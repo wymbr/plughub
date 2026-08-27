@@ -2,6 +2,88 @@
 
 ---
 
+## O demo endureceu, e nasceu o runner que faltava (2026-08-27)
+
+`PLUGHUB_ANALYTICS_OPEN_ACCESS` deixou de ser `"true"` cravado. **Não virou `"false"` cravado**: virou
+`"${PLUGHUB_ANALYTICS_OPEN_ACCESS:-false}"` — default estrito, bypass pedido por env, e aí ele fica no
+histórico do shell em vez de ficar no arquivo. É a forma que a direção de ambientes registrada hoje
+pede, e custa o mesmo.
+
+**Testemunha da virada:** anônimo em `/reports/sessions` foi de **200 → 401**. Sem ela, um run verde
+depois da troca poderia significar apenas que o container não pegou a env.
+
+### O runner, e por que ele veio junto e não depois
+
+Havia **24 gates e nenhum runner**. Cada arco criava o seu, via-o verde uma vez, e ele virava
+lembrança — e o modo de falha é AUSÊNCIA: nada fica vermelho, o arquivo só para de dizer a verdade.
+
+Virar a flag exigia rodar os gates de qualquer jeito. Fazer isso à mão e depois escrever o runner seria
+a única combinação com retrabalho.
+
+`infra/test/run_gates.sh` + `infra/test/gates.manifest`. **Manifesto, não glob**: um glob esconde as
+duas metades do mesmo erro — script novo entra sem revisão, script removido some do relatório e a
+cobertura encolhe em silêncio. Com manifesto, sumir é uma edição visível no diff, e arquivo ausente é
+`MISSING` (falha).
+
+**Cinco desfechos, não dois:** `VERDE` · `VERMELHO` · `INCONCLUSIVO` (conta como falha) · `TIMEOUT` ·
+`RC=n` cru · `MISSING`. O prefixo do arquivo **não** define o que é gate: vários `probe_*` têm
+veredicto e reprovam.
+
+### AUTO × ASSISTIDO — a correção que a primeira execução impôs
+
+A primeira passada deu **6 de 25 não-verdes**, e **5 eram erro meu de manifesto**: pus na lista
+instrumentos que exigem argumento ou estado vivo (um agente humano logado no Console; um `T0` colhido
+ANTES de um fluxo; uma instância concreta). Rodá-los assim os deixa INCONCLUSIVO para sempre — e **um
+runner permanentemente vermelho por não-defeito ensina a ignorar o vermelho**, perdendo o único valor
+que tem. Omiti-los faria a cobertura parecer maior do que é.
+
+São dois erros opostos, e a saída é uma terceira classe: linhas com `!` são **listadas com o requisito
+ao lado, nunca executadas**, e o rodapé diz que *não contam como falha — mas também não contam como
+cobertura*. O manifesto também aceita prefixo de env (`VAR=valor script.sh`), o que converteu um dos
+cinco em AUTO: o `probe_process_chip_scoped_marker` precisava de um principal ESTREITO, não de um
+humano.
+
+### O único vermelho de verdade não era regressão do produto
+
+`gate_supervisor_tenant_guard.sh` chamava `/supervisor/join` **sem token**, e desde o T2 isso é 401.
+Todos os probes davam 401 e o gate mapeava 401 para *"ACEITO"* — o inverso do que aconteceu. O produto
+está **mais estrito** do que o gate supunha: `tenant_unverifiable` recusa meta sem `tenant_id`, que era
+exatamente o fail-open caçado, e o tenant passou a vir do TOKEN.
+
+Corrigido com a **credencial irrestrita**, e não por conveniência: com escopo irrestrito o
+`_authorize_live_session` retorna cedo e a dimensão POOL sai do caminho, de modo que o gate mede **uma**
+proposição. Somada a testemunha `PA`: a mesma chamada sem credencial tem de ser 401 — sem ela, o dia em
+que o header parar de ser enviado devolve 401 em tudo e o gate volta a acusar tenant.
+
+**Regressão que eu causei e consertei no mesmo passo:** o P5 fazia login próprio em
+`${AUTH:-…:3202}/auth/login`, e o `_auth.sh` define `AUTH` **já com `/auth`** — a concatenação virou
+`…/auth/auth/login`, 404, token vazio, P5 silenciosamente não exercitado (na baseline ele rodava, 409).
+O conserto não foi escapar da colisão: foi **remover a segunda implementação de "obter um token"**.
+
+### A virada quebrou exatamente UM script, e honestamente
+
+`probe_process_chip_scoped_marker` usava uma leitura **anônima** como referência irrestrita — o método
+dependia de *"sem header ⇒ vê tudo"*. Com a flag fechada ele saiu **INCONCLUSIVO**, não verde falso.
+Conserto: irrestrito deixa de ser a **ausência** de credencial e passa a ser a credencial **declarada**.
+A proposição e os três ramos são idênticos; mudou o veículo — e os rótulos mudaram junto, porque
+chamar de "anon" uma leitura autenticada dá ao próximo leitor uma ideia errada do que se compara.
+
+### Instrumento consertado de passagem
+
+`q_analytics_authless_inventory.sh` §4 media a proposição **de ontem**: classificava por lista vazia e
+chamava tudo de `VAZIO=irrestrito`, contando o principal DECLARADO como dependente do legado — e é
+justamente esse número que o passo 3 lê para decidir se pode inverter. Agora são **três** classes
+(`DECLARADO` · `VAZIO=legado` · `escopado`). Medição atual: **1 declarado, 0 dependentes do legado**.
+Também caiu um `\n` literal dentro de um `grep` do §5, que imprimia `grep: n: No such file or directory`
+no meio da medição.
+
+### Estado final
+
+**21/21 AUTO verdes** com o demo endurecido; 4 assistidos listados com o requisito. Antes da virada a
+baseline era 21/21 verdes também — logo o delta da flag é atribuível, não confundido com outra coisa.
+
+---
+
 ## Passo 2 do plano `accessible_pools` — o irrestrito virou DECLARAÇÃO (2026-08-27)
 
 `accessible_pools == []` significava "todos os pools". Convenção **implícita**, e o passo 3 do plano

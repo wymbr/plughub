@@ -27,6 +27,17 @@
 
 set -u
 
+# Credencial (2026-08-27). `/supervisor/join` passou a exigir token no passo T2 —
+# sem ele TODO probe volta 401 e o gate lia isso como "aceito", invertendo o
+# veredicto. Usa o principal IRRESTRITO de proposito: com escopo irrestrito o
+# `_authorize_live_session` retorna cedo e a dimensao POOL sai do caminho, de modo
+# que o que este gate mede e SO o tenant. Um gate por proposicao.
+PLUGHUB_TEST_EMAIL="${PLUGHUB_TEST_EMAIL:-probe@plughub.local}"
+PLUGHUB_TEST_PASS="${PLUGHUB_TEST_PASS:-changeme_probe}"
+export PLUGHUB_TEST_EMAIL PLUGHUB_TEST_PASS
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_auth.sh"
+
 TENANT="${TENANT:-tenant_demo}"
 OUTRO="${OUTRO:-tenant_outro}"
 COMPOSE="${COMPOSE_FILE:-docker-compose.demo.yml}"
@@ -65,10 +76,25 @@ PING_HTTP="$($CURL "$AN/v1/health")"
 
 join() { # session_id  tenant_declarado → código HTTP
   $CURL -X POST "$AN/supervisor/join" $JSON \
+    -H "$(plughub_auth_header)" \
     -d "{\"tenant_id\":\"$2\",\"session_id\":\"$1\",\"operator_id\":\"gate\"}"
 }
 
+# Testemunha: a MESMA chamada SEM credencial tem de ser 401. Sem ela, o dia em que
+# o header parar de ser enviado devolve 401 em tudo e o gate volta a reportar as
+# falhas de tenant de antes — veredicto certo pelo motivo errado, outra vez.
+noauth_join() {
+  $CURL -X POST "$AN/supervisor/join" $JSON \
+    -d "{\"tenant_id\":\"$TENANT\",\"session_id\":\"$1\",\"operator_id\":\"gate\"}"
+}
+
 FAIL=""
+
+# ── PA — TESTEMUNHA: a camada de autenticacao esta na frente ────────────────
+r SET "session:${S_OK}:meta" "{\"tenant_id\":\"$TENANT\",\"channel\":\"webchat\"}" EX 300 > /dev/null
+CA="$(noauth_join "$S_OK")"
+echo "   PA sem credencial ............................... HTTP $CA   (esperado 401)"
+[ "$CA" = "401" ] || FAIL="$FAIL\n   · PA devolveu $CA — a rota aceitou SEM token. Ou o guard do T2 sumiu,"$'\n'"     ou o servico roda imagem antiga; nos dois casos os probes abaixo"$'\n'"     medem outra coisa."
 
 # ── P0 — CONTROLE: meta com o tenant certo ──────────────────────────────────
 r SET "session:${S_OK}:meta" "{\"tenant_id\":\"$TENANT\",\"channel\":\"webchat\"}" EX 300 > /dev/null
@@ -84,7 +110,10 @@ if [ "$C1" != "403" ]; then
   FAIL="$FAIL\n   · P1 devolveu $C1 — meta sem \`tenant_id\` foi ACEITO. É o fail-open:"$'\n'"     \`meta.get(\"tenant_id\", body.tenant_id) != body.tenant_id\` compara o"$'\n'"     valor com ele mesmo. Serviço rodando imagem antiga também dá isto."
 fi
 
-# ── P2 — a metade que sempre funcionou ──────────────────────────────────────
+# ── P2 — divergencia de tenant ──────────────────────────────────────────────
+# Desde o T2 este probe recusa por um motivo MELHOR do que o original: o tenant vem
+# do TOKEN, entao declarar outro no corpo e `tenant_mismatch_token` — a recusa
+# acontece ANTES de olhar o meta. O codigo esperado nao mudou (403); a razao, sim.
 C2="$(join "$S_OK" "$OUTRO")"
 echo "   P2 meta com tenant DIVERGENTE ................... HTTP $C2   (esperado 403)"
 [ "$C2" = "403" ] || FAIL="$FAIL\n   · P2 devolveu $C2 — tenant divergente aceito (regressão na metade que já funcionava)"
@@ -118,11 +147,14 @@ else
   # P5 — o caminho de ESCRITA. Só a RECUSA é exercitada: o ramo positivo
   # publicaria evento de roteamento e XADD para uma sessão de rascunho, e um gate
   # não deve deixar rastro num tópico de produção. Declarado, não escondido.
-  TOK="$($BODY -X POST "${AUTH:-http://localhost:3202}/auth/login" $JSON \
-        -d "{\"email\":\"admin@plughub.local\",\"password\":\"changeme_admin\",\"tenant_id\":\"$TENANT\"}" \
-        | jq -r '.access_token // empty' 2>/dev/null)"
+  # Token pelo helper unico. Antes havia um login proprio aqui, e ele quebrou no dia
+  # em que o gate passou a usar `_auth.sh`: os dois definem `AUTH`, mas com
+  # significados diferentes (o helper ja inclui `/auth`), e a concatenacao virou
+  # `.../auth/auth/login` → 404 → token vazio → P5 silenciosamente nao exercitado.
+  # Duas implementacoes de "obter um token" divergem no primeiro ajuste.
+  TOK="$(plughub_token 2>/dev/null)"
   if [ -z "$TOK" ]; then
-    echo "   ⚠ P5 (session_transfer) NÃO exercitado: login falhou."
+    echo "   ⚠ P5 (session_transfer) NÃO exercitado: sem credencial (plughub_token)."
   else
     C5="$($CURL -X POST "$MCP/api/session_transfer/${S_NO}" $JSON \
           -H "Authorization: Bearer $TOK" -d '{"target_pool":"retencao_humano"}')"

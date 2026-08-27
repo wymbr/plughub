@@ -1,0 +1,78 @@
+# gates.manifest — o conjunto que `run_gates.sh` executa.
+#
+# POR QUE MANIFESTO E NAO GLOB
+# ----------------------------
+# Um glob (`gate_*.sh`) esconde as duas metades do mesmo erro: script novo que
+# ninguem lembrou de escrever entra sem revisao, e script REMOVIDO some do
+# relatorio sem deixar rastro — o runner passa a cobrir menos e continua verde.
+# Com manifesto, some-lo e uma edicao visivel no diff, e um arquivo ausente vira
+# MISSING (falha), nunca silencio.
+#
+# O prefixo NAO define o que e gate: dos 214 scripts de infra/test/, varios
+# `probe_*` tem veredicto e reprovam, e varios `gate_*` foram escritos antes da
+# convencao. A lista abaixo e por COMPORTAMENTO, nao por nome.
+#
+# DUAS CLASSES, E A SEGUNDA NAO E DECORACAO
+# -----------------------------------------
+#   AUTO       roda sem assistencia. E o que o runner executa.
+#   ASSISTIDO  (linha comecando com `!`) precisa de argumento ou de estado vivo
+#              que so um humano produz: um agente logado no Console, um T0 colhido
+#              ANTES de um fluxo, uma instancia concreta. O runner NAO os executa —
+#              LISTA, com o requisito ao lado.
+#
+# Por que listar em vez de rodar e chamar de INCONCLUSIVO: um runner
+# permanentemente vermelho por nao-defeito ensina a ignorar o vermelho, e ai ele
+# perde o unico valor que tem. Por que listar em vez de omitir: omitir faz a
+# cobertura parecer maior do que e. Sao dois erros opostos e a lista evita os dois.
+#
+# Uma linha pode levar prefixo de env: `VAR=valor script.sh`.
+#
+# Convencao de saida de cada script:
+#   0 = VERDE  ·  1 = VERMELHO  ·  2 = INCONCLUSIVO (nao conseguiu medir)
+# INCONCLUSIVO conta como falha: um gate que sai 0 sem ter medido compra confianca
+# sem dar nada.
+
+# ══ AUTO ═════════════════════════════════════════════════════════════════════
+
+# ── Seguranca / autorizacao ──────────────────────────────────────────────────
+probe_unrestricted_claim.sh
+probe_supervisor_join_authz.sh
+probe_analise_route_guard.sh
+gate_supervisor_tenant_guard.sh
+gate_webhook_endpoint_auth.sh
+
+# ── Fila, SLA e capacidade ───────────────────────────────────────────────────
+gate_queue_report_per_wait.sh
+gate_sla_segment_target.sh
+probe_queue_window_order.sh
+
+# ── Sessao, conferencia e retomada ───────────────────────────────────────────
+gate_external_resume.sh
+gate_family_b_resume_closes.sh
+probe_release_presence.sh
+probe_force_complete_branches.sh
+
+# ── Config e registro ────────────────────────────────────────────────────────
+gate_pool_config_ttl_source.sh
+gate_webhook_registry_resolution.sh
+probe_config_route_collision.sh
+probe_meta_ttl_bridge_off.sh
+
+# ── Sentimento ───────────────────────────────────────────────────────────────
+gate_console_sentiment_source.sh
+
+# ── Analytics / relatorios ───────────────────────────────────────────────────
+gate_orphan_ui_callers.sh
+gate_bg_task_visibility.sh
+probe_segments_journey_window.sh
+# Precisa de um principal de escopo ESTREITO — com admin o marcador nasce correto
+# e o defeito nao e exercido (o proprio probe declara isso e sai INCONCLUSIVO).
+ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_chip_scoped_marker.sh
+
+# ══ ASSISTIDOS ═══════════════════════════════════════════════════════════════
+# Nao rodam sozinhos. O requisito vai depois do nome, e e o que o runner imprime.
+
+!gate_pause_capacity.sh   exige um agente humano LOGADO no Console (a instancia nasce no login WS, `registerHumanAgent`) — forjar a chave em Redis testaria a forja, nao o produto
+!gate_queue_segment_not_born_without_flow.sh   exige T0 colhido ANTES do fluxo: T0=$(date -u +%FT%TZ)
+!gate_sentiment_engine_half.sh   exige T0 colhido ANTES de abrir o contato, e um contato que ENFILEIRE
+!probe_release_reclaim_race.sh   exige <pool_id> <instance_id> de uma instancia viva

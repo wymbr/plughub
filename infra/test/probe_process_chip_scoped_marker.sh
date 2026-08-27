@@ -31,7 +31,7 @@
 #
 #     auth_n <  anon_n  →  há membro fora  →  marcador DEVE ser `true`
 #     auth_n == anon_n  →  não há          →  marcador DEVE ser `false`
-#     auth_n >  anon_n  →  impossível      →  o escopado contou MAIS que o aberto
+#     auth_n >  anon_n  →  impossível      →  o escopado contou MAIS que o irrestrito
 #
 # É a mesma lição do D14.1 (um instrumento pode ser falseável, ramificado e honesto e
 # ainda medir a proposição vizinha) — cometida aqui uma tela depois de tê-la
@@ -42,7 +42,7 @@
 # · de PRESENÇA: a CHAVE existe na resposta. Ausente ⇒ imagem antiga ⇒ INCONCLUSIVO,
 #   nunca vermelho — um contador de ausência sem testemunha de presença reprova o
 #   ambiente e chama de defeito de código.
-# · NEGATIVA: no escopo ANÔNIMO (sem ABAC) o marcador tem de vir `false` em TODAS as
+# · NEGATIVA: no escopo IRRESTRITO o marcador tem de vir `false` em TODAS as
 #   linhas — medido, nunca `null` e nunca `true`.
 # · de POPULAÇÃO: sem nenhuma linha com `auth_n < anon_n` o gate NÃO julga (exit 2).
 #   Um usuário de escopo largo não refuta o defeito; ele apenas não o exerce.
@@ -63,29 +63,51 @@ FIELD=journey_has_scoped_out_members
 
 command -v jq >/dev/null || { echo "INCONCLUSIVO: jq ausente"; exit 2; }
 
-TOK=$(curl -s -X POST "$AUTH/login" -H 'content-type: application/json' \
-  -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASS\",\"tenant_id\":\"$TENANT\"}" \
-  | jq -r '.access_token // empty')
+# ⚠️ A REFERENCIA IRRESTRITA MUDOU DE VEICULO (2026-08-27).
+# Ate aqui a referencia era uma leitura SEM credencial, porque `sem header => ve
+# tudo` era o comportamento do analytics. Esse ramo foi fechado (a flag
+# `analytics_open_access` tem default `false`), e a leitura anonima passou a devolver
+# 401 — o probe saia INCONCLUSIVO, honestamente, mas sem medir nada.
+# Agora irrestrito e uma CREDENCIAL DECLARADA (`unrestricted: true` + lista vazia),
+# nao a ausencia de uma. A proposicao e os tres ramos sao os mesmos; so o veiculo
+# mudou. O rotulo mudou junto de proposito: chamar de "anon" uma leitura autenticada
+# daria ao proximo leitor uma ideia errada do que se compara.
+REF_EMAIL=${REF_EMAIL:-probe@plughub.local}
+REF_PASS=${REF_PASS:-changeme_probe}
+
+login_tok() {  # $1=email $2=senha
+  curl -s -X POST "$AUTH/login" -H 'content-type: application/json' \
+    -d "{\"email\":\"$1\",\"password\":\"$2\",\"tenant_id\":\"$TENANT\"}" \
+    | jq -r '.access_token // empty'
+}
+
+TOK=$(login_tok "$ADMIN_EMAIL" "$ADMIN_PASS")
 [ -z "$TOK" ] && { echo "INCONCLUSIVO: login falhou para $ADMIN_EMAIL"; exit 2; }
+REF_TOK=$(login_tok "$REF_EMAIL" "$REF_PASS")
+[ -z "$REF_TOK" ] && {
+  echo "INCONCLUSIVO: login falhou para a referencia irrestrita $REF_EMAIL."
+  echo "  criar com: bash infra/test/mk_unrestricted_principal.sh"
+  exit 2
+}
 
 URL="$AN/reports/sessions?tenant_id=$TENANT&from_dt=$FROM&to_dt=$TO&page=1&page_size=200"
-ANON=$(curl -s "$URL")
+ANON=$(curl -s "$URL" -H "Authorization: Bearer $REF_TOK")   # referencia irrestrita
 AUTHD=$(curl -s "$URL" -H "Authorization: Bearer $TOK")
 
 N_ANON=$(echo "$ANON"  | jq '[.data[]?] | length')
 N_AUTHD=$(echo "$AUTHD" | jq '[.data[]?] | length')
 if [ "${N_ANON:-0}" -eq 0 ] || [ "${N_AUTHD:-0}" -eq 0 ]; then
-  echo "INCONCLUSIVO: uma das duas leituras veio vazia (anon=$N_ANON auth=$N_AUTHD)."
+  echo "INCONCLUSIVO: uma das duas leituras veio vazia (irrestrito=$N_ANON escopado=$N_AUTHD)."
   exit 2
 fi
-echo "usuário=$ADMIN_EMAIL · linhas anon=$N_ANON · auth=$N_AUTHD"
+echo "escopado=$ADMIN_EMAIL · linhas irrestrito=$N_ANON · escopado=$N_AUTHD"
 
 # ── 0. testemunha de PRESENÇA — a chave existe? ──────────────────────────────
 # `has()`, não valor: chave AUSENTE é imagem antiga (INCONCLUSIVO); chave presente
 # com `null` é "não medi", que tem julgamento próprio mais abaixo.
 KEY_ANON=$(echo "$ANON"  | jq "[.data[] | select(has(\"$FIELD\"))] | length")
 KEY_AUTH=$(echo "$AUTHD" | jq "[.data[] | select(has(\"$FIELD\"))] | length")
-echo "0 · presença da chave \`$FIELD\`: $KEY_ANON/$N_ANON (anon) · $KEY_AUTH/$N_AUTHD (auth)"
+echo "0 · presença da chave \`$FIELD\`: $KEY_ANON/$N_ANON (irrestrito) · $KEY_AUTH/$N_AUTHD (escopado)"
 if [ "$KEY_ANON" -eq 0 ] && [ "$KEY_AUTH" -eq 0 ]; then
   echo
   echo "INCONCLUSIVO: o campo não existe em NENHUMA linha — a analytics-api está"
@@ -93,11 +115,11 @@ if [ "$KEY_ANON" -eq 0 ] && [ "$KEY_AUTH" -eq 0 ]; then
   exit 2
 fi
 
-# ── 1. testemunha NEGATIVA — sem ABAC o marcador é medido `false` ────────────
+# ── 1. testemunha NEGATIVA — no irrestrito o marcador é medido `false` ───────
 FALSE_ANON=$(echo "$ANON" | jq "[.data[] | select(.$FIELD == false)] | length")
 TRUE_ANON=$(echo  "$ANON" | jq "[.data[] | select(.$FIELD == true)]  | length")
 NULL_ANON=$(echo  "$ANON" | jq "[.data[] | select(has(\"$FIELD\")) | select(.$FIELD == null)] | length")
-echo "1 · anon (sem ABAC): false=$FALSE_ANON · true=$TRUE_ANON · null=$NULL_ANON"
+echo "1 · irrestrito ($REF_EMAIL): false=$FALSE_ANON · true=$TRUE_ANON · null=$NULL_ANON"
 
 # ── 2. população DERIVADA — quais processos perdem membros neste escopo? ─────
 # ⚠️ NADA de `// "default"`: em jq o alternativo dispara em `false` e em `0` tanto

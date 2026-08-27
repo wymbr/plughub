@@ -1,5 +1,33 @@
 # TODO — PlugHub Itens Pendentes
 
+## Gates — o que o runner ainda NÃO cobre (2026-08-27)
+
+`infra/test/run_gates.sh` cobre **21 gates AUTO**. Quatro ficam de fora por natureza, e a lista existe
+para que a cobertura não pareça maior do que é:
+
+| gate | requisito |
+|---|---|
+| `gate_pause_capacity.sh` | agente humano LOGADO no Console (a instância nasce no login WS, `registerHumanAgent`) — forjar a chave em Redis testaria a forja, não o produto |
+| `gate_queue_segment_not_born_without_flow.sh` | `T0` colhido **antes** do fluxo |
+| `gate_sentiment_engine_half.sh` | `T0` colhido antes do contato, e um contato que ENFILEIRE |
+| `probe_release_reclaim_race.sh` | `<pool_id> <instance_id>` de uma instância viva |
+
+**Como fechar, se valer a pena:** os dois de `T0` viram AUTO se o próprio gate produzir o fluxo que
+mede (hoje ele só o observa). Os outros dois exigem um ator — humano logado, instância viva — e o
+caminho honesto é um harness que os produza, não um forjador de chave em Redis.
+
+⚠️ **Não transformar em AUTO baixando a barra**: um gate que roda sempre e nunca exerce o caminho é a
+família *"teste que não pode reprovar"*, e sai pior do que a lista acima.
+
+**Fora do manifesto por decisão:** os outros ~190 scripts de `infra/test/` são seeds, medições (`q_*`)
+e smokes de arco. Entram se e quando tiverem veredicto falseável — o critério é COMPORTAMENTO, não
+prefixo.
+
+**Ainda não coberto por runner nenhum:** as suítes de pytest (analytics 637 · auth 64 · channel-gateway
+676 · evaluation-api 211), das quais 4 testes estão vermelhos e registrados em seção própria. E o
+`auth-api` não tem nem pytest nem os testes na imagem.
+
+
 ## Ambientes componíveis — PISO × PACOTES DE CONTEÚDO *(direção, decidida 2026-08-27)*
 
 **O modelo não é "demo × dev".** É: **partindo de vazio, um ambiente é uma composição de pacotes de

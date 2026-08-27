@@ -976,7 +976,13 @@ services:
       # open_access = bypass AMPLO de demo (audit/admin/transcript acessíveis sem token).
       # MANTIDO true p/ não quebrar a Auditoria e o tool_trace do avaliador. O pool-scoping
       # foi DESACOPLADO deste flag (pool_auth): agora enforça sempre que há segredo + token.
-      PLUGHUB_ANALYTICS_OPEN_ACCESS: "true"
+      # Endurecido em 2026-08-27. Era `"true"` cravado, e o `true` existia porque os
+      # scripts de verificacao chamavam a analytics SEM credencial — o que deixou de
+      # ser verdade: 30 scripts autenticam (12 sozinhos, 18 pelo shim de `_auth.sh`) e
+      # os dois que comparavam agregado contra ledger usam o principal irrestrito
+      # DECLARADO (`probe@plughub.local`). Default estrito; o bypass e pedido por env,
+      # e ai fica no historico do shell em vez de ficar no arquivo.
+      PLUGHUB_ANALYTICS_OPEN_ACCESS: "${PLUGHUB_ANALYTICS_OPEN_ACCESS:-false}"
       # Segurança Fase A/E — o MESMO segredo do auth-api p/ o optional_pool_principal
       # verificar o Bearer e enforçar accessible_pools em /reports/*. Sem isto (ou sem token)
       # o scoping degrada p/ irrestrito. Sem token (dashboards/embeds) segue irrestrito.

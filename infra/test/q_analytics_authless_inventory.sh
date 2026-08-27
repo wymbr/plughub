@@ -73,17 +73,29 @@ echo "    useSessionTrace     -> /reports/sessions/{id}/trace"
 echo "    useCustomerJourneys -> /reports/journeys"
 
 hr "4. QUEM DEPENDE de 'accessible_pools = [] => irrestrito'"
+# ⚠️ TRES classes, nao duas (corrigido 2026-08-27, depois do passo 2). Antes este
+# bloco classificava so por lista vazia e chamava tudo de "VAZIO=irrestrito" — o que
+# contava o principal DECLARADO (`unrestricted: true`) como dependente do legado. E o
+# passo 3 le justamente este numero para decidir se pode inverter, entao o erro nao
+# era cosmetico: era o instrumento respondendo a pergunta de ontem.
+#
+#   DECLARADO     -> tem o claim. Sobrevive ao passo 3. NAO e dependente.
+#   VAZIO=legado  -> lista vazia E sem claim. ESTES sao os dependentes.
+#   escopado      -> lista nao-vazia. O restritivo vence, indiferente ao claim.
 $DC exec -T postgres psql -U plughub -d plughub_demo -tA -F'|' -c \
 "SELECT email, array_to_string(roles,','),
         coalesce(array_length(accessible_pools,1),0),
-        CASE WHEN accessible_pools IS NULL THEN 'NULL=irrestrito'
-             WHEN array_length(accessible_pools,1) IS NULL THEN 'VAZIO=irrestrito'
+        CASE WHEN coalesce(unrestricted,false) THEN 'DECLARADO'
+             WHEN coalesce(array_length(accessible_pools,1),0) = 0 THEN 'VAZIO=legado'
              ELSE 'escopado' END
    FROM auth.users ORDER BY 3, 1;" 2>/dev/null \
-| awk -F'|' 'BEGIN{v=0;t=0}
-  {t++; printf "  %-26s %-20s n_pools=%-3s %s\n",$1,$2,$3,$4; if($4 ~ /irrestrito/) v++}
-  END{printf "\n  total de usuários = %d   |   dependentes do vazio = %d\n",t,v;
-      if(t==0) print "  !! INCONCLUSIVO: zero usuários lidos — DB inalcançável?"}'
+| awk -F'|' 'BEGIN{v=0;d=0;t=0}
+  {t++; printf "  %-26s %-20s n_pools=%-3s %s\n",$1,$2,$3,$4;
+   if($4=="VAZIO=legado") v++; if($4=="DECLARADO") d++}
+  END{printf "\n  total de usuários = %d   |   irrestritos DECLARADOS = %d   |   dependentes do LEGADO = %d\n",t,d,v;
+      if(t==0) print "  !! INCONCLUSIVO: zero usuários lidos — DB inalcançável?";
+      else if(v==0) print "  => nenhum usuario DESTA BASE depende do vazio: o passo 3 nao quebraria ninguem aqui.";
+      else print "  => o passo 3 apagaria o acesso destes. Conceder `unrestricted` a quem deve manter, ANTES de inverter."}'
 echo
 echo "  ⚠️ 'zero dependentes' é fato DESTA BASE, não do produto. Os produtores do"
 echo "     vazio continuam vivos e um install limpo nasce irrestrito:"
@@ -98,7 +110,8 @@ echo "Agora o bypass e amarrado a \`analytics_open_access\` (default False no co
 echo "entao o que se mede aqui e QUAL RAMO este ambiente escolheu — nao se ha defeito."
 BASE="http://localhost:3500"
 Q="tenant_id=$TENANT&page_size=1"
-FLAG=$(grep -oE 'PLUGHUB_ANALYTICS_OPEN_ACCESS:[[:space:]]*"?[a-zA-Z]+' \n       docker-compose.demo.yml | head -1 | grep -oE '[a-zA-Z]+$')
+FLAG=$(grep -oE 'PLUGHUB_ANALYTICS_OPEN_ACCESS:[[:space:]]*"?[a-zA-Z]+' \
+       docker-compose.demo.yml | head -1 | grep -oE '[a-zA-Z]+$')
 ANON=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/reports/sessions?$Q")
 BAD=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer lixo.nao.jwt"       "$BASE/reports/sessions?$Q")
 echo
