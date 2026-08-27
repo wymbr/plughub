@@ -16,6 +16,7 @@ from typing import Any
 
 import pytz
 from fastapi import APIRouter, Depends, HTTPException, Request
+from plughub_authz import enforce_write
 from pydantic import BaseModel, Field
 
 from .db import (
@@ -60,6 +61,35 @@ def _settings(request: Request):
     return request.app.state.settings
 
 
+def _require_calendars_write(request: Request) -> None:
+    """
+    Portao DUAL de escrita da config de calendario (admin-token OU Bearer + ABAC
+    `config.calendars` read_write), delegado ao verificador canonico.
+
+    Entra como DEPENDENCIA DE ROTA, nao no corpo do handler: as doze rotas de escrita
+    nao recebiam `request`, e alargar doze assinaturas para instalar um portao e doze
+    lugares onde alguem pode esquecer. No decorador ele fica greppavel, e uma rota de
+    escrita NOVA sem `_WRITE` salta aos olhos na revisao.
+
+    O que a escrita destrancada custava, para nao virar zelo abstrato: a janela de
+    contato do outbound e decidida por `campaign.contact_calendar_id`
+    (`db_contact_eligibility` consulta `is_open` deste servico). Apagar ou reescrever
+    um calendario anonimamente ABRE a janela em que clientes podem ser contatados.
+    """
+    settings = _settings(request)
+    enforce_write(
+        request     = request,
+        admin_token = settings.admin_token,
+        jwt_secret  = getattr(settings, "jwt_secret", ""),
+        module      = "config",
+        field       = "calendars",
+        what        = "escrita de config de calendario",
+    )
+
+
+_WRITE = Depends(_require_calendars_write)
+
+
 # ── Holiday Sets ──────────────────────────────────────────────────────────────
 
 class HolidaySetCreate(BaseModel):
@@ -88,7 +118,7 @@ async def list_holiday_sets(
     return await db_list_holiday_sets(pool, organization_id, tenant_id)
 
 
-@router.post("/v1/holiday-sets", status_code=201)
+@router.post("/v1/holiday-sets", status_code=201, dependencies=[_WRITE])
 async def create_holiday_set(
     body: HolidaySetCreate,
     request: Request,
@@ -108,7 +138,7 @@ async def get_holiday_set(id: str, pool=Depends(_pool)):
     return row
 
 
-@router.patch("/v1/holiday-sets/{id}")
+@router.patch("/v1/holiday-sets/{id}", dependencies=[_WRITE])
 async def update_holiday_set(id: str, body: HolidaySetUpdate, pool=Depends(_pool)):
     row = await db_update_holiday_set(pool, id, body.model_dump(exclude_none=True))
     if not row:
@@ -116,7 +146,7 @@ async def update_holiday_set(id: str, body: HolidaySetUpdate, pool=Depends(_pool
     return row
 
 
-@router.delete("/v1/holiday-sets/{id}", status_code=204)
+@router.delete("/v1/holiday-sets/{id}", status_code=204, dependencies=[_WRITE])
 async def delete_holiday_set(id: str, pool=Depends(_pool)):
     deleted = await db_delete_holiday_set(pool, id)
     if not deleted:
@@ -142,7 +172,7 @@ async def get_tenant_config(
     return await db_get_tenant_config(pool, tenant_id)
 
 
-@router.patch("/v1/tenant-config")
+@router.patch("/v1/tenant-config", dependencies=[_WRITE])
 async def update_tenant_config(
     body: TenantConfigUpdate,
     pool=Depends(_pool),
@@ -193,7 +223,7 @@ async def list_calendars(
     return await db_list_calendars(pool, organization_id, tenant_id)
 
 
-@router.post("/v1/calendars", status_code=201)
+@router.post("/v1/calendars", status_code=201, dependencies=[_WRITE])
 async def create_calendar(
     body: CalendarCreate,
     request: Request,
@@ -222,7 +252,7 @@ async def get_calendar(id: str, pool=Depends(_pool)):
     return row
 
 
-@router.patch("/v1/calendars/{id}")
+@router.patch("/v1/calendars/{id}", dependencies=[_WRITE])
 async def update_calendar(id: str, body: CalendarUpdate, pool=Depends(_pool)):
     row = await db_update_calendar(pool, id, body.model_dump(exclude_none=True))
     if not row:
@@ -230,7 +260,7 @@ async def update_calendar(id: str, body: CalendarUpdate, pool=Depends(_pool)):
     return row
 
 
-@router.delete("/v1/calendars/{id}", status_code=204)
+@router.delete("/v1/calendars/{id}", status_code=204, dependencies=[_WRITE])
 async def delete_calendar(id: str, pool=Depends(_pool)):
     deleted = await db_delete_calendar(pool, id)
     if not deleted:
@@ -274,12 +304,12 @@ async def list_associations(
     return await db_list_associations(pool, tenant_id, entity_type, entity_id)
 
 
-@router.post("/v1/associations", status_code=201)
+@router.post("/v1/associations", status_code=201, dependencies=[_WRITE])
 async def create_association(body: AssociationCreate, pool=Depends(_pool)):
     return await db_create_association(pool, body.model_dump())
 
 
-@router.patch("/v1/associations/{id}")
+@router.patch("/v1/associations/{id}", dependencies=[_WRITE])
 async def update_association(id: str, body: AssociationUpdate, pool=Depends(_pool)):
     row = await db_update_association(pool, id, body.model_dump(exclude_none=True))
     if not row:
@@ -287,7 +317,7 @@ async def update_association(id: str, body: AssociationUpdate, pool=Depends(_poo
     return row
 
 
-@router.put("/v1/associations/upsert")
+@router.put("/v1/associations/upsert", dependencies=[_WRITE])
 async def upsert_association(body: AssociationUpsert, pool=Depends(_pool)) -> dict[str, Any]:
     """
     Idempotent upsert: replace the association for this entity with the given calendar.
@@ -302,7 +332,7 @@ async def upsert_association(body: AssociationUpsert, pool=Depends(_pool)) -> di
     return await db_create_association(pool, data)
 
 
-@router.delete("/v1/associations/entity", status_code=204)
+@router.delete("/v1/associations/entity", status_code=204, dependencies=[_WRITE])
 async def delete_entity_associations(
     tenant_id:   str,
     entity_type: str,
@@ -313,7 +343,7 @@ async def delete_entity_associations(
     await db_delete_associations_for_entity(pool, tenant_id, entity_type, entity_id)
 
 
-@router.delete("/v1/associations/{id}", status_code=204)
+@router.delete("/v1/associations/{id}", status_code=204, dependencies=[_WRITE])
 async def delete_association(id: str, pool=Depends(_pool)):
     deleted = await db_delete_association(pool, id)
     if not deleted:

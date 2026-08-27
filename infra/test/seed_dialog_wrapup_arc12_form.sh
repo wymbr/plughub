@@ -26,6 +26,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
+DIALOG_ADMIN_TOKEN="${DIALOG_ADMIN_TOKEN:-demo_dialog_admin_token}"   # portao de escrita (sistema)
 TENANT="${TENANT:-tenant_demo}"
 FORM_ID="dialog_wrapup_arc12_v1"
 FORM_FILE="${REPO_ROOT}/infra/dialog/${FORM_ID}.json"
@@ -34,7 +35,7 @@ FORM_FILE="${REPO_ROOT}/infra/dialog/${FORM_ID}.json"
 
 echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT}) a partir de ${FORM_FILE#"$REPO_ROOT"/}"
 
-curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
+curl -fsS -X POST -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "${DIALOG_API}/v1/dialog/forms" \
   -H 'Content-Type: application/json' \
   -H "X-Tenant-ID: ${TENANT}" \
   --data-binary @"${FORM_FILE}" >/dev/null || {
@@ -42,6 +43,6 @@ curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
 echo "✓ DialogForm criado/atualizado: ${FORM_ID}"
 
 echo "→ Publicando"
-curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms/${FORM_ID}/publish" \
+curl -fsS -X POST -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "${DIALOG_API}/v1/dialog/forms/${FORM_ID}/publish" \
   -H "X-Tenant-ID: ${TENANT}" >/dev/null
 echo "✓ DialogForm publicado: ${FORM_ID}"

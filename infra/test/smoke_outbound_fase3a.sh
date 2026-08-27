@@ -18,7 +18,8 @@ jqget() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1'))"; }
 STAMP=$(date +%s)
 
 echo "1) Cria calendário SEMPRE FECHADO (weekly_schedule vazio) ..."
-CALID=$(curl -s -X POST "$CAL/v1/calendars" -H 'content-type: application/json' -d "{
+CAL_ADMIN_TOKEN="${CAL_ADMIN_TOKEN:-demo_calendar_admin_token}"   # portao de escrita (sistema)
+CALID=$(curl -s -X POST "$CAL/v1/calendars" -H 'content-type: application/json' -H "X-Admin-Token: $CAL_ADMIN_TOKEN" -d "{
   \"organization_id\":\"org-default\",\"tenant_id\":\"$TENANT\",\"scope\":\"tenant\",
   \"name\":\"F3a closed $STAMP\",\"always_open\":false,\"weekly_schedule\":[]
 }" | jqid)
@@ -55,5 +56,5 @@ echo "   $R2"
 echo "   PASS: sem calendar, a janela não bloqueia."
 
 echo "5) Limpeza ..."
-curl -s -X DELETE "$CAL/v1/calendars/$CALID" >/dev/null || true
+curl -s -X DELETE "$CAL/v1/calendars/$CALID" -H "X-Admin-Token: $CAL_ADMIN_TOKEN" >/dev/null || true
 echo "GATE outbound Fase 3a — OK."

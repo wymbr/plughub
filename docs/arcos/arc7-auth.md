@@ -976,3 +976,126 @@ como *"recusou o não-autorizado"* seria medir o 404).
 
 O sítio 2 alcançava mais do que parecia: `_can_view_transcript` **delega** para ele, então o
 bypass de config vazio chegava a **transcrição** — conteúdo, não só listas de id→nome.
+
+---
+
+## Portão dos serviços de config — calendar-api e dialog-api (2026-08-27)
+
+Último achado colateral do arco. **Não é dívida de ABAC**: era escrita não autenticada em config
+de produção. Os campos `config.calendars` e `config.dialog_forms`, criados no passo 2, decidiam
+apenas quem **vê** a tela.
+
+### O que foi medido, antes
+
+| serviço | medição |
+|---|---|
+| `calendar-api` (3700) | `POST /v1/calendars` **sem credencial nenhuma** → **201**, recurso criado. `admin_token` existia em `config.py:41` e **nenhuma rota o lia** |
+| `dialog-api` (3760) | `PLUGHUB_DIALOG_ADMIN_TOKEN` ausente no compose deixava `_require_admin` inerte (`if expected and …`) — criar **e publicar** um DialogForm anonimamente devolvia **200** nas duas chamadas |
+
+O custo não é abstrato: `campaign.contact_calendar_id` decide a **janela em que um cliente pode
+ser contatado** (Outbound Fase 3a; `db_contact_eligibility` consulta `is_open`). Reescrever ou
+apagar um calendário anonimamente **abre** essa janela.
+
+### A decisão foi ONDE mora o verificador, e a medição a resolveu
+
+O `TODO.md` registrava *cinco* implementações de "verificar JWT + ler `module_config`". Medindo:
+**seis** — faltava a `pricing-api`. E as seis **já haviam divergido** em seis pontos
+independentes (tabela completa no cabeçalho de
+`packages/py-authz/src/plughub_authz/__init__.py`, e resumida no `TODO.md` § *Migrar os SEIS*).
+Dois desses pontos são fail-open:
+
+- `min_access` desconhecido cai em `.get(min_access, 0)` em três serviços — um typo (`"readwrite"`)
+  vira rank 0, e então **qualquer** grant não-`none` passa;
+- `module_config` vazio **libera** na `evaluation-api` quando `min_access is None` (ramo legado
+  declarado, não acidente).
+
+**O agravante que nomeia a dívida:** `channel-gateway/auth.py:6-9` *promete no docstring* ser o
+ponto compartilhado — *"outros módulos devem reusar estas funções em vez de reimplementar"* — e
+cinco serviços reimplementaram. Promessa sem mecanismo, a mesma família do DDL de
+`participation_intervals`.
+
+**Hipótese que caiu na medição:** PyJWT **recusa** chave HMAC vazia (`InvalidKeyError`, subclasse
+de `PyJWTError`), então o caminho de segredo vazio da `evaluation-api` vira 401 — não é fail-open,
+como eu ia registrar.
+
+**Achado que mudou o desenho:** nenhum serviço Python do monorepo depende de pacote interno.
+Extrair não era refactor, era criar infraestrutura de empacotamento — barata só porque o contexto
+de build dos dois Dockerfiles já é a raiz do monorepo (~2 linhas por serviço).
+
+**Decisão do dono:** pacote canônico, **só nos dois novos**; os seis ficam como dívida
+registrada, porque cada um tem postura deliberadamente diferente (bypass de demo na analytics,
+dual-gate com admin-token na config/pricing, ramo legado da evaluation) e trocar seis posturas no
+commit que abre duas portas é raio de ação onde regressão se esconde.
+
+### `packages/py-authz` — API e decisões canônicas
+
+```python
+ACCESS_RANK  = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+bearer_from_header(authorization) -> str | None
+verify_user_jwt(token, secret)    -> dict | None      # None = ausente/inválido/expirado
+abac_can(claims, module, field, min_access="read_only") -> bool
+enforce_write(*, request, admin_token, jwt_secret, module, field,
+              min_access="read_write", what) -> dict | None   # 401 / 403 / 503
+```
+
+Cada decisão fecha uma divergência medida:
+
+| decisão | divergência que fecha |
+|---|---|
+| uma tabela de rank, `read_only` e `write_only` colapsados em 1 (o que `permissions.ts` usa) | a lista indexada da `analytics-api`, onde `write_only > read_only` — **registrada, não replicada** |
+| `min_access` desconhecido levanta `ValueError` | o `.get(min_access, 0)` que faz typo virar "passa" |
+| `module_config` vazio ⇒ **nega** | o ramo que libera na `evaluation-api` (grant-first: ausência de grants nunca é autorização) |
+| credencial ausente ⇒ **401**; grant insuficiente ⇒ **403** | 401 × 403 entre config-api e pricing-api. Dois estados diferentes, dois códigos |
+| portão desabilitado **loga em WARNING nomeando o campo** | foi um portão inerte e mudo que deixou estes dois serviços abertos por meses |
+
+### Onde o portão entra, e onde deliberadamente NÃO entra
+
+- **calendar-api** — 12 rotas de escrita (`holiday-sets`, `tenant-config`, `calendars`,
+  `associations`) atrás de `dependencies=[_WRITE]` **no decorador**, não no corpo: os handlers não
+  recebiam `request`, e alargar doze assinaturas cria doze lugares para esquecer. No decorador o
+  portão é greppável e uma rota nova sem ele salta na revisão.
+- **dialog-api** — as 3 rotas de escrita, reusando o `_require_admin` que já existia (o parâmetro
+  `x_admin_token` fica na assinatura só para o header aparecer no OpenAPI; quem o lê é o
+  `enforce_write`, a partir do request — uma leitura só).
+- **Leitura aberta nos dois, por decisão.** `/v1/engine/*` é consultado por workflow-api
+  (`add-business-duration`), scheduler-api (`is-open-calendar`, `next-open-slot-calendar`) e
+  mailing-api, todos sem credencial; os `GET` do dialog servem o `form_get` do mcp-server e o
+  survey web do channel-gateway. Um portão que fechasse a leitura **passaria** no teste de
+  segurança e quebraria o produto em silêncio: o NPS de fim-de-contato cairia no `on_failure` do
+  `form_get` e o wrap-up abriria o painel vazio.
+
+### O que quebraria junto, e foi consertado
+
+- **UI** — nem o `apiFetch` local de `CalendarsPage.tsx` nem `api/dialog-hooks.ts` mandavam
+  `Authorization`. Os dois passaram a mandar o Bearer **inclusive nas leituras**: separar headers
+  de leitura de headers de escrita cria dois lugares para esquecer, e o esquecimento aparece como
+  um botão que não salva, não como erro. É o defeito que `OrchestrationTab.tsx:172` já documenta.
+- **12 atalhos manuais** de seed do dialog — 10 ganharam o admin-token; os outros 2 só leem e
+  delegam a escrita ao seed já corrigido.
+- **2 scripts de calendar** (`test_t15_dispatcher.sh`, `smoke_outbound_fase3a.sh`). ⚠️ O t15 tem
+  um `else` que **pula** os casos 3 e 4 quando o calendar não responde — com 401 ele ficaria verde
+  **por pular**, que é a família "teste que não pode reprovar".
+- **`dialog-seed`** — `DIALOG_ADMIN_TOKEN` (env crua) tem de espelhar
+  `PLUGHUB_DIALOG_ADMIN_TOKEN` (prefixo do pydantic-settings). Divergir faria a base nova subir
+  **sem formulário nenhum**.
+
+### Gates
+
+| gate | o que reprova |
+|---|---|
+| `probe_config_service_write_gate.sh` | escrita anônima voltar (S1/S6/S7) · o caminho de **sistema** parar de funcionar (S2) · quem **tem** o grant não conseguir escrever (S3/S8, contraprova positiva) · quem **não** tem conseguir (S4 — e o código tem de ser **403**, não 401) · a **leitura/engine fechar junto** (S5/S9/S10) |
+| `probe_authz_single_verifier.sh` | uma **sétima** implementação aparecer · os dois consumidores deixarem de importar `plughub_authz` · o pacote sumir do Dockerfile ("existe" ≠ "está pronto") |
+
+A linha de base do segundo é uma **lista nomeada**, não um número: um contador não sabe dizer se a
+sétima entrou e uma das seis saiu no mesmo commit.
+
+⚠️ **Dois defeitos nos próprios instrumentos, e o segundo é o que vale guardar.** O primeiro: o
+probe reprovava o produto por colisão em `uq_calendar` (dois cenários criando com o mesmo nome →
+500), com uma mensagem convincente. O segundo: o contador **subcontava de forma não
+determinística** — com `set -o pipefail`, `sed … | grep -q` faz o `grep` sair no primeiro
+casamento, o `sed` morrer de SIGPIPE (141), e o `if` ler a falha do pipeline como *"não casou"*;
+quanto **maior** o arquivo, mais provável a corrida, então sumiam justamente os dois routers
+grandes e duas execuções seguidas deram **6 e 5**. Um contador que perde linha sozinho deixaria a
+sétima cópia entrar debaixo do verde. Trocado por `grep -qE '^[^#]*(…)'`, sem pipe, e a
+falseabilidade foi conferida injetando uma sétima implementação.
+

@@ -2,6 +2,115 @@
 
 ---
 
+## Escrita de config sem credencial — calendar-api e dialog-api fechadas (2026-08-27)
+
+Último dos achados colaterais do arco de ABAC. Não era dívida de ABAC: era **escrita não
+autenticada em config de produção**.
+
+| serviço | antes | agora |
+|---|---|---|
+| `calendar-api` (3700) | `POST /v1/calendars` **sem credencial nenhuma** → **201**, recurso criado. `admin_token` existia em `config.py:41` e nenhuma rota o lia | 12 rotas de escrita atrás de portão dual; `/v1/engine/*` intactas |
+| `dialog-api` (3760) | `PLUGHUB_DIALOG_ADMIN_TOKEN` ausente no compose deixava `_require_admin` inerte (`if expected and …`) — criar **e publicar** DialogForm anônimo → **200** nos dois | 3 rotas de escrita atrás do mesmo portão; `GET` intactos |
+
+O custo concreto, para não ser zelo abstrato: a janela em que um cliente pode ser contatado é
+decidida por `campaign.contact_calendar_id` (Outbound Fase 3a — `db_contact_eligibility` consulta
+`is_open` deste serviço). Reescrever ou apagar um calendário anonimamente **abre** essa janela.
+
+### A decisão que travava não era "gatear ou não" — era ONDE mora o verificador
+
+E a medição a resolveu. Não eram **cinco** implementações de *"verificar JWT + ler
+`module_config`"*, como o `TODO.md` registrava: eram **seis** (faltava a `pricing-api`). E elas
+**já haviam divergido**, em seis pontos independentes:
+
+| ponto | divergência medida |
+|---|---|
+| biblioteca | stdlib à mão (config, pricing) × PyJWT (analytics, channel-gateway, evaluation) × `python-jose` (auth-api) — **três** |
+| ordem de acesso | dict `{none:0, read_only:1, write_only:1, read_write:2}` em 4 serviços × **lista indexada** em `analytics-api/audit.py`, onde `write_only` é ESTRITAMENTE maior que `read_only`. O mesmo grant responde diferente em dois serviços |
+| `module_config` vazio | recusa em 4 × **libera** na `evaluation-api` quando `min_access is None` |
+| `min_access` desconhecido | `.get(min_access, **0**)` faz um typo (`"readwrite"`) virar rank 0 ⇒ **qualquer** grant não-`none` passa (3 serviços) × `.get(…, 1)` no channel-gateway |
+| credencial ausente | **401** (config-api) × **403** (pricing-api) |
+| segredo ausente | 503 × recusa × degrada **aberto** (`pool_auth`, declarado) × devolve `None` |
+
+Isso tirou "extrair" do campo do gosto: copiar duas vezes mais seria a sétima e a oitava cópia de
+algo que **já** diverge. **O agravante é o que dá nome à dívida** — `channel-gateway/auth.py:6-9`
+**promete no docstring** ser o ponto compartilhado (*"outros módulos devem reusar estas funções em
+vez de reimplementar"*) e cinco serviços reimplementaram. Promessa sem mecanismo é a mesma família
+do DDL de `participation_intervals`, que afirmava em prosa a ordenação que nenhum produtor impunha.
+
+**Uma hipótese minha caiu na medição, antes de virar relato:** eu ia registrar que a
+`evaluation-api` com `jwt_secret` vazio verificaria contra `""`. PyJWT recusa chave vazia
+(`InvalidKeyError`, subclasse de `PyJWTError`) ⇒ vira 401. Não é fail-open.
+
+**Achado que mudou o desenho:** *nenhum* serviço Python do monorepo depende de pacote interno —
+extrair não era refactor, era criar infraestrutura de empacotamento. O que a tornou barata é que o
+contexto de build dos dois Dockerfiles já é a raiz do monorepo: ~2 linhas por serviço.
+
+Decisão do dono: **pacote canônico, só nos dois novos**, com a migração dos seis registrada como
+dívida — porque cada um dos seis tem postura deliberadamente diferente, e trocar seis posturas no
+commit que abre duas portas é raio de ação onde regressão se esconde.
+
+### `packages/py-authz` — o que ele decide, e cada decisão fecha uma divergência
+
+- **uma** tabela de rank, com `read_only` e `write_only` colapsados em 1 (a maioria medida, e a
+  que `permissions.ts` usa). A lista indexada da analytics é o outlier — **registrado, não
+  replicado**;
+- `min_access` desconhecido **levanta `ValueError`**. Erro de programação que vira "passa" é como
+  a divergência 4 se paga;
+- `module_config` vazio ⇒ **nega** (grant-first, a decisão do arco: ausência de grants nunca é
+  autorização);
+- credencial **ausente** ⇒ 401; grant **insuficiente** ⇒ 403. Dois estados, dois códigos;
+- portão desabilitado (sem `admin_token`) **loga em WARNING nomeando o campo que deixa de valer**.
+  Um portão inerte que não avisa é indistinguível de um portão — foi assim que estes dois
+  serviços passaram meses abertos.
+
+### A LEITURA ficou aberta nos dois, e isso é decisão, não lacuna
+
+`/v1/engine/*` (workflow-api `add-business-duration`, scheduler-api `is-open-calendar`,
+mailing-api) e os `GET` do dialog (`form_get` do mcp-server, survey web do channel-gateway) são
+chamadores de **runtime, sem credencial**. Um portão que fechasse a leitura passaria no teste de
+segurança e quebraria o produto em silêncio — o NPS de fim-de-contato cairia no `on_failure` do
+`form_get` e o wrap-up abriria o painel vazio. Por isso o gate tem **três testemunhas do outro
+lado** (S5, S9, S10), não só as de recusa.
+
+### O que quebraria e foi consertado junto (medido antes de fechar)
+
+- **UI**: nem `CalendarsPage.tsx` (`apiFetch` local) nem `api/dialog-hooks.ts` mandavam
+  `Authorization` — a tela salvaria 401 com o backend correto. É o defeito que
+  `OrchestrationTab.tsx:172` já documenta como próprio. Os dois passaram a mandar o Bearer,
+  **inclusive nas leituras**: separar "headers de leitura" de "headers de escrita" cria dois
+  lugares para esquecer;
+- **12 atalhos manuais** de seed do dialog (`infra/test/seed_dialog_*.sh`) escreviam anônimos —
+  10 ganharam o admin-token; os outros 2 só leem e delegam a escrita, corretamente não tocados;
+- **2 scripts de calendar** (`test_t15_dispatcher.sh`, `smoke_outbound_fase3a.sh`). O t15 tem um
+  `else` que **pula** o caso quando o calendar não responde — com 401 ele ficaria verde por
+  pular, que é a família "teste que não pode reprovar";
+- **`dialog-seed`**: `DIALOG_ADMIN_TOKEN` (env crua) tinha de espelhar `PLUGHUB_DIALOG_ADMIN_TOKEN`
+  (prefixo do pydantic-settings). Divergir faria a base nova subir **sem formulário nenhum**.
+
+### Dois defeitos nos meus próprios instrumentos, e o segundo é o que vale registrar
+
+1. O probe reprovava o produto por **colisão de nome** em `uq_calendar`: dois cenários criavam
+   com o mesmo nome, o segundo dava 500, e a mensagem ("portão recusando quem deveria passar")
+   era convincente. Nome por cenário.
+2. ⚠️ O contador de implementações **subcontava, de forma não determinística**: `set -o pipefail`
+   + `sed … | grep -q` faz o `grep` sair no primeiro casamento, o `sed` morrer de SIGPIPE (141) e
+   o `if` ler a falha do pipeline como *"não casou"*. Quanto **maior** o arquivo, mais provável a
+   corrida — então sumiam justamente os dois routers grandes, e duas execuções seguidas deram
+   **6 e 5**. Um contador que perde linha sozinho deixaria a sétima cópia entrar debaixo do verde.
+   Trocado por `grep -qE '^[^#]*(…)'`, sem pipe. Falseabilidade conferida: injetar uma sétima
+   implementação deixa o gate vermelho.
+
+**Gates:** `probe_config_service_write_gate.sh` (10 cenários: recusa anônima, caminho de sistema,
+contraprova **positiva** — quem tem o grant escreve — e **negativa** — 403, não 401 —, mais as três
+testemunhas de leitura aberta) e `probe_authz_single_verifier.sh` (linha de base como **lista
+nomeada**, não número: um contador não sabe dizer se a sétima entrou e uma das seis saiu no mesmo
+commit). Verificado também **pelo proxy da UI** (5174), que é o caminho do browser: 201 / 403 /
+401 / 200 nos casos correspondentes.
+
+**Suítes:** 31/31 gates verdes · calendar-api 63 · dialog-api 10.
+
+---
+
 ## Fim da cauda de papel — passo 8 completo, arco de ABAC total fechado (2026-08-27)
 
 Duas decisões do dono destravaram os três sítios que faltavam:

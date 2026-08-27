@@ -20,6 +20,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
+DIALOG_ADMIN_TOKEN="${DIALOG_ADMIN_TOKEN:-demo_dialog_admin_token}"   # portao de escrita (sistema)
 TENANT="${TENANT:-tenant_demo}"
 
 for FORM_ID in dialog_limite_solicitacao dialog_limite_aprovacao; do
@@ -31,14 +32,14 @@ for FORM_ID in dialog_limite_solicitacao dialog_limite_aprovacao; do
   # silencioso (o form seguiu com question nodes em vez de fields, e o valor digitado
   # pelo aprovador não chegava ao workflow). O PUT é o caminho de ATUALIZAÇÃO.
   echo "→ Criando '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT})"
-  if curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
+  if curl -fsS -X POST -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "${DIALOG_API}/v1/dialog/forms" \
        -H 'Content-Type: application/json' \
        -H "X-Tenant-ID: ${TENANT}" \
        --data-binary @"${FORM_FILE}" >/dev/null 2>&1; then
     echo "  ✓ criado (draft)"
   else
     echo "  · já existia — atualizando o draft via PUT"
-    curl -fsS -X PUT "${DIALOG_API}/v1/dialog/forms/${FORM_ID}" \
+    curl -fsS -X PUT -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "${DIALOG_API}/v1/dialog/forms/${FORM_ID}" \
       -H 'Content-Type: application/json' \
       -H "X-Tenant-ID: ${TENANT}" \
       --data-binary @"${FORM_FILE}" >/dev/null
@@ -46,7 +47,7 @@ for FORM_ID in dialog_limite_solicitacao dialog_limite_aprovacao; do
   fi
 
   echo "→ Publicando '${FORM_ID}'"
-  curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms/${FORM_ID}/publish" \
+  curl -fsS -X POST -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "${DIALOG_API}/v1/dialog/forms/${FORM_ID}/publish" \
     -H "X-Tenant-ID: ${TENANT}" >/dev/null
   echo "  ✓ publicado"
 done

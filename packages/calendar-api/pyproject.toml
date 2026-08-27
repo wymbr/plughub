@@ -6,6 +6,9 @@ requires-python = ">=3.10"
 dependencies    = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
+    # Verificador canonico de JWT de usuario + portao ABAC. Path dep do monorepo
+    # (instalada pelo Dockerfile antes deste pacote); nao existe no PyPI.
+    "plughub-authz",
     "asyncpg>=0.29.0",
     "redis[hiredis]>=5.2.0",
     "pydantic>=2.9.0",

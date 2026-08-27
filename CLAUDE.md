@@ -467,6 +467,7 @@ plughub/
   plughub_spec_v1.docx           ← full architectural specification
   packages/
     schemas/                     ← @plughub/schemas — Zod contracts
+    py-authz/                    ← plughub-authz — verificador CANÔNICO de JWT+ABAC (Python)
     sdk/                         ← @plughub/sdk — TypeScript + Python
     mcp-server-plughub/          ← Agent Runtime and BPM tools
     skill-flow-engine/           ← Skill Flow interpreter
@@ -493,6 +494,7 @@ plughub/
 | Package | Language | Runtime | Notes |
 |---|---|---|---|
 | schemas | TypeScript | Node 20+ | Zod 3.23+ |
+| py-authz | Python | Python 3.11+ | lib, sem serviço — PyJWT + FastAPI |
 | sdk | TypeScript + Python | Node 20+ / Python 3.11+ | Two parallel packages |
 | mcp-server-plughub | TypeScript | Node 20+ | Official Anthropic MCP SDK |
 | skill-flow-engine | TypeScript | Node 20+ | State graph interpreter |
@@ -1087,6 +1089,29 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
 → See [`docs/product/shared-capacity-pool-as-tag-design.md`](docs/product/shared-capacity-pool-as-tag-design.md)
 
 ## Security — Section 9.5
+
+**UM verificador de JWT+ABAC, e ele é `packages/py-authz`.** *(2026-08-27.)* Todo portão novo que
+precise responder *"este chamador pode?"* a partir de um JWT do auth-api usa `plughub_authz`
+(`verify_user_jwt` · `abac_can` · `enforce_write`) — nunca uma cópia. A regra é medida, não
+estética: quando ela foi escrita já existiam **seis** implementações independentes, e elas
+**divergiam em seis pontos** (biblioteca; ordem de acesso, onde `analytics-api/audit.py` trata
+`write_only` como maior que `read_only` e os outros os colapsam; `module_config` vazio, que a
+`evaluation-api` LIBERA no ramo legado; `min_access` desconhecido, que em três serviços vira rank
+0 e deixa **qualquer** grant passar; 401 × 403 para credencial ausente; e quatro posturas
+distintas para segredo ausente). Tabela completa no cabeçalho do pacote.
+**O agravante que dá o nome à regra:** `channel-gateway/auth.py:6-9` já *prometia no docstring*
+ser o ponto compartilhado, e cinco serviços reimplementaram — promessa sem mecanismo, a mesma
+família do DDL de `participation_intervals`. Gate `infra/test/probe_authz_single_verifier.sh`
+(reprova a sétima cópia; a migração dos seis é dívida registrada no `TODO.md`, **não** exigida
+pelo gate).
+
+**Escrita de config exige portão; LEITURA de config nem sempre — e isso é decidido, não
+omitido.** `calendar-api` e `dialog-api` gateiam escrita (`config.calendars` / `config.dialog_forms`,
+`read_write`) e mantêm abertas as rotas que chamadores de **runtime sem credencial** consomem:
+`/v1/engine/*` (workflow-api, scheduler-api, mailing-api decidem a janela de contato) e os `GET`
+do dialog (`form_get` do mcp-server, survey web). Um portão que feche a leitura **passa** no teste
+de segurança e quebra o produto em silêncio — por isso o gate carrega testemunhas dos dois lados.
+Gate: `infra/test/probe_config_service_write_gate.sh`.
 
 **Tool permission filtering**: `InferenceRequest.permissions` from JWT → `InferenceEngine.infer()` filters tool list. Empty = no filtering (backward-compatible).
 

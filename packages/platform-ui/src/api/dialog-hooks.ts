@@ -3,7 +3,10 @@
  * API hooks for the Dialog primitive editor (DialogForm store — dialog-api,
  * port 3760, via the /v1/dialog Vite/nginx proxy). Custom fetch (mirrors
  * evaluation-hooks). Tenant scoping via the X-Tenant-ID header (dialog-api
- * requires it). Writes are open in the demo (admin_token unset).
+ * requires it). ESCRITA exige `config.dialog_forms` (read_write) desde 2026-08-27:
+ * o portao do dialog-api virou dual (admin-token de sistema OU Bearer + ABAC), e
+ * ate entao `PLUGHUB_DIALOG_ADMIN_TOKEN` vazio o deixava inerte — criar E publicar
+ * um form anonimamente devolvia 200.
  *
  * The DialogForm shape mirrors @plughub/schemas/dialog.ts but is defined
  * locally to keep platform-ui decoupled from the schemas package.
@@ -143,7 +146,14 @@ export type DialogFormUpsert = Pick<
 >
 
 function headers(tenantId: string): Record<string, string> {
-  return { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId }
+  // O Bearer viaja em TODA chamada, leitura inclusive. As leituras do dialog-api sao
+  // abertas, entao mandar o token nelas nao muda nada hoje — mas separar "headers de
+  // leitura" de "headers de escrita" cria dois lugares onde alguem pode esquecer, e o
+  // esquecimento aparece como um botao que nao salva, nao como erro.
+  const h: Record<string, string> = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId }
+  const token = localStorage.getItem('plughub_access_token')
+  if (token) h['Authorization'] = `Bearer ${token}`
+  return h
 }
 
 // ── List (latest version metadata per form) ───────────────────────────────────

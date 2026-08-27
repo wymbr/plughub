@@ -1,0 +1,21 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name            = "plughub-authz"
+version         = "0.1.0"
+description     = "Verificador canônico de JWT de usuário (auth-api HS256) + portão ABAC module_config"
+requires-python = ">=3.11"
+dependencies    = [
+    "pyjwt>=2.9.0",
+    "fastapi>=0.115.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

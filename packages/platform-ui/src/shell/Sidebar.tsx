@@ -174,19 +174,22 @@ const Sidebar: React.FC = () => {
         { label: t('nav.resources'),     href: '/config/resources',     icon: Package,         abac: { module: 'config', field: 'resources' } },
         { label: t('nav.platform'),      href: '/config/platform',      icon: Tv2,             abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.channels'),      href: '/config/channels',      icon: Radio,           abac: { module: 'config', field: 'channels'  } },
-        // ⚠️ MENU-ONLY: o calendar-api nao tem portao nenhum — medido em 2026-08-27,
-        // `POST /v1/calendars` SEM credencial devolveu 201 e criou o recurso. Este campo
-        // decide quem VE a tela, nao quem pode escrever. Ver `TODO.md` § "Serviços de
-        // config sem portão".
+        // Menu E backend concordam desde 2026-08-27: o calendar-api gateia as 12 rotas de
+        // ESCRITA com `config.calendars` (read_write), via `plughub_authz`. Antes disso
+        // `POST /v1/calendars` sem credencial nenhuma devolvia 201 e criava o recurso.
+        // As rotas `/v1/engine/*` seguem abertas de proposito (workflow-api, scheduler-api
+        // e mailing-api consultam a janela de contato sem credencial).
         { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'calendars' } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.configurar (D2).
         { label: t('nav.schedules'),     href: '/config/schedules',     icon: CalendarClock,   abac: { module: 'scheduler', field: 'configurar' } },
         // Outbound (fatia 1b) — grant-first (strict): visível só com outbound.configurar.
         { label: t('nav.outbound'),      href: '/config/outbound',      icon: Send,            abac: { module: 'outbound', field: 'configurar' } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
-        // ⚠️ MENU-ONLY, mesma razao: `DIALOG_ADMIN_TOKEN` vazio no compose torna o
-        // `_require_admin` do dialog-api inerte (`if expected and ...`) — criar E PUBLICAR
-        // form sem credencial devolveu 200 nos dois.
+        // Idem: escrita do dialog-api gateada por `config.dialog_forms` (read_write). Ate
+        // 2026-08-27 `PLUGHUB_DIALOG_ADMIN_TOKEN` ausente no compose deixava o
+        // `_require_admin` inerte (`if expected and ...`) — criar E PUBLICAR form sem
+        // credencial devolvia 200 nos dois. Leitura segue aberta: `form_get` e o survey
+        // web sao chamadores de runtime sem credencial.
         { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'dialog_forms' } },
         // Era a UNICA entrada gateada por PAPEL no nivel do item. O modulo `billing` ja
         // existia e o supervisor chegou a ter `billing.visualizar` concedido sem ver a

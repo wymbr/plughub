@@ -103,8 +103,16 @@ interface HolidaySet {
 // ── Fetch helpers ──────────────────────────────────────────────────────────────
 
 async function apiFetch(path: string, opts?: RequestInit) {
+  // Bearer obrigatorio na ESCRITA desde 2026-08-27 (portao dual do calendar-api:
+  // admin-token de sistema OU `config.calendars` read_write). Mandado tambem nas
+  // leituras, que seguem abertas, para nao existirem dois caminhos de header.
+  const token = localStorage.getItem('plughub_access_token')
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts?.headers ?? {}),
+    },
     ...opts,
   })
   if (!res.ok) {

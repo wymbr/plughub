@@ -37,8 +37,18 @@ class Settings(BaseSettings):
     # Background task: how often to check for window transitions (seconds)
     window_check_interval_s: int = 60
 
-    # Admin token for write operations (optional — omit to allow all)
+    # Portao de ESCRITA (dual: admin-token de sistema OU Bearer + ABAC
+    # `config.calendars`). Vazio DESABILITA o portao — postura preservada, mas agora
+    # LOGADA em WARNING pelo `plughub_authz.enforce_write`.
+    #
+    # As rotas `/v1/engine/*` ficam ABERTAS de proposito: sao consultadas por
+    # workflow-api (`add-business-duration`), scheduler-api (`is-open-calendar`,
+    # `next-open-slot-calendar`) e mailing-api (janela de contato), todos chamadores
+    # internos sem credencial. Elas CALCULAM sobre a config; nao a alteram.
     admin_token: str = ""
+
+    # Mesmo segredo HS256 da auth-api — valida o Bearer do caminho ABAC.
+    jwt_secret:  str = ""
 
 
 @lru_cache

@@ -1162,9 +1162,12 @@ services:
       DIALOG_FORMS_DIR: /dialog
       TENANT_ID:        tenant_demo
       SEED_MAX_WAIT:    "120"
-      # dialog-api roda sem admin_token no demo (escritas abertas); se
-      # PLUGHUB_DIALOG_ADMIN_TOKEN for definido lá, espelhe aqui.
-      DIALOG_ADMIN_TOKEN: ""
+      # ESPELHO de PLUGHUB_DIALOG_ADMIN_TOKEN do servico dialog-api. Os dois nomes
+      # diferem porque o servico usa env_prefix `PLUGHUB_DIALOG_` (pydantic-settings) e
+      # o seed le a env crua; divergir aqui faz o seed levar 401 e a base nova subir
+      # SEM formulario nenhum — o NPS de fim-de-contato cairia no `on_failure` do
+      # `form_get` e o wrap-up abriria o painel vazio.
+      DIALOG_ADMIN_TOKEN: demo_dialog_admin_token
     command: ["python", "/seed/seed_dialog.py"]
     depends_on:
       dialog-api:
@@ -1322,6 +1325,11 @@ services:
       PLUGHUB_CALENDAR_DATABASE_URL:  postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_CALENDAR_REDIS_URL:     redis://redis:6379
       PLUGHUB_CALENDAR_KAFKA_BROKERS: kafka:29092
+      # Portao de escrita LIGADO. Vazio o desabilitaria — e um portao desligado no
+      # demo e a razao de este servico ter aceitado `POST /v1/calendars` anonimo ate
+      # 2026-08-27. As rotas /v1/engine/* seguem abertas (chamadores internos).
+      PLUGHUB_CALENDAR_ADMIN_TOKEN:   demo_calendar_admin_token
+      PLUGHUB_CALENDAR_JWT_SECRET:    changeme_auth_jwt_secret_demo_32c   # mesmo segredo da auth-api
     depends_on:
       postgres:
         condition: service_healthy
@@ -1395,6 +1403,11 @@ services:
       - "3760:3760"
     environment:
       PLUGHUB_DIALOG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
+      # Portao de escrita LIGADO (era vazio ⇒ inerte: criar E publicar form anonimo
+      # devolvia 200). Leituras seguem abertas — `form_get` e o survey web sao
+      # chamadores de runtime sem credencial.
+      PLUGHUB_DIALOG_ADMIN_TOKEN:  demo_dialog_admin_token
+      PLUGHUB_DIALOG_JWT_SECRET:   changeme_auth_jwt_secret_demo_32c   # mesmo segredo da auth-api
     depends_on:
       postgres:
         condition: service_healthy

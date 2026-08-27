@@ -13,6 +13,7 @@ set -euo pipefail
 
 TENANT="tenant_demo"
 DIALOG="http://localhost:3760"
+DIALOG_ADMIN_TOKEN="${DIALOG_ADMIN_TOKEN:-demo_dialog_admin_token}"   # portao de escrita (sistema)
 CGW="http://localhost:8010"
 EVAL="http://localhost:3400"
 COMPOSE="docker compose -f docker-compose.demo.yml"
@@ -39,9 +40,9 @@ read -r -d '' BODY <<JSON || true
   ]
 }
 JSON
-curl -fsS -X POST "$DIALOG/v1/dialog/forms" "${ts[@]}" -H 'content-type: application/json' -d "$BODY" >/dev/null 2>&1 \
+curl -fsS -X POST -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "$DIALOG/v1/dialog/forms" "${ts[@]}" -H 'content-type: application/json' -d "$BODY" >/dev/null 2>&1 \
   || echo "   (form provavelmente já existe — seguindo)"
-curl -fsS -X POST "$DIALOG/v1/dialog/forms/$FORM/publish" "${ts[@]}" >/dev/null
+curl -fsS -X POST -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "$DIALOG/v1/dialog/forms/$FORM/publish" "${ts[@]}" >/dev/null
 
 echo "2) cria token de survey web (grain=session) ..."
 CREATE=$(curl -s -w $'\n%{http_code}' -X POST "$CGW/v1/survey/web/create" -H 'content-type: application/json' -d "{

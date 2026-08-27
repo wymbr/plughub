@@ -47,6 +47,20 @@ probe_customer_history_authz.sh
 # a senha de quem detem o campo). Testemunhas de presenca nos dois lados: o mesmo
 # principal cria e edita pessoa, e o admin continua concedendo.
 probe_config_permissions_split.sh
+# calendar-api e dialog-api aceitavam escrita ANONIMA ate 2026-08-27 (`POST
+# /v1/calendars` sem credencial -> 201; criar E publicar DialogForm -> 200), enquanto
+# os campos `config.calendars`/`config.dialog_forms` decidiam so o MENU. Fechadas com
+# portao dual sobre `plughub_authz`. As tres testemunhas de LEITURA ABERTA (S5/S9/S10)
+# nao sao enfeite: workflow-api, scheduler-api, mailing-api, `form_get` e o survey web
+# chamam sem credencial, e um portao que fecha a leitura passa no teste de seguranca e
+# quebra o produto em silencio.
+probe_config_service_write_gate.sh
+# Conta as implementacoes independentes de "verificar JWT + ler module_config". Eram
+# SEIS quando se mediu, e ja divergiam em seis pontos (tabela no cabecalho de
+# packages/py-authz). O probe nao exige que as seis migrem — protege contra a SETIMA.
+# A linha de base e uma LISTA NOMEADA, nao um numero: um contador nao sabe dizer se a
+# setima entrou e uma das seis saiu no mesmo commit.
+probe_authz_single_verifier.sh
 # Uma tela e gateada duas vezes — pelo campo no `Sidebar.tsx` (quem VE) e pelo campo
 # que o servico exige (quem ESCREVE) — e nada obrigava os dois a coincidir. Media-se
 # por COMPORTAMENTO: concede so o campo do menu e confere se o backend aceita. O campo

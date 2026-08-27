@@ -113,26 +113,64 @@ seja, um objeto com duas leituras e uma delas escreve em tabela morta.
 Encaminhamento (não decidido): remover as duas tabelas e o `apply`, mantendo o template como
 preset de `module_config` — que é o uso que a UI já faz e o único com consumidor.
 
-### 🔴 Serviços de config SEM portão (achado do passo 2, 2026-08-27)
+### ✅ Serviços de config SEM portão — FECHADO (2026-08-27)
 
-Não é dívida de ABAC — é **escrita não autenticada** em config de produção. Medido:
+`calendar-api` e `dialog-api` aceitavam **escrita não autenticada** em config de produção
+(`POST /v1/calendars` sem credencial → **201**; criar **e publicar** DialogForm anônimo → **200**
+nos dois). Fechado: portão **dual** (admin-token de sistema **OU** Bearer + ABAC) sobre as 12
+rotas de escrita do calendar e as 3 do dialog. Ver `CHANGELOG.md` e
+[`docs/arcos/arc7-auth.md`](docs/arcos/arc7-auth.md) § Portão dos serviços de config.
 
-| serviço | medição |
+**A decisão que travava era ONDE mora o verificador**, e a medição a resolveu: não eram cinco
+implementações de *"verificar JWT + ler `module_config`"* — eram **seis** (faltava a
+`pricing-api`), e elas **já haviam divergido**, em seis pontos. Isso tirou "extrair" do campo do
+gosto. O dono escolheu o pacote canônico **só para os dois novos**, sem migrar os seis.
+
+**LEITURA FICOU ABERTA nos dois, e não é lacuna** — `/v1/engine/*` (workflow-api,
+scheduler-api, mailing-api) e os `GET` do dialog (`form_get` do mcp-server, survey web) são
+chamadores de runtime sem credencial. Um portão que fechasse a leitura passaria no teste de
+segurança e quebraria o produto em silêncio; por isso as três testemunhas S5/S9/S10 do gate.
+
+Gates: `infra/test/probe_config_service_write_gate.sh` (10 cenários, com contraprova positiva
+**e** negativa) e `infra/test/probe_authz_single_verifier.sh`.
+
+### 🟡 Migrar os SEIS verificadores para `packages/py-authz` (dívida aberta, com evidência)
+
+O pacote canônico existe e tem dois consumidores. Os seis anteriores **não** foram migrados de
+propósito: cada um tem postura deliberadamente diferente (bypass de demo na analytics, dual-gate
+com admin-token na config/pricing, ramo legado da evaluation), e trocar a postura de seis
+serviços no mesmo commit que abre duas portas novas é raio de ação onde regressão se esconde.
+
+O que torna esta dívida **acionável em vez de aspiracional** é a tabela de divergências medidas
+(completa no cabeçalho de `packages/py-authz/src/plughub_authz/__init__.py`):
+
+| ponto | divergência |
 |---|---|
-| `calendar-api` (3700) | `POST /v1/calendars` **sem credencial** → **201**, recurso criado. Não há dependência de auth em rota nenhuma do CRUD |
-| `dialog-api` (3760) | `DIALOG_ADMIN_TOKEN: ""` no compose torna `_require_admin` inerte (`if expected and ...`). Criar **e publicar** DialogForm anônimo → **200** nos dois |
+| biblioteca | stdlib à mão (config, pricing) × PyJWT (analytics, channel-gateway, evaluation) × `python-jose` (auth-api) |
+| ordem de acesso | dict com `write_only == read_only == 1` (4 serviços) × **lista indexada** em `analytics-api/audit.py`, onde `write_only > read_only`. O mesmo grant responde diferente em dois serviços |
+| `module_config` vazio | recusa em 4 × **libera** na `evaluation-api` quando `min_access is None` (ramo legado declarado) |
+| `min_access` desconhecido | `.get(min_access, **0**)` faz um typo virar rank 0 ⇒ qualquer grant passa (3 serviços) × `.get(…, 1)` no channel-gateway |
+| credencial ausente | **401** (config-api) × **403** (pricing-api) |
+| segredo ausente | 503 × recusa × degrada **aberto** (`pool_auth`, declarado) × devolve `None` |
 
-Consequência hoje: `config.calendars` e `config.dialog_forms` decidem quem **vê** a tela, não
-quem **escreve**. Está anotado ao lado de cada regra no `Sidebar.tsx` para que o campo não seja
-lido como proteção.
+⚠️ **O agravante é o que dá nome à dívida:** `channel-gateway/auth.py:6-9` **promete no
+docstring** ser o ponto compartilhado — *"outros módulos devem reusar estas funções em vez de
+reimplementar"* — e cinco serviços reimplementaram. Promessa sem mecanismo é a mesma família do
+DDL de `participation_intervals`. O `probe_authz_single_verifier.sh` é o mecanismo: ele **não**
+exige a migração, protege contra a **sétima** cópia.
 
-⚠️ **A decisão que trava a correção não é "gatear ou não", é ONDE mora o verificador.** Já
-existem **cinco** implementações independentes de *verificar JWT + ler `module_config`*
-(`analytics-api/audit.py`, `channel-gateway/auth.py`, `config-api/router.py`, `evaluation-api`,
-`auth-api`). Copiar mais duas vezes leva a sete, e é exatamente a forma como a divergência de
-masking nasceu (três implementações, cada uma com teste próprio, nenhum comparando as portas).
-As opções são **(a)** copiar e registrar a dívida, ou **(b)** extrair um helper compartilhado
-antes. É decisão do dono; nenhuma foi tomada.
+Ordem sugerida quando for feito: `pricing-api` e `config-api` primeiro (são cópias quase
+byte-idênticas uma da outra — divergem só no código de recusa), depois `channel-gateway`, e
+`analytics-api`/`evaluation-api` por último, porque as duas mudam de COMPORTAMENTO ao migrar (a
+ordem de acesso e o ramo legado, respectivamente) e precisam de decisão do dono, não de refactor.
+
+### 🟡 `dialog-api` não tem rota DELETE (achado colateral, 2026-08-27)
+
+Rotas medidas: `POST ""`, `GET ""`, `GET /{id}`, `PUT /{id}`, `POST /{id}/publish` — e nada
+mais. Consequência prática: **todo form criado é permanente**, inclusive os que instrumentos
+criam. O `probe_config_service_write_gate.sh` contorna apagando pelo Postgres, e diz por que no
+comentário; um probe que suja o ambiente que mede acaba medindo a própria sujeira. Não é
+urgente, mas enquanto não existir, qualquer script que crie form tem de limpar pelo banco.
 
 ### 🟡 Layout pessoal de dashboard exige permissão de plataforma (achado do passo 2)
 

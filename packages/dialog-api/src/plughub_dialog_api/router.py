@@ -3,8 +3,11 @@ router.py
 FastAPI routes for the Dialog API — generic scripted-dialog form store.
 
 Tenant scoping via header X-Tenant-ID (all endpoints).
-Writes require X-Admin-Token when settings.admin_token is set; reads are open
-(content is masked-by-construction — no PII values stored).
+Escrita = portao DUAL (X-Admin-Token de sistema OU Bearer + ABAC
+`config.dialog_forms` read_write), delegado ao verificador canonico
+`plughub_authz`. Leituras sao ABERTAS: o `form_get` do mcp-server e o survey
+web do channel-gateway sao chamadores de runtime sem credencial, e o conteudo
+e masked-by-construction (nenhum valor de PII no store).
 
 Endpoints (all under /v1/dialog/forms):
   GET    /                         → list latest version metadata per form
@@ -19,6 +22,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
+from plughub_authz import enforce_write
 from pydantic import BaseModel, Field
 
 from .db import (
@@ -44,9 +48,20 @@ def _require_tenant(x_tenant_id: str | None) -> str:
 
 
 def _require_admin(request: Request, x_admin_token: str | None) -> None:
-    expected = request.app.state.settings.admin_token
-    if expected and x_admin_token != expected:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    """
+    Portao de escrita. O `x_admin_token` fica na assinatura para o header aparecer no
+    OpenAPI; quem o LE e o `enforce_write`, a partir do request — uma so leitura, para
+    nao existirem duas respostas para "este header confere?".
+    """
+    settings = request.app.state.settings
+    enforce_write(
+        request     = request,
+        admin_token = settings.admin_token,
+        jwt_secret  = getattr(settings, "jwt_secret", ""),
+        module      = "config",
+        field       = "dialog_forms",
+        what        = "escrita de DialogForm",
+    )
 
 
 class FormUpsert(BaseModel):
