@@ -59,7 +59,12 @@ def _mint_bootstrap_jwt() -> str:
         "sub":           "seed_bootstrap",
         "tenant_id":     TENANT_ID,
         "roles":         ["admin"],
-        "module_config": {"config": {"users": {"access": "read_write", "scope": []}}},
+        "module_config": {"config": {
+            "users":       {"access": "read_write", "scope": []},
+            # `permissions` e obrigatorio aqui: o proprio seed faz PUT module-config,
+            # que exige o campo desde o split de 2026-08-27.
+            "permissions": {"access": "read_write", "scope": []},
+        }},
         "iat":           now,
         "exp":           now + 3600,
     }
@@ -216,11 +221,12 @@ DEMO_USERS = [
                 "gerenciar":  {"access": "read_write", "scope": []},
             },
             "config": {
-                "platform":   {"access": "read_write", "scope": []},
-                "resources":  {"access": "read_write", "scope": []},
-                "channels":   {"access": "read_write", "scope": []},
-                "users":      {"access": "read_write", "scope": []},
-                "masking":    {"access": "read_write", "scope": []},
+                "platform":    {"access": "read_write", "scope": []},
+                "resources":   {"access": "read_write", "scope": []},
+                "channels":    {"access": "read_write", "scope": []},
+                "users":       {"access": "read_write", "scope": []},
+                "permissions": {"access": "read_write", "scope": []},
+                "masking":     {"access": "read_write", "scope": []},
             },
             "skill_flows": {
                 "operacao":   {"access": "read_write", "scope": []},

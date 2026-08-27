@@ -41,6 +41,12 @@ probe_analise_route_guard.sh
 gate_supervisor_tenant_guard.sh
 gate_webhook_endpoint_auth.sh
 probe_customer_history_authz.sh
+# Split `config.users` x `config.permissions` (2026-08-27). Exercita as TRES portas
+# da escalacao: a ROTA (/permissions, /templates, module-config), o CORPO
+# (`roles`/`accessible_pools`/`unrestricted` num PATCH de usuario) e o ALVO (resetar
+# a senha de quem detem o campo). Testemunhas de presenca nos dois lados: o mesmo
+# principal cria e edita pessoa, e o admin continua concedendo.
+probe_config_permissions_split.sh
 # Este mede o BROWSER, nao o backend: chamada de UI com `fetch` cru contra endpoint
 # que exige credencial deixa a TELA VAZIA sem erro, e nenhum gate de backend pega —
 # do lado do backend o 401 esta certo.

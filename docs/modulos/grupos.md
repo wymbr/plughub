@@ -54,7 +54,8 @@ Regras especiais:
 
 | Campo | Efeito |
 |---|---|
-| `config.users` | Acesso à página de grupos (mesma gate que gestão de usuários) |
+| `config.users` | Acesso à página de grupos, CRUD do grupo e **membership** (aba Membros) |
+| `config.permissions` | **Aba Donos (supervisores)** — nomear supervisor concede escopo: `supervised_user_ids` decide de quem a evaluation-api mostra avaliações. Sem o campo a aba não aparece (split de 2026-08-27) |
 
 ## APIs
 

@@ -59,6 +59,7 @@
     "noPoolsConfigured": "No pools configured.",
     "poolsDescription": "Restricts which pools' data this user can access. Empty = all pools.",
     "permissionsDescription": "Fine-grained ABAC permissions per module.",
+    "noGrantNotice": "You can create and edit users, but not grant capabilities. Role, pool scope and module permissions are managed by someone with the \"Grant permissions\" field.",
     "saveChanges": "Save changes",
     "createUser": "Create user",
     "role": "Roles",

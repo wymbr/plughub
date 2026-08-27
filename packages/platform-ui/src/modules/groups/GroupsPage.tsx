@@ -324,6 +324,11 @@ interface DrawerProps {
 }
 
 function GroupDrawer({ group, loading, tab, onTabChange, tenantId, adminToken, onClose, onDelete, onRefresh, t }: DrawerProps) {
+  // Owners = SUPERVISORES do grupo, e nomear supervisor concede escopo: o claim
+  // `supervised_user_ids` decide de quem a evaluation-api mostra avaliacoes. Por isso a
+  // aba segue `config.permissions`, nao `config.users` (split de 2026-08-27).
+  const { perms } = useAuth()
+  const canGrant = perms.can('config', 'permissions', 'read_write')
   return (
     <div className="fixed inset-0 z-40 flex">
       {/* Backdrop */}
@@ -351,7 +356,7 @@ function GroupDrawer({ group, loading, tab, onTabChange, tenantId, adminToken, o
 
         {/* Tabs */}
         <div className="border-b border-border px-6 flex gap-1">
-          {(['info', 'members', 'owners'] as const).map(tabKey => (
+          {(canGrant ? (['info', 'members', 'owners'] as const) : (['info', 'members'] as const)).map(tabKey => (
             <button
               key={tabKey}
               onClick={() => onTabChange(tabKey)}
@@ -374,7 +379,7 @@ function GroupDrawer({ group, loading, tab, onTabChange, tenantId, adminToken, o
             <>
               {tab === 'info'    && <InfoTab   group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
               {tab === 'members' && <GroupUserChecklist kind="users"       group={group} tenantId={tenantId} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
-              {tab === 'owners'  && <GroupUserChecklist kind="supervisors" group={group} tenantId={tenantId} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
+              {tab === 'owners' && canGrant && <GroupUserChecklist kind="supervisors" group={group} tenantId={tenantId} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
             </>
           )}
         </div>

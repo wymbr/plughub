@@ -82,19 +82,81 @@ def _check_config_field(claims: dict[str, Any], field: str, min_access: str) -> 
     return _ACCESS_RANK.get(access, 0) >= _ACCESS_RANK.get(min_access, 0)
 
 
-def _require_config_usuarios(write: bool):
-    """Dependency factory: exige Bearer + ABAC `config.usuarios` (read_only|read_write)."""
+def _require_config(field: str, write: bool):
+    """Dependency factory: exige Bearer + ABAC `config.{field}` (read_only|read_write)."""
     async def _dep(request: Request, settings: Settings = Depends(_settings)) -> dict[str, Any]:
         claims = await _bearer_claims(request, settings)
         need = "read_write" if write else "read_only"
-        if not _check_config_field(claims, "users", need):
-            raise HTTPException(status_code=403, detail=f"forbidden: requires config.usuarios ({need})")
+        if not _check_config_field(claims, field, need):
+            raise HTTPException(
+                status_code=403,
+                detail=f"forbidden: requires config.{field} ({need})",
+            )
         return claims
     return _dep
 
 
-_USUARIOS_READ = _require_config_usuarios(write=False)
-_USUARIOS_WRITE = _require_config_usuarios(write=True)
+# `users`       = administrar PESSOAS (criar, editar dados, ativar/desativar, grupos)
+# `permissions` = conceder CAPACIDADE (papeis, modulos/campos, escopo de pools)
+#
+# Split de 2026-08-27. Ver o bloco de comentario em `infra/modules.yaml`: o campo
+# unico era a chave-mestra, e toda fronteira ABAC colapsava nele.
+_USUARIOS_READ = _require_config("users", write=False)
+_USUARIOS_WRITE = _require_config("users", write=True)
+_PERMS_READ = _require_config("permissions", write=False)
+_PERMS_WRITE = _require_config("permissions", write=True)
+
+
+# Campos de CAPACIDADE: muda-los e CONCEDER, nao administrar. Ficam sob
+# `config.permissions` mesmo em rotas cuja porta e `config.users`.
+#
+# ⚠️ `password` NAO esta aqui de proposito — resetar senha e trabalho legitimo de
+# quem administra pessoas. O vetor "resetar a senha do admin e entrar como admin" e
+# fechado pela outra ponta: `_assert_may_touch`, que protege o ALVO privilegiado.
+_CAPACITY_FIELDS = frozenset({"roles", "accessible_pools", "unrestricted"})
+
+
+def _is_privileged(row: dict[str, Any]) -> bool:
+    """O alvo detem capacidade que o torna intocavel por quem so administra pessoas."""
+    mc = row.get("module_config") or {}
+    acc = ((mc.get("config") or {}).get("permissions") or {}).get("access", "none")
+    return acc != "none" or bool(row.get("unrestricted"))
+
+
+def _assert_may_grant(claims: dict[str, Any], sent: set[str], acao: str) -> None:
+    """Recusa alto quando o CORPO carrega campo de capacidade sem `config.permissions`.
+
+    O discriminador e `model_fields_set` (pydantic v2) — o que o chamador ENVIOU, nao
+    o valor resultante. Omitir `roles` num POST e aceitar o default; envia-lo e
+    conceder, mesmo que por acaso o valor coincida com o default.
+    """
+    tocados = sorted(sent & _CAPACITY_FIELDS)
+    if not tocados:
+        return
+    if not _check_config_field(claims, "permissions", "read_write"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"forbidden: {acao} com campo de capacidade requer config.permissions "
+                f"(read_write) — no corpo: {', '.join(tocados)}"
+            ),
+        )
+
+
+def _assert_may_touch(claims: dict[str, Any], alvo: dict[str, Any], acao: str) -> None:
+    """Protege o ALVO: quem detem `config.permissions` so e tocado por um par.
+
+    Sem esta regra o split nao entrega o que promete — o supervisor redefine a senha
+    do admin (campo de PESSOA, permitido) e entra como admin.
+    """
+    if _is_privileged(alvo) and not _check_config_field(claims, "permissions", "read_write"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"forbidden: {acao} de um usuario que detem config.permissions "
+                f"(ou unrestricted) requer config.permissions (read_write)"
+            ),
+        )
 
 
 def _user_to_response(row: dict[str, Any]) -> UserResponse:
@@ -262,7 +324,14 @@ async def me(request: Request) -> MeResponse:
 
 @router.post("/users", response_model=UserResponse, status_code=201,
              dependencies=[Depends(_USUARIOS_WRITE)])
-async def create_user(body: CreateUserRequest, request: Request) -> UserResponse:
+async def create_user(
+    body: CreateUserRequest,
+    request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
+) -> UserResponse:
+    # Nascer com papel/escopo/irrestrito e CONCEDER na criacao. Omitir o campo aceita
+    # o default (`operator`, [], False) e nao exige nada a mais.
+    _assert_may_grant(claims, set(body.model_fields_set), "criar usuario")
     pool = _get_pool(request)
     # Verifica se e-mail já existe
     existing = await db_mod.get_user_by_email(pool, body.tenant_id, body.email)
@@ -312,12 +381,15 @@ async def update_user(
     user_id: str,
     body: UpdateUserRequest,
     request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
 ) -> UserResponse:
     pool = _get_pool(request)
     # Garante que o usuário existe
     existing = await db_mod.get_user_by_id(pool, user_id)
     if not existing:
         raise HTTPException(status_code=404, detail="User not found")
+    _assert_may_grant(claims, set(body.model_fields_set), "editar usuario")
+    _assert_may_touch(claims, existing, "editar")
 
     ph = hash_password(body.password) if body.password else None
     row = await db_mod.update_user(
@@ -336,8 +408,15 @@ async def update_user(
 
 @router.delete("/users/{user_id}", status_code=204,
                dependencies=[Depends(_USUARIOS_WRITE)])
-async def delete_user(user_id: str, request: Request) -> None:
+async def delete_user(
+    user_id: str,
+    request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
+) -> None:
     pool = _get_pool(request)
+    alvo = await db_mod.get_user_by_id(pool, user_id)
+    if alvo:
+        _assert_may_touch(claims, alvo, "remover")
     deleted = await db_mod.delete_user(pool, user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
@@ -361,7 +440,7 @@ def _perm_to_response(row: dict[str, Any]) -> PermissionResponse:
 
 
 @router.post("/permissions", response_model=PermissionResponse, status_code=201,
-             dependencies=[Depends(_USUARIOS_WRITE)])
+             dependencies=[Depends(_PERMS_WRITE)])
 async def grant_permission(body: GrantPermissionRequest, request: Request) -> PermissionResponse:
     """Concede permissão a um usuário. Idempotente (ON CONFLICT UPDATE)."""
     pool = _get_pool(request)
@@ -379,7 +458,7 @@ async def grant_permission(body: GrantPermissionRequest, request: Request) -> Pe
 
 
 @router.get("/permissions", response_model=list[PermissionResponse],
-            dependencies=[Depends(_USUARIOS_READ)])
+            dependencies=[Depends(_PERMS_READ)])
 async def list_permissions(
     request: Request,
     tenant_id: str = "tenant_demo",
@@ -392,7 +471,7 @@ async def list_permissions(
 
 
 @router.delete("/permissions/{permission_id}", status_code=204,
-               dependencies=[Depends(_USUARIOS_WRITE)])
+               dependencies=[Depends(_PERMS_WRITE)])
 async def revoke_permission(permission_id: str, request: Request) -> None:
     pool = _get_pool(request)
     revoked = await perms_mod.revoke_permission(pool, permission_id)
@@ -442,7 +521,7 @@ def _tmpl_to_response(row: dict[str, Any]) -> TemplateResponse:
 
 
 @router.post("/templates", response_model=TemplateResponse, status_code=201,
-             dependencies=[Depends(_USUARIOS_WRITE)])
+             dependencies=[Depends(_PERMS_WRITE)])
 async def create_template(body: CreateTemplateRequest, request: Request) -> TemplateResponse:
     pool = _get_pool(request)
     row = await perms_mod.create_template(
@@ -456,7 +535,7 @@ async def create_template(body: CreateTemplateRequest, request: Request) -> Temp
 
 
 @router.get("/templates", response_model=list[TemplateResponse],
-            dependencies=[Depends(_USUARIOS_READ)])
+            dependencies=[Depends(_PERMS_READ)])
 async def list_templates(
     request: Request,
     tenant_id: str = "tenant_demo",
@@ -467,7 +546,7 @@ async def list_templates(
 
 
 @router.get("/templates/{template_id}", response_model=TemplateResponse,
-            dependencies=[Depends(_USUARIOS_READ)])
+            dependencies=[Depends(_PERMS_READ)])
 async def get_template(template_id: str, request: Request) -> TemplateResponse:
     pool = _get_pool(request)
     row = await perms_mod.get_template(pool, template_id)
@@ -477,7 +556,7 @@ async def get_template(template_id: str, request: Request) -> TemplateResponse:
 
 
 @router.patch("/templates/{template_id}", response_model=TemplateResponse,
-              dependencies=[Depends(_USUARIOS_WRITE)])
+              dependencies=[Depends(_PERMS_WRITE)])
 async def update_template(
     template_id: str,
     body: UpdateTemplateRequest,
@@ -495,7 +574,7 @@ async def update_template(
 
 
 @router.delete("/templates/{template_id}", status_code=204,
-               dependencies=[Depends(_USUARIOS_WRITE)])
+               dependencies=[Depends(_PERMS_WRITE)])
 async def delete_template(template_id: str, request: Request) -> None:
     pool = _get_pool(request)
     deleted = await perms_mod.delete_template(pool, template_id)
@@ -504,7 +583,7 @@ async def delete_template(template_id: str, request: Request) -> None:
 
 
 @router.post("/templates/{template_id}/apply", response_model=list[PermissionResponse],
-             dependencies=[Depends(_USUARIOS_WRITE)])
+             dependencies=[Depends(_PERMS_WRITE)])
 async def apply_template(
     template_id: str,
     body: ApplyTemplateRequest,
@@ -589,7 +668,7 @@ async def get_module(module_id: str, request: Request) -> dict:
 
 
 @router.post("/modules", response_model=dict, status_code=201,
-             dependencies=[Depends(_USUARIOS_WRITE)])
+             dependencies=[Depends(_PERMS_WRITE)])
 async def register_module(body: dict, request: Request) -> dict:
     """
     Registra ou atualiza um módulo (upsert por module_id).
@@ -614,7 +693,7 @@ async def register_module(body: dict, request: Request) -> dict:
 
 
 @router.patch("/modules/{module_id}/active", response_model=dict,
-              dependencies=[Depends(_USUARIOS_WRITE)])
+              dependencies=[Depends(_PERMS_WRITE)])
 async def set_module_active(module_id: str, request: Request, active: bool = True) -> dict:
     pool = _get_pool(request)
     ok = await db_mod.set_module_active(pool, module_id, active)
@@ -643,7 +722,7 @@ async def set_module_active(module_id: str, request: Request, active: bool = Tru
 
 
 @router.get("/users/{user_id}/module-config", response_model=dict,
-            dependencies=[Depends(_USUARIOS_READ)])
+            dependencies=[Depends(_PERMS_READ)])
 async def get_user_module_config(user_id: str, request: Request) -> dict:
     """Retorna o module_config completo do usuário."""
     pool = _get_pool(request)
@@ -656,7 +735,7 @@ async def get_user_module_config(user_id: str, request: Request) -> dict:
 
 
 @router.put("/users/{user_id}/module-config", response_model=dict,
-            dependencies=[Depends(_USUARIOS_WRITE)])
+            dependencies=[Depends(_PERMS_WRITE)])
 async def set_user_module_config(user_id: str, body: dict, request: Request) -> dict:
     """
     Substitui todo o module_config do usuário.
@@ -698,7 +777,7 @@ async def set_user_module_config(user_id: str, body: dict, request: Request) -> 
 
 
 @router.patch("/users/{user_id}/module-config/{module_id}", response_model=dict,
-              dependencies=[Depends(_USUARIOS_WRITE)])
+              dependencies=[Depends(_PERMS_WRITE)])
 async def patch_user_module_config(
     user_id: str,
     module_id: str,

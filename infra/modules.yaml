@@ -221,8 +221,25 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+      # ⚠️ 'users' x 'permissions' — SPLIT de 2026-08-27, e a razão é de
+      # SEGURANÇA, não de organização. O campo único "Gestão de usuários e
+      # permissões" era a chave-mestra: quem o tinha podia se auto-conceder qualquer
+      # módulo, trocar o próprio papel, alargar 'accessible_pools', ligar
+      # 'unrestricted' e redefinir a senha de um admin. Ou seja, TODA fronteira ABAC
+      # colapsava em "tem config.users".
+      #
+      # É a família "container largo para um fato estreito": administrar uma PESSOA e
+      # conceder CAPACIDADE a ela são dois fatos com donos diferentes. O supervisor
+      # precisa do primeiro (criar operador, resetar senha, ativar/desativar) e não
+      # pode ter o segundo — senão as decisões de escopo que o dono tomou viram
+      # sugestão, revogáveis por quem elas restringem.
       users:
-        label: Gestão de usuários e permissões
+        label: Gestão de usuários (criar, editar dados, ativar/desativar)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      permissions:
+        label: Conceder permissões (papéis, módulos, escopo de pools)
         domain: [none, read_only, read_write]
         scopable: false
         default: none

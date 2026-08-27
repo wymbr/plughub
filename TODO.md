@@ -1,76 +1,79 @@
 # TODO — PlugHub Itens Pendentes
 
-## 🔴 DECISÃO PENDENTE — o supervisor vê 18 itens de menu só pelo papel (medido 2026-08-27)
+## 🟡 ABAC TOTAL — escopo FECHADO pelo dono (2026-08-27), passo 1 entregue
 
-`q_nav_gates_matrix.py` mede quem vê o quê e **por qual razão**. Depois do rename ABAC o admin caiu de
-8 para 1 item por bypass; **o supervisor continua em 18**, entre eles o menu de Configuração inteiro,
-Monitor, Fluxo e a Auditoria LGPD.
+Decisão: **eliminar a permissão por papel; tudo sob ABAC.** As seis perguntas foram fechadas:
 
-**Nenhuma dessas telas funciona** — o backend recusa (agent-registry 403 · audit 403 · config-api
-gateado por `module_config` sem bypass de papel). Falha fechada, então é consistência, não escalação.
-
-**A decisão é sua, e tem duas metades:**
-
-1. **Configuração e Auditoria** — o supervisor deve alcançá-las? Se **não**, some o menu ao remover o
-   bypass e o alinhamento é gratuito. Se **sim**, precisa de grant explícito antes.
-2. **Monitor e Fluxo** (`contacts.operacao`, `skill_flows.operacao`) — aqui o supervisor **usa** as
-   telas. Hoje ele as vê por papel; o backend delas não foi medido item a item. Remover o bypass sem
-   conceder `contacts.operacao` tira Monitor do supervisor.
-
-**Depois de decidido**, a implementação é `strict: true` nas regras não-estritas (27 de 37 hoje) mais
-os grants correspondentes — e o bypass de papel sai de `passesAbacRule`, cumprindo a decisão de
-2026-08-26.
-
-*(Hoje são **26 de 37** não-estritas — `nav.audit` virou `strict` em 2026-08-27.)*
-
-### Insumos medidos para fechar o escopo (2026-08-27)
-
-**A · Os 17 do supervisor NÃO precisam de módulo novo.** Todos mapeiam para campos que já existem:
-`contacts.operacao` (Monitor), `skill_flows.operacao` (Fluxo), `audit.sessions`, `config.*`. Tirar o
-portão de papel do supervisor é **decisão de grant**, não de modelagem. A modelagem é escopo separado
-e menor.
-
-**B · São SETE as entradas de menu sem regra ABAC alguma** — e cinco delas não precisam de regra nova:
-
-| entrada | encaminhamento proposto |
+| # | decisão do dono |
 |---|---|
-| `nav.monitor`, `nav.flow`, `nav.quality`, `nav.analise`, `nav.config` | **cabeçalhos de grupo**. Regra derivável: *grupo visível ⟺ ao menos um filho visível*. Resolve 5 dos 7 sem inventar campo |
-| `nav.home` | qualquer um logado vê — sem portão |
-| `nav.billing` | única lacuna real, e o módulo `billing` **já existe**. É grant, não módulo novo |
+| 1 | supervisor administra **Access, Groups, Calendars, Schedules** |
+| 2 | supervisor **não** alcança Fluxo |
+| 3 | supervisor **mantém** Monitor (é o trabalho dele; o grant é escopado por pool) |
+| 4 | supervisor **não** vê Faturamento — o `billing.visualizar` dele era grant de teste, sai |
+| 5 | **tudo módulo independente**, e **papel vira preset de seed**, não portão. Default alterável só pelo seed, não pela tela |
+| 6 | `module_config` vazio = **não pode nada** (mesma lógica de `accessible_pools`); a porta larga é o claim `unrestricted`, declarado |
 
-**C · 🔴 São DOIS bypasses, não um.** Além do papel, `passesAbacRule` degrada aberto quando o
-`module_config` está **VAZIO** (`legado`) — na matriz, `probe@plughub.local` aparece como `legado` em
-mais de 20 itens. Remover só o de papel deixa o segundo de pé, e ele é **mais silencioso**: basta um
-usuário sem grants para ver tudo. Os dois têm de cair juntos, ou o caso "config vazia" precisa de
-decisão própria.
+A decisão 5 é a que muda a economia do arco: com o usuário **nascendo com um preset**, granularidade
+deixa de custar trabalho a quem concede — o que era o único argumento contra o split por persona.
+Duas propriedades vêm junto, e são desejadas: **papel vira certidão de nascimento, não política viva**
+(editar o template não muda quem já existe — é o mesmo *seed-if-absent* do resto da casa), e o
+template é **provisionamento**, então mantê-lo fora da tela não fere *"todo campo de config é
+UI-editável"*, que vale para o `module_config` de cada pessoa.
 
-**D · Discriminador proposto para módulo × campo:** *módulo é a unidade que você concede ou nega
-INTEIRA a uma pessoa; campo é para quando o trabalho da mesma pessoa se divide.* Pela prática:
-`scheduler` e `outbound` **já são** módulos independentes com `configurar`/`operacao` e `strict: true`
-— precedente bom. `calendars` e `dialogforms` hoje caem em `config.platform`, mas são **conteúdo
-operacional**, não afinação de plataforma; pela mesma régua seriam módulos próprios (ou um módulo de
-conteúdo).
+### Ordem de execução — inegociável, e a matriz mede a prontidão entre os passos
 
-⚠️ **Custo do outro lado, a pesar:** mais módulos = tela de Acesso virando muro de checkbox, e aí as
-pessoas concedem tudo por segurança. A régua que eu usaria é **módulo por pessoa que você
-contrataria**, não por tela.
+| # | passo | estado |
+|---|---|---|
+| 1 | Split `config.users` → `users` + `permissions` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
+| 2 | Campos `config.calendars` / `config.dialog_forms` / `config.dashboards`; `nav.channels` → `config.channels` | pendente |
+| 3 | **Papel → preset de seed**, aplicado em `create_user` | pendente — **pré-requisito do passo 6** |
+| 4 | Grants: supervisor recebe os 4 campos da decisão 1; sai `billing.visualizar` | pendente |
+| 5 | `strict: true` em bloco + regra ABAC nas 7 entradas sem regra | pendente |
+| 6 | Caem os **dois** bypasses juntos (papel **e** config vazia); `unrestricted` vira a única porta larga | pendente |
+| 7 | Apagar os 7 `roles:` do `Sidebar.tsx` | pendente |
+| 8 | Cauda de papel no **backend**: 4 sítios | arco à parte |
 
-**E · Monitor e Analytics não precisam de módulo.** Já são ABAC (`contacts.operacao` ×
-`contacts.visualizar`), e os dois campos já separam quem opera de quem analisa.
+⚠️ **O passo 6 depende do 3, e isto foi medido, não suposto.** `create_user`
+(`packages/auth-api/.../db.py:249`) grava `roles`, `accessible_pools`, `unrestricted` e
+`max_concurrent_sessions` — **e não grava `module_config`**. Ou seja, *todo usuário criado pela tela
+nasce com config vazio*, dentro da degradação. Inverter o 6 antes do 3 faria cada usuário novo
+**nascer cego**, e quem o criou leria isso como "a tela de Acesso quebrou".
 
-**Instrumento:** `python3 infra/test/q_nav_gates_matrix.py` regenera a matriz (quem vê o quê e por qual
-razão) a qualquer momento — as regras são derivadas do `Sidebar.tsx`, não copiadas.
+⚠️ **Não remover bypass antes de conceder.** Depois do passo 4 o placar do supervisor tem de ir a
+**0 dependências de bypass** — só então 5/6 são seguros.
 
-⚠️ **Não remover o bypass antes de conceder**: a matriz mostra exatamente quem perde o quê, e o
-número > 0 é a instrução de que há grant a dar primeiro.
+### Cauda de papel no backend (passo 8) — medida
 
-### Resíduo separado — o menu oferece a Auditoria LGPD a quem o backend recusa
+Eliminar o papel do menu **não** o elimina do produto. Restam decisões por papel em:
 
-`nav.audit` aparece para admin e supervisor por bypass; `GET /v1/audit/mcp-calls` devolve **403 para os
-três usuários do tenant**. Ninguém tem `module_config.audit.sessions` — o que está correto, porque esse
-módulo é do DPO. O defeito é o menu, não a permissão: ele deveria ser `strict: true` já, sem esperar a
-decisão acima.
+- `packages/channel-gateway/.../main.py:1557` — `is_elevated = ("admin" in roles) or ("supervisor" in roles)`
+- `packages/evaluation-api/.../router.py:247` e `:462` — `if "admin" in roles`
+- `auth-api` — `resolve_supervisor_scope` (admin → sem restrição)
 
+A direção é segura (menu mais estrito que backend), mas o arco não termina no `Sidebar.tsx`.
+
+### Estado da matriz (regenerar com `python3 infra/test/q_nav_gates_matrix.py`)
+
+- 37 itens com regra ABAC, **26 não-estritos** (sujeitos ao bypass de papel)
+- **7 portões de papel** no fonte: 5 cabeçalhos de grupo + `nav.home` + o item `nav.billing`
+  *(o §1 do script conta 8 — um deles está dentro de um comentário; corrigir junto com o passo 5)*
+- placar do bypass: admin **0** · operator **0** · probe **0** · **supervisor 17**
+- `probe@plughub.local` aparece `legado` em **20 itens** — é o segundo bypass, o silencioso
+
+### Encaminhamento das 7 entradas sem regra (passo 5)
+
+| entrada | encaminhamento |
+|---|---|
+| `nav.monitor`, `nav.flow`, `nav.quality`, `nav.analise`, `nav.config` | cabeçalhos: *grupo visível ⟺ ao menos um filho visível* — derivação, não campo novo |
+| `nav.home` | sem portão |
+| `nav.billing` | `billing.visualizar` — o módulo já existe |
+
+### Princípio que saiu do passo 1, e vale para os próximos
+
+**Módulo é a unidade que você concede ou nega INTEIRA a uma pessoa; campo é para quando o trabalho da
+mesma pessoa se divide.** O corolário medido: um campo cujo rótulo tem **"e"** (*"Gestão de usuários
+**e** permissões"*) provavelmente são dois fatos — e se um deles concede capacidade, o campo é uma
+chave-mestra até que se prove o contrário.
 
 ## Gates — o que o runner ainda NÃO cobre (2026-08-27)
 

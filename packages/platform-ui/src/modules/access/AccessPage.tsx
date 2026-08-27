@@ -218,11 +218,13 @@ interface UserModalProps {
   availablePools: Pool[]
   modules:        ModuleSchema[]
   templates:      PermTemplate[]
+  /** `config.permissions` (read_write) — separa ADMINISTRAR pessoa de CONCEDER capacidade. */
+  canGrant:       boolean
   onClose:        () => void
   onSaved:        () => void
 }
 
-function UserModal({ tenantId, adminToken, user, availablePools, modules, templates, onClose, onSaved }: UserModalProps) {
+function UserModal({ tenantId, adminToken, user, availablePools, modules, templates, canGrant, onClose, onSaved }: UserModalProps) {
   const { t } = useTranslation('access')
   const isEdit = user !== null
   const [templateId, setTemplateId] = useState('')
@@ -314,10 +316,15 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
       tasks.push(apiFetch(`/auth/v1/groups/${gid}/users`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
     for (const gid of init.member) if (!memberGroups.has(gid))
       tasks.push(apiFetch(`/auth/v1/groups/${gid}/users/${userId}`, adminToken, { method: 'DELETE' }))
-    for (const gid of supervisorGroups) if (!init.supervisor.has(gid))
-      tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
-    for (const gid of init.supervisor) if (!supervisorGroups.has(gid))
-      tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors/${userId}`, adminToken, { method: 'DELETE' }))
+    // Nomear supervisor de grupo e CONCEDER escopo (o claim `supervised_user_ids`
+    // decide de quem a evaluation-api mostra avaliacoes) — logo segue `canGrant`.
+    // Membership fica: alargar por ali so alcanca grupo que a pessoa ja supervisiona.
+    if (canGrant) {
+      for (const gid of supervisorGroups) if (!init.supervisor.has(gid))
+        tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
+      for (const gid of init.supervisor) if (!supervisorGroups.has(gid))
+        tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors/${userId}`, adminToken, { method: 'DELETE' }))
+    }
     await Promise.all(tasks)
   }
 
@@ -335,20 +342,28 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
     setSaving(true); setErr(null)
     try {
       const accessiblePools = Array.from(selectedPools)
+      // Campos de CAPACIDADE so viajam com `canGrant`. O backend discrimina pelo que
+      // foi ENVIADO (`model_fields_set`), nao pelo valor — mandar `roles` igual ao
+      // atual ainda seria "conceder" e levaria 403.
+      const capacity = canGrant
+        ? { roles, accessible_pools: accessiblePools, unrestricted }
+        : {}
       if (isEdit) {
-        const body: UpdateUserInput = { name: name || undefined, roles, accessible_pools: accessiblePools, unrestricted, active, max_concurrent_sessions: maxConcurrentSessions }
+        const body: UpdateUserInput = { name: name || undefined, ...capacity, active, max_concurrent_sessions: maxConcurrentSessions }
         if (password) body.password = password
         await apiFetch(`/auth/users/${user!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
         // Save ABAC module config separately (PUT replaces the whole config)
-        await apiFetch(`/auth/users/${user!.id}/module-config`, adminToken, {
-          method: 'PUT', body: JSON.stringify(moduleConfig),
-        })
+        if (canGrant) {
+          await apiFetch(`/auth/users/${user!.id}/module-config`, adminToken, {
+            method: 'PUT', body: JSON.stringify(moduleConfig),
+          })
+        }
         await applyGroupChanges(user!.id)
       } else {
-        const body: CreateUserInput = { tenant_id: tenantId, email, name, password, roles, accessible_pools: accessiblePools, unrestricted, max_concurrent_sessions: maxConcurrentSessions }
+        const body: CreateUserInput = { tenant_id: tenantId, email, name, password, ...capacity, max_concurrent_sessions: maxConcurrentSessions }
         const created = await apiFetch<{ id: string }>('/auth/users', adminToken, { method: 'POST', body: JSON.stringify(body) })
         // Set ABAC module config on the newly created user if anything was configured
-        if (Object.keys(moduleConfig).length > 0) {
+        if (canGrant && Object.keys(moduleConfig).length > 0) {
           await apiFetch(`/auth/users/${created.id}/module-config`, adminToken, {
             method: 'PUT', body: JSON.stringify(moduleConfig),
           })
@@ -371,7 +386,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
           <button onClick={onClose} className="text-muted-light hover:text-muted text-xl leading-none">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
-          {!isEdit && templates.length > 0 && (
+          {canGrant && !isEdit && templates.length > 0 && (
             <div className="bg-surface-muted border border-border rounded-lg p-3">
               <label className="block text-sm font-medium text-dark mb-1">{t('users.template')}</label>
               <select value={templateId} onChange={e => applyTemplate(e.target.value)}
@@ -404,15 +419,21 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
               placeholder={isEdit ? t('users.passwordBlank') : t('users.passwordMin8')}
               className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-dark mb-1">{t('users.role')}</label>
-            <select value={roles[0] ?? 'operator'} onChange={e => setRoles([e.target.value])}
-              className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
-              {ALL_ROLES.map(role => (
-                <option key={role} value={role}>{ROLE_LABELS[role]}</option>
-              ))}
-            </select>
-          </div>
+          {canGrant ? (
+            <div>
+              <label className="block text-sm font-medium text-dark mb-1">{t('users.role')}</label>
+              <select value={roles[0] ?? 'operator'} onChange={e => setRoles([e.target.value])}
+                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
+                {ALL_ROLES.map(role => (
+                  <option key={role} value={role}>{ROLE_LABELS[role]}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-surface-muted p-3">
+              <p className="text-xs text-muted">{t('users.noGrantNotice')}</p>
+            </div>
+          )}
 
           {/* Max concurrent sessions */}
           <div>
@@ -428,6 +449,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
             <p className="text-xs text-muted-light mt-1">{t('users.maxConcurrentSessionsDescription')}</p>
           </div>
 
+          {canGrant && (<>
           {/* Escopo irrestrito — declaracao EXPLICITA (passo 2, 2026-08-27).
               Marcar aqui e diferente de "nao escolher nenhum pool": o segundo depende
               da convencao implicita `[] = todos`, que sera invertida. */}
@@ -513,6 +535,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
               </p>
             </div>
           )}
+          </>)}
 
           {/* Group association (Arc 9) */}
           {allGroups.length > 0 && (
@@ -540,7 +563,9 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
                         type="checkbox"
                         checked={supervisorGroups.has(g.group_id)}
                         onChange={() => toggleGroup('supervisor', g.group_id)}
-                        className="rounded border-border-strong text-primary focus:ring-primary/40"
+                        disabled={!canGrant}
+                        title={canGrant ? undefined : t('users.noGrantNotice')}
+                        className="rounded border-border-strong text-primary focus:ring-primary/40 disabled:opacity-40 disabled:cursor-not-allowed"
                       />
                     </span>
                   </div>
@@ -790,6 +815,10 @@ interface UsersPaneProps {
 }
 
 function UsersPane({ tenantId, adminToken, availablePools, modules, templates, users, loading, error, reload }: UsersPaneProps) {
+  // Lido aqui e nao recebido por prop: e a MESMA fonte que o Sidebar e as rotas usam
+  // (`session.moduleConfig`), e passar por prop criaria uma segunda copia da decisao.
+  const { perms } = useAuth()
+  const canGrant = perms.can('config', 'permissions', 'read_write')
   const { t } = useTranslation('access')
   const [search,       setSearch]       = useState('')
   const [roleFilter,   setRoleFilter]   = useState('all')
@@ -953,6 +982,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
       {modalUser !== undefined && (
         <UserModal tenantId={tenantId} adminToken={adminToken} user={modalUser}
           availablePools={availablePools} modules={modules} templates={templates}
+          canGrant={canGrant}
           onClose={() => setModalUser(undefined)} onSaved={reload} />
       )}
     </div>
@@ -1060,7 +1090,10 @@ type PageTab = 'users' | 'templates'
 
 export default function AccessPage() {
   const { t } = useTranslation('access')
-  const { session, tenantId } = useAuth()
+  const { session, tenantId, perms } = useAuth()
+  // ADMINISTRAR pessoa (`config.users`) x CONCEDER capacidade (`config.permissions`).
+  // Quem so tem o primeiro cria/edita/desativa usuario e nao reescreve fronteira.
+  const canGrant = perms.can('config', 'permissions', 'read_write')
 
   const [activeTab,   setActiveTab]   = useState<PageTab>('users')
   // G-PROBE platform-wide: a página autoriza pelo Bearer do operador (session JWT) +
@@ -1078,7 +1111,7 @@ export default function AccessPage() {
   type LucideIcon = React.FC<{ className?: string }>
   const tabs: { id: PageTab; label: string; Icon: LucideIcon }[] = [
     { id: 'users',     label: t('tabs.users'),     Icon: User     },
-    { id: 'templates', label: t('tabs.templates'), Icon: FileText },
+    ...(canGrant ? [{ id: 'templates' as PageTab, label: t('tabs.templates'), Icon: FileText }] : []),
   ]
 
   return (

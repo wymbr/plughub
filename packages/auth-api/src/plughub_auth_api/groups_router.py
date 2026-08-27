@@ -38,7 +38,7 @@ from . import db as db_mod
 from .config import Settings, get_settings
 # G-PROBE platform-wide: grupos autorizam pelo JWT do operador + ABAC `config.usuarios`
 # (mesmo gate de users/permissions); sem fallback de admin-token.
-from .router import _USUARIOS_READ, _USUARIOS_WRITE
+from .router import _PERMS_WRITE, _USUARIOS_READ, _USUARIOS_WRITE
 
 logger = logging.getLogger("plughub.auth_api.groups")
 
@@ -205,8 +205,16 @@ async def list_supervisors(group_id: str, request: Request) -> list[dict]:
     return [_serialize_user(r) for r in rows]
 
 
+# ⚠️ NOMEAR SUPERVISOR e conceder, nao administrar (split de 2026-08-27).
+# `resolve_supervisor_scope` deriva `supervised_user_ids` dos grupos que a pessoa
+# SUPERVISIONA, e a evaluation-api (`router.py:465`) usa esse claim para decidir de quem
+# ela ve as avaliacoes. Sob `config.users` isso era auto-concessao de escopo: crio um
+# grupo, me nomeio supervisor, passo a ver as avaliacoes de quem esta nele.
+#
+# A membership (`/users`) FICA em `config.users`: alargar por ali so alcanca grupos que
+# voce ja supervisiona — e isso e o seu escopo, nao uma extensao dele.
 @groups_router.post("/{group_id}/supervisors", response_model=dict, status_code=201,
-                    dependencies=[Depends(_USUARIOS_WRITE)])
+                    dependencies=[Depends(_PERMS_WRITE)])
 async def add_supervisor(
     group_id: str,
     body: AddSupervisorRequest,
@@ -218,7 +226,7 @@ async def add_supervisor(
 
 
 @groups_router.delete("/{group_id}/supervisors/{user_id}", status_code=204,
-                      dependencies=[Depends(_USUARIOS_WRITE)])
+                      dependencies=[Depends(_PERMS_WRITE)])
 async def remove_supervisor(
     group_id: str,
     user_id: str,

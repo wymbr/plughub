@@ -170,6 +170,28 @@ SET module_config = jsonb_set(
 WHERE (module_config -> 'config') ? 'usuarios'
 """
 
+# Split `config.users` -> `users` + `permissions` (2026-08-27).
+#
+# ⚠️ ESTE backfill e legitimo, e o do `unrestricted` nao era — a diferenca importa.
+# La, inferir a intencao a partir da ausencia teria ALARGADO escopo por adivinhacao
+# ("nao tem lista, entao pode tudo"). Aqui o campo esta sendo PARTIDO: quem tem
+# `config.users` HOJE ja pode conceder, porque as duas capacidades moram no mesmo
+# campo. Copiar a metade nova preserva exatamente o que ja era verdade; NAO copiar
+# e que seria a mudanca silenciosa — o admin perderia a tela de Acesso no deploy.
+#
+# `read_only` em `users` vira `read_only` em `permissions`: quem so lia continua so
+# lendo. So o `read_write` carrega o poder de conceder.
+DDL_MIGRATE_ABAC_PERMISSIONS = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config, '{config}',
+    (module_config -> 'config')
+      || jsonb_build_object('permissions', module_config -> 'config' -> 'users')
+)
+WHERE (module_config -> 'config') ? 'users'
+  AND NOT ((module_config -> 'config') ? 'permissions')
+"""
+
 # ── Arc 9 — Agent Groups & Supervisor Scope ───────────────────────────────────
 
 DDL_AGENT_GROUPS = """
@@ -221,6 +243,7 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_MIGRATE_ABAC_PLATAFORMA)
             await conn.execute(DDL_MIGRATE_ABAC_CANAIS)
             await conn.execute(DDL_MIGRATE_ABAC_USUARIOS)
+            await conn.execute(DDL_MIGRATE_ABAC_PERMISSIONS)
             # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
             # docs/arcos/arc9-agent-groups.md; tables may still exist physically
             # in older DBs, just no longer created/read/written by this service)

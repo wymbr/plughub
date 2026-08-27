@@ -2,6 +2,93 @@
 
 ---
 
+## `config.users` deixa de ser a chave-mestra do tenant (2026-08-27)
+
+Passo 1 do arco de ABAC total (decisão do dono, escopo fechado hoje). **Administrar uma PESSOA e
+conceder CAPACIDADE a ela eram o mesmo campo**, e por isso toda fronteira ABAC do produto colapsava
+numa só: quem recebia `config.users` para gerir a operação podia, na mesma tela, marcar qualquer
+módulo em si mesmo, trocar o próprio papel para `admin`, ligar `unrestricted` — ou simplesmente
+redefinir a senha do admin e entrar como ele.
+
+É a família *"container largo para um fato estreito"*, aplicada a autorização: o campo tinha o rótulo
+honesto (*"Gestão de usuários **e permissões**"*) e mesmo assim ninguém lia a conjunção como um
+problema, porque na prática só o admin o tinha. O defeito só ficou visível ao decidir que o
+**supervisor** administraria Access/Groups.
+
+### O split, e por que ele precisa de TRÊS portas
+
+`config.permissions` é o campo novo. Fechar só as rotas de concessão seria **decorativo** — o corpo do
+`PATCH /users/{id}` é um caminho de escalação tão bom quanto:
+
+| porta | o que passa a exigir `config.permissions` |
+|---|---|
+| **rota** | `/permissions/*`, `/templates/*`, `/modules*`, `/users/{id}/module-config` (14 endpoints) |
+| **corpo** | `roles`, `accessible_pools`, `unrestricted` em `POST`/`PATCH /users` — mesmo com a porta sendo `config.users` |
+| **alvo** | editar/apagar um usuário que **detém** `config.permissions` (ou é `unrestricted`) |
+
+A porta do **alvo** existe por causa da senha. Redefinir senha é campo de PESSOA, e tem de continuar
+permitido — é trabalho legítimo de quem administra. O que a fecha não é a guarda de corpo, é a
+proteção do alvo: sem ela o supervisor reseta a senha do admin e o split não entrega nada.
+
+**O discriminador do corpo é `model_fields_set` (pydantic v2), não o valor.** Omitir `roles` num `POST`
+aceita o default; enviá-lo é conceder, ainda que o valor coincida com o default. Comparar valores
+faria "mandar o mesmo papel de novo" passar, e a UI manda o formulário inteiro.
+
+### O backfill aqui é legítimo — e o do `unrestricted` não era
+
+`DDL_MIGRATE_ABAC_PERMISSIONS` copia `config.users` → `config.permissions` para quem já tinha o campo.
+Parece a mesma coisa que foi recusada há dois dias, e não é: lá, inferir a partir da **ausência**
+alargaria escopo por adivinhação (*"não tem lista, então pode tudo"*). Aqui o campo está sendo
+**partido**, e quem tem `config.users` hoje **já pode conceder** — as duas capacidades moram no mesmo
+lugar. Copiar preserva o que era verdade; **não copiar** é que seria a mudança silenciosa: o admin
+perderia a tela de Acesso no deploy. `read_only` migra como `read_only`.
+
+### A metade de UI não é cosmética
+
+A tela de Acesso **sempre** mandava `roles`/`accessible_pools`/`unrestricted` no corpo e **sempre**
+fazia o `PUT` de module-config. Sem mexer nela, um supervisor com `config.users` levaria **403 ao
+salvar uma troca de nome** — o menu oferecendo o que o backend recusa, a mesma família do `nav.audit`.
+Agora `canGrant` decide, e decide as duas coisas juntas: os campos de capacidade não são renderizados
+**nem enviados** (esconder e continuar mandando devolveria 403 mudo). A aba *Templates* some — ela
+existe só para conceder. `CreateUserInput.roles` virou opcional, porque **omitir é o mecanismo**.
+
+### Gate
+
+`infra/test/probe_config_permissions_split.sh` (no manifesto). Nove cenários, e as testemunhas de
+presença estão nos **dois** lados: o mesmo principal cria (S1) e edita (S3) uma pessoa, cria grupo e
+adiciona membro (S9), e o admin continua concedendo (S7) — sem elas, "tudo 403" seria lido como
+sucesso quando na verdade a rota quebrou para todo mundo.
+
+**Contraprova executada nas duas portas** (verde de primeira merece desconfiança): concedendo
+`config.permissions` ao **mesmo** principal, `PATCH roles` e `PUT module-config` vão de **403 → 200**,
+e `POST /groups/{id}/supervisors` vai de **403 → 201**. O discriminador é o campo, não um acidente.
+
+### A porta adjacente: nomear supervisor de grupo também concedia
+
+Achado ao procurar outros caminhos de capacidade sob `config.users`, e **medido antes de agir**:
+`resolve_supervisor_scope` deriva `supervised_user_ids` dos grupos que a pessoa **supervisiona**, e
+`evaluation-api/router.py:465` **consome esse claim** para decidir de quem ela vê as avaliações. Ou
+seja, sob o campo único bastava criar um grupo, adicionar pessoas e se auto-nomear supervisor para
+passar a ver avaliação alheia — escalação por **escopo**, não por módulo.
+
+A linha traçada, e por que não é *"tudo vira `permissions`"*:
+
+| sub-recurso | é | campo |
+|---|---|---|
+| `agent_group_users` (membros) | organograma — alargar por aqui só alcança grupo que você **já** supervisiona, que é a definição do seu escopo | `config.users` |
+| `agent_group_supervisors` (donos) | capacidade — aqui você escolhe um escopo **novo**, inclusive para si | `config.permissions` |
+
+Leitura das duas listas continua em `config.users`: a tela precisa mostrar quem supervisiona.
+Na UI, a aba **Owners** some sem o campo e a coluna *Supervisor* da associação em Acesso fica
+**desabilitada** (visível, para não desalinhar a tabela nem esconder o fato) — e `applyGroupChanges`
+não emite a chamada.
+
+**Achado colateral:** o `token de bootstrap` do `seed_auth` declarava só `config.users` e faz
+`PUT module-config` — sem a linha nova o seed morreria com 403 no primeiro usuário, e o sintoma seria
+lido como *"auth-api quebrou"*.
+
+---
+
 ## Histórico do cliente para de mentir · `agent-assist-ui` aposentado (2026-08-27)
 
 Duas decisões do dono, fechadas.

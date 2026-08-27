@@ -59,6 +59,7 @@
     "noPoolsConfigured": "Nenhum pool configurado.",
     "poolsDescription": "Restringe a quais pools este usuário tem acesso aos dados. Vazio = todos os pools.",
     "permissionsDescription": "Permissões ABAC granulares por módulo.",
+    "noGrantNotice": "Você pode criar e editar usuários, mas não conceder capacidades. Papel, escopo de pools e permissões de módulo são geridos por quem tem o campo \"Conceder permissões\".",
     "saveChanges": "Salvar alterações",
     "createUser": "Criar usuário",
     "role": "Papéis",

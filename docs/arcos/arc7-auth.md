@@ -709,3 +709,82 @@ Revisores (IA e humanos) respondem por critério, no mesmo formato estruturado.
 - **Permissão ABAC é um filtro adicional** ao filtro de roles — roles continuam sendo a primeira barreira. Ambos devem passar (`AND` lógico)
 - **Nunca persistir `PermissionAccess` como strings hardcoded** — sempre usar tipos TypeScript para evitar typos
 - **Escopo sempre em formato `{type}:{id}`** — ex: `pool:retencao_humano`, `campaign:camp_abc123`, nunca valores soltos
+
+
+---
+
+## `config.users` × `config.permissions` — split de 2026-08-27
+
+**Por que existe.** O campo único `config.users` (*"Gestão de usuários **e** permissões"*) era a
+chave-mestra do tenant. Quem o tivesse em `read_write` podia, sem nenhum defeito de código:
+
+- marcar qualquer módulo/campo em si mesmo (`PUT /users/{id}/module-config`);
+- trocar o próprio papel para `admin` (`PATCH /users/{id}` com `roles`);
+- alargar `accessible_pools` ou ligar `unrestricted`;
+- **redefinir a senha de um admin** e simplesmente entrar como ele.
+
+Ou seja: toda fronteira ABAC do produto era revogável por quem ela restringia. O defeito ficou
+invisível enquanto só o admin tinha o campo; apareceu ao decidir que o **supervisor** administraria
+Access/Groups (decisão do dono, 2026-08-27).
+
+### As três portas
+
+| porta | mecanismo | exige |
+|---|---|---|
+| **rota** | 14 endpoints cuja razão de existir é conceder: `/permissions/*`, `/templates/*`, `/modules*`, `/users/{id}/module-config` | `config.permissions` |
+| **corpo** | `_assert_may_grant` — `roles`, `accessible_pools`, `unrestricted` em `POST`/`PATCH /users` | `config.permissions` (read_write) |
+| **alvo** | `_assert_may_touch` — editar/apagar alguém que detém `config.permissions` ou é `unrestricted` | `config.permissions` (read_write) |
+| **escopo** | `POST`/`DELETE /v1/groups/{id}/supervisors` — nomear quem supervisiona um grupo | `config.permissions` (read_write) |
+
+Fechar só a **rota** seria decorativo: bastaria `PATCH /users/{id}` com `roles: ["admin"]` pela porta
+de administração. Fechar rota + corpo ainda deixaria a **senha** — que é campo de pessoa, permitido
+por construção. E as três juntas ainda deixariam o **escopo**: `resolve_supervisor_scope` deriva
+`supervised_user_ids` dos grupos supervisionados, e `evaluation-api/router.py:465` consome esse claim,
+então auto-nomear-se supervisor de um grupo passa a mostrar as avaliações de quem está nele.
+
+**Membership (`/groups/{id}/users`) NÃO migrou**, e a assimetria é o ponto: alargar por ali só alcança
+grupo que a pessoa já supervisiona — isso é o escopo dela, não uma extensão. Nomear supervisor escolhe
+um escopo **novo**. Ler as duas listas segue em `config.users`: a tela precisa mostrar quem
+supervisiona.
+
+**Discriminador do corpo:** `model_fields_set` (pydantic v2) — o que o chamador **enviou**, não o
+valor resultante. Omitir `roles` num `POST` aceita o default (`operator`) e não exige nada a mais;
+enviá-lo é conceder, mesmo que o valor coincida com o default.
+
+### Migração
+
+`DDL_MIGRATE_ABAC_PERMISSIONS` (idempotente, roda no boot) copia `config.users` → `config.permissions`.
+
+⚠️ **Este backfill é legítimo, e o do `unrestricted` não era.** Lá, inferir a partir da *ausência*
+alargaria escopo por adivinhação. Aqui o campo está sendo **partido**: quem tem `config.users` hoje
+**já pode conceder**. Copiar preserva o que era verdade; **não copiar** é que seria a mudança
+silenciosa (o admin perderia a tela de Acesso no deploy). `read_only` migra como `read_only`.
+
+### A metade de UI
+
+`AccessPage` calcula `canGrant = perms.can('config','permissions','read_write')` e, sem ele:
+
+- os campos de capacidade não são renderizados **nem enviados** — as duas coisas, porque esconder e
+  continuar mandando devolveria 403 mudo no salvamento de uma troca de nome;
+- o `PUT` de module-config é pulado;
+- a aba **Templates** some (existe só para conceder).
+
+`CreateUserInput.roles` virou **opcional**: omitir é o mecanismo, não um detalhe de tipagem.
+
+Sem esta metade o split viraria o defeito que deveria fechar — menu oferecendo o que o backend recusa,
+a mesma família do `nav.audit`.
+
+### Gate
+
+`infra/test/probe_config_permissions_split.sh` (no manifesto). Testemunhas de presença nos **dois**
+lados: o principal restrito cria (S1) e edita (S3) uma pessoa; o admin continua concedendo (S7). Sem
+elas, *"tudo 403"* seria lido como sucesso quando a rota quebrou para todo mundo.
+
+**Contraprova executada:** concedendo `config.permissions` ao mesmo principal, `PATCH roles` e
+`PUT module-config` vão de **403 → 200**.
+
+### Principal de teste
+
+`useradmin@plughub.local` (`changeme_useradmin`) — papel `supervisor`, `config.users: read_write`,
+**sem** `config.permissions`. O papel é `supervisor` de propósito: se algum bypass de papel
+sobreviver, ele aparece como um 2xx onde o gate espera 403. Criado pelo próprio probe se ausente.

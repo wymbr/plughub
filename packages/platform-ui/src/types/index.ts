@@ -832,7 +832,11 @@ export interface CreateUserInput {
   email:                   string
   name:                    string
   password:                string
-  roles:                   string[]
+  // Campos de CAPACIDADE — OPCIONAIS de proposito (split `config.users` x
+  // `config.permissions`, 2026-08-27). Quem so administra pessoas OMITE os tres, e a
+  // omissao e o mecanismo: o auth-api decide pelo que foi ENVIADO (`model_fields_set`),
+  // entao mandar `roles` com o valor default ainda contaria como conceder e daria 403.
+  roles?:                  string[]
   accessible_pools?:       string[]
   unrestricted?:           boolean
   max_concurrent_sessions?: number

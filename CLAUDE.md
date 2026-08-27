@@ -1222,6 +1222,31 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **auth-api** (port 3200): users + sessions in PostgreSQL schema `auth`. JWT HS256 TTL 1h; refresh token rotation (43-char opaque, SHA-256 stored). Silent re-auth from `localStorage('plughub_refresh_token')`. `accessible_pools[]` in JWT: empty = all pools; non-empty = row-level filter in analytics-api.
 
+> ⚠️ **ADMINISTRAR uma pessoa nunca é o mesmo campo que CONCEDER capacidade a ela**
+> *(split de 2026-08-27)*. `config.users` era a chave-mestra do tenant: cobria criar/editar usuário
+> **e** conceder papel, módulo e escopo de pool, então toda fronteira ABAC do produto colapsava em
+> *"tem `config.users`"* — quem o recebesse para gerir a operação podia marcar qualquer módulo em si
+> mesmo, virar `admin`, ligar `unrestricted`, ou redefinir a senha do admin e entrar como ele.
+> Hoje: **`config.users`** = pessoa (criar, editar dados, ativar/desativar, grupos) · **`config.permissions`**
+> = capacidade (papéis, módulos/campos, escopo de pools).
+>
+> **O portão tem QUATRO portas, e fechar só a primeira é decorativo:** a **rota** (`/permissions`,
+> `/templates`, `/modules`, `module-config`), o **corpo** (`roles`/`accessible_pools`/`unrestricted`
+> num `POST`/`PATCH /users`, cuja porta é `config.users`), o **alvo** (editar/apagar quem *detém*
+> `config.permissions`) e o **escopo** (`POST`/`DELETE /v1/groups/{id}/supervisors`). A porta do alvo
+> existe por causa da **senha**: resetá-la é campo de PESSOA e tem de seguir permitido, então quem
+> barra o *"reseto a senha do admin e entro como admin"* é a proteção do alvo, nunca a guarda de
+> corpo. A do escopo existe porque `resolve_supervisor_scope` deriva `supervised_user_ids` de quem a
+> pessoa SUPERVISIONA, e a evaluation-api consome esse claim para decidir de quem ela vê avaliações —
+> auto-nomear-se supervisor de um grupo é conceder. **Membership fica** em `config.users`: alargar por
+> ali só alcança grupo que já se supervisiona, que é a definição do escopo, não uma extensão dele.
+>
+> **O discriminador do corpo é `model_fields_set`, não o valor** — omitir `roles` aceita o default;
+> enviá-lo é conceder, ainda que o valor coincida. Comparar valores deixaria passar *"mandei o mesmo
+> papel de novo"*, e a tela manda o formulário inteiro. **Corolário de modelagem:** um campo cujo
+> rótulo tem **"e"** provavelmente são dois fatos — e se um deles concede capacidade, é chave-mestra
+> até prova em contrário. Gate: `infra/test/probe_config_permissions_split.sh`.
+
 **ABAC** (`module_config` in JWT): `auth.module_registry` seeded from `infra/modules.yaml`. 8 modules: `evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`. Each field has `access: none|read_only|write_only|read_write` + `scope[]`. `PermissionChecker.can(module, field, minAccess?, scopeId?)`. Graceful degradation for legacy accounts without `module_config`.
 
 **Performance routing** (Arc 7d): `performance_score = resolution_rate × (1 − escalation_rate)`. Blending: `(1-w) × competency + w × performance`; `w = performance_score_weight` (default 0.0, env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT`). Redis key `{tenant}:agent_perf:{agent_type_id}` (TTL 6h). Batch job in analytics-api runs every 5min, lookback 7 days, min 5 sessions for statistical significance.
@@ -1270,7 +1295,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 **analytics-api scope filtering**: `supervised_agent_types` claim is no longer emitted by auth-api. `PoolPrincipal.supervised_agent_types` / `_apply_agent_scope()` / `_agent_scope_session_join()` still exist in code (not removed) but `payload.get("supervised_agent_types", [])` now always resolves to `None` → permanent no-op. `accessible_pools` (Arc 7) still applies its own pool-level filter on the same endpoints, unaffected.
 
-**auth-api REST** (`/v1/groups`, Bearer + ABAC `config.usuarios`): CRUD for groups + `users` (members) + `supervisors` sub-resources only.
+**auth-api REST** (`/v1/groups`, Bearer + ABAC `config.users`): CRUD for groups + `users` (members) + `supervisors` sub-resources only.
 
 **platform-ui**: `GroupsPage` at `/config/groups` (roles: admin, ABAC `config.users`). List + side drawer with 3 tabs (Info, Members, Owners). i18n namespace `groups` (en + pt-BR). Group↔user association is also editable directly from the user's own form in `Configuration > Access` (section "Group association", Member/Supervisor checkboxes per group) — no cross-reference needed from the Group side for that. Monitor Heatmap filtered by `accessiblePools` only (`supervisedAgentTypes` client-side filter is now always `[]` = unrestricted, degrades gracefully).
 
