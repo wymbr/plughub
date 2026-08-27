@@ -309,6 +309,27 @@ class TestForms:
 class TestConfigAbacGate:
     """G-PROBE fase 1 — gate ABAC grant-first na config humana (forms/campaigns/rubric)."""
 
+    @pytest.fixture(autouse=True)
+    def _service_token_set(self, monkeypatch):
+        """
+        DESFAZ, so nesta classe, o `_open_token_gates` do modulo.
+
+        Aquele fixture zera `settings.service_token` de proposito (os testes de
+        NEGOCIO nao devem herdar a config do deploy). Mas
+        `_require_service_or_eval_write` comeca com
+
+            if not settings.service_token: return
+
+        entao, com o token zerado, a guarda devolve ANTES da checagem ABAC — e esta
+        classe, que existe para afirmar que a checagem ABAC RECUSA, passava direto
+        para o handler e morria em `ResponseValidationError`. O fixture do modulo
+        desligava exatamente o que esta classe mede.
+
+        Os testes daqui NAO mandam `x-service-token`, entao a guarda cai no ramo
+        Bearer+ABAC — que e a proposicao afirmada.
+        """
+        monkeypatch.setattr(settings, "service_token", "svc-token-do-teste", raising=False)
+
     @staticmethod
     def _tok(**fields: str) -> dict:
         cfg = {f: {"access": acc, "scope": []} for f, acc in fields.items()}

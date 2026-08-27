@@ -282,8 +282,22 @@ async def test_handle_resume_publishes_kafka_event(adapter, mock_redis, mock_pro
         tenant_id    = TENANT_ID,
         payload      = {"decision": "approved"},
     )
-    mock_producer.send_and_wait.assert_called_once()
-    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    # `handle_resume` publica DOIS eventos: o de roteamento e a trilha analitica.
+    # Selecionar POR TOPICO, nunca por contagem nem por `call_args` (que e a ULTIMA
+    # chamada — hoje a analitica, que nao carrega `payload`).
+    por_topico = {
+        c.args[0]: json.loads(c.kwargs["value"])
+        for c in mock_producer.send_and_wait.call_args_list
+    }
+    assert "conversations.inbound" in por_topico, (
+        "o evento de ROTEAMENTO sumiu — sem ele o resume nao chega ao routing engine"
+    )
+    assert "conversations.events" in por_topico, (
+        "a trilha analitica de `session_resumed` sumiu"
+    )
+    assert por_topico["conversations.events"]["event_type"] == "session_resumed"
+
+    event = por_topico["conversations.inbound"]
     assert event["event_type"]   == "session_resumed"
     assert event["session_id"]   == SESSION_ID
     assert event["resume_token"] == RESUME_TOKEN

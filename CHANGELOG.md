@@ -2,6 +2,68 @@
 
 ---
 
+## Os quatro vermelhos eram todos o MESMO defeito de método (2026-08-27)
+
+Quatro testes reprovavam em dois pacotes, e nenhum apontava para código de produto errado. Os quatro
+eram **testes que não controlavam o que julgam** — cada um herdando de fora a condição que deveria
+declarar.
+
+### `nav.audit` — `strict: true`, e sem `roles:`
+
+Entrada de menu da Auditoria LGPD aparecia para admin e supervisor pelo **bypass de papel**, enquanto
+`GET /v1/audit/mcp-calls` devolve **403 para os três usuários do tenant** — ninguém tem
+`module_config.audit.sessions`. A UI oferecia uma tela que o backend recusa.
+
+O `roles:` saiu junto porque o módulo `audit` é do DPO e o `CLAUDE.md` o declara **ortogonal às
+roles**: quem tem o grant vê, tenha o papel que tiver. Manter portão de papel ali era o contrário do
+desenho.
+
+**Efeito medido: o admin foi de 1 para 0 itens por bypass.** O acesso dele passou a ser inteiramente
+declarado — a decisão do dono de 2026-08-26 (*"o admin RESPEITA a ABAC como qualquer um"*) vale para
+ele agora. O supervisor segue em 17, e isso é decisão registrada no `TODO.md`.
+
+### evaluation-api ×3 — o fixture desligava o que a classe mede
+
+`TestConfigAbacGate` afirma que a checagem ABAC **recusa** escrita sem grant. Mas o módulo tem
+`_open_token_gates`, `autouse=True`, que zera `settings.service_token` — deliberado e correto para os
+testes de negócio (o próprio docstring explica que sem isso oito testes herdam a config do deploy e
+recebem 401).
+
+Só que `_require_service_or_eval_write` começa com `if not settings.service_token: return`. Com o token
+zerado a guarda devolve **antes** da checagem ABAC, e os três testes corriam até o fim do handler,
+morrendo em `ResponseValidationError` — o mock devolve `None` e o `response_model` exige dict.
+
+O fixture do módulo **desligava exatamente o que a classe existe para medir**. E o caminho já estava
+escrito no próprio docstring dele, para o outro portão: *"por isso o portão ganhou teste PRÓPRIO, onde
+o token é definido pelo teste"*. Conserto: fixture de classe que restaura o `service_token`. Os testes
+não mandam `x-service-token`, então a guarda cai no ramo Bearer+ABAC — a proposição afirmada.
+
+**214 passando.**
+
+### channel-gateway ×1 — asserção presa numa CONTAGEM
+
+`handle_resume` passou a publicar **dois** eventos: `conversations.inbound` (roteamento) e
+`conversations.events` (trilha analítica de `session_resumed`). O teste afirmava `assert_called_once()`
+e — pior — lia `call_args`, que é a **última** chamada: hoje a analítica, que não carrega `payload`.
+Duas asserções apontando para o evento errado.
+
+Consertado **por tópico**, não por contagem: seleciona o evento pelo tópico e afirma que os dois foram
+publicados. `assert_called_once` quebraria de novo no dia de um terceiro publish, mesmo correto; a
+asserção por tópico sobrevive a isso e continua reprovando se um dos dois sumir — que é o que importa.
+
+**677 passando.**
+
+### A moral, e ela é uma só
+
+Nenhum dos quatro era regressão de produto. Todos eram instrumento medindo sob condição que não
+declarou: dois herdando env do container (`TestDashboardRBAC` mais cedo hoje, e este trio), um herdando
+um fixture de outra intenção, um herdando uma contagem que o produto legitimamente mudou. *Um teste que
+não controla a condição que julga não está medindo — está lembrando.*
+
+Baselines: evaluation-api **211 → 214** · channel-gateway **676 → 677** · gates **24/24**.
+
+---
+
 ## O portão de papel do menu era inerte — e o motivo era um rename pela metade (2026-08-27)
 
 Fui atacar os dois resíduos do T4: os `roles:` que sobraram no menu, e o bypass de admin/supervisor

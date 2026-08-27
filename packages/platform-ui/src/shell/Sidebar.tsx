@@ -149,12 +149,20 @@ const Sidebar: React.FC = () => {
     },
 
     // ── Auditoria LGPD ────────────────────────────────────────────
+    // `strict: true` e SEM `roles:` (2026-08-27). Medido: o menu mostrava esta
+    // entrada a admin e supervisor pelo BYPASS DE PAPEL, e `GET /v1/audit/mcp-calls`
+    // devolve 403 para os TRES usuarios do tenant — ninguem tem
+    // `module_config.audit.sessions`. Ou seja, a UI oferecia uma tela que o backend
+    // recusa; falha fechada, mas ainda assim uma tela que nao funciona.
+    //
+    // O `roles:` sai porque o modulo `audit` e do DPO/compliance e o CLAUDE.md o
+    // declara ORTOGONAL as roles existentes: quem tem o grant ve, tenha o papel que
+    // tiver. Manter o portao de papel aqui seria justamente o contrario do desenho.
     {
       label: t('nav.audit'),
       href:  '/audit',
       icon:  Search,
-      roles: ['admin', 'supervisor'],
-      abac:  { module: 'audit', field: 'sessions' },
+      abac:  { module: 'audit', field: 'sessions', strict: true },
     },
 
     // ── Configuração ───────────────────────────────────────────────

@@ -248,6 +248,17 @@ que bate no 5173 a cada ~5 min — o único script que aponta para a porta é o 
 periódico.
 
 
+## ✅ Os quatro vermelhos — FECHADOS em 2026-08-27 (detalhe no `CHANGELOG.md`)
+
+Todos eram instrumento herdando a condição que deveria declarar, nenhum era regressão de produto.
+Baselines: evaluation-api 214 · channel-gateway 677.
+
+**O que continua aberto desta seção:** nada roda estas suítes fora deste desvio. São **1 594 testes**
+(analytics 639 · auth 64 · channel-gateway 677 · evaluation 214) que só existem quando alguém lembra —
+e `auth-api`/`evaluation-api` não têm pytest na imagem, `auth-api` não tem nem os testes. O `run_gates`
+cobre os gates de shell; as suítes de pytest continuam sem runner.
+
+<!-- registro original -->
 ## 🔴 Quatro testes vermelhos que ninguém estava vendo (medido 2026-08-27)
 
 As suítes de `evaluation-api` e `channel-gateway` **não são rodadas de rotina** — só foram executadas
