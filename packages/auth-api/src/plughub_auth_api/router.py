@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from jose import JWTError
 
 from . import db as db_mod
+from . import presets as presets_mod
 from . import permissions as perms_mod
 from .config import Settings, get_settings
 from .jwt_utils import (
@@ -349,6 +350,45 @@ async def create_user(
         unrestricted=body.unrestricted,
         max_concurrent_sessions=body.max_concurrent_sessions,
     )
+
+    # ── Preset de nascimento (passo 3, 2026-08-27) ────────────────────────────
+    # Ate aqui o usuario nascia com `module_config` VAZIO, ou seja, dentro da
+    # degradacao graciosa — o menu "funcionava" porque o buraco o sustentava.
+    # Aplicar o preset do papel e o que permite inverter aquela degradacao sem que
+    # todo usuario novo nasca cego.
+    #
+    # Falha aqui NAO derruba a criacao: o usuario existe, so nasce sem grants — e a
+    # linha de log diz exatamente isso, em vez de degradar calado.
+    try:
+        # ⚠️ A linha crua do registry traz a coluna `schema` como STRING JSON (asyncpg
+        # nao decodifica JSONB sem codec) e com o nome `schema`, nao `permission_schema`.
+        # `_module_to_dict` e quem normaliza os dois — usar as linhas cruas faria o
+        # construtor nao achar campo algum e devolver `{}`, que e indistinguivel de
+        # "nenhum preset declarado".
+        mods = [_module_to_dict(r) for r in
+                await db_mod.list_modules(pool, tenant_id=None, active_only=True)]
+        cfg = presets_mod.build_module_config(body.roles, mods)
+        if cfg:
+            await db_mod.set_user_module_config(pool, str(row["id"]), cfg)
+            row["module_config"] = cfg
+            logger.info(
+                "preset aplicado a %s (papeis=%s): %d modulo(s), %d campo(s)",
+                body.email, ",".join(body.roles), len(cfg),
+                sum(len(v) for v in cfg.values()),
+            )
+        else:
+            logger.warning(
+                "NENHUM preset para os papeis %s — %s nasce sem grants e nao vera "
+                "tela alguma quando a degradacao de config vazio for removida. "
+                "Declare `role_defaults` em infra/modules.yaml.",
+                ",".join(body.roles) or "(vazio)", body.email,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "falha ao aplicar o preset de papel a %s: %s — usuario criado SEM grants",
+            body.email, exc,
+        )
+
     return _user_to_response(row)
 
 

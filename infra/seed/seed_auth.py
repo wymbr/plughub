@@ -13,7 +13,6 @@ Usuários criados:
         evaluation.curar      = read_write  (G-PROBE perna humana, 2026-07-02 — curadoria/calibração)
         contacts.visualizar   = read_only
         contacts.exportar     = read_write
-        billing.visualizar    = read_only
 
   operator@plughub.local    / changeme_operator  (roles: operator)
       module_config (campos do catálogo infra/modules.yaml):
@@ -265,9 +264,12 @@ DEMO_USERS = [
                 "visualizar": {"access": "read_only",  "scope": []},  # vê contatos/relatórios
                 "exportar":   {"access": "read_write", "scope": []},  # exporta dados
             },
-            "billing": {
-                "visualizar": {"access": "read_only", "scope": []},
-            },
+            # `billing.visualizar` REMOVIDO em 2026-08-27 (decisão 4 do dono: "o grant
+            # é apenas um teste, pode desconsiderar"). Era a única divergência entre
+            # este seed e o `role_defaults` do catálogo — e manter uma lista de exceção
+            # de uma linha no gate envelheceria pior do que remover a linha.
+            # Efeito visível: nenhum. `nav.billing` é portão de PAPEL (admin, business)
+            # e o supervisor nunca esteve na lista: tinha o grant e não via a tela.
         },
     },
     {

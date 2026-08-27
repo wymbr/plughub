@@ -1247,6 +1247,18 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 > rótulo tem **"e"** provavelmente são dois fatos — e se um deles concede capacidade, é chave-mestra
 > até prova em contrário. Gate: `infra/test/probe_config_permissions_split.sh`.
 
+> **PAPEL É PRESET DE NASCIMENTO, NUNCA PORTÃO** *(passo 3, 2026-08-27)*. Cada campo do
+> catálogo declara `role_defaults`; `create_user` aplica o preset dos papéis **uma vez**, na
+> criação. Antes disso o `INSERT` não gravava `module_config` e **todo usuário criado pela tela
+> nascia com config vazio** — dentro da degradação graciosa. O menu funcionava porque o buraco o
+> sustentava, e inverter a degradação sem preset faria cada usuário novo **nascer cego**.
+>
+> Consequências aceitas: **editar o preset não muda quem já existe** (mesma semântica de
+> seed-if-absent do resto da casa — política se aplica por edição, não por decreto), e **trocar o
+> papel depois não reescreve grants** (rebaixar é ato deliberado; deduzi-lo da troca apagaria em
+> silêncio o que foi dado à mão). Múltiplos papéis rendem o **maior** acesso por campo, nunca a
+> interseção. Gate: `infra/test/probe_role_preset_on_create.sh`.
+
 **ABAC** (`module_config` in JWT): `auth.module_registry` seeded from `infra/modules.yaml`. 8 modules: `evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`. Each field has `access: none|read_only|write_only|read_write` + `scope[]`. `PermissionChecker.can(module, field, minAccess?, scopeId?)`. Graceful degradation for legacy accounts without `module_config`.
 
 **Performance routing** (Arc 7d): `performance_score = resolution_rate × (1 − escalation_rate)`. Blending: `(1-w) × competency + w × performance`; `w = performance_score_weight` (default 0.0, env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT`). Redis key `{tenant}:agent_perf:{agent_type_id}` (TTL 6h). Batch job in analytics-api runs every 5min, lookback 7 days, min 5 sessions for statistical significance.

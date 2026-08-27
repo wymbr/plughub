@@ -2,6 +2,91 @@
 
 ---
 
+## O papel vira preset de nascimento, não portão (2026-08-27)
+
+Passo 3 do arco de ABAC total, e **pré-requisito medido do passo 6**.
+
+### O buraco que sustentava o menu
+
+`create_user` gravava `roles`, `accessible_pools`, `unrestricted` e
+`max_concurrent_sessions` — **e não gravava `module_config`**. Todo usuário criado pela tela
+nascia com config **vazio**, ou seja, dentro da degradação graciosa (`passesAbacRule` libera
+quando o `module_config` está vazio). O menu "funcionava" porque o buraco o sustentava.
+
+Isso torna a inversão daquela degradação uma armadilha: sem preset, cada usuário novo
+**nasceria cego** — menu só com Home — e quem o criou leria como *"a tela de Acesso quebrou"*.
+Por isso este passo vem **antes**, e não junto.
+
+### O modelo
+
+O papel deixa de ser um segundo mecanismo ao lado da ABAC e passa a ser um **preset declarado**
+(`role_defaults` por campo em `infra/modules.yaml`), aplicado **uma vez**, na criação. Duas
+propriedades vêm junto, e são desejadas:
+
+- **Papel é certidão de nascimento, não política viva.** Editar o preset não muda quem já
+  existe — mesma semântica de *seed-if-absent* do resto da casa.
+- **Trocar o papel depois não reescreve grants.** Rebaixar alguém é ato deliberado sobre as
+  permissões; deduzi-lo da troca de papel apagaria, em silêncio, grants dados à mão.
+
+Múltiplos papéis rendem o **maior** acesso por campo, nunca a interseção — acumular papel
+expressa acumular função.
+
+### Procedência de cada preset — e onde ela falta
+
+| papéis | origem |
+|---|---|
+| `admin`, `supervisor`, `operator` | **levantados** do `infra/seed/seed_auth.py`, único lugar onde tiveram grants explícitos. Nenhuma invenção |
+| `developer`, `business` | 🟡 **declarados mínimos, precisam de revisão do dono** |
+
+Para `developer` e `business` **não existe baseline medível**: o que eles alcançam hoje vem da
+degradação de config vazio — exatamente o que o passo 6 remove. Copiar *"o que eles veem hoje"*
+seria copiar o bypass para dentro da declaração.
+
+### Verificação — e o que ela achou
+
+O comparador estático `_seed_vs_preset.py` (arquivo × arquivo) apontou **uma** divergência:
+`supervisor` tinha `billing.visualizar` no seed e não no preset. Era precisamente o grant que o
+dono mandou desconsiderar (decisão 4). Removido do seed, de modo que as duas declarações ficam
+idênticas **sem lista de exceção** — uma lista de exceção de uma linha envelheceria pior, porque
+ninguém a revisita. Efeito visível: **nenhum** — `nav.billing` é portão de papel (`admin`,
+`business`) e o supervisor nunca esteve na lista: tinha o grant e não via a tela.
+
+Medição depois do re-seed: admin 43=43, supervisor 5=5, operator 5=5, **idênticos**.
+
+### Gate
+
+`infra/test/probe_role_preset_on_create.sh` (no manifesto), seis cenários. Mede as **duas**
+metades, que respondem a perguntas diferentes:
+
+- **comportamento** (S1) — o catálogo **deployado**: usuário criado nasce com grants;
+- **declaração** (S2/S3/S6) — o **arquivo**: papel declarado sem preset, preset fora do `domain`,
+  seed divergindo do catálogo.
+
+A distinção está escrita no probe: editar o YAML sem reiniciar o auth-api faz os dois
+discordarem, e essa discordância é *"existe ≠ está aplicado"*, não defeito do gate.
+
+Testemunha negativa (S5): papel inexistente não pode inventar grants. **Contraprova executada:**
+removendo todo preset de `developer` do catálogo, o S2 fica vermelho nomeando o papel.
+
+Boot do auth-api agora declara a cobertura (`Preset de papel: os 5 papeis declarados tem grants
+no catalogo`), com a lista de papéis **derivada** do `Literal` de `models.py` — redigitá-la
+divergiria no primeiro papel novo, e o sintoma seria justamente o silêncio.
+
+### 🔴 Achado: o subsistema de templates de permissão é morto
+
+Ao procurar onde o preset deveria morar, medi o candidato óbvio — `permission_templates` +
+`platform_permissions`, que o auth-api expõe em `/templates` e `/permissions`:
+
+- **0 linhas** nas duas tabelas;
+- **nenhum código lê `platform_permissions` para decidir coisa alguma** — a única menção fora do
+  próprio CRUD é um docstring no endpoint que materializa nelas.
+
+O `apply_template` materializa permissões numa tabela que ninguém consulta, enquanto a decisão
+real vive em `auth.users.module_config`. A UI usa o mesmo objeto com outra semântica (pré-preenche
+o formulário com `module_config`). Não construí o preset em cima disso; registrado no `TODO.md`.
+
+---
+
 ## `config.platform` deixa de gatear cinco telas (2026-08-27)
 
 Passo 2 do arco de ABAC total. Um campo cobria **Dashboards, Platform, Channels,

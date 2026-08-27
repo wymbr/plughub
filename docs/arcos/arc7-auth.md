@@ -843,3 +843,55 @@ O namespace `dashboards` mistura template do tenant com preferência pessoal
 (`layout:{tenant}:{user}`), e o gate é por namespace — então salvar o próprio Home exige
 permissão de administração (operator e supervisor: **403**). O campo novo **não** conserta
 isso; a saída é regra de posse, e o `user_id` já está dentro da chave. Ver `TODO.md`.
+
+
+---
+
+## O papel como PRESET de nascimento — passo 3 (2026-08-27)
+
+**O buraco.** `create_user` (`db.py:249`) gravava `roles`, `accessible_pools`, `unrestricted` e
+`max_concurrent_sessions` — **e não `module_config`**. Todo usuário criado pela tela nascia com
+config vazio, dentro da degradação graciosa. O menu funcionava porque o buraco o sustentava, e
+inverter a degradação sem preset faria cada usuário novo nascer cego.
+
+**O modelo.** `role_defaults` por campo em `infra/modules.yaml`; `presets.build_module_config`
+monta o config de nascimento; `create_user` o aplica logo após inserir a linha.
+
+- Falha ao aplicar **não** derruba a criação — o usuário existe, só nasce sem grants, e a linha
+  de log diz exatamente isso em vez de degradar calado.
+- Múltiplos papéis rendem o **maior** acesso por campo (união), nunca a interseção.
+- Campo sem preset **não entra** no config: ausência é negação, e escrever `access: none`
+  encheria o objeto de ruído que a tela teria de filtrar.
+- Preset fora do `domain` do campo é **recusado alto** no construtor, com log — deixá-lo passar
+  faria o 422 estourar na criação do usuário, longe da causa.
+
+**Duas propriedades aceitas de propósito:** papel é *certidão de nascimento*, não política viva
+(editar o preset não muda quem já existe); e trocar o papel depois **não** reescreve grants —
+deduzi-lo da troca apagaria, em silêncio, o que foi concedido à mão.
+
+**Cobertura conferida no boot.** `roles_sem_preset` compara os papéis declarados (derivados do
+`Literal` de `models.py`, nunca redigitados) com os citados no catálogo, e **avisa** — não é
+erro, porque papel novo antes do preset é transição legítima; o que não pode é ser silencioso.
+
+### Procedência dos presets
+
+`admin`/`supervisor`/`operator` foram **levantados** do `seed_auth.py`. `developer`/`business`
+são **declarações mínimas** que precisam de decisão: não há baseline medível para eles, porque o
+que alcançam hoje vem da degradação de config vazio — copiar isso seria copiar o bypass para
+dentro da declaração. Ver `TODO.md`.
+
+### Duas declarações, um comparador
+
+`infra/test/_seed_vs_preset.py` compara **arquivo × arquivo** (o seed do demo × o catálogo). É
+estático de propósito: comparar com o usuário vivo ficaria vermelho a cada edição legítima pela
+tela de Acesso, e um gate que reprova por uso normal ensina a ignorar o vermelho.
+
+A primeira execução achou uma divergência (`supervisor` com `billing.visualizar` no seed e não no
+preset) — o grant que o dono mandou desconsiderar. Removido, de modo que as duas declarações
+ficam idênticas sem lista de exceção.
+
+### Gate
+
+`infra/test/probe_role_preset_on_create.sh`. **S1 mede o catálogo DEPLOYADO** (o
+`auth.module_registry`, lido no boot); **S2/S3/S6 medem o ARQUIVO**. Editar o YAML sem reiniciar
+o auth-api faz os dois discordarem, e isso é *"existe ≠ está aplicado"*, não defeito do gate.

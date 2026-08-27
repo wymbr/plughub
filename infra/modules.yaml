@@ -26,12 +26,18 @@ modules:
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
+          operator: read_write
       revisar:
         label: Revisar e decidir sobre avaliações
         domain: [none, read_only, read_write]
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
+          supervisor: read_write
       # T5/5a — campos por round (contestação/réplica/tréplica). Cada um concede um round;
       # um perfil combina o que precisar. contestar/revisar = round 1.
       contestar_replica:
@@ -40,24 +46,32 @@ modules:
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
       contestar_treplica:
         label: Contestar avaliações (tréplica - round 3)
         domain: [none, read_write]
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
       revisar_replica:
         label: Revisar réplica (round 2)
         domain: [none, read_only, read_write]
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
       revisar_treplica:
         label: Revisar tréplica (round 3)
         domain: [none, read_only, read_write]
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
       # Slice auth quality (2026-06-25): curadoria + calibração (Arc 13 Fase H).
       # read_only = ver fila/contexto cego; read_write = re-pontuar, resolver, flag de viés.
       # Não tem rounds (≠ revisar/contestar). Concedido pela tela de Access, escopo por pool.
@@ -67,16 +81,25 @@ modules:
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
+          supervisor: read_write
       report:
         label: Visualizar relatórios de qualidade
         domain: [none, read_only]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_only
+          business: read_only
+          supervisor: read_only
       formularios:
         label: Gerenciar formulários e campanhas
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       # T8-D — gerir a rubrica-template/prompt do avaliador (perfil "mantenedor de prompt",
       # ortogonal a formulários). Gate da página Rubrica/Prompt (spec §16.3).
       gerir_rubrica:
@@ -84,6 +107,8 @@ modules:
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
 
   # ── Contatos ──────────────────────────────────────────────────────────────────
   - module_id: contacts
@@ -97,17 +122,29 @@ modules:
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
+          operator: read_write
       visualizar:
         label: Visualizar contatos e transcrições
         domain: [none, read_only]
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_only
+          business: read_only
+          developer: read_only
+          operator: read_only
+          supervisor: read_only
       exportar:
         label: Exportar dados de contatos
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
+          supervisor: read_write
 
   # ── Automação de Fluxos ───────────────────────────────────────────────────────
   - module_id: workflows
@@ -120,32 +157,45 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       visualizar:
         label: Visualizar instâncias e relatórios de workflow
         domain: [none, read_only]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_only
+          business: read_only
       cancelar:
         label: Cancelar instâncias de workflow
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       webhooks:
         label: Gerenciar webhooks de disparo
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       # Arc 16 Phase C — Tier 1 poller ABAC fields
       journey_read:
         label: Visualizar journeys suspensas de um pool (journey_list_suspended)
         domain: [none, read_only]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_only
       journey_resume:
         label: Retomar journeys suspensas (journey_resume)
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
 
   # ── Campanhas ─────────────────────────────────────────────────────────────────
   - module_id: campaigns
@@ -158,11 +208,16 @@ modules:
         domain: [none, read_only]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_only
+          business: read_only
       gerenciar:
         label: Criar e gerenciar campanhas
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
 
   # ── Atendimento (Agent Assist) ────────────────────────────────────────────────
   - module_id: agent_assist
@@ -176,12 +231,16 @@ modules:
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
       supervisionar:
         label: Monitorar e intervir em sessões ativas
         domain: [none, read_only, read_write]
         scopable: true
         scope_type: pool
         default: none
+        role_defaults:
+          admin: read_write
 
   # ── Faturamento ───────────────────────────────────────────────────────────────
   - module_id: billing
@@ -194,11 +253,16 @@ modules:
         domain: [none, read_only]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_only
+          business: read_only
       gerenciar:
         label: Gerenciar recursos e ativar reservas
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
 
   # ── Configuração da Plataforma ────────────────────────────────────────────────
   - module_id: config
@@ -216,31 +280,43 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       dashboards:
         label: Dashboards (templates e catálogo por papel)
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       calendars:
         label: Calendários e feriados
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       dialog_forms:
         label: Formulários de diálogo (DialogForms)
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       resources:
         label: Pools, Agent Types, Skills, Instâncias
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       channels:
         label: Configuração de canais e credenciais
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       # ⚠️ 'users' x 'permissions' — SPLIT de 2026-08-27, e a razão é de
       # SEGURANÇA, não de organização. O campo único "Gestão de usuários e
       # permissões" era a chave-mestra: quem o tinha podia se auto-conceder qualquer
@@ -258,16 +334,22 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       permissions:
         label: Conceder permissões (papéis, módulos, escopo de pools)
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       masking:
         label: Configuração de mascaramento de dados
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
 
   # ── Skill Flows / AgentFlow ───────────────────────────────────────────────────
   - module_id: skill_flows
@@ -280,16 +362,26 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
+          developer: read_write
       visualizar:
         label: Visualizar relatórios de agent flow
         domain: [none, read_only]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_only
+          business: read_only
+          developer: read_only
       editar:
         label: Criar e editar skill flows
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
+          developer: read_write
 
   # ── Aprovações (fila de trabalho humano) ──────────────────────────────────────
   # ADR docs/adr/adr-human-approval-workflow-step.md. Aprovação = passo de workflow
@@ -311,11 +403,17 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
+          operator: read_write
       decide:
         label: Decidir (aprovar / recusar / encaminhar)
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
+          operator: read_write
 
   # ── Agendas (Scheduler) ───────────────────────────────────────────────────────
   # Scheduler Fase 3. Grant-first (strict, sem bypass de admin): a nav /config/schedules
@@ -332,11 +430,15 @@ modules:
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       operacao:
         label: Operar agendas no Monitor (disparar, pausar, cancelar)
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
 
   # ── Outbound (mailings + campanhas + entregas) ────────────────────────────────
   # Módulo Outbound (fatia 1b). Grant-first (strict, sem bypass de admin): a nav
@@ -353,8 +455,12 @@ modules:
         domain: [none, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write
       operacao:
         label: Monitorar entregas
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+        role_defaults:
+          admin: read_write

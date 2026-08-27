@@ -12,13 +12,14 @@ import logging
 import os
 import pathlib
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, get_args
 
 import asyncpg
 import uvicorn
 from fastapi import FastAPI
 
 from . import db as db_mod
+from .models import Role
 from .config import get_settings
 from .groups_router import groups_router
 from .password import hash_password
@@ -48,6 +49,12 @@ else:
     except IndexError:
         # Fallback para containers onde o WORKDIR é /app (profundidade menor)
         _MODULES_YAML = pathlib.Path("/infra/modules.yaml")
+
+
+# Papeis declarados — DERIVADOS do `Role` de models.py, nunca redigitados: uma segunda
+# lista divergiria no primeiro papel novo, e o sintoma seria justamente o silencio que
+# a conferencia abaixo existe para quebrar.
+_ROLES_DECLARADOS = get_args(Role)
 
 
 async def _register_platform_modules(pool: asyncpg.Pool) -> None:
@@ -107,6 +114,30 @@ async def _register_platform_modules(pool: asyncpg.Pool) -> None:
         "Módulos de plataforma: %d registrados, %d erros (source: %s)",
         registered, errors, _MODULES_YAML,
     )
+
+    # ── Preset de papel: cobertura, conferida no BOOT ─────────────────────────
+    # Um papel sem `role_defaults` em campo nenhum faz o usuario nascer com config
+    # vazio — o "nascer cego" que o passo 3 existe para impedir. Descobrir isso na
+    # criacao do primeiro usuario daquele papel e tarde: ele ja entrou no sistema.
+    #
+    # Aviso, nao erro: papel novo declarado antes de ter preset e um estado legitimo
+    # de transicao. O que nao pode e ser SILENCIOSO.
+    from .presets import roles_sem_preset  # import local: evita ciclo no import-time
+    sem = roles_sem_preset(
+        [{"module_id": m.get("module_id", ""),
+          "permission_schema": m.get("permission_schema", {})} for m in modules],
+        list(_ROLES_DECLARADOS),
+    )
+    if sem:
+        logger.warning(
+            "PAPEL SEM PRESET: %s — usuario criado com esse papel nasce SEM grants e "
+            "nao vera tela alguma quando a degradacao de config vazio for removida. "
+            "Declare `role_defaults` para ele em %s.",
+            ", ".join(sem), _MODULES_YAML,
+        )
+    else:
+        logger.info("Preset de papel: os %d papeis declarados tem grants no catalogo.",
+                    len(_ROLES_DECLARADOS))
 
 
 async def _create_pool_with_retry(

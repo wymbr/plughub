@@ -26,7 +26,7 @@ UI-editável"*, que vale para o `module_config` de cada pessoa.
 |---|---|---|
 | 1 | Split `config.users` → `users` + `permissions` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 2 | Campos `config.calendars` / `config.dialog_forms` / `config.dashboards`; `nav.channels` → `config.channels` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
-| 3 | **Papel → preset de seed**, aplicado em `create_user` | pendente — **pré-requisito do passo 6** |
+| 3 | **Papel → preset de seed**, aplicado em `create_user` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 4 | Grants: supervisor recebe os 4 campos da decisão 1; sai `billing.visualizar` | pendente |
 | 5 | `strict: true` em bloco + regra ABAC nas 7 entradas sem regra | pendente |
 | 6 | Caem os **dois** bypasses juntos (papel **e** config vazia); `unrestricted` vira a única porta larga | pendente |
@@ -41,6 +41,37 @@ nasce com config vazio*, dentro da degradação. Inverter o 6 antes do 3 faria c
 
 ⚠️ **Não remover bypass antes de conceder.** Depois do passo 4 o placar do supervisor tem de ir a
 **0 dependências de bypass** — só então 5/6 são seguros.
+
+### 🟡 Presets de `developer` e `business` precisam de decisão (achado do passo 3)
+
+`admin`, `supervisor` e `operator` tiveram os presets **levantados** do `seed_auth.py` — é o que
+eles têm hoje, movido para a declaração. `developer` e `business` **não têm baseline medível**:
+o que alcançam hoje vem da degradação de config vazio, que é o que o passo 6 remove. Copiar *"o
+que eles veem hoje"* seria copiar o bypass para dentro da declaração.
+
+Declarados minimamente em `infra/modules.yaml`:
+
+| papel | preset atual |
+|---|---|
+| `developer` | `skill_flows.{operacao,editar,visualizar}` + `contacts.visualizar` |
+| `business` | `contacts.visualizar`, `evaluation.report`, `billing.visualizar`, `skill_flows.visualizar`, `workflows.visualizar`, `campaigns.visualizar` |
+
+**A decisão fica melhor depois do passo 5**, quando a matriz mostrar exatamente o que cada preset
+faz aparecer no menu.
+
+### 🔴 Subsistema de templates de permissão está MORTO (achado do passo 3)
+
+Medido: `auth.permission_templates` e `auth.platform_permissions` têm **0 linhas**, e **nenhum
+código lê `platform_permissions` para decidir** — a única menção fora do próprio CRUD é um
+docstring. O `POST /templates/{id}/apply` materializa permissões numa tabela que ninguém
+consulta, enquanto a decisão real vive em `auth.users.module_config`.
+
+Agrava: a **UI usa o mesmo objeto com outra semântica** — o seletor de template pré-preenche o
+formulário a partir de `template.module_config` (cópia no cliente), sem passar pelo `apply`. Ou
+seja, um objeto com duas leituras e uma delas escreve em tabela morta.
+
+Encaminhamento (não decidido): remover as duas tabelas e o `apply`, mantendo o template como
+preset de `module_config` — que é o uso que a UI já faz e o único com consumidor.
 
 ### 🔴 Serviços de config SEM portão (achado do passo 2, 2026-08-27)
 

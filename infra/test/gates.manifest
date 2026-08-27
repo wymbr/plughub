@@ -54,6 +54,13 @@ probe_config_permissions_split.sh
 # repetir o erro do menu em vez de o denunciar. Contraprova executada: reintroduzir o
 # bug original do `nav.channels` deixa este gate vermelho.
 probe_nav_backend_field_agreement.sh
+# Passo 3: o papel virou PRESET de nascimento. Ate 2026-08-27 `create_user` nao
+# gravava `module_config`, entao todo usuario criado pela tela nascia com config
+# VAZIO — dentro da degradacao graciosa. Este gate segura a ORDEM do arco: inverter
+# aquela degradacao sem preset faria cada usuario novo nascer cego. Mede as duas
+# metades: o comportamento (nasce com grants) e a declaracao (papel sem preset,
+# preset fora do domain, seed do demo divergindo do catalogo).
+probe_role_preset_on_create.sh
 # Este mede o BROWSER, nao o backend: chamada de UI com `fetch` cru contra endpoint
 # que exige credencial deixa a TELA VAZIA sem erro, e nenhum gate de backend pega —
 # do lado do backend o 401 esta certo.
