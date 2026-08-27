@@ -20,7 +20,7 @@
 #       admin do demo tem 22 pools EXPLICITOS, nao a lista vazia — nunca dependeu do
 #       legado, e como o ramo restritivo vence a lista, conceder-lhe o claim seria
 #       INERTE. Irrestrito exige as duas coisas: unrestricted=true E lista vazia.);
-#   S4  a declaracao nao ter DENTES (irrestrito nao ver mais que o admin escopado),
+#   S4  a declaracao nao ter DENTES (irrestrito nao ver mais que um principal ESCOPADO),
 #       ou o filtro de pool ter parado de valer. Sao DUAS proposicoes e dois numeros:
 #       sem a segunda, a primeira passaria num mundo onde o filtro nao roda. O caso
 #       'irrestrito == admin' e ramo PROPRIO (INCONCLUSIVO): 'nao ha dado fora do
@@ -108,10 +108,14 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 sec "S3 - existe um principal IRRESTRITO POR DECLARACAO"
-info "medido em 2026-08-27: o admin do demo tem 22 pools EXPLICITOS, nao a lista"
-info "vazia — logo ele nunca dependeu do legado, e com a ordem restritivo-vence"
-info "conceder o claim a ele seria INERTE. Irrestrito de verdade exige as duas"
-info "coisas: unrestricted=true E lista vazia."
+info "irrestrito de verdade exige DUAS coisas: unrestricted=true E lista vazia — com"
+info "a ordem restritivo-vence, o claim sobre uma lista nao-vazia e INERTE."
+info ""
+info "Historico: este principal foi criado porque o admin do demo tinha 22 pools"
+info "EXPLICITOS e por isso nao servia de cobaia. O dono decidiu em 2026-08-27 que"
+info "aqueles 22 eram residuo de teste, e o admin tambem virou irrestrito — mas o"
+info "probe@ FICA: um gate que depende do principal de producao estar configurado de"
+info "um jeito especifico volta a quebrar na proxima decisao de config."
 
 PROBE_EMAIL="${PROBE_EMAIL:-probe@plughub.local}"
 PROBE_PASS="${PROBE_PASS:-changeme_probe}"
@@ -154,31 +158,41 @@ SUP_TOK="$(login_json "$SUP_EMAIL" "$SUP_PASS" | jq -r '.access_token // empty')
 N_SUP=""
 [ -n "$SUP_TOK" ] && N_SUP="$(count_pools "$SUP_TOK")"
 
-info "pools distintos: irrestrito=$N_PROBE  admin(22 pools)=$N_ADMIN  supervisor=${N_SUP:-?}"
+# ⚠️ O COMPARADOR MUDOU em 2026-08-27. Era o admin, "o escopado com 22 pools" — e o
+# dono decidiu que aqueles 22 eram residuo de teste, entao o admin virou IRRESTRITO
+# declarado. Comparar dois irrestritos da sempre o mesmo numero e cai no ramo
+# INCONCLUSIVO para sempre, por nao-defeito. O comparador certo e quem realmente tem
+# recorte: o supervisor.
+info "pools distintos: irrestrito=$N_PROBE  escopado($SUP_EMAIL)=${N_SUP:-?}  admin=$N_ADMIN"
 
 bad_shape() { case "${1:-}" in ""|-1|null) return 0;; *) return 1;; esac; }
 
-if bad_shape "$N_PROBE" || bad_shape "$N_ADMIN"; then
-  inc "/reports/pools/queue nao devolveu .data.series - forma inesperada"
-elif [ "$N_PROBE" -gt "$N_ADMIN" ]; then
-  ok "irrestrito ve MAIS que o admin escopado ($N_PROBE > $N_ADMIN) - a declaracao foi exercida"
-elif [ "$N_PROBE" -lt "$N_ADMIN" ]; then
-  bad "irrestrito ve MENOS que o admin ($N_PROBE < $N_ADMIN) - a declaracao esta ESTREITANDO"
+if bad_shape "$N_PROBE" || bad_shape "${N_SUP:-}"; then
+  inc "/reports/pools/queue nao devolveu .data.series para irrestrito ou escopado"
+  info "Sem os dois numeros nao ha comparacao — e um verde aqui seria vacuo."
+elif [ "$N_PROBE" -gt "$N_SUP" ]; then
+  ok "irrestrito ve MAIS que o escopado ($N_PROBE > $N_SUP) - a declaracao foi exercida"
+elif [ "$N_PROBE" -lt "$N_SUP" ]; then
+  bad "irrestrito ve MENOS que o escopado ($N_PROBE < $N_SUP) - a declaracao ESTREITA"
 else
   # Ramo proprio, e nao e o mesmo que reprovar: 'nao ha dado fora do escopo do
-  # admin nesta janela' e diferente de 'a declaracao nao vale'. Exposicao e dano
+  # escopado nesta janela' e diferente de 'a declaracao nao vale'. Exposicao e dano
   # sao grandezas separadas; declarar OK aqui seria afirmar o que nao se mediu.
-  inc "irrestrito e admin veem o MESMO ($N_PROBE) - nenhum dado fora dos 22 pools do"
-  info "admin nesta janela, entao a declaracao existe mas NAO foi exercida."
+  inc "irrestrito e escopado veem o MESMO ($N_PROBE) - nenhum dado fora dos pools de"
+  info "$SUP_EMAIL nesta janela, entao a declaracao existe mas NAO foi exercida."
   info "Alargue a janela do relatorio e repita antes de concluir qualquer coisa."
 fi
 
-if bad_shape "${N_SUP:-}"; then
-  inc "login/resposta do supervisor ($SUP_EMAIL) falhou - sem o escopado nao ha testemunha"
-elif [ "$N_SUP" -lt "$N_ADMIN" ]; then
-  ok "escopado ve MENOS ($N_SUP < $N_ADMIN) - o filtro de pool esta rodando"
+# Testemunha do OUTRO lado: o admin tambem e irrestrito desde 2026-08-27, entao ele
+# tem de ver o mesmo que o probe. Se vir menos, alguem lhe devolveu recorte sem querer.
+if bad_shape "$N_ADMIN"; then
+  inc "login/resposta do admin falhou - sem ele nao ha a segunda testemunha"
+elif [ "$N_ADMIN" -eq "$N_PROBE" ]; then
+  ok "admin (tambem irrestrito) ve o mesmo que o probe ($N_ADMIN) - coerente"
 else
-  bad "escopado ve $N_SUP e admin ve $N_ADMIN - o filtro NAO esta separando"
+  bad "admin ve $N_ADMIN e o probe ve $N_PROBE, e AMBOS sao irrestritos"
+  info "Dois principais sem recorte devem ver a mesma populacao. Divergir significa"
+  info "que um deles ganhou recorte por outra via."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────

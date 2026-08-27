@@ -69,6 +69,12 @@ probe_role_preset_on_create.sh
 # normal. Guarda tambem a flag 'strict', que e o caminho de regressao mais provavel:
 # bastaria uma entrada de menu nova esquecer de marca-la para os dois voltarem.
 probe_nav_grant_first.sh
+# Passo 8: a rota que decide APROVACAO tinha bypass de papel elevado sobre ABAC E
+# recorte de pool. Este gate roda a metade ESTRUTURAL sempre (o verificador nao cita
+# papel, e o gate por grant continua no caminho) e DECLARA a metade comportamental
+# como nao exercida quando falta RESUME_TOKEN de uma aprovacao suspensa — sem ele,
+# todo mundo leva 404 e ler isso como 'recusou o nao-autorizado' seria medir o 404.
+probe_resume_approver_authz.sh
 # Este mede o BROWSER, nao o backend: chamada de UI com `fetch` cru contra endpoint
 # que exige credencial deixa a TELA VAZIA sem erro, e nenhum gate de backend pega —
 # do lado do backend o 401 esta certo.

@@ -866,6 +866,7 @@ async def resolve_supervisor_scope(
     pool: asyncpg.Pool,
     user_id: str,
     role: str,
+    unrestricted: bool = False,
 ) -> tuple[list[str], list[str]]:
     """
     Returns (supervised_groups, supervised_user_ids).
@@ -873,7 +874,11 @@ async def resolve_supervisor_scope(
     Algorithm:
       1. Find all groups where user is a supervisor.
       2. Expand those groups → user_ids (group members).
-      3. Admin role always gets [] (no restriction).
+      3. Principal SEM RECORTE (`unrestricted`) sempre recebe [] (sem restrição).
+         ⚠️ Era "admin role" até 2026-08-27 (passo 8). Quem não tem recorte de escopo é
+         quem DECLARA não ter, não quem carrega um papel — mesma troca do sítio irmão em
+         `evaluation-api/router.py` (`_evaluation_scope`). O parâmetro `role` sobrevive
+         na assinatura por compat; ele já não decide nada aqui.
 
     Note (2026-07-02): shift-based time-windowing and the agent_type_id
     expansion (Arc 9 original design) were removed — see
@@ -883,7 +888,11 @@ async def resolve_supervisor_scope(
     unvalidated, in agent_group_members). Supervisor scope is membership-only;
     pool-level row scoping is handled separately by `accessible_pools` (Arc 7).
     """
-    if role == "admin":
+    # ⚠️ Era `if role == "admin"` (passo 8, 2026-08-27). Mesma troca do sítio irmão na
+    # evaluation-api: quem não tem recorte de escopo é quem DECLARA não ter, não quem
+    # tem um papel. `unrestricted` é lido do usuário — o parâmetro `role` sobrevive na
+    # assinatura por compat de chamador.
+    if unrestricted:
         return [], []
 
     uid = uuid.UUID(user_id)

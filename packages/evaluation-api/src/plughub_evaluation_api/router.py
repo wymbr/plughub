@@ -477,8 +477,10 @@ def _compute_result_scope(
     if not jwt_payload:
         return None, None, None
     accessible = _scope_from_claims(jwt_payload, "results")
-    roles = jwt_payload.get("roles") or []
-    if "admin" in roles:
+    # ⚠️ Era `if "admin" in roles` (passo 8, 2026-08-27). O eixo aqui é ESCOPO — de quem
+    # eu vejo avaliações —, e escopo é exatamente o que `unrestricted` declara. Papel
+    # decidindo escopo é a mesma dívida que o menu tinha; o claim é a declaração.
+    if jwt_payload.get("unrestricted") is True:
         return None, accessible, None
     sub = jwt_payload.get("sub")
     supervised = jwt_payload.get("supervised_user_ids") or []

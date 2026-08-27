@@ -31,7 +31,7 @@ UI-editável"*, que vale para o `module_config` de cada pessoa.
 | 5 | Portão único grant-first + regra em `nav.billing` | ✅ **2026-08-27** — e **absorveu 6 e 7** (ver abaixo) |
 | 6 | Caem os **dois** bypasses juntos; `unrestricted` vira a única porta larga | ✅ **2026-08-27** (no mesmo commit do 5) |
 | 7 | Apagar os 7 `roles:` do `Sidebar.tsx` | ✅ **2026-08-27** (no mesmo commit do 5) |
-| 8 | Cauda de papel no **backend**: 4 sítios | 🟡 **2 de 4 feitos** (2026-08-27); os outros 2 precisam de decisão — ver abaixo |
+| 8 | Cauda de papel no **backend**: 4 sítios | ✅ **2026-08-27** — arco 1–8 COMPLETO |
 
 ⚠️ **O passo 6 depende do 3, e isto foi medido, não suposto.** `create_user`
 (`packages/auth-api/.../db.py:249`) grava `roles`, `accessible_pools`, `unrestricted` e
@@ -151,51 +151,16 @@ regra de escopo outra vez: preferência pessoal não é config de plataforma. O 
 **dentro da chave** (`layout:{tenantId}:{userId}`), e o config-api já lê o `sub` do JWT, então a
 saída é uma **regra de posse** (a chave é minha ⇒ posso escrever), não um campo novo.
 
-### 🔴 DECISÃO PENDENTE — os 2 sítios de papel que sobraram (passo 8, 2026-08-27)
+### ✅ Os 2 sítios de papel que sobravam — RESPONDIDOS pelo dono (2026-08-27)
 
-Dos quatro, dois caíram sem decisão (`_has_any_evaluation_access` e o `unrestricted` do menu —
-ver `CHANGELOG.md`). Os outros dois **mudam quem consegue fazer o quê**, e a medição diz por quê.
-
-#### Sítio 1 — `is_elevated` no channel-gateway (`main.py:1557`)
-
-```python
-is_elevated = ("admin" in roles) or ("supervisor" in roles)
-```
-
-Bypassa **ABAC e pool-scope** no `/resume` de tarefa humana. O comentário o justifica com *"contas
-elevadas não carregam `module_config` por campo"* — **premissa falsa desde o passo 3**.
-
-Remover barra gente, e não é hipótese:
-
-| quem | o que acontece |
+| pergunta | resposta |
 |---|---|
-| supervisor | **não tem `approvals.decide`** — hoje resolve aprovação *só* por este bypass |
-| admin | tem `approvals.decide`, mas o bypass também pula o pool-scope; **`aprovacao_deploy`** (pool de aprovação, `dispatch=pull`, `kind=human`) está **fora** dos 22 pools dele, num tenant de 36 |
+| O supervisor deve decidir aprovações? | **Sim, as do módulo de Quality** — que são REST próprio (`contestation_router`, gate `evaluation.revisar`) e não passam pelo `/resume`. Ele já as tem; **não** recebeu `approvals.decide` |
+| Os 22 pools do admin são deliberados? | **Não** — resíduo de teste do demo. *"Na prática todos os pools são criados dinamicamente."* `admin@` virou `accessible_pools: []` + `unrestricted: true`, declarado |
 
-**Duas perguntas para o dono:**
-1. O supervisor deve decidir aprovações? Se sim → grant `approvals.decide` (+ `operacao`).
-2. Qual é o domínio de pool do admin? Os 22 são deliberados, ou estado herdado? *(O seed **não**
-   define `accessible_pools` do admin — os 22 vieram de outro lugar.)*
-
-⚠️ **Enquanto não decidir, não remover**: hoje o bypass é a única coisa que faz a aprovação
-funcionar para os dois.
-
-#### Sítios 3 e 4 — escopo de PESSOAS por papel
-
-| onde | código |
-|---|---|
-| `evaluation-api/router.py:462` | `if "admin" in roles: return None, accessible, None` |
-| `auth-api/db.py` (`resolve_supervisor_scope`) | `if role == "admin": return [], []` |
-
-Os dois decidem **de quem** você vê as avaliações. O eixo aqui é **escopo**, não capacidade —
-então a resposta consistente com o resto do arco é o claim `unrestricted`, não o papel.
-
-**O que trava:** `admin@` tem `unrestricted: false`. Trocar `role == admin` por `unrestricted`
-faria o admin ver **só as próprias avaliações** (ele não supervisiona nenhum grupo).
-
-**Saídas possíveis:** (a) marcar `admin@` como `unrestricted` — hoje é **seguro**, porque o claim
-deixou de conceder capacidade, e a regra *"restritivo vence"* mantém os 22 pools dele intactos;
-(b) dar ao admin a supervisão dos grupos; (c) deixar como está e aceitar o papel neste eixo.
+Implementado; ver `CHANGELOG.md`. Fica registrado o que a segunda resposta implica: **o seed
+declara escopo apenas para quem o declara na entrada** — o `supervisor@` tem `accessible_pools`
+montado à mão como caso de teste, e um default aplicado a todos o apagaria em silêncio.
 
 ### Cauda de papel no backend (passo 8) — medida
 

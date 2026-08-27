@@ -1548,14 +1548,25 @@ def _resolve_approver_principal(
     if payload.get("tenant_id") and payload["tenant_id"] != body.tenant_id:
         _log.warning("A5 403 tenant_mismatch: jwt=%s body=%s", payload.get("tenant_id"), body.tenant_id)
         raise HTTPException(status_code=403, detail="approval: tenant mismatch")
-    # ABAC por TIPO DE TAREFA (Camada E2) — admin/supervisor bypassam por role (mesma
-    # semântica do passesAbac da plataforma; contas elevadas não carregam module_config
-    # por campo). Elevados têm autoridade sobre todos os pools e bypassam ABAC E pool-scope
-    # (o pool-scope já foi exercido no inbox/claim; re-exigir cria assimetria claim↔resume).
+    # ABAC por TIPO DE TAREFA (Camada E2).
+    #
+    # ⚠️ O BYPASS DE PAPEL CAIU em 2026-08-27 (passo 8). Ele era
+    # `("admin" in roles) or ("supervisor" in roles)`, justificado por "contas elevadas
+    # não carregam module_config por campo" e por "mesma semântica do passesAbac da
+    # plataforma". As DUAS premissas morreram no mesmo arco: desde o passo 3 todo usuário
+    # nasce com grants por campo, e no passo 5 o `passesAbac` deixou de olhar papel.
+    #
+    # Quem aprova agora precisa de `approvals.decide` E do pool no domínio. Medido antes
+    # de remover, porque remover barra gente:
+    #   · admin  — tem o grant, e virou `unrestricted` (decisão do dono: os 22 pools eram
+    #     resíduo de teste), então `pool_in_scope` o libera pelo claim;
+    #   · supervisor — NÃO tem `approvals.decide`, e é o desejado: a aprovação dele é a de
+    #     QUALITY, que é REST próprio (`contestation_router`, gate `evaluation.revisar`) e
+    #     não passa por aqui. O que ele perde é o `aprovacao_deploy` — promoção de deploy,
+    #     que a decisão 2 já pôs fora do alcance dele.
     roles = payload.get("roles")
     roles = roles if isinstance(roles, list) else []
-    is_elevated = ("admin" in roles) or ("supervisor" in roles)
-    if not is_elevated and required_abac is not None:
+    if required_abac is not None:
         _mod, _field = required_abac
         # Tarefa que EXIGE capacidade (ex.: aprovação → approvals.decide). Form-fill
         # genérico (required_abac=None, ex.: wrap-up) NÃO cai aqui: o binding do claim

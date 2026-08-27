@@ -149,6 +149,31 @@ def upsert_user(email: str, name: str, password: str, roles: list[str]) -> str |
     return None
 
 
+def set_scope(user_id: str, email: str, entry: dict):
+    """Aplica `accessible_pools`/`unrestricted` — SO se a entrada os declarar.
+
+    ⚠️ A guarda por PRESENCA da chave nao e detalhe: o `supervisor@` tem
+    `accessible_pools` montado a mao como caso de teste (CLAUDE.md proibe desfaze-lo).
+    Aplicar um default a todo mundo o apagaria, e apagar escopo nao aparece na tela como
+    erro — aparece como "sumiu dado".
+
+    Campos de CAPACIDADE no corpo exigem `config.permissions` (split do passo 1); o
+    token de bootstrap do seed o declara.
+    """
+    corpo = {}
+    if "accessible_pools" in entry:
+        corpo["accessible_pools"] = entry["accessible_pools"]
+    if "unrestricted" in entry:
+        corpo["unrestricted"] = entry["unrestricted"]
+    if not corpo:
+        return
+    status, body = _req("PATCH", f"/auth/users/{user_id}", corpo)
+    if status == 200:
+        ok(f"escopo de {email}: {corpo}")
+    else:
+        warn(f"Falha ao aplicar escopo de {email}: {status} {body}")
+
+
 def set_module_config(user_id: str, config: dict):
     """Define module_config completo do usuário."""
     status, body = _req("PUT", f"/auth/users/{user_id}/module-config", config)
@@ -186,6 +211,19 @@ DEMO_USERS = [
         "name":     "Demo Admin",
         "password": "changeme_admin",
         "roles":    ["admin", "developer"],
+        # Sem recorte de pool, DECLARADO (decisão do dono, 2026-08-27). O admin do demo
+        # carregava 22 pools de 36 — resíduo de teste, não política ("na prática todos os
+        # pools são criados dinamicamente").
+        #
+        # Declarado e não deduzido de `accessible_pools: []`: a lista vazia significa
+        # "todos" pela convenção LEGADA, que o passo 3 do plano de pools inverte para
+        # "nenhum". Quem depender da convenção perde tudo naquele dia; o claim existe
+        # justamente para que a inversão não apague ninguém.
+        #
+        # ⚠️ Isto NÃO concede capacidade: desde a correção do passo 8, `unrestricted`
+        # responde só pelo eixo de ESCOPO. O que o admin pode fazer vem dos grants.
+        "accessible_pools": [],
+        "unrestricted": True,
         "module_config": {
             "evaluation": {
                 "contestar":          {"access": "read_write", "scope": []},
@@ -338,6 +376,8 @@ def main():
             password = user["password"],
             roles    = user["roles"],
         )
+        if uid:
+            set_scope(uid, user["email"], user)
         if uid and user.get("module_config"):
             set_module_config(uid, user["module_config"])
 

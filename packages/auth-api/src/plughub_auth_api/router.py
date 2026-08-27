@@ -187,7 +187,7 @@ async def _make_token_response(
     role: str = (list(user["roles"]) or ["operator"])[0]
     # Arc 9 — resolve supervisor scope at token generation time
     sup_groups, sup_user_ids = await db_mod.resolve_supervisor_scope(
-        pool, str(user["id"]), role,
+        pool, str(user["id"]), role, bool(user.get("unrestricted", False)),
     )
     access = create_access_token(
         user_id=str(user["id"]),

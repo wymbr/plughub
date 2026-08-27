@@ -140,13 +140,33 @@ def test_scope_no_jwt_unrestricted():
     assert _compute_result_scope(None) == (None, None, None)
 
 
-def test_scope_admin_unrestricted():
-    jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": []}
+def test_scope_unrestricted_claim_sees_everyone():
+    """Sem recorte e quem DECLARA nao ter (passo 8, 2026-08-27) — antes era o papel."""
+    jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": [],
+           "unrestricted": True}
     assert _compute_result_scope(jwt) == (None, None, None)
 
 
-def test_scope_admin_with_accessible_pools():
-    jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": ["p1", "p2"]}
+def test_scope_admin_role_alone_is_scoped():
+    """O DISCRIMINADOR da mudanca: papel `admin` sozinho NAO da mais escopo total.
+
+    Escopo (de quem eu vejo avaliacoes) e o eixo que `unrestricted` declara; papel
+    decidindo escopo era a mesma divida que o menu tinha. Sem o claim, o admin passa a
+    ver so a si mesmo — que e o mesmo tratamento de qualquer nao-supervisor.
+    """
+    jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": [],
+           "supervised_user_ids": []}
+    users, pools, self_id = _compute_result_scope(jwt)
+    assert users == ["u_admin"] and pools is None and self_id == "u_admin"
+
+
+def test_scope_unrestricted_with_accessible_pools():
+    """O claim libera o eixo de PESSOAS; a lista de pools continua restringindo.
+
+    Sao dois recortes independentes, e o RESTRITIVO vence em cada um.
+    """
+    jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": ["p1", "p2"],
+           "unrestricted": True}
     users, pools, self_id = _compute_result_scope(jwt)
     assert users is None and pools == ["p1", "p2"] and self_id is None
 

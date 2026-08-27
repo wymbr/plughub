@@ -956,10 +956,23 @@ no channel-gateway). O que saiu foi a consulta a ele no portão de navegação.
 
 | # | sítio | estado |
 |---|---|---|
-| 1 | `channel-gateway/main.py:1557` (`is_elevated`) | 🟡 **decisão pendente** — remover barra o supervisor (sem `approvals.decide`) e o admin (`aprovacao_deploy` fora dos 22 pools dele) |
+| 1 | `channel-gateway/main.py` (`is_elevated`) | ✅ caiu — exige `approvals.decide` + pool no domínio. O supervisor perde só o `aprovacao_deploy`: a aprovação de Quality é REST próprio (`contestation_router`) e não passa aqui. O admin passa pelo claim `unrestricted` |
 | 2 | `evaluation-api` `_has_any_evaluation_access` | ✅ role-admin e config-vazio caíram; *sem token* fica (postura de demo, eixo próprio) |
-| 3 | `evaluation-api/router.py:462` (`_evaluation_scope`) | 🟡 **decisão pendente** — eixo de escopo; trocar por `unrestricted` faz o admin ver só as próprias avaliações |
-| 4 | `auth-api` `resolve_supervisor_scope` | 🟡 idem |
+| 3 | `evaluation-api/router.py` (`_evaluation_scope`) | ✅ `"admin" in roles` → `unrestricted is True` |
+| 4 | `auth-api` `resolve_supervisor_scope` | ✅ `role == "admin"` → parâmetro `unrestricted` |
+
+**Arco 1–8 COMPLETO** (2026-08-27). Nos sítios 3 e 4 o eixo é **escopo**, e escopo é exatamente o
+que `unrestricted` declara — papel decidindo escopo era a mesma dívida que o menu tinha.
+
+**O que a decisão do dono sobre os pools do admin exigiu junto:** o seed **não aplicava**
+`accessible_pools`/`unrestricted` (o `upsert_user` só manda email/name/password/roles), então a
+declaração seria inerte. O `set_scope` novo aplica — **e só quando a entrada declara**, porque o
+`supervisor@` tem `accessible_pools` montado à mão como caso de teste e um default aplicado a
+todos o apagaria; apagar escopo não aparece na tela como erro, aparece como *"sumiu dado"*.
+
+Gate: `infra/test/probe_resume_approver_authz.sh` — metade estrutural sempre, metade
+comportamental declarada NÃO EXERCIDA sem `RESUME_TOKEN` (sem ele todo mundo leva 404, e ler isso
+como *"recusou o não-autorizado"* seria medir o 404).
 
 O sítio 2 alcançava mais do que parecia: `_can_view_transcript` **delega** para ele, então o
 bypass de config vazio chegava a **transcrição** — conteúdo, não só listas de id→nome.

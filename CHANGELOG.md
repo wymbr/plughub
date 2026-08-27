@@ -2,6 +2,78 @@
 
 ---
 
+## Fim da cauda de papel — passo 8 completo, arco de ABAC total fechado (2026-08-27)
+
+Duas decisões do dono destravaram os três sítios que faltavam:
+
+> **1.** *"supervisor deve decidir aprovações para o módulo de quality"*
+> **2.** *"os 22 pools do admin foram definidos em cima do ambiente demo para teste; o seed não
+> precisa definir nenhum pool na prática, uma vez que todos os pools são criados dinamicamente"*
+
+### O que a decisão 1 significa, medido
+
+A revisão de Quality é **REST próprio** (`contestation_router`, gate `evaluation.revisar` /
+`curar`) e **não passa** pelo `/resume` do channel-gateway, onde vivia o bypass. Ou seja: remover
+o bypass **não tira nada** da aprovação que o supervisor deve ter. O que ele perde é o
+`aprovacao_deploy` — promoção de deploy, que a decisão 2 do escopo já pusera fora do alcance dele
+(*não alcança Fluxo*).
+
+Conclusão: o supervisor **não** recebe `approvals.decide`; ele já tem o que a decisão pede.
+
+### O que a decisão 2 destravou
+
+`admin@` passou a declarar `accessible_pools: []` **+ `unrestricted: true`**.
+
+Declarado, não deduzido de lista vazia: `[]` significa "todos" pela convenção **legada**, que o
+passo 3 do plano de pools inverte para "nenhum" — quem depender da convenção perde tudo naquele
+dia, e o claim existe justamente para que a inversão não apague ninguém.
+
+E é **seguro agora** e não era ontem: até a correção anterior, `unrestricted` liberava o menu
+inteiro (inclusive a Auditoria LGPD). Depois dela, responde só pelo eixo de escopo.
+
+**Achado no caminho:** o seed **não aplicava** `accessible_pools`/`unrestricted` — `upsert_user`
+só manda email/name/password/roles. Eu ia deixar uma declaração sem mecanismo. O `set_scope` novo
+aplica, **e só quando a entrada declara** — guarda que não é detalhe: o `supervisor@` tem
+`accessible_pools` montado à mão como caso de teste, e um default aplicado a todos o apagaria.
+Apagar escopo não aparece como erro na tela; aparece como *"sumiu dado"*. Verificado depois do
+seed: admin 0 pools + claim, supervisor com os 2 pools do caso de teste **intactos**.
+
+### Os três sítios
+
+| # | sítio | mudança |
+|---|---|---|
+| 1 | `channel-gateway/main.py` (`is_elevated`) | papel elevado bypassava **ABAC e pool-scope** numa rota que decide aprovação. Caiu; agora exige `approvals.decide` + pool no domínio |
+| 3 | `evaluation-api` `_evaluation_scope` | `"admin" in roles` → `unrestricted is True` |
+| 4 | `auth-api` `resolve_supervisor_scope` | `role == "admin"` → parâmetro `unrestricted` |
+
+Nos sítios 3 e 4 o eixo é **escopo** (de quem vejo avaliações), e escopo é exatamente o que
+`unrestricted` declara — papel decidindo escopo era a mesma dívida que o menu tinha.
+
+Três testes reescritos, e o novo `test_scope_admin_role_alone_is_scoped` é o **discriminador**:
+prova que papel `admin` sozinho já não dá escopo total. Suíte: **216 passam**.
+
+### Gate
+
+`infra/test/probe_resume_approver_authz.sh`. Metade **estrutural** roda sempre; metade
+**comportamental** exige uma aprovação suspensa (`RESUME_TOKEN=…`) e, sem ela, é declarada **NÃO
+EXERCIDA** — não vermelha. Um gate permanentemente vermelho por não-defeito ensina a ignorar o
+vermelho; sair verde afirmando que mediu seria pior. O veredicto diz `VERDE (PARCIAL)` e nomeia o
+que ficou de fora.
+
+**Terceira vez neste arco que um grep confundiu código com comentário:** o S1 reprovou o próprio
+comentário que documenta a remoção. Corrigido com `grep -v '^\s*#'`, como o `roles:` do Sidebar e
+o `strict` do gate anterior.
+
+### Arco fechado
+
+Passos 1–8 completos. O que resta são os achados colaterais, todos registrados no `TODO.md`:
+serviços de config sem portão (`calendar-api`, `dialog-api`), layout pessoal de dashboard atrás de
+permissão de plataforma, o editor de Fluxo com divergência menu×backend, e os presets de
+`developer`/`business` — este último agora fácil de decidir, porque a matriz mostra exatamente o
+que cada preset faz aparecer.
+
+---
+
 ## `unrestricted` deixa de conceder capacidade · cauda de papel no backend (2026-08-27)
 
 Passo 8, **metade feita e metade registrada** — dois dos quatro sítios de papel mudam quem
