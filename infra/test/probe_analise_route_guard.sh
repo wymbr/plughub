@@ -44,13 +44,24 @@ else
   ok "grupo \`analise\` sem \`roles:\` — quem decide e o grant de cada filho"
 fi
 
-echo "── A'. TESTEMUNHA: outros grupos AINDA tem \`roles:\` ──"
-# Sem esta, um Sidebar vazio/renomeado passaria na secao A por ausencia.
-N_ROLES=$(grep -cE "^\s*roles:\s*\[" "$SIDEBAR")
-if [ "$N_ROLES" -eq 0 ]; then
-  inc "nenhum grupo tem \`roles:\` — ou o padrao mudou, ou o arquivo nao e o que penso"
+echo "── A'. TESTEMUNHA: o arquivo e o que penso (nao passei por ausencia) ──"
+# ⚠️ ATE 2026-08-27 esta testemunha era outra: contava quantos OUTROS grupos ainda
+# tinham \`roles:\`, para provar que a ausencia no \`analise\` significava algo. Era
+# correta enquanto a remocao era PARCIAL. O passo 5 removeu os 7 portoes, e a
+# comparacao perdeu referencia — ficaria vermelha para sempre por um NAO-defeito, que
+# e a forma mais rapida de ensinar a ignorar o vermelho.
+#
+# A proposicao "nenhum grupo tem portao de papel" mudou de casa: vive em
+# \`probe_nav_grant_first.sh\` (S1), com testemunha de presenca propria. Aqui basta
+# provar que o arquivo tem a forma esperada, senao a secao A passaria por vacuidade.
+N_ABAC=$(grep -c "abac:" "$SIDEBAR")
+N_ROLES=$(grep -cE "^\s*roles:\s*\[" "$SIDEBAR" || true)
+if [ "${N_ABAC:-0}" -lt 10 ]; then
+  inc "so $N_ABAC regras \`abac:\` no Sidebar — o arquivo nao e o que penso"
+elif [ "${N_ROLES:-0}" -ne 0 ]; then
+  bad "$N_ROLES portao(oes) de papel de volta no Sidebar (ver probe_nav_grant_first.sh)"
 else
-  ok "$N_ROLES outros grupos ainda usam \`roles:\` (divida registrada, fora deste escopo)"
+  ok "$N_ABAC regras \`abac:\` e zero \`roles:\` — estado-alvo do passo 5"
 fi
 
 echo "── B. toda rota de PAGINA sob \`analise/\` tem guard ──"

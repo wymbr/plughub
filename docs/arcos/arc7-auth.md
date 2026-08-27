@@ -895,3 +895,39 @@ ficam idênticas sem lista de exceção.
 `infra/test/probe_role_preset_on_create.sh`. **S1 mede o catálogo DEPLOYADO** (o
 `auth.module_registry`, lido no boot); **S2/S3/S6 medem o ARQUIVO**. Editar o YAML sem reiniciar
 o auth-api faz os dois discordarem, e isso é *"existe ≠ está aplicado"*, não defeito do gate.
+
+
+---
+
+## O portão único do menu — passo 5 (2026-08-27)
+
+**Três mecanismos caíram juntos** porque separá-los deixaria o anterior inerte:
+
+| # | o que era | por que caiu junto |
+|---|---|---|
+| `roles:` no Sidebar (7) | portão de PAPEL, decidido **antes** da ABAC | enquanto existisse, o grant do passo 4 era **no-op** — 11 grants do supervisor que ele não via |
+| ramo não-estrito: papel | `admin`/`supervisor` passando por cima do grant | contradizia a decisão do dono de 2026-08-26 |
+| ramo não-estrito: config vazio | `module_config` vazio liberando tudo | o mais silencioso: usuário novo nascia vendo tudo |
+
+**O ramo saiu inteiro, e a flag `strict` sumiu do tipo e das 11 regras.** Marcar cada regra
+deixaria a regressão a um esquecimento de distância: entrada nova sem a flag reabriria os dois.
+
+**`unrestricted` passou a viajar até a UI** (`TokenUserInfo` → `Session`), porque só existia no
+JWT e no `UserResponse` — e com o portão grant-first ele é a única porta larga que resta.
+
+### Cabeçalhos de grupo: derivação, não campo
+
+Os 5 cabeçalhos não ganharam regra ABAC. A regra *"grupo visível ⟺ ao menos um filho visível"* já
+estava implementada; o que faltava era **tirar o `roles:` deles**, que a curto-circuitava.
+
+### O instrumento media uma proposição adjacente
+
+`q_nav_gates_matrix.py` avaliava só as regras `abac:` — respondia *"o grant passa?"* quando a
+pergunta era *"a pessoa vê?"*. Ganhou a seção **3b** (grants inertes por portão de grupo) e, no
+passo 5, foi atualizado para espelhar a decisão nova: sem `BYPASS`/`legado`, com `IRREST` para o
+claim. Instrumento que sobrevive intacto à mudança do que ele mede não está medindo.
+
+### Gate
+
+`infra/test/probe_nav_grant_first.sh` — **estrutural de propósito**: a proposição é sobre a
+*forma* da decisão, e simulá-la em bash seria uma segunda implementação da regra.

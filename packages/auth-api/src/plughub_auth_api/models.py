@@ -61,6 +61,10 @@ class TokenUserInfo(BaseModel):
     roles: list[str]
     tenant_id: str
     accessible_pools: list[str]
+    # Declaração EXPLÍCITA de "sem recorte". Viaja no payload de login desde 2026-08-27
+    # porque a UI monta a sessão daqui, e com o portão de navegação grant-first o claim
+    # é a única porta larga que resta — ausente aqui, ele não existiria na tela.
+    unrestricted: bool = False
     max_concurrent_sessions: int = 3     # capacity shared across all pools
     module_config: dict[str, Any] = {}   # ABAC config por módulo (carregado do JWT)
 

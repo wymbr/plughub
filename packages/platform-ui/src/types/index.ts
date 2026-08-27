@@ -27,6 +27,12 @@ export interface Session {
   roles: string[]                  // all roles from JWT (user may have multiple)
   tenantId: string
   accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
+  /**
+   * Declaração explícita de "sem recorte" (passo 2 do arco de autorização).
+   * É a ÚNICA porta larga do menu desde que o portão virou grant-first: config vazio
+   * deixou de liberar, então quem vê tudo é quem declara isto, nunca quem omite grants.
+   */
+  unrestricted: boolean
   /** Arc 9 — agent types this supervisor can see. [] = unrestricted (admin). */
   supervisedAgentTypes: string[]
   /** Maximum simultaneous contacts this human agent can serve. Shared across all pools. */

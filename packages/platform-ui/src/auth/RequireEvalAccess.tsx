@@ -74,21 +74,22 @@ interface RequireAbacProps {
   module: string
   field?: string
   anyOf?: string[]
-  /** grant-first: exige o grant mesmo com config vazio e mesmo para admin. */
-  strict?: boolean
   children: React.ReactNode
 }
 
 export const RequireAbac: React.FC<RequireAbacProps> = ({
-  module, field, anyOf, strict, children,
+  module, field, anyOf, children,
 }) => {
   const { session } = useAuth()
   const { t } = useTranslation('evaluation')
 
+  // A prop `strict` saiu no passo 5: o portão é grant-first para todo mundo, então não
+  // há mais dois comportamentos entre os quais escolher.
   const allowed = passesAbacRule(
-    { module, field, anyOf, strict },
+    { module, field, anyOf },
     session?.moduleConfig,
     session?.role,
+    session?.unrestricted,
   )
 
   if (!allowed) {

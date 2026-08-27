@@ -216,6 +216,7 @@ async def _make_token_response(
                 roles=list(user["roles"]),
                 tenant_id=user["tenant_id"],
                 accessible_pools=list(user["accessible_pools"]),
+                unrestricted=bool(user.get("unrestricted", False)),
                 max_concurrent_sessions=int(user.get("max_concurrent_sessions", 3)),
                 module_config=module_config,
             ),

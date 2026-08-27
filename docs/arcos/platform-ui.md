@@ -279,7 +279,16 @@ Icon: ⚙️ — roles: admin, business
 
 ### Filtering rules
 
-Items are filtered in two passes: (1) `roles[]` — if present, session.role must be in the list; (2) `passesAbac()` — if `abac` is set and `moduleConfig` is populated (non-empty), and role is not admin/supervisor, calls `perms.can(module, field)`. Admin and supervisor bypass all ABAC checks. When `moduleConfig` is absent (legacy accounts), ABAC is skipped and items are shown by role only.
+**Atualizado em 2026-08-27 (passo 5 do arco de ABAC total).** A descrição anterior — dois passes,
+`roles[]` e depois `passesAbac()`, com admin/supervisor e `moduleConfig` vazio passando por cima —
+**não vale mais**, e cada uma daquelas três liberações foi removida:
+
+Hoje há **um** passe: `passesAbacRule(rule, moduleConfig, role, unrestricted)`, grant-first para
+todo mundo. Não há `roles[]` no `Sidebar.tsx`, não há decisão por papel dentro da função, e
+`moduleConfig` vazio significa **não pode nada** (antes significava "pode tudo").
+
+A única forma de ver um item sem ter o grant dele é o claim **`unrestricted`**, declarado por
+usuário. Cabeçalho de grupo continua **derivado**: visível ⟺ ao menos um filho visível.
 
 **ABAC tier semantics:**
 - `operacao` gates operational write items (Monitor, Console, Editor, Deploy) — users with `operacao: none` (e.g. business) don't see these

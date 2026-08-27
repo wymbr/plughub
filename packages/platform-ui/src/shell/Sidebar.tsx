@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
-import { passesAbacRule } from '@/lib/permissions'
+import { passesAbacRule, type AbacNavRule } from '@/lib/permissions'
 import { useTranslation } from 'react-i18next'
 import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, ClipboardList, BarChart2, Settings, Search,
@@ -22,7 +22,10 @@ interface NavItem {
   // grant ABAC mesmo para admin (usar quando a API correspondente enforça ABAC sem
   // admin token, ex.: curadoria/`curar`). Default (false) mantém o bypass de admin.
   // anyOf: visível se o usuário tiver QUALQUER um dos campos (OR); senão usa `field`.
-  abac?: { module: string; field?: string; anyOf?: string[]; strict?: boolean }
+  // REFERENCIA o tipo compartilhado, nao uma copia: a copia anterior guardava a
+  // flag `strict` que `AbacNavRule` ja tinha perdido — tipo copiado diverge na
+  // primeira mudanca, igual a regra copiada.
+  abac?: AbacNavRule
   children?: NavItem[]
 }
 
@@ -45,7 +48,6 @@ const Sidebar: React.FC = () => {
       label: t('nav.home'),
       href: '/',
       icon: Home,
-      roles: ['operator', 'supervisor', 'admin', 'developer', 'business']
     },
 
     // ── Console ────────────────────────────────────────────────────
@@ -53,7 +55,6 @@ const Sidebar: React.FC = () => {
       label: t('nav.console'),
       href:  '/console',
       icon:  Monitor,
-      roles: ['operator', 'supervisor', 'admin'],
       abac:  { module: 'contacts', field: 'operacao' },
     },
 
@@ -63,14 +64,13 @@ const Sidebar: React.FC = () => {
       label: t('nav.monitor'),
       href: '#',
       icon: Radio,
-      roles: ['operator', 'supervisor', 'admin'],
       children: [
         { label: t('nav.monitor.sessions'),  href: '/flow/monitor',      icon: FileText,  abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: Users,     abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: Waves,     abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: Zap,       abac: { module: 'contacts',   field: 'operacao' } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.operacao (D2).
-        { label: t('nav.monitor.schedules'), href: '/monitor/schedules', icon: CalendarClock, abac: { module: 'scheduler', field: 'operacao', strict: true } },
+        { label: t('nav.monitor.schedules'), href: '/monitor/schedules', icon: CalendarClock, abac: { module: 'scheduler', field: 'operacao' } },
         // I5 / ADR § D7b — pendências de wrap-up AGORA. Leitura sob o mesmo grant
         // do resto do Monitor; a AÇÃO de encerrar é mais estreita e é o endpoint
         // que a enforça (supervisor|admin).
@@ -84,7 +84,6 @@ const Sidebar: React.FC = () => {
       label: t('nav.flow'),
       href: '#',
       icon: GitBranch,
-      roles: ['admin', 'developer', 'business', 'supervisor'],
       children: [
         { label: t('nav.flow.editor'), href: '/agent-flow/editor', icon: PenLine, abac: { module: 'skill_flows', field: 'operacao' } },
         { label: t('nav.flow.deploy'), href: '/agent-flow/deploy', icon: Rocket,  abac: { module: 'skill_flows', field: 'operacao' } },
@@ -97,19 +96,18 @@ const Sidebar: React.FC = () => {
       label: t('nav.quality'),
       href: '#',
       icon: ClipboardCheck,
-      roles: ['operator', 'supervisor', 'admin', 'business'],
       // Quality nav é grant-first (strict-ABAC): cada item é gateado pelo grant ABAC,
       // sem `roles` e sem bypass de admin/supervisor — o menu reflete exatamente as
       // permissões concedidas pela tela de Acesso. Exceção: Knowledge (sem campo ABAC
       // próprio — KB é admin-only por role).
       children: [
-        { label: t('nav.eval.forms'),       href: '/evaluation/forms',       icon: FileCheck,    abac: { module: 'evaluation', field: 'formularios', strict: true } },
-        { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: List,         abac: { module: 'evaluation', field: 'formularios', strict: true } },
-        { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: BookOpen,     abac: { module: 'evaluation', field: 'formularios', strict: true } },
-        { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: Archive,      abac: { module: 'evaluation', anyOf: ['report', 'revisar', 'contestar'], strict: true } },
-        { label: t('nav.eval.calibration'), href: '/evaluation/calibration', icon: Ruler,        abac: { module: 'evaluation', anyOf: ['curar', 'report'], strict: true } },
-        { label: t('nav.eval.curadoria'),   href: '/evaluation/curadoria',   icon: Search,       abac: { module: 'evaluation', field: 'curar', strict: true } },
-        { label: t('nav.eval.rubric'),      href: '/evaluation/rubric',      icon: FileCheck,    abac: { module: 'evaluation', field: 'gerir_rubrica', strict: true } },
+        { label: t('nav.eval.forms'),       href: '/evaluation/forms',       icon: FileCheck,    abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: List,         abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: BookOpen,     abac: { module: 'evaluation', field: 'formularios' } },
+        { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: Archive,      abac: { module: 'evaluation', anyOf: ['report', 'revisar', 'contestar'] } },
+        { label: t('nav.eval.calibration'), href: '/evaluation/calibration', icon: Ruler,        abac: { module: 'evaluation', anyOf: ['curar', 'report'] } },
+        { label: t('nav.eval.curadoria'),   href: '/evaluation/curadoria',   icon: Search,       abac: { module: 'evaluation', field: 'curar' } },
+        { label: t('nav.eval.rubric'),      href: '/evaluation/rubric',      icon: FileCheck,    abac: { module: 'evaluation', field: 'gerir_rubrica' } },
       ]
     },
 
@@ -149,7 +147,7 @@ const Sidebar: React.FC = () => {
     },
 
     // ── Auditoria LGPD ────────────────────────────────────────────
-    // `strict: true` e SEM `roles:` (2026-08-27). Medido: o menu mostrava esta
+    // grant-first e SEM `roles:` (2026-08-27). Medido: o menu mostrava esta
     // entrada a admin e supervisor pelo BYPASS DE PAPEL, e `GET /v1/audit/mcp-calls`
     // devolve 403 para os TRES usuarios do tenant — ninguem tem
     // `module_config.audit.sessions`. Ou seja, a UI oferecia uma tela que o backend
@@ -162,7 +160,7 @@ const Sidebar: React.FC = () => {
       label: t('nav.audit'),
       href:  '/audit',
       icon:  Search,
-      abac:  { module: 'audit', field: 'sessions', strict: true },
+      abac:  { module: 'audit', field: 'sessions' },
     },
 
     // ── Configuração ───────────────────────────────────────────────
@@ -171,7 +169,6 @@ const Sidebar: React.FC = () => {
       label: t('nav.config'),
       href: '#',
       icon: Settings,
-      roles: ['admin', 'business'],
       children: [
         { label: t('nav.dashboards'),    href: '/dashboards',           icon: LayoutDashboard, abac: { module: 'config', field: 'dashboards' } },
         { label: t('nav.resources'),     href: '/config/resources',     icon: Package,         abac: { module: 'config', field: 'resources' } },
@@ -183,15 +180,18 @@ const Sidebar: React.FC = () => {
         // config sem portão".
         { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'calendars' } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.configurar (D2).
-        { label: t('nav.schedules'),     href: '/config/schedules',     icon: CalendarClock,   abac: { module: 'scheduler', field: 'configurar', strict: true } },
+        { label: t('nav.schedules'),     href: '/config/schedules',     icon: CalendarClock,   abac: { module: 'scheduler', field: 'configurar' } },
         // Outbound (fatia 1b) — grant-first (strict): visível só com outbound.configurar.
-        { label: t('nav.outbound'),      href: '/config/outbound',      icon: Send,            abac: { module: 'outbound', field: 'configurar', strict: true } },
+        { label: t('nav.outbound'),      href: '/config/outbound',      icon: Send,            abac: { module: 'outbound', field: 'configurar' } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
         // ⚠️ MENU-ONLY, mesma razao: `DIALOG_ADMIN_TOKEN` vazio no compose torna o
         // `_require_admin` do dialog-api inerte (`if expected and ...`) — criar E PUBLICAR
         // form sem credencial devolveu 200 nos dois.
         { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'dialog_forms' } },
-        { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      roles: ['admin', 'business'] },
+        // Era a UNICA entrada gateada por PAPEL no nivel do item. O modulo `billing` ja
+        // existia e o supervisor chegou a ter `billing.visualizar` concedido sem ver a
+        // tela — grant e portao discordando, cada um em silencio.
+        { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      abac: { module: 'billing', field: 'visualizar' } },
         { label: t('nav.access'),        href: '/config/access',        icon: Lock,            abac: { module: 'config', field: 'users'     } },
         { label: t('nav.groups'),        href: '/config/groups',        icon: Users,           abac: { module: 'config', field: 'users'     } },
       ]
@@ -209,11 +209,18 @@ const Sidebar: React.FC = () => {
     return location.pathname === href || location.pathname.startsWith(href + '/')
   }
 
+  // ⚠️ NÃO EXISTE MAIS PORTÃO DE PAPEL no menu (2026-08-27, passo 5). Os 7 `roles:`
+  // saíram: 5 eram cabeçalhos de grupo — e cabeçalho já era DERIVADO ("grupo visível
+  // ⟺ ao menos um filho visível", logo abaixo) —, 1 era o `nav.home` (qualquer um
+  // logado vê) e 1 era o `nav.billing`, que virou grant. Enquanto existiam, conceder o
+  // campo do filho não mudava o que a pessoa via: o papel decidia antes.
+  //
   // A decisão vive em `lib/permissions.ts` (`passesAbacRule`) porque o GUARD DE ROTA
   // precisa da mesma resposta. Duas implementações da mesma regra é como a divergência
   // de masking nasceu — cada porta com teste próprio, nenhum comparando as portas.
   function passesAbac(item: NavItem): boolean {
-    return passesAbacRule(item.abac, session?.moduleConfig, session?.role)
+    return passesAbacRule(item.abac, session?.moduleConfig, session?.role,
+                          session?.unrestricted)
   }
 
   const childVisible = (child: NavItem) =>

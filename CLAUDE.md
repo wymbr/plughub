@@ -1259,6 +1259,27 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 > silêncio o que foi dado à mão). Múltiplos papéis rendem o **maior** acesso por campo, nunca a
 > interseção. Gate: `infra/test/probe_role_preset_on_create.sh`.
 
+> **O MENU TEM UM PORTÃO SÓ, E ELE É GRANT-FIRST** *(passo 5, 2026-08-27)*. Eram três
+> mecanismos empilhados, e dois invisíveis para quem lia só o `Sidebar.tsx`: o `roles:` por
+> item/grupo, o papel `admin`/`supervisor` liberando dentro de `passesAbacRule`, e — o mais
+> silencioso — **`module_config` vazio liberando**, de modo que bastava um usuário sem grants
+> para ver a plataforma inteira com o menu parecendo normal.
+>
+> **Os `roles:` não eram "um passo depois": eram o que tornava o grant INERTE.** O cabeçalho do
+> grupo decidia antes da ABAC, então conceder o campo do filho não mudava o que a pessoa via —
+> medido, 11 grants do supervisor que ele não alcançava. Regra derivada: **dois portões sobre a
+> mesma decisão significam que o mais grosseiro é o único que vale**, e conceder no fino vira
+> no-op silencioso.
+>
+> **O ramo saiu INTEIRO, não virou flag por regra.** Marcar cada regra com `strict: true`
+> deixaria a porta aberta para a próxima entrada escrita sem a flag; sem o ramo não há flag a
+> esquecer. Corolário: quando a correção pode ser *"marcar cada caso"* ou *"remover a alternativa"*,
+> a segunda é a que não depende de memória.
+>
+> A porta larga que resta é **declarada**: o claim `unrestricted`. Mesma inversão de
+> `accessible_pools`, pela mesma razão — **um valor ausente não pode ser lido como autorização**.
+> Gate: `infra/test/probe_nav_grant_first.sh`.
+
 **ABAC** (`module_config` in JWT): `auth.module_registry` seeded from `infra/modules.yaml`. 8 modules: `evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`. Each field has `access: none|read_only|write_only|read_write` + `scope[]`. `PermissionChecker.can(module, field, minAccess?, scopeId?)`. Graceful degradation for legacy accounts without `module_config`.
 
 **Performance routing** (Arc 7d): `performance_score = resolution_rate × (1 − escalation_rate)`. Blending: `(1-w) × competency + w × performance`; `w = performance_score_weight` (default 0.0, env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT`). Redis key `{tenant}:agent_perf:{agent_type_id}` (TTL 6h). Batch job in analytics-api runs every 5min, lookback 7 days, min 5 sessions for statistical significance.

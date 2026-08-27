@@ -2,6 +2,82 @@
 
 ---
 
+## O menu passa a ter UM portão — passo 5 (2026-08-27)
+
+Fim do arco de navegação: caem os **três** mecanismos empilhados e sobra o grant, mais uma
+porta larga **declarada**.
+
+### Antes: três mecanismos, dois invisíveis
+
+| # | mecanismo | por que sobrevivia |
+|---|---|---|
+| 1 | `roles:` no `Sidebar.tsx` (7) | não editável pela tela de Acesso; decidia **antes** da ABAC |
+| 2 | ramo não-estrito de `passesAbacRule` liberando por papel `admin`/`supervisor` | invisível para quem lia só o Sidebar |
+| 3 | o **mesmo** ramo liberando com `module_config` **vazio** | o mais silencioso: bastava um usuário sem grants para ver a plataforma inteira, com o menu parecendo normal |
+
+### 🔴 O achado que mudou o escopo do passo: os grants do passo 4 estavam INERTES
+
+Ao estender a matriz para modelar o portão de papel do **grupo**, medi que os grants concedidos
+ontem não faziam nada: o cabeçalho de Configuração tem `roles: ['admin','business']` e barra o
+supervisor **antes** de a ABAC ser consultada (`Sidebar.tsx:224`). O supervisor tinha
+`config.users` e **não via Access**. Eram **11 grants inertes** só para ele.
+
+Isso é a lição de método do próprio repositório: meu instrumento avaliava só as regras `abac:`,
+respondendo *"o grant passa?"* quando a pergunta era *"a pessoa vê?"* — uma proposição
+**adjacente** à que eu tinha feito. A matriz ganhou a seção **3b** para nomear exatamente isso.
+
+Consequência: remover os `roles:` **não** era um passo 7 separado; sem isso o passo 4 não
+entregava nada.
+
+### O ramo saiu inteiro, e não virou flag por regra
+
+Poderia ter marcado as 26 regras com `strict: true` e parado aí. Não: com a flag, **a próxima
+entrada de menu escrita sem ela reabre os dois bypasses em silêncio**. O ramo saiu inteiro e a
+flag foi removida do tipo e das 11 regras que a tinham — sem ramo, não há flag a esquecer.
+
+### A porta larga é declarada
+
+`unrestricted` passou a viajar até a UI (não estava no payload de login, só no JWT e no
+`UserResponse`) e é a única forma de ver um item sem ter o grant dele. É a mesma inversão que
+`accessible_pools` recebeu, pela mesma razão: **um valor ausente não pode ser lido como uma
+autorização**.
+
+### Resultado medido
+
+O supervisor vê **23** itens e não vê **15** — exatamente as decisões 1–4:
+
+| decisão | efeito |
+|---|---|
+| 1 — administra Access, Groups, Calendars, Schedules | ✅ os quatro aparecem |
+| 2 — não alcança Fluxo | ✅ `nav.flow.editor` e `nav.flow.deploy` fora |
+| 3 — mantém Monitor | ✅ Console + 6 itens de Monitor |
+| 4 — não vê Faturamento | ✅ `nav.billing` virou grant, e ele não tem |
+
+Admin vê 37 de 38 — o único fora é `nav.audit`, correto: o módulo é do DPO e ninguém o tem.
+`probe@` (o principal irrestrito) vê os 38 **pelo claim**, e é o único.
+
+### Gate
+
+`infra/test/probe_nav_grant_first.sh` (no manifesto). Estrutural de propósito: a proposição é
+sobre a **forma** da decisão (*"existe um só portão"*), e simular a regra em bash seria uma
+segunda implementação dela — o defeito que este arco passou o tempo todo evitando. Guarda os
+três mecanismos **e** a flag `strict`, que é o caminho de regressão mais provável. Testemunha de
+presença primeiro: sem regras `abac:` no arquivo, toda ausência passaria por vacuidade.
+
+**O gate achou um resto na primeira execução** — e também um defeito nele mesmo: o `grep 'strict'`
+casava `unrestricted` por substring, ou seja, reprovava o próprio conserto que deveria proteger.
+Corrigido com fronteira de palavra. O resto real: `NavItem.abac` era uma **cópia estrutural** de
+`AbacNavRule` e ainda declarava `strict` — cópia de tipo diverge na primeira mudança, igual a
+cópia de regra. Passou a referenciar o tipo.
+
+### O que sobra do arco
+
+Os passos 6 e 7 do plano **foram absorvidos aqui** (os dois bypasses e os `roles:` caíram
+juntos, porque separá-los deixaria o passo anterior inerte). Resta o **passo 8**: a cauda de
+papel no backend — 4 sítios, registrados no `TODO.md`.
+
+---
+
 ## Os grants do supervisor — passo 4 (2026-08-27)
 
 As decisões 1 e 3 do dono viram grants, em **duas casas** mantidas idênticas pelo S6 do

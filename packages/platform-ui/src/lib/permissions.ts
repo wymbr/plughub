@@ -150,21 +150,35 @@ export interface AbacNavRule {
   module: string
   field?: string
   anyOf?: string[]
-  /** grant-first: exige o grant mesmo com config vazio e mesmo para admin. */
-  strict?: boolean
 }
 
+/**
+ * GRANT-FIRST, sem exceção — passo 5 do arco de ABAC total (2026-08-27).
+ *
+ * Até aqui havia um ramo não-estrito que carregava DOIS bypasses, e o segundo era o
+ * mais silencioso dos dois:
+ *
+ *   · papel `admin`/`supervisor` passava por cima de qualquer grant;
+ *   · `module_config` VAZIO passava por cima de qualquer grant — bastava um usuário
+ *     sem grants para ver a plataforma inteira, e o menu dele parecia normal.
+ *
+ * Os dois caíram juntos, e o ramo saiu INTEIRO em vez de cada regra ganhar uma flag
+ * `strict: true`: com a flag, a próxima entrada de menu escrita sem ela reabriria os
+ * dois em silêncio. Sem o ramo, não há flag a esquecer.
+ *
+ * A porta larga que sobra é DECLARADA: `unrestricted` no usuário. Ausência de grants
+ * deixou de significar "pode tudo" e passou a significar "não pode nada" — a mesma
+ * inversão que `accessible_pools` recebeu, e pela mesma razão: um valor ausente não
+ * pode ser lido como uma autorização.
+ */
 export function passesAbacRule(
   rule: AbacNavRule | undefined,
   moduleConfig: ModuleConfig | undefined | null,
-  role: string | undefined,
+  _role: string | undefined,
+  unrestricted?: boolean,
 ): boolean {
   if (!rule) return true
-  const strict = rule.strict === true
-  if (!strict) {
-    if (!moduleConfig || Object.keys(moduleConfig).length === 0) return true
-    if (['admin', 'supervisor'].includes(role ?? '')) return true
-  }
+  if (unrestricted === true) return true
   const perms = makePermissions(moduleConfig)
   if (rule.anyOf && rule.anyOf.length > 0) return rule.anyOf.some(f => perms.can(rule.module, f))
   return rule.field ? perms.can(rule.module, rule.field) : true

@@ -61,6 +61,14 @@ probe_nav_backend_field_agreement.sh
 # metades: o comportamento (nasce com grants) e a declaracao (papel sem preset,
 # preset fora do domain, seed do demo divergindo do catalogo).
 probe_role_preset_on_create.sh
+# Passo 5: o menu passou a ter UM portao (o grant) e UMA porta larga DECLARADA
+# (o claim 'unrestricted'). Este gate impede a volta dos tres mecanismos que cairam:
+# o 'roles:' do Sidebar, a decisao por PAPEL dentro de passesAbacRule, e o
+# module_config VAZIO liberando — este ultimo o mais silencioso dos tres, porque
+# bastava um usuario sem grants para ver a plataforma inteira com o menu parecendo
+# normal. Guarda tambem a flag 'strict', que e o caminho de regressao mais provavel:
+# bastaria uma entrada de menu nova esquecer de marca-la para os dois voltarem.
+probe_nav_grant_first.sh
 # Este mede o BROWSER, nao o backend: chamada de UI com `fetch` cru contra endpoint
 # que exige credencial deixa a TELA VAZIA sem erro, e nenhum gate de backend pega —
 # do lado do backend o 401 esta certo.

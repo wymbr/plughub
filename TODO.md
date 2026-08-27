@@ -28,9 +28,9 @@ UI-editável"*, que vale para o `module_config` de cada pessoa.
 | 2 | Campos `config.calendars` / `config.dialog_forms` / `config.dashboards`; `nav.channels` → `config.channels` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 3 | **Papel → preset de seed**, aplicado em `create_user` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 4 | Grants: supervisor recebe os campos das decisões 1 e 3; saiu `billing.visualizar` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
-| 5 | `strict: true` em bloco + regra ABAC nas 7 entradas sem regra | pendente |
-| 6 | Caem os **dois** bypasses juntos (papel **e** config vazia); `unrestricted` vira a única porta larga | pendente |
-| 7 | Apagar os 7 `roles:` do `Sidebar.tsx` | pendente |
+| 5 | Portão único grant-first + regra em `nav.billing` | ✅ **2026-08-27** — e **absorveu 6 e 7** (ver abaixo) |
+| 6 | Caem os **dois** bypasses juntos; `unrestricted` vira a única porta larga | ✅ **2026-08-27** (no mesmo commit do 5) |
+| 7 | Apagar os 7 `roles:` do `Sidebar.tsx` | ✅ **2026-08-27** (no mesmo commit do 5) |
 | 8 | Cauda de papel no **backend**: 4 sítios | arco à parte |
 
 ⚠️ **O passo 6 depende do 3, e isto foi medido, não suposto.** `create_user`
@@ -38,6 +38,13 @@ UI-editável"*, que vale para o `module_config` de cada pessoa.
 `max_concurrent_sessions` — **e não grava `module_config`**. Ou seja, *todo usuário criado pela tela
 nasce com config vazio*, dentro da degradação. Inverter o 6 antes do 3 faria cada usuário novo
 **nascer cego**, e quem o criou leria isso como "a tela de Acesso quebrou".
+
+> **Por que 5, 6 e 7 saíram juntos** *(fechado em 2026-08-27)*: eram separáveis no plano e não
+> na prática. Os `roles:` do passo 7 decidiam **antes** da ABAC, então enquanto existissem os
+> grants do passo 4 ficavam **inertes** — medido: 11 grants do supervisor que ele não via. E o
+> passo 6 caiu junto porque o ramo não-estrito de `passesAbacRule` foi removido **inteiro** em
+> vez de cada regra ganhar `strict: true`: com a flag, a próxima entrada de menu escrita sem ela
+> reabriria os dois bypasses em silêncio.
 
 ⚠️ **Não remover bypass antes de conceder** — mas **o alvo NÃO é zero**. *(Corrigido em
 2026-08-27: esta linha, e a mensagem do próprio `q_nav_gates_matrix.py`, diziam "tem de ir a 0".
