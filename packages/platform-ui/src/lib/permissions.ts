@@ -166,19 +166,34 @@ export interface AbacNavRule {
  * `strict: true`: com a flag, a próxima entrada de menu escrita sem ela reabriria os
  * dois em silêncio. Sem o ramo, não há flag a esquecer.
  *
- * A porta larga que sobra é DECLARADA: `unrestricted` no usuário. Ausência de grants
- * deixou de significar "pode tudo" e passou a significar "não pode nada" — a mesma
- * inversão que `accessible_pools` recebeu, e pela mesma razão: um valor ausente não
- * pode ser lido como uma autorização.
+ * Ausência de grants deixou de significar "pode tudo" e passou a significar "não pode
+ * nada" — a mesma inversão que `accessible_pools` recebeu, e pela mesma razão: um valor
+ * ausente não pode ser lido como uma autorização.
+ *
+ * ⚠️ E NÃO HÁ PORTA LARGA — nem sequer `unrestricted`. Corrigido em 2026-08-27, no
+ * mesmo dia em que foi introduzido: a primeira versão deste portão liberava tudo para
+ * quem tivesse o claim, e a evidência de que isso estava errado é concreta —
+ * `probe@` (unrestricted, ZERO grants) passou a ver `nav.audit`, o módulo de Auditoria
+ * LGPD, que é do DPO e existe para ser concedido individualmente.
+ *
+ * São DOIS EIXOS, e juntá-los é a mesma família de "container largo para um fato
+ * estreito" que este arco vem consertando:
+ *
+ *   ESCOPO      quais linhas/pools/pessoas eu alcanço  →  `accessible_pools`, `unrestricted`
+ *   CAPACIDADE  quais funções eu posso exercer         →  `module_config` (grants)
+ *
+ * `unrestricted` responde ao primeiro. Deixá-lo responder ao segundo converteria
+ * "não tenho recorte" em "tenho tudo". A alternativa — manter o atalho e excluir os
+ * módulos de concessão individual — seria uma lista de exceção, que envelhece.
+ *
+ * Não falta a ninguém: o admin tem os grants explícitos.
  */
 export function passesAbacRule(
   rule: AbacNavRule | undefined,
   moduleConfig: ModuleConfig | undefined | null,
-  _role: string | undefined,
-  unrestricted?: boolean,
+  _role?: string | undefined,
 ): boolean {
   if (!rule) return true
-  if (unrestricted === true) return true
   const perms = makePermissions(moduleConfig)
   if (rule.anyOf && rule.anyOf.length > 0) return rule.anyOf.some(f => perms.can(rule.module, f))
   return rule.field ? perms.can(rule.module, rule.field) : true

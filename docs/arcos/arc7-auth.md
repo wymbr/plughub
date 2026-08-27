@@ -931,3 +931,35 @@ claim. Instrumento que sobrevive intacto à mudança do que ele mede não está 
 
 `infra/test/probe_nav_grant_first.sh` — **estrutural de propósito**: a proposição é sobre a
 *forma* da decisão, e simulá-la em bash seria uma segunda implementação da regra.
+
+
+---
+
+## Escopo × capacidade, e a cauda de papel no backend — passo 8 (2026-08-27)
+
+### A correção do passo 5
+
+`passesAbacRule` deixou de consultar `unrestricted`. A primeira versão do portão grant-first
+usava o claim como porta larga, e isso converte **escopo** em **capacidade**:
+
+| eixo | pergunta | mecanismo |
+|---|---|---|
+| escopo | quais linhas/pools/pessoas eu alcanço | `accessible_pools`, `unrestricted` |
+| capacidade | quais funções eu posso exercer | `module_config` |
+
+Evidência medida: `probe@` (unrestricted, zero grants) enxergava `nav.audit`, o módulo do DPO.
+
+O campo `Session.unrestricted` **fica** — ele é usado no eixo dele (pool scope na analytics-api e
+no channel-gateway). O que saiu foi a consulta a ele no portão de navegação.
+
+### Cauda de papel: 2 de 4
+
+| # | sítio | estado |
+|---|---|---|
+| 1 | `channel-gateway/main.py:1557` (`is_elevated`) | 🟡 **decisão pendente** — remover barra o supervisor (sem `approvals.decide`) e o admin (`aprovacao_deploy` fora dos 22 pools dele) |
+| 2 | `evaluation-api` `_has_any_evaluation_access` | ✅ role-admin e config-vazio caíram; *sem token* fica (postura de demo, eixo próprio) |
+| 3 | `evaluation-api/router.py:462` (`_evaluation_scope`) | 🟡 **decisão pendente** — eixo de escopo; trocar por `unrestricted` faz o admin ver só as próprias avaliações |
+| 4 | `auth-api` `resolve_supervisor_scope` | 🟡 idem |
+
+O sítio 2 alcançava mais do que parecia: `_can_view_transcript` **delega** para ele, então o
+bypass de config vazio chegava a **transcrição** — conteúdo, não só listas de id→nome.

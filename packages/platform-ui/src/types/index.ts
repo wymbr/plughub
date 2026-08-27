@@ -28,9 +28,13 @@ export interface Session {
   tenantId: string
   accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
   /**
-   * Declaração explícita de "sem recorte" (passo 2 do arco de autorização).
-   * É a ÚNICA porta larga do menu desde que o portão virou grant-first: config vazio
-   * deixou de liberar, então quem vê tudo é quem declara isto, nunca quem omite grants.
+   * Declaração explícita de "sem recorte de ESCOPO" (passo 2 do arco de autorização).
+   *
+   * ⚠️ NÃO concede capacidade. O menu é grant-first e não consulta este campo: quem vê
+   * uma tela é quem tem o grant dela, ponto. Ver a nota em `passesAbacRule` — deixar o
+   * claim liberar o menu fazia `probe@` (0 grants) enxergar a Auditoria LGPD.
+   *
+   * O eixo dele é pool/linha: `accessible_pools` na analytics-api e no channel-gateway.
    */
   unrestricted: boolean
   /** Arc 9 — agent types this supervisor can see. [] = unrestricted (admin). */

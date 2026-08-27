@@ -115,8 +115,13 @@ def test_view_anonymous_allowed():
     assert _can_view_transcript(None, None) is True
 
 
-def test_view_empty_module_config_allowed():
-    assert _can_view_transcript({"sub": "u", "module_config": {}}, None) is True
+def test_view_empty_module_config_denied():
+    """Config VAZIO passou a NEGAR (passo 8, 2026-08-27).
+
+    Antes liberava, e aqui o alcance era TRANSCRICAO — o bypass silencioso chegando a
+    conteudo, nao so a listas de id->nome. Ausencia de grants nunca foi autorizacao.
+    """
+    assert _can_view_transcript({"sub": "u", "module_config": {}}, None) is False
 
 
 def test_view_with_report_only_allowed():

@@ -151,12 +151,32 @@ def test_anyof_none_payload_allowed():
     assert _has_any_evaluation_access(None) is True
 
 
-def test_anyof_admin_role_allowed():
-    assert _has_any_evaluation_access({"sub": "u", "roles": ["admin"]}) is True
+def test_anyof_admin_role_denied_without_grant():
+    """Papel `admin` NAO libera mais (passo 8, 2026-08-27).
+
+    A decisao do dono e que o admin respeita a ABAC como qualquer um, e desde o passo 3
+    ele CARREGA `module_config` por campo — a premissa que sustentava o atalho ("contas
+    elevadas nao tem grants detalhados") deixou de valer. Um admin real passa por ter
+    `evaluation.*`, nao por ser admin.
+    """
+    assert _has_any_evaluation_access({"sub": "u", "roles": ["admin"]}) is False
 
 
-def test_anyof_empty_module_config_allowed():
-    assert _has_any_evaluation_access({"sub": "u", "module_config": {}}) is True
+def test_anyof_empty_module_config_denied():
+    """Config VAZIO passou a significar "nao pode nada" (passo 8, 2026-08-27).
+
+    Era o bypass silencioso: bastava um principal sem grants para ler tudo, e nada
+    ficava vermelho. Ausencia de grants nunca foi uma autorizacao.
+    """
+    assert _has_any_evaluation_access({"sub": "u", "module_config": {}}) is False
+
+
+def test_anyof_admin_with_grant_allowed():
+    """Testemunha de presenca: sem ela, os dois `is False` acima seriam indistinguiveis
+    de "a funcao passou a negar todo mundo"."""
+    jwt = {"sub": "u", "roles": ["admin"],
+           "module_config": {"evaluation": {"report": {"access": "read_only", "scope": []}}}}
+    assert _has_any_evaluation_access(jwt) is True
 
 
 def test_anyof_one_grant_allowed():

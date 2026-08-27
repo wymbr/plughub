@@ -239,16 +239,29 @@ def _require_service_or_eval_write(
 def _has_any_evaluation_access(jwt_payload: dict[str, Any] | None) -> bool:
     """Any-of dos campos do módulo `evaluation`: QUALQUER grant != none habilita a
     leitura compartilhada (listas de forms/campaigns/rubric/etc. que telas distintas
-    consomem p/ mapear id→nome). Degradação graciosa (postura demo, igual a
-    `_can_view_transcript`): sem token / `module_config` vazio / role admin → permitido;
-    `module_config` presente SEM nenhum grant evaluation → negado."""
+    consomem p/ mapear id→nome).
+
+    ⚠️ DUAS LIBERAÇÕES CAÍRAM EM 2026-08-27 (passo 8 do arco de ABAC total), e são
+    exatamente as que caíram do menu no passo 5:
+
+      · `role admin` — bypass de PAPEL. A decisão do dono é que o admin respeita a ABAC
+        como qualquer um; e desde o passo 3 ele CARREGA `module_config` por campo (43),
+        então a premissa que sustentava o atalho ("contas elevadas não têm grants
+        detalhados") deixou de valer.
+      · `module_config` VAZIO — o bypass silencioso: bastava um principal sem grants
+        para ler tudo. Ausência de grants não é autorização.
+
+    O que FICA, com nome próprio: **sem token → permitido**. Essa é a postura de demo
+    desta API (`analytics_open_access` é a análoga na analytics-api), tem eixo próprio e
+    remover sem decisão quebraria todo chamador interno que não manda Bearer. Estava
+    misturada com as outras duas no mesmo `if`, e é por isso que as três pareciam a
+    mesma coisa."""
     if not jwt_payload:
-        return True
-    if "admin" in (jwt_payload.get("roles") or []):
         return True
     module_config = jwt_payload.get("module_config", {})
     if not module_config:
-        return True
+        # Config vazio = NADA concedido. Antes liberava.
+        return False
     eval_cfg = module_config.get("evaluation", {})
     if not isinstance(eval_cfg, dict):
         return False
@@ -397,9 +410,15 @@ def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None
     do módulo `evaluation` com acesso != none habilita a visão (read-only p/ observador;
     ações vêm de `available_actions`). Generaliza sobre os campos (o módulo usa `report`
     como leitura, além de `revisar`/`contestar`/round-variants/`formularios`/`gerir_rubrica`)
-    — não enumera nomes. Graceful degradation: token legado/anônimo ou `module_config`
-    vazio → permitido (endpoints de avaliação são abertos por tenant; conteúdo mascarado, D3).
-    Mesma semântica any-of de `_has_any_evaluation_access` (G-PROBE fase 2)."""
+    — não enumera nomes.
+
+    ⚠️ `module_config` VAZIO passou a NEGAR em 2026-08-27 (passo 8). Antes liberava, e o
+    efeito era ler TRANSCRIÇÃO com zero grants — o bypass silencioso alcançando conteúdo,
+    não só listas. Token anônimo continua permitido: é a postura de demo desta API, tem
+    eixo próprio e está declarada em `_has_any_evaluation_access`.
+
+    Mesma semântica any-of de `_has_any_evaluation_access` (G-PROBE fase 2) — e a mesma
+    IMPLEMENTAÇÃO, por delegação: duas cópias divergiriam no primeiro ajuste."""
     return _has_any_evaluation_access(jwt_payload)
 
 

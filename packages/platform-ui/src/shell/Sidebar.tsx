@@ -219,8 +219,7 @@ const Sidebar: React.FC = () => {
   // precisa da mesma resposta. Duas implementações da mesma regra é como a divergência
   // de masking nasceu — cada porta com teste próprio, nenhum comparando as portas.
   function passesAbac(item: NavItem): boolean {
-    return passesAbacRule(item.abac, session?.moduleConfig, session?.role,
-                          session?.unrestricted)
+    return passesAbacRule(item.abac, session?.moduleConfig, session?.role)
   }
 
   const childVisible = (child: NavItem) =>

@@ -89,7 +89,6 @@ export const RequireAbac: React.FC<RequireAbacProps> = ({
     { module, field, anyOf },
     session?.moduleConfig,
     session?.role,
-    session?.unrestricted,
   )
 
   if (!allowed) {

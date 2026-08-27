@@ -2,6 +2,74 @@
 
 ---
 
+## `unrestricted` deixa de conceder capacidade · cauda de papel no backend (2026-08-27)
+
+Passo 8, **metade feita e metade registrada** — dois dos quatro sítios de papel mudam quem
+consegue fazer o quê e precisam de decisão do dono (medição abaixo).
+
+### 🔴 Correção do passo 5, no mesmo dia: dois eixos, um claim
+
+No passo 5 eu fiz `passesAbacRule` liberar tudo para quem tem `unrestricted`. **Errado**, e a
+evidência é concreta: `probe@` (unrestricted, **zero grants**) passou a ver `nav.audit` — o módulo
+de **Auditoria LGPD**, que é do DPO e existe justamente para ser concedido individualmente.
+
+Um claim que diz *"não tenho recorte de POOL"* passou a valer como *"tenho todas as capacidades"*.
+São dois eixos, e juntá-los é a mesma família de **container largo para um fato estreito** que este
+arco vem consertando:
+
+| eixo | pergunta | mecanismo |
+|---|---|---|
+| **escopo** | quais linhas/pools/pessoas eu alcanço | `accessible_pools`, `unrestricted` |
+| **capacidade** | quais funções eu posso exercer | `module_config` (grants) |
+
+A alternativa seria manter o atalho e excluir os módulos de concessão individual (`audit` hoje,
+outro amanhã) — **lista de exceção, que envelhece e ninguém revisita**.
+
+Resultado: no menu, capacidade vem **só** de grant. Não há porta larga, e não falta a ninguém — o
+admin tem 43 campos explícitos. O `unrestricted` segue fazendo o que sempre fez, no eixo dele.
+
+O gate ganhou o **S6** (`passesAbacRule` não pode consultar `unrestricted`) e trocou a testemunha
+do S5, que exigia o oposto. É o caminho de regressão mais tentador do arco: o claim está ali, à
+mão, e parece atalho razoável até alguém contar o que ele abre.
+
+### Sítio 2 da cauda: `_has_any_evaluation_access`
+
+Carregava **três** liberações, e duas eram exatamente as que caíram do menu no passo 5 — `role
+admin` e `module_config` vazio. As duas caem aqui pelo mesmo motivo.
+
+A terceira **fica, com nome próprio**: *sem token → permitido* é a postura de demo desta API
+(análoga a `analytics_open_access`), tem eixo próprio, e removê-la sem decisão quebraria todo
+chamador interno. Estava misturada com as outras duas no mesmo `if`, e é por isso que as três
+pareciam a mesma coisa.
+
+**Alcance maior do que parecia:** `_can_view_transcript` delega para essa função. Ou seja, o
+bypass de config vazio chegava a **transcrição** — conteúdo, não só listas de id→nome. Três testes
+atualizados (eles codificavam o comportamento antigo, e a mudança é o ponto), mais uma testemunha
+de presença nova: admin **com** grant continua passando, senão os dois `is False` seriam
+indistinguíveis de *"a função passou a negar todo mundo"*. Suíte: **215 passam**.
+
+### 🟡 Os dois sítios que NÃO mexi, e a medição que explica
+
+**Sítio 1 — `is_elevated` no channel-gateway (`/resume`).** O comentário justifica o bypass com
+*"contas elevadas não carregam `module_config` por campo"* — premissa **falsa desde o passo 3**.
+Mas remover barra gente:
+
+- o **supervisor** não tem `approvals.decide`; hoje ele resolve aprovação **só** por esse bypass;
+- o **admin** tem `approvals.decide`, mas o bypass também pula o pool-scope — e medido:
+  **`aprovacao_deploy`** (o pool de aprovação, `dispatch=pull`, `kind=human`) está **fora** dos 22
+  pools do admin, num tenant de 36. Remover o bypass **barraria o próprio admin**.
+
+Duas decisões, nenhuma minha: *quem aprova?* e *qual é o domínio de pool do admin?*
+
+**Sítios 3 e 4 — escopo de PESSOAS por papel** (`_evaluation_scope` na evaluation-api e
+`resolve_supervisor_scope` no auth-api): `admin → sem restrição`. Aqui o eixo é **escopo**, então a
+resposta consistente é `unrestricted` — mas `admin@` tem `unrestricted: false` e 22 pools
+explícitos, logo trocar faria o admin ver **só as próprias avaliações**.
+
+Registrados no `TODO.md` com a medição.
+
+---
+
 ## O menu passa a ter UM portão — passo 5 (2026-08-27)
 
 Fim do arco de navegação: caem os **três** mecanismos empilhados e sobra o grant, mais uma

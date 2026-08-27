@@ -1276,9 +1276,20 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 > esquecer. Corolário: quando a correção pode ser *"marcar cada caso"* ou *"remover a alternativa"*,
 > a segunda é a que não depende de memória.
 >
-> A porta larga que resta é **declarada**: o claim `unrestricted`. Mesma inversão de
-> `accessible_pools`, pela mesma razão — **um valor ausente não pode ser lido como autorização**.
-> Gate: `infra/test/probe_nav_grant_first.sh`.
+> **Ausência de grants nunca é autorização** — mesma inversão de `accessible_pools`, pela mesma
+> razão. E **NÃO existe porta larga**, nem sequer o claim `unrestricted`:
+>
+> > **ESCOPO e CAPACIDADE são eixos distintos, e um claim de escopo nunca concede capacidade**
+> > *(corrigido em 2026-08-27, no mesmo dia em que foi introduzido)*. `unrestricted` responde
+> > *"quais linhas/pools/pessoas eu alcanço"*; `module_config` responde *"quais funções eu posso
+> > exercer"*. A primeira versão do portão grant-first deixou o claim liberar o menu, e a
+> > evidência de que isso é defeito é concreta: `probe@` (unrestricted, **zero grants**) passou a
+> > ver `nav.audit` — o módulo de **Auditoria LGPD**, que existe para ser concedido
+> > individualmente ao DPO. A alternativa (manter o atalho e excluir os módulos de concessão
+> > individual) seria lista de exceção, que envelhece. Não falta a ninguém: o admin tem os grants.
+>
+> Gate: `infra/test/probe_nav_grant_first.sh` (o S6 guarda exatamente essa regressão, que é a mais
+> tentadora do arco — o claim está à mão e parece atalho razoável até alguém contar o que abre).
 
 **ABAC** (`module_config` in JWT): `auth.module_registry` seeded from `infra/modules.yaml`. 8 modules: `evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`. Each field has `access: none|read_only|write_only|read_write` + `scope[]`. `PermissionChecker.can(module, field, minAccess?, scopeId?)`. Graceful degradation for legacy accounts without `module_config`.
 

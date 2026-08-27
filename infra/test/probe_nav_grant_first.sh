@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# probe_nav_grant_first.sh — o menu tem UM portao, e a porta larga e DECLARADA?
+# probe_nav_grant_first.sh — o menu tem UM portao, e ele e o GRANT?
 # ==============================================================================
 #
 # O QUE ELE PROVA
@@ -66,12 +66,15 @@ if [ "${N_ABAC:-0}" -lt 10 ]; then
 fi
 ok "$N_ABAC regras \`abac:\` no Sidebar — ha o que gatear"
 
-if grep -q 'unrestricted === true' "$PERMS"; then
-  ok "a porta larga DECLARADA (\`unrestricted\`) esta implementada em passesAbacRule"
+# ⚠️ ATE 2026-08-27 esta testemunha era o oposto: exigia que passesAbacRule HONRASSE
+# `unrestricted`, como prova de que o portao nao tinha fechado sem saida. A saida foi
+# removida de proposito no passo 8 — ver S6 abaixo. A testemunha certa agora e que o
+# portao ainda CONCEDE a quem tem grant, senao "ninguem ve nada" passaria por ausencia.
+if grep -qE 'perms\.can\(rule\.module' "$PERMS"; then
+  ok "o portao ainda CONCEDE por grant (chama perms.can) — nao fechou para todos"
 else
-  bad "passesAbacRule nao honra \`unrestricted\`"
-  info "Sem ela o portao fechou sem saida: nenhum principal consegue ver tudo, e a"
-  info "decisao do dono ('a porta larga e o claim, declarado') vira meia decisao."
+  bad "passesAbacRule nao consulta mais os grants"
+  info "Um portao que nega todo mundo passaria em todas as secoes de ausencia abaixo."
 fi
 
 # ── S1 — nenhum portao de papel no menu ─────────────────────────────────────
@@ -119,9 +122,29 @@ else
   info "ESQUECER de marca-la para os dois bypasses voltarem, em silencio."
 fi
 
+# ── S6 — capacidade nao pode vir de um claim de ESCOPO ──────────────────────
+sec "S6 - passesAbacRule nao consulta \`unrestricted\`"
+# `unrestricted` diz "nao tenho recorte de POOL". Deixa-lo liberar o MENU converte um
+# claim de ESCOPO em concessao de CAPACIDADE — e a evidencia de que isso e defeito foi
+# medida: com ele, `probe@` (unrestricted, ZERO grants) enxergava `nav.audit`, o modulo
+# de Auditoria LGPD, que existe para ser concedido individualmente ao DPO.
+#
+# E o caminho de regressao mais tentador do arco: o claim esta ali, a mao, e parece
+# atalho razoavel ate alguem contar o que ele abre.
+if [ -z "$CORPO" ]; then
+  inc "corpo de passesAbacRule nao isolado — S6 nao mediu"
+elif printf '%s' "$CORPO" | grep -q 'unrestricted'; then
+  bad "S6: passesAbacRule voltou a consultar \`unrestricted\`"
+  printf '%s' "$CORPO" | grep -n 'unrestricted' | sed 's/^/                 /'
+  info "Isso concede CAPACIDADE a partir de um claim de ESCOPO — inclusive o modulo"
+  info "de Auditoria LGPD, que ninguem deve receber sem grant explicito."
+else
+  ok "S6: capacidade vem so de grant; \`unrestricted\` fica no eixo de escopo"
+fi
+
 printf '\n'
 if [ "$fail" -eq 0 ]; then
-  printf '\033[32mVERDE\033[0m - um portao (o grant), uma porta larga (declarada).\n'
+  printf '\033[32mVERDE\033[0m - um portao so: o grant. Nem papel, nem config vazio, nem claim de escopo.\n'
 else
   printf '\033[31mVERMELHO\033[0m - ver secoes acima.\n'
 fi
