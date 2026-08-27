@@ -25,6 +25,7 @@ import type {
 } from '@/types'
 
 import { getAccessToken } from '@/auth/token-store'
+import { apiFetch } from '@/api/apiFetch'
 
 const BASE = '/v1/evaluation'
 const KN_BASE = '/v1/knowledge'
@@ -1128,7 +1129,7 @@ export function useEvaluationsAnalytics(
     if (params.from_dt)      q.set('from_dt',      params.from_dt)
     if (params.to_dt)        q.set('to_dt',        params.to_dt)
     setLoading(true)
-    fetch(`${ANALYTICS_BASE}/evaluations?${q}`)
+    apiFetch(`${ANALYTICS_BASE}/evaluations?${q}`)
       .then(r => r.json())
       .then(d => { setRows(d.data ?? []); setMeta(d.meta ?? meta); setError(null) })
       .catch(e => setError(String(e)))
@@ -1160,7 +1161,7 @@ export function useEvaluationsSummary(
     if (params.from_dt)     q.set('from_dt',     params.from_dt)
     if (params.to_dt)       q.set('to_dt',       params.to_dt)
     setLoading(true)
-    fetch(`${ANALYTICS_BASE}/evaluations/summary?${q}`)
+    apiFetch(`${ANALYTICS_BASE}/evaluations/summary?${q}`)
       .then(r => r.json())
       .then(d => { setRows(d.data ?? []); setGroupBy(d.group_by ?? 'campaign_id'); setMeta(d.meta ?? meta); setError(null) })
       .catch(e => setError(String(e)))
@@ -1221,7 +1222,7 @@ export function useQualityReport(
     if (params.from_dt)         q.set('from_dt',         params.from_dt)
     if (params.to_dt)           q.set('to_dt',           params.to_dt)
     setLoading(true)
-    fetch(`${ANALYTICS_BASE}/evaluations/quality?${q}`)
+    apiFetch(`${ANALYTICS_BASE}/evaluations/quality?${q}`)
       .then(r => r.json())
       .then(d => {
         setRows(d.data ?? []); setMode(d.mode ?? 'oficial'); setGroupBy(d.group_by ?? 'campaign_id')
@@ -1301,7 +1302,7 @@ export function useEvaluatorCalibration(
     if (params.to_dt)         q.set('to_dt',         params.to_dt)
     if (params.granularity)   q.set('granularity',   params.granularity)
     setLoading(true)
-    fetch(`${ANALYTICS_BASE}/evaluator-calibration?${q}`)
+    apiFetch(`${ANALYTICS_BASE}/evaluator-calibration?${q}`)
       .then(r => r.json())
       .then(d => {
         setData(d.data ?? [])

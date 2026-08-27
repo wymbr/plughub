@@ -205,6 +205,52 @@ class TestFetchActiveSessions:
 
 # ─── TestOverlaySentiment ─────────────────────────────────────────────────────
 
+class TestCustomerHistoryPoolGate:
+    """
+    O portao de pool nos endpoints de historico do cliente (2026-08-27).
+
+    Ate essa data `sessions.py` tinha ZERO ocorrencias de `pool_principal`: os dois
+    endpoints serviam historico de contato chaveado por `customer_id` — dado pessoal
+    — a qualquer chamador. Estes testes ficam VERMELHOS se a dependencia sair da
+    assinatura, ou se o curto-circuito de escopo vazio sumir.
+
+    O comportamento AO VIVO (401 sem credencial, escopo filtrando de fato) e provado
+    por `infra/test/probe_customer_history_authz.sh`; aqui o alvo e o CONTRATO.
+    """
+
+    def test_ambos_os_handlers_declaram_o_principal(self):
+        import inspect
+        from plughub_analytics_api import sessions as mod
+        from plughub_analytics_api.pool_auth import optional_pool_principal
+        for fn in (mod.customer_history, mod.customer_history_search):
+            params = inspect.signature(fn).parameters
+            assert "pool_principal" in params, f"{fn.__name__} sem `pool_principal`"
+            dep = params["pool_principal"].default
+            assert getattr(dep, "dependency", None) is optional_pool_principal, (
+                f"{fn.__name__} nao depende de `optional_pool_principal`"
+            )
+
+    def test_escopo_vazio_devolve_vazio_sem_tocar_clickhouse(self):
+        """
+        `accessible_pools == []` = alcanca nada. A resposta e vazia SEM consultar o
+        ClickHouse — mesma postura dos `/reports/*`. A assercao sobre o cliente e o
+        que separa "curto-circuitou" de "consultou e nao achou nada".
+        """
+        app = FastAPI()
+        app.include_router(router)
+        _override_pool_principal(app, accessible=[])
+        store = MagicMock()
+        store._database = "analytics"
+        store._client = MagicMock()
+        store.new_client.return_value = store._client
+        app.state.store = store
+        with TestClient(app) as client:
+            r = client.get("/sessions/customer/c1", params={"tenant_id": "t"})
+        assert r.status_code == 200
+        assert r.json() == []
+        store._client.query.assert_not_called()
+
+
 class TestOverlaySentiment:
     def _make_sessions(self, ids):
         return [
@@ -301,10 +347,27 @@ class TestOverlaySentiment:
 
 # ─── TestListActiveSessionsEndpoint ──────────────────────────────────────────
 
+# ── Portao de pool nos endpoints de historico do cliente (2026-08-27) ─────────
+# Os handlers passaram a depender de `optional_pool_principal`. Estas fabricas
+# montam o app a mao, entao a dependencia precisa de override — em UM lugar, nunca
+# copiado por fabrica: quatro copias divergem na primeira mudanca de assinatura.
+#
+# O override torna o app IRRESTRITO. Isso e proposital para os testes de conteudo,
+# e e por isso que existe `TestCustomerHistoryPoolGate`: sem ela, a suite ficaria
+# verde num mundo em que o portao foi removido.
+def _override_pool_principal(app, accessible=None):
+    from plughub_analytics_api.pool_auth import PoolPrincipal, optional_pool_principal
+    app.dependency_overrides[optional_pool_principal] = lambda: PoolPrincipal(
+        accessible_pools=accessible, tenant_id="tenant_test", sub="test",
+    )
+    return app
+
+
 class TestListActiveSessionsEndpoint:
     def _make_app(self, ch_rows=None, redis_results=None):
         app = FastAPI()
         app.include_router(router)
+        _override_pool_principal(app)
 
         store   = MagicMock()
         store._client   = MagicMock()
@@ -490,6 +553,7 @@ class TestCustomerHistoryEndpoint:
     def _make_app(self, ch_rows=None, raise_exc=None):
         app = FastAPI()
         app.include_router(router)
+        _override_pool_principal(app)
 
         store = MagicMock()
         store._client   = MagicMock()
@@ -669,6 +733,7 @@ class TestSearchEndpoint:
     def _make_app(self, ch_rows=None, raise_exc=None):
         app = FastAPI()
         app.include_router(router)
+        _override_pool_principal(app)
         store = MagicMock()
         store._client   = MagicMock()
         store._database = "analytics"
@@ -754,6 +819,7 @@ class TestStreamClickHouseFallback:
         """
         app = FastAPI()
         app.include_router(router)
+        _override_pool_principal(app)
 
         # Redis mock: xrange for history, xread raises CancelledError to end loop
         redis = AsyncMock()

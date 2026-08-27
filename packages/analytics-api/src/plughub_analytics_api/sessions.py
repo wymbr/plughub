@@ -36,8 +36,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from .pool_auth import PoolPrincipal, optional_pool_principal
 
 logger = logging.getLogger("plughub.analytics.sessions")
 
@@ -186,6 +188,7 @@ async def customer_history(
     request:     Request,
     tenant_id:   str = Query(..., description="Tenant identifier"),
     limit:       int = Query(_DEFAULT_HISTORY_LIMIT, ge=1, le=_MAX_HISTORY_LIMIT),
+    pool_principal: "PoolPrincipal" = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """
     Contact history for a customer — last N closed sessions, most recent first.
@@ -201,11 +204,19 @@ async def customer_history(
     # atendente vê durante o atendimento seguinte — e que não tem conversa nenhuma.
     from .reports_query import _internal_pools_for
     internal_pools = await _internal_pools_for(tenant_id)
+
+    # ABAC de pool (2026-08-27). Ate hoje este endpoint nao tinha portao NENHUM:
+    # respondia 200 a qualquer chamador, servindo historico de contato chaveado por
+    # `customer_id`. Lista VAZIA de pools = alcanca nada, e a resposta e vazia SEM
+    # tocar o ClickHouse — mesma postura dos `/reports/*`.
+    accessible = pool_principal.accessible_pools
+    if accessible is not None and not accessible:
+        return JSONResponse(content=[])
     try:
         rows = await asyncio.to_thread(
             _fetch_customer_history,
             store.new_client(), store._database, tenant_id, customer_id, limit,
-            internal_pools,
+            internal_pools, accessible,
         )
         return JSONResponse(content=rows)
     except Exception as exc:
@@ -219,6 +230,7 @@ async def customer_history(
 def _fetch_customer_history(
     client: Any, db: str, tenant_id: str, customer_id: str, limit: int,
     internal_pools: "frozenset[str] | None" = None,
+    accessible_pools: "list[str] | None" = None,
 ) -> list[dict]:
     """
     Queries ClickHouse for closed sessions belonging to the given customer,
@@ -231,24 +243,37 @@ def _fetch_customer_history(
     internal_clause = ""
     if internal_pools:
         lst = ", ".join(f"'{p}'" for p in sorted(internal_pools))
-        internal_clause = f"AND pool_id NOT IN ({lst})"
+        internal_clause = f"AND s.pool_id NOT IN ({lst})"
+
+    # Predicado canonico de escopo de SESSAO — o mesmo dos `/reports/*`. Nao e
+    # `pool_id IN (...)`: `sessions.pool_id` e o pool de ENTRADA, e autorizar so por
+    # ele faz o supervisor perder contatos que os agentes DELE atenderam (medido em
+    # 2026-08-14: 52 de 67 contatos sairiam do escopo). O helper cobre as tres razoes
+    # de uma sessao ser minha — entrou por pool meu, ainda nao tem pool, ou um pool
+    # meu PARTICIPOU. Reusado, nunca reimplementado.
+    from .reports_query import _session_scope_clause
+    scope = _session_scope_clause(db, accessible_pools, alias="s")
+    scope_clause = f"AND {scope}" if scope else ""
+
     result = client.query(f"""
         SELECT
-            session_id,
-            channel,
-            pool_id,
-            opened_at,
-            closed_at,
-            handle_time_ms,
-            outcome,
-            close_reason,
-            root_session_id
-        FROM {db}.sessions FINAL
-        WHERE tenant_id   = {{tenant_id:String}}
-          AND customer_id = {{customer_id:String}}
-          AND closed_at IS NOT NULL
+            s.session_id,
+            s.channel,
+            s.pool_id,
+            s.opened_at,
+            s.closed_at,
+            s.handle_time_ms,
+            s.outcome,
+            s.close_reason,
+            s.root_session_id
+        -- alias ANTES de FINAL: `FROM t FINAL AS s` e SYNTAX_ERROR 62 no ClickHouse.
+        FROM {db}.sessions AS s FINAL
+        WHERE s.tenant_id   = {{tenant_id:String}}
+          AND s.customer_id = {{customer_id:String}}
+          AND s.closed_at IS NOT NULL
           {internal_clause}
-        ORDER BY opened_at DESC
+          {scope_clause}
+        ORDER BY s.opened_at DESC
         LIMIT {limit}
     """, parameters={"tenant_id": tenant_id, "customer_id": customer_id})
 
@@ -351,6 +376,7 @@ def _make_snippet(content: str, term: str, radius: int = _SNIPPET_RADIUS) -> str
 async def customer_history_search(
     customer_id: str,
     request:     Request,
+    pool_principal: "PoolPrincipal" = Depends(optional_pool_principal),
     tenant_id:   str = Query(..., description="Tenant identifier"),
     q:           str = Query(..., min_length=1, description="Free-text term (masked content)"),
     date_from:   str | None = Query(None, alias="from", description="Lower bound on opened_at (ISO)"),
@@ -368,11 +394,15 @@ async def customer_history_search(
     read (the column does not exist in analytics.messages). Graceful on failure.
     """
     store = request.app.state.store
+    accessible = pool_principal.accessible_pools
+    if accessible is not None and not accessible:
+        return JSONResponse(content=[])
     try:
         hits = await asyncio.to_thread(
             _search_customer_history,
             store.new_client(), store._database, tenant_id, customer_id,
             q, date_from, date_to, channel, outcome, pool, limit, offset,
+            accessible,
         )
         return JSONResponse(content=hits)
     except Exception as exc:
@@ -388,6 +418,7 @@ def _search_customer_history(
     date_from: str | None, date_to: str | None,
     channel: str | None, outcome: str | None, pool: str | None,
     limit: int, offset: int,
+    accessible_pools: "list[str] | None" = None,
 ) -> list[dict]:
     """
     Scan matching MASKED messages for a customer's closed sessions, then collapse
@@ -416,6 +447,13 @@ def _search_customer_history(
     if date_to:
         where.append("s.opened_at <= parseDateTimeBestEffort({date_to:String})")
         params["date_to"] = date_to
+
+    # Mesmo predicado canonico do `customer_history` — o JOIN ja aliasa `sessions`
+    # como `s`, entao ele encaixa sem tocar na forma da query.
+    from .reports_query import _session_scope_clause
+    _scope = _session_scope_clause(db, accessible_pools, alias="s")
+    if _scope:
+        where.append(_scope)
 
     result = client.query(
         f"""
@@ -894,7 +932,10 @@ def _build_workflow_trace(
         res = client.query(
             f"""
             SELECT s.session_id AS child_session_id
-            FROM {db}.sessions FINAL AS s
+            -- alias ANTES de FINAL. Esta query estava com a ordem invertida desde
+            -- sempre e NUNCA devolveu linha: o `except` abaixo loga em DEBUG,
+            -- invisivel no nivel padrao. Ver CHANGELOG 2026-08-27.
+            FROM {db}.sessions AS s FINAL
             WHERE s.tenant_id = {{tenant_id:String}}
               AND s.origin_session_id = {{session_id:String}}
             ORDER BY s.opened_at ASC

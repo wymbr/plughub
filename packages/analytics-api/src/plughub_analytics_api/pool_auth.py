@@ -40,6 +40,8 @@ from __future__ import annotations
 import json
 import logging
 
+from typing import Any
+
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -310,6 +312,36 @@ def accessible_pools_from_token(token: str | None) -> list[str] | None:
     # precisam concordar, senão o mesmo relatório mostra pools diferentes conforme
     # o token venha no header ou na query. Por isso é a MESMA função, não duas cópias.
     return _resolve_scope(payload, "SSE")
+
+
+def accessible_pools_from_request(
+    request: "Any", token: "str | None" = None,
+) -> "list[str] | None":
+    """
+    Escopo de pool aceitando as DUAS origens do token: `?token=` OU o cabecalho
+    `Authorization: Bearer`.
+
+    ── Por que existe (2026-08-27) ──────────────────────────────────────────────
+    O `?token=` foi criado para SSE: `EventSource` nao manda cabecalho. Mas o
+    cabecalho e o caminho normal de todo o resto — e `accessible_pools_from_token`
+    so olhava a query. Enquanto `analytics_open_access` era `true`, a ausencia do
+    `?token=` apenas avisava e devolvia irrestrito: o chamador por cabecalho
+    funcionava POR ACIDENTE. Ao endurecer o demo, os tres endpoints de `/dashboard/*`
+    passaram a 401 para quem autentica por cabecalho — `apiFetch` do platform-ui
+    incluido.
+
+    A precedencia e query-primeiro por compatibilidade: quem ja monta a URL com
+    `?token=` continua igual. O cabecalho e o fallback, nao o contrario.
+    """
+    if not token:
+        auth = ""
+        try:
+            auth = request.headers.get("Authorization", "") or ""
+        except Exception:  # request sem headers (teste, chamada interna)
+            auth = ""
+        if auth.startswith("Bearer "):
+            token = auth[len("Bearer "):].strip() or None
+    return accessible_pools_from_token(token)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

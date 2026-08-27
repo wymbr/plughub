@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { TranscriptMessage } from "../types";
+import { apiFetch } from '@/api/apiFetch'
 
 const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_URL ?? "/analytics";
 const TENANT_ID      = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
@@ -47,7 +48,7 @@ export function useSessionTranscript(
       `${ANALYTICS_BASE}/v1/transcript/sessions/${encodeURIComponent(sessionId)}` +
       `?tenant_id=${encodeURIComponent(TENANT_ID)}&scope=contact`;
 
-    fetch(url)
+    apiFetch(url)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<{ messages?: TranscriptMessage[] }>;

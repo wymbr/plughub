@@ -40,6 +40,11 @@ probe_supervisor_join_authz.sh
 probe_analise_route_guard.sh
 gate_supervisor_tenant_guard.sh
 gate_webhook_endpoint_auth.sh
+probe_customer_history_authz.sh
+# Este mede o BROWSER, nao o backend: chamada de UI com `fetch` cru contra endpoint
+# que exige credencial deixa a TELA VAZIA sem erro, e nenhum gate de backend pega —
+# do lado do backend o 401 esta certo.
+probe_ui_credential_coverage.sh
 
 # ── Fila, SLA e capacidade ───────────────────────────────────────────────────
 gate_queue_report_per_wait.sh

@@ -118,6 +118,26 @@ vez de sobrescrever calado.
   superfície de produto duplicada. Eixo diferente, decisão independente (ver seção própria).
 
 
+## ✅ `/sessions/customer/*` — FECHADO em 2026-08-27 (detalhe no `CHANGELOG.md`)
+
+Portão `optional_pool_principal` + `_session_scope_clause`; gate
+`infra/test/probe_customer_history_authz.sh` (irrestrito 4 · escopado 0). O diagnóstico abaixo fica
+como registro do que era e de como foi medido.
+
+### Resíduos abertos deste arco
+
+- ⚠️ **`customer_history` devolve `[]` com HTTP 200 quando a query falha.** Loga em `warning`, mas para
+  a TELA é indistinguível de "cliente sem histórico" — foi exatamente assim que o `SYNTAX_ERROR` que
+  eu introduzi ficou escondido. Trocar por erro explícito é mudança de contrato para o front; decidir.
+- ⚠️ **`workflow_trace` / legacy reverse lookup nunca devolveu linha** (mesma forma inválida, desde
+  sempre, `except` logando em DEBUG). Corrigido o SQL; **não medido** se o caminho primário
+  (`delegate_child_ids`) já cobria tudo — se cobria, o achado é inócuo; se não, houve sessão-filha
+  perdida em `workflow_trace` esse tempo todo.
+- ⚠️ **`probe_ui_credential_coverage.sh` cobre 4 chamadas**, não todas. Fora: `/dashboard/*` (o
+  contrato está coberto por pytest), e os outros ~47 `fetch(` de `evaluation-hooks.ts`, que apontam
+  para a evaluation-api e não foram medidos.
+
+<!-- registro original -->
 ## 🔴 `/sessions/customer/*` — histórico do cliente SEM autenticação e SEM escopo (medido 2026-08-27)
 
 Achado depois de fechar os três furos de autorização; **nenhum deles cobria este**. `sessions.py` tem

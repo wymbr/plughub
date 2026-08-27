@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from "react";
 import { SearchHit } from "../types";
+import { apiFetch } from '@/api/apiFetch'
 
 const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_URL ?? "/analytics";
 const TENANT_ID      = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
@@ -74,7 +75,7 @@ export function useCustomerSearch(
         `${ANALYTICS_BASE}/sessions/customer/${encodeURIComponent(customerId)}/search` +
         `?${params.toString()}`;
 
-      fetch(url)
+      apiFetch(url)
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json() as Promise<SearchHit[]>;

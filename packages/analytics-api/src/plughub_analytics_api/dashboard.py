@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .auth import Principal, require_principal
-from .pool_auth import accessible_pools_from_token
+from .pool_auth import accessible_pools_from_request
 from .query import (
     get_metrics_24h, get_pool_sla_1h,
     get_pool_snapshots, get_sentiment_live,
@@ -87,7 +87,7 @@ async def dashboard_operational(
     redis = request.app.state.redis
     # Segurança Fase D — domínio de pools do chamador (Bearer via query param, pois
     # EventSource não envia header). None = irrestrito (sem token/segredo/inválido).
-    accessible = accessible_pools_from_token(token)
+    accessible = accessible_pools_from_request(request, token)
 
     async def event_generator():
         yield f"retry: {_SSE_RETRY_MS}\n\n"
@@ -207,7 +207,7 @@ async def dashboard_sentiment(
         )
     redis = request.app.state.redis
     data  = _filter_by_pool(await get_sentiment_live(redis, tenant_id),
-                            accessible_pools_from_token(token))
+                            accessible_pools_from_request(request, token))
     return JSONResponse(content=data)
 
 
@@ -249,7 +249,7 @@ async def dashboard_pool_sla(
         database  = store._database,
         tenant_id = tenant_id,
     )
-    data  = _filter_by_pool(data, accessible_pools_from_token(token))
+    data  = _filter_by_pool(data, accessible_pools_from_request(request, token))
     return JSONResponse(content=data)
 
 

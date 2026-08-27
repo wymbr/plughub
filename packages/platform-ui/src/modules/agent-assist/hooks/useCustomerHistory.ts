@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { ContactHistoryEntry } from "../types";
+import { apiFetch } from '@/api/apiFetch'
 
 const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_URL ?? "/analytics";
 const TENANT_ID      = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
@@ -48,7 +49,7 @@ export function useCustomerHistory(
       `${ANALYTICS_BASE}/sessions/customer/${encodeURIComponent(customerId)}` +
       `?tenant_id=${encodeURIComponent(TENANT_ID)}&limit=${HISTORY_LIMIT}`;
 
-    fetch(url)
+    apiFetch(url)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<ContactHistoryEntry[]>;

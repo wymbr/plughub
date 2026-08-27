@@ -2,6 +2,75 @@
 
 ---
 
+## O histórico do cliente ganhou portão — e o caminho até lá achou quatro defeitos (2026-08-27)
+
+`GET /sessions/customer/{id}` e `.../search` serviam histórico de contato chaveado por `customer_id`
+— dado pessoal — a **qualquer** chamador: `sessions.py` tinha **zero** ocorrências de `pool_principal`
+e o `include_router` não declara dependência global. Nenhum dos três furos fechados hoje cobria este.
+
+**Instrumento:** token **inválido**, não ausência de header. O portão recusa token inválido mesmo com
+`analytics_open_access` ligado; "sem header" devolve 401 por dois motivos e não separa *gateado* de
+*flag fechada*.
+
+O portão é o **mesmo** dos `/reports/*`: `optional_pool_principal` + o predicado canônico
+`_session_scope_clause`. Uma terceira resposta para *"esta sessão é minha?"* seria a divergência que
+esse helper existe para acabar — ele já cobre as três razões (entrou por pool meu · ainda não tem pool
+· um pool meu **participou**), e a terceira é a que impede o supervisor de perder contatos que os
+agentes dele atenderam. Escopo vazio devolve `[]` **sem tocar o ClickHouse**.
+
+Gate: `infra/test/probe_customer_history_authz.sh`.
+
+### O alvo do gate é DERIVADO da pergunta, não "o maior"
+
+A primeira versão escolhia o cliente com mais sessões. Medido: 21 sessões, **todas em `limite_ia`** —
+que é um dos pools do supervisor. Os dois principals viam 21 e o filtro **nunca era exercido**; o gate
+saía INCONCLUSIVO, com razão. Agora o alvo é um cliente com sessão fora dos pools do escopado, e esses
+pools vêm **do token dele**, nunca hardcoded. Medição atual: irrestrito **4**, escopado **0**.
+
+### Quatro defeitos que o caminho revelou
+
+**1 · Regressão minha, pega pela testemunha de presença.** Ao aliasar a tabela para encaixar o
+predicado, escrevi `FROM t FINAL AS s` — em ClickHouse o alias vem **antes** do `FINAL`, e a forma
+invertida é `SYNTAX_ERROR 62`. O handler engole a exceção e devolve `[]` com **200**, então a query
+quebrada aparecia na tela como *"cliente sem histórico"*. Só apareceu porque o gate **exige que o
+irrestrito veja LINHAS**; sem essa testemunha ele ficaria verde sobre um endpoint morto.
+
+**2 · A mesma forma inválida, pré-existente, num `try/except`.** O *"legacy reverse lookup"* de
+sessões-filha por `origin_session_id` (`workflow_trace`) tinha a ordem invertida **desde sempre** e
+loga em `logger.debug` — invisível no nível padrão. Provado contra o servidor 23.8.16: forma errada →
+`SYNTAX_ERROR`, forma certa → devolve dado. **Nunca retornou uma linha.** É uma rede de segurança que
+o código acredita ter; o comentário ao lado diz que o caminho primário é `delegate_child_ids`, então o
+dano depende de esse caminho cobrir tudo — o que **não** está medido. *`except` que loga em DEBUG é
+`except: pass` com etiqueta.*
+
+**3 · O browser não mandava credencial, e o endurecimento quebrou a transcrição.**
+`useSessionTranscript` usa `fetch` **cru** contra `/v1/transcript/sessions/*`, que é gateado — a tela
+ficava **vazia sem erro** (o `catch` seta lista vazia, indistinguível de *"não há dado"*). Nenhum gate
+de backend pega isso: do lado do backend o 401 está **certo**. Novo gate
+`infra/test/probe_ui_credential_coverage.sh` cruza *"a chamada manda credencial?"* × *"o endpoint
+exige?"* — a segunda medida **ao vivo**, porque ler o handler diria o que ele declara, não o que o
+deploy responde. Quatro chamadas convertidas para `apiFetch` (em `evaluation-hooks.ts` **só as 4 de
+`ANALYTICS_BASE`**: o arquivo tem 51 `fetch(` e a maioria vai para outro serviço).
+
+**4 · `/dashboard/*` recusava quem autentica por CABEÇALHO.** `accessible_pools_from_token` lia só o
+`?token=` — parâmetro que existe porque `EventSource` não manda cabeçalho, não porque cabeçalho seja
+inválido. Com `open_access` ligado a ausência do query param apenas avisava e devolvia irrestrito: o
+chamador por cabeçalho funcionava **por acidente**. Ao endurecer, os três endpoints passaram a 401
+para todo mundo que usa `apiFetch`. Conserto: `accessible_pools_from_request`, **um** resolvedor
+aceitando as duas origens (query primeiro, por compatibilidade), nos três call sites.
+
+### E um teste que passava por herança de ambiente
+
+`TestDashboardRBAC` patcheia `auth.get_settings` mas **não** `pool_auth.get_settings`, e
+`/dashboard/sentiment` consulta os dois. Enquanto o demo tinha `open_access=true`, o segundo portão
+lia as settings **reais do container** e degradava aberto — o teste ficava verde sem controlar metade
+do que julga. É a família que a nota do próprio fixture já descrevia uma vez (`MagicMock` truthy
+fazendo seis testes receberem 200 em tudo); segundo módulo, mesmo defeito.
+
+Baseline: **analytics-api 637 → 639** (2 testes novos de contrato do portão). Gates: **23/23**.
+
+---
+
 ## O demo endureceu, e nasceu o runner que faltava (2026-08-27)
 
 `PLUGHUB_ANALYTICS_OPEN_ACCESS` deixou de ser `"true"` cravado. **Não virou `"false"` cravado**: virou

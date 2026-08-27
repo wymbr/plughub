@@ -359,6 +359,22 @@ class TestDashboardRBAC:
             "plughub_analytics_api.auth.get_settings",
             lambda: settings,
         )
+        # ── O SEGUNDO portao (2026-08-27) ────────────────────────────────────
+        # `/dashboard/sentiment` tambem chama `accessible_pools_from_token`, que
+        # vive em `pool_auth` e le as settings DE LA. Sem este patch o teste
+        # controlava um portao e HERDAVA o outro do ambiente do container: com
+        # `analytics_open_access=true` no demo o caminho recusado apenas avisava e
+        # devolvia irrestrito, e os testes de caminho feliz ficavam verdes por
+        # acidente. Ao endurecer o demo eles reprovaram — sem o produto ter mudado.
+        #
+        # `auth_jwt_secret` recebe o MESMO segredo com que `_make_token` assina, de
+        # modo que o token do teste seja de fato VERIFICAVEL: apontar para outro
+        # segredo trocaria "verde por bypass" por "verde por 401 esperado".
+        settings.auth_jwt_secret = SECRET
+        monkeypatch.setattr(
+            "plughub_analytics_api.pool_auth.get_settings",
+            lambda: settings,
+        )
 
     @pytest.mark.parametrize("endpoint", ENDPOINTS)
     def test_missing_token_returns_401(self, endpoint):
