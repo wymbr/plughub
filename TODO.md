@@ -21,6 +21,46 @@ gateado por `module_config` sem bypass de papel). Falha fechada, então é consi
 os grants correspondentes — e o bypass de papel sai de `passesAbacRule`, cumprindo a decisão de
 2026-08-26.
 
+*(Hoje são **26 de 37** não-estritas — `nav.audit` virou `strict` em 2026-08-27.)*
+
+### Insumos medidos para fechar o escopo (2026-08-27)
+
+**A · Os 17 do supervisor NÃO precisam de módulo novo.** Todos mapeiam para campos que já existem:
+`contacts.operacao` (Monitor), `skill_flows.operacao` (Fluxo), `audit.sessions`, `config.*`. Tirar o
+portão de papel do supervisor é **decisão de grant**, não de modelagem. A modelagem é escopo separado
+e menor.
+
+**B · São SETE as entradas de menu sem regra ABAC alguma** — e cinco delas não precisam de regra nova:
+
+| entrada | encaminhamento proposto |
+|---|---|
+| `nav.monitor`, `nav.flow`, `nav.quality`, `nav.analise`, `nav.config` | **cabeçalhos de grupo**. Regra derivável: *grupo visível ⟺ ao menos um filho visível*. Resolve 5 dos 7 sem inventar campo |
+| `nav.home` | qualquer um logado vê — sem portão |
+| `nav.billing` | única lacuna real, e o módulo `billing` **já existe**. É grant, não módulo novo |
+
+**C · 🔴 São DOIS bypasses, não um.** Além do papel, `passesAbacRule` degrada aberto quando o
+`module_config` está **VAZIO** (`legado`) — na matriz, `probe@plughub.local` aparece como `legado` em
+mais de 20 itens. Remover só o de papel deixa o segundo de pé, e ele é **mais silencioso**: basta um
+usuário sem grants para ver tudo. Os dois têm de cair juntos, ou o caso "config vazia" precisa de
+decisão própria.
+
+**D · Discriminador proposto para módulo × campo:** *módulo é a unidade que você concede ou nega
+INTEIRA a uma pessoa; campo é para quando o trabalho da mesma pessoa se divide.* Pela prática:
+`scheduler` e `outbound` **já são** módulos independentes com `configurar`/`operacao` e `strict: true`
+— precedente bom. `calendars` e `dialogforms` hoje caem em `config.platform`, mas são **conteúdo
+operacional**, não afinação de plataforma; pela mesma régua seriam módulos próprios (ou um módulo de
+conteúdo).
+
+⚠️ **Custo do outro lado, a pesar:** mais módulos = tela de Acesso virando muro de checkbox, e aí as
+pessoas concedem tudo por segurança. A régua que eu usaria é **módulo por pessoa que você
+contrataria**, não por tela.
+
+**E · Monitor e Analytics não precisam de módulo.** Já são ABAC (`contacts.operacao` ×
+`contacts.visualizar`), e os dois campos já separam quem opera de quem analisa.
+
+**Instrumento:** `python3 infra/test/q_nav_gates_matrix.py` regenera a matriz (quem vê o quê e por qual
+razão) a qualquer momento — as regras são derivadas do `Sidebar.tsx`, não copiadas.
+
 ⚠️ **Não remover o bypass antes de conceder**: a matriz mostra exatamente quem perde o quê, e o
 número > 0 é a instrução de que há grant a dar primeiro.
 
