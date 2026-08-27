@@ -724,18 +724,11 @@ services:
 # User Interfaces
 # ─────────────────────────────────────────────────────────────────────────────
 
-  agent-assist-ui:
-    build:
-      context: .
-      dockerfile: packages/agent-assist-ui/Dockerfile
-    container_name: full-agent-assist-ui
-    ports:
-      - "5173:5173"
-    depends_on:
-      mcp-server-plughub:
-        condition: service_healthy
-    networks:
-      - plughub-full
+  # agent-assist-ui REMOVIDO em 2026-08-27 (ver CHANGELOG): app React que duplicava
+  # 1:1 as abas do platform-ui, sem autenticacao nenhuma. As paginas de demo que
+  # viviam nele estao em `infra/demo/web/`, servidas pelo `demo-assets` no
+  # docker-compose.demo.yml. Este compose nao tem equivalente — se precisar do
+  # simulador de cliente aqui, copie aquele servico.
 
   platform-ui:
     build:

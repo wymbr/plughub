@@ -654,8 +654,8 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 > **Quatro superfícies, três graus de proteção** — inventário que a passagem não tinha: `ActionBar` e
 > `ContactList` guardavam por `!== null` (desarmadas); `ChatArea` inventara `!== 0`, que protegia por
 > acidente **e escondia um `0.0` medido de verdade**; `EstadoTab` não tinha guarda nenhuma e
-> anunciava "0% neutral" em toda sessão. Some `packages/agent-assist-ui/` — app legado, **serviço vivo
-> na porta 5173 do compose demo** —, que renderiza a mesma tela e caiu no mesmo conserto.
+> anunciava "0% neutral" em toda sessão. *(O `packages/agent-assist-ui/` renderizava a mesma tela e caiu no mesmo conserto — app legado,
+> **APOSENTADO em 2026-08-27**; a porta 5173 hoje serve só os ativos estáticos de `infra/demo/web/`.)*
 >
 > Gate: `infra/test/gate_console_sentiment_source.sh` (re-executável, sem contato real; testemunha
 > negativa = ctx presente com outra tag e sentimento ausente ⇒ tem de vir `null`, nunca `0`).

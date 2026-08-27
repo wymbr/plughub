@@ -77,7 +77,7 @@ São **três operações distintas** e confundi-las custou duas rodadas:
 | O que o bridge **executa** | `PUT /v1/pools/{p}/slots/next` + `POST /v1/pools/{p}/promote` (header `x-service-token`, `config_json` COMPLETO) |
 | DialogForm editado | `bash infra/test/seed_dialog_limite_forms.sh` (POST cria versão nova; PUT como fallback) |
 | Código Python/TS | `build` + `up -d` — **nenhum serviço monta o fonte** |
-| `webchat-test.html` | `build agent-assist-ui` (é `COPY` no Dockerfile) + Ctrl+Shift+R |
+| `webchat-test.html` | edite `infra/demo/web/webchat-test.html` + Ctrl+Shift+R (servido como estático, sem build) |
 
 ⚠️ `masking.context_rules` é seed-if-absent **por chave**: as 3 regras novas do `seed.py` **não
 entram** em base já semeada. Em `/config/masking`, role `operator`: `session.numero_cartao`→`last_4`,

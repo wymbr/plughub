@@ -497,7 +497,7 @@ worker. Em `/analise/customer-voice`, alternar o seletor `grain` com `metric=nps
 | `infra/registry/tenant_demo.yaml` | pools `limite_ia`, `limite_processo`, `limite_retorno`, `aprovacao_credito` + endpoint webhook |
 | `packages/channel-gateway/.../adapters/webhook.py` | `_pending_context_preview` generalizado (§7.1 fechado) |
 | `packages/config-api/.../seed.py` | 3 regras de masking para o pacote de aprovação |
-| `packages/agent-assist-ui/webchat-test.html` | `<option>` de `limite_ia` |
+| `infra/demo/web/webchat-test.html` | `<option>` de `limite_ia` |
 | `infra/test/smoke_limite_tres_acessos.sh` | aceite, veredicto de 3 estados |
 
 ### Três decisões tomadas durante a escrita

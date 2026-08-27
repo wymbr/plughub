@@ -175,9 +175,11 @@ como registro do que era e de como foi medido.
 
 ### Resíduos abertos deste arco
 
-- ⚠️ **`customer_history` devolve `[]` com HTTP 200 quando a query falha.** Loga em `warning`, mas para
-  a TELA é indistinguível de "cliente sem histórico" — foi exatamente assim que o `SYNTAX_ERROR` que
-  eu introduzi ficou escondido. Trocar por erro explícito é mudança de contrato para o front; decidir.
+- ✅ **`customer_history` e `..._search` devolvem 502 em falha de query** (decidido 2026-08-27). A UI já
+  tinha o estado de erro desenhado e traduzido — era código morto. **Continua aberto o terceiro:**
+  `list_active_sessions` (`sessions.py:88`) tem o mesmo padrão e ficou de fora de propósito — alimenta
+  o Monitor, que faz polling, e erro a cada ciclo numa falha transitória ensina a ignorar a caixa.
+  Decisão própria: tolerar N falhas seguidas antes de acusar.
 - ⚠️ **`workflow_trace` / legacy reverse lookup nunca devolveu linha** (mesma forma inválida, desde
   sempre, `except` logando em DEBUG). Corrigido o SQL; **não medido** se o caminho primário
   (`delegate_child_ids`) já cobria tudo — se cobria, o achado é inócuo; se não, houve sessão-filha
@@ -217,6 +219,19 @@ Pendente: decidir o portão (`optional_pool_principal` escopando por pool das se
 `audit` com trilha) e **contar os consumidores antes**, como no passo 2.
 
 
+## ✅ `agent-assist-ui` — APOSENTADO em 2026-08-27 (decisão do dono; detalhe no `CHANGELOG.md`)
+
+Ativos de demo em `infra/demo/web/`, servidos pelo `demo-assets` na mesma porta 5173.
+
+**Resíduo aberto:** eu nunca identifiquei a origem do `curl` periódico que batia no 5173. O único
+script que apontava para a porta era o `probe_duration_definitions.sh` (repontado). Se algo
+automatizado ainda bater lá esperando o proxy `/analytics`, agora recebe **404** — barulhento, que é o
+comportamento desejado, mas vale ficar atento nos próximos dias.
+
+**Não reescritos de propósito:** as ~40 menções em `docs/product/passagem-*.md`, changelogs antigos e
+`docs/deprecated/`. São registro histórico.
+
+<!-- registro original -->
 ## `agent-assist-ui` — recomendação: APOSENTAR o app, PRESERVAR o `webchat-test.html` (2026-08-27)
 
 Decisão do dono; abaixo a medição que a sustenta. São **duas coisas num pacote só**, e só uma é legado.

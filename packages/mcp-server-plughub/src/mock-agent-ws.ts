@@ -9,8 +9,9 @@
  *   cd packages/mcp-server-plughub
  *   npx ts-node src/mock-agent-ws.ts
  *
- * Em outro terminal:
- *   cd packages/agent-assist-ui
+ * Em outro terminal (o `agent-assist-ui` foi aposentado em 2026-08-27 — o Console
+ * vive no platform-ui):
+ *   cd packages/platform-ui
  *   npm run dev
  *
  * Porta: 3100  (mesma do servidor real — sem alteração no vite.config.ts)

@@ -88,7 +88,7 @@ BUILD_PACKAGES=(
 
 INSTALL_ONLY_PACKAGES=(
   "packages/e2e-tests"
-  "packages/agent-assist-ui"
+  # `packages/agent-assist-ui` APOSENTADO em 2026-08-27 (ver CHANGELOG).
   "packages/dashboard/ui"
 )
 

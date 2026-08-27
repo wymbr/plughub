@@ -266,17 +266,11 @@ module.exports = {
       env:         { ...ENV, PLUGHUB_DASHBOARD_API_PORT: "8082" },
     },
 
-    // ── 12. Agent Assist UI (Vite dev server — porta 5173) ────────────────────
-    // Para produção, use `npm run build` e sirva os estáticos com nginx.
-    {
-      ...COMMON,
-      name:       "agent-assist-ui",
-      script:     "node_modules/.bin/vite",
-      args:       "--host 0.0.0.0 --port 5173",
-      cwd:        path.join(ROOT, "packages/agent-assist-ui"),
-      ...logPaths("agent-assist-ui"),
-      env:        { NODE_ENV: "development" },
-    },
+    // ── 12. (vago) — `agent-assist-ui` APOSENTADO em 2026-08-27 ───────────────
+    // App React que duplicava 1:1 as abas do platform-ui (`/agent-assist`), sem
+    // autenticação nenhuma. As páginas de demo que viviam nele estão em
+    // `infra/demo/web/`, servidas como estático pelo serviço `demo-assets` do
+    // docker-compose.demo.yml — mesma porta 5173. Ver CHANGELOG.
 
     // ── 13. Dashboard UI (Vite dev server — porta 5174) ───────────────────────
     {

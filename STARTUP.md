@@ -343,10 +343,9 @@ npm install
 npm run build
 Set-Location ..\..\..\..
 
-# Agent Assist UI
-Set-Location packages\agent-assist-ui
-npm install
-Set-Location ..\..
+# (Agent Assist UI APOSENTADO em 2026-08-27 — o Console vive no platform-ui.
+#  As paginas de demo que viviam nele estao em `infra/demo/web/`, servidas como
+#  estatico. Ver CHANGELOG.)
 
 # Dashboard UI
 Set-Location packages\dashboard\ui
@@ -505,11 +504,14 @@ plughub-bridge
 uvicorn plughub_dashboard_api.app:app --host 0.0.0.0 --port 8090
 ```
 
-- [ ] **[7.1] Abrir aba → Agent Assist UI (porta 5173)**
+- [ ] **[7.1] Ativos de demo na porta 5173** — `agent-assist-ui` APOSENTADO em
+  2026-08-27. A porta hoje serve `infra/demo/web/` (simulador de cliente
+  `webchat-test.html` e o widget WebRTC) como estatico, pelo servico `demo-assets`
+  do `docker-compose.demo.yml`. Fora do compose, qualquer servidor estatico serve:
 
 ```powershell
-Set-Location packages\agent-assist-ui
-npm run dev
+# opcional, fora do compose
+npx --yes http-server infra\demo\web -p 5173
 ```
 
 Acesse: `http://localhost:5173?agent=NOME&pool=retencao_humano`
@@ -568,7 +570,7 @@ docker exec plughub-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loca
 | 6.6 | channel-gateway | 8010 | HTTP + WebSocket |
 | 6.8 | skill-flow-service | 3400 | HTTP REST |
 | 6.10 | dashboard-api | 8090 | HTTP REST |
-| 7.1 | agent-assist-ui | 5173 | Browser |
+| 7.1 | demo-assets (estático) | 5173 | Browser |
 | 7.2 | dashboard-ui | 5174 | Browser |
 
 Serviços 6.4, 6.7, 6.9 e 6.10 são consumers Kafka — sem porta HTTP.
@@ -984,7 +986,7 @@ Na próxima vez que o servidor reiniciar, o PM2 sobe automaticamente todos os se
 | `clickhouse-consumer` | Python (Kafka consumer) | — |
 | `orchestrator-bridge` | Python (Kafka consumer) | — |
 | `dashboard-api` | Python (entry point) | configurável |
-| `agent-assist-ui` | Vite dev server | 5173 |
+| `demo-assets` | nginx estático (`infra/demo/web/`) | 5173 |
 | `dashboard-ui` | Vite dev server | 5174 |
 
 ### Scripts disponíveis

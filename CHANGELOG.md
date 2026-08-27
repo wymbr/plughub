@@ -2,6 +2,75 @@
 
 ---
 
+## Histórico do cliente para de mentir · `agent-assist-ui` aposentado (2026-08-27)
+
+Duas decisões do dono, fechadas.
+
+### 1 · Falha de query deixa de se disfarçar de "sem histórico"
+
+Os dois handlers de histórico engoliam a exceção e devolviam `[]` com **200**. Para a tela isso é
+indistinguível de *"este cliente nunca ligou"* — e o atendente trata a pessoa diferente com essa
+informação. **O falso negativo é acionável.** Foi assim, também, que o `SYNTAX_ERROR` introduzido mais
+cedo hoje ficou escondido.
+
+**A consequência que se temia já estava tratada:** `HistoricoTab.tsx` tem os três estados desenhados e
+traduzidos — `loadingHistory`, **`historyError`** (caixa vermelha) e `noHistory` (🗂 *"Sem contatos
+anteriores registrados."*), este último só quando `!loading && !error`. Os dois hooks já fazem
+`if (!res.ok) throw`. **O ramo de erro era código morto**; não houve mudança de front-end, houve
+reativação.
+
+**Por que 502, e não `{"data": [], "degraded": true}`** — o dono não tinha preferência, e a medição
+decidiu: o hook faz `setEntries(Array.isArray(data) ? data : [])`. Um objeto faz `Array.isArray` dar
+falso, o hook seta `[]` e a tela volta a dizer *"sem contatos anteriores"* — **o próprio defeito,
+reproduzido em silêncio** se alguém aplicar só metade. O 502 custa zero front-end. E não 500 (que
+reivindicaria culpa do handler quando quem falhou foi o store) nem 503 (que promete transitoriedade;
+erro de SQL não melhora com repetição).
+
+**Fora do corte, de propósito:** `list_active_sessions` (`sessions.py:88`, mesmo padrão) alimenta o
+Monitor, que faz *polling*. Erro ali pisca caixa vermelha a cada ciclo numa falha de dois segundos, e
+isso ensina a ignorar a caixa. Merece decisão própria — tolerar N falhas antes de acusar.
+
+**O curto-circuito de escopo vazio continua `[]` com 200:** *"você não alcança pool nenhum"* não é
+falha, é resposta correta.
+
+Os dois testes que cravavam o contrato antigo foram **invertidos e renomeados** (`graceful` deixou de
+descrever o que afirmam), cada um com uma segunda asserção — `resp.json() != []` — porque só o código
+de status deixaria passar um handler que voltasse a devolver vazio com outro status.
+
+### 2 · `agent-assist-ui` aposentado, ativos de demo preservados
+
+App React de 22 arquivos que duplicava **1:1** as quatro abas do `platform-ui`, sem `login`/`Bearer`/
+`AuthContext` em nenhum deles, violando a invariante do `CLAUDE.md` (*"never create a new
+`packages/my-ui/` standalone frontend app"*), e que já cobrou trabalho dobrado duas vezes.
+
+**O que sobreviveu:** `webchat-test.html` (simulador de cliente do demo) e `webrtc-widget.html`, agora
+em **`infra/demo/web/`**, servidos por um nginx estático **na mesma porta 5173** — todas as URLs de
+roteiro e documentação seguem valendo. Eles falam direto com o channel-gateway
+(`ws://localhost:8010/ws/chat`) e não usavam nenhum dos proxies do app.
+
+**Não foram para dentro do `platform-ui`** de propósito: são harness de *demo*, e metê-los no produto
+funde de novo as duas coisas que a direção de ambientes componíveis separa.
+
+⚠️ **Um risco pego no caminho:** `infra/demo/` já existia e contém `initdb/` com SQL de criação de
+banco. Servir o diretório inteiro como estático publicaria aquilo por HTTP. Os ativos foram para
+`infra/demo/web/` e o mount aponta para lá — verificado: `initdb/` responde **404**.
+
+**O que se perdeu, declarado:** os proxies `/api/`, `/agent-ws` e `/analytics/` do nginx antigo. Eram
+do app React; o único consumidor externo era `probe_duration_definitions.sh`, que usava
+`5173/analytics` como atalho — repontado para a analytics-api direto, que é onde essa medição deveria
+ter batido desde sempre (rotear verificação por uma UI faz o resultado depender de um serviço que não
+é o medido).
+
+Instruções que ficariam quebradas foram corrigidas: `ecosystem.config.js` (pm2), `scripts/linux/
+setup.sh`, `STARTUP.md` (×4), o `cd` do `mock-agent-ws.ts`, os dois caminhos de HTML em docs de arco, e
+a afirmação do `CLAUDE.md` de que o serviço estava vivo. **Passagens e changelogs antigos NÃO foram
+reescritos** — são registro do que era verdade quando foram escritos, e limpá-los para o grep ficar
+bonito apagaria história.
+
+Baselines: analytics-api **639** · gates **24/24**.
+
+---
+
 ## Os quatro vermelhos eram todos o MESMO defeito de método (2026-08-27)
 
 Quatro testes reprovavam em dois pacotes, e nenhum apontava para código de produto errado. Os quatro

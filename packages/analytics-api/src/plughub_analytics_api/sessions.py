@@ -36,7 +36,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .pool_auth import PoolPrincipal, optional_pool_principal
@@ -220,11 +220,18 @@ async def customer_history(
         )
         return JSONResponse(content=rows)
     except Exception as exc:
+        # NAO devolver `[]` com 200: para a tela isso e indistinguivel de "este
+        # cliente nunca ligou", e o atendente decide diferente com essa informacao.
+        # A `HistoricoTab` ja renderiza `historico.historyError` — o ramo existia e
+        # era codigo morto porque este endpoint nunca falhava visivelmente.
         logger.warning(
             "customer_history failed tenant=%s customer=%s: %s",
             tenant_id, customer_id, exc,
         )
-        return JSONResponse(content=[], status_code=200)
+        raise HTTPException(
+            status_code=502,
+            detail="analytics store failed to answer the customer history query",
+        ) from exc
 
 
 def _fetch_customer_history(
@@ -406,11 +413,17 @@ async def customer_history_search(
         )
         return JSONResponse(content=hits)
     except Exception as exc:
+        # Mesma razao do `customer_history`: busca que falha nao pode devolver
+        # "nenhum resultado". Aqui o engano e ainda mais caro — o atendente conclui
+        # que o termo nao aparece no historico, quando a busca nem rodou.
         logger.warning(
             "customer_history_search failed tenant=%s customer=%s q=%r: %s",
             tenant_id, customer_id, q, exc,
         )
-        return JSONResponse(content=[], status_code=200)
+        raise HTTPException(
+            status_code=502,
+            detail="analytics store failed to answer the customer history search",
+        ) from exc
 
 
 def _search_customer_history(

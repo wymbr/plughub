@@ -68,17 +68,28 @@ def parse_sidebar() -> tuple[list[dict], list[dict]]:
     """Devolve (itens_com_abac, portoes_de_papel), derivados do fonte."""
     src = SIDEBAR.read_text(encoding="utf-8")
     items: list[dict] = []
-    # ⚠️ NAO usar `label: ... .*? abac:` num `re.S` solto: o `.*?` atravessa a
-    # fronteira da entrada e casa o `abac:` do item SEGUINTE. Medido em 2026-08-27:
-    # `nav.billing` (que tem `roles:`, nao `abac:`) aparecia associado ao
-    # `config.users` do `nav.access` logo abaixo — o relatorio inventava uma regra.
+    # ⚠️ A associacao e do `abac:` para o label ANTERIOR mais proximo — nunca do
+    # label para o `abac:` seguinte. Duas correcoes, ambas medidas em 2026-08-27:
     #
-    # A guarda: entre o label e o `abac:` nao pode haver OUTRO `label:`. Assim a
-    # associacao morre na fronteira da entrada, que e o que "mesma entrada" significa.
-    for m in re.finditer(
-        r"label:\s*t\('([^']+)'\)((?:(?!label:).)*?)abac:\s*\{([^}]*)\}", src, re.S
-    ):
-        label, body = m.group(1), m.group(3)
+    #  (a) para FRENTE, o `.*?` com `re.S` atravessava a fronteira da entrada:
+    #      `nav.billing` (que tem `roles:` e nao `abac:`) aparecia associado ao
+    #      `config.users` do `nav.access` logo abaixo — regra inventada.
+    #  (b) restringir com "nao pode haver outro label no meio" nao bastava: num
+    #      GRUPO com filhos (`{ label: G, children: [{ label: F, abac: A }] }`) o
+    #      label do grupo vem antes e absorvia o `abac:` do PRIMEIRO filho — o
+    #      filho sumia da tabela e o grupo ganhava uma regra que nao e dele.
+    #
+    # De tras para frente as duas somem: o label anterior mais proximo de um `abac:`
+    # e, por construcao da estrutura, o dono dele.
+    for m in re.finditer(r"abac:\s*\{([^}]*)\}", src):
+        body = m.group(1)
+        antes = src[:m.start()]
+        lab = None
+        for lm in re.finditer(r"label:\s*t\('([^']+)'\)", antes):
+            lab = lm.group(1)
+        if lab is None:
+            continue
+        label = lab
         mod = re.search(r"module:\s*'([^']+)'", body)
         fld = re.search(r"field:\s*'([^']+)'", body)
         anyof = re.search(r"anyOf:\s*\[([^\]]*)\]", body)

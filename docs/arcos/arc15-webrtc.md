@@ -586,7 +586,7 @@ webrtc_tts_injection_enabled: bool = True
 - `i18n/index.ts`: imports + registro do namespace `webrtc`
 
 ### Fase F — Widget do Cliente ✅ 2026-05-20
-- `packages/agent-assist-ui/webrtc-widget.html` — widget standalone (single HTML, sem build); usa `livekit-client@2` via CDN (`cdn.jsdelivr.net`)
+- `infra/demo/web/webrtc-widget.html` — widget standalone (single HTML, sem build); usa `livekit-client@2` via CDN (`cdn.jsdelivr.net`)
 - Protocolo WS idêntico ao webchat (`conn.hello` → `conn.authenticate` → `conn.authenticated`) mas conecta em `/ws/webrtc/{pool_id}`
 - `connectWebRTC()`: JWT auto-gerado (Web Crypto HS256), WS connect, auth handshake
 - `webrtc.ready` handler: aplica medium indicator, chama `requestMedia()` → `connectLiveKit()` → publica local tracks (audio+video para video, só audio para voice)

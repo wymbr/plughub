@@ -604,12 +604,22 @@ class TestCustomerHistoryEndpoint:
         assert resp.status_code == 200
         assert resp.json() == []
 
-    def test_returns_200_on_ch_failure_graceful(self):
+    def test_ch_failure_NAO_vira_historico_vazio(self):
+        """
+        Falha de query nao pode se disfarcar de "este cliente nunca ligou".
+
+        Ate 2026-08-27 este teste cravava o oposto (`200` + `[]`) — e era exatamente o
+        defeito: para a `HistoricoTab` as duas situacoes eram identicas, e o atendente
+        decide diferente com "sem contatos anteriores" na tela. Foi assim que um
+        `SYNTAX_ERROR` real ficou escondido.
+        """
         app = self._make_app(raise_exc=RuntimeError("ClickHouse unavailable"))
         with TestClient(app) as client:
             resp = client.get("/sessions/customer/cust_001?tenant_id=tenant_test")
-        assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.status_code == 502
+        # A segunda assercao e a que importa: um corpo `[]` com QUALQUER status
+        # reproduz o engano. Sem ela, so o codigo estaria guardado.
+        assert resp.json() != []
 
     def test_missing_tenant_id_returns_422(self):
         app = self._make_app(ch_rows=[])
@@ -775,12 +785,17 @@ class TestSearchEndpoint:
             resp = client.get("/sessions/customer/cust_1/search?q=x")
         assert resp.status_code == 422
 
-    def test_graceful_on_ch_failure(self):
+    def test_ch_failure_NAO_vira_busca_sem_resultado(self):
+        """
+        Busca que falha nao pode devolver "nenhum resultado" — aqui o engano e ainda
+        mais caro que na lista: o atendente conclui que o termo NAO aparece no
+        historico, quando a busca nem chegou a rodar.
+        """
         app = self._make_app(raise_exc=RuntimeError("ClickHouse down"))
         with TestClient(app) as client:
             resp = client.get("/sessions/customer/cust_1/search?tenant_id=t&q=cobranca")
-        assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.status_code == 502
+        assert resp.json() != []
 
     def test_does_not_shadow_history_route(self):
         # /customer/{id} (list) still works alongside /customer/{id}/search

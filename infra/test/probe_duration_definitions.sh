@@ -18,8 +18,12 @@ set -uo pipefail
 source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
 
 TENANT="${TENANT:-tenant_demo}"
-UI="${UI:-http://localhost:5173}"
-API="${API:-$UI/analytics}"
+# ⚠️ Antes: `API="$UI/analytics"` com UI=5173 — o probe usava o nginx do
+# `agent-assist-ui` como ATALHO para a analytics-api. Aquele app foi aposentado em
+# 2026-08-27 e o proxy foi com ele; agora aponta para a analytics direto, que e onde
+# esta medicao deveria ter batido desde sempre (rotear verificacao por uma UI faz o
+# resultado depender de um servico que nao e o medido).
+API="${API:-http://localhost:3500}"
 DB="${CH_DB:-plughub_demo}"
 COMPOSE="${COMPOSE:-docker compose -f docker-compose.demo.yml}"
 
