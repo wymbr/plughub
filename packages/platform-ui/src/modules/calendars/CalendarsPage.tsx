@@ -13,6 +13,7 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { getAccessToken } from '@/auth/token-store'
 import Spinner from '@/components/ui/Spinner'
 import EmptyState from '@/components/ui/EmptyState'
 
@@ -106,7 +107,9 @@ async function apiFetch(path: string, opts?: RequestInit) {
   // Bearer obrigatorio na ESCRITA desde 2026-08-27 (portao dual do calendar-api:
   // admin-token de sistema OU `config.calendars` read_write). Mandado tambem nas
   // leituras, que seguem abertas, para nao existirem dois caminhos de header.
-  const token = localStorage.getItem('plughub_access_token')
+  // O token vive em MEMORIA (`auth/token-store`); `localStorage['plughub_access_token']`
+  // e chave que ninguem escreve — lia-la mandava a escrita anonima, 401 desde o portao.
+  const token = getAccessToken()
   const res = await fetch(path, {
     headers: {
       'Content-Type': 'application/json',

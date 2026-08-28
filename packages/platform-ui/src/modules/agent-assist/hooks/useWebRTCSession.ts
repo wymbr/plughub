@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getAccessToken } from "@/auth/token-store";
 import {
   Room,
   RoomEvent,
@@ -98,7 +99,9 @@ export function useWebRTCSession(
     try {
       const res = await fetch(
         `/api/webrtc/token/${sid}?role=agent&identity=${encodeURIComponent(identity)}`,
-        { headers: { Authorization: `Bearer ${localStorage.getItem("plughub_access_token") ?? ""}` } }
+        // Token em MEMORIA (`auth/token-store`). A leitura do localStorage aqui mandava
+        // `Bearer ` vazio — chave que ninguem escreve.
+        { headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` } }
       );
       if (!res.ok) throw new Error(`token_fetch_failed:${res.status}`);
 
