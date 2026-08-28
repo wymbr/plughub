@@ -492,6 +492,23 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
 """
 
 
+class ArchivedFormError(Exception):
+    """O DialogForm pedido está ARQUIVADO no dialog-api (`deleted_at`).
+
+    Criar link de survey é criar VÍNCULO NOVO — e é o único ponto do produto que faz isso a
+    partir de um `form_id` que não veio de um vínculo já existente. Por isso recusa aqui e
+    em lugar nenhum mais: os demais leitores CONTINUAM um vínculo (skill em execução, slot,
+    ctx, segmento histórico) e servem arquivado de propósito (ADR adr-dialog-form-deletion
+    D1/D4). Sem esta guarda, o arquivamento seria silenciosamente contornado toda vez que
+    alguém disparasse um survey outbound — e o form ficaria congelado num token por dias.
+    """
+
+    def __init__(self, form_id: str, deleted_at: Any) -> None:
+        super().__init__(f"dialog form archived: {form_id}")
+        self.form_id = form_id
+        self.deleted_at = deleted_at
+
+
 class SurveyWebService:
     def __init__(
         self,
@@ -559,6 +576,11 @@ class SurveyWebService:
             )
             r.raise_for_status()
             form = r.json()
+
+        # O dialog-api SERVE form arquivado (é o que mantém contato em andamento e história
+        # de pé) e diz que está — a recusa é decisão de quem cria vínculo, não do store.
+        if form.get("deleted_at"):
+            raise ArchivedFormError(form_id, form["deleted_at"])
 
         token  = secrets.token_urlsafe(24)
         record = {

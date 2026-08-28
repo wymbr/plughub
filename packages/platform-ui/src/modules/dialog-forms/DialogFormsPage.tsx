@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Plus, Trash2, ArrowUp, ArrowDown, ChevronRight, ChevronDown,
-  SlidersHorizontal, Check, AlertTriangle, FileText,
+  SlidersHorizontal, Check, AlertTriangle, FileText, Archive, ArchiveRestore,
 } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { useNamespace } from '@/modules/config-plataforma/api/config-hooks'
@@ -25,6 +25,8 @@ import {
   createDialogForm,
   updateDialogForm,
   publishDialogForm,
+  deleteDialogForm,
+  undeleteDialogForm,
   type DialogForm,
   type DialogNode,
   type StatementNode,
@@ -116,7 +118,8 @@ const CUSTOM_TYPE = '__custom__'
 const DialogFormsPage: React.FC = () => {
   const { t } = useTranslation('dialogForms')
   const { tenantId: TENANT } = useAuth()
-  const { forms, loading, reload } = useDialogForms(TENANT)
+  const [showArchived, setShowArchived] = useState(false)
+  const { forms, loading, reload } = useDialogForms(TENANT, showArchived)
   const { entries: surveyCfg } = useNamespace(TENANT, 'survey')
   const instruments = resolveInstruments(surveyCfg['instruments']?.value)
 
@@ -236,6 +239,51 @@ const DialogFormsPage: React.FC = () => {
     }
   }
 
+  // ── Arquivar / restaurar (ADR adr-dialog-form-deletion) ────────────────────
+  // `ever_published` vem da LISTA e decide se o DELETE arquiva ou PURGA. Sem ele não dá
+  // para avisar direito, e avisar errado num ato irreversível é pior que não oferecer o
+  // botão — por isso a ação fica DESABILITADA enquanto o dado não estiver à mão, em vez de
+  // supor o caso reversível (que é o palpite confortável, e o errado).
+  const listEntry  = draft ? forms.find(f => f.form_id === draft.form_id) : undefined
+  const isArchived = !!(draft?.deleted_at || listEntry?.deleted_at)
+  const willPurge  = listEntry?.ever_published === false
+  const canArchive = !!draft && !isNew && !isArchived && listEntry?.ever_published !== undefined
+
+  const archive = async () => {
+    if (!draft || !canArchive) return
+    const question = willPurge
+      ? t('archive.confirmPurge', { id: draft.form_id })
+      : t('archive.confirm', { id: draft.form_id })
+    if (!window.confirm(question)) return
+    setBusy(true); setMsg(null)
+    try {
+      const res = await deleteDialogForm(TENANT, draft.form_id)
+      setMsg({ kind: 'ok', text: res.purged ? t('msg.purged') : t('msg.archived') })
+      await reload()
+      if (res.purged) { setDraft(null); setBlocks([]) }
+      else {
+        const fresh = await getDialogForm(TENANT, draft.form_id)
+        setDraft(fresh); setBlocks(buildBlocks(fresh))
+      }
+    } catch (e) {
+      setMsg({ kind: 'err', text: String(e) })
+    } finally { setBusy(false) }
+  }
+
+  const restore = async () => {
+    if (!draft) return
+    setBusy(true); setMsg(null)
+    try {
+      await undeleteDialogForm(TENANT, draft.form_id)
+      setMsg({ kind: 'ok', text: t('msg.restored') })
+      await reload()
+      const fresh = await getDialogForm(TENANT, draft.form_id)
+      setDraft(fresh); setBlocks(buildBlocks(fresh))
+    } catch (e) {
+      setMsg({ kind: 'err', text: String(e) })
+    } finally { setBusy(false) }
+  }
+
   return (
     <div className="flex h-full gap-4 p-4">
       {/* ── List ── */}
@@ -247,6 +295,12 @@ const DialogFormsPage: React.FC = () => {
             <Plus size={14} /> {t('new')}
           </button>
         </div>
+        <div className="px-3 py-1.5 border-b">
+          <button onClick={() => setShowArchived(v => !v)}
+            className={`flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded hover:bg-surface-alt ${showArchived ? 'text-blue-700' : 'text-muted'}`}>
+            <Archive size={12} /> {showArchived ? t('archive.showActive') : t('archive.showArchived')}
+          </button>
+        </div>
         {loading && <div className="p-3 text-xs text-gray-400">{t('loading')}</div>}
         {!loading && forms.length === 0 && <div className="p-3 text-xs text-gray-400">{t('empty')}</div>}
         <ul>
@@ -254,12 +308,15 @@ const DialogFormsPage: React.FC = () => {
             <li key={f.form_id}>
               <button onClick={() => openEdit(f.form_id)}
                 className={`w-full text-left px-3 py-2 border-b hover:bg-gray-50 ${draft?.form_id === f.form_id ? 'bg-blue-50' : ''}`}>
-                <div className="text-sm text-gray-800 truncate">{f.name || f.form_id}</div>
+                <div className={`text-sm truncate ${f.deleted_at ? 'text-muted-light line-through' : 'text-dark'}`}>
+                  {f.name || f.form_id}
+                </div>
                 <div className="text-[11px] text-gray-400 flex gap-2">
                   <span>{f.form_id}</span>
                   <span className={f.status === 'published' ? 'text-green-600' : 'text-amber-600'}>
                     {f.status} v{f.version}
                   </span>
+                  {f.deleted_at && <span className="text-muted">{t('archive.badge')}</span>}
                 </div>
               </button>
             </li>
@@ -276,6 +333,14 @@ const DialogFormsPage: React.FC = () => {
         )}
         {draft && (
           <div className="p-4 space-y-4">
+            {isArchived && (
+              <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2">
+                <Archive size={14} className="mt-0.5 shrink-0" />
+                {/* O texto diz o que de fato acontece. "Apagado" seria mentira: o form
+                    continua sendo resolvido por quem já está vinculado a ele. */}
+                <span>{t('archive.banner', { at: draft.deleted_at ?? listEntry?.deleted_at ?? '' })}</span>
+              </div>
+            )}
             {/* metadata */}
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-gray-600">
@@ -353,11 +418,33 @@ const DialogFormsPage: React.FC = () => {
 
             {/* actions */}
             <div className="flex items-center gap-3 pt-2 border-t">
-              <button disabled={busy} onClick={() => save(false)}
-                className="text-sm bg-gray-700 text-white px-3 py-1.5 rounded hover:bg-gray-800 disabled:opacity-50">
+              {isArchived ? (
+                <button disabled={busy} onClick={restore}
+                  className="flex items-center gap-1 text-sm border border-border px-3 py-1.5 rounded hover:bg-surface-muted disabled:opacity-50">
+                  <ArchiveRestore size={14} /> {t('archive.restore')}
+                </button>
+              ) : (
+                <button disabled={busy || !canArchive} onClick={archive}
+                  title={willPurge ? t('archive.purgeHint') : t('archive.hint')}
+                  className="flex items-center gap-1 text-sm border border-border text-muted px-3 py-1.5 rounded hover:bg-surface-muted disabled:opacity-50">
+                  <Archive size={14} /> {willPurge ? t('archive.purgeAction') : t('archive.action')}
+                </button>
+              )}
+              {/* Arquivado recusa escrita no backend (409). Desabilitar aqui não é
+                  duplicar a regra: é evitar que o operador receba um código HTTP cru
+                  no lugar de uma explicação. O portão continua sendo o do servidor. */}
+              {/* `bg-dark`, não `bg-gray-700`: o token `gray` do tailwind.config.ts é uma
+                  cor CHAPADA, o que apaga a escala inteira do Tailwind — nenhuma classe
+                  `*-gray-N` existe no CSS construído. Aqui isso era invisível no pior
+                  sentido: fundo nenhum + `text-white` = botão branco no branco, com a
+                  área de clique intacta. Ver TODO § classes gray-N inertes. */}
+              <button disabled={busy || isArchived} onClick={() => save(false)}
+                title={isArchived ? t('archive.readOnly') : undefined}
+                className="text-sm bg-dark text-white px-3 py-1.5 rounded hover:opacity-90 disabled:opacity-50">
                 {t('action.saveDraft')}
               </button>
-              <button disabled={busy} onClick={() => save(true)}
+              <button disabled={busy || isArchived} onClick={() => save(true)}
+                title={isArchived ? t('archive.readOnly') : undefined}
                 className="text-sm bg-blue-700 text-white px-3 py-1.5 rounded hover:bg-blue-800 disabled:opacity-50">
                 {t('action.publish')}
               </button>

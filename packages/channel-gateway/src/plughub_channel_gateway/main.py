@@ -48,6 +48,7 @@ from .registry_invalidation_consumer import RegistryInvalidationConsumer
 from .webchat_config import webchat_config
 from .session_registry import SessionRegistry
 from .survey_web import (
+    ArchivedFormError,
     SurveyWebService,
     SurveyLinkDelivery,
     SURVEY_PAGE_HTML,
@@ -1172,6 +1173,18 @@ async def survey_web_create(request: Request) -> dict:
             # Pool-scoping (Segurança Fase B): pool da sessão pesquisada, congelado no
             # token → carimbado na resposta + session.signals no submit. Vazio = admin-only.
             pool_id=body.get("pool_id", "") or "",
+        )
+    # 409 ANTES do 502 genérico, e por motivo de diagnóstico: "o form está arquivado" é
+    # recusa deliberada desta borda, não falha do dialog-api. Colapsar as duas em 502 diria
+    # ao operador que o store quebrou, quando o store respondeu certo.
+    except ArchivedFormError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"dialog form '{exc.form_id}' esta arquivado (deleted_at={exc.deleted_at}) — "
+                "nao e possivel criar link de survey novo sobre ele; restaure o form ou "
+                "escolha outro"
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"dialog-api error: {exc}")

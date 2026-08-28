@@ -111,27 +111,53 @@ def load_forms() -> list[tuple[Path, dict]]:
     return out
 
 
-def published_version(form_id: str) -> int | None:
-    """Versão publicada corrente, ou None se não houver (404)."""
+def published_state(form_id: str) -> tuple[int | None, str | None]:
+    """(versão publicada corrente, deleted_at) — (None, None) se não houver (404).
+
+    O `deleted_at` vem no MESMO GET porque o dialog-api SERVE form arquivado de propósito
+    (ADR adr-dialog-form-deletion D1): esconder o arquivado da resolução faria este seed
+    receber 404, concluir "ausente" e RESSUSCITAR, a cada boot, o form que alguém arquivou.
+    A leitura aberta é o que torna o arquivamento estável — e o preço é este: quem lê tem de
+    olhar o campo, em vez de deduzir estado do código HTTP.
+    """
     status, body = _req("GET", f"/v1/dialog/forms/{form_id}?status=published")
     if status == 200:
-        return body.get("version")
+        return body.get("version"), body.get("deleted_at")
     if status != 404:
         warn(f"{form_id}: GET published devolveu {status} ({body}) — tratando como AUSENTE")
-    return None
+    return None, None
 
 
 def seed_one(form_id: str, doc: dict) -> bool:
-    current = published_version(form_id)
+    current, archived_at = published_state(form_id)
+
+    if archived_at and not RECONCILE:
+        # Nomear o motivo é o ponto: "já publicado, não toco" mandaria o operador procurar
+        # o defeito no arquivo, quando o estado é uma DECISÃO registrada no store.
+        skip(f"{form_id}: ARQUIVADO em {archived_at} — DB vence (seed-if-absent). "
+             f"Restaure com POST /v1/dialog/forms/{form_id}/undelete, ou use "
+             "DIALOG_SEED_RECONCILE=true para o arquivo vencer (restaura e republica).")
+        return True
 
     if current is not None and not RECONCILE:
         skip(f"{form_id}: já publicado (v{current}) — DB vence (seed-if-absent). "
              "Use DIALOG_SEED_RECONCILE=true para o arquivo vencer.")
         return True
 
+    if archived_at:
+        # Arquivo vence é arquivo vence: sem o restauro, o PUT abaixo levaria 409 e o seed
+        # morreria num estado que ele mesmo sabe resolver.
+        status, body = _req("POST", f"/v1/dialog/forms/{form_id}/undelete")
+        if status not in (200, 201):
+            warn(f"{form_id}: reconcile pediu restauro e o undelete falhou: {status} {body}")
+            return False
+        log(f"{form_id}: RESTAURADO (estava arquivado em {archived_at}; reconcile)")
+
     verb, path = ("PUT", f"/v1/dialog/forms/{form_id}") if current is not None \
         else ("POST", "/v1/dialog/forms")
     reason = f"reconcile sobre v{current}" if current is not None else "ausente no store"
+    if archived_at:
+        reason += ", restaurado"
 
     status, body = _req(verb, path, doc)
     if status not in (200, 201):

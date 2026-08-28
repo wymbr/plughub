@@ -164,13 +164,65 @@ byte-idênticas uma da outra — divergem só no código de recusa), depois `cha
 `analytics-api`/`evaluation-api` por último, porque as duas mudam de COMPORTAMENTO ao migrar (a
 ordem de acesso e o ramo legado, respectivamente) e precisam de decisão do dono, não de refactor.
 
-### 🟡 `dialog-api` não tem rota DELETE (achado colateral, 2026-08-27)
+### 🟡 101 classes `*-gray-N` INERTES no platform-ui (medido 2026-08-28)
+
+`tailwind.config.ts:23` redefine o token `gray` como cor **CHAPADA** (`#6B7280`), o que
+substitui a escala inteira do Tailwind. Medição contra o bundle servido:
+
+```
+utilitárias (bg|text|border)-gray-N no CSS construído:  NENHUMA
+usos no fonte (packages/platform-ui/src):              101
+```
+
+O próprio config avisa (*"colide com a escala built-in, prefira 'muted'"*) — e 101 lugares
+foram escritos assim mesmo. **Promessa sem mecanismo**, a mesma família do docstring de
+`channel-gateway/auth.py` e do DDL de `participation_intervals`.
+
+**O modo de falha não é uniforme, e é isso que o torna caro.** Quase todas as 101 só perdem
+um tom de cinza e ninguém nota. Mas onde a classe carrega o FUNDO de um elemento com
+`text-white`, o resultado é branco no branco — **elemento invisível com a área de clique
+intacta**. Foi o que aconteceu com o *Save draft* do editor de DialogForms: o operador
+clicou no que parecia espaço vazio e recebeu um erro de gravação. Corrigido pontualmente
+(`bg-dark`).
+
+**A categoria perigosa foi varrida e está fechada** (2026-08-28): das **90** classes que
+restam, **22** carregam fundo e **NENHUMA** aparece junto de `text-white` — o único caso
+era o *Save draft*. O resto perde tom de cinza, não visibilidade. Registrar isso importa
+porque a próxima leitura desta entrada não precisa refazer a medição para saber que não há
+outro botão invisível esperando.
+
+**O que impede a volta não é a varredura, é o mecanismo:** um check de build (ou lint) que
+recuse `*-gray-N`, já que nenhuma delas funciona. Sem ele, a próxima linha escrita com
+`bg-gray-700` entra igual. A varredura em si é decisão por call site (cada um precisa de
+escolha de token: `muted`, `muted-light`, `surface-alt`, `border`, `dark`).
+
+### ✅ `dialog-api` não tem rota DELETE (achado colateral, 2026-08-27) — RESOLVIDO 2026-08-28
 
 Rotas medidas: `POST ""`, `GET ""`, `GET /{id}`, `PUT /{id}`, `POST /{id}/publish` — e nada
 mais. Consequência prática: **todo form criado é permanente**, inclusive os que instrumentos
 criam. O `probe_config_service_write_gate.sh` contorna apagando pelo Postgres, e diz por que no
 comentário; um probe que suja o ambiente que mede acaba medindo a própria sujeira. Não é
 urgente, mas enquanto não existir, qualquer script que crie form tem de limpar pelo banco.
+
+**As sete decisões estão fechadas** em [`docs/adr/adr-dialog-form-deletion.md`](docs/adr/adr-dialog-form-deletion.md)
+(arquivamento reversível; purga real só do nunca-publicado). O que a medição desfez, e que vale
+para além desta rota: **soft-delete responde "dá para recuperar?" (armazenamento) e NÃO responde
+"o contato em andamento cai?" (leitura)** — são dois eixos, e escolher soft-delete mantendo `404`
+na resolução quebraria os **seis** leitores exatamente como um hard delete, só que com um backup
+que ninguém consulta. Daí D1: o catálogo fecha, `GET /{form_id}` continua servindo (com
+`deleted_at`). Dois dos seis leitores leem no **fim** do diálogo (`survey_record`,
+`segment_outcome_record`) e um lê **história encerrada** (`WebhookSegmentDetail`), cujo dano não
+teria janela. Achado de tabela: `seed_dialog.published_version()` trata `404` como AUSENTE, então
+com a leitura fechada **todo boot ressuscitaria o form apagado**.
+
+Fases F1 (dialog-api) → F2 (UI) → F3 (`survey_link_create` recusa) → F4 (seed) → F5 (gate
+`probe_dialog_form_delete.sh`, cuja testemunha negativa é `GET ?status=published` de arquivado
+devolver **200 com `deleted_at`** — um probe que só cheque "sumiu da lista" fica verde num hard
+delete). **Todas entregues em 2026-08-28; ver `CHANGELOG.md`.**
+
+**Resíduo aceito, não dívida:** a limpeza do `probe_config_service_write_gate.sh` continua pelo
+Postgres — ela publica o form que cria, e publicado só arquiva. Se incomodar, a saída é o probe
+parar de publicar (nunca-publicado é purgado pela própria rota), não reabrir a decisão.
 
 ### 🟡 Layout pessoal de dashboard exige permissão de plataforma (achado do passo 2)
 

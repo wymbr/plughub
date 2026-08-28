@@ -2,6 +2,70 @@
 
 ---
 
+## `DELETE` no dialog-api — arquivar reversível, purgar só o nunca-publicado (2026-08-28)
+
+Fecha o achado colateral de 2026-08-27 (`dialog-api` sem rota `DELETE` ⇒ **todo form criado era
+permanente**, e todo script que criasse form tinha de limpar pelo Postgres). Decisões em
+[`docs/adr/adr-dialog-form-deletion.md`](docs/adr/adr-dialog-form-deletion.md); fases F1–F5 entregues.
+
+### A pergunta que travava a rota, e o enquadramento que a medição desfez
+
+*"O que acontece com um form publicado que um skill em execução referencia?"* A resposta óbvia —
+soft-delete — responde **outra coisa**: ela é do eixo **armazenamento** (*"dá para recuperar?"*), e
+a pergunta é do eixo **leitura** (*"o contato em andamento cai?"*). Soft-delete com `404` na
+resolução quebra exatamente como um hard delete, só que com um backup que ninguém consulta.
+
+O inventário mostrou **seis** leitores, todos por `?status=published` — e o que decidiu o desenho
+não foi a contagem, foi **quando** cada um lê:
+
+| # | leitor | quando lê |
+|---|---|---|
+| 1 | `form_get` (`tools/dialog.ts:230`) | início do diálogo |
+| 2 | `survey_record` (`tools/survey.ts:161`) | **fim** — compõe a nota |
+| 3 | `segment_outcome_record` (`tools/segment.ts:81`) | **fim** — deriva eventos Arc 12 |
+| 4 | `survey_link_create` (`survey_web.py:556`) | só na criação (congela o form no token) |
+| 5 | `DialogFormRenderer.tsx:230` | ao abrir o painel |
+| 6 | `WebhookSegmentDetail.tsx:257` | **retrospectivo, segmento já fechado** |
+
+Dois leem no FIM (a janela de risco vai até o submit, não até o `carregar_form`) e um lê **história
+encerrada** — dano sem janela, permanente. E o `seed_dialog.published_version()` tratava `404` como
+AUSENTE: com a leitura fechada, **todo boot ressuscitaria o form arquivado**.
+
+### O que ficou
+
+- **D1 — o catálogo fecha, a resolução não.** `GET /` esconde arquivados (`?include_deleted=true` é
+  a lixeira); `GET /{form_id}` **serve**, com `deleted_at` no corpo. Ninguém *descobre* form por id:
+  quem resolve já tem vínculo.
+- **D2 — purga real do nunca-publicado.** Como os seis resolvem `published`, um form sem versão
+  publicada não pode estar vinculado — isso é demonstrável, não estimado, e é a **única parte
+  decidível** de *"recusar quando há referência viva"* (o `form_id` literal mora dentro do flow do
+  snapshot do slot; checagem cross-service seria incompleta por construção). A tela avisa antes, e a
+  resposta declara `purged`.
+- **D3** `409` nos três escritores + `POST /{id}/undelete` próprio — ressuscitar por escrita faria
+  um slot antigo executar conteúdo novo sem ninguém tocar no deploy. **D4** só `survey_link_create`
+  recusa (única borda que cria vínculo NOVO). **D5** o delete é do `form_id`, nunca da versão
+  (*despublicar* é outra operação, ainda inexistente). **D6** `RECONCILE` restaura e republica; o log
+  do seed diz **arquivado**. **D7** a tela diz *arquivar* — "apagado" mentiria.
+
+**Um achado durante a F2:** a tela não conseguia avisar direito. `ever_published` **não é derivável
+do `status` da lista** (a última versão pode ser rascunho e existir uma publicada mais antiga), então
+a lista passou a carregá-lo — e o botão de arquivar fica **desabilitado** enquanto o dado não estiver
+à mão, em vez de supor o caso reversível, que é o palpite confortável e o errado num ato irreversível.
+
+### Medição
+
+`infra/test/probe_dialog_form_delete.sh` (no manifesto): **9 falhas** contra o build anterior →
+**GATE VERDE** depois do rebuild de `dialog-api` + `channel-gateway`. A asserção que dá valor ao
+gate é a **testemunha negativa** (S3): arquivado tem de resolver `200` **com `deleted_at`** — um
+probe que só checasse *"sumiu da lista"* fica verde num hard delete. Suíte do dialog-api de 11 → 27
+testes, com **mutation check** (filtrar arquivado na resolução · catálogo parar de esconder · `put`
+parar de recusar · nunca-publicado deixar de ser purgado ⇒ **4 vermelhos**). F3 tem 3 testes no
+channel-gateway, incluindo a testemunha de presença (form vivo ainda cria link). F4 medida ao vivo
+nos dois ramos: com o `dialog_nps_buttons` arquivado o seed imprimiu
+`ARQUIVADO em … — DB vence` e **não ressuscitou**; com `RECONCILE=true` restaurou e republicou.
+
+---
+
 ## Escrita de config sem credencial — calendar-api e dialog-api fechadas (2026-08-27)
 
 Último dos achados colaterais do arco de ABAC. Não era dívida de ABAC: era **escrita não

@@ -12,6 +12,7 @@
  * locally to keep platform-ui decoupled from the schemas package.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { getAccessToken } from '@/auth/token-store'
 
 const BASE = '/v1/dialog/forms'
 
@@ -137,6 +138,18 @@ export interface DialogForm {
   tags?: string[]
   created_at?: string
   updated_at?: string
+  /**
+   * Arquivado (ADR adr-dialog-form-deletion). Preenchido = fora do catálogo e de vínculos
+   * novos; NÃO significa inalcançável — quem já está vinculado continua resolvendo o form.
+   * Por isso a tela diz "arquivar", nunca "apagar".
+   */
+  deleted_at?: string | null
+  /**
+   * Só na LISTA. Decide se o DELETE arquiva (reversível) ou PURGA (definitivo), e por isso
+   * é lido ANTES de perguntar. Não é derivável de `status`: a última versão pode ser
+   * rascunho e existir uma publicada mais antiga.
+   */
+  ever_published?: boolean
 }
 
 /** Fields the store accepts on create/update (the rest is server-owned). */
@@ -151,14 +164,19 @@ function headers(tenantId: string): Record<string, string> {
   // leitura" de "headers de escrita" cria dois lugares onde alguem pode esquecer, e o
   // esquecimento aparece como um botao que nao salva, nao como erro.
   const h: Record<string, string> = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId }
-  const token = localStorage.getItem('plughub_access_token')
+  // O token vive em MEMORIA (`auth/token-store`, alimentado pelo AuthContext) — nunca no
+  // localStorage. Ler `localStorage['plughub_access_token']` era ler uma chave que NINGUEM
+  // escreve: o Bearer nunca ia, e desde que o portao de escrita fechou (2026-08-27) toda
+  // gravacao desta pagina saia anonima e voltava 401. Falha muda ate alguem clicar em
+  // salvar — o `if (token)` transformava "nao ha token" em "manda sem token".
+  const token = getAccessToken()
   if (token) h['Authorization'] = `Bearer ${token}`
   return h
 }
 
 // ── List (latest version metadata per form) ───────────────────────────────────
 
-export function useDialogForms(tenantId: string) {
+export function useDialogForms(tenantId: string, includeDeleted = false) {
   const [forms, setForms]     = useState<DialogForm[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
@@ -166,7 +184,8 @@ export function useDialogForms(tenantId: string) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch(BASE, { headers: headers(tenantId) })
+      const url = includeDeleted ? `${BASE}?include_deleted=true` : BASE
+      const r = await fetch(url, { headers: headers(tenantId) })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setForms(Array.isArray(d) ? d : (d?.forms ?? []))
@@ -176,7 +195,7 @@ export function useDialogForms(tenantId: string) {
     } finally {
       setLoading(false)
     }
-  }, [tenantId])
+  }, [tenantId, includeDeleted])
 
   useEffect(() => { load() }, [load])
 
@@ -209,6 +228,37 @@ export async function updateDialogForm(tenantId: string, formId: string, body: D
 
 export async function publishDialogForm(tenantId: string, formId: string): Promise<DialogForm> {
   const r = await fetch(`${BASE}/${encodeURIComponent(formId)}/publish`, {
+    method: 'POST', headers: headers(tenantId),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
+  return r.json()
+}
+
+// ── Arquivar / restaurar (ADR adr-dialog-form-deletion) ───────────────────────
+
+export interface DialogFormDeleteResult {
+  form_id: string
+  /** true = as linhas foram REMOVIDAS (form nunca publicado). Não há undelete depois. */
+  purged: boolean
+  deleted_at: string | null
+  versions: number
+  already_deleted: boolean
+}
+
+export async function deleteDialogForm(
+  tenantId: string, formId: string,
+): Promise<DialogFormDeleteResult> {
+  const r = await fetch(`${BASE}/${encodeURIComponent(formId)}`, {
+    method: 'DELETE', headers: headers(tenantId),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
+  return r.json()
+}
+
+export async function undeleteDialogForm(
+  tenantId: string, formId: string,
+): Promise<{ form_id: string; restored_versions: number; was_deleted: boolean }> {
+  const r = await fetch(`${BASE}/${encodeURIComponent(formId)}/undelete`, {
     method: 'POST', headers: headers(tenantId),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)

@@ -97,9 +97,26 @@
     "saveDraft": "Salvar rascunho",
     "publish": "Publicar"
   },
+  "archive": {
+    "action": "Arquivar",
+    "purgeAction": "Excluir",
+    "restore": "Restaurar",
+    "showArchived": "Ver arquivados",
+    "showActive": "Ver ativos",
+    "badge": "arquivado",
+    "hint": "Sai do catálogo e de novos vínculos. Quem já usa este formulário continua funcionando.",
+    "purgeHint": "Este formulário nunca foi publicado — a exclusão é definitiva.",
+    "readOnly": "Formulário arquivado: restaure antes de editar.",
+    "banner": "Formulário arquivado em {{at}}. Ele não aparece no catálogo nem pode ser vinculado a algo novo, mas continua sendo entregue a quem já o referencia — até que o deploy correspondente seja trocado.",
+    "confirm": "Arquivar \"{{id}}\"?\n\nEle sai do catálogo e de novos vínculos. Quem já o referencia (deploys, contatos em andamento, histórico) continua funcionando normalmente. Você pode restaurar depois.",
+    "confirmPurge": "EXCLUIR \"{{id}}\" definitivamente?\n\nEste formulário nunca foi publicado, então nada pode estar usando ele — e por isso ele será apagado de verdade, com todas as versões. NÃO há como restaurar."
+  },
   "msg": {
     "saved": "Rascunho salvo.",
-    "published": "Publicado."
+    "published": "Publicado.",
+    "archived": "Formulário arquivado.",
+    "purged": "Formulário excluído definitivamente.",
+    "restored": "Formulário restaurado."
   },
   "err": {
     "formIdRequired": "Informe o ID do formulário.",

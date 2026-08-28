@@ -97,9 +97,26 @@
     "saveDraft": "Save draft",
     "publish": "Publish"
   },
+  "archive": {
+    "action": "Archive",
+    "purgeAction": "Delete",
+    "restore": "Restore",
+    "showArchived": "Show archived",
+    "showActive": "Show active",
+    "badge": "archived",
+    "hint": "Removes it from the catalog and from new bindings. Anything already using this form keeps working.",
+    "purgeHint": "This form was never published — deleting it is permanent.",
+    "readOnly": "Archived form: restore it before editing.",
+    "banner": "Form archived on {{at}}. It no longer appears in the catalog and cannot be bound to anything new, but it is still served to whatever already references it — until that deployment is changed.",
+    "confirm": "Archive \"{{id}}\"?\n\nIt leaves the catalog and new bindings. Anything that already references it (deployments, live contacts, history) keeps working. You can restore it later.",
+    "confirmPurge": "Permanently DELETE \"{{id}}\"?\n\nThis form was never published, so nothing can be using it — which is why it will be really deleted, with every version. There is NO way to restore it."
+  },
   "msg": {
     "saved": "Draft saved.",
-    "published": "Published."
+    "published": "Published.",
+    "archived": "Form archived.",
+    "purged": "Form permanently deleted.",
+    "restored": "Form restored."
   },
   "err": {
     "formIdRequired": "Form ID is required.",

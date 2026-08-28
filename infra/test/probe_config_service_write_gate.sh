@@ -162,10 +162,12 @@ if [ "$s" = "200" ] || [ "$s" = "201" ]; then ok "S8b admin-token → $s — o c
 elif [ "$s" = "401" ]; then bad "S8b admin-token → 401 — o seed vai levar 401; DIALOG_ADMIN_TOKEN do dialog-seed precisa espelhar PLUGHUB_DIALOG_ADMIN_TOKEN"
 else bad "S8b admin-token → $s (esperado 200/201)"; fi
 
-# ⚠️ Limpeza pelo BANCO, não pela API: o dialog-api NÃO tem rota DELETE (medido —
-# `POST ""`, `PUT /{id}`, `POST /{id}/publish`, e mais nada). Sem isto o probe deixaria
-# um form residual no tenant a cada execução, e um instrumento que suja o ambiente que
-# mede acaba medindo a própria sujeira. A ausência da rota está registrada no TODO.md.
+# ⚠️ Limpeza pelo BANCO, e agora por um motivo DIFERENTE do original. A rota `DELETE`
+# passou a existir (2026-08-28, ADR adr-dialog-form-deletion), mas ela ARQUIVA o que já
+# foi publicado — e o S8b acima PUBLICA este form de propósito. Pela API o resíduo seria
+# uma linha arquivada por execução; pelo banco não sobra nada. A alternativa correta, se
+# um dia esta limpeza incomodar, é o probe parar de publicar (form nunca publicado é
+# PURGADO pela própria rota, sem tocar no Postgres) — não é reabrir a decisão.
 docker exec plughub-demo-postgres-1 psql -U plughub -d plughub_demo -q \
   -c "DELETE FROM dialog.forms WHERE form_id = '$FORM_ID';" >/dev/null 2>&1 \
   && info "limpeza: form de probe removido" \

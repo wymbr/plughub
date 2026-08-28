@@ -55,6 +55,15 @@ probe_config_permissions_split.sh
 # chamam sem credencial, e um portao que fecha a leitura passa no teste de seguranca e
 # quebra o produto em silencio.
 probe_config_service_write_gate.sh
+# O DELETE do dialog-api ARQUIVA (reversivel) e so PURGA o que nunca foi publicado.
+# A assercao que da valor ao gate e a TESTEMUNHA NEGATIVA (S3): form arquivado tem de
+# continuar resolvivel por id, com `deleted_at` no corpo. Um probe que so checasse
+# "sumiu da lista" ficaria VERDE num hard delete — e um hard delete aqui derruba
+# contato em andamento, a composicao de nota no fim do dialogo e a leitura de historia
+# ja encerrada, alem de fazer o dialog-seed ressuscitar o form no boot seguinte.
+# S9 cobre a unica borda que cria vinculo NOVO (survey_link_create), que com a
+# resolucao aberta passou a SUCEDER e precisa da guarda propria.
+probe_dialog_form_delete.sh
 # Conta as implementacoes independentes de "verificar JWT + ler module_config". Eram
 # SEIS quando se mediu, e ja divergiam em seis pontos (tabela no cabecalho de
 # packages/py-authz). O probe nao exige que as seis migrem — protege contra a SETIMA.

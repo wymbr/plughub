@@ -10,11 +10,18 @@ web do channel-gateway sao chamadores de runtime sem credencial, e o conteudo
 e masked-by-construction (nenhum valor de PII no store).
 
 Endpoints (all under /v1/dialog/forms):
-  GET    /                         → list latest version metadata per form
+  GET    /                         → list latest version metadata per form (?include_deleted)
   GET    /{form_id}                → resolve one form (?status=published&version=N)
   POST   /                         → create a new draft version
   PUT    /{form_id}                → edit (draft in place, or new draft version)
   POST   /{form_id}/publish        → publish a version (?version=N; default latest draft)
+  DELETE /{form_id}                → arquiva (ou PURGA, se nunca publicado)
+  POST   /{form_id}/undelete       → restaura form arquivado
+
+Arquivamento (ADR adr-dialog-form-deletion): o CATÁLOGO (`GET /`) esconde arquivados; a
+RESOLUÇÃO (`GET /{form_id}`) continua servindo, com `deleted_at` no corpo — quem resolve por
+id já tem vínculo, e fechar essa porta derrubaria contato em andamento e leitura de história
+encerrada. Escrita sobre arquivado → 409, com o caminho do restauro na mensagem.
 """
 from __future__ import annotations
 
@@ -26,11 +33,14 @@ from plughub_authz import enforce_write
 from pydantic import BaseModel, Field
 
 from .db import (
+    FormArchivedError,
     db_create_form,
+    db_delete_form,
     db_get_form,
     db_list_forms,
     db_publish_form,
     db_put_form,
+    db_undelete_form,
 )
 
 logger = logging.getLogger("plughub.dialog.router")
@@ -45,6 +55,18 @@ def _require_tenant(x_tenant_id: str | None) -> str:
     if not x_tenant_id:
         raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
     return x_tenant_id
+
+
+def _archived_409(exc: FormArchivedError) -> HTTPException:
+    """409 que NOMEIA a saída. Recusa sem caminho de volta seria a mesma degradação muda que
+    o resto do serviço evita — o operador precisa saber que existe restauro, e onde."""
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"dialog form '{exc.form_id}' esta arquivado (deleted_at={exc.deleted_at}) — "
+            f"restaure com POST /v1/dialog/forms/{exc.form_id}/undelete antes de escrever"
+        ),
+    )
 
 
 def _require_admin(request: Request, x_admin_token: str | None) -> None:
@@ -103,10 +125,11 @@ class FormUpsert(BaseModel):
 @router.get("")
 async def list_forms(
     request: Request,
+    include_deleted: bool = Query(default=False),
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
 ) -> dict:
     tenant_id = _require_tenant(x_tenant_id)
-    forms = await db_list_forms(_pool(request), tenant_id)
+    forms = await db_list_forms(_pool(request), tenant_id, include_deleted=include_deleted)
     return {"forms": forms}
 
 
@@ -134,7 +157,10 @@ async def create_form(
 ) -> dict:
     tenant_id = _require_tenant(x_tenant_id)
     _require_admin(request, x_admin_token)
-    return await db_create_form(_pool(request), tenant_id, body.to_doc())
+    try:
+        return await db_create_form(_pool(request), tenant_id, body.to_doc())
+    except FormArchivedError as exc:
+        raise _archived_409(exc) from exc
 
 
 @router.put("/{form_id}")
@@ -149,7 +175,10 @@ async def put_form(
     _require_admin(request, x_admin_token)
     if body.form_id != form_id:
         raise HTTPException(status_code=400, detail="form_id in body must match path")
-    return await db_put_form(_pool(request), tenant_id, form_id, body.to_doc())
+    try:
+        return await db_put_form(_pool(request), tenant_id, form_id, body.to_doc())
+    except FormArchivedError as exc:
+        raise _archived_409(exc) from exc
 
 
 @router.post("/{form_id}/publish")
@@ -162,7 +191,50 @@ async def publish_form(
 ) -> dict:
     tenant_id = _require_tenant(x_tenant_id)
     _require_admin(request, x_admin_token)
-    form = await db_publish_form(_pool(request), tenant_id, form_id, version)
+    try:
+        form = await db_publish_form(_pool(request), tenant_id, form_id, version)
+    except FormArchivedError as exc:
+        raise _archived_409(exc) from exc
     if form is None:
         raise HTTPException(status_code=404, detail=f"no publishable version for form: {form_id}")
     return form
+
+
+@router.delete("/{form_id}")
+async def delete_form(
+    request: Request,
+    form_id: str,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """
+    Arquiva o form — ou o PURGA, se ele nunca teve versão publicada (ADR D2).
+
+    A resposta declara qual dos dois aconteceu (`purged`), porque só um deles é reversível e
+    a tela precisa avisar ANTES no caso irreversível. Arquivar NÃO tira o form do ar para
+    quem já está vinculado: ele sai do catálogo e de vínculos novos, e segue resolvível por
+    id (é o que mantém contato em andamento, composição de nota e histórico de pé).
+    """
+    tenant_id = _require_tenant(x_tenant_id)
+    _require_admin(request, x_admin_token)
+    result = await db_delete_form(_pool(request), tenant_id, form_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"dialog form not found: {form_id}")
+    return result
+
+
+@router.post("/{form_id}/undelete")
+async def undelete_form(
+    request: Request,
+    form_id: str,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """Restaura form arquivado. Rota própria, e não flag no DELETE: restaurar é ato, aparece
+    no OpenAPI e é auditável como tal."""
+    tenant_id = _require_tenant(x_tenant_id)
+    _require_admin(request, x_admin_token)
+    result = await db_undelete_form(_pool(request), tenant_id, form_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"dialog form not found: {form_id}")
+    return result
