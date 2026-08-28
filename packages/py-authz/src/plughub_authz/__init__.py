@@ -66,9 +66,13 @@ logger = logging.getLogger("plughub.authz")
 
 __all__ = [
     "ACCESS_RANK",
+    "LEGACY_EMPTY_MEANS_UNRESTRICTED",
+    "LEGACY_UNRESTRICTED_MARK",
     "abac_can",
     "bearer_from_header",
     "enforce_write",
+    "pool_in_scope",
+    "resolve_scope",
     "verify_user_jwt",
 ]
 
@@ -117,12 +121,39 @@ def abac_can(
     module: str,
     field: str,
     min_access: str = "read_only",
+    scope_id: str | None = None,
 ) -> bool:
     """
-    True se `module_config[module][field].access` ≥ `min_access`.
+    True se `module_config[module][field].access` ≥ `min_access`, respeitando o `scope`
+    do grant quando um `scope_id` é nomeado.
 
     `min_access` fora de `ACCESS_RANK` levanta `ValueError` — ver decisão canônica no
     cabeçalho. Um typo virando "passa" foi a divergência 4.
+
+    ── `scope_id` (D2, entrou no passo 6, 2026-08-28) ────────────────────────────
+    O grant carrega uma lista `scope` ao lado do `access`, e ela recorta a CAPACIDADE a
+    um conjunto de pools. É eixo diferente de `resolve_scope`/`accessible_pools`, que
+    recorta LINHAS de relatório: aqui a pergunta é *"posso exercer esta função NESTE
+    pool?"*.
+
+    Três ramos, e o terceiro é herdado, não decidido:
+
+      1. `scope` vazio/ausente → grant GLOBAL → passa (independe de `scope_id`).
+      2. `scope` não-vazio + `scope_id` nomeado → teste de pertencimento.
+      3. `scope` não-vazio + `scope_id is None` → **passa**.
+
+    O ramo 3 vem da `evaluation-api`, onde o `pool_id` sai de `campaign.pool_id` e ser
+    `None` significa *"a campanha não é escopada a pool"* — não *"esqueci de passar"*.
+    Sob essa leitura, passar é correto: não há pool do qual estar fora. Mas a leitura
+    oposta é defensável (um usuário escopado só deveria tocar recurso escopado), e
+    decidir isso DENTRO de uma migração tornaria uma eventual regressão inatribuível.
+    Portado literalmente, e registrado no `TODO.md` junto do passo 3 de
+    `accessible_pools`, que é o mesmo tipo de pergunta.
+
+    ── o ALIAS `pool:x` × `x` ────────────────────────────────────────────────────
+    A UI grava `"pool:retencao_humano"`; parte dos grants tem só `"retencao_humano"`.
+    As duas formas são aceitas AQUI, numa casa só — era o que a `evaluation-api` já
+    fazia, e duplicar a normalização é como um alias vira divergência.
     """
     if min_access not in ACCESS_RANK:
         raise ValueError(
@@ -134,7 +165,117 @@ def abac_can(
     if not isinstance(fld, dict):
         return False
     access = fld.get("access") or "none"
-    return ACCESS_RANK.get(access, 0) >= ACCESS_RANK[min_access]
+    if ACCESS_RANK.get(access, 0) < ACCESS_RANK[min_access]:
+        return False
+
+    escopo = fld.get("scope")
+    if not isinstance(escopo, list) or not escopo:
+        return True          # ramo 1 — grant global
+    if scope_id is None:
+        return True          # ramo 3 — o recurso não nomeia escopo (ver docstring)
+    return scope_id in escopo or f"pool:{scope_id}" in escopo   # ramo 2
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ESCOPO DE POOL — o SEGUNDO verificador
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# `abac_can` responde *"quais FUNÇÕES eu posso exercer?"*. Esta seção responde a outra
+# pergunta, de eixo independente: *"quais LINHAS/POOLS eu alcanço?"*. As duas foram
+# confundidas uma vez (o claim `unrestricted` liberando o menu, corrigido no mesmo dia
+# em que foi introduzido) e a separação é decisão registrada em CLAUDE.md.
+#
+# POR QUE ELE ENTROU AQUI, e por que isto era o item URGENTE da migração
+# =====================================================================
+# Havia **três** implementações, medidas em 2026-08-28, todas carregando o mesmo
+# marcador `LEGADO_POOLS_VAZIO`:
+#
+#   · `analytics-api/pool_auth.py:153`      `_resolve_scope`
+#   · `channel-gateway/auth.py:67`          `pool_in_scope`
+#   · `evaluation-api/router.py:437`        `_scope_from_claims`
+#
+# O `probe_authz_single_verifier.sh` NÃO as contava — ele conta quem decodifica JWT e
+# lê `module_config`, e estas três só consomem claims já decodificados. Ou seja: sobre
+# este eixo não havia mecanismo nenhum.
+#
+# E o prazo não era estético. O **passo 3** do plano de `accessible_pools` inverte o
+# significado de `[] `: hoje é *"todos os pools"* (convenção implícita), depois será
+# *"nenhum pool"*. Uma inversão aplicada a duas das três cópias é vazamento de escopo
+# que **degrada mudo** — ninguém recebe erro, o relatório só mostra linhas a mais.
+# Consolidar ANTES transforma o passo 3 em edição de uma linha, num arquivo.
+#
+# ⚠️ O QUE O PASSO 3 AINDA TERÁ DE OLHAR (não está resolvido aqui)
+# ---------------------------------------------------------------
+# Depois da inversão, `resolve_scope` passa a devolver `[]` para o usuário sem recorte
+# declarado, e `[]` **não é** `None`. Todo consumidor precisa tratar lista VAZIA como
+# domínio vazio, nunca como "sem filtro" — se algum deles fizer `if not pools: <sem
+# filtro>`, a inversão vira liberação geral no lugar de restrição geral, que é o pior
+# desfecho possível. Isso é auditoria de call site, e continua pendente de propósito:
+# fazê-la aqui seria fazer o passo 3 cedo e sem inventário.
+
+LEGACY_UNRESTRICTED_MARK = "LEGADO_POOLS_VAZIO"
+
+# ⚠️ ESTE É O INTERRUPTOR DO PASSO 3, e ele existe para ser UM.
+#
+# True  (hoje)  — `accessible_pools == []` e sem claim `unrestricted` ⇒ irrestrito,
+#                 com WARNING contado. É a convenção legada, e ela tem de sobreviver
+#                 enquanto tokens antigos circulam (TTL de 1h) e enquanto houver
+#                 emissor que não conheça o claim.
+# False (passo 3) — a mesma entrada passa a significar **nenhum pool**.
+#
+# Virar isto é ato deliberado: os testes de `test_scope.py` cobrem os DOIS estados, de
+# modo que a inversão já tem tabela-verdade escrita e não precisa ser descoberta no dia.
+LEGACY_EMPTY_MEANS_UNRESTRICTED: bool = True
+
+
+def resolve_scope(claims: dict[str, Any] | None, origem: str) -> list[str] | None:
+    """
+    Domínio de pools do chamador. **`None` = irrestrito**; lista = recorte.
+
+    Ordem dos ramos — idêntica nas três origens, de propósito: dois serviços que
+    respondem diferente a *"este pool está no meu domínio?"* é como se paga um
+    vazamento.
+
+      1. lista não-vazia → decide a lista. **O RESTRITIVO vence, sempre**: um
+         `unrestricted` setado por engano não pode ALARGAR o domínio de um operador
+         escopado, porque alargamento não aparece na tela como erro.
+      2. claim `unrestricted is True` → irrestrito EXPLÍCITO.
+      3. senão → depende de `LEGACY_EMPTY_MEANS_UNRESTRICTED` (ver acima), e o ramo
+         legado é **CONTADO**, nunca omitido.
+
+    `origem` nomeia o call site no log (`header`, `SSE`, `results`, `transcript`, …).
+    Sem ela o WARNING diria que existe um usuário a decidir, sem dizer onde ele
+    apareceu — e o passo 3 precisa de uma lista, não de uma estimativa.
+
+    O log distingue **claim AUSENTE** (token velho / emissor que não o cunha) de
+    **claim presente e `false`** (usuário que realmente não tem escopo declarado). São
+    populações diferentes e só a segunda é decisão de alguém.
+    """
+    raw = (claims.get("accessible_pools") if claims else None) or []
+    if raw:
+        return list(raw)
+    if claims and claims.get("unrestricted") is True:
+        return None
+    if LEGACY_EMPTY_MEANS_UNRESTRICTED:
+        logger.warning(
+            "authz scope(%s): irrestrito por %s — `accessible_pools` vazio e sem claim "
+            "`unrestricted`. claim_presente=%s sub=%s. Este ramo desaparece no passo 3; "
+            "enquanto existir, cada linha destas e um usuario a decidir.",
+            origem,
+            LEGACY_UNRESTRICTED_MARK,
+            bool(claims) and "unrestricted" in claims,
+            (claims or {}).get("sub", ""),
+        )
+        return None
+    return []
+
+
+def pool_in_scope(claims: dict[str, Any] | None, pool_id: str, origem: str = "pool_in_scope") -> bool:
+    """True se `pool_id` está no domínio do chamador. Derivado de `resolve_scope`."""
+    dominio = resolve_scope(claims, origem)
+    if dominio is None:
+        return True
+    return pool_id in dominio
 
 
 def enforce_write(
