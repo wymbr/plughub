@@ -34,12 +34,22 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from plughub_authz import ACCESS_RANK as _RANK
+
 logger = logging.getLogger("plughub.auth_api.presets")
 
-# read_only e write_only sao incomparaveis entre si, mas ambos < read_write. O rank
-# espelha `_ACCESS_RANK` do router e o `ACCESS_ORDER` do PermissionChecker no front —
-# se algum dia divergirem, e este comentario que aponta as tres casas.
-_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+# read_only e write_only sao incomparaveis entre si, mas ambos < read_write.
+#
+# ⚠️ Ate 2026-08-28 esta era a QUARTA copia da tabela de rank, e o comentario que a
+# acompanhava dizia apontar "as tres casas" — apontar nao e mecanismo, e foi assim que as seis
+# implementacoes do verificador divergiram em seis pontos. Hoje e a tabela canonica.
+# O censo do `probe_authz_single_verifier.sh` nunca contou este arquivo (ele nao
+# decodifica JWT nem le `module_config` de claims): a copia estava no eixo VIZINHO,
+# como o resolvedor de escopo estava.
+#
+# `>` sobre esta tabela mantem o PRIMEIRO entre `read_only` e `write_only`, que
+# colapsam em 1. Ambiguidade preexistente e preservada de proposito: escolher um dos
+# dois aqui seria inventar uma ordem que nenhuma das outras casas tem.
 
 
 def build_module_config(

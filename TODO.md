@@ -134,45 +134,49 @@ segurança e quebraria o produto em silêncio; por isso as três testemunhas S5/
 Gates: `infra/test/probe_config_service_write_gate.sh` (10 cenários, com contraprova positiva
 **e** negativa) e `infra/test/probe_authz_single_verifier.sh`.
 
-### 🟡 Migrar os SEIS verificadores para `packages/py-authz` (dívida aberta, com evidência)
+### ✅ Migrar os SEIS verificadores para `packages/py-authz` — CONCLUÍDO (2026-08-28)
 
-O pacote canônico existe e tem dois consumidores. Os seis anteriores **não** foram migrados de
-propósito: cada um tem postura deliberadamente diferente (bypass de demo na analytics, dual-gate
-com admin-token na config/pricing, ramo legado da evaluation), e trocar a postura de seis
-serviços no mesmo commit que abre duas portas novas é raio de ação onde regressão se esconde.
+> **Arco completo, passos 0–6.** Linha de base do `probe_authz_single_verifier.sh`:
+> **7 arquivos em 6 serviços → 1**, e esse 1 é o **emissor** (`auth-api/jwt_utils.py`),
+> que fica por decisão (D4). História em `CHANGELOG.md` de 2026-08-28. **A linha de base
+> não deve ir a zero** — se um dia for, alguém migrou o emissor sem decidir isso.
+>
+> Fica aqui só o que continua ABERTO e nasceu do arco:
 
-O que torna esta dívida **acionável em vez de aspiracional** é a tabela de divergências medidas
-(completa no cabeçalho de `packages/py-authz/src/plughub_authz/__init__.py`):
+**1. O ramo 3 do `scope_id` é HERDADO, não decidido** *(passo 6)*. Em
+`plughub_authz.abac_can`, `scope` não-vazio + `scope_id is None` → **passa**. Veio da
+`evaluation-api`, onde o `pool_id` sai de `campaign.pool_id` e `None` significa *"a
+campanha não é escopada a pool"*, não *"esqueci de passar"* — sob essa leitura, passar é
+correto. A leitura oposta (um usuário escopado só toca recurso escopado) é defensável.
+**Decidir junto do passo 3 de `accessible_pools`**: é o mesmo tipo de pergunta, e o
+inventário que aquele passo exige responde os dois.
 
-| ponto | divergência |
-|---|---|
-| biblioteca | stdlib à mão (config, pricing) × PyJWT (analytics, channel-gateway, evaluation) × `python-jose` (auth-api) |
-| ordem de acesso | dict com `write_only == read_only == 1` (4 serviços) × **lista indexada** em `analytics-api/audit.py`, onde `write_only > read_only`. O mesmo grant responde diferente em dois serviços |
-| `module_config` vazio | recusa em 4 × **libera** na `evaluation-api` quando `min_access is None` (ramo legado declarado) |
-| `min_access` desconhecido | `.get(min_access, **0**)` faz um typo virar rank 0 ⇒ qualquer grant passa (3 serviços) × `.get(…, 1)` no channel-gateway |
-| credencial ausente | **401** (config-api) × **403** (pricing-api) |
-| segredo ausente | 503 × recusa × degrada **aberto** (`pool_auth`, declarado) × devolve `None` |
+**2. Eixo VIZINHO medido e LIMPO — não virou gate** *(passo 4)*. O C1 conta quem lê
+`module_config` **e** decodifica JWT; ao lado existe *"quem decodifica um JWT, para
+qualquer fim"*. A `analytics-api` tem duas casas nesse eixo — `pool_auth.py` (escopo) e
+`auth.py` (identidade, `admin_jwt_secret`) — que **ficam locais**: precisam distinguir
+*expirado × inválido* na mensagem do 401, e `verify_user_jwt` colapsa os dois em `None`.
+Medidos os 9 decodificadores do repo: todos com `algorithms=["HS256"]`; o único
+`verify_signature: False` é a espiada documentada do `webchat.py:439`. **Se aparecer o
+segundo `verify_signature: False`, é a hora de construir o C5** — hoje ele teria lista de
+exceção de um item, e exceção que envelhece é o defeito que ela deveria pegar.
 
-⚠️ **O agravante é o que dá nome à dívida:** `channel-gateway/auth.py:6-9` **promete no
-docstring** ser o ponto compartilhado — *"outros módulos devem reusar estas funções em vez de
-reimplementar"* — e cinco serviços reimplementaram. Promessa sem mecanismo é a mesma família do
-DDL de `participation_intervals`. O `probe_authz_single_verifier.sh` é o mecanismo: ele **não**
-exige a migração, protege contra a **sétima** cópia.
+**3. Armadilha latente no C1** *(passo 4)*: o filtro `^[^#]*` exclui comentário `#`, **não
+docstring**. Um arquivo migrado que descreva em prosa o `decode` que perdeu volta a casar;
+hoje não vira falso positivo só porque o primeiro filtro exige `module_config`, que sai
+junto. Registrado no próprio probe. Trocar `grep` por AST quando o falso positivo aparecer,
+não antes.
 
-Ordem sugerida quando for feito: `pricing-api` e `config-api` primeiro (são cópias quase
-byte-idênticas uma da outra — divergem só no código de recusa), depois `channel-gateway`, e
-`analytics-api`/`evaluation-api` por último, porque as duas mudam de COMPORTAMENTO ao migrar (a
-ordem de acesso e o ramo legado, respectivamente) e precisam de decisão do dono, não de refactor.
+**4. `probe_resume_approver_authz.sh` é VERDE PARCIAL por desenho** — a metade
+comportamental (S2/S3) precisa de uma aprovação SUSPENSA e não roda sozinha. A suíte nova
+do passo 3 (`test_approver_principal_authz.py`) cobre a mesma metade em unit, mas o
+caminho HTTP real continua sem gate re-executável.
 
-> **Emenda de 2026-08-28 — dentro do analytics-api são DOIS, e a conta de seis não os separa.**
-> O serviço tem `auth.require_principal` (segredo de SISTEMA, `/admin/*`) e `pool_auth.*` (JWT do
-> auth-api, `/reports/*`), e a divergência entre eles não é de postura: é de **segredo**, logo um
-> token válido para um é lixo para o outro. Foi assim que `/dashboard/*` ficou sem caminho
-> autenticado nenhum para o navegador (detalhe no `CHANGELOG.md` e em
-> [`docs/arcos/arc7-auth.md`](docs/arcos/arc7-auth.md)). Hoje há um terceiro,
-> `require_dashboard_principal`, que aceita os dois — deliberadamente, porque as duas populações
-> de chamador existem. Quando a migração acontecer, **o analytics-api não é UM caso, são três**, e
-> o de dashboard é o único cuja resposta correta é *"aceita as duas credenciais"*.
+**5. Lição de método do arco, para o próximo que mover uma fronteira de autorização:**
+em **cinco dos sete passos** os testes que cercavam a fronteira estavam para trás, e em
+três deles quem revelou foi a **bateria de mutação**, não a suíte. Ao mexer num portão,
+o primeiro passo é medir o que o cerca — e o vermelho de um controle POSITIVO parece
+proteção, que é justamente o que se queria ver.
 
 ### 🟡 `/dashboard/metrics` devolve agregado TENANT-WIDE a chamador escopado (2026-08-28)
 

@@ -102,11 +102,26 @@ def test_no_jwt_has_no_actions():
     assert _compute_available_actions(r, None, None) == []
 
 
-def test_legacy_token_degrades_to_allow_review():
-    # token sem module_config (ex.: admin) → _check_abac_permission degrada p/ permitir
+def test_token_sem_module_config_NAO_oferece_review():
+    """⚠️ INVERTIDO em 2026-08-28 (passo 6). Antes: *"degrada p/ permitir"*.
+
+    O ramo legado (`module_config` vazio → libera) fechou. O que o tornava
+    insustentável não era a política, era a CONTRADIÇÃO: este mesmo serviço já negava o
+    TRANSCRIPT ao mesmo token desde 2026-08-27 — ele não podia LER a conversa e podia
+    DECIDIR sobre ela. Contado antes de fechar: **um** portador de config vazio na
+    instalação, a fixture do probe grant-first.
+    """
     r = _result("under_review", rnd=1, evaluated="u_agent")
     legacy = {"sub": "u_admin"}  # sem module_config
-    assert _compute_available_actions(r, legacy, None) == ["review"]
+    assert _compute_available_actions(r, legacy, None) == []
+
+
+def test_com_o_grant_o_review_continua_sendo_oferecido():
+    """Testemunha de presença ao lado da negativa: fechar o ramo não pode ter fechado
+    a função. Sem esta linha, um `return []` incondicional passaria igual."""
+    r = _result("under_review", rnd=1, evaluated="u_agent")
+    revisor = _jwt("u_revisor", revisar="read_write")
+    assert _compute_available_actions(r, revisor, None) == ["review"]
 
 
 # ─── _can_view_transcript ─────────────────────────────────────────────────────
@@ -240,9 +255,40 @@ def test_legacy_token_no_module_config_grant_first_denied():
     assert _check_abac_permission({"sub": "u"}, "curar", None, min_access="read_write") is False
 
 
-def test_legacy_token_no_module_config_legacy_field_allowed():
-    # legado: campo sem min_access (revisar/contestar) mantém degradação graciosa.
-    assert _check_abac_permission({"sub": "u"}, "revisar") is True
+def test_config_vazio_recusa_em_TODOS_os_campos():
+    """⚠️ INVERTIDO em 2026-08-28. Era *"campo sem min_access mantém degradação"*.
+
+    Grant-first não tem exceção por campo: ausência de grants nunca é autorização.
+    """
+    for campo in ("revisar", "contestar", "curar"):
+        assert _check_abac_permission({"sub": "u"}, campo) is False, campo
+
+
+def test_min_access_default_e_read_only_nao_None():
+    """O parâmetro deixou de ser `str | None`. `None` era o interruptor do ramo legado,
+    e mantê-lo como valor válido deixaria a porta reabrível por um call site novo."""
+    jwt = _jwt("u", revisar="read_only")
+    assert _check_abac_permission(jwt, "revisar") is True
+    assert _check_abac_permission(jwt, "revisar", None, min_access="read_write") is False
+
+
+def test_escopo_de_pool_atravessa_o_wrapper_ate_o_canonico():
+    """O recorte de capacidade por pool passou ao `plughub_authz` (D2). Este caso prova
+    que ele chega lá pelo wrapper, nas duas grafias do alias."""
+    for escopo in (["pool:retencao_humano"], ["retencao_humano"]):
+        jwt = {"sub": "u", "module_config": {"evaluation": {
+            "revisar": {"access": "read_write", "scope": escopo}}}}
+        assert _check_abac_permission(jwt, "revisar", "retencao_humano") is True
+        assert _check_abac_permission(jwt, "revisar", "outro_pool") is False
+
+
+def test_campanha_SEM_pool_passa_pelo_grant_escopado():
+    """Ramo herdado: `pool_id=None` sai de `campaign.pool_id` e significa *a campanha
+    não é escopada*, não *esqueci de passar*. Portado literalmente no passo 6 e
+    registrado — a leitura oposta é defensável."""
+    jwt = {"sub": "u", "module_config": {"evaluation": {
+        "revisar": {"access": "read_write", "scope": ["pool:outro"]}}}}
+    assert _check_abac_permission(jwt, "revisar", None) is True
 
 
 def test_curar_scope_pool_match_and_mismatch():

@@ -40,7 +40,14 @@ from .channel_capability_registry import (
     select_channel,
 )
 from .config import get_settings, Settings
-from .auth import verify_user_jwt, abac_can, pool_in_scope, accessible_pools, bearer_from_header
+# Verificador canônico (passo 3 da consolidação, 2026-08-28). O import vem DIRETO do
+# pacote, não re-exportado por `.auth`: um re-export deixaria `auth.py` parecendo dono
+# do verificador, que é exatamente a aparência que criou as seis cópias. De `.auth`
+# ficam só os dois nomes que são fato do channel-gateway — o wrapper que carimba a
+# origem no log de escopo, e o helper de log da lista crua.
+from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
+
+from .auth import accessible_pools, pool_in_scope
 from .context_reader import ContextReader
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint, resolve_pool
 from .outbound_consumer import OutboundConsumer

@@ -45,6 +45,7 @@ from typing import Any
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from plughub_authz import LEGACY_UNRESTRICTED_MARK, resolve_scope
 
 from .config import get_settings
 
@@ -147,23 +148,25 @@ class PoolPrincipal:
 # "claim presente e false com lista vazia" (usuário que realmente não tem escopo
 # declarado). São populações diferentes e só a segunda é decisão de alguém — é
 # essa distinção que dá ao passo 3 uma lista, em vez de uma estimativa.
-_LEGACY_MARK = "LEGADO_POOLS_VAZIO"
+# Re-exportado do canônico: os testes importam `_LEGACY_MARK` daqui, e ter duas
+# strings para o mesmo marcador faria o grep de inventário do passo 3 perder metade
+# das linhas.
+_LEGACY_MARK = LEGACY_UNRESTRICTED_MARK
 
 
 def _resolve_scope(payload: dict, origem: str) -> list[str] | None:
-    """`None` = irrestrito; lista = escopo (já com os espelhos `-int`)."""
-    raw = payload.get("accessible_pools") or []
-    if raw:
-        return _with_internal_mirrors(list(raw))
-    if payload.get("unrestricted") is True:
-        return None
-    logger.warning(
-        "pool_auth(%s): irrestrito por %s — `accessible_pools` vazio e sem claim "
-        "`unrestricted`. claim_presente=%s sub=%s. Este ramo desaparece no passo 3 "
-        "do plano; enquanto existir, cada linha destas e um usuario a decidir.",
-        origem, _LEGACY_MARK, "unrestricted" in payload, payload.get("sub", ""),
-    )
-    return None
+    """`None` = irrestrito; lista = escopo (já com os espelhos `-int`).
+
+    A ORDEM DOS RAMOS mudou de casa em 2026-08-28, não de conteúdo: era uma das TRÊS
+    cópias (com `channel-gateway/auth.py` e `evaluation-api/router.py`), consolidada em
+    `plughub_authz.resolve_scope` antes do passo 3 — que inverte o significado de `[]`
+    e, aplicado a duas das três, seria vazamento de escopo silencioso.
+
+    O que FICA aqui é o que é do domínio da analytics: os espelhos `-int`. Eles são
+    acesso DERIVADO (quem alcança `p` alcança `p-int`) e não pertencem ao verificador
+    genérico — nenhum outro serviço tem fila interna.
+    """
+    return _with_internal_mirrors(resolve_scope(payload, origem))
 
 
 async def optional_pool_principal(

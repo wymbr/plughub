@@ -903,14 +903,20 @@ services:
 
   auth-api:
     build:
-      context: packages/auth-api
-      dockerfile: Dockerfile
+      # Contexto = raiz do monorepo desde 2026-08-28: sem isso o `packages/py-authz`
+      # (verificador canônico) e o `infra/modules.yaml` ficam fora do build. Ver o
+      # cabeçalho do Dockerfile.
+      context: .
+      dockerfile: packages/auth-api/Dockerfile
     ports:
       - "3202:3200"
     volumes:
-      # modules.yaml não está no contexto de build (packages/auth-api/).
-      # O volume mount torna o arquivo acessível em /infra/modules.yaml dentro
-      # do container, que é o path que main.py resolve via seed_modules_from_yaml().
+      # ⚠️ Este mount deixou de ser NECESSÁRIO em 2026-08-28: o Dockerfile agora copia
+      # `infra/modules.yaml` para o mesmo caminho, e a imagem basta sozinha (era o que
+      # faltava ao `docker-compose.full.yml`, que subia com o registry de módulos
+      # vazio). Ele FICA por ergonomia de dev — editar o YAML e reiniciar aplica sem
+      # rebuild, o mesmo padrão do `./infra/registry` no orchestrator-bridge —, e
+      # apenas sobrepõe o arquivo da imagem.
       - ./infra/modules.yaml:/infra/modules.yaml:ro
     environment:
       PLUGHUB_AUTH_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo

@@ -24,21 +24,24 @@ Routes:
        Raw (non-resolved) entries explicitly set for (tenant_id, namespace).
        Useful for seeing what overrides are active.
 
-All mutation endpoints require the X-Admin-Token header matching PLUGHUB_CONFIG_ADMIN_TOKEN.
-Read endpoints are unauthenticated (internal service — network-level access control applies).
+Escrita: portao DUAL — `X-Admin-Token` (= PLUGHUB_CONFIG_ADMIN_TOKEN, caminho de
+seed/sistema) OU `Authorization: Bearer <jwt>` com ABAC `config.{campo do namespace}`
+em read_write. Verificado por `plughub_authz.enforce_write` (verificador canonico).
+O `?admin_token=` em query string foi REMOVIDO em 2026-08-28 — segredo em URL entra
+em log de acesso e de proxy; tinha um unico chamador, e era teste.
+
+Leitura NAO tem portao, e isso e decidido: os leitores sao chamadores de runtime sem
+credencial. Um portao que fechasse a leitura passaria no teste de seguranca e quebraria
+o produto em silencio.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 import logging
-import time
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from plughub_authz import enforce_write
 from pydantic import BaseModel
 
 logger = logging.getLogger("plughub.config.router")
@@ -51,8 +54,6 @@ router = APIRouter(prefix="/config")
 # compartilhado por várias telas. Cada namespace mapeia a um campo ABAC `config.*`.
 # Gate DUAL (transição): admin-token (telas ainda não migradas) OU Bearer + ABAC do
 # campo do namespace (telas migradas: Platform→`plataforma`, Masking→`masking`).
-
-_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
 
 # namespaces de canais (telas ainda em admin-token) → campo `canais` (path Bearer correto,
 # inativo até a migração de Channels). masking → `masking`. Default (Platform é o editor
@@ -73,63 +74,37 @@ def _ns_field(namespace: str) -> str:
     return _NS_FIELD_OVERRIDES.get(namespace, "platform")
 
 
-def _b64url_decode(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+async def _require_config_write(namespace: str, request: Request) -> None:
+    """Write guard: admin-token (seed/sistema) OU Bearer + ABAC `config.{ns_field}` (read_write).
 
+    MIGRADO para `plughub_authz` em 2026-08-28 (passo 2 da consolidação dos seis
+    verificadores). Saíram daqui `_verify_hs256` (HMAC em stdlib — uma das três
+    bibliotecas que faziam a MESMA verificação no repo) e `_check_config_field` com
+    `.get(min_access, 0)`, que fazia um `min_access` digitado errado virar rank 0 e,
+    com isso, qualquer grant não-`none` passar. O canônico levanta `ValueError`.
 
-def _verify_hs256(token: str, secret: str) -> dict[str, Any]:
-    try:
-        h, p, sig = token.split(".")
-    except ValueError:
-        raise HTTPException(status_code=401, detail="malformed token")
-    expected = base64.urlsafe_b64encode(
-        hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
-    ).rstrip(b"=").decode()
-    if not hmac.compare_digest(expected, sig):
-        raise HTTPException(status_code=401, detail="invalid token signature")
-    payload = json.loads(_b64url_decode(p))
-    if payload.get("exp") and int(payload["exp"]) < int(time.time()):
-        raise HTTPException(status_code=401, detail="token expired")
-    return payload
+    O campo continua sendo resolvido AQUI, por `_ns_field(namespace)`: ele depende da
+    rota, então não cabe numa dependência estática — é fato do call site, não do
+    verificador.
 
-
-def _check_config_field(claims: dict[str, Any], field: str, min_access: str) -> bool:
-    mc = claims.get("module_config") or {}
-    fc = (mc.get("config") or {}).get(field) or {}
-    access = fc.get("access", "none")
-    if access == "none":
-        return False
-    return _ACCESS_RANK.get(access, 0) >= _ACCESS_RANK.get(min_access, 0)
-
-
-async def _require_config_write(
-    namespace: str,
-    request: Request,
-    x_admin_token: Optional[str] = Header(default=None),
-    admin_token: Optional[str] = Query(default=None, alias="admin_token"),
-) -> None:
-    """Write guard: admin-token (back-compat) OR Bearer + ABAC `config.{ns_field}` (read_write).
-
-    Preserva a postura original: admin_token vazio = auth desabilitada (internal-only).
+    ⚠️ **O `?admin_token=` SAIU** (D5, decidido 2026-08-28). Ele existia como parâmetro
+    de query ao lado do header. Medido antes de remover: **um** chamador em todo o
+    repositório, e era teste (`infra/test/smoke_config_write_auth.sh:79`) — zero uso em
+    produção. E não era só código morto: segredo em query string entra em log de
+    acesso, log de proxy e histórico de browser, ou seja, o parâmetro vazava a
+    chave-mestra de config pelo caminho mais difícil de expurgar. Quem precisa do
+    caminho de sistema manda `X-Admin-Token`.
     """
     from .config import get_settings
     settings = get_settings()
-    expected = getattr(settings, "admin_token", None)
-    if not expected:
-        return  # auth desabilitada (deploy interno) — comportamento original preservado
-    token = x_admin_token or admin_token
-    if token == expected:
-        return  # admin-token válido (telas legadas / seed / sistema)
-    # Caminho Bearer+ABAC (telas migradas): exige JWT válido + campo do namespace.
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing admin token or Bearer")
-    if not getattr(settings, "jwt_secret", ""):
-        raise HTTPException(status_code=503, detail="jwt secret not configured")
-    claims = _verify_hs256(auth[len("Bearer "):], settings.jwt_secret)
-    field = _ns_field(namespace)
-    if not _check_config_field(claims, field, "read_write"):
-        raise HTTPException(status_code=403, detail=f"forbidden: requires config.{field} (read_write)")
+    enforce_write(
+        request=request,
+        admin_token=getattr(settings, "admin_token", None) or "",
+        jwt_secret=getattr(settings, "jwt_secret", ""),
+        module="config",
+        field=_ns_field(namespace),
+        what=f"escrita de config no namespace `{namespace}`",
+    )
 
 
 # ─── request models ──────────────────────────────────────────────────────────

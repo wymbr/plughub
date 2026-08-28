@@ -163,12 +163,58 @@ def _access_token(
 
 
 def _usuarios_token(access: str = "read_write") -> str:
-    """JWT com o grant ABAC que as rotas de gestão exigem."""
+    """JWT com `config.users` — administrar PESSOAS."""
     return _access_token(module_config={"config": {"users": {"access": access, "scope": []}}})
 
 
 def _admin_headers(access: str = "read_write") -> dict[str, str]:
     return {"Authorization": f"Bearer {_usuarios_token(access)}"}
+
+
+# ── `config.users` × `config.permissions` — os dois grants NÃO se substituem ──
+#
+# ⚠️ Estes helpers nasceram em 2026-08-28, consertando **15 controles POSITIVOS que
+# estavam vermelhos desde o split de 2026-08-27**. Naquele dia `config.users` deixou de
+# ser a chave-mestra e as rotas de CAPACIDADE (`/permissions`, `/templates`, `/modules`,
+# `/module-config`) passaram a exigir `config.permissions` — mas o `_admin_headers`
+# continuou cunhando só o grant de pessoas. Resultado: toda rota de capacidade
+# respondia 403 no teste, e o suite não tinha prova nenhuma de que ELAS DEIXAM ALGUÉM
+# PASSAR. Os negativos seguiam verdes por acidente, pelo motivo errado.
+#
+# É a mesma família do que se mediu na pricing e no config-api no passo 2 da migração
+# do verificador: o teste concedia um campo que o backend nunca conferiu. E o modo de
+# falha é o de sempre — **o vermelho de um controle positivo parece "a rota está
+# protegida"**, que é justamente o que se queria ver.
+#
+# Os três helpers ficam SEPARADOS de propósito. Um `_headers()` que cunhasse tudo
+# apagaria a distinção que o split existe para criar, e o suite voltaria a não saber
+# dizer qual porta abriu.
+
+
+def _perms_headers(access: str = "read_write") -> dict[str, str]:
+    """JWT com `config.permissions` — conceder CAPACIDADE (papéis, módulos, escopo)."""
+    tok = _access_token(
+        module_config={"config": {"permissions": {"access": access, "scope": []}}}
+    )
+    return {"Authorization": f"Bearer {tok}"}
+
+
+def _ambos_headers(access: str = "read_write") -> dict[str, str]:
+    """Os DOIS grants. Necessário quando o CORPO carrega campo de capacidade.
+
+    `_assert_may_grant` recusa alto sobre `model_fields_set`: enviar `roles` num
+    `POST /users` é CONCEDER, ainda que o valor coincida com o default — então a rota é
+    `config.users` e o corpo pede `config.permissions`.
+    """
+    tok = _access_token(
+        module_config={
+            "config": {
+                "users":       {"access": access, "scope": []},
+                "permissions": {"access": access, "scope": []},
+            }
+        }
+    )
+    return {"Authorization": f"Bearer {tok}"}
 
 
 # ─── TestHealth ───────────────────────────────────────────────────────────────
@@ -313,7 +359,7 @@ class TestCreateUser:
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "new@test.local",
                              "password": "password123", "roles": ["supervisor"]},
-                       headers=_admin_headers())
+                       headers=_ambos_headers())
         assert r.status_code == 201
         assert r.json()["email"] == "new@test.local"
 
@@ -438,15 +484,107 @@ class TestDeleteUser:
     def test_delete_ok(self, client):
         c, _ = client
         uid = str(_SAMPLE_USER["id"])
-        with patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
+        # ⚠️ `get_user_by_id` PRECISA ser mockado desde o split de 2026-08-27: o handler
+        # busca o ALVO para `_assert_may_touch`. Sem o patch, a função real rodava sobre
+        # o `AsyncMock` do pool e o teste estourava `TypeError` em `db.py:336` — falha
+        # que parece de mock e é, na verdade, um teste deixado para trás pela mudança.
+        with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=_SAMPLE_USER)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
             r = c.delete(f"/auth/users/{uid}", headers=_admin_headers())
         assert r.status_code == 204
 
     def test_delete_not_found(self, client):
         c, _ = client
-        with patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=False)):
+        with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=False)):
             r = c.delete(f"/auth/users/{uuid.uuid4()}", headers=_admin_headers())
         assert r.status_code == 404
+
+
+# ─── As DUAS guardas que fazem o split entregar o que promete ─────────────────
+#
+# Acrescentadas em 2026-08-28. Elas não tinham teste NENHUM, e são o miolo da divisão
+# `config.users` × `config.permissions`: sem as duas, quem administra pessoas volta a
+# ser a chave-mestra do tenant por dois caminhos diferentes.
+#
+# As duas chamam `abac_can` (o verificador canônico desde o passo 5) — logo são também
+# o controle positivo E negativo da migração deste serviço.
+
+
+class TestGuardaDeCorpo:
+    """`_assert_may_grant` — o CORPO carrega campo de capacidade."""
+
+    def test_roles_no_corpo_sem_config_permissions_e_403(self, client):
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)):
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "x@test.local",
+                             "password": "password123", "roles": ["admin"]},
+                       headers=_admin_headers())
+        assert r.status_code == 403
+        assert "config.permissions" in r.json()["detail"]
+
+    def test_sem_campo_de_capacidade_no_corpo_passa(self, client):
+        """O discriminador é o que foi ENVIADO, não o valor resultante: omitir `roles`
+        aceita o default, e isso não é conceder."""
+        c, _ = client
+        created = _user_copy(email="y@test.local")
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)):
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "y@test.local",
+                             "password": "password123"},
+                       headers=_admin_headers())
+        assert r.status_code == 201
+
+
+class TestGuardaDeAlvo:
+    """`_assert_may_touch` — quem detém `config.permissions` só é tocado por um par.
+
+    É esta guarda que fecha *"reseto a senha do admin e entro como admin"*. Resetar
+    senha é campo de PESSOA e segue permitido de propósito; o que barra o vetor é a
+    proteção do ALVO, nunca a guarda de corpo.
+    """
+
+    _PRIVILEGIADO = {
+        **_SAMPLE_USER,
+        "module_config": {"config": {"permissions": {"access": "read_write", "scope": []}}},
+    }
+
+    def test_apagar_privilegiado_so_com_config_users_e_403(self, client):
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_id",
+                   new=AsyncMock(return_value=self._PRIVILEGIADO)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
+            r = c.delete(f"/auth/users/{_SAMPLE_USER['id']}", headers=_admin_headers())
+        assert r.status_code == 403
+        assert "config.permissions" in r.json()["detail"]
+
+    def test_apagar_privilegiado_por_um_PAR_passa(self, client):
+        """Um "par" precisa dos DOIS grants, e isto não é redundância.
+
+        A ROTA é `config.users` (apagar é administrar pessoa); a proteção do ALVO é
+        `config.permissions`. Quem tem só o segundo não chega ao handler — 403 na
+        porta. Escrevi este caso com `_perms_headers` primeiro e ele reprovou: a
+        composição das duas portas não é dedutível de nenhuma das duas sozinha.
+        """
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_id",
+                   new=AsyncMock(return_value=self._PRIVILEGIADO)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
+            r = c.delete(f"/auth/users/{_SAMPLE_USER['id']}", headers=_ambos_headers())
+        assert r.status_code == 204
+
+    def test_so_config_permissions_nao_alcanca_a_rota_de_pessoa(self, client):
+        """Testemunha do lado oposto: o grant de CAPACIDADE não administra pessoa."""
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_id",
+                   new=AsyncMock(return_value=_SAMPLE_USER)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
+            r = c.delete(f"/auth/users/{_SAMPLE_USER['id']}", headers=_perms_headers())
+        assert r.status_code == 403
+
+    def test_unrestricted_tambem_torna_o_alvo_protegido(self, client):
+        """`_is_privileged` olha DOIS fatos, e o segundo é o claim de escopo."""
+        c, _ = client
+        alvo = {**_SAMPLE_USER, "module_config": {}, "unrestricted": True}
+        with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=alvo)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
+            r = c.delete(f"/auth/users/{_SAMPLE_USER['id']}", headers=_admin_headers())
+        assert r.status_code == 403
 
 
 # ─── TestSeedAdmin ────────────────────────────────────────────────────────────
@@ -595,7 +733,7 @@ class TestGrantPermission:
             r = c.post("/auth/permissions",
                        json={"tenant_id": "tenant_test", "user_id": str(_SAMPLE_USER["id"]),
                              "module": "analytics", "action": "view"},
-                       headers=_admin_headers())
+                       headers=_perms_headers())
         assert r.status_code == 201
         body = r.json()
         assert body["module"] == "analytics"
@@ -638,7 +776,7 @@ class TestGrantPermission:
                        json={"tenant_id": "tenant_test", "user_id": str(_SAMPLE_USER["id"]),
                              "module": "analytics", "action": "view",
                              "scope_type": "pool", "scope_id": "pool_sac"},
-                       headers=_admin_headers())
+                       headers=_perms_headers())
         assert r.status_code == 201
         assert r.json()["scope_id"] == "pool_sac"
 
@@ -652,7 +790,7 @@ class TestListPermissions:
         with patch("plughub_auth_api.router.perms_mod.list_permissions",
                    new=AsyncMock(return_value=[_SAMPLE_PERM])):
             r = c.get("/auth/permissions?tenant_id=tenant_test",
-                      headers=_admin_headers())
+                      headers=_perms_headers())
         assert r.status_code == 200
         assert len(r.json()) == 1
 
@@ -661,7 +799,7 @@ class TestListPermissions:
         with patch("plughub_auth_api.router.perms_mod.list_permissions",
                    new=AsyncMock(return_value=[_SAMPLE_PERM])) as mock:
             r = c.get(f"/auth/permissions?tenant_id=tenant_test&user_id={_SAMPLE_USER['id']}",
-                      headers=_admin_headers())
+                      headers=_perms_headers())
         assert r.status_code == 200
         assert mock.call_args.kwargs.get("user_id") == str(_SAMPLE_USER["id"])
 
@@ -675,7 +813,7 @@ class TestRevokePermission:
         with patch("plughub_auth_api.router.perms_mod.revoke_permission",
                    new=AsyncMock(return_value=True)):
             r = c.delete(f"/auth/permissions/{uuid.uuid4()}",
-                         headers=_admin_headers())
+                         headers=_perms_headers())
         assert r.status_code == 204
 
     def test_revoke_not_found(self, client):
@@ -683,7 +821,7 @@ class TestRevokePermission:
         with patch("plughub_auth_api.router.perms_mod.revoke_permission",
                    new=AsyncMock(return_value=False)):
             r = c.delete(f"/auth/permissions/{uuid.uuid4()}",
-                         headers=_admin_headers())
+                         headers=_perms_headers())
         assert r.status_code == 404
 
 
@@ -734,7 +872,7 @@ class TestTemplates:
             r = c.post("/auth/templates",
                        json={"tenant_id": "tenant_test", "name": "operator_default",
                              "permissions": [{"module": "analytics", "action": "view"}]},
-                       headers=_admin_headers())
+                       headers=_perms_headers())
         assert r.status_code == 201
         assert r.json()["name"] == "operator_default"
 
@@ -743,7 +881,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.list_templates",
                    new=AsyncMock(return_value=[_SAMPLE_TMPL])):
             r = c.get("/auth/templates?tenant_id=tenant_test",
-                      headers=_admin_headers())
+                      headers=_perms_headers())
         assert r.status_code == 200
         assert len(r.json()) == 1
 
@@ -753,7 +891,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.get_template",
                    new=AsyncMock(return_value=_SAMPLE_TMPL)):
             r = c.get(f"/auth/templates/{tid}",
-                      headers=_admin_headers())
+                      headers=_perms_headers())
         assert r.status_code == 200
         assert r.json()["id"] == tid
 
@@ -762,7 +900,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.get_template",
                    new=AsyncMock(return_value=None)):
             r = c.get(f"/auth/templates/{uuid.uuid4()}",
-                      headers=_admin_headers())
+                      headers=_perms_headers())
         assert r.status_code == 404
 
     def test_update_template(self, client):
@@ -775,7 +913,7 @@ class TestTemplates:
                    new=AsyncMock(return_value=updated)):
             r = c.patch(f"/auth/templates/{tid}",
                         json={"description": "Updated description"},
-                        headers=_admin_headers())
+                        headers=_perms_headers())
         assert r.status_code == 200
         assert r.json()["description"] == "Updated description"
 
@@ -784,7 +922,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.delete_template",
                    new=AsyncMock(return_value=True)):
             r = c.delete(f"/auth/templates/{uuid.uuid4()}",
-                         headers=_admin_headers())
+                         headers=_perms_headers())
         assert r.status_code == 204
 
 
@@ -802,7 +940,7 @@ class TestApplyTemplate:
                    new=AsyncMock(return_value=materialized)):
             r = c.post(f"/auth/templates/{_SAMPLE_TMPL['id']}/apply",
                        json={"user_id": str(_SAMPLE_USER["id"]), "granted_by": "admin"},
-                       headers=_admin_headers())
+                       headers=_perms_headers())
         assert r.status_code == 200
         assert len(r.json()) == 2
 
@@ -812,7 +950,7 @@ class TestApplyTemplate:
                    new=AsyncMock(side_effect=ValueError("Template not found"))):
             r = c.post(f"/auth/templates/{uuid.uuid4()}/apply",
                        json={"user_id": str(_SAMPLE_USER["id"])},
-                       headers=_admin_headers())
+                       headers=_perms_headers())
         assert r.status_code == 404
 
 

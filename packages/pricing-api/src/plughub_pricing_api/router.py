@@ -16,18 +16,14 @@ Endpoints:
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 import logging
-import time
 from datetime import date
-from typing import Annotated, Any
+from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
+from plughub_authz import enforce_write
 from pydantic import BaseModel, Field
 
 from . import db as pricing_db
@@ -51,59 +47,42 @@ def get_redis(request: Request):
     return getattr(request.app.state, "redis", None)
 
 
-# G-PROBE platform-wide: write gate DUAL — admin-token (seed/sistema) OU Bearer + ABAC
-# `config.plataforma` (UI; billing/pricing tratado como config de plataforma). Verificação
-# HS256 em stdlib (sem dep nova), com o mesmo jwt_secret da auth-api.
-
-_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
-
-
-def _b64url_decode(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
-
-
-def _verify_hs256(token: str, secret: str) -> dict[str, Any]:
-    try:
-        h, p, sig = token.split(".")
-    except ValueError:
-        raise HTTPException(status_code=401, detail="malformed token")
-    expected = base64.urlsafe_b64encode(
-        hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
-    ).rstrip(b"=").decode()
-    if not hmac.compare_digest(expected, sig):
-        raise HTTPException(status_code=401, detail="invalid token signature")
-    payload = json.loads(_b64url_decode(p))
-    if payload.get("exp") and int(payload["exp"]) < int(time.time()):
-        raise HTTPException(status_code=401, detail="token expired")
-    return payload
-
-
-def _check_config_field(claims: dict[str, Any], field: str, min_access: str) -> bool:
-    fc = (claims.get("module_config") or {}).get("config", {}).get(field) or {}
-    access = fc.get("access", "none")
-    if access == "none":
-        return False
-    return _ACCESS_RANK.get(access, 0) >= _ACCESS_RANK.get(min_access, 0)
-
-
+# Write gate DUAL — admin-token (seed/sistema) OU Bearer + ABAC `config.platform`
+# (billing/pricing é tratado como config de plataforma).
+#
+# MIGRADO para `plughub_authz` em 2026-08-28 (passo 2 da consolidação dos seis
+# verificadores). O que este arquivo tinha e deixou de ter:
+#
+#   · `_verify_hs256` em stdlib — uma das TRÊS bibliotecas em uso no repo para a mesma
+#     verificação (stdlib aqui e no config-api, PyJWT em três serviços, `python-jose`
+#     no auth-api). Divergência 1 da tabela.
+#   · `_check_config_field` com `.get(min_access, 0)` — divergência 4: um `min_access`
+#     digitado errado virava rank 0 e QUALQUER grant não-`none` passava. O canônico
+#     levanta `ValueError`.
+#
+# DUAS MUDANÇAS DE COMPORTAMENTO, ambas decididas (D6, 2026-08-28):
+#
+#   1. credencial AUSENTE agora é **401**, não 403. Este serviço era o outlier
+#      (divergência 5): o config-api já devolvia 401. São perguntas diferentes — "não
+#      sei quem é" × "sei, e não pode" — e colapsá-las apaga a distinção justamente no
+#      log de quem investiga acesso negado. Medido antes de trocar: a UI não tem
+#      interceptor global de 401 (o refresh é agendado por expiração em
+#      `AuthContext.tsx`, não disparado por resposta), então não há loop de logout.
+#   2. a mensagem dizia `config.plataforma`; o campo em `infra/modules.yaml` é
+#      **`platform`**. O gate sempre conferiu `platform` — só o texto mentia, e mandava
+#      quem tomou 403 procurar um grant inexistente.
 def require_admin(
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> None:
-    expected = settings.admin_token
-    if not expected:
-        return  # auth desabilitada (deploy interno)
-    x_admin = request.headers.get("X-Admin-Token") or request.headers.get("x-admin-token")
-    if x_admin == expected:
-        return  # admin-token (seed_pricing / sistema)
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=403, detail="missing admin token or Bearer")
-    if not getattr(settings, "jwt_secret", ""):
-        raise HTTPException(status_code=503, detail="jwt secret not configured")
-    claims = _verify_hs256(auth[len("Bearer "):], settings.jwt_secret)
-    if not _check_config_field(claims, "platform", "read_write"):
-        raise HTTPException(status_code=403, detail="forbidden: requires config.plataforma (read_write)")
+    enforce_write(
+        request=request,
+        admin_token=settings.admin_token,
+        jwt_secret=getattr(settings, "jwt_secret", ""),
+        module="config",
+        field="platform",
+        what="escrita de pricing/billing",
+    )
 
 
 # ─── Invoice ──────────────────────────────────────────────────────────────────

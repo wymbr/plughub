@@ -226,7 +226,8 @@ class TestResources:
                 json={"resource_type": "ai_agent", "quantity": 5},
                 headers={"X-Admin-Token": "wrong"},
             )
-            assert r.status_code == 403
+            # 403 -> 401 em 2026-08-28 (D6): credencial errada nao identifica ninguem.
+            assert r.status_code == 401
         finally:
             app.dependency_overrides.pop(router_get_settings, None)
 
@@ -302,13 +303,21 @@ class TestAdminGate:
 
     _WRITE = ("/v1/pricing/reserve/t1/peak_pool/activate", {})
 
-    def test_no_credential_is_403(self, gated_client):
-        r = gated_client.post(self._WRITE[0])
-        assert r.status_code == 403
+    def test_no_credential_is_401(self, gated_client):
+        """401, nao 403 — mudou em 2026-08-28 com a migracao para `plughub_authz` (D6).
 
-    def test_wrong_admin_token_is_403(self, gated_client):
+        Este servico era o OUTLIER: o config-api, gate gemeo, ja devolvia 401. Sao
+        perguntas diferentes — "nao sei quem e" x "sei, e nao pode" — e colapsa-las
+        apaga a distincao justamente no log de quem investiga acesso negado.
+        """
+        r = gated_client.post(self._WRITE[0])
+        assert r.status_code == 401
+
+    def test_wrong_admin_token_is_401(self, gated_client):
+        """Admin-token errado nao e atalho: cai no caminho Bearer, que sem credencial
+        responde 401 (o token de admin invalido nao IDENTIFICA ninguem)."""
         r = gated_client.post(self._WRITE[0], headers={"X-Admin-Token": "chute"})
-        assert r.status_code == 403
+        assert r.status_code == 401
 
     @patch("plughub_pricing_api.router.pricing_db.set_reserve_active", new_callable=AsyncMock)
     @patch("plughub_pricing_api.router.pricing_db.record_activation", new_callable=AsyncMock)
@@ -321,10 +330,22 @@ class TestAdminGate:
 
     @patch("plughub_pricing_api.router.pricing_db.set_reserve_active", new_callable=AsyncMock)
     @patch("plughub_pricing_api.router.pricing_db.record_activation", new_callable=AsyncMock)
-    def test_bearer_with_config_plataforma_passes(self, mock_record, mock_set, gated_client):
+    def test_bearer_with_config_platform_passes(self, mock_record, mock_set, gated_client):
+        """Controle positivo do caminho Bearer.
+
+        ⚠️ Estava VERMELHO desde sempre, e a causa nao era o gate: o teste concedia
+        `config.plataforma` (portugues), e o campo declarado em `infra/modules.yaml` —
+        e conferido pelo codigo — sempre foi `platform`. O gate estava certo; o teste
+        documentava um grant que nao existe. O que sustentava a confusao era a MENSAGEM
+        de erro do proprio gate, que dizia "requires config.plataforma" e mandava quem
+        tomasse 403 procurar um campo inexistente. Corrigidos os dois em 2026-08-28.
+
+        Medido antes de mexer: rodando o `router.py` do HEAD dentro do container, este
+        caso ja falhava — logo nao e regressao da migracao.
+        """
         mock_set.return_value    = 2
         mock_record.return_value = MOCK_LOG
-        tok = _bearer({"config": {"plataforma": {"access": "read_write"}}})
+        tok = _bearer({"config": {"platform": {"access": "read_write"}}})
         r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 200
 
@@ -334,8 +355,12 @@ class TestAdminGate:
         assert r.status_code == 403
 
     def test_bearer_read_only_is_403(self, gated_client):
-        """`plataforma` em `read_only` lê, não escreve — rank 1 < 2."""
-        tok = _bearer({"config": {"plataforma": {"access": "read_only"}}})
+        """`platform` em `read_only` lê, não escreve — rank 1 < 2.
+
+        (Este passava por ACIDENTE antes: com o campo em portugues o grant nunca era
+        encontrado, entao o 403 vinha de "sem grant", nao de "grant insuficiente" — o
+        teste afirmava o codigo certo pela razao errada.)"""
+        tok = _bearer({"config": {"platform": {"access": "read_only"}}})
         r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 403
 

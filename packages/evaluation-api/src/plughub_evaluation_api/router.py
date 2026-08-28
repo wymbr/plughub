@@ -67,9 +67,9 @@ from typing import Any
 
 import asyncpg
 import httpx
-import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from plughub_authz import abac_can, bearer_from_header, resolve_scope, verify_user_jwt
 from pydantic import BaseModel, Field, model_validator
 
 from .config import settings
@@ -100,82 +100,82 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
+# O decode é o CANÔNICO desde 2026-08-28 (passo 6, o último da consolidação). Saiu
+# daqui o `pyjwt.decode` local — este arquivo era a última das SEIS implementações a
+# ainda decodificar por conta própria — e o `_ACCESS_RANK`, que era a quinta cópia da
+# tabela de rank.
+#
+# Uma perda declarada: o 401 dizia `invalid token: {exc}`, ecoando o texto da exceção
+# do PyJWT. O canônico devolve `None` e LOGA o motivo (`authz: JWT inválido: …`), então
+# a razão continua existindo — do lado de quem opera, não do lado de quem apresentou o
+# token. Devolver detalhe de parse a um chamador não autenticado nunca foi requisito.
+
+
 def _decode_jwt(request: Request) -> dict[str, Any]:
-    """Decode HS256 Bearer JWT; return payload with at least 'sub' and 'roles'."""
-    auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer "):
+    """Bearer obrigatório. 401 nomeado; exige `sub` (identidade sem sujeito não serve)."""
+    token = bearer_from_header(request.headers.get("authorization"))
+    if not token:
         raise HTTPException(status_code=401, detail="missing Bearer token")
-    token = auth[7:]
-    try:
-        payload = pyjwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-    except pyjwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail=f"invalid token: {exc}")
+    payload = verify_user_jwt(token, settings.jwt_secret)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="invalid or expired token")
     if "sub" not in payload:
         raise HTTPException(status_code=401, detail="token missing 'sub' claim")
     return payload
 
 
 def _decode_jwt_optional(request: Request) -> dict[str, Any] | None:
-    """Decode Bearer JWT if present; return None if absent (no error)."""
-    auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer "):
-        return None
-    token = auth[7:]
-    try:
-        payload = pyjwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-        return payload
-    except pyjwt.PyJWTError:
-        return None
+    """Bearer opcional: ausente OU inválido → `None`, sem erro.
 
-
-_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+    ⚠️ Não é o mesmo que o irmão acima com `try`: aqui o token inválido é
+    INDISTINGUÍVEL do ausente por decisão — é a postura anônima desta API, declarada em
+    `_has_any_evaluation_access`, e ela é do EIXO de demo, não do de autorização.
+    """
+    token = bearer_from_header(request.headers.get("authorization"))
+    if not token:
+        return None
+    return verify_user_jwt(token, settings.jwt_secret)
 
 
 def _check_abac_permission(
     jwt_payload: dict[str, Any],
     field: str,
     pool_id: str | None = None,
-    min_access: str | None = None,
+    min_access: str = "read_only",
 ) -> bool:
     """
-    Check ABAC permission from module_config JWT claim.
+    ABAC de `module_config.evaluation.{field}`, com o `scope` do grant.
 
-    field:   'revisar'   → can the caller perform human review?
-             'contestar' → can the caller file a contestation?
-             'curar'     → can the caller curate/calibrate evaluations?
-    pool_id: if the campaign is scoped to a pool, pass it to enforce scope.
-    min_access: optional minimum access level required ('read_only' | 'read_write').
-             When None (default) any non-'none' grant passes (legacy behavior).
-             When set, the grant's access rank must be >= the required rank — so a
-             read_only grant does NOT satisfy a read_write write endpoint.
+    field:   'revisar'   → pode revisar (humano)?
+             'contestar' → pode contestar?
+             'curar'     → pode curar/calibrar?
+    pool_id: pool da campanha, quando ela é escopada. `None` = a campanha NÃO nomeia
+             pool (sai de `campaign.pool_id`), não "esqueci de passar".
 
-    Graceful degradation: if module_config is absent (legacy token) → allow,
-            EXCEPT for grant-first endpoints (min_access set): there an empty config
-            means "no grant" → deny (consistent with the strict nav gating).
-    Scope: if scope list is empty → global access → allow.
-            if scope list is non-empty → pool_id must be in the list.
+    ── DUAS mudanças em 2026-08-28 (passo 6, o último da consolidação) ────────────
+    **(1) É um wrapper sobre `plughub_authz.abac_can`.** A lógica de escopo — inclusive
+    o alias `pool:x` × `x` — foi para o canônico (D2), porque `modules.yaml` declara
+    `scope_type: pool` nos 7 campos de `evaluation` e a UI já manda `scopeId`: deixar o
+    recorte só aqui garantia divergência tela×API no primeiro consumidor novo. Medido
+    antes de mover: **zero** usuários com `scope` não-vazio hoje — o momento mais barato.
+
+    **(2) O RAMO LEGADO FECHOU.** `min_access` era `str | None`, e `None` significava
+    *"token sem `module_config` → LIBERA"*. Quatro dos seis call sites usavam esse modo,
+    e dois deles são os endpoints de **revisão** e **contestação** — decisões de
+    qualidade sobre pessoas.
+
+    O que tornava isso insustentável não era a política, era a CONTRADIÇÃO interna: o
+    mesmo serviço já fechara o mesmo ramo para o transcript em 2026-08-27
+    (`_can_view_transcript`). Um token vazio **não podia LER** a conversa e **podia
+    DECIDIR** sobre ela. Duas respostas para *"config vazio autoriza?"* dentro do mesmo
+    arquivo é o estado em que a mais permissiva vale.
+
+    Contado antes de fechar, na instalação de demo: **um** portador de `module_config`
+    vazio — `probe@plughub.local`, a fixture do probe grant-first, criada para não ter
+    grant. Custo real: zero. Em instalação com usuários ativos sem grants, o caminho é
+    **backfill** com `presets.build_module_config`, nunca manter a porta.
     """
-    module_config = jwt_payload.get("module_config", {})
-    if not module_config:
-        # Legacy token with no module_config:
-        #  - legacy callers (min_access None) → degrade to allow (back-compat)
-        #  - grant-first callers (min_access set, e.g. curar) → deny (no grant)
-        return min_access is None
-    field_config = module_config.get("evaluation", {}).get(field, {})
-    access = field_config.get("access", "none")
-    if access == "none":
-        return False
-    if min_access is not None and _ACCESS_RANK.get(access, 0) < _ACCESS_RANK.get(min_access, 0):
-        return False
-    scope: list[str] = field_config.get("scope", [])
-    if not scope:
-        # Empty scope = global access
-        return True
-    if pool_id:
-        # Scope list contains entries like "pool:retencao_humano"
-        return f"pool:{pool_id}" in scope or pool_id in scope
-    # No pool_id to check against → accept if any scope is present
-    return True
+    return abac_can(jwt_payload, "evaluation", field, min_access, pool_id)
 
 
 def _require_evaluation_field(
@@ -435,19 +435,14 @@ def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None
 #   2. claim `unrestricted` = true → irrestrito EXPLÍCITO;
 #   3. senão → irrestrito LEGADO, **contado** (some no passo 3).
 def _scope_from_claims(jwt_payload: dict, origem: str) -> list[str] | None:
-    """`None` = sem restrição de pool; lista = domínio."""
-    raw = (jwt_payload.get("accessible_pools") if jwt_payload else None) or []
-    if raw:
-        return list(raw)
-    if jwt_payload and jwt_payload.get("unrestricted") is True:
-        return None
-    logger.warning(
-        "eval scope(%s): irrestrito por LEGADO_POOLS_VAZIO — accessible_pools vazio e "
-        "sem claim `unrestricted`. claim_presente=%s sub=%s",
-        origem, bool(jwt_payload) and "unrestricted" in jwt_payload,
-        (jwt_payload or {}).get("sub", ""),
-    )
-    return None
+    """`None` = sem restrição de pool; lista = domínio.
+
+    Delega ao canônico desde 2026-08-28. Era uma das TRÊS cópias (com
+    `analytics-api/pool_auth.py` e `channel-gateway/auth.py`), consolidada ANTES do
+    passo 3 do plano de `accessible_pools` — o passo que inverte o significado de `[]`
+    e que, aplicado a duas das três, seria vazamento de escopo que degrada mudo.
+    """
+    return resolve_scope(jwt_payload, "eval:" + origem)
 
 
 def _compute_result_scope(

@@ -1100,20 +1100,66 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
 
 ## Security — Section 9.5
 
-**UM verificador de JWT+ABAC, e ele é `packages/py-authz`.** *(2026-08-27.)* Todo portão novo que
-precise responder *"este chamador pode?"* a partir de um JWT do auth-api usa `plughub_authz`
-(`verify_user_jwt` · `abac_can` · `enforce_write`) — nunca uma cópia. A regra é medida, não
+**UM verificador de JWT+ABAC, e ele é `packages/py-authz`.** *(2026-08-27; a migração dos seis
+foi concluída em 2026-08-28.)* Todo portão que responde *"este chamador pode?"* a partir de um JWT
+do auth-api usa `plughub_authz` (`verify_user_jwt` · `abac_can` · `bearer_from_header` ·
+`enforce_write` · `resolve_scope`/`pool_in_scope`) — nunca uma cópia. **`abac_can` também decide o
+recorte de CAPACIDADE por pool** (parâmetro `scope_id`, com o alias `pool:x` × `x` normalizado numa
+casa só): é eixo distinto do `resolve_scope`, que recorta LINHAS de relatório. A regra é medida, não
 estética: quando ela foi escrita já existiam **seis** implementações independentes, e elas
 **divergiam em seis pontos** (biblioteca; ordem de acesso, onde `analytics-api/audit.py` trata
 `write_only` como maior que `read_only` e os outros os colapsam; `module_config` vazio, que a
 `evaluation-api` LIBERA no ramo legado; `min_access` desconhecido, que em três serviços vira rank
 0 e deixa **qualquer** grant passar; 401 × 403 para credencial ausente; e quatro posturas
 distintas para segredo ausente). Tabela completa no cabeçalho do pacote.
-**O agravante que dá o nome à regra:** `channel-gateway/auth.py:6-9` já *prometia no docstring*
+**O agravante que dá o nome à regra:** `channel-gateway/auth.py` já *prometia no docstring*
 ser o ponto compartilhado, e cinco serviços reimplementaram — promessa sem mecanismo, a mesma
 família do DDL de `participation_intervals`. Gate `infra/test/probe_authz_single_verifier.sh`
 (reprova a sétima cópia; a migração dos seis é dívida registrada no `TODO.md`, **não** exigida
-pelo gate).
+pelo gate). *Aquele arquivo migrou no passo 3 (2026-08-28) e hoje é camada fina — deixou de ser
+cópia depois de deixar de mentir, nessa ordem; a inversa teria sido cosmética.* **Linha de base do
+gate: 7 arquivos em 6 serviços → 1**, e esse 1 é o EMISSOR (`auth-api/jwt_utils.py`), que fica com
+`python-jose` por decisão — quem assina e quem confere têm de ser cada um o seu lado. **A linha de
+base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
+
+> **Ao mover uma fronteira de autorização, MEÇA o que a cerca antes de confiar no verde.** Em
+> **cinco dos sete passos** deste arco os testes ao redor da fronteira estavam para trás — campo ABAC
+> em português que nunca existiu (pricing/config), portão de resume sem teste nenhum
+> (channel-gateway), nada atravessando a rota (analytics), 17 vermelhos herdados de um split
+> anterior (auth-api), a porta de autenticação descoberta (evaluation). Em **três** deles quem
+> revelou foi a **bateria de mutação**, não a suíte. E o modo de falha é sempre o mesmo: *o vermelho
+> de um controle POSITIVO parece proteção*, que é justamente o que se queria ver. Corolário: ao
+> fechar um portão, escreva o caso que prova que ele **deixa alguém passar** — o negativo sozinho
+> passa pelo motivo errado.
+
+> **Ramo legado de autorização morre CONTADO, nunca por decreto nem por inércia** *(passo 6)*. A
+> `evaluation-api` liberava revisão e contestação a token com `module_config` vazio, e o que tornou
+> isso insustentável não foi a política — foi a **contradição interna**: o mesmo serviço já negava o
+> transcript ao mesmo token desde 2026-08-27, então ele *não podia LER* a conversa e *podia DECIDIR*
+> sobre ela. **Duas respostas para a mesma pergunta dentro do mesmo arquivo significam que a mais
+> permissiva é a que vale.** Antes de fechar, contou-se a população: **um** portador na instalação, a
+> fixture do probe grant-first. Onde houver usuário ativo sem grants, o caminho é **backfill** com
+> `presets.build_module_config`, nunca manter a porta.*
+
+> **São DOIS verificadores, e o segundo passou meses sem mecanismo** *(consolidado 2026-08-28)*.
+> `abac_can` responde *"quais FUNÇÕES posso exercer"*; o resolvedor de **escopo de pool**
+> (`resolve_scope` · `pool_in_scope`) responde *"quais LINHAS/POOLS eu alcanço"*. Eixos
+> independentes — confundi-los é o defeito que fez o claim `unrestricted` liberar o menu, corrigido
+> no mesmo dia em que nasceu. O de escopo tinha **três** cópias (`analytics-api/pool_auth.py`,
+> `channel-gateway/auth.py`, `evaluation-api/router.py`), todas com o marcador
+> `LEGADO_POOLS_VAZIO`, e **o probe não contava nenhuma**: ele conta quem DECODIFICA JWT, e essas
+> três só consomem claims já decodificados. **Regra derivada: um censo desenhado para um eixo não
+> prova nada sobre o eixo vizinho** — a cobertura tem de ser afirmada por eixo, nunca herdada.
+>
+> A urgência era o **passo 3** do plano de `accessible_pools`, que inverte o significado de `[]`
+> (hoje "todos", depois "nenhum"): inversão aplicada a duas das três cópias é vazamento de escopo
+> que degrada **mudo**. Hoje o interruptor é único (`LEGACY_EMPTY_MEANS_UNRESTRICTED`), com a
+> tabela-verdade dos **dois** estados escrita. ⚠️ O que o passo 3 ainda terá de auditar por call
+> site: depois da inversão `resolve_scope` devolve `[]`, e todo consumidor que fizer
+> `if not pools: <sem filtro>` transforma restrição geral em **liberação** geral.
+> Gate: C4 do mesmo probe, via `infra/test/_scope_resolver_census.py` — que é AST, não `grep`,
+> porque `grep` acusava os sete produtores do auth-api (o emissor **escreve** os campos; escrever
+> não é decidir o que a ausência significa).
 
 **Escrita de config exige portão; LEITURA de config nem sempre — e isso é decidido, não
 omitido.** `calendar-api` e `dialog-api` gateiam escrita (`config.calendars` / `config.dialog_forms`,
@@ -1447,12 +1493,24 @@ MCP tool `agent_event(category, value, tags?)` para agentes publicarem KPIs de n
 Módulo ABAC `audit` para DPO/compliance — ortogonal às roles existentes. Qualquer usuário com `module_config.audit.*` no JWT tem acesso escalonado. Cinco campos: `sessions`, `mcp_calls`, `user_access`, `data_requests`, `config_snapshot` — os dois primeiros ativos.
 
 **analytics-api** tem dois endpoints em `/v1/audit`: `GET /sessions/{id}/messages` e `GET /mcp-calls`.
-Gate `_check_audit_access(request, field)` (`audit.py`) — quatro ramos declarados: `analytics_open_access`
-LIBERA nomeando o ator como `open_access`; **sem `auth_jwt_secret` RECUSA** (postura oposta à do
-`pool_auth`, que degrada aberto: lá é escopo de leitura, aqui é dado pessoal); `module_config.audit.{sessions|mcp_calls}`
-≥ `read_only` LIBERA; senão 403. **Usa PyJWT (`import jwt`), nunca `python-jose`** — as duas convivem no
-repo e `jose` não está neste container; o import errado só falharia com o bypass DESLIGADO, isto é, só em
-produção. Ambos gravam `audit_access_log` **inclusive na recusa**.
+Gate `_check_audit_access(request, field)` (`audit.py`) — **cinco** ramos declarados, cada um com o seu
+código: `analytics_open_access` LIBERA nomeando o ator como `open_access`; **sem `auth_jwt_secret` → 503**
+(falha do SERVIÇO — postura oposta à do `pool_auth`, que degrada aberto: lá é escopo de leitura, aqui é
+dado pessoal); credencial ausente ou não verificável → **401**; `module_config.audit.{sessions|mcp_calls}`
+≥ `read_only` LIBERA; senão **403**, e a recusa **nomeia quem foi barrado**. O verificador é o CANÔNICO
+(`plughub_authz`) desde 2026-08-28 — a lista indexada local, onde `write_only` era maior que `read_only`,
+saiu com ele. **Nunca `enforce_write` aqui:** ele responde direto, e esta casa precisa GRAVAR antes de
+responder.
+
+> **A trilha só vale se a recusa também for gravada — e a sem credencial não era** *(fechado
+> 2026-08-28)*. As duas rotas carregavam `optional_pool_principal` só pelo `tenant_id` (o
+> `accessible_pools` nunca foi lido: auditoria é ortogonal a pool). Sendo `Depends`, o `401` dela era
+> levantado **antes do corpo do handler**, então `_record_access` nunca rodava — e o banner da tela
+> prometia que todo acesso fica registrado. **Regra derivada: portão que decide dentro de um `Depends`
+> não pode ter efeito colateral no handler**; se a recusa precisa gravar, ela decide onde grava. Hoje a
+> identidade sai do próprio portão. Gate: `infra/test/probe_audit_surface.sh` (P4) +
+> `tests/test_audit_handler_trail.py` — este último nasceu porque uma mutação (`status_code=denied.status`
+> → `403`) sobreviveu a 23 testes verdes: eles cobriam o VEREDICTO, e nada atravessava a rota.
 
 > ⚠️ **Corrigido 2026-08-22 por medição.** Esta seção afirmava `_require_audit_access()` e o dual-write
 > `[timeline_row, mcp_audit_log_row]` como entregues (CHANGELOG de 2026-05-14). **Nada disso existia na

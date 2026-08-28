@@ -18,6 +18,7 @@ from typing import Annotated, Any
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from jose import JWTError
+from plughub_authz import abac_can
 
 from . import db as db_mod
 from . import presets as presets_mod
@@ -70,17 +71,18 @@ def _settings() -> Settings:
 # (read_only p/ GET, read_write p/ mutação). Strict: sem fallback de admin-token.
 # O bootstrap (seed_auth) minta um Bearer próprio assinado com o jwt_secret.
 
-_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
-
-
-def _check_config_field(claims: dict[str, Any], field: str, min_access: str) -> bool:
-    """ABAC: `module_config.config.{field}` >= min_access. Grant-first (ausência = deny)."""
-    mc = claims.get("module_config") or {}
-    fc = (mc.get("config") or {}).get(field) or {}
-    access = fc.get("access", "none")
-    if access == "none":
-        return False
-    return _ACCESS_RANK.get(access, 0) >= _ACCESS_RANK.get(min_access, 0)
+# O verificador é o CANÔNICO desde 2026-08-28 (passo 5 da consolidação). Saíram daqui
+# o `_ACCESS_RANK` (quarta cópia da mesma tabela de rank no repositório) e o
+# `_check_config_field`, cujo `.get(min_access, 0)` era a divergência 4: um `min_access`
+# digitado errado virava rank 0 e QUALQUER grant não-`none` passava. Inerte hoje — os
+# três call sites passam literais —, e é por isso que valia fechar antes do quarto.
+#
+# ⚠️ O que NÃO migrou, e a razão: `jwt_utils.py` continua com `python-jose`. Este
+# serviço é o EMISSOR do token; quem assina e quem confere têm de ser a mesma
+# biblioteca, e o canônico verifica com PyJWT. Trocar o emissor por simetria seria
+# mexer na assinatura de toda a plataforma para arrumar a estética de um import. (D4.)
+# O `from jose import JWTError` no topo é só o tipo de exceção que `decode_access_token`
+# levanta — não é um segundo decodificador.
 
 
 def _require_config(field: str, write: bool):
@@ -88,7 +90,7 @@ def _require_config(field: str, write: bool):
     async def _dep(request: Request, settings: Settings = Depends(_settings)) -> dict[str, Any]:
         claims = await _bearer_claims(request, settings)
         need = "read_write" if write else "read_only"
-        if not _check_config_field(claims, field, need):
+        if not abac_can(claims, "config", field, need):
             raise HTTPException(
                 status_code=403,
                 detail=f"forbidden: requires config.{field} ({need})",
@@ -134,7 +136,7 @@ def _assert_may_grant(claims: dict[str, Any], sent: set[str], acao: str) -> None
     tocados = sorted(sent & _CAPACITY_FIELDS)
     if not tocados:
         return
-    if not _check_config_field(claims, "permissions", "read_write"):
+    if not abac_can(claims, "config", "permissions", "read_write"):
         raise HTTPException(
             status_code=403,
             detail=(
@@ -150,7 +152,7 @@ def _assert_may_touch(claims: dict[str, Any], alvo: dict[str, Any], acao: str) -
     Sem esta regra o split nao entrega o que promete — o supervisor redefine a senha
     do admin (campo de PESSOA, permitido) e entra como admin.
     """
-    if _is_privileged(alvo) and not _check_config_field(claims, "permissions", "read_write"):
+    if _is_privileged(alvo) and not abac_can(claims, "config", "permissions", "read_write"):
         raise HTTPException(
             status_code=403,
             detail=(

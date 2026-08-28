@@ -2,6 +2,425 @@
 
 ---
 
+## Verificador canônico: os SEIS viraram UM — arco completo, passos 0–6 (2026-08-28)
+
+**Arco completo.** Os seis verificadores independentes de *"JWT + `module_config`"* — que
+já haviam divergido em seis pontos medidos — passaram a ser um. Linha de base do gate:
+**7 arquivos em 6 serviços → 1**, e esse 1 é o **emissor** (`auth-api/jwt_utils.py`), que
+fica por decisão: quem assina com `python-jose` e quem verifica com PyJWT têm de ser cada
+um o seu lado, e trocar o emissor por simetria mexeria na assinatura de toda a plataforma.
+
+Os passos 0 e 1 são **pré-requisito**, não migração de serviço: um fixa o comportamento do
+pacote, o outro fecha um eixo que estava a ponto de divergir. Os passos 2 a 6 migram
+serviços (config+pricing; channel-gateway; analytics; auth-api; evaluation).
+
+### O padrão que apareceu em CINCO dos sete passos
+
+Não estava no plano, e é o achado mais reaproveitável do arco: **toda vez que uma mudança
+move uma fronteira de autorização, os testes que a cercam ficam para trás — e o vermelho
+de um controle positivo parece proteção.**
+
+| onde | o que estava descoberto | como apareceu |
+|---|---|---|
+| pricing + config (p2) | 4 controles positivos concediam campos em português que nunca existiram | os negativos passavam pelo motivo errado |
+| channel-gateway (p3) | **zero** testes no portão A5/E2 do resume | medição prévia |
+| analytics (p4) | nada atravessava a rota — só o veredicto | mutação sobrevivente |
+| auth-api (p5) | 17 vermelhos do split de 27-08; `build_module_config` sem teste | HEAD + mutação sobrevivente |
+| evaluation (p6) | `_decode_jwt`, a porta de autenticação do serviço | duas mutações sobreviventes |
+
+Em três dos cinco o instrumento que revelou foi a **bateria de mutação**, não a suíte. Um
+verde só vale depois de responder *"o que o faria ficar vermelho?"*.
+
+### D1 — o pacote canônico tinha ZERO teste
+
+Ele nasceu com dois consumidores e nenhuma tabela-verdade. Isso não era lacuna enquanto era um
+ponto de extração recente; passou a ser no momento em que seis serviços seriam postos para
+depender dele. *Um verificador compartilhado sem tabela-verdade própria não é "um lugar só" — é
+seis comportamentos que agora mudam juntos, sem ninguém saber quais são.*
+
+`packages/py-authz/tests/` — **70 casos**, um grupo por divergência medida entre as seis
+implementações. Mutação de controle (verde só vale se puder ficar vermelho):
+
+| reversão plantada | reprovou |
+|---|---|
+| `write_only` volta a ser > `read_only` (a ordem da analytics) | 2 |
+| `min_access` desconhecido volta a `.get(…, 0)` | 5 |
+| portão desabilitado deixa de avisar (`warning`→`debug`) | 1 |
+| `unrestricted` por truthiness em vez de `is True` | 4 |
+| ramo legado deixa de avisar | 2 |
+| `unrestricted` checado ANTES da lista (alargamento) | 1 |
+
+A asserção sobre **log** é a mais importante da suíte: um portão inerte que não avisa é
+indistinguível de um portão — foi assim que a `calendar-api` aceitou `POST /v1/calendars`
+anônimo até 2026-08-27.
+
+### D3 — havia um SEGUNDO verificador, com TRÊS cópias e nenhum mecanismo
+
+`abac_can` responde *"quais funções posso exercer"*. O resolvedor de **escopo de pool** responde
+*"quais linhas/pools eu alcanço"* — eixo independente, e havia três implementações dele:
+`analytics-api/pool_auth.py:153`, `channel-gateway/auth.py:67`, `evaluation-api/router.py:437`,
+todas com o marcador `LEGADO_POOLS_VAZIO`.
+
+**O `probe_authz_single_verifier.sh` não contava nenhuma**: ele conta quem DECODIFICA JWT e lê
+`module_config`, e estas três só consomem claims já decodificados. Sobre este eixo não havia
+mecanismo nenhum.
+
+E o prazo não era estético: o **passo 3** do plano de `accessible_pools` inverte o significado de
+`[]` (hoje "todos", depois "nenhum"). Inversão aplicada a duas das três cópias é vazamento de
+escopo que **degrada mudo** — ninguém recebe erro, o relatório só mostra linhas a mais.
+Consolidar antes transforma o passo 3 em edição de **uma linha, num arquivo**
+(`LEGACY_EMPTY_MEANS_UNRESTRICTED`), com a tabela-verdade dos **dois** estados já escrita.
+
+O que NÃO foi para o canônico: os espelhos `-int` da analytics (acesso derivado `p` → `p-int`)
+ficam nela — nenhum outro serviço tem fila interna.
+
+### O censo do C4 mediu a proposição errada DUAS vezes antes de acertar
+
+O critério novo do probe não é um `grep`, e a razão é a regra de método do CLAUDE.md — *um
+instrumento pode ser falseável, ramificado e honesto e ainda medir a proposição ADJACENTE*:
+
+| critério | acusava | por quê era errado |
+|---|---|---|
+| menciona `unrestricted` + `accessible_pools` | 7 funções do auth-api | são o **emissor** — escrevem os campos no token |
+| …+ ramifica em `unrestricted` | `db.py:update_user` | `if unrestricted is not None` é patch parcial, não decisão de escopo |
+| …+ só chave **literal** (não `ast.Name`) | nada | o resolvedor LÊ claims; os produtores usam PARÂMETROS |
+
+Publicar qualquer das duas primeiras seria publicar defeito que não existe. O discriminador
+final está em `infra/test/_scope_resolver_census.py`, e ele foi provado falseável plantando uma
+sétima cópia (pegou) e removendo (limpou).
+
+### Evidência
+
+- 70/70 em `py-authz`; **646** analytics-api, **680** channel-gateway, **216** evaluation-api —
+  todas verdes após a migração (o escopo é behavior-preserving por construção).
+- Ao vivo, três tokens contra `/reports/sessions`: o log traz `authz scope(header)` (prefixo
+  canônico) e **uma** linha de legado para três requisições — só a do token sem recorte.
+  Testemunha negativa valendo em produção, não só em unit test.
+- `probe_authz_single_verifier.sh` VERDE com C2/C3 estendidos a 5 consumidores + **C4** novo.
+
+### Passo 2 — `config-api` + `pricing-api` migrados (mesmo dia)
+
+Os dois portões de escrita quase byte-idênticos passaram a `plughub_authz.enforce_write`.
+Saíram de cada um: `_verify_hs256` (HMAC em stdlib — uma das TRÊS bibliotecas que faziam a
+mesma verificação no repo) e `_check_config_field` com `.get(min_access, 0)`, que fazia um
+`min_access` digitado errado virar rank 0 e qualquer grant não-`none` passar.
+
+**Duas mudanças decididas (D6):** credencial ausente na `pricing-api` passa de **403 → 401**
+(o `config-api`, gate gêmeo, já devolvia 401); e o `?admin_token=` em query string do
+`config-api` **saiu** (D5) — um único chamador, e era teste. Segredo em query string entra em
+log de acesso, log de proxy e histórico de browser.
+
+**Dois vermelhos PRÉ-EXISTENTES caíram junto, e eram o mesmo defeito.** Os testes e o smoke
+concediam campos ABAC em **português** — `config.plataforma`, `config.canais` — que nunca
+existiram: `infra/modules.yaml` sempre declarou `platform` e `channels`, e o código sempre
+conferiu os nomes em inglês (regra de linguagem do CLAUDE.md). Consequência medida: **os
+quatro controles POSITIVOS do caminho Bearer estavam vermelhos** — nenhum dos dois gates
+tinha prova de que deixa alguém passar. Os negativos passavam por acidente: sem o grant, o
+403 vinha de *"campo ausente"*, não de *"campo errado"*, que é a proposição que a linha
+afirma medir. Ambos medidos contra o HEAD dentro do container antes de mexer, para separar
+regressão de dívida herdada. A mensagem de erro do gate da pricing (*"requires
+config.plataforma"*) alimentava a confusão e foi corrigida junto.
+
+Evidência: `config-api` 29/29, `pricing-api` **53/53** (era 49 + 4 vermelhos),
+`smoke_config_write_auth.sh` **todo verde pela primeira vez**. Linha de base do
+`probe_authz_single_verifier.sh` encolheu de 7 arquivos/6 serviços para **5/4**, com a data
+da saída registrada no próprio probe.
+
+### Passo 3 — `channel-gateway`: o arquivo que PROMETIA deixou de ser cópia
+
+`verify_user_jwt`, `abac_can`, `_ACCESS_ORDER` e `bearer_from_header` saíram de
+`channel-gateway/auth.py`, que virou camada fina — sobraram só os dois nomes que são fato do
+serviço (o wrapper que carimba a origem no log de escopo e o helper de log da lista crua).
+O `main.py` importa **direto** de `plughub_authz`: um re-export deixaria `auth.py` parecendo
+dono do verificador, que é exatamente a aparência que criou as seis cópias.
+
+Este é o arquivo cujo docstring **prometia** ser o ponto compartilhado enquanto cinco serviços
+reimplementavam. Ele deixou de ser cópia depois de deixar de mentir — a ordem inversa teria
+sido cosmética.
+
+**A divergência 4 fechou.** O `abac_can` local fazia `_ACCESS_ORDER.get(min_access, 1)`: um
+`min_access` digitado errado virava rank 1 e qualquer grant `read_only` para cima passava. Era
+**inerte hoje** (o único call site passa o literal `"write_only"`) — e é por isso que valia
+fechar antes de existir o segundo call site.
+
+#### O verde de 680 testes não podia ficar vermelho
+
+A medição prévia devolveu **zero** testes tocando as três funções migradas **ou** o call site
+(`main._resolve_approver_principal`, o portão A5/E2 do resume interno). Aceitar as 680 verdes
+seria aceitar cobertura que não exercita nada do que mudou — a família *"um teste que não pode
+reprovar é pior que teste nenhum"*, num portão de autorização.
+
+`tests/test_approver_principal_authz.py` — **19 casos** sobre as três classes de saída
+(`None` = externo/sistema · dict = humano possessed · 403). Mutação de controle, **8 de 8
+pegas**:
+
+| reversão plantada | reprovou |
+|---|---|
+| portão ABAC removido (`required_abac` ignorado) | 6 |
+| `pool_in_scope` sempre True | 3 |
+| assinatura não verificada (`verify_signature: False`) | 2 |
+| endurecer form-fill (exigir ABAC sempre) | 2 |
+| sem segredo finge `possessed` | 1 |
+| degradação sem segredo fica MUDA | 1 |
+| `tenant` mismatch ignorado | 1 |
+| `instance_id` mismatch ignorado | 1 |
+
+A testemunha que mais importa é `test_form_fill_generico_passa_SEM_grant_nenhum`: com
+`required_abac=None` (wrap-up) o portão **não exige grant**, porque quem autoriza é o binding
+do claim, conferido depois no `handle_resume`. Endurecer "por simetria" faria todo agente de
+wrap-up tomar 403 — e é a mudança que parece certa lendo só a função.
+
+**Fato pinado, não defeito:** o call site pede `write_only`, e `read_only` colapsa no mesmo
+rank — logo passaria. Não é vivo porque `infra/modules.yaml` declara `approvals.decide` com
+domínio `[none, read_write]` e `auth-api/db.py:661` **recusa** gravar access fora do domínio.
+O teste existe para que, se alguém alargar o domínio do campo, se lembre de que o portão pede
+o grau lateral e não `read_write`.
+
+Evidência: **699/699** no channel-gateway (680 + 19), rodados contra a **imagem reconstruída**,
+não sobre `docker cp` — e com verificação de identidade (`main.abac_can is
+plughub_authz.abac_can`), que é o que separa *"importou"* de *"é o mesmo objeto"*.
+`probe_resume_approver_authz.sh` VERDE (parcial por desenho — a metade comportamental precisa
+de aprovação suspensa; a nova suíte cobre exatamente essa metade em unit). Linha de base do
+`probe_authz_single_verifier.sh`: **5/4 → 4/3**.
+
+### Passo 4 — `analytics-api`: primitivos, e a trilha que só existia no docstring
+
+Saíram de `audit.py` o `_ACCESS_LEVELS` + `_has_abac` (a **lista indexada**, divergência 2 —
+nos outros cinco serviços a ordem é um dict com `write_only == read_only == 1`, e aqui
+`write_only` era estritamente maior) e o `jwt.decode` local. A divergência era **latente,
+não viva**: este gate só pergunta `read_only`, e nas duas ordens `write_only` a satisfaz. As
+dez linhas da tabela-verdade em `test_audit_gate.py` respondem igual antes e depois — foi
+assim que se soube que a troca preserva comportamento, em vez de se supor.
+
+**`enforce_write` NÃO foi usado, e é a razão de este passo ser diferente dos outros.** Ele
+levanta `HTTPException` direto; aqui a recusa precisa GRAVAR a trilha antes de virar
+resposta, e um portão que já responde não deixa nada acontecer entre decidir e responder.
+Compõem-se os primitivos (`verify_user_jwt` + `abac_can`) e a casa mantém a sua estrutura de
+recusa. É a decisão D7.
+
+#### O `Depends` que fazia a promessa da tela ser falsa
+
+As duas rotas carregavam `optional_pool_principal` **só pelo `tenant_id`** — o
+`accessible_pools` que a dependência calcula nunca foi lido ali (auditoria é ortogonal a
+pool, por decisão do módulo). O preço era alto: sendo dependência, o `401` dela era
+levantado **antes do corpo do handler**, então `_record_access` nunca rodava. O docstring do
+módulo e o banner da tela afirmam que *todo* acesso fica registrado; para o acesso **sem
+credencial** isso era falso — e é o acesso anônimo que uma trilha mais precisa registrar.
+Hoje a identidade sai do próprio portão e toda recusa é gravada antes de virar resposta.
+
+Isso fecha o achado que o passo 2 registrou como *"de outro dono"*:
+`probe_audit_surface.sh` passou de **P4 vermelho (delta 0 de 2)** a **`rc=0`, o probe
+inteiro verde**.
+
+#### A recusa ganhou NOME e CÓDIGO
+
+| antes | depois |
+|---|---|
+| toda recusa → `403` | `401` sem credencial · `403` sem grant · `503` sem segredo no serviço |
+| linha gravada sempre como `anonymous` | grava o `sub` real de quem foi barrado |
+| recusa sem credencial → **não gravada** | gravada, como `anonymous` |
+
+O `403` uniforme apagava a distinção *"não sei quem é"* × *"sei, e não pode"* no log de quem
+investiga acesso negado. E gravar um usuário identificado como `anonymous` apagava
+exatamente o **por quem** que justifica a tabela existir. O `503` é mudança decidida no
+mesmo espírito da D6: sem `auth_jwt_secret` a falha é do SERVIÇO, e um `403` mandaria o
+operador procurar um grant que não resolveria nada.
+
+Medido ao vivo, depois do rebuild: `admin`/`supervisor`/`probe` → **403** com o `sub` real na
+linha (nenhum tem o grant `audit` — grant-first funcionando, o módulo é para conceder ao
+DPO); sem header → **401** gravado como `anonymous`; e um DPO sintético com
+`audit.{sessions,mcp_calls}` → **200** com `result=ok`.
+
+#### Uma mutação sobreviveu, e ela apontou um teste que faltava
+
+A bateria plantou `status_code=denied.status → status_code=403` no handler e **23 de 23
+continuaram verdes**: `test_audit_gate.py` cobre o VEREDICTO, e nada atravessava a rota. O
+fio entre *"o portão decidiu 401"* e *"o cliente recebeu 401"* não era medido — e é ali que
+mora todo o comportamento novo. `test_audit_handler_trail.py` (11 casos, TestClient) fecha
+isso; com ele, **12 de 12** mutações são pegas:
+
+| reversão plantada | reprovou |
+|---|---|
+| gate ABAC sempre libera | 3 |
+| handler ignora o `status` da recusa *(a que sobrevivera)* | 3 |
+| recusa deixa de gravar a trilha | 4 |
+| assinatura não verificada | 2 |
+| campo do ABAC ignorado (usa sempre `sessions`) | 1 |
+| recusa não carrega o ator · sem segredo deixa de recusar · tenant sai da query · `row_count` zerado · falha da trilha vira `debug` | 1 cada |
+
+#### Medição do eixo VIZINHO — feita, e o resultado é *limpo*
+
+O C1 conta quem lê `module_config` **e** decodifica JWT. Ao lado dele existe *"quem
+decodifica um JWT, para qualquer fim"*, e nesse a analytics tem mais duas casas:
+`pool_auth.py` (escopo) e `auth.py` (identidade, com `admin_jwt_secret`). **Ficam locais de
+propósito**: precisam distinguir *expirado × inválido* na mensagem do 401, e
+`verify_user_jwt` colapsa os dois em `None` — migrar custaria uma recusa nomeada, ou crescer
+o canônico contra a D7.
+
+Medidos os **9** decodificadores do repositório: todos passam `algorithms=["HS256"]`, e o
+único `verify_signature: False` é a espiada documentada do `webchat.py:439` (lê o tenant para
+RESOLVER o segredo por-tenant, confere o header `alg`, e reverifica em `:464`). Nenhuma
+divergência hoje ⇒ **registrado, não gateado**: um C5 com lista de exceção de um item
+envelhece, e exceção que envelhece é o defeito que ela deveria pegar.
+
+*Armadilha latente registrada no próprio probe:* o filtro `^[^#]*` do C1 exclui comentário
+`#`, **não docstring** — um arquivo migrado que descreva em prosa o `decode` que perdeu volta
+a casar. Hoje não vira falso positivo só porque o primeiro filtro exige `module_config`, que
+sai junto.
+
+Linha de base do `probe_authz_single_verifier.sh`: **4/3 → 3 arquivos em 2 serviços**.
+Suíte: **663** (era 646 + 6 no gate + 11 no handler).
+
+### Passo 5 — `auth-api`: o build context primeiro, o verificador depois
+
+**Parte 1, isolada e verificada sozinha:** o build context do auth-api era
+`packages/auth-api`, o que deixava `packages/py-authz` fora do contexto — pré-requisito
+do passo. Virou a raiz do monorepo, e a mudança **caiu antes** da mudança de código, para
+que um build quebrado fosse atribuível a uma coisa só.
+
+Isso derrubou um defeito que não era o alvo. `infra/modules.yaml` também estava fora do
+contexto, e o compose de **demo** contornava com um volume mount — que o
+`docker-compose.full.yml` **não tinha**, nem a env correspondente. Lá o
+`_seed_modules_from_yaml` caía no aviso *"pulando registro de módulos"* e a stack subia com
+`auth.module_registry` VAZIO. Como `build_module_config` lê exatamente essa tabela, **todo
+usuário criado no full nascia sem grant nenhum** — e, sob grant-first, nascer sem grant é
+nascer cego. Contorno em um dos dois composes é o *"ambiente que só sobe porque já subiu
+antes"*, com o agravante de que o aviso existia e ninguém o lia. O Dockerfile agora COPIA
+o arquivo para `/infra/modules.yaml` — exatamente o caminho de fallback que `main.py` já
+resolve —, então a **imagem basta sozinha**; o mount do demo fica por ergonomia e apenas
+sobrepõe. Medido depois do rebuild: *"Módulos de plataforma: 11 registrados, 0 erros
+(source: /infra/modules.yaml)"*, e o token do admin volta com os 11 módulos.
+
+**Parte 2:** `_ACCESS_RANK` + `_check_config_field` do `router.py` viraram `abac_can`.
+Fechou a divergência 4 pela quarta vez (`.get(min_access, 0)` → typo virando rank 0 → todo
+grant não-`none` passando; inerte, os três call sites passam literais).
+
+E apareceu uma **quarta cópia da tabela de rank** que nenhum censo contava:
+`presets.py:_RANK`, usado para escolher o maior acesso entre papéis. O comentário dela
+dizia apontar *"as três casas"* — apontar não é mecanismo, e é assim que seis
+implementações divergem em seis pontos. Estava no eixo **vizinho** (o arquivo não decodifica
+JWT nem lê `module_config` de claims), como o resolvedor de escopo estava no passo 1.
+
+**O que NÃO migrou, e a razão:** `jwt_utils.py` fica com `python-jose`. Este serviço é o
+**emissor**; quem assina e quem confere têm de ser a mesma biblioteca, e o canônico verifica
+com PyJWT. Trocar o emissor por simetria seria mexer na assinatura de toda a plataforma para
+arrumar a estética de um import. (D4.)
+
+#### 17 testes vermelhos, e nenhum era meu
+
+Medidos contra o HEAD dentro do container antes de tocar em nada — **17 falhas idênticas**.
+Duas famílias, ambas do split `config.users` × `config.permissions` de 2026-08-27:
+
+| | causa | consequência |
+|---|---|---|
+| 15 × `403` | o helper de teste cunhava só `config.users`; as rotas de CAPACIDADE (`/permissions`, `/templates`, `/modules`, `/module-config`) passaram a exigir `config.permissions` | **os controles POSITIVOS dessas rotas estavam vermelhos** — o suite não tinha prova de que elas deixam alguém passar |
+| 2 × `TypeError` | o split acrescentou o lookup do ALVO (`_assert_may_touch`), que os testes de delete nunca mockaram | a função real rodava sobre o `AsyncMock` do pool |
+
+É a mesma família da pricing e do config-api no passo 2: **o vermelho de um controle
+positivo parece "a rota está protegida"**, que é justamente o que se queria ver. Três
+helpers separados (`_admin_headers` · `_perms_headers` · `_ambos_headers`) — um helper único
+que cunhasse tudo apagaria a distinção que o split existe para criar.
+
+#### As duas guardas do split não tinham teste nenhum
+
+`_assert_may_grant` (o CORPO carrega campo de capacidade) e `_assert_may_touch` (o ALVO
+detém capacidade) são o miolo da divisão — sem elas, quem administra pessoas volta a ser a
+chave-mestra por dois caminhos. Ambas chamam `abac_can`, logo são também o controle da
+migração deste serviço. Cobertas agora, e um dos casos **reprovou minha própria expectativa**:
+escrevi *"um par apaga o privilegiado"* com só `config.permissions` e tomei 403 — a ROTA é
+`config.users`, a proteção do ALVO é `config.permissions`, e a composição das duas portas não
+é dedutível de nenhuma sozinha.
+
+#### Outra mutação sobrevivente, outro teste que faltava
+
+`presets.build_module_config` não tinha teste: a mutação `if _RANK.get(…) > _RANK.get(…)` →
+`if False:` passou por 70 verdes. É a função que implementa um invariante escrito no
+CLAUDE.md — *"múltiplos papéis rendem o MAIOR acesso por campo, nunca a interseção"* — e o
+modo de falha é AUSÊNCIA (o usuário nasce com menos grant, o sintoma é "o menu não mostra").
+`tests/test_presets.py`, 13 casos. Com ele, **9 de 9** mutações são pegas: portão de rota,
+guarda de corpo, guarda de alvo, `read_only` passando por `read_write`, `unrestricted` no
+alvo, e as três de preset (ordem, domain, campo sem default).
+
+#### O critério do C1 precisou de precisão, e ela é falseável
+
+`auth-api/router.py` importa `from jose import JWTError` — o **tipo de exceção** que o
+emissor levanta. O critério largo (`from jose`) o contava como decodificador, e depois da
+migração ele teria ficado na linha de base **pelo motivo errado**: um import de exceção não
+diverge de nada. É o mesmo defeito que o C4 corrigiu do outro lado — instrumento medindo a
+proposição adjacente. O critério passou a `from jose import .*jwt`, e o controle
+positivo é `jwt_utils.py`, que faz `from jose import JWTError, jwt` e **continua** contado.
+
+Linha de base: **3/2 → 2 arquivos em 2 serviços** (`auth-api/jwt_utils.py`, o emissor que
+fica por decisão, e `evaluation-api/router.py`, o passo 6). Consumidores no C2/C3: **8**.
+Suítes: **1813** (auth-api 83, era 47+17 vermelhos).
+
+### Passo 6 — `evaluation-api`: o escopo sobe, e o ramo legado fecha
+
+Último da fila, e o único com duas mudanças de comportamento no mesmo passo.
+
+**D2 — o `scope` do grant subiu para o canônico.** `abac_can` ganhou `scope_id`, com os
+três ramos documentados e o alias `pool:x` × `x` normalizado numa casa só. Era a única
+implementação do recorte de CAPACIDADE por pool no repositório, e deixá-la ali garantia
+divergência tela×API no primeiro consumidor novo — `infra/modules.yaml` declara
+`scope_type: pool` nos 7 campos de `evaluation` e a UI já manda `scopeId`. Medido antes de
+mover: **zero** usuários com `scope` não-vazio, o momento mais barato.
+
+⚠️ O terceiro ramo (`scope` não-vazio + `scope_id is None` → passa) foi portado
+**literalmente**, não decidido. Na evaluation o `pool_id` sai de `campaign.pool_id`, e
+`None` ali significa *"a campanha não é escopada"*, não *"esqueci de passar"* — sob essa
+leitura, passar é correto. A leitura oposta é defensável, e decidi-la dentro de uma
+migração tornaria uma regressão inatribuível. Registrado no `TODO.md` junto do passo 3 de
+`accessible_pools`, que é o mesmo tipo de pergunta.
+
+**O ramo legado fechou**, e a razão não era a política — era a **contradição interna**.
+`min_access=None` significava *"token sem `module_config` → LIBERA"*, e quatro dos seis
+call sites usavam esse modo, dois deles sendo os endpoints de **revisão** e
+**contestação**. Só que o mesmo serviço já fechara o mesmo ramo para o transcript em
+2026-08-27: o mesmo token **não podia LER** a conversa e **podia DECIDIR** sobre ela. Duas
+respostas para *"config vazio autoriza?"* dentro do mesmo arquivo, e quando isso acontece a
+mais permissiva é a que vale.
+
+Contado antes de fechar, como o plano exigia: **um** portador de `module_config` vazio na
+instalação — `probe@plughub.local`, a fixture do probe grant-first, criada para não ter
+grant. Custo real zero. Em instalação com usuários ativos sem grants o caminho é backfill
+com `presets.build_module_config`, nunca manter a porta.
+
+**Perda declarada:** o 401 dizia `invalid token: {exc}`, ecoando o texto do PyJWT. O
+canônico devolve `None` e **loga** o motivo — a razão continua existindo, do lado de quem
+opera, não do lado de quem apresentou o token.
+
+#### Duas mutações sobreviventes, e o que elas apontaram
+
+`_decode_jwt` — a porta de **autenticação** do serviço — não tinha teste nenhum. Trocar
+`verify_user_jwt(...)` por `... or {"sub": "anon"}` (token inválido aceito) e desligar a
+exigência de `sub` passaram por **220 verdes**. `tests/test_decode_jwt.py`, 17 casos,
+separando os dois irmãos (`_decode_jwt` obrigatório × `_decode_jwt_optional` anônimo, que
+são gates diferentes e não podem colapsar). Com ele, **6 de 6** mutações caem.
+
+A exigência de `sub` merece nome próprio: `_compute_available_actions` compara `jwt.sub`
+com `evaluated_user_id` para decidir POSSE. Um `sub` ausente tornaria a comparação sempre
+falsa e **o avaliado deixaria de poder contestar, em silêncio**.
+
+No canônico, a bateria de escopo também teve uma sobrevivente: trocar o casamento exato
+por `endswith` passou pela suíte inteira, porque o caso de PREFIXO que eu escrevera não
+podia pegar um casamento por SUFIXO. Um alias de duas grafias convida a esse tipo de
+"quase igual", e o modo de falha é **alargar escopo em silêncio**. Cinco casos
+parametrizados fecham prefixo, sufixo e `pool:` no meio.
+
+Linha de base: **2 → 1**. Suítes: **1846** (evaluation 237, py-authz 82).
+
+### Achado colateral do passo 2 — ✅ RESOLVIDO no passo 4 (mesmo dia)
+
+`probe_audit_surface.sh` P4 estava vermelho, e **já estava antes desta mudança** — medido
+revertendo `pool_auth.py` para o HEAD dentro do container: resultado idêntico (delta 0 de 2
+previstos). A causa é estrutural: a recusa por `401` acontece em `optional_pool_principal`, que
+é `Depends` e **corta antes do corpo do handler** — logo `_record_access` nunca roda. O
+docstring de `audit.py` e o banner da UI afirmam que *todo* acesso fica registrado; para o 401
+isso era falso. **Caiu junto com o passo 4**, tirando a dependência das duas rotas (ver
+acima): o probe hoje sai `rc=0`.
+
+---
+
 ## Título de cartão vira DERIVADO — e a causa era chave i18n duplicada (2026-08-28)
 
 O cartão da Home chamado **`catalog.volume-by-channel.label`** (a própria chave i18n no lugar do

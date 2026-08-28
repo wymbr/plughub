@@ -13,6 +13,16 @@
 #                              banner dizendo que todo acesso fica registrado
 #   (3) `_require_audit_access()` — não existe; roda `optional_pool_principal`
 #
+# ── ATUALIZAÇÃO 2026-08-28 (o bloco acima é o diagnóstico de 08-22, preservado) ──
+# (2) e (3) estão FECHADOS. O gate existe (`_check_audit_access`, cinco ramos, no
+# verificador canônico `plughub_authz`), `audit_access_log` existe e é escrita — e o
+# passo 4 da migração tirou o `optional_pool_principal` das duas rotas: sendo `Depends`,
+# o `401` dele era levantado ANTES do corpo do handler, então a recusa SEM CREDENCIAL
+# nunca era gravada. Era exatamente o que este P4 media, e é por isso que ele saiu do
+# vermelho sem que o critério mudasse. (1) segue aberto de propósito: `mcp_audit_log`
+# não tem produtor neste ambiente, e criar tabela que ninguém preenche é o
+# "existe ≠ está pronto" de novo.
+#
 # Este probe mede os três, e mede também o que pode ME REFUTAR: se
 # `analytics_open_access` estiver ligado, a porta aberta é DECISÃO de config, não
 # ausência de portão, e o veredicto do P3 muda de nome.

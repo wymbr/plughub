@@ -5,9 +5,17 @@
 # O PUT/DELETE genérico (`/config/{namespace}/{key}`) aceita:
 #   - X-Admin-Token (back-compat — telas ainda não migradas), OU
 #   - Bearer + ABAC `config.{campo}` (read_write), com o campo mapeado por namespace:
-#       masking|audit_policy → config.masking ; canais(webchat/…) → config.canais ;
-#       default (Platform) → config.plataforma.
-# Telas migradas nesta fatia: Platform (config.plataforma) + Masking (config.masking).
+#       masking|audit_policy → config.masking ; canais(webchat/…) → config.channels ;
+#       default (Platform) → config.platform.
+# Telas migradas nesta fatia: Platform (config.platform) + Masking (config.masking).
+#
+# ⚠️ Os nomes de campo sao os do `infra/modules.yaml`, e sao INGLES — regra de
+# linguagem do CLAUDE.md (identificador tecnico em ingles; portugues so em texto
+# exibido). Ate 2026-08-28 este smoke mintava `plataforma`/`canais`, campos que nunca
+# existiram, e por isso os TRES controles POSITIVOS do caminho Bearer estavam
+# VERMELHOS — o gate nunca teve prova de que ele deixa alguem passar. Os negativos
+# passavam por acidente: sem o grant, o 403 vinha de "campo ausente", nao de "campo
+# errado", que e a proposicao que a linha afirma medir.
 #
 # JWTs mintados DENTRO do container config-api (stdlib HS256, mesmo jwt_secret).
 # ──────────────────────────────────────────────────────────────────────────────
@@ -46,10 +54,10 @@ put() {  # $1=ns $2=key ; resto = headers
 echo "══ aguardando config-api ══"
 for i in $(seq 1 30); do $CURL "$CFG/config?tenant_id=$TENANT" >/dev/null 2>&1 && break; [ "$i" = 30 ] && { echo "  ✗ timeout"; exit 1; }; sleep 1; done
 
-echo "══ mint tokens (plataforma / masking / sem grant) ══"
-TOK_PLAT=$(mint '{"config":{"plataforma":{"access":"read_write","scope":[]}}}')
+echo "══ mint tokens (platform / masking / channels / sem grant) ══"
+TOK_PLAT=$(mint '{"config":{"platform":{"access":"read_write","scope":[]}}}')
 TOK_MASK=$(mint '{"config":{"masking":{"access":"read_write","scope":[]}}}')
-TOK_CAN=$(mint '{"config":{"canais":{"access":"read_write","scope":[]}}}')
+TOK_CAN=$(mint '{"config":{"channels":{"access":"read_write","scope":[]}}}')
 TOK_NONE=$(mint '{"contacts":{"operacao":{"access":"read_write","scope":[]}}}')
 [ -n "$TOK_PLAT" ] && [ -n "$TOK_MASK" ] && [ -n "$TOK_CAN" ] && [ -n "$TOK_NONE" ] || { echo "  ✗ mint falhou"; exit 1; }
 echo "  ✓ tokens mintados"
@@ -59,24 +67,27 @@ assert "admin-token → 200"        200 "$(put routing smoke_gprobe -H "X-Admin-
 assert "admin-token errado → 401" 401 "$(put routing smoke_gprobe -H "X-Admin-Token: wrong")"
 assert "sem credencial → 401"     401 "$(put routing smoke_gprobe)"
 
-echo "══ 2. Platform (namespace default → config.plataforma) ══"
-assert "Bearer plataforma:rw → 200"     200 "$(put routing smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
+echo "══ 2. Platform (namespace default → config.platform) ══"
+assert "Bearer platform:rw → 200"     200 "$(put routing smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
 assert "Bearer masking (campo errado) → 403" 403 "$(put routing smoke_gprobe -H "Authorization: Bearer $TOK_MASK")"
 assert "Bearer sem grant → 403"         403 "$(put routing smoke_gprobe -H "Authorization: Bearer $TOK_NONE")"
 
 echo "══ 3. Masking (namespace masking/audit_policy → config.masking) ══"
 assert "Bearer masking:rw (masking) → 200"      200 "$(put masking smoke_gprobe -H "Authorization: Bearer $TOK_MASK")"
 assert "Bearer masking:rw (audit_policy) → 200" 200 "$(put audit_policy smoke_gprobe -H "Authorization: Bearer $TOK_MASK")"
-assert "Bearer plataforma (campo errado) → 403" 403 "$(put masking smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
+assert "Bearer platform (campo errado) → 403" 403 "$(put masking smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
 
-echo "══ 4. Channels (namespace webchat/webhook → config.canais) ══"
-assert "Bearer canais:rw (webchat) → 200"       200 "$(put webchat smoke_gprobe -H "Authorization: Bearer $TOK_CAN")"
-assert "Bearer canais:rw (webhook) → 200"       200 "$(put webhook smoke_gprobe -H "Authorization: Bearer $TOK_CAN")"
-assert "Bearer plataforma (campo errado) → 403" 403 "$(put webchat smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
+echo "══ 4. Channels (namespace webchat/webhook → config.channels) ══"
+assert "Bearer channels:rw (webchat) → 200"     200 "$(put webchat smoke_gprobe -H "Authorization: Bearer $TOK_CAN")"
+assert "Bearer channels:rw (webhook) → 200"     200 "$(put webhook smoke_gprobe -H "Authorization: Bearer $TOK_CAN")"
+assert "Bearer platform (campo errado) → 403" 403 "$(put webchat smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
 
 echo "══ cleanup (remove as chaves de teste via admin-token) ══"
 for nk in "routing/smoke_gprobe" "masking/smoke_gprobe" "audit_policy/smoke_gprobe" "webchat/smoke_gprobe" "webhook/smoke_gprobe"; do
-  $CURL -X DELETE "$CFG/config/$nk?tenant_id=$TENANT&admin_token=$ADMIN" >/dev/null 2>&1
+  # Header, nao `?admin_token=`: o parametro de query SAIU em 2026-08-28 (D5). Este
+  # era o UNICO chamador dele no repositorio — e a limpeza falhava MUDA (`>/dev/null`
+  # em ambos os fluxos), deixando cinco chaves de teste na config de producao.
+  $CURL -X DELETE "$CFG/config/$nk?tenant_id=$TENANT" -H "X-Admin-Token: $ADMIN" >/dev/null 2>&1
 done
 
 echo

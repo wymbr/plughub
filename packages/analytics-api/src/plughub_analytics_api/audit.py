@@ -28,10 +28,9 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
-
-from .pool_auth import PoolPrincipal, optional_pool_principal
+from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 
 logger = logging.getLogger("plughub.analytics.audit")
 
@@ -60,88 +59,126 @@ router = APIRouter(prefix="/v1/audit", tags=["audit"])
 # O ambiente demo roda `PLUGHUB_ANALYTICS_OPEN_ACCESS=true`, então o 200 sem
 # header é bypass declarado; o buraco é o outro, e ele NÃO depende dessa flag.
 
-_ACCESS_LEVELS = ["none", "read_only", "write_only", "read_write"]
-
-
-def _has_abac(module_config: dict, module: str, field: str) -> bool:
-    """
-    `module_config[module][field].access` ≥ read_only.
-
-    Mesma hierarquia do `permissions.ts` da UI (`ACCESS_LEVELS`), e a paridade é
-    obrigatória: gate de tela que discorda de gate de API é gate nenhum.
-    `write_only` conta porque está acima de `read_only` na hierarquia declarada —
-    não inventar uma segunda ordem aqui.
-    """
-    field_cfg = ((module_config or {}).get(module) or {}).get(field)
-    if not isinstance(field_cfg, dict):
-        return False
-    access = field_cfg.get("access") or "none"
-    if access not in _ACCESS_LEVELS:
-        return False
-    return _ACCESS_LEVELS.index(access) >= _ACCESS_LEVELS.index("read_only")
+# ── o verificador é o CANÔNICO (passo 4, 2026-08-28) ──────────────────────────
+#
+# Saíram daqui, para `plughub_authz`:
+#
+#   · `_ACCESS_LEVELS` + `_has_abac` — a **lista indexada**, que era a divergência 2 da
+#     tabela do pacote: nos outros cinco serviços a ordem é um dict com
+#     `write_only == read_only == 1`, e aqui `write_only` era ESTRITAMENTE MAIOR. O
+#     mesmo grant respondia diferente em dois serviços.
+#   · o `jwt.decode` local de `_audit_actor` — a implementação que o C1 do
+#     `probe_authz_single_verifier.sh` contava neste arquivo.
+#
+# ⚠️ A divergência 2 era **latente, não viva**: este gate só pergunta `read_only`, e
+# nas DUAS ordens `write_only` satisfaz `read_only`. As dez linhas da tabela-verdade em
+# `tests/test_audit_gate.py` respondem igual antes e depois — foi assim que se soube
+# que a troca é behavior-preserving, em vez de se supor. Ela ficaria viva no primeiro
+# call site que pedisse `min_access="write_only"`, e é esse que não vai mais existir.
+#
+# O QUE **NÃO** FOI USADO, E POR QUÊ: `enforce_write`.
+# ---------------------------------------------------
+# Ele levanta `HTTPException` direto, e aqui a recusa precisa GRAVAR a trilha antes de
+# virar resposta. Um portão que já responde não deixa nada acontecer entre decidir e
+# responder — então esta casa compõe os PRIMITIVOS (`verify_user_jwt` + `abac_can`) e
+# mantém a sua própria estrutura de recusa. É a decisão D7: portão parametrizado até
+# caber em todo mundo vira função cujo comportamento ninguém lê no call site.
+#
+# ── medição do eixo VIZINHO (feita no passo 4, resultado: limpo) ──────────────
+# O C1 conta quem lê `module_config` **e** decodifica JWT. Existe um eixo ao lado —
+# *"quem decodifica um JWT, para qualquer fim"* — e nele a analytics tem mais DUAS
+# casas que não são cópias deste gate: `pool_auth.py` (escopo) e `auth.py` (identidade,
+# com `admin_jwt_secret`). Elas ficam locais de propósito: precisam distinguir
+# **expirado × inválido** na mensagem do 401, e `verify_user_jwt` colapsa os dois em
+# `None`. Migrar custaria uma recusa nomeada, ou crescer o canônico contra a D7.
+# Medidos os 9 decodificadores do repositório: todos passam `algorithms=["HS256"]`, e
+# o único `verify_signature: False` é a espiada documentada do `webchat.py:439` (lê o
+# tenant para RESOLVER o segredo, confere o header `alg`, e reverifica em `:464`).
+# Nenhuma divergência hoje ⇒ registrado, não gateado: um C5 com lista de exceção de um
+# item envelhece, e exceção que envelhece é o defeito que ela deveria pegar.
 
 
 def _audit_actor(request: Request) -> tuple[str, str, dict]:
     """
-    Devolve `(sub, kind, module_config)` do Bearer, sem levantar.
+    Devolve `(sub, kind, claims)` do Bearer, sem levantar.
 
-    `optional_pool_principal` já roda como dependência e devolve o `sub`, mas NÃO
-    carrega `module_config` — decodificar aqui evita alargar o `PoolPrincipal`,
-    que é lido por dezenas de rotas que não têm nada com auditoria.
+    Devolve os CLAIMS inteiros, não só o `module_config`: o `tenant_id` sai daqui
+    desde o passo 4 — antes vinha do `PoolPrincipal`, uma dependência que estas rotas
+    carregavam só por causa desse campo (o `accessible_pools` que ela calcula nunca
+    foi lido aqui; auditoria é ortogonal a pool por decisão do módulo).
     """
-    # ⚠️ **PyJWT (`import jwt`), NÃO `python-jose`.** Os dois convivem no repo — o
-    # auth-api usa `from jose import jwt`, a analytics-api usa PyJWT, e `jose` nem
-    # está instalado neste container. A v1 desta função copiou o import do
-    # auth-api; como ele é LOCAL e o demo roda com `open_access=true`, esta função
-    # nunca era chamada e o `ImportError` só apareceria com o bypass desligado —
-    # isto é, só em produção, na primeira vez que o gate fosse de fato exercido.
-    # Foi o teste unitário que o pegou, justamente por não passar pelo bypass.
-    import jwt
-
     from .config import get_settings
 
     settings = get_settings()
-    header = request.headers.get("authorization") or ""
-    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    token = bearer_from_header(request.headers.get("authorization"))
     if not token or not settings.auth_jwt_secret:
         return "", "anonymous", {}
-    try:
-        claims = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
-    except Exception:
+    claims = verify_user_jwt(token, settings.auth_jwt_secret)
+    if claims is None:
         return "", "anonymous", {}
-    return claims.get("sub") or "", "user", claims.get("module_config") or {}
+    return claims.get("sub") or "", "user", claims
 
 
 class AuditDenied(Exception):
-    """Recusa nomeada — o handler a converte em 403 e REGISTRA a tentativa."""
+    """Recusa nomeada — o handler a REGISTRA e converte no `status` que ela carrega.
 
+    Carrega o ator porque a trilha existe para dizer *"quantas vezes um dado foi
+    acessado e POR QUEM"*. Antes do passo 4 toda recusa era gravada como
+    `anonymous`: um usuário identificado, barrado por falta do grant, virava linha
+    sem nome — apagando exatamente o "quem" que justifica a tabela.
 
-def _check_audit_access(request: Request, field: str) -> tuple[str, str]:
+    E carrega o `status` porque 401 e 403 respondem a perguntas diferentes — *"não
+    sei quem é"* × *"sei, e não pode"*. Colapsá-las apaga a distinção no log de quem
+    investiga acesso negado (decisão canônica do `py-authz`).
     """
-    Portão de `/v1/audit/*`. Devolve `(actor_sub, actor_kind)` ou levanta `AuditDenied`.
+
+    def __init__(self, motivo: str, *, status: int = 403,
+                 actor_sub: str = "", actor_kind: str = "anonymous") -> None:
+        super().__init__(motivo)
+        self.status = status
+        self.actor_sub = actor_sub
+        self.actor_kind = actor_kind
+
+
+def _check_audit_access(request: Request, field: str) -> tuple[str, str, str]:
+    """
+    Portão de `/v1/audit/*`. Devolve `(actor_sub, actor_kind, tenant_id)` ou levanta
+    `AuditDenied`.
 
     Precedência, e cada ramo é declarado:
       1. `analytics_open_access` → LIBERA, com ator `open_access`. É bypass de
          demo (`config.py:75`, "NEVER enable in production") e fica NOMEADO na
          trilha, para ninguém confundir acesso autenticado com acesso de demo.
-      2. sem `auth_jwt_secret` → **RECUSA**. Aqui a postura é oposta à do
+      2. sem `auth_jwt_secret` → **RECUSA (503)**. Aqui a postura é oposta à do
          `pool_auth`, que degrada aberto quando não há como verificar o token: lá
          o efeito é escopo de leitura operacional, aqui é dado pessoal sob LGPD.
-         Identidade não tem fallback — sem como provar quem é, não se entrega.
-      3. `module_config.audit.<field>` ≥ read_only → LIBERA.
-      4. caso contrário → RECUSA.
+         Identidade não tem fallback — sem como provar quem é, não se entrega. É
+         503 e não 401 porque a falha é do SERVIÇO: mandar o chamador arrumar o
+         token dele seria apontar para o lugar errado.
+      3. credencial ausente ou não verificável → **RECUSA (401)**.
+      4. `module_config.audit.<field>` ≥ read_only → LIBERA.
+      5. caso contrário → **RECUSA (403)**, nomeando quem foi barrado.
     """
     from .config import get_settings
 
-    if get_settings().analytics_open_access:
-        return "", "open_access"
+    settings = get_settings()
+    if settings.analytics_open_access:
+        return "", "open_access", ""
+    if not settings.auth_jwt_secret:
+        raise AuditDenied(
+            "auth_jwt_secret não configurado — sem como verificar identidade",
+            status=503,
+        )
 
-    actor_sub, actor_kind, module_config = _audit_actor(request)
+    actor_sub, actor_kind, claims = _audit_actor(request)
     if actor_kind == "anonymous":
-        raise AuditDenied("credencial ausente ou não verificável")
-    if not _has_abac(module_config, "audit", field):
-        raise AuditDenied(f"sem module_config.audit.{field}")
-    return actor_sub, actor_kind
+        raise AuditDenied("credencial ausente ou não verificável", status=401)
+    if not abac_can(claims, "audit", field, "read_only"):
+        raise AuditDenied(
+            f"sem module_config.audit.{field}",
+            status=403, actor_sub=actor_sub, actor_kind=actor_kind,
+        )
+    return actor_sub, actor_kind, str(claims.get("tenant_id") or "")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -248,25 +285,33 @@ async def audit_session_messages(
     session_id:  str,
     request:     Request,
     tenant_id:   str = Query("tenant_demo"),
-    principal:   PoolPrincipal = Depends(optional_pool_principal),
 ):
     """
     Returns masked message content for a session for LGPD audit purposes.
     Gate: module_config.audit.sessions (ABAC) or analytics_open_access.
     Side-effect: grava uma linha imutável em audit_access_log — inclusive na recusa.
+
+    ⚠️ A rota deixou de depender de `optional_pool_principal` no passo 4. Ela a
+    carregava só pelo `tenant_id` (o `accessible_pools` que a dependência calcula
+    nunca foi lido aqui — auditoria é ortogonal a pool, por decisão do módulo), e o
+    preço era alto: sendo um `Depends`, o `401` dela era levantado ANTES do corpo do
+    handler, então `_record_access` nunca rodava. A promessa do docstring — e o banner
+    da tela — de que *todo* acesso fica registrado era falsa justamente para o acesso
+    sem credencial, que é o que mais interessa a uma trilha. Hoje a identidade sai do
+    próprio portão, e TODA recusa é gravada antes de virar resposta.
     """
     try:
-        actor_sub, actor_kind = _check_audit_access(request, "sessions")
+        actor_sub, actor_kind, claims_tenant = _check_audit_access(request, "sessions")
     except AuditDenied as denied:
         await _record_access(
-            request, actor_sub="", actor_kind="anonymous",
+            request, actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
             endpoint="audit.sessions.messages", target_kind="session",
             target_id=session_id, result="denied", row_count=0,
         )
-        return JSONResponse(status_code=403, content={"detail": str(denied)})
+        return JSONResponse(status_code=denied.status, content={"detail": str(denied)})
 
     # Tenant isolation
-    effective_tenant = principal.tenant_id or tenant_id
+    effective_tenant = claims_tenant or tenant_id
     store = _store(request)
     try:
         messages = await asyncio.to_thread(
@@ -368,7 +413,6 @@ async def audit_mcp_calls(
     session_id:  str | None = Query(None, description="Scope to one session (R5 tool_trace)."),
     limit:       int  = Query(100, ge=1, le=1000),
     masked_only: bool = Query(False),
-    principal:   PoolPrincipal = Depends(optional_pool_principal),
 ):
     """
     Returns MCP tool call audit records for a tenant.
@@ -379,16 +423,16 @@ async def audit_mcp_calls(
     chronologically — the path the evaluator uses to build tool_trace (R5).
     """
     try:
-        actor_sub, actor_kind = _check_audit_access(request, "mcp_calls")
+        actor_sub, actor_kind, claims_tenant = _check_audit_access(request, "mcp_calls")
     except AuditDenied as denied:
         await _record_access(
-            request, actor_sub="", actor_kind="anonymous",
+            request, actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
             endpoint="audit.mcp_calls", target_kind="mcp_calls",
             target_id=session_id or "", result="denied", row_count=0,
         )
-        return JSONResponse(status_code=403, content={"detail": str(denied)})
+        return JSONResponse(status_code=denied.status, content={"detail": str(denied)})
 
-    effective_tenant = principal.tenant_id or tenant_id
+    effective_tenant = claims_tenant or tenant_id
     store = _store(request)
     try:
         calls = await asyncio.to_thread(

@@ -435,8 +435,11 @@ services:
 
   auth-api:
     build:
-      context: packages/auth-api
-      dockerfile: Dockerfile
+      # Contexto = raiz do monorepo desde 2026-08-28: sem isso o `packages/py-authz`
+      # (verificador canônico) e o `infra/modules.yaml` ficam fora do build. Ver o
+      # cabeçalho do Dockerfile.
+      context: .
+      dockerfile: packages/auth-api/Dockerfile
     container_name: full-auth-api
     ports:
       - "3200:3200"

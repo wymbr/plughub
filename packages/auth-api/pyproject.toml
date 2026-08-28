@@ -10,6 +10,9 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
+    # Verificador canônico de JWT+ABAC. Dependência de PATH do monorepo (não existe
+    # no PyPI) — instalada pelo Dockerfile antes deste pacote.
+    "plughub-authz",
     "asyncpg>=0.29.0",
     "python-jose[cryptography]>=3.3.0",
     "bcrypt>=4.1.0",
