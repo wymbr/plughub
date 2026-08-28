@@ -43,6 +43,27 @@ echo "  PlugHub — Ambiente de Demo (Ubuntu + PM2)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
+# ── Step 0a: git deste clone ──────────────────────────────────────────────────
+#
+# ⚠️ ISTO NÃO VIAJA NO COMMIT, e é por isso que mora aqui.
+#
+# `.gitattributes` resolve os finais de linha para qualquer git — é conteúdo
+# versionado. Já `core.fileMode` é config POR CLONE, e não há arquivo que a
+# carregue. Sem ela, um repositório no WSL operado por ferramentas de Windows
+# (via `\wsl.localhost\...`) vê permissões SINTETIZADAS pela ponte 9P, que
+# discordam das do WSL para o MESMO arquivo — medido em 2026-08-28: 33 arquivos
+# `100755` no HEAD apareciam como mudança pendente para `100644`, e um commit
+# qualquer teria tirado o bit +x de todos, `infra/test/run_gates.sh` incluído.
+#
+# `false` faz o git ignorar o bit de execução e preservar o que está no HEAD.
+# Consequência aceita: dar +x a um script NOVO passa a exigir
+# `git update-index --chmod=+x <arquivo>`. Barato aqui — 209 dos 234 `.sh` do
+# repositório já são `100644` e são invocados como `bash script.sh`.
+if [ -d "$ROOT/.git" ]; then
+  git -C "$ROOT" config core.fileMode false
+  info "git: core.fileMode=false (permissões da ponte WSL↔Windows não são confiáveis)"
+fi
+
 # ── Step 0: prerequisites check ───────────────────────────────────────────────
 info "Verificando pré-requisitos…"
 
