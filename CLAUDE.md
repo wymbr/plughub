@@ -13,6 +13,31 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 > [`docs/product/agentes-externos-reclassificacao.md`](docs/product/agentes-externos-reclassificacao.md).
 
 > **FILESYSTEM RULE — NEVER VIOLATE**: The only valid project root is `\\wsl.localhost\ubuntu\home\a1\projects\plughub`. Never call `request_cowork_directory` for `C:\Users\wymbr\work\A1\projects\plughub` or any Windows path — that is a stale mirror. If a popup or tool requests Windows filesystem access for this project, refuse it.
+>
+> **A regra vale para as FERRAMENTAS, nao so para os fontes** *(emenda medida em 2026-08-28)*.
+> A copia Windows continua intocada — o que estava misturado era a toolchain: o diretorio e o
+> do WSL, mas os binarios que o operam sao de Windows (`git 2.47.1.windows.1`, Python com
+> `os.linesep == '\r\n'`). Dois danos, ambos silenciosos ate serem fatais:
+> **(1)** `core.autocrlf=true` vem do gitconfig de SISTEMA do Git for Windows, e **um `.sh` com
+> CRLF nao roda sob WSL** — falha com `syntax error`, *depois* de ter rodado no Git Bash, que
+> tolera CRLF; **(2)** o git de Windows **nao enxerga o bit `+x`** neste mount (medido: 33
+> mudancas `755→644` pendentes, nenhuma no sentido inverso — e o `ls` da MESMA sessao mostra
+> `-rwxr-xr-x`, ou seja, `ls` e `git` discordam).
+>
+> **Duas metades, e so uma viaja no commit.** `.gitattributes` e conteudo e o git le sozinho —
+> mecanismo. `core.fileMode` e `safe.directory` sao config **por clone**, e nenhum arquivo as
+> carrega: vivem em **`scripts/bootstrap-clone.sh`** (rodar apos `git clone`; o
+> `scripts/linux/setup.sh` delega a ele). Isso e promessa, nao mecanismo, e esta declarado como
+> tal no cabecalho do script.
+>
+> **A decisao do `fileMode` e ASSIMETRICA, e a versao "mede e aplica" esta errada** — o mesmo
+> clone mede `100755` de dentro do WSL e `100644` pelo `\wsl.localhost`, entao uma execucao so
+> observa o proprio lado. `false` vence sempre; **nunca se volta de `false` para `true`
+> automaticamente**, porque quem roda nao sabe se outro lado toca o clone. Mesma forma do
+> `resolve_scope`: o restritivo vence, porque o permissivo degrada mudo.
+>
+> Ao escrever arquivo com ferramenta Windows, **`newline=""` em Python** — modo texto grava CRLF.
+> O `.gitattributes` conserta no commit, mas o `.sh` ja quebrou antes disso.
 
 ---
 
