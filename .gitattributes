@@ -1,0 +1,47 @@
+# .gitattributes — finais de linha do repositório
+#
+# POR QUE ESTE ARQUIVO EXISTE (2026-08-28)
+# =======================================
+# O repositório vive no WSL, mas as ferramentas que o operam são binários de
+# Windows atuando sobre `\wsl.localhost\...`: `git version 2.47.1.windows.1` e o
+# Python do Windows (`os.linesep == '\r\n'`). Duas consequências, e nenhuma delas
+# é escolha de ninguém:
+#
+#   1. `core.autocrlf=true` vem do gitconfig de SISTEMA do Git for Windows
+#      (`C:/Program Files/Git/etc/gitconfig`) — não do repo, não do usuário. Sem
+#      um `.gitattributes`, todo checkout reescreve a árvore para CRLF.
+#   2. Qualquer ferramenta Windows que abra um arquivo em modo TEXTO grava CRLF.
+#
+# O sintoma que dá o nome à regra: **um `.sh` com CRLF não roda sob WSL** — falha
+# com `syntax error near unexpected token`, e falha DEPOIS de já ter rodado no Git
+# Bash, que tolera CRLF. Foi assim que `smoke_config_write_auth.sh` e dois probes
+# quebraram sem que nada ficasse vermelho no caminho normal.
+#
+# Configuração de máquina é promessa; `.gitattributes` é MECANISMO: vale
+# independentemente de qual git roda, em qual sistema, com qual `core.autocrlf`.
+
+# Regra geral: git decide texto×binário pelo conteúdo, e todo texto é LF —
+# no repositório E na árvore de trabalho.
+* text=auto eol=lf
+
+# Explícito no caso que de fato quebra. Redundante com a linha acima de
+# propósito: é a linha que alguém lê quando um script para de rodar.
+*.sh text eol=lf
+
+# Scripts só-Windows: CRLF é o correto aqui, não a exceção tolerada.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binários — nunca converter. `text=auto` já os detectaria pelo conteúdo; a
+# declaração explícita evita depender de heurística para arquivo grande.
+*.docx binary
+*.pdf  binary
+*.xlsx binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff  binary
+*.woff2 binary
