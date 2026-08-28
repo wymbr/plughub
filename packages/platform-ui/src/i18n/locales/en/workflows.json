@@ -1,6 +1,5 @@
 {
   "title":   "Workflow",
-  "editor":  "Editor",
   "monitor": "Monitor",
   "report":  "Report",
   "calendar":"Calendar",
@@ -19,19 +18,6 @@
     "context":  "Context (JSON)",
     "submit":   "Trigger",
     "cancel":   "Cancel"
-  },
-  "webhook": {
-    "title":        "Webhooks",
-    "create":       "New Webhook",
-    "description":  "Description",
-    "flowId":       "Flow ID",
-    "active":       "Active",
-    "triggerCount": "Triggers",
-    "lastTrigger":  "Last triggered",
-    "rotate":       "Rotate token",
-    "delete":       "Delete",
-    "deliveries":   "Delivery log",
-    "noWebhooks":   "No webhooks configured."
   },
   "instance": {
     "id":               "Instance ID",
@@ -93,7 +79,6 @@
     "createButton": "Create Webhook",
     "creating": "Creating…",
     "flowId": "Flow ID",
-    "description": "Description",
     "contextOverride": "Context Override (JSON)",
     "invalidJson": "Invalid JSON",
     "unknownError": "Unknown error",
@@ -124,7 +109,9 @@
     "tokenPlaceholder": "Admin token (X-Admin-Token)",
     "selectOrCreate": "Select a webhook or create a new one",
     "description": "Webhooks allow external systems (Salesforce, ERP, etc.) to trigger workflows automatically via an authenticated URL.",
-    "error": "Error"
+    "error": "Error",
+    "triggerCount": "Triggers",
+    "deliveries": "Delivery log"
   },
   "analise": {
     "title":         "Process Analysis",

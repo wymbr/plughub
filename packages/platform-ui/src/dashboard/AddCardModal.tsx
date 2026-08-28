@@ -11,7 +11,7 @@
  */
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ENDPOINT_CATALOG, type EndpointDescriptor } from './catalog'
+import { titleForNewCard, ENDPOINT_CATALOG, type EndpointDescriptor } from './catalog'
 import { listDisplayTools, getDisplayTool } from './tools/registry'
 import type { NewDashboardCard, QueryParam } from './tools/types'
 
@@ -351,7 +351,10 @@ export function AddCardModal({ tenantId, onAdd, onClose }: AddCardModalProps) {
       w:           selectedEndpoint.defaultW,
       h:           selectedEndpoint.defaultH,
       tool_id:     selectedToolId,
-      title:       title.trim() || t(`catalog.${selectedEndpoint.id}.label`, { defaultValue: selectedEndpoint.label }),
+      // Vazio = derivar do catalogo no render (`resolveCardTitle`). Assar aqui
+      // congelaria a lingua da criacao — e a chave crua, quando o namespace
+      // ainda nao carregou. Ver `titleForNewCard`.
+      title:       titleForNewCard(title),
       query: {
         endpoint: selectedEndpoint.endpoint,
         params,

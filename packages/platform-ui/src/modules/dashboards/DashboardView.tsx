@@ -27,7 +27,10 @@ import {
   useTemplates,
   type RoleCatalog,
 } from '@/api/dashboard-hooks'
-import { ENDPOINT_CATALOG, resolveCardTitle, type EndpointDescriptor } from '@/dashboard/catalog'
+import {
+  ENDPOINT_CATALOG, normalizeCardTitles, resolveCardTitle, titleForNewCard,
+  type EndpointDescriptor,
+} from '@/dashboard/catalog'
 import type { DashboardCard, GlobalFilter } from '@/types'
 
 const COLS = 12
@@ -51,7 +54,7 @@ function reconcileCards(cards: DashboardCard[], allowed: string[] | null): Dashb
 }
 
 /** Build a card from a catalog descriptor, with runtime-wired params (like AddCardModal). */
-function buildCard(ep: EndpointDescriptor, label: string): DashboardCard {
+function buildCard(ep: EndpointDescriptor): DashboardCard {
   const params: Record<string, unknown> = {
     from: { type: 'runtime', filter_key: 'date_from', default: '-7d' },
     to:   { type: 'runtime', filter_key: 'date_to',   default: '' },
@@ -63,7 +66,7 @@ function buildCard(ep: EndpointDescriptor, label: string): DashboardCard {
     id: uuid(),
     x: 0, y: Infinity, w: ep.defaultW, h: ep.defaultH,
     tool_id: ep.default_tool,
-    title: label,
+    title: titleForNewCard(),   // derivado no render, nunca assado
     query: { endpoint: ep.endpoint, params },
     tool_config: { compact: true },
     refresh_ms: 30_000,
@@ -123,7 +126,7 @@ export default function DashboardView() {
     setRuntimeFilters(defaults)
     loadPersonalLayout(tenantId, userId, adminToken).then(personal => {
       const base = (personal && personal.length > 0 ? personal : template.cards) as DashboardCard[]
-      setCards(reconcileCards(base, allowed))
+      setCards(normalizeCardTitles(reconcileCards(base, allowed), t))
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [template, roleCatalog, tenantId, userId])
@@ -154,7 +157,7 @@ export default function DashboardView() {
   const addComponent = (id: string) => {
     const ep = ENDPOINT_CATALOG.find(e => e.id === id)
     if (!ep) return
-    setCards(prev => [...prev, buildCard(ep, t(`catalog.${ep.id}.label`, { defaultValue: ep.label }))])
+    setCards(prev => [...prev, buildCard(ep)])
   }
   const persist = async (next: DashboardCard[]) => {
     setSaving(true)

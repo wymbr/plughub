@@ -1,22 +1,9 @@
 {
   "title":   "Workflow",
-  "editor":  "Editor",
   "monitor": "Monitor",
   "report":  "Relatório",
   "calendar":"Calendário",
   "triggers":"Webhooks / Gatilhos",
-  "instance": {
-    "id":        "ID da Instância",
-    "title":     "Instâncias",
-    "status":    "Status",
-    "flow":      "Fluxo",
-    "started":   "Iniciado",
-    "updated":   "Atualizado",
-    "cancel":    "Cancelar",
-    "resume":    "Retomar",
-    "noItems":   "Nenhuma instância de workflow encontrada.",
-    "loading":   "Carregando instâncias…"
-  },
   "statuses": {
     "active":    "Ativo",
     "suspended": "Suspenso",
@@ -31,19 +18,6 @@
     "context":  "Contexto (JSON)",
     "submit":   "Disparar",
     "cancel":   "Cancelar"
-  },
-  "webhook": {
-    "title":        "Webhooks",
-    "create":       "Novo Webhook",
-    "description":  "Descrição",
-    "flowId":       "ID do Fluxo",
-    "active":       "Ativo",
-    "triggerCount": "Disparos",
-    "lastTrigger":  "Último disparo",
-    "rotate":       "Rotacionar token",
-    "delete":       "Excluir",
-    "deliveries":   "Log de entregas",
-    "noWebhooks":   "Nenhum webhook configurado."
   },
   "instance": {
     "statuses": {
@@ -62,7 +36,16 @@
     "suspendReason":    "Motivo de suspensão",
     "resumeToken":      "Resume Token",
     "expiresAt":        "Expira",
-    "clickToCopy":      "Clique para copiar"
+    "clickToCopy":      "Clique para copiar",
+    "id":               "ID da Instância",
+    "title":            "Instâncias",
+    "status":           "Status",
+    "flow":             "Fluxo",
+    "started":          "Iniciado",
+    "updated":          "Atualizado",
+    "cancel":           "Cancelar",
+    "resume":           "Retomar",
+    "loading":          "Carregando instâncias…"
   },
   "suspendReasons": {
     "approval": "Aguardando Aprovação",
@@ -96,7 +79,6 @@
     "createButton": "Criar Webhook",
     "creating": "Criando…",
     "flowId": "ID do Fluxo",
-    "description": "Descrição",
     "contextOverride": "Context Override (JSON)",
     "invalidJson": "JSON inválido",
     "unknownError": "Erro desconhecido",
@@ -127,7 +109,9 @@
     "tokenPlaceholder": "Admin token (X-Admin-Token)",
     "selectOrCreate": "Selecione um webhook ou crie um novo",
     "description": "Webhooks permitem que sistemas externos (Salesforce, ERP, etc.) disparem workflows automaticamente via URL autenticada.",
-    "error": "Erro"
+    "error": "Erro",
+    "triggerCount": "Disparos",
+    "deliveries": "Log de entregas"
   },
   "analise": {
     "title":         "Análise de Processos",

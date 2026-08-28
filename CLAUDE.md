@@ -845,6 +845,15 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
 2. Use `useTranslation(namespace)` + `t('key')` in the component — never hardcode strings in JSX.
 3. Use the existing namespace for the module (see `docs/arcos/platform-ui.md` § i18n) or register a new one in `src/i18n/index.ts`.
 4. For helpers **outside React components** that produce translated strings: receive `t` as an explicit parameter — never call `useTranslation` at module level.
+5. **Nunca repetir uma chave no mesmo objeto do arquivo de locale.** JSON aceita, o parser fica com a
+   ÚLTIMA, e tudo que só existia na anterior deixa de existir — a tela passa a mostrar a CHAVE no
+   lugar do texto. Medido em 2026-08-28: `"catalog"` duas vezes em `dashboards.json` derrubou três
+   rótulos e virou um cartão chamado `catalog.volume-by-channel.label` na Home; a varredura achou
+   mais 7 casos em 6 namespaces. **Paridade EN × pt-BR NÃO detecta** — os dois arquivos quebram
+   igual e a paridade fica perfeita. Gate próprio: `infra/test/probe_i18n_duplicate_keys.sh`.
+6. **Título derivável é RENDERING, não dado.** Nunca gravar em store o resultado de um `t()` (título
+   de cartão, rótulo de coluna): congela a língua da criação e, se o namespace ainda não carregou,
+   congela a chave crua. Grava-se o FATO (o id/endpoint) e resolve-se no render.
 
 ```
 ✅  <span>{t('header.offline')}</span>

@@ -2,6 +2,65 @@
 
 ---
 
+## Título de cartão vira DERIVADO — e a causa era chave i18n duplicada (2026-08-28)
+
+O cartão da Home chamado **`catalog.volume-by-channel.label`** (a própria chave i18n no lugar do
+texto). A hipótese inicial — título "assado" na criação do cartão e congelado no template — estava
+**errada**, e a medição do dado salvo derrubou-a em uma linha: o template guardava
+`"Volume por Canal"`, não a chave.
+
+### A causa: `"catalog"` duas vezes no mesmo arquivo
+
+`en/dashboards.json` e `pt-BR/dashboards.json` declaravam **`"catalog"` nas linhas 24 e 163**. JSON
+não proíbe chave repetida — o parser aceita e a **última vence**. O bloco perdedor levava três
+rótulos que só ele tinha:
+
+| perdido em ambos os locales | efeito |
+|---|---|
+| `volume-by-channel` | o cartão da Home mostrando a chave crua |
+| `pools-queue` | mostraria a chave se adicionado |
+| `agent-availability` | idem |
+
+Com a chave inexistente, `t('catalog.volume-by-channel.label')` devolve a própria chave — e o
+`resolveCardTitle` a repassava com o comportamento **correto**: ele reconheceu `"Volume por Canal"`
+como rótulo derivável e re-traduziu para a língua corrente, que não tinha o verbete.
+
+**A varredura achou mais 7**, em 6 namespaces: `common.confirm`, `agentReports.filters.allPools`,
+`workflows.{editor, webhook, webhook.description, instance}`. Duas classes: objeto×objeto (perde
+chaves) e escalar×objeto (`t('confirm')` passa a devolver um objeto). Recuperadas **19 chaves** no
+total, com regra mecânica — *a última ocorrência fica como está, o que só existe na anterior é
+trazido para dentro dela, a anterior sai*. Nada que renderiza hoje mudou (medido: `alterou=-`,
+`sumiu=-` nos 8 arquivos); só voltou a existir o que estava inalcançável.
+
+### O título passou a ser derivado de qualquer jeito
+
+A hipótese errada apontava para um defeito **real, só que de outra ordem**: o `AddCardModal` e o
+quick-add do `DashboardView` resolviam `t()` na **criação** e gravavam a string. Isso congela a
+língua — cartão criado em PT segue em PT com a interface em EN — e, se o namespace ainda não
+carregou, congela a chave crua. Agora:
+
+- `titleForNewCard()` grava **`''`** quando o usuário não digitou título próprio. O fato já está
+  gravado: é o `query.endpoint`, de onde `catalogIdForEndpoint` deriva a entrada do catálogo.
+  Guardar também um `catalog_id` seria a mesma verdade em dois campos, livres para divergir.
+- `resolveCardTitle` resolve o derivável na língua corrente e **preserva o custom**;
+  `normalizeCardTitles` zera o derivável no **carregamento**, para que o "Save template" seguinte
+  persista a limpeza em vez de deixar o render certo por cima de um dado que mente.
+
+### Gates
+
+- **`probe_i18n_duplicate_keys.sh`** (novo) — chave repetida em qualquer nível de qualquer locale.
+  **Um probe de PARIDADE EN×pt-BR jamais pegaria isto**: os dois arquivos estavam duplicados do
+  mesmo jeito, então a paridade estava perfeita. Comparar as línguas responde *"as traduções cobrem
+  as mesmas chaves?"*; não responde *"alguma chave sumiu em silêncio nas duas?"*. Contra a árvore de
+  ontem: **13 achados**; contra a de hoje: zero.
+- **`probe_dashboard_card_title.sh`** (novo) — 10 asserções sobre o `catalog.ts` real, compilado
+  dentro de um container Node da stack (o platform-ui não tem runner de teste, e um `vitest` que
+  ninguém instalou não é cobertura). Guarda as **duas** metades: o derivável re-traduz **e** o
+  título que o usuário digitou não é tocado — sem a segunda, "re-traduz tudo" passaria e apagaria
+  dado que só o usuário tem. Contra o `catalog.ts` de ontem: vermelho, com o motivo nomeado.
+
+---
+
 ## `/dashboard/*` estava na PORTA ERRADA — Monitor e Home sem dado (2026-08-28)
 
 Sintoma: os cartões da Home mostravam **"Indisponível"** e o Monitor › Sessions / os cartões de

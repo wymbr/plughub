@@ -405,3 +405,34 @@ Sem alteração na camada de storage:
 - Templates: Config API `dashboards/template:{uuid}` — JSON completo do `DashboardTemplate`
 - Layout pessoal: Config API `dashboards/layout:{tenant}:{user}` — array de `{ id, x, y, w, h }`
 - Admin token: `localStorage('plughub_admin_token')` — não vai para o backend
+
+
+---
+
+## Título do cartão — derivado do catálogo, nunca assado (2026-08-28)
+
+**O `title` do cartão guarda só o que o usuário digitou.** Vazio = derivar do catálogo, na língua
+corrente, no momento do render.
+
+| onde | o quê |
+|---|---|
+| `titleForNewCard(custom?)` | o que se grava num cartão novo: `''`, salvo título próprio |
+| `resolveCardTitle(card, t)` | derivável → rótulo do catálogo na língua atual; custom → intocado |
+| `normalizeCardTitles(cards, t)` | no carregamento, zera o derivável para o próximo save persistir |
+
+O fato já está gravado — é o `query.endpoint`, de onde `catalogIdForEndpoint` deriva a entrada do
+catálogo. **Não existe campo `catalog_id`**, de propósito: seria a mesma verdade em dois lugares,
+livres para divergir.
+
+Assar o rótulo na criação (o que se fazia até aqui) congela a língua: cartão criado em PT continua
+em PT com a interface em EN. E congela a **chave crua** quando o namespace `dashboards` ainda não
+carregou — `t()` devolve a própria chave.
+
+> ⚠️ **O que a Home mostrava não era isso.** O sintoma (`catalog.volume-by-channel.label` como
+> título) tinha causa própria: `"catalog"` aparecia **duas vezes** no `dashboards.json` de ambos os
+> locales, e em JSON a última vence — três rótulos do bloco perdedor deixaram de existir. Detalhe e
+> inventário no `CHANGELOG.md`; gate em `infra/test/probe_i18n_duplicate_keys.sh`.
+
+Gate do título: `infra/test/probe_dashboard_card_title.sh` — compila o `catalog.ts` real dentro de
+um container Node da stack e guarda as duas metades da regra (o derivável re-traduz; o custom não é
+tocado).

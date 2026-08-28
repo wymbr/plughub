@@ -350,11 +350,76 @@ export function catalogIdForEndpoint(endpoint?: string): string | undefined {
 type TFunc = (key: string, opts?: Record<string, unknown>) => string
 
 /**
+ * Chave i18n crua gravada como se fosse titulo: `catalog.<id>.label`.
+ *
+ * Acontecia quando o card era criado ANTES do namespace `dashboards` carregar —
+ * `t()` devolve a propria chave, e ela ia assada para o template. Nenhum humano
+ * digita isso, entao reconhecer o formato e seguro: e sempre rendering vazado, nunca
+ * titulo custom. Foi o que a Home mostrou por meses no cartao de volume por canal.
+ */
+const BAKED_KEY_RE = /^catalog\.[a-z0-9-]+\.label$/i
+
+/**
+ * Um titulo GUARDADO conta como custom?
+ *
+ * Nao conta quando: esta vazio (o caso normal desde 2026-08-28 — ver
+ * `titleForNewCard`), quando e a chave crua vazada, ou quando ainda e igual ao
+ * rotulo do catalogo em alguma lingua (cards criados antes, com o titulo assado).
+ *
+ * O par EN/pt-BR e hardcoded de proposito e vai envelhecer para ZERO: desde que o
+ * titulo deixou de ser assado na criacao, nenhum card NOVO nasce com rotulo gravado,
+ * entao uma terceira lingua nao cria caso novo. Isto e reconhecimento de dado
+ * legado, nao regra viva.
+ */
+function isDerivedTitle(stored: string, id: string, t: TFunc): boolean {
+  if (!stored) return true
+  if (BAKED_KEY_RE.test(stored)) return true
+  const key = `catalog.${id}.label`
+  const entry = getEndpoint(id)
+  return stored === t(key, { lng: 'en' })
+      || stored === t(key, { lng: 'pt-BR' })
+      || (!!entry && stored === entry.label)
+}
+
+/**
+ * `title` a gravar num card novo: **string vazia**, salvo quando o usuario digitou
+ * um titulo proprio.
+ *
+ * Titulo derivavel e RENDERING, nao fato: assa-lo congela a lingua da criacao (card
+ * criado em PT segue em PT com a UI em EN) e, se o namespace ainda nao carregou,
+ * congela a chave crua. O fato ja esta gravado — e o `query.endpoint`, de onde
+ * `catalogIdForEndpoint` deriva a entrada do catalogo. Guardar tambem um `catalog_id`
+ * seria a MESMA verdade em dois campos, livres para divergir.
+ */
+export function titleForNewCard(custom?: string): string {
+  return (custom ?? '').trim()
+}
+
+/**
+ * Normaliza os titulos de um conjunto de cards vindo do store: o que for derivavel
+ * vira `''`. Roda no CARREGAMENTO, para que um "Save template" seguinte persista a
+ * limpeza — sem isso o render ficaria certo e o dado salvo continuaria mentindo,
+ * esperando a proxima superficie que leia `card.title` cru.
+ */
+export function normalizeCardTitles<T>(cards: T[], t: TFunc): T[] {
+  // Generico SEM constraint + cast interno: os dois formatos de card (legado com
+  // `type`/`config`, novo com `query`) formam uma uniao que nao satisfaz uma
+  // constraint estrutural, e amarra-la faria o `setCards` receber a constraint em vez
+  // do tipo do chamador. O cast e local e o campo lido e um so.
+  return cards.map(card => {
+    const c = card as { title?: string; query?: { endpoint?: string } }
+    const stored = (c.title ?? '').trim()
+    if (!stored) return card
+    const id = catalogIdForEndpoint(c.query?.endpoint)
+    if (!id || !isDerivedTitle(stored, id, t)) return card
+    return { ...card, title: '' }
+  })
+}
+
+/**
  * Display title for a dashboard card, locale-aware.
- * Cards store a `title` string that was baked in whatever language was active at
- * creation time. If that stored title still matches the catalog label (in EN or
- * pt-BR — i.e. the user never renamed it), re-translate it to the current locale.
- * A genuinely custom title is preserved as-is.
+ * Titulo derivavel (vazio, chave vazada ou rotulo assado) e resolvido do catalogo na
+ * lingua corrente; titulo genuinamente custom e preservado como esta.
  */
 export function resolveCardTitle(
   card: { title?: string; query?: { endpoint?: string }; config?: { title?: string }; type?: string },
@@ -363,13 +428,10 @@ export function resolveCardTitle(
   const stored = (card.title ?? '').trim()
   const id = catalogIdForEndpoint(card.query?.endpoint)
   if (id) {
-    const key = `catalog.${id}.label`
-    const cur = t(key)
-    const en  = t(key, { lng: 'en' })
-    const pt  = t(key, { lng: 'pt-BR' })
-    const entry = getEndpoint(id)
-    if (!stored || stored === en || stored === pt || (entry && stored === entry.label)) return cur
+    if (isDerivedTitle(stored, id, t)) return t(`catalog.${id}.label`)
     return stored
   }
+  // Card legado (sem `query.endpoint`): nao ha catalogo de onde derivar.
+  if (BAKED_KEY_RE.test(stored)) return t(stored)
   return stored || card.config?.title || card.type || ''
 }

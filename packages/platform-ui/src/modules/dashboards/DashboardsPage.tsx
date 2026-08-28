@@ -26,7 +26,7 @@ import { useAuth } from '@/auth/useAuth'
 import { AddCardModal } from '@/dashboard/AddCardModal'
 import { RoleDefaultsModal } from '@/modules/dashboards/RoleDefaultsModal'
 import { CardRenderer } from '@/dashboard/CardRenderer'
-import { resolveCardTitle } from '@/dashboard/catalog'
+import { normalizeCardTitles, resolveCardTitle } from '@/dashboard/catalog'
 import { FilterBar } from '@/dashboard/FilterBar'
 import { FilterConfigPanel } from '@/dashboard/FilterConfigPanel'
 import {
@@ -217,9 +217,12 @@ export default function DashboardsPage() {
       if (personal && personal.length === template.cards.length) {
         const personalIds = new Set(personal.map(c => c.id))
         const allMatch = template.cards.every(c => personalIds.has(c.id))
-        if (allMatch) { setCards(personal); return }
+        // Titulo derivavel vira '' no carregamento: o "Save template" seguinte
+        // persiste a limpeza, em vez de deixar o dado salvo mentindo com o render
+        // certo por cima.
+        if (allMatch) { setCards(normalizeCardTitles(personal, t)); return }
       }
-      setCards(template.cards)
+      setCards(normalizeCardTitles(template.cards, t))
     })
     setDirty(false)
     setEditMode(false)
