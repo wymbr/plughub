@@ -314,6 +314,44 @@ def accessible_pools_from_token(token: str | None) -> list[str] | None:
     return _resolve_scope(payload, "SSE")
 
 
+def raw_bearer_from_request(
+    request: "Any", token: "str | None" = None,
+) -> "str | None":
+    """
+    Token CRU nas duas origens possiveis: `?token=` (SSE, porque `EventSource` nao
+    manda cabecalho) OU `Authorization: Bearer` (todo o resto).
+
+    Existe como funcao propria porque DOIS verificadores precisam da mesma resposta
+    para "de onde vem o token": o escopo de pool (`accessible_pools_from_request`) e a
+    identidade (`auth.require_dashboard_principal`). Duas copias divergiriam em
+    precedencia, e a divergencia apareceria como "o mesmo endpoint autoriza pelo
+    cabecalho mas escopa pela query".
+
+    Precedencia query-primeiro por compatibilidade: quem ja monta a URL com `?token=`
+    continua igual; o cabecalho e o fallback, nao o contrario.
+    """
+    if token:
+        return token
+    # `?token=` mesmo quando o chamador nao o declarou como parametro: o dependency de
+    # identidade (`auth.require_dashboard_principal`) nao tem como receber o Query, e
+    # sem esta linha o SSE de `/dashboard/operational` autenticava por um caminho que
+    # o `EventSource` nao consegue usar — 401 so no stream, com os irmaos verdes.
+    try:
+        qp = request.query_params.get("token")
+    except Exception:  # request sem query_params (teste, chamada interna)
+        qp = None
+    if qp:
+        return qp
+    auth = ""
+    try:
+        auth = request.headers.get("Authorization", "") or ""
+    except Exception:  # request sem headers (teste, chamada interna)
+        auth = ""
+    if auth.startswith("Bearer "):
+        return auth[len("Bearer "):].strip() or None
+    return None
+
+
 def accessible_pools_from_request(
     request: "Any", token: "str | None" = None,
 ) -> "list[str] | None":
@@ -333,15 +371,7 @@ def accessible_pools_from_request(
     A precedencia e query-primeiro por compatibilidade: quem ja monta a URL com
     `?token=` continua igual. O cabecalho e o fallback, nao o contrario.
     """
-    if not token:
-        auth = ""
-        try:
-            auth = request.headers.get("Authorization", "") or ""
-        except Exception:  # request sem headers (teste, chamada interna)
-            auth = ""
-        if auth.startswith("Bearer "):
-            token = auth[len("Bearer "):].strip() or None
-    return accessible_pools_from_token(token)
+    return accessible_pools_from_token(raw_bearer_from_request(request, token))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

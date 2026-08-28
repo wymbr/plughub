@@ -103,6 +103,60 @@ probe_call "modules/agent-assist/hooks/useCustomerSearch.ts" \
   "/sessions/customer/__probe__/search?tenant_id=$TENANT&q=x" "busca no historico"
 probe_call "api/evaluation-hooks.ts" \
   "/reports/evaluations?tenant_id=$TENANT" "relatorios de avaliacao"
+# 2026-08-28 — os quatro que a versao anterior deste probe NAO listava, e que por
+# isso quebraram com ele VERDE: cartoes da Home, Console/Monitor, trace e workflow.
+probe_call "dashboard/CardRenderer.tsx" \
+  "/reports/display/session-volume?tenant_id=$TENANT&from=-7d" "cartoes do dashboard"
+probe_call "modules/service/api/hooks.ts" \
+  "/dashboard/metrics?tenant_id=$TENANT" "metricas 24h do Console/Monitor"
+probe_call "modules/agent-assist/hooks/useSessionTrace.ts" \
+  "/reports/sessions/__probe__/trace" "trace da sessao"
+probe_call "modules/service/components/WorkflowTraceList.tsx" \
+  "/sessions/__probe__/workflow-trace?tenant_id=$TENANT" "trace de workflow"
+
+printf '\n'
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Varredura DERIVADA — a metade que cresce sozinha
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# A tabela acima mede AO VIVO, mas so o que alguem lembrou de listar. Foi o bastante
+# para ficar verde no dia em que a Home parou: os arquivos que quebraram nao estavam
+# nela. `_ui_raw_analytics_calls.py` varre a arvore e devolve todo `fetch` cru que
+# aponta para um endpoint de analytics; aqui cada achado e classificado pela MESMA
+# regra da tabela — 401 anonimo => QUEBRADO, resto => EXPOSTO.
+printf '\033[1mVarredura derivada (todo fetch cru -> analytics)\033[0m\n'
+SWEEP="$HERE/_ui_raw_analytics_calls.py"
+PY="$(command -v python3 || command -v python)"
+if [ -z "$PY" ] || [ ! -f "$SWEEP" ]; then
+  inc "varredura indisponivel (python=$PY, script=$SWEEP) — a metade derivada NAO rodou"
+else
+  sweep_out="$("$PY" "$SWEEP" "$UI_SRC")"
+  n_hit=0; n_und=0
+  while IFS='|' read -r kind f line rest1 rest2; do
+    [ -n "$kind" ] || continue
+    case "$kind" in
+      HIT)
+        n_hit=$((n_hit + 1))
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$AN$rest1")"
+        if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+          bad "$f:$line"
+          info "fetch CRU para $rest1 — o endpoint exige credencial (HTTP $code)."
+          info "Trocar por apiFetch, ou a tela fica vazia sem erro."
+        else
+          warn "$f:$line"
+          info "fetch CRU para $rest1 (HTTP $code — ainda nao exige credencial)."
+        fi ;;
+      UNDECIDABLE)
+        n_und=$((n_und + 1)) ;;
+    esac
+  done <<< "$sweep_out"
+  [ "$n_hit" -eq 0 ] && ok "nenhum fetch cru com URL literal apontando para analytics"
+  # O nao-medido e DITO, nunca omitido: contar zero indecidiveis transformaria
+  # "nao olhei" em "esta limpo".
+  info "$n_und chamada(s) com URL nao-literal, tipo fetch(url) — fora do alcance"
+  info "desta via; e assim que o CardRenderer escapou. Cobertura declarada, nao suposta."
+fi
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then

@@ -13,6 +13,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import type { TraceNode } from './WorkflowTraceList'
 
@@ -221,7 +222,7 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
     if (!tenantId || !node.session_id) return
     setLoading(true)
     try {
-      const res  = await fetch(
+      const res  = await apiFetch(
         `/sessions/${encodeURIComponent(node.session_id)}/pipeline-state?tenant_id=${encodeURIComponent(tenantId)}`
       )
       const json = await res.json() as PipelineStateResponse

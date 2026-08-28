@@ -7,6 +7,7 @@
  * Endpoint: GET /reports/sessions/{session_id}/trace (analytics-api). Fail-soft.
  */
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/api/apiFetch";
 
 const REPORTS_BASE = "/reports";
 
@@ -49,7 +50,7 @@ export function useSessionTrace(sessionId: string | null): UseSessionTraceReturn
     let cancelled = false;
     setLoading(true); setError(null);
 
-    fetch(`${REPORTS_BASE}/sessions/${encodeURIComponent(sessionId)}/trace`)
+    apiFetch(`${REPORTS_BASE}/sessions/${encodeURIComponent(sessionId)}/trace`)
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then(d => { if (!cancelled) { setTrace(d as SessionTrace); setLoading(false); } })
       .catch(e => { if (!cancelled) { setError(String(e)); setTrace(null); setLoading(false); } });

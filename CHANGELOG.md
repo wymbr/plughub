@@ -2,6 +2,104 @@
 
 ---
 
+## `/dashboard/*` estava na PORTA ERRADA — Monitor e Home sem dado (2026-08-28)
+
+Sintoma: os cartões da Home mostravam **"Indisponível"** e o Monitor › Sessions / os cartões de
+pool do Console vinham vazios, com a stack inteira `healthy` e o ClickHouse respondendo.
+Nada quebrou no dado: **duas causas de credencial**, ambas expostas pelo endurecimento do demo de
+2026-08-27 (`e6cd974`, `PLUGHUB_ANALYTICS_OPEN_ACCESS` de `true` cravado para default `false`).
+
+### Causa 1 — dois verificadores, e as rotas de dashboard estavam no do sistema
+
+O analytics-api tem **dois** verificadores, com segredos diferentes:
+
+| verificador | segredo | quem carrega esse token |
+|---|---|---|
+| `auth.require_principal` | `admin_jwt_secret` | serviço/operação (`/admin/*`) |
+| `pool_auth.*` | `auth_jwt_secret` | o navegador, vindo do login do auth-api |
+
+As quatro rotas de `/dashboard/*` dependiam da **primeira**. O navegador nunca tem esse token, então
+**não existia caminho autenticado nenhum** para elas: medido, o mesmo JWT que dá `200` em
+`/reports/sessions` dava `401 Invalid token` em `/dashboard/{operational,metrics,sentiment,pool-sla}`
+— no cabeçalho **e** no `?token=`. Enquanto o bypass anônimo existia, `require_principal` devolvia um
+principal `admin` **antes de qualquer decode**, e era só isso que fazia a tela funcionar.
+
+É a família *"existe ≠ está pronto"* com um agravante: o `accessible_pools_from_request` fora escrito
+no dia anterior justamente para essas rotas, com a hipótese de que o problema era a **origem** do
+token (query × cabeçalho). Era o **segredo** — e consertar a origem não move o número, o que faz o
+conserto certo parecer não ter aplicado.
+
+- **`auth.require_dashboard_principal`** (novo): aceita o token de sistema **ou** o JWT do usuário,
+  do cabeçalho ou de `?token=`. Dependência **nova** em vez de alargar `require_principal`, que
+  também guarda `/admin/*` (cross-tenant, flush, backfill) — alargar ali daria a qualquer usuário
+  logado o que hoje exige segredo de sistema, e alargamento é o erro que não aparece na tela.
+- **Usuário fica preso ao próprio tenant** (`role="operator"`), mesmo com `roles: ["admin"]` no
+  token: papel de produto não é papel de sistema. Cross-tenant segue exigindo o outro segredo.
+- **Expiração não cai para a tentativa seguinte** — assinatura conferida + `exp` vencido já
+  identifica o emissor; tentar o outro segredo trocaria *"expirado"* (que a UI resolve com refresh)
+  por *"inválido"* (que ela trata como erro de credencial).
+- `pool_auth.raw_bearer_from_request` passou a ser a **única** casa que responde *"de onde vem o
+  token"* — identidade e escopo de pool lendo por caminhos diferentes daria o endpoint que
+  *autoriza* por uma origem e *escopa* por outra. Foi exatamente o que aconteceu na 1ª iteração
+  deste conserto: os três irmãos ficaram verdes e o SSE seguiu `401`, porque a dependência só lia
+  o cabeçalho e o `EventSource` não manda cabeçalho.
+
+### Causa 2 — o browser chamando anônimo, com `fetch` cru
+
+`/reports/*` e `/reports/display/*` sempre aceitaram o JWT do usuário; **cinco call sites não o
+mandavam**. `apiFetch` existe para isso desde 2026-07-23 e não estava em uso neles:
+
+| arquivo | endpoint | tela |
+|---|---|---|
+| `dashboard/CardRenderer.tsx:48` | `/reports/display/*` | todos os cartões da Home |
+| `service/api/hooks.ts` (×5) | `/dashboard/metrics`, `/sessions/active`, `/reports/{segments,sessions}` | Console / Monitor |
+| `agent-assist/hooks/useSessionTrace.ts:52` | `/reports/sessions/{id}/trace` | trace da sessão |
+| `service/components/WorkflowTraceList.tsx:174` | `/sessions/{id}/workflow-trace` | trace de workflow |
+| `service/components/WebhookSegmentDetail.tsx:224` | `/sessions/{id}/pipeline-state` | **latente** (rota ainda aberta) |
+
+`/dashboard/metrics` não mandava credencial **nenhuma** — nem o `?token=` que os dois irmãos no mesmo
+arquivo mandavam. E os `catch { /* stale data acceptable */ }` engoliam também o `401`: dado velho é
+aceitável, recusa de credencial não é. Agora há `_warnDenied`, que **nomeia** o que a tela deixou de
+mostrar em vez de deixar a ausência parecer "não há dado".
+
+### O instrumento media a proposição adjacente
+
+`probe_ui_credential_coverage.sh` existia desde 2026-08-27, com este defeito exato como razão
+declarada — e estava **VERDE** no dia em que a Home parou. Motivo: inventário **à mão** de quatro
+arquivos, e nenhum dos cinco quebrados estava nele. Ele respondia *"os quatro que eu conheço mandam
+credencial?"*, não *"alguma chamada do browser a endpoint gateado sai sem credencial?"*.
+
+`infra/test/_ui_raw_analytics_calls.py` é a metade que **cresce sozinha**: varre a árvore, resolve
+helper de header por leitura (não por lista de nomes, que envelhece) e devolve todo `fetch` cru
+apontando para analytics; o probe classifica cada achado **ao vivo** (401 ⇒ QUEBRADO · resto ⇒
+EXPOSTO). Falseabilidade medida: sobre a árvore de ontem sai **5 achados**; sobre a de hoje, zero.
+
+**E o limite é declarado, não escondido:** `fetch(url)` — URL montada noutro lugar — não é decidível
+por esta via, e foi assim que o `CardRenderer` escapou. Esses casos saem como `UNDECIDABLE` e o probe
+**imprime a contagem** (15 hoje). Contar zero deles transformaria *"não olhei"* em *"está limpo"* —
+que é o defeito que a varredura existe para não repetir.
+
+### Escopo de pool: uma limitação virou declaração
+
+`/dashboard/metrics` é **tenant-wide** e continua sendo — os irmãos filtram por `_filter_by_pool`
+porque devolvem linha por pool; aqui o retorno já vem agregado e `usage_events` sequer tem coluna de
+pool. Filtrar só o que dá filtraria **sessões** e não **uso**, publicando um painel meio-escopado —
+números que não fecham entre si, sem nada dizendo por quê. Então a resposta carrega
+`pool_scope_applied: false` e o serviço **loga** quando quem lê é um chamador escopado. Dívida no
+`TODO.md`, não silêncio.
+
+### Medição
+
+- Backend, pelo mesmo proxy que o browser usa (`:5174`): as 7 rotas → `200`. Testemunhas: anônimo →
+  `401` · token lixo → `401` · outro tenant → `403` · SSE sem `?token=` → `401`.
+- `TestDashboardUserJwt` (7 testes) com os segredos **distintos** — em `TestDashboardRBAC` os dois
+  apontam para o mesmo `SECRET`, e um token de usuário passaria pelo ramo do admin, verde sem
+  exercer nada. Com o `dashboard.py` de ontem: **4 reprovam**; com o de hoje: 7 passam.
+- Suíte do analytics-api: **646 passam**.
+- `probe_ui_credential_coverage.sh`: **VERDE** (8 arquivos na tabela viva + varredura sem achados).
+
+---
+
 ## `DELETE` no dialog-api — arquivar reversível, purgar só o nunca-publicado (2026-08-28)
 
 Fecha o achado colateral de 2026-08-27 (`dialog-api` sem rota `DELETE` ⇒ **todo form criado era

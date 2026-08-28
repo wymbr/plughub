@@ -446,3 +446,131 @@ class TestDashboardRBAC:
         assert resp.status_code in (200, 503), (
             f"{endpoint} admin must not be blocked by tenant isolation"
         )
+
+
+# ── TestDashboardUserJwt ──────────────────────────────────────────────────────
+#
+# O defeito que esta classe guarda (medido 2026-08-28)
+# ----------------------------------------------------
+# `/dashboard/*` autenticava SO com `admin_jwt_secret` — o token de SISTEMA. O
+# navegador nunca o tem: o login do auth-api assina com `auth_jwt_secret`. Enquanto
+# `analytics_open_access` era `true` ninguem via, porque o bypass devolvia um
+# principal `admin` antes de qualquer decode. Ao endurecer o demo (2026-08-27) as
+# quatro rotas viraram 401 para a UI, e Monitor > Sessions / cartoes de pool do
+# Console ficaram VAZIOS — o 401 engolido pelo `catch` do hook.
+#
+# POR QUE OS SEGREDOS AQUI SAO DIFERENTES: em `TestDashboardRBAC` os dois apontam
+# para `SECRET`, entao um token de usuario passaria pelo ramo do ADMIN e o teste
+# ficaria verde sem exercer nada. Segredos distintos sao o que torna esta classe
+# capaz de reprovar: com o codigo de ontem, `test_user_jwt_is_accepted` da 401.
+SECRET_SYS  = "system_secret_distinto"
+SECRET_USER = "auth_api_secret_distinto"
+
+
+def _user_token(**over) -> str:
+    """JWT no formato que o auth-api emite (o do login da UI)."""
+    payload = {
+        "sub": "c30b50d9", "tenant_id": TENANT, "email": "admin@plughub.local",
+        "roles": ["admin", "developer"], "accessible_pools": [], "unrestricted": True,
+    }
+    payload.update(over)
+    return jwt.encode(payload, SECRET_USER, algorithm="HS256")
+
+
+class TestDashboardUserJwt:
+    @pytest.fixture(autouse=True)
+    def _patch_settings(self, monkeypatch):
+        settings = MagicMock()
+        settings.admin_jwt_secret     = SECRET_SYS
+        settings.auth_jwt_secret      = SECRET_USER
+        # Sem esta linha o MagicMock devolve truthy e TUDO passa pelo bypass — a
+        # classe inteira ficaria verde sem tocar no codigo que ela mede.
+        settings.analytics_open_access = False
+        for mod in ("auth", "pool_auth"):
+            monkeypatch.setattr(
+                f"plughub_analytics_api.{mod}.get_settings", lambda: settings,
+            )
+
+    def _client_and_store(self):
+        app, _, store_mock = _make_app()
+        store_mock._client.query = MagicMock(
+            side_effect=[
+                _ch_result(["total", "avg_handle_ms", "channel", "outcome", "close_reason"], []),
+                _ch_result(["oc", "cnt"], []),
+                _ch_result(["dimension", "total_qty"], []),
+                _ch_result(["category", "cnt", "avg_sc"], []),
+            ]
+        )
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_user_jwt_is_accepted(self):
+        """O JWT do LOGIN abre /dashboard/metrics. Era 401 ate 2026-08-28."""
+        resp = self._client_and_store().get(
+            "/dashboard/metrics",
+            params={"tenant_id": TENANT},
+            headers=_auth_headers(_user_token()),
+        )
+        assert resp.status_code in (200, 503), resp.text
+
+    def test_user_jwt_via_query_param(self):
+        """Caminho do SSE: `EventSource` nao manda header, o token vai em `?token=`."""
+        resp = self._client_and_store().get(
+            "/dashboard/metrics",
+            params={"tenant_id": TENANT, "token": _user_token()},
+        )
+        assert resp.status_code in (200, 503), resp.text
+
+    def test_system_token_still_works(self):
+        """O token de SISTEMA nao foi trocado pelo de usuario — os dois abrem."""
+        sys_token = jwt.encode(
+            {"sub": "svc", "role": "admin"}, SECRET_SYS, algorithm="HS256",
+        )
+        resp = self._client_and_store().get(
+            "/dashboard/metrics",
+            params={"tenant_id": TENANT},
+            headers=_auth_headers(sys_token),
+        )
+        assert resp.status_code in (200, 503), resp.text
+
+    # ── testemunhas: o portao continua sendo portao ──────────────────────────
+    def test_anonymous_still_401(self):
+        resp = self._client_and_store().get(
+            "/dashboard/metrics", params={"tenant_id": TENANT},
+        )
+        assert resp.status_code == 401
+
+    def test_token_signed_with_neither_secret_is_401(self):
+        bogus = jwt.encode({"sub": "x", "tenant_id": TENANT}, "outro_segredo", algorithm="HS256")
+        resp = self._client_and_store().get(
+            "/dashboard/metrics",
+            params={"tenant_id": TENANT},
+            headers=_auth_headers(bogus),
+        )
+        assert resp.status_code == 401
+
+    def test_user_jwt_cannot_cross_tenant(self):
+        """
+        `roles: ["admin"]` e papel de PRODUTO. Cross-tenant e capacidade de SISTEMA e
+        segue exigindo o outro segredo — ler os dois no mesmo campo seria conceder
+        alcance por causa de um rotulo de tela.
+        """
+        resp = self._client_and_store().get(
+            "/dashboard/metrics",
+            params={"tenant_id": "outro_tenant"},
+            headers=_auth_headers(_user_token()),
+        )
+        assert resp.status_code == 403
+
+    def test_user_jwt_without_tenant_is_403(self):
+        """Sem tenant no token nao da para dizer qual tenant ele le — recusa nomeada,
+        nunca `None` (que os handlers leriam como 'todos')."""
+        token = jwt.encode(
+            {"sub": "x", "roles": ["admin"]}, SECRET_USER, algorithm="HS256",
+        )
+        resp = self._client_and_store().get(
+            "/dashboard/metrics",
+            params={"tenant_id": TENANT},
+            headers=_auth_headers(token),
+        )
+        assert resp.status_code == 403
+        assert "tenant_id" in resp.text

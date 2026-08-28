@@ -22,8 +22,13 @@ Routes:
       Query param: tenant_id (required)
       Returns: list of {pool_id, avg_score, count, distribution, updated_at}.
 
-All endpoints require a valid Bearer JWT (same RBAC as /admin/*).
-Operators are restricted to their own tenant_id; admins may query any tenant.
+Auth: `require_dashboard_principal` -- aceita o token de SISTEMA
+(`admin_jwt_secret`, mesmo de /admin/*) OU o JWT do usuario logado
+(`auth_jwt_secret`, o do auth-api), pelo cabecalho ou por `?token=` (SSE).
+Ate 2026-08-28 estas rotas exigiam o segredo de SISTEMA, que o navegador nunca tem:
+com `analytics_open_access=false` a UI recebia 401 em todas as quatro. Usuario logado
+fica sempre preso ao PROPRIO tenant; cross-tenant segue exigindo token de sistema.
+O escopo de POOL e decidido a parte, por `accessible_pools_from_request`.
 """
 from __future__ import annotations
 
@@ -35,7 +40,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .auth import Principal, require_principal
+from .auth import Principal, require_dashboard_principal
 from .pool_auth import accessible_pools_from_request
 from .query import (
     get_metrics_24h, get_pool_sla_1h,
@@ -66,7 +71,7 @@ async def dashboard_operational(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
     token:     str | None = Query(None, description="auth-api Bearer (SSE query param — EventSource não manda header) p/ pool-scoping"),
-    principal: Principal = Depends(require_principal),
+    principal: Principal = Depends(require_dashboard_principal),
 ) -> StreamingResponse:
     """
     Server-Sent Events stream of live pool operational snapshots.
@@ -125,7 +130,7 @@ async def dashboard_operational(
 async def dashboard_metrics(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
-    principal: Principal = Depends(require_principal),
+    principal: Principal = Depends(require_dashboard_principal),
 ) -> JSONResponse:
     """
     Aggregated metrics for the last 24 hours (ClickHouse).
@@ -166,6 +171,35 @@ async def dashboard_metrics(
         database = store._database,
         tenant_id = tenant_id,
     )
+    # Escopo de pool: este bloco e TENANT-WIDE e continua sendo. Os irmaos
+    # (`operational`, `sentiment`, `pool-sla`) filtram por `_filter_by_pool` porque
+    # devolvem linha POR POOL; aqui o retorno ja vem agregado, e `usage_events` sequer
+    # tem coluna de pool -- filtrar so o que da filtraria SESSOES e nao USO, publicando
+    # um painel meio-escopado, que e pior que um escopo declarado (numeros que nao
+    # fecham entre si, sem nada dizendo por que).
+    #
+    # Entao a limitacao vira DECLARACAO, nao silencio: campo na resposta + log nomeando
+    # quem leu mais do que o proprio dominio. Divida registrada no TODO.md.
+    # O `try` NAO e degradacao silenciosa: a IDENTIDADE ja foi decidida pelo
+    # `require_dashboard_principal` acima, e esta segunda leitura serve so para o
+    # marcador. Um token de SISTEMA nao e verificavel pelo `auth_jwt_secret`, entao o
+    # resolvedor de escopo levanta 401 — e deixa-lo subir daria 401 numa requisicao
+    # que a identidade JA aprovou. O motivo e dito, nunca engolido.
+    try:
+        accessible = accessible_pools_from_request(request, None)
+    except HTTPException:
+        logger.info(
+            "/dashboard/metrics: token sem escopo de pool legivel (tipicamente o de "
+            "SISTEMA). Segue TENANT-WIDE, que e o alcance desse chamador."
+        )
+        accessible = None
+    data["pool_scope_applied"] = False
+    if accessible is not None:
+        logger.warning(
+            "/dashboard/metrics: chamador ESCOPADO (%d pools) recebendo agregado "
+            "TENANT-WIDE de %s. sub=%s. `pool_scope_applied=false` na resposta.",
+            len(accessible), tenant_id, principal.sub,
+        )
     status_code = 503 if data.get("error") else 200
     return JSONResponse(content=data, status_code=status_code)
 
@@ -177,7 +211,7 @@ async def dashboard_sentiment(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
     token:     str | None = Query(None, description="auth-api Bearer p/ pool-scoping"),
-    principal: Principal = Depends(require_principal),
+    principal: Principal = Depends(require_dashboard_principal),
 ) -> JSONResponse:
     """
     Current per-pool sentiment aggregate (Redis, TTL 300s).
@@ -218,7 +252,7 @@ async def dashboard_pool_sla(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
     token:     str | None = Query(None, description="auth-api Bearer p/ pool-scoping"),
-    principal: Principal = Depends(require_principal),
+    principal: Principal = Depends(require_dashboard_principal),
 ) -> JSONResponse:
     """
     Per-pool SLA performance for the last 1 hour (ClickHouse).

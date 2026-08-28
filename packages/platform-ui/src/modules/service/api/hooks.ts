@@ -16,15 +16,33 @@ import type {
   PoolSnapshot, PoolSlaEntry, PoolView, SentimentEntry, StreamEntry, SupervisorState
 } from '../types'
 import { getAccessToken } from '@/auth/token-store'
+import { apiFetch } from '@/api/apiFetch'
 
 const BASE = ''  // relative URLs — Vite proxies to analytics-api on port 3500
 
-// Segurança Fase D — pool-scoping dos endpoints /dashboard/*: o token do domínio vai
-// como QUERY PARAM porque o EventSource (SSE) não envia header Authorization. Sem token
-// → sufixo vazio → backend degrada irrestrito (dashboards sem login seguem funcionando).
+// Segurança Fase D — o token vai como QUERY PARAM no ÚNICO caminho que não aceita
+// cabeçalho: o EventSource (SSE) de `/dashboard/operational`. Todo o resto usa
+// `apiFetch` (cabeçalho), que é onde o Bearer pertence.
+// ⚠️ A versão anterior deste comentário dizia que sem token o "backend degrada
+// irrestrito (dashboards sem login seguem funcionando)". Isso deixou de valer em
+// 2026-08-27: o anônimo é 401. Comentário que descreve um contrato revogado é da mesma
+// família do valor plausível — parece resposta e não é.
 function _tok(): string {
   const t = getAccessToken()
   return t ? `&token=${encodeURIComponent(t)}` : ''
+}
+
+// 2026-08-28 — os `catch { /* stale data acceptable */ }` abaixo engoliam TAMBEM o
+// 401. Quando `/dashboard/*` passou a recusar o anonimo, a tela ficou vazia sem uma
+// linha em lugar nenhum dizendo por que. Dado velho e aceitavel; recusa de credencial
+// nao e — ela precisa aparecer para quem depura.
+function _warnDenied(res: Response, what: string): void {
+  if (res.status === 401 || res.status === 403) {
+    console.warn(
+      `[analytics] ${what}: HTTP ${res.status} — requisicao sem autorizacao. ` +
+      `A tela vai ficar sem este dado (nao e ausencia de dado).`,
+    )
+  }
 }
 
 // Segurança 2026-08-27 — `POST /supervisor/{join,message,leave}` passou a EXIGIR token
@@ -117,8 +135,8 @@ export function useSentimentLive(tenantId: string, intervalMs = 10_000): Sentime
   const fetch_ = useCallback(async () => {
     if (!tenantId) return
     try {
-      const res = await fetch(`${BASE}/dashboard/sentiment?tenant_id=${encodeURIComponent(tenantId)}${_tok()}`)
-      if (res.ok) setEntries(await safeJson(res))
+      const res = await apiFetch(`${BASE}/dashboard/sentiment?tenant_id=${encodeURIComponent(tenantId)}`)
+      if (res.ok) setEntries(await safeJson(res)); else _warnDenied(res, 'dashboard/sentiment')
     } catch { /* stale data acceptable */ }
   }, [tenantId])
   useEffect(() => { fetch_(); const id = setInterval(fetch_, intervalMs); return () => clearInterval(id) }, [fetch_, intervalMs])
@@ -132,8 +150,8 @@ export function useMetrics24h(tenantId: string, intervalMs = 60_000): Metrics24h
   const fetch_ = useCallback(async () => {
     if (!tenantId) return
     try {
-      const res = await fetch(`${BASE}/dashboard/metrics?tenant_id=${encodeURIComponent(tenantId)}`)
-      if (res.ok) setMetrics(await safeJson(res))
+      const res = await apiFetch(`${BASE}/dashboard/metrics?tenant_id=${encodeURIComponent(tenantId)}`)
+      if (res.ok) setMetrics(await safeJson(res)); else _warnDenied(res, 'dashboard/metrics')
     } catch { /* ignore */ }
   }, [tenantId])
   useEffect(() => { fetch_(); const id = setInterval(fetch_, intervalMs); return () => clearInterval(id) }, [fetch_, intervalMs])
@@ -147,8 +165,8 @@ export function usePoolSla(tenantId: string, intervalMs = 60_000): PoolSlaEntry[
   const fetch_ = useCallback(async () => {
     if (!tenantId) return
     try {
-      const res = await fetch(`${BASE}/dashboard/pool-sla?tenant_id=${encodeURIComponent(tenantId)}${_tok()}`)
-      if (res.ok) setEntries(await safeJson(res))
+      const res = await apiFetch(`${BASE}/dashboard/pool-sla?tenant_id=${encodeURIComponent(tenantId)}`)
+      if (res.ok) setEntries(await safeJson(res)); else _warnDenied(res, 'dashboard/pool-sla')
     } catch { /* stale data acceptable */ }
   }, [tenantId])
   useEffect(() => { fetch_(); const id = setInterval(fetch_, intervalMs); return () => clearInterval(id) }, [fetch_, intervalMs])
@@ -222,10 +240,10 @@ export function useActiveSessions(
     if (!tenantId || !poolId) return
     setLoading(true)
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${BASE}/sessions/active?tenant_id=${encodeURIComponent(tenantId)}&pool_id=${encodeURIComponent(poolId)}&limit=100`,
       )
-      if (res.ok) setSessions(await safeJson(res))
+      if (res.ok) setSessions(await safeJson(res)); else _warnDenied(res, 'sessions/active')
     } catch { /* stale data acceptable */ }
     finally { setLoading(false) }
   }, [tenantId, poolId])
@@ -334,7 +352,7 @@ export function useSessionSegments(
     setLoading(true)
     try {
       const url = `${BASE}/reports/segments?tenant_id=${encodeURIComponent(tenantId)}&session_id=${encodeURIComponent(sessionId)}&page_size=50`
-      const res = await fetch(url)
+      const res = await apiFetch(url)
       if (!res.ok) {
         setError(`API indisponível (HTTP ${res.status})`)
         return
@@ -416,7 +434,7 @@ export function useSessionChildren(
     setLoading(true)
     const url = `${BASE}/reports/sessions?tenant_id=${encodeURIComponent(tenantId)}`
       + `&origin_session_id=${encodeURIComponent(sessionId)}&page_size=50`
-    fetch(url)
+    apiFetch(url)
       .then(async res => {
         if (cancelled) return
         if (!res.ok) { setError(`HTTP ${res.status}`); return }

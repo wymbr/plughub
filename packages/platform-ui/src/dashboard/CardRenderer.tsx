@@ -10,6 +10,7 @@
  * Polling interval is taken from card.refresh_ms (default 30s).
  */
 import React, { useEffect, useRef, useState } from 'react'
+import { apiFetch } from '@/api/apiFetch'
 import { TimeseriesChart } from '@/components/TimeseriesChart'
 import type { DashboardCard, TimeseriesCardConfig, PoolStatusCardConfig } from '@/types'
 import { getDisplayTool } from './tools/registry'
@@ -45,8 +46,15 @@ function useFetchCardData(
       try {
         setLoading(true)
         const url = buildQueryUrl(card, runtimeFilters)
-        const res = await fetch(url)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        // `apiFetch` e nao `fetch`: os `/reports/display/*` exigem Bearer desde
+        // 2026-08-27 (o anonimo virou 401). Sem o token todo cartao do dashboard
+        // renderizava "Indisponivel" -- e o 401 nao aparecia em lugar nenhum.
+        const res = await apiFetch(url)
+        if (!res.ok) {
+          throw new Error(res.status === 401 || res.status === 403
+            ? `HTTP ${res.status} (sem autorizacao para este relatorio)`
+            : `HTTP ${res.status}`)
+        }
         const json = await res.json()
         if (!cancelled) { setData(json); setError(null) }
       } catch (e) {

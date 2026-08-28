@@ -164,6 +164,35 @@ byte-idênticas uma da outra — divergem só no código de recusa), depois `cha
 `analytics-api`/`evaluation-api` por último, porque as duas mudam de COMPORTAMENTO ao migrar (a
 ordem de acesso e o ramo legado, respectivamente) e precisam de decisão do dono, não de refactor.
 
+> **Emenda de 2026-08-28 — dentro do analytics-api são DOIS, e a conta de seis não os separa.**
+> O serviço tem `auth.require_principal` (segredo de SISTEMA, `/admin/*`) e `pool_auth.*` (JWT do
+> auth-api, `/reports/*`), e a divergência entre eles não é de postura: é de **segredo**, logo um
+> token válido para um é lixo para o outro. Foi assim que `/dashboard/*` ficou sem caminho
+> autenticado nenhum para o navegador (detalhe no `CHANGELOG.md` e em
+> [`docs/arcos/arc7-auth.md`](docs/arcos/arc7-auth.md)). Hoje há um terceiro,
+> `require_dashboard_principal`, que aceita os dois — deliberadamente, porque as duas populações
+> de chamador existem. Quando a migração acontecer, **o analytics-api não é UM caso, são três**, e
+> o de dashboard é o único cuja resposta correta é *"aceita as duas credenciais"*.
+
+### 🟡 `/dashboard/metrics` devolve agregado TENANT-WIDE a chamador escopado (2026-08-28)
+
+Declarado, não silencioso: a resposta carrega `pool_scope_applied: false` e o serviço loga quando
+quem lê tem `accessible_pools` restrito. Não foi escopado no mesmo passo porque `get_metrics_24h`
+agrega quatro blocos e **`usage_events` não tem coluna de pool**: filtrar só os que dão (sessions,
+segments) publicaria um painel meio-escopado — sessões de um domínio ao lado de uso do tenant
+inteiro, números que não fecham entre si e nada dizendo por quê. Escopar de verdade exige decidir o
+que fazer com `usage`/`sentiment`: omitir o bloco (a tela perde a faixa) ou marcá-lo por bloco.
+**Enquanto não for decidido, a limitação é lida na resposta, não adivinhada.**
+
+### 🟡 Cobertura declarada da varredura de credencial no browser (2026-08-28)
+
+`infra/test/_ui_raw_analytics_calls.py` só decide `fetch` com URL **literal**. As **15** chamadas
+`fetch(url)` (URL montada noutro lugar) saem como `UNDECIDABLE` e o probe imprime a contagem — foi
+exatamente por esse buraco que `dashboard/CardRenderer.tsx` escapou e a Home parou com o gate verde.
+Fechar de vez pede a regra inversa: **proibir `fetch` cru no platform-ui**, com allowlist declarada
+dos wrappers de credencial (`apiFetch`, `api/auth.ts`, `modules/*/api.ts`) — manifesto, não glob,
+pela mesma razão do `run_gates.sh`. É lint, não runtime; cabe num passo próprio.
+
 ### 🟡 101 classes `*-gray-N` INERTES no platform-ui (medido 2026-08-28)
 
 `tailwind.config.ts:23` redefine o token `gray` como cor **CHAPADA** (`#6B7280`), o que

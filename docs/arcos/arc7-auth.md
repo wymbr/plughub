@@ -1099,3 +1099,73 @@ grandes e duas execuções seguidas deram **6 e 5**. Um contador que perde linha
 sétima cópia entrar debaixo do verde. Trocado por `grep -qE '^[^#]*(…)'`, sem pipe, e a
 falseabilidade foi conferida injetando uma sétima implementação.
 
+
+---
+
+## Os DOIS verificadores do analytics-api, e a porta errada de `/dashboard/*` (2026-08-28)
+
+O analytics-api nunca teve um verificador só. Tem dois, com **segredos diferentes**, e a diferença
+não é histórica — é de domínio:
+
+| verificador | segredo | quem carrega esse token | superfície |
+|---|---|---|---|
+| `auth.require_principal` | `admin_jwt_secret` | serviço / operação | `/admin/*` (cross-tenant, flush, backfill) |
+| `pool_auth.optional_pool_principal` | `auth_jwt_secret` | o **navegador**, do login do auth-api | `/reports/*`, `/reports/display/*` |
+| `auth.require_dashboard_principal` | **os dois** | qualquer um dos acima | `/dashboard/*` |
+
+A terceira linha é de 2026-08-28. Até ela, `/dashboard/*` dependia do verificador de **sistema** —
+e o navegador nunca tem aquele token. Não havia caminho autenticado: o mesmo JWT que abre
+`/reports/sessions` recebia `401 Invalid token` nas quatro rotas de dashboard, tanto pelo cabeçalho
+quanto pelo `?token=`.
+
+O defeito ficou invisível por meses porque `analytics_open_access` era `true` no demo: o bypass
+devolve um principal `admin` **antes de qualquer decode**, então a tela funcionava sem nunca exercer
+o verificador. Ao endurecer o demo (`PLUGHUB_ANALYTICS_OPEN_ACCESS` default `false`, 2026-08-27),
+Monitor › Sessions e os cartões de pool do Console ficaram vazios.
+
+### O que a nova dependência decide, e o que ela deliberadamente NÃO concede
+
+1. **`admin_jwt_secret` primeiro** — a semântica de hoje, intacta: `role: admin` do token de sistema
+   segue podendo consultar qualquer tenant.
+2. **`auth_jwt_secret` depois** — usuário logado, mapeado para `role="operator"` e **preso ao tenant
+   do próprio token**, ainda que traga `roles: ["admin"]`. Papel de produto não é papel de sistema;
+   lê-los no mesmo campo concederia alcance cross-tenant por causa de um rótulo de tela.
+3. **Token sem `tenant_id` → `403` nomeado.** `effective_tenant` de um operator sem tenant devolve
+   `None`, que os handlers leem como *"todos"* — campo ausente virando escopo total é o valor
+   plausível que esta casa persegue.
+4. **Expiração não cai para a tentativa seguinte.** Assinatura conferida + `exp` vencido já
+   identifica o emissor; tentar o outro segredo trocaria *"expirado"* (a UI resolve com refresh) por
+   *"inválido"* (ela trata como erro de credencial).
+
+Uma dependência **nova** em vez de alargar `require_principal`: aquele guarda também `/admin/*`.
+Alargar ali daria a qualquer usuário logado o que hoje exige o segredo de sistema — e alargamento
+não aparece na tela como erro, só como dado a mais.
+
+### Origem do token mora numa casa só
+
+`pool_auth.raw_bearer_from_request(request, token?)` é a **única** resposta para *"de onde vem o
+token"*: `?token=` primeiro (o `EventSource` de `/dashboard/operational` não manda cabeçalho),
+cabeçalho como fallback. Identidade (`require_dashboard_principal`) e escopo de pool
+(`accessible_pools_from_request`) leem pela mesma função de propósito — na 1ª iteração deste
+conserto elas divergiam, e o resultado foi os três irmãos verdes com o SSE ainda em `401`.
+
+### `/dashboard/metrics` é tenant-wide, e agora diz isso
+
+Os três irmãos filtram por `_filter_by_pool` porque devolvem linha **por pool**. `metrics` devolve
+agregado, e `usage_events` não tem coluna de pool: filtrar só o que dá filtraria *sessões* e não
+*uso*, publicando um painel meio-escopado — números que não fecham entre si, sem nada dizendo por
+quê. A resposta carrega **`pool_scope_applied: false`** e o serviço loga quando quem lê é chamador
+escopado. Escopar de verdade é dívida registrada no `TODO.md`.
+
+> A leitura de escopo dentro de `metrics` está sob `try/except HTTPException`, e isso **não** é
+> degradação silenciosa: a identidade já foi decidida acima, e um token de SISTEMA não é verificável
+> pelo `auth_jwt_secret`. Deixar o 401 subir daria recusa numa requisição que a identidade **já
+> aprovou**. O motivo vai para o log.
+
+### Gate
+
+`infra/test/probe_ui_credential_coverage.sh` (metade viva, agora com os cinco arquivos que
+quebraram) + `infra/test/_ui_raw_analytics_calls.py` (varredura derivada, com a classe
+`UNDECIDABLE` impressa em vez de omitida) + `TestDashboardUserJwt` em
+`analytics-api/tests/test_dashboard.py` — **com os dois segredos distintos**, senão um token de
+usuário passaria pelo ramo do admin e a classe ficaria verde sem exercer nada.

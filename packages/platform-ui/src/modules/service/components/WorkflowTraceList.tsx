@@ -13,6 +13,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import { Loader2, Timer } from 'lucide-react'
 import type { ContactSegment } from '../types'
 
@@ -171,7 +172,7 @@ export function WorkflowTraceList({ tenantId, sessionId, onSelectAgent, onSelect
     if (!tenantId || !sessionId) return
     setLoading(true)
     try {
-      const res  = await fetch(`/sessions/${encodeURIComponent(sessionId)}/workflow-trace?tenant_id=${encodeURIComponent(tenantId)}`)
+      const res  = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}/workflow-trace?tenant_id=${encodeURIComponent(tenantId)}`)
       const data = await res.json() as { nodes: TraceNode[]; error?: string }
       if (data.error) { setError(t('trace.errorLoad')); return }
       setNodes(data.nodes ?? [])
