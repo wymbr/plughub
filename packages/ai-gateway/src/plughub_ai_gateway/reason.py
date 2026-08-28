@@ -15,10 +15,12 @@ import logging
 import re
 import time
 from typing import Any
+import asyncio
 
 from .account_selector import AccountSelector
 from .models    import ReasonRequest, ReasonResponse, OutputFieldSchema
 from .providers import LLMProvider
+from .usage_emitter import emit_llm_tokens
 
 logger = logging.getLogger("plughub.ai_gateway.reason")
 
@@ -47,7 +49,12 @@ class ReasonEngine:
         max_tokens: int = 4096,
         providers: dict[str, LLMProvider] | None = None,
         account_selector: AccountSelector | None = None,
+        kafka_producer: Any | None = None,
     ) -> None:
+        # T1 — produtor de `usage.events`. Opcional: sem Kafka o gateway segue
+        # respondendo, e a ausência é LOGADA pelo emissor (o gasto ocorreu; o que
+        # se perde é o registro). Nunca silencioso.
+        self._kafka_producer = kafka_producer
         # `provider` stays the fallback/default (legacy "anthropic" alias) — used
         # when no AccountSelector is configured, or as last resort.
         self._provider       = provider
@@ -94,6 +101,47 @@ class ReasonEngine:
         # No selector, selection failed, or no matching instance — legacy alias.
         return self._provider, None
 
+    def _emit_usage(
+        self, req: ReasonRequest, resp: ReasonResponse,
+        provider_key: str | None = None,
+    ) -> None:
+        """
+        T1 — publica o consumo deste caminho em `usage.events`.
+
+        UM ponto de emissão para os dois ramos (flat e tool-use), no fim do
+        `process`, e não dentro de cada `provider.call`: hoje é uma chamada por
+        requisição, mas se um dia houver retry interno o ramo novo passaria a
+        emitir sozinho — e subcontar é o modo de falha caro aqui.
+
+        `ensure_future` porque metering NUNCA entra no caminho crítico da resposta
+        ao skill flow. O prazo do `send` vive dentro de `emit_llm_tokens`, para
+        que nenhum chamador possa esquecê-lo.
+        """
+        if self._kafka_producer is None:
+            return
+        # T2/D2 — a conta EFETIVA, resolvida do `provider_key` que atendeu. Nunca
+        # de `req.preferred_config_ids`: aquilo é PREFERÊNCIA, e sob throttle ou
+        # fallback cross-provider a conta que responde é outra. Derivar da config
+        # acertaria em dia normal e erraria no dia do incidente — que é quando o
+        # relatório é lido.
+        config_id = (self._account_selector.config_id_for(provider_key)
+                     if self._account_selector is not None else None)
+        key_id = provider_key.split(":", 1)[1] if provider_key and ":" in provider_key else None
+        asyncio.ensure_future(emit_llm_tokens(
+            producer=      self._kafka_producer,
+            tenant_id=     req.tenant_id,
+            session_id=    req.session_id,
+            model_id=      resp.model_used,
+            agent_type_id= None,   # `req.agent_id` é auditoria, não tipo de agente
+            input_tokens=  resp.input_tokens,
+            output_tokens= resp.output_tokens,
+            source=        "reason",
+            segment_id=        req.segment_id or None,
+            account_config_id= config_id,
+            account_key_id=    key_id,
+            model_profile=     req.model_profile,
+        ))
+
     async def process(self, req: ReasonRequest) -> ReasonResponse:
         profile = self._model_profiles.get(req.model_profile)
         if profile is None:
@@ -103,7 +151,9 @@ class ReasonEngine:
 
         # T7b — quando há JSON Schema (montado upstream do form), usa tool-use nativo.
         if req.json_schema is not None:
-            return await self._process_tool_use(req, profile, start)
+            resp, tool_key = await self._process_tool_use(req, profile, start)
+            self._emit_usage(req, resp, tool_key)
+            return resp
 
         # Build prompt with schema and input
         schema_desc = _format_schema(req.output_schema)
@@ -151,7 +201,7 @@ class ReasonEngine:
         # Validate against output_schema
         _validate_schema(parsed, req.output_schema)
 
-        return ReasonResponse(
+        resp = ReasonResponse(
             session_id    = req.session_id,
             result        = parsed,
             model_used    = llm_resp.model_used,
@@ -159,9 +209,11 @@ class ReasonEngine:
             output_tokens = usage.get("output_tokens", 0),
             latency_ms    = latency_ms,
         )
+        self._emit_usage(req, resp, provider_key)
+        return resp
 
 
-    async def _process_tool_use(self, req: ReasonRequest, profile: Any, start: float) -> ReasonResponse:
+    async def _process_tool_use(self, req: ReasonRequest, profile: Any, start: float) -> tuple[ReasonResponse, str | None]:
         """T7b — structured output via tool-use nativo. O JSON Schema (req.json_schema)
         é o input_schema de uma única tool forçada; o provedor garante o shape por
         construção. Validação recursiva + retry como rede."""
@@ -224,6 +276,9 @@ class ReasonEngine:
                 provider_key,
                 tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
             )
+        # Devolve também o `provider_key`: é a CONTA que atendeu, e a emissão de
+        # consumo acontece em `process`. Guardá-la em `self` seria corrida entre
+        # requisições concorrentes — o engine é compartilhado.
         return ReasonResponse(
             session_id    = req.session_id,
             result        = parsed,
@@ -231,7 +286,7 @@ class ReasonEngine:
             input_tokens  = usage.get("input_tokens", 0),
             output_tokens = usage.get("output_tokens", 0),
             latency_ms    = latency_ms,
-        )
+        ), provider_key
 
 
 def _validate_json_schema(data: Any, schema: dict[str, Any], path: str = "$") -> list[str]:

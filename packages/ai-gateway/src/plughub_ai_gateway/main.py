@@ -82,7 +82,7 @@ async def _probe_credentials_on_boot(
         if provider is None:
             continue
         try:
-            await asyncio.wait_for(
+            _probe_resp = await asyncio.wait_for(
                 provider.call(
                     messages=[{"role": "user", "content": "ping"}],
                     tools=None,
@@ -92,9 +92,25 @@ async def _probe_credentials_on_boot(
                 timeout=settings.llm_boot_probe_timeout_s,
             )
             await selector.record_outcome(acc.provider_key, ok=True)
+            # ── T1: este consumo é DELIBERADAMENTE excluído de `usage.events` ──
+            #
+            # A sonda gasta tokens reais e o provedor cobra por eles. Mesmo assim não
+            # é emitida, e a razão é estrutural, não preguiça: `usage_events` exige
+            # `tenant_id` (String NOT NULL nas duas tabelas), e a sonda é do PROCESSO,
+            # não de tenant nenhum. Emitir exigiria inventar um tenant — e custo
+            # atribuído ao tenant errado é pior que custo ausente, porque aparece numa
+            # fatura de alguém.
+            #
+            # A exclusão é CONTADA em vez de silenciosa: sem esta linha, a diferença
+            # entre o relatório e a fatura do provedor não teria explicação em lugar
+            # nenhum. Ver ADR de relatórios, emenda T0 da §5.
+            _pu = (getattr(_probe_resp, "raw", None) or {}).get("usage", {}) or {}
             logger.info(
-                "boot probe: credencial OK provider=%s key_id=%s config_id=%s",
+                "boot probe: credencial OK provider=%s key_id=%s config_id=%s "
+                "tokens_in=%s tokens_out=%s (NÃO publicado em usage.events — consumo "
+                "de processo, sem tenant a quem atribuir)",
                 acc.provider, acc.key_id, acc.config_id or "-",
+                _pu.get("input_tokens", "?"), _pu.get("output_tokens", "?"),
             )
         except ProviderError as exc:
             await selector.record_outcome(
@@ -284,6 +300,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # reason steps (previously hardcoded to the single legacy alias above).
         providers=providers,
         account_selector=account_selector,
+        kafka_producer=kafka_producer,
     )
     app.state.session_mgr = session_mgr
 
@@ -515,6 +532,12 @@ async def reason(req: ReasonRequest, request: Request) -> ReasonResponse:
                 session_id         = req.session_id,
                 customer_utterance = req.customer_utterance,
                 model_id           = get_settings().model_for_profile("fast"),
+                # T2 — o sentimento pega o provider pelo ALIAS legado, que não diz
+                # qual conta é. Resolver por IDENTIDADE do objeto recupera a chave
+                # canônica; sem isso 42% das chamadas cairiam num balde "conta
+                # desconhecida" grande demais para o relatório ter uso.
+                account_key_id     = _account_key_of(request.app.state, sentiment_provider(request.app.state)),
+                segment_id         = req.segment_id or None,
             )
         )
         # Task de background sem observador morre CALADA: a exceção fica presa no
@@ -523,6 +546,23 @@ async def reason(req: ReasonRequest, request: Request) -> ReasonResponse:
         task.add_done_callback(_log_task_exception)
 
     return response
+
+
+def _account_key_of(state: Any, provider: Any) -> str | None:
+    """
+    T2/D2 — `key_id` da conta que uma instância de provider representa.
+
+    Os caminhos fire-and-forget (sentimento, copiloto) não passam pelo
+    `AccountSelector`: pegam o provider pelo alias `anthropic`. Sem esta resolução
+    o consumo deles ficaria sem conta — e como eles são a maior fatia do volume,
+    o relatório por conta nasceria com um balde "outros" maior que o resto.
+
+    Devolve None quando não há chave canônica. Nomear a ausência é o contrato: o
+    chamador NUNCA escolhe uma conta por conveniência.
+    """
+    from .account_selector import resolve_provider_key
+    key = resolve_provider_key(getattr(state, "llm_providers", None) or {}, provider)
+    return key.split(":", 1)[1] if key and ":" in key else None
 
 
 def sentiment_provider(state: Any) -> Any | None:
@@ -599,6 +639,8 @@ async def copilot_analyze(req: CopilotAnalyzeRequest, request: Request) -> dict:
             tenant_id        = req.tenant_id,
             customer_message = req.customer_message,
             model_id         = model_id,
+            producer         = request.app.state.kafka_producer,
+            account_key_id   = _account_key_of(request.app.state, provider),
         )
     )
 

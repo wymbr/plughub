@@ -41,6 +41,7 @@ import logging
 import re
 from typing import Any
 
+from .usage_emitter import emit_llm_tokens
 from .sentiment_emitter import (
     emit_sentiment_updated,
     resolve_session_pool_id,
@@ -141,6 +142,8 @@ async def analyze_and_emit_sentiment(
     session_id:         str,
     customer_utterance: str,
     model_id:           str,
+    account_key_id:     str | None = None,   # T2/D2
+    segment_id:         str | None = None,   # T2/D1
 ) -> None:
     """
     Mede o sentimento de UMA fala do cliente e publica pelos três canais existentes.
@@ -180,6 +183,24 @@ async def analyze_and_emit_sentiment(
             model_id   = model_id,
             max_tokens = _MAX_TOKENS,
         )
+        # T1 — este caminho era 42% de todas as chamadas LLM do ambiente e NÃO
+        # publicava consumo. Emite aqui, junto ao `provider.call`, e não onde o
+        # score é usado: o token foi gasto mesmo que o parse falhe abaixo, e
+        # emitir depois do `if score is None` perderia toda chamada malsucedida.
+        _usage = (getattr(response, "raw", None) or {}).get("usage", {}) or {}
+        asyncio.ensure_future(emit_llm_tokens(
+            producer=      producer,
+            tenant_id=     tenant_id,
+            session_id=    session_id,
+            model_id=      getattr(response, "model_used", model_id),
+            agent_type_id= None,
+            input_tokens=  int(_usage.get("input_tokens", 0) or 0),
+            output_tokens= int(_usage.get("output_tokens", 0) or 0),
+            source=        "sentiment",
+            segment_id=     segment_id,
+            account_key_id= account_key_id,
+            model_profile=  "fast",
+        ))
         # `.content`, não `.text` — o segundo não existe em `LLMResponse`.
         score = _parse_score(getattr(response, "content", "") or "")
     except Exception as exc:

@@ -1,5 +1,11 @@
 # Módulo: Configuração → Relatórios de Agentes
 
+> ⚠️ **PÁGINA REMOVIDA em 2026-08-28** (F0 do [ADR de relatórios](../adr/adr-relatorios-duas-superficies-e-lentes.md)).
+> A `AgentReportsPage.tsx` estava **órfã** — nenhum import em lugar nenhum — e a rota que este documento
+> anunciava (`/contacts/reports/agents`) **já não existia**. A superfície viva de disponibilidade e
+> pausas é a bancada `/analise/agents`, que consome o mesmo `GET /reports/agent-availability`.
+> Este documento fica como registro histórico.
+
 > Última atualização: 2026-05-25 · Estado: Arc 16
 
 > Rota UI: `/contacts/reports/agents` | Roles: supervisor, admin, business

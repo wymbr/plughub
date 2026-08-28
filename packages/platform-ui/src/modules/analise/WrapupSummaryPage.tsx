@@ -1,6 +1,21 @@
 /**
- * WrapupSummaryPage
- * Rota: /analise/wrapup — HISTÓRICO das pendências de wrap-up (I5 / ADR § D7b, fatia 2).
+ * WrapupSummaryPage — a lente de **disposição** da superfície A.
+ *
+ * ⚠️ **Não é mais uma rota.** `/analise/wrapup` foi absorvido na F2 do
+ * `adr-relatorios-duas-superficies-e-lentes.md` (D7: "endereço morre, componente é
+ * re-hospedado"), e o endereço antigo redireciona para
+ * `/analise/sessions?lens=disposition`. A regra que o matou é a de sobrevivência:
+ * a unidade de análise aqui é o CONTATO, logo isto é lente, não endereço.
+ *
+ * O seletor de período PRÓPRIO saiu junto. Ele agora recebe `fromDt`/`toDt` da barra
+ * de filtro da superfície — duas janelas de tempo na mesma tela seriam dois recortes
+ * concorrentes, e a de dentro venceria em silêncio.
+ *
+ * O que ele NÃO honra, e a tela diz: o resto da barra. O agregado é sobre pools
+ * INTERNOS (`-int`), onde o filtro de pool do operador não se aplica. É por isso que
+ * a lente se declara `honors: 'period_only'` no contrato — ver `lens-contract.ts`.
+ *
+ * HISTÓRICO das pendências de wrap-up (I5 / ADR § D7b, fatia 2).
  *
  * Contraparte retrospectiva do Monitor › Pendências. A divisão não é arbitrária:
  *   · Monitor  = quem está devendo AGORA (ledger Redis, janela de ~25 h)
@@ -44,16 +59,6 @@ interface Totals {
   unfilled_rate?:     number | null
 }
 
-const PERIODS: { key: string; days: number }[] = [
-  { key: '7d',  days: 7 },
-  { key: '30d', days: 30 },
-  { key: '90d', days: 90 },
-]
-
-function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString()
-}
-
 function fmtDuration(ms: number | null): string {
   if (ms == null || !Number.isFinite(ms)) return '—'
   const s = Math.round(ms / 1000)
@@ -82,7 +87,15 @@ function KpiCard({ label, value, hint, tone }: {
   )
 }
 
-export default function WrapupSummaryPage() {
+interface Props {
+  /** Intervalo da barra de filtro da superfície A. Obrigatórios: sem eles o
+   *  componente teria de inventar um período, e um período inventado ao lado de um
+   *  escolhido é o defeito que esta absorção existe para fechar. */
+  fromDt: string
+  toDt:   string
+}
+
+export default function WrapupSummaryPage({ fromDt, toDt }: Props) {
   const { t } = useTranslation('workItems')
   const { session, tenantId, perms } = useAuth()
 
@@ -91,7 +104,6 @@ export default function WrapupSummaryPage() {
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
   const [axis,    setAxis]    = useState<GroupAxis>('agent')
-  const [period,  setPeriod]  = useState(PERIODS[1]!)
 
   const canView = perms.can('contacts', 'visualizar')
 
@@ -101,7 +113,8 @@ export default function WrapupSummaryPage() {
     const p = new URLSearchParams({
       tenant_id: tenantId,
       group_by:  axis,
-      from_dt:   isoDaysAgo(period.days),
+      from_dt:   fromDt,
+      to_dt:     toDt,
     })
     try {
       const res = await apiFetch(`/reports/wrapup-summary?${p}`)
@@ -120,7 +133,7 @@ export default function WrapupSummaryPage() {
     } finally {
       setLoading(false)
     }
-  }, [tenantId, axis, period, t])
+  }, [tenantId, axis, fromDt, toDt, t])
 
   useEffect(() => { if (canView) void load(); else setLoading(false) }, [canView, load])
 
@@ -150,16 +163,6 @@ export default function WrapupSummaryPage() {
                 className={`px-3 py-1.5 text-xs transition-colors ${axis === a
                   ? 'bg-primary text-white' : 'bg-white text-muted hover:text-dark'}`}>
                 {t(`axis.${a}`)}
-              </button>
-            ))}
-          </div>
-          <div className="flex gap-1 flex-wrap">
-            {PERIODS.map(p => (
-              <button key={p.key} type="button" onClick={() => setPeriod(p)}
-                className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${period.key === p.key
-                  ? 'bg-primary text-white border-primary'
-                  : 'bg-white text-muted border-border-strong hover:text-dark'}`}>
-                {t(`history.period.${p.key}`)}
               </button>
             ))}
           </div>

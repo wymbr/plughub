@@ -713,6 +713,16 @@ services:
       PLUGHUB_REDIS_URL: redis://redis:6379
       PLUGHUB_PORT: "3200"
       PLUGHUB_WORKERS: "1"
+      # ── Broker (T1, 2026-08-28) — o ai-gateway era o ÚNICO serviço sem esta linha.
+      # Sem ela ele caía no default hardcoded `kafka:9092` (config.py:78), que é o
+      # listener PLAINTEXT — e ele ANUNCIA `localhost:9093` (linha 464 deste arquivo).
+      # O produtor conectava, recebia metadata apontando para um endereço que não
+      # existe dentro do container, e o `send` BLOQUEAVA em vez de levantar.
+      # Consequência medida: nenhuma publicação do gateway jamais chegou ao Kafka
+      # neste ambiente — inclusive `sentiment.updated`, cujos 40 s de bloqueio o
+      # CLAUDE.md registrava como "broker momentaneamente inalcançável". Não era
+      # momentâneo: era fiação. Outros 19 serviços já usam `kafka:29092`.
+      PLUGHUB_KAFKA_BROKERS: kafka:29092
       # LLM Accounts — catalog fetch (namespace llm_accounts); graceful fallback to
       # PLUGHUB_ANTHROPIC_API_KEY above when the catalog is empty/unreachable.
       PLUGHUB_CONFIG_API_URL: http://config-api:3600

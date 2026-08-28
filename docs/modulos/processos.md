@@ -1,5 +1,12 @@
 # Módulo: Processos
 
+> ⚠️ **PÁGINA REMOVIDA em 2026-08-28** (F0 do [ADR de relatórios](../adr/adr-relatorios-duas-superficies-e-lentes.md)).
+> A rota `/flow/processos` estava **fora do menu** (alcançável só por URL), contradizia a **D2** de
+> [`adr-historico-unificado-duas-visoes`](../adr/adr-historico-unificado-duas-visoes.md) — *processo é
+> pivô, nunca navegação livre* — e sua aba default agregava sobre `workflow_events`, **vazia por
+> construção** desde a deprecação do workflow-api (Arc 19 fase D). O processo vive hoje como **nível 2**
+> de `/analise/sessions?journey=…`. Este documento fica como registro histórico.
+
 > Última atualização: 2026-05-25 · Estado: Arc 16
 
 > Rota UI: `/agent-flow/processos` | Roles: operator+ | ABAC: `skill_flows.operacao`

@@ -57,6 +57,8 @@ from .reports_query import (
     query_events,
     query_session_complexity,
     query_sessions_report,
+    query_contacts_series_report,
+    query_token_breakdown_report,
     query_journeys_report,
     query_customer_360,
     query_customer_voice,
@@ -194,6 +196,158 @@ async def report_sessions(
 # Não confundir com GET /reports/agent-events/* — esses são Arc 12
 # (`agent_business_events`, KPIs que o agente declara pela tool `agent_event`)
 # e permanecem. A semelhança de nome é histórica e já induziu erro no TODO.md.
+
+
+# ─── GET /reports/contacts/series ────────────────────────────────────────────
+#
+# A SÉRIE da superfície A (F2 do `adr-relatorios-duas-superficies-e-lentes.md`).
+#
+# Aceita o MESMO conjunto de filtros de `GET /reports/sessions` — não por simetria
+# estética, mas porque as duas respostas aparecem lado a lado na mesma tela, sob a
+# mesma barra de filtro. Um endpoint de série com menos filtros que a lista produz o
+# defeito mais barato desta superfície: dois números certos para perguntas diferentes,
+# sem nada dizendo qual foi respondida.
+#
+# Por que não estender `/reports/timeseries/volume`: ele tem chamadores vivos
+# (dashboards, página de avaliação) com contrato mais simples — `{bucket, value}` e um
+# só recorte de pool. Alargá-lo mudaria a resposta deles.
+
+@router.get("/contacts/series")
+async def report_contacts_series(
+    request:          Request,
+    tenant_id:        str           = Query(...,    description="Tenant identifier"),
+    metric:           str           = Query("volume", pattern="^(volume|duration|resources|tokens)$",
+                                            description="volume=contatos · duration=avg(handle_time_ms) do PRÓPRIO contato · resources=os dois números da D4 (instâncias distintas × trocas de mão) mais o pico simultâneo · tokens=consumo de LLM atribuído ao contato (T3; entrada e saída NÃO se somam)"),
+    interval:         int           = Query(60,     ge=1, le=1440, description="Bucket em minutos"),
+    from_dt:          Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
+    to_dt:            Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
+    channel:          Optional[str] = Query(None),
+    outcome:          Optional[str] = Query(None),
+    close_reason:     Optional[str] = Query(None),
+    pool_id:          Optional[str] = Query(None,   description='"Atendido por" — igual ao de /reports/sessions'),
+    entry_pool_id:    Optional[str] = Query(None,   description='"Entrou por" — igual ao de /reports/sessions'),
+    direction:        Optional[str] = Query(None,   pattern="^(inbound|outbound|internal)$"),
+    session_id:       Optional[str] = Query(None),
+    root_session_id:  Optional[str] = Query(None),
+    agent_id:         Optional[str] = Query(None),
+    insight_category: Optional[str] = Query(None),
+    insight_tags:     Optional[str] = Query(None),
+    ani:              Optional[str] = Query(None),
+    dnis:             Optional[str] = Query(None),
+    status:           Optional[str] = Query(None),
+    origin:           str           = Query("live", pattern="^(live|import|reeval)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Série temporal sobre a MESMA população que `GET /reports/sessions` listaria.
+
+    Resposta: `{buckets: [{bucket, values: {...}, sample}], meta: {...}}`.
+
+    `sample` por bucket é obrigatório e é a razão de a resposta não ser
+    `{bucket, value}`: sem ele, média zero e ausência de contato chegam idênticas à
+    tela. `meta.series` declara o que foi computado — a resposta se descreve, em vez
+    de deixar a UI adivinhar pelo nome da chave.
+
+    **`scope` não existe aqui**, de propósito: agregado nunca conta pool interno
+    (guardrail §7.2 do `adr-wrapup-detached-pull`). A lista o oferece porque é
+    visibilidade; a série é contagem.
+    """
+    tags_list = [t.strip() for t in insight_tags.split(",") if t.strip()] if insight_tags else None
+    data = await query_contacts_series_report(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        metric    = metric,
+        interval  = interval,
+        channel          = channel,
+        outcome          = outcome,
+        close_reason     = close_reason,
+        pool_id          = pool_id,
+        entry_pool_id    = entry_pool_id,
+        direction        = direction,
+        session_id       = session_id,
+        root_session_id  = root_session_id,
+        agent_id         = agent_id,
+        insight_category = insight_category,
+        insight_tags     = tags_list,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
+        ani              = ani,
+        dnis             = dnis,
+        status           = status,
+        origin           = origin,
+    )
+    return JSONResponse(content=data, status_code=503 if data.get("error") else 200)
+
+
+# ─── GET /reports/contacts/tokens/breakdown ──────────────────────────────────
+#
+# A metade da pergunta que a série não responde (T3): *quem* gastou, *de qual conta*
+# e *com qual modelo*. Endpoint PRÓPRIO, e não um `breakdown_by` da série, porque a
+# forma da resposta é outra — linhas, não buckets — e espremer as duas no mesmo
+# envelope obrigaria a UI a adivinhar qual veio.
+#
+# Mesmos filtros da lista, pelo mesmo motivo da série: a tabela aparece embaixo do
+# gráfico, sob a mesma barra.
+
+@router.get("/contacts/tokens/breakdown")
+async def report_token_breakdown(
+    request:          Request,
+    tenant_id:        str           = Query(..., description="Tenant identifier"),
+    from_dt:          Optional[str] = Query(None),
+    to_dt:            Optional[str] = Query(None),
+    limit:            int           = Query(100, ge=1, le=500),
+    channel:          Optional[str] = Query(None),
+    outcome:          Optional[str] = Query(None),
+    close_reason:     Optional[str] = Query(None),
+    pool_id:          Optional[str] = Query(None),
+    entry_pool_id:    Optional[str] = Query(None),
+    direction:        Optional[str] = Query(None, pattern="^(inbound|outbound|internal)$"),
+    session_id:       Optional[str] = Query(None),
+    root_session_id:  Optional[str] = Query(None),
+    agent_id:         Optional[str] = Query(None),
+    insight_category: Optional[str] = Query(None),
+    insight_tags:     Optional[str] = Query(None),
+    ani:              Optional[str] = Query(None),
+    dnis:             Optional[str] = Query(None),
+    status:           Optional[str] = Query(None),
+    origin:           str           = Query("live", pattern="^(live|import|reeval)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Consumo de LLM por (conta × modelo × origem da chamada), com o pool que atendeu.
+
+    Linhas: `pool_id`, `account_config_id`, `model_id`, `model_profile`, `source`,
+    `tokens_in`, `tokens_out`, `sessions`, `events`.
+
+    **Atribuição por `segment_id` (D1)** — o pool da SESSÃO é o de ENTRADA (D10), então
+    creditar por ele daria o gasto do especialista de IA ao pool onde o contato começou.
+    Recortado em `USAGE_ATTRIBUTION_EPOCH`: agrupamento por atribuição não pode misturar
+    "não media" com "não informado".
+
+    `meta.rows_without_pool` conta as linhas cujo `segment_id` não casou com segmento
+    algum — sintoma de chave não propagada, nomeado em vez de escondido num travessão.
+    """
+    tags_list = [t.strip() for t in insight_tags.split(",") if t.strip()] if insight_tags else None
+    data = await query_token_breakdown_report(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        limit     = limit,
+        channel = channel, outcome = outcome, close_reason = close_reason,
+        pool_id = pool_id, entry_pool_id = entry_pool_id, direction = direction,
+        session_id = session_id, root_session_id = root_session_id,
+        agent_id = agent_id,
+        insight_category = insight_category, insight_tags = tags_list,
+        accessible_pools       = pool_principal.accessible_pools,
+        supervised_agent_types = pool_principal.supervised_agent_types,
+        ani = ani, dnis = dnis, status = status, origin = origin,
+    )
+    return JSONResponse(content=data, status_code=503 if data.get("error") else 200)
 
 
 # ─── GET /reports/contact-insights ───────────────────────────────────────────

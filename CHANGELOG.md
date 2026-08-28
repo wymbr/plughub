@@ -1,5 +1,686 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Relatórios T3: a lente de token — quem gastou, de qual conta, com qual modelo (2026-08-28)
+
+Última fase da trilha de token do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md).
+A T1 ligou o produtor, a T2 tornou o consumo atribuível, a T3 o **exibe**: lente `tokens` na
+Superfície A + tabela de breakdown. Validado contra dado real.
+
+### Duas perguntas, dois joins — e trocá-los não fica vermelho
+
+| | pergunta | junta por | por quê |
+|---|---|---|---|
+| **série** | quanto este contato custou | `session_id` | todo evento tem sessão; exigir `segment_id` descartaria em silêncio o consumo de quem ainda não propaga a chave |
+| **breakdown** | **quem** gastou | `segment_id` (D1) | o `pool_id` da SESSÃO é o de ENTRADA (D10) — creditar por ele daria o gasto do especialista de IA ao pool onde o contato começou |
+
+O breakdown responde nominalmente o que a revisão pediu — *"quem usou quanto de qual conta,
+quando e como"*: pool que atendeu × conta (`account_config_id`, que sobrevive à rotação de
+chave) × modelo × **perfil pedido** × origem da chamada. `model_profile` fica ao lado de
+`model_id` porque é o par que diagnostica fallback; só um dos dois não diz nada.
+
+Medição real (dois contatos do demo, `limite_ia`):
+
+| pool | modelo | perfil | origem | entrada | saída |
+|---|---|---|---|---|---|
+| `limite_ia` | claude-haiku-4-5 | fast | sentiment | 464 | 36 |
+| `limite_ia` | claude-sonnet-4-6 | balanced | reason | 230 | 215 |
+
+### Não existe `tokens_total`, e a ausência é decisão
+
+Entrada e saída têm preços diferentes em todo provedor: somá-las daria o número mais fácil de
+publicar e o menos utilizável — mesma família da soma de licença humana com licença de IA que a
+admissão recusa. `tokens_per_contact` acompanha as somas porque responde outra pergunta: um
+bucket pode ter o dobro de tokens por ter o dobro de contatos, ou por os contatos custarem o
+dobro.
+
+### ⚠️ A época de granularidade DIÁRIA voltou a mentir — no segundo leitor
+
+A contagem de eventos sem chave de atribuição acusou **8 defeitos que não existem**: eventos
+emitidos horas antes de a coluna existir são "pós-época" pelo calendário e história pelos fatos.
+O discriminador é **ordem, não data** — a mesma correção que a seção C do
+`probe_llm_call_paths.sh` já precisara fazer na T2. O `meta` passou a carregar **dois** fatos:
+`unattributed_events` (quantos) e `unattributed_in_flight` (se ainda chegam). Na tela:
+*"8 eventos sem chave de atribuição, todos anteriores ao último atribuído (história)"* — e não
+um alarme sobre um defeito inexistente.
+
+Um segundo nome entrou no `usage_attribution`: **`USAGE_PRODUCER_EPOCH`** (antes disto não há
+LINHA NENHUMA) ao lado de `USAGE_ATTRIBUTION_EPOCH` (há linha, sem a chave). Mesmo valor hoje, e
+é por isso que precisam de nomes separados — fundi-las tornaria impossível explicar a série no
+dia em que uma mudar. A primeira é **rótulo**; a segunda é **predicado**.
+
+### A nota da época se contradizia na tela
+
+Primeira redação: *"a série começa em 2026-08-28"* — e havia ponto no dia 27, porque o bucket é
+do **contato** (`opened_at`), não do evento. O que a data significa é *"nada foi REGISTRADO
+antes de X"*. Texto que descreve o eixo errado é da família do DDL que promete ordenação.
+
+### Testemunha negativa, agora que existe produtor
+
+Seção **D** do `probe_llm_call_paths.sh`: contato que não chamou LLM **não pode ter linha** —
+nunca uma valendo 0, que na lente viraria *"usou IA e gastou zero"*, indistinguível de quem usou
+e é barato. Mutação (inserir um evento com `quantity = 0`) → vermelho; removido → verde. A nota
+*"T3 não coberto"* do outro probe saiu junto: deixou de ser verdade no instante em que a
+testemunha passou a existir.
+
+### ⚠️ Achado colateral — 12 de 38 rotas `/reports/*` sem principal
+
+Ao inventariar os leitores de `usage_events`. **Quatro verificadas ao vivo respondem 200 sem
+credencial nenhuma**, enquanto `/reports/sessions` e `/reports/segments` respondem 401:
+
+```
+200  /reports/usage
+200  /reports/evaluations
+200  /reports/agent-events/summary
+200  /reports/customers/cus_x/360
+401  /reports/sessions
+401  /reports/segments
+```
+
+**Não consertado aqui** — são 12 rotas com consumidores próprios, e cada uma precisa da sua
+medição; um conserto em bloco trocaria um buraco por telas quebradas. É a regra do CLAUDE.md
+recorrendo: o `probe_authz_single_verifier` conta *quem decodifica JWT*, não *quais rotas exigem
+um* — *"um censo desenhado para um eixo não prova nada sobre o eixo vizinho"*. Falta o censo do
+terceiro eixo: **cobertura de rota**.
+
+### Verificação
+
+- `test_contacts_series.py` — **24 testes** (7 novos da T3); 8 mutações, todas pegas: série
+  exigindo segmento, crédito ao pool de entrada, época fora do breakdown, época virando
+  predicado na série, saúde do produtor recortada pelos filtros, `tokens_total` publicado,
+  linhas sem pool zeradas, e `in_flight` sem o discriminador de ordem.
+- Produtor real (`POST /v1/reason` do ai-gateway) com `session_id`/`segment_id` de **contatos
+  reais** do demo: 12 eventos atribuídos, lidos pela lente e pelo breakdown com o pool resolvido
+  do segmento. *(Não foi uma conversa de cliente ao vivo — o que se provou aqui é o LEITOR; o
+  produtor foi provado ponta a ponta na T1/T2.)*
+- 690 testes analytics-api · 180 ai-gateway · `tsc --noEmit` em 0 · os cinco gates em 0.
+- Navegador: a lente, os três rodapés de ausência e a tabela de breakdown.
+
+**Aberto:** a metade B da lente de token (superfície de Recursos) espera a **F3**, onde a
+entidade deixa de ser o contato.
+
+## Relatórios F2: a Superfície A — a lista vira uma lente entre outras (2026-08-28)
+
+Fase F2 do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md). `/analise/sessions`
+passa a hospedar a **Superfície A · Contatos**: uma barra de filtro, três níveis de drill e **cinco
+lentes** — lista · volume · duração · recursos por contato · disposição. Validado no navegador com dado
+real e por gate re-executável.
+
+### A fase inteira estava numa pergunta: a lente fala da mesma população que a lista?
+
+Os endpoints de série que já existiam (`/reports/timeseries/{volume,handle_time}`) aceitam **um**
+recorte — `pool_id`, que é o pool de ENTRADA (D10). A barra da superfície tem **doze** campos.
+Pendurar uma lente ali produziria o defeito mais barato desta tela: o operador filtra `channel=voice`,
+a lista mostra 12 contatos e o gráfico mostra 300. Os dois números certos, para perguntas diferentes,
+sem nada dizendo qual foi respondida.
+
+A saída **não** foi dar filtros próprios à série — dois textos de SQL divergem justamente onde o
+filtro importa. Foi extrair `_session_conditions` de `_fetch_sessions`: **uma expressão, dois
+consumidores**, a mesma forma que a F4 do `adr-historico-unificado-duas-visoes` deu à direção do
+acesso. Novo endpoint `GET /reports/contacts/series` com os mesmos filtros da lista. Os dois endpoints
+antigos ficam: têm chamadores vivos (dashboards, avaliação) e contrato mais simples.
+
+### ⚠️ O filtro de canal da lista de contatos NUNCA funcionou
+
+Achado ao construir a série, e **anterior a ela**. A condição era
+`EXISTS (SELECT 1 … WHERE tenant_id = s.tenant_id …)` — subconsulta **correlacionada**, que o
+ClickHouse 23.8 recusa com o código 47 e que está documentada como não-suportada **200 linhas abaixo,
+no mesmo arquivo**, com o mesmo código de erro. A query inteira levantava, o `except` do wrapper
+devolvia `data_unavailable` com `data: []`, e o endpoint respondia **200 com zero linhas**: o seletor
+de canal — um dos filtros mais usados da tela — não filtrava, ele **esvaziava**.
+
+| | antes | agora |
+|---|---|---|
+| `channel=webchat` | **0** | **398** |
+| `channel=webhook` | 0 | 480 |
+| `channel=whatsapp` | 0 | 2 |
+| `channel=voice` | 0 | 1 |
+
+(881 no total, e 398+480+2+1 = 881.) O conserto usa `_CHANNEL_EXPR` — a **mesma string** que a coluna
+`channel` da listagem devolve, então filtro e coluna deixam de poder divergir. E **683 testes não
+notavam**: nenhum atravessava a rota com filtro de canal.
+
+### As ausências são contadas, nunca omitidas
+
+| Lente | Amostra | Ausência nomeada |
+|---|---|---|
+| volume | 881 | — |
+| duração | 371 | **510 sem `handle_time_ms`** (58% da população) |
+| recursos | 861 | **20 sem nenhum segmento** · **4 segmentos clampados** |
+
+As contas fecham: `371 + 510 = 881` e `861 + 20 = 881`. Sem esses números no `meta`, o gráfico de
+duração apresentaria a duração "típica" de 42% da população como se fosse a de todos — e os 20
+contatos perdidos fariam dois totais diferentes na mesma tela parecerem bug.
+
+**Segmento sem fim é fechado no fim da SESSÃO, nunca em `now()`** (`coalesce(ended_at, closed_at,
+now())`): com `now()`, o pico simultâneo desses 4 contatos **cresceria todo dia sem que nenhum evento
+acontecesse**. Em contato ABERTO o `now()` é o certo — aquele recurso está ocupado agora.
+
+### A lente de recursos: os três números da D4
+
+`resources` (instâncias distintas = **custo**) × `handoffs` (segmentos = **trocas de mão**) ×
+`peak` (varredura de intervalos = **simultaneidade**). Nenhum deriva dos outros: medido na
+instalação, 26/08 deu 3,83 recursos com 4,42 trocas — a diferença é o mesmo agente pegando o contato
+mais de uma vez, distinção que um número só apagaria. O empate do pico ordena **fim antes de início**,
+senão passagem de bastão viraria dois agentes simultâneos e a lente mediria transferência.
+
+### Contrato de lente: dois campos novos, ambos por exigência de mecanismo
+
+- **`honors`** (`all | period_only`) — a disposição agrega sobre pools **internos** (`-int`), onde o
+  filtro de pool da barra não se aplica. A tela **diz isso** (selo `⚠ honra só o intervalo`); sem o
+  campo, exibiria uma barra de filtro que não filtra.
+- **`source`** (`agents_compare | contacts_series | own`) — sem ele, cada lente da superfície A faria a
+  seção D do gate reprovar **pelo motivo errado** (ausente do `_COMPARE_LENSES` da mesa, onde não deve
+  mesmo estar). A extração do lado TS virou parser (`infra/test/_lens_census.py`), porque o
+  discriminador vive DEPOIS do `id` no mesmo bloco — `grep` não acompanha bloco.
+
+### Absorções e remoções (D7 — "endereço morre, componente é re-hospedado")
+
+- `/analise/wrapup` → `Navigate` para `/analise/sessions?lens=disposition`; sai do menu. O
+  `WrapupSummaryPage` continua vivo, agora recebendo `fromDt`/`toDt` da barra — o seletor de período
+  próprio saiu, porque duas janelas de tempo na mesma tela são dois recortes concorrentes e o de
+  dentro vence em silêncio.
+- `AnaliseTab.tsx` **removida** (órfã anterior a esta fase): era a única consumidora viva daqueles dois
+  endpoints na área de contatos e agregava KPIs **no cliente** sobre `FETCH_LIMIT = 1000` — um total
+  que parava de crescer aos mil sem dizer nada. Dívida de órfãs **18 → 17**.
+
+### Três defeitos de INSTRUMENTO, achados pela própria bateria de mutação
+
+1. O teste de alias de agregado media *"todo alias tem sufixo"* quando o defeito é *"o alias sombreia a
+   coluna que o agregado lê"* — reprovou `count() AS handoffs`, que não sombreia nada. Irmão do caveat
+   da D14.1: instrumento falseável medindo a proposição **vizinha**.
+2. O probe **rebaixava um vermelho confirmado a INCONCLUSIVO** quando uma seção posterior não conseguia
+   medir. Hoje `inconclusive()` confere `FAIL` antes de sair: defeito medido vence "não medi".
+3. Nenhum mock reproduz `ILLEGAL_AGGREGATION` (184) nem o código 47 — a suíte ficava verde sobre
+   queries que não rodam. Quem os pega é a asserção sobre a **forma do SQL** e a **seção F** do probe,
+   contra o ClickHouse da instalação.
+
+### Decoração escondendo dado
+
+A animação do recharts desenha a linha por `stroke-dasharray` e **não renderiza os pontos enquanto
+anima**: o bucket isolado de 21/08 (47 contatos, cercado por dois dias sem contato) não aparecia em
+tela alguma. `isAnimationActive={false}`. Junto, o eixo passou a ser **preenchido** — o `GROUP BY` não
+devolve dia vazio, então 21 e 24 de agosto ficavam adjacentes como se fossem consecutivos. Bucket
+ausente entra com `null` e `connectNulls={false}`: **buraco, nunca zero**. O rótulo passou a ser
+formatado em UTC (o bucket vem sem `Z` e `new Date()` o lia como hora local, o que num fuso a oeste
+nomearia o dia anterior ao que foi contado).
+
+### Verificação
+
+- `test_contacts_series.py` — **17 testes**, 7 mutações aplicadas e todas pegas (predicado divergente,
+  clamp em `now()`, desempate invertido, excluídos zerados, escopo vazio ignorado, fallback mudo de
+  métrica, pool interno na contagem).
+- `probe_report_surface.sh` — seções **E** (métricas do contrato × `_SERIES` do backend) e **F**
+  (`Σ sample` da série × `total_contacts` da lista, 4 filtros, contra dado real) acrescentadas; 5
+  mutações do gate, todas pegas. Testemunha de presença obrigatória na F: concordância entre dois zeros
+  não é evidência de nada.
+- 683 testes analytics-api · 180 ai-gateway · 12 usage-aggregator · `tsc --noEmit` em 0 ·
+  `probe_report_surface`, `probe_llm_call_paths`, `probe_i18n_duplicate_keys`, `probe_edge_surface`
+  todos em 0.
+- Navegador: as cinco lentes, o selo `period_only`, os rodapés de ausência e o estado vazio
+  (*"absence of data — not zero"*).
+
+**Aberto e nomeado:** estender `/reports/wrapup-summary` aos demais filtros (é o que tiraria o
+`period_only`); T3 (lente de token) e F3/F4 seguem nas fases previstas.
+
+## Relatórios T2: o custo ganha dono — segmento, conta e modelo viram coluna (2026-08-28)
+
+Terceira fase da trilha de token do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md).
+A T1 fez o consumo ser publicado; a T2 o torna **atribuível**. Validado ao vivo.
+
+### O que passou a viajar no evento
+
+| Campo | Responde | Onde |
+|---|---|---|
+| `segment_id` | **de quem é o custo** (D1) | topo do evento + coluna |
+| `account_config_id` | custo por conta (sobrevive à rotação de chave) | metadata → coluna |
+| `account_key_id` | depuração de rate-limit (muda na rotação) | metadata → coluna |
+| `model_id` | modelo que **respondeu** | metadata → coluna |
+| `model_profile` | modelo que o skill **pediu** | metadata → coluna |
+
+`model_profile` × `model_id` é o par que diagnostica fallback — *"pedi balanced e veio outro"*. Só um
+dos dois não diz nada.
+
+O `segment_id` viaja do `ctx.segmentId` do engine (que já o tinha) pelo payload do `aiGatewayCall`,
+`skill-flow-service`, `ReasonRequest` e emissor. A D1 previu "custo baixo" e estava certa: o valor já
+estava em escopo em todos os saltos.
+
+### Dois dos quatro caminhos vivos não escolhem conta
+
+Achado que mudou o desenho: `sentiment` e `copilot` pegam o provider pelo **alias legado**
+(`registry.get("anthropic")`), não pelo `AccountSelector` — logo não têm `provider_key`. Como eles são
+a maior fatia do volume, deixá-los sem conta criaria um balde "outros" maior que o resto do relatório.
+
+Resolvido por **identidade de objeto** (`resolve_provider_key`): a mesma instância está no registro sob
+duas chaves (o alias e a canônica `{provider}:{key_id}`), e a canônica é a que carrega a conta.
+Igualdade de objeto, não de configuração — dois providers configurados igual são contas diferentes.
+Sem chave canônica: `None` nomeado, nunca uma conta por conveniência.
+
+E no `reason` a conta é a **EFETIVA**, derivada do `provider_key` que atendeu — nunca de
+`preferred_config_ids`, que é preferência e diverge exatamente sob throttle e fallback, isto é, no dia
+do incidente, que é quando o relatório é lido. O `provider_key` do ramo tool-use passou a ser
+**devolvido** em vez de guardado em `self`: o engine é compartilhado, e atributo de instância seria
+corrida entre requisições concorrentes.
+
+### O ingest descartava o metadata inteiro
+
+`parse_usage_event` jogava fora o `metadata` — o que a T1 tornou visível ao vivo: duas linhas de
+caminhos diferentes (reason e sentiment) chegavam ao ClickHouse **indistinguíveis**, enquanto a cópia
+do Postgres sabia separá-las. Agora são colunas, porque é sobre elas que a lente agrupa: `GROUP BY` em
+campo aninhado dentro de String seria varredura.
+
+Migração idempotente em `_MIGRATIONS`, aplicada no boot; **forward-only por construção** — o metadata
+descartado não existe em lugar nenhum e não há backfill nem parcial.
+
+### O Pydantic descarta campo extra em silêncio
+
+`UsageEvent` do `usage-aggregator` não declarava `segment_id`, então ele sumiria da cópia do Postgres —
+os dois stores divergiriam em **conteúdo**, não só em forma. Declarado no modelo e dobrado no
+`metadata` na persistência (a tabela do PG não tem coluna, e D3 a mantém como store de faturamento).
+
+### A época é DATA, e isso deixa uma ambiguidade que relógio não resolve
+
+`usage_attribution.py`, no molde do `sla_source.py`. Ela existe para separar **duas ausências de
+aparência idêntica**, ambas gravadas como `''`: *não medíamos* (pré-T2) × *não informado* (chamador que
+não propaga a chave — **defeito**). Sem o corte, o defeito se esconde dentro da história.
+
+Mas a época marca uma versão de CÓDIGO, e cada ambiente a implanta numa hora diferente — um timestamp
+fixo mentiria fora daqui. Isso deixa o dia da implantação ambíguo, e **a primeira versão do gate errou
+por isso**: reportou 8 eventos "sem source" como defeito quando eram os próprios eventos de verificação
+da T1, emitidos horas antes das colunas existirem.
+
+Quem separa os dois não é a data, é a **ORDEM**: se o evento mais recente tem `source`, o produtor está
+são e o resto é retrato do passado; se o mais recente está vazio, o defeito é agora. A seção C do
+`probe_llm_call_paths.sh` compara os dois máximos — pergunta certa, sem inventar precisão que a época
+não tem.
+
+### A prova
+
+Uma chamada com `segment_id`, e a consulta que era o objetivo do arco:
+
+```
+segment_id      source     model_id                    tokens_in  tokens_out
+seg-t2-abc123   reason     claude-sonnet-4-6                  95           8
+seg-t2-abc123   sentiment  claude-haiku-4-5-20251001         226          18
+```
+
+Postgres com o mesmo conteúdo (`source`, `segment_id`, `account_key_id` no metadata). Daqui saem pool,
+participante, skill e `deploy_version` por JOIN em `analytics.segments` — e com eles custo por contato,
+por journey e por versão de deploy.
+
+### Verificação
+
+180 testes no ai-gateway · 12 no usage-aggregator · 161 no consumer do analytics (3 novos, com mutação:
+parser voltar a descartar o metadata reprova) · migração conferida no ClickHouse (14 colunas) · seção C
+do probe falseável (evento novo sem `source` → vermelho) · três serviços reconstruídos e `healthy`.
+
+⚠️ A suíte do analytics-api não coleta no host por falta de `plughub_authz` no `PYTHONPATH` —
+**pré-existente e alheio a esta fase**; rodada com o caminho do pacote, 327 passam.
+
+---
+## Relatórios T1: o produtor de token, e a cadeia de três defeitos dormentes que ele acordou (2026-08-28)
+
+Segunda fase da trilha de token do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md).
+`usage.events` passou a ser publicado pelos caminhos vivos do ai-gateway. **Validado ponta a ponta**
+com chamada real: uma requisição → 4 linhas em Postgres e ClickHouse.
+
+### O produtor
+
+`emit_llm_tokens` virou o choke point dos quatro caminhos, com `source` **obrigatório e sem default** —
+um caminho novo não consegue emitir sem se identificar, e é isso que dá ao gate o que ler.
+
+| Caminho | source | Estado |
+|---|---|---|
+| `POST /v1/reason` | `reason` | emite (ponto único no `process`, cobre os ramos flat e tool-use) |
+| sentiment, dentro do reason | `sentiment` | emite — era 42% das chamadas e não publicava nada |
+| `POST /v1/copilot/analyze` | `copilot` | emite |
+| sonda de credencial do boot | — | **exclusão declarada**: `usage_events` exige `tenant_id NOT NULL` e não há tenant a quem atribuir. O log do boot passou a **contar** o gasto excluído (`tokens_in=8 tokens_out=1`) |
+
+Duas guardas, ambas por defeito já pago neste repositório: **tenant vazio não emite** (o
+`ReasonRequest.tenant_id` tem default `""`, e evento sem tenant infla o total sem aparecer em linha
+nenhuma) e **o `send` tem prazo** (ele não levanta com broker fora do ar — BLOQUEIA ~40 s). O prazo
+vive dentro do emissor, para que nenhum chamador possa esquecê-lo.
+
+Nos caminhos fire-and-forget a emissão fica **junto ao `provider.call`, antes do parse**: o token foi
+pago mesmo quando a resposta é ilegível, e emitir depois perderia justamente as chamadas malsucedidas.
+
+### A suíte tinha 168 verdes e não protegia nada disso
+
+Antes de escrever teste algum, mediu-se: **apagar a emissão do `reason` e a do `sentiment` deixava os
+168 testes verdes**. Um verde que não pode reprovar compra confiança sem dar nada — e num produtor de
+custo o defeito não aparece na tela, aparece na fatura.
+
+`test_usage_emission.py` (12 testes) trava o que faltava, com peso nas **testemunhas negativas** (o que
+NÃO pode gerar linha: tenant vazio, zero tokens, sem fala do cliente). Quatro mutações agora reprovam:
+emissão removida no reason · no sentiment · guarda de tenant desligada · `wait_for` do send removido.
+
+### A cadeia — cada conserto revelou o próximo
+
+**1. O ai-gateway nunca publicou em Kafka neste ambiente.** Era o **único** serviço sem
+`PLUGHUB_KAFKA_BROKERS` no compose (outros 19 declaram `kafka:29092`), então caía no default hardcoded
+`config.py:78` → `kafka:9092`. Esse listener aceita a conexão e **anuncia `localhost:9093`**; o produtor
+recebia metadata apontando para um endereço inexistente dentro do container e o `send` bloqueava.
+
+Consequência retroativa: **`sentiment.updated` falhava pelo mesmo motivo desde sempre.** O `CLAUDE.md`
+registrava os 40 s de bloqueio como *"broker momentaneamente inalcançável"*. Não era momentâneo — era
+fiação, e nunca ninguém a mediu porque a degradação era graciosa.
+
+**2. Com o broker certo, os eventos chegaram — e o `usage-aggregator` não conseguia persistir.** Ele
+passava o timestamp ISO como **string** para o asyncpg, que codifica o parâmetro no CLIENTE, pelo tipo
+do objeto Python, e a recusa **antes** que o `::timestamptz` escrito no SQL rode. O cast no texto da
+query dá a impressão de que a conversão está coberta; não está.
+
+Defeito dormente desde sempre, e **inalcançável por teste até agora**: sem produtor, o consumidor nunca
+executava aquela linha. A tabela `usage_events` do Postgres tinha **0 linhas** — nunca recebeu nada.
+
+**3. E os testes do aggregator codificavam o defeito.** Três deles asseveravam que
+`_truncate_to_hour` devolve `str` — exatamente o tipo que quebra o INSERT. Travavam o FORMATO da saída
+sem nunca exercer o USO dela. Corrigidos para `datetime`, mais o teste que faltava: *o valor é
+bindável?* — asseverar o tipo é o que liga a função ao seu uso real.
+
+> **Padrão:** um produtor ausente não deixa um buraco, deixa uma **fila de defeitos dormentes rio
+> abaixo** — e cada um deles tem testes verdes, porque nada jamais os alcançou. É a mesma família do
+> `down -v` que derrubou três defeitos antigos de uma vez: o wipe não quebrou, revelou.
+
+### A prova
+
+Uma chamada a `/v1/reason` com `customer_utterance`, e o resultado no Postgres:
+
+| dimension | quantity | source | model |
+|---|---|---|---|
+| `llm_tokens_input` | 95 | `reason` | claude-sonnet-4-6 |
+| `llm_tokens_output` | 8 | `reason` | claude-sonnet-4-6 |
+| `llm_tokens_input` | 226 | `sentiment` | claude-haiku-4-5 |
+| `llm_tokens_output` | 18 | `sentiment` | claude-haiku-4-5 |
+
+**O caminho sem rota própria foi 244 de 347 tokens — 70% do volume desta chamada**, contra os 42% que a
+T0 mediu por contagem. O prompt de sistema do sentiment é grande em relação ao reason, então por
+TOKEN a fatia invisível era ainda maior do que por CHAMADA. Um produtor ligado ao handler HTTP teria
+perdido a maior parte do custo.
+
+### O que a T2 ainda precisa fazer, agora demonstrado ao vivo
+
+No ClickHouse as mesmas quatro linhas chegam **indistinguíveis**: o ingest descarta o `metadata`, então
+`source` e `model_id` não existem na trilha analítica — sobrevivem só na cópia do Postgres. É a **D3**
+deixando de ser argumento e virando observação.
+
+### Verificação
+
+180 testes no ai-gateway · 12 no usage-aggregator · `probe_llm_call_paths.sh` verde (checagem **por
+caminho**, não por contagem: um caminho declarado `SIM` sem chamada ao emissor reprova) ·
+`probe_report_surface.sh` verde · ai-gateway e usage-aggregator reconstruídos (`build`, nunca `cp`) e
+`healthy`.
+
+---
+## Relatórios T0: seis caminhos gastam token, um publica — e é o que ninguém chama (2026-08-28)
+
+Primeira fase da trilha de token do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md).
+T0 é **medir antes de construir**. Entrega: `infra/test/probe_llm_call_paths.sh`, re-executável,
+com metade estática que vale sem serviço de pé.
+
+### Inventário — 6 caminhos, 1 emissor
+
+| Caminho | Chamador | Chamadas (9 d) | Emite |
+|---|---|---|---|
+| `POST /v1/reason` | skill-flow-service · engine-runner | **16** | não |
+| sentiment (dentro do `/v1/reason`) | — sem rota própria | **12** | não |
+| `POST /v1/copilot/analyze` | `mcp-server-plughub/src/server.ts:3394` | 0 (ocioso) | não |
+| sonda de credencial no boot | `main.py` | — | não |
+| `POST /inference` | **nenhum** | 0 | **SIM** |
+| `POST /v1/turn` | **nenhum** | 0 | não |
+
+Janela: logs do container de 2026-08-20 a 2026-08-28. Zero erros de LLM no período.
+
+### O achado que redesenha a T1
+
+**12 de 28 chamadas (42%) vêm de um caminho SEM ROTA PRÓPRIA.** O `sentiment_analyzer` é uma
+chamada dedicada disparada de dentro do `/v1/reason`, fire-and-forget.
+
+Consequência direta: **um produtor ligado ao handler HTTP perderia essa fatia inteira** — e
+perderia calado, que é a forma cara. O emissor tem de ficar no site que fala com o provider, não
+na rota. A T1 deixa de ser *"emitir do `/v1/reason`"* e passa a ser *"cobrir os quatro caminhos
+vivos a partir de um emissor compartilhado"*.
+
+### Rota morta × ambiente ocioso — o volume não distingue, e o probe diz isso
+
+28 chamadas em 9 dias é ambiente parado. Um zero, sozinho, não separa *"este caminho morreu"* de
+*"ninguém usou a plataforma esta semana"* — e tratar os dois igual erraria o escopo da T1 nas duas
+direções.
+
+A distinção se resolve **estaticamente**, e virou coluna da tabela do probe:
+`/v1/copilot/analyze` tem chamador (volume zero = ocioso, **entra na T1**); `/v1/turn` e
+`/inference` não têm nenhum (**rotas mortas**).
+
+**São duas rotas mortas, não uma** — e a única emissão de `usage.events` da plataforma está dentro
+de uma delas. Ordem que isso impõe: **não apagar `/inference` antes da T1**, sob pena de remover o
+único emissor existente. Ficou escrito na própria tabela do probe.
+
+### A sonda de boot obriga uma decisão, não um silêncio
+
+`main.py:86` chama o provider com `max_tokens=1` para verificar credencial. Consome pouco — mas
+**o provedor cobra**, e ela não tem sessão nem segmento.
+
+É o caso que prova que a chave de atribuição da D1 precisa ser **anulável**, e exige decisão
+declarada na T1: emitir com marcador de origem e `session_id: null`, ou não emitir. Escolher em
+silêncio produz o defeito clássico — a soma do relatório nunca bate com a fatura, e ninguém
+descobre por quê.
+
+### Falseabilidade
+
+Site de consumo novo e não declarado → **vermelho** (verificado por mutação). Padrão que deixa de
+casar com o código → **`INCONCLUSIVO`**, não verde. Cobertura de emissão que **diminui** →
+vermelho; a dívida atual (5 de 6 sem emitir) é reportada e **não** reprova: é o estado que a T0
+existe para medir, não para punir.
+
+---
+## Relatórios F0b: o redirect entrou, o arquivo nunca saiu — e a contagem estava errada (2026-08-28)
+
+Continuação da F0 do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md),
+sob a mesma regra da D7. **1.706 linhas** removidas.
+
+### Cinco páginas de relatório cuja rota já era `Navigate` desde o Arc 19
+
+| Alvo | Linhas |
+|---|---|
+| `AgentFlowMonitorPage.tsx` | 270 |
+| `AgentFlowReportPage.tsx` | 246 |
+| `WorkflowMonitorPage.tsx` | 282 |
+| `MonitorJourneysPage.tsx` | 13 |
+| `WorkflowReportPage.tsx` | 5 |
+
+O `MonitorJourneysPage` é o espécime da família: o próprio docstring dizia *"Kept as a stub to
+avoid dangling imports"* — e ele tinha **zero imports**. **A justificativa para manter o arquivo
+era falsa e verificável**, e ninguém a verificou por um arco inteiro.
+
+### A cascata, de novo — e mais funda
+
+Como o `MetricSelector` na F0, apagar expôs código que só estava vivo porque um morto o segurava.
+Duas rodadas até estabilizar:
+
+- `WorkflowsPage.tsx` (386) — referenciada só pelo `WorkflowMonitorPage`
+- `campaigns/CampaignsPage.tsx` (504) — referenciada só pelo `WorkflowReportPage`, que era um
+  **re-export** dela
+
+**A contagem de órfãos é limite inferior até que se apague de fato.** Não dá para planejar a
+limpeza inteira de antemão: cada rodada revela a próxima.
+
+### O gate estava medindo errado, e as duas tentativas erraram de lados opostos
+
+A seção B casava **basename**. Isso tem duas classes de erro, e as duas existiam nesta árvore:
+
+- **Falso negativo por colisão.** `campaigns/CampaignsPage.tsx` estava órfã e passou despercebida
+  porque `evaluation/CampaignsPage.tsx` (viva, roteada) faz o nome aparecer no `routes.tsx`.
+- **Falso positivo ao "consertar" com caminho.** Casar `dir/Base` acusou `index.tsx` (alcançado
+  por import de DIRETÓRIO) e irmãos (`./Base`). Trocar uma classe de erro pela outra não é conserto.
+
+O que decide alcançabilidade é **resolver o especificador de import** — alias `@/`, relativo,
+extensões e `/index` na ordem do bundler. Virou `infra/test/_ui_orphans.py`, no padrão dos helpers
+que outros gates já usam. Limite declarado no cabeçalho: import dinâmico montado em runtime não é
+resolvível estaticamente e não existe hoje nesta árvore.
+
+Com o resolvedor, a linha de base real é **18**, não 16 — e **nenhuma é página de relatório**: a
+F0b esgotou essa família.
+
+### Duas documentações que o resolvedor desmentiu
+
+- `ContextoTab.tsx:6` afirma que o `EstadoTab` *"was removed in Fase C"*. **Não foi** — foi
+  desligado e o arquivo ficou. O `CLAUDE.md` § Sentiment Tracking ainda o descreve como uma das
+  quatro superfícies vivas que renderizam sentimento.
+- `ChannelsPage.tsx:3` diz `@deprecated — Replaced by config-channels/GatewayConfigPanel.tsx`. O
+  substituto **também** está órfão: o substituído e o substituto morreram juntos.
+
+Ambas ficam nomeadas na linha de base do probe, com dono a definir — não são de relatórios.
+
+### Falseabilidade re-verificada após trocar o mecanismo
+
+- órfã nova com **basename colidente** (o caso que a versão anterior perdia) → **vermelho**
+- resolvedor ausente → **`INCONCLUSIVO`**, não verde
+
+`tsc --noEmit` limpo. Gate verde: 115 arquivos varridos, 18 de 18 da dívida reconhecida.
+
+---
+## Relatórios F1: o contrato de lente, e dois campos que nunca eram lidos (2026-08-28)
+
+Segunda fase do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md).
+A declaração de lente saiu da mesa e virou contrato em
+`platform-ui/src/modules/analise/lens-contract.ts`, **consumido no mesmo commit** — um schema
+sem leitor seria o órfão que a F0 acabou de caçar.
+
+### Metade da declaração antiga estava morta
+
+`LensDef` tinha quatro campos — `{ id, domain, primaryKey, pct }` — e a medição mostrou que
+**dois nunca eram lidos**: `primaryKey` e `pct`, declarados 10× cada, consumidos **0**. Só
+`domain` era vivo.
+
+E isso não era cosmético: como a declaração não carregava métrica nem formato, o `LensChart`
+teve de hardcodá-los inline (`metricKey="resolution_rate"` `fmt="pct"`), e *"esta lente está
+vazia?"* virou uma **lista de exceção nomeando cinco lentes**. **A declaração não só divergiu
+da necessidade — ela apodreceu por dentro, e o dispatch cresceu para compensar.**
+
+### O que o contrato obriga a responder
+
+| Campo | Pergunta | Onde vivia antes |
+|---|---|---|
+| `entity` | que TIPO de coisa esta lente compara | booleano `deployLens` em 5 condicionais do seletor |
+| `metrics[]` | chave, formato e **agregação** de cada métrica | hardcoded inline no JSX |
+| `evidence` | onde vive a prova de que há dado (*vazio ≠ zero*) | lista de exceção com 5 nomes |
+| `comparability` | o que torna duas entidades comparáveis | guarda inline, só na lente `quality` |
+
+### Três coisas que só apareceram ao declarar as 10 lentes reais
+
+**`aggregation` é por MÉTRICA, não por lente.** Em `sessions_aht`, `sessions` **soma** e `aht_ms`
+**promedia**. O campo não cabe no topo — e isso não se descobre desenhando, só declarando.
+
+**Nasceu `recomputed`.** Taxa e índice (`resolution_rate`, NPS) não somam **nem promediam** —
+recalculam-se da população. Sem esse valor, `avg` seria a escolha natural e errada: promediar
+uma taxa entre entidades de volumes diferentes dá um número que parece certo.
+
+**O compilador exigiu separar `LensId` de `FetchableLensId`.** `session_nps` é servida pelo
+backend e consumida pelo painel de detalhe, mas **não é plotável**. A distinção vivia num
+comentário; ao derivar `LensId` da declaração, deixou de compilar e virou tipo.
+
+### A guarda que se declara incapaz de decidir
+
+`quality_criteria` exige a mesma régua que `quality` — nota por dimensão só é comparável dentro
+do mesmo formulário — e **não tinha guarda nenhuma**. Ganhou. Mas ela **não consegue decidir**:
+`form_ids` é produzido só pela lente `quality` (`reports_query.py:4613`).
+
+Então ela se declara **`unverifiable`** e a tela diz isso, em vez de passar calada. Uma guarda
+que aprova por falta de dado é pior que guarda nenhuma — ela compra confiança sem dar nada. O
+conserto é de backend (expor `form_ids` nesta lente) e ficou registrado, não silenciado.
+
+### Onde o contrato mora — desvio medido, com o motivo
+
+O ADR dizia `@plughub/schemas`. Medido antes de escrever: **o platform-ui não importa esse
+pacote** — não é dependência, não há alias em `vite.config.ts`, e a UI espelha tipos à mão em
+quatro lugares. A declaração lá ficaria sem leitor; o backend é Python e não importaria TS.
+
+O contrato mora onde é consumido, e a coerência com o backend virou **mecanismo**: a **seção D**
+de `probe_report_surface.sh` compara os ids declarados com o `_COMPARE_LENSES` de
+`reports_query.py`. Hoje: **11 × 11**.
+
+### Falseabilidade da seção D, verificada por mutação
+
+- backend ganha lente que o contrato não conhece → **vermelho**, apontando `BACKEND_ONLY_LENSES`
+- contrato ganha lente que o backend não serve → **vermelho**
+- **parser deixa de casar com a forma dos arquivos → `INCONCLUSIVO`, não verde** — é a diferença
+  entre um probe e um probe que só *parece* medir
+
+### O que continua fora
+
+O terceiro membro da tripla da D6 — a **forma do gráfico** — segue cascata de `if`; entra na F3,
+quando a mesa virar modo. Está escrito na seção "não coberto ainda" do probe, por fase e não por
+esquecimento. `tsc --noEmit` limpo.
+
+---
+## Relatórios F0: cinco páginas mortas removidas, e um gate para a próxima (2026-08-28)
+
+Primeira fase do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md).
+**Independente de todo o resto do arco** — não espera contrato de lente, superfície nova nem
+produtor de token. Só apaga o que já estava morto e instala o mecanismo que impede a recorrência.
+
+### O que foi removido (2.393 linhas)
+
+| Alvo | Linhas | Por que estava morto |
+|---|---|---|
+| `AnaliseComparacaoPage.tsx` | 553 | zero imports |
+| `MetricSelector.tsx` | 214 | **cascata** — seu único consumidor era a página acima |
+| `AgentReportsPage.tsx` + módulo `agent-reports/` | 482 | zero imports; a rota que o doc anunciava (`/contacts/reports/agents`) não existia |
+| `AnaliseAgentesPage.tsx` (rota `/analise/agents-legacy`) | 469 | fora do menu, superseded pela bancada |
+| `ProcessosPage.tsx` (rota `/flow/processos`) | 675 | fora do menu; contradizia a **D2** de `adr-historico-unificado-duas-visoes` (*processo é pivô, nunca navegação livre*) e sua aba default agregava sobre `workflow_events`, **vazia por construção** desde a deprecação do workflow-api |
+
+Mais o endereço duplicado: `/contacts/events` renderizava o **mesmo componente** de
+`/analise/events`, com entrada de menu nos dois grupos. Virou redirect; a página fica em
+Analytics porque consulta stream **armazenado** (investigação por `session_id`), não o "agora"
+do Monitor. `tsc --noEmit` limpo depois de tudo.
+
+### A cascata é o achado que justifica o gate
+
+O `MetricSelector` não estava na lista. Ele **passou a estar** no instante em que a
+`AnaliseComparacaoPage` saiu — e o `CLAUDE.md` registrava, desde o cleanup T16, que ele fora
+mantido *"usado por `AnaliseComparacaoPage`"*. A justificativa de manter apontava para uma
+página que já estava órfã: **a razão para preservar um arquivo pode morrer sem que ninguém
+reveja o arquivo.** É o que uma lista de morte revisada à mão não pega.
+
+### A medição corrigiu o próprio ADR
+
+O ADR declarou *"linha de base: 2 órfãs"* — número medido só na área de relatórios. Varrendo
+`platform-ui/src/modules` inteiro são **10 páginas órfãs** (mais 8 componentes). A F0 remove 2;
+as **8 restantes ficam declaradas no gate como dívida que não pode crescer**.
+
+E cinco delas contam a mesma história, agora com nome: `AgentFlowMonitorPage`,
+`AgentFlowReportPage`, `MonitorJourneysPage`, `WorkflowMonitorPage`, `WorkflowReportPage` — 816
+linhas de páginas de relatório cuja rota virou `Navigate` no Arc 19. **O redirect entrou, o
+arquivo nunca saiu.** São F0b, sob a mesma regra.
+
+### Gate — `infra/test/probe_report_surface.sh`
+
+Molde do `probe_edge_surface.sh`: análise estática, sem serviço de pé, veredicto de três estados.
+Três perguntas, cada uma reprovando hoje em silêncio se ninguém as fizer:
+
+- **A** — rota de relatório sem linha no de-para da D7 → vermelho (a classificação é a decisão;
+  entrar calada é o defeito).
+- **B** — página órfã **nova**, fora da linha de base declarada → vermelho.
+- **C** — rota viva ausente do `Sidebar.tsx` → vermelho, salvo isenção declarada. É exatamente
+  como `/analise/agents-legacy` e `/flow/processos` sobreviveram invisíveis por meses.
+
+**Falseabilidade verificada por mutação**, nos três eixos: rota nova sem classe → vermelho;
+arquivo órfão novo → vermelho; entrada de menu removida → vermelho; revertido → verde.
+
+O que ele **não** cobre está escrito nele, por fase e não por esquecimento: o contrato de lente
+(F1, falha de tipo em build) e a testemunha negativa do token (T3, sem produtor não há o que medir).
+
+### Documentação que apontava para o morto
+
+`CLAUDE.md` § Arc 8 (rota inexistente) e § Arc 6 Fase 2 (a justificativa do `MetricSelector`) ·
+`docs/arcos/arc8-agent-availability.md` · `docs/INDEX.md` (duas linhas) · banners de remoção em
+`docs/modulos/processos.md` e `docs/modulos/relatorios-agentes.md`, que descreviam páginas
+inexistentes.
+
+### Achado colateral, não corrigido
+
+`/evaluation/reports` está roteada **sem `RequireEvalAccess`**, ao contrário de todos os irmãos,
+e fora do menu. Registrado na §7 do ADR; é decisão de dono, não desta fase.
+
 ---
 
 ## Verificador canônico: os SEIS viraram UM — arco completo, passos 0–6 (2026-08-28)

@@ -27,27 +27,21 @@ import {
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 
 // ── Lentes ──────────────────────────────────────────────────────────────────
-// domain: 'universal' (humano + IA) | 'human' (IA desabilitada na lista).
-// primaryKey: métrica plotada no gráfico mínimo da F4.1 (F4.2 enriquece a viz).
+// F1 do ADR de relatórios: a declaração saiu daqui e virou CONTRATO em
+// `./lens-contract.ts`. A `LensDef` local tinha quatro campos e dois deles
+// (`primaryKey`, `pct`) nunca eram lidos — declarados 10× cada, consumidos 0.
+// O contrato obriga a responder quatro perguntas por lente (entidade · métricas
+// com formato e agregação · onde vive a evidência · comparabilidade), e é dele
+// que saem agora o estado vazio e o tipo de entidade do seletor.
+import {
+  REPORT_LENSES, lensById,
+  type LensId, type FetchableLensId,
+} from './lens-contract'
 
-type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'session_nps' | 'wrapup' | 'escalation_reason' | 'deploy'
-type Domain = 'universal' | 'human' | 'ai'
-
-interface LensDef { id: LensId; domain: Domain; primaryKey: string | null; pct: boolean }
-
-const LENSES: LensDef[] = [
-  { id: 'resolution',      domain: 'universal', primaryKey: 'resolution_rate', pct: true  },
-  { id: 'sessions_aht',    domain: 'universal', primaryKey: 'sessions',        pct: false },
-  { id: 'quality',         domain: 'universal', primaryKey: 'avg_score',       pct: false },
-  { id: 'quality_criteria', domain: 'universal', primaryKey: null,             pct: false },
-  { id: 'nps',             domain: 'universal', primaryKey: 'nps',             pct: false },
-  { id: 'wrapup',          domain: 'universal', primaryKey: null,              pct: false },
-  { id: 'escalation_reason', domain: 'universal', primaryKey: null,            pct: false },
-  // deploy (Arc 6 Fase 2): qualidade Oficial por versão de skill — só agentes IA.
-  { id: 'deploy',          domain: 'ai',        primaryKey: 'avg_score',       pct: false },
-  { id: 'availability',    domain: 'human',     primaryKey: 'occupancy_pct',   pct: true  },
-  { id: 'pause_reason',    domain: 'human',     primaryKey: null,              pct: false },
-]
+// Sem cast para `ReportLens[]`: alargar aqui devolveria `id: string` e o seletor
+// perderia a união literal — que é justamente o que impede uma lente inexistente
+// de virar estado válido.
+const LENSES = REPORT_LENSES
 
 // Cor da célula por nota 0–10 (vermelho → âmbar → verde). Reusada no heatmap (F8.3)
 // e no radar do detalhe (F8.4).
@@ -857,6 +851,38 @@ function DeployEpochChart({
   )
 }
 
+/**
+ * F1 — avaliador da `comparability: 'same_form'` do contrato de lente.
+ *
+ * A régua é o eixo: comparar qualidade entre AGENTES exige o mesmo formulário;
+ * comparar entre FORMULÁRIOS só é válido para um agente só. Era uma guarda inline
+ * na lente `quality`; virou função porque `quality_criteria` exige a mesma coisa
+ * (nota por DIMENSÃO só é comparável dentro do mesmo form) e não tinha guarda.
+ *
+ * O quarto veredicto é o que impede uma guarda decorativa: `form_ids` é produzido
+ * hoje **só** pela lente `quality` (`reports_query.py:4613`). Numa lente que declara
+ * `same_form` e não recebe o campo, a guarda não pode DECIDIR — e passar calado
+ * seria a guarda que nunca reprova. Ela se declara `unverifiable` e a tela diz isso.
+ */
+type SameFormVerdict = 'ok' | 'warn' | 'blocked' | 'unverifiable'
+
+function checkSameForm(
+  resp: CompareResp, selected: string[],
+): { verdict: SameFormVerdict; forms: string[] } {
+  const ents = selected
+    .map(k => resp.data.entities.find(e => e.agent_key === k))
+    .filter((e): e is CompareEntity => !!e && !e.missing)
+  const forms = [...new Set(ents
+    .flatMap(e => (e.summary.form_ids as unknown as string[] | undefined) ?? [])
+    .filter(Boolean))]
+  const multi = ents.length > 1
+  // Sem nenhum form_id e com mais de uma entidade em tela: não há o que decidir.
+  if (forms.length === 0) return { verdict: multi ? 'unverifiable' : 'ok', forms }
+  if (forms.length > 1 && multi)  return { verdict: 'blocked', forms }
+  if (forms.length > 1 && !multi) return { verdict: 'warn',    forms }
+  return { verdict: 'ok', forms }
+}
+
 function LensChart({
   lens, resp, selected, t, escalationLabels,
 }: {
@@ -871,7 +897,12 @@ function LensChart({
   const hasData = (resp.data.average && resp.data.average.series.length > 0) ||
     resp.data.entities.some(e => e.series.length > 0 ||
       ((e.summary.reasons as unknown as unknown[] | undefined)?.length ?? 0) > 0)
-  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup' && lens !== 'quality_criteria' && lens !== 'escalation_reason' && lens !== 'deploy') return (
+  // F1: a lista de exceção que nomeava cinco lentes à mão virou uma pergunta ao
+  // contrato. `evidence: 'delegated'` = o componente da lente desenha o próprio
+  // estado vazio; `'series'` = a checagem genérica vale. Mesmo comportamento de
+  // antes, com uma diferença que é o ponto: a lente NOVA não entra calada — ela
+  // tem de declarar onde vive a sua evidência, ou não compila.
+  if (!hasData && lensById(lens)?.evidence === 'series') return (
     <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
   )
 
@@ -892,28 +923,21 @@ function LensChart({
     </div>
   )
   if (lens === 'quality') {
-    // Regra de comparabilidade (item 3 follow-ups A): comparar a média de
-    // qualidade entre AGENTES exige o mesmo formulário; comparar entre
-    // FORMULÁRIOS só é válido para um único agente (a régua/campanha é o eixo,
-    // não um disfarce). Lê summary.form_ids (exposto pela lente quality).
-    const qEnts = selected
-      .map(k => resp.data.entities.find(e => e.agent_key === k))
-      .filter((e): e is CompareEntity => !!e && !e.missing)
-    const qForms = [...new Set(qEnts
-      .flatMap(e => (e.summary.form_ids as unknown as string[] | undefined) ?? [])
-      .filter(Boolean))]
-    const multiAgent = qEnts.length > 1
-    if (qForms.length > 1 && multiAgent) return (
+    // F1: a regra de comparabilidade agora é DECLARADA (`comparability: 'same_form'`)
+    // e avaliada por `checkSameForm`, compartilhada com `quality_criteria` — que
+    // exige a mesma régua e não tinha guarda nenhuma.
+    const cmp = checkSameForm(resp, selected)
+    if (cmp.verdict === 'blocked') return (
       <div className="h-52 flex flex-col items-center justify-center text-sm text-muted-light text-center px-6 gap-1">
         <span className="text-warning font-medium">{t('bench.quality.crossFormGuard')}</span>
-        <span className="text-2xs">{t('bench.quality.crossFormGuardHint', { forms: qForms.join(', ') })}</span>
+        <span className="text-2xs">{t('bench.quality.crossFormGuardHint', { forms: cmp.forms.join(', ') })}</span>
       </div>
     )
     return (
       <div className="space-y-2">
-        {qForms.length > 1 && !multiAgent && (
+        {cmp.verdict === 'warn' && (
           <p className="text-2xs text-warning px-1">
-            {t('bench.quality.sameAgentForms', { forms: qForms.join(', ') })}
+            {t('bench.quality.sameAgentForms', { forms: cmp.forms.join(', ') })}
           </p>
         )}
         <MetricLine resp={resp} metricKey="avg_score" fmt="score" selected={selected}
@@ -937,9 +961,26 @@ function LensChart({
   if (lens === 'wrapup') return (
     <StackedDispositionBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
   )
-  if (lens === 'quality_criteria') return (
-    <QualityCriteriaHeatmap resp={resp} selected={selected} labelMap={labelMap} t={t} />
-  )
+  if (lens === 'quality_criteria') {
+    // Mesma régua da lente `quality` — nota por DIMENSÃO só é comparável dentro do
+    // mesmo formulário. Esta guarda NÃO existia aqui, e hoje ela não consegue
+    // decidir: o backend não expõe `form_ids` nesta lente. Dizer isso é o ponto —
+    // uma guarda que passa por falta de dado é pior que guarda nenhuma.
+    const cmp = checkSameForm(resp, selected)
+    return (
+      <div className="space-y-2">
+        {cmp.verdict === 'blocked' && (
+          <p className="text-2xs text-warning px-1">
+            {t('bench.quality.crossFormGuardHint', { forms: cmp.forms.join(', ') })}
+          </p>
+        )}
+        {cmp.verdict === 'unverifiable' && (
+          <p className="text-2xs text-muted-light px-1">{t('bench.quality.formUnknown')}</p>
+        )}
+        <QualityCriteriaHeatmap resp={resp} selected={selected} labelMap={labelMap} t={t} />
+      </div>
+    )
+  }
   if (lens === 'escalation_reason') return (
     <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t}
       valueMode="count" reasonLabels={escalationLabels} emptyKey="bench.chart.selectForEscalation" />
@@ -972,12 +1013,15 @@ function AgentDetail({
   tenantId: string; fromDt: string; toDt: string; agentKey: string; isHuman: boolean
   t: (k: string, o?: Record<string, unknown>) => string
 }) {
-  const [byLens, setByLens] = useState<Partial<Record<LensId, CompareEntity | null>>>({})
+  // FetchableLensId, não LensId: o detalhe consome `session_nps`, que o backend
+  // serve e a faixa de botões não plota. A distinção vivia num comentário e virou
+  // tipo quando `LensId` passou a ser derivado da declaração de lentes plotáveis.
+  const [byLens, setByLens] = useState<Partial<Record<FetchableLensId, CompareEntity | null>>>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    const lenses: LensId[] = isHuman
+    const lenses: FetchableLensId[] = isHuman
       ? ['resolution', 'quality', 'quality_criteria', 'availability', 'nps', 'session_nps']
       : ['resolution', 'quality', 'quality_criteria', 'nps', 'session_nps']
     Promise.all(lenses.map(l => {
@@ -987,8 +1031,8 @@ function AgentDetail({
       })
       return apiFetch(`/reports/agents/compare?${p}`)
         .then(r => r.json())
-        .then((d: CompareResp) => [l, d.data?.entities?.[0] ?? null] as [LensId, CompareEntity | null])
-        .catch(() => [l, null] as [LensId, CompareEntity | null])
+        .then((d: CompareResp) => [l, d.data?.entities?.[0] ?? null] as [FetchableLensId, CompareEntity | null])
+        .catch(() => [l, null] as [FetchableLensId, CompareEntity | null])
     })).then(entries => setByLens(Object.fromEntries(entries)))
       .finally(() => setLoading(false))
   }, [tenantId, fromDt, toDt, agentKey, isHuman])
@@ -1265,12 +1309,16 @@ export default function AgentsBenchPage() {
   }, [fromDt, toDt, poolId, lens, selected, view, deployMode])
 
   const lensDef = LENSES.find(l => l.id === lens)!
-  // Lente deploy (§11): a unidade é o POOL — entidades = pool_ids; sem média da frota.
-  const deployLens = lens === 'deploy'
+  // F1/D6: a unidade comparada é DECLARADA, não inferida do id da lente. `deploy`
+  // compara POOLS (§11: o mesmo skill roda em N pools, âncora-skill misturaria) e
+  // era só isso que o antigo `lens === 'deploy'` dizia nas cinco condicionais do
+  // seletor. Uma segunda lente por-pool — ou a lente de token, cuja entidade é a
+  // CONTA — passa a funcionar sem tocar em nenhuma delas.
+  const poolEntity = lensDef.entity === 'pool'
   const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt)
   const { resp, loading: chartLoading } = useCompare(
-    tenantId ?? '', fromDt, toDt, poolId, lens, selected, !deployLens,
-    deployLens ? deployMode : 'daily')
+    tenantId ?? '', fromDt, toDt, poolId, lens, selected, !poolEntity,
+    poolEntity ? deployMode : 'daily')
   const { resp: crossResp, loading: crossLoading } = useCross(tenantId ?? '', fromDt, toDt, poolId, view === 'cross')
   const escalationLabels = useEscalationLabels(tenantId ?? '')
 
@@ -1437,14 +1485,14 @@ export default function AgentsBenchPage() {
                       {/* Deploy (§11): a entidade é o PRÓPRIO pool — o checkbox seleciona o pool_id.
                           Nas demais lentes: bulk dos agentes elegíveis do pool. */}
                       <input type="checkbox"
-                        checked={deployLens ? selected.includes(pool) : allOn}
-                        ref={el => { if (el) el.indeterminate = !deployLens && !allOn && someOn }}
-                        disabled={!deployLens && eligible.length === 0}
-                        onChange={() => deployLens ? toggle(pool, false) : poolToggle(agents)}
+                        checked={poolEntity ? selected.includes(pool) : allOn}
+                        ref={el => { if (el) el.indeterminate = !poolEntity && !allOn && someOn }}
+                        disabled={!poolEntity && eligible.length === 0}
+                        onChange={() => poolEntity ? toggle(pool, false) : poolToggle(agents)}
                         className="accent-primary"
-                        style={{ accentColor: deployLens && selected.includes(pool) ? colorFor(pool) : undefined }} />
+                        style={{ accentColor: poolEntity && selected.includes(pool) ? colorFor(pool) : undefined }} />
                       <span className="flex-1 min-w-0 text-xs font-semibold text-dark font-mono truncate">{pool}</span>
-                      {!deployLens && (
+                      {!poolEntity && (
                         <button onClick={() => togglePoolPin(pool)}
                           title={t('bench.list.pinPoolAvg')} aria-label={t('bench.list.pinPoolAvg')}
                           className={`text-2xs font-bold px-1.5 py-0.5 rounded border transition-colors ${
@@ -1463,7 +1511,7 @@ export default function AgentsBenchPage() {
                       <ul>
                         {agents.map(a => {
                           // Deploy: agentes viram só referência (a seleção é por pool).
-                          const disabled = deployLens || isDisabled(a.type)
+                          const disabled = poolEntity || isDisabled(a.type)
                           const checked = selected.includes(a.key)
                           const resPct = a.sessions ? a.resolved / a.sessions : null
                           return (
@@ -1532,7 +1580,7 @@ export default function AgentsBenchPage() {
                   <p className="text-xs font-semibold text-muted uppercase tracking-wide">
                     {t(`bench.lens.${lens}`)}
                   </p>
-                  {deployLens ? (
+                  {poolEntity ? (
                     // Toggle Diário ↔ Versão (R15b) — só na lente deploy.
                     <div className="inline-flex items-center gap-1.5">
                       <span className="text-2xs text-muted-light">{t('bench.deploy.modeLabel')}</span>

@@ -96,6 +96,15 @@ class ReasonRequest(BaseModel):
     session_id:    str
     agent_id:      str = ""   # optional — forwarded for audit, not used in inference logic
     tenant_id:     str = ""   # optional — used for session-param analytics (best-effort)
+    # T2/D1 — chave de atribuição de CUSTO. É o segmento, não o pool: segmento→pool
+    # é total (`segments.pool_id` é não-nulo), mas a inversa não vale, e o pool da
+    # SESSÃO é o de ENTRADA — atribuir por ele creditaria ao pool errado o
+    # especialista IA invocado por `@mention`. Com o segmento vêm de graça pool,
+    # participante, skill e `deploy_version`, todos por JOIN em `analytics.segments`.
+    #
+    # Vazio = não informado (chamador legado). Nunca inventar: o emissor manda
+    # `null`, e a linha fica atribuível só até a sessão.
+    segment_id:    str = ""
     prompt_id:     str = Field(..., description="Ref ao Prompt Registry")
     input:         dict[str, Any]
     # A fala do cliente, NOMEADA (2026-08-23). `input` é opaco por contrato — o

@@ -42,10 +42,13 @@ parâmetro nativo (`anthropic_provider.py:88-91`). Foi assim desde sempre — o
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
+
+from .usage_emitter import emit_llm_tokens
 
 logger = logging.getLogger("plughub.ai_gateway.copilot")
 
@@ -256,6 +259,8 @@ async def analyze_for_copilot(
     customer_message: str,
     model_id:         str = "claude-haiku-4-5-20251001",
     max_tokens:       int = 256,
+    producer:         Any = None,   # T1 — AIOKafkaProducer | None (usage.events)
+    account_key_id:   str | None = None,   # T2/D2
 ) -> None:
     """
     Analyzes a customer message in background, writes co-pilot suggestions to ContextStore,
@@ -307,6 +312,24 @@ async def analyze_for_copilot(
             model_id   = model_id,
             max_tokens = max_tokens,
         )
+
+        # T1 — consumo deste caminho vai para `usage.events`. Emitido junto ao
+        # `provider.call`, antes do parse: o token foi gasto mesmo quando o parse
+        # sai vazio e a função retorna cedo (linha abaixo), e emitir depois
+        # perderia justamente as chamadas que não renderam sugestão.
+        _usage = (getattr(response, "raw", None) or {}).get("usage", {}) or {}
+        asyncio.ensure_future(emit_llm_tokens(
+            producer=      producer,
+            tenant_id=     tenant_id,
+            session_id=    session_id,
+            model_id=      getattr(response, "model_used", model_id),
+            agent_type_id= None,
+            input_tokens=  int(_usage.get("input_tokens", 0) or 0),
+            output_tokens= int(_usage.get("output_tokens", 0) or 0),
+            source=        "copilot",
+            account_key_id= account_key_id,
+            model_profile=  "fast",
+        ))
 
         # 4. Parse response text
         text = getattr(response, "content", "") or "" if response else ""

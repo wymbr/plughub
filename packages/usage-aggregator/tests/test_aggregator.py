@@ -14,10 +14,11 @@ Cobre:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
-from usage_aggregator.aggregator import UsageAggregator, _truncate_to_hour
+from usage_aggregator.aggregator import UsageAggregator, _truncate_to_hour, _to_datetime
 from usage_aggregator.models     import UsageEvent
 
 
@@ -185,19 +186,41 @@ async def test_postgres_failure_does_not_raise():
 
 # ─── Testes de _truncate_to_hour ──────────────────────────────────────────────
 
+# ⚠️ Estes três testes asseveravam `str` até 2026-08-28 — e era exatamente a string
+# que quebrava o INSERT: o asyncpg codifica o parâmetro no CLIENTE, pelo tipo do
+# objeto Python, e recusa `str` antes que o `::timestamptz` do SQL rode. Os testes
+# travavam o FORMATO da saída sem nunca exercer o uso dela, então ficavam verdes
+# sobre um valor inutilizável. O defeito só apareceu quando a T1 fez o primeiro
+# evento chegar de verdade a `usage.events`.
+
 def test_truncate_to_hour_removes_minutes_and_seconds():
     result = _truncate_to_hour("2026-04-21T10:30:45+00:00")
-    assert result == "2026-04-21T10:00:00+00:00"
+    assert result == datetime(2026, 4, 21, 10, 0, tzinfo=timezone.utc)
 
 
 def test_truncate_to_hour_handles_utc_z():
     result = _truncate_to_hour("2026-04-21T23:59:59Z")
-    assert result == "2026-04-21T23:00:00+00:00"
+    assert result == datetime(2026, 4, 21, 23, 0, tzinfo=timezone.utc)
 
 
 def test_truncate_to_hour_already_on_hour():
     result = _truncate_to_hour("2026-04-21T08:00:00+00:00")
-    assert result == "2026-04-21T08:00:00+00:00"
+    assert result == datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc)
+
+
+def test_valores_de_tempo_sao_bindaveis_pelo_asyncpg():
+    """
+    O teste que faltava — e que teria pego o defeito.
+
+    Não basta o valor estar CERTO: ele tem de ser de um tipo que o driver aceita.
+    `datetime` timezone-aware é o contrato do asyncpg para `timestamptz`; `str` é
+    recusada. Asseverar o TIPO é o que liga a função ao seu uso real.
+    """
+    for iso in ("2026-04-21T10:30:45+00:00", "2026-04-21T23:59:59Z"):
+        assert isinstance(_to_datetime(iso), datetime)
+        assert _to_datetime(iso).tzinfo is not None
+        assert isinstance(_truncate_to_hour(iso), datetime)
+        assert _truncate_to_hour(iso).tzinfo is not None
 
 
 # ─── Regression: event_id idempotency ─────────────────────────────────────────

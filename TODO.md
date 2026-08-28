@@ -7108,3 +7108,40 @@ por quem devia".)*
 
 ---
 
+
+## Cobertura de credencial nas rotas `/reports/*` da analytics-api — o TERCEIRO eixo de autorização
+
+**Medido em 2026-08-28** (achado colateral da T3 do `adr-relatorios-duas-superficies-e-lentes.md`).
+
+**12 das 38 rotas `/reports/*` não declaram principal algum.** Quatro verificadas ao vivo
+respondem **200 sem credencial**, enquanto as vizinhas respondem 401:
+
+```
+200  /reports/usage                     ← consumida pela BillingPage (que AUTENTICA)
+200  /reports/evaluations
+200  /reports/agent-events/summary
+200  /reports/customers/cus_x/360       ← dado de CLIENTE
+401  /reports/sessions
+401  /reports/segments
+```
+
+Lista completa das 12: `/usage`, `/workflows`, `/campaigns`, `/evaluations`,
+`/evaluations/summary`, `/evaluations/quality`, `/customer-voice/instruments`,
+`/customers/{customer_id}/360`, `/agent-events/series`, `/agent-events/summary`,
+`/agent-events/categories`, `/evaluator-calibration`.
+
+**Por que não foi consertado junto com o achado.** São 12 rotas com consumidores próprios;
+acrescentar `optional_pool_principal` a todas de uma vez troca um buraco por telas quebradas em
+lugares que ninguém mediu. Cada uma precisa de: (a) quem consome, (b) o consumidor manda Bearer,
+(c) o filtro de escopo faz sentido para aquele agregado (auditoria é ortogonal a pool; billing é
+tenant-wide por desenho — pode ser que a resposta certa para algumas seja *exigir credencial sem
+filtrar linha*).
+
+**Por que os censos existentes não pegaram.** `probe_authz_single_verifier` conta **quem
+decodifica JWT**; o C4 conta **quem resolve escopo de pool**. Nenhum conta **quais rotas exigem
+credencial** — e é a regra já escrita no CLAUDE.md recorrendo pela terceira vez: *"um censo
+desenhado para um eixo não prova nada sobre o eixo vizinho"*. Desta vez o eixo descoberto é o
+mais grosseiro dos três: a rota não pede nada.
+
+**O que fazer:** censo de COBERTURA no molde do C4 (AST sobre as assinaturas de rota, não
+`grep`), com linha de base declarada e as isenções NOMEADAS — nunca uma lista de "por enquanto".

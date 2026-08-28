@@ -623,15 +623,34 @@ def parse_usage_event(payload: dict[str, Any]) -> dict | None:
     if not event_id or not tenant_id or not dimension:
         return None
 
+    # ── T2/D3 — o `metadata` deixa de ser DESCARTADO no ingest ────────────────
+    #
+    # Até 2026-08-28 este parser jogava fora o `metadata` inteiro, e com ele o
+    # modelo e a conta que o emissor já mandava. Consequência medida ao vivo na
+    # T1: duas linhas de caminhos DIFERENTES (reason e sentiment) chegavam ao
+    # ClickHouse indistinguíveis — a trilha analítica não sabia dizer o que tinha
+    # gasto o quê, enquanto a cópia do Postgres sabia.
+    #
+    # Promovidos a COLUNA, não deixados em JSON, porque é sobre eles que a lente
+    # agrupa: filtro e GROUP BY em campo aninhado num String seria varredura.
+    meta = payload.get("metadata") or {}
     return {
         "table":            "usage_events",
         "event_id":         event_id,
         "tenant_id":        tenant_id,
         "session_id":       payload.get("session_id") or "",
+        # D1 — chave de atribuição. Vazio = evento de chamador que ainda não a
+        # informa; a linha fica atribuível só até a sessão, e isso é VISÍVEL.
+        "segment_id":       payload.get("segment_id") or "",
         "dimension":        dimension,
         "quantity":         int(payload.get("quantity", 1)),
         "source_component": payload.get("source_component") or "",
         "timestamp":        payload.get("timestamp") or _now(),
+        "source":            meta.get("source") or "",
+        "model_id":          meta.get("model_id") or "",
+        "model_profile":     meta.get("model_profile") or "",
+        "account_config_id": meta.get("account_config_id") or "",
+        "account_key_id":    meta.get("account_key_id") or "",
     }
 
 

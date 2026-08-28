@@ -36,8 +36,6 @@ const BREADCRUMBS: Record<string, BreadcrumbDef> = {
   '/flow/monitor':           { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.sessions' },
   '/contacts/agents':        { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.agents' },
   '/contacts/pools':         { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.pools' },
-  '/contacts/events':        { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.events' },
-  '/flow/processos':         { section: 'nav.monitor', sectionHref: '/flow/monitor',    page: 'nav.monitor.processes' },
 
   // ── Flow ───────────────────────────────────────────────────────────────────
   '/agent-flow/editor':      { section: 'nav.flow',    sectionHref: '/agent-flow/editor', page: 'nav.flow.editor' },

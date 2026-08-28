@@ -157,6 +157,7 @@ class InferenceEngine:
                 agent_type_id=  req.agent_type_id,
                 input_tokens=   llm_response.input_tokens,
                 output_tokens=  llm_response.output_tokens,
+                source=         "inference",
                 gateway_id=     self._gateway_id,
             ))
 

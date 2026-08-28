@@ -471,6 +471,18 @@ def _ch_join_sql(db: str) -> str:
         ) AS _ch ON _ch.session_id = s.session_id"""
 
 
+def _needs_ch_join(direction: str | None, channel: str | None) -> bool:
+    """O JOIN `_ch` é exigido por DOIS filtros, não por um.
+
+    Era só a direção; o conserto do filtro de canal (F2) acrescentou o segundo. Vira
+    predicado porque o chamador o consulta em três lugares (contagem, listagem,
+    série) — e um deles esquecido não dá erro de sintaxe: dá
+    `Missing columns: '_ch.channel_v'`, que o `except` do wrapper converte em
+    "não há dado". Exatamente o defeito que esta fase acabou de fechar.
+    """
+    return bool(direction or channel)
+
+
 def _mark_internal_rows(
     rows: list[dict], internal_pools: "frozenset[str] | set[str] | None",
 ) -> list[dict]:
@@ -614,15 +626,13 @@ async def query_sessions_report(
         }
 
 
-def _fetch_sessions(
+def _session_conditions(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
     channel: str | None, outcome: str | None, close_reason: str | None, pool_id: str | None,
     session_id: str | None, agent_id: str | None,
     insight_category: str | None, insight_tags: list[str] | None,
     accessible_pools: list[str] | None,
-    supervised_agent_types: list[str] | None,
-    page: int, page_size: int,
     ani: str | None = None, dnis: str | None = None,
     status: str | None = None,
     origin: "str | list[str]" = "live",
@@ -633,7 +643,26 @@ def _fetch_sessions(
     origin_session_id: str | None = None,
     entry_pool_id: str | None = None,
     direction: str | None = None,
-) -> dict:
+) -> "tuple[list[str], dict]":
+    """
+    O predicado de CONTATO — extraído de `_fetch_sessions` na F2 do
+    `adr-relatorios-duas-superficies-e-lentes.md`.
+
+    Existe porque a superfície A passa a ter LENTES ao lado da lista, e uma lente que
+    respondesse sobre uma população diferente da listada seria a mentira mais barata
+    desta tela: o operador filtra `channel=voice`, a lista mostra 12 contatos e o
+    gráfico de volume mostra 300 — dois números certos para perguntas diferentes, sem
+    nada na tela dizendo qual foi respondida.
+
+    A alternativa (dar filtros próprios à série) foi recusada pela mesma razão que a F4
+    do `adr-historico-unificado-duas-visoes` deu à direção do acesso: **uma expressão,
+    dois consumidores**. Enquanto forem dois textos de SQL, eles divergem — e divergem
+    exatamente no caso em que o filtro importa.
+
+    Devolve `(conditions, params)`; os JOINs que algumas condições exigem
+    (`_ch_join_sql` para a direção, `_agent_scope_session_join` para o escopo do Arc 9)
+    ficam com o CHAMADOR, porque a forma do `FROM` é dele.
+    """
     conditions = ["s.tenant_id = {tenant_id:String}"]
     # S1 — o fetch das filhas de UMA sessão IGNORA a janela, como o `_fetch_journeys`
     # já faz no fetch direcionado. A filha nasce depois do pai: um wrap-up que começa
@@ -731,16 +760,26 @@ def _fetch_sessions(
                 AND s.root_session_id NOT IN ({_member_list_sp})"""
         )
     if channel:
-        # For active sessions parse_routed may have set channel='' — include them by also
-        # checking non-FINAL rows. For closed sessions s.channel is authoritative.
-        conditions.append(
-            f"(s.channel = {{channel:String}} OR"
-            f" (s.closed_at IS NULL AND EXISTS ("
-            f"  SELECT 1 FROM {db}.sessions"
-            f"  WHERE tenant_id = s.tenant_id AND session_id = s.session_id"
-            f"  AND channel = {{channel:String}}"
-            f" )))"
-        )
+        # ⚠️ CONSERTADO na F2 (2026-08-28). Esta condição era uma subconsulta
+        # CORRELACIONADA (`EXISTS ... WHERE tenant_id = s.tenant_id`) — a construção
+        # que o ClickHouse 23.8 **não suporta** e que está documentada como tal 200
+        # linhas abaixo, no comentário dos tiers de `_joins`, com o mesmo código de
+        # erro (47, `Missing columns: 's.session_id' 's.tenant_id'`).
+        #
+        # O modo de falha era o pior possível: a query inteira levantava, o `except`
+        # do wrapper devolvia `data_unavailable` com `data: []`, e o endpoint
+        # respondia **200 com zero linhas**. Ou seja, o seletor de canal da lista de
+        # contatos — um dos filtros mais usados da tela — nunca filtrou: ele
+        # **esvaziava**, e "não há contato neste canal" é indistinguível de "a query
+        # falhou" para quem só olha a tela. Medido: 398 sessões `webchat` na
+        # instalação, `channel=webchat` devolvia 0.
+        #
+        # O conserto usa o canal EFETIVO (`_CHANNEL_EXPR`), que é exatamente o que a
+        # subconsulta tentava expressar — e é a MESMA string que a coluna `channel`
+        # da listagem devolve. Filtro e coluna deixam de poder divergir, como já
+        # acontece com a direção (F4). O JOIN `_ch` que a expressão exige passa a ser
+        # anexado quando há filtro de canal; ver `_needs_ch_join`.
+        conditions.append(f"{_CHANNEL_EXPR} = {{channel:String}}")
         params["channel"] = channel
     if outcome:
         conditions.append("s.outcome = {outcome:String}")
@@ -833,6 +872,188 @@ def _fetch_sessions(
 
     # Substrate isolation (ADR): default 'live' (produção); UI/quality passam outra origem.
     _apply_origin_scope(conditions, origin, alias="s.")
+    return conditions, params
+
+
+async def query_contacts_series_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    metric:                 str              = "volume",
+    interval:               int              = 60,
+    channel:                str | None       = None,
+    outcome:                str | None       = None,
+    close_reason:           str | None       = None,
+    pool_id:                str | None       = None,
+    entry_pool_id:          str | None       = None,
+    direction:              str | None       = None,
+    session_id:             str | None       = None,
+    root_session_id:        str | None       = None,
+    agent_id:               str | None       = None,
+    insight_category:       str | None       = None,
+    insight_tags:           list[str] | None = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
+    ani:                    str | None       = None,
+    dnis:                   str | None       = None,
+    status:                 str | None       = None,
+    origin:                 "str | list[str]" = "live",
+    scope:                  str              = "contacts",
+) -> dict:
+    """
+    A SÉRIE da superfície A (F2). Monta o MESMO predicado da lista e delega o SQL a
+    `contacts_series`.
+
+    Note o que ela NÃO aceita, e é deliberado: `scope="all"` chega até aqui porque a
+    barra de filtro o oferece, mas **agregado não é listagem** — o guardrail §7.2 do
+    `adr-wrapup-detached-pull` proíbe pool interno em número agregado. Ele é aceito
+    para não fazer o parâmetro sumir na troca de aba, e ignorado no predicado: a série
+    é sempre do domínio de contato. A UI diz isso na tela; silêncio aqui faria a
+    contagem oscilar com um toggle que a lente não honra.
+    """
+    from .contacts_series import query_contacts_series
+
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+
+    empty = {"buckets": [], "meta": {"metric": metric, "interval_minutes": interval,
+                                     "from": since, "to": until, "total": 0, "series": []}}
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+    if supervised_agent_types is not None and not supervised_agent_types:
+        return empty
+
+    internal_pools = await _internal_pools_for(tenant_id)
+    conditions, params = _session_conditions(
+        client, database, tenant_id, since, until,
+        channel, outcome, close_reason, pool_id, session_id, agent_id,
+        insight_category, insight_tags, accessible_pools,
+        ani=ani, dnis=dnis, status=status, origin=origin,
+        root_session_id=root_session_id, spawned_from_root=None,
+        internal_pools=internal_pools,
+        # `scope` fixo em "contacts": ver o docstring. Passar o do chamador faria a
+        # série contar sessao de pool interno, que nenhum agregado conta.
+        scope="contacts",
+        origin_session_id=None,
+        entry_pool_id=entry_pool_id, direction=direction,
+    )
+    where = " AND ".join(conditions)
+
+    # Os MESMOS JOINs da contagem de `_fetch_sessions` — nem mais, nem menos. O de
+    # canal so entra com filtro de direcao (a expressao de direcao exige o canal
+    # efetivo); o do Arc 9 e pre-agregado por sessao e nao multiplica linha.
+    _agent_join, _agent_where = _agent_scope_session_join(database, tenant_id, supervised_agent_types)
+    if _agent_where:
+        where = f"{where} {_agent_where}"
+    joins = f"{_agent_join}{_ch_join_sql(database) if _needs_ch_join(direction, channel) else ''}"
+
+    return await query_contacts_series(
+        client, database, tenant_id,
+        metric=metric, interval=interval,
+        since=since, until=until,
+        joins=joins, where=where, params=params,
+    )
+
+
+async def query_token_breakdown_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    limit:                  int              = 100,
+    channel:                str | None       = None,
+    outcome:                str | None       = None,
+    close_reason:           str | None       = None,
+    pool_id:                str | None       = None,
+    entry_pool_id:          str | None       = None,
+    direction:              str | None       = None,
+    session_id:             str | None       = None,
+    root_session_id:        str | None       = None,
+    agent_id:               str | None       = None,
+    insight_category:       str | None       = None,
+    insight_tags:           list[str] | None = None,
+    accessible_pools:       list[str] | None = None,
+    supervised_agent_types: list[str] | None = None,
+    ani:                    str | None       = None,
+    dnis:                   str | None       = None,
+    status:                 str | None       = None,
+    origin:                 "str | list[str]" = "live",
+) -> dict:
+    """
+    Breakdown de consumo de LLM (T3) sobre a MESMA população da lista.
+
+    Reusa `_session_conditions` pela mesma razão da série: a tabela aparece embaixo do
+    gráfico, sob a mesma barra de filtro, e responder sobre outra população seria a
+    divergência que a F2 fechou — agora com dinheiro em cima.
+    """
+    from .contacts_series import query_token_breakdown
+
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    empty = {"data": [], "meta": {"from": since, "to": until}}
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+    if supervised_agent_types is not None and not supervised_agent_types:
+        return empty
+
+    internal_pools = await _internal_pools_for(tenant_id)
+    conditions, params = _session_conditions(
+        client, database, tenant_id, since, until,
+        channel, outcome, close_reason, pool_id, session_id, agent_id,
+        insight_category, insight_tags, accessible_pools,
+        ani=ani, dnis=dnis, status=status, origin=origin,
+        root_session_id=root_session_id, spawned_from_root=None,
+        internal_pools=internal_pools, scope="contacts",
+        origin_session_id=None,
+        entry_pool_id=entry_pool_id, direction=direction,
+    )
+    where = " AND ".join(conditions)
+    _agent_join, _agent_where = _agent_scope_session_join(database, tenant_id, supervised_agent_types)
+    if _agent_where:
+        where = f"{where} {_agent_where}"
+    joins = f"{_agent_join}{_ch_join_sql(database) if _needs_ch_join(direction, channel) else ''}"
+
+    return await query_token_breakdown(
+        client, database, tenant_id,
+        since=since, until=until, joins=joins, where=where, params=params, limit=limit,
+    )
+
+
+def _fetch_sessions(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    channel: str | None, outcome: str | None, close_reason: str | None, pool_id: str | None,
+    session_id: str | None, agent_id: str | None,
+    insight_category: str | None, insight_tags: list[str] | None,
+    accessible_pools: list[str] | None,
+    supervised_agent_types: list[str] | None,
+    page: int, page_size: int,
+    ani: str | None = None, dnis: str | None = None,
+    status: str | None = None,
+    origin: "str | list[str]" = "live",
+    root_session_id: str | None = None,
+    spawned_from_root: str | None = None,
+    internal_pools: "frozenset[str] | None" = None,
+    scope: str = "contacts",
+    origin_session_id: str | None = None,
+    entry_pool_id: str | None = None,
+    direction: str | None = None,
+) -> dict:
+    conditions, params = _session_conditions(
+        client, db, tenant_id, since, until,
+        channel, outcome, close_reason, pool_id, session_id, agent_id,
+        insight_category, insight_tags, accessible_pools,
+        ani=ani, dnis=dnis, status=status, origin=origin,
+        root_session_id=root_session_id, spawned_from_root=spawned_from_root,
+        internal_pools=internal_pools, scope=scope,
+        origin_session_id=origin_session_id,
+        entry_pool_id=entry_pool_id, direction=direction,
+    )
 
     where = " AND ".join(conditions)
 
@@ -852,7 +1073,7 @@ def _fetch_sessions(
     # O JOIN `_ch` entra na CONTAGEM quando (e só quando) o filtro de direção está
     # ativo: a expressão de direção o exige (canal efetivo, não cru). É pré-agregado
     # por `session_id`, então não multiplica linha — a contagem não muda por ele.
-    _counts_join = f"{_agent_join}{_ch_join_sql(db) if direction else ''}"
+    _counts_join = f"{_agent_join}{_ch_join_sql(db) if _needs_ch_join(direction, channel) else ''}"
     _counts = client.query(
         f"SELECT count(), countIf({_contact_expr}) "
         f"FROM {db}.sessions AS s FINAL {_counts_join} WHERE {where}",

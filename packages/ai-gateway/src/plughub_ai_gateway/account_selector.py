@@ -113,6 +113,28 @@ class AccountSelector:
                 await selector.mark_throttled(provider_key, retry_after_seconds=60)
     """
 
+    def config_id_for(self, provider_key: str | None) -> str | None:
+        """
+        T2/D2 — `provider_key` ({provider}:{key_id}) → `config_id` do catálogo.
+
+        Existe como método do selector, e não como lookup no chamador, porque são
+        DUAS identidades para dois usos e o mapa entre elas mora aqui: o `key_id` é
+        prefixo do SHA-256 da chave (bom para depurar rate-limit, muda na rotação);
+        o `config_id` é o id do catálogo `llm_accounts` (tem `display_name` e
+        SOBREVIVE à rotação) — é ele que a tela de custo por conta precisa.
+
+        Guardar só o hash faria uma rotação de chave parecer "surgiu uma conta
+        nova". Devolve None quando não há correspondência: ausência nomeada, nunca
+        uma conta escolhida por conveniência.
+        """
+        if not provider_key:
+            return None
+        for accounts in self._accounts.values():
+            for acc in accounts:
+                if acc.provider_key == provider_key:
+                    return acc.config_id or None
+        return None
+
     def __init__(self, redis, accounts: list[LLMAccount]) -> None:
         self._redis = redis
         # Group accounts by provider
@@ -444,3 +466,31 @@ class AccountSelector:
         tpm_util = int(tpm_raw or 0) / max(acc.tpm_limit, 1)
         # RPM weighted 70% — more commonly the binding constraint for short calls
         return rpm_util * 0.7 + tpm_util * 0.3
+
+
+def resolve_provider_key(registry: dict, provider: object) -> str | None:
+    """
+    T2/D2 — descobre sob qual `{provider}:{key_id}` uma INSTÂNCIA de provider está
+    registrada.
+
+    Existe porque nem todo caminho de consumo passa pelo AccountSelector: o
+    sentimento e o copiloto pegam o provider pelo ALIAS legado
+    (`registry.get("anthropic")`), e o alias não diz qual conta é. Sem esta
+    resolução, 42% das chamadas ficariam com conta desconhecida — o que
+    transformaria o relatório por conta num balde "outros" grande demais para ter
+    uso.
+
+    A mesma instância aparece no dicionário sob DUAS chaves (o alias e a canônica);
+    esta função devolve a canônica — a única que carrega o `key_id`. Identidade de
+    objeto (`is`), não igualdade: dois providers com a mesma configuração são
+    contas diferentes.
+
+    Devolve None quando não há chave canônica. Ausência nomeada; o chamador NÃO
+    inventa uma conta.
+    """
+    if provider is None or not registry:
+        return None
+    for key, instance in registry.items():
+        if instance is provider and ":" in key:
+            return key
+    return None

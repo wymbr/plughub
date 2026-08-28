@@ -52,6 +52,7 @@ export async function executeReason(
         input:         resolvedInput,
         output_schema: step.output_schema,
         session_id:    ctx.sessionId,
+        ...(ctx.segmentId ? { segment_id: ctx.segmentId } : {}),
         attempt,
         ...(jsonSchema ? { json_schema: jsonSchema } : {}),
         ...(modelProfile ? { model_profile: modelProfile } : {}),

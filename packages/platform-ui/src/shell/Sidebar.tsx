@@ -68,7 +68,6 @@ const Sidebar: React.FC = () => {
         { label: t('nav.monitor.sessions'),  href: '/flow/monitor',      icon: FileText,  abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: Users,     abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: Waves,     abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: Zap,       abac: { module: 'contacts',   field: 'operacao' } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.operacao (D2).
         { label: t('nav.monitor.schedules'), href: '/monitor/schedules', icon: CalendarClock, abac: { module: 'scheduler', field: 'operacao' } },
         // I5 / ADR § D7b — pendências de wrap-up AGORA. Leitura sob o mesmo grant
@@ -142,7 +141,6 @@ const Sidebar: React.FC = () => {
         { label: t('nav.analise.surveys'), href: '/analise/surveys', icon: ClipboardList, abac: { module: 'evaluation', field: 'report' } },
         // I5 / ADR § D7b fatia 2 — histórico de wrap-up. Par retrospectivo do
         // Monitor › Pendências; mesmo grant do resto do Analytics.
-        { label: t('nav.analise.wrapup'), href: '/analise/wrapup', icon: Inbox, abac: { module: 'contacts', field: 'visualizar' } },
       ]
     },
 

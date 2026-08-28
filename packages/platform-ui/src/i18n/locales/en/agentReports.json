@@ -196,7 +196,8 @@
     "quality": {
       "crossFormGuard": "Comparing across agents requires the same form",
       "crossFormGuardHint": "These agents were evaluated under different forms ({{forms}}). Select agents from the same form — or a single agent to compare across forms.",
-      "sameAgentForms": "Averages from different forms/campaigns of the same agent ({{forms}}) — comparable as context, not as a single yardstick."
+      "sameAgentForms": "Averages from different forms/campaigns of the same agent ({{forms}}) — comparable as context, not as a single yardstick.",
+      "formUnknown": "Comparability cannot be verified: this lens does not report the evaluation form, so there is no guarantee the compared entities share the same yardstick."
     },
     "domain": {
       "universal": "Compares human and AI agents.",

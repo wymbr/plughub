@@ -287,6 +287,77 @@ class TestParseUsageEvent:
         assert parse_usage_event({"tenant_id": TENANT}) is None
         assert parse_usage_event({"event_id": "x", "tenant_id": TENANT}) is None
 
+    # ── T2/D3 — o metadata deixou de ser descartado ───────────────────────────
+
+    def test_promove_metadata_a_colunas(self):
+        """
+        Até 2026-08-28 este parser jogava fora o `metadata` INTEIRO. Medido ao vivo
+        na T1: duas linhas de caminhos diferentes (reason e sentiment) chegavam ao
+        ClickHouse indistinguíveis, enquanto a cópia do Postgres sabia separá-las.
+        """
+        row = parse_usage_event({
+            "event_id":         "evt-t2",
+            "tenant_id":        TENANT,
+            "session_id":       SESSION,
+            "segment_id":       "seg-abc",
+            "dimension":        "llm_tokens_input",
+            "quantity":         97,
+            "source_component": "ai-gateway",
+            "timestamp":        "2026-08-28T10:00:00+00:00",
+            "metadata": {
+                "source":            "sentiment",
+                "model_id":          "claude-haiku-4-5",
+                "model_profile":     "fast",
+                "account_config_id": "conta_prod_br",
+                "account_key_id":    "754d27f40eb21592",
+            },
+        })
+        assert row is not None
+        assert row["segment_id"]        == "seg-abc"
+        assert row["source"]            == "sentiment"
+        assert row["model_id"]          == "claude-haiku-4-5"
+        assert row["model_profile"]     == "fast"
+        assert row["account_config_id"] == "conta_prod_br"
+        assert row["account_key_id"]    == "754d27f40eb21592"
+
+    def test_sem_metadata_nao_quebra_e_nao_inventa(self):
+        """
+        Evento legado (anterior à T2) tem de continuar entrando — com os campos
+        VAZIOS, nunca com valor fabricado. Distinguir "não medíamos" de "não
+        informado" é papel da época (`usage_attribution.USAGE_ATTRIBUTION_EPOCH`),
+        não de um default aqui.
+        """
+        row = parse_usage_event({
+            "event_id":         "evt-legado",
+            "tenant_id":        TENANT,
+            "dimension":        "llm_tokens_output",
+            "quantity":         8,
+            "source_component": "ai-gateway",
+            "timestamp":        "2026-01-01T10:00:00+00:00",
+        })
+        assert row is not None
+        for campo in ("segment_id", "source", "model_id",
+                      "model_profile", "account_config_id", "account_key_id"):
+            assert row[campo] == "", campo
+
+    def test_dois_caminhos_ficam_distinguiveis(self):
+        """
+        O teste que descreve o defeito que a T2 conserta: mesma sessão, mesma
+        dimensão, caminhos diferentes. Antes, as duas linhas eram idênticas em
+        tudo que o ClickHouse guardava.
+        """
+        base = {
+            "tenant_id": TENANT, "session_id": SESSION,
+            "dimension": "llm_tokens_input", "quantity": 100,
+            "source_component": "ai-gateway",
+            "timestamp": "2026-08-28T10:00:00+00:00",
+        }
+        a = parse_usage_event({**base, "event_id": "a",
+                               "metadata": {"source": "reason", "model_id": "sonnet"}})
+        b = parse_usage_event({**base, "event_id": "b",
+                               "metadata": {"source": "sentiment", "model_id": "haiku"}})
+        assert (a["source"], a["model_id"]) != (b["source"], b["model_id"])
+
 
 # ── parse_sentiment_event ─────────────────────────────────────────────────────
 

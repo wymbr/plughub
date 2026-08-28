@@ -83,7 +83,7 @@ Um arquivo por módulo da UI. Cobre o que cada módulo faz, suas abas, gates de 
 |---|---|---|---|
 | [modulos/workflow.md](modulos/workflow.md) | `/workflow/*` | operator+ | Editor de workflows, Monitor de instâncias, Calendar, Report |
 | [modulos/agentflow.md](modulos/agentflow.md) | `/agent-flow/*` | admin+ | Editor YAML de SkillFlows, Monitor, Deploy lifecycle, @mention, Pool Hooks |
-| [modulos/processos.md](modulos/processos.md) | `/agent-flow/processos` | operator+ | Jornadas (Arc 10/16) e Instâncias de workflow — monitoramento multi-sessão |
+| [modulos/processos.md](modulos/processos.md) | ~~removida 2026-08-28~~ | — | Jornadas (Arc 10/16) e Instâncias de workflow — monitoramento multi-sessão |
 
 ### Qualidade
 
@@ -102,7 +102,7 @@ Um arquivo por módulo da UI. Cobre o que cada módulo faz, suas abas, gates de 
 | [modulos/grupos.md](modulos/grupos.md) | `/config/groups` | admin | Agent Groups, supervisores por turno, escopo de supervisor no JWT (Arc 9) |
 | [modulos/dashboards.md](modulos/dashboards.md) | `/dashboards` | admin | DisplayTool registry, tipos de card, ENDPOINT_CATALOG, FilterBar |
 | [modulos/faturamento.md](modulos/faturamento.md) | `/config/billing` | admin, business | Faturamento por capacidade: base + reserve pools |
-| [modulos/relatorios-agentes.md](modulos/relatorios-agentes.md) | `/contacts/reports/agents` | supervisor+ | Disponibilidade e pausas de agentes humanos |
+| [modulos/relatorios-agentes.md](modulos/relatorios-agentes.md) | ~~removida 2026-08-28~~ | — | Disponibilidade e pausas de agentes humanos |
 
 ---
 

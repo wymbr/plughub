@@ -15,12 +15,10 @@ import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import SchedulesPage from '@/modules/schedules/SchedulesPage'
 import SchedulesMonitorPage from '@/modules/schedules/SchedulesMonitorPage'
 import WorkItemsPage from '@/modules/work-items/WorkItemsPage'
-import WrapupSummaryPage from '@/modules/analise/WrapupSummaryPage'
 import OutboundPage from '@/modules/outbound/OutboundPage'
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
 import FlowMonitorPage      from '@/modules/agent-flow/FlowMonitorPage'
-import ProcessosPage        from '@/modules/agent-flow/ProcessosPage'
 import BillingPage from '@/modules/billing/BillingPage'
 import FormsPage from '@/modules/evaluation/FormsPage'
 import EvalCampaignsPage from '@/modules/evaluation/CampaignsPage'
@@ -46,7 +44,13 @@ import EventsPage   from '@/modules/contacts/EventsPage'
 //  virou `Navigate`; a segunda não era sequer importada. Import órfão não é
 //  inofensivo: mantém a página compilando e viva no bundle, e sugere ao próximo
 //  leitor que existe um caminho até ela.)
-import AnaliseAgentesPage   from '@/modules/analise/AnaliseAgentesPage'
+// (F0 do ADR de relatórios, 2026-08-28 — REMOVIDAS pela mesma razão, agora com gate:
+//  `AnaliseComparacaoPage` (órfã) + `MetricSelector` (seu único consumidor),
+//  `AgentReportsPage` (órfã), `AnaliseAgentesPage` (rota `/analise/agents-legacy`,
+//  fora do menu, superseded pela mesa) e `ProcessosPage` (rota `/flow/processos`,
+//  fora do menu; contradiz a D2 de adr-historico-unificado-duas-visoes, e sua aba
+//  default agrega sobre `workflow_events`, VAZIA desde a deprecação do workflow-api).
+//  O gate `infra/test/probe_report_surface.sh` reprova a próxima órfã.)
 import AgentsBenchPage      from '@/modules/analise/AgentsBenchPage'
 import AnalisePoolsPage     from '@/modules/analise/AnalisePoolsPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
@@ -88,15 +92,17 @@ export const routes: RouteObject[] = [
       // Monitor/Sessions → /flow/monitor (live pool view)
       { path: 'contacts/agents',   element: <AgentsPage   /> },
       { path: 'contacts/pools',    element: <PoolsPage    /> },
-      { path: 'contacts/events',   element: <EventsPage   /> },
+      // F0 (ADR relatórios, D7) — `/contacts/events` renderizava o MESMO componente
+      // que `/analise/events`, com entrada de menu nos DOIS grupos. A página consulta
+      // o stream ARMAZENADO (investigação por session_id), não o "agora" do Monitor:
+      // vive em Analytics, e o endereço histórico vira redirect.
+      { path: 'contacts/events',   element: <Navigate to="/analise/events" replace /> },
       { path: 'flow/monitor',      element: <FlowMonitorPage     /> },
       // Monitor/Agendas → live schedules + dispatch ledger (Scheduler Fase 3)
       { path: 'monitor/schedules', element: <SchedulesMonitorPage /> },
       // Monitor/Pendências → wrap-ups pendentes AGORA (I5 / ADR § D7b, fatia 1).
       // Só o vivo: o histórico do período é query sobre `segments` no Analytics.
       { path: 'monitor/work-items', element: <WorkItemsPage /> },
-      // Monitor/Processes → KPI dashboard (completion rates, failure analysis)
-      { path: 'flow/processos',    element: <ProcessosPage      /> },
       // Legacy redirects
       { path: 'contacts',          element: <Navigate to="/analise/sessions"  replace /> },
       { path: 'contacts/sessions', element: <Navigate to="/analise/sessions"  replace /> },
@@ -122,7 +128,6 @@ export const routes: RouteObject[] = [
       // ── Analytics (historical views) ──────────────────────────────
       { path: 'analise/sessions',  element: <RequireAbac module="contacts" field="visualizar"><SessionsPage /></RequireAbac> },
       { path: 'analise/agents',    element: <RequireAbac module="contacts" field="visualizar"><AgentsBenchPage /></RequireAbac> },
-      { path: 'analise/agents-legacy', element: <RequireAbac module="contacts" field="visualizar"><AnaliseAgentesPage /></RequireAbac> },
       { path: 'analise/pools',     element: <RequireAbac module="contacts" field="visualizar"><AnalisePoolsPage /></RequireAbac> },
       { path: 'analise/events',    element: <RequireAbac module="contacts" field="visualizar"><EventsPage /></RequireAbac> },
       // F3.3 — `/analise/processos` foi ABSORVIDO por `/analise/sessions`. O processo
@@ -138,9 +143,12 @@ export const routes: RouteObject[] = [
       { path: 'analise/customer-voice', element: <RequireAbac module="contacts" field="visualizar"><CustomerVoicePage /></RequireAbac> },
       // Survey response navigator (S8) — per-response list from PG survey_response.
       { path: 'analise/surveys', element: <RequireAbac module="contacts" field="visualizar"><AnaliseSurveysPage /></RequireAbac> },
-      // I5 / ADR § D7b fatia 2 — histórico do trabalho author-bound (wrap-up).
-      // Contraparte retrospectiva de Monitor › Pendências, que só mostra o vivo.
-      { path: 'analise/wrapup', element: <RequireAbac module="contacts" field="visualizar"><WrapupSummaryPage /></RequireAbac> },
+      // F2 — `/analise/wrapup` foi ABSORVIDO por `/analise/sessions` como a lente de
+      // **disposição** (D7: "endereço morre, componente é re-hospedado"). A regra que
+      // o matou é a de sobrevivência: a unidade de análise é o CONTATO, logo é lente.
+      // O componente continua vivo, hospedado no nível 1 daquela rota, e passa a
+      // honrar o intervalo da barra de filtro em vez do próprio seletor de período.
+      { path: 'analise/wrapup', element: <Navigate to="/analise/sessions?lens=disposition" replace /> },
       // Legacy redirects
       { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },
       { path: 'analise/agentes',   element: <Navigate to="/analise/agents"   replace /> },

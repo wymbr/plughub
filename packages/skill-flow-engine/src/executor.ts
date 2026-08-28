@@ -86,6 +86,19 @@ export interface StepContext {
      * Habilita a medição de sentimento no ai-gateway. Ausente = não medir.
      * Nunca inferida do `input`, que é opaco por contrato.
      */
+    /**
+     * T2/D1 — segmento que está consumindo. É a chave de ATRIBUIÇÃO DE CUSTO: o
+     * ai-gateway a carimba no evento `usage.events`, e dela saem pool,
+     * participante, skill e `deploy_version` por JOIN em `analytics.segments`.
+     *
+     * Não é o pool: segmento→pool é total, mas a inversa não vale, e o pool da
+     * SESSÃO é o de ENTRADA — atribuir por ele creditaria ao pool errado o
+     * especialista IA invocado por `@mention`.
+     *
+     * Ausente = chamador sem segmento em escopo; o custo fica atribuível só até a
+     * sessão. Nunca inventar.
+     */
+    segment_id?:   string
     customer_utterance?: string
   }): Promise<unknown>
 

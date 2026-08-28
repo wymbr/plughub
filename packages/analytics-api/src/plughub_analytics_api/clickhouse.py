@@ -190,15 +190,42 @@ CREATE TABLE IF NOT EXISTS {db}.usage_events
     event_id         String,
     tenant_id        String,
     session_id       String,
+    segment_id       String DEFAULT '',
     dimension        String,
     quantity         Int64,
     source_component String,
+    source            String DEFAULT '',
+    model_id          String DEFAULT '',
+    model_profile     String DEFAULT '',
+    account_config_id String DEFAULT '',
+    account_key_id    String DEFAULT '',
     timestamp        DateTime64(3, 'UTC'),
     date             Date
 )
 ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, event_id)
+"""
+
+# ── T2/D3 — metadata promovido a COLUNA ───────────────────────────────────────
+# Até 2026-08-28 o parser DESCARTAVA o `metadata` inteiro, e com ele modelo e conta
+# que o emissor já mandava. Medido ao vivo na T1: duas linhas de caminhos diferentes
+# (reason e sentiment) chegavam INDISTINGUÍVEIS aqui, enquanto a cópia do Postgres
+# sabia separá-las. Promovidos a coluna porque é sobre eles que a lente agrupa.
+#
+# ⚠️ FORWARD-ONLY por construção: linha antiga fica com '' e **não há backfill
+# possível** — o metadata descartado não existe em lugar nenhum. Quem consome a
+# série tem de cortar na época declarada (`USAGE_ATTRIBUTION_EPOCH`), e não tratar
+# '' como "conta desconhecida": são duas ausências diferentes (não media × não
+# informado), e confundi-las foi o defeito que a época do SLA já pagou uma vez.
+_ALTER_USAGE_EVENTS_T2 = """
+ALTER TABLE {db}.usage_events
+    ADD COLUMN IF NOT EXISTS segment_id        String DEFAULT '' AFTER session_id,
+    ADD COLUMN IF NOT EXISTS source            String DEFAULT '' AFTER source_component,
+    ADD COLUMN IF NOT EXISTS model_id          String DEFAULT '' AFTER source,
+    ADD COLUMN IF NOT EXISTS model_profile     String DEFAULT '' AFTER model_id,
+    ADD COLUMN IF NOT EXISTS account_config_id String DEFAULT '' AFTER model_profile,
+    ADD COLUMN IF NOT EXISTS account_key_id    String DEFAULT '' AFTER account_config_id
 """
 
 _DDL_SENTIMENT_EVENTS = """
@@ -1149,6 +1176,7 @@ _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE,
     _DDL_SESSIONS_MIGRATE_ANI_DNIS,
     _DDL_SESSIONS_MIGRATE_SLA,
+    _ALTER_USAGE_EVENTS_T2,   # T2/D3: segment_id + source + modelo + conta
     _DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT,
     _DDL_MESSAGES_MIGRATE_CONTENT,
     _ALTER_WORKFLOW_EVENTS_POOL_ID,       # Add pool_id to workflow_events
@@ -1618,8 +1646,11 @@ class AnalyticsStore:
     # usage_events
 
     _USAGE_COLS = [
-        "event_id", "tenant_id", "session_id",
-        "dimension", "quantity", "source_component", "timestamp", "date",
+        "event_id", "tenant_id", "session_id", "segment_id",
+        "dimension", "quantity", "source_component",
+        "source", "model_id", "model_profile",
+        "account_config_id", "account_key_id",
+        "timestamp", "date",
     ]
 
     async def insert_usage_event(self, row: dict) -> None:
@@ -2313,9 +2344,15 @@ def _usage_row(d: dict) -> list:
         d.get("event_id", ""),
         d.get("tenant_id", ""),
         d.get("session_id", "") or "",
+        d.get("segment_id", "") or "",
         d.get("dimension", ""),
         int(d.get("quantity", 0)),
         d.get("source_component", "") or "",
+        d.get("source", "") or "",
+        d.get("model_id", "") or "",
+        d.get("model_profile", "") or "",
+        d.get("account_config_id", "") or "",
+        d.get("account_key_id", "") or "",
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

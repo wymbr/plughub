@@ -96,9 +96,22 @@ class UsageAggregator:
                     event.session_id,
                     event.dimension,
                     event.quantity,
-                    event.timestamp,
+                    # `_to_datetime`, não a string crua: o asyncpg codifica o
+                    # parâmetro no CLIENTE, pelo tipo do objeto Python, e recusa
+                    # `str` antes que o `::timestamptz` do SQL chegue a rodar.
+                    # Defeito DORMENTE desde sempre — só disparou em 2026-08-28,
+                    # quando a T1 fez o primeiro evento realmente chegar a este
+                    # tópico. Não havia como pegá-lo antes: sem produtor, o
+                    # consumidor nunca executava esta linha.
+                    _to_datetime(event.timestamp),
                     event.source_component,
-                    json.dumps(event.metadata),
+                    # `segment_id` dobrado no metadata: a tabela do PG não tem
+                    # coluna para ele, e perdê-lo aqui faria as duas cópias do
+                    # mesmo evento discordarem sobre a quem o custo pertence.
+                    json.dumps(
+                        {**event.metadata, "segment_id": event.segment_id}
+                        if event.segment_id else event.metadata
+                    ),
                 )
 
                 # Agregado por hora — upsert
@@ -124,8 +137,24 @@ class UsageAggregator:
             )
 
 
-def _truncate_to_hour(iso_ts: str) -> str:
-    """Trunca um timestamp ISO 8601 para a hora inteira (minutos e segundos zerados)."""
-    dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-    truncated = dt.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-    return truncated.isoformat()
+def _to_datetime(iso_ts: str) -> datetime:
+    """
+    ISO 8601 → `datetime` timezone-aware, para bind do asyncpg.
+
+    Existe porque o asyncpg codifica o parâmetro no CLIENTE, a partir do tipo do
+    objeto Python: uma `str` é recusada com `invalid input for query argument`
+    ANTES que o `::timestamptz` escrito no SQL tenha chance de rodar. O cast no
+    texto da query dá a impressão de que a conversão está coberta — e não está.
+    """
+    return datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+
+
+def _truncate_to_hour(iso_ts: str) -> datetime:
+    """
+    Trunca um timestamp ISO 8601 para a hora inteira.
+
+    Devolve `datetime`, não `str`, pela mesma razão de `_to_datetime` — o valor vai
+    direto para o bind de `usage_hourly.hour`.
+    """
+    dt = _to_datetime(iso_ts)
+    return dt.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc)

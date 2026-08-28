@@ -121,6 +121,19 @@ export const UsageEventSchema = z.object({
   /** Sessão associada quando aplicável. */
   session_id:       z.string().nullable().default(null),
 
+  /**
+   * T2/D1 - segmento que consumiu. CHAVE DE ATRIBUICAO DE CUSTO: dela saem pool,
+   * participante, skill e deploy_version por JOIN em analytics.segments.
+   *
+   * Nao e o pool: segmento->pool e total, mas a inversa nao vale, e o pool da
+   * SESSAO e o de ENTRADA - atribuir por ele creditaria ao pool errado o
+   * especialista IA invocado por @mention.
+   *
+   * null = chamador que ainda nao a informa; a linha fica atribuivel so ate a
+   * sessao. Nunca inventar.
+   */
+  segment_id:       z.string().nullable().default(null),
+
   /** Dimensão de consumo. */
   dimension:        UsageDimensionSchema,
 

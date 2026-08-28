@@ -32,6 +32,12 @@ class UsageEvent(BaseModel):
     event_id:         str
     tenant_id:        str
     session_id:       str | None = None
+    # T2/D1 — chave de atribuição de custo. Declarada aqui porque o Pydantic
+    # DESCARTA campo extra em silêncio: sem esta linha o `segment_id` sumiria da
+    # cópia do Postgres e os dois stores divergiriam em CONTEÚDO, não só em forma.
+    # A tabela do PG não tem coluna para ele (D3 mantém o PG como store de
+    # faturamento/idempotência), então ele é dobrado no `metadata` na persistência.
+    segment_id:       str | None = None
     dimension:        str
     quantity:         float
     timestamp:        str

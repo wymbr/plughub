@@ -1,10 +1,26 @@
 /**
- * SessionsPage — /analise/sessions
+ * SessionsPage — /analise/sessions · **Superfície A · Contatos** (F2 do
+ * `adr-relatorios-duas-superficies-e-lentes.md`).
  *
- * Three-level drill-down (matches Journeys / Processes pattern):
- *   Level 1: filtered session list
- *   Level 2: segment list for a specific session  (breadcrumb bar)
- *   Level 3: SessionTranscript for a specific segment
+ * Níveis (drill), inalterados:
+ *   Nível 1: lista filtrada de contatos
+ *   Nível 2: processo (`?journey=`) ou segmentos da sessão
+ *   Nível 3: transcrição do segmento
+ *
+ * LENTES (F2) — a faixa no nível 1
+ * ---------------------------------
+ * O nível 1 deixa de ser "a lista" e passa a ser **uma lente entre outras**, todas
+ * sob a MESMA barra de filtro: lista · volume · duração · recursos · disposição.
+ * Isso é o que a D7 chama de superfície: filtro + nível + lente, e não uma página
+ * por pergunta. Cada lente que era página (`/analise/wrapup`) vira aba aqui.
+ *
+ * ⚠️ **A lente vai na URL** (`?lens=`), como `?journey=` e `?session_id=`. Estado
+ * local criaria um segundo endereço para o mesmo lugar, que diverge no reload e no
+ * botão voltar — o defeito que o parâmetro de sessão já fechou nesta tela.
+ *
+ * ⚠️ **A faixa só existe no nível 1.** Lente é sobre a POPULAÇÃO filtrada; dentro de
+ * uma sessão não há população. Mostrá-la no drill ofereceria um controle que não
+ * responde nada.
  */
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -23,6 +39,10 @@ import type { TraceNode }      from '@/modules/service/components/WorkflowTraceL
 import type { ContactFilters } from './types'
 import { DEFAULT_FILTERS } from './types'
 import { ListaTab }        from './tabs/ListaTab'
+import ContactLensChart    from './ContactLensChart'
+import WrapupSummaryPage   from '@/modules/analise/WrapupSummaryPage'
+import { CONTACT_LENSES, isContactLens } from '@/modules/analise/lens-contract'
+import type { ContactLensId } from '@/modules/analise/lens-contract'
 // Mesmo componente que a coluna "Processo" da lista usa — ver o comentário do
 // `ProcessCrumb` abaixo para por que isto não é conveniência.
 import { ProcessChip, processCounts, hasProcess } from './ProcessChip'
@@ -177,6 +197,47 @@ function FilterBar({ filters, setFilters }: {
   )
 }
 
+// ── Faixa de lentes (F2) ──────────────────────────────────────────────────────
+//
+// Uma lente por aba, todas sob a mesma barra de filtro. A faixa é gerada da
+// DECLARAÇÃO (`CONTACT_LENSES`), não de uma lista aqui: uma lente nova entra no
+// contrato e aparece — que é a previsão da D5 e a razão de a F1 vir antes da F2.
+//
+// O selo de `honors: 'period_only'` não é decoração. Ele diz que aquela lente honra
+// só o intervalo, e o resto da barra não a alcança. Sem ele, o operador filtraria
+// por pool e leria o resultado como se o filtro tivesse valido — uma barra que não
+// filtra é a mentira mais barata desta superfície, e não fica vermelha em lugar
+// nenhum.
+function LensBar({ lens, onChange }: {
+  lens: ContactLensId
+  onChange: (id: ContactLensId) => void
+}) {
+  const { t } = useTranslation('contacts')
+  const current = CONTACT_LENSES.find(l => l.id === lens)
+  return (
+    <div className="bg-white border-b border-border px-4 flex items-center gap-1 flex-shrink-0">
+      {CONTACT_LENSES.map(l => (
+        <button
+          key={l.id}
+          onClick={() => onChange(l.id)}
+          className={`text-xs px-3 py-2 border-b-2 transition-colors ${
+            l.id === lens
+              ? 'border-primary text-primary font-medium'
+              : 'border-transparent text-muted hover:text-dark'
+          }`}
+        >
+          {t(`lens.${l.id}.title`)}
+        </button>
+      ))}
+      {current?.honors === 'period_only' && (
+        <span className="ml-auto text-xs text-warning" title={t('lens.periodOnlyHint')}>
+          {t('lens.periodOnly')}
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ── Selo do processo no breadcrumb do drill ───────────────────────────────────
 //
 // A volta ao PROCESSO, que não existia. Até 2026-08-25 o único pivô para a visão 2
@@ -254,6 +315,14 @@ export default function SessionsPage() {
   /** Processo no endereço. Presente ⇒ chegamos aqui PELO processo, e é para ele que
    *  o selo do breadcrumb volta (sem precisar redescobri-lo). */
   const urlJourney = searchParams.get('journey')
+  /** F2 — a LENTE do nível 1, na URL pela mesma razão que as duas acima.
+   *
+   *  Valor desconhecido cai em `list` em vez de renderizar nada: o parâmetro vem de
+   *  link externo e de redirect (`/analise/wrapup` → `?lens=disposition`), então uma
+   *  lente que não existe é entrada de fora, não erro de programação. */
+  const rawLens = searchParams.get('lens')
+  const lens: ContactLensId = isContactLens(rawLens ?? '') ? (rawLens as ContactLensId) : 'list'
+  const lensDef = CONTACT_LENSES.find(l => l.id === lens)!
   useEffect(() => {
     if (urlSession) {
       setDetailSessionId(prev => (prev === urlSession ? prev : urlSession))
@@ -547,19 +616,31 @@ export default function SessionsPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
       <FilterBar filters={filters} setFilters={setFilters} />
+      <LensBar lens={lens} onChange={id => setSearchParams(id === 'list' ? {} : { lens: id })} />
 
       <div className="flex-1 overflow-hidden">
-        <ListaTab
-          tenantId={tenantId}
-          filters={contactFilters}
-          onOpenDetail={(sid, ch) => openSession(sid, ch || null)}
-          scopeAll={listScopeAll}
-          onScopeAllChange={setListScopeAll}
-          // Pivô para o nível 2. Vai pela URL (e não por estado local) de propósito:
-          // é o mesmo endereço dos deep-links externos, então há UM caminho para o
-          // processo, não dois que podem divergir.
-          onOpenJourney={jid => setSearchParams({ journey: jid })}
-        />
+        {lens === 'list' ? (
+          <ListaTab
+            tenantId={tenantId}
+            filters={contactFilters}
+            onOpenDetail={(sid, ch) => openSession(sid, ch || null)}
+            scopeAll={listScopeAll}
+            onScopeAllChange={setListScopeAll}
+            // Pivô para o nível 2. Vai pela URL (e não por estado local) de propósito:
+            // é o mesmo endereço dos deep-links externos, então há UM caminho para o
+            // processo, não dois que podem divergir.
+            onOpenJourney={jid => setSearchParams({ journey: jid })}
+          />
+        ) : lens === 'disposition' ? (
+          // `/analise/wrapup` absorvido (D7): o endereço morre, o componente é
+          // re-hospedado. Recebe o intervalo da barra — sem isso a tela teria DUAS
+          // janelas de tempo, e a de dentro venceria em silêncio.
+          <WrapupSummaryPage fromDt={filters.fromDt} toDt={filters.toDt} />
+        ) : (
+          // Toda lente de série é o MESMO componente, dirigido pela declaração —
+          // nunca um branch por lente. Ver `ContactLensChart`.
+          <ContactLensChart tenantId={tenantId} filters={contactFilters} lens={lensDef} />
+        )}
       </div>
     </div>
   )
