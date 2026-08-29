@@ -1,6 +1,6 @@
 # ADR: `masked` deixa de ser booleano e passa a nomear um TIPO do catálogo
 
-**Status:** Aceito — 2026-08-29. **T0–T6 e T7-A entregues** (ver `CHANGELOG.md`); resta só a **T7-B**, bloqueada por decisão do dono. T7, que fecha o ramo `boolean`, é a única não reversível e segue não iniciada.
+**Status:** Aceito — 2026-08-29. **T0–T6 e T7-A entregues** (ver `CHANGELOG.md`); resta só a **T7-B**, bloqueada por decisão do dono.
 **Data:** 2026-08-29
 **Componentes:** `packages/schemas`, `packages/skill-flow-engine`, `packages/mcp-server-plughub`,
 `packages/orchestrator-bridge`, `packages/platform-ui`, `packages/agent-registry`,
