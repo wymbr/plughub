@@ -52,6 +52,7 @@ import { registerDialogTools }      from "./tools/dialog"
 import type { DialogDeps }          from "./tools/dialog"
 import jwt                         from "jsonwebtoken"
 import { createRedisClient, keys } from "./infra/redis"
+import { observeContextTags, readContextAudit } from "./lib/context-map"
 import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
@@ -1010,6 +1011,12 @@ async function applyContextMaskingDynamic(
   // permissivo e o que a regra `*` endereça); senão o primeiro declarado.
   const role         = roles.find(r => config.supervisor_roles.includes(r))
                        ?? roles[0] ?? "operator"
+  // ── V3 — modo AUDITORIA (não altera NADA abaixo) ────────────────────────────
+  // Observa as tags contra o mapa e conta alias × canônica × não-declarada. É
+  // fire-and-forget de propósito: a classificação não entra em nenhuma decisão
+  // desta função, e uma falha de contador não pode derrubar a aba Contexto.
+  void observeContextTags(rawHash, tenantId).catch(() => { /* já logado na casa */ })
+
   const result: Record<string, unknown> = {}
   const byRule:      string[] = []
   const byPoolScope: string[] = []
@@ -1382,6 +1389,49 @@ export async function startServer(config: ServerConfig): Promise<void> {
       }
 
       res.json(out)
+    } catch (err) {
+      res.status(500).json({ error: String(err) })
+    }
+  })
+
+  /**
+   * GET /internal/context-audit?tenant_id=… — a leitura do modo AUDITORIA (V3).
+   *
+   * Existe porque um contador que ninguém consegue ler não autoriza decisão
+   * nenhuma, e a V4 é decidida por este número. Devolve o PAR do ADR §7 (alias ×
+   * canônica), a lista de não-declaradas e — obrigatoriamente ao lado —
+   * `declared_in_map`: *"zero não-declaradas"* sobre um mapa vazio é serviço
+   * parado, não allowlist completa.
+   *
+   * Mesmo portão do `/internal/context-snapshot` (`x-service-token`): a lista de
+   * campos não-declarados NOMEIA campos de um tenant, e nomes de campo já são
+   * informação sobre o negócio dele.
+   */
+  app.get("/internal/context-audit", async (req: Request, res: Response) => {
+    // Mesmo nome de env do irmão `/internal/context-snapshot` — não um segundo
+    // token. Duas credenciais para dois endpoints do mesmo processo é como uma das
+    // duas fica sem ser setada e o endpoint responde 503 parecendo defeito.
+    const expected = process.env["MCP_INTERNAL_SERVICE_TOKEN"] ?? ""
+    if (!expected) {
+      console.error(
+        "[context-audit] MCP_INTERNAL_SERVICE_TOKEN não configurado — RECUSANDO. " +
+        "Deixa de valer: a leitura da auditoria do ContextStore. A COLETA segue " +
+        "acontecendo nas duas portas; o que falta é a porta de leitura.",
+      )
+      res.status(503).json({ error: "internal_token_not_configured" })
+      return
+    }
+    if (req.header("x-service-token") !== expected) {
+      res.status(401).json({ error: "Unauthorized" })
+      return
+    }
+    const tenantId = typeof req.query["tenant_id"] === "string" ? req.query["tenant_id"] : ""
+    if (!tenantId) {
+      res.status(400).json({ error: "tenant_id required" })
+      return
+    }
+    try {
+      res.json(await readContextAudit(tenantId, redis))
     } catch (err) {
       res.status(500).json({ error: String(err) })
     }

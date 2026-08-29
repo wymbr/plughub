@@ -1,5 +1,130 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## V3 do arco ALLOWLIST — o mapa existe, os aliases são contados, e a auditoria não esconde nada (2026-08-29)
+
+O ContextStore ganhou um **mapa declarativo** (`masking.context_map`, 74 campos e 39 aliases) em
+`escopo.dominio.campo`, cada folha nomeando um tipo do catálogo da V2. O runtime resolve a tag **na
+borda** contra esse mapa e **conta** — alias × canônica × não-declarada × dinâmica —, publicando o
+resultado em `GET /internal/context-audit`.
+
+**A V3 não fecha nada, e isso é o desenho, não uma limitação.** O `mode` do mapa tem **um** valor
+(`audit`): não existe config capaz de ligar imposição antes de a V4 escrever o código que a honre.
+O ramo E do gate guarda exatamente essa propriedade — as duas portas chamam a auditoria, nenhuma
+consome o retorno.
+
+### O denominador estava errado, e leitura sozinha não era o denominador
+
+A §1.8 do ADR afirmava **486 ocorrências em 97 arquivos**. Não reproduz: contando
+`@ctx.<ns>.<campo>` em `packages/`, são **231 em 53 arquivos**. O 486 é compatível com um critério
+mais largo (`@ctx.` ∪ `:ctx:`, incluindo `docs/`), que mistura referência de tag com nome de chave
+Redis e com prosa.
+
+O achado que mudou o método, porém, foi outro: **escrita e leitura não coincidem**. As declarações
+`tag:` dos `context_tags` nos YAML trazem campos que nenhuma leitura menciona — `caller.telefone`,
+`caller.intencao_primaria`, `session.wrapup.*`, `account.status`. Semear o mapa só pelo censo de
+leitura teria produzido uma allowlist incompleta **do lado silencioso** (omitir campo que alguém
+escreve), que é o modo de falha que o arco existe para matar. O mapa saiu da UNIÃO das duas.
+
+O censo do ContextStore VIVO não serviu de autoridade: são 5 campos distintos em 11 hashes, todos
+escritos pelo routing-engine. Um mapa semeado dali teria 5 folhas.
+
+### O primeiro segmento NÃO é o escopo, e é isso que a migração conserta
+
+O censo mostrou 8 primeiros-segmentos reais, e só **dois** são escopos com roteamento próprio
+(`session`, `journey`). `caller`, `account`, `hook`, `approval` roteiam para o hash de sessão **por
+serem o default**, e `campaign_id`/`target_pool` não têm segmento nenhum. As canônicas de 3
+segmentos que já existem (`session.pool.id`, `session.queue.position`) são escritas pelo
+routing-engine — a forma-alvo não foi inventada, ela já roda.
+
+### `legado` teve de virar ARRAY (emenda à D3)
+
+O exemplo da D2 traz `legado: "caller.cpf"`, no singular. Medido: **duas grafias vivas para o mesmo
+campo** — `caller.cpf` e `session.cpf`, este último depositado pelo `delegate.context`. Com `legado`
+escalar restariam dois nós canônicos (quebrando *"só a canônica é armazenada"*) ou o descarte
+silencioso de um alias.
+
+### O mapa exigiu o primeiro tipo que NÃO mascara — e com ele um fail-open novo
+
+A maioria dos 74 campos é encanamento sem PII, e o catálogo da V2 só tinha tipos que mascaram.
+As alternativas já estavam recusadas por escrito: `tipo` opcional reintroduz o *"declarado porém sem
+tipo"* (o default permissivo como AUSÊNCIA, D1 do ADR do `masked` tipado), e um `tipo: "none"`
+próprio do mapa seria o oitavo inventário de categoria num arco que existe para colapsar sete.
+Entrou `texto` (`by_role` vazio, `lgpd: none`) — que a D1 já previa: *"existe tipo que só formata, e
+tipo que não faz nada"*.
+
+**Mas um tipo inerte no catálogo abriu um caminho que não existia:** o portão de deploy da T5
+(`invalid_masked_type`) conferia apenas que o id EXISTE, então `masked: "texto"` passaria — campo
+declarado mascarado, renderizado em claro, com o selo de conformidade de quem declarou. É a pior
+forma do "valor plausível": a declaração está lá e o valor sai inteiro.
+
+Fechado por **predicado derivado do próprio tipo** (`typeMasksSomething`, sobre `mascara.by_role`),
+nunca por lista de exceção — lista envelheceria no primeiro tipo novo, que foi como `iban`/`passport`
+sobreviveram até a V2. Medido antes de ligar: os 10 tipos anteriores declaram `by_role.operator`
+não-`plain`, logo **zero regressão**. A recusa NOMEIA o motivo certo (*"existe mas não mascara"*),
+porque *"não existe"* mandaria o autor caçar erro de digitação num id correto.
+
+### Uma exposição de PII, reproduzida ao vivo
+
+O censo achou `session.numero_atual` — o **telefone** do cliente no fluxo de portabilidade
+(`agente_portabilidade_intake_v1.yaml:445`, `confidence: 1.0`) — e ele **não casa nenhuma das 23
+regras** do tenant: `*.telefone` exige sufixo `.telefone`, e `session.*` não pode ter catch-all
+(derrubaria a tela de aprovação). Cai no `default_unmatched_operator: "plain"`.
+
+Reproduzido no caminho real: o snapshot devolveu `"value":"11987654321"` em claro ao lado de
+`caller.cpf` mascarado como `***00`. É a §1.1 do ADR num campo concreto. **Exposição real, dano
+medido zero hoje** (nenhum hash vivo o contém). No mapa ele é declarado `phone`; o conserto durável
+é a V4, e o paliativo (uma regra exata) é decisão de produto — está no `TODO.md`.
+
+### Instrumentos
+
+Gate `infra/test/probe_context_map_audit.sh`, **9 ramos**, visto vermelho antes de verde e
+exercitado por mutação: um `tipo` inexistente injetado na config viva derruba B e B2 nomeando o
+campo; removido, volta a verde. Bateria de 6 mutações sobre o oráculo (tipo desconhecido, escopo
+fora do enum, alias ambíguo, alias sombreando canônica, mapa vazio, predicado que lê o dado), **cada
+uma afirmando que a mutação aplicou** antes de julgar.
+
+E um defeito que a fase introduziu e um gate VIZINHO denunciou: as chaves de auditoria nasceram em
+`{t}:ctx:audit:*`, **dentro do namespace das sessões** (`{t}:ctx:{sessionId}`). Os probes da V1 e da
+V1b, que listam as sessões com ContextStore vivo, passaram a exibir `audit:counts` e `audit:seen` no
+meio dos UUIDs. `journey:`/`customer:` moram sob `:ctx:` legitimamente — são **escopos** do contexto;
+auditoria é metadado **sobre** o contexto e não herda o endereço. Movidas para `{t}:ctx_audit:*`, com
+ramo H no gate (fonte **e** testemunha viva no Redis) para que não volte.
+
+Quatro lições do próprio ciclo:
+
+- **O ramo B julgava TS contra TS, e o que roda é outro par.** Um `texto` presente na TS e ausente
+  da config passou despercebido porque os dois mirrors do `seed.py` são hand-written **e**
+  seed-if-absent: acrescentar um tipo na TS não chega ao store. O sintoma foi o portão recusar
+  `masked: "texto"` pelo motivo ERRADO (*"não existe"*), veredicto correto sobre a proposição
+  vizinha. Daí o ramo **B2 — vivo × vivo**. *(O `probe_type_catalog.sh` já cobria isso para o
+  catálogo; tê-lo rodado antes teria encurtado o caminho.)*
+- **`$?` através de `wsl.exe -- bash -lc '…'` a partir do Git Bash é expandido cedo** e devolve o
+  status errado. O gate reportava `FALHA (2)` e "exit 0" ao mesmo tempo — instrumento quebrado, não
+  gate quebrado. Aferir com `&& / ||`.
+- **Um gate só prova o que ele mede.** O ramo E confere a INOCUIDADE na fonte, e nenhum dos oito
+  ramos originais olhava para o endereço das chaves — quem viu foi um probe de outra fase, rodado
+  por hábito. Vale o hábito.
+- **`config-api` cacheia em processo:** re-semear com `--overwrite` não muda o que a API serve até o
+  serviço reiniciar. Custou um diagnóstico inteiro no rumo errado.
+
+### Arquivos
+
+- `packages/schemas/src/context-map.ts` (novo) — `ContextMapSchema`, `DEFAULT_CONTEXT_MAP`,
+  `buildContextTagIndex`/`resolveContextTag` (uma casa, três consumidores) e o oráculo
+  `verifyContextMap`.
+- `packages/schemas/src/audit.ts` — tipo `texto`, `typeMasksSomething`, label de `credential`
+  ampliada (token de retomada compartilha política **e** classe), docstring de `declared_only`
+  corrigida: são **dois** sítios de declaração, e a marca diz *"não se chega por detecção"*.
+- `packages/mcp-server-plughub/src/lib/context-map.ts` (novo) — carga do mapa com cache de 60 s,
+  classificação pura, registro fire-and-forget e `readContextAudit`.
+- `packages/mcp-server-plughub/src/server.ts` / `lib/context-masking.ts` — as duas portas humanas
+  observam; `GET /internal/context-audit`.
+- `packages/agent-registry/src/validators/skill.ts` — recusa de tipo inerte (+3 testes).
+- `packages/config-api/src/plughub_config_api/seed.py` — `masking.context_map` (gerado da TS, com
+  round-trip conferido) e `texto` no `masking.types`.
+
+---
+
 ## T7-A do `masked` tipado — a ESCRITA fecha, e a T7 era DUAS remoções (2026-08-29)
 
 `MaskedDeclarationSchema` deixou de aceitar `true`: **422** no `PUT /v1/skills`. A declaração

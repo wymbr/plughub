@@ -62,6 +62,8 @@ export {
   DataTypeCatalogSchema,
   DEFAULT_DATA_TYPE_CATALOG,
   verifyDataTypeCatalog,
+  TEXTO_DATA_TYPE_ID,
+  typeMasksSomething,
 } from "./audit"
 
 export type {
@@ -90,6 +92,27 @@ export type {
   DataType,
   DataTypeCatalog,
 } from "./audit"
+
+// ── Mapa do ContextStore (D2 do arco ALLOWLIST, fase V3) ──
+export {
+  ContextScopeSchema,
+  ContextMapFieldSchema,
+  ContextMapSchema,
+  DEFAULT_CONTEXT_MAP,
+  buildContextTagIndex,
+  resolveContextTag,
+  verifyContextMap,
+} from "./context-map"
+
+export type {
+  ContextScope,
+  ContextMapField,
+  ContextMap,
+  ContextTagOrigin,
+  ContextTagResolution,
+  ContextTagIndex,
+  ContextMapVerification,
+} from "./context-map"
 
 // ── v2: Mensagem ─────────────────────────────
 export {

@@ -270,11 +270,27 @@ describe("validateMaskedBlock", () => {
 // T5 — portão de DEPLOY do `masked` tipado (ADR adr-masked-typed-declaration, D3)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Entradas REALISTAS: todo tipo do catálogo vivo declara `mascara.by_role`, e desde
+// a V3 do arco ALLOWLIST isso deixou de ser detalhe — o portão recusa tipo que não
+// mascara, então um fixture de `{ id }` pelado descreveria um catálogo que não
+// existe e faria o teste medir a proposição vizinha.
 const catalogOk = (types: string[]) =>
   (async () => ({
     ok: true,
-    json: async () => ({ entries: { types: { value: { types: types.map(id => ({ id })) } } } }),
+    json: async () => ({ entries: { types: { value: {
+      types: types.map(id => ({ id, mascara: { by_role: { operator: "hidden" } } })),
+    } } } }),
   })) as unknown as typeof fetch
+
+/** Catálogo com um tipo INERTE (não mascara para papel nenhum) — o caso do `texto`. */
+const catalogComInerte = (async () => ({
+  ok: true,
+  json: async () => ({ entries: { types: { value: { types: [
+    { id: "cpf",   mascara: { by_role: { operator: "last_2" } } },
+    { id: "texto", mascara: { by_role: {} } },
+    { id: "so_plain", mascara: { by_role: { operator: "plain" } } },
+  ] } } } }),
+})) as unknown as typeof fetch
 
 const flowWithMasked = (masked: unknown): SkillFlow => ({
   entry: "c",
@@ -302,6 +318,31 @@ describe("validateMaskedTypeRefs — portão de deploy", () => {
   it("aprova tipo que existe no catálogo", async () => {
     const errs = await validateMaskedTypeRefs(flowWithMasked("cpf"), { ...OPTS, fetchImpl: catalogOk(["cpf", "opaque"]) })
     expect(errs).toEqual([])
+  })
+
+  // ── V3 do arco ALLOWLIST — o catálogo passou a poder conter tipo que NÃO mascara
+  // (`texto`, criado para o MAPA do ContextStore). Conferir só a EXISTÊNCIA do id
+  // deixaria passar `masked: "texto"`: campo declarado mascarado e renderizado em
+  // claro — fail-open com selo de conformidade.
+  it("RECUSA tipo que EXISTE mas não mascara (by_role vazio)", async () => {
+    const errs = await validateMaskedTypeRefs(flowWithMasked("texto"), { ...OPTS, fetchImpl: catalogComInerte })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain('"texto"')
+    expect(errs[0]).toContain("NÃO mascara")
+    // O motivo importa: "não existe" mandaria o autor caçar erro de digitação num id correto.
+    expect(errs[0]).not.toContain("não existe no catálogo")
+  })
+
+  it("RECUSA tipo cujo by_role é todo \"plain\"", async () => {
+    const errs = await validateMaskedTypeRefs(flowWithMasked("so_plain"), { ...OPTS, fetchImpl: catalogComInerte })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain("NÃO mascara")
+  })
+
+  // Testemunha POSITIVA do mesmo catálogo: um portão que recusasse tudo também
+  // passaria nos dois testes acima.
+  it("APROVA tipo que mascara, no mesmo catálogo que tem o inerte", async () => {
+    expect(await validateMaskedTypeRefs(flowWithMasked("cpf"), { ...OPTS, fetchImpl: catalogComInerte })).toEqual([])
   })
 
   it("RECUSA tipo ausente, nomeando campo, tipo e alternativas", async () => {

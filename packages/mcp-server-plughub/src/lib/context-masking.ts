@@ -29,6 +29,7 @@
  */
 
 import { MaskingService } from "./masking"
+import { observeContextTags } from "./context-map"
 import type { ContextMaskingConfig, ContextMaskingRule, ContextMaskingType } from "@plughub/schemas"
 
 // ── ContextMaskingConfig in-process cache ─────────────────────────────────────
@@ -297,6 +298,13 @@ export async function maskContextForPersistence(
   tenantId: string,
 ): Promise<PersistenceSnapshot> {
   const config = await getContextMaskingConfig(tenantId)
+
+  // ── V3 — modo AUDITORIA (não altera NADA abaixo) ────────────────────────────
+  // A SEGUNDA porta. Instrumentar só a da Console deixaria esta medindo nada, sem
+  // nada ficar vermelho — que é exatamente como o `supervisor_state` passou meses
+  // devolvendo o hash cru (ADR §1.5).
+  void observeContextTags(rawHash, tenantId).catch(() => { /* já logado na casa */ })
+
   const entries: Record<string, unknown> = {}
   let total  = 0
   let hidden = 0

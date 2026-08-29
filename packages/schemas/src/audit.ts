@@ -354,6 +354,13 @@ export type DataTypeMask = z.infer<typeof DataTypeMaskSchema>
 export const OPAQUE_DATA_TYPE_ID = "opaque"
 
 /**
+ * `texto` — o tipo sem política. Constante pelo mesmo motivo de
+ * `OPAQUE_DATA_TYPE_ID`: é referenciado pelo mapa do ContextStore e pelo oráculo,
+ * e um literal repetido em três casas é como as grafias divergem.
+ */
+export const TEXTO_DATA_TYPE_ID = "texto" as const
+
+/**
  * MaskedDeclaration — o que um step/nó ou campo declara em `masked`.
  *
  *   `"cpf"`  → mascarado, e o TIPO é `cpf` (política vem do catálogo)
@@ -392,8 +399,14 @@ export const DataTypeSchema = z.object({
   mascara: DataTypeMaskSchema.default({}),
   lgpd:    LgpdClassSchema.default("none"),
   /**
-   * Tipo alcançável APENAS por declaração (`masked: "<id>"`) — nunca por detecção
-   * nem por ser um `DataCategory` canônico.
+   * Tipo alcançável APENAS por DECLARAÇÃO — nunca por detecção nem por ser um
+   * `DataCategory` canônico.
+   *
+   * ⚠️ São DOIS sítios de declaração, e a V3 acrescentou o segundo: `masked: "<id>"`
+   * num campo de formulário, e o **mapa do ContextStore** (`context-map.ts`). A
+   * marca diz *"não se chega aqui por detecção"*, e não *"o `masked:` aceita"* —
+   * quem decide o que cada sítio aceita é o sítio. `texto` é o caso que separa os
+   * dois: declarável no mapa, recusado pelo `masked:` (ver `typeMasksSomething`).
    *
    * Existe por causa do ORÁCULO: `verifyDataTypeCatalog` trata como órfão todo tipo
    * sem `detect_pattern` cujo id não seja `DataCategory`, e foi assim que a V2
@@ -562,7 +575,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
     // ID DO CAMPO, que é a chave do `masked_types` — a distinção não se perde.
     {
       id:      "credential",
-      label:   "Credencial (senha, código 2FA)",
+      label:   "Credencial (senha, código 2FA, token de retomada)",
       icon:    "🔑",
       formato: {},
       mascara: {
@@ -625,6 +638,38 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       lgpd:          "nao_classificado",
       declared_only: true,
     },
+    // ── texto — o tipo que NÃO faz nada, e por que ele precisa existir ────────
+    //
+    // Acrescentado na V3 do arco ALLOWLIST. O mapa do ContextStore (D2) declara
+    // TODO campo, e a maioria dos campos medidos é encanamento sem PII
+    // (`session.pool.id`, `session.workflow.current_round`, `session.survey.grain`).
+    // Sem um tipo para eles restariam duas saídas, ambas já recusadas por escrito:
+    //
+    //   · `tipo` opcional — reintroduz o "declarado porém sem tipo", que é o
+    //     default permissivo na forma de AUSÊNCIA (a D1 do ADR do `masked` tipado
+    //     recusa exatamente isto: o valor mais barato de produzir e o mais difícil
+    //     de contar);
+    //   · um segundo vocabulário no mapa (`tipo: "none"`) — o oitavo inventário de
+    //     categoria, num arco que existe para colapsar sete.
+    //
+    // A D1 já previa este tipo: *"qualquer das três pode ser vazia — existe tipo
+    // que só formata, e tipo que NÃO FAZ NADA"*.
+    //
+    // ⚠️ `by_role` VAZIO é o que o torna inelegível a `masked:` — ver
+    // `typeMasksSomething` abaixo. Um campo declarado `masked: "texto"` seria
+    // declarado-mascarado e renderizado em CLARO: fail-open com cara de
+    // conformidade. O portão de deploy da T5 recusa, e o gate tem testemunha.
+    {
+      id:      TEXTO_DATA_TYPE_ID,
+      label:   "Texto sem classificação (encanamento, ids internos)",
+      icon:    "📄",
+      formato: {},
+      // `by_role` explicitamente VAZIO — é a declaração de que não há máscara para
+      // papel nenhum, e é o que `typeMasksSomething` lê para recusar `masked:`.
+      mascara: { by_role: {} },
+      lgpd:          "none",
+      declared_only: true,
+    },
   ],
 }
 
@@ -660,6 +705,31 @@ export const DEFAULT_MASKING_RULES: MaskingRule[] = DEFAULT_DATA_TYPE_CATALOG.ty
     if (typeof t.formato.preserve_pattern === "string")     rule.preserve_pattern     = t.formato.preserve_pattern
     return rule
   })
+
+/**
+ * typeMasksSomething — este tipo esconde algo de alguém?
+ *
+ * Existe porque a V3 acrescentou ao catálogo o primeiro tipo que **não mascara**
+ * (`texto`), e com ele um caminho fail-open que antes não podia existir: o portão
+ * de deploy da T5 (`invalid_masked_type`) conferia apenas que o id EXISTE no
+ * catálogo, então `masked: "texto"` passaria — um campo declarado mascarado,
+ * renderizado em claro, e com o selo de conformidade de quem declarou.
+ *
+ * É a pior forma do "valor plausível" que a § Postura de Engenharia cataloga: a
+ * declaração está lá, a tela mostra o campo protegido na config, e o valor sai
+ * inteiro. Um tipo que não mascara é legítimo — no MAPA, onde declarar encanamento
+ * é o esperado; nunca no `masked:`, cuja única razão de ser é esconder.
+ *
+ * O predicado é derivado do próprio tipo (`by_role`), não de uma lista de exceção:
+ * uma lista envelheceria no primeiro tipo novo, que é como o `iban`/`passport`
+ * sobreviveram até a V2. Medido em 2026-08-29 contra o catálogo vivo: os 10 tipos
+ * anteriores declaram `by_role.operator` não-`plain`, logo o portão não regride
+ * nenhuma declaração existente.
+ */
+export function typeMasksSomething(t: DataType): boolean {
+  const byRole = t.mascara?.by_role ?? {}
+  return Object.values(byRole).some(v => v !== "plain")
+}
 
 /**
  * verifyDataTypeCatalog — o ORÁCULO do gate da V2, exportado para não ser reimplementado

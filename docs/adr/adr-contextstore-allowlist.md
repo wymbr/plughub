@@ -1,7 +1,8 @@
 # ADR: ContextStore como ALLOWLIST — tipo declarado, mapa de dados e vocabulário único de política
 
 **Status:** Aceito — 2026-08-26. **Parcialmente implementado:** V0 *(metade)* · V1 · V1b · V2 · V2b
-entregues; **V3 é a próxima**. V4 (a inversão, não reversível) segue **não iniciada**.
+· **V3** entregues; **V4 é a próxima** — e a V4 (a inversão, não reversível) só é autorizada pelo
+número que a V3 passou a publicar (§7).
 **Data:** 2026-08-26 *(cabeçalho corrigido em 2026-08-29: dizia "Proposto — nenhuma fase implementada"
 enquanto a §6 marcava quatro fases como FEITAS, com gate e entrada de CHANGELOG cada uma. Documento que
 se contradiz é da mesma família do DDL de `participation_intervals` — prosa afirmando um estado que
@@ -186,9 +187,20 @@ honesta não pode ser "presumir que passam pelo mesmo lugar", porque não passam
 
 ### 1.8 Blast radius
 
-`@ctx.` ou `:ctx:` aparecem em **486 ocorrências, 97 arquivos** (medido nesta sessão), dos quais ~40
+`@ctx.` ou `:ctx:` aparecem em **486 ocorrências, 97 arquivos** (medido em 2026-08-26), dos quais ~40
 são YAML de skill — isto é, **autoria**, não só código de plataforma. Este número é o que separa uma
 mudança de chave de uma mudança de declaração.
+
+> ⚠️ **O 486 NÃO se reproduz, e o denominador do mapa é outro** *(remedido em 2026-08-29, na V3)*.
+> Contando `@ctx.<ns>.<campo>` em `packages/`: **231 ocorrências em 53 arquivos**. O 486 é
+> compatível com um critério mais largo (`@ctx.` ∪ `:ctx:`, incluindo `docs/`), que mistura
+> referência de tag com nome de CHAVE Redis e prosa. Não é o mesmo universo, e a diferença importa:
+> o mapa se mede pelas TAGS.
+>
+> E o censo de leitura, sozinho, também não bastou — **escrita e leitura não coincidem**. As
+> declarações `tag:` dos `context_tags` nos YAML trazem campos que nenhuma leitura menciona
+> (`caller.telefone`, `caller.intencao_primaria`, `session.wrapup.*`, `account.status`). O mapa da
+> V3 foi semeado sobre a UNIÃO das duas varreduras: **74 campos, 39 aliases**.
 
 ---
 
@@ -268,6 +280,14 @@ o runtime lê o primeiro segmento (como hoje), a UI agrupa pelo segundo.
 
 A canônica é a nova (`session.cliente.cpf`); o nome atual (`caller.cpf`) vira `legado` **no próprio
 nó do mapa** — não numa segunda config, porque duas casas é como as cópias divergem.
+
+> **Emenda medida na V3 (2026-08-29): `legado` é ARRAY, não string.** O exemplo acima está no
+> singular, e a varredura achou **duas grafias vivas para o mesmo campo** — `caller.cpf`
+> (`agente_contexto_ia_v1.yaml:111,230`) e `session.cpf` (depositado pelo `delegate.context`, o
+> achado que motivou os globs de sufixo em 08-26). Com `legado` escalar sobrariam duas saídas, ambas
+> ruins: **dois nós canônicos** para um campo — o que quebra a própria condição 2 abaixo, já que
+> passariam a existir duas canônicas — ou **descartar um alias em silêncio**, que é o vazamento que
+> o arco existe para matar. Hoje 39 aliases apontam para 74 canônicas.
 
 Três condições, e sem elas o alias é dívida em vez de migração:
 
@@ -459,7 +479,7 @@ hierárquico hoje (`ContextTagEntrySchema.tag`, regex multi-nível em `context-s
 | **V1b** | A segunda porta (§1.5). **FEITA em 2026-08-26** (ver `CHANGELOG.md`): política extraída para `lib/context-masking.ts` e aplicada ao tool MCP `supervisor_state`, em **grau operator sem portão de namespace**; `context_masking` no retorno. Gate `probe_supervisor_tool_masking.sh` (6 ramos; **C** = testemunha negativa contra blanket-mask, **B** usa o endpoint HTTP como **oráculo** em vez de valor hardcodado). Barata porque **0 skills consumiam** o campo — o custo teria crescido com o primeiro consumidor | sim |
 | **V2** | Catálogo de tipos (D1) declarado e semeado, **sem nenhum consumidor novo** — os mecanismos atuais passam a lê-lo. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `DataTypeSchema` + `DEFAULT_DATA_TYPE_CATALOG` (7 tipos, só o ALCANÇÁVEL — `iban`/`passport` fora), `DEFAULT_MASKING_RULES` passou a ser **derivada** do catálogo, `masking.types` semeado, e a tela iterando o dado com **selo derivado** em vez do "Ativo" incondicional. Gates `probe_type_catalog.sh` (dois lados + testemunha do ORÁCULO) e `probe_masking_display_parity.sh` (três portas, com testemunha contra o caso vácuo). Dois defeitos alheios caíram junto: o leitor de regras de canal apontava para uma rota inexistente (**inerte desde sempre**) e o `\(?` do regex de telefone era ramo morto | sim |
 | **V2b** | Fechar a casa LEGADA de display rule (`rule.{category}`) — pré-requisito do `masked` TIPADO, que não pode ser escrito enquanto a mesma pergunta tiver duas respostas. **FEITA em 2026-08-29** (ver `CHANGELOG.md`). **A remoção foi autorizada por CONTADOR, não por decreto:** o ramo D do `probe_type_catalog.sh` publicava o número de chaves legadas dizendo *"a remoção é MEDIDA por este número zerar"* — zerou. Medido antes de tocar: **zero escritores** em todo o repositório (a V2 já migrara a tela; os três `putConfig` da `MaskingPage` são `audit_policy/{key}`, `masking/types`, `masking/context_rules`), **zero chaves** em todo o `platform_config` (todos os tenants, todos os namespaces — contra 8 linhas do ns `masking` de testemunha) e **quatro leitores**, todos no `platform-ui`. Gate `probe_legacy_display_rule_closed.sh`, visto **vermelho antes de verde** (4 casas → 0). Achado: o leitor legado **não era peso morto** — `getMaskingRule` devolvia o override e `update()` o gravava de volta no CATÁLOGO, então editar qualquer campo de uma categoria com override **promovia o legado a tipo, em silêncio**; armadilha ARMADA, blast radius zero por ausência de dado | sim |
-| **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria** (só registra o que teria sido escondido/recusado) | sim |
+| **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria**. **FEITA em 2026-08-29** (ver `CHANGELOG.md`): `masking.context_map` com **74 campos e 39 aliases**, semeado a partir do CENSO (leitura ∪ escrita — as duas varreduras discordam), `resolveContextTag` resolvendo **na borda** nas DUAS portas humanas, e o PAR de contadores com data em `{t}:ctx:audit:*`, legível por `GET /internal/context-audit`. **O mapa não recusa nada e o enum `mode` tem UM valor** — não existe config capaz de ligar a V4 antes de o código que a honra existir. Três achados que a fase produziu: **(1)** o `486` da §1.8 **não reproduz** (são 231/53 arquivos), e leitura sozinha não é o denominador — escrita traz campos que nenhuma leitura menciona; **(2)** `legado` teve de virar ARRAY (D3), porque o mesmo campo tem duas grafias vivas; **(3)** o mapa exigiu o primeiro tipo que **não mascara** (`texto`), e com ele um fail-open que não existia — `masked: "texto"` passaria pelo portão da T5, que só conferia EXISTÊNCIA do id. Fechado por predicado derivado (`typeMasksSomething`), não por lista de exceção, com testemunha positiva ao lado. Gate `probe_context_map_audit.sh` (8 ramos), visto **vermelho antes de verde** | sim |
 | **V4** | Inverter para deny-by-default, com a lista real que a V3 produziu | **não** |
 | **V5** | Tela do pool vira seletor (D6); fechamento dos aliases cujo contador zerou | sim |
 
@@ -481,9 +501,24 @@ Gates exigidos por fase:
   existente. Os dois lados, senão volta `iban`/`passport`.
 - **V3** — o contador de alias precisa de par: resoluções via alias **e** via canônica. Só o primeiro
   não distingue "ninguém migrou" de "ninguém usa".
+- **V3** ✅ — o par existe e é lido junto: `GET /internal/context-audit` devolve `alias[]` e
+  `canonical[]` com `count` + `last_seen` cada, mais `declared_in_map`. Medido no caminho real: uma
+  leitura com `caller.cpf` (alias) e `session.pool.id` (canônica) move **os dois** contadores, e o
+  ramo D do gate é a testemunha negativa nos dois sentidos — tag canônica não incrementa alias, e
+  vice-versa. Sem isso o par passaria por um contador que incrementa tudo.
 - **V4** — a medição que autoriza virar a chave é *"o modo auditoria acusou zero campos não
   declarados por N dias"*, com o número de campos **declarados** ao lado. Zero sobre zero é um serviço
   parado, não uma allowlist completa.
+  > ⚠️ **A V3 deixou uma condição a mais, e ela não estava prevista aqui:** `unknown` só é confiável
+  > enquanto `overflow == 0`. O balde tem teto (500 grafias distintas), porque `session.*` recebe
+  > campo autorado pelo tenant e é ilimitado por construção. Truncar sem dizer faria a lista parecer
+  > completa — exatamente o que a V4 não pode acreditar —, então o teto INCREMENTA `__overflow__` e a
+  > leitura o publica ao lado. **`overflow > 0` invalida a autorização**, não a atrasa.
+  >
+  > E a auditoria observa a LEITURA, nas duas portas humanas: um campo escrito por um dos 12 `HSET`
+  > diretos (§1.7) e **nunca lido** é invisível. Isso é benigno para esta decisão — o que a V4
+  > inverte é a política **R-humano**, e campo que ninguém lê por essa porta não perde nada ao deixar
+  > de ser acessível por ela —, mas deixa de ser benigno se a V4 alargar para W ou P.
 - **Transversal** — nenhum gate pode sair `OK` com ramo `INCONCLUSIVO`. O
   `probe_chip_breakdown.sh` foi corrigido em 08-26 por ter exatamente essa forma; o
   `probe_f4_direction_and_classes.sh` **ainda tem**.

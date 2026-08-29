@@ -7,8 +7,8 @@
  */
 
 import { z }           from "zod"
-import { SkillSchema } from "@plughub/schemas"
-import type { FlowStep, SkillFlow } from "@plughub/schemas"
+import { SkillSchema, typeMasksSomething } from "@plughub/schemas"
+import type { FlowStep, SkillFlow, DataType } from "@plughub/schemas"
 
 export const CreateSkillSchema = SkillSchema
 
@@ -197,7 +197,8 @@ export async function validateMaskedTypeRefs(
   if (refs.length === 0) return []            // sem tipado ⇒ sem dependência
 
   const doFetch = opts.fetchImpl ?? fetch
-  let ids: Set<string>
+  let ids:   Set<string>
+  let inert: Set<string> = new Set()
   try {
     const url  = `${opts.configApiUrl}/config/masking?tenant_id=${encodeURIComponent(opts.tenantId)}`
     const resp = await doFetch(url)
@@ -207,9 +208,14 @@ export async function validateMaskedTypeRefs(
     const cat  = (raw && typeof raw === "object" && "value" in (raw as object))
       ? (raw as { value: unknown }).value
       : raw
-    const types = (cat as { types?: Array<{ id?: string }> } | undefined)?.types
+    const types = (cat as { types?: DataType[] } | undefined)?.types
     if (!Array.isArray(types) || types.length === 0) throw new Error("catálogo vazio ou ausente")
     ids = new Set(types.map(t => String(t?.id ?? "")).filter(Boolean))
+    // V3 — o catálogo passou a poder conter tipo que NÃO mascara (`texto`, para o
+    // mapa do ContextStore). Conferir só a EXISTÊNCIA do id deixaria passar
+    // `masked: "texto"`: campo declarado mascarado, renderizado em claro, com selo
+    // de conformidade. O predicado é derivado do tipo, nunca uma lista de exceção.
+    inert = new Set(types.filter(t => t && !typeMasksSomething(t)).map(t => String(t.id ?? "")).filter(Boolean))
   } catch (err) {
     // Degradação NUNCA silenciosa, e aqui nem sequer degrada: recusa NOMEANDO.
     return [
@@ -219,10 +225,24 @@ export async function validateMaskedTypeRefs(
     ]
   }
 
-  return refs
+  const unknown = refs
     .filter(r => !ids.has(r.type))
     .map(r =>
       `step "${r.step}", campo "${r.field}": masked: "${r.type}" não existe no catálogo ` +
       `masking.types do tenant. Tipos declarados: ${[...ids].sort().join(", ")}.`,
     )
+
+  // Recusa NOMEANDO o motivo, que é diferente do de cima: o tipo existe, e é por
+  // isso que a mensagem tem de dizer que ele não mascara — senão o autor procura
+  // um erro de digitação num id que está certo.
+  const doesNotMask = refs
+    .filter(r => ids.has(r.type) && inert.has(r.type))
+    .map(r =>
+      `step "${r.step}", campo "${r.field}": masked: "${r.type}" existe no catálogo mas ` +
+      `NÃO mascara para papel nenhum (\`mascara.by_role\` vazio ou todo "plain"). ` +
+      `Declarar um campo como mascarado com um tipo inerte o exibiria em claro — ` +
+      `é o tipo do MAPA do ContextStore, não de declaração \`masked\`.`,
+    )
+
+  return [...unknown, ...doesNotMask]
 }

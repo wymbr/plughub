@@ -1,5 +1,73 @@
 # TODO — PlugHub Itens Pendentes
 
+
+## Achados da V3 do arco ALLOWLIST (2026-08-29) — fora do escopo da fase
+
+### 🔴 `session.numero_atual` — telefone do cliente EM CLARO ao operador
+
+Medido e **reproduzido no caminho real** (`POST /internal/context-snapshot` devolveu
+`"value":"11987654321"` ao lado de `caller.cpf` mascarado como `***00`).
+
+- **Produtor:** `agente_portabilidade_intake_v1.yaml:445` (`context_set`, `confidence: 1.0`) — é a
+  linha atual do cliente no fluxo de portabilidade.
+- **Por que escapa:** não casa **nenhuma** das 23 regras do `tenant_demo`. `*.telefone` exige o
+  sufixo `.telefone`; `caller.*`/`account.*` não alcançam `session.*`; e `session.*` **não pode** ter
+  catch-all (derrubaria a tela de aprovação — o seed avisa por escrito). Cai no
+  `default_unmatched_operator: "plain"`.
+- **Exposição × dano:** exposição REAL; **dano medido hoje zero** — nenhum hash vivo do ContextStore
+  contém o campo (a varredura achou 5 campos distintos em 11 hashes, todos do routing-engine).
+- **Conserto durável:** a V4. O mapa da V3 já o declara `session.portabilidade.numero_atual` com
+  `tipo: phone`.
+- **Paliativo (decisão de PRODUTO, não fiz):** uma regra exata
+  `{"pattern": "session.numero_atual", "role": "operator", "type": "last_4"}`. Não apliquei porque
+  mascarar a linha em portabilidade pode atrapalhar o próprio atendimento que a coleta serve — quem
+  decide isso é quem conhece o fluxo, não o gate.
+
+### 🟡 `masking.context_rules` do `__global__` está ATRÁS do seed — tenant novo nasce sem o conserto de 08-26
+
+Medido: `__global__` tem **14 regras**, `tenant_demo` tem **23**, o `seed.py` tem **23**. Os globs de
+sufixo (`*.cpf`, `*.numero_cartao`, …) — que são o conserto de 2026-08-26 para o PII que cai em
+`session.*` — existem **só no override do tenant**. Um tenant novo herda a política pré-conserto.
+
+Dano hoje **zero** (só existe um tenant real). Mas **não basta reaplicar o seed**: a divergência é
+nos DOIS sentidos — `session.cpf_titular` existe vivo e não no seed; `session.vencimento_cartao`
+existe no seed e não vivo. Um `--overwrite` cego **regride** o `cpf_titular`. É exatamente a D7 do
+ADR, ainda em aberto: o seed precisa **comparar e logar** o que difere, em vez de pular mudo.
+
+### 🟡 `session.vencimento_cartao` — o CATÁLOGO não tem tipo que sirva
+
+Campo escrito e mascarado por regra (`last_2`), deixado **fora do mapa de propósito**: nenhum tipo do
+catálogo serve. `credit_card` é `last_4`, e num `MM/AA` isso mostra quase tudo — o mesmo argumento
+pelo qual a T6 recusou reusar `credit_card` para o CVV.
+
+Declarar um tipo aproximado escreveria no mapa uma política que ninguém decidiu, e a V4 a aplicaria.
+Fechar a lacuna é decisão do CATÁLOGO (um tipo com `by_role.operator: "last_2"` e
+`lgpd: "financeiro"`), e **é pré-requisito da V4** — enquanto faltar, o campo conta como
+não-declarado e a auditoria (corretamente) não autoriza a inversão.
+
+### 🟡 Quatro regras de masking apontam para campos que código nenhum escreve
+
+`caller.cnpj`, `account.numero_contrato`, `account.valor_fatura`, `account.limite_credito` não
+aparecem em nenhuma das duas varreduras (leitura `@ctx.` nem escrita `tag:`). São regras sem
+produtor — inócuas, mas engordam a lista que a tela de Masking exibe e sugerem cobertura que não
+existe. Antes de remover, conferir se algum `delegate.context` de tenant as alimenta (a varredura só
+alcança o código, não o conteúdo autorado).
+
+### 🟡 `config-api` cacheia em processo — re-semear não basta
+
+`plughub-config-seed --only <ns>.<key> --overwrite` grava no Postgres, mas
+`GET /config/<ns>?tenant_id=` continua servindo o valor antigo até o serviço **reiniciar**. Custou um
+diagnóstico inteiro no rumo errado nesta sessão (a mutação "não aplicava", quando na verdade não era
+servida). Ou o seed passa a invalidar, ou o procedimento de reaplicação inclui o restart — hoje não
+inclui, e nada avisa.
+
+### 🟡 `$?` através de `wsl.exe -- bash -lc '…'` a partir do Git Bash devolve status errado
+
+O `$?` é expandido cedo (pelo Git Bash), então um gate que imprime `FALHA (2)` "sai 0". Não é
+defeito do gate; é o instrumento. Aferir sempre com `&& / ||`, nunca com `$?`, nessa combinação.
+Vale para qualquer probe rodado a partir do Windows.
+
+
 ## 🟡 ABAC TOTAL — escopo FECHADO pelo dono (2026-08-27), passo 1 entregue
 
 Decisão: **eliminar a permissão por papel; tudo sob ABAC.** As seis perguntas foram fechadas:

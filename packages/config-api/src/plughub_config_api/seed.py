@@ -646,7 +646,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                 # coletado. card_cvv nao e credit_card — aquele exibe os 4 ultimos, e
                 # num CVV de 3 digitos isso mostraria quase o valor inteiro.
                 {
-                    "id": "credential", "label": "Credencial (senha, código 2FA)", "icon": "🔑",
+                    "id": "credential", "label": "Credencial (senha, código 2FA, token de retomada)", "icon": "🔑",
                     "formato": {},
                     "mascara": {
                         "by_role": {"operator": "hidden"},
@@ -683,6 +683,25 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "lgpd": "nao_classificado",
                     "declared_only": True,
                 },
+                # texto — o tipo que NAO faz nada (V3 do arco ALLOWLIST). Existe
+                # porque o MAPA do ContextStore declara todo campo, e a maioria e
+                # encanamento sem PII (`session.pool.id`, `session.survey.grain`).
+                # As alternativas ja estao recusadas por escrito: `tipo` opcional
+                # reintroduz o "declarado porem sem tipo" (o default permissivo como
+                # AUSENCIA), e um `tipo: "none"` proprio do mapa seria o oitavo
+                # inventario de categoria num arco que existe para colapsar sete.
+                #
+                # `by_role` VAZIO e a declaracao de que nao ha mascara para papel
+                # nenhum — e e isso que torna o tipo INELEGIVEL a `masked:` no portao
+                # de deploy (`typeMasksSomething`). Um campo `masked: "texto"` seria
+                # declarado-mascarado e exibido em claro.
+                {
+                    "id": "texto", "label": "Texto sem classificação (encanamento, ids internos)", "icon": "📄",
+                    "formato": {},
+                    "mascara": {"by_role": {}},
+                    "lgpd": "none",
+                    "declared_only": True,
+                },
             ],
         },
         "Catálogo de tipos de dado — declaração única de formato × máscara (papel e "
@@ -690,6 +709,149 @@ _SEED: list[tuple[str, str, object, str]] = [
         "@plughub/schemas/audit.ts. Substitui os inventários de categoria dispersos "
         "(DataCategorySchema, DEFAULT_MASKING_RULES, MaskingPage.DEFAULT_CATEGORIES, "
         "MaskedToken.CATEGORY_META)."
+    ),
+
+    # ── masking.context_map — O MAPA (D2 do arco ALLOWLIST, fase V3) ──────────
+    #
+    # ⚠️ **GERADO de `DEFAULT_CONTEXT_MAP` em `@plughub/schemas/context-map.ts`,
+    # nunca digitado à mão.** A autoridade é a TS — é ela que o oráculo
+    # `verifyContextMap` julga e que o runtime do mcp-server usa como fallback.
+    # Esta cópia existe só para semear base vazia (D7).
+    #
+    # A divergência entre as duas não é confiada à disciplina:
+    # `infra/test/probe_context_map_audit.sh` compara as duas e REPROVA — mesmo
+    # mecanismo do `probe_masking_display_parity.sh` para o catálogo da V2. Sem esse
+    # gate, "espelha" é só duas casas esperando divergir.
+    #
+    # O mapa é a ALLOWLIST, e na V3 ele **não recusa nada**: `mode: "audit"` apenas
+    # conta. O enum tem UM valor de propósito — não existe config capaz de ligar
+    # imposição antes de a V4 escrever o código que a honra.
+    #
+    # Fonte de verdade é ESTE store, não o arquivo — editar aqui depois de a base
+    # estar semeada é NO-OP (seed-if-absent).
+    (
+        "masking", "context_map",
+        {
+            "mode": "audit",
+            "dynamic_prefixes": ["agent.", "segment."],
+            "contexto": {
+                "session": {
+                    "cliente": {
+                        "nome": {"tipo": "texto", "legado": ["caller.nome"]},
+                        "cpf": {"tipo": "cpf", "legado": ["caller.cpf", "session.cpf"]},
+                        "telefone": {"tipo": "phone", "legado": ["caller.telefone"]},
+                        "email": {"tipo": "email_addr", "legado": ["caller.email"]},
+                        "customer_id": {"tipo": "texto", "legado": ["caller.customer_id", "session.customer_id"], "label": "ID interno — não-PII, necessário p/ histórico/360"},
+                        "account_id": {"tipo": "texto", "legado": ["caller.account_id"]},
+                        "motivo_contato": {"tipo": "texto", "legado": ["caller.motivo_contato"]},
+                        "intencao_primaria": {"tipo": "texto", "legado": ["caller.intencao_primaria"]},
+                        "sentimento_atual": {"tipo": "texto", "legado": ["caller.sentimento_atual"]}
+                    },
+                    "conta": {
+                        "plano_atual": {"tipo": "texto", "legado": ["account.plano_atual", "caller.plano_atual"]},
+                        "status": {"tipo": "texto", "legado": ["account.status"]}
+                    },
+                    "cartao": {
+                        "numero": {"tipo": "credit_card", "legado": ["session.numero_cartao"]},
+                        "cpf_titular": {"tipo": "cpf", "legado": ["session.cpf_titular"]},
+                        "limite_solicitado": {"tipo": "financial", "legado": ["session.limite_solicitado"]},
+                        "limite_aprovado": {"tipo": "financial", "legado": ["session.limite_aprovado"]}
+                    },
+                    "pool": {
+                        "id": {"tipo": "texto"},
+                        "channels": {"tipo": "texto"},
+                        "llm_account_ids": {"tipo": "texto"},
+                        "max_reply_time_ms": {"tipo": "texto"},
+                        "mentionable_pools": {"tipo": "texto"}
+                    },
+                    "queue": {
+                        "position": {"tipo": "texto"},
+                        "eta_ms": {"tipo": "texto"}
+                    },
+                    "sentimento": {
+                        "current": {"tipo": "texto"},
+                        "categoria": {"tipo": "texto", "label": "Classificada na LEITURA — sem produtor próprio"}
+                    },
+                    "wrapup": {
+                        "resumo": {"tipo": "texto"},
+                        "classificacao": {"tipo": "texto"},
+                        "escalation_reason": {"tipo": "texto"},
+                        "proximos_passos": {"tipo": "texto"}
+                    },
+                    "workflow": {
+                        "dialog_form_id": {"tipo": "texto"},
+                        "resume_token": {"tipo": "credential", "legado": ["session.workflow_resume_token"]},
+                        "delegate_resume_token": {"tipo": "credential", "legado": ["session.delegate_resume_token"]},
+                        "current_round": {"tipo": "texto"},
+                        "max_rounds": {"tipo": "texto"},
+                        "decisions": {"tipo": "texto"},
+                        "origin_session_id": {"tipo": "texto"},
+                        "briefing_session_id": {"tipo": "texto"}
+                    },
+                    "contato": {
+                        "close_origin": {"tipo": "texto"},
+                        "contact_channel": {"tipo": "texto"},
+                        "contact_identifier": {"tipo": "texto"},
+                        "contact_outcome": {"tipo": "texto"},
+                        "customer_present": {"tipo": "texto"},
+                        "customer_participant_id": {"tipo": "texto"},
+                        "human_agent_participant_id": {"tipo": "texto"},
+                        "confirmation_channel": {"tipo": "texto"}
+                    },
+                    "survey": {
+                        "form_id": {"tipo": "texto"},
+                        "grain": {"tipo": "texto"},
+                        "origin": {"tipo": "texto"},
+                        "origin_pool": {"tipo": "texto"},
+                        "pool_id": {"tipo": "texto"},
+                        "segment_id": {"tipo": "texto"},
+                        "target_id": {"tipo": "texto"},
+                        "customer_key": {"tipo": "texto"},
+                        "agent_key": {"tipo": "texto"},
+                        "surveyed_agent_key": {"tipo": "texto"},
+                        "surveyed_segment_id": {"tipo": "texto"}
+                    },
+                    "portabilidade": {
+                        "numero_atual": {"tipo": "phone", "legado": ["session.numero_atual"]},
+                        "operadora_destino": {"tipo": "texto", "legado": ["session.operadora_destino"]}
+                    },
+                    "reembolso": {
+                        "numero_pedido": {"tipo": "texto", "legado": ["session.numero_pedido"]},
+                        "motivo_reembolso": {"tipo": "texto", "legado": ["session.motivo_reembolso"]}
+                    },
+                    "deploy": {
+                        "notes": {"tipo": "texto", "legado": ["session.deploy_notes"]},
+                        "deployed_by": {"tipo": "texto", "legado": ["session.deployed_by"]},
+                        "skill_id": {"tipo": "texto", "legado": ["session.skill_id"]}
+                    },
+                    "campanha": {
+                        "campaign_id": {"tipo": "texto", "legado": ["session.campaign_id"]},
+                        "delivery_id": {"tipo": "texto", "legado": ["session.delivery_id"]}
+                    },
+                    "hook": {
+                        "wrapup_pool": {"tipo": "texto", "legado": ["hook.wrapup_pool"]},
+                        "dialog_form_id": {"tipo": "texto", "legado": ["hook.dialog_form_id"]},
+                        "acw_timeout_hours": {"tipo": "texto", "legado": ["hook.acw_timeout_hours"]}
+                    }
+                },
+                "journey": {
+                    "processo": {
+                        "resultado": {"tipo": "texto", "legado": ["journey.resultado"]},
+                        "parecer": {"tipo": "texto", "legado": ["journey.parecer"]},
+                        "numero_pedido": {"tipo": "texto", "legado": ["journey.numero_pedido"]},
+                        "pedido": {"tipo": "texto", "legado": ["journey.pedido"]},
+                        "origin_process_session": {"tipo": "texto", "legado": ["journey.origin_process_session"]}
+                    },
+                    "cartao": {
+                        "numero": {"tipo": "credit_card", "legado": ["journey.numero_cartao"]},
+                        "limite_aprovado": {"tipo": "financial", "legado": ["journey.limite_aprovado"]}
+                    }
+                }
+            }
+        },
+        "Mapa do ContextStore (escopo.dominio.campo -> tipo + aliases legados). "
+        "Allowlist da V3; em modo auditoria NAO esconde nada, apenas conta "
+        "alias x canonica x nao-declarada. Gerado de @plughub/schemas."
     ),
 
     # ── pricing ───────────────────────────────────────────────────────────────
