@@ -150,10 +150,19 @@ torna categorias antigas inexplicáveis, e não há de onde reconstruir dentro d
 Se o reuso entre pools morder, o caminho é catálogo referenciado **com pin de versão** — nunca referência a
 "o atual".
 
-### D9 — A versão viaja do render ao submit
+### D9 — ~~A versão viaja do render ao submit~~ **SUPERSEDED (2026-08-29)**
 
-`form_get`/renderer devolvem `{form, version}`; o submit devolve `form_version`; `segment_outcome_record`
-resolve `?version=N`, **nunca** `?status=published`. Isto não é bookkeeping — fecha uma corrida viva (achado 1).
+> **Substituída por [`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md).** A redação
+> original era: *"`form_get`/renderer devolvem `{form, version}`; o submit devolve `form_version`;
+> `segment_outcome_record` resolve `?version=N`, nunca `?status=published`."*
+>
+> Ela sincronizava as duas leituras. A decisão que a substitui **remove a segunda**: `form_get` já normaliza
+> `captures` dentro do `render`, então o skill passa `$.pipeline_state.dialog.render.captures` no lugar de
+> `dialog_form_id` e `segment_outcome_record` deixa de buscar o form. Sem segunda leitura não há corrida, e
+> não há versão a carimbar. Menos mecanismo para o mesmo fim.
+>
+> O **achado 1** que motivava esta decisão continua válido e é o que o outro ADR resolve. A **D6** (caminho de
+> `id`s imutáveis) **não** é substituída: o snapshot congela o que executa, não como o histórico se lê.
 
 ### D10 — Agregação por PREFIXO; agregação por nível fixo é inválida
 
@@ -309,7 +318,7 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 | # | Fase | Entrega | Depende de |
 |---|---|---|---|
 | **F0** | **`flattenBlocks` lossless** | O editor edita o objeto parseado in-place; nunca reconstrói `capture`. Gate de round-trip: abrir + salvar `dialog_wrapup_arc12_v1` preserva `kind`. | — |
-| **F0b** | **Pin de versão** (D9) | `form_get`/renderer devolvem `version`; submit devolve `form_version`; `segment_outcome_record` usa `?version=N`. | — |
+| ~~**F0b**~~ | ~~Pin de versão~~ — **movida** para a fase **S1** de [`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md), que mata a corrida removendo a segunda leitura em vez de sincronizá-la (ver D9). | — |
 | **F1** | **Schema** | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos, obrigatoriedade derivada (D7). `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). | — |
 | **F2** | **Resposta multi de verdade** | `menu.ts` para de tratar `checklist` como escalar; bridge para de `json.dumps` a lista; `DialogFormRenderer`/`survey_web` permitem multi. Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
 | **F3** | **Renderer Miller + recusa alta** | Colunas no Console (pasta abre coluna, arquivo seleciona); `form_get` recusa em canal pobre (D11); invariante de pai comum conferido no submit (D5). | F1, F2 |
