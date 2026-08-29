@@ -263,6 +263,14 @@ export const LgpdClassSchema = z.enum([
   "financeiro", // dado financeiro / PCI-DSS
   "credencial", // segredo ou capacidade (token, senha) — nunca retido
   "none",       // não pessoal
+  // "não classificado" — o dado é mascarado e a CLASSE não foi declarada.
+  // Não é `none`: `none` afirma *"não é dado pessoal"*, e essa é uma afirmação que
+  // ninguém fez. Não é `sensivel` nem `credencial`: essas são afirmações jurídicas
+  // que inflariam a contagem de qualquer relatório LGPD com dado que talvez não
+  // seja daquela classe. É o mesmo padrão do balde `unknown` do rollup de
+  // capacidade — publicado como classe PRÓPRIA e contado, nunca dobrado numa real,
+  // porque dobrar escolhe a moeda cara em silêncio.
+  "nao_classificado",
 ])
 export type LgpdClass = z.infer<typeof LgpdClassSchema>
 
@@ -343,6 +351,28 @@ export const DataTypeSchema = z.object({
   formato: DataTypeFormatSchema.default({}),
   mascara: DataTypeMaskSchema.default({}),
   lgpd:    LgpdClassSchema.default("none"),
+  /**
+   * Tipo alcançável APENAS por declaração (`masked: "<id>"`) — nunca por detecção
+   * nem por ser um `DataCategory` canônico.
+   *
+   * Existe por causa do ORÁCULO: `verifyDataTypeCatalog` trata como órfão todo tipo
+   * sem `detect_pattern` cujo id não seja `DataCategory`, e foi assim que a V2
+   * expulsou os fantasmas `iban`/`passport`. `opaque` é indetectável **por
+   * construção** (é a resolução de `masked: true`, cujo conteúdo é desconhecido) e
+   * não é uma espécie de dado, então não cabe no enum `DataCategory` — pô-lo lá
+   * recriaria exatamente o fantasma que a V2 removeu: membro de enum que nenhum
+   * produtor emite, já que campo opaco é SUPRIMIDO e nunca tokenizado.
+   *
+   * Marcar em vez de excetuar mantém o oráculo capaz de REPROVAR: um tipo sem
+   * detecção, fora do enum e sem esta marca continua órfão.
+   *
+   * `.optional()` e não `.default(false)`: com `default`, o campo vira OBRIGATÓRIO
+   * no tipo de saída do Zod e as 7 entradas literais teriam de repetir
+   * `declared_only: false` sem acrescentar nada. Ausente já significa `false` para
+   * o oráculo (`!t.declared_only`), então o default restritivo se preserva — mesma
+   * escolha de `label` e `icon`.
+   */
+  declared_only: z.boolean().optional(),
 })
 export type DataType = z.infer<typeof DataTypeSchema>
 
@@ -477,6 +507,37 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       mascara: { by_role: { operator: "financial" } },
       lgpd:    "financeiro",
     },
+    // ── opaque — a resolução de `masked: true` ────────────────────────────────
+    //
+    // Fase T1 do ADR `adr-masked-typed-declaration.md`. Quando `masked` passar a
+    // aceitar um id de tipo, `true` resolve AQUI — e o ponto é que `true` deixa de
+    // ser *"mascarado sem tipo"* e passa a ser *"mascarado do tipo mais
+    // restritivo"*. Manter um ramo sem tipo reintroduziria o default permissivo na
+    // forma mais cara: como AUSÊNCIA, o valor mais barato de produzir e o mais
+    // difícil de contar.
+    //
+    // Máxima restrição, e cada campo é escolha, não preenchimento:
+    //   · sem `formato.detect_pattern` — indetectável por construção (não se sabe
+    //     o que é), daí `declared_only`;
+    //   · `by_role.operator: "hidden"` — o operador não vê. `hidden` remove o campo,
+    //     e é o mais forte do `ContextMaskingType`;
+    //   · `display`: some da tela, silencia na voz e **não ecoa para ninguém** —
+    //     `echo_to_operator: false` é o único do catálogo, e é deliberado;
+    //   · `lgpd: "nao_classificado"` — ver o comentário do enum. Dizer `none` seria
+    //     afirmar que não é dado pessoal; dizer `sensivel`/`credencial` seria uma
+    //     afirmação jurídica que ninguém fez.
+    {
+      id:      "opaque",
+      label:   "Não classificado (mascarado sem tipo)",
+      icon:    "⬛",
+      formato: {},
+      mascara: {
+        by_role: { operator: "hidden" },
+        display: { display_screen: "hidden", display_voice: "silence", echo_to_customer: false, echo_to_operator: false },
+      },
+      lgpd:          "nao_classificado",
+      declared_only: true,
+    },
   ],
 }
 
@@ -529,8 +590,17 @@ export function verifyDataTypeCatalog(catalog: DataTypeCatalog = DEFAULT_DATA_TY
   categories_without_type: string[]
 } {
   const ids = catalog.types.map(t => t.id)
+  // TRÊS alcances, e o terceiro entrou na T1 do ADR do `masked` tipado:
+  //   detecção (`detect_pattern`) · categoria canônica (`DataCategory`) ·
+  //   DECLARAÇÃO (`declared_only`, para o tipo que só pode ser nomeado por
+  //   `masked: "<id>"` — hoje só `opaque`).
+  // A marca é por tipo, e não uma lista de exceção no oráculo, para que um tipo
+  // sem detecção, fora do enum e sem a marca continue órfão — o oráculo tem de
+  // seguir capaz de REPROVAR, que é o que o ramo E do gate confere.
   const orphan_types = catalog.types
-    .filter(t => !t.formato.detect_pattern && !DataCategorySchema.safeParse(t.id).success)
+    .filter(t => !t.formato.detect_pattern
+              && !DataCategorySchema.safeParse(t.id).success
+              && !t.declared_only)
     .map(t => t.id)
   const categories_without_type = DataCategorySchema.options.filter(c => !ids.includes(c))
   return { declared: catalog.types.length, orphan_types, categories_without_type }

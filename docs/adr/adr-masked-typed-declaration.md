@@ -8,8 +8,9 @@
 **Relacionado:** [`adr-contextstore-allowlist.md`](adr-contextstore-allowlist.md) *(este ADR é o
 consumidor do catálogo que a V2 criou; a V2b foi seu pré-requisito)* ·
 [`adr-message-masking.md`](adr-message-masking.md) ·
-[`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md) *(colisão de contrato
-no bloco `render` — ver D7)* · [`docs/guias/masked-input.md`](../guias/masked-input.md)
+[`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md) *(ambos tocam o bloco
+`render`, mas em chaves diferentes — a dependência de ordem CAIU, ver D7 emendada)* ·
+[`docs/guias/masked-input.md`](../guias/masked-input.md)
 **Censo que o precede:** `infra/test/q_masked_declaration_census.sh` (F0, executada em 2026-08-29)
 
 ---
@@ -279,6 +280,20 @@ permissivo: cair nele nunca é um atalho confortável.
 **O que piora antes de melhorar.** Enquanto §1.4 não estiver consertada, tipar não muda o Console —
 e por isso D6 é ordem, não sugestão.
 
+**Consequência não prevista, descoberta ao implementar a T1: este ADR APOSENTA o critério de
+alcançabilidade do oráculo da V2.** O `verifyDataTypeCatalog` existe para achar tipo que *nenhum
+mecanismo alcança* — foi assim que `iban`/`passport` caíram. Mas assim que `masked` puder nomear
+qualquer id do catálogo, **todo tipo passa a ser alcançável por declaração**, e a pergunta *"alguém
+consegue chegar neste tipo?"* responde "sim" para tudo, inclusive para um fantasma novo. O oráculo
+não fica errado; fica **vazio**.
+
+O sucessor não é uma alcançabilidade mais fina — é trocar de pergunta: de **alcance** para **USO**.
+Depois da T2, o que denuncia um fantasma é *"este tipo está declarado em algum skill ou form?"*,
+medido contra o parque (agent-registry + dialog-api), que é o mesmo contador da D8 lido pelo outro
+lado. Enquanto a T2 não chega, o critério atual segue valendo e `declared_only` é a única exceção,
+marcada no tipo. **Consequência para a ordem: a T2 não pode entrar sem que o gate da V2 ganhe o
+critério de uso — senão o arco remove uma proteção e não põe nada no lugar.**
+
 ---
 
 ## 5. Fases
@@ -286,7 +301,7 @@ e por isso D6 é ordem, não sugestão.
 | fase | entrega | reversível |
 |---|---|---|
 | **T0** | **Contar o parque** e congelar a linha de base: 6 declarações (§1.5), 1 form com campo masked, 42 YAMLs. Gate que reprova declaração NOVA sem tipo depois de T2 | sim |
-| **T1** | Tipo `opaque` no catálogo (`masking.types`), semeado, **sem nenhum consumidor novo** — máxima restrição, sem `detect_pattern` | sim |
+| **T1** | ✅ **FEITA em 2026-08-29.** Tipo `opaque` no catálogo (código + seed), **sem nenhum consumidor novo**. Entregou mais do que a linha previa, e as duas adições são exigência do oráculo, não enfeite: **(a) `DataType.declared_only`** — o oráculo da V2 trata como órfão todo tipo sem `detect_pattern` cujo id não seja `DataCategory`, e foi medido que ele **reprovaria `opaque`** (`orfaos=["opaque"]`, rodado na imagem antes de mudar). Pôr `opaque` no enum `DataCategory` foi **recusado**: campo opaco é SUPRIMIDO, nunca tokenizado, logo seria membro de enum que nenhum produtor emite — o fantasma `iban`/`passport` de volta. A marca é **por tipo**, não lista de exceção no oráculo, para que ele siga capaz de reprovar. **(b) `LgpdClass.nao_classificado`** — nenhuma das 5 classes servia com honestidade: `none` afirma *"não é dado pessoal"*, `sensivel`/`credencial` são afirmações jurídicas que ninguém fez. Mesmo padrão do balde `unknown` do rollup de capacidade: classe própria e contada, nunca dobrada numa real | sim |
 | **T2** | Schema aceita a união (D1); `resolveMaskedFields` devolve `{ids, types}` (D2); `true` → `opaque`. Nada a jusante muda ainda | sim |
 | **T3** | O redator do bridge consome o TIPO — máscara por papel e regra de canal alcançam a submissão de form (§1.3) | sim |
 | **T4** | `DialogFormRenderer` honra `masked` (D6). **Fecha a armadilha de §1.4** | sim |

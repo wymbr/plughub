@@ -73,6 +73,13 @@ export async function emitSessionOpened(
   await emitUsage(kafka, {
     tenant_id:        params.tenant_id,
     session_id:       params.session_id,
+    // `segment_id` passou a ser exigido pelo contrato em `10bde79` (atribuição de
+    // custo por segmento) e estes dois emissores nunca foram atualizados — o pacote
+    // não compila desde então; a imagem em uso é anterior. `null` é o valor CERTO,
+    // não um remendo: os dois são fatos de SESSÃO (`{tenant_id, session_id, channel}`)
+    // e não têm segmento em escopo. O próprio schema manda: "null = chamador que
+    // ainda não a informa; a linha fica atribuível só até a sessão. Nunca inventar."
+    segment_id:       null,
     dimension:        "sessions",
     quantity:         1,
     source_component: "core",
@@ -102,6 +109,7 @@ export async function emitMessageSent(
   await emitUsage(kafka, {
     tenant_id:        params.tenant_id,
     session_id:       params.session_id,
+    segment_id:       null,   // idem — fato de sessão, sem segmento em escopo
     dimension:        "messages",
     quantity:         1,
     source_component: "core",

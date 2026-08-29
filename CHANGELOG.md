@@ -1,5 +1,72 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## T1 do `masked` tipado — o tipo `opaque`, e um gate que aprovava imagem velha (2026-08-29)
+
+Primeira fase do [ADR do `masked` tipado](docs/adr/adr-masked-typed-declaration.md). Entrega o tipo
+para o qual `masked: true` vai resolver, **sem nenhum consumidor novo** — mesmo padrão da V2.
+
+### `opaque` não é "sem tipo": é o tipo mais restritivo
+
+O ponto inteiro da D1. Um ramo *"mascarado porém sem tipo"* reintroduziria o default permissivo na
+forma mais cara — como **ausência**, o valor mais barato de produzir e o mais difícil de contar.
+`opaque` é indetectável por construção, o operador não vê (`by_role.operator: hidden`), some da tela,
+silencia na voz e **não ecoa para ninguém** (`echo_to_operator: false`, o único do catálogo assim).
+
+### Duas adições que o oráculo EXIGIU, medidas antes
+
+**`DataType.declared_only`.** O `verifyDataTypeCatalog` trata como órfão todo tipo sem
+`detect_pattern` cujo id não seja `DataCategory` — foi assim que a V2 expulsou `iban`/`passport`.
+Rodado na imagem **antes** de mudar: `orfaos=["opaque"]`. Pôr `opaque` no enum `DataCategory` foi
+**recusado** — campo opaco é SUPRIMIDO, nunca tokenizado, logo seria membro de enum que nenhum
+produtor emite: o fantasma de volta. A marca é **por tipo**, não lista de exceção no oráculo, para
+que ele siga capaz de reprovar (o ramo E continua verde: `órfãos=1` sobre catálogo sabidamente órfão).
+
+**`LgpdClass.nao_classificado`.** Nenhuma das cinco classes servia com honestidade: `none` afirma
+*"não é dado pessoal"*, `sensivel`/`credencial` são afirmações jurídicas que ninguém fez e que
+inflariam qualquer relatório LGPD. Mesmo padrão do balde `unknown` do rollup de capacidade — classe
+própria e contada, nunca dobrada numa real, porque dobrar escolhe a moeda cara em silêncio.
+
+### O gate aprovava imagem velha, e isso é o achado que fica
+
+`docker compose build` **reprovou**, o `tail -4` do comando escondeu, o `up -d` subiu a imagem
+anterior — e `probe_type_catalog.sh` saiu **VERDE**. Quem pegou foi o preflight de conteúdo manual
+(`declarados=7`, deveria ser 8), não o gate.
+
+A causa é estrutural e vale para todo gate desta família: o **P0** confere que o símbolo EXISTE, não
+que é o de agora; e o **ramo C** compara imagem × config viva, que são **dois artefatos implantados**.
+Estando os dois atrás do fonte, eles **concordam** — e a concordância é lida como aprovação. A cura
+não é comparar melhor os dois: é trazer o **FONTE** para a mesa, o único lado que não pode estar atrás
+de si mesmo. Novo ramo **P0b (imagem × fonte)**, visto vermelho antes de verde.
+
+### Achado que não era de masking: o `mcp-server-plughub` não compilava
+
+O build reprovou por `usage-emitter.ts`, não por nada meu. `10bde79` (arco de relatórios) acrescentou
+`segment_id` a `UsageEventSchema` com `.default(null)` — que torna o campo **obrigatório no tipo de
+saída** do Zod —, e os dois emissores nunca foram atualizados. **O pacote estava sem compilar desde
+então, e nada ficou vermelho porque ninguém reconstruiu**: é o *"ambiente que só sobe porque já subiu
+antes"*, no serviço onde moram as tools. Corrigido com `segment_id: null` nos dois, que é o que o
+próprio schema manda (*"null = chamador que ainda não a informa. Nunca inventar"*) — os dois são fatos
+de SESSÃO e não têm segmento em escopo. **Quantos outros pacotes não compilam é desconhecido**;
+dívida registrada no `TODO.md`.
+
+*(Nota de método: a mesma armadilha do `.default()` me pegou duas vezes na mesma hora — primeiro em
+`declared_only`, que virou `.optional()`, e o erro que ele produziu foi o que revelou o de
+`usage-emitter`.)*
+
+### Provisionamento
+
+O seed é **seed-if-absent**: `masking.types` já existia e o primeiro `config-seed` saiu
+`inserted=0 skipped=76`. Reconciliado pelo caminho oficial (`plughub-config-seed --only masking.types
+--overwrite`), sem perda — medido antes que a chave só existe em `__global__`, sem override de tenant.
+E o **`config-seed` é serviço próprio**: construir `config-api` não o atualiza, e a primeira
+reconciliação rodou a imagem antiga dizendo `inserted=1` sem mudar nada.
+
+Gates: `probe_type_catalog.sh` (com P0b novo) · `probe_masking_display_parity.sh` ·
+`probe_legacy_display_rule_closed.sh` · `probe_i18n_duplicate_keys.sh` — todos verdes; catálogo vivo
+com 8 tipos, `opaque` incluído.
+
+---
+
 ## V2b do arco ALLOWLIST — a casa legada de display rule fecha, e o contador é que autorizou (2026-08-29)
 
 Pré-requisito do `masked` **tipado** (o `masked: true` do DialogForm/menu passar a referenciar um TIPO

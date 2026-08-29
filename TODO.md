@@ -5281,6 +5281,34 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 >   importa para a fase, **sem backfill**. Nota adjacente: tabela vazia também significa que nenhum
 >   skill deste ambiente emite `agent_event` — o Arc 12 não tem produtor vivo aqui.
 >
+> ### 🔴 O `mcp-server-plughub` NÃO COMPILAVA — descoberto em 2026-08-29, ao construir a T1
+>
+> **Nada disto tem a ver com masking.** O commit `10bde79` (arco de relatórios, atribuição de custo
+> por segmento) acrescentou `segment_id` a `UsageEventSchema` com `.default(null)` — e `.default()`
+> torna o campo **obrigatório no tipo de SAÍDA** do Zod. `EmitParams` é
+> `Omit<UsageEvent, "event_id"|"timestamp">`, então os dois emissores de
+> `mcp-server-plughub/src/lib/usage-emitter.ts` (`:73` sessões, `:102` mensagens) passaram a não
+> compilar. Eles não são tocados desde `da57af3`, muito anterior.
+>
+> **O pacote inteiro estava sem compilar desde `10bde79`, e nada ficou vermelho** porque ninguém
+> reconstruiu a imagem — é o *"ambiente que só sobe porque já subiu antes"* do `CLAUDE.md`, com o
+> agravante de que o serviço em execução é o **mcp-server**, onde moram as tools. Corrigido no mesmo
+> passo (`segment_id: null` nos dois, que é o que o próprio schema manda: *"null = chamador que ainda
+> não a informa. Nunca inventar"* — os dois são fatos de SESSÃO e não têm segmento em escopo).
+>
+> ⚠️ **O que fica em aberto é maior que o conserto:** ninguém sabe **quantos outros pacotes não
+> compilam**, porque a única evidência é reconstruir. `infra/scripts/rebuild-all.sh --wipe` existe e é
+> exatamente este teste; a dívida é rodá-lo **de propósito, em dia calmo**, e contar. Enquanto isso
+> não acontecer, "a stack está de pé" não é evidência de que a árvore compila.
+>
+> · 🟡 **Lição já aplicada ao gate:** `probe_type_catalog.sh` ganhou o ramo **P0b (imagem × FONTE)**.
+>   O P0 conferia que o símbolo EXISTE, não que é o de agora; e o ramo C compara imagem × config
+>   viva, que são **dois artefatos implantados** — estando os dois atrás do fonte, eles CONCORDAM e a
+>   concordância é lida como aprovação. Foi o que aconteceu: o build reprovou, o `up -d` subiu a
+>   imagem anterior e o gate saiu **VERDE**. A cura não é comparar melhor os dois implantados: é
+>   trazer o fonte para a mesa, que é o único lado que não pode estar atrás de si mesmo. **Todo gate
+>   que julga conteúdo de imagem precisa deste ramo** — os demais ainda não têm.
+>
 > ### 🆕 DETECÇÃO de PII — dois achados medidos em 2026-08-29 (arco PRÓPRIO, não é o `masked` tipado)
 >
 > **Decisão de escopo tomada aqui:** declaração (`masked:`) e detecção (regex) **não são duas

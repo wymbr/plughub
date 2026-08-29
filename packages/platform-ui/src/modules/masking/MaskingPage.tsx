@@ -30,7 +30,11 @@ import { DEFAULT_DISPLAY_RULE } from '@/components/MaskedToken'
 //
 // A lista agora VEM DO DADO (`masking.types` no config-api). Nenhuma categoria pode
 // aparecer nesta tela sem estar declarada, e o selo é DERIVADO do que o tipo tem.
-type LgpdClass = 'pessoal' | 'sensivel' | 'financeiro' | 'credencial' | 'none'
+
+// ⚠️ Cópia local de `LgpdClassSchema` (@plughub/schemas/audit.ts). A deduplicação
+// exige o platform-ui depender de @plughub/schemas — dívida registrada no TODO.md.
+// Enquanto for cópia, ela ACOMPANHA o canônico: `nao_classificado` entrou na T1.
+type LgpdClass = 'pessoal' | 'sensivel' | 'financeiro' | 'credencial' | 'none' | 'nao_classificado'
 
 interface DataTypeFormat {
   display?:              string

@@ -51,6 +51,34 @@ case "$SYM" in
     ;;
 esac
 
+# ── P0b. PREFLIGHT DE CONTEÚDO (a imagem tem o catálogo ATUAL?) ──────────────
+#
+# P0 confere que o símbolo EXISTE; não que ele é o de agora. Medido em 2026-08-29,
+# na T1: um `npm run build` reprovou dentro do Dockerfile, o `up -d` subiu a imagem
+# ANTERIOR, e o gate saiu VERDE — porque o ramo C compara imagem × config viva, que
+# são dois artefatos IMPLANTADOS. Estando os dois atrás do fonte, eles CONCORDAM, e
+# a concordância é lida como aprovação.
+#
+# A cura não é comparar melhor os dois: é trazer o FONTE para a mesa, que é o único
+# lado que não pode estar desatualizado em relação a si mesmo.
+echo
+echo "── P0b. preflight de CONTEÚDO (imagem × fonte) ──────────────"
+SRC_IDS="$(sed -n '/DEFAULT_DATA_TYPE_CATALOG/,/^}/p' packages/schemas/src/audit.ts \
+           | grep -oE 'id:[[:space:]]*"[a-z0-9_]+"' | sed 's/.*"\(.*\)"/\1/' | sort | tr '\n' ',')"
+IMG_IDS="$($DC exec -T "$SVC" sh -c "cd $NODE_CWD && node -e \"const s=require('@plughub/schemas'); console.log(s.DEFAULT_DATA_TYPE_CATALOG.types.map(t=>t.id).sort().join(',')+',')\"" 2>&1 | tr -d '\r')"
+if [ -z "$SRC_IDS" ] || [ "$SRC_IDS" = "," ]; then
+  huh "não consegui extrair os ids do fonte — o formato do catálogo mudou; a comparação não vale"
+elif [ "$SRC_IDS" = "$IMG_IDS" ]; then
+  ok "imagem == fonte (${SRC_IDS%,})"
+else
+  huh "IMAGEM DESATUALIZADA — fonte=[${SRC_IDS%,}] imagem=[${IMG_IDS%,}]"
+  say "   ⇒ o build falhou ou não foi feito. Rode: \$DC build ${SVC} && \$DC up -d ${SVC}"
+  say "   ⇒ os ramos abaixo julgariam a imagem ANTIGA — nada medido"
+  echo
+  echo "VEREDICTO: INCONCLUSIVO — nada medido"
+  exit 2
+fi
+
 # ── A + B. lado do CÓDIGO ─────────────────────────────────────────────────────
 echo
 echo "── A. catálogo do código: dois lados ────────────────────────"

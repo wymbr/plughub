@@ -39,7 +39,8 @@
     "pessoal": "dado pessoal",
     "sensivel": "dado sensível",
     "financeiro": "financeiro",
-    "credencial": "credencial"
+    "credencial": "credencial",
+    "nao_classificado": "não classificado"
   },
   "retention": {
     "save": "Salvar",

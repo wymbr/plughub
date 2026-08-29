@@ -640,6 +640,22 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {"by_role": {"operator": "financial"}},
                     "lgpd": "financeiro",
                 },
+                # opaque — a resolução de `masked: true` (T1 do ADR do `masked`
+                # tipado). Máxima restrição: indetectável por construção
+                # (`declared_only`), o operador não vê, não ecoa para ninguém, e a
+                # classe é `nao_classificado` — dizer `none` afirmaria que não é
+                # dado pessoal, o que ninguém afirmou. Espelha o catálogo do código.
+                {
+                    "id": "opaque", "label": "Não classificado (mascarado sem tipo)", "icon": "⬛",
+                    "formato": {},
+                    "mascara": {
+                        "by_role": {"operator": "hidden"},
+                        "display": {"display_screen": "hidden", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": False},
+                    },
+                    "lgpd": "nao_classificado",
+                    "declared_only": True,
+                },
             ],
         },
         "Catálogo de tipos de dado — declaração única de formato × máscara (papel e "
