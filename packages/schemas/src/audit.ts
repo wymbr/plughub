@@ -356,16 +356,32 @@ export const OPAQUE_DATA_TYPE_ID = "opaque"
 /**
  * MaskedDeclaration — o que um step/nó ou campo declara em `masked`.
  *
- *   `"cpf"`     → mascarado, e o TIPO é `cpf` (política vem do catálogo)
- *   `true`      → mascarado, tipo `opaque` (o mais restritivo) — NÃO é "sem tipo"
- *   `false`     → não mascarado (override explícito sobre o step)
- *   ausente     → herda o step/nó
+ *   `"cpf"`  → mascarado, e o TIPO é `cpf` (política vem do catálogo)
+ *   `false`  → não mascarado (override explícito sobre o step)
+ *   ausente  → herda o step/nó
  *
- * O ramo `boolean` é transitório e fecha por CONTADOR, nunca por decreto (D8 do
- * ADR `adr-masked-typed-declaration.md`): sai quando o parque de `masked: true`
- * zerar, medido por gate. Enquanto não zerar, `true` é legítimo.
+ * ⚠️ **`true` NÃO é mais aceito na ESCRITA** (fase T7-A, 2026-08-29). Era a
+ * declaração ANÔNIMA — dizia *"esconda"* sem dizer **o quê** —, e é ela que o arco
+ * existe para eliminar: sem o tipo, máscara-por-papel e classe LGPD não têm onde
+ * morar. Fechado por CONTADOR, não por decreto: o parque zerou na T6 (medido na
+ * autoridade, não no arquivo) e o gate `q_masked_declaration_census.sh` § eixo 1b
+ * o confere.
+ *
+ * **`false` FICA, e a assimetria é deliberada.** Ele tem zero usos hoje, e ainda
+ * assim não sai junto: `false` é a única forma de dizer *"este campo NÃO é
+ * mascarado, mesmo que o step mascare"*. Removê-lo tiraria uma CAPACIDADE; tirar
+ * `true` remove uma FORMA LEGADA. Ausência de uso não é o mesmo que ausência de
+ * propósito.
+ *
+ * ⚠️ **O RUNTIME segue tolerando `true`, de propósito** — ver `normalizeDecl` em
+ * `skill-flow-engine/src/masking-policy.ts`. O snapshot de slot NÃO é validado por
+ * Zod na execução (o skill-flow-service é wrapper fino) e o `POST /rollback` apenas
+ * troca linhas de slot, sem revalidar. Logo um `previous` anterior à T6 continua
+ * executável, e tem de continuar: remover a tolerância do runtime faria
+ * `normalizeDecl` cair em `d.trim()` sobre um booleano — TypeError no meio de um
+ * atendimento. Esta é a metade (B) da T7, adiada por decisão.
  */
-export const MaskedDeclarationSchema = z.union([z.boolean(), z.string()])
+export const MaskedDeclarationSchema = z.union([z.literal(false), z.string()])
 export type MaskedDeclaration = z.infer<typeof MaskedDeclarationSchema>
 
 export const DataTypeSchema = z.object({

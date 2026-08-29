@@ -110,7 +110,9 @@ describe("executeMenu — masked input", () => {
       type:        "menu",
       prompt:      "Digite seu PIN:",
       interaction: "text",
-      masked:      true,
+      // T7-A: `true` deixou de ser aceito na ESCRITA. Este step exercita o
+      // mascaramento step-level, que hoje se declara com um TIPO.
+      masked:      "credential",
       on_success:  "validar",
       on_failure:  "falhou",
       timeout_s:   60,
@@ -133,7 +135,7 @@ describe("executeMenu — masked input", () => {
       type:        "menu",
       prompt:      "Digite sua senha:",
       interaction: "text",
-      masked:      true,
+      masked:      "credential",
       on_success:  "validar",
       on_failure:  "falhou",
       timeout_s:   60,
@@ -153,7 +155,7 @@ describe("executeMenu — masked input", () => {
       type:        "menu",
       prompt:      "Informe suas credenciais:",
       interaction: "form",
-      masked:      true,
+      masked:      "credential",
       fields: [
         { id: "senha", label: "Senha", type: "text", required: false },
         { id: "pin",   label: "PIN",   type: "text", required: false },
@@ -184,7 +186,7 @@ describe("executeMenu — masked input", () => {
       interaction: "form",
       fields: [
         { id: "nome",  label: "Nome",  type: "text", required: false                  },  // not masked
-        { id: "senha", label: "Senha", type: "text", required: false, masked: true    },  // field-level masked
+        { id: "senha", label: "Senha", type: "text", required: false, masked: "credential" },  // field-level, TIPADO (T6)
         { id: "cpf",   label: "CPF",   type: "text", required: false                  },  // not masked
       ],
       on_success:  "proximo",
@@ -217,7 +219,7 @@ describe("executeMenu — masked input", () => {
       interaction: "form",
       fields: [
         { id: "usuario", label: "Usuário", type: "text", required: false                },
-        { id: "token",   label: "Token",   type: "text", required: false, masked: true  },
+        { id: "token",   label: "Token",   type: "text", required: false, masked: "credential" },
       ],
       on_success:  "proximo",
       on_failure:  "falhou",
@@ -241,7 +243,7 @@ describe("executeMenu — masked input", () => {
       type:        "menu",
       prompt:      "Formulário:",
       interaction: "form",
-      masked:      true,
+      masked:      "credential",
       fields: [
         { id: "nome",  label: "Nome",  type: "text", required: false, masked: false },  // explicit opt-out
         { id: "senha", label: "Senha", type: "text", required: false                },  // inherits step.masked

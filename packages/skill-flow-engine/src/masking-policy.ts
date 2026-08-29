@@ -52,6 +52,19 @@ export type MaskedFieldDef = {
 function normalizeDecl(d: MaskedDecl): string | false | undefined {
   if (d === undefined) return undefined
   if (d === false)     return false
+  // ⚠️ NÃO REMOVER. Assimetria DELIBERADA com o schema (T7-A, 2026-08-29): a
+  // ESCRITA já não aceita `true` (`MaskedDeclarationSchema`), mas o RUNTIME
+  // continua tolerando — e a razão é medida, não conservadorismo.
+  //
+  // O snapshot do slot NÃO é validado por Zod na execução (o skill-flow-service é
+  // wrapper fino sobre o engine) e o `POST /v1/pools/:id/rollback` apenas troca
+  // linhas de slot, sem revalidar. Um slot `previous` anterior à T6 portanto
+  // continua executável — e tem de continuar. Sem esta linha, `true` cairia no
+  // `d.trim()` abaixo: TypeError sobre um booleano, no meio de um atendimento.
+  //
+  // Sai junto da metade (B) da T7, quando nenhum snapshot ALCANÇÁVEL (current,
+  // next E previous, por tenant) tiver a forma anônima — o eixo 1b do
+  // `q_masked_declaration_census.sh` reporta os dois números separados.
   if (d === true)      return OPAQUE_DATA_TYPE_ID
   const trimmed = d.trim()
   return trimmed.length ? trimmed : OPAQUE_DATA_TYPE_ID

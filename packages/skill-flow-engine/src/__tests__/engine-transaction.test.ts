@@ -57,7 +57,7 @@ beforeEach(() => {
 /**
  * Flow:
  *   begin_transaction (on_failure: recolher)
- *   → coletar_senha (menu, masked:true)
+ *   → coletar_senha (menu, masked:"credential")
  *   → validar (invoke — reads @masked.coletar_senha)
  *   → tx_fim (end_transaction, result_as: "tx_result")
  *   → concluir (complete)
@@ -78,7 +78,7 @@ const transactionFlow: SkillFlow = {
       interaction: "text",
       prompt:      "Informe sua senha:",
       timeout_s:   300,
-      masked:      true,
+      masked:      "credential",
       output_as:   "coletar_senha",
       on_success:  "validar",
       on_failure:  "tx_start",   // on_failure goes back to begin (retry)
@@ -244,7 +244,7 @@ describe("SkillFlowEngine — masked transaction menu timeout", () => {
         { id: "tx_start", type: "begin_transaction", on_failure: "recolher" },
         {
           id: "coletar_senha", type: "menu", interaction: "text",
-          prompt: "Senha:", masked: true, timeout_s: 30,
+          prompt: "Senha:", masked: "credential", timeout_s: 30,
           on_success: "tx_fim", on_failure: "tx_start", on_timeout: "tx_start",
         },
         { id: "tx_fim", type: "end_transaction" },

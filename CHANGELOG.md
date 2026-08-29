@@ -1,5 +1,65 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## T7-A do `masked` tipado — a ESCRITA fecha, e a T7 era DUAS remoções (2026-08-29)
+
+`MaskedDeclarationSchema` deixou de aceitar `true`: **422** no `PUT /v1/skills`. A declaração
+anônima — *"esconda"* sem dizer **o quê** — morreu na porta.
+
+### A correção que precedeu a decisão
+
+Eu havia escrito que fechar o ramo `boolean` tornaria os rollbacks *"inexecutáveis, porque o parse do
+snapshot passaria a recusar"*. **Não existe esse parse.** Medido: o `skill-flow-service` é um wrapper
+fino que entrega o flow ao engine **sem validar com Zod**, e o `POST /v1/pools/:id/rollback` apenas
+**troca linhas de slot**, sem revalidar. A afirmação criava um dilema falso — *"migrar ou preservar
+rollback"* — que não existe.
+
+Com isso, a T7 se revelou **duas remoções com consequências opostas**:
+
+| | remove | efeito no rollback | reversível |
+|---|---|---|---|
+| **T7-A** | `true` da união Zod (**escrita**) | **nenhum** | sim |
+| **T7-B** | `if (d === true)` em `normalizeDecl` (**runtime**) | `d.trim()` sobre booleano → **TypeError em atendimento** | o dano cai em produção |
+
+Só a **A** entrega o objetivo; a **B** é limpeza sem valor de produto.
+
+### `false` fica, e tem zero usos
+
+Medido: `masked: false` não aparece em YAML nenhum, no `skills.flow` da autoridade nem em DialogForm
+algum. Mesmo assim **não sai junto**: é a única forma de dizer *"este campo NÃO é mascarado, mesmo que
+o step mascare"*. Remover `false` tiraria uma **capacidade**; remover `true` remove uma **forma
+legada**. Ausência de uso não é ausência de propósito.
+
+### A assimetria escrita × runtime é deliberada, e está protegida por teste
+
+O runtime **continua** resolvendo `true` → `opaque`. Sem isso, um slot `previous` anterior à T6 —
+que existe **por desenho**, é o alvo de rollback — estouraria. Três testes fixam a assimetria
+justamente para que ninguém a "limpe" achando que é resíduo.
+
+**Provado ao contrário, com contato real:** com o schema **já fechado**, fiz um rollback de
+`auth_form_ia` para o snapshot pré-T6 e rodei um contato. Ele **executou e mascarou**, gravando
+`masked_types: {'senha':'opaque','codigo_2fa':'opaque'}`. Tivesse a T7-B sido feita junto, este
+contato teria quebrado. Slot restaurado depois (`set-next` + `promote`).
+
+*O rollback aconteceu por acidente meu — um comando anterior falhou no meio, depois do `curl` e antes
+do `psql` —, e virou a melhor evidência disponível. Registrado como foi.*
+
+### O que o build cobrou
+
+**6 fixtures de teste** escreviam `masked: true` e pararam de compilar (`menu.test.ts` ×3,
+`engine-transaction.test.ts` ×3). Migradas para o tipo. É o portão funcionando: o compilador achou
+todos os escritores da forma antiga sem que ninguém precisasse procurá-los.
+
+### Estado
+
+`TOTAL_EXECUTAVEL = 0`. **T7-B bloqueada** por decisão do dono: exige que nenhum snapshot alcançável
+(inclusive `previous`, **por tenant**) tenha a forma anônima, ou aceitar por escrito perder esses
+rollbacks. O texto do contador foi corrigido — ele repetia o mesmo erro do *parse*.
+
+Verificação: **422** para `masked: true`, **200** para `false` e para `"credential"`, pela via real.
+167 testes (skill-flow-engine, +3) e 22 (agent-registry). Gates do arco verdes.
+
+---
+
 ## T6 do `masked` tipado — o parque migra, e a T7 descobre uma pré-condição (2026-08-29)
 
 As **6** declarações anônimas do parque deixaram de existir: `senha`/`codigo_2fa` (×4 em

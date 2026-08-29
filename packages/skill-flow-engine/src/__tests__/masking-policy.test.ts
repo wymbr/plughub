@@ -7,7 +7,7 @@
 
 import { describe, test, it, expect } from "vitest"
 import { isFieldMasked, computeMaskedFieldIds, resolveMaskedFields, maskedFieldType, isStepMasked } from "../masking-policy"
-import { OPAQUE_DATA_TYPE_ID } from "@plughub/schemas"
+import { OPAQUE_DATA_TYPE_ID, MaskedDeclarationSchema } from "@plughub/schemas"
 import type { MaskedFieldDef } from "../masking-policy"
 
 // ── isFieldMasked ─────────────────────────────────────────────────────────────
@@ -225,5 +225,35 @@ describe("resolveMaskedFields — ids e tipos numa passada", () => {
       ids: ["pin"], types: { pin: OPAQUE_DATA_TYPE_ID },
     })
     expect(resolveMaskedFields(false, undefined, "pin")).toEqual({ ids: [], types: {} })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T7-A — a ESCRITA fecha para `true`; o RUNTIME segue tolerando.
+//
+// A assimetria é o ponto, e estes testes existem para que ela não seja "limpa"
+// por engano: quem vir `if (d === true)` na masking-policy depois de o schema já
+// recusar `true` vai achar que é resíduo. Não é — é o que mantém executável um
+// snapshot de slot `previous` anterior à T6, que não passa por Zod na execução.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("T7-A — assimetria escrita × runtime", () => {
+  it("a ESCRITA recusa `true` (a declaração anônima morreu na porta)", () => {
+    expect(MaskedDeclarationSchema.safeParse(true).success).toBe(false)
+  })
+
+  it("a escrita ACEITA `false` e id de tipo — `false` é capacidade, não legado", () => {
+    // `false` tem zero usos no parque e mesmo assim fica: é a única forma de dizer
+    // "este campo NÃO é mascarado, mesmo que o step mascare".
+    expect(MaskedDeclarationSchema.safeParse(false).success).toBe(true)
+    expect(MaskedDeclarationSchema.safeParse("cpf").success).toBe(true)
+  })
+
+  it("o RUNTIME ainda resolve `true` → opaque (snapshot antigo segue executável)", () => {
+    // Se este teste ficar vermelho, um rollback para deploy pré-T6 passa a estourar
+    // com TypeError no meio de um atendimento — o `d.trim()` sobre um booleano.
+    expect(maskedFieldType({ id: "x", masked: true }, undefined)).toBe(OPAQUE_DATA_TYPE_ID)
+    expect(maskedFieldType({ id: "x" }, true)).toBe(OPAQUE_DATA_TYPE_ID)
+    expect(isStepMasked(true)).toBe(true)
   })
 })

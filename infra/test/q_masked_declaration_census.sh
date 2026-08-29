@@ -160,12 +160,19 @@ if command -v jq >/dev/null 2>&1; then
   if [ "$TOT" != "0" ]; then
     echo "  => T7 BLOQUEADA: ainda ha forma anonima em EXECUCAO. Nao e prazo, e contador."
   elif [ "${N_PV:-0}" != "0" ]; then
-    echo "  => execucao zerada, mas a T7 NAO esta autorizada: ${N_PV} snapshot(s) de"
-    echo "     ROLLBACK ainda carregam a forma anonima. Fechar o ramo boolean os tornaria"
-    echo "     INEXECUTAVEIS — o parse do snapshot passaria a recusar, e o rollback"
-    echo "     deixaria de ser rollback. Precondicao da T7: ou esses previous envelhecem,"
-    echo "     ou se ACEITA POR ESCRITO perder o rollback para deploys anteriores a T6."
-    echo "     E decisao do dono, nao consequencia silenciosa de uma remocao de schema."
+    echo "  => T7-A FEITA (a ESCRITA ja recusa \`true\`: 422 no PUT /v1/skills)."
+    echo "     T7-B (remover a tolerancia do RUNTIME) NAO esta autorizada: ${N_PV} snapshot(s)"
+    echo "     de ROLLBACK ainda carregam a forma anonima."
+    echo
+    echo "     O dano NAO seria de parse — medido: o snapshot nao passa por Zod na execucao"
+    echo "     (skill-flow-service e wrapper fino) e o POST /rollback so troca linhas de slot."
+    echo "     O dano e em \`normalizeDecl\`: sem o ramo \`d === true\`, um booleano cai no"
+    echo "     \`d.trim()\` — TypeError no meio de um atendimento. PROVADO ao contrario em"
+    echo "     2026-08-29: com o schema ja fechado, um rollback real para snapshot pre-T6"
+    echo "     executou e gravou masked_types={senha:opaque}, porque a tolerancia estava la."
+    echo
+    echo "     Precondicao da T7-B: nenhum snapshot ALCANCAVEL (inclusive previous, POR"
+    echo "     TENANT) com a forma anonima — ou aceitar por escrito perder esses rollbacks."
   else
     echo "  => T7 AUTORIZADA: nada anonimo em execucao nem em rollback."
   fi
