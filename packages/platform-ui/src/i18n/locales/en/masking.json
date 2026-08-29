@@ -33,9 +33,6 @@
       "catalogMissing": "Catalog missing or empty (masking.types). No type declared — this does not mean there is no masking: it means this screen cannot tell you which.",
       "tokenFormat": "Inline token format",
       "tokenExplanation": "replaced by display_partial on delivery to client via WebSocket. Resolved to original value by authorized roles via MCP tools."
-    },
-    "displayRules": {
-      "legacyOverride": "legacy override (rule.*)"
     }
   },
   "lgpd": {

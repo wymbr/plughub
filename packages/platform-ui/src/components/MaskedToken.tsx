@@ -183,10 +183,18 @@ export function renderWithTokens(
 /**
  * Fetches masking display rules from Config API namespace "masking".
  *
- * Fonte primária: o CATÁLOGO DE TIPOS (`masking.types` → `type.mascara.display`),
- * declaração única do arco ALLOWLIST (fase V2). Fallback legado: as chaves soltas
- * `rule.{category}`, que a MaskingPage gravava antes do catálogo — lidas ainda, e
- * CONTADAS no aviso, porque é o contador que diz quando removê-las.
+ * Fonte ÚNICA: o CATÁLOGO DE TIPOS (`masking.types` → `type.mascara.display`),
+ * declaração única do arco ALLOWLIST.
+ *
+ * ⚠️ A casa legada — as chaves soltas `rule.{category}`, que a tela gravava antes
+ * do catálogo — foi FECHADA na fase V2b (2026-08-29). Não é limpeza cosmética: o
+ * leitor legado VENCIA sobre o catálogo, então enquanto ele existisse a mesma
+ * pergunta ("como este token aparece?") tinha duas respostas e a que valia não era
+ * a declarada. A remoção foi autorizada por medição, não por decreto — o contador
+ * que este mesmo hook publicava zerou, e o ramo D do `probe_type_catalog.sh` existia
+ * justamente para dizer quando. Medido antes de remover: zero chaves `rule.*` em
+ * todo o `platform_config` (todos os tenants, todos os namespaces), contra 8 linhas
+ * do namespace `masking` de testemunha de presença. Guarda: `probe_legacy_display_rule_closed.sh`.
  *
  * ⚠️ Corrigido em 2026-08-26: a URL era `/api/config/{tenant}/masking`, caminho que
  * NENHUM proxy do platform-ui serve (a base é `/config` — a ocorrência era única no
@@ -217,9 +225,8 @@ export function useMaskingDisplayRules(): MaskingRulesMap {
             ? (v as { value: unknown }).value
             : v
 
+        // Fonte ÚNICA: o catálogo de tipos (`masking.types` → `type.mascara.display`).
         const map: MaskingRulesMap = {}
-
-        // 1. catálogo de tipos — fonte primária
         const catalog = unwrap(entries['types']) as { types?: Array<{ id?: string; mascara?: { display?: unknown } }> } | undefined
         for (const t of catalog?.types ?? []) {
           const display = t?.mascara?.display
@@ -227,24 +234,9 @@ export function useMaskingDisplayRules(): MaskingRulesMap {
             map[t.id] = display as MaskingDisplayRule
           }
         }
-        const fromCatalog = Object.keys(map).length
 
-        // 2. chaves legadas rule.{category} — vencem sobre o catálogo (são override
-        //    explícito de tenant) e são contadas para que a remoção seja MEDIDA.
-        let legacy = 0
-        for (const [key, entry] of Object.entries(entries)) {
-          if (!key.startsWith('rule.')) continue
-          const v = unwrap(entry)
-          if (v && typeof v === 'object') {
-            map[key.slice('rule.'.length)] = v as MaskingDisplayRule
-            legacy++
-          }
-        }
-
-        if (fromCatalog === 0) {
-          console.warn(`[masking] catálogo masking.types ausente ou vazio — ${legacy} regra(s) legada(s) rule.*; categorias sem regra caem no DEFAULT_DISPLAY_RULE`)
-        } else if (legacy > 0) {
-          console.info(`[masking] catálogo com ${fromCatalog} tipo(s) + ${legacy} override(s) legado(s) rule.* — remover as legadas quando este número zerar`)
+        if (Object.keys(map).length === 0) {
+          console.warn('[masking] catálogo masking.types ausente, vazio ou sem `mascara.display` — NENHUMA regra de display por categoria aplicada; vale DEFAULT_DISPLAY_RULE para todo token')
         }
         setRules(map)
       })

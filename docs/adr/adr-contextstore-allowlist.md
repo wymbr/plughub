@@ -1,7 +1,11 @@
 # ADR: ContextStore como ALLOWLIST — tipo declarado, mapa de dados e vocabulário único de política
 
-**Status:** Proposto — 2026-08-26. Nenhuma fase implementada.
-**Data:** 2026-08-26
+**Status:** Aceito — 2026-08-26. **Parcialmente implementado:** V0 *(metade)* · V1 · V1b · V2 · V2b
+entregues; **V3 é a próxima**. V4 (a inversão, não reversível) segue **não iniciada**.
+**Data:** 2026-08-26 *(cabeçalho corrigido em 2026-08-29: dizia "Proposto — nenhuma fase implementada"
+enquanto a §6 marcava quatro fases como FEITAS, com gate e entrada de CHANGELOG cada uma. Documento que
+se contradiz é da mesma família do DDL de `participation_intervals` — prosa afirmando um estado que
+nada impõe —, e o dano aqui é concreto: quem lesse só o cabeçalho reimplementaria a V2.)*
 **Componentes:** `packages/mcp-server-plughub`, `packages/schemas`, `packages/config-api`,
 `packages/platform-ui`, `packages/skill-flow-engine`, `packages/sdk`,
 `packages/orchestrator-bridge`, `packages/channel-gateway`, `packages/routing-engine`,
@@ -111,6 +115,13 @@ todos verdes, todos medindo a porta contra ela mesma.
 
 Nenhuma é errada; nenhuma é completa. São três recortes do mesmo objeto morando em três casas, e o
 `iban`/`passport` fantasma é o que acontece quando o catálogo não tem dono.
+
+> **Emenda de 2026-08-29 (V2b).** A linha do meio mudou de chave: `MaskingDisplayRule` já não é
+> chaveada por `rule.{category}`, e sim pelo **id do tipo** no catálogo (`type.mascara.display`). A
+> tabela acima descreve o estado do diagnóstico, não o de hoje. Isto era **pré-requisito do `masked`
+> tipado**: enquanto a dimensão CANAL tivesse casa própria, "que máscara este campo usa?" teria duas
+> respostas — e, como sempre, valeria a mais permissiva (o leitor legado vencia o catálogo). As
+> outras duas metades seguem em casas separadas; fundi-las é a V3 em diante.
 
 ### 1.5 Achado — o ContextStore tem uma SEGUNDA porta, sem política ✅ FECHADO (V1b, 2026-08-26)
 
@@ -442,6 +453,7 @@ hierárquico hoje (`ContextTagEntrySchema.tag`, regex multi-nível em `context-s
 | **V1** | A omissão deixa de ser muda. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `MaskedContextView` com `total` + `by_rule` + `by_pool_scope`, `context_withheld` no endpoint, faixa na aba Contexto. **Duas listas** porque as causas se consertam em telas diferentes. Gate `probe_context_withheld.sh` (6 ramos; D = testemunha negativa, F = aritmética) | sim |
 | **V1b** | A segunda porta (§1.5). **FEITA em 2026-08-26** (ver `CHANGELOG.md`): política extraída para `lib/context-masking.ts` e aplicada ao tool MCP `supervisor_state`, em **grau operator sem portão de namespace**; `context_masking` no retorno. Gate `probe_supervisor_tool_masking.sh` (6 ramos; **C** = testemunha negativa contra blanket-mask, **B** usa o endpoint HTTP como **oráculo** em vez de valor hardcodado). Barata porque **0 skills consumiam** o campo — o custo teria crescido com o primeiro consumidor | sim |
 | **V2** | Catálogo de tipos (D1) declarado e semeado, **sem nenhum consumidor novo** — os mecanismos atuais passam a lê-lo. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `DataTypeSchema` + `DEFAULT_DATA_TYPE_CATALOG` (7 tipos, só o ALCANÇÁVEL — `iban`/`passport` fora), `DEFAULT_MASKING_RULES` passou a ser **derivada** do catálogo, `masking.types` semeado, e a tela iterando o dado com **selo derivado** em vez do "Ativo" incondicional. Gates `probe_type_catalog.sh` (dois lados + testemunha do ORÁCULO) e `probe_masking_display_parity.sh` (três portas, com testemunha contra o caso vácuo). Dois defeitos alheios caíram junto: o leitor de regras de canal apontava para uma rota inexistente (**inerte desde sempre**) e o `\(?` do regex de telefone era ramo morto | sim |
+| **V2b** | Fechar a casa LEGADA de display rule (`rule.{category}`) — pré-requisito do `masked` TIPADO, que não pode ser escrito enquanto a mesma pergunta tiver duas respostas. **FEITA em 2026-08-29** (ver `CHANGELOG.md`). **A remoção foi autorizada por CONTADOR, não por decreto:** o ramo D do `probe_type_catalog.sh` publicava o número de chaves legadas dizendo *"a remoção é MEDIDA por este número zerar"* — zerou. Medido antes de tocar: **zero escritores** em todo o repositório (a V2 já migrara a tela; os três `putConfig` da `MaskingPage` são `audit_policy/{key}`, `masking/types`, `masking/context_rules`), **zero chaves** em todo o `platform_config` (todos os tenants, todos os namespaces — contra 8 linhas do ns `masking` de testemunha) e **quatro leitores**, todos no `platform-ui`. Gate `probe_legacy_display_rule_closed.sh`, visto **vermelho antes de verde** (4 casas → 0). Achado: o leitor legado **não era peso morto** — `getMaskingRule` devolvia o override e `update()` o gravava de volta no CATÁLOGO, então editar qualquer campo de uma categoria com override **promovia o legado a tipo, em silêncio**; armadilha ARMADA, blast radius zero por ausência de dado | sim |
 | **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria** (só registra o que teria sido escondido/recusado) | sim |
 | **V4** | Inverter para deny-by-default, com a lista real que a V3 produziu | **não** |
 | **V5** | Tela do pool vira seletor (D6); fechamento dos aliases cujo contador zerou | sim |

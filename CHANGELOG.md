@@ -1,5 +1,86 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## V2b do arco ALLOWLIST — a casa legada de display rule fecha, e o contador é que autorizou (2026-08-29)
+
+Pré-requisito do `masked` **tipado** (o `masked: true` do DialogForm/menu passar a referenciar um TIPO
+do catálogo, para que máscara-por-papel e classe LGPD sejam propriedade do tipo e não escolha de cada
+formulário). Esse ADR não podia ser escrito enquanto o vocabulário não fosse único **de verdade**: a
+dimensão CANAL do mascaramento tinha duas casas, e enquanto tivesse duas, *"que máscara este campo
+usa?"* teria duas respostas — e valeria a mais permissiva.
+
+### A premissa herdada estava errada, e medir primeiro é o que a pegou
+
+A passagem de sessão afirmava *"a tela ainda escreve o legado"*, citando `MaskingPage.tsx:174, :195,
+:406`. **Falso.** As três linhas são: `:174` a **declaração** de `saveMaskingRule` (que desde a V2
+grava o catálogo, em `:183`), `:195` e `:406` **leituras**. A tela tem exatamente três `putConfig` —
+`audit_policy/{key}`, `masking/types`, `masking/context_rules` — e nenhum toca `rule.*`. O engano
+nasceu de listar números de linha de um `grep` e chamar de escrita o que era leitura; é a razão de a
+primeira fase de todo arco aqui ser medição.
+
+Estado real, medido antes de tocar em qualquer coisa:
+
+| eixo | medido | evidência |
+|---|---|---|
+| escritores em código | **0** | os 3 `putConfig` acima; `seed.py` semeia 6 chaves no ns `masking`, nenhuma `rule.*` |
+| chaves vivas | **0** | `platform_config` INTEIRO — todos os tenants, todos os namespaces — contra **8** linhas do ns `masking` de testemunha de presença |
+| leitores em código | **4** | `MaskedToken.tsx:236,239` · `MaskingPage.tsx:195,406` |
+
+Nenhum dos dois ramos que a passagem previa (*"zero leitores ⇒ remover um escritor"* × *"leitor vivo
+⇒ migrar antes"*). O caso real é o terceiro e o menor: **zero escritores, zero dados, leitores
+inertes**. Não havia migração a fazer porque não havia dado a migrar.
+
+### A remoção foi autorizada por um contador, não por decreto
+
+O ramo D do `probe_type_catalog.sh` (V2) publicava o nº de chaves legadas com a frase *"a remoção é
+MEDIDA por este número zerar"*, e o próprio `useMaskingDisplayRules` logava *"remover as legadas
+quando este número zerar"*. Zerou. **O instrumento que dizia quando remover é o que autorizou** — não
+uma decisão nova.
+
+### O leitor não era peso morto — havia uma armadilha ARMADA
+
+`getMaskingRule` devolvia o override legado **vencendo o catálogo**, e o `update()` da tela gravava o
+resultado de volta no CATÁLOGO. Logo, editar qualquer campo de uma categoria com override **promovia
+o legado a tipo, em silêncio** — sem que ninguém tivesse pedido. Blast radius **zero** hoje (nenhuma
+chave existe), mas a forma é a de sempre: a casa que ninguém escreve mais ainda decide.
+
+### Entregue
+
+- **`MaskedToken.tsx`** — laço legado removido de `useMaskingDisplayRules`; fonte única é o catálogo.
+  O aviso de degradação **nomeia o que deixa de valer** (*"NENHUMA regra de display por categoria
+  aplicada; vale `DEFAULT_DISPLAY_RULE` para todo token"*) em vez de contar legadas que não existem.
+- **`MaskingPage.tsx`** — `getMaskingRule` com uma casa só; selo *"override legado"* e o cálculo
+  `isLegacy` removidos.
+- **i18n** — `section.displayRules.legacyOverride` removida dos **dois** locales (o bloco
+  `displayRules` ficaria vazio e saiu inteiro).
+- **Gate `infra/test/probe_legacy_display_rule_closed.sh`** — quatro ramos (fonte · **oráculo** ·
+  config viva · store inteiro), **visto vermelho antes de verde**: 4 casas em código → 0.
+
+### O gate: por que a exclusão de comentário é load-bearing, e não higiene
+
+O contador do ramo A é de **ausência**, e "0 ocorrências" é indistinguível de "regex quebrada" — daí
+o ramo **B**, uma fixture com 2 linhas de código e 2 de comentário que o contador tem de separar
+(4 brutas ⇒ 2 acusadas). E a exclusão de comentário não é zelo: **hoje, depois do conserto, 3 linhas
+de `packages/` ainda casam a regex, e as 3 são a prosa que documenta a remoção.** Um contador ingênuo
+reproduziria um número não-zero e acusaria exatamente o texto que explica por que está zerado. O
+ramo A imprime os dois números lado a lado (`bruto=3, código=0`) para que a diferença seja visível em
+vez de suposta.
+
+O ramo **C** mede um tenant; o ramo **D** existe porque *"zero para `tenant_demo`"* não é *"zero"* —
+a chave é por-tenant, e o veredicto precisa do store inteiro. Ambos carregam testemunha de presença:
+sem ela, um namespace vazio aprovaria por ausência de dado.
+
+### Verificação
+
+`tsc --noEmit` limpo; imagem `platform-ui` reconstruída (o `vite build` roda dentro dela) e no ar.
+Preflight de símbolo no bundle **em execução**: a string do aviso novo está presente, a forma antiga
+(`startsWith("rule.")`, selo *"legacy override"*) **ausente** — prova de runtime, não de fonte.
+
+→ [`docs/adr/adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md) §6 (fase V2b) ·
+cabeçalho do ADR corrigido no mesmo passo: dizia *"Proposto — nenhuma fase implementada"* enquanto a
+§6 marcava quatro fases como FEITAS, cada uma com gate e entrada de CHANGELOG.
+
+---
+
 ## Vazamento de campo `masked` para store durável — conserto, expurgo e gate (2026-08-29)
 
 **Senha e código 2FA de `skill_auth_form_v1` chegaram ao ClickHouse em claro.** 13 linhas em

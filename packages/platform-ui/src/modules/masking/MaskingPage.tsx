@@ -167,9 +167,12 @@ export default function MaskingPage() {
    * catálogo inteiro — mesmo padrão de `saveContextRules` logo abaixo, e é o que
    * mantém UMA casa em vez de duas.
    *
-   * ⚠️ As chaves legadas `rule.{category}` continuam sendo LIDAS pelo consumidor
-   * (MaskedToken), como override de tenant, mas esta tela não escreve mais nelas.
-   * Medido em 2026-08-26: existem ZERO no ambiente — não há migração a fazer.
+   * ⚠️ As chaves legadas `rule.{category}` foram FECHADAS na fase V2b (2026-08-29):
+   * esta tela já não escrevia nelas desde a V2, e agora ninguém mais as lê. Havia
+   * uma armadilha ARMADA no caminho: `getMaskingRule` devolvia o override legado e
+   * `update()` o gravava de volta no CATÁLOGO — editar qualquer chave de uma
+   * categoria com override PROMOVIA o legado a tipo, em silêncio. Zero dano medido
+   * (não existia nenhuma chave), mas o leitor não era peso morto.
    */
   async function saveMaskingRule(category: string, rule: MaskingDisplayRule) {
     if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
@@ -191,9 +194,7 @@ export default function MaskingPage() {
   }
 
   function getMaskingRule(category: string): MaskingDisplayRule {
-    // legado primeiro (override explícito de tenant), depois o tipo, depois o default
-    const legacy = maskingEntries[`rule.${category}`]?.value ?? maskingEntries[`rule.${category}`]
-    if (legacy && typeof legacy === 'object') return legacy as MaskingDisplayRule
+    // Uma casa só: o TIPO, depois o default. (V2b fechou o override legado.)
     const fromType = dataTypes.find(dt => dt.id === category)?.mascara?.display
     if (fromType && typeof fromType === 'object') return fromType
     return DEFAULT_DISPLAY_RULE
@@ -403,7 +404,6 @@ export default function MaskingPage() {
             {dataTypes.map(cat => {
               const rule = getMaskingRule(cat.id)
               const isSaving = saving === `type.${cat.id}`
-              const isLegacy = Boolean(maskingEntries[`rule.${cat.id}`])
               function update(patch: Partial<MaskingDisplayRule>) {
                 saveMaskingRule(cat.id, { ...rule, ...patch })
               }
@@ -419,7 +419,6 @@ export default function MaskingPage() {
                       {t(`categories.${cat.id}`, { defaultValue: cat.label ?? cat.id })}
                     </span>
                     <code style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>{cat.id}</code>
-                    {isLegacy && <span style={{ fontSize: 10, color: '#f59e0b', marginLeft: 6 }}>{t('section.displayRules.legacyOverride')}</span>}
                     {isSaving && <span style={{ fontSize: 10, color: '#3b82f6', marginLeft: 'auto' }}>saving…</span>}
                   </div>
 

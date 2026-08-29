@@ -5222,9 +5222,12 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 > · 🆕 **`CATEGORY_META` (`MaskedToken.tsx`) tem rótulos hardcoded em português** — `'Cartão'`,
 >   `'Fone'`, `'Passaporte'`. Viola a invariante i18n do `CLAUDE.md`. A V2 tirou os fantasmas de lá
 >   mas não os rótulos; o destino é o `label` do próprio tipo, traduzido.
-> · 🆕 **Contador de aliases: `masking.rule.*` = 0 hoje.** O leitor mantém o fallback legado e o
+> · ✅ ~~**Contador de aliases: `masking.rule.*` = 0 hoje.** O leitor mantém o fallback legado e o
 >   CONTA (aviso no console). É o mesmo mecanismo do D3 — a remoção do fallback é **medida** por
->   este número continuar zerado, não agendada por opinião.
+>   este número continuar zerado, não agendada por opinião.~~ — **FECHADO na V2b (2026-08-29)**: o
+>   número continuou zerado (medido no `platform_config` INTEIRO, não só em `tenant_demo`), os 4
+>   leitores saíram e o gate `probe_legacy_display_rule_closed.sh` impede o retorno. Foi o contador
+>   que autorizou, exatamente como esta linha previa.
 > · 🆕 **O namespace `masking` ainda carrega 4 chaves marcadas `[DEPRECATED — use audit_policy.*]`**
 >   (`authorized_roles`, `default_retention_days`, `capture_input_default`, `capture_output_default`),
 >   duplicadas em `audit_policy`. São duas grafias da mesma config, e ninguém as está contando.
@@ -5235,8 +5238,34 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 > · ⚠️ **`financial` é a MESMA palavra em dois enums** — `DataCategory` (classe de dado) e
 >   `ContextMaskingType` (forma de máscara). Convivem por acaso; num mapa que cruze os dois, colidem.
 >
+> ### 🆕 O que a V2b deixou aberto (2026-08-29) — achados FORA do escopo dela
+>
+> · 🔴 **`MaskingDisplayRule` é redefinida à mão no `platform-ui`** (`MaskedToken.tsx:43-57`:
+>   interface + `DEFAULT_DISPLAY_RULE` + `MaskingRulesMap`), duplicando `MaskingDisplayRuleSchema`
+>   (`schemas/src/audit.ts:308-314`). **Conferido em 2026-08-29: os quatro campos e os quatro
+>   defaults COINCIDEM hoje** — não há drift, e é por isso que é dívida e não defeito. Deduplicar
+>   exige fazer o `platform-ui` depender de `@plughub/schemas`, que é o **desacoplamento de ~960
+>   linhas** já registrado como fora de escopo em
+>   [`adr-skill-flow-editor-validation.md`](docs/adr/adr-skill-flow-editor-validation.md) (com risco
+>   de dual-instance de Zod documentado em `agent-registry/src/app.ts:58-61`). Não fazer por dentro
+>   desta fase foi decisão, não esquecimento.
+> · 🟡 **`section.displayRules.title` e `.description` não existem em locale nenhum** — a
+>   `MaskingPage` os chama com `defaultValue` em inglês (`:400-401`), então **pt-BR vê inglês**.
+>   Viola a invariante i18n do `CLAUDE.md` (chave nos DOIS arquivos). Descoberto ao remover
+>   `legacyOverride`, que era a única chave do bloco `displayRules` — o bloco saiu vazio. Não
+>   corrigido junto porque **acrescentar tradução muda texto visível**, e isso é mudança própria,
+>   não resíduo de uma remoção. Mesma família do `CATEGORY_META` acima.
+> · 🟡 **O ramo INCONCLUSIVO de `q_type_catalog_state.sh` não distingue "sem `.entries`" de "sem
+>   `jq`"** — com `jq` ausente ele acusa *"resposta sem campo .entries; leitor quebrado"* enquanto
+>   imprime um corpo que **tem** `.entries`. A mensagem contradiz a evidência que ela mesma mostra.
+>   Inofensivo onde a casa roda (WSL tem `jq`), mas é diagnóstico que aponta para o lugar errado —
+>   e o script é um instrumento, que é justamente onde isso custa caro.
+>
 > ✅ **O ADR existe:** [`docs/adr/adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md)
-> — status **proposto**. As sete perguntas abaixo estão **respondidas
+> — status **Aceito, parcialmente implementado** (V0 metade · V1 · V1b · V2 · V2b entregues; a V3 é a
+> próxima; a V4, que é a inversão não reversível, segue não iniciada). *Dizia "proposto" aqui e no
+> cabeçalho do ADR até 2026-08-29, com quatro fases já FEITAS na §6 — quem lesse só o rótulo
+> reimplementaria a V2.* As sete perguntas abaixo estão **respondidas
 > lá** (§3), e o modelo mudou em três pontos por decisão do dono na sessão de 08-26:
 > **(1)** categoria abstrata virou **TIPO** (formato × máscara-por-papel × classe LGPD numa
 > declaração só, qualquer uma podendo ser vazia); **(2)** a hierarquia de negócio entra na CHAVE,
