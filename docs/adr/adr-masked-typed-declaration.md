@@ -216,11 +216,24 @@ que já é verdade do lado da detecção e passa a ser do lado da declaração.
 renderizar em claro, não devolver no `payload.answers`), e essa fase é **pré-requisito** de a
 tipagem alcançar o Console. Ordem inegociável.
 
-### D7 — Ordem com a S1 do ADR de snapshot: **S1 primeiro**
+### D7 — Ordem com a S1 do ADR de snapshot: **a dependência CAIU**
 
-As duas fases mexem no mesmo bloco `render` do `form_get`: a S1 **acrescenta** `captures`; esta
-tipagem **muda o tipo** de `render.fields[].masked`. Aditiva antes de mutativa — e a S1 ainda mata a
-corrida das duas leituras, que é ruído a menos durante uma mudança de contrato.
+*Emendada em 2026-08-29, no dia seguinte à redação, ao medir a S1 para implementá-la.*
+
+A versão original dizia *"S1 primeiro"*, porque as duas fases mexeriam no mesmo bloco `render` e
+aditiva vem antes de mutativa. Duas medições derrubaram a ordem:
+
+- **a S1 está BLOQUEADA** — duas de suas premissas foram refutadas
+  ([`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md) §D6): `render.captures`
+  perde o mapa opção→nota, e o único chamador de `segment_outcome_record` não tem `form_get`, logo não
+  há `render` no `pipeline_state` dele. Manter a ordem faria a tipagem esperar por uma fase sem data;
+- **a colisão era mais fraca do que eu afirmei.** As duas mexem em **chaves diferentes** do mesmo
+  objeto: a S1 em `render.captures`, a tipagem em `render.fields[].masked`. Objeto comum não é campo
+  comum — e chamar isso de colisão de contrato foi imprecisão minha, não medição.
+
+**Fica:** nenhuma ordem entre S1 e T2. Se as duas forem implementadas, a S1 continua sendo aditiva e a
+tipagem mutativa, mas em campos que não se tocam. As ordens internas deste ADR (T1→T2, T4 antes do
+Console, T6→T7) **não** dependiam disso e seguem valendo.
 
 ### D8 — O fechamento do ramo `true` é por CONTADOR, nunca por decreto
 
@@ -282,7 +295,8 @@ e por isso D6 é ordem, não sugestão.
 | **T7** | Fechar o ramo `boolean` **quando o contador zerar** (D8) | **não** |
 
 **Ordens inegociáveis:** T1 antes de T2 · **T4 antes de a tipagem alcançar o Console** · T6 antes de
-T7 · **S1 do ADR de snapshot antes de T2** (D7).
+T7. *(A dependência da S1 do ADR de snapshot CAIU em 2026-08-29 — ver D7 emendada: a S1 está
+bloqueada e a colisão era em chaves diferentes do mesmo objeto, não no mesmo campo.)*
 
 ---
 
