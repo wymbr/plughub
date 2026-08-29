@@ -11,6 +11,7 @@
  */
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import { titleForNewCard, ENDPOINT_CATALOG, type EndpointDescriptor } from './catalog'
 import { listDisplayTools, getDisplayTool } from './tools/registry'
 import type { NewDashboardCard, QueryParam } from './tools/types'
@@ -188,7 +189,12 @@ function StepConfigure({
     params.forEach(param => {
       if (!param.options_from) return
       const url = `${param.options_from}?tenant_id=${encodeURIComponent(tenantId)}`
-      fetch(url)
+      // `apiFetch` (não `fetch`): o único `options_from` do catálogo hoje é
+      // `/reports/agent-events/categories`, que passou a exigir credencial em
+      // 2026-08-29. Com `fetch` cru o seletor de categoria do editor de cartão
+      // apareceria SEM opções — e o `.catch(() => {})` abaixo faria isso parecer
+      // "não há categoria", que é o modo de falha por AUSÊNCIA.
+      apiFetch(url)
         .then(r => r.ok ? r.json() : Promise.reject())
         .then((body: { data?: Array<{ category: string }> }) => {
           const opts = body.data?.map(d => d.category) ?? []

@@ -84,6 +84,44 @@ logger = logging.getLogger("plughub.analytics.reports")
 router = APIRouter(prefix="/reports")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# EXIGIR CREDENCIAL e RECORTAR LINHA são DOIS fatos, e só o primeiro está fechado
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# `Depends(optional_pool_principal)` responde UMA pergunta: *"quem está chamando?"*.
+# Ele 401 sem `Authorization` (desde 2026-08-27) e devolve `accessible_pools`. Quem
+# decide se aquela lista vira `WHERE` é o HANDLER, passando-a adiante — e a maioria
+# das rotas deste arquivo passa.
+#
+# ── O que mudou em 2026-08-29, e o que NÃO mudou ─────────────────────────────
+# Doze rotas daqui não declaravam principal algum. Quatro foram medidas ao vivo
+# respondendo **200 anônimo**, entre elas `/reports/customers/{id}/360` — dado de
+# CLIENTE. Elas passaram intactas pelos dois censos que já existiam porque ambos
+# contam QUEM DECIDE (C1: quem decodifica JWT · C4: quem resolve escopo de pool), e
+# uma rota sem dependência nenhuma não tem decisor para contar. Agora todas exigem
+# credencial, e o eixo tem censo próprio: `probe_route_credential_coverage.sh`.
+#
+# O que NÃO mudou: nenhuma delas RECORTA LINHA. As `query_*` que servem estas doze
+# (`query_usage_report`, `query_workflows_report`, `query_campaigns_report`,
+# `query_evaluations_*`, `query_customer_360`, `query_agent_events_*`,
+# `query_evaluator_calibration`) **não aceitam `accessible_pools`** — não é um
+# argumento que alguém esqueceu de passar, é filtro que não existe. Fabricá-lo aqui
+# seria inventar, por rota, qual coluna é "o pool desta agregação", e o precedente
+# está medido: a F2 do ADR de relatórios encontrou um filtro de canal que não
+# filtrava, ESVAZIAVA — subconsulta que o ClickHouse recusava, `except` devolvendo
+# `data_unavailable`, endpoint respondendo 200 com zero linha, 683 testes verdes.
+# Recorte inventado quebra para o lado que ninguém vê.
+#
+# Consequência ACEITA e nomeada: um operador escopado a um pool, autenticado, lê
+# estes agregados INTEIROS. É estritamente melhor que o anônimo lê-los inteiros, e
+# estritamente pior que o alvo. A dívida está contada no `TODO.md`
+# (§ "Recorte de linha nas rotas recém-gateadas"), com a lista das doze e o critério
+# por rota — nunca como "por enquanto".
+#
+# Ao escrever rota NOVA aqui: `pool_principal` é obrigatório e o gate reprova sem
+# ele; passar `accessible_pools` à query é decisão sua, e a resposta default é SIM.
+
+
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
 def _today_label() -> str:
@@ -446,6 +484,7 @@ async def report_usage(
     page:             int           = Query(1,      ge=1),
     page_size:        int           = Query(100,    ge=1),
     format:           str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Raw usage event list. Useful for billing and metering BI exports.
@@ -484,6 +523,7 @@ async def report_workflows(
     page:        int           = Query(1,       ge=1),
     page_size:   int           = Query(100,     ge=1),
     format:      str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Workflow lifecycle event list.
@@ -524,6 +564,7 @@ async def report_campaigns(
     page:        int           = Query(1,       ge=1),
     page_size:   int           = Query(100,     ge=1),
     format:      str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Campaign collect event list + per-campaign aggregate summary.
@@ -783,6 +824,7 @@ async def get_evaluations_report(
     page:         int            = Query(1, ge=1),
     page_size:    int            = Query(100, ge=1),
     format:       str            = Query("json"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Individual evaluation results per session.
@@ -818,6 +860,7 @@ async def get_evaluations_summary(
     form_id:     Optional[str]  = Query(None),
     group_by:    str            = Query("campaign_id"),
     format:      str            = Query("json"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Aggregated evaluation summary: avg score, score distribution, status counts.
@@ -858,6 +901,7 @@ async def get_evaluations_quality(
     segment_id:      Optional[str] = Query(None),
     form_version:    Optional[int] = Query(None),
     format:          str           = Query("json"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """T11 — relatório de qualidade em DOIS modos (nunca blendados):
       - **oficial** (default): só avaliações FINALIZADAS (`evaluation_finalized`) — o invariante.
@@ -932,7 +976,9 @@ async def get_agents_compare(
 # ─── Customer Voice (Fatia 1) — lente genérica grain × metric + overlay SLA ──────
 
 @router.get("/customer-voice/instruments")
-async def get_customer_voice_instruments() -> Response:
+async def get_customer_voice_instruments(
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
     """Catálogo de instrumentos: métrica → {source, rollup, grãos suportados, label}.
     A UI usa isto para montar os seletores (grão × instrumento)."""
     return JSONResponse(content={"instruments": CV_INSTRUMENTS}, status_code=200)
@@ -1565,6 +1611,7 @@ async def report_customer_360(
     customer_id: str,
     tenant_id:   str = Query(..., description="Tenant identifier"),
     origin:      str = Query("live", pattern="^(live|import|reeval)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """360 agregado do cliente: resumo de contatos, qualidade (modo Oficial —
     `evaluation_finalized`) e voz do cliente (`session_signal`), tudo vinculado por
@@ -1628,6 +1675,7 @@ async def get_agent_events_series(
     skill_id:    Optional[str] = Query(None,   description="Filter by skill_id"),
     granularity: str           = Query("day",  pattern="^(hour|day|week)$"),
     format:      str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Time-series of agent business events (Arc 12).
@@ -1669,6 +1717,7 @@ async def get_agent_events_summary(
     page:      int           = Query(1,            ge=1),
     page_size: int           = Query(100,          ge=1),
     format:    str           = Query("json",       pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Aggregated summary of agent business events (Arc 12).
@@ -1704,6 +1753,7 @@ async def get_agent_events_categories(
     to_dt:     Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
     pool_id:   Optional[str] = Query(None,  description="Filter by pool_id"),
     skill_id:  Optional[str] = Query(None,  description="Filter by skill_id"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Catalogue of distinct category values active in the time window (Arc 12).
@@ -1739,6 +1789,7 @@ async def get_evaluator_calibration(
     evaluator_id:  Optional[str] = Query(None,  description="Filter by evaluator agent_type_id"),
     skill_version: Optional[str] = Query(None,  description="Filter by skill version string"),
     granularity:   str           = Query("day", description="Time bucket: day | week"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Calibration Score time-series for the AI evaluator (Arc 13).

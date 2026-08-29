@@ -1,5 +1,161 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Autorização: o TERCEIRO eixo ganha censo — e o recorte do achado não era o do eixo (2026-08-29)
+
+Fecha a dívida aberta pela T3 do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md):
+rotas da analytics-api que **não pedem credencial nenhuma**. Já havia dois censos de
+autorização, e nenhum responde a esta pergunta — o C1 conta **quem decodifica JWT**, o C4
+conta **quem resolve escopo de pool**. Os dois medem QUEM DECIDE, e uma rota sem dependência
+nenhuma não tem decisor para contar: atravessa os dois intacta.
+
+### O achado dizia 12; o eixo tinha 19
+
+O TODO falava de "12 das 38 rotas `/reports/*`", porque o achado veio de um arco de
+relatórios. O censo AST (`infra/test/_route_principal_census.py`) mediu **19 descobertas em
+73 rotas**, e as sete fora daquele prefixo não eram sobra:
+
+| fora do recorte | o que servia sem credencial |
+|---|---|
+| `GET /sessions/{id}/stream` | **a transcrição inteira do contato** — `content` de cada mensagem de cliente e de agente |
+| `GET /sessions/active` | lista de sessões vivas de qualquer pool |
+| `GET /sessions/{id}/workflow-trace` · `/pipeline-state` | trajetória e estado interno da execução |
+| `POST /reports/admin/flush-synthetic` | cinco `ALTER TABLE … DELETE` |
+| `POST /admin/performance-sync` | recomputa o score que ALIMENTA O ROTEAMENTO |
+
+O `/stream` é o pior, e o agravante é a forma: a rota **irmã** que existe para servir esse
+mesmo dado — `/v1/transcript/sessions/{id}` — já exigia credencial desde sempre. **Duas
+portas para o mesmo dado e só uma trancada**, e é a trancada que dá a impressão de que o dado
+está protegido. Medido ao vivo antes do conserto: `curl` sem header devolvia o diálogo
+completo de uma sessão real.
+
+Regra derivada, e é a mesma do CLAUDE.md pela terceira vez: **o recorte de um achado é o do
+lugar onde ele foi encontrado, nunca o do defeito.** Herdar o `/reports/*` do TODO teria
+deixado a transcrição aberta com o gate VERDE.
+
+### Estado: 18 gateadas, 1 isenta NOMEADA
+
+`/v1/health` é a única isenção, com motivo escrito: o `healthcheck` do compose bate nela antes
+de qualquer auth-api existir, e exigir credencial ali acopla o boot da stack ao boot do emissor
+de token — o modo de falha seria deadlock de inicialização, não um 401 legível.
+
+Cada rota recebeu o portão que o seu tipo pede, não o mais forte disponível:
+
+| portão | onde | por quê |
+|---|---|---|
+| `optional_pool_principal` | as 12 de `reports.py` + 3 de `sessions.py` | leitura de relatório; 401 sem header desde 2026-08-27 |
+| `sse_pool_principal` **(novo)** | `/sessions/{id}/stream` | `EventSource` não manda cabeçalho — o token chega em `?token=` |
+| `require_pool_principal` | `POST /reports/admin/flush-synthetic` | é ESCRITA; o critério é o de `POST /supervisor/*` — "não sei quem é" reprova inclusive no ramo sem-segredo |
+| `require_principal` | `POST /admin/performance-sync` | vive sob `/admin/*` e alimenta o roteamento: token de SISTEMA, como os irmãos |
+
+`sse_pool_principal` **delega** o veredicto a `optional_pool_principal` — nada é redecidido
+lá dentro, nem a semântica de `[]`, nem o ramo `analytics_open_access`, nem as mensagens de
+recusa. Ele resolve transporte, não política; duas respostas para "quem é este chamador" e a
+mais permissiva passaria a valer. Ser uma **dependência** (e não uma decisão no corpo do
+handler) é o que o torna substituível no teste e visível ao censo sem alargar a lista de
+guards-no-corpo — aquela lista existe para o `audit.py`, que precisa GRAVAR trilha antes de
+responder, e cada nome novo nela é uma rota que o censo deixa de conferir na assinatura.
+
+### EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos — só o primeiro fechou
+
+As `query_*` que servem as doze de `reports.py` **não aceitam `accessible_pools`**: não é
+argumento que alguém esqueceu de passar, é filtro que não existe. Fabricá-lo aqui seria
+inventar, por rota, qual coluna é "o pool desta agregação" — e o precedente está medido: a F2
+deste mesmo arco encontrou um filtro de canal que não filtrava, **esvaziava** (subconsulta que
+o ClickHouse recusava, `except` devolvendo `data_unavailable`, 200 com zero linha, 683 testes
+verdes). Consequência aceita e nomeada: operador escopado, autenticado, lê estes agregados
+inteiros. Melhor que o anônimo lê-los inteiros; pior que o alvo. Dívida contada no `TODO.md`,
+com o critério que falta decidir por rota.
+
+Exceção deliberada: **`/sessions/active` recorta** (403 `pool_scope_denied`, nunca lista
+vazia — vazio é indistinguível de "este pool não tem sessão ativa"). Lá o chamador **nomeia**
+o pool, então o escopo é teste de pertinência à lista do token, não predicado de coluna.
+
+### Os 690 testes ficaram verdes — e continuariam verdes sem o portão
+
+Todo teste de rota do pacote injeta um chamador autenticado por `dependency_overrides`, então
+nenhum distingue *"a rota exige credencial"* de *"a rota não exige nada"*. É a família que o
+CLAUDE.md nomeia: *"um teste que não pode reprovar é pior que teste nenhum"*.
+`test_route_credential_gate.py` (40 casos) acrescenta o **controle negativo** — sem override,
+401 — com o **positivo** ao lado, porque um 401 pode vir de parâmetro faltando ou de router
+mal montado, e sem o par o teste passaria pelo motivo errado.
+
+**Uma mutação sobreviveu à primeira versão do arquivo, e o conserto é a lição.** Trocar
+`Depends(sse_pool_principal)` por `Depends(optional_pool_principal)` na rota do stream
+mantinha os 38 testes VERDES: eles exercitavam a dependência **isolada**, o que não prova que
+a rota a use. Em produção a mutação mataria o Console — `EventSource` não manda cabeçalho, o
+`?token=` deixaria de ser lido, e o sintoma seria AUSÊNCIA (stream vazio), não erro. Os dois
+testes que fecham essa distância montam o app **sem** overrides.
+
+### O gate, em duas metades que não se substituem
+
+`infra/test/probe_route_credential_coverage.sh` — **(A)** censo AST sobre as assinaturas;
+**(B)** medição ao vivo, rota a rota. (A) sozinha pega a regressão no commit; (B) sozinha não
+diz onde consertar. E (A) pode estar certa com (B) errada: um `Depends` declarado num router
+que ninguém inclui não gateia nada.
+
+O censo tem um terceiro ramo, `INDECIDIVEL`, que existe por um erro cometido ao escrevê-lo: a
+primeira versão tinha a lista de principais incompleta (faltavam `require_principal` e
+`require_dashboard_principal`) e acusou sete rotas de `/admin/*` e `/dashboard/*` que estavam
+gateadas. **Um censo de lista fechada falha para o lado errado** — acusa quem está protegido
+por um guard que ele não conhece. Rota sem principal conhecido mas com algum outro `Depends`
+agora é REPORTADA, não acusada.
+
+### A varredura do browser tinha um balde de "não medidos" com defeito dentro
+
+`_ui_raw_analytics_calls.py` classificava `fetch(url)` — URL montada numa linha anterior —
+como UNDECIDABLE, e o probe imprimia *"15 chamadas fora do alcance desta via"* com o resto
+verde. Ao gatear as rotas, **duas** foram achadas A MÃO dentro desse balde, e as duas eram
+`fetch` cru contra endpoint recém-gateado: `useCustomer360.ts` (aba Cliente) e
+`AddCardModal.tsx` (opções do editor de cartão). O balde não continha ruído: continha as telas
+que quebrariam, e o número "15" as tornava invisíveis contando-as.
+
+Duas correções no instrumento:
+
+- **resolve `fetch(url)`** pela última `const url = <literal>` antes da chamada. "Resolvido e
+  aponta para outro serviço" deixou de cair no mesmo balde que "não consegui ler" — senão o
+  contador de não-medidos passa a contar chamadas que foram medidas e absolvidas;
+- **mascara comentários** antes de varrer (preservando offsets, para os números de linha
+  continuarem verdadeiros). A varredura casava `fetch(` dentro de PROSA: das 15 linhas, pelo
+  menos duas eram comentário, e uma terceira apareceu no instante em que alguém escreveu um
+  comentário explicando um `fetch(url)`.
+
+Resultado: **15 → 7** não-medidos, todos honestos, e um HIT novo.
+
+**O HIT novo é um defeito que já estava em produção**: `useCustomerJourneys.ts` chamava
+`/reports/journeys` com `fetch` cru, e aquela rota exige credencial **desde 2026-08-27**. O
+painel de jornadas em aberto do Histórico recebia 401 havia dois dias. O docstring do arquivo
+dizia *"Optional auth (no 401)"* — contrato revogado, da mesma família do valor plausível:
+parece resposta.
+
+### Verificação
+
+- `probe_route_credential_coverage.sh` — VERMELHO com 19 achados nas duas metades, VERDE
+  depois (72/73 cobertas, 1 isenta; 67 rotas GET recusando ao vivo);
+- 730 testes da analytics-api (690 + 40 novos); **três mutações** aplicadas e revertidas — tirar
+  o principal de uma rota, neutralizar o 403 de escopo, e a do `sse_pool_principal` acima;
+- cada uma das 18 medida ao vivo nos DOIS sentidos: `sem=401 · com=200`;
+- `/stream` medido nos três caminhos: anônimo 401 · `?token=` 200 · header 200;
+- **fim a fim no browser**: contato real no webchat → fila humana → Console → Monitor ›
+  Sessions › segmento, com a transcrição renderizando pela SSE gateada. É a prova que faltava
+  de que o `?token=` chega, e o modo de falha que ela descarta é o silencioso (tela vazia);
+- `probe_ui_credential_coverage.sh`, `probe_authz_single_verifier.sh`, `probe_report_surface.sh`,
+  `probe_llm_call_paths.sh`, `probe_audit_surface.sh` — todos verdes;
+- nenhum script de `infra/` regrediu: a varredura por chamadores sem credencial das rotas
+  novas devolveu só os arquivos deste arco, que chamam sem token de propósito.
+
+### Achados colaterais, não consertados (contados no `TODO.md`)
+
+1. `useCampaignReport` chama `/v1/evaluation/reports/campaigns/{id}` → **404**. Duas telas
+   mostram "sem relatório" desde sempre; o `.then(r => r.ok ? … : null)` engole. Consertar
+   exige decidir qual agregado a tela quer — produto, não plumbing.
+2. A aba Consumption do Billing lê `data.rows` de um corpo `{data, meta}`, e espera
+   `{dimension, total}` de um endpoint que devolve EVENTOS. Diz "No consumption data
+   available" com o endpoint respondendo 200 e 20 linhas.
+3. `mcp-server-plughub` **não compila** (`usage-emitter.ts:73,102`, `TS2345`), o que faz
+   `docker compose up -d --build platform-ui` falhar por `depends_on`. Contorno: `build
+   platform-ui` + `up -d --no-deps platform-ui`.
+
+
 ## Relatórios T3: a lente de token — quem gastou, de qual conta, com qual modelo (2026-08-28)
 
 Última fase da trilha de token do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md).

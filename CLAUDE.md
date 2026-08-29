@@ -1187,21 +1187,35 @@ base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
 > porque `grep` acusava os sete produtores do auth-api (o emissor **escreve** os campos; escrever
 > não é decidir o que a ausência significa).
 
-> **⚠️ E há um TERCEIRO eixo, sem censo nenhum: COBERTURA DE ROTA** *(medido 2026-08-28,
-> na T3 do ADR de relatórios)*. Os dois censos acima contam **quem decide** — quem
-> decodifica JWT, quem resolve escopo de pool. Nenhum conta **quais rotas exigem
-> credencial**, e a diferença é material: **12 das 38 rotas `/reports/*` da analytics-api
-> não declaram principal algum**. Quatro verificadas ao vivo respondem **200 sem
-> credencial** — `/reports/usage`, `/reports/evaluations`, `/reports/agent-events/summary`
-> e **`/reports/customers/{id}/360`** —, enquanto `/reports/sessions` e `/reports/segments`
-> respondem 401 corretamente.
+> **E há um TERCEIRO eixo: COBERTURA DE ROTA** — *descoberto 2026-08-28 na T3 do ADR de
+> relatórios, com censo próprio e fechado em 2026-08-29*. Os dois censos acima contam
+> **quem decide**: quem decodifica JWT (C1), quem resolve escopo de pool (C4). Nenhum
+> conta **quais rotas exigem que alguém decida** — e uma rota sem dependência nenhuma não
+> tem decisor para contar, então atravessa os dois intacta. É a regra da seção acima pela
+> terceira vez (*"um censo desenhado para um eixo não prova nada sobre o eixo vizinho"*),
+> e desta vez o eixo é o mais grosseiro dos três: a rota simplesmente não pede nada.
 >
-> É a regra da seção acima recorrendo pela terceira vez: *"um censo desenhado para um eixo
-> não prova nada sobre o eixo vizinho"* — e desta vez o eixo descoberto é o mais grosseiro
-> dos três, porque não depende de nenhuma sutileza de claim: a rota simplesmente não pede
-> nada. **Não consertado**: são 12 rotas com consumidores próprios (a `BillingPage` consome
-> `/reports/usage`), e um conserto em bloco trocaria um buraco por telas quebradas. Dívida
-> registrada no `TODO.md`; o mecanismo que falta é um censo de cobertura, no molde do C4.
+> **O recorte do achado não era o do eixo.** O achado falava de `/reports/*` porque veio
+> de um arco de relatórios; o censo AST mediu **19 rotas descobertas em 73**, e as sete
+> fora daquele prefixo incluíam a pior de todas — `GET /sessions/{id}/stream`, que servia
+> a **transcrição inteira do contato** a quem chamasse, medida ao vivo. O agravante é a
+> forma: a rota IRMÃ que existe para servir esse mesmo dado (`/v1/transcript/sessions/{id}`)
+> já exigia credencial. **Duas portas para o mesmo dado e só uma trancada** — e a trancada
+> é o que dá a impressão de que o dado está protegido.
+>
+> Hoje: **18 gateadas, 1 isenta NOMEADA** (`/v1/health`, liveness do compose — exigir
+> credencial ali acopla o boot da stack ao boot do emissor de token). Gate:
+> `infra/test/probe_route_credential_coverage.sh`, em duas metades que não se substituem —
+> **(A)** censo AST (`_route_principal_census.py`) e **(B)** medição ao vivo, porque um
+> `Depends` declarado num router que ninguém inclui não gateia nada.
+>
+> **EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos** — e só o primeiro está fechado. As
+> `query_*` que servem as doze de `reports.py` não aceitam `accessible_pools`: não é
+> argumento esquecido, é filtro que não existe. Inventá-lo por rota seria escolher qual
+> coluna é "o pool desta agregação", e o precedente está medido (F2: um filtro de canal que
+> não filtrava, **esvaziava**). Exceção deliberada: `/sessions/active` recorta, porque lá o
+> chamador **nomeia** o pool e o teste é de pertinência, não de coluna. O resto é dívida
+> contada no `TODO.md`, nunca "por enquanto".
 
 **Escrita de config exige portão; LEITURA de config nem sempre — e isso é decidido, não
 omitido.** `calendar-api` e `dialog-api` gateiam escrita (`config.calendars` / `config.dialog_forms`,

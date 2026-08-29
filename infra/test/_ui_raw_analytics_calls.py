@@ -31,12 +31,27 @@ O que conta como credencial
 
 LIMITE CONHECIDO, declarado e nao escondido
 -------------------------------------------
-So e decidivel aqui o `fetch` cujo 1o argumento e um LITERAL. `fetch(url)` — com a URL
-montada noutro lugar — nao diz para onde vai; foi assim que o `CardRenderer.tsx` (os
-cartoes da Home) escapou desta via. Esses casos saem como linhas `UNDECIDABLE|…`: nao
-sao defeito nem cobertura, sao o pedaco que esta varredura NAO mede, e o probe os
-imprime como nota. Omiti-los faria a cobertura parecer maior do que e — que e
-exatamente o erro que este arquivo existe para nao repetir.
+So e decidivel aqui o `fetch` cujo 1o argumento e um LITERAL — ou um IDENTIFICADOR que
+esta varredura consegue resolver (ver abaixo). `fetch(montarUrl())` continua sem dizer
+para onde vai. Esses casos saem como linhas `UNDECIDABLE|…`: nao sao defeito nem
+cobertura, sao o pedaco que esta varredura NAO mede, e o probe os imprime como nota.
+Omiti-los faria a cobertura parecer maior do que e — que e exatamente o erro que este
+arquivo existe para nao repetir.
+
+RESOLUCAO DE `fetch(url)` (2026-08-29) — o balde de nao-medidos tinha defeito dentro
+------------------------------------------------------------------------------------
+Ate aqui, uma `const url` montada com template literal seguida de `fetch(url)` caia no
+balde UNDECIDABLE, e o probe imprimia "15 chamadas fora do alcance" com o resto
+VERDE. Ao gatear as rotas descobertas da analytics-api, DUAS delas foram achadas A MAO
+dentro desse balde, e as duas eram `fetch` cru contra endpoint que passou a exigir
+credencial — `useCustomer360.ts` (aba Cliente) e `AddCardModal.tsx` (opcoes do editor
+de cartao). Ou seja: o balde nao continha so ruido, continha as duas telas que
+quebrariam, e o numero "15" as tornava invisiveis contando-as.
+
+Agora, quando o 1o argumento e um identificador simples, procuramos a ULTIMA atribuicao
+`const <ident> = <literal>` antes da chamada e decidimos sobre ela. Nao resolve
+identificador vindo de parametro, de props ou de outra funcao — esses continuam
+UNDECIDABLE, e continuam contados.
 
 Saida: `HIT|arquivo|linha|path_de_teste|trecho`   (decidivel, candidato)
        `UNDECIDABLE|arquivo|linha|trecho`         (URL nao-literal)
@@ -66,6 +81,33 @@ DEF_RE = re.compile(r"(?:function|const)\s+([A-Za-z_$][\w$]*)\s*[\(=]")
 
 # `const BASE = ''` e afins: prefixo de URL que mora numa constante do arquivo.
 CONST_STR_RE = re.compile(r"const\s+([A-Za-z_$][\w$]*)\s*=\s*(['\"])(.*?)\2")
+
+# `fetch(url)` — 1o argumento e um identificador simples, sem chamada nem propriedade.
+BARE_IDENT_RE = re.compile(r"^([A-Za-z_$][\w$]*)\s*[,)]")
+
+# `const url = ` — a atribuicao cujo lado direito queremos decidir.
+CONST_ASSIGN_RE = r"const\s+%s\s*=\s*"
+
+
+COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+
+def _mask_comments(text: str) -> str:
+    """Comentarios viram espacos, PRESERVANDO offsets (e portanto os numeros de linha).
+
+    Por que (2026-08-29): a varredura casava `fetch(` dentro de PROSA. Das 15 linhas
+    UNDECIDABLE medidas antes desta mudanca, pelo menos duas eram comentario
+    (`dialog-hooks.ts:4` "fetch (mirrors …", `useCopilotState.ts:23` "fetch (e.g.
+    Date.now())"), e uma terceira apareceu no instante em que alguem escreveu um
+    comentario explicando um `fetch(url)`. Um contador de nao-medidos que conta prosa
+    infla justamente o numero que serve para dizer o tamanho do ponto cego.
+
+    Substituir por espacos (e nao remover) mantem `str.count('\\n')` e os offsets do
+    `finditer` exatos — o numero de linha reportado continua sendo o do arquivo real.
+    """
+    def _branco(m: re.Match) -> str:
+        return "".join("\n" if c == "\n" else " " for c in m.group(0))
+    return COMMENT_RE.sub(_branco, text)
 
 
 def _credential_helpers(text: str) -> set[str]:
@@ -125,7 +167,7 @@ def scan(root: Path) -> list[str]:
     for path in sorted(root.rglob("*")):
         if path.suffix not in (".ts", ".tsx") or not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = _mask_comments(path.read_text(encoding="utf-8", errors="replace"))
         helpers = _credential_helpers(text)
         consts = _string_consts(text)
         for m in CALL_RE.finditer(text):
@@ -138,6 +180,28 @@ def scan(root: Path) -> list[str]:
             snippet = text[m.start(): m.start() + 60].split("\n")[0].strip()
             rel = path.relative_to(root).as_posix()
             if window.lstrip()[:1] not in ("`", "'", '"'):
+                # `fetch(url)`: tenta a ULTIMA `const url = <literal>` antes daqui.
+                # Sem isto o caso mais comum de URL montada em duas linhas some do
+                # relatorio como "fora do alcance" — e foi la que estavam as duas
+                # chamadas que quebrariam ao gatear as rotas (2026-08-29).
+                ident = BARE_IDENT_RE.match(window.lstrip())
+                rhs = None
+                if ident:
+                    antes = text[: m.start()]
+                    ult = None
+                    for a in re.finditer(CONST_ASSIGN_RE % re.escape(ident.group(1)), antes):
+                        ult = a
+                    if ult is not None:
+                        rhs = antes[ult.end():]
+                if rhs is not None and rhs.lstrip()[:1] in ("`", "'", '"'):
+                    # RESOLVIDO. `None` aqui significa "aponta para outro servico",
+                    # nao "nao consegui ler" — e os dois nao podem cair no mesmo balde,
+                    # senao o numero de nao-medidos passa a contar chamadas que foram
+                    # medidas e absolvidas (`/api/work_queue/`, `/v1/workflow/`).
+                    alvo = _test_path(rhs, consts)
+                    if alvo is not None:
+                        hits.append(f"HIT|{rel}|{line}|{alvo}|{snippet}")
+                    continue
                 undecidable.append(f"UNDECIDABLE|{rel}|{line}|{snippet}")
                 continue
             test_path = _test_path(window, consts)

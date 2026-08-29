@@ -7109,39 +7109,91 @@ por quem devia".)*
 ---
 
 
-## Cobertura de credencial nas rotas `/reports/*` da analytics-api — o TERCEIRO eixo de autorização
+## Cobertura de credencial por ROTA — o TERCEIRO eixo de autorização ✅ FECHADO 2026-08-29
 
-**Medido em 2026-08-28** (achado colateral da T3 do `adr-relatorios-duas-superficies-e-lentes.md`).
+Descoberto em 2026-08-28 (achado colateral da T3 do `adr-relatorios-duas-superficies-e-lentes.md`),
+fechado em 2026-08-29. Histórico em `CHANGELOG.md`; a regra e o estado ficam no `CLAUDE.md`
+§ Security. Gate: `infra/test/probe_route_credential_coverage.sh` (A: censo AST · B: ao vivo).
 
-**12 das 38 rotas `/reports/*` não declaram principal algum.** Quatro verificadas ao vivo
-respondem **200 sem credencial**, enquanto as vizinhas respondem 401:
+**O recorte do achado não era o do eixo.** O TODO original falava de "12 das 38 rotas
+`/reports/*`". O censo mediu **19 descobertas em 73**, e as sete fora daquele prefixo
+carregavam a pior: `GET /sessions/{id}/stream` servia a **transcrição inteira do contato**
+sem credencial — enquanto a rota irmã `/v1/transcript/sessions/{id}`, feita para servir esse
+mesmo dado, já exigia. Resultado: 18 gateadas, 1 isenta nomeada (`/v1/health`).
 
-```
-200  /reports/usage                     ← consumida pela BillingPage (que AUTENTICA)
-200  /reports/evaluations
-200  /reports/agent-events/summary
-200  /reports/customers/cus_x/360       ← dado de CLIENTE
-401  /reports/sessions
-401  /reports/segments
-```
+O que sobrou está abaixo, contado. Nenhum destes é "por enquanto".
 
-Lista completa das 12: `/usage`, `/workflows`, `/campaigns`, `/evaluations`,
-`/evaluations/summary`, `/evaluations/quality`, `/customer-voice/instruments`,
-`/customers/{customer_id}/360`, `/agent-events/series`, `/agent-events/summary`,
-`/agent-events/categories`, `/evaluator-calibration`.
+---
 
-**Por que não foi consertado junto com o achado.** São 12 rotas com consumidores próprios;
-acrescentar `optional_pool_principal` a todas de uma vez troca um buraco por telas quebradas em
-lugares que ninguém mediu. Cada uma precisa de: (a) quem consome, (b) o consumidor manda Bearer,
-(c) o filtro de escopo faz sentido para aquele agregado (auditoria é ortogonal a pool; billing é
-tenant-wide por desenho — pode ser que a resposta certa para algumas seja *exigir credencial sem
-filtrar linha*).
+### Recorte de linha nas rotas recém-gateadas (dívida contada, aberta)
 
-**Por que os censos existentes não pegaram.** `probe_authz_single_verifier` conta **quem
-decodifica JWT**; o C4 conta **quem resolve escopo de pool**. Nenhum conta **quais rotas exigem
-credencial** — e é a regra já escrita no CLAUDE.md recorrendo pela terceira vez: *"um censo
-desenhado para um eixo não prova nada sobre o eixo vizinho"*. Desta vez o eixo descoberto é o
-mais grosseiro dos três: a rota não pede nada.
+**As doze rotas de `reports.py` exigem credencial e NÃO recortam linha.** Um operador
+escopado a um pool, autenticado, lê estes agregados inteiros. É estritamente melhor que o
+anônimo lê-los inteiros, e estritamente pior que o alvo.
 
-**O que fazer:** censo de COBERTURA no molde do C4 (AST sobre as assinaturas de rota, não
-`grep`), com linha de base declarada e as isenções NOMEADAS — nunca uma lista de "por enquanto".
+A causa é mecânica, não esquecimento: as `query_*` que as servem **não aceitam
+`accessible_pools`**. Fabricar o filtro por rota exigiria decidir, uma a uma, qual coluna é
+"o pool desta agregação" — e o precedente está medido: a F2 do ADR de relatórios encontrou
+um filtro de canal que não filtrava, **esvaziava** (subconsulta que o ClickHouse recusava,
+`except` devolvendo `data_unavailable`, 200 com zero linha, 683 testes verdes).
+
+| Rota | Query | Critério que falta decidir |
+|---|---|---|
+| `/reports/usage` | `query_usage_report` | `usage_events` não tem pool; a chave seria `session_id`→`sessions` |
+| `/reports/workflows` | `query_workflows_report` | idem, via `instance_id` |
+| `/reports/campaigns` | `query_campaigns_report` | idem, via `collect_token` |
+| `/reports/evaluations` · `/summary` · `/quality` | `query_evaluations_*` | join a `segments` (o pool que ATENDEU) × `sessions` (o de entrada) — é a D10 |
+| `/reports/customers/{id}/360` | `query_customer_360` | tem `sess_conds` compartilhado; `_session_scope_clause` serviria, mas exige alias no `FROM` de 3 queries |
+| `/reports/agent-events/*` | `query_agent_events_*` | `category_l1` é o `pool_id` por convenção do Arc 12 — convenção não é coluna |
+| `/reports/evaluator-calibration` | `query_evaluator_calibration` | eixo é o AVALIADOR, não o pool; pode ser que a resposta certa seja "não recorta" |
+
+**Exceção já feita:** `/sessions/active` recorta (403 `pool_scope_denied`), porque o chamador
+**nomeia** o pool — teste de pertinência à lista do token, não predicado de coluna.
+
+O `/reports/customers/{id}/360` é o mais urgente: é dado de CLIENTE, e a linha da tabela
+diz que o predicado já existe.
+
+---
+
+### Escopo por SESSÃO na leitura de um contato (dívida contada, aberta)
+
+Vale para **duas** rotas, e é uma dívida só: `GET /sessions/{id}/stream` e
+`GET /v1/transcript/sessions/{id}`. As duas exigem credencial; nenhuma confere se **aquela
+sessão** pertence ao escopo do chamador. Quem tem qualquer token do tenant lê qualquer
+contato.
+
+O padrão existe (`resolve_live_session_pools` + `_assert_session_in_scope`, em
+`supervisor.py`), mas só decide sessão **VIVA** — e metade do tráfego destas rotas é sessão
+FECHADA servida do ClickHouse, onde ele devolve conjunto vazio, que quem chama tem de ler
+como recusa. Aplicar só à metade viva trocaria um buraco por um buraco **intermitente**, que
+é pior de diagnosticar.
+
+O que falta decidir antes de implementar: o predicado da sessão fechada. Candidato natural é
+`_session_scope_clause` (entrou por pool meu ∪ pool meu atendeu), que é o mesmo que os
+relatórios já usam — mas ele é SQL sobre `sessions`, e estas rotas leem Redis primeiro.
+
+---
+
+### Achados colaterais, medidos ao fechar o eixo (não consertados)
+
+Nenhum é do eixo de credencial; os três apareceram porque o conserto passou por perto.
+
+1. **`useCampaignReport` chama rota que não existe.** `evaluation-hooks.ts:829` faz
+   `GET /v1/evaluation/reports/campaigns/{id}` → **404** (verificado ao vivo). Consumido por
+   `CampaignsPage` e `ReportsPage`, que mostram "sem relatório" desde sempre. O `.then(r =>
+   r.ok ? r.json() : null)` engole o 404. Consertar exige decidir **qual** agregado a tela
+   quer (`{total, completed, pending, in_review}` não é o que
+   `/reports/campaigns` da analytics devolve) — produto, não plumbing.
+
+2. **A aba Consumption do Billing lê o campo errado.** `/reports/usage` devolve
+   `{data, meta}` com 20 linhas de EVENTOS; `BillingPage.tsx:105` lê `data.rows` (undefined)
+   e o tipo que espera é `{dimension, total}` — AGREGADO. Duas discordâncias, e a tela diz
+   "No consumption data available" com o endpoint respondendo 200. Pré-existente ao gate
+   (o gate só provou que a credencial chega). Conserto = decidir se agrega no servidor ou
+   no cliente.
+
+3. **`mcp-server-plughub` não compila.** `src/lib/usage-emitter.ts:73` e `:102` — dois
+   `TS2345` em `EmitParams`. Consequência operacional: `docker compose up -d --build
+   platform-ui` **falha**, porque o platform-ui tem `depends_on: mcp-server-plughub` e o
+   compose constrói a dependência. O contorno é `build platform-ui` + `up -d --no-deps
+   platform-ui`. Não tocado (é do arco de metering).

@@ -25,7 +25,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -45,6 +45,8 @@ from .sessions        import router as sessions_router
 from .supervisor      import router as supervisor_router
 from .audit           import router as audit_router
 from .transcript      import router as transcript_router
+from .auth            import Principal, require_principal
+from .pool_auth       import PoolPrincipal, require_pool_principal
 
 
 @asynccontextmanager
@@ -184,11 +186,20 @@ async def health() -> JSONResponse:
 
 
 @app.post("/admin/performance-sync")
-async def trigger_performance_sync() -> JSONResponse:
+async def trigger_performance_sync(
+    principal: Principal = Depends(require_principal),
+) -> JSONResponse:
     """
     Arc 7d — Manual trigger for the performance score sync.
     Runs immediately (blocking the request) and returns the sync result.
     Useful for testing or forcing a refresh after data backfill.
+
+    Credencial (2026-08-29): token de SISTEMA, como os demais `/admin/*`. Ela vive
+    sob esse prefixo, recomputa o score que ALIMENTA O ROTEAMENTO
+    (`{tenant}:agent_perf:*`) e não tem chamador algum no repositório — era um
+    gatilho manual aberto a qualquer um. `require_principal` é o mesmo guard de
+    `/admin/consolidated`; alargá-la para o JWT de usuário daria a qualquer pessoa
+    logada o que hoje exige o segredo de sistema.
     """
     from .performance_job import run_performance_sync
     store: AnalyticsStore = app.state.store
@@ -198,9 +209,19 @@ async def trigger_performance_sync() -> JSONResponse:
 
 
 @app.post("/reports/admin/flush-synthetic")
-async def flush_synthetic(tenant_id: str = "tenant_demo") -> JSONResponse:
+async def flush_synthetic(
+    tenant_id: str = "tenant_demo",
+    pool_principal: PoolPrincipal = Depends(require_pool_principal),
+) -> JSONResponse:
     """Apaga a massa sintética (LIKE 'synthetic_%') do ClickHouse — par do flush da
-    evaluation-api, para o ciclo gerar/limpar do avaliador fake. Best-effort por tabela."""
+    evaluation-api, para o ciclo gerar/limpar do avaliador fake. Best-effort por tabela.
+
+    Credencial (2026-08-29): o irmão ESTRITO (`require_pool_principal`), não o aberto.
+    Isto é ESCRITA — cinco `ALTER TABLE … DELETE` — e o critério da casa é o de
+    `POST /supervisor/*`: numa fronteira de escrita, "não sei quem é" reprova, inclusive
+    no ramo sem-segredo, onde `optional_pool_principal` degrada aberto de propósito.
+    O consumidor (`platform-ui/src/api/evaluation-hooks.ts:516`) já mandava
+    `bearerHeaders(token)` — o portão que faltava era do lado de cá."""
     store: AnalyticsStore = app.state.store
     db = store._database
     deleted: dict[str, str] = {}

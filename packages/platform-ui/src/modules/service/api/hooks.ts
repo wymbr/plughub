@@ -281,7 +281,11 @@ export function useSessionStream(
 
     function connect() {
       if (closed) return
-      const url = `${BASE}/sessions/${encodeURIComponent(sessionId!)}/stream?tenant_id=${encodeURIComponent(tenantId)}`
+      // `_tok()` aqui pelo mesmo motivo do `/dashboard/operational`: é SSE, e
+      // `EventSource` não manda cabeçalho. Sem ele esta chamada passou a ser 401 em
+      // 2026-08-29, quando a rota deixou de servir a transcrição do contato a quem
+      // chamasse — e o sintoma seria o Console sem mensagens, sem erro nenhum.
+      const url = `${BASE}/sessions/${encodeURIComponent(sessionId!)}/stream?tenant_id=${encodeURIComponent(tenantId)}${_tok()}`
       const es  = new EventSource(url)
       esRef.current = es
       setStatus('connecting')

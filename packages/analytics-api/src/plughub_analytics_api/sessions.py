@@ -39,7 +39,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .pool_auth import PoolPrincipal, optional_pool_principal
+from .pool_auth import (
+    PoolPrincipal,
+    optional_pool_principal,
+    sse_pool_principal,
+)
 
 logger = logging.getLogger("plughub.analytics.sessions")
 
@@ -61,6 +65,7 @@ async def list_active_sessions(
     tenant_id: str = Query(..., description="Tenant identifier"),
     pool_id:   str = Query(..., description="Pool to list sessions for"),
     limit:     int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """
     Active sessions for a pool, worst sentiment first.
@@ -71,7 +76,24 @@ async def list_active_sessions(
     Each entry includes:
       session_id, channel, opened_at, handle_time_ms (running),
       latest_score (from Redis), latest_category
+
+    Escopo de pool (2026-08-29): aqui o recorte é membership, não predicado de
+    coluna — o chamador NOMEIA o pool, então "posso ver este pool?" é um teste de
+    pertinência à lista do token. É por isso que esta rota recorta e as doze de
+    `reports.py` não: lá seria preciso inventar qual coluna é o pool da agregação;
+    aqui o pool está no argumento.
     """
+    if pool_principal.accessible_pools is not None \
+            and pool_id not in pool_principal.accessible_pools:
+        # 403, não lista vazia: uma lista vazia é indistinguível de "este pool não
+        # tem sessão ativa", e é exatamente esse silêncio que o Console leria como
+        # dado. Recusa NOMEADA, com quem foi barrado no log.
+        logger.warning(
+            "sessions/active RECUSADO sub=%s pool=%s — fora do escopo do chamador %s",
+            pool_principal.sub, pool_id, sorted(pool_principal.accessible_pools),
+        )
+        raise HTTPException(status_code=403, detail="pool_scope_denied")
+
     store = request.app.state.store
     redis = request.app.state.redis
     try:
@@ -516,6 +538,7 @@ async def session_stream(
     session_id: str,
     request:    Request,
     tenant_id:  str = Query(..., description="Tenant identifier"),
+    pool_principal: PoolPrincipal = Depends(sse_pool_principal),
 ) -> StreamingResponse:
     """
     SSE stream of Redis session stream (read-only XREAD).
@@ -523,6 +546,27 @@ async def session_stream(
     First sends a 'history' event with all existing entries,
     then sends 'entry' events as new entries arrive.
     Sends ':keepalive' comment every 15s to prevent proxy timeouts.
+
+    ── Credencial (2026-08-29) ──────────────────────────────────────────────────
+    Esta rota servia a TRANSCRIÇÃO INTEIRA do contato — `content` de cada mensagem
+    de cliente e de agente — a quem chamasse, sem credencial. Medido ao vivo antes
+    de fechar: `GET /sessions/<id real>/stream?tenant_id=tenant_demo` sem header
+    devolvia o diálogo completo. E o agravante não é a rota sozinha: a IRMÃ que
+    existe para servir esse mesmo dado, `/v1/transcript/sessions/{id}`, já exigia
+    credencial desde sempre. Duas portas para o mesmo dado e só uma trancada — a
+    fechada dá a impressão de que o dado está protegido.
+
+    O gate é `sse_pool_principal` e não `optional_pool_principal` por um motivo de
+    transporte: `EventSource` não envia cabeçalho, então o token chega em `?token=`.
+    Aquele irmão lê as DUAS origens pela mesma função que `/dashboard/*` usa, e
+    DELEGA a decisão ao verificador único — não há segunda semântica de recusa aqui.
+
+    ⚠️ O que esta mudança NÃO faz: conferir se ESTA sessão pertence ao escopo do
+    chamador. A irmã `/v1/transcript/*` também não confere — o padrão que existe
+    (`resolve_live_session_pools`, em `supervisor.py`) só decide sessão VIVA, e
+    metade do tráfego daqui é sessão fechada servida do ClickHouse, onde a resposta
+    seria fail-open. Fazer só a metade viva trocaria um buraco por um buraco
+    intermitente. Dívida contada no `TODO.md`, para as DUAS rotas juntas.
     """
     redis      = request.app.state.redis
     store      = request.app.state.store
@@ -749,6 +793,7 @@ async def get_workflow_trace(
     session_id: str,
     request:    Request,
     tenant_id:  str = Query(...),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """
     Returns the ordered trace node list for a webhook workflow session.
@@ -1035,6 +1080,7 @@ async def get_pipeline_state(
     session_id: str,
     request:    Request,
     tenant_id:  str = Query(...),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> JSONResponse:
     """
     Reads pipeline_state from Redis for a webhook workflow session.

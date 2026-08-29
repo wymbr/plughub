@@ -5,10 +5,18 @@
  * and a contacts summary — all keyed by customer_id.
  *
  * Endpoint: GET /reports/customers/{customer_id}/360?tenant_id (analytics-api, ADR §D4).
- * Same /reports proxy the Vista Processos / journeys use. Optional auth. Fail-soft.
+ * Same /reports proxy the Vista Processos / journeys use. Fail-soft.
+ *
+ * ⚠️ "Optional auth" (o que esta linha dizia até 2026-08-29) descrevia um contrato que
+ * era um DEFEITO, não uma escolha: a rota não declarava principal algum e respondia
+ * 200 anônimo — medido — servindo o 360 de qualquer cliente. Ela passou a exigir
+ * credencial, e por isso a chamada aqui virou `apiFetch`: com `fetch` cru a aba
+ * Cliente ficaria VAZIA, e o `catch` abaixo transformaria o 401 em "este cliente não
+ * tem dado", que é indistinguível de resposta.
  */
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/api/apiFetch";
 
 const REPORTS_BASE = "/reports";
 const TENANT_ID    = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
@@ -70,7 +78,7 @@ export function useCustomer360(customerId: string | null): UseCustomer360Return 
       tenant_id: TENANT_ID,
     })}`;
 
-    fetch(url)
+    apiFetch(url)
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then(d => { if (!cancelled) { setData(d as Customer360); setLoading(false); } })
       .catch(e => { if (!cancelled) { setError(String(e)); setData(null); setLoading(false); } });

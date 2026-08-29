@@ -4,10 +4,19 @@
  * tab can distinguish a process (PRC-…) from an individual contact (session).
  *
  * Endpoint: GET /reports/journeys?tenant_id&customer_id=<id> (analytics-api, ADR §D2).
- * Same proxy the Vista Processos uses. Optional auth (no 401). Graceful degradation.
+ * Same proxy the Vista Processos uses. Graceful degradation.
+ *
+ * ⚠️ "Optional auth (no 401)" — o que esta linha dizia — deixou de valer em
+ * 2026-08-27, quando `optional_pool_principal` passou a recusar o anônimo. A chamada
+ * continuou em `fetch` cru, então o painel de jornadas em aberto do Histórico está
+ * recebendo 401 desde então. Achado em 2026-08-29 pela varredura
+ * `_ui_raw_analytics_calls.py`, depois que ela passou a resolver `fetch(url)` — antes
+ * este call site vivia no balde de "não medidos", contado e invisível. Comentário que
+ * descreve contrato revogado é da mesma família do valor plausível: parece resposta.
  */
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/api/apiFetch";
 
 const REPORTS_BASE = "/reports";
 const TENANT_ID    = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
@@ -51,7 +60,7 @@ export function useCustomerJourneys(customerId: string | null): UseCustomerJourn
       page_size: "50",
     })}`;
 
-    fetch(url)
+    apiFetch(url)
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then(d => { if (!cancelled) { setJourneys(d.data ?? []); setLoading(false); } })
       .catch(e => { if (!cancelled) { setError(String(e)); setJourneys([]); setLoading(false); } });

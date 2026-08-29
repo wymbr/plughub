@@ -356,10 +356,24 @@ class TestOverlaySentiment:
 # e e por isso que existe `TestCustomerHistoryPoolGate`: sem ela, a suite ficaria
 # verde num mundo em que o portao foi removido.
 def _override_pool_principal(app, accessible=None):
-    from plughub_analytics_api.pool_auth import PoolPrincipal, optional_pool_principal
-    app.dependency_overrides[optional_pool_principal] = lambda: PoolPrincipal(
+    """Injeta um chamador AUTENTICADO nas duas dependências de escopo do router.
+
+    São duas porque o transporte é diferente, não a decisão: `sse_pool_principal`
+    aceita `?token=` (o `EventSource` do `/stream` não manda cabeçalho) e delega o
+    veredicto a `optional_pool_principal`. Sobrescrever só a primeira deixaria os
+    testes de stream batendo em 401 — e sobrescrever só ela é justamente o estado
+    em que este helper estava quando o gate do stream entrou (2026-08-29).
+    """
+    from plughub_analytics_api.pool_auth import (
+        PoolPrincipal,
+        optional_pool_principal,
+        sse_pool_principal,
+    )
+    fake = lambda: PoolPrincipal(
         accessible_pools=accessible, tenant_id="tenant_test", sub="test",
     )
+    app.dependency_overrides[optional_pool_principal] = fake
+    app.dependency_overrides[sse_pool_principal]      = fake
     return app
 
 

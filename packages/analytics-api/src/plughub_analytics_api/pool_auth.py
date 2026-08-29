@@ -43,7 +43,7 @@ import logging
 from typing import Any
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from plughub_authz import LEGACY_UNRESTRICTED_MARK, resolve_scope
 
@@ -420,6 +420,44 @@ async def require_pool_principal(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="auth_required",
         )
+    return await optional_pool_principal(credentials)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Irmão SSE — mesma decisão, as DUAS origens de token
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def sse_pool_principal(
+    request: Request,
+    token: str | None = Query(None, description="Bearer do auth-api (SSE)"),
+) -> PoolPrincipal:
+    """
+    Como `optional_pool_principal`, mas aceita o token em `?token=` além do cabeçalho.
+
+    ── Por que uma dependência, e não a decisão no corpo (2026-08-29) ───────────
+    `EventSource` não envia cabeçalho: uma rota SSE gateada só pelo `Authorization`
+    fica inalcançável pelo browser — foi exatamente o que aconteceu com `/dashboard/*`
+    ao endurecer o demo (401 no stream, irmãos verdes). A leitura das duas origens já
+    é UMA função (`raw_bearer_from_request`), compartilhada com a identidade do
+    dashboard, para não existir endpoint que autorize por uma origem e escope por
+    outra.
+
+    Ser uma **dependência** (e não uma chamada no corpo do handler) é o que a torna
+    substituível por `dependency_overrides` no teste e visível ao censo de cobertura
+    (`_route_principal_census.py`) sem alargar a lista de guards-no-corpo — aquela
+    lista existe para `audit.py`, que precisa GRAVAR trilha antes de responder, e
+    cada nome novo nela é um caso que o censo deixa de conferir na assinatura.
+
+    A decisão em si é DELEGADA ao verificador único: montamos a credencial a partir
+    da origem que existir e chamamos `optional_pool_principal`. Nada é redecidido
+    aqui — nem a semântica de `[]`, nem o ramo `analytics_open_access`, nem as
+    mensagens de recusa. Duas respostas para "quem é este chamador" e a mais
+    permissiva passaria a valer.
+    """
+    raw = raw_bearer_from_request(request, token)
+    credentials = (
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials=raw) if raw else None
+    )
     return await optional_pool_principal(credentials)
 
 
