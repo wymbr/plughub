@@ -5238,6 +5238,49 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 > · ⚠️ **`financial` é a MESMA palavra em dois enums** — `DataCategory` (classe de dado) e
 >   `ContextMaskingType` (forma de máscara). Convivem por acaso; num mapa que cruze os dois, colidem.
 >
+> ### 🆕 F0 do `masked` TIPADO — censo feito em 2026-08-29
+>
+> Instrumento re-executável: `infra/test/q_masked_declaration_census.sh` (três eixos, cada um com
+> testemunha de presença). **Não é gate — é número.** O ADR ainda não foi escrito; isto é o que ele
+> tem de partir.
+>
+> · **Quatro declarações, um resolvedor.** O booleano é declarado em **2×2**: nível do nó
+>   (`skill.ts:476` `MenuStep.masked` · `dialog.ts:314` `QuestionNode.masked`) × nível do campo
+>   (`skill.ts:503` · `dialog.ts:258`). A precedência (*campo vence step*) é aplicada **uma vez**, em
+>   `skill-flow-engine/src/masking-policy.ts` (`isFieldMasked` + `computeMaskedFieldIds`, com teste
+>   próprio), e o `form_get` (`mcp-server/tools/dialog.ts:110-140`) **achata** as duas declarações do
+>   DialogForm em `render.fields[].masked`, que o step `menu` consome. **Arquitetura favorável:** a
+>   tipagem muda declaração + normalizador; os consumidores a jusante recebem `masked_fields[]` (lista
+>   de ids) e só precisam mudar onde o TIPO tiver de chegar (máscara por papel, regra de canal).
+> · 🔴 **A submissão de form ENTRA na transcrição durável, e o campo não-declarado vai em CLARO.**
+>   Medido ao vivo: 2 linhas `[Formulário: …]` em `plughub_demo.messages` (`author_role=customer`,
+>   contra 1 564 de testemunha), com `senha` e `codigo_2fa` redigidos e **`email` em claro** — porque
+>   o autor do form não marcou `masked`. **O catálogo TEM regra para ele** (`email_addr`, com
+>   `detect_pattern` e `lgpd=pessoal`) e ela não é aplicada nesse caminho. Não é buraco no catálogo:
+>   é §1.4 do ADR em ato — **detecção** e **declaração** moram em casas separadas, e o caminho de
+>   escrita do bridge consulta só a declaração. É o argumento central do `masked` tipado, medido em
+>   vez de afirmado.
+> · 🟡 **`DialogFormRenderer.tsx` ignora `masked` — zero ocorrências.** A 4ª superfície do dialog
+>   primitive (Console: aprovação, wrap-up, collect-form genérico) não honra a declaração, então o
+>   valor iria para `payload.answers` → `workflow_resume` → `pipeline_state`, contra a invariante
+>   *"nunca escrever valor mascarado em pipeline_state"*. **Exposição × dano medidos e diferentes:**
+>   dos 10 DialogForms do tenant, **1** declara campo masked (`dialog_limite_solicitacao`), e ele não
+>   é dos que chegam ao Console (aprovação/wrap-up/demo têm zero). **Armadilha ARMADA, dano hoje 0** —
+>   e é o primeiro form masked roteado ao Console que a dispara.
+> · ⚠️ **Ordem entre ADRs:** a S1 do [`adr-deploy-time-content-snapshot`](docs/adr/adr-deploy-time-content-snapshot.md)
+>   e o `masked` tipado **mexem no MESMO bloco `render`** do `form_get` (a S1 leva `captures`; a
+>   tipagem teria de levar o tipo em `render.fields[].masked`). Fazer as duas sem decidir a ordem é
+>   colisão de contrato — não é bloqueio de nenhuma das duas, é decisão a tomar antes da segunda.
+> · ✅ **Teto de `category_l1..l4` CONFERIDO — a prosa do `CLAUDE.md` estava certa**, e agora é
+>   medição: regex `AGENT_EVENT_CATEGORY_REGEX = /^[a-z0-9_]+(\.[a-z0-9_]+){1,4}$/` aceita **2–5**
+>   segmentos · `decomposeCategoryLevels` extrai **4** (`const [l1,l2,l3,l4] = split(".")` — o 5º cai
+>   no destructuring, em silêncio) · DDL tem **4** colunas, e `category_l4` **nem está no `ORDER BY`**
+>   · profundidade 5 da árvore exigiria **8** (3 do `pool.skill.metric` + 5 do caminho). A F4 do
+>   [`adr-dialog-tree-options`](docs/adr/adr-dialog-tree-options.md) segue bloqueada como escrito.
+>   **`agent_business_events` está VAZIA (0 linhas)** ⇒ bloqueio **latente**: sem exposição e, o que
+>   importa para a fase, **sem backfill**. Nota adjacente: tabela vazia também significa que nenhum
+>   skill deste ambiente emite `agent_event` — o Arc 12 não tem produtor vivo aqui.
+>
 > ### 🆕 O que a V2b deixou aberto (2026-08-29) — achados FORA do escopo dela
 >
 > · 🔴 **`MaskingDisplayRule` é redefinida à mão no `platform-ui`** (`MaskedToken.tsx:43-57`:
