@@ -108,6 +108,8 @@ export interface DialogFormField {
   required?: boolean
   value?: string | number | boolean
   options?: DialogOption[]
+  /** Declaração de mascaramento — `boolean | string` desde a T2 (string = id de tipo). */
+  masked?: boolean | string
 }
 interface DialogNode {
   id: string
@@ -119,11 +121,42 @@ interface DialogNode {
   fields?: DialogFormField[]
   output_key?: string
   ask_when?: AskWhen
+  masked?: boolean | string
 }
 interface DialogFormDoc {
   name?: string
   default_locale?: string
   nodes?: DialogNode[]
+}
+
+/**
+ * maskedDeclarations — ids declarados como mascarados neste form, nó e campo.
+ *
+ * ⚠️ Esta superfície NÃO PODE honrar `masked`, e é por isso que ela RECUSA em vez de
+ * renderizar. O Console submete por `workflow_resume`, e nesse caminho **não existe
+ * masked scope**: o valor digitado iria direto para `payload.answers` →
+ * `pipeline_state`, contra a invariante absoluta *"valor mascarado nunca entra em
+ * pipeline_state, Redis, stream ou log"* (D4 do ADR `adr-masked-typed-declaration`).
+ *
+ * Renderizar como `<input type="password">` seria a correção que PARECE certa e é a
+ * pior: protege a TELA e deixa o valor cair no store, trocando um vazamento visível
+ * por um silencioso. Recusar é a única leitura honesta do que esta superfície sabe
+ * fazer — e recusa o FORM INTEIRO, não o campo: submeter sem ele entregaria ao
+ * workflow uma resposta incompleta indistinguível de "o humano deixou em branco".
+ *
+ * Estado medido em 2026-08-29: dos 10 DialogForms do tenant, 1 declara campo
+ * mascarado (`dialog_limite_solicitacao`, o `cvv`) e ele NÃO chega ao Console —
+ * aprovação, wrap-up e demo têm zero. Armadilha ARMADA, dano zero; dispara no
+ * primeiro form mascarado roteado para cá.
+ */
+export function maskedDeclarations(form: DialogFormDoc | null | undefined): string[] {
+  const out: string[] = []
+  const declared = (m: unknown) => m !== undefined && m !== false && m !== ""
+  for (const n of form?.nodes ?? []) {
+    if (declared(n.masked)) out.push(n.output_key || n.id)
+    for (const f of n.fields ?? []) if (declared(f.masked)) out.push(f.id)
+  }
+  return out
 }
 
 // ── Render-prop state exposed to a consumer overlay (approval etc.) ───────────
@@ -356,6 +389,8 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
 
   const locale = form?.default_locale
   const disabled = !!inputsDisabled
+  // T4 — a recusa e decidida ANTES de qualquer render de input.
+  const maskedFields = maskedDeclarations(form)
 
   // Field editor (interaction:"form" fields) — bool/select/date/money/number/text.
   const renderField = (f: DialogFormField) => (
@@ -489,6 +524,24 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
           {!form ? (
             <div className="text-sm text-muted-light">
               {t("formFill.noForm", { defaultValue: "Loading form…" })}
+            </div>
+          ) : maskedFields.length > 0 ? (
+            /* T4 — RECUSA, e nao renderizacao decorada. Ver `maskedDeclarations`:
+               esta superficie nao tem masked scope, entao o valor digitado iria para
+               `pipeline_state`. Sem inputs e sem submit — recusar alto e a postura da
+               casa quando a alternativa e degradar em masking. */
+            <div className="text-sm text-red-text bg-red-light border border-red/30 rounded p-3 space-y-2">
+              <div className="font-semibold">
+                {t("formFill.maskedRefused.title", { defaultValue: "This form cannot be filled here" })}
+              </div>
+              <p className="text-xs">
+                {t("formFill.maskedRefused.body", {
+                  defaultValue: "It declares masked fields, and this surface has no masked scope — the value would reach the workflow state in clear. Collect it through a channel that supports masked input.",
+                })}
+              </p>
+              <p className="text-xs font-mono text-muted">
+                {t("formFill.maskedRefused.fields", { defaultValue: "Masked fields" })}: {maskedFields.join(", ")}
+              </p>
             </div>
           ) : (
             <>

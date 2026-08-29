@@ -248,6 +248,11 @@
       "contacts":     "Contacts",
       "total":        "total",
       "resolved":     "resolved",
+    "maskedRefused": {
+      "title":  "This form cannot be filled here",
+      "body":   "It declares masked fields, and this surface has no masked scope — the value would reach the workflow state in clear. Collect it through a channel that supports masked input.",
+      "fields": "Masked fields"
+    },
       "open":         "open",
       "last":         "last",
       "none":         "No contacts.",

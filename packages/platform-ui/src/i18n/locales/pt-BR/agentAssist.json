@@ -279,6 +279,11 @@
     "submit":          "Enviar",
     "yes":             "Sim",
     "resolved":        "Enviado. O workflow vai continuar.",
+    "maskedRefused": {
+      "title":  "Este formulário não pode ser preenchido aqui",
+      "body":   "Ele declara campos mascarados, e esta superfície não tem escopo de mascaramento — o valor chegaria ao estado do workflow em claro. Colete por um canal que suporte entrada mascarada.",
+      "fields": "Campos mascarados"
+    },
     "conflict": {
       "terminal": "Esta tarefa já foi encerrada por outra pessoa. Suas respostas NÃO foram salvas.",
       "inFlight": "Outro encerramento desta tarefa já está em curso. Suas respostas NÃO foram salvas.",

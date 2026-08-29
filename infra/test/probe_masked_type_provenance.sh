@@ -18,6 +18,7 @@
 #   B.  a coluna EXISTE na tabela viva
 #   C.  ORACULO — a ausencia e distinguivel do vazio? (map vazio != campo ausente)
 #   D.  censo das casas de placeholder — reprova a quarta
+#   E.  T4 — a 4a superficie RECUSA form mascarado (nao renderiza decorado)
 #
 # Tres estados: OK / FALHA / INCONCLUSIVO (nunca OK com ramo inconclusivo).
 set -u
@@ -153,6 +154,53 @@ elif [ "$N_CASAS" -lt 3 ] 2>/dev/null; then
   huh "MENOS de 3: alguma casa sumiu ou o padrao de busca nao alcanca mais — recontar"
 else
   bad "${N_CASAS} casas: apareceu uma NOVA. Consolidar antes de crescer o numero"
+fi
+
+# -- E. T4: a quarta superficie recusa ----------------------------------------
+# O Console submete por `workflow_resume`, caminho SEM masked scope: o valor iria
+# para pipeline_state. Renderizar como <input type="password"> e a correcao que
+# PARECE certa e e a pior — protege a tela e deixa o valor cair no store, trocando
+# um vazamento visivel por um silencioso. Por isso o ramo exige RECUSA, e exige que
+# ela seja decidida ANTES de qualquer input.
+echo
+echo "-- E. T4 — DialogFormRenderer recusa form mascarado ----------"
+RND="packages/platform-ui/src/modules/agent-assist/components/DialogFormRenderer.tsx"
+if [ ! -f "$RND" ]; then
+  huh "renderer ausente: $RND"
+else
+  # 1. o predicado existe e e EXPORTADO (ancora simbolica, nao string solta)
+  if grep -q "export function maskedDeclarations" "$RND"; then
+    ok "predicado \`maskedDeclarations\` exportado"
+  else
+    bad "sem \`maskedDeclarations\` — a deteccao voltou a ser implicita"
+  fi
+  # 2. a recusa esta no caminho de render, ANTES dos inputs
+  if grep -q "maskedFields.length > 0 ?" "$RND"; then
+    ok "recusa no caminho de render"
+  else
+    bad "sem ramo de recusa — o form mascarado voltaria a renderizar em claro"
+  fi
+  # 3. TESTEMUNHA NEGATIVA: `type="password"` nao pode aparecer aqui.
+  #    Se aparecer, alguem trocou a recusa por decoracao — que e exatamente o
+  #    conserto errado, e o unico que passaria despercebido numa revisao rapida.
+  # Comentario EXCLUIDO, e a exclusao e load-bearing: o cabecalho de
+  # `maskedDeclarations` cita `<input type="password">` textualmente para explicar
+  # por que NAO usa-lo — e um contador ingenuo acusa justamente a prosa que
+  # documenta a decisao. Mesma armadilha do ramo A de probe_legacy_display_rule_closed,
+  # e ela pegou este gate na primeira execucao.
+  PWD_CODE="$(grep -n 'type="password"' "$RND"     | awk '{ l=$0; sub(/^[0-9]+:/,"",l); sub(/^[ 	]+/,"",l); if (l !~ /^(\/\/|\*|\/\*)/) print }')"
+  if [ -n "$PWD_CODE" ]; then
+    bad "ha <input type=password> no renderer — recusa trocada por DECORACAO; o valor volta a pipeline_state"
+  else
+    ok "nenhum input de senha — a superficie recusa em vez de fingir que suporta"
+  fi
+  # 4. i18n nos DOIS locales (invariante do CLAUDE.md)
+  N_LOC=0
+  for L in pt-BR en; do
+    grep -q "maskedRefused" "packages/platform-ui/src/i18n/locales/$L/agentAssist.json" 2>/dev/null && N_LOC=$((N_LOC+1))
+  done
+  if [ "$N_LOC" = "2" ]; then ok "i18n nos dois locales"
+  else bad "i18n em ${N_LOC}/2 locales — a tela mostraria a CHAVE crua"; fi
 fi
 
 # -- veredicto ----------------------------------------------------------------
