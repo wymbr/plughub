@@ -75,14 +75,38 @@
     }
   },
   "resources": {
-    "filter": { "from": "From", "to": "to", "allPools": "All pools", "allChannels": "All channels" },
+    "filter": {
+      "from": "From", "to": "to",
+      "allPools": "All pools", "allChannels": "All channels",
+      "periodOnly": "this lens honours the date range only",
+      "periodOnlyHint": "This lens ignores the pool filter: an LLM account's spend belongs to the tenant and does not split by pool."
+    },
     "mode": { "evolve": "Evolve", "compare": "Compare" },
     "lens": {
       "label": "Lens:",
       "pool_volume": "Volume",
       "pool_queue": "Queue",
       "pool_occupancy": "Capacity",
-      "pool_sla": "SLA"
+      "pool_sla": "SLA",
+      "account_tokens": "Tokens by account"
+    },
+    "tokens": {
+      "title": "LLM consumption by account",
+      "hint": "All consumption in the period, whether or not it is tied to a contact. NOT comparable with the tokens lens in Analytics › Sessions, which measures the cost of the filtered contacts — different populations.",
+      "periodOnly": "⚠ honours the date range only",
+      "error": "The query failed; this is not absence of consumption",
+      "noData": "No LLM consumption in the period.",
+      "epochHint": "The attribution series starts on {{date}} — before that the event did not carry the account identity.",
+      "in": "Input tokens",
+      "out": "Output tokens",
+      "uncatalogued": "account not in catalogue",
+      "unidentified": "no account identified",
+      "cols": { "account": "Account", "model": "Model", "profile": "Profile", "source": "Source", "in": "Input", "out": "Output", "sessions": "Sessions" },
+      "note": {
+        "uncatalogued": "{{count}} event(s) from an account that spent but is not in Resources › LLM Accounts — the spend is attributable to the key, not to the catalogue entry.",
+        "unidentified": "{{count}} event(s) with no account, dated on or after the epoch. The epoch has DAY granularity: events from the epoch day itself cannot be separated from history, so this number is a CEILING for the propagation defect, not a measure of it.",
+        "preEpoch": "{{count}} event(s) before {{date}}, when the event did not yet carry the account. They are excluded from the table and cannot be fixed."
+      }
     }
   },
   "tabs": {

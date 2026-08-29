@@ -40,6 +40,23 @@ from __future__ import annotations
 # Data em que o produtor passou a carimbar a chave de atribuição (T2).
 # Linha com `timestamp` anterior a isto tem `segment_id`/`source`/conta vazios por
 # AUSÊNCIA DE MECANISMO, não por defeito do chamador.
+#
+# ⚠️ **LIMITE MEDIDO — a granularidade é de DIA, e o corte é de INSTANTE.**
+# A T1, a T2 e este corte entraram no MESMO dia (2026-08-28), então os eventos de
+# antes da T2 *naquele dia* passam pelo predicado e caem no balde "pós-época e sem
+# conta" — que a regra acima manda ler como DEFEITO. Medido em 2026-08-29, na F3: os
+# oito eventos assim classificados são `t1-verify-B`/`t1-verify-C`, as sessões de
+# verificação da própria T1, emitidas às 20:33 e 20:37; o primeiro evento COM conta é
+# de 20:59.
+#
+# Consequência para quem lê: **o contador de "sem conta" é um TETO do defeito, não a
+# medida dele**, enquanto a janela incluir o dia da época. Quem exibe esse número tem
+# de dizer isso (`AccountTokensPanel` diz).
+#
+# Por que não foi convertido para `DateTime` aqui: o valor teria de ser um instante, e
+# o único instante disponível seria escolhido OLHANDO os dados desta instalação —
+# ajustar a constante para a amostra ficar limpa é a definição de fitting. A conversão
+# é legítima quando houver o registro de deploy da T2; até lá, o limite é declarado.
 USAGE_ATTRIBUTION_EPOCH = "2026-08-28"
 
 

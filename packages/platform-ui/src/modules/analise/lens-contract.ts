@@ -67,8 +67,14 @@ export type MetricAggregation = 'sum' | 'avg' | 'recomputed'
  * `contact` entrou na F2 com a superfície A: ali a lente não compara entidades ao
  * longo do tempo — ela agrega a POPULAÇÃO filtrada em buckets. É outra família, e
  * confundi-las foi o que produziu a mesa como página (D6).
+ *
+ * `account` entrou na F3 e é a **previsão testável da D6** se cumprindo: *"a lente de
+ * token introduz o terceiro tipo de entidade (a conta LLM, depois de agente e pool).
+ * Se ao implementar o token for preciso tocar naquelas cinco condicionais do seletor,
+ * o contrato não foi extraído."* Não foi preciso — as condicionais leem
+ * `lensDef.entity === 'pool'` desde a F1, e acrescentar um quarto valor não as toca.
  */
-export type LensEntity = 'agent' | 'pool' | 'contact'
+export type LensEntity = 'agent' | 'pool' | 'contact' | 'account'
 
 /**
  * A qual SUPERFÍCIE a lente pertence (D7).
@@ -184,6 +190,8 @@ export type LensChart =
    * desenhar é do componente — é o que `evidence: 'delegated'` já significa.
    */
   | 'pool_panel'
+  /** Tabela de consumo por CONTA LLM × modelo × origem (F3 · a metade B do token). */
+  | 'account_tokens'
 
 export interface ReportMetric {
   key:         string
@@ -444,6 +452,26 @@ export const REPORT_LENSES = [
     chart: 'pool_panel',
     surface: 'resources',
   },
+  {
+    // T3 · metade B — o consumo visto do lado da OFERTA.
+    //
+    // `entity: 'account'` é o terceiro tipo, e é a previsão da D6 se cumprindo.
+    //
+    // `honors: 'period_only'` NÃO é folga: o gasto de uma conta é fato de TENANT e não
+    // se reparte por pool. O endpoint RECUSA `?pool_id=` com 422 em vez de ignorá-lo —
+    // devolver o total sob o rótulo de um recorte é a mentira mais cara desta
+    // superfície, porque o número é plausível.
+    //
+    // ⚠️ A população desta lente é o `usage_events` INTEIRO, e por isso ela NÃO é
+    // comparável com a lente `tokens` da superfície A. Medido em 2026-08-29: a de lá
+    // junta com as sessões filtradas e enxerga 945 dos 1 991 tokens do período. Duas
+    // perguntas, dois números, e somá-los ou compará-los é erro.
+    id: 'account_tokens', entity: 'account', domain: 'universal',
+    metrics: [], evidence: 'delegated', comparability: 'always',
+    source: 'own', honors: 'period_only',
+    chart: 'account_tokens',
+    surface: 'resources',
+  },
 ] as const satisfies readonly ReportLens[]
 
 export type LensId = (typeof REPORT_LENSES)[number]['id']
@@ -478,6 +506,9 @@ const bySource = <S extends DeclaredLens['source']>(source: S) =>
 const byChart = <C extends DeclaredLens['chart']>(chart: C) =>
   (l: DeclaredLens): l is Extract<DeclaredLens, { chart: C }> => l.chart === chart
 
+const bySurface = <S extends DeclaredLens['surface']>(surface: S) =>
+  (l: DeclaredLens): l is Extract<DeclaredLens, { surface: S }> => l.surface === surface
+
 /** Lentes da superfície A, na ordem em que a faixa as apresenta. */
 export const CONTACT_LENSES = REPORT_LENSES.filter(byEntity('contact'))
 
@@ -499,22 +530,33 @@ export const CONTACT_LENSES = REPORT_LENSES.filter(byEntity('contact'))
 export const COMPARE_LENSES = REPORT_LENSES.filter(bySource('agents_compare'))
 
 /**
- * Lentes do modo **evoluir** da Superfície B — os painéis por pool re-hospedados de
- * `/analise/pools` (F3).
+ * Lentes do modo **evoluir** da Superfície B.
  *
- * Recorte pela FORMA e não pela superfície: a B tem duas famílias sob o mesmo
- * endereço — estes painéis (modo evoluir) e as dez da mesa (modo comparar). Filtrar
- * por `surface === 'resources'` traria as duas juntas e a faixa mostraria lentes que o
- * modo corrente não desenha, que é o defeito que a mesa acabou de ter com as lentes
- * de contato.
+ * O recorte tem DOIS predicados, e nenhum sozinho serve:
+ *
+ *   `surface: 'resources'` sozinho traria também as dez lentes da MESA, que são desta
+ *   superfície mas do outro modo — a faixa ofereceria lente que o modo corrente não
+ *   desenha, o defeito que a mesa acabou de ter com as lentes de contato;
+ *
+ *   `source: 'own'` sozinho traria `list` e `disposition`, que são da superfície A.
+ *
+ * É a mesma lição de "um censo desenhado para um eixo não prova nada sobre o vizinho",
+ * aplicada a um filtro: superfície e modo são eixos distintos.
  */
-export const RESOURCE_PANEL_LENSES = REPORT_LENSES.filter(byChart('pool_panel'))
+export const RESOURCE_PANEL_LENSES = REPORT_LENSES
+  .filter(bySurface('resources'))
+  .filter(bySource('own'))
 
 export type ResourcePanelLensId = (typeof RESOURCE_PANEL_LENSES)[number]['id']
 
 export function isResourcePanelLens(id: string): id is ResourcePanelLensId {
   return RESOURCE_PANEL_LENSES.some(l => l.id === id)
 }
+
+/** Os quatro painéis re-hospedados de `/analise/pools` — subconjunto do acima. */
+export const POOL_PANEL_LENSES = REPORT_LENSES.filter(byChart('pool_panel'))
+
+export type PoolPanelLensId = (typeof POOL_PANEL_LENSES)[number]['id']
 
 export type ContactLensId = (typeof CONTACT_LENSES)[number]['id']
 

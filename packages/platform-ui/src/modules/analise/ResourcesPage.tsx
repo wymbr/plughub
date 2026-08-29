@@ -41,17 +41,24 @@ import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import AnalisePoolsPage from './AnalisePoolsPage'
 import AgentsBenchPage from './AgentsBenchPage'
+import AccountTokensPanel from './AccountTokensPanel'
 import {
-  RESOURCE_PANEL_LENSES, isResourcePanelLens,
-  type ResourcePanelLensId,
+  RESOURCE_PANEL_LENSES, isResourcePanelLens, lensById, assertNever,
+  type ResourcePanelLensId, type PoolPanelLensId,
 } from './lens-contract'
 
 type Mode = 'evolve' | 'compare'
 
 const inp = 'text-sm border border-border-strong rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30'
 
-/** Lente da faixa → sub-aba do painel re-hospedado. */
-const PANEL_SUBTAB: Record<ResourcePanelLensId, 'volume' | 'queue' | 'capacity' | 'sla'> = {
+/**
+ * Lente da faixa → sub-aba do painel re-hospedado.
+ *
+ * Tipado sobre `PoolPanelLensId` (as quatro de forma `pool_panel`), não sobre todas as
+ * do modo evoluir: uma lente de OUTRA forma não pertence a este mapa, e o compilador
+ * é quem diz isso. Foi assim que `account_tokens` não entrou aqui por engano.
+ */
+const PANEL_SUBTAB: Record<PoolPanelLensId, 'volume' | 'queue' | 'capacity' | 'sla'> = {
   pool_volume:    'volume',
   pool_queue:     'queue',
   pool_occupancy: 'capacity',
@@ -117,6 +124,17 @@ export default function ResourcesPage() {
 
   if (!tenantId) return null
 
+  // Quais controles a barra pode oferecer — DERIVADO do contrato, não escrito por
+  // lente. `honors: 'period_only'` diz que a lente ignora tudo menos o intervalo;
+  // deixar os seletores ativos ali seria a barra que não filtra, que é a mentira mais
+  // barata desta superfície. Desabilitados (e não escondidos) de propósito: o controle
+  // sumindo faria a barra pular a cada troca de lente, e o estado ficaria invisível em
+  // vez de explicado.
+  const lenteAtual  = mode === 'evolve' ? lensById(lens) : undefined
+  const soPeriodo   = lenteAtual?.honors === 'period_only'
+  // A mesa compara ENTIDADES e o `/reports/agents/compare` não recebe canal.
+  const aceitaCanal = mode === 'evolve' && !soPeriodo
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
 
@@ -126,21 +144,23 @@ export default function ResourcesPage() {
         <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)} className={inp} />
         <span className="text-xs text-muted">{t('resources.filter.to')}</span>
         <input type="date" value={toDt} onChange={e => setToDt(e.target.value)} className={inp} />
-        <select value={poolId} onChange={e => setPoolId(e.target.value)} className={`${inp} w-44 bg-white`}>
+        <select value={poolId} onChange={e => setPoolId(e.target.value)}
+          disabled={soPeriodo}
+          title={soPeriodo ? t('resources.filter.periodOnlyHint') : undefined}
+          className={`${inp} w-44 bg-white disabled:opacity-40`}>
           <option value="">{t('resources.filter.allPools')}</option>
           {poolOptions.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
-        {/* O canal só filtra os painéis por pool: a mesa compara ENTIDADES, e o
-            `/reports/agents/compare` não recebe canal. Escondê-lo no modo comparar é
-            o mesmo princípio do `honors` do contrato — a barra não oferece controle
-            que aquele modo não aplica. */}
-        {mode === 'evolve' && (
+        {aceitaCanal && (
           <select value={channel} onChange={e => setChannel(e.target.value)} className={`${inp} w-36 bg-white`}>
             <option value="">{t('resources.filter.allChannels')}</option>
             {['webchat', 'whatsapp', 'voice', 'email', 'sms', 'webhook'].map(c => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
+        )}
+        {soPeriodo && (
+          <span className="text-2xs text-warning">{t('resources.filter.periodOnly')}</span>
         )}
 
         <div className="flex-1" />
@@ -174,10 +194,30 @@ export default function ResourcesPage() {
               </button>
             ))}
           </div>
-          <div className="flex-1 overflow-hidden flex flex-col">
-            <AnalisePoolsPage host={{
-              fromDt, toDt, poolId, channel, subTab: PANEL_SUBTAB[lens],
-            }} />
+          {/* Despacho pela FORMA declarada, como nas outras duas superfícies. O
+              `assertNever` fecha o conjunto: lente nova do modo evoluir com forma que
+              esta tela não desenha não compila. */}
+          <div className="flex-1 overflow-auto p-0">
+            {(() => {
+              const forma = lensById(lens)!.chart
+              switch (forma) {
+                case 'pool_panel':
+                  return (
+                    <AnalisePoolsPage host={{
+                      fromDt, toDt, poolId, channel,
+                      subTab: PANEL_SUBTAB[lens as PoolPanelLensId],
+                    }} />
+                  )
+                case 'account_tokens':
+                  return (
+                    <div className="p-4">
+                      <AccountTokensPanel tenantId={tenantId} fromDt={fromDt} toDt={toDt} />
+                    </div>
+                  )
+                default:
+                  return assertNever(forma as never)
+              }
+            })()}
           </div>
         </>
       ) : (

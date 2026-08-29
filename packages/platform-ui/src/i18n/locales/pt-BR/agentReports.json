@@ -75,14 +75,38 @@
     }
   },
   "resources": {
-    "filter": { "from": "De", "to": "a", "allPools": "Todos os pools", "allChannels": "Todos os canais" },
+    "filter": {
+      "from": "De", "to": "a",
+      "allPools": "Todos os pools", "allChannels": "Todos os canais",
+      "periodOnly": "esta lente honra só o intervalo",
+      "periodOnlyHint": "Esta lente ignora o filtro de pool: o gasto de uma conta LLM é do tenant e não se reparte por pool."
+    },
     "mode": { "evolve": "Evoluir", "compare": "Comparar" },
     "lens": {
       "label": "Lente:",
       "pool_volume": "Volume",
       "pool_queue": "Fila",
       "pool_occupancy": "Capacidade",
-      "pool_sla": "SLA"
+      "pool_sla": "SLA",
+      "account_tokens": "Tokens por conta"
+    },
+    "tokens": {
+      "title": "Consumo de LLM por conta",
+      "hint": "Todo o consumo do período, tenha ou não vínculo com um contato. NÃO é comparável com a lente de tokens em Análise › Sessões, que mede o custo dos contatos filtrados — são populações diferentes.",
+      "periodOnly": "⚠ honra só o intervalo de datas",
+      "error": "A consulta falhou; isto não é ausência de consumo",
+      "noData": "Nenhum consumo de LLM no período.",
+      "epochHint": "A série de atribuição começa em {{date}} — antes disso o evento não carregava a identidade da conta.",
+      "in": "Tokens de entrada",
+      "out": "Tokens de saída",
+      "uncatalogued": "conta fora do catálogo",
+      "unidentified": "sem conta identificada",
+      "cols": { "account": "Conta", "model": "Modelo", "profile": "Perfil", "source": "Origem", "in": "Entrada", "out": "Saída", "sessions": "Sessões" },
+      "note": {
+        "uncatalogued": "{{count}} evento(s) de conta que consumiu mas não está em Recursos › Contas LLM — o gasto é atribuível à chave, não ao cadastro.",
+        "unidentified": "{{count}} evento(s) sem conta, com data igual ou posterior à época. A época tem granularidade de DIA: eventos do próprio dia dela não podem ser separados da história, então este número é um TETO para o defeito de propagação, não a medida dele.",
+        "preEpoch": "{{count}} evento(s) anteriores a {{date}}, quando o evento ainda não carregava a conta. Ficam fora da tabela e não têm conserto."
+      }
     }
   },
   "tabs": {

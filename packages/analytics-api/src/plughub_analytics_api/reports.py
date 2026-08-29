@@ -27,14 +27,17 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 from .config import get_settings
 from .pool_auth import PoolPrincipal, optional_pool_principal
 from .pricing_client import get_configured_agent_capacity
 from .reports_query import (
+    _ch_fmt,
     _clamp_page_size,
+    _default_from,
+    _default_to,
     _to_csv,
     query_agent_performance_daily,
     query_agent_performance_report,
@@ -597,6 +600,61 @@ async def report_campaigns(
     if format == "csv":
         return _respond({"data": data.get("data", [])}, format, f"campaigns_{_today_label()}.csv")
     return _respond(data, format, f"campaigns_{_today_label()}.csv")
+
+
+# ─── GET /reports/resources/tokens ────────────────────────────────────────────
+#
+# A metade B da lente de token (F3 · D2): **quanto cada CONTA gastou**, não quanto os
+# contatos custaram. É rota própria, e não um parâmetro do breakdown da superfície A,
+# porque a POPULAÇÃO é outra — ver o cabeçalho de `resources_query.py` para a medição
+# que decidiu isso (reusar o endpoint de lá publicaria 47% do consumo, em silêncio).
+
+@router.get("/resources/tokens")
+async def report_resource_tokens(
+    request:        Request,
+    tenant_id:      str           = Query(..., description="Tenant identifier"),
+    from_dt:        Optional[str] = Query(None),
+    to_dt:          Optional[str] = Query(None),
+    limit:          int           = Query(100, ge=1, le=500),
+    format:         str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Consumo de LLM agregado por conta × modelo × origem.
+
+    **Não aceita filtro de pool, e isso é decisão declarada**: a conta é recurso de
+    TENANT, e o gasto dela não se reparte por pool. Um `?pool_id=` aqui devolveria a
+    soma de um subconjunto sob o rótulo do todo. A lente declara
+    `honors: 'period_only'` e a tela o diz — o campo do contrato existe para essa
+    afirmação não viver só aqui.
+    """
+    from .resources_query import query_account_tokens
+
+    # RECUSA explícita, em vez do silêncio default do FastAPI. Parâmetro desconhecido
+    # é ignorado sem aviso, e `pool_id` não é desconhecido: ele EXISTE em todas as
+    # rotas vizinhas. Quem o manda aqui está pedindo um recorte, e receberia o total do
+    # tenant acreditando que veio filtrado — a mentira mais cara desta superfície,
+    # porque o número é plausível. Descoberto pelo teste que eu escrevi para provar o
+    # contrário (`test_pool_id_nao_e_parametro`), que reprovou com 200.
+    if "pool_id" in request.query_params or "entry_pool_id" in request.query_params:
+        raise HTTPException(
+            status_code=422,
+            detail="pool_scope_not_applicable: o gasto de uma conta LLM é do TENANT e "
+                   "não se reparte por pool; filtrar aqui devolveria a soma de um "
+                   "subconjunto sob o rótulo do todo",
+        )
+
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    data = await query_account_tokens(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        since     = since,
+        until     = until,
+        limit     = limit,
+    )
+    return _respond(data, format, f"resource_tokens_{_today_label()}.csv")
 
 
 # ─── GET /reports/participation ───────────────────────────────────────────────
