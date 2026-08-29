@@ -79,11 +79,11 @@ steps:
         - id: senha
           label: "Senha"
           type: "text"
-          masked: true
+          masked: "credential"   # T6: era `true` (⇒ opaque). O TIPO carrega a classe LGPD.
         - id: codigo_2fa
           label: "Código 2FA"
           type: "text"
-          masked: true
+          masked: "credential"
       context_tags:
         outputs:
           email:
@@ -147,11 +147,11 @@ steps:
         - id: senha
           label: "Senha"
           type: "text"
-          masked: true
+          masked: "credential"
         - id: codigo_2fa
           label: "Código 2FA"
           type: "text"
-          masked: true
+          masked: "credential"
       context_tags:
         outputs:
           email:

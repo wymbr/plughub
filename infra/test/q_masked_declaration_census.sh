@@ -123,6 +123,56 @@ else
   huh "jq ausente — 2b nao medido"
 fi
 
+# -- EIXO 1b. T6/T7 -- o CONTADOR que autoriza fechar o ramo `boolean` --------
+# Nao e opiniao nem prazo: a T7 (remover `boolean` da uniao) so pode acontecer
+# quando este numero zerar, medido na AUTORIDADE (agent-registry + dialog-api),
+# nunca no arquivo. Mesmo mecanismo que autorizou a V2b.
+#
+# `current`/`next` EXECUTAM; `previous` e o alvo de ROLLBACK e guarda, DE
+# PROPOSITO, a versao anterior. Exigir zero nele seria pedir que se quebrasse o
+# rollback para migrar — e o rollback e justamente o que torna o promote seguro.
+# Por isso os dois numeros aparecem SEPARADOS, e so o primeiro entra no total.
+PG="${PG:-plughub-demo-postgres-1}"
+psql_count() {
+  docker exec "$PG" psql -U plughub -d plughub_registry -t -A -c "$1" 2>/dev/null | tr -d '\r' | head -1
+}
+RE_ANON='"masked"[[:space:]]*:[[:space:]]*true'
+echo
+echo "-- EIXO 1b. declaracoes ANONIMAS restantes (masked: true) ----"
+if command -v jq >/dev/null 2>&1; then
+  N_SK="$(psql_count "SELECT count(*) FROM public.skills WHERE flow::text ~ '${RE_ANON}';")"
+  N_SL="$(psql_count "SELECT count(*) FROM public.pool_skill_slots WHERE slot IN ('current','next') AND yaml_snapshot::text ~ '${RE_ANON}';")"
+  N_PV="$(psql_count "SELECT count(*) FROM public.pool_skill_slots WHERE slot = 'previous' AND yaml_snapshot::text ~ '${RE_ANON}';")"
+  IDS="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" "${DIALOG}/v1/dialog/forms" \
+        | jq -r '(if type=="object" then (.forms // .items // .data) else . end)[]? | .form_id // .id' 2>/dev/null)"
+  N_FM=0
+  for id in $IDS; do
+    C="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" "${DIALOG}/v1/dialog/forms/${id}" \
+         | jq '[.. | objects | select(.masked == true)] | length' 2>/dev/null)"
+    N_FM=$((N_FM + ${C:-0}))
+  done
+  echo "  skills (skills.flow):            ${N_SK:-?}   (na AUTORIDADE, nao no YAML)"
+  echo "  slots que EXECUTAM:              ${N_SL:-?}   (current/next — o que o bridge roda)"
+  echo "  campos em DialogForms:           ${N_FM}"
+  echo "  slots de ROLLBACK:               ${N_PV:-?}   (previous — NAO entra no total)"
+  TOT=$(( ${N_SK:-0} + ${N_SL:-0} + N_FM ))
+  echo "  TOTAL_EXECUTAVEL=${TOT}"
+  if [ "$TOT" != "0" ]; then
+    echo "  => T7 BLOQUEADA: ainda ha forma anonima em EXECUCAO. Nao e prazo, e contador."
+  elif [ "${N_PV:-0}" != "0" ]; then
+    echo "  => execucao zerada, mas a T7 NAO esta autorizada: ${N_PV} snapshot(s) de"
+    echo "     ROLLBACK ainda carregam a forma anonima. Fechar o ramo boolean os tornaria"
+    echo "     INEXECUTAVEIS — o parse do snapshot passaria a recusar, e o rollback"
+    echo "     deixaria de ser rollback. Precondicao da T7: ou esses previous envelhecem,"
+    echo "     ou se ACEITA POR ESCRITO perder o rollback para deploys anteriores a T6."
+    echo "     E decisao do dono, nao consequencia silenciosa de uma remocao de schema."
+  else
+    echo "  => T7 AUTORIZADA: nada anonimo em execucao nem em rollback."
+  fi
+else
+  huh "jq ausente — contador da T7 nao medido"
+fi
+
 # ── EIXO 3. teto de profundidade de categoria ────────────────────────────────
 echo
 echo "-- EIXO 3. teto de categoria (regex x decompose x DDL) -------"

@@ -531,6 +531,53 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       mascara: { by_role: { operator: "financial" } },
       lgpd:    "financeiro",
     },
+    // ── credential — segredo que prova identidade (senha, código 2FA) ─────────
+    //
+    // Alvo da T6: é para cá que migram as declarações `masked: true` de
+    // `skill_auth_form_v1` (senha, codigo_2fa) e `skill_auth_ia_v1`.
+    //
+    // Indetectável por construção (uma senha não tem forma), daí `declared_only`.
+    // Máxima restrição, igual ao `opaque` — o que muda é a CLASSE, e é ela que
+    // justifica ser um tipo à parte em vez de continuar anônimo: `credencial` diz
+    // a um relatório LGPD *o que* foi coletado, coisa que `opaque` não sabe dizer.
+    //
+    // Senha e código 2FA compartilham este tipo porque compartilham a POLÍTICA
+    // (ninguém vê, nunca persiste, classe credencial). O que os distingue viaja no
+    // ID DO CAMPO, que é a chave do `masked_types` — a distinção não se perde.
+    {
+      id:      "credential",
+      label:   "Credencial (senha, código 2FA)",
+      icon:    "🔑",
+      formato: {},
+      mascara: {
+        by_role: { operator: "hidden" },
+        display: { display_screen: "hidden", display_voice: "silence", echo_to_customer: false, echo_to_operator: false },
+      },
+      lgpd:          "credencial",
+      declared_only: true,
+    },
+    // ── card_cvv — o código de segurança do cartão ────────────────────────────
+    //
+    // **Não é `credit_card`**, e a diferença não é de nome: `credit_card` declara
+    // `display_partial` com os 4 últimos dígitos, e num CVV de 3 dígitos isso
+    // exibiria quase o valor inteiro. Reusar o tipo do PAN seria a economia que
+    // vaza.
+    //
+    // **Nem é `credential`**, apesar da política idêntica: a CLASSE difere
+    // (`financeiro` × `credencial`), e a classe é propriedade do tipo (D1) —
+    // "se dois campos precisam de políticas diferentes, são dois tipos".
+    {
+      id:      "card_cvv",
+      label:   "CVV do cartão",
+      icon:    "🔒",
+      formato: {},
+      mascara: {
+        by_role: { operator: "hidden" },
+        display: { display_screen: "hidden", display_voice: "silence", echo_to_customer: false, echo_to_operator: false },
+      },
+      lgpd:          "financeiro",
+      declared_only: true,
+    },
     // ── opaque — a resolução de `masked: true` ────────────────────────────────
     //
     // Fase T1 do ADR `adr-masked-typed-declaration.md`. Quando `masked` passar a

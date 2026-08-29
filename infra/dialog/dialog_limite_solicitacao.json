@@ -44,7 +44,7 @@
           "label": { "pt-BR": "CVV (3 dígitos, no verso do cartão)" },
           "type": "text",
           "required": true,
-          "masked": true
+          "masked": "card_cvv"
         }
       ]
     }

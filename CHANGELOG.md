@@ -1,5 +1,73 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## T6 do `masked` tipado — o parque migra, e a T7 descobre uma pré-condição (2026-08-29)
+
+As **6** declarações anônimas do parque deixaram de existir: `senha`/`codigo_2fa` (×4 em
+`skill_auth_form_v1`) e o `pin_input` de `skill_auth_ia_v1` → **`credential`**; o `cvv` de
+`dialog_limite_solicitacao` → **`card_cvv`**.
+
+### Dois tipos novos, e a separação entre eles é a D1 em ato
+
+Nenhum dos 8 tipos servia. `credential` e `card_cvv` têm **política idêntica** — ninguém vê, nunca
+persiste, indetectáveis por construção — e ainda assim são **dois tipos**, porque a **classe difere**
+(`credencial` × `financeiro`) e a classe é propriedade do tipo: *"se dois campos precisam de políticas
+diferentes, são dois tipos"*.
+
+**`card_cvv` não é `credit_card`**, e a diferença não é de nome: `credit_card` declara
+`display_partial` com os 4 últimos dígitos, e num CVV de **3** isso exibiria quase o valor inteiro.
+Reusar o tipo do PAN seria a economia que vaza.
+
+Senha e código 2FA **compartilham** `credential` porque compartilham a política — e o que os distingue
+viaja no **id do campo**, que é a chave do `masked_types`. A distinção não se perde.
+
+### O que a migração ensinou sobre onde a verdade mora
+
+Migrar o YAML é **no-op**: é *seed-if-absent* e o DB vence. A migração real foi `PUT` com
+`x-skill-publish` **e re-`promote` dos slots**, porque o bridge executa o **snapshot do slot**, não o
+`skill.flow`. Os dois passos são necessários e nenhum sozinho basta.
+
+E o portão da T5 deixou de ser inerte no mesmo ato: os `PUT` levavam `masked: "credential"` e passaram
+**porque o tipo existe no catálogo** — a primeira vez que o parque tem declaração tipada de verdade.
+
+### O `numero_cartao` que eu quase declarei — e teria quebrado o fluxo
+
+Medindo o form, achei que **`numero_cartao` não está declarado mascarado**, só o `cvv`. Parecia a
+mesma omissão do `email` da §1.3, e a correção parecia óbvia. **Não é.** O valor é usado a jusante
+(`skill_limite_entrada_v1:475` grava `session.numero_cartao` no ContextStore, e o prompt de aprovação
+o exibe): declará-lo `masked` o tiraria do `pipeline_state` e o fluxo passaria a mostrar cartão vazio.
+
+O número do cartão é coberto pelo **outro** mecanismo — masking de ContextStore por papel. A distinção
+que fica: **`masked:` é para valor que o fluxo NÃO PODE GUARDAR; `context_rules` é para valor que o
+fluxo PRECISA e não pode exibir livremente.** Confundir os dois teria quebrado um fluxo vivo, e foi
+medir o uso a jusante que impediu.
+
+### A pré-condição da T7, que não é o contador de execução
+
+O contador do eixo 1b foi para **`TOTAL_EXECUTAVEL = 0`**. Mas ele acusava `2` antes de eu olhar
+**quais**: são slots **`previous`** — os alvos de **rollback** —, e eles carregam a forma anônima
+**por desenho**, porque guardam a versão anterior.
+
+Fechar o ramo `boolean` (T7) os tornaria **inexecutáveis**: o parse do snapshot passaria a recusar, e
+o rollback deixaria de ser rollback. Logo a T7 exige **ou** que esses `previous` envelheçam, **ou**
+que se aceite **por escrito** perder o rollback para deploys anteriores à T6 — decisão do dono, nunca
+consequência silenciosa de uma remoção de schema. O contador passou a reportar os dois números
+**separados**, e só o de execução entra no total.
+
+*Um contador que exigisse zero no `previous` estaria pedindo que se quebrasse o rollback para migrar —
+e o rollback é justamente o que torna o promote seguro.*
+
+### Verificação
+
+Contato real: `masked_types: {'senha':'credential','codigo_2fa':'credential'}` na transcrição durável,
+e dali a classe LGPD (`credencial`) alcançável por join no catálogo. Gates do arco verdes; suítes
+164/164 (skill-flow-engine) e 22/22 (agent-registry validator).
+
+*Nota de método: a substituição no YAML acusou **6** ocorrências de `masked: true` onde eu esperava 4 —
+duas eram COMENTÁRIO. Terceira vez nesta sessão que a prosa citando a forma antiga entra na contagem;
+a asserção de contagem foi o que impediu de reescrever comentário como se fosse código.*
+
+---
+
 ## T4 + T5 do `masked` tipado — a superfície que recusa, e o portão de deploy (2026-08-29)
 
 ### T4 — "honrar" acabou significando RECUSAR

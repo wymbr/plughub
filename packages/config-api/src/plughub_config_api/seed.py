@@ -640,6 +640,33 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {"by_role": {"operator": "financial"}},
                     "lgpd": "financeiro",
                 },
+                # credential / card_cvv — alvos da T6. Politica identica ao opaque
+                # (ninguem ve, nunca persiste), mas CLASSE diferente, e a classe e
+                # propriedade do TIPO: e ela que diz a um relatorio LGPD o que foi
+                # coletado. card_cvv nao e credit_card — aquele exibe os 4 ultimos, e
+                # num CVV de 3 digitos isso mostraria quase o valor inteiro.
+                {
+                    "id": "credential", "label": "Credencial (senha, código 2FA)", "icon": "🔑",
+                    "formato": {},
+                    "mascara": {
+                        "by_role": {"operator": "hidden"},
+                        "display": {"display_screen": "hidden", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": False},
+                    },
+                    "lgpd": "credencial",
+                    "declared_only": True,
+                },
+                {
+                    "id": "card_cvv", "label": "CVV do cartão", "icon": "🔒",
+                    "formato": {},
+                    "mascara": {
+                        "by_role": {"operator": "hidden"},
+                        "display": {"display_screen": "hidden", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": False},
+                    },
+                    "lgpd": "financeiro",
+                    "declared_only": True,
+                },
                 # opaque — a resolução de `masked: true` (T1 do ADR do `masked`
                 # tipado). Máxima restrição: indetectável por construção
                 # (`declared_only`), o operador não vê, não ecoa para ninguém, e a

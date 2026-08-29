@@ -63,7 +63,7 @@ steps:
       interaction: text
       prompt: "Informe seu PIN de segurança (6 dígitos):"
       timeout_s: 120
-      masked: true
+      masked: "credential"   # T6: era `true` (⇒ opaque). O TIPO carrega a classe LGPD.
       output_as: pin_input
       on_success: validar_pin
       on_failure: falha_autenticacao
