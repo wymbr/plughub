@@ -1,6 +1,7 @@
 # ADR: Conteúdo referenciado resolvido no DEPLOY — snapshot, não runtime
 
-**Status:** Proposto — **S1 BLOQUEADA em 2026-08-29** (duas premissas refutadas ao implementar; ver §D6).
+**Status:** Proposto. **S1 DECIDIDA em 2026-08-29 — caminho A (pin de versão)**, não iniciada. As
+duas premissas da S1 original foram refutadas ao medir (ver §D6); o dono escolheu o pin.
 **Data:** 2026-08-29
 **Componentes:** `packages/agent-registry` (`PoolSkillSlot`, `set-next`/`promote`),
 `packages/mcp-server-plughub` (`form_get`, `segment_outcome_record`),
@@ -155,8 +156,35 @@ snapshot puro entrega build e deixa o autor às cegas.
 > CLIENTE, e um browser poderia forjar valor de métrica de negócio do Arc 12. Origem do dado tem de
 > ser servidor.
 >
-> **A S1 fica BLOQUEADA aguardando decisão** entre os dois caminhos acima. As demais fases (S2–S6) não
-> dependem desta medição.
+> ## ✅ DECISÃO DO DONO — 2026-08-29: caminho **A (pin de versão)**
+>
+> Entre os dois caminhos, escolheu-se **pinar a versão** — que é a fase **F0b** do
+> [`adr-dialog-tree-options.md`](adr-dialog-tree-options.md), aquela que esta ADR dizia superseder.
+> **A supersessão da F0b está, portanto, REVERTIDA**: a F0b volta a ser o mecanismo.
+>
+> **Como funciona:** quem renderiza registra, **no servidor**, qual versão do form exibiu; o
+> `segment_outcome_record` lê aquela versão (`?version=N`, que a dialog-api já serve —
+> `router.py:141` → `db.py:174-178`). As duas leituras continuam existindo, mas passam a apontar para
+> a **mesma** versão: a corrida deixa de ser removida e passa a ser **inócua**.
+>
+> **O argumento decisivo foi o `captures`.** O caminho B (o renderizador consumir o `render` do
+> workflow) obriga a consertar o mapa opção→nota em `render.captures` — que é exatamente onde a S1
+> original quebraria a métrica `fcr` em silêncio. O pin **não toca nisso**: o composer segue buscando
+> o form INTEIRO, só que da versão certa, e continua recebendo `options` com `capture.value`.
+>
+> ⚠️ **Requisito inegociável do pin: quem o grava é o SERVIDOR.** Vindo do payload do cliente, um
+> browser escolheria qual versão do formulário descreve a própria resposta — mesma família da recusa
+> de deixar o renderizador ecoar os `captures`.
+>
+> **Prioridade: baixa, e medida.** Dano hoje **zero** — os dois forms de wrap-up
+> (`dialog_wrapup_v1`, `dialog_wrapup_arc12_v1`) estão em **v1**, nunca republicados, então o gatilho
+> (republicar durante um wrap-up aberto) jamais ocorreu. A janela, essa, é ilimitada (`timeout_s: -1`
+> em todo nó). **Momento recomendado: antes de o [ADR da árvore](adr-dialog-tree-options.md) entrar**,
+> porque ele mexe justamente nos forms de wrap-up e aumenta a republicação.
+>
+> A ordem **S1 antes de S3** continua valendo, e agora por razão dupla: congelar o form no snapshot
+> (S3) enquanto o composer busca ao vivo faria a corrida **piorar** — um lado nunca mudaria e o outro
+> sim.
 
 ### D6 — A segunda leitura morre; `captures` viajam no `render` *(texto original — ver refutação acima)*
 
@@ -227,7 +255,7 @@ independente. São dois problemas de aparência idêntica e só um morre aqui.
 
 | # | Fase | Entrega | Depende de |
 |---|---|---|---|
-| **S1** | ⚠️ **BLOQUEADA — 2026-08-29** | Duas premissas refutadas por medição (ver bloco no topo da D6): `render.captures` perde o mapa opção→nota (dano VIVO em `dialog_wrapup_arc12_v1`), e o único chamador não tem `form_get`, logo não há `render` no `pipeline_state` dele. Reabre como escolha entre pin de versão (F0b) e renderizador consumindo o render do workflow. | — |
+| **S1** | ✅ **DECIDIDA — 2026-08-29: caminho A (PIN DE VERSÃO)**, não iniciada | Duas premissas refutadas por medição (ver bloco no topo da D6): `render.captures` perde o mapa opção→nota (dano VIVO em `dialog_wrapup_arc12_v1`), e o único chamador não tem `form_get`, logo não há `render` no `pipeline_state` dele. Reabre como escolha entre pin de versão (F0b) e renderizador consumindo o render do workflow. | — |
 | **S2** | **`version` na referência** | `form_get` repassa `version`; pin × float documentado. Fecha antes a decisão em aberto #2 (rollback). | — |
 | **S3** | **Resolução no promote** | O `promote` resolve as referências e grava no snapshot; `form_get` lê do snapshot em execução (D1). | S2 |
 | **S4** | **Conflito otimista** | A tela de deploy declara as versões exibidas; `409` + diff quando divergirem (D3). | S3 |
