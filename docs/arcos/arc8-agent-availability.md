@@ -16,7 +16,7 @@ Components:
 - **orchestrator-bridge**: updates Redis agent state on pause/resume
 - **Kafka `agent.lifecycle`**: carries `agent_pause` and `agent_ready` events
 - **analytics-api**: persists pause intervals to ClickHouse
-- **platform-ui**: a bancada `/analise/agents` consome `/reports/agent-availability` (a `AgentReportsPage.tsx` era órfã e foi removida em 2026-08-28)
+- **platform-ui**: a bancada consome `/reports/agent-availability` e vive no **modo comparar** de `/analise/resources` (F3 do ADR de relatórios, 2026-08-29; `/analise/agents` virou redirect). A `AgentReportsPage.tsx` era órfã e foi removida em 2026-08-28
 
 ---
 
@@ -136,7 +136,7 @@ Response includes per-agent:
 
 ## Platform-UI
 
-~~`AgentReportsPage.tsx` at `/contacts/reports/agents`~~ — **REMOVIDA 2026-08-28** (órfã; F0 do ADR de relatórios). A superfície viva é `/analise/agents`.
+~~`AgentReportsPage.tsx` at `/contacts/reports/agents`~~ — **REMOVIDA 2026-08-28** (órfã; F0 do ADR de relatórios). A superfície viva é o modo comparar de `/analise/resources` (F3, 2026-08-29).
 
 Accessible to: `supervisor`, `admin`, `business` roles.
 ABAC gate: `contacts.visualizar` (read access required).

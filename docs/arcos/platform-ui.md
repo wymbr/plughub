@@ -246,10 +246,17 @@ Icon: 📊 — roles: supervisor, admin, business
 | Child | Icon | href | ABAC gate |
 |-------|------|------|-----------|
 | Sessions | 📋 | `/analise/sessions` | `contacts.visualizar` |
-| Agents | 👥 | `/analise/agents` | `contacts.visualizar` |
+| Resources | 📦 | `/analise/resources` | `contacts.visualizar` |
 | Events | 📡 | `/analise/events` | `contacts.visualizar` |
-| Processes | ⚙️ | `/analise/processos` | `workflows.operacao` |
 | Quality | ✓ | `/analise/quality` | `evaluation.report` |
+
+> **F3 do ADR de relatórios (2026-08-29).** «Agents» (`/analise/agents`) e «Pools»
+> (`/analise/pools`) eram DUAS entradas para a mesma superfície — a oferta —, e viraram
+> **Resources**: modo *evoluir* (os quatro painéis por pool) × modo *comparar* (a mesa).
+> Os dois endereços antigos são `redirect` preservando a query; o de `/analise/agents`
+> ainda carimba `mode=compare` e renomeia o `?mode=epoch` legado para `?deploy=epoch`.
+> «Processes» (`/analise/processos`) saiu do menu na F3.3 — processo é PIVÔ, alcançado
+> pelo chip da linha de contato em Sessions.
 
 ### Configuração group (navKey: `config`)
 

@@ -3,7 +3,8 @@
 > ⚠️ **PÁGINA REMOVIDA em 2026-08-28** (F0 do [ADR de relatórios](../adr/adr-relatorios-duas-superficies-e-lentes.md)).
 > A `AgentReportsPage.tsx` estava **órfã** — nenhum import em lugar nenhum — e a rota que este documento
 > anunciava (`/contacts/reports/agents`) **já não existia**. A superfície viva de disponibilidade e
-> pausas é a bancada `/analise/agents`, que consome o mesmo `GET /reports/agent-availability`.
+> pausas é a bancada, que consome o mesmo `GET /reports/agent-availability` e hoje vive no **modo
+> comparar** de `/analise/resources` (F3, 2026-08-29 — `/analise/agents` também virou redirect).
 > Este documento fica como registro histórico.
 
 > Última atualização: 2026-05-25 · Estado: Arc 16

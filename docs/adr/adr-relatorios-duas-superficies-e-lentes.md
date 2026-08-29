@@ -1,8 +1,10 @@
 # ADR — Relatórios: duas superfícies, lente declarada e a mesa como modo
 
-**Status:** **F0 ✅ · F1 ✅ · F0b ✅ · T0 ✅ · T1 ✅ · T2 ✅ · F2 ✅ · T3 ✅** (2026-08-28) — demais fases propostas. As-built e achados por fase no
+**Status:** **F0 ✅ · F1 ✅ · F0b ✅ · T0 ✅ · T1 ✅ · T2 ✅ · F2 ✅ · T3 ✅ · F3 ✅** (2026-08-29) — resta a **F4**. As-built e achados por fase no
 `CHANGELOG.md`. A F1 mexeu em três decisões deste ADR ao encontrar a realidade; as emendas estão
 marcadas **[emenda F1]** na D5 e na D6, e nenhuma delas mudou o que o contrato precisa responder.
+A **[emenda F3]** registra o as-built da Superfície B, o de-para das lentes da D7 (escrito antes de
+medir o que existia) e as duas garantias que estavam escritas e não existiam.
 **Supersede parcialmente:** a suposição, implícita nos dez endereços de `/analise/*`, de que cada
 recorte de relatório merece página própria.
 **Não altera:** [`adr-journey-session-segment-model.md`](adr-journey-session-segment-model.md) (os três
@@ -437,7 +439,7 @@ fica **fora do escopo** desta revisão) · `events` (Arc 12, categoria hierárqu
 | **F1 ✅** | Contrato de lente (D5+`entity` da D6), consumido pela mesa; seção D do gate | — |
 | **F0b ✅** | 5 páginas de relatório com rota `Navigate` + 2 de cascata; resolvedor de imports no gate | F0 |
 | **F2 ✅** | Superfície A em `/analise/sessions`; absorve wrap-up | F1 |
-| **F3** | Superfície B + mesa como modo (D6); absorve pools | F1 |
+| **F3 ✅** | Superfície B + mesa como modo (D6); absorve pools | F1 |
 | **F4** | `customer-voice` absorve `surveys` | F1 |
 | **T0 ✅** | **Medir** chamadas LLM por caminho; gate `probe_llm_call_paths.sh` | — |
 | **T1 ✅** | Produtor nos 4 caminhos vivos (`source` obrigatório); validado ponta a ponta | T0 |
@@ -470,6 +472,85 @@ gate existir pela primeira vez. **F1 antes de F2/F3 não é preferência**: é a
 > **Caveat de método que o probe carrega:** 28 chamadas em 9 dias é ambiente ocioso, e volume zero
 > **não** distingue *"caminho morto"* de *"ninguém usou a plataforma"*. Quem separa os dois é o
 > chamador, resolvido estaticamente — por isso ele é coluna da tabela declarada, não nota de rodapé.
+
+
+> **[emenda F3 — o as-built, e as quatro coisas que a medição mudou]**
+>
+> A F3 saiu em quatro fatias, cada uma verificada contra dado real: **F3a** a forma do
+> gráfico vira declaração · **F3b/c** a Superfície B nasce e a mesa vira modo · **F3d** a
+> lente de token do lado da oferta.
+>
+> **1. A previsão da D6 se cumpriu, e o teste dela foi barato.** *"A lente de token
+> introduz o terceiro tipo de entidade; se for preciso tocar naquelas cinco condicionais
+> do seletor, o contrato não foi extraído."* Não foi preciso: `entity: 'account'` entrou
+> sem tocar em nenhuma delas, porque desde a F1 elas leem `lensDef.entity === 'pool'`.
+>
+> **2. Duas garantias estavam ESCRITAS e não existiam** — as duas minhas, ambas
+> desfeitas por sonda de tipo, não por revisão:
+>
+>   · o comentário do `SessionsPage` dizia que uma lente de contato com forma nova *"não
+>     compila"*. `const _t: number = shape` respondeu `Type 'string'`:
+>     `REPORT_LENSES.filter(l => l.entity === 'contact')` colapsa os literais, e o
+>     `assertNever` não reprovava nada. Consertado com predicado de tipo
+>     (`byEntity`/`bySource`/`byChart`) — e só então a mutação (lente de contato com
+>     `chart: 'criteria_heatmap'`) passou a quebrar o build;
+>   · o cabeçalho da `ResourcesPage` declarava a partição da URL entre hospedeiro e
+>     hospedado **e reusava o nome `mode`** nos dois lados (`evolve|compare` na
+>     superfície, `daily|epoch` no toggle de deploy). Trocar de lente no modo comparar
+>     apagava `mode=compare`; o reload caía no modo evoluir, mostrando outra tela sem
+>     erro. O parâmetro da mesa virou `deploy`, e o redirect de `/analise/agents`
+>     **renomeia** o legado antes de carimbar `mode=compare`.
+>
+> Regra que fica: **partição de namespace declarada em prosa não é partição.** É a mesma
+> família do DDL de `participation_intervals`, agora dentro deste arco.
+>
+> **3. A lente de token da B não podia reusar o endpoint da A**, e a diferença é de
+> POPULAÇÃO, não de `group by`. Medido antes de escrever: 20 eventos / 1 991 tokens no
+> período, dos quais **8 eventos / 945 tokens** têm sessão em `sessions`. O breakdown da
+> A faz `INNER JOIN` com as sessões filtradas — de propósito, porque vive sob a mesma
+> barra que o gráfico dela. Reusá-lo publicaria **47% do consumo**, em silêncio. Daí
+> `GET /reports/resources/tokens`, sobre `usage_events` inteiro, e o campo
+> `meta.population` para que ninguém compare os dois números sem perceber que são duas
+> perguntas. A rota **recusa `?pool_id=` com 422** em vez de ignorá-lo: o gasto de uma
+> conta é do tenant, e devolver o total sob o rótulo de um recorte é a mentira que o
+> `honors` do contrato existe para impedir.
+>
+> **4. A época mentiu pela TERCEIRA vez, e desta vez fica declarada em vez de
+> consertada.** O contador de "sem conta" acusava 8 eventos como defeito vivo de
+> propagação; medidos, são `t1-verify-B`/`t1-verify-C` — as sessões de verificação da
+> própria T1, de 20:33 e 20:37, enquanto o primeiro evento COM conta é de 20:59.
+> `USAGE_ATTRIBUTION_EPOCH` tem granularidade de **dia** e o corte é de **instante**.
+> Não converti a constante para `DateTime`: o único instante disponível seria escolhido
+> **olhando estes dados**, que é a definição de fitting, e ela é compartilhada com outro
+> leitor. O número passou a ser publicado como **teto** do defeito, com o porquê na tela,
+> e o limite está escrito onde a constante mora.
+>
+> **O que a F3 achou e não era dela** — dois defeitos vivos, ambos de fases anteriores:
+>
+>   · **a mesa mostrava seis botões escritos `bench.lens.list`, `bench.lens.volume`, …**
+>     — a chave crua de i18n. Ela fazia `LENSES = REPORT_LENSES`, e a F2, ao acrescentar
+>     as lentes de contato à declaração, fez a mesa oferecer lentes que o
+>     `/reports/agents/compare` não conhece. Conserto pela FONTE (`COMPARE_LENSES` = o
+>     que a mesa sabe pedir), não pela entidade;
+>   · **o combo de pool da `/analise/pools` não é o problema** — o meu era: a primeira
+>     versão da `ResourcesPage` lia `/v1/pools` como array quando o corpo é
+>     `{pools:[...]}`, e o seletor ficava vazio enquanto a URL levava `?pool=sac_ia` e o
+>     painel filtrava certo. Só o seletor mentia.
+>
+> **De-para das lentes da B.** A D7 lista *"resources · availability · occupancy · usage
+> · token"*. Aquela lista foi escrita antes de medir o que existia; ao abrir a página há
+> quatro painéis com fontes distintas. O as-built mantém os nomes do que EXISTE —
+> `pool_volume` (usage) · `pool_queue` · `pool_occupancy` (occupancy) · `pool_sla` ·
+> `account_tokens` (token) —, e `availability` continua sendo lente da MESA, por agente,
+> que é onde ela pertence: disponibilidade é fato de recurso, e o recurso comparável é o
+> agente, não o pool. Renomear quatro painéis para caberem numa lista indicativa seria
+> fazer a documentação descrever um sistema que não existe.
+>
+> **Gate:** seção **G** do `probe_report_surface.sh` — conta comparação por ID DE LENTE
+> nas telas de despacho, com controle positivo (≥ 6 `case` de forma) para que um parser
+> que deixou de casar não saia verde. Ela nasceu acusando uma linha dentro de `{/* … */}`
+> que EXPLICA a cascata removida, o que deu `_strip_comments.py` — a terceira varredura
+> deste repositório a confundir prosa com código.
 
 ## 6. Gate — o que o faria ficar vermelho
 

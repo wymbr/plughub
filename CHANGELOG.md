@@ -1,5 +1,144 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Relatórios F3: a Superfície B nasce, a mesa vira MODO, e a forma do gráfico vira declaração (2026-08-29)
+
+Penúltima fase do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md) — resta a
+F4. Saiu em quatro fatias, cada uma verificada contra dado real no browser.
+
+### Dois endereços eram a mesma superfície
+
+`/analise/pools` (781 linhas, quatro sub-abas) e `/analise/agents` (1.638, a mesa) mediam a **oferta**.
+Comparar difere de evoluir em UMA dimensão — uma série por entidade selecionada × uma série pela
+população filtrada —, e filtro, lente e bucket são os mesmos. Viraram `/analise/resources`: uma barra
+de filtro, um seletor de modo, uma faixa de lentes. Duas entradas de menu viraram uma.
+
+Endereço morre, componente é re-hospedado (D7): os dois ganharam prop `host` e, com ela, não desenham a
+própria barra. É o padrão que a F2 usou para o wrap-up, pela mesma razão — duas janelas de tempo na
+mesma tela e a de dentro vence em silêncio.
+
+### A forma do gráfico saiu da cascata
+
+Era o terceiro membro da tripla da D6, o único que a F1 deixou para trás. `entity`, `evidence` e
+`comparability` já eram contrato; a FORMA continuava numa cascata de dez `if (lens === '…')` com
+métrica, formato e título hardcodados no JSX. Enquanto isso durou, "lente nova" queria dizer "editar o
+componente de render" — o custo que a D5 diz que o contrato existe para remover.
+
+Agora a lente declara `chart` e o despacho é um `switch` exaustivo com `assertNever`. **A unidade mora
+dentro da forma** (`reason_bars_count` × `reason_bars_minutes`): era um parâmetro `valueMode` com
+DEFAULT, lido num call site e omitido no outro — e default de unidade é a forma barata de publicar
+minutos rotulados como contagem.
+
+A guarda de comparabilidade deixou de ser escrita por lente: quem a exige é quem DECLARA `same_form`.
+Antes `quality` a tinha inline e `quality_criteria` não — duas lentes com a mesma régua, uma só
+protegida.
+
+### A previsão da D6 se cumpriu
+
+*"A lente de token introduz o terceiro tipo de entidade (a conta LLM). Se ao implementar o token for
+preciso tocar naquelas cinco condicionais do seletor, o contrato não foi extraído."*
+
+Não foi preciso: `entity: 'account'` entrou sem tocar em nenhuma. Elas leem `lensDef.entity === 'pool'`
+desde a F1.
+
+### DUAS garantias estavam escritas e não existiam — as duas minhas
+
+Nenhuma foi pega por revisão; as duas caíram por medição.
+
+1. **O comentário do `SessionsPage` dizia que uma lente de contato com forma nova "não compila".** Sonda
+   de tipo (`const _t: number = shape`) respondeu `Type 'string'`: `REPORT_LENSES.filter(l => l.entity
+   === 'contact')` colapsa os literais, e o `assertNever` não reprovava nada. Com predicado de tipo
+   (`byEntity`/`bySource`/`byChart`) os literais sobrevivem — e só então a mutação passou a quebrar o
+   build. **Prosa prometendo invariante sem mecanismo**, a família do DDL de `participation_intervals`,
+   agora dentro deste arco.
+
+2. **O cabeçalho da `ResourcesPage` declarava a partição da URL e reusava o nome `mode`** nos dois
+   lados: `evolve|compare` na superfície, `daily|epoch` no toggle de deploy da mesa. Trocar de lente no
+   modo comparar APAGAVA `mode=compare`, e o reload caía no modo evoluir — outra tela, nenhum erro.
+   Medido no browser, não deduzido: a URL saía `?from=…&to=…&lens=sessions_aht`. O parâmetro da mesa
+   virou `deploy`, e o redirect de `/analise/agents` **renomeia** o legado antes de carimbar
+   `mode=compare` (verificado: `?lens=deploy&mode=epoch&pool=sac_ia` cai em comparar + lente deploy +
+   "Por versão" + pool filtrado).
+
+   Regra derivada: **partição de namespace declarada em prosa não é partição.**
+
+### A lente de token da oferta não podia reusar o endpoint da demanda
+
+Parecia o mesmo endpoint com outro `group by`. A medição, feita antes de escrever código, desfez isso:
+
+| população | eventos | tokens |
+|---|---|---|
+| todos os eventos de token do período | 20 | 1 991 |
+| com sessão existente em `sessions` | 8 | 945 |
+
+O breakdown da Superfície A faz `INNER JOIN` com as sessões SELECIONADAS — de propósito, porque a tabela
+dele vive sob a mesma barra que o gráfico dela. Reusá-lo para perguntar *"quanto a conta gastou"*
+publicaria **47% do consumo**, sem erro e sem linha vermelha. Mesmo depois do corte de época sobram 4
+eventos atribuídos (347 tokens) sem sessão.
+
+Daí `GET /reports/resources/tokens`, sobre `usage_events` inteiro, com `meta.population` para que
+ninguém compare os dois números sem perceber que são duas perguntas. **A rota recusa `?pool_id=` com
+422** em vez de ignorá-lo: o gasto de uma conta é do tenant, e devolver o total sob o rótulo de um
+recorte é a mentira que o `honors` do contrato existe para impedir. Isso foi descoberto pelo teste que
+escrevi para provar o contrário — FastAPI ignora parâmetro desconhecido em silêncio, e `pool_id` não é
+desconhecido: existe em toda rota vizinha.
+
+### A época mentiu pela TERCEIRA vez, e desta vez fica DECLARADA
+
+O contador de "sem conta" acusava 8 eventos como defeito vivo de propagação. Medidos: são
+`t1-verify-B`/`t1-verify-C`, as sessões de verificação da própria T1, emitidas às 20:33 e 20:37 —
+enquanto o primeiro evento COM conta é de 20:59. `USAGE_ATTRIBUTION_EPOCH` tem granularidade de **dia** e
+o corte é de **instante**.
+
+**Não converti a constante para `DateTime`**: o único instante disponível seria escolhido *olhando estes
+dados*, que é a definição de fitting, e ela é compartilhada com outro leitor. O número passou a ser
+publicado como **teto** do defeito, com o porquê na tela, e o limite está escrito onde a constante mora.
+
+### Três defeitos VIVOS que a F3 achou e não eram dela
+
+1. **A mesa mostrava seis botões escritos `bench.lens.list`, `bench.lens.volume`, …** — a chave crua de
+   i18n, o sintoma que a invariante do `CLAUDE.md` descreve. Ela fazia `LENSES = REPORT_LENSES`, e a F2,
+   ao acrescentar as lentes de contato à declaração, fez a mesa oferecer lentes que o
+   `/reports/agents/compare` não conhece. Conserto pela FONTE (`COMPARE_LENSES` = o que a mesa sabe
+   pedir), não pela entidade — uma lente futura de pool servida pelo mesmo endpoint entra sozinha.
+2. **Faltavam `_ch_fmt`/`_default_from`/`_default_to` no import do `reports.py`** — `NameError` na
+   primeira chamada real da rota nova, com os 730 testes VERDES porque nenhum a atravessa. Daí
+   `test_resources_tokens.py`, cuja lição está no cabeçalho: **rota nova sem teste que a ATRAVESSE não
+   está coberta por nada**.
+3. **A célula de conta colapsava TRÊS estados em dois**, chamando de "fora do catálogo" uma linha sem
+   chave nenhuma. São: cadastrada · real mas fora do catálogo · não identificada — e a diferença entre
+   as duas últimas é *"falta cadastrar"* contra *"não sabemos quem gastou"*.
+
+### A barra de filtro passou a derivar do contrato
+
+`honors: 'period_only'` desabilita o seletor de pool e esconde o de canal, com o motivo ao lado. O campo
+existia desde a F2 para a tela poder DIZER isso; até agora só o dizia o painel de disposição, à mão.
+
+### Gate
+
+Seção **G** do `probe_report_surface.sh` — conta comparação por ID DE LENTE nas telas de despacho, com
+controle positivo (≥ 6 `case` de forma) para que um parser que deixou de casar não saia verde. Ela
+nasceu acusando `SessionsPage.tsx:629`, uma linha dentro de `{/* … */}` que EXPLICA a cascata removida:
+reprovaria por causa da documentação da própria correção. Daí `_strip_comments.py`, que apaga comentário
+preservando OFFSET — **a terceira varredura deste repositório a confundir prosa com código**.
+
+A tabela D7 do gate reclassifica `/analise/pools` e `/analise/agents` como `redirect`, e foi ela que
+exigiu a decisão: acusou `analise/resources` sem linha e as duas rotas vivas fora do menu.
+
+### Verificação
+
+- 741 testes da analytics-api (730 + 11 da rota nova); `tsc --noEmit` limpo;
+- **quatro mutações** aplicadas e revertidas: forma nova sem renderer (quebra o build) · lente de
+  contato com forma que a Superfície A não desenha (idem) · ramo por id reintroduzido (seção G vermelha)
+  · `sse_pool_principal` trocado na rota. A segunda mutação **não aplicou** na primeira tentativa
+  (âncora inexistente) e eu quase li o verde como "sobreviveu" — o instrumento foi medido antes do
+  código;
+- no browser: as nove formas da mesa desenhando · as cinco lentes da Superfície B com dado real · os
+  dois modos · a barra única · os dois redirects preservando query · o round-trip da URL após reload;
+- `probe_report_surface.sh`, `probe_ui_credential_coverage.sh`, `probe_i18n_duplicate_keys.sh`,
+  `probe_route_credential_coverage.sh`, `probe_llm_call_paths.sh`, `probe_authz_single_verifier.sh` —
+  todos verdes.
+
+
 ## Autorização: o TERCEIRO eixo ganha censo — e o recorte do achado não era o do eixo (2026-08-29)
 
 Fecha a dívida aberta pela T3 do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md):
