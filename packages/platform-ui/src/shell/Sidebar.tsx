@@ -140,7 +140,14 @@ const Sidebar: React.FC = () => {
         { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: ClipboardCheck, abac: { module: 'evaluation', field: 'report'     } },
         { label: t('nav.analise.customers'), href: '/analise/customers', icon: UserSearch,    abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.customerVoice'), href: '/analise/customer-voice', icon: MessageSquare, abac: { module: 'contacts', field: 'visualizar' } },
-        { label: t('nav.analise.surveys'), href: '/analise/surveys', icon: ClipboardList, abac: { module: 'evaluation', field: 'report' } },
+        // F4 — «Respostas de Pesquisa» saiu do menu: virou o nível de RESPOSTAS da Voz
+        // do Cliente, sob a mesma barra de filtro (D7). Duas entradas para o agregado e
+        // o detalhe do MESMO sinal é o que fazia cada pergunta virar página.
+        //
+        // ⚠️ O gate de ABAC mudou de dono junto: a lista exige `evaluation.report`
+        // (verbatim é LGPD) e a superfície exige `contacts.visualizar`. Quem tem só a
+        // segunda vê o agregado e, ao pedir as respostas, recebe o 403 da evaluation-api
+        // — a fronteira continua sendo do backend, como sempre foi.
         // I5 / ADR § D7b fatia 2 — histórico de wrap-up. Par retrospectivo do
         // Monitor › Pendências; mesmo grant do resto do Analytics.
       ]

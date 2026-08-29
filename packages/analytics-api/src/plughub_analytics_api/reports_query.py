@@ -4215,8 +4215,10 @@ def _cv_sla_series(
         f"s.opened_at <  '{until}'",
     ]
     params: dict = {"tenant_id": tenant_id}
-    if pool_id:
-        conds.append("w.pool_id = {pool_id:String}"); params["pool_id"] = pool_id
+    # Mesmo filtro da série de survey, na coluna do SEGMENTO. Se as duas metades
+    # divergissem, o overlay compararia populações diferentes no mesmo eixo — que é a
+    # forma mais convincente de publicar uma correlação que não existe.
+    _cv_pool_filter(conds, params, _cv_pools(pool_id), column="w.pool_id")
     _apply_pool_scope(conds, accessible_pools, column="w.pool_id")
     rows = _rows_to_dicts(client.query(f"""
         SELECT toString(toDate(s.opened_at)) AS date,
@@ -4239,9 +4241,46 @@ def _cv_sla_series(
     return out
 
 
+def _cv_pools(pool_id: "str | list[str] | None") -> "list[str]":
+    """Normaliza o parâmetro de pool para lista, aceitando o escalar legado.
+
+    O endpoint passou a receber `?pool_id=` repetido na F4; o escalar continua válido
+    porque há link antigo com um pool só. Vazios são descartados: `?pool_id=` sem valor
+    é "sem filtro", não "o pool cujo id é a string vazia".
+    """
+    if pool_id is None:
+        return []
+    if isinstance(pool_id, str):
+        return [pool_id] if pool_id else []
+    return [p for p in pool_id if p]
+
+
+def _cv_pool_filter(
+    conds: list[str], params: dict, pool_ids: "list[str] | None", column: str = "pool_id",
+) -> None:
+    """Filtro de pool da Voz do Cliente — UM ou VÁRIOS.
+
+    Virou lista na F4, quando `/analise/surveys` foi absorvido como o nível de
+    RESPOSTAS desta superfície. Aquela tela tinha `PoolMultiSelect` e esta aceitava um
+    pool só; unificar a barra com o parâmetro escalar teria REDUZIDO uma capacidade que
+    funcionava — re-hospedar um componente não é rebaixá-lo.
+
+    Lista vazia e `None` são a mesma coisa aqui (sem filtro), de propósito: o chamador
+    que não escolheu pool nenhum e o que limpou a seleção querem a mesma resposta.
+    """
+    if not pool_ids:
+        return
+    if len(pool_ids) == 1:
+        conds.append(f"{column} = {{pool_id:String}}")
+        params["pool_id"] = pool_ids[0]
+        return
+    conds.append(f"{column} IN {{pool_ids:Array(String)}}")
+    params["pool_ids"] = list(pool_ids)
+
+
 def query_customer_voice(
     client: Any, db: str, tenant_id: str, grain: str, metric: str, since: str, until: str,
-    pool_id: str | None = None, accessible_pools: list[str] | None = None,
+    pool_id: "str | list[str] | None" = None, accessible_pools: list[str] | None = None,
 ) -> dict:
     """Lente genérica: série diária do instrumento (roll-up do catálogo) no grão pedido +
     overlay de SLA. grain=journey: cada sinal já é uma journey (1 survey por processo) →
@@ -4265,8 +4304,7 @@ def query_customer_voice(
             "value_num IS NOT NULL",
         ]
         params = {"tenant_id": tenant_id, "grain": grain, "metric": metric}
-        if pool_id:
-            conds.append("pool_id = {pool_id:String}"); params["pool_id"] = pool_id
+        _cv_pool_filter(conds, params, _cv_pools(pool_id))
         _apply_pool_scope(conds, accessible_pools)
         # S1 — roll-up POR INSTRUMENTO (antes era `avg` para tudo que não fosse NPS):
         #   nps_index → %promotores − %detratores

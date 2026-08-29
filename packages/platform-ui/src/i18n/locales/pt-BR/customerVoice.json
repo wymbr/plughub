@@ -12,6 +12,20 @@
   "sla": "SLA (aderência %)",
   "nResponses_one": "{{count}} resposta",
   "nResponses_other": "{{count}} respostas",
+  "nSignals_one": "{{count}} sinal",
+  "nSignals_other": "{{count}} sinais",
+  "filter": {
+    "from": "De",
+    "to": "a",
+    "allPools": "Todos os pools do domínio",
+    "noPools": "Nenhum pool no domínio",
+    "poolCount": "{{count}} pools"
+  },
+  "level": {
+    "aggregate": "Agregado",
+    "responses": "Respostas"
+  },
+  "storeNote": "O agregado conta SINAIS (analítico); o nível de respostas conta RESPOSTAS registradas (store operacional, com verbatim). São stores diferentes e os dois números podem divergir — sinal semeado para demonstração não gera resposta.",
   "overlayNote": "Leitura descritiva: justapõe o que o cliente sentiu com a aderência de SLA. Não conclui causa.",
   "empty": {
     "title": "Sem sinais",

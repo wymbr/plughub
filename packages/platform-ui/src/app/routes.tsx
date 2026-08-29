@@ -55,7 +55,6 @@ import ResourcesPage        from '@/modules/analise/ResourcesPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import AnaliseClientesPage  from '@/modules/analise/AnaliseClientesPage'
 import CustomerVoicePage    from '@/modules/analise/CustomerVoicePage'
-import AnaliseSurveysPage   from '@/modules/analise/AnaliseSurveysPage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 import ConfigChannelsIndex from '@/modules/config-channels'
 import DialogFormsPage from '@/modules/dialog-forms/DialogFormsPage'
@@ -167,8 +166,11 @@ export const routes: RouteObject[] = [
       // Customer History H5 — lente Analytics do Cliente 360 (busca + 360 + histórico).
       { path: 'analise/customers', element: <RequireAbac module="contacts" field="visualizar"><AnaliseClientesPage /></RequireAbac> },
       { path: 'analise/customer-voice', element: <RequireAbac module="contacts" field="visualizar"><CustomerVoicePage /></RequireAbac> },
-      // Survey response navigator (S8) — per-response list from PG survey_response.
-      { path: 'analise/surveys', element: <RequireAbac module="contacts" field="visualizar"><AnaliseSurveysPage /></RequireAbac> },
+      // F4 — `/analise/surveys` (navegador de respostas, S8) foi ABSORVIDO como o nível
+      // de RESPOSTAS da Voz do Cliente (D7). O redirect carimba `view=responses` porque
+      // aquele endereço ERA a lista: sem isso o link antigo cairia no agregado —
+      // tecnicamente na tela certa, mostrando outra coisa.
+      { path: 'analise/surveys', element: <RedirectPreservingQuery to="/analise/customer-voice" add={{ view: 'responses' }} /> },
       // F2 — `/analise/wrapup` foi ABSORVIDO por `/analise/sessions` como a lente de
       // **disposição** (D7: "endereço morre, componente é re-hospedado"). A regra que
       // o matou é a de sobrevivência: a unidade de análise é o CONTATO, logo é lente.

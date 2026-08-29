@@ -1,10 +1,12 @@
 # ADR — Relatórios: duas superfícies, lente declarada e a mesa como modo
 
-**Status:** **F0 ✅ · F1 ✅ · F0b ✅ · T0 ✅ · T1 ✅ · T2 ✅ · F2 ✅ · T3 ✅ · F3 ✅** (2026-08-29) — resta a **F4**. As-built e achados por fase no
+**Status:** **ARCO COMPLETO** — F0 ✅ · F1 ✅ · F0b ✅ · T0 ✅ · T1 ✅ · T2 ✅ · F2 ✅ · T3 ✅ · F3 ✅ · F4 ✅ (2026-08-29). As-built e achados por fase no
 `CHANGELOG.md`. A F1 mexeu em três decisões deste ADR ao encontrar a realidade; as emendas estão
 marcadas **[emenda F1]** na D5 e na D6, e nenhuma delas mudou o que o contrato precisa responder.
 A **[emenda F3]** registra o as-built da Superfície B, o de-para das lentes da D7 (escrito antes de
-medir o que existia) e as duas garantias que estavam escritas e não existiam.
+medir o que existia) e as duas garantias que estavam escritas e não existiam. A **[emenda F4]**
+estreita a palavra *"drill"* da D7 para **nível**: os dois lados da Voz do Cliente leem stores
+diferentes, e afirmar identidade entre eles seria publicar uma correlação inexistente.
 **Supersede parcialmente:** a suposição, implícita nos dez endereços de `/analise/*`, de que cada
 recorte de relatório merece página própria.
 **Não altera:** [`adr-journey-session-segment-model.md`](adr-journey-session-segment-model.md) (os três
@@ -440,7 +442,7 @@ fica **fora do escopo** desta revisão) · `events` (Arc 12, categoria hierárqu
 | **F0b ✅** | 5 páginas de relatório com rota `Navigate` + 2 de cascata; resolvedor de imports no gate | F0 |
 | **F2 ✅** | Superfície A em `/analise/sessions`; absorve wrap-up | F1 |
 | **F3 ✅** | Superfície B + mesa como modo (D6); absorve pools | F1 |
-| **F4** | `customer-voice` absorve `surveys` | F1 |
+| **F4 ✅** | `customer-voice` absorve `surveys` | F1 |
 | **T0 ✅** | **Medir** chamadas LLM por caminho; gate `probe_llm_call_paths.sh` | — |
 | **T1 ✅** | Produtor nos 4 caminhos vivos (`source` obrigatório); validado ponta a ponta | T0 |
 | **T2 ✅** | `segment_id` + conta + modelo no evento e nas colunas (D1–D3); época declarada | T1 |
@@ -551,6 +553,70 @@ gate existir pela primeira vez. **F1 antes de F2/F3 não é preferência**: é a
 > que deixou de casar não saia verde. Ela nasceu acusando uma linha dentro de `{/* … */}`
 > que EXPLICA a cascata removida, o que deu `_strip_comments.py` — a terceira varredura
 > deste repositório a confundir prosa com código.
+
+
+> **[emenda F4 — o as-built, e por que o "drill" NÃO virou drill de ponto]**
+>
+> A D7 diz *"`/analise/surveys` → **drill** de `/analise/customer-voice`"*. Ao medir, a
+> palavra teve de ficar mais estreita: virou **nível**, não drill de ponto.
+>
+> **Os dois níveis não leem o mesmo store.** O agregado vem de `session_signal`
+> (ClickHouse); a lista vem de `survey_response` (PostgreSQL, via evaluation-api).
+> Medido em 2026-08-29: **130 sinais × 48 respostas** para `nps`/`segment`, e as séries
+> nem começam no mesmo dia (2026-07-30 × 2026-08-10). Um drill que dissesse *"estas são
+> as respostas por trás deste ponto"* afirmaria uma identidade que o dado não garante.
+>
+> **E não é defeito** — foi preciso medir para saber. Os dois produtores
+> (`survey_record` e `/survey/{token}/submit`) são **persist-first por ADR**: gravam a
+> resposta e só então emitem o sinal. A diferença é `seed_volume_demo.sh`, que escreve
+> 82 linhas `vol_%` direto no ClickHouse. Para todo sinal de caminho REAL existe a
+> resposta: **48 = 48** no grão segmento, **3 = 3** no de sessão. Exposição de um número
+> divergente ≠ invariante quebrada (D14.1). Reportar aqui um defeito teria sido publicar
+> um que não existe.
+>
+> O que a tela faz, então: mostra os dois números com o que cada um conta, e o nível de
+> respostas herda período, pools, instrumento e grão da MESMA barra. Nenhuma afirmação
+> de identidade, nenhuma correlação inventada.
+>
+> **O vocabulário passou a vir do catálogo, e isso corrigiu três coisas de uma vez.**
+> `AnaliseSurveysPage` tinha `METRICS`/`GRAINS` hardcodados:
+>
+>   · oferecia **`pmf × segment`** e **`fcr × segment`**, que o catálogo não serve (os
+>     dois declaram só `session|journey`);
+>   · oferecia um grão **`workflow`** que não existe nem no catálogo nem no dado
+>     (medido: só `segment` e `session`, nos dois stores);
+>   · e a Voz do Cliente abria com `grain: 'journey'` **fixo** — grão que neste ambiente
+>     não tem uma linha sequer, então a página abria em "Sem sinais" com 130 sinais na
+>     base. O default passou a ser o primeiro grão que o INSTRUMENTO declara suportar.
+>
+> **Duas capacidades foram preservadas por decisão, não por acidente:**
+>
+>   · **multi-pool.** A lista tinha `PoolMultiSelect`; o agregado aceitava um pool só.
+>     Unificar a barra com o parâmetro escalar teria REDUZIDO uma capacidade que
+>     funcionava — re-hospedar um componente não é rebaixá-lo. `/reports/customer-voice`
+>     passou a aceitar `?pool_id=` repetido, e o filtro vale nas DUAS metades (série de
+>     survey e overlay de SLA). Se só uma filtrasse, o gráfico compararia populações
+>     diferentes no mesmo eixo.
+>   · **o gate de `evaluation.report`.** Era a entrada de menu de `/analise/surveys`;
+>     como a superfície é gateada por `contacts.visualizar`, absorver a lista sem trazer
+>     o gate junto teria ALARGADO quem alcança verbatim (LGPD). O toggle "Respostas" só
+>     aparece para quem tem o grant, pelo mesmo `passesAbacRule` que o `Sidebar` usa.
+>
+> ⚠️ **E ao trazer o gate, mediu-se que ele nunca foi fronteira.** O endpoint
+> `/v1/evaluation/survey/responses` **não confere `evaluation.report`** — só recorta por
+> pool —, apesar de o docstring dele afirmar *"gate = acesso ao módulo evaluation,
+> postura LGPD"*. Exposição estrutural real; dano hoje **zero** (4 de 6 usuários
+> alcançam sem o grant, e os quatro são o admin e três fixtures de probe). Não
+> consertado aqui: é fronteira de outro serviço, com raio próprio, e pertence ao arco de
+> authz. Contado no `TODO.md` com a população medida.
+>
+> **Regressão que eu mesmo introduzi e desfiz:** reescrevi `CustomerVoicePage` a partir
+> de uma leitura PARCIAL do arquivo e perdi metade do `OverlayChart` — rótulos de banda,
+> rótulos de eixo x, retângulos da legenda —, além de trocar `t('sla')` por um
+> `t('slaLegend')` que não existe em locale nenhum (a chave apareceria crua, o mesmo
+> sintoma que a F3 achou na mesa). Restaurado por diff contra o `HEAD` até ficar
+> byte-idêntico. Lição: **reescrever um arquivo inteiro exige tê-lo lido inteiro**; o
+> que se perde não é o que se lembra de ter lido.
 
 ## 6. Gate — o que o faria ficar vermelho
 

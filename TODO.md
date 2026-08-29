@@ -7197,3 +7197,48 @@ Nenhum é do eixo de credencial; os três apareceram porque o conserto passou po
    platform-ui` **falha**, porque o platform-ui tem `depends_on: mcp-server-plughub` e o
    compose constrói a dependência. O contorno é `build platform-ui` + `up -d --no-deps
    platform-ui`. Não tocado (é do arco de metering).
+
+---
+
+## `/v1/evaluation/survey/responses` não confere `evaluation.report` (medido 2026-08-29, na F4)
+
+**O docstring do handler afirma o gate que ele não tem.**
+`router.py:list_survey_responses` diz *"S8 — navegador de respostas. Verbatim incluído
+(**gate = acesso ao módulo evaluation**, postura LGPD)"*. O corpo só faz pool-scoping
+(`_scope_from_claims(jwt_payload, "transcript")`). Não há checagem de
+`module_config.evaluation.report` em lugar nenhum da rota.
+
+Prosa prometendo invariante sem mecanismo — a família do DDL de
+`participation_intervals` e do docstring de `channel-gateway/auth.py`.
+
+**O gate real era o MENU.** `/analise/surveys` tinha `abac: { module: 'evaluation',
+field: 'report' }` no `Sidebar.tsx`. Gate de navegação, não fronteira: `curl` com
+qualquer JWT do tenant sempre passou.
+
+**Exposição × dano, medidos separadamente** (a lição da D14.1 — são duas grandezas):
+
+| | |
+|---|---|
+| exposição estrutural | real: a rota devolve verbatim a qualquer JWT válido cujo domínio de pool alcance as respostas |
+| população que alcança `nps_ia` (onde estão as 51 respostas) sem o grant | **4 de 6 usuários** |
+| desses, quem é usuário de negócio | **zero** — `navprobe@`, `useradmin@` e `probe@` são fixtures dos probes de segurança; o quarto é `admin@` |
+| dano hoje | nenhum |
+
+**A F4 não alargou nem consertou.** Ao absorver a lista como o nível de RESPOSTAS da Voz
+do Cliente, o gate de navegação veio junto: o toggle "Respostas" só aparece para quem
+tem `evaluation.report` (`CustomerVoicePage`, via `passesAbacRule` — a mesma casa que o
+`Sidebar` usa). Isso mantém a F4 neutra; a rota continua como estava.
+
+**Por que não foi consertado aqui:** é fronteira de outro serviço (evaluation-api), e
+fechá-la é mudança de autorização com raio próprio — pertence ao arco de authz, junto
+com o eixo de cobertura de rota, não a um refactor de relatórios. O caminho, quando for
+feito, é o do passo 6 daquele arco: contar a população antes (feito acima), aplicar
+`abac_can(payload, "evaluation", "report")` do `plughub_authz`, e escrever o caso que
+prova que alguém COM o grant passa — o negativo sozinho passa pelo motivo errado.
+
+⚠️ **Não confundir com o eixo de COBERTURA DE ROTA.** Aquele conta rotas que não pedem
+credencial nenhuma; esta pede (o JWT é lido, o escopo de pool vale). O que falta é o
+segundo eixo — *quais FUNÇÕES o portador pode exercer* —, e é por isso que o censo do
+`probe_authz_single_verifier` não a acusa: ela não decodifica JWT por conta própria nem
+resolve escopo por conta própria. Terceiro caso da mesma regra: um censo desenhado para
+um eixo não prova nada sobre o vizinho.

@@ -171,16 +171,45 @@ function Meta({ label, value, mono }: { label: string; value: string; mono?: boo
 
 // ── Main page ────────────────────────────────────────────────────────────────
 
-export default function AnaliseSurveysPage() {
+/**
+ * Filtros vindos da SUPERFÍCIE que hospeda esta lista (F4).
+ *
+ * `/analise/surveys` deixou de ser endereço: a lista de respostas virou o **nível de
+ * inspeção** da Voz do Cliente (D7 — "endereço morre, componente é re-hospedado"). Com
+ * `host`, esta página não desenha a própria barra de filtro; o período, os pools, o
+ * instrumento e o grão são da superfície.
+ *
+ * Mesmo padrão da F2 (wrap-up) e da F3 (painéis de pool), pela mesma razão: duas barras
+ * de filtro na mesma tela e a de dentro vence em silêncio.
+ */
+export interface SurveyListHost {
+  fromDt:  string
+  toDt:    string
+  poolIds: string[]
+  /** Vazio = todos os instrumentos. Vem do CATÁLOGO, não de lista local. */
+  metric:  string
+  /** Vazio = todos os grãos. */
+  grain:   string
+}
+
+export default function AnaliseSurveysPage({ host }: { host?: SurveyListHost } = {}) {
   const { tenantId, currentUser } = useAuth()
   const { t } = useTranslation('contacts')
   const navigate = useNavigate()
 
-  const [fromDt, setFromDt]   = useState(iso30DaysAgo)
-  const [toDt, setToDt]       = useState(isoToday)
-  const [grain, setGrain]     = useState('')
-  const [metric, setMetric]   = useState('')
-  const [poolIds, setPoolIds] = useState<string[]>([])
+  const [ownFromDt, setFromDt]   = useState(iso30DaysAgo)
+  const [ownToDt, setToDt]       = useState(isoToday)
+  const [ownGrain, setGrain]     = useState('')
+  const [ownMetric, setMetric]   = useState('')
+  const [ownPoolIds, setPoolIds] = useState<string[]>([])
+
+  // O hospedeiro VENCE quando existe — não é merge. Dois donos para o mesmo filtro é o
+  // defeito que o `host` fecha.
+  const fromDt  = host ? host.fromDt  : ownFromDt
+  const toDt    = host ? host.toDt    : ownToDt
+  const grain   = host ? host.grain   : ownGrain
+  const metric  = host ? host.metric  : ownMetric
+  const poolIds = host ? host.poolIds : ownPoolIds
   const [domainPools, setDomainPools] = useState<string[]>([])
   const [rows, setRows]       = useState<SurveyResponseRow[]>([])
   const [total, setTotal]     = useState(0)
@@ -225,7 +254,9 @@ export default function AnaliseSurveysPage() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
-      {/* Filter bar */}
+      {/* Filter bar — só quando esta lista É a página. Hospedada, a barra é da
+          superfície (ver `SurveyListHost`). */}
+      {!host && (
       <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-muted">{t('surveys.filters.from', { defaultValue: 'De' })}</label>
@@ -262,6 +293,7 @@ export default function AnaliseSurveysPage() {
               {t('surveys.refresh', { defaultValue: 'Atualizar' })}
             </button>}
       </div>
+      )}
 
       {/* Count */}
       <div className="flex items-center px-5 py-2 bg-white border-b border-border flex-shrink-0 text-xs">

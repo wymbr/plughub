@@ -69,9 +69,9 @@ declare -A CLASS=(
   [analise/agents]="redirect|F3 - a mesa virou o MODO comparar de /analise/resources (D6); o redirect carimba mode=compare"
   [analise/pools]="redirect|F3 - as quatro sub-abas viraram as lentes do modo evoluir de /analise/resources"
   [analise/wrapup]="redirect|F2 - absorvido como a lente de disposicao (?lens=disposition) de /analise/sessions"
-  [analise/surveys]="superficie|vira DRILL de /analise/customer-voice na F4"
+  [analise/surveys]="redirect|F4 - absorvido como o NIVEL de respostas de /analise/customer-voice; o redirect carimba view=responses"
   [analise/quality]="fica|avaliação — unidade de análise distinta (Arc 6)"
-  [analise/customer-voice]="fica|sinal do cliente — unidade distinta; absorve surveys na F4"
+  [analise/customer-voice]="superficie|Voz do Cliente — agregado (session_signal) x nivel de respostas (survey_response), uma barra de filtro"
   [analise/customers]="fica|cliente — ADR próprio (adr-customer-360-two-surfaces), fora de escopo"
   [analise/events]="fica|Arc 12 business events — categoria hierárquica, investigação por session_id"
   [dashboards]="fica|composição do operador sobre o catálogo de DisplayTool"
@@ -422,7 +422,11 @@ echo "   · F3: a lente de TOKEN do lado da oferta (entidade = conta LLM). A T3 
 echo "         a da superfície A; esta espera decidir o que exibir quando"
 echo "         \`account_config_id\` está VAZIO — medido em 2026-08-29: é o caso de 100%"
 echo "         dos eventos deste ambiente, que roda pela chave de env legada"
-echo "   · F4: \`customer-voice\` absorve \`surveys\`"
+echo "   · pos-F4: o endpoint \`/v1/evaluation/survey/responses\` NAO confere"
+echo "         \`evaluation.report\`, apesar de o docstring dele afirmar que confere."
+echo "         O gate de navegacao existe (a F4 o trouxe junto ao absorver a lista),"
+echo "         mas a FRONTEIRA e de outro servico e tem raio proprio. Divida no TODO,"
+echo "         com a populacao medida: 4 de 6 usuarios alcancam sem o grant"
 
 echo
 if [ "$FAIL" -eq 0 ]; then

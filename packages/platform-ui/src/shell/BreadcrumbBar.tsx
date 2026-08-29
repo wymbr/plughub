@@ -56,6 +56,10 @@ const BREADCRUMBS: Record<string, BreadcrumbDef> = {
   // As linhas deles saíram: uma entrada de breadcrumb para rota que redireciona nunca
   // é lida, e sobrevive como afirmação de que a página existe.
   '/analise/resources':      { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.resources' },
+  // F4 — a Voz do Cliente não tinha linha aqui e abria sem trilha, ao contrário das
+  // irmãs. Passou a ter porque agora hospeda um NÍVEL (as respostas) e a trilha é o
+  // que diz de onde se veio.
+  '/analise/customer-voice': { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.customerVoice' },
   '/analise/events':         { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.events' },
   '/analise/quality':        { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.quality' },
 

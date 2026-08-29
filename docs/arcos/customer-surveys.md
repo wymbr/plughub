@@ -454,7 +454,13 @@ A view consolidada reusa `/reports/agents/cross` com as novas métricas.
 A bancada (§10) **agrega** (curvas, médias — fonte ClickHouse `session_signal`). Complementar a ela,
 uma superfície dedicada lista **resposta a resposta**, para inspeção qualitativa.
 
-- **Rota** `/analise/surveys` (ABAC `visualizar`/report). **Lista agrupada por tipo** (CSAT/NPS/CES/
+> ⚠️ **F4 do ADR de relatórios (2026-08-29):** `/analise/surveys` deixou de ser endereço. A lista virou
+> o **nível de respostas** da Voz do Cliente (`/analise/customer-voice?view=responses`), sob a barra de
+> filtro daquela superfície; o endereço antigo é `redirect` preservando a query. O gate ABAC
+> `evaluation.report` veio junto (o toggle só aparece para quem tem o grant). O que segue abaixo
+> descreve a lista, que continua viva — só mudou de casa.
+
+- **Rota** ~~`/analise/surveys`~~ → nível de `/analise/customer-voice` (ABAC `visualizar`/report). **Lista agrupada por tipo** (CSAT/NPS/CES/
   PMF/FCR), com filtros (período, pool, canal, faixa de nota, categoria de classificação do §10c) e
   **N/cobertura** sempre visível.
 - **Fonte = PG `survey_response`/`survey_instance`** (operacional, por-resposta) — não o agregado. Cada

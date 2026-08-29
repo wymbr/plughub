@@ -12,6 +12,20 @@
   "sla": "SLA (attainment %)",
   "nResponses_one": "{{count}} response",
   "nResponses_other": "{{count}} responses",
+  "nSignals_one": "{{count}} signal",
+  "nSignals_other": "{{count}} signals",
+  "filter": {
+    "from": "From",
+    "to": "to",
+    "allPools": "All pools in domain",
+    "noPools": "No pools in domain",
+    "poolCount": "{{count}} pools"
+  },
+  "level": {
+    "aggregate": "Aggregate",
+    "responses": "Responses"
+  },
+  "storeNote": "The aggregate counts SIGNALS (analytical); the responses level counts recorded RESPONSES (operational store, with verbatim). They are different stores and the two numbers may diverge — signals seeded for demo purposes produce no response.",
   "overlayNote": "Descriptive read: juxtaposes what the customer felt with SLA attainment. It does not infer causation.",
   "empty": {
     "title": "No signals",

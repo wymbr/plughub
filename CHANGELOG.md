@@ -1,5 +1,99 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Relatórios F4: a Voz do Cliente absorve as respostas — e o "drill" virou NÍVEL por medição (2026-08-29)
+
+Última fase do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md). **Arco
+completo** (F0 · F0b · F1 · F2 · F3 · F4 · T0–T3). `/analise/surveys` deixa de ser endereço: a lista
+resposta-a-resposta vira o nível de inspeção da Voz do Cliente, sob a mesma barra de filtro (período ·
+pools · instrumento · grão).
+
+`/analise/` sai de 10 endereços para 6, e a Análise passa a ter três superfícies com a mesma gramática:
+**Contatos** (demanda) · **Recursos** (oferta) · **Voz do Cliente** (sinal).
+
+### A palavra da D7 teve de ficar mais estreita
+
+A D7 diz *"`/analise/surveys` → **drill** de `/analise/customer-voice`"*. Ao medir, virou **nível** —
+não drill de ponto, e a diferença não é semântica:
+
+| população | onde | linhas (`nps`/`segment`) | começa em |
+|---|---|---|---|
+| agregado | `session_signal` (ClickHouse) | 130 | 2026-07-30 |
+| respostas | `survey_response` (PostgreSQL) | 48 | 2026-08-10 |
+
+Um drill que dissesse *"estas são as respostas por trás deste ponto"* afirmaria uma identidade que o
+dado não garante — e um ponto de julho abriria uma lista vazia, lida como "não houve resposta".
+
+**E não é defeito — foi preciso medir para saber.** Os dois produtores (`survey_record` e
+`/survey/{token}/submit`) são **persist-first por ADR**: gravam a resposta e só então emitem o sinal.
+A diferença é `seed_volume_demo.sh`, que escreve 82 linhas `vol_%` direto no ClickHouse. Para todo
+sinal de caminho REAL existe a resposta: **48 = 48** no grão segmento, **3 = 3** no de sessão.
+
+Exposição de um número divergente ≠ invariante quebrada (a lição da D14.1, aplicada na direção certa
+desta vez). Publicar aqui um defeito teria sido publicar um que não existe. O que a tela faz: mostra os
+dois números com o que cada um conta, e diz que os stores são diferentes.
+
+### O vocabulário passou a vir do catálogo, e isso corrigiu três coisas
+
+`AnaliseSurveysPage` tinha `METRICS`/`GRAINS` **hardcodados**:
+
+1. oferecia **`pmf × segment`** e **`fcr × segment`** — o catálogo declara só `session|journey` para
+   os dois;
+2. oferecia um grão **`workflow`** que não existe nem no catálogo nem no dado (medido: só `segment` e
+   `session`, nos dois stores);
+3. e a Voz do Cliente abria com `grain: 'journey'` **fixo** — grão sem uma única linha neste ambiente.
+   **A página abria em "Sem sinais" com 130 sinais na base.** O default passou a ser o primeiro grão
+   que o INSTRUMENTO declara suportar.
+
+### Duas capacidades preservadas por decisão
+
+- **Multi-pool.** A lista tinha `PoolMultiSelect`; o agregado aceitava um pool só. Unificar a barra com
+  o parâmetro escalar teria REDUZIDO uma capacidade que funcionava — re-hospedar um componente não é
+  rebaixá-lo. `/reports/customer-voice` passou a aceitar `?pool_id=` repetido, e o filtro vale nas DUAS
+  metades: a série de survey e o overlay de SLA. **Se só uma filtrasse, o gráfico compararia populações
+  diferentes no mesmo eixo** — e é essa a asserção que a mutação do teste derruba.
+- **O gate de `evaluation.report`.** Era a entrada de menu de `/analise/surveys`; a superfície é gateada
+  por `contacts.visualizar`. Absorver a lista sem trazer o gate junto teria ALARGADO quem alcança
+  verbatim (LGPD) — e alargamento é o erro que não aparece na tela, porque só mostra dado a MAIS. O
+  toggle "Respostas" só existe para quem tem o grant, pelo mesmo `passesAbacRule` do `Sidebar`.
+
+### Ao trazer o gate, mediu-se que ele nunca foi fronteira
+
+`/v1/evaluation/survey/responses` **não confere `evaluation.report`** — só recorta por pool —, apesar
+de o docstring afirmar *"gate = acesso ao módulo evaluation, postura LGPD"*. Prosa prometendo invariante
+sem mecanismo, a família do DDL de `participation_intervals`.
+
+Exposição estrutural real; **dano hoje zero**: 4 de 6 usuários alcançam `nps_ia` (onde estão as 51
+respostas) sem o grant, e os quatro são o `admin` e três fixtures de probe. Não consertado aqui — é
+fronteira de outro serviço, com raio próprio, e pertence ao arco de authz. Contado no `TODO.md` com a
+população medida e o caminho (o do passo 6: contar antes, `abac_can`, e o caso positivo ao lado).
+
+Terceiro caso da mesma regra: **um censo desenhado para um eixo não prova nada sobre o vizinho** — o
+`probe_authz_single_verifier` não a acusa porque ela não decodifica JWT nem resolve escopo por conta
+própria.
+
+### Regressão que eu introduzi e desfiz
+
+Reescrevi `CustomerVoicePage` a partir de uma leitura **parcial** do arquivo e perdi metade do
+`OverlayChart` — rótulos de banda, rótulos de eixo x, retângulos da legenda —, além de trocar `t('sla')`
+por um `t('slaLegend')` inexistente em locale nenhum (a chave apareceria crua, o mesmo sintoma que a F3
+achou na mesa). Restaurado por diff contra o `HEAD` até ficar **byte-idêntico**.
+
+Lição: **reescrever um arquivo inteiro exige tê-lo lido inteiro.** O que se perde não é o que se lembra
+de ter lido.
+
+### Verificação
+
+- 746 testes da analytics-api (741 + 5 do filtro de pool), com **mutação**: neutralizar o filtro do
+  overlay de SLA deixa `test_overlay_de_sla_recebe_o_mesmo_recorte` vermelho;
+- `tsc --noEmit` limpo; `probe_report_surface.sh`, `probe_ui_credential_coverage.sh`,
+  `probe_i18n_duplicate_keys.sh`, `probe_route_credential_coverage.sh`,
+  `probe_authz_single_verifier.sh`, `probe_llm_call_paths.sh` — todos verdes;
+- no browser, contra dado real: agregado (NPS 39,7 · 121 sinais) → respostas (48) sob a mesma barra ·
+  filtro de pool nos dois níveis (`sac_ia` → 33 sinais / 0 respostas; `nps_ia` → 48 respostas) ·
+  redirect de `/analise/surveys?metric=nps` preservando o instrumento e carimbando `view=responses` ·
+  breadcrumb, que a página não tinha.
+
+
 ## Relatórios F3: a Superfície B nasce, a mesa vira MODO, e a forma do gráfico vira declaração (2026-08-29)
 
 Penúltima fase do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md) — resta a

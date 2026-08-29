@@ -25,7 +25,7 @@ CSV response:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -1050,7 +1050,11 @@ async def get_customer_voice(
     metric:         str            = Query("nps",     description="nps | csat | ces | pmf | fcr | sla"),
     from_dt:        Optional[str]  = Query(None),
     to_dt:          Optional[str]  = Query(None),
-    pool_id:        Optional[str]  = Query(None),
+    # F4 — repetível (`?pool_id=a&pool_id=b`). Virou lista quando `/analise/surveys` foi
+    # absorvido como o nível de RESPOSTAS desta superfície: aquela tela tinha
+    # `PoolMultiSelect`, e unificar a barra com um parâmetro escalar teria REDUZIDO uma
+    # capacidade que funcionava. O escalar continua válido (link antigo).
+    pool_id:        Optional[List[str]] = Query(None),
     pool_principal: PoolPrincipal  = Depends(optional_pool_principal),
 ) -> Response:
     """Voz do Cliente: série diária do instrumento (roll-up do catálogo) no grão pedido +

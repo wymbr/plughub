@@ -124,3 +124,80 @@ def test_unknown_metric_raises():
         assert "unknown metric" in str(exc)
     else:
         raise AssertionError("esperava ValueError para métrica fora do catálogo")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# F4 — filtro de pool: UM, VÁRIOS, ou nenhum
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# O parâmetro virou lista quando `/analise/surveys` foi absorvido como o nível de
+# RESPOSTAS desta superfície: aquela tela tinha `PoolMultiSelect` e esta aceitava um
+# pool só. Unificar a barra com o escalar teria REDUZIDO uma capacidade que funcionava.
+#
+# Estes testes assertam sobre o SQL EXECUTADO, não sobre o fonte — mesmo mecanismo do
+# `test_sla_reads_the_segment.py`, e pela mesma razão: um `grep` no arquivo contaria o
+# comentário que documenta a decisão.
+#
+# ⚠️ O caso do OVERLAY é o que importa mais e é o menos óbvio: a série de survey e a de
+# SLA precisam do MESMO recorte. Se só uma filtrasse, o gráfico compararia populações
+# diferentes no mesmo eixo — a forma mais convincente de publicar uma correlação que
+# não existe. Por isso a asserção é sobre as DUAS queries.
+
+
+def _run_pools(pool_id, metric: str = "nps") -> MagicMock:
+    c = _client([])
+    query_customer_voice(
+        c, "db", "t", "session", metric, "2026-07-01", "2026-07-31", pool_id=pool_id,
+    )
+    return c
+
+
+def test_sem_pool_nao_filtra():
+    sql = _sql(_run_pools(None))
+    assert "pool_id = {pool_id:String}" not in sql
+    assert "pool_ids:Array(String)" not in sql
+
+
+def test_pool_unico_usa_igualdade():
+    c = _run_pools("sac_ia")
+    sql = _sql(c)
+    assert "pool_id = {pool_id:String}" in sql
+    assert "pool_ids:Array(String)" not in sql
+    params = [call.kwargs.get("parameters", {}) for call in c.query.call_args_list]
+    assert any(p.get("pool_id") == "sac_ia" for p in params)
+
+
+def test_varios_pools_usam_in():
+    c = _run_pools(["sac_ia", "retencao_humano"])
+    sql = _sql(c)
+    assert "pool_ids:Array(String)" in sql
+    params = [call.kwargs.get("parameters", {}) for call in c.query.call_args_list]
+    assert any(p.get("pool_ids") == ["sac_ia", "retencao_humano"] for p in params)
+
+
+def test_lista_vazia_e_o_mesmo_que_sem_filtro():
+    """Quem limpou a seleção e quem nunca escolheu querem a mesma resposta.
+
+    Sem isto, `pool_ids=[]` viraria `IN []` — que em ClickHouse não casa com nada, e a
+    tela devolveria ZERO sinais para "todos os pools". Um vazio que parece resultado.
+    """
+    assert "pool_id" not in _sql(_run_pools([]))
+
+
+def test_string_vazia_nao_vira_pool():
+    """`?pool_id=` sem valor é "sem filtro", não "o pool cujo id é a string vazia"."""
+    assert "pool_id = {pool_id:String}" not in _sql(_run_pools(""))
+
+
+def test_overlay_de_sla_recebe_o_mesmo_recorte():
+    """As DUAS queries filtram — senão o overlay compara populações diferentes.
+
+    A coluna difere de propósito: a série de survey filtra `pool_id` de
+    `session_signal`; o overlay filtra `w.pool_id`, o pool do SEGMENTO onde se esperou
+    (D10 — o pool da sessão é o de ENTRADA).
+    """
+    c = _run_pools(["a", "b"])
+    sqls = [str(call.args[0]) for call in c.query.call_args_list]
+    assert len(sqls) == 2, "esperado série + overlay"
+    assert "pool_id IN {pool_ids:Array(String)}" in sqls[0]
+    assert "w.pool_id IN {pool_ids:Array(String)}" in sqls[1]
