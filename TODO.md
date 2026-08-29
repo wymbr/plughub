@@ -5281,6 +5281,49 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 >   importa para a fase, **sem backfill**. Nota adjacente: tabela vazia também significa que nenhum
 >   skill deste ambiente emite `agent_event` — o Arc 12 não tem produtor vivo aqui.
 >
+> ### 🆕 DETECÇÃO de PII — dois achados medidos em 2026-08-29 (arco PRÓPRIO, não é o `masked` tipado)
+>
+> **Decisão de escopo tomada aqui:** declaração (`masked:`) e detecção (regex) **não são duas
+> implementações da mesma coisa** e o ADR do `masked` tipado **não** absorve a segunda. Declaração
+> responde *"este campo VAI receber segredo"* — sabe-se **antes** do valor existir, alcança o valor
+> inteiro e pode **suprimir na origem**. Detecção responde *"este texto CONTÉM algo parecido com
+> PII"* — só se sabe **depois**, alcança um trecho, e só pode tokenizar post-hoc. O que as duas
+> compartilham é o **TIPO** (`formato.detect_pattern` × `mascara.by_role` × `lgpd`), e a detecção já
+> o lê desde a V2 (`DEFAULT_MASKING_RULES` é derivada do catálogo). Fundi-las devolveria duas
+> respostas para uma pergunta — o defeito que a V2b fechou.
+>
+> O mecanismo de detecção **não** é o problema: é único (`MaskingService.applyMasking`,
+> `mcp-server-plughub/src/lib/masking.ts`) e funciona (há `meu cpf e [cpf:tk_ab12:***-00]` na base).
+> O problema é **COLOCAÇÃO** — um único call site (`tools/session.ts:472`, gated em
+> `role === customer|primary`), e o caminho que vazou não passa por ele: a submissão de form é
+> escrita pelo **bridge**, em Python. Medido: dos **439** recados de cliente em
+> `plughub_demo.messages`, **0 CPFs crus** e **2 emails crus** — e os 2 são exatamente as 2
+> submissões de form. Três colocações possíveis, cada uma com custo real: (a) choke point de escrita
+> do stream — certo em tese, mas o bridge não usa `writeStreamEntry()`; (b) no redator do bridge —
+> resolve o caso medido e cria a **segunda implementação** que a V2b gastou esforço para eliminar;
+> (c) net-pass na borda de ingestão — uma casa, agnóstica de linguagem, mas *depois* do fato e sem o
+> vault à mão. **Escolher é o F1 deste arco; medir o volume por caminho é o F0.**
+>
+> · 🔴 **`session.ts:485` — detecção que falha entrega o conteúdo CRU, em silêncio.**
+>   `} catch { /* mascaramento não-fatal — entrega conteúdo original */ }`. É `except: pass` no
+>   único lugar do produto onde degradar significa **vazar PII**, e o próprio ADR já registra masking
+>   como a política em que fallback mudo não é opção (D4). Não medi se dispara hoje — **o ponto é que
+>   ninguém saberia**, que é a definição da patologia. Conserto mínimo: logar NOMEANDO o que deixou
+>   de valer (categoria/sessão), no molde do aviso de degradação da V2b. Conserto certo: decidir se
+>   recusa alto. *Nota: há 7 outros `catch` mudos no mesmo arquivo (`:249 :306 :317 :326 :430 :585
+>   :607`); os demais degradam para ausência de enfeite, não para vazamento — só este é desta
+>   classe, e é por isso que ele sai da lista.*
+> · 🟡 **A transcrição durável não tem PROVENIÊNCIA de mascaramento — e não é campo perdido, é fato
+>   nunca modelado.** Conferido nas quatro camadas: `ConversationMessageSentSchema`
+>   (`platform-events.ts:419-432`) **não declara** `masked`/`masked_categories`; o produtor do bridge
+>   (`main.py:9401+`) não os envia; o parser (`models.py:492-508`) não os lê; o DDL de
+>   `plughub_demo.messages` (`clickhouse.py:161-174`) não tem as colunas. Consequência: **não dá para
+>   distinguir "detectamos e tokenizamos" de "nunca olhamos"** — as duas leituras são idênticas, que
+>   é a assinatura de *valor plausível*. O flag existe só no stream canônico do Redis, escrito pelo
+>   `session.ts`. Pré-requisito de qualquer medição séria de cobertura de detecção: sem a coluna, o
+>   F0 do arco acima só sabe contar PII crua que ele mesmo souber procurar por regex — ou seja, mede
+>   o que já sabe, e não o que escapou.
+>
 > ### 🆕 O que a V2b deixou aberto (2026-08-29) — achados FORA do escopo dela
 >
 > · 🔴 **`MaskingDisplayRule` é redefinida à mão no `platform-ui`** (`MaskedToken.tsx:43-57`:
