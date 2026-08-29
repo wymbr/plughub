@@ -116,6 +116,11 @@ todos verdes, todos medindo a porta contra ela mesma.
 Nenhuma é errada; nenhuma é completa. São três recortes do mesmo objeto morando em três casas, e o
 `iban`/`passport` fantasma é o que acontece quando o catálogo não tem dono.
 
+> **O consumidor desta unificação já tem ADR próprio:**
+> [`adr-masked-typed-declaration.md`](adr-masked-typed-declaration.md) — o `masked` do
+> DialogForm/menu passa a nomear um tipo do catálogo. É ele que faz a linha do meio (canal) e a de
+> baixo (papel) alcançarem um campo declarado; a V2b foi o pré-requisito dele.
+>
 > **Emenda de 2026-08-29 (V2b).** A linha do meio mudou de chave: `MaskingDisplayRule` já não é
 > chaveada por `rule.{category}`, e sim pelo **id do tipo** no catálogo (`type.mascara.display`). A
 > tabela acima descreve o estado do diagnóstico, não o de hoje. Isto era **pré-requisito do `masked`

@@ -5252,7 +5252,7 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 >   DialogForm em `render.fields[].masked`, que o step `menu` consome. **Arquitetura favorável:** a
 >   tipagem muda declaração + normalizador; os consumidores a jusante recebem `masked_fields[]` (lista
 >   de ids) e só precisam mudar onde o TIPO tiver de chegar (máscara por papel, regra de canal).
-> · 🔴 **A submissão de form ENTRA na transcrição durável, e o campo não-declarado vai em CLARO.**
+> · 🔴 *(agora coberto por [`adr-masked-typed-declaration.md`](docs/adr/adr-masked-typed-declaration.md) §1.3)* **A submissão de form ENTRA na transcrição durável, e o campo não-declarado vai em CLARO.**
 >   Medido ao vivo: 2 linhas `[Formulário: …]` em `plughub_demo.messages` (`author_role=customer`,
 >   contra 1 564 de testemunha), com `senha` e `codigo_2fa` redigidos e **`email` em claro** — porque
 >   o autor do form não marcou `masked`. **O catálogo TEM regra para ele** (`email_addr`, com
