@@ -20,6 +20,7 @@
  */
 
 import { z } from "zod"
+import { MaskedDeclarationSchema } from "./audit"
 import { ScoreScaleSchema, ScoreAggregationSchema } from "./scoring"
 
 // ─────────────────────────────────────────────
@@ -255,7 +256,7 @@ export const DialogFieldSchema = z.object({
    * When true this field is masked: its value never appears in the runner's raw
    * return (masked-input invariant) — it stays in the in-memory masked scope.
    */
-  masked:     z.boolean().optional(),
+  masked:     MaskedDeclarationSchema.optional(),
   validation: DialogValidationSchema,
   capture:    DialogCaptureSchema,
 })
@@ -311,7 +312,7 @@ export const QuestionNodeSchema = z.object({
   interaction: DialogInteractionSchema.default("text"),
   options:     z.array(DialogOptionSchema).optional(),
   fields:      z.array(DialogFieldSchema).optional(),
-  masked:      z.boolean().optional(),
+  masked:      MaskedDeclarationSchema.optional(),
   /** Key under which the raw answer lands in the runner's return `answers`. */
   output_key:  z.string().min(1),
   /** Question-level capture (single-answer questions). */

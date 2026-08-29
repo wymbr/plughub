@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod"
+import { MaskedDeclarationSchema } from "./audit"
 import { ToolContextTagsSchema, ReasonStepContextTagsSchema, SkillRequiredContextSchema, ContextTagScopeSchema } from "./context-store"
 import { SignalGrainSchema } from "./survey"
 
@@ -473,7 +474,7 @@ export const MenuStepSchema = z.object({
    * Pode ser sobrescrito por campo individual (field-level tem precedência).
    * Valores mascarados nunca entram no stream, pipeline_state ou logs.
    */
-  masked: z.boolean().optional(),
+  masked: MaskedDeclarationSchema.optional(),
   /**
    * Standby de @mention (mention-protocol): quando true, este menu NÃO recebe
    * mensagens comuns dos roteadores (texto do agente humano / menu_submit) —
@@ -500,7 +501,7 @@ export const MenuStepSchema = z.object({
        * Quando false, este campo NÃO é mascarado — mesmo que masked=true no step.
        * (field-level tem precedência sobre step-level)
        */
-      masked:   z.boolean().optional(),
+      masked:   MaskedDeclarationSchema.optional(),
     })),
     z.string(),
   ]).optional(),

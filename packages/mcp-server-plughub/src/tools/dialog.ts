@@ -39,7 +39,7 @@ const FormGetInputSchema = z.object({
 // Content-shaping only (no control flow).
 
 interface RenderField {
-  id: string; label: string; type: string; required: boolean; masked: boolean
+  id: string; label: string; type: string; required: boolean; masked: boolean | string
   // Approval (ADR adr-human-approval-workflow-step): pre-filled editable value +
   // per-field options (select). Absent for plain capture-only survey fields.
   value?:   string | number | boolean
@@ -114,7 +114,9 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
             label:    resolveLocalizedText(f.label, locale, dl),
             type:     f.type,
             required: f.required ?? false,
-            masked:   f.masked === true,
+            // Verbatim: com a união (T2), `=== true` faria `masked: "cpf"` virar
+            // `false` e o campo sair DESMASCARADO — fail-open silencioso.
+            masked:   f.masked ?? false,
           }
           if (f.value !== undefined) rf.value = f.value
           if (f.options && f.options.length) {
@@ -131,7 +133,7 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
           label:    resolveLocalizedText(node.prompt, locale, dl),
           type:     node.interaction === "text" ? "text" : "choice",
           required: true,
-          masked:   node.masked === true,
+          masked:   node.masked ?? false,   // verbatim — ver acima
         })
       }
       questions.push({

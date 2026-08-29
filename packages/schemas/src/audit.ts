@@ -344,6 +344,30 @@ export type DataTypeMask = z.infer<typeof DataTypeMaskSchema>
  * **Invariante: um campo declara EXATAMENTE UM tipo.** Se dois campos precisam de
  * políticas diferentes, são dois tipos — nunca um tipo com exceção no campo.
  */
+/**
+ * OPAQUE_DATA_TYPE_ID — o tipo para o qual `masked: true` resolve.
+ *
+ * Uma casa só para a string: engine, normalizador e guardas leem daqui, senão o id
+ * do tipo mais restritivo do produto vira literal repetido em N arquivos, que é
+ * como um rename silencioso desliga o mascaramento.
+ */
+export const OPAQUE_DATA_TYPE_ID = "opaque"
+
+/**
+ * MaskedDeclaration — o que um step/nó ou campo declara em `masked`.
+ *
+ *   `"cpf"`     → mascarado, e o TIPO é `cpf` (política vem do catálogo)
+ *   `true`      → mascarado, tipo `opaque` (o mais restritivo) — NÃO é "sem tipo"
+ *   `false`     → não mascarado (override explícito sobre o step)
+ *   ausente     → herda o step/nó
+ *
+ * O ramo `boolean` é transitório e fecha por CONTADOR, nunca por decreto (D8 do
+ * ADR `adr-masked-typed-declaration.md`): sai quando o parque de `masked: true`
+ * zerar, medido por gate. Enquanto não zerar, `true` é legítimo.
+ */
+export const MaskedDeclarationSchema = z.union([z.boolean(), z.string()])
+export type MaskedDeclaration = z.infer<typeof MaskedDeclarationSchema>
+
 export const DataTypeSchema = z.object({
   id:      z.string().min(1),
   label:   z.string().optional(),
@@ -527,7 +551,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
     //     afirmar que não é dado pessoal; dizer `sensivel`/`credencial` seria uma
     //     afirmação jurídica que ninguém fez.
     {
-      id:      "opaque",
+      id:      OPAQUE_DATA_TYPE_ID,
       label:   "Não classificado (mascarado sem tipo)",
       icon:    "⬛",
       formato: {},

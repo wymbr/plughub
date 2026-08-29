@@ -63,8 +63,23 @@ esac
 # lado que não pode estar desatualizado em relação a si mesmo.
 echo
 echo "── P0b. preflight de CONTEÚDO (imagem × fonte) ──────────────"
-SRC_IDS="$(sed -n '/DEFAULT_DATA_TYPE_CATALOG/,/^}/p' packages/schemas/src/audit.ts \
-           | grep -oE 'id:[[:space:]]*"[a-z0-9_]+"' | sed 's/.*"\(.*\)"/\1/' | sort | tr '\n' ',')"
+# O id pode vir como literal (`id: "cpf"`) OU como CONSTANTE (`id: OPAQUE_DATA_TYPE_ID`),
+# e a constante existe justamente para o id do tipo mais restritivo não virar literal
+# repetido. Um extrator que só lê literais deixa de ver o tipo assim que alguém faz
+# esse refactor — foi o que aconteceu em 2026-08-29, e o gate saiu INCONCLUSIVO em vez
+# de verde, que é o comportamento certo: ele não sabia responder, e disse isso.
+AUDIT_SRC="packages/schemas/src/audit.ts"
+SRC_IDS="$(sed -n '/DEFAULT_DATA_TYPE_CATALOG/,/^}/p' "$AUDIT_SRC" \
+           | grep -oE 'id:[[:space:]]*("[a-z0-9_]+"|[A-Z][A-Z0-9_]+)' \
+           | sed 's/^id:[[:space:]]*//' \
+           | while read -r tok; do
+               case "$tok" in
+                 '"'*) echo "$tok" | tr -d '"' ;;
+                 # constante: resolve pelo `export const NOME = "valor"` do mesmo arquivo
+                 *) grep -oE "export const ${tok} = \"[a-z0-9_]+\"" "$AUDIT_SRC" \
+                      | head -1 | sed 's/.*"\(.*\)"/\1/' ;;
+               esac
+             done | grep -v '^$' | sort | tr '\n' ',')"
 IMG_IDS="$($DC exec -T "$SVC" sh -c "cd $NODE_CWD && node -e \"const s=require('@plughub/schemas'); console.log(s.DEFAULT_DATA_TYPE_CATALOG.types.map(t=>t.id).sort().join(',')+',')\"" 2>&1 | tr -d '\r')"
 if [ -z "$SRC_IDS" ] || [ "$SRC_IDS" = "," ]; then
   huh "não consegui extrair os ids do fonte — o formato do catálogo mudou; a comparação não vale"

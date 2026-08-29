@@ -1,6 +1,6 @@
 # ADR: `masked` deixa de ser booleano e passa a nomear um TIPO do catálogo
 
-**Status:** Proposto — 2026-08-29. Nenhuma fase implementada.
+**Status:** Aceito — 2026-08-29. **T1 e T2 entregues** (ver `CHANGELOG.md`); T3 é a próxima. T7, que fecha o ramo `boolean`, é a única não reversível e segue não iniciada.
 **Data:** 2026-08-29
 **Componentes:** `packages/schemas`, `packages/skill-flow-engine`, `packages/mcp-server-plughub`,
 `packages/orchestrator-bridge`, `packages/platform-ui`, `packages/agent-registry`,
@@ -280,19 +280,28 @@ permissivo: cair nele nunca é um atalho confortável.
 **O que piora antes de melhorar.** Enquanto §1.4 não estiver consertada, tipar não muda o Console —
 e por isso D6 é ordem, não sugestão.
 
-**Consequência não prevista, descoberta ao implementar a T1: este ADR APOSENTA o critério de
-alcançabilidade do oráculo da V2.** O `verifyDataTypeCatalog` existe para achar tipo que *nenhum
-mecanismo alcança* — foi assim que `iban`/`passport` caíram. Mas assim que `masked` puder nomear
-qualquer id do catálogo, **todo tipo passa a ser alcançável por declaração**, e a pergunta *"alguém
-consegue chegar neste tipo?"* responde "sim" para tudo, inclusive para um fantasma novo. O oráculo
-não fica errado; fica **vazio**.
+**Consequência sobre o oráculo da V2 — e a correção do meu próprio exagero.**
 
-O sucessor não é uma alcançabilidade mais fina — é trocar de pergunta: de **alcance** para **USO**.
-Depois da T2, o que denuncia um fantasma é *"este tipo está declarado em algum skill ou form?"*,
-medido contra o parque (agent-registry + dialog-api), que é o mesmo contador da D8 lido pelo outro
-lado. Enquanto a T2 não chega, o critério atual segue valendo e `declared_only` é a única exceção,
-marcada no tipo. **Consequência para a ordem: a T2 não pode entrar sem que o gate da V2 ganhe o
-critério de uso — senão o arco remove uma proteção e não põe nada no lugar.**
+Escrevi aqui, ao entregar a T1, que este ADR *"APOSENTA o critério de alcançabilidade"* e que a T2
+**não poderia entrar** sem um critério de uso no lugar. **Exagerado, e a diferença muda o plano.**
+
+O raciocínio era: se `masked` pode nomear qualquer id, todo tipo vira alcançável por declaração e a
+pergunta *"alguém consegue chegar neste tipo?"* responde "sim" para tudo. Isso **só valeria se
+"declarável" fosse propriedade automática de todo tipo** — e não é. O oráculo continua reprovando
+`iban` novo, porque para entrar no catálogo sem `detect_pattern` e fora do enum `DataCategory` ele
+precisa de `declared_only: true`, que é **ato deliberado de quem escreve o tipo**, não consequência
+da tipagem. A proteção não é removida.
+
+O que **de fato** aparece é um buraco menor e diferente: `declared_only` vira a porta pela qual se
+contrabandeia um tipo qualquer — marque-o e o oráculo cala. Isso não é "critério vazio"; é uma
+exceção que precisa de contrapeso.
+
+**O contrapeso é o USO, e ele só é mensurável depois da T2** (antes, nada pode nomear um tipo, então
+todo `declared_only` tem uso zero por construção, inclusive o `opaque`). Logo o critério de uso
+**não é pré-requisito da T2 — é consequência dela**, e a red condition natural é *"tipo
+`declared_only` com zero declarações no parque"*, que só passa a significar algo a partir da **T6**
+(quando as 6 declarações migram). **Ordem corrigida: T2 pode entrar; o critério de uso entra com a
+T6**, e até lá o parque é medido por `q_masked_declaration_census.sh`.
 
 ---
 
@@ -302,7 +311,7 @@ critério de uso — senão o arco remove uma proteção e não põe nada no lug
 |---|---|---|
 | **T0** | **Contar o parque** e congelar a linha de base: 6 declarações (§1.5), 1 form com campo masked, 42 YAMLs. Gate que reprova declaração NOVA sem tipo depois de T2 | sim |
 | **T1** | ✅ **FEITA em 2026-08-29.** Tipo `opaque` no catálogo (código + seed), **sem nenhum consumidor novo**. Entregou mais do que a linha previa, e as duas adições são exigência do oráculo, não enfeite: **(a) `DataType.declared_only`** — o oráculo da V2 trata como órfão todo tipo sem `detect_pattern` cujo id não seja `DataCategory`, e foi medido que ele **reprovaria `opaque`** (`orfaos=["opaque"]`, rodado na imagem antes de mudar). Pôr `opaque` no enum `DataCategory` foi **recusado**: campo opaco é SUPRIMIDO, nunca tokenizado, logo seria membro de enum que nenhum produtor emite — o fantasma `iban`/`passport` de volta. A marca é **por tipo**, não lista de exceção no oráculo, para que ele siga capaz de reprovar. **(b) `LgpdClass.nao_classificado`** — nenhuma das 5 classes servia com honestidade: `none` afirma *"não é dado pessoal"*, `sensivel`/`credencial` são afirmações jurídicas que ninguém fez. Mesmo padrão do balde `unknown` do rollup de capacidade: classe própria e contada, nunca dobrada numa real | sim |
-| **T2** | Schema aceita a união (D1); `resolveMaskedFields` devolve `{ids, types}` (D2); `true` → `opaque`. Nada a jusante muda ainda | sim |
+| **T2** | ✅ **FEITA em 2026-08-29.** União nos 4 pontos (`MaskedDeclarationSchema`); `resolveMaskedFields` devolve `{ids, types}` numa passada, com `isFieldMasked`/`computeMaskedFieldIds` virando **derivações** — a precedência vive em `maskedFieldType`, uma casa só. `true` → `OPAQUE_DATA_TYPE_ID`, constante única. **Um consumidor teve de mudar contra a linha "nada a jusante"**, e por segurança, não por completude: `form_get` achatava com `f.masked === true`, o que faria `masked: "cpf"` virar `false` e o campo sair **DESmascarado** — a união sem consertar o achatamento cria fail-open. Mesmo motivo em `menu.ts` (`isStepMasked`, porque o `waitingMeta` lido pelo bridge como `any_masked` é contrato booleano). Provado ao vivo no agent-registry: **200** para `masked: "cpf"`, **422 `invalid_union`** para `masked: 7`, payloads diferindo só nesse campo. 8 testes novos, e a mutação (string→não-mascarado, o comportamento pré-T2) derruba **6** deles | sim |
 | **T3** | O redator do bridge consome o TIPO — máscara por papel e regra de canal alcançam a submissão de form (§1.3) | sim |
 | **T4** | `DialogFormRenderer` honra `masked` (D6). **Fecha a armadilha de §1.4** | sim |
 | **T5** | Guarda de deploy recusa tipo desconhecido; runtime resolve para `opaque` com log nomeado (D3) | sim |

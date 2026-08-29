@@ -27,7 +27,7 @@
 import type { MenuStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { interpolate, resolveVisibility, resolveInputValue } from "../interpolate"
-import { computeMaskedFieldIds, isFieldMasked } from "../masking-policy"
+import { computeMaskedFieldIds, isFieldMasked, isStepMasked } from "../masking-policy"
 import { redisKeys } from "../redis-keys"
 
 // ── Dialog primitive §17.3-2 — dynamic options/fields ─────────────────────────
@@ -229,7 +229,7 @@ export async function executeMenu(
   const waitingField = ctx.instanceId || "_default_"
   const waitingMeta  = JSON.stringify({
     visibility:    resolvedVisibility,
-    masked:        step.masked === true,
+    masked:        isStepMasked(step.masked),
     // Include the computed per-field masked IDs so the orchestrator-bridge can
     // redact individual form fields (e.g. senha, codigo_2fa) without suppressing
     // the entire submission when only some fields are masked.
@@ -420,10 +420,13 @@ export async function executeMenu(
     //   field.masked === true  → campo mascarado, independente de step.masked
     //   field.masked === false → campo NÃO mascarado, mesmo que step.masked=true
     //   step.masked === true   → todos os campos sem field.masked explícito são mascarados
-    const stepMasked = step.masked === true
+    // A DECLARAÇÃO viaja inteira (pode ser id de tipo); quem a interpreta é a
+    // masking-policy. `step.masked === true` aqui daria `false` para `masked: "cpf"`
+    // e o campo cairia em pipeline_state em claro.
+    const stepMasked = step.masked
     const hasFieldDefs = resolvedFields.length > 0
 
-    if (!stepMasked && !hasFieldDefs) {
+    if (!isStepMasked(stepMasked) && !hasFieldDefs) {
       // Caminho rápido: nenhum mascaramento configurado
       const successResult: StepResult = {
         next_step_id:      step.on_success,

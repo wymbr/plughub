@@ -14,7 +14,7 @@ export type { StepContext, StepResult } from "./executor"
 export { handleMentionCommand, parseCommandName } from "./mention-commands"
 export type { MentionCommandContext, MentionCommandResult } from "./mention-commands"
 
-export { isFieldMasked, computeMaskedFieldIds } from "./masking-policy"
-export type { MaskedFieldDef } from "./masking-policy"
+export { isFieldMasked, computeMaskedFieldIds, resolveMaskedFields, maskedFieldType, isStepMasked } from "./masking-policy"
+export type { MaskedDecl, MaskedFieldDef } from "./masking-policy"
 
 export { redisKeys } from "./redis-keys"

@@ -44,6 +44,8 @@ export {
   MaskingAccessPolicySchema,
   AuditRecordSchema,
   DEFAULT_MASKING_RULES,
+  OPAQUE_DATA_TYPE_ID,
+  MaskedDeclarationSchema,
   // ContextStore field-level masking (dynamic rules — Arc 11 Fase D)
   ContextMaskingTypeSchema,
   ContextMaskingRuleSchema,
@@ -79,6 +81,7 @@ export type {
   ContextMaskingConfig,
   // Catálogo de TIPOS
   LgpdClass,
+  MaskedDeclaration,
   DataTypeFormat,
   DisplayScreen,
   DisplayVoice,
