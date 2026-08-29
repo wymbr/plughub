@@ -195,6 +195,19 @@ tem quem leia; recusar em runtime derrubaria um atendimento em curso por erro de
 degradação é para o **mais restritivo**, com o motivo dito. Isso é o oposto de
 `catch { /* não-fatal */ }`, e é o padrão que o `CLAUDE.md` pede.
 
+> **Emenda de 2026-08-29 (T5): a metade de RUNTIME fica ADIADA, e a razão é medida.** Depois da T3, um
+> tipo desconhecido **não muda comportamento nenhum**: a supressão é decidida pelos `ids`
+> (`resolveMaskedFields().ids`), não pelo tipo, e o tipo só é **registrado** em `masked_types`. Logo o
+> único dano de um id inexistente é um rótulo que não casa com o catálogo — e o portão de deploy o
+> impede na origem. A janela que sobra é estreita: **tipo apagado do catálogo depois do deploy.**
+> Fechá-la custaria uma leitura de config-api no caminho INBOUND QUENTE do bridge, num serviço cuja
+> história de leitura de config é de falha em camadas (§ Configuration do `CLAUDE.md`). Custo sem
+> benefício correspondente **hoje**; passa a valer quando existir um consumidor que RESOLVA o tipo
+> para aplicar política — o que está fora deste ADR. Registrado, não esquecido.
+>
+> ⚠️ **Lacuna conhecida do portão implementado:** ele roda no `PUT /v1/skills`, não no `promote`. Um
+> tipo apagado entre o save e a promoção passa. É a mesma janela acima, e fecha com a mesma decisão.
+
 ### D4 — O tipo decide EXIBIÇÃO e CLASSE. **Nunca** persistência
 
 `masked ⇒ o valor nunca entra em `pipeline_state`, Redis, stream ou log` permanece **absoluto e
@@ -314,7 +327,7 @@ T6**, e até lá o parque é medido por `q_masked_declaration_census.sh`.
 | **T2** | ✅ **FEITA em 2026-08-29.** União nos 4 pontos (`MaskedDeclarationSchema`); `resolveMaskedFields` devolve `{ids, types}` numa passada, com `isFieldMasked`/`computeMaskedFieldIds` virando **derivações** — a precedência vive em `maskedFieldType`, uma casa só. `true` → `OPAQUE_DATA_TYPE_ID`, constante única. **Um consumidor teve de mudar contra a linha "nada a jusante"**, e por segurança, não por completude: `form_get` achatava com `f.masked === true`, o que faria `masked: "cpf"` virar `false` e o campo sair **DESmascarado** — a união sem consertar o achatamento cria fail-open. Mesmo motivo em `menu.ts` (`isStepMasked`, porque o `waitingMeta` lido pelo bridge como `any_masked` é contrato booleano). Provado ao vivo no agent-registry: **200** para `masked: "cpf"`, **422 `invalid_union`** para `masked: 7`, payloads diferindo só nesse campo. 8 testes novos, e a mutação (string→não-mascarado, o comportamento pré-T2) derruba **6** deles | sim |
 | **T3** | ⚠️ **REESCRITA em 2026-08-29, ao medir para implementar.** A linha original dizia *"máscara por papel e regra de canal alcançam a submissão de form"* e **metade disso é impossível por invariante**: `by_role: last_2` e `display_screen: display_partial` exigem TER o valor para derivar o parcial, e num campo DECLARADO ele nunca persiste (§D4). Derivar e gravar seria gravar um derivado do segredo — em `senha`, os últimos caracteres da senha. ⇒ **`mascara.*` é dimensão do caminho de DETECÇÃO** (onde existem token e vault); no caminho da DECLARAÇÃO só `lgpd` e "suprimido" são alcançáveis. Segundo achado: **três casas** produzem `••••••` para campo de form — `orchestrator-bridge/main.py:352`, `channel-gateway/adapters/webchat.py:839` e `platform-ui/AgentAssistPage.tsx:398` —, então mudar o PLACEHOLDER numa delas cria divergência entre caminhos. ⇒ **T3 = o tipo viaja e é REGISTRADO como DADO**, não embutido no texto: mesma forma que a detecção já usa (`session_stream_events.masked_categories`). Placeholder intocado, as três casas seguem coerentes, e a consolidação delas vira fase própria | sim |
 | **T4** | ✅ **FEITA em 2026-08-29.** E "honrar" acabou significando **RECUSAR**, não decorar: o Console submete por `workflow_resume`, caminho **sem masked scope**, então o valor digitado iria direto para `payload.answers` → `pipeline_state`, contra a invariante absoluta. Renderizar como `<input type="password">` é a correção que PARECE certa e é a pior — protege a TELA e deixa o valor cair no store, trocando vazamento visível por silencioso. Recusa o **form inteiro**, não o campo: submeter sem ele entregaria ao workflow uma resposta incompleta indistinguível de *"o humano deixou em branco"*. Predicado puro exportado (`maskedDeclarations`) + painel de recusa nomeando os campos + i18n nos dois locales. Gate: ramo E de `probe_masked_type_provenance.sh`, com **testemunha negativa contra `type="password"`** — os quatro sub-ramos provados por mutação, um a um | sim |
-| **T5** | Guarda de deploy recusa tipo desconhecido; runtime resolve para `opaque` com log nomeado (D3) | sim |
+| **T5** | ✅ **METADE DE DEPLOY FEITA em 2026-08-29** (a de runtime fica adiada — ver emenda na D3). `validateMaskedTypeRefs` no `PUT /v1/skills` do agent-registry: recusa **422 `invalid_masked_type`** nomeando step, campo, tipo inexistente **e os tipos que existem** (dizer o que falta sem dizer o que há transfere ao autor um trabalho que o servidor já fez). **Acoplamento ESCOPADO** — flow sem declaração tipada não consulta o catálogo, então salvar skill não passa a depender do config-api; só quem declara um tipo paga, e hoje o parque tem ZERO tipados, o que torna a dependência inerte até a T6. **Fail-closed em três formas**: catálogo inalcançável, HTTP não-2xx e **lista vazia** recusam, e a mensagem da lista vazia NÃO acusa o autor do skill (é defeito de config). Provado ao vivo: **200** para `cpf`, **422** para `iban`, **200** para `masked: true` sem tocar no catálogo. 7 testes; duas mutações provam que reprovam | sim |
 | **T6** | Migrar as 6 declarações do parque; contador de `masked: true` decai | sim |
 | **T7** | Fechar o ramo `boolean` **quando o contador zerar** (D8) | **não** |
 

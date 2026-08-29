@@ -139,3 +139,90 @@ export function validateMaskedBlock(flow: SkillFlow): string[] {
 
   return errors
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T5 — portão de DEPLOY do `masked` tipado (ADR adr-masked-typed-declaration, D3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Colhe as declarações TIPADAS de `masked` no flow — só as strings.
+ *
+ * `true`/`false` não entram: `true` resolve para `opaque`, que é um tipo real do
+ * catálogo e não precisa de conferência; `false` não declara nada.
+ *
+ * Exportada porque o gate ancora nela: um predicado com nome é conferível, uma
+ * condição inline no meio da rota não é.
+ */
+export function collectMaskedTypeRefs(flow: SkillFlow): Array<{ step: string; field: string; type: string }> {
+  const out: Array<{ step: string; field: string; type: string }> = []
+  const typed = (m: unknown): string | null =>
+    (typeof m === "string" && m.trim().length > 0) ? m.trim() : null
+
+  for (const step of flow.steps ?? []) {
+    const s = step as FlowStep & {
+      masked?: unknown
+      fields?: Array<{ id?: string; masked?: unknown }>
+      output_as?: string
+    }
+    const stepType = typed(s.masked)
+    if (stepType) out.push({ step: step.id, field: s.output_as ?? step.id, type: stepType })
+    for (const f of s.fields ?? []) {
+      const ft = typed(f?.masked)
+      if (ft) out.push({ step: step.id, field: f?.id ?? "?", type: ft })
+    }
+  }
+  return out
+}
+
+/**
+ * Confere as referências tipadas contra o catálogo VIVO do tenant.
+ *
+ * **Fail-closed, e o acoplamento é ESCOPADO**: um flow sem nenhuma declaração
+ * tipada não busca o catálogo, logo não depende do config-api para ser salvo.
+ * Só quem declara um tipo paga a dependência — e paga porque, sem conferir, o
+ * deploy grava um id que ninguém resolve, e o defeito só aparece meses depois,
+ * na transcrição, como um `masked_types` que não casa com tipo nenhum.
+ *
+ * Catálogo inalcançável ⇒ RECUSA. É a postura oposta à de leitura de relatório,
+ * e deliberada: aqui não se pode verificar, e mascaramento é a política em que
+ * "não sei" nunca pode virar "pode passar".
+ *
+ * Devolve lista de mensagens; vazia = aprovado.
+ */
+export async function validateMaskedTypeRefs(
+  flow: SkillFlow,
+  opts: { tenantId: string; configApiUrl: string; fetchImpl?: typeof fetch },
+): Promise<string[]> {
+  const refs = collectMaskedTypeRefs(flow)
+  if (refs.length === 0) return []            // sem tipado ⇒ sem dependência
+
+  const doFetch = opts.fetchImpl ?? fetch
+  let ids: Set<string>
+  try {
+    const url  = `${opts.configApiUrl}/config/masking?tenant_id=${encodeURIComponent(opts.tenantId)}`
+    const resp = await doFetch(url)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const body = await resp.json() as { entries?: Record<string, unknown> }
+    const raw  = body?.entries?.["types"]
+    const cat  = (raw && typeof raw === "object" && "value" in (raw as object))
+      ? (raw as { value: unknown }).value
+      : raw
+    const types = (cat as { types?: Array<{ id?: string }> } | undefined)?.types
+    if (!Array.isArray(types) || types.length === 0) throw new Error("catálogo vazio ou ausente")
+    ids = new Set(types.map(t => String(t?.id ?? "")).filter(Boolean))
+  } catch (err) {
+    // Degradação NUNCA silenciosa, e aqui nem sequer degrada: recusa NOMEANDO.
+    return [
+      `não foi possível conferir os tipos de masking contra o catálogo do tenant ` +
+      `(${String(err)}). ${refs.length} referência(s) tipada(s) no flow — o deploy é ` +
+      `recusado porque "não sei" não pode virar "pode passar" em mascaramento.`,
+    ]
+  }
+
+  return refs
+    .filter(r => !ids.has(r.type))
+    .map(r =>
+      `step "${r.step}", campo "${r.field}": masked: "${r.type}" não existe no catálogo ` +
+      `masking.types do tenant. Tipos declarados: ${[...ids].sort().join(", ")}.`,
+    )
+}

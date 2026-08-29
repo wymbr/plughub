@@ -5281,6 +5281,13 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 >   importa para a fase, **sem backfill**. Nota adjacente: tabela vazia também significa que nenhum
 >   skill deste ambiente emite `agent_event` — o Arc 12 não tem produtor vivo aqui.
 >
+> ### 🟡 `agent-registry`: 2 testes de `pools.test.ts` vermelhos, PRÉ-EXISTENTES (medido 2026-08-29)
+>
+> `POST /v1/pools > cria pool válido` e `GET /v1/pools > retorna lista` falham com **500 onde se
+> espera 201/200**. **Não são regressão** — conferido por `git stash` das alterações da T5: as mesmas
+> duas falham sem elas. Os outros 6 do arquivo passam, então não é o arquivo inteiro fora do ar; é um
+> caminho específico. Parente do achado do `mcp-server` que não compilava: verde por ninguém rodar.
+>
 > ### 🔴 O `mcp-server-plughub` NÃO COMPILAVA — descoberto em 2026-08-29, ao construir a T1
 >
 > **Nada disto tem a ver com masking.** O commit `10bde79` (arco de relatórios, atribuição de custo

@@ -1,5 +1,72 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## T4 + T5 do `masked` tipado — a superfície que recusa, e o portão de deploy (2026-08-29)
+
+### T4 — "honrar" acabou significando RECUSAR
+
+`DialogFormRenderer` (Console: aprovação, wrap-up, collect-form genérico) ignorava `masked` por
+completo. A correção **não** foi renderizar como `<input type="password">`: o Console submete por
+`workflow_resume`, e nesse caminho **não existe masked scope** — o valor iria direto para
+`payload.answers` → `pipeline_state`, contra a invariante absoluta. O input de senha é a correção que
+*parece* certa e é a pior: protege a **tela** e deixa o valor cair no **store**, trocando um vazamento
+visível por um silencioso. Por isso o gate carrega **testemunha negativa contra `type="password"`**
+neste arquivo.
+
+Recusa o **form inteiro**, não o campo: submeter sem ele entregaria ao workflow uma resposta
+incompleta indistinguível de *"o humano deixou em branco"*. Predicado puro exportado
+(`maskedDeclarations`), painel nomeando os campos ofensores, i18n nos dois locales. Os quatro
+sub-ramos do gate provados por mutação.
+
+### T5 — portão de DEPLOY, com o acoplamento escopado
+
+`validateMaskedTypeRefs` no `PUT /v1/skills`: **422 `invalid_masked_type`** nomeando step, campo, o
+tipo inexistente **e os tipos que existem** — dizer o que falta sem dizer o que há transfere ao autor
+um trabalho que o servidor já fez.
+
+**O acoplamento é ESCOPADO, e é isso que impede o portão de virar dependência geral:** um flow sem
+declaração tipada **não consulta o catálogo**, logo salvar skill não passa a depender do config-api
+estar de pé. Só quem declara um tipo paga — e o parque tem **zero** tipados hoje, o que torna a
+dependência inerte até a T6. Há um teste cujo `fetchImpl` explode se for chamado: é ele que prova a
+propriedade, não a leitura do código.
+
+**Fail-closed em três formas**, e a terceira tem mensagem distinta: catálogo **inalcançável**,
+**HTTP não-2xx** e **lista vazia** recusam; a da lista vazia **não acusa o autor do skill**, porque
+com o `Set` vazio todo tipo viraria "inexistente" e a culpa cairia em quem não a tem.
+
+Provado ao vivo: **200** para `masked: "cpf"`, **422** para `masked: "iban"` (o fantasma que a V2
+expulsou), **200** para `masked: true` sem tocar no catálogo.
+
+**A metade de RUNTIME ficou ADIADA, por medição, não por cansaço.** Depois da T3 um tipo desconhecido
+**não muda comportamento nenhum**: a supressão é decidida pelos `ids`, não pelo tipo, que só é
+*registrado*. O único dano é um rótulo que não casa com o catálogo — e o portão de deploy o impede na
+origem. A janela que sobra (tipo apagado **depois** do deploy) custaria uma leitura de config-api no
+caminho inbound quente do bridge, num serviço com histórico de leitura de config falhando em camadas.
+Registrada na D3 do ADR junto com a lacuna irmã: o portão roda no `PUT`, não no `promote`.
+
+### O teste que media a proposição vizinha — meu
+
+Escrevi um caso chamado *"catálogo VAZIO também recusa"* e uma mutação passou por ele. Investigando: o
+teste montava `{ entries: {} }`, em que `types` é **`undefined`** — o `!Array.isArray` já lança, e a
+cláusula `length === 0` **nunca era exercitada**. O nome dizia *vazio*, o teste media *ausente*. É
+exatamente a patologia que a § Postura de Engenharia nomeia (*"um instrumento pode ser falseável,
+ramificado e honesto — e ainda medir a proposição ERRADA"*), e só apareceu porque a mutação **aplicou
+e o verde continuou**. Hoje são dois casos, com o comentário explicando por que são diferentes.
+
+*Corolário de método, aprendido no mesmo passo:* duas mutações anteriores "não derrubaram nada" —
+e não derrubaram porque **não aplicaram** (`sed` quebrando em `||`, `replace` sem casar). Bateria de
+mutação precisa **afirmar que a mutação entrou** antes de interpretar o verde; senão ela mede a si
+mesma.
+
+### Achado adjacente
+
+`agent-registry`: **2 testes de `pools.test.ts` já estavam vermelhos** (500 onde se espera 201/200),
+conferido por `git stash` — não são regressão. Registrado no `TODO.md`.
+
+Gates: 22 testes em `skill-validator.test.ts` (7 novos), duas mutações provando que reprovam ·
+ramo E de `probe_masked_type_provenance.sh` para a T4 · demais gates do arco verdes.
+
+---
+
 ## T2 + T3 do `masked` tipado — a união entra, e o tipo vira PROVENIÊNCIA (2026-08-29)
 
 *(A T1 tem entrada própria abaixo.)*

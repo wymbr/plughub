@@ -9,7 +9,7 @@
 
 import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }      from "../db"
-import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock } from "../validators/skill"
+import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock, validateMaskedTypeRefs } from "../validators/skill"
 import { publishRegistryChanged } from "../infra/kafka"
 import { config } from "../config"
 
@@ -226,6 +226,21 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         return res.status(422).json({
           error:   "invalid_masked_block",
           details: maskedErrors,
+        })
+      }
+
+      // ── T5 — portão de DEPLOY do `masked` tipado (ADR D3) ──────────────────
+      // Só busca o catálogo quando o flow declara ALGUM tipo (string). Flow sem
+      // declaração tipada não paga a dependência do config-api para ser salvo —
+      // é o que impede este portão de virar acoplamento geral.
+      const typeErrors = await validateMaskedTypeRefs(body.flow, {
+        tenantId:     tenantId,
+        configApiUrl: config.config_api_url,
+      })
+      if (typeErrors.length > 0) {
+        return res.status(422).json({
+          error:   "invalid_masked_type",
+          details: typeErrors,
         })
       }
     }

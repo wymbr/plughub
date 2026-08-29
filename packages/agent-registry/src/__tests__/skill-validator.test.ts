@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { validateMaskedBlock } from "../validators/skill"
+import { validateMaskedBlock, collectMaskedTypeRefs, validateMaskedTypeRefs } from "../validators/skill"
 import type { SkillFlow } from "@plughub/schemas"
 
 // ─────────────────────────────────────────────
@@ -263,5 +263,100 @@ describe("validateMaskedBlock", () => {
     // end_transaction has no on_success; BFS stops there.
     // post_reason is only in the array after tx_fim — not inside the block.
     expect(validateMaskedBlock(flow)).toEqual([])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T5 — portão de DEPLOY do `masked` tipado (ADR adr-masked-typed-declaration, D3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const catalogOk = (types: string[]) =>
+  (async () => ({
+    ok: true,
+    json: async () => ({ entries: { types: { value: { types: types.map(id => ({ id })) } } } }),
+  })) as unknown as typeof fetch
+
+const flowWithMasked = (masked: unknown): SkillFlow => ({
+  entry: "c",
+  steps: [
+    { id: "c", type: "menu", interaction: "form", prompt: "p", output_as: "d",
+      fields: [{ id: "x", label: "X", type: "text", masked }],
+      on_success: "f", on_failure: "f" },
+    { id: "f", type: "complete", outcome: "resolved" },
+  ],
+} as unknown as SkillFlow)
+
+const OPTS = { tenantId: "t", configApiUrl: "http://cfg" }
+
+describe("collectMaskedTypeRefs", () => {
+  it("colhe só as declarações TIPADAS (string), nunca os booleanos", () => {
+    expect(collectMaskedTypeRefs(flowWithMasked("cpf"))).toEqual([{ step: "c", field: "x", type: "cpf" }])
+    // `true` resolve para `opaque`, que é tipo real do catálogo — não há o que conferir.
+    expect(collectMaskedTypeRefs(flowWithMasked(true))).toEqual([])
+    expect(collectMaskedTypeRefs(flowWithMasked(false))).toEqual([])
+    expect(collectMaskedTypeRefs(flowWithMasked("   "))).toEqual([])   // string vazia não é declaração
+  })
+})
+
+describe("validateMaskedTypeRefs — portão de deploy", () => {
+  it("aprova tipo que existe no catálogo", async () => {
+    const errs = await validateMaskedTypeRefs(flowWithMasked("cpf"), { ...OPTS, fetchImpl: catalogOk(["cpf", "opaque"]) })
+    expect(errs).toEqual([])
+  })
+
+  it("RECUSA tipo ausente, nomeando campo, tipo e alternativas", async () => {
+    const errs = await validateMaskedTypeRefs(flowWithMasked("iban"), { ...OPTS, fetchImpl: catalogOk(["cpf", "opaque"]) })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain('"iban"')
+    expect(errs[0]).toContain('campo "x"')
+    expect(errs[0]).toContain("cpf, opaque")     // diz o que EXISTE, não só o que falta
+  })
+
+  it("ACOPLAMENTO ESCOPADO: flow sem tipagem não consulta o catálogo", async () => {
+    // O teste que importa: se buscasse, `fetchImpl` explodiria. Salvar um skill sem
+    // declaração tipada NÃO pode depender do config-api estar de pé.
+    const boom = (async () => { throw new Error("não deveria buscar") }) as unknown as typeof fetch
+    expect(await validateMaskedTypeRefs(flowWithMasked(true),  { ...OPTS, fetchImpl: boom })).toEqual([])
+    expect(await validateMaskedTypeRefs(flowWithMasked(false), { ...OPTS, fetchImpl: boom })).toEqual([])
+  })
+
+  it("FAIL-CLOSED: catálogo inalcançável RECUSA, e diz por quê", async () => {
+    const down = (async () => { throw new Error("ECONNREFUSED") }) as unknown as typeof fetch
+    const errs = await validateMaskedTypeRefs(flowWithMasked("cpf"), { ...OPTS, fetchImpl: down })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain("ECONNREFUSED")
+  })
+
+  it("FAIL-CLOSED: catálogo AUSENTE recusa (a chave `types` não veio)", async () => {
+    const absent = (async () => ({ ok: true, json: async () => ({ entries: {} }) })) as unknown as typeof fetch
+    const errs = await validateMaskedTypeRefs(flowWithMasked("cpf"), { ...OPTS, fetchImpl: absent })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain("catálogo")
+  })
+
+  it("FAIL-CLOSED: catálogo com lista VAZIA recusa — e é caso DIFERENTE do ausente", async () => {
+    // Este teste nasceu de uma mutação que passou: o caso "ausente" acima chega ao
+    // mesmo `throw` por outro caminho (`types` é `undefined`, e `!Array.isArray` já
+    // dispara), então ele NÃO cobria a cláusula `length === 0`. Testes com nomes
+    // parecidos exercitando caminhos diferentes é como uma guarda fica sem prova.
+    //
+    // Por que lista vazia tem de RECUSAR: com o `Set` vazio, todo tipo declarado
+    // vira "inexistente" — a mensagem acusaria o autor do skill por um defeito de
+    // CONFIG. Vazio é INCONCLUSIVO, e inconclusivo em masking recusa dizendo isso.
+    const emptyList = (async () => ({
+      ok: true,
+      json: async () => ({ entries: { types: { value: { types: [] } } } }),
+    })) as unknown as typeof fetch
+    const errs = await validateMaskedTypeRefs(flowWithMasked("cpf"), { ...OPTS, fetchImpl: emptyList })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain("catálogo")
+    expect(errs[0]).not.toContain("não existe no catálogo")   // não é culpa do skill
+  })
+
+  it("FAIL-CLOSED: HTTP não-2xx recusa", async () => {
+    const notFound = (async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch
+    const errs = await validateMaskedTypeRefs(flowWithMasked("cpf"), { ...OPTS, fetchImpl: notFound })
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain("503")
   })
 })
