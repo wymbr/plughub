@@ -22,7 +22,10 @@ Uso:
 
 `script_json` = lista de regras aplicadas NA ORDEM em que os prompts chegam:
   [{"match": "CPF", "answer": "529..."},
-   {"match": "já tem um pedido", "answer": "consultar"}]
+   {"match": "já tem um pedido", "answer": "consultar"},
+   {"match": "dados de acesso",  "answer": {"email": "x@y", "senha": "s"}}]
+`answer` escalar responde `text`/`button`/`list`; `answer` DICT responde
+`interaction: form` (um valor por `field.id`) — ver a nota das TRÊS superfícies.
 `match` é substring case-insensitive do prompt. Regra sem prompt correspondente NÃO
 é usada — e o cliente imprime `UNMATCHED`, para o veredicto do shell distinguir
 "o fluxo não chegou lá" de "o fluxo chegou e a resposta estava errada".
@@ -141,12 +144,22 @@ async def main() -> int:
                     i, rule = hit
                     used[i] = True
                     answered += 1
-                    print(f"ANSWER {menu_id} | {rule['answer']}", flush=True)
+                    # ⚠️ TERCEIRA superfície de resposta: `interaction: form`.
+                    # `WsMenuSubmit.result` é `str | list[str] | dict`
+                    # (channel-gateway/models.py:61), e um form de N campos só é
+                    # respondível como DICT {field_id: valor}. A v2 deste cliente
+                    # mandava sempre string, então nenhum `interaction: form`
+                    # jamais foi exercido por probe — inclusive o de masking POR
+                    # CAMPO, que é onde nasceu o vazamento de 2026-08-29.
+                    # `answer` dict/list viaja como está; string segue como antes.
+                    _ans = rule["answer"]
+                    _shown = _ans if isinstance(_ans, str) else json.dumps(_ans, ensure_ascii=False)
+                    print(f"ANSWER {menu_id} | {_shown}", flush=True)
                     await ws.send(json.dumps({
                         "type":        "menu.submit",
                         "menu_id":     menu_id,
                         "interaction": msg.get("interaction") or "text",
-                        "result":      rule["answer"],
+                        "result":      _ans,
                     }))
                 elif mtype in ("msg.text", "message.text"):
                     # ⚠️ Menu com `interaction: text` (sem masked_fields) NÃO vira

@@ -273,6 +273,100 @@ def _stl() -> int:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Redação da resposta do cliente — UMA decisão, quatro destinos
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# A resposta de um step `menu` sai do bridge por QUATRO portas, e todas as quatro
+# precisam responder à MESMA pergunta: "o que deste texto pode aparecer aqui?".
+#
+#   1. pub/sub + stream do agente HUMANO   (Agent Assist)
+#   2. Kafka `conversations.events`        (analytics → ClickHouse, DURÁVEL)
+#   3. stream canônico da sessão IA        (transcrição)
+#   4. `_route_to_receive_waiting`         (conteúdo entregue ao step `receive`)
+#
+# Até 2026-08-29 a decisão estava DUPLICADA: os destinos 1 e 3 traziam o bloco de
+# redação por campo (literalmente o mesmo código, copiado), e os destinos 2 e 4
+# carregavam só a forma antiga, de uma linha:
+#
+#     content = reply_text if not any_masked else "[entrada mascarada]"
+#
+# `any_masked` é o flag de STEP. Quando o masking é declarado por CAMPO
+# (`fields[].masked: true`) sem `masked` no step — que é o caso de
+# `skill_auth_form_v1`, deployado no pool `auth_form_ia` com `senha` e
+# `codigo_2fa` —, `any_masked` é FALSO e os destinos 2 e 4 publicavam o texto
+# CRU. O destino 2 é o durável: senha e código 2FA iam para o ClickHouse.
+#
+# O comentário no topo de `agente_auth_form_v1.yaml` afirma que esses campos
+# "NUNCA aparecem no stream, pipeline_state ou logs" — verdadeiro para os três
+# destinos que ele lista, e falso para o quarto, que ele não lista. Promessa sem
+# mecanismo, no arquivo que existe para demonstrar o mecanismo.
+#
+# A duplicação É a causa: quem escreveu a redação por campo tocou os dois sites
+# que tinha à mão. A regra que fica: **esta decisão mora numa função só**, e todo
+# destino novo a chama. Um `if not any_masked` solto em qualquer porta nova
+# reabre exatamente este vazamento, e sem nada ficar vermelho.
+
+_MASKED_SUPPRESSED       = "[entrada mascarada]"
+_MASKED_SUPPRESSED_HUMAN = "[entrada mascarada — conteúdo não disponível]"
+_MASKED_FIELD_PLACEHOLDER = "••••••"
+
+
+def redact_customer_reply(
+    reply_text: str,
+    *,
+    msg_type: str,
+    any_masked: bool,
+    masked_fields: set[str] | None = None,
+    suppressed_text: str = _MASKED_SUPPRESSED,
+    decorate_non_text: bool = True,
+) -> tuple[str, str]:
+    """Decide o que de `reply_text` pode ser publicado, e com que visibilidade.
+
+    Fonte ÚNICA da redação de resposta do cliente. Devolve `(texto, visibility)`.
+
+    Três ramos, nesta ordem — a precedência importa:
+
+      1. `any_masked` (step inteiro mascarado) → suprime tudo, `agents_only`.
+      2. `masked_fields` num `menu_result` → redige campo a campo, `all`.
+         Só os ids listados viram `••••••`; os demais sobrevivem, que é o ponto
+         do masking por campo (`email` claro, `senha` oculto no mesmo form).
+      3. nada mascarado → passa adiante.
+
+    `decorate_non_text` distingue destino de EXIBIÇÃO de destino de DADO:
+      - True  (humano, stream): não-texto vira `[Seleção: …]`, para leitura;
+      - False (analytics, `receive`): devolve `reply_text` intacto quando nada
+        está mascarado. Decorar aqui mudaria o formato do conteúdo que agentes
+        e relatórios consomem — o conserto é do vazamento, não do formato.
+
+    A visibilidade devolvida é sugestão para os destinos que a usam (1 e 3);
+    os destinos 2 e 4 publicam com visibilidade própria e ignoram o segundo item.
+    """
+    if any_masked:
+        return suppressed_text, "agents_only"
+
+    if masked_fields and msg_type == "menu_result":
+        try:
+            result_obj = json.loads(reply_text) if isinstance(reply_text, str) else reply_text
+            if isinstance(result_obj, dict):
+                redacted = {
+                    k: (_MASKED_FIELD_PLACEHOLDER if k in masked_fields else v)
+                    for k, v in result_obj.items()
+                }
+                return f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]", "all"
+            # Resposta não-dict com campos mascarados declarados: não dá para
+            # redigir seletivamente, e devolver o cru seria o vazamento de novo.
+            return f"[Seleção: {suppressed_text}]", "all"
+        except Exception:
+            # Parse falhou: NÃO cair para o texto cru — há campo mascarado
+            # declarado, e o desconhecido aqui é o valor, não a política.
+            return f"[Seleção: {suppressed_text}]", "all"
+
+    if decorate_non_text:
+        return (reply_text if msg_type == "text" else f"[Seleção: {reply_text}]"), "all"
+    return reply_text, "all"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # session:{id}:meta — escrita com DONO declarado e prazo que só ESTENDE
 # ══════════════════════════════════════════════════════════════════════════════
 #
@@ -9239,35 +9333,24 @@ async def process_inbound(
             # value and show a placeholder instead. This prevents PIN / passwords
             # from ever reaching the agent's chat UI, which is the invariant
             # stated in docs/guias/masked-input.md (maskedScope is memory-only).
+            # Destino 1 — Agent Assist. Ver `redact_customer_reply`: a decisão é
+            # única para as quatro portas; aqui só o placeholder é mais explícito.
+            display_text, visibility = redact_customer_reply(
+                reply_text,
+                msg_type        = msg_type,
+                any_masked      = any_masked,
+                masked_fields   = all_masked_fields,
+                suppressed_text = _MASKED_SUPPRESSED_HUMAN,
+            )
             if any_masked:
-                display_text = "[entrada mascarada — conteúdo não disponível]"
-                visibility   = "agents_only"
                 logger.info(
                     "Masked menu reply suppressed for human agent: session=%s", session_id,
                 )
             elif all_masked_fields and msg_type == "menu_result":
-                # Field-level masking: some form fields are sensitive, others are not.
-                # Redact individual masked field values instead of suppressing entirely.
-                try:
-                    result_obj = json.loads(reply_text) if isinstance(reply_text, str) else reply_text
-                    if isinstance(result_obj, dict):
-                        redacted = {
-                            k: ("••••••" if k in all_masked_fields else v)
-                            for k, v in result_obj.items()
-                        }
-                        display_text = f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]"
-                    else:
-                        display_text = f"[Seleção: {reply_text}]"
-                except Exception:
-                    display_text = f"[Seleção: {reply_text}]"
-                visibility = "all"
                 logger.info(
                     "Field-level masked form reply redacted for human agent: session=%s fields=%s",
-                    session_id, list(all_masked_fields),
+                    session_id, sorted(all_masked_fields),
                 )
-            else:
-                display_text = reply_text if msg_type == "text" else f"[Seleção: {reply_text}]"
-                visibility   = "all"
             event = {
                 "type":       "message.text",
                 "message_id": msg.get("message_id", str(uuid.uuid4())),
@@ -9323,7 +9406,18 @@ async def process_inbound(
                 "author_id":    author.get("id") or contact_id or "customer",
                 "author_role":  "customer",
                 "content_type": "text",
-                "content":      reply_text if not any_masked else "[entrada mascarada]",
+                # Destino 2 — DURÁVEL (ClickHouse). Era aqui que `senha` e
+                # `codigo_2fa` de `skill_auth_form_v1` saíam em claro: o teste
+                # era só `any_masked` (step-level) e o masking daquele skill é
+                # por CAMPO. `decorate_non_text=False` preserva o formato do
+                # conteúdo analítico quando nada está mascarado.
+                "content":      redact_customer_reply(
+                    reply_text,
+                    msg_type          = msg_type,
+                    any_masked        = any_masked,
+                    masked_fields     = all_masked_fields,
+                    decorate_non_text = False,
+                )[0],
                 "visibility":   "all",
                 "timestamp":    msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
             }
@@ -9381,10 +9475,22 @@ async def process_inbound(
                         if agent_key != "_default_"
                         else f"menu:result:{session_id}"
                     )
+                    # O LPUSH leva o texto CRU de propósito: é o transporte para o
+                    # engine, que separa campo mascarado em `ctx.maskedScope`. O LOG
+                    # é outra coisa — imprimia `reply_text[:80]` sem olhar masking
+                    # nenhum, então senha e código 2FA de um form com masking por
+                    # campo iam para o stdout do bridge. Log é destino, e o
+                    # invariante de `masked-input.md` diz "nunca em logs".
                     await redis_client.lpush(result_key, reply_text)
+                    _log_text, _ = redact_customer_reply(
+                        reply_text,
+                        msg_type      = msg_type,
+                        any_masked    = any_masked,
+                        masked_fields = all_masked_fields,
+                    )
                     logger.info(
                         "Pushed menu reply to AI agent: session=%s agent=%s key=%s text=%r",
-                        session_id, agent_key, result_key, reply_text[:80],
+                        session_id, agent_key, result_key, _log_text[:80],
                     )
             delivered = True
 
@@ -9394,32 +9500,13 @@ async def process_inbound(
             # Analytics/Sessions transcript even when no human agent is present.
             # Skipped when is_human — the human branch already wrote it.
             if not is_human:
-                if any_masked:
-                    _ai_stream_display = "[entrada mascarada]"
-                    _ai_stream_vis     = "agents_only"
-                elif all_masked_fields and msg_type == "menu_result":
-                    try:
-                        _result_obj = (
-                            json.loads(reply_text)
-                            if isinstance(reply_text, str) else reply_text
-                        )
-                        if isinstance(_result_obj, dict):
-                            _redacted = {
-                                k: ("••••••" if k in all_masked_fields else v)
-                                for k, v in _result_obj.items()
-                            }
-                            _ai_stream_display = f"[Formulário: {json.dumps(_redacted, ensure_ascii=False)}]"
-                        else:
-                            _ai_stream_display = f"[Seleção: {reply_text}]"
-                    except Exception:
-                        _ai_stream_display = f"[Seleção: {reply_text}]"
-                    _ai_stream_vis = "all"
-                else:
-                    _ai_stream_display = (
-                        reply_text if msg_type == "text"
-                        else f"[Seleção: {reply_text}]"
-                    )
-                    _ai_stream_vis = "all"
+                # Destino 3 — stream canônico da sessão IA.
+                _ai_stream_display, _ai_stream_vis = redact_customer_reply(
+                    reply_text,
+                    msg_type      = msg_type,
+                    any_masked    = any_masked,
+                    masked_fields = all_masked_fields,
+                )
 
                 try:
                     await redis_client.xadd(
@@ -9460,7 +9547,17 @@ async def process_inbound(
                 author_id             = contact_id or "customer",
                 author_role           = "customer",
                 visibility            = "all",
-                content               = reply_text if not any_masked else "[entrada mascarada]",
+                # Destino 4 — conteúdo entregue ao step `receive`. Mesma falha do
+                # destino 2 (só `any_masked`). O agente NÃO perde nada de legítimo:
+                # valor mascarado nunca esteve aqui — ele vive no `maskedScope` e
+                # sai por `@masked.*` dentro do flow.
+                content               = redact_customer_reply(
+                    reply_text,
+                    msg_type          = msg_type,
+                    any_masked        = any_masked,
+                    masked_fields     = all_masked_fields,
+                    decorate_non_text = False,
+                )[0],
                 instance_id_of_author = None,  # customers are not instances
             )
             if n_receive:

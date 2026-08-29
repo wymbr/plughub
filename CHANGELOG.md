@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Vazamento de campo `masked` para store durável — conserto, expurgo e gate (2026-08-29)
+
+**Senha e código 2FA de `skill_auth_form_v1` chegaram ao ClickHouse em claro.** 13 linhas em
+`plughub_demo.messages`, `author_role='customer'`, entre **2026-08-10 19:45:59** e
+**2026-08-19 20:11:03**, em 13 sessões distintas do `tenant_demo` — assinatura de teste manual do
+demo de autenticação, uma submissão por sessão. Expurgadas por mutação
+(`ALTER TABLE … UPDATE content = '[expurgado — LGPD 2026-08-29]'`), `system.mutations` vazio e
+`cruas=0` conferidos depois.
+
+### A causa: uma decisão, cinco destinos, duas implementações
+
+A resposta de um step `menu` sai do bridge por **cinco** portas, e todas respondem à mesma pergunta
+— *"o que deste texto pode aparecer aqui?"*. A redação por campo estava **copiada literalmente** em
+duas delas; as outras três carregavam a forma antiga, de uma linha:
+
+```python
+content = reply_text if not any_masked else "[entrada mascarada]"
+```
+
+`any_masked` é o flag de **step**. Com masking declarado por **campo** (`fields[].masked: true` sem
+`masked` no step — que é `skill_auth_form_v1`, deployado em `auth_form_ia`), ele é **falso**, e os
+três publicavam o texto cru:
+
+| destino | antes |
+|---|---|
+| pub/sub + stream do agente humano | tratava campo |
+| **Kafka `conversations.events` → ClickHouse** | ❌ só `any_masked` — **o vazamento durável** |
+| stream canônico da sessão IA | tratava campo |
+| **`_route_to_receive_waiting`** (step `receive`) | ❌ só `any_masked` |
+| **log do bridge** (`text=%r`, `reply_text[:80]`) | ❌ não olhava masking nenhum |
+
+O log não estava no inventário inicial e é destino como os outros — `masked-input.md` diz "nunca em
+logs".
+
+**A duplicação é a causa, não o sintoma:** quem escreveu a redação por campo tocou os dois sites que
+tinha à mão. Conserto: `redact_customer_reply` em `main.py`, **fonte única**, cinco chamadores.
+`decorate_non_text` distingue destino de EXIBIÇÃO (`[Seleção: …]`) de destino de DADO (analytics e
+`receive` recebem o texto intacto quando nada está mascarado) — o conserto é do vazamento, não do
+formato. E o `except` do parse deixou de cair para o texto cru: com campo mascarado declarado, o
+desconhecido é o valor, não a política.
+
+⚠️ **O comentário no topo de `agente_auth_form_v1.yaml:16` afirma que senha e 2FA "NUNCA aparecem no
+stream, pipeline_state ou logs".** Verdadeiro para os três destinos que ele lista, falso para o
+quarto, que ele não lista — no arquivo que existe para *demonstrar* o mecanismo. Promessa sem
+mecanismo, a mesma família do DDL de `participation_intervals`.
+
+### O gate, e por que ele é canário
+
+`packages/orchestrator-bridge/.../tests/test_masked_reply_redaction.py` (12 casos) guarda o veredicto
+**e a estrutura**: a forma antiga não pode reaparecer no fonte, e a contagem de call sites é fixa em
+6 (1 def + 5 destinos) — destino novo reprova de propósito. Duas testemunhas de presença impedem que
+um redator que suprima *tudo* passe.
+
+`infra/test/probe_masked_field_sinks.sh` julga os quatro destinos com store durável em contato real.
+**É canário por necessidade:** a investigação produziu **cinco falsos positivos seguidos**, todos da
+mesma causa — sonda por `LIKE` sobre nome de campo casa a DEFINIÇÃO do formulário
+(`interaction_request`), a PROSA do skill (*"Formulário de autenticação iniciado…"*) e a chave do
+JSON, nunca só o valor. Uma string improvável elimina a classe inteira. O probe tem **preflight**
+(recusa medir imagem antiga — `restart` não basta, nenhum serviço monta o fonte), instante absoluto
+no `--since`, e veredicto de três estados: o `INCONCLUSIVO` existe porque *"não vazou"* e *"não
+chegou contato"* produzem o mesmo silêncio.
+
+**Medição de referência (contato real, sem seed):** canário mascarado **0** nos quatro destinos;
+canário **não** mascarado (`email`) presente no ClickHouse — o caminho foi exercido, e a redação
+distinguiu campo a campo.
+
+### Achado de instrumento: nenhum `interaction: form` jamais foi exercido por probe
+
+`infra/test/_ws_chat.py` enviava `menu.submit.result` sempre como **string**, e o servidor aceita
+`str | list[str] | dict` (`channel-gateway/models.py:61`). Um form de N campos só é respondível como
+dict — logo a superfície onde o vazamento nasceu **nunca tinha sido dirigida por teste**. Corrigido:
+`answer` dict/list viaja como está. É a terceira nota de defeito de instrumento naquele arquivo; as
+duas anteriores já estavam no docstring dele.
+
+### Dívida declarada
+
+- **A submissão de form não aparece na transcrição.** Nas 13 sessões antigas (fechadas, 226 mensagens
+  em `session_stream_events`) a resposta do formulário não está lá — nem crua, nem redigida, nem
+  suprimida. Não é PII; afeta Analytics/Sessions e o substrato do Replayer (avaliação). Medir com o
+  canário depois de fechar a sessão.
+- O gate cobre os destinos por **contagem de call sites**, não por comportamento: um sexto destino
+  escrito errado é pego pela contagem, não pelo conteúdo.
+- `registry_syncer.py:610` — `SyntaxWarning: invalid escape sequence '\d'`, anterior e não
+  relacionado.
+
 ## Relatórios F4: a Voz do Cliente absorve as respostas — e o "drill" virou NÍVEL por medição (2026-08-29)
 
 Última fase do [ADR de relatórios](docs/adr/adr-relatorios-duas-superficies-e-lentes.md). **Arco
