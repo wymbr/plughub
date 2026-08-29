@@ -359,15 +359,66 @@ if [ "$MEDIDO" -eq 0 ]; then
 fi
 [ "$DIVERGE" -eq 0 ] && echo "   ($MEDIDO de 4 filtros com população não-vazia)"
 
+
+# ── G) A FORMA DO GRÁFICO É DECLARADA, NÃO RAMIFICADA (F3) ────────────────────
+# Terceiro membro da tripla da D6. Até a F3, o `LensChart` da mesa despachava por
+# `if (lens === '…')` — dez ramos, com métrica, formato e título hardcodados no JSX —
+# e o `SessionsPage` tinha três. Enquanto isso durou, "lente nova" significava
+# "editar o componente de render", que é o custo que a D5 diz que o contrato remove.
+#
+# O que esta seção mede é o que foi REMOVIDO: comparação por ID DE LENTE dentro dos
+# componentes que desenham. A exaustividade das formas quem impõe é o compilador
+# (`assertNever`), e o `tsc` do build é o gate dela — aqui contamos o resíduo, que é a
+# parte que volta sozinha quando alguém tem pressa.
+#
+# ⚠️ A varredura ignora COMENTÁRIO — de linha **e de bloco**. As duas telas explicam em
+# prosa a cascata que substituíram, então contar prosa faria esta seção reprovar por
+# causa da documentação da própria correção. Medido ao escrever: com `sed 's://.*::'`
+# sozinho, `SessionsPage.tsx:629` era acusado por uma linha dentro de `{/* … */}`.
+# É o mesmo ajuste que a varredura de `fetch` cru precisou, pela mesma razão.
+echo
+echo "── G) despacho por forma declarada (sem cascata por id de lente) ──"
+G_ALVOS="modules/analise/AgentsBenchPage.tsx modules/contacts/SessionsPage.tsx"
+G_FALTA=0; G_RESIDUO=0
+for f in $G_ALVOS; do
+  if [ ! -f "$UI/$f" ]; then
+    echo "   ⛔ INCONCLUSIVO — $f ausente; o inventário desta seção está desatualizado."
+    inconclusive
+  fi
+  # Comentários de linha fora; `lens === '<id>'` e `lensDef.id === '<id>'` dentro.
+  n="$(python3 "$(dirname "$0")/_strip_comments.py" "$UI/$f" \
+       | grep -cE "(lens|lensDef\.id|def\.id)[[:space:]]*===[[:space:]]*'[a-z_]+'" || true)"
+  if [ "${n:-0}" -gt 0 ]; then
+    G_RESIDUO=$((G_RESIDUO + n)); FAIL=1
+    echo "   ❌ $f — $n comparação(ões) por id de lente:"
+    python3 "$(dirname "$0")/_strip_comments.py" "$UI/$f" \
+      | grep -nE "(lens|lensDef\.id|def\.id)[[:space:]]*===[[:space:]]*'[a-z_]+'" \
+      | sed 's/^/      · /' | head -6
+    echo "      A forma vive no contrato (\`chart\`). Um ramo por id aqui é a cascata voltando."
+  fi
+done
+# Controle POSITIVO do instrumento: sem ele, um `grep` que deixou de casar (arquivo
+# renomeado, aspas trocadas) sairia VERDE por não achar nada — e "não achei" viraria
+# "está limpo", que é o modo de falha que este repositório persegue.
+G_CTRL="$(python3 "$(dirname "$0")/_strip_comments.py" "$UI/modules/analise/AgentsBenchPage.tsx" \
+          | grep -cE "case[[:space:]]+'[a-z_]+':" || true)"
+if [ "${G_CTRL:-0}" -lt 6 ]; then
+  echo "   ⛔ INCONCLUSIVO — achei só ${G_CTRL:-0} \`case\` de forma no despacho (esperado ≥ 6)."
+  echo "      O parser desta seção deixou de casar com o arquivo; um verde não valeria nada."
+  inconclusive
+fi
+if [ "$G_RESIDUO" -eq 0 ]; then
+  echo "   ✅ nenhuma comparação por id de lente nas duas telas de despacho"
+  echo "      ($G_CTRL formas no \`switch\` da mesa; exaustividade imposta por \`assertNever\`)"
+fi
 # ── Fases futuras — declaradas para NÃO parecerem cobertas ────────────────────
 echo
 echo "── não coberto ainda (por fase, não por esquecimento) ──"
 echo "   · F2/F3: a lente de DISPOSIÇÃO honra só o intervalo (agrega sobre pools"
 echo "         internos). O contrato o declara (\`honors: period_only\`) e a tela o diz;"
 echo "         estender \`/reports/wrapup-summary\` aos demais filtros é trabalho próprio"
-echo "   · F3: o DISPATCH do gráfico ainda é cascata de if — o contrato já declara"
-echo "         entidade/evidência/comparabilidade, mas a forma do gráfico só entra"
-echo "         quando a mesa virar modo (D6)"
+echo "   · F3: a mesa como MODO da superfície B (D6). O despacho da forma já saiu da"
+echo "         cascata (seção G), mas \`/analise/agents\` ainda é ENDEREÇO próprio"
 echo "   · F3: a superfície de RECURSOS (e com ela a lente de token do lado da oferta)."
 echo "         A T3 entregou a lente de token da superfície A; a metade B espera a F3,"
 echo "         que é onde a entidade deixa de ser o contato"

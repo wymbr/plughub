@@ -41,7 +41,7 @@ import { DEFAULT_FILTERS } from './types'
 import { ListaTab }        from './tabs/ListaTab'
 import ContactLensChart    from './ContactLensChart'
 import WrapupSummaryPage   from '@/modules/analise/WrapupSummaryPage'
-import { CONTACT_LENSES, isContactLens } from '@/modules/analise/lens-contract'
+import { CONTACT_LENSES, assertNever, isContactLens } from '@/modules/analise/lens-contract'
 import type { ContactLensId } from '@/modules/analise/lens-contract'
 // Mesmo componente que a coluna "Processo" da lista usa — ver o comentário do
 // `ProcessCrumb` abaixo para por que isto não é conveniência.
@@ -613,13 +613,24 @@ export default function SessionsPage() {
     direction:       filters.direction,                   // D8 (F4)
   }
 
+  // A forma sai da DECLARAÇÃO uma vez só. Extraída para variável porque o
+  // estreitamento do TypeScript trabalha sobre ela: depois dos três ramos abaixo
+  // `shape` é `never`, e é isso que torna o `assertNever` uma prova de COMPILAÇÃO em
+  // vez de um estado vazio em runtime.
+  const shape = lensDef.chart
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
       <FilterBar filters={filters} setFilters={setFilters} />
       <LensBar lens={lens} onChange={id => setSearchParams(id === 'list' ? {} : { lens: id })} />
 
       <div className="flex-1 overflow-hidden">
-        {lens === 'list' ? (
+        {/* F3 — o despacho é pela FORMA declarada (`chart`), não pelo id da lente.
+            Eram três branches (`lens === 'list'` · `'disposition'` · resto), e o
+            "resto" é o que faria uma lente de contato nova ser desenhada como série
+            **sem ninguém decidir isso**. Aqui a lente diz a forma, e a forma que esta
+            superfície não conhece não compila. */}
+        {shape === 'contact_list' ? (
           <ListaTab
             tenantId={tenantId}
             filters={contactFilters}
@@ -631,15 +642,20 @@ export default function SessionsPage() {
             // processo, não dois que podem divergir.
             onOpenJourney={jid => setSearchParams({ journey: jid })}
           />
-        ) : lens === 'disposition' ? (
+        ) : shape === 'disposition_summary' ? (
           // `/analise/wrapup` absorvido (D7): o endereço morre, o componente é
           // re-hospedado. Recebe o intervalo da barra — sem isso a tela teria DUAS
           // janelas de tempo, e a de dentro venceria em silêncio.
           <WrapupSummaryPage fromDt={filters.fromDt} toDt={filters.toDt} />
-        ) : (
+        ) : shape === 'metric_lines' ? (
           // Toda lente de série é o MESMO componente, dirigido pela declaração —
           // nunca um branch por lente. Ver `ContactLensChart`.
           <ContactLensChart tenantId={tenantId} filters={contactFilters} lens={lensDef} />
+        ) : (
+          // Inalcançável POR TIPO: `lensDef` vem de `CONTACT_LENSES`, cujo `chart` é
+          // estreitado às três formas acima. Uma lente de contato com forma nova não
+          // compila aqui — que é mais forte que qualquer estado vazio em runtime.
+          assertNever(shape)
         )}
       </div>
     </div>

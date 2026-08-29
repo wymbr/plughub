@@ -34,14 +34,20 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 // com formato e agregação · onde vive a evidência · comparabilidade), e é dele
 // que saem agora o estado vazio e o tipo de entidade do seletor.
 import {
-  REPORT_LENSES, lensById,
+  COMPARE_LENSES, lensById,
   type LensId, type FetchableLensId,
 } from './lens-contract'
 
 // Sem cast para `ReportLens[]`: alargar aqui devolveria `id: string` e o seletor
 // perderia a união literal — que é justamente o que impede uma lente inexistente
 // de virar estado válido.
-const LENSES = REPORT_LENSES
+//
+// ⚠️ Era `REPORT_LENSES` (TODAS), e isso virou defeito quando a F2 acrescentou as seis
+// lentes de contato à declaração: a mesa passou a renderizar botão para lentes que o
+// `/reports/agents/compare` não conhece, escritos com a CHAVE CRUA de i18n
+// (`bench.lens.list`, …), porque `bench.lens.*` só tem entrada para as dez dela.
+// `COMPARE_LENSES` filtra pela FONTE — o que a mesa sabe pedir —, não pela entidade.
+const LENSES = COMPARE_LENSES
 
 // Cor da célula por nota 0–10 (vermelho → âmbar → verde). Reusada no heatmap (F8.3)
 // e no radar do detalhe (F8.4).
@@ -906,94 +912,164 @@ function LensChart({
     <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
   )
 
-  if (lens === 'resolution') return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <MetricLine resp={resp} metricKey="resolution_rate" fmt="pct" selected={selected}
-        title={t('bench.metric.resolution')} labelMap={labelMap} />
-      <MetricLine resp={resp} metricKey="escalation_rate" fmt="pct" selected={selected}
-        title={t('bench.metric.escalation')} labelMap={labelMap} />
+  // ── F3 · O DESPACHO É POR FORMA DECLARADA, não por id de lente ───────────────
+  //
+  // Aqui viviam dez `if (lens === '…')`, e com eles a métrica, o formato e o título
+  // de cada gráfico — hardcodados no JSX. A consequência era o custo que o contrato
+  // existe para remover: "lente nova" queria dizer "editar este componente".
+  //
+  // Agora a lente diz a FORMA (`chart`) e as MÉTRICAS (`metrics[]`, cada uma com
+  // `format`), e as oito formas abaixo se servem disso. Uma lente que reusa uma forma
+  // existente não toca em nada daqui — foi o que a D6 previu como teste da extração.
+  //
+  // O `switch` é exaustivo por construção: `LensChart` é união fechada e o
+  // `assertNever` no default falha em COMPILAÇÃO se alguém acrescentar uma forma sem
+  // renderer. Uma cascata de `if` com um `return` final (o antigo `// pause_reason`)
+  // não tem essa propriedade: a lente nova cai calada no último ramo e é DESENHADA
+  // COM A FORMA ERRADA — que é pior do que não desenhar.
+  const def = lensById(lens)
+  if (!def) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
+  )
+
+  // A guarda de comparabilidade deixou de ser escrita por lente: quem a exige é quem
+  // DECLARA `same_form`. Antes, `quality` a tinha inline e `quality_criteria` não —
+  // duas lentes com a mesma régua e uma só protegida.
+  const cmp = def.comparability === 'same_form'
+    ? checkSameForm(resp, selected)
+    : { verdict: 'ok' as SameFormVerdict, forms: [] as string[] }
+
+  // Bloqueio só faz sentido onde o gráfico agrega as entidades num eixo comum: numa
+  // linha única, misturar réguas produz um número inventado. O mapa de calor é POR
+  // entidade, então cross-form é advertência, não impedimento — e a diferença é da
+  // FORMA, não da lente.
+  if (cmp.verdict === 'blocked' && def.chart === 'metric_lines') return (
+    <div className="h-52 flex flex-col items-center justify-center text-sm text-muted-light text-center px-6 gap-1">
+      <span className="text-warning font-medium">{t('bench.quality.crossFormGuard')}</span>
+      <span className="text-2xs">{t('bench.quality.crossFormGuardHint', { forms: cmp.forms.join(', ') })}</span>
     </div>
   )
-  if (lens === 'sessions_aht') return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <MetricLine resp={resp} metricKey="sessions" fmt="count" selected={selected}
-        title={t('bench.metric.sessions')} labelMap={labelMap} />
-      <MetricLine resp={resp} metricKey="aht_ms" fmt="time" selected={selected}
-        title={t('bench.metric.aht')} labelMap={labelMap} />
-    </div>
+
+  const aviso = (
+    <>
+      {cmp.verdict === 'warn' && (
+        <p className="text-2xs text-warning px-1">
+          {t('bench.quality.sameAgentForms', { forms: cmp.forms.join(', ') })}
+        </p>
+      )}
+      {cmp.verdict === 'blocked' && (
+        <p className="text-2xs text-warning px-1">
+          {t('bench.quality.crossFormGuardHint', { forms: cmp.forms.join(', ') })}
+        </p>
+      )}
+      {cmp.verdict === 'unverifiable' && (
+        <p className="text-2xs text-muted-light px-1">{t('bench.quality.formUnknown')}</p>
+      )}
+    </>
   )
-  if (lens === 'quality') {
-    // F1: a regra de comparabilidade agora é DECLARADA (`comparability: 'same_form'`)
-    // e avaliada por `checkSameForm`, compartilhada com `quality_criteria` — que
-    // exige a mesma régua e não tinha guarda nenhuma.
-    const cmp = checkSameForm(resp, selected)
-    if (cmp.verdict === 'blocked') return (
-      <div className="h-52 flex flex-col items-center justify-center text-sm text-muted-light text-center px-6 gap-1">
-        <span className="text-warning font-medium">{t('bench.quality.crossFormGuard')}</span>
-        <span className="text-2xs">{t('bench.quality.crossFormGuardHint', { forms: cmp.forms.join(', ') })}</span>
-      </div>
-    )
-    return (
-      <div className="space-y-2">
-        {cmp.verdict === 'warn' && (
-          <p className="text-2xs text-warning px-1">
-            {t('bench.quality.sameAgentForms', { forms: cmp.forms.join(', ') })}
-          </p>
-        )}
-        <MetricLine resp={resp} metricKey="avg_score" fmt="score" selected={selected}
-          title={t('bench.metric.quality')} labelMap={labelMap} />
-      </div>
-    )
-  }
-  if (lens === 'deploy') return (
-    resp.meta.mode === 'epoch'
-      ? <DeployEpochChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
-      : <DeployChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
-  )
-  if (lens === 'nps') return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <MetricLine resp={resp} metricKey="nps" fmt="count" selected={selected}
-        title={t('bench.metric.npsIndex')} labelMap={labelMap} />
-      <MetricLine resp={resp} metricKey="avg_nps" fmt="score" selected={selected}
-        title={t('bench.metric.npsAvg')} labelMap={labelMap} />
-    </div>
-  )
-  if (lens === 'wrapup') return (
-    <StackedDispositionBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
-  )
-  if (lens === 'quality_criteria') {
-    // Mesma régua da lente `quality` — nota por DIMENSÃO só é comparável dentro do
-    // mesmo formulário. Esta guarda NÃO existia aqui, e hoje ela não consegue
-    // decidir: o backend não expõe `form_ids` nesta lente. Dizer isso é o ponto —
-    // uma guarda que passa por falta de dado é pior que guarda nenhuma.
-    const cmp = checkSameForm(resp, selected)
-    return (
-      <div className="space-y-2">
-        {cmp.verdict === 'blocked' && (
-          <p className="text-2xs text-warning px-1">
-            {t('bench.quality.crossFormGuardHint', { forms: cmp.forms.join(', ') })}
-          </p>
-        )}
-        {cmp.verdict === 'unverifiable' && (
-          <p className="text-2xs text-muted-light px-1">{t('bench.quality.formUnknown')}</p>
-        )}
-        <QualityCriteriaHeatmap resp={resp} selected={selected} labelMap={labelMap} t={t} />
-      </div>
-    )
-  }
-  if (lens === 'escalation_reason') return (
-    <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t}
-      valueMode="count" reasonLabels={escalationLabels} emptyKey="bench.chart.selectForEscalation" />
-  )
-  if (lens === 'availability') return (
-    <GroupedBars resp={resp} selected={selected} labelMap={labelMap} t={t}
-      metrics={[
-        { key: 'occupancy_pct', name: t('bench.metric.occupancy') },
-        { key: 'pause_pct',     name: t('bench.metric.pause') },
-      ]} />
-  )
-  // pause_reason
-  return <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
+
+  const corpo = ((): React.ReactNode => {
+    switch (def.chart) {
+      case 'metric_lines':
+        // Uma `MetricLine` por métrica DECLARADA. O título vem por convenção de id
+        // (`bench.metric.<key>`), que é o que os dez ramos anteriores escreviam à mão
+        // — e escreviam de forma inconsistente (`resolution_rate` → `bench.metric.
+        // resolution`). Os apelidos que sobraram estão em `METRIC_TITLE_KEY`, um mapa
+        // FECHADO: uma chave inexistente ali não compila.
+        return (
+          <div className={def.metrics.length > 1
+            ? 'grid grid-cols-1 lg:grid-cols-2 gap-4' : ''}>
+            {def.metrics.map(m => (
+              <MetricLine key={m.key} resp={resp} metricKey={m.key} fmt={m.format}
+                selected={selected} labelMap={labelMap}
+                title={t(METRIC_TITLE_KEY[m.key] ?? `bench.metric.${m.key}`)} />
+            ))}
+          </div>
+        )
+      case 'grouped_bars':
+        return (
+          <GroupedBars resp={resp} selected={selected} labelMap={labelMap} t={t}
+            metrics={def.metrics.map(m => ({
+              key: m.key, name: t(METRIC_TITLE_KEY[m.key] ?? `bench.metric.${m.key}`),
+            }))} />
+        )
+      case 'reason_bars_count':
+        return (
+          <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t}
+            valueMode="count" reasonLabels={escalationLabels}
+            emptyKey={REASON_EMPTY_KEY[def.chart]} />
+        )
+      case 'reason_bars_minutes':
+        return (
+          <StackedReasonBars resp={resp} selected={selected} labelMap={labelMap} t={t}
+            valueMode="minutes" emptyKey={REASON_EMPTY_KEY[def.chart]} />
+        )
+      case 'disposition_bars':
+        return <StackedDispositionBars resp={resp} selected={selected} labelMap={labelMap} t={t} />
+      case 'criteria_heatmap':
+        return <QualityCriteriaHeatmap resp={resp} selected={selected} labelMap={labelMap} t={t} />
+      case 'deploy_timeline':
+        return resp.meta.mode === 'epoch'
+          ? <DeployEpochChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
+          : <DeployChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
+      // As duas formas da superfície A (`contact_list`, `disposition_summary`) não são
+      // desenhadas pela MESA: lá a entidade é o contato, e quem despacha é o
+      // `SessionsPage`. Recusar aqui é mais honesto que desenhar algo — a alternativa
+      // seria um estado vazio que parece "não há dado".
+      case 'contact_list':
+      case 'disposition_summary':
+        return (
+          <div className="h-52 flex items-center justify-center text-sm text-muted-light px-6 text-center">
+            {t('bench.chart.notInThisSurface')}
+          </div>
+        )
+      default:
+        return assertNever(def.chart)
+    }
+  })()
+
+  return <div className="space-y-2">{aviso}{corpo}</div>
+}
+
+/**
+ * Falha em COMPILAÇÃO quando uma forma nova entra no contrato sem renderer.
+ * É o que a cascata de `if` não tinha: lá, a forma nova caía no `return` final e era
+ * desenhada com a geometria de `pause_reason`, calada.
+ */
+function assertNever(x: never): never {
+  throw new Error(`forma de gráfico sem renderer: ${String(x)}`)
+}
+
+/**
+ * Apelidos de título que não seguem `bench.metric.<key>`.
+ *
+ * Mapa FECHADO de propósito: as chaves são as métricas declaradas cujo rótulo
+ * histórico diverge do id (`resolution_rate` → `bench.metric.resolution`). Uma métrica
+ * nova cai na convenção; uma que precise de apelido entra aqui e o `??` acima nunca
+ * fabrica chave inexistente em silêncio — chave ausente aparece CRUA na tela, que é
+ * ruidoso e por isso aceitável.
+ */
+const METRIC_TITLE_KEY: Record<string, string> = {
+  resolution_rate: 'bench.metric.resolution',
+  escalation_rate: 'bench.metric.escalation',
+  aht_ms:          'bench.metric.aht',
+  avg_score:       'bench.metric.quality',
+  nps:             'bench.metric.npsIndex',
+  avg_nps:         'bench.metric.npsAvg',
+  occupancy_pct:   'bench.metric.occupancy',
+  pause_pct:       'bench.metric.pause',
+}
+
+/**
+ * Mensagem de "selecione uma entidade" das duas formas de barras por motivo.
+ *
+ * Tipado sobre as DUAS formas, não sobre `string`: uma terceira forma de razões não
+ * compila sem entrada aqui. É a diferença entre uma lista que envelhece e uma que o
+ * compilador segura.
+ */
+const REASON_EMPTY_KEY: Record<'reason_bars_count' | 'reason_bars_minutes', string> = {
+  reason_bars_count:   'bench.chart.selectForEscalation',
+  reason_bars_minutes: 'bench.chart.selectForPause',
 }
 
 // ── Detalhe type-aware (F4.4) — consolidado das lentes por agente ─────────────
@@ -1294,6 +1370,8 @@ export default function AgentsBenchPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [detail, setDetail] = useState<{ key: string; label: string; type: string } | null>(null)
 
+  const lensDef = LENSES.find(l => l.id === lens)!
+
   // Sincroniza estado → URL (replace, sem empilhar histórico).
   useEffect(() => {
     const next = new URLSearchParams()
@@ -1303,12 +1381,16 @@ export default function AgentsBenchPage() {
     if (lens !== 'resolution') next.set('lens', lens)
     if (selected.length) next.set('sel', selected.join(','))
     if (view === 'cross') next.set('view', view)
-    if (lens === 'deploy' && deployMode === 'epoch') next.set('mode', 'epoch')
+    // `mode=epoch` é do gráfico de deploy, não da lente chamada "deploy": quem
+    // entende os dois modos é a FORMA `deploy_timeline`. Era `lens === 'deploy'`, o
+    // último ramo por id que sobrou depois da F3 — e um segundo gráfico de linha do
+    // tempo herdaria o toggle na tela e perderia o parâmetro na URL, que é a
+    // divergência mais chata de diagnosticar (o estado existe e não viaja).
+    if (lensDef.chart === 'deploy_timeline' && deployMode === 'epoch') next.set('mode', 'epoch')
     setSp(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromDt, toDt, poolId, lens, selected, view, deployMode])
 
-  const lensDef = LENSES.find(l => l.id === lens)!
   // F1/D6: a unidade comparada é DECLARADA, não inferida do id da lente. `deploy`
   // compara POOLS (§11: o mesmo skill roda em N pools, âncora-skill misturaria) e
   // era só isso que o antigo `lens === 'deploy'` dizia nas cinco condicionais do

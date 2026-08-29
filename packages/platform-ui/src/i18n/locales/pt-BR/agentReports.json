@@ -228,6 +228,7 @@
       "loading": "Carregando…",
       "noData": "Sem dados para esta lente no período.",
       "pendingViz": "O gráfico desta lente chega no próximo passo.",
+      "notInThisSurface": "Esta lente pertence à superfície de Contatos.",
       "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa.",
       "selectForWrapup": "Selecione um ou mais agentes na lista para comparar disposições do wrap-up.",
       "selectForQuality": "Selecione um ou mais agentes na lista para comparar a qualidade por dimensão.",

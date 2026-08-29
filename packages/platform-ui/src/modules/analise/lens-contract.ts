@@ -118,6 +118,50 @@ export type LensEvidence = 'series' | 'delegated'
  */
 export type LensComparability = 'always' | 'same_form'
 
+/**
+ * A FORMA do gráfico — o terceiro membro da tripla da D6, e o último a entrar (F3).
+ *
+ * ── O que ele substitui ──────────────────────────────────────────────────────
+ * Uma cascata de dez `if (lens === '…')` dentro do `LensChart` da mesa, mais três
+ * branches no `SessionsPage`. Enquanto a forma vivia lá, "lente nova" significava
+ * "editar o componente de render" — que é exatamente o custo que a D5 diz que o
+ * contrato existe para remover. Com o campo, uma lente que reusa uma forma existente
+ * não toca em renderer nenhum.
+ *
+ * ── Por que a UNIDADE está dentro da forma, e não num campo à parte ──────────
+ * `reason_bars_count` e `reason_bars_minutes` têm a MESMA geometria e eixos que
+ * significam coisas diferentes. Era um parâmetro `valueMode` com **default**
+ * (`'minutes'`), lido de um call site e omitido no outro — e default de unidade é a
+ * forma barata de publicar minutos rotulados como contagem. Separadas na enum, o
+ * `switch` exaustivo não deixa a próxima lente de razões herdar a unidade errada por
+ * silêncio.
+ *
+ * ── A geometria depende de `entity`, e isso é coerente, não ambíguo ──────────
+ * `metric_lines` numa lente de `entity: 'contact'` é UM gráfico com uma linha por
+ * métrica (a população filtrada ao longo do tempo); numa de `agent`/`pool` são N
+ * gráficos, um por métrica, cada um com uma linha por entidade selecionada. É a
+ * distinção da D6 — evoluir × comparar — e ela já está declarada em `entity`.
+ */
+export type LensChart =
+  /** Linha(s) das métricas declaradas. A forma de 8 das 16 lentes. */
+  | 'metric_lines'
+  /** Barras agrupadas por entidade, uma barra por métrica declarada. */
+  | 'grouped_bars'
+  /** Barras empilhadas por MOTIVO, eixo em contagem. */
+  | 'reason_bars_count'
+  /** Barras empilhadas por MOTIVO, eixo em minutos. */
+  | 'reason_bars_minutes'
+  /** Barras empilhadas de disposição (wrap-up) por entidade. */
+  | 'disposition_bars'
+  /** Mapa de calor de nota por critério × entidade. */
+  | 'criteria_heatmap'
+  /** Linha do tempo de deploy (diário com marcadores, ou por versão). */
+  | 'deploy_timeline'
+  /** A lista de contatos. Não é gráfico; é a forma da lente `list`. */
+  | 'contact_list'
+  /** Painel de disposição do período (componente próprio, re-hospedado). */
+  | 'disposition_summary'
+
 export interface ReportMetric {
   key:         string
   format:      MetricFormat
@@ -134,6 +178,7 @@ export interface ReportLens {
   comparability: LensComparability
   source:        LensSource
   honors:        LensHonors
+  chart:         LensChart
 }
 
 // ── Declaração das lentes vivas ───────────────────────────────────────────────
@@ -149,6 +194,7 @@ export const REPORT_LENSES = [
     ],
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     id: 'sessions_aht', entity: 'agent', domain: 'universal',
@@ -158,6 +204,7 @@ export const REPORT_LENSES = [
     ],
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     // A régua é o eixo: comparar a média de qualidade entre AGENTES exige o mesmo
@@ -166,6 +213,7 @@ export const REPORT_LENSES = [
     metrics: [{ key: 'avg_score', format: 'score', aggregation: 'avg' }],
     evidence: 'series', comparability: 'same_form',
     source: 'agents_compare', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     // Mesma régua, mesma exigência — e a guarda NÃO existia aqui.
@@ -177,6 +225,7 @@ export const REPORT_LENSES = [
     metrics: [],
     evidence: 'delegated', comparability: 'same_form',
     source: 'agents_compare', honors: 'all',
+    chart: 'criteria_heatmap',
   },
   {
     // Índice NPS não se soma nem se promedia entre buckets — recalcula-se.
@@ -187,16 +236,19 @@ export const REPORT_LENSES = [
     ],
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     id: 'wrapup', entity: 'agent', domain: 'universal',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'disposition_bars',
   },
   {
     id: 'escalation_reason', entity: 'agent', domain: 'universal',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'reason_bars_count',
   },
   {
     // Arc 6 Fase 2 — âncora no POOL: o mesmo skill roda em N pools, e âncora-skill
@@ -206,6 +258,7 @@ export const REPORT_LENSES = [
     metrics: [{ key: 'avg_score', format: 'score', aggregation: 'avg' }],
     evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'deploy_timeline',
   },
   {
     id: 'availability', entity: 'agent', domain: 'human',
@@ -215,11 +268,13 @@ export const REPORT_LENSES = [
     ],
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'grouped_bars',
   },
   {
     id: 'pause_reason', entity: 'agent', domain: 'human',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
+    chart: 'reason_bars_minutes',
   },
   // ── Superfície A · Contatos (F2) ────────────────────────────────────────────
   //
@@ -233,12 +288,14 @@ export const REPORT_LENSES = [
     id: 'list', entity: 'contact', domain: 'universal',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'own', honors: 'all',
+    chart: 'contact_list',
   },
   {
     id: 'volume', entity: 'contact', domain: 'universal',
     metrics: [{ key: 'contacts', format: 'count', aggregation: 'sum' }],
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     // Do PRÓPRIO elemento (`sessions.handle_time_ms`), nunca da soma dos segmentos:
@@ -247,6 +304,7 @@ export const REPORT_LENSES = [
     metrics: [{ key: 'handle_time_ms', format: 'time', aggregation: 'avg' }],
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     // D4 — três grandezas, e nenhuma deriva das outras: quantos agentes o contato
@@ -260,6 +318,7 @@ export const REPORT_LENSES = [
     ],
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     // T3 — consumo de LLM atribuído ao contato.
@@ -280,6 +339,7 @@ export const REPORT_LENSES = [
     ],
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
+    chart: 'metric_lines',
   },
   {
     // Absorve `/analise/wrapup`. **`period_only` é medição, não folga**: o agregado
@@ -289,13 +349,58 @@ export const REPORT_LENSES = [
     id: 'disposition', entity: 'contact', domain: 'human',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'own', honors: 'period_only',
+    chart: 'disposition_summary',
   },
 ] as const satisfies readonly ReportLens[]
 
 export type LensId = (typeof REPORT_LENSES)[number]['id']
 
+/** Um elemento da declaração, com os tipos LITERAIS preservados. */
+type DeclaredLens = (typeof REPORT_LENSES)[number]
+
+/**
+ * Recorte da declaração que **preserva os literais**.
+ *
+ * ⚠️ `REPORT_LENSES.filter(l => l.entity === 'contact')` — o que estava aqui — devolve
+ * um array cujo elemento é a união de TODAS as lentes, e o `chart` dele colapsa em
+ * `string`. Medido em 2026-08-29 com uma sonda de tipo: `const _t: number = shape`
+ * acusou `Type 'string' is not assignable to type 'number'`.
+ *
+ * A consequência não era cosmética. O `SessionsPage` fecha o despacho com
+ * `assertNever(shape)`, e o comentário ao lado dizia que uma lente de contato com
+ * forma nova **não compilaria**. Com `shape: string` isso era falso — a garantia
+ * estava escrita e não existia, que é a família do DDL de `participation_intervals`
+ * (prosa prometendo invariante sem mecanismo). A mutação que provou: acrescentar uma
+ * lente `entity: 'contact'` com `chart: 'criteria_heatmap'` compilava limpo.
+ *
+ * Com o predicado de tipo, `chart` volta a ser a união dos literais daquele recorte, e
+ * o `assertNever` passa a reprovar de verdade.
+ */
+const byEntity = <E extends DeclaredLens['entity']>(entity: E) =>
+  (l: DeclaredLens): l is Extract<DeclaredLens, { entity: E }> => l.entity === entity
+
+const bySource = <S extends DeclaredLens['source']>(source: S) =>
+  (l: DeclaredLens): l is Extract<DeclaredLens, { source: S }> => l.source === source
+
 /** Lentes da superfície A, na ordem em que a faixa as apresenta. */
-export const CONTACT_LENSES = REPORT_LENSES.filter(l => l.entity === 'contact')
+export const CONTACT_LENSES = REPORT_LENSES.filter(byEntity('contact'))
+
+/**
+ * Lentes que a MESA (modo comparar) sabe pedir — as servidas por `/reports/agents/compare`.
+ *
+ * ⚠️ Existe por um defeito MEDIDO em 2026-08-29, não por simetria. A mesa fazia
+ * `const LENSES = REPORT_LENSES`, e quando a F2 acrescentou as seis lentes de contato
+ * à declaração, ela passou a renderizar botão para todas — inclusive as que aquele
+ * endpoint não conhece. Como `bench.lens.*` só tem chave para as dez dela, a tela
+ * mostrava **seis botões escritos `bench.lens.list`, `bench.lens.volume`, …**: a chave
+ * crua, que é o sintoma que o CLAUDE.md descreve na invariante de i18n.
+ *
+ * O conserto não é filtrar por `entity !== 'contact'` — isso voltaria a amarrar a mesa
+ * a *quem* ela compara. O critério é a FONTE: a mesa mostra o que ela sabe **pedir**.
+ * Uma lente futura de entidade `pool` servida pelo mesmo endpoint entra sozinha; uma
+ * de fonte própria não entra, e não precisa de exceção nomeada.
+ */
+export const COMPARE_LENSES = REPORT_LENSES.filter(bySource('agents_compare'))
 
 export type ContactLensId = (typeof CONTACT_LENSES)[number]['id']
 
@@ -325,4 +430,21 @@ export type FetchableLensId = LensId | BackendOnlyLensId
 
 export function lensById(id: string): ReportLens | undefined {
   return (REPORT_LENSES as readonly ReportLens[]).find(l => l.id === id)
+}
+
+/**
+ * Exaustividade de `LensChart` — falha em COMPILAÇÃO, não em runtime.
+ *
+ * É o que a cascata de `if` não tinha. Lá, a forma nova caía no `return` final e era
+ * desenhada com a geometria da última lente da lista, **calada**: um gráfico
+ * sintaticamente válido e semanticamente errado, que é a classe de relatório que a D5
+ * nomeia como a mais cara, porque não fica vermelha.
+ *
+ * Onde o tipo já prova que o ramo é inalcançável (o `SessionsPage`, cujo `lensDef` vem
+ * de `CONTACT_LENSES` e por isso tem `chart` estreitado a três valores), o `throw`
+ * nunca roda — e é justamente esse o ponto: acrescentar uma lente de contato com forma
+ * nova deixa de compilar ali, em vez de cair num ramo genérico.
+ */
+export function assertNever(x: never): never {
+  throw new Error(`forma de gráfico sem renderer: ${String(x)}`)
 }

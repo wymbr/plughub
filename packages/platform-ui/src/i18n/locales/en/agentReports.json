@@ -228,6 +228,7 @@
       "loading": "Loading…",
       "noData": "No data for this lens in the period.",
       "pendingViz": "This lens's chart arrives in the next step.",
+      "notInThisSurface": "This lens belongs to the Contacts surface.",
       "selectForPause": "Select one or more agents in the list to compare pause reasons.",
       "selectForWrapup": "Select one or more agents in the list to compare wrap-up dispositions.",
       "selectForQuality": "Select one or more agents in the list to compare quality by dimension.",
