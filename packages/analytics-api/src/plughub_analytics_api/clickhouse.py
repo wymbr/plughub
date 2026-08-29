@@ -170,7 +170,11 @@ CREATE TABLE IF NOT EXISTS {db}.messages
     visibility   String,
     content      Nullable(String),
     timestamp    DateTime64(3, 'UTC'),
-    date         Date
+    date         Date,
+    -- T3: field_id -> id do tipo do catalogo, para o mascaramento DECLARADO.
+    -- Map vazio = nenhum campo declarado; e a coluna que separa "mascaramos e
+    -- sabiamos o que" de "ninguem olhou", que sem ela sao leituras identicas.
+    masked_types Map(String, String)
 )
 ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
@@ -181,7 +185,11 @@ ORDER BY (tenant_id, message_id)
 _DDL_MESSAGES_MIGRATE_CONTENT = (
     "ALTER TABLE {db}.messages"
     " ADD COLUMN IF NOT EXISTS author_id Nullable(String) DEFAULT NULL,"
-    " ADD COLUMN IF NOT EXISTS content   Nullable(String) DEFAULT NULL"
+    " ADD COLUMN IF NOT EXISTS content   Nullable(String) DEFAULT NULL,"
+    # T3: sem este ALTER, instalacao LIMPA teria a coluna (o CREATE TABLE a declara)
+    # e a base existente NAO — e o parser escreveria num campo inexistente. E a
+    # familia do "ambiente que so sobe porque ja subiu antes", pelo avesso.
+    " ADD COLUMN IF NOT EXISTS masked_types Map(String, String)"
 )
 
 _DDL_USAGE_EVENTS = """
@@ -1578,6 +1586,12 @@ class AnalyticsStore:
         "message_id", "tenant_id", "session_id", "author_id", "author_role",
         "channel", "content_type", "visibility", "content", "timestamp", "date",
         "origin",   # substrate isolation (ADR)
+        # T3 — a QUINTA camada. Schema, produtor, parser e DDL nao bastam: se a
+        # coluna nao entra AQUI e em `_message_row`, o parser produz a chave e o
+        # escritor a descarta em SILENCIO (chave extra num dict e ignorada). Foi
+        # exatamente o que aconteceu: bridge publicando `masked_types` corretamente
+        # e a coluna gravando `{}` em toda linha.
+        "masked_types",
     ]
 
     async def insert_message(self, row: dict) -> None:
@@ -2335,6 +2349,8 @@ def _message_row(d: dict) -> list:
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
         d.get("origin") or "live",   # substrate isolation (ADR)
+        # Map(String,String) — vazio quando nenhum campo foi declarado mascarado.
+        {str(k): str(v) for k, v in (d.get("masked_types") or {}).items()},
     ]
 
 

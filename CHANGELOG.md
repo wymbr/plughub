@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## T2 + T3 do `masked` tipado — a união entra, e o tipo vira PROVENIÊNCIA (2026-08-29)
+
+*(A T1 tem entrada própria abaixo.)*
+
+### T2 — a união, e a precedência numa casa só
+
+`masked` aceita `boolean | string` nos quatro pontos de declaração; `true` resolve para
+`OPAQUE_DATA_TYPE_ID`. `resolveMaskedFields` devolve `{ids, types}` numa passada, e
+`isFieldMasked`/`computeMaskedFieldIds` viraram **derivações** — a precedência vive em
+`maskedFieldType` e em mais lugar nenhum.
+
+**Um consumidor mudou contra a linha "nada a jusante muda ainda", e por segurança:** `form_get`
+achatava com `f.masked === true`, então `masked: "cpf"` viraria `false` e o campo sairia
+**desmascarado**. A união sem consertar o achatamento cria *fail-open*. Idem `menu.ts`, onde
+`isStepMasked` substitui o teste na mão (o contrato booleano com o bridge continua booleano, mas
+**derivado**). String vazia falha **fechado**.
+
+Provado pela via real: **200** para `masked: "cpf"`, **422 `invalid_union`** para `masked: 7`,
+payloads diferindo só nesse campo. 8 testes novos; a mutação que devolve o comportamento pré-T2
+derruba **6**.
+
+### T3 — reescrita ao medir, porque metade dela era impossível
+
+A fase dizia *"máscara por papel e regra de canal alcançam a submissão de form"*. **Metade é
+impossível por invariante:** `by_role: last_2` e `display_screen: display_partial` exigem **ter o
+valor** para derivar o parcial, e num campo DECLARADO ele nunca persiste. Derivar e gravar seria
+gravar um derivado do segredo — em `senha`, os últimos caracteres da senha. ⇒ **`mascara.*` é
+dimensão do caminho de DETECÇÃO** (onde existem token e vault); na DECLARAÇÃO só `lgpd` e
+"suprimido" são alcançáveis.
+
+Segundo achado: **três casas** produzem o placeholder `••••••` — bridge, `webchat.py:839` e
+`AgentAssistPage.tsx:398`. Embutir o tipo no texto numa delas faria os caminhos divergirem.
+
+⇒ **T3 = o tipo viaja e é REGISTRADO como DADO.** `messages.masked_types` (`Map(String,String)`,
+campo → id do tipo), na mesma forma que a detecção já usa (`masked_categories`). Placeholder
+intocado; consolidar as três vira fase própria, e o gate **conta as três e reprova a quarta**.
+
+**Ausência ≠ vazio, e é o ponto inteiro:** o produtor **omite** o campo quando não há declaração.
+Gravar `{}` em toda mensagem devolveria a ambiguidade que a coluna existe para remover.
+
+### O achado que custou a depuração: são CINCO camadas, não quatro
+
+Eu havia registrado que a proveniência faltava em quatro camadas (schema · produtor · parser · DDL).
+Com as quatro corretas, a coluna gravava `{}` **em toda linha**. A quinta é o **ESCRITOR**:
+`clickhouse.py` monta o INSERT a partir de `_MESSAGE_COLS`, uma **lista fixa**, e `_message_row`
+produz os valores posicionalmente — chave extra no dict do parser é **ignorada, sem erro e sem log**.
+É a camada que descarta calada, e por isso ganhou ramo próprio no gate, com checagem de **pareamento**
+(coluna sem valor desalinha o INSERT inteiro; valor sem coluna levanta aridade — nenhuma das duas
+falha do jeito que se espera).
+
+*Método: cheguei aqui instrumentando, não deduzindo — e uma medição minha no meio do caminho estava
+errada (`kafka-console-consumer --from-beginning --max-messages 400` lê as mensagens mais ANTIGAS, e
+eu li o zero como "o bridge não publica"). O log temporário no produtor desfez o engano em um passo.*
+
+### Verificação
+
+Contato **real** pelo webchat (`_ws_chat.py`), form com `senha`/`codigo_2fa` declarados:
+
+```
+content:      [Formulário: {"email": "f…@p.local", "senha": "••••••", "codigo_2fa": "••••••"}]
+masked_types: {'senha':'opaque','codigo_2fa':'opaque'}
+```
+
+Testemunha negativa no mesmo dado: `email`, **não declarado**, não está no mapa e seu valor
+sobrevive — o mapa registra exatamente o que foi declarado, nem mais nem menos.
+
+Gate `infra/test/probe_masked_type_provenance.sh` (P0 conteúdo · A cinco camadas + pareamento ·
+B coluna viva · C oráculo ausência≠vazio · D censo das três casas), visto vermelho antes de verde.
+Suíte do skill-flow-engine 164/164. Gates irmãos do arco todos verdes.
+
+---
+
 ## T1 do `masked` tipado — o tipo `opaque`, e um gate que aprovava imagem velha (2026-08-29)
 
 Primeira fase do [ADR do `masked` tipado](docs/adr/adr-masked-typed-declaration.md). Entrega o tipo

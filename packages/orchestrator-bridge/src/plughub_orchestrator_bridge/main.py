@@ -9306,6 +9306,11 @@ async def process_inbound(
         # all_masked_fields: union of per-field masked_fields across all waiting entries
         any_masked        = False
         all_masked_fields: set[str] = set()
+        # T3 — proveniencia da DECLARACAO: campo -> id do tipo do catalogo.
+        # Registrada como DADO ao lado do texto redigido, nunca embutida nele: o
+        # placeholder e produzido em TRES casas (aqui, webchat adapter, echo do
+        # Console) e muda-lo numa so faria os caminhos divergirem.
+        all_masked_types: dict[str, str] = {}
         if waiting_hash:
             for _meta_json in waiting_hash.values():
                 try:
@@ -9316,6 +9321,11 @@ async def process_inbound(
                     for _fid in (_meta.get("masked_fields") or []):
                         if isinstance(_fid, str):
                             all_masked_fields.add(_fid)
+                    _types = _meta.get("masked_types")
+                    if isinstance(_types, dict):
+                        for _fid, _tid in _types.items():
+                            if isinstance(_fid, str) and isinstance(_tid, str) and _tid:
+                                all_masked_types[_fid] = _tid
                 except Exception:
                     pass
         if not any_masked:
@@ -9421,6 +9431,13 @@ async def process_inbound(
                 "visibility":   "all",
                 "timestamp":    msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
             }
+            # T3 — proveniencia da declaracao. Campo omitido quando VAZIO, de
+            # proposito: `{}` gravado em toda mensagem tornaria "nao havia campo
+            # mascarado" indistinguivel de "ninguem olhou", que e a patologia que
+            # este arco existe para fechar. Presente => alguem declarou; ausente =>
+            # nada foi declarado NESTA mensagem.
+            if all_masked_types:
+                _analytics_event["masked_types"] = dict(all_masked_types)
             if _kafka_producer:
                 await _kafka_producer.send_and_wait(
                     "conversations.events",

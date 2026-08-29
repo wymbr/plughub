@@ -27,7 +27,7 @@
 import type { MenuStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { interpolate, resolveVisibility, resolveInputValue } from "../interpolate"
-import { computeMaskedFieldIds, isFieldMasked, isStepMasked } from "../masking-policy"
+import { resolveMaskedFields, isFieldMasked, isStepMasked } from "../masking-policy"
 import { redisKeys } from "../redis-keys"
 
 // ── Dialog primitive §17.3-2 — dynamic options/fields ─────────────────────────
@@ -159,7 +159,10 @@ export async function executeMenu(
   // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
   // campo implícito — permite que o webchat renderize <input type="password"> quando masked=true.
   const implicitFieldId = step.output_as ?? step.id
-  const maskedFieldIds  = computeMaskedFieldIds(step.masked, resolvedFields, implicitFieldId)
+  // UMA resolucao, dois resultados (D2): os ids dirigem o canal (overlay de senha),
+  // os tipos dirigem o registro de proveniencia no bridge (T3).
+  const masked          = resolveMaskedFields(step.masked, resolvedFields, implicitFieldId)
+  const maskedFieldIds  = masked.ids
 
   try {
     // Sempre inclui o objeto menu para todas as interações.
@@ -234,6 +237,15 @@ export async function executeMenu(
     // redact individual form fields (e.g. senha, codigo_2fa) without suppressing
     // the entire submission when only some fields are masked.
     masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : [],
+    // T3 — o TIPO de cada campo mascarado, para o bridge REGISTRAR a proveniencia.
+    // Vai como DADO, nunca embutido no texto redigido: o placeholder e produzido em
+    // TRES casas (bridge, webchat adapter, echo do Console) e muda-lo numa so faria
+    // os caminhos divergirem.
+    //
+    // Nao carrega politica de EXIBICAO. `mascara.by_role`/`display_screen` exigem ter
+    // o valor para derivar um parcial, e em campo DECLARADO ele nunca persiste — sao
+    // dimensoes do caminho de DETECCAO, onde existem token e vault.
+    masked_types:  masked.types,
     // Mention-protocol standby: routers must NOT feed plain messages to this
     // BLPOP — it wakes only via mention_command_dispatch interrupts.
     standby:       step.standby === true,

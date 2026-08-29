@@ -504,6 +504,15 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "content":      payload.get("content"),
                 "timestamp":    payload.get("timestamp") or _now(),
                 "origin":       origin_from_source(payload.get("source")),
+                # T3 — proveniencia do mascaramento DECLARADO (campo -> id do tipo).
+                # Map() do ClickHouse; vazio = nenhum campo declarado nesta mensagem.
+                # Sem esta coluna, "mascaramos e sabiamos o que" e "ninguem olhou"
+                # sao leituras identicas na transcricao duravel.
+                "masked_types": {
+                    str(k): str(v)
+                    for k, v in (payload.get("masked_types") or {}).items()
+                    if isinstance(k, str) and isinstance(v, str) and v
+                },
             }
         ]
 

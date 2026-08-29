@@ -429,6 +429,22 @@ export const ConversationMessageSentSchema = z.object({
   content_type: z.string().optional(),
   visibility:   z.enum(["all", "agents_only"]).optional(),
   timestamp:    z.string().datetime().optional(),
+  /**
+   * T3 — proveniência do mascaramento DECLARADO: `field_id` → id do tipo do
+   * catálogo (`masking.types`). Escrito pelo bridge a partir do `masked_types`
+   * que o `menu` step publica no `waitingMeta`.
+   *
+   * Existe porque, sem ele, "mascaramos e sabíamos o quê" e "ninguém olhou" são
+   * leituras IDÊNTICAS na transcrição durável — a assinatura de valor plausível.
+   *
+   * **Ausente quando não houve campo declarado.** Nunca `{}`: um objeto vazio em
+   * toda mensagem devolveria justamente a ambiguidade que o campo remove.
+   *
+   * ⚠️ Não carrega política de exibição. `mascara.by_role`/`display_screen`
+   * precisam do VALOR para derivar um parcial, e em campo declarado ele nunca
+   * persiste — são dimensões do caminho de DETECÇÃO (`masked_categories`).
+   */
+  masked_types: z.record(z.string()).optional(),
 })
 export type ConversationMessageSent = z.infer<typeof ConversationMessageSentSchema>
 

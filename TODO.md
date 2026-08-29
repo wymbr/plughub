@@ -5341,8 +5341,16 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 >   recusa alto. *Nota: há 7 outros `catch` mudos no mesmo arquivo (`:249 :306 :317 :326 :430 :585
 >   :607`); os demais degradam para ausência de enfeite, não para vazamento — só este é desta
 >   classe, e é por isso que ele sai da lista.*
-> · 🟡 **A transcrição durável não tem PROVENIÊNCIA de mascaramento — e não é campo perdido, é fato
->   nunca modelado.** Conferido nas quatro camadas: `ConversationMessageSentSchema`
+> · ✅ ~~**A transcrição durável não tem PROVENIÊNCIA de mascaramento**~~ — **FECHADO para o caminho
+>   da DECLARAÇÃO na T3 (2026-08-29)**: `messages.masked_types` (`Map(String,String)`, campo → id do
+>   tipo), provado por contato real. **E são CINCO camadas, não quatro** — a contagem abaixo estava
+>   incompleta e o erro custou uma depuração: com schema, produtor, parser e DDL corretos, a coluna
+>   gravava `{}` em toda linha, porque o **ESCRITOR** (`clickhouse.py` `_MESSAGE_COLS` +
+>   `_message_row`) monta o INSERT a partir de uma **lista fixa de colunas** — chave extra no dict do
+>   parser é ignorada, sem erro e sem log. É a camada que descarta calada, e é a que faltava.
+>   *Segue aberto para o caminho da DETECÇÃO* (`masked_categories` existe em
+>   `session_stream_events`, não em `messages`). Texto original abaixo, pelo diagnóstico:
+>   Conferido nas quatro camadas: `ConversationMessageSentSchema`
 >   (`platform-events.ts:419-432`) **não declara** `masked`/`masked_categories`; o produtor do bridge
 >   (`main.py:9401+`) não os envia; o parser (`models.py:492-508`) não os lê; o DDL de
 >   `plughub_demo.messages` (`clickhouse.py:161-174`) não tem as colunas. Consequência: **não dá para
