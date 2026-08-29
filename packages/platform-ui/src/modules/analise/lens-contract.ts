@@ -71,6 +71,20 @@ export type MetricAggregation = 'sum' | 'avg' | 'recomputed'
 export type LensEntity = 'agent' | 'pool' | 'contact'
 
 /**
+ * A qual SUPERFÍCIE a lente pertence (D7).
+ *
+ *   `contacts`  — Superfície A, a DEMANDA: quantos contatos, quanto duraram, quanto
+ *                 custaram. A entidade agregada é o contato.
+ *   `resources` — Superfície B, a OFERTA: quanto o parque atendeu, esperou, ocupou.
+ *                 A entidade é o recurso (pool, agente, conta).
+ *
+ * Não é derivável de `entity`: a mesa (modo comparar da B) tem lentes de `entity:
+ * 'agent'` E de `entity: 'pool'`, e as duas são da mesma superfície. Confundir os dois
+ * eixos foi o que produziu a mesa como PÁGINA em vez de modo (D6).
+ */
+export type LensSurface = 'contacts' | 'resources'
+
+/**
  * De ONDE a lente tira o dado. Campo acrescentado na F2, e não por simetria: a
  * seção D de `probe_report_surface.sh` compara os ids declarados aqui com o
  * `_COMPARE_LENSES` de `reports_query.py`. Sem `source`, a primeira lente da
@@ -161,6 +175,15 @@ export type LensChart =
   | 'contact_list'
   /** Painel de disposição do período (componente próprio, re-hospedado). */
   | 'disposition_summary'
+  /**
+   * Painel de pool re-hospedado (F3) — volume, fila, capacidade, SLA.
+   *
+   * Uma forma só para os quatro, e não quatro valores, porque `chart` descreve a
+   * FORMA, não a lente: quatro valores usados por uma lente cada degeneraria o campo
+   * num apelido do `id`, que é a declaração inútil que a D5 removeu. Qual painel
+   * desenhar é do componente — é o que `evidence: 'delegated'` já significa.
+   */
+  | 'pool_panel'
 
 export interface ReportMetric {
   key:         string
@@ -179,6 +202,7 @@ export interface ReportLens {
   source:        LensSource
   honors:        LensHonors
   chart:         LensChart
+  surface:       LensSurface
 }
 
 // ── Declaração das lentes vivas ───────────────────────────────────────────────
@@ -195,6 +219,7 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'metric_lines',
+    surface: 'resources',
   },
   {
     id: 'sessions_aht', entity: 'agent', domain: 'universal',
@@ -205,6 +230,7 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'metric_lines',
+    surface: 'resources',
   },
   {
     // A régua é o eixo: comparar a média de qualidade entre AGENTES exige o mesmo
@@ -214,6 +240,7 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'same_form',
     source: 'agents_compare', honors: 'all',
     chart: 'metric_lines',
+    surface: 'resources',
   },
   {
     // Mesma régua, mesma exigência — e a guarda NÃO existia aqui.
@@ -226,6 +253,7 @@ export const REPORT_LENSES = [
     evidence: 'delegated', comparability: 'same_form',
     source: 'agents_compare', honors: 'all',
     chart: 'criteria_heatmap',
+    surface: 'resources',
   },
   {
     // Índice NPS não se soma nem se promedia entre buckets — recalcula-se.
@@ -237,18 +265,21 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'metric_lines',
+    surface: 'resources',
   },
   {
     id: 'wrapup', entity: 'agent', domain: 'universal',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'disposition_bars',
+    surface: 'resources',
   },
   {
     id: 'escalation_reason', entity: 'agent', domain: 'universal',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'reason_bars_count',
+    surface: 'resources',
   },
   {
     // Arc 6 Fase 2 — âncora no POOL: o mesmo skill roda em N pools, e âncora-skill
@@ -259,6 +290,7 @@ export const REPORT_LENSES = [
     evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'deploy_timeline',
+    surface: 'resources',
   },
   {
     id: 'availability', entity: 'agent', domain: 'human',
@@ -269,12 +301,14 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'grouped_bars',
+    surface: 'resources',
   },
   {
     id: 'pause_reason', entity: 'agent', domain: 'human',
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'agents_compare', honors: 'all',
     chart: 'reason_bars_minutes',
+    surface: 'resources',
   },
   // ── Superfície A · Contatos (F2) ────────────────────────────────────────────
   //
@@ -289,6 +323,7 @@ export const REPORT_LENSES = [
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'own', honors: 'all',
     chart: 'contact_list',
+    surface: 'contacts',
   },
   {
     id: 'volume', entity: 'contact', domain: 'universal',
@@ -296,6 +331,7 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
     chart: 'metric_lines',
+    surface: 'contacts',
   },
   {
     // Do PRÓPRIO elemento (`sessions.handle_time_ms`), nunca da soma dos segmentos:
@@ -305,6 +341,7 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
     chart: 'metric_lines',
+    surface: 'contacts',
   },
   {
     // D4 — três grandezas, e nenhuma deriva das outras: quantos agentes o contato
@@ -319,6 +356,7 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
     chart: 'metric_lines',
+    surface: 'contacts',
   },
   {
     // T3 — consumo de LLM atribuído ao contato.
@@ -340,6 +378,7 @@ export const REPORT_LENSES = [
     evidence: 'series', comparability: 'always',
     source: 'contacts_series', honors: 'all',
     chart: 'metric_lines',
+    surface: 'contacts',
   },
   {
     // Absorve `/analise/wrapup`. **`period_only` é medição, não folga**: o agregado
@@ -350,6 +389,60 @@ export const REPORT_LENSES = [
     metrics: [], evidence: 'delegated', comparability: 'always',
     source: 'own', honors: 'period_only',
     chart: 'disposition_summary',
+    surface: 'contacts',
+  },
+  // ── Superfície B · Recursos (F3) ────────────────────────────────────────────
+  //
+  // As quatro sub-abas de `/analise/pools` viram lentes: o endereço morre, o
+  // componente é re-hospedado (D7). São `entity: 'pool'` e `source: 'own'` — cada
+  // uma tem endpoint próprio (`/reports/pools/{volume,queue,occupancy}`) e não passa
+  // pelo `/reports/agents/compare` da mesa.
+  //
+  // ⚠️ A D7 lista as lentes da B como *"resources · availability · occupancy · usage
+  // · token"*. Aquela lista foi escrita ANTES de medir o que existia; ao abrir a
+  // página, o que há são quatro painéis com fontes distintas. Mantenho os nomes do
+  // que EXISTE (e o de-para na emenda do ADR) em vez de rebatizar quatro painéis
+  // para caberem numa lista indicativa — renomear sem mover código é como a
+  // documentação passa a descrever um sistema que não existe.
+  //
+  // `availability` da D7 já é lente da MESA (por agente, `agents_compare`), e é lá
+  // que ela pertence: disponibilidade é fato de RECURSO, e o recurso comparável é o
+  // agente, não o pool.
+  {
+    id: 'pool_volume', entity: 'pool', domain: 'universal',
+    metrics: [], evidence: 'delegated', comparability: 'always',
+    source: 'own', honors: 'all',
+    chart: 'pool_panel',
+    surface: 'resources',
+  },
+  {
+    id: 'pool_queue', entity: 'pool', domain: 'universal',
+    metrics: [], evidence: 'delegated', comparability: 'always',
+    source: 'own', honors: 'all',
+    chart: 'pool_panel',
+    surface: 'resources',
+  },
+  {
+    // Capacidade: **`comparability: 'never_sum'` seria o valor certo** e ele não
+    // existe — o `compute_tenant_capacity` já recusa `available` escalar no topo
+    // porque licença humana e de IA são moedas não-fungíveis, e `Σ available(pool)`
+    // conta o mesmo recurso uma vez por pool. Declaro `always` porque a lente NÃO
+    // soma pools (o painel mostra a linha de cada um e a linha `__total__` que o
+    // backend deduplica), então o valor não estaria protegendo nada aqui. Inventar
+    // um quarto valor de comparabilidade sem consumidor é a dívida que este contrato
+    // remove; ele entra quando alguém tentar somar.
+    id: 'pool_occupancy', entity: 'pool', domain: 'universal',
+    metrics: [], evidence: 'delegated', comparability: 'always',
+    source: 'own', honors: 'all',
+    chart: 'pool_panel',
+    surface: 'resources',
+  },
+  {
+    id: 'pool_sla', entity: 'pool', domain: 'universal',
+    metrics: [], evidence: 'delegated', comparability: 'always',
+    source: 'own', honors: 'all',
+    chart: 'pool_panel',
+    surface: 'resources',
   },
 ] as const satisfies readonly ReportLens[]
 
@@ -382,6 +475,9 @@ const byEntity = <E extends DeclaredLens['entity']>(entity: E) =>
 const bySource = <S extends DeclaredLens['source']>(source: S) =>
   (l: DeclaredLens): l is Extract<DeclaredLens, { source: S }> => l.source === source
 
+const byChart = <C extends DeclaredLens['chart']>(chart: C) =>
+  (l: DeclaredLens): l is Extract<DeclaredLens, { chart: C }> => l.chart === chart
+
 /** Lentes da superfície A, na ordem em que a faixa as apresenta. */
 export const CONTACT_LENSES = REPORT_LENSES.filter(byEntity('contact'))
 
@@ -401,6 +497,24 @@ export const CONTACT_LENSES = REPORT_LENSES.filter(byEntity('contact'))
  * de fonte própria não entra, e não precisa de exceção nomeada.
  */
 export const COMPARE_LENSES = REPORT_LENSES.filter(bySource('agents_compare'))
+
+/**
+ * Lentes do modo **evoluir** da Superfície B — os painéis por pool re-hospedados de
+ * `/analise/pools` (F3).
+ *
+ * Recorte pela FORMA e não pela superfície: a B tem duas famílias sob o mesmo
+ * endereço — estes painéis (modo evoluir) e as dez da mesa (modo comparar). Filtrar
+ * por `surface === 'resources'` traria as duas juntas e a faixa mostraria lentes que o
+ * modo corrente não desenha, que é o defeito que a mesa acabou de ter com as lentes
+ * de contato.
+ */
+export const RESOURCE_PANEL_LENSES = REPORT_LENSES.filter(byChart('pool_panel'))
+
+export type ResourcePanelLensId = (typeof RESOURCE_PANEL_LENSES)[number]['id']
+
+export function isResourcePanelLens(id: string): id is ResourcePanelLensId {
+  return RESOURCE_PANEL_LENSES.some(l => l.id === id)
+}
 
 export type ContactLensId = (typeof CONTACT_LENSES)[number]['id']
 

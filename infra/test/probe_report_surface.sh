@@ -65,8 +65,9 @@ inconclusive() {
 #   redirect     — endereço histórico preservado; não é página
 declare -A CLASS=(
   [analise/sessions]="superficie|Superfície A · Contatos (níveis journey>session>segment)"
-  [analise/agents]="superficie|vira MODO comparar da Superfície B na F3 (D6)"
-  [analise/pools]="superficie|vira LENTES da Superfície B na F3"
+  [analise/resources]="superficie|Superfície B · Recursos (modo evoluir = painéis por pool · modo comparar = a mesa)"
+  [analise/agents]="redirect|F3 - a mesa virou o MODO comparar de /analise/resources (D6); o redirect carimba mode=compare"
+  [analise/pools]="redirect|F3 - as quatro sub-abas viraram as lentes do modo evoluir de /analise/resources"
   [analise/wrapup]="redirect|F2 - absorvido como a lente de disposicao (?lens=disposition) de /analise/sessions"
   [analise/surveys]="superficie|vira DRILL de /analise/customer-voice na F4"
   [analise/quality]="fica|avaliação — unidade de análise distinta (Arc 6)"
@@ -417,11 +418,11 @@ echo "── não coberto ainda (por fase, não por esquecimento) ──"
 echo "   · F2/F3: a lente de DISPOSIÇÃO honra só o intervalo (agrega sobre pools"
 echo "         internos). O contrato o declara (\`honors: period_only\`) e a tela o diz;"
 echo "         estender \`/reports/wrapup-summary\` aos demais filtros é trabalho próprio"
-echo "   · F3: a mesa como MODO da superfície B (D6). O despacho da forma já saiu da"
-echo "         cascata (seção G), mas \`/analise/agents\` ainda é ENDEREÇO próprio"
-echo "   · F3: a superfície de RECURSOS (e com ela a lente de token do lado da oferta)."
-echo "         A T3 entregou a lente de token da superfície A; a metade B espera a F3,"
-echo "         que é onde a entidade deixa de ser o contato"
+echo "   · F3: a lente de TOKEN do lado da oferta (entidade = conta LLM). A T3 entregou"
+echo "         a da superfície A; esta espera decidir o que exibir quando"
+echo "         \`account_config_id\` está VAZIO — medido em 2026-08-29: é o caso de 100%"
+echo "         dos eventos deste ambiente, que roda pela chave de env legada"
+echo "   · F4: \`customer-voice\` absorve \`surveys\`"
 
 echo
 if [ "$FAIL" -eq 0 ]; then

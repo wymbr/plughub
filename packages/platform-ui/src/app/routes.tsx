@@ -51,8 +51,7 @@ import EventsPage   from '@/modules/contacts/EventsPage'
 //  fora do menu; contradiz a D2 de adr-historico-unificado-duas-visoes, e sua aba
 //  default agrega sobre `workflow_events`, VAZIA desde a deprecação do workflow-api).
 //  O gate `infra/test/probe_report_surface.sh` reprova a próxima órfã.)
-import AgentsBenchPage      from '@/modules/analise/AgentsBenchPage'
-import AnalisePoolsPage     from '@/modules/analise/AnalisePoolsPage'
+import ResourcesPage        from '@/modules/analise/ResourcesPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import AnaliseClientesPage  from '@/modules/analise/AnaliseClientesPage'
 import CustomerVoicePage    from '@/modules/analise/CustomerVoicePage'
@@ -64,9 +63,28 @@ import DialogFormsPage from '@/modules/dialog-forms/DialogFormsPage'
 /** `<Navigate>` que carrega a query string junto. O `Navigate` puro a DESCARTA, e um
  *  redirect que perde `?journey=…` não erra: ele leva a uma tela plausível (a lista
  *  de contatos) em vez da pedida — o modo de falha que passa despercebido. */
-function RedirectPreservingQuery({ to }: { to: string }) {
+function RedirectPreservingQuery(
+  { to, add, rename }: { to: string; add?: Record<string, string>; rename?: Record<string, string> },
+) {
   const { search } = useLocation()
-  return <Navigate to={`${to}${search}`} replace />
+  // `add` existe para o redirect de `/analise/agents`: aquele endereço ERA a mesa, e
+  // a mesa virou o MODO comparar da Superfície B (F3 · D6). Sem carimbar
+  // `mode=compare`, o link antigo cairia no modo evoluir — tecnicamente na tela
+  // certa, e mostrando outra coisa, que é pior que um 404 porque parece funcionar.
+  //
+  // `rename` existe pelo mesmo caso: o toggle Diário↔Versão da lente de deploy viajava
+  // em `?mode=`, nome que na superfície nova significa evoluir↔comparar. Sem traduzir,
+  // um link antigo `?mode=epoch` viraria "modo desconhecido" e cairia em evoluir,
+  // levando a pessoa a outra tela. Renomear ANTES de `add` é o que faz o link de
+  // ontem chegar onde ele apontava.
+  if (!add && !rename) return <Navigate to={`${to}${search}`} replace />
+  const qs = new URLSearchParams(search)
+  for (const [de, para] of Object.entries(rename ?? {})) {
+    const v = qs.get(de)
+    if (v !== null) { qs.delete(de); qs.set(para, v) }
+  }
+  for (const [k, v] of Object.entries(add ?? {})) qs.set(k, v)
+  return <Navigate to={`${to}?${qs.toString()}`} replace />
 }
 
 export const routes: RouteObject[] = [
@@ -127,8 +145,16 @@ export const routes: RouteObject[] = [
 
       // ── Analytics (historical views) ──────────────────────────────
       { path: 'analise/sessions',  element: <RequireAbac module="contacts" field="visualizar"><SessionsPage /></RequireAbac> },
-      { path: 'analise/agents',    element: <RequireAbac module="contacts" field="visualizar"><AgentsBenchPage /></RequireAbac> },
-      { path: 'analise/pools',     element: <RequireAbac module="contacts" field="visualizar"><AnalisePoolsPage /></RequireAbac> },
+      // F3 — **Superfície B · Recursos**. Absorve os dois endereços abaixo: os painéis
+      // de `/analise/pools` viram as lentes do modo EVOLUIR, e a mesa de
+      // `/analise/agents` vira o modo COMPARAR (D6: a mesa é modo, não página).
+      { path: 'analise/resources', element: <RequireAbac module="contacts" field="visualizar"><ResourcesPage /></RequireAbac> },
+      // Os redirects PRESERVAM a query: `/analise/agents?lens=deploy&sel=…` é link
+      // compartilhável e aparece em deep-links; perder os parâmetros levaria a uma
+      // tela genérica em vez do que a pessoa pediu. `mode=compare` é acrescentado ao
+      // de `/analise/agents` porque aquele endereço ERA a mesa.
+      { path: 'analise/agents',    element: <RedirectPreservingQuery to="/analise/resources" rename={{ mode: 'deploy' }} add={{ mode: 'compare' }} /> },
+      { path: 'analise/pools',     element: <RedirectPreservingQuery to="/analise/resources" /> },
       { path: 'analise/events',    element: <RequireAbac module="contacts" field="visualizar"><EventsPage /></RequireAbac> },
       // F3.3 — `/analise/processos` foi ABSORVIDO por `/analise/sessions`. O processo
       // é nível 2 daquela rota (`?journey=…`), alcançado pelo chip da linha de contato;

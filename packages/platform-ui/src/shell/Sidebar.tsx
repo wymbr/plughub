@@ -132,8 +132,10 @@ const Sidebar: React.FC = () => {
         // Chega-se a ele pelo chip da linha de contato em Análise › Sessões. Uma lista
         // livre reintroduziria o filtro por pool no nível errado — devolveria *journeys
         // que tocaram o pool* a quem pediu contatos.
-        { label: t('nav.analise.agents'),    href: '/analise/agents',    icon: Users,         abac: { module: 'contacts',   field: 'visualizar' } },
-        { label: t('nav.analise.pools'),     href: '/analise/pools',     icon: Package,       abac: { module: 'contacts',   field: 'visualizar' } },
+        // F3 — DUAS entradas viraram UMA: «Agentes» e «Pools» eram, respectivamente,
+        // o modo comparar e as lentes da MESMA superfície (a oferta). Duas entradas
+        // de menu para uma superfície é o que fazia cada pergunta virar página (D7).
+        { label: t('nav.analise.resources'), href: '/analise/resources', icon: Package,       abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.events'),    href: '/analise/events',    icon: Zap,           abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: ClipboardCheck, abac: { module: 'evaluation', field: 'report'     } },
         { label: t('nav.analise.customers'), href: '/analise/customers', icon: UserSearch,    abac: { module: 'contacts',   field: 'visualizar' } },

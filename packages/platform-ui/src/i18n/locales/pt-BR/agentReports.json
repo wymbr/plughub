@@ -74,6 +74,17 @@
       "cols": { "pool": "Pool", "target": "Alvo", "within": "Dentro", "attainment": "Atingimento" }
     }
   },
+  "resources": {
+    "filter": { "from": "De", "to": "a", "allPools": "Todos os pools", "allChannels": "Todos os canais" },
+    "mode": { "evolve": "Evoluir", "compare": "Comparar" },
+    "lens": {
+      "label": "Lente:",
+      "pool_volume": "Volume",
+      "pool_queue": "Fila",
+      "pool_occupancy": "Capacidade",
+      "pool_sla": "SLA"
+    }
+  },
   "tabs": {
     "humans":       "Agentes Humanos",
     "ai":           "Agentes IA",
@@ -228,7 +239,7 @@
       "loading": "Carregando…",
       "noData": "Sem dados para esta lente no período.",
       "pendingViz": "O gráfico desta lente chega no próximo passo.",
-      "notInThisSurface": "Esta lente pertence à superfície de Contatos.",
+      "notInThisSurface": "Esta lente não é desenhada nesta visão.",
       "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa.",
       "selectForWrapup": "Selecione um ou mais agentes na lista para comparar disposições do wrap-up.",
       "selectForQuality": "Selecione um ou mais agentes na lista para comparar a qualidade por dimensão.",

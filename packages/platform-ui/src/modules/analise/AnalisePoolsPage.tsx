@@ -629,7 +629,27 @@ const SlaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ dat
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
-export default function AnalisePoolsPage() {
+/**
+ * Filtros e lente vindos da SUPERFÍCIE que hospeda estes painéis (F3).
+ *
+ * `/analise/pools` deixou de ser endereço: as quatro sub-abas viraram lentes da
+ * Superfície B (D7 — "endereço morre, componente é re-hospedado"). Quando `host` está
+ * presente, esta página não desenha a própria barra de filtro nem a própria faixa de
+ * sub-abas: as duas passam a ser da superfície.
+ *
+ * É o mesmo padrão que a F2 usou para o `WrapupSummaryPage`, e pela mesma razão: DUAS
+ * janelas de tempo na mesma tela — a da superfície e a de dentro — e a de dentro vence
+ * em silêncio. O usuário mexe na de cima e o painel não muda.
+ */
+export interface PoolPanelHost {
+  fromDt:  string
+  toDt:    string
+  poolId:  string
+  channel: string
+  subTab:  SubTab
+}
+
+export default function AnalisePoolsPage({ host }: { host?: PoolPanelHost } = {}) {
   const { t }        = useTranslation('agentReports')
   const { tenantId } = useAuth()
 
@@ -637,11 +657,19 @@ export default function AnalisePoolsPage() {
   const weekAgo = new Date(today.getTime() - 7 * 86400000)
   const iso     = (d: Date) => d.toISOString().slice(0, 10)
 
-  const [subTab,  setSubTab]  = useState<SubTab>('volume')
-  const [fromDt,  setFromDt]  = useState(iso(weekAgo))
-  const [toDt,    setToDt]    = useState(iso(today))
-  const [poolId,  setPoolId]  = useState('')
-  const [channel, setChannel] = useState('')
+  const [ownSubTab,  setSubTab]  = useState<SubTab>('volume')
+  const [ownFromDt,  setFromDt]  = useState(iso(weekAgo))
+  const [ownToDt,    setToDt]    = useState(iso(today))
+  const [ownPoolId,  setPoolId]  = useState('')
+  const [ownChannel, setChannel] = useState('')
+
+  // O hospedeiro VENCE quando existe. Não é merge: dois donos para o mesmo filtro é
+  // exatamente o defeito que o `host` fecha.
+  const subTab  = host ? host.subTab  : ownSubTab
+  const fromDt  = host ? host.fromDt  : ownFromDt
+  const toDt    = host ? host.toDt    : ownToDt
+  const poolId  = host ? host.poolId  : ownPoolId
+  const channel = host ? host.channel : ownChannel
 
   const [volume,  setVolume]  = useState<VolumeData | null>(null)
   const [occ,     setOcc]     = useState<OccData | null>(null)
@@ -723,6 +751,18 @@ export default function AnalisePoolsPage() {
   const subtabs: Array<{ id: SubTab; soon?: boolean }> = [
     { id: 'volume' }, { id: 'queue' }, { id: 'capacity' }, { id: 'sla' },
   ]
+
+  // Hospedado: só o conteúdo. Barra de filtro e faixa de sub-abas são da superfície.
+  if (host) {
+    return (
+      <div className="flex-1 overflow-auto p-4">
+        {subTab === 'volume'   && <VolumeSubTab data={volume} loading={loading} />}
+        {subTab === 'queue'    && <FilaSubTab data={queue} loading={loading} queueTiers={queueTiers} />}
+        {subTab === 'capacity' && <CapacitySubTab data={occ} loading={loading} />}
+        {subTab === 'sla'      && <SlaSubTab data={queue} loading={loading} />}
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">

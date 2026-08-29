@@ -74,6 +74,17 @@
       "cols": { "pool": "Pool", "target": "Target", "within": "Within", "attainment": "Attainment" }
     }
   },
+  "resources": {
+    "filter": { "from": "From", "to": "to", "allPools": "All pools", "allChannels": "All channels" },
+    "mode": { "evolve": "Evolve", "compare": "Compare" },
+    "lens": {
+      "label": "Lens:",
+      "pool_volume": "Volume",
+      "pool_queue": "Queue",
+      "pool_occupancy": "Capacity",
+      "pool_sla": "SLA"
+    }
+  },
   "tabs": {
     "humans":       "Human Agents",
     "ai":           "AI Agents",
@@ -228,7 +239,7 @@
       "loading": "Loading…",
       "noData": "No data for this lens in the period.",
       "pendingViz": "This lens's chart arrives in the next step.",
-      "notInThisSurface": "This lens belongs to the Contacts surface.",
+      "notInThisSurface": "This lens is not drawn in this view.",
       "selectForPause": "Select one or more agents in the list to compare pause reasons.",
       "selectForWrapup": "Select one or more agents in the list to compare wrap-up dispositions.",
       "selectForQuality": "Select one or more agents in the list to compare quality by dimension.",

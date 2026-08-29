@@ -1012,12 +1012,15 @@ function LensChart({
         return resp.meta.mode === 'epoch'
           ? <DeployEpochChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
           : <DeployChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
-      // As duas formas da superfície A (`contact_list`, `disposition_summary`) não são
-      // desenhadas pela MESA: lá a entidade é o contato, e quem despacha é o
-      // `SessionsPage`. Recusar aqui é mais honesto que desenhar algo — a alternativa
-      // seria um estado vazio que parece "não há dado".
+      // Formas que a MESA não desenha: as duas da superfície A (`contact_list`,
+      // `disposition_summary`, despachadas pelo `SessionsPage`) e o painel de pool
+      // (`pool_panel`, do modo EVOLUIR da superfície B — a mesa é o modo comparar).
+      // Nenhuma é alcançável, porque a faixa só oferece `COMPARE_LENSES`; o ramo
+      // existe para o `assertNever` poder ser exaustivo, e é ele que faz uma forma
+      // NOVA parar o build em vez de cair calada num render genérico.
       case 'contact_list':
       case 'disposition_summary':
+      case 'pool_panel':
         return (
           <div className="h-52 flex items-center justify-center text-sm text-muted-light px-6 text-center">
             {t('bench.chart.notInThisSurface')}
@@ -1350,23 +1353,57 @@ function CrossView({
 
 // ── Página ──────────────────────────────────────────────────────────────────
 
-export default function AgentsBenchPage() {
+/**
+ * Filtros vindos da SUPERFÍCIE que hospeda a mesa (F3 · D6).
+ *
+ * `/analise/agents` deixou de ser endereço e virou o **modo comparar** da Superfície
+ * B. Quando `host` está presente, a mesa não desenha a própria barra de filtro: o
+ * período e o pool são da superfície, e a mesa cuida do que é dela (lente, seleção de
+ * entidades, view, modo de deploy).
+ *
+ * ── A partição da URL, e por que ela é o ponto ───────────────────────────────
+ * Os dois lados escrevem `?…` no mesmo endereço. A superfície é dona de `from`, `to` e
+ * `pool`; a mesa é dona de `lens`, `sel`, `view` e `mode`. O efeito de sincronia
+ * abaixo montava um `URLSearchParams` VAZIO e o substituía inteiro — hospedada assim,
+ * a mesa apagaria os filtros da superfície a cada render. Hospedada, ela PRESERVA o
+ * que não é dela.
+ */
+export interface BenchHost {
+  fromDt: string
+  toDt:   string
+  poolId: string
+}
+
+export default function AgentsBenchPage({ host }: { host?: BenchHost } = {}) {
   const { t } = useTranslation('agentReports')
   const { tenantId } = useAuth()
 
   // F4.5 — estado inicial vem da URL (lente/pool/período/seleção sobrevivem a
   // reload e navegação; link compartilhável).
   const [sp, setSp] = useSearchParams()
-  const [fromDt, setFromDt] = useState(sp.get('from') || DEFAULT_FILTERS.fromDt)
-  const [toDt,   setToDt]   = useState(sp.get('to')   || DEFAULT_FILTERS.toDt)
-  const [poolId, setPoolId] = useState(sp.get('pool') || '')
+  const [ownFromDt, setFromDt] = useState(sp.get('from') || DEFAULT_FILTERS.fromDt)
+  const [ownToDt,   setToDt]   = useState(sp.get('to')   || DEFAULT_FILTERS.toDt)
+  const [ownPoolId, setPoolId] = useState(sp.get('pool') || '')
+  const fromDt = host ? host.fromDt : ownFromDt
+  const toDt   = host ? host.toDt   : ownToDt
+  const poolId = host ? host.poolId : ownPoolId
   const [lens,   setLens]   = useState<LensId>(
     (LENSES.some(l => l.id === sp.get('lens')) ? sp.get('lens') : 'resolution') as LensId)
   const [selected, setSelected] = useState<string[]>(
     (sp.get('sel') || '').split(',').filter(Boolean))
   const [view, setView] = useState<'lenses' | 'cross'>(sp.get('view') === 'cross' ? 'cross' : 'lenses')
   // Modo da lente deploy (R15b): diário (markers) × epoch (por versão).
-  const [deployMode, setDeployMode] = useState<'daily' | 'epoch'>(sp.get('mode') === 'epoch' ? 'epoch' : 'daily')
+  // ⚠️ O parâmetro chama-se `deploy`, e NÃO `mode`, desde a F3. Medido ao hospedar a
+  // mesa na Superfície B: os dois escreviam `mode` — a superfície com `evolve|compare`
+  // (D6) e a mesa com `daily|epoch` —, e trocar de lente no modo comparar APAGAVA o
+  // `mode=compare` da URL. O recarregamento caía no modo evoluir, e nada ficava
+  // vermelho: a tela mostrava algo plausível, só que outra coisa.
+  //
+  // A partição de URL entre hospedeiro e hospedado só vale se os NOMES forem
+  // disjuntos; declarar a partição em comentário e reusar o nome é a promessa sem
+  // mecanismo de sempre. Link legado com `?mode=epoch` continua funcionando: o
+  // redirect de `/analise/agents` renomeia antes de carimbar `mode=compare`.
+  const [deployMode, setDeployMode] = useState<'daily' | 'epoch'>(sp.get('deploy') === 'epoch' ? 'epoch' : 'daily')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [detail, setDetail] = useState<{ key: string; label: string; type: string } | null>(null)
 
@@ -1374,19 +1411,28 @@ export default function AgentsBenchPage() {
 
   // Sincroniza estado → URL (replace, sem empilhar histórico).
   useEffect(() => {
-    const next = new URLSearchParams()
-    if (fromDt) next.set('from', fromDt)
-    if (toDt)   next.set('to', toDt)
-    if (poolId) next.set('pool', poolId)
-    if (lens !== 'resolution') next.set('lens', lens)
-    if (selected.length) next.set('sel', selected.join(','))
-    if (view === 'cross') next.set('view', view)
+    // Hospedada, parte-se do que já está na URL: `from`/`to`/`pool` são da
+    // superfície. Começar de um `URLSearchParams` vazio (o que esta linha fazia)
+    // apagaria os filtros do hospedeiro a cada render — e o sintoma seria a barra
+    // voltando ao default sozinha, que ninguém liga ao componente de dentro.
+    const next = host ? new URLSearchParams(sp) : new URLSearchParams()
+    if (!host) {
+      if (fromDt) next.set('from', fromDt)
+      if (toDt)   next.set('to', toDt)
+      if (poolId) next.set('pool', poolId)
+    }
+    if (lens !== 'resolution') next.set('lens', lens); else next.delete('lens')
+    // `delete` no ramo falso de cada um: hospedada, `next` parte da URL existente, e
+    // sem apagar o estado antigo um parâmetro nunca sairia depois de entrar.
+    if (selected.length) next.set('sel', selected.join(',')); else next.delete('sel')
+    if (view === 'cross') next.set('view', view); else next.delete('view')
     // `mode=epoch` é do gráfico de deploy, não da lente chamada "deploy": quem
     // entende os dois modos é a FORMA `deploy_timeline`. Era `lens === 'deploy'`, o
     // último ramo por id que sobrou depois da F3 — e um segundo gráfico de linha do
     // tempo herdaria o toggle na tela e perderia o parâmetro na URL, que é a
     // divergência mais chata de diagnosticar (o estado existe e não viaja).
-    if (lensDef.chart === 'deploy_timeline' && deployMode === 'epoch') next.set('mode', 'epoch')
+    if (lensDef.chart === 'deploy_timeline' && deployMode === 'epoch') next.set('deploy', 'epoch')
+    else next.delete('deploy')
     setSp(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromDt, toDt, poolId, lens, selected, view, deployMode])
@@ -1520,16 +1566,19 @@ export default function AgentsBenchPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
 
-      {/* Filtro */}
+      {/* Filtro — só quando a mesa é a página. Hospedada, período e pool são da
+          superfície; o que sobra é o export, que é da mesa (exporta a lente atual). */}
       <div className="bg-white border-b border-border px-4 py-2.5 flex-shrink-0 flex items-center gap-3 flex-wrap">
-        <span className="text-xs text-muted">{t('bench.filters.from')}</span>
-        <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)} className={inp} />
-        <span className="text-xs text-muted">{t('bench.filters.to')}</span>
-        <input type="date" value={toDt} onChange={e => setToDt(e.target.value)} className={inp} />
-        <select value={poolId} onChange={e => setPoolId(e.target.value)} className={`${inp} w-48`}>
-          <option value="">{t('bench.filters.allPools')}</option>
-          {poolOptions.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
+        {!host && <>
+          <span className="text-xs text-muted">{t('bench.filters.from')}</span>
+          <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)} className={inp} />
+          <span className="text-xs text-muted">{t('bench.filters.to')}</span>
+          <input type="date" value={toDt} onChange={e => setToDt(e.target.value)} className={inp} />
+          <select value={poolId} onChange={e => setPoolId(e.target.value)} className={`${inp} w-48`}>
+            <option value="">{t('bench.filters.allPools')}</option>
+            {poolOptions.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </>}
         <div className="flex-1" />
         <button onClick={exportCsv} disabled={exportDisabled}
           className={`${inp} flex items-center gap-1 disabled:opacity-40 hover:border-border-strong`}>

@@ -52,8 +52,10 @@ const BREADCRUMBS: Record<string, BreadcrumbDef> = {
 
   // ── Analytics ──────────────────────────────────────────────────────────────
   '/analise/sessions':       { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.sessions' },
-  '/analise/agents':         { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.agents' },
-  '/analise/pools':          { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.pools' },
+  // F3 — `/analise/agents` e `/analise/pools` viraram redirects para cá (Superfície B).
+  // As linhas deles saíram: uma entrada de breadcrumb para rota que redireciona nunca
+  // é lida, e sobrevive como afirmação de que a página existe.
+  '/analise/resources':      { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.resources' },
   '/analise/events':         { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.events' },
   '/analise/quality':        { section: 'nav.analise', sectionHref: '/analise/sessions',  page: 'nav.analise.quality' },
 
