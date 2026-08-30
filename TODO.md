@@ -31,8 +31,17 @@ sufixo (`*.cpf`, `*.numero_cartao`, …) — que são o conserto de 2026-08-26 p
 
 Dano hoje **zero** (só existe um tenant real). Mas **não basta reaplicar o seed**: a divergência é
 nos DOIS sentidos — `session.cpf_titular` existe vivo e não no seed; `session.vencimento_cartao`
-existe no seed e não vivo. Um `--overwrite` cego **regride** o `cpf_titular`. É exatamente a D7 do
-ADR, ainda em aberto: o seed precisa **comparar e logar** o que difere, em vez de pular mudo.
+existe no seed e não vivo. Um `--overwrite` cego **regride** o `cpf_titular`.
+
+> **Atualizado 2026-08-29 — a D7 foi entregue, e esta divergência agora APARECE.** Todo
+> `plughub-config-seed` a nomeia nas duas direções e avisa quantos itens um `--overwrite`
+> descartaria (hoje: 1). Medido na ocasião: **77 keys, 76 iguais, esta é a única divergente**.
+> O que sobra aqui **não é instrumento, é DECISÃO de política** — e ela tem um caminho barato:
+> acrescentar `session.cpf_titular` à declaração do `seed.py` faz `overwrite_would_drop` ir a zero,
+> e aí a reaplicação passa a ser puro acréscimo. Não fiz porque promover uma regra de mascaramento
+> a **default de plataforma** é escolha de produto (ela pode ser deliberadamente só do
+> `tenant_demo`), e o instrumento que acabou de ser construído existe justamente para essa escolha
+> ser tomada com o número na mão, não deduzida.
 
 ### 🟡 `session.vencimento_cartao` — o CATÁLOGO não tem tipo que sirva
 

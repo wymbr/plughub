@@ -1,7 +1,8 @@
 # ADR: ContextStore como ALLOWLIST — tipo declarado, mapa de dados e vocabulário único de política
 
 **Status:** Aceito — 2026-08-26. **Parcialmente implementado:** V0 *(metade)* · V1 · V1b · V2 · V2b
-· **V3** · **V5 (metade — a D6)** entregues. **V4 (a inversão, não reversível) é a próxima** e só é
+· **V3** · **V5 (metade — a D6)** · **D7 (metade — o seed)** entregues.
+**V4 (a inversão, não reversível) é a próxima** e só é
 autorizada pelo número que a V3 passou a publicar (§7); a outra metade da V5 — fechar os aliases —
 depende do mesmo contador decair, logo as duas são bloqueadas por TEMPO, não por esforço.
 **Data:** 2026-08-26 *(cabeçalho corrigido em 2026-08-29: dizia "Proposto — nenhuma fase implementada"
@@ -365,7 +366,7 @@ não existe.
 > primeiro save; (b) **a limpeza passou a existir** — não havia caminho para esvaziar
 > `context_visibility`, em três camadas mudas, e o seletor tornou o gesto natural.
 
-### D7 — Fonte de verdade: config-api. O arquivo apenas semeia
+### D7 — Fonte de verdade: config-api. O arquivo apenas semeia — ✅ **entregue 2026-08-29** *(metade do seed)*
 
 Medido em 08-26: o `seed.py` e a config viva **divergiram nos dois sentidos**
 (`session.vencimento_cartao` só no seed; `session.cpf_titular` só vivo), porque o seed foi editado
@@ -375,6 +376,35 @@ Decisão, alinhada à invariante de provisionamento do `CLAUDE.md`: **o config-a
 verdade; o arquivo declarativo apenas semeia base vazia.** O que muda é que a divergência deixa de
 ser invisível — o seed passa a **comparar e logar** o que difere em vez de pular mudo, e a tela mostra
 a proveniência de cada nó (global × override de tenant).
+
+**Entregue:** a metade do seed. `config_drift.describe_divergence` (stdlib puro, testável sem DB) e
+o `divergent` do `seed()`. A metade da TELA (proveniência global × override por nó) **segue aberta**.
+
+**Denominador, medido antes de mudar:** **77 keys semeadas, 0 ausentes, 76 iguais, 1 divergente.**
+Um número pequeno, e dizê-lo é a entrega: a D7 não descobre uma base podre, ela remove a
+possibilidade de uma base podre passar despercebida. Nas horas anteriores à medição haviam nascido
+**duas** divergências (`masking.types` e `masking.context_rules`) e nenhuma tinha se anunciado.
+
+**A divergência tem DUAS direções, e é por isso que o seed não conserta.** Reaplicar uma key
+acrescenta o que só está na declaração **e descarta o que só está no banco**. No `__global__` vivo,
+`masking.context_rules` tem 10 regras só no declarado *e* `session.cpf_titular` só no gravado — que
+nenhum glob declarado cobre (`*.cpf` casa o **sufixo** `.cpf`, não `cpf_titular`). Um `--overwrite`
+cego derrubaria aquele campo para `default_unmatched_operator: "plain"`. Logo o relatório separa os
+lados e publica `overwrite_would_drop`: é o único número que responde *"posso reaplicar esta key sem
+perder nada?"*. **Escolher um lado é decisão de política, não de mecanismo.**
+
+**Achado que reposiciona a própria D7 — a DECLARAÇÃO pode estar velha.** Medido em 2026-08-29: o
+`seed.py` **dentro do container** estava atrás do repositório (imagem sem bind mount), e a primeira
+medição de divergência julgou a declaração errada — deu 2 em vez de 1. Um `divergent=0` vindo de uma
+imagem atrasada é uma afirmação sobre um arquivo que não é o do repositório. É a família
+*"existe ≠ é o de agora"*, agora dentro do instrumento que existe para acabar com o silêncio. Virou
+o **ramo A** do gate, que compara os hashes.
+
+**Gate:** `infra/test/probe_seed_drift_named.sh` (6 ramos: declaração atual · nomeia · duas direções
+· testemunha negativa · não cura · comparador puro). Bateria de mutação com 4 mutações, todas pegas
+— e a primeira tentativa da mutação da testemunha negativa **não pegou**, porque foi neutralizada
+pela segunda guarda do comparador; a realista era comparar contra a LINHA em vez do `value` dela,
+que é exatamente o erro que o mock do `test_store.py` carregava.
 
 ---
 
@@ -386,7 +416,7 @@ de rota no proxy do platform-ui. Detalhe e lições no `CHANGELOG.md` § V0. Fic
 herdada apontava um passo **adiante** do defeito, e só caiu porque foi medida antes de consertada.
 
 **1b. Quem é a fonte de verdade entre seed e config viva?** → **D7**: config-api. O seed compara e
-loga.
+loga — ✅ **entregue 2026-08-29** (a metade do seed; a proveniência na tela segue aberta).
 
 **2. Como declarar ~40 tags sem virar formulário impraticável?** → **D1 + D2**: a allowlist é **por
 campo**, mas o que é reusável é o **tipo**, não a regra. Declarar um campo é escolher um tipo de uma

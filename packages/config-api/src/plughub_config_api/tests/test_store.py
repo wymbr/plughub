@@ -72,6 +72,28 @@ def _row(value: object) -> MagicMock:
     return r
 
 
+def _declared_row(_sql: str, _tenant: str, namespace: str, key: str):
+    """fetchrow que devolve o valor DECLARADO de (namespace, key), ou None.
+
+    Existe porque desde a D7 o seed COMPARA o gravado com o declarado: um mock de
+    valor fixo faria toda key divergir e o teste de "pula existente" provaria o
+    oposto do nome dele.
+    """
+    for ns, k, value, desc in _SEED:
+        if ns == namespace and k == key:
+            return _full_row(k, value, desc, ns)
+    return None
+
+
+def _declared_row_but(t_ns: str, t_key: str, other: object):
+    """Como `_declared_row`, mas UMA key devolve um valor diferente do declarado."""
+    def _inner(_sql: str, _tenant: str, namespace: str, key: str):
+        if namespace == t_ns and key == t_key:
+            return _full_row(key, other, "", namespace)
+        return _declared_row(_sql, _tenant, namespace, key)
+    return _inner
+
+
 def _full_row(key: str, value: object, description: str = "", ns: str = "ns") -> MagicMock:
     """Simulates an asyncpg.Record for list queries (key + value + description + updated_at)."""
     r = MagicMock()
@@ -399,13 +421,51 @@ class TestSeedData:
         assert result["skipped"]  == 0
 
     async def test_seed_skips_existing_entries_when_no_overwrite(self):
-        # get_entry returns a non-None value → all entries already exist
-        existing = {"key": "k", "value": 1, "description": "", "updated_at": "2026-01-01T00:00:00"}
-        pool  = _make_pool(fetchrow_return=_full_row("k", 1))
+        """Existe E é IGUAL ⇒ pula.
+
+        Este teste passava com um mock que devolvia `value: 1` para TODA key —
+        e passava só porque o seed nunca olhava o valor. Desde a D7 ele olha, e o
+        mock precisou virar honesto: devolve o valor DECLARADO de cada key. Um
+        mock que devolve qualquer coisa agora prova o contrário do que o nome diz.
+        """
+        pool  = _make_pool()
+        pool.fetchrow = AsyncMock(side_effect=_declared_row)
         redis = _make_redis()
         store = ConfigStore(pool, ConfigCache(redis))
         result = await __import__(
             "plughub_config_api.seed", fromlist=["seed"]
         ).seed(store, overwrite=False)
-        assert result["skipped"]  == len(_SEED)
+        assert result["skipped"]   == len(_SEED)
+        assert result["inserted"]  == 0
+        assert result["divergent"] == 0, (
+            "nenhuma key diverge quando o gravado É o declarado — "
+            f"divergiram: {result['drift']}"
+        )
+
+    async def test_seed_conta_e_nomeia_o_que_diverge(self):
+        """Existe e é DIFERENTE ⇒ conta como divergente, nomeia, e NÃO escreve.
+
+        É o caso que o seed tratava como "pulei" — o modo de falha mudo que a D7
+        removeu. As três asserções são separadas de propósito: contar sem nomear
+        não diz o que fazer, e nomear enquanto escreve seria conserto automático,
+        que esta decisão recusa (a divergência tem informação nas duas direções).
+        """
+        pool  = _make_pool()
+        pool.fetchrow = AsyncMock(side_effect=_declared_row_but(
+            "masking", "context_rules", {"rules": [], "supervisor_roles": []},
+        ))
+        redis = _make_redis()
+        store = ConfigStore(pool, ConfigCache(redis))
+        result = await __import__(
+            "plughub_config_api.seed", fromlist=["seed"]
+        ).seed(store, overwrite=False)
+
+        assert result["divergent"] == 1
+        assert result["skipped"]   == len(_SEED) - 1
+        names = [n for n, _s in result["drift"]]
+        assert names == ["masking.context_rules"]
+        # A divergência tem de dizer ONDE, não só QUE.
+        assert "rules" in result["drift"][0][1]
+        # E o seed não pode ter escrito: `inserted` conta escrita.
         assert result["inserted"] == 0
+        pool.execute.assert_not_awaited()

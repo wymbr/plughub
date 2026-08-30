@@ -1,5 +1,110 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## D7 do arco ALLOWLIST — o seed do config-api compara e loga em vez de pular mudo (2026-08-29)
+
+`seed-if-absent` é a política certa — depois do primeiro boot o DB é a fonte de verdade —, mas o
+pulo era literalmente `skipped += 1` e nada mais. Quando a declaração ganhava um item que a base já
+semeada não tinha, o item simplesmente não existia: sem erro, sem log, sem número.
+
+Agora a key existente é **comparada** com a declarada e a divergência sai **contada, nomeada e com
+as duas direções separadas**. O seed continua não escrevendo.
+
+### O denominador, medido antes de mudar
+
+**77 keys semeadas · 0 ausentes · 76 iguais · 1 divergente.**
+
+O número é pequeno, e dizê-lo é parte da entrega: a D7 não descobriu uma base podre — removeu a
+possibilidade de uma base podre passar despercebida. Nas horas anteriores à medição haviam nascido
+**duas** divergências (`masking.types`, ao ganhar o tipo `texto` na V3; e `masking.context_rules`,
+com 23 regras declaradas contra 14 gravadas) e **nenhuma das duas se anunciou** — a primeira só
+apareceu porque um gate vizinho reprovou, e a segunda porque alguém foi contar à mão.
+
+### Por que COMPARA e LOGA, e por que não conserta
+
+Reaplicar uma key **acrescenta** o que só está na declaração **e descarta** o que só está no banco.
+Medido no `__global__` vivo:
+
+| direção | `masking.context_rules` |
+|---|---|
+| só no **declarado** (10) | os globs de sufixo do conserto de 2026-08-26 (`*.cpf`, `*.telefone`, `*.resume_token`…) |
+| só no **gravado** (1) | `session.cpf_titular` |
+
+`*.cpf` casa o **sufixo** `.cpf`, não `cpf_titular` — então um `--overwrite` cego apagaria aquela
+regra e o campo cairia em `default_unmatched_operator: "plain"`. **A divergência carrega informação
+nos dois sentidos, e escolher um lado é decisão de política, não de mecanismo.** Daí o relatório
+publicar `overwrite_would_drop`: é o único número que responde *"posso reaplicar esta key sem perder
+nada?"*.
+
+### O achado que reposicionou a própria fase: a DECLARAÇÃO pode estar velha
+
+A primeira medição deu **2 divergentes**. Estava errada — o `seed.py` **dentro do container** estava
+atrás do repositório (imagem sem bind mount, `Mounts: []`), e a comparação julgou uma declaração que
+não era a do repo. Com o arquivo atual, o número é **1**.
+
+Um `divergent=0` vindo de uma imagem atrasada é uma afirmação sobre um arquivo que não é o que
+alguém escreveu. É *"existe ≠ é o de agora"* outra vez, desta vez **dentro do instrumento que existe
+para acabar com o silêncio**. Virou o **ramo A** do gate, que compara os hashes dos dois lados; e o
+`docker cp` que serve para iterar foi trocado por `build` antes do verde final.
+
+### Achados que o ciclo produziu
+
+- **Dois bugs no comparador, achados pelos próprios testes antes de o gate existir.** (a) reordenar
+  uma lista com identidade era reportado como divergência de forma na raiz — ruído que faria o log
+  deixar de ser lido; hoje a **caminhada é a autoridade** e caminhada vazia significa igual. (b) com
+  `id` repetido, a identidade era aceita a partir da *outra* lista, o dicionário indexado colapsava
+  dois itens num só e **um deles sumia do relatório** — divergência escondida por dentro do detector
+  de divergência. Hoje a identidade tem de valer nas duas listas.
+- **Um teste que passava pelo motivo errado.** `test_seed_skips_existing_entries_when_no_overwrite`
+  usava um mock que devolvia `value: 1` para **toda** key, e passava só porque o seed nunca olhava o
+  valor. Ao passar a olhar, o teste ficou vermelho — corretamente. O mock virou honesto (devolve o
+  valor declarado de cada key) e ganhou o par que faltava: existe-e-é-**diferente** ⇒ conta, nomeia,
+  **e não escreve** (`pool.execute.assert_not_awaited()`).
+- **Rótulo de item em lista de raiz saía `[[almoco]]`** — colchete em volta de um caminho vazio, que
+  não diz de que lista o item é. Achado pelo gate, ao reprovar. A linha do log já nomeia a key, então
+  o rótulo perdeu o colchete.
+- **`?tenant_id=` é obrigatório no `GET /config/{ns}/{key}`** (422 sem ele) — omiti-lo fazia o ramo
+  sair INCONCLUSIVO com cara de *"serviço fora do ar"*. Mesma pegadinha em camadas já registrada no
+  `CLAUDE.md`.
+
+### Instrumentos
+
+`infra/test/probe_seed_drift_named.sh` — **6 ramos**: A declaração atual (container × repo) · B
+nomeia · C as duas direções + aviso de descarte · D **testemunha negativa** (key igual fora do
+relatório) · E **não cura** (valor intacto depois da passada) · F comparador puro.
+
+Bateria de mutação, **4 de 4 pegas**. A lição fica na primeira tentativa da mutação do ramo D, que
+**não pegou**: desligar o curto-circuito de igualdade foi neutralizado pela *segunda* guarda do
+comparador — a mutação derrubou uma defesa de duas e provou nada. A regressão realista era comparar
+contra a **linha** em vez do `value` dela, que é exatamente o erro que o mock do `test_store.py`
+carregava.
+
+**A bateria cobrou um preço, e ele está registrado no cabeçalho do gate.** A mutação que prova o
+ramo E faz o seed CONSERTAR — e uma passada assim é um `--overwrite` de *toda* key divergente, no
+store de verdade. Ela reescreveu `__global__.masking.context_rules` e removeu `session.cpf_titular`.
+Restaurado no mesmo dia, com o estado conferido (76 iguais / 1 divergente, `cpf_titular` de volta);
+o override do `tenant_demo` ficou intacto e **nenhum comportamento de mascaramento mudou**, porque é
+dele que o único tenant resolve. Regra que fica: **snapshote toda key já divergente antes de mutar,
+não só a cobaia** — o gate restaura o que ele mesmo escreve, não o que a mutação escreve por ele.
+
+### Arquivos
+
+- `packages/config-api/src/plughub_config_api/config_drift.py` (novo) — comparador, stdlib puro,
+  sem import de DB para ser testável como função pura.
+- `packages/config-api/src/plughub_config_api/seed.py` — comparação no pulo; `divergent`, `drift` e
+  `drift_destructive` no retorno; resumo na CLI. Duas afirmações que ficaram falsas no docstring
+  (*"sem erro e sem log"*, *"o modo de falha desta função é MUDO"*) corrigidas junto.
+- `packages/config-api/src/plughub_config_api/tests/test_config_drift.py` (novo, 16 testes) e
+  `tests/test_store.py` (mock honesto + teste da divergência) — **46 passam**.
+- `infra/test/probe_seed_drift_named.sh` + `infra/test/_seed_drift_mutate.py` (novos).
+
+### O que a D7 **não** entrega
+
+A metade da TELA — mostrar a proveniência de cada nó (default global × override de tenant) — segue
+aberta. E o `masking.context_rules` do `__global__` continua atrás: agora ele **aparece**, mas
+resolvê-lo é a decisão de política que o relatório passou a permitir tomar com o número na mão.
+
+---
+
 ## D6 do arco ALLOWLIST — a tela do pool vira seletor, e a lista deixa de ser escrita (2026-08-29)
 
 `context_visibility` era **texto livre separado por vírgula**. Passou a ser seleção sobre os nós do

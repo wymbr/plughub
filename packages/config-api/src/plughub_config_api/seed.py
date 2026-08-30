@@ -36,10 +36,16 @@ Run:
 ⚠️ Seed-if-absent é por (namespace, key), e várias keys guardam uma ESTRUTURA
 (masking.context_rules é UMA key com o array inteiro de regras). Acrescentar um
 item dentro dessa estrutura não é uma key nova: numa base já semeada a key existe,
-o seed pula, e o item novo não chega — sem erro e sem log. Para essas edições,
-reaplicar a key inteira é obrigatório:
+o seed pula, e o item novo não chega. Para essas edições, reaplicar a key inteira
+é obrigatório:
 
   plughub-config-seed --only masking.context_rules --overwrite
+
+Desde 2026-08-29 (D7 do arco ALLOWLIST) esse pulo é **contado e nomeado**: o valor
+gravado é comparado com o declarado e a divergência sai no log e no `divergent` do
+retorno, com as DUAS direções separadas. O seed continua não consertando nada — a
+divergência tem informação nos dois sentidos e escolher um lado é decisão de
+política. Ver `config_drift.py`.
 """
 from __future__ import annotations
 
@@ -52,6 +58,7 @@ import redis.asyncio as aioredis
 
 from .cache import ConfigCache
 from .config import get_settings
+from .config_drift import Divergence, describe_divergence
 from .kafka_emitter import ConfigKafkaEmitter
 from .store import ConfigStore
 
@@ -1165,16 +1172,24 @@ async def seed(
     If overwrite=True: updates all entries (useful for schema migrations).
 
     `only` restricts the run to the given "{namespace}.{key}" identifiers. Existe
-    porque o modo de falha desta função é MUDO: quando um valor ganha um item novo
-    (uma regra a mais dentro de masking.context_rules, que é UMA key com o array
-    inteiro), o seed-if-absent pula a key e o item novo simplesmente não existe —
-    sem erro, sem log de divergência. Reaplicar a key inteira é o conserto, e
-    fazê-lo sem `only` reescreveria as outras ~90 keys de tabela.
+    porque quando um valor ganha um item novo (uma regra a mais dentro de
+    masking.context_rules, que é UMA key com o array inteiro), o seed-if-absent
+    pula a key e o item novo simplesmente não existe. Reaplicar a key inteira é o
+    conserto, e fazê-lo sem `only` reescreveria as outras ~90 keys de tabela.
 
-    Returns {"inserted": N, "skipped": N}.
+    Desde a D7 o pulo deixou de ser MUDO — mas segue sendo pulo: quando a key já
+    existe, o valor gravado é COMPARADO com o declarado e a divergência é logada
+    nomeando as DUAS direções. Comparar e logar, nunca consertar — a divergência
+    carrega informação nos dois sentidos (medido: `masking.context_rules` tem 10
+    regras só no declarado E uma só no gravado, que uma reaplicação apagaria),
+    então escolher um lado é decisão de política, não de mecanismo.
+
+    Returns {"inserted": N, "skipped": N, "divergent": N}.
     """
-    inserted = 0
-    skipped  = 0
+    inserted  = 0
+    skipped   = 0
+    divergent = 0
+    drift: list[tuple[str, Divergence]] = []
 
     if only:
         known = {f"{ns}.{k}" for ns, k, _v, _d in _SEED}
@@ -1189,7 +1204,24 @@ async def seed(
         if not overwrite:
             existing = await store.get_entry("__global__", namespace, key)
             if existing is not None:
-                skipped += 1
+                report = describe_divergence(value, existing["value"])
+                if report is None:
+                    skipped += 1
+                else:
+                    divergent += 1
+                    drift.append((f"{namespace}.{key}", report))
+                    logger.warning(
+                        "DIVERGE %s.%s — o gravado NAO e o declarado, e o seed nao o "
+                        "toca (seed-if-absent). %s. Deixa de valer: a base serve o "
+                        "valor anterior. Reaplicar: plughub-config-seed --only %s.%s "
+                        "--overwrite%s",
+                        namespace, key, report.summary(), namespace, key,
+                        (
+                            f" — ATENCAO: a reaplicacao DESCARTA {report.overwrite_would_drop} "
+                            f"item(ns) que so existe(m) no banco."
+                            if report.overwrite_would_drop else ""
+                        ),
+                    )
                 continue
         await store.set(None, namespace, key, value, description)
         if emitter is not None:
@@ -1199,8 +1231,19 @@ async def seed(
         inserted += 1
         logger.info("seeded %s.%s", namespace, key)
 
-    logger.info("seed complete: inserted=%d skipped=%d", inserted, skipped)
-    return {"inserted": inserted, "skipped": skipped}
+    logger.info(
+        "seed complete: inserted=%d skipped=%d divergent=%d",
+        inserted, skipped, divergent,
+    )
+    return {
+        "inserted":  inserted,
+        "skipped":   skipped,
+        "divergent": divergent,
+        "drift":     [(name, rep.summary()) for name, rep in drift],
+        # Quantas keys perderiam algo numa reaplicacao cega. Zero aqui e o unico
+        # numero que autoriza `--overwrite` sem ler o log linha a linha.
+        "drift_destructive": sum(1 for _n, rep in drift if rep.overwrite_would_drop),
+    }
 
 
 async def _run(*, overwrite: bool = False, only: set[str] | None = None) -> None:
@@ -1232,7 +1275,24 @@ async def _run(*, overwrite: bool = False, only: set[str] | None = None) -> None
         logger.warning("emitter indisponível, config.changed não sairá: %s", exc)
 
     result = await seed(store, overwrite=overwrite, only=only, emitter=emitter)
-    print(f"Done: inserted={result['inserted']}  skipped={result['skipped']}")
+    print(
+        f"Done: inserted={result['inserted']}  skipped={result['skipped']}  "
+        f"divergent={result.get('divergent', 0)}"
+    )
+    if result.get("divergent"):
+        # O log ja nomeou cada uma; aqui o resumo, porque quem roda o seed no boot
+        # ve stdout e nem sempre o logger.
+        print(
+            f"⚠️  {result['divergent']} key(s) com valor gravado DIFERENTE do declarado "
+            f"(o seed nao as tocou):"
+        )
+        for name, summary in result.get("drift", []):
+            print(f"      · {name}: {summary}")
+        if result.get("drift_destructive"):
+            print(
+                f"    {result['drift_destructive']} dela(s) tem item so no BANCO — "
+                f"reaplicar com --overwrite DESCARTA esse item. Decida por key."
+            )
     if result["inserted"] and not (emit_ok and emitter.enabled):
         print(
             "⚠️  config.changed NÃO publicado: os consumidores seguem com o valor "
