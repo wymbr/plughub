@@ -72,7 +72,7 @@ O alias FICA no mapa para que o **contador** prove o fóssil extinto, em vez de 
 |---|---|---|
 | 4 | **congelar** o mínimo declarado dos presets `developer`/`business` | zero código; o gatilho é o primeiro portador real |
 | 5 | **remover** `platform_permissions` + `permission_templates` + `apply` + as 2 funções mortas | template segue como preset de `module_config` (o uso que a UI já faz) |
-| 6 | fazer só a **peça 1 da (d)**, sem se comprometer com ela | fechar escopo de conteúdo; a (d) fica adiada com meio pré-requisito pronto |
+| 6 | ✅ **FEITA em 2026-08-30** — peça 1 da (d), sem se comprometer com ela | escopo de conteúdo fechado nas 4 rotas; a (d) segue adiada, agora com o pré-requisito INTEIRO pronto |
 | 7 | ordem: grupo 1 → registrar → provar fóssil → **V4** → resto | — |
 
 **#4 — medido ao vivo (`auth.users`, base `plughub_demo`, 2026-08-30):** supervisor 2 · admin 2
@@ -243,6 +243,38 @@ Série cortada e retomada em 2026-08-30 sob o mapa novo, com cache quente:
 `session.summary`, `session.status`, `session.preview`, `session.approval_threshold` e
 `approval.summary` — e **não devem ser decididos um a um**: a D9 os dissolve.
 
+
+## 🔴 A transcrição da tela de Qualidade está QUEBRADA — delegação anônima *(medido 2026-08-30)*
+
+Achado de lambuja ao fechar o escopo de conteúdo; **independente daquela mudança**, e anterior a ela.
+
+**Os dois lados, medidos:**
+
+- **O chamador não manda credencial.** `evaluation-api/router.py:2221` faz
+  `client.get(f"{analytics_api_url}/v1/transcript/sessions/{session_id}", params=params)` —
+  nenhum header, nenhum token de serviço.
+- **A rota recusa sem credencial.** Desde 2026-08-27 `optional_pool_principal` responde **401**
+  quando não há `Authorization` e `analytics_open_access` está desligado. Ele **está**: default
+  `False` em `config.py:75` e **zero ocorrências** da env em `infra/` (compose, `.env*`, scripts).
+  Confirmado ao vivo: `curl` sem header → `401 {"detail":"auth_required"}`.
+
+**Consequência:** `resp.status_code >= 400` → `HTTPException(502, "transcript service error (401)")`.
+Quem abre a transcrição pela tela de Qualidade recebe 502.
+
+**Por que não consertei junto.** As duas saídas óbvias decidem política, não fiação:
+
+| saída | o que decide |
+|---|---|
+| encaminhar o token do usuário | o escopo de POOL passa a valer sobre uma leitura que a evaluation-api já gateia por `module_config.evaluation.*` + `pool_id` — dois eixos, e alguém tem de dizer qual manda |
+| token de serviço / header interno | a evaluation-api vira a autoridade única daquela leitura, e o analytics confia na delegação |
+
+O ADR da transcrição diz **explicitamente** que o gate de PAPEL fica na evaluation-api, *"NOT here"*
+— o que favorece a segunda. Mas isso é decisão de quem desenhou a delegação, não conserto mecânico.
+
+⚠️ **O tell de método:** o defeito nasceu de uma rota chamada `optional_pool_principal` que deixou
+de ser opcional em 2026-08-27. O nome ainda diz "optional", e o chamador que dependia disso não
+tinha teste atravessando a fronteira — é o mesmo modo de falha do `probe_audit_surface`: *o
+veredicto foi coberto, a travessia não*.
 
 ## 🟡 Pré-requisito da V4 — passo 1 ✅; o resto foi SUPERSEDIDO pela D9 *(2026-08-30)*
 
@@ -3456,12 +3488,22 @@ IRRESTRITO"*, que era relevante sob a premissa herdada e hoje só confunde — c
 `pool_auth.py:157-161` implementa exatamente essa convenção (`[] → None → irrestrito`). Ver a
 seção do furo abaixo, onde ela deixa de ser curiosidade e vira decisão.
 
-### 🟡 (d) "ABAC no conteúdo, lista aberta" — ADIADA; reconfirmada em 2026-08-30
+### 🟡 (d) "ABAC no conteúdo, lista aberta" — ADIADA; **peça 1 ✅ em 2026-08-30**
 
-> **Segue adiada**, e a peça 1 dela vira dívida de segurança PRÓPRIA (fechar escopo de conteúdo),
-> que é o pré-requisito que a própria (d) exige primeiro — fazê-lo não compromete com ela. Metade
-> dessa peça passou a existir sozinha em 2026-08-29, com o eixo de cobertura de credencial por
-> rota. A peça 3 (filtro de relevância) só existe SE as listas abrirem. Ver a § *"SETE decisões do dono — sessão de 2026-08-30"*, #6.
+> **Segue adiada**, e a **peça 1 está FEITA** (2026-08-30): as quatro rotas de conteúdo
+> recortam por pool, com decisor único e gate `probe_session_content_scope.sh` (6 ramos,
+> vermelho antes de verde). Detalhe no `CHANGELOG.md` da data.
+>
+> **A tabela abaixo está DESATUALIZADA e foi mantida como registro** — ela é de 2026-08-26 e
+> já estava errada em dois pontos a favor quando foi remedida hoje: `POST /join` ganhou
+> portão em 08-27 e `/customers/{id}/360` passou a repassar `accessible_pools`. Estado real
+> em 2026-08-30, medido: das 11 linhas, as que faltavam eram **quatro**, e as quatro foram
+> fechadas.
+>
+> **O que a peça 1 NÃO fez, de propósito:** abrir as listas. A ordem registrada abaixo
+> (*portões de conteúdo primeiro, abrir as linhas depois*) fica intacta — o que mudou é que
+> a primeira metade dela existe. A peça 3 (filtro de relevância) só existe SE as listas
+> abrirem, e continua sem dono. Ver a § *"SETE decisões do dono — sessão de 2026-08-30"*, #6.
 
 **A proposta.** Tirar a ABAC da montagem do chip *e da lista* — todos enxergam todos os contatos e
 segmentos — e aplicá-la **na exibição do conteúdo**, de modo que só quem tem escopo faça drill-down.

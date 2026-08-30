@@ -1,6 +1,83 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
 
+
+## Escopo de pool nas rotas de CONTEÚDO — a peça 1 da (d), e o irmão fechado que a destravava (2026-08-30)
+
+Quatro rotas da analytics-api servem o conteúdo de UM contato — `/v1/transcript/sessions/{id}`,
+`/sessions/{id}/stream`, `/{id}/workflow-trace`, `/{id}/pipeline-state`. Desde 2026-08-29 elas
+exigem credencial; até hoje usavam o principal **só para resolver `tenant_id`**. Qualquer token
+válido do tenant lia o diálogo de qualquer contato cujo `session_id` conhecesse — e o que
+protegia não era permissão, era o supervisor não RECEBER o id (uuid como barreira de
+capacidade). Decisão #6 do dono, peça 1 da proposta (d).
+
+**A metade que faltava estava nomeada com precisão no próprio código** (`sessions.py`): o padrão
+existente, `resolve_live_session_pools`, só decide sessão VIVA (Redis), e metade do tráfego
+dessas rotas é sessão fechada servida do ClickHouse — *"gatear só a metade viva trocaria um
+buraco por um buraco INTERMITENTE"*. Quem fechou a credencial parou ali de propósito, e estava
+certo. O irmão existe agora: `pool_auth.resolve_closed_session_pools`.
+
+**Um decisor, não dois.** `authorize_session_scope` virou o veredicto único do eixo, e o
+`_authorize_live_session` do supervisor passou a DELEGAR a ele. O que continua morando no
+supervisor é a escolha da FONTE — lá se passa só `redis`, nunca `store`, porque entrar numa
+conferência é ato sobre sessão VIVA e resolver o escopo de uma sessão fechada a tornaria
+joinable por ter pool conhecido. Mesma recusa, outra pergunta.
+
+**A união é a MESMA do predicado de lista, e isso é deliberado.** `_session_scope_clause` já
+responde *"esta sessão é minha?"* para as listas: entrou por pool meu OU um pool meu a atendeu.
+Duas respostas para a mesma pergunta é o defeito que este repositório persegue. O que muda é a
+FORMA — teste de pertinência de UMA sessão, não predicado de linha —, não o critério.
+
+**Duas consultas, nunca um `JOIN`.** Existem `session_id` em `segments` sem linha em `sessions`
+(15 medidos em 2026-08-14). Um `JOIN` a partir de `sessions` devolveria vazio para justamente
+essas, e a recusa pareceria escopo quando é ausência de linha.
+
+**Onde as duas posturas DIVERGEM, e por quê.** O predicado de lista trata `pool_id = ''` como
+VISÍVEL, para o contato aparecer desde a chegada. Esse argumento não se transporta: uma sessão
+ainda não roteada está VIVA, e a metade viva a resolve pelo Redis. Indeterminável *no
+ClickHouse* é sessão que fechou sem nunca ter sido atribuída — não há operação a fazer sobre
+ela, e numa rota que serve o diálogo do cliente *"não consegui determinar"* tem de RECUSAR.
+Medido antes de escolher, em `tenant_demo`: **10 de 947 sessões (1,06%)** são indetermináveis —
+nove viveram de 0 a 50 ms, uma é de e2e, só quatro têm mensagem (1 ou 2 cada). A população não
+decidiu a regra; decidiu que adotá-la custa ~nada. E a recusa **não fica muda**: loga
+`session_scope_undeterminable`, que é o que transforma 1% numa lista se virar 10%.
+
+**O verde que não valia nada, e por isso o gate.** A suíte de 747 testes da analytics-api passou
+**IGUAL antes e depois** do portão (747 → 747, zero falhas) — ela exercita essas rotas com
+principal irrestrito, então o gate ficava INERTE nela. Um teste que não pode reprovar compra
+confiança sem dar nada. Daí `infra/test/probe_session_content_scope.sh`, com seis ramos e os dois
+lados: **A** escopado ao pool da sessão → 200 · **B** escopado a outro pool → 403
+`pool_scope_denied` · **C** irrestrito → 200 · **D** sessão indeterminável → 403
+`session_pools_undeterminable` · **E** sem token → 401, que existe para que o 403 do B não seja
+um 401 disfarçado · **F** a delegação do supervisor preserva o veredicto.
+
+**O ramo F media a proposição errada na primeira versão**, e o defeito é o do catálogo: com
+sessão fechada o `/join` responde **404 antes do portão** (`session:{id}:meta` ausente), e o
+ramo aceitava esse 404 como *"não afrouxou"*. Verde pela pergunta adjacente. Refeito com um meta
+sintético, ele agora ALCANÇA o portão e afirma os dois lados.
+
+**Vermelho antes de verde, provado por mutação:** trocado o `if not (pools & allowed)` por
+`if False`, os ramos B (quatro rotas) e F ficam vermelhos — e a resposta mutada devolve **a
+transcrição de verdade**, que é a prova de que a exposição era real e não teórica.
+
+### Achado de lambuja: a delegação de transcrição da evaluation-api está QUEBRADA
+
+Medido no caminho, e **independente desta mudança**: `evaluation-api/router.py:2221` chama
+`GET /v1/transcript/sessions/{id}` com `client.get(url, params=...)` — **nenhum header**. Desde
+2026-08-27 `optional_pool_principal` responde **401** a requisição sem `Authorization` quando
+`analytics_open_access` está desligado, que é o **default** e não é ligado em `infra/` nenhum
+(medido: zero ocorrências da env em compose, `.env*` ou scripts). O 401 vira **502** na cara de
+quem abre a transcrição pela tela de Qualidade. Confirmado ao vivo pelos dois lados: o chamador
+não manda header (código) e a rota recusa sem header (`curl` → 401).
+
+Não é regressão desta mudança e esta mudança não o agrava — quando o portão de escopo entra, a
+requisição já parou no de credencial. **A correção não é óbvia e por isso não foi feita aqui:**
+encaminhar o token do usuário faria o escopo de pool valer sobre uma leitura que a evaluation-api
+já gateia por `module_config.evaluation.*` + `pool_id`, e são eixos distintos — decidir qual
+manda é decisão de quem desenhou a delegação (o ADR diz explicitamente que o gate de PAPEL fica
+lá, não aqui). Registrado no `TODO.md`.
+
+
 ## Censo de cadastro do ContextStore — a lista da D9 por análise estática, e o extrator que NÃO é um walker de YAML (2026-08-30)
 
 A [D9](docs/adr/adr-contextstore-allowlist.md) **afirmava** que a população de tags do

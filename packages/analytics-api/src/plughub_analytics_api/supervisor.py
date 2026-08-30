@@ -30,7 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from .pool_auth import (
     PoolPrincipal,
     require_pool_principal,
-    resolve_live_session_pools,
+    authorize_session_scope,
 )
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -95,28 +95,23 @@ async def _authorize_live_session(
     coisa que "nenhum pool bate": e "nao consegui determinar", e numa fronteira de
     ESCRITA em conferencia de cliente "nao sei" tem de reprovar. O irmao aberto
     (`optional_pool_principal`) existe para leitura de relatorio, nao para isto.
+
+    DELEGACAO (2026-08-30, peca 1 da proposta (d))
+    ----------------------------------------------
+    O veredicto mudou de casa para `pool_auth.authorize_session_scope`, que virou o
+    decisor UNICO do eixo quando as rotas de CONTEUDO passaram a precisar do mesmo
+    julgamento. Nao e' refactor cosmetico: manter duas implementacoes do mesmo
+    veredicto e' como se paga o vazamento que fica so numa delas — e' o argumento do
+    verificador unico de JWT (secao Security do CLAUDE.md), aplicado ao eixo de ESCOPO.
+
+    O que esta funcao ainda decide, e por isso continua existindo: a FONTE. Aqui
+    passa-se so `redis`, NUNCA `store` — entrar numa conferencia e' ato sobre sessao
+    VIVA, e resolver o escopo de uma sessao FECHADA a tornaria joinable por ter pool
+    conhecido. A recusa e' identica; a pergunta e' que e' outra.
     """
-    if principal.is_unrestricted:
-        return
-
-    pools = await resolve_live_session_pools(redis, tenant_id, session_id)
-    if not pools:
-        logger.warning(
-            "supervisor: RECUSADO sub=%s session=%s — nao foi possivel determinar pool "
-            "algum da sessao (meta sem `pool_id` e nenhuma instancia nos SETs de agente). "
-            "Recusa deliberada: escopo indeterminado nao autoriza escrita.",
-            principal.sub, session_id,
-        )
-        raise HTTPException(status_code=403, detail="session_pools_undeterminable")
-
-    allowed = set(principal.accessible_pools or [])
-    if not (pools & allowed):
-        logger.warning(
-            "supervisor: RECUSADO sub=%s session=%s — pools da sessao %s nao intersectam "
-            "o escopo do chamador %s",
-            principal.sub, session_id, sorted(pools), sorted(allowed),
-        )
-        raise HTTPException(status_code=403, detail="pool_scope_denied")
+    await authorize_session_scope(
+        principal, tenant_id, session_id, rota="supervisor.join", redis=redis,
+    )
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────

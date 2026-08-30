@@ -40,6 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .pool_auth import (
+    authorize_session_scope,
     PoolPrincipal,
     optional_pool_principal,
     sse_pool_principal,
@@ -561,15 +562,34 @@ async def session_stream(
     Aquele irmão lê as DUAS origens pela mesma função que `/dashboard/*` usa, e
     DELEGA a decisão ao verificador único — não há segunda semântica de recusa aqui.
 
-    ⚠️ O que esta mudança NÃO faz: conferir se ESTA sessão pertence ao escopo do
-    chamador. A irmã `/v1/transcript/*` também não confere — o padrão que existe
-    (`resolve_live_session_pools`, em `supervisor.py`) só decide sessão VIVA, e
-    metade do tráfego daqui é sessão fechada servida do ClickHouse, onde a resposta
-    seria fail-open. Fazer só a metade viva trocaria um buraco por um buraco
-    intermitente. Dívida contada no `TODO.md`, para as DUAS rotas juntas.
+    ── Escopo de pool (2026-08-30, peça 1 da (d) — decisão #6 do dono) ─────────
+    A dívida que esta seção registrava — *"não confere se ESTA sessão pertence ao
+    escopo do chamador"* — está FECHADA, e o que faltava estava nomeado com
+    precisão aqui: o padrão existente (`resolve_live_session_pools`) só decidia
+    sessão VIVA, e metade do tráfego daqui é sessão fechada servida do ClickHouse
+    — gatear só a metade viva trocaria um buraco por um buraco INTERMITENTE, que é
+    pior de diagnosticar. O irmão fechado existe agora
+    (`pool_auth.resolve_closed_session_pools`) e as duas rotas irmãs foram gateadas
+    JUNTAS, como a dívida pedia.
     """
     redis      = request.app.state.redis
     store      = request.app.state.store
+
+    # ── Escopo de pool (2026-08-30, peça 1 da (d) — decisão #6 do dono) ──────────
+    # A dívida declarada no docstring acima descrevia exatamente o que faltava: o
+    # irmão FECHADO do resolvedor. Ele existe agora (`resolve_closed_session_pools`),
+    # e as duas rotas irmãs foram gateadas JUNTAS, como lá estava registrado —
+    # fechar uma só deixaria a outra aberta parecendo protegida.
+    #
+    # O portão roda AQUI, antes de construir o `StreamingResponse`: dentro do
+    # gerador o 403 viraria um EVENTO SSE, a conexão abriria com status 200 e a
+    # recusa chegaria ao cliente como DADO. Recusa que o consumidor lê como
+    # conteúdo não é recusa.
+    await authorize_session_scope(
+        pool_principal, tenant_id, session_id,
+        rota="sessions.stream", redis=redis, store=store,
+    )
+
     stream_key = f"session:{session_id}:stream"
 
     async def event_generator():
@@ -802,9 +822,17 @@ async def get_workflow_trace(
       1. origin_session_id from ClickHouse sessions table
       2. Primary segment of the origin session (the intake agent)
       3. All segments of the webhook session, ordered by started_at
+
+    Escopo de pool conferido (2026-08-30): a trajetória nomeia pools, skills e
+    segmentos do contato — é conteúdo, não metadado de lista.
     """
     store = request.app.state.store
     redis = request.app.state.redis
+
+    await authorize_session_scope(
+        pool_principal, tenant_id, session_id,
+        rota="sessions.workflow_trace", redis=redis, store=store,
+    )
 
     # Redis fallback: ClickHouse may have lost origin_session_id for sessions
     # created before the consumer fix (parse_routed overwrote it with NULL).
@@ -1087,8 +1115,19 @@ async def get_pipeline_state(
     Also reads ContextStore entries (agents_only subset for analytics access).
 
     Falls back to empty on error — Redis keys may have expired for old sessions.
+
+    Escopo de pool conferido (2026-08-30): esta rota devolve o ContextStore da
+    sessão, que carrega dado de cliente — é a mais sensível das três, apesar do
+    nome técnico.
     """
     redis = request.app.state.redis
+    store = request.app.state.store
+
+    await authorize_session_scope(
+        pool_principal, tenant_id, session_id,
+        rota="sessions.pipeline_state", redis=redis, store=store,
+    )
+
     try:
         pipeline_key = f"{tenant_id}:pipeline:{session_id}"
         ctx_key      = f"{tenant_id}:ctx:{session_id}"

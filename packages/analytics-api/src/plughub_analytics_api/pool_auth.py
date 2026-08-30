@@ -37,6 +37,7 @@ Usage
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -541,3 +542,140 @@ async def resolve_live_session_pools(
             )
 
     return pools
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Escopo de pool para UMA sessão — o irmão FECHADO, e o autorizador único
+# (peça 1 da proposta (d); decisão #6 do dono, 2026-08-30)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# `resolve_live_session_pools` acima só decide sessão VIVA (Redis). As rotas de
+# CONTEÚDO — transcrição, stream, workflow-trace, pipeline-state — servem também
+# sessão FECHADA, do ClickHouse, e é por isso que o fechamento da credencial em
+# 2026-08-29 parou aqui: gatear só a metade viva trocaria um buraco por um buraco
+# INTERMITENTE, que é pior de diagnosticar.
+#
+# ── A união é a MESMA do predicado de lista, e isso é deliberado ──────────────
+# `reports_query._session_scope_clause` já responde *"esta sessão é minha?"* para
+# as LISTAS: entrou por pool meu OU um pool meu a atendeu. Duas respostas para a
+# mesma pergunta é o defeito que este repositório persegue, então a fonte aqui é a
+# mesma união — o que muda é a FORMA (teste de pertinência de uma sessão, não
+# predicado de linha), não o critério.
+#
+# ── Onde as duas DIVERGEM, e por quê ─────────────────────────────────────────
+# O predicado de lista tem um terceiro ramo: `pool_id = ''` → VISÍVEL. Ele existe
+# para que o contato apareça DESDE A CHEGADA, antes de rotear. Esse argumento não
+# se transporta para conteúdo: uma sessão ainda não roteada está VIVA, e a metade
+# viva a resolve pelo Redis. Uma sessão indeterminável *no ClickHouse* é uma que
+# fechou sem nunca ter sido atribuída — não há operação a fazer sobre ela, e numa
+# rota que serve o diálogo do cliente *"não consegui determinar"* tem de RECUSAR.
+# Mesma postura do `_authorize_live_session`, pela mesma razão.
+#
+# Medido em `tenant_demo` (2026-08-30) antes de escolher: **10 de 947 sessões**
+# (1,06%) são indetermináveis — sem pool e sem segmento algum. Nove viveram de 0 a
+# 50 ms (`agent_closed`), uma é de e2e, e só quatro têm mensagem (1 ou 2 cada).
+# A população não decidiu a regra — decidiu que adotá-la custa ~nada. E ela não
+# fica MUDA: cada recusa loga `session_scope_undeterminable`, que é o que
+# transforma "1%" numa lista no dia em que virar 10%.
+
+
+def _fetch_closed_session_pools(client: Any, db: str, tenant_id: str, session_id: str) -> set[str]:
+    """Pools de uma sessão persistida: `sessions.pool_id` ∪ `segments.pool_id`.
+
+    ⚠️ **Duas consultas, e não um `JOIN`.** Existem `session_id` em `segments` que
+    NÃO têm linha em `sessions` (15 medidos em 2026-08-14, ver `TODO.md`), e são
+    justamente as que mais importam para autorizar: um `JOIN` a partir de
+    `sessions` devolveria vazio e a recusa pareceria escopo, quando é ausência de
+    linha. Cada tabela responde por si; a união é de quem chama.
+    """
+    pools: set[str] = set()
+    for tabela in ("sessions", "segments"):
+        result = client.query(
+            f"""
+            SELECT DISTINCT pool_id
+            FROM {db}.{tabela} FINAL
+            WHERE tenant_id  = {{tenant_id:String}}
+              AND session_id = {{session_id:String}}
+            """,
+            parameters={"tenant_id": tenant_id, "session_id": session_id},
+        )
+        for row in result.result_rows or []:
+            pid = (row[0] or "").strip()
+            if pid:
+                pools.add(pid)
+    return pools
+
+
+async def resolve_closed_session_pools(store: Any, tenant_id: str, session_id: str) -> set[str]:
+    """Irmão de `resolve_live_session_pools` para a sessão já persistida.
+
+    Mesmo contrato: conjunto VAZIO é *"não consegui determinar"*, nunca "nenhum
+    pool", e nunca levanta — erro de ClickHouse vira vazio (⇒ recusa) com log.
+    Falhar ABERTO aqui devolveria a fronteira ao estado que esta fase fecha.
+    """
+    try:
+        return await asyncio.to_thread(
+            _fetch_closed_session_pools,
+            store.new_client(), store._database, tenant_id, session_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "resolve_closed_session_pools: session=%s ilegivel no ClickHouse (%s) — "
+            "conjunto vazio, e quem chama RECUSA",
+            session_id, exc,
+        )
+        return set()
+
+
+async def authorize_session_scope(
+    principal: PoolPrincipal,
+    tenant_id: str,
+    session_id: str,
+    *,
+    rota: str,
+    redis: Any = None,
+    store: Any = None,
+) -> None:
+    """Portão de ESCOPO DE POOL para UMA sessão. Levanta 403 nomeado; nunca degrada.
+
+    É o **decisor único** do eixo: `_authorize_live_session` (supervisor) delega
+    aqui passando só `redis`, e as rotas de conteúdo passam os dois. Ter duas
+    implementações do mesmo veredicto é como se paga o vazamento que fica só numa
+    delas — o mesmo argumento do verificador único de JWT (§ Security do CLAUDE.md).
+
+    `redis` ausente ⇒ não consulta a metade viva; `store` ausente ⇒ não consulta a
+    fechada. Quem chama declara quais fontes fazem sentido para a sua pergunta:
+    entrar numa conferência é ato sobre sessão VIVA, e uma sessão fechada não deve
+    ficar joinable por ter pool conhecido.
+
+    Decisão do dono (2026-08-26), preservada: **o admin respeita a ABAC como
+    qualquer um; não há bypass por papel.** O único eixo é o escopo.
+    """
+    if principal.is_unrestricted:
+        return
+
+    pools: set[str] = set()
+    if redis is not None:
+        pools |= await resolve_live_session_pools(redis, tenant_id, session_id)
+    if store is not None and not pools:
+        # Só consulta o ClickHouse quando a metade viva não resolveu: sessão viva
+        # é o caso quente, e a fechada custa duas queries.
+        pools |= await resolve_closed_session_pools(store, tenant_id, session_id)
+
+    if not pools:
+        logger.warning(
+            "session_scope_undeterminable rota=%s sub=%s session=%s — nenhum pool "
+            "determinavel (nem vivo, nem persistido). Recusa deliberada: escopo "
+            "indeterminado nao autoriza leitura de conteudo.",
+            rota, principal.sub, session_id,
+        )
+        raise HTTPException(status_code=403, detail="session_pools_undeterminable")
+
+    allowed = set(principal.accessible_pools or [])
+    if not (pools & allowed):
+        logger.warning(
+            "pool_scope_denied rota=%s sub=%s session=%s — pools da sessao %s nao "
+            "intersectam o escopo do chamador %s",
+            rota, principal.sub, session_id, sorted(pools), sorted(allowed),
+        )
+        raise HTTPException(status_code=403, detail="pool_scope_denied")

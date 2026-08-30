@@ -42,7 +42,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
-from .pool_auth import PoolPrincipal, optional_pool_principal
+from .pool_auth import PoolPrincipal, authorize_session_scope, optional_pool_principal
 
 logger = logging.getLogger("plughub.analytics.transcript")
 
@@ -201,10 +201,37 @@ async def transcript_session_messages(
     """
     Returns the masked transcript for a session, windowed to the segment when
     scope=segment + segment_id are given. Role gating is the caller's
-    responsibility (evaluation-api); this read enforces tenant isolation only.
+    responsibility (evaluation-api).
+
+    ── Escopo de pool (2026-08-30, peça 1 da (d) — decisão #6 do dono) ──────────
+    A frase que estava aqui — *"this read enforces tenant isolation only"* — era
+    verdadeira e era o defeito: qualquer token do tenant lia a transcrição INTEIRA
+    de qualquer contato cujo `session_id` conhecesse. O que a protegia não era
+    permissão, era o supervisor não RECEBER o id (uuid como barreira de capacidade).
+
+    Duas portas serviam este mesmo dado e nenhuma conferia escopo: esta e a irmã
+    `GET /sessions/{id}/stream`. Foram fechadas juntas, que é como a dívida estava
+    registrada — fechar uma só deixaria a outra aberta parecendo protegida.
+
+    O gate de PAPEL segue fora daqui (evaluation-api, `module_config.evaluation.*`);
+    são eixos distintos, e este confere apenas *"esta sessão é dos meus pools?"*.
+
+    ⚠️ **A delegação da evaluation-api chama esta rota SEM credencial** — medido
+    2026-08-30 (`router.py:2221`, `client.get(url, params=...)`, nenhum header) —
+    e desde 2026-08-27 `optional_pool_principal` responde **401** a requisição sem
+    `Authorization` quando `analytics_open_access` está desligado, que é o default
+    e não é ligado em `infra/` nenhum. Ou seja: aquela delegação já está quebrada,
+    ANTES deste portão, e o 401 vira 502 na cara do usuário. Defeito próprio,
+    registrado no `TODO.md`; não é regressão desta mudança, e esta mudança não o
+    agrava.
     """
     effective_tenant = principal.tenant_id or tenant_id
     store = _store(request)
+
+    await authorize_session_scope(
+        principal, effective_tenant, session_id,
+        rota="transcript.session", store=store,
+    )
     try:
         payload = await asyncio.to_thread(
             _fetch_transcript,

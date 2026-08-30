@@ -1213,13 +1213,35 @@ base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
 > **(A)** censo AST (`_route_principal_census.py`) e **(B)** medição ao vivo, porque um
 > `Depends` declarado num router que ninguém inclui não gateia nada.
 >
-> **EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos** — e só o primeiro está fechado. As
-> `query_*` que servem as doze de `reports.py` não aceitam `accessible_pools`: não é
-> argumento esquecido, é filtro que não existe. Inventá-lo por rota seria escolher qual
-> coluna é "o pool desta agregação", e o precedente está medido (F2: um filtro de canal que
-> não filtrava, **esvaziava**). Exceção deliberada: `/sessions/active` recorta, porque lá o
-> chamador **nomeia** o pool e o teste é de pertinência, não de coluna. O resto é dívida
-> contada no `TODO.md`, nunca "por enquanto".
+> **EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos.** O primeiro fechou em 2026-08-29;
+> o segundo fechou **para o CONTEÚDO** em 2026-08-30 e segue aberto para os AGREGADOS —
+> e a linha divisória não é de esforço, é de natureza da pergunta.
+>
+> **Conteúdo ✅** — as quatro rotas que servem UM contato (`/v1/transcript/sessions/{id}`,
+> `/sessions/{id}/stream`, `/workflow-trace`, `/pipeline-state`) recortam por pool desde
+> 2026-08-30. Ali a pergunta é de **PERTINÊNCIA** (*esta sessão é dos meus pools?*), não de
+> coluna, e por isso é decidível — mesma razão pela qual `/sessions/active` sempre recortou.
+> O decisor é **único**: `pool_auth.authorize_session_scope`, para onde o
+> `_authorize_live_session` do supervisor passou a DELEGAR. **Duas metades, e a segunda era
+> o bloqueio:** o resolvedor existente só decidia sessão VIVA (Redis), e metade do tráfego é
+> sessão fechada do ClickHouse — gatear só a metade viva trocaria um buraco por um buraco
+> INTERMITENTE. O irmão fechado (`resolve_closed_session_pools`) usa a MESMA união do
+> predicado de lista (`_session_scope_clause`: entrou por pool meu **ou** um pool meu
+> atendeu), e faz **duas consultas, nunca um `JOIN`** — há `session_id` em `segments` sem
+> linha em `sessions`, e num `JOIN` a ausência de linha viraria recusa disfarçada de escopo.
+> **Onde as duas DIVERGEM, e é decisão:** a lista trata `pool_id = ''` como VISÍVEL (para o
+> contato aparecer desde a chegada); o conteúdo **RECUSA** o indeterminável, porque uma
+> sessão ainda não roteada está VIVA e a metade viva a resolve — indeterminável *no
+> ClickHouse* é sessão que fechou sem nunca ser atribuída. Medido antes de escolher: **10 de
+> 947** (1,06%), todas detritos de teste. A recusa **loga nomeando**
+> (`session_scope_undeterminable`), que é o que transforma 1% numa lista se virar 10%.
+>
+> **Agregados ❌ — dívida, e a razão é outra.** As `query_*` que servem as doze de
+> `reports.py` não aceitam `accessible_pools`: não é argumento esquecido, é filtro que não
+> existe. Inventá-lo por rota seria escolher qual coluna é "o pool desta agregação", e o
+> precedente está medido (F2: um filtro de canal que não filtrava, **esvaziava**). Contada
+> no `TODO.md`, nunca "por enquanto". Gate do que fechou:
+> `infra/test/probe_session_content_scope.sh` (6 ramos, vermelho antes de verde).
 
 **Escrita de config exige portão; LEITURA de config nem sempre — e isso é decidido, não
 omitido.** `calendar-api` e `dialog-api` gateiam escrita (`config.calendars` / `config.dialog_forms`,
