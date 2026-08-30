@@ -3560,7 +3560,22 @@ operação"*.
 **Estado: adiada por decisão do dono em 2026-08-26**, em favor da (a). Se voltar, vira ADR com as
 três peças na ordem acima. A (b) é a fatia 1 dela e **não deve ser feita isolada**.
 
-### 🔴 O ABAC de pool é OPT-IN DO CHAMADOR — sem header, lê tudo (medido 2026-08-26)
+### ✅ O ABAC de pool é OPT-IN DO CHAMADOR — **os TRÊS bypasses fechados** *(2026-08-27; conferido ao vivo 2026-08-30)*
+
+> **O título estava 🔴 e o defeito não existe mais** — os três ramos fail-open descritos abaixo
+> foram fechados pelo endurecimento de `optional_pool_principal` em 2026-08-27, e o texto ficou
+> para trás. Medido ao vivo em 2026-08-30, com a stack de pé:
+>
+> | ramo | hoje |
+> |---|---|
+> | 1 · sem `auth_jwt_secret` | **401** `auth_unavailable` (só `analytics_open_access`, declarado pelo operador, libera) |
+> | 2 · sem header `Authorization` | **401** `auth_required` |
+> | 3 · SSE com token **EXPIRADO** em `?token=` | **401** (testado com token `exp` no passado) |
+>
+> É o padrão que este arquivo cataloga: **o TÍTULO é o que mente para mais gente**. Um 🔴 falso
+> custa mais que uma seção ausente — ele esconde os vermelhos reais na varredura. O diagnóstico
+> abaixo fica como registro do que era.
+
 
 `pool_auth.py` declara três bypasses, todos por escrito e todos fail-OPEN:
 
