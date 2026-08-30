@@ -292,6 +292,71 @@ de ser opcional em 2026-08-27. O nome ainda diz "optional", e o chamador que dep
 tinha teste atravessando a fronteira — é o mesmo modo de falha do `probe_audit_surface`: *o
 veredicto foi coberto, a travessia não*.
 
+## 🧭 Migração da D9 — a FATIA 1 e o que ela NÃO é *(escrito 2026-08-30, antes de compactar)*
+
+### O que está desbloqueado, e o que não está
+
+⚠️ **"Sem nada pendente" vale para a FATIA 1, não para a D9.** A D9 é **proposto** (o ADR como
+um todo é Aceito; ela é emenda). Das seis decisões abertas do ADR, **três são pré-requisito do
+D9 completo** e nenhuma delas bloqueia a fatia 1:
+
+| decisão aberta | bloqueia o quê |
+|---|---|
+| #1 choke point de escrita (12 `HSET`) | o CARIMBO do `atributo` (D9.6) — item de maior esforço |
+| #2 onde mora a tela de cadastro | a *feature* de cadastro; e é o que faz gente contornar |
+| #3 lista de domínios (critério de PAPEL) | o crescimento do mapa **além** dos domínios que já existem |
+
+### FATIA 1 — cadastrar os 37 no mapa vigente
+
+**Não precisa da D9 aceita.** É o mecanismo da V3 (o `DEFAULT_CONTEXT_MAP`) crescendo:
+reversível, sem código novo, e é o que leva o `unknown` da auditoria a **zero** — que é o
+número que a V4 espera, na definição VELHA e na nova.
+
+**A lista está pronta:** `docs/product/contextstore-cadastro-censo.md`, anexo "os 37 não
+declarados", com origem e superfície de cada um. Reproduzível a qualquer momento:
+
+```bash
+python3 infra/test/censo_contextstore_cadastro.py
+```
+
+Números de referência (2026-08-30): **91 escritos · 54 cobertos · 37 a cadastrar · 21 lidos
+sem escritor · 0 dinâmicos**; mapa vigente **75 canônicas / 53 aliases**.
+
+**O trabalho, por campo:** escolher `escopo.dominio.campo` + `tipo` + `legado[]` com a grafia
+real. **27 dos 37 são identificador/enum ⇒ `texto`, sem política.** As outras 10:
+
+- **8 de prosa** (`approval.summary` · `session.summary` · `session.parecer` ·
+  `session.resultado` · `session.pergunta_coleta` · as 3 do copiloto): escolha de tipo, **não
+  bloqueio** — a D9.5 foi DEPRECIADA (ver ADR). Medido: 6 têm ZERO dado; os 2 que têm são
+  template autorado com buraco tipado. ⚠️ `session.summary` é lido ATRAVÉS da porta de masking
+  (`DialogFormRenderer.tsx:232`) — tipo restritivo **apaga a tela de aprovação**.
+- **`session.preview`**: o valor é uma spec de mascaramento. Decisão aberta #6.
+- **`session.reviewer_id`**: identidade de usuário da PLATAFORMA; nenhuma das 5 classes LGPD
+  serve. Decisão aberta #5.
+
+**Onde a decisão #3 encosta na fatia 1, sem bloquear:** campo que cabe em domínio já existente
+entra; campo que pediria domínio NOVO (o copiloto é o caso claro) fica **listado para o dono**
+em vez de inventar taxonomia — é a regra da D9.8, fechar por PAPEL e nunca por caber nos demos.
+
+**Duas reduções já medidas, a aplicar na fatia 1:** `session.survey_*` × `session.surveyed_*`
+são UM fato com duas grafias (bridge no `on_human_end` × gateway no `collect_engage`) ⇒
+aliases da mesma canônica; e `session.parecer`/`resultado` espelham os gêmeos de `journey.*`,
+com tipo idêntico.
+
+**Como conferir que funcionou:** re-semear (`--overwrite` das chaves de `masking`) **+ restart
+do config-api** (cache em processo), cortar a série de auditoria, **esperar o cache de 60 s
+virar**, rodar tráfego, e ver `unknown` cair. Os dois cuidados são obrigatórios: cortar sem
+esperar produz lista que acusa campo já declarado — aconteceu em 08-30.
+
+### Resíduos de ambiente que seguem de pé
+
+- **`mcp-server-plughub` não reconstruído** — `DEFAULT_CONTEXT_MAP` embutido duas versões
+  atrás. Comportamento vivo correto (busca do config-api, cache 60 s); o FALLBACK é que serviria
+  mapa velho.
+- **`auth-api` não reconstruído** — o container ainda roda o subsistema `platform_permissions`
+  que a decisão #5 removeu da árvore.
+- **`tenant_demo` mantém a regra fóssil `session.cpf_titular`** no override próprio.
+
 ## 🟡 Pré-requisito da V4 — passo 1 ✅; o resto foi SUPERSEDIDO pela D9 *(2026-08-30)*
 
 > ⚠️ **Leia primeiro:** este bloco descreve o trabalho sob o modelo ANTIGO (mapa de nomes como
