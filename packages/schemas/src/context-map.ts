@@ -200,10 +200,36 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         llm_account_ids:   { tipo: "texto" },
         max_reply_time_ms: { tipo: "texto" },
         mentionable_pools: { tipo: "texto" },
+        // Escrito pelo routing-engine a cada roteamento (`agent-registry.ts:443`).
+        agent_groups:      { tipo: "texto" },
       },
       queue: {
         position: { tipo: "texto" },
         eta_ms:   { tipo: "texto" },
+      },
+      // ── Copiloto — as 4 saidas do `copilot_emitter` + o interruptor ──────
+      //
+      // ⚠️ Este dominio e' NOVO no mapa, e a nota que precedeu esta fatia dizia
+      // para LISTAR ao dono em vez de cria-lo. A medicao mudou o veredicto, e o
+      // motivo importa: as cinco tags JA sao escritas em `escopo.dominio.campo`
+      // pela propria plataforma (`copilot_emitter.py`, `server.ts:2031-2034`,
+      // `skill.ts:1390`). Declara-las nao escolhe nome nenhum — descreve o que
+      // existe, com zero alias. O que a nota protegia era INVENTAR taxonomia; nao
+      // declarar aqui deixaria tag canonica da propria plataforma em `unknown`,
+      // que e' o defeito, nao a prudencia. A decisao aberta #3 (lista de dominios
+      // por PAPEL, D9.8) renormaliza este dominio junto com os outros 14 — todos
+      // os 15 mudam de nome quando ela cair, e este nao acrescenta divida.
+      //
+      // Tres deles sao PROSA de LLM sobre a conversa; `texto` e' aposta, nao
+      // descricao (ver o censo, § "Quantos ficam sem tipo obvio"). Ficam `texto`
+      // porque a alternativa quebra a tela: o painel do copiloto no Console le os
+      // quatro pela porta de masking.
+      copilot: {
+        mode:                { tipo: "texto", label: "Interruptor — `mention.set_context`" },
+        ultima_analise:      { tipo: "texto" },
+        sugestao_resposta:   { tipo: "texto" },
+        flags_risco:         { tipo: "texto" },
+        acoes_recomendadas:  { tipo: "texto" },
       },
       sentimento: {
         current:   { tipo: "texto" },
@@ -232,34 +258,88 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         dialog_form_id:        { tipo: "texto", legado: ["session.dialog_form_id"] },
         resume_token:          { tipo: "credential", legado: ["session.workflow_resume_token"] },
         delegate_resume_token: { tipo: "credential", legado: ["session.delegate_resume_token"] },
-        current_round:         { tipo: "texto" },
-        max_rounds:            { tipo: "texto" },
+        current_round:         { tipo: "texto", legado: ["session.current_round"] },
+        max_rounds:            { tipo: "texto", legado: ["session.max_rounds"] },
         decisions:             { tipo: "texto", legado: ["session.decisions"] },
         origin_session_id:     { tipo: "texto", legado: ["session.origin_session_id"] },
         briefing_session_id:   { tipo: "texto", legado: ["session.briefing_session_id"] },
+        // ── Pacote de aprovacao — MESMO `delegate.context` que ja deposita
+        // `dialog_form_id` e `decisions` acima. Nao e' dominio novo: e' o resto do
+        // payload que a V3 declarou pela metade.
+        // (`skill_limite_processo_v1.yaml:88-104`, `skill_gate_promocao_v1.yaml:52-58`.)
+        title:                 { tipo: "texto", legado: ["session.title"] },
+        // ⚠️ DOIS aliases porque sao DUAS SESSOES para UM fato — a sessao do
+        // processo escreve `approval.summary` (`invoke context_set`) e a filha
+        // recebe o MESMO valor como `session.summary`, piped pelo
+        // `summary: "@ctx.approval.summary"` do delegate. Mesma forma de
+        // `caller.cpf` x `session.cpf`.
+        //
+        // ⚠️ E o tipo e' `texto` por MEDICAO, nao por preguica: `session.summary`
+        // e' lido em `DialogFormRenderer.tsx:232` ATRAVES da porta de masking, entao
+        // um tipo restritivo apaga a tela de aprovacao — o "troca vazamento de PII
+        // por quebra muda de UI" que o pre-requisito da V4 nomeia. O YAML ja carrega
+        // a contramedida por escrito: o summary carrega so texto publico, e cartao,
+        // CPF e valor viajam como tags SEPARADAS justamente para terem politica
+        // propria (`skill_limite_processo_v1.yaml:39-42`).
+        summary:               { tipo: "texto", legado: ["session.summary", "approval.summary"] },
+        status:                { tipo: "texto", legado: ["session.status"] },
+        approval_threshold:    { tipo: "texto", legado: ["session.approval_threshold"] },
+        // Revisao de avaliacao (evaluation-api `router.py:2336-2338`, `:2455-2457`).
+        // `round_echoed` e' o par de `current_round` acima; `review_decision`, o de
+        // `decisions` — mesma familia, mesmo dominio.
+        review_decision:       { tipo: "texto", legado: ["session.review_decision"] },
+        round_echoed:          { tipo: "texto", legado: ["session.round_echoed"] },
       },
       contato: {
         close_origin:               { tipo: "texto", legado: ["session.close_origin"] },
         contact_channel:            { tipo: "texto", legado: ["session.contact_channel"] },
         contact_identifier:         { tipo: "texto", legado: ["session.contact_identifier"] },
-        contact_outcome:            { tipo: "texto" },
-        customer_present:           { tipo: "texto" },
+        contact_outcome:            { tipo: "texto", legado: ["session.contact_outcome"] },
+        customer_present:           { tipo: "texto", legado: ["session.customer_present"] },
         customer_participant_id:    { tipo: "texto", legado: ["session.customer_participant_id"] },
         human_agent_participant_id: { tipo: "texto", legado: ["session.human_agent_participant_id"] },
         confirmation_channel:       { tipo: "texto", legado: ["session.confirmation_channel"] },
+        // ── Proveniencia do ACESSO. Escritas juntas pelo gateway em todo nascimento
+        // de sessao (`webhook.py:609-625`, `:1665-1687`, `:2183-2195`).
+        // `spawn_reason` e' o discriminador ternario da D13 (NULL=inbound ·
+        // `collect`=outbound · `trigger`/`delegate`=interno).
+        spawn_reason:               { tipo: "texto", legado: ["session.spawn_reason"] },
+        root_session_id:            { tipo: "texto", legado: ["session.root_session_id"] },
+        resume_origin:              { tipo: "texto", legado: ["session.resume_origin"] },
+        // ── Fatos que o bridge carimba PRE-HOOK, para o hook saber quem atendeu
+        // (`main.py:1469`, `:1491`). Sao a fonte dos aliases `surveyed_*` logo abaixo.
+        last_primary_segment_id:    { tipo: "texto", legado: ["session.last_primary_segment_id"] },
+        last_primary_agent_key:     { tipo: "texto", legado: ["session.last_primary_agent_key"] },
+        // Pergunta consolidada que a IA GERA e o menu seguinte interpola
+        // (`agente_contexto_ia_v1.yaml:170-175`). Prosa de LLM — e `texto` aqui nao e'
+        // omissao: o valor e' exibido AO CLIENTE, entao mascara-lo quebra a coleta.
+        pergunta_coleta:            { tipo: "texto", legado: ["session.pergunta_coleta"] },
       },
+      // ⚠️ As 9 canonicas abaixo ja existiam desde a V3 e TODAS estavam sem
+      // `legado` — a grafia viva e' PLANA (`session.survey_form_id`), composta pelo
+      // gateway e pelos `context_json`, e caia em `unknown`. E' o mesmo defeito que o
+      // cabecalho do `workflow` documenta: canonica declarada, grafia real orfa.
+      //
+      // ⚠️ E as duas folhas `surveyed_*` SUMIRAM daqui — nao foram apagadas, foram
+      // FUNDIDAS. Medido no censo: o bridge escreve `session.surveyed_segment_id` /
+      // `surveyed_agent_key` no `on_human_end` da sessao de ORIGEM (`main.py:2239`) e
+      // o gateway escreve `session.survey_segment_id` / `survey_agent_key` no
+      // `collect_engage` da sessao da PESQUISA (`webhook.py:2231`). UM fato — *qual
+      // segmento/agente esta sendo pesquisado* —, duas sessoes, duas grafias. Manter
+      // duas canonicas para um fato e' a D9.8 acontecendo: em seis meses "o segmento
+      // pesquisado" teria duas casas defensaveis.
       survey: {
-        form_id:             { tipo: "texto" },
-        grain:               { tipo: "texto" },
-        origin:              { tipo: "texto" },
-        origin_pool:         { tipo: "texto" },
-        pool_id:             { tipo: "texto" },
-        segment_id:          { tipo: "texto" },
-        target_id:           { tipo: "texto" },
-        customer_key:        { tipo: "texto" },
-        agent_key:           { tipo: "texto" },
-        surveyed_agent_key:  { tipo: "texto", legado: ["session.surveyed_agent_key"] },
-        surveyed_segment_id: { tipo: "texto", legado: ["session.surveyed_segment_id"] },
+        form_id:             { tipo: "texto", legado: ["session.survey_form_id"] },
+        grain:               { tipo: "texto", legado: ["session.survey_grain"] },
+        origin:              { tipo: "texto", legado: ["session.survey_origin"] },
+        origin_pool:         { tipo: "texto", legado: ["session.survey_origin_pool"] },
+        pool_id:             { tipo: "texto", legado: ["session.survey_pool_id"] },
+        target_id:           { tipo: "texto", legado: ["session.survey_target_id"] },
+        customer_key:        { tipo: "texto", legado: ["session.survey_customer_key"] },
+        segment_id:          { tipo: "texto", legado: ["session.survey_segment_id",
+                                                       "session.surveyed_segment_id"] },
+        agent_key:           { tipo: "texto", legado: ["session.survey_agent_key",
+                                                       "session.surveyed_agent_key"] },
       },
       portabilidade: {
         // `linha_em_servico`, não `phone` — decisão do dono, 2026-08-30: é a linha
@@ -281,6 +361,23 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       campanha: {
         campaign_id: { tipo: "texto", legado: ["session.campaign_id"] },
         delivery_id: { tipo: "texto", legado: ["session.delivery_id"] },
+      },
+      // ── Processo, no escopo da SESSAO. Nao e' dominio inventado: e' o
+      // `journey.processo` que ja existe abaixo, um escopo acima. O censo mediu que
+      // `session.parecer`/`session.resultado` sao os gemeos de
+      // `journey.parecer`/`journey.resultado` — mesmo tipo, escopo diferente —, e o
+      // escopo e' o PRIMEIRO segmento por decisao da D2, logo nao podem ser alias
+      // um do outro. Chegam pelo `delegate.context` de `skill_limite_entrada_v1.yaml:410-412`.
+      //
+      // `outcome` e' o grao de PROCESSO, e a distincao dele para
+      // `contato.contact_outcome` esta escrita pelo proprio consumidor:
+      // `skill_survey_trigger_v1.yaml:65-68` testa os dois porque "so uma delas
+      // existe em cada disparo" — `on_process_end` x `on_contact_end`. Carimbado
+      // pelo bridge pre-hook (`main.py:5284`).
+      processo: {
+        parecer:   { tipo: "texto", legado: ["session.parecer"] },
+        resultado: { tipo: "texto", legado: ["session.resultado"] },
+        outcome:   { tipo: "texto", legado: ["session.process_outcome"] },
       },
       hook: {
         wrapup_pool:       { tipo: "texto", legado: ["hook.wrapup_pool"] },

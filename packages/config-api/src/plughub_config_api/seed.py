@@ -804,11 +804,19 @@ _SEED: list[tuple[str, str, object, str]] = [
                         "channels": {"tipo": "texto"},
                         "llm_account_ids": {"tipo": "texto"},
                         "max_reply_time_ms": {"tipo": "texto"},
-                        "mentionable_pools": {"tipo": "texto"}
+                        "mentionable_pools": {"tipo": "texto"},
+                        "agent_groups": {"tipo": "texto"}
                     },
                     "queue": {
                         "position": {"tipo": "texto"},
                         "eta_ms": {"tipo": "texto"}
+                    },
+                    "copilot": {
+                        "mode": {"tipo": "texto", "label": "Interruptor — `mention.set_context`"},
+                        "ultima_analise": {"tipo": "texto"},
+                        "sugestao_resposta": {"tipo": "texto"},
+                        "flags_risco": {"tipo": "texto"},
+                        "acoes_recomendadas": {"tipo": "texto"}
                     },
                     "sentimento": {
                         "current": {"tipo": "texto"},
@@ -824,34 +832,44 @@ _SEED: list[tuple[str, str, object, str]] = [
                         "dialog_form_id": {"tipo": "texto", "legado": ["session.dialog_form_id"]},
                         "resume_token": {"tipo": "credential", "legado": ["session.workflow_resume_token"]},
                         "delegate_resume_token": {"tipo": "credential", "legado": ["session.delegate_resume_token"]},
-                        "current_round": {"tipo": "texto"},
-                        "max_rounds": {"tipo": "texto"},
+                        "current_round": {"tipo": "texto", "legado": ["session.current_round"]},
+                        "max_rounds": {"tipo": "texto", "legado": ["session.max_rounds"]},
                         "decisions": {"tipo": "texto", "legado": ["session.decisions"]},
                         "origin_session_id": {"tipo": "texto", "legado": ["session.origin_session_id"]},
-                        "briefing_session_id": {"tipo": "texto", "legado": ["session.briefing_session_id"]}
+                        "briefing_session_id": {"tipo": "texto", "legado": ["session.briefing_session_id"]},
+                        "title": {"tipo": "texto", "legado": ["session.title"]},
+                        "summary": {"tipo": "texto", "legado": ["session.summary", "approval.summary"]},
+                        "status": {"tipo": "texto", "legado": ["session.status"]},
+                        "approval_threshold": {"tipo": "texto", "legado": ["session.approval_threshold"]},
+                        "review_decision": {"tipo": "texto", "legado": ["session.review_decision"]},
+                        "round_echoed": {"tipo": "texto", "legado": ["session.round_echoed"]}
                     },
                     "contato": {
                         "close_origin": {"tipo": "texto", "legado": ["session.close_origin"]},
                         "contact_channel": {"tipo": "texto", "legado": ["session.contact_channel"]},
                         "contact_identifier": {"tipo": "texto", "legado": ["session.contact_identifier"]},
-                        "contact_outcome": {"tipo": "texto"},
-                        "customer_present": {"tipo": "texto"},
+                        "contact_outcome": {"tipo": "texto", "legado": ["session.contact_outcome"]},
+                        "customer_present": {"tipo": "texto", "legado": ["session.customer_present"]},
                         "customer_participant_id": {"tipo": "texto", "legado": ["session.customer_participant_id"]},
                         "human_agent_participant_id": {"tipo": "texto", "legado": ["session.human_agent_participant_id"]},
-                        "confirmation_channel": {"tipo": "texto", "legado": ["session.confirmation_channel"]}
+                        "confirmation_channel": {"tipo": "texto", "legado": ["session.confirmation_channel"]},
+                        "spawn_reason": {"tipo": "texto", "legado": ["session.spawn_reason"]},
+                        "root_session_id": {"tipo": "texto", "legado": ["session.root_session_id"]},
+                        "resume_origin": {"tipo": "texto", "legado": ["session.resume_origin"]},
+                        "last_primary_segment_id": {"tipo": "texto", "legado": ["session.last_primary_segment_id"]},
+                        "last_primary_agent_key": {"tipo": "texto", "legado": ["session.last_primary_agent_key"]},
+                        "pergunta_coleta": {"tipo": "texto", "legado": ["session.pergunta_coleta"]}
                     },
                     "survey": {
-                        "form_id": {"tipo": "texto"},
-                        "grain": {"tipo": "texto"},
-                        "origin": {"tipo": "texto"},
-                        "origin_pool": {"tipo": "texto"},
-                        "pool_id": {"tipo": "texto"},
-                        "segment_id": {"tipo": "texto"},
-                        "target_id": {"tipo": "texto"},
-                        "customer_key": {"tipo": "texto"},
-                        "agent_key": {"tipo": "texto"},
-                        "surveyed_agent_key": {"tipo": "texto", "legado": ["session.surveyed_agent_key"]},
-                        "surveyed_segment_id": {"tipo": "texto", "legado": ["session.surveyed_segment_id"]}
+                        "form_id": {"tipo": "texto", "legado": ["session.survey_form_id"]},
+                        "grain": {"tipo": "texto", "legado": ["session.survey_grain"]},
+                        "origin": {"tipo": "texto", "legado": ["session.survey_origin"]},
+                        "origin_pool": {"tipo": "texto", "legado": ["session.survey_origin_pool"]},
+                        "pool_id": {"tipo": "texto", "legado": ["session.survey_pool_id"]},
+                        "target_id": {"tipo": "texto", "legado": ["session.survey_target_id"]},
+                        "customer_key": {"tipo": "texto", "legado": ["session.survey_customer_key"]},
+                        "segment_id": {"tipo": "texto", "legado": ["session.survey_segment_id", "session.surveyed_segment_id"]},
+                        "agent_key": {"tipo": "texto", "legado": ["session.survey_agent_key", "session.surveyed_agent_key"]}
                     },
                     "portabilidade": {
                         "numero_atual": {"tipo": "linha_em_servico", "legado": ["session.numero_atual"]},
@@ -869,6 +887,11 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "campanha": {
                         "campaign_id": {"tipo": "texto", "legado": ["session.campaign_id"]},
                         "delivery_id": {"tipo": "texto", "legado": ["session.delivery_id"]}
+                    },
+                    "processo": {
+                        "parecer": {"tipo": "texto", "legado": ["session.parecer"]},
+                        "resultado": {"tipo": "texto", "legado": ["session.resultado"]},
+                        "outcome": {"tipo": "texto", "legado": ["session.process_outcome"]}
                     },
                     "hook": {
                         "wrapup_pool": {"tipo": "texto", "legado": ["hook.wrapup_pool"]},

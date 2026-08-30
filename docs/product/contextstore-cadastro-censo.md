@@ -16,6 +16,39 @@
 
 ---
 
+## ✅ A FATIA 1 foi executada em 2026-08-30 — o que este documento passa a ser
+
+Os **37** que este censo listou **foram cadastrados**, menos quatro deixados de fora
+de propósito (abaixo). O mapa saiu de **75 canônicas / 53 aliases** para
+**94 / 82**, e o número que a V4 espera caiu de **37 para 4**.
+
+Ficaram FORA, e cada um tem dono:
+
+| campo | por quê | onde a decisão mora |
+|---|---|---|
+| `session.preview` | o valor **é uma spec de mascaramento** (`{"numero_cartao": "last_4"}`), não um dado. Declará-lo como `texto` diria que a política é conteúdo | decisão aberta **#6** do ADR |
+| `session.reviewer_id` | identidade de **usuário da plataforma**; nenhuma das 5 classes LGPD foi pensada para não-cliente. É lacuna do CATÁLOGO, e a ordem é catálogo antes do mapa | decisão aberta **#5** do ADR |
+| `session.journey_demo_ping` | eco de **demo** (`skill_journey_demo_v1`) | override do tenant, nunca o seed |
+| `session.journey_echo` | eco de **demo** (`skill_survey_outbound_v1`, do trio que nenhum pool deploya) | override do tenant, nunca o seed |
+
+Os dois últimos são a única decisão de método nova desta fatia: `DEFAULT_CONTEXT_MAP`
+é o **seed da PLATAFORMA**, e escrever nele instrumentação de demo colocaria detrito
+no default de todo tenant. Que a auditoria siga acusando os dois é o comportamento
+CERTO — eles são mesmo não declarados, no sentido que importa.
+
+> ⚠️ **Um achado do próprio instrumento, e ele é da família *"teste que não pode
+> reprovar"*.** Ao conferir o resultado, o censo publicou **80 aliases** contra os
+> **82** do oráculo da TS, e mostrou `session.surveyed_*` como NÃO DECLARADO quando
+> já eram alias. Causa: o parser do mapa era **line-based** e um `legado` com dois
+> aliases quebra naturalmente em duas linhas — ele lia a primeira e descartava o
+> resto **em silêncio**. Sub-contagem erra para o lado do trabalho a mais, o que a
+> torna *simpática* e não menos falsa: ela inventaria pendência que não existe.
+> Corrigido para juntar a folha por **saldo de chaves**. A conferência que pegou
+> isso foi comparar o instrumento com o **oráculo**, que é outra implementação —
+> um número sozinho não teria denunciado nada.
+
+---
+
 ## Veredicto
 
 **A premissa da D9.2 sobrevive: ZERO nomes dinâmicos.** Em 42 skills e em todos os

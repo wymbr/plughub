@@ -3,6 +3,109 @@
 
 
 
+## FATIA 1 da migração D9 — os 37 campos medidos entram no mapa (2026-08-30)
+
+O censo de hoje listou **37 nomes escritos e não declarados** no ContextStore. Eles
+foram cadastrados no `DEFAULT_CONTEXT_MAP` — o mecanismo que a V3 já tem —, o que
+**não depende de a D9 ser aceita**, é reversível, não traz código novo, e é o que leva
+o `unknown` da auditoria a zero, número que a V4 espera na definição velha e na nova.
+
+**75/53 → 94/82 canônicas/aliases. Não cobertos: 37 → 4.**
+
+### A prova é ao vivo, e ela previa o resultado antes de rodar
+
+Cortada a série de auditoria, esperado o cache de 60 s do mcp-server virar e rodado o
+`smoke_limite_tres_acessos.sh` (18/18 verde), os **7 `unknown`** que o tráfego acusava
+viraram **6 `alias`** e sobrou **um só**: `session.preview` — que é, exatamente, um dos
+quatro deixados de fora de propósito. Os números foram escritos antes: 94 e 82 previstos,
+94 e 82 medidos pelo oráculo.
+
+O gate `probe_context_map_audit.sh` ficou **vermelho antes de verde**: o ramo B acusou a
+config viva ainda em 75 campos até o `PUT` pela API oficial (invariante de
+provisionamento — nada escrito direto no store).
+
+### Os quatro que ficaram fora têm dono, e nenhum é "por enquanto"
+
+| campo | por quê |
+|---|---|
+| `session.preview` | o valor **é uma spec de mascaramento**, não um dado — decisão aberta **#6** |
+| `session.reviewer_id` | identidade de usuário da **plataforma**; nenhuma das 5 classes LGPD serve. É lacuna do CATÁLOGO, e a ordem firmada na D8 é catálogo antes do mapa — decisão aberta **#5** |
+| `session.journey_demo_ping` · `session.journey_echo` | eco de **demo**. `DEFAULT_CONTEXT_MAP` é o seed da PLATAFORMA; escrever detrito de demo ali entraria no default de todo tenant. Que a auditoria siga acusando os dois é o comportamento certo |
+
+### Três reduções vieram da lista, e nenhuma é estética
+
+1. **`survey_*` × `surveyed_*` FUNDIDAS.** Eram duas canônicas para UM fato — *qual
+   segmento/agente está sendo pesquisado* —, escritas em sessões diferentes: o bridge no
+   `on_human_end` da sessão de ORIGEM (`main.py:2239`) e o gateway no `collect_engage` da
+   sessão da PESQUISA (`webhook.py:2231`). Viraram dois aliases da mesma canônica, como
+   `caller.cpf` × `session.cpf`. É a D9.8 acontecendo: manter as duas daria, em seis
+   meses, duas casas defensáveis para a mesma pergunta.
+2. **Nove canônicas de `survey` estavam SEM `legado` desde a V3** — a grafia viva é PLANA
+   (`session.survey_form_id`), composta pelo gateway e pelos `context_json`, e caía em
+   `unknown`. É o mesmo defeito que o cabeçalho do domínio `workflow` já documentava:
+   canônica declarada, grafia real órfã. **Por-catch da mesma classe:**
+   `session.contact_outcome` e `session.max_rounds`, que o censo contava como *lidos sem
+   escritor* e eram canônica declarada sem a grafia viva.
+3. **O pacote de aprovação não era domínio novo.** `title` / `summary` / `status` /
+   `approval_threshold` chegam pelo MESMO `delegate.context` que já depositava
+   `dialog_form_id` e `decisions` — a V3 declarou metade do payload.
+
+### Dois tipos escolhidos por MEDIÇÃO, não por conveniência
+
+* `session.summary` é `texto` porque é lido em `DialogFormRenderer.tsx:232` **através da
+  porta de masking**: um tipo restritivo **apaga a tela de aprovação** — o *"troca
+  vazamento de PII por quebra muda de UI"* que o pré-requisito da V4 nomeia. O YAML já
+  carrega a contramedida por escrito (`skill_limite_processo_v1.yaml:39-42`): o summary
+  leva só texto público, e cartão/CPF/valor viajam como tags SEPARADAS justamente para
+  ter política própria.
+* `session.contato.pergunta_coleta` é `texto` porque o valor é **exibido ao cliente** —
+  mascará-lo quebra a coleta e não protege ninguém.
+
+### Uma departura declarada, e o critério que a autoriza
+
+A nota de escopo escrita antes do compact mandava **listar** ao dono qualquer campo que
+pedisse domínio NOVO, e nomeava o copiloto. As cinco tags do copiloto foram
+**declaradas**. O motivo é que a nota não as alcançava: elas já são escritas em
+`escopo.dominio.campo` pela própria plataforma (`copilot_emitter.py`,
+`server.ts:2031-2034`), então declará-las **não escolhe nome nenhum** — zero alias, zero
+taxonomia. O que a nota protegia era *inventar*; deixar tag canônica da própria
+plataforma em `unknown` seria o defeito, não a prudência. Mesma leitura para
+`session.processo`, que é o `journey.processo` já existente **um escopo abaixo** (e a D2
+impede que sejam alias um do outro, porque o escopo é o primeiro segmento). A decisão
+aberta **#3** renormaliza os 15 domínios de uma vez quando cair.
+
+### Achado do próprio instrumento — família *"teste que não pode reprovar"*
+
+Ao conferir, o censo publicou **80 aliases** contra os **82** do oráculo da TS, e mostrou
+`session.surveyed_*` como NÃO DECLARADO quando já eram alias. Causa: o parser do mapa era
+**line-based**, e um `legado` com dois aliases quebra naturalmente em duas linhas — ele
+lia a primeira e descartava o resto **em silêncio**. Sub-contagem erra para o lado do
+trabalho a mais, o que a torna *simpática* e não menos falsa: ela inventa pendência que
+não existe. Corrigido para juntar a folha por **saldo de chaves**. Quem pegou foi
+**comparar o instrumento com o oráculo**, que é outra implementação — um número sozinho
+não teria denunciado nada.
+
+### Dois efeitos que a fatia produziu fora dela, e os dois foram medidos
+
+* **O `probe_seed_drift_named.sh` ficou vermelho no ramo A**, e estava certo: mexer no
+  `seed.py` do repo põe o container **atrás da declaração**, que é o achado que originou
+  aquele ramo (`divergent=0` de imagem atrasada é afirmação sobre outro arquivo).
+  Fechado com `build` + `up -d` do config-api — nunca `docker cp`, que não sobrevive a
+  `up -d`. Verde depois.
+* **O seletor de visibilidade do pool cresceu junto**, porque é DERIVADO do mapa (D6):
+  5 namespaces / 113 tags → **6 / 176**. O namespace novo é `approval`, classificado
+  `legacy` ao lado de `caller`/`hook`/`account` — ele aparece porque `approval.summary`
+  virou alias declarado. `probe_context_visibility_selector.sh` verde.
+
+### Arquivos
+
+`packages/schemas/src/context-map.ts` (autoridade) · `packages/config-api/.../seed.py`
+(cópia **gerada** do `dist`, conferida idêntica por AST × JSON) ·
+`infra/test/censo_contextstore_cadastro.py` (parser) ·
+`docs/product/contextstore-cadastro-censo.md` · `docs/adr/adr-contextstore-allowlist.md`.
+
+---
+
 ## Chamadores internos da analytics-api: credencial de serviço, e o `catch {}` que escondia um deploy inseguro (2026-08-30)
 
 O fechamento de credencial de 2026-08-29 gateou 18 rotas da analytics-api e **não migrou

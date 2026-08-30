@@ -83,7 +83,32 @@ def ler_mapa():
     bloco = src[src.index("export const DEFAULT_CONTEXT_MAP"):]
     aliases, canonicas = {}, {}
     esc = dom = None
+    # ⚠️ A folha do mapa pode ocupar MAIS DE UMA LINHA — um `legado` com dois
+    # aliases quebra naturalmente. A versão line-based deste parser lia só a
+    # primeira linha e descartava o resto do array em silêncio: em 2026-08-30 ele
+    # publicou `80 aliases` contra os `82` que o oráculo da TS conta, e mostrou
+    # `session.surveyed_*` como NÃO DECLARADO quando eram alias. Sub-contagem
+    # ainda é mentira, mesmo quando erra para o lado do trabalho a mais.
+    # Junta-se por SALDO DE CHAVES, não por heurística de sufixo.
+    linhas, buf, saldo = [], "", 0
     for ln in bloco.split("\n"):
+        t = ln.strip()
+        if buf:
+            buf += " " + t
+            saldo += t.count("{") - t.count("}")
+            if saldo <= 0:
+                linhas.append(buf)
+                buf, saldo = "", 0
+            continue
+        d = t.count("{") - t.count("}")
+        if "tipo:" in t and d > 0:
+            buf, saldo = t, d
+            continue
+        linhas.append(t)
+    if buf:
+        linhas.append(buf)
+
+    for ln in linhas:
         s = ln.strip()
         if re.match(r"^(session|journey|customer):\s*\{", s):
             esc, dom = s.split(":")[0], None

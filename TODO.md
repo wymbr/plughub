@@ -292,7 +292,28 @@ de ser opcional em 2026-08-27. O nome ainda diz "optional", e o chamador que dep
 tinha teste atravessando a fronteira — é o mesmo modo de falha do `probe_audit_surface`: *o
 veredicto foi coberto, a travessia não*.
 
-## 🧭 Migração da D9 — a FATIA 1 e o que ela NÃO é *(escrito 2026-08-30, antes de compactar)*
+## ✅ Migração da D9 — a FATIA 1 está FEITA *(2026-08-30)*
+
+**75/53 → 94/82 canônicas/aliases; não cobertos 37 → 4.** Gate
+`probe_context_map_audit.sh` vermelho antes de verde; prova ao vivo com série cortada +
+`smoke_limite_tres_acessos` (7 `unknown` → 6 `alias`, sobrando só `session.preview`).
+História completa no `CHANGELOG.md`; decisões no ADR.
+
+### O que ficou aberto DESTA fatia — quatro campos, e cada um espera uma decisão
+
+| campo | espera |
+|---|---|
+| `session.preview` | **decisão #6** — o valor é uma spec de mascaramento; onde isso mora, se é que mora no ctx |
+| `session.reviewer_id` | **decisão #5** — classe LGPD para identidade de usuário da PLATAFORMA. É lacuna do CATÁLOGO, e a ordem firmada na D8 é catálogo antes do mapa |
+| `session.journey_demo_ping` · `session.journey_echo` | decisão do dono: se o demo precisa sobreviver à V4, os dois entram no **override do tenant**, nunca no seed da plataforma |
+
+⚠️ **Não "consertar" isso declarando os dois ecos de demo no `DEFAULT_CONTEXT_MAP` para
+zerar o contador.** O contador acusá-los é o comportamento certo — eles são mesmo não
+declarados no sentido que importa, e zerar o número escondendo a pergunta é o que este
+arco inteiro persegue.
+
+### O que a fatia 1 NÃO era, e segue valendo
+
 
 ### O que está desbloqueado, e o que não está
 

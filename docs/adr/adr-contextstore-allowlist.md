@@ -745,6 +745,60 @@ nominais**, o que ninguém mantém; classes são um punhado.
 E isto é o que fecha a §3 do briefing do dono: o campo de config já existia com esse
 propósito e não era usado, porque não havia estrutura declarada sobre a qual escolher.
 
+#### D9 — FATIA 1 EXECUTADA (2026-08-30): os 37 cadastrados no mapa vigente
+
+A migração começou pela parte que **não depende de a D9 ser aceita**: cadastrar no
+`DEFAULT_CONTEXT_MAP` (o mecanismo da V3) os nomes que o censo mediu. É reversível,
+não tem código novo e é o que leva o `unknown` da auditoria a zero — o número que a
+V4 espera, na definição velha e na nova.
+
+**75/53 → 94/82 canônicas/aliases; 37 não cobertos → 4.** Gate
+`probe_context_map_audit.sh` **vermelho antes de verde** (o ramo B acusou a config
+viva ainda em 75 até o `PUT` pela API oficial).
+
+**Três reduções vieram da própria lista, e nenhuma é estética:**
+
+1. **`survey_*` × `surveyed_*` fundidas.** Eram duas canônicas para UM fato — *qual
+   segmento/agente está sendo pesquisado* —, escritas em sessões diferentes (bridge
+   no `on_human_end` da ORIGEM × gateway no `collect_engage` da PESQUISA). Viraram
+   dois aliases da mesma canônica, como `caller.cpf` × `session.cpf`. É a D9.8
+   acontecendo: manter as duas daria, em seis meses, duas casas defensáveis para a
+   mesma pergunta.
+2. **Nove canônicas de `survey` estavam SEM `legado` desde a V3** — a grafia viva é
+   PLANA (`session.survey_form_id`) e caía em `unknown`. Mesmo defeito que o
+   cabeçalho do domínio `workflow` já documentava; a V3 declarou a canônica e deixou
+   a grafia real órfã. **Por-catch da mesma classe:** `session.contact_outcome` e
+   `session.max_rounds`, que o censo contava como *lidos sem escritor* e que também
+   eram canônica declarada sem a grafia viva.
+3. **O pacote de aprovação não era domínio novo.** `title`/`summary`/`status`/
+   `approval_threshold` chegam pelo MESMO `delegate.context` que já depositava
+   `dialog_form_id` e `decisions` — a V3 declarou metade do payload.
+
+**Duas escolhas de tipo que são MEDIÇÃO, não conveniência:**
+
+* `session.summary` é `texto` porque é lido em `DialogFormRenderer.tsx:232`
+  **através da porta de masking**: tipo restritivo APAGA a tela de aprovação — o
+  *"troca vazamento de PII por quebra muda de UI"* que o pré-requisito da V4 nomeia.
+  O YAML já carrega a contramedida por escrito (`skill_limite_processo_v1.yaml:39-42`):
+  o summary carrega só texto público, e cartão/CPF/valor viajam como tags SEPARADAS
+  justamente para ter política própria.
+* `session.contato.pergunta_coleta` é `texto` porque o valor é **exibido ao
+  cliente** — mascará-lo quebra a coleta, não protege ninguém.
+
+⚠️ **Uma departura declarada.** A nota que precedeu a fatia mandava **listar** ao
+dono qualquer campo que pedisse domínio NOVO, e nomeava o copiloto. As cinco tags do
+copiloto foram **declaradas**, e o motivo é que a nota não as alcançava: elas já são
+escritas em `escopo.dominio.campo` pela própria plataforma (`copilot_emitter.py`,
+`server.ts:2031-2034`), então declará-las **não escolhe nome nenhum** — zero alias,
+zero taxonomia. O que a nota protegia era *inventar*; deixar tag canônica da própria
+plataforma em `unknown` seria o defeito, não a prudência. Mesma leitura para
+`session.processo`, que é o `journey.processo` já existente **um escopo abaixo**, e a
+D2 impede que sejam alias um do outro (o escopo é o primeiro segmento). A decisão
+aberta **#3** renormaliza os 15 domínios de uma vez quando cair; nenhum destes
+acrescenta dívida que os outros já não tenham.
+
+---
+
 #### D9.8 — Domínio: lista FECHADA de PAPÉIS; vocabulário de negócio é DADO
 
 O agrupamento existe porque a alternativa está medida: **130 grafias**, duas famílias de nome
