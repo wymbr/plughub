@@ -199,9 +199,13 @@ alcança; sobra a postura de runtime da D9.1.
 **37 a cadastrar** · 21 lidos sem escritor · **0 dinâmicos**.
 
 **O número que dimensiona a decisão não é 37, é 10** — 27 dos 37 são identificador/enum e
-viram `texto` sem política. Das 10 restantes, **8 pedem uma capacidade que o catálogo não
-tem**: a marcação de *conteúdo livre* da D9.5 (prosa de LLM/humano sobre a conversa, que pode
-trazer qualquer PII). ⇒ **a D9.5 sobe de nota de rodapé a PRÉ-REQUISITO da migração.**
+viram `texto` sem política; as outras 10 pedem uma escolha de tipo.
+
+> ⛔ **CORRIGIDO no mesmo dia.** Escrevi aqui que **8 dos 10** *"pedem uma capacidade que o
+> catálogo não tem"* e que a **D9.5 subia a PRÉ-REQUISITO**. Falso: `ContextMapFieldSchema.tipo`
+> é `z.string()` validado contra o catálogo ⇒ **todo campo tem onde ser cadastrado**, `opaque`
+> inclusive. A D9.5 foi **depreciada pela própria D9** (o mecanismo que ela invocava não
+> existe: `detect_pattern` tem zero consumidores). **A migração não tem bloqueio.**
 
 **Validação cruzada:** os 7 `unknown` que a auditoria ao vivo acusou estão todos nesta lista.
 O censo é superconjunto estrito do que o tráfego achou, por um fator de ~5 — que é o próprio
@@ -212,11 +216,11 @@ argumento da D9.2 contra descobrir por observação.
 > tópico Kafka nem fixture. O que ele ainda não separa é *ler sem escritor* de *dead read*:
 > os 21 da segunda lista são uma pergunta em aberto, não um defeito medido.
 
-**Próximo passo, se a D9 for adiante:** decidir a marcação de conteúdo livre (D9.5) **antes**
-de escrever o extrator, porque 8 campos não têm onde ser cadastrados sem ela. O extrator, por
-sua vez, tem de nascer conhecendo as seis superfícies — o `cadastro2.py` do scratchpad é o
-protótipo, e as três correções que ele precisou (string JSON, `input.tag`, prefixo composto no
-gateway) são o teste que ele tem de passar.
+**Próximo passo, se a D9 for adiante:** escrever o extrator — não há decisão pendente antes
+dele. Ele tem de nascer conhecendo as seis superfícies; o `cadastro2.py` do scratchpad (hoje
+versionado em `infra/test/censo_contextstore_cadastro.py`) é o protótipo, e as três correções
+que ele precisou (string JSON, `input.tag`, prefixo composto no gateway) são o teste que ele
+tem de passar.
 
 ### Resíduos de AMBIENTE — não viajam no commit
 

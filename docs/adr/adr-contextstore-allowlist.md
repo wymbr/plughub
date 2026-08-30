@@ -639,7 +639,56 @@ segmento é id de runtime. O mapa já os trata como terceiro balde, e o cadastro
 a noção de **família registrada**, senão a lista nasce impossível de fechar e o número que
 autoriza a inversão vem inflado por campos que não podem ser declarados.
 
-#### D9.5 — Conteúdo LIVRE precisa de marcação própria
+#### D9.5 — ~~Conteúdo LIVRE precisa de marcação própria~~ — ⛔ **DEPRECIADA pela própria D9** *(2026-08-30, no mesmo dia)*
+
+> **Quem a depreca é a D9**, não a redefinição da V4 — a redefinição é consequência daquela.
+> E a forma é incomum o bastante para valer registro: **é uma sub-decisão superada pelo
+> PRÓPRIO PAI**. A D9.5 foi escrita junto com a D9, a partir da intuição pré-cadastro, e
+> afirmava *"o cadastro não basta"*. Medido, o cadastro basta.
+
+**As três medições que a derrubam:**
+
+1. **Todo campo TEM onde ser cadastrado.** `ContextMapFieldSchema.tipo` é `z.string()`
+   conferido contra o catálogo — o mapa aceita qualquer um dos 13 tipos, `opaque` inclusive.
+   A afirmação *"8 campos não têm onde ser cadastrados"* (escrita no censo de 2026-08-30 e
+   propagada para quatro arquivos) é **falsa**, e foi ela que promoveu esta decisão a
+   pré-requisito.
+2. **O mecanismo que ela invocava NÃO EXISTE.** Ela dizia que a metade de detecção do
+   catálogo *"deixa de ser complemento e vira a única defesa"*, como se bastasse ligá-la.
+   `formato.detect_pattern` tem **zero consumidores** — só declarações, no catálogo TS e
+   espelhadas no `seed.py`. O motor que de fato existe (`MaskingService.applyMasking`) lê
+   `MaskingRule.pattern`, roda em **um único sítio** (`tools/session.ts:472`) e **só sobre
+   mensagens do stream** — nunca sobre valor de ContextStore.
+3. **A D9 já resolve o que ela existia para resolver.** O defeito da §1.1 é *valor visível
+   **porque ninguém decidiu***. Sob o cadastro, escolher `texto` para um campo de prosa é
+   decisão explícita e auditável. Pode ser decisão RUIM — mas garantir que a decisão seja boa
+   nunca foi o contrato deste arco.
+
+**O que fica verdadeiro, e é mais estreito:** a declaração de um campo de prosa é uma APOSTA,
+não uma descrição. `tipo: cpf` é verdade sobre todo valor futuro daquele campo; `tipo: X` em
+`sugestao_resposta` é um palpite sobre conteúdo que ainda não existe. Isso não abre buraco no
+modelo — muda o que a TELA de cadastro deve **dizer** a quem escolhe. Afordância, não
+mecanismo.
+
+**Os dois sobreviventes NÃO são "D9.5 depois"** — são itens diferentes que apenas coabitavam
+aquela nota, e foram para casas próprias:
+
+| sobrevivente | onde foi parar |
+|---|---|
+| granularidade em prosa (*"mostre o útil, esconda o CPF que ele cita"*) | **feature nova**, não pendência: exige levar o motor de detecção ao caminho de leitura do ctx — segundo sítio de detecção para manter. Gatilho: o primeiro contato real em que um campo de prosa carregue valor não-vazio. Hoje **6 dos 8 têm zero dado**, e os 2 que têm são **template autorado com um buraco tipado** (`R$ {{@ctx.session.limite_solicitado}}`), não prosa |
+| classe LGPD para **não-cliente** (`session.reviewer_id`, usuário da plataforma) | decisão aberta #5 abaixo — é lacuna de CLASSE, não de detecção, e nada tem a ver com conteúdo livre |
+
+⚠️ **Risco que a versão original não via, e que sozinho já desaconselhava o caminho:**
+`session.summary` é lido em `DialogFormRenderer.tsx:232` a partir de
+`supervisorState.customer_context.context_snapshot` — **através da porta de masking**.
+Mascarar por default apaga a tela de aprovação, que é o *"troca vazamento de PII por quebra
+muda de UI"* do pré-requisito da V4.
+
+**Consequência prática: a migração da D9 deixa de ter bloqueio.** São 37 campos a cadastrar,
+o trabalho é escolher um tipo para cada, 27 são óbvios, e nenhum espera decisão de mecanismo.
+
+<!-- TEXTO ORIGINAL, mantido como registro do que se pensava:
+
 
 `caller.note` e `caller.observacao` são o caso em que **o cadastro não basta**: o campo está
 registrado, mas o *valor* pode trazer qualquer coisa. Anotação de agente é certeza em
@@ -664,6 +713,7 @@ conteúdo livre"* — e essa marcação é o que liga a detecção sobre ele.
 > cujo valor é uma **spec de mascaramento** (`{"numero_cartao": "last_4", …}`), política
 > guardada como dado — e **`session.reviewer_id`**, identidade de **usuário da plataforma**,
 > para a qual nenhuma das 5 classes LGPD do catálogo foi pensada.
+-->
 
 #### D9.6 — Tipagem e mascaramento resolvem-se no CADASTRO
 
@@ -762,10 +812,14 @@ declarado no read* e passa a ser sobre *tag não cadastrada no publish*.
    nos demos.
 4. **O destino de `linha_em_servico`**, criado hoje a partir de um fluxo de demonstração: a
    distinção finalidade × cadastro é boa; o tipo pode estar sobre-ajustado.
-5. **A marcação de conteúdo livre (D9.5)** — deixou de ser refinamento e passou a ser a
-   PRIMEIRA das quatro, porque 8 dos 37 campos não podem ser cadastrados sem ela.
+5. **Classe LGPD para não-cliente** — `session.reviewer_id` é identidade de USUÁRIO da
+   plataforma, e nenhuma das 5 classes foi pensada para isso. Lacuna de classe, pequena e
+   real. *(Sobreviveu à depreciação da D9.5, onde estava só coabitando.)*
 6. **`session.preview`** — política de mascaramento guardada como valor de tag. Decidir se
    isso continua morando no ContextStore antes de lhe dar um tipo.
+
+> ⚠️ A antiga #5 (*marcação de conteúdo livre*) **saiu**: a D9.5 foi depreciada pela própria
+> D9 no mesmo dia — ver acima. Nenhuma decisão de mecanismo bloqueia a migração.
 
 ## 3. As sete perguntas do briefing — respostas
 

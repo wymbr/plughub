@@ -82,19 +82,27 @@ Este é o número que dimensiona a decisão, e ele é bem menor que 37:
 | classe | n | o que decidir |
 |---|---|---|
 | identificador, enum ou controle interno | **27** | nada — é `texto`, sem política |
-| **conteúdo LIVRE** | **8** | ⚠️ **nenhum tipo do catálogo serve** |
+| **prosa** (LLM ou humano) | **8** | qual tipo — e é escolha, não bloqueio |
 | política guardada como dado (`session.preview`) | 1 | onde isso mora, se é que mora no ctx |
 | identidade de **usuário da plataforma** (`session.reviewer_id`) | 1 | nenhuma das 5 classes LGPD foi pensada para não-cliente |
 
-**São 10 decisões reais, e 8 delas pedem uma capacidade que o catálogo não tem** — a
-marcação de *conteúdo livre* que a **D9.5** nomeia. Os oito:
-`approval.summary` · `session.summary` · `session.parecer` · `session.resultado` ·
-`session.pergunta_coleta` · `session.copilot.sugestao_resposta` ·
-`session.copilot.acoes_recomendadas` · `session.copilot.flags_risco`.
+> ⛔ **CORRIGIDO no mesmo dia.** A versão original desta seção dizia que os 8 de prosa
+> *"pedem uma capacidade que o catálogo não tem"* e promovia a **D9.5** a pré-requisito.
+> **Falso**, e conferido: `ContextMapFieldSchema.tipo` é `z.string()` validado contra o
+> catálogo, então o mapa aceita qualquer um dos 13 tipos — `opaque` inclusive. **Todo campo
+> tem onde ser cadastrado.** O que nenhum tipo entrega é granularidade *dentro* da prosa
+> (mostrar o útil e esconder o CPF citado), e isso é limitação de UTILIDADE, não de
+> segurança. A D9.5 foi **depreciada pela própria D9** — ver o ADR.
+>
+> Duas medições que a corrigem: **(a)** dos 8, **6 têm ZERO dado** no store vivo e os 2 que
+> têm são **template autorado com um buraco tipado**
+> (`R$ {{@ctx.session.limite_solicitado}}`), não prosa — a sensibilidade deles é DERIVÁVEL
+> do buraco; **(b)** `session.summary` é lido através da porta de masking
+> (`DialogFormRenderer.tsx:232`), então mascarar por default **apaga a tela de aprovação**.
 
-Todos carregam prosa gerada por LLM ou redigida por humano, sobre uma conversa —
-podem trazer qualquer PII. Tipá-los `texto` seria **claro por declaração**, que é pior
-que claro por omissão: parece decidido.
+O que fica verdadeiro é mais estreito: declarar tipo num campo de prosa é uma **aposta**,
+não uma descrição. Isso muda o que a tela de cadastro deve DIZER a quem escolhe —
+afordância, não mecanismo.
 
 > ⚠️ **Precedente medido, não introduzido aqui:** os gêmeos `journey.parecer` e
 > `journey.resultado` **já estão no mapa como `texto`**. A lacuna é anterior a este
@@ -128,8 +136,10 @@ mas o **tipo é o mesmo** e a decisão é uma só.
 2. **D9.3 — a partição são TRÊS origens, não duas.** Plataforma (seed) × tenant
    (config) × **chamador** (corpo do webhook). A terceira não tem portão possível no
    publish; só resta a postura de runtime da D9.1 — grava, resolve restritivo e loga.
-3. **D9.5 sobe de nota de rodapé a pré-requisito.** É a única das quatro decisões
-   abertas que **bloqueia** a migração: 8 dos 37 não podem ser cadastrados sem ela.
+3. **D9.5 DEPRECIADA pela própria D9** *(corrigido no mesmo dia)*. Ela invocava um
+   mecanismo inexistente — `formato.detect_pattern` tem **zero consumidores**, e o motor
+   real roda num sítio só, sobre mensagens do stream, nunca sobre valor de ctx. **A
+   migração não tem bloqueio.**
 4. **A D9.8 ganha evidência.** As duas famílias `survey_*`/`surveyed_*` que ela citava
    como sintoma estão medidas, e o cadastro as colapsa.
 

@@ -212,9 +212,18 @@ requisição. Para essa origem sobra exclusivamente a postura de runtime da D9.1
 vigente (75 canônicas / 53 aliases) · **37 a cadastrar** · 21 lidos sem escritor conhecido.
 
 **O número que dimensiona a decisão é 10, não 37.** Vinte e sete dos 37 são identificador,
-enum ou controle interno e viram `texto` sem política. Das 10 restantes, **8 pedem uma
-capacidade que o catálogo não tem** — a marcação de *conteúdo livre* da **D9.5**, que por
-isso **sobe de nota de rodapé a pré-requisito da migração**: `approval.summary`,
+enum ou controle interno e viram `texto` sem política; as outras 10 pedem uma escolha de tipo.
+
+> ⛔ **CORRIGIDO no mesmo dia, e a correção é do dono.** Esta entrada dizia que **8 das 10**
+> *"pedem uma capacidade que o catálogo não tem"* e promovia a **D9.5** a pré-requisito.
+> **Falso.** `ContextMapFieldSchema.tipo` é `z.string()` validado contra o catálogo: o mapa
+> aceita qualquer um dos 13 tipos, `opaque` inclusive — **todo campo tem onde ser cadastrado**.
+> Pior, a D9.5 invocava um mecanismo que **não existe**: `formato.detect_pattern` tem **zero
+> consumidores**, e o motor real (`MaskingService.applyMasking`) roda num sítio só
+> (`tools/session.ts:472`), sobre **mensagens do stream**, nunca sobre valor de ctx.
+> A D9.5 foi **depreciada pela própria D9** — uma sub-decisão superada pelo próprio pai,
+> porque foi escrita a partir da intuição pré-cadastro. **A migração não tem bloqueio.**
+> A lista abaixo fica como registro de quais campos são de prosa: `approval.summary`,
 `session.summary`, `session.parecer`, `session.resultado`, `session.pergunta_coleta` e as
 três do copiloto carregam prosa de LLM ou de humano **sobre a conversa**, logo podem trazer
 qualquer PII, e tipá-las `texto` seria claro por DECLARAÇÃO — pior que claro por omissão,
