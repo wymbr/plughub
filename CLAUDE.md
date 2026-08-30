@@ -1265,8 +1265,14 @@ base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
 > `handoff-status` não estava só sem credencial: `ANALYTICS_API_URL` **nunca foi setada** no
 > agent-registry deste compose, então a chamada dava `fetch failed` e o `catch` a convertia em
 > *"0 sessões ativas"* — uma promoção com **24** sessões vivas parecia segura, e assim foi
-> desde sempre. Quem revelou não foi o portão: foi o `console.warn` acrescentado no ramo de
-> falha. **Todo caminho que degrada num número diz por que degradou.**
+> desde sempre. **Todo caminho que degrada num número diz por que degradou.**
+>
+> ⚠️ **E o achado NÃO era novo — ele estava escrito desde 2026-08-27**, com o mesmo
+> diagnóstico e **o mesmo conserto prescrito**, no `TODO.md`. Foi re-derivado do zero em
+> 08-30 porque ninguém procurou. Com o `TODO.md` em ~7 900 linhas, **achado que não é
+> procurado é achado que se paga duas vezes** — e a segunda vez pode contradizer a primeira
+> sem ninguém notar. Regra barata: **antes de registrar uma descoberta, `grep` do sintoma no
+> `TODO.md` e no `CHANGELOG.md`.**
 
 **Escrita de config exige portão; LEITURA de config nem sempre — e isso é decidido, não
 omitido.** `calendar-api` e `dialog-api` gateiam escrita (`config.calendars` / `config.dialog_forms`,

@@ -37,18 +37,34 @@ aquela tabela ganhar produtor, decidir se a leitura da própria plataforma é ac
 (instinto: é, e deve ser GRAVADA, nunca isenta). O ramo G do gate guarda a regressão mais
 tentadora — dar chave mestra ao serviço "para resolver de uma vez".
 
-### O defeito mais antigo, que só apareceu porque a degradação deixou de ser muda
+### O defeito mais antigo — e ele NÃO era novo *(corrigido logo após o commit)*
 
 `handoff-status` não estava só sem credencial. Ao acrescentar um `console.warn` no ramo de
 falha — porque *"um endpoint que existe para deploy seguro não pode devolver 0 em silêncio"* —
 o log respondeu na primeira execução: **`fetch failed`**, não 401. Medido: **`ANALYTICS_API_URL`
 nunca foi setada** para o agent-registry neste compose, então o default do código
 (`http://localhost:3500`) apontava para o próprio container. A chamada **jamais funcionou**, e
-o `catch {}` a convertia em `active_sessions: 0`.
+o `catch {}` a convertia em `active_sessions: 0` — uma promoção com **24** sessões vivas
+parecia segura, desde sempre.
 
-Ou seja: **uma promoção com 24 sessões vivas parecia segura, desde sempre.** A resposta certa,
-medida direto na analytics, era 24. O portão de credencial não revelou isso — quem revelou foi
-o aviso. *Todo caminho que degrada num número diz por que degradou.*
+⚠️ **A primeira versão desta entrada dizia que o aviso REVELOU o defeito. Falso, e a correção
+importa mais que o conserto.** Ele estava medido e escrito desde **2026-08-27**, no `TODO.md`,
+com o mesmo diagnóstico (env ausente · default que aponta para o próprio container · `catch {}`
+vazio · sempre 0), com a mesma classificação (*"fiação ausente + degradação muda, as duas
+famílias do `CLAUDE.md` no mesmo `try`"*) e com **exatamente o conserto que apliquei**:
+*"declarar a env no compose **e** fazer o `catch` dizer o que deixou de valer"*. Aquela seção
+até **anteviu** o problema de credencial: *"consertar a fiação a torna um dos chamadores
+header-less do inventário"*.
+
+O que o `console.warn` fez foi me levar de volta a uma conclusão já registrada, por um caminho
+mais caro. **O instrumento funcionou; a busca é que não aconteceu.** Com o `TODO.md` em ~7 900
+linhas, achado que não é procurado é achado que se paga duas vezes — e a segunda vez vem com o
+risco de contradizer a primeira sem ninguém notar. **Regra: antes de registrar uma descoberta,
+`grep` do sintoma no `TODO.md` e no `CHANGELOG.md`.** É barato, e teria poupado um ciclo aqui.
+
+O que segue verdadeiro sem emenda: o defeito era real, o conserto é o prescrito, e *todo
+caminho que degrada num número diz por que degradou* — foi por não dizer que ele durou três
+dias depois de diagnosticado.
 
 ### Gate
 

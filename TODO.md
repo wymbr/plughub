@@ -3904,7 +3904,18 @@ Conserto candidato: `pip install -e ".[dev]"` num estágio de teste do Dockerfil
 declarado em `infra/` que instale antes de rodar. Contorno de hoje:
 `pip install pytest pytest-asyncio httpx` dentro do container após cada build.
 
-### 🔴 `agent-registry` chama o analytics-api num endereço que é ele mesmo — `handoff-status` sempre 0 (medido 2026-08-27)
+### ✅ `agent-registry` chama o analytics-api num endereço que é ele mesmo — `handoff-status` sempre 0 — **RESOLVIDO 2026-08-30**
+
+> **O conserto foi EXATAMENTE o que esta seção prescrevia** (env no compose + `catch` que diz o
+> que deixou de valer), mais a credencial de serviço que ela anteviu. Medido depois:
+> `active_sessions` de 0 → **24**. Gate: `infra/test/probe_internal_service_callers.sh`, ramo B,
+> com testemunha positiva obrigatória (`> 0`) — porque o defeito ERA o zero.
+>
+> ⚠️ **Mas ele foi re-derivado do zero, sem que esta seção fosse lida** — três dias depois de
+> escrita, por um caminho mais caro (um `console.warn` novo em vez de um `grep`). O `CHANGELOG`
+> de 08-30 chegou a creditar o instrumento pela descoberta, e foi corrigido. A lição não é do
+> código: **achado que não é procurado é achado que se paga duas vezes**, e num `TODO.md` de
+> ~7 900 linhas isso é o caso comum, não o raro.
 
 `routes/skills.ts:594` monta `${config.analytics_api_url}/reports/sessions` para contar sessões ativas
 antes de um deploy. O `docker-compose.demo.yml` **não declara `ANALYTICS_API_URL` para o
