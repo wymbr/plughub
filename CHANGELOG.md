@@ -1,5 +1,74 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+
+## Censo de cadastro do ContextStore — a lista da D9 por análise estática, e o extrator que NÃO é um walker de YAML (2026-08-30)
+
+A [D9](docs/adr/adr-contextstore-allowlist.md) **afirmava** que a população de tags do
+ContextStore é estaticamente enumerável e que a lista de migração era produzível hoje.
+Estava medida só a metade fácil (21 escritas em YAML, todas literais). Esta entrega mede
+o resto e produz a lista: [`docs/product/contextstore-cadastro-censo.md`](docs/product/contextstore-cadastro-censo.md),
+com o instrumento versionado em `infra/test/censo_contextstore_cadastro.py`.
+
+**A premissa sobrevive — `DINAMICOS: 0`** em 42 skills e em todos os escritores de
+plataforma. Os dois únicos casos de composição são `segment.{segId}.<folha literal>`, a
+FAMÍLIA que a D9.4 já prevê. **O zero foi conferido por mutação**: um nome composto em
+runtime leva o contador a 1 e nomeia o sítio. Sem isso ele seria indistinguível de um
+detector morto — o modo de falha que este repositório cataloga como *"teste que não pode
+reprovar"*.
+
+**Mas ela é verdadeira por um motivo diferente do que a D9 supôs, e a diferença muda o
+desenho do portão.**
+
+**(1) O extrator NÃO é um walker de YAML.** A D9 contava DUAS superfícies de autoria; são
+**SEIS**, e quatro não aparecem caminhando a árvore: `context_json` é uma **string JSON**
+dentro do YAML (7 skills, 15 nomes); `invoke tool: context_set`/`context_write` guardam o
+nome em `input.tag`, um campo de step como outro qualquer; `delegate.context`/
+`collect.context` têm o prefixo `session.` **composto no gateway** (`webhook.py:1695`,
+`:2721`), logo o nome final não existe no arquivo. Um portão escrito da forma óbvia ficaria
+**verde com quatro superfícies passando por baixo** — fail-open por INVISIBILIDADE, que é o
+*valor plausível* do lado do instrumento. As três correções estão declaradas no cabeçalho do
+script como o teste que qualquer reescrita tem de passar; cada uma nasceu de um falso
+negativo desta própria sessão.
+
+**(2) São TRÊS origens, não duas.** A D9.3 partia plataforma × tenant. Falta o **chamador**:
+`POST /v1/channels/webhook/pool/{id}` traz um objeto `context` e o gateway escreve **cada
+chave verbatim, sem prefixo** (`webhook.py:630`). É de lá que vêm as duas únicas tags **sem
+namespace nenhum** — `campaign_id` e `target_pool`, lidas por quatro skills — e a rota é
+anônima por construção. Nenhuma análise estática de artefato a alcança: o nome só existe na
+requisição. Para essa origem sobra exclusivamente a postura de runtime da D9.1.
+
+**Os números:** 91 nomes escritos (61 tenant · 35 plataforma) · 54 já cobertos pelo mapa
+vigente (75 canônicas / 53 aliases) · **37 a cadastrar** · 21 lidos sem escritor conhecido.
+
+**O número que dimensiona a decisão é 10, não 37.** Vinte e sete dos 37 são identificador,
+enum ou controle interno e viram `texto` sem política. Das 10 restantes, **8 pedem uma
+capacidade que o catálogo não tem** — a marcação de *conteúdo livre* da **D9.5**, que por
+isso **sobe de nota de rodapé a pré-requisito da migração**: `approval.summary`,
+`session.summary`, `session.parecer`, `session.resultado`, `session.pergunta_coleta` e as
+três do copiloto carregam prosa de LLM ou de humano **sobre a conversa**, logo podem trazer
+qualquer PII, e tipá-las `texto` seria claro por DECLARAÇÃO — pior que claro por omissão,
+porque parece decidido. *(Precedente que o censo apenas CONTA e não introduz:
+`journey.parecer` e `journey.resultado` já estão no mapa como `texto`.)* As outras duas:
+`session.preview`, cujo valor é uma **spec de mascaramento** (política guardada como dado), e
+`session.reviewer_id`, identidade de **usuário da plataforma**, para a qual nenhuma das 5
+classes LGPD foi pensada.
+
+**Validação cruzada:** os 7 `unknown` que a auditoria ao vivo acusou nos quatro fluxos de
+smoke estão **todos** nesta lista. O censo é superconjunto estrito do que o tráfego achou,
+por um fator de ~5 — que é o próprio argumento da D9.2 contra descobrir por observação.
+
+**Duas reduções que a lista permite**, ambas medidas e não supostas: a família
+`session.survey_*` (gateway, `collect_engage`) × `session.surveyed_*` (bridge,
+`on_human_end`) é **um fato com duas grafias** em sessões diferentes — colapsa em aliases da
+mesma canônica, como `caller.cpf` × `session.cpf`; e `session.parecer`/`session.resultado`
+espelham os gêmeos de `journey.*`, com tipo idêntico e decisão única.
+
+Achados corrigidos por medição no caminho: `session.approval_threshold` não é valor
+financeiro (é o enum `"possessed"`, classe de verificação de âncora) e `session.round_echoed`
+não é fixture (é o número da rodada de revisão, escrito por código de produção da
+evaluation-api). Os dois teriam sido classificados errado pelo nome.
+
+
 ## Decisão #5 — o subsistema `platform_permissions` sai, e o template fica como preset (2026-08-30)
 
 Havia **duas** respostas para *"quais permissões esta pessoa tem?"* dentro do auth-api: a matriz

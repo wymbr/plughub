@@ -175,32 +175,48 @@ Além das duas dissolvidas no topo:
   do backend"*. É a regra da casa outra vez: **um censo desenhado para um eixo não prova nada
   sobre o eixo vizinho** — aqui, o mesmo eixo com um serviço fora da varredura.
 
-## 🧭 Próxima tarefa da D9 e resíduos de ambiente *(2026-08-30, escrito antes de compactar)*
+## 🧭 Censo de cadastro da D9 — ✅ FEITO *(2026-08-30)* e resíduos de ambiente
 
-### A tarefa: produzir a LISTA DE CADASTRO por análise estática
+### O resultado: [`docs/product/contextstore-cadastro-censo.md`](docs/product/contextstore-cadastro-censo.md)
 
-A D9 **afirma** que a população de tags é estaticamente enumerável e que a migração é
-"limitada e medível". Está medida só a metade fácil — **21 escritas em YAML, todas literais,
-zero nome dinâmico** (`packages/skill-flow-engine/skills/`). O resto foi **assumido**, e é
-exatamente o que precisa ser provado antes de escrever o portão:
+**A premissa da D9.2 sobrevive — ZERO nomes dinâmicos** em 42 skills e em todos os escritores
+de plataforma. Os dois casos de composição são `segment.{segId}.<folha literal>`, a FAMÍLIA
+que a D9.4 já prevê.
 
-1. **Escritores de código de PLATAFORMA** — channel-gateway (`ctx_writes`), orchestrator-bridge,
-   routing-engine, mcp-server, ai-gateway: algum compõe chave em runtime? Se sim, a
-   enumerabilidade quebra **do lado que o portão de publish não alcança**, e a D9 precisa de
-   emenda antes de virar código.
-2. **Superfícies de autoria não varridas**: `context_tags.outputs` (anotação em
-   `reason`/`invoke`/`notify`) e `collect.context`.
-3. **A partição plataforma × tenant** — é o que decide se o cadastro nasce com 20 linhas ou 200.
+**Mas ela é verdadeira por um motivo diferente do que a D9 supôs.** A D9 contava DUAS
+superfícies de autoria; são **SEIS**, e quatro são invisíveis a um caminhador de árvore de
+YAML — `context_json` é uma **string JSON**, e `context_set`/`context_write` guardam o nome em
+`input.tag`, um campo de step como outro qualquer. Um portão de publish escrito da forma óbvia
+ficaria **verde com quatro superfícies passando por baixo**: fail-open por INVISIBILIDADE, não
+por decisão. É a família do *valor plausível*, do lado do instrumento.
 
-**Entrega:** lista de registro com origem, `atributo` proposto por campo, famílias dinâmicas
-separadas, e o número que importa — **quantos campos ficam sem tipo óbvio**, que é o trabalho
-real de decisão.
+E há a **terceira origem** que a D9.3 não previa: o **corpo HTTP do webhook**
+(`webhook.py:630` escreve cada chave verbatim, sem prefixo) — é assim que existem as duas
+únicas tags sem namespace nenhum, `campaign_id` e `target_pool`. Nenhum portão de publish a
+alcança; sobra a postura de runtime da D9.1.
 
-**Método, para não repetir o erro do mapa:** o censo SOBRE-COLETA por natureza (a varredura de
-08-30 acusou tópicos Kafka, nomes de evento e fixtures como se fossem tags). Ele gera
-HIPÓTESE; fato é a auditoria, que lê chaves de hash reais. Ferramentas já escritas nesta
-sessão, se ainda existirem no scratchpad: `censo_alias.py` (grafias × canônicas) e
-`classificar.py` (grafias × domínios candidatos).
+**Os números:** 91 nomes escritos (61 tenant · 35 plataforma) · 54 já cobertos ·
+**37 a cadastrar** · 21 lidos sem escritor · **0 dinâmicos**.
+
+**O número que dimensiona a decisão não é 37, é 10** — 27 dos 37 são identificador/enum e
+viram `texto` sem política. Das 10 restantes, **8 pedem uma capacidade que o catálogo não
+tem**: a marcação de *conteúdo livre* da D9.5 (prosa de LLM/humano sobre a conversa, que pode
+trazer qualquer PII). ⇒ **a D9.5 sobe de nota de rodapé a PRÉ-REQUISITO da migração.**
+
+**Validação cruzada:** os 7 `unknown` que a auditoria ao vivo acusou estão todos nesta lista.
+O censo é superconjunto estrito do que o tráfego achou, por um fator de ~5 — que é o próprio
+argumento da D9.2 contra descobrir por observação.
+
+> ⚠️ **O aviso de sobre-coleta continua valendo, mas mudou de forma.** Este censo é
+> ESTRUTURAL (caminha o YAML e conhece cada superfície), não `grep` — por isso não acusou
+> tópico Kafka nem fixture. O que ele ainda não separa é *ler sem escritor* de *dead read*:
+> os 21 da segunda lista são uma pergunta em aberto, não um defeito medido.
+
+**Próximo passo, se a D9 for adiante:** decidir a marcação de conteúdo livre (D9.5) **antes**
+de escrever o extrator, porque 8 campos não têm onde ser cadastrados sem ela. O extrator, por
+sua vez, tem de nascer conhecendo as seis superfícies — o `cadastro2.py` do scratchpad é o
+protótipo, e as três correções que ele precisou (string JSON, `input.tag`, prefixo composto no
+gateway) são o teste que ele tem de passar.
 
 ### Resíduos de AMBIENTE — não viajam no commit
 

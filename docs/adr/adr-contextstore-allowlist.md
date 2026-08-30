@@ -595,6 +595,20 @@ tráfego, esperar aparecer, repetir até secar) e passa a ser de **análise est�
 artefatos no publish). O *loop-until-dry* que a fase anterior exigia **deixa de ser
 necessário**, e a lista de migração é produzível hoje.
 
+> ✅ **CONFIRMADA, e a lista foi produzida** — censo de 2026-08-30 em
+> [`docs/product/contextstore-cadastro-censo.md`](../product/contextstore-cadastro-censo.md):
+> **91 nomes escritos, 0 dinâmicos**, 37 a cadastrar. Os dois únicos casos de composição são
+> `segment.{segId}.<folha literal>` — a família da D9.4.
+>
+> ⚠️ **Emenda de MÉTODO, e ela é load-bearing: o extrator NÃO é um walker de YAML.** A D9
+> contava duas superfícies de autoria; são **seis**, e quatro não aparecem caminhando a
+> árvore — `context_json` é uma **string JSON** dentro do YAML (7 skills, 15 nomes),
+> `context_set`/`context_write` guardam o nome em `input.tag` (um campo de step como outro),
+> `delegate.context`/`collect.context` têm o prefixo `session.` **composto no gateway** (o
+> nome final não está no arquivo), e o resto é literal em código de plataforma. Um portão
+> escrito da forma óbvia ficaria verde com quatro superfícies passando por baixo: **fail-open
+> por invisibilidade**, que é o *valor plausível* do lado do instrumento.
+
 #### D9.3 — O cadastro tem DUAS origens, não uma
 
 Boa parte das tags é escrita por **código de plataforma** — channel-gateway (`ctx_writes`),
@@ -608,6 +622,15 @@ alcança esses.
 
 Mesma partição de `infra/modules.yaml` × config por tenant. Sem ela, o portão pareceria
 fechado e metade dos escritores passaria por fora.
+
+> ⚠️ **EMENDA (censo de 2026-08-30): são TRÊS origens, e a terceira não tem portão.** O corpo
+> HTTP do webhook (`POST /v1/channels/webhook/pool/{id}`) traz um objeto `context` e o
+> gateway escreve **cada chave verbatim, sem prefixo** (`webhook.py:630`). É por aí que
+> existem as duas únicas tags **sem namespace nenhum** — `campaign_id` e `target_pool`,
+> lidas por quatro skills —, e a rota é anônima por construção. Nenhuma análise estática de
+> artefato a alcança: o nome só existe em runtime, na requisição. Para esta origem sobra
+> exclusivamente a postura de runtime da **D9.1** — grava, resolve restritivo, LOGA. O
+> cadastro pode declarar o que ela tem PERMISSÃO de escrever; não pode impedir na origem.
 
 #### D9.4 — Prefixos dinâmicos continuam FAMÍLIA, nunca folha
 
@@ -625,6 +648,22 @@ produção, não hipótese.
 É onde a metade de **DETECÇÃO** do catálogo (`formato.detect_pattern`) deixa de ser
 complemento e vira a única defesa. O cadastro é o lugar certo para declarar *"este campo é
 conteúdo livre"* — e essa marcação é o que liga a detecção sobre ele.
+
+> ⚠️ **PROMOVIDA A PRÉ-REQUISITO pelo censo de 2026-08-30.** Ela era nota de rodapé sobre
+> `caller.note`; medida, é **o que bloqueia a migração**. Dos 37 campos a cadastrar, 27 são
+> identificador/enum e viram `texto` sem política — mas **8 não têm onde ser cadastrados**:
+> `approval.summary` · `session.summary` · `session.parecer` · `session.resultado` ·
+> `session.pergunta_coleta` · `session.copilot.sugestao_resposta` ·
+> `session.copilot.acoes_recomendadas` · `session.copilot.flags_risco`. Todos carregam prosa
+> de LLM ou de humano **sobre a conversa**, logo podem trazer qualquer PII, e nenhum dos 13
+> tipos serve. Tipá-los `texto` seria **claro por DECLARAÇÃO** — pior que claro por omissão,
+> porque parece decidido. *(Precedente que o censo apenas CONTA, não introduz:
+> `journey.parecer` e `journey.resultado` já estão no mapa como `texto`.)*
+>
+> Dois casos que não são conteúdo livre e mesmo assim não têm tipo: **`session.preview`** —
+> cujo valor é uma **spec de mascaramento** (`{"numero_cartao": "last_4", …}`), política
+> guardada como dado — e **`session.reviewer_id`**, identidade de **usuário da plataforma**,
+> para a qual nenhuma das 5 classes LGPD do catálogo foi pensada.
 
 #### D9.6 — Tipagem e mascaramento resolvem-se no CADASTRO
 
@@ -723,6 +762,10 @@ declarado no read* e passa a ser sobre *tag não cadastrada no publish*.
    nos demos.
 4. **O destino de `linha_em_servico`**, criado hoje a partir de um fluxo de demonstração: a
    distinção finalidade × cadastro é boa; o tipo pode estar sobre-ajustado.
+5. **A marcação de conteúdo livre (D9.5)** — deixou de ser refinamento e passou a ser a
+   PRIMEIRA das quatro, porque 8 dos 37 campos não podem ser cadastrados sem ela.
+6. **`session.preview`** — política de mascaramento guardada como valor de tag. Decidir se
+   isso continua morando no ContextStore antes de lhe dar um tipo.
 
 ## 3. As sete perguntas do briefing — respostas
 
