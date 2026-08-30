@@ -114,26 +114,36 @@ export type ContextMap = z.infer<typeof ContextMapSchema>
  * ── Critério de SEMEADURA: só o que é tipável com confiança ──────────────────
  *
  * Campo medido cujo tipo não existe no catálogo **fica de fora**, de propósito.
- * `session.vencimento_cartao` é o caso: as regras vivas o mascaram (`last_2`) e
- * nenhum tipo do catálogo serve — `credit_card` é `last_4` e num `MM/AA` isso
- * mostraria quase tudo, que é o mesmo argumento pelo qual a T6 recusou reusar
- * `credit_card` para o CVV.
- *
- * Declarar um tipo aproximado ali seria escrever no mapa uma política que ninguém
+ * Declarar um tipo aproximado seria escrever no mapa uma política que ninguém
  * decidiu, e a V4 a aplicaria. Deixar de fora faz a **auditoria acusar o campo**,
  * que é o comportamento pretendido: o mapa é medido pelo que falta nele, e a V4
- * não pode virar a chave enquanto a lista não fechar. A lacuna é do CATÁLOGO, e
- * fecha-se lá.
+ * não pode virar a chave enquanto a lista não fechar.
+ *
+ * ✅ **O caso que originou o critério FECHOU em 2026-08-30.**
+ * `session.vencimento_cartao` ficou fora da V3 porque nenhum dos 11 tipos servia —
+ * `credit_card` é `last_4` e sobre `MM/AA` mostraria quase tudo (o argumento pelo
+ * qual a T6 recusou reusá-lo no CVV). A lacuna era do CATÁLOGO e foi fechada LÁ,
+ * com o tipo `card_expiry`; só então o campo entrou aqui, como
+ * `session.cartao.vencimento`. **A ordem é o critério**: catálogo primeiro, mapa
+ * depois — nunca o inverso.
  *
  * ── Achado de exposição que o censo produziu (dano a medir, não presumir) ────
  *
- * `session.numero_atual` guarda o **telefone** do cliente (linha atual, fluxo de
- * portabilidade — `agente_portabilidade_intake_v1.yaml:445`, `confidence: 1.0`) e
+ * `session.numero_atual` guarda um **telefone** (a linha sendo portada — fluxo de
+ * portabilidade, `agente_portabilidade_intake_v1.yaml:445`, `confidence: 1.0`) e
  * **não casa nenhuma das 23 regras** do tenant: `*.telefone` exige sufixo
  * `.telefone`, e não há catch-all de `session.*` (não pode haver — derrubaria a
- * tela de aprovação). Cai no `default_unmatched_operator: "plain"` e é exibido em
- * CLARO ao operador. É a §1.1 do ADR acontecendo num campo concreto. Aqui ele é
- * declarado `phone`; o conserto durável é a V4.
+ * tela de aprovação). Cai no `default_unmatched_operator: "plain"`. É a §1.1 do ADR
+ * acontecendo num campo concreto.
+ *
+ * ⚠️ **E o desfecho foi o OPOSTO do previsto, por decisão do dono (2026-08-30).**
+ * A V3 o declarou `phone`, presumindo que exibi-lo em claro fosse o defeito. Medido
+ * ao decidir: este número não é dado de CADASTRO, é o **objeto do atendimento** — o
+ * operador não conclui uma portabilidade sem vê-lo. O campo segue em claro, agora
+ * **declarado** como tal (`tipo: "linha_em_servico"`), e não mais por omissão.
+ * A §1.1 continua valendo: o defeito nunca foi o valor visível, foi o valor visível
+ * porque **ninguém decidiu**. Ver o tipo em `audit.ts` — a finalidade entrou como
+ * TIPO, e não como exceção de regra, para que mapa e regra não deem duas respostas.
  */
 export const DEFAULT_CONTEXT_MAP: ContextMap = {
   mode:             "audit",
@@ -149,7 +159,7 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         customer_id:       { tipo: "texto",      legado: ["caller.customer_id", "session.customer_id"],
                              label: "ID interno — não-PII, necessário p/ histórico/360" },
         account_id:        { tipo: "texto",      legado: ["caller.account_id"] },
-        motivo_contato:    { tipo: "texto",      legado: ["caller.motivo_contato"] },
+        motivo_contato:    { tipo: "texto",      legado: ["caller.motivo_contato", "session.motivo_contato"] },
         intencao_primaria: { tipo: "texto",      legado: ["caller.intencao_primaria"] },
         sentimento_atual:  { tipo: "texto",      legado: ["caller.sentimento_atual"] },
       },
@@ -161,7 +171,23 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       // ── Pacote de aprovação (aumento de limite) — hoje achatado em `session.*` ──
       cartao: {
         numero:            { tipo: "credit_card", legado: ["session.numero_cartao"] },
-        cpf_titular:       { tipo: "cpf",         legado: ["session.cpf_titular"] },
+        // `cpf`, e não `cpf_titular` (decisão do dono, 2026-08-30): o discriminador
+        // mora no segmento de DOMÍNIO, nunca no nome da folha. Medido — o casador de
+        // regra NÃO tem glob de meio (`context-masking.ts:80-160` aceita exato,
+        // `*.sufixo`, `prefixo.*` e `*`), então um `*cpf*` seria regra INERTE, sem
+        // nada ficar vermelho. Com a canônica terminando em `.cpf`, o glob genérico
+        // já a cobre: princípio e mecanismo coincidem.
+        //
+        // ⚠️ A grafia legada NÃO tem produtor — o campo de tela saiu do formulário e
+        // foi substituído por `vencimento_cartao` (`skill_limite_processo_v1.yaml:88-91`;
+        // o form vivo tem 4 campos e nenhum é ele). O alias fica para que o CONTADOR
+        // prove o fóssil extinto em vez de nós afirmarmos: apagá-lo faria a tag, se
+        // algum tenant ainda a escrever, cair em "não declarada" sem ninguém saber
+        // que ela já fora prevista.
+        cpf:               { tipo: "cpf",         legado: ["session.cpf_titular"] },
+        // Entrou em 2026-08-30, junto do tipo `card_expiry`. Ver o critério de
+        // semeadura no cabeçalho: o campo esperava TIPO, não decisão.
+        vencimento:        { tipo: "card_expiry", legado: ["session.vencimento_cartao"] },
         limite_solicitado: { tipo: "financial",   legado: ["session.limite_solicitado"] },
         limite_aprovado:   { tipo: "financial",   legado: ["session.limite_aprovado"] },
       },
@@ -194,25 +220,33 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       // POLÍTICA (`operator: hidden`) e a mesma CLASSE do tipo. O catálogo declara
       // que dois campos com política e classe iguais são UM tipo — inventar um
       // `token` seria o oitavo inventário.
+      // ⚠️ As grafias `session.*` PLANAS abaixo não são cosmética: são o que o código
+      // realmente escreve. A V3 declarou as canônicas e deixou 13 folhas SEM `legado`,
+      // então a grafia viva caía em `unknown` — medido em 2026-08-30, com tráfego real,
+      // e `session.dialog_form_id`/`session.decisions` entre elas. Inverter a V4 assim
+      // derrubaria a tela de aprovação em silêncio, que é exatamente o que o seed do
+      // config-api avisa por escrito. Os aliases vêm do CENSO DE PRODUTORES
+      // (`ctx_writes` do channel-gateway + escritas do bridge + `tag:` dos YAML), não
+      // de semelhança de nome.
       workflow: {
-        dialog_form_id:        { tipo: "texto" },
+        dialog_form_id:        { tipo: "texto", legado: ["session.dialog_form_id"] },
         resume_token:          { tipo: "credential", legado: ["session.workflow_resume_token"] },
         delegate_resume_token: { tipo: "credential", legado: ["session.delegate_resume_token"] },
         current_round:         { tipo: "texto" },
         max_rounds:            { tipo: "texto" },
-        decisions:             { tipo: "texto" },
-        origin_session_id:     { tipo: "texto" },
-        briefing_session_id:   { tipo: "texto" },
+        decisions:             { tipo: "texto", legado: ["session.decisions"] },
+        origin_session_id:     { tipo: "texto", legado: ["session.origin_session_id"] },
+        briefing_session_id:   { tipo: "texto", legado: ["session.briefing_session_id"] },
       },
       contato: {
-        close_origin:               { tipo: "texto" },
-        contact_channel:            { tipo: "texto" },
-        contact_identifier:         { tipo: "texto" },
+        close_origin:               { tipo: "texto", legado: ["session.close_origin"] },
+        contact_channel:            { tipo: "texto", legado: ["session.contact_channel"] },
+        contact_identifier:         { tipo: "texto", legado: ["session.contact_identifier"] },
         contact_outcome:            { tipo: "texto" },
         customer_present:           { tipo: "texto" },
-        customer_participant_id:    { tipo: "texto" },
-        human_agent_participant_id: { tipo: "texto" },
-        confirmation_channel:       { tipo: "texto" },
+        customer_participant_id:    { tipo: "texto", legado: ["session.customer_participant_id"] },
+        human_agent_participant_id: { tipo: "texto", legado: ["session.human_agent_participant_id"] },
+        confirmation_channel:       { tipo: "texto", legado: ["session.confirmation_channel"] },
       },
       survey: {
         form_id:             { tipo: "texto" },
@@ -224,12 +258,15 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         target_id:           { tipo: "texto" },
         customer_key:        { tipo: "texto" },
         agent_key:           { tipo: "texto" },
-        surveyed_agent_key:  { tipo: "texto" },
-        surveyed_segment_id: { tipo: "texto" },
+        surveyed_agent_key:  { tipo: "texto", legado: ["session.surveyed_agent_key"] },
+        surveyed_segment_id: { tipo: "texto", legado: ["session.surveyed_segment_id"] },
       },
       portabilidade: {
-        // Telefone. Ver o achado de exposição no cabeçalho.
-        numero_atual:      { tipo: "phone", legado: ["session.numero_atual"] },
+        // `linha_em_servico`, não `phone` — decisão do dono, 2026-08-30: é a linha
+        // SENDO PORTADA, objeto do atendimento e não dado de cadastro. O telefone de
+        // CADASTRO continua protegido, em `session.cliente.telefone`. Ver o achado de
+        // exposição no cabeçalho e o tipo em `audit.ts`.
+        numero_atual:      { tipo: "linha_em_servico", legado: ["session.numero_atual"] },
         operadora_destino: { tipo: "texto", legado: ["session.operadora_destino"] },
       },
       reembolso: {

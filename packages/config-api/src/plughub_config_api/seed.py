@@ -690,6 +690,40 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "lgpd": "nao_classificado",
                     "declared_only": True,
                 },
+                # card_expiry — vencimento do cartao (MM/AA). Acrescentado em
+                # 2026-08-30: o campo ja tinha POLITICA VIVA (`session.vencimento_cartao`
+                # e `*.vencimento_cartao` mascaram `last_2`) e nenhum tipo casava
+                # mascara E classe. Nao e `credit_card` (last_4 sobre `1226` devolve
+                # tudo) nem `cpf` (a classe difere: financeiro x pessoal).
+                # Sem `detect_pattern` de proposito: `\d{2}/\d{2}` casaria qualquer data.
+                # TIPO DE LEITURA, nunca de coleta — ver o comentario em audit.ts.
+                {
+                    "id": "card_expiry", "label": "Vencimento do cartão (MM/AA)", "icon": "📅",
+                    "formato": {"display": "##/##"},
+                    "mascara": {
+                        "by_role": {"operator": "last_2"},
+                        "display": {"display_screen": "display_partial", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": True},
+                    },
+                    "lgpd": "financeiro",
+                    "declared_only": True,
+                },
+                # linha_em_servico — telefone que e o OBJETO do atendimento (a linha
+                # sendo portada), nao dado de cadastro. Primeiro tipo cuja razao de
+                # existir e a FINALIDADE e nao o formato (decisao do dono, 2026-08-30).
+                # `lgpd` continua `pessoal`: o que se declara vazio e a MASCARA, nunca
+                # a CLASSE — um relatorio LGPD tem de seguir dizendo que um telefone
+                # foi coletado. `declared_only` e exigencia: a deteccao olha o VALOR, e
+                # o valor nao diz a finalidade (D5 do ADR do `masked` tipado).
+                # `by_role` vazio => INELEGIVEL a `masked:`, como o `texto`.
+                {
+                    "id": "linha_em_servico",
+                    "label": "Linha em serviço (telefone que é objeto do atendimento)", "icon": "📱",
+                    "formato": {"display": "(##) #####-####"},
+                    "mascara": {"by_role": {}},
+                    "lgpd": "pessoal",
+                    "declared_only": True,
+                },
                 # texto — o tipo que NAO faz nada (V3 do arco ALLOWLIST). Existe
                 # porque o MAPA do ContextStore declara todo campo, e a maioria e
                 # encanamento sem PII (`session.pool.id`, `session.survey.grain`).
@@ -750,7 +784,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                         "email": {"tipo": "email_addr", "legado": ["caller.email"]},
                         "customer_id": {"tipo": "texto", "legado": ["caller.customer_id", "session.customer_id"], "label": "ID interno — não-PII, necessário p/ histórico/360"},
                         "account_id": {"tipo": "texto", "legado": ["caller.account_id"]},
-                        "motivo_contato": {"tipo": "texto", "legado": ["caller.motivo_contato"]},
+                        "motivo_contato": {"tipo": "texto", "legado": ["caller.motivo_contato", "session.motivo_contato"]},
                         "intencao_primaria": {"tipo": "texto", "legado": ["caller.intencao_primaria"]},
                         "sentimento_atual": {"tipo": "texto", "legado": ["caller.sentimento_atual"]}
                     },
@@ -760,7 +794,8 @@ _SEED: list[tuple[str, str, object, str]] = [
                     },
                     "cartao": {
                         "numero": {"tipo": "credit_card", "legado": ["session.numero_cartao"]},
-                        "cpf_titular": {"tipo": "cpf", "legado": ["session.cpf_titular"]},
+                        "cpf": {"tipo": "cpf", "legado": ["session.cpf_titular"]},
+                        "vencimento": {"tipo": "card_expiry", "legado": ["session.vencimento_cartao"]},
                         "limite_solicitado": {"tipo": "financial", "legado": ["session.limite_solicitado"]},
                         "limite_aprovado": {"tipo": "financial", "legado": ["session.limite_aprovado"]}
                     },
@@ -786,24 +821,24 @@ _SEED: list[tuple[str, str, object, str]] = [
                         "proximos_passos": {"tipo": "texto"}
                     },
                     "workflow": {
-                        "dialog_form_id": {"tipo": "texto"},
+                        "dialog_form_id": {"tipo": "texto", "legado": ["session.dialog_form_id"]},
                         "resume_token": {"tipo": "credential", "legado": ["session.workflow_resume_token"]},
                         "delegate_resume_token": {"tipo": "credential", "legado": ["session.delegate_resume_token"]},
                         "current_round": {"tipo": "texto"},
                         "max_rounds": {"tipo": "texto"},
-                        "decisions": {"tipo": "texto"},
-                        "origin_session_id": {"tipo": "texto"},
-                        "briefing_session_id": {"tipo": "texto"}
+                        "decisions": {"tipo": "texto", "legado": ["session.decisions"]},
+                        "origin_session_id": {"tipo": "texto", "legado": ["session.origin_session_id"]},
+                        "briefing_session_id": {"tipo": "texto", "legado": ["session.briefing_session_id"]}
                     },
                     "contato": {
-                        "close_origin": {"tipo": "texto"},
-                        "contact_channel": {"tipo": "texto"},
-                        "contact_identifier": {"tipo": "texto"},
+                        "close_origin": {"tipo": "texto", "legado": ["session.close_origin"]},
+                        "contact_channel": {"tipo": "texto", "legado": ["session.contact_channel"]},
+                        "contact_identifier": {"tipo": "texto", "legado": ["session.contact_identifier"]},
                         "contact_outcome": {"tipo": "texto"},
                         "customer_present": {"tipo": "texto"},
-                        "customer_participant_id": {"tipo": "texto"},
-                        "human_agent_participant_id": {"tipo": "texto"},
-                        "confirmation_channel": {"tipo": "texto"}
+                        "customer_participant_id": {"tipo": "texto", "legado": ["session.customer_participant_id"]},
+                        "human_agent_participant_id": {"tipo": "texto", "legado": ["session.human_agent_participant_id"]},
+                        "confirmation_channel": {"tipo": "texto", "legado": ["session.confirmation_channel"]}
                     },
                     "survey": {
                         "form_id": {"tipo": "texto"},
@@ -815,11 +850,11 @@ _SEED: list[tuple[str, str, object, str]] = [
                         "target_id": {"tipo": "texto"},
                         "customer_key": {"tipo": "texto"},
                         "agent_key": {"tipo": "texto"},
-                        "surveyed_agent_key": {"tipo": "texto"},
-                        "surveyed_segment_id": {"tipo": "texto"}
+                        "surveyed_agent_key": {"tipo": "texto", "legado": ["session.surveyed_agent_key"]},
+                        "surveyed_segment_id": {"tipo": "texto", "legado": ["session.surveyed_segment_id"]}
                     },
                     "portabilidade": {
-                        "numero_atual": {"tipo": "phone", "legado": ["session.numero_atual"]},
+                        "numero_atual": {"tipo": "linha_em_servico", "legado": ["session.numero_atual"]},
                         "operadora_destino": {"tipo": "texto", "legado": ["session.operadora_destino"]}
                     },
                     "reembolso": {

@@ -1,5 +1,229 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Decisão #5 — o subsistema `platform_permissions` sai, e o template fica como preset (2026-08-30)
+
+Havia **duas** respostas para *"quais permissões esta pessoa tem?"* dentro do auth-api: a matriz
+plana `auth.platform_permissions` (com CRUD, resolvedor e um `apply_template` que a materializava)
+e o `auth.users.module_config`, que é o que o verificador canônico `plughub_authz` lê. Só a segunda
+decide alguma coisa.
+
+### Medido antes de remover
+
+| | medição |
+|---|---|
+| `auth.platform_permissions` | **0 linhas** (base viva) |
+| `auth.permission_templates` | **0 linhas** |
+| consumidores de produção de `/auth/permissions*` e `/templates/{id}/apply` | **nenhum** — nem UI, nem serviço |
+| consumidores de teste | **20 asserções**, e eram as únicas |
+| suíte auth-api antes × depois | **83 → 63**, zero falhas dos dois lados |
+
+**São os testes que faziam o subsistema parecer vivo.** Cinco rotas registradas, um módulo de 347
+linhas, duas tabelas com DDL — e o único tráfego que qualquer um deles já viu veio de
+`test_router.py`.
+
+### Uma correção de medição, e ela é da família que este repositório cataloga
+
+Ao levantar a decisão, afirmei *"`user_can()` sem nenhum chamador, nem em teste"*. **A função não
+se chama `user_can`** — é `resolve_permissions`, e ela **tem** chamador: o endpoint
+`GET /permissions/resolve`. Meu grep voltou vazio pelo **nome errado**, não por a função ser morta.
+
+É exatamente *"um teste que não pode reprovar"* aplicado a uma medição: o vazio parecia resposta.
+A caracterização correta nunca foi *"laço morto sem chamadores"* — é **endpoints sem consumidor de
+produção sobre uma tabela vazia**, que é motivo suficiente e não precisava do exagero. Só
+`get_accessible_pools_for_module` estava literalmente sem chamador algum.
+
+A decisão não muda, porque a justificativa dela era a segunda formulação. O que muda é o registro.
+
+### O que saiu, o que ficou, e por quê
+
+**Saiu:** a tabela `platform_permissions` (DDL), o seu CRUD (`grant_permission`, `revoke_permission`,
+`list_permissions`), o resolvedor (`resolve_permissions`), o derivador de escopo
+(`get_accessible_pools_for_module`), o `apply_template`, as quatro rotas `/auth/permissions*`, a rota
+`POST /auth/templates/{id}/apply`, o helper `_perm_to_response`, cinco modelos Pydantic e as 20
+asserções.
+
+**Ficou:** `auth.permission_templates` e o seu CRUD. Tem consumidor **vivo** — a tela de Acesso
+lista, cria, edita e apaga templates e usa `template.config` (`{role, module_config,
+accessible_pools, max_concurrent_sessions}`) para **pré-preencher** o formulário de usuário. É cópia
+no cliente, sem vínculo vivo, e é assim de propósito.
+
+⚠️ **Consequência aceita:** sobram **dois** mecanismos de preset escrevendo `module_config` —
+`role_defaults` (servidor, automático no `create_user`) e o template (cliente, cópia manual). Não
+competem, porque os gatilhos são diferentes, e só o primeiro é o DEFAULT. Um terceiro seria demais.
+
+### Resíduo físico, deliberado
+
+`auth.platform_permissions` e a coluna legada `permissions` de `permission_templates` **continuam
+existindo em bases já criadas**: o pacote usa DDL idempotente (`CREATE TABLE IF NOT EXISTS`), não
+migração versionada, então não há caminho para `DROP` sem escrever um. São órfãs — nada as cria em
+instalação nova, nada as lê, estão vazias. Dropá-las é item de migração, não efeito colateral de uma
+remoção de código.
+
+**Por que não foi removida a coluna do DDL de templates junto:** `TemplateResponse` não expõe
+`permissions`, então seria seguro — mas o `SELECT *` de `get_template` passaria a devolver formas
+diferentes em base nova e base velha, e o ganho é zero. Fica na mesma dívida de migração.
+## D8 do arco ALLOWLIST — finalidade vira dimensão do TIPO, e o mapa fecha as três folhas que faltavam (2026-08-30)
+
+Três decisões do dono, tomadas num levantamento de pendências, entregues juntas porque eram as
+**três folhas que bloqueavam a V4** — e a V4 é o passo não reversível do arco.
+
+| # | decisão | efeito |
+|---|---|---|
+| 1 | tipo **`card_expiry`** | fecha a lacuna que mantinha `session.vencimento_cartao` fora do mapa |
+| 2 | tipo **`linha_em_servico`** | `session.numero_atual` segue em claro, agora **declarado** |
+| 3 | folha `cartao.cpf_titular` → **`cartao.cpf`** | o discriminador sai do nome da folha e vai para o domínio |
+
+### D8.1 — FINALIDADE é dimensão do tipo, nunca exceção de regra
+
+`session.portabilidade.numero_atual` é a **linha sendo portada**: um telefone, mas **objeto do
+atendimento**, não dado de cadastro — não se conclui uma portabilidade sem vê-lo. Até aqui o tipo
+amarrava `formato × máscara × classe` e **não tinha eixo para finalidade**, então ele e
+`session.cliente.telefone` eram o **mesmo `phone`**.
+
+A saída óbvia — uma regra `plain` para a tag — é a errada, e pelo motivo do próprio arco: com a
+regra dizendo `plain` e o mapa dizendo `phone`, *"que máscara este campo usa?"* teria **duas
+respostas**, e a permissiva venceria. Mesma forma que a V2b removeu do leitor legado de canal.
+
+Três propriedades do tipo novo, todas load-bearing:
+
+- **nome pela finalidade** (`linha_em_servico`, nunca `phone_open`) — um "telefone que não mascara"
+  batizado pelo formato é arma carregada apontada para o próximo telefone de cadastro;
+- **`lgpd: "pessoal"` preservado** — o que se declara vazio é a MÁSCARA, nunca a CLASSE: um telefone
+  continua identificando alguém, e o relatório LGPD tem de seguir dizendo que foi coletado. `texto`
+  (`lgpd: "none"`) seria a economia que mente;
+- **`declared_only: true` obrigatório** — a detecção olha o VALOR, e o valor não diz a finalidade;
+  dois tipos com o mesmo regex seriam ambíguos em texto livre (D5 do ADR do `masked` tipado).
+
+`by_role` vazio ⇒ **inelegível a `masked:`** (`typeMasksSomething`), como o `texto`. Tipo que não
+esconde nada não pode declarar que algo está escondido.
+
+**A §1.1 do ADR não muda de sentido, e é o ponto:** o defeito nunca foi *"o valor está visível"*, foi
+*"o valor está visível **porque ninguém decidiu**"*. O campo sai do `default_unmatched_operator` e
+passa a ser uma declaração — que é exatamente o que a V4 vai exigir de todos.
+
+**Evidência que eu trouxe e que se mostrou fraca, registrada para não ser reusada.** Ao propor
+mascarar o campo, argumentei que a plataforma *"já o protege uma borda ao lado"*:
+`_LEGACY_PREVIEW_SPEC` (`webhook.py:2298`) o mascara `last_4`. **Não sustenta.** Aquele preview vai
+ao **cliente**, na retomada cross-canal, e ali mascarar é **anti-enumeração** — não confirmar dado a
+quem ainda não provou posse. Audiência e finalidade diferentes; as duas bordas podem divergir com
+razão, e é disso que a D8.1 trata.
+
+### D8.2 — O discriminador mora no DOMÍNIO, e isso é mecanismo, não gosto
+
+O mapa da V3 trazia `session.cartao.cpf_titular`. A folha canônica passou a ser **`cpf`**, com o
+qualificador (*de quem* é o CPF) no domínio — `cartao`. Medido antes de decidir:
+
+> **`lib/context-masking.ts:80-160`** aceita **exato**, **sufixo** (`*.x`, por fronteira de
+> segmento), **prefixo** (`x.*`) e `*`. **Não há glob de meio.** Um `*cpf*` cairia no ramo
+> *"non-glob pattern that isn't an exact match"* → **regra inerte**, sem nada ficar vermelho.
+
+Logo *"CPF protegido independentemente de qual CPF"* só existe com a tag terminando em `.cpf` — e aí
+o glob genérico `*.cpf`, que já existia, cobre a família inteira. O princípio pedido (*"declarar só o
+genérico; o cadastro aponta para o canônico"*) e o mecanismo coincidem, e o `legado[]` da D3 **é**
+esse apontamento.
+
+**Critério derivado:** folha cujo nome carrega qualificador (`_titular`, `_origem`, `_alternativo`)
+tem o qualificador no domínio, não no campo.
+
+### D8.3 — A lacuna do CATÁLOGO fecha no catálogo, e só então o mapa cresce
+
+`session.vencimento_cartao` ficou **fora** da V3 de propósito: tinha política viva (`last_2`) e
+nenhum dos 11 tipos casava máscara **e** classe. `credit_card` é `last_4`, e sobre `12/26` (dígitos
+`1226`) isso devolveria o valor inteiro — o mesmo argumento pelo qual a T6 recusou reusá-lo no CVV.
+Fechou-se **no catálogo**, com `card_expiry` (`last_2` · `financeiro` · `declared_only`), e só depois
+o campo entrou no mapa.
+
+**A ordem é o critério:** catálogo primeiro, mapa depois. O inverso — declarar um tipo aproximado
+para o campo caber — escreveria no mapa uma política que ninguém decidiu, e a V4 a aplicaria.
+
+⚠️ **`card_expiry` é tipo de LEITURA, nunca de COLETA.** Ele mascara algo, logo é elegível a
+`masked:` pelo portão da T5 — e declará-lo no campo do formulário quebraria o pacote de aprovação
+**em silêncio**: pela D4 do ADR do `masked` tipado, masked nunca entra em `pipeline_state`, e é de lá
+que `skill_limite_entrada_v1.yaml:475` lê o valor para escrever a tag. O formulário declara `masked`
+só no `cvv`, e isso é desenho — `infra/dialog/dialog_limite_solicitacao.json`. O portão não distingue
+os dois usos; quem distingue é o comentário do tipo.
+
+### O fóssil: como a reaplicação ficou segura
+
+A D7 vinha publicando `overwrite_would_drop = 1` para `masking.context_rules` — a regra
+`session.cpf_titular`, que só existia no banco. **Medido agora: aquele campo não tem produtor.**
+
+| onde | fóssil | testemunha de presença |
+|---|---|---|
+| `skills.flow` / `flow_draft` (autoridade) | **0** | sucessor `vencimento_cartao` em **2** de 44 skills |
+| `pool_skill_slots.yaml_snapshot` (**o que EXECUTA**) | **0** | sucessor em **4** de 39 slots |
+| código (`packages/`, `infra/`) | **0** | o comentário em `skill_limite_processo_v1.yaml:88-91` conta a substituição |
+
+A testemunha positiva ao lado do zero é o que separa *"não há"* de *"o predicado não funciona"*.
+
+**A conclusão que reposiciona o número:** a "divergência nos dois sentidos" **não são duas
+políticas — é uma política em dois momentos.** O campo de tela `cpf_titular` saiu do formulário e foi
+substituído por `vencimento_cartao`; o `__global__` é simplesmente mais velho que essa troca, e as
+duas pontas da divergência (`cpf_titular` só no banco, `vencimento_cartao` só na declaração) são **o
+mesmo evento**. O `overwrite_would_drop = 1` estava certo como número e contava uma regra morta — o
+que exigia medição não era o contador, era a **leitura** dele.
+
+⚠️ **Duas medições ficaram INCONCLUSIVAS, e não viram negativas:** o ContextStore vivo tem **0
+hashes `ctx`** em 4 254 chaves (TTL de 4 h, sem contato recente), e o store durável da F5 tem 221
+linhas mas **nenhuma do fluxo de limite** (zero tags `cartao.*`). Nenhuma das duas refuta o fóssil;
+nenhuma o confirma. Elas não pesam na decisão porque o eixo que importa é o **produtor**, e a F5
+persiste já mascarado — mudar a regra não desmascara história.
+
+### Reaplicação
+
+Antes de escrever, o comparador da D7 nomeou tudo, e bateu com a previsão item a item:
+
+| key | só no declarado | só no gravado | difere |
+|---|---|---|---|
+| `masking.types` | 2 (`card_expiry`, `linha_em_servico`) | — | — |
+| `masking.context_map` | 2 (`cartao.cpf`, `cartao.vencimento`) | 1 (`cartao.cpf_titular`) | 1 (`portabilidade.numero_atual.tipo`) |
+| `masking.context_rules` | 10 (globs de sufixo + a exata do sucessor) | 1 (`session.cpf_titular`) | — |
+
+**A imagem do container estava atrás do repo** — o ramo A da própria D7 — e foi conferido antes, não
+depois: sem o rebuild, o `--overwrite` teria reaplicado a declaração ANTIGA. Depois:
+`plughub-config-seed --overwrite` das três keys → `inserted=3 divergent=0` → **restart do config-api**
+(o cache é em processo; re-semear não basta, e isso já custou um diagnóstico inteiro no rumo errado).
+
+Estado vivo, conferido pelo que a API **serve**:
+
+| | antes | depois |
+|---|---|---|
+| `masking.types` | 11 | **13** |
+| `masking.context_map` | 74 canônicas / 39 aliases | **75 / 40** |
+| `session.cartao` | `numero, cpf_titular, limite_*` | `numero, **cpf**, **vencimento**, limite_*` |
+| `numero_atual` | `phone` | **`linha_em_servico`** |
+| `context_rules` (`__global__`) | 14 | **23**, sem `cpf_titular` |
+
+**Resíduo nomeado:** o `tenant_demo` tem override próprio de `context_rules` (o seed só escreve
+`__global__`), e ele difere do global por **exatamente uma regra em cada direção** — tem
+`session.cpf_titular` e não tem a exata `session.vencimento_cartao`. É o mesmo retrato pré-troca,
+agora do lado do tenant. **Sem lacuna de comportamento:** o glob `*.vencimento_cartao` está nos dois.
+Limpá-lo é ato sobre config de tenant, não sobre default de plataforma.
+
+### O gate, e uma asserção que INVERTEU
+
+`infra/test/probe_context_map_audit.sh` — **16 asserções verdes**. O ramo F reprovou na primeira
+execução, e a reprovação estava **certa**: ele usava `session.vencimento_cartao` como testemunha de
+*"a lacuna deliberada é ACUSADA (`unknown`)"*, e a D8.3 fechou essa lacuna.
+
+A asserção **não foi removida** — a proposição a proteger mudou, não sumiu: era *"a lacuna é
+visível"*, hoje é *"a lacuna está FECHADA e não volta em silêncio"*. Apagar o ramo deixaria o campo
+poder virar não-declarado outra vez sem nada ficar vermelho. O caso sintético (`naoDeclarada`) segue
+cobrindo *"o balde `unknown` funciona"*; este cobre um campo **real e medido**, que é o que uma
+regressão atingiria.
+
+Provado por **mutação**: removido o alias, o ramo F fica vermelho com
+`{"lacunaFechada":"unknown"}` e o gate sai não-zero; revertido, volta a 16 verdes. Verde → vermelho
+→ verde, na mesma sessão.
+
+### Fora de escopo, decidido e registrado
+
+Do mesmo levantamento saíram quatro decisões que **não** são código deste commit: congelar os presets
+de `developer`/`business` (medido: 1 portador de `developer`, que é o próprio admin; **0** de
+`business`), remover o subsistema morto de templates de permissão (0 linhas nas duas tabelas, laço
+morto que só os testes mantinham vivo), fazer só a peça 1 da proposta (d), e a ordem de trabalho.
+Raciocínio completo em `TODO.md` § *"SETE decisões do dono — sessão de 2026-08-30"*.
+
 ## D7 do arco ALLOWLIST — o seed do config-api compara e loga em vez de pular mudo (2026-08-29)
 
 `seed-if-absent` é a política certa — depois do primeiro boot o DB é a fonte de verdade —, mas o

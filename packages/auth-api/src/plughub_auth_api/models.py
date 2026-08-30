@@ -104,37 +104,6 @@ class MeResponse(BaseModel):
 
 # ─── Permissions & Templates ───────────────────────────────────────────────────
 
-class GrantPermissionRequest(BaseModel):
-    tenant_id: str
-    user_id: str
-    module: str
-    action: str
-    scope_type: str = "global"   # "global" | "pool"
-    scope_id: str | None = None  # pool_id for scope_type="pool"
-    granted_by: str = "admin"
-
-
-class PermissionResponse(BaseModel):
-    id: str
-    tenant_id: str
-    user_id: str
-    module: str
-    action: str
-    scope_type: str
-    scope_id: str | None
-    granted_by: str
-    template_id: str | None
-    created_at: str
-
-
-class PermissionEntry(BaseModel):
-    """Entrada de permissão dentro de um template."""
-    module: str
-    action: str
-    scope_type: str = "global"
-    scope_id: str | None = None
-
-
 class CreateTemplateRequest(BaseModel):
     tenant_id: str
     name: str
@@ -160,15 +129,3 @@ class TemplateResponse(BaseModel):
     updated_at: str
 
 
-class ApplyTemplateRequest(BaseModel):
-    user_id: str
-    granted_by: str = "admin"
-    scope_override: dict | None = None   # {"scope_type": "pool", "scope_id": "pool_xyz"}
-
-
-class ResolvePermissionResponse(BaseModel):
-    allowed: bool
-    user_id: str
-    module: str
-    action: str
-    pool_id: str | None

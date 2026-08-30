@@ -638,6 +638,81 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       lgpd:          "nao_classificado",
       declared_only: true,
     },
+    // ── card_expiry — o vencimento do cartão (MM/AA) ──────────────────────────
+    //
+    // Existe porque o campo tem POLÍTICA VIVA e não tinha tipo: as duas regras do
+    // tenant (`session.vencimento_cartao` exata e `*.vencimento_cartao`) o mascaram
+    // `last_2`, e nenhum dos 11 tipos anteriores casava máscara E classe. Enquanto
+    // faltasse, o campo ficava FORA do mapa de propósito e a auditoria — corretamente
+    // — não autorizava a V4. A lacuna era do CATÁLOGO, e fecha-se aqui.
+    //
+    // **Não é `credit_card`**: aquele preserva os 4 últimos, e sobre `12/26` (dígitos
+    // `1226`) isso devolveria o valor INTEIRO. Mesmo argumento pelo qual a T6 recusou
+    // reusar `credit_card` no CVV.
+    // **Nem é `cpf`**, apesar de a máscara coincidir (`last_2`): a CLASSE difere
+    // (`financeiro` × `pessoal`), e classe é propriedade do tipo (D1).
+    //
+    // `last_2` sobre `12/26` → `***26`: aparece o ANO, some o MÊS. Este tipo DECLARA
+    // a política que já vale hoje; não a muda.
+    //
+    // ⚠️ **Tipo de LEITURA, nunca de COLETA.** Ele mascara algo, logo passa no portão
+    // da T5 e pode ser escrito num `masked:` — e isso QUEBRARIA o pacote de aprovação
+    // em silêncio: pela D4 do ADR do `masked` tipado, masked nunca entra em
+    // `pipeline_state`, e é de lá que `skill_limite_entrada_v1.yaml:475` lê o valor
+    // para escrever a tag. O form declara `masked` só no `cvv`, e isso é desenho —
+    // ver `infra/dialog/dialog_limite_solicitacao.json`.
+    {
+      id:    "card_expiry",
+      label: "Vencimento do cartão (MM/AA)",
+      icon:  "📅",
+      // Sem `detect_pattern` de propósito: `\d{2}/\d{2}` casaria qualquer data.
+      formato: { display: "##/##" },
+      mascara: {
+        by_role: { operator: "last_2" },
+        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+      },
+      lgpd:          "financeiro",
+      declared_only: true,
+    },
+    // ── linha_em_servico — o telefone que é o OBJETO do atendimento ───────────
+    //
+    // Primeiro tipo cuja razão de existir é a FINALIDADE, não o formato (decisão do
+    // dono, 2026-08-30). Dado de CADASTRO — a linha do cliente,
+    // `session.cliente.telefone` — é protegido; o número que é o OBJETO da transação
+    // (a linha sendo portada) não, porque não se atende portabilidade sem vê-lo.
+    //
+    // Até aqui o tipo amarrava formato × máscara × classe e **não tinha eixo para
+    // finalidade**, então `session.cliente.telefone` e
+    // `session.portabilidade.numero_atual` eram o MESMO `phone`. A finalidade entra
+    // como TIPO, e não como exceção de regra, porque mapa e regra dando respostas
+    // diferentes é a duplicação que este arco existe para matar — e a permissiva
+    // venceria.
+    //
+    // `lgpd: "pessoal"` FICA, e é o ponto: um telefone continua identificando alguém.
+    // O que se declara vazio é a MÁSCARA, nunca a CLASSE — um relatório LGPD tem de
+    // seguir dizendo que um telefone foi coletado. `texto` (`lgpd: "none"`) seria a
+    // economia que mente.
+    //
+    // `declared_only` é EXIGÊNCIA, não conveniência: a detecção olha o VALOR, e o
+    // valor não diz a finalidade — dois tipos com o mesmo regex seriam ambíguos em
+    // texto livre. É a D5 do ADR do `masked` tipado (*"a detecção fica fora"*).
+    //
+    // ⚠️ `by_role` vazio ⇒ INELEGÍVEL a `masked:` (`typeMasksSomething`), como o
+    // `texto`. Correto: tipo que não esconde nada não pode declarar que algo está
+    // escondido.
+    //
+    // ⚠️ O nome é a FINALIDADE, não o formato. Um `phone_open` seria arma carregada
+    // apontada para o próximo telefone de cadastro.
+    {
+      id:      "linha_em_servico",
+      label:   "Linha em serviço (telefone que é objeto do atendimento)",
+      icon:    "📱",
+      formato: { display: "(##) #####-####" },
+      // `by_role` VAZIO — ver o comentário acima. Não é omissão.
+      mascara: { by_role: {} },
+      lgpd:          "pessoal",
+      declared_only: true,
+    },
     // ── texto — o tipo que NÃO faz nada, e por que ele precisa existir ────────
     //
     // Acrescentado na V3 do arco ALLOWLIST. O mapa do ContextStore (D2) declara

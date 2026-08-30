@@ -105,9 +105,23 @@ Ao iniciar, `seed_admin_if_absent()` cria o usuário admin configurado via env v
 | `db.py` | DDL + CRUD asyncpg: `ensure_schema`, `create_user`, `get_user_by_email`, `get_user_by_id`, `list_users`, `update_user`, `delete_user`, `create_session`, `get_session_by_token_hash`, `rotate_session`, `delete_session`, `seed_admin_if_absent` |
 | `router.py` | FastAPI routes — login/refresh/logout/me + CRUD admin |
 | `main.py` | FastAPI app + lifespan asyncpg pool + seed |
-| `tests/test_router.py` | **58/58 testes** — TestHealth, TestLogin (4), TestRefresh (3), TestLogout (2), TestMe (3), TestCreateUser (3), TestListUsers (1), TestGetUser (2), TestUpdateUser (2), TestDeleteUser (2), TestSeedAdmin (2), TestPasswordUtils (3), TestJwtUtils (3), TestHashRefreshToken (3), TestGrantPermission (3), TestListPermissions (2), TestRevokePermission (2), TestResolvePermission (3), TestTemplates (6), TestApplyTemplate (2), TestResolvePermissionsLogic (6) |
+| `tests/test_router.py` | **63 testes** *(era 83 até 2026-08-30; a remoção do `platform_permissions` levou junto as 20 asserções que eram os seus únicos consumidores. O `58/58` desta linha estava vencido havia mais tempo ainda.)* — TestHealth, TestLogin (4), TestRefresh (3), TestLogout (2), TestMe (3), TestCreateUser (3), TestListUsers (1), TestGetUser (2), TestUpdateUser (2), TestDeleteUser (2), TestSeedAdmin (2), TestPasswordUtils (3), TestJwtUtils (3), TestHashRefreshToken (3), TestGrantPermission (3), TestListPermissions (2), TestRevokePermission (2), TestResolvePermission (3), TestTemplates (6), TestApplyTemplate (2), TestResolvePermissionsLogic (6) |
 
-## Arc 7b — platform_permissions (✅ implementado)
+## Arc 7b — platform_permissions (❌ REMOVIDO em 2026-08-30)
+
+> ❌ **REMOVIDO em 2026-08-30.** A tabela `auth.platform_permissions`, as quatro rotas
+> `/auth/permissions*` e o `POST /auth/templates/{id}/apply` saíram do código. Medido antes:
+> **0 linhas** na tabela e **0 consumidores de produção** — nenhuma UI e nenhum serviço os
+> chamava; os únicos chamadores eram os testes, e é por isso que o subsistema parecia vivo.
+>
+> Quem responde *"esta pessoa pode?"* é `auth.users.module_config`, lido pelo verificador
+> canônico `plughub_authz`. Manter um endpoint que **parece conceder permissão** e escreve
+> numa tabela que ninguém lê é a duplicação que o arco do ABAC TOTAL existe para matar.
+>
+> **O que FICA:** `auth.permission_templates` e o seu CRUD — consumidor vivo é a tela de
+> Acesso, que usa `template.config` como preset copiado no cliente.
+>
+> A descrição abaixo fica como registro do que existiu. Ver `CHANGELOG.md` (2026-08-30).
 
 Generaliza `evaluation_permissions` para todo o sistema. Implementado em `packages/auth-api/`.
 

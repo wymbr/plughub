@@ -1,9 +1,294 @@
 # TODO — PlugHub Itens Pendentes
 
 
+## ✅ SETE decisões do dono — sessão de 2026-08-30 *(registro ÚNICO; não duplicar)*
+
+> Levantamento das decisões pendentes, percorridas em dois grupos. **Este é o único lugar
+> onde elas moram**: os itens originais abaixo apontam para cá em vez de repetirem, porque
+> duas cópias de um plano divergem e este repositório já pagou por isso.
+
+**Achado de método, antes das decisões.** Eu listei sete e **duas não eram decisão** — a
+medição as dissolveu antes de chegarem à mesa, porque eu as havia levantado lendo **títulos**:
+
+| listado como aberto | estado real |
+|---|---|
+| chip de PROCESSO p/ usuário escopado | **decidido, implementado e provado em 2026-08-26** (caminho (a); gate verde, metade visual 4/4). Só o TÍTULO da seção dizia "decisão aberta" |
+| `AnaliseTab.tsx` volta ou morre | **arquivo apagado** em `10bde79`; a feature (métricas agregadas do conjunto filtrado) foi absorvida pelas cinco lentes da F2 |
+
+É o item 1 da § *"Erros de método"* acontecendo comigo: **item antigo mente sobre o próprio
+estado**, e o TÍTULO mente para mais gente que o corpo (item 5 da mesma seção).
+
+### Grupo 1 — o que bloqueava a V4
+
+| # | decisão | onde |
+|---|---|---|
+| 1 | tipo **`card_expiry`** (`operator: last_2` · `lgpd: financeiro` · `declared_only` · `display "##/##"`) | `audit.ts` + `seed.py` |
+| 2 | tipo **`linha_em_servico`** (`by_role: {}` · `lgpd: pessoal` · `declared_only`) | idem |
+| 3 | **nenhuma** declaração de `cpf_titular`; a folha vira `cartao.cpf` com o alias | `context-map.ts` + `seed.py` |
+
+**#1 — por que tipo novo e não reuso.** O campo já tinha POLÍTICA VIVA (duas regras, `last_2`)
+e nenhum dos 11 tipos casava máscara **e** classe. Não é `credit_card` (`last_4` sobre `1226`
+devolve tudo — o argumento da T6 para o CVV) nem `cpf` (a classe difere). O tipo **declara** a
+política que já valia; zero mudança de comportamento. `last_2` sobre `12/26` → `***26`: aparece
+o ano, some o mês.
+⚠️ **É tipo de LEITURA.** Ele mascara algo, logo passa no portão da T5 e pode ser escrito num
+`masked:` — e isso quebraria o pacote de aprovação **em silêncio** (D4: masked nunca entra em
+`pipeline_state`, e é de lá que `skill_limite_entrada_v1.yaml:475` lê para escrever a tag). O
+form declara `masked` só no `cvv`, e isso é desenho, não esquecimento.
+
+**#2 — a decisão inverteu o diagnóstico da V3, e a evidência que eu trouxe estava fraca.**
+Apresentei o `_LEGACY_PREVIEW_SPEC` (`webhook.py:2298`, `numero_atual → last_4`) como prova de
+que a plataforma já protegia o campo numa borda irmã. **Não prova**: aquele preview vai ao
+**cliente**, na retomada cross-canal, e ali mascarar é **anti-enumeração** — não confirmar dado
+a quem ainda não provou posse. Outra audiência, outra finalidade; as duas bordas podem divergir
+com razão.
+Medido ao decidir: a máscara do ContextStore vale em **duas portas apenas** — o endpoint da
+Console (`server.ts:1536`) e `maskContextForPersistence` (persistência F5 + tool
+`supervisor_state`). A interpolação `@ctx.` do engine lê o hash **cru**, então nenhum fluxo é
+afetado por regra nenhuma.
+Decisão: o número **é o objeto do atendimento**, não dado de cadastro — segue em claro, agora
+**declarado** como tal. O telefone de CADASTRO (`session.cliente.telefone`) continua protegido.
+A §1.1 do ADR segue valendo: o defeito nunca foi o valor visível, foi o valor visível **porque
+ninguém decidiu**.
+
+**#3 — o princípio do dono, e o caso concreto que dissolveu.** Princípio: *"declara-se `cpf`,
+genérico; se for preciso discriminar, o cadastro aponta para o canônico"*. **A medição o
+reforça:** o casador de regra **não tem glob de meio** (`context-masking.ts:80-160` aceita
+exato, `*.sufixo`, `prefixo.*`, `*`), então `*cpf*` seria regra **inerte**, sem nada ficar
+vermelho. Logo *"CPF protegido independente de qual CPF"* só existe com a tag terminando em
+`.cpf` — o discriminador no segmento de **domínio**. Princípio e mecanismo coincidem.
+**E o campo é fóssil:** `session.cpf_titular` **não tem produtor** — o campo de tela saiu do
+formulário, substituído por `vencimento_cartao` (`skill_limite_processo_v1.yaml:88-91`; o form
+vivo tem 4 campos e nenhum é ele), e `skill_limite_entrada_v1.yaml:475` escreve `session.cpf`,
+que `*.cpf` já cobre. **A "divergência nos dois sentidos" não são duas políticas: é uma política
+em dois momentos** — o `__global__` é mais velho que a mudança do formulário, e
+`vencimento_cartao` é o *sucessor* de `cpf_titular`. `overwrite_would_drop = 1` está contando
+uma regra morta.
+O alias FICA no mapa para que o **contador** prove o fóssil extinto, em vez de nós afirmarmos.
+
+### Grupo 2
+
+| # | decisão | consequência |
+|---|---|---|
+| 4 | **congelar** o mínimo declarado dos presets `developer`/`business` | zero código; o gatilho é o primeiro portador real |
+| 5 | **remover** `platform_permissions` + `permission_templates` + `apply` + as 2 funções mortas | template segue como preset de `module_config` (o uso que a UI já faz) |
+| 6 | fazer só a **peça 1 da (d)**, sem se comprometer com ela | fechar escopo de conteúdo; a (d) fica adiada com meio pré-requisito pronto |
+| 7 | ordem: grupo 1 → registrar → provar fóssil → **V4** → resto | — |
+
+**#4 — medido ao vivo (`auth.users`, base `plughub_demo`, 2026-08-30):** supervisor 2 · admin 2
+· operator 2 · **developer 1 — e é o `admin@`** · **business 0**. Seis usuários, todos fixtures.
+Isso dá CAUSA ao que o item registrava como sintoma (*"não têm baseline medível"*): **não há
+população**. O preset de `developer` é **inerte por construção** (seu único portador já é admin,
+que concede mais) e o de `business` se aplica a ninguém. Desenhar persona contra zero população
+é o erro que as colunas ANI/DNIS custaram.
+
+**#5 — ✅ ENTREGUE em 2026-08-30** (detalhe no `CHANGELOG.md`). Medido ao vivo:
+`auth.platform_permissions` **0 linhas** · `auth.permission_templates` **0 linhas** · **zero
+consumidores de produção** das rotas (nem UI, nem serviço). **São os testes que o faziam
+parecer vivo** — 20 asserções, e eram as únicas. Suíte auth-api **83 → 63**, zero falhas dos
+dois lados.
+
+⚠️ **Correção de uma medição minha.** Eu escrevi aqui *"laço morto fechado — `user_can()` sem
+nenhum chamador"*. **A função não se chama `user_can`** (é `resolve_permissions`), e ela TEM
+chamador: o endpoint `GET /permissions/resolve`. O grep voltou vazio pelo **nome errado** — é
+*"um teste que não pode reprovar"* aplicado a uma medição, com o vazio parecendo resposta. A
+caracterização correta é **endpoints sem consumidor de produção sobre tabela vazia**, que já
+bastava; só `get_accessible_pools_for_module` estava literalmente sem chamador. A UI documenta outra semântica em
+`AccessPage.tsx:37-44` (snapshot que PRÉ-PREENCHE o form, *"sem vínculo vivo nem propagação"*).
+Seguro **agora justamente porque há 0 linhas**; no dia em que alguém chamar `apply`, remover vira
+migração. A baseline de teste do auth-api **cai junto** — correto, não regressão.
+Consequência aceita: sobram **dois** mecanismos de preset escrevendo `module_config` —
+`role_defaults` (servidor, automático no create) e o template (cliente, cópia manual). Não
+competem (gatilhos diferentes), mas só o primeiro é o default.
+
+**#6 — o que mudou sem ninguém trabalhar nela:** em 2026-08-29 o eixo de cobertura de credencial
+por rota fechou (18 gateadas, 1 isenta nomeada), o que é **metade da peça 1** da (d). As peças 1
+e 2 são o mesmo trabalho com ou sem a (d); a peça 3 (filtro de relevância) só existe **se** as
+listas abrirem. Fechar o escopo é o pré-requisito que a própria (d) exige primeiro, então
+fazê-lo não compromete com ela.
+
+### Três regras que saíram destas decisões — valem além das folhas que as originaram
+
+1. **Finalidade é dimensão do TIPO, nunca exceção de regra.** Campo cuja finalidade dispensa
+   máscara ganha tipo próprio, **nomeado pela finalidade** (`linha_em_servico`, jamais
+   `phone_open`), com a **classe LGPD preservada** — o que se declara vazio é a máscara, nunca a
+   classe. Mapa e regra dando respostas diferentes é a duplicação que este arco existe para
+   matar, e a permissiva venceria.
+2. **O discriminador mora no segmento de DOMÍNIO, nunca no nome da folha.** Medido: sem glob de
+   meio, `escopo.dominio.campo` é a única forma de um glob genérico alcançar a família inteira.
+   Critério para toda folha nova do mapa.
+3. **Preset e template não se decidem contra zero população.** O gatilho é o primeiro portador
+   real, e ele fica ESCRITO no item — não é adiamento, é a condição que torna a decisão legível.
+
+### Estado da implementação (2026-08-30)
+
+**Passo 1 ✅ — código na árvore.** `audit.ts` (+2 tipos), `context-map.ts` (folha `cartao.cpf`
+renomeada, `cartao.vencimento` nova, `portabilidade.numero_atual` retipada, mais os DOIS blocos
+de cabeçalho que passariam a mentir), `seed.py` (as três cópias espelhadas).
+Oráculos verdes: catálogo `declared=13 · órfãos=[] · categorias_sem_tipo=[]`; mapa
+`declared=75 · aliases=40`, as quatro listas vazias. `typeMasksSomething`: `card_expiry=true`
+(elegível a `masked:` — mitigado por comentário), `linha_em_servico=false` (inelegível, como o
+`texto`). `DEFAULT_MASKING_RULES` segue em **4** — nenhum tipo novo é detectável.
+
+**Passo 3 ✅ — o store vivo foi reaplicado** (detalhe no `CHANGELOG.md`, § D8). O fóssil
+`cpf_titular` foi **provado sem produtor** onde ele poderia existir, com testemunha positiva ao
+lado do zero: `skills.flow`/`flow_draft` **0** (sucessor em 2 de 44) e
+`pool_skill_slots.yaml_snapshot` — *o que EXECUTA* — **0** (sucessor em 4 de 39). A imagem do
+container estava atrás do repo (ramo A da própria D7) e foi reconstruída **antes** do
+`--overwrite`; depois, restart do config-api.
+
+| | antes | depois (servido pela API) |
+|---|---|---|
+| `masking.types` | 11 | **13** |
+| `masking.context_map` | 74 canônicas / 39 aliases | **75 / 40** |
+| `session.cartao` | `numero, cpf_titular, limite_*` | `numero, **cpf**, **vencimento**, limite_*` |
+| `numero_atual` | `phone` | **`linha_em_servico`** |
+| `context_rules` (`__global__`) | 14 | **23**, sem `cpf_titular` |
+
+Gate `probe_context_map_audit.sh`: **16 asserções verdes**, com o ramo F **invertido** (a lacuna
+deliberada virou lacuna FECHADA) e provado por mutação — verde → vermelho → verde.
+
+⚠️ **Duas medições ficaram INCONCLUSIVAS e não viram negativas:** ContextStore vivo com **0
+hashes `ctx`** (TTL 4 h, sem contato recente) e store durável da F5 com 221 linhas, **nenhuma do
+fluxo de limite**. Não pesam na decisão — o eixo que importa é o PRODUTOR, e a F5 persiste já
+mascarado —, mas ficam ditas para que ninguém as leia como prova.
+
+⚠️ **Resíduo nomeado:** o `tenant_demo` tem override próprio de `context_rules` (o seed só escreve
+`__global__`) e difere do global por **exatamente uma regra em cada direção** — tem
+`session.cpf_titular`, não tem a exata `session.vencimento_cartao`. Mesmo retrato pré-troca, agora
+do lado do tenant. **Sem lacuna de comportamento** (o glob `*.vencimento_cartao` está nos dois);
+limpá-lo é ato sobre config de TENANT, não sobre default de plataforma.
+
+### Correções de estado que a sessão produziu
+
+Além das duas dissolvidas no topo:
+
+- 🟢 **`mcp-server-plughub` COMPILA.** O achado 3 da § *"Cobertura de credencial por ROTA"*
+  (*"não compila / `TS2345` em `usage-emitter.ts`"*) está **vencido**: o conserto
+  (`segment_id: null`) está na árvore em `usage-emitter.ts:82`, o container **bate com o repo**
+  (sem bind mount) e `npx tsc --noEmit` → **`TSC_OK`**, medido em 2026-08-30.
+- 🟡 **A cauda de papel no backend tem 8 sítios a mais.** O censo do passo 8 do ABAC TOTAL lista
+  **4** (channel-gateway, evaluation-api ×2, auth-api) e o arco está marcado *"1–8 COMPLETO"*.
+  Medido: `mcp-server-plughub/src/server.ts` tem **8** portões de papel
+  (`:1441, :1750, :1841, :2200, :2674, :2756, :2827, :2858`) — um serviço inteiro não varrido.
+  A direção é segura (menu mais estrito que backend), mas alguém vai ler o ✅ como *"papel saiu
+  do backend"*. É a regra da casa outra vez: **um censo desenhado para um eixo não prova nada
+  sobre o eixo vizinho** — aqui, o mesmo eixo com um serviço fora da varredura.
+
+## 🟡 Pré-requisito da V4 — passo 1 ✅; o resto foi SUPERSEDIDO pela D9 *(2026-08-30)*
+
+> ⚠️ **Leia primeiro:** este bloco descreve o trabalho sob o modelo ANTIGO (mapa de nomes como
+> allowlist de leitura). A **D9** do `adr-contextstore-allowlist.md` o supersede — o ContextStore
+> passa a ser **cadastro**, com portão no **publish**. Os aliases do passo 1 continuam válidos e
+> viram **instrumento de migração**; os sete do passo 2 deixam de ser pergunta. O que fica desta
+> seção é a MEDIÇÃO, que é o que motivou a emenda.
+
+**A auditoria da V3 acordou.** Até hoje ela nunca gravara nada — não por defeito: o mcp-server já
+tinha a instrumentação (imagem de 2026-08-29 23:29, `observeContextTags` em `src` e `dist`) e a
+auditoria **não expira** (nenhum `EXPIRE`; acumula para sempre). Faltava **tráfego**. O
+`unknown: []` que se lia era `0` sobre **zero leituras** — a armadilha que o próprio ADR nomeia
+(*"zero sobre zero é serviço parado"*), e autorizar a inversão não-reversível com esse número seria
+o pior uso possível dela.
+
+Quatro fluxos rodados (`smoke_limite_tres_acessos`, `smoke_journey_context`,
+`smoke_wrapup_arc12_capture`, `smoke_detached_hook`) produziram o primeiro balde real:
+**alias 12 · canonical 4 · unknown 13 · dynamic 0 · overflow 0**.
+
+### Confirmações que o tráfego trouxe
+
+- **`session.vencimento_cartao` → alias de `session.cartao.vencimento`** — a D8.3 provada com dado
+  vivo, não com oráculo.
+- **`session.cpf_titular` NÃO apareceu** — o fóssil confirmado morto com tráfego real, o que fecha
+  a última dúvida sobre o `--overwrite` do passo 3.
+
+### 🔴 O bloqueio: dos 13 `unknown`, SEIS já têm canônica no mapa — sem `legado`
+
+| tag REAL escrita | canônica declarada no mapa | estado |
+|---|---|---|
+| `session.dialog_form_id` | `session.workflow.dialog_form_id` | canônica **sem produtor**; a real cai em `unknown` |
+| `session.decisions` | `session.workflow.decisions` | idem |
+| `session.origin_session_id` | declarada (`:230`) | idem |
+| `session.briefing_session_id` | declarada (`:231`) | idem |
+| `session.surveyed_agent_key` | declarada (`:253`) | idem |
+| `session.surveyed_segment_id` | declarada (`:254`) | idem |
+
+As outras **sete** são genuinamente não declaradas: `session.root_session_id`, `session.title`,
+`session.summary`, `session.status`, `session.preview`, `session.approval_threshold` e
+**`approval.summary`** — este último de um namespace `approval.*` que o mapa não conhece.
+
+**Por que isto BLOQUEIA a V4, e não é detalhe de completude:** inverter agora negaria
+`session.dialog_form_id` e `session.decisions` — que são **exatamente** os campos que o seed do
+config-api avisa por escrito ("*NÃO acrescentar um catch-all `session.*`: derrubaria
+`session.dialog_form_id`/`session.decisions` e a tela de aprovação deixaria de renderizar em
+silêncio*"). A V4 chegaria ao mesmo defeito por outro caminho.
+
+**E há um fato maior por trás:** das **75 canônicas declaradas**, o tráfego observou **4**
+(`session.pool.id`, `session.pool.channels`, `session.queue.position`, `session.queue.eta_ms`). O
+resto ou é alcançado por **alias** (12 grafias legadas vivas) ou **não tem produtor**. O mapa da V3
+declarou nomes canônicos aspiracionais — o estado-alvo da migração — enquanto a grafia que o código
+realmente escreve ficou de fora em seis casos. **Isso não é erro do censo:** o censo mediu leituras
+`@ctx.` e declarações `tag:`, e essas seis são escritas por caminhos que nenhuma das duas varreduras
+alcançava do mesmo jeito.
+
+### O trabalho, na ordem
+
+1. ✅ **Aliases acrescentados — 13, não 6** (2026-08-30). O escopo cresceu ao medir: em vez de tratar
+   só o que a auditoria observara, derivei do **CENSO DE PRODUTORES** (`ctx_writes` do
+   channel-gateway + escritas do bridge + `tag:` dos YAML) e casei contra as canônicas do mapa. Deu
+   **12 casamentos 1:1** mais **1 ambiguidade**, resolvida por medição: `session.dialog_form_id`
+   tinha duas canônicas candidatas (`workflow` × `hook`), e `webhook.py:2208` o escreve no caminho de
+   **collect engage** — o do hook já tinha alias próprio (`hook.dialog_form_id`).
+   Sete dos treze **ainda não tinham sido observados**: seriam descobertos um a um, rodada a rodada.
+   ⚠️ **O censo SOBRE-COLETA e não é fonte de verdade.** Ele acusou 50 "sem canônica", e boa parte é
+   ruído do meu próprio regex: `session.signals` e `journey.merges` são **tópicos Kafka**,
+   `session.closed` é nome de evento em 17 arquivos, `session.a`/`b`/`foo`/`x` são fixtures. O censo
+   gera HIPÓTESE; quem dá FATO é a auditoria, que lê chaves de hash reais.
+   Mapa: **75 canônicas / 40 → 53 aliases**, oráculo com as quatro listas vazias, gate
+   `probe_context_map_audit.sh` em 16 verdes.
+2. ~~Decidir as SETE restantes~~ — **NÃO DECIDIR.** A **D9** (proposta pelo dono em 2026-08-30, ver
+   o ADR) muda o modelo: o ContextStore vira **cadastro**, e sob ele estes sete não existem como
+   pergunta. O que os tornava pergunta era a allowlist ser uma enumeração de NOMES que o tenant
+   autora — e é justamente isso que a emenda supersede.
+3. **Continuar acumulando tráfego** até N rodadas seguidas não acrescentarem nada ao `unknown` — a
+   forma é *loop-until-dry*, não "rodei uma vez". Quatro fluxos cobrem uma fração dos 44 skills.
+4. Só então a V4.
+
+### ⚠️ Ler a auditoria depois de mexer no mapa exige DOIS cuidados, não um
+
+Medido ao vivo, e o segundo me pegou:
+
+- **O contador não expira.** Entradas gravadas sob um mapa anterior ficam para sempre, e ler a lista
+  sem cortar a série mistura classificações de dois mapas num número só — o defeito que a D14 recusou
+  com a época do SLA. **Corte a série** (`DEL {t}:ctx_audit:*`) depois de qualquer mudança de mapa,
+  preservando o dump antes.
+- **O mapa tem cache de 60 s no mcp-server.** Cortei a série e rodei tráfego imediatamente: o fluxo
+  do limite executou com o mapa ANTIGO em cache e gravou `session.dialog_form_id` e
+  `session.decisions` como `unknown` — campos que **já estavam declarados**. Uma leitura ingênua
+  teria concluído que o alias não funcionou. Provado ao contrário rodando o mesmo fluxo com o cache
+  quente: os dois passaram a `alias`, resolvendo para `session.workflow.*`.
+
+**Regra: cortar a série E esperar o cache virar. Cortar sozinho produz uma lista que acusa campo
+declarado** — e a V4 negaria exatamente esse campo.
+
+### Estado medido depois do passo 1 (série limpa, cache quente)
+
+`alias 18 · canonical 4 · unknown 7 · dynamic 0 · overflow 0` sobre os mesmos quatro fluxos.
+
+⚠️ `overflow = 0` hoje — o balde tem teto, e o aviso do ADR (*"`unknown` só vale enquanto
+`overflow == 0`"*) segue válido. Reconferir a cada medição.
+
+⚠️ **A auditoria observa a LEITURA.** Campo escrito por um dos 12 `HSET` diretos e nunca lido é
+invisível a ela. Para W (escrita) e P (persistência) o número não é suficiente — é para R-humano.
+
 ## Achados da V3 do arco ALLOWLIST (2026-08-29) — fora do escopo da fase
 
-### 🔴 `session.numero_atual` — telefone do cliente EM CLARO ao operador
+### ✅ `session.numero_atual` — DECIDIDO em 2026-08-30 (e ao contrário do previsto aqui)
+
+> O campo é o **objeto do atendimento**, não dado de cadastro: segue em CLARO, agora
+> **declarado** (`tipo: "linha_em_servico"`) em vez de por omissão. O telefone de CADASTRO
+> (`session.cliente.telefone`) continua protegido. Raciocínio — e a evidência minha que se
+> mostrou fraca (`_LEGACY_PREVIEW_SPEC` serve ao CLIENTE, não ao operador) — na § *"SETE decisões do dono — sessão de 2026-08-30"*, #2.
+> O texto abaixo fica como registro do que foi medido.
 
 Medido e **reproduzido no caminho real** (`POST /internal/context-snapshot` devolveu
 `"value":"11987654321"` ao lado de `caller.cpf` mascarado como `***00`).
@@ -23,7 +308,13 @@ Medido e **reproduzido no caminho real** (`POST /internal/context-snapshot` devo
   mascarar a linha em portabilidade pode atrapalhar o próprio atendimento que a coleta serve — quem
   decide isso é quem conhece o fluxo, não o gate.
 
-### 🟡 `masking.context_rules` do `__global__` está ATRÁS do seed — tenant novo nasce sem o conserto de 08-26
+### 🟢 `masking.context_rules` do `__global__` atrás do seed — DECIDIDO em 2026-08-30
+
+> **Não se declara `cpf_titular`** (decisão do dono: declara-se o genérico; o discriminador vai
+> para o segmento de DOMÍNIO). E o caso concreto dissolveu — medido: `session.cpf_titular` **não
+> tem produtor**, logo o `overwrite_would_drop = 1` conta uma regra MORTA e a divergência é *uma
+> política em dois momentos*, não duas políticas. Falta só provar o fóssil fora do código antes do
+> `--overwrite`. Ver a § *"SETE decisões do dono — sessão de 2026-08-30"*, #3.
 
 Medido: `__global__` tem **14 regras**, `tenant_demo` tem **23**, o `seed.py` tem **23**. Os globs de
 sufixo (`*.cpf`, `*.numero_cartao`, …) — que são o conserto de 2026-08-26 para o PII que cai em
@@ -43,7 +334,11 @@ existe no seed e não vivo. Um `--overwrite` cego **regride** o `cpf_titular`.
 > `tenant_demo`), e o instrumento que acabou de ser construído existe justamente para essa escolha
 > ser tomada com o número na mão, não deduzida.
 
-### 🟡 `session.vencimento_cartao` — o CATÁLOGO não tem tipo que sirva
+### ✅ `session.vencimento_cartao` — RESOLVIDO em 2026-08-30 (tipo `card_expiry`)
+
+> A lacuna era do CATÁLOGO e foi fechada lá: `card_expiry` (`operator: last_2`, `lgpd:
+> financeiro`, `declared_only`), declarando a política que já valia. Só então o campo entrou no
+> mapa, como `session.cartao.vencimento` — **a ordem é o critério**. Ver a § *"SETE decisões do dono — sessão de 2026-08-30"*, #1.
 
 Campo escrito e mascarado por regra (`last_2`), deixado **fora do mapa de propósito**: nenhum tipo do
 catálogo serve. `credit_card` é `last_4`, e num `MM/AA` isso mostra quase tudo — o mesmo argumento
@@ -174,7 +469,12 @@ agent-registry é parte do encaminhamento.
 respondem **200 anônimo**. Escritas são gateadas (401 sem token, 403 sem o campo). É divulgação
 de config, não de dado pessoal, mas é superfície.
 
-### 🟡 Presets de `developer` e `business` precisam de decisão (achado do passo 3)
+### ✅ Presets de `developer` e `business` — DECIDIDO em 2026-08-30 (congelar o mínimo)
+
+> Medido ao vivo: **`developer` tem 1 portador — o próprio `admin@`** — e **`business` tem 0**.
+> Não há baseline porque **não há população**: o preset de `developer` é inerte por construção e
+> o de `business` se aplica a ninguém. Congela-se o mínimo já declarado; o gatilho para desenhar
+> de verdade é o primeiro portador REAL. Ver a § *"SETE decisões do dono — sessão de 2026-08-30"*, #4.
 
 `admin`, `supervisor` e `operator` tiveram os presets **levantados** do `seed_auth.py` — é o que
 eles têm hoje, movido para a declaração. `developer` e `business` **não têm baseline medível**:
@@ -191,7 +491,13 @@ Declarados minimamente em `infra/modules.yaml`:
 **A decisão fica melhor depois do passo 5**, quando a matriz mostrar exatamente o que cada preset
 faz aparecer no menu.
 
-### 🔴 Subsistema de templates de permissão está MORTO (achado do passo 3)
+### ✅ Subsistema de templates de permissão MORTO — DECIDIDO em 2026-08-30 (remover)
+
+> Confirmado ao vivo (0 linhas nas duas tabelas) e o grafo é pior que *"ninguém lê"*: é **laço
+> morto fechado** — `user_can()` sem nenhum chamador, `get_accessible_pools_for_module()` só em
+> teste, `apply_template()` escrevendo numa tabela que ninguém consulta. **São os testes que o
+> fazem parecer vivo.** Remover as duas tabelas + o `apply` + as duas funções; o template segue
+> como preset de `module_config`. Ver a § *"SETE decisões do dono — sessão de 2026-08-30"*, #5.
 
 Medido: `auth.permission_templates` e `auth.platform_permissions` têm **0 linhas**, e **nenhum
 código lê `platform_permissions` para decidir** — a única menção fora do próprio CRUD é um
@@ -377,7 +683,13 @@ Implementado; ver `CHANGELOG.md`. Fica registrado o que a segunda resposta impli
 declara escopo apenas para quem o declara na entrada** — o `supervisor@` tem `accessible_pools`
 montado à mão como caso de teste, e um default aplicado a todos o apagaria em silêncio.
 
-### Cauda de papel no backend (passo 8) — medida
+### Cauda de papel no backend (passo 8) — medida ⚠️ SUBCONTADA (corrigido 2026-08-30)
+
+> **São 4 aqui e mais 8 em `mcp-server-plughub`** (`src/server.ts:1441, 1750, 1841, 2200, 2674,
+> 2756, 2827, 2858`) — um serviço inteiro fora da varredura, com o arco marcado *"1–8 COMPLETO"*.
+> A direção é segura (menu mais estrito que backend), mas alguém vai ler o ✅ como *"papel saiu do
+> backend"*. Regra da casa outra vez: **um censo desenhado para um eixo não prova nada sobre o
+> eixo vizinho** — aqui, o MESMO eixo com um serviço não varrido.
 
 Eliminar o papel do menu **não** o elimina do produto. Restam decisões por papel em:
 
@@ -433,7 +745,7 @@ família *"teste que não pode reprovar"*, e sai pior do que a lista acima.
 e smokes de arco. Entram se e quando tiverem veredicto falseável — o critério é COMPORTAMENTO, não
 prefixo.
 
-**Ainda não coberto por runner nenhum:** as suítes de pytest (analytics 637 · auth 64 · channel-gateway
+**Ainda não coberto por runner nenhum:** as suítes de pytest (analytics 637 · auth ~~64~~ **63**, medido 2026-08-30 · channel-gateway
 676 · evaluation-api 211), das quais 4 testes estão vermelhos e registrados em seção própria. E o
 `auth-api` não tem nem pytest nem os testes na imagem.
 
@@ -647,7 +959,7 @@ Todos eram instrumento herdando a condição que deveria declarar, nenhum era re
 Baselines: evaluation-api 214 · channel-gateway 677.
 
 **O que continua aberto desta seção:** nada roda estas suítes fora deste desvio. São **1 594 testes**
-(analytics 639 · auth 64 · channel-gateway 677 · evaluation 214) que só existem quando alguém lembra —
+(analytics 639 · auth ~~64~~ **63** · channel-gateway 677 · evaluation 214) que só existem quando alguém lembra — ⚠️ **O número do auth está velho: medido em 2026-08-30, eram 83, e ficaram 63 depois da remoção do `platform_permissions`.**
 e `auth-api`/`evaluation-api` não têm pytest na imagem, `auth-api` não tem nem os testes. O `run_gates`
 cobre os gates de shell; as suítes de pytest continuam sem runner.
 
@@ -772,7 +1084,10 @@ Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo co
 
 ### 🆕 Aberto pela fase 3 (2026-08-25)
 
-- **`AnaliseTab.tsx` perdeu o último consumidor.** Ela era usada só por `ContactsPage` e
+- ✅ **`AnaliseTab.tsx` — RESOLVIDO por remoção (medido 2026-08-30).** O arquivo foi apagado em
+  `10bde79` e a feature (métricas agregadas do conjunto filtrado) foi absorvida pelas **cinco
+  lentes da F2**, sobre o mesmo predicado da lista. Não há decisão pendente. Registro original:
+  **`AnaliseTab.tsx` perdeu o último consumidor.** Ela era usada só por `ContactsPage` e
   `AnaliseContatosPage`, as duas removidas — e **já estava inalcançável antes disso**, porque
   nenhuma das duas tinha rota desde a F3.3. Não foi apagada junto de propósito: é uma FEATURE
   (métricas agregadas do conjunto filtrado de contatos), e decidir se ela volta — como aba de
@@ -2944,7 +3259,11 @@ trocar a ordem custa zero.
 que ele é **condicional** em `meta.window_applied`, não permanente · `uniq(root_session_id)` como
 métrica de cabeçalho (lacuna registrada, não fechada).
 
-### 🔴 O chip de PROCESSO SOME para usuário escopado — decisão aberta (medido 2026-08-26)
+### ✅ O chip de PROCESSO SOME para usuário escopado — DECIDIDO E IMPLEMENTADO (2026-08-26)
+
+> ⚠️ **O título dizia "decisão aberta" enquanto o corpo dizia decidido, implementado e provado.**
+> Corrigido em 2026-08-30, depois de a discrepância ter feito o item ser levantado como pendência
+> numa varredura por títulos. É o item 5 da § *"Erros de método"* no seu caso mais barato.
 
 > **Triado, e a triagem herdada estava errada em dois pontos.** A passagem 09-12 mandava marcar
 > *"Include internal sessions"* e ver se a contagem voltava a 108. **Não pode**: o toggle manda
@@ -3068,7 +3387,12 @@ IRRESTRITO"*, que era relevante sob a premissa herdada e hoje só confunde — c
 `pool_auth.py:157-161` implementa exatamente essa convenção (`[] → None → irrestrito`). Ver a
 seção do furo abaixo, onde ela deixa de ser curiosidade e vira decisão.
 
-### 🟡 (d) "ABAC no conteúdo, lista aberta" — proposta do dono, ADIADA com a ORDEM INVERTIDA (2026-08-26)
+### 🟡 (d) "ABAC no conteúdo, lista aberta" — ADIADA; reconfirmada em 2026-08-30
+
+> **Segue adiada**, e a peça 1 dela vira dívida de segurança PRÓPRIA (fechar escopo de conteúdo),
+> que é o pré-requisito que a própria (d) exige primeiro — fazê-lo não compromete com ela. Metade
+> dessa peça passou a existir sozinha em 2026-08-29, com o eixo de cobertura de credencial por
+> rota. A peça 3 (filtro de relevância) só existe SE as listas abrirem. Ver a § *"SETE decisões do dono — sessão de 2026-08-30"*, #6.
 
 **A proposta.** Tirar a ABAC da montagem do chip *e da lista* — todos enxergam todos os contatos e
 segmentos — e aplicá-la **na exibição do conteúdo**, de modo que só quem tem escopo faça drill-down.
@@ -7442,7 +7766,10 @@ Nenhum é do eixo de credencial; os três apareceram porque o conserto passou po
    (o gate só provou que a credencial chega). Conserto = decidir se agrega no servidor ou
    no cliente.
 
-3. **`mcp-server-plughub` não compila.** `src/lib/usage-emitter.ts:73` e `:102` — dois
+3. ~~**`mcp-server-plughub` não compila.**~~ ⚠️ **VENCIDO — medido `TSC_OK` em 2026-08-30**
+   (o conserto `segment_id: null` está em `usage-emitter.ts:82`, e o container BATE com o repo —
+   sem bind mount, imagem reconstruída). O registro abaixo fica pelo modo de falha que descreve.
+   Texto original: `src/lib/usage-emitter.ts:73` e `:102` — dois
    `TS2345` em `EmitParams`. Consequência operacional: `docker compose up -d --build
    platform-ui` **falha**, porque o platform-ui tem `depends_on: mcp-server-plughub` e o
    compose constrói a dependência. O contorno é `build platform-ui` + `up -d --no-deps

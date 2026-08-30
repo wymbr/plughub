@@ -255,7 +255,7 @@ if [ -f "$SCHEMAS/dist/context-map.js" ]; then
     const o = t => resolveContextTag(t, ix).origin
     console.log(JSON.stringify({
       naoDeclarada: o("session.campo_que_ninguem_declarou"),
-      lacunaReal:   o("session.vencimento_cartao"),
+      lacunaFechada: o("session.vencimento_cartao"),
       agente:       o("agent.part_123.foo"),
       segmento:     o("segment.seg_9.bar"),
     }))
@@ -266,9 +266,23 @@ if [ -f "$SCHEMAS/dist/context-map.js" ]; then
     echo "$F" | grep -q '"naoDeclarada":"unknown"' \
       && ok "F: tag fora do mapa e ACUSADA (unknown)" \
       || bad "F: tag fora do mapa nao foi acusada — $F"
-    echo "$F" | grep -q '"lacunaReal":"unknown"' \
-      && ok "F: session.vencimento_cartao acusado — a lacuna do CATALOGO fica visivel" \
-      || bad "F: a lacuna deliberada deixou de aparecer — $F"
+    # 2026-08-30 (D8.3) — a assercao INVERTEU, e a inversao E a entrega.
+    #
+    # Ate aqui session.vencimento_cartao era a lacuna DELIBERADA da V3: campo com
+    # politica viva (last_2) cujo tipo nao existia no catalogo. O ramo exigia que
+    # caisse em unknown, isto e, que a auditoria a ACUSASSE. O catalogo ganhou
+    # card_expiry e o campo entrou no mapa como session.cartao.vencimento, entao a
+    # grafia antiga passou a resolver como ALIAS.
+    #
+    # A assercao NAO foi removida, porque a proposicao a proteger mudou e nao sumiu:
+    # era "a lacuna e visivel", hoje e "a lacuna esta FECHADA e nao volta em
+    # silencio". Um ramo apagado deixaria o campo poder virar nao-declarado outra vez
+    # sem nada ficar vermelho. O caso SINTETICO (naoDeclarada) segue cobrindo "o
+    # balde unknown funciona"; este cobre um campo REAL e medido, que e o que uma
+    # regressao de verdade atingiria.
+    echo "$F" | grep -q '"lacunaFechada":"alias"' \
+      && ok "F: session.vencimento_cartao resolve como ALIAS — lacuna do catalogo FECHADA" \
+      || bad "F: esperado alias (lacuna fechada), veio — $F"
     if echo "$F" | grep -q '"agente":"dynamic"' && echo "$F" | grep -q '"segmento":"dynamic"'; then
       ok "F: agent.*/segment.* no balde DINAMICO — nao inflam a lista da V4"
     else

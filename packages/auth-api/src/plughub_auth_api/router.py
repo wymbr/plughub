@@ -31,16 +31,12 @@ from .jwt_utils import (
     hash_refresh_token,
 )
 from .models import (
-    ApplyTemplateRequest,
     CreateTemplateRequest,
     CreateUserRequest,
-    GrantPermissionRequest,
     LoginRequest,
     LogoutRequest,
     MeResponse,
-    PermissionResponse,
     RefreshRequest,
-    ResolvePermissionResponse,
     TemplateResponse,
     TokenResponse,
     TokenUserInfo,
@@ -465,84 +461,20 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
 
 
-# ─── Platform permissions (admin) ─────────────────────────────────────────────
-
-def _perm_to_response(row: dict[str, Any]) -> PermissionResponse:
-    return PermissionResponse(
-        id=str(row["id"]),
-        tenant_id=row["tenant_id"],
-        user_id=row["user_id"],
-        module=row["module"],
-        action=row["action"],
-        scope_type=row["scope_type"],
-        scope_id=row.get("scope_id"),
-        granted_by=row["granted_by"],
-        template_id=str(row["template_id"]) if row.get("template_id") else None,
-        created_at=row["created_at"].isoformat() if hasattr(row.get("created_at"), "isoformat") else str(row.get("created_at", "")),
-    )
-
-
-@router.post("/permissions", response_model=PermissionResponse, status_code=201,
-             dependencies=[Depends(_PERMS_WRITE)])
-async def grant_permission(body: GrantPermissionRequest, request: Request) -> PermissionResponse:
-    """Concede permissão a um usuário. Idempotente (ON CONFLICT UPDATE)."""
-    pool = _get_pool(request)
-    row = await perms_mod.grant_permission(
-        pool,
-        tenant_id=body.tenant_id,
-        user_id=body.user_id,
-        module=body.module,
-        action=body.action,
-        scope_type=body.scope_type,
-        scope_id=body.scope_id,
-        granted_by=body.granted_by,
-    )
-    return _perm_to_response(row)
-
-
-@router.get("/permissions", response_model=list[PermissionResponse],
-            dependencies=[Depends(_PERMS_READ)])
-async def list_permissions(
-    request: Request,
-    tenant_id: str = "tenant_demo",
-    user_id: str | None = None,
-    module: str | None = None,
-) -> list[PermissionResponse]:
-    pool = _get_pool(request)
-    rows = await perms_mod.list_permissions(pool, tenant_id, user_id=user_id, module=module)
-    return [_perm_to_response(r) for r in rows]
-
-
-@router.delete("/permissions/{permission_id}", status_code=204,
-               dependencies=[Depends(_PERMS_WRITE)])
-async def revoke_permission(permission_id: str, request: Request) -> None:
-    pool = _get_pool(request)
-    revoked = await perms_mod.revoke_permission(pool, permission_id)
-    if not revoked:
-        raise HTTPException(status_code=404, detail="Permission not found")
-
-
-@router.get("/permissions/resolve", response_model=ResolvePermissionResponse)
-async def resolve_permission(
-    request: Request,
-    tenant_id: str,
-    user_id: str,
-    module: str,
-    action: str,
-    pool_id: str | None = None,
-) -> ResolvePermissionResponse:
-    """
-    Verifica se o usuário tem permissão para (module, action) no escopo indicado.
-    Acessível sem admin token — útil para UIs verificarem permissões antes de renderizar.
-    """
-    pool = _get_pool(request)
-    allowed = await perms_mod.resolve_permissions(
-        pool, tenant_id=tenant_id, user_id=user_id,
-        module=module, action=action, pool_id=pool_id,
-    )
-    return ResolvePermissionResponse(
-        allowed=allowed, user_id=user_id, module=module, action=action, pool_id=pool_id,
-    )
+# ─── Platform permissions — REMOVIDO em 2026-08-30 ───────────────────────────
+#
+# Aqui viviam `POST/GET/DELETE /permissions` e `GET /permissions/resolve`, sobre a
+# tabela `auth.platform_permissions`. Saíram inteiros: **zero linhas** na tabela e
+# **zero consumidores de produção** (só os testes chamavam), enquanto quem de fato
+# decide *"esta pessoa pode?"* é `auth.users.module_config`, lido pelo verificador
+# canônico `plughub_authz`.
+#
+# O risco não era o custo de manter: era um endpoint que **parece conceder
+# permissão** e escreve numa tabela que ninguém consulta. Duas respostas para a
+# mesma pergunta significam que a mais permissiva vale — mesmo modo de falha que a
+# V2b removeu do masking e o grant-first removeu do menu.
+#
+# Ver `permissions.py` (cabeçalho) para o resíduo físico deliberado.
 
 
 # ─── Permission templates (admin) ─────────────────────────────────────────────
@@ -625,30 +557,11 @@ async def delete_template(template_id: str, request: Request) -> None:
         raise HTTPException(status_code=404, detail="Template not found")
 
 
-@router.post("/templates/{template_id}/apply", response_model=list[PermissionResponse],
-             dependencies=[Depends(_PERMS_WRITE)])
-async def apply_template(
-    template_id: str,
-    body: ApplyTemplateRequest,
-    request: Request,
-) -> list[PermissionResponse]:
-    """
-    Aplica o template a um usuário, materializando as permissões em platform_permissions.
-    scope_override sobrescreve o scope_type/scope_id de todas as entradas do template.
-    """
-    pool = _get_pool(request)
-    try:
-        rows = await perms_mod.apply_template(
-            pool,
-            template_id=template_id,
-            tenant_id=body.user_id.split(":")[0] if ":" in body.user_id else "tenant_demo",
-            user_id=body.user_id,
-            granted_by=body.granted_by,
-            scope_override=body.scope_override,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return [_perm_to_response(r) for r in rows]
+# `POST /templates/{id}/apply` foi REMOVIDO em 2026-08-30 junto de
+# `platform_permissions`: ele materializava o template naquela tabela, e a tela de
+# Acesso nunca o chamou — ela copia `template.config` no cliente para PRÉ-PREENCHER
+# o formulário de usuário. O template continua sendo preset; o que sumiu foi a
+# segunda semântica do mesmo objeto.
 
 
 # ─── Module registry ──────────────────────────────────────────────────────────

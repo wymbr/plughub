@@ -69,7 +69,21 @@ CREATE TABLE auth.module_registry (
 );
 ```
 
-### `auth.platform_permissions`
+### `auth.platform_permissions` — ❌ REMOVIDA em 2026-08-30
+
+> ❌ **REMOVIDO em 2026-08-30.** A tabela `auth.platform_permissions`, as quatro rotas
+> `/auth/permissions*` e o `POST /auth/templates/{id}/apply` saíram do código. Medido antes:
+> **0 linhas** na tabela e **0 consumidores de produção** — nenhuma UI e nenhum serviço os
+> chamava; os únicos chamadores eram os testes, e é por isso que o subsistema parecia vivo.
+>
+> Quem responde *"esta pessoa pode?"* é `auth.users.module_config`, lido pelo verificador
+> canônico `plughub_authz`. Manter um endpoint que **parece conceder permissão** e escreve
+> numa tabela que ninguém lê é a duplicação que o arco do ABAC TOTAL existe para matar.
+>
+> **O que FICA:** `auth.permission_templates` e o seu CRUD — consumidor vivo é a tela de
+> Acesso, que usa `template.config` como preset copiado no cliente.
+>
+> A descrição abaixo fica como registro do que existiu. Ver `CHANGELOG.md` (2026-08-30).
 
 ```sql
 CREATE TABLE auth.platform_permissions (

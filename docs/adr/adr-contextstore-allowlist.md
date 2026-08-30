@@ -36,6 +36,16 @@ nada impõe —, e o dano aqui é concreto: quem lesse só o cabeçalho reimplem
 5. São **quatro políticas** distintas (escrita, leitura por agente, exibição a humano, persistência)
    compartilhando **um** vocabulário. Fundi-las é erro; separá-las em quatro vocabulários é o estado
    atual.
+6. **FINALIDADE é dimensão do tipo** (D8, 2026-08-30): campo cuja finalidade dispensa máscara ganha
+   tipo próprio — nomeado pela finalidade, com a classe LGPD preservada —, nunca uma regra `plain`
+   de exceção, que daria duas respostas à mesma pergunta. E o **discriminador mora no domínio**
+   (`cartao.cpf`, não `cartao.cpf_titular`), porque o casador não tem glob de meio.
+7. **O ContextStore vira CADASTRO** (D9, proposto 2026-08-30) — emenda que SUPERSEDE a D2 como
+   allowlist-por-nome. O domínio inteiro é configurado antes do uso, como um `DialogForm`; o que
+   não está registrado não passa no **publish** (o runtime nunca rejeita, resolve restritivo e
+   loga). Tipagem e mascaramento resolvem-se no cadastro, e a visibilidade do pool vira SELEÇÃO
+   sobre a estrutura cadastrada. Motivo medido: a enumeração de NOMES não fecha — 75 canônicas
+   declaradas, **4** observadas, 13 correções vindas de 4 fluxos.
 
 ---
 
@@ -408,6 +418,312 @@ que é exatamente o erro que o mock do `test_store.py` carregava.
 
 ---
 
+### D8 — FINALIDADE é dimensão do TIPO; o DISCRIMINADOR mora no domínio — ✅ **decidido 2026-08-30**
+
+Duas decisões do dono, tomadas ao fechar as três folhas que faltavam ao mapa da V3. Ambas
+estendem a D1 e a D2 em vez de as emendarem, e ambas nasceram de medição, não de simetria.
+
+#### D8.1 — Campo cuja FINALIDADE dispensa máscara ganha TIPO próprio, nunca exceção de regra
+
+A D1 diz que o tipo é `formato × máscara-por-papel × classe LGPD`. Faltava um eixo, e ele
+apareceu num campo concreto: `session.portabilidade.numero_atual` é a **linha sendo portada** —
+um telefone, mas **objeto do atendimento**, não dado de cadastro. Sem esse eixo, ele e
+`session.cliente.telefone` eram o **mesmo `phone`**, e a única saída teria sido uma regra
+`plain` explícita para a tag.
+
+**Essa saída é a errada, e o motivo é o do próprio arco:** com a regra dizendo `plain` e o mapa
+dizendo `phone`, *"que máscara este campo usa?"* teria **duas respostas**, e a mais permissiva
+venceria — a mesma forma que a V2b removeu do leitor legado de canal. A finalidade entra
+portanto como **TIPO** (`linha_em_servico`), com três propriedades load-bearing:
+
+| propriedade | por quê |
+|---|---|
+| nome pela **FINALIDADE**, nunca pelo formato | um `phone_open` é arma carregada apontada para o próximo telefone de cadastro |
+| `lgpd` **preservado** (`pessoal`) | o que se declara vazio é a MÁSCARA, nunca a CLASSE — um relatório LGPD tem de seguir dizendo que um telefone foi coletado. `texto` (`lgpd: "none"`) seria a economia que mente |
+| `declared_only: true` **obrigatório** | a detecção olha o VALOR, e o valor não diz a finalidade; dois tipos com o mesmo regex seriam ambíguos em texto livre. É a D5 do ADR do `masked` tipado, aplicada ao mapa |
+
+`by_role` vazio ⇒ **inelegível a `masked:`** por `typeMasksSomething`, como o `texto`. Correto:
+tipo que não esconde nada não pode declarar que algo está escondido.
+
+⚠️ **A §1.1 não muda de sentido.** O defeito nunca foi *"o valor está visível"*; foi *"o valor
+está visível **porque ninguém decidiu**"*. `numero_atual` sai do `default_unmatched_operator` e
+passa a ser uma **declaração**, que é exatamente o que a inversão da V4 existe para exigir.
+
+⚠️ **Evidência que se mostrou fraca, registrada para não ser reusada.** Ao propor mascarar o
+campo, argumentei que a plataforma *"já o protege uma borda ao lado"* — `_LEGACY_PREVIEW_SPEC`
+(`webhook.py:2298`) o mascara `last_4`. **Não sustenta**: aquele preview vai ao **cliente**, na
+retomada cross-canal, e ali mascarar é **anti-enumeração** (não confirmar dado a quem ainda não
+provou posse). Audiência e finalidade diferentes — as duas bordas podem divergir com razão, e é
+justamente disso que a D8.1 trata.
+
+#### D8.2 — O discriminador mora no segmento de DOMÍNIO, nunca no nome da folha
+
+O mapa da V3 trazia `session.cartao.cpf_titular`. Decisão: a folha canônica é **`cpf`**, e o
+discriminador (*de quem* é o CPF) fica no domínio — `cartao`. Não é preferência estética; é o
+único desenho que o mecanismo suporta:
+
+> **Medido (`lib/context-masking.ts:80-160`):** o casador aceita **exato**, **sufixo** (`*.x`,
+> por fronteira de segmento), **prefixo** (`x.*`) e `*`. **Não há glob de meio.** Um `*cpf*`
+> cairia no ramo *"non-glob pattern that isn't an exact match"* e seria **regra inerte**, sem
+> nada ficar vermelho.
+
+Logo *"CPF protegido independentemente de qual CPF"* só é alcançável com a tag terminando em
+`.cpf` — e é o glob genérico `*.cpf`, que já existe, que passa a cobrir a família inteira. O
+princípio pedido pelo dono (*"declarar só o genérico; o cadastro aponta para o canônico"*) e o
+mecanismo coincidem, e o `legado[]` da D3 **é** esse apontamento.
+
+**Critério derivado, para toda folha nova:** se o nome da folha carrega um qualificador
+(`_titular`, `_origem`, `_alternativo`), o qualificador pertence ao domínio, não ao campo.
+
+#### D8.3 — A lacuna do CATÁLOGO fecha no catálogo, e só então o mapa cresce
+
+`session.vencimento_cartao` ficou **fora** da V3 de propósito: tinha política viva (`last_2`) e
+nenhum dos 11 tipos casava máscara **e** classe (`credit_card` é `last_4`, e sobre `MM/AA` isso
+mostraria quase tudo — o argumento da T6 para o CVV). Fechou-se **no catálogo**, com
+`card_expiry`, e só depois o campo entrou no mapa como `session.cartao.vencimento`.
+
+**A ordem é o critério, e vale como regra:** catálogo primeiro, mapa depois. O inverso —
+declarar um tipo aproximado para o campo caber — escreveria no mapa uma política que ninguém
+decidiu, e a V4 a aplicaria.
+
+⚠️ **`card_expiry` é tipo de LEITURA, nunca de COLETA.** Ele mascara algo, logo é elegível a
+`masked:` pelo portão da T5 — e declará-lo no campo do formulário quebraria o pacote de
+aprovação **em silêncio**: pela D4 do ADR do `masked` tipado, masked nunca entra em
+`pipeline_state`, e é de lá que `skill_limite_entrada_v1.yaml:475` lê o valor para escrever a
+tag. O formulário declara `masked` só no `cvv`, e isso é desenho — ver
+`infra/dialog/dialog_limite_solicitacao.json`. O portão não distingue os dois usos; quem
+distingue é esta linha.
+
+#### Estado após a D8
+
+Catálogo **13** tipos (`verifyDataTypeCatalog`: órfãos `[]`, categorias sem tipo `[]`); mapa
+**75 canônicas / 40 aliases**, as quatro listas do `verifyContextMap` vazias.
+
+✅ **Store vivo reaplicado em 2026-08-30** (`--overwrite` das três keys + restart do config-api;
+o cache é em processo, re-semear não basta). A API serve 13 tipos e 75/40, e o gate
+`probe_context_map_audit.sh` fecha com **16 asserções verdes**.
+
+O **ramo F do gate INVERTEU**, e a inversão é a entrega: ele usava `session.vencimento_cartao` como
+testemunha de *"a lacuna deliberada é acusada (`unknown`)"*, e a D8.3 fechou essa lacuna. A asserção
+não foi removida — a proposição passou a ser *"a lacuna está FECHADA e não volta em silêncio"*.
+Provado por mutação (removido o alias, o ramo fica vermelho).
+
+⚠️ **O `tenant_demo` mantém override próprio de `context_rules`** — o seed só escreve `__global__` —
+e ele difere por uma regra em cada direção (tem `session.cpf_titular`, não tem a exata
+`session.vencimento_cartao`). Sem lacuna de comportamento: o glob `*.vencimento_cartao` está nos
+dois. Limpá-lo é ato sobre config de tenant.
+
+### D9 — O ContextStore vira CADASTRO: o que não está registrado não pode ser usado — 🆕 **proposto 2026-08-30**
+
+> **Emenda que SUPERSEDE parte da D2 e redefine a D5.** Proposta do dono depois de a V3
+> ser exercitada com tráfego real. O que cai não é o rigor — é a **natureza do problema**.
+
+#### O que a medição derrubou
+
+A D2 desenhou o mapa como uma **enumeração de NOMES**. Nomes são autorados pelo tenant: a
+população é **aberta**. Medido em 2026-08-30, com tráfego real:
+
+| medição | valor |
+|---|---|
+| canônicas declaradas no mapa | **75** |
+| canônicas observadas sendo ESCRITAS | **4** |
+| aliases que faltavam, achados numa passada | **13** |
+| campos ainda sem canônica nenhuma | **7** |
+| fluxos que produziram isso | **4**, de 44 skills, num tenant |
+
+Quatro fluxos e o mapa já precisou de 13 correções. Não há horizonte de convergência: cada
+fluxo novo que alguém autora acrescenta nomes que ninguém declarou. **A V4 estava bloqueada
+por uma enumeração que não fecha.**
+
+E há um segundo defeito, apontado pelo dono e mais grave que o primeiro: **os tipos criados
+neste arco saíram de cenários de DEMO** (`skill_limite_processo_v1`,
+`agente_portabilidade_intake_v1`). `card_expiry` ainda se defende — vencimento de cartão é
+uma classe real. **`linha_em_servico` é o caso claro**: a *distinção* que ele carrega
+(finalidade × cadastro) é geral e boa, mas o *tipo* nasceu da semântica de um fluxo de
+demonstração. Extrair regra geral de exemplo proprietário é o erro, e ele estava em curso.
+
+**A separação que faltava:**
+
+| | catálogo de **tipos** | mapa de **nomes** |
+|---|---|---|
+| população | **fechada** (13 hoje) | **aberta** — o tenant autora |
+| generaliza? | sim — CPF, telefone, cartão são classes de qualquer tenant | não — `session.approval_threshold` é o cenário de um cliente |
+| mantenível por | a plataforma | ninguém, por construção |
+
+A V3 fundiu os dois e apoiou a allowlist na metade que não fecha.
+
+#### A decisão
+
+**O domínio inteiro do ContextStore passa a ser CONFIGURADO antes do uso**, como um
+`DialogForm`: declarado, versionado, publicado, e só então consumido. **O que não está
+cadastrado não pode ser usado.**
+
+O cadastro é a fonte única de: o campo existir · o **domínio** em que mora · o **tipo**
+(`atributo`) e, por consequência, **máscara por papel e classe LGPD**.
+
+Isto responde a §2 do briefing do dono — *"o ContextStore nasceu para passar dados úteis
+adiante e nunca foi padronizado"*. O mapa era uma tentativa de impor ordem **retroativamente,
+por enumeração**; só funciona com população fechada, e ela não é.
+
+#### D9.1 — O portão é no PUBLISH; o runtime nunca rejeita
+
+*"Não pode ser usado"* está certo como **contrato** e seria perigoso como **runtime**: escrita
+rejeitada em execução faz um erro de cadastro derrubar atendimento em curso.
+
+A casa já decidiu isto uma vez — D3 do `adr-masked-typed-declaration.md`. **Duas guardas,
+posturas opostas:**
+
+| momento | postura |
+|---|---|
+| **publish do skill** | **RECUSA**, nomeando a tag não cadastrada. Alto, estático, antes de rodar |
+| **runtime** | **nunca rejeita a escrita**; grava, resolve para o mais restritivo e **LOGA nomeando** |
+
+Sem a segunda metade, a primeira troca um vazamento por uma queda — e a §"Postura de
+Engenharia" já cataloga esse padrão.
+
+#### D9.2 — A pré-condição é ser estaticamente enumerável, e foi MEDIDA
+
+O modelo só é viável se a população puder ser descoberta sem tráfego. Medido em 2026-08-30
+sobre `packages/skill-flow-engine/skills/`:
+
+- **21** escritas declaradas em YAML — **todas com nome literal**;
+- **zero** `tag:` com interpolação;
+- **zero** chaves de `delegate.context` compostas em runtime.
+
+**Consequência que é o ganho central:** o problema deixa de ser de **observação** (rodar
+tráfego, esperar aparecer, repetir até secar) e passa a ser de **análise estática** (varrer os
+artefatos no publish). O *loop-until-dry* que a fase anterior exigia **deixa de ser
+necessário**, e a lista de migração é produzível hoje.
+
+#### D9.3 — O cadastro tem DUAS origens, não uma
+
+Boa parte das tags é escrita por **código de plataforma** — channel-gateway (`ctx_writes`),
+orchestrator-bridge, routing-engine, mcp-server, ai-gateway. Nenhum portão de publish de skill
+alcança esses.
+
+| origem | registra | onde |
+|---|---|---|
+| **plataforma** | tags escritas pelo próprio código | seed (é o que o `DEFAULT_CONTEXT_MAP` já é) |
+| **tenant** | tags autoradas em skills/flows | configuração, pela tela |
+
+Mesma partição de `infra/modules.yaml` × config por tenant. Sem ela, o portão pareceria
+fechado e metade dos escritores passaria por fora.
+
+#### D9.4 — Prefixos dinâmicos continuam FAMÍLIA, nunca folha
+
+`agent.{participantId}.*` e `segment.{segId}.*` não são enumeráveis campo a campo — o segundo
+segmento é id de runtime. O mapa já os trata como terceiro balde, e o cadastro precisa manter
+a noção de **família registrada**, senão a lista nasce impossível de fechar e o número que
+autoriza a inversão vem inflado por campos que não podem ser declarados.
+
+#### D9.5 — Conteúdo LIVRE precisa de marcação própria
+
+`caller.note` e `caller.observacao` são o caso em que **o cadastro não basta**: o campo está
+registrado, mas o *valor* pode trazer qualquer coisa. Anotação de agente é certeza em
+produção, não hipótese.
+
+É onde a metade de **DETECÇÃO** do catálogo (`formato.detect_pattern`) deixa de ser
+complemento e vira a única defesa. O cadastro é o lugar certo para declarar *"este campo é
+conteúdo livre"* — e essa marcação é o que liga a detecção sobre ele.
+
+#### D9.6 — Tipagem e mascaramento resolvem-se no CADASTRO
+
+Decisão do dono. O catálogo de tipos (V2/V2b/D8) **sobrevive inteiro** e vira o vocabulário do
+`atributo` de cada registro. E há uma consequência que barateia tudo:
+
+> **O escritor não declara nada.** O tipo já está no cadastro; o caminho de escrita
+> **CARIMBA** o `atributo` na entrada a partir do registro.
+
+Três propriedades vêm juntas: o autor **não tem como errar** (não há o que declarar); o dado
+guardado fica **autodescritivo** (bom para o snapshot durável da F5 e para export de LGPD);
+e o tipo tem **uma casa só**.
+
+⚠️ **Pré-requisito nomeado, e é o custo real:** carimbar exige **choke point de escrita**, e o
+§1.7 já mediu **12 `HSET` diretos** no ctx sem ponto único. Enquanto eles existirem, o carimbo
+tem furo — e o furo é silencioso.
+
+#### D9.7 — A visibilidade do pool é SELEÇÃO sobre a estrutura cadastrada
+
+Decisão do dono. A tela de configuração do pool **mostra a estrutura já cadastrada** e o
+operador **seleciona quais campos são liberados** para os recursos daquele pool. Não há texto
+livre, e não há como escolher o que não existe.
+
+O mecanismo da **D6 sobrevive** — ela já trocou texto livre por seleção sobre o mapa. O que
+muda é a **fonte**: passa a ser o cadastro, e a seleção pode ser por **campo** ou por
+**atributo/classe**. A segunda é a que torna a config operável: hoje a D6 lista **113 tags
+nominais**, o que ninguém mantém; classes são um punhado.
+
+E isto é o que fecha a §3 do briefing do dono: o campo de config já existia com esse
+propósito e não era usado, porque não havia estrutura declarada sobre a qual escolher.
+
+#### D9.8 — Domínio: lista FECHADA de PAPÉIS; vocabulário de negócio é DADO
+
+O agrupamento existe porque a alternativa está medida: **130 grafias**, duas famílias de nome
+para o mesmo domínio (`session.survey_*` do gateway × `session.surveyed_*` do bridge), um
+namespace `approval.*` que não é escopo, e palavras genéricas viradas chave de topo
+(`session.title`, `session.status`, `session.summary`).
+
+**Mas a lista tem de ser um nível mais abstrata que o catálogo do tenant:**
+
+```
+produto.tipo = "seguro_auto"     ✅  o catálogo do tenant é VALOR
+produto.seguro_auto.apolice      ❌  o catálogo do tenant virou ESTRUTURA
+```
+
+É a D8.2 um andar acima: o discriminador não sobe para a estrutura. Uma telco não tem
+"seguro"; uma seguradora não tem "linha". Fechar o vocabulário de negócio no cadastro da
+plataforma repete, um nível acima, o erro de fechar o mapa de nomes.
+
+**Corolário de composição:** a lista é só de **papéis**. Misturar entidade (`cliente`,
+`produto`) com estado/evento (`pendências`, `erros`) na mesma lista de topo é como taxonomia
+apodrece — em seis meses *"pendência de cliente"* tem duas casas defensáveis, que é o defeito
+de *"duas respostas para a mesma pergunta"* que este arco inteiro persegue. Estado é
+`atributo` ou valor.
+
+Candidatos: `cliente · produto · transacao · atendimento · processo · tarefa · sistema`.
+
+⚠️ **A evidência a favor desta lista é FRACA, e está declarado.** Classificando as 130 grafias
+medidas: **105 caem em uma só · 0 ambíguas · 10 fora · 15 ruído**. **O único número que vale
+independente da população é o ZERO de ambiguidade** — ele é propriedade da lista, não dos
+dados. Os outros descrevem hábitos de **demo**: o produto não está em produção e não há caso
+real. A lista deve ser julgada por ser **principiada**, não por caber nos demos.
+
+#### E três eixos, que é o teto
+
+| eixo | responde | quem decide |
+|---|---|---|
+| **escopo** (`session`/`journey`/`customer`) | onde mora, por quanto tempo | roteamento que já existe |
+| **atributo** (classe) | que espécie de dado é | catálogo fechado, plataforma |
+| **domínio** | sobre o que é | cadastro |
+
+O domínio carrega **organização e descoberta — nunca política**. Se ele começar a decidir
+máscara, passam a existir duas respostas para *"isto é sensível?"*, e a permissiva vence.
+
+#### O que esta emenda supersede, e o que sobrevive
+
+**Supersede:** a **D2** enquanto *allowlist de leitura por nome* (o mapa vira o **cadastro**, e
+isso é promoção, não descarte) e a **D5**, cujo deny-by-default deixa de ser sobre *nome não
+declarado no read* e passa a ser sobre *tag não cadastrada no publish*.
+
+**Sobrevive intacto:** a **D1** (o tipo é a declaração única), o **catálogo** (V2, V2b, D8), a
+**D3**/**D4**, o mecanismo de **alias** da D3 — que deixa de ser caminho crítico e vira
+**instrumento de migração** —, e a **D6**, que ganha a fonte que lhe faltava.
+
+**A V4 é REDEFINIDA**, não adiada: deixa de ser *"inverter o default de leitura"* e passa a ser
+*"ligar o portão de publish"*, com a lista de migração produzível por análise estática.
+
+#### Decisões que esta emenda deixa ABERTAS
+
+1. **O choke point de escrita** — desenho e migração dos 12 `HSET` diretos. É o pré-requisito
+   do carimbo (D9.6) e o item de maior esforço.
+2. **Onde mora a tela de cadastro** — e a fricção que ela cria: campo novo passa a exigir
+   registro. É a *feature*, e é também o que faz gente contornar. O erro de publish precisa
+   dizer exatamente o que registrar, e o cadastro precisa morar onde o autor já está.
+3. **A lista de domínios**, que só deve fechar com o critério de PAPEL acima — nunca por caber
+   nos demos.
+4. **O destino de `linha_em_servico`**, criado hoje a partir de um fluxo de demonstração: a
+   distinção finalidade × cadastro é boa; o tipo pode estar sobre-ajustado.
+
 ## 3. As sete perguntas do briefing — respostas
 
 **1. As regras vêm mesmo do config-api?** ✅ Sim, e a tela é que mentia — **fechado em 2026-08-26**.
@@ -523,11 +839,13 @@ hierárquico hoje (`ContextTagEntrySchema.tag`, regex multi-nível em `context-s
 | **V1b** | A segunda porta (§1.5). **FEITA em 2026-08-26** (ver `CHANGELOG.md`): política extraída para `lib/context-masking.ts` e aplicada ao tool MCP `supervisor_state`, em **grau operator sem portão de namespace**; `context_masking` no retorno. Gate `probe_supervisor_tool_masking.sh` (6 ramos; **C** = testemunha negativa contra blanket-mask, **B** usa o endpoint HTTP como **oráculo** em vez de valor hardcodado). Barata porque **0 skills consumiam** o campo — o custo teria crescido com o primeiro consumidor | sim |
 | **V2** | Catálogo de tipos (D1) declarado e semeado, **sem nenhum consumidor novo** — os mecanismos atuais passam a lê-lo. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `DataTypeSchema` + `DEFAULT_DATA_TYPE_CATALOG` (7 tipos, só o ALCANÇÁVEL — `iban`/`passport` fora), `DEFAULT_MASKING_RULES` passou a ser **derivada** do catálogo, `masking.types` semeado, e a tela iterando o dado com **selo derivado** em vez do "Ativo" incondicional. Gates `probe_type_catalog.sh` (dois lados + testemunha do ORÁCULO) e `probe_masking_display_parity.sh` (três portas, com testemunha contra o caso vácuo). Dois defeitos alheios caíram junto: o leitor de regras de canal apontava para uma rota inexistente (**inerte desde sempre**) e o `\(?` do regex de telefone era ramo morto | sim |
 | **V2b** | Fechar a casa LEGADA de display rule (`rule.{category}`) — pré-requisito do `masked` TIPADO, que não pode ser escrito enquanto a mesma pergunta tiver duas respostas. **FEITA em 2026-08-29** (ver `CHANGELOG.md`). **A remoção foi autorizada por CONTADOR, não por decreto:** o ramo D do `probe_type_catalog.sh` publicava o número de chaves legadas dizendo *"a remoção é MEDIDA por este número zerar"* — zerou. Medido antes de tocar: **zero escritores** em todo o repositório (a V2 já migrara a tela; os três `putConfig` da `MaskingPage` são `audit_policy/{key}`, `masking/types`, `masking/context_rules`), **zero chaves** em todo o `platform_config` (todos os tenants, todos os namespaces — contra 8 linhas do ns `masking` de testemunha) e **quatro leitores**, todos no `platform-ui`. Gate `probe_legacy_display_rule_closed.sh`, visto **vermelho antes de verde** (4 casas → 0). Achado: o leitor legado **não era peso morto** — `getMaskingRule` devolvia o override e `update()` o gravava de volta no CATÁLOGO, então editar qualquer campo de uma categoria com override **promovia o legado a tipo, em silêncio**; armadilha ARMADA, blast radius zero por ausência de dado | sim |
-| **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria**. **FEITA em 2026-08-29** (ver `CHANGELOG.md`): `masking.context_map` com **74 campos e 39 aliases**, semeado a partir do CENSO (leitura ∪ escrita — as duas varreduras discordam), `resolveContextTag` resolvendo **na borda** nas DUAS portas humanas, e o PAR de contadores com data em `{t}:ctx:audit:*`, legível por `GET /internal/context-audit`. **O mapa não recusa nada e o enum `mode` tem UM valor** — não existe config capaz de ligar a V4 antes de o código que a honra existir. Três achados que a fase produziu: **(1)** o `486` da §1.8 **não reproduz** (são 231/53 arquivos), e leitura sozinha não é o denominador — escrita traz campos que nenhuma leitura menciona; **(2)** `legado` teve de virar ARRAY (D3), porque o mesmo campo tem duas grafias vivas; **(3)** o mapa exigiu o primeiro tipo que **não mascara** (`texto`), e com ele um fail-open que não existia — `masked: "texto"` passaria pelo portão da T5, que só conferia EXISTÊNCIA do id. Fechado por predicado derivado (`typeMasksSomething`), não por lista de exceção, com testemunha positiva ao lado. Gate `probe_context_map_audit.sh` (8 ramos), visto **vermelho antes de verde** | sim |
-| **V4** | Inverter para deny-by-default, com a lista real que a V3 produziu | **não** |
+| **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria**. **FEITA em 2026-08-29** (ver `CHANGELOG.md`): `masking.context_map` com **74 campos e 39 aliases**, semeado a partir do CENSO (leitura ∪ escrita — as duas varreduras discordam), `resolveContextTag` resolvendo **na borda** nas DUAS portas humanas, e o PAR de contadores com data em `{t}:ctx:audit:*`, legível por `GET /internal/context-audit`. **O mapa não recusa nada e o enum `mode` tem UM valor** — não existe config capaz de ligar a V4 antes de o código que a honra existir. Três achados que a fase produziu: **(1)** o `486` da §1.8 **não reproduz** (são 231/53 arquivos), e leitura sozinha não é o denominador — escrita traz campos que nenhuma leitura menciona; **(2)** `legado` teve de virar ARRAY (D3), porque o mesmo campo tem duas grafias vivas; **(3)** o mapa exigiu o primeiro tipo que **não mascara** (`texto`), e com ele um fail-open que não existia — `masked: "texto"` passaria pelo portão da T5, que só conferia EXISTÊNCIA do id. Fechado por predicado derivado (`typeMasksSomething`), não por lista de exceção, com testemunha positiva ao lado. Gate `probe_context_map_audit.sh` (8 ramos), visto **vermelho antes de verde**. ⚠️ **Números superados pela D8 (2026-08-30): 75 campos e 40 aliases**, com o catálogo em **13** tipos | sim |
+| **V4** | ~~Inverter para deny-by-default, com a lista real que a V3 produziu~~ — **REDEFINIDA pela D9 (2026-08-30)**: deixa de ser *"inverter o default de LEITURA sobre uma lista de nomes"* e passa a ser *"ligar o PORTÃO DE PUBLISH sobre o cadastro"*. Não é adiamento: a versão antiga estava bloqueada por uma enumeração que não fecha (4 fluxos → 13 correções + 7 pendências), e a nova tem lista de migração **produzível por análise estática** — medido: 21 escritas em YAML, **todas literais**, zero nome dinâmico | **não** |
 | **V5** | Tela do pool vira seletor (D6); fechamento dos aliases cujo contador zerou. **D6 FEITA em 2026-08-29** (ver `CHANGELOG.md`): `context_visibility` deixou de ser texto livre e passou a SELEÇÃO sobre os nós do mapa, servida por `GET /v1/context-map/visibility-options` (5 namespaces, 113 tags). Medido ao fazer: havia **QUATRO** cópias da afirmação sobre o default e as quatro discordavam — o conserto de 08-26 arrumou a dica e **não tocou no placeholder logo abaixo**, que é exatamente o *"sem mecanismo que impeça a volta"* previsto aqui. E **dois dos sete namespaces da taxonomia não existem** (`service`, `history`: zero produtores, zero no store vivo), com `service` no default da plataforma. O seletor os elimina sem lista de exceção. Duas propriedades load-bearing: valor LEGADO fora do mapa é mantido e MARCADO (descartá-lo no primeiro save seria mudança de política silenciosa, na direção que ninguém percebe), e a LIMPEZA passou a existir — não havia caminho nenhum, em três camadas mudas (tela omitia a chave, schema sem `.nullable()` ⇒ 422, `PUT` passando `null` cru a coluna `Json` que exige `DbNull`). Gate `probe_context_visibility_selector.sh` (6 ramos). **O fechamento dos aliases segue pendente e é BLOQUEADO POR TEMPO**: depende do contador da V3 zerar por N dias | sim |
 
-Ordem inegociável: **V1 antes de V4.**
+Ordem inegociável: **V1 antes de V4** — e, desde a D8.3, **catálogo antes do mapa**: campo cujo tipo
+não existe fica FORA, e a lacuna fecha-se no catálogo. Declarar um tipo aproximado para o campo caber
+escreveria no mapa uma política que ninguém decidiu, e a V4 a aplicaria.
 
 ---
 
