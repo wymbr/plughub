@@ -382,6 +382,27 @@ system_error         — unrecoverable error
   calmo, não no dia em que você precisa da stack de pé. Corolário para diagnóstico: quando um
   serviço falha logo após um wipe, a hipótese ordenada não é "o wipe quebrou", é "o wipe revelou".
 
+  > **Corolário medido em 2026-08-30 — pergunte à IMAGEM, nunca ao container.** O `TODO.md`
+  > dizia que **quatro** Dockerfiles Python não instalavam pytest. Medido: **nenhuma das 14
+  > imagens** tinha, e os quatro containers em que a suíte "rodava" tinham o pytest instalado
+  > **à mão** — estado que um `up -d` apaga. `docker exec` no container e `docker run` sobre a
+  > imagem respondem perguntas DIFERENTES, e só a segunda é reprodutível. Quando o defeito é
+  > *"isto só funciona aqui"*, o instrumento tem de ser o artefato, não a instância dele. Com o
+  > pytest na imagem apareceram **15 falhas reais em 3 serviços** — nenhum deles o que o TODO
+  > apontava, e 12 eram testes que ficaram **para trás de um portão de autorização** (a sexta
+  > ocorrência do padrão da § Security). Gate: `infra/test/probe_python_suites.sh`, que separa
+  > **declaração** (o Dockerfile pede `.[dev]`) de **imagem** (o pytest está lá) de **execução**
+  > — a primeira sem a segunda é promessa sem mecanismo; a segunda sem a primeira fica verde por
+  > container herdado.
+  >
+  > ⚠️ **E o runner óbvio nasce permanentemente vermelho.** Rodar `pytest` da raiz do monorepo
+  > (`cd /app`) troca o **rootdir**, e com ele o `[tool.pytest.ini_options]` de cada pacote
+  > (`asyncio_mode = "auto"`) deixa de ser lido: **476 falsos vermelhos** contra 15 reais. Um
+  > gate assim ensina todo mundo a ignorá-lo, que é pior que gate nenhum. Rode no WORKDIR do
+  > pacote. O que denunciou foi comparar com uma medição anterior do MESMO serviço
+  > (`channel-gateway`: 699/0 antes, 594/187 depois, **mesmo código**) — um número sozinho não
+  > diz de qual proposição ele é evidência.
+
 - **Guarda sobre valor decodificado testa `if not x`, NUNCA `is None` — o vazio é o valor plausível
   mais barato de produzir.** Os decodificadores deste repo normalizam ausência para string vazia
   (`mute_queue._decode` devolve `""`, não `None`), então `is None` compara com um valor que a fonte

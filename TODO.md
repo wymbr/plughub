@@ -1082,7 +1082,23 @@ como registro do que era e de como foi medido.
   para a evaluation-api e não foram medidos.
 
 <!-- registro original -->
-## 🔴 `/sessions/customer/*` — histórico do cliente SEM autenticação e SEM escopo (medido 2026-08-27)
+## 🟡 `/sessions/customer/*` — restou só a TRILHA *(título corrigido 2026-08-30)*
+
+> ⛔ **O 🔴 era título velho — o quarto falso vermelho desta semana.** Medido hoje, ao vivo:
+> `Bearer lixo.lixo.lixo` devolve **401** nas duas rotas (fechado pelo arco de cobertura de
+> credencial de 08-29), e o escopo por pool entrou em 08-27, pelo MESMO
+> `_session_scope_clause` canônico das listas — está no código, com o comentário datado.
+>
+> **Sobra uma metade, e é real:** `_record_access` tem **zero** ocorrências em `sessions.py`.
+> Histórico de contato chaveado por `customer_id` — a associação identidade↔contatos é o
+> próprio dado pessoal — sai **sem trilha LGPD**, enquanto o módulo `audit` existe exatamente
+> para esta classe e recusa alto por padrão.
+>
+> ⚠️ **Antes de aplicar `_check_audit_access` aqui, CONTE a população.** O gate de auditoria
+> recusa a quem não tem o grant, e o consumidor histórico (`agent-assist-ui`) foi aposentado —
+> mas a `HistoricoTab` do Console vive. Fechar sem contar troca um buraco de trilha por uma
+> aba vazia. É a mesma ordem do passo 6 da consolidação de autorização: ramo morre CONTADO.
+
 
 Achado depois de fechar os três furos de autorização; **nenhum deles cobria este**. `sessions.py` tem
 **zero** ocorrências de `pool_principal`, e não há dependência global no `include_router`.
@@ -1161,39 +1177,43 @@ periódico.
 Todos eram instrumento herdando a condição que deveria declarar, nenhum era regressão de produto.
 Baselines: evaluation-api 214 · channel-gateway 677.
 
-**O que continua aberto desta seção:** nada roda estas suítes fora deste desvio. São **1 594 testes**
-(analytics 639 · auth ~~64~~ **63** · channel-gateway 677 · evaluation 214) que só existem quando alguém lembra — ⚠️ **O número do auth está velho: medido em 2026-08-30, eram 83, e ficaram 63 depois da remoção do `platform_permissions`.**
-e `auth-api`/`evaluation-api` não têm pytest na imagem, `auth-api` não tem nem os testes. O `run_gates`
-cobre os gates de shell; as suítes de pytest continuam sem runner.
+**Fechado em 2026-08-30**, e o número desta seção era pequeno demais: não eram 1 594 testes em 4
+serviços, são **2 621 em 14**. A frase *"`auth-api`/`evaluation-api` não têm pytest na imagem"*
+também estava curta — **nenhuma das 14 imagens tinha**. Ver a seção logo abaixo e o `CHANGELOG.md`.
 
-<!-- registro original -->
-## 🔴 Quatro testes vermelhos que ninguém estava vendo (medido 2026-08-27)
+⚠️ **E esta seção ✅ tinha um 🔴 GÊMEO logo adiante**, com o mesmo conteúdo, sobrevivendo à data em
+que o item foi fechado. Não foi erro de medição: foi **duplicata não podada**. Foi ela que fez o
+item parecer aberto por três dias. É o custo de `TODO.md` com ~7 900 linhas, e a regra barata já
+está escrita: **`grep` do sintoma antes de registrar** — e, ao FECHAR, `grep` do sintoma para achar
+o gêmeo.
 
-As suítes de `evaluation-api` e `channel-gateway` **não são rodadas de rotina** — só foram executadas
-porque o passo 2 tocou os dois pacotes. Estavam com 4 falhas, todas **anteriores** à mudança (provado
-copiando o arquivo de `HEAD` por cima dentro do container: falhas idênticas).
+## 🟡 As suítes Python RODAM (2026-08-30) — restam 3 vermelhos DECLARADOS
 
-- `evaluation-api` — `TestConfigAbacGate::test_create_form_{no_token_401,without_grant_403,readonly_grant_403}`,
-  todos com `ResponseValidationError`. São **testes de portão ABAC**: a família que menos pode ficar
-  vermelha sem alguém saber, porque o que eles guardam é autorização.
-- `channel-gateway` — `test_webhook_adapter::test_handle_resume_publishes_kafka_event`.
-
-**A dívida não é só consertar os quatro.** É que nada roda estas suítes: 887 testes (676 + 211) que só
-existem quando alguém lembra. Irmão do item *"nenhum runner invoca os gates"* — e da mesma família de
-*"um ambiente que só sobe porque já subiu antes não está sendo verificado"*.
-
-⚠️ **Agravante medido:** `auth-api` e `evaluation-api` **não têm pytest na imagem**, e o `auth-api`
-**não tem os testes na imagem** (só `src/`) — a suíte dele só roda por `docker cp`. Das cinco baselines
-que este projeto cita, quatro dependem de estado herdado do container.
-
-
-> Itens genuinamente não implementados. Histórico de implementações concluídas em `CHANGELOG.md`.
+> ⛔ **Os "quatro testes vermelhos" estavam verdes** — e não por medição errada: eles foram
+> fechados em **2026-08-27**, e a seção ✅ que registra isso está logo acima. O 🔴 era
+> **duplicata não podada** do mesmo item, e sobreviveu ao fechamento.
 >
-> **Poda:** seções fechadas saem daqui por `infra/scripts/prune_todo_closed.py` (dry-run por
-> defeito) — o CHANGELOG é a casa do concluído, e duas casas para a mesma informação é o
-> defeito que este projeto evita em toda parte.
+> **O agravante, esse era o defeito — e maior do que estava escrito:** não eram *quatro
+> Dockerfiles* sem pytest, era **nenhuma das 14 imagens**. Os quatro containers que "rodavam"
+> tinham o pytest instalado à mão. História no `CHANGELOG.md`; gate em
+> `infra/test/probe_python_suites.sh`.
 
----
+**Baseline hoje: 2 621 passando, 3 falhando.** O gate imprime as três a cada execução — e
+cada uma toca dívida que já estava aberta noutro lugar:
+
+| serviço | teste | dívida de onde vem |
+|---|---|---|
+| `routing-engine` | `test_expire_returns_the_slot_even_after_the_lease_expired` | `claimed_via` volta `record` onde se espera `semaphore`. É a **lacuna 2** que a validação da Camada F declarou aberta (*a lease não foi medida*), e `claimed_via` é resíduo aberto da D14.1 |
+| `ai-gateway` | `test_reason_emite_com_source_reason` | `sources()` **vazio** — nenhum evento de uso emitido |
+| `ai-gateway` | `test_sentiment_emite_mesmo_com_resposta_ilegivel` | idem; toca a atribuição de token (T0–T3), cujo contrato é `source` obrigatório nos 4 caminhos vivos |
+
+⚠️ **Ao consertar, medir ANTES se o vermelho é do teste ou do código.** Os dois do
+`ai-gateway` afirmam que a emissão acontece; se a emissão realmente não acontece, o defeito
+não é de teste — é a lente de token medindo menos do que diz. E o do `routing-engine` é o
+único instrumento que hoje aponta para a lease, que ninguém mediu.
+
+**Aberto ainda:** nenhum runner de CI invoca este gate — ele existe e roda à mão. Irmão do
+item *"nenhum runner invoca os gates"*.
 
 ## 🧭 Ordem de trabalho PROPOSTA — SLA/ledger → destravar F4 → visão 2 de processos *(2026-08-25)*
 

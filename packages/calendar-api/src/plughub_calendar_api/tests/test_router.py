@@ -16,12 +16,27 @@ from plughub_calendar_api.main import app
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# Credencial de ESCRITA. As doze rotas de escrita ganharam portao dual
+# (`_require_calendars_write`, 2026-08-28) e estes testes ficaram para tras dele:
+# mediam 401 e afirmavam 200/201/422. Nao e' defeito do portao — e' o padrao que o
+# `CLAUDE.md` ja registra em cinco dos sete passos da consolidacao de autorizacao:
+# ao mover uma fronteira, os testes que a cercam param de medir o que dizem medir.
+#
+# ⚠️ O header vai no CLIENTE, e nao em treze call sites, porque treze e o numero de
+# lugares onde alguem esqueceria. Quem cobre a ausencia de credencial e' a classe
+# `TestWriteGate` no fim do arquivo — sem ela, um portao removido deixaria esta
+# suite inteira VERDE.
+_ADMIN_TOKEN   = "test-calendar-admin-token"
+_WRITE_HEADERS = {"X-Admin-Token": _ADMIN_TOKEN}
+
+
 def _make_settings(**kwargs) -> Settings:
     defaults = {
         "installation_id": "inst-test",
         "organization_id": "org-test",
         "database_url": "postgresql://localhost/test",
         "default_timezone": "America/Sao_Paulo",
+        "admin_token": _ADMIN_TOKEN,
     }
     defaults.update(kwargs)
     return Settings(**defaults)
@@ -134,7 +149,8 @@ class TestUpdateTenantConfig:
         self.settings = _make_settings()
         app.state.pool = self.pool
         app.state.settings = self.settings
-        self.client = TestClient(app, raise_server_exceptions=True)
+        self.client = TestClient(app, raise_server_exceptions=True,
+                                 headers=_WRITE_HEADERS)
 
     def test_saves_valid_timezone(self):
         """PATCH with a valid IANA timezone should persist and return the config."""
@@ -246,7 +262,8 @@ class TestCreateCalendarTimezoneInheritance:
         self.settings = _make_settings()
         app.state.pool = self.pool
         app.state.settings = self.settings
-        self.client = TestClient(app, raise_server_exceptions=True)
+        self.client = TestClient(app, raise_server_exceptions=True,
+                                 headers=_WRITE_HEADERS)
 
     def _calendar_payload(self, **kwargs):
         payload = {
@@ -318,3 +335,48 @@ class TestCreateCalendarTimezoneInheritance:
         assert resp.status_code == 201
         # Only the INSERT fetchrow — no tenant config query
         assert self.pool.fetchrow.call_count == 1
+
+
+# ── O portao de escrita RECUSA sem credencial ────────────────────────────────
+#
+# Esta classe existe pelo motivo inverso do resto do arquivo: as outras medem que a
+# rota FUNCIONA, e por isso passariam identicas se o portao fosse removido amanha.
+# Aqui o `TestClient` e' deliberadamente SEM header — e' a unica assercao da suite
+# que fica vermelha quando a fronteira some.
+class TestWriteGate:
+    def setup_method(self):
+        self.pool     = _make_pool()
+        self.settings = _make_settings()
+        app.state.pool     = self.pool
+        app.state.settings = self.settings
+        self.client = TestClient(app, raise_server_exceptions=True)   # SEM credencial
+
+    def test_patch_tenant_config_sem_credencial_recusa(self):
+        self.pool.fetchrow = AsyncMock(return_value=None)
+        resp = self.client.patch(
+            "/v1/tenant-config",
+            json={"tenant_id": "tenant-abc", "default_timezone": "America/Chicago"},
+        )
+        assert resp.status_code in (401, 403), resp.status_code
+        # E a recusa acontece ANTES do handler — nenhuma escrita foi tentada.
+        self.pool.fetchrow.assert_not_called()
+
+    def test_post_calendar_sem_credencial_recusa(self):
+        self.pool.fetchrow = AsyncMock(return_value=None)
+        resp = self.client.post(
+            "/v1/calendars",
+            json={"organization_id": "org-test", "tenant_id": "tenant-abc",
+                  "name": "Test Calendar", "timezone": "Asia/Tokyo"},
+        )
+        assert resp.status_code in (401, 403), resp.status_code
+        self.pool.fetchrow.assert_not_called()
+
+    def test_token_errado_recusa(self):
+        """Testemunha de que o portao COMPARA — nao basta mandar qualquer header."""
+        self.pool.fetchrow = AsyncMock(return_value=None)
+        resp = self.client.patch(
+            "/v1/tenant-config",
+            headers={"X-Admin-Token": "token-errado"},
+            json={"tenant_id": "tenant-abc", "default_timezone": "America/Chicago"},
+        )
+        assert resp.status_code in (401, 403), resp.status_code

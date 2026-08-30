@@ -3,6 +3,91 @@
 
 
 
+## As 14 suítes Python passam a rodar a partir da IMAGEM — e o agravante era maior que o item (2026-08-30)
+
+O `TODO.md` carregava desde 2026-08-27 um 🔴 *"quatro testes vermelhos que ninguém estava
+vendo"*, com o agravante *"nada roda estas suítes"* e a nota de que **quatro Dockerfiles**
+não instalavam pytest.
+
+**Os quatro testes estão verdes** — e não por medição errada minha: eles foram **fechados em
+2026-08-27**, e o `TODO.md` tem a seção ✅ que registra isso **três parágrafos acima** do 🔴. O
+vermelho era **duplicata não podada**, sobrevivendo ao próprio fechamento, e foi ela que fez o item
+parecer aberto. É o custo de um `TODO.md` de ~7 900 linhas: a regra *"`grep` do sintoma antes de
+registrar"* precisa de um par — **`grep` do sintoma ao FECHAR**, para achar o gêmeo.
+
+**O agravante era o defeito, e é maior do que estava escrito: ZERO das 14 imagens Python
+tinha pytest.** Os quatro containers em que a suíte "rodava" tinham o pytest instalado **à
+mão**, em algum momento, por alguém — estado que um `docker compose up -d` apaga. Medido
+com `docker run` sobre a imagem, não com `docker exec` no container, que é o instrumento que
+discrimina os dois. É a invariante do `CLAUDE.md` literalmente: *um ambiente que só sobe
+porque já subiu antes não está sendo verificado — está sendo lembrado.*
+
+### O que a medição revelou quando passou a existir
+
+**2 621 testes passando, 15 falhando** — em três serviços, nenhum deles o que o TODO
+apontava. E `auth-api` de fato não tinha a própria suíte na imagem: o Dockerfile copia só
+`src/`, e os testes vivem em `packages/auth-api/tests/`; a imagem carregava apenas os dois
+testes do `py-authz`.
+
+### Doze dos quinze: os testes ficaram para trás do portão
+
+`calendar-api` mediu **401** e afirmava 200/201/422 — os doze são anteriores ao portão de
+escrita de 2026-08-28 (`_require_calendars_write`) e não apresentam credencial. É a sexta
+ocorrência do padrão que a § Security já registra: *ao mover uma fronteira de autorização,
+os testes que a cercam param de medir o que dizem medir*.
+
+O conserto põe o header **no cliente**, não em treze call sites — treze é o número de
+lugares onde alguém esqueceria. E veio com a metade que importa: a classe `TestWriteGate`,
+com `TestClient` **sem** credencial, que é a única asserção do arquivo que fica vermelha se
+o portão sumir. Sem ela, "consertar" seria fazer a suíte deixar de exercer a fronteira.
+Provado por **mutação**: neutralizado o `enforce_write`, as 3 testemunhas reprovam.
+`calendar-api` 63 → **66 passed**.
+
+### Os três que sobram são dívida NOMEADA, não exceção calada
+
+| serviço | teste | o que ele acusa |
+|---|---|---|
+| `routing-engine` | `test_expire_returns_the_slot_even_after_the_lease_expired` | `claimed_via` volta `record` onde se espera `semaphore` — é a **"lacuna 2"** que a validação da Camada F declarou aberta (*a lease não foi medida*), e `claimed_via` é resíduo aberto da D14.1 |
+| `ai-gateway` | `test_reason_emite_com_source_reason` | `sources()` volta **vazio** — nenhum evento de uso emitido |
+| `ai-gateway` | `test_sentiment_emite_mesmo_com_resposta_ilegivel` | idem; toca a atribuição de token (T0–T3), cujo contrato é `source` obrigatório nos 4 caminhos vivos |
+
+O gate **imprime as três a cada execução**. Lista de exceção que envelhece calada é o
+defeito; lista que se anuncia é dívida.
+
+### Gate: `infra/test/probe_python_suites.sh`, três proposições SEPARADAS
+
+**A. declaração** (os 14 Dockerfiles instalam `.[dev]`) · **B. imagem** (pytest importa em
+container NOVO, feito da imagem) · **C. execução** (as 14 suítes rodam; vermelho só o
+declarado; suíte que coleta ZERO é **inconclusiva**, não verde).
+
+A separação é o ponto: **(A) sem (B) é promessa sem mecanismo**, e **(B) sem (A) fica verde
+por container herdado** — que é o defeito que originou o gate. Mutação nas duas: `.[dev]`
+removido de um Dockerfile → A vermelho nomeando o serviço; teste quebrado num container → C
+vermelho com `scheduler-api(1!=0)`.
+
+### ⚠️ Duas armadilhas que o próprio trabalho produziu, e as duas são de método
+
+**(1) `cd /app` custou 476 falsos vermelhos.** A primeira execução deu *"476 failed"*.
+Rodar da raiz do monorepo troca o **rootdir** do pytest, e com ele o
+`[tool.pytest.ini_options]` de cada pacote (`asyncio_mode = "auto"`) deixa de ser lido —
+todo teste assíncrono falha. O número real era 15. Um runner escrito da forma óbvia
+nasceria **permanentemente vermelho**, e todo mundo aprenderia a ignorá-lo, que é a pior
+saída possível para um gate. O que denunciou foi comparar com uma medição anterior do
+mesmo serviço (`channel-gateway`: 699/0 antes, 594/187 depois — **mesmo código**).
+
+**(2) O parser do gate quase mediu a proposição errada.** O regex do resultado exigia um
+não-dígito **antes** do número, e por isso não casava linha que **começa** com ele
+(`237 passed, ...`). Doze suítes verdes viraram *"ZERO testes"*. Quem pegou não foi a
+contagem — foi a **testemunha de presença** (`0 passed e 0 failed ⇒ INCONCLUSIVO`), que sem
+isso teria somado só 472 e o gate teria passado.
+
+### Arquivos
+
+14 `packages/*/Dockerfile` (`-e .` → `-e ".[dev]"`; `auth-api` ganhou `COPY tests/`) ·
+`packages/calendar-api/.../tests/test_router.py` · `infra/test/probe_python_suites.sh`.
+
+---
+
 ## FATIA 1 da migração D9 — os 37 campos medidos entram no mapa (2026-08-30)
 
 O censo de hoje listou **37 nomes escritos e não declarados** no ContextStore. Eles

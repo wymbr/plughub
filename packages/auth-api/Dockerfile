@@ -29,8 +29,17 @@ COPY infra/modules.yaml /infra/modules.yaml
 
 COPY packages/auth-api/pyproject.toml .
 COPY packages/auth-api/src/ ./src/
+# A suite do auth-api NAO vive em `src/` — vive em `packages/auth-api/tests/`.
+# Sem esta linha a imagem carrega so os testes do py-authz, e a suite do
+# proprio servico so existia por `docker cp`.
+COPY packages/auth-api/tests/ ./tests/
 
-RUN pip install --no-cache-dir -e .
+# ⚠️ `.[dev]` e NAO `.` — o extra traz o pytest, e sem ele a suite do servico
+# so roda em container onde alguem instalou o pytest A MAO. Medido em 2026-08-30:
+# NENHUMA das 14 imagens Python tinha pytest; quatro containers tinham, por estado
+# herdado que um `up -d` apaga. Um ambiente que so verifica porque ja verificou
+# antes nao esta sendo verificado — esta sendo lembrado.
+RUN pip install --no-cache-dir -e ".[dev]"
 
 EXPOSE 3200
 
