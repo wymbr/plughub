@@ -175,6 +175,59 @@ Além das duas dissolvidas no topo:
   do backend"*. É a regra da casa outra vez: **um censo desenhado para um eixo não prova nada
   sobre o eixo vizinho** — aqui, o mesmo eixo com um serviço fora da varredura.
 
+## 🧭 Próxima tarefa da D9 e resíduos de ambiente *(2026-08-30, escrito antes de compactar)*
+
+### A tarefa: produzir a LISTA DE CADASTRO por análise estática
+
+A D9 **afirma** que a população de tags é estaticamente enumerável e que a migração é
+"limitada e medível". Está medida só a metade fácil — **21 escritas em YAML, todas literais,
+zero nome dinâmico** (`packages/skill-flow-engine/skills/`). O resto foi **assumido**, e é
+exatamente o que precisa ser provado antes de escrever o portão:
+
+1. **Escritores de código de PLATAFORMA** — channel-gateway (`ctx_writes`), orchestrator-bridge,
+   routing-engine, mcp-server, ai-gateway: algum compõe chave em runtime? Se sim, a
+   enumerabilidade quebra **do lado que o portão de publish não alcança**, e a D9 precisa de
+   emenda antes de virar código.
+2. **Superfícies de autoria não varridas**: `context_tags.outputs` (anotação em
+   `reason`/`invoke`/`notify`) e `collect.context`.
+3. **A partição plataforma × tenant** — é o que decide se o cadastro nasce com 20 linhas ou 200.
+
+**Entrega:** lista de registro com origem, `atributo` proposto por campo, famílias dinâmicas
+separadas, e o número que importa — **quantos campos ficam sem tipo óbvio**, que é o trabalho
+real de decisão.
+
+**Método, para não repetir o erro do mapa:** o censo SOBRE-COLETA por natureza (a varredura de
+08-30 acusou tópicos Kafka, nomes de evento e fixtures como se fossem tags). Ele gera
+HIPÓTESE; fato é a auditoria, que lê chaves de hash reais. Ferramentas já escritas nesta
+sessão, se ainda existirem no scratchpad: `censo_alias.py` (grafias × canônicas) e
+`classificar.py` (grafias × domínios candidatos).
+
+### Resíduos de AMBIENTE — não viajam no commit
+
+- **`mcp-server-plughub` não foi reconstruído.** O `DEFAULT_CONTEXT_MAP` embutido nele está
+  **duas versões atrás** (11 tipos, 74/39). Comportamento vivo está correto — ele busca o mapa
+  do config-api com cache de 60 s —, mas o **fallback** só é exercido se o config-api ficar
+  inalcançável, e aí serviria mapa velho. Entra no próximo build.
+- **`auth-api` não foi reconstruído**: o container ainda roda o subsistema `platform_permissions`
+  que este commit removeu do código.
+- **O store vivo DESTE demo já está reaplicado** (13 tipos, 75/53 depois dos aliases). Em
+  qualquer outro ambiente o código não basta: exige `--overwrite` das três chaves de `masking`
+  **mais restart do config-api** — o cache é em processo.
+- **`tenant_demo` mantém a regra fóssil `session.cpf_titular`** no override próprio (o seed só
+  escreve `__global__`). Difere do global por uma regra em cada direção. **Sem lacuna de
+  comportamento** — o glob `*.vencimento_cartao` está nos dois. Limpá-lo é ato sobre config de
+  TENANT, não default de plataforma.
+
+### Estado da auditoria, para não ser remedido do zero
+
+Série cortada e retomada em 2026-08-30 sob o mapa novo, com cache quente:
+**alias 18 · canonical 4 · unknown 7 · dynamic 0 · overflow 0**, sobre quatro fluxos
+(`smoke_limite_tres_acessos`, `smoke_journey_context`, `smoke_wrapup_arc12_capture`,
+`smoke_detached_hook`). Os 7 `unknown` são `session.title`, `session.root_session_id`,
+`session.summary`, `session.status`, `session.preview`, `session.approval_threshold` e
+`approval.summary` — e **não devem ser decididos um a um**: a D9 os dissolve.
+
+
 ## 🟡 Pré-requisito da V4 — passo 1 ✅; o resto foi SUPERSEDIDO pela D9 *(2026-08-30)*
 
 > ⚠️ **Leia primeiro:** este bloco descreve o trabalho sob o modelo ANTIGO (mapa de nomes como
