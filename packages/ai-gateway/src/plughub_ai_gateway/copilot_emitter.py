@@ -48,7 +48,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from .usage_emitter import emit_llm_tokens
+from .usage_emitter import schedule_llm_tokens
 
 logger = logging.getLogger("plughub.ai_gateway.copilot")
 
@@ -318,7 +318,7 @@ async def analyze_for_copilot(
         # sai vazio e a função retorna cedo (linha abaixo), e emitir depois
         # perderia justamente as chamadas que não renderam sugestão.
         _usage = (getattr(response, "raw", None) or {}).get("usage", {}) or {}
-        asyncio.ensure_future(emit_llm_tokens(
+        schedule_llm_tokens(
             producer=      producer,
             tenant_id=     tenant_id,
             session_id=    session_id,
@@ -329,7 +329,7 @@ async def analyze_for_copilot(
             source=        "copilot",
             account_key_id= account_key_id,
             model_profile=  "fast",
-        ))
+        )
 
         # 4. Parse response text
         text = getattr(response, "content", "") or "" if response else ""

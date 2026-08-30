@@ -27,7 +27,7 @@ from .models         import InferenceRequest, InferenceResponse
 from .providers      import LLMProvider, LLMResponse, ProviderError
 from .rate_limit     import RateLimiter, RateLimitExceeded
 from .session        import SessionManager
-from .usage_emitter  import emit_llm_tokens
+from .usage_emitter  import schedule_llm_tokens
 
 logger = logging.getLogger("plughub.ai_gateway.inference")
 
@@ -148,8 +148,7 @@ class InferenceEngine:
 
         # 4b. Metering — publica tokens consumidos em usage.events (fire-and-forget)
         if self._kafka_producer is not None and not (llm_response.input_tokens == 0 and llm_response.output_tokens == 0):
-            import asyncio
-            asyncio.ensure_future(emit_llm_tokens(
+            schedule_llm_tokens(
                 producer=       self._kafka_producer,
                 tenant_id=      req.tenant_id,
                 session_id=     req.session_id,
@@ -159,7 +158,7 @@ class InferenceEngine:
                 output_tokens=  llm_response.output_tokens,
                 source=         "inference",
                 gateway_id=     self._gateway_id,
-            ))
+            )
 
         # 5. Extract session parameters
         last_user_content = ""

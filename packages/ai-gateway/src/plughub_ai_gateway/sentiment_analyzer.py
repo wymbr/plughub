@@ -41,7 +41,7 @@ import logging
 import re
 from typing import Any
 
-from .usage_emitter import emit_llm_tokens
+from .usage_emitter import schedule_llm_tokens
 from .sentiment_emitter import (
     emit_sentiment_updated,
     resolve_session_pool_id,
@@ -188,7 +188,7 @@ async def analyze_and_emit_sentiment(
         # score é usado: o token foi gasto mesmo que o parse falhe abaixo, e
         # emitir depois do `if score is None` perderia toda chamada malsucedida.
         _usage = (getattr(response, "raw", None) or {}).get("usage", {}) or {}
-        asyncio.ensure_future(emit_llm_tokens(
+        schedule_llm_tokens(
             producer=      producer,
             tenant_id=     tenant_id,
             session_id=    session_id,
@@ -200,7 +200,7 @@ async def analyze_and_emit_sentiment(
             segment_id=     segment_id,
             account_key_id= account_key_id,
             model_profile=  "fast",
-        ))
+        )
         # `.content`, não `.text` — o segundo não existe em `LLMResponse`.
         score = _parse_score(getattr(response, "content", "") or "")
     except Exception as exc:

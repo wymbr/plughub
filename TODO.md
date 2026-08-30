@@ -1204,13 +1204,16 @@ cada uma toca dívida que já estava aberta noutro lugar:
 | serviço | teste | dívida de onde vem |
 |---|---|---|
 | `routing-engine` | `test_expire_returns_the_slot_even_after_the_lease_expired` | `claimed_via` volta `record` onde se espera `semaphore`. É a **lacuna 2** que a validação da Camada F declarou aberta (*a lease não foi medida*), e `claimed_via` é resíduo aberto da D14.1 |
-| `ai-gateway` | `test_reason_emite_com_source_reason` | `sources()` **vazio** — nenhum evento de uso emitido |
-| `ai-gateway` | `test_sentiment_emite_mesmo_com_resposta_ilegivel` | idem; toca a atribuição de token (T0–T3), cujo contrato é `source` obrigatório nos 4 caminhos vivos |
+| ~~`ai-gateway` ×2~~ | — | ✅ **fechados em 2026-08-30**, e o veredicto foi o oposto do previsto: a emissão ACONTECIA; o defeito era do teste, que esperava por 1 yield. Detalhe no `CHANGELOG.md` |
 
-⚠️ **Ao consertar, medir ANTES se o vermelho é do teste ou do código.** Os dois do
-`ai-gateway` afirmam que a emissão acontece; se a emissão realmente não acontece, o defeito
-não é de teste — é a lente de token medindo menos do que diz. E o do `routing-engine` é o
-único instrumento que hoje aponta para a lease, que ninguém mediu.
+⚠️ **Ao consertar, medir ANTES se o vermelho é do teste ou do código.** Esta linha era uma
+aposta minha — *"se a emissão realmente não acontece, é a lente de token medindo menos do que
+diz"* — e a medição a **refutou**. Fica como está, porque o valor dela não era acertar: era
+obrigar a medir antes de consertar. O que a medição achou foi outra coisa (`ensure_future` sem
+referência forte, fail-silent num produtor de custo), e ela só aparece para quem vai olhar.
+
+**O do `routing-engine` continua sendo o único instrumento que aponta para a lease**, que
+ninguém mediu — e é o próximo.
 
 **Aberto ainda:** nenhum runner de CI invoca este gate — ele existe e roda à mão. Irmão do
 item *"nenhum runner invoca os gates"*.

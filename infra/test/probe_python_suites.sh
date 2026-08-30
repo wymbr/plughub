@@ -54,15 +54,14 @@ dialog-api calendar-api pricing-api quality-ingest"
 #     "lacuna 2" que a validação da Camada F declarou aberta (*a lease não foi
 #     medida*), e `claimed_via` é resíduo aberto da D14.1.
 #
-#   ai-gateway · test_reason_emite_com_source_reason
-#   ai-gateway · test_sentiment_emite_mesmo_com_resposta_ilegivel
-#     `sources()` volta VAZIO — nenhum evento de uso emitido. Toca a atribuição de
-#     token (T0–T3), cujo contrato é `source` obrigatório nos 4 caminhos vivos.
+#   ~~ai-gateway (2)~~ — FECHADOS em 2026-08-30, e o veredicto foi o OPOSTO do
+#     previsto: a emissão ACONTECIA. O defeito era do teste, que esperava por
+#     `await asyncio.sleep(0)` — um yield — quando `sources()` só enche a partir de
+#     2 e os dois eventos a partir de 5. A espera passou a ser pelas TASKS.
 #
-BASELINE_TOTAL=3
+BASELINE_TOTAL=1
 declare -A BASELINE=(
   [routing-engine]=1
-  [ai-gateway]=2
 )
 
 FAIL=0; INC=0
@@ -148,9 +147,8 @@ echo
 echo "-- vermelho DECLARADO (imprime sempre; divida, nao exceção calada) --"
 echo "     routing-engine  test_expire_returns_the_slot_even_after_the_lease_expired"
 echo "                     claimed_via='record' x 'semaphore' — lacuna 2 da Camada F"
-echo "     ai-gateway      test_reason_emite_com_source_reason"
-echo "     ai-gateway      test_sentiment_emite_mesmo_com_resposta_ilegivel"
-echo "                     sources() VAZIO — atribuicao de token (T0-T3)"
+echo "     (os dois do ai-gateway sairam em 2026-08-30 — era defeito de TESTE,"
+echo "      nao de produto: a emissao acontecia e a espera media 1 yield)"
 
 echo
 if [ "$FAIL" -gt 0 ]; then

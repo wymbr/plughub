@@ -18,6 +18,25 @@ O que estes testes travam, por ordem de importância:
      (lição do `first_queued_ms`, que carimbava espera de 0 ms em todo contato
      roteado direto);
   3. o token é emitido MESMO quando o uso do resultado falha — a chamada foi paga.
+
+⚠️ POR QUE A ESPERA NÃO É `asyncio.sleep(0)` — corrigido em 2026-08-30
+---------------------------------------------------------------------
+A primeira versão esperava a emissão com um `await asyncio.sleep(0)`, um yield só.
+Isso é **adivinhar quantas suspensões a corrotina tem por dentro**, e a conta estava
+errada: medido, `sources()` só enche a partir de **2** yields, e os DOIS eventos
+(input e output) só a partir de **5**. Resultado — dois testes vermelhos com o
+produto CERTO, e a leitura óbvia (*"a emissão não acontece"*) apontando para uma
+regressão que não existia.
+
+Pior que o vermelho: `test_sentiment_emite_com_source_sentiment` passava **por
+acidente**, porque aquele caminho tem um `await resolve_session_pool_id` DEPOIS do
+agendamento, e é ele que dava os turnos. Teste que passa pelo motivo errado é a
+família que este repositório cataloga — ele teria continuado verde se a emissão
+fosse removida e o `await` ficasse.
+
+A espera passa a ser `drain_llm_token_emissions()`, que aguarda as tasks REAIS. O
+set que a sustenta existe no produto por outra razão (referência forte contra GC de
+task) — a determinismo do teste é consequência, não motivo.
 """
 from __future__ import annotations
 
@@ -25,7 +44,7 @@ import asyncio
 import json
 import pytest
 
-from ..usage_emitter import emit_llm_tokens
+from ..usage_emitter import drain_llm_token_emissions, emit_llm_tokens
 
 
 # ── Dublês ────────────────────────────────────────────────────────────────────
@@ -174,6 +193,43 @@ async def test_send_travado_nao_trava_o_chamador():
         usage_emitter._SEND_TIMEOUT_S = original
 
 
+# ── 1b. O agendador guarda REFERENCIA FORTE ──────────────────────────────────
+#
+# Sem estas duas asserções o `_IN_FLIGHT` é mecanismo que ninguém mede: alguém
+# "simplifica" `schedule_llm_tokens` de volta para um `ensure_future` solto, os
+# doze testes acima seguem verdes (porque `drain_...` teria um set sempre vazio e
+# retornaria na hora), e a única evidência do defeito volta a ser a fatura.
+
+@pytest.mark.asyncio
+async def test_agendador_guarda_referencia_forte_ate_terminar():
+    from .. import usage_emitter
+
+    p = FakeProducer()
+    task = usage_emitter.schedule_llm_tokens(
+        producer=p, tenant_id="t1", session_id="s1", model_id="m",
+        agent_type_id=None, input_tokens=1, output_tokens=1, source="reason",
+    )
+    # ANTES de terminar: o set e' a referencia forte que impede a coleta.
+    assert task in usage_emitter._IN_FLIGHT
+
+    await usage_emitter.drain_llm_token_emissions()
+
+    # DEPOIS: sai do set — senao o set cresce sem teto num processo longo, que
+    # trocaria um vazamento de metrica por um vazamento de memoria.
+    assert task not in usage_emitter._IN_FLIGHT
+    assert usage_emitter._IN_FLIGHT == set()
+    assert p.sources() == {"reason"}
+
+
+@pytest.mark.asyncio
+async def test_drenar_com_nada_em_voo_nao_trava():
+    """Testemunha negativa do proprio helper de espera."""
+    from .. import usage_emitter
+
+    assert usage_emitter._IN_FLIGHT == set()
+    await asyncio.wait_for(usage_emitter.drain_llm_token_emissions(), timeout=1.0)
+
+
 # ── 2. Caminho `reason` ───────────────────────────────────────────────────────
 
 def _reason_engine(producer, response: FakeResponse):
@@ -206,7 +262,7 @@ async def test_reason_emite_com_source_reason():
     eng = _reason_engine(p, FakeResponse(content='{"ok": true}',
                                          usage={"input_tokens": 42, "output_tokens": 7}))
     await eng.process(_reason_req())
-    await asyncio.sleep(0)   # deixa o ensure_future rodar
+    await drain_llm_token_emissions()
 
     assert p.sources() == {"reason"}
     assert p.events("llm_tokens_input")[0]["quantity"] == 42
@@ -220,7 +276,7 @@ async def test_reason_com_tenant_vazio_nao_emite():
     p = FakeProducer()
     eng = _reason_engine(p, FakeResponse(content='{"ok": true}'))
     await eng.process(_reason_req(tenant_id=""))
-    await asyncio.sleep(0)
+    await drain_llm_token_emissions()
     assert p.usage_sent() == []
 
 
@@ -238,7 +294,7 @@ async def test_sentiment_emite_com_source_sentiment():
         producer=p, tenant_id="t1", session_id="s1",
         customer_utterance="isso é inaceitável", model_id="haiku",
     )
-    await asyncio.sleep(0)
+    await drain_llm_token_emissions()
     assert "sentiment" in p.sources()
     assert p.events("llm_tokens_input")[0]["quantity"] == 30
 
@@ -260,7 +316,7 @@ async def test_sentiment_emite_mesmo_com_resposta_ilegivel():
         producer=p, tenant_id="t1", session_id="s1",
         customer_utterance="oi", model_id="haiku",
     )
-    await asyncio.sleep(0)
+    await drain_llm_token_emissions()
     assert "sentiment" in p.sources()
 
 

@@ -370,6 +370,20 @@ system_error         — unrecoverable error
   verde, pergunte o que o faria ficar vermelho** — e prefira que o teste se declare INCONCLUSIVO a
   passar por ausência de amostra.
 
+  > **Corolário de assincronia, medido em 2026-08-30 — esperar por CONTAGEM DE YIELDS é
+  > adivinhar a estrutura interna da corrotina.** `await asyncio.sleep(0)` depois de um
+  > `ensure_future` não espera a task: espera **um** turno do loop. Medido no emissor de tokens,
+  > `sources()` só enche a partir de **2** yields e os dois eventos a partir de **5** — dois
+  > testes vermelhos com o produto CERTO, e a leitura óbvia (*"a emissão não acontece"*)
+  > apontando para uma regressão inexistente. Pior, o gêmeo deles **passava por acidente**: o
+  > caminho dele tinha um `await` a mais DEPOIS do agendamento, e era ele que dava os turnos —
+  > mesmo produto, veredictos opostos, decididos por uma linha alheia à proposição. **Espere
+  > pelas TASKS**, e mantenha o conjunto delas no PRODUTO, não no teste: um helper que use
+  > `asyncio.all_tasks` varre também as tasks de quem chamou. Aqui o conjunto já precisava
+  > existir por outra razão — `ensure_future` sem guardar o retorno deixa o loop como único dono
+  > e o CPython avisa que a task pode ser coletada no meio da execução; num produtor de CUSTO
+  > isso é fail-silent com a evidência na FATURA. Ver `CHANGELOG.md` 2026-08-30.
+
 - **Um ambiente que só sobe porque já subiu antes não está sendo verificado — está sendo lembrado.**
   Estado herdado (volume, imagem, linha de DB, coluna criada por `db push`) é entrada não declarada
   do boot: enquanto ele existir, o aplicador pode estar quebrado sem que nada fique vermelho. Três

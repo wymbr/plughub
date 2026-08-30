@@ -3,6 +3,73 @@
 
 
 
+## Os dois vermelhos do ai-gateway: a emissão acontecia, e o defeito era do TESTE (2026-08-30)
+
+Dos três vermelhos declarados que o gate novo publicou, ataquei primeiro os dois do
+`ai-gateway` com a hipótese escrita: *"se a emissão realmente não acontece, o defeito não é de
+teste — é a lente de token medindo menos do que diz"*.
+
+**A hipótese foi refutada por medição, e é bom que a ordem tenha sido essa.** Rodando os dois
+caminhos com um número CRESCENTE de yields:
+
+| yields | `sources()` | eventos |
+|---|---|---|
+| 0–1 | `[]` | 0 |
+| 2 | `['reason']` / `['sentiment']` | **1** |
+| 5+ | idem | **2** |
+
+A emissão acontece. O teste esperava com **um** `await asyncio.sleep(0)` — que é **adivinhar
+quantas suspensões a corrotina tem por dentro** —, e a conta estava errada em ambos os eixos:
+`sources()` só enche a partir de 2 yields, e os DOIS eventos (input e output) a partir de 5.
+
+### O achado pior é o teste que passava
+
+`test_sentiment_emite_com_source_sentiment` **passava por acidente**: aquele caminho tem um
+`await resolve_session_pool_id` DEPOIS do agendamento, e era ele que dava os turnos. O gêmeo
+(`..._resposta_ilegivel`) retorna antes desse `await` e por isso reprovava. Mesmo produto, mesma
+emissão, veredictos opostos — decididos por uma linha que nada tem a ver com a proposição.
+Teste que passa pelo motivo errado é a família que este repositório cataloga, e aqui ele teria
+continuado verde se a emissão fosse removida e o `await` ficasse.
+
+### E o caminho revelou um defeito de PRODUTO, latente
+
+Os quatro caminhos vivos faziam `asyncio.ensure_future(emit_llm_tokens(...))` **sem guardar o
+retorno**. A documentação do CPython é explícita: sem referência forte, o event loop é o único
+dono e a task **pode ser coletada no meio da execução**. Num produtor de **custo** isso é a
+família fail-silent inteira — o token é gasto, a linha não sai, nada fica vermelho, e o defeito
+aparece na **fatura**, não na tela. Não há ocorrência observada; é exposição, não dano — e fica
+dito assim, sem inflar um no outro.
+
+Conserto: **`schedule_llm_tokens`** em `usage_emitter.py` — uma casa, referência forte em
+`_IN_FLIGHT`, descarte no `done_callback`. Os quatro sítios (`reason`, `sentiment_analyzer`,
+`copilot_emitter`, `inference`) passaram a usá-la. É a mesma razão pela qual `emit_llm_tokens`
+já era o choke point do `source`: uma casa que todos atravessam é o único lugar onde uma
+garantia se impõe.
+
+**A determinismo do teste é CONSEQUÊNCIA, não motivo.** O mesmo set dá a
+`drain_llm_token_emissions()` um ponto de espera pelas tasks REAIS. Um helper escrito no arquivo
+de teste conheceria as tasks por heurística (`asyncio.all_tasks`) e varreria também as de quem
+chamou.
+
+### Provado por mutação — três, e a terceira reproduz o sintoma original
+
+| mutação | resultado |
+|---|---|
+| emissão do `reason` removida | 1 vermelho |
+| emissão do `sentiment` removida | **2** vermelhos — inclusive o que passava por acidente |
+| `_IN_FLIGHT.add(task)` removido | **3** vermelhos, e são exatamente os dois originais + a testemunha da referência |
+
+A última é a que fecha o argumento: neutralizada a referência forte, o sintoma de onde parti
+volta idêntico. Duas testemunhas novas guardam o mecanismo — sem elas, alguém "simplifica"
+`schedule_llm_tokens` de volta para um `ensure_future` solto, os doze testes seguem verdes
+(porque `drain_...` teria um set sempre vazio) e a única evidência do defeito volta a ser a
+fatura.
+
+`ai-gateway` 178 → **182 passed**. Baseline do gate: 3 → **1** vermelho declarado (sobra o
+`routing-engine`, que é a lease da Camada F). Total **2 625 passando**.
+
+---
+
 ## As 14 suítes Python passam a rodar a partir da IMAGEM — e o agravante era maior que o item (2026-08-30)
 
 O `TODO.md` carregava desde 2026-08-27 um 🔴 *"quatro testes vermelhos que ninguém estava

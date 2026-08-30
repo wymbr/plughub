@@ -24,6 +24,45 @@ logger = logging.getLogger("plughub.ai_gateway.usage")
 _SEND_TIMEOUT_S = 5.0
 
 
+# Referencias FORTES das emissoes em voo.
+#
+# ⚠️ Nao e' zelo: `asyncio.ensure_future` sem guardar o retorno deixa o event loop
+# com a UNICA referencia forte, e a documentacao do CPython avisa que a task pode
+# ser coletada no meio da execucao. Num produtor de CUSTO isso e' a familia
+# fail-silent inteira — o token e' gasto, a linha nao sai, nada fica vermelho, e o
+# defeito aparece na FATURA, nao na tela. Os quatro caminhos vivos faziam
+# `ensure_future` solto.
+#
+# O set tambem e' o que da' ao teste um ponto de espera DETERMINISTICO: contar
+# `await asyncio.sleep(0)` e' adivinhar quantas suspensoes a corrotina tem por
+# dentro, e foi assim que dois testes desta suite ficaram vermelhos enquanto o
+# produto estava certo (e um TERCEIRO passava por acidente, porque o caminho dele
+# tinha um `await` a mais depois do agendamento).
+_IN_FLIGHT: set[asyncio.Task] = set()
+
+
+def schedule_llm_tokens(**kwargs: Any) -> "asyncio.Task":
+    """Agenda `emit_llm_tokens` fora do caminho critico, sem perder a task.
+
+    Todo chamador usa ESTE agendador — nunca `ensure_future` direto. E' a mesma
+    razao pela qual `emit_llm_tokens` e' o choke point do `source`: uma casa que
+    todos atravessam e' o unico lugar onde uma garantia se impoe.
+    """
+    task = asyncio.ensure_future(emit_llm_tokens(**kwargs))
+    _IN_FLIGHT.add(task)
+    task.add_done_callback(_IN_FLIGHT.discard)
+    return task
+
+
+async def drain_llm_token_emissions() -> None:
+    """Espera as emissoes em voo. Existe para TESTE, e por isso mora aqui:
+    um helper de espera escrito no arquivo de teste conheceria as tasks por
+    heuristica (`asyncio.all_tasks`), e varreria tambem as tasks de quem chamou.
+    """
+    while _IN_FLIGHT:
+        await asyncio.gather(*list(_IN_FLIGHT), return_exceptions=True)
+
+
 async def emit_llm_tokens(
     producer: Any,           # aiokafka.AIOKafkaProducer ou duck-type compatível
     tenant_id:    str,

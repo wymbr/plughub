@@ -20,7 +20,7 @@ import asyncio
 from .account_selector import AccountSelector
 from .models    import ReasonRequest, ReasonResponse, OutputFieldSchema
 from .providers import LLMProvider
-from .usage_emitter import emit_llm_tokens
+from .usage_emitter import schedule_llm_tokens
 
 logger = logging.getLogger("plughub.ai_gateway.reason")
 
@@ -127,7 +127,7 @@ class ReasonEngine:
         config_id = (self._account_selector.config_id_for(provider_key)
                      if self._account_selector is not None else None)
         key_id = provider_key.split(":", 1)[1] if provider_key and ":" in provider_key else None
-        asyncio.ensure_future(emit_llm_tokens(
+        schedule_llm_tokens(
             producer=      self._kafka_producer,
             tenant_id=     req.tenant_id,
             session_id=    req.session_id,
@@ -140,7 +140,7 @@ class ReasonEngine:
             account_config_id= config_id,
             account_key_id=    key_id,
             model_profile=     req.model_profile,
-        ))
+        )
 
     async def process(self, req: ReasonRequest) -> ReasonResponse:
         profile = self._model_profiles.get(req.model_profile)
