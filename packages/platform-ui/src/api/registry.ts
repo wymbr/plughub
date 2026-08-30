@@ -342,3 +342,42 @@ export const revokeChannelEndpointToken = async (
   return response.json()
 }
 
+
+// ── D6 — vocabulário do seletor de `context_visibility` ───────────────────────
+//
+// Derivado do MAPA do ContextStore (fase V3), no agent-registry. A tela não deriva
+// nada: `platform-ui` não depende de `@plughub/schemas`, então uma derivação local
+// seria uma segunda leitura da árvore do mapa — e é assim que dois vocabulários
+// nascem num arco que existe para colapsar sete.
+
+export interface ContextVisibilityNamespaceOption {
+  ns:     string
+  /** `canonical` = escopo do modelo novo; `legacy` = só existe como prefixo de alias. */
+  source: 'canonical' | 'legacy'
+  fields: number
+}
+
+export interface ContextVisibilityTagOption {
+  tag:       string
+  canonical: string
+  tipo:      string
+  origin:    'canonical' | 'alias'
+}
+
+export interface ContextVisibilityOptions {
+  namespaces: ContextVisibilityNamespaceOption[]
+  tags:       ContextVisibilityTagOption[]
+  /** `builtin` = o mapa do TENANT não foi lido; a lista é a do código. */
+  source:     'config' | 'builtin'
+  degraded_reason?: string
+}
+
+export const getContextVisibilityOptions = async (
+  tenantId: string,
+): Promise<ContextVisibilityOptions> => {
+  const response = await fetch(`${getBaseUrl()}/v1/context-map/visibility-options`, {
+    headers: headers(tenantId),
+  })
+  if (!response.ok) throw new Error('Failed to load context visibility options')
+  return response.json()
+}

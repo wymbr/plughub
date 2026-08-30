@@ -58,8 +58,20 @@
     },
     "contextVisibility": {
       "label": "Visibilidade do Context Store",
-      "hint": "Namespaces visíveis ao operator na aba Contexto. Separe por vírgula. Padrão: service, session. Namespaces PII (caller, account, history) aparecem mascarados quando incluídos.",
-      "allowTagsHint": "Tags exatas que o operador sempre vê (em claro), mesmo fora dos namespaces acima — para ids internos de referência que não são PII (ex.: caller.customer_id, necessário p/ identificar o cliente / carregar histórico). Separe por vírgula. Padrão: caller.customer_id."
+      "hint": "Namespaces que o operador vê na aba Contexto. A lista vem do mapa do ContextStore — não há como escolher um namespace que não existe. Namespaces de PII aparecem mascarados quando incluídos.",
+      "allowTagsHint": "Tags exatas que o operador sempre vê em claro, mesmo fora dos namespaces acima — para ids internos de referência que não são PII (ex.: caller.customer_id, necessário p/ identificar o cliente / carregar histórico).",
+      "nsPlaceholder": "Selecione os namespaces — vazio usa o padrão da plataforma",
+      "tagsPlaceholder": "Selecione tags exatas — opcional",
+      "search": "Filtrar…",
+      "optionsEmpty": "Sem opções — o mapa do ContextStore não pôde ser carregado",
+      "scopeBadge": "escopo",
+      "legacyBadge": "legado",
+      "unknownBadge": "fora do mapa",
+      "unknownHint": "Valor declarado antes desta tela e desconhecido do mapa do ContextStore. Fica como está até alguém removê-lo — não é descartado ao salvar.",
+      "nsHintCount": "{{count}} campo(s) no mapa",
+      "tagHintAlias": "Grafia legada de {{canonical}}",
+      "tagHintCanonical": "Nome canônico",
+      "builtinWarning": "Exibindo o vocabulário embutido: o mapa do ContextStore deste tenant não pôde ser lido, então campos declarados apenas na config dele não aparecem na lista."
     },
     "typeCapacity": {
       "label": "Tipo & Capacidade",

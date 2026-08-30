@@ -494,13 +494,20 @@ export const PoolRegistrationSchema = z.object({
    * ContextStore visibility configuration for the ContextoTab.
    * Controls which namespaces the operator role can see.
    *
-   * Default (when absent): ["service", "journey", "session"]
-   * PII namespaces (caller, account, history) always appear masked when included.
-   * supervisor/admin always see all namespaces with full values.
+   * Default (when absent): `DEFAULT_OPERATOR_NAMESPACES` no `mcp-server-plughub`
+   * (`server.ts`) — hoje `["service", "session"]`. supervisor/admin sempre veem tudo.
    *
-   * Examples:
-   *   SAC genérico:  operator_namespaces: ["service", "journey", "session"]
-   *   Cobrança:      operator_namespaces: ["service", "journey", "session", "account", "history"]
+   * ⚠️ **Este docstring já foi a QUARTA cópia divergente da mesma afirmação**
+   * (corrigido em 2026-08-29). Dizia `["service", "journey", "session"]`, e as
+   * quatro casas discordavam entre si: o código (`["service","session"]`), a dica
+   * i18n, o placeholder da tela (`service, journey, session`) e esta. Por isso não
+   * se enumera mais o default aqui — aponta-se para quem o define.
+   *
+   * ⚠️ **`service` e `history` não têm PRODUTOR** — medido em 2026-08-29: zero
+   * ocorrências em `packages/`, zero no ContextStore vivo. São namespaces que a
+   * `context-store-taxonomy.md` declara e ninguém escreve; `service` está no
+   * default e não concede nada. O vocabulário REAL é derivado do mapa
+   * (`contextVisibilityOptions`), que é o que a tela do pool oferece (D6).
    */
   context_visibility:     z.object({
     operator_namespaces: z.array(z.string()).min(1),
@@ -513,7 +520,13 @@ export const PoolRegistrationSchema = z.object({
      * platform default when omitted.
      */
     operator_allow_tags: z.array(z.string()).optional(),
-  }).optional(),
+    /**
+     * `.nullable()` no objeto inteiro: `null` LIMPA a política e devolve o pool ao
+     * default da plataforma. Sem isso não existia caminho de limpeza — esvaziar o
+     * campo na tela era no-op, e a tela passava a exibir vazio um pool que
+     * continuava com política. É a mesma forma de `calendar_id`, e o mesmo motivo.
+     */
+  }).nullable().optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

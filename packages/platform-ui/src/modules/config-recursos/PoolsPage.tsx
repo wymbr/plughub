@@ -21,6 +21,8 @@ import {
   PoolHookDispatch,
 } from '@/types'
 import { useDialogForms } from '@/api/dialog-hooks'
+import { ContextVisibilitySelect } from './ContextVisibilitySelect'
+import type { ContextVisibilityOptions } from '@/api/registry'
 import Button from '@/components/ui/Button'
 import Table from '@/components/ui/Table'
 import Input from '@/components/ui/Input'
@@ -578,6 +580,10 @@ const PoolsPage: React.FC = () => {
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   const [competencySkills, setCompetencySkills] = useState<CompetencySkill[]>([])
   const [llmAccountOptions, setLlmAccountOptions] = useState<LlmAccountOption[]>([])
+  // D6 — vocabulário do seletor de context_visibility, derivado do MAPA no
+  // agent-registry. `null` = ainda não carregou (o seletor abre vazio e diz isso);
+  // nunca se cai para uma lista literal, que seria o oitavo inventário.
+  const [ctxOptions, setCtxOptions] = useState<ContextVisibilityOptions | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isOpen,    setIsOpen]    = useState(false)
   const [editingPool, setEditingPool] = useState<Pool | null>(null)
@@ -603,8 +609,10 @@ const PoolsPage: React.FC = () => {
     sla_target_ms:     30000,
     max_reply_time_ms:           null as number | null,
     calendar_id:                 '',
-    context_visibility_ns:       '' as string,   // comma-separated operator_namespaces
-    context_visibility_allow_tags: '' as string,  // comma-separated operator_allow_tags (exact tags visible plain)
+    // D6 — deixaram de ser texto separado por vírgula e passaram a ser SELEÇÃO
+    // sobre os nós do mapa do ContextStore (ver ContextVisibilitySelect).
+    context_visibility_ns:         [] as string[],   // operator_namespaces
+    context_visibility_allow_tags: [] as string[],   // operator_allow_tags (tags exatas em claro)
     routing_weights:             { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
     // Queue treatment (queue-attended-model): POOL de fila (F2 — o endereço) +
     // teto de espera. `queue_skill_id` é LEGADO: fica no estado só para ser
@@ -716,12 +724,26 @@ const PoolsPage: React.FC = () => {
     }
   }, [session])
 
+  const loadCtxOptions = useCallback(async () => {
+    if (!session) return
+    try {
+      setCtxOptions(await registryApi.getContextVisibilityOptions(session.tenantId))
+    } catch (err) {
+      // Degradação não silenciosa: sem opções o seletor fica vazio e a tela avisa —
+      // o que NÃO se faz é voltar ao texto livre "por enquanto", que reabriria a
+      // porta que a D6 fechou.
+      console.warn('[PoolsPage] vocabulário de context_visibility indisponível:', err)
+      setCtxOptions(null)
+    }
+  }, [session])
+
   useEffect(() => {
     void loadPools()
     void loadCalendars()
     void loadCompetencySkills()
     void loadLlmAccounts()
-  }, [loadPools, loadCalendars, loadCompetencySkills, loadLlmAccounts])
+    void loadCtxOptions()
+  }, [loadPools, loadCalendars, loadCompetencySkills, loadLlmAccounts, loadCtxOptions])
 
   // ── form helpers ──────────────────────────────────────────────────────────────
 
@@ -753,7 +775,7 @@ const PoolsPage: React.FC = () => {
       pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', purpose: 'contact',
       internal_queue_enabled: false,
       channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
-      max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', context_visibility_allow_tags: '',
+      max_reply_time_ms: null, calendar_id: '', context_visibility_ns: [], context_visibility_allow_tags: [],
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
       queue_pool_id: '', queue_skill_id: '', queue_max_wait_s: null,
       hooks: { ...EMPTY_HOOKS },
@@ -779,8 +801,8 @@ const PoolsPage: React.FC = () => {
       sla_target_ms:     pool.sla_target_ms,
       max_reply_time_ms:           pool.max_reply_time_ms ?? null,
       calendar_id:                 pool.calendar_id || '',
-      context_visibility_ns:       (pool.context_visibility?.operator_namespaces ?? []).join(', '),
-      context_visibility_allow_tags: (pool.context_visibility?.operator_allow_tags ?? []).join(', '),
+      context_visibility_ns:         pool.context_visibility?.operator_namespaces ?? [],
+      context_visibility_allow_tags: pool.context_visibility?.operator_allow_tags ?? [],
       routing_weights:             buildDefaultWeights(pool),
       queue_pool_id:               pool.queue_config?.pool_id ?? '',
       queue_skill_id:              pool.queue_config?.skill_id ?? '',
@@ -910,14 +932,19 @@ const PoolsPage: React.FC = () => {
         ...(formData.calendar_id
           ? { calendar_id: formData.calendar_id }
           : (editingPool?.calendar_id ? { calendar_id: null } : {})),
-        ...(formData.context_visibility_ns.trim()
+        // `null` LIMPA no registry. Sem este ramo, esvaziar o seletor e salvar era
+        // no-op: a chave saía do corpo, o valor antigo permanecia, e a tela passava
+        // a mostrar vazio um pool que continuava com política — "a tela mente", que
+        // é o defeito que a V0 deste mesmo arco existiu para consertar.
+        // Mesma forma já usada por `calendar_id` logo acima.
+        ...(formData.context_visibility_ns.length
           ? { context_visibility: {
-              operator_namespaces: formData.context_visibility_ns.split(',').map(s => s.trim()).filter(Boolean),
-              ...(formData.context_visibility_allow_tags.trim()
-                ? { operator_allow_tags: formData.context_visibility_allow_tags.split(',').map(s => s.trim()).filter(Boolean) }
+              operator_namespaces: formData.context_visibility_ns,
+              ...(formData.context_visibility_allow_tags.length
+                ? { operator_allow_tags: formData.context_visibility_allow_tags }
                 : {}),
             } }
-          : {}),
+          : (editingPool?.context_visibility ? { context_visibility: null } : {})),
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
         // Queue treatment (queue-attended-model). F2: quem ATIVA a fila é o
@@ -1506,21 +1533,46 @@ const PoolsPage: React.FC = () => {
               <p className="text-sm font-semibold text-dark">{t('pools.contextVisibility.label')}</p>
               <p className="text-xs text-gray mt-0.5">{t('pools.contextVisibility.hint')}</p>
             </div>
-            <input
-              type="text"
-              placeholder="service, journey, session"
+            <ContextVisibilitySelect
+              options={(ctxOptions?.namespaces ?? []).map(n => ({
+                value:  n.ns,
+                badge:  n.source === 'canonical' ? t('pools.contextVisibility.scopeBadge') : t('pools.contextVisibility.legacyBadge'),
+                hint:   t('pools.contextVisibility.nsHintCount', { count: n.fields }),
+                legacy: n.source === 'legacy',
+              }))}
               value={formData.context_visibility_ns}
-              onChange={e => setFormData({ ...formData, context_visibility_ns: e.target.value })}
-              className="w-full border border-border rounded px-3 py-1.5 text-sm text-dark focus:outline-none focus:ring-1 focus:ring-primary"
+              onChange={v => setFormData({ ...formData, context_visibility_ns: v })}
+              placeholder={t('pools.contextVisibility.nsPlaceholder')}
+              emptyLabel={t('pools.contextVisibility.optionsEmpty')}
+              searchLabel={t('pools.contextVisibility.search')}
+              unknownBadge={t('pools.contextVisibility.unknownBadge')}
+              unknownTitle={t('pools.contextVisibility.unknownHint')}
             />
             <p className="text-xs text-gray mt-2 mb-1">{t('pools.contextVisibility.allowTagsHint')}</p>
-            <input
-              type="text"
-              placeholder="caller.customer_id"
+            <ContextVisibilitySelect
+              searchable
+              options={(ctxOptions?.tags ?? []).map(tg => ({
+                value:  tg.tag,
+                badge:  tg.tipo,
+                hint:   tg.origin === 'alias'
+                  ? t('pools.contextVisibility.tagHintAlias', { canonical: tg.canonical })
+                  : t('pools.contextVisibility.tagHintCanonical'),
+                legacy: tg.origin === 'alias',
+              }))}
               value={formData.context_visibility_allow_tags}
-              onChange={e => setFormData({ ...formData, context_visibility_allow_tags: e.target.value })}
-              className="w-full border border-border rounded px-3 py-1.5 text-sm text-dark focus:outline-none focus:ring-1 focus:ring-primary"
+              onChange={v => setFormData({ ...formData, context_visibility_allow_tags: v })}
+              placeholder={t('pools.contextVisibility.tagsPlaceholder')}
+              emptyLabel={t('pools.contextVisibility.optionsEmpty')}
+              searchLabel={t('pools.contextVisibility.search')}
+              unknownBadge={t('pools.contextVisibility.unknownBadge')}
+              unknownTitle={t('pools.contextVisibility.unknownHint')}
             />
+            {/* Degradação NUNCA silenciosa: se o mapa do tenant não foi lido, o
+                seletor está oferecendo o vocabulário do CÓDIGO, e quem edita
+                visibilidade de PII precisa saber disso. */}
+            {ctxOptions?.source === 'builtin' && (
+              <p className="text-xs text-warning mt-1">⚠ {t('pools.contextVisibility.builtinWarning')}</p>
+            )}
           </div>
 
           {/* ── Routing weights — Fixos ───────────────────────────────────────── */}

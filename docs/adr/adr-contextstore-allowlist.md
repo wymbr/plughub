@@ -1,8 +1,9 @@
 # ADR: ContextStore como ALLOWLIST — tipo declarado, mapa de dados e vocabulário único de política
 
 **Status:** Aceito — 2026-08-26. **Parcialmente implementado:** V0 *(metade)* · V1 · V1b · V2 · V2b
-· **V3** entregues; **V4 é a próxima** — e a V4 (a inversão, não reversível) só é autorizada pelo
-número que a V3 passou a publicar (§7).
+· **V3** · **V5 (metade — a D6)** entregues. **V4 (a inversão, não reversível) é a próxima** e só é
+autorizada pelo número que a V3 passou a publicar (§7); a outra metade da V5 — fechar os aliases —
+depende do mesmo contador decair, logo as duas são bloqueadas por TEMPO, não por esforço.
 **Data:** 2026-08-26 *(cabeçalho corrigido em 2026-08-29: dizia "Proposto — nenhuma fase implementada"
 enquanto a §6 marcava quatro fases como FEITAS, com gate e entrada de CHANGELOG cada uma. Documento que
 se contradiz é da mesma família do DDL de `participation_intervals` — prosa afirmando um estado que
@@ -351,6 +352,19 @@ Foi texto livre que permitiu a dica prometer o namespace `journey` num default q
 sem mecanismo que impeça a volta. O seletor **é** o mecanismo: não há como digitar um namespace que
 não existe.
 
+> **Confirmado ao implementar (2026-08-29), e pior do que este parágrafo supunha.** A correção de
+> 08-26 arrumou a dica i18n e **deixou o placeholder do próprio campo dizendo `service, journey,
+> session`** — a promessa sobreviveu a três linhas de distância do conserto. Contadas, eram **quatro**
+> casas afirmando o default, todas discordando entre si (código, dica, placeholder, docstring do
+> schema). Mais: **`service` e `history` não têm produtor nenhum** — zero ocorrências em `packages/`
+> e zero no ContextStore vivo —, e `service` está no default. O seletor derruba a classe inteira
+> porque a lista deixa de ser escrita: ela é derivada do mapa (`contextVisibilityOptions`).
+>
+> **Duas propriedades que a D6 não previa e são load-bearing:** (a) valor legado fora do mapa é
+> MANTIDO e marcado — um seletor que só expressasse as opções descartaria política em silêncio no
+> primeiro save; (b) **a limpeza passou a existir** — não havia caminho para esvaziar
+> `context_visibility`, em três camadas mudas, e o seletor tornou o gesto natural.
+
 ### D7 — Fonte de verdade: config-api. O arquivo apenas semeia
 
 Medido em 08-26: o `seed.py` e a config viva **divergiram nos dois sentidos**
@@ -481,7 +495,7 @@ hierárquico hoje (`ContextTagEntrySchema.tag`, regex multi-nível em `context-s
 | **V2b** | Fechar a casa LEGADA de display rule (`rule.{category}`) — pré-requisito do `masked` TIPADO, que não pode ser escrito enquanto a mesma pergunta tiver duas respostas. **FEITA em 2026-08-29** (ver `CHANGELOG.md`). **A remoção foi autorizada por CONTADOR, não por decreto:** o ramo D do `probe_type_catalog.sh` publicava o número de chaves legadas dizendo *"a remoção é MEDIDA por este número zerar"* — zerou. Medido antes de tocar: **zero escritores** em todo o repositório (a V2 já migrara a tela; os três `putConfig` da `MaskingPage` são `audit_policy/{key}`, `masking/types`, `masking/context_rules`), **zero chaves** em todo o `platform_config` (todos os tenants, todos os namespaces — contra 8 linhas do ns `masking` de testemunha) e **quatro leitores**, todos no `platform-ui`. Gate `probe_legacy_display_rule_closed.sh`, visto **vermelho antes de verde** (4 casas → 0). Achado: o leitor legado **não era peso morto** — `getMaskingRule` devolvia o override e `update()` o gravava de volta no CATÁLOGO, então editar qualquer campo de uma categoria com override **promovia o legado a tipo, em silêncio**; armadilha ARMADA, blast radius zero por ausência de dado | sim |
 | **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria**. **FEITA em 2026-08-29** (ver `CHANGELOG.md`): `masking.context_map` com **74 campos e 39 aliases**, semeado a partir do CENSO (leitura ∪ escrita — as duas varreduras discordam), `resolveContextTag` resolvendo **na borda** nas DUAS portas humanas, e o PAR de contadores com data em `{t}:ctx:audit:*`, legível por `GET /internal/context-audit`. **O mapa não recusa nada e o enum `mode` tem UM valor** — não existe config capaz de ligar a V4 antes de o código que a honra existir. Três achados que a fase produziu: **(1)** o `486` da §1.8 **não reproduz** (são 231/53 arquivos), e leitura sozinha não é o denominador — escrita traz campos que nenhuma leitura menciona; **(2)** `legado` teve de virar ARRAY (D3), porque o mesmo campo tem duas grafias vivas; **(3)** o mapa exigiu o primeiro tipo que **não mascara** (`texto`), e com ele um fail-open que não existia — `masked: "texto"` passaria pelo portão da T5, que só conferia EXISTÊNCIA do id. Fechado por predicado derivado (`typeMasksSomething`), não por lista de exceção, com testemunha positiva ao lado. Gate `probe_context_map_audit.sh` (8 ramos), visto **vermelho antes de verde** | sim |
 | **V4** | Inverter para deny-by-default, com a lista real que a V3 produziu | **não** |
-| **V5** | Tela do pool vira seletor (D6); fechamento dos aliases cujo contador zerou | sim |
+| **V5** | Tela do pool vira seletor (D6); fechamento dos aliases cujo contador zerou. **D6 FEITA em 2026-08-29** (ver `CHANGELOG.md`): `context_visibility` deixou de ser texto livre e passou a SELEÇÃO sobre os nós do mapa, servida por `GET /v1/context-map/visibility-options` (5 namespaces, 113 tags). Medido ao fazer: havia **QUATRO** cópias da afirmação sobre o default e as quatro discordavam — o conserto de 08-26 arrumou a dica e **não tocou no placeholder logo abaixo**, que é exatamente o *"sem mecanismo que impeça a volta"* previsto aqui. E **dois dos sete namespaces da taxonomia não existem** (`service`, `history`: zero produtores, zero no store vivo), com `service` no default da plataforma. O seletor os elimina sem lista de exceção. Duas propriedades load-bearing: valor LEGADO fora do mapa é mantido e MARCADO (descartá-lo no primeiro save seria mudança de política silenciosa, na direção que ninguém percebe), e a LIMPEZA passou a existir — não havia caminho nenhum, em três camadas mudas (tela omitia a chave, schema sem `.nullable()` ⇒ 422, `PUT` passando `null` cru a coluna `Json` que exige `DbNull`). Gate `probe_context_visibility_selector.sh` (6 ramos). **O fechamento dos aliases segue pendente e é BLOQUEADO POR TEMPO**: depende do contador da V3 zerar por N dias | sim |
 
 Ordem inegociável: **V1 antes de V4.**
 

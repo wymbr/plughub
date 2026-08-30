@@ -102,6 +102,7 @@ export {
   buildContextTagIndex,
   resolveContextTag,
   verifyContextMap,
+  contextVisibilityOptions,
 } from "./context-map"
 
 export type {
@@ -112,6 +113,9 @@ export type {
   ContextTagResolution,
   ContextTagIndex,
   ContextMapVerification,
+  ContextVisibilityOptions,
+  ContextVisibilityNamespaceOption,
+  ContextVisibilityTagOption,
 } from "./context-map"
 
 // ── v2: Mensagem ─────────────────────────────

@@ -14,6 +14,7 @@ import { channelEndpointsRouter } from "./routes/channel-endpoints"
 // PoolSkillSlot, autoritativo). Rota desmontada; model removido do schema.
 import { poolSlotsRouter }        from "./routes/pool-slots"
 import { operationalRouter }      from "./routes/operational"
+import { contextMapRouter }       from "./routes/context-map"
 import { requireResourceWrite }   from "./middleware/require-resource-write"
 
 export const app = express()
@@ -47,6 +48,9 @@ app.use("/v1/instances",          instancesRouter)
 app.use("/v1/channels",           requireResourceWrite, channelsRouter)
 app.use("/v1/channel-endpoints",  requireResourceWrite, channelEndpointsRouter)
 app.use("/v1/operational",        operationalRouter)
+// D6 — vocabulário do seletor de `context_visibility`. Somente LEITURA e
+// derivado do mapa; não escreve nada, por isso fora do `requireResourceWrite`.
+app.use("/v1/context-map",        contextMapRouter)
 
 // ── Healthcheck ────────────────────────────
 app.get("/v1/health", (_req: Request, res: Response) => {

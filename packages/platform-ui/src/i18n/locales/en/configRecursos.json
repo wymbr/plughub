@@ -58,8 +58,20 @@
     },
     "contextVisibility": {
       "label": "Context Store Visibility",
-      "hint": "Namespaces visible to the operator in the Context tab. Separate with commas. Default: service, session. PII namespaces (caller, account, history) appear masked when included.",
-      "allowTagsHint": "Exact tags the operator always sees (plain), even outside the namespaces above — for internal reference ids that are not PII (e.g. caller.customer_id, needed to identify the customer / load history). Comma-separated. Default: caller.customer_id."
+      "hint": "Namespaces the operator sees in the Context tab. The list comes from the ContextStore map — there is no way to pick a namespace that does not exist. PII namespaces appear masked when included.",
+      "allowTagsHint": "Exact tags the operator always sees in plain text, even outside the namespaces above — for internal reference ids that are not PII (e.g. caller.customer_id, needed to identify the customer / load history).",
+      "nsPlaceholder": "Select namespaces — empty uses the platform default",
+      "tagsPlaceholder": "Select exact tags — optional",
+      "search": "Filter…",
+      "optionsEmpty": "No options — the ContextStore map could not be loaded",
+      "scopeBadge": "scope",
+      "legacyBadge": "legacy",
+      "unknownBadge": "not in the map",
+      "unknownHint": "Value declared before this screen and unknown to the ContextStore map. It is kept as-is until you remove it — it is not dropped on save.",
+      "nsHintCount": "{{count}} field(s) in the map",
+      "tagHintAlias": "Legacy spelling of {{canonical}}",
+      "tagHintCanonical": "Canonical name",
+      "builtinWarning": "Showing the built-in vocabulary: this tenant's ContextStore map could not be read, so fields declared only in its config are missing from the list."
     },
     "typeCapacity": {
       "label": "Type & Capacity",

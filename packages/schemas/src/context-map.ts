@@ -433,3 +433,95 @@ export function verifyContextMap(
     alias_shadows_canonical,
   }
 }
+
+// ─────────────────────────────────────────────
+// Opções de `context_visibility` (D6 / fase V5)
+// ─────────────────────────────────────────────
+
+/**
+ * O que a tela do pool pode OFERECER, derivado do mapa.
+ *
+ * ── Por que isto vive aqui, e não no platform-ui ─────────────────────────────
+ *
+ * O `platform-ui` **não depende de `@plughub/schemas`** — redefine os contratos à
+ * mão em `types/index.ts`, dívida que o `CLAUDE.md` registra. Derivar a lista lá
+ * criaria uma SEGUNDA leitura da árvore do mapa, e é assim que dois vocabulários
+ * nascem no arco que existe para colapsar sete. A derivação fica na casa do mapa;
+ * quem serve a tela é um endpoint que a chama.
+ *
+ * ── `agent.*` fica FORA das opções, e isso é medido ─────────────────────────
+ *
+ * O portão de namespace (`applyContextMaskingDynamic`) descarta `agent.*` **antes**
+ * de consultar a lista (`if (ns === "agent") continue`). Um pool que declarasse
+ * `agent` não veria nada: a opção seria inerte por construção. Oferecê-la é a mesma
+ * família do `service` — item de menu que não faz nada, e que o operador só
+ * descobre inerte quando o campo não aparece.
+ */
+export interface ContextVisibilityNamespaceOption {
+  ns: string
+  /**
+   * `canonical` — o namespace é ESCOPO no modelo novo (`session`, `journey`).
+   * `legacy`    — só existe como primeiro segmento de alias (`caller`, `account`,
+   *               `hook`); some quando a migração terminar.
+   */
+  source: "canonical" | "legacy"
+  /** Quantos campos do mapa caem neste namespace — dá peso à escolha. */
+  fields: number
+}
+
+export interface ContextVisibilityTagOption {
+  /** A grafia selecionável (canônica ou legada) — é ela que vai para a config. */
+  tag:       string
+  canonical: string
+  tipo:      string
+  origin:    "canonical" | "alias"
+}
+
+export interface ContextVisibilityOptions {
+  namespaces: ContextVisibilityNamespaceOption[]
+  tags:       ContextVisibilityTagOption[]
+}
+
+/**
+ * Deriva as opções do mapa. **Nenhuma lista literal** — é o mecanismo que a D6
+ * pede: não há como escolher um namespace que não existe, porque a lista não é
+ * escrita, é medida.
+ *
+ * As grafias LEGADAS entram de propósito: enquanto a migração não termina, o
+ * ContextStore vivo guarda `caller.cpf`, e uma lista só com canônicas ofereceria
+ * exatamente o que o portão NÃO vai casar hoje.
+ */
+export function contextVisibilityOptions(map: ContextMap = DEFAULT_CONTEXT_MAP): ContextVisibilityOptions {
+  const index = buildContextTagIndex(map)
+  const nsCount = new Map<string, { canonical: number; legacy: number }>()
+  const bump = (name: string, kind: "canonical" | "legacy") => {
+    const ns  = name.split(".")[0] ?? ""
+    if (!ns || ns === "agent") return
+    const cur = nsCount.get(ns) ?? { canonical: 0, legacy: 0 }
+    cur[kind]++
+    nsCount.set(ns, cur)
+  }
+
+  const tags: ContextVisibilityTagOption[] = []
+  for (const [canonical, tipo] of index.canonical) {
+    bump(canonical, "canonical")
+    tags.push({ tag: canonical, canonical, tipo, origin: "canonical" })
+  }
+  for (const [legado, canonical] of index.alias) {
+    bump(legado, "legacy")
+    tags.push({ tag: legado, canonical, tipo: index.canonical.get(canonical) ?? "", origin: "alias" })
+  }
+
+  const namespaces: ContextVisibilityNamespaceOption[] = [...nsCount.entries()]
+    .map(([ns, c]) => ({
+      ns,
+      // Um namespace que tem QUALQUER canônica é escopo do modelo novo; os demais
+      // só sobrevivem enquanto houver alias apontando para fora deles.
+      source: (c.canonical > 0 ? "canonical" : "legacy") as "canonical" | "legacy",
+      fields: c.canonical + c.legacy,
+    }))
+    .sort((a, b) => (a.source === b.source ? b.fields - a.fields : a.source === "canonical" ? -1 : 1))
+
+  tags.sort((a, b) => a.tag.localeCompare(b.tag))
+  return { namespaces, tags }
+}

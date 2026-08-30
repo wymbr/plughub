@@ -53,6 +53,21 @@ produtor — inócuas, mas engordam a lista que a tela de Masking exibe e sugere
 existe. Antes de remover, conferir se algum `delegate.context` de tenant as alimenta (a varredura só
 alcança o código, não o conteúdo autorado).
 
+### 🟡 `DEFAULT_OPERATOR_NAMESPACES` ainda contém `service`, que não concede nada
+
+Medido em 2026-08-29: `service.*` tem **zero produtores** em `packages/` e zero ocorrências no
+ContextStore vivo, mas está no default da plataforma (`server.ts`,
+`DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]`). O efeito é **inerte** — concede visibilidade
+a um namespace onde nada é escrito —, então não há urgência e nada vaza.
+
+**Não removi de propósito:** é um default de VISIBILIDADE, e mexer nele é mudança de comportamento
+de segurança que merece decisão explícita, não um efeito colateral de um arco de UI. O docstring do
+schema já registra a medição, e o seletor da D6 impede que alguém o *escolha* daqui em diante.
+
+Junto: `docs/guias/context-store-taxonomy.md` declara SETE namespaces, dois dos quais
+(`service.*` — com cinco campos nominais — e `history.*`) não existem. O ADR já marca o guia como
+desatualizado; agora está medido. Se o guia for revisado, esses dois são o começo.
+
 ### 🟡 `config-api` cacheia em processo — re-semear não basta
 
 `plughub-config-seed --only <ns>.<key> --overwrite` grava no Postgres, mas

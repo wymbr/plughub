@@ -1,5 +1,104 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## D6 do arco ALLOWLIST — a tela do pool vira seletor, e a lista deixa de ser escrita (2026-08-29)
+
+`context_visibility` era **texto livre separado por vírgula**. Passou a ser seleção sobre os nós do
+mapa do ContextStore que a V3 criou: `GET /v1/context-map/visibility-options` no agent-registry
+deriva o vocabulário (**5 namespaces, 113 tags**) e a tela só oferece o que existe.
+
+**O seletor É o mecanismo.** Corrigir os textos seria o conserto que envelhece — e a medição mostra
+por quê.
+
+### Quatro cópias da mesma afirmação, e as quatro discordavam
+
+Sobre o default de `operator_namespaces`, no mesmo produto:
+
+| casa | dizia |
+|---|---|
+| código (`server.ts`, autoridade) | `["service", "session"]` |
+| dica i18n | *"Default: service, session"* — mas citando `history` como namespace PII |
+| **placeholder do campo, ao lado da dica** | `service, journey, session` |
+| docstring do schema (`agent-registry.ts`) | `["service", "journey", "session"]` |
+
+O conserto de 2026-08-26 arrumou a dica e **não tocou no placeholder logo abaixo dela**. Era o que o
+ADR previa ao dizer que aquela correção ficou *"sem mecanismo que impeça a volta"*: a prosa foi
+corrigida numa casa e envelheceu nas outras três no mesmo dia.
+
+### Dois dos sete namespaces documentados NÃO EXISTEM
+
+Medido: `service.*` e `history.*` têm **zero produtores** em `packages/` (nem leitura `@ctx.`, nem
+declaração `tag:` de `context_tags`) e **zero ocorrências** no ContextStore vivo. A
+`context-store-taxonomy.md` declara os dois — `service.*` com cinco campos nominais — e `service`
+está **no default da plataforma**, onde não concede nada.
+
+O seletor os elimina sem lista de exceção: a lista vem do mapa, e o mapa é medido. Nada a manter em
+sincronia.
+
+### O valor legado NÃO pode sumir em silêncio
+
+Um pool salvo antes desta tela pode declarar algo fora do mapa. Um seletor que só soubesse expressar
+as opções **descartaria esse valor no primeiro save** — mudança de política silenciosa, e na direção
+que ninguém percebe: o operador deixa de ver um campo e não abre chamado sobre o que não apareceu.
+
+O desconhecido vira chip marcado (⚠), com o aviso visível **sem abrir o dropdown**, e só sai se
+alguém o remover. Provado ponta a ponta no navegador: `service` carregado, exibido marcado,
+sobrevivendo ao save.
+
+### Um defeito que o seletor revelou: não existia caminho de LIMPEZA
+
+Com texto livre ninguém esvaziava o campo; com chips, remover é o gesto natural — e ele era **no-op**.
+Três camadas, todas mudas:
+
+- a tela omitia a chave do corpo quando vazia ⇒ o valor antigo permanecia;
+- `PoolRegistrationSchema.context_visibility` era `.optional()` sem `.nullable()` ⇒ `null` dava **422**;
+- o `PUT` passava `null` cru a uma coluna `Json` do Prisma, que exige `Prisma.DbNull` (o caminho de
+  CREATE já fazia certo, na linha 108).
+
+Resultado: a tela exibia vazio um pool que continuava com política — *"a tela mente"*, o mesmo
+defeito que a V0 deste arco existiu para consertar. As três camadas foram fechadas (a da tela na
+mesma forma que `calendar_id` já usava), e o ciclo completo foi verificado no navegador: carregar →
+remover chips → salvar → `null` no banco.
+
+### Onde a derivação mora, e por que não na tela
+
+`platform-ui` **não depende de `@plughub/schemas`** (redefine os contratos à mão — dívida registrada
+no `CLAUDE.md`), então derivar a lista lá seria uma **segunda leitura** da árvore do mapa. A
+derivação (`contextVisibilityOptions`) ficou na casa do mapa; o agent-registry a serve, porque
+`context_visibility` é campo de **Pool** e é a ele que a tela já fala. A resposta carrega `source`:
+se o mapa do tenant não foi lido, a tela **avisa** em vez de oferecer o vocabulário do código como
+se fosse o dele.
+
+`agent.*` fica fora das opções por medição, não por gosto: o portão descarta `agent.*` **antes** de
+consultar a lista, então a opção seria inerte — a mesma família do `service`.
+
+### Instrumentos
+
+Gate `infra/test/probe_context_visibility_selector.sh`, **6 ramos**. Duas lições do ciclo, ambas
+sobre o gate julgar a proposição errada:
+
+- **O ramo E leu um `dist/` herdado** e reprovou um schema que estava correto — o gate só compilava
+  quando `dist/` não existia. É o *"preflight de CONTEÚDO, não de símbolo"*: o símbolo existia e não
+  era o de agora. Hoje recompila sempre.
+- **A primeira mutação do ramo D não provou nada.** Renomear a declaração da variável deixa o gate
+  verde *e não compilaria* — mutação irreal. A regressão realista não se parece com código removido,
+  e sim com **um filtro a mais** (`value.filter(v => known.has(v))`), que descarta o legado calado.
+  O ramo virou asserção NEGATIVA sobre esse filtro — e a primeira versão dela reprovava o próprio
+  conserto, porque não distinguia `known.has` de `!known.has`. Baseline verde → filtro injetado →
+  vermelho → restaurado → verde.
+
+### Arquivos
+
+- `packages/schemas/src/context-map.ts` — `contextVisibilityOptions` (derivação única).
+- `packages/schemas/src/agent-registry.ts` — `context_visibility` agora `.nullable()`; docstring
+  deixou de enumerar o default (aponta para quem o define) e registra os dois namespaces sem produtor.
+- `packages/agent-registry/src/routes/context-map.ts` (novo) + `app.ts` — o endpoint.
+- `packages/agent-registry/src/routes/pools.ts` — `null` → `Prisma.DbNull` no update.
+- `packages/platform-ui/src/modules/config-recursos/ContextVisibilitySelect.tsx` (novo),
+  `PoolsPage.tsx` (estado vira array, seletores, limpeza explícita), `api/registry.ts`, locales
+  `en`/`pt-BR`.
+
+---
+
 ## V3 do arco ALLOWLIST — o mapa existe, os aliases são contados, e a auditoria não esconde nada (2026-08-29)
 
 O ContextStore ganhou um **mapa declarativo** (`masking.context_map`, 74 campos e 39 aliases) em

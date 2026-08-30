@@ -291,7 +291,10 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.llm_account_ids       !== undefined && { llm_account_ids:       body.llm_account_ids }),
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),
         ...(body.calendar_id              !== undefined && { calendar_id:              body.calendar_id }),
-        ...(body.context_visibility       !== undefined && { context_visibility:       body.context_visibility }),
+        // `null` LIMPA (D6): coluna Json do Prisma exige `DbNull`, não `null` cru —
+        // o caminho de CREATE (:108) já fazia isso. Sem o mapeamento, esvaziar a
+        // visibilidade pela tela não teria efeito nenhum no banco.
+        ...(body.context_visibility       !== undefined && { context_visibility:       body.context_visibility ?? Prisma.DbNull }),
       } as any,
     })
 
