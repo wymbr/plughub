@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from typing import Any
 
@@ -170,7 +171,95 @@ def _resolve_scope(payload: dict, origem: str) -> list[str] | None:
     return _with_internal_mirrors(resolve_scope(payload, origem))
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Credencial de SERVIÇO — chamador interno sem usuário (2026-08-30)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# O fechamento de credencial de 2026-08-29 gateou 18 rotas e não migrou nenhum
+# chamador INTERNO. Medido em 2026-08-30, quatro chamavam sem header algum, e a
+# forma de morrer é a pior possível — três devolvem um ZERO PLAUSÍVEL:
+#
+#   · `evaluation-api/router.py:2221`  → `/v1/transcript/…`   → 502 na tela (visível)
+#   · `evaluation-api/backfill.py:76`  → `/reports/segments`  → `scanned=0` (mudo)
+#   · `agent-registry/skills.ts:609`   → `/reports/sessions`  → `active_sessions: 0`
+#     dentro de um `catch {}`, no endpoint que existe para DEPLOY SEGURO: uma
+#     promoção com sessões vivas passa a parecer segura, e nada fica vermelho.
+#   · `mcp-server/evaluation.ts:1114`  → `/v1/audit/mcp-calls` → `toolTrace = []`
+#
+# O quarto NÃO é atendido aqui, e é decisão, não esquecimento: aquela rota tem
+# portão PRÓPRIO (`audit._check_audit_access`, LGPD, com trilha gravada) e a fonte
+# está VAZIA — `session_timeline` tem 0 linhas em `tenant_demo`, medido. Afrouxar
+# o portão mais sensível da casa para servir um leitor sem dado seria decidir
+# política contra população zero, que é a regra que a decisão #4 desta mesma
+# semana firmou. Fica registrado no `TODO.md`, com o gatilho: quando aquela tabela
+# ganhar produtor, alguém decide se a leitura da própria plataforma é acesso
+# auditado (instinto: é, e deve ser GRAVADA, não isenta).
+#
+# ── Postura: o header ACRESCENTA uma porta, nunca remove a exigência ──────────
+# `service_token` vazio **não libera**. Esta é a diferença deliberada em relação a
+# `_require_service` da evaluation-api, onde vazio é no-op por herança de demo
+# aberto: replicar isso aqui reintroduziria o defeito que 2026-08-27 fechou — o
+# ABAC de pool ser OPT-IN DO CHAMADOR, em que omitir o header era decisão de quem
+# chama. Sem header, o fluxo é exatamente o de antes.
+#
+# ⚠️ O principal de serviço é IRRESTRITO, e por isso ele é uma IDENTIDADE e não um
+# anônimo com senha: `sub = "service:<nome>"` viaja para o log e para a trilha. Um
+# chamador interno legítimo precisa alcançar pools que não são "dele" (o backfill
+# enumera a campanha inteira), então recortar por pool aqui seria quebrar a função;
+# o que não pode é o alcance ser anônimo.
+
+
+_SERVICE_NAME_OK = re.compile(r"[^a-zA-Z0-9_.:-]")
+
+
+def _service_principal(request: "Request | None") -> "PoolPrincipal | None":
+    """`None` = não apresentou credencial de serviço (segue o fluxo normal).
+
+    Levanta 401 nomeado quando apresentou e não confere — inclusive quando o
+    serviço não tem token configurado, que é erro de DEPLOY e não de chamador.
+    """
+    if request is None:
+        return None
+    presented = request.headers.get("x-service-token", "")
+    if not presented:
+        return None
+
+    settings = get_settings()
+    if not settings.analytics_service_token:
+        logger.error(
+            "pool_auth RECUSA: chamador apresentou `X-Service-Token` mas "
+            "`PLUGHUB_ANALYTICS_SERVICE_TOKEN` nao esta configurado neste servico. Isto e' "
+            "erro "
+            "de DEPLOY (os dois lados tem de casar), nao de chamador — e aceitar seria "
+            "transformar 'nao ha credencial' em 'pode tudo'."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="service_token_not_configured",
+        )
+    if presented != settings.analytics_service_token:
+        logger.warning("pool_auth: `X-Service-Token` apresentado NAO confere — recusado")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="service_credential_invalid",
+        )
+
+    # O nome vem do chamador, que já provou o segredo compartilhado — mas ele viaja
+    # para LOG e trilha, então é saneado: sem isso um chamador interno poderia
+    # injetar quebra de linha na trilha de auditoria.
+    raw_name = (request.headers.get("x-service-name") or "").strip()[:48]
+    name = _SERVICE_NAME_OK.sub("", raw_name) or "unnamed"
+    if name == "unnamed":
+        logger.warning(
+            "pool_auth: credencial de servico VALIDA sem `X-Service-Name` utilizavel "
+            "(bruto=%r). O acesso e' concedido, mas a trilha dira 'service:unnamed' — "
+            "um chamador interno sem nome e' um vazamento de RASTRO, nao de acesso.",
+            raw_name[:32],
+        )
+    return PoolPrincipal(accessible_pools=None, tenant_id=None, sub=f"service:{name}")
+
+
 async def optional_pool_principal(
+    request: Request = None,  # type: ignore[assignment]
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> PoolPrincipal:
     """
@@ -179,6 +268,14 @@ async def optional_pool_principal(
     Always succeeds (never raises 401 for missing token). Raises 401 only
     when a token IS present but fails verification.
     """
+    # Credencial de SERVIÇO primeiro: chamador interno não tem Bearer de usuário.
+    # Antes de tudo, inclusive do ramo de `analytics_open_access` — um serviço que
+    # apresenta token errado tem de ser RECUSADO mesmo em demo aberto, senão o
+    # deploy quebrado passa despercebido justamente onde se testa.
+    _svc = _service_principal(request)
+    if _svc is not None:
+        return _svc
+
     settings = get_settings()
 
     # Pool-scoping é DESACOPLADO do `analytics_open_access` (Segurança Fase A/E): o
@@ -392,6 +489,7 @@ def accessible_pools_from_request(
 # os dois reprovam.
 
 async def require_pool_principal(
+    request: Request = None,  # type: ignore[assignment]
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> PoolPrincipal:
     """
@@ -406,6 +504,12 @@ async def require_pool_principal(
       - `auth_required`      — nenhum header `Authorization`.
       - `Token expired` / `Invalid token` — herdados do decode.
     """
+    # Serviço primeiro: ele não apresenta `Authorization`, e os dois 401 abaixo o
+    # barrariam antes de qualquer chance.
+    _svc = _service_principal(request)
+    if _svc is not None:
+        return _svc
+
     settings = get_settings()
     if not settings.auth_jwt_secret:
         logger.error(
@@ -421,7 +525,7 @@ async def require_pool_principal(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="auth_required",
         )
-    return await optional_pool_principal(credentials)
+    return await optional_pool_principal(request, credentials)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -459,7 +563,7 @@ async def sse_pool_principal(
     credentials = (
         HTTPAuthorizationCredentials(scheme="Bearer", credentials=raw) if raw else None
     )
-    return await optional_pool_principal(credentials)
+    return await optional_pool_principal(request, credentials)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

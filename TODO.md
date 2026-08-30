@@ -244,7 +244,19 @@ Série cortada e retomada em 2026-08-30 sob o mapa novo, com cache quente:
 `approval.summary` — e **não devem ser decididos um a um**: a D9 os dissolve.
 
 
-## 🔴 A transcrição da tela de Qualidade está QUEBRADA — delegação anônima *(medido 2026-08-30)*
+## ✅ Chamadores internos da analytics-api — FECHADO em 2026-08-30 *(detalhe no `CHANGELOG.md`)*
+
+> A seção abaixo é o DIAGNÓSTICO original, mantido porque a medição vale. O conserto veio no
+> mesmo dia e cresceu: não era uma rota, eram **quatro chamadores**, e a investigação
+> desenterrou um defeito mais antigo — o `handoff-status` do agent-registry **nunca funcionou**
+> neste deploy (`ANALYTICS_API_URL` ausente ⇒ `fetch failed` ⇒ `catch {}` ⇒ `active_sessions: 0`;
+> a resposta certa era 24). Gate: `infra/test/probe_internal_service_callers.sh`.
+>
+> **Aberto, com gatilho declarado:** o 4º chamador (`mcp-server` → `/v1/audit/mcp-calls`)
+> **não** foi atendido, de propósito — aquela rota tem portão LGPD próprio e a fonte está
+> vazia (`session_timeline` = 0 linhas, medido). Quando ela ganhar produtor, decidir se a
+> leitura da própria plataforma é acesso auditado (instinto: é, e deve ser GRAVADA, nunca
+> isenta). O ramo G do probe guarda a regressão de dar chave mestra ao serviço.
 
 Achado de lambuja ao fechar o escopo de conteúdo; **independente daquela mudança**, e anterior a ela.
 

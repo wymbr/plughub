@@ -1225,6 +1225,7 @@ async def backfill_campaign(
     return await run_campaign_backfill(
         pool, campaign,
         analytics_api_url=settings.analytics_api_url,
+        analytics_service_token=settings.analytics_service_token,
         from_dt=from_dt, to_dt=to_dt,
         page_size=settings.backfill_page_size,
         max_segments=settings.backfill_max_segments,
@@ -2215,11 +2216,23 @@ async def get_result_transcript(
     if scope == "segment" and segment_id:
         params["segment_id"] = segment_id
 
+    # ── Credencial de serviço (2026-08-30) ───────────────────────────────────
+    # Esta chamada era ANÔNIMA e a analytics-api passou a exigir credencial em
+    # 2026-08-29: o 401 virava 502 na tela de Qualidade. O gate de PAPEL desta
+    # leitura fica AQUI (`_can_view_transcript`, logo acima) por decisão de ADR —
+    # por isso vai token de SERVIÇO e não o Bearer do usuário: encaminhar o do
+    # usuário faria o escopo de POOL da analytics valer sobre uma leitura já
+    # gateada por `module_config.evaluation.*` + `pool_id`, e dois portões sobre a
+    # mesma pergunta significa que o mais grosseiro é o único que vale.
+    _svc_headers = {
+        "X-Service-Token": settings.analytics_service_token,
+        "X-Service-Name":  "evaluation-api",
+    } if settings.analytics_service_token else {}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{settings.analytics_api_url}/v1/transcript/sessions/{session_id}",
-                params=params,
+                params=params, headers=_svc_headers,
             )
     except Exception as exc:
         logger.error("transcript delegation to analytics-api failed: %s", exc)

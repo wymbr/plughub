@@ -74,6 +74,22 @@ class Settings(BaseSettings):
     # requiring a Bearer token. NEVER enable in production.
     analytics_open_access: bool = False
 
+    # ── Credencial de SERVIÇO (X-Service-Token) ───────────────────────────────
+    # Chamadores internos (evaluation-api, agent-registry) não têm usuário: eles
+    # não podem apresentar um Bearer do auth-api. Sem isto, o fechamento de
+    # credencial de 2026-08-29 os deixa 401 — e três dos quatro degradavam para
+    # um ZERO plausível, em silêncio.
+    #
+    # ⚠️ Vazio NÃO libera. É o oposto da postura de `_require_service` da
+    # evaluation-api (lá vazio = no-op, herança de demo aberto): aqui o header só
+    # ACRESCENTA uma porta, nunca remove a exigência. Apresentar credencial de
+    # serviço a um serviço que não tem uma é erro do DEPLOY, e sai 401 nomeado.
+    # env: `PLUGHUB_ANALYTICS_SERVICE_TOKEN` (o prefixo do serviço é `PLUGHUB_`).
+    # Os três nomes de env deste segredo terminam igual de propósito — os prefixos
+    # diferem por serviço, e segredo compartilhado com nomes que não se parecem é
+    # segredo que alguém rotaciona pela metade.
+    analytics_service_token: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

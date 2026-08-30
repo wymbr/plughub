@@ -1243,6 +1243,31 @@ base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
 > no `TODO.md`, nunca "por enquanto". Gate do que fechou:
 > `infra/test/probe_session_content_scope.sh` (6 ramos, vermelho antes de verde).
 
+> **Fechar credencial numa API obriga a MIGRAR os chamadores internos, e eles não têm
+> usuário** *(medido 2026-08-30)*. O fechamento de 08-29 gateou 18 rotas e não tocou em
+> chamador nenhum: **quatro** falavam com a analytics-api sem header, e o modo de falha é o
+> do catálogo — três degradavam para um **zero plausível** (`scanned=0` no backfill de
+> campanha · `active_sessions: 0` no `handoff-status`, que existe para decidir se um deploy é
+> SEGURO · `toolTrace=[]` na evidência do tier-2), e só um dava erro visível (502 na tela de
+> Qualidade). Hoje eles apresentam `X-Service-Token`, e a **postura é aditiva**: o header
+> ACRESCENTA uma porta e **nunca remove a exigência** — token vazio no serviço **não libera**
+> (é o oposto de `_require_service` da evaluation-api, onde vazio é no-op por herança de demo
+> aberto; replicar aquilo reintroduziria o *ABAC opt-in do chamador* que 08-27 fechou). O
+> principal de serviço é **irrestrito e por isso é uma IDENTIDADE**: `sub="service:<nome>"`
+> viaja para log e trilha, porque um chamador interno legítimo precisa alcançar pools que não
+> são "dele" (o backfill enumera a campanha inteira) — o que não pode é o alcance ser
+> **anônimo**. **A auditoria LGPD fica FORA**: o serviço não fura `_check_audit_access`,
+> decisão tomada contra a medição de que a fonte daquele leitor está VAZIA (política contra
+> população zero é o erro que a decisão #4 desta semana firmou). Gate:
+> `infra/test/probe_internal_service_callers.sh` (7 ramos).
+>
+> ⚠️ **`catch {}` sobre uma checagem de SEGURANÇA é pior que a falha que ele esconde.** O
+> `handoff-status` não estava só sem credencial: `ANALYTICS_API_URL` **nunca foi setada** no
+> agent-registry deste compose, então a chamada dava `fetch failed` e o `catch` a convertia em
+> *"0 sessões ativas"* — uma promoção com **24** sessões vivas parecia segura, e assim foi
+> desde sempre. Quem revelou não foi o portão: foi o `console.warn` acrescentado no ramo de
+> falha. **Todo caminho que degrada num número diz por que degradou.**
+
 **Escrita de config exige portão; LEITURA de config nem sempre — e isso é decidido, não
 omitido.** `calendar-api` e `dialog-api` gateiam escrita (`config.calendars` / `config.dialog_forms`,
 `read_write`) e mantêm abertas as rotas que chamadores de **runtime sem credencial** consomem:

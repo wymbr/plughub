@@ -559,6 +559,15 @@ services:
       # AGENT_REGISTRY_SERVICE_TOKEN é a credencial dos callers internos (RegistrySyncer/deploy).
       PLUGHUB_JWT_SECRET:           changeme_auth_jwt_secret_demo_32c
       AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo
+      # sessões vivas antes do deploy; sem isto ele devolve 0 em silêncio).
+      # ⚠️ Esta URL FALTAVA, e sem ela o `handoff-status` nunca funcionou neste
+      # deploy: o default do código é `http://localhost:3500`, que dentro do
+      # container é ele mesmo. O `catch {}` engolia o `fetch failed` e devolvia
+      # `active_sessions: 0` — medido em 2026-08-30, a resposta certa era 23.
+      # Defeito ANTERIOR ao fechamento de credencial de 2026-08-29, e mais grave:
+      # é o endpoint que existe para decidir se um deploy é seguro.
+      ANALYTICS_API_URL: http://analytics-api:3500
+      ANALYTICS_SERVICE_TOKEN: changeme_analytics_service_token_demo
       KAFKA_BROKERS:  kafka:29092
       REDIS_URL:      redis://redis:6379
       CONFIG_API_URL: http://config-api:3600   # item 7a — teto do buffer (queue_max_total)
@@ -980,6 +989,12 @@ services:
     ports:
       - "3500:3500"
     environment:
+      # Credencial dos chamadores INTERNOS desta API (evaluation-api, agent-registry).
+      # O fechamento de credencial de 2026-08-29 gateou as rotas e NAO migrou os
+      # chamadores: os tres ficaram 401, e tres deles degradavam para um ZERO
+      # plausivel. Os TRES envs deste segredo terminam em ANALYTICS_SERVICE_TOKEN
+      # (prefixos diferentes por servico) e DEVEM casar.
+      PLUGHUB_ANALYTICS_SERVICE_TOKEN: changeme_analytics_service_token_demo
       PLUGHUB_KAFKA_BROKERS:       kafka:29092
       PLUGHUB_KAFKA_GROUP_ID:      analytics-demo
       PLUGHUB_REDIS_URL:           redis://redis:6379
@@ -1594,6 +1609,9 @@ services:
     ports:
       - "3400:3400"
     environment:
+      # = PLUGHUB_ANALYTICS_SERVICE_TOKEN da analytics-api. Sem ele o backfill de
+      # campanha devolve scanned=0 MUDO e a transcricao da tela de Qualidade da 502.
+      PLUGHUB_EVALUATION_ANALYTICS_SERVICE_TOKEN: changeme_analytics_service_token_demo
       PLUGHUB_EVALUATION_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_EVALUATION_REDIS_URL:           redis://redis:6379
       PLUGHUB_EVALUATION_KAFKA_BROKERS:       kafka:29092

@@ -606,13 +606,32 @@ skillsRouter.get("/:skill_id/handoff-status", async (req: Request, res: Response
         for (const pid of poolIds) params.append("pool_id", pid)
 
         const analyticsUrl = `${config.analytics_api_url}/reports/sessions?${params.toString()}`
-        const aRes = await fetch(analyticsUrl)
+        // Credencial de serviço (2026-08-30): esta chamada era ANÔNIMA e a
+        // analytics-api passou a exigir credencial em 2026-08-29.
+        const aRes = await fetch(analyticsUrl, {
+          headers: config.analytics_service_token
+            ? { "X-Service-Token": config.analytics_service_token,
+                "X-Service-Name":  "agent-registry" }
+            : {},
+        })
         if (aRes.ok) {
           const aBody = await aRes.json() as { meta?: { total?: number }; total?: number }
           activeSessionCount = aBody.meta?.total ?? aBody.total ?? 0
+        } else {
+          // ⚠️ NÃO fica mudo. Este endpoint existe para DEPLOY SEGURO: devolver 0
+          // sem dizer por quê faz uma promoção com sessões vivas parecer segura, e
+          // foi exatamente assim que o 401 passou despercebido.
+          console.warn(
+            `handoff-status: analytics-api respondeu ${aRes.status} — ` +
+            `active_sessions vai como 0 e NAO reflete a realidade (skill=${skillId})`,
+          )
         }
-      } catch {
-        // analytics-api unavailable — return 0 gracefully
+      } catch (err) {
+        // Idem: indisponibilidade tambem nao pode virar "0 sessoes" em silencio.
+        console.warn(
+          `handoff-status: analytics-api inalcancavel (${String(err)}) — ` +
+          `active_sessions vai como 0 e NAO reflete a realidade (skill=${skillId})`,
+        )
       }
     }
 

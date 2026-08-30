@@ -46,6 +46,7 @@ def _close_order_key(seg: dict[str, Any]) -> tuple:
 
 async def fetch_closed_segments(
     analytics_api_url: str,
+    analytics_service_token: str,
     tenant_id: str,
     *,
     pool_id: str | None,
@@ -60,6 +61,14 @@ async def fetch_closed_segments(
     out: list[dict[str, Any]] = []
     page = 1
     base = analytics_api_url.rstrip("/")
+    # Credencial de serviço (2026-08-30): esta enumeração era ANÔNIMA e a
+    # analytics-api passou a exigir credencial em 2026-08-29. O `best-effort`
+    # abaixo transformava o 401 em `scanned=0` — degradação MUDA, e o backfill
+    # simplesmente não achava mais nada. É o zero plausível do catálogo.
+    headers = {
+        "X-Service-Token": analytics_service_token,
+        "X-Service-Name":  "evaluation-api",
+    } if analytics_service_token else {}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             while len(out) < max_segments:
@@ -72,7 +81,8 @@ async def fetch_closed_segments(
                 }
                 if pool_id:
                     params["pool_id"] = pool_id
-                resp = await client.get(f"{base}/reports/segments", params=params)
+                resp = await client.get(f"{base}/reports/segments", params=params,
+                                        headers=headers)
                 if resp.status_code != 200:
                     logger.warning("backfill: /reports/segments %s (page=%s) — parando",
                                    resp.status_code, page)
@@ -97,6 +107,7 @@ async def run_campaign_backfill(
     campaign: dict[str, Any],
     *,
     analytics_api_url: str,
+    analytics_service_token: str = "",
     from_dt: str,
     to_dt: str,
     page_size: int = 200,
@@ -121,7 +132,7 @@ async def run_campaign_backfill(
     rules       = campaign.get("sampling_rules") or {}
 
     segments = await fetch_closed_segments(
-        analytics_api_url, tenant_id,
+        analytics_api_url, analytics_service_token, tenant_id,
         pool_id=epid, from_dt=from_dt, to_dt=to_dt,
         page_size=page_size, max_segments=max_segments,
     )

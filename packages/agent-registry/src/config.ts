@@ -18,6 +18,12 @@ export const config = {
   redis_url: process.env["REDIS_URL"] ?? "redis://localhost:6379",
   // External service URLs for proxy endpoints
   analytics_api_url: process.env["ANALYTICS_API_URL"] ?? "http://localhost:3500",
+  // Credencial de SERVIÇO para falar com a analytics-api. O `handoff-status` conta
+  // sessões vivas antes de um deploy e chamava ANÔNIMO; desde que a analytics fechou
+  // credencial (2026-08-29) o `catch {}` engolia o 401 e devolvia `active_sessions: 0`
+  // — um deploy com sessões em curso passava a parecer seguro. Tem de casar com
+  // `ANALYTICS_SERVICE_TOKEN` do outro lado.
+  analytics_service_token: process.env["ANALYTICS_SERVICE_TOKEN"] ?? "",
   workflow_api_url:  process.env["WORKFLOW_API_URL"]   ?? "http://localhost:3800",
   // Config API — item 7a: teto do buffer da fila gratuita (queue_max_total)
   config_api_url:    process.env["CONFIG_API_URL"]     ?? "http://localhost:3600",

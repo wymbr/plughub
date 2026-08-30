@@ -30,6 +30,12 @@ class Settings(BaseSettings):
 
     # Analytics API (T17-backfill — enumera segmentos persistidos via /reports/segments)
     analytics_api_url: str = "http://localhost:3500"
+    # Credencial de SERVIÇO para falar com a analytics-api. Os dois chamadores
+    # daqui (backfill e delegação de transcrição) não têm usuário: eram anônimos e
+    # quebraram quando a analytics fechou credencial em 2026-08-29 — um em 502
+    # visível, o outro em `scanned=0` MUDO. Tem de casar com `ANALYTICS_SERVICE_TOKEN`
+    # do outro lado.
+    analytics_service_token: str = ""
     backfill_page_size: int    = 200    # paginação do /reports/segments
     backfill_max_segments: int = 5000   # teto de segurança por job de backfill
 

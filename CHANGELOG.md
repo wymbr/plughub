@@ -2,6 +2,84 @@
 
 
 
+
+## Chamadores internos da analytics-api: credencial de serviço, e o `catch {}` que escondia um deploy inseguro (2026-08-30)
+
+O fechamento de credencial de 2026-08-29 gateou 18 rotas da analytics-api e **não migrou
+nenhum chamador interno**. Medido hoje: **quatro** falavam sem header algum, e três
+degradavam para um **zero plausível** — o primeiro item da § Postura de Engenharia.
+
+| chamador | rota | como morria |
+|---|---|---|
+| `evaluation-api/router.py:2221` | `/v1/transcript/sessions/{id}` | 502 na tela de Qualidade (visível) |
+| `evaluation-api/backfill.py:76` | `/reports/segments` | `scanned=0` — **mudo** |
+| `agent-registry/skills.ts:609` | `/reports/sessions` | `active_sessions: 0` — **mudo** |
+| `mcp-server/evaluation.ts:1114` | `/v1/audit/mcp-calls` | `toolTrace = []` — **mudo** |
+
+**A postura é ADITIVA, e a diferença é deliberada.** A analytics-api passou a aceitar
+`X-Service-Token`, mas o header **acrescenta uma porta e nunca remove a exigência**: token
+vazio no serviço **não libera**. É o oposto de `_require_service` da evaluation-api (lá vazio
+é no-op, herança de demo aberto) — replicar aquilo reintroduziria o defeito que 2026-08-27
+fechou, o *ABAC de pool ser opt-in do chamador*. Sem header, o fluxo é exatamente o de antes.
+
+**O principal de serviço é irrestrito e por isso é uma IDENTIDADE**, não um anônimo com
+senha: `sub="service:<nome>"` vai para log e trilha, com o nome saneado (ele vem do chamador
+e viaja para a auditoria). Irrestrito porque um chamador interno legítimo precisa alcançar
+pools que não são "dele" — o backfill enumera a campanha inteira. O que não pode é o alcance
+ser anônimo.
+
+**O quarto chamador NÃO foi atendido, e isso é decisão.** `/v1/audit/mcp-calls` tem portão
+próprio (`_check_audit_access`, LGPD, com trilha gravada) e a fonte está **vazia** —
+`session_timeline` tem **0 linhas** em `tenant_demo`, medido. Afrouxar o portão mais sensível
+da casa para servir um leitor sem dado seria decidir política contra população zero, que é
+exatamente a regra que a decisão #4 desta semana firmou. Fica com gatilho escrito: quando
+aquela tabela ganhar produtor, decidir se a leitura da própria plataforma é acesso auditado
+(instinto: é, e deve ser GRAVADA, nunca isenta). O ramo G do gate guarda a regressão mais
+tentadora — dar chave mestra ao serviço "para resolver de uma vez".
+
+### O defeito mais antigo, que só apareceu porque a degradação deixou de ser muda
+
+`handoff-status` não estava só sem credencial. Ao acrescentar um `console.warn` no ramo de
+falha — porque *"um endpoint que existe para deploy seguro não pode devolver 0 em silêncio"* —
+o log respondeu na primeira execução: **`fetch failed`**, não 401. Medido: **`ANALYTICS_API_URL`
+nunca foi setada** para o agent-registry neste compose, então o default do código
+(`http://localhost:3500`) apontava para o próprio container. A chamada **jamais funcionou**, e
+o `catch {}` a convertia em `active_sessions: 0`.
+
+Ou seja: **uma promoção com 24 sessões vivas parecia segura, desde sempre.** A resposta certa,
+medida direto na analytics, era 24. O portão de credencial não revelou isso — quem revelou foi
+o aviso. *Todo caminho que degrada num número diz por que degradou.*
+
+### Gate
+
+`infra/test/probe_internal_service_callers.sh`, 7 ramos e 14 asserções:
+**A** fronteira (válido 200 · errado 401 · sem header 401) · **B** travessia do agent-registry
+com **testemunha positiva obrigatória** (`active_sessions > 0`, porque o defeito era justamente
+o zero, e um probe que só conferisse HTTP 200 ficaria verde com ele no lugar) · **C**/**D**
+travessias da evaluation-api medidas **de dentro do container** (é lá que moram as duas coisas
+que podem falhar: a env e o valor do token; testar do host provaria a fronteira outra vez, não
+a fiação) · **E** o segredo está nos três serviços **e os três valores casam** — os nomes de env
+diferem por prefixo (`PLUGHUB_ANALYTICS_SERVICE_TOKEN` · `PLUGHUB_EVALUATION_ANALYTICS_SERVICE_TOKEN`
+· `ANALYTICS_SERVICE_TOKEN`) e todos terminam igual de propósito, porque segredo compartilhado
+com nomes que não se parecem é segredo que alguém rotaciona pela metade · **F** a recusa é
+NOMEADA (`service_credential_invalid` ≠ `auth_required`, senão token dessincronizado parece
+"faltou login") · **G** o serviço **não** fura o portão de auditoria.
+
+Vermelho antes de verde, por mutação: removida a `ANALYTICS_API_URL` do agent-registry, o ramo B
+fica vermelho com o número exato do defeito original (`active_sessions = 0`).
+
+Regressões: suíte da analytics-api **747 → 747**, e `probe_session_content_scope.sh` segue verde.
+
+### Achado de método sobre o próprio trabalho
+
+Duas das três variáveis de compose caíram no **serviço errado** na primeira aplicação —
+`mcp-server-plughub` e `routing-engine` em vez de `evaluation-api` e `analytics-api`. Ancorar
+por CHAVE num compose de 1300 linhas escolhe a primeira ocorrência, que raramente é o bloco que
+se quer. A colocação passou a ser feita por bloco de serviço e **conferida depois** (`awk` que
+imprime, para cada env, a que serviço ela pertence). O erro era invisível: o compose valida, os
+serviços sobem, e só o comportamento denuncia.
+
+
 ## Escopo de pool nas rotas de CONTEÚDO — a peça 1 da (d), e o irmão fechado que a destravava (2026-08-30)
 
 Quatro rotas da analytics-api servem o conteúdo de UM contato — `/v1/transcript/sessions/{id}`,
