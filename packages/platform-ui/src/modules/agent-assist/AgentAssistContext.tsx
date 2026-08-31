@@ -43,6 +43,7 @@ import {
 import { useMultiPoolWebSocket } from "./hooks/useMultiPoolWebSocket";
 import type { TaggedWsEvent }    from "./hooks/useMultiPoolWebSocket";
 import { INTERNAL_QUEUE_SUFFIX, mirrorOriginOf } from "./poolLabel";
+import { apiFetch } from '@/api/apiFetch'
 
 const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
 
@@ -146,7 +147,11 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
       mirror_of:             mirrorOriginOf(p.pool_id),
       agent_kind:            p.agent_kind ?? null,
     }));
-    if (accessiblePools.length === 0) return list;
+// AUT-06 (2026-08-31): lista VAZIA = NENHUM pool, nunca "todos".
+    // O claim `unrestricted` foi removido (AUT-13), entao nao ha mais porta larga a
+    // consultar: escopo de pool e sempre ENUMERADO. Inferir "todos" de `length === 0`
+    // era a mesma fusao `[] x None` que o lado Python ja fechou.
+    if (accessiblePools.length === 0) return [];
     // I2 (D2) — ACESSO DERIVADO, não associação: quem alcança `p` alcança `p-int`.
     // Sem isto o espelho não entra em `availablePools`, `pullPools` não casa o
     // `dispatch_mode` e o wrap-up do próprio agente fica invisível — falha por
@@ -340,7 +345,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   // ── History loader ────────────────────────────────────────────────────────
   const fetchHistory = useCallback(async (sessionId: string) => {
     try {
-      const res  = await fetch(`/api/conversation_history/${sessionId}`);
+      const res  = await apiFetch(`/api/conversation_history/${sessionId}`);
       const data = res.ok
         ? (await res.json() as { messages: ChatMessage[] })
         : { messages: [] };

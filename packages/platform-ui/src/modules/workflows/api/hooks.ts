@@ -3,6 +3,7 @@
  * Wraps workflow-api (port 3800) via Vite proxy /v1/workflow
  */
 import { useCallback, useEffect, useState } from 'react'
+import { apiFetch } from '@/api/apiFetch'
 
 async function safeJson<T>(res: Response): Promise<T> {
   const ct = res.headers.get('content-type') ?? ''
@@ -54,7 +55,7 @@ export function useWorkflowInstances(
     try {
       const params = new URLSearchParams({ tenant_id: tenantId, limit: '200' })
       if (status) params.set('status', status)
-      const res = await fetch(`/v1/workflow/instances?${params.toString()}`)
+      const res = await apiFetch(`/v1/workflow/instances?${params.toString()}`)
       if (res.ok) {
         const data = await safeJson<WorkflowInstance[] | { instances?: WorkflowInstance[] }>(res)
         setInstances(Array.isArray(data) ? data : (data.instances ?? []))
@@ -85,7 +86,7 @@ export function useWorkflowInstance(
     if (!instanceId) return
     setLoading(true)
     try {
-      const res = await fetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}`)
+      const res = await apiFetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}`)
       if (res.ok) setInstance(await safeJson<WorkflowInstance>(res))
     } catch { /* stale ok */ }
     finally { setLoading(false) }
@@ -112,7 +113,7 @@ export async function triggerWorkflow(payload: {
   metadata?:       Record<string, unknown>
   pipeline_state?: Record<string, unknown>
 }): Promise<WorkflowInstance> {
-  const res = await fetch('/v1/workflow/trigger', {
+  const res = await apiFetch('/v1/workflow/trigger', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(payload),
@@ -155,7 +156,7 @@ export function useWorkflowInstancesFiltered(
       if (filters.toDt)    params.set('to_dt',    filters.toDt)
       const url = `/v1/workflow/instances?${params}`
       console.debug('[useWorkflowInstancesFiltered] GET', url)
-      const res = await fetch(url)
+      const res = await apiFetch(url)
       if (res.ok) {
         const data: WorkflowInstance[] = await safeJson(res)
         setInstances(Array.isArray(data) ? data : [])
@@ -199,7 +200,7 @@ export function useWorkflowInstanceSessions(
     if (!instanceId) { setSessions([]); return }
     let cancelled = false
     setLoading(true)
-    fetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}/sessions`)
+    apiFetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}/sessions`)
       .then(r => r.ok ? safeJson<{ sessions: InstanceSession[] }>(r) : Promise.reject(r.status))
       .then(d => { if (!cancelled) setSessions(d.sessions ?? []) })
       .catch(() => { if (!cancelled) setSessions([]) })
@@ -269,7 +270,7 @@ export function useWebhooks(
     setLoading(true)
     try {
       const params = new URLSearchParams({ tenant_id: tenantId, limit: '100' })
-      const res = await fetch(`/v1/workflow/webhooks?${params}`, {
+      const res = await apiFetch(`/v1/workflow/webhooks?${params}`, {
         headers: { 'X-Admin-Token': adminToken },
       })
       if (res.ok) setWebhooks(await safeJson<Webhook[]>(res))
@@ -300,7 +301,7 @@ export function useWebhookDeliveries(
     if (!webhookId || !adminToken) return
     setLoading(true)
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/v1/workflow/webhooks/${encodeURIComponent(webhookId)}/deliveries?limit=${limit}`,
         { headers: { 'X-Admin-Token': adminToken } },
       )
@@ -323,7 +324,7 @@ export async function createWebhookApi(
   contextOverride: Record<string, unknown>,
   adminToken:      string,
 ): Promise<{ webhook: Webhook; token: string }> {
-  const res = await fetch('/v1/workflow/webhooks', {
+  const res = await apiFetch('/v1/workflow/webhooks', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
     body: JSON.stringify({ tenant_id: tenantId, flow_id: flowId, description, context_override: contextOverride }),
@@ -339,7 +340,7 @@ export async function patchWebhookApi(
   updates:    { active?: boolean; description?: string; context_override?: Record<string, unknown> },
   adminToken: string,
 ): Promise<Webhook> {
-  const res = await fetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}`, {
+  const res = await apiFetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}`, {
     method:  'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
     body:    JSON.stringify(updates),
@@ -352,7 +353,7 @@ export async function rotateWebhookTokenApi(
   webhookId:  string,
   adminToken: string,
 ): Promise<{ webhook: Webhook; token: string }> {
-  const res = await fetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}/rotate`, {
+  const res = await apiFetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}/rotate`, {
     method: 'POST', headers: { 'X-Admin-Token': adminToken },
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -362,7 +363,7 @@ export async function rotateWebhookTokenApi(
 }
 
 export async function deleteWebhookApi(webhookId: string, adminToken: string): Promise<void> {
-  const res = await fetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}`, {
+  const res = await apiFetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}`, {
     method: 'DELETE', headers: { 'X-Admin-Token': adminToken },
   })
   if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)

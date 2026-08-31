@@ -118,7 +118,8 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
     try {
       const res = await listPools(tenantId)
       const dom = currentUser?.accessiblePools ?? []
-      setPools(dom.length ? res.items.filter(p => dom.includes(p.pool_id)) : res.items)
+      // AUT-06: vazio = NENHUM pool, nao "todos" (o claim `unrestricted` saiu na AUT-13).
+      setPools(res.items.filter(p => dom.includes(p.pool_id)))
     }
     catch { /* non-fatal */ }
   }, [tenantId, currentUser])
@@ -358,7 +359,8 @@ function ReportSubTab({ tenantId }: { tenantId: string }) {
     try {
       const res = await listPools(tenantId)
       const dom = currentUser?.accessiblePools ?? []
-      setPools(dom.length ? res.items.filter(p => dom.includes(p.pool_id)) : res.items)
+      // AUT-06: vazio = NENHUM pool, nao "todos" (o claim `unrestricted` saiu na AUT-13).
+      setPools(res.items.filter(p => dom.includes(p.pool_id)))
     }
     catch { /* non-fatal */ }
   }, [tenantId, currentUser])

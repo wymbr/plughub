@@ -14,6 +14,7 @@
 
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { apiFetch } from '@/api/apiFetch'
 import {
   ContactContextData,
   ContactContextField,
@@ -223,7 +224,7 @@ const ManualTagForm: React.FC<{
     setStatus("busy");
     setErrMsg("");
     try {
-      const res = await fetch(`/api/inject-context/${sessionId}`, {
+      const res = await apiFetch(`/api/inject-context/${sessionId}`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

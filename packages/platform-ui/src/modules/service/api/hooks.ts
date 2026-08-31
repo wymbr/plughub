@@ -478,7 +478,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
     if (!sessionId || !tenantId) return
     setState(s => ({ ...s, status: 'joining', error: null }))
     try {
-      const res = await fetch(`${BASE}/supervisor/join`, {
+      const res = await apiFetch(`${BASE}/supervisor/join`, {
         method: 'POST', headers: _authHeaders(),
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, operator_id: operatorId }),
       })
@@ -493,7 +493,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
   const message = useCallback(async (text: string, visibility: 'agents_only' | 'all' = 'agents_only') => {
     if (!sessionId || !tenantId || !state.participantId) return
     try {
-      const res = await fetch(`${BASE}/supervisor/message`, {
+      const res = await apiFetch(`${BASE}/supervisor/message`, {
         method: 'POST', headers: _authHeaders(),
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, participant_id: state.participantId, text, visibility }),
       })
@@ -510,7 +510,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
     }
     setState(s => ({ ...s, status: 'leaving', error: null }))
     try {
-      await fetch(`${BASE}/supervisor/leave`, {
+      await apiFetch(`${BASE}/supervisor/leave`, {
         method: 'POST', headers: _authHeaders(),
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, participant_id: state.participantId }),
       })

@@ -76,7 +76,7 @@ export function useForms(tenantId: string, accessToken?: string) {
 }
 
 export async function createForm(tenantId: string, body: Partial<EvaluationForm>, token?: string) {
-  const r = await fetch(`${BASE}/forms`, {
+  const r = await apiFetch(`${BASE}/forms`, {
     method: 'POST',
     headers: bearerHeaders(token),
     body: JSON.stringify({ ...body, tenant_id: tenantId }),
@@ -86,7 +86,7 @@ export async function createForm(tenantId: string, body: Partial<EvaluationForm>
 }
 
 export async function updateForm(formId: string, body: Partial<EvaluationForm>, token?: string) {
-  const r = await fetch(`${BASE}/forms/${formId}`, {
+  const r = await apiFetch(`${BASE}/forms/${formId}`, {
     method: 'PATCH',
     headers: bearerHeaders(token),
     body: JSON.stringify(body),
@@ -96,7 +96,7 @@ export async function updateForm(formId: string, body: Partial<EvaluationForm>, 
 }
 
 export async function deleteForm(formId: string, token?: string) {
-  const r = await fetch(`${BASE}/forms/${formId}`, {
+  const r = await apiFetch(`${BASE}/forms/${formId}`, {
     method: 'DELETE',
     headers: bearerHeaders(token),
   })
@@ -167,7 +167,7 @@ export async function createRubricTemplate(
   body: { scope: 'tenant' | 'campaign'; campaign_id?: string; name?: string; body?: string },
   token?: string,
 ): Promise<RubricTemplate> {
-  const r = await fetch(`${BASE}/rubric-templates`, {
+  const r = await apiFetch(`${BASE}/rubric-templates`, {
     method: 'POST',
     headers: bearerHeaders(token),
     body: JSON.stringify({ ...body, tenant_id: tenantId }),
@@ -301,7 +301,7 @@ export async function updateRubricTemplate(
   rubricId: string, tenantId: string, body: { name?: string; body?: string },
   token?: string,
 ): Promise<RubricTemplate> {
-  const r = await fetch(`${BASE}/rubric-templates/${rubricId}?tenant_id=${tenantId}`, {
+  const r = await apiFetch(`${BASE}/rubric-templates/${rubricId}?tenant_id=${tenantId}`, {
     method: 'PUT',
     headers: bearerHeaders(token),
     body: JSON.stringify(body),
@@ -311,7 +311,7 @@ export async function updateRubricTemplate(
 }
 
 export async function publishRubricTemplate(rubricId: string, tenantId: string, token?: string): Promise<RubricTemplate> {
-  const r = await fetch(`${BASE}/rubric-templates/${rubricId}/publish?tenant_id=${tenantId}`, {
+  const r = await apiFetch(`${BASE}/rubric-templates/${rubricId}/publish?tenant_id=${tenantId}`, {
     method: 'POST',
     headers: bearerHeaders(token),
     body: JSON.stringify({}),
@@ -325,7 +325,7 @@ export function useRubricVersions(rubricId: string | null, tenantId: string) {
   const load = useCallback(async () => {
     if (!rubricId) { setVersions([]); return }
     try {
-      const r = await fetch(`${BASE}/rubric-templates/${rubricId}/versions?tenant_id=${tenantId}`)
+      const r = await apiFetch(`${BASE}/rubric-templates/${rubricId}/versions?tenant_id=${tenantId}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setVersions(d?.versions ?? [])
@@ -339,7 +339,7 @@ export async function previewRubric(
   tenantId: string,
   body: { form_id?: string; campaign_id?: string; rubric_body?: string; rubric_id?: string },
 ): Promise<RubricPreviewResult> {
-  const r = await fetch(`${BASE}/rubric-templates/preview`, {
+  const r = await apiFetch(`${BASE}/rubric-templates/preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...body, tenant_id: tenantId }),
@@ -357,7 +357,7 @@ export function useResultCriteria(resultId: string | null, tenantId: string) {
     if (!resultId) { setCriteria([]); return }
     setLoading(true)
     try {
-      const r = await fetch(`${BASE}/results/${resultId}/criteria?tenant_id=${tenantId}`)
+      const r = await apiFetch(`${BASE}/results/${resultId}/criteria?tenant_id=${tenantId}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setCriteria(d?.criterion_responses ?? [])
@@ -374,7 +374,7 @@ export function useFormVersion(formId: string | null, version: number | null | u
     if (!formId) { setForm(null); return }
     try {
       const v = version ?? 1
-      const r = await fetch(`${BASE}/forms/${formId}/versions/${v}?tenant_id=${tenantId}`)
+      const r = await apiFetch(`${BASE}/forms/${formId}/versions/${v}?tenant_id=${tenantId}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       setForm(await r.json())
     } catch { setForm(null) }
@@ -401,7 +401,7 @@ export function useCampaignSummaries(tenantId: string, pollMs = 0) {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`${BASE}/reports/campaign-summary?tenant_id=${tenantId}`)
+      const r = await apiFetch(`${BASE}/reports/campaign-summary?tenant_id=${tenantId}`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setSummaries(d?.summaries ?? {})
@@ -452,7 +452,7 @@ export function useCampaigns(tenantId: string, pollMs = 0, accessToken?: string)
 }
 
 export async function createCampaign(body: Partial<EvaluationCampaign>, token?: string) {
-  const r = await fetch(`${BASE}/campaigns`, {
+  const r = await apiFetch(`${BASE}/campaigns`, {
     method: 'POST',
     headers: bearerHeaders(token),
     body: JSON.stringify(body),
@@ -462,7 +462,7 @@ export async function createCampaign(body: Partial<EvaluationCampaign>, token?: 
 }
 
 export async function pauseCampaign(campaignId: string, token?: string) {
-  const r = await fetch(`${BASE}/campaigns/${campaignId}/pause`, {
+  const r = await apiFetch(`${BASE}/campaigns/${campaignId}/pause`, {
     method: 'POST',
     headers: bearerHeaders(token),
   })
@@ -471,7 +471,7 @@ export async function pauseCampaign(campaignId: string, token?: string) {
 }
 
 export async function updateCampaign(campaignId: string, tenantId: string, body: Partial<EvaluationCampaign>, token?: string) {
-  const r = await fetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
+  const r = await apiFetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
     method: 'PUT',
     headers: bearerHeaders(token),
     body: JSON.stringify(body),
@@ -481,7 +481,7 @@ export async function updateCampaign(campaignId: string, tenantId: string, body:
 }
 
 export async function deleteCampaign(campaignId: string, tenantId: string, token?: string) {
-  const r = await fetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
+  const r = await apiFetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
     method: 'DELETE',
     headers: bearerHeaders(token),
   })
@@ -494,7 +494,7 @@ export async function seedSyntheticEvaluations(
 ): Promise<{ results_created: number; nps_signals_emitted: number; requested: number }> {
   // G-PROBE fase 2 — endpoint de ops agora gateado (serviço OU Bearer+ABAC formularios:rw);
   // a UI usa o Bearer do operador (token = session.accessToken), sem segredo no frontend.
-  const r = await fetch(`${BASE}/admin/seed-synthetic`, {
+  const r = await apiFetch(`${BASE}/admin/seed-synthetic`, {
     method: 'POST',
     headers: bearerHeaders(token),
     body: JSON.stringify({ tenant_id: tenantId, campaign_id: campaignId, count }),
@@ -509,11 +509,11 @@ export async function flushSyntheticEvaluations(
 ): Promise<{ pg: unknown; ch: unknown }> {
   const q = `?tenant_id=${encodeURIComponent(tenantId)}`
   // G-PROBE fase 2 — flush da evaluation-api gateado (serviço OU Bearer+ABAC); a UI usa Bearer.
-  const pgRes = await fetch(`${BASE}/admin/flush-synthetic${q}`, { method: 'POST', headers: bearerHeaders(token) })
+  const pgRes = await apiFetch(`${BASE}/admin/flush-synthetic${q}`, { method: 'POST', headers: bearerHeaders(token) })
   if (!pgRes.ok) throw new Error(`evaluation flush HTTP ${pgRes.status}: ${await pgRes.text()}`)
   const pg = await pgRes.json()
   // analytics-api é alcançado pelo proxy "/reports" → 3500 (open-access no demo; Bearer ignorado)
-  const chRes = await fetch(`/reports/admin/flush-synthetic${q}`, { method: 'POST', headers: bearerHeaders(token) })
+  const chRes = await apiFetch(`/reports/admin/flush-synthetic${q}`, { method: 'POST', headers: bearerHeaders(token) })
   const ch = chRes.ok ? await chRes.json() : { error: `HTTP ${chRes.status}` }
   return { pg, ch }
 }
@@ -523,7 +523,7 @@ export async function dispatchCampaign(
   campaignId: string, tenantId: string, token?: string,
 ): Promise<{ campaign_id: string; dispatched: number; evaluator_pool: string }> {
   // G-PROBE fase 2 — dispatch gateado (serviço OU Bearer+ABAC formularios:rw); a UI usa Bearer.
-  const r = await fetch(
+  const r = await apiFetch(
     `${BASE}/campaigns/${campaignId}/dispatch?tenant_id=${encodeURIComponent(tenantId)}`,
     { method: 'POST', headers: bearerHeaders(token) },
   )
@@ -532,7 +532,7 @@ export async function dispatchCampaign(
 }
 
 export async function resumeCampaign(campaignId: string, token?: string) {
-  const r = await fetch(`${BASE}/campaigns/${campaignId}/resume`, {
+  const r = await apiFetch(`${BASE}/campaigns/${campaignId}/resume`, {
     method: 'POST',
     headers: bearerHeaders(token),
   })
@@ -808,7 +808,7 @@ export async function adjudicateContestation(
 ) {
   // G-PROBE platform-wide: adjudicação (Arc6 legado) usa o Bearer do operador (token =
   // session.accessToken) em vez de X-Admin-Token.
-  const r = await fetch(`${BASE}/contestations/${contestationId}/adjudicate`, {
+  const r = await apiFetch(`${BASE}/contestations/${contestationId}/adjudicate`, {
     method: 'POST',
     headers: bearerHeaders(token),
     body: JSON.stringify(body),
@@ -826,7 +826,7 @@ export function useCampaignReport(campaignId: string | null) {
   useEffect(() => {
     if (!campaignId) return
     setLoading(true)
-    fetch(`${BASE}/reports/campaigns/${campaignId}`)
+    apiFetch(`${BASE}/reports/campaigns/${campaignId}`)
       .then(r => r.ok ? r.json() : null)
       .then(d => setReport(d))
       .catch(() => {})
@@ -843,7 +843,7 @@ export function useAgentReport(tenantId: string, poolId?: string) {
   useEffect(() => {
     const params = new URLSearchParams({ tenant_id: tenantId })
     if (poolId) params.set('pool_id', poolId)
-    fetch(`${BASE}/reports/agents?${params}`)
+    apiFetch(`${BASE}/reports/agents?${params}`)
       .then(r => r.ok ? r.json() : {})
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .then((d: any) => setRows(Array.isArray(d) ? d : (d?.agents ?? d?.data ?? d?.items ?? [])))
@@ -875,7 +875,7 @@ export async function searchKnowledge(
 ): Promise<KnowledgeSnippet[]> {
   const params = new URLSearchParams({ tenant_id: tenantId, query, top_k: String(topK) })
   if (namespace) params.set('namespace', namespace)
-  const r = await fetch(`${KN_BASE}/search?${params}`, { headers: knHeaders(false) })
+  const r = await apiFetch(`${KN_BASE}/search?${params}`, { headers: knHeaders(false) })
   if (!r.ok) return []
   const data = await r.json()
   return (data.results ?? data) as KnowledgeSnippet[]
@@ -884,7 +884,7 @@ export async function searchKnowledge(
 export async function upsertSnippet(
   body: { tenant_id: string; namespace: string; content: string; source_ref?: string; metadata?: Record<string, unknown> },
 ): Promise<KnowledgeSnippet> {
-  const r = await fetch(`${KN_BASE}/snippets`, {
+  const r = await apiFetch(`${KN_BASE}/snippets`, {
     method: 'POST',
     headers: knHeaders(),
     body: JSON.stringify(body),
@@ -894,7 +894,7 @@ export async function upsertSnippet(
 }
 
 export async function deleteSnippet(snippetId: string): Promise<void> {
-  const r = await fetch(`${KN_BASE}/snippets/${snippetId}`, {
+  const r = await apiFetch(`${KN_BASE}/snippets/${snippetId}`, {
     method: 'DELETE',
     headers: knHeaders(false),
   })
@@ -1046,7 +1046,7 @@ export async function saveCurationSamplingRules(
   rules: Omit<CurationSamplingRule, 'campaign_id' | 'rule_id'>[],
   token?: string,
 ): Promise<CurationSamplingRule[]> {
-  const r = await fetch(`${BASE}/campaigns/${campaignId}/sampling-rules`, {
+  const r = await apiFetch(`${BASE}/campaigns/${campaignId}/sampling-rules`, {
     method: 'PUT',
     headers: bearerHeaders(token),
     body: JSON.stringify({ rules: rules.map(rule => ({ ...rule, campaign_id: campaignId })) }),

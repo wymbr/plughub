@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import { Users, X, Check } from 'lucide-react'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ function adminHeaders(token: string): HeadersInit {
 }
 
 async function apiFetch<T>(url: string, token: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     ...init,
     headers: { ...adminHeaders(token), ...(init?.headers ?? {}) },
   })

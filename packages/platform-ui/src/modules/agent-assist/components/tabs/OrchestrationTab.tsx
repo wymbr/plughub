@@ -19,6 +19,7 @@ import { Pause, Search, Check } from "lucide-react";
 import { getAccessToken } from "@/auth/token-store";
 import { AiParticipantInfo, ChatMessage, PipelineTransition, SupervisorState } from "../../types";
 import { AiParticipantCard } from "../AiParticipantCard";
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -74,7 +75,7 @@ const InjectContextForm: React.FC<InjectFormProps> = ({ sessionId, mcpBase, onDo
     if (!key.trim() || !value.trim()) return;
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${mcpBase}/api/inject-context/${sessionId}`, {
+      const res = await apiFetch(`${mcpBase}/api/inject-context/${sessionId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: key.trim(), value: value.trim(), confidence: Number(conf) || 0.9 }),

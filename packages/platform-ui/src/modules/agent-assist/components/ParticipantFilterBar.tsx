@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import { User, Bot, Settings2 } from "lucide-react";
 import { AiParticipantInfo, ChatMessage, CopilotSuggestions } from "../types";
 import { getAccessToken } from "@/auth/token-store";
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Filter key helpers ────────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ const InterventionsPanel: React.FC<InterventionsProps> = ({
     setBusy("inject");
     setMsg(null);
     try {
-      const res = await fetch(`${mcpBase}/api/inject-context/${sessionId}`, {
+      const res = await apiFetch(`${mcpBase}/api/inject-context/${sessionId}`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ context: contextText.trim() }),

@@ -12,6 +12,7 @@ import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import { triggerWorkflow, useWorkflowInstances } from './api/hooks'
 import type { Skill } from '@/types'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── API helpers ────────────────────────────────────────────────────────────────
 
@@ -22,7 +23,7 @@ function headers(token?: string) {
 }
 
 async function fetchSkills(tenantId: string, token?: string): Promise<Skill[]> {
-  const res = await fetch(`/v1/skills?tenant_id=${tenantId}`, { headers: headers(token) })
+  const res = await apiFetch(`/v1/skills?tenant_id=${tenantId}`, { headers: headers(token) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
   return Array.isArray(body) ? body : (body.data ?? body.skills ?? [])

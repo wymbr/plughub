@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight } from "lucide-react"
 import { poolDisplayLabel } from "../poolLabel"
+import { apiFetch } from '@/api/apiFetch'
 
 interface QueueContact {
   session_id:   string
@@ -137,7 +138,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
       // Fila é estado tempo-real; o Express gera ETag no res.json() e o browser
       // devolve 304 (corpo em cache) — o que faz o refresh imediato pós-release
       // (P4) ler a lista velha. no-store força 200 com dados frescos sempre.
-      const res = await fetch(url, { cache: "no-store" })
+      const res = await apiFetch(url, { cache: "no-store" })
       if (!res.ok) { setError(`HTTP ${res.status}`); return }
       const data = await res.json() as { contacts?: QueueContact[] }
       setContacts(data.contacts ?? [])
@@ -219,7 +220,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
   const handlePull = useCallback(async (c: QueueContact) => {
     setClaiming(c.session_id)
     try {
-      const res = await fetch(`/api/work_queue/claim/${encodeURIComponent(c.session_id)}`, {
+      const res = await apiFetch(`/api/work_queue/claim/${encodeURIComponent(c.session_id)}`, {
         method:  "POST",
         headers: { "content-type": "application/json" },
         body:    JSON.stringify({

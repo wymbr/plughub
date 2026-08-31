@@ -12,6 +12,7 @@ import Spinner from '@/components/ui/Spinner'
 import { User, FileText, Check, AlertTriangle } from 'lucide-react'
 import type { PlatformUser, CreateUserInput, UpdateUserInput, Pool, ModuleConfig } from '@/types'
 import ModulePermissionForm, { type ModuleSchema } from '@/components/ModulePermissionForm'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -66,7 +67,7 @@ function authHeaders(token: string): HeadersInit {
 }
 
 async function apiFetch<T>(url: string, adminToken: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     ...init,
     headers: { ...authHeaders(adminToken), ...(init?.headers ?? {}) },
   })
@@ -136,7 +137,7 @@ function usePools(tenantId: string) {
   useEffect(() => {
     if (!tenantId) return
     setLoading(true)
-    fetch('/v1/pools', {
+    apiFetch('/v1/pools', {
       headers: {
         'x-tenant-id': tenantId,
         'x-user-id':   'operator',
@@ -161,7 +162,7 @@ function usePools(tenantId: string) {
 function useModules(adminToken: string) {
   const [modules, setModules] = useState<ModuleSchema[]>([])
   useEffect(() => {
-    fetch('/auth/modules?active_only=true')
+    apiFetch('/auth/modules?active_only=true')
       .then(r => r.ok ? r.json() : [])
       .then((data: unknown) => {
         setModules(Array.isArray(data) ? data as ModuleSchema[] : [])
@@ -248,7 +249,6 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
   const [selectedPools,setSelectedPools]= useState<Set<string>>(
     new Set(user?.accessible_pools ?? [])
   )
-  const [unrestricted, setUnrestricted] = useState(user?.unrestricted ?? false)
   const [moduleConfig,            setModuleConfig]            = useState<ModuleConfig>(user?.module_config ?? {})
   const [maxConcurrentSessions,   setMaxConcurrentSessions]   = useState(user?.max_concurrent_sessions ?? 3)
   const [active,  setActive]  = useState(user?.active ?? true)
@@ -346,7 +346,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
       // foi ENVIADO (`model_fields_set`), nao pelo valor — mandar `roles` igual ao
       // atual ainda seria "conceder" e levaria 403.
       const capacity = canGrant
-        ? { roles, accessible_pools: accessiblePools, unrestricted }
+        ? { roles, accessible_pools: accessiblePools }
         : {}
       if (isEdit) {
         const body: UpdateUserInput = { name: name || undefined, ...capacity, active, max_concurrent_sessions: maxConcurrentSessions }
@@ -450,23 +450,13 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
           </div>
 
           {canGrant && (<>
-          {/* Escopo irrestrito — declaracao EXPLICITA (passo 2, 2026-08-27).
-              Marcar aqui e diferente de "nao escolher nenhum pool": o segundo depende
-              da convencao implicita `[] = todos`, que sera invertida. */}
-          <div className="rounded-lg border border-border-strong p-3">
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input type="checkbox" checked={unrestricted}
-                onChange={e => { setUnrestricted(e.target.checked); if (e.target.checked) setSelectedPools(new Set()) }}
-                className="mt-0.5" />
-              <span>
-                <span className="text-sm font-medium text-dark">{t('users.unrestricted')}</span>
-                <span className="block text-xs text-muted-light mt-0.5">{t('users.unrestrictedDescription')}</span>
-              </span>
-            </label>
-          </div>
-
+          {/* O checkbox "escopo irrestrito" SAIU em 2026-08-31 junto com o claim.
+              Sob ABAC total nao ha porta larga: escopo de pool e sempre ENUMERADO,
+              porque pools sao do TENANT e nao da plataforma. Mante-lo seria pior que
+              inutil — ele tambem DESABILITAVA este seletor, entao marca-lo passaria a
+              impedir a atribuicao sem conceder nada. */}
           {/* Pool multi-select */}
-          <div className={unrestricted ? 'opacity-40 pointer-events-none' : undefined}>
+          <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-sm font-medium text-dark">
                 {t('users.pools')}
@@ -672,7 +662,7 @@ function TemplateEditor({ tenantId, adminToken, availablePools, modules, templat
 
   async function handleDelete() {
     try {
-      const res = await fetch(`/auth/templates/${template!.id}`, {
+      const res = await apiFetch(`/auth/templates/${template!.id}`, {
         method: 'DELETE', headers: authHeaders(adminToken),
       })
       if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`)
@@ -850,7 +840,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
   async function handleDelete(u: PlatformUser) {
     setActionErr(null)
     try {
-      const res = await fetch(`/auth/users/${u.id}`, { method: 'DELETE', headers: authHeaders(adminToken) })
+      const res = await apiFetch(`/auth/users/${u.id}`, { method: 'DELETE', headers: authHeaders(adminToken) })
       if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`)
       void reload()
     } catch (ex) { setActionErr(String(ex)) }
@@ -948,9 +938,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
                       <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{u.roles.map(r => <RoleBadge key={r} role={r} />)}</div></td>
                       <td className="px-4 py-3">
                         {u.accessible_pools.length === 0
-                          ? (u.unrestricted
-                              ? <span className="text-xs text-muted-light italic">{t('users.allPools')}</span>
-                              : <span className="text-xs text-warning italic" title={t('users.legacyAllPoolsHint')}>{t('users.legacyAllPools')}</span>)
+                          ? <span className="text-xs text-warning italic" title={t('users.legacyAllPoolsHint')}>{t('users.legacyAllPools')}</span>
                           : <div className="flex flex-wrap gap-1">
                               {u.accessible_pools.slice(0, 3).map(p => (
                                 <span key={p} className="text-xs bg-surface-alt text-muted px-1.5 py-0.5 rounded font-mono">{p}</span>

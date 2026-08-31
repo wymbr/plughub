@@ -18,6 +18,7 @@ import { Search, User, Users } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { Customer360Card } from '@/modules/agent-assist/components/Customer360Card'
 import { HistoricoTab } from '@/modules/agent-assist/components/tabs/HistoricoTab'
+import { apiFetch } from '@/api/apiFetch'
 
 const TENANT_ID = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
 
@@ -66,7 +67,7 @@ export default function AnaliseClientesPage() {
     if (!q) return
     setSearching(true)
     try {
-      const res = await fetch(`/v1/channels/webhook/identity/customers/search?${new URLSearchParams({
+      const res = await apiFetch(`/v1/channels/webhook/identity/customers/search?${new URLSearchParams({
         tenant_id: tenant, q, limit: '20',
       })}`)
       const data = res.ok ? await res.json() : { results: [] }

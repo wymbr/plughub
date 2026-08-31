@@ -13,6 +13,7 @@
  */
 
 import { parseResumeConflict, type ResumeConflict } from '@/lib/resume-conflict'
+import { apiFetch } from '@/api/apiFetch'
 
 /**
  * Estado derivado do cruzamento ledger × ZSET × lease × registro de posse.
@@ -76,7 +77,7 @@ export async function fetchPending(params: {
   // no-store: pendência é estado tempo-real; o ETag do Express faria o browser
   // devolver 304 com a lista velha logo após um encerramento (mesmo motivo do
   // PullInboxPanel).
-  const res = await fetch(`/api/work_queue/pending${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
+  const res = await apiFetch(`/api/work_queue/pending${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<PendingResponse>
 }

@@ -7,6 +7,7 @@
  * DELETE /config/{ns}/{key}?tenant_id=...  → remove override
  */
 import { useCallback, useEffect, useState } from 'react'
+import { apiFetch } from '@/api/apiFetch'
 
 /** Safely parse a Response as JSON, surfacing clear errors when the backend
  *  is unavailable (proxy returns HTML) rather than crashing with SyntaxError. */
@@ -51,7 +52,7 @@ export function useAllConfig(tenantId: string): {
     if (!tenantId) return
     setLoading(true)
     setError(null)
-    fetch(`/config?tenant_id=${encodeURIComponent(tenantId)}`)
+    apiFetch(`/config?tenant_id=${encodeURIComponent(tenantId)}`)
       .then(r => safeJson<AllConfig>(r).then(j => r.ok ? j : Promise.reject((j as {detail?: string}).detail ?? `HTTP ${r.status}`)))
       .then(j => { setData(j); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -79,7 +80,7 @@ export function useNamespace(tenantId: string, ns: string): {
     if (!tenantId || !ns) return
     setLoading(true)
     setError(null)
-    fetch(`/config/${ns}?tenant_id=${encodeURIComponent(tenantId)}`)
+    apiFetch(`/config/${ns}?tenant_id=${encodeURIComponent(tenantId)}`)
       .then(r => safeJson<{entries?: Record<string, ConfigEntry>; detail?: string}>(r)
         .then(j => r.ok ? j : Promise.reject(j.detail ?? `HTTP ${r.status}`)))
       .then(j => {
@@ -127,7 +128,7 @@ export function useMultiNamespace(tenantId: string, namespaceIds: string[]): {
     setError(null)
 
     const fetchNs = (ns: string) =>
-      fetch(`/config/${ns}?tenant_id=${encodeURIComponent(tenantId)}`)
+      apiFetch(`/config/${ns}?tenant_id=${encodeURIComponent(tenantId)}`)
         .then(r => safeJson<{entries?: Record<string, ConfigEntry>; detail?: string}>(r)
           .then(j => r.ok ? j : Promise.reject(j.detail ?? `HTTP ${r.status}`)))
         .then(j => {
@@ -175,7 +176,7 @@ export async function putConfig(
   adminToken:  string,
   accessToken?: string,
 ): Promise<void> {
-  const res = await fetch(`/config/${ns}/${key}`, {
+  const res = await apiFetch(`/config/${ns}/${key}`, {
     method:  'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -200,7 +201,7 @@ export async function deleteConfig(
 ): Promise<void> {
   const params = new URLSearchParams()
   if (tenantId) params.set('tenant_id', tenantId)
-  const res = await fetch(`/config/${ns}/${key}?${params.toString()}`, {
+  const res = await apiFetch(`/config/${ns}/${key}?${params.toString()}`, {
     method:  'DELETE',
     headers: _writeHeaders(adminToken, accessToken),
   })

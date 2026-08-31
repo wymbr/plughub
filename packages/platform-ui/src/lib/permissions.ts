@@ -170,21 +170,23 @@ export interface AbacNavRule {
  * nada" — a mesma inversão que `accessible_pools` recebeu, e pela mesma razão: um valor
  * ausente não pode ser lido como uma autorização.
  *
- * ⚠️ E NÃO HÁ PORTA LARGA — nem sequer `unrestricted`. Corrigido em 2026-08-27, no
- * mesmo dia em que foi introduzido: a primeira versão deste portão liberava tudo para
- * quem tivesse o claim, e a evidência de que isso estava errado é concreta —
- * `probe@` (unrestricted, ZERO grants) passou a ver `nav.audit`, o módulo de Auditoria
- * LGPD, que é do DPO e existe para ser concedido individualmente.
+ * ⚠️ E NÃO HÁ PORTA LARGA. Houve uma — o claim `unrestricted` —, e ela caiu duas vezes:
+ * em 2026-08-27 deixou de liberar o MENU (no mesmo dia em que foi introduzida, porque
+ * `probe@`, com ZERO grants, passou a ver `nav.audit`, o módulo de Auditoria LGPD que é
+ * do DPO e existe para ser concedido individualmente); em **2026-08-31 o claim foi
+ * REMOVIDO** do produto inteiro, por decisão do dono: sob ABAC total não há porta larga
+ * nem no eixo de escopo, porque pools são do TENANT e não da plataforma, logo escopo de
+ * pool é sempre ENUMERADO.
  *
  * São DOIS EIXOS, e juntá-los é a mesma família de "container largo para um fato
  * estreito" que este arco vem consertando:
  *
- *   ESCOPO      quais linhas/pools/pessoas eu alcanço  →  `accessible_pools`, `unrestricted`
+ *   ESCOPO      quais linhas/pools/pessoas eu alcanço  →  `accessible_pools`
  *   CAPACIDADE  quais funções eu posso exercer         →  `module_config` (grants)
  *
- * `unrestricted` responde ao primeiro. Deixá-lo responder ao segundo converteria
- * "não tenho recorte" em "tenho tudo". A alternativa — manter o atalho e excluir os
- * módulos de concessão individual — seria uma lista de exceção, que envelhece.
+ * A lição que fica, e que sobrevive ao campo que a originou: um claim de ESCOPO nunca
+ * responde por CAPACIDADE. A alternativa — manter o atalho e excluir os módulos de
+ * concessão individual — seria uma lista de exceção, que envelhece.
  *
  * Não falta a ninguém: o admin tem os grants explícitos.
  */

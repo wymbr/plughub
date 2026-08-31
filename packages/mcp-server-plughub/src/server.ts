@@ -2895,22 +2895,32 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // token / inválido → irrestrito. Erros nunca 401 (read-only, consistente com os
       // demais snapshots operacionais).
       //
-      // Passo 2 do plano `accessible_pools` (2026-08-27): lista não-vazia decide (o
-      // RESTRITIVO vence); senão o claim `unrestricted`; senão o LEGADO `[] = todos`,
-      // que é contado e desaparece no passo 3.
+      // Lista não-vazia decide; senão o LEGADO `[] = todos`, contado, que desaparece
+      // na AUT-03. ⚠️ O ramo `claim unrestricted` SAIU em 2026-08-31 — sob ABAC total
+      // não há porta larga por claim. Segunda das duas cópias TS do resolvedor.
       let accessible: string[] | null = null
       try {
         const payload = verifyJwtPayload(req.headers["authorization"] as string | undefined)
         const raw = payload["accessible_pools"]
         if (Array.isArray(raw) && raw.length > 0) {
           accessible = raw.map(String)
-        } else if (payload["unrestricted"] !== true) {
+        } else {
           console.warn(
-            `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio e sem claim ` +
-            `unrestricted. claim_presente=${"unrestricted" in payload} sub=${payload["sub"] ?? ""}`,
+            `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio. ` +
+            `sub=${payload["sub"] ?? ""}`,
           )
         }
-      } catch { /* sem token / inválido → irrestrito */ }
+      } catch (e) {
+        // AUT-17 (2026-08-31): escopo VAZIO, nao irrestrito. Ver a nota gemea em
+        // `agent-registry/routes/operational.ts` — os dois sitios decidem a mesma
+        // coisa e divergir aqui seria a quarta copia do resolvedor a responder
+        // diferente para "qual e o meu dominio?".
+        accessible = []
+        console.warn(
+          `[operational] escopo VAZIO por credencial: ${req.headers["authorization"] ? "token invalido/expirado" : "sem header Authorization"}` +
+          ` — ${e instanceof Error ? e.message : "erro"}`,
+        )
+      }
       const scopedPoolIds = accessible
         ? poolIds.filter(pid => accessible!.includes(pid))
         : poolIds

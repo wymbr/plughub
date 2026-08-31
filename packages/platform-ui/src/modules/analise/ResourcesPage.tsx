@@ -42,6 +42,7 @@ import { useAuth } from '@/auth/useAuth'
 import AnalisePoolsPage from './AnalisePoolsPage'
 import AgentsBenchPage from './AgentsBenchPage'
 import AccountTokensPanel from './AccountTokensPanel'
+import { apiFetch } from '@/api/apiFetch'
 import {
   RESOURCE_PANEL_LENSES, isResourcePanelLens, lensById, assertNever,
   type ResourcePanelLensId, type PoolPanelLensId,
@@ -93,7 +94,7 @@ export default function ResourcesPage() {
     // e o modo de falha é o desta casa: a URL levava `?pool=sac_ia`, o painel filtrava
     // certo, e só o SELETOR mentia, mostrando "todos os pools". Sem `.catch` engolindo
     // nada e sem erro no console: um seletor vazio parece "não há pool".
-    fetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
+    apiFetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { pools?: Array<{ pool_id: string }> }) => {
         if (cancelado) return

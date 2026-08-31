@@ -32,6 +32,7 @@ import { useAuth } from '@/auth/useAuth'
 import { getAccessToken } from '@/auth/token-store'
 import Spinner from '@/components/ui/Spinner'
 import type { Skill } from '@/types'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Blank template ──────────────────────────────────────────────────────────
 
@@ -152,7 +153,7 @@ function _formatApiError(body: Record<string, unknown>, status: number): string 
 }
 
 async function apiFetchRaw(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
-  const res = await fetch(url, init)
+  const res = await apiFetch(url, init)
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as Record<string, unknown>
     throw new Error(_formatApiError(body, res.status))
@@ -440,7 +441,7 @@ const SkillFlowsPage: React.FC = () => {
     if (!tenantId) return
     setListLoading(true)
     try {
-      const res = await fetch('/v1/skills', { headers: operatorHeaders(tenantId) })
+      const res = await apiFetch('/v1/skills', { headers: operatorHeaders(tenantId) })
       if (res.ok) {
         const data = await res.json() as { items?: Skill[]; skills?: Skill[] }
         setSkills(data.items ?? data.skills ?? [])
@@ -599,7 +600,7 @@ const SkillFlowsPage: React.FC = () => {
   async function handleDelete() {
     if (!selectedId) return
     try {
-      const res = await fetch(`/v1/skills/${encodeURIComponent(selectedId)}`, {
+      const res = await apiFetch(`/v1/skills/${encodeURIComponent(selectedId)}`, {
         method:  'DELETE',
         headers: operatorHeaders(tenantId),
       })

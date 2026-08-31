@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
+import { apiFetch } from '@/api/apiFetch'
 import { useTranslation } from 'react-i18next'
 import { Pause, Play } from 'lucide-react'
 import {
@@ -37,7 +38,9 @@ function usePoolOptions(tenantId: string) {
   const [pools, setPools] = useState<PoolOption[]>([])
   useEffect(() => {
     if (!tenantId) return
-    fetch('/v1/operational/pools', { headers: { 'x-tenant-id': tenantId } })
+    // apiFetch, nao `fetch` cru: sem o Bearer o backend nao sabe QUEM pergunta, e
+    // desde 2026-08-31 responde lista VAZIA em vez de degradar aberto (AUT-17).
+    apiFetch('/v1/operational/pools', { headers: { 'x-tenant-id': tenantId } })
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(body => setPools(body.items ?? []))
       .catch(() => setPools([]))
@@ -56,7 +59,7 @@ function useCalendarOptions(tenantId: string) {
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   useEffect(() => {
     if (!tenantId) return
-    fetch(`/v1/calendars?organization_id=${encodeURIComponent(CALENDAR_ORG_ID)}&tenant_id=${encodeURIComponent(tenantId)}`)
+    apiFetch(`/v1/calendars?organization_id=${encodeURIComponent(CALENDAR_ORG_ID)}&tenant_id=${encodeURIComponent(tenantId)}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`calendars ${r.status}`)))
       .then(rows => setCalendars(Array.isArray(rows) ? rows : []))
       .catch(err => { console.error('[CampaignsPage] failed to load calendars', err); setCalendars([]) })

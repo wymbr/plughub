@@ -22,6 +22,7 @@ import { Settings } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -107,14 +108,14 @@ function _h(tenantId: string, token?: string | null): Record<string, string> {
 }
 
 async function apiFetchPools(tenantId: string, token?: string | null): Promise<Pool[]> {
-  const res = await fetch('/v1/pools', { headers: _h(tenantId, token) })
+  const res = await apiFetch('/v1/pools', { headers: _h(tenantId, token) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
   return Array.isArray(body) ? body : (body.pools ?? body.data ?? [])
 }
 
 async function apiFetchSkills(tenantId: string, token?: string | null): Promise<Skill[]> {
-  const res = await fetch('/v1/skills', { headers: _h(tenantId, token) })
+  const res = await apiFetch('/v1/skills', { headers: _h(tenantId, token) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
   return Array.isArray(body) ? body : (body.skills ?? body.data ?? [])
@@ -122,7 +123,7 @@ async function apiFetchSkills(tenantId: string, token?: string | null): Promise<
 
 /** Dialog forms — for the `source: "dialogforms"` config-param combo. */
 async function apiFetchDialogForms(tenantId: string, token?: string | null): Promise<Array<{ form_id: string; name?: string }>> {
-  const res = await fetch('/v1/dialog/forms', { headers: _h(tenantId, token) })
+  const res = await apiFetch('/v1/dialog/forms', { headers: _h(tenantId, token) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
   return Array.isArray(body) ? body : (body.forms ?? body.data ?? [])
@@ -136,7 +137,7 @@ async function apiFetchDialogForms(tenantId: string, token?: string | null): Pro
 // (forward-compat: a newer skill/schema may declare a source this build doesn't know).
 
 async function apiFetchSlots(poolId: string, tenantId: string, token?: string | null): Promise<SlotsResponse> {
-  const res = await fetch(`/v1/pools/${poolId}/slots`, { headers: _h(tenantId, token) })
+  const res = await apiFetch(`/v1/pools/${poolId}/slots`, { headers: _h(tenantId, token) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
@@ -145,7 +146,7 @@ async function apiSetNextSlot(
   poolId: string, tenantId: string, token: string | null | undefined,
   payload: { skill_id: string; config_json: Record<string, unknown> },
 ): Promise<SlotData> {
-  const res = await fetch(`/v1/pools/${poolId}/slots/next`, {
+  const res = await apiFetch(`/v1/pools/${poolId}/slots/next`, {
     method: 'PUT', headers: _h(tenantId, token), body: JSON.stringify(payload),
   })
   if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`) }
@@ -153,7 +154,7 @@ async function apiSetNextSlot(
 }
 
 async function apiPromote(poolId: string, tenantId: string, token?: string | null): Promise<SlotsResponse> {
-  const res = await fetch(`/v1/pools/${poolId}/promote`, {
+  const res = await apiFetch(`/v1/pools/${poolId}/promote`, {
     method: 'POST', headers: _h(tenantId, token),
   })
   if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`) }
@@ -161,7 +162,7 @@ async function apiPromote(poolId: string, tenantId: string, token?: string | nul
 }
 
 async function apiRollback(poolId: string, tenantId: string, token?: string | null): Promise<SlotsResponse> {
-  const res = await fetch(`/v1/pools/${poolId}/rollback`, {
+  const res = await apiFetch(`/v1/pools/${poolId}/rollback`, {
     method: 'POST', headers: _h(tenantId, token),
   })
   if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t}`) }

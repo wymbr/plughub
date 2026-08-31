@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { MentionableAgent } from "../types";
+import { apiFetch } from '@/api/apiFetch'
 
 const API_BASE = "/v1";
 
@@ -23,7 +24,7 @@ export function useMentionableAgents(poolId: string | null): MentionableAgent[] 
 
     let cancelled = false;
 
-    fetch(`${API_BASE}/pools/${encodeURIComponent(poolId)}/mentionable-agents`, {
+    apiFetch(`${API_BASE}/pools/${encodeURIComponent(poolId)}/mentionable-agents`, {
       headers: { "x-tenant-id": "tenant_demo", "x-user-id": "operator" },
     })
       .then(r => (r.ok ? r.json() : { agents: [] }))

@@ -8,14 +8,13 @@ Claims do access token:
   email                     — e-mail
   name                      — nome de exibição
   roles                     — lista de roles (operator | supervisor | admin | developer | business)
-  accessible_pools          — lista de pool_ids; [] = acesso a todos os pools (LEGADO,
-                              ver `unrestricted`)
-  unrestricted              — True = o usuario NAO tem recorte de pool (ve o tenant inteiro).
-                              Declaracao EXPLICITA, introduzida no passo 2 do plano de
-                              `accessible_pools` (2026-08-27), porque `[] = todos` e implicito
-                              e o passo 3 inverte esse significado para "nenhum pool". Enquanto
-                              a inversao nao acontece os dois caminhos convivem: o claim vence,
-                              e o legado segue valendo — CONTADO, nunca omitido.
+  accessible_pools          — lista de pool_ids que o usuario alcanca.
+                              [] = NENHUM pool (o `unrestricted` saiu em 2026-08-31: sob ABAC
+                              total nao ha porta larga por CLAIM, porque pools sao do TENANT e
+                              nao da plataforma). Irrestrito sobrevive apenas para principal de
+                              SISTEMA, construido explicitamente — nunca vindo de um token de
+                              usuario. Enquanto `LEGACY_EMPTY_MEANS_UNRESTRICTED` do py-authz
+                              for True, [] ainda resolve irrestrito no leitor (AUT-03).
   module_config             — config ABAC por módulo (ver infra/modules.yaml)
                               ex: { "evaluation": { "contestar": { "access": "read_write", "scope": [] } } }
   supervised_groups         — Arc 9: group_ids supervisionados ([] = sem restrição / admin)
@@ -51,7 +50,6 @@ def create_access_token(
     roles: list[str],
     accessible_pools: list[str],
     settings: Settings,
-    unrestricted: bool = False,
     module_config: dict[str, Any] | None = None,
     supervised_groups: list[str] | None = None,
     supervised_user_ids: list[str] | None = None,
@@ -65,7 +63,6 @@ def create_access_token(
         "name":                     name,
         "roles":                    roles,
         "accessible_pools":         accessible_pools,
-        "unrestricted":             unrestricted,
         "module_config":            module_config or {},
         "supervised_groups":        supervised_groups or [],
         "supervised_user_ids":      supervised_user_ids or [],

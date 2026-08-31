@@ -16,6 +16,7 @@
 import React from 'react'
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Token regex ────────────────────────────────────────────────────────────────
 
@@ -209,7 +210,7 @@ export function useMaskingDisplayRules(): MaskingRulesMap {
 
   useEffect(() => {
     if (!tenantId) return
-    fetch(`/config/masking?tenant_id=${encodeURIComponent(tenantId)}`)
+    apiFetch(`/config/masking?tenant_id=${encodeURIComponent(tenantId)}`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()

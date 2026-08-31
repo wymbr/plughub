@@ -144,7 +144,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       id: string; email: string; name: string
       roles: string[]; tenant_id: string; accessible_pools: string[]
       /** Declaração explícita de "sem recorte" — porta larga do menu grant-first. */
-      unrestricted?: boolean
       supervised_agent_types?: string[]
       max_concurrent_sessions?: number
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -159,7 +158,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       roles:                 user.roles,
       tenantId:              user.tenant_id,
       accessiblePools:       user.accessible_pools,
-      unrestricted:          user.unrestricted === true,
       supervisedAgentTypes:  user.supervised_agent_types ?? [],
       maxConcurrentSessions: user.max_concurrent_sessions ?? 3,
       moduleConfig:          (user.module_config ?? {}) as ModuleConfig,

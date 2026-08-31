@@ -18,6 +18,7 @@
 
 import { useEffect, useState } from "react";
 import { DelegationSchema } from "../types";
+import { apiFetch } from '@/api/apiFetch'
 
 const API_BASE = "/v1";
 
@@ -43,7 +44,7 @@ export function useDelegationSchema(agentTypeId: string | null): {
 
     // AgentType retired: delegation_input lives on the skill, and (deploy-driven)
     // agentTypeId carries the skill_id — fetch the skill's delegation-schema.
-    fetch(`${API_BASE}/skills/${encodeURIComponent(agentTypeId)}/delegation-schema`, {
+    apiFetch(`${API_BASE}/skills/${encodeURIComponent(agentTypeId)}/delegation-schema`, {
       headers: { "x-tenant-id": "tenant_demo", "x-user-id": "operator" },
     })
       .then(r => {

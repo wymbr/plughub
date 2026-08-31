@@ -26,10 +26,11 @@ export default function FlowMonitorPage() {
     if (!tenantId) return
     listPools(tenantId)
       .then(res => {
-        // Segurança Fase E — dropdown = domínio (listPools ∩ accessiblePools; vazio = todos).
+        // Segurança Fase E — dropdown = domínio (listPools ∩ accessiblePools).
+        // AUT-06 (2026-08-31): vazio = NENHUM, não "todos" — ver `AgentAssistContext`.
         const active = res.items.filter(p => p.status === 'active')
         const dom = currentUser?.accessiblePools ?? []
-        setPools(dom.length ? active.filter(p => dom.includes(p.pool_id)) : active)
+        setPools(active.filter(p => dom.includes(p.pool_id)))
       })
       .catch(() => setPools([]))
   }, [tenantId, currentUser])

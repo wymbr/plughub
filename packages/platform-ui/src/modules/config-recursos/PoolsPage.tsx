@@ -30,6 +30,7 @@ import Select from '@/components/ui/Select'
 import Badge from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import Spinner from '@/components/ui/Spinner'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── types ──────────────────────────────────────────────────────────────────────
 
@@ -640,7 +641,7 @@ const PoolsPage: React.FC = () => {
         organization_id: session.tenantId,
         tenant_id:       session.tenantId,
       })
-      const res = await fetch(`/v1/calendars?${params}`)
+      const res = await apiFetch(`/v1/calendars?${params}`)
       if (res.ok) {
         const data = await res.json() as Array<{ id: string; name: string }>
         setCalendars((data ?? []).map(c => ({ id: c.id, name: c.name })))
@@ -657,7 +658,7 @@ const PoolsPage: React.FC = () => {
         entity_type: 'pool',
         entity_id:   poolId,
       })
-      const res = await fetch(`/v1/associations?${params}`)
+      const res = await apiFetch(`/v1/associations?${params}`)
       if (!res.ok) return []
       const assocs = await res.json() as Array<{ exceptions?: ExceptionEntry[] }>
       // Return exceptions from the first (primary) association
@@ -668,7 +669,7 @@ const PoolsPage: React.FC = () => {
   const loadCompetencySkills = useCallback(async () => {
     if (!session) return
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/config/competency_skills?tenant_id=${encodeURIComponent(session.tenantId)}`
       )
       if (res.ok) {
@@ -691,7 +692,7 @@ const PoolsPage: React.FC = () => {
   const loadLlmAccounts = useCallback(async () => {
     if (!session) return
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/config/llm_accounts?tenant_id=${encodeURIComponent(session.tenantId)}`
       )
       if (res.ok) {
@@ -999,7 +1000,7 @@ const PoolsPage: React.FC = () => {
       // ── Sync calendar association in calendar-api ─────────────────────────
       // The actual engine uses calendar-api associations — keep them in sync.
       if (formData.calendar_id) {
-        await fetch('/v1/associations/upsert', {
+        await apiFetch('/v1/associations/upsert', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1014,7 +1015,7 @@ const PoolsPage: React.FC = () => {
         })
       } else {
         // No calendar selected — remove any existing associations for this pool
-        await fetch(
+        await apiFetch(
           `/v1/associations/entity?tenant_id=${encodeURIComponent(session.tenantId)}&entity_type=pool&entity_id=${encodeURIComponent(poolId)}`,
           { method: 'DELETE' },
         )

@@ -685,7 +685,7 @@ export default function AnalisePoolsPage({ host }: { host?: PoolPanelHost } = {}
   useEffect(() => {
     if (!tenantId) return
     let cancelled = false
-    fetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
+    apiFetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { pools?: Array<{ pool_id: string; queue_config?: unknown; agent_kind?: string }> }) => {
         if (cancelled) return

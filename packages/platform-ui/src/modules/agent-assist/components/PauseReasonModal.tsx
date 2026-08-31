@@ -13,6 +13,7 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pause } from "lucide-react";
+import { apiFetch } from '@/api/apiFetch'
 
 interface PauseReason {
   id:            string;
@@ -47,7 +48,7 @@ export const PauseReasonModal: React.FC<Props> = ({ onConfirm, onCancel }) => {
   // Load pause reasons from Config API; fall back to (translated) defaults on any error
   useEffect(() => {
     let cancelled = false;
-    fetch("/config/agent_activity/pause_reasons")
+    apiFetch("/config/agent_activity/pause_reasons")
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (cancelled) return;

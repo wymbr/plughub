@@ -225,7 +225,7 @@ LEGACY_UNRESTRICTED_MARK = "LEGADO_POOLS_VAZIO"
 #
 # Virar isto é ato deliberado: os testes de `test_scope.py` cobrem os DOIS estados, de
 # modo que a inversão já tem tabela-verdade escrita e não precisa ser descoberta no dia.
-LEGACY_EMPTY_MEANS_UNRESTRICTED: bool = True
+LEGACY_EMPTY_MEANS_UNRESTRICTED: bool = False
 
 
 def resolve_scope(claims: dict[str, Any] | None, origem: str) -> list[str] | None:
@@ -236,12 +236,17 @@ def resolve_scope(claims: dict[str, Any] | None, origem: str) -> list[str] | Non
     respondem diferente a *"este pool está no meu domínio?"* é como se paga um
     vazamento.
 
-      1. lista não-vazia → decide a lista. **O RESTRITIVO vence, sempre**: um
-         `unrestricted` setado por engano não pode ALARGAR o domínio de um operador
-         escopado, porque alargamento não aparece na tela como erro.
-      2. claim `unrestricted is True` → irrestrito EXPLÍCITO.
-      3. senão → depende de `LEGACY_EMPTY_MEANS_UNRESTRICTED` (ver acima), e o ramo
+      1. lista não-vazia → decide a lista.
+      2. senão → depende de `LEGACY_EMPTY_MEANS_UNRESTRICTED` (ver acima), e o ramo
          legado é **CONTADO**, nunca omitido.
+
+    ⚠️ **O claim `unrestricted` foi REMOVIDO em 2026-08-31 (decisão do dono).** Ele era a
+    porta larga por CLAIM: um usuário podia carregar "vejo o tenant inteiro". Sob ABAC
+    total isso não se sustenta — escopo de pool é sempre enumerado, porque pools são do
+    TENANT (criados pelo usuário) e não da plataforma. Escopo de usuário passa a ser
+    **sempre uma lista**; `None` (irrestrito) sobrevive apenas para principal de SISTEMA,
+    construído explicitamente (ex.: `pool_auth.py`, principal de serviço), nunca vindo de
+    um token de usuário. É "remover a alternativa", não "marcar cada caso".
 
     `origem` nomeia o call site no log (`header`, `SSE`, `results`, `transcript`, …).
     Sem ela o WARNING diria que existe um usuário a decidir, sem dizer onde ele
@@ -254,19 +259,28 @@ def resolve_scope(claims: dict[str, Any] | None, origem: str) -> list[str] | Non
     raw = (claims.get("accessible_pools") if claims else None) or []
     if raw:
         return list(raw)
-    if claims and claims.get("unrestricted") is True:
-        return None
     if LEGACY_EMPTY_MEANS_UNRESTRICTED:
         logger.warning(
-            "authz scope(%s): irrestrito por %s — `accessible_pools` vazio e sem claim "
-            "`unrestricted`. claim_presente=%s sub=%s. Este ramo desaparece no passo 3; "
+            "authz scope(%s): irrestrito por %s — `accessible_pools` vazio. "
+            "claims_presentes=%s sub=%s. Este ramo desaparece no passo 3; "
             "enquanto existir, cada linha destas e um usuario a decidir.",
             origem,
             LEGACY_UNRESTRICTED_MARK,
-            bool(claims) and "unrestricted" in claims,
+            bool(claims),
             (claims or {}).get("sub", ""),
         )
         return None
+    logger.info(
+        "authz scope(%s): dominio VAZIO — `accessible_pools` vazio e o ramo legado esta "
+        "DESLIGADO (AUT-03, 2026-08-31), entao lista vazia significa NENHUM pool. "
+        "claims_presentes=%s sub=%s. Isto e config valida, nao defeito: quem precisa "
+        "operar recebe escopo em Acesso. Fica em INFO, e nao em WARNING, justamente "
+        "porque virou desfecho normal — mas nao pode ficar MUDO: 'nao vejo nada' e o "
+        "sintoma que chega, e sem esta linha ele e indistinguivel de tela quebrada.",
+        origem,
+        bool(claims),
+        (claims or {}).get("sub", ""),
+    )
     return []
 
 

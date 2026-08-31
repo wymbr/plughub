@@ -815,6 +815,13 @@ async def list_survey_responses(
     """S8 — navegador de respostas: lista survey_response JOIN survey_instance (verbatim
     incluído — LGPD, gateado no router). Filtros opcionais; pool-scope por accessible_pools;
     ordenado por responded_at DESC; paginado. `metric` filtra por sinal presente (jsonb @>)."""
+    # `[]` = chamador sem NENHUM pool ⇒ nada a devolver; `None` = irrestrito, segue.
+    # Sem esta guarda o `if accessible_pools:` abaixo simplesmente não adiciona filtro,
+    # e o passo 3 (`LEGACY_EMPTY_MEANS_UNRESTRICTED = False`) converteria "nenhum acesso"
+    # em acesso a TUDO, sem erro nem log. Ver `pending.md` AUT-05.
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "total": 0, "limit": limit, "offset": offset}
+
     conds = ["i.tenant_id = $1"]
     args: list[Any] = [tenant_id]
     def ph(v: Any) -> str:
@@ -1830,7 +1837,18 @@ async def list_results(
     # pode divergir do pool OPERACIONAL real onde o agente trabalhou; a interseção AND cega
     # não deveria bloquear alguém de ver a própria avaliação por causa dessa divergência.
     # accessible_pools continua restringindo a visibilidade de OUTRAS pessoas supervisionadas.
-    if evaluated_user_ids is not None:
+    # `accessible_pools == []` = chamador sem NENHUM pool. Hoje essa entrada não chega aqui
+    # (o resolvedor devolve `None` para lista vazia); depois do passo 3 ela chega, e TODOS os
+    # ramos abaixo leem lista vazia como "sem filtro" — convertendo nenhum-acesso em acesso a
+    # tudo, sem erro nem log. A recusa não pode ser cega: a regra de posse logo acima diz que a
+    # própria avaliação é SEMPRE visível. Logo, sem pool algum, sobra exatamente a posse.
+    # Ver `pending.md` AUT-05.
+    if accessible_pools is not None and not accessible_pools:
+        if not self_user_id:
+            return []
+        args.append(self_user_id)
+        cond += f" {cond_prefix} {rp}evaluated_user_id = ${len(args)}"
+    elif evaluated_user_ids is not None:
         if self_user_id and accessible_pools:
             args.append(self_user_id)
             self_idx = len(args)

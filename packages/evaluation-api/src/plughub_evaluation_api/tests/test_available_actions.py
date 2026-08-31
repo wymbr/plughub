@@ -155,11 +155,21 @@ def test_scope_no_jwt_unrestricted():
     assert _compute_result_scope(None) == (None, None, None)
 
 
-def test_scope_unrestricted_claim_sees_everyone():
-    """Sem recorte e quem DECLARA nao ter (passo 8, 2026-08-27) — antes era o papel."""
+def test_claim_unrestricted_NAO_abre_mais_o_eixo_de_pessoas():
+    """Testemunha da remocao do claim (2026-08-31, decisao do dono).
+
+    Sob ABAC total nao ha porta larga por CLAIM. Um token que ainda carregue
+    `unrestricted: True` — legado, ate o TTL de 1h expirar — nao ve mais as avaliacoes
+    de todo mundo: cai no escopo de posse + supervisao, como qualquer um. Quem precisa
+    ver as de outros passa a ve-las por SUPERVISAO (Arc 9), que e o mecanismo do eixo
+    de pessoas.
+
+    E este teste que fica VERMELHO se alguem reintroduzir o ramo.
+    """
     jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": [],
            "unrestricted": True}
-    assert _compute_result_scope(jwt) == (None, None, None)
+    users, pools, self_id = _compute_result_scope(jwt)
+    assert users == ["u_admin"] and self_id == "u_admin"
 
 
 def test_scope_admin_role_alone_is_scoped():
@@ -175,15 +185,14 @@ def test_scope_admin_role_alone_is_scoped():
     assert users == ["u_admin"] and pools is None and self_id == "u_admin"
 
 
-def test_scope_unrestricted_with_accessible_pools():
-    """O claim libera o eixo de PESSOAS; a lista de pools continua restringindo.
-
-    Sao dois recortes independentes, e o RESTRITIVO vence em cada um.
-    """
+def test_os_dois_eixos_seguem_independentes_sem_o_claim():
+    """PESSOAS e POOLS continuam sendo dois recortes independentes — o que mudou e que
+    nenhum dos dois se abre por declaracao. A lista de pools segue restringindo o eixo
+    de pool; o eixo de pessoas segue em posse + supervisao."""
     jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": ["p1", "p2"],
            "unrestricted": True}
     users, pools, self_id = _compute_result_scope(jwt)
-    assert users is None and pools == ["p1", "p2"] and self_id is None
+    assert users == ["u_admin"] and pools == ["p1", "p2"] and self_id == "u_admin"
 
 
 def test_scope_atendente_only_self():

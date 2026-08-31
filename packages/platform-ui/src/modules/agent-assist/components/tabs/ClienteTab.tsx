@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import { User, Search, UserPlus, Check, AlertCircle } from "lucide-react";
 import { getAccessToken } from "../../../../auth/token-store";
 import { Customer360Card } from "../Customer360Card";
+import { apiFetch } from '@/api/apiFetch'
 
 interface ClienteTabProps {
   customerId: string | null;
@@ -66,7 +67,7 @@ export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, s
     if (!q) return;
     setSearching(true); setMsg(null);
     try {
-      const res = await fetch(`/v1/channels/webhook/identity/customers/search?${new URLSearchParams({
+      const res = await apiFetch(`/v1/channels/webhook/identity/customers/search?${new URLSearchParams({
         tenant_id: tenant, q, limit: "20",
       })}`);
       const data = res.ok ? await res.json() : { results: [] };
@@ -118,7 +119,7 @@ export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, s
       const anchors = cValue.trim()
         ? [{ kind: cKind, value: cValue.trim() }]
         : [{ kind: "contact_identifier", value: contactId ?? sessionId ?? "" }];
-      const rres = await fetch(`/v1/channels/webhook/identity/resolve`, {
+      const rres = await apiFetch(`/v1/channels/webhook/identity/resolve`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tenant_id: tenant, anchors, provision: true }),
       });
@@ -126,7 +127,7 @@ export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, s
       const cid: string = rdata.customer_id ?? "";
       if (!cid) { setMsg({ text: t('cliente.createError'), ok: false }); setCreating(false); return; }
       if (cName.trim()) {
-        await fetch(`/v1/channels/webhook/identity/attributes`, {
+        await apiFetch(`/v1/channels/webhook/identity/attributes`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tenant_id: tenant, customer_id: cid, attributes: { nome: cName.trim() } }),
         });

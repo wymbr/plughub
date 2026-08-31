@@ -174,7 +174,7 @@ function useEscalationLabels(tenantId: string): Record<string, string> {
   const [labels, setLabels] = useState<Record<string, string>>({})
   useEffect(() => {
     if (!tenantId) return
-    fetch(`/config/agent_activity?tenant_id=${encodeURIComponent(tenantId)}`)
+    apiFetch(`/config/agent_activity?tenant_id=${encodeURIComponent(tenantId)}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { entries?: { escalation_reasons?: { id: string; label: string }[] } }) => {
         const list = d.entries?.escalation_reasons ?? []

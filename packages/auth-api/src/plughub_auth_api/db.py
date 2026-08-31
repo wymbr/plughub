@@ -865,8 +865,6 @@ async def list_group_supervisors(
 async def resolve_supervisor_scope(
     pool: asyncpg.Pool,
     user_id: str,
-    role: str,
-    unrestricted: bool = False,
 ) -> tuple[list[str], list[str]]:
     """
     Returns (supervised_groups, supervised_user_ids).
@@ -874,11 +872,10 @@ async def resolve_supervisor_scope(
     Algorithm:
       1. Find all groups where user is a supervisor.
       2. Expand those groups → user_ids (group members).
-      3. Principal SEM RECORTE (`unrestricted`) sempre recebe [] (sem restrição).
-         ⚠️ Era "admin role" até 2026-08-27 (passo 8). Quem não tem recorte de escopo é
-         quem DECLARA não ter, não quem carrega um papel — mesma troca do sítio irmão em
-         `evaluation-api/router.py` (`_evaluation_scope`). O parâmetro `role` sobrevive
-         na assinatura por compat; ele já não decide nada aqui.
+      ⚠️ Não há mais atalho. Era `if role == "admin"` até 2026-08-27 (passo 8), depois
+         `if unrestricted`, e este caiu em 2026-08-31 com a remoção do claim. Os
+         parâmetros `role` e `unrestricted` saíram da assinatura junto — parâmetro morto
+         numa função de autorização é convite a voltar a decidir.
 
     Note (2026-07-02): shift-based time-windowing and the agent_type_id
     expansion (Arc 9 original design) were removed — see
@@ -888,13 +885,6 @@ async def resolve_supervisor_scope(
     unvalidated, in agent_group_members). Supervisor scope is membership-only;
     pool-level row scoping is handled separately by `accessible_pools` (Arc 7).
     """
-    # ⚠️ Era `if role == "admin"` (passo 8, 2026-08-27). Mesma troca do sítio irmão na
-    # evaluation-api: quem não tem recorte de escopo é quem DECLARA não ter, não quem
-    # tem um papel. `unrestricted` é lido do usuário — o parâmetro `role` sobrevive na
-    # assinatura por compat de chamador.
-    if unrestricted:
-        return [], []
-
     uid = uuid.UUID(user_id)
     sup_rows = await pool.fetch(
         "SELECT group_id FROM auth.agent_group_supervisors WHERE user_id = $1",
@@ -928,6 +918,15 @@ async def seed_admin_if_absent(
     existing = await get_user_by_email(pool, tenant_id, email)
     if existing:
         return False
+    # MÓDULOS são da plataforma; POOLS são do tenant — e no seed não existe pool nenhum.
+    # Por isso o seed declara `roles` (que aplicam os presets de `module_config`, incluindo
+    # `config.permissions: read_write`) e NÃO declara escopo de pool.
+    #
+    # ⚠️ `unrestricted=True` saiu em 2026-08-31. Ele era uma afirmação sobre POOLS feita
+    # antes de existir pool, e reintroduzia por SEED a porta larga que o passo 8 tinha
+    # removido do runtime. Não é preciso: `config.permissions` é `scopable: false`, logo o
+    # admin semeado concede escopo de pool — a si mesmo, inclusive — assim que houver pool.
+    # Bootstrap fecha pelo MÓDULO, nunca pelo escopo.
     await create_user(
         pool,
         tenant_id=tenant_id,
@@ -936,7 +935,6 @@ async def seed_admin_if_absent(
         name=name,
         roles=["admin", "developer"],
         accessible_pools=[],
-        unrestricted=True,
     )
     logger.info("seed admin user created: %s @ %s", email, tenant_id)
     return True

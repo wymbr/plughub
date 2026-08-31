@@ -91,8 +91,6 @@
     "colMember": "Membro",
     "colSupervisor": "Owner",
     "groupsHint": "Membro ou owner do grupo. O escopo de dados do owner passa a valer no próximo login do usuário.",
-    "unrestricted": "Sem restrição de pool",
-    "unrestrictedDescription": "Este usuário vê todos os pools do tenant. Declare aqui — deixar a lista vazia depende de uma convenção legada que está sendo invertida.",
     "legacyAllPools": "Todos (legado)",
     "legacyAllPoolsHint": "Lista vazia e sem declaração explícita: este usuário vê todos os pools apenas pela convenção implícita. Marque “Sem restrição de pool” para preservar esse acesso."
   },

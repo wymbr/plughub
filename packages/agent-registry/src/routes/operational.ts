@@ -42,22 +42,35 @@ function _accessiblePools(req: Request): string[] | null {
   try {
     const claims = verifyHs256(auth.slice("Bearer ".length), secret)
     const raw = claims["accessible_pools"]
-    // Passo 2 do plano `accessible_pools` (2026-08-27). Ordem idêntica à do
-    // `_resolve_scope` da analytics-api — dois serviços que respondem diferente a
-    // "qual é o meu domínio?" divergem no primeiro ajuste:
-    //   1. lista não-vazia → escopado. O RESTRITIVO vence, sempre (um `unrestricted`
-    //      setado por engano não pode ALARGAR o domínio de um operador escopado);
-    //   2. claim `unrestricted` = true → irrestrito EXPLÍCITO;
-    //   3. senão → irrestrito LEGADO, contado. Some no passo 3.
+    // Ordem idêntica à do `resolve_scope` do py-authz — dois serviços que respondem
+    // diferente a "qual é o meu domínio?" divergem no primeiro ajuste:
+    //   1. lista não-vazia → escopado;
+    //   2. senão → irrestrito LEGADO, contado. Some na AUT-03.
+    //
+    // ⚠️ O ramo `claim unrestricted → irrestrito` SAIU em 2026-08-31: sob ABAC total não
+    // há porta larga por claim, porque pools são do TENANT e não da plataforma. Esta é
+    // uma das DUAS cópias TS do resolvedor que nenhum censo contava — o
+    // `probe_authz_single_verifier` conta quem DECODIFICA JWT, e estas consomem claims
+    // já decodificados. Mantê-la em sincronia é obrigação, não estilo.
     if (Array.isArray(raw) && raw.length > 0) return raw.map((p) => String(p))
-    if (claims["unrestricted"] === true) return null
     console.warn(
-      `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio e sem claim ` +
-      `unrestricted. claim_presente=${"unrestricted" in claims} sub=${claims["sub"] ?? ""}`,
+      `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio. ` +
+      `sub=${claims["sub"] ?? ""}`,
     )
     return null
-  } catch {
-    return null   // token inválido/expirado → degrada aberto (read-only, não bloqueia)
+  } catch (e) {
+    // AUT-17 (2026-08-31): NAO degrada mais aberto. Antes um token ausente ou invalido
+    // devolvia `null` = irrestrito — e depois da AUT-03 isso seria a maior porta que
+    // sobra: escopo vazio recusaria, mas NENHUMA credencial liberaria o tenant inteiro.
+    //
+    // Devolve dominio VAZIO. E o log distingue as duas populacoes, porque elas nao sao
+    // a mesma coisa: sem header e chamador que nunca se identificou (tela nao migrada
+    // para o `apiFetch`); token invalido e sessao expirada ou adulterada.
+    console.warn(
+      `[operational] escopo VAZIO por credencial: ${auth ? "token invalido/expirado" : "sem header Authorization"}` +
+      ` — ${e instanceof Error ? e.message : "erro"}`,
+    )
+    return []
   }
 }
 
@@ -257,8 +270,16 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
 
     // Segurança Fase D — filtra ao DOMÍNIO do chamador. Filtrando a lista AQUI,
     // tudo a jusante (snapshots, live counts, admissão por pool, active/mute, items
-    // e os agregados do summary derivados de items) já sai escopado. Sem token/segredo
-    // → `accessible=null` → sem filtro (compat com o dashboard sem auth).
+    // e os agregados do summary derivados de items) já sai escopado.
+    //
+    // ⚠️ Três valores, e o do meio é novo (AUT-17, 2026-08-31):
+    //   `null` → sem filtro (só o ramo LEGADO de lista vazia, que cai na AUT-03);
+    //   `[]`   → NENHUM pool — credencial ausente ou inválida. Antes isto era `null`,
+    //            e depois da AUT-03 seria a maior porta que sobra;
+    //   lista  → recorte.
+    // O `[]` funciona porque array vazio é truthy em JS: vira `Set` vazio e filtra tudo.
+    // Não trocar por `accessible?.length ? … : null` — seria refazer aqui o `if not x`
+    // que fundiria de novo "nenhum" com "todos".
     const accessible    = _accessiblePools(req)
     const accessibleSet = accessible ? new Set(accessible) : null
     const pools = accessibleSet ? allPools.filter(p => accessibleSet.has(p.pool_id)) : allPools

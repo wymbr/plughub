@@ -2384,6 +2384,12 @@ async def query_workflow_summary(
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    # `[]` = chamador sem NENHUM pool ⇒ resposta vazia; `None` = irrestrito, segue.
+    # Sem esta guarda a lista vazia desce como `[]` para o helper (que a lê como "sem
+    # filtro"), e o passo 3 — `LEGACY_EMPTY_MEANS_UNRESTRICTED = False` — a converteria
+    # em LIBERAÇÃO GERAL, silenciosa. Era o único wrapper da família sem ela.
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": {"from_dt": since, "to_dt": until}}
     try:
         return await asyncio.to_thread(
             _fetch_workflow_summary, client, database, tenant_id, since, until,

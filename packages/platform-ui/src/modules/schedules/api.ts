@@ -1,3 +1,4 @@
+import { apiFetch } from '@/api/apiFetch'
 /**
  * schedules/api.ts
  * Types + REST client + formatting helpers for the Scheduler / Agenda module (Fase 3).
@@ -81,7 +82,7 @@ export interface WebhookPool {
 // ── Fetch helpers ────────────────────────────────────────────────────────────
 
 async function apiFetch(path: string, opts?: RequestInit) {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
     ...opts,
   })

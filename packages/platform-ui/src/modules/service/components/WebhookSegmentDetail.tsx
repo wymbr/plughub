@@ -255,7 +255,7 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
   useEffect(() => {
     if (!formId) { setAnswerLabels({}); return }
     let cancelled = false
-    fetch(`/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`, {
+    apiFetch(`/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`, {
       headers: { 'X-Tenant-ID': tenantId },
     })
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))

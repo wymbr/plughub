@@ -1,6 +1,78 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
 
+## `accessible_pools: []` — a auditoria, os 3 vazamentos e a porta larga que o SEED reabria (2026-08-31)
+
+O contrato tem três valores e **dois são falsy**: `None` = irrestrito · `[]` = nenhum pool · `[...]` =
+recorte. Logo `if not accessible_pools:` colapsa irrestrito com nenhum-acesso. Hoje o ramo é inalcançável
+(`resolve_scope` devolve `None` para lista vazia); no dia em que `LEGACY_EMPTY_MEANS_UNRESTRICTED` virar
+`False`, cada sítio assim vira **liberação onde deveria haver recusa** — sem erro, sem log, sem tela vermelha.
+
+### O censo, e por que AST e não `grep`
+
+`infra/test/_accessible_pools_census.py`: **142 funções** tocam o campo — 93 apenas repassam, 41 distinguem,
+**8 decidem por truthiness**. `grep` não sabe se um `if not x` foi precedido por um `if x is None` na mesma
+função, que é exatamente o que separa código correto de vazamento.
+
+**Ler o censo não bastava.** Dos 8, verificados um a um pelos CHAMADORES: **1 falso positivo**
+(`authorize_session_scope` — o `pools` ali é outro conjunto, e o ramo recusa), **4 protegidos** por wrappers
+que já usavam o idioma certo, e **3 vazamentos reais**. A afirmação intermediária de que
+`_session_scope_clause` era o perigoso estava **errada** — veio de ler a função isolada.
+
+### Os 3 consertos
+
+- `query_workflow_summary` (analytics-api) — era o único wrapper da família sem a guarda;
+- `list_survey_responses` (evaluation-api) — guarda na função de DADOS, que protege todo chamador;
+- `list_results` (evaluation-api) — **não** levou guarda cega: a assinatura documenta que a própria
+  avaliação é sempre visível, então `return []` esconderia do usuário as próprias avaliações. Sem pool
+  algum **sobra exatamente a posse**, e só ela.
+
+Suítes: **237 + 747 + 63 verdes**. Gate `infra/test/probe_accessible_pools_scope.sh`, em duas metades —
+censo (nenhum sítio novo) e **testemunha** (os 3 continuam distinguindo). Sem a segunda, reverter um
+conserto sairia verde: o sítio só voltaria para a lista tolerada.
+
+### A metade TypeScript, que o censo não via
+
+`AgentAssistContext.tsx:149` faz `if (accessiblePools.length === 0) return list`. **Um censo desenhado para
+um eixo não prova nada sobre o eixo vizinho** — o dele era linguagem. Medido depois: o claim `unrestricted`
+já viaja no JWT (`jwt_utils.py:68`) e já está na sessão, então **não** exige interruptor coordenado, como
+eu havia suposto. Fica em aberto (AUT-06). `AccessPage.tsx:950` já estava correto.
+
+### A chave virou (AUT-03)
+
+`LEGACY_EMPTY_MEANS_UNRESTRICTED = False`. Uma linha — precedida de treze itens, porque virar antes de
+fechar a cauda teria trocado um vazamento conhecido por um invisível.
+
+**O caminho vazio não ficou mudo.** Com a flag em `False` o ramo legado some, e com ele o log; ficaria
+silencioso justamente quando *"não vejo nada"* vira desfecho normal. Virou `logger.info` que nomeia a
+origem e declara que é config válida — em INFO e não WARNING, porque não é defeito, mas presente,
+porque é o sintoma que chega ao suporte.
+
+**Provado ao vivo, com os dois controles no mesmo teste:** `admin@` (36 pools explícitos) → 100 linhas;
+`probe@` (0 pools) → 0 linhas. Antes, os dois viam as mesmas 100.
+
+⚠️ **O primeiro teste deu "0 linhas para ambos" e era um 422 disfarçado** — faltava `tenant_id` na query,
+e o parser transformou o erro num zero plausível. Um resultado sem controle positivo não é resultado:
+zero para todo mundo tanto prova a correção quanto prova que nada foi medido.
+
+### O seed reabria por nascimento o que o passo 8 fechara no runtime
+
+O passo 8 (2026-08-27) removeu os três bypasses de papel. Mas `seed_admin_if_absent` gravava
+**`unrestricted=True`** — afirmação sobre POOLS feita antes de existir pool, e porta larga concedida por
+regra do código.
+
+**MÓDULOS são da plataforma; POOLS são do tenant.** O seed conhece os primeiros e não pode conhecer os
+segundos. `unrestricted=True` saiu: o bootstrap fecha pelo **módulo**, porque `config.permissions` tem
+`role_defaults: admin: read_write` e é `scopable: false` — o admin semeado concede escopo de pool, a si
+mesmo inclusive, assim que houver pool. Sem efeito hoje (o ramo legado ainda resolve irrestrito) e sem
+efeito no `admin@` existente (seed é if-absent).
+
+**População medida antes de decidir**, como no fechamento do ramo legado da evaluation-api: dos 6 usuários
+ativos, `admin@`/`probe@` são `unrestricted`, `operator@`/`supervisor@` têm recorte explícito, e os
+**2 afetados** pela inversão são fixtures de probe (`navprobe@`, `useradmin@`).
+
+
+
 
 
 ## O último vermelho: o teste media a ORDEM da cascata de posse, não a própria proposição (2026-08-30)

@@ -223,7 +223,6 @@ DEMO_USERS = [
         # ⚠️ Isto NÃO concede capacidade: desde a correção do passo 8, `unrestricted`
         # responde só pelo eixo de ESCOPO. O que o admin pode fazer vem dos grants.
         "accessible_pools": [],
-        "unrestricted": True,
         "module_config": {
             "evaluation": {
                 "contestar":          {"access": "read_write", "scope": []},

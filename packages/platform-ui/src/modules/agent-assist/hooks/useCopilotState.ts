@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CopilotSuggestions } from "../types";
+import { apiFetch } from '@/api/apiFetch'
 
 const API_BASE = "/api";
 
@@ -29,7 +30,7 @@ export function useCopilotState(
     if (!sessionId || fetchingRef.current) return;
     fetchingRef.current = true;
     try {
-      const res = await fetch(`${API_BASE}/copilot_state/${sessionId}`);
+      const res = await apiFetch(`${API_BASE}/copilot_state/${sessionId}`);
       if (res.ok) {
         const data = (await res.json()) as CopilotSuggestions & { session_id?: string };
         setSuggestions({

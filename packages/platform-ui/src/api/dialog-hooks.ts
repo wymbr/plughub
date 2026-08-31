@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { getAccessToken } from '@/auth/token-store'
+import { apiFetch } from '@/api/apiFetch'
 
 const BASE = '/v1/dialog/forms'
 
@@ -185,7 +186,7 @@ export function useDialogForms(tenantId: string, includeDeleted = false) {
     setLoading(true)
     try {
       const url = includeDeleted ? `${BASE}?include_deleted=true` : BASE
-      const r = await fetch(url, { headers: headers(tenantId) })
+      const r = await apiFetch(url, { headers: headers(tenantId) })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setForms(Array.isArray(d) ? d : (d?.forms ?? []))
@@ -205,7 +206,7 @@ export function useDialogForms(tenantId: string, includeDeleted = false) {
 // ── Get one (full, with nodes) — highest version (draft or published) ─────────
 
 export async function getDialogForm(tenantId: string, formId: string): Promise<DialogForm> {
-  const r = await fetch(`${BASE}/${encodeURIComponent(formId)}`, { headers: headers(tenantId) })
+  const r = await apiFetch(`${BASE}/${encodeURIComponent(formId)}`, { headers: headers(tenantId) })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json()
 }
@@ -213,13 +214,13 @@ export async function getDialogForm(tenantId: string, formId: string): Promise<D
 // ── Create / update / publish ─────────────────────────────────────────────────
 
 export async function createDialogForm(tenantId: string, body: DialogFormUpsert): Promise<DialogForm> {
-  const r = await fetch(BASE, { method: 'POST', headers: headers(tenantId), body: JSON.stringify(body) })
+  const r = await apiFetch(BASE, { method: 'POST', headers: headers(tenantId), body: JSON.stringify(body) })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
   return r.json()
 }
 
 export async function updateDialogForm(tenantId: string, formId: string, body: DialogFormUpsert): Promise<DialogForm> {
-  const r = await fetch(`${BASE}/${encodeURIComponent(formId)}`, {
+  const r = await apiFetch(`${BASE}/${encodeURIComponent(formId)}`, {
     method: 'PUT', headers: headers(tenantId), body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
@@ -227,7 +228,7 @@ export async function updateDialogForm(tenantId: string, formId: string, body: D
 }
 
 export async function publishDialogForm(tenantId: string, formId: string): Promise<DialogForm> {
-  const r = await fetch(`${BASE}/${encodeURIComponent(formId)}/publish`, {
+  const r = await apiFetch(`${BASE}/${encodeURIComponent(formId)}/publish`, {
     method: 'POST', headers: headers(tenantId),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
@@ -248,7 +249,7 @@ export interface DialogFormDeleteResult {
 export async function deleteDialogForm(
   tenantId: string, formId: string,
 ): Promise<DialogFormDeleteResult> {
-  const r = await fetch(`${BASE}/${encodeURIComponent(formId)}`, {
+  const r = await apiFetch(`${BASE}/${encodeURIComponent(formId)}`, {
     method: 'DELETE', headers: headers(tenantId),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)
@@ -258,7 +259,7 @@ export async function deleteDialogForm(
 export async function undeleteDialogForm(
   tenantId: string, formId: string,
 ): Promise<{ form_id: string; restored_versions: number; was_deleted: boolean }> {
-  const r = await fetch(`${BASE}/${encodeURIComponent(formId)}/undelete`, {
+  const r = await apiFetch(`${BASE}/${encodeURIComponent(formId)}/undelete`, {
     method: 'POST', headers: headers(tenantId),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => '')}`)

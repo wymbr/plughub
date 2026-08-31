@@ -70,23 +70,28 @@ def test_lista_e_copiada_nao_aliasada(legado_ligado):
     assert claims["accessible_pools"] == ["sac"]
 
 
-# ── ramo 2: unrestricted EXPLÍCITO ───────────────────────────────────────────
+# ── o claim REMOVIDO (2026-08-31) ────────────────────────────────────────────
+# Sob ABAC total nao existe porta larga POR CLAIM: pools sao do TENANT (criados pelo
+# usuario), nao da plataforma, entao escopo de usuario e sempre ENUMERADO. `None`
+# sobrevive so para principal de SISTEMA, construido explicitamente.
 
-def test_unrestricted_true_sem_lista(legado_ligado, caplog):
-    with caplog.at_level(logging.WARNING, logger="plughub.authz"):
-        assert resolve_scope({"unrestricted": True, "accessible_pools": []}, "t") is None
-    assert not [r for r in caplog.records if r.levelno >= logging.WARNING], \
-        "irrestrito EXPLICITO nao e degradacao — nao pode contar como legado"
+def test_claim_unrestricted_nao_concede_com_legado_DESLIGADO(legado_invertido):
+    """A testemunha que importa. Com o legado desligado, o token que ainda carregue
+    `unrestricted: True` e lista vazia recebe **nenhum pool** — nao o tenant inteiro.
+
+    E este teste que fica VERMELHO se alguem reintroduzir o ramo. Sem ele a volta da
+    porta larga passaria despercebida, porque com o legado LIGADO os dois desenhos
+    devolvem `None` pelo mesmo caminho.
+    """
+    assert resolve_scope({"unrestricted": True, "accessible_pools": []}, "t") == []
 
 
-@pytest.mark.parametrize("valor", ["true", 1, "1", "yes", {}, [], None])
-def test_unrestricted_so_aceita_True_de_verdade(legado_invertido, valor):
-    """`is True`, não truthiness. Um `"false"` (string) é truthy e liberaria o tenant
-    inteiro — a família de defeito que CLAUDE.md cataloga em `if not x` × `is None`."""
+@pytest.mark.parametrize("valor", [True, "true", 1, "1", "yes", {}, [], None])
+def test_nenhum_valor_do_claim_concede(legado_invertido, valor):
+    """Nenhum valor concede — `True` inclusive. O claim nao e mais lido."""
     assert resolve_scope({"unrestricted": valor, "accessible_pools": []}, "t") == []
 
-
-# ── ramo 3: o legado, CONTADO ────────────────────────────────────────────────
+# ── o legado, CONTADO (cai na AUT-03) ────────────────────────────────────────────────
 
 def test_legado_devolve_irrestrito_E_AVISA(legado_ligado, caplog):
     with caplog.at_level(logging.WARNING, logger="plughub.authz"):
@@ -133,10 +138,10 @@ def test_passo3_lista_vazia_passa_a_significar_NENHUM(legado_invertido, caplog):
 
 
 def test_passo3_nao_toca_quem_ja_e_explicito(legado_invertido):
-    """A inversão só alcança o ramo 3. Quem declarou escopo, ou declarou
-    `unrestricted`, responde igual antes e depois — é isso que a torna aplicável."""
+    """A inversão só alcança o ramo legado. Quem declarou escopo responde igual antes
+    e depois — é isso que a torna aplicável. (O `unrestricted` saiu em 2026-08-31 e
+    não responde mais nada; a testemunha disso está acima.)"""
     assert resolve_scope({"accessible_pools": ["sac"]}, "t") == ["sac"]
-    assert resolve_scope({"unrestricted": True}, "t") is None
 
 
 def test_passo3_pool_in_scope_fecha(legado_invertido):

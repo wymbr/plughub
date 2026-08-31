@@ -36,7 +36,9 @@ export function PoolDomainSelect({
     registryApi.listPools(tenantId)
       .then(r => {
         const all = r.items.map(p => p.pool_id)
-        setPools(accessiblePools.length ? all.filter(p => accessiblePools.includes(p)) : all)
+        // AUT-06 (2026-08-31): filtra SEMPRE. Lista vazia = nenhum pool no combo,
+        // nao o dominio inteiro — ver a nota em `AgentAssistContext`.
+        setPools(all.filter(p => accessiblePools.includes(p)))
       })
       .catch(() => setPools([]))
     // join estabiliza a dep (a prop é um array novo a cada render do pai)

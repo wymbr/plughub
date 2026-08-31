@@ -60,7 +60,7 @@ function useInvoice(tenantId: string) {
     if (!tenantId) return
     setLoading(true); setError(null)
     try {
-      const res = await fetch(`/v1/pricing/invoice/${encodeURIComponent(tenantId)}`)
+      const res = await apiFetch(`/v1/pricing/invoice/${encodeURIComponent(tenantId)}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setInvoice(await res.json() as Invoice)
     } catch (err) { setError(String(err)) }
@@ -79,7 +79,7 @@ function useResources(tenantId: string) {
     if (!tenantId) return
     setLoading(true)
     try {
-      const res = await fetch(`/v1/pricing/resources/${encodeURIComponent(tenantId)}`)
+      const res = await apiFetch(`/v1/pricing/resources/${encodeURIComponent(tenantId)}`)
       if (res.ok) {
         const data = await res.json() as { resources: InstallationResource[] }
         setResources(data.resources)
@@ -140,7 +140,7 @@ function useCapacityGov(tenantId: string) {
     const since = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
 
     void Promise.allSettled([
-      fetch(`/v1/pricing/capacity/${enc}`).then(r => r.ok ? r.json() : null),
+      apiFetch(`/v1/pricing/capacity/${enc}`).then(r => r.ok ? r.json() : null),
       apiFetch(`/reports/pools/occupancy?tenant_id=${enc}&from_dt=${since}&bucket=hour`)
         .then(r => r.ok ? r.json() : null),
     ]).then(([cap, occ]) => {

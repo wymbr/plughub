@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react'
 import type { DashboardCard, DashboardTemplate, NewDashboardCard } from '@/types'
 import { getAccessToken } from '@/auth/token-store'
+import { apiFetch } from '@/api/apiFetch'
 
 type AnyDashboardCard = DashboardCard | NewDashboardCard
 
@@ -32,7 +33,7 @@ function cfgHeaders(json = false): Record<string, string> {
 
 async function configGet(namespace: string, key: string, _adminToken?: string, tenantId?: string): Promise<unknown> {
   const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, { headers: cfgHeaders() })
+  const res = await apiFetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, { headers: cfgHeaders() })
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`Config GET ${namespace}/${key}: HTTP ${res.status}`)
   const json = await res.json()
@@ -49,7 +50,7 @@ async function configPut(
 ): Promise<void> {
   const body: Record<string, unknown> = { value }
   if (tenantId) body.tenant_id = tenantId
-  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}`, {
+  const res = await apiFetch(`${CONFIG_BASE}/${namespace}/${key}`, {
     method: 'PUT',
     headers: cfgHeaders(true),
     body: JSON.stringify(body),
@@ -60,7 +61,7 @@ async function configPut(
 
 async function configDelete(namespace: string, key: string, _adminToken: string, tenantId?: string): Promise<void> {
   const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, {
+  const res = await apiFetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, {
     method: 'DELETE',
     headers: cfgHeaders(),
   })
@@ -69,7 +70,7 @@ async function configDelete(namespace: string, key: string, _adminToken: string,
 
 async function configListNamespace(namespace: string, _adminToken?: string, tenantId?: string): Promise<Record<string, unknown>> {
   const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  const res = await fetch(`${CONFIG_BASE}/${namespace}${params}`, { headers: cfgHeaders() })
+  const res = await apiFetch(`${CONFIG_BASE}/${namespace}${params}`, { headers: cfgHeaders() })
   if (!res.ok) throw new Error(`Config list ${namespace}: HTTP ${res.status}`)
   const json = await res.json()
   // Config API returns { tenant_id, namespace, entries: {...} } — unwrap entries

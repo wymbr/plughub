@@ -158,7 +158,8 @@ export default function CustomerVoicePage() {
       .then(r => {
         const all = r.items.map(p => p.pool_id)
         const dom = currentUser?.accessiblePools ?? []
-        setDomainPools(dom.length ? all.filter(p => dom.includes(p)) : all)
+        // AUT-06: vazio = NENHUM pool, nao "todos" (o claim `unrestricted` saiu na AUT-13).
+        setDomainPools(all.filter(p => dom.includes(p)))
       })
       .catch(() => setDomainPools([]))
   }, [tenantId, currentUser])

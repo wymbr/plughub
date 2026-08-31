@@ -472,11 +472,15 @@ def _compute_result_scope(
     if not jwt_payload:
         return None, None, None
     accessible = _scope_from_claims(jwt_payload, "results")
-    # ⚠️ Era `if "admin" in roles` (passo 8, 2026-08-27). O eixo aqui é ESCOPO — de quem
-    # eu vejo avaliações —, e escopo é exatamente o que `unrestricted` declara. Papel
-    # decidindo escopo é a mesma dívida que o menu tinha; o claim é a declaração.
-    if jwt_payload.get("unrestricted") is True:
-        return None, accessible, None
+    # ⚠️ Era `if "admin" in roles` (passo 8, 2026-08-27), depois
+    # `if jwt_payload.get("unrestricted") is True` — e este ramo SAIU em 2026-08-31, com
+    # a remoção do claim (decisão do dono: sob ABAC total não há porta larga por claim).
+    #
+    # MUDANÇA DE COMPORTAMENTO, declarada e não silenciosa: ninguém mais vê o eixo de
+    # PESSOAS aberto por declaração. Quem precisa ver avaliações de outros as vê por
+    # SUPERVISÃO (`supervised_user_ids`, Arc 9) — que é o mecanismo do eixo de pessoas —,
+    # e o eixo de POOL segue por `accessible`, que é outro e continua valendo. Um admin
+    # que não supervisiona ninguém passa a ver apenas as próprias.
     sub = jwt_payload.get("sub")
     supervised = jwt_payload.get("supervised_user_ids") or []
     allowed = [u for u in {*supervised, sub} if u]

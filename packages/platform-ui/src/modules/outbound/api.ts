@@ -1,3 +1,4 @@
+import { apiFetch } from '@/api/apiFetch'
 /**
  * outbound/api.ts
  * Types + REST client for the Outbound module (mailings + campaigns + deliveries).
@@ -114,7 +115,7 @@ export interface WebhookPool {
 // ── Fetch helpers ────────────────────────────────────────────────────────────
 
 async function apiFetch(path: string, opts?: RequestInit) {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
     ...opts,
   })
@@ -145,7 +146,7 @@ export function makeOutboundApi(tenantId: string) {
     importFile: async (id: string, file: File): Promise<ImportReport> => {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await fetch(`/v1/mailings/${id}/import`, { method: 'POST', headers: th, body: fd })
+      const res = await apiFetch(`/v1/mailings/${id}/import`, { method: 'POST', headers: th, body: fd })
       if (!res.ok) throw new Error(await res.text().catch(() => String(res.status)))
       return res.json()
     },

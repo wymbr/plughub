@@ -36,6 +36,7 @@ import { CheckCircle2 } from "lucide-react"
 import { useAuth } from "../../../auth/useAuth"
 import { parseResumeConflict, resumeConflictDetails } from "../../../lib/resume-conflict"
 import type { ChatMessage } from "../types"
+import { apiFetch } from '@/api/apiFetch'
 
 export type Snapshot = Record<string, { value?: unknown } | undefined> | null | undefined
 
@@ -260,7 +261,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   useEffect(() => {
     if (!formId) { setForm(null); return }
     let cancelled = false
-    fetch(`/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`, {
+    apiFetch(`/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`, {
       headers: { "X-Tenant-ID": tenantId },
     })
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
@@ -285,7 +286,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   useEffect(() => {
     if (!briefingSessionId) { setBriefing([]); return }
     let alive = true
-    fetch(`/api/conversation_history/${encodeURIComponent(briefingSessionId)}`)
+    apiFetch(`/api/conversation_history/${encodeURIComponent(briefingSessionId)}`)
       .then(r => r.ok ? r.json() : { messages: [] })
       .then((data: { messages?: ChatMessage[] }) => { if (alive) setBriefing(data.messages ?? []) })
       .catch(() => { /* transient — briefing may be momentarily empty */ })

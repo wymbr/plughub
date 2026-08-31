@@ -57,6 +57,7 @@ import {
 } from "./components/ParticipantFilterBar";
 import { CopilotBanner }   from "./components/CopilotBanner";
 import { WebRTCOverlay }   from "./components/WebRTCOverlay";
+import { apiFetch } from '@/api/apiFetch'
 
 // Set vazio estável para o preview read-only (ChatArea sem seleção de mensagens).
 const EMPTY_MESSAGE_IDS: Set<string> = new Set<string>();
@@ -201,7 +202,7 @@ export const AgentAssistPage: React.FC = () => {
     let alive = true;
     const load = async () => {
       try {
-        const res  = await fetch(`/api/conversation_history/${previewSessionId}`);
+        const res  = await apiFetch(`/api/conversation_history/${previewSessionId}`);
         const data = res.ok ? (await res.json() as { messages?: ChatMessage[] }) : { messages: [] };
         if (alive) setPreviewMessages(data.messages ?? []);
       } catch { /* transient — preview pode ficar momentaneamente vazio */ }
@@ -221,7 +222,7 @@ export const AgentAssistPage: React.FC = () => {
   const claimPreviewContact = useCallback(async (sessionId: string, poolId: string, conferenceId: string) => {
     const instanceId = session?.userId ? `human-${session.userId}` : "";
     try {
-      const res = await fetch(`/api/work_queue/claim/${encodeURIComponent(sessionId)}`, {
+      const res = await apiFetch(`/api/work_queue/claim/${encodeURIComponent(sessionId)}`, {
         method:  "POST",
         headers: { "content-type": "application/json" },
         body:    JSON.stringify({ pool_id: poolId, instance_id: instanceId, conference_id: conferenceId }),
@@ -335,7 +336,7 @@ export const AgentAssistPage: React.FC = () => {
         // mcp-server cai no meta.instance_id global (last-writer) e, em
         // multi-humano, o agent_done de um humano é atribuído a outro. Ver g7 §10.
         const instanceId = contacts.get(sessionId)?.instanceId ?? undefined;
-        const resp = await fetch(`/api/agent_done/${sessionId}`, {
+        const resp = await apiFetch(`/api/agent_done/${sessionId}`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ ...payload, instance_id: instanceId }),
@@ -422,7 +423,7 @@ export const AgentAssistPage: React.FC = () => {
       });
 
       try {
-        const resp = await fetch(`/api/menu_submit/${selectedSessionId}`, {
+        const resp = await apiFetch(`/api/menu_submit/${selectedSessionId}`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ menu_id: menuId, interaction, result, displayText, agent_key: sourceInstance }),
@@ -603,7 +604,7 @@ export const AgentAssistPage: React.FC = () => {
     const sid = selected.sessionId;
     const instanceId = session?.userId ? `human-${session.userId}` : "";
     try {
-      await fetch(`/api/work_queue/release/${encodeURIComponent(sid)}`, {
+      await apiFetch(`/api/work_queue/release/${encodeURIComponent(sid)}`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ pool_id: approvalPoolId, instance_id: instanceId }),

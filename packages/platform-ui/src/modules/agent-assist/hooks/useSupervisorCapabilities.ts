@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SupervisorCapabilities, SupervisorState } from "../types";
+import { apiFetch } from '@/api/apiFetch'
 
 const API_BASE = "/api";
 const TURN_INTERVAL = 5;
@@ -23,7 +24,7 @@ export function useSupervisorCapabilities(
     if (!sessionId || fetchingRef.current) return;
     fetchingRef.current = true;
     try {
-      const res = await fetch(`${API_BASE}/supervisor_capabilities/${sessionId}`);
+      const res = await apiFetch(`${API_BASE}/supervisor_capabilities/${sessionId}`);
       if (res.ok) {
         const data = (await res.json()) as SupervisorCapabilities;
         setCapabilities(data);

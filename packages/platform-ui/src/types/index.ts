@@ -27,16 +27,6 @@ export interface Session {
   roles: string[]                  // all roles from JWT (user may have multiple)
   tenantId: string
   accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
-  /**
-   * Declaração explícita de "sem recorte de ESCOPO" (passo 2 do arco de autorização).
-   *
-   * ⚠️ NÃO concede capacidade. O menu é grant-first e não consulta este campo: quem vê
-   * uma tela é quem tem o grant dela, ponto. Ver a nota em `passesAbacRule` — deixar o
-   * claim liberar o menu fazia `probe@` (0 grants) enxergar a Auditoria LGPD.
-   *
-   * O eixo dele é pool/linha: `accessible_pools` na analytics-api e no channel-gateway.
-   */
-  unrestricted: boolean
   /** Arc 9 — agent types this supervisor can see. [] = unrestricted (admin). */
   supervisedAgentTypes: string[]
   /** Maximum simultaneous contacts this human agent can serve. Shared across all pools. */
@@ -828,8 +818,7 @@ export interface PlatformUser {
   email:                   string
   name:                    string
   roles:                   string[]
-  accessible_pools:        string[]   // [] = all pools (LEGADO — ver `unrestricted`)
-  unrestricted?:           boolean    // declaracao explicita: sem recorte de pool
+  accessible_pools:        string[]   // [] = nenhum pool (LEGADO: ainda resolve "todos" ate a AUT-03)
   module_config?:          ModuleConfig
   active:                  boolean
   max_concurrent_sessions?: number
@@ -848,7 +837,6 @@ export interface CreateUserInput {
   // entao mandar `roles` com o valor default ainda contaria como conceder e daria 403.
   roles?:                  string[]
   accessible_pools?:       string[]
-  unrestricted?:           boolean
   max_concurrent_sessions?: number
 }
 
@@ -857,7 +845,6 @@ export interface UpdateUserInput {
   password?:                string
   roles?:                   string[]
   accessible_pools?:        string[]
-  unrestricted?:            boolean
   active?:                  boolean
   max_concurrent_sessions?: number
 }
