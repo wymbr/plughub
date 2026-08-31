@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 from . import db as db_mod
 from .models import Role
-from .config import get_settings
+from .config import get_settings, seed_admin_roles
 from .groups_router import groups_router
 from .password import hash_password
 from .permissions import ensure_permissions_schema
@@ -182,13 +182,20 @@ async def lifespan(app: FastAPI):
     # Registra módulos de plataforma a partir de infra/modules.yaml (idempotente)
     await _register_platform_modules(pool)
 
-    # Seed do usuário admin padrão (idempotente)
+    # Seed do usuário admin padrão (idempotente).
+    #
+    # ⚠️ `seed_admin_roles()` RECUSA papel desconhecido, e a recusa mata o boot de
+    # propósito: papel fora do catálogo não casa com preset algum, o admin nasceria com
+    # `module_config` vazio e — sob o portão grant-first — sem menu nenhum. Um boot que
+    # falha nomeando a env errada é infinitamente mais barato que uma instalação que sobe
+    # e não abre.
     await db_mod.seed_admin_if_absent(
         pool,
         tenant_id=settings.seed_tenant_id,
         email=settings.seed_admin_email,
         password_hash=hash_password(settings.seed_admin_password),
         name=settings.seed_admin_name,
+        roles=seed_admin_roles(),
     )
 
     logger.info("auth-api ready — port %d", settings.port)

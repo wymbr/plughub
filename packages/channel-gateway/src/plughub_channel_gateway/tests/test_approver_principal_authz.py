@@ -234,23 +234,33 @@ def test_lista_declarada_VENCE_unrestricted_setado_por_engano():
     assert e.value.status_code == 403
 
 
-def test_unrestricted_explicito_alcanca_qualquer_pool():
+def test_claim_unrestricted_NAO_alcanca_nada():
+    """O claim `unrestricted` foi REMOVIDO em 2026-08-31 (AUT-13) — e nao volta.
+
+    ⚠️ Este teste afirmava o oposto (`... is not None`). Escopo e capacidade sao eixos
+    distintos: um claim de ESCOPO nunca concede acesso, e pools sao do TENANT, nao da
+    plataforma — logo escopo de usuario e sempre uma lista enumerada. Reescrito como
+    TESTEMUNHA, nao apagado: assim reintroduzir a porta larga reprova aqui (AUT-27).
+    """
     req = _bearer(**_mc("read_write"), accessible_pools=[], unrestricted=True)
-    assert cg_main._resolve_approver_principal(req, _body(pool_id="qualquer"), APROVACAO) is not None
+    with pytest.raises(HTTPException) as e:
+        cg_main._resolve_approver_principal(req, _body(pool_id="qualquer"), APROVACAO)
+    assert e.value.status_code == 403
 
 
-def test_ramo_LEGADO_pools_vazio_ainda_libera_e_e_CONTADO(caplog):
-    """⚠️ Este caso VIRA no passo 3 do plano de `accessible_pools`.
+def test_pools_vazio_RECUSA_e_este_teste_avisou_a_virada():
+    """`[]` = NENHUM pool (AUT-03, virada de 2026-08-31).
 
-    Hoje `[]` sem claim `unrestricted` = irrestrito, com WARNING contado. Quando
-    `LEGACY_EMPTY_MEANS_UNRESTRICTED` for False, o mesmo token passa a receber 403 —
-    e é este teste que vai ficar vermelho para avisar, em vez de o escopo vazar mudo.
-    A origem no log tem de dizer `channel-gateway`: o passo 3 precisa de uma lista de
-    usuários a decidir, não de uma estimativa.
+    ⚠️ Registro de que o INSTRUMENTO funcionou: a versao anterior deste teste afirmava
+    o ramo legado (`[]` = irrestrito, com WARNING contado) e trazia no proprio docstring
+    a frase *"e este teste que vai ficar vermelho para avisar, em vez de o escopo vazar
+    mudo"*. Foi o que aconteceu — ele ficou vermelho na virada, exatamente como
+    prometido. O que restava era escrever a versao pos-virada, e e esta.
+
+    Nao ha mais log a conferir aqui: o ramo legado nao existe, entao nao ha o que contar.
+    O que se conta agora e o desfecho — 403 — e ele e o produto, nao um marcador.
     """
     req = _bearer(**_mc("read_write"))
-    with caplog.at_level("WARNING"):
-        assert cg_main._resolve_approver_principal(req, _body(pool_id="qualquer"), APROVACAO) is not None
-    legado = [r for r in caplog.records if "LEGADO_POOLS_VAZIO" in r.message]
-    assert legado, "o ramo legado tem de ser CONTADO, nunca omitido"
-    assert "channel-gateway" in legado[0].message
+    with pytest.raises(HTTPException) as e:
+        cg_main._resolve_approver_principal(req, _body(pool_id="qualquer"), APROVACAO)
+    assert e.value.status_code == 403

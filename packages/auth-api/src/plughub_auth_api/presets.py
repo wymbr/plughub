@@ -114,3 +114,76 @@ def roles_sem_preset(modules: list[dict[str, Any]], roles_conhecidos: list[str])
             if isinstance(definicao, dict):
                 citados.update((definicao.get("role_defaults") or {}).keys())
     return [r for r in roles_conhecidos if r not in citados]
+
+
+# ─── Aplicacao do preset — UM caminho, dois chamadores ────────────────────────
+#
+# ⚠️ NASCEU DE UM DEFEITO MEDIDO (AUT-12, 2026-08-31), e o defeito era um IMPASSE DE
+# BOOTSTRAP. `db.create_user` grava `roles`, mas **nao grava `module_config`**: quem
+# aplicava o preset era o ROUTER, depois da chamada. O caminho do SEED
+# (`seed_admin_if_absent`) chama `create_user` direto e nunca passava por la — medido,
+# o admin semeado nascia com `module_config = '{}'`.
+#
+# Sob o portao grant-first (passo 5, 2026-08-27) config vazio significa **nenhum menu**.
+# E o admin nao podia se corrigir: conceder exige `config.permissions`, que ele nao
+# tinha. Instalacao nova subia e nao abria, sem erro em lugar nenhum.
+#
+# Nao mordia porque o `infra/seed/seed_auth.py` provisiona pela API com `module_config`
+# explicito — ou seja, o ambiente funcionava por um caminho DIFERENTE do que o codigo
+# afirmava usar. E a afirmacao estava escrita em dois lugares (o comentario do seed em
+# `db.py` e a linha da AUT-07 no `done.md`), ambos como se fosse mecanismo. Promessa sem
+# mecanismo, e load-bearing: foi com esse fundamento que a AUT-07 tirou o
+# `unrestricted=True` do seed.
+#
+# Por isso a aplicacao vive AQUI e nao no router: dois chamadores, uma implementacao.
+# Duas divergiriam no primeiro ajuste — foi o que aconteceu com o resolvedor de escopo.
+
+
+def normalize_module_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Linha de `auth.module_registry` -> forma que `build_module_config` entende.
+
+    ⚠️ A coluna do banco chama-se **`schema`**; o construtor le **`permission_schema`**.
+    Passar a linha crua faz ele nao achar campo algum e devolver `{}` — indistinguivel
+    de "nenhum preset declarado". O `asyncpg` tambem entrega JSONB como STRING sem codec.
+    Os dois tropecos moram nesta funcao, num lugar so.
+    """
+    import json as _json
+
+    schema = row.get("schema") or row.get("permission_schema") or {}
+    if isinstance(schema, str):
+        schema = _json.loads(schema)
+    return {"module_id": row.get("module_id"), "permission_schema": schema}
+
+
+async def apply_role_preset(pool: Any, user_id: str, roles: list[str], email: str = "") -> dict[str, Any]:
+    """Monta e GRAVA o `module_config` de nascimento. Devolve o que gravou (ou `{}`).
+
+    Falha aqui NAO derruba quem chama: o usuario existe, so nasce sem grants — e a linha
+    de log diz exatamente isso, em vez de degradar calado.
+    """
+    from . import db as db_mod  # import tardio: `db` nao importa `presets`, e assim fica
+
+    try:
+        mods = [normalize_module_row(r) for r in
+                await db_mod.list_modules(pool, tenant_id=None, active_only=True)]
+        cfg = build_module_config(roles, mods)
+        if cfg:
+            await db_mod.set_user_module_config(pool, user_id, cfg)
+            logger.info(
+                "preset aplicado a %s (papeis=%s): %d modulo(s), %d campo(s)",
+                email or user_id, ",".join(roles), len(cfg),
+                sum(len(v) for v in cfg.values()),
+            )
+            return cfg
+        logger.warning(
+            "NENHUM preset para os papeis %s — %s nasce sem grants e nao vera tela "
+            "alguma sob o portao grant-first. Declare `role_defaults` em "
+            "infra/modules.yaml.",
+            ",".join(roles) or "(vazio)", email or user_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "falha ao aplicar o preset de papel a %s: %s — usuario criado SEM grants",
+            email or user_id, exc,
+        )
+    return {}

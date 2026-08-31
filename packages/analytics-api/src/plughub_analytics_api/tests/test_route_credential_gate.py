@@ -240,11 +240,34 @@ async def test_sse_aceita_token_no_cabecalho():
 # funciona" e "a rota a usa"; por isso montam o app SEM `dependency_overrides`.
 
 def _jwt_de_teste() -> str:
+    # ⚠️ O escopo era `[]` (AUT-27, corrigido em 2026-08-31). Enquanto `[]` significava
+    # "todos os pools", o recorte de conteudo passava direto e a rota devolvia 200. Com a
+    # inversao da AUT-03, `[]` virou NENHUM pool e estes dois testes passaram a falhar
+    # com 403 — por ESCOPO, nao por credencial.
+    #
+    # O defeito era do INSTRUMENTO, e da familia mais sutil: o teste continuava honesto e
+    # ramificado, mas media uma proposicao ADJACENTE a que da nome a ele. Um relatorio
+    # fiel ao vermelho teria publicado "o `?token=` parou de ser aceito", que e falso.
     import jwt as _jwt
     return _jwt.encode(
-        {"sub": "u", "tenant_id": "t", "accessible_pools": []},
+        {"sub": "u", "tenant_id": "t", "accessible_pools": ["sac"]},
         "s" * 32, algorithm="HS256",
     )
+
+
+# A PROPOSICAO destes dois testes e "a rota LE a credencial nesta origem", nunca "o
+# chamador ve o conteudo". Quem responde a segunda e o recorte de sessao, que tem testes
+# proprios — e aqui ele recusa de forma legitima, porque a sessao `s1` nao existe.
+#
+# Por isso o veredicto e sobre o 401: ele, e so ele, significa "a credencial nao foi
+# lida". Um 403 prova o oposto — a requisicao ATRAVESSOU a autenticacao e morreu depois.
+# O limite de 5xx existe para o teste nao passar por acidente quando a rota explode.
+def _credencial_foi_lida(r) -> None:
+    assert r.status_code != 401, (
+        "a credencial nao foi aceita pela ROTA — `EventSource` nao tem outra origem "
+        "alem do `?token=`, entao o Console ficaria sem stream, em silencio."
+    )
+    assert r.status_code < 500, f"a rota explodiu ({r.status_code}), o teste nao julga nada"
 
 
 def test_rota_stream_aceita_token_na_query():
@@ -256,10 +279,7 @@ def test_rota_stream_aceita_token_na_query():
             r = client.get(f"/sessions/s1/stream?tenant_id=t&token={tok}")
     finally:
         m.stop()
-    assert r.status_code == 200, (
-        "o `?token=` não foi aceito pela ROTA — `EventSource` não tem outra origem, "
-        "então o Console ficaria sem stream, em silêncio."
-    )
+    _credencial_foi_lida(r)
 
 
 def test_rota_stream_aceita_token_no_cabecalho():
@@ -275,7 +295,7 @@ def test_rota_stream_aceita_token_no_cabecalho():
             )
     finally:
         m.stop()
-    assert r.status_code == 200
+    _credencial_foi_lida(r)
 
 
 @pytest.mark.asyncio

@@ -182,7 +182,14 @@ def test_scope_admin_role_alone_is_scoped():
     jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": [],
            "supervised_user_ids": []}
     users, pools, self_id = _compute_result_scope(jwt)
-    assert users == ["u_admin"] and pools is None and self_id == "u_admin"
+    # ⚠️ Era `pools is None` (AUT-27, corrigido em 2026-08-31). `None` significa
+    # IRRESTRITO; `[]`, NENHUM pool. Enquanto a lista vazia resolvia para `None`, este
+    # teste afirmava sem querer que o admin sem pools alcanca TODOS — o contrario do que
+    # o proprio nome dele promete. A virada da AUT-03 o expos.
+    #
+    # O eixo de PESSOAS nao muda: o admin segue vendo a si mesmo, porque a posse da
+    # propria avaliacao nao depende de escopo de pool.
+    assert users == ["u_admin"] and pools == [] and self_id == "u_admin"
 
 
 def test_os_dois_eixos_seguem_independentes_sem_o_claim():
@@ -198,7 +205,8 @@ def test_os_dois_eixos_seguem_independentes_sem_o_claim():
 def test_scope_atendente_only_self():
     jwt = {"sub": "u_op", "roles": ["operator"], "accessible_pools": [], "supervised_user_ids": []}
     users, pools, self_id = _compute_result_scope(jwt)
-    assert users == ["u_op"] and pools is None and self_id == "u_op"
+    # `[]` e nao `None` — ver a nota em `test_scope_admin_role_alone_is_scoped`.
+    assert users == ["u_op"] and pools == [] and self_id == "u_op"
 
 
 def test_scope_supervisor_group_plus_self():

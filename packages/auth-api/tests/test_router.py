@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import json as _json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -595,13 +596,14 @@ class TestSeedAdmin:
     async def test_seed_creates_when_absent(self):
         from plughub_auth_api import db as db_mod
         pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=None)           # get_user_by_email → None
+        pool.fetchrow = AsyncMock(return_value=None)
         pool.execute = AsyncMock(return_value="INSERT 0 1")
 
-        created_user = _user_copy(roles=["admin", "developer"])
-        with patch.object(db_mod, "get_user_by_email", new=AsyncMock(return_value=None)), \
-             patch.object(db_mod, "create_user", new=AsyncMock(return_value=created_user)):
-            result = await db_mod.seed_admin_if_absent(pool, "t1", "a@t.com", "hashed", "Admin")
+        with patch.object(db_mod, "get_user_by_email", new=AsyncMock(return_value=None)),              patch.object(db_mod, "create_user",
+                          new=AsyncMock(return_value=_user_copy(roles=["admin"]))),              patch.object(db_mod, "list_modules", new=AsyncMock(return_value=[])),              patch.object(db_mod, "set_user_module_config", new=AsyncMock()):
+            result = await db_mod.seed_admin_if_absent(
+                pool, "t1", "a@t.com", "hashed", "Admin", roles=["admin"],
+            )
         assert result is True
 
     @pytest.mark.asyncio
@@ -609,8 +611,77 @@ class TestSeedAdmin:
         from plughub_auth_api import db as db_mod
         pool = MagicMock()
         with patch.object(db_mod, "get_user_by_email", new=AsyncMock(return_value=_SAMPLE_USER)):
-            result = await db_mod.seed_admin_if_absent(pool, "t1", "a@t.com", "hashed", "Admin")
+            result = await db_mod.seed_admin_if_absent(
+                pool, "t1", "a@t.com", "hashed", "Admin", roles=["admin"],
+            )
         assert result is False
+
+    # ── AUT-12 (2026-08-31): a testemunha que faltava ────────────────────────
+    #
+    # Ate aqui esta classe so afirmava `True`/`False` — "criou" e "nasceu com grants"
+    # sao DOIS fatos, e so o primeiro era testado. Foi essa lacuna que deixou passar um
+    # IMPASSE DE BOOTSTRAP: `create_user` grava `roles` e NAO grava `module_config`, e
+    # quem aplicava o preset era so o router. Medido em 2026-08-31, o admin semeado
+    # nascia com `module_config = '{}'` — sob o portao grant-first, sem menu nenhum, e
+    # sem poder se corrigir, porque conceder exige `config.permissions`.
+    #
+    # O teste exerce `apply_role_preset` de verdade, com a linha de registry na forma
+    # CRUA do banco (coluna `schema`, JSON em STRING). Isso e de proposito: o construtor
+    # le `permission_schema`, e a linha crua o faz devolver `{}` — indistinguivel de
+    # "nenhum preset declarado".
+    @pytest.mark.asyncio
+    async def test_seed_aplica_preset_e_admin_nasce_com_config_permissions(self):
+        from plughub_auth_api import db as db_mod
+        pool = MagicMock()
+        gravado: dict = {}
+
+        async def _captura(_pool, _uid, cfg):
+            gravado.update(cfg)
+
+        registry_cru = [{
+            "module_id": "config",
+            "schema": _json.dumps({
+                "permissions": {"role_defaults": {"admin": "read_write"}},
+                "users":       {"role_defaults": {"admin": "read_write",
+                                                  "supervisor": "read_write"}},
+            }),
+        }]
+
+        with patch.object(db_mod, "get_user_by_email", new=AsyncMock(return_value=None)),              patch.object(db_mod, "create_user",
+                          new=AsyncMock(return_value=_user_copy(roles=["admin"]))),              patch.object(db_mod, "list_modules", new=AsyncMock(return_value=registry_cru)),              patch.object(db_mod, "set_user_module_config", new=_captura):
+            assert await db_mod.seed_admin_if_absent(
+                pool, "t1", "a@t.com", "hashed", "Admin", roles=["admin"],
+            ) is True
+
+        # Sem este campo o admin nao consegue conceder nada — nem a si mesmo.
+        assert gravado["config"]["permissions"]["access"] == "read_write"
+        assert gravado["config"]["users"]["access"] == "read_write"
+
+    @pytest.mark.asyncio
+    async def test_papel_sem_role_defaults_nasce_SEM_grants(self):
+        """Testemunha negativa: o preset nao inventa acesso para papel nao declarado.
+
+        Sem ela, um `apply_role_preset` que concedesse tudo a qualquer papel passaria no
+        teste acima — ele so prova que ALGUEM recebe, nunca que o CERTO recebe.
+        """
+        from plughub_auth_api import db as db_mod
+        pool = MagicMock()
+        chamou = False
+
+        async def _nao_deveria(_pool, _uid, _cfg):
+            nonlocal chamou
+            chamou = True
+
+        registry_cru = [{
+            "module_id": "config",
+            "schema": _json.dumps({"permissions": {"role_defaults": {"admin": "read_write"}}}),
+        }]
+        with patch.object(db_mod, "get_user_by_email", new=AsyncMock(return_value=None)),              patch.object(db_mod, "create_user",
+                          new=AsyncMock(return_value=_user_copy(roles=["operator"]))),              patch.object(db_mod, "list_modules", new=AsyncMock(return_value=registry_cru)),              patch.object(db_mod, "set_user_module_config", new=_nao_deveria):
+            await db_mod.seed_admin_if_absent(
+                pool, "t1", "o@t.com", "hashed", "Op", roles=["operator"],
+            )
+        assert chamou is False, "gravou config para papel sem `role_defaults` declarado"
 
 
 # ─── TestPasswordUtils ────────────────────────────────────────────────────────

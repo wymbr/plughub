@@ -913,6 +913,7 @@ async def seed_admin_if_absent(
     email: str,
     password_hash: str,
     name: str,
+    roles: list[str],
 ) -> bool:
     """Cria usuário admin se não existir. Retorna True se criou."""
     existing = await get_user_by_email(pool, tenant_id, email)
@@ -927,14 +928,29 @@ async def seed_admin_if_absent(
     # removido do runtime. Não é preciso: `config.permissions` é `scopable: false`, logo o
     # admin semeado concede escopo de pool — a si mesmo, inclusive — assim que houver pool.
     # Bootstrap fecha pelo MÓDULO, nunca pelo escopo.
-    await create_user(
+    created = await create_user(
         pool,
         tenant_id=tenant_id,
         email=email,
         password_hash=password_hash,
         name=name,
-        roles=["admin", "developer"],
+        roles=roles,
         accessible_pools=[],
     )
-    logger.info("seed admin user created: %s @ %s", email, tenant_id)
+    # AUT-12 (2026-08-31): o preset PRECISA rodar aqui. `create_user` grava `roles` e
+    # NAO grava `module_config` — quem aplicava era so o router, entao este caminho
+    # produzia um admin com config vazio. Sob o portao grant-first isso e um IMPASSE:
+    # sem menu, e sem poder se conceder nada (conceder exige `config.permissions`).
+    #
+    # Import tardio para nao criar ciclo: `presets` importa `db`, nunca o contrario.
+    from . import presets as presets_mod
+
+    cfg = await presets_mod.apply_role_preset(pool, str(created["id"]), roles, email)
+    # Loga os PAPEIS e o TAMANHO do que foi gravado. "Criou" e "nasceu com grants" sao
+    # dois fatos, e ate hoje so o primeiro aparecia no log — foi por isso que um admin
+    # cego podia ser semeado sem nada acusar.
+    logger.info(
+        "seed admin user created: %s @ %s roles=%s modulos_no_preset=%d",
+        email, tenant_id, roles, len(cfg),
+    )
     return True

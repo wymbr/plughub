@@ -2021,8 +2021,15 @@ class TestPoolPrincipalAuth:
             pools = accessible_pools_from_token(tok)
         assert set(pools) == {"pool_a", "pool_a-int"}
 
-    async def test_valid_jwt_empty_pools_returns_unrestricted(self):
-        """JWT with accessible_pools=[] means all pools (admin convention)."""
+    async def test_valid_jwt_empty_pools_returns_NENHUM_pool(self):
+        """JWT com `accessible_pools: []` significa NENHUM pool.
+
+        ⚠️ Este teste chamava-se `..._returns_unrestricted` e afirmava o contrario, com o
+        comentario "[] -> all pools". Era a convencao ate 2026-08-31, quando a AUT-03 a
+        inverteu: sob ABAC total, escopo e sempre enumerado, e ausencia nunca e
+        autorizacao. O teste ficou vermelho por afirmar a semantica antiga (AUT-27) —
+        reescrito como TESTEMUNHA da nova, nao apagado.
+        """
         import jwt as pyjwt
         from unittest.mock import MagicMock, patch
         from ..pool_auth import optional_pool_principal
@@ -2037,7 +2044,9 @@ class TestPoolPrincipalAuth:
             m.return_value.analytics_open_access = False
             m.return_value.auth_jwt_secret = secret
             principal = await optional_pool_principal(credentials=creds)
-        assert principal.accessible_pools is None   # [] → all pools
+        # `[]`, nao `None`: `None` sobrevive apenas para principal de SISTEMA, construido
+        # explicitamente — nunca vindo de um token de usuario.
+        assert principal.accessible_pools == []
 
     async def test_valid_jwt_with_pools_restricts(self):
         import jwt as pyjwt
@@ -2114,74 +2123,86 @@ class TestPoolPrincipalAuth:
 
 # ── query_contact_insights_report ─────────────────────────────────────────────
 
-class TestUnrestrictedClaim:
+class TestEscopoDePool:
     """
-    Passo 2 do plano `accessible_pools` (2026-08-27) — `unrestricted` EXPLICITO.
+    O contrato de `accessible_pools`, DEPOIS da virada de 2026-08-31.
 
-    O que estes testes ficariam VERMELHOS por: (a) o claim deixar de ser lido; (b) o
-    claim passar a vencer uma lista nao-vazia (alargamento invisivel); (c) o ramo
-    legado ser removido antes do passo 3 (quebraria todo token em circulacao); (d) os
-    dois tradutores — header e SSE — divergirem.
+    ⚠️ Esta classe chamava-se `TestUnrestrictedClaim` e media o OPOSTO: que o claim
+    `unrestricted` concedia acesso irrestrito e que lista vazia significava "todos".
+    O arco AUT-03/AUT-13 removeu as duas coisas — o claim saiu do token e do resolvedor,
+    e `[]` passou a significar NENHUM pool. Os testes seguiram afirmando a semantica
+    antiga e viraram vermelho permanente (AUT-27).
+
+    **Reescritos como TESTEMUNHAS, nao apagados.** Apagar deixaria o caminho livre para
+    a porta larga voltar sem nada acusar; assim, reintroduzi-la reprova aqui.
     """
 
-    def test_claim_explicito_da_irrestrito(self):
-        from ..pool_auth import _resolve_scope
-        assert _resolve_scope({"sub": "u", "unrestricted": True, "accessible_pools": []},
-                              "header") is None
-
-    def test_lista_VENCE_o_claim(self):
+    def test_claim_unrestricted_NAO_concede_nada(self):
         """
-        O restritivo vence. Se o claim vencesse, um `unrestricted` setado por engano
-        ALARGARIA o acesso de um operador escopado — e alargamento nao aparece na tela
-        como erro, aparece como dado a mais.
+        A porta larga por CLAIM nao existe mais. Escopo e capacidade sao eixos
+        distintos, e pools sao do TENANT (criados pelo usuario), nao da plataforma —
+        logo escopo de usuario e sempre uma lista enumerada.
+        """
+        from ..pool_auth import _resolve_scope
+        assert _resolve_scope(
+            {"sub": "u", "unrestricted": True, "accessible_pools": []}, "header"
+        ) == []
+
+    def test_lista_decide_e_o_claim_e_inerte(self):
+        """
+        Com o claim vivo, este teste provava que "o restritivo vence". Hoje prova algo
+        mais forte: o claim nao entra na conta em situacao alguma. Os espelhos `-int`
+        seguem DERIVADOS — quem alcanca `p` alcanca `p-int`.
         """
         from ..pool_auth import _resolve_scope
         got = _resolve_scope(
             {"sub": "u", "unrestricted": True, "accessible_pools": ["sac"]}, "header")
         assert got == ["sac", "sac-int"]
 
-    def test_legado_ainda_vale_e_e_CONTADO(self, caplog):
+    def test_lista_vazia_e_NENHUM_pool_e_nao_fica_muda(self, caplog):
         """
-        Token sem o claim (emitido antes do deploy, ou por outro emissor) segue
-        irrestrito — inverter aqui seria fazer o passo 3 cedo. Mas nao em silencio.
-        """
-        import logging
-        from ..pool_auth import _resolve_scope, _LEGACY_MARK
-        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
-            got = _resolve_scope({"sub": "velho", "accessible_pools": []}, "header")
-        assert got is None
-        assert _LEGACY_MARK in caplog.text
-        assert "claim_presente=False" in caplog.text
+        A inversao da AUT-03, e a razao de a linha de log existir: "nao vejo nada" e o
+        sintoma que chega ao suporte, e sem ela e indistinguivel de tela quebrada.
 
-    def test_claim_presente_e_false_e_populacao_DIFERENTE(self, caplog):
-        """
-        `claim ausente` (token velho) e `claim false com lista vazia` (usuario sem
-        escopo declarado) caem no mesmo ramo hoje, mas so o segundo e decisao de
-        alguem. O passo 3 precisa da lista, nao de uma estimativa — logo o log
-        distingue os dois.
+        Fica em INFO, nao WARNING: escopo vazio virou desfecho NORMAL (config valida de
+        quem ainda nao recebeu pools), e WARNING em caso normal treina todos a ignorar.
         """
         import logging
         from ..pool_auth import _resolve_scope
-        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
-            _resolve_scope({"sub": "u", "unrestricted": False, "accessible_pools": []},
-                           "header")
-        assert "claim_presente=True" in caplog.text
+        with caplog.at_level(logging.INFO, logger="plughub.authz"):
+            got = _resolve_scope({"sub": "sem_escopo", "accessible_pools": []}, "header")
+        assert got == []
+        assert "dominio VAZIO" in caplog.text
+        assert "sem_escopo" in caplog.text
 
-    def test_escopado_NAO_loga_legado(self, caplog):
+    def test_token_SEM_o_campo_cai_no_mesmo_desfecho(self, caplog):
+        """
+        Token velho (emitido antes do campo existir) e token com lista vazia dao o MESMO
+        resultado — nenhum pool. O log distingue as populacoes por `claims_presentes`,
+        que e o que permite contar quem ainda circula com token antigo.
+        """
+        import logging
+        from ..pool_auth import _resolve_scope
+        with caplog.at_level(logging.INFO, logger="plughub.authz"):
+            assert _resolve_scope({"sub": "velho"}, "header") == []
+        assert "dominio VAZIO" in caplog.text
+
+    def test_escopado_NAO_loga_dominio_vazio(self, caplog):
         """Testemunha negativa: contador que dispara sempre nao conta nada."""
         import logging
-        from ..pool_auth import _resolve_scope, _LEGACY_MARK
-        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
+        from ..pool_auth import _resolve_scope
+        with caplog.at_level(logging.INFO, logger="plughub.authz"):
             _resolve_scope({"sub": "u", "accessible_pools": ["sac"]}, "header")
-        assert _LEGACY_MARK not in caplog.text
+        assert "dominio VAZIO" not in caplog.text
 
-    def test_irrestrito_explicito_NAO_loga_legado(self, caplog):
-        import logging
-        from ..pool_auth import _resolve_scope, _LEGACY_MARK
-        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
-            _resolve_scope({"sub": "u", "unrestricted": True, "accessible_pools": []},
-                           "header")
-        assert _LEGACY_MARK not in caplog.text
+    def test_ramo_LEGADO_esta_DESLIGADO(self):
+        """
+        Guarda o interruptor. Se `LEGACY_EMPTY_MEANS_UNRESTRICTED` voltar a `True`, todo
+        token com lista vazia volta a ver o tenant inteiro — sem erro, sem log de erro,
+        sem tela vermelha. E o vazamento mais barato de reintroduzir deste repositorio.
+        """
+        from plughub_authz import LEGACY_EMPTY_MEANS_UNRESTRICTED
+        assert LEGACY_EMPTY_MEANS_UNRESTRICTED is False
 
     def test_header_e_SSE_sao_a_MESMA_funcao(self):
         """
@@ -2191,9 +2212,9 @@ class TestUnrestrictedClaim:
         import inspect
         from .. import pool_auth
         src = inspect.getsource(pool_auth.accessible_pools_from_token)
-        assert "_resolve_scope(payload, \"SSE\")" in src
+        assert '_resolve_scope(payload, "SSE")' in src
         src2 = inspect.getsource(pool_auth.optional_pool_principal)
-        assert "_resolve_scope(payload, \"header\")" in src2
+        assert '_resolve_scope(payload, "header")' in src2
 
 
 class TestQueryContactInsightsReport:

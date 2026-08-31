@@ -1,5 +1,142 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## A cauda Python do arco de escopo: 10 instrumentos velhos, 2 629 verdes (2026-08-31)
+
+**AUT-27.** Ao rodar os portões depois da AUT-12, o `probe_python_suites` estava
+**vermelho**: 10 falhas em `analytics-api` (6), `channel-gateway` (2) e
+`evaluation-api` (2). Uma raiz só — fixtures e asserções escritas quando
+`accessible_pools: []` significava *"todos"* e quando o claim `unrestricted` existia.
+**Cauda do arco do próprio dia, não regressão.**
+
+Todos foram **reescritos como testemunhas, nenhum apagado**. Apagar deixaria o caminho
+livre para a porta larga voltar sem nada acusar; a versão nova reprova exatamente quem
+a reintroduzir.
+
+### O instrumento que anunciou a própria virada
+
+`test_ramo_LEGADO_pools_vazio_ainda_libera_e_e_CONTADO` (channel-gateway) trazia no
+docstring, escrito antes:
+
+> *"Quando `LEGACY_EMPTY_MEANS_UNRESTRICTED` for False, o mesmo token passa a receber
+> 403 — e é este teste que vai ficar vermelho para avisar, em vez de o escopo vazar
+> mudo."*
+
+Foi exatamente o que aconteceu. **O teste fez o trabalho dele**; o que faltava era
+escrever a versão pós-virada, e é ela que está lá agora. Vale registrar como
+contraexemplo do resto desta entrada: nem todo vermelho é instrumento defasado — este
+era instrumento *cumprindo* o que prometeu.
+
+### Os dois que mediam a proposição errada
+
+`test_rota_stream_aceita_token_{na_query,no_cabecalho}` (analytics-api) existem para
+provar que a rota **lê a credencial** naquela origem — `EventSource` não manda header,
+então sem o `?token=` o Console fica sem stream, em silêncio. O fixture usava
+`accessible_pools: []`; enquanto isso era "todos", o recorte de conteúdo passava e a
+rota devolvia 200. Depois da AUT-03 passou a devolver **403 por ESCOPO**.
+
+O teste continuava honesto e ramificado, e mesmo assim media uma pergunta **adjacente à
+que lhe dá nome** — a família da D14.1. Um relatório fiel ao vermelho teria publicado
+*"o `?token=` parou de ser aceito"*, que é **falso**.
+
+Hoje o veredicto é sobre o **401**: ele, e só ele, significa *"a credencial não foi
+lida"*. Um 403 prova o contrário — a requisição atravessou a autenticação e morreu
+depois, no gate seguinte, que tem testes próprios. O teto de 5xx existe para o teste não
+passar por acidente quando a rota explode.
+
+### E um interruptor que passou a ser guardado
+
+Entrou `test_ramo_LEGADO_esta_DESLIGADO`, que afirma
+`LEGACY_EMPTY_MEANS_UNRESTRICTED is False`. Religá-lo devolve o tenant inteiro a todo
+token de lista vazia — **sem erro, sem log de erro, sem tela vermelha**. É o vazamento
+mais barato de reintroduzir deste repositório, e agora tem uma linha de código que o
+impede de voltar em silêncio.
+
+### Uma armadilha que quase virou diagnóstico errado
+
+A primeira medição rodou `pytest` com `cd /app` e mostrou **8+ falhas por serviço**. É a
+armadilha que o cabeçalho do `probe_python_suites.sh` documenta em maiúsculas: mudar o
+rootdir descarta o `[tool.pytest.ini_options]` de cada pacote (`asyncio_mode = "auto"`).
+Os números reais eram 6/2/2, e vieram do WORKDIR do pacote. *Um número sozinho não diz
+de qual proposição ele é evidência.*
+
+Estado final: **2 629 testes passando, zero falhando nas 14 suítes**, e o ramo C do gate
+exige `TOT_FAIL == 0` — um vermelho novo pinta o portão sem depender de alguém lembrar
+de atualizar uma tabela.
+
+---
+
+## Papel semeado virou config — e a mudança expôs um impasse de bootstrap (2026-08-31)
+
+**AUT-12.** `seed_admin_email`, `seed_admin_password` e `seed_admin_name` já eram
+config; **`roles` era o único campo do admin semeado fora dela**, hardcoded em `db.py`.
+Não era decisão, era resíduo: quem instala podia trocar a identidade do primeiro
+usuário, mas não a capacidade dele.
+
+Default passou de `admin,developer` para **`admin`** (decisão do dono). Medido antes de
+trocar: **zero** campos do catálogo concedem a `developer` sem conceder também a `admin`,
+e os dois gates de papel que restam na UI (Dashboards, AgentFlow Deploy) aceitam `admin`
+— o banner do deploy sequer aparece, porque só aparece quando falta capacidade. Nada se
+perde, e `developer` numa instalação de produção era grant que ninguém pediu.
+
+A env **recusa alto** papel desconhecido ou lista vazia, e a recusa mata o boot de
+propósito: papel fora do catálogo não casa com preset algum, o admin nasceria com
+`module_config` vazio e — sob o portão grant-first — sem menu. *Um boot que falha
+nomeando a env errada é infinitamente mais barato que uma instalação que sobe e não abre.*
+
+### ⚠️ O achado: o admin semeado nascia CEGO
+
+Ao verificar que o preset de `admin` sozinho basta, a medição respondeu outra coisa:
+
+```
+seed_admin_if_absent(..., roles=['admin'])  →  module_config = '{}'
+```
+
+`db.create_user` grava `roles` e **não grava `module_config`**. Quem aplicava o preset
+era o **router**, depois da chamada — e o seed chama `create_user` direto, então nunca
+passava por lá. Resultado: numa instalação nova o admin de bootstrap nasce **sem menu**
+sob o grant-first, e **sem poder se corrigir**, porque conceder exige
+`config.permissions`. Impasse.
+
+**Por que nunca mordeu:** o `infra/seed/seed_auth.py` provisiona pela API com
+`module_config` explícito. Ou seja, o ambiente funcionava por um caminho **diferente**
+do que o código afirmava usar — a assinatura de *"um ambiente que só sobe porque já
+subiu"*, com o agravante de que o caminho que se acreditava usar estava quebrado.
+
+**E a afirmação estava escrita em dois lugares, ambos meus:** o comentário do seed em
+`db.py` e a linha da AUT-07 no `done.md` (*"o bootstrap fecha pelo MÓDULO… logo o admin
+semeado concede escopo"*). Promessa sem mecanismo — e **load-bearing**: foi com esse
+fundamento que a AUT-07 removeu o `unrestricted=True` do seed. A linha do `done.md` foi
+**corrigida, não reescrita**.
+
+Hoje a aplicação do preset vive em `presets.apply_role_preset`: **um caminho, dois
+chamadores**. Duas implementações divergiriam no primeiro ajuste — foi exatamente o que
+aconteceu com o resolvedor de escopo (AUT-23).
+
+Junto veio `normalize_module_row`, que concentra dois tropeços que já custaram um
+diagnóstico errado nesta mesma sessão: a coluna do banco chama-se **`schema`** e o
+construtor lê **`permission_schema`**; e o `asyncpg` entrega JSONB como **string**.
+Passar a linha crua faz o construtor devolver `{}` — indistinguível de *"nenhum preset
+declarado"*. Foi assim que a minha primeira medição saiu **`0` para os dois lados** e
+quase virou a conclusão errada: o zero era do instrumento.
+
+### Testemunhas
+
+A classe `TestSeedAdmin` só afirmava `True`/`False` — *"criou"* e *"nasceu com grants"*
+são **dois fatos**, e só o primeiro era testado. Foi essa lacuna que deixou o impasse
+passar. Entraram duas: uma que exerce `apply_role_preset` de verdade, com a linha de
+registry na forma **crua** do banco (é o que pegaria o tropeço do `schema`), e a
+**negativa** — papel sem `role_defaults` não grava config nenhuma, sem a qual um preset
+que concedesse tudo a qualquer papel passaria no teste positivo.
+
+Suíte auth-api: **65 verdes** (eram 63). Mutação — o seed voltar a não aplicar o preset
+— reprova exatamente a testemunha nova.
+
+Os quatro campos do bootstrap passaram a ser declarados em `.env.demo.example`,
+comentados: configurável sem ser descobrível é meia config, e a primeira subida é
+justamente quando alguém precisa deles.
+
+---
+
 ## Pool sem vigia: o alarme é só o órfão, e ele se recusa a mentir (2026-08-31)
 
 **AUT-14.** Depois da AUT-03 (`accessible_pools: []` = NENHUM pool) um pool pode ficar
