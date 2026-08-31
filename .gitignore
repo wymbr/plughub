@@ -25,6 +25,12 @@ build/
 .env
 .env.*
 !.env.example
+# A excecao acima nomeia um arquivo que NAO EXISTE — o template do repositorio e
+# `.env.demo.example`, e ele casava com `.env.*` e ficava fora do controle de versao.
+# Consequencia medida em 2026-08-31: um clone novo nao recebia o template que o
+# proprio arquivo manda copiar ("cp .env.demo.example .env.demo"), e qualquer edicao
+# nele era local — documentacao que nunca chega a ninguem.
+!.env.*.example
 scripts/linux/set-env.local.sh
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
