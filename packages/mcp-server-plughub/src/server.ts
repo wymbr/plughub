@@ -2891,13 +2891,20 @@ export async function startServer(config: ServerConfig): Promise<void> {
         : await redis.smembers(`${tenantId}:pools`)
 
       // Segurança Fase D — escopa ao DOMÍNIO de pools do chamador (Bearer). Filtrar a
-      // lista de pools aqui já escopa as instâncias (só as de pools acessíveis). Sem
-      // token / inválido → irrestrito. Erros nunca 401 (read-only, consistente com os
-      // demais snapshots operacionais).
+      // lista de pools aqui já escopa as instâncias (só as de pools acessíveis).
       //
-      // Lista não-vazia decide; senão o LEGADO `[] = todos`, contado, que desaparece
-      // na AUT-03. ⚠️ O ramo `claim unrestricted` SAIU em 2026-08-31 — sob ABAC total
-      // não há porta larga por claim. Segunda das duas cópias TS do resolvedor.
+      // ⚠️ TRÊS desfechos desde a AUT-19 (2026-08-31), e a mudança é que credencial
+      // ausente/inválida virou **401** em vez de domínio vazio. Antes, `[]` carregava
+      // duas causas — "sua sessão expirou" e "você não tem pool nenhum" — e a tela não
+      // sabia separá-las, então anunciava escopo vazio para quem só precisava
+      // reautenticar. Agora `[]` significa exatamente uma coisa: escopo legitimamente
+      // vazio, que é config VÁLIDA.
+      //
+      // O ramo `claim unrestricted` SAIU em 2026-08-31 (sob ABAC total não há porta
+      // larga por claim); o ramo LEGADO `[] = todos` saiu na AUT-23, que é quando o
+      // py-authz e estas duas cópias voltaram a concordar sobre o mesmo claim. Ver a
+      // nota gêmea em `agent-registry/routes/operational.ts`: os dois sítios decidem a
+      // MESMA coisa, e divergir aqui é como se paga um vazamento.
       let accessible: string[] | null = null
       try {
         const payload = verifyJwtPayload(req.headers["authorization"] as string | undefined)
@@ -2905,21 +2912,28 @@ export async function startServer(config: ServerConfig): Promise<void> {
         if (Array.isArray(raw) && raw.length > 0) {
           accessible = raw.map(String)
         } else {
-          console.warn(
-            `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio. ` +
-            `sub=${payload["sub"] ?? ""}`,
+          // Config VALIDA (o usuario pode legitimamente nao alcancar pool nenhum), entao
+          // `info` e 200. Mas nunca silencio: "nao vejo nada" e o sintoma que chega.
+          accessible = []
+          console.info(
+            `[operational] dominio VAZIO — accessible_pools vazio; sob ABAC total isso ` +
+            `significa NENHUM pool (AUT-03). sub=${payload["sub"] ?? ""}`,
           )
         }
       } catch (e) {
-        // AUT-17 (2026-08-31): escopo VAZIO, nao irrestrito. Ver a nota gemea em
-        // `agent-registry/routes/operational.ts` — os dois sitios decidem a mesma
-        // coisa e divergir aqui seria a quarta copia do resolvedor a responder
-        // diferente para "qual e o meu dominio?".
-        accessible = []
+        // `verifyJwtPayload` levanta tanto para header ausente quanto para token
+        // invalido — as duas populacoes sao nomeadas no `reason`, que a tela usa para
+        // distinguir "nunca me identifiquei" de "minha sessao expirou". So a segunda se
+        // conserta sozinha, pelo re-auth reativo do `apiFetch`.
+        const temHeader = !!req.headers["authorization"]
         console.warn(
-          `[operational] escopo VAZIO por credencial: ${req.headers["authorization"] ? "token invalido/expirado" : "sem header Authorization"}` +
+          `[operational] 401 — ${temHeader ? "token invalido/expirado" : "sem header Authorization"}` +
           ` — ${e instanceof Error ? e.message : "erro"}`,
         )
+        return res.status(401).json({
+          error:  "unauthorized",
+          reason: temHeader ? "invalid_token" : "missing_header",
+        })
       }
       const scopedPoolIds = accessible
         ? poolIds.filter(pid => accessible!.includes(pid))

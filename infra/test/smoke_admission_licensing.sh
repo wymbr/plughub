@@ -175,15 +175,29 @@ echo "── Portão D · summary do /v1/operational/pools ───────
 # Cadeia de sondas: a imagem do agent-registry não traz `curl` (foi o que fez este
 # portão sair INCONCLUSIVO na validação de 2026-08-02). `node` está garantido — é um
 # serviço Node —, então ele é o fundo do poço, não uma conveniência.
-SUM="$($DC exec -T -e T="$TENANT" agent-registry sh -lc '
+# ⚠️ AUT-19 (2026-08-31): esta rota passou a exigir credencial. Ate entao a chamada
+# saia sem `Authorization` e recebia 200 — a mesma porta que a AUT-23 mediu servindo os
+# 36 pools do tenant a quem nao se identificasse. Fechar a borda obriga a MIGRAR os
+# chamadores, e este e um deles; sem o token o portao D sairia INCONCLUSIVO por 401 e
+# alguem leria como "agent-registry fora do ar".
+D_TOK="$(curl -s --max-time 10 -X POST "${AUTH:-http://localhost:3202/auth}/login"   -H 'content-type: application/json'   -d "{\"email\":\"${ADMIN_EMAIL:-admin@plughub.local}\",\"password\":\"${ADMIN_PASS:-changeme_admin}\",\"tenant_id\":\"$TENANT\"}"   | python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("access_token",""))
+except Exception: print("")' 2>/dev/null)"
+if [ -z "$D_TOK" ]; then
+  inc "login falhou — o portao D exige credencial desde a AUT-19 e nao ha token"
+  note "sem token esta rota devolve 401, que NAO e o mesmo que servico fora do ar"
+  SUM=""
+else
+SUM="$($DC exec -T -e T="$TENANT" -e TOK="$D_TOK" agent-registry sh -lc '
   URL="http://127.0.0.1:3300/v1/operational/pools"
   if command -v curl >/dev/null 2>&1; then
-    curl -s -H "x-tenant-id: $T" "$URL"
+    curl -s -H "x-tenant-id: $T" -H "authorization: Bearer $TOK" "$URL"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO- --header="x-tenant-id: $T" "$URL"
+    wget -qO- --header="x-tenant-id: $T" --header="authorization: Bearer $TOK" "$URL"
   else
-    node -e "require(\"http\").get({host:\"127.0.0.1\",port:3300,path:\"/v1/operational/pools\",headers:{\"x-tenant-id\":process.env.T}},r=>{let d=\"\";r.on(\"data\",c=>d+=c);r.on(\"end\",()=>process.stdout.write(d))}).on(\"error\",e=>{console.error(e.message);process.exit(1)})"
+    node -e "require(\"http\").get({host:\"127.0.0.1\",port:3300,path:\"/v1/operational/pools\",headers:{\"x-tenant-id\":process.env.T,\"authorization\":\"Bearer \"+process.env.TOK}},r=>{let d=\"\";r.on(\"data\",c=>d+=c);r.on(\"end\",()=>process.stdout.write(d))}).on(\"error\",e=>{console.error(e.message);process.exit(1)})"
   fi' 2>&1 | head -c 200000)"
+fi
 if [ -z "$SUM" ] || ! printf '%s' "$SUM" | grep -q '"items"'; then
   inc "agent-registry não respondeu um payload utilizável — portão não julgou"
   note "resposta (200 primeiros bytes): $(printf '%s' "$SUM" | head -c 200)"

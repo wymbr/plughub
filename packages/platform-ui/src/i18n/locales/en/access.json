@@ -92,7 +92,14 @@
     "colSupervisor": "Owner",
     "groupsHint": "Member or owner of the group. Owner data scope is applied on the user's next login.",
     "legacyAllPools": "All (legacy)",
-    "legacyAllPoolsHint": "Empty list, no explicit declaration: this user sees every pool only because of the implicit convention. Tick “No pool restriction” to keep that access."
+    "legacyAllPoolsHint": "Empty list, no explicit declaration: this user sees every pool only because of the implicit convention. Tick “No pool restriction” to keep that access.",
+    "poolWatchers": "{{count}} user",
+    "poolWatchers_other": "{{count}} users",
+    "poolsUnwatched": "Unwatched pools",
+    "poolsUnwatchedHint": "No user has access — yet they keep receiving contacts, invisible in Monitor.",
+    "orphanWarning": "This change leaves {{count}} pool with no user access:\n\n{{pools}}\n\nIt will keep receiving contacts, but nobody will see it in Monitor or reports. Continue?",
+    "orphanWarning_other": "This change leaves {{count}} pools with no user access:\n\n{{pools}}\n\nThey will keep receiving contacts, but nobody will see them in Monitor or reports. Continue?",
+    "poolsUnwatchedUnknown": "User list possibly incomplete — the unwatched-pools census cannot assert anything."
   },
   "roles": {
     "operator": "Operator",

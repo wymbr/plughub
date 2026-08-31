@@ -29,7 +29,7 @@ import React, {
 import { ModuleConfig, Session, UserRole } from '@/types'
 import { apiLogin, apiRefresh, apiLogout, AuthApiError } from '@/api/auth'
 import { makePermissions, Permissions } from '@/lib/permissions'
-import { setAccessToken } from '@/auth/token-store'
+import { setAccessToken, setReauthorizer } from '@/auth/token-store'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -284,15 +284,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // ── getAccessToken — for API clients ─────────────────────────────────────────
 
-  const getAccessToken = useCallback(async (): Promise<string | null> => {
+  /**
+   * Renova a sessao AGORA, sem olhar o relogio local. Dono unico do `refreshingRef`,
+   * que deduplica chamadas concorrentes.
+   *
+   * ⚠️ **A dedup nao e otimizacao — e correcao.** O refresh token e ROTATIVO: cada
+   * renovacao invalida a anterior. Sem ela, duas chamadas em paralelo (o Monitor
+   * dispara varias) fariam dois refreshes e o segundo derrubaria o primeiro — a sessao
+   * morreria exatamente quando tentasse se salvar.
+   *
+   * Extraido em 2026-08-31 (AUT-19) para ter UMA implementacao de refresh servindo os
+   * dois gatilhos: o proativo (`getAccessToken`, perto de expirar) e o REATIVO (401
+   * vindo do servidor, via `token-store.reauthorize`). Duas copias divergiriam no
+   * primeiro ajuste, como ja aconteceu com o resolvedor de escopo.
+   */
+  const runRefresh = useCallback(async (): Promise<Session | null> => {
     if (!session) return null
-
-    // Token still valid (with 10s margin)?
-    if (session.expiresAt - Date.now() > 10_000) {
-      return session.accessToken
-    }
-
-    // Token about to expire — refresh now (deduplicate concurrent calls)
     if (!refreshingRef.current) {
       refreshingRef.current = apiRefresh(session.refreshToken)
         .then((data) => {
@@ -312,9 +319,32 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         })
     }
 
-    const renewed = await refreshingRef.current
-    return renewed?.accessToken ?? null
+    return refreshingRef.current
   }, [session, buildSession, persistSession, scheduleRefresh, clearStorage])
+
+  const getAccessToken = useCallback(async (): Promise<string | null> => {
+    if (!session) return null
+    // Token ainda valido (margem de 10s)? Devolve sem tocar na rede.
+    if (session.expiresAt - Date.now() > 10_000) return session.accessToken
+    return (await runRefresh())?.accessToken ?? null
+  }, [session, runRefresh])
+
+  // ── Re-auth REATIVO (AUT-19) ────────────────────────────────────────────────
+  // Registra o renovador no holder de modulo para o `apiFetch` reagir a um 401.
+  //
+  // Escrito DURANTE O RENDER, pela mesma razao medida em 2026-08-25 para o
+  // `setAccessToken`: efeito de filho roda antes do efeito do pai, entao um `useEffect`
+  // aqui deixaria a primeira leitura de cada reload sem renovador registrado. A guarda
+  // por ref torna a escrita idempotente (StrictMode renderiza duas vezes).
+  //
+  // O closure captura a `session` corrente — e re-registra a cada troca de sessao, que
+  // e o que garante que um 401 tardio nao use um refresh token ja rotacionado.
+  const reauthRef = useRef<typeof runRefresh | null>(null)
+  if (reauthRef.current !== runRefresh) {
+    reauthRef.current = runRefresh
+    setReauthorizer(async () => (await runRefresh())?.accessToken ?? null)
+  }
+  useEffect(() => () => { setReauthorizer(null) }, [])
 
   // ── Derived stable values — recomputed only when session identity changes ───
 

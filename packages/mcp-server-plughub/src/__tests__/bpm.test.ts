@@ -194,6 +194,17 @@ describe("Tools BPM — validação de input", () => {
 
   it("conversation_escalate publica evento de roteamento com pool_id explícito", async () => {
     const sessionId = "550e8400-e29b-41d4-a716-446655440000"
+    // ⚠️ AUT-24 (2026-08-31): este `setex` FALTAVA, e por isso o teste estava vermelho.
+    // O produto passou a RECUSAR escalação sem `tenant_id` conhecido — "identidade não
+    // tem fallback" — e o teste ainda afirmava o contrato antigo, em que um tenant era
+    // inventado. O vermelho estava do lado do INSTRUMENTO, não do produto: quem lesse a
+    // suíte concluiria que a escalação está quebrada.
+    await redis.setex(`session:${sessionId}:meta`, 3600, JSON.stringify({
+      tenant_id:   "tenant_test",
+      contact_id:  "contact_001",
+      customer_id: "550e8400-e29b-41d4-a716-446655440111",
+      channel:     "webchat",
+    }))
     const res = await server.callTool("conversation_escalate", {
       session_id:  sessionId,
       target_pool: "retencao_humano",
@@ -209,5 +220,25 @@ describe("Tools BPM — validação de input", () => {
     )
     expect(inbound).toBeDefined()
     expect(inbound!.message["confidence"]).toBe(0)
+  })
+
+  // TESTEMUNHA do fail-closed (AUT-24). Sem ela, alguem "conserta" o vermelho anterior
+  // reintroduzindo o tenant inventado e a suite fica verde — o defeito que a recusa
+  // existe para impedir volta sem nada acusar.
+  //
+  // Por que a recusa e certa: tenant e a fronteira de ISOLAMENTO. Um palpite errado nao
+  // degrada a entrega, escreve estado de um contato real num namespace alheio — e o
+  // contato morre em silencio DEPOIS de o cliente ser avisado da transferencia.
+  it("conversation_escalate RECUSA sem tenant conhecido, e nao publica nada", async () => {
+    const sessionId = "550e8400-e29b-41d4-a716-4466554400ff"
+    const res = await server.callTool("conversation_escalate", {
+      session_id:  sessionId,
+      target_pool: "retencao_humano",
+      error_reason: "Churn risk elevado",
+    })
+    const body = _body(res)
+    expect(body.escalated).toBe(false)
+    expect(body.error).toBe("tenant_unknown")
+    expect(kafka.events.some(e => e.topic === "conversations.inbound")).toBe(false)
   })
 })

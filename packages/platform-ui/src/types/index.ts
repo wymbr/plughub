@@ -818,7 +818,7 @@ export interface PlatformUser {
   email:                   string
   name:                    string
   roles:                   string[]
-  accessible_pools:        string[]   // [] = nenhum pool (LEGADO: ainda resolve "todos" ate a AUT-03)
+  accessible_pools:        string[]   // [] = NENHUM pool (AUT-03 virou em 2026-08-31; nao ha mais ramo legado)
   module_config?:          ModuleConfig
   active:                  boolean
   max_concurrent_sessions?: number

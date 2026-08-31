@@ -13,6 +13,7 @@ import { User, FileText, Check, AlertTriangle } from 'lucide-react'
 import type { PlatformUser, CreateUserInput, UpdateUserInput, Pool, ModuleConfig } from '@/types'
 import ModulePermissionForm, { type ModuleSchema } from '@/components/ModulePermissionForm'
 import { apiFetch } from '@/api/apiFetch'
+import { computeCoverage, orphansAfter } from './pool-coverage'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -66,7 +67,14 @@ function authHeaders(token: string): HeadersInit {
   return h
 }
 
-async function apiFetch<T>(url: string, adminToken: string, init?: RequestInit): Promise<T> {
+// ⚠️ RENOMEADO em 2026-08-31 (AUT-19). Este helper JA se chamava `apiFetch` — um
+// wrapper tipado que devolve JSON e levanta em nao-2xx — e a varredura da AUT-18
+// (2026-08-30) trocou o `fetch(` do corpo dele por `apiFetch(`, criando **auto-recursao
+// infinita**, e ainda acrescentou `import { apiFetch }` no topo, criando conflito de
+// nome. As duas paginas quebravam ao carregar; o build inteiro do platform-ui parou de
+// compilar (34 erros) e ninguem viu, porque o gate da AUT-18 CONTA chamadas por texto e
+// o `vite dev` nao typecheca. Colisao de nome e invisivel para grep.
+async function jsonFetch<T>(url: string, adminToken: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(url, {
     ...init,
     headers: { ...authHeaders(adminToken), ...(init?.headers ?? {}) },
@@ -80,8 +88,15 @@ async function apiFetch<T>(url: string, adminToken: string, init?: RequestInit):
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
+/** Teto pedido ao `/auth/users`. Bater NELE nao prova corte, mas torna o corte
+ *  possivel — e e o unico sinal que a resposta (um array puro, sem total) oferece. */
+const USERS_PAGE_LIMIT = 500
+
 function useUsers(tenantId: string, adminToken: string) {
   const [users,   setUsers]   = useState<PlatformUser[]>([])
+  // "A lista PODE estar incompleta" — nao "esta". A distincao importa: o censo se
+  // recusa a afirmar ausencia, em vez de afirmar uma ausencia errada.
+  const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
 
@@ -90,20 +105,25 @@ function useUsers(tenantId: string, adminToken: string) {
     setLoading(true); setError(null)
     try {
       // auth-api returns a plain array, not {users: [...]}
-      const data = await apiFetch<PlatformUser[] | { users: PlatformUser[] }>(
-        `/auth/users?tenant_id=${encodeURIComponent(tenantId)}`,
+      // AUT-14: teto EXPLICITO. `GET /auth/users` pagina com `limit` (default 100,
+      // medido em 2026-08-31) e a tela pedia sem parametro — entao a lista ja vinha
+      // cortada em 100 sem nada dizer. Um censo de cobertura sobre lista cortada publica
+      // ORFAO FALSO, que e como se ensina a ignorar alarme.
+      const data = await jsonFetch<PlatformUser[] | { users: PlatformUser[] }>(
+        `/auth/users?tenant_id=${encodeURIComponent(tenantId)}&limit=${USERS_PAGE_LIMIT}`,
         adminToken,
       )
       const arr = Array.isArray(data)
         ? data
         : (data as { users?: PlatformUser[] }).users ?? []
       setUsers(arr)
+      setTruncated(arr.length >= USERS_PAGE_LIMIT)
     } catch (err) { setError(String(err)) }
     finally { setLoading(false) }
   }, [tenantId, adminToken])
 
   useEffect(() => { void load() }, [load])
-  return { users, loading, error, reload: load }
+  return { users, truncated, loading, error, reload: load }
 }
 
 function useTemplates(tenantId: string, adminToken: string) {
@@ -116,7 +136,7 @@ function useTemplates(tenantId: string, adminToken: string) {
     setLoading(true); setError(null)
     try {
       // auth-api returns a plain array (response_model=list[TemplateResponse]).
-      const data = await apiFetch<PermTemplate[] | { templates: PermTemplate[] }>(
+      const data = await jsonFetch<PermTemplate[] | { templates: PermTemplate[] }>(
         `/auth/templates?tenant_id=${encodeURIComponent(tenantId)}`,
         adminToken,
       )
@@ -217,6 +237,8 @@ interface UserModalProps {
   adminToken:     string
   user:           PlatformUser | null
   availablePools: Pool[]
+  /** Populacao inteira — o censo de vigias (AUT-14) e do TENANT, nao do usuario. */
+  allUsers:       PlatformUser[]
   modules:        ModuleSchema[]
   templates:      PermTemplate[]
   /** `config.permissions` (read_write) — separa ADMINISTRAR pessoa de CONCEDER capacidade. */
@@ -225,7 +247,7 @@ interface UserModalProps {
   onSaved:        () => void
 }
 
-function UserModal({ tenantId, adminToken, user, availablePools, modules, templates, canGrant, onClose, onSaved }: UserModalProps) {
+function UserModal({ tenantId, adminToken, user, availablePools, modules, templates, canGrant, allUsers, onClose, onSaved }: UserModalProps) {
   const { t } = useTranslation('access')
   const isEdit = user !== null
   const [templateId, setTemplateId] = useState('')
@@ -261,7 +283,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
   // (otherwise every field falsely renders as "no access").
   useEffect(() => {
     if (!user?.id) return
-    apiFetch<ModuleConfig>(`/auth/users/${user.id}/module-config`, adminToken)
+    jsonFetch<ModuleConfig>(`/auth/users/${user.id}/module-config`, adminToken)
       .then(cfg => setModuleConfig(cfg ?? {}))
       .catch(() => { /* keep current (empty) config on failure */ })
   }, [user?.id, adminToken])
@@ -277,7 +299,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
   useEffect(() => {
     let cancelled = false
     type GUser = { user_id?: string; id?: string }
-    apiFetch<{ group_id: string; name: string }[]>(
+    jsonFetch<{ group_id: string; name: string }[]>(
       `/auth/v1/groups?tenant_id=${encodeURIComponent(tenantId)}`, adminToken,
     )
       .then(async groups => {
@@ -287,7 +309,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
         const mem = new Set<string>(); const sup = new Set<string>()
         const has = (arr?: GUser[]) => (arr ?? []).some(u => u.user_id === user.id || u.id === user.id)
         await Promise.all(list.map(async g => {
-          const d = await apiFetch<{ users?: GUser[]; supervisors?: GUser[] }>(`/auth/v1/groups/${g.group_id}`, adminToken)
+          const d = await jsonFetch<{ users?: GUser[]; supervisors?: GUser[] }>(`/auth/v1/groups/${g.group_id}`, adminToken)
           if (has(d.users)) mem.add(g.group_id)
           if (has(d.supervisors)) sup.add(g.group_id)
         }))
@@ -313,17 +335,17 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
     const init = initialGroupsRef.current
     const tasks: Promise<unknown>[] = []
     for (const gid of memberGroups) if (!init.member.has(gid))
-      tasks.push(apiFetch(`/auth/v1/groups/${gid}/users`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
+      tasks.push(jsonFetch(`/auth/v1/groups/${gid}/users`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
     for (const gid of init.member) if (!memberGroups.has(gid))
-      tasks.push(apiFetch(`/auth/v1/groups/${gid}/users/${userId}`, adminToken, { method: 'DELETE' }))
+      tasks.push(jsonFetch(`/auth/v1/groups/${gid}/users/${userId}`, adminToken, { method: 'DELETE' }))
     // Nomear supervisor de grupo e CONCEDER escopo (o claim `supervised_user_ids`
     // decide de quem a evaluation-api mostra avaliacoes) — logo segue `canGrant`.
     // Membership fica: alargar por ali so alcanca grupo que a pessoa ja supervisiona.
     if (canGrant) {
       for (const gid of supervisorGroups) if (!init.supervisor.has(gid))
-        tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
+        tasks.push(jsonFetch(`/auth/v1/groups/${gid}/supervisors`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
       for (const gid of init.supervisor) if (!supervisorGroups.has(gid))
-        tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors/${userId}`, adminToken, { method: 'DELETE' }))
+        tasks.push(jsonFetch(`/auth/v1/groups/${gid}/supervisors/${userId}`, adminToken, { method: 'DELETE' }))
     }
     await Promise.all(tasks)
   }
@@ -345,26 +367,43 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
       // Campos de CAPACIDADE so viajam com `canGrant`. O backend discrimina pelo que
       // foi ENVIADO (`model_fields_set`), nao pelo valor — mandar `roles` igual ao
       // atual ainda seria "conceder" e levaria 403.
+      // AUT-14 — o unico instante em que EXPOSICAO vira DANO. O censo permanente so
+      // alarma orfao (zero vigias); aqui perguntamos o que ESTA mudanca cria. Medido em
+      // 2026-08-31: desativar a conta que carrega 36 pools orfanaria 31 de uma vez, e
+      // nada acusaria — o sintoma do orfao e AUSENCIA.
+      const vaiOrfanar = orphansAfter(
+        allUsers,
+        availablePools.map(p => p.pool_id),
+        { id: user?.id ?? '__novo__', active, accessiblePools },
+      )
+      if (vaiOrfanar.length > 0) {
+        const ok = window.confirm(
+          t('users.orphanWarning', { count: vaiOrfanar.length, pools: vaiOrfanar.join(', ') }),
+        )
+        // Avisa, nunca impede: pool sem vigia e config valida — so nao pode ser SILENCIOSA.
+        if (!ok) { setSaving(false); return }
+      }
+
       const capacity = canGrant
         ? { roles, accessible_pools: accessiblePools }
         : {}
       if (isEdit) {
         const body: UpdateUserInput = { name: name || undefined, ...capacity, active, max_concurrent_sessions: maxConcurrentSessions }
         if (password) body.password = password
-        await apiFetch(`/auth/users/${user!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
+        await jsonFetch(`/auth/users/${user!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
         // Save ABAC module config separately (PUT replaces the whole config)
         if (canGrant) {
-          await apiFetch(`/auth/users/${user!.id}/module-config`, adminToken, {
+          await jsonFetch(`/auth/users/${user!.id}/module-config`, adminToken, {
             method: 'PUT', body: JSON.stringify(moduleConfig),
           })
         }
         await applyGroupChanges(user!.id)
       } else {
         const body: CreateUserInput = { tenant_id: tenantId, email, name, password, ...capacity, max_concurrent_sessions: maxConcurrentSessions }
-        const created = await apiFetch<{ id: string }>('/auth/users', adminToken, { method: 'POST', body: JSON.stringify(body) })
+        const created = await jsonFetch<{ id: string }>('/auth/users', adminToken, { method: 'POST', body: JSON.stringify(body) })
         // Set ABAC module config on the newly created user if anything was configured
         if (canGrant && Object.keys(moduleConfig).length > 0) {
-          await apiFetch(`/auth/users/${created.id}/module-config`, adminToken, {
+          await jsonFetch(`/auth/users/${created.id}/module-config`, adminToken, {
             method: 'PUT', body: JSON.stringify(moduleConfig),
           })
         }
@@ -376,6 +415,11 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
   }
 
   const allSelected = availablePools.length > 0 && availablePools.every(p => selectedPools.has(p.pool_id))
+
+  // Quantos usuarios ATIVOS alcancam cada pool. E DADO ao lado da linha, nunca emblema
+  // vermelho: "preso a um vigia" e configuracao normal, e na instalacao medida seriam 31
+  // de 36 — alarme que dispara em 86% da populacao nao e sinal (D14.1 do CLAUDE.md).
+  const cobertura = computeCoverage(allUsers, availablePools.map(p => p.pool_id))
 
   return (
     <div ref={backdropRef} className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
@@ -485,7 +529,14 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
                       <input type="checkbox" checked={checked} onChange={() => togglePool(pool.pool_id)}
                         className="w-4 h-4 rounded accent-primary flex-shrink-0 mt-0.5" />
                       <div className="flex-1 min-w-0 overflow-hidden">
-                        <p className="text-sm font-mono text-dark truncate">{pool.pool_id}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-mono text-dark truncate">{pool.pool_id}</p>
+                          <span className={`text-xs flex-shrink-0 ${
+                            cobertura.byPool[pool.pool_id] === 0 ? 'text-warning font-semibold' : 'text-muted-light'
+                          }`}>
+                            {t('users.poolWatchers', { count: cobertura.byPool[pool.pool_id] ?? 0 })}
+                          </span>
+                        </div>
                         {pool.description && (
                           <p className="text-xs text-muted-light truncate">{pool.description}</p>
                         )}
@@ -652,8 +703,8 @@ function TemplateEditor({ tenantId, adminToken, availablePools, modules, templat
         max_concurrent_sessions: maxConcurrent,
       }
       const body = { tenant_id: tenantId, name: name.trim(), description: description.trim(), config }
-      if (isEdit) await apiFetch(`/auth/templates/${template!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
-      else        await apiFetch('/auth/templates', adminToken, { method: 'POST', body: JSON.stringify(body) })
+      if (isEdit) await jsonFetch(`/auth/templates/${template!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
+      else        await jsonFetch('/auth/templates', adminToken, { method: 'POST', body: JSON.stringify(body) })
       setSuccessMsg(isEdit ? t('messages.templateSaved') : t('messages.templateCreated'))
       onSaved()
     } catch (ex) { setErr(String(ex)) }
@@ -799,12 +850,14 @@ interface UsersPaneProps {
   modules:        ModuleSchema[]
   templates:      PermTemplate[]
   users:          PlatformUser[]
+  /** A lista pode estar cortada pela paginacao — ver `USERS_PAGE_LIMIT`. */
+  usersTruncated: boolean
   loading:        boolean
   error:          string | null
   reload:         () => void
 }
 
-function UsersPane({ tenantId, adminToken, availablePools, modules, templates, users, loading, error, reload }: UsersPaneProps) {
+function UsersPane({ tenantId, adminToken, availablePools, modules, templates, users, usersTruncated, loading, error, reload }: UsersPaneProps) {
   // Lido aqui e nao recebido por prop: e a MESMA fonte que o Sidebar e as rotas usam
   // (`session.moduleConfig`), e passar por prop criaria uma segunda copia da decisao.
   const { perms } = useAuth()
@@ -829,16 +882,41 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
     acc[r] = users.filter(u => u.roles.includes(r)).length; return acc
   }, {})
 
+  // AUT-14 — guarda ÚNICA para os três caminhos que tiram um vigia de circulação
+  // (modal, desativar na lista, apagar). Duplicá-la seria pedir que um deles fique para
+  // trás no primeiro ajuste — e o esquecido não deixa rastro, porque o sintoma do pool
+  // órfão é AUSÊNCIA: ele segue recebendo contato, invisível.
+  //
+  // Avisa, nunca IMPEDE: pool sem vigia é config válida; o que não pode é ser silenciosa.
+  function confirmaSemVigia(u: PlatformUser, escopoDepois: string[]): boolean {
+    const vaiOrfanar = orphansAfter(
+      users,
+      availablePools.map(p => p.pool_id),
+      { id: u.id, active: false, accessiblePools: escopoDepois },
+    )
+    if (vaiOrfanar.length === 0) return true
+    return window.confirm(
+      t('users.orphanWarning', { count: vaiOrfanar.length, pools: vaiOrfanar.join(', ') }),
+    )
+  }
+
+  const censo = computeCoverage(users, availablePools.map(p => p.pool_id), usersTruncated)
+  const orfaos = censo.orphans
+
   async function handleToggleActive(u: PlatformUser) {
     setActionErr(null)
+    // Só a DESATIVAÇÃO tira vigia; reativar só acrescenta cobertura.
+    if (u.active && !confirmaSemVigia(u, u.accessible_pools)) return
     try {
-      await apiFetch(`/auth/users/${u.id}`, adminToken, { method: 'PATCH', body: JSON.stringify({ active: !u.active }) })
+      await jsonFetch(`/auth/users/${u.id}`, adminToken, { method: 'PATCH', body: JSON.stringify({ active: !u.active }) })
       void reload()
     } catch (ex) { setActionErr(String(ex)) }
   }
 
   async function handleDelete(u: PlatformUser) {
     setActionErr(null)
+    // Apagar é desativar de forma irreversível: para a cobertura, o efeito é o mesmo.
+    if (u.active && !confirmaSemVigia(u, u.accessible_pools)) return
     try {
       const res = await apiFetch(`/auth/users/${u.id}`, { method: 'DELETE', headers: authHeaders(adminToken) })
       if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`)
@@ -855,6 +933,25 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
           <div className="flex justify-between text-sm"><span className="text-muted">{t('users.total')}</span><span className="font-semibold">{total}</span></div>
           <div className="flex justify-between text-sm"><span className="text-green">{t('users.active')}</span><span className="font-semibold text-green-text">{active}</span></div>
           <div className="flex justify-between text-sm"><span className="text-red">{t('users.inactive')}</span><span className="font-semibold text-red-text">{total - active}</span></div>
+          {/* AUT-14 — ÚNICO alarme: pool com ZERO vigias. Ele não fica desligado; o
+              roteamento não consulta `accessible_pools`, então segue recebendo contato,
+              invisível no Monitor e nos relatórios. "Preso a um vigia" NÃO entra aqui:
+              seria exposição publicada como dano (D14.1), e na instalação medida daria
+              31 de 36 — alarme que dispara em 86% da população não é sinal. */}
+          {censo.truncated && (
+            <div className="mt-2 pt-2 border-t border-border">
+              <p className="text-xs text-warning-text leading-snug">{t('users.poolsUnwatchedUnknown')}</p>
+            </div>
+          )}
+          {orfaos.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-border" title={orfaos.join(', ')}>
+              <div className="flex justify-between text-sm">
+                <span className="text-warning">{t('users.poolsUnwatched')}</span>
+                <span className="font-semibold text-warning-text">{orfaos.length}</span>
+              </div>
+              <p className="text-xs text-muted-light mt-1 leading-snug">{t('users.poolsUnwatchedHint')}</p>
+            </div>
+          )}
         </div>
         <div className="p-4 border-b border-border">
           <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">{t('users.role')}</p>
@@ -968,7 +1065,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
       </div>
 
       {modalUser !== undefined && (
-        <UserModal tenantId={tenantId} adminToken={adminToken} user={modalUser}
+        <UserModal tenantId={tenantId} adminToken={adminToken} user={modalUser} allUsers={users}
           availablePools={availablePools} modules={modules} templates={templates}
           canGrant={canGrant}
           onClose={() => setModalUser(undefined)} onSaved={reload} />
@@ -1089,7 +1186,7 @@ export default function AccessPage() {
   // access token da sessão (nome `adminToken` mantido só p/ minimizar o diff).
   const adminToken = session?.accessToken ?? ''
 
-  const { users, loading, error, reload } = useUsers(tenantId, adminToken)
+  const { users, truncated: usersTruncated, loading, error, reload } = useUsers(tenantId, adminToken)
   const { pools } = usePools(tenantId)
   const { modules } = useModules(adminToken)
   // Single source: templates shared by the Templates tab (list + save/reload) AND the
@@ -1129,7 +1226,7 @@ export default function AccessPage() {
       {/* Content */}
       <div className="flex-1 overflow-hidden flex">
         {activeTab === 'users' && (
-          <UsersPane tenantId={tenantId} adminToken={adminToken}
+          <UsersPane tenantId={tenantId} adminToken={adminToken} usersTruncated={usersTruncated}
             availablePools={pools} modules={modules} templates={templates}
             users={users} loading={loading} error={error} reload={reload} />
         )}

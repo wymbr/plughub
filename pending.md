@@ -128,14 +128,15 @@ O arco ABAC TOTAL (8 passos) está em `done.md`. Aqui fica só o que não fechou
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| AUT-10 | **(a) Afordância do escopo vazio.** A tela avisa que operar exige escopo de pool atribuído. Ao CRIAR um pool, oferecer sua inclusão no perfil do criador (`Pool.created_by` já existe) — ⚠️ **gatear a oferta por `config.permissions`**, senão vira auto-grant: criar pool exige `config.resources`, que é módulo DIFERENTE, e teríamos duas portas para a mesma decisão | `aberto` | decidido 2026-08-31 |
+| AUT-10 | **Afordância do escopo vazio + oferta ao criar pool.** *(decidido 2026-08-31)* A tela avisa que operar exige escopo atribuído; ao criar um pool, oferta de incluí-lo no próprio perfil, **gateada por `config.permissions`** (criar pool exige `config.resources`, módulo DIFERENTE — sem o gate seriam duas portas para a mesma decisão). Quem não pode conceder recebe *"peça a quem administra permissões"*, nunca um botão que sempre 403. **Sem recusa dura** — ela esbarra em três isenções (seeder cria 35 dos 36 pools, duas bases sem transação, espelho `-int` com acesso derivado) e tiraria a criação de quem tem só `config.resources`. ⚠️ **NÃO depende de `Pool.created_by`**: medido, ele não contém usuário nenhum (35 `registry-syncer`, 1 `e2e-runner`) e o `createPool` da UI sequer envia `x-user-id` | `aberto` | decidido 2026-08-31 |
 | AUT-12 | **(c) Papel semeado vira config**, ao lado de `seed_admin_email`/`password`/`name`, que já são config — hoje só `roles` ficou de fora, o que é incoerência e não decisão | `aberto` | decidido 2026-08-31 |
 | AUT-15 | **Resto do campo `unrestricted`: só a superfície de PERSISTÊNCIA/API.** O caminho vivo fechou (não é emitido, não é lido, não decide escopo de supervisão). Sobram: `models.py` (4 campos) · `db.py` CRUD+DDL · guarda de capacidade `router.py:115-156` · coluna do banco (migração destrutiva, tratar à parte) · `_user_to_response` | `aberto` | 2026-08-31 |
 | AUT-20 | **`api/registry.ts` — 23 chamadas sem credencial, e a outra origem.** Excluído da migração de propósito: `getBaseUrl()` devolve `VITE_REGISTRY_URL || http://localhost:3300`, ou seja **fura o proxy e vai a outra origem** (só funciona em dev, e mandar Bearer cross-origin merece decisão, não varredura). É o ÚNICO resto real. Usado por config-channels e `config-recursos/PoolsPage` | `aberto` | medido 2026-08-31 |
 | AUT-21 | **Estender `probe_ui_credential_coverage.sh` além de analytics.** O portão existe desde 2026-08-28 e está verde, mas só cobre chamadas a **analytics** — e declara o próprio ponto cego (*"3 chamadas com URL não-literal, fora do alcance desta via; é assim que o CardRenderer escapou"*). A migração de hoje fechou 116 chamadas que ele não vigiava; sem estender o portão, a próxima nasce sem gate | `aberto` | derivado 2026-08-31 |
-| AUT-19 | **"Vazio" tem duas causas e a tela não as distingue.** Decorre do lembrete do dono: pool vazio é **config válida**, então a lista vazia por falta de credencial fica indistinguível de escopo legitimamente vazio. O servidor já separa as duas no log (ausente × inválido); falta decidir se a RESPOSTA carrega a distinção, para a tela dizer *"sessão expirada"* em vez de *"nenhum pool"* | `aberto` | derivado 2026-08-31 |
-| AUT-14 | **Deriva do check-all.** "Selecionar todos" é INSTANTÂNEO, não regra: concede os N pools de hoje e não o N+1 de amanhã. O sintoma é AUSÊNCIA — *"a falha mais provável desta ADR"*, nas palavras de `pool_auth.py:70`. Tornar visível (lista de "pools sem escopo atribuído" e/ou oferta no fluxo de criação), nunca deduzir em silêncio | `aberto` | derivado 2026-08-31 |
 | AUT-09 | `analytics-api/auth.py:47` — `Principal.role == "admin"` carrega *"assinado pelo segredo de SISTEMA"*, não papel de produto (o próprio comentário diz: *"papel de produto não é papel de sistema"*). São **dois fatos no mesmo campo**, com o mesmo vocabulário que o passo 8 removeu em toda parte. Renomear para `principal_kind: system\|user` | `aberto` | medido 2026-08-31 |
+| AUT-26 | **Três pacotes declaram testes e não têm runner na imagem** — `sdk` e `gitagent` (sem container algum) e `mcp-server-knowledge` (tem container, a imagem não traz vitest). É o mesmo *"declara e não instala"* que o gêmeo Python mediu nas 14 imagens. O `probe_ts_suites.sh` os **NOMEIA a cada execução** em vez de omitir, e de propósito não reprova por isso: gate que nasce vermelho ensina a ser ignorado | `aberto` | medido 2026-08-31 |
+| AUT-25 | **O `platform-ui` não tem suíte de teste — zero `*.test.*`, sem vitest/jest.** ⚠️ *Metade FECHADA em 2026-08-31:* o typecheck do pacote virou o ramo C do `probe_apifetch_reauth.sh`, e ele existe porque compilar dois arquivos **não pega colisão de nome** — foi assim que a varredura da AUT-18 quebrou quatro arquivos e o build sem nada ficar vermelho. O que sobra é a decisão: o pacote ganha suíte própria (custo: dependência + config + CI) ou fica com harnesses pontuais compilando arquivos de produção, como o da AUT-19? | `aberto` | decidido em parte 2026-08-31 |
+| AUT-22 | **`config.permissions` deve ser `scopable`?** Hoje e `false`: a capacidade e do tenant INTEIRO, logo auto-conceder um pool **nao e escalacao para o detentor legitimo** — ele ja manda no escopo de todos. A tela de Access lista os 36 pools porque `GET /v1/pools` filtra so por tenant. Se algum dia existir "admin regional", isso muda e a lista irrestrita vira furo. **Pergunta de desenho, nao defeito** | `adiado` — gatilho: surgir papel de administracao de permissoes com escopo | ADR granularidade, secao "NAO decide" |
 | AUT-01 | Recorte de pool nos **AGREGADOS**: as `query_*` que servem as 12 rotas de `reports.py` não aceitam `accessible_pools` — **não é argumento esquecido, é filtro que não existe**. Inventá-lo por rota escolheria qual coluna é "o pool da agregação", e o precedente está medido (F2: um filtro de canal que não filtrava, **esvaziava**) | `aberto` | `CLAUDE.md` § Security |
 
 ⚠️ **Por que AUT-03 é `bloqueado` e não `aberto`.** O interruptor é único e os testes cobrem os
@@ -144,6 +145,24 @@ devolver `[]`, e todo consumidor que trate lista vazia como "sem filtro" convert
 liberação — sem erro, sem log, sem tela vermelha. É a assinatura da § Postura de Engenharia: o
 valor plausível (um relatório que responde normalmente) escondendo o defeito. Inverter antes da
 AUT-04 é trocar um vazamento conhecido por um vazamento invisível.
+
+---
+
+## `docs/adr/adr-abac-module-granularity-and-delegation.md` — granularidade e delegacao ABAC
+
+Nasceu da demanda do dono (2026-08-31): rotatividade alta exige que o supervisor contrate sem
+poder reescrever a propria fronteira. **A ordem G1 -> G2 -> G3 e inegociavel** — revogar antes
+de existir o veiculo tira a contratacao do supervisor sem dar nada em troca.
+
+| id | tarefa | estado | evidencia |
+|---|---|---|---|
+| MOD-01 | **G0 — censo de `config.permissions`**: quem detem no banco x quem `role_defaults`+seed declaram. Medido: `supervisor@` e `useradmin@` detem contra a declaracao. Instrumento antes de qualquer mudanca | `aberto` | medido 2026-08-31 |
+| MOD-02 | **G1 — D3+D4**: rota `apply-template` (capacidade vem do template, nunca do corpo) + flag `delegable` + **recusa derivada** para template que conceda campo privilegiado. Sem a D4 o desenho e caminho de escalacao: `config.users` + template admin + senha + login | `bloqueado` por MOD-01 | ADR D3/D4 |
+| MOD-03 | **G2 — D5**: decidir QUEM aplica (campo proprio x junto de `config.users` x pelo `access`) e implementar a criacao de usuario por template na UI | `bloqueado` por MOD-02 | ADR D5 (aberta) |
+| MOD-04 | **G3 — revogar `config.permissions`** de `supervisor@` e de quem mais o censo apontar, pela API oficial | `bloqueado` por MOD-03 | ADR fase G3 |
+| MOD-05 | **G4 — corte #1**: `contacts.operacao` -> `monitorar` x `atender`. Inclui backfill de todo portador do campo largo, senao o corte rebaixa em silencio | `aberto` | ADR D6 #1 |
+| MOD-06 | **G5 — cortes #2 e #3**: `workflows.operacao` (Editor x Monitor) e `config.resources` (Pools x Skills) | `bloqueado` por MOD-05 | ADR D6 #2/#3 |
+| MOD-07 | **G6 — corte #4**: recorte de `contacts.visualizar` por superficie de Analytics | `bloqueado` por AUT-01 | ADR D6 #4 |
 
 ---
 

@@ -1,5 +1,315 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Pool sem vigia: o alarme é só o órfão, e ele se recusa a mentir (2026-08-31)
+
+**AUT-14.** Depois da AUT-03 (`accessible_pools: []` = NENHUM pool) um pool pode ficar
+sem nenhum usuário no escopo — e isso **não o desliga**. O roteamento não consulta
+`accessible_pools`: ele segue recebendo contato, enfileirando e consumindo licença,
+**invisível** no Monitor, no Console e nos relatórios. Não é um pool morto; é um pool
+**sem vigia**, e o sintoma é AUSÊNCIA — a linha que ninguém vê.
+
+### O segundo número foi recusado, e a recusa procede
+
+A proposta inicial trazia **dois** alarmes: órfão (zero vigias) e frágil (exatamente
+um). O dono recusou o segundo, e o argumento mais forte é do próprio `CLAUDE.md`:
+
+> *"exposição e dano são grandezas separadas... contou-se quem foi exposto e chamou-se
+> de sofrimento"* — § D14.1
+
+E há um agravante aritmético: o número medido era **31 de 36**, ou seja **86% da
+população**. Alarme que dispara em 86% dos casos não é sinal — é o portão
+permanentemente vermelho que ensina a ser ignorado. Pior, o 31 era **artefato** do grant
+de 36 pools dado ao `admin@` horas antes, não evidência sobre produção.
+
+### Mas o fato não foi descartado — estava no contêiner errado
+
+Duas correções que não são concessões:
+
+1. **"1 usuário" não é o fato interessante.** O fato é *"31 pools dependem da MESMA
+   conta"* — isso é do **tenant**, não do pool. Lido por pool virava ruído, porque cada
+   linha isolada **é** normal.
+2. **Exposição vira dano num instante nomeável: a desativação.** É lá que a checagem
+   pertence. E são **três** os caminhos que tiram um vigia de circulação — o modal,
+   o "desativar" da lista e o "apagar" —, todos passando por um decisor único
+   (`confirmaSemVigia`). Duplicá-lo seria pedir que um fique para trás no primeiro
+   ajuste, e o esquecido não deixa rastro, porque o sintoma já era ausência.
+
+**Avisa, nunca impede:** pool sem vigia é configuração válida. O que não pode é ser
+silenciosa.
+
+### ⚠️ O achado que teria invertido o valor do alarme
+
+`GET /auth/users` **pagina**, com `limit` default **100** — e a tela pedia a lista sem
+parâmetro nenhum. Um censo de cobertura sobre lista cortada não erra para menos: ele
+publica **órfão FALSO**, porque o pool coberto por quem não veio na página aparece como
+descoberto. É precisamente assim que se ensina alguém a ignorar um alarme, e teria
+acontecido no primeiro tenant com mais de 100 contas.
+
+Hoje o teto é **explícito**, e quando a lista pode estar cortada o censo **declara que
+não sabe** (`truncated`) em vez de afirmar ausência. O mapa de contagens sobrevive como
+piso honesto (*"ao menos N"*); o alarme, não — **ausência não se deduz de amostra**.
+
+### Gate: `infra/test/probe_pool_coverage.sh`
+
+Compila `access/pool-coverage.ts` — o arquivo de produção — em `strict` com
+`noUncheckedIndexedAccess`, e o exerce em **11 casos**. A flag extra pagou no ato: forçou
+trocar `if (p in byPool)` por leitura do VALOR, que é a mesma distinção da AUT-03 —
+presença de chave e valor são fatos diferentes.
+
+Falseabilidade por mutação: contar usuário inativo reprova **3** casos (incluindo o que
+reproduz o 31-de-36 medido); acusar órfão preexistente reprova **1**, e é a mutação que
+mais importa, porque um aviso que sempre aparece é um aviso que alguém desliga.
+
+Por que um cálculo de tela merece portão: ele erra **calado nas duas direções** — contar
+inativo faz órfão parecer coberto (e o sintoma do órfão já era ausência), e culpar a
+mudança errada transforma o aviso em ruído. Nenhum dos dois fica vermelho sozinho.
+
+---
+
+## As suítes TS voltaram a ser instrumento: 596 verdes, e o que o vermelho escondia (2026-08-31)
+
+**AUT-24.** `agent-registry` 6/33 e `mcp-server-plughub` 1/222, vermelhos há tempo
+indeterminado. O custo foi pago **no mesmo dia** em que se decidiu consertá-las:
+precisando saber se um conserto tinha quebrado algo, foi preciso rodar cada pacote
+**duas vezes** — uma com a versão do `HEAD` — só para descobrir que o vermelho era
+herdado. **Suíte vermelha por default deixa de ser instrumento de regressão e vira
+ritual manual.**
+
+### O diagnóstico era pior que "teste atrás do portão"
+
+As 6 falhavam com `expected 401 to be 201`, o que sugere apenas testes sem credencial.
+Medindo: **o veredicto dependia de ambiente não declarado, e errava dos dois lados.**
+
+- Na máquina de quem não exporta `PLUGHUB_JWT_SECRET`, o `requireResourceWrite` vira
+  no-op e a suíte ficava **VERDE sem nunca exercer o portão** — a família *teste que não
+  pode reprovar*;
+- dentro do container, onde o segredo existe, as mesmas asserções ficavam vermelhas.
+
+**O verde era o pior dos dois.** Hoje o teste **declara o próprio ambiente** com
+`vi.hoisted`, que roda antes dos imports — necessário porque `config.ts` lê
+`process.env` no import e `../app` importa `config`; um `beforeAll` chegaria tarde.
+
+E limpa `AGENT_REGISTRY_SERVICE_TOKEN` **de propósito**: com ele a requisição passaria
+pelo atalho de serviço e o ramo **Bearer+ABAC — que é o que a UI usa — ficaria sem
+teste**. Consertar o vermelho pelo caminho mais curto teria apagado a cobertura.
+
+### Vermelho guarda vermelho de outra natureza
+
+Com o 401 fora do caminho, apareceram **três falhas que ele escondia**: o mock do Kafka
+não tinha `publishRegistryChanged` e o do Prisma não tinha `poolSkillSlot` — mocks
+velhos em relação ao código, invisíveis enquanto a requisição morria no portão. É a
+razão de suíte vermelha ser pior que suíte nenhuma: ela **empilha** falhas de naturezas
+diferentes sob um sintoma só.
+
+### O vermelho do `mcp-server` era do INSTRUMENTO, não do produto
+
+`conversation_escalate publica evento…` falhava porque a tool passou a **recusar**
+escalação sem `tenant_id` conhecido — *"identidade não tem fallback"*: canal tem (palpite
+errado degrada a entrega), tenant não (palpite errado escreve estado de um contato real
+num namespace alheio, e ele morre em silêncio **depois** de o cliente ser avisado da
+transferência). O teste ainda afirmava o contrato antigo. Quem lesse a suíte concluiria
+que a escalação está quebrada.
+
+### Quatro testemunhas que não existiam
+
+Os testes cobriam só o caminho feliz — mediam o handler, nunca a fronteira. Entraram:
+**401** sem credencial, **403** sem `config.resources`, **403** com `read_only` (o rank
+exige `read_write`), e a do **fail-closed** da escalação. Sem elas, apagar o
+`requireResourceWrite` do `app.ts` ou reintroduzir o tenant inventado deixaria a suíte
+inteira verde. Ambas as mutações foram feitas e reprovam exatamente as testemunhas.
+
+Uma quinta afirma o oposto: **`GET /v1/pools` NÃO exige credencial, por decisão** — a
+tela de Access lista todos os pools do tenant para poder atribuí-los. Sem essa
+testemunha, alguém "endurece" o gate para GET e quebra a atribuição de escopo sem nada
+ficar vermelho.
+
+### Gate: `infra/test/probe_ts_suites.sh`
+
+Gêmeo do `probe_python_suites.sh`, com a mesma separação de proposições: **execução a
+partir da IMAGEM** (o único ambiente reprodutível — foi a dependência de env não
+declarado que causou tudo isto) e **cobertura NOMEADA**.
+
+Estado: **596 testes verdes** — `agent-registry` 37 · `mcp-server-plughub` 223 ·
+`skill-flow-engine` 167 · `schemas` 169. E três pacotes declaram testes sem runner na
+imagem (`sdk`, `gitagent`, `mcp-server-knowledge`): **nomeados a cada execução, e de
+propósito não reprovam** — gate que nasce vermelho ensina a ser ignorado, que é o
+defeito de origem. Registrado em AUT-26.
+
+---
+
+## `[]` com um significado só: 401 é credencial, `[]` é escopo (2026-08-31)
+
+**AUT-19.** Depois da AUT-23 o domínio vazio passou a existir de verdade — e passou a
+carregar **duas causas** que a tela não sabia separar: *"sua sessão expirou"* e *"você
+não tem pool nenhum atribuído"*. A segunda é **config válida**; a primeira se conserta
+sozinha. Anunciar escopo vazio para quem só precisava reautenticar é o valor plausível de
+sempre: a tela responde normalmente e mente.
+
+**Decisão do dono: eliminar a ambiguidade, não rotulá-la.** Credencial ausente/inválida
+vira **401**; escopo legítimo segue **200 + `[]`**. Mesma forma de *"remover a
+alternativa"* do portão grant-first — sem o valor ambíguo não há convenção a esquecer, e
+nenhum consumidor precisa aprender um campo novo.
+
+No servidor a decisão virou **união discriminada** (`unrestricted` × `scoped` ×
+`unauthorized`) em vez de um terceiro sentinela: o compilador **obriga** cada call site a
+tratar o caso 401, então um endpoint novo não consegue ignorá-lo em silêncio.
+
+### O achado que valia mais que a tarefa
+
+`GET /v1/operational/pools/:pool_id/queue` **não tinha verificação nenhuma** — nem
+credencial, nem escopo. Servia os `session_id` da fila de qualquer pool do tenant a quem
+chamasse, enquanto a irmã `GET /pools` (que devolve só **contagens**) já escopava. **Duas
+portas para o mesmo assunto e só uma trancada** — e a destrancada servia o conteúdo mais
+sensível das duas. É o padrão de `/sessions/{id}/stream`, de novo. Hoje exige credencial
+e recusa pool fora do escopo com `403` **nomeado**.
+
+### A metade cliente não é acessório
+
+Passar a devolver 401 sem renovação reativa trocaria *"Monitor vazio"* por *"Monitor
+quebrado"*: o re-auth era só por **timer**, que não cobre aba suspensa, laptop que
+dormiu, relógio atrasado nem segredo rotacionado — casos em que o token parece válido
+**localmente** e o servidor o recusa. Por isso a renovação aqui é **forçada**, não
+`getAccessToken()`, que devolveria o mesmo token stale.
+
+⚠️ **O single-flight não é otimização — é correção.** O refresh token é **rotativo**:
+cada renovação invalida a anterior. Sem dedup, N respostas 401 simultâneas (o Monitor
+dispara várias) fariam N refreshes se derrubando, e **a sessão morreria exatamente quando
+tentasse se salvar**. Na tela isso apareceria como *"deslogou sozinho"*, que ninguém liga
+a este código. O `runRefresh` foi extraído para haver **uma** implementação servindo os
+dois gatilhos — duas divergiriam no primeiro ajuste, como já aconteceu com o resolvedor
+de escopo.
+
+**Chamador migrado junto:** `smoke_admission_licensing.sh` batia na rota sem credencial e
+passaria a sair `INCONCLUSIVO` por 401, que alguém leria como *"agent-registry fora do
+ar"*. Fechar uma borda obriga a migrar quem a atravessa — terceira vez esta semana.
+
+### ⚠️ A varredura da AUT-18 tinha quebrado o build, e ninguém sabia
+
+Ao typechecar o `platform-ui` (por outro motivo) apareceram **34 erros**. Causa: a
+varredura de 08-30 trocou `fetch(` por `apiFetch(` **dentro de quatro helpers locais que
+já se chamavam `apiFetch`** — criando **auto-recursão infinita** — e ainda acrescentou o
+`import` homônimo. `AccessPage`, `GroupsPage`, `outbound/api.ts`, `schedules/api.ts`.
+
+Medido antes de atribuir: a contagem de erros é **idêntica com e sem as mudanças de
+hoje** ⇒ herdada de ontem, não regressão de agora. E a imagem em execução é de
+**2026-08-29**, anterior ao commit — a demo servia o bundle antigo e estava intacta. O
+defeito estava na **árvore**, e teria embarcado no próximo rebuild.
+
+**Por que nenhum instrumento pegou:** o `probe_ui_credential_coverage` conta chamadas por
+**texto**, e o `vite dev` **não typecheca**. *Colisão de nome é invisível para grep* — e
+era exatamente o que um `tsc --noEmit` custaria um segundo para ver. Hoje os quatro
+helpers se chamam `jsonFetch` e **delegam** ao `apiFetch` compartilhado, que é o que a
+AUT-18 queria. Typecheck: **0 erros**. Lacuna registrada em AUT-25.
+
+### Medição (controle positivo em toda rodada)
+
+| chamador | `/pools` | `/api/instances` | `/pools/:id/queue` |
+|---|---|---|---|
+| `admin@` (36 pools) | 36 | 291 | 200 |
+| `probe@` (claim `[]`) | 0 (200) | 0 (200) | **403** |
+| sem header | **401** | **401** | **401** |
+| token inválido | **401** | **401** | **401** |
+
+### Gates
+
+`probe_ts_scope_resolvers.sh` estendido: o 200-com-lista-vazia e o 401 são medidos como
+**fatos separados** — sem os dois lados, um serviço que devolvesse 401 para tudo passaria.
+
+`probe_apifetch_reauth.sh` **novo**, e ele compila **os arquivos de produção** (única
+adaptação: o alias `@/` vira import relativo) em vez de manter cópias. Sete casos de
+comportamento; o ramo C typecheca o pacote inteiro, porque compilar dois arquivos não
+pega colisão de nome — que é o defeito que acabou de custar um build.
+
+Falseabilidade provada por mutação: remover o single-flight reprova **só** o caso
+concorrente; remover a retentativa reprova três; e no gate do escopo, trocar `return []`
+por `return null` **mantendo o log** deixa a metade estática verde e reprova só a viva.
+
+O `platform-ui` não tem framework de teste — **zero** `*.test.*`, sem vitest/jest. Este
+harness é a resposta proporcional; a decisão sobre suíte própria fica em AUT-25.
+
+---
+
+## As duas cópias TS do resolvedor de escopo, e o log que não podia imprimir (2026-08-31)
+
+**AUT-23.** A virada da AUT-03 (`accessible_pools: []` = NENHUM pool) alcançou o `py-authz` e
+**deixou as duas cópias TypeScript para trás por um dia**. Python e TypeScript passaram a
+discordar sobre o mesmo claim: a mesma conta recebia 0 linhas no analytics e **os 36 pools do
+tenant** no Monitor.
+
+**Como apareceu.** Ao medir a AUT-19 (*"vazio tem duas causas e a tela não as distingue"*),
+verificou-se que **no TypeScript o vazio não era produzido** — lista vazia virava *tudo*. Decidir
+como a tela distingue duas causas de um valor que ainda não existe seria decidir sobre população
+inexistente; por isso este item passou à frente daquele.
+
+**Dois ramos, e o segundo é o mais instrutivo.**
+
+- `[] → null` — o ramo LEGADO, com o comentário *"Some na AUT-03"* ainda por cumprir, nas duas
+  cópias (`agent-registry/routes/operational.ts`, `mcp-server-plughub/server.ts`).
+- `if (!auth.startsWith("Bearer ")) return null` — no `agent-registry` esse early-return ficava
+  **ANTES do `try`**, então o caso *sem header* jamais alcançava o `catch` da AUT-17 e seguia
+  irrestrito, **calado**. A consequência é que o ramo `"sem header Authorization"` da mensagem de
+  log daquele `catch` era **INALCANÇÁVEL** — e foi ele que denunciou o defeito. *Um log que não
+  pode imprimir é da mesma família do teste que não pode reprovar: comprou-se confiança sem
+  receber nada.* No `mcp-server` a AUT-17 valia inteira, porque `verifyJwtPayload` levanta.
+
+⚠️ **Erro de registro corrigido.** O `done.md` da AUT-17 dizia *"as duas cópias devolviam
+irrestrito em token ausente/inválido; agora devolvem domínio vazio"*. Era verdade para uma das
+duas. A linha foi corrigida em vez de reescrita — quem a ler saberá que a afirmação já foi maior
+que o fato.
+
+**Por que nenhum censo pegou.** Terceiro eixo, terceiro ponto cego: o
+`_accessible_pools_census.py` é AST sobre **Python**; o `probe_authz_single_verifier` conta quem
+**decodifica JWT**, e estas duas consomem claims já decodificados. *Um censo desenhado para um
+eixo não prova nada sobre o eixo vizinho* — pela terceira vez.
+
+**Medição, sempre com controle positivo na mesma rodada** (sem ele, zeros provam serviço fora do
+ar, não escopo):
+
+| chamador | antes | depois |
+|---|---|---|
+| `admin@` (36 pools) | 36 pools / 291 instâncias | **inalterado** |
+| `probe@` (claim `[]`) | **36 pools** | 0 / 0 |
+| sem header | **36 pools**, sem log | 0 / 0 |
+| token inválido | 0 | 0 |
+
+O primeiro teste ao vivo saiu *"36/36/36"* e foi **descartado**: o login usava porta e rota
+erradas, os três tokens vinham vazios e o número era o mesmo fato repetido três vezes. Sem
+controle positivo, um resultado uniforme é indistinguível de instrumento quebrado.
+
+**Cauda conferida antes do conserto**, não depois: o `routing-engine` já distingue `pools`
+ausente (tenant) de `pools=` presente e vazio (`empty_scope`), e os consumidores em
+`operational.ts` tratam `[]` corretamente (`[]` é truthy em JS ⇒ `Set` vazio ⇒ filtra tudo). O
+único ajuste foi **repassar o motivo do engine** em vez de rotular tudo como `no_rollup`:
+`empty_scope` e `no_rollup` são dois fatos, e só o segundo é problema de infraestrutura — juntá-los
+faria a tela pedir suporte para uma config válida.
+
+**O único ramo que ainda devolve irrestrito** é `PLUGHUB_JWT_SECRET` ausente, que é postura de
+**serviço** (a mesma de `requireResourceWrite`), não decisão sobre um usuário — e agora **loga**.
+
+**Gate: `infra/test/probe_ts_scope_resolvers.sh`**, em duas metades, provadas **não redundantes**
+por mutação:
+
+- **(B) fonte** — o marcador do ramo legado não pode voltar, e o sítio tem de declarar o domínio
+  vazio (senão apagar o marcador passaria verde por remoção, não por conserto);
+- **(A) vivo** — controle positivo **antes** de qualquer negativo, e `INCONCLUSIVO` (nunca verde)
+  quando a stack está fora ou a fixture de escopo vazio não tem mesmo `[]`.
+
+A mutação decisiva: trocar `return []` por `return null` **mantendo o log intacto** deixa a metade
+estática **verde nas quatro** e reprova só a viva. A recíproca (marcador de volta ao fonte) reprova
+só a estática.
+
+**Suítes conferidas contra o baseline do `HEAD`, não contra a expectativa**: `agent-registry`
+6/27 e `mcp-server` 1/221 — idênticas antes e depois, logo **herdadas**. As 6 são
+`expected 401 to be 201/409/422`: testes atrás de um portão de autorização, **sétima ocorrência**
+do padrão que o `CLAUDE.md` cataloga. Registradas em AUT-24, não consertadas aqui.
+
+Comentários corrigidos junto, porque passaram a mentir: o cabeçalho de `_accessiblePools`, o
+`types/index.ts` (*"LEGADO: ainda resolve todos até a AUT-03"*) e o `apiFetch.ts`, cujo motivo
+**inverteu** — anexar o Bearer deixou de ser o que amplia e passou a ser o que **habilita**: tela
+não migrada agora aparece vazia, não completa.
+
+---
+
 
 ## `accessible_pools: []` — a auditoria, os 3 vazamentos e a porta larga que o SEED reabria (2026-08-31)
 

@@ -114,7 +114,12 @@ export interface WebhookPool {
 
 // ── Fetch helpers ────────────────────────────────────────────────────────────
 
-async function apiFetch(path: string, opts?: RequestInit) {
+// ⚠️ RENOMEADO em 2026-08-31 (AUT-19). Este helper JA se chamava `apiFetch`, e a
+// varredura da AUT-18 (2026-08-30) trocou o `fetch(` do corpo dele por `apiFetch(`,
+// criando **auto-recursao infinita**, mais um `import { apiFetch }` no topo que colide
+// com o nome. Hoje ele DELEGA ao apiFetch compartilhado — que e o que a AUT-18 queria —
+// e mantem o que so ele fazia: Content-Type e levantar em nao-2xx.
+async function jsonFetch(path: string, opts?: RequestInit) {
   const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
     ...opts,
@@ -133,15 +138,15 @@ export function makeOutboundApi(tenantId: string) {
   return {
     // ── Mailings ──
     listMailings: (): Promise<{ mailings: Mailing[]; total: number }> =>
-      apiFetch('/v1/mailings', { headers: th }),
+      jsonFetch('/v1/mailings', { headers: th }),
     createMailing: (body: object): Promise<Mailing> =>
-      apiFetch('/v1/mailings', { method: 'POST', headers: th, body: JSON.stringify(body) }),
+      jsonFetch('/v1/mailings', { method: 'POST', headers: th, body: JSON.stringify(body) }),
     updateMailing: (id: string, body: object): Promise<Mailing> =>
-      apiFetch(`/v1/mailings/${id}`, { method: 'PATCH', headers: th, body: JSON.stringify(body) }),
+      jsonFetch(`/v1/mailings/${id}`, { method: 'PATCH', headers: th, body: JSON.stringify(body) }),
     removeMailing: (id: string) =>
-      apiFetch(`/v1/mailings/${id}`, { method: 'DELETE', headers: th }),
+      jsonFetch(`/v1/mailings/${id}`, { method: 'DELETE', headers: th }),
     listEntries: (id: string, status?: string): Promise<{ entries: MailingEntry[]; total: number }> =>
-      apiFetch(`/v1/mailings/${id}/entries${status ? `?status=${status}` : ''}`, { headers: th }),
+      jsonFetch(`/v1/mailings/${id}/entries${status ? `?status=${status}` : ''}`, { headers: th }),
     /** File import (multipart) — parses via the mailing's column_map (Fase 4). */
     importFile: async (id: string, file: File): Promise<ImportReport> => {
       const fd = new FormData()
@@ -153,19 +158,19 @@ export function makeOutboundApi(tenantId: string) {
 
     // ── Campaigns ──
     listCampaigns: (): Promise<{ campaigns: Campaign[]; total: number }> =>
-      apiFetch('/v1/campaigns', { headers: th }),
+      jsonFetch('/v1/campaigns', { headers: th }),
     createCampaign: (body: object): Promise<Campaign> =>
-      apiFetch('/v1/campaigns', { method: 'POST', headers: th, body: JSON.stringify(body) }),
+      jsonFetch('/v1/campaigns', { method: 'POST', headers: th, body: JSON.stringify(body) }),
     updateCampaign: (id: string, body: object): Promise<Campaign> =>
-      apiFetch(`/v1/campaigns/${id}`, { method: 'PATCH', headers: th, body: JSON.stringify(body) }),
+      jsonFetch(`/v1/campaigns/${id}`, { method: 'PATCH', headers: th, body: JSON.stringify(body) }),
     listDeliveries: (id: string, limit = 200): Promise<{ deliveries: CampaignDelivery[]; total: number }> =>
-      apiFetch(`/v1/campaigns/${id}/deliveries?limit=${limit}`, { headers: th }),
+      jsonFetch(`/v1/campaigns/${id}/deliveries?limit=${limit}`, { headers: th }),
   }
 }
 
 /** Webhook-only pools from agent-registry (campaign target). */
 export async function fetchWebhookPools(tenantId: string): Promise<WebhookPool[]> {
-  const data = await apiFetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
+  const data = await jsonFetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
   const pools = (data?.pools ?? []) as Array<{ pool_id: string; channel_types?: string[] }>
   return pools
     .filter(p => (p.channel_types ?? []).includes('webhook'))
@@ -175,7 +180,7 @@ export async function fetchWebhookPools(tenantId: string): Promise<WebhookPool[]
 /** Calendars from calendar-api (contact-window dropdown). */
 export async function fetchCalendars(tenantId: string): Promise<Array<{ id: string; name: string }>> {
   try {
-    const data = await apiFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${tenantId}`)
+    const data = await jsonFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${tenantId}`)
     return (data ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))
   } catch {
     return []

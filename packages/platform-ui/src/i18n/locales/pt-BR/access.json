@@ -92,7 +92,14 @@
     "colSupervisor": "Owner",
     "groupsHint": "Membro ou owner do grupo. O escopo de dados do owner passa a valer no próximo login do usuário.",
     "legacyAllPools": "Todos (legado)",
-    "legacyAllPoolsHint": "Lista vazia e sem declaração explícita: este usuário vê todos os pools apenas pela convenção implícita. Marque “Sem restrição de pool” para preservar esse acesso."
+    "legacyAllPoolsHint": "Lista vazia e sem declaração explícita: este usuário vê todos os pools apenas pela convenção implícita. Marque “Sem restrição de pool” para preservar esse acesso.",
+    "poolWatchers": "{{count}} usuário",
+    "poolWatchers_other": "{{count}} usuários",
+    "poolsUnwatched": "Pools sem vigia",
+    "poolsUnwatchedHint": "Sem nenhum usuário com acesso — mas continuam recebendo contato, invisíveis no Monitor.",
+    "orphanWarning": "Esta mudança deixa {{count}} pool sem nenhum usuário com acesso:\n\n{{pools}}\n\nEles continuarão recebendo contato, mas ninguém os verá no Monitor nem nos relatórios. Confirma?",
+    "orphanWarning_other": "Esta mudança deixa {{count}} pools sem nenhum usuário com acesso:\n\n{{pools}}\n\nEles continuarão recebendo contato, mas ninguém os verá no Monitor nem nos relatórios. Confirma?",
+    "poolsUnwatchedUnknown": "Lista de usuários possivelmente incompleta — o censo de pools sem vigia não pode afirmar nada."
   },
   "roles": {
     "operator": "Operator",

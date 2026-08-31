@@ -29,49 +29,99 @@ function _getTenantId(req: Request): string {
 // O Monitor (superfície operacional) deve respeitar o DOMÍNIO de pools do usuário
 // (`accessible_pools`, Arc 7c), como os relatórios /reports. Lê o Bearer do auth-api
 // (mesmo segredo, PLUGHUB_JWT_SECRET) e devolve a lista permitida.
-//   null  → sem restrição (todos os pools): sem segredo configurado, sem token, token
-//           inválido (degrada aberto, como o optional_pool_principal), ou accessible_pools
-//           vazio ([] = admin/todos por convenção do auth-api).
+//   null  → sem restrição (todos os pools). ÚNICA causa desde a AUT-23: PLUGHUB_JWT_SECRET
+//           ausente, que é postura de SERVIÇO (auth desabilitada em dev), nunca decisão
+//           sobre um usuário — e mesmo essa loga.
+//   []    → NENHUM pool. Três causas, todas logadas e nomeadas: sem header Authorization,
+//           token inválido/expirado (AUT-17), e `accessible_pools` vazio no claim (AUT-03).
 //   [...] → restrito a esses pool_ids.
-// Escopo (não a fronteira dura de escrita): read-only, degradação graciosa — nunca 401.
-function _accessiblePools(req: Request): string[] | null {
+// Escopo (não a fronteira dura de escrita): read-only — recusa devolvendo domínio vazio,
+// nunca 401. Mas RECUSA: até 2026-08-31 esta função degradava ABERTA em dois ramos.
+// AUT-19 (2026-08-31): TRES desfechos, num tipo que o compilador obriga a tratar.
+//
+// Antes eram dois (`string[] | null`), e por isso `[]` carregava DUAS causas que a tela
+// nao sabia separar: "sua sessao expirou" e "voce nao tem pool nenhum atribuido" — a
+// segunda e config VALIDA. A decisao do dono foi **eliminar a ambiguidade, nao rotula-la**:
+// credencial ausente/invalida vira 401, e `[]` passa a significar exatamente uma coisa.
+// Mesma forma de "remover a alternativa" do portao grant-first: sem o valor ambiguo nao
+// ha convencao a esquecer.
+//
+// Uniao discriminada em vez de um terceiro valor sentinela porque o `switch`/`if` fica
+// EXIGIDO pelo compilador — um call site novo nao consegue ignorar o caso 401 em silencio.
+type _Scope =
+  | { kind: "unrestricted" }
+  | { kind: "scoped"; pools: string[] }
+  | { kind: "unauthorized"; reason: "missing_header" | "invalid_token" }
+
+function _resolveScope(req: Request): _Scope {
   const secret = config.jwt_secret
-  if (!secret) return null
+  if (!secret) {
+    // Postura de SERVICO (a mesma de `requireResourceWrite`): sem segredo configurado a
+    // auth esta desabilitada, e o dev/test roda irrestrito. NAO e decisao por usuario —
+    // por isso sobrevive a AUT-03. Mas nao pode ser MUDA: e o unico ramo que ainda
+    // devolve irrestrito a partir de uma requisicao HTTP.
+    console.warn(
+      "[operational] escopo IRRESTRITO: PLUGHUB_JWT_SECRET ausente — auth desabilitada " +
+      "neste servico. Em producao isto e defeito de deploy, nao configuracao.",
+    )
+    return { kind: "unrestricted" }
+  }
   const auth = (req.headers["authorization"] as string | undefined) ?? ""
-  if (!auth.startsWith("Bearer ")) return null
+  // AUT-23 (2026-08-31): este early-return devolvia `null` = IRRESTRITO, e por isso
+  // ficava ANTES do `try` — de modo que o ramo "sem header Authorization" do log abaixo
+  // era INALCANCAVEL. Um log que nao pode imprimir e da familia do teste que nao pode
+  // reprovar: comprou-se confianca sem receber nada, e a AUT-17 foi registrada como se
+  // cobrisse os dois casos quando cobria so o token invalido. Medido ao vivo: chamada
+  // SEM header nenhum recebia os 36 pools do tenant, calada.
+  if (!auth.startsWith("Bearer ")) {
+    console.warn("[operational] 401 — sem header Authorization")
+    return { kind: "unauthorized", reason: "missing_header" }
+  }
   try {
     const claims = verifyHs256(auth.slice("Bearer ".length), secret)
     const raw = claims["accessible_pools"]
     // Ordem idêntica à do `resolve_scope` do py-authz — dois serviços que respondem
     // diferente a "qual é o meu domínio?" divergem no primeiro ajuste:
     //   1. lista não-vazia → escopado;
-    //   2. senão → irrestrito LEGADO, contado. Some na AUT-03.
+    //   2. senão → domínio VAZIO (AUT-03, virada de 2026-08-31).
     //
     // ⚠️ O ramo `claim unrestricted → irrestrito` SAIU em 2026-08-31: sob ABAC total não
     // há porta larga por claim, porque pools são do TENANT e não da plataforma. Esta é
     // uma das DUAS cópias TS do resolvedor que nenhum censo contava — o
     // `probe_authz_single_verifier` conta quem DECODIFICA JWT, e estas consomem claims
-    // já decodificados. Mantê-la em sincronia é obrigação, não estilo.
-    if (Array.isArray(raw) && raw.length > 0) return raw.map((p) => String(p))
-    console.warn(
-      `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio. ` +
-      `sub=${claims["sub"] ?? ""}`,
+    // já decodificados. Mantê-la em sincronia é obrigação, não estilo — e foi
+    // exatamente aqui que ela quebrou: a AUT-03 virou o py-authz e deixou as duas
+    // copias TS no ramo legado por um dia, com Python e TypeScript discordando sobre o
+    // que `accessible_pools: []` significa.
+    if (Array.isArray(raw) && raw.length > 0) {
+      return { kind: "scoped", pools: raw.map((p) => String(p)) }
+    }
+    // Config VALIDA (pool e do tenant; o usuario pode legitimamente nao alcancar
+    // nenhum), entao `info`, nao `warn` — e 200 com lista vazia, NUNCA 401. Depois da
+    // AUT-19 este e o UNICO produtor de dominio vazio, e e o que da a `[]` um
+    // significado so. Mas nunca silencio: "nao vejo nada" e o sintoma que chega, e sem
+    // esta linha ele e indistinguivel de tela quebrada.
+    console.info(
+      `[operational] dominio VAZIO — accessible_pools vazio; sob ABAC total isso ` +
+      `significa NENHUM pool (AUT-03). sub=${claims["sub"] ?? ""}`,
     )
-    return null
+    return { kind: "scoped", pools: [] }
   } catch (e) {
-    // AUT-17 (2026-08-31): NAO degrada mais aberto. Antes um token ausente ou invalido
-    // devolvia `null` = irrestrito — e depois da AUT-03 isso seria a maior porta que
-    // sobra: escopo vazio recusaria, mas NENHUMA credencial liberaria o tenant inteiro.
-    //
-    // Devolve dominio VAZIO. E o log distingue as duas populacoes, porque elas nao sao
-    // a mesma coisa: sem header e chamador que nunca se identificou (tela nao migrada
-    // para o `apiFetch`); token invalido e sessao expirada ou adulterada.
+    // AUT-17 (2026-08-31): NAO degrada mais aberto. AUT-19: deixou de devolver dominio
+    // vazio tambem — token invalido nao e "voce nao tem pools", e a tela precisa poder
+    // dizer "sessao expirada" e reautenticar em vez de anunciar escopo vazio.
     console.warn(
-      `[operational] escopo VAZIO por credencial: ${auth ? "token invalido/expirado" : "sem header Authorization"}` +
-      ` — ${e instanceof Error ? e.message : "erro"}`,
+      `[operational] 401 — token invalido/expirado: ${e instanceof Error ? e.message : "erro"}`,
     )
-    return []
+    return { kind: "unauthorized", reason: "invalid_token" }
   }
+}
+
+/** Traduz o desfecho 401 numa resposta. `reason` viaja para a tela poder distinguir
+ *  "nunca me identifiquei" de "minha sessao expirou" — o segundo se conserta sozinho
+ *  pelo re-auth reativo do `apiFetch`, o primeiro nao. */
+function _send401(res: Response, scope: { reason: string }): Response {
+  return res.status(401).json({ error: "unauthorized", reason: scope.reason })
 }
 
 // ── F4b — rollup de capacidade do tenant (defeito C) ──────────────────────────
@@ -135,11 +185,15 @@ async function _tenantCapacity(
       signal: AbortSignal.timeout(2_000),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const body = await resp.json() as { capacity: TenantCapacity | null }
+    const body = await resp.json() as { capacity: TenantCapacity | null; reason?: string | null }
     _scopedCapCache.set(key, { at: Date.now(), value: body.capacity ?? null })
+    // AUT-23: repassa o MOTIVO do engine em vez de rotular tudo como `no_rollup`.
+    // `empty_scope` (chamador nao alcanca pool nenhum) e `no_rollup` (o rollup nao foi
+    // publicado) sao dois fatos, e so o segundo e problema de infraestrutura — junta-los
+    // faria a tela pedir suporte para uma config valida.
     return body.capacity
       ? { capacity: body.capacity, capacity_unavailable: null }
-      : { capacity: null, capacity_unavailable: "no_rollup" }
+      : { capacity: null, capacity_unavailable: body.reason ?? "no_rollup" }
   } catch {
     // Engine fora / timeout → desconhecido. NUNCA cair para `Σ available` das linhas:
     // a soma é o defeito C, não um fallback dele.
@@ -272,15 +326,18 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
     // tudo a jusante (snapshots, live counts, admissão por pool, active/mute, items
     // e os agregados do summary derivados de items) já sai escopado.
     //
-    // ⚠️ Três valores, e o do meio é novo (AUT-17, 2026-08-31):
-    //   `null` → sem filtro (só o ramo LEGADO de lista vazia, que cai na AUT-03);
-    //   `[]`   → NENHUM pool — credencial ausente ou inválida. Antes isto era `null`,
-    //            e depois da AUT-03 seria a maior porta que sobra;
+    // ⚠️ Depois da AUT-19 (2026-08-31) sobraram DOIS valores aqui, e `[]` tem UMA causa:
+    //   `null` → sem filtro (só quando PLUGHUB_JWT_SECRET está ausente — postura de
+    //            serviço, nunca decisão sobre um usuário);
+    //   `[]`   → NENHUM pool, e agora isso significa **escopo legitimamente vazio**.
+    //            Credencial ausente/inválida saiu daqui: vira 401 na linha acima.
     //   lista  → recorte.
     // O `[]` funciona porque array vazio é truthy em JS: vira `Set` vazio e filtra tudo.
     // Não trocar por `accessible?.length ? … : null` — seria refazer aqui o `if not x`
     // que fundiria de novo "nenhum" com "todos".
-    const accessible    = _accessiblePools(req)
+    const scope = _resolveScope(req)
+    if (scope.kind === "unauthorized") return _send401(res, scope)
+    const accessible    = scope.kind === "scoped" ? scope.pools : null
     const accessibleSet = accessible ? new Set(accessible) : null
     const pools = accessibleSet ? allPools.filter(p => accessibleSet.has(p.pool_id)) : allPools
 
@@ -460,6 +517,25 @@ operationalRouter.get("/pools/:pool_id/queue", async (req: Request, res: Respons
   try {
     const tenantId = _getTenantId(req)
     const poolId   = req.params["pool_id"]!
+
+    // AUT-19 (2026-08-31) — esta rota NAO TINHA VERIFICACAO NENHUMA: servia os
+    // `session_id` da fila de qualquer pool do tenant, sem credencial e sem escopo,
+    // enquanto a irma `GET /pools` (que devolve so CONTAGENS) ja escopava. Duas portas
+    // para o mesmo assunto e so uma trancada — e a trancada e o que da a impressao de
+    // que o dado esta protegido. A rota descoberta e a que serve o conteudo MAIS
+    // sensivel das duas.
+    //
+    // Ordem: credencial ANTES da existencia do pool, senao um chamador anonimo enumera
+    // pool_ids pelo 404 x 200.
+    const scope = _resolveScope(req)
+    if (scope.kind === "unauthorized") return _send401(res, scope)
+    if (scope.kind === "scoped" && !scope.pools.includes(poolId)) {
+      // 403 nomeando, nao 404 mudo: quem tem credencial valida merece saber que o
+      // limite e de ESCOPO. E o 403 e o mesmo para pool inexistente fora do escopo,
+      // entao nada vaza sobre quais pools existem la fora.
+      console.info(`[operational] 403 — pool "${poolId}" fora do escopo do chamador`)
+      return res.status(403).json({ error: "forbidden", reason: "pool_out_of_scope" })
+    }
 
     // Verify pool exists
     const pool = await prisma.pool.findUnique({

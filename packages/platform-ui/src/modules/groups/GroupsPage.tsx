@@ -62,7 +62,14 @@ function adminHeaders(token: string): HeadersInit {
     : { 'Content-Type': 'application/json' }
 }
 
-async function apiFetch<T>(url: string, token: string, init?: RequestInit): Promise<T> {
+// ⚠️ RENOMEADO em 2026-08-31 (AUT-19). Este helper JA se chamava `apiFetch` — um
+// wrapper tipado que devolve JSON e levanta em nao-2xx — e a varredura da AUT-18
+// (2026-08-30) trocou o `fetch(` do corpo dele por `apiFetch(`, criando **auto-recursao
+// infinita**, e ainda acrescentou `import { apiFetch }` no topo, criando conflito de
+// nome. As duas paginas quebravam ao carregar; o build inteiro do platform-ui parou de
+// compilar (34 erros) e ninguem viu, porque o gate da AUT-18 CONTA chamadas por texto e
+// o `vite dev` nao typecheca. Colisao de nome e invisivel para grep.
+async function jsonFetch<T>(url: string, token: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(url, {
     ...init,
     headers: { ...adminHeaders(token), ...(init?.headers ?? {}) },
@@ -109,7 +116,7 @@ export default function GroupsPage() {
     if (!tenantId || !adminToken) return
     setLoading(true); setError(null)
     try {
-      const data = await apiFetch<Group[]>(
+      const data = await jsonFetch<Group[]>(
         `/auth/v1/groups?tenant_id=${encodeURIComponent(tenantId)}`,
         adminToken,
       )
@@ -128,7 +135,7 @@ export default function GroupsPage() {
   const openGroup = useCallback(async (groupId: string) => {
     setDrawerLoading(true); setDrawerOpen(true); setDrawerTab('info')
     try {
-      const detail = await apiFetch<GroupDetail>(
+      const detail = await jsonFetch<GroupDetail>(
         `/auth/v1/groups/${groupId}`,
         adminToken,
       )
@@ -152,7 +159,7 @@ export default function GroupsPage() {
     if (!newName.trim()) return
     setSaving(true)
     try {
-      await apiFetch<Group>('/auth/v1/groups', adminToken, {
+      await jsonFetch<Group>('/auth/v1/groups', adminToken, {
         method: 'POST',
         body: JSON.stringify({ tenant_id: tenantId, name: newName.trim(), description: newDesc.trim() }),
       })
@@ -170,7 +177,7 @@ export default function GroupsPage() {
   const deleteGroup = async (groupId: string) => {
     if (!confirm(t('confirmDelete'))) return
     try {
-      await apiFetch<void>(`/auth/v1/groups/${groupId}`, adminToken, { method: 'DELETE' })
+      await jsonFetch<void>(`/auth/v1/groups/${groupId}`, adminToken, { method: 'DELETE' })
       closeDrawer()
       await loadGroups()
     } catch (e) {
@@ -296,7 +303,7 @@ export default function GroupsPage() {
           onClose={closeDrawer}
           onDelete={deleteGroup}
           onRefresh={async (id) => {
-            const detail = await apiFetch<GroupDetail>(`/auth/v1/groups/${id}`, adminToken)
+            const detail = await jsonFetch<GroupDetail>(`/auth/v1/groups/${id}`, adminToken)
             setDrawerGroup(detail)
             await loadGroups()
           }}
@@ -403,7 +410,7 @@ function InfoTab({ group, adminToken, onRefresh, t }: {
   const save = async () => {
     setSaving(true)
     try {
-      await apiFetch(`/auth/v1/groups/${group.group_id}`, adminToken, {
+      await jsonFetch(`/auth/v1/groups/${group.group_id}`, adminToken, {
         method: 'PUT',
         body: JSON.stringify({ name, description: desc }),
       })
@@ -466,7 +473,7 @@ function GroupUserChecklist({ kind, group, tenantId, adminToken, onRefresh, t }:
   const [search,   setSearch]   = useState('')
 
   useEffect(() => {
-    apiFetch<UserLite[] | { users?: UserLite[] }>(`/auth/users?tenant_id=${encodeURIComponent(tenantId)}`, adminToken)
+    jsonFetch<UserLite[] | { users?: UserLite[] }>(`/auth/users?tenant_id=${encodeURIComponent(tenantId)}`, adminToken)
       .then(d => {
         const arr = Array.isArray(d) ? d : (d.users ?? [])
         setAllUsers(arr.map(u => ({ id: String(u.id), name: u.name ?? '', email: u.email ?? '' })))
@@ -483,9 +490,9 @@ function GroupUserChecklist({ kind, group, tenantId, adminToken, onRefresh, t }:
     setBusy(uid)
     try {
       if (selected.has(uid)) {
-        await apiFetch(`/auth/v1/groups/${group.group_id}/${kind}/${uid}`, adminToken, { method: 'DELETE' })
+        await jsonFetch(`/auth/v1/groups/${group.group_id}/${kind}/${uid}`, adminToken, { method: 'DELETE' })
       } else {
-        await apiFetch(`/auth/v1/groups/${group.group_id}/${kind}`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: uid }) })
+        await jsonFetch(`/auth/v1/groups/${group.group_id}/${kind}`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: uid }) })
       }
       await onRefresh(group.group_id)
     } finally { setBusy(null) }

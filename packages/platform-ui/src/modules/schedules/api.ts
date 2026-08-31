@@ -81,7 +81,12 @@ export interface WebhookPool {
 
 // ── Fetch helpers ────────────────────────────────────────────────────────────
 
-async function apiFetch(path: string, opts?: RequestInit) {
+// ⚠️ RENOMEADO em 2026-08-31 (AUT-19). Este helper JA se chamava `apiFetch`, e a
+// varredura da AUT-18 (2026-08-30) trocou o `fetch(` do corpo dele por `apiFetch(`,
+// criando **auto-recursao infinita**, mais um `import { apiFetch }` no topo que colide
+// com o nome. Hoje ele DELEGA ao apiFetch compartilhado — que e o que a AUT-18 queria —
+// e mantem o que so ele fazia: Content-Type e levantar em nao-2xx.
+async function jsonFetch(path: string, opts?: RequestInit) {
   const res = await apiFetch(path, {
     headers: { 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
     ...opts,
@@ -99,25 +104,25 @@ export function makeSchedApi(tenantId: string) {
   const th = { 'X-Tenant-ID': tenantId }
   return {
     list: (): Promise<{ agendas: Agenda[]; total: number }> =>
-      apiFetch('/v1/agendas', { headers: th }),
+      jsonFetch('/v1/agendas', { headers: th }),
     create: (body: object): Promise<Agenda> =>
-      apiFetch('/v1/agendas', { method: 'POST', headers: th, body: JSON.stringify(body) }),
+      jsonFetch('/v1/agendas', { method: 'POST', headers: th, body: JSON.stringify(body) }),
     update: (id: string, body: object): Promise<Agenda> =>
-      apiFetch(`/v1/agendas/${id}`, { method: 'PATCH', headers: th, body: JSON.stringify(body) }),
+      jsonFetch(`/v1/agendas/${id}`, { method: 'PATCH', headers: th, body: JSON.stringify(body) }),
     remove: (id: string) =>
-      apiFetch(`/v1/agendas/${id}`, { method: 'DELETE', headers: th }),
-    pause:  (id: string) => apiFetch(`/v1/agendas/${id}/pause`,  { method: 'POST', headers: th }),
-    resume: (id: string) => apiFetch(`/v1/agendas/${id}/resume`, { method: 'POST', headers: th }),
-    cancel: (id: string) => apiFetch(`/v1/agendas/${id}/cancel`, { method: 'POST', headers: th }),
-    fire:   (id: string) => apiFetch(`/v1/agendas/${id}/fire`,   { method: 'POST', headers: th }),
+      jsonFetch(`/v1/agendas/${id}`, { method: 'DELETE', headers: th }),
+    pause:  (id: string) => jsonFetch(`/v1/agendas/${id}/pause`,  { method: 'POST', headers: th }),
+    resume: (id: string) => jsonFetch(`/v1/agendas/${id}/resume`, { method: 'POST', headers: th }),
+    cancel: (id: string) => jsonFetch(`/v1/agendas/${id}/cancel`, { method: 'POST', headers: th }),
+    fire:   (id: string) => jsonFetch(`/v1/agendas/${id}/fire`,   { method: 'POST', headers: th }),
     dispatches: (id: string): Promise<{ dispatches: AgendaDispatch[]; total: number }> =>
-      apiFetch(`/v1/agendas/${id}/dispatches`, { headers: th }),
+      jsonFetch(`/v1/agendas/${id}/dispatches`, { headers: th }),
   }
 }
 
 /** Webhook-only pools from agent-registry (hard filter — D3). */
 export async function fetchWebhookPools(tenantId: string): Promise<WebhookPool[]> {
-  const data = await apiFetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
+  const data = await jsonFetch('/v1/pools', { headers: { 'x-tenant-id': tenantId } })
   const pools = (data?.pools ?? []) as Array<{ pool_id: string; channel_types?: string[] }>
   return pools
     .filter(p => (p.channel_types ?? []).includes('webhook'))
@@ -127,7 +132,7 @@ export async function fetchWebhookPools(tenantId: string): Promise<WebhookPool[]
 /** Calendars from calendar-api (for the business-day calendar_id dropdown). */
 export async function fetchCalendars(tenantId: string): Promise<Array<{ id: string; name: string }>> {
   try {
-    const data = await apiFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${tenantId}`)
+    const data = await jsonFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${tenantId}`)
     return (data ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))
   } catch {
     return []
