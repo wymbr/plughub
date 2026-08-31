@@ -26,7 +26,7 @@ export interface Session {
   role: UserRole
   roles: string[]                  // all roles from JWT (user may have multiple)
   tenantId: string
-  accessiblePools: string[]        // [] = all pools (admin); non-empty = restricted
+  accessiblePools: string[]        // [] = NENHUM pool (AUT-03, 2026-08-31); lista = recorte
   /** Arc 9 — agent types this supervisor can see. [] = unrestricted (admin). */
   supervisedAgentTypes: string[]
   /** Maximum simultaneous contacts this human agent can serve. Shared across all pools. */

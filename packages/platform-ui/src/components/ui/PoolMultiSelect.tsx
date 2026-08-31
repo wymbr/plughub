@@ -4,9 +4,14 @@ import { useState, useRef, useEffect } from 'react'
  * PoolMultiSelect — combo multi-selecionável de pools (checkbox dropdown).
  *
  * Arco de segurança (2026-07-23): o filtro de pool nas telas de Analytics deve oferecer
- * o DOMÍNIO do usuário (`listPools ∩ session.accessiblePools`), não texto livre. Vazio =
- * todo o domínio (não "todos os pools"). O backend SEMPRE reintersecta com o domínio — a
- * UI é conveniência, não a fronteira de segurança.
+ * o DOMÍNIO do usuário (`listPools ∩ session.accessiblePools`), não texto livre.
+ *
+ * ⚠️ `pools` chega JÁ filtrado pelo chamador — este componente não vê `accessiblePools` e
+ * por isso não sabe distinguir "o tenant não tem pool" de "eu não alcanço nenhum". Quem
+ * tem essa informação é quem o usa; o aviso da AUT-10 (`EmptyScopeNotice`) mora lá.
+ *
+ * `value` vazio = nenhum filtro aplicado (todo o domínio), que NÃO é "todos os pools" —
+ * o backend SEMPRE reintersecta com o domínio. A UI é conveniência, nunca a fronteira.
  */
 export function PoolMultiSelect({ pools, value, onChange, placeholder, allLabel, countLabel }: {
   pools:       string[]

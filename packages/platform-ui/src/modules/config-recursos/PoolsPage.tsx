@@ -31,6 +31,7 @@ import Badge from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
 import Spinner from '@/components/ui/Spinner'
 import { apiFetch } from '@/api/apiFetch'
+import { reauthorize } from '@/auth/token-store'
 
 // ── types ──────────────────────────────────────────────────────────────────────
 
@@ -547,7 +548,57 @@ const CHANNEL_OPTIONS = [
 ]
 
 const PoolsPage: React.FC = () => {
-  const { session } = useAuth()
+  const { session, perms } = useAuth()
+
+  /**
+   * AUT-10 — oferece ao CRIADOR incluir o pool novo no próprio escopo.
+   *
+   * Um pool recém-criado não pertence ao escopo de ninguém, e o roteamento **não**
+   * consulta `accessible_pools` — então ele já pode receber contato enquanto está
+   * invisível no Monitor, no Console e nos relatórios. Quem acabou de criá-lo é quem
+   * mais provavelmente vai operá-lo, e mandá-lo a outra tela para isso é atrito que
+   * ninguém paga: o resultado prático seria pool sem vigia (ver `pool-coverage.ts`).
+   *
+   * ⚠️ **Gateada por `config.permissions`, e isso não é detalhe.** Criar pool exige
+   * `config.resources`; atribuir escopo é campo de CAPACIDADE e exige
+   * `config.permissions` — módulos DIFERENTES. Sem o gate, esta oferta viraria uma
+   * SEGUNDA porta para a mesma decisão, e quem tivesse só `config.resources` se
+   * autoconcederia escopo criando pools. O servidor recusa de qualquer forma
+   * (`_assert_may_grant`); o gate aqui evita oferecer um botão que sempre daria 403.
+   *
+   * Não decide por ninguém: pergunta. E se a resposta for não, ou se a concessão
+   * falhar, **o pool continua criado** — a criação não é desfeita por causa de uma
+   * conveniência.
+   */
+  async function ofereceEscopoAoCriador(novoPoolId: string): Promise<void> {
+    if (!session) return
+    if (!perms.can('config', 'permissions', 'read_write')) {
+      // Quem não pode conceder não recebe um caminho sem saída — recebe o próximo passo.
+      setAviso(t('pools.scopeOffer.askAdmin', { pool: novoPoolId }))
+      return
+    }
+    if (session.accessiblePools.includes(novoPoolId)) return
+    if (!window.confirm(t('pools.scopeOffer.confirm', { pool: novoPoolId }))) return
+
+    try {
+      const r = await apiFetch(`/auth/users/${session.userId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          accessible_pools: [...session.accessiblePools, novoPoolId],
+        }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      // O escopo vive no TOKEN. Sem renovar, a concessão só valeria no próximo login —
+      // e o sintoma seria "eu me atribuí e continua vazio", que é pior que não ter
+      // oferecido. `reauthorize` é o mesmo caminho forçado do re-auth reativo (AUT-19).
+      await reauthorize()
+      setAviso(t('pools.scopeOffer.granted', { pool: novoPoolId }))
+    } catch (e) {
+      // Falhar aqui NÃO desfaz o pool. Diz o que ficou por fazer, e onde terminar.
+      setAviso(t('pools.scopeOffer.failed', { pool: novoPoolId }))
+    }
+  }
   const { t } = useTranslation('configRecursos')
   const { t: tCommon } = useTranslation('common')
 
@@ -590,6 +641,10 @@ const PoolsPage: React.FC = () => {
   const [editingPool, setEditingPool] = useState<Pool | null>(null)
   const [isSaving, setIsSaving]   = useState(false)
   const [error,    setError]      = useState('')
+  // AUT-10 — desfecho da oferta de escopo. Separado do `error` de propósito: aqui
+  // nada falhou do ponto de vista da criação, e pintar de vermelho um pool criado com
+  // sucesso ensinaria o operador a ignorar a faixa vermelha.
+  const [aviso,    setAviso]      = useState('')
 
   // Pool-level calendar exceptions (Level 2: association exceptions override calendar exceptions)
   const [calExceptions, setCalExceptions] = useState<ExceptionEntry[]>([])
@@ -995,6 +1050,7 @@ const PoolsPage: React.FC = () => {
         )
       } else {
         await registryApi.createPool({ pool_id: formData.pool_id, ...payload }, session.tenantId)
+        await ofereceEscopoAoCriador(poolId)
       }
 
       // ── Sync calendar association in calendar-api ─────────────────────────
@@ -1171,6 +1227,13 @@ const PoolsPage: React.FC = () => {
           {error && (
             <div className="bg-red-light border border-red/30 text-red-text px-3 py-2 rounded text-sm">
               {error}
+            </div>
+          )}
+          {aviso && (
+            <div className="bg-warning-light border border-warning/30 text-warning-text px-3 py-2 rounded text-sm flex items-start justify-between gap-3">
+              <span>{aviso}</span>
+              <button type="button" onClick={() => setAviso('')}
+                className="text-warning-text/60 hover:text-warning-text leading-none flex-shrink-0">&times;</button>
             </div>
           )}
 

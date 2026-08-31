@@ -63,5 +63,11 @@
     "deleteMessage": "Esta ação não pode ser desfeita. Deseja continuar?",
     "yes": "Sim, excluir",
     "no": "Cancelar"
+  },
+  "emptyScope": {
+    "title": "Nenhum pool atribuído ao seu perfil",
+    "canGrant": "Pools são criados pelo tenant, não vêm com a plataforma — é preciso atribuí-los a cada perfil. Sem isso, as telas de operação ficam vazias mesmo com a operação rodando.",
+    "askAdmin": "Pools são criados pelo tenant e precisam ser atribuídos ao seu perfil. Peça a quem administra permissões.",
+    "goToAccess": "Atribuir pools em Configuração › Acesso"
   }
 }

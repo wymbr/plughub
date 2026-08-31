@@ -168,6 +168,25 @@ else
   bad "S4b ligou o claim irrestrito sem config.permissions (HTTP $C4b)"
 fi
 
+# ── S4c — o campo que a oferta de escopo da AUT-10 envia ─────────────────────
+# Adicionado em 2026-08-31. O probe cobria `roles` e `unrestricted`, e NAO cobria
+# `accessible_pools` — terceiro membro de `_CAPACITY_FIELDS`, e o unico que uma tela
+# passou a mandar sozinho: a oferta "incluir o pool novo no meu escopo", logo apos criar
+# um pool (AUT-10).
+#
+# Importa porque criar pool exige `config.resources` e conceder escopo exige
+# `config.permissions` — MODULOS DIFERENTES. Sem esta recusa no servidor a oferta viraria
+# uma SEGUNDA porta para a mesma decisao, e quem tivesse so `config.resources` se
+# autoconcederia escopo criando pools. A guarda da UI apenas evita oferecer um botao que
+# daria 403; quem RECUSA e esta linha.
+C4c="$(st "$T_UA" PATCH "/users/$ALVO_ID" '{"accessible_pools":["sac_ia"]}')"
+if [ "$C4c" = "403" ]; then
+  ok "S4c PATCH com accessible_pools recusado (403)"
+else
+  bad "S4c alterou escopo de pool sem config.permissions (HTTP $C4c)"
+  info "Escopo e campo de CAPACIDADE. Se ele passa, a oferta da AUT-10 vira porta larga."
+fi
+
 C5="$(st "$T_UA" PUT "/users/$ALVO_ID/module-config" \
   '{"config":{"permissions":{"access":"read_write","scope":[]}}}')"
 if [ "$C5" = "403" ]; then

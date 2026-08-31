@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
+import { EmptyScopeNotice } from '@/components/ui/EmptyScopeNotice'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -321,7 +322,7 @@ function QueueDrilldown({ tenantId, poolId, slaMs }: { tenantId: string; poolId:
 // ── PoolsPage ──────────────────────────────────────────────────────────────────
 
 export default function PoolsPage() {
-  const { tenantId } = useAuth()
+  const { tenantId, session } = useAuth()
   const { t, i18n } = useTranslation('contacts')
 
   const [pools,        setPools]        = useState<PoolOp[]>([])
@@ -499,8 +500,18 @@ export default function PoolsPage() {
       <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center py-16 text-muted-light gap-2">
-            <Server className="w-10 h-10" aria-hidden="true" />
-            <span className="text-sm">{t('pools.noData')}</span>
+            {/* AUT-10: "sem escopo" e "sem pool no tenant" produzem a MESMA tela vazia,
+                e só a primeira tem conserto do lado de quem olha. Separá-las é o ponto:
+                o operador sem escopo precisa saber que falta atribuição, não concluir
+                que a operação está parada. */}
+            {session?.accessiblePools.length === 0 ? (
+              <EmptyScopeNotice />
+            ) : (
+              <>
+                <Server className="w-10 h-10" aria-hidden="true" />
+                <span className="text-sm">{t('pools.noData')}</span>
+              </>
+            )}
           </div>
         )}
 

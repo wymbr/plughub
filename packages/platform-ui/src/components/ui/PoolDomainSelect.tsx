@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react'
 import * as registryApi from '@/api/registry'
+import { EmptyScopeNotice } from '@/components/ui/EmptyScopeNotice'
 
 /**
  * PoolDomainSelect — combo (single-select) de pool restrito ao DOMÍNIO do usuário.
  *
  * Arco de segurança / Fase E (2026-07-23): o filtro de pool nas telas de Analytics deve
  * oferecer o domínio (`listPools ∩ accessiblePools`), não texto livre — assim o filtro
- * nunca oferece um pool fora do domínio. `accessiblePools` vazio = admin → lista cheia.
+ * nunca oferece um pool fora do domínio.
+ *
+ * ⚠️ `accessiblePools` vazio significa **NENHUM pool** desde a AUT-03 (2026-08-31) — a
+ * frase anterior aqui dizia "= admin → lista cheia", e era a convenção que a inversão
+ * removeu. Com domínio vazio o combo é uma MENTIRA: ele oferece "Todos" e o backend
+ * devolve nada, então a tela fica vazia sem dizer por quê. Por isso, nesse caso, o
+ * lugar do combo é do aviso (AUT-10).
  * O scoping DURO continua no backend (`optional_pool_principal` reintersecta sempre);
  * este combo é conveniência + UX, nunca a fronteira de segurança.
  *
@@ -23,7 +30,7 @@ export function PoolDomainSelect({
   className,
 }: {
   tenantId:        string
-  accessiblePools: string[]          // [] = admin (todos os pools)
+  accessiblePools: string[]          // [] = NENHUM pool (AUT-03)
   value:           string
   onChange:        (id: string) => void
   allLabel:        string
@@ -43,6 +50,10 @@ export function PoolDomainSelect({
       .catch(() => setPools([]))
     // join estabiliza a dep (a prop é um array novo a cada render do pai)
   }, [tenantId, accessiblePools.join(',')])
+
+  // Domínio vazio: o combo não tem o que oferecer, e "Todos" resolveria para nada.
+  // Trocá-lo pelo aviso é a diferença entre uma tela vazia e uma tela que se explica.
+  if (accessiblePools.length === 0) return <EmptyScopeNotice compact />
 
   return (
     <select value={value} onChange={e => onChange(e.target.value)} className={className}>

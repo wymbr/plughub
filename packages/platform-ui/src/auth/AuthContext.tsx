@@ -71,7 +71,7 @@ export interface CurrentUser {
   tenantId:               string
   role:                   UserRole        // highest-privilege role
   roles:                  string[]
-  accessiblePools:        string[]       // [] = all pools
+  accessiblePools:        string[]       // [] = NENHUM pool (AUT-03, 2026-08-31)
   supervisedAgentTypes:   string[]       // [] = unrestricted (admin); non-empty = Arc 9 scope
   maxConcurrentSessions:  number
 }

@@ -171,11 +171,32 @@
       "label": "Pesos de Roteamento — Dinâmicos",
       "hint": "Influência de cada fator em tempo real na ordenação da fila. 0 = ignorar, 9 = máxima influência.",
       "reset": "↺ Restaurar padrões dinâmicos",
-      "sla":      { "label": "Urgência SLA",     "hint": "Tempo de espera ÷ SLA alvo" },
-      "wait":     { "label": "Tempo de espera",  "hint": "Espera absoluta normalizada" },
-      "tier":     { "label": "Tier do cliente",  "hint": "platinum > gold > standard" },
-      "churn":    { "label": "Risco de churn",   "hint": "Score de churn do perfil" },
-      "business": { "label": "Valor de negócio", "hint": "business_score do cliente" }
+      "sla": {
+        "label": "Urgência SLA",
+        "hint": "Tempo de espera ÷ SLA alvo"
+      },
+      "wait": {
+        "label": "Tempo de espera",
+        "hint": "Espera absoluta normalizada"
+      },
+      "tier": {
+        "label": "Tier do cliente",
+        "hint": "platinum > gold > standard"
+      },
+      "churn": {
+        "label": "Risco de churn",
+        "hint": "Score de churn do perfil"
+      },
+      "business": {
+        "label": "Valor de negócio",
+        "hint": "business_score do cliente"
+      }
+    },
+    "scopeOffer": {
+      "confirm": "Pool \"{{pool}}\" criado.\n\nIncluir no seu escopo agora? Sem isso ele não aparece no Monitor, no Console nem nos relatórios — embora já possa receber contato.",
+      "granted": "Pool \"{{pool}}\" incluído no seu escopo.",
+      "askAdmin": "Pool \"{{pool}}\" criado, mas ainda não está no escopo de ninguém — e o roteamento não consulta escopo, então ele já pode receber contato sem aparecer no Monitor. Peça a quem administra permissões para atribuí-lo.",
+      "failed": "Pool \"{{pool}}\" criado, mas NÃO foi possível incluí-lo no seu escopo. Atribua em Configuração › Acesso."
     }
   },
   "competencySkills": {

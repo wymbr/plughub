@@ -63,5 +63,11 @@
     "deleteMessage": "This action cannot be undone. Do you want to continue?",
     "yes": "Yes, delete",
     "no": "Cancel"
+  },
+  "emptyScope": {
+    "title": "No pools assigned to your profile",
+    "canGrant": "Pools are created by the tenant, not shipped with the platform — each profile must be granted them. Without that, operational screens stay empty even while the operation runs.",
+    "askAdmin": "Pools are created by the tenant and must be granted to your profile. Ask whoever administers permissions.",
+    "goToAccess": "Assign pools in Configuration › Access"
   }
 }

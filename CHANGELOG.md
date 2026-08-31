@@ -1,5 +1,85 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## Afordância de escopo: a tela diz que o vazio é escopo, e o criador recebe a oferta (2026-08-31)
+
+**AUT-10.** Depois da AUT-03, `accessible_pools: []` significa nenhum pool — e é config
+**válida**: pools são do tenant, não da plataforma, então quem entra pela primeira vez
+não tem nenhum. O problema nunca foi a regra; é o **sintoma**. Tela vazia é
+indistinguível de *"não há dado"* e de *"quebrou"*, e é exatamente por isso que o
+resolvedor loga `dominio VAZIO` no servidor. Este arco é a metade da frente da mesma
+decisão.
+
+### (a) `EmptyScopeNotice` — um componente, dois destinos
+
+O texto diverge no **único** ponto que importa: para onde a pessoa vai. Quem detém
+`config.permissions` recebe o link para Acesso; quem não detém recebe *"peça a quem
+administra permissões"* — mandá-lo a uma tela onde só levaria 403 seria pior que não
+dizer nada. É afordância, nunca fronteira: quem decide segue sendo o servidor.
+
+Ligado em dois lugares escolhidos, não em todos:
+
+- **`PoolDomainSelect`** — com domínio vazio o combo é uma **mentira**: oferece "Todos"
+  e o backend devolve nada. Ali o aviso toma o lugar do combo, porque um seletor sem o
+  que oferecer não é meia funcionalidade, é uma pista falsa.
+- **Monitor › Pools** — *"não tenho escopo"* e *"o tenant não tem pool"* produziam a
+  **mesma** tela vazia, e só a primeira tem conserto do lado de quem olha. Um operador
+  sem escopo concluía que a operação estava parada.
+
+**Não coberto, e por decisão:** `PoolMultiSelect` recebe `pools` já filtrado e **não vê**
+`accessiblePools` — não sabe distinguir as duas ausências. Quem sabe é quem o usa; forçar
+o componente a adivinhar seria inventar a informação que falta.
+
+### (b) A oferta ao criar o pool
+
+Um pool recém-criado não está no escopo de ninguém, e o roteamento **não consulta**
+`accessible_pools` — ele já pode receber contato enquanto está invisível. Quem acabou de
+criá-lo é quem mais provavelmente vai operá-lo.
+
+⚠️ **Gateada por `config.permissions`, e isso não é detalhe.** Criar pool exige
+`config.resources`; atribuir escopo é campo de **capacidade**. Módulos diferentes — sem o
+gate, a oferta seria uma **segunda porta** para a mesma decisão, e quem tivesse só
+`config.resources` se autoconcederia escopo criando pools.
+
+Duas decisões que a implementação obrigou a tomar:
+
+- **`reauthorize()` depois da concessão.** O escopo vive no **token**; sem renovar, a
+  concessão só valeria no próximo login e o sintoma seria *"me atribuí e continua
+  vazio"* — pior que não ter oferecido. É o mesmo caminho forçado do re-auth reativo da
+  AUT-19, já construído.
+- **Falha na concessão não desfaz o pool.** A criação não é revertida por causa de uma
+  conveniência; a faixa diz o que ficou por fazer e onde terminar. E ela é de AVISO, não
+  de erro: pintar de vermelho um pool criado com sucesso ensina o operador a ignorar
+  vermelho.
+
+### O gate que faltava, e que não era o óbvio
+
+A guarda da UI só evita oferecer um botão que daria 403 — quem **recusa** é o servidor.
+Medido antes de confiar: `PATCH {"accessible_pools": [...]}` sem `config.permissions`
+devolve **403**, com controle positivo na mesma rodada (`{"name": ...}` → **200**).
+
+Só que o `probe_config_permissions_split.sh` cobria `roles` e `unrestricted` e **não
+cobria `accessible_pools`** — terceiro membro de `_CAPACITY_FIELDS`, e justamente o único
+que uma tela passou a enviar sozinho. Entrou o **S4c**. Mutação (tirar o campo do
+conjunto) reprova exatamente ele.
+
+*O reflexo teria sido escrever um gate para a guarda da UI. O que merecia gate era a
+regra do servidor da qual a UI depende — a guarda de tela é conveniência, e testá-la
+compraria confiança no lugar errado.*
+
+### Duas notas de ambiente
+
+`jq` existe sob WSL (`wsl.exe -d ubuntu`), então os portões que dependem dele — e que
+saíam `INCONCLUSIVO` no shell Windows — **rodam**. Foi assim que o S4c foi executado e
+mutado de verdade, em vez de ficar como caso escrito e nunca exercido.
+
+E o `useradmin@`, que o censo de 08-31 apontou detendo `config.permissions` contra a
+declaração, saiu limpo — efeito colateral de rodar o próprio probe, cujo
+`PUT module-config` substitui o config inteiro. **A deriva se corrige sozinha só onde há
+probe**, e é precisamente por isso que o censo do MOD-01 precisa existir. O `supervisor@`
+segue com o grant, e segue aberto.
+
+---
+
 ## A cauda Python do arco de escopo: 10 instrumentos velhos, 2 629 verdes (2026-08-31)
 
 **AUT-27.** Ao rodar os portões depois da AUT-12, o `probe_python_suites` estava

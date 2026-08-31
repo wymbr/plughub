@@ -171,11 +171,32 @@
       "label": "Routing Weights — Dynamic",
       "hint": "Influence of each real-time factor on queue ordering. 0 = ignore, 9 = maximum influence.",
       "reset": "↺ Restore dynamic defaults",
-      "sla":      { "label": "SLA Urgency",     "hint": "Wait time ÷ SLA target" },
-      "wait":     { "label": "Wait time",        "hint": "Normalized absolute wait" },
-      "tier":     { "label": "Customer tier",    "hint": "platinum > gold > standard" },
-      "churn":    { "label": "Churn risk",       "hint": "Churn score from profile" },
-      "business": { "label": "Business value",   "hint": "Customer business_score" }
+      "sla": {
+        "label": "SLA Urgency",
+        "hint": "Wait time ÷ SLA target"
+      },
+      "wait": {
+        "label": "Wait time",
+        "hint": "Normalized absolute wait"
+      },
+      "tier": {
+        "label": "Customer tier",
+        "hint": "platinum > gold > standard"
+      },
+      "churn": {
+        "label": "Churn risk",
+        "hint": "Churn score from profile"
+      },
+      "business": {
+        "label": "Business value",
+        "hint": "Customer business_score"
+      }
+    },
+    "scopeOffer": {
+      "confirm": "Pool \"{{pool}}\" created.\n\nAdd it to your scope now? Without that it won't show in Monitor, Console or reports — even though it can already receive contacts.",
+      "granted": "Pool \"{{pool}}\" added to your scope.",
+      "askAdmin": "Pool \"{{pool}}\" created, but it is not in anyone's scope yet — and routing does not consult scope, so it can already receive contacts without showing in Monitor. Ask whoever administers permissions to assign it.",
+      "failed": "Pool \"{{pool}}\" created, but it could NOT be added to your scope. Assign it in Configuration › Access."
     }
   },
   "competencySkills": {
