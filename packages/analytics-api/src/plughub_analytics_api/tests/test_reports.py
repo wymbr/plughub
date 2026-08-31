@@ -643,7 +643,8 @@ class TestQueryUsageReport:
     async def test_usage_row_mapped(self):
         ts = datetime(2026, 4, 21, 8, 0, 0)
         client = _make_client(
-            self._count_result(1),
+            self._count_result(0),   # não-atribuível
+            self._count_result(1),   # total
             _ch_result(self._COLS, [
                 ["ev-use-001", TENANT, "sess-001",
                  "llm_tokens_input", 1234, "ai-gateway", ts],
@@ -658,7 +659,8 @@ class TestQueryUsageReport:
 
     async def test_filters_accepted(self):
         client = _make_client(
-            self._count_result(10),
+            self._count_result(0),    # não-atribuível
+            self._count_result(10),   # total
             _ch_result(self._COLS, []),
         )
         result = await query_usage_report(
@@ -667,6 +669,51 @@ class TestQueryUsageReport:
             source_component="ai-gateway",
         )
         assert result["meta"]["total"] == 10
+
+    # ── AUT-01 — recorte de pool e população não-atribuível ───────────────────
+
+    async def test_escopo_vazio_nao_consulta(self):
+        """`accessible_pools=[]` é NENHUM pool, e o ClickHouse não é tocado.
+
+        Sem esta guarda o `_session_derived_scope_clause` devolveria `""` para `[]`
+        (dois dos três valores de escopo são falsy) e "nenhum pool" viraria "todos" —
+        a inversão exata que a AUT-03 fechou do outro lado.
+        """
+        client = MagicMock()
+        result = await query_usage_report(client, DB, TENANT, accessible_pools=[])
+        assert result["data"] == []
+        assert result["meta"]["total"] == 0
+        client.query.assert_not_called()
+
+    async def test_escopo_entra_como_predicado_de_sessao(self):
+        client = _make_client(
+            self._count_result(0), self._count_result(0),
+            _ch_result(self._COLS, []),
+        )
+        await query_usage_report(client, DB, TENANT, accessible_pools=["p1"])
+        sql = " ".join(str(c.args[0]) for c in client.query.call_args_list)
+        # `usage_events` não tem `pool_id`: o recorte é pelo conjunto de SESSÕES.
+        assert "pool_id IN ('p1')" in sql
+        assert f"FROM {DB}.sessions AS s FINAL" in sql
+
+    async def test_unattributable_nao_carrega_o_recorte(self):
+        """O contador é da JANELA DE DADOS, não do chamador.
+
+        A primeira versão media "o que o meu recorte deixou de fora" sob este nome, e
+        devolvia 20 de 20 para um chamador escopado — contando também as linhas que
+        SÃO atribuíveis, só que a outro pool. Duas proposições, um nome, e a segunda
+        ainda publicava o tamanho da população alheia.
+        """
+        client = _make_client(
+            self._count_result(3), self._count_result(5),
+            _ch_result(self._COLS, []),
+        )
+        r = await query_usage_report(client, DB, TENANT, accessible_pools=["p1"])
+        assert r["meta"]["unattributable"] == 3
+        # a query do não-atribuível é a PRIMEIRA, e não pode levar o filtro de pool
+        sql_unattr = str(client.query.call_args_list[0].args[0])
+        assert "NOT IN (SELECT session_id FROM" in sql_unattr
+        assert "pool_id IN" not in sql_unattr, "o contador herdou o recorte do chamador"
 
     async def test_error_returns_empty(self):
         client = MagicMock()

@@ -1,5 +1,146 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-08-31 — Recorte de linha nos AGREGADOS de `/reports` (AUT-01)
+
+**EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos.** O primeiro fechou em 2026-08-29;
+este arco fecha o segundo para os agregados. Um operador escopado a um pool,
+autenticado, lia os relatórios inteiros — estritamente melhor que o anônimo lê-los
+inteiros, e estritamente pior que o alvo.
+
+### O vazamento, medido — com controle positivo na MESMA rodada
+
+`admin@plughub.local` (36 pools) × um chamador escopado a UM pool:
+
+| rota | admin | escopado | |
+|---|---|---|---|
+| `/reports/sessions` | 386 | **323** | ← controle positivo: o instrumento mede |
+| `/reports/usage` | 20 | 20 | vazava |
+| `/reports/evaluations` · `/summary` · `/quality` | 2 · 1 · 2 | 2 · 1 · 2 | vazava |
+| `/reports/agent-events/summary` · `/categories` | 3 · 3 | 3 · 3 | vazava |
+| `/reports/customers/{id}/360` | 21 contatos | 21 contatos | vazava — dado de CLIENTE |
+
+Sem o 386→323 a rodada não valeria nada: *"números iguais"* é também o que uma medição
+quebrada produz. Foi um instrumento assim que quase publicou o número errado — a
+primeira leitura do 360 usou `(.contacts|length)`, que conta as CHAVES do objeto (5) e
+não os contatos (21).
+
+### A decisão é por FAMÍLIA DE FATO, nunca por rota
+
+O `TODO.md` já registrava a causa certa: as `query_*` **não aceitam `accessible_pools`**
+— não é argumento esquecido, é filtro que não existe. E fabricá-lo por rota exigiria
+decidir 13 vezes qual coluna é *"o pool desta agregação"*; o precedente está medido (F2:
+um filtro de canal que não filtrava, **esvaziava** — 683 testes verdes o tempo todo).
+Treze escolhas é escolher errado ao menos uma, em silêncio.
+
+A pergunta que decide não é *"qual coluna?"*, é **"a linha carrega o pool como fato
+PRÓPRIO, ou o pool é fato de OUTRA coisa que ela referencia?"** — e ela tem três
+respostas, cada uma com **um** predicado:
+
+| | quando | predicado | tabelas |
+|---|---|---|---|
+| **F-A** | a linha TEM `pool_id` | `_apply_pool_scope` | `agent_business_events`, `workflow_events` |
+| **F-B** | a linha tem `session_id` | `_session_derived_scope_clause` | `usage_events`, `evaluation_results`, `evaluation_finalized`, `session_signal` |
+| **F-C** | nenhuma chave alcança pool | dívida DECLARADA | `collect_events`, `calibration_events` |
+
+A F-B **delega ao `_session_scope_clause`** — o predicado único de *"esta sessão é
+minha"* (entrou por pool meu ∪ ainda sem pool ∪ um pool meu atendeu). Escrever ali um
+`pool_id IN (…)` sobre `sessions` recriaria a cópia que a F1b removeu, com o mesmo
+defeito: autorizar pelo pool de ENTRADA faz o supervisor perder o que os agentes DELE
+atenderam (52 contatos, medido em 2026-08-14). Consequência prática: **o supervisor
+conta nos relatórios exatamente a população que consegue abrir na lista de contatos.**
+
+### Duas correções de rumo que a medição impôs
+
+**(1) A F-C começou RECUSANDO (403), e foi revertida no mesmo dia.** A premissa era que
+`accessible_pools is None` marcaria o chamador irrestrito. Medido: **o admin também é
+escopado** — carrega uma LISTA de 36 pools, e `None` só acontece para principal de
+SERVIÇO. A recusa devolvia 403 ao administrador de verdade, para defender **zero linha**
+(as duas tabelas estão vazias). É a D14.1 ao contrário: publicar defesa contra um dano
+que não existe, causando um que existe. O discriminador que a recusa precisaria (*"o
+escopo deste chamador cobre o tenant inteiro?"*) exige o universo de pools do registry —
+dependência nova, com caminho de degradação próprio, por duas tabelas sem produtor.
+Virou dívida DECLARADA (`_SCOPE_DEBT`), com gatilho nomeado e contada pelo censo.
+
+**(2) `meta.unattributable` media a proposição errada.** O `/usage` perdeu 12 das 20
+linhas da janela para o admin — `session_id` não-vazio que não casa com sessão nenhuma.
+Excluí-las é correto (linha não-atribuível não é de ninguém), mas isto é dado de
+FATURAMENTO: sumir com 60% em silêncio é a família do filtro que esvazia. Virou
+contador, no desenho do `sla_unstamped`. Só que a primeira versão contava *"o que o meu
+recorte deixou de fora"* — para o escopado, 20 de 20, incluindo as 8 que SÃO atribuíveis
+a outro pool. Duas proposições sob um nome, e a errada ainda publicava o tamanho da
+população alheia. Hoje é propriedade da JANELA, igual para todo chamador: **12**.
+
+### Isenção é DECLARADA, nunca deduzida da ausência
+
+Foi a ausência — 13 rotas que simplesmente não passavam o argumento — que deixou isto
+invisível por meses: uma rota sem recorte é indistinguível de uma que decidiu não
+recortar, e só uma das duas é defeito. Duas tabelas separadas, porque *"decidimos não
+recortar"* e *"ainda não sabemos recortar"* são fatos diferentes — a primeira não tem
+gatilho, a segunda tem, e juntá-las faria a dívida herdar a tranquilidade da decisão.
+
+- `_SCOPE_EXEMPT` (2): `/resources/tokens` (gasto de conta LLM é do TENANT — decisão de
+  2026-08-29, que já recusa `?pool_id=` com 422) · `/customer-voice/instruments`
+  (catálogo estático, não lê tenant).
+- `_SCOPE_DEBT` (2): `/campaigns` · `/evaluator-calibration` — AUT-28.
+
+### Achado colateral: `/reports/quality` respondia **500 desde sempre**
+
+`query_quality_report` estava definido **duas vezes** no mesmo módulo — o relatório de
+sentimento (`sentiment_events`, com recorte de pool desde sempre) e a T11 de
+`/evaluations/quality`, mil linhas abaixo. Em Python a segunda definição substitui a
+primeira sem aviso, então a rota passava `pool_id`/`category`/`accessible_pools` a uma
+função que não os aceita → `TypeError`. O `grep` achava a função, o argumento de escopo
+estava lá, o corpo estava certo — e nada disso rodava. A rota não tem consumidor na UI,
+então ninguém a consultava.
+
+**E eram DOIS pares:** `_fetch_quality` estava duplicado igual. Renomear só o de fora
+trocou o 500 por um **`503` com `error: data_unavailable`** — o `except Exception` do
+wrapper engolia o `TypeError` e o servia como degradação graciosa. *Fail-soft sobre
+defeito de fiação produz exatamente o valor plausível*: uma rota permanentemente
+quebrada com cara de fonte de dados indisponível. Só o log nomeando a exceção denunciou.
+
+Hoje: `query_sentiment_events_report` / `_fetch_sentiment_events`, HTTP 200. Segundo
+achado ao acender a luz: **as 5 linhas de `sentiment_events` têm `pool_id = 'unknown'`**
+— resíduo do defeito de `session:{id}:meta` corrigido em 2026-08-24 —, então o relatório
+mostra 0 mesmo para o admin. Honesto: aquelas linhas não são de pool nenhum.
+
+### Gate
+
+`infra/test/probe_report_row_scope.sh`, em duas metades que não se substituem:
+
+- **A. censo AST** (`_report_scope_census.py`) — toda rota em ESCOPADA / ISENTA / DÍVIDA;
+  rota nova em nenhuma reprova. `grep` não serviria: `accessible_pools` aparece no
+  docstring, no comentário e no nome do parâmetro do `PoolPrincipal` — presentes em rota
+  que não recorta nada, e foi assim que 13 delas pareceram cobertas.
+- **B. ao vivo** — o recorte está no caminho que roda. Um `accessible_pools=` passado a
+  uma query que o ignora não recorta nada, e só a medição separa as duas.
+
+⚠️ **Rota sem dado sai `SEM AMOSTRA`, nunca verde**, e a rodada inteira é INCONCLUSIVA
+se o controle positivo não mover. Testemunha negativa: escopo `[]` lê 0 (não voltou a
+significar "todos", AUT-03). Falseável — mutação no censo → `FALTA /usage`; mutação na
+query → `admin=20 e escopado=20 são IGUAIS`, reproduzindo o vazamento original.
+
+Suíte da analytics-api: **750 verdes** (3 vermelhos consertados eram do próprio arco — o
+alias `s` na subquery do 360 e o `_count` a mais do `unattributable`). Os dois testes
+novos foram provados falseáveis por mutação.
+
+### Cauda encontrada ao rodar os portões vizinhos (AUT-30)
+
+O `probe_session_content_scope.sh` estava **vermelho, e não por este arco** — nenhum
+arquivo que ele exercita foi tocado. O ramo C cunhava `{"unrestricted": true}` para
+representar o chamador irrestrito, e esse claim foi REMOVIDO por decisão do dono hoje
+mesmo (AUT-12). O gate seguiu cunhando um claim que ninguém lê e passou a acusar *"o
+irrestrito perdeu acesso às rotas de conteúdo"* — **falso**, porque não existe mais
+aquele irrestrito. É a mesma família das 10 falhas da AUT-27: instrumento escrito contra
+um contrato que mudou embaixo, cujo vermelho fiel ao ramo publicaria um defeito
+inexistente. O ramo passou a usar o único principal irrestrito que restou — o de SERVIÇO
+(`X-Service-Token`), lido do próprio container para o gate não carregar uma cópia de
+segredo que envelhece calada.
+
+⚠️ O vermelho só apareceu porque o `docker compose up -d` deste arco **recriou o
+container**, descartando código que estava lá por `docker cp`. *O rebuild não quebrou —
+revelou*, exatamente como o primeiro `down -v` de 2026-08-05.
+
 ## Afordância de escopo: a tela diz que o vazio é escopo, e o criador recebe a oferta (2026-08-31)
 
 **AUT-10.** Depois da AUT-03, `accessible_pools: []` significa nenhum pool — e é config

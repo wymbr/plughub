@@ -7967,35 +7967,33 @@ O que sobrou está abaixo, contado. Nenhum destes é "por enquanto".
 
 ---
 
-### Recorte de linha nas rotas recém-gateadas (dívida contada, aberta)
+### Recorte de linha nos agregados — ✅ FECHADO em 2026-08-31 (AUT-01)
 
-**As doze rotas de `reports.py` exigem credencial e NÃO recortam linha.** Um operador
-escopado a um pool, autenticado, lê estes agregados inteiros. É estritamente melhor que o
-anônimo lê-los inteiros, e estritamente pior que o alvo.
+O diagnóstico abaixo estava certo na causa e **errado na contagem**: falava de *"as doze
+rotas de `reports.py`"*, e o censo AST mediu **13 sem recorte em 39** — duas delas com
+isenção já DECIDIDA e escrita no próprio código (`/resources/tokens`, que inclusive
+recusa `?pool_id=` com 422, e `/customer-voice/instruments`, catálogo estático). Contar
+"o que falta" sem separar "o que decidiu não fazer" superestima a dívida e faz a decisão
+tomada parecer esquecimento.
 
-A causa é mecânica, não esquecimento: as `query_*` que as servem **não aceitam
-`accessible_pools`**. Fabricar o filtro por rota exigiria decidir, uma a uma, qual coluna é
-"o pool desta agregação" — e o precedente está medido: a F2 do ADR de relatórios encontrou
-um filtro de canal que não filtrava, **esvaziava** (subconsulta que o ClickHouse recusava,
-`except` devolvendo `data_unavailable`, 200 com zero linha, 683 testes verdes).
+Estado: **35 escopadas · 2 isentas declaradas · 2 dívidas com gatilho**. O porquê e as
+duas correções de rumo estão no `CHANGELOG.md` § *Recorte de linha nos AGREGADOS*; a
+regra (decisão por FAMÍLIA DE FATO, não por rota) mora no cabeçalho de `reports_query.py`
+e no `CLAUDE.md` § Security. Gate: `infra/test/probe_report_row_scope.sh`.
 
-| Rota | Query | Critério que falta decidir |
-|---|---|---|
-| `/reports/usage` | `query_usage_report` | `usage_events` não tem pool; a chave seria `session_id`→`sessions` |
-| `/reports/workflows` | `query_workflows_report` | idem, via `instance_id` |
-| `/reports/campaigns` | `query_campaigns_report` | idem, via `collect_token` |
-| `/reports/evaluations` · `/summary` · `/quality` | `query_evaluations_*` | join a `segments` (o pool que ATENDEU) × `sessions` (o de entrada) — é a D10 |
-| `/reports/customers/{id}/360` | `query_customer_360` | tem `sess_conds` compartilhado; `_session_scope_clause` serviria, mas exige alias no `FROM` de 3 queries |
-| `/reports/agent-events/*` | `query_agent_events_*` | `category_l1` é o `pool_id` por convenção do Arc 12 — convenção não é coluna |
-| `/reports/evaluator-calibration` | `query_evaluator_calibration` | eixo é o AVALIADOR, não o pool; pode ser que a resposta certa seja "não recorta" |
+A tabela original previa "o critério que falta decidir" por rota, e **duas previsões não
+se sustentaram na medição**, o que é o registro mais útil que ela deixa:
 
-**Exceção já feita:** `/sessions/active` recorta (403 `pool_scope_denied`), porque o chamador
-**nomeia** o pool — teste de pertinência à lista do token, não predicado de coluna.
+- *"`/reports/agent-events/*` — `category_l1` é o `pool_id` por convenção do Arc 12;
+  convenção não é coluna"* — **`agent_business_events` TEM coluna `pool_id`**, preenchida
+  em 9 de 9 linhas. Não era preciso confiar na convenção; bastava olhar o schema.
+- *"`/reports/campaigns` — idem, via `collect_token`"* — `collect_events` **não tem
+  `session_id`**; o caminho concebível é `instance_id` → `workflow_events.pool_id`, e
+  ele não foi construído porque as duas tabelas estão vazias (AUT-28).
 
-O `/reports/customers/{id}/360` é o mais urgente: é dado de CLIENTE, e a linha da tabela
-diz que o predicado já existe.
-
----
+O que sobrou está em `pending.md`: **AUT-28** (as duas rotas de dívida) e **AUT-29** (a
+recusa por escopo só é viável quando o admin for `unrestricted` — hoje ele carrega uma
+lista de 36 pools, e recusar "chamador escopado" recusaria o administrador).
 
 ### Escopo por SESSÃO na leitura de um contato (dívida contada, aberta)
 

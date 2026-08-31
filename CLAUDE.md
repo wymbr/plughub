@@ -1346,12 +1346,36 @@ base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
 > 947** (1,06%), todas detritos de teste. A recusa **loga nomeando**
 > (`session_scope_undeterminable`), que é o que transforma 1% numa lista se virar 10%.
 >
-> **Agregados ❌ — dívida, e a razão é outra.** As `query_*` que servem as doze de
-> `reports.py` não aceitam `accessible_pools`: não é argumento esquecido, é filtro que não
-> existe. Inventá-lo por rota seria escolher qual coluna é "o pool desta agregação", e o
-> precedente está medido (F2: um filtro de canal que não filtrava, **esvaziava**). Contada
-> no `TODO.md`, nunca "por enquanto". Gate do que fechou:
-> `infra/test/probe_session_content_scope.sh` (6 ramos, vermelho antes de verde).
+> **Agregados ✅ — fechado em 2026-08-31 (AUT-01), e a chave foi não decidir por rota.**
+> As `query_*` não aceitavam `accessible_pools` — filtro que não existia, não argumento
+> esquecido. Vazamento medido ao vivo, com controle positivo na MESMA rodada: `admin@`
+> (36 pools) e um chamador escopado a UM pool liam números IDÊNTICOS em `/usage`,
+> `/evaluations`, `/evaluations/{summary,quality}`, `/agent-events/{summary,categories}` e
+> `/customers/{id}/360`, enquanto `/sessions` movia 386→323.
+>
+> **A pergunta não é "qual coluna é o pool desta agregação?"** — essa forma pede 13
+> escolhas, e 13 escolhas é errar ao menos uma em silêncio (o precedente é a F2: um filtro
+> de canal que não filtrava, **esvaziava**). A pergunta é **"a linha carrega o pool como
+> fato PRÓPRIO, ou o pool é fato de OUTRA coisa que ela referencia?"**, que tem três
+> respostas e **um predicado cada**: **F-A** pool-nativo (`_apply_pool_scope`) · **F-B**
+> derivado-de-sessão (`_session_derived_scope_clause`, que DELEGA ao `_session_scope_clause`
+> da F1b — escrever ali um `pool_id IN (…)` recriaria a cópia que autoriza pelo pool de
+> ENTRADA) · **F-C** indecidível, que vira **dívida DECLARADA**.
+>
+> **Isenção é DECLARADA, nunca deduzida da ausência** — e são DUAS tabelas, porque
+> *"decidimos não recortar"* (`_SCOPE_EXEMPT`, sem gatilho) e *"ainda não sabemos
+> recortar"* (`_SCOPE_DEBT`, com gatilho) são fatos diferentes; juntá-las faria a dívida
+> herdar a tranquilidade da decisão. Estado: **35 escopadas · 2 isentas · 2 dívidas**.
+>
+> ⚠️ **A recusa por escopo NÃO é viável hoje, e isso é medição.** A primeira versão da F-C
+> devolvia 403 ao chamador escopado; `admin@plughub.local` carrega uma LISTA de 36 pools
+> (`accessible_pools is None` só acontece para principal de SERVIÇO), então ela recusava o
+> administrador de verdade para defender ZERO linha — a D14.1 ao contrário. Volta a ser
+> opção quando o admin for `unrestricted` (AUT-29).
+>
+> Gates: `infra/test/probe_report_row_scope.sh` (A: censo AST · B: ao vivo, com controle
+> positivo obrigatório e `SEM AMOSTRA` em vez de verde por ausência) e
+> `infra/test/probe_session_content_scope.sh` (conteúdo, 6 ramos).
 
 > **Fechar credencial numa API obriga a MIGRAR os chamadores internos, e eles não têm
 > usuário** *(medido 2026-08-30)*. O fechamento de 08-29 gateou 18 rotas e não tocou em

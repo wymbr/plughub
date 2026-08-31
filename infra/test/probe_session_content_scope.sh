@@ -18,7 +18,15 @@
 #
 #   RAMO A  token escopado AO pool da sessão      → 200   (não quebrei a leitura)
 #   RAMO B  token escopado a OUTRO pool           → 403 pool_scope_denied
-#   RAMO C  token irrestrito                      → 200   (sem regressão p/ admin)
+#   RAMO C  principal IRRESTRITO                  → 200   (sem regressão p/ quem vê tudo)
+#
+# ⚠️ O ramo C mudou de VEÍCULO em 2026-08-31, não de proposição. Ele cunhava
+# `{"unrestricted": true}`, e esse claim foi **REMOVIDO por decisão do dono** no mesmo
+# dia (AUT-12): escopo de pool passa a ser sempre enumerado. O gate seguiu cunhando um
+# claim que ninguém lê, virou vermelho, e o vermelho dizia "o irrestrito perdeu acesso"
+# — falso, porque não existe mais aquele irrestrito. Hoje o único principal irrestrito
+# é o de SERVIÇO (`X-Service-Token`), e é ele que o ramo usa. Mesma família das 10
+# falhas da AUT-27: instrumento escrito contra um contrato que mudou embaixo.
 #   RAMO D  sessão INDETERMINÁVEL + token escopado→ 403 session_pools_undeterminable
 #   RAMO E  sem token                             → 401   (o 403 do B não é 401 disfarçado)
 #   RAMO F  a delegação do supervisor preserva o veredicto (meta sintético,
@@ -104,8 +112,11 @@ echo
 
 TOK_A=$(mint "{\"accessible_pools\":[\"${POOL}\"]}")
 TOK_B=$(mint "{\"accessible_pools\":[\"${OUTRO}\"]}")
-TOK_C=$(mint '{"unrestricted":true}')
-for t in A B C; do
+# O irrestrito de hoje é o principal de SERVIÇO — lido do próprio container, para o
+# gate não carregar uma cópia do segredo que envelhece em silêncio.
+SVC_TOKEN=$($DC exec -T analytics-api printenv PLUGHUB_ANALYTICS_SERVICE_TOKEN 2>/dev/null | tr -d '\r\n')
+[ -n "$SVC_TOKEN" ] || { echo "INCONCLUSIVO: PLUGHUB_ANALYTICS_SERVICE_TOKEN vazio no container"; exit 2; }
+for t in A B; do
   eval "v=\$TOK_$t"
   case "$v" in *.*.*) ;; *) echo "FALHA: token $t não foi cunhado ([$v])"; exit 2;; esac
 done
@@ -130,9 +141,9 @@ case "$DET" in
   *) bad "B deveria dizer pool_scope_denied, disse: $(echo "$DET" | head -c 90)" ;;
 esac
 echo
-echo "── RAMO C — token irrestrito ⇒ 200 ─────────────────────────────────────"
+echo "── RAMO C — principal IRRESTRITO (serviço) ⇒ 200 ───────────────────────"
 for r in "$R_TRACE" "$R_PIPE" "$R_TRAN"; do
-  assert "C ${r%%\?*}" "200" "$(code -H "Authorization: Bearer $TOK_C" "${AN}${r}")"
+  assert "C ${r%%\?*}" "200" "$(code -H "X-Service-Token: $SVC_TOKEN" "${AN}${r}")"
 done
 echo
 echo "── RAMO D — sessão indeterminável ⇒ 403 session_pools_undeterminable ───"

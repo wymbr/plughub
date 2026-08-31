@@ -100,4 +100,6 @@ async def test_sessions_subquery_is_origin_scoped():
     # Default origin='live' entra na subquery de sessões (isolamento de substrato).
     assert "origin IN ('live')" in sql
     # Os joins de quality/survey filtram pelo conjunto de sessões do cliente.
-    assert "session_id IN (SELECT session_id FROM db.sessions" in sql
+    # O alias `s` entrou na AUT-01: `_session_scope_clause` qualifica as colunas, e
+    # sem alias o predicado referenciaria um `s` que não existe no FROM.
+    assert "session_id IN (SELECT s.session_id FROM db.sessions AS s FINAL" in sql

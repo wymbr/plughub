@@ -47,7 +47,7 @@ from .reports_query import (
     query_agents_cross,
     query_evaluations_report,
     query_evaluations_summary,
-    query_quality_report,
+    query_sentiment_events_report,
     query_participation_report,
     query_quality_report,
     query_segments_report,
@@ -146,6 +146,69 @@ def _respond(data: dict, fmt: str, filename: str) -> Response:
 
 
 # ─── GET /reports/sessions ────────────────────────────────────────────────────
+
+
+
+# ─── AUT-01 · isencoes DECLARADAS de recorte de pool ──────────────────────────
+#
+# Toda rota deste arquivo cai em exatamente uma de tres classes, e o portao
+# `infra/test/probe_report_row_scope.sh` reprova a que nao cair em nenhuma:
+#
+#   ESCOPADA  passa `accessible_pools` a query               (35 rotas)
+#   ISENTA    `_SCOPE_EXEMPT` — decidido, sem gatilho          (2)
+#   DIVIDA    `_SCOPE_DEBT`   — nao expressavel, COM gatilho   (2)
+#
+# **A isencao e DECLARADA, nunca deduzida da ausencia.** Foi a ausencia — 13 rotas que
+# simplesmente nao passavam o argumento — que deixou o vazamento invisivel por meses:
+# uma rota sem recorte e indistinguivel de uma rota que decidiu nao recortar, e so uma
+# das duas e defeito. O mesmo padrao do `/v1/health` no censo de credencial: uma
+# isenta, NOMEADA, nunca omitida.
+#
+# E sao DUAS tabelas, porque "decidimos nao recortar" e "ainda nao sabemos recortar"
+# sao fatos diferentes: a primeira nao tem gatilho, a segunda tem, e junta-las faria a
+# divida herdar a tranquilidade da decisao.
+_SCOPE_EXEMPT: dict[str, str] = {
+    "/resources/tokens":
+        "O gasto de uma conta LLM e fato do TENANT e nao se reparte por pool — decisao "
+        "de 2026-08-29, ja escrita no docstring da rota, que inclusive RECUSA `?pool_id=` "
+        "com 422 para nao devolver a soma de um subconjunto sob o rotulo do todo. "
+        "Recortar por `accessible_pools` aqui seria a mesma mentira pela porta de tras.",
+    "/customer-voice/instruments":
+        "Catalogo estatico (`CV_INSTRUMENTS`): metrica -> {source, rollup, graos, label}. "
+        "Nao le tenant nem ClickHouse, entao nao ha linha para recortar.",
+}
+
+# Divida: o recorte NAO e expressavel hoje, e o gatilho esta nomeado.
+#
+# ⚠️ A primeira versao deste arco RECUSAVA (403) o chamador escopado nestas duas rotas,
+# e a medicao derrubou a decisao no mesmo dia: **o admin tambem e um chamador
+# escopado** — `admin@plughub.local` carrega uma lista de 36 pools, nao a ausencia de
+# restricao (`accessible_pools is None` so acontece para principal de SERVICO). A
+# recusa devolvia 403 ao administrador de verdade, para defender **zero linha** — as
+# duas tabelas estao vazias nesta instalacao. E a D14.1 do `CLAUDE.md` ao contrario:
+# publicar uma defesa contra um dano que nao existe, causando um que existe.
+#
+# O discriminador que a recusa PRECISARIA ("o escopo deste chamador cobre o tenant
+# inteiro?") exige o universo de pools do registry — dependencia nova, com caminho de
+# degradacao proprio, por duas tabelas sem produtor. Nao se paga isso agora. O que
+# torna a recusa viavel depois e o claim `unrestricted` chegar ao admin (AUT-15).
+_SCOPE_DEBT: dict[str, str] = {
+    "/campaigns":
+        "`collect_events` nao tem `session_id` nem `pool_id` (so `collect_token` e "
+        "`instance_id`). Ha um caminho concebivel — `instance_id` -> "
+        "`workflow_events.pool_id` — e ele NAO foi construido: as duas tabelas estao "
+        "VAZIAS aqui, entao o join entraria sem nunca ter sido visto funcionar, que e "
+        "como nasceu o filtro de canal da F2 (o que filtrava esvaziando, 683 testes "
+        "verdes). GATILHO: quando `collect_events` tiver produtor, o join vira "
+        "exercivel e o recorte e obrigatorio.",
+    "/evaluator-calibration":
+        "`calibration_events` so carrega `evaluator_id`; o eixo do relatorio e o "
+        "AVALIADOR. Pode ser que a resposta certa seja isencao DECIDIDA (como "
+        "`/resources/tokens`) — mas isso e decisao do dono, e presumi-la aqui seria "
+        "converter uma divida em politica sem ninguem ter escolhido. GATILHO: quando "
+        "a tabela tiver produtor, decidir entre recorte e isencao explicita.",
+}
+
 
 @router.get("/sessions")
 async def report_sessions(
@@ -459,7 +522,7 @@ async def report_quality(
     Columns: event_id, tenant_id, session_id, pool_id, score, category, timestamp
     """
     ps = _clamp_page_size(page_size, format == "csv")
-    data = await query_quality_report(
+    data = await query_sentiment_events_report(
         client    = request.app.state.store.new_client(),
         database  = request.app.state.store._database,
         tenant_id = tenant_id,
@@ -508,6 +571,7 @@ async def report_usage(
         source_component = source_component,
         page      = page,
         page_size = ps,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"usage_{_today_label()}.csv")
 
@@ -549,6 +613,7 @@ async def report_workflows(
         campaign_id = campaign_id,
         page      = page,
         page_size = ps,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"workflows_{_today_label()}.csv")
 
@@ -904,6 +969,7 @@ async def get_evaluations_report(
         eval_status  = eval_status,
         page         = page,
         page_size    = page_size,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"evaluations_{_today_label()}.csv")
 
@@ -940,6 +1006,7 @@ async def get_evaluations_summary(
         campaign_id = campaign_id,
         form_id    = form_id,
         group_by   = group_by,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"evaluations_summary_{_today_label()}.csv")
 
@@ -978,6 +1045,7 @@ async def get_evaluations_quality(
         finalize_reason = finalize_reason,
         segment_id      = segment_id,
         form_version    = form_version,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"evaluations_quality_{_today_label()}.csv")
 
@@ -1684,6 +1752,7 @@ async def report_customer_360(
         tenant_id   = tenant_id,
         customer_id = customer_id,
         origin      = origin,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, "json", "")
 
@@ -1761,6 +1830,7 @@ async def get_agent_events_series(
         pool_id     = pool_id,
         skill_id    = skill_id,
         granularity = granularity,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"agent_events_series_{_today_label()}.csv")
 
@@ -1801,6 +1871,7 @@ async def get_agent_events_summary(
         group_by  = group_by,
         page      = page,
         page_size = ps,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"agent_events_summary_{_today_label()}.csv")
 
@@ -1835,6 +1906,7 @@ async def get_agent_events_categories(
         to_dt     = to_dt,
         pool_id   = pool_id,
         skill_id  = skill_id,
+        accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, "json", "")
 

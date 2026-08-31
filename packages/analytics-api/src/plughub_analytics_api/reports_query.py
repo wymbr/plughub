@@ -312,6 +312,102 @@ def _session_scope_clause(
     )
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# AUT-01 — recorte de linha nos AGREGADOS. Um corte por FAMÍLIA DE FATO.
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Medido em 2026-08-31, ao vivo, com controle positivo na MESMA rodada: `admin@`
+# (36 pools) e um chamador escopado a UM pool liam números IDÊNTICOS em
+# `/usage` (20), `/evaluations` (2), `/evaluations/summary` (1),
+# `/evaluations/quality` (2), `/agent-events/summary` (3), `/agent-events/categories`
+# (3) e `/customers/{id}/360` (5 contatos) — enquanto `/sessions` movia 386→323.
+# O 386→323 é o que prova que o instrumento mede; sem ele, "números iguais" também
+# seria o que uma medição quebrada produz.
+#
+# ── Por que a decisão é por FAMÍLIA, e não por rota ───────────────────────────
+#
+# O `TODO.md` registrava a causa certa: as `query_*` não aceitavam `accessible_pools`
+# porque **o filtro não existe**, e fabricá-lo por rota exigiria decidir, uma a uma,
+# qual coluna é "o pool desta agregação". O precedente está medido — a F2 do ADR de
+# relatórios encontrou um filtro de canal que não filtrava, **esvaziava**. Escolher
+# 13 vezes é escolher errado ao menos uma, em silêncio.
+#
+# A pergunta que decide não é "qual coluna?", é **"a linha carrega o pool como fato
+# PRÓPRIO, ou o pool é fato de OUTRA coisa que ela referencia?"** — e ela tem só três
+# respostas, cada uma com um predicado só:
+#
+#   F-A  pool-nativo     a linha TEM `pool_id`      → `_apply_pool_scope`
+#                        (`agent_business_events`, `workflow_events`)
+#   F-B  derivado-de-    a linha tem `session_id`;  → `_session_derived_scope_clause`
+#        sessão          o pool é fato da SESSÃO      (`usage_events`,
+#                                                      `evaluation_results`,
+#                                                      `evaluation_finalized`,
+#                                                      `session_signal`)
+#   F-C  indecidível     nenhuma chave alcança pool → RECUSA (403), nunca servir
+#                        (`collect_events`: só `collect_token`/`instance_id`;
+#                         `calibration_events`: só `evaluator_id`)
+#
+# ⚠️ **F-C recusa em vez de devolver vazio.** Vazio fabricado é o modo de falha da F2:
+# indistinguível de "não há dado", 200, e ninguém fica vermelho. A recusa nomeia o
+# motivo e some sozinha quando alguém der a essas tabelas uma chave de pool.
+#
+# ⚠️ **`_apply_pool_scope` sobre `pool_id` NÃO é o filtro `?pool_id=` do usuário.** São
+# duas perguntas (o que eu ALCANÇO × o que eu PEDI) e a segunda nunca autoriza a
+# primeira. Ver o aviso equivalente em `_fetch_sessions` sobre `entry_pool_id`.
+
+
+def scope_denies_everything(accessible_pools: "list[str] | None") -> bool:
+    """`[]` = NENHUM pool. Dois dos três valores de escopo são falsy — e só um libera.
+
+    Depois da AUT-03 (`LEGACY_EMPTY_MEANS_UNRESTRICTED = False`) a lista vazia é
+    config VÁLIDA e frequente: usuário criado sem escopo nasce assim. O idioma
+    `if not accessible_pools` a confunde com `None` (irrestrito) e **inverte o
+    veredicto** — é a mesma família de `if raw is None` sobre um decodificador que
+    devolve `""`: o ramo fica morto e o caminho segue como se houvesse permissão.
+
+    Existe como função NOMEADA porque o idioma inline (`is not None and not …`) está
+    repetido 16 vezes neste arquivo e é ilegível o bastante para ser copiado errado
+    uma vez. As 16 estão corretas e ficam; o que não se quer é a décima sétima
+    escrita à mão.
+
+    True  → o chamador deve devolver resultado vazio SEM consultar o ClickHouse.
+    """
+    return accessible_pools is not None and not accessible_pools
+
+
+def _session_derived_scope_clause(
+    db: str,
+    accessible_pools: "list[str] | None",
+    column: str = "session_id",
+) -> str:
+    """Predicado F-B: a linha não carrega pool, carrega `session_id`.
+
+    Delega ao `_session_scope_clause` — o predicado ÚNICO de "esta sessão é minha"
+    (entrou por pool meu ∪ ainda sem pool ∪ um pool meu atendeu). Escrever aqui um
+    `pool_id IN (…)` sobre `sessions` recriaria a cópia que a F1b removeu, e com o
+    mesmo defeito: autorizar pelo pool de ENTRADA faz o supervisor perder o que os
+    agentes DELE atenderam (52 contatos, medido em 2026-08-14).
+
+    **Linha órfã fica de fora, e isso é decidido.** Um `session_id` que não casa com
+    sessão nenhuma simplesmente não está no conjunto — não é preciso ramo para isso.
+    A direção é a conservadora e a mesma do conteúdo de contato (2026-08-30): o
+    indeterminável é RECUSADO, nunca concedido. Para o chamador irrestrito nada muda:
+    sem restrição o predicado é `""` e a linha órfã continua visível.
+
+    Devolve `""` quando não há restrição — mas `""` também sai para `[]`, e por isso
+    todo chamador passa antes por `scope_denies_everything`.
+    """
+    scope = _session_scope_clause(db, accessible_pools, alias="s")
+    if not scope:
+        return ""
+    return (
+        f"{column} IN ("
+        f"SELECT s.session_id FROM {db}.sessions AS s FINAL"
+        " WHERE s.tenant_id = {tenant_id:String}"
+        f" AND {scope})"
+    )
+
+
 # Quality substrate isolation (ADR adr-quality-substrate-isolation) — domínio de origin.
 _VALID_ORIGINS = {"live", "import", "reeval"}
 
@@ -2149,9 +2245,34 @@ def _fetch_contact_insights(
 # `agent_business_events` — outro eixo, mantido.
 
 
-# ─── /reports/quality ────────────────────────────────────────────────────────
+# ─── /reports/quality — lista de eventos de SENTIMENTO ───────────────────────
+#
+# ⚠️ O nome era `query_quality_report`, IGUAL ao da T11 mil linhas abaixo — e como a
+# outra é definida DEPOIS, esta ficava sombreada: em Python a segunda definição
+# substitui a primeira no módulo, sem aviso de ninguém. Consequência medida em
+# 2026-08-31: `/reports/quality` respondia **500 para todo mundo, sempre** (a rota
+# passa `pool_id`/`category`/`accessible_pools`, que a T11 não aceita → TypeError), e
+# o recorte de pool que ESTA função sempre teve era inalcançável.
+#
+# É a família *"existe ≠ está pronto"* na forma mais barata: o `grep` acha a função, o
+# argumento de escopo está lá, o corpo está certo — e nada disso roda. Só o 500
+# denuncia, e ninguém consulta uma rota sem consumidor na UI. Foi encontrada ao contar
+# quais rotas recortam linha (AUT-01): esta seria contada como recortando.
+#
+# O nome novo diz a TABELA (`sentiment_events`), não o rótulo do relatório: foi o
+# rótulo genérico ("quality") que deixou duas coisas diferentes reivindicarem o mesmo
+# identificador.
+#
+# ⚠️ E eram DUAS funções sombreadas, não uma: `_fetch_quality` estava duplicado do
+# mesmo jeito. Renomear só a de fora trocou o 500 por um **503 com
+# `error: data_unavailable`** — o `except Exception` do wrapper engolia o `TypeError:
+# _fetch_quality() missing 1 required positional argument` e o servia como degradação
+# graciosa. *Fail-soft sobre defeito de fiação produz exatamente o valor plausível*:
+# uma rota permanentemente quebrada com cara de fonte de dados indisponível, que
+# ninguém investiga. Só o log nomeando a exceção denunciou — e é por isso que aquele
+# `except` imprime o texto do erro em vez de um 'falhou' genérico.
 
-async def query_quality_report(
+async def query_sentiment_events_report(
     client:    Any,
     database:  str,
     tenant_id: str,
@@ -2170,15 +2291,15 @@ async def query_quality_report(
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
-            _fetch_quality, client, database, tenant_id, since, until,
+            _fetch_sentiment_events, client, database, tenant_id, since, until,
             pool_id, category, accessible_pools, page, page_size,
         )
     except Exception as exc:
-        logger.warning("query_quality_report failed tenant=%s: %s", tenant_id, exc)
+        logger.warning("query_sentiment_events_report failed tenant=%s: %s", tenant_id, exc)
         return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
 
 
-def _fetch_quality(
+def _fetch_sentiment_events(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
     pool_id: str | None, category: str | None,
@@ -2231,13 +2352,16 @@ async def query_usage_report(
     source_component: str | None = None,
     page:      int = 1,
     page_size: int = 100,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_usage, client, database, tenant_id, since, until,
-            dimension, source_component, page, page_size,
+            dimension, source_component, page, page_size, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_usage_report failed tenant=%s: %s", tenant_id, exc)
@@ -2249,6 +2373,7 @@ def _fetch_usage(
     since: str, until: str,
     dimension: str | None, source_component: str | None,
     page: int, page_size: int,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -2263,6 +2388,44 @@ def _fetch_usage(
     if source_component:
         conditions.append("source_component = {source_component:String}")
         params["source_component"] = source_component
+
+    # ABAC pool-scope (AUT-01, F-B) — `usage_events` nao tem `pool_id`; o pool e fato
+    # da SESSAO. O predicado e o mesmo de "esta sessao e minha" que os relatorios de
+    # contato usam, entao um supervisor ve aqui a mesma populacao que ve la.
+    _scope = _session_derived_scope_clause(db, accessible_pools)
+
+    # ── e o que cai FORA e contado, nao sumido ────────────────────────────────
+    #
+    # Medido em 2026-08-31: de 20 linhas na janela de 7 dias, **12 tem `session_id`
+    # nao-vazio que nao casa com sessao nenhuma** em `sessions`. O predicado as exclui
+    # — corretamente, porque linha nao-atribuivel nao e de ninguem —, mas isto aqui e
+    # dado de FATURAMENTO: sumir com 60% do relatorio em silencio e a mesma familia do
+    # filtro de canal da F2, que filtrava esvaziando.
+    #
+    # Entao a exclusao vira NUMERO. `meta.unattributable` diz quantas linhas da janela
+    # o recorte nao conseguiu atribuir; `0` e a resposta normal e a unica que nao pede
+    # investigacao. Mesmo desenho do `sla_unstamped` no Fila/SLA: a populacao ambigua
+    # ganhou contador em vez de silencio.
+    #
+    # ⚠️ **NAO e "o que o meu recorte deixou de fora"** — a primeira versao mediu isso e
+    # o nome mentia. Para o chamador escopado ela devolvia 20 de 20, porque contava
+    # tambem as 8 linhas que SAO atribuiveis, so que a outro pool. Duas proposicoes
+    # ("nao pertence a ninguem" x "nao pertence a mim") sob um nome so, e a segunda
+    # ainda publica o tamanho da populacao alheia.
+    #
+    # `unattributable` e propriedade da JANELA DE DADOS, igual para todo chamador:
+    # linhas cujo `session_id` nao casa com sessao nenhuma. Por isso o predicado aqui
+    # nao leva `accessible_pools`.
+    base_where = " AND ".join(conditions)
+    unattributable = _count(
+        client,
+        f"SELECT count() FROM {db}.usage_events FINAL WHERE {base_where}"
+        f" AND session_id NOT IN (SELECT session_id FROM {db}.sessions FINAL"
+        " WHERE tenant_id = {tenant_id:String})",
+        params,
+    )
+    if _scope:
+        conditions.append(_scope)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -2279,7 +2442,9 @@ def _fetch_usage(
         LIMIT {page_size} OFFSET {offset}
     """, parameters=params)
 
-    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+    meta = _meta(page, page_size, total, since, until)
+    meta["unattributable"] = unattributable
+    return {"data": _rows_to_dicts(result), "meta": meta}
 
 
 # ─── /reports/workflows ──────────────────────────────────────────────────────
@@ -2296,13 +2461,16 @@ async def query_workflows_report(
     campaign_id: str | None = None,
     page:      int = 1,
     page_size: int = 100,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_workflows, client, database, tenant_id, since, until,
-            flow_id, status, campaign_id, page, page_size,
+            flow_id, status, campaign_id, page, page_size, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_workflows_report failed tenant=%s: %s", tenant_id, exc)
@@ -2314,6 +2482,7 @@ def _fetch_workflows(
     since: str, until: str,
     flow_id: str | None, status: str | None, campaign_id: str | None,
     page: int, page_size: int,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -2331,6 +2500,12 @@ def _fetch_workflows(
     if campaign_id:
         conditions.append("campaign_id = {campaign_id:String}")
         params["campaign_id"] = campaign_id
+
+    # ABAC pool-scope (AUT-01, F-A) — `workflow_events` TEM `pool_id` proprio.
+    # ⚠️ Linha com `pool_id = ''` fica de FORA do chamador escopado, e isso e
+    # decidido: evento de workflow sem pool nao e atribuivel a ninguem, e conceder o
+    # nao-atribuivel e a direcao errada. Para o irrestrito nada muda.
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -3114,6 +3289,7 @@ async def query_evaluations_report(
     eval_status:  str | None = None,
     page:      int = 1,
     page_size: int = 100,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     """
     Returns individual evaluation results (one row per evaluated session).
@@ -3121,10 +3297,13 @@ async def query_evaluations_report(
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_evaluations, client, database, tenant_id, since, until,
             campaign_id, form_id, evaluator_id, eval_status, page, page_size,
+            accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_evaluations_report failed tenant=%s: %s", tenant_id, exc)
@@ -3186,6 +3365,7 @@ def _fetch_evaluations(
     campaign_id: str | None, form_id: str | None,
     evaluator_id: str | None, eval_status: str | None,
     page: int, page_size: int,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -3206,6 +3386,13 @@ def _fetch_evaluations(
     if eval_status:
         conditions.append("eval_status = {eval_status:String}")
         params["eval_status"] = eval_status
+
+    # ABAC pool-scope (AUT-01, F-B) — esta tabela nao tem `pool_id`; o pool e fato da
+    # SESSAO. O predicado e o mesmo de "esta sessao e minha" que os relatorios de
+    # contato ja usam, entao um supervisor ve aqui exatamente a populacao que ve la.
+    _scope = _session_derived_scope_clause(db, accessible_pools)
+    if _scope:
+        conditions.append(_scope)
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -3253,6 +3440,7 @@ async def query_evaluations_summary(
     campaign_id: str | None = None,
     form_id:     str | None = None,
     group_by:    str = "campaign_id",   # campaign_id | evaluator_id | form_id | date | agent_key | pool_id
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     """
     Aggregated evaluation summary: avg score, score distribution, count by status.
@@ -3267,10 +3455,12 @@ async def query_evaluations_summary(
     allowed_groups = {"campaign_id", "evaluator_id", "form_id", "date", "agent_key", "pool_id"}
     if group_by not in allowed_groups:
         group_by = "campaign_id"
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": {"from_dt": since, "to_dt": until}}
     try:
         return await asyncio.to_thread(
             _fetch_evaluations_summary, client, database, tenant_id, since, until,
-            campaign_id, form_id, group_by,
+            campaign_id, form_id, group_by, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_evaluations_summary failed tenant=%s: %s", tenant_id, exc)
@@ -3282,6 +3472,7 @@ def _fetch_evaluations_summary(
     since: str, until: str,
     campaign_id: str | None, form_id: str | None,
     group_by: str,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -3296,6 +3487,13 @@ def _fetch_evaluations_summary(
     if form_id:
         conditions.append("form_id = {form_id:String}")
         params["form_id"] = form_id
+
+    # ABAC pool-scope (AUT-01, F-B) — esta tabela nao tem `pool_id`; o pool e fato da
+    # SESSAO. O predicado e o mesmo de "esta sessao e minha" que os relatorios de
+    # contato ja usam, entao um supervisor ve aqui exatamente a populacao que ve la.
+    _scope = _session_derived_scope_clause(db, accessible_pools)
+    if _scope:
+        conditions.append(_scope)
 
     where = " AND ".join(conditions)
 
@@ -3367,6 +3565,7 @@ async def query_customer_360(
     customer_id: str,
     *,
     origin: "str | list[str]" = "live",
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     """Cliente 360 agregado por `customer_id` (ADR `adr-customer-360-two-surfaces.md` §D4).
 
@@ -3380,11 +3579,17 @@ async def query_customer_360(
     `session_id`, então o vínculo é sempre via subquery no conjunto de sessões do cliente.
     `origin='live'` por default (isolamento de substrato) — a superfície é operacional.
     """
+    # Escopo VAZIO nao consulta — e a resposta e a MESMA forma do cliente inexistente
+    # (`contacts: None`), nunca um 360 com zeros: zero e um numero, e um numero afirma
+    # que se mediu.
+    if scope_denies_everything(accessible_pools):
+        return {"customer_id": customer_id, "contacts": None, "quality": None,
+                "surveys": []}
     internal_pools = await _internal_pools_for(tenant_id)
     try:
         return await asyncio.to_thread(
             _fetch_customer_360, client, database, tenant_id, customer_id, origin,
-            internal_pools,
+            internal_pools, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_customer_360 failed tenant=%s customer=%s: %s",
@@ -3397,6 +3602,7 @@ def _fetch_customer_360(
     client: Any, db: str, tenant_id: str, customer_id: str,
     origin: "str | list[str]",
     internal_pools: "frozenset[str] | None" = None,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     params = {"tenant_id": tenant_id, "customer_id": customer_id}
 
@@ -3406,8 +3612,20 @@ def _fetch_customer_360(
         "customer_id = {customer_id:String}",
     ]
     _apply_origin_scope(sess_conds, origin)
+    # ABAC pool-scope (AUT-01, F-B) — no `sess_conds`, que e a RAIZ das tres leituras
+    # (contatos, qualidade, surveys). Recortar so uma delas daria um 360 em que o
+    # numero de contatos e o de avaliacoes falam de populacoes diferentes.
+    #
+    # O predicado e o mesmo `_session_scope_clause` da lista de contatos, entao o que
+    # o supervisor conta aqui e o que ele consegue abrir la. Ele exige o alias `s`; as
+    # condicoes acima sao colunas nao-qualificadas e o ClickHouse as resolve na
+    # presenca do alias.
+    _scope = _session_scope_clause(db, accessible_pools, alias="s")
+    if _scope:
+        sess_conds.append(_scope)
     sessions_subquery = (
-        f"SELECT session_id FROM {db}.sessions FINAL WHERE {' AND '.join(sess_conds)}"
+        f"SELECT s.session_id FROM {db}.sessions AS s FINAL"
+        f" WHERE {' AND '.join(sess_conds)}"
     )
 
     # ── contacts ──────────────────────────────────────────────────────────────
@@ -3425,7 +3643,7 @@ def _fetch_customer_360(
                 countIf(COALESCE(status, 'closed') != 'closed')  AS open_count,
                 arrayFilter(x -> x != '', groupUniqArray(channel)) AS channels,
                 max(opened_at)                                   AS last_contact_at
-            FROM {db}.sessions FINAL
+            FROM {db}.sessions AS s FINAL
             WHERE {' AND '.join(contact_conds)}
         """, parameters=params)
         rows = _rows_to_dicts(r)
@@ -3483,7 +3701,7 @@ def _fetch_customer_360(
     }
 
 
-# ─── /reports/quality — T11: Oficial × Operacional (§17.3) ────────────────────
+# ─── /evaluations/quality — T11: Oficial × Operacional (§17.3) ───────────────
 
 _QUALITY_GROUPS = {"campaign_id", "finalize_reason", "segment_id", "form_version",
                    "evaluated_agent_type", "date"}
@@ -3502,6 +3720,7 @@ async def query_quality_report(
     finalize_reason: str | None = None,
     segment_id:      str | None = None,
     form_version:    int | None = None,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     """T11 — relatório de qualidade em DOIS modos, nunca blendados (spec §17.3):
       - oficial: só `result_state='finalized'` (tabela `evaluation_finalized`) — o invariante.
@@ -3512,10 +3731,14 @@ async def query_quality_report(
     mode  = "operacional" if mode == "operacional" else "oficial"
     if group_by not in _QUALITY_GROUPS:
         group_by = "campaign_id"
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "mode": mode, "group_by": group_by,
+                "meta": {"from_dt": since, "to_dt": until}}
     try:
         return await asyncio.to_thread(
             _fetch_quality, client, database, tenant_id, since, until,
             mode, group_by, campaign_id, finalize_reason, segment_id, form_version,
+            accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_quality_report failed tenant=%s: %s", tenant_id, exc)
@@ -3527,6 +3750,7 @@ def _fetch_quality(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     mode: str, group_by: str, campaign_id: str | None,
     finalize_reason: str | None, segment_id: str | None, form_version: int | None,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     params: dict = {"tenant_id": tenant_id}
 
@@ -3543,6 +3767,11 @@ def _fetch_quality(
         fin_conds.append("segment_id = {segment_id:String}"); params["segment_id"] = segment_id
     if form_version is not None:
         fin_conds.append("form_version = {form_version:Int32}"); params["form_version"] = int(form_version)
+    # ABAC pool-scope (AUT-01, F-B) — `evaluation_finalized` nao tem `pool_id`; o pool
+    # e fato da SESSAO avaliada.
+    _scope = _session_derived_scope_clause(db, accessible_pools)
+    if _scope:
+        fin_conds.append(_scope)
     fin_where = " AND ".join(fin_conds)
 
     fin_src = f"""
@@ -3560,6 +3789,11 @@ def _fetch_quality(
         ]
         if campaign_id:
             prov_conds.append("campaign_id = {campaign_id:String}")
+        # O MESMO recorte na fatia provisoria: aplicado so na finalizada, o modo
+        # `operacional` publicaria o provisorio do tenant inteiro sob o rotulo do
+        # recorte, e a diferenca entre os dois modos passaria a medir o escopo.
+        if _scope:
+            prov_conds.append(_scope)
         prov_where = " AND ".join(prov_conds)
         # provisório = evaluation_results cujo instance_id ainda NÃO finalizou
         source = f"""
@@ -6997,6 +7231,7 @@ async def query_agent_events_series(
     pool_id:     str | None = None,
     skill_id:    str | None = None,
     granularity: str = "day",  # day | week | hour
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     """
     Time-series of agent business events aggregated by (period, category).
@@ -7012,11 +7247,22 @@ async def query_agent_events_series(
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    # Escopo VAZIO nao consulta: `_apply_pool_scope` devolve False para `[]` e NAO
+    # acrescenta condicao — sem esta linha "nenhum pool" viraria "todos".
+    if scope_denies_everything(accessible_pools):
+        return {
+            "data": [],
+            "meta": {
+                "from_dt": since, "to_dt": until,
+                "granularity": granularity, "category": category,
+                "pool_id": pool_id, "skill_id": skill_id,
+            },
+        }
     try:
         return await asyncio.to_thread(
             _fetch_agent_events_series,
             client, database, tenant_id, since, until,
-            category, pool_id, skill_id, granularity,
+            category, pool_id, skill_id, granularity, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_agent_events_series failed tenant=%s: %s", tenant_id, exc)
@@ -7041,6 +7287,7 @@ def _fetch_agent_events_series(
     pool_id:     str | None,
     skill_id:    str | None,
     granularity: str,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     # Truncation function per granularity
     trunc = {
@@ -7065,6 +7312,13 @@ def _fetch_agent_events_series(
     if skill_id:
         conditions.append("skill_id = {skill_id:String}")
         params["skill_id"] = skill_id
+
+    # ABAC pool-scope (AUT-01, F-A) — a linha carrega `pool_id` como fato PRÓPRIO,
+    # entao o recorte e direto. NAO confundir com o `?pool_id=` acima: aquele e o
+    # filtro que o operador PEDIU, este e o conjunto que ele ALCANCA. Conflatar os
+    # dois faz o filtro do usuario virar autorizacao — e um `?pool_id=` de fora do
+    # escopo passaria a servir dado alheio.
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
 
@@ -7112,6 +7366,7 @@ async def query_agent_events_summary(
     group_by: str = "category",  # category | skill_id | pool_id | agent_type_id
     page:     int = 1,
     page_size: int = 100,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     """
     Aggregated summary of agent business events grouped by the chosen dimension.
@@ -7142,11 +7397,15 @@ async def query_agent_events_summary(
 
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    # Escopo VAZIO nao consulta: `_apply_pool_scope` devolve False para `[]` e NAO
+    # acrescenta condicao — sem esta linha "nenhum pool" viraria "todos".
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_agent_events_summary,
             client, database, tenant_id, since, until,
-            category, pool_id, group_by, page, page_size,
+            category, pool_id, group_by, page, page_size, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_agent_events_summary failed tenant=%s: %s", tenant_id, exc)
@@ -7168,6 +7427,7 @@ def _fetch_agent_events_summary(
     group_by:  str,
     page:      int,
     page_size: int,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -7182,6 +7442,13 @@ def _fetch_agent_events_summary(
     if pool_id:
         conditions.append("pool_id = {pool_id:String}")
         params["pool_id"] = pool_id
+
+    # ABAC pool-scope (AUT-01, F-A) — a linha carrega `pool_id` como fato PRÓPRIO,
+    # entao o recorte e direto. NAO confundir com o `?pool_id=` acima: aquele e o
+    # filtro que o operador PEDIU, este e o conjunto que ele ALCANCA. Conflatar os
+    # dois faz o filtro do usuario virar autorizacao — e um `?pool_id=` de fora do
+    # escopo passaria a servir dado alheio.
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
 
@@ -7228,6 +7495,7 @@ async def query_agent_events_categories(
     *,
     pool_id:  str | None = None,
     skill_id: str | None = None,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     """
     Catalogue of distinct category values active in the time window.
@@ -7241,11 +7509,15 @@ async def query_agent_events_categories(
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    # Escopo VAZIO nao consulta: `_apply_pool_scope` devolve False para `[]` e NAO
+    # acrescenta condicao — sem esta linha "nenhum pool" viraria "todos".
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": {"from_dt": since, "to_dt": until}}
     try:
         return await asyncio.to_thread(
             _fetch_agent_events_categories,
             client, database, tenant_id, since, until,
-            pool_id, skill_id,
+            pool_id, skill_id, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_agent_events_categories failed tenant=%s: %s", tenant_id, exc)
@@ -7260,6 +7532,7 @@ def _fetch_agent_events_categories(
     until:    str,
     pool_id:  str | None,
     skill_id: str | None,
+    accessible_pools: "list[str] | None" = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -7274,6 +7547,13 @@ def _fetch_agent_events_categories(
     if skill_id:
         conditions.append("skill_id = {skill_id:String}")
         params["skill_id"] = skill_id
+
+    # ABAC pool-scope (AUT-01, F-A) — a linha carrega `pool_id` como fato PRÓPRIO,
+    # entao o recorte e direto. NAO confundir com o `?pool_id=` acima: aquele e o
+    # filtro que o operador PEDIU, este e o conjunto que ele ALCANCA. Conflatar os
+    # dois faz o filtro do usuario virar autorizacao — e um `?pool_id=` de fora do
+    # escopo passaria a servir dado alheio.
+    _apply_pool_scope(conditions, accessible_pools)
 
     where = " AND ".join(conditions)
 
