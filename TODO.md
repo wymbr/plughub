@@ -590,7 +590,7 @@ defeito do gate; é o instrumento. Aferir sempre com `&& / ||`, nunca com `$?`, 
 Vale para qualquer probe rodado a partir do Windows.
 
 
-## 🟡 ABAC TOTAL — escopo FECHADO pelo dono (2026-08-27), passo 1 entregue
+## ABAC TOTAL — escopo definido pelo dono em 2026-08-27 *(arco de 8 passos; ver `done.md` grupo `docs/arcos/arc7-auth.md` — título corrigido 2026-08-31)*
 
 Decisão: **eliminar a permissão por papel; tudo sob ABAC.** As seis perguntas foram fechadas:
 
@@ -1187,7 +1187,7 @@ item parecer aberto por três dias. É o custo de `TODO.md` com ~7 900 linhas, e
 está escrita: **`grep` do sintoma antes de registrar** — e, ao FECHAR, `grep` do sintoma para achar
 o gêmeo.
 
-## 🟡 As suítes Python RODAM (2026-08-30) — restam 3 vermelhos DECLARADOS
+## As suítes Python rodam a partir da imagem *(2026-08-30; baseline `BASELINE_TOTAL=0` — título corrigido 2026-08-31, os três vermelhos caíram nos commits `b7c6d00` e `4d18e0f`)*
 
 > ⛔ **Os "quatro testes vermelhos" estavam verdes** — e não por medição errada: eles foram
 > fechados em **2026-08-27**, e a seção ✅ que registra isso está logo acima. O 🔴 era
@@ -3381,7 +3381,7 @@ Encadeia com o pré-requisito 2 do **R8** (*"produzir o vocabulário"*).
 
 ---
 
-## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12; **F0 ✅ + F1 ✅ + F1b ✅ + F2 ✅ + F3 ✅** — restam F4, F5)*
+## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12; ver `pending.md` grupo `adr-historico-unificado-duas-visoes` — título corrigido 2026-08-31: a F4 fechou em `CHANGELOG.md:5559`)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-14.** Dizia *"nada implementado"*, e F0 (`774b257`) e F1
 > (`43ab761`) estavam commitadas desde 12-13/08, sem entrada no `CHANGELOG` e sem nada aqui. A sessão
@@ -6917,7 +6917,7 @@ informação nova (não conserto), e pedem desenho de onde cabem na linha.
 viva e reprova se `sla.percentage` vier `0` **com** `elapsed_ms` `0` — testemunha de presença ao
 lado: `turn_count > 0` no mesmo payload (senão "sessão vazia" e "campo morto" têm a mesma cara).
 
-## Console não libera a tela após `Transfer` — histórico e contexto ficam com a sessão já fechada *(inconformidade relatada 2026-08-24, NÃO diagnosticada)*
+## Console não libera a tela após `Transfer` — histórico e contexto ficam com a sessão já fechada *(relatada 2026-08-24; conserto em `CHANGELOG.md:5300`, 2026-08-26 — título corrigido 2026-08-31)*
 
 **Relato do operador (é o requisito, não uma hipótese):** depois de executar **Transfer**, o esperado é
 que o Console se comporte como o **Close** — apagar histórico da conversa e contexto da tela e ficar

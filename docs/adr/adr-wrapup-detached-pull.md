@@ -364,3 +364,20 @@ histórico de uma única decisão em dois lugares.
 - Não introduz Journey artificial para contatos sem processo multi-sessão.
 - Não estende `scope=all` a `/reports/journeys` (listagem topo) — só ao drill-down de uma journey já aberta e a
   `/reports/sessions`.
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 751 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+Camada E2: wrap-up humano destacado = item de pull `assigned_to`. **Decisão: Path α, renderer-first** — o renderer é o **tratamento genérico de collect-form no Console** (não "renderer de aprovação"): renderiza o DialogForm de qualquer collect/delegate reivindicado + submit via `workflow_resume`; serve aprovação+wrap-up+survey-no-Console SEM skill por caso (§2.1). β (skill agente menu) **não viável no pull-standalone** (humano vira primário, sem IA p/ renderizar). Comuns: `assigned_to` (E2c), `acw_pending` (E2e, produtor pendente da Camada C), sessão de wrap-up fora da contagem (E2f), DialogForm (E2a). Kickoff do núcleo genérico: `docs/product/approval-renderer-kickoff.md` — proposto

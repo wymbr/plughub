@@ -689,3 +689,29 @@ o teste não pode reprovar por ausência de amostra. Depois de F1, o ramo espera
 - `packages/analytics-api/…/reports_query.py` — `_fetch_journeys`, `_apply_contact_scope`, `_journey_resolved_map`
 - `packages/platform-ui/src/modules/analise/AnaliseJourneysPage.tsx` — a Vista Processos atual
 - `packages/platform-ui/src/modules/service/components/SegmentList.tsx` — a primitiva de timeline (achado 8)
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 1307 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+`/analise/sessions` + `/analise/processos` colapsam num módulo: **visão 1** (contatos não relacionados, filtro de contato) × **visão 2** (processo). **Processo é PIVÔ, nunca navegação livre** — lista de processos só escopada por atributo de contato (`customer_id`, `open`), e é isso que mantém o filtro sempre no nível de contato (senão "filtrar por pool" devolve *journeys que tocaram o pool*). Processo aparece como CHIP na linha de contato (conta o processo inteiro, não a fatia filtrada — exige rótulo). **Duas classes de linha**: acesso do cliente (direção + par entrada→saída) × etapa interna (maquinaria, dobrada). Segmento é a FOLHA (sem transcript fundido cross-contato ⇒ sem ADR de masking). Com `started_at` na linha, **árvore e cronologia viram um componente com toggle de ordenação**; faixas-por-personagem = destino (faixa = IDENTIDADE, não segmento). Direção do acesso DERIVADA de `spawn_reason` (NULL=inbound · `collect`=outbound · `trigger`/`delegate`=interno). **"Recebeu a saída" nunca se infere de `visibility='all'`** — mente no parking, que existe justamente porque o cliente não está lá. **Estado 2026-08-25: F0 ✅ F1 ✅ F1b ✅ F2 ✅ F3 ✅ F4 ✅ (as duas visões na tela) — resta a F5
+
+> **Continuação da mesma entrada de índice (migrada em 2026-08-31, num segundo passo).** O primeiro passo usou um leitor LINE-BASED e migrou só a primeira linha física — o mesmo defeito que a § "achado do próprio instrumento" do ADR do allowlist descreve. Pego ao conferir o fence contra linhas órfãs, não pelo verde do script.
+
+(`ContextStorePersister`, fase própria) e a lente C (destino registrado).** A F4 trouxe um achado
+que não era dela: **a direção do acesso estava prestes a existir em duas casas** (derivada em TS
+para a coluna, e em SQL para o filtro novo). Virou UMA expressão, usada como coluna e como
+predicado na mesma query — divergir entre *"o que a linha diz"* e *"o que o filtro devolve"*
+deixou de ser possível. Gate `infra/test/probe_f4_direction_and_classes.sh` (vermelho→verde).
+**F0 antes da UI** *(feito)*: `handle_collect` não honrava `customer_resumable`/`resume_policy` (gate assimétrico vs os dois handlers de delegate; registrado em `skill_limite_entrega_v1.yaml:41-42`) — fechá-lo dá output-com-confirmação, perna-como-sessão, direção outbound e pertença por PROVENIÊNCIA, dispensando `journey_merge` para o output ativo. Achados medidos: `ani`/`dnis` vazios em 314 sessões · `sessions.pool_id` é o ÚLTIMO pool (filtro por pool já mente) · `/reports/segments` trunca em silêncio (janela sempre aplicada) · Audit LGPD documentado e AUSENTE — proposto

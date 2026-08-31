@@ -332,3 +332,20 @@ F2 antes de F4 (categoria de caminho sobre resposta escalar-com-JSON-dentro prod
 **Gate:** `infra/test/probe_dialog_tree_options.sh`, no molde de `probe_dialog_form_delete.sh` — vermelho antes
 do build, verde depois, com testemunha negativa em cada fase (o que o faria ficar vermelho está nomeado na
 coluna "Entrega").
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 2273 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+opções em ÁRVORE no DialogForm (taxonomia de wrap-up). **A recursão entra em `DialogOption`, nunca em `DialogNode`** — taxonomia é DOMÍNIO DE VALOR, não control-flow (`Financeiro > Cobrança > indevida` é UMA resposta, não decide o que vem depois), então `nodes` segue plano e as SEIS superfícies mantêm o laço linear. Pasta × arquivo com seletividade **derivada** (selecionável ⟺ sem `options`); profundidade 5; nesting só sob `list`/`checklist` (sob `button`/`form` é erro de schema, nunca render parcial); multi-seleção **dentro de uma pasta** ⇒ prefixo comum vira invariante CONFERÍVEL; resposta = caminho de **`id`s** (label nunca entra na série); obrigatoriedade derivada do nesting + folha de escape `nao_se_aplica` (que é um *arquivo na raiz*) — `required` burlado grava NULL, indistinguível de "não perguntamos"; árvore INLINE e versionada; `ask_when` ganha `prefix`, o que **fecha a decisão em aberto #3** do ADR de skip-logic. Quatro achados que sustentam as fases: **(1)** o form é lido DUAS VEZES (renderer no claim × `segment.ts:325` no submit, com `timeout_s:-1` no meio) e nada as amarra ⇒ pin de versão; **(2)** `flattenBlocks` reconstrói `capture` e perde `kind` (`dialog-blocks.ts:120,136`), que `deriveAgentEvents` exige (`segment.ts:110`) — armadilha ARMADA, blast radius zero hoje (só fixture a declara); **(3)** o ramo `multi-select ⇒ N eventos` é **CÓDIGO MORTO** — os 3 renderizadores tratam `checklist` como escalar e o bridge faz `json.dumps` na lista (`main.py:9116-9126`) ⇒ hoje sairia **uma** categoria-lixo `_a_b_`; **(4)** `AGENT_EVENT_CATEGORY_REGEX` aceita 2–5 segmentos e a profundidade decidida daria 8 ⇒ **bloqueio**, e `decomposeCategoryLevels` só extrai 4 (5º segmento hoje é gravado e silenciosamente invisível). Versionamento é **uso, não build** (PK inclui `version`, publish só promove, `?version=N` existe). Adjacentes registrados e fora de escopo: sem `GET /{form_id}/versions`, e **rollback não faz rollback**. Fases F0 (lossless) · F0b (pin) · F1 (schema) · F2 (multi de verdade) · F3 (Miller + recusa alta) · F4 (categoria de caminho) · F5 (editor) · F6. Ordem inegociável: F0 antes de F5, F2 antes de F4 — proposto

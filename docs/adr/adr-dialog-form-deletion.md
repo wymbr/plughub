@@ -178,3 +178,20 @@ estiver à mão — supor o caso reversível é o palpite confortável, e o erra
 4. `POST`/`PUT`/`publish` sobre arquivado ⇒ `409`; após `undelete`, ⇒ `200`.
 5. **Testemunha de presença:** um form vivo, não tocado, continua `200` na lista e na resolução — senão um
    backend que respondesse `404` a tudo passaria nos itens 2 e 3.
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 2015 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+`DELETE` de DialogForm: **arquivar** (reversível) e não apagar. A medição separou dois eixos que "soft-delete" funde: ARMAZENAMENTO (*"dá para recuperar?"*) × **LEITURA** (*"o contato em andamento cai?"*) — soft-delete com `404` na resolução quebraria igual ao hard delete. **D1: o catálogo fecha, `GET /{form_id}` continua servindo** (com `deleted_at`), porque ninguém DESCOBRE form por id: quem chama já tem vínculo. São **SEIS** leitores, todos por `?status=published`; **dois leem no FIM** do diálogo (`survey_record`, `segment_outcome_record` ⇒ a janela de risco vai até o submit, não até o `carregar_form`) e **um lê história encerrada** (`WebhookSegmentDetail`, dano sem janela). **D2: purga real só do nunca-publicado** — é a única parte DECIDÍVEL de "recusar quando há referência viva" (o `form_id` literal mora dentro do flow do snapshot do slot, então checagem cross-service seria incompleta por construção), com aviso de irreversibilidade na tela. D3 `409` em escrita sobre arquivado + `undelete` próprio (ressuscitar implícito faria slot antigo executar conteúdo novo sem ninguém tocar no deploy) · D4 recusa só de quem cria vínculo NOVO (`survey_link_create`) · D5 delete é do `form_id`, nunca da versão (despublicar é outra operação) · D6 `RECONCILE` limpa `deleted_at`, log diz *arquivado* · D7 a tela diz **arquivar**. Achado de tabela: `seed_dialog.published_version()` trata `404` como AUSENTE ⇒ com leitura fechada, **todo boot ressuscitaria o form apagado**. Emenda medida na UI: **`ever_published` não é derivável do `status` da lista** (última versão pode ser rascunho com uma publicada mais antiga), então a lista o carrega e o botão de arquivar fica DESABILITADO sem ele — supor o caso reversível é o palpite confortável e o errado num ato irreversível. Fases F1–F5 e gate `probe_dialog_form_delete.sh` (9 falhas antes do build → verde depois) — **Aceito + implementado 2026-08-28**

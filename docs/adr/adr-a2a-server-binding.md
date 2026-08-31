@@ -310,3 +310,20 @@ pool — `spawn_reason` hoje não distingue caller A2A de trigger interno.
   `docs/adr/adr-webhook-endpoint-single-registry.md` (D6),
   `docs/guias/webhook-patterns.md` § Exposição na borda (§4),
   `docs/product/competitive-analysis-2026-07.md` (§7).
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 1237 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+PlugHub como **servidor** A2A: binding de borda sobre pool+sessão, sem motor novo. `Task`=sessão (`taskId`=`session_id`, `contextId`=`root_session_id` — não criar contêiner, é o erro da `WorkflowInstance`/`Journey` pela 3ª vez); AgentCard = PROJEÇÃO do agent-registry (`version`=`set_at` do slot ⇒ contrato externo versiona junto com o deploy); A2A é **binding, não `channel`** (canal é filtro de roteamento; quem chamou é fato de CREDENCIAL) ⇒ zero diff no routing. Net-new real **não é o protocolo, é o ARTEFATO**: o caminho webhook nasceu fire-and-forget (trigger devolve só `{session_id}`) e `get_status` responde `"closed"` quando a chave não existe — "não sei" indistinguível de "terminou". Principal externo = `a2a_client` no auth-api (token por endpoint ≠ caller com N pools), `tenant_id` **nunca do corpo** (hoje vem), masking sem opção, cota `a2a_tasks`. Fases A0 descritor → A1 card read-only → **A2 principal (bloqueia A4)** → A3 artefato+status honesto → A4 JSON-RPC → A5 SSE → A6 validação. FORA: pool humano (fase 2, será `webchat`), PlugHub como CLIENTE (seria `invoke`, nunca pool — inventaria capacidade de recurso alheio) — proposto

@@ -271,3 +271,20 @@ form **entre** o claim e o submit não pode mudar o que `segment_outcome_record`
 alterado desde a exibição tem de dar **409**, não 200; e um skill com `version` pinada tem de continuar rodando
 a versão pinada depois de o form ser republicado (controle positivo — sem ele o probe passa por não exercer
 o pin).
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 3122 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+conteúdo referenciado (DialogForm) resolvido no **PROMOTE**, congelado no snapshot do slot — não em runtime. **Não é padrão novo: a base já decidiu assim duas vezes** (o bridge roda o `yaml_snapshot` do slot, não `skill.flow`; e `survey_link_create` já snapshota o form no token). Resolve TRÊS problemas que vinham fundidos: **(1)** a corrida das duas leituras — e resolve por **REMOÇÃO**, não sincronização: `form_get` já normaliza `captures` no `render`, então o skill passa `$.pipeline_state.dialog.render.captures` e `segment_outcome_record` para de buscar o form ⇒ **supersede a F0b/D9 do ADR da árvore**; **(2)** *"vi X, subiu Y"* — o form é editado noutra tela, por outra pessoa, noutra cadência, e **não há indicador de defasagem** para ele (há para o flow: `_isStale`); conserto = **promote OTIMISTA**, a tela declara as versões que exibiu e diverge com `409`+diff, porque aviso que ninguém lê é a família do *"using default values"*; **(3)** dispersão de autoria ⇒ o editor RESOLVE a referência e mostra in loco. **Injetar na EDIÇÃO foi recusado** (D4): troca risco visível por silencioso — a cópia envelhece sem sinal (modo de falha do `flattenBlocks`) e **velho é pior que diferente**; mais o bloat de uma taxonomia de 5 níveis dentro do YAML, que é MENOS legível. `version` opcional na referência = **pin × float** explícito por caso. **NÃO resolve** (D7): o snapshot congela o que EXECUTA, não como o histórico se LÊ — a imutabilidade do `id` segue invariante independente. Efeito colateral: **afrouxa o ADR de deleção** (arquivar deixa de poder quebrar deploy em execução). Emenda registrada: o argumento *"reuso entre canais exige arquivo separado"* **caiu** — quem serve N canais é a normalização `render`, que funcionaria inline; a referência compra (a) superfícies sem skill rodando, (b) editar texto sem re-deploy, (c) o mesmo form em N pools — **só a (c) obriga**. Fases S1 · S2 (`version`) · S3 (resolução no promote) · S4 (conflito) · S5 (afordância) · S6. Ordem: S1 antes de S3; S4 nunca antes da S5. ⚠️ **A S1 original ("`captures` no render, mata a corrida sozinha") foi REFUTADA por medição em 2026-08-29**, nas duas premissas: `render.captures` perde o mapa opção→nota (dano VIVO — `fcr` de `dialog_wrapup_arc12_v1` viraria `NaN` e a métrica sumiria) e o ÚNICO chamador de `segment_outcome_record` não tem `form_get`, logo não há `render` no `pipeline_state` dele — as duas leituras que correm são o renderizador do Console (cliente) e o composer (servidor). **Decisão do dono, 2026-08-29: caminho A — PIN DE VERSÃO**, que é a F0b do ADR da árvore ⇒ **a supersessão da F0b está REVERTIDA**. O pin é gravado pelo SERVIDOR (do cliente, um browser escolheria a versão que descreve a própria resposta) e não exige consertar `captures`, porque o composer segue lendo o form inteiro. Prioridade BAIXA e medida: dano zero hoje (os dois forms de wrap-up estão em v1, nunca republicados), a fazer antes de o ADR da árvore entrar — proposto

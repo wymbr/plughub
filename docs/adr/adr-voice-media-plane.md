@@ -325,3 +325,20 @@ ambiente que só sobe porque já subiu antes não está sendo verificado.
 | Borda SIP exposta sem classificação | V10 + probe próprio, espelhando o que a allowlist HTTP já faz |
 | Concorrência de eventos na fronteira de mídia | O bridge não garante ordem (A9); o estado de perna deve ser idempotente por `(session, participante, estado)` |
 | Store único apagar gravação pelo ciclo de anexo | V5 — classe de artefato com política própria, antes de existir arquivo |
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 1717 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+arco de VOZ PRÓPRIA (modo SIP): terminação SIP + SFU + STT/TTS + perna do agente + gravação, **independente de PABX**. Consolida TRÊS dívidas que sozinhas não se justificam: canal `voice` que **não roda** (5 métodos inexistentes em `voice.py:236`, mockados no teste ⇒ `AttributeError` real), Arc 15 **placebo** (zero LiveKit em compose, zero env, SDK fora do `pyproject`), discador bloqueado por falta de mídia. **V1: o plano de mídia NÃO tem topologia própria — acompanha o deploy da plataforma** (⇒ elimina SFU SaaS; on-prem = sem WAN e sem SBC de graça; nuvem = SBC é do produto). **V6: `_dev_mode` SAI — sem credencial o provider RECUSA**, porque token bem-formado e falso é o valor plausível mais caro (foi o que deixou o Arc 15 parecer pronto por meses); mock é escolha declarada, nunca inferida de credencial vazia. V2 reconstrói `voice` (já está no `Literal`), Twilio rebaixado a **um** `IVoiceProvider` (tronco CPaaS); `webrtc` segue canal à parte (lá o CLIENTE é browser); perna do AGENTE nunca é canal. V4 preserva "IA é sempre texto" — bot leg é o ÚNICO ponto áudio↔texto. **V5: gravação no AttachmentStore, sem store próprio — mas retenção vira política POR CLASSE** (o ciclo atual, soft-expire horário, apagaria gravação) e há **conflito doc×doc a arbitrar: 5 anos × 30 dias LGPD**. V10: **borda SIP é superfície nova, fora da allowlist HTTP** (o probe só conhece prefixo). Fases V-F0 infra de pé (fase própria, primeira) → V-F1 perna SIP entrante → V-F2 bot leg STT/TTS (conserta o `collect` morto) → V-F3 gravação → V-F4 egress+supervisão → V-F5 validação c/ instalação limpa — proposto

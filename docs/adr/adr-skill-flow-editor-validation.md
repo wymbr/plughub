@@ -209,3 +209,20 @@ segunda resposta que este ADR existe para impedir.
 com **ciclo não-guardado** tem de reprovar no `PUT` **e** no dry-run com a mesma mensagem; um skill **válido**
 tem de passar nos dois (controle positivo — sem ele o probe passa pelo motivo errado); e o dry-run **fora do ar**
 tem de deixar o editor em "não validado", nunca em verde.
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 2655 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+feedback de validação no editor de skill-flow: **AFORDÂNCIA ≠ VEREDICTO**. A proposta original ("JSON Schema no Monaco, uma dep e um passo de build") foi refutada nos DOIS eixos. **Custo:** o Monaco vem de **CDN via AMD loader** (`@monaco-editor/loader`), `vite.config.ts` não tem config nenhuma para ele, `monaco-yaml` não existe — e é ele, não o Monaco, que aplica schema a YAML (`jsonDefaults` não atua em `language="yaml"`) ⇒ é **migração de bundling**, não `npm i`. **Papel (o que decide o ADR):** `SkillSchema` é `ZodEffects` e `SkillFlowSchema` tem dois `.refine` (`skill.ts:1318-1324` — `entry` existente, tem `complete|escalate`), e **`zod-to-json-schema` não representa refinements** ⇒ o JSON Schema diria VÁLIDO para flow que o servidor recusa: verde local contradizendo o verde que importa. Logo JSON Schema serve para **afordância** (autocomplete/hover) e nunca para **veredicto** — fundir os dois dá duas respostas para *"isto é válido?"*, e a mais permissiva vence. **Decisão: veredicto pelo SERVIDOR, via dry-run `POST /v1/skills/validate`**, com `PUT` e dry-run chamando o **mesmo** `validateSkillPayload()` extraído (D3). Achados: **(1)** o erro de bloco masked é **invisível** hoje — servidor devolve `details` (plural, `skills.ts:226`) e o front lê `detail` (singular, `SkillFlowsPage.tsx:608`) ⇒ vira "HTTP 422" mudo; **(2)** o `PUT` **não** detecta ciclo não-guardado (a checagem existe em `engine.ts:270` mas só roda na execução) ⇒ flow com ciclo salva verde e explode depois; **(3)** existem DUAS `validateFlow`, e a boa para UI é a do `sdk/certify/flow.ts:91` (devolve resultado estruturado; a do engine lança string); **(4)** `onMount` descarta o argumento `monaco` (`:846`) ⇒ não há handle para `setModelMarkers`. Pré-requisito medido de D3: rodar o verificador sobre os **42 YAMLs** e contar reprovações antes de ligar. Fora de escopo e registrado: refs `$.`/`@ctx.` (exigiria inferência de `pipeline_state` por ponto do grafo) e o **desacoplamento `platform-ui × @plughub/schemas`** — que redefine `Skill`/`Pool`/`AgentType`/`Session` à mão em `types/index.ts` (~960 linhas) mais dezenas de cópias locais divergentes, **sem justificativa escrita em lugar nenhum**, e cujo risco de dual-instance de Zod já está documentado em `agent-registry/src/app.ts:58-61`. Fases F0 (handle + erro visível) · F1 (verificador único) · F2 (dry-run + painel, degradação ALTA) · F3 (markers — decide `js-yaml` × `yaml`, que tem offsets) · F4 (afordância, arco de bundling). Ordem inegociável: F1 antes de F2 — proposto

@@ -86,8 +86,10 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 ```
 plughub/
   CLAUDE.md          ← arquitetura viva, regras, invariantes, resumos (≤ 800 linhas)
-  TODO.md            ← itens genuinamente não implementados
-  CHANGELOG.md       ← histórico de implementações concluídas
+  pending.md         ← trabalho ABERTO, agrupado por demanda (ADR/spec). É a lista de tarefas
+  done.md            ← ÍNDICE do que fechou, com os MESMOS grupos. Nunca narrativa
+  TODO.md            ← raciocínio e medição por assunto. NÃO é lista de tarefas (medido: 78% é prosa)
+  CHANGELOG.md       ← histórico de implementações concluídas, com o porquê
   docs/
     modulos/                  ← docs de páginas/features da UI (uma por rota)
     arcos/                    ← docs de implementação por Arc (detalhe técnico)
@@ -123,10 +125,17 @@ plughub/
                                   helper `session_meta_merge` (3 modos, EVAL único), regra do MAIOR
                                   TTL (-1/-2 DEFINEM). Fatia A ✅; B (recusar campo alheio) e C
                                   (`entry_pool_id` × `pool_id`) abertas
+      abac-permission-system.md ← ABAC: guia de implementação (módulos, campos, access levels)
+      context-store-taxonomy.md ← ContextStore: taxonomia de namespaces e controle de visibilidade
+      context-masking-rules.md ← ContextStore: mascaramento dinâmico por variável × role
+      timeouts-e-deteccao-de-falhas.md ← timeouts e detecção de falhas por camada
+      gitagent.md             ← GitAgent: ciclo de vida completo (repo Git como fonte de verdade do agente)
+      conferencia-agente-ia-mapeamento.md ← ⚠️ OBSOLETO por auto-declaração: mapeava gaps de conferência multi-agente/@mention já implementados. Indexado para não ser redescoberto como pendente
+      changelog-2026-04-{15,16,16b,29}.md ← fragmentos datados de changelog (histórico; o canônico é `CHANGELOG.md`)
     adr/
       adr-message-masking.md  ← masking architecture decision
-      adr-contextstore-allowlist.md ← ContextStore como ALLOWLIST: `default_unmatched_operator: "plain"` é **deny-nothing** (campo sem regra nasce em claro, e desde a F5 nasce DURÁVEL em claro), e a causa é estrutural — `session.*`/`journey.*` não podem ter catch-all (o seed avisa: derruba a tela de aprovação em silêncio) e é justamente ali que o `delegate.context` deposita. **TIPO é a declaração única** (formato × máscara-por-papel × classe LGPD; qualquer uma pode ser vazia) — funde as três METADES medidas: `MaskingRule`+regex tem detecção sem papel/canal, `MaskingDisplayRule` tem canal (`display_screen`×`display_voice`) sem papel, `ContextMaskingType` tem papel sem detecção/canal. **MAPA em `escopo.dominio.campo`** = a allowlist; o escopo FICA no primeiro segmento porque o prefixo hoje roteia hash+TTL em 3 casas (`sdk/context-store.ts:106-120` · `interpolate.ts:237` · `journey.ts:180`) e mover isso p/ config criaria roteamento de RETENÇÃO DE PII que degrada mudo. Legado vira `alias` no próprio nó, resolvido na BORDA (nenhuma regra escrita contra alias — seria "regra que não regra"), **contado e datado**. **QUATRO políticas, um vocabulário** (W escrita · R-agente · R-humano · P persistência) — fundi-las é erro (o portão de namespace na persistência apagaria história). **Pré-requisito inegociável: a omissão deixa de ser MUDA antes da inversão** (`continue` em `server.ts:1163`/`:1179`), senão troca vazamento de PII por quebra muda de UI. Achados que o ADR carrega: a 2ª porta — o tool `supervisor_state` devolvia o ctx **CRU** — **fechada na V1b** (política em `lib/context-masking.ts`, uma casa para as duas portas; tool entrega em **grau operator sem portão de namespace**, porque não há visualizador com PAPEL e o pool que ele tem à mão é o de ENTRADA) · ~~3~~ **SETE inventários de categoria discordavam** — a contagem herdada era por MENÇÃO e perdeu os três com produtor vivo em Python, que eram justamente os que podiam divergir sem teste de TS notar; medidos lado a lado, **nenhuma das 5 linhas era unânime** · **12 `HSET` diretos** no ctx sem choke point. Fases V0 (tela que mente) → V1 (contar, não omitir — vale sozinha) → V1b (2ª porta) → V2 (tipos) → **V2b (fechar a casa legada `rule.{category}`)** → V3 (mapa+alias+modo AUDITORIA) → **V4 inverter (não reversível)** → V5 (seletor no pool). Ordem inegociável: V1 antes de V4. **V0/V1/V1b/V2/V2b/V3, a METADE D6 da V5 e a METADE do seed da D7 entregues (ver CHANGELOG); a V4 é a próxima, e só o número da V3 a autoriza** — a outra metade da V5 (fechar aliases) depende do mesmo contador decair, logo as duas são bloqueadas por TEMPO, não por esforço. A **V3** semeou `masking.context_map` (**74 campos, 39 aliases**; **75 e 40** desde 2026-08-30) a partir do CENSO — e o censo corrigiu o denominador: o `486` da §1.8 **não reproduz** (são **231 em 53 arquivos**), e leitura sozinha não bastava, porque as declarações `tag:` dos YAML trazem campos que nenhuma leitura menciona. `legado` virou **ARRAY** (o mesmo campo tem duas grafias vivas: `caller.cpf` e `session.cpf`). O mapa exigiu o primeiro tipo que **não mascara** (`texto`) — e, em 2026-08-30, mais dois: `card_expiry` (o vencimento tinha política viva e nenhum tipo casava máscara **e** classe) e `linha_em_servico` (o primeiro cujo motivo de existir é a FINALIDADE, não o formato), fechando a lacuna que era **do catálogo** e só então deixando o campo entrar no mapa — **a ordem é o critério** e, com ele, fechou um fail-open que o portão da T5 abria — `masked: "texto"` passaria, porque aquele portão só conferia EXISTÊNCIA do id; hoje há predicado derivado (`typeMasksSomething`), com testemunha positiva. **O modo auditoria não esconde nada e o enum `mode` tem UM valor** — não há config que ligue a V4 antes do código que a honre. Dois avisos para quem for fazer a V4: `unknown` só vale enquanto `overflow == 0` (o balde tem teto, porque `session.*` recebe campo autorado pelo tenant), e a auditoria observa a LEITURA — campo escrito por um dos 12 `HSET` e nunca lido é invisível (benigno para R-humano, não para W/P). Achado de exposição REPRODUZIDO ao vivo: **`session.numero_atual` sai em CLARO** (não casa nenhuma das 23 regras; `*.telefone` exige o sufixo) — e o **desfecho foi o OPOSTO do previsto** (decisão do dono, 2026-08-30): aquele número **é o objeto do atendimento**, não dado de cadastro, e segue em claro **declarado** (`tipo: "linha_em_servico"`) em vez de por omissão; o telefone de CADASTRO (`session.cliente.telefone`) continua protegido. A §1.1 não muda de sentido: o defeito nunca foi o valor visível, foi o valor visível **porque ninguém decidiu**. Daí a regra que fica — **FINALIDADE é dimensão do TIPO, nunca exceção de regra**, nomeada pela finalidade e com a classe LGPD preservada (o que se declara vazio é a MÁSCARA, nunca a classe), senão mapa e regra dão duas respostas e a permissiva vence. Gate `probe_context_map_audit.sh` (9 ramos, vermelho antes de verde). **A D6 (2026-08-29)** trocou o texto livre de `pools.context_visibility` por SELEÇÃO sobre o mapa (`GET /v1/context-map/visibility-options`: 5 namespaces, 113 tags), e o que ela mediu generaliza: eram **QUATRO** casas afirmando o default e as quatro discordavam — o conserto de 08-26 arrumou a dica e **não tocou no placeholder três linhas abaixo**. **`service` e `history` não têm produtor** (zero em `packages/`, zero no store vivo) e `service` está no default, concedendo nada. Regra derivada: **enquanto a lista for ESCRITA, ela diverge; o conserto é derivá-la.** Duas propriedades load-bearing: valor legado fora do mapa é MANTIDO e marcado (descartá-lo no save seria mudança de política silenciosa) e a LIMPEZA passou a existir — não havia caminho, em três camadas mudas (tela omitia a chave · schema sem `.nullable()` ⇒ 422 · `PUT` com `null` cru em coluna `Json`, que exige `Prisma.DbNull`). Gate `probe_context_visibility_selector.sh` (6 ramos). **A D7 (2026-08-29)** fez o `seed` do config-api **comparar e logar** em vez de pular mudo — medido antes de mudar: **77 keys, 76 iguais, 1 divergente**, e dizer o número pequeno É a entrega (nas horas anteriores haviam nascido DUAS divergências e nenhuma se anunciou). **Compara e loga, nunca conserta**, porque a divergência tem DUAS direções: reaplicar acrescenta o que só está na declaração *e descarta o que só está no banco* — em `masking.context_rules` são 10 regras só no declarado e `session.cpf_titular` só no gravado, que nenhum glob cobre (`*.cpf` casa o SUFIXO), logo `--overwrite` cego derrubaria o campo para `plain`. ⚠️ **Medido em 2026-08-30: aquele campo NÃO TEM PRODUTOR** — o campo de tela saiu do formulário e foi substituído por `vencimento_cartao`, então a "divergência nos dois sentidos" é **uma política em dois momentos**, não duas políticas, e o `overwrite_would_drop = 1` conta uma regra morta. O número seguiu certo; a LEITURA dele é que exigia medir o produtor. Daí `overwrite_would_drop`, o único número que responde *"posso reaplicar sem perder nada?"*. Achado que reposicionou a fase: **a DECLARAÇÃO pode estar velha** — o `seed.py` DENTRO do container estava atrás do repo (imagem sem bind mount) e a 1ª medição deu 2 em vez de 1; `divergent=0` de imagem atrasada é afirmação sobre outro arquivo. Virou o ramo A do gate `probe_seed_drift_named.sh` (6 ramos, 4/4 mutações pegas — e a 1ª tentativa da mutação da testemunha negativa NÃO pegou, neutralizada pela segunda guarda do comparador). Aberta a metade da TELA (proveniência global × override por nó). A V2 fechou a metade aberta da V0 (catálogo único, `DEFAULT_MASKING_RULES` derivada dele, fantasmas fora, selo derivado) e derrubou dois defeitos alheios: o leitor de regras de canal apontava para rota inexistente (**inerte desde sempre**, 404 engolido por `.catch(() => {})`) e o `\(?` do regex de telefone era **ramo morto** (`\b` nunca casa antes de `(`). **A V2b é pré-requisito do `masked` TIPADO** — enquanto a dimensão CANAL tivesse casa própria, *"que máscara este campo usa?"* teria duas respostas e valeria a mais permissiva (o leitor legado **vencia** o catálogo). Três medições que regem o método: **(1)** a premissa herdada *"a tela ainda escreve o legado"* era **falsa** — as linhas citadas eram a declaração da função e duas LEITURAS; **(2)** o caso real não era nenhum dos dois ramos previstos, e sim **zero escritores + zero dados + 4 leitores**, o menor deles; **(3)** quem autorizou remover foi o **contador** que a V2 deixou publicando *"a remoção é MEDIDA por este número zerar"*, não uma decisão nova. Achado: o leitor legado **não era peso morto** — `getMaskingRule` o devolvia vencendo o catálogo e o `update()` da tela o gravava de volta NO catálogo, promovendo legado a tipo em silêncio (armadilha ARMADA, blast radius zero por ausência de dado). Gate `probe_legacy_display_rule_closed.sh` (fonte · oráculo · config viva · store inteiro), vermelho antes de verde; a **exclusão de linha de comentário é load-bearing e não higiene** — depois do conserto **3 linhas ainda casam a regex e as 3 são a prosa que documenta a remoção** — **Aceito, parcialmente implementado** (V0 metade · V1 · V1b · V2 · V2b · V3 · **D8** · V5 metade/D6 · D7 metade/seed; V4 não iniciada). A **D8 (2026-08-30)** acrescentou a dimensão que faltava ao tipo — **FINALIDADE** — e o critério de nomeação do mapa: campo cuja finalidade dispensa máscara ganha tipo PRÓPRIO (`linha_em_servico`), nunca regra `plain` de exceção; o discriminador mora no **domínio** (`cartao.cpf`), porque o casador **não tem glob de meio** e um `*cpf*` seria regra inerte; e a lacuna de tipo fecha-se no **catálogo** antes de o mapa crescer (`card_expiry`). Catálogo 11→**13**, mapa 74/39→**75/40** (e **75/53** depois dos 13 aliases derivados do censo de produtores; **94/82** desde a FATIA 1 da D9). **A D9 (proposta 2026-08-30) SUPERSEDE a D2 como allowlist-por-nome:** o ContextStore vira **CADASTRO** — domínio inteiro configurado antes do uso, como um `DialogForm`; o que não está registrado **não passa no PUBLISH** (runtime nunca rejeita: resolve restritivo e LOGA, mesma dupla postura da D3). Tipagem e máscara resolvem-se no cadastro, o escritor **não declara nada** (o caminho de escrita CARIMBA o `atributo`, o que exige o choke point que hoje não existe — 12 `HSET` diretos), e a visibilidade do pool vira **seleção sobre a estrutura cadastrada**. O motivo é medido: a enumeração de NOMES não fecha (75 canônicas declaradas × **4** observadas escrevendo; 4 fluxos de 44 skills geraram 13 correções), enquanto o catálogo de TIPOS fecha. A pré-condição do modelo foi medida: **21 escritas em YAML, todas literais**, zero tag com nome dinâmico ⇒ a população é **estaticamente enumerável**, e o problema deixa de ser de observação (rodar tráfego até secar) para ser de análise estática. **A V4 é REDEFINIDA**, não adiada. **O censo foi feito em 2026-08-30** ([`docs/product/contextstore-cadastro-censo.md`](docs/product/contextstore-cadastro-censo.md)) e confirmou a premissa — **91 nomes escritos, ZERO dinâmicos**, 54 já cobertos, **37 a cadastrar** —, mas com duas emendas que mudam o desenho. **(1) O extrator NÃO é um walker de YAML**: a D9 contava duas superfícies de autoria e são **SEIS**, quatro invisíveis à árvore (`context_json` é string JSON; `context_set`/`context_write` guardam o nome em `input.tag`; `delegate/collect.context` têm o prefixo `session.` composto NO GATEWAY, logo o nome final não está no arquivo) — portão escrito da forma óbvia fica verde com quatro superfícies por baixo, **fail-open por invisibilidade**. **(2) São TRÊS origens, não duas**: o corpo HTTP do webhook escreve cada chave verbatim e sem prefixo (`webhook.py:630`), e é daí que vêm as duas únicas tags sem namespace (`campaign_id`, `target_pool`); nenhum portão de publish a alcança, sobra a postura de runtime. **O número que dimensiona a decisão é 10, não 37** — 27 são identificador/enum (`texto`, sem política) e 10 pedem escolha de tipo. **A D9.5 foi DEPRECIADA pela própria D9**, no mesmo dia: a versão anterior desta linha dizia que 8 dos 10 *"pedem capacidade que o catálogo não tem"* e promovia a D9.5 a pré-requisito — **falso**, porque `ContextMapFieldSchema.tipo` é `z.string()` validado contra o catálogo e o mapa aceita qualquer um dos 13 tipos, `opaque` inclusive ⇒ **todo campo tem onde ser cadastrado**. Pior, o mecanismo que a D9.5 invocava **não existe**: `formato.detect_pattern` tem **zero consumidores**, e o motor real (`MaskingService.applyMasking`) roda num sítio só (`tools/session.ts:472`), sobre **mensagens do stream**, nunca sobre valor de ctx. É uma sub-decisão superada pelo PRÓPRIO PAI — foi escrita a partir da intuição pré-cadastro, e sob o cadastro escolher `texto` para um campo de prosa é **decisão explícita e auditável**, que é todo o contrato da §1.1 (*o defeito era o valor visível PORQUE NINGUÉM DECIDIU*; garantir que a decisão seja BOA nunca foi o contrato). Sobrevive só o estreito: declarar tipo em prosa é APOSTA e não descrição, o que muda o que a TELA de cadastro diz a quem escolhe — afordância, não mecanismo. **A migração da D9 não tem bloqueio.** Validação cruzada: os 7 `unknown` que o tráfego acusou estão todos na lista, que é superconjunto estrito por ~5×. **A FATIA 1 foi EXECUTADA em 2026-08-30** — os 37 cadastrados no mapa vigente (**75/53 → 94/82**), `não cobertos` **37 → 4**, e a prova é ao vivo: cortada a série e rodado o `smoke_limite_tres_acessos`, os 7 `unknown` viraram 6 `alias` e sobrou **só `session.preview`**, que é justamente um dos quatro deixados de fora com dono (`preview` = decisão #6 · `reviewer_id` = decisão #5, lacuna de CLASSE no catálogo e a ordem é catálogo antes do mapa · dois ecos de **demo**, que não entram no seed da PLATAFORMA). Três reduções vieram da lista e nenhuma é estética: **`survey_*` × `surveyed_*` fundidas** (duas canônicas para UM fato, escritas em sessões diferentes — bridge no `on_human_end` da ORIGEM × gateway no `collect_engage` da PESQUISA); **nove canônicas de `survey` estavam SEM `legado` desde a V3**, com a grafia viva PLANA caindo em `unknown` (mesmo defeito que o domínio `workflow` já documentava — canônica declarada, grafia real órfã; por-catch: `session.contact_outcome` e `session.max_rounds`); e o **pacote de aprovação não era domínio novo** (`title`/`summary`/`status`/`approval_threshold` chegam pelo MESMO `delegate.context` que já depositava `dialog_form_id` e `decisions`). Dois tipos escolhidos por MEDIÇÃO: `session.summary` é `texto` porque é lido **através da porta de masking** (`DialogFormRenderer.tsx:232`) e um tipo restritivo APAGARIA a tela de aprovação; `pergunta_coleta` é `texto` porque o valor é exibido **ao cliente**. ⚠️ Departura declarada: a nota de escopo mandava LISTAR campo que pedisse domínio novo e nomeava o copiloto — as 5 tags foram **declaradas**, porque já são escritas em `escopo.dominio.campo` pela própria plataforma e declará-las **não escolhe nome nenhum**; o que a nota protegia era *inventar*. Achado do próprio instrumento, da família *teste que não pode reprovar*: o censo publicou **80** aliases contra os **82** do oráculo porque o parser do mapa era **line-based** e descartava em silêncio a segunda linha de um `legado` quebrado — sub-contagem erra para o lado do trabalho a mais, o que a torna simpática e não menos falsa; quem a pegou foi **comparar o instrumento com o oráculo**, que é outra implementação
-      adr-masked-typed-declaration.md ← `masked` deixa de ser BOOLEANO e passa a nomear um TIPO do catálogo. O booleano é declaração **anônima** — diz *"esconda"* e não diz **o quê** —, então máscara-por-papel, regra de canal e classe LGPD não têm onde morar e acabam decididas **por formulário**; e conformidade por formulário significa N políticas de CPF no tenant, valendo a mais permissiva. Consumidor direto do catálogo da V2; a **V2b foi pré-requisito** (enquanto a dimensão canal tivesse casa própria, a pergunta teria duas respostas). **D1: `true` é um TIPO (`opaque`, máxima restrição), não a ausência de um** — manter um ramo "mascarado porém sem tipo" reintroduziria o default permissivo como AUSÊNCIA, que é o valor mais barato de produzir e o mais difícil de contar. **D4: o tipo decide EXIBIÇÃO e CLASSE, nunca PERSISTÊNCIA** — *"masked nunca entra em `pipeline_state`"* segue absoluto, porque tipo que opta por persistir derruba a invariante **editando config**, sem revisão de deploy. **D3: duas guardas, ambas fail-closed com posturas opostas** — deploy RECUSA tipo desconhecido, runtime resolve para `opaque` e LOGA nomeando (recusar em runtime derrubaria atendimento em curso por erro de config). **D5: a DETECÇÃO fica fora** — declaração sabe ANTES do valor existir, alcança o valor inteiro e suprime na origem; detecção só sabe DEPOIS, alcança um trecho e tokeniza post-hoc; o que compartilham é o TIPO, e a detecção já o lê desde a V2. Achados que sustentam as fases: **(1)** quatro declarações em **2×2** (`skill.ts:476,503` × `dialog.ts:314,258`) mas **um** resolvedor (`masking-policy.ts`) e **um** normalizador (`form_get` achata dialog→`render.fields[].masked`) ⇒ a tipagem muda declaração+normalizador, não a cauda; **(2)** a submissão de form ENTRA na transcrição durável e o campo **não-declarado vai em CLARO** — medido: `email` em claro ao lado de `senha`/`codigo_2fa` redigidos, com o catálogo tendo `email_addr`/`lgpd=pessoal`; **(3)** `DialogFormRenderer.tsx` ignora `masked` (zero ocorrências) — armadilha ARMADA, **dano hoje 0** (1 de 10 forms declara masked, e não é dos que chegam ao Console); **(4)** parque de **6 declarações**, medido na AUTORIDADE com três vias concordando (arquivo 5 = `skills.flow` 5 = 2 de 37 slots; `flow_draft` zero). Fases T0 (contar no agent-registry, nunca no arquivo) → **T1 ✅ (`opaque` — entregue 2026-08-29; trouxe `DataType.declared_only`, porque o oráculo da V2 REPROVARIA o tipo novo, e `LgpdClass.nao_classificado`, porque nenhuma das 5 classes servia sem mentir)** → **T2 ✅ (união + resolvedor único — entregue 2026-08-29; a precedência passou a viver em UMA função, `maskedFieldType`, e as outras duas viraram derivações. Achado: a união sem consertar o achatamento do `form_get` seria FAIL-OPEN — `=== true` faria `masked: "cpf"` virar `false` e o campo sair desmascarado)** → **T3 ✅ (o tipo vira PROVENIÊNCIA — entregue 2026-08-29; a fase foi REESCRITA ao medir: `by_role`/`display_screen` são impossíveis em campo declarado, porque derivar um parcial exige ter o valor e ele nunca persiste ⇒ `mascara.*` é dimensão da DETECÇÃO. E o placeholder tem TRÊS casas, então o tipo viaja como DADO, não no texto. Achado: são CINCO camadas, não quatro — o ESCRITOR do ClickHouse monta o INSERT de uma lista FIXA de colunas e descarta chave extra em silêncio)** → **T4 ✅ (4ª superfície — entregue 2026-08-29; "honrar" virou RECUSAR: o Console submete por `workflow_resume`, sem masked scope, então `<input type="password">` seria a correção que PARECE certa e é a pior — protege a tela e deixa o valor cair em `pipeline_state`. Gate com testemunha negativa contra o input de senha)** → **T5 ✅ metade de DEPLOY (2026-08-29): `422 invalid_masked_type` no `PUT /v1/skills`, com ACOPLAMENTO ESCOPADO — flow sem tipo não consulta o catálogo, logo salvar skill não passa a depender do config-api. Fail-closed em três formas (inalcançável · não-2xx · lista vazia). A metade de RUNTIME foi ADIADA por medição: pós-T3 um tipo desconhecido não muda comportamento (a supressão é por `ids`), só o rótulo, e o portão de deploy o impede na origem)** → **T6 ✅ (migrar — 2026-08-29; exigiu DOIS tipos novos, `credential` e `card_cvv`, porque nenhum dos 8 servia. `card_cvv` ≠ `credit_card`: aquele exibe 4 dígitos, e num CVV de 3 isso mostraria quase tudo. Migrado na AUTORIDADE e RE-PROMOVIDO nos slots)** → **T7-A ✅ (2026-08-29: a ESCRITA fecha — 422 para `masked: true`; `false` FICA, porque é CAPACIDADE e não forma legada, apesar de zero usos)** → **T7-B (remover a tolerância do RUNTIME) BLOQUEADA.** A T7 eram DUAS remoções com consequências opostas, e tratá-las como uma dava um falso dilema: medido, o snapshot NÃO passa por Zod na execução e o `POST /rollback` só troca linhas de slot ⇒ fechar o schema não quebra rollback nenhum. O dano da (B) é `d.trim()` sobre booleano — TypeError em atendimento. **Provado ao contrário:** com o schema já fechado, um rollback real para snapshot pré-T6 executou e mascarou. Ordens inegociáveis: T1 antes de T2 · **T4 antes de a tipagem alcançar o Console** · T6 antes de T7. *(A dependência da S1 do snapshot foi EMENDADA em 2026-08-29, um dia depois: a S1 caiu ao ser medida para implementação, e a "colisão de contrato" era em chaves DIFERENTES do mesmo objeto — `render.captures` × `render.fields[].masked` —, o que é objeto comum, não campo comum.)* D8: o fechamento é por **CONTADOR**, nunca por decreto — mesmo mecanismo que autorizou a V2b — proposto
+      adr-contextstore-allowlist.md  ← ContextStore como ALLOWLIST: **TIPO é a declaração única** (formato × máscara-por-papel × classe LGPD), MAPA em `escopo.dominio.campo`, legado vira `alias` contado e datado. Pré-requisito: a omissão deixa de ser MUDA antes da inversão. Fases V0→V5 + D6–D9 — **V0–V3, D6–D8 e a FATIA 1 da D9 entregues; a V4 (inverter o default) é a próxima e NÃO é reversível** — Aceito, parcialmente implementado
+      adr-masked-typed-declaration.md ← `masked` deixa de ser BOOLEANO e passa a nomear um TIPO do catálogo (`true` = `opaque`, não a ausência de tipo); o tipo decide EXIBIÇÃO e CLASSE, **nunca PERSISTÊNCIA**; detecção fica fora. Fases T0–T7 — **T1–T6 e T7-A entregues; T7-B (tolerância do runtime) BLOQUEADA** — proposto
       adr-mcp-interception-single-border.md ← borda única de interceptação MCP: veredicto no mcp-server (3 bordas → 1), proxy externo vira mapeador de vocabulário, `McpInterceptor` fica como caminho de portabilidade; requisito T = domain server inalcançável a partir do agente (borda é rede, não código); fases M0(medir)/B1(pool c/ health-check)/B2(mcpCall nativo)/B3(assimetrias)/T — proposto
       adr-webchat-channel.md  ← webchat channel architecture
       adr-session-replayer.md ← session replayer architecture
@@ -135,27 +144,29 @@ plughub/
       adr-evaluation-sampling.md ← amostragem: cota por agente (virada para estado) + carimbo de versão
       adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; implementado ✅)
       adr-survey-form-scoring-composition.md ← composição de nota em survey (dimension+perguntas ponderadas; primitivo `scoring.ts` compartilhado c/ Quality) — proposto
-      adr-dialog-conditional-skip-logic.md ← skip-logic condicional em DialogForm (guarda declarativa `ask_when`, **não** control-flow) — **Aceito + implementado 2026-07-08**, validado ao vivo no webchat *(corrigido 2026-08-17: este índice dizia "proposto" por mais de um mês)*. **Guarda LOAD-BEARING**, e a razão mudou sem enfraquecer *(2026-08-18)*: a versão anterior dizia "com o editor de fluxo local saindo (interop n8n)" — o editor **fica**, e a pressão para empurrar control-flow ao form **existe do mesmo jeito**, agora vinda do lado oposto (enquanto o editor de fluxo próprio for insuficiente, o formulário é o caminho de menor resistência). Se ceder, o editor de fluxo é reconstruído dentro do editor de formulário, com linguagem pior. Avaliador canônico `evaluateAskWhen` em `schemas/src/dialog.ts:423`, **hoje triplicado** (espelhos em `survey_web.py:386` e `DialogFormRenderer.tsx:400`). Aberta só 1 das 3 decisões do ADR (`checklist` multi-valor)
-      adr-dialog-form-deletion.md ← `DELETE` de DialogForm: **arquivar** (reversível) e não apagar. A medição separou dois eixos que "soft-delete" funde: ARMAZENAMENTO (*"dá para recuperar?"*) × **LEITURA** (*"o contato em andamento cai?"*) — soft-delete com `404` na resolução quebraria igual ao hard delete. **D1: o catálogo fecha, `GET /{form_id}` continua servindo** (com `deleted_at`), porque ninguém DESCOBRE form por id: quem chama já tem vínculo. São **SEIS** leitores, todos por `?status=published`; **dois leem no FIM** do diálogo (`survey_record`, `segment_outcome_record` ⇒ a janela de risco vai até o submit, não até o `carregar_form`) e **um lê história encerrada** (`WebhookSegmentDetail`, dano sem janela). **D2: purga real só do nunca-publicado** — é a única parte DECIDÍVEL de "recusar quando há referência viva" (o `form_id` literal mora dentro do flow do snapshot do slot, então checagem cross-service seria incompleta por construção), com aviso de irreversibilidade na tela. D3 `409` em escrita sobre arquivado + `undelete` próprio (ressuscitar implícito faria slot antigo executar conteúdo novo sem ninguém tocar no deploy) · D4 recusa só de quem cria vínculo NOVO (`survey_link_create`) · D5 delete é do `form_id`, nunca da versão (despublicar é outra operação) · D6 `RECONCILE` limpa `deleted_at`, log diz *arquivado* · D7 a tela diz **arquivar**. Achado de tabela: `seed_dialog.published_version()` trata `404` como AUSENTE ⇒ com leitura fechada, **todo boot ressuscitaria o form apagado**. Emenda medida na UI: **`ever_published` não é derivável do `status` da lista** (última versão pode ser rascunho com uma publicada mais antiga), então a lista o carrega e o botão de arquivar fica DESABILITADO sem ele — supor o caso reversível é o palpite confortável e o errado num ato irreversível. Fases F1–F5 e gate `probe_dialog_form_delete.sh` (9 falhas antes do build → verde depois) — **Aceito + implementado 2026-08-28**
-      adr-deploy-time-content-snapshot.md ← conteúdo referenciado (DialogForm) resolvido no **PROMOTE**, congelado no snapshot do slot — não em runtime. **Não é padrão novo: a base já decidiu assim duas vezes** (o bridge roda o `yaml_snapshot` do slot, não `skill.flow`; e `survey_link_create` já snapshota o form no token). Resolve TRÊS problemas que vinham fundidos: **(1)** a corrida das duas leituras — e resolve por **REMOÇÃO**, não sincronização: `form_get` já normaliza `captures` no `render`, então o skill passa `$.pipeline_state.dialog.render.captures` e `segment_outcome_record` para de buscar o form ⇒ **supersede a F0b/D9 do ADR da árvore**; **(2)** *"vi X, subiu Y"* — o form é editado noutra tela, por outra pessoa, noutra cadência, e **não há indicador de defasagem** para ele (há para o flow: `_isStale`); conserto = **promote OTIMISTA**, a tela declara as versões que exibiu e diverge com `409`+diff, porque aviso que ninguém lê é a família do *"using default values"*; **(3)** dispersão de autoria ⇒ o editor RESOLVE a referência e mostra in loco. **Injetar na EDIÇÃO foi recusado** (D4): troca risco visível por silencioso — a cópia envelhece sem sinal (modo de falha do `flattenBlocks`) e **velho é pior que diferente**; mais o bloat de uma taxonomia de 5 níveis dentro do YAML, que é MENOS legível. `version` opcional na referência = **pin × float** explícito por caso. **NÃO resolve** (D7): o snapshot congela o que EXECUTA, não como o histórico se LÊ — a imutabilidade do `id` segue invariante independente. Efeito colateral: **afrouxa o ADR de deleção** (arquivar deixa de poder quebrar deploy em execução). Emenda registrada: o argumento *"reuso entre canais exige arquivo separado"* **caiu** — quem serve N canais é a normalização `render`, que funcionaria inline; a referência compra (a) superfícies sem skill rodando, (b) editar texto sem re-deploy, (c) o mesmo form em N pools — **só a (c) obriga**. Fases S1 · S2 (`version`) · S3 (resolução no promote) · S4 (conflito) · S5 (afordância) · S6. Ordem: S1 antes de S3; S4 nunca antes da S5. ⚠️ **A S1 original ("`captures` no render, mata a corrida sozinha") foi REFUTADA por medição em 2026-08-29**, nas duas premissas: `render.captures` perde o mapa opção→nota (dano VIVO — `fcr` de `dialog_wrapup_arc12_v1` viraria `NaN` e a métrica sumiria) e o ÚNICO chamador de `segment_outcome_record` não tem `form_get`, logo não há `render` no `pipeline_state` dele — as duas leituras que correm são o renderizador do Console (cliente) e o composer (servidor). **Decisão do dono, 2026-08-29: caminho A — PIN DE VERSÃO**, que é a F0b do ADR da árvore ⇒ **a supersessão da F0b está REVERTIDA**. O pin é gravado pelo SERVIDOR (do cliente, um browser escolheria a versão que descreve a própria resposta) e não exige consertar `captures`, porque o composer segue lendo o form inteiro. Prioridade BAIXA e medida: dano zero hoje (os dois forms de wrap-up estão em v1, nunca republicados), a fazer antes de o ADR da árvore entrar — proposto
-      adr-skill-flow-editor-validation.md ← feedback de validação no editor de skill-flow: **AFORDÂNCIA ≠ VEREDICTO**. A proposta original ("JSON Schema no Monaco, uma dep e um passo de build") foi refutada nos DOIS eixos. **Custo:** o Monaco vem de **CDN via AMD loader** (`@monaco-editor/loader`), `vite.config.ts` não tem config nenhuma para ele, `monaco-yaml` não existe — e é ele, não o Monaco, que aplica schema a YAML (`jsonDefaults` não atua em `language="yaml"`) ⇒ é **migração de bundling**, não `npm i`. **Papel (o que decide o ADR):** `SkillSchema` é `ZodEffects` e `SkillFlowSchema` tem dois `.refine` (`skill.ts:1318-1324` — `entry` existente, tem `complete|escalate`), e **`zod-to-json-schema` não representa refinements** ⇒ o JSON Schema diria VÁLIDO para flow que o servidor recusa: verde local contradizendo o verde que importa. Logo JSON Schema serve para **afordância** (autocomplete/hover) e nunca para **veredicto** — fundir os dois dá duas respostas para *"isto é válido?"*, e a mais permissiva vence. **Decisão: veredicto pelo SERVIDOR, via dry-run `POST /v1/skills/validate`**, com `PUT` e dry-run chamando o **mesmo** `validateSkillPayload()` extraído (D3). Achados: **(1)** o erro de bloco masked é **invisível** hoje — servidor devolve `details` (plural, `skills.ts:226`) e o front lê `detail` (singular, `SkillFlowsPage.tsx:608`) ⇒ vira "HTTP 422" mudo; **(2)** o `PUT` **não** detecta ciclo não-guardado (a checagem existe em `engine.ts:270` mas só roda na execução) ⇒ flow com ciclo salva verde e explode depois; **(3)** existem DUAS `validateFlow`, e a boa para UI é a do `sdk/certify/flow.ts:91` (devolve resultado estruturado; a do engine lança string); **(4)** `onMount` descarta o argumento `monaco` (`:846`) ⇒ não há handle para `setModelMarkers`. Pré-requisito medido de D3: rodar o verificador sobre os **42 YAMLs** e contar reprovações antes de ligar. Fora de escopo e registrado: refs `$.`/`@ctx.` (exigiria inferência de `pipeline_state` por ponto do grafo) e o **desacoplamento `platform-ui × @plughub/schemas`** — que redefine `Skill`/`Pool`/`AgentType`/`Session` à mão em `types/index.ts` (~960 linhas) mais dezenas de cópias locais divergentes, **sem justificativa escrita em lugar nenhum**, e cujo risco de dual-instance de Zod já está documentado em `agent-registry/src/app.ts:58-61`. Fases F0 (handle + erro visível) · F1 (verificador único) · F2 (dry-run + painel, degradação ALTA) · F3 (markers — decide `js-yaml` × `yaml`, que tem offsets) · F4 (afordância, arco de bundling). Ordem inegociável: F1 antes de F2 — proposto
-      adr-dialog-tree-options.md ← opções em ÁRVORE no DialogForm (taxonomia de wrap-up). **A recursão entra em `DialogOption`, nunca em `DialogNode`** — taxonomia é DOMÍNIO DE VALOR, não control-flow (`Financeiro > Cobrança > indevida` é UMA resposta, não decide o que vem depois), então `nodes` segue plano e as SEIS superfícies mantêm o laço linear. Pasta × arquivo com seletividade **derivada** (selecionável ⟺ sem `options`); profundidade 5; nesting só sob `list`/`checklist` (sob `button`/`form` é erro de schema, nunca render parcial); multi-seleção **dentro de uma pasta** ⇒ prefixo comum vira invariante CONFERÍVEL; resposta = caminho de **`id`s** (label nunca entra na série); obrigatoriedade derivada do nesting + folha de escape `nao_se_aplica` (que é um *arquivo na raiz*) — `required` burlado grava NULL, indistinguível de "não perguntamos"; árvore INLINE e versionada; `ask_when` ganha `prefix`, o que **fecha a decisão em aberto #3** do ADR de skip-logic. Quatro achados que sustentam as fases: **(1)** o form é lido DUAS VEZES (renderer no claim × `segment.ts:325` no submit, com `timeout_s:-1` no meio) e nada as amarra ⇒ pin de versão; **(2)** `flattenBlocks` reconstrói `capture` e perde `kind` (`dialog-blocks.ts:120,136`), que `deriveAgentEvents` exige (`segment.ts:110`) — armadilha ARMADA, blast radius zero hoje (só fixture a declara); **(3)** o ramo `multi-select ⇒ N eventos` é **CÓDIGO MORTO** — os 3 renderizadores tratam `checklist` como escalar e o bridge faz `json.dumps` na lista (`main.py:9116-9126`) ⇒ hoje sairia **uma** categoria-lixo `_a_b_`; **(4)** `AGENT_EVENT_CATEGORY_REGEX` aceita 2–5 segmentos e a profundidade decidida daria 8 ⇒ **bloqueio**, e `decomposeCategoryLevels` só extrai 4 (5º segmento hoje é gravado e silenciosamente invisível). Versionamento é **uso, não build** (PK inclui `version`, publish só promove, `?version=N` existe). Adjacentes registrados e fora de escopo: sem `GET /{form_id}/versions`, e **rollback não faz rollback**. Fases F0 (lossless) · F0b (pin) · F1 (schema) · F2 (multi de verdade) · F3 (Miller + recusa alta) · F4 (categoria de caminho) · F5 (editor) · F6. Ordem inegociável: F0 antes de F5, F2 antes de F4 — proposto
+      adr-dialog-conditional-skip-logic.md ← skip-logic em DialogForm: guarda declarativa `ask_when`, **não** control-flow — guarda LOAD-BEARING (ceder reconstrói o editor de fluxo dentro do editor de formulário). Avaliador canônico `evaluateAskWhen`, hoje **triplicado** — **Aceito + implementado 2026-07-08**; 1 das 3 decisões segue aberta
+      adr-dialog-form-deletion.md    ← `DELETE` de DialogForm é **arquivar** (reversível), não apagar — separa ARMAZENAMENTO de LEITURA; o catálogo fecha mas `GET /{form_id}` continua servindo; purga real só do nunca-publicado — **Aceito + implementado 2026-08-28**
+      adr-deploy-time-content-snapshot.md ← conteúdo referenciado (DialogForm) resolvido no **PROMOTE** e congelado no snapshot do slot, nunca em runtime; promote OTIMISTA com `409`+diff. **A S1 original foi REFUTADA por medição; decisão do dono = pin de versão gravado pelo SERVIDOR** — proposto
+      adr-skill-flow-editor-validation.md ← validação no editor de skill-flow: **AFORDÂNCIA ≠ VEREDICTO** — `zod-to-json-schema` não representa refinements, então JSON Schema serve para autocomplete e o veredicto vem do SERVIDOR (dry-run `POST /v1/skills/validate`, mesmo `validateSkillPayload()` do `PUT`). Fases F0–F4; F1 antes de F2 — proposto
+      adr-dialog-tree-options.md     ← opções em ÁRVORE no DialogForm: a recursão entra em `DialogOption`, **nunca em `DialogNode`** — taxonomia é DOMÍNIO DE VALOR, não control-flow, então `nodes` segue plano e as seis superfícies mantêm o laço linear. Fases F0–F6; F0 antes de F5, F2 antes de F4 — proposto
       adr-outbound-survey-as-collect-contact.md ← survey web outbound = contato via `collect` (canal survey/web), membro N1 da journey; sinal solto vira legado/anônimo (Journey J4c) — proposto
       adr-customer-360-two-surfaces.md ← Cliente 360 (Console 4 abas × Analytics): Contexto/Histórico(jornadas em aberto)/Cliente(cadastro manual+360 quality/survey)/Ações; jornadas = filtro `customer_id` no `/reports/journeys`; cadastro v1 reusa Resolvedor Fase A/B (merge=Fase C) — proposto
       adr-human-approval-workflow-step.md ← Aprovação humana = passo de workflow (collect/delegate a pool, dispatch_mode config); conteúdo=DialogForm (reuso), aprovador=agente logado (Modo A), Console/inbox responsivo, retorno→choice; omnichannel adiado (canal-agnóstico); fases A1–A6 — proposto (fechado)
-      adr-wrapup-detached-pull.md ← Camada E2: wrap-up humano destacado = item de pull `assigned_to`. **Decisão: Path α, renderer-first** — o renderer é o **tratamento genérico de collect-form no Console** (não "renderer de aprovação"): renderiza o DialogForm de qualquer collect/delegate reivindicado + submit via `workflow_resume`; serve aprovação+wrap-up+survey-no-Console SEM skill por caso (§2.1). β (skill agente menu) **não viável no pull-standalone** (humano vira primário, sem IA p/ renderizar). Comuns: `assigned_to` (E2c), `acw_pending` (E2e, produtor pendente da Camada C), sessão de wrap-up fora da contagem (E2f), DialogForm (E2a). Kickoff do núcleo genérico: `docs/product/approval-renderer-kickoff.md` — proposto
-      adr-work-item-requeue-and-agent-affinity.md ← devolução de item à fila, posse e afinidade (D1–D8). Achado: um F5 no Console (WS ~2 s) é tratado como abandono → `agent_done` + re-route genérico → item volta ao ZSET com a vaga ainda ocupada (**duplicação**), e o re-publish de 6 campos apaga `assigned_to`/`conference_id`/`work_item_deadline`/`auto_attend`. **D6 emendada ao implementar**: posse NÃO cabe no ledger `work_task` (`assigned_to` é reserva, vazio em item pooled) — é registro durável do ÁRBITRO (`{t}:pool:{p}:claim_record:{sid}`, TTL do prazo do item). **Fases A ✅ + B ✅ + C ✅ + D ✅ 2026-08-04** (A: posse conferida no submit contra registro durável, 4 ramos, 403 em item na fila — provado na UI; B: bridge pergunta a POSSE ao árbitro e devolve por `work_task_release` — `conference_id`/`work_item_deadline` preservados no F5 real; C: a queda devolve RESERVADO ao dono anterior via Camada B, janela por tipo em config-api ns `routing` (`-int` 300 s / demais 30 s), com o botão "Return to queue" NÃO reservando — default seguro. `first_queued_ms` saiu do escopo: é chave própria com NX, já escrita). D: a tela deriva posse do CLAIM — guarda no mcp-server sobre `pool:pending_assignment` (o replay não era do pub/sub), veredicto puro `shouldDropOnPossession` com os mesmos 4 ramos do submit e do drop; fecha a duplicação VISUAL). **E ✅ 2026-08-04**: mapas de `close_reason` separados por DOMÍNIO — `_TRANSPORT_TO_SEGMENT_CLOSE_REASON` só com os transportes em que o CONTATO não fecha (`agent_disconnect`, `agent_transfer` — e, desde 2026-08-05, `agent_release_item`, a devolução deliberada à fila: ver CHANGELOG e `conference-mechanics.md` § Mudança 32), consultado antes do de contato, e só no fim de segmento pelo lado do agente (fecha a lacuna 6: 14 de 31 segmentos humanos saíam mudos, 12 deles em pools de pull cujo item nunca foi entregue, contra 0/9 na fila interna, que carimba pelo submit). A queda publica **`agent_released`**, não `agent_done` — o routing trata igual para devolver a vaga (`keep_slot_for_wrapup` forçado a false: numa queda não há herdeiro para o hold). **Duas emendas medidas:** nada analítico lê `agent_done` (`analytics-api/models.py` o mapeia a `None` desde 2026-07-28) — logo a contaminação de contagem/AHT/bancada vem dos SEGMENTOS, não do evento; e **suprimir** o evento no ramo de item de trabalho seria regressão, porque `remove_conversation` também restaura a membership dos SETs do pool, que o `work_task_release` não faz. **F ✅ 2026-08-04 — ARCO A–F COMPLETO**: resume terminal-uma-vez. O achado que mudou a fase é que **não era corrida da fila pull, e sim da RETOMADA** — os três gatilhos (submit, supervisor, prazo) entram pela MESMA `handle_resume`, e o hash `resume_tokens` é escrito por `suspend`/`delegate`/`collect`, logo toda workflow suspensa já tem dois retomadores possíveis (o pretendido e o scanner, que roda no MESMO event loop do endpoint HTTP — a corrida não precisa de réplicas). Mecanismo: `SET NX` no topo, solto no `finally`; o `HDEL` **fica no fim** (é ele que preserva a retentabilidade e faz o 403 do A5 não consumir o item — subi-lo trocaria a corrida por item irresumível). Registro terminal `{t}:resume_terminal:{token}` gravado ANTES do consumo dá NOME à recusa: token ausente com registro → **409**, sem registro → 404 honesto. Fecha o caso `expire→submit`, que devolvia *"token não encontrado ou expirado"* ao agente cujo item o supervisor acabara de encerrar. `work_task_expire` segue idempotente de propósito (é o árbitro; o errado era ser a única defesa). **Consequência aceita:** o lock dá unicidade, não prioridade — entrega pode perder para prazo numa janela de segundos; o conserto, se preciso, é um sinal de "em preenchimento" para o scanner, não o lock. **F2 ✅ 2026-08-04**: o Console LÊ o 409 (`lib/resume-conflict.ts`, parser que DESCE por `detail` — o corpo chega aninhado DUAS vezes no caminho do supervisor: FastAPI embrulha, mcp-server repassa sob `expire_failed`). Assimetria que rege o desenho: o supervisor **nunca** vê `terminal` (resume bem-sucedido apaga o ledger `work_task` → 404 `no_work_task` antes do gateway), e o `in_flight` que sobra a ele traz `session_id`/`cause`/`closed_at` **VAZIOS** — por isso **sentença** (do consumidor: o agente perde respostas, o supervisor não perde nada) e **linha de fatos** (compartilhada, omitindo campo ausente) são separadas; concatenar daria *"encerrado por agent () em "*. No agente, `terminal` desliga o Submit; `in_flight` não
-      adr-historico-unificado-duas-visoes.md ← `/analise/sessions` + `/analise/processos` colapsam num módulo: **visão 1** (contatos não relacionados, filtro de contato) × **visão 2** (processo). **Processo é PIVÔ, nunca navegação livre** — lista de processos só escopada por atributo de contato (`customer_id`, `open`), e é isso que mantém o filtro sempre no nível de contato (senão "filtrar por pool" devolve *journeys que tocaram o pool*). Processo aparece como CHIP na linha de contato (conta o processo inteiro, não a fatia filtrada — exige rótulo). **Duas classes de linha**: acesso do cliente (direção + par entrada→saída) × etapa interna (maquinaria, dobrada). Segmento é a FOLHA (sem transcript fundido cross-contato ⇒ sem ADR de masking). Com `started_at` na linha, **árvore e cronologia viram um componente com toggle de ordenação**; faixas-por-personagem = destino (faixa = IDENTIDADE, não segmento). Direção do acesso DERIVADA de `spawn_reason` (NULL=inbound · `collect`=outbound · `trigger`/`delegate`=interno). **"Recebeu a saída" nunca se infere de `visibility='all'`** — mente no parking, que existe justamente porque o cliente não está lá. **Estado 2026-08-25: F0 ✅ F1 ✅ F1b ✅ F2 ✅ F3 ✅ F4 ✅ (as duas visões na tela) — resta a F5
-(`ContextStorePersister`, fase própria) e a lente C (destino registrado).** A F4 trouxe um achado
-que não era dela: **a direção do acesso estava prestes a existir em duas casas** (derivada em TS
-para a coluna, e em SQL para o filtro novo). Virou UMA expressão, usada como coluna e como
-predicado na mesma query — divergir entre *"o que a linha diz"* e *"o que o filtro devolve"*
-deixou de ser possível. Gate `infra/test/probe_f4_direction_and_classes.sh` (vermelho→verde).
-**F0 antes da UI** *(feito)*: `handle_collect` não honrava `customer_resumable`/`resume_policy` (gate assimétrico vs os dois handlers de delegate; registrado em `skill_limite_entrega_v1.yaml:41-42`) — fechá-lo dá output-com-confirmação, perna-como-sessão, direção outbound e pertença por PROVENIÊNCIA, dispensando `journey_merge` para o output ativo. Achados medidos: `ani`/`dnis` vazios em 314 sessões · `sessions.pool_id` é o ÚLTIMO pool (filtro por pool já mente) · `/reports/segments` trunca em silêncio (janela sempre aplicada) · Audit LGPD documentado e AUSENTE — proposto
-      adr-a2a-server-binding.md ← PlugHub como **servidor** A2A: binding de borda sobre pool+sessão, sem motor novo. `Task`=sessão (`taskId`=`session_id`, `contextId`=`root_session_id` — não criar contêiner, é o erro da `WorkflowInstance`/`Journey` pela 3ª vez); AgentCard = PROJEÇÃO do agent-registry (`version`=`set_at` do slot ⇒ contrato externo versiona junto com o deploy); A2A é **binding, não `channel`** (canal é filtro de roteamento; quem chamou é fato de CREDENCIAL) ⇒ zero diff no routing. Net-new real **não é o protocolo, é o ARTEFATO**: o caminho webhook nasceu fire-and-forget (trigger devolve só `{session_id}`) e `get_status` responde `"closed"` quando a chave não existe — "não sei" indistinguível de "terminou". Principal externo = `a2a_client` no auth-api (token por endpoint ≠ caller com N pools), `tenant_id` **nunca do corpo** (hoje vem), masking sem opção, cota `a2a_tasks`. Fases A0 descritor → A1 card read-only → **A2 principal (bloqueia A4)** → A3 artefato+status honesto → A4 JSON-RPC → A5 SSE → A6 validação. FORA: pool humano (fase 2, será `webchat`), PlugHub como CLIENTE (seria `invoke`, nunca pool — inventaria capacidade de recurso alheio) — proposto
-      adr-cti-gateway-multi-driver.md ← telefonia legada como canal: serviço on-prem `cti-gateway` com N drivers (CSTA-IPO 1º) sobre **modelo canônico = perfil reduzido de CSTA** (ancestral de TSAPI/JTAPI e nativo em Unify/Alcatel/Mitel ⇒ tradução tem destino, não esperanto). **O PABX é o ÂNCORA, o CTI é o EFETUADOR, nunca o árbitro** — 3 destinos p/ a mesma chamada ancorada (perna de mídia · ramal · conferência); *estacionar é estado de MÍDIA, não lógico* (ou a central segura não-atendida, ou a perna da plataforma atendeu — nunca os dois), e é isso que acopla "quem enfileira" a "quem faz a URA". **Capability declarada por driver, recusa alto, nunca emulação muda** (`transfer` atômico × consulta+completa atrás do mesmo método = valor plausível que falha como chamada perdida); verificada no boot contra o switch. Identidade da chamada é do GATEWAY (transfer/conference trocam o id nativo) por componente conexa sob aliases — **reusa o padrão `root_session_id`+union-find**, não inventa o 3º mecanismo; `attach_call_data` (UUI) é a via preferencial quando existe. Ramal = **2 fatos com escopos diferentes**: elegibilidade→`auth.users`, alocado→hash da instância; **monitor ⟺ alocação** (é o que segura o teto de sinalização do IPO, ordem de grandeza abaixo do parque). Transferência: fila = re-publish inbound (caminho que já existe) · agente = `assigned_to` (pull direcionado) ⇒ invariante "pool é a unidade endereçável" intacto. **Nenhum driver na matriz sem TRAÇO GRAVADO** (Record/Replay vira infra do arco, não backlog). Canal PRÓPRIO `pbx`, e o `voice` (Twilio) **não** é consertado aqui — medido: `handle_inbound` chama 5 métodos inexistentes, mockados no teste, `AttributeError` em runtime real. Fases F0 (núcleo+IPO, mídia toda na central, entrega os 6 requisitos) → **F1 driver estruturalmente diferente, obrigatória antes de qualquer outro** → F2 demanda. **§0 emendado 2026-08-19 — a fronteira é ATENDIMENTO × TELEFONIA INTERNA, não controle × mídia**, e caem DOIS MODOS que não são fases um do outro: *modo CTI* (PABX ancora, mídia nunca sai da LAN, sem IA na voz, matriz de drivers) × *modo SIP* (plataforma ancora, PABX vira interno, tronco INVERTE de direção e só carrega handoff). Achado que reposicionou: no modo SIP a parte Avaya é **um tronco e um `REFER`** — o resto não tem relação com PABX nenhum, logo é arco de VOZ PRÓPRIA, não integração (classificá-lo como "integração IPO" escondia o custo *e* o valor). SIP é **mais** portável que CTI (todo PABX manda SIP ⇒ zero matriz), mas depende de plano de mídia que está em ZERO; CTI é mais complexo e não depende de nada — "mais simples" ≠ "caminho mais curto até algo de pé". Emendas: D1 vale só no modo CTI; D6 vira **capability de mídia VAZIA** em `pbx` (skill com TTS não roda, e o registry reprova); D8 escopado ao CTI; D9 desdobra "para ramal" (CTI = contato CONTINUA · SIP = contato SAI, `REFER`); F2-mídia saiu p/ o outro ADR — proposto
-      adr-voice-media-plane.md ← arco de VOZ PRÓPRIA (modo SIP): terminação SIP + SFU + STT/TTS + perna do agente + gravação, **independente de PABX**. Consolida TRÊS dívidas que sozinhas não se justificam: canal `voice` que **não roda** (5 métodos inexistentes em `voice.py:236`, mockados no teste ⇒ `AttributeError` real), Arc 15 **placebo** (zero LiveKit em compose, zero env, SDK fora do `pyproject`), discador bloqueado por falta de mídia. **V1: o plano de mídia NÃO tem topologia própria — acompanha o deploy da plataforma** (⇒ elimina SFU SaaS; on-prem = sem WAN e sem SBC de graça; nuvem = SBC é do produto). **V6: `_dev_mode` SAI — sem credencial o provider RECUSA**, porque token bem-formado e falso é o valor plausível mais caro (foi o que deixou o Arc 15 parecer pronto por meses); mock é escolha declarada, nunca inferida de credencial vazia. V2 reconstrói `voice` (já está no `Literal`), Twilio rebaixado a **um** `IVoiceProvider` (tronco CPaaS); `webrtc` segue canal à parte (lá o CLIENTE é browser); perna do AGENTE nunca é canal. V4 preserva "IA é sempre texto" — bot leg é o ÚNICO ponto áudio↔texto. **V5: gravação no AttachmentStore, sem store próprio — mas retenção vira política POR CLASSE** (o ciclo atual, soft-expire horário, apagaria gravação) e há **conflito doc×doc a arbitrar: 5 anos × 30 dias LGPD**. V10: **borda SIP é superfície nova, fora da allowlist HTTP** (o probe só conhece prefixo). Fases V-F0 infra de pé (fase própria, primeira) → V-F1 perna SIP entrante → V-F2 bot leg STT/TTS (conserta o `collect` morto) → V-F3 gravação → V-F4 egress+supervisão → V-F5 validação c/ instalação limpa — proposto
-      adr-relatorios-duas-superficies-e-lentes.md ← relatórios colapsam em DUAS superfícies (Contatos=demanda × Recursos=oferta) com nível (`journey>session>segment`) × lente em aba × modo. **A mesa de comparação é MODO, não página** (difere de "evoluir" em UMA dimensão: série por entidade × série pela população). **Lente vira DECLARAÇÃO com três campos** — `aggregation` · `emptiness` (vazio ≠ zero) · **`comparability`** (o campo que a mesa descobriu e resolveu UMA vez, inline, na guarda cross-form de `quality`, e que falta em `quality_criteria`); hoje são 4 campos e uma cascata de 11 `if`, com lista de exceção nomeando 5 lentes e um booleano `deployLens` porque a lente `deploy` troca o TIPO DE ENTIDADE. **Token: o produtor ESTAVA morto e foi construído** (T0→T2) — o diagnóstico original (`emit_llm_tokens` só de `POST /inference`, rota sem chamador) valia, e a T0 mediu que **42% das chamadas vêm do `sentiment_analyzer`**, que não tem rota própria: o emissor foi para o site que fala com o provider, não para o handler. Hoje os 4 caminhos vivos publicam com `source` obrigatório, e `segment_id`/conta/modelo são COLUNAS, a partir de época declarada (`usage_attribution.USAGE_ATTRIBUTION_EPOCH`). Chave de atribuição = **`segment_id`**, não `pool_id` (segmento→pool é total, a inversa não; e o pool da SESSÃO é o de ENTRADA ⇒ especialista IA seria creditado ao pool errado); conta é a **EFETIVA** com identidade dupla (`config_id` sobrevive à rotação de chave, `key_id` não) e ausência `null` nomeada. **Recursos por contato são DOIS números** (`distinct instance_id` = custo × `count(segment_id)` = trocas de mão) mais o pico simultâneo por varredura de intervalos — a sobreposição que torna `Σ duration` inválido É a métrica aqui. Inventário medido: **10 páginas órfãs na árvore** (a contagem inicial de 2 só media a área de relatórios; a F0 removeu 5 arquivos — `AnaliseComparacaoPage` + `MetricSelector`, seu único consumidor, `AgentReportsPage`, `AnaliseAgentesPage`, `ProcessosPage` — e deixou **8 declaradas como dívida que não pode crescer**, 5 delas de relatório com rota já `Navigate` desde o Arc 19 ⇒ F0b), 1 endereço duplicado, 3 rotas fora do menu — patologia já diagnosticada em `routes.tsx:41-47` e **recorrida duas vezes**, logo a lista de morte é a TABELA DE UM GATE (`probe_report_surface.sh`, molde do `probe_edge_surface.sh`), não documentação. **Estado 2026-08-29: ARCO COMPLETO — F0 ✅ F0b ✅ F1 ✅ F2 ✅ F3 ✅ F4 ✅ T0–T3 ✅.** `/analise/` saiu de 10 endereços para 6, com TRÊS superfícies de mesma gramática (filtro × nível × lente × modo): **Contatos** (demanda, `/analise/sessions`) · **Recursos** (oferta, `/analise/resources`) · **Voz do Cliente** (sinal, `/analise/customer-voice`). **A F4** absorveu `/analise/surveys` como o NÍVEL de respostas da Voz do Cliente — e a palavra "drill" da D7 teve de estreitar para *nível*: o agregado lê `session_signal` (ClickHouse) e a lista lê `survey_response` (PG), então prometer que uma linha explica um ponto seria afirmar identidade entre duas populações. **Não é defeito** (medido: os dois produtores são persist-first, e para todo sinal REAL existe a resposta — 48=48, 3=3; a divergência de 130×48 é `seed_volume_demo.sh` escrevendo `vol_%` direto no CH). Lições da F4: (a) **vocabulário hardcodado oferecia o que o backend não serve** — `pmf × segment`, um grão `workflow` inexistente, e um default `journey` que abria a página VAZIA com 130 sinais na base; tudo passou a vir do catálogo; (b) **absorver não pode rebaixar** — a lista tinha multi-pool e o agregado aceitava um só, então o endpoint passou a aceitar `?pool_id=` repetido nas DUAS metades (série + overlay de SLA; filtrar só uma compararia populações diferentes no mesmo eixo); (c) o gate `evaluation.report` da entrada de menu veio junto, e ao trazê-lo mediu-se que **ele nunca foi fronteira** — `/v1/evaluation/survey/responses` não o confere, apesar de o docstring afirmar que sim (exposição real, dano zero: os 4 de 6 que alcançam sem grant são o admin e três fixtures; dívida no `TODO.md`). A T3 entregou a lente de token da superfície A (série por SESSÃO = quanto o contato custou × breakdown por SEGMENTO = quem gastou, de qual conta, com qual modelo; trocar os dois joins não fica vermelho). **A F3 entregou a Superfície B em `/analise/resources`**: `/analise/pools` e `/analise/agents` viraram redirects — as quatro sub-abas são as lentes do modo EVOLUIR, a mesa é o modo COMPARAR (D6), e a forma do gráfico saiu da cascata de dez `if` para o campo `chart` do contrato, com `switch` exaustivo. **Lições que ficam:** (a) a metade B do token **não podia reusar o endpoint da A** — aquele faz `INNER JOIN` com as sessões filtradas, e medido são **945 de 1 991 tokens**, ou seja 47% publicados em silêncio; virou rota própria (`/reports/resources/tokens`) que **recusa `?pool_id=` com 422** em vez de ignorá-lo; (b) **partição de namespace declarada em prosa não é partição** — superfície e mesa escreviam ambas `?mode=`, e trocar de lente apagava o modo; (c) `REPORT_LENSES.filter(l => l.entity === 'contact')` **colapsa os literais em `string`**, e com isso o `assertNever` que o comentário dizia impedir lente nova não impedia nada (conserto: predicado de tipo); (d) a época de atribuição **mentiu pela terceira vez** — granularidade de DIA contra corte de INSTANTE faz as sessões de verificação da própria T1 parecerem defeito vivo; ficou DECLARADA como teto, não consertada, porque o único instante disponível seria escolhido olhando os dados. Achado que não era da fase: a mesa exibia **seis botões escritos `bench.lens.list`, `bench.lens.volume`, …** (a chave crua) desde que a F2 acrescentou as lentes de contato à declaração. A F2 entregou a Superfície A com cinco lentes sobre o MESMO predicado da lista (`_session_conditions`, uma expressão e dois consumidores) e trouxe um achado que não era dela: **o filtro de canal da lista de contatos nunca funcionou** — subconsulta correlacionada que o CH 23.8 recusa, `except` do wrapper devolvendo `data_unavailable`, endpoint respondendo 200 com zero linha. O seletor não filtrava, ele ESVAZIAVA (medido: 398 sessões `webchat`, filtro devolvia 0), e 683 testes não notavam. O contrato de lente ganhou `source` e `honors` por exigência de mecanismo, não de simetria.
+      adr-wrapup-detached-pull.md    ← Camada E2: wrap-up humano destacado = item de pull `assigned_to`. **Path α, renderer-first** — o renderer é o tratamento genérico de collect-form no Console, servindo aprovação+wrap-up+survey **sem skill por caso** — proposto
+      adr-work-item-requeue-and-agent-affinity.md ← devolução de item à fila, posse e afinidade (D1–D8): posse é registro durável do **ÁRBITRO**, não do ledger `work_task`; resume terminal-uma-vez com `SET NX`. **Arco A–F completo + F2 (o Console lê o 409)** — implementado
+      adr-historico-unificado-duas-visoes.md ← `/analise/sessions` + `/analise/processos` colapsam num módulo (contatos × processo): **processo é PIVÔ, nunca navegação livre**; segmento é a FOLHA. **F0–F4 entregues (as duas visões na tela); resta a F5** — proposto
+      adr-a2a-server-binding.md      ← PlugHub como **servidor** A2A: binding de borda sobre pool+sessão (`Task`=sessão), sem motor nem contêiner novo; AgentCard = PROJEÇÃO do agent-registry; A2A é binding, não `channel` ⇒ zero diff no routing. Fases A0–A6 — proposto
+      adr-cti-gateway-multi-driver.md ← telefonia legada como canal: `cti-gateway` on-prem com N drivers sobre **perfil reduzido de CSTA**; o PABX é o ÂNCORA e o CTI é o EFETUADOR, nunca o árbitro; capability por driver, recusa alto, nunca emulação muda. A fronteira é **modo CTI × modo SIP**, que não são fases um do outro. Fases F0–F2 — proposto
+      adr-voice-media-plane.md       ← arco de VOZ PRÓPRIA (modo SIP): terminação SIP + SFU + STT/TTS + perna do agente + gravação, **independente de PABX**; o plano de mídia acompanha o deploy da plataforma e `_dev_mode` SAI (sem credencial o provider RECUSA). Fases V-F0→V-F5 — proposto
+      adr-relatorios-duas-superficies-e-lentes.md ← relatórios colapsam em DUAS superfícies (Contatos=demanda × Recursos=oferta) com nível × lente × modo; a mesa de comparação é MODO, não página; lente vira DECLARAÇÃO (`aggregation`/`emptiness`/`comparability`). **ARCO COMPLETO — F0–F4 + T0–T3** — implementado
+      adr-agent-licensing-and-pool-isolation.md ← licenciamento de agentes e isolamento entre pools (D9 partição por pool, D10 licenças materializadas; D6 revogada) — proposto
+      adr-pool-capacity-reserved-shared.md ← capacidade de IA por pool: `reserved` × `shared`, no provisionamento e na admissão de pools `agent_kind: ai` — proposto
+      adr-pool-no-resource-policy.md ← desfecho do roteamento quando o pool não tem recurso: enfileirar ou recusar — proposto
+      adr-ai-gateway-separation.md   ← separação do AI Gateway entre carga OPERACIONAL e AVALIAÇÃO (perfil `evaluation` isolado) — Aceito, implementado
+      adr-identity-channel-possession.md ← plataforma é autoridade de POSSE DE CANAL (OTP), nunca de identidade-de-registro; `verification_class` (`claimed` × `possessed`) e `otp_verify` como única via para `possessed` — Aceito, implementado
+      adr-internal-work-queue-author-bound.md ← fila interna por pool: trabalho **author-bound** não é trabalho pooled — Aceito; I1–I4 e o núcleo da I5 implementados, relatório de pendências em aberto
+      adr-webhook-endpoint-single-registry.md ← webhook com registro ÚNICO de endpoint e identificador opaco — Aceito, arco A–F completo; remoção do legado e auth saem como arcos próprios
+      adr-survey-response-store.md   ← store operacional por-resposta de survey: schema PG dedicado × estender a dialog-api — Aceito, pré-implementação (gate antes de codar o S8)
 ```
 
 ### Como adicionar uma nova feature
@@ -169,10 +180,34 @@ deixou de ser possível. Gate `infra/test/probe_f4_direction_and_classes.sh` (ve
 
 | Tipo de decisão | Onde registrar imediatamente |
 |---|---|
-| Nova tarefa planejada | Task no tracker (`TaskCreate`) |
+| Nova tarefa planejada | Linha em `pending.md`, **sob o grupo da demanda** |
 | Decisão técnica (> 3 linhas) | Entrada em `TODO.md` com raciocínio |
 | Invariante ou regra arquitetural | Seção neste arquivo |
-| Implementação concluída | `CHANGELOG.md` |
+| Implementação concluída | `CHANGELOG.md` (o porquê) **+** linha em `done.md` (o índice) |
+
+### Ledger de tarefas — `pending.md` / `done.md`
+
+> **Nasceu em 2026-08-31.** O `TODO.md` acumulou 127 seções e nenhuma citava um ADR no título; a
+> vinculação entre tarefa, demanda e histórico só existia em prosa. Medido no mesmo dia: **nove
+> marcadores desatualizados**, e em todos o **corpo estava certo e o título velho** — porque quem
+> lista pendências lê título. O tracker que esta tabela mandava usar (`TaskCreate`) **nunca recebeu
+> uma linha**: destino sem mecanismo não se cumpre, e é por isso que a regra abaixo vem com portão.
+
+1. **Toda tarefa nasce sob um grupo**, e o grupo titula um documento que existe (ADR, spec ou arco).
+   Sem documento, vai para o balde **`sem-demanda`**, que é **contado** — se cresce, está entrando
+   trabalho sem decisão por trás.
+2. **Todo id é `AAA-NN`, único através dos DOIS arquivos.** É a chave de junção que não existia.
+3. **Título nunca afirma status** — status é coluna. Isso remove a possibilidade do defeito em vez
+   de exigir vigilância, que já falhou nove vezes.
+4. **Três estados abertos:** `aberto` · `bloqueado` (impedimento nomeado) · `adiado` (decidido não
+   agora, com **gatilho** declarado). `adiado` existe para que decisão tomada não volte à mesa.
+5. **`done.md` é índice, nunca narrativa** — id, tarefa, data e âncora no `CHANGELOG.md`. O porquê
+   mora lá; repetir aqui criaria mais uma casa afirmando o mesmo fato.
+6. **Fechar é MOVER**, e a mudança é conferida: nenhum id nos dois arquivos, nenhum id sumido.
+
+Portão: **`infra/test/probe_task_ledger.sh`** (6 ramos; A/B/C/E/F provados falseáveis por mutação).
+Ele existe porque o modo de falha do desenho de dois arquivos — **tarefa perdida na mudança** — é
+mais silencioso que o status velho que ele substitui.
 
 ### Convenção de pastas de documentação
 
@@ -464,6 +499,13 @@ system_error         — unrecoverable error
   `PUT /v1/skills/:id` com `x-skill-publish:true`, ou `REGISTRY_SYNC_RECONCILE=true`. E, se o pool usa slot,
   publicar ainda **não basta** — o bridge executa o snapshot do slot `current` (`set-next`→`promote`).
   Alvo Fase 2: YAML→migração versionada if-absent, store por store.
+
+  > ⚠️ **Corolário: para `hooks`, `deploy`, `capacity` e afins, pergunte ao agent-registry, NUNCA ao
+  > YAML.** Medido em 2026-08-22: uma "correção" anterior leu `infra/registry/tenant_demo.yaml:400`,
+  > viu `dispatch: inline` e corrigiu o `CLAUDE.md` para dizer que o demo estava em `inline` — mas a
+  > config VIVA (`GET :3300/v1/pools/retencao_humano`) dizia `detached`. O YAML é seed-if-absent:
+  > editar pool já semeado é no-op e **o DB vence**. Ler a fonte DECLARATIVA e chamá-la de estado é
+  > o mesmo erro que esta seção descreve — com o agravante de ter sido cometido *ao corrigir*.
 - **Every config field is UI-editable** — todo campo de config tem superfície na tela do módulo. Campo
   que só existe em YAML/arquivo é dívida a fechar.
 - **env only for secrets and wiring** — env é exclusivamente para segredos (JWT, tokens, creds) e
@@ -527,6 +569,12 @@ Checks per call (< 1ms): permission validation (JWT local decode) → injection 
 
 ## Repository Structure
 
+> **Medido em 2026-08-31: a tabela listava 21 pacotes e o repositório tem 35.** Seis dos ausentes
+> (`analytics-api`, `config-api`, `orchestrator-bridge`, `dialog-api`, `mailing-api`,
+> `session-replayer`) são citados dezenas de vezes no resto deste arquivo — a estrutura mentia por
+> OMISSÃO, que é o "valor plausível" da § Postura de Engenharia na forma mais barata: uma lista
+> parece completa por ser uma lista.
+
 ```
 plughub/
   CLAUDE.md                      ← this file
@@ -535,25 +583,52 @@ plughub/
     schemas/                     ← @plughub/schemas — Zod contracts
     py-authz/                    ← plughub-authz — verificador CANÔNICO de JWT+ABAC (Python)
     sdk/                         ← @plughub/sdk — TypeScript + Python
-    mcp-server-plughub/          ← Agent Runtime and BPM tools
+
+    mcp-server-plughub/          ← Agent Runtime and BPM tools — port 3100
+    mcp-server-knowledge/        ← Vector knowledge base for RAG agents — port 3401
+    mcp-server-auth/             ← domain MCP: authentication and PIN validation (demo stub) — port 3150
     skill-flow-engine/           ← Skill Flow interpreter
-    ai-gateway/                  ← LLM calls and context extraction (Python)
-    agent-registry/              ← CRUD for AgentType, Pool, Skill, GatewayConfig
-    routing-engine/              ← Agent allocation and queue management
-    rules-engine/                ← Post-routing event evaluation
-    channel-gateway/             ← Channel adapters and inbound normalisation
-    calendar-api/                ← Calendar engine + CRUD REST (Arc 4) — port 3700
-    scheduler-api/               ← Agenda/scheduler: fire a pool via webhook at a time — port 3650
-    workflow-api/                ← Workflow instance lifecycle (Arc 4) — port 3800
     skill-flow-worker/           ← Kafka consumer, runs SkillFlow for workflow instances
+    orchestrator-bridge/         ← reconciliação (instance_bootstrap), RegistrySyncer, pool hooks
+    ai-gateway/                  ← LLM calls, sentiment, context extraction (Python)
+
+    agent-registry/              ← CRUD for AgentType, Pool, Skill, GatewayConfig — port 3300
+    config-api/                  ← platform_config: settings horizontais por namespace — port 3600
+    auth-api/                    ← Auth, JWT, ABAC, grupos — port 3200
+    routing-engine/              ← Agent allocation and queue management (capacity em 3550)
+    rules-engine/                ← Post-routing event evaluation
+    channel-gateway/             ← Channel adapters, inbound normalisation, identity, survey web
+
+    calendar-api/                ← Calendar engine + CRUD REST (Arc 4) — port 3700
+    scheduler-api/               ← Agenda: fire a pool via webhook at a time — port 3650
+    workflow-api/                ← Workflow instance lifecycle (Arc 4) — port 3800
+    dialog-api/                  ← store canônico de DialogForm (draft/publish) — port 3760
+    mailing-api/                 ← outbound: mailing, campaign, delivery — port 3660
     pricing-api/                 ← Capacity-based billing, invoice — port 3900
-    auth-api/                    ← Auth, JWT, ABAC — port 3200
+    usage-aggregator/            ← metering: agrega usage.events, quota, cycle-reset — port 3950
+
+    analytics-api/               ← relatórios + leitor ClickHouse + audit LGPD — port 3500
     evaluation-api/              ← Quality evaluation platform (Arc 6) — port 3400
+    session-replayer/            ← Hydrator + Replayer + ReplayContext + StreamPersister
     quality-ingest/              ← Pluggable contact-history reader (R13a) — port 3850
     quality-export/              ← Internal history → re-evaluation (R13d) — port 3852
-    mcp-server-knowledge/        ← Vector knowledge base for RAG agents
-    platform-ui/                 ← All operator-facing UI (React + Vite)
+
+    platform-ui/                 ← All operator-facing UI (React + Vite) — port 5174
+
+    e2e-tests/                   ← black-box E2E suite (não é serviço)
+    gitagent/                    ← @plughub/gitagent: repo Git como fonte de verdade do agente (lib/CLI)
+    dashboard/                   ← api + ui do Dashboard #35 (não sobe em compose algum)
+    agente-retencao-teste/       ← fixture: agente nativo de teste E2E (agent.yaml + flows)
+
+    conversation-writer/         ← ⚠️ PACOTE FÓSSIL em quarentena declarada (2026-08-03)
+    clickhouse-consumer/         ← ⚠️ PACOTE FÓSSIL em quarentena declarada (2026-08-03)
 ```
+
+> **Os dois fósseis são mantidos DE PROPÓSITO e não devem ser religados.** Nenhum está deployado e o
+> destino de escrita de um deles não existe; ficam no repositório, com o rótulo no próprio README,
+> pelo mesmo critério da tabela `pools` fóssil — **o erro fica visível e reversível**. Apagá-los
+> troca um erro documentado por um buraco mudo; religá-los sem ler o README é o modo de falha que a
+> quarentena existe para impedir.
 
 ## Stack per Package
 
@@ -1576,7 +1651,7 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 ---
 
-## Arc 11 — Console como Superfície de Orquestração ✅
+## Arc 11 — Console como Superfície de Orquestração
 
 O Console é uma **superfície de orquestração**: o operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe (AI e humanos simétricos no modelo de sessão). Funcionalidades: cartões de participantes AI em tempo real (step/status do Skill-Flow); "Adicionar Especialista" (invoca pools de `mentionable_pools` via A2A `assist`); "Delegar Tarefa" (seleção de mensagens → drawer instrução+visibilidade → card de resultado no `agent_done`); Tab de Orquestração (steps do Skill-Flow + intervenções de supervisor). **Permissões**: operar = `agent_assist.operacao`; intervir = role `supervisor` + scope ABAC.
 
@@ -1584,51 +1659,32 @@ O Console é uma **superfície de orquestração**: o operador humano dirige, de
 
 ---
 
-## Arc 6 Fase 2 — Observabilidade por Deploy ✅ (diário+markers P3 + epoch/versão R15a/R15b + cobertura 1b)
+## Arc 6 Fase 2 — Observabilidade por Deploy *(completo)*
 
-> **Status (completo, 2026-06-24):** lente `deploy` no board de Agentes (`/reports/agents/compare?lens=deploy`,
-> decisão D3), **ancorada no POOL** (spec §11), com **dois modos** via `&mode=daily|epoch` (toggle Diário↔
-> Por versão na UI): **diário+markers** (1º corte §6) e **epoch/versão** (§4.1/D4 — eixo X = versões). O epoch
-> faz `JOIN evaluation_finalized.segment_id→segments` (carimbo `deploy_version` do R9, sem denormalizar),
-> `GROUP BY pool/skill/deploy_version`, ordem `deployed_at` (fallback `first_seen`), `min_sample=30`, multi-pool
-> = uma curva por pool (união por deployed_at). **Micro-fatia 1b ✅**: overlay de **nota provisória** (linha
-> tracejada) + **pendentes de fechamento** por versão, da evaluation-api (`GET /v1/evaluation/reports/deploy-coverage`
-> via `coverage_client`, degradação graciosa). Detalhe em `docs/arcos/arc-evaluation-metrics-methodology.md` §IV.8.
+Lente `deploy` no board de Agentes (`/reports/agents/compare?lens=deploy`), em **dois modos**
+(`&mode=daily|epoch`): diário com marcadores de deploy, e epoch com o eixo X em versões.
 
-**Âncora = POOL** (par `(pool, skill)` colapsado enquanto 1 skill por pool): `skill_id` é estável (deploy não
-muda o id; `version` é campo à parte; deploy é pool-centric via `PoolSkillSlot`+`SkillDeployment.pool_ids`), e
-**um skill pode rodar em vários pools** → âncora-skill misturaria pools. Curva por pool; um deploy compartilhado
-vira o mesmo marcador em cada curva de pool atingida.
+**Âncora = POOL, nunca skill.** `skill_id` é estável (o deploy não muda o id; `version` é campo à
+parte) e **um skill pode rodar em vários pools** — ancorar no skill misturaria pools numa curva só.
+Um deploy compartilhado vira o mesmo marcador em cada curva de pool atingido. A nota vem de
+`evaluation_finalized` (fonte Oficial), agrupada por `attr.pool_id`, com `min_sample=30`.
 
-**Implementado (P2 + P3):**
-- **agent-registry**: `GET /v1/skills/:id/deployments` (P2-A) + `GET /v1/pools/:id/deployments` (P3-A — deploys
-  onde pool ∈ `pool_ids`). Header `x-tenant-id`.
-- **analytics-api**: config `agent_registry_url`; `deployments_client` (`fetch_skill_deployments` +
-  `fetch_pool_deployments`, cache `(kind,tenant,id)` 60s, degradação → `[]`, D1). Lente `deploy` em
-  `query_agents_compare` (`_COMPARE_LENSES`, domain `ai`): `_compare_deploy_lens` lê `avg(final_score)` de
-  `evaluation_finalized` (Oficial, D2) **agrupado por `attr.pool_id`** (curva por pool); `_fetch_deploy_markers`
-  usa a timeline do pool, cada marker com `pool_id`+`skill_id`+`version_label`; `meta.min_sample=30`.
-  *(Cuidado CH: `any(attr.agent_type)`, não constante `'ai'` — alias colide com o `WHERE attr.agent_type` e a
-  query falha.)*
-- **platform-ui** `AgentsBenchPage`/`DeployChart`: na lente, entidades = **pools** (checkbox do pool → `pool_id`,
-  cor própria; agentes desabilitados; μ oculto); `include_average=false`. Leitura honesta: eixo diário completo,
-  **bolinha = dia com avaliação** + **reta** (`linear`) entre medições (sem zero/interpolação em dia sem amostra);
-  **deploy = triângulo** na cor do pool sobre a curva, **versão/skill no tooltip** (`<title>` em `ReferenceDot
-  shape`) + **contador** "N deploys" (não cresce com a qtd); flag N<min; estado-vazio "selecione um pool".
-  Cleanup T16: `TimeseriesView`/`ComparisonView` mortas removidas (`MetricSelector` foi mantido então por causa da `AnaliseComparacaoPage`; medido em 2026-08-28, essa página estava ÓRFÃ e as duas caíram juntas na F0 do ADR de relatórios — o consumidor era
-  `AnaliseComparacaoPage`).
-- Demo: analytics-api ganhou `PLUGHUB_AGENT_REGISTRY_URL`. Seed `infra/test/seed_deploy_lens_demo.sh`
-  (usa `flow_id == skill_id` p/ alinhar). Testes: `test_deployments_client.py` (9) + `test_deploy_lens.py` (5).
+**Leitura honesta é requisito, não estilo:** eixo diário completo, **bolinha só em dia COM
+avaliação**, reta entre medições — sem zero e sem interpolação em dia sem amostra, que inventariam
+qualidade onde não houve medida. Marcador de deploy traz versão/skill no tooltip; N<min é
+sinalizado. Dependências externas (deployments do agent-registry, cobertura da evaluation-api)
+degradam graciosamente para lista vazia.
 
-**Limitações registradas:** `ReferenceDot`/eixo categórico só rende se o dia do deploy é categoria (o front
-injeta); deploy posterior à última avaliação fica no fim da curva (sem dados pós-deploy ainda).
+**Limitação registrada:** deploy posterior à última avaliação fica no fim da curva, sem dados
+pós-deploy ainda.
 
 → See [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md),
-[`docs/product/arc6-phase2-deploy-observability-spec.md`](docs/product/arc6-phase2-deploy-observability-spec.md)
+[`docs/product/arc6-phase2-deploy-observability-spec.md`](docs/product/arc6-phase2-deploy-observability-spec.md).
+As-built, endpoints e testes no `CHANGELOG.md`.
 
 ---
 
-## Arc 12 — Agent Business Events ✅
+## Arc 12 — Agent Business Events
 
 MCP tool `agent_event(category, value, tags?)` para agentes publicarem KPIs de negócio durante sessões. `category` hierárquico `pool_id.skill_id.metric_key` (1º segmento = pool_id da sessão, namespace isolation); contexto resolvido do `session_token`; tags bloqueiam PII; rate limit configurável; auditado via `McpInterceptor`. Infra: topic `agent.events` → ClickHouse `analytics.agent_business_events` (`category_l1..l4` pré-decompostos) + endpoints `/reports/agent-events/{series,summary,categories}`. Integra com Arc 6 Fase 2 (`metrics[]=agent_event:{category}`).
 
@@ -1682,7 +1738,7 @@ em `session_timeline`, que é de onde `/v1/audit/mcp-calls` lê.
 
 ---
 
-## Arc 13 — Evaluation Review, Contestation & Calibration ✅
+## Arc 13 — Evaluation Review, Contestation & Calibration
 
 Dois fluxos por tipo de agente avaliado. **Humano**: revisor AI pré-publicação (gate por campanha) → contestação por dimensão → human reviewer decide (`ContestationThread` append-only; `max_rounds` via `ContestationPolicy`). **AI**: `evaluation_finalized` imediato + curadoria amostral por regras configuráveis; revisor AI gera `calibration_signal` → `CalibrationNote` no knowledge namespace → feedback ao avaliador via RAG. **Invariante**: `evaluation_finalized` é a única fonte de truth para relatórios de qualidade. Topic `calibration.events` + `GET /reports/evaluator-calibration` (Calibration Dashboard, correlaciona com deploy epochs do Arc 6 Fase 2).
 
@@ -1690,7 +1746,7 @@ Dois fluxos por tipo de agente avaliado. **Humano**: revisor AI pré-publicaçã
 
 ---
 
-## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/R5/R6/R7a/R8a–R8e/R9–R12 ✅ (R8 completo); R7b/R7c fora de escopo (LGPD); R13a–c/R14/R15a–b/R16 PENDENTE
+## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/R5/R6/R7a/R8a–R8e/R9–R12 (R8 completo); R7b/R7c fora de escopo (LGPD); R13a–c/R14/R15a–b/R16 PENDENTE
 
 > **Limitação assumida (2026-06-23):** faithfulness sobre **valor PII de output de ferramenta** não é
 > suportada — reter o retorno cru (vault R7b) é anti-minimização LGPD sem requisito consentido. R7a
@@ -1711,35 +1767,34 @@ Define **o que o avaliador mede e como** (distinto de revisão/contestação, Ar
 
 ---
 
-## Quality Ingest — leitor de histórico plugável (R13a–R13d) ✅ arco completo
+## Quality Ingest — leitor de histórico plugável (R13a–R13d) *(arco completo)*
 
 Módulo anti-corrupção que faz históricos **externos** (CCaaS) e a **reavaliação interna** entrarem no
-MESMO pipeline de avaliação (sampling → ReplayContext → avaliador → analytics), sem o importador tocar a
-infra interna. **Interface = stream de eventos** `ingestion_event_v1` (não lote); **pool é a unidade**
-(eventos carimbam `pool_id`, não `campaign_id`); tier-2 de IA indisponível p/ externo (grau-transcript).
+MESMO pipeline de avaliação (sampling → ReplayContext → avaliador → analytics), **sem o importador
+tocar a infra interna**.
 
-`packages/quality-ingest/` (Python FastAPI, porta 3850, **produtor puro**) expõe `POST /v1/ingest/events`
-(header `X-Tenant-ID`), roda masking net-pass, deriva `session_id`/`segment_id` determinísticos
-(idempotência), e **mapeia 1:1** o stream → eventos canônicos internos que os consumers já entendem:
-`conversations.events` (contact_open/message_sent/contact_closed), `conversations.participants` (campo
-`type` underscore), `agent.lifecycle` `agent_done`, e `conversations.session_closed` (dispara sampling).
-Toda emissão leva `source:"external_import"` (gate do consumer Y; nunca `channel_gateway`).
-Schemas em `@plughub/schemas/ingestion-event.ts` (R13a-1). **Consumer Y ✅ (R13b)**:
-`ImportStreamConsumer` (session-replayer) reconstrói `session_stream_events` (PG) dos eventos canônicos
-gated `source=external_import`, via o `StreamPersister.insert_records`/`recompute_deltas` (mesmo escritor do
-Persister vivo, sem drift) → Hydrator/Replayer dão um ReplayContext.events igual ao interno. **Mapa por
-source ✅ (R13c)**: namespace `quality_ingest.source_map` (Config API); o `SourceMapClient` resolve e o
-mapper traduz ext→int (pool, humano→`user_id`, IA→`skill_id`+`deploy_version`) **antes** de emitir
-(pass-through se não mapeado). **Exportador interno ✅ (R13d)**: `packages/quality-export/` (ClickHouse-only,
-porta 3852) lê `sessions`+`segments`+`messages` (`FINAL`) e re-emite `ingestion_event_v1` pela mesma porta
-do quality-ingest (inverso do mapper) — `external_contact_id`=session_id original → novo session_id de
-reavaliação. Reusa o pool original; pool dedicado sai do `source_map` (R13c) sem código novo.
+**Invariantes:**
+- a interface é **stream de eventos** (`ingestion_event_v1`, schema em
+  `@plughub/schemas/ingestion-event.ts`), nunca lote;
+- **pool é a unidade** — eventos carimbam `pool_id`, jamais `campaign_id`;
+- o quality-ingest é **produtor puro** (porta 3850): faz masking net-pass, deriva `session_id`/
+  `segment_id` determinísticos (idempotência) e mapeia 1:1 para os eventos canônicos que os
+  consumers já entendem — não escreve em store interno;
+- toda emissão leva **`source: "external_import"`**, nunca `channel_gateway`; é esse carimbo que
+  gateia o consumer de reconstrução;
+- a reconstrução do stream durável reusa o **mesmo escritor** do Persister vivo, para não haver
+  drift entre o caminho importado e o nativo;
+- **tier-2 de IA é indisponível para externo** (grau-transcript) — não há `mcp.audit` nem
+  `pipeline_state` de origem.
+
+O exportador interno (`quality-export`, porta 3852) é o inverso: lê ClickHouse e re-emite pela mesma
+porta do ingest, gerando um `session_id` novo de reavaliação a partir do original.
 
 → See [`docs/arcos/quality-ingest.md`](docs/arcos/quality-ingest.md)
 
 ---
 
-## Arc 15 — Canal WebRTC com SFU (LiveKit) ⚠️ código ✅ · SFU NÃO PROVISIONADO
+## Arc 15 — Canal WebRTC com SFU (LiveKit) ⚠️ código · SFU NÃO PROVISIONADO
 
 > **Corrigido 2026-08-20 por medição.** O ✅ desta seção cobria o **canal**, e foi lido por meses como
 > se cobrisse a solução de mídia. Medido: **não há serviço LiveKit em compose nenhum** (`grep livekit
@@ -1785,353 +1840,212 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 ---
 
-## Dialog Primitive — Scripted-Dialog Runner (survey + OTP) — Fatia 1 + 2b ✅
+## Dialog Primitive — Scripted-Dialog Runner (survey + OTP)
 
-Primitivo de "interação scriptada delegada" compartilhado por survey e OTP (ADR
-`docs/adr/adr-otp-workflow-and-dialog-primitive.md`). **Quatro costuras inegociáveis:** conteúdo (DialogForm
-JSON) × controle (skill/workflow chamador) × canal (runner Tier-3) × **segredo** (`OtpService`). O código do OTP
-**nunca** passa pela mão de um agente/runner — gerar/enviar/verificar ficam no serviço confiável; o runner só
-carrega o que o **cliente** digitou (vale p/ survey: resposta é do cliente, não fabricada — integridade do dado).
+Primitivo de "interação scriptada delegada" compartilhado por survey e OTP
+(ADR `docs/adr/adr-otp-workflow-and-dialog-primitive.md`).
 
-**DialogForm** (`@plughub/schemas/dialog.ts`): script **linear** de nodes `statement` (→ notify) e `question`
-(→ menu), versionado (draft/published), i18n embutido (`LocalizedText = string | {locale: texto}`), `capture`
-(binding declarativo de métrica p/ survey) e `validation` (formato). **Sem `next` condicional** — branching é do
-skill, nunca no JSON (senão vira linguagem em JSON). Store canônico: **`dialog-api`** (porta 3760, schema
-`dialog.forms`, CRUD + publish). Tool MCP **`form_get`** resolve o form publicado + normaliza num bloco `render`
-single-turn (menu_prompt / fields / statement_after / captures).
+**Quatro costuras inegociáveis:** conteúdo (DialogForm JSON) × controle (skill/workflow chamador) ×
+canal (runner) × **segredo** (`OtpService`). O código do OTP **nunca** passa pela mão de um
+agente/runner — gerar/enviar/verificar ficam no serviço confiável; o runner só carrega o que o
+**cliente** digitou. Vale igual para survey: resposta é do cliente, nunca fabricada.
 
-**dialog-runner** (`skill_dialog_runner_v1`, pool `dialog_runner`, perfil `agent`): invocado via `delegate()`
-(roda como conference specialist na sessão do chamador). v1 = N statements + **1 turno de coleta**, render
-**nativo single-question** (§17.4): usa a **interação da pergunta** (text→input, button/list→botões — o webchat
-já renderiza). **Contrato uniforme:** devolve `payload = { value: <escalar> }`; o domínio lê
-`$.pipeline_state.<delegate>.value` e faz verify/record (não unificar — vira `if` gigante). Binding as-built do
-`form_id` = **contexto de delegate** (`@ctx.session.dialog_form_id`).
+**DialogForm** (`@plughub/schemas/dialog.ts`): script **linear** de nodes `statement` (→ notify) e
+`question` (→ menu), versionado (draft/published), i18n embutido, `capture` (binding de métrica) e
+`validation` (formato). **Sem `next` condicional — branching é do skill, nunca no JSON**, senão vira
+linguagem em JSON. Store canônico **`dialog-api`** (porta 3760); a tool MCP **`form_get`** resolve o
+form publicado e normaliza num bloco `render` single-turn. **Contrato uniforme:** o runner devolve
+`payload = { value: <escalar> }` e o domínio faz verify/record — não unificar, vira `if` gigante.
 
-**DOIS veículos (achado 2b):** o runner-especialista serve chamadores que **podem suspender** (OTP intake,
-survey reconnect). **Hooks de `on_contact_end` NÃO podem delegar** — delegar suspende o hook agent e o bridge
-trata `suspended` como hook concluído → fecha o contato antes de renderizar. Logo o NPS **ativo** (`agente_nps_v1`)
-consome o primitivo de **conteúdo INLINE** (`form_get` + menu dinâmico), sem delegate/suspend. Ambos veículos
-compartilham `DialogForm` + `form_get` + menu dinâmico; só divergem em suspender-ou-não.
+⚠️ **DOIS veículos, e a divisão é mecânica, não estética.** O runner-especialista (via `delegate()`)
+serve chamadores que **podem suspender**. **Hooks de `on_contact_end` NÃO podem delegar** — delegar
+suspende o hook agent, o bridge trata `suspended` como hook concluído e **fecha o contato antes de
+renderizar**; por isso o NPS ativo consome o primitivo **INLINE** (`form_get` + menu dinâmico). Os
+dois compartilham `DialogForm` + `form_get` + menu dinâmico; só divergem em suspender-ou-não.
+Delegate é de **nível único** — aninhar no collector colide em `session.delegate_resume_token`.
 
-**Engine (extensões):** §17.3 — `$.config.*` (slot config_json → runtime; **plumbing bridge→slot ✅ 2026-07-08** —
-`config_params` declarativo no skill + UI de deploy + bridge injeta `PoolSkillSlot.config_json` no `/execute`; skill
-parametrizado por deploy, ex. `skill_survey_multi_v1` usa `$.config.form_id`) +
-`menu.options/fields` união `array | ref`. §17.4 — `menu.interaction` e `menu.visibility` união `enum|array | ref`
-(`$.`/`@ctx.`), resolvidas por `resolveDynamicValue` em `menu.ts`; `form_get` expõe o render nativo. **Invariante
-de build:** o `MenuStepSchema` mudou → **todo serviço TS que valida skills (`agent-registry`) + o engine
-(`skill-flow-service`) + `mcp-server` devem ser rebuildados** junto, senão o `agent-registry` rejeita o ref (422).
+**Três superfícies, um conteúdo:** chat (runner) · inline (hook) · página web pública
+`GET /survey/{token}`. Entrega real do link (SMS/e-mail) é trilha à parte, ainda não construída.
 
-**Consumidores:** OTP (Fatia 1) · **NPS ativo de fim-de-contato** (`agente_nps_v1`,
-hook `on_contact_end`, **inline**, form `dialog_nps_buttons` botões 0-10 customer-only). Delegate de nível único
-(aninhar no collector = colisão de `session.delegate_resume_token`, rejeitado). *(A "survey NPS reconnect"
-delegate — `agente_survey_reconnect_v1`/`skill_survey_v1` — foi **aposentada na Camada E1**, arco detach de
-hooks; a coleta assíncrona vive no J4c collect.)*
+**Invariante de build:** mexer no `MenuStepSchema` obriga a **rebuildar junto** todo serviço TS que
+valida skills (`agent-registry`), o engine (`skill-flow-service`) e o `mcp-server` — senão o
+agent-registry rejeita o ref com 422.
 
-**Provisionamento ✅ (2026-08-07):** fonte declarativa `infra/dialog/*.json` aplicada no boot pelo serviço
-**`dialog-seed`** (`infra/seed/seed_dialog.py`), via API oficial e **seed-if-absent** (form publicado → DB
-vence; `DIALOG_SEED_RECONCILE=true` → arquivo vence). Antes disso os forms só existiam em scripts ad-hoc de
-`infra/test/`, e **base nova subia sem nenhum**: NPS de fim-de-contato caía no `on_failure` do `form_get`
-(contato fecha sem pesquisa) e o wrap-up abria o painel VAZIO (`404 → setForm(null)`). Editar um JSON de
-`infra/dialog/` é **no-op** onde o form já está publicado — mesma pegadinha do YAML de skill.
+**Provisionamento:** `infra/dialog/*.json` aplicado no boot pelo `dialog-seed`, via API oficial e
+**seed-if-absent**. Editar um JSON onde o form já está publicado é **no-op** — mesma pegadinha do
+YAML de skill (`DIALOG_SEED_RECONCILE=true` inverte).
 
-**Editor ✅:** `/config/dialog-forms` (platform-ui, grupo Configuração) — cria/edita/publica DialogForms via
-`dialog-api` (proxy `/v1/dialog`). Fecha a dívida "form = dado do tenant, UI-editável". **Multi-locale ✅**
-(LocaleBar + `setLt`/`ltToStr` sobre `LocalizedText`; string pura = só o `default_locale`; indicador
-"sem tradução" por nó). Refinamentos de UX/completude → `TODO.md` § "Revisão do editor de diálogos".
-
-**Loop ✅:** step `loop` (N perguntas sequenciais em canal pobre) — `dialog_survey_multi_v1` +
-`skill_survey_multi_v1` (pool `survey_multi_ia`). Item atual em path fixo (sem índice variável), contador tipo
-`receive`, guardado pelo `menu` do body.
-
-**Veículo web ✅:** página pública `GET /survey/{token}` (channel-gateway, `survey_web.py`) renderiza o **mesmo**
-`DialogForm` como `<form>` e grava via `session.signals` (mesma trilha do `survey_record`). Snapshot do form no
-`create` (token Redis). **Três superfícies, um conteúdo:** chat (runner) · inline (hook) · página web. Entrega
-real do link (SMS/e-mail) = trilha à parte.
-
-**Retry por formato ✅:** `MenuStep` ganhou `validation`+`retry` (união objeto|ref); o step `menu` faz reprompt
-na mesma superfície em falha de FORMATO (numeric/pattern/faixa/comprimento), honra `max_attempts`, esgota→
-`on_failure`. Só escalar; timeout/desconexão/@mention não são retry. Semântica (código OTP) segue no chamador.
-
-**Fatia 2 (pendente):** `channel_policy: elect`; ~~plumbing `$.config` bridge→slot~~ (✅ 2026-07-08); timeout dinâmico do runner;
-multi-locale + preview no editor; entrega real do link web (provedor SMS/e-mail). *(Vazamento de instância do
-delegate→suspend do OTP resolvido 2026-07-07 — ver CHANGELOG + `docs/arcos/session-conference-lifecycle.md`.)*
+**Pendente (Fatia 2):** `channel_policy: elect`; timeout dinâmico do runner; preview no editor;
+entrega real do link web.
 
 → See [`docs/product/dialog-primitive-and-runner-design.md`](docs/product/dialog-primitive-and-runner-design.md),
-[`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md)
+[`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md).
+História (editor, loop, retry, multi-locale, datas) no `CHANGELOG.md`.
 
 ---
 
-## Scheduler / Agenda — `scheduler-api` (Fase 1 ✅ · Fase 2 ✅ · Fase 3 ✅)
+## Scheduler / Agenda — `scheduler-api` *(completo, Fases 1–3)*
 
-Serviço `scheduler-api` (porta 3650). Uma **Agenda** é um recurso **domain-agnostic** que, num *quando/modo*
-(1x / recorrente daily-weekly-monthly, `times[]` no dia), **aciona um POOL via webhook** (Arc 19,
-`POST /v1/channels/webhook/pool/{id}`) — nunca um skill (invariante S4). Duas camadas: **Camada 1** (Redis
-sorted-set `scheduler:timers` + poller único 15s + re-hidratação no boot); **Camada 2** (Postgres schema
-`scheduler`: `agendas` + `agenda_dispatches`, fonte de verdade). Invariantes: o scheduler **não** reimplementa
-o "quando" — `business_day_policy` consulta o **calendar-api** (endpoints by-calendar_id `is-open-calendar`/
-`next-open-slot-calendar`; o engine segue a única autoridade); **status da agenda = "acionou o pool ou não"**,
-execução é da sessão (ref `session_id` no ledger, drill-through, nunca espelhada); `dispatched` = gateway criou
-sessão (admissão/capacidade aparecem no ciclo da sessão); sem retry no v1 (`failed` gravado + Monitor).
-Recorrência calcula só a **próxima** ocorrência e re-arma no disparo; `once`/exhausted → `completed`.
-**Fase 2 ✅ (promote agendado):** o corpo do job = pool webhook `deploy_promote_ia` (skill `skill_deploy_promote_v1`,
-perfil workflow) que faz `invoke pool_promote` lendo o pool-alvo do **payload da agenda** (`@ctx.target_pool`;
-payload = `{ target_pool, action }`). `pool_promote` (tool em `mcp-server-plughub/tools/deploy.ts`) é o wrapper
-auditado do **único** caminho de promote (`POST /v1/pools/:id/promote`); **não-2xx (409 `next` vazio / 422
-capacidade) → `isError` → `on_failure`** (o 409 não some, promoção nenhuma em silêncio). Endereça **pool**, nunca
-skill/versão (S4; **sem pin**). A falha do promote vive no **ciclo da sessão** (drill-through), não no
-`AgendaDispatch` (a gateway devolve 201+session_id). Gate `infra/test/smoke_scheduled_promote.sh`.
-**Fase 3 ✅ (UI + fire-now):** `POST /v1/agendas/{id}/fire` (`Dispatcher.fire_manual` — disparo imediato sem
-consumir a recorrência; cancelada→409). platform-ui **`/config/schedules`** (autoria: CRUD + editor de rule/
-validity/calendar/payload, seletor de pool só-webhook) e **Monitor › Agendas** (`/monitor/schedules`: régua de
-`AgendaDispatch` + drill pra sessão + disparar/pausar/retomar/cancelar; reagendar = editar na autoria).
-Proxy `/v1/agendas`→3650 (Vite+nginx). **ABAC `scheduler.{configurar,operacao}`** grant-first, **sem role
-default nem bypass de admin** (D2 — só quem recebe o campo em Acesso vê as telas; seed concede ao admin demo).
-Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. **Scheduler completo (Fases 1–3).**
+Serviço na porta 3650. Uma **Agenda** é recurso **domain-agnostic** que, num *quando/modo* (1x ou
+recorrente daily/weekly/monthly, `times[]` no dia), **aciona um POOL via webhook** — nunca um skill
+(invariante S4). Duas camadas: Redis (sorted-set `scheduler:timers` + poller 15 s + re-hidratação no
+boot) sobre Postgres (schema `scheduler`, fonte de verdade).
+
+**Invariantes:**
+- o scheduler **não reimplementa o "quando"** — `business_day_policy` consulta o **calendar-api**,
+  que é a autoridade única;
+- **status da agenda = "acionou o pool ou não"**; a execução é da SESSÃO (ledger guarda `session_id`
+  para drill-through e **nunca espelha** o estado dela);
+- `dispatched` significa que a gateway criou a sessão — admissão e capacidade aparecem no ciclo da
+  sessão, não aqui;
+- **sem retry no v1**: `failed` é gravado e aparece no Monitor;
+- recorrência calcula só a **próxima** ocorrência e re-arma no disparo.
+
+**Promote agendado:** o corpo do job é um pool webhook que faz `invoke pool_promote` — wrapper
+auditado do **único** caminho de promote. Não-2xx (409 `next` vazio, 422 capacidade) vira `isError`
+→ `on_failure`; **promoção nenhuma acontece em silêncio**. Endereça pool, nunca skill/versão, e
+**sem pin**.
+
+**ABAC `scheduler.{configurar,operacao}` é grant-first, sem role default nem bypass de admin** — só
+quem recebe o campo em Acesso vê as telas. Autoria em `/config/schedules`; operação em
+Monitor › Agendas (disparo imediato não consome a recorrência).
 
 → See [`docs/product/scheduler-agenda-spec.md`](docs/product/scheduler-agenda-spec.md),
 [`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md)
 
 ---
 
-## Outbound — Mailing + Campaign + Delivery (Fases 1 ✅ / 2 ✅ / 2b ✅ / 3 ✅ [3a+3b] / 4 importador ✅ / 5a fan-out ✅ / 5b survey e2e ✅)
+## Outbound — Mailing + Campaign + Delivery *(arco completo, Fases 1–5)*
 
-Substrato **genérico** de contato ativo (Fase 4 do arco Scheduler): `mailing` (audiência) + `campaign`
-(orquestrador fino, endereça **POOL** — S4) + `campaign_delivery` (estado por-campanha). **Survey é o 1º
-consumidor (S11 agendado), não o dono.** Invariantes: metadado da entrada **opaco** (contrato produtor↔consumidor);
-**membership (`mailing_entries`) ≠ suppression (`campaign_deliveries`)**; entrada = `(pessoa, contexto)`.
+Substrato **genérico** de contato ativo: `mailing` (audiência) + `campaign` (orquestrador fino, que
+endereça **POOL** — invariante S4) + `campaign_delivery` (estado por-campanha). Store canônico
+**`mailing-api`** (porta 3660, schema PG `outbound`). **Survey é o 1º consumidor, não o dono.**
 
-**`mailing-api`** (Python FastAPI + asyncpg, porta **3660**, schema PG `outbound`): store canônico do domínio
-(one-source). CRUD mailings/campaigns + `mailing_add` (upsert por `dedup_key`) + **drain** (`FOR UPDATE SKIP
-LOCKED` + claim atômico em `campaign_deliveries`) + `POST /v1/deliveries/{id}/result`. Tools MCP grupo `outbound`
-(`mailing_add`/`campaign_drain`/`campaign_delivery_result`) = wrappers finos, `isError` em não-2xx, auditados. O
-skill outbound **drena via MCP** (agentes nunca tocam DB); **pacing = a agenda recorrente** (tick drena ≤
-`batch_size`). Idempotência: `UNIQUE(campaign_id, mailing_entry_id)` + retry por `campaign.retry.max_attempts`.
-Demo: pool webhook `outbound_demo` + `skill_outbound_demo_v1` (drena → `loop` → `campaign_delivery_result`), agenda
-dispara com **diff zero** no scheduler (`@ctx.campaign_id` do payload). Gate `infra/test/smoke_outbound_fase1.sh`
-✅ (2026-07-21). A validação destravou um fix de engine: `loop.ts` não limpava o sentinel `:__invoked__` → invoke
-no body do loop só rodava a 1ª iteração (agora limpo, simétrico ao `:__notified__`).
-**Decisão (2026-07-21):** o `contact_eligibility_check` (Fase 2) **substitui** o `survey_eligibility_check` — motor
-de elegibilidade único e genérico; survey depois. UI (mailings/campaigns) = dívida da fatia 1b.
+**Invariantes:**
+- metadado da entrada é **opaco** — contrato produtor↔consumidor, a plataforma não o interpreta;
+- **membership (`mailing_entries`) ≠ suppression (`campaign_deliveries`)** — não fundir;
+- entrada = **`(pessoa, contexto)`**, nunca só pessoa;
+- **agentes drenam via MCP e nunca tocam o DB** (`mailing_add`/`campaign_drain`/
+  `campaign_delivery_result`: wrappers finos, `isError` em não-2xx, auditados);
+- **pacing é a agenda recorrente**, não um laço no skill (tick drena ≤ `batch_size`);
+- idempotência = `UNIQUE(campaign_id, mailing_entry_id)` + `FOR UPDATE SKIP LOCKED` no claim.
 
-**Fase 2 — governança de contato ✅ (validada via API):** motor **agnóstico** de fadiga no schema `outbound` —
-`contact_log` (fato: customer×channel×campaign×contacted_at) + `contact_policy` (regra em camadas tenant/campaign:
-`frequency_caps`/`quarantine_after`/`channel_caps`; janela `24h|7d|60m|30s`|seg) + `contact_eligibility_check`
-(decisão: avalia a policy efetiva — campanha sobre tenant — contra o log; `claim=true` grava o fato na mesma
-transação, janela começa no envio; `reason` sempre nomeia a regra). `mailing_unsubscribe` = supressão mailing-scoped
-(`entry.status='unsubscribed'`). Tools MCP `contact_eligibility_check`/`mailing_unsubscribe`; endpoints
-`/v1/contact-policies`, `/v1/contact/eligibility`, `/v1/unsubscribe`. Validação **via API** (`smoke_outbound_fase2.sh`).
-Opt-out global (do_not_contact no cadastro), janela de calendário e preferência soft = Fase 3. **Fase 2b ✅ E2E:**
-o gate roda **dentro** do `skill_outbound_demo_v1` (loop → `verificar_elegibilidade`(claim) → `choice` →
-`contacted`|`skipped_ineligible`); smoke `smoke_outbound_fase2b.sh` (fadiga cross-campanha no fluxo real).
-**Deploy do skill editado num pool com slot:** republicar `skill.flow`/reconcile NÃO basta (o bridge roda o
-snapshot do slot `current`) — re-snapshotar via `PUT /slots/next` → `POST /promote` (com `x-service-token`), que
-publica `registry.changed(pool)` e invalida o cache do bridge.
+**Elegibilidade (`contact_eligibility_check`) é motor único e agnóstico** — substituiu o
+`survey_eligibility_check`. Precedência **inegociável**: `opt_out` (cadastro `do_not_contact`, salvo
+`campaign.transactional`) → janela de calendário → fadiga (`frequency_caps`/`quarantine_after`/
+`channel_caps`). `claim=true` grava o fato na MESMA transação — a janela começa no envio, não na
+decisão — e `reason` **sempre nomeia a regra**. Falha de dependência degrada para **ALLOW
+barulhento**, nunca silencioso.
 
-**Fase 3 — portões (desenho fechado):** só **3a (janela/calendar)** + **3b (opt-out `do_not_contact`)** são build
-novo, no `contact_eligibility_check`. **Capacidade** = routing `allocate-or-queue` + `pool.queue_config.max_wait_s`
-(config, sem código — o `collect` cria o contato roteado); **canal** = reuso de `collect.channel_policy` (channels/
-preferred_order/exclude) — ambos fecham na Fase 5. Pacing **por-canal**: `reactive` (sem consulta) p/ baixa latência;
-`look_ahead` (consulta `pool_status_get` + taxa de conexão) p/ o **discador de voz** (Fase 5+). **Fase 3a ✅ via
-API:** `db_contact_eligibility` consulta `campaign.contact_calendar_id` → calendar-api `is_open` (antes dos caps,
-fora da transação); fechado → `outside_window` sem claim; erro do calendar → degrada p/ ABERTO. Smoke
-`smoke_outbound_fase3a.sh`. **Fase 3b ✅ via API (opt-out global):** `do_not_contact` (`{all?, channels?}`) vive
-no cadastro (`identity.customers.attributes`), lido via channel-gateway `GET …/identity/customers/{id}`; o
-eligibility veta `opt_out` de **MAIOR precedência** (antes de calendar/fadiga) salvo `campaign.transactional`;
-`mailing_unsubscribe scope=global` escreve o atributo. Degrada→ALLOW barulhento. Smoke `smoke_outbound_fase3b.sh` (**validado 2026-08-20**, com
-testemunha e caso por-canal acrescentados na validação).
+**Fan-out = dispatcher + worker** via `workflow_trigger` fire-and-forget; paralelismo pelo
+`max_concurrent` do pool + allocate-or-queue. O contato usa o **`collect` LAZY** — ativo-síncrono só
+é exigido na voz-com-agente, fora do corte.
 
-**Fase 4 — importador de arquivo ✅ API (2026-07-22):** adaptador anti-corrupção em **DUAS camadas** no
-`mailing-api`, REST puro (importador não é agente): **Camada A** (`batch_ingest` + `POST /v1/mailings/{id}/
-entries/batch`, público, agnóstico de formato) recebe linhas normalizadas → resolve `customer_id` (id nativo ou
-`anchors`→Identity `resolve()`) → valida (sem contato nem id = `rejected`) → `db_add_entry` → relatório
-`{total,added,deduped,resolved,unresolved,rejected}`; **Camada B** (`parse_file` + `POST /v1/mailings/{id}/import`,
-multipart) lê o **`column_map` do mailing** (`{customer_id_column?, anchors:[{kind,column}], contacts:{canal→col},
-metadata_columns?}` — config de PARSING, `metadata` segue opaco em runtime), faz parse CSV/xlsx **síncrono com
-teto** (`PLUGHUB_MAILING_IMPORT_MAX_ROWS=5000`→413), remapeia rejeição→nº de linha, carimba `source=import:{id}`.
-Rejeita-linha-e-continua (nunca aborta). Camada A pública = seam reusável por formatos futuros. Deps novas:
-`openpyxl`+`python-multipart`. Smoke `smoke_outbound_fase4.sh`. Ver `docs/arcos/outbound.md`.
+⚠️ **No survey outbound o veículo é o link web (`survey_link_create`), NUNCA o `collect`** — o
+collect chavearia o sinal pela raiz da sessão CHAMADORA (a do dispatcher, no fan-out), errada para o
+survey do processo. Por isso o `origin_session_id` viaja EXPLÍCITO na metadata.
 
-**Fase 5a — fan-out dispatcher/worker ✅ (2026-07-22):** o loop inline sequencial da Fase 1 virou **dispatcher +
-worker** via `workflow_trigger` (fire-and-forget). `skill_outbound_dispatch_v1` (pool `outbound_dispatch`,
-disparado pela agenda): `drenar(campaign_drain, claim) → loop{ workflow_trigger(pool=outbound_worker, customer_id,
-context_json={delivery_id,customer_id,channel,campaign_id}) } → complete`, **não espera**. `skill_outbound_worker_v1`
-(pool `outbound_worker`, 1 por contato em paralelo): `eligibility(claim) → choice → [elegível: contacted →
-collect(lazy) → responded|failed] | [inelegível: skipped_ineligible]`. Contabilidade variante (a): dispatcher
-claima + passa `delivery_id`. Paralelismo = `outbound_worker.max_concurrent` + allocate-or-queue. **Decisão B:**
-usa o `collect` LAZY existente — funcionalmente = ativo p/ todo canal com engajamento **adiável** (link/mensagem);
-o ativo-síncrono só é forçado na voz-com-agente (fora do corte; entra como pacing `look_ahead`, não reserva).
-Smoke `smoke_outbound_fase5a.sh` (N deliveries `claimed→contacted`).
-
-**Fase 5b — survey outbound e2e ✅ (2026-07-22):** conecta o survey ao substrato de campanha. O processo faz
-`mailing_add` no `complete` (journey_complete) com `metadata={origin_session_id,grain,form_id,customer_key}`;
-campanha+agenda drena; `skill_outbound_survey_dispatch_v1` (pool `outbound_survey_dispatch`) faz fan-out ao
-`skill_outbound_survey_worker_v1` (pool `outbound_survey_worker`). **Veículo = link web** (`survey_link_create`,
-que recebe `origin_session_id` EXPLÍCITO da metadata) e **não** o `collect` — o collect chavearia o sinal pela raiz
-da sessão chamadora (a do dispatcher no fan-out), errada p/ o survey do processo. Worker: `eligibility(claim) →
-survey_link_create → campaign_delivery_result(contacted, guarda token) → complete`. A submissão em
-`/survey/{token}/submit` publica `session.signals` no origin/grão (mesma trilha do `survey_record`). Closure =
-sinal + `contacted` (token na delivery p/ drill; `responded` por-delivery = refinamento). Dispatcher de survey
-próprio (conhece o contrato de metadata; mantém o da 5a congelado). Smoke `smoke_outbound_fase5b.sh`. **Arco
-Outbound completo (1–5).**
+**Importador** é anti-corrupção em duas camadas: ingest normalizado público (agnóstico de formato,
+seam reusável) × adaptador de arquivo que lê o `column_map` do mailing. Parse síncrono com teto
+(`PLUGHUB_MAILING_IMPORT_MAX_ROWS`, 413 acima dele). Rejeita-linha-e-continua, nunca aborta o lote.
 
 → See [`docs/arcos/outbound.md`](docs/arcos/outbound.md),
-[`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md),
-[`docs/product/outbound-fase1-implementation-spec.md`](docs/product/outbound-fase1-implementation-spec.md)
+[`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md).
+História fase-a-fase, gates e datas no `CHANGELOG.md`.
 
 ---
 
 ## Pending (Next Iteration)
 
-> ⚠️ **A triagem de 2026-08-17 NÃO é mais filtro vivo — a direção que a ancorava foi revertida em
-> 2026-08-18.** Ver [`docs/product/n8n-arco-abortado-2026-08-18.md`](docs/product/n8n-arco-abortado-2026-08-18.md).
-> Os baldes que aparecem entre colchetes abaixo eram relativos a um alvo que não existe mais:
+> **Só itens NÃO implementados.** Arco concluído sai daqui para o `CHANGELOG.md` — item pronto dentro
+> de uma seção chamada *Pending* volta a ser triado como trabalho em aberto, que é o custo real de
+> deixá-lo. Detalhe, fases e evidência por item vivem no `TODO.md` e nos `docs/`; aqui fica **o que
+> está aberto e por que importa**.
 >
-> | Balde antigo | Estado agora |
-> |---|---|
-> | `Congela` | **DESCONGELADO** — prendia "até o gate da fase 3", e esse gate não existe. Volta à fila normal, **sem prioridade herdada** |
-> | `Escopo reduzido` | **REEXAMINAR** — o corte era *"esta parte vira template n8n"*. Rejulgar item a item; **não** reverter em bloco (alguns cortes eram bons por mérito próprio) |
-> | `Aborta` | **segue abortado**, por mérito próprio — nenhum caiu por *"o n8n cobre"* |
-> | `Segue` | inalterado; onde a justificativa citava o alvo, ela foi trocada, não a prioridade |
->
-> A evidência por item da triagem (arquivo:linha) continua válida; os baldes e as âncoras de fase, não.
-> **No lugar do alvo:** A2A server binding ([`adr-a2a-server-binding.md`](docs/adr/adr-a2a-server-binding.md))
-> e editor gráfico próprio alavancado por *execução observável*. A direção *"config + interpretador
-> genérico"* sobrevive inteira e **nunca dependeu do n8n**.
->
-> ⚠️ Arcos concluídos foram movidos daqui para o `CHANGELOG.md` — a regra de manutenção deste arquivo
-> proíbe ✅ no `CLAUDE.md`, e item concluído dentro de uma seção chamada *Pending* volta a ser triado como
-> trabalho em aberto. Limpeza restrita ao que a triagem tocou; varredura completa da seção é escopo à parte.
+> **Os baldes da triagem de 2026-08-17 foram REMOVIDOS em 2026-08-31** — a direção que os ancorava
+> caiu em 2026-08-18 ([`n8n-arco-abortado-2026-08-18.md`](docs/product/n8n-arco-abortado-2026-08-18.md)),
+> e por treze dias eles custaram contexto em toda sessão para dizer que não valiam. A evidência por
+> item da triagem continua válida; os baldes e as âncoras de fase, não. **No lugar do alvo:** A2A
+> server binding e editor gráfico próprio alavancado por *execução observável* — a direção
+> *"config + interpretador genérico"* sobrevive inteira e **nunca dependeu do n8n**.
 
-### Arc 15 — WebRTC (decisão em aberto) — **[Descongelado 2026-08-18]**
-- **Provisionar o SFU** *(pendente de VERDADE, medido 2026-08-20)*: não há serviço LiveKit em compose
-  algum, nem env `LIVEKIT_*`, nem manifesto k8s em `infra/`, nem o SDK como dependência do
-  channel-gateway — o canal roda inteiro em `_dev_mode`/mock. Bloqueia qualquer medição de WebRTC.
-- bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado). Decisão, não
-  implementação pendente — mas **depende do item acima**: não se decide topologia de mídia sobre um
-  SFU que não existe. *(Esta linha dizia "o arco em si está concluído"; concluído é o canal, não a
-  solução de mídia.)*
+### Arc 15 — WebRTC
+**Provisionar o SFU** é pré-requisito, não detalhe de deploy: não há LiveKit em compose algum, nem env
+`LIVEKIT_*`, nem manifesto k8s, nem o SDK como dependência — o canal roda inteiro em `_dev_mode`, que
+devolve token bem-formado e falso. Bloqueia qualquer medição de WebRTC e a decisão do bridge
+PSTN→WebRTC via SIP Ingress.
 
-### Usage Metering — Channel Gateway Adapters — **[Descongelado 2026-08-18]**
-- `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` *(deferred)*: functions in `usage_emitter.py` ready, adapters not yet calling them. Depende da evolução dos módulos de channel-gateway, que não andou — motivo **próprio**, e o único que sobrou depois que o gate de fase caiu. *(O achado de que `llm_tokens_*` não é emitido no `/v1/reason` continua valendo, mas é **defeito**, não item de direção.)*
+### Usage Metering — adaptadores de canal
+`whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages`: as funções existem em
+`usage_emitter.py`, os adaptadores não as chamam. *(Separado: `llm_tokens_*` não emitido no
+`/v1/reason` é **defeito**, não item de direção.)*
 
-### Pricing Module — **[Descongelado 2026-08-18]**
-- **Integração metering × pricing** *(deferred)*: módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
+### Pricing — integração metering × pricing
+Módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
 
-### Audit LGPD — Fases Pendentes — **[Segue — fosso]**
-> ⚠️ A urgência extra vinha de *"parte da execução mora fora da plataforma"* (retenção de log com PII
-> no motor de terceiro). Com a reversão, **a execução volta a ser toda em casa e essa urgência cai** —
-> as quatro fases seguem pendentes por obrigação de LGPD, que é razão própria e independente.
-- **Fase 2** *(deferred)*: `original_content` desmascarado via endpoint batch de resolução de tokens em Core.
-- **Fase 3** *(deferred)*: `user_access` logs — topic Kafka `user_access.events` em auth-api + ClickHouse.
-- **Fase 4** *(deferred)*: SAR/erasure pipeline — pseudonimização `sessions_stream` + anonimização ClickHouse.
-- **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
+### Audit LGPD — Fases 2–5
+`original_content` desmascarado (exige endpoint batch em Core) · logs `user_access` · pipeline
+SAR/erasure · `config_snapshot` para o DPO. Pendentes por obrigação legal, razão própria e
+independente de qualquer direção de produto.
 
-### Quality Ingest — concerns abertos — **[Segue — fosso]**
-*(O arco R13a–R13d está concluído; história no `CHANGELOG.md` e detalhe em `docs/arcos/quality-ingest.md`.)*
-- **Concerns** (§9 do doc do arco): (a) `ReplayContext` `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest — `pool_id` degrada se um contato vier partido entre POSTs. O concern (c) foi resolvido pelo discriminador `origin` (abaixo).
+### Quality Ingest — concerns abertos
+(a) `ReplayContext` entrega `session_meta`/`participants`/`sentiment` em default para importados;
+(b) correlação por-requisição: `pool_id` degrada se um contato vier partido entre POSTs.
 
-### Isolamento do substrato por `origin` — Fase 2 — **[Descongelado 2026-08-18 — mas o gatilho próprio segue não disparado]**
-Discriminador `origin: live|import|reeval` por-sessão nas tabelas de substrato, com **filtro default `live`** no report layer da analytics-api (`_apply_origin_scope`) e no sampling da evaluation-api (`_passes_filters`) — é o default no backend que dá a garantia, e a UI operacional espelha (sem seletor de origem: origem é contexto de qualidade, não dropdown operacional). **Invariantes:** `origin` é a verdade universal por-sessão; **não** estender `pool.agent_kind`.
-**Pendente = só a Fase 2** (partição CH `PARTITION BY (…, origin)` + `pool.origin_class`), **adiada por decisão em 2026-06-25**: é governança/lifecycle, não correção. **Gatilho de reativação inalterado pela reversão** — importação externa real com obrigação de retenção/erasure própria (LGPD, `DROP PARTITION`). Sair do balde `Congela` **não** o antecipa: o item nunca dependeu do alvo abortado, e continua esperando o gatilho de negócio. → [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md)
+### Isolamento do substrato por `origin` — Fase 2
+Partição ClickHouse `PARTITION BY (…, origin)` + `pool.origin_class`. É governança/lifecycle, não
+correção — **adiada por decisão**, aguardando gatilho próprio: importação externa real com obrigação
+de retenção/erasure (`DROP PARTITION`).
 
-### Business in Any Media — processo channel-abstract + framework de loja *(proposta)* — **[REEXAMINADO 2026-08-26 — corte REVERTIDO]**
-> O corte do nível (a), do contrato delegate-por-pool e do intake-flow tinha como razão literal
-> *"autoria, que vira template n8n"* — fundamento que caiu com a reversão. **Voltam à fila**, a
-> rejulgar pelo mérito sob a pergunta *"quanto disso vira config + interpretador genérico"* (tarefa
-> **B1**). Veredicto e tarefas em `TODO.md` § *"Reexame dos 9 em `Escopo reduzido`"*.
-> **Fica** (fronteira/governança): resolvedor de identidade nível (b), gate de identificação,
-> commerce-cards com checkout mascarado + repasse ao PSP, novas `ChannelCapability`. Esta metade
-> nunca dependeu do alvo e segue inalterada.
-> ⚠️ **A outra metade voltou a ser questão aberta.** O nível (a) *"fluxo negocial channel-abstract"*,
-> o contrato delegate-por-pool e o intake-flow tinham sido cortados com a razão *"vira template n8n,
-> porque a autoria sai por completo"* — a autoria **fica**, então o fundamento do corte caiu.
-> Rejulgar pelo mérito: são autoria de fluxo, e o que decide agora é o escopo do editor próprio
-> (quanto mais vira config + interpretador genérico, menos precisa ser fluxo autorado).
-> **Consumidor da parte que fica:** Cliente 360 / Resolvedor de Identidade Fase C.
-- Reposicionamento process-centric + comércio conversacional sobre o modelo de 3 níveis (a/b/c). Specs em `docs/product/`: arquitetura-alvo (3 níveis), resolvedor de identidade/cadastro (nível b, generaliza `pending_workflow`), contrato delegate-por-pool, commerce-cards (nível c), fluxo de intake. Detalhe e fases em `TODO.md`. Base existe (workflow+canais+suspend/resume+masking); falta cadastro de identidade completo, commerce-cards e o nível (b) de primeira classe.
-- **Resolvedor de Identidade (nível b) — Fase A · Slices 1–2 ✅** (2026-07-02, CHANGELOG): cadastro mínimo interno no channel-gateway (módulo `identity/`). **Slice 1 (Redis):** Lookup 1 `resolve_or_provision` (`{t}:identity:{kind}:{hash}`→`customer_id` nativo, PII hasheada com salt de env), Lookup 2 `pending_by_customer` (generaliza `pending_workflow`), endpoints `POST …/identity/resolve` + `GET …/pending/by-customer/{id}`, tools MCP `customer_resolve` + `pending_workflow_get(anchors)`, dual-write flag-gated no `delegate`. **Slice 2 (PG durável):** schema `identity` (`customers`/`secondary_keys`/`external_refs`/`merges`, raw asyncpg idempotente, reusa o pool dos attachments), promoção efêmero→PG no gatilho concreto (`write_pending`), fallback Redis→PG com reidratação (`matched_by="durable"`). **Destrava a retomada cross-canal** e é a chave estável que o histórico (arco H) precisa. **Slice 4 ✅** (2026-07-02): o bridge (`_close_contact_layer` → `_resolve_close_customer_id`) carimba o `caller.customer_id` **nativo** do ContextStore em `sessions.customer_id` no fechamento (fallback `contact_id`) → conserta o `contact_id`-como-`customer_id` e reconecta H1/H2/H3; `AgentAssistPage` chaveia a `HistoricoTab` pelo `caller.customer_id`. **Fase A completa (Slices 1–4).** **Wiring do intake ✅ (2026-07-03, CHANGELOG):** `agente_portabilidade_intake_v1` resolve o `customer_id` nativo (`customer_resolve`, âncoras `numero_atual`+`contact_identifier`) e grava `caller.customer_id` via `context_set` pré-ramificação → Slice 4 propaga o nativo. Validado no demo (2 intakes, mesmo número → mesmo `cus_…`). **Nota de deploy:** pool migrado a `PoolSkillSlot` exige `set-next`+`promote` (edição de YAML+restart republica `skill.flow` mas não re-snapshota o slot `current` que o bridge executa). **Slice 3 ✅ (2026-07-03, CHANGELOG):** campos opcionais `customer_resumable` (default `false`) + `resume_policy` (`offer|auto`, default `offer`) no step `delegate` e `collect` (`schemas/src/skill.ts`), propagados pelos call sites explícitos dos executores (`executeDelegate`/`executeCollect` — ponto de drop) → `persistDelegate`/`persistCollect` → skill-flow-service → channel-gateway. A **dual-write `pending_by_customer`** (antes incondicional) agora é **gated em `customer_resumable`** em `handle_delegate` **e** `handle_delegate_conference` (spec §6); `resume_policy` viaja no `PendingEntry.policy`. `session_resumed` ganha `resume_origin` (`same_channel|token|identity`; só `token` wirado — `same_channel`/`identity` ficam p/ o caminho de reconexão-oferta da Fase B). Guardrail de perfil = colocação no schema (o discriminated union descarta os campos de um `suspend`). Demo: `skill_portabilidade_demo_v1` (`notificar_e_confirmar`) seta `customer_resumable: true` p/ manter a retomada cross-canal sob o gate. **Reconexão-oferta por identidade ✅ (2026-07-03, Fase B slice, CHANGELOG):** o intake (`agente_portabilidade_intake_v1`) resolve pendências por **anchors[]** (Lookup 1→2 cross-canal via `pending_workflow_get(anchors)`) em vez de `contact_identifier`; `find_pending_by_customer` devolve `policy` + view achatada (compat legado) e a dual-write guarda `context_preview` **mascarado** (`operadora_destino` claro, `numero_atual`→`***4321`); novo `choice avaliar_politica_retomada` honra `policy` (`auto`→retoma direto, `offer`→menu); `resume_origin=identity` percorre intake delegate→`session.resume_origin`→confirmação→`workflow_resume` (tool tolerante a valor ausente→`token`)→endpoint→`handle_resume`→`session_resumed`. Validado no demo (oferta cross-canal com número mascarado). **Identidade progressiva + posse de canal (OTP) + gate seguro ✅ (2026-07-04, Fase B completa em 3 fases, CHANGELOG + ADR `adr-identity-channel-possession.md`):** (1) progressiva — `resolve_or_provision` anexa âncoras *miss* ao vencedor como `claimed` (email sozinho resolve depois); `verification_class` (`claimed|possessed`) no índice Redis (`{cid,vc}`, leitor tolerante) + PG; confiança = `f(kind,classe)` (possessed>claimed). (2) OTP como **serviço componível opcional** (`OtpService`: challenge/verify, código só-hash, rate-limit, entrega mockada gated por `PLUGHUB_OTP_DEV_RETURN_CODE`); `otp_verify`→`attach_anchor(possessed,durable)` é a **única** via para `possessed` (`customer_attach_key` só `claimed`; invariante possessed⟺verificado); tools `otp_challenge`/`otp_verify`/`customer_attach_key`/`customer_update_attributes`. (3) **default seguro**: retomada cross-canal de `customer_resumable` exige `possessed` — `pending_workflow_get` devolve `verification_required` (sem vazar existência) quando só `claimed`; intake oferece OTP (proativo com recusa)→verifica→re-consulta. **Plataforma = autoridade de posse de canal, não de identidade-de-registro** (emenda princípio 7/§4.4; identidade legal segue no CRM do tenant). **Falta (Fase C / quando houver CRM):** `external_refs` + merge de clientes; wiring do step CRM `resolve`; origem `resume_origin=same_channel` (continuidade intra-canal, platform-level); transporte real do OTP; `persistCollect` no skill-flow-worker legado. Plano: `docs/product/identity-resolver-fase-a-plano.md`.
+### Business in Any Media — processo channel-abstract + comércio
+**Fica:** resolvedor de identidade Fase C (`external_refs` + merge de clientes), gate de
+identificação, commerce-cards com checkout mascarado e repasse ao PSP, novas `ChannelCapability`.
+**A rejulgar (tarefa B1 do `TODO.md`):** o nível (a) *"fluxo negocial channel-abstract"*, o contrato
+delegate-por-pool e o intake-flow — cortados com a razão *"vira template n8n"*, fundamento que caiu.
+O critério agora é *quanto disso vira config + interpretador genérico*.
 
-### Journey (retorno) — modelo de 3 níveis — **[Segue — fosso]** *(J1–J5b concluídos; história no `CHANGELOG.md`)*
-> ⚠️ **Corrigido 2026-08-17:** este cabeçalho dizia *"N3-no-drill pendente"*; o `TODO.md:3240` registra o
-> item como **entregue em 2026-07-23**. Abertos de verdade: **item 2** (cache `sessions.journey_id` não
-> refrescado no merge — otimização adiada por decisão) e **item 3** (guard de rota ABAC em `analise/*`,
-> dívida app-wide de segurança).
-- **Estado:** J1 (espinha `root_session_id` + propagação), J2 (`/reports/journeys` + Vista Processos + drill 3 níveis), J3 (`journey_merge` + `journey.merges` + `journey_aliases` + union-find + `PendingEntry.root_session_id`) **concluídos e validados** (ver `CHANGELOG.md`). **J4 reenquadrado (2026-07-22):** deixou de ser um display isolado e virou a **fatia journey** da camada genérica **Customer Voice** (lente `grain × metric` sobre `session_signal` + catálogo source-aware + overlay SLA; ver seção "Customer Voice" no CHANGELOG). O grão journey do survey é exibido na superfície "Voz do Cliente" (`/analise/customer-voice`); a exibição N3 **na própria Vista Processos** (pendurar o sinal no drill) segue pendente. Decisão as-built: cache `sessions.journey_id` **diferido** (reads por union-find, sem refresh no merge). **J5a ✅ (2026-07-22) — `@ctx.journey.*` (contexto compartilhado do processo):** a **leitura** (interpolate) + **escrita automática** (context_tags via engine) + **migração no merge** (`journey_merge` → `migrateJourneyContext`, canônica vence) já existiam; o gap era a **escrita imperativa** (`context_set` do skill-flow e `/api/inject-context` do supervisor gravavam raw no hash da sessão). Fechado com o helper único **`writeContextTag`** (`tools/journey.ts`): tag `journey.*` → hash do PROCESSO (`{t}:ctx:journey:{raiz canônica}`, TTL 30d), resolvendo a raiz pela MESMA via do bridge (proveniência `session.root_session_id` → `resolveJourneyRoot` union-find); demais tags → hash da sessão. Sem nova dependência (não importa `@plughub/sdk`; reusa os helpers que o `journey_merge` já usa). Smoke `infra/test/smoke_journey_context.sh`.
-- Reintroduz o agrupamento de N contatos (N1/N2 operacionais) em torno de um processo negocial (N3) **sem** a entidade Journey do Arc 10 (removida na Fase F). Modelo **D1.5**: journey = componente conexa de sessões sob (proveniência ∪ alias), identificada pela **raiz canônica** (valorada em `session_id`, resolvida por union-find na leitura). Fonte de verdade = `root_session_id` (imutável, nunca null: param propagado do chamador ou auto-mint=`self`) + `journey_aliases`; a coluna dormente `sessions.journey_id` vira **cache** eventualmente consistente. Merge = tool MCP `journey_merge` (sempre novo→antigo ⇒ ordem total, sem ciclo) + topic **`journey.merges`** (1 tipo, ≠ `journey.events` de 9 tipos removido no Arc 19). Mantém `origin_session_id` (1 salto, `SessionTrace`) **e** `root_session_id` (raiz transitiva). Três superfícies: mostrar 3 níveis (drill `journey→[session→[segment]]`), medir/avaliar por nível (N1 QA por segmento; N3 `session_signal` grain=`journey`), exibir contatos sob a journey (proveniência ∪ merge). Fases J1–J5 (J1+J2 = journey por proveniência; J3 = merge). **Nunca** reviver entidade/lifecycle/merge-split. Detalhe/fases em `TODO.md`.
-- Design: [`docs/product/journey-retorno-modelo-3-niveis-design.md`](docs/product/journey-retorno-modelo-3-niveis-design.md) · Spec: [`docs/product/journey-3-niveis-implementation-spec.md`](docs/product/journey-3-niveis-implementation-spec.md) · Diagrama: `docs/product/journey-3-cenarios-unionfind.svg`.
+### Journey — modelo de 3 níveis
+Abertos: cache `sessions.journey_id` não refrescado no merge (**otimização adiada por decisão**;
+leituras vão por union-find) · guard de rota ABAC em `analise/*` (dívida app-wide de segurança) ·
+exibição do sinal N3 no drill da própria Vista Processos.
+→ See [`docs/product/journey-retorno-modelo-3-niveis-design.md`](docs/product/journey-retorno-modelo-3-niveis-design.md),
+[`docs/product/journey-3-niveis-implementation-spec.md`](docs/product/journey-3-niveis-implementation-spec.md). Diagrama: `docs/product/journey-3-cenarios-unionfind.svg`.
 
-### Fila de trabalho humano / dispatch pull + inbox no Console — **[Segue — fosso]** *(pull genérico e renderer R0 concluídos; aprovação R1 + wrap-up E2 pendentes)*
-> Dispatch de trabalho a humano de ponta a ponta — governança de contato com pessoa. Nada depende do
-> editor de fluxo. O `DialogFormRenderer` (R0) é a superfície genérica que o alvo **reforça**: é o
-> tratamento de collect-form no Console **sem skill por caso**, o mesmo princípio de "config +
-> interpretador genérico" que o §5.3 do doc de interop extrapola.
-- **Pull genérico ✅** (Frente 1 F1–F2b, ver CHANGELOG): `dispatch_mode: pull` no Routing Engine (claim atômico `ZREM`, lease+auto-release), tools `work_queue_*`, `PullInboxPanel` com preview.
-- **Renderer genérico de collect-form no Console — R0 ✅** (2026-07-24, ver CHANGELOG): `DialogFormRenderer.tsx` = 4ª superfície do dialog primitive. Claim de workflow suspensa (ctx `session.dialog_form_id`+resume token) → **briefing** (transcrição de `session.briefing_session_id`) + **DialogForm inteiro** → `workflow_resume` com `payload.answers`. `ApprovalPanel` virou **wrapper fino** (decisions/edições/ABAC empilhados). Consumidores validados: aprovação (wrapper) + demo genérico (`skill_formfill_demo_v1`/`dialog_formfill_demo`, `smoke_formfill_renderer.sh`). Núcleo estável que aprovação (R1) e wrap-up-α (E2) consomem sem alterar. **Follow-up:** ingress de resume aplica `approvals.decide` a qualquer resume com JWT (parametrizar por tipo de tarefa — relevante à E2).
-- **Aprovação como especialização — desenho FECHADO** (ADR `docs/adr/adr-human-approval-workflow-step.md`, 2026-07-16; **A3/R0 ✅**, R1 = anexos/masking + ABAC completos pendente): aprovação = passo transparente do workflow (`collect`/`delegate` a um pool, `dispatch_mode` config push|pull) → **conteúdo = DialogForm** (reuso do primitivo; editor/`form_get`), **aprovador = agente logado** (Modo A; reusa Agent Groups/Arc 8/ABAC `approvals`), **superfície = Console/inbox responsivo**, **retorno pelo payload do delegate → `choice`**. **Omnichannel adiado** (conteúdo/retorno canal-agnósticos; sem `channel_type: "console"`). Fases A1–A6 no ADR §6. Specs antigas (`routing-pull-dispatch`, `human-work-queue-aprovacao`, `pull-inbox-console-ui`, `frente1-…-consolidado`) **reconciliadas** pelo ADR. Liga ao gate de promoção homologação→produção.
+### Fila de trabalho humano — aprovação R1
+O pull genérico e o renderer genérico de collect-form (R0) estão entregues, e o wrap-up destacado
+também. Aberto: **R1** — anexos, masking e ABAC completos na aprovação. Follow-up medido: o ingress
+de resume aplica `approvals.decide` a **qualquer** resume com JWT; parametrizar por tipo de tarefa.
 
-### Detach de hooks de finalização + Pull direcionado + ACW *(desenho fechado 2026-07-23; Camadas A ✅ + B ✅ + D ✅ 2026-07-24; E1 ✅ (Forma A aposentada); E2 wrap-up ✅ (detached + wiring, 2026-07-24/27); **wrap-up UNIFICADO** ✅ Phase 0+1+3 (2026-07-27) — inline=auto-atendimento sobre a MESMA máquina detached, `acw_pending`/`acw_gate` REVERTIDOS + inline antigo (`wrapup_ia`+`wrap_up_pending`) REMOVIDO (modelo errado: bloqueavam a instância inteira; capacidade = 1 vaga pelo semáforo `claim_instance`, os dois modos); **Phase 2 ✅** (2026-07-27) hand-off da vaga: no close com wrap-up inline a vaga é TROCADA por um hold `__wrapup_hold__::{origin}::{pool_id}::{expires_at_ms}` (swap net 0, flag `keep_slot_for_wrapup` carimbado pelo bridge) que o auto-claim do wrap-up HERDA — ocupação nunca oscila, push não toma a vaga na janela; holds expirados são descartados em qualquer claim (anti-vazamento). Destravou 3 defeitos pré-existentes do ciclo pull/resume (identidade da instância humana corrompida pelo `agent_ready` do resume; vaga do claimante devolvida só por efeito colateral; estado do form grudado no Console) — ver CHANGELOG + `docs/guias/conference-mechanics.md` Mudança 27. **Camada F ✅ 2026-07-30 — ARCO A–F COMPLETO**; ver CHANGELOG)*
-- **Problema:** hooks de finalização não podem suspender/collect — o bridge segura `_trigger_contact_close()` (`hook_pending`) e trata `suspended` como concluído → fecha o contato cedo. Isso força DUAS formas de coleta de survey (delegate legado `skill_survey_v1` × collect J4c). A razão de segurar é **atribuição**, que a Journey (`root_session_id`) + referência de segmento no payload resolvem **sem** segurar.
-- **Alvo:** reduzir a 2 mecanismos — `inline` (síncrono, precisa do WS vivo do cliente: NPS presente) e `collect` (assíncrono, perfil workflow) — e **aposentar a Forma A (delegate)**. Fecha **G1** (AHT inflado por wrap-up) e generaliza **G7** (desacoplamento `on_human_end`).
-- **Invariante (PABX):** o "ramal" (direcionar a um recurso) NÃO é alvo de roteamento — é work item que mora num **pool** (fila) com filtro de claim `assigned_to` + **fallback pro pool** por lease. Fila=pool+dispatch; ramal=pull direcionado+overflow. Embrião de transfer-to-agent, sem quebrar o invariante "pool é a unidade endereçável".
-- **Camadas:** **A** `dispatch: inline|detached` no `PoolHookEntry` (schema, default inline; guard rejeita `detached` em `on_human_start`) ✅ · **B** pull direcionado ✅ **(2026-07-24, smoke 5/5)** — `assigned_to`+`fallback_to_pool_after_s`+`assigned_at_ms` no work item (`QueuedContact`/`contact_data`, sem novo Zod); gate DENTRO de `Router.work_task_claim` antes do `ZREM` (dono OU idade ≥ fallback; ausente=permanente; `reason: reserved_to_other`, logado); claimant derivado de `instance_id`=`human-{userId}` (ou explícito); inbox filtra/rotula reservado×transbordado; **sem reaper de lease** (transbordo por idade do item); smoke `infra/test/smoke_directed_pull.sh`; wrap-up como consumidor = Camada E · ~~**C** `acw_gate: none|soft|hard`~~ **REVERTIDA na Phase 0 e REMOVIDA ponta a ponta (2026-07-29)** — o gate bloqueava a instância INTEIRA (não uma vaga) e reservava no dispatch (não no claim); a Phase 0 tirou o enforcement e o marker, e a coluna/plumbing/UI saíram depois (migration `20260729000000_drop_pool_acw_gate`). Capacidade de wrap-up = 1 vaga pelo semáforo `claim_instance`, nos dois modos. **Não reviver este enum**: um gate de ACW futuro se desenha sobre a VAGA · **D** bridge honra `detached` ✅ **(2026-07-24, smoke 2/2)** — `_fire_detached_hook` (workflow webhook `POST /channels/webhook/pool/{id}`, `origin`+`journey:inherit`+ref de segmento no ctx); `_entry_will_dispatch` exclui detached do `hook_pending`; auto-close `_trigger_contact_close` na leva 100% detached (fecha G1); guardas `_has_customer_hooks` excluem detached; env `CHANNEL_GATEWAY_URL`; **conference-mechanics.md Mudança 25**. Limitações: post_human+detached, segment_wrapup fanout → Camada E · **E1** ✅ **(2026-07-24)** aposentar Forma A (pools `survey_processo_ia`/`survey_collector_ia`/`survey_reconnect_ia` + skills `skill_survey_v1`/`skill_survey_nps_v1`/`skill_survey_reconnect_v1` — estavam inertes, removidos do YAML/arquivos; DB rodando persiste inerte, purge opcional via PRUNE) · **E2** wrap-up detached — **núcleo ✅** (Path α renderer-first): renderer R0 (`DialogFormRenderer.tsx`) ✅ 2026-07-24; form `dialog_wrapup_v1` + workflow `skill_wrapup_detached_v1` (E2a) ✅; tool `segment_outcome_record` (E2b, grava outcome no segmento da origem por referência) ✅ 2026-07-24 E2E; **wiring `on_human_end` ✅ 2026-07-27** (`retencao_humano.on_human_end` → `wrapup_detached_ia`; o `dispatch` controla só a ENTREGA sobre a MESMA máquina — `inline` = auto-atendimento no Console; `detached` = item de pull manual. **Config VIVA medida 2026-08-22: `dispatch: detached`** (`GET :3300/v1/pools/retencao_humano`).
-> ⚠️ **Correção da correção.** Em 2026-08-20 esta linha foi "corrigida" para dizer que o demo estava em
-> `inline`, citando `infra/registry/tenant_demo.yaml:400`. O YAML diz `inline` mesmo — e não vale nada:
-> registry é **seed-if-absent**, editar pool já semeado é no-op e **o DB vence**. Aquela correção leu a
-> fonte DECLARATIVA e a chamou de estado — o mesmo erro que a § Configuration — Single Source
-> Invariants descreve em "Seed-if-absent / DB-owned". Regra derivada: **para
-> `hooks`, `deploy`, `capacity` e afins, perguntar ao agent-registry, nunca ao YAML.**; `_fire_detached_hook` injeta `origin_session_id` no ctx; `fire_pool_hooks` semeia seg_signal + surveyed_*; **E2E validado com atendimento real, sem seed**). **Falta:** ~~sessão de wrap-up fora da contagem de contato/TMA (E2f)~~ ✅ · **F** validação ✅ **2026-07-30** — F1 atribuição (provada pelo `issue_status`, não pelo `outcome`), F2 G1 no relatório (8 contatos na tela = 8 no pool de contato; 11 sessões internas fora — contaminação seria na CONTAGEM, não na média: `handle_time_ms` é NULL nas internas), F3 pull direcionado 5/5 em duas execuções (flakiness era o **drain** comendo o item de um pool sem `pool_config`, corrigido na raiz), F4 expiração (`acw_expired` com duração real; vaga devolvida pelo prazo — a **lease** não foi medida, lacuna 2 segue aberta). *(E2e — produtor do marker `acw_pending` — saiu de escopo com a remoção da Camada C.)*
-- Design: [`docs/product/finalization-hooks-detach-and-directed-pull-design.md`](docs/product/finalization-hooks-detach-and-directed-pull-design.md). Detalhe/fases em `TODO.md`.
-- **Triagem 2026-08-17 — [Segue — fosso].** Governança de contato com pessoa de ponta a ponta; nada aqui depende do editor de fluxo. A **Camada E2** é o próprio movimento do alvo aplicado à superfície humana (*"o renderer trata collect-form genérico, sem skill por caso"*) — alinhada, não conflitante.
-- ✅ **CONFLITO DOC×DOC resolvido POR MEDIÇÃO (2026-08-20).** Este cabeçalho estava certo; o `TODO.md` § homônima (~linha 4303) estava **estagnado no plano de 2026-07-23** — chamava E2 de "pendente" e ainda listava a **E2e** como escopo, item que morreu com a reversão da Camada C. O tell de que era plano velho, não medição divergente: nenhuma das duas seções do `TODO.md` concordava entre si (a de ~2652 já marcava E2f e F ✅). Medido no código: os sete sub-itens da E2 existem (`dialog_wrapup_v1` + `skill_wrapup_detached_v1`; `segment_outcome_record` nos DOIS registros do mcp-server; `assigned_to` de webhook→routing→claim; `pools.purpose` com 2 migrations e filtros no analytics; `DialogFormRenderer.tsx`), e o `CHANGELOG.md:6542` tem a entrada da Camada F datada de 2026-07-30 com F1–F4 contra o dado. **Uma correção caiu da medição** (o `dispatch` do demo, acima). **Dois fatos seguem abertos — e são fato, não conflito:** (a) a própria F4 declara sua lacuna (a **lease** não foi medida; sem reaper); (b) **não existe gate re-executável da Camada F** — ela foi validada por medição manual instrumentada, reaproveitando os smokes de B/D/R0/I5 por override de env (`infra/test/smoke_internal_work_queue.sh:85-89`, que parametriza `DISPATCH`/`ACW_HOURS`). Um arco declarado completo sem gate versionado volta a ser lembrança, não verificação.
+### Detach de hooks / pull direcionado — dívida de verificação
+O arco A–F está completo, mas **duas lacunas são fato, não conflito**: a própria F4 declara que a
+**lease não foi medida** (não há reaper), e **não existe gate re-executável da Camada F** — ela foi
+validada por medição manual instrumentada. *Arco declarado completo sem gate versionado volta a ser
+lembrança, não verificação.*
 
-### Record/Replay Harness *(proposta)* — **[Segue — fase 5]**
-- Generaliza o Session Replayer num harness de gravação/replay em todas as costuras (driver/mock por seam) p/ regressão determinística e gate de promoção via `ComparisonReport`. Falta captura full-fidelity MCP/AI Gateway, clock/seed injetável, gravação seletiva. Spec em `docs/product/record-replay-harness-spec.md`. Detalhe em `TODO.md`.
-- **Justificativa trocada em 2026-08-18, prioridade preservada.** A razão de então era *"é o único gate capaz de pegar a avaliação tier-2 achatando sem alarme"* — ela **caiu junto com o alvo**, porque a avaliação deixa de achatar quando a execução fica em casa. Sobrevive pela razão original e própria: **gate de promoção** por regressão determinística. Também some o custo extra que a triagem lhe atribuía (não há costura nova a gravar).
+### Record/Replay Harness *(proposta)*
+Harness de gravação/replay em todas as costuras, para regressão determinística e **gate de
+promoção**. Falta captura full-fidelity MCP/AI Gateway, clock/seed injetável, gravação seletiva.
 
-### Customer Surveys — Módulo de Pesquisas de Satisfação *(spec/ADR)* — **[REEXAMINADO 2026-08-26 — parcial]**
-> **S7 (editor de DialogForm) sobe, confirmado.** O **S2** segue absorvido no interpretador genérico,
-> mas *se ele volta a ter dono próprio é decisão a tomar, não herdada* (tarefa **C2**) — a frente que
-> o absorvia mudou de dono, não morreu. O trio de skills sem pool **segue abortado por mérito próprio**.
-> ⚠️ O resíduo do `value_label` foi citado com **arquivo errado** na triagem e precisa ser remedido
-> antes de entrar em plano (**C4**). Veredicto em `TODO.md` § *"Reexame dos 9 em `Escopo reduzido`"*.
-> **Fica:** S5/S8/S9–S11, store per-response, resíduos do S1 (nenhum produtor CES/PMF/FCR; `value_label`
-> ignorado em `CustomerVoicePage.tsx:161`), e o **S7 = editor de DialogForm** — que **ganha importância
-> com a reversão**, não perde: o conteúdo conversacional continua sendo autorado em casa, e a guarda do
-> `ask_when` (sem control-flow no form) segue load-bearing.
-> **S2 — reavaliar o enquadramento.** Ele era *"runner genérico + DialogForm"* e tinha sido **absorvido**
-> pela frente *"promover o interpretador a serviço de código"*, ancorada num pré-requisito de fase 5 que
-> não existe mais. A frente sobrevive (agora como **redutor de escopo do editor próprio**), mas se o S2
-> volta a ser fatia com dono próprio ou continua absorvido é decisão a tomar, não herdada.
-> **Segue abortado por mérito próprio:** o trio `skill_survey_runner_v1`/`skill_survey_outbound_v1`/
-> `skill_survey_trigger_v1`, que nenhum pool deploya. Não foi cortado por *"o n8n cobre"*, e a reversão
-> não o ressuscita.
-- Generaliza o NPS de fim-de-contato (`skill_nps_v1` + `on_contact_end` + `survey_record` → `session_signal`) num módulo de 5 instrumentos (**CSAT/NPS/CES/PMF/FCR**; Health Score = composto futuro). Princípio: separar **instrumento** (`survey_definition`, composto de perguntas reutilizáveis `survey_question` — N formulários por tipo via form-builder; editor — ADR §16×§17: **B decidida** = 1 skill interpretador genérico + **form JSON versionado** (draft/published na evaluation-api), **engine estendido em 2 peças** (`$.config` do slot no flow + `menu.options/fields` dinâmicos), binding via `interface_schema`→`PoolSkillSlot.config_json` (`form_id` + `survey_form_get`); **A alternativa** = compile-to-skill via `SurveyCompiler`) de **gatilho** (**decisão no skill**, não na plataforma) de **veículo** (runner na conferência / link web). **Gatilho (revisão 2026-06-23)**: o hook é genérico e despacha sempre; o `skill_survey_runner_v1` lê `@ctx.session.contact_outcome` e decide — "ciclo fechado" (`resolved`) é convenção customizável do runner, não invariante de plataforma. Único pré-requisito de plataforma: carimbar `contact_outcome`/`segment_outcome` no ContextStore pré-hook. Achado corrigido: o `skill_nps_v1` é slot transacional (CSAT) com instrumento NPS colado — substituído pelo runner genérico. Net new: **quarentena** anti-fadiga (tool MCP `survey_eligibility_check` + ledger PG/Redis), schema PG `survey` (question/definition/instance/response/quarantine), **interface web pública** `/survey/:token` + envio outbound, **lente `customer_voice`/view "Visão do cliente"** na bancada 360°, **navegador de respostas** (lista por tipo + verbatim + áudio/STT, LGPD — desde a F4 do ADR de relatórios é o NÍVEL de respostas de `/analise/customer-voice`, não endereço próprio) e **agente IA `agente_survey_analyst_v1`** (classifica sentiment/tema/urgência + endereça via Rules Engine/`workflow_trigger`). **Retorno outbound** (§19): contato ativo via `collect`/Arc 19, modo auto (rules) OU **caixa de ações no Console** (sessão outbound-intent parqueada na **inbox pull já existente** — `PullInboxPanel`/`dispatch_mode`/`work_queue`; novo = pool de retorno + skill pós-claim). **claim ≠ collect**: o claim só anexa + dispara briefing (`on_human_start` copilot: contexto da origem + verbatim + histórico); o agente coordena o `collect`/dial via menu `agents_only`. Associação à base de cliente via `customer_key` (forward-compatível com o cadastro dinâmico futuro). Fases S1–S10. **Cadastro de cliente e Health Score fora de escopo** (só os ganchos de dados).
-- **Reconciliação de store (2026-07-07, ADR `adr-survey-form-scoring-composition.md`):** a nota original "form JSON versionado na **evaluation-api** + `survey_form_get`" é **superseded** — o `survey_definition` é um **`DialogForm`+dimensions na dialog-api** (D8; o dialog primitive as-built usa dialog-api + `form_get`). Composição de nota: camada `dimension` (instrumento) agrupa perguntas com **escala+agregação na dimension** (perguntas herdam), `weighted_mean` peso-1-default com re-normalização de NA, **dimensions paralelas** (um sinal por dimension, ≠ composite único do Quality); `survey_record` **compõe** server-side (D9) via o primitivo compartilhado `@plughub/schemas/scoring.ts` (`composeScore`). Schema escrito; runtime + editor com dimension pendentes.
-- Spec: `docs/arcos/customer-surveys.md`.
+### Customer Surveys — módulo de pesquisas
+**Fica:** S5/S8/S9–S11, store per-response e o **S7 (editor de DialogForm)**, que *ganha* importância
+com a reversão — o conteúdo conversacional segue autorado em casa e a guarda do `ask_when` (sem
+control-flow no form) segue load-bearing. **Resíduos do S1:** nenhum produtor de CES/PMF/FCR;
+`value_label` ignorado em `CustomerVoicePage.tsx:161`. **A decidir:** se o S2 (runner genérico) volta
+a ter dono próprio (tarefa C2); e o resíduo do `value_label` foi citado com **arquivo errado** na
+triagem, a remedir antes de entrar em plano (C4).
 
-### Outbound — refinamentos — **[Segue — fosso]**
-*(O arco Fases 1–5 está concluído; história no `CHANGELOG.md` e detalhe em `docs/arcos/outbound.md`.
-O substrato de audiência — `mailing`/`campaign`/`campaign_delivery`, com máquina de estado por
-destinatário e pacing na agenda — é capacidade própria, e nenhuma parte dele esteve em jogo na direção
-revertida. O `do_not_contact` da Fase 3b — que era o item mais urgente da seção, veto de contato com
-pessoa rodando sem gate verde — foi **validado em 2026-08-20**; ver CHANGELOG.)*
-- **Fase 3 — pipeline de portões** (cada um reuso, "aplica se configurado"): janela de contato (calendar-api
-  `is_open`), recursos/pacing (`pool_status_get` + back-pressure da agenda), canal (`channel_policy`+resolver,
-  possessed-only), preferência (cadastro de cliente).
-- **Fase 4 — importador** anti-corrupção (CSV/xlsx → `mailing_add`, padrão quality-ingest) **✅ API** (2026-07-22)
-  — duas camadas (batch ingest público + adaptador de arquivo); `column_map` no mailing; `smoke_outbound_fase4.sh`.
-- **Fase 5a — fan-out ✅** (2026-07-22): dispatcher/worker via `workflow_trigger` (skills `skill_outbound_dispatch_v1`/
-  `skill_outbound_worker_v1`, pools `outbound_dispatch`/`outbound_worker`); collect lazy sob decisão B; `smoke_outbound_fase5a.sh`.
-- **Fase 5b — survey outbound e2e ✅** (2026-07-22): substrato de campanha → `survey_link_create` (origin explícito) →
-  `/survey/submit` → `session.signals`. Skills `skill_outbound_survey_{dispatch,worker}_v1`, pools homônimos; `smoke_outbound_fase5b.sh`.
-- **Refinamentos 5b (backlog):** `responded` por-delivery (submit → `campaign_delivery_result`); skill de processo que
-  auto-alimenta a mailing no `complete` (journey_complete real, hoje seed direto); pertença à journey via `journey_merge` (metadata.origin_session_id).
-- **UI (fatia 1b) ✅** (2026-07-22): módulo `outbound` no platform-ui (`/config/outbound`, página com abas
-  Mailings/Campaigns/Deliveries + editores de `column_map` e `ordering` + import). ABAC `outbound.{configurar,operacao}`,
-  proxy `/v1/(mailings|campaigns)`→3660. Fecha a invariante "UI-editable".
-- Design: [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md);
-  arco: [`docs/arcos/outbound.md`](docs/arcos/outbound.md).
+### Outbound — refinamentos
+`responded` por-delivery (submit → `campaign_delivery_result`) · skill de processo que auto-alimenta
+a mailing no `complete` (hoje seed direto) · pertença à journey via `journey_merge` · pacing
+`look_ahead` para o discador de voz, que depende do plano de mídia.
 
-### Histórico de contatos do cliente — capacidade transversal *(spec — §20 de customer-surveys.md)* — **[Segue — fosso / busca `GIN` em Congela]**
-- Útil a **qualquer atendimento** (não só survey). **Já existe**: lista por `customer_id` (`GET /analytics/sessions/customer/{id}`, ClickHouse `sessions.customer_id` = `customer_key`) + `HistoricoTab`/`useCustomerHistory` no Agent Assist; transcrição por sessão (`GET /analytics/v1/transcript/sessions/{id}`). **H1 drill lista→transcrição ✅** (2026-07-02, CHANGELOG): `HistoricoTab` liga ao endpoint via `useSessionTranscript` (masked-by-construction, sem `audit_access_log`); exigiu adicionar o proxy `/analytics/*` ao platform-ui (nginx+vite) — o app canônico não o tinha, então lista+transcrição eram inalcançáveis. **H2 busca (backend) ✅** (2026-07-02, CHANGELOG): `GET /sessions/customer/{id}/search` — **decisão v1 = ClickHouse `messages` JOIN `sessions`** (não `sessions_stream`; masked-by-construction, escopo `customer_id`, colocado), substring `positionCaseInsensitiveUTF8`, 1 hit/sessão + snippet mascarado + score, filtros from/to/channel/outcome/pool. **Proposta fechada (2026-07-15, `docs/adr/adr-customer-360-two-surfaces.md`): Cliente 360 em duas lentes** — Console (ao vivo) × Analytics (retrospectivo) sobre os mesmos dados (`customer_id`), com o **Journey fechado** (T1–T6). **Mapa das 4 abas do Console (D1):** **Contexto** (afirmado — ContextStore da sessão, o que persiste é config de pool), **Histórico** (reatribuído — **jornadas em aberto** re-introduzidas + contatos + busca), **Cliente** (NOVA — cadastro manual + 360), **Ações** (inalterada). Jornadas vivem **só no Histórico**; Cliente **linka**. (D2) "jornadas do cliente" = **filtro `customer_id`+`open` no `/reports/journeys`** (reuso). (D3) **cadastro manual** na aba Cliente, v1 = buscar/criar/atacar âncora (reusa Resolvedor Fase A/B; net-new = `GET /identity/customers/search`; merge/`external_refs` = Fase C). (D4) **360 agregado** por `customer_id`: **quality** (Arc 6) + **survey** (`session_signal`) + resumo contatos/jornadas. **Falta**: H3 (busca UI, backend pronto); HJ (jornadas no Histórico); H4-geral (contexto de jornada); C1a (cadastro) + C1b (360); H4-survey **bloqueado** (briefing de retorno não construído); H5 (Analytics por cliente + `GIN`). **Spec**: `docs/arcos/customer-contact-history.md` (H1–H5/HJ/C1).
-
+### Histórico de contatos do cliente / Cliente 360
+⚠️ **Corrigido em 2026-08-31 por validação contra o CHANGELOG.** Esta entrada listava H3, HJ,
+H4-geral, C1a, C1b e H5 como abertos; `CHANGELOG.md:17339` (2026-07-16) declara *"Fecha o Customer
+History no v1: H1 · H2 · H3 · HJ · H4-geral · C1a · C1b · H5"* — **os seis estavam fechados havia
+seis semanas**. O `TODO.md:6778` já dizia o certo; eram duas casas afirmando e a errada era a que
+o índice lia. Abertos de verdade, ambos por gatilho e não por esforço:
+- **busca full-text `GIN(tsvector)`** — a busca de mensagens usa substring no ClickHouse, suficiente
+  no volume atual; é **otimização, não correção**. Gatilho: latência/volume medidos.
+- **H4-survey** — origem+resultado do survey no briefing de retorno, **BLOQUEADO** porque o briefing
+  ainda não existe.

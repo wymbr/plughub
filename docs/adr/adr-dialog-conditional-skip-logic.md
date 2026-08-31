@@ -92,3 +92,20 @@ perguntar), é skill, não guarda.
   entre engine e web.
 - Retrocompatível: `ask_when` ausente = comportamento atual.
 - Custo: avaliador em dois veículos (loop step + web) + validação de forward-reference + UX de editor (à parte).
+
+
+---
+
+## Apêndice — resumo denso migrado do índice do `CLAUDE.md` (2026-08-31)
+
+> Este bloco vivia como **uma linha** do índice `docs/` no `CLAUDE.md`, onde ocupava 982 bytes.
+> Medido antes de mover: **~85% do seu vocabulário já existe neste ADR** — ele é uma condensação
+> independente, não uma cópia, e por isso os ~15% restantes (achados, números e nomes de arquivo que
+> só foram registrados no índice) **não existiam em lugar nenhum além dali**. Movido inteiro, sem
+> resumir, porque a alternativa — cortar no CLAUDE.md e confiar que o ADR já dizia tudo — perderia
+> exatamente a fração que não dá para recuperar.
+>
+> **É trabalho aberto**, não documentação final: a fração nova deve ser dobrada no corpo do ADR e
+> este apêndice, encolhido. Enquanto isso não acontece, ele é a única cópia.
+
+skip-logic condicional em DialogForm (guarda declarativa `ask_when`, **não** control-flow) — **Aceito + implementado 2026-07-08**, validado ao vivo no webchat *(corrigido 2026-08-17: este índice dizia "proposto" por mais de um mês)*. **Guarda LOAD-BEARING**, e a razão mudou sem enfraquecer *(2026-08-18)*: a versão anterior dizia "com o editor de fluxo local saindo (interop n8n)" — o editor **fica**, e a pressão para empurrar control-flow ao form **existe do mesmo jeito**, agora vinda do lado oposto (enquanto o editor de fluxo próprio for insuficiente, o formulário é o caminho de menor resistência). Se ceder, o editor de fluxo é reconstruído dentro do editor de formulário, com linguagem pior. Avaliador canônico `evaluateAskWhen` em `schemas/src/dialog.ts:423`, **hoje triplicado** (espelhos em `survey_web.py:386` e `DialogFormRenderer.tsx:400`). Aberta só 1 das 3 decisões do ADR (`checklist` multi-valor)
