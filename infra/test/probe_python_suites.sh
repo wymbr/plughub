@@ -45,24 +45,31 @@ dialog-api calendar-api pricing-api quality-ingest"
 
 # ── Vermelho DECLARADO ────────────────────────────────────────────────────────
 #
-# Não é lista de exceção que envelhece calada: cada linha nomeia o teste E a
-# dívida de onde ele vem, e o gate IMPRIME as três a cada execução. Falha NOVA,
-# ou falha aqui que passe a PASSAR, muda a contagem e o gate acusa.
+# **A lista está VAZIA desde 2026-08-30**, e o vazio é asserção: `BASELINE_TOTAL=0`
+# com o ramo C exigindo `TOT_FAIL == 0`. Um vermelho novo em QUALQUER dos 14 pinta
+# o gate, sem ninguém precisar lembrar de atualizar tabela.
 #
-#   routing-engine · test_expire_returns_the_slot_even_after_the_lease_expired
-#     `claimed_via` volta 'record' onde o teste espera 'semaphore'. É exatamente a
-#     "lacuna 2" que a validação da Camada F declarou aberta (*a lease não foi
-#     medida*), e `claimed_via` é resíduo aberto da D14.1.
+# Os três que ela carregou por algumas horas fecharam, e os dois veredictos valem
+# registro porque foram OPOSTOS entre si:
 #
-#   ~~ai-gateway (2)~~ — FECHADOS em 2026-08-30, e o veredicto foi o OPOSTO do
-#     previsto: a emissão ACONTECIA. O defeito era do teste, que esperava por
-#     `await asyncio.sleep(0)` — um yield — quando `sources()` só enche a partir de
-#     2 e os dois eventos a partir de 5. A espera passou a ser pelas TASKS.
+#   ai-gateway (2) — a emissão ACONTECIA; o defeito era do teste, que esperava por
+#     `await asyncio.sleep(0)` (um yield) quando `sources()` só enche a partir de 2
+#     e os dois eventos a partir de 5. A espera passou a ser pelas TASKS, e o
+#     conjunto que a sustenta existe no produto por outra razão (referência forte
+#     contra GC de task num produtor de CUSTO).
 #
-BASELINE_TOTAL=1
-declare -A BASELINE=(
-  [routing-engine]=1
-)
+#   routing-engine (1) — o teste media a ORDEM da cascata de posse, não a própria
+#     proposição. A D6 inseriu o registro durável ENTRE a lease e o semáforo, então
+#     `claimed_via` passou a responder `record`; as quatro asserções que importam
+#     sempre passaram. A terceira via (semáforo) ganhou teste PRÓPRIO, senão ficaria
+#     sem exercício nenhum.
+#
+# ⚠️ Se um dia esta tabela voltar a ter linha, ela nomeia o teste E a dívida de onde
+# ele vem, e o gate a imprime a cada execução. Lista de exceção que envelhece calada
+# é o defeito; lista que se anuncia é dívida.
+#
+BASELINE_TOTAL=0
+declare -A BASELINE=()
 
 FAIL=0; INC=0
 ok()  { echo "  v $1"; }
@@ -137,6 +144,8 @@ done
 echo
 if [ -n "$VERMELHOS" ]; then
   bad "C: contagem de falhas fora do declarado:$VERMELHOS"
+elif [ "$TOT_FAIL" -eq 0 ] && [ "$BASELINE_TOTAL" -eq 0 ]; then
+  ok "C: $TOT_PASS passando, ZERO falhando nas 14 suites"
 elif [ "$TOT_FAIL" -eq "$BASELINE_TOTAL" ]; then
   ok "C: $TOT_PASS passando; $TOT_FAIL falhando, e as $TOT_FAIL sao as DECLARADAS"
 else
@@ -144,11 +153,13 @@ else
 fi
 
 echo
-echo "-- vermelho DECLARADO (imprime sempre; divida, nao exceção calada) --"
-echo "     routing-engine  test_expire_returns_the_slot_even_after_the_lease_expired"
-echo "                     claimed_via='record' x 'semaphore' — lacuna 2 da Camada F"
-echo "     (os dois do ai-gateway sairam em 2026-08-30 — era defeito de TESTE,"
-echo "      nao de produto: a emissao acontecia e a espera media 1 yield)"
+echo "-- vermelho DECLARADO --"
+if [ "$BASELINE_TOTAL" -eq 0 ]; then
+  echo "     NENHUM. As 14 suites estao verdes, e o ramo C exige TOT_FAIL == 0:"
+  echo "     um vermelho novo pinta o gate sem depender de alguem lembrar da tabela."
+else
+  echo "     (ver a tabela BASELINE no cabecalho deste arquivo)"
+fi
 
 echo
 if [ "$FAIL" -gt 0 ]; then

@@ -1115,7 +1115,13 @@ class Router:
         `session:{sid}:closed`, e num claim abandonado o delegate está suspenso e a
         sessão está ABERTA — o reap passa ao lado.
 
-        A segunda via é `find_occupant_instance`, que lê a vaga onde ela de fato
+        São TRÊS vias, e o docstring afirmou DUAS por semanas — a D6 inseriu o
+        registro durável no meio e esta prosa não acompanhou. Prosa que descreve um
+        mecanismo que mudou é a mesma família do DDL de `participation_intervals`;
+        aqui o dano foi um teste vermelho medindo a ORDEM antiga. Ordem em vigor:
+        **lease → registro durável (D6) → semáforo**.
+
+        A terceira via é `find_occupant_instance`, que lê a vaga onde ela de fato
         mora. O medo que justificava depender da lease — derrubar o occupant de um
         contato de PUSH na mesma sessão — deixou de existir com a F1: o membro do
         semáforo leva o pool no 3º campo, então a busca discrimina `(sessão, pool)`

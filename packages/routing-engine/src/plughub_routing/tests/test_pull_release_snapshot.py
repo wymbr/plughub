@@ -266,6 +266,21 @@ async def test_expire_returns_the_slot_even_after_the_lease_expired(env):
     O que este teste NÃO cobre: a janela entre os 180 s e o prazo do item, em que o
     trabalho fica invisível a todos os agentes. Essa é a lacuna 2 propriamente
     dita e segue aberta — aqui só se conserta a vaga.
+
+    ⚠️ **A resposta esperada MUDOU em 2026-08-30, e a mudança é uma melhoria.**
+    Este teste afirmava `claimed_via == "semaphore"`. Depois dele, a **D6** (Fase A
+    do ADR de devolução/afinidade) inseriu uma via ENTRE a lease e o semáforo: o
+    registro durável de posse (`{t}:pool:{p}:claim_record:{sid}`), com TTL casado ao
+    prazo do item. No cenário deste teste — reivindicado, lease vencida — é
+    justamente ele que ainda está lá, e a cascata passou a responder `record`.
+
+    Ficar vermelho aqui era **medir a ORDEM da cascata**, não a proposição do teste,
+    que é *"a vaga volta mesmo com a lease morta"*. As quatro asserções que
+    importam (`was_claimed`, o semáforo zerado e a capacidade nos dois pools) sempre
+    passaram. Por isso a asserção agora tem duas metades: o que a resposta **não
+    pode ser** (`lease`, que morreu) e qual via respondeu — e a terceira via ganhou
+    teste PRÓPRIO logo abaixo, porque com o `record` no meio ela deixou de ser
+    exercida por este e viraria código morto sem ninguém notar.
     """
     reg, router, client, tenant, instance = env
     sid = "ses-abandonada"
@@ -286,8 +301,13 @@ async def test_expire_returns_the_slot_even_after_the_lease_expired(env):
         f"expire não reconheceu um item que FOI reivindicado — reportá-lo como "
         f"nunca-reivindicado apaga a evidência da lacuna 2 ({res})"
     )
-    assert res["claimed_via"] == "semaphore", (
-        f"a vaga deveria ter sido encontrada pelo semáforo, não pela lease ({res})"
+    assert res["claimed_via"] != "lease", (
+        f"a lease foi apagada; se ela respondeu, o setup não simulou a expiração ({res})"
+    )
+    assert res["claimed_via"] == "record", (
+        f"esperado o registro durável da D6 — é ele que sobrevive à lease no cenário "
+        f"que motiva o expire. Se voltou 'semaphore', o `claim_record` não está sendo "
+        f"escrito no claim, e a posse voltou a depender de uma chave de 180 s ({res})"
     )
     assert await reg.instance_session_count(tenant, instance) == 0, (
         "VAGA PRESA: a lease expirou e o expire não devolveu a vaga do recurso — "
@@ -297,6 +317,53 @@ async def test_expire_returns_the_slot_even_after_the_lease_expired(env):
         snap = await _snap(client, tenant, pool)
         assert snap["available"] == CAPACITY, (
             f"{pool}: capacidade não voltou após o expire sem lease — {snap}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_expire_falls_back_to_the_semaphore_when_lease_and_record_are_gone(env):
+    """A TERCEIRA via: sem lease e sem registro, a vaga ainda volta pelo semáforo.
+
+    **Por que este teste existe, e por que ele nasceu junto com uma correção.** Até
+    2026-08-30 a via do semáforo era exercida pelo teste anterior. A D6 pôs o
+    registro durável no meio da cascata, aquele teste passou a sair por `record`, e
+    a terceira via ficou **sem nenhum exercício** — código que ninguém mede, guardando
+    o pior cenário (`instance_id` vazio ⇒ vaga presa até o SET expirar).
+
+    Não é hipótese acadêmica: o `claim_record` tem TTL casado ao prazo do ITEM, e
+    item cujo prazo passou perde o registro. O expire por prazo é exatamente quando
+    isso acontece.
+
+    É também a única asserção que cobre o `logger.warning` que a §lacuna 2 usa como
+    MEDIDA — *"lease AUSENTE mas vaga ocupada"*. Sem este teste, apagar aquele ramo
+    não pintaria nada de vermelho.
+    """
+    reg, router, client, tenant, instance = env
+    sid = "ses-sem-lease-nem-registro"
+    await _claimed(reg, router, client, tenant, instance, sid)
+
+    await reg.delete_claim_lease(tenant, POOLS[0], sid)
+    await reg.delete_claim_record(tenant, POOLS[0], sid)
+    assert await reg.read_claim_lease(tenant, POOLS[0], sid) is None
+    assert await reg.read_claim_record(tenant, POOLS[0], sid) is None, (
+        "setup: o registro ainda existe — este teste mediria a via do `record`"
+    )
+    assert await reg.instance_session_count(tenant, instance) == 1, (
+        "setup: a vaga não está ocupada — não há o que devolver, nada a medir"
+    )
+
+    res = await router.work_task_expire(tenant, POOLS[0], sid, reason="acw_expired")
+
+    assert res["was_claimed"] is True, res
+    assert res["claimed_via"] == "semaphore", (
+        f"sem lease e sem registro, só o semáforo sabe quem ocupa a vaga ({res})"
+    )
+    assert await reg.instance_session_count(tenant, instance) == 0, (
+        "VAGA PRESA: as três vias falharam e a capacidade do agente encolheu"
+    )
+    for pool in POOLS:
+        assert (await _snap(client, tenant, pool))["available"] == CAPACITY, (
+            f"{pool}: capacidade não voltou pela terceira via"
         )
 
 

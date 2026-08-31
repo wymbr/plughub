@@ -1203,7 +1203,7 @@ cada uma toca dívida que já estava aberta noutro lugar:
 
 | serviço | teste | dívida de onde vem |
 |---|---|---|
-| `routing-engine` | `test_expire_returns_the_slot_even_after_the_lease_expired` | `claimed_via` volta `record` onde se espera `semaphore`. É a **lacuna 2** que a validação da Camada F declarou aberta (*a lease não foi medida*), e `claimed_via` é resíduo aberto da D14.1 |
+| ~~`routing-engine`~~ | — | ✅ **fechado** — o teste media a ORDEM da cascata de posse (a D6 pôs o registro durável entre a lease e o semáforo), não a própria proposição; as quatro asserções que importam sempre passaram |
 | ~~`ai-gateway` ×2~~ | — | ✅ **fechados em 2026-08-30**, e o veredicto foi o oposto do previsto: a emissão ACONTECIA; o defeito era do teste, que esperava por 1 yield. Detalhe no `CHANGELOG.md` |
 
 ⚠️ **Ao consertar, medir ANTES se o vermelho é do teste ou do código.** Esta linha era uma
@@ -1212,8 +1212,14 @@ diz"* — e a medição a **refutou**. Fica como está, porque o valor dela não
 obrigar a medir antes de consertar. O que a medição achou foi outra coisa (`ensure_future` sem
 referência forte, fail-silent num produtor de custo), e ela só aparece para quem vai olhar.
 
-**O do `routing-engine` continua sendo o único instrumento que aponta para a lease**, que
-ninguém mediu — e é o próximo.
+**Baseline hoje: `BASELINE_TOTAL=0`, e o zero é asserção** — o ramo C exige `TOT_FAIL == 0`,
+então um vermelho novo pinta o gate sem depender de alguém lembrar da tabela.
+
+⚠️ **A lacuna 2 NÃO fechou.** O que fechou foi a VAGA — que volta pelas três vias e agora tem
+teste em cada uma. A lacuna propriamente dita é a janela entre os 180 s da lease e o prazo do
+item, em que o trabalho fica **invisível a todos os agentes**; ninguém a mediu e não há reaper.
+O `claimed_via` deixou de ser resíduo (é medido nas três vias), mas os demais resíduos da D14.1
+seguem abertos.
 
 **Aberto ainda:** nenhum runner de CI invoca este gate — ele existe e roda à mão. Irmão do
 item *"nenhum runner invoca os gates"*.

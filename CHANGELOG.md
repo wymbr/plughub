@@ -3,6 +3,68 @@
 
 
 
+## O último vermelho: o teste media a ORDEM da cascata de posse, não a própria proposição (2026-08-30)
+
+O terceiro e último vermelho declarado — `routing-engine ·
+test_expire_returns_the_slot_even_after_the_lease_expired` — afirmava
+`claimed_via == "semaphore"` e recebia `"record"`.
+
+**As quatro asserções que importam sempre passaram:** `was_claimed is True`, o semáforo
+zerado, e a capacidade de volta nos DOIS pools do recurso. Ou seja, a proposição do teste —
+*"a vaga volta mesmo com a lease morta"* — estava satisfeita. O que reprovava era a **ordem da
+cascata**, que não é o que ele diz medir.
+
+### A causa: uma via nova entre as duas antigas
+
+A **D6** (Fase A do ADR de devolução/afinidade) inseriu o registro durável de posse
+(`{t}:pool:{p}:claim_record:{sid}`, TTL casado ao prazo do item) **entre** a lease e o
+semáforo. No cenário do teste — reivindicado, lease vencida — é justamente ele que ainda está
+lá. A cascata passou de **lease → semáforo** para **lease → registro → semáforo**, e a
+resposta mudou de `semaphore` para `record`. Melhoria, não regressão.
+
+⚠️ **E o docstring do `work_task_expire` continuou afirmando DUAS vias** — *"A segunda via é
+`find_occupant_instance`… a busca é o fallback"* — enquanto o código tinha três. Prosa que
+descreve um mecanismo que mudou é a família do DDL de `participation_intervals`, e aqui o dano
+foi concreto: fez um vermelho de rótulo parecer defeito de comportamento. Corrigido, com a
+ordem em vigor escrita.
+
+### O conserto NÃO foi trocar a string esperada
+
+Com o `record` no meio, a **terceira via deixou de ser exercida por qualquer teste** — código
+que ninguém mede, guardando o pior cenário (`instance_id` vazio ⇒ vaga presa até o SET
+expirar). E não é hipótese: o `claim_record` tem TTL casado ao prazo do ITEM, e o expire por
+prazo é exatamente quando esse prazo passou.
+
+Então a via ganhou teste próprio — `test_expire_falls_back_to_the_semaphore_when_lease_and_record_are_gone`
+—, que é também a **única asserção que cobre o `logger.warning`** que a §lacuna 2 usa como
+MEDIDA (*"lease AUSENTE mas vaga ocupada"*). Sem ele, apagar aquele ramo não pintaria nada de
+vermelho.
+
+O teste original ficou com duas metades: o que a resposta **não pode ser** (`lease`, que
+morreu) e qual via respondeu — com a mensagem de falha dizendo o que uma volta a `semaphore`
+significaria (*o `claim_record` não está sendo escrito no claim*).
+
+### Provado por mutação, e a segunda confirma a mensagem
+
+| mutação | resultado |
+|---|---|
+| a 3ª via (`find_occupant_instance`) some | **3** vermelhos, inclusive o teste novo |
+| o claim deixa de gravar o `claim_record` (D6) | **exatamente** o teste original, e o log do semáforo aparece — que é o que a mensagem de falha prevê |
+
+### Baseline do gate: 1 → **0**, e o zero é asserção
+
+`BASELINE_TOTAL=0` com o ramo C exigindo `TOT_FAIL == 0`. Um vermelho novo em qualquer dos 14
+serviços pinta o gate **sem depender de alguém lembrar de atualizar a tabela** — que é o modo
+como listas de exceção apodrecem.
+
+**As 14 suítes: 2 627 passando, ZERO falhando.**
+
+⚠️ **O que isto NÃO fecha:** a lacuna 2 propriamente dita — a janela entre os 180 s da lease e
+o prazo do item, em que o trabalho fica **invisível a todos os agentes**. Aqui só se conserta e
+se mede a VAGA. A visibilidade segue aberta, e o `TODO.md` a mantém.
+
+---
+
 ## Os dois vermelhos do ai-gateway: a emissão acontecia, e o defeito era do TESTE (2026-08-30)
 
 Dos três vermelhos declarados que o gate novo publicou, ataquei primeiro os dois do
