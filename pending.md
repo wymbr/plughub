@@ -199,6 +199,30 @@ O discriminador certo está na MESMA entrada do roster, ao lado, sem ser lido:
 
 ---
 
+## `docs/adr/adr-agent-capability-over-role.md` — capacidade no lugar de `agent_role`
+
+O gate do avaliador **fica**; o que muda é o EIXO. `agent_role` está vivo e é
+load-bearing (44 skills, 41 `executor` + 3 `evaluator`; smoke dedicado verde incluindo o
+ramo negativo), e é o **único** controle de identidade nas duas tools que servem
+`original_content` desmascarado. O custo dele não é o gate — é ser o **terceiro
+vocabulário** de *"quem pode o quê"* numa casa que já tem um.
+
+⚠️ **A ordem das fases não é preferência.** O caminho natural (*"o não-avaliador nem
+veria a tool"*) não funciona: `registry-client.ts:72` fixa `permissions: []` e o
+`inference.py:128` trata vazio como **sem filtro** — **73 tools, 0 permissões
+declaradas**. É a mesma forma da AUT-03: default vazio que significa "tudo" e precisa ser
+POPULADO antes de virar "nada". Trocar o gate antes de ligar o filtro troca um gate que
+funciona por um que não roda.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| CAP-01 | **F1 — declarar `permissions[]` por skill e MEDIR o delta ANTES de inverter o default.** Censo por skill: tools usadas × tools declaradas. Reprova se algum agente perder tool que comprovadamente chama. É a fase cara e a única que toca todos os agentes; se o censo mostrar inviabilidade, a D1 fica bloqueada e `agent_role` PERMANECE — resultado legítimo, melhor que gate que não roda | `aberto` | ADR § pré-requisito |
+| CAP-02 | **F2 — criar o grant e fazer os dois gates o consultarem, MANTENDO `agent_role` em paralelo** (E lógico). Inclui a decisão de desenho que o ADR deixa aberta: de onde vem o grant do AGENTE, já que o `session_token` não carrega `module_config` — pode ser que o eixo certo seja o próprio `permissions[]` da F1, e aí o terceiro vocabulário vira o primeiro sem inventar um quarto | `bloqueado` por CAP-01 | ADR § D1 e § não decide |
+| CAP-03 | **F3 — retirar `agent_role` do gate, schema, registry e bridge; `orchestrator` sai junto** (zero portadores, nenhum gate o consome). Recusar o campo NOMEANDO na entrada da API, como a lápide do `unrestricted` — pydantic/Zod ignoram chave desconhecida e o remetente veria 200 sobre no-op | `bloqueado` por CAP-02 | ADR § D3, `CHANGELOG.md` § lápide |
+| CAP-04 | **O `role` propagado no agent_type sintetizado do bridge** (`orchestrator-bridge/main.py:652`). O comentário afirma que ninguém lê; **verificado, confere** — zero leitores. Sai com a F3, ou antes: é independente | `aberto` | ADR § D4 |
+
+---
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 0.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho

@@ -8090,9 +8090,20 @@ um eixo não prova nada sobre o vizinho.
 
 ## Gate de @mention: o invariante declarado não é o invariante imposto (2026-09-01)
 
-Grupo `MEN` no `pending.md`. Origem: a hipótese do dono de que *"a conferência é toda
-baseada em @mention, ele não exige nem bloqueia por papel, e o eixo que sobrou é
-resquício"*. Verificada — e ela está **parcialmente certa, com o alvo deslocado**.
+Grupo `MEN` no `pending.md`.
+
+⚠️ **Correção de enquadramento (mesma data).** A entrada dizia que a origem era *"a
+hipótese do dono de que a conferência é toda baseada em @mention"*. **Aquilo era a
+PREMISSA de um argumento, não a pergunta.** O dono questionava a necessidade do
+**terceiro** eixo (`agent_role`), e usava a conferência como razão: *"@mention não gateia
+por papel, logo o eixo que sobrou é resquício"*. Eu peguei a premissa, fui verificá-la —
+achei nela um defeito real — e **não voltei para a conclusão**.
+
+Registrado porque o desvio é o mesmo custo que este documento inteiro descreve: **três
+vocabulários chamados "role" fazem medir o eixo errado**, e desta vez quem mediu errado
+foi quem escreve. A pergunta original virou o ADR
+`docs/adr/adr-agent-capability-over-role.md` (grupo `CAP`); o achado abaixo é do eixo de
+PARTICIPAÇÃO e vale por si, sem dizer nada sobre `agent_role`.
 
 ### O que foi medido, e o que cada medida custou
 

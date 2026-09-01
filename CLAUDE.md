@@ -167,6 +167,7 @@ plughub/
       adr-internal-work-queue-author-bound.md ← fila interna por pool: trabalho **author-bound** não é trabalho pooled — Aceito; I1–I4 e o núcleo da I5 implementados, relatório de pendências em aberto
       adr-webhook-endpoint-single-registry.md ← webhook com registro ÚNICO de endpoint e identificador opaco — Aceito, arco A–F completo; remoção do legado e auth saem como arcos próprios
       adr-survey-response-store.md   ← store operacional por-resposta de survey: schema PG dedicado × estender a dialog-api — Aceito, pré-implementação (gate antes de codar o S8)
+      adr-agent-capability-over-role.md ← CAPACIDADE no lugar de `agent_role`: o gate do avaliador FICA (é o único controle nas tools que servem `original_content` desmascarado) e troca de EIXO — o custo do campo não é o gate, é ser o TERCEIRO vocabulário de "quem pode o quê". ⚠️ Ordem F1→F2→F3 não é preferência: `permissions[]` está INERTE por norma declarada (73 tools, 0 declaradas; `registry-client:72` fixa `[]` e vazio = sem filtro), então trocar o eixo antes de ligar o filtro troca um gate que funciona por um que não roda. Mesma forma da AUT-03 — default vazio que precisa ser POPULADO antes de invertido — proposto
 ```
 
 ### Como adicionar uma nova feature
