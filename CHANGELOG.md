@@ -1,5 +1,89 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-03: a rota de `core.*` é DECLARADA, e o escopo desceu um segmento
+
+### O que a CNS-02 sacrificou, e que esta fase recupera
+
+A CNS-02 reservou o root `core.*` para a plataforma. Com isso o **primeiro segmento
+passou a carregar PROPRIEDADE** (core × tenant) em vez de **ESCOPO** (session/journey/
+customer), e a spec chegou a afirmar que isso não custava nada porque *"os 36 nomes do
+core são todos de sessão"*.
+
+**A afirmação estava errada, e o erro é do tipo caro.** `core.customer.*` foi definido
+para absorver `insight.historico.*` e `pricing.*`, que roteiam para o hash do **CLIENTE,
+90 dias**. Sem rota declarada, aquele prefixo cairia no *default* do SDK (hash da sessão,
+4 h) e a migração moveria dado de retenção trimestral para um hash que expira no mesmo
+dia — **sem erro, sem log, sem teste vermelho**.
+
+Decisão: **o escopo de uma tag do core é o seu SEGUNDO segmento.**
+
+```
+core.customer.*  → hash do CLIENTE,  90 d   (junto de insight.historico, pricing)
+core.journey.*   → hash da JOURNEY,  30 d   (junto de journey.)
+core.*  (resto)  → hash da SESSÃO,    4 h   (como qualquer outro root)
+```
+
+### Três casas roteiam por prefixo, e as três foram alteradas
+
+`sdk/context-store.ts` (TTL **e chave** — o prefixo decide as duas, por isso a entrada
+vai em `LONG_TTL_PREFIXES`, que os quatro call sites já consultam) ·
+`skill-flow-engine/interpolate.ts` (leitura) · `mcp-server-plughub/tools/journey.ts`
+(escrita). Duas concordando e uma não é escrita indo para um hash e leitura vindo de
+outro, degradando como *"a tag não existe"*.
+
+E `core.segment.` entrou em `dynamic_prefixes` — nos **dois** mirrors (`context-map.ts`
+e `seed.py`). Sem ele, quando a escrita do bridge virar `core.segment.{segId}.…` ela
+deixaria de ser FAMÍLIA dinâmica e passaria a contar como `unknown`, inflando justamente
+o número que autoriza a V4 com um campo impossível de declarar folha a folha.
+
+### O teste, e por que ele pode reprovar
+
+`packages/sdk/src/__tests__/context-store-routing.test.ts`. **Uma rota que devolve o
+mesmo que o default é decorativa por construção** — por isso só se asserta sobre as
+rotas que DIVERGEM do default, cada uma com a testemunha ao lado (um irmão sob `core.`
+que continua de sessão). Sem o par, *"roteou para o cliente"* não distingue a rota certa
+de um casador largo demais.
+
+**Bateria de mutação EXECUTADA:** remover `core.customer.` → 2 vermelhos; remover
+`core.journey.` → 1; trocar por `core.` (casador largo) → **3**. A terceira pega um a
+mais do que eu previra: com o prefixo largo, `core.journey.*` casa `isLongTtl` **antes**
+de `isJourneyTag` — a ordem das guardas no `ttlFor` é significativa — e recebe 90 d em
+vez de 30. O número medido ficou no docstring no lugar da previsão.
+
+### Config viva reaplicada pela API oficial
+
+`plughub-config-seed --only masking.context_map --overwrite` + restart (o cache é em
+processo). Conferido: `dynamic_prefixes` vivo com os três prefixos, e a comparação
+mapa-vivo × TS dando **`same = true`, 94 campos**.
+
+### Achado colateral: um gate que emitia veredicto sem conseguir medir
+
+O `probe_context_map_audit.sh` reprovava o ramo B com **`DIVERGENCIA config viva x TS:`
+e o payload VAZIO**. Não havia divergência: o comparador `node` lê um arquivo em
+`/tmp`, e o node desta bancada resolve `/tmp/x` contra a raiz do cwd — com cwd em UNC
+isso vira um caminho que não existe. O `readFileSync` estourava e o `2>/dev/null`
+engolia.
+
+É a regra transversal do próprio ADR: **um ramo que não consegue julgar não pode emitir
+veredicto.** Três consertos: o arquivo temporário passou a ser ancorado no diretório do
+script (com `trap` de limpeza); o ramo B distingue *"não executou"* (`huh`) de
+*"diverge"* (`bad`); e o passo de `tsc` deixou de depender de `npx`, que morre com
+`ERR_INVALID_URL` na UNC — o efeito disso era pior que o inconclusivo, porque deixava
+`dist/` **stale** e os ramos A e B passavam a julgar a versão ANTERIOR do mapa dizendo
+*"idêntica"*.
+
+⚠️ Ao consertar, errei uma vez do jeito instrutivo: montei o caminho do `tsc` com
+`$SCHEMAS` (relativo ao repo) e o usei **depois** do `cd "$SCHEMAS"`, o que o fazia cair
+no ramo do `npx` outra vez — mesmo INCONCLUSIVO, outra causa, e o conserto parecendo não
+ter efeito.
+
+**Resultado:** `probe_context_map_audit.sh` sai **OK com zero ramos inconclusivos** pela
+primeira vez nesta bancada. Medido antes e depois com `git stash`: os três probes
+(`type_catalog`, `context_visibility_selector`, `context_map_audit`) já estavam
+inconclusivos **antes** desta mudança; ela consertou um e não tocou nos outros dois,
+que caem no mesmo `npx`/UNC e ficam registrados.
+
+
 ## 2026-09-01 — CNS-07: a tela de tipos passa a editar as QUATRO dimensões, não uma
 
 ### O achado: a tela mentia por OMISSÃO, e a dimensão que faltava era a que decide

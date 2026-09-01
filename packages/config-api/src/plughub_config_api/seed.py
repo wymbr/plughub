@@ -774,7 +774,12 @@ _SEED: list[tuple[str, str, object, str]] = [
         "masking", "context_map",
         {
             "mode": "audit",
-            "dynamic_prefixes": ["agent.", "segment."],
+            # CNS-03 — `core.segment.` entra junto porque a CNS-02 reservou o root
+            # `core.*`: quando a escrita do bridge virar `core.segment.{segId}.…`, sem
+            # este prefixo ela deixaria de ser FAMÍLIA dinâmica e passaria a contar como
+            # `unknown`, inflando justamente o número que autoriza a V4 com um campo que
+            # é impossível declarar folha a folha.
+            "dynamic_prefixes": ["agent.", "segment.", "core.segment."],
             "contexto": {
                 "session": {
                     "cliente": {

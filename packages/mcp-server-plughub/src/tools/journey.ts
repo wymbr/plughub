@@ -177,7 +177,10 @@ export async function writeContextTag(
   tag:       string,
   entryJson: string,
 ): Promise<{ scope: "journey" | "session"; journeyRoot?: string }> {
-  if (tag.startsWith("journey.")) {
+  // CNS-03 — `core.journey.*` roteia igual a `journey.*`: o escopo de uma tag do core é
+  // o SEGUNDO segmento. Terceira das três casas que roteiam por prefixo; as outras duas
+  // são `sdk/context-store.ts` (TTL + chave) e `skill-flow-engine/interpolate.ts` (leitura).
+  if (tag.startsWith("journey.") || tag.startsWith("core.journey.")) {
     let provenanceRoot = sessionId
     try {
       const raw = await redis.hget(`${tenantId}:ctx:${sessionId}`, "session.root_session_id")

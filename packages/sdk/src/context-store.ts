@@ -47,7 +47,7 @@ import type {
 // de TTL longo mas continua no hash da JOURNEY (`{tenant}:ctx:journey:{id}`, via o
 // sessionId virtual `journey:{id}`). Misturar os dois mandaria o contexto do processo
 // para o hash do cliente.
-const LONG_TTL_PREFIXES = ["insight.historico", "pricing"]
+const LONG_TTL_PREFIXES = ["insight.historico", "pricing", "core.customer."]
 
 /**
  * J5a-1 — o contexto compartilhado do processo (`journey.*`) vive tanto quanto o processo,
@@ -55,7 +55,28 @@ const LONG_TTL_PREFIXES = ["insight.historico", "pricing"]
  * contatos da mesma journey — que é exatamente o caso de uso que o namespace existe para
  * atender (a doc já prometia 30 dias; o código dava 4 horas).
  */
-const JOURNEY_TTL_PREFIX = "journey."
+const JOURNEY_TTL_PREFIXES = ["journey.", "core.journey."]
+
+/**
+ * CNS-03 — **o escopo de uma tag do CORE é o seu SEGUNDO segmento.**
+ *
+ * A CNS-02 reservou o root `core.*` para a plataforma, e com isso o primeiro segmento
+ * passou a carregar PROPRIEDADE em vez de escopo. O escopo não desapareceu: ele desceu
+ * um nível, e as duas rotas não-sessão do core estão declaradas acima —
+ * `core.customer.` junto de `insight.historico`/`pricing` (hash do CLIENTE, 90 d) e
+ * `core.journey.` junto de `journey.` (hash da JOURNEY, 30 d). Todo o resto de `core.`
+ * é de sessão, pela mesma regra de qualquer outro root.
+ *
+ * ⚠️ **`core.customer.` NÃO é declaração por antecipação — é migração.** Ele absorve
+ * `insight.historico.*` e `pricing.*`, que já hoje roteiam para o hash do cliente com
+ * 90 dias. Sem esta linha, renomeá-los para `core.customer.*` moveria dado de retenção
+ * trimestral para um hash de 4 horas, **sem erro em lugar nenhum** — a spec chegou a
+ * afirmar que "os nomes do core são todos de sessão", e ela estava errada justamente
+ * nestes dois.
+ *
+ * ⚠️ E o prefixo decide **DUAS** coisas, TTL *e* chave: por isso a entrada tem de ficar
+ * em `LONG_TTL_PREFIXES`, que os quatro call sites já consultam, e nunca só no `ttlFor`.
+ */
 
 // ── TTLs padrão ───────────────────────────────────────────────────────────────
 
@@ -107,9 +128,9 @@ export class ContextStore {
     return LONG_TTL_PREFIXES.some(p => tag.startsWith(p))
   }
 
-  /** Tag do processo (`journey.*`): TTL longo, mas no hash da JOURNEY — nunca no do cliente. */
+  /** Tag do processo (`journey.*`, `core.journey.*`): TTL longo, mas no hash da JOURNEY — nunca no do cliente. */
   private isJourneyTag(tag: string): boolean {
-    return tag.startsWith(JOURNEY_TTL_PREFIX)
+    return JOURNEY_TTL_PREFIXES.some(p => tag.startsWith(p))
   }
 
   /** TTL efetivo da tag. Ordem: cliente (longo) → journey (processo) → sessão. */

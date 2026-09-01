@@ -234,7 +234,13 @@ async function resolveCtxRef(
 
   // Arc 16: @ctx.journey.* reads from the journey Redis hash
   // The SDK maps getValue("journey:{journeyId}", tag) → {tenant}:ctx:journey:{journeyId}
-  if (tag.startsWith("journey.") && ctx.journeyId) {
+  //
+  // CNS-03: `core.journey.*` entra aqui pela mesma porta. O escopo de uma tag do core é
+  // o SEGUNDO segmento (a CNS-02 deu o primeiro à propriedade), e as três casas que
+  // roteiam por prefixo têm de concordar — esta, o `ttlFor`/`isJourneyTag` do SDK e o
+  // `writeContextTag` do mcp-server. Duas concordando e uma não é escrita indo para um
+  // hash e leitura vindo de outro, que degrada como "a tag não existe".
+  if ((tag.startsWith("journey.") || tag.startsWith("core.journey.")) && ctx.journeyId) {
     return contextStore.getValue(`journey:${ctx.journeyId}`, tag, ctx.customerId)
   }
 

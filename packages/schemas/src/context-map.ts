@@ -89,7 +89,7 @@ export const ContextMapSchema = z.object({
    * Somá-los aos não-declarados inflaria com campos impossíveis de declarar
    * justamente o número que autoriza a V4 — medir exposição e chamá-la de dano.
    */
-  dynamic_prefixes: z.array(z.string().min(1)).default(["agent.", "segment."]),
+  dynamic_prefixes: z.array(z.string().min(1)).default(["agent.", "segment.", "core.segment."]),
   /** escopo → domínio → campo → folha */
   contexto: z.record(z.record(z.record(ContextMapFieldSchema))).default({}),
 })
@@ -147,7 +147,7 @@ export type ContextMap = z.infer<typeof ContextMapSchema>
  */
 export const DEFAULT_CONTEXT_MAP: ContextMap = {
   mode:             "audit",
-  dynamic_prefixes: ["agent.", "segment."],
+  dynamic_prefixes: ["agent.", "segment.", "core.segment."],
   contexto: {
     session: {
       // ── Dados do cliente — hoje no namespace `caller.*` ──────────────────
