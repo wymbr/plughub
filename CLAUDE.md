@@ -545,6 +545,24 @@ São **TRÊS** bordas, não duas — e a terceira é a única server-side:
 | External agent (LangGraph, CrewAI) | `plughub-sdk proxy` sidecar on localhost:7422 | Loopback only | implementado — **só existe se o operador subir o processo**. **Rebaixado** (2026-08-13): runtime importado sai do roadmap por decisão de produto |
 | Agent `external-mcp` | tool `invoke` do mcp-server (server-side) | rede interna | ✅ — **única borda em vigor**; é expor **tool**, não importar agente. Não encostar |
 
+> **A autorização desta borda é o `tools[]` DECLARADO na skill, e ele só passou a viajar em
+> 2026-09-01 (CAP-06).** Antes, `registry-client.getAgentType` devolvia `permissions: []`
+> **fixo** e o `judgeInvoke` **nega com lista vazia** — a "única borda em vigor" recusava
+> **100% das chamadas**, inclusive de quem declarasse a tool. Hoje o `agent_login` mapeia
+> `{mcp_server, tool}` → `"{mcp_server}:{tool}"` e **assina** no `session_token`: a lista
+> viaja assinada ou não viaja — **nunca** como argumento da chamada, que seria o chamador
+> declarando a própria autorização (o defeito que derrubou o gate de avaliador na CAP-01).
+> **Virada OPT-IN:** skill sem `tools[]` continua com `[]` e continua barrada; 0 de 44
+> declaram hoje, então o número de chamadas que passaram a ser **negadas** é zero.
+> ⚠️ **A mesma lista tem TRÊS semânticas** — `judgeInvoke` (exato, vazio ⇒ nega) · sidecar
+> (curinga `{server}:*`, vazio ⇒ sem filtro) · `ai-gateway/inference.py:131` (**nome CRU** da
+> tool, vazio ⇒ sem filtro). Popular no formato dos dois primeiros faria o terceiro remover
+> TODAS as tools; ele é caminho morto hoje (`/v1/inference` sem chamador), e se ganhar
+> produtor o formato se unifica **antes**. ⚠️ Restam duas paredes, ambas registradas e ambas
+> BARULHENTAS: nenhum `MCP_SERVER_*_URL` configurado (CAP-07) e o `mcp_server` declarado sem
+> validação (CAP-08, `skills.ts` é `TODO` com `void mcpServers`). Gate:
+> `infra/test/probe_mcp_permissions_producer.sh`.
+
 Checks per call (< 1ms): permission validation (JWT local decode) → injection guard (13 patterns) → audit record (Kafka `mcp.audit`, fire-and-forget). Audit policy defined per tool, not per call — caller cannot opt out (LGPD). `AuditRecord` includes: `server_name`, `tool_name`, `allowed`, `injection_detected`, `duration_ms`, `source` (`in_process`|`proxy_sidecar`|`mcp_server_invoke`).
 
 > ⚠️ **O invariante "nenhuma chamada MCP escapa do guard" está VIGENTE apenas no caminho `external-mcp`.**
@@ -1018,7 +1036,14 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
 - Never write to `insight.historico.*` directly in PostgreSQL — always via Kafka
 - Never expose `original_content` of masked messages to agents — only to authorised roles via audit trail
 - Never forward tool calls containing injection patterns
-- Never send tool list to LLM without applying `permissions[]` filter from JWT
+- ⚠️ **MEDIDO SEM CAMINHO VIVO em 2026-09-01 (CAP-06)** — *"Never send tool list to LLM without
+  applying `permissions[]` filter from JWT"*. O filtro existe (`inference.py:128`), mas
+  `/v1/inference` **não tem chamador** no repositório, `InferenceRequest.permissions` **nunca é
+  setado** em Python, e **nenhum** step `reason` declara tools de domínio (o único `tools=[…]` é a
+  ferramenta sintética do `output_schema`). Ou seja: não há lista de tools indo a LLM nenhum para
+  filtrar. A regra fica — quando a passagem de tools existir, ela vale —, mas com o agravante
+  registrado: aquele filtro casa o **nome CRU** da tool, e não o `"{server}:{tool}"` que a borda
+  `invoke` e o sidecar usam
 - Never write masked input values to `pipeline_state`, Redis, stream, or logs
 - ⚠️ **MEDIDO FALSO em 2026-09-01, aguardando decisão (MEN-01)** — *"Never allow AI agents to
   emit `@mention` commands — only `role: primary` or `role: human`"*. As duas metades da frase

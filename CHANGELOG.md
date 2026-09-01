@@ -1,5 +1,84 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — A borda `invoke` deixou de negar tudo: `permissions[]` ganhou produtor (CAP-05/CAP-06)
+
+O `CLAUDE.md` declara o `invoke` do mcp-server como **a única borda MCP em vigor**. Medido:
+ela recusava **100% das chamadas**, inclusive as de um agente que declarasse a tool — e não
+por política, por um default.
+
+`registry-client.getAgentType` devolvia `permissions: []` **fixo**. Como o `judgeInvoke` faz
+match exato e **nega com lista vazia**, o token que todo agente recebia no `agent_login` era
+um token sem permissão nenhuma. O comentário ao lado do `[]` chamava isso de *"the permissive
+default (⇒ no MCP tool filtering)"* — e errava **duas vezes**: a config por-agente nunca morou
+no slot de deploy (o `config_json` só tem `form_id` e `max_concurrent_sessions`), e vazio só é
+permissivo em **duas** das três bordas. Na terceira, que é a que está em vigor, vazio é `deny`.
+
+**Por que não doía:** população zero. Nenhum agente `external-mcp` configurado, `session_timeline`
+(destino do `mcp.audit`) com zero linhas. É o modo de falha da § Postura de Engenharia na forma
+mais cara — um mecanismo de segurança que não protege nada porque **não deixa nada acontecer**,
+e cuja primeira vítima seria o primeiro operador a configurar um agente externo.
+
+### O conserto foi um elo, porque os outros quatro já existiam
+
+```
+skill declara tools[]  →  registry guarda  →  agent_login ASSINA  →  executor manda o token
+                                              ↑ ÚNICO BURACO          →  mcp-server impõe (judgeInvoke)
+```
+
+`toPermissions()` mapeia o `tools[]` que o `getAgentType` **já buscava** (`{mcp_server, tool}` →
+`"{mcp_server}:{tool}"`). Três decisões, cada uma com o seu motivo escrito no código:
+
+- **`required` não filtra.** Ele responde *"a skill funciona sem esta tool?"* — dependência, não
+  autorização. Usá-lo como gate negaria toda tool opcional e converteria robustez em política.
+- **Entrada malformada é descartada COM LOG**, nunca convertida em `"undefined:foo"` — que seria
+  uma permissão que não casa com nada, isto é, recusa silenciosa disfarçada de concessão.
+- **Não emite curinga `"{server}:*"`** — o sidecar o aceita e o `judgeInvoke` não; gerá-lo aqui
+  produziria uma permissão que vale numa borda e não na outra.
+
+### A virada é OPT-IN, e isso é medição, não cautela
+
+**0 de 44** skills declaram `tools[]`. Logo o número de chamadas que passam a ser **negadas** é
+**zero**: a mudança é estritamente **abridora** (de *"nega tudo"* para *"nega tudo menos o
+declarado"*). O plano registrado mandava popular os 44 YAMLs em seguida; a medição o **refutou**:
+o seed é *seed-if-absent* (editar YAML de skill já semeada é no-op) e o caminho nativo
+(`skill-flow-service.mcpCall`) **não consulta** `permissions[]` — quem consulta é a borda `invoke`,
+cujos usuários são agentes externos, população 0. Popular seria trabalho sem leitor.
+
+### A terceira semântica, que não estava documentada em lugar nenhum
+
+A mesma lista é lida por três consumidores, e o terceiro **casa o nome CRU da tool**:
+`ai-gateway/inference.py:131` faz `t.get("name") in req.permissions`, não `"{server}:{tool}"`.
+Popular no formato dos outros dois faria aquele filtro **remover todas as tools** do LLM.
+Mitigante medido: `/v1/inference` **não tem chamador** no repositório e
+`InferenceRequest.permissions` **nunca é setado** em Python — o consumidor é caminho morto, como
+o `/inference` do sentimento em 2026-08-23. Ficou escrito no tipo `AgentTypeInfo.permissions`, com
+a ordem: se ganhar produtor, o formato se unifica **antes**, não depois.
+
+### Instrumentos
+
+- `registry-client.test.ts` — 23 testes; bateria de mutação com 4 mutantes, todos vermelhos
+  (voltar a `[]`; filtrar por `required`; não descartar malformado; emitir curinga), controle
+  positivo verde. O último bloco alimenta o **`judgeInvoke` real** com o produto de
+  `toPermissions` — sem isso os dois lados poderiam divergir de formato com as duas suítes verdes.
+- `infra/test/probe_mcp_permissions_producer.sh` (+ `_mcp_permissions_probe.mjs`) — 6 ramos
+  **atravessando a borda** por MCP/SSE, porque a proposição é a assinatura do token e nenhuma
+  leitura de código a alcança. Contra o binário **anterior**: P1, P3 e P4 vermelhos, sendo o P3
+  (*skill DECLARA a tool e ainda leva `permission_denied`*) o retrato do defeito. Depois: 10 PASS,
+  0 FAIL, 0 SKIPPED, sem resíduo. O ramo que não pode sumir é o **P2** — sem ele, um `judgeInvoke`
+  que aceitasse tudo passaria em P1/P3 e o probe ficaria verde com a borda escancarada.
+- A metade pesada é Node de propósito: `agent_login` e `invoke` são tools MCP sobre SSE, e um
+  cliente SSE em `curl` não é escrevível.
+
+### O que a medição abriu (registrado, não consertado)
+
+- **A borda tem ZERO destinos configurados.** Nenhum `MCP_SERVER_*_URL` em compose algum, então
+  `_resolveDomainUrl` não resolve servidor de domínio nenhum. É a segunda parede — e, ao contrário
+  da primeira, ela **grita**: a recusa nomeia a variável exata que falta. Passar de `permission_denied`
+  mudo para *"defina `MCP_SERVER_MCP_SERVER_AUTH_URL`"* é a diferença entre as duas. (CAP-07)
+- **O `mcp_server` declarado não é conferido contra nada.** A "validação cruzada" de
+  `skills.ts:53-60` é um `TODO` com `void mcpServers`. Eu próprio afirmei aqui, durante a análise,
+  que ela estava implementada — li o cabeçalho do arquivo, não o corpo. (CAP-08)
+
 ## 2026-09-01 — A imagem do agent-registry voltou a nascer (AUT-35)
 
 Descoberto ao tentar reconstruir o pacote pela CAP-03, e é um caso limpo de **registro

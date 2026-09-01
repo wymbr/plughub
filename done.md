@@ -122,6 +122,8 @@ história no `CHANGELOG.md`. Nada registrado aqui ainda.)*
 | CAP-02 | R2 — procedência do `evaluation_submit` passa a vir do `agent_type_id` do token assinado | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-04 | Validação de que o `evaluator_pool` da campanha roda um flow de avaliação (derivada do artefato) | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-03 | R3 — `agent_role` fora de 5 pacotes + coluna dropada por migração; PUT recusa o campo com 422 nomeando | 2026-09-01 | `CHANGELOG.md:37` |
+| CAP-05 | A borda `invoke` deixou de negar 100% das chamadas — o default `permissions: []` era `deny`, não permissivo | 2026-09-01 | `CHANGELOG.md:3` |
+| CAP-06 | `permissions[]` ganhou produtor: o `tools[]` da skill é mapeado e ASSINADO no `session_token` | 2026-09-01 | `CHANGELOG.md:3` |
 
 ---
 

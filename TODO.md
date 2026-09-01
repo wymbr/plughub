@@ -1,5 +1,44 @@
 # TODO — PlugHub Itens Pendentes
 
+## `permissions[]` — DECISÃO TOMADA (B), e as duas refutações que a execução produziu
+
+> **Decidido em 2026-09-01: opção B (dar produtor), pelo ato do dono — *"seguir com cap-06"*.**
+> A opção A (eliminar por desuso) fica registrada abaixo, com o motivo pelo qual não fechava:
+> eliminar `permissions[]` obrigaria a remover também os **dois invariantes** que o `CLAUDE.md`
+> declara (*"nenhuma chamada MCP escapa do guard"*, *"never send tool list to LLM without applying
+> `permissions[]`"*) e o campo `AuditRecord.permissions_checked`. `agent_role` saiu porque **nenhum
+> cenário o justificava**; aqui os cenários existem — só não têm população. Fechado em
+> `CHANGELOG.md` 2026-09-01 e nas linhas CAP-05/CAP-06 de `done.md`.
+
+### Duas coisas que a EXECUÇÃO refutou do plano que estava escrito aqui
+
+1. **"Popular os 44 YAMLs" NÃO era o passo seguinte.** Medido: seed é *seed-if-absent* (editar
+   YAML de skill já semeada é no-op sem `x-skill-publish`/reconcile) **e** o caminho nativo
+   (`skill-flow-service.mcpCall`) não consulta `permissions[]` — quem consulta é a borda `invoke`,
+   cujos usuários são agentes externos, população **0**. Popular seria trabalho sem leitor, e com
+   um risco real (ver 2). O que fecha a proposição é o **elo assinado**, provado com skill de
+   teste no probe, não a população.
+2. **O perigo não era o que eu tinha escrito.** O aviso registrado era *"popular antes de inverter
+   o default"* (ordem da AUT-03). A ameaça de verdade é de **FORMATO**, e morde ao popular, não ao
+   inverter: `ai-gateway/inference.py:131` casa o **nome CRU** da tool (`t.get("name")`), não
+   `"{server}:{tool}"` — popular no formato das outras duas bordas faria aquele filtro **remover
+   todas as tools**. Mitigante medido: `/v1/inference` não tem chamador e
+   `InferenceRequest.permissions` nunca é setado em Python. Documentado no tipo
+   `AgentTypeInfo.permissions`, com a ordem: **unificar o formato ANTES** de dar produtor àquele
+   lado, nunca depois.
+
+### Erro meu na análise, corrigido antes de virar decisão
+
+Afirmei ao dono que o registry **já valida** o `mcp_server` declarado contra os servidores do
+tenant. Falso: `skills.ts:53-60` é um `TODO` com `void mcpServers`, e o cabeçalho do arquivo é que
+promete a validação. Li o cabeçalho, não o corpo — a mesma família de defeito que este repositório
+persegue (*promessa sem mecanismo*), cometida **ao analisar**. Virou CAP-08, e ela está `bloqueado`
+por um achado que a correção trouxe: **não existe fonte de verdade de "servidor registrado"**
+(`GET /v1/mcp-servers` → 404; `_resolveDomainUrl` resolve por env var). A validação prometida não
+tem contra o quê validar.
+
+---
+
 ## `permissions[]` — a decisão A/B, e por que o transporte já está resolvido (CAP-05/CAP-06, 2026-09-01)
 
 Levantado depois de fechar o arco `agent_role`, a partir da pergunta do dono: *"vejo que ele
