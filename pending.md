@@ -179,48 +179,55 @@ Frente fechada (ver `done.md`); resta um item **adiado por decisão**.
 ## `docs/guias/mention-protocol.md` — protocolo @mention
 
 ⚠️ **O invariante declarado NÃO é imposto pelo gate que existe para impô-lo** (medido
-2026-09-01). O guia diz *"Agentes IA em conferência **não** podem usar `@mention`"*
-(§42) e, duas linhas acima, define a regra como *"apenas `role: primary` ou `role:
-human`"* (§40) — e as duas frases **não são a mesma coisa**: `primary` é POSIÇÃO na
-sessão, não espécie do participante. Medido em histórico real de `tenant_demo`:
-**1144 segmentos `native/primary` + 100 `ai/primary`** contra 333 `human/primary`. O
-gate lê o eixo de posição para responder uma pergunta de espécie, e por isso **deixa
-passar exatamente a população que o comentário dele diz excluir**.
+2026-09-01). O guia diz *"Agentes IA em conferência **não** podem usar `@mention`"* (§42)
+e, duas linhas acima, define a regra como *"apenas `role: primary` ou `role: human`"*
+(§40). As duas frases **não são a mesma coisa**: `primary` é POSIÇÃO na sessão, não
+espécie do participante. Medido em histórico real: **1144 segmentos `native/primary` +
+100 `ai/primary`** contra 333 `human/primary` — o gate deixa passar exatamente a
+população que o comentário dele diz excluir. O discriminador de espécie está na MESMA
+entrada do roster, sem ser lido: `agent_type` (`human` | `native` | `ai`).
 
-O discriminador certo está na MESMA entrada do roster, ao lado, sem ser lido:
-`agent_type` (`human` | `native` | `ai`).
+⚠️ **E ele tem o MESMO defeito estrutural do gate do avaliador**: resolve o papel de um
+`participant_id` vindo do **input**, tendo o `instance_id` assinado em mãos
+(`senderInstanceId`, extraído na l.403 e usado para outra coisa na l.426). A tabela dos
+dois gates vive em `docs/adr/adr-remove-agent-role-axis.md` § *Achado estrutural
+compartilhado* — escrita **uma vez**, não repetida aqui.
+
+⚠️ **Eixo DIFERENTE do `agent_role`** (grupo `CAP`): campo, casa, produtor e consumidor
+distintos. O que os une é o defeito de forma, não o assunto.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| MEN-01 | **Decidir A ou B — o texto e o código discordam, e manter como está não é a opção conservadora.** **(A)** o gate passa a ler `agent_type` e o invariante vira verdadeiro — muda comportamento: agentes de IA que hoje conseguiriam rotear deixam de conseguir. **(B)** o gate sai e se declara que @mention não é gateado por espécie, alinhando com o caminho WS — e aí as 4 cópias do invariante (`CLAUDE.md` ×2, guia §40/§42/§80, comentário em `session.ts:611`) saem junto, porque deixam de ser verdade. **Não é opção deixar como está**: promessa sem mecanismo é o que este repo mais paga caro | `bloqueado` — decisão do dono | `TODO.md` § gate de @mention |
-| MEN-02 | **A aplicação do invariante é ASSIMÉTRICA entre os dois caminhos, e só um tem gate.** WS `agent-ws` (`server.ts:3638` — o caminho VIVO do Console) chama `routeMentions` **sem checagem nenhuma**, por desenho declarado (*"o WS conhece o agente pela conexão"*). MCP `message_send` (`session.ts:621`) tem o gate. É a forma *"duas portas para o mesmo dado e só uma trancada"*; aqui é defensável (cada camada gateia onde consegue provar), mas precisa ser **decidido e escrito**, não herdado | `bloqueado` por MEN-01 | `TODO.md` § gate de @mention |
-| MEN-03 | **Mensagem de log aponta para a casa ABANDONADA do campo.** O gate resolve o papel pelo roster `session:{id}:participants` desde a Fatia B do §1055, mas o aviso ainda diz *"hash `{t}:agent:instance:{id}` sem campo `role`"* — manda quem depura para o lugar errado. Medido: aquele hash tem **0 de 5** com o campo, **nenhum escritor** (o `agent_login` grava `agent_role`, nunca `role`) e **nenhum leitor**. É resquício de verdade, e é 1 linha | `aberto` | `TODO.md` § gate de @mention |
-| MEN-04 | **Falta a evidência de DANO — só há EXPOSIÇÃO.** Medido que o caminho está aberto (LLM recebe a tool porque `permissions: []` = sem filtro; a IA é `primary`; o gate passa). NÃO medido que alguém passou: 0 @mentions na janela de log, e os anteriores se perderam no rebuild. Fechar exige um contato real em pool de IA com `@alias` no texto — o instrumento já existe, os três ramos do gate logam diferente. **Publicar exposição como dano é a D14.1 ao contrário** | `aberto` — precisa de tráfego | `TODO.md` § gate de @mention |
-
+| MEN-01 | **Antes de decidir, responder a pergunta que resolveu o gate do avaliador: QUAL cenário isto impede?** Não foi feita para o @mention, e foi justamente pular essa pergunta que produziu duas respostas erradas no grupo `CAP`. Só depois dela as opções fazem sentido: **(A)** ler `agent_type` e o invariante vira verdadeiro · **(B)** remover o gate e retirar as 4 cópias da promessa (`CLAUDE.md` ×2, guia §40/§42/§80, comentário em `session.ts:611`) · **(C)** o que a resposta do avaliador sugere — se não houver cenário, remover. **Não é opção deixar como está** | `bloqueado` — precisa da análise de cenário | ADR `adr-remove-agent-role-axis.md` § achado estrutural |
+| MEN-02 | **A aplicação é ASSIMÉTRICA e só um caminho tem gate.** WS `agent-ws` (`server.ts:3638` — o caminho VIVO do Console) chama `routeMentions` **sem checagem nenhuma**, por desenho declarado (*"o WS conhece o agente pela conexão"*). MCP `message_send` tem o gate. Aqui é defensável — cada camada gateia onde consegue provar —, mas precisa ser **decidido e escrito**, não herdado | `bloqueado` por MEN-01 | `TODO.md` § gate de @mention |
+| MEN-03 | **Mensagem de log aponta para a casa ABANDONADA do campo.** O gate resolve pelo roster `session:{id}:participants` desde a Fatia B do §1055, mas o aviso ainda diz *"hash `{t}:agent:instance:{id}` sem campo `role`"* — manda quem depura para o lugar errado. Medido: aquele hash tem **0 de 5** com o campo, nenhum escritor e nenhum leitor. **Independente do MEN-01 e imediato: 1 linha** | `aberto` | `TODO.md` § gate de @mention |
+| MEN-04 | **Só há EXPOSIÇÃO medida, não DANO.** O caminho está aberto (LLM recebe a tool porque `permissions: []` = sem filtro; a IA é `primary`; o gate passa). NÃO medido que alguém passou: 0 @mentions na janela de log, anteriores perdidos no rebuild. Fecha com um contato real em pool de IA com `@alias` no texto — os três desfechos do gate já logam diferente. **Publicar exposição como dano é a D14.1 ao contrário** | `aberto` — precisa de tráfego | `TODO.md` § gate de @mention |
 ---
 
-## `docs/adr/adr-agent-capability-over-role.md` — capacidade no lugar de `agent_role`
+## `docs/adr/adr-remove-agent-role-axis.md` — remoção do terceiro eixo
 
-O gate do avaliador **fica**; o que muda é o EIXO. `agent_role` está vivo e é
-load-bearing (44 skills, 41 `executor` + 3 `evaluator`; smoke dedicado verde incluindo o
-ramo negativo), e é o **único** controle de identidade nas duas tools que servem
-`original_content` desmascarado. O custo dele não é o gate — é ser o **terceiro
-vocabulário** de *"quem pode o quê"* numa casa que já tem um.
+O gate do avaliador **sai**, e `agent_role` com ele. Não porque o eixo incomoda: porque
+**não impede nenhum cenário que alguém consiga descrever**. Medido em 2026-09-01:
 
-⚠️ **A ordem das fases não é preferência.** O caminho natural (*"o não-avaliador nem
-veria a tool"*) não funciona: `registry-client.ts:72` fixa `permissions: []` e o
-`inference.py:128` trata vazio como **sem filtro** — **73 tools, 0 permissões
-declaradas**. É a mesma forma da AUT-03: default vazio que significa "tudo" e precisa ser
-POPULADO antes de virar "nada". Trocar o gate antes de ligar o filtro troca um gate que
-funciona por um que não roda.
+- ele **não autentica o chamador** — o `session_token` carrega `instance_id` (identidade
+  assinada) e as duas tools o DESCARTAM, consultando o papel do `participant_id` que veio
+  do **input**. Passa quem nomear qualquer avaliador;
+- o cenário de PII **não fecha**: o `ReplayContext` exige `session_id` fechado **e**
+  amostrado **e** dentro do TTL de 1 h, e nenhuma tool devolve lista de sessões a agente;
+- o que ele de fato separa é **avaliador mal configurado** — detecção de erro de deploy,
+  não fronteira de segurança.
+
+⚠️ A versão anterior deste grupo propunha **trocar o eixo** (grant de capacidade, 3
+fases). Foi **refutada por medição no mesmo dia** e está preservada dentro do ADR § —
+sem ela, "trocar o eixo" é reproposto em três meses.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| CAP-01 | **F1 — declarar `permissions[]` por skill e MEDIR o delta ANTES de inverter o default.** Censo por skill: tools usadas × tools declaradas. Reprova se algum agente perder tool que comprovadamente chama. É a fase cara e a única que toca todos os agentes; se o censo mostrar inviabilidade, a D1 fica bloqueada e `agent_role` PERMANECE — resultado legítimo, melhor que gate que não roda | `aberto` | ADR § pré-requisito |
-| CAP-02 | **F2 — criar o grant e fazer os dois gates o consultarem, MANTENDO `agent_role` em paralelo** (E lógico). Inclui a decisão de desenho que o ADR deixa aberta: de onde vem o grant do AGENTE, já que o `session_token` não carrega `module_config` — pode ser que o eixo certo seja o próprio `permissions[]` da F1, e aí o terceiro vocabulário vira o primeiro sem inventar um quarto | `bloqueado` por CAP-01 | ADR § D1 e § não decide |
-| CAP-03 | **F3 — retirar `agent_role` do gate, schema, registry e bridge; `orchestrator` sai junto** (zero portadores, nenhum gate o consome). Recusar o campo NOMEANDO na entrada da API, como a lápide do `unrestricted` — pydantic/Zod ignoram chave desconhecida e o remetente veria 200 sobre no-op | `bloqueado` por CAP-02 | ADR § D3, `CHANGELOG.md` § lápide |
-| CAP-04 | **O `role` propagado no agent_type sintetizado do bridge** (`orchestrator-bridge/main.py:652`). O comentário afirma que ninguém lê; **verificado, confere** — zero leitores. Sai com a F3, ou antes: é independente | `aberto` | ADR § D4 |
-
+| CAP-01 | **R1 — remover os dois `if` de `agent_role`** (`evaluation_context_get`, `evaluation_submit`), MANTENDO `readAgentIdentity`: sai o gate, não a leitura, que o `submit` usa para procedência. Inverter o `smoke_agent_role_gate.sh` em **testemunha** — o T4 passa a afirmar que o contexto É entregue e que a procedência sobrevive | `aberto` | ADR § D1, D3 |
+| CAP-02 | **R2 — decidir a procedência do `evaluation_submit`.** O `agent_type_id` gravado no resultado vem de um hash indexado por `participant_id` **do input**, então é tão auto-declarado quanto a autorização era. NÃO bloqueia a R1 (o estado não piora), mas se a procedência do avaliador importa ao Arc 13, tem de vir do `instance_id` do token | `aberto` | ADR § Pendência |
+| CAP-03 | **R3 — remover `agent_role` do schema, registry, syncer e bridge**; `orchestrator` (zero portadores) e o `role` sintetizado do bridge (`main.py:652`, zero leitores — verificado) saem junto. Recusar o campo **nomeando** na entrada da API: Zod/pydantic ignoram chave desconhecida e o remetente veria 200 sobre no-op | `bloqueado` por CAP-01 | ADR § D2, R3 |
+| CAP-04 | **Validar no registry/portão que pool de avaliação aponta para skill de avaliação.** É a mitigação do ÚNICO efeito real da remoção — perde-se a detecção de avaliador mal configurado. Ali é onde o erro nasce, e onde é barato | `aberto` | ADR § Riscos 1 |
+| CAP-05 | **`permissions[]` está INERTE por norma declarada — 73 tools expostas, 0 declaradas.** O campo existe em TODA a mensagem (`SessionTokenPayload`, `AgentTypeSchema` com regex de formato, `InferenceRequest`, `AuditRecord`); o que não existe é **produtor**: a entidade que o declarava (`AgentType`) foi aposentada e a declaração não reapareceu — `pools` sem coluna, `skills.tools` **0 de 44**, `config_json` só com `form_id`/`max_concurrent_sessions`. Fato **independente** deste ADR: sobrevive à remoção do `agent_role`. Mesma forma da AUT-03 | `adiado` — sem dono e sem gatilho declarado; entra se alguém quiser reduzir superfície de tool | ADR § Alternativa refutada |
 ---
 
 ## `sem-demanda` — trabalho sem decisão por trás

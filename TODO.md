@@ -8102,7 +8102,7 @@ achei nela um defeito real — e **não voltei para a conclusão**.
 Registrado porque o desvio é o mesmo custo que este documento inteiro descreve: **três
 vocabulários chamados "role" fazem medir o eixo errado**, e desta vez quem mediu errado
 foi quem escreve. A pergunta original virou o ADR
-`docs/adr/adr-agent-capability-over-role.md` (grupo `CAP`); o achado abaixo é do eixo de
+`docs/adr/adr-remove-agent-role-axis.md` (grupo `CAP`); o achado abaixo é do eixo de
 PARTICIPAÇÃO e vale por si, sem dizer nada sobre `agent_role`.
 
 ### O que foi medido, e o que cada medida custou
@@ -8182,4 +8182,62 @@ A proposta anterior era *deixar o gate MCP intacto até o dono decidir se a cone
 basta*. Não se sustenta depois da medição: **o gate não protege o que diz proteger**,
 então mantê-lo não é a opção conservadora — é manter promessa sem mecanismo. As opções
 reais são MEN-01 (A) e (B); "como está" saiu da mesa.
+
+---
+
+## Gate de evaluator: o que ele verifica não é quem chama (2026-09-01)
+
+Grupo `CAP`, ADR `docs/adr/adr-remove-agent-role-axis.md`. Origem: a pergunta do dono —
+*"por que existe um gate para evaluator? Não vejo cenário para bloquear quem não é
+evaluator; avalie o que acontece se eliminarmos"*.
+
+Registrado porque **duas respostas anteriores foram erradas**, e o erro tem forma
+reconhecível.
+
+### As duas respostas erradas, e o que faltava nas duas
+
+1. *"`agent_role` está vivo e é load-bearing"* — **verdade, e irrelevante**. Medi que o
+   gate existe, tem produtor, tem portão verde com ramo negativo, e é o único controle nas
+   tools. Tudo certo, e **nada disso responde se ele protege algo**.
+2. *"troque o eixo em vez de remover"* — construído sobre a primeira. Virou um ADR inteiro
+   com três fases.
+
+O que faltava nas duas é a MESMA pergunta: **de qual proposição cada fato é evidência?**
+"O gate roda" é evidência de que ele roda. Não é evidência de que impede alguma coisa.
+
+### O que a medição mostrou quando a pergunta certa foi feita
+
+**(a) O gate não autentica o chamador.** `SessionTokenPayload` carrega `instance_id` —
+identidade assinada — e as duas tools fazem `const { tenant_id } = verifySessionToken(…)`,
+descartando-a. O papel é consultado para o `participant_id` **do input**. O gate responde
+*"o id que você digitou é de um avaliador?"*.
+
+> A ironia é do próprio arquivo: o comentário que explica de onde vem o `agent_role` diz
+> *"nunca do input do agente — auto-declaração é asserção, não autorização"*.
+
+**(b) O cenário de PII não fecha.** O `ReplayContext` exige `session_id` **fechado** ∧
+**amostrado** ∧ dentro do **TTL de 1 h**. Agente em sessão viva não tem contexto da
+própria sessão, e nenhuma tool devolve lista de sessões a agente.
+
+**(c) O que sobra é detecção de erro de deploy** — avaliador cujo skill ficou em
+`executor`. É exatamente o T4 do smoke. Erro de configuração se pega onde nasce.
+
+### O achado que vale além deste gate
+
+Os **dois** gates de papel da casa autorizam pela string do input tendo a identidade
+assinada em mãos — `evaluation_*` a descarta; `message_send` a extrai (`senderInstanceId`,
+l.403), usa para outra coisa (l.426) e resolve o papel pelo input (l.421). A tabela vive
+no ADR § *Achado estrutural compartilhado*, escrita uma vez e referenciada do grupo `MEN`.
+
+### O que sobreviveu do ADR refutado
+
+`permissions[]` está **inerte por norma declarada**: 73 tools, 0 declaradas. O CAMPO existe
+em toda a mensagem (`SessionTokenPayload`, `AgentTypeSchema` com regex, `InferenceRequest`,
+`AuditRecord`) — falta **produtor**, porque a entidade que o declarava (`AgentType`) foi
+aposentada e a declaração não reapareceu: `pools` sem coluna, `skills.tools` **0 de 44**,
+`config_json` só com `form_id`/`max_concurrent_sessions`. Fato independente, `CAP-05`.
+
+⚠️ Note a diferença entre este caso e o do `agent_role`: aqui o **transporte** está
+construído inteiro e vazio; lá o mecanismo funcionava e **não protegia**. Cano sem água ×
+cadeado sem porta.
 
