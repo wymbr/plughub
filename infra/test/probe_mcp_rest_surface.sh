@@ -69,7 +69,7 @@ GET /api/supervisor_state/:sessionId|gateada|requireJwtRole
 GET /api/work_queue/list|aberta-divida|lista fila de trabalho humano — publicada pela borda (CAP-11)
 GET /api/work_queue/pending|aberta-divida|lista itens pendentes — publicada pela borda (CAP-11)
 GET /health|aberta-isenta|liveness do compose; exigir credencial acopla o boot da stack ao do emissor de token (mesma isencao do analytics-api)
-GET /internal/context-audit|aberta-divida|NAO publicada pela borda; direto na 3100 (CAP-11)
+GET /internal/context-audit|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
 GET /sse|aberta-divida|transporte MCP, anonimo por construcao; NAO publicado pela borda (CAP-09/CAP-10)
 POST /api/agent_done/:sessionId|aberta-divida|FECHA sessao — publicada pela borda (CAP-11)
 POST /api/force-complete/:sessionId|gateada|requireJwtRole
@@ -79,7 +79,7 @@ POST /api/session_transfer/:sessionId|gateada|verifyJwtPayload
 POST /api/work_queue/claim/:sessionId|aberta-divida|RECLAMA item de fila humana — publicada pela borda (CAP-11)
 POST /api/work_queue/expire/:sessionId|gateada|requireJwtRole
 POST /api/work_queue/release/:sessionId|aberta-divida|DEVOLVE item de fila humana — publicada pela borda (CAP-11)
-POST /internal/context-snapshot|aberta-divida|NAO publicada pela borda; direto na 3100 (CAP-11)
+POST /internal/context-snapshot|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
 POST /messages|aberta-divida|canal de escrita do transporte MCP; NAO publicado pela borda (CAP-09/CAP-10)
 PUT /api/agent-pause|gateada|requireJwtRole
 PUT /api/agent-resume|gateada|requireJwtRole

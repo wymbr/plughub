@@ -68,6 +68,38 @@ Mutação: rota nova sem linha · regressão (aberta declarada gateada) · melho
 borda publicando o transporte (apontando `BORDA` para a 3100) — todas vermelhas, controle
 positivo verde, e borda fora do ar sai **3 (INCONCLUSIVO)**, nunca 0.
 
+### 6. Correção do próprio instrumento, no mesmo dia
+
+A primeira versão do censo marcou `/internal/context-snapshot` e `/internal/context-audit` como
+**SEM CREDENCIAL**. Falso: as duas são gateadas por **`x-service-token`** contra
+`MCP_INTERNAL_SERVICE_TOKEN` e ainda **falham fechadas** (503 quando o env não está setado).
+O `CREDENCIAL` do censo só listava identificadores de **JWT**, e esta casa tem **duas** formas de
+credencial — JWT de usuário e token de serviço.
+
+A lição não é *"faltou um nome na lista"*: é que **um censo de credencial precisa cobrir todas as
+FORMAS de credencial da casa**, e é a mesma trilha do `probe_authz_single_verifier` ao descobrir
+que contar quem decodifica JWT não conta quem resolve escopo. A detecção passou a incluir o
+LITERAL do header. Contagem corrigida: 14 → **12** sem credencial no total; **as 9 publicadas não
+mudaram**, então o achado central ficou intacto e o que estava errado era a classificação do
+`/internal`. Novo estado declarado: `gateada=13 · aberta-divida=11 · aberta-isenta=1`.
+
+### 7. O `session_token` é AUTO-SERVIÇO — e isso muda o peso das 23 tools "gateadas"
+
+Medido: uma conexão **anônima** ao `/sse` chama `agent_login` nomeando um `skill_id` qualquer — e
+o registry serve a lista de skills **sem credencial** — e recebe um `session_token` **assinado**:
+
+```
+skill_id obtido sem credencial: skill_auth_form_v1
+agent_login anônimo: TOKEN EMITIDO
+claims: {tenant_id: tenant_demo, agent_type_id: skill_auth_form_v1, instance_id: <livre>}
+```
+
+`agent_login` **não pode** exigir token (é o emissor — a isenção do censo de tools está certa). O
+problema não é a isenção: é que ela só era inócua enquanto o transporte tivesse dono. Consequência
+para ler a CAP-09 corretamente: *"23 de 72 tools verificam `session_token`"* **não** é 23 tools
+protegidas — o portão existe e o **dispensador está aberto** para quem alcança a porta. É por isso
+que a decisão de topologia da CAP-10 precede a política tool-a-tool.
+
 ### O que ficou aberto
 
 **CAP-12** — fechar as nove. A mais barata e de maior dano é `conversation_history`: o irmão
