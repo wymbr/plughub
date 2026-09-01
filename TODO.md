@@ -5965,7 +5965,20 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 >   importa para a fase, **sem backfill**. Nota adjacente: tabela vazia também significa que nenhum
 >   skill deste ambiente emite `agent_event` — o Arc 12 não tem produtor vivo aqui.
 >
-> ### 🟡 `agent-registry`: 2 testes de `pools.test.ts` vermelhos, PRÉ-EXISTENTES (medido 2026-08-29)
+> ### 🟢 `agent-registry`: o registro de "2 testes vermelhos" era MENOR que o defeito (reaberto e fechado 2026-09-01, AUT-35)
+>
+> ⚠️ **A medição de 2026-08-29 abaixo subestimava.** Não eram "2 testes vermelhos": o
+> `npm run build` é `tsc` sobre `include: ["src/**/*"]`, os testes entravam no build de
+> PRODUÇÃO, e o `await import()` de topo do `pools.test.ts` (AUT-24) o quebrava com TS1378 —
+> ou seja, **a IMAGEM não nascia**, e nenhuma mudança do pacote alcançava o runtime. Foi
+> descoberto em 2026-09-01 ao tentar reconstruir pela CAP-03, que ficou bloqueada por isto.
+>
+> Fechado com `tsconfig.json` (produção: CommonJS, sem testes) + `tsconfig.test.json`
+> (testes: ES2022, `noEmit`) — a correção de uma linha desbloquearia e apagaria a cobertura
+> de tipos dos testes. Split provado por mutação: erro de tipo num teste reprova SÓ a metade
+> B. Suíte medida depois: **37/37 verde** — os dois testes citados abaixo não falham mais.
+>
+> *(diagnóstico original de 2026-08-29, preservado:)*
 >
 > `POST /v1/pools > cria pool válido` e `GET /v1/pools > retorna lista` falham com **500 onde se
 > espera 201/200**. **Não são regressão** — conferido por `git stash` das alterações da T5: as mesmas

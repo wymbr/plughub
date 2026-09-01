@@ -1,0 +1,25 @@
+// tsconfig.test.json — TYPECHECK dos testes (nunca emite). Par de `tsconfig.json`.
+//
+// Existe para que excluir os testes do build (AUT-35) não os tire da verificação de
+// tipos. Sem este arquivo, o desbloqueio do build teria comprado imagem funcionando
+// ao preço de `src/__tests__/**` deixar de ser typecheckado — e ninguém notaria,
+// porque o sintoma é a AUSÊNCIA de um erro.
+//
+// `module: ES2022` não é para "fazer passar": é o sistema de módulos sob o qual os
+// testes REALMENTE rodam (vitest transpila com esbuild). Sob ele o `await import()`
+// de topo do `pools.test.ts` é legal, que é o ponto — o TS1378 era o typecheck
+// descrevendo um mundo diferente do de execução.
+//
+// `include` traz TODO o `src`, não só os testes: um teste importa o que testa, e
+// typecheckar o teste isolado do alvo mediria meio contrato.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module":           "ES2022",
+    "moduleResolution": "node",
+    "noEmit":           true,
+    "incremental":      false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

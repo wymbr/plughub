@@ -91,13 +91,9 @@ classification:
   type: orchestrator
   domain: quality
 
-# Propósito do agente — entrada de autorização do gate de `evaluation_context_get`
-# (que devolve `original_content` DESMASCARADO). Ver agente_avaliacao_v1.yaml.
-#
-# ATENÇÃO — mesmo caso do agente_revisor_v1: motor de revisão por workflow, hoje
-# LEGADO/inerte, e sem step `agent_login`. Sem hash de instância não há papel a
-# ler, e o gate fechado nega. Reativar exige adicionar o login primeiro.
-agent_role: evaluator
+# LÁPIDE — `agent_role: evaluator` vivia aqui. Removido em 2026-09-01 (CAP-03):
+# o eixo saiu com o gate que era seu único consumidor. Mandar o campo agora faz
+# o `PUT /v1/skills/{id}` responder 422 nomeando — não é ignorado em silêncio.
 
 entry: get_context
 

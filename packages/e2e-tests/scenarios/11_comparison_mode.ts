@@ -155,9 +155,8 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     let evalToken = ""
 
     try {
-      // Skill de AVALIAÇÃO: o gate exige `agent_role: evaluator` do registry
-      // (`skill_retencao_oferta_v1` é executor). O `agent_busy` grava o mapa
-      // participant→instance que a tool usa para resolver o hash.
+      // Skill de AVALIAÇÃO. O gate de papel saiu (CAP-01, 2026-09-01); o login
+      // permanece porque o token assinado é a fonte da procedência (CAP-02).
       const login = await mcp.agentLogin(ctx.tenantId, "skill_avaliacao_v1", evalInstanceId)
       evalToken = login.session_token
       await mcp.agentReady(evalToken)

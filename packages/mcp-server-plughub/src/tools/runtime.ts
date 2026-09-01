@@ -193,10 +193,11 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
 
         // Persiste estado da instância no Redis
         //
-        // `agent_role` — PROPÓSITO do agente, vindo do REGISTRY (nunca do input).
-        // O escopo casa: o hash é da INSTÂNCIA, e o propósito é fato do artefato
-        // que a instância executa, estável por toda a vida dela. É o campo que os
-        // gates de `evaluation_context_get`/`evaluation_submit` consomem.
+        // LÁPIDE — aqui era carimbado `agent_role` (removido em 2026-09-01, CAP-03).
+        // Ele tinha um consumidor só, o gate de avaliação, e o gate saiu antes por
+        // não impedir cenário nenhum. O `agent_type_id` abaixo FICA e ganhou peso:
+        // é dele que sai a procedência do `evaluation_submit` — mas lida do TOKEN
+        // ASSINADO, não deste hash (CAP-02). Este `hset` é o único escritor dos dois.
         //
         // Não confundir com o PAPEL DE PARTICIPAÇÃO (primary/specialist/supervisor):
         // esse é fato de (participante, sessão) e NÃO cabe aqui — a mesma instância
@@ -208,7 +209,6 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         await redis.hset(instanceKey, {
           state:                   "logged_in",
           agent_type_id,
-          agent_role:              agentType.agent_role ?? "executor",
           current_sessions:        "0",
           max_concurrent_sessions: String(agentType.max_concurrent_sessions),
           execution_model:         agentType.execution_model ?? "stateless",

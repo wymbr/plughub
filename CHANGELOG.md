@@ -1,5 +1,207 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — A imagem do agent-registry voltou a nascer (AUT-35)
+
+Descoberto ao tentar reconstruir o pacote pela CAP-03, e é um caso limpo de **registro
+menor que o defeito**. O `TODO.md:5968` dizia *"2 testes de `pools.test.ts` vermelhos,
+PRÉ-EXISTENTES"*. O fato era outro: `npm run build` é `tsc` puro sobre
+`include: ["src/**/*"]`, então `src/__tests__/**` entrava no build de **produção**, e o
+`await import()` de topo que a AUT-24 introduziu é ilegal sob `module: CommonJS` —
+**TS1378**. Não é suíte vermelha: é imagem que não nasce. Por dias, nenhuma mudança no
+agent-registry alcançou o runtime, e a única pista era o título do próprio commit
+(*"…e um build quebrado"*).
+
+**A correção de uma linha foi recusada.** Excluir `__tests__` do build desbloqueia e
+**apaga a cobertura de tipos dos testes** — exatamente o que o ramo C do
+`probe_apifetch_reauth.sh` existe para garantir noutro pacote. Trocar um defeito visível
+(imagem que falha) por um invisível (tipos que ninguém mais confere) é o padrão que a
+§ Postura persegue.
+
+São dois arquivos: `tsconfig.json` emite produção sem testes; `tsconfig.test.json`
+(`extends`, `noEmit`) typecheca **tudo**. E os testes passam a ser verificados sob
+`module: ES2022` **de propósito** — é o sistema de módulos que o vitest de fato usa
+(esbuild, semântica ESM). Sob CommonJS eles eram typecheckados num mundo em que não
+rodam, e era isso que o TS1378 estava dizendo. Produção segue CommonJS no typecheck **e**
+no emit: verificar sob um sistema de módulos e emitir sob outro esconderia justamente
+essa classe de erro.
+
+O `script` `typecheck` roda as **duas** metades — um `tsconfig.test.json` que existe e
+nunca é invocado seria promessa sem mecanismo.
+
+**Split provado por mutação**, que é o que distingue cobertura de arquivo decorativo: um
+erro de tipo plantado num teste deixa a metade B vermelha e a metade A **verde** (prova
+que os testes saíram do build) — e some ao reverter. Medições depois: imagem construída
+(41 h → 22 s de idade), suíte **37/37 verde**, e os dois testes que o `TODO` citava não
+falham mais. O registro lá foi corrigido, não reescrito.
+
+## 2026-09-01 — O gate de evaluator sai, e a procedência muda de fonte (CAP-01, CAP-02, CAP-04)
+
+O ADR `adr-remove-agent-role-axis.md` já trazia a medição: o gate de
+`evaluation_context_get`/`evaluation_submit` **não autenticava o chamador**. O
+`session_token` carrega `instance_id` — identidade assinada — e as duas tools o
+descartavam, consultando o papel do `participant_id` que veio do **input**. Passava quem
+nomeasse qualquer avaliador; barrava só o avaliador **mal configurado**. Este registro é
+o que a execução acrescentou à decisão.
+
+### (a) A remoção do `if` desalojou mais do que o `if`
+
+`readAgentIdentity` devolvia `{resolved, agentRole, agentTypeId, instanceKey}`, e
+`resolved` era derivado da **presença de `agent_role`**. Tirados os dois gates, ela ficou
+sem consumidor nenhum — porque a procedência também mudou de fonte (abaixo). Foi
+**removida**, com lápide: mantê-la faria a R3 transformá-la num leitor que devolve sempre
+`resolved: false`, um campo que nunca denuncia nada. Efeito colateral que vale registrar:
+a R3 **não precisa mais tocar `evaluation.ts`**.
+
+### (b) A procedência estava a uma linha de distância, e ninguém tinha olhado
+
+A § Pendência do ADR dizia que o `agent_type_id` do resultado é tão auto-declarado quanto
+a autorização era, e deixava a correção em aberto. Medindo: **o token já carrega
+`agent_type_id`**, e `agent_login` (`runtime.ts:208`) é o **único escritor** dos dois
+valores — assina o token e escreve o hash com o mesmo dado do registry. Não eram duas
+fontes concorrentes: era a mesma fonte, uma assinada e outra não.
+
+Por isso a R2 não custou uma fase: entrou junto da R1, e o teste que a prova só existe
+porque o mock passou a devolver valores **diferentes** nas duas fontes. Com valores iguais
+a asserção seria decorativa.
+
+### (c) A mitigação não podia usar o discriminador que o ADR ia apagar
+
+O Risco 1 mandava *"validar no registry que pool de avaliação aponta para skill de
+avaliação"*. Medido: **nenhuma das duas metades desse predicado sobrevive à R3** — o lado
+do pool não tem marcador algum (`avaliacao_ia` se distingue por um comentário em prosa no
+YAML; `purpose` é `contact|internal`), e o lado do skill **é** o `agent_role`.
+
+Criar um campo (`is_evaluator`, `purpose: evaluation`) seria o eixo renascendo com outro
+nome — exatamente a alternativa que o ADR refuta. O discriminador escolhido é **derivado
+do artefato**: o flow do slot `current` do pool invoca `evaluation_context_get` /
+`evaluation_submit`? Um flow que não as chama não consegue avaliar, tenha o rótulo que
+tiver. Fonte é o `yaml_snapshot` do slot, que é o que **roda** (o `deploy` do pool é NULL
+desde o modelo de slots, então não há segunda fonte).
+
+Casa: `create_campaign` **e** `update_campaign` — gatear só o create deixaria a porta
+aberta pelo caminho mais usado, já que a tela edita. População contada antes de escrever a
+recusa: 7 campanhas com `evaluator_pool=avaliacao_ia` (que o discriminador aprova) e 1
+com `null`; nenhuma quebra.
+
+**`unverifiable` nunca é `not_evaluator`.** Registry inacessível ou pool sem slot promovido
+degrada para ALLOW **barulhento**, e o aviso nomeia *o que deixou de valer*, não só que
+degradou. Colapsar os dois recriaria o filtro que filtra ESVAZIANDO — o defeito da F2 do
+arco de relatórios. Este é um detector de erro de deploy, não uma fronteira: recusar
+campanha porque o agent-registry piscou trocaria detecção barata por indisponibilidade.
+
+### (d) Os testes foram invertidos, e a inversão achou três defeitos meus
+
+Cinco testes unitários e o T4 do smoke afirmavam a recusa. Viraram testemunhas — apagá-los
+deixaria a remoção sem prova de que ela é o comportamento pretendido, e *"trocar o eixo"*
+seria reproposto em três meses sem nada a contradizê-lo. Mutação nos dois sentidos:
+reintroduzir o gate deixa 4 vermelhos; fazer a procedência voltar ao hash deixa 1, e é o
+que nomeia a proposição certa.
+
+O que a execução revelou, e é o registro que importa:
+
+1. **um teste que não podia reprovar, escrito hoje** — a linha final do smoke ficou com um
+   `
+` **literal** em vez de quebra, fundindo as duas linhas; `bash -n` passava (é só um
+   `n` escapado) e o ramo de **falha ficou inalcançável**. Descoberto por `cat -A`, não por
+   sintaxe. `bash -n` responde *"isto parseia?"*, nunca *"o ramo roda?"*;
+2. **o probe da CAP-04 imprimiu ✅ com um ramo PULADO** — truncar em `head -c 400` o corpo
+   que ia ser parseado fabricou ausência de `campaign_id`, e o P5 saiu de fininho. Hoje
+   ramo não exercido **reprova** (`SKIPPED`), em vez de se declarar inconclusivo;
+3. **o guard foi parar em `update_form`** — as três linhas de abertura são idênticas às de
+   `update_campaign`, e o `FormUpdate` não tem `evaluator_pool`: 500 em toda edição de
+   formulário, já no container, sem nada vermelho. Nasceu daí o ramo **P5b**, que mede a
+   rota vizinha.
+
+Os três são da mesma família: o instrumento parecia responder a pergunta feita.
+
+### Verificação
+
+- `packages/mcp-server-plughub` — 20/20 unitários, falseáveis nos dois sentidos por mutação;
+- `infra/test/smoke_agent_role_gate.sh` — contato REAL: com `agent_role=executor` o contexto
+  **é** entregue, **nenhuma** negação é logada, e a procedência sobrevive
+  (sem `evaluator_unknown`). É a prova conjunta de CAP-01 e CAP-02;
+- `infra/test/probe_evaluator_pool_validation.sh` — 8 ramos, com controle positivo em P1 e
+  no PUT do P5, e pré-condições que reprovam se o parque deixar de ser o que o probe assume.
+
+### CAP-03 (R3) — o campo saiu, e a verificação parou num defeito alheio
+
+O censo era maior que a lista do ADR, e todos os sites foram tratados: schemas (incluindo
+um `.refine()` que exigia skill para `role === "orchestrator"` e era **inalcançável** — zero
+portadores), agent-registry (rota + Prisma), mcp-server (`registry-client.ts` e o carimbo do
+`agent_login`), bridge (cache, `role` sintetizado, syncer), 3 YAMLs de skill, fixtures e
+cenários 09/11 do e2e, e as listas de passthrough de `_publish_skill.py` e
+`smoke_internal_work_queue.sh`.
+
+**A coluna física SAI — e essa decisão foi invertida por medição, no meio do arco.** O plano
+(e a linha que estava escrita aqui) era mantê-la, pelo precedente
+`agent_group_members`/`agent_group_shifts` (2026-07-02) e AUT-32: *"não vale migração
+destrutiva por coluna inerte"*. Quem refutou foi o boot do próprio serviço:
+`scripts/bootstrap-db.js` confere schema VIVO × `schema.prisma` e **recusa subir com drift** —
+
+    [*] Changed the `skills` table
+      [-] Removed column `agent_role`
+    [bootstrap-db] FATAL: schema still does not match schema.prisma after bootstrap.
+
+O precedente não transferia, e a diferença é concreta: `agent_group_members` vive no schema
+`auth`, que **não tem guard de drift** — tabela esquecida ali é invisível. Aqui, coluna
+esquecida **derruba o serviço**. Manter a coluna exigiria manter o campo no modelo, isto é,
+não remover o eixo. Migração explícita `20260901000000_drop_skill_agent_role`.
+
+⚠️ Isto **não** afrouxa a regra contra `prisma db push --accept-data-loss` no boot: aquela é
+contra o DIFF AUTOMÁTICO decidir o que apagar. Esta é versionada, revisada e aplicada por
+`prisma migrate deploy` — o caminho que a própria regra manda usar.
+
+**Lição de método, e ela é da família da § Postura:** um precedente é evidência sobre o caso
+de onde veio. Transferi-lo pede verificar se o MECANISMO que o sustentava existe no destino —
+aqui o que mudava tudo era um guard de 4 linhas no boot de um pacote, e ele só apareceu quando
+o container recusou subir.
+
+**A lápide é 422 nomeando**, não silêncio: Zod ignora chave desconhecida, então quem
+continuasse mandando `agent_role` veria 200 sobre no-op — o custo medido da remoção do
+`unrestricted`.
+
+**O smoke mudou de natureza, e vale registrar por quê.** Na CAP-01 o T4 provava por
+ASSIMETRIA: virava o skill para `executor` pela API e mostrava que o contexto vinha do
+mesmo jeito. Com a CAP-03 essa mutação **deixou de existir** — o PUT recusa —, então a prova
+virou ESTRUTURAL: nada escreve, nada lê, e mandar o campo é erro nomeado. O T2 foi invertido
+no lugar (de "≥1 instância COM o campo" para "zero instâncias com o campo"), com **testemunha
+de presença** ao lado, porque "zero" também é o que se vê quando não há instância nenhuma.
+
+⚠️ **Verificação parcial, declarada.** Verde: schemas e mcp-server typecheck limpos, imagens
+de mcp-server e orchestrator-bridge construídas, 62 testes unitários. **Não verificado ao
+vivo:** a metade do agent-registry (o 422 e a ausência do campo no `GET /v1/skills`) — a
+imagem **não reconstrói**, por defeito PRÉ-EXISTENTE e alheio a este arco: `npm run build` é
+`tsc` puro sobre `include: ["src/**/*"]`, então os testes entram no build de produção, e
+`pools.test.ts:33` usa `await import()` no topo sob `module: CommonJS` (TS1378). Registrado
+como **AUT-35**, que bloqueia a CAP-03.
+
+O `TODO.md:5968` chamava isto de *"2 testes vermelhos"* e **subestimava**: não é suíte
+vermelha, é imagem que não nasce — nenhuma mudança no agent-registry alcança o runtime. É a
+diferença entre "existe" e "está pronto", medida mais uma vez.
+
+**Medição final, e ela é o retrato exato do bloqueio:** T1 ✓ (avaliador legítimo servido) ·
+T2 ✓ (zero instâncias com o campo) · T3 ✓ (procedência) · T5 ✓ (controle positivo) ·
+**T4 ✗ — HTTP 200 onde deveria vir 422**, porque o agent-registry serve a imagem anterior.
+O único vermelho é a metade bloqueada, e ele aponta para ela.
+
+#### O T2 quase mediu a proposição errada — pela terceira vez neste arco
+
+A 1ª versão contava TODAS as instâncias com `agent_role` no hash. Medido logo após o
+rebuild: **9 de 9 ainda tinham o campo** — e a leitura óbvia (*"a remoção não funcionou"*)
+estava errada. O hash da instância vive 1 h (TTL do `session_token`), e os 9 logins mais
+recentes eram de **18 minutos ANTES** do restart: hashes escritos pela imagem velha, que a
+remoção nunca teve chance de tocar.
+
+Contar a população inteira responde uma pergunta adjacente à que se fez — *"existe hash com
+o campo?"* em vez de *"o produtor ainda escreve o campo?"*. O corte é `logged_in_at` contra
+o início do próprio teste, e o T1 já garante um login fresco. Com a janela certa: **1
+instância nova, 0 com o campo.**
+
+É o mesmo par de erro do arco inteiro: *(a)* medir população que inclui o passado, e *(b)*
+uma pré-condição escrita por ANALOGIA — pus `/v1/health` na evaluation-api porque outros
+serviços usam esse caminho, e o smoke abortou; é `/health`. Analogia não é medição.
+
+
 ## 2026-08-31 — A lápide do `unrestricted` (AUT-15)
 
 O campo saiu da persistência e da API do auth-api. O caminho vivo já tinha fechado — o

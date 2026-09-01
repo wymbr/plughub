@@ -97,18 +97,9 @@ classification:
   type: orchestrator
   domain: quality
 
-# PROPÓSITO do agente (Fato A — escopo do artefato), declarado no registry.
-# É a ENTRADA DE AUTORIZAÇÃO dos gates de avaliação: `agent_login` lê este valor
-# do registry e o carimba no hash da instância; `evaluation_context_get` e
-# `evaluation_submit` exigem "evaluator" e falham FECHADO sem ele.
-#
-# Precisa vir daqui — e não do input do `agent_login` — porque um agente declarar
-# "sou evaluator" é asserção, não autorização. `evaluation_context_get` devolve o
-# ReplayContext com `original_content` DESMASCARADO.
-#
-# Não confundir com o papel de PARTICIPAÇÃO numa sessão (primary/specialist/
-# supervisor): esse é fato de (participante, sessão), vive no escopo da sessão.
-agent_role: evaluator
+# LÁPIDE — `agent_role: evaluator` vivia aqui. Removido em 2026-09-01 (CAP-03):
+# o eixo saiu com o gate que era seu único consumidor. Mandar o campo agora faz
+# o `PUT /v1/skills/{id}` responder 422 nomeando — não é ignorado em silêncio.
 
 entry: login
 
@@ -120,9 +111,10 @@ steps:
   # orchestrator", mecanismo que nunca foi implementado (avaliador rodava sem
   # token e morria no evaluation_context_get). Solução test-grade (opção A):
   # o agente loga a si mesmo via agent_login (contrato Spec 4.5) e usa o token
-  # emitido. participant_id = evaluation_id (UUID; o gate de role tolera
-  # instância desconhecida). agent_type_id = skill_id (pós-C2, a identidade do
-  # agente É o skill deployado — getAgentType resolve via GET /v1/skills/{id}).
+  # emitido. participant_id = evaluation_id (UUID). O `agent_type_id` gravado no
+  # resultado vem do TOKEN, não deste participant_id (CAP-02). agent_type_id do
+  # login = skill_id (pós-C2, a identidade do agente É o skill deployado —
+  # getAgentType resolve via GET /v1/skills/{id}).
   #
   # VISÃO FINAL (registrada no TODO): o avaliador será disparado pelo CALENDÁRIO
   # na data/hora da agenda da campanha (módulo quality, campo schedule já existe

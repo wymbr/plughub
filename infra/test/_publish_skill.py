@@ -77,7 +77,9 @@ def main() -> int:
         "classification": raw.get("classification", {"type": "orchestrator"}),
         "flow":           flow,
     }
-    for opt in ("delegation_input", "config_params", "agent_role"):
+    # `agent_role` saiu da lista em 2026-09-01 (CAP-03): o PUT agora o RECUSA com
+    # 422, então repassá-lo faria toda publicação de skill falhar.
+    for opt in ("delegation_input", "config_params"):
         if raw.get(opt):
             payload[opt] = raw[opt]
 

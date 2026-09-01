@@ -5,7 +5,7 @@
  */
 
 import { z } from "zod"
-import { SkillRefSchema, AgentRoleSchema } from "./skill"
+import { SkillRefSchema } from "./skill"
 import { ChannelSchema }  from "./common"
 
 // ─────────────────────────────────────────────
@@ -547,12 +547,10 @@ export const AgentFrameworkSchema = z.enum([
 ])
 export type AgentFramework = z.infer<typeof AgentFrameworkSchema>
 
-// A definição canônica de AgentRoleSchema migrou para `./skill`: a entidade
-// AgentType foi aposentada e a identidade do agente passou a ser o skill
-// deployado, então o propósito é fato do SKILL. Reexportado aqui só por
-// retrocompat do import path (`AgentTypeRegistrationSchema` abaixo ainda o usa).
-export { AgentRoleSchema }
-export type { AgentRole } from "./skill"
+// LÁPIDE — `AgentRoleSchema` reexportado daqui (CAP-03, 2026-09-01). O eixo foi
+// removido; ver a lápide em `./skill`. O campo `role` do
+// `AgentTypeRegistrationSchema` saiu junto: o bridge o sintetizava e ele tinha
+// ZERO leitores (verificado antes de remover).
 
 export const AgentClassificationSchema = z.object({
   type:     z.enum(["vertical", "horizontal"]),
@@ -568,7 +566,6 @@ export const AgentTypeRegistrationSchema = z.object({
 
   framework:       AgentFrameworkSchema,
   execution_model: z.enum(["stateless", "stateful"]),
-  role:            AgentRoleSchema.default("executor"),
 
   /** Para humanos: total de conversas incluindo conferências ativas */
   max_concurrent_sessions: z.number().int().min(1).default(1),
@@ -600,15 +597,10 @@ export const AgentTypeRegistrationSchema = z.object({
 
   /** null para agentes humanos */
   prompt_id: z.string().nullable().optional(),
-}).refine(
-  (agent: { role: string; skills: unknown[] }) => {
-    if (agent.role === "orchestrator") {
-      return agent.skills.length > 0
-    }
-    return true
-  },
-  { message: "Agentes orchestrator devem referenciar ao menos uma skill de orquestração" }
-)
+})
+// LÁPIDE — o `.refine()` que exigia skill para `role === "orchestrator"` saiu com o
+// campo (CAP-03). Ele era INALCANÇÁVEL: `orchestrator` teve zero portadores em 44
+// skills, então a regra nunca reprovou nada em nenhum momento da vida dela.
 export type AgentTypeRegistration = z.infer<typeof AgentTypeRegistrationSchema>
 
 // ─────────────────────────────────────────────

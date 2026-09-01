@@ -119,10 +119,11 @@ const MessageSendInputSchema = z.object({
  * `specialist` noutra ao mesmo tempo — guardá-lo em `{t}:agent:instance:{id}`
  * colapsaria multi-sessão, e foi por isso que NENHUM produtor jamais escreveu lá.
  * Os dois leitores liam um campo sem escritor e caíam no default desde sempre.
- * O que mora legitimamente no hash da instância é `agent_role` (propósito do
- * agente: executor/orchestrator/evaluator), que é constante por toda a vida dela
- * — outro fato, outro nome. Ver CLAUDE.md § "Never store a narrower-scope fact
- * in a wider-scope field".
+ * O contraste que esta nota usava era o `agent_role` (propósito do agente), que
+ * morava legitimamente ali por ser constante na vida da instância. Ele foi
+ * REMOVIDO em 2026-09-01 (CAP-03) — some o exemplo, fica a regra: o hash da
+ * instância só admite fato da INSTÂNCIA. Ver CLAUDE.md § "Never store a
+ * narrower-scope fact in a wider-scope field".
  *
  * `resolved` distingue "li e vale primary" de "não consegui ler" — o gate de
  * @mention exige leitura POSITIVA, porque um gate de autorização que falha aberto

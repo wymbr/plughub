@@ -27,7 +27,6 @@ export interface AgentTypeInfo {
    * Opcional no tipo para não obrigar fixtures/stubs antigos a declará-lo — os
    * consumidores aplicam `?? "executor"`, que fecha por omissão.
    */
-  agent_role?:             string
 }
 
 export interface RegistryClient {
@@ -57,20 +56,12 @@ export function createRegistryClient(baseUrl: string): RegistryClient {
       }
       const data = await res.json() as Record<string, unknown>
 
-      // agent_role: fecha por omissão. Um registry antigo (sem a coluna) ou uma
-      // resposta truncada devolve undefined → "executor", que NÃO abre nenhum
-      // gate. Privilégio nunca vem de campo ausente.
-      const rawRole = data["agent_role"]
-      const agent_role =
-        rawRole === "evaluator" || rawRole === "orchestrator" ? rawRole : "executor"
-
       return {
         agent_type_id:           (data["skill_id"] as string | undefined) ?? agentTypeId,
         max_concurrent_sessions: 1,
         execution_model:         "stateless",
         pools:                   [],
         permissions:             [],
-        agent_role,
       }
     },
   }
@@ -86,7 +77,6 @@ export function createStubRegistryClient(agentTypes: AgentTypeInfo[]): RegistryC
       // Garante que campos adicionados retroativamente existem mesmo em stubs antigos
       if (!found.permissions)    found.permissions    = []
       if (!found.execution_model) found.execution_model = "stateless"
-      if (!found.agent_role)      found.agent_role      = "executor"
       return found
     },
   }

@@ -1,3 +1,24 @@
+// tsconfig.json — PRODUÇÃO (typecheck + emit). Ver `tsconfig.test.json` p/ os testes.
+//
+// POR QUE ESTE ARQUIVO FOI PARTIDO EM DOIS (AUT-35, 2026-09-01)
+// ============================================================
+// `npm run build` é `tsc` puro, e o `include: ["src/**/*"]` original arrastava
+// `src/__tests__/**` para dentro do build de PRODUÇÃO. Quando `pools.test.ts` passou a
+// usar `await import()` no topo (AUT-24), o `module: CommonJS` daqui o rejeitou com
+// **TS1378** — e a IMAGEM do agent-registry deixou de nascer. Não era suíte vermelha:
+// era nenhuma mudança do pacote alcançando o runtime, por dias, com o defeito
+// registrado no `TODO.md` como "2 testes vermelhos".
+//
+// A correção de uma linha seria excluir os testes daqui e parar. Ela desbloqueia e
+// **apaga a cobertura de tipos dos testes** — exatamente o que o ramo C do
+// `probe_apifetch_reauth.sh` existe para garantir noutro pacote. Por isso são dois
+// arquivos: este emite produção, o irmão typecheca os testes.
+//
+// E os testes são typecheckados sob `module: ES2022` de propósito — é o sistema de
+// módulos que o **vitest** de fato usa (transpila com esbuild, semântica ESM).
+// Typechecká-los sob CommonJS, como antes, media um mundo em que eles não rodam.
+// Produção continua CommonJS no typecheck E no emit: verificar sob um sistema de
+// módulos e emitir sob outro esconderia justamente a classe de erro do TS1378.
 {
   "compilerOptions": {
     "target":                     "ES2020",
@@ -14,5 +35,5 @@
     "incremental":                true
   },
   "include":  ["src/**/*"],
-  "exclude":  ["node_modules", "dist"]
+  "exclude":  ["node_modules", "dist", "src/**/__tests__/**"]
 }

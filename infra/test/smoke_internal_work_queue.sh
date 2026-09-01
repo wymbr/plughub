@@ -191,7 +191,8 @@ payload = {
     "classification": src.get("classification", {"type": "orchestrator"}),
     "flow": flow,
 }
-for k in ("delegation_input", "config_params", "agent_role"):
+# `agent_role` saiu da lista (CAP-03, 2026-09-01): o PUT o recusa com 422.
+for k in ("delegation_input", "config_params"):
     if src.get(k): payload[k] = src[k]
 base = os.environ.get("AGENT_REGISTRY_URL", "http://agent-registry:3300")
 req = urllib.request.Request(

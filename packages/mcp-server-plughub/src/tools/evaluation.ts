@@ -689,49 +689,18 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
   // evaluation-api (ex.: pre-review). Lida do env; header omitido quando vazia (demo).
   const evalServiceToken = deps.serviceToken ?? process.env["PLUGHUB_EVALUATION_SERVICE_TOKEN"] ?? ""
 
-  /**
-   * Resolve a instância de um `participant_id` e devolve seu propósito declarado
-   * (`agent_role`) junto com o `agent_type_id`.
-   *
-   * Por que resolver em vez de usar o `participant_id` cru: o hash é indexado por
-   * `instance_id`, e os dois só coincidem por acidente no avaliador do Arc 6 (que
-   * faz `agent_login` com `instance_id = evaluation_id` e passa o MESMO valor como
-   * `participant_id`). Para qualquer outro participante — especialista, humano,
-   * agente registrado via `agent_busy` — são valores distintos. O mapa
-   * `{tenant}:participant:{id}:instance` (escrito por `agent_busy`) é a mesma via
-   * que o `message_send` já usa; o fallback ao id cru cobre o caso do avaliador.
-   *
-   * `resolved: false` significa "não consegui PROVAR o papel" — distinto de
-   * "provei que é executor". Quem chama deve NEGAR nos dois casos, mas a mensagem
-   * de erro muda, e um gate que não prova nada não deve autorizar.
-   */
-  async function readAgentIdentity(
-    tenantId: string,
-    participantId: string,
-  ): Promise<{ resolved: boolean; agentRole: string; agentTypeId: string; instanceKey: string }> {
-    let instanceId = participantId
-    try {
-      const mapped = await redis.get(`${tenantId}:participant:${participantId}:instance`)
-      if (mapped) instanceId = mapped
-    } catch { /* fallback: participant_id cru (caminho do avaliador) */ }
-
-    const instanceKey = `${tenantId}:agent:instance:${instanceId}`
-    try {
-      const [roleRaw, typeRaw] = await Promise.all([
-        redis.hget(instanceKey, "agent_role"),
-        redis.hget(instanceKey, "agent_type_id"),
-      ])
-      return {
-        resolved:    Boolean(roleRaw),
-        agentRole:   roleRaw ?? "",
-        agentTypeId: typeRaw ?? "",
-        instanceKey,
-      }
-    } catch (err) {
-      console.warn(`[evaluation] leitura da instância falhou: ${instanceKey} — ${String(err)}`)
-      return { resolved: false, agentRole: "", agentTypeId: "", instanceKey }
-    }
-  }
+  // ── LÁPIDE — `readAgentIdentity` (CAP-01/CAP-02, 2026-09-01) ──────────────
+  //
+  // Lia `agent_role` + `agent_type_id` de `{tenant}:agent:instance:{id}`,
+  // resolvido a partir do `participant_id` do INPUT. Tinha dois consumidores e
+  // ambos caíram: o gate de papel (removido — ver evaluation_context_get) e a
+  // procedência do `evaluation_submit`, que passou a ler o `agent_type_id` do
+  // session_token ASSINADO. Como `agent_login` é o ÚNICO escritor dos dois
+  // valores, o token é a mesma fonte — só que não vem do input.
+  //
+  // Não reviver para "resolver participante": o mapa
+  // `{tenant}:participant:{id}:instance` continua existindo e é o que o
+  // `message_send` usa; o que morreu foi decidir/atribuir por ele.
 
   // ── transcript_get ────────────────────────────────────────────────────────
   server.tool(
@@ -962,49 +931,33 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
     "sentimento, participantes e metadados da sessão original. " +
     "Arc 6: quando o ReplayContext contém evaluation_form, campaign_id ou instance_id, " +
     "esses campos são também surfaced como top-level convenience fields na resposta. " +
-    "Disponível apenas para agentes cujo skill declara agent_role: evaluator no registry. " +
     "Requer que o Session Replayer tenha processado a sessão previamente. " +
     "Spec: Session Replayer.",
     EvaluationContextGetInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
+        // `participant_id` continua sendo lido — mas só como ECO no contrato de
+        // resposta (ver o `return ok({...})` no fim do handler). Depois da remoção
+        // do gate ele não decide mais NADA aqui.
         const { session_token, session_id, participant_id } =
           EvaluationContextGetInputSchema.parse(input)
 
+        // ── Por que NÃO há gate de papel (ADR adr-remove-agent-role-axis, D1) ─
+        //
+        // Havia aqui um gate `agent_role === "evaluator"`. Ele não autenticava o
+        // chamador: o `session_token` carrega o `instance_id` ASSINADO e o gate o
+        // DESCARTAVA, consultando o papel do `participant_id` que veio do INPUT.
+        // Bastava nomear qualquer avaliador para atravessar — o próprio comentário
+        // que ele carregava dizia "auto-declaração é asserção, não autorização".
+        //
+        // E o cenário que o justificava não fecha: para receber `original_content`
+        // desmascarado é preciso nomear um `session_id` simultaneamente FECHADO,
+        // AMOSTRADO e dentro do TTL de 1 h do ReplayContext — e nenhuma tool
+        // devolve lista de sessões a um agente. O que ele de fato separava era
+        // avaliador MAL CONFIGURADO: erro de deploy, não fronteira de segurança.
+        // Essa detecção passa a viver onde o erro nasce — a validação da campanha
+        // que declara `evaluator_pool` (CAP-04), não em runtime servindo produção.
         const { tenant_id } = verifySessionToken(session_token)
-
-        // ── Gate de autorização — FALHA FECHADO ──────────────────────────────
-        //
-        // Este endpoint devolve o ReplayContext, que carrega `original_content`
-        // DESMASCARADO. O gate anterior lia o campo `role` (que produtor nenhum
-        // escrevia) com default `""`, e a condição era `if (role && role !== ...)`:
-        // string vazia curto-circuitava e a verificação simplesmente NÃO ACONTECIA.
-        // Qualquer agente com session_token válido lia PII desmascarada.
-        //
-        // Agora lê `agent_role`, carimbado pelo `agent_login` a partir do REGISTRY
-        // (nunca do input do agente — auto-declaração é asserção, não autorização),
-        // e exige leitura POSITIVA: sem prova de propósito, nega. Um gate que não
-        // consegue provar nada não deve autorizar.
-        //
-        // `reviewer` saiu do vocabulário aceito aqui: a revisão humana do Arc 13 é
-        // o contrato REST (`contestation_router`) com Bearer JWT + ABAC, não MCP.
-        const identity = await readAgentIdentity(tenant_id, participant_id)
-
-        if (!identity.resolved) {
-          return mcpError(
-            "unauthorized",
-            `evaluation_context_get requer agent_role 'evaluator' declarado no registry. ` +
-            `Não foi possível LER o papel do participante '${participant_id}' ` +
-            `(hash ${identity.instanceKey} sem campo "agent_role"). ` +
-            `A instância fez agent_login? O skill declara agent_role: evaluator?`
-          )
-        }
-        if (identity.agentRole !== "evaluator") {
-          return mcpError(
-            "unauthorized",
-            `evaluation_context_get requer agent_role 'evaluator' (atual: ${identity.agentRole})`
-          )
-        }
 
         // Lê ReplayContext do Redis — escrito pelo Replayer
         const contextKey = `${tenant_id}:replay:${session_id}:context`
@@ -1219,31 +1172,25 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           dimension_threads, evaluated_agent_type,
         } = parsed
 
-        const { tenant_id } = verifySessionToken(session_token)
-
-        // ── Identidade + propósito do avaliador ──────────────────────────────
-        const identity = await readAgentIdentity(tenant_id, participant_id)
-
-        // Gate simétrico ao do evaluation_context_get: só quem tem propósito
-        // `evaluator` DECLARADO NO REGISTRY escreve resultado de avaliação.
-        // Falha fechado — sem prova de propósito, nega.
-        if (identity.agentRole !== "evaluator") {
-          return mcpError(
-            "unauthorized",
-            `evaluation_submit requer agent_role 'evaluator' declarado no registry ` +
-            `(lido: ${identity.agentRole || "<ausente>"}). ` +
-            `Participante '${participant_id}' → ${identity.instanceKey}.`
-          )
-        }
+        // ── Procedência do avaliador (CAP-02) ────────────────────────
+        //
+        // O `agent_type_id` vem do session_token VERIFICADO, nunca de um hash
+        // indexado pelo `participant_id` que veio do INPUT. Os dois valores nascem
+        // do MESMO `agent_login` (runtime.ts assina o token e escreve o hash com o
+        // valor do registry, e é o único escritor do campo) — mas só o do token é
+        // ASSINADO. Procedência lida do input seria tão auto-declarada quanto era a
+        // autorização que saiu daqui (ADR adr-remove-agent-role-axis § Pendência).
+        const { tenant_id, agent_type_id: token_agent_type_id } =
+          verifySessionToken(session_token)
 
         // Degradação nunca é silenciosa: "evaluator_unknown" é um valor PLAUSÍVEL
         // que atravessa o pipeline inteiro e só aparece como buraco nos cortes por
         // avaliador do Arc 13. Se cair aqui, o log diz por quê.
-        let agent_type_id = identity.agentTypeId
+        let agent_type_id = token_agent_type_id
         if (!agent_type_id) {
           agent_type_id = "evaluator_unknown"
           console.warn(
-            `[evaluation_submit] agent_type_id AUSENTE em ${identity.instanceKey} — ` +
+            `[evaluation_submit] agent_type_id AUSENTE no session_token — ` +
             `resultado será carimbado como "evaluator_unknown" e os cortes por ` +
             `avaliador (calibração Arc 13) ficam cegos para esta avaliação.`
           )

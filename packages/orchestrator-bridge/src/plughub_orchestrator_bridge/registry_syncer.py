@@ -696,12 +696,10 @@ class RegistrySyncer:
             if raw.get("config_params"):
                 payload["config_params"] = raw["config_params"]
 
-            # agent_role — propósito do agente (executor|orchestrator|evaluator).
-            # Só entra no payload quando o YAML DECLARA: a rota preserva o valor do
-            # DB quando a chave está ausente (provisioning precedence — uma edição de
-            # UI não pode ser revertida a "executor" por um PUT que nem cita o campo).
-            if raw.get("agent_role"):
-                payload["agent_role"] = raw["agent_role"]
+            # LÁPIDE — `agent_role` saiu do payload em 2026-09-01 (CAP-03). O campo
+            # foi removido do modelo e a rota PUT agora o RECUSA com 422 nomeando;
+            # continuar propagando faria todo boot do syncer reprovar em cada skill
+            # cujo YAML ainda declare o campo. Os YAMLs foram limpos junto.
 
             await self._upsert_skill(http, headers, skill_id, payload, report)
 

@@ -172,10 +172,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     // D1: Login → ready → busy (simulated as evaluator)
     try {
-      // Loga como o skill de AVALIAÇÃO: o gate de `evaluation_context_get` exige
-      // `agent_role: evaluator` declarado no registry, e `skill_retencao_oferta_v1` é
-      // executor. O `agent_busy` abaixo grava o mapa participant→instance, que é
-      // como a tool resolve o hash a partir do participant_id.
+      // Loga como o skill de AVALIAÇÃO. O gate de papel que exigia isto foi
+      // REMOVIDO (CAP-01, 2026-09-01) — o login segue aqui porque o token é a
+      // fonte da PROCEDÊNCIA do resultado (CAP-02), não porque autoriza.
       const login = await mcp.agentLogin(ctx.tenantId, "skill_avaliacao_v1", evalInstanceId);
       evalToken = login.session_token;
       await mcp.agentReady(evalToken);

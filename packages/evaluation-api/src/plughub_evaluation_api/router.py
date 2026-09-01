@@ -905,6 +905,91 @@ async def list_campaigns(
     return {"tenant_id": tenant_id, "campaigns": rows, "count": len(rows)}
 
 
+# ── CAP-04 — o pool avaliador roda mesmo um flow de avaliação? ────────────────
+#
+# É a mitigação do ÚNICO efeito real da remoção do gate de `agent_role`
+# (`docs/adr/adr-remove-agent-role-axis.md` § Riscos 1): perdeu-se a detecção de
+# avaliador MAL CONFIGURADO. Ela volta AQUI, onde o erro nasce — alguém declara
+# `evaluator_pool` — e não em runtime servindo produção.
+#
+# O discriminador é DERIVADO DO ARTEFATO: o flow que o pool de fato executa
+# invoca as tools de avaliação? Não é um campo declarado, e isso é deliberado —
+# qualquer campo novo (`is_evaluator`, `purpose: evaluation`) seria o eixo
+# `agent_role` renascendo com outro nome, que é exatamente a alternativa que o
+# ADR refuta. Um flow que não chama `evaluation_context_get` não consegue avaliar,
+# tenha o rótulo que tiver.
+#
+# Fonte = slot `current` do POOL (`yaml_snapshot`), não a definição viva do skill:
+# é o snapshot que roda. O `deploy` do pool é NULL desde o modelo de slots, então
+# não há segunda fonte a consultar.
+_EVALUATION_TOOLS = {"evaluation_context_get", "evaluation_submit"}
+
+
+async def _evaluator_pool_verdict(tenant_id: str, pool_id: str) -> tuple[str, str]:
+    """Devolve (verdict, detail) com verdict em {ok, not_evaluator, unverifiable}.
+
+    ⚠️ `unverifiable` NUNCA é `not_evaluator`. Falha de dependência degrada para
+    ALLOW barulhento (mesma postura do `contact_eligibility_check`): este é um
+    detector de erro de deploy, não uma fronteira de segurança, e recusar
+    campanha porque o agent-registry piscou trocaria uma detecção barata por uma
+    indisponibilidade. O log nomeia O QUE deixou de ser verificado — "degradação
+    nunca é silenciosa" exige dizer o que perdeu validade, não só que degradou.
+    """
+    base = (settings.agent_registry_url or "").rstrip("/")
+    if not base:
+        return "unverifiable", "agent_registry_url não configurada"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{base}/v1/pools/{pool_id}/slots",
+                headers={"x-tenant-id": tenant_id},
+            )
+            if resp.status_code == 404:
+                return "not_evaluator", f"pool '{pool_id}' não existe no registry"
+            resp.raise_for_status()
+            current = ((resp.json() or {}).get("slots") or {}).get("current") or {}
+    except Exception as exc:
+        return "unverifiable", f"agent-registry inacessível: {exc}"
+
+    if not current.get("set"):
+        # Sem slot promovido o pool não executa flow nenhum — mas "não consegui
+        # ver o artefato" e "vi o artefato e ele não avalia" são fatos diferentes,
+        # e colapsá-los recriaria o filtro que filtra ESVAZIANDO (o defeito da F2).
+        return "unverifiable", f"pool '{pool_id}' sem slot 'current' promovido"
+
+    snapshot = current.get("yaml_snapshot") or {}
+    tools = {
+        str(step.get("tool"))
+        for step in (snapshot.get("steps") or [])
+        if isinstance(step, dict) and step.get("tool")
+    }
+    hit = _EVALUATION_TOOLS & tools
+    if hit:
+        return "ok", f"flow invoca {sorted(hit)}"
+    return "not_evaluator", (
+        f"o flow deployado em '{pool_id}' (skill "
+        f"{current.get('skill_id') or '?'}) não invoca nenhuma de "
+        f"{sorted(_EVALUATION_TOOLS)} — não consegue avaliar"
+    )
+
+
+async def _guard_evaluator_pool(tenant_id: str, evaluator_pool: str | None) -> None:
+    """Recusa `evaluator_pool` que comprovadamente não avalia. NULL = default
+    global, não é declaração, e por isso não é verificado."""
+    if not evaluator_pool:
+        return
+    verdict, detail = await _evaluator_pool_verdict(tenant_id, evaluator_pool)
+    if verdict == "not_evaluator":
+        raise HTTPException(400, detail=f"evaluator_pool inválido: {detail}")
+    if verdict == "unverifiable":
+        logger.warning(
+            "CAP-04: evaluator_pool '%s' (tenant %s) ACEITO SEM VERIFICAÇÃO — %s. "
+            "O que deixa de valer: a garantia de que o pool avaliador roda um flow "
+            "que invoca %s. Uma campanha pode ficar sem avaliador funcional.",
+            evaluator_pool, tenant_id, detail, sorted(_EVALUATION_TOOLS),
+        )
+
+
 @router.post("/v1/evaluation/campaigns", status_code=201)
 async def create_campaign(body: CampaignCreate, request: Request) -> dict:
     _require_service_or_eval_write(request)   # provisionamento (seed/e2e) OU UI
@@ -913,6 +998,7 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
     form = await _db.get_form(pool, body.form_id, body.tenant_id)
     if not form:
         raise HTTPException(400, detail=f"form {body.form_id} not found for tenant")
+    await _guard_evaluator_pool(body.tenant_id, body.evaluator_pool)
     data = body.model_dump()
     row = await _db.create_campaign(
         pool,
@@ -956,6 +1042,9 @@ async def get_campaign(campaign_id: str, tenant_id: str, request: Request) -> di
 async def update_campaign(campaign_id: str, tenant_id: str, body: CampaignUpdate, request: Request) -> dict:
     _require_service_or_eval_write(request)   # provisionamento é upsert: create + update
     pool = _pool(request)
+    # CAP-04 — o update também DECLARA o pool avaliador; gatear só o create
+    # deixaria a porta aberta pelo caminho mais usado (a tela EDITA, não recria).
+    await _guard_evaluator_pool(tenant_id, body.evaluator_pool)
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     row = await _db.update_campaign(pool, campaign_id, tenant_id, **updates)
     if not row:

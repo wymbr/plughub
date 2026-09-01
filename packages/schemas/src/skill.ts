@@ -31,37 +31,31 @@ export const SkillClassificationSchema = z.object({
 })
 
 // ─────────────────────────────────────────────
-// Propósito do agente (Fato A — escopo do artefato)
+// LÁPIDE — `agent_role` / `AgentRoleSchema` (CAP-03, 2026-09-01)
 // ─────────────────────────────────────────────
+//
+// O terceiro eixo de papel foi REMOVIDO. Ele existia por um consumidor só — o gate
+// de `evaluation_context_get`/`evaluation_submit` —, e esse gate saiu em 2026-09-01
+// (CAP-01) porque não impedia cenário nenhum: lia o papel de um `participant_id`
+// vindo do INPUT, com o `instance_id` assinado do token em mãos e descartado.
+//
+// Os outros dois valores nunca tiveram consumidor: `orchestrator` teve ZERO
+// portadores em 44 skills e se comportava como `executor`; o `role` sintetizado
+// pelo bridge tinha zero leitores (verificado).
+//
+// ⚠️ O que este arquivo NÃO desfaz, e continua valendo: papel de PARTICIPAÇÃO
+// (`primary`/`specialist`/`supervisor`) é fato de (participante, sessão) e nunca
+// cabe no hash da instância — a mesma instância é `primary` numa sessão e
+// `specialist` noutra ao mesmo tempo. Era a confusão desses dois escopos que este
+// eixo existia para desfazer, e a distinção sobrevive à remoção do campo.
+//
+// A detecção de avaliador mal configurado mudou de casa: validação no
+// create/update de campanha de que o `evaluator_pool` roda um flow que invoca as
+// tools de avaliação (CAP-04) — discriminador DERIVADO do artefato. Um campo novo
+// aqui seria este eixo renascendo com outro nome.
+//
+// Ver `docs/adr/adr-remove-agent-role-axis.md`.
 
-/**
- * `agent_role` — PROPÓSITO do agente, declarado no registry.
- *
- * Não confundir com o **papel de participação numa sessão** (`primary` |
- * `specialist` | `supervisor`), que é fato de (participante, sessão) e vive no
- * escopo da sessão. São dois fatos de escopos diferentes que o código já
- * confundiu sob um único campo chamado `role`:
- *
- *   - `agent_role` (aqui)      → escopo do ARTEFATO. Estável, declarado, é
- *                                 config do tenant. Entrada de AUTORIZAÇÃO.
- *   - papel de participação    → escopo (participante, sessão). Uma mesma
- *                                 instância é `primary` numa sessão e
- *                                 `specialist` noutra ao mesmo tempo.
- *
- * Mora no SKILL — e não num `agent_type` — porque a entidade AgentType foi
- * aposentada: no modelo deploy-driven a identidade do agente É o skill
- * deployado (`agent_login` valida contra `GET /v1/skills/{id}`).
- *
- * **Invariante de autorização**: quem consome isto (ex.: o gate de
- * `evaluation_context_get`) deve lê-lo do REGISTRY, nunca de um input do
- * agente. Um agente declarar "sou evaluator" é asserção, não autorização.
- */
-export const AgentRoleSchema = z.enum([
-  "executor",       // resolve diretamente — padrão
-  "orchestrator",   // coordena outros via skill flow
-  "evaluator",      // avalia qualidade pós-sessão (nunca recebe tráfego ao vivo)
-])
-export type AgentRole = z.infer<typeof AgentRoleSchema>
 
 // ─────────────────────────────────────────────
 // Tools da skill
@@ -1342,15 +1336,6 @@ export const SkillSchema = z.object({
   description: z.string(),
 
   classification: SkillClassificationSchema,
-
-  /**
-   * agent_role — propósito do agente (ver AgentRoleSchema).
-   *
-   * Default `executor`: todo skill existente segue inalterado, e um skill que
-   * esquece de declarar NÃO ganha privilégio por omissão (o gate de avaliação
-   * exige `evaluator` positivo). Campo de config do tenant — editável na UI.
-   */
-  agent_role: AgentRoleSchema.default("executor"),
 
   /**
    * System prompt instruction — obrigatório para skills verticais/horizontais (LLM-driven).

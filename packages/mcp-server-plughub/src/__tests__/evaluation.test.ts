@@ -19,7 +19,14 @@ const mockRedis = {
 }
 
 vi.mock("../infra/jwt", () => ({
-  verifySessionToken: (_token: string) => ({ tenant_id: "tenant_test" }),
+  // O session_token real carrega tenant_id + agent_type_id + instance_id
+  // (infra/jwt.ts SessionTokenPayload). O mock antigo só devolvia o tenant, e
+  // por isso não conseguia distinguir procedência-do-token de procedência-do-hash.
+  verifySessionToken: (_token: string) => ({
+    tenant_id:     "tenant_test",
+    agent_type_id: "agente_avaliacao_v1",
+    instance_id:   "evinstance_from_token",
+  }),
   InvalidTokenError:  class InvalidTokenError extends Error {},
 }))
 
@@ -162,52 +169,26 @@ describe("evaluation_context_get", () => {
     expect(text.error).toBe("replay_not_ready")
   })
 
-  it("rejects participant with role 'primary'", async () => {
-    mockRedis.hget.mockResolvedValue("primary")
+  // ── TESTEMUNHA — o gate de papel SAIU (CAP-01, ADR adr-remove-agent-role-axis)
+  //
+  // Aqui havia TRÊS testes de recusa (`primary`, `reviewer`, papel ilegível) e um
+  // quarto que provava a resolução `participant→instance`. Os quatro afirmavam um
+  // gate que não autenticava o chamador: ele lia o papel do `participant_id` vindo
+  // do INPUT, com o `instance_id` ASSINADO em mãos e descartado. Invertidos em vez
+  // de apagados — apagar deixaria a remoção sem prova de que ela é o comportamento
+  // pretendido, e "trocar o eixo" voltaria à mesa em três meses.
+  //
+  // O teste do mapa `{tenant}:participant:{id}:instance` não foi invertido, foi
+  // REMOVIDO: o mecanismo que ele exercia (`readAgentIdentity`) não existe mais.
+  // O mapa continua vivo e é o que o `message_send` usa — o que morreu foi decidir
+  // por ele.
+  it.each([
+    ["primary",           "primary"],
+    ["reviewer",          "reviewer"],
+    ["papel ilegível",    null],
+  ])("entrega o contexto a participante com papel %s (gate removido)", async (_label, role) => {
+    mockRedis.hget.mockResolvedValue(role)
     mockRedis.get.mockResolvedValue(JSON.stringify(makeReplayContext()))
-
-    const { rawTool } = makeServer()
-    const raw = await rawTool("evaluation_context_get", {
-      session_token:  VALID_TOKEN,
-      session_id:     SESSION_ID,
-      participant_id: PARTICIPANT_ID,
-    })
-
-    expect(raw.isError).toBe(true)
-    const text = JSON.parse(raw.content[0]!.text)
-    expect(text.error).toBe("unauthorized")
-  })
-
-  it("rejects participant with agent_role 'reviewer'", async () => {
-    // `reviewer` saiu do vocabulário aceito: a revisão humana do Arc 13 é o
-    // contrato REST (contestation_router) com Bearer JWT + ABAC, não MCP.
-    // `AgentRoleSchema` (registry) nem sequer tem esse valor.
-    mockRedis.hget.mockResolvedValue("reviewer")
-    mockRedis.get.mockResolvedValue(JSON.stringify(makeReplayContext()))
-
-    const { rawTool } = makeServer()
-    const raw = await rawTool("evaluation_context_get", {
-      session_token:  VALID_TOKEN,
-      session_id:     SESSION_ID,
-      participant_id: PARTICIPANT_ID,
-    })
-
-    expect(raw.isError).toBe(true)
-    expect(JSON.parse(raw.content[0]!.text).error).toBe("unauthorized")
-  })
-
-  it("resolves the instance via the participant→instance map", async () => {
-    // O hash é indexado por `instance_id`; o caller passa `participant_id`. Os dois
-    // só coincidem por acidente no avaliador do Arc 6. O mapa
-    // `{tenant}:participant:{id}:instance` (escrito pelo agent_busy) é a via correta
-    // — a mesma que o message_send já usa.
-    const MAPPED_INSTANCE = "inst_evaluator_42"
-    mockRedis.get.mockImplementation((key: string) =>
-      Promise.resolve(
-        key.includes(":participant:")
-          ? MAPPED_INSTANCE
-          : JSON.stringify(makeReplayContext()),
-      ))
 
     const { callTool } = makeServer()
     const result = await callTool("evaluation_context_get", {
@@ -217,28 +198,23 @@ describe("evaluation_context_get", () => {
     }) as Record<string, unknown>
 
     expect(result.session_id).toBe(SESSION_ID)
-    expect(mockRedis.hget).toHaveBeenCalledWith(
-      `tenant_test:agent:instance:${MAPPED_INSTANCE}`,
-      "agent_role",
-    )
+    expect(result.context).toBeDefined()
   })
 
-  it("rejects when agent_role cannot be read (fails closed)", async () => {
-    // Regressão do buraco corrigido: o gate antigo tinha default "" e a condição
-    // `if (role && ...)` curto-circuitava — a verificação NÃO acontecia e o
-    // ReplayContext (com original_content DESMASCARADO) saía para qualquer um.
-    mockRedis.hget.mockResolvedValue(null)
+  it("não consulta o hash da instância para decidir nada", async () => {
+    // Testemunha estrutural: enquanto esta asserção valer, não há como um gate de
+    // papel voltar a nascer aqui lendo `{tenant}:agent:instance:{id}` — que é
+    // exatamente a forma que a remoção desfez.
     mockRedis.get.mockResolvedValue(JSON.stringify(makeReplayContext()))
 
-    const { rawTool } = makeServer()
-    const raw = await rawTool("evaluation_context_get", {
+    const { callTool } = makeServer()
+    await callTool("evaluation_context_get", {
       session_token:  VALID_TOKEN,
       session_id:     SESSION_ID,
       participant_id: PARTICIPANT_ID,
     })
 
-    expect(raw.isError).toBe(true)
-    expect(JSON.parse(raw.content[0]!.text).error).toBe("unauthorized")
+    expect(mockRedis.hget).not.toHaveBeenCalled()
   })
 
   it("extracts participant_summary fields correctly", async () => {
@@ -265,12 +241,11 @@ describe("evaluation_context_get", () => {
 describe("evaluation_submit", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // O hash da instância responde por CAMPO: `agent_role` é a entrada de
-    // autorização do gate, `agent_type_id` é a identidade carimbada no resultado.
-    // Um `mockResolvedValue` único devolveria o agent_type_id também para
-    // `agent_role` e o gate negaria tudo.
-    mockRedis.hget.mockImplementation((_key: string, field: string) =>
-      Promise.resolve(field === "agent_role" ? "evaluator" : "agente_avaliacao_v1"))
+    // O hash da instância não é mais consultado por estas tools (o gate saiu e a
+    // procedência passou ao token). O mock fica devolvendo o `agent_type_id` do
+    // hash DE PROPÓSITO e com valor DIFERENTE do token: é ele que faz a testemunha
+    // de procedência abaixo poder reprovar.
+    mockRedis.hget.mockResolvedValue("agente_do_hash_v1")
     mockRedis.get.mockResolvedValue(JSON.stringify(makeReplayContext()))
     mockKafka.publish.mockResolvedValue(undefined)
   })
@@ -289,16 +264,28 @@ describe("evaluation_submit", () => {
     is_benchmark:       false,
   }
 
-  it("rejects submit when agent_role is not evaluator (fails closed)", async () => {
-    mockRedis.hget.mockImplementation((_key: string, field: string) =>
-      Promise.resolve(field === "agent_role" ? "executor" : "agente_retencao_v1"))
+  it("submete mesmo com o hash dizendo executor (gate removido)", async () => {
+    mockRedis.hget.mockResolvedValue("executor")
 
-    const { rawTool } = makeServer()
-    const raw = await rawTool("evaluation_submit", baseInput)
+    const { callTool } = makeServer()
+    const result = await callTool("evaluation_submit", baseInput) as Record<string, unknown>
 
-    expect(raw.isError).toBe(true)
-    expect(JSON.parse(raw.content[0]!.text).error).toBe("unauthorized")
-    expect(mockKafka.publish).not.toHaveBeenCalled()
+    expect(result.submitted).toBe(true)
+    expect(mockKafka.publish).toHaveBeenCalled()
+  })
+
+  it("carimba a procedência com o agent_type_id do TOKEN, não o do hash (CAP-02)", async () => {
+    // Esta é a asserção que distingue as duas fontes. O hash devolve
+    // "agente_do_hash_v1" (indexado pelo participant_id do INPUT) e o token
+    // devolve "agente_avaliacao_v1" (assinado no agent_login). Se alguém voltar a
+    // ler o hash, este teste fica vermelho — que é o ponto.
+    const { callTool } = makeServer()
+    await callTool("evaluation_submit", baseInput)
+
+    const [, payload] = mockKafka.publish.mock.calls.at(-1)!
+    expect(JSON.stringify(payload)).toContain("agente_avaliacao_v1")
+    expect(JSON.stringify(payload)).not.toContain("agente_do_hash_v1")
+    expect(mockRedis.hget).not.toHaveBeenCalled()
   })
 
   it("publishes evaluation.completed with eval_status=submitted (Arc 3 baseline)", async () => {

@@ -223,10 +223,6 @@ sem ela, "trocar o eixo" é reproposto em três meses.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| CAP-01 | **R1 — remover os dois `if` de `agent_role`** (`evaluation_context_get`, `evaluation_submit`), MANTENDO `readAgentIdentity`: sai o gate, não a leitura, que o `submit` usa para procedência. Inverter o `smoke_agent_role_gate.sh` em **testemunha** — o T4 passa a afirmar que o contexto É entregue e que a procedência sobrevive | `aberto` | ADR § D1, D3 |
-| CAP-02 | **R2 — decidir a procedência do `evaluation_submit`.** O `agent_type_id` gravado no resultado vem de um hash indexado por `participant_id` **do input**, então é tão auto-declarado quanto a autorização era. NÃO bloqueia a R1 (o estado não piora), mas se a procedência do avaliador importa ao Arc 13, tem de vir do `instance_id` do token | `aberto` | ADR § Pendência |
-| CAP-03 | **R3 — remover `agent_role` do schema, registry, syncer e bridge**; `orchestrator` (zero portadores) e o `role` sintetizado do bridge (`main.py:652`, zero leitores — verificado) saem junto. Recusar o campo **nomeando** na entrada da API: Zod/pydantic ignoram chave desconhecida e o remetente veria 200 sobre no-op | `bloqueado` por CAP-01 | ADR § D2, R3 |
-| CAP-04 | **Validar no registry/portão que pool de avaliação aponta para skill de avaliação.** É a mitigação do ÚNICO efeito real da remoção — perde-se a detecção de avaliador mal configurado. Ali é onde o erro nasce, e onde é barato | `aberto` | ADR § Riscos 1 |
 | CAP-05 | **`permissions[]` está INERTE por norma declarada — 73 tools expostas, 0 declaradas.** O campo existe em TODA a mensagem (`SessionTokenPayload`, `AgentTypeSchema` com regex de formato, `InferenceRequest`, `AuditRecord`); o que não existe é **produtor**: a entidade que o declarava (`AgentType`) foi aposentada e a declaração não reapareceu — `pools` sem coluna, `skills.tools` **0 de 44**, `config_json` só com `form_id`/`max_concurrent_sessions`. Fato **independente** deste ADR: sobrevive à remoção do `agent_role`. Mesma forma da AUT-03 | `adiado` — sem dono e sem gatilho declarado; entra se alguém quiser reduzir superfície de tool | ADR § Alternativa refutada |
 ---
 

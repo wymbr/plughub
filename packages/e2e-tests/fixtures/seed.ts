@@ -52,11 +52,13 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
   });
 
   // Skill de AVALIAÇÃO — necessário aos cenários 09 (session replayer) e 11
-  // (comparison mode), que fazem agent_login como avaliador para exercitar
-  // `evaluation_context_get`. O gate dessa tool exige `agent_role: evaluator`
-  // declarado no registry (auto-declaração no login não autoriza), e o
-  // `agent_login` resolve a identidade via GET /v1/skills/{id} — sem esta
-  // fixture o login devolve `agent_type_not_found` e os dois cenários abortam.
+  // (comparison mode), que fazem agent_login como avaliador. O `agent_login`
+  // resolve a identidade via GET /v1/skills/{id}; sem esta fixture ele devolve
+  // `agent_type_not_found` e os dois cenários abortam.
+  //
+  // ⚠️ Não declara mais `agent_role`: o eixo saiu em 2026-09-01 (CAP-03) e o PUT
+  // o recusa com 422. O que o skill precisa continuar sendo é o que o token
+  // carrega — é dele que sai a procedência do resultado (CAP-02).
   await registry.createSkill({
     skill_id: "skill_avaliacao_v1",
     name: "Avaliação de Qualidade",
@@ -66,7 +68,6 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
       type: "horizontal",
       domain: "quality",
     },
-    agent_role: "evaluator",
     instruction: {
       prompt_id: "prompt_avaliacao_v1",
     },

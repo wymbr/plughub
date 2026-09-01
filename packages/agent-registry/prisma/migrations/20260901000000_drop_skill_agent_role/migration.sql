@@ -1,0 +1,35 @@
+-- Remove `skills.agent_role` (CAP-03, 2026-09-01).
+--
+-- POR QUE ESTA MIGRAÇÃO É DESTRUTIVA E MESMO ASSIM É A CERTA
+-- =========================================================
+-- O plano original era o oposto: DEIXAR a coluna física, pelo precedente de
+-- `agent_group_members`/`agent_group_shifts` (2026-07-02) e da AUT-32 — "não vale
+-- migração destrutiva por coluna inerte".
+--
+-- Esse precedente foi REFUTADO POR MEDIÇÃO neste pacote, e a refutação veio do próprio
+-- boot: `scripts/bootstrap-db.js` faz uma conferência final de que o schema VIVO bate
+-- com o `schema.prisma` e RECUSA subir se houver drift. Com o campo fora do modelo e a
+-- coluna no banco, o agent-registry saiu com:
+--
+--   [*] Changed the `skills` table
+--     [-] Removed column `agent_role`
+--   [bootstrap-db] FATAL: schema still does not match schema.prisma after bootstrap.
+--
+-- O precedente não transfere porque as situações não são a mesma: `agent_group_members`
+-- vive no schema `auth` (auth-api), que não tem guard de drift — tabela esquecida ali é
+-- invisível. Aqui, coluna esquecida DERRUBA O SERVIÇO. Manter a coluna exigiria manter
+-- o campo no modelo, isto é, não remover o eixo.
+--
+-- O que se perde: os valores `executor`/`evaluator` de 44 skills. Não é dado de negócio
+-- e não tem leitor — o único consumidor era o gate de avaliação, removido em 2026-09-01
+-- (CAP-01), e a detecção de avaliador mal configurado mudou para a validação de
+-- `evaluator_pool` no create/update de campanha (CAP-04), que deriva do FLOW deployado.
+--
+-- ⚠️ Isto NÃO afrouxa a regra do `CLAUDE.md` contra `prisma db push --accept-data-loss`
+-- no boot. Aquela regra é contra o DIFF AUTOMÁTICO decidir o que apagar; esta é uma
+-- migração explícita, versionada e revisada, aplicada por `prisma migrate deploy` — que
+-- é justamente o caminho que a regra manda usar.
+--
+-- Ver `docs/adr/adr-remove-agent-role-axis.md` e o CHANGELOG de 2026-09-01.
+
+ALTER TABLE "skills" DROP COLUMN IF EXISTS "agent_role";
