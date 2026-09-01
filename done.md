@@ -126,6 +126,7 @@ história no `CHANGELOG.md`. Nada registrado aqui ainda.)*
 | CAP-06 | `permissions[]` ganhou produtor: o `tools[]` da skill é mapeado e ASSINADO no `session_token` | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-09 | Censo das 72 tools por camada de guarda virou gate; duas promessas falsas corrigidas (`deploy.ts`, `CLAUDE.md` do pacote) | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-11 | Superfície de rede do mcp-server medida: a borda existe (nginx no Dockerfile do platform-ui), não publica o transporte MCP, e publica 20 rotas `/api/*` | 2026-09-01 | `CHANGELOG.md:3` |
+| CAP-12 | As 9 rotas `/api/*` publicadas pela borda passaram a exigir credencial; o decode-sem-verificar do `verifyJwtPayload` saiu junto (era um portão que não podia reprovar onde o segredo faltava) | 2026-09-01 | `CHANGELOG.md:3` |
 
 ---
 

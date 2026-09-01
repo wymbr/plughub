@@ -57,6 +57,11 @@
 
 set -u   # sem -e de propósito: ramo AUSENTE imprime INCONCLUSIVO, não morre
 
+# CAP-12 (2026-09-01): as rotas `/api/*` do mcp-server exigem credencial. Sem esta
+# linha as chamadas abaixo voltam 401, e o script contaria zero item como se a fila
+# estivesse vazia. O shim anexa o Bearer so onde ele e conferido — ver _auth.sh.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_auth.sh"; plughub_auth_curl_shim
+
 TENANT="${TENANT:-tenant_demo}"
 COMPOSE="${COMPOSE_FILE:-docker-compose.demo.yml}"
 MCP_URL="${MCP_URL:-http://localhost:3100}"

@@ -44,6 +44,15 @@
 
 set -u
 
+# CAP-12 (2026-09-01): `/api/work_queue/{claim,release}` passam a exigir credencial.
+# Aqui o shim de `curl` do `_auth.sh` NAO alcanca — as chamadas sao `httpx`, dentro
+# de um `python -` que roda no container do routing-engine. Entao o token e obtido
+# fora e INTERPOLADO no heredoc (que e nao-citado de proposito, como `${SID}` ja
+# demonstra). Sem ele os quatro POSTs voltariam 401 e o probe reportaria
+# "claim_failed", que aqui pareceria a corrida NAO acontecendo — um verde falso.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_auth.sh"
+_TOK="$(plughub_token)"
+
 TENANT="${TENANT:-tenant_demo}"
 COMPOSE="${COMPOSE_FILE:-docker-compose.demo.yml}"
 POOL="${1:-}"
@@ -145,7 +154,10 @@ async def main():
     s = get_settings()
     print("redis_url=" + s.redis_url)
     rds = aioredis.from_url(s.redis_url, decode_responses=True)
-    async with httpx.AsyncClient(timeout=10.0) as http:
+    async with httpx.AsyncClient(
+        timeout=10.0,
+        headers={"Authorization": "Bearer ${_TOK}"},
+    ) as http:
         for n in range(1, ROUNDS + 1):
             # 1. Claim — estabelece a posse e (via bridge) a presença.
             c = await http.post(

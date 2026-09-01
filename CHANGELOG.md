@@ -1,5 +1,115 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CAP-12: as nove rotas `/api/*` do mcp-server passam a exigir credencial
+
+### O que estava aberto, e por que ninguém tropeçava nisso
+
+A CAP-11 mediu a superfície de rede e achou o desenho pelo avesso: o transporte MCP
+(`/sse`) **não** atravessa a borda, e as rotas REST `/api/*` **atravessam**. Vinte rotas
+publicadas, **nove sem credencial** — medidas ao vivo com controle positivo
+(`/api/instances` e `/api/agent-state` recusando anônimo na mesma rodada, o que separa
+"aberto" de "serviço fora do ar").
+
+O motivo de ninguém notar é o mais barato que existe: **o Console sempre apresentou o
+token**. O `apiFetch` anexa `Authorization: Bearer` desde 2026-07-23, e todas as nove
+são chamadas por ele. Quem não conferia era o servidor. Medido antes de mexer: anônimo e
+com Bearer devolviam **exatamente o mesmo código** nas nove.
+
+Dano não é exposição (D14.1), e aqui os dois números divergem por rota. As duas de fila
+devolviam vazio com a stack ociosa; `conversation_history` lê `session:{id}:messages`,
+que tem três produtores, e devolve `content` de mensagem sem filtro. `menu_submit`
+submete **no lugar do cliente**, `agent_done` **fecha** a sessão — e esta última
+respondeu `200` a um `POST` anônimo durante a medição de linha de base, tendo escrito o
+marcador de fechamento e publicado em Kafka.
+
+### O que foi feito, na ordem em que tinha de ser feito
+
+**1. O verificador deixou de falhar ABERTO — e isto vem antes das rotas.**
+`verifyJwtPayload` tinha um "fallback dev": sem `PLUGHUB_JWT_SECRET`, **decodificava sem
+conferir assinatura**. O efeito não é modo dev — é que todo portão construído sobre ele
+aceita token forjado, com o papel que o forjador escolher, sem nada ficar vermelho.
+
+Não era hipótese: `docker-compose.demo.yml:622` define `PLUGHUB_JWT_SECRET`, e o bloco
+`mcp-server-plughub` do `docker-compose.full.yml` definia **`JWT_SECRET`** — outro nome.
+O mesmo código conferia assinatura num compose e aceitava forjado no outro. Fechar as
+nove sobre esse helper seria entregar **um portão que não pode reprovar** em metade dos
+deploys descritos no repositório.
+
+Duas consequências que andam juntas, e por isso saíram no mesmo commit: o fallback foi
+removido, e o `full.yml` recebeu a env (`== auth-api`). Tirar o anestésico sem repor a
+config só trocaria o portão falso por uma stack morta.
+
+Segredo ausente virou **503 nomeando a causa**, nunca 401 — via `AuthNaoDisponivel`, que
+existe como **tipo** e não como texto de mensagem porque os dois desfechos se consertam
+em telas diferentes: 401 manda o chamador se autenticar (e ele tentará para sempre), 503
+manda alguém olhar o deploy. E a guarda do segredo vem **antes** da guarda do header,
+senão uma chamada anônima a serviço mal configurado sairia como `missing_header` — a
+recusa certa com o diagnóstico errado. Os três chamadores diretos de `verifyJwtPayload`
+(`approval_audit`, `session_transfer`, `instances`) passaram pelo mesmo desvio; cada um
+traduzia a exceção no seu próprio vocabulário, e sem isso o 503 sairia como
+`transfer_failed`.
+
+`extractJwtRole` saiu junto: zero chamadores medidos, e o corpo era
+`catch { return "operator" }` — um helper cuja única conduta é engolir falha de
+autenticação e devolver um papel. Sem chamador hoje, mas à mão para o próximo portão.
+
+**2. As nove ganharam o gate,** no padrão que o arquivo já praticava: leitura com
+`["operator","supervisor","admin","developer"]`, escrita sem `developer` — os mesmos
+conjuntos das rotas gateadas vizinhas, para não inventar uma terceira política.
+
+O comentário de `/api/work_queue/pending` dizia *"Sem gate de role: quem vê é governado
+pelo ABAC da tela (contacts.operacao)"*. A frase descreve o que a **tela** faz, e a rota
+não é a tela: ela é publicada pela borda e respondia a `curl`. **ABAC de tela não gateia
+rota** — mesma família do docstring de `channel-gateway/auth.py`, que *prometia* ser o
+ponto compartilhado enquanto cinco serviços reimplementavam. O comentário foi
+substituído pela correção, não apagado.
+
+**3. Medição, com as duas metades.** Anônimo → 401 nas nove; token forjado → 401;
+credencial válida → passa. A terceira não é enfeite: *"ao fechar um portão, escreva o
+caso que prova que ele deixa alguém passar — o negativo sozinho passa pelo motivo
+errado"*. E o positivo **não exige 200**: `menu_submit`, `claim` e `release` validam
+corpo e devolvem 400 com credencial boa; o que se afirma é "passou do portão", senão o
+ramo reprovaria por validação de corpo alheia.
+
+A remoção do fallback foi provada por **mutação de imagem**: a mesma imagem, subida sem
+`PLUGHUB_JWT_SECRET`, devolve `503 auth_unavailable` nomeando a env — não "aceita
+qualquer um". E o probe foi provado falseável removendo o gate de **uma** rota e
+rebuildando: `D1` e `E` acusaram, exit 1.
+
+**4. Nove scripts de teste chamavam essas rotas, e fechá-las sem tocá-los seria pior que
+o vazamento.** Vários contam itens; um 401 lido como lista vazia é verde por ausência de
+amostra — a família do catálogo de "teste que não pode reprovar". O conserto **não** foi
+editar vinte call sites: o `_auth.sh` já tinha o mecanismo certo (`plughub_auth_curl_shim`,
+que decide sobre a URL **em runtime**, e nasceu justamente porque detecção estática de
+call site é comprovadamente incompleta neste repositório). O shim passou a cobrir o
+mcp-server, casando por **origem** (3100, 5174) **e** por caminho das nove — `*/api/*`
+sozinho seria largo demais, meia dúzia de serviços da casa tem `/api`.
+
+Exceção única: `probe_release_reclaim_race.sh` chama por `httpx` dentro de um `python -`
+que roda **no container do routing-engine**, onde o shim de shell não alcança; ali o
+token é interpolado no heredoc. Sem isso os POSTs voltariam 401 e o probe reportaria
+`claim_failed`, que **naquele probe pareceria a corrida não acontecendo** — verde falso.
+
+### O que este arco NÃO fez, e está declarado
+
+Fechou **credencial**, não **linha**. Um operador autenticado de qualquer pool segue
+lendo a conversa de qualquer sessão, e a chave que `conversation_history` lê não tem
+sequer prefixo de tenant. É `CAP-14` no `pending.md`, com gatilho, e está escrito também
+no cabeçalho do probe — não é achado a redescobrir.
+
+### Arquivos
+
+- `packages/mcp-server-plughub/src/server.ts` — fallback removido, `AuthNaoDisponivel` +
+  `respondeFalhaDeAuth`, gate nas nove, `extractJwtRole` removida
+- `docker-compose.full.yml` — `PLUGHUB_JWT_SECRET` no `mcp-server-plughub`
+- `infra/test/probe_mcp_rest_surface.sh` — nove linhas para `gateada`
+  (`gateada=22 · aberta-divida=2 · aberta-isenta=1`), ramo D invertido com positivo de
+  aceitação, dívida de escopo declarada no cabeçalho
+- `infra/test/_auth.sh` — shim cobre o mcp-server
+- 9 scripts de teste — passam a apresentar credencial
+- `packages/mcp-server-plughub/CLAUDE.md` — o invariante de JWT reescrito pelo medido
+
+
 ## 2026-09-01 — A superfície de rede do mcp-server, medida — e ela inverte a prioridade (CAP-11)
 
 A CAP-10 estava bloqueada por *"falta medir a superfície de rede do mcp-server"*. Medida, ela

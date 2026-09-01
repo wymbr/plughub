@@ -230,6 +230,12 @@ services:
       REDIS_URL:          redis://redis:6379
       PORT:               "3100"
       JWT_SECRET:         demo_plughub_secret_32chars__
+      # CAP-12 (2026-09-01): `JWT_SECRET` acima NÃO é lido por este serviço — ele lê
+      # `PLUGHUB_JWT_SECRET`, e sem ela caía no decode-sem-verificar. Medido: o
+      # `demo.yml` tinha a env e este não, então o mesmo código conferia assinatura
+      # num compose e aceitava token forjado no outro. Tem de ser o MESMO segredo
+      # que a auth-api EMITE (`PLUGHUB_AUTH_JWT_SECRET`, linha ~448).
+      PLUGHUB_JWT_SECRET: changeme_auth_jwt_secret_full_32chars   # == auth-api
       KAFKA_BROKERS:      kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
       CALENDAR_API_URL:   http://calendar-api:3700

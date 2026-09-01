@@ -37,6 +37,8 @@ PLUGHUB_TEST_PASS="${PLUGHUB_TEST_PASS:-changeme_probe}"
 export PLUGHUB_TEST_EMAIL PLUGHUB_TEST_PASS
 # shellcheck source=/dev/null
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_auth.sh"
+# CAP-12: supervisor_capabilities e copilot_state passaram a exigir credencial.
+plughub_auth_curl_shim
 
 TENANT="${TENANT:-tenant_demo}"
 OUTRO="${OUTRO:-tenant_outro}"

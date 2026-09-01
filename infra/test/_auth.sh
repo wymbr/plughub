@@ -69,9 +69,11 @@ plughub_token() {
 
 plughub_auth_header() { printf 'Authorization: Bearer %s' "$(plughub_token)"; }
 
-# curl com credencial. USAR SO em chamadas a analytics-api: mandar um Bearer de
-# auth-api para outro servico pode ser recusado, e um 401 vindo do servico errado e
-# exatamente o tipo de falha que se depura pelo lado errado.
+# curl com credencial. USAR nos servicos que CONFEREM o JWT do auth-api — hoje a
+# analytics-api e o mcp-server-plughub (`/api/*`), este ultimo desde a CAP-12
+# (2026-09-01), porque o `PLUGHUB_JWT_SECRET` dele e o mesmo segredo que a auth-api
+# emite. Mandar este Bearer para um servico que NAO o confere pode ser recusado, e um
+# 401 vindo do servico errado e o tipo de falha que se depura pelo lado errado.
 acurl() { curl -H "$(plughub_auth_header)" "$@"; }
 
 # Uma linha declarando SOB QUAL ESCOPO a medicao foi feita. Chamar no cabecalho do
@@ -90,7 +92,7 @@ plughub_scope_line() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# plughub_auth_curl_shim — anexa a credencial SO nas chamadas a analytics-api
+# plughub_auth_curl_shim — anexa a credencial SO onde o JWT do auth-api e conferido
 #
 # Por que um shim e nao editar cada `curl`: a deteccao ESTATICA de call site e
 # comprovadamente incompleta neste repositorio. Medido em 2026-08-27: seis dos 18
@@ -102,9 +104,20 @@ plughub_scope_line() {
 # O shim decide sobre a URL REAL, em runtime. Nao pode errar por forma do fonte.
 #
 # ⚠️ Ele sombreia `curl` DENTRO do script que o chama (nunca globalmente), e so
-# acrescenta o header quando o alvo e a analytics-api — mandar um Bearer do auth-api
+# acrescenta o header quando o alvo CONFERE este JWT — mandar um Bearer do auth-api
 # para config-api/agent-registry poderia ser recusado, e um 401 vindo do servico
 # errado e o tipo de falha que se depura pelo lado errado por meia hora.
+#
+# ── CAP-12 (2026-09-01): o mcp-server entrou na lista ────────────────────────────
+# As nove rotas `/api/*` do mcp-server passaram a exigir credencial. Elas eram
+# chamadas por NOVE scripts desta pasta, e sem esta linha todos passariam a receber
+# 401 — que em varios deles seria lido como "a fila esta vazia", porque o teste conta
+# itens. Ou seja: fechar a rota sem estender o shim trocaria um vazamento por uma
+# suite que reprova pelo motivo errado, ou pior, que PASSA medindo zero.
+#
+# O casamento e por ORIGEM (3100 direto, 5174 pela borda) E por CAMINHO das nove
+# rotas — a segunda metade cobre script que monte a URL com outro host. `*/api/*`
+# sozinho seria largo demais: meia duzia de servicos da casa tem `/api`.
 #
 # Uso, uma linha no topo do script:
 #     source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
@@ -118,7 +131,10 @@ plughub_auth_curl_shim() {
       case "$a" in http://*|https://*) u="$a" ;; esac
     done
     case "$u" in
-      *:3500*|*/reports/*|*/v1/audit*|*/analytics/*)
+      *:3500*|*/reports/*|*/v1/audit*|*/analytics/*|\
+      *:3100/api/*|*:5174/api/*|\
+      */api/work_queue/*|*/api/conversation_history/*|*/api/copilot_state/*|\
+      */api/supervisor_capabilities/*|*/api/agent_done/*|*/api/menu_submit/*)
         command curl -H "$(plughub_auth_header)" "$@" ;;
       *)
         command curl "$@" ;;

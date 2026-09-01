@@ -26,6 +26,11 @@
 
 set -uo pipefail
 
+# CAP-12 (2026-09-01): as rotas `/api/*` do mcp-server exigem credencial. Sem esta
+# linha as chamadas abaixo voltam 401, e o script contaria zero item como se a fila
+# estivesse vazia. O shim anexa o Bearer so onde ele e conferido — ver _auth.sh.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_auth.sh"; plughub_auth_curl_shim
+
 COMPOSE="docker compose -f docker-compose.demo.yml"
 TENANT="tenant_demo"
 SID="${1:-dbdb1e94-1b86-4e2c-ab84-cd9498e1fa73}"

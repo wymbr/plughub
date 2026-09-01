@@ -45,6 +45,8 @@ POOL_PULL="formfill_demo"
 AD_EMAIL="${AD_EMAIL:-admin@plughub.local}"; AD_PASS="${AD_PASS:-changeme_admin}"
 INSTANCE="${INSTANCE:-}"
 
+# CAP-12: /api/work_queue/claim passou a exigir credencial (o /expire ja exigia).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_auth.sh"; plughub_auth_curl_shim
 CURL="curl -s --max-time 20"
 JSON='-H Content-Type:application/json'
 redis() { $COMPOSE exec -T redis redis-cli "$@"; }

@@ -48,6 +48,21 @@ Default port: 3100.
   (`agent_login`) é isenta por ser a emissora. Censo por camada, tabela de classificação
   e trava contra regressão: `infra/test/probe_mcp_tool_guard_census.sh`. A política —
   o que passa a exigir credencial — é decisão em aberto (`pending.md`, CAP-10)
+- ✅ **A ponte REST `/api/*` fechou em 2026-09-01 (CAP-12).** Das 25 rotas, **22
+  gateiam**, 1 é isenta nomeada (`/health`, liveness do compose) e 2 são o transporte
+  MCP, que a borda não publica. Antes disso, **nove rotas publicadas pela borda
+  respondiam sem credencial** — inclusive a que serve a conversa inteira e as que
+  fecham sessão e submetem no lugar do cliente. O Console já mandava o Bearer; o
+  servidor é que não conferia. Gate: `infra/test/probe_mcp_rest_surface.sh`
+- ⚠️ **Sem `PLUGHUB_JWT_SECRET` o serviço RECUSA (503), nunca decodifica sem
+  conferir.** O fallback "dev" saiu na mesma CAP-12: ele não era modo de
+  desenvolvimento, era um portão que aceitava token forjado onde a env faltasse — e
+  ela faltava no `docker-compose.full.yml`, que definia `JWT_SECRET`, outro nome. 503
+  e 401 são desfechos distintos de propósito: um se conserta no deploy, o outro no
+  chamador
+- ⚠️ **`/api/*` exige CREDENCIAL e não recorta LINHA.** `conversation_history` lê
+  `session:{id}:messages`, chave **sem prefixo de tenant** — qualquer operador
+  autenticado alcança qualquer sessão. Dívida declarada: `pending.md` CAP-14
 - session_id is mandatory in all Agent Runtime tools
 - tenant_id is inferred from the JWT — never from the request body
 

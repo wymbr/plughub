@@ -17,8 +17,10 @@
 #    seja: as 48 dívidas de tool da CAP-09 estão atrás de uma porta que a única borda
 #    do repositório não expõe. ⚠️ `200` ali é o **valor plausível** do catálogo — o
 #    código HTTP é idêntico nos dois casos e só o `content-type` separa.
-# 3. **A borda PUBLICA `/api/*`** — 20 rotas, e **9 sem credencial**. Estas são a
-#    superfície realmente exposta do mcp-server.
+# 3. **A borda PUBLICA `/api/*`** — 20 rotas, e eram **9 sem credencial**. Estas são
+#    a superfície realmente exposta do mcp-server. ✅ **As 9 fecharam na CAP-12
+#    (2026-09-01)**: a linha delas migrou para `gateada` e o ramo D INVERTEU de sinal
+#    — ele agora reprova se alguma voltar a responder sem credencial.
 # 4. **Exposição ≠ dano** (D14.1): duas das abertas devolveram vazio com a stack
 #    ociosa, mas `conversation_history` lê `session:{id}:messages`, que tem **três
 #    produtores** (`session.ts:529`, `orchestrator-bridge/main.py:7340`,
@@ -32,7 +34,20 @@
 # "credencial que eu não sei apresentar" — por isso o controle positivo é obrigatório:
 # sem ele, um 401 universal (serviço fora do ar, nginx quebrado) passaria por proteção.
 #
-# ⚠️ ESTE PROBE NÃO FECHA ROTA. Ele trava o censo. Fechar as 9 é decisão (CAP-11).
+# ⚠️ DÍVIDA DE ESCOPO — DECLARADA, não esquecida
+# ==============================================
+# A CAP-12 fechou **CREDENCIAL**, não **LINHA**. São dois fatos, e a analytics-api já
+# pagou para aprender que são: *"EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos"*.
+# Hoje um operador autenticado de QUALQUER pool lê a conversa de QUALQUER sessão por
+# `/api/conversation_history/{id}` — e o agravante é que a chave lida
+# (`session:{id}:messages`) **não tem sequer prefixo de tenant**, então nem o
+# isolamento por tenant existe ali. O irmão gateado E escopado do mesmo dado é
+# `analytics-api /v1/transcript/sessions/{id}`, fechado em 2026-08-30 — de novo duas
+# portas para o mesmo dado, e agora só uma delas recorta.
+# Gatilho para pagar: o primeiro tenant com operadores que não devem se ver.
+# Registrado como CAP-14 no `pending.md` — não é achado a redescobrir.
+#
+# ⚠️ ESTE PROBE NÃO FECHA ROTA. Ele trava o censo.
 #
 # Uso:  bash infra/test/probe_mcp_rest_surface.sh
 # Env:  BORDA=http://localhost:5174   DIRETO=http://localhost:3100
@@ -42,6 +57,14 @@ set -uo pipefail
 
 BORDA="${BORDA:-http://localhost:5174}"
 DIRETO="${DIRETO:-http://localhost:3100}"
+# O positivo de aceitação (ramo D2) precisa de um token REAL — portão medido só pelo
+# negativo não se distingue de um handler quebrado.
+AUTH="${AUTH:-http://localhost:3202}"     # 3202 = auth-api no host (3200 é o ai-gateway)
+AD_EMAIL="${AD_EMAIL:-admin@plughub.local}"; AD_PASS="${AD_PASS:-changeme_admin}"
+TENANT="${TENANT:-tenant_demo}"
+# Sessão que NÃO existe: o ramo mede o PORTÃO, nunca o conteúdo. Nenhuma leitura de
+# conversa real acontece neste probe.
+SESSAO="sess_probe_cap12_inexistente"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CENSO="$ROOT/infra/test/_mcp_rest_census.mjs"
 
@@ -61,24 +84,24 @@ inc() { echo "  ⏭️  $* (INCONCLUSIVO)"; INCONCL=$((INCONCL+1)); }
 DECLARADO=$(cat <<'TABELA'
 GET /api/agent-state|gateada|requireJwtRole
 GET /api/approval_audit/:sessionId|gateada|verifyJwtPayload
-GET /api/conversation_history/:sessionId|aberta-divida|SERVE CONTEUDO de conversa (session:{id}:messages, 3 produtores) — publicada pela borda (CAP-11)
-GET /api/copilot_state/:sessionId|aberta-divida|estado de copilot da sessao — publicada pela borda (CAP-11)
+GET /api/conversation_history/:sessionId|gateada|requireJwtRole leitura (CAP-12). EXIGE credencial e NAO recorta linha — ver DIVIDA DE ESCOPO no cabecalho
+GET /api/copilot_state/:sessionId|gateada|requireJwtRole leitura (CAP-12)
 GET /api/instances|gateada|verifyJwtPayload
-GET /api/supervisor_capabilities/:sessionId|aberta-divida|publicada pela borda (CAP-11)
+GET /api/supervisor_capabilities/:sessionId|gateada|requireJwtRole leitura (CAP-12)
 GET /api/supervisor_state/:sessionId|gateada|requireJwtRole
-GET /api/work_queue/list|aberta-divida|lista fila de trabalho humano — publicada pela borda (CAP-11)
-GET /api/work_queue/pending|aberta-divida|lista itens pendentes — publicada pela borda (CAP-11)
+GET /api/work_queue/list|gateada|requireJwtRole leitura (CAP-12)
+GET /api/work_queue/pending|gateada|requireJwtRole leitura (CAP-12)
 GET /health|aberta-isenta|liveness do compose; exigir credencial acopla o boot da stack ao do emissor de token (mesma isencao do analytics-api)
 GET /internal/context-audit|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
 GET /sse|aberta-divida|transporte MCP, anonimo por construcao; NAO publicado pela borda (CAP-09/CAP-10)
-POST /api/agent_done/:sessionId|aberta-divida|FECHA sessao — publicada pela borda (CAP-11)
+POST /api/agent_done/:sessionId|gateada|requireJwtRole escrita (CAP-12)
 POST /api/force-complete/:sessionId|gateada|requireJwtRole
 POST /api/inject-context/:sessionId|gateada|requireJwtRole
-POST /api/menu_submit/:sessionId|aberta-divida|SUBMETE no lugar do cliente — publicada pela borda (CAP-11)
+POST /api/menu_submit/:sessionId|gateada|requireJwtRole escrita (CAP-12)
 POST /api/session_transfer/:sessionId|gateada|verifyJwtPayload
-POST /api/work_queue/claim/:sessionId|aberta-divida|RECLAMA item de fila humana — publicada pela borda (CAP-11)
+POST /api/work_queue/claim/:sessionId|gateada|requireJwtRole escrita (CAP-12)
 POST /api/work_queue/expire/:sessionId|gateada|requireJwtRole
-POST /api/work_queue/release/:sessionId|aberta-divida|DEVOLVE item de fila humana — publicada pela borda (CAP-11)
+POST /api/work_queue/release/:sessionId|gateada|requireJwtRole escrita (CAP-12)
 POST /internal/context-snapshot|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
 POST /messages|aberta-divida|canal de escrita do transporte MCP; NAO publicado pela borda (CAP-09/CAP-10)
 PUT /api/agent-pause|gateada|requireJwtRole
@@ -136,17 +159,88 @@ for r in "/api/instances" "/api/agent-state"; do
 done
 
 echo
-echo "── D · as ABERTAS respondem sem credencial, pela borda ──"
+echo "── D · as NOVE da CAP-12 recusam anônimo E aceitam credencial ──"
+#
+# Duas metades obrigatórias, e a segunda é a que quase ninguém escreve: *"ao fechar um
+# portão, escreva o caso que prova que ele DEIXA ALGUÉM PASSAR — o negativo sozinho
+# passa pelo motivo errado"* (§ Security). Handler quebrado, rota renomeada ou nginx
+# caído produzem 401 em tudo, e um probe só-negativo chamaria isso de segurança.
+#
+# ⚠️ O positivo NÃO exige 200: `menu_submit`, `claim` e `release` validam corpo e
+# devolvem 400 mesmo com credencial válida. O que se afirma é *"passou do portão"* —
+# logo qualquer coisa que não seja 401/403/503. Exigir 200 acoplaria este ramo à
+# validação de corpo de cada handler, e ele reprovaria por motivo alheio.
+NOVE_GET="/api/conversation_history/$SESSAO
+/api/copilot_state/$SESSAO
+/api/supervisor_capabilities/$SESSAO
+/api/work_queue/list
+/api/work_queue/pending"
+NOVE_POST="/api/agent_done/$SESSAO
+/api/menu_submit/$SESSAO
+/api/work_queue/claim/$SESSAO
+/api/work_queue/release/$SESSAO"
+
 if [ "$GATE_OK" -eq 0 ]; then
-  inc "sem controle positivo, este ramo não distingue aberto de serviço fora do ar"
+  inc "sem controle positivo, este ramo não distingue fechado de serviço fora do ar"
 else
-  for r in "/api/work_queue/list" "/api/work_queue/pending"; do
+  # ── D1 · NEGATIVO — anônimo é recusado ──────────────────────────────────────
+  D1=0
+  while read -r r; do
+    [ -n "$r" ] || continue
     c=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$BORDA$r" 2>/dev/null || echo 000)
-    if [ "$c" = "200" ]; then ok "$r → 200 SEM credencial (dívida declarada, CAP-11)"
-    elif [ "$c" = "401" ] || [ "$c" = "403" ]; then
-      bad "$r → $c: FECHOU desde 2026-09-01 — mova a linha de 'aberta-divida' para 'gateada'"
-    else inc "$r → $c (nem aberto nem gateado; investigar)"; fi
-  done
+    case "$c" in
+      401|403) D1=$((D1+1)) ;;
+      200)     bad "REGRESSÃO: $r → 200 SEM credencial — a CAP-12 foi desfeita" ;;
+      503)     bad "$r → 503: serviço sem PLUGHUB_JWT_SECRET (deploy, não credencial)" ;;
+      *)       inc "$r → $c (investigar)" ;;
+    esac
+  done <<< "$NOVE_GET"
+  while read -r r; do
+    [ -n "$r" ] || continue
+    c=$(curl -s -m 8 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+        -d '{}' "$BORDA$r" 2>/dev/null || echo 000)
+    case "$c" in
+      401|403) D1=$((D1+1)) ;;
+      200|400) bad "REGRESSÃO: POST $r → $c SEM credencial — a CAP-12 foi desfeita" ;;
+      503)     bad "POST $r → 503: serviço sem PLUGHUB_JWT_SECRET (deploy, não credencial)" ;;
+      *)       inc "POST $r → $c (investigar)" ;;
+    esac
+  done <<< "$NOVE_POST"
+  [ "$D1" -eq 9 ] && ok "as 9 recusam anônimo (401/403)"
+
+  # ── D2 · POSITIVO DE ACEITAÇÃO ──────────────────────────────────────────────
+  TOKEN=""
+  if command -v jq >/dev/null 2>&1; then
+    TOKEN=$(curl -s -m 8 -X POST "$AUTH/auth/login" -H 'Content-Type: application/json' \
+      -d "{\"email\":\"$AD_EMAIL\",\"password\":\"$AD_PASS\",\"tenant_id\":\"$TENANT\"}" \
+      2>/dev/null | jq -r '.access_token // empty')
+  fi
+  if [ -z "$TOKEN" ]; then
+    inc "sem token do auth-api ($AUTH) — não dá para provar que o portão DEIXA passar"
+  else
+    PASSOU=0; TOTAL=0
+    while read -r r; do
+      [ -n "$r" ] || continue
+      TOTAL=$((TOTAL+1))
+      c=$(curl -s -m 8 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+          "$BORDA$r" 2>/dev/null || echo 000)
+      case "$c" in
+        401|403|503) bad "com credencial VÁLIDA, $r → $c (o portão fechou para quem PODIA)" ;;
+        *)           PASSOU=$((PASSOU+1)) ;;
+      esac
+    done <<< "$NOVE_GET"
+    while read -r r; do
+      [ -n "$r" ] || continue
+      TOTAL=$((TOTAL+1))
+      c=$(curl -s -m 8 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+          -H "Authorization: Bearer $TOKEN" -d '{}' "$BORDA$r" 2>/dev/null || echo 000)
+      case "$c" in
+        401|403|503) bad "com credencial VÁLIDA, POST $r → $c (o portão fechou para quem PODIA)" ;;
+        *)           PASSOU=$((PASSOU+1)) ;;
+      esac
+    done <<< "$NOVE_POST"
+    [ "$PASSOU" -eq "$TOTAL" ] && ok "as $TOTAL passam com credencial válida (fecha, não quebra)"
+  fi
 fi
 
 echo
@@ -193,7 +287,7 @@ echo "────────────────────────�
 echo "  FAIL=$FAIL  INCONCLUSIVO=$INCONCL"
 if [ "$INCONCL" -gt 0 ]; then echo "⏭️  INCONCLUSIVO — não mediu tudo; isto NÃO é verde"; exit 3; fi
 if [ "$FAIL" -eq 0 ]; then
-  echo "✅ superfície estável — borda não publica o transporte; as 9 abertas seguem declaradas"
+  echo "✅ superfície estável — borda não publica o transporte; as 9 da CAP-12 seguem fechadas"
   exit 0
 fi
 echo "❌ a superfície MUDOU sem a declaração acompanhar"

@@ -838,35 +838,73 @@ async function unregisterHumanAgent(
 const _JWT_SECRET = process.env["PLUGHUB_JWT_SECRET"] ?? ""
 
 /**
- * Verify a Bearer JWT and return its payload.
- * Throws if the token is missing, malformed, or the signature is invalid.
- * Falls back to decode-only when PLUGHUB_JWT_SECRET is not configured (dev only).
+ * Segredo ausente é falha do SERVIÇO, nunca credencial ruim do chamador.
+ *
+ * Existe como TIPO, e não como string de mensagem, porque os dois desfechos têm
+ * consertos em telas diferentes: 401 manda o chamador se autenticar (e ele vai
+ * tentar de novo, para sempre); 503 manda alguém olhar o deploy. Colapsá-los faz
+ * uma stack mal configurada parecer uma senha errada — o disfarce mais barato que
+ * um erro de deploy tem. Mesma postura de `_check_audit_access` na analytics-api.
  */
-function verifyJwtPayload(authHeader: string | undefined): Record<string, unknown> {
-  if (!authHeader?.startsWith("Bearer ")) throw new Error("Missing Bearer token")
-  const token = authHeader.slice(7)
-  if (_JWT_SECRET) {
-    // Production path — full signature verification
-    return jwt.verify(token, _JWT_SECRET, { algorithms: ["HS256"] }) as Record<string, unknown>
-  }
-  // Dev fallback — decode without verification (logs a warning at startup)
-  const payloadB64 = token.split(".")[1] ?? ""
-  return JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as Record<string, unknown>
+class AuthNaoDisponivel extends Error {}
+
+/**
+ * Responde 503 se — e só se — a falha foi do SERVIÇO. Devolve `true` quando já
+ * respondeu, para o `catch` do chamador saber que não deve responder de novo.
+ *
+ * Existe porque `verifyJwtPayload` tem TRÊS chamadores diretos além do
+ * `requireJwtRole`, cada um com o seu `catch`, e cada um traduzindo a exceção num
+ * diagnóstico próprio (`missing_header`, `invalid_token`, `transfer_failed`). Sem
+ * este desvio, segredo ausente sairia como *"você não mandou header"* — a recusa
+ * estaria certa e a explicação, errada, que é o modo de falha caro: manda o
+ * operador procurar no lugar onde não está.
+ */
+function respondeFalhaDeAuth(err: unknown, res: Response): boolean {
+  if (!(err instanceof AuthNaoDisponivel)) return false
+  console.error(`[auth] 503 — ${err.message}`)
+  res.status(503).json({ error: "auth_unavailable", reason: err.message })
+  return true
 }
 
 /**
- * Extract role from a verified JWT.
- * Throws 401 when the token is missing or invalid.
+ * Verify a Bearer JWT and return its payload.
+ * Throws if the token is missing, malformed, or the signature is invalid.
+ *
+ * ── O fallback de decode-sem-verificar FOI REMOVIDO (CAP-12, 2026-09-01) ──────
+ *
+ * Até aqui, sem `PLUGHUB_JWT_SECRET` esta função **decodificava sem conferir a
+ * assinatura**. O efeito não é "modo dev": é que todo portão construído sobre ela
+ * aceita **token forjado por qualquer um** — e sem ficar vermelho em lugar nenhum,
+ * porque um JWT forjado é bem-formado e traz o papel que o forjador escolher.
+ *
+ * Não era hipótese. Medido em 2026-09-01: `docker-compose.demo.yml:622` define
+ * `PLUGHUB_JWT_SECRET`, mas o bloco `mcp-server-plughub` do
+ * `docker-compose.full.yml` define **`JWT_SECRET`** — outro nome —, então lá o
+ * verificador caía no ramo de decode. Fechar as nove rotas da CAP-12 sobre este
+ * helper, com o fallback vivo, seria entregar um portão que **não pode reprovar**
+ * num dos dois composes do repositório. Por isso a remoção vem ANTES das rotas, e
+ * o `full.yml` recebeu a env no mesmo commit: tirar o anestésico sem repor a
+ * config só troca o portão falso por uma stack morta.
+ *
+ * A ordem das duas guardas também é decidida: **o segredo é conferido primeiro**.
+ * Ao contrário, uma chamada anônima a um serviço mal configurado responderia 401,
+ * e o operador concluiria "credencial", que é o diagnóstico errado.
  */
-function extractJwtRole(authHeader: string | undefined): string {
-  try {
-    const payload = verifyJwtPayload(authHeader)
-    const role = (payload["role"] ?? (payload["roles"] as string[])?.[0]) as string | undefined
-    return role ?? "operator"
-  } catch {
-    return "operator"   // fallback for non-UI callers (agent MCP sessions authenticated separately)
+function verifyJwtPayload(authHeader: string | undefined): Record<string, unknown> {
+  if (!_JWT_SECRET) {
+    throw new AuthNaoDisponivel(
+      "PLUGHUB_JWT_SECRET não configurado — o serviço não tem como CONFERIR assinatura",
+    )
   }
+  if (!authHeader?.startsWith("Bearer ")) throw new Error("Missing Bearer token")
+  const token = authHeader.slice(7)
+  return jwt.verify(token, _JWT_SECRET, { algorithms: ["HS256"] }) as Record<string, unknown>
 }
+
+// `extractJwtRole` foi REMOVIDA junto (CAP-12): zero chamadores medidos, e o corpo
+// dela era `catch { return "operator" }` — um helper cuja única conduta é engolir
+// falha de autenticação e devolver um papel. Sem chamador hoje, mas à mão para o
+// próximo portão; a família inteira de fail-open sai no mesmo commit.
 
 /**
  * Guard for UI endpoints that require a valid signed JWT with a minimum role.
@@ -885,7 +923,8 @@ function requireJwtRole(
       return null
     }
     return payload
-  } catch {
+  } catch (err) {
+    if (respondeFalhaDeAuth(err, res)) return null
     res.status(401).json({ error: "Unauthorized" })
     return null
   }
@@ -1276,7 +1315,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
     let payload: Record<string, unknown>
     try {
       payload = verifyJwtPayload(req.headers.authorization)
-    } catch {
+    } catch (err) {
+      if (respondeFalhaDeAuth(err, res)) return
       res.status(401).json({ error: "Unauthorized" })
       return
     }
@@ -1932,7 +1972,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Written by channel-gateway (inbound via WebchatAdapter, outbound via OutboundConsumer).
   // Key: session:{sessionId}:messages — Redis List (RPUSH, LRANGE).
   // Each entry is a JSON-serialised ChatMessage { id, author, text, timestamp }.
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/conversation_history/:sessionId", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
     const { sessionId } = req.params
     try {
       const raw      = await redis.lrange(`session:${sessionId}:messages`, 0, -1)
@@ -1949,7 +1996,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // supervisor_config.escalation_pools from the agent-registry — the same source
   // as the supervisor_capabilities MCP tool. (Was a hardcoded empty stub → Transfer
   // always showed "No destinations available" even with escalation_pools configured.)
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/supervisor_capabilities/:sessionId", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
     const { sessionId } = req.params
     // LEITURA cross-tenant se o tenant for inventado: este handler consulta o
     // agent-registry com `x-tenant-id` e devolve ao Console os destinos de
@@ -2000,7 +2054,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Returns the latest co-pilot suggestions written by AI Gateway (copilot_emitter.py).
   // Reads {tenantId}:ctx:{sessionId} hash fields prefixed with "session.copilot.*".
   // Called by the Agent Assist UI (useCopilotState hook) after receiving copilot.updated.
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/copilot_state/:sessionId", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
     const { sessionId } = req.params
 
     // O tenant é o PREFIXO da chave do ContextStore lida logo abaixo
@@ -2077,7 +2138,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
     process.env["CHANNEL_GATEWAY_HTTP_URL"] ??
     "http://channel-gateway:8010"
 
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/work_queue/list", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
     try {
       const tenantId = (req.query["tenant_id"] as string) || _wqTenant()
       const poolsRaw = (req.query["pools"] as string) || ""
@@ -2090,7 +2158,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
   })
 
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/work_queue/claim/:sessionId", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
     try {
       const sessionId  = String(req.params["sessionId"] ?? "")
       const body       = (req.body ?? {}) as Record<string, unknown>
@@ -2116,7 +2191,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
   })
 
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/work_queue/release/:sessionId", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
     try {
       const sessionId  = String(req.params["sessionId"] ?? "")
       const body       = (req.body ?? {}) as Record<string, unknown>
@@ -2149,10 +2231,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // tela: `segments` no Analytics, pelo trio de close_reason (task_submitted /
   // acw_expired / acw_supervisor_closed) — fatia 2, ciclo próprio.
   //
-  // Sem gate de role: quem vê é governado pelo ABAC da tela (contacts.operacao),
-  // igual ao /api/work_queue/list logo acima. O corte fino fica na AÇÃO, que é o
-  // /expire — esse sim supervisor|admin.
+  // ⚠️ CORREÇÃO 2026-09-01 (CAP-12). Este comentário dizia:
+  //     *"Sem gate de role: quem vê é governado pelo ABAC da tela
+  //       (contacts.operacao), igual ao /api/work_queue/list logo acima."*
+  // A frase descreve o que a TELA faz, e a rota não é a tela: ela é publicada pela
+  // borda e respondia a `curl` anônimo. ABAC de tela não gateia rota — é a mesma
+  // família do docstring de `channel-gateway/auth.py`, que *prometia* ser o ponto
+  // compartilhado enquanto cinco serviços reimplementavam. Promessa sem mecanismo.
+  // O que sobrevive da frase é a comparação: list e pending seguem no MESMO nível,
+  // e o corte fino continua na AÇÃO (/expire, supervisor|admin).
   app.get("/api/work_queue/pending", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
     try {
       const tenantId = (req.query["tenant_id"] as string) || _wqTenant()
       const maxKeys  = req.query["max_keys"]
@@ -2256,7 +2345,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 
   // POST /api/agent_done/:sessionId — light signal for UI teardown (actual done via MCP tool)
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/agent_done/:sessionId", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
     const { sessionId } = req.params
     try {
       const body    = req.body as Record<string, unknown>
@@ -2480,7 +2576,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
       })
 
       res.json({ ok: true, session_id: sessionId, target_pool: targetPool, handoff_reason: handoffReason })
-    } catch {
+    } catch (err) {
+      if (respondeFalhaDeAuth(err, res)) return
       res.status(500).json({ error: "transfer_failed" })
     }
   })
@@ -2488,7 +2585,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Menu substitution — supervisor answers a pending menu step on behalf of the customer.
   // XADD interaction_result to the session stream so the Skill Flow engine can resume
   // the suspended menu step.  Also pub/sub notifies agents watching the stream.
+  // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
+  // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
+  // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
+  // apresentava o token (`apiFetch` anexa o Bearer desde 2026-07-23); quem não
+  // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
+  // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/menu_submit/:sessionId", async (req: Request, res: Response) => {
+    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
     const { sessionId } = req.params
     const { menu_id, interaction, result, displayText: rawDisplayText, agent_key } = req.body as Record<string, unknown>
     // G7 (c): instance de origem do menu (ecoado do source_instance do menu.render).
@@ -2921,6 +3025,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
           )
         }
       } catch (e) {
+        // Segredo ausente é falha do SERVIÇO e sai 503 — antes de qualquer leitura
+        // do header, senão uma stack mal configurada acusaria `missing_header`.
+        if (respondeFalhaDeAuth(e, res)) return
         // `verifyJwtPayload` levanta tanto para header ausente quanto para token
         // invalido — as duas populacoes sao nomeadas no `reason`, que a tela usa para
         // distinguir "nunca me identifiquei" de "minha sessao expirou". So a segunda se
