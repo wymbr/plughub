@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CAP-16: o Console para de converter falha de leitura em histórico vazio
+
+### O sintoma chegou como "o Console não mostra histórico"
+
+Relatado pelo dono no mesmo dia da CAP-12: contato transferido da fila para um humano
+chegava ao Console com a área de conversa dizendo **"Awaiting messages…"**, enquanto o
+webchat do cliente mostrava o diálogo inteiro.
+
+A causa imediata **não era do Console** e está registrada aqui pelo que ela ensina sobre
+ordem de rebuild: a imagem `platform-ui` em execução era de **2026-08-29 23:53**, e três
+commits tocaram o pacote em 08-31 — entre eles o `878e341`, que migrou
+`/api/conversation_history` e `/api/work_queue/list` de `fetch` cru para `apiFetch` (o que
+anexa o Bearer). A CAP-12 fechou essas rotas com credencial em 09-01. O bundle servido
+mandava a chamada **sem `Authorization`**, e ela passou a receber `401`. Medido no log do
+nginx, na sessão exata da tela: `GET /api/conversation_history/94ae97c8-… 401`. O mesmo
+build velho ainda mandava o campo `unrestricted` no `PATCH /users`, removido na AUT-15 —
+daí o `422` na tela de Acesso, que era o servidor novo funcionando contra a tela velha.
+**Fechar um portão obriga a conferir a IDADE do artefato de quem chama, não só o código do
+chamador** — a fonte estava certa nos três casos; o que estava velho era a imagem.
+
+### O defeito próprio: três cópias decidindo o mesmo, todas para o valor plausível
+
+O que o rebuild **não** conserta, e é o que este commit fecha: os três chamadores da rota
+faziam, cada um por conta,
+
+```ts
+const data = res.ok ? await res.json() : { messages: [] }   // e um catch vazio
+```
+
+Ou seja, **qualquer** falha — `401`, `500`, rede caída, corpo inválido — virava *histórico
+vazio*, que é indistinguível de um contato que de fato não tem histórico. O `401` não
+aparecia na tela **nem no console do browser**: só no log do nginx, três camadas longe de
+quem viu o sintoma. É a família *"um valor plausível esconde bugs; um valor ausente os
+denuncia"* na sua forma mais barata, agravada por estar **triplicada** — três cópias da
+mesma decisão é como elas divergem.
+
+### O conserto
+
+**Um carregador só** (`packages/platform-ui/src/modules/agent-assist/api.ts`,
+`loadConversationHistory`), consumido pelos três. Ele não lança: devolve
+`{ messages, error }`, e o contrato é a distinção que faltava — **`error === null`
+significa que a leitura ACONTECEU**, e aí `messages: []` é um fato sobre o contato;
+`error !== null` significa que **não se sabe** o que há no histórico. A falha é logada numa
+casa só, nomeando rota, sessão e motivo.
+
+Três consumidores, três telas honestas:
+
+| superfície | antes | agora |
+|---|---|---|
+| Console, contato ativo | `"Awaiting messages…"` | recusa nomeada com o motivo (`HTTP 401`) |
+| Console, preview de fila | idem, a cada poll de 4 s | idem, sem toast (o poll já loga) |
+| `DialogFormRenderer`, briefing | `"Sem transcrição disponível."` | *"não foi possível carregar — não se sabe se há conteúdo"* |
+
+Duas decisões que não são cosméticas:
+
+- **a releitura que falha NÃO sobrescreve as mensagens já carregadas.** O código antigo
+  gravava `[]` por cima; um `401` transitório apagava transcrição boa da tela;
+- **com mensagens vivas presentes, o aviso vira FAIXA** (*"a conversa abaixo pode ser só
+  parte do contato"*) em vez de sumir. Histórico ausente no começo de uma conversa em
+  andamento é o caso perigoso: o operador responde achando que viu tudo. A faixa é o que
+  separa *"conversa completa"* de *"conversa que começa no meio"*.
+
+O campo `ContactSession.historyError` existe por escopo: é fato **da sessão** exibida, e
+mora ao lado das mensagens que ele qualifica.
+
+### Medição
+
+- `tsc -b` + `vite build` verdes (o build da imagem é o typecheck; não há `node_modules`
+  fora do Docker neste ambiente);
+- bundle novo: os três call sites colapsaram em **uma** função, e ela chama o `apiFetch`
+  (`Bearer` + re-auth) — conferido no artefato, não no fonte;
+- os dois desfechos que o conserto depende de distinguir seguem distinguíveis no servidor:
+  `GET /api/conversation_history/sess_inexistente` devolve **`200 {"messages":[]}`** com
+  Bearer e **`401`** sem — 200-vazio e falha continuam sendo códigos diferentes, que é a
+  premissa do contrato acima.
+
+⚠️ **Não fecha a CAP-14** (recorte de LINHA e ausência de prefixo de tenant nessa rota),
+que segue `adiado` com gatilho próprio. Este commit é sobre o chamador não mentir quando a
+rota recusa.
+
+---
+
 ## 2026-09-01 — CAP-13: a 3100 publica em loopback, e o transporte MCP sai da LAN
 
 ### "A borda não publica o transporte" era metade da resposta

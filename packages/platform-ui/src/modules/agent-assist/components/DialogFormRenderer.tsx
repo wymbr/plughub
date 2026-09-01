@@ -37,6 +37,7 @@ import { useAuth } from "../../../auth/useAuth"
 import { parseResumeConflict, resumeConflictDetails } from "../../../lib/resume-conflict"
 import type { ChatMessage } from "../types"
 import { apiFetch } from '@/api/apiFetch'
+import { loadConversationHistory } from '../api'
 
 export type Snapshot = Record<string, { value?: unknown } | undefined> | null | undefined
 
@@ -237,6 +238,8 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
   const [baseline,    setBaseline]    = useState<Record<string, string>>({})
   const [briefing,    setBriefing]    = useState<ChatMessage[]>([])
+  /** Motivo de o briefing não ter sido lido (`null` = leitura OK). Ver `../api.ts`. */
+  const [briefingError, setBriefingError] = useState<string | null>(null)
   const [busy,        setBusy]        = useState<string | null>(null)
   const [done,        setDone]        = useState(false)
   const [error,       setError]       = useState<string | null>(null)
@@ -284,12 +287,16 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
 
   // Fetch the briefing transcript of the REFERENCED session, if any.
   useEffect(() => {
-    if (!briefingSessionId) { setBriefing([]); return }
+    if (!briefingSessionId) { setBriefing([]); setBriefingError(null); return }
     let alive = true
-    apiFetch(`/api/conversation_history/${encodeURIComponent(briefingSessionId)}`)
-      .then(r => r.ok ? r.json() : { messages: [] })
-      .then((data: { messages?: ChatMessage[] }) => { if (alive) setBriefing(data.messages ?? []) })
-      .catch(() => { /* transient — briefing may be momentarily empty */ })
+    // `transcriptEmpty` significa "a sessão referenciada não tem transcrição".
+    // Falha de leitura NÃO pode cair nessa frase: quem preenche o formulário
+    // decidiria a partir de um briefing que ele acha completo e está ausente.
+    loadConversationHistory(briefingSessionId).then(({ messages, error }) => {
+      if (!alive) return
+      setBriefingError(error)
+      if (!error) setBriefing(messages)
+    })
     return () => { alive = false }
   }, [briefingSessionId])
 
@@ -499,7 +506,14 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                 <div className="text-2xs font-semibold text-muted uppercase tracking-wide mb-1">
                   {t("formFill.transcript", { defaultValue: "Referenced conversation" })}
                 </div>
-                {briefing.length === 0 ? (
+                {briefingError ? (
+                  <div className="text-xs text-warning-text">
+                    {t("formFill.transcriptError", {
+                      reason: briefingError,
+                      defaultValue: "Could not load the transcript ({{reason}}). It is unknown whether this conversation has content.",
+                    })}
+                  </div>
+                ) : briefing.length === 0 ? (
                   <div className="text-xs text-muted-light">
                     {t("formFill.transcriptEmpty", { defaultValue: "No transcript available." })}
                   </div>

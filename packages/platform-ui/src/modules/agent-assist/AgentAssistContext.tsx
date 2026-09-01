@@ -43,7 +43,7 @@ import {
 import { useMultiPoolWebSocket } from "./hooks/useMultiPoolWebSocket";
 import type { TaggedWsEvent }    from "./hooks/useMultiPoolWebSocket";
 import { INTERNAL_QUEUE_SUFFIX, mirrorOriginOf } from "./poolLabel";
-import { apiFetch } from '@/api/apiFetch'
+import { loadConversationHistory } from "./api";
 
 const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
 
@@ -92,6 +92,7 @@ function makeContact(sessionId: string, poolId: string, channel = "webchat"): Co
     instanceId:        null,
     maxReplyTimeMs:    null,
     messages:          [],
+    historyError:      null,
     supervisorState:   null,
     capabilities:      null,
     sessionStartedAt:  new Date(),
@@ -343,22 +344,25 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const disconnectToastIds    = useRef<Map<string, string>>(new Map());
 
   // ── History loader ────────────────────────────────────────────────────────
+  //
+  // A falha NÃO vira lista vazia. Até 2026-09-01 este bloco fazia
+  // `res.ok ? json : { messages: [] }` e engolia a exceção — então um `401` na
+  // rota (que passou a exigir credencial na CAP-12) chegava ao operador como
+  // *"Awaiting messages…"*, idêntico a um contato sem histórico. Hoje o motivo
+  // viaja no contato e a ChatArea o mostra; e as mensagens JÁ carregadas ficam de
+  // pé, porque sobrescrevê-las com `[]` apagaria dado bom por causa de uma
+  // releitura que falhou.
   const fetchHistory = useCallback(async (sessionId: string) => {
-    try {
-      const res  = await apiFetch(`/api/conversation_history/${sessionId}`);
-      const data = res.ok
-        ? (await res.json() as { messages: ChatMessage[] })
-        : { messages: [] };
-      setContacts(prev => {
-        const c = prev.get(sessionId);
-        if (!c) return prev;
-        const next = new Map(prev);
-        next.set(sessionId, { ...c, messages: data.messages ?? [] });
-        return next;
-      });
-    } catch {
-      // non-fatal
-    }
+    const { messages, error } = await loadConversationHistory(sessionId);
+    setContacts(prev => {
+      const c = prev.get(sessionId);
+      if (!c) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, error
+        ? { ...c, historyError: error }
+        : { ...c, messages, historyError: null });
+      return next;
+    });
   }, []);
 
   // ── WS event handler ──────────────────────────────────────────────────────

@@ -369,6 +369,13 @@ export interface ContactSession {
   /** Maximum reply time per customer message (ms). Null = no per-message SLA configured. */
   maxReplyTimeMs:   number | null;
   messages:         ChatMessage[];
+  /**
+   * Motivo pelo qual o histórico persistido NÃO pôde ser lido, ou `null` quando a
+   * leitura aconteceu. Existe para separar *"este contato não tem histórico"* de
+   * *"não sei o que este contato tem"* — até 2026-09-01 as duas coisas chegavam à
+   * tela como a mesma lista vazia. Ver `loadConversationHistory` em `../api.ts`.
+   */
+  historyError:     string | null;
   supervisorState:  SupervisorState | null;
   capabilities:     SupervisorCapabilities | null;
   sessionStartedAt: Date;

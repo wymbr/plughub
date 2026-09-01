@@ -275,6 +275,7 @@
     "briefing":        "Resumo",
     "transcript":      "Conversa referenciada",
     "transcriptEmpty": "Sem transcrição disponível.",
+    "transcriptError": "Não foi possível carregar a transcrição ({{reason}}). Não se sabe se esta conversa tem conteúdo.",
     "noForm":          "Carregando formulário…",
     "submit":          "Enviar",
     "yes":             "Sim",
@@ -573,6 +574,9 @@
   "chatArea": {
     "sessionClosedBanner": "Cliente desconectou — preencha o encerramento para liberar o contato.",
     "waitingMessages":     "Aguardando mensagens…",
+    "historyErrorTitle":   "Não foi possível carregar o histórico deste contato",
+    "historyErrorHint":    "A conversa anterior não pôde ser lida ({{reason}}). Isto não é um histórico vazio — o conteúdo dele é desconhecido.",
+    "historyErrorPartial": "A conversa anterior não pôde ser carregada ({{reason}}) — as mensagens abaixo podem ser só parte do contato.",
     "selectionContext":    "📋 Contexto",
     "selectionCount_one":  "{{count}} mensagem selecionada",
     "selectionCount_other":"{{count}} mensagens selecionadas",

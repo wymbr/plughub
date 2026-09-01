@@ -378,6 +378,35 @@ Vite proxies added: `'^/api'` → `http://localhost:3100`, `'^/agent-ws'` → `w
 
 New dependency: `recharts@^2.x` (used by EstadoTab sentiment line chart).
 
+## Histórico do contato — a leitura tem UM carregador, e a falha tem NOME (2026-09-01)
+
+`GET /api/conversation_history/{sessionId}` (mcp-server) alimenta três superfícies: a ChatArea do
+contato ativo, o preview read-only do contato em fila e o briefing do `DialogFormRenderer`. Até
+2026-09-01 os três chamavam a rota direto e decidiam sozinhos o que fazer com a falha — **todos da
+mesma forma**, `res.ok ? json : { messages: [] }` mais um `catch` vazio. Qualquer falha virava
+*histórico vazio*, indistinguível de um contato que não tem histórico, e sem log em lugar nenhum.
+
+Hoje há **um** carregador, `loadConversationHistory` em `modules/agent-assist/api.ts`. Ele não lança;
+devolve `{ messages, error }`, e o contrato é a distinção que faltava:
+
+| `error` | significa | `messages: []` quer dizer |
+|---|---|---|
+| `null` | a leitura ACONTECEU | este contato não tem histórico — é fato |
+| não-nulo | não se sabe o que há no histórico | não há o que entregar, nunca "está vazio" |
+
+Regras que os consumidores têm de manter:
+
+- **releitura que falha não sobrescreve mensagens já carregadas** — gravar `[]` por cima apaga
+  transcrição boa por causa de um `401` transitório;
+- **com mensagens presentes, o aviso é FAIXA, não sumiço** (`chatArea.historyErrorPartial`): a
+  conversa começa no meio, e o operador responderia achando que viu tudo;
+- **`transcriptEmpty` ≠ `transcriptError`** no briefing, pelo mesmo motivo.
+
+O motivo mora em `ContactSession.historyError` — fato da sessão exibida, ao lado das mensagens que
+ele qualifica. Por que isto ganhou seção: o defeito só apareceu quando a rota passou a exigir
+credencial (CAP-12) e um bundle velho a chamou sem Bearer; o `401` chegou ao operador como
+*"Awaiting messages…"*. Ver `CHANGELOG.md` 2026-09-01 (CAP-16).
+
 ## Seletor de presença — o que o humano pode ESCOLHER (2026-08-11)
 
 Três listas, e confundi-las é o defeito histórico desta tela:

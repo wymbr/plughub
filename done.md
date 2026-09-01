@@ -128,6 +128,7 @@ história no `CHANGELOG.md`. Nada registrado aqui ainda.)*
 | CAP-11 | Superfície de rede do mcp-server medida: a borda existe (nginx no Dockerfile do platform-ui), não publica o transporte MCP, e publica 20 rotas `/api/*` | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-12 | As 9 rotas `/api/*` publicadas pela borda passaram a exigir credencial; o decode-sem-verificar do `verifyJwtPayload` saiu junto (era um portão que não podia reprovar onde o segredo faltava) | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-13 | A 3100 passou a publicar em loopback nos dois composes — o transporte MCP anônimo estava aceitando conexão no IP de LAN, medido | 2026-09-01 | `CHANGELOG.md:3` |
+| CAP-16 | Os três chamadores de `/api/conversation_history` pararam de converter falha de leitura em histórico vazio: carregador único, motivo na tela e releitura que falha não apaga mensagem boa | 2026-09-01 | `CHANGELOG.md:3` |
 
 ---
 

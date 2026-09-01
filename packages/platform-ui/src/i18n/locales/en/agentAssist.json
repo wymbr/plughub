@@ -280,6 +280,7 @@
     "briefing":        "Briefing",
     "transcript":      "Referenced conversation",
     "transcriptEmpty": "No transcript available.",
+    "transcriptError": "Could not load the transcript ({{reason}}). It is unknown whether this conversation has content.",
     "noForm":          "Loading form…",
     "submit":          "Submit",
     "yes":             "Yes",
@@ -574,6 +575,9 @@
   "chatArea": {
     "sessionClosedBanner": "Client disconnected — fill in the close form to release the contact.",
     "waitingMessages":     "Awaiting messages…",
+    "historyErrorTitle":   "Could not load this contact's history",
+    "historyErrorHint":    "The earlier conversation could not be read ({{reason}}). This is not an empty history — its content is unknown.",
+    "historyErrorPartial": "The earlier conversation could not be loaded ({{reason}}) — the messages below may be only part of the contact.",
     "selectionContext":    "📋 Context",
     "selectionCount_one":  "{{count}} message selected",
     "selectionCount_other":"{{count}} messages selected",

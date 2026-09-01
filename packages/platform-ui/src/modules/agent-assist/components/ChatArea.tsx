@@ -32,6 +32,13 @@ interface ChatAreaProps {
   selectedMessageIds?: Set<string>;
   /** Arc 11 Fase C — toggle a message's selection state */
   onToggleSelection?:  (messageId: string) => void;
+  /**
+   * Motivo pelo qual o histórico persistido não pôde ser lido (`null` = leitura
+   * OK). Não-nulo troca o vazio "aguardando mensagens" por uma recusa nomeada, e
+   * marca a conversa como possivelmente INCOMPLETA quando já há mensagens vivas —
+   * as duas coisas eram indistinguíveis até 2026-09-01. Ver `../api.ts`.
+   */
+  historyError?:       string | null;
 }
 
 const TREND_ICON: Record<string, string> = {
@@ -65,6 +72,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onMenuSubmit,
   selectedMessageIds,
   onToggleSelection,
+  historyError = null,
 }) => {
   const { t } = useTranslation('agentAssist');
   const bottomRef    = useRef<HTMLDivElement | null>(null);
@@ -199,9 +207,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         aria-relevant="additions"
         className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 bg-surface-muted"
       >
+        {/* Histórico ilegível: a recusa é NOMEADA, nunca uma tela vazia. Com
+            mensagens vivas na tela o aviso vira faixa — a conversa está
+            incompleta no começo, e é isso que o operador precisa saber antes de
+            responder. */}
+        {historyError && messages.length > 0 && (
+          <div
+            role="status"
+            className="self-stretch flex items-start gap-2 px-3 py-2 rounded-lg bg-warning-light border border-warning/30 text-xs text-warning-text"
+          >
+            <span aria-hidden="true">⚠</span>
+            <span>{t('chatArea.historyErrorPartial', { reason: historyError })}</span>
+          </div>
+        )}
+
         {messages.length === 0 && (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-sm text-muted">{t('chatArea.waitingMessages')}</p>
+          <div className="flex-1 flex items-center justify-center px-6">
+            {historyError ? (
+              <div role="status" className="text-center">
+                <p className="text-sm text-warning-text font-medium">
+                  {t('chatArea.historyErrorTitle')}
+                </p>
+                <p className="text-xs text-muted mt-1">
+                  {t('chatArea.historyErrorHint', { reason: historyError })}
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-muted">{t('chatArea.waitingMessages')}</p>
+            )}
           </div>
         )}
 

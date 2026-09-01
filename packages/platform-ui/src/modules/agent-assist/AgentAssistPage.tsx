@@ -58,6 +58,7 @@ import {
 import { CopilotBanner }   from "./components/CopilotBanner";
 import { WebRTCOverlay }   from "./components/WebRTCOverlay";
 import { apiFetch } from '@/api/apiFetch'
+import { loadConversationHistory } from "./api";
 
 // Set vazio estável para o preview read-only (ChatArea sem seleção de mensagens).
 const EMPTY_MESSAGE_IDS: Set<string> = new Set<string>();
@@ -195,17 +196,21 @@ export const AgentAssistPage: React.FC = () => {
   // P4 — bump força o PullInboxPanel a refazer o fetch na hora (ex.: pós-release).
   const [inboxRefreshSignal, setInboxRefreshSignal] = useState<number>(0);
   const [previewMessages,  setPreviewMessages]  = useState<ChatMessage[]>([]);
+  /** Motivo de o histórico do preview não ter sido lido — ver `./api.ts`. */
+  const [previewHistoryError, setPreviewHistoryError] = useState<string | null>(null);
   const { state: previewSupervisorState } = useSupervisorState(previewSessionId, lastWsEvent);
 
   useEffect(() => {
-    if (!previewSessionId) { setPreviewMessages([]); return; }
+    if (!previewSessionId) { setPreviewMessages([]); setPreviewHistoryError(null); return; }
     let alive = true;
+    // Aqui NÃO há toast nem log extra: o poll é de 4 s e `loadConversationHistory`
+    // já loga o motivo. O que a tela ganha é a distinção entre "contato em fila
+    // ainda sem mensagens" e "não consegui ler as mensagens dele".
     const load = async () => {
-      try {
-        const res  = await apiFetch(`/api/conversation_history/${previewSessionId}`);
-        const data = res.ok ? (await res.json() as { messages?: ChatMessage[] }) : { messages: [] };
-        if (alive) setPreviewMessages(data.messages ?? []);
-      } catch { /* transient — preview pode ficar momentaneamente vazio */ }
+      const { messages, error } = await loadConversationHistory(previewSessionId);
+      if (!alive) return;
+      setPreviewHistoryError(error);
+      if (!error) setPreviewMessages(messages);
     };
     load();
     const id = setInterval(load, 4000);   // D3 — segue o poll
@@ -887,6 +892,7 @@ export const AgentAssistPage: React.FC = () => {
                 {/* Chat messages */}
                 <ChatArea
                   messages={visibleMessages}
+                  historyError={selected.historyError}
                   aiTyping={aiTypingSessions.has(selected.sessionId)}
                   sessionClosed={selected.sessionClosed}
                   liveState={selected.supervisorState ? {
@@ -925,6 +931,7 @@ export const AgentAssistPage: React.FC = () => {
                 </div>
                 <ChatArea
                   messages={previewMessages}
+                  historyError={previewHistoryError}
                   aiTyping={false}
                   sessionClosed={false}
                   liveState={previewSupervisorState ? {
