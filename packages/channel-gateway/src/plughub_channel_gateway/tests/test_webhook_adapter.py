@@ -192,7 +192,7 @@ async def test_trigger_root_inherits_transitive_root_from_origin_ctx(adapter, mo
     )
     event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
     assert event["root_session_id"] == "W1-root"
-    mock_redis.hget.assert_awaited_with(f"{TENANT_ID}:ctx:W2-origin", "session.root_session_id")
+    mock_redis.hget.assert_awaited_with(f"{TENANT_ID}:ctx:W2-origin", "core.contact.root_session_id")
 
 
 @pytest.mark.asyncio
@@ -220,13 +220,13 @@ async def test_trigger_explicit_root_param_wins(adapter, mock_redis, mock_produc
 
 @pytest.mark.asyncio
 async def test_trigger_seeds_ctx_root(adapter, mock_redis, mock_producer):
-    """The new session's ContextStore is seeded with session.root_session_id = self,
+    """The new session's ContextStore is seeded with core.contact.root_session_id = self,
     so any child spawned from it inherits the transitive root."""
     session_id = await adapter.handle_trigger(skill_id=SKILL_ID, tenant_id=TENANT_ID)
     assert mock_redis.hset.await_args_list, "expected an hset for ctx seeding"
     mapping = mock_redis.hset.await_args_list[0].kwargs["mapping"]
-    assert "session.root_session_id" in mapping
-    assert json.loads(mapping["session.root_session_id"])["value"] == session_id
+    assert "core.contact.root_session_id" in mapping
+    assert json.loads(mapping["core.contact.root_session_id"])["value"] == session_id
 
 
 # ── handle_resume — Fase A (token resolution) ─────────────────────────────────

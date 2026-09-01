@@ -66,7 +66,7 @@ const WorkflowTriggerInputSchema = z.object({
   ),
 
   origin_session_id: z.string().optional().describe(
-    "Current session ID — stored as session.origin_session_id in the new workflow " +
+    "Current session ID — stored as core.workflow.origin_session_id in the new workflow " +
     "session ContextStore for traceability. In skill-flow YAML use $.session_id."
   ),
 
@@ -231,7 +231,7 @@ export function registerWorkflowTools(
   // workflow that delegated work to it via the delegate() step.
   //
   // The agent reads the resume_token from its own ContextStore:
-  //   @ctx.session.workflow_resume_token   (written by the delegate step engine)
+  //   @ctx.core.workflow.resume_token   (written by the delegate step engine)
   //
   // This tool posts to channel-gateway POST /v1/channels/webhook/resume/{token}.
   //
@@ -248,12 +248,12 @@ export function registerWorkflowTools(
     "workflow_resume",
     "Resume a parent workflow that delegated I/O to this agent via the delegate() step. " +
     "Call this as the last step of your skill after completing the assigned I/O task. " +
-    "Pass resume_token from @ctx.session.workflow_resume_token (interpolated by skill-flow-engine). " +
+    "Pass resume_token from @ctx.core.workflow.resume_token (interpolated by skill-flow-engine). " +
     "decision: 'input' (data collected), 'approved', 'rejected', or 'timeout'.",
     {
       resume_token: z.string().min(1).describe(
         "The resume token for the parent workflow. In skill-flow YAML use " +
-        "@ctx.session.workflow_resume_token — the engine resolves it from ContextStore."
+        "@ctx.core.workflow.resume_token — the engine resolves it from ContextStore."
       ),
       decision: z.enum(["input", "approved", "rejected", "timeout"]).describe(
         "Outcome of the I/O task. 'input' = data collected from customer. " +

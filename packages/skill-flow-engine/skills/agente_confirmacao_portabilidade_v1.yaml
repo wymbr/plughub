@@ -5,7 +5,7 @@
 # Acionado por: delegate() step em skill_portabilidade_demo_v1
 #
 # Recebe via ContextStore (escrito pelo delegate step):
-#   session.workflow_resume_token  — token para retomar o workflow pai
+#   core.workflow.resume_token  — token para retomar o workflow pai
 #   session.contact_identifier     — número/email do cliente para contato
 #   session.numero_atual           — número que está sendo portado
 #   session.operadora_destino      — operadora de destino
@@ -100,7 +100,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "@ctx.session.workflow_resume_token"
+      resume_token: "@ctx.core.workflow.resume_token"
       decision: "input"
       # Identity Resolver (nível b §11): repassa a procedência da retomada. Só
       # está presente quando este specialist foi acionado pelo reconnect por
@@ -118,7 +118,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "@ctx.session.workflow_resume_token"
+      resume_token: "@ctx.core.workflow.resume_token"
       decision: "timeout"
     on_success: retornar_sessao_pai
     on_failure: finalizar
@@ -126,14 +126,14 @@ steps:
   # ── Etapa 3c: retornar à sessão pai (Session A-new) ───────────────────────────
   # Quando o agente roda como conference specialist em Session A-new (não como
   # sessão independente em Session C), o delegate_resume_token está disponível
-  # em @ctx.session.delegate_resume_token e resume o delegate step do pai.
+  # em @ctx.core.workflow.delegate_resume_token e resume o delegate step do pai.
   # Quando roda em Session C (independente), este token é null → invoke falha
   # silenciosamente → on_failure: finalizar. Comportamento correto para ambos.
   - id: retornar_sessao_pai
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "@ctx.session.delegate_resume_token"
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
       decision: "input"
       resume_origin: "@ctx.session.resume_origin"   # nível b §11 (ausente → "token")
     on_success: finalizar

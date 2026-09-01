@@ -97,7 +97,7 @@ steps:
       survey_session_id: "$.session_id"
       # Segurança Fase B — aqui a sessão pesquisada É a própria (origin = $.session_id),
       # então o pool desta sessão é o pool da origem. (≠ runner J4c, onde o alvo é outro.)
-      pool_id:           "@ctx.session.pool.id"
+      pool_id:           "@ctx.core.pool.id"
       form_id:           "$.config.form_id"   # fatia 1: mesmo form do deploy (grava o que foi renderizado)
       answers:           "$.pipeline_state.respostas"
     on_success: agradecer

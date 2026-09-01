@@ -207,9 +207,9 @@ steps:
     on_failure: limpar_form_do_pacote
 
   # ══ Etapa 3b — DESARMAR o pacote de aprovação antes de re-delegar ══════════
-  # As tags do pacote (`session.dialog_form_id`, `session.decisions`) são escritas
+  # As tags do pacote (`core.workflow.dialog_form_id`, `session.decisions`) são escritas
   # pelo delegate de aprovação e NUNCA são limpas pela plataforma — só o
-  # `session.delegate_resume_token` é sobrescrito no delegate seguinte.
+  # `core.workflow.delegate_resume_token` é sobrescrito no delegate seguinte.
   #
   # Sem esta limpeza, o delegate de PARKING (etapa 4) herda um snapshot que o
   # Console lê como "tarefa de aprovação": o mesmo formulário reaparece no inbox e,
@@ -225,7 +225,7 @@ steps:
     input:
       session_id: "$.session_id"
       tenant_id:  "$.tenant_id"
-      tag:        "session.dialog_form_id"
+      tag:        "core.workflow.dialog_form_id"
       value:      ""
       confidence: 1.0
       visibility: "agents_only"

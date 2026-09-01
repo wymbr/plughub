@@ -323,9 +323,9 @@ async def _process_message(
                 event.session_id, result.instance_id,
                 result.pool_id, result.priority_score, result.routing_mode,
             )
-            # Write session.pool.* to ContextStore so skill-flows can reference
-            # @ctx.session.pool.id, @ctx.session.pool.channels, and
-            # @ctx.session.pool.mentionable_pools without querying agent-registry.
+            # Write core.pool.* to ContextStore so skill-flows can reference
+            # @ctx.core.pool.id, @ctx.core.pool.channels, and
+            # @ctx.core.pool.mentionable_pools without querying agent-registry.
             asyncio.create_task(
                 _write_pool_context(
                     redis_client,
@@ -928,9 +928,9 @@ async def _persist_queued_contact(
             "Failed to persist queued contact: session=%s — %s", event.session_id, exc
         )
 
-    # Fase C (queue-attended-model): write session.queue.* to ContextStore so
-    # the queue-treatment skill-flow can reference @ctx.session.queue.position /
-    # @ctx.session.queue.eta_ms. Runs on EVERY enqueue attempt (not just the
+    # Fase C (queue-attended-model): write core.queue.* to ContextStore so
+    # the queue-treatment skill-flow can reference @ctx.core.queue.position /
+    # @ctx.core.queue.eta_ms. Runs on EVERY enqueue attempt (not just the
     # first): drain re-attempts re-enter here and refresh the position.
     asyncio.create_task(
         _write_queue_context(
@@ -1135,8 +1135,8 @@ async def _write_queue_context(
     ttl_seconds:       int = 86_400,
 ) -> None:
     """
-    Fase C (queue-attended-model): writes session.queue.position and
-    session.queue.eta_ms to the ContextStore hash while the contact waits.
+    Fase C (queue-attended-model): writes core.queue.position and
+    core.queue.eta_ms to the ContextStore hash while the contact waits.
 
     Position/ETA vêm de `_queue_position_and_eta` — a MESMA conta que alimenta o
     `queue.position_updated` no Kafka (antes eram duas implementações do mesmo fato,
@@ -1167,10 +1167,10 @@ async def _write_queue_context(
             })
 
         mapping: dict[str, str] = {
-            "session.queue.position": _entry(position),
+            "core.queue.position": _entry(position),
         }
         if avg_handle_ms > 0:
-            mapping["session.queue.eta_ms"] = _entry(eta_ms)
+            mapping["core.queue.eta_ms"] = _entry(eta_ms)
 
         await redis_client.hset(ctx_key, mapping=mapping)
         await redis_client.expire(ctx_key, ttl_seconds, nx=True)
@@ -1194,10 +1194,10 @@ async def _write_pool_context(
     ttl_seconds:  int = 86_400,
 ) -> None:
     """
-    Writes session.pool.* entries to the ContextStore Redis hash so skill-flows
-    can reference @ctx.session.pool.id, @ctx.session.pool.channels,
-    @ctx.session.pool.mentionable_pools, @ctx.session.pool.max_reply_time_ms, and
-    @ctx.session.pool.llm_account_ids without querying the agent-registry.
+    Writes core.pool.* entries to the ContextStore Redis hash so skill-flows
+    can reference @ctx.core.pool.id, @ctx.core.pool.channels,
+    @ctx.core.pool.mentionable_pools, @ctx.core.pool.max_reply_time_ms, and
+    @ctx.core.pool.llm_account_ids without querying the agent-registry.
 
     Reads pool_config from the routing engine's own Redis cache
     ({tenant_id}:pool_config:{pool_id}) to avoid an additional I/O path.
@@ -1240,17 +1240,17 @@ async def _write_pool_context(
             })
 
         mapping: dict[str, str] = {
-            "session.pool.id":       _entry(pool_id),
-            "session.pool.channels": _entry(channel_types),
+            "core.pool.id":       _entry(pool_id),
+            "core.pool.channels": _entry(channel_types),
         }
         if mentionable_pools:
-            mapping["session.pool.mentionable_pools"] = _entry(mentionable_pools)
+            mapping["core.pool.mentionable_pools"] = _entry(mentionable_pools)
         if agent_groups:
-            mapping["session.pool.agent_groups"] = _entry(agent_groups)
+            mapping["core.pool.agent_groups"] = _entry(agent_groups)
         if max_reply_time_ms is not None:
-            mapping["session.pool.max_reply_time_ms"] = _entry(max_reply_time_ms)
+            mapping["core.pool.max_reply_time_ms"] = _entry(max_reply_time_ms)
         if llm_account_ids:
-            mapping["session.pool.llm_account_ids"] = _entry(llm_account_ids)
+            mapping["core.pool.llm_account_ids"] = _entry(llm_account_ids)
 
         await redis_client.hset(ctx_key, mapping=mapping)
         # EXPIRE with NX: only sets TTL if no TTL is currently on the key,

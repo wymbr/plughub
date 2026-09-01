@@ -48,20 +48,20 @@ export function snapVal(snap: Snapshot, key: string): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined
 }
 
-// The delegate-conference path writes session.delegate_resume_token; the plain
-// webhook delegate writes session.workflow_resume_token. collect (wrap-up-α, E2)
+// The delegate-conference path writes core.workflow.delegate_resume_token; the plain
+// webhook delegate writes core.workflow.resume_token. collect (wrap-up-α, E2)
 // will add its own key here — resolve generically so the core covers every path.
 export function resumeTokenOf(snap: Snapshot): string | undefined {
   return (
-    snapVal(snap, "session.delegate_resume_token") ??
-    snapVal(snap, "session.workflow_resume_token") ??
+    snapVal(snap, "core.workflow.delegate_resume_token") ??
+    snapVal(snap, "core.workflow.resume_token") ??
     snapVal(snap, "session.collect_resume_token")
   )
 }
 
 /** True when a claimed contact is a FORM-FILL task (renders in this surface). */
 export function isFormFillSnapshot(snap: Snapshot): boolean {
-  return !!snapVal(snap, "session.dialog_form_id") && !!resumeTokenOf(snap)
+  return !!snapVal(snap, "core.workflow.dialog_form_id") && !!resumeTokenOf(snap)
 }
 
 /** Resolve a LocalizedText (string | { locale: text }) to a plain string. */
@@ -227,7 +227,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   const { t } = useTranslation("agentAssist")
   const { getAccessToken } = useAuth()
 
-  const formId            = snapVal(snapshot, "session.dialog_form_id")
+  const formId            = snapVal(snapshot, "core.workflow.dialog_form_id")
   const resumeToken       = resumeTokenOf(snapshot)
   const briefingSessionId = snapVal(snapshot, "session.briefing_session_id")
   const title             = snapVal(snapshot, "session.title")

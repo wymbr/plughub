@@ -575,18 +575,18 @@ export const AgentAssistPage: React.FC = () => {
     : (selected?.messages ?? []).filter(m => messageMatchesFilter(m, filterKey));
 
   // Form-fill (R0) — o contato reivindicado é uma workflow suspensa que carrega um
-  // DialogForm (`session.dialog_form_id`) + resume token no context_snapshot. A
+  // DialogForm (`core.workflow.dialog_form_id`) + resume token no context_snapshot. A
   // aprovação (A3) é uma ESPECIALIZAÇÃO (também traz `session.decisions`).
   const approvalSnapshot = selected?.supervisorState?.customer_context?.context_snapshot ?? null;
   const isFormFillContact = isFormFillSnapshot(approvalSnapshot as never);
   const isApprovalContact = isApprovalSnapshot(approvalSnapshot as never);
   // pool_id do RESUME/release = o pool onde o item foi REIVINDICADO (a claim lease
-  // vive lá), NÃO o `session.pool.id` do snapshot — que é o pool do WORKFLOW (ex.:
+  // vive lá), NÃO o `core.pool.id` do snapshot — que é o pool do WORKFLOW (ex.:
   // wrapup_detached_ia / formfill_demo_ia), não o pool pull do claim (ex.: formfill_demo).
-  // Usar session.pool.id fazia o resume procurar a lease no pool errado → 403
+  // Usar core.pool.id fazia o resume procurar a lease no pool errado → 403
   // (caller!=claimant) e o workflow nunca resumia. `selected.poolId` vem do routed do claim.
   const approvalPoolId = (selected?.poolId
-    ?? ((approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.pool.id"]?.value as string | undefined))
+    ?? ((approvalSnapshot as Record<string, { value?: unknown }> | null)?.["core.pool.id"]?.value as string | undefined))
     ?? "";
 
   // Tira a tarefa de aprovação do atendimento do agente: remove do mapa (para o

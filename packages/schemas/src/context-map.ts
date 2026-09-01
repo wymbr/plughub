@@ -198,6 +198,62 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
   mode:             "audit",
   dynamic_prefixes: ["agent.", "segment.", "core.segment."],
   contexto: {
+    // ── core.* — RESERVADO à plataforma (CNS-02). Semeado; o cadastro recusa
+    //    root `core` vindo de tenant. Cada folha traz a canônica ANTERIOR no
+    //    `legado`: o snapshot durável guarda os nomes velhos para sempre, e é o
+    //    alias que mantém aquele histórico mascarado.
+    core: {
+      contact: {
+        close_origin: { tipo: "texto", legado: ["session.contato.close_origin", "session.close_origin"] },
+        customer_participant_id: { tipo: "texto", legado: ["session.contato.customer_participant_id", "session.customer_participant_id"] },
+        human_agent_participant_id: { tipo: "texto", legado: ["session.contato.human_agent_participant_id", "session.human_agent_participant_id"] },
+        last_primary_agent_key: { tipo: "texto", legado: ["session.contato.last_primary_agent_key", "session.last_primary_agent_key"] },
+        last_primary_segment_id: { tipo: "texto", legado: ["session.contato.last_primary_segment_id", "session.last_primary_segment_id"] },
+        root_session_id: { tipo: "texto", legado: ["session.contato.root_session_id", "session.root_session_id"] },
+        spawn_reason: { tipo: "texto", legado: ["session.contato.spawn_reason", "session.spawn_reason"] },
+      },
+      copilot: {
+        last_analysis: { tipo: "texto", legado: ["session.copilot.ultima_analise"] },
+        recommended_actions: { tipo: "texto", legado: ["session.copilot.acoes_recomendadas"] },
+        risk_flags: { tipo: "texto", legado: ["session.copilot.flags_risco"] },
+        suggested_reply: { tipo: "texto", legado: ["session.copilot.sugestao_resposta"] },
+      },
+      pool: {
+        agent_groups: { tipo: "texto", legado: ["session.pool.agent_groups"] },
+        channels: { tipo: "texto", legado: ["session.pool.channels"] },
+        id: { tipo: "texto", legado: ["session.pool.id"] },
+        llm_account_ids: { tipo: "texto", legado: ["session.pool.llm_account_ids"] },
+        max_reply_time_ms: { tipo: "texto", legado: ["session.pool.max_reply_time_ms"] },
+        mentionable_pools: { tipo: "texto", legado: ["session.pool.mentionable_pools"] },
+      },
+      process: {
+        outcome: { tipo: "texto", legado: ["session.processo.outcome", "session.process_outcome"] },
+      },
+      queue: {
+        eta_ms: { tipo: "texto", legado: ["session.queue.eta_ms"] },
+        position: { tipo: "texto", legado: ["session.queue.position"] },
+      },
+      sentiment: {
+        category: { tipo: "texto", label: "Classificada na LEITURA — sem produtor próprio", legado: ["session.sentimento.categoria"] },
+        current: { tipo: "texto", legado: ["session.sentimento.current"] },
+      },
+      survey: {
+        agent_key: { tipo: "texto", legado: ["session.survey.agent_key", "session.survey_agent_key", "session.surveyed_agent_key"] },
+        grain: { tipo: "texto", legado: ["session.survey.grain", "session.survey_grain"] },
+        pool_id: { tipo: "texto", legado: ["session.survey.pool_id", "session.survey_pool_id"] },
+        segment_id: { tipo: "texto", legado: ["session.survey.segment_id", "session.survey_segment_id", "session.surveyed_segment_id"] },
+        target_id: { tipo: "texto", legado: ["session.survey.target_id", "session.survey_target_id"] },
+      },
+      workflow: {
+        current_round: { tipo: "texto", legado: ["session.workflow.current_round", "session.current_round"] },
+        delegate_resume_token: { tipo: "credential", legado: ["session.workflow.delegate_resume_token", "session.delegate_resume_token"] },
+        dialog_form_id: { tipo: "texto", legado: ["session.workflow.dialog_form_id", "session.dialog_form_id"] },
+        origin_session_id: { tipo: "texto", legado: ["session.workflow.origin_session_id", "session.origin_session_id"] },
+        resume_token: { tipo: "credential", legado: ["session.workflow.resume_token", "session.workflow_resume_token"] },
+        review_decision: { tipo: "texto", legado: ["session.workflow.review_decision", "session.review_decision"] },
+        round_echoed: { tipo: "texto", legado: ["session.workflow.round_echoed", "session.round_echoed"] },
+      },
+    },
     session: {
       // ── Dados do cliente — hoje no namespace `caller.*` ──────────────────
       cliente: {
@@ -205,8 +261,7 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         cpf:               { tipo: "cpf",        legado: ["caller.cpf", "session.cpf"] },
         telefone:          { tipo: "phone",      legado: ["caller.telefone"] },
         email:             { tipo: "email_addr", legado: ["caller.email"] },
-        customer_id:       { tipo: "texto",      legado: ["caller.customer_id", "session.customer_id"],
-                             label: "ID interno — não-PII, necessário p/ histórico/360" },
+        customer_id:       { tipo: "texto",      legado: ["caller.customer_id", "session.customer_id"], label: "ID interno — não-PII, necessário p/ histórico/360" },
         account_id:        { tipo: "texto",      legado: ["caller.account_id"] },
         motivo_contato:    { tipo: "texto",      legado: ["caller.motivo_contato", "session.motivo_contato"] },
         intencao_primaria: { tipo: "texto",      legado: ["caller.intencao_primaria"] },
@@ -243,19 +298,6 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       // ── Já CANÔNICOS: escritos em `escopo.dominio.campo` pelo routing-engine ──
       // Nenhum `legado`, e é isso que dá ao contador do D3 o seu par: sem tag
       // canônica viva, "ninguém migrou" e "ninguém usa" seriam indistinguíveis.
-      pool: {
-        id:                { tipo: "texto" },
-        channels:          { tipo: "texto" },
-        llm_account_ids:   { tipo: "texto" },
-        max_reply_time_ms: { tipo: "texto" },
-        mentionable_pools: { tipo: "texto" },
-        // Escrito pelo routing-engine a cada roteamento (`agent-registry.ts:443`).
-        agent_groups:      { tipo: "texto" },
-      },
-      queue: {
-        position: { tipo: "texto" },
-        eta_ms:   { tipo: "texto" },
-      },
       // ── Copiloto — as 4 saidas do `copilot_emitter` + o interruptor ──────
       //
       // ⚠️ Este dominio e' NOVO no mapa, e a nota que precedeu esta fatia dizia
@@ -275,14 +317,6 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       // quatro pela porta de masking.
       copilot: {
         mode:                { tipo: "texto", label: "Interruptor — `mention.set_context`" },
-        ultima_analise:      { tipo: "texto" },
-        sugestao_resposta:   { tipo: "texto" },
-        flags_risco:         { tipo: "texto" },
-        acoes_recomendadas:  { tipo: "texto" },
-      },
-      sentimento: {
-        current:   { tipo: "texto" },
-        categoria: { tipo: "texto", label: "Classificada na LEITURA — sem produtor próprio" },
       },
       wrapup: {
         resumo:            { tipo: "texto" },
@@ -304,13 +338,8 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       // (`ctx_writes` do channel-gateway + escritas do bridge + `tag:` dos YAML), não
       // de semelhança de nome.
       workflow: {
-        dialog_form_id:        { tipo: "texto", legado: ["session.dialog_form_id"] },
-        resume_token:          { tipo: "credential", legado: ["session.workflow_resume_token"] },
-        delegate_resume_token: { tipo: "credential", legado: ["session.delegate_resume_token"] },
-        current_round:         { tipo: "texto", legado: ["session.current_round"] },
         max_rounds:            { tipo: "texto", legado: ["session.max_rounds"] },
         decisions:             { tipo: "texto", legado: ["session.decisions"] },
-        origin_session_id:     { tipo: "texto", legado: ["session.origin_session_id"] },
         briefing_session_id:   { tipo: "texto", legado: ["session.briefing_session_id"] },
         // ── Pacote de aprovacao — MESMO `delegate.context` que ja deposita
         // `dialog_form_id` e `decisions` acima. Nao e' dominio novo: e' o resto do
@@ -336,29 +365,20 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         // Revisao de avaliacao (evaluation-api `router.py:2336-2338`, `:2455-2457`).
         // `round_echoed` e' o par de `current_round` acima; `review_decision`, o de
         // `decisions` — mesma familia, mesmo dominio.
-        review_decision:       { tipo: "texto", legado: ["session.review_decision"] },
-        round_echoed:          { tipo: "texto", legado: ["session.round_echoed"] },
       },
       contato: {
-        close_origin:               { tipo: "texto", legado: ["session.close_origin"] },
         contact_channel:            { tipo: "texto", legado: ["session.contact_channel"] },
         contact_identifier:         { tipo: "texto", legado: ["session.contact_identifier"] },
         contact_outcome:            { tipo: "texto", legado: ["session.contact_outcome"] },
         customer_present:           { tipo: "texto", legado: ["session.customer_present"] },
-        customer_participant_id:    { tipo: "texto", legado: ["session.customer_participant_id"] },
-        human_agent_participant_id: { tipo: "texto", legado: ["session.human_agent_participant_id"] },
         confirmation_channel:       { tipo: "texto", legado: ["session.confirmation_channel"] },
         // ── Proveniencia do ACESSO. Escritas juntas pelo gateway em todo nascimento
         // de sessao (`webhook.py:609-625`, `:1665-1687`, `:2183-2195`).
         // `spawn_reason` e' o discriminador ternario da D13 (NULL=inbound ·
         // `collect`=outbound · `trigger`/`delegate`=interno).
-        spawn_reason:               { tipo: "texto", legado: ["session.spawn_reason"] },
-        root_session_id:            { tipo: "texto", legado: ["session.root_session_id"] },
         resume_origin:              { tipo: "texto", legado: ["session.resume_origin"] },
         // ── Fatos que o bridge carimba PRE-HOOK, para o hook saber quem atendeu
         // (`main.py:1469`, `:1491`). Sao a fonte dos aliases `surveyed_*` logo abaixo.
-        last_primary_segment_id:    { tipo: "texto", legado: ["session.last_primary_segment_id"] },
-        last_primary_agent_key:     { tipo: "texto", legado: ["session.last_primary_agent_key"] },
         // Pergunta consolidada que a IA GERA e o menu seguinte interpola
         // (`agente_contexto_ia_v1.yaml:170-175`). Prosa de LLM — e `texto` aqui nao e'
         // omissao: o valor e' exibido AO CLIENTE, entao mascara-lo quebra a coleta.
@@ -379,16 +399,9 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       // pesquisado" teria duas casas defensaveis.
       survey: {
         form_id:             { tipo: "texto", legado: ["session.survey_form_id"] },
-        grain:               { tipo: "texto", legado: ["session.survey_grain"] },
         origin:              { tipo: "texto", legado: ["session.survey_origin"] },
         origin_pool:         { tipo: "texto", legado: ["session.survey_origin_pool"] },
-        pool_id:             { tipo: "texto", legado: ["session.survey_pool_id"] },
-        target_id:           { tipo: "texto", legado: ["session.survey_target_id"] },
         customer_key:        { tipo: "texto", legado: ["session.survey_customer_key"] },
-        segment_id:          { tipo: "texto", legado: ["session.survey_segment_id",
-                                                       "session.surveyed_segment_id"] },
-        agent_key:           { tipo: "texto", legado: ["session.survey_agent_key",
-                                                       "session.surveyed_agent_key"] },
       },
       portabilidade: {
         // `linha_em_servico`, não `phone` — decisão do dono, 2026-08-30: é a linha
@@ -426,7 +439,6 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       processo: {
         parecer:   { tipo: "texto", legado: ["session.parecer"] },
         resultado: { tipo: "texto", legado: ["session.resultado"] },
-        outcome:   { tipo: "texto", legado: ["session.process_outcome"] },
       },
       hook: {
         wrapup_pool:       { tipo: "texto", legado: ["hook.wrapup_pool"] },

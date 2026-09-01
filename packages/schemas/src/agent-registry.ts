@@ -176,7 +176,7 @@ const PoolHookEntrySchema = z.object({
    *
    *  "skip"    → segmento não é despachado; pulado silenciosamente.
    *  "timeout" → despachado normalmente; skill YAML decide via
-   *              @ctx.session.close_origin (ou expira pelo _HOOK_TIMEOUT_S).
+   *              @ctx.core.contact.close_origin (ou expira pelo _HOOK_TIMEOUT_S).
    *
    * Default: "timeout" (backward compatible).
    */
@@ -440,7 +440,7 @@ export const PoolRegistrationSchema = z.object({
   mentionable_pools:      z.record(z.string()).optional(),
   /**
    * IDs dos Agent Groups (Arc 9) aos quais este pool pertence.
-   * Escrito no ContextStore como session.pool.agent_groups[] após cada roteamento.
+   * Escrito no ContextStore como core.pool.agent_groups[] após cada roteamento.
    */
   agent_groups:           z.array(z.string()).optional(),
   /**
@@ -451,7 +451,7 @@ export const PoolRegistrationSchema = z.object({
    * indisponíveis (nunca falha só pelo filtro de preferência).
    * Vazio/ausente = sem restrição (usa o pool inteiro de contas do provider,
    * comportamento anterior à existência deste campo).
-   * Escrito no ContextStore como session.pool.llm_account_ids[] após cada
+   * Escrito no ContextStore como core.pool.llm_account_ids[] após cada
    * roteamento; o step `reason` do skill-flow-engine o repassa como
    * `preferred_config_ids` no InferenceRequest ao ai-gateway.
    */

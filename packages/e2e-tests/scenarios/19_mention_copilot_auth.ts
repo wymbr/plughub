@@ -153,7 +153,7 @@ const COPILOT_FLOW: Record<string, any> = {
         "Dados da sessão:",
         "- Cliente: @ctx.caller.nome",
         "- Motivo do contato: @ctx.caller.motivo_contato",
-        "- Sentimento atual: @ctx.session.sentimento.categoria",
+        "- Sentimento atual: @ctx.core.sentiment.category",
         "- Histórico: @ctx.session.historico_resumo",
       ].join("\n"),
       output_as:     "analise",
@@ -385,7 +385,7 @@ async function runPartC(
   await ctx.redis.hset(`${ctx.tenantId}:ctx:${sessionId}`,
     "caller.nome",            ctxEntry("João E2E"),
     "caller.motivo_contato",  ctxEntry("Cancelamento de plano"),
-    "session.sentimento.categoria", ctxEntry("neutral"),
+    "core.sentiment.category", ctxEntry("neutral"),
     "session.historico_resumo",     ctxEntry("Primeiro contato"),
   );
 

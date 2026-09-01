@@ -68,7 +68,7 @@ steps:
          "session.contact_channel": "{{$.pipeline_state.alvo.metadata.channel}}",
          "session.campaign_id": "{{@ctx.campaign_id}}",
          "session.survey_origin": "{{$.pipeline_state.alvo.metadata.origin_session_id}}",
-         "session.survey_grain": "{{$.pipeline_state.alvo.metadata.grain}}",
+         "core.survey.grain": "{{$.pipeline_state.alvo.metadata.grain}}",
          "session.survey_form_id": "{{$.pipeline_state.alvo.metadata.form_id}}",
          "session.survey_customer_key": "{{$.pipeline_state.alvo.metadata.customer_key}}",
          "session.survey_origin_pool": "{{$.pipeline_state.alvo.metadata.origin_pool}}"}

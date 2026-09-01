@@ -6,7 +6,7 @@
 # Prova, no backend, que um `delegate` SEM `decisions[]` a um pool pull:
 #   (1) enfileira um item no pool pull (aparece em /api/work_queue/list);
 #   (2) a sessão-filha carrega no ContextStore tudo que o <DialogFormRenderer>
-#       genérico lê: `session.dialog_form_id` + `session.briefing_session_id` +
+#       genérico lê: `core.workflow.dialog_form_id` + `session.briefing_session_id` +
 #       um resume token (delegate/workflow/collect).
 # O ciclo completo claim→render→resume é verificado na UI (Console) — este smoke
 # garante o CONTRATO que a UI consome.

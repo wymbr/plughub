@@ -129,9 +129,9 @@ else
 fi
 
 echo "══ 7) submete a decisão (resume com Bearer + ABAC approvals.decide) ══"
-RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "session.delegate_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
+RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "core.workflow.delegate_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 if [ -z "$RTOK" ]; then
-  RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "session.workflow_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
+  RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "core.workflow.resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 fi
 [ -n "$RTOK" ] || die "não achei resume token no ctx da sessão $SID"
 # Corpo conferido em `WebhookResumeRequest` (channel-gateway/main.py:736), não

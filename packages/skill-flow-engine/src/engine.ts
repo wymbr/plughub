@@ -36,7 +36,7 @@ export interface SkillFlowEngineConfig {
     model_profile?: string                    // R8d — perfil de modelo (revisor heterogêneo)
     /** T2/D1 — chave de atribuição de custo. Ver `executor.ts`. */
     segment_id?:   string
-    preferred_config_ids?: string[]           // LLM Accounts — session.pool.llm_account_ids
+    preferred_config_ids?: string[]           // LLM Accounts — core.pool.llm_account_ids
   }) => Promise<unknown>
   /**
    * ContextStore unificado — acesso a @ctx.namespace.campo para steps que

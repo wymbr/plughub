@@ -28,7 +28,7 @@
  *
  * ── Fonte canônica ───────────────────────────────────────────────────────────
  * ContextStore da sessão: `{tenant_id}:ctx:{session_id}`, tag
- * `session.sentimento.current`, escrita por
+ * `core.sentiment.current`, escrita por
  * `ai-gateway/sentiment_emitter.write_context_store_sentiment`.
  *
  * É superconjunto ESTRITO da fonte antiga, e isso é o que decide a questão: TODO
@@ -46,7 +46,7 @@
  */
 
 /** Tag do ContextStore que guarda o score medido. Contrato com o ai-gateway. */
-export const SENTIMENT_CTX_TAG = "session.sentimento.current"
+export const SENTIMENT_CTX_TAG = "core.sentiment.current"
 
 /** Limiar de alerta. Espelha `sentiment.alert` da spec 3.2a. */
 export const SENTIMENT_ALERT_THRESHOLD = -0.5

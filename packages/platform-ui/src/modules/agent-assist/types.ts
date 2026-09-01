@@ -189,7 +189,7 @@ export interface ContactContextData {
 
 /**
  * A single ContextStore entry as returned by supervisor_state.customer_context.context_snapshot.
- * The flat map is keyed by tag name (e.g. "caller.nome", "session.sentimento.current").
+ * The flat map is keyed by tag name (e.g. "caller.nome", "core.sentiment.current").
  */
 export interface ContextEntry {
   /** The stored value — string, number, boolean or structured object. */
@@ -215,7 +215,7 @@ export interface CustomerContext {
   /** Legacy structured contact context (pre-ContextStore). Present when context_snapshot absent. */
   contact_context?:     ContactContextData;
   /**
-   * New flat ContextStore snapshot keyed by tag name (e.g. "caller.nome", "session.sentimento.current").
+   * New flat ContextStore snapshot keyed by tag name (e.g. "caller.nome", "core.sentiment.current").
    * Supersedes contact_context when present.
    */
   context_snapshot?:    Record<string, ContextEntry>;

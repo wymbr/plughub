@@ -10,7 +10,7 @@
 # Saídas, os três emissores que já existiam:
 #   · Kafka  `sentiment.updated`
 #   · Redis  {tenant}:pool:{pool}:sentiment_live        (TTL 300 s)
-#   · ctx    {tenant}:ctx:{session} → session.sentimento.current   (TTL 4 h)
+#   · ctx    {tenant}:ctx:{session} → core.sentiment.current   (TTL 4 h)
 #
 # ⚠️ Contrato ANTERIOR, deliberadamente aposentado — não voltar a testá-lo:
 # `/v1/reason` lia `sentiment_score` do `output_schema` que o SKILL declarava. Como
@@ -116,11 +116,11 @@ echo "      aguardando a task de background (chamada dedicada ao modelo)..."
 CTX_B=""
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 2
-  CTX_B="$(R HGET "$TENANT:ctx:$SB" 'session.sentimento.current')"
+  CTX_B="$(R HGET "$TENANT:ctx:$SB" 'core.sentiment.current')"
   [ -n "$CTX_B" ] && break
 done
 
-CTX_A="$(R HGET "$TENANT:ctx:$SA" 'session.sentimento.current')"
+CTX_A="$(R HGET "$TENANT:ctx:$SA" 'core.sentiment.current')"
 LIVE="$(R --scan --pattern "$TENANT:pool:*:sentiment_live")"
 N_LIVE="$(printf '%s\n' "$LIVE" | grep -c .)"
 

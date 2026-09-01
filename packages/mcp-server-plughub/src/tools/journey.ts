@@ -166,7 +166,7 @@ export async function resolveJourneyRoot(
  * contatos, quebrando o `@ctx.journey.*` que a leitura (interpolate) já resolve.
  *
  * Resolve a raiz canônica pela MESMA via que o bridge e o `journey_merge`: raiz de
- * proveniência = `session.root_session_id` do ctx (o que o bridge carimba; fallback = a
+ * proveniência = `core.contact.root_session_id` do ctx (o que o bridge carimba; fallback = a
  * própria sessão) → `resolveJourneyRoot` (find da componente na floresta de aliases).
  * `entryJson` já vem serializado — este helper só decide a CHAVE e o TTL, nunca o conteúdo.
  */
@@ -183,7 +183,7 @@ export async function writeContextTag(
   if (tag.startsWith("journey.") || tag.startsWith("core.journey.")) {
     let provenanceRoot = sessionId
     try {
-      const raw = await redis.hget(`${tenantId}:ctx:${sessionId}`, "session.root_session_id")
+      const raw = await redis.hget(`${tenantId}:ctx:${sessionId}`, "core.contact.root_session_id")
       if (raw) {
         const parsed = JSON.parse(raw)
         if (parsed?.value) provenanceRoot = String(parsed.value)

@@ -236,7 +236,7 @@ async function aiGatewayCall(payload: {
   attempt:       number
   json_schema?:  Record<string, unknown>   // T7b — forwardado via JSON.stringify(payload)
   model_profile?: string                    // R8d — forwardado ao /v1/reason (ReasonRequest)
-  preferred_config_ids?: string[]           // LLM Accounts — session.pool.llm_account_ids
+  preferred_config_ids?: string[]           // LLM Accounts — core.pool.llm_account_ids
   customer_utterance?: string               // fala do cliente — habilita medição de sentimento
   segment_id?:   string                     // T2/D1 — chave de atribuicao de custo (usage.events)
   tenant_id?:    string                     // injetado pelo handler; sem ele o gateway grava sem prefixo

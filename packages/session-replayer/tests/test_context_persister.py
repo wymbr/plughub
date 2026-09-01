@@ -72,7 +72,7 @@ MASKED_RESPONSE = {
             "caller.cpf":  {"value": "***-00", "masked": True, "category": "last_2",
                             "source": "crm", "confidence": 0.9,
                             "updated_at": "2026-08-26T10:04:12Z"},
-            "session.pool.id": {"value": "retencao_humano", "source": "routing_engine"},
+            "core.pool.id": {"value": "retencao_humano", "source": "routing_engine"},
             "caller.senha": {"value": None, "masked": True, "category": "hidden"},
         },
         "total": 3,
@@ -138,7 +138,7 @@ async def test_the_persister_never_masks():
     sess = next(args for _s, args in _inserts(conn) if args[2] == "session")
     entries = json.loads(sess[4])
     assert entries["caller.cpf"]["value"] == "***-00"
-    assert entries["session.pool.id"]["value"] == "retencao_humano"
+    assert entries["core.pool.id"]["value"] == "retencao_humano"
 
 
 async def test_no_token_writes_nothing():

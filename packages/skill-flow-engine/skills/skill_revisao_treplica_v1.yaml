@@ -22,10 +22,10 @@ description: |
     session.contest_deadline_hours — prazo para o avaliado contestar (horas)
     session.review_deadline_hours  — prazo para o revisor humano decidir (horas)
     session.use_business_hours    — true = apenas em horário comercial
-    session.current_round         — inicializado em 0; incrementado a cada contestação
+    core.workflow.current_round         — inicializado em 0; incrementado a cada contestação
 
   Interação com evaluation-api:
-    - evaluation-api escreve session.review_decision antes de cada resume:
+    - evaluation-api escreve core.workflow.review_decision antes de cada resume:
         "approved"  — agente humano não contestou (prazo expirou sem contestação)
         "contested" — agente humano contestou ≥1 dimensão
         "reviewed"  — revisor humano submeteu decisão
@@ -56,7 +56,7 @@ steps:
   - id: verificar_contestacao
     type: choice
     conditions:
-      - field:    "@ctx.session.review_decision"
+      - field:    "@ctx.core.workflow.review_decision"
         operator: eq
         value:    "contested"
         next:     incrementar_round
@@ -67,15 +67,15 @@ steps:
     type: invoke
     tool: context_write
     input:
-      tag:   session.current_round
-      value: "{{add(@ctx.session.current_round, 1)}}"
+      tag:   core.workflow.current_round
+      value: "{{add(@ctx.core.workflow.current_round, 1)}}"
     on_success: verificar_limite_rounds
     on_failure: congelar_resultado
 
   - id: verificar_limite_rounds
     type: choice
     conditions:
-      - field:    "@ctx.session.current_round"
+      - field:    "@ctx.core.workflow.current_round"
         operator: gt
         value:    "@ctx.session.max_rounds"
         next:     congelar_resultado
@@ -113,7 +113,7 @@ steps:
   - id: verificar_revisao_ai
     type: choice
     conditions:
-      - field:    "@ctx.session.review_decision"
+      - field:    "@ctx.core.workflow.review_decision"
         operator: eq
         value:    "finalized"
         next:     encerrar_aprovado
@@ -132,7 +132,7 @@ steps:
 
   # ── Aguarda revisão humana (reviewer_type=human ou fallback) ─────────────────
   # Timeout: review_deadline_hours (lido do ContextStore, padrão 48h).
-  # evaluation-api escreve session.review_decision="reviewed" antes do resume.
+  # evaluation-api escreve core.workflow.review_decision="reviewed" antes do resume.
   - id: aguardar_revisao_humana
     type: suspend
     reason: input
@@ -146,7 +146,7 @@ steps:
   - id: verificar_revisao_humana
     type: choice
     conditions:
-      - field:    "@ctx.session.review_decision"
+      - field:    "@ctx.core.workflow.review_decision"
         operator: eq
         value:    "reviewed"
         next:     verificar_finalizacao_humana
@@ -156,7 +156,7 @@ steps:
   - id: verificar_finalizacao_humana
     type: choice
     conditions:
-      - field:    "@ctx.session.current_round"
+      - field:    "@ctx.core.workflow.current_round"
         operator: gte
         value:    "@ctx.session.max_rounds"
         next:     encerrar_aprovado

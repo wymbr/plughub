@@ -6,9 +6,9 @@ description: |
   hooks). Disparado pelo bridge em todo hook on_human_end side=agent — `detached`
   (pull manual) ou `inline` (auto-atendimento no Console); é a MESMA máquina, muda só
   a entrega. O bridge injeta no context:
-    session.surveyed_agent_key  — user_id do humano que atendeu (→ assigned_to)
-    session.origin_session_id   — sessão de origem (→ briefing + atribuição)
-    session.surveyed_segment_id — segmento humano a atribuir (usado na gravação)
+    core.survey.agent_key  — user_id do humano que atendeu (→ assigned_to)
+    core.workflow.origin_session_id   — sessão de origem (→ briefing + atribuição)
+    core.survey.segment_id — segmento humano a atribuir (usado na gravação)
     hook.origin_pool            — pool que disparou o hook
     hook.wrapup_pool            — fila interna DELE (`{origin}-int`) → alvo do delegate
     hook.*                      — o que a entrada de hook declarar em `context:`
@@ -21,7 +21,7 @@ description: |
   O workflow DELEGA o DialogForm de disposição à FILA INTERNA do pool de origem
   (ADR adr-internal-work-queue-author-bound: wrap-up é trabalho AUTHOR-BOUND — só quem
   atendeu pode classificar o próprio atendimento), DIRECIONADO ao agente
-  (assigned_to = @ctx.session.surveyed_agent_key, Camada B). O agente reivindica no
+  (assigned_to = @ctx.core.survey.agent_key, Camada B). O agente reivindica no
   inbox pull, o Console (DialogFormRenderer/R0) renderiza o form + o briefing
   (transcrição da origem via briefing_session_id) e submete via workflow_resume. As
   respostas caem em $.pipeline_state.coletar.answers.
@@ -42,7 +42,7 @@ steps:
     # nomeando a ref — em vez de cair num pool de contato por engano.
     pool: "@ctx.hook.wrapup_pool"
     # Camada B — o item cai no inbox DAQUELE agente (não fila compartilhada).
-    assigned_to: "@ctx.session.surveyed_agent_key"
+    assigned_to: "@ctx.core.survey.agent_key"
     # SEM transbordo: wrap-up é author-bound, só quem atendeu pode classificar o
     # próprio atendimento — transbordar seria erro de categoria (ADR D4). A saída de
     # pendência é supervisor + TTL (`acw_expired`), fase I5.
@@ -56,7 +56,7 @@ steps:
       # Fato do pool de ORIGEM (PoolHookEntry.context), não deste skill: Retenção e
       # Cobrança podem usar formulários de wrap-up diferentes.
       dialog_form_id:      "@ctx.hook.dialog_form_id"
-      briefing_session_id: "@ctx.session.origin_session_id"
+      briefing_session_id: "@ctx.core.workflow.origin_session_id"
     # Prazo do ACW — fato do POOL DE ORIGEM, pela mesma razão que o formulário:
     # Retenção e Cobrança podem ter janelas diferentes para classificar o próprio
     # atendimento. Declarado em `PoolHookEntry.context.acw_timeout_hours`. Ausente,
@@ -79,8 +79,8 @@ steps:
     tool: segment_outcome_record
     input:
       tenant_id:         "$.tenant_id"
-      origin_session_id: "@ctx.session.origin_session_id"
-      segment_id:        "@ctx.session.surveyed_segment_id"
+      origin_session_id: "@ctx.core.workflow.origin_session_id"
+      segment_id:        "@ctx.core.survey.segment_id"
       # Fatia 3 — passa as respostas INTEIRAS + o form que as descreve, em vez de
       # mapear campo a campo (`answers.classificacao`, `answers.resumo`, …). O mapa
       # campo-a-campo fazia cada pergunta nova no editor exigir editar este YAML +

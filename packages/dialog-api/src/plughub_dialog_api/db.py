@@ -168,7 +168,7 @@ async def db_get_form(
 
     NÃO filtra `deleted_at` — é DELIBERADO (ADR D1). Resolver por id explícito só acontece a
     partir de um vínculo que já existe (skill em execução, `config_json` do slot,
-    `session.dialog_form_id` no ctx, segmento histórico); ninguém DESCOBRE form por id. Pôr o
+    `core.workflow.dialog_form_id` no ctx, segmento histórico); ninguém DESCOBRE form por id. Pôr o
     filtro aqui não impediria uso novo — impediria a continuação e a leitura do passado.
     """
     if version is not None:

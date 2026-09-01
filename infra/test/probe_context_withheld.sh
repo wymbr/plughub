@@ -15,7 +15,7 @@
 # ── Por que INJETA, em vez de olhar o que houver ─────────────────────────────
 #
 # Mesma razão do `probe_context_visibility.sh`: um teste de igualdade só julga se a
-# população contiver o caso em que A ≠ B. Sessão comum só tem `session.pool.*`,
+# população contiver o caso em que A ≠ B. Sessão comum só tem `core.pool.*`,
 # que está DENTRO do default — nada é retido, e um produtor que nunca emite passa.
 # Injeta-se UM caso de cada CAUSA, porque elas se consertam em telas diferentes.
 #

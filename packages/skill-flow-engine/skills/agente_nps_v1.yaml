@@ -4,7 +4,7 @@
 # Executa em conferência como specialist, em paralelo com agente_wrapup_v1.
 #
 # Responsabilidades:
-#   - Verificar se o cliente ainda está conectado (@ctx.session.close_origin)
+#   - Verificar se o cliente ainda está conectado (@ctx.core.contact.close_origin)
 #   - Se desconectado → encerra imediatamente sem pesquisa
 #   - Se conectado → agradecer, aplicar pesquisa NPS (0–10 via botões)
 #   - Registrar resposta no ContextStore (session.nps_score)
@@ -44,7 +44,7 @@ steps:
   - id: verificar_origem
     type: choice
     conditions:
-      - field: "@ctx.session.close_origin"
+      - field: "@ctx.core.contact.close_origin"
         operator: eq
         value: "customer_disconnect"
         next: encerrar_sem_pesquisa
@@ -89,19 +89,19 @@ steps:
     type: notify
     message: "Agradecemos sua avaliação! ✅"
     visibility:
-      - "@ctx.session.customer_participant_id"
+      - "@ctx.core.contact.customer_participant_id"
     on_success: escolher_grao
     on_failure: escolher_grao
 
   # ── Ramifica o GRÃO pelo contexto (mesmo pool nps_ia serve humano e IA) ───────
-  # Humano: o bridge carimba session.surveyed_segment_id (segmento do humano servido
+  # Humano: o bridge carimba core.survey.segment_id (segmento do humano servido
   # por este on_human_end/on_contact_end) → grão SEGMENT (atribuível ao agente). IA
   # (contato resolvido só por IA, ex.: sac_ia): não há segmento humano → o stash fica
   # ausente → grão SESSION (origin = a própria sessão). Um pool, dois grãos.
   - id: escolher_grao
     type: choice
     conditions:
-      - field:    "@ctx.session.surveyed_segment_id"
+      - field:    "@ctx.core.survey.segment_id"
         operator: exists
         next:     gravar_sinal
     default: gravar_sinal_sessao
@@ -118,11 +118,11 @@ steps:
       tenant_id:         "$.tenant_id"
       origin_session_id: "$.session_id"
       grain:             "segment"
-      segment_id:        "@ctx.session.surveyed_segment_id"
-      agent_key:         "@ctx.session.surveyed_agent_key"
+      segment_id:        "@ctx.core.survey.segment_id"
+      agent_key:         "@ctx.core.survey.agent_key"
       # Segurança Fase B — pool da sessão pesquisada. O hook roda NA conferência dela,
-      # então o session.pool.id (escrito pela Routing Engine) é o pool da origem.
-      pool_id:           "@ctx.session.pool.id"
+      # então o core.pool.id (escrito pela Routing Engine) é o pool da origem.
+      pool_id:           "@ctx.core.pool.id"
       signals:
         - metric: "nps"
           value: "$.pipeline_state.nps_resposta"
@@ -140,7 +140,7 @@ steps:
       grain:             "session"
       survey_session_id: "$.session_id"
       # Segurança Fase B — pool da sessão pesquisada (a própria; hook roda nela).
-      pool_id:           "@ctx.session.pool.id"
+      pool_id:           "@ctx.core.pool.id"
       signals:
         - metric: "nps"
           value: "$.pipeline_state.nps_resposta"

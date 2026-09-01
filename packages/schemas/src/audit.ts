@@ -717,7 +717,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
     //
     // Acrescentado na V3 do arco ALLOWLIST. O mapa do ContextStore (D2) declara
     // TODO campo, e a maioria dos campos medidos é encanamento sem PII
-    // (`session.pool.id`, `session.workflow.current_round`, `session.survey.grain`).
+    // (`core.pool.id`, `session.workflow.current_round`, `session.survey.grain`).
     // Sem um tipo para eles restariam duas saídas, ambas já recusadas por escrito:
     //
     //   · `tipo` opcional — reintroduz o "declarado porém sem tipo", que é o

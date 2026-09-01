@@ -12,7 +12,7 @@
  *   {t}:ctx:customer:{customerId} — TTL longo (~90d)   → insight.historico, pricing
  *
  * Referência nos skill flows: @ctx.namespace.campo
- *   ex: @ctx.caller.cpf, @ctx.session.sentimento.current, @ctx.account.plano_atual
+ *   ex: @ctx.caller.cpf, @ctx.core.sentiment.current, @ctx.account.plano_atual
  *
  * Namespaces convencionados:
  *   caller.*          quem está ligando (pode diferir do titular da conta)
@@ -223,7 +223,7 @@ export type SkillRequiredContext = z.infer<typeof SkillRequiredContextSchema>
  *     output_as: analise
  *     context_tags:
  *       outputs:
- *         sentimento: { tag: "session.sentimento.current", confidence: 0.8, merge: "overwrite" }
+ *         sentimento: { tag: "core.sentiment.current", confidence: 0.8, merge: "overwrite" }
  *         escalar:    { tag: "session.escalar_solicitado",  confidence: 1.0, merge: "overwrite" }
  *         historico_mensagens:
  *           tag: "session.historico_mensagens"

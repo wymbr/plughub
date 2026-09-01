@@ -169,7 +169,7 @@ echo
 echo "── leitura · o score está no ctx da sessão e no agregado do pool? ────────"
 echo "      sessão : $SID"
 echo "      pool   : $POOL"
-CTX="$(R HGET "$TENANT:ctx:$SID" 'session.sentimento.current')"
+CTX="$(R HGET "$TENANT:ctx:$SID" 'core.sentiment.current')"
 LIVE="$(R HGETALL "$TENANT:pool:$POOL:sentiment_live")"
 echo "      ctx    : ${CTX:-<ausente>}"
 echo "      live   : $(printf '%s' "$LIVE" | tr '\n' ' ')"

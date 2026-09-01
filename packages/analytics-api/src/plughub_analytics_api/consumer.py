@@ -206,13 +206,13 @@ def _inject_session_identity(rows: list[dict]) -> None:
 async def _enrich_session_root(row: dict, redis: object) -> None:
     """
     Journey J1 — set a sessions row's root_session_id (+ journey_id cache) from the
-    AUTHORITATIVE ContextStore value (session.root_session_id), when present.
+    AUTHORITATIVE ContextStore value (core.contact.root_session_id), when present.
 
     sessions is a ReplacingMergeTree (whole-row replace). Several events that write a
     sessions row — conversations.routed/queued, session_suspended, contact_closed via
     abandon paths — do NOT carry the propagated root, so the parser falls back to
     session_id (self) and clobbers a CHILD session's transitive root. channel-gateway
-    seeds session.root_session_id in the ContextStore on trigger/delegate; read it here
+    seeds core.contact.root_session_id in the ContextStore on trigger/delegate; read it here
     so EVERY sessions write preserves the correct root (single central point, covers all
     writers, uses the source of truth). Fail-soft: missing/broken entry leaves the
     parser's value (self) untouched — correct for genuine top-level roots.
@@ -223,7 +223,7 @@ async def _enrich_session_root(row: dict, redis: object) -> None:
         return
     try:
         raw = await redis.hget(  # type: ignore[union-attr]
-            f"{tenant_id}:ctx:{session_id}", "session.root_session_id"
+            f"{tenant_id}:ctx:{session_id}", "core.contact.root_session_id"
         )
         if not raw:
             return

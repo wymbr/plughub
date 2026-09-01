@@ -66,7 +66,7 @@ steps:
     input:
       form_id:           "@ctx.session.survey_form_id"
       origin_session_id: "@ctx.session.survey_origin"
-      grain:             "@ctx.session.survey_grain"
+      grain:             "@ctx.core.survey.grain"
       customer_key:      "@ctx.session.survey_customer_key"
       # Segurança Fase B — pool da sessão pesquisada (carimbado na metadata do mailing
       # pelo processo, repassado pelo dispatcher). Vazio → admin-only (decisão C).

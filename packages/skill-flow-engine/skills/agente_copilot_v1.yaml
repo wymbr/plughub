@@ -110,7 +110,7 @@ steps:
           Seja direto e útil — sem perguntas, apenas a sugestão.
         nome_cliente: "@ctx.caller.nome"
         motivo_contato: "@ctx.caller.motivo_contato"
-        sentimento: "@ctx.session.sentimento.categoria"
+        sentimento: "@ctx.core.sentiment.category"
         historico: "@ctx.session.historico_resumo"
       output_as: analise
       output_schema:

@@ -54,7 +54,7 @@ case "${1:-}" in
     echo "2) Disparando o workflow de wrap-up p/ (ORIGIN=$ORIGIN, SEG=$SEG), direcionado ao operador ..."
     curl -s -X POST "$CG/v1/channels/webhook/pool/wrapup_detached_ia" \
       -H 'content-type: application/json' \
-      -d "{\"tenant_id\":\"$TENANT\",\"context\":{\"session.surveyed_agent_key\":\"$OP_USER\",\"session.origin_session_id\":\"$ORIGIN\",\"session.surveyed_segment_id\":\"$SEG\"}}"
+      -d "{\"tenant_id\":\"$TENANT\",\"context\":{\"core.survey.agent_key\":\"$OP_USER\",\"core.workflow.origin_session_id\":\"$ORIGIN\",\"core.survey.segment_id\":\"$SEG\"}}"
     echo
     echo
     echo "AGORA no Console (como Demo Operator):"

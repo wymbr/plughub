@@ -1,7 +1,7 @@
 """
 sentiment_emitter.py
 AI Gateway — sentiment.updated Kafka event + sentiment_live Redis aggregate
-             + ContextStore write (session.sentimento.*).
+             + ContextStore write (core.sentiment.*).
 
 Princípio: fire-and-forget em todos os paths. Erros de infraestrutura nunca
 bloqueiam o retorno do AI Gateway ao agente chamador.
@@ -183,9 +183,9 @@ async def write_context_store_sentiment(
     Escreve o sentimento atual no ContextStore da sessão.
     Chave: {tenant_id}:ctx:{session_id}  (hash Redis)
     Tag:
-      session.sentimento.current → score numérico (-1.0 a 1.0)
+      core.sentiment.current → score numérico (-1.0 a 1.0)
 
-    **`session.sentimento.categoria` NÃO é escrita aqui (corrigido 2026-08-02).**
+    **`core.sentiment.category` NÃO é escrita aqui (corrigido 2026-08-02).**
     A classificação em satisfied/neutral/frustrated/angry usa faixas CONFIGURÁVEIS POR
     TENANT e é feita na LEITURA, pelo consumidor — regra escrita em três lugares
     independentes (o cabeçalho deste módulo, `platform-events.ts` e o `CLAUDE.md`
@@ -229,7 +229,7 @@ async def write_context_store_sentiment(
     try:
         await redis.hset(
             key,
-            mapping={"session.sentimento.current": entry_current},
+            mapping={"core.sentiment.current": entry_current},
         )
         # Renew TTL on the session context hash
         await redis.expire(key, _CTX_SESSION_TTL)

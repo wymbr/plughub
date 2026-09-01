@@ -14,7 +14,7 @@
 #   (resolveSegmentRef), campo gravado pelo bridge no
 #   join a partir do humano que ESTE hook serve. Assim cada wrap-up endereça só o seu
 #   humano — funciona com 2+ humanos na conferência (o campo de SESSÃO global
-#   session.human_agent_participant_id colapsava em multi-humano). O cliente,
+#   core.contact.human_agent_participant_id colapsava em multi-humano). O cliente,
 #   supervisores e os demais humanos NÃO veem este wrap-up.
 #
 # Invariantes:

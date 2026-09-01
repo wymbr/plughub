@@ -24,16 +24,16 @@
 # assíncrona ficou toda no `collect` (perfil workflow), respeitando a segregação de
 # perfis (`menu` e `suspend` nunca no mesmo skill).
 #
-# Interpretador ÚNICO dirigido por config: o form vem de @ctx.session.dialog_form_id.
+# Interpretador ÚNICO dirigido por config: o form vem de @ctx.core.workflow.dialog_form_id.
 # NENHUMA métrica hardcoded — `survey_record` compõe os sinais a partir do próprio
 # DialogForm (dimensions/captures), e o output_key vem do render.
 #
 # Contexto semeado pelo channel-gateway (handle_collect_engage), antes do inbound:
-#   session.dialog_form_id        — qual DialogForm renderizar
-#   session.survey_grain          — GRÃO do sinal (journey | session | workflow)  [S2]
-#   session.survey_target_id      — a sessão contra a qual o sinal é chaveado     [S2]
-#   session.root_session_id       — raiz canônica da journey (pertença N1)
-#   session.workflow_resume_token — token p/ retomar o collect do workflow (= collect_token)
+#   core.workflow.dialog_form_id        — qual DialogForm renderizar
+#   core.survey.grain          — GRÃO do sinal (journey | session | workflow)  [S2]
+#   core.survey.target_id      — a sessão contra a qual o sinal é chaveado     [S2]
+#   core.contact.root_session_id       — raiz canônica da journey (pertença N1)
+#   core.workflow.resume_token — token p/ retomar o collect do workflow (= collect_token)
 #
 # Fluxo:
 #   carregar_form → coletar (menu ao vivo) → gravar_sinal → retomar (workflow_resume)
@@ -60,7 +60,7 @@ steps:
     type: invoke
     tool: form_get
     input:
-      form_id:   "@ctx.session.dialog_form_id"
+      form_id:   "@ctx.core.workflow.dialog_form_id"
       tenant_id: "$.tenant_id"
     output_as: dialog
     on_success: coletar
@@ -91,8 +91,8 @@ steps:
   # O GRÃO é config de DEPLOY do workflow outbound (`$.config.grain`), e a tradução
   # grão→chave é feita pelo N2 (channel-gateway), que é quem tem o contexto do chamador
   # (raiz da journey, sessão de origem). Aqui o runner só LÊ o que já veio resolvido:
-  #   session.survey_grain      — journey | session | workflow
-  #   session.survey_target_id  — a sessão contra a qual o sinal é chaveado
+  #   core.survey.grain      — journey | session | workflow
+  #   core.survey.target_id  — a sessão contra a qual o sinal é chaveado
   # Assim o runner é 100% genérico: zero métrica e zero grão hardcoded. Pesquisar a
   # journey ou a sessão vira um DEPLOY diferente, não um skill diferente.
   - id: gravar_sinal
@@ -100,18 +100,18 @@ steps:
     tool: survey_record
     input:
       tenant_id:         "$.tenant_id"
-      origin_session_id: "@ctx.session.survey_target_id"
-      grain:             "@ctx.session.survey_grain"
+      origin_session_id: "@ctx.core.survey.target_id"
+      grain:             "@ctx.core.survey.grain"
       # Atribuição por segmento (só populados quando grain=segment; nos demais grãos as
       # tags não existem e a ref resolve para null — `.nullish()` no schema tolera).
-      segment_id:        "@ctx.session.survey_segment_id"
-      agent_key:         "@ctx.session.survey_agent_key"
+      segment_id:        "@ctx.core.survey.segment_id"
+      agent_key:         "@ctx.core.survey.agent_key"
       # Segurança Fase B (J4c) — pool da sessão PESQUISADA, resolvido pelo N2
       # (handle_collect) e semeado no engage. Esta sessão é de INFRA do survey, então
-      # NÃO se usa session.pool.id daqui (seria o pool de survey, não o do atendimento).
-      pool_id:           "@ctx.session.survey_pool_id"
+      # NÃO se usa core.pool.id daqui (seria o pool de survey, não o do atendimento).
+      pool_id:           "@ctx.core.survey.pool_id"
       survey_session_id: "$.session_id"
-      form_id:           "@ctx.session.dialog_form_id"
+      form_id:           "@ctx.core.workflow.dialog_form_id"
       answers:
         - output_key: "$.pipeline_state.dialog.render.output_key"
           value:      "$.pipeline_state.answers"
@@ -125,7 +125,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "@ctx.session.workflow_resume_token"
+      resume_token: "@ctx.core.workflow.resume_token"
       decision: "input"
       payload:
         value: "$.pipeline_state.answers"
@@ -137,7 +137,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "@ctx.session.workflow_resume_token"
+      resume_token: "@ctx.core.workflow.resume_token"
       decision: "timeout"
     on_success: finalizar
     on_failure: finalizar

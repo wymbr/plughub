@@ -98,7 +98,7 @@ export async function getContextMaskingConfig(
  * As regras protegiam por NAMESPACE (`caller.*`, `account.*`), mas a varredura do
  * ContextStore vivo mostrou que o PII cai em `session.*` e `journey.*` — e esses
  * **não podem ter catch-all**: um `session.* → hidden` derruba
- * `session.dialog_form_id`/`session.decisions` e a tela de aprovação para de
+ * `core.workflow.dialog_form_id`/`session.decisions` e a tela de aprovação para de
  * renderizar em silêncio (o seed do config-api avisa isso por escrito).
  *
  * A razão é estrutural: o `delegate.context` de um workflow chega na sessão-filha

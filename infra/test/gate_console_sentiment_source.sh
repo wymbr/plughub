@@ -94,10 +94,10 @@ ENTRY='{"value":-0.5,"confidence":0.8,"source":"ai_inferred:gate","visibility":"
 
 R SET "session:$SID_M:meta" "$META" >/dev/null
 R SET "session:$SID_W:meta" "$META" >/dev/null
-R HSET "$TENANT:ctx:$SID_M" 'session.sentimento.current' "$ENTRY" >/dev/null
+R HSET "$TENANT:ctx:$SID_M" 'core.sentiment.current' "$ENTRY" >/dev/null
 # Testemunha: ctx EXISTE, com outra tag — só a de sentimento falta.
 R HSET "$TENANT:ctx:$SID_W" 'caller.customer_id' '{"value":"cus_gate","confidence":1.0,"source":"gate","visibility":"agents_only","updated_at":"1970-01-01T00:00:00Z"}' >/dev/null
-echo "      medida     : $SID_M  (ctx com session.sentimento.current = -0.5)"
+echo "      medida     : $SID_M  (ctx com core.sentiment.current = -0.5)"
 echo "      testemunha : $SID_W  (ctx presente, SEM a tag de sentimento)"
 
 echo
@@ -144,7 +144,7 @@ if [ "$V_M" != "-0.5" ]; then
     echo "      '0' é a assinatura do defeito original — a fonte aposentada"
     echo "      (session:{id}:ai → partial_params.sentiment_score) com \`?? 0\` por cima."
   fi
-  echo "      Fonte correta: {tenant}:ctx:{sid} → session.sentimento.current,"
+  echo "      Fonte correta: {tenant}:ctx:{sid} → core.sentiment.current,"
   echo "      lida do hash CRU em lib/session-sentiment.ts."
   FAIL=1
 fi

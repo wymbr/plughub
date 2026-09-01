@@ -55,7 +55,7 @@ echo "══ seed do cenário (S2 →prov S1 →alias S0) ══"
 # tenant resolvido pelo inject-context via session:{id}:meta
 redis SET "session:${S2}:meta" "{\"tenant_id\":\"${TENANT}\"}" >/dev/null
 # proveniência: S2.root_session_id = S1  (formato ContextEntry)
-redis HSET "$SHASH" "session.root_session_id" \
+redis HSET "$SHASH" "core.contact.root_session_id" \
   "{\"value\":\"${S1}\",\"confidence\":1.0,\"source\":\"seed\",\"visibility\":\"agents_only\",\"updated_at\":\"${STAMP}\"}" >/dev/null
 # aresta de alias na floresta: S1 absorvida por S0
 redis HSET "$ALIAS" "$S1" "$S0" >/dev/null

@@ -85,9 +85,9 @@ echo "══ 3) dispara o workflow de wrap-up ══"
 TRIG=$($CURL -X POST "$CG/v1/channels/webhook/pool/$POOL_WH" $JSON -d "{
   \"tenant_id\":\"$TENANT\",
   \"context\":{
-    \"session.origin_session_id\":\"$ORIGIN\",
-    \"session.surveyed_segment_id\":\"$SEG\",
-    \"session.surveyed_agent_key\":\"$SUB\",
+    \"core.workflow.origin_session_id\":\"$ORIGIN\",
+    \"core.survey.segment_id\":\"$SEG\",
+    \"core.survey.agent_key\":\"$SUB\",
     \"hook.wrapup_pool\":\"$POOL_PULL\",
     \"hook.dialog_form_id\":\"$FORM\"
   }}")
@@ -115,7 +115,7 @@ echo "$CLAIM" | grep -q '"claimed": *true' || die "claim recusado — ${CLAIM:0:
 ok "item reivindicado"
 
 echo "══ 6) submete o form COM as duas capturas ══"
-RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "session.delegate_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
+RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "core.workflow.delegate_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 [ -n "$RTOK" ] || die "sem resume token no ctx de $SID"
 RCODE=$(curl -s -o /tmp/_wrapup_resume -w '%{http_code}' --max-time 20 \
   -X POST "$CG/v1/channels/webhook/resume/$RTOK" $JSON -H "Authorization: Bearer $TOK" -d "{

@@ -1377,10 +1377,10 @@ async def _write_pre_hook_context(
     executar.  Chamado imediatamente antes de fire_pool_hooks("on_human_end").
 
     Campos escritos:
-      session.close_origin              — "agent_closed" ou "client_disconnect"
-      session.customer_participant_id   — lido de session:{id}:customer_participant_id
+      core.contact.close_origin              — "agent_closed" ou "client_disconnect"
+      core.contact.customer_participant_id   — lido de session:{id}:customer_participant_id
                                           (gerado pelo channel-gateway no handshake)
-      session.human_agent_participant_id — instance_id do agente humano que saiu;
+      core.contact.human_agent_participant_id — instance_id do agente humano que saiu;
                                            usado pelo wrap-up para visibility array
     """
     ctx_key = f"{tenant_id}:ctx:{session_id}"
@@ -1394,7 +1394,7 @@ async def _write_pre_hook_context(
             "visibility": "agents_only",
             "updated_at": now_iso,
         })
-        await redis_client.hset(ctx_key, "session.close_origin", entry_origin)
+        await redis_client.hset(ctx_key, "core.contact.close_origin", entry_origin)
 
         # 2. customer_participant_id — o agente NPS usa para montar o array de
         #    visibility [customer_participant_id] das suas mensagens.
@@ -1413,7 +1413,7 @@ async def _write_pre_hook_context(
                 "visibility": "agents_only",
                 "updated_at": now_iso,
             })
-            await redis_client.hset(ctx_key, "session.customer_participant_id", entry_pid)
+            await redis_client.hset(ctx_key, "core.contact.customer_participant_id", entry_pid)
 
         # 3. human_agent_participant_id — o agente de wrap-up usa para montar o
         #    array de visibility [human_instance_id] das suas mensagens, garantindo
@@ -1428,7 +1428,7 @@ async def _write_pre_hook_context(
                 "updated_at": now_iso,
             })
             await redis_client.hset(
-                ctx_key, "session.human_agent_participant_id", entry_human,
+                ctx_key, "core.contact.human_agent_participant_id", entry_human,
             )
 
         # 4. Fatos do ÚLTIMO SEGMENTO PRIMARY — insumo para survey de grão `segment`.
@@ -1447,7 +1447,7 @@ async def _write_pre_hook_context(
             _seg_str = _last_seg if isinstance(_last_seg, str) else _last_seg.decode()
             await redis_client.hset(
                 ctx_key,
-                "session.last_primary_segment_id",
+                "core.contact.last_primary_segment_id",
                 json.dumps({
                     "value":      _seg_str,
                     "confidence": 1.0,
@@ -1469,7 +1469,7 @@ async def _write_pre_hook_context(
                 if _agent_key:
                     await redis_client.hset(
                         ctx_key,
-                        "session.last_primary_agent_key",
+                        "core.contact.last_primary_agent_key",
                         json.dumps({
                             "value":      _agent_key,
                             "confidence": 1.0,
@@ -1666,7 +1666,7 @@ async def _publish_segment_release(
     fontes (`_fixed_pid` é um `instance_id` com nome de pid, e o fallback é um
     participant_id de verdade), então publicamos as duas formas que temos.
 
-    ⚠️ **O campo global `session.human_agent_participant_id` é de escopo largo** e num
+    ⚠️ **O campo global `core.contact.human_agent_participant_id` é de escopo largo** e num
     conferência multi-humano nomeia o humano ERRADO — incluí-lo seria a violação de
     escopo que o CLAUDE.md descreve. É seguro **aqui e só aqui** porque este caminho
     roda dentro de `remaining <= 0`: a origem era o ÚLTIMO humano, logo não existe
@@ -1683,7 +1683,7 @@ async def _publish_segment_release(
         _recipients.append(instance_id)
     try:
         _ha_raw = await redis_client.hget(
-            f"{tenant_id}:ctx:{session_id}", "session.human_agent_participant_id",
+            f"{tenant_id}:ctx:{session_id}", "core.contact.human_agent_participant_id",
         )
         if _ha_raw:
             _ha_entry = json.loads(_ha_raw if isinstance(_ha_raw, str) else _ha_raw.decode())
@@ -1763,20 +1763,20 @@ async def _fire_detached_hook(
         )
         return
     context: dict[str, str] = {
-        "session.close_origin": close_origin or "",
+        "core.contact.close_origin": close_origin or "",
         "hook.type":            hook_type,
         "hook.origin_pool":     pool_id,
         # A sessão de ORIGEM viaja no top-level do body (journey inherit + parse_inbound),
         # mas o agente destacado a lê como TAG de contexto: o wrap-up usa
-        # @ctx.session.origin_session_id no briefing_session_id (transcrição) E no
+        # @ctx.core.workflow.origin_session_id no briefing_session_id (transcrição) E no
         # segment_outcome_record (grava por referência). Sem isto, o briefing e a
         # gravação ficam sem a origem. Igual ao context provado no smoke.
-        "session.origin_session_id": session_id,
+        "core.workflow.origin_session_id": session_id,
     }
     if human_seg_id:
-        context["session.surveyed_segment_id"] = human_seg_id
+        context["core.survey.segment_id"] = human_seg_id
     if agent_key:
-        context["session.surveyed_agent_key"] = agent_key
+        context["core.survey.agent_key"] = agent_key
     # Wrap-up unificado (Camada E2) — entrega INLINE: o delegate do workflow lê
     # @ctx.session.wrap_up_auto_attend e propaga o flag ao item de pull; o Console
     # auto-reivindica (auto-atendimento). Ausente = DETACHED (pull manual da inbox).
@@ -2094,7 +2094,7 @@ async def fire_pool_hooks(
     _close_origin_val = ""
     try:
         _co_raw0 = await redis_client.hget(
-            f"{tenant_id}:ctx:{session_id}", "session.close_origin"
+            f"{tenant_id}:ctx:{session_id}", "core.contact.close_origin"
         )
         if _co_raw0:
             _co0 = json.loads(_co_raw0 if isinstance(_co_raw0, str) else _co_raw0.decode())
@@ -2152,7 +2152,7 @@ async def fire_pool_hooks(
     # ── F5 (grão segmento): segmento humano que ESTE on_human_end serve ───────
     # pool_id é o pool do humano que encerrou. Lê o registro human_seg:{pool}
     # (gravado no participant_left) + deriva o close_reason da iniciativa
-    # (session.close_origin), semeia o acumulador do segmento e guarda o
+    # (core.contact.close_origin), semeia o acumulador do segmento e guarda o
     # segment_id para carimbar no hook_conf de cada hook desta leva.
     _hook_human_seg_id = ""
     _hook_human_instance_id = ""   # G7: pid do humano DESTE segmento (não o global)
@@ -2160,7 +2160,7 @@ async def fire_pool_hooks(
     # G7 Slice B: segment_wrapup também serve um segmento humano específico (o que
     # transferiu) — mesma leitura de human_seg + served_human stash que on_human_end.
     # G7 Fase 3b: on_contact_end (NPS) também precisa do stash — o agente de NPS lê
-    # session.surveyed_segment_id/surveyed_agent_key para gravar survey_record(grain=segment)
+    # core.survey.segment_id/surveyed_agent_key para gravar survey_record(grain=segment)
     # atribuído ao segmento do humano dono do contato.
     if hook_type in ("on_human_end", "segment_wrapup", "on_contact_end"):
         try:
@@ -2194,7 +2194,7 @@ async def fire_pool_hooks(
                     _hs_transport = ""
                     try:
                         _raw_org = await redis_client.hget(
-                            f"{tenant_id}:ctx:{session_id}", "session.close_origin")
+                            f"{tenant_id}:ctx:{session_id}", "core.contact.close_origin")
                         if _raw_org:
                             _org = json.loads(_raw_org if isinstance(_raw_org, str) else _raw_org.decode())
                             _hs_transport = str((_org or {}).get("value", "") or "")
@@ -2218,12 +2218,12 @@ async def fire_pool_hooks(
                         )
                         _sv_now = datetime.now(timezone.utc).isoformat()
                         await redis_client.hset(f"{tenant_id}:ctx:{session_id}", mapping={
-                            "session.surveyed_segment_id": json.dumps({
+                            "core.survey.segment_id": json.dumps({
                                 "value": _hook_human_seg_id, "confidence": 1.0,
                                 "source": "on_human_end_hook", "visibility": "agents_only",
                                 "updated_at": _sv_now,
                             }),
-                            "session.surveyed_agent_key": json.dumps({
+                            "core.survey.agent_key": json.dumps({
                                 "value": _surveyed_agent_key, "confidence": 1.0,
                                 "source": "on_human_end_hook", "visibility": "agents_only",
                                 "updated_at": _sv_now,
@@ -2479,7 +2479,7 @@ async def fire_pool_hooks(
                     else:
                         _ha_raw = await redis_client.hget(
                             f"{tenant_id}:ctx:{session_id}",
-                            "session.human_agent_participant_id",
+                            "core.contact.human_agent_participant_id",
                         )
                         if _ha_raw:
                             _ha_entry = json.loads(
@@ -2767,7 +2767,7 @@ async def _resolve_close_root_session_id(
     The sessions table is a ReplacingMergeTree and the close row (this writer) is
     the one that survives; it MUST carry the transitive root, otherwise the
     analytics _session_row falls back to DEFAULT session_id and a CHILD session's
-    root is lost after close. Reads `session.root_session_id` from the ContextStore
+    root is lost after close. Reads `core.contact.root_session_id` from the ContextStore
     (seeded by channel-gateway on trigger/delegate; for native agent sessions it is
     seeded here too — see the open path). Fallback = session_id (own root).
     Best-effort: any error → session_id (never blocks close).
@@ -2776,7 +2776,7 @@ async def _resolve_close_root_session_id(
         return session_id
     try:
         raw = await redis_client.hget(
-            f"{tenant_id}:ctx:{session_id}", "session.root_session_id"
+            f"{tenant_id}:ctx:{session_id}", "core.contact.root_session_id"
         )
         if not raw:
             return session_id
@@ -2805,7 +2805,7 @@ async def _resolve_journey_root(
     Journey J5 — a raiz CANÔNICA da journey desta sessão (o `journeyId` do engine).
 
     Duas etapas, e a segunda é o que faz o `@ctx.journey.*` sobreviver a um merge:
-      1. raiz de PROVENIÊNCIA — `session.root_session_id` do ctx (fallback: a própria sessão);
+      1. raiz de PROVENIÊNCIA — `core.contact.root_session_id` do ctx (fallback: a própria sessão);
       2. raiz CANÔNICA — `find()` no mapa de aliases (`{tenant}:journey:aliases`, espelho
          que a tool `journey_merge` mantém). Sem isto, duas journeys unidas continuariam
          com DOIS hashes de contexto: os agentes de cada braço leriam caixas diferentes, e o
@@ -2976,14 +2976,14 @@ async def _close_contact_layer(
         # conveniência. Ausente = sessão de topo (ninguém a criou) — que é a leitura
         # correta: raiz de árvore não tem pai.
         _origin_close = await _read_ctx_value(
-            redis_client, tenant_id, session_id, "session.origin_session_id",
+            redis_client, tenant_id, session_id, "core.workflow.origin_session_id",
         )
         # Journey T4: o RÓTULO da aresta (trigger|delegate|collect) — por que esta sessão
         # existe. Mesma razão do origin: a linha de close sobrevive e tem de repetir o
         # fato, senão o apaga. Crítico para a sessão de survey, que nasce pelo WEBCHAT (o
         # adapter não sabe que veio de um `collect`) — o rótulo só existe no ctx.
         _spawn_close = await _read_ctx_value(
-            redis_client, tenant_id, session_id, "session.spawn_reason",
+            redis_client, tenant_id, session_id, "core.contact.spawn_reason",
         )
 
         # SLA do pool no fechamento: a linha de close é a que sobrevive no
@@ -4811,7 +4811,7 @@ async def process_routed(
             # segmento. Grava no namespace segment-scoped do próprio wrap-up para que
             # suas mensagens usem visibility ["@ctx.segment.served_human_participant_id"]
             # — isolando o wrap-up ao humano certo mesmo com 2+ humanos na conferência
-            # (substitui o campo de SESSÃO global session.human_agent_participant_id).
+            # (substitui o campo de SESSÃO global core.contact.human_agent_participant_id).
             try:
                 _served_raw = await redis_client.get(
                     f"session:{session_id}:hook_served_human:{conference_id}"
@@ -5258,11 +5258,11 @@ async def process_routed(
                     ))
                 if _process_end_hooks:
                     # Journey J4 — carimba process_outcome no ctx pré-hook. A raiz canônica
-                    # já está em session.root_session_id (J1) e o customer_id nativo em
+                    # já está em core.contact.root_session_id (J1) e o customer_id nativo em
                     # caller.customer_id — o agente de survey lê ambos p/ gravar grain=journey.
                     try:
                         await redis_client.hset(
-                            f"{tenant_id}:ctx:{session_id}", "session.process_outcome",
+                            f"{tenant_id}:ctx:{session_id}", "core.process.outcome",
                             json.dumps({
                                 "value":      _ai_outcome,
                                 "confidence": 1.0,

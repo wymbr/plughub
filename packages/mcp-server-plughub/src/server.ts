@@ -1410,10 +1410,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // journey é esta" — uma segunda implementação dela, em Python, partiria o
       // contexto compartilhado no merge exatamente como o comentário de
       // `writeContextTag` descreve. Mesma via de proveniência que o bridge usa:
-      // `session.root_session_id` do ctx → find da componente.
+      // `core.contact.root_session_id` do ctx → find da componente.
       if (includeJourney) {
         let provenanceRoot = sessionId
-        const rawRoot = rawHash["session.root_session_id"]
+        const rawRoot = rawHash["core.contact.root_session_id"]
         if (rawRoot) {
           try {
             const parsed = JSON.parse(rawRoot) as { value?: unknown }
@@ -2089,10 +2089,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     try {
       const ctxKey = `${tenantId}:ctx:${sessionId}`
       const fields = [
-        "session.copilot.sugestao_resposta",
-        "session.copilot.flags_risco",
-        "session.copilot.acoes_recomendadas",
-        "session.copilot.ultima_analise",
+        "core.copilot.suggested_reply",
+        "core.copilot.risk_flags",
+        "core.copilot.recommended_actions",
+        "core.copilot.last_analysis",
       ]
       const raw = await (redis as any).hmget(ctxKey, ...fields)
 
@@ -2622,13 +2622,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // 1. Resolve the human agent's participant_id so we can match against
       //    the visibility arrays in menu:waiting — same logic as the WS text
       //    handler (line 1383): vis.includes(agentPid).
-      //    The bridge writes session.human_agent_participant_id to the
+      //    The bridge writes core.contact.human_agent_participant_id to the
       //    ContextStore ({tenantId}:ctx:{sessionId}) before firing hooks.
       const menuTenantId = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
       let agentPid = "human_agent"
       try {
         const ctxKey = `${menuTenantId}:ctx:${sessionId}`
-        const raw = await redis.hget(ctxKey, "session.human_agent_participant_id")
+        const raw = await redis.hget(ctxKey, "core.contact.human_agent_participant_id")
         if (raw) {
           const entry = JSON.parse(raw)
           if (typeof entry.value === "string" && entry.value) {
@@ -3775,8 +3775,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
           if (waitingHash && Object.keys(waitingHash).length > 0) {
             // Resolve the human agent's participant_id from ContextStore so that
             // array-visibility menu steps (e.g. wrap-up using
-            // ["@ctx.session.human_agent_participant_id"]) match correctly.
-            // The bridge writes session.human_agent_participant_id before firing hooks.
+            // ["@ctx.core.contact.human_agent_participant_id"]) match correctly.
+            // The bridge writes core.contact.human_agent_participant_id before firing hooks.
             // Mirrors the same lookup in the menu_submit handler.
             // G7 (c): resolver o remetente pela identidade da PRÓPRIA conexão
             // (expectedInstanceId = human-${userId}). Com a visibility do wrap-up
@@ -3788,7 +3788,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
             if (!expectedInstanceId) {
               try {
                 const ctxTenantId = agentTenantId || (process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo")
-                const rawPid = await redis.hget(`${ctxTenantId}:ctx:${targetSessionId}`, "session.human_agent_participant_id")
+                const rawPid = await redis.hget(`${ctxTenantId}:ctx:${targetSessionId}`, "core.contact.human_agent_participant_id")
                 if (rawPid) {
                   const pidEntry = JSON.parse(rawPid)
                   if (typeof pidEntry.value === "string" && pidEntry.value) {

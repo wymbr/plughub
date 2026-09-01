@@ -36,7 +36,7 @@
 #   P4 o `resume_token` da pendência é uma chave `{t}:collect:*` (⇒ é COLLECT, e
 #      não delegate — discriminador que o passo 8 do smoke NÃO faz).
 #   P5 o clique marca a pendência `engaged` e cria `survey_session_id`.
-#   P6 o ctx da sessão-filha traz `session.spawn_reason = "collect"`.
+#   P6 o ctx da sessão-filha traz `core.contact.spawn_reason = "collect"`.
 #   P7 depois do WS + fechamento, a linha em `sessions` traz `collect`
 #      ⇒ a contagem de `collect` vai de 0 para 1.
 #   ⚠️ Os frágeis são P2 (ambiente é DB-owned; o YAML não manda) e P7 (depende de
@@ -199,10 +199,10 @@ else
 fi
 
 echo "══ 6) TESTEMUNHA DO PRODUTOR — o ctx da sessão-filha traz o rótulo? ══"
-CTXSR=$(redis HGET "${TENANT}:ctx:${SSID}" "session.spawn_reason" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
+CTXSR=$(redis HGET "${TENANT}:ctx:${SSID}" "core.contact.spawn_reason" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 [ "$CTXSR" = "collect" ] \
-  && ok "ctx: session.spawn_reason = collect" \
-  || bad "ctx: session.spawn_reason = '${CTXSR:-<ausente>}' (esperado 'collect') — o
+  && ok "ctx: core.contact.spawn_reason = collect" \
+  || bad "ctx: core.contact.spawn_reason = '${CTXSR:-<ausente>}' (esperado 'collect') — o
         produtor de webhook.py:2118 não escreveu. Este é o defeito (a), produtor mudo."
 
 echo "══ 7) o inbound — conecta o WS como o cliente conectaria ══"

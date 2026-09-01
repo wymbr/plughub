@@ -401,18 +401,18 @@ class TestWriteContextStoreSentiment:
         r = make_redis()
         await write_context_store_sentiment(r, TENANT, SESSION, 0.5)
         mapping = r.hset.call_args.kwargs["mapping"]
-        assert "session.sentimento.current" in mapping
-        assert "session.sentimento.categoria" not in mapping, (
+        assert "core.sentiment.current" in mapping
+        assert "core.sentiment.category" not in mapping, (
             "o emitter voltou a classificar: categoria usa faixas configuráveis por "
             "tenant e é responsabilidade de quem LÊ"
         )
-        assert list(mapping) == ["session.sentimento.current"]
+        assert list(mapping) == ["core.sentiment.current"]
 
     async def test_current_entry_value_matches_score(self):
         r = make_redis()
         await write_context_store_sentiment(r, TENANT, SESSION, -0.4)
         mapping = r.hset.call_args.kwargs["mapping"]
-        entry = json.loads(mapping["session.sentimento.current"])
+        entry = json.loads(mapping["core.sentiment.current"])
         assert entry["value"]      == -0.4
         assert entry["confidence"] == 0.80
         assert entry["source"]     == "ai_inferred:sentiment_emitter"
@@ -426,7 +426,7 @@ class TestWriteContextStoreSentiment:
         """
         r = make_redis()
         await write_context_store_sentiment(r, TENANT, SESSION, -0.7)
-        entry = json.loads(r.hset.call_args.kwargs["mapping"]["session.sentimento.current"])
+        entry = json.loads(r.hset.call_args.kwargs["mapping"]["core.sentiment.current"])
         assert entry["value"] == -0.7
 
     async def test_writes_survive_without_a_classifier(self):
@@ -454,7 +454,7 @@ class TestWriteContextStoreSentiment:
         r = make_redis()
         await write_context_store_sentiment(r, TENANT, SESSION, 0.123456789)
         mapping = r.hset.call_args.kwargs["mapping"]
-        entry = json.loads(mapping["session.sentimento.current"])
+        entry = json.loads(mapping["core.sentiment.current"])
         assert entry["value"] == 0.1235  # round to 4
 
     async def test_none_redis_is_noop(self):

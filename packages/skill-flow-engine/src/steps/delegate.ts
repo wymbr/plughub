@@ -218,7 +218,7 @@ export async function executeDelegate(
   }
 
   // Camada B (pull direcionado) — resolve assigned_to (aceita ref @ctx.*/$.* via o
-  // mesmo resolveInputMap do context; o wrap-up usa @ctx.session.surveyed_agent_key).
+  // mesmo resolveInputMap do context; o wrap-up usa @ctx.core.survey.agent_key).
   let resolvedAssignedTo: string | undefined
   if (step.assigned_to) {
     const m = await resolveInputMap({ v: step.assigned_to }, ctx, ctx.contextStore)

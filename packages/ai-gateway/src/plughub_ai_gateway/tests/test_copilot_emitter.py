@@ -199,10 +199,10 @@ class TestWriteCopilotContext:
         redis.hset.assert_called_once()
         kwargs = redis.hset.call_args
         mapping = kwargs.kwargs.get("mapping") or kwargs.args[1]
-        assert "session.copilot.sugestao_resposta" in mapping
-        assert "session.copilot.flags_risco" in mapping
-        assert "session.copilot.acoes_recomendadas" in mapping
-        assert "session.copilot.ultima_analise" in mapping
+        assert "core.copilot.suggested_reply" in mapping
+        assert "core.copilot.risk_flags" in mapping
+        assert "core.copilot.recommended_actions" in mapping
+        assert "core.copilot.last_analysis" in mapping
 
     @pytest.mark.asyncio
     async def test_sets_correct_context_key(self):

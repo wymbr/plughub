@@ -12,10 +12,10 @@
  * Uso via SDK direto (fontes não-MCP: AI Gateway, Routing Engine, Rules Engine):
  *
  *   const store = new ContextStore({ redis, tenantId: "tenant_demo" })
- *   await store.set(sessionId, "session.sentimento.current", {
+ *   await store.set(sessionId, "core.sentiment.current", {
  *     value: -0.4, confidence: 1.0, source: "ai:sentiment_emitter"
  *   })
- *   const entry = await store.get(sessionId, "session.sentimento.current")
+ *   const entry = await store.get(sessionId, "core.sentiment.current")
  *   const snapshot = await store.getByPrefix(sessionId, ["session", "caller"])
  */
 
@@ -124,7 +124,7 @@ export class ContextStore {
    * Escreve ou atualiza uma tag no ContextStore.
    *
    * @param sessionId   ID da sessão ativa
-   * @param tag         Caminho da tag: "caller.cpf", "session.sentimento.current"
+   * @param tag         Caminho da tag: "caller.cpf", "core.sentiment.current"
    * @param entry       Dados a escrever (sem updated_at — gerado automaticamente)
    * @param merge       Estratégia de merge (default: highest_confidence)
    * @param customerId  Necessário apenas para tags de longa duração (pricing, insight.historico)

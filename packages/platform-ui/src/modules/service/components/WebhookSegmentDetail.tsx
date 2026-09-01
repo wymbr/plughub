@@ -244,12 +244,12 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
   const isActive     = node.ended_at === null
 
   // S4 — dicionário de rótulos das respostas, do DialogForm que as coletou
-  // (`session.dialog_form_id` no ctx desta sessão). É DICIONÁRIO, não fonte: quem
+  // (`core.workflow.dialog_form_id` no ctx desta sessão). É DICIONÁRIO, não fonte: quem
   // manda na lista é a resposta gravada. Form ausente/404 ⇒ mapa vazio ⇒ as chaves
   // aparecem cruas, que é a degradação honesta (nunca um rótulo inventado).
   const [answerLabels, setAnswerLabels] = useState<Record<string, string>>({})
-  const formId = typeof ctx['session.dialog_form_id']?.value === 'string'
-    ? ctx['session.dialog_form_id'].value as string
+  const formId = typeof ctx['core.workflow.dialog_form_id']?.value === 'string'
+    ? ctx['core.workflow.dialog_form_id'].value as string
     : ''
 
   useEffect(() => {

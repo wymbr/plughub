@@ -139,7 +139,7 @@ export const SkillEvaluationSchema = z.object({
 /**
  * Referência a valor no pipeline_state (JSONPath) ou ContextStore (@ctx).
  * JSONPath: $.pipeline_state.results.analise.sentimento
- * ContextStore: @ctx.session.sentimento.current
+ * ContextStore: @ctx.core.sentiment.current
  * ContextStore special: @ctx.__gaps__, @ctx.__pending_question__
  */
 const JsonPathSchema = z.string().regex(
@@ -370,7 +370,7 @@ export const ReasonStepSchema = z.object({
    * Exemplo:
    *   context_tags:
    *     outputs:
-   *       sentimento: { tag: "session.sentimento.current", confidence: 0.8, merge: "overwrite" }
+   *       sentimento: { tag: "core.sentiment.current", confidence: 0.8, merge: "overwrite" }
    *       escalar:    { tag: "session.escalar_solicitado",  confidence: 1.0, merge: "overwrite" }
    */
   context_tags:       ReasonStepContextTagsSchema.optional(),
@@ -722,7 +722,7 @@ export const CollectStepSchema = z.object({
   /**
    * Journey J4c — DialogForm to render on engagement (survey collect). The N2
    * handler stores it on the collect pending; the survey pool's dialog_runner
-   * reads it (@ctx.session.dialog_form_id) to render the form live when the
+   * reads it (@ctx.core.workflow.dialog_form_id) to render the form live when the
    * customer opens the link. Config-driven single interpreter — no bespoke skill.
    */
   dialog_form_id: z.string().optional(),
@@ -739,14 +739,14 @@ export const CollectStepSchema = z.object({
    *
    * O que o grão significa em termos de CHAVE do sinal é semântica do **modelo de
    * sessão** (não regra de negócio), então quem a resolve é o handler N2:
-   *   journey  → a raiz canônica          (session.root_session_id)
-   *   session  → a sessão de origem       (session.origin_session_id do chamador)
+   *   journey  → a raiz canônica          (core.contact.root_session_id)
+   *   session  → a sessão de origem       (core.workflow.origin_session_id do chamador)
    *   workflow → o próprio workflow       (a sessão chamadora)
    *   segment  → NÃO suportado por aqui   — `survey_record` exige `segment_id`, que o
    *              workflow outbound não conhece; um survey de segmento precisa que o
    *              gatilho carimbe o segmento, o que é outra fatia.
    * O alvo resolvido viaja no pending e é semeado no ctx da sessão de survey
-   * (`session.survey_grain` + `session.survey_target_id`), de onde o runner o lê —
+   * (`core.survey.grain` + `core.survey.target_id`), de onde o runner o lê —
    * mantendo o runner 100% genérico (zero métrica e zero grão hardcoded).
    *
    * Default `journey` (retrocompat: pendings sem grão são de journey).
@@ -1151,7 +1151,7 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
      * um user_id específico DENTRO do pool pull, com transbordo pro pool por lease.
      * Ortogonal ao `pool` (o pool é o endereço; isto é filtro de claim dentro dele).
      * Suporta refs (@ctx.* / $.pipeline_state.*) — o wrap-up usa
-     * "@ctx.session.surveyed_agent_key". Só efetivo quando o pool é `dispatch_mode: pull`.
+     * "@ctx.core.survey.agent_key". Só efetivo quando o pool é `dispatch_mode: pull`.
      */
     assigned_to:              z.string().optional(),
     /** Janela da reserva (s); após, o item transborda pra qualquer um do pool.
@@ -1170,7 +1170,7 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
     /**
      * Key→value pairs written to the child session's ContextStore before
      * the agent is activated. Supports @ctx.* and $.pipeline_state.* references.
-     * The engine always writes session.workflow_resume_token automatically —
+     * The engine always writes core.workflow.resume_token automatically —
      * no need to declare it here.
      */
     context:        z.record(z.string()).optional(),

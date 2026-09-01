@@ -70,7 +70,11 @@ ESCRITORES = [
     "packages/mcp-server-plughub/src/server.ts",
 ]
 
-LIT = re.compile(r"""["']((?:session|journey|caller|account|insight|approval)\.[a-zA-Z0-9_.]+)["']""")
+# CNS-11 — `core` entrou no alfabeto. Sem ele o censo le os escritores de plataforma
+# JA migrados e nao ve nada: em 2026-09-01 a primeira rodada pos-rename publicou
+# "plataforma 0" sobre 35 escritas vivas. Instrumento que nao aprende o vocabulario
+# novo nao mede menos — mede ERRADO, e para o lado tranquilizador.
+LIT = re.compile(r"""["']((?:core|session|journey|caller|account|insight|approval)\.[a-zA-Z0-9_.]+)["']""")
 JSONKEY = re.compile(r'"([a-zA-Z0-9_.]+)"\s*:')
 # Marcas de ESCRITA na vizinhança do literal. Sem elas o mesmo literal conta como
 # leitura — o arquivo escreve E lê os mesmos nomes.
@@ -110,7 +114,7 @@ def ler_mapa():
 
     for ln in linhas:
         s = ln.strip()
-        if re.match(r"^(session|journey|customer):\s*\{", s):
+        if re.match(r"^(core|session|journey|customer):\s*\{", s):
             esc, dom = s.split(":")[0], None
             continue
         m = re.match(r"^([a-z_]+):\s*\{\s*$", s)

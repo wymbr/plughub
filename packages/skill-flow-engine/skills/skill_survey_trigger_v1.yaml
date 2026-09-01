@@ -70,7 +70,7 @@ steps:
   - id: avaliar_desfecho
     type: choice
     conditions:
-      - field:    "@ctx.session.process_outcome"
+      - field:    "@ctx.core.process.outcome"
         operator: eq
         value:    "resolved"
         next:     disparar_survey
@@ -93,8 +93,8 @@ steps:
   #
   # ── ESCOLHA DO SEGMENTO (política, para survey de grão `segment`) ────────────
   # QUAL segmento pesquisar é decisão de negócio — mora AQUI, no skill, não no core.
-  # A plataforma só EXPÕE os fatos no ctx pré-hook (`session.last_primary_segment_id`,
-  # `session.last_primary_agent_key`, escritos pelo bridge); o gatilho escolhe e propaga.
+  # A plataforma só EXPÕE os fatos no ctx pré-hook (`core.contact.last_primary_segment_id`,
+  # `core.contact.last_primary_agent_key`, escritos pelo bridge); o gatilho escolhe e propaga.
   #
   # Default de produto: o ÚLTIMO segmento primary — quem de fato fechou o atendimento.
   # Um tenant que queira outro critério (o primeiro, o de um pool específico, …) muda
@@ -114,8 +114,8 @@ steps:
       # engine antes da chamada. Semeia o ctx da sessão do workflow ANTES do routing, então
       # o `collect` (step 1) já lê as tags.
       context_json: >-
-        {"session.survey_segment_id": "{{@ctx.session.last_primary_segment_id}}",
-         "session.survey_agent_key": "{{@ctx.session.last_primary_agent_key}}"}
+        {"core.survey.segment_id": "{{@ctx.core.contact.last_primary_segment_id}}",
+         "core.survey.agent_key": "{{@ctx.core.contact.last_primary_agent_key}}"}
     on_success: encerrar
     on_failure: encerrar
 

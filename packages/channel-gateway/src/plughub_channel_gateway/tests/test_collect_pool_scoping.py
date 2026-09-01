@@ -4,8 +4,8 @@ Segurança Fase B (J4c) — o pool da SESSÃO PESQUISADA flui na escrita do surv
 caminho collect-based:
 
   handle_collect        → resolve o pool do ALVO (signal_target_id) do ctx
-                          (session.pool.id) e o congela no pending (signal_pool_id).
-  handle_collect_engage → semeia session.survey_pool_id no ctx da sessão de survey.
+                          (core.pool.id) e o congela no pending (signal_pool_id).
+  handle_collect_engage → semeia core.survey.pool_id no ctx da sessão de survey.
                           O runner (skill_survey_runner_v1) lê essa tag e a passa ao
                           survey_record → a resposta nasce com o pool do atendimento
                           pesquisado, NÃO com o pool de infra do survey.
@@ -77,9 +77,9 @@ async def test_grain_session_stamps_origin_pool():
     r = _FakeRedis()
     tenant, caller, origin = "tenant_demo", "wf_sess_1", "contact_sess_1"
     # o ALVO (origem) tem o pool escrito pela Routing Engine
-    await r.hset(f"{tenant}:ctx:{origin}", "session.pool.id", _ctx_entry("retencao_humano"))
+    await r.hset(f"{tenant}:ctx:{origin}", "core.pool.id", _ctx_entry("retencao_humano"))
     # o workflow chamador aponta a origem (grain=session resolve o alvo daqui)
-    await r.hset(f"{tenant}:ctx:{caller}", "session.origin_session_id", _ctx_entry(origin))
+    await r.hset(f"{tenant}:ctx:{caller}", "core.workflow.origin_session_id", _ctx_entry(origin))
 
     a = _adapter(r)
     res = await _collect(a, tenant=tenant, caller=caller, token="tok_1", grain="session")
@@ -92,18 +92,18 @@ async def test_grain_session_stamps_origin_pool():
 
     eng = await a.handle_collect_engage(tenant_id=tenant, collect_token="tok_1", jwt_secret_default="s")
     sid = eng["session_id"]
-    seeded = await r.hget(f"{tenant}:ctx:{sid}", "session.survey_pool_id")
+    seeded = await r.hget(f"{tenant}:ctx:{sid}", "core.survey.pool_id")
     assert seeded is not None and json.loads(seeded)["value"] == "retencao_humano"
-    assert json.loads(await r.hget(f"{tenant}:ctx:{sid}", "session.survey_target_id"))["value"] == origin
+    assert json.loads(await r.hget(f"{tenant}:ctx:{sid}", "core.survey.target_id"))["value"] == origin
 
 
 @pytest.mark.asyncio
 async def test_grain_journey_stamps_root_pool():
     r = _FakeRedis()
     tenant, caller, root = "tenant_demo", "wf_sess_2", "root_sess_2"
-    await r.hset(f"{tenant}:ctx:{root}", "session.pool.id", _ctx_entry("sac_ia"))
+    await r.hset(f"{tenant}:ctx:{root}", "core.pool.id", _ctx_entry("sac_ia"))
     # journey grain: alvo = raiz canônica lida do chamador
-    await r.hset(f"{tenant}:ctx:{caller}", "session.root_session_id", _ctx_entry(root))
+    await r.hset(f"{tenant}:ctx:{caller}", "core.contact.root_session_id", _ctx_entry(root))
 
     a = _adapter(r)
     await _collect(a, tenant=tenant, caller=caller, token="tok_2", grain="journey")
@@ -113,7 +113,7 @@ async def test_grain_journey_stamps_root_pool():
     assert pending["signal_pool_id"] == "sac_ia"
 
     eng = await a.handle_collect_engage(tenant_id=tenant, collect_token="tok_2", jwt_secret_default="s")
-    seeded = await r.hget(f"{tenant}:ctx:{eng['session_id']}", "session.survey_pool_id")
+    seeded = await r.hget(f"{tenant}:ctx:{eng['session_id']}", "core.survey.pool_id")
     assert json.loads(seeded)["value"] == "sac_ia"
 
 
@@ -122,7 +122,7 @@ async def test_empty_pool_when_target_ctx_absent_degrades_not_crashes():
     r = _FakeRedis()
     tenant, caller = "tenant_demo", "wf_sess_3"
     # raiz aponta p/ sessão sem ctx (ex.: expirado) → pool não resolve
-    await r.hset(f"{tenant}:ctx:{caller}", "session.root_session_id", _ctx_entry("root_missing"))
+    await r.hset(f"{tenant}:ctx:{caller}", "core.contact.root_session_id", _ctx_entry("root_missing"))
 
     a = _adapter(r)
     await _collect(a, tenant=tenant, caller=caller, token="tok_3", grain="journey")
@@ -132,4 +132,4 @@ async def test_empty_pool_when_target_ctx_absent_degrades_not_crashes():
 
     # engage NÃO semeia a tag quando o pool é vazio → ref do runner resolve null
     eng = await a.handle_collect_engage(tenant_id=tenant, collect_token="tok_3", jwt_secret_default="s")
-    assert await r.hget(f"{tenant}:ctx:{eng['session_id']}", "session.survey_pool_id") is None
+    assert await r.hget(f"{tenant}:ctx:{eng['session_id']}", "core.survey.pool_id") is None

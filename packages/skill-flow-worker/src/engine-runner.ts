@@ -199,7 +199,7 @@ export class EngineRunner {
     session_id:    string
     attempt:       number
     json_schema?:  Record<string, unknown>   // T7b — tool-use nativo quando presente
-    preferred_config_ids?: string[]          // LLM Accounts — session.pool.llm_account_ids
+    preferred_config_ids?: string[]          // LLM Accounts — core.pool.llm_account_ids
     customer_utterance?: string              // fala do cliente — habilita medição de sentimento
     tenant_id?:    string
   }): Promise<unknown> {

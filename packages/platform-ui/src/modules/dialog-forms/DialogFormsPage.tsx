@@ -62,7 +62,7 @@ function setLt(current: LocalizedText | undefined, locale: string, value: string
 }
 
 type VisSelect = 'all' | 'agents_only' | 'customer'
-const CUSTOMER_VIS = ['@ctx.session.customer_participant_id']
+const CUSTOMER_VIS = ['@ctx.core.contact.customer_participant_id']
 function visToSelect(v: DialogVisibility | undefined): VisSelect {
   if (v === 'agents_only') return 'agents_only'
   if (Array.isArray(v)) return 'customer'

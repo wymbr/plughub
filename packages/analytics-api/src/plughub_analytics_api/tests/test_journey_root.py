@@ -3,7 +3,7 @@ test_journey_root.py — Journey J1.
 
 Cobre _enrich_session_root: sobrescreve root_session_id (+ journey_id cache) de
 uma linha `sessions` com o valor AUTORITATIVO do ContextStore
-(session.root_session_id), imunizando contra o clobber do ReplacingMergeTree por
+(core.contact.root_session_id), imunizando contra o clobber do ReplacingMergeTree por
 writers que não carregam a raiz (routed/queued/suspended/closed). Fail-soft:
 ctx ausente/ilegível → mantém o valor do parser (self, correto p/ raiz top-level).
 """
@@ -30,7 +30,7 @@ async def test_overrides_root_and_journey_from_ctx():
     await _enrich_session_root(row, r)
     assert row["root_session_id"] == "W1-root"
     assert row["journey_id"] == "W1-root"   # cache = root
-    r.hget.assert_awaited_once_with("t:ctx:W2", "session.root_session_id")
+    r.hget.assert_awaited_once_with("t:ctx:W2", "core.contact.root_session_id")
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ história no `CHANGELOG.md`. Nada registrado aqui ainda.)*
 | CNS-09 | **D-C dissolvida pela CNS-02** — tirar `portabilidade`/`reembolso` da estrutura deixou de ser tarefa: sob `core.*` aquilo é espaço de TENANT, e a plataforma não dita vocabulário de negócio. Sobrevive como conselho de modelagem na spec §3, não como trabalho | 2026-09-01 | `TODO.md` § CNS-02 |
 | CNS-03 | Rota de `core.` DECLARADA (o escopo do core é o 2º segmento: `core.customer.`→90 d, `core.journey.`→30 d) + `core.segment.` em `dynamic_prefixes` | 2026-09-01 | `CHANGELOG.md` § 2026-09-01 CNS-03 |
 | CNS-04 | Tabela de roteamento única em `@plughub/schemas`; oráculo troca `unknown_scopes` por `mismatched_retention` (coerência, não enum) — desarma o root `customer` prometendo 90 d e entregando 4 h | 2026-09-01 | `CHANGELOG.md` § 2026-09-01 CNS-04 |
+| CNS-11 | **O commit único** — 35 nomes do core migram para `core.*`: 84 arquivos na passada mecânica + 34 folhas movidas nos dois mirrors do mapa | 2026-09-01 | `CHANGELOG.md` § 2026-09-01 CNS-11 |
 | CNS-10 | **Absorvida pela CNS-11** — sob `core.*` nenhum skill renomeia vocabulário próprio; o que muda são as **referências de leitura** a nomes do core em 14 skills, e isso é parte do commit único | 2026-09-01 | `TODO.md` § CNS-02 |
 
 ---

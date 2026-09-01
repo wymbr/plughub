@@ -2426,9 +2426,9 @@ async def review_result(result_id: str, tenant_id: str, body: ReviewBody, reques
     # Write to ContextStore so the suspended workflow YAML choice step can branch on it
     if result.get("session_id"):
         await _write_ctx(redis_client, tenant_id, result["session_id"], {
-            "session.review_decision": body.decision,
-            "session.reviewer_id":     caller_user_id,
-            "session.round_echoed":    body.round,
+            "core.workflow.review_decision": body.decision,
+            "core.workflow.reviewer_id":     caller_user_id,
+            "core.workflow.round_echoed":    body.round,
         })
 
     # Resume workflow (fire-and-forget)
@@ -2545,9 +2545,9 @@ async def create_contestation(body: ContestationCreate, request: Request) -> dic
     # Write to ContextStore so workflow choice step can see "contested"
     if result.get("session_id"):
         await _write_ctx(redis_client, body.tenant_id, result["session_id"], {
-            "session.review_decision": "contested",
-            "session.reviewer_id":     caller_user_id,
-            "session.round_echoed":    body.round,
+            "core.workflow.review_decision": "contested",
+            "core.workflow.reviewer_id":     caller_user_id,
+            "core.workflow.round_echoed":    body.round,
         })
 
     # Resume workflow (fire-and-forget)

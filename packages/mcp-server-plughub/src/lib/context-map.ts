@@ -176,7 +176,7 @@ function auditRedis(): RedisClient {
  * Contadores em PAR (ADR §7): `alias:*` e `canon:*` vivem no mesmo hash e são
  * lidos juntos. Só o primeiro não distingue *"ninguém migrou"* de *"ninguém usa"* —
  * e, no estado de hoje, é exatamente o par que dá a resposta: as tags que o
- * routing-engine escreve (`session.pool.*`, `session.queue.*`) já nascem canônicas,
+ * routing-engine escreve (`core.pool.*`, `core.queue.*`) já nascem canônicas,
  * então `canon` > 0 enquanto `alias` > 0 significa migração PARCIAL, não ausência
  * de uso.
  *

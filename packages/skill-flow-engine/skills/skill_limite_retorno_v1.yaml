@@ -100,7 +100,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token:  "@ctx.session.workflow_resume_token"
+      resume_token:  "@ctx.core.workflow.resume_token"
       decision:      "input"
       resume_origin: "@ctx.session.resume_origin"
       payload:
@@ -116,7 +116,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token:  "@ctx.session.delegate_resume_token"
+      resume_token:  "@ctx.core.workflow.delegate_resume_token"
       decision:      "input"
       resume_origin: "@ctx.session.resume_origin"
     on_success: finalizar

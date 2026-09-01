@@ -32,15 +32,15 @@ steps:
   - id: verificar_analise
     type: choice
     conditions:
-      - field: "@ctx.session.review_decision"
+      - field: "@ctx.core.workflow.review_decision"
         operator: eq
         value: "approved"
         next: notificar_aprovado
-      - field: "@ctx.session.review_decision"
+      - field: "@ctx.core.workflow.review_decision"
         operator: eq
         value: "rejected"
         next: notificar_rejeitado
-      - field: "@ctx.session.review_decision"
+      - field: "@ctx.core.workflow.review_decision"
         operator: eq
         value: "needs_info"
         next: coletar_informacoes
@@ -50,7 +50,7 @@ steps:
     type: collect
     target:
       type: customer
-      id: "@ctx.session.customer_participant_id"
+      id: "@ctx.core.contact.customer_participant_id"
     requires: [text]
     prompt: "📎 Para prosseguir com o reembolso do pedido {{@ctx.session.numero_pedido}}, precisamos de informações adicionais. Por favor, envie o comprovante de compra."
     timeout_hours: 48
@@ -80,7 +80,7 @@ steps:
     type: collect
     target:
       type: customer
-      id: "@ctx.session.customer_participant_id"
+      id: "@ctx.core.contact.customer_participant_id"
     requires: [text]
     prompt: "💰 O reembolso do pedido {{@ctx.session.numero_pedido}} foi processado. Você já recebeu o crédito em sua conta?"
     timeout_hours: 24

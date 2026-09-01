@@ -418,14 +418,14 @@ class WebhookAdapter(ChannelAdapter):
 
     async def _read_ctx_root(self, tenant_id: str, session_id: str | None) -> str | None:
         """
-        Journey J1: read `session.root_session_id` from a session's ContextStore.
+        Journey J1: read `core.contact.root_session_id` from a session's ContextStore.
 
         Returns the raw value, or None when absent/unreadable. Used to inherit the
         caller's TRANSITIVE root when spawning a child session (trigger-from-session
         / delegate): child.root = caller.root, not caller.session_id. Fail-soft — a
         missing/broken entry falls back to the caller resolving root = self upstream.
         """
-        return await self._read_ctx_tag(tenant_id, session_id, "session.root_session_id")
+        return await self._read_ctx_tag(tenant_id, session_id, "core.contact.root_session_id")
 
     async def _resolve_signal_target(
         self,
@@ -442,12 +442,12 @@ class WebhookAdapter(ChannelAdapter):
         é regra de negócio — pesquisar a journey ou a sessão — fica no `config_json` do
         deploy; aqui só se resolve o que a plataforma já sabe:
 
-          journey  → a raiz canônica da journey        (caller.session.root_session_id)
-          session  → a sessão de origem pesquisada     (caller.session.origin_session_id,
+          journey  → a raiz canônica da journey        (caller.core.contact.root_session_id)
+          session  → a sessão de origem pesquisada     (caller.core.workflow.origin_session_id,
                      i.e. a sessão que disparou o workflow de survey)
           workflow → o próprio workflow                (a sessão chamadora)
           segment  → a sessão QUE CONTÉM o segmento    (também a de origem — o
-                     `segment_id` viaja à parte, em `session.survey_segment_id`)
+                     `segment_id` viaja à parte, em `core.survey.segment_id`)
 
         Note que `segment` e `session` resolvem para a MESMA sessão-chave: o que os separa
         não é a chave, é o `segment_id` + `agent_key` que acompanham o sinal (é assim que
@@ -459,12 +459,12 @@ class WebhookAdapter(ChannelAdapter):
             return session_id
         if grain in ("session", "segment"):
             origin = await self._read_ctx_tag(
-                tenant_id, session_id, "session.origin_session_id"
+                tenant_id, session_id, "core.workflow.origin_session_id"
             )
             if not origin:
                 raise ValueError(
                     f"signal_grain='{grain}' exige que o workflow tenha uma sessão de "
-                    "origem (session.origin_session_id) — este collect não foi disparado "
+                    "origem (core.workflow.origin_session_id) — este collect não foi disparado "
                     "a partir de uma sessão."
                 )
             return origin
@@ -518,7 +518,7 @@ class WebhookAdapter(ChannelAdapter):
 
         origin_session_id: Arc 19 — session that triggered this workflow
           (e.g. a webchat intake session). Written to ContextStore as
-          session.origin_session_id so agents can trace the provenance.
+          core.workflow.origin_session_id so agents can trace the provenance.
 
         context: Arc 19 — seed ContextStore entries for the new session.
           Dict of {tag: value} pairs (string values). Written atomically
@@ -600,20 +600,20 @@ class WebhookAdapter(ChannelAdapter):
         # seeded tags are already available via @ctx.* resolution.
         #
         # context_entries format: {tag: value} — both strings.
-        # origin_session_id is always written as session.origin_session_id
+        # origin_session_id is always written as core.workflow.origin_session_id
         # (confidence 1.0, visibility agents_only) when provided.
         ctx_key   = f"{tenant_id}:ctx:{session_id}"
         now_iso   = datetime.now(timezone.utc).isoformat()
         ctx_writes: dict[str, str] = {}
 
-        # Journey J1: root is never null — always seed session.root_session_id so
+        # Journey J1: root is never null — always seed core.contact.root_session_id so
         # any child spawned from THIS session inherits the transitive root.
-        ctx_writes["session.root_session_id"] = self._ctx_entry(
+        ctx_writes["core.contact.root_session_id"] = self._ctx_entry(
             resolved_root, "webhook_trigger", now_iso
         )
 
         if origin_session_id:
-            ctx_writes["session.origin_session_id"] = json.dumps({
+            ctx_writes["core.workflow.origin_session_id"] = json.dumps({
                 "value":      origin_session_id,
                 "confidence": 1.0,
                 "source":     "webhook_trigger",
@@ -622,7 +622,7 @@ class WebhookAdapter(ChannelAdapter):
             })
             # Journey T4: rótulo da aresta no ctx — o bridge o relê para carimbar a linha
             # de close (a sobrevivente no ReplacingMergeTree). Só existe quando há aresta.
-            ctx_writes["session.spawn_reason"] = self._ctx_entry(
+            ctx_writes["core.contact.spawn_reason"] = self._ctx_entry(
                 "trigger", "webhook_trigger", now_iso,
             )
 
@@ -1635,8 +1635,8 @@ class WebhookAdapter(ChannelAdapter):
 
         The context keys are written as "session.{key}" in ContextStore so the
         child session's agent can read them via @ctx.session.{key}.
-        workflow_resume_token is always written as session.workflow_resume_token.
-        origin_session_id is always written as session.origin_session_id.
+        workflow_resume_token is always written as core.workflow.resume_token.
+        origin_session_id is always written as core.workflow.origin_session_id.
 
         Args:
             tenant_id:         tenant identifier
@@ -1653,7 +1653,7 @@ class WebhookAdapter(ChannelAdapter):
         now_iso = datetime.now(timezone.utc).isoformat()
 
         # Journey J1: child inherits the caller's TRANSITIVE root (not origin, which
-        # is 1-hop). Read the caller's session.root_session_id; fallback = origin
+        # is 1-hop). Read the caller's core.contact.root_session_id; fallback = origin
         # (caller treated as its own root when it predates J1 / has no entry).
         caller_root = await self._read_ctx_root(tenant_id, origin_session_id) or origin_session_id
 
@@ -1662,12 +1662,12 @@ class WebhookAdapter(ChannelAdapter):
         ctx_writes: dict[str, str] = {}
 
         # Journey J1: seed child root so a grandchild delegate inherits it too.
-        ctx_writes["session.root_session_id"] = self._ctx_entry(
+        ctx_writes["core.contact.root_session_id"] = self._ctx_entry(
             caller_root, "delegate_step", now_iso
         )
 
         # Always write workflow_resume_token so the agent can call workflow_resume
-        ctx_writes["session.workflow_resume_token"] = json.dumps({
+        ctx_writes["core.workflow.resume_token"] = json.dumps({
             "value":      resume_token,
             "confidence": 1.0,
             "source":     "delegate_step",
@@ -1676,7 +1676,7 @@ class WebhookAdapter(ChannelAdapter):
         })
 
         # Always write origin_session_id (star topology root)
-        ctx_writes["session.origin_session_id"] = json.dumps({
+        ctx_writes["core.workflow.origin_session_id"] = json.dumps({
             "value":      origin_session_id,
             "confidence": 1.0,
             "source":     "delegate_step",
@@ -1684,7 +1684,7 @@ class WebhookAdapter(ChannelAdapter):
             "updated_at": now_iso,
         })
         # Journey T4: rótulo da aresta — este filho existe porque um workflow delegou I/O.
-        ctx_writes["session.spawn_reason"] = self._ctx_entry(
+        ctx_writes["core.contact.spawn_reason"] = self._ctx_entry(
             "delegate", "delegate_step", now_iso,
         )
 
@@ -1988,21 +1988,21 @@ class WebhookAdapter(ChannelAdapter):
 
         # Atribuição por segmento — quem ESCOLHE o segmento é o GATILHO (política mora no
         # skill; ele propaga a escolha via `context_json` do workflow_trigger). O core só
-        # expõe os fatos (`session.last_primary_segment_id` etc., escritos pelo bridge no
+        # expõe os fatos (`core.contact.last_primary_segment_id` etc., escritos pelo bridge no
         # ctx pré-hook) e transporta a escolha. Default de produto = último segmento
         # primary, mas isso está no YAML do gatilho, não aqui.
         signal_segment_id = ""
         signal_agent_key  = ""
         if signal_grain == "segment":
             signal_segment_id = await self._read_ctx_tag(
-                tenant_id, session_id, "session.survey_segment_id",
+                tenant_id, session_id, "core.survey.segment_id",
             ) or ""
             signal_agent_key = await self._read_ctx_tag(
-                tenant_id, session_id, "session.survey_agent_key",
+                tenant_id, session_id, "core.survey.agent_key",
             ) or ""
             if not signal_segment_id:
                 raise ValueError(
-                    "signal_grain='segment' exige `session.survey_segment_id` no ctx do "
+                    "signal_grain='segment' exige `core.survey.segment_id` no ctx do "
                     "workflow — o gatilho deve escolher o segmento e propagá-lo no "
                     "context_json do workflow_trigger (a escolha é política do skill)."
                 )
@@ -2010,13 +2010,13 @@ class WebhookAdapter(ChannelAdapter):
         # ── Segurança Fase B (J4c) — pool da SESSÃO PESQUISADA ────────────────
         # O pool da resposta = o pool da sessão contra a qual o sinal é gravado
         # (signal_target_id), NÃO o pool de infra do survey (o runner roda no pool
-        # de survey, não no atendimento pesquisado). Lê `session.pool.id` do ctx do
+        # de survey, não no atendimento pesquisado). Lê `core.pool.id` do ctx do
         # alvo (escrito pela Routing Engine no `_write_pool_context`). Congela no
-        # pending → `handle_collect_engage` semeia `session.survey_pool_id` → o runner
+        # pending → `handle_collect_engage` semeia `core.survey.pool_id` → o runner
         # o carimba no `survey_record`. Vazio (ex.: ctx do alvo expirado) = admin-only
         # (decisão C) — logado, nunca degrada em silêncio.
         signal_pool_id = await self._read_ctx_tag(
-            tenant_id, signal_target_id, "session.pool.id"
+            tenant_id, signal_target_id, "core.pool.id"
         ) or ""
         if not signal_pool_id:
             logger.warning(
@@ -2155,7 +2155,7 @@ class WebhookAdapter(ChannelAdapter):
 
         Mechanism — reuses the whole existing webchat path, zero new adapter:
           • Pre-seed the session ContextStore. The analytics consumer's J1 root
-            enrichment reads `session.root_session_id` from the ctx (not the event),
+            enrichment reads `core.contact.root_session_id` from the ctx (not the event),
             so seeding it BEFORE the inbound makes the session a journey member N1
             by construction. `collect_token` + `dialog_form_id` are read by the runner.
           • Mint a webchat JWT carrying `session_id` — the webchat adapter honours
@@ -2180,10 +2180,10 @@ class WebhookAdapter(ChannelAdapter):
             ctx_key    = f"{tenant_id}:ctx:{session_id}"
             ctx_writes: dict[str, str] = {
                 # Journey J1: root BEFORE the inbound → consumer enrichment stamps it.
-                "session.root_session_id": self._ctx_entry(
+                "core.contact.root_session_id": self._ctx_entry(
                     pending.get("root_session_id") or session_id, "collect_engage", now_iso,
                 ),
-                "session.origin_session_id": json.dumps({
+                "core.workflow.origin_session_id": json.dumps({
                     "value": pending.get("caller_session_id") or "", "confidence": 1.0,
                     "source": "collect_engage", "visibility": "agents_only",
                     "updated_at": now_iso,
@@ -2192,9 +2192,9 @@ class WebhookAdapter(ChannelAdapter):
                 # abriu o link), e o adapter de webchat não sabe que ela veio de um
                 # `collect` — então o rótulo tem de ser semeado AQUI, antes do inbound.
                 # O bridge o relê do ctx para carimbar a linha de close.
-                "session.spawn_reason": self._ctx_entry("collect", "collect_engage", now_iso),
+                "core.contact.spawn_reason": self._ctx_entry("collect", "collect_engage", now_iso),
                 # The runner resumes N3 with this at the end (workflow_resume).
-                "session.workflow_resume_token": json.dumps({
+                "core.workflow.resume_token": json.dumps({
                     "value": collect_token, "confidence": 1.0, "source": "collect_engage",
                     "visibility": "agents_only", "updated_at": now_iso,
                 }),
@@ -2205,7 +2205,7 @@ class WebhookAdapter(ChannelAdapter):
             }
             if pending.get("form_id"):
                 # Dialog primitive binding — the single generic runner reads this.
-                ctx_writes["session.dialog_form_id"] = json.dumps({
+                ctx_writes["core.workflow.dialog_form_id"] = json.dumps({
                     "value": pending["form_id"], "confidence": 1.0,
                     "source": "collect_engage", "visibility": "agents_only",
                     "updated_at": now_iso,
@@ -2214,33 +2214,33 @@ class WebhookAdapter(ChannelAdapter):
             # ambos daqui: ele não sabe (nem precisa saber) que grão está pesquisando.
             # Retrocompat: pendings criados antes do S2 não têm os campos → default
             # journey / raiz, que é exatamente o que eles faziam hardcoded.
-            ctx_writes["session.survey_grain"] = self._ctx_entry(
+            ctx_writes["core.survey.grain"] = self._ctx_entry(
                 pending.get("signal_grain") or "journey", "collect_engage", now_iso,
             )
-            ctx_writes["session.survey_target_id"] = self._ctx_entry(
+            ctx_writes["core.survey.target_id"] = self._ctx_entry(
                 pending.get("signal_target_id")
                 or pending.get("root_session_id")
                 or session_id,
                 "collect_engage", now_iso,
             )
             # S3 — atribuição por segmento. Só existe quando grain=segment; nos outros
-            # grãos a tag fica AUSENTE e a ref `@ctx.session.survey_segment_id` do runner
+            # grãos a tag fica AUSENTE e a ref `@ctx.core.survey.segment_id` do runner
             # resolve para null — por isso `segment_id`/`agent_key` são `.nullish()` no
             # SurveyRecordInputSchema (o runner é um só para todos os grãos).
             if pending.get("signal_segment_id"):
-                ctx_writes["session.survey_segment_id"] = self._ctx_entry(
+                ctx_writes["core.survey.segment_id"] = self._ctx_entry(
                     pending["signal_segment_id"], "collect_engage", now_iso,
                 )
             if pending.get("signal_agent_key"):
-                ctx_writes["session.survey_agent_key"] = self._ctx_entry(
+                ctx_writes["core.survey.agent_key"] = self._ctx_entry(
                     pending["signal_agent_key"], "collect_engage", now_iso,
                 )
             # Segurança Fase B (J4c) — pool da sessão pesquisada (resolvido no
-            # handle_collect). O runner o lê como @ctx.session.survey_pool_id e o passa
+            # handle_collect). O runner o lê como @ctx.core.survey.pool_id e o passa
             # ao survey_record. Ausente (pending legado ou ctx do alvo expirado) → a tag
             # não existe → ref resolve null → pool vazio (admin-only, decisão C).
             if pending.get("signal_pool_id"):
-                ctx_writes["session.survey_pool_id"] = self._ctx_entry(
+                ctx_writes["core.survey.pool_id"] = self._ctx_entry(
                     pending["signal_pool_id"], "collect_engage", now_iso,
                 )
             await self._redis.hset(ctx_key, mapping=ctx_writes)
@@ -2728,7 +2728,7 @@ class WebhookAdapter(ChannelAdapter):
 
         # Write Session A-new's delegate resume_token so the specialist can
         # call workflow_resume a second time to close Session A-new properly.
-        ctx_writes["session.delegate_resume_token"] = json.dumps({
+        ctx_writes["core.workflow.delegate_resume_token"] = json.dumps({
             "value":      resume_token,
             "confidence": 1.0,
             "source":     "delegate_conference",

@@ -200,7 +200,7 @@ export async function resolveVisibility(
   // broadcast to everyone (including the customer), which is the opposite of the
   // YAML author's intention.  Fall back to "agents_only" as a safe default.
   // This prevents NPS messages from leaking to the Agent Assist UI when
-  // @ctx.session.customer_participant_id is not yet in the ContextStore.
+  // @ctx.core.contact.customer_participant_id is not yet in the ContextStore.
   return visibility.length > 0 ? "agents_only" : "all"
 }
 

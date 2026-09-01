@@ -54,6 +54,14 @@ cd "$(dirname "$0")/../.." || exit 2
 CONFIG_API="${CONFIG_API:-http://localhost:3600}"
 CONFIG_TOKEN="${CONFIG_TOKEN:-demo_config_admin_token}"
 CONTAINER="${CONFIG_CONTAINER:-plughub-demo-config-api-1}"
+# Nesta bancada o shell e Git Bash (MSYS), que CONVERTE um argumento comecando com
+# `/` em caminho Windows antes de o docker o ver: `test -f /app/...` chega ao
+# container como `C:/Program Files/Git/app/...` e da rc=1. O ramo A entao publicava
+# "seed.py nao existe no container" sobre um arquivo que ESTA la — e como ele zera o
+# `drift_ok`, os ramos vivos deixavam de julgar em cascata. Terceira ocorrencia da
+# mesma familia em 2026-09-01 (as outras: `npx` sob UNC e `/tmp` resolvido contra a
+# raiz do cwd), e todas com a mesma forma: bancada reprovando no lugar do produto.
+export MSYS_NO_PATHCONV=1
 IN_CONTAINER="/app/packages/config-api/src/plughub_config_api"
 
 # Key-cobaia: lista de dicts com `id`, sem consumidor critico, restaurada no fim.

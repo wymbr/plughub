@@ -167,10 +167,10 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
     "workflow de wrap-up no on_resume (skill_wrapup_detached_v1).",
     {
       origin_session_id: z.string().describe("Sessão de ORIGEM (o contato que fechou) — chaveia o seg_signal"),
-      segment_id:        z.string().describe("Segmento humano a atribuir (@ctx.session.surveyed_segment_id)"),
+      segment_id:        z.string().describe("Segmento humano a atribuir (@ctx.core.survey.segment_id)"),
       // Fatia 3 — o caminho preferido: respostas cruas + o form que as descreve.
       answers:           z.record(z.any()).optional().describe("Respostas do DialogForm ($.pipeline_state.coletar.answers). Preferido — dispensa mapear campo a campo"),
-      dialog_form_id:    z.string().optional().describe("Form respondido (@ctx.session.dialog_form_id) — dirige a captura Arc 12"),
+      dialog_form_id:    z.string().optional().describe("Form respondido (@ctx.core.workflow.dialog_form_id) — dirige a captura Arc 12"),
       // Contrato antigo (4 campos nomeados) — mantido para os chamadores que ainda
       // mapeiam campo a campo. `answers` VENCE quando presente.
       classificacao:     z.string().optional().describe("Disposição crua: resolvido | pendente | escalado | cancelado"),

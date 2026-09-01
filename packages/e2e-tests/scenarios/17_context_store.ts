@@ -15,8 +15,8 @@
  *   Read back and assert each field has value, confidence ≥ 0.9, visibility.
  *
  * Part C — Session namespace (AI Gateway sentiment)
- *   Simulate write_context_store_sentiment by writing session.sentimento.current
- *   and session.sentimento.categoria with source=ai_inferred:sentiment_emitter.
+ *   Simulate write_context_store_sentiment by writing core.sentiment.current
+ *   and core.sentiment.category with source=ai_inferred:sentiment_emitter.
  *   Verify score rounding (4 decimal places) and category derivation.
  *
  * Part D — @ctx interpolation simulation
@@ -175,25 +175,25 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     const ctxKeySession = ctxKey; // same hash key, different fields
     await redis.hset(ctxKeySession, {
-      "session.sentimento.current": makeEntry(
+      "core.sentiment.current": makeEntry(
         roundedScore, 0.80, "ai_inferred:sentiment_emitter", "agents_only"
       ),
-      "session.sentimento.categoria": makeEntry(
+      "core.sentiment.category": makeEntry(
         expectedCategory, 0.80, "ai_inferred:sentiment_emitter", "agents_only"
       ),
     });
     await redis.expire(ctxKeySession, SESSION_TTL);
 
-    const rawScore = await redis.hget(ctxKey, "session.sentimento.current");
-    const rawCat   = await redis.hget(ctxKey, "session.sentimento.categoria");
+    const rawScore = await redis.hget(ctxKey, "core.sentiment.current");
+    const rawCat   = await redis.hget(ctxKey, "core.sentiment.category");
 
     const scoreEntry = rawScore ? parseEntry(rawScore) : null;
     const catEntry   = rawCat   ? parseEntry(rawCat)   : null;
 
     assertions.push(
       typeof scoreEntry?.value === "number"
-        ? pass(`C: session.sentimento.current value is number (${scoreEntry.value})`)
-        : fail("C: session.sentimento.current type", `got ${typeof scoreEntry?.value}`)
+        ? pass(`C: core.sentiment.current value is number (${scoreEntry.value})`)
+        : fail("C: core.sentiment.current type", `got ${typeof scoreEntry?.value}`)
     );
 
     assertions.push(
@@ -204,7 +204,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     assertions.push(
       catEntry?.value === "frustrated"
-        ? pass("C: session.sentimento.categoria = 'frustrated'")
+        ? pass("C: core.sentiment.category = 'frustrated'")
         : fail("C: sentiment category", `got ${catEntry?.value}`)
     );
 
@@ -302,9 +302,9 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       );
 
       assertions.push(
-        snapshot && "session.sentimento.categoria" in snapshot
-          ? pass("E: context_snapshot contains session.sentimento.categoria")
-          : fail("E: context_snapshot session.sentimento.categoria missing", "")
+        snapshot && "core.sentiment.category" in snapshot
+          ? pass("E: context_snapshot contains core.sentiment.category")
+          : fail("E: context_snapshot core.sentiment.category missing", "")
       );
     } catch (err) {
       assertions.push(fail("E: supervisor_state call", String(err)));

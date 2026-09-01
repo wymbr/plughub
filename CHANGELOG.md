@@ -1,5 +1,99 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-11: os 35 nomes do core migram para `core.*` (o commit único)
+
+### O que mudou
+
+**84 arquivos, 368 ocorrências** na passada mecânica (40 de código · 15 skills · 29 de
+teste), mais a cirurgia estrutural nos dois mirrors do mapa. Big bang atômico, como a
+CNS-11 decidiu: sem escrita dupla e sem alias na leitura.
+
+```
+core.contact.*   7      core.pool.*      6      core.process.outcome  1
+core.workflow.*  7      core.queue.*     2      core.sentiment.*      2
+core.survey.*    5      core.copilot.*   4
+```
+
+**34 folhas** movidas de `contexto.session.*` para `contexto.core.*`, e a canônica
+ANTERIOR entrou no `legado` de cada uma — o snapshot durável guarda os nomes velhos
+para sempre, e é o alias que mantém aquele histórico **mascarado**. Aliases 82 → 116.
+
+**O par `survey_*` × `surveyed_*` colapsou**: duas grafias para um fato, escritas em
+serviços diferentes (bridge no fim do atendimento × gateway na pesquisa), agora uma
+canônica com três aliases.
+
+### Três decisões tomadas durante a execução
+
+**1. `copilot.mode` ficou de fora — são 35 nomes, não 36.** É o único cuja escrita é
+ambígua: código de plataforma (bridge · `bpm.ts` · `mention-commands.ts`) executando
+um nome que o SKILL declara em `mention_commands.set_context`. Movê-lo faria um skill
+nomear chave do core, que é o alçapão que a reserva existe para fechar. Fica em
+`session.copilot.mode` e a pergunta fica registrada.
+
+**2. Docs NÃO entraram na passada mecânica.** O dry-run acusou 134 arquivos, dos quais
+**50 são `.md`** — e `CHANGELOG.md` (85 ocorrências) e `TODO.md` (46) são registro
+**histórico**. Uma entrada de 2026-08-24 descrevendo `session.pool.id` tem de continuar
+dizendo isso: era o que o código dizia então. Reescrever narrativa passada corrompe a
+evidência que este repositório usa para não redescobrir o mesmo defeito.
+
+**3. `sentimento.categoria` virou `core.sentiment.category`.** Ela é leitura MORTA
+(ninguém escreve; a classificação é feita na leitura), e é justamente por não ter
+escritor que renomeá-la é grátis — deixá-la em português dentro de `core.` faria o
+commit que implementa a regra de idioma nascer violando-a.
+
+### Dois defeitos meus, e o segundo é o instrutivo
+
+**(a) Reproduzi o bug do parser line-based.** O primeiro mover truncou as duas folhas
+cujo `legado` quebra em duas linhas — `survey.agent_key` e `survey.segment_id`, justo
+o par `surveyed_*` — e produziu TypeScript inválido. É o **mesmo** defeito que o censo
+do mapa sofreu em 2026-08-30, e lá foi **pior**: não quebrou nada, sub-contou aliases
+em silêncio. Aqui o compilador pegou; lá só pegou comparar instrumento com oráculo.
+
+**(b) O censo ficou CEGO ao vocabulário novo.** A primeira rodada pós-rename publicou
+`mapa 60 canônicas` (são 94) e **`plataforma 0`** sobre 35 escritas vivas — porque
+`ler_mapa` só reconhecia `session|journey|customer` no topo e o regex `LIT` não tinha
+`core`. **Instrumento que não aprende o vocabulário novo não mede menos: mede ERRADO,
+e para o lado tranquilizador.** Corrigido nas duas casas.
+
+### A prova de que o rename ficou completo
+
+Depois de ensinar o censo, os números **voltaram exatamente aos de antes**:
+
+| | antes | depois |
+|---|---|---|
+| escritos | 91 | **91** |
+| não cobertos | 4 | **4** |
+| lidos sem escritor | 21 | **21** |
+| dinâmicos | 0 | **0** |
+| aliases no mapa | 82 | 116 *(+34: as canônicas antigas)* |
+
+A mesma população, sob nomes novos, com a mesma cobertura. E os 4 não-cobertos são os
+mesmos quatro com dono — `core.workflow.reviewer_id` (decisão #5, classe LGPD), dois
+ecos de demo e `session.preview` (decisão #6).
+
+**Mirrors conferidos programaticamente:** `DEFAULT_CONTEXT_MAP` (TS, via `dist`) ×
+`seed.py` (via AST) — **idênticos**, 94 folhas. Config viva reaplicada pela API oficial
+e `probe_context_map_audit` **OK, zero ramos inconclusivos**.
+
+⚠️ Achado no caminho: a pasta `session.pool` ficou **vazia** na TS e removê-la não é
+higiene — um `{}` sobrando declara um domínio que o tenant poderia povoar, reabrindo
+por baixo a colisão que a reserva do root fechou por cima.
+
+### Gates, e dois vermelhos que NÃO são desta fase
+
+`probe_context_map_audit` · `probe_task_ledger` · `probe_i18n_duplicate_keys`: **OK**.
+`probe_context_visibility_selector` e `probe_type_catalog`: inconclusivos por bancada
+(`npx` sob UNC), como já estavam.
+
+`probe_seed_drift_named` ganhou o conserto do ramo **A** — **terceira ocorrência do dia
+da mesma família de bancada**: o Git Bash converte `/app/...` em caminho Windows antes
+de o `docker exec` o ver, então o probe publicava *"seed.py não existe no container"*
+sobre um arquivo que está lá, e como isso zera o `drift_ok`, os ramos vivos deixavam de
+julgar em cascata. Com A verde, sobram **C** e **E** — pré-existentes (medidos por `git
+stash`) e registrados como **CNS-12**, sendo o E um achado de produto: o seed estaria
+**reescrevendo** a key divergente, contra a decisão da D7.
+
+
 ## 2026-09-01 — CNS-04: uma casa só para "onde esta tag mora", e ela desarmou uma armadilha
 
 ### Havia DUAS listas para a mesma pergunta, e elas discordavam

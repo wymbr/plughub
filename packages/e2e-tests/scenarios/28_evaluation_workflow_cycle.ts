@@ -17,7 +17,7 @@
  *   → workflow triggered (skill_revisao_simples_v1 = 1 round)
  *   → workflow.suspended → evaluation-api consumer updates action_required, deadline_at
  *   → JWT-gated review endpoint (anti-replay round check)
- *   → ContextStore written: session.review_decision = "approved"
+ *   → ContextStore written: core.workflow.review_decision = "approved"
  *   → workflow resumed → workflow.completed
  *   → evaluation-api consumer: locked=true, lock_reason="completed"
  *   → GET result: locked=true, available_actions=[]
@@ -41,7 +41,7 @@
  *   POST /review with correct round + valid JWT → 200
  *
  * Part D — ContextStore written + workflow resumed (3 assertions):
- *   Redis: {tenant}:ctx:{session_id} has session.review_decision="approved"
+ *   Redis: {tenant}:ctx:{session_id} has core.workflow.review_decision="approved"
  *   GET /v1/workflow/instances/{id} → status=completed (after resume)
  *   GET /v1/evaluation/results/{id} → locked=true, lock_reason present
  *
@@ -310,10 +310,10 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
   // ── Part D — ContextStore + workflow completion ────────────────────────────
 
-  // D-1: Redis ContextStore has session.review_decision = "approved"
+  // D-1: Redis ContextStore has core.workflow.review_decision = "approved"
   try {
     const ctxKey = `${tenantId}:ctx:${sessionId}`
-    const raw    = await redis.hget(ctxKey, "session.review_decision")
+    const raw    = await redis.hget(ctxKey, "core.workflow.review_decision")
     let approved = false
     if (raw) {
       try {
@@ -322,12 +322,12 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
       } catch { approved = raw === "approved" }
     }
     assertions.push(approved
-      ? pass("D-1: ContextStore has session.review_decision=approved",
+      ? pass("D-1: ContextStore has core.workflow.review_decision=approved",
           `key=${ctxKey} raw=${raw?.slice(0, 60)}`)
-      : fail("D-1: ContextStore has session.review_decision=approved",
+      : fail("D-1: ContextStore has core.workflow.review_decision=approved",
           `expected approved, got: ${raw}`))
   } catch (e) {
-    assertions.push(fail("D-1: ContextStore has session.review_decision=approved", String(e)))
+    assertions.push(fail("D-1: ContextStore has core.workflow.review_decision=approved", String(e)))
   }
 
   // D-2: Workflow eventually completes

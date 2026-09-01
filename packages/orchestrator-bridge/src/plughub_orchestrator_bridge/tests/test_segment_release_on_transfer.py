@@ -76,7 +76,7 @@ async def test_includes_the_participant_id_as_well():
     await bridge_mod._publish_segment_release(r, "sess", "t", "human-alice")
     ev = _published(r)
     assert set(ev["recipients"]) == {"human-alice", "part_abc123"}
-    r.hget.assert_awaited_once_with("t:ctx:sess", "session.human_agent_participant_id")
+    r.hget.assert_awaited_once_with("t:ctx:sess", "core.contact.human_agent_participant_id")
 
 
 @pytest.mark.asyncio

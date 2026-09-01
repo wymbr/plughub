@@ -17,7 +17,7 @@
 #   AGRUPA — três sessões sob uma raiz, igual ao session_id do intake.
 #
 #   Fundamento: `handle_trigger` (webhook.py:476-486) resolve a raiz lendo
-#   `session.root_session_id` do ctx do CHAMADOR, e sempre semeia a tag na sessão
+#   `core.contact.root_session_id` do ctx do CHAMADOR, e sempre semeia a tag na sessão
 #   nova (`:534`) — logo a herança é transitiva por construção, e um workflow
 #   disparando outro workflow não é caso especial. Os dois saltos passam
 #   `origin_session_id` (entrada:375, processo:216) e nenhum passa `journey: new`.
@@ -142,7 +142,7 @@ if [[ -n "${A_ROOT:-}" && "$A_ROOT" == "$B_ROOT" && "$B_ROOT" == "$C_ROOT" ]]; t
 else
   bad "raízes DIVERGEM (A=${A_ROOT:-?} B=${B_ROOT:-?} C=$C_ROOT)"
   echo "      ⇒ a Vista Processos vai mostrar linhas separadas. Investigar a leitura"
-  echo "        de session.root_session_id do ctx do chamador em handle_trigger."
+  echo "        de core.contact.root_session_id do ctx do chamador em handle_trigger."
 fi
 
 # `spawn_reason` é o rótulo da aresta (Journey T4). Ausente = a sessão se declara

@@ -552,7 +552,7 @@ pools:
     deploy: { skill_id: skill_dialog_runner_v1, max_concurrent_sessions: 10 }
     # Dialog primitive (survey + OTP): pool do dialog-runner Tier-3 genérico.
     # Acionado por delegate() de um workflow/skill negocial (ex.: o step-up de OTP
-    # em agente_portabilidade_intake_v1). Recebe session.dialog_form_id via context,
+    # em agente_portabilidade_intake_v1). Recebe core.workflow.dialog_form_id via context,
     # renderiza o DialogForm (form_get) e devolve o input cru via workflow_resume.
     # Domínio-cego: nunca verifica nem registra (verify/record ficam no chamador).
     description: "Pool do dialog-runner genérico (dialog primitive — survey + OTP)"

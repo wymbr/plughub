@@ -167,7 +167,7 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
       // ── A SEGUNDA PORTA, fechada em 2026-08-26 ──────────────────────────────
       //
       // Este bloco fazia `JSON.parse` do hash **CRU** e devolvia tudo: `caller.cpf`
-      // em claro, `session.delegate_resume_token` em claro, `agent.*` incluído —
+      // em claro, `core.workflow.delegate_resume_token` em claro, `agent.*` incluído —
       // enquanto o endpoint HTTP homônimo (`server.ts`), a três arquivos daqui,
       // aplicava a política inteira. Duas implementações da mesma leitura e só uma
       // com política é literalmente o defeito do SENTIMENTO de 2026-08-25, agora

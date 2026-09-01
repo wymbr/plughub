@@ -3,7 +3,7 @@
 #
 # Por que existe (2026-08-26): a F5 transformou o ctx de EFÊMERO (Redis, TTL 24h) em
 # DURÁVEL (Postgres). O hash inteiro passou a ser retido, e ninguém o revisou sob
-# essa luz — o primeiro olhar no dado gravado já achou um `session.delegate_resume_token`
+# essa luz — o primeiro olhar no dado gravado já achou um `core.workflow.delegate_resume_token`
 # (uma CAPACIDADE) em claro, porque `default_unmatched_operator` é `plain` e não há
 # regra para ele.
 #

@@ -841,7 +841,7 @@ async def get_workflow_trace(
     try:
         ctx_raw = await redis.hget(
             f"{tenant_id}:ctx:{session_id}",
-            "session.origin_session_id",
+            "core.workflow.origin_session_id",
         )
         if ctx_raw:
             import json as _json

@@ -9,8 +9,8 @@
 #             the caller's session (a segment, never a standalone session).
 #
 # Receives via ContextStore (written by the delegate step):
-#   session.dialog_form_id        — which DialogForm to render
-#   session.delegate_resume_token — token to resume the caller's delegate step
+#   core.workflow.dialog_form_id        — which DialogForm to render
+#   core.workflow.delegate_resume_token — token to resume the caller's delegate step
 #
 # Contract (the four seams):
 #   CONTENT  — the DialogForm JSON (loaded via form_get). No control here.
@@ -49,7 +49,7 @@ entry: carregar_form
 steps:
 
   # ── 1. Load the DialogForm (content) ─────────────────────────────────────────
-  # form_id comes from the delegate context (@ctx.session.dialog_form_id).
+  # form_id comes from the delegate context (@ctx.core.workflow.dialog_form_id).
   # form_get returns { form, render } where render is the single-turn view:
   #   render.menu_prompt (leading statements), render.fields (per-question),
   #   render.statement_after, render.captures (domain-blind echo).
@@ -57,7 +57,7 @@ steps:
     type: invoke
     tool: form_get
     input:
-      form_id:   "@ctx.session.dialog_form_id"
+      form_id:   "@ctx.core.workflow.dialog_form_id"
       tenant_id: "$.tenant_id"
     output_as: dialog
     on_success: coletar
@@ -95,7 +95,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "@ctx.session.delegate_resume_token"
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
       decision: "input"
       payload:
         value: "$.pipeline_state.answers"
@@ -107,7 +107,7 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "@ctx.session.delegate_resume_token"
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
       decision: "timeout"
     on_success: finalizar
     on_failure: finalizar

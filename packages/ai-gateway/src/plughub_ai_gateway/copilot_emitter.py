@@ -8,7 +8,7 @@ bloqueiam o retorno ao chamador.
 
 Fluxo:
   1. Lê ContextStore ({tenant_id}:ctx:{session_id}) para contexto da sessão
-     (caller.nome, caller.motivo_contato, session.sentimento.current)
+     (caller.nome, caller.motivo_contato, core.sentiment.current)
   2. Monta prompt compacto e chama LLM (haiku — isolado de tráfego realtime)
   3. Parseia resposta JSON: { sugestao_resposta, flags_risco, acoes_recomendadas }
   4. Escreve session.copilot.* no ContextStore (fire-and-forget)
@@ -16,10 +16,10 @@ Fluxo:
      → Agent Assist UI recebe via WebSocket e re-busca /copilot_state
 
 ContextStore tags escritas:
-  session.copilot.sugestao_resposta   → string: sugestão de resposta para o agente
-  session.copilot.flags_risco         → list[str]: flags de risco detectados
-  session.copilot.acoes_recomendadas  → list[str]: ações recomendadas
-  session.copilot.ultima_analise      → ISO8601: timestamp da última análise
+  core.copilot.suggested_reply   → string: sugestão de resposta para o agente
+  core.copilot.risk_flags         → list[str]: flags de risco detectados
+  core.copilot.recommended_actions  → list[str]: ações recomendadas
+  core.copilot.last_analysis      → ISO8601: timestamp da última análise
 
 Confidence: 0.75 — inferência de co-pilot (não verificada pelo agente)
 Source: "ai_inferred:copilot_emitter"
@@ -85,7 +85,7 @@ def _build_user_prompt(
     """Builds the compact user prompt for co-pilot analysis.
 
     **Sentimento entra como SCORE, não como rótulo (2026-08-02).** Este módulo lia
-    `session.sentimento.categoria`, tag que o AI Gateway não escreve — classificar é
+    `core.sentiment.category`, tag que o AI Gateway não escreve — classificar é
     responsabilidade de quem LÊ, com faixas configuráveis por tenant (`CLAUDE.md`
     § Sentiment Tracking). Como a tag nunca existiu, o `if` abaixo apenas pulava e o
     copiloto rodou sem contexto de sentimento, em silêncio.
@@ -141,7 +141,7 @@ async def _read_context(
     Returns (caller_nome, motivo_contato, sentimento_score).
     Never raises.
 
-    Lê `session.sentimento.current` (score), não `…categoria` — ver `_build_user_prompt`.
+    Lê `core.sentiment.current` (score), não `…categoria` — ver `_build_user_prompt`.
     """
     try:
         key = f"{tenant_id}:ctx:{session_id}"
@@ -149,7 +149,7 @@ async def _read_context(
             key,
             "caller.nome",
             "caller.motivo_contato",
-            "session.sentimento.current",
+            "core.sentiment.current",
         )
         caller_nome      = _read_ctx_value(raw[0]) if raw else None
         motivo_contato   = _read_ctx_value(raw[1]) if raw else None
@@ -201,10 +201,10 @@ async def _write_copilot_context(
 
     try:
         await redis.hset(key, mapping={
-            "session.copilot.sugestao_resposta":  _entry(sugestao_resposta),
-            "session.copilot.flags_risco":        _entry(flags_risco),
-            "session.copilot.acoes_recomendadas": _entry(acoes_recomendadas),
-            "session.copilot.ultima_analise":     _entry(now),
+            "core.copilot.suggested_reply":  _entry(sugestao_resposta),
+            "core.copilot.risk_flags":        _entry(flags_risco),
+            "core.copilot.recommended_actions": _entry(acoes_recomendadas),
+            "core.copilot.last_analysis":     _entry(now),
         })
         await redis.expire(key, _CTX_SESSION_TTL)
     except Exception as exc:

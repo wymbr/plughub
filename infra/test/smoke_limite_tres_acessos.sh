@@ -278,7 +278,7 @@ echo "$CLAIM" | grep -q '"claimed": *true' \
   || die "claim recusado — ${CLAIM:0:200}"
 ok "item reivindicado pelo aprovador"
 
-RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "session.delegate_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
+RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "core.workflow.delegate_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 [ -n "$RTOK" ] || die "não achei o resume token no ctx da sessão $SID"
 
 # `pool_id`+`instance_id` são o binding do claimante (o ingress exige caller == claimant).
@@ -334,7 +334,7 @@ if [ "$SNAP_OK" = "0" ]; then
 fi
 
 sleep 3
-FID=$(redis HGET "${TENANT}:ctx:${SID}" "session.dialog_form_id" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
+FID=$(redis HGET "${TENANT}:ctx:${SID}" "core.workflow.dialog_form_id" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 DEC=$(redis HGET "${TENANT}:ctx:${SID}" "session.decisions"      | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 if [ -z "$FID" ] && [ -z "$DEC" ]; then
   ok "dialog_form_id e decisions limpos — o parking não se passa por aprovação"

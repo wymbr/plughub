@@ -34,7 +34,7 @@ export async function executeReason(
   // R8d — perfil de modelo (estático ou `$.pipeline_state.*`). Resolvido p/ habilitar
   // revisor heterogêneo (família ≠ avaliador) sem hardcode no YAML.
   const modelProfile  = resolveModelProfile(step, ctx)
-  // LLM Accounts — lista de contas preferidas do pool (session.pool.llm_account_ids,
+  // LLM Accounts — lista de contas preferidas do pool (core.pool.llm_account_ids,
   // escrita pelo Routing Engine em _write_pool_context). Ausente/vazio = sem
   // restrição (AccountSelector usa o pool inteiro de contas do provider).
   const preferredConfigIds = await resolvePreferredConfigIds(ctx)
@@ -181,7 +181,7 @@ export function resolveModelProfile(
 
 
 /**
- * LLM Accounts — resolve `session.pool.llm_account_ids` do ContextStore (escrito
+ * LLM Accounts — resolve `core.pool.llm_account_ids` do ContextStore (escrito
  * pelo Routing Engine em `_write_pool_context` após cada alocação). Retorna
  * undefined quando ausente/ContextStore não disponível — o ai-gateway cai no
  * comportamento sem restrição (pool inteiro de contas do provider).
@@ -189,7 +189,7 @@ export function resolveModelProfile(
 async function resolvePreferredConfigIds(ctx: StepContext): Promise<string[] | undefined> {
   if (!ctx.contextStore) return undefined
   try {
-    const value = await ctx.contextStore.getValue(ctx.sessionId, "session.pool.llm_account_ids")
+    const value = await ctx.contextStore.getValue(ctx.sessionId, "core.pool.llm_account_ids")
     if (Array.isArray(value) && value.every(v => typeof v === "string") && value.length > 0) {
       return value as string[]
     }

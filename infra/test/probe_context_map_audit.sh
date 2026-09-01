@@ -223,9 +223,9 @@ if [ -f "$SCHEMAS/dist/context-map.js" ]; then
       return o
     }
     // C — o par: uma grafia legada E uma canonica viva (escrita pelo routing-engine)
-    const par = cls(["caller.cpf", "session.pool.id"])
+    const par = cls(["caller.cpf", "core.pool.id"])
     // D — testemunha negativa, nos DOIS sentidos
-    const soCanon = cls(["session.pool.id", "session.queue.position"])
+    const soCanon = cls(["core.pool.id", "core.queue.position"])
     const soAlias = cls(["caller.cpf", "caller.nome"])
     console.log(JSON.stringify({ par, soCanon, soAlias }))
   ' 2>/dev/null)

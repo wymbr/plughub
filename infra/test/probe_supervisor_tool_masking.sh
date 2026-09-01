@@ -19,7 +19,7 @@
 # ── Por que INJETA, e por que o ORÁCULO é o endpoint ─────────────────────────
 #
 # Injeta porque um teste de igualdade só julga se a população contiver o caso em
-# que A ≠ B — sessão comum só tem `session.pool.*`, que nenhuma regra alcança, e
+# que A ≠ B — sessão comum só tem `core.pool.*`, que nenhuma regra alcança, e
 # então "porta fechada" e "porta aberta" produzem a MESMA saída.
 #
 # E o valor esperado NÃO é escrito à mão aqui: ele é lido do endpoint HTTP, que é

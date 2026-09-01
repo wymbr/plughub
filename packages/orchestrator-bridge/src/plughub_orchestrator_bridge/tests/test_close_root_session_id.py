@@ -3,7 +3,7 @@ test_close_root_session_id.py — Journey J1.
 
 Cobre _resolve_close_root_session_id: carimba a raiz transitiva na linha de
 fechamento (a que sobrevive no ReplacingMergeTree do analytics), lendo
-session.root_session_id do ContextStore; fallback = session_id (própria raiz)
+core.contact.root_session_id do ContextStore; fallback = session_id (própria raiz)
 quando ausente/ilegível.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ async def test_reads_transitive_root_from_ctx():
     r.hget = AsyncMock(return_value=_ctx_entry("W1-root"))
     out = await bridge_mod._resolve_close_root_session_id(r, "t", "W2-child")
     assert out == "W1-root"
-    r.hget.assert_awaited_once_with("t:ctx:W2-child", "session.root_session_id")
+    r.hget.assert_awaited_once_with("t:ctx:W2-child", "core.contact.root_session_id")
 
 
 @pytest.mark.asyncio

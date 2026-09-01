@@ -6,7 +6,7 @@
 # Pergunta do dono: *"o Console respeita `Context Store Visibility`, ou exibe
 # tudo?"*. A tentativa óbvia — abrir a aba Contexto como admin e como operator e
 # comparar — deu as duas telas IDÊNTICAS, e isso **não julgou nada**: os únicos
-# tags presentes na sessão eram `session.pool.*`, que estão DENTRO do default
+# tags presentes na sessão eram `core.pool.*`, que estão DENTRO do default
 # (`["service","session"]`). O portão nunca teve o que barrar.
 #
 # **Um teste de igualdade só julga se a população contiver o caso em que A ≠ B.**
