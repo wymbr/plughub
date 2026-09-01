@@ -8085,3 +8085,90 @@ segundo eixo — *quais FUNÇÕES o portador pode exercer* —, e é por isso qu
 `probe_authz_single_verifier` não a acusa: ela não decodifica JWT por conta própria nem
 resolve escopo por conta própria. Terceiro caso da mesma regra: um censo desenhado para
 um eixo não prova nada sobre o vizinho.
+
+---
+
+## Gate de @mention: o invariante declarado não é o invariante imposto (2026-09-01)
+
+Grupo `MEN` no `pending.md`. Origem: a hipótese do dono de que *"a conferência é toda
+baseada em @mention, ele não exige nem bloqueia por papel, e o eixo que sobrou é
+resquício"*. Verificada — e ela está **parcialmente certa, com o alvo deslocado**.
+
+### O que foi medido, e o que cada medida custou
+
+| # | pergunta | instrumento | resposta |
+|---|---|---|---|
+| Q1 | quem chama `message_send`? | grep | nenhum skill, serviço ou UI — é tool MCP, invocada pelo **LLM** |
+| Q2 | o LLM enxerga essa tool? | 2 greps | **sempre**: `registry-client.ts` devolve `permissions: []`, e `inference.py:128` faz `if req.permissions:` — vazio = **sem filtro** |
+| Q3 | que papel a IA tem no roster? | 1 query CH | **`primary`** — 1144 `native/primary` + 100 `ai/primary` × 333 `human/primary` |
+| Q4 | o gate já negou alguém? | logs | **INCONCLUSIVO** — 0 negações mas 0 tráfego de @mention na janela; controle positivo ok (`agent_login`=9) |
+
+### A conclusão que Q1–Q3 forçam
+
+O gate (`session.ts:621`) é:
+
+```ts
+if (role !== "primary" && role !== "human") → nega
+```
+
+O invariante escrito é *"agentes de IA NUNCA emitem @mention"*. O gate implementa
+*"quem não for `primary` nem `human` não emite"*. **As duas frases não são a mesma
+coisa**, porque `primary` é POSIÇÃO na sessão e não espécie do participante — e a IA
+que conduz a conversa É a `primary`.
+
+> O gate deixa passar exatamente a população que o comentário dele diz excluir.
+> Ele exclui `specialist`, `queue` e `supervisor`; não exclui a IA primária.
+
+É a família **"dois fatos, um campo"** já catalogada aqui: lê-se o eixo de posição para
+responder uma pergunta de espécie. E o discriminador certo está na MESMA entrada do
+roster, ao lado, **sem ser lido**:
+
+```py
+_roster_entry = { participant_id, session_id, instance_id,
+                  agent_type_id, role, agent_type }   # agent_type: human | native | ai
+```
+
+### O documento contém a contradição dentro de si
+
+`docs/guias/mention-protocol.md` §40 define a regra (`primary | human`) e §42 afirma a
+consequência (*"Agentes IA não podem usar @mention"*) — que **não se segue** da §40. O
+código implementa fielmente a §40; o leitor acredita na §42. São **quatro cópias** da
+afirmação (CLAUDE.md ×2, guia §40/§42/§80, comentário em `session.ts:611`), e nenhuma
+delas é falsa isoladamente — o que é falso é a **implicação** entre elas.
+
+### Dois passos meus que estavam errados, registrados porque a ordem importa
+
+1. **Medi a casa abandonada primeiro.** Concluí que o gate era inerte porque o hash
+   `agent:instance:{id}` não tem o campo `role` (0 de 5). O gate mudou de casa na Fatia
+   B do §1055 e lê o **roster**. A medição estava certa; o alvo, não.
+2. **Li "roster vazio" como "sem produtor".** Havia **zero sessões vivas** no ambiente
+   (0 `session:*:meta`, 0 streams), então aquilo era `INCONCLUSIVO`. O produtor existe
+   (`orchestrator-bridge/main.py:3545`).
+
+Ambos são o mesmo erro de método — *ausência não é evidência sem controle positivo* —, e
+o que os pegou foi procurar o produtor antes de afirmar a ausência.
+
+### Exposição × dano (MEN-04)
+
+Medido: **exposição**. O caminho está aberto de ponta a ponta — LLM recebe a tool, a IA é
+`primary`, o gate passa. **Não** medido: dano. Zero @mentions na janela de log, e os
+anteriores se perderam no rebuild do container.
+
+Publicar *"a IA está roteando @mentions"* seria a D14.1 ao contrário — exatamente o erro
+corrigido na AUT-01 há dois dias. Fechar exige tráfego real: um contato em pool de IA com
+`@alias` no texto. Os três desfechos já logam diferente, então o instrumento existe.
+
+### O que NÃO está em questão
+
+O eixo `agent_role` (`executor`/`orchestrator`/`evaluator`) é **outro campo, outra casa,
+outro destino** — vive e é load-bearing no gate do avaliador (`smoke_agent_role_gate.sh`
+passa, inclusive o ramo negativo). Não confundir: a discussão acima é sobre o papel de
+PARTICIPAÇÃO no roster.
+
+### Por que a ordem "decidir antes de mexer" mudou
+
+A proposta anterior era *deixar o gate MCP intacto até o dono decidir se a conexão WS
+basta*. Não se sustenta depois da medição: **o gate não protege o que diz proteger**,
+então mantê-lo não é a opção conservadora — é manter promessa sem mecanismo. As opções
+reais são MEN-01 (A) e (B); "como está" saiu da mesa.
+

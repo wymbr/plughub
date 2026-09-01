@@ -1019,7 +1019,12 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
 - Never forward tool calls containing injection patterns
 - Never send tool list to LLM without applying `permissions[]` filter from JWT
 - Never write masked input values to `pipeline_state`, Redis, stream, or logs
-- Never allow AI agents to emit `@mention` commands — only `role: primary` or `role: human`
+- ⚠️ **MEDIDO FALSO em 2026-09-01, aguardando decisão (MEN-01)** — *"Never allow AI agents to
+  emit `@mention` commands — only `role: primary` or `role: human`"*. As duas metades da frase
+  **não são a mesma coisa**: `primary` é POSIÇÃO na sessão, não espécie do participante, e a IA
+  que conduz a conversa É a `primary` (medido: 1144 segmentos `native/primary` + 100
+  `ai/primary` × 333 `human/primary`). O gate de `message_send` implementa a segunda metade e
+  por isso **deixa passar a população que a primeira nomeia**. Nada foi mudado no código ainda
 - Never call `redis.xadd()` directly in mcp-server-plughub — use `writeStreamEntry()`
 - **Never leave deferred phases undocumented** — every unimplemented phase MUST be registered in `## Pending`
 - Never create a new `packages/my-ui/` standalone frontend app — add a module to platform-ui
@@ -1431,7 +1436,9 @@ Gate: `infra/test/probe_config_service_write_gate.sh`.
 
 Token format in stream: `[{category}:{token_id}:{display_partial}]` (e.g. `[cpf:tk_b7d2:***-00]`). Stream stores `content` (masked) + `original_content` (unmasked). Default `authorized_roles: ["evaluator", "reviewer"]`. Domain MCP tools resolve tokens via `McpInterceptor.resolveToken` callback. Channel Gateway strips to `display_partial` only before WS delivery.
 
-**@mention**: only `role: primary` or `role: human` may issue mentions. Domain closed by `mentionable_pools` pool config. `mention_commands` YAML declares actions: `set_context`, `trigger_step`, `terminate_self`.
+**@mention**: ⚠️ *o gate testa `role ∈ {primary, human}` — e isso **não** exclui agentes de IA,
+que são `primary`; ver MEN-01, medido falso em 2026-09-01. A aplicação é ainda ASSIMÉTRICA: o
+caminho WS do Console (`server.ts:3638`) não checa papel nenhum, por desenho declarado.* Domain closed by `mentionable_pools` pool config. `mention_commands` YAML declares actions: `set_context`, `trigger_step`, `terminate_self`.
 
 **Masked Input**: `masked: true` on menu step (field-level or step-level). `begin_transaction`/`end_transaction` wraps collection-validation-action as atomic block. `@masked.*` namespace in-memory only — never written to Redis, pipeline_state, stream, or logs. Retry always recolects; never re-uses masked values.
 

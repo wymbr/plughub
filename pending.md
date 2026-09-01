@@ -176,6 +176,29 @@ Frente fechada (ver `done.md`); resta um item **adiado por decisão**.
 
 ---
 
+## `docs/guias/mention-protocol.md` — protocolo @mention
+
+⚠️ **O invariante declarado NÃO é imposto pelo gate que existe para impô-lo** (medido
+2026-09-01). O guia diz *"Agentes IA em conferência **não** podem usar `@mention`"*
+(§42) e, duas linhas acima, define a regra como *"apenas `role: primary` ou `role:
+human`"* (§40) — e as duas frases **não são a mesma coisa**: `primary` é POSIÇÃO na
+sessão, não espécie do participante. Medido em histórico real de `tenant_demo`:
+**1144 segmentos `native/primary` + 100 `ai/primary`** contra 333 `human/primary`. O
+gate lê o eixo de posição para responder uma pergunta de espécie, e por isso **deixa
+passar exatamente a população que o comentário dele diz excluir**.
+
+O discriminador certo está na MESMA entrada do roster, ao lado, sem ser lido:
+`agent_type` (`human` | `native` | `ai`).
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| MEN-01 | **Decidir A ou B — o texto e o código discordam, e manter como está não é a opção conservadora.** **(A)** o gate passa a ler `agent_type` e o invariante vira verdadeiro — muda comportamento: agentes de IA que hoje conseguiriam rotear deixam de conseguir. **(B)** o gate sai e se declara que @mention não é gateado por espécie, alinhando com o caminho WS — e aí as 4 cópias do invariante (`CLAUDE.md` ×2, guia §40/§42/§80, comentário em `session.ts:611`) saem junto, porque deixam de ser verdade. **Não é opção deixar como está**: promessa sem mecanismo é o que este repo mais paga caro | `bloqueado` — decisão do dono | `TODO.md` § gate de @mention |
+| MEN-02 | **A aplicação do invariante é ASSIMÉTRICA entre os dois caminhos, e só um tem gate.** WS `agent-ws` (`server.ts:3638` — o caminho VIVO do Console) chama `routeMentions` **sem checagem nenhuma**, por desenho declarado (*"o WS conhece o agente pela conexão"*). MCP `message_send` (`session.ts:621`) tem o gate. É a forma *"duas portas para o mesmo dado e só uma trancada"*; aqui é defensável (cada camada gateia onde consegue provar), mas precisa ser **decidido e escrito**, não herdado | `bloqueado` por MEN-01 | `TODO.md` § gate de @mention |
+| MEN-03 | **Mensagem de log aponta para a casa ABANDONADA do campo.** O gate resolve o papel pelo roster `session:{id}:participants` desde a Fatia B do §1055, mas o aviso ainda diz *"hash `{t}:agent:instance:{id}` sem campo `role`"* — manda quem depura para o lugar errado. Medido: aquele hash tem **0 de 5** com o campo, **nenhum escritor** (o `agent_login` grava `agent_role`, nunca `role`) e **nenhum leitor**. É resquício de verdade, e é 1 linha | `aberto` | `TODO.md` § gate de @mention |
+| MEN-04 | **Falta a evidência de DANO — só há EXPOSIÇÃO.** Medido que o caminho está aberto (LLM recebe a tool porque `permissions: []` = sem filtro; a IA é `primary`; o gate passa). NÃO medido que alguém passou: 0 @mentions na janela de log, e os anteriores se perderam no rebuild. Fechar exige um contato real em pool de IA com `@alias` no texto — o instrumento já existe, os três ramos do gate logam diferente. **Publicar exposição como dano é a D14.1 ao contrário** | `aberto` — precisa de tráfego | `TODO.md` § gate de @mention |
+
+---
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 0.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho

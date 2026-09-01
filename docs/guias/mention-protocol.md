@@ -37,9 +37,19 @@ A mensagem é enviada com `visibility: "agents_only"`. Todos os participantes a 
 
 ## Permissões — quem pode emitir
 
+> ⚠️ **As duas frases abaixo se contradizem, e a medição de 2026-09-01 diz qual vale.**
+> A regra (§ seguinte) é o que o código faz; a consequência (§ depois dela) **não se segue**
+> dela, porque `primary` é POSIÇÃO na sessão e não espécie do participante — a IA que conduz
+> a conversa É a `primary`. Medido em `tenant_demo`: **1144 segmentos `native/primary` + 100
+> `ai/primary`** contra 333 `human/primary`. O discriminador de espécie existe e está na
+> MESMA entrada do roster, sem ser lido: `agent_type` (`human` | `native` | `ai`).
+>
+> Decisão em aberto (**MEN-01**): corrigir o gate para ler `agent_type`, ou remover o gate e
+> retirar a promessa. Nada foi mudado no código.
+
 Apenas participantes com `role: primary` ou `role: human` podem emitir `@mention`.
 
-Agentes IA em conferência **não** podem usar `@mention`. Para convidar especialistas ou coordenar outros agentes, agentes IA utilizam o `task` step com `mode: assist` — que tem controle de fluxo próprio e auditável.
+Agentes IA em conferência **não** podem usar `@mention`. *(⚠️ INTENÇÃO, não estado — ver o aviso acima: o gate atual não a impõe.)* Para convidar especialistas ou coordenar outros agentes, agentes IA utilizam o `task` step com `mode: assist` — que tem controle de fluxo próprio e auditável.
 
 Esta restrição é aplicada pelo mcp-server-plughub antes do parse do mention. Se um participante IA tentar enviar uma mensagem `agents_only` com prefixo `@`, ela é entregue normalmente sem roteamento especial.
 
@@ -77,7 +87,7 @@ mcp-server recebe message_send:
   visibility: "agents_only"
   text: "@billing conta=@ctx.caller.account_id"
 
-1. Verifica permissão do remetente (role: primary | human)
+1. Verifica permissão do remetente (role: primary | human) — ⚠️ *não exclui IA; ver MEN-01*
    → não autorizado: entrega sem roteamento
 
 2. Detecta prefixo "@" → extrai aliases e texto do comando
