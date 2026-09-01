@@ -1,5 +1,80 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CAP-13: a 3100 publica em loopback, e o transporte MCP sai da LAN
+
+### "A borda não publica o transporte" era metade da resposta
+
+A CAP-11 mediu que a única borda do repositório não expõe `/sse` — pela 5174 ele devolve
+`text/html`, o fallback SPA. Isso foi lido, na hora, como *"as 48 tools sem credencial da
+CAP-09 estão inalcançáveis de fora"*. Estava incompleto: **a porta publicava sozinha**.
+
+`"3100:3100"` faz o Docker publicar em `0.0.0.0`, e a diferença entre isso e uma exposição
+real depende do host — por isso foi medida, não deduzida. Nesta máquina:
+
+| | antes | depois |
+|---|---|---|
+| 3100 via `127.0.0.1` | ACEITA | ACEITA |
+| 3100 via `192.168.1.124` (LAN) | **ACEITA** | **recusada** |
+| 5174 via LAN — *controle, não mudou* | ACEITA | ACEITA |
+
+Ou seja: qualquer aparelho no mesmo Wi-Fi alcançava o transporte MCP, que é **anônimo por
+construção**, serve as 72 tools no `tools/list`, e cujo `agent_login` é **auto-serviço** —
+quem chega à porta cunha um `session_token` assinado nomeando qualquer `skill_id` (o
+registry serve a lista sem credencial). O controle da 5174 é o que separa *"o fechamento
+funcionou"* de *"um firewall começou a bloquear tudo"*.
+
+O caminho até esse número tem uma lição própria. A primeira tentativa de controle usou o
+gateway do WSL (`172.25.128.1`) e voltou **recusado nas duas portas, antes da mudança** —
+o firewall do Hyper-V bloqueia a rota WSL→host. Aceitar aquilo teria produzido um
+"controle" verde antes e depois, isto é, um instrumento incapaz de reprovar. O que
+destravou foi perguntar ao **socket**, não à rota: `Get-NetTCPConnection` mostrava `::`
+(todas as interfaces) e passou a mostrar `127.0.0.1`.
+
+### Por que esta veio DEPOIS da CAP-12, e não antes
+
+Porque topologia não alcança as nove rotas `/api/*`: elas são publicadas pela **borda**, e
+continuariam publicadas com a 3100 fechada. Fechar a porta primeiro teria dado a impressão
+de resolver o que não resolvia. As duas juntas fecham as duas superfícies do processo — o
+transporte por topologia, a ponte REST por credencial.
+
+### O que muda e o que não muda
+
+Nenhum contêiner usava a porta publicada: todos falam por nome de serviço
+(`mcp-server-plughub:3100`), inclusive o nginx do platform-ui — verificado ao vivo depois
+da mudança. Quem usa é o **host, e só em desenvolvimento**: o proxy do `vite.config.ts`, a
+suíte e2e (`MCP_SERVER_URL`) e os probes de `infra/test/`, todos em `localhost`, que o
+loopback continua servindo. Verificado: `/health` 200, `/sse` ainda `text/event-stream`,
+borda servindo `/api` com token e recusando sem.
+
+### O gate, e por que ele não afirma o que seria confortável afirmar
+
+Ramo **F** do `probe_mcp_rest_surface.sh`, em duas metades que não se substituem: a
+**declaração** nos dois composes (é ela que viaja para outro deploy — num host Linux com
+Docker nativo, `0.0.0.0` é alcance de LAN de verdade) e o **bind vivo** do `docker ps` (é
+ele que morde hoje). Provado falseável nas duas, independentemente: mutar só o compose
+deixa a primeira vermelha e a segunda verde; reiniciar com a mutação derruba as duas.
+
+O ramo **não** afirma *"recusa a partir da LAN"*, e a recusa é deliberada: nesta máquina o
+firewall do Hyper-V já bloqueia a rota que um probe rodando no WSL usaria, então a
+asserção ficaria verde **antes e depois** da correção. O fato falseável aqui é o endereço
+do bind.
+
+### O que fica aberto
+
+Remover a linha `ports:` de vez — `CAP-15`, `adiado` com gatilho declarado. Não é esforço:
+é que se o alvo virar **deploy distribuído**, a porta volta a ser necessária e a pergunta
+deixa de ser topologia, virando autenticação de transporte (o padrão já existe na casa,
+`MCP_INTERNAL_SERVICE_TOKEN`, falhando fechado). Investir em remover antes dessa decisão
+pode ser trabalho jogado fora.
+
+### Arquivos
+
+- `docker-compose.demo.yml`, `docker-compose.full.yml` — `127.0.0.1:3100:3100`, com o
+  porquê e o aviso de não mapear `/sse` no nginx
+- `infra/test/probe_mcp_rest_surface.sh` — ramo F; achado 2 do cabeçalho corrigido
+- `packages/mcp-server-plughub/CLAUDE.md` — a topologia da porta como invariante
+
+
 ## 2026-09-01 — CAP-12: as nove rotas `/api/*` do mcp-server passam a exigir credencial
 
 ### O que estava aberto, e por que ninguém tropeçava nisso

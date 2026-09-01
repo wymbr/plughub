@@ -598,8 +598,34 @@ services:
     build:
       context: .
       dockerfile: packages/mcp-server-plughub/Dockerfile
+    # ── CAP-13 (2026-09-01): a 3100 escuta em LOOPBACK, não em toda interface ────
+    # `"3100:3100"` faz o Docker publicar em `0.0.0.0`, e isso NÃO é teórico: medido
+    # nesta máquina, `Test-NetConnection 192.168.1.124:3100` respondia **ACEITA** —
+    # qualquer aparelho no mesmo Wi-Fi alcançava a porta. O que há atrás dela é o
+    # transporte MCP (`/sse`), que é **anônimo por construção** e serve as 72 tools no
+    # `tools/list`, das quais 48 não verificam credencial nenhuma (CAP-09) — e o
+    # `agent_login` é AUTO-SERVIÇO: quem alcança a porta cunha um `session_token`
+    # assinado nomeando qualquer `skill_id`.
+    #
+    # ⚠️ A borda NÃO é substituto disto. Ela não publica `/sse` (medido: pela 5174 o
+    # `/sse` devolve `text/html`, o fallback SPA), então fechar a porta não move a
+    # exposição para a 5174 — ela some. Foi por isso que a CAP-12 (rotas `/api/*`) veio
+    # ANTES: aquelas continuavam expostas pela borda com esta porta fechada, e portanto
+    # topologia nunca as alcançaria.
+    #
+    # Nenhum contêiner precisa desta publicação — todos falam por nome de serviço
+    # (`mcp-server-plughub:3100`), inclusive o nginx do platform-ui. Quem precisa é o
+    # HOST, e só em desenvolvimento: o proxy do `vite.config.ts`, a suíte e2e
+    # (`MCP_SERVER_URL`) e os probes de `infra/test/` — todos usando `localhost`, que
+    # o loopback continua servindo.
+    #
+    # ⚠️ Este é um PASSO INTERMEDIÁRIO, decidido em 2026-09-01. Eliminar a publicação
+    # de vez exige mover os probes para dentro da rede do compose; e se o alvo virar
+    # deploy DISTRIBUÍDO, a porta volta a ser necessária e a resposta deixa de ser
+    # topologia — vira autenticação de transporte (o padrão já existe na casa:
+    # `MCP_INTERNAL_SERVICE_TOKEN`, falhando FECHADO). Ver `pending.md` CAP-13.
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     environment:
       REDIS_URL: redis://redis:6379
       PORT: "3100"

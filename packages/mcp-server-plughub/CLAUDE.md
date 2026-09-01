@@ -63,6 +63,14 @@ Default port: 3100.
 - ⚠️ **`/api/*` exige CREDENCIAL e não recorta LINHA.** `conversation_history` lê
   `session:{id}:messages`, chave **sem prefixo de tenant** — qualquer operador
   autenticado alcança qualquer sessão. Dívida declarada: `pending.md` CAP-14
+- ⚠️ **A porta 3100 publica em LOOPBACK, e isso é o que mantém o transporte anônimo
+  fora de alcance.** Até 2026-09-01 os composes diziam `"3100:3100"` (= `0.0.0.0`), e
+  medido nesta máquina o IP de LAN **aceitava conexão** — qualquer aparelho na mesma
+  rede alcançava o `/sse`, que não pede credencial e serve as 72 tools. *"A borda não
+  publica o transporte"* era só METADE da resposta: a porta publicava sozinha.
+  ⚠️ Ao mexer em `ports:` ou ao mapear rotas novas no nginx do platform-ui, **não
+  exponha `/sse` nem `/messages`** — mapeá-los move a exposição para a 5174 e desfaz
+  o fechamento. Gate: ramo F do `infra/test/probe_mcp_rest_surface.sh`
 - session_id is mandatory in all Agent Runtime tools
 - tenant_id is inferred from the JWT — never from the request body
 

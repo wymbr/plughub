@@ -17,6 +17,11 @@
 #    seja: as 48 dívidas de tool da CAP-09 estão atrás de uma porta que a única borda
 #    do repositório não expõe. ⚠️ `200` ali é o **valor plausível** do catálogo — o
 #    código HTTP é idêntico nos dois casos e só o `content-type` separa.
+#    ⚠️ **"A borda não publica" era METADE da resposta** — a porta publicava sozinha.
+#    Medido em 2026-09-01 (CAP-13): com `"3100:3100"`, `Test-NetConnection` sobre o IP
+#    de LAN desta máquina respondia **ACEITA**, isto é, qualquer aparelho no mesmo
+#    Wi-Fi alcançava o transporte anônimo. Hoje o bind é `127.0.0.1:3100:3100` e o
+#    ramo F trava as duas metades: a DECLARAÇÃO nos composes e o bind VIVO.
 # 3. **A borda PUBLICA `/api/*`** — 20 rotas, e eram **9 sem credencial**. Estas são
 #    a superfície realmente exposta do mcp-server. ✅ **As 9 fecharam na CAP-12
 #    (2026-09-01)**: a linha delas migrou para `gateada` e o ramo D INVERTEU de sinal
@@ -283,11 +288,47 @@ else
 fi
 
 echo
+echo "── F · a 3100 publica em LOOPBACK, e os composes declaram isso ──"
+#
+# Duas metades que não se substituem, pelo mesmo motivo do par A/B: a DECLARAÇÃO é o
+# que viaja para outro deploy (num host Linux com Docker nativo, `0.0.0.0` é alcance
+# de LAN de verdade), e o BIND VIVO é o que esta máquina realmente faz — um pode estar
+# certo com o outro errado, e é o segundo que morde hoje.
+#
+# ⚠️ Este ramo NÃO afirma "recusa a partir da LAN". Seria tentador e seria um teste que
+# não pode reprovar AQUI: nesta máquina o firewall do Hyper-V já recusa a rota
+# WSL→host, então a asserção ficaria verde antes e depois da correção. O fato
+# falseável é o ENDEREÇO DO BIND, e é sobre ele que o ramo decide.
+F_ESPERADO="127.0.0.1:3100:3100"
+for arq in "$ROOT/docker-compose.demo.yml" "$ROOT/docker-compose.full.yml"; do
+  if [ ! -f "$arq" ]; then inc "ausente: $(basename "$arq")"; continue; fi
+  linha=$(grep -E '^\s*-\s*"[0-9.:]*3100:3100"' "$arq" | head -1 | tr -d ' "-')
+  case "$linha" in
+    "$F_ESPERADO") ok "$(basename "$arq") declara $F_ESPERADO" ;;
+    "")            inc "$(basename "$arq"): nenhuma publicação de 3100 encontrada — a porta saiu de vez? atualize este ramo" ;;
+    *)             bad "$(basename "$arq") declara '$linha' — a 3100 voltou a publicar fora do loopback (CAP-13)" ;;
+  esac
+done
+if command -v docker >/dev/null 2>&1; then
+  BIND=$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null \
+         | grep 'mcp-server-plughub' | head -1 | grep -oE '[0-9.]+:3100->3100' | head -1)
+  if [ -z "$BIND" ]; then
+    inc "mcp-server sem publicação de 3100 no \`docker ps\` (parado, ou porta já removida)"
+  elif [ "${BIND%%:*}" = "127.0.0.1" ]; then
+    ok "bind VIVO em ${BIND%%:*} — não escuta em interface externa"
+  else
+    bad "bind VIVO em ${BIND%%:*} (esperado 127.0.0.1) — a stack corrente expõe o transporte MCP"
+  fi
+else
+  inc "docker ausente — sem o bind vivo, só a declaração foi conferida"
+fi
+
+echo
 echo "──────────────────────────────────────────────────────────"
 echo "  FAIL=$FAIL  INCONCLUSIVO=$INCONCL"
 if [ "$INCONCL" -gt 0 ]; then echo "⏭️  INCONCLUSIVO — não mediu tudo; isto NÃO é verde"; exit 3; fi
 if [ "$FAIL" -eq 0 ]; then
-  echo "✅ superfície estável — borda não publica o transporte; as 9 da CAP-12 seguem fechadas"
+  echo "✅ superfície estável — transporte fora da borda E fora da LAN; as 9 da CAP-12 fechadas"
   exit 0
 fi
 echo "❌ a superfície MUDOU sem a declaração acompanhar"
