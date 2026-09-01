@@ -39,7 +39,15 @@ Default port: 3100.
 
 - Never implement business logic — only receive and route
 - Every tool validates input with Zod before processing
-- Every tool authenticates via JWT in the Authorization header
+- ⚠️ **MEDIDO FALSO em 2026-09-01 (CAP-09)** — *"Every tool authenticates via JWT in the
+  Authorization header"*. O transporte MCP (`GET /sse`, `POST /messages` em `server.ts`)
+  **não checa credencial nenhuma**: um cliente conecta anônimo e recebe as **72** tools
+  no `tools/list` (medido, não lido). Os `requireJwtRole`/`verifyJwtPayload` do
+  `server.ts` estão na **ponte REST `/api/*`**, que é outra superfície. No handler, o
+  `session_token` é verificado em **23 das 72**; **48** não verificam nada e **1**
+  (`agent_login`) é isenta por ser a emissora. Censo por camada, tabela de classificação
+  e trava contra regressão: `infra/test/probe_mcp_tool_guard_census.sh`. A política —
+  o que passa a exigir credencial — é decisão em aberto (`pending.md`, CAP-10)
 - session_id is mandatory in all Agent Runtime tools
 - tenant_id is inferred from the JWT — never from the request body
 

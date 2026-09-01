@@ -124,6 +124,7 @@ história no `CHANGELOG.md`. Nada registrado aqui ainda.)*
 | CAP-03 | R3 — `agent_role` fora de 5 pacotes + coluna dropada por migração; PUT recusa o campo com 422 nomeando | 2026-09-01 | `CHANGELOG.md:37` |
 | CAP-05 | A borda `invoke` deixou de negar 100% das chamadas — o default `permissions: []` era `deny`, não permissivo | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-06 | `permissions[]` ganhou produtor: o `tools[]` da skill é mapeado e ASSINADO no `session_token` | 2026-09-01 | `CHANGELOG.md:3` |
+| CAP-09 | Censo das 72 tools por camada de guarda virou gate; duas promessas falsas corrigidas (`deploy.ts`, `CLAUDE.md` do pacote) | 2026-09-01 | `CHANGELOG.md:3` |
 
 ---
 

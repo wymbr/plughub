@@ -1,5 +1,83 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — As tools da plataforma não seguem o modelo da borda; o censo virou gate (CAP-09)
+
+Pergunta do dono depois da CAP-06: *"o MCP plughub com as funções da plataforma segue o
+mesmo modelo?"* Não. É o caso **menos** protegido dos três, e duas promessas escritas
+afirmavam o contrário.
+
+### O censo, por camada, sobre as 72 tools
+
+| camada | cobertura |
+|---|---|
+| `permissions[]` (`judgeInvoke`) | **1/72** — e é a própria `invoke` |
+| audit `mcp.audit` | **1/72** — a `invoke` é o único produtor do tópico |
+| injection guard (`withGuard`) | **16/72** — só `bpm.ts` e `workflow.ts` |
+| `session_token` verificado | **23/72** — 48 não verificam, 1 é isenta (`agent_login`, a emissora) |
+
+**33 tools não têm camada nenhuma**, entre elas `pool_promote`, `skill_deploy`,
+`transcript_get`, `context_set`, `work_task_claim`, `survey_record`, `mailing_unsubscribe`.
+O caminho nativo confirma: `skill-flow-service.mcpCall` é `client.callTool()` direto.
+
+### Duas promessas falsas, corrigidas
+
+1. **`deploy.ts:7-13`** afirmava que a promoção é *"permission-checked, injection-guarded
+   and audited by the `McpInterceptor` like any other domain tool call"*. As três são
+   falsas — o `McpInterceptor` **nunca é instanciado** (só existe no exemplo do docstring
+   dele) —, e **a mesma frase foi copiada para o `CHANGELOG.md:18389`**. Promessa em duas
+   casas, mecanismo em zero: a família do DDL de `participation_intervals`. *"Ter um
+   caminho único"* e *"esse caminho ser gateado"* são fatos diferentes; só o primeiro era
+   verdade.
+2. **`packages/mcp-server-plughub/CLAUDE.md`** declarava *"Every tool authenticates via JWT
+   in the Authorization header"*. Medido, não lido: `GET /sse` e `POST /messages` **não
+   checam credencial nenhuma** — um cliente conecta anônimo e recebe as 72 tools no
+   `tools/list`. Os `requireJwtRole` do `server.ts` estão na ponte REST `/api/*`, que é
+   outra superfície.
+
+### O instrumento, e por que ele é AST
+
+`grep -c 'server.tool('` devolvia **73** — o 73º era um **comentário**. E, pior, o número
+por arquivo não responde a pergunta: `evaluation.ts` tem 10 tools e 5 verificam token, mas
+um arquivo com uma ocorrência conta como "tem". Foi assim que a primeira contagem manual
+produziu *"40 sem `session_token`"* quando o real é **48** — o erro estava na granularidade,
+não na aritmética. O `_mcp_tool_guard_census.mjs` usa a AST do TypeScript e associa cada
+camada ao **handler daquela tool**. Mesmo motivo do `_route_principal_census.py`: contar
+ocorrências não é contar decisores.
+
+**Duas metades que não se substituem** (desenho do `probe_route_credential_coverage.sh`):
+**A** censo AST do fonte (vê a camada, que é fato do código) × **B** `tools/list` no
+servidor no ar (vê o que é realmente registrado). O ramo **C** cruza os dois conjuntos —
+e a confirmação independente veio de graça: AST e runtime dizem **72**, o mesmo número.
+
+### O gate trava a MUDANÇA, não a política
+
+`infra/test/probe_mcp_tool_guard_census.sh` não decide que toda tool precisa de credencial
+— essa decisão não foi tomada. Ele enumera e **exige que toda tool esteja classificada**,
+no molde do `probe_edge_surface.sh`. Duas classes, não uma: **`isento`** (decidido que não
+precisa, sem gatilho) × **`divida`** (sabe-se que falta, gatilho nomeado) — juntá-las faria
+a dívida herdar a tranquilidade da decisão, que é o par `_SCOPE_EXEMPT`/`_SCOPE_DEBT` da
+analytics-api. Estado travado: `ok=23 · isento=1 · divida=48`.
+
+O ramo **D** trava a postura do transporte **nos dois sentidos**: se alguém puser credencial
+no `/sse`, ele reprova até a declaração acompanhar. Um gate que só nota regressão deixa a
+melhoria passar sem registro, e aí ninguém sabe mais o que vale.
+
+**A linha de base não nasce vermelha de propósito.** Um gate que nasce vermelho ensina todo
+mundo a ignorá-lo — a lição dos 476 falsos vermelhos do runner de pytest. Aqui a classe
+`divida` registra o estado real sem reprovar; o que reprova é a mudança não declarada.
+
+Bateria de mutação, todas vermelhas, controle positivo verde: tool nova sem linha (fere C
+**e** E) · deriva de camada · linha órfã · transporte declarado ao contrário. E o veredicto
+é de **três estados**: com o servidor fora do ar sai **3 (INCONCLUSIVO)**, nunca 0.
+
+### O que NÃO foi feito, e por quê
+
+A política — o que passa a exigir credencial — fica em aberto (CAP-10), **bloqueada por
+medição que falta**: a porta 3100 está em `0.0.0.0` neste compose de demo, e borda é fato de
+REDE, não de código. Não existe aqui o equivalente do `probe_edge_surface.sh` para dizer o
+que o deploy publica. Decidir gravidade sem o alcance medido seria a D14.1 ao contrário —
+lá contou-se exposição e chamou-se de dano; aqui seria decidir dano sem contar exposição.
+
 ## 2026-09-01 — A borda `invoke` deixou de negar tudo: `permissions[]` ganhou produtor (CAP-05/CAP-06)
 
 O `CLAUDE.md` declara o `invoke` do mcp-server como **a única borda MCP em vigor**. Medido:

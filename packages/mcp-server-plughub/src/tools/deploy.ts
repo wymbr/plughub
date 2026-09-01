@@ -7,10 +7,27 @@
  *   pool_promote  — POOL-centric promote (POST /v1/pools/:id/promote), the SINGLE
  *                   promote path (next→current→previous + SkillDeployment). Used by
  *                   skill_deploy_promote_v1, the body of a scheduled-promote agenda
- *                   (Scheduler Fase 2). `invoke` reaches the agent-registry via THIS
- *                   MCP tool — never an arbitrary HTTP call — so the promotion is
- *                   permission-checked, injection-guarded and audited by the
- *                   McpInterceptor like any other domain tool call.
+ *                   (Scheduler Fase 2). O acesso ao agent-registry passa por ESTA tool,
+ *                   nunca por HTTP arbitrário — a promoção tem UM caminho.
+ *
+ * ⚠️ CORREÇÃO DE 2026-09-01 (CAP-09) — este cabeçalho AFIRMAVA que a promoção é
+ * *"permission-checked, injection-guarded and audited by the McpInterceptor like any
+ * other domain tool call"*. **As três são falsas, e a frase foi copiada para o
+ * `CHANGELOG.md:18389`** — promessa em duas casas, mecanismo em zero, exatamente a
+ * família do DDL de `participation_intervals`.
+ *
+ * O que foi medido:
+ *   · o `McpInterceptor` **nunca é instanciado** — só existe no exemplo do docstring
+ *     do próprio `packages/sdk/src/mcp-interceptor.ts` (o `CLAUDE.md` já registrava);
+ *   · `pool_promote` e `skill_deploy` **não** passam por `withGuard` (16 das 72 tools
+ *     passam, todas em `bpm.ts` e `workflow.ts`);
+ *   · **nada** aqui publica em `mcp.audit` — o tópico tem UM produtor no repositório,
+ *     e é a tool `invoke`;
+ *   · nenhuma das duas verifica `session_token`.
+ *
+ * "Ter um caminho único" e "esse caminho ser gateado" são fatos DIFERENTES; o primeiro
+ * é verdade, o segundo não era. A dívida está declarada em `pending.md` (CAP-09/CAP-10)
+ * e travada contra regressão por `infra/test/probe_mcp_tool_guard_census.sh`.
  */
 
 import { z }         from "zod"
