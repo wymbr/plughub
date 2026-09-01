@@ -96,6 +96,9 @@ export type {
 // ── Mapa do ContextStore (D2 do arco ALLOWLIST, fase V3) ──
 export {
   ContextScopeSchema,
+  ContextStoreKindSchema,
+  CONTEXT_ROUTE_PREFIXES,
+  resolveContextStore,
   ContextMapFieldSchema,
   ContextMapSchema,
   DEFAULT_CONTEXT_MAP,
@@ -107,6 +110,7 @@ export {
 
 export type {
   ContextScope,
+  ContextStoreKind,
   ContextMapField,
   ContextMap,
   ContextTagOrigin,

@@ -42,18 +42,67 @@ import { z } from "zod"
 import { DEFAULT_DATA_TYPE_CATALOG, type DataTypeCatalog } from "./audit"
 
 /**
- * Escopos válidos — e a lista é FECHADA porque cada valor corresponde a um
- * roteamento de storage que já existe no código (§1.6 do ADR):
+ * Onde uma tag é ARMAZENADA, e por quanto tempo. Três destinos, e são fato de
+ * CÓDIGO — cada um corresponde a uma chave Redis que já existe:
  *
- *   session  → `{t}:ctx:{sessionId}`          TTL   4 h   (default)
- *   journey  → `{t}:ctx:journey:{raiz}`       TTL  30 d   (prefixo `journey.`)
- *   customer → `{t}:ctx:customer:{customerId}` TTL 90 d   (`insight.historico`, `pricing`)
- *
- * Um escopo novo aqui sem o roteamento correspondente declararia uma retenção que
- * ninguém aplica — a família "promessa sem produtor" que o `CLAUDE.md` cataloga.
+ *   session  → `{t}:ctx:{sessionId}`           TTL   4 h
+ *   journey  → `{t}:ctx:journey:{raiz}`        TTL  30 d
+ *   customer → `{t}:ctx:customer:{customerId}` TTL  90 d
  */
-export const ContextScopeSchema = z.enum(["session", "journey", "customer"])
-export type ContextScope = z.infer<typeof ContextScopeSchema>
+export const ContextStoreKindSchema = z.enum(["session", "journey", "customer"])
+export type ContextStoreKind = z.infer<typeof ContextStoreKindSchema>
+
+/**
+ * A TABELA DE ROTEAMENTO — a declaração ÚNICA de qual prefixo vai para qual store.
+ *
+ * ── Por que ela mudou de casa (CNS-04, 2026-09-01) ───────────────────────────
+ *
+ * Até aqui havia DUAS listas para a mesma pergunta: `ContextScopeSchema`
+ * (`session|journey|customer`), que o oráculo do mapa usava para aprovar um root, e
+ * as constantes de prefixo do `sdk/context-store.ts`, que decidem de verdade o TTL e
+ * a chave. **Elas discordavam, e a divergência era uma armadilha ARMADA:** o enum
+ * admitia `customer` como root do mapa e o comentário prometia 90 dias, mas nenhuma
+ * rota casa o prefixo `customer.` — as rotas de 90 d são `insight.historico`,
+ * `pricing` e `core.customer.`. Um `contexto.customer.x` declarado no mapa teria a
+ * canônica `customer.x`, que cai no default e vive **4 horas**. Dano zero hoje
+ * (nenhum root `customer` no mapa vigente), pela mesma razão que o legado
+ * `rule.{category}` da V2b: ausência de dado, não ausência de defeito.
+ *
+ * Agora existe uma casa só, e ela mora em `schemas` porque é o pacote base — o SDK
+ * depende dele, nunca o contrário.
+ *
+ * ⚠️ **A ordem é significativa.** `core.customer.` tem de ser avaliada antes de
+ * qualquer regra mais larga sobre `core.`: com um casador largo, `core.journey.*`
+ * casaria a rota de cliente primeiro e receberia 90 d em vez de 30 — foi exatamente
+ * o que a bateria de mutação da CNS-03 mediu, e é por isso que a tabela é uma LISTA
+ * ORDENADA e não um mapa.
+ */
+export const CONTEXT_ROUTE_PREFIXES: ReadonlyArray<{ prefix: string; store: ContextStoreKind }> = [
+  { prefix: "insight.historico", store: "customer" },
+  { prefix: "pricing",           store: "customer" },
+  { prefix: "core.customer.",    store: "customer" },
+  { prefix: "journey.",          store: "journey"  },
+  { prefix: "core.journey.",     store: "journey"  },
+]
+
+/**
+ * Resolve o store de uma tag. **O default é `session`** — e ele é honesto, não
+ * omissão: qualquer root não listado vive no hash da sessão com o TTL da sessão, que
+ * é o que o roteamento sempre fez para tudo que não fosse journey/cliente. É o que
+ * permite a CNS-02 liberar roots de tenant sem tocar em roteamento nenhum.
+ */
+export function resolveContextStore(tag: string): ContextStoreKind {
+  for (const r of CONTEXT_ROUTE_PREFIXES) if (tag.startsWith(r.prefix)) return r.store
+  return "session"
+}
+
+/**
+ * @deprecated Era o gate de root do oráculo, e gateava a coisa errada — ver o
+ * comentário de `CONTEXT_ROUTE_PREFIXES`. Sobrevive só como vocabulário; quem decide
+ * onde uma tag mora é `resolveContextStore`.
+ */
+export const ContextScopeSchema = ContextStoreKindSchema
+export type ContextScope = ContextStoreKind
 
 /** Folha do mapa: um campo declarado. */
 export const ContextMapFieldSchema = z.object({
@@ -500,8 +549,13 @@ export interface ContextMapVerification {
   aliases:         number
   /** `tipo` que o catálogo não declara. */
   unknown_types:           Array<{ field: string; tipo: string }>
-  /** Escopo fora do enum — declararia uma retenção que nenhum roteamento aplica. */
-  unknown_scopes:          string[]
+  /**
+   * Root cujo NOME anuncia um store para o qual as tags dele não roteiam — o mapa
+   * prometendo uma retenção que ninguém aplica. Substituiu `unknown_scopes`, que
+   * gateava o root contra um enum escrito à mão e por isso aprovava justamente o
+   * caso perigoso (`customer`, cujo prefixo não roteia para lugar nenhum).
+   */
+  mismatched_retention:    Array<{ root: string; anuncia: ContextStoreKind; roteia_para: ContextStoreKind }>
   /** Mesma grafia legada reivindicada por dois nós: a resolução dependeria da ordem. */
   ambiguous_aliases:       Array<{ legado: string; claimed_by: string[] }>
   /** Grafia legada que também é canônica de outro nó: o alias sombrearia um campo real. */
@@ -534,11 +588,25 @@ export function verifyContextMap(
   const index   = buildContextTagIndex(map)
 
   const unknown_types:  Array<{ field: string; tipo: string }> = []
-  const unknown_scopes: string[] = []
+  const mismatched_retention: Array<{ root: string; anuncia: ContextStoreKind; roteia_para: ContextStoreKind }> = []
   const claims = new Map<string, string[]>()   // legado → canônicas que o reivindicam
 
   for (const [escopo, dominios] of Object.entries(map.contexto)) {
-    if (!ContextScopeSchema.safeParse(escopo).success) unknown_scopes.push(escopo)
+    // O root é LIVRE (CNS-02): `core` é da plataforma, o resto é do tenant, e tudo o
+    // que não tem rota própria vive na sessão — que é honesto e é o default real.
+    // O que NÃO pode é o root anunciar um store e as tags dele irem para outro: é a
+    // retenção prometida sem mecanismo. Só se confere quando o nome do root É um
+    // store; um root de negócio (`card`, `products`) não anuncia nada.
+    const anuncia = ContextStoreKindSchema.safeParse(escopo)
+    if (anuncia.success && anuncia.data !== "session") {
+      const campo0 = Object.keys(dominios)[0]
+      const folha0 = campo0 !== undefined ? Object.keys(dominios[campo0] ?? {})[0] : undefined
+      const amostra = folha0 !== undefined ? `${escopo}.${campo0}.${folha0}` : `${escopo}.`
+      const real = resolveContextStore(amostra)
+      if (real !== anuncia.data) {
+        mismatched_retention.push({ root: escopo, anuncia: anuncia.data, roteia_para: real })
+      }
+    }
     for (const [dominio, campos] of Object.entries(dominios)) {
       for (const [campo, leaf] of Object.entries(campos)) {
         const name = `${escopo}.${dominio}.${campo}`
@@ -562,7 +630,7 @@ export function verifyContextMap(
     declared: index.canonical.size,
     aliases:  index.alias.size,
     unknown_types,
-    unknown_scopes,
+    mismatched_retention,
     ambiguous_aliases,
     alias_shadows_canonical,
   }

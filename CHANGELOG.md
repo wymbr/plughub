@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-04: uma casa só para "onde esta tag mora", e ela desarmou uma armadilha
+
+### Havia DUAS listas para a mesma pergunta, e elas discordavam
+
+Para aprovar um root do mapa, o oráculo usava `ContextScopeSchema`
+(`session|journey|customer`), cujo comentário prometia que `customer` valia **90
+dias**. Quem decide de verdade o TTL e a chave eram os prefixos do
+`sdk/context-store.ts` — e **`customer.` não está entre eles**: as rotas de 90 d são
+`insight.historico`, `pricing` e (desde a CNS-03) `core.customer.`.
+
+Consequência: um `contexto.customer.x` declarado no mapa **passava** no oráculo, e a
+tag `customer.x` caía no default — **4 horas**, onde a declaração prometia 90 dias.
+Armadilha ARMADA; dano zero só porque nenhum mapa vigente usa o root, que é a mesma
+razão do legado `rule.{category}` da V2b: ausência de dado, não ausência de defeito.
+
+### A tabela mudou de casa, e o gate mudou de proposição
+
+`CONTEXT_ROUTE_PREFIXES` + `resolveContextStore` passam a viver em
+`@plughub/schemas` — o pacote base, de quem o SDK depende (nunca o contrário). O SDK
+perdeu as duas listas locais e ficou com o que é dele: o mapeamento **store → TTL**,
+porque os TTLs são configuráveis por instância e a tabela de rotas não é.
+
+E o oráculo trocou `unknown_scopes` (pertencimento a um enum) por
+**`mismatched_retention`** (coerência): *o root anuncia um store? então as tags dele
+têm de ir para lá*. Root de tenant não anuncia nada e passa; `core` passa; `customer`
+é **acusado**. O gate anterior testava a proposição vizinha — e aprovava justamente o
+caso perigoso.
+
+### Um quinto call site, que a busca por predicado não teria achado
+
+`getByPrefix` filtra os prefixos **de consulta** contra as rotas de cliente, com
+casamento nas **duas direções** (`insight` alcança `insight.historico.*`;
+`insight.historico.resumo` é mais longo que a rota). `resolveContextStore` não serve
+ali e não deve servir: ele responde *"onde esta tag mora"*, e a pergunta é *"esta
+consulta pode alcançar o hash do cliente"*. Trocar um pelo outro faria a consulta
+curta parar de ler o hash do cliente — histórico sumindo do snapshot, sem erro.
+
+### Testes
+
+`packages/schemas/src/context-map.routing.test.ts`, 10 casos. Dois merecem nota:
+
+* **R-4 documenta o contra-intuitivo**: `customer.` **não** roteia para o cliente. Se
+  alguém acrescentar essa rota, o teste fica vermelho e obriga a decidir — melhor que
+  a rota nascer e o `mismatched_retention` deixar de acusar sem ninguém notar.
+* **O-5 mede o mapa VIGENTE** com testemunha de presença ao lado (`declared > 50`),
+  porque zero incoerências sobre um mapa vazio não é aprovação.
+
+**Mutação EXECUTADA:** acrescentar a rota `customer.` → 2 vermelhos (R-4 e O-3);
+neutralizar a checagem de coerência → 1 vermelho (O-3).
+
+### Vermelho pré-existente, medido e registrado
+
+A suíte de schemas tem **1 falha anterior a esta mudança**, confirmada por `git
+stash`: `agent-registry.test.ts:292` espera que o schema recuse um agente
+`orchestrator` sem skills — validação removida junto com o eixo `agent_role` em
+2026-09-01. Registrada como **CAP-17**; não é regressão desta fase.
+
+
 ## 2026-09-01 — CNS-03: a rota de `core.*` é DECLARADA, e o escopo desceu um segmento
 
 ### O que a CNS-02 sacrificou, e que esta fase recupera

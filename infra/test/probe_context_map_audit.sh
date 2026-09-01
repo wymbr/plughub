@@ -101,7 +101,7 @@ if [ -f "$SCHEMAS/dist/context-map.js" ]; then
   A=$(cd "$SCHEMAS" && node -e '
     const m = require("./dist/context-map.js")
     const v = m.verifyContextMap()
-    const bad = ["unknown_types","unknown_scopes","ambiguous_aliases","alias_shadows_canonical"]
+    const bad = ["unknown_types","mismatched_retention","ambiguous_aliases","alias_shadows_canonical"]
       .filter(k => (v[k] || []).length > 0)
     console.log(JSON.stringify({ declared: v.declared, aliases: v.aliases, bad,
       detail: Object.fromEntries(bad.map(k => [k, v[k]])) }))

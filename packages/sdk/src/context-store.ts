@@ -39,43 +39,38 @@ import type {
   ContextGapsReport,
   ContextMergeStrategy,
 } from "@plughub/schemas"
+import { resolveContextStore, CONTEXT_ROUTE_PREFIXES } from "@plughub/schemas"
 
-// ── namespaces que vivem no hash de longa duração (do CLIENTE) ────────────────
+// ── roteamento de store: UMA casa, e ela é @plughub/schemas ───────────────────
 //
-// Atenção: este prefixo decide DUAS coisas — o TTL **e a chave** (roteia para
-// `customerKey` quando há `customerId`). Por isso `journey.` NÃO entra aqui: ele precisa
-// de TTL longo mas continua no hash da JOURNEY (`{tenant}:ctx:journey:{id}`, via o
-// sessionId virtual `journey:{id}`). Misturar os dois mandaria o contexto do processo
-// para o hash do cliente.
-const LONG_TTL_PREFIXES = ["insight.historico", "pricing", "core.customer."]
+// CNS-04 — as duas listas de prefixo que viviam aqui (`LONG_TTL_PREFIXES` e
+// `JOURNEY_TTL_PREFIXES`) foram para `CONTEXT_ROUTE_PREFIXES`, no pacote base. Aqui
+// elas eram metade da verdade: o oráculo do mapa aprovava roots contra um enum
+// próprio (`session|journey|customer`) que NÃO casava com estes prefixos, e por isso
+// admitia `customer` como root prometendo 90 dias enquanto `customer.x` caía no
+// default de 4 horas. Duas listas para a mesma pergunta, e a resposta divergente era
+// silenciosa.
+//
+// O que fica NESTE pacote é o que é dele: o mapeamento store → TTL, porque os TTLs
+// são CONFIGURÁVEIS por instância (`ContextStoreConfig`) e a tabela de rotas não é.
 
 /**
- * J5a-1 — o contexto compartilhado do processo (`journey.*`) vive tanto quanto o processo,
- * não quanto uma sessão. Sem isto ele herdaria SESSION_TTL_S (4h) e evaporaria entre dois
- * contatos da mesma journey — que é exatamente o caso de uso que o namespace existe para
- * atender (a doc já prometia 30 dias; o código dava 4 horas).
- */
-const JOURNEY_TTL_PREFIXES = ["journey.", "core.journey."]
-
-/**
- * CNS-03 — **o escopo de uma tag do CORE é o seu SEGUNDO segmento.**
+ * CNS-03/04 — **o escopo de uma tag do CORE é o seu SEGUNDO segmento**, e quem
+ * responde isso é `resolveContextStore`, de `@plughub/schemas`.
  *
  * A CNS-02 reservou o root `core.*` para a plataforma, e com isso o primeiro segmento
- * passou a carregar PROPRIEDADE em vez de escopo. O escopo não desapareceu: ele desceu
- * um nível, e as duas rotas não-sessão do core estão declaradas acima —
- * `core.customer.` junto de `insight.historico`/`pricing` (hash do CLIENTE, 90 d) e
- * `core.journey.` junto de `journey.` (hash da JOURNEY, 30 d). Todo o resto de `core.`
- * é de sessão, pela mesma regra de qualquer outro root.
+ * passou a carregar PROPRIEDADE em vez de escopo. O escopo não desapareceu: desceu um
+ * nível — `core.customer.` vai para o hash do CLIENTE (90 d), `core.journey.` para o
+ * da JOURNEY (30 d), e o resto de `core.` é de sessão como qualquer outro root.
  *
- * ⚠️ **`core.customer.` NÃO é declaração por antecipação — é migração.** Ele absorve
- * `insight.historico.*` e `pricing.*`, que já hoje roteiam para o hash do cliente com
- * 90 dias. Sem esta linha, renomeá-los para `core.customer.*` moveria dado de retenção
- * trimestral para um hash de 4 horas, **sem erro em lugar nenhum** — a spec chegou a
- * afirmar que "os nomes do core são todos de sessão", e ela estava errada justamente
- * nestes dois.
+ * ⚠️ **`core.customer.` não é declaração por antecipação — é migração.** Ele absorve
+ * `insight.historico.*` e `pricing.*`, que já roteiam para o cliente com 90 dias. Sem
+ * a rota, renomeá-los moveria dado de retenção trimestral para um hash de 4 horas,
+ * **sem erro em lugar nenhum**.
  *
- * ⚠️ E o prefixo decide **DUAS** coisas, TTL *e* chave: por isso a entrada tem de ficar
- * em `LONG_TTL_PREFIXES`, que os quatro call sites já consultam, e nunca só no `ttlFor`.
+ * ⚠️ E o prefixo decide **DUAS** coisas, TTL *e* chave — por isso `isLongTtl` continua
+ * existindo como predicado próprio, consultado pelos call sites que escolhem a CHAVE,
+ * e não só pelo `ttlFor`.
  */
 
 // ── TTLs padrão ───────────────────────────────────────────────────────────────
@@ -124,20 +119,24 @@ export class ContextStore {
     return `${this.tenantId}:ctx:customer:${customerId}`
   }
 
+  /**
+   * Vai para o hash do CLIENTE? É o único store que muda a CHAVE, e por isso tem
+   * predicado próprio — os quatro call sites perguntam isto, não o TTL.
+   * `journey` também tem TTL longo mas mora no hash da JOURNEY (via o sessionId
+   * virtual `journey:{id}`); confundir os dois mandaria contexto de processo para
+   * o hash do cliente.
+   */
   private isLongTtl(tag: string): boolean {
-    return LONG_TTL_PREFIXES.some(p => tag.startsWith(p))
+    return resolveContextStore(tag) === "customer"
   }
 
-  /** Tag do processo (`journey.*`, `core.journey.*`): TTL longo, mas no hash da JOURNEY — nunca no do cliente. */
-  private isJourneyTag(tag: string): boolean {
-    return JOURNEY_TTL_PREFIXES.some(p => tag.startsWith(p))
-  }
-
-  /** TTL efetivo da tag. Ordem: cliente (longo) → journey (processo) → sessão. */
+  /** TTL efetivo da tag, derivado do store. Ordem: cliente → journey → sessão. */
   private ttlFor(tag: string, override?: number): number {
-    if (this.isLongTtl(tag))    return this.longTtl
-    if (this.isJourneyTag(tag)) return this.journeyTtl
-    return override ?? this.sessionTtl
+    switch (resolveContextStore(tag)) {
+      case "customer": return this.longTtl
+      case "journey":  return this.journeyTtl
+      default:         return override ?? this.sessionTtl
+    }
   }
 
   // ── set ─────────────────────────────────────────────────────────────────────
@@ -272,8 +271,18 @@ export class ContextStore {
       }
     }
 
-    // Se algum prefixo é de longa duração e customerId fornecido, lê do customer hash
-    const longPrefixes = prefixes.filter(p => LONG_TTL_PREFIXES.some(lp => lp.startsWith(p) || p.startsWith(lp)))
+    // Se algum prefixo é de longa duração e customerId fornecido, lê do customer hash.
+    //
+    // ⚠️ QUINTO call site da tabela de rotas — os outros quatro perguntam por uma TAG
+    // inteira (`resolveContextStore`), este pergunta por um PREFIXO DE CONSULTA, que
+    // pode ser mais curto que a rota (`insight` para alcançar `insight.historico.*`)
+    // ou mais longo (`insight.historico.resumo`). Daí o casamento nas DUAS direções,
+    // que `resolveContextStore` não faz nem deve fazer: ele responde "onde esta tag
+    // mora", e aqui a pergunta é "esta consulta pode alcançar o hash do cliente".
+    // Confundir as duas faria a consulta curta parar de ler o hash do cliente — e o
+    // sintoma seria histórico do cliente sumindo do snapshot, sem erro.
+    const customerRoutes = CONTEXT_ROUTE_PREFIXES.filter(r => r.store === "customer").map(r => r.prefix)
+    const longPrefixes = prefixes.filter(p => customerRoutes.some(lp => lp.startsWith(p) || p.startsWith(lp)))
     if (longPrefixes.length > 0 && customerId) {
       const customerSnapshot = await this._readHash(this.customerKey(customerId))
       for (const [tag, entry] of Object.entries(customerSnapshot)) {
