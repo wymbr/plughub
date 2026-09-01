@@ -1,5 +1,80 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — A superfície de rede do mcp-server, medida — e ela inverte a prioridade (CAP-11)
+
+A CAP-10 estava bloqueada por *"falta medir a superfície de rede do mcp-server"*. Medida, ela
+**inverteu o item**: o que a CAP-09 contou (48 tools sem credencial) está atrás de uma porta
+que a borda não publica, e o que a borda publica é outra coisa — com nove buracos.
+
+### 1. A borda existe, é versionada, e por isso ninguém a achava
+
+O nginx é **gerado dentro do `packages/platform-ui/Dockerfile`** (`RUN printf 'server {…}'`),
+e é exatamente por isso que procurar `nginx*.conf` no repositório não devolve nada — foi o que
+a análise do channel-gateway concluiu em 2026-08-10 (*"não existe borda versionada"*) e vale
+para aquele serviço, não para este. São **21 `location`** e **14 upstreams**.
+
+### 2. A borda NÃO publica o transporte MCP
+
+| | pela borda (5174) | direto (3100) |
+|---|---|---|
+| `/sse` | `text/html` — fallback SPA | `text/event-stream` + handshake |
+
+O **código HTTP é 200 nos dois**; só o `content-type` separa. Julgar por status teria produzido
+o veredicto oposto — é o *valor plausível* do catálogo, na forma mais barata. Consequência: as
+48 dívidas de tool da CAP-09 **não são alcançáveis pela borda**. Continuam alcançáveis pela porta
+publicada (`3100:3100` em `demo` e `full`, e nenhum compose a restringe), o que torna a CAP-10
+uma decisão de **topologia antes de código**.
+
+### 3. O que a borda publica: `/api/*` — 20 rotas, **9 sem credencial**
+
+Censo AST de `server.ts` (25 rotas) confirmado ao vivo **pela borda**, com controle positivo:
+`/api/instances` e `/api/agent-state` devolvem **401**; as abertas devolvem **200**. Sem esse
+controle, um 401 universal — serviço fora do ar, nginx quebrado — passaria por proteção.
+
+As nove: `conversation_history` · `copilot_state` · `supervisor_capabilities` ·
+`work_queue/list` · `work_queue/pending` · `agent_done` · `menu_submit` · `work_queue/claim` ·
+`work_queue/release`.
+
+### 4. Exposição e dano são dois números, e aqui eles divergem
+
+Lição da D14.1 aplicada na direção certa. Com a stack ociosa, as duas rotas de fila devolveram
+**vazio** — exposição sem dano *agora*. Mas `conversation_history` lê `session:{id}:messages`,
+que tem **três produtores** (`session.ts:529`, `orchestrator-bridge/main.py:7340`,
+`channel-gateway/session_registry.py:144`) e devolve `content` de mensagem sem filtro. *"Zero
+agora"* não é *"inócuo"* — é a stack parada. E `menu_submit` submete **no lugar do cliente**,
+`agent_done` **fecha** a sessão.
+
+A contagem foi feita sem despejar conteúdo: `session_id` inexistente para o teste de status, e
+contagem de itens (nunca o corpo) para o teste de população.
+
+### 5. O instrumento
+
+`infra/test/probe_mcp_rest_surface.sh` + `_mcp_rest_census.mjs`. Censo próprio porque **um censo
+desenhado para um eixo não prova nada sobre o eixo vizinho** — pela quarta vez nesta casa: o
+censo de tools atravessa estas rotas intacto, porque elas não registram tool nenhuma.
+
+Duas metades: **A** AST de `server.ts` (quais rotas exigem decisão) × **B** medição atravessando
+a borda (o que responde de fato). Tabela declarada com três posturas — `gateada` ·
+`aberta-divida` · `aberta-isenta` —, e a isenta é **uma**: `/health`, pela mesma razão do
+analytics-api (exigir credencial acopla o boot da stack ao do emissor de token). Estado:
+`gateada=11 · aberta-divida=13 · aberta-isenta=1`.
+
+O ramo **B** tem testemunha própria: se `/sse` direto **não** for `event-stream`, o ramo se
+declara quebrado em vez de aprovar — sem isso, um mcp-server fora do ar faria a borda parecer
+segura. E o ramo **E** reprova **nos dois sentidos**, melhoria inclusive: fechar uma rota sem
+mover a linha também é vermelho.
+
+Mutação: rota nova sem linha · regressão (aberta declarada gateada) · melhoria não declarada ·
+borda publicando o transporte (apontando `BORDA` para a 3100) — todas vermelhas, controle
+positivo verde, e borda fora do ar sai **3 (INCONCLUSIVO)**, nunca 0.
+
+### O que ficou aberto
+
+**CAP-12** — fechar as nove. A mais barata e de maior dano é `conversation_history`: o irmão
+gateado já existe (`analytics /v1/transcript/sessions/{id}`), então fechá-la não tira função de
+ninguém. **CAP-10** — a política das tools, agora rebaixada e precedida pela decisão de publicar
+ou não a porta 3100.
+
 ## 2026-09-01 — As tools da plataforma não seguem o modelo da borda; o censo virou gate (CAP-09)
 
 Pergunta do dono depois da CAP-06: *"o MCP plughub com as funções da plataforma segue o
