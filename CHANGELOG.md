@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-07: a tela de tipos passa a editar as QUATRO dimensões, não uma
+
+### O achado: a tela mentia por OMISSÃO, e a dimensão que faltava era a que decide
+
+`DataType` tem quatro dimensões — `formato`, `mascara.display` (canal), `mascara.by_role`
+(**o que cada papel enxerga**) e `lgpd` (classe). A `/config/masking` editava **uma**:
+`mascara.display`. `formato.display` e `lgpd` apareciam como selo read-only, e
+`mascara.by_role` **não aparecia em lugar nenhum** — apesar de ser a dimensão que a
+política de masking realmente consome.
+
+Não é cosmético. Um campo de config sem superfície é dívida declarada pelo próprio
+`CLAUDE.md` (*"Every config field is UI-editable"*), e aqui o campo invisível é o que
+responde *"o supervisor vê o CPF inteiro?"*.
+
+### O que mudou
+
+* **`saveType(category, mutate)`** — gravador único das quatro dimensões, reescrevendo o
+  catálogo inteiro. `saveMaskingRule` virou um wrapper de três linhas sobre ele. A chave
+  `masking.types` é um documento só; um PATCH por dimensão criaria uma segunda casa para a
+  mesma verdade.
+* **`by_role` editável** por papel (`operator`, `supervisor`), com os 9 tipos de máscara.
+* **`lgpd` editável**, com as 6 classes.
+* **Aviso de tipo INERTE**, derivado — não lista de exceção.
+
+### Duas decisões que são de modelagem, não de UI
+
+**1. Valor vazio REMOVE a chave; nunca grava `"plain"`.** `by_role` é um mapa, e a ausência
+da chave não é o mesmo que `plain`: ausente significa *"este papel não tem regra própria"*,
+`plain` é a decisão explícita de mostrar em claro. Gravar o default apagaria a distinção —
+o padrão que este repositório cataloga como *"um default no produtor derruba a guarda do
+consumidor sem deixar rastro"*.
+
+**2. O aviso de inerte existe porque a consequência mora noutro lugar.** `typeMasksSomething`
+decide se um tipo é elegível a `masked:` numa skill, e quem aplica é o portão de deploy da T5
+(`invalid_masked_type`). Sem o aviso, esvaziar o `by_role` aqui faz o deploy ser recusado
+depois, com um erro apontando para o YAML em vez da edição que o causou. O predicado da tela é
+**cópia literal** do canônico, e foi **conferido contra ele** nos 13 tipos: 0 divergências,
+com testemunha positiva (`{operator:last_4}` → mascara) e negativa (`{operator:plain}` → não).
+
+### Dívida de i18n fechada de lambuja
+
+Dez rótulos da seção usavam `t()` **sem chave em locale nenhum**, vivendo de `defaultValue` —
+a tela mostrava inglês mesmo em pt-BR. Fechados junto: `section.displayRules.*`,
+`displayScreen.*`, `displayVoice.*`, mais os novos `section.typeEditor.*`, `maskingType.*` e
+`lgpd.none`. Paridade EN × pt-BR: **70/70**, gate `probe_i18n_duplicate_keys.sh` verde.
+
+> ⚠️ **Achado colateral, não consertado:** `i18n/index.ts` fixa `lng: 'en'`, sem detector e sem
+> seletor na UI. O pt-BR é empacotado e **nunca selecionado** — ou seja, a metade pt-BR de toda
+> mudança de i18n neste app é, por construção, não exercitada. Confirmado que as strings estão
+> no bundle servido; que elas *renderizam* não foi possível verificar sem trocar o `lng`.
+
+### Verificação — ao vivo, com round-trip
+
+Imagem rebuildada e container recriado (`docker cp` não serviria: `up -d` recria da imagem).
+
+* `tsc --noEmit` limpo; código novo confirmado no bundle servido.
+* **13 tipos, 5 selects cada, todos os valores batendo com o catálogo vivo** do config-api.
+* **Aviso de inerte em exatamente 2** — `linha_em_servico` e `texto`, os dois que o ADR
+  documenta como não-mascaradores de propósito — e **em nenhum dos outros 11**. A testemunha
+  negativa é o que dá valor ao ramo.
+* **Save de ponta a ponta:** `cpf.supervisor` → `full` pela tela → confirmado no config-api →
+  recarregada a página, a tela mostra `full`. **Integridade do catálogo conferida depois da
+  escrita**: 13 tipos, nenhuma classe LGPD perdida, nenhum `detect_pattern` perdido — que é o
+  risco real de "reescreve o documento inteiro".
+* **Ramo de remoção:** voltar a *— sem regra —* deixou `by_role = {operator: last_2}`, com a
+  chave `supervisor` **ausente** e não gravada como `plain`. Estado revertido ao original.
+
+Arquivos: `packages/platform-ui/src/modules/masking/MaskingPage.tsx`,
+`packages/platform-ui/src/i18n/locales/{en,pt-BR}/masking.json`.
+Contexto: [`docs/product/contextstore-core-namespace-spec.md`](docs/product/contextstore-core-namespace-spec.md) §6.2.
+
+
 ## 2026-09-01 — CAP-16: o Console para de converter falha de leitura em histórico vazio
 
 ### O sintoma chegou como "o Console não mostra histórico"

@@ -109,6 +109,34 @@ const EMPTY_CONTEXT_CONFIG: ContextMaskingConfig = {
   supervisor_roles: DEFAULT_SUPERVISOR_ROLES,
 }
 
+/**
+ * Os papéis que `mascara.by_role` endereça. É a MESMA partição de
+ * `ContextMaskingRule.role` (@plughub/schemas) menos o curinga `*`, que não faz
+ * sentido aqui: o mapa já é por papel, e uma entrada `*` conviveria com as duas
+ * específicas sem regra de precedência declarada — duas respostas para a mesma
+ * pergunta, que é o defeito que o catálogo de tipos existe para fechar.
+ */
+const MASK_ROLES = ['operator', 'supervisor'] as const
+
+/** Ordem de exibição das classes; espelha `LgpdClassSchema`. */
+const LGPD_CLASSES: LgpdClass[] = [
+  'none', 'pessoal', 'sensivel', 'financeiro', 'credencial', 'nao_classificado',
+]
+
+/**
+ * Espelho de `typeMasksSomething` (@plughub/schemas/audit.ts) — **derivado, nunca
+ * lista de exceção**, e a fórmula é copiada literalmente porque quem julga de
+ * verdade é o portão de deploy da T5 (`invalid_masked_type`): um tipo que não
+ * mascara para papel nenhum é INELEGÍVEL a `masked:` numa skill.
+ *
+ * Existe na tela para que a consequência apareça ANTES do save. Sem ele, esvaziar
+ * o `by_role` de um tipo em uso faz o próximo deploy do skill ser recusado com um
+ * erro que aponta para o YAML, e não para a edição que o causou.
+ */
+function typeMasksSomething(dt: DataTypeEntry): boolean {
+  return Object.values(dt.mascara?.by_role ?? {}).some(v => v !== 'plain')
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function MaskingPage() {
@@ -178,14 +206,24 @@ export default function MaskingPage() {
    * categoria com override PROMOVIA o legado a tipo, em silêncio. Zero dano medido
    * (não existia nenhuma chave), mas o leitor não era peso morto.
    */
-  async function saveMaskingRule(category: string, rule: MaskingDisplayRule) {
+  /**
+   * Grava uma mudança em UM tipo do catálogo, reescrevendo o catálogo inteiro.
+   *
+   * Ponto único de escrita das QUATRO dimensões do tipo (CNS-07, 2026-09-01) —
+   * até aqui só `mascara.display` era editável, e `mascara.by_role` (o que cada
+   * PAPEL enxerga) não tinha superfície nenhuma, apesar de ser a dimensão que a
+   * política de masking realmente consome. `lgpd` era exibida como selo e não
+   * podia ser corrigida pela tela.
+   *
+   * A escrita é sempre do catálogo INTEIRO porque a chave `masking.types` é um
+   * documento só; um PATCH por tipo criaria uma segunda casa para a mesma verdade.
+   */
+  async function saveType(category: string, mutate: (dt: DataTypeEntry) => DataTypeEntry) {
     if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
     setSaving(`type.${category}`)
     try {
       const next: DataTypeCatalog = {
-        types: dataTypes.map(dt => dt.id === category
-          ? { ...dt, mascara: { ...(dt.mascara ?? {}), display: rule } }
-          : dt),
+        types: dataTypes.map(dt => dt.id === category ? mutate(dt) : dt),
       }
       await putConfig('masking', 'types', next, tenantId, '', adminToken)
       reloadMasking()
@@ -195,6 +233,30 @@ export default function MaskingPage() {
     } finally {
       setSaving(null)
     }
+  }
+
+  async function saveMaskingRule(category: string, rule: MaskingDisplayRule) {
+    await saveType(category, dt => ({ ...dt, mascara: { ...(dt.mascara ?? {}), display: rule } }))
+  }
+
+  /**
+   * `by_role` é um MAPA papel → tipo de máscara, e a ausência da chave não é o
+   * mesmo que `plain`: ausente significa *"este papel não tem regra própria"*,
+   * enquanto `plain` é a decisão explícita de mostrar em claro. Por isso o valor
+   * vazio do select REMOVE a chave em vez de gravar `"plain"` — gravar o default
+   * apagaria a distinção, que é o padrão que este repositório cataloga.
+   */
+  async function saveByRole(category: string, role: string, type: ContextMaskingType | '') {
+    await saveType(category, dt => {
+      const by = { ...(dt.mascara?.by_role ?? {}) }
+      if (type === '') delete by[role]
+      else            by[role] = type
+      return { ...dt, mascara: { ...(dt.mascara ?? {}), by_role: by } }
+    })
+  }
+
+  async function saveLgpd(category: string, lgpd: LgpdClass) {
+    await saveType(category, dt => ({ ...dt, lgpd }))
   }
 
   function getMaskingRule(category: string): MaskingDisplayRule {
@@ -398,11 +460,17 @@ export default function MaskingPage() {
           </div>
         </Section>
 
-        {/* ── Section 5: Display rules per category ────────────────────────── */}
+        {/*
+          ── Section 5: o editor do TIPO ─────────────────────────────────────
+          Era "Display Rules by Category" e editava só `mascara.display` — uma
+          das QUATRO dimensões do tipo. A dimensão que a política de masking
+          realmente consome (`mascara.by_role`) não tinha superfície nenhuma, e
+          a classe LGPD só aparecia como selo. CNS-07 (2026-09-01).
+        */}
         <Section
           icon={Monitor}
-          title={t('section.displayRules.title', { defaultValue: 'Display Rules by Category' })}
-          desc={t('section.displayRules.description', { defaultValue: 'Configure how masked tokens are shown per channel. Changes apply immediately to new sessions.' })}
+          title={t('section.typeEditor.title', { defaultValue: 'Data Types — mask, roles and class' })}
+          desc={t('section.typeEditor.description', { defaultValue: 'Each type declares how the value is shown per channel, what each role sees, and its LGPD class. Changes apply immediately to new sessions.' })}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
             {dataTypes.map(cat => {
@@ -486,7 +554,67 @@ export default function MaskingPage() {
                         disabled={isSaving}
                       />
                     </div>
+
+                    {/* ── by_role: o que cada PAPEL enxerga (CNS-07) ──────────── */}
+                    {MASK_ROLES.map(role => (
+                      <div key={role} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160 }}>
+                        <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                          {t(`section.typeEditor.role.${role}`, { defaultValue: role })}
+                        </label>
+                        <select
+                          value={cat.mascara?.by_role?.[role] ?? ''}
+                          disabled={isSaving}
+                          onChange={e => saveByRole(cat.id, role, e.target.value as ContextMaskingType | '')}
+                          style={{ ...selectStyle }}
+                        >
+                          <option value="">{t('section.typeEditor.noRule', { defaultValue: '— no rule —' })}</option>
+                          {(Object.keys(MASKING_TYPE_INFO) as ContextMaskingType[]).map(mt => (
+                            <option key={mt} value={mt}>
+                              {t(`maskingType.${mt}`, { defaultValue: MASKING_TYPE_INFO[mt].label })}
+                              {' · '}{MASKING_TYPE_INFO[mt].sample}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+
+                    {/* ── lgpd: a CLASSE do dado ──────────────────────────────── */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160 }}>
+                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {t('section.typeEditor.lgpd', { defaultValue: 'LGPD class' })}
+                      </label>
+                      <select
+                        value={cat.lgpd ?? 'none'}
+                        disabled={isSaving}
+                        onChange={e => saveLgpd(cat.id, e.target.value as LgpdClass)}
+                        style={{ ...selectStyle }}
+                      >
+                        {LGPD_CLASSES.map(c => (
+                          <option key={c} value={c}>{t(`lgpd.${c}`, { defaultValue: c })}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
+
+                  {/*
+                    Consequência DERIVADA, mostrada antes do save: um tipo sem
+                    máscara para papel nenhum é inelegível a `masked:` numa skill,
+                    e o portão de deploy (T5) recusa. Sem este aviso, esvaziar o
+                    `by_role` aqui faz o erro aparecer noutro lugar, apontando para
+                    o YAML em vez da edição que o causou.
+                  */}
+                  {!typeMasksSomething(cat) && (
+                    <div style={{
+                      marginTop: 10, padding: '8px 12px', background: '#1a1206',
+                      border: '1px solid #78350f', borderRadius: 6, fontSize: 11,
+                      color: '#fbbf24', display: 'flex', gap: 8, alignItems: 'flex-start',
+                    }}>
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                      <span>{t('section.typeEditor.inert', {
+                        defaultValue: 'This type masks nothing for any role, so it cannot be used in a skill\'s `masked:` declaration — deploy will be refused. Valid for ContextStore map fields that only declare plumbing.',
+                      })}</span>
+                    </div>
+                  )}
                 </div>
               )
             })}

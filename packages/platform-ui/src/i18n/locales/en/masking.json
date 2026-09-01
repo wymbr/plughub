@@ -33,6 +33,23 @@
       "catalogMissing": "Catalog missing or empty (masking.types). No type declared — this does not mean there is no masking: it means this screen cannot tell you which.",
       "tokenFormat": "Inline token format",
       "tokenExplanation": "replaced by display_partial on delivery to client via WebSocket. Resolved to original value by authorized roles via MCP tools."
+    },
+    "typeEditor": {
+      "title": "Data Types — mask, roles and class",
+      "description": "Each type declares how the value is shown per channel, what each role sees, and its LGPD class. Changes apply immediately to new sessions.",
+      "role": {
+        "operator": "Operator sees",
+        "supervisor": "Supervisor sees"
+      },
+      "noRule": "— no rule —",
+      "lgpd": "LGPD class",
+      "inert": "This type masks nothing for any role, so it cannot be used in a skill's `masked:` declaration — deploy will be refused. Valid for ContextStore map fields that only declare plumbing."
+    },
+    "displayRules": {
+      "screen": "Screen display",
+      "voice": "Voice channel",
+      "echoCustomer": "Echo to customer",
+      "echoOperator": "Echo to operator"
     }
   },
   "lgpd": {
@@ -40,7 +57,8 @@
     "sensivel": "sensitive data",
     "financeiro": "financial",
     "credencial": "credential",
-    "nao_classificado": "unclassified"
+    "nao_classificado": "unclassified",
+    "none": "not personal"
   },
   "retention": {
     "save": "Save",
@@ -61,5 +79,26 @@
     "address": "Address",
     "health": "Health Data",
     "financial": "Financial Data"
+  },
+  "maskingType": {
+    "plain": "Visible (no mask)",
+    "hidden": "Hidden (field removed)",
+    "full": "Fully masked",
+    "last_2": "Last 2 digits",
+    "last_4": "Last 4 digits",
+    "first_1": "First letter",
+    "first_word": "First word",
+    "email_domain": "Domain visible",
+    "financial": "Financial value"
+  },
+  "displayScreen": {
+    "partial": "Partial (***-00)",
+    "full": "Full mask (•••••)",
+    "hidden": "Label only"
+  },
+  "displayVoice": {
+    "silence": "Silence",
+    "beep": "Beep tone",
+    "placeholder": "Speak placeholder"
   }
 }

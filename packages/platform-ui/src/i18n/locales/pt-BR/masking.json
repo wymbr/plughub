@@ -33,6 +33,23 @@
       "catalogMissing": "Catálogo ausente ou vazio (masking.types). Nenhum tipo declarado — isto não significa que não há mascaramento: significa que esta tela não sabe dizer qual.",
       "tokenFormat": "Formato do token inline",
       "tokenExplanation": "substituído por display_partial na entrega ao cliente via WebSocket. Resolvido para o valor original por roles autorizados via MCP tools."
+    },
+    "typeEditor": {
+      "title": "Tipos de dado — máscara, papéis e classe",
+      "description": "Cada tipo declara como o valor é exibido por canal, o que cada papel enxerga e a sua classe LGPD. Alterações valem para sessões novas.",
+      "role": {
+        "operator": "Operador vê",
+        "supervisor": "Supervisor vê"
+      },
+      "noRule": "— sem regra —",
+      "lgpd": "Classe LGPD",
+      "inert": "Este tipo não mascara para papel nenhum, logo não pode ser usado num `masked:` de skill — o deploy será recusado. Válido para campos do mapa do ContextStore que só declaram encanamento."
+    },
+    "displayRules": {
+      "screen": "Exibição na tela",
+      "voice": "Canal de voz",
+      "echoCustomer": "Eco para o cliente",
+      "echoOperator": "Eco para o operador"
     }
   },
   "lgpd": {
@@ -40,7 +57,8 @@
     "sensivel": "dado sensível",
     "financeiro": "financeiro",
     "credencial": "credencial",
-    "nao_classificado": "não classificado"
+    "nao_classificado": "não classificado",
+    "none": "não pessoal"
   },
   "retention": {
     "save": "Salvar",
@@ -61,5 +79,26 @@
     "address": "Endereço",
     "health": "Dados de Saúde",
     "financial": "Dados Financeiros"
+  },
+  "maskingType": {
+    "plain": "Visível (sem máscara)",
+    "hidden": "Oculto (remove o campo)",
+    "full": "Totalmente mascarado",
+    "last_2": "Últimos 2 dígitos",
+    "last_4": "Últimos 4 dígitos",
+    "first_1": "Primeira letra",
+    "first_word": "Primeira palavra",
+    "email_domain": "Domínio visível",
+    "financial": "Valor financeiro"
+  },
+  "displayScreen": {
+    "partial": "Parcial (***-00)",
+    "full": "Máscara total (•••••)",
+    "hidden": "Só o rótulo"
+  },
+  "displayVoice": {
+    "silence": "Silêncio",
+    "beep": "Bipe",
+    "placeholder": "Falar placeholder"
   }
 }
