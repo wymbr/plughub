@@ -150,7 +150,13 @@ def upsert_user(email: str, name: str, password: str, roles: list[str]) -> str |
 
 
 def set_scope(user_id: str, email: str, entry: dict):
-    """Aplica `accessible_pools`/`unrestricted` — SO se a entrada os declarar.
+    """Aplica `accessible_pools` — SO se a entrada o declarar.
+
+    ⚠️ `unrestricted` saiu daqui em 2026-08-31 (AUT-15). Enquanto ele existia como
+    campo do modelo, mandá-lo era conceder; depois da remocao seria pior — pydantic
+    ignora chave desconhecida e o seed veria 200 sobre um no-op. Hoje a auth-api RECUSA
+    o campo com 422 nomeando a lapide, entao mante-lo aqui quebraria o seed em vez de
+    degradar em silencio. As duas coisas juntas sao a razao de sair.
 
     ⚠️ A guarda por PRESENCA da chave nao e detalhe: o `supervisor@` tem
     `accessible_pools` montado a mao como caso de teste (CLAUDE.md proibe desfaze-lo).
@@ -163,8 +169,6 @@ def set_scope(user_id: str, email: str, entry: dict):
     corpo = {}
     if "accessible_pools" in entry:
         corpo["accessible_pools"] = entry["accessible_pools"]
-    if "unrestricted" in entry:
-        corpo["unrestricted"] = entry["unrestricted"]
     if not corpo:
         return
     status, body = _req("PATCH", f"/auth/users/{user_id}", corpo)
@@ -215,13 +219,9 @@ DEMO_USERS = [
         # carregava 22 pools de 36 — resíduo de teste, não política ("na prática todos os
         # pools são criados dinamicamente").
         #
-        # Declarado e não deduzido de `accessible_pools: []`: a lista vazia significa
-        # "todos" pela convenção LEGADA, que o passo 3 do plano de pools inverte para
-        # "nenhum". Quem depender da convenção perde tudo naquele dia; o claim existe
-        # justamente para que a inversão não apague ninguém.
-        #
-        # ⚠️ Isto NÃO concede capacidade: desde a correção do passo 8, `unrestricted`
-        # responde só pelo eixo de ESCOPO. O que o admin pode fazer vem dos grants.
+        # `accessible_pools: []` significa NENHUM pool desde a AUT-03 — a inversão
+        # aconteceu. Quem precisa de alcance total enumera: não há mais declaração de
+        # "sem recorte" para usuário (AUT-15).
         "accessible_pools": [],
         "module_config": {
             "evaluation": {

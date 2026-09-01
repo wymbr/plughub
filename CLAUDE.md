@@ -1370,8 +1370,13 @@ base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
 > ⚠️ **A recusa por escopo NÃO é viável hoje, e isso é medição.** A primeira versão da F-C
 > devolvia 403 ao chamador escopado; `admin@plughub.local` carrega uma LISTA de 36 pools
 > (`accessible_pools is None` só acontece para principal de SERVIÇO), então ela recusava o
-> administrador de verdade para defender ZERO linha — a D14.1 ao contrário. Volta a ser
-> opção quando o admin for `unrestricted` (AUT-29).
+> administrador de verdade para defender ZERO linha — a D14.1 ao contrário.
+>
+> ⚠️ *Correção de algumas horas depois:* esta passagem dizia *"volta a ser opção quando
+> o admin for `unrestricted`"*, e o campo `unrestricted` foi **REMOVIDO** no mesmo dia
+> (AUT-15) — a dependência estava invertida. Com escopo sempre ENUMERADO, o
+> discriminador teria de ser *"este escopo cobre o universo de pools do registry?"*,
+> dependência nova e com caminho de degradação próprio. Ver AUT-29.
 >
 > Gates: `infra/test/probe_report_row_scope.sh` (A: censo AST · B: ao vivo, com controle
 > positivo obrigatório e `SEM AMOSTRA` em vez de verde por ausência) e
@@ -1559,10 +1564,15 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 > = capacidade (papéis, módulos/campos, escopo de pools).
 >
 > **O portão tem QUATRO portas, e fechar só a primeira é decorativo:** a **rota** (`/permissions`,
-> `/templates`, `/modules`, `module-config`), o **corpo** (`roles`/`accessible_pools`/`unrestricted`
-> num `POST`/`PATCH /users`, cuja porta é `config.users`), o **alvo** (editar/apagar quem *detém*
-> `config.permissions`) e o **escopo** (`POST`/`DELETE /v1/groups/{id}/supervisors`). A porta do alvo
-> existe por causa da **senha**: resetá-la é campo de PESSOA e tem de seguir permitido, então quem
+> `/templates`, `/modules`, `module-config`), o **corpo** (`roles`/`accessible_pools`
+> num `POST`/`PATCH /users`, cuja porta é `config.users`), o **alvo** (editar/apagar quem
+> *detém* `config.permissions`) e o **escopo** (`POST`/`DELETE /v1/groups/{id}/supervisors`).
+>
+> *`unrestricted` saiu do conjunto do corpo em 2026-08-31 porque saiu do MODELO (AUT-15).
+> Campo que ninguém pode mandar não precisa de portão — mas precisa **não ser aceito em
+> silêncio**: pydantic ignora chave desconhecida, então a rota o recusa com 422 nomeando.*
+>
+> A porta do alvo existe por causa da **senha**: resetá-la é campo de PESSOA e tem de seguir permitido, então quem
 > barra o *"reseto a senha do admin e entro como admin"* é a proteção do alvo, nunca a guarda de
 > corpo. A do escopo existe porque `resolve_supervisor_scope` deriva `supervised_user_ids` de quem a
 > pessoa SUPERVISIONA, e a evaluation-api consome esse claim para decidir de quem ela vê avaliações —
@@ -1605,7 +1615,8 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 > a segunda é a que não depende de memória.
 >
 > **Ausência de grants nunca é autorização** — mesma inversão de `accessible_pools`, pela mesma
-> razão. E **NÃO existe porta larga**, nem sequer o claim `unrestricted`:
+> razão. E **NÃO existe porta larga**, nem sequer o claim `unrestricted` — que desde
+> 2026-08-31 (AUT-12/13/15) não é cunhado, não é lido, e nem existe mais como campo:
 >
 > > **ESCOPO e CAPACIDADE são eixos distintos, e um claim de escopo nunca concede capacidade**
 > > *(corrigido em 2026-08-27, no mesmo dia em que foi introduzido)*. `unrestricted` responde

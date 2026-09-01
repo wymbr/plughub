@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS auth.users (
     password_hash    TEXT        NOT NULL,
     roles            TEXT[]      NOT NULL DEFAULT '{}',
     accessible_pools TEXT[]      NOT NULL DEFAULT '{}',
-    unrestricted     BOOL        NOT NULL DEFAULT FALSE,
     active           BOOL        NOT NULL DEFAULT TRUE,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -79,21 +78,39 @@ ALTER TABLE auth.users
     ADD COLUMN IF NOT EXISTS max_concurrent_sessions INT NOT NULL DEFAULT 3
 """
 
-# ── Passo 2 do plano `accessible_pools` (2026-08-27) ───────────────────────────
-# `accessible_pools = []` significa HOJE "todos os pools" — convencao implicita, lida
-# por SETE tradutores em servicos diferentes. O passo 3 inverte esse significado para
-# "nenhum pool", e sem um jeito EXPLICITO de dizer "este usuario nao tem recorte" a
-# inversao apagaria o acesso de quem depende da convencao, em silencio.
+# ══════════════════════════════════════════════════════════════════════════════
+# `unrestricted` — o campo SAIU do código em 2026-08-31 (AUT-15)
+# ══════════════════════════════════════════════════════════════════════════════
 #
-# `unrestricted` e essa declaracao. Default FALSE de proposito: NAO ha backfill.
-# Backfillar converteria em concessao declarada aquilo que hoje pode ser acidente (a
-# coluna nasce `'{}'` por default), e na direcao irreversivel. Em vez disso, cada
-# tradutor CONTA quando resolve irrestrito pelo caminho legado — e o passo 3 decide
-# com a lista na mao, nao com esperanca.
-DDL_MIGRATE_USERS_UNRESTRICTED = """
-ALTER TABLE auth.users
-    ADD COLUMN IF NOT EXISTS unrestricted BOOL NOT NULL DEFAULT FALSE
-"""
+# Ele nasceu no passo 2 do plano `accessible_pools` como a forma EXPLÍCITA de dizer
+# "este usuário não tem recorte", para que a inversão do passo 3 (`[]` = NENHUM pool)
+# não apagasse acesso em silêncio. O passo 3 aconteceu, e a decisão do dono foi que
+# **escopo de pool é sempre enumerado**: o claim saiu do token na AUT-13 e do
+# `resolve_scope` na AUT-12. Desde então o campo não é emitido, não é lido e não
+# decide nada.
+#
+# ⚠️ E ele já estava MENTINDO. `TokenUserInfo` é construído sem o campo, então o corpo
+# do login publicava `unrestricted: false` para `admin@plughub.local`, cuja linha no
+# banco diz `t`. Um valor constante vestido de dado — a família mais barata de "valor
+# plausível", porque nada fica vermelho e quem lê a API decide pelo oposto do banco.
+#
+# ── A COLUNA FÍSICA FICA, e isso é decidido ───────────────────────────────────
+#
+# `DROP COLUMN` é irreversível e apagaria as duas linhas que hoje a têm `true`. O
+# precedente da casa é o oposto e está escrito no `CLAUDE.md`: `agent_group_members` e
+# `agent_group_shifts` saíram do código em 2026-07-02 e *"podem existir fisicamente em
+# bancos antigos — o código não mais as cria/lê/escreve"*. Mesmo caminho aqui, pela
+# mesma razão da quarentena dos dois pacotes fósseis: **o erro fica visível e
+# reversível**, e apagar troca um erro documentado por um buraco mudo.
+#
+# O `CREATE TABLE` deixa de criá-la e o `ALTER ... ADD COLUMN IF NOT EXISTS` saiu — sem
+# isso a coluna voltaria a nascer a cada boot, e "removido do código" seria promessa
+# sem mecanismo. Banco legado mantém a coluna com `NOT NULL DEFAULT FALSE`, então todo
+# `INSERT` que a omite continua válido: a remoção funciona nos dois sentidos.
+#
+# Quem contava a população: 8 usuários, **2** com `true`, e **1** privilegiado SÓ por
+# ela — `probe@plughub.local`, fixture de portão. Mesma forma da medição que fechou o
+# ramo legado da evaluation-api: política contra população de fixture.
 
 # ── Language Cleanup Phase 2 — rename Portuguese ABAC field keys in module_config
 # Each UPDATE is idempotent: the WHERE clause only matches rows that still carry
@@ -254,7 +271,6 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_MODULE_REGISTRY)
             await conn.execute(DDL_MIGRATE_USERS_MODULE_CONFIG)
             await conn.execute(DDL_MIGRATE_USERS_MAX_CONCURRENT)
-            await conn.execute(DDL_MIGRATE_USERS_UNRESTRICTED)
             # Language Cleanup Phase 2 — rename Portuguese ABAC field names
             await conn.execute(DDL_MIGRATE_ABAC_RELATORIO)
             await conn.execute(DDL_MIGRATE_ABAC_RECURSOS)
@@ -285,19 +301,18 @@ async def create_user(
     roles: list[str],
     accessible_pools: list[str],
     max_concurrent_sessions: int = 3,
-    unrestricted: bool = False,
 ) -> dict[str, Any]:
     row = await pool.fetchrow(
         """
         INSERT INTO auth.users
             (tenant_id, email, password_hash, name, roles, accessible_pools,
-             max_concurrent_sessions, unrestricted)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id, tenant_id, email, name, roles, accessible_pools, unrestricted,
+             max_concurrent_sessions)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, tenant_id, email, name, roles, accessible_pools,
                   max_concurrent_sessions, active, created_at, updated_at
         """,
         tenant_id, email, password_hash, name, roles, accessible_pools,
-        max_concurrent_sessions, unrestricted,
+        max_concurrent_sessions,
     )
     return dict(row)
 
@@ -344,7 +359,7 @@ async def list_users(
 ) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
-        SELECT id, tenant_id, email, name, roles, accessible_pools, unrestricted,
+        SELECT id, tenant_id, email, name, roles, accessible_pools,
                module_config, max_concurrent_sessions, active, created_at, updated_at
         FROM auth.users
         WHERE tenant_id = $1
@@ -366,7 +381,6 @@ async def update_user(
     accessible_pools: list[str] | None = None,
     active: bool | None = None,
     max_concurrent_sessions: int | None = None,
-    unrestricted: bool | None = None,
 ) -> dict[str, Any] | None:
     sets = []
     params: list[Any] = []
@@ -384,8 +398,6 @@ async def update_user(
         sets.append(f"active = ${i}"); params.append(active); i += 1
     if max_concurrent_sessions is not None:
         sets.append(f"max_concurrent_sessions = ${i}"); params.append(max_concurrent_sessions); i += 1
-    if unrestricted is not None:
-        sets.append(f"unrestricted = ${i}"); params.append(unrestricted); i += 1
 
     if not sets:
         return await get_user_by_id(pool, user_id)
@@ -397,7 +409,7 @@ async def update_user(
         f"""
         UPDATE auth.users SET {", ".join(sets)}
         WHERE id = ${i}
-        RETURNING id, tenant_id, email, name, roles, accessible_pools, unrestricted,
+        RETURNING id, tenant_id, email, name, roles, accessible_pools,
                   module_config, max_concurrent_sessions, active, created_at, updated_at
         """,
         *params,

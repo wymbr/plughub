@@ -161,11 +161,21 @@ else
   info "administracao continuaria concedendo."
 fi
 
+# ⚠️ Este caso mudou de VEREDICTO em 2026-08-31 (AUT-15), nao de proposicao. Ele exigia
+# 403 (campo de CAPACIDADE sem `config.permissions`), e o campo `unrestricted` foi
+# REMOVIDO do produto — pydantic ignora chave desconhecida, entao a versao antiga
+# passaria a ver 200 e o probe reprovaria por um motivo que parece dele.
+#
+# O 422 e mais forte que o 403 que substitui: o 403 dizia "voce poderia, com o grant
+# certo"; o 422 diz que ninguem pode, porque a coisa nao existe. A lapide vive em
+# `models.py` e existe justamente para a recusa NOMEAR o motivo.
 C4b="$(st "$T_UA" PATCH "/users/$ALVO_ID" '{"unrestricted":true}')"
-if [ "$C4b" = "403" ]; then
-  ok "S4b PATCH com unrestricted recusado (403)"
+if [ "$C4b" = "422" ]; then
+  ok "S4b PATCH com unrestricted RECUSADO pela lapide (422)"
+elif [ "$C4b" = "200" ]; then
+  bad "S4b unrestricted aceito em SILENCIO (200) — a lapide sumiu do models.py"
 else
-  bad "S4b ligou o claim irrestrito sem config.permissions (HTTP $C4b)"
+  bad "S4b esperado 422 (lapide), veio $C4b"
 fi
 
 # ── S4c — o campo que a oferta de escopo da AUT-10 envia ─────────────────────

@@ -579,11 +579,41 @@ class TestGuardaDeAlvo:
             r = c.delete(f"/auth/users/{_SAMPLE_USER['id']}", headers=_perms_headers())
         assert r.status_code == 403
 
-    def test_unrestricted_tambem_torna_o_alvo_protegido(self, client):
-        """`_is_privileged` olha DOIS fatos, e o segundo é o claim de escopo."""
+    def test_linha_legada_com_unrestricted_NAO_protege_mais_o_alvo(self, client):
+        """TESTEMUNHA da AUT-15 — invertida, nunca apagada.
+
+        Este caso afirmava o oposto (*"`_is_privileged` olha DOIS fatos"*), e foi o
+        disjunto `unrestricted` que saiu em 2026-08-31: desde a AUT-12/AUT-13 o campo
+        não é emitido, não é lido e não decide escopo nenhum, então ele tornava alguém
+        intocável por deter uma flag INERTE — mais difícil de administrar que um par,
+        sem que a flag lhe desse poder algum.
+
+        Apagar o caso deixaria a mudança sem testemunha, e a direção importa: remover
+        um disjunto de um predicado de SEGURANÇA o enfraquece. Invertido, ele
+        documenta a decisão e denuncia a volta silenciosa do ramo.
+
+        População contada antes de decidir, nunca depois: 8 usuários, 2 com `true`, e
+        **1** privilegiado só por ela — `probe@plughub.local`, fixture de portão.
+
+        O par indispensável é `test_o_disjunto_que_FICA_ainda_protege`: sem ele este
+        caso passaria num mundo onde `_is_privileged` sempre devolve False, que é o
+        defeito grave.
+        """
         c, _ = client
         alvo = {**_SAMPLE_USER, "module_config": {}, "unrestricted": True}
         with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=alvo)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
+            r = c.delete(f"/auth/users/{_SAMPLE_USER['id']}", headers=_admin_headers())
+        assert r.status_code == 204
+
+    def test_o_disjunto_que_FICA_ainda_protege(self, client):
+        """Controle positivo do caso acima, na MESMA rodada.
+
+        `config.permissions` no alvo continua barrando quem só administra pessoas — é
+        este predicado que impede o *"reseto a senha do admin e entro como admin"*, e
+        o caso acima não significaria nada sem ele ao lado.
+        """
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=self._PRIVILEGIADO)),              patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
             r = c.delete(f"/auth/users/{_SAMPLE_USER['id']}", headers=_admin_headers())
         assert r.status_code == 403
 

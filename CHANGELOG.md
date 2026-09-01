@@ -1,5 +1,125 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-08-31 — A lápide do `unrestricted` (AUT-15)
+
+O campo saiu da persistência e da API do auth-api. O caminho vivo já tinha fechado — o
+claim deixou de ser cunhado (AUT-13) e o ramo saiu do `resolve_scope` (AUT-12) —, então
+a expectativa era uma remoção mecânica. Foram **três** coisas que só apareceram medindo,
+e nenhuma delas é arrumação.
+
+### (a) O campo já estava MENTINDO
+
+`TokenUserInfo` é construído sem ele. O corpo do login publicava `unrestricted: false`
+para `admin@plughub.local`, cuja linha no banco diz `t`. Um valor constante vestido de
+dado — a família mais barata de *valor plausível*: nada fica vermelho, e quem lê a API
+para decidir algo recebe o oposto do banco.
+
+### (b) Ele participava de um predicado de SEGURANÇA
+
+`_is_privileged` decide quem é **intocável por quem só administra pessoas** — é o que
+impede o *"reseto a senha do admin e entro como admin"* que o split de 2026-08-27
+existe para fechar. Tirar um disjunto de um predicado assim o **enfraquece**, então a
+remoção precisa de razão, não de arrumação.
+
+A razão é que o disjunto protegia um **fantasma**: desde a AUT-12/13 o campo não é
+emitido, não é lido e não decide escopo nenhum, então ele tornava alguém mais difícil de
+administrar sem lhe dar poder algum. E a população foi contada **antes** de decidir: 8
+usuários, 2 com `true`, e **1** privilegiado só por ela — `probe@plughub.local`, fixture
+de portão. Mesma forma da medição que fechou o ramo legado da evaluation-api.
+
+O disjunto que fica é o real: deter `config.permissions`. O teste que afirmava o
+contrário foi **invertido, nunca apagado**, e ganhou um controle positivo ao lado — sem
+ele, o caso invertido passaria num mundo onde `_is_privileged` sempre devolve `False`,
+que é o defeito grave.
+
+### (c) Remover um campo de ENTRADA não é neutro — daí a lápide
+
+Pydantic ignora chave desconhecida por default. Medido logo após a remoção: `PATCH
+{"unrestricted": true}` → **200**, sobre um no-op. Uma concessão que o chamador acredita
+ter feito. E havia dois remetentes reais: `infra/seed/seed_auth.py` e o `S4b` do
+`probe_config_permissions_split.sh`, que exigia 403 e passaria a ver 200.
+
+O precedente da casa é recusar nomeando, e está escrito em `/reports/resources/tokens`:
+*"Parâmetro desconhecido é ignorado sem aviso, e `pool_id` não é desconhecido: ele
+EXISTE em todas as rotas vizinhas."* Aqui é mais forte — o campo existia **neste**
+endpoint até hoje.
+
+- **422, não 403.** O 403 diria *"você poderia, com o grant certo"*, e é falso: ninguém
+  pode, porque a coisa não existe. O código de status é parte da mensagem.
+- **O tipo anotado é `Any`, não `None`.** Com `None` o pydantic reprova pelo TIPO antes
+  de chamar o validador e o cliente recebe `"Input should be None"` — recusa correta com
+  a razão perdida, que é a degradação muda em miniatura. Foi exatamente o que saiu da
+  primeira versão da lápide.
+
+**A coluna física fica** (AUT-32). `DROP COLUMN` é irreversível e apagaria as 2 linhas
+que a têm `true`; o precedente é `agent_group_members`/`agent_group_shifts` (2026-07-02).
+O `CREATE TABLE` deixou de criá-la e o `ALTER ... ADD COLUMN IF NOT EXISTS` saiu — sem
+isso ela renasceria a cada boot e *"removido do código"* seria promessa sem mecanismo.
+
+### O helper de teste entregava o OPOSTO do que promete, e derrubava três gates
+
+`mk_unrestricted_principal.sh` criava `unrestricted: true` + lista **vazia** — o único
+arranjo que sobrevivia à inversão do passo 3 *quando foi escrito*. A AUT-13 tirou o claim
+do token e a AUT-03 fez `[]` significar NENHUM pool; juntas, converteram *"irrestrito por
+declaração"* em **escopo vazio**.
+
+O `probe_unrestricted_claim.sh` media isso e dizia *"irrestrito vê MENOS que o escopado
+(0 < 2) — a declaração ESTREITA"*. A leitura óbvia — *"alguém quebrou o escopo"* — era
+falsa. ⚠️ **É o modo de falha mais caro de um helper de teste**: HTTP 200, nome
+tranquilizador, e um principal que não serve — o gate consumidor reprova por um motivo
+que parece dele. Três gates estavam assim: `gate_sla_segment_target`,
+`gate_queue_report_per_wait` e `probe_process_chip_scoped_marker`.
+
+Hoje o helper **enumera**, lendo os pools do agent-registry (pool novo entra sozinho na
+próxima execução). Dois defeitos apareceram no próprio conserto:
+
+- o agent-registry filtra tenant pelo **header `x-tenant-id`**, não por query param —
+  `?tenant_id=` sai **200 com `{"pools":[],"total":0}`**, indistinguível de *"o tenant
+  não tem pool"*. Quem denunciou foi o ramo `INCONCLUSIVO`, na **primeira** execução: sem
+  ele o helper teria criado um principal de escopo vazio outra vez;
+- a conferência comparava `$N_POOLS` — o número que o script **pretendia** escrever — e
+  passava com a escrita mutada. *"Foi escrito" não é "mudou"*: hoje ela **lê de volta**.
+
+Resultado: `gate_queue_report_per_wait` INCONCLUSIVO → **VERDE**;
+`probe_process_chip_scoped_marker` deixou de acusar `irrestrito=0` e agora pede o que
+realmente precisa (um usuário de escopo estreito). `gate_sla_segment_target` continua
+vermelho **por outra causa**, medida na mesma rodada e registrada como AUT-31: falha no
+próprio tenant sintético, enquanto a rota devolve o mesmo número (78 séries · 11 pools)
+para o admin e para o principal de serviço em `tenant_demo`.
+
+### O gate, invertido — terceira ocorrência do padrão no mesmo dia
+
+`probe_unrestricted_claim.sh` provava que o claim **era** cunhado: era o pré-requisito do
+passo 3. O passo 3 aconteceu e o dono decidiu o **oposto** do pré-requisito. Apagar
+deixaria o caminho livre para a porta larga voltar sem nada acusar, então as proposições
+foram invertidas (mesma postura de AUT-27 e AUT-30):
+
+- **N1** o claim não volta ao token — e o **refresh é ramo próprio**, porque o modo de
+  falha clássico de claim é funcionar por uma hora e voltar na renovação, já que os dois
+  caminhos montam o payload em lugares diferentes;
+- **N2** a API recusa **nomeando**, com controle positivo na mesma rodada (o mesmo corpo
+  sem o campo cria);
+- **N3** o principal dos gates alcança o tenant inteiro — sem ele N1 e N2 passariam num
+  mundo onde ninguém enxerga nada, que é exatamente o estado em que o arquivo foi
+  encontrado.
+
+Falseável: mutação no tipo da lápide → N2b vermelho; mutação no helper → N3 vermelho com
+`principal=0 pools (lidos de volta)`.
+
+⚠️ Registro de método: na primeira tentativa a mutação foi revertida no **fonte** e não
+na **imagem**, e o gate seguiu vermelho por um artefato velho. Mesma lição de sempre —
+pergunte ao artefato, não ao arquivo.
+
+66 testes verdes na auth-api; seis portões vizinhos verdes.
+
+### Correção de uma linha do ledger escrita hoje mesmo
+
+A **AUT-29** dizia `bloqueado por AUT-15`, presumindo que a AUT-15 entregaria o claim
+`unrestricted` ao admin. A AUT-15 é o **oposto**: a remoção do campo. Escrevi a linha
+errada ao fechar a AUT-01, horas antes — a dependência estava invertida. O fato medido
+continua de pé (o admin é um chamador escopado de 36 pools), mas o caminho para
+destravá-la não é este.
+
 ## 2026-08-31 — Recorte de linha nos AGREGADOS de `/reports` (AUT-01)
 
 **EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos.** O primeiro fechou em 2026-08-29;

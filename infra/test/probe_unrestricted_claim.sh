@@ -1,222 +1,155 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# probe_unrestricted_claim.sh — Passo 2 do plano `accessible_pools` (2026-08-27)
+# probe_unrestricted_claim.sh — INVERTIDO em 2026-08-31 (AUT-15)
 # ==============================================================================
 #
-# O QUE ESTE GATE PROVA
-# ---------------------
-# Hoje "accessible_pools == []" significa "todos os pools" — convencao IMPLICITA,
-# lida por sete tradutores em servicos diferentes. O passo 3 inverte esse
-# significado para "nenhum pool". Sem uma forma EXPLICITA de dizer "este usuario
-# nao tem recorte", a inversao apaga o acesso de quem depende da convencao, em
-# silencio. O claim "unrestricted: true" e essa forma.
+# ── O que ele media, e por que virou do avesso ────────────────────────────────
 #
-# O QUE O DEIXARIA VERMELHO
-# -------------------------
-#   S1  o claim nao ser cunhado no login;
-#   S2  o claim ser cunhado SO no login e nao no refresh — o modo de falha classico
-#       de claim novo: funciona por uma hora e degrada mudo na renovacao;
-#   S3  nao existir principal irrestrito POR DECLARACAO. (Medido em 2026-08-27: o
-#       admin do demo tem 22 pools EXPLICITOS, nao a lista vazia — nunca dependeu do
-#       legado, e como o ramo restritivo vence a lista, conceder-lhe o claim seria
-#       INERTE. Irrestrito exige as duas coisas: unrestricted=true E lista vazia.);
-#   S4  a declaracao nao ter DENTES (irrestrito nao ver mais que um principal ESCOPADO),
-#       ou o filtro de pool ter parado de valer. Sao DUAS proposicoes e dois numeros:
-#       sem a segunda, a primeira passaria num mundo onde o filtro nao roda. O caso
-#       'irrestrito == admin' e ramo PROPRIO (INCONCLUSIVO): 'nao ha dado fora do
-#       escopo do admin nesta janela' nao e 'a declaracao nao vale'.
+# Nasceu no passo 2 do plano `accessible_pools` (2026-08-27) para provar que o claim
+# `unrestricted` ERA cunhado, que sobrevivia ao refresh, que existia um principal
+# irrestrito POR DECLARACAO e que essa declaracao tinha DENTES. Era o pre-requisito da
+# inversao do passo 3 (`[]` = NENHUM pool): sem uma forma explicita de dizer "este
+# usuario nao tem recorte", a inversao apagaria acesso em silencio.
 #
-# S5 nao reprova: e o INVENTARIO do ramo legado, insumo do passo 3.
+# O passo 3 aconteceu, e o dono decidiu o oposto do pre-requisito: **escopo de pool e
+# sempre ENUMERADO**. O claim saiu do token (AUT-13), o ramo saiu do `resolve_scope`
+# (AUT-12) e o campo saiu da persistencia e da API (AUT-15).
 #
-# INCONCLUSIVO e ramo proprio e conta como falha do INSTRUMENTO (fail=1) — um gate
-# que sai 0 sem ter medido compra confianca sem dar nada.
+# ⚠️ E o gate ficou VERMELHO acusando o contrario do que acontecia. Ele dizia
+# *"irrestrito ve MENOS que o escopado (0 < 2) - a declaracao ESTREITA"*, e a leitura
+# obvia — "alguem quebrou o escopo" — era falsa: o principal chamado irrestrito passara
+# a ser um principal de escopo VAZIO, porque o `mk_unrestricted_principal.sh` continuava
+# criando `unrestricted:true` + lista vazia, arranjo que a AUT-03 converteu em "nenhum
+# pool". Instrumento fiel ao proprio ramo, publicando um defeito que nao existe — a
+# mesma familia da AUT-27 e da AUT-30, terceira ocorrencia no mesmo dia.
+#
+# ── O que ele mede AGORA ──────────────────────────────────────────────────────
+#
+# Apagar deixaria o caminho livre para a porta larga voltar sem nada acusar, que e a
+# postura ja aplicada duas vezes hoje. Entao as proposicoes foram INVERTIDAS, e sao as
+# tres que a remocao precisa que continuem verdadeiras:
+#
+#   N1  o token NAO carrega `unrestricted` — nem no login, nem no refresh (o modo de
+#       falha classico e o campo voltar por UM dos dois caminhos);
+#   N2  a API RECUSA o campo, nomeando (422), em vez de aceitar em silencio: pydantic
+#       ignora chave desconhecida, e um 200 sobre no-op e uma concessao que o chamador
+#       acredita ter feito;
+#   N3  o principal que os gates chamam de "irrestrito" ALCANCA o tenant inteiro —
+#       hoje por enumeracao. Sem N3 os outros dois passariam num mundo onde ninguem
+#       enxerga nada, que e exatamente o estado em que este arquivo foi encontrado.
+#
+# Veredicto: 0 = VERDE · 1 = DEFEITO · 2 = INCONCLUSIVO (pre-condicao falhou).
 # ==============================================================================
 set -uo pipefail
-
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
+cd "$HERE/../.." || { echo "INCONCLUSIVO: raiz do repo nao encontrada"; exit 2; }
 # shellcheck source=/dev/null
 source "$HERE/_auth.sh"
 
-ANALYTICS="${ANALYTICS:-http://localhost:3500}"
-SUP_EMAIL="${SUP_EMAIL:-supervisor@plughub.local}"
-SUP_PASS="${SUP_PASS:-changeme_supervisor}"
+FAIL=0
+ok()  { printf '  \033[32mOK\033[0m           %s\n' "$1"; }
+bad() { printf '  \033[31mFALHA\033[0m        %s\n' "$1"; FAIL=1; }
+inc() { printf '  \033[33mINCONCLUSIVO\033[0m %s\n' "$1"; exit 2; }
 
-fail=0
-ok()   { printf '  \033[32mOK\033[0m           %s\n' "$1"; }
-bad()  { printf '  \033[31mFALHA\033[0m        %s\n' "$1"; fail=1; }
-inc()  { printf '  \033[33mINCONCLUSIVO\033[0m %s\n' "$1"; fail=1; }
-info() { printf '               %s\n' "$1"; }
-sec()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
+command -v jq >/dev/null || inc "jq ausente"
 
-# Payload de um JWT (base64url). Sem verificar assinatura: aqui so interessa
-# QUAIS claims viajaram, e a verificacao e do servico, nao do probe.
-jwt_payload() {
-  local p="${1#*.}"
-  p="${p%%.*}"
-  p="$(printf '%s' "$p" | tr '_-' '/+')"
-  case $(( ${#p} % 4 )) in 2) p="$p==";; 3) p="$p=";; esac
-  printf '%s' "$p" | base64 -d 2>/dev/null
+claims() {  # $1 = jwt
+  local p; p="$(printf '%s' "$1" | cut -d. -f2)"
+  p="$p$(printf '%*s' $(( (4 - ${#p} % 4) % 4 )) '' | tr ' ' '=')"
+  printf '%s' "$p" | tr '_-' '/+' | base64 -d 2>/dev/null
 }
 
-login_json() {  # $1=email $2=senha
-  curl -s -X POST "$AUTH/login" -H 'content-type: application/json' \
-    -d "{\"email\":\"$1\",\"password\":\"$2\",\"tenant_id\":\"$TENANT\"}"
-}
+echo "== probe_unrestricted_claim (INVERTIDO — AUT-15) =="
+echo
 
-# ─────────────────────────────────────────────────────────────────────────────
-sec "S1 - o claim e CUNHADO no login"
+echo "N1 - o token NAO carrega o claim, nem no login nem no refresh"
+LOGIN="$(curl -s -X POST "$AUTH/login" -H 'content-type: application/json' \
+  -d "{\"email\":\"$_PH_EMAIL\",\"password\":\"$_PH_PASS\",\"tenant_id\":\"$TENANT\"}")"
+ACC="$(printf '%s' "$LOGIN" | jq -r '.access_token // empty')"
+REF="$(printf '%s' "$LOGIN" | jq -r '.refresh_token // empty')"
+[ -n "$ACC" ] || inc "login do admin falhou — sem token nao ha o que medir"
 
-LJ="$(login_json "$_PH_EMAIL" "$_PH_PASS")"
-ACCESS="$(printf '%s' "$LJ" | jq -r '.access_token // empty')"
-REFRESH="$(printf '%s' "$LJ" | jq -r '.refresh_token // empty')"
-
-if [ -z "$ACCESS" ]; then
-  inc "login de $_PH_EMAIL falhou — sem token nao ha o que medir: $(printf '%s' "$LJ" | head -c 160)"
+if [ "$(claims "$ACC" | jq 'has("unrestricted")')" = "false" ]; then
+  ok "N1a login: o claim nao esta no JWT"
 else
-  PAY="$(jwt_payload "$ACCESS")"
-  # Testemunha de presenca: se accessible_pools tambem sumir, quem falhou foi o
-  # decode, nao a cunhagem. Sem ela, "chave ausente" e indistinguivel de "parse quebrou".
-  if ! printf '%s' "$PAY" | jq -e 'has("accessible_pools")' >/dev/null 2>&1; then
-    inc "payload sem nem accessible_pools — o decode e que falhou, nao o claim"
-  elif printf '%s' "$PAY" | jq -e 'has("unrestricted")' >/dev/null 2>&1; then
-    ok "claim unrestricted presente no access token do login"
+  bad 'N1a o claim unrestricted voltou ao JWT de login'
+fi
+
+# O refresh e ramo PROPRIO: o modo de falha classico de claim e funcionar por uma hora
+# e voltar na renovacao, porque os dois caminhos montam o payload em lugares diferentes.
+if [ -n "$REF" ]; then
+  ACC2="$(curl -s -X POST "$AUTH/refresh" -H 'content-type: application/json' \
+    -d "{\"refresh_token\":\"$REF\"}" | jq -r '.access_token // empty')"
+  if [ -z "$ACC2" ]; then
+    bad "N1b o refresh nao devolveu token — nao foi possivel medir o segundo caminho"
+  elif [ "$(claims "$ACC2" | jq 'has("unrestricted")')" = "false" ]; then
+    ok "N1b refresh: o claim tambem nao esta la"
   else
-    bad "claim unrestricted AUSENTE no login (a testemunha accessible_pools esta la)"
+    bad "N1b o claim voltou pelo REFRESH (o login esta limpo e a renovacao nao)"
   fi
+else
+  bad "N1b login nao devolveu refresh_token — o segundo caminho ficou sem medida"
 fi
 
-# ─────────────────────────────────────────────────────────────────────────────
-sec "S2 - o claim sobrevive ao REFRESH"
-info "ramo que degrada mudo: token vive 1h, entao um claim so-no-login funciona"
-info "a tarde inteira e some na renovacao."
-
-if [ -z "${REFRESH:-}" ]; then
-  inc "login nao devolveu refresh_token"
+echo
+echo "N2 - a API RECUSA o campo NOMEANDO, em vez de aceitar calada"
+TOK="$(plughub_token)"
+[ -n "$TOK" ] || inc "sem token de admin"
+ALVO="probe_lapide_$$@plughub.local"
+RESP="$(curl -s -w '\n%{http_code}' -X POST "$AUTH/users" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $TOK" \
+  -d "{\"tenant_id\":\"$TENANT\",\"email\":\"$ALVO\",\"password\":\"lapide_probe_123\",\"unrestricted\":true}")"
+CODE="$(printf '%s' "$RESP" | tail -1)"
+CORPO="$(printf '%s' "$RESP" | sed '$d')"
+if [ "$CODE" = "422" ]; then
+  ok "N2a POST com o campo removido = 422"
+  case "$(printf '%s' "$CORPO" | jq -r '.detail[0].msg // .detail // ""')" in
+    *AUT-15*|*REMOVIDO*) ok "N2b a recusa NOMEIA o motivo" ;;
+    *) bad 'N2b recusou sem dizer por que — a lapide perdeu a mensagem (tipo None em vez de Any?)' ;;
+  esac
+elif [ "$CODE" = "200" ] || [ "$CODE" = "201" ]; then
+  bad "N2a campo aceito em SILENCIO ($CODE) — pydantic ignorou e o chamador acha que concedeu"
+  ID="$(printf '%s' "$CORPO" | jq -r '.id // empty')"
+  [ -n "$ID" ] && curl -s -o /dev/null -X DELETE "$AUTH/users/$ID" -H "Authorization: Bearer $TOK"
 else
-  RJ="$(curl -s -X POST "$AUTH/refresh" -H 'content-type: application/json' \
-        -d "{\"refresh_token\":\"$REFRESH\"}")"
-  RACC="$(printf '%s' "$RJ" | jq -r '.access_token // empty')"
-  if [ -z "$RACC" ]; then
-    inc "refresh falhou: $(printf '%s' "$RJ" | head -c 160)"
-  elif printf '%s' "$(jwt_payload "$RACC")" | jq -e 'has("unrestricted")' >/dev/null 2>&1; then
-    ok "claim presente tambem no token renovado"
+  bad "N2a esperado 422, veio $CODE"
+fi
+
+# Controle positivo na MESMA rodada: sem ele o N2 passaria num mundo onde a rota
+# simplesmente nao cria mais usuario nenhum.
+RESP2="$(curl -s -w '\n%{http_code}' -X POST "$AUTH/users" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $TOK" \
+  -d "{\"tenant_id\":\"$TENANT\",\"email\":\"ok_$ALVO\",\"password\":\"lapide_probe_123\"}")"
+CODE2="$(printf '%s' "$RESP2" | tail -1)"
+if [ "$CODE2" = "200" ] || [ "$CODE2" = "201" ]; then
+  ok "N2c controle positivo: o MESMO corpo sem o campo cria ($CODE2)"
+  ID2="$(printf '%s' "$RESP2" | sed '$d' | jq -r '.id // empty')"
+  [ -n "$ID2" ] && curl -s -o /dev/null -X DELETE "$AUTH/users/$ID2" -H "Authorization: Bearer $TOK"
+else
+  bad "N2c a rota nao cria nem sem o campo ($CODE2) — o N2a passou pelo motivo errado"
+fi
+
+echo
+echo "N3 - o principal 'irrestrito' dos gates ALCANCA o tenant inteiro"
+SAIDA="$(bash "$HERE/mk_unrestricted_principal.sh" 2>&1)"; RC=$?
+if [ "$RC" -eq 2 ]; then
+  inc "mk_unrestricted_principal nao pode rodar: $(printf '%s' "$SAIDA" | head -1)"
+elif [ "$RC" -ne 0 ]; then
+  bad "mk_unrestricted_principal falhou:"; printf '%s\n' "$SAIDA" | tail -3 | sed 's/^/               /'
+else
+  LINHA="$(printf '%s' "$SAIDA" | grep 'conferencia:' || true)"
+  N_P="$(printf '%s' "$LINHA" | sed -n 's/.*principal=\([0-9]*\).*/\1/p')"
+  N_A="$(printf '%s' "$LINHA" | sed -n 's/.*admin=\([0-9]*\).*/\1/p')"
+  if [ -z "${N_P:-}" ] || [ "${N_P:-0}" -eq 0 ]; then
+    bad "o principal ficou com ${N_P:-?} pools — e o estado de escopo VAZIO com nome de irrestrito"
+  elif [ "${N_P:-0}" -ge "${N_A:-0}" ]; then
+    ok "N3 principal=$N_P pools · admin=$N_A pools"
   else
-    bad "claim no login e AUSENTE no refresh — cunhagem so num dos dois caminhos"
+    bad "N3 o principal ($N_P) alcanca MENOS que o admin ($N_A)"
   fi
 fi
 
-# ─────────────────────────────────────────────────────────────────────────────
-sec "S3 - existe um principal IRRESTRITO POR DECLARACAO"
-info "irrestrito de verdade exige DUAS coisas: unrestricted=true E lista vazia — com"
-info "a ordem restritivo-vence, o claim sobre uma lista nao-vazia e INERTE."
-info ""
-info "Historico: este principal foi criado porque o admin do demo tinha 22 pools"
-info "EXPLICITOS e por isso nao servia de cobaia. O dono decidiu em 2026-08-27 que"
-info "aqueles 22 eram residuo de teste, e o admin tambem virou irrestrito — mas o"
-info "probe@ FICA: um gate que depende do principal de producao estar configurado de"
-info "um jeito especifico volta a quebrar na proxima decisao de config."
-
-PROBE_EMAIL="${PROBE_EMAIL:-probe@plughub.local}"
-PROBE_PASS="${PROBE_PASS:-changeme_probe}"
-
-PJ="$(login_json "$PROBE_EMAIL" "$PROBE_PASS")"
-PROBE_TOK="$(printf '%s' "$PJ" | jq -r '.access_token // empty')"
-
-if [ -z "$PROBE_TOK" ]; then
-  bad "principal irrestrito ($PROBE_EMAIL) nao existe ou nao autentica"
-  info "criar com: bash infra/test/mk_unrestricted_principal.sh   (ou POST $AUTH/users com"
-  info "           accessible_pools=[] e unrestricted=true)"
-else
-  PP="$(jwt_payload "$PROBE_TOK")"
-  PU="$(printf '%s' "$PP" | jq -r 'if has("unrestricted") then (.unrestricted|tostring) else "ausente" end')"
-  PN="$(printf '%s' "$PP" | jq -r '.accessible_pools | length')"
-  if [ "$PU" = "true" ] && [ "$PN" = "0" ]; then
-    ok "$PROBE_EMAIL declara unrestricted=true com lista vazia"
-  elif [ "$PU" != "true" ]; then
-    bad "$PROBE_EMAIL tem unrestricted=$PU — nao e principal irrestrito"
-  else
-    bad "$PROBE_EMAIL declara unrestricted=true mas lista $PN pools: o restritivo"
-    info "vence, entao a declaracao fica inerte. Zerar accessible_pools."
-  fi
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────
-sec "S4 - a declaracao tem DENTES, e o escopo AINDA vale"
-info "duas proposicoes distintas, dois numeros — sem a segunda, a primeira passaria"
-info "num mundo onde o filtro simplesmente nao roda."
-
-count_pools() {  # $1 = token -> pools DISTINTOS visiveis na serie
-  curl -s "$ANALYTICS/reports/pools/queue?tenant_id=$TENANT" \
-       -H "Authorization: Bearer $1" \
-    | jq -r 'try (.data.series | map(.pool_id) | unique | length) catch -1' 2>/dev/null
-}
-
-N_ADMIN="$(count_pools "${ACCESS:-x}")"
-N_PROBE="$(count_pools "${PROBE_TOK:-x}")"
-SUP_TOK="$(login_json "$SUP_EMAIL" "$SUP_PASS" | jq -r '.access_token // empty')"
-N_SUP=""
-[ -n "$SUP_TOK" ] && N_SUP="$(count_pools "$SUP_TOK")"
-
-# ⚠️ O COMPARADOR MUDOU em 2026-08-27. Era o admin, "o escopado com 22 pools" — e o
-# dono decidiu que aqueles 22 eram residuo de teste, entao o admin virou IRRESTRITO
-# declarado. Comparar dois irrestritos da sempre o mesmo numero e cai no ramo
-# INCONCLUSIVO para sempre, por nao-defeito. O comparador certo e quem realmente tem
-# recorte: o supervisor.
-info "pools distintos: irrestrito=$N_PROBE  escopado($SUP_EMAIL)=${N_SUP:-?}  admin=$N_ADMIN"
-
-bad_shape() { case "${1:-}" in ""|-1|null) return 0;; *) return 1;; esac; }
-
-if bad_shape "$N_PROBE" || bad_shape "${N_SUP:-}"; then
-  inc "/reports/pools/queue nao devolveu .data.series para irrestrito ou escopado"
-  info "Sem os dois numeros nao ha comparacao — e um verde aqui seria vacuo."
-elif [ "$N_PROBE" -gt "$N_SUP" ]; then
-  ok "irrestrito ve MAIS que o escopado ($N_PROBE > $N_SUP) - a declaracao foi exercida"
-elif [ "$N_PROBE" -lt "$N_SUP" ]; then
-  bad "irrestrito ve MENOS que o escopado ($N_PROBE < $N_SUP) - a declaracao ESTREITA"
-else
-  # Ramo proprio, e nao e o mesmo que reprovar: 'nao ha dado fora do escopo do
-  # escopado nesta janela' e diferente de 'a declaracao nao vale'. Exposicao e dano
-  # sao grandezas separadas; declarar OK aqui seria afirmar o que nao se mediu.
-  inc "irrestrito e escopado veem o MESMO ($N_PROBE) - nenhum dado fora dos pools de"
-  info "$SUP_EMAIL nesta janela, entao a declaracao existe mas NAO foi exercida."
-  info "Alargue a janela do relatorio e repita antes de concluir qualquer coisa."
-fi
-
-# Testemunha do OUTRO lado: o admin tambem e irrestrito desde 2026-08-27, entao ele
-# tem de ver o mesmo que o probe. Se vir menos, alguem lhe devolveu recorte sem querer.
-if bad_shape "$N_ADMIN"; then
-  inc "login/resposta do admin falhou - sem ele nao ha a segunda testemunha"
-elif [ "$N_ADMIN" -eq "$N_PROBE" ]; then
-  ok "admin (tambem irrestrito) ve o mesmo que o probe ($N_ADMIN) - coerente"
-else
-  bad "admin ve $N_ADMIN e o probe ve $N_PROBE, e AMBOS sao irrestritos"
-  info "Dois principais sem recorte devem ver a mesma populacao. Divergir significa"
-  info "que um deles ganhou recorte por outra via."
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────
-sec "S5 - INVENTARIO do ramo legado (mede, nao reprova)"
-info "cada linha aqui e um portador da convencao implicita [] = todos, e e"
-info "exatamente a lista que o passo 3 precisa ter antes de inverter."
-
-LOG="$(cd "$ROOT" && docker compose -f docker-compose.demo.yml logs --since 5m analytics-api 2>/dev/null)"
-if [ -z "$LOG" ]; then
-  info "(logs do analytics-api indisponiveis nesta execucao — inventario nao medido)"
-else
-  N_LEG="$(printf '%s' "$LOG" | grep -c 'LEGADO_POOLS_VAZIO' || true)"
-  info "ocorrencias nos ultimos 5 min: $N_LEG"
-  if [ "${N_LEG:-0}" -gt 0 ]; then
-    printf '%s' "$LOG" | grep -o 'claim_presente=[A-Za-z]* sub=[^ ]*' | sort | uniq -c | sed 's/^/               /'
-    info "claim_presente=False -> token velho, ou emissor que nao conhece o claim"
-    info "claim_presente=True  -> usuario sem escopo declarado: DECISAO de alguem"
-  fi
-fi
-
-printf '\n'
-if [ "$fail" -eq 0 ]; then
-  printf '\033[32mGATE VERDE\033[0m - irrestrito e declarado, o refresh concorda, o escopo vale.\n'
-else
-  printf '\033[31mGATE VERMELHO\033[0m - ver secoes acima.\n'
-fi
-exit "$fail"
+echo
+echo "====================="
+[ "$FAIL" -eq 0 ] && { echo "VERDE — o campo saiu, a recusa nomeia, e o principal enxerga o tenant"; exit 0; }
+echo "VERMELHO"; exit 1

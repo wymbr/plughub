@@ -112,14 +112,37 @@ _PERMS_WRITE = _require_config("permissions", write=True)
 # ⚠️ `password` NAO esta aqui de proposito — resetar senha e trabalho legitimo de
 # quem administra pessoas. O vetor "resetar a senha do admin e entrar como admin" e
 # fechado pela outra ponta: `_assert_may_touch`, que protege o ALVO privilegiado.
-_CAPACITY_FIELDS = frozenset({"roles", "accessible_pools", "unrestricted"})
+#
+# `unrestricted` saiu do conjunto em 2026-08-31 (AUT-15) porque saiu do MODELO: um
+# campo que o `UpdateUserRequest` não declara nunca aparece em `model_fields_set`, e
+# guardá-lo aqui seria vigiar uma porta que não existe mais.
+_CAPACITY_FIELDS = frozenset({"roles", "accessible_pools"})
 
 
 def _is_privileged(row: dict[str, Any]) -> bool:
-    """O alvo detem capacidade que o torna intocavel por quem so administra pessoas."""
+    """O alvo detem capacidade que o torna intocavel por quem so administra pessoas.
+
+    ── Por que `unrestricted` saiu deste predicado (AUT-15, 2026-08-31) ──────────
+
+    Este e um predicado de SEGURANCA, e tirar um disjunto dele o enfraquece — entao a
+    remocao precisa de razao, nao de arrumacao.
+
+    A razao e que o disjunto protegia um FANTASMA. Desde a AUT-12/AUT-13 o campo nao e
+    emitido no token, nao e lido pelo `resolve_scope` e nao decide escopo nenhum;
+    manter alguem intocavel por deter uma flag inerte deixava esse alguem mais dificil
+    de administrar do que um par, sem que a flag lhe desse poder algum.
+
+    Populacao contada antes de decidir (nunca depois): 8 usuarios, 2 com `true`, e
+    **1** privilegiado SO por ela — `probe@plughub.local`, fixture de portao. Mesma
+    forma da medicao que fechou o ramo legado da evaluation-api.
+
+    O disjunto que FICA e o que sempre foi o real: deter `config.permissions`. E ele
+    e load-bearing — sem esta funcao o split de 2026-08-27 nao entrega o que promete
+    (o supervisor redefine a senha do admin, campo de PESSOA, e entra como admin).
+    """
     mc = row.get("module_config") or {}
     acc = ((mc.get("config") or {}).get("permissions") or {}).get("access", "none")
-    return acc != "none" or bool(row.get("unrestricted"))
+    return acc != "none"
 
 
 def _assert_may_grant(claims: dict[str, Any], sent: set[str], acao: str) -> None:
@@ -153,7 +176,7 @@ def _assert_may_touch(claims: dict[str, Any], alvo: dict[str, Any], acao: str) -
             status_code=403,
             detail=(
                 f"forbidden: {acao} de um usuario que detem config.permissions "
-                f"(ou unrestricted) requer config.permissions (read_write)"
+                f"requer config.permissions (read_write)"
             ),
         )
 
@@ -166,7 +189,6 @@ def _user_to_response(row: dict[str, Any]) -> UserResponse:
         name=row["name"],
         roles=list(row["roles"]),
         accessible_pools=list(row["accessible_pools"]),
-        unrestricted=bool(row.get("unrestricted", False)),
         max_concurrent_sessions=int(row.get("max_concurrent_sessions", 3)),
         active=row["active"],
         created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
@@ -344,7 +366,6 @@ async def create_user(
         name=body.name,
         roles=body.roles,
         accessible_pools=body.accessible_pools,
-        unrestricted=body.unrestricted,
         max_concurrent_sessions=body.max_concurrent_sessions,
     )
 
@@ -413,7 +434,6 @@ async def update_user(
         password_hash=ph,
         roles=body.roles,
         accessible_pools=body.accessible_pools,
-        unrestricted=body.unrestricted,
         active=body.active,
         max_concurrent_sessions=body.max_concurrent_sessions,
     )
