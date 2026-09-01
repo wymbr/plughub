@@ -48,6 +48,10 @@ cd "$(dirname "$0")/../.." || exit 2
 DC="${DC:-docker compose -f docker-compose.demo.yml}"
 CFG="${CFG:-http://localhost:3600}"
 TENANT="${TENANT:-tenant_demo}"
+# LIVE_JSON mora DENTRO do repo, e nao em /tmp, porque o node desta bancada resolve
+# "/tmp/x" contra a raiz do cwd — com cwd em UNC isso vira \<host>\<distro>\tmp\x,
+# que nao existe. Caminho absoluto derivado do proprio script serve as duas bancadas.
+LIVE_JSON="$(cd "$(dirname "$0")" && pwd)/.ctxmap_live.json"; export LIVE_JSON
 SCHEMAS="packages/schemas"
 
 fail=0
@@ -69,9 +73,25 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 # Compila os schemas uma vez; os ramos leem de dist/.
+#
+# ⚠️ `npx` NAO serve aqui: nesta bancada o cwd e um caminho UNC e o npm morre com
+# ERR_INVALID_URL antes de chamar o tsc — o ramo saia INCONCLUSIVO por motivo de
+# BANCADA, nunca de codigo, e o `dist/` ficava STALE sem ninguem notar. Stale e pior
+# que ausente: os ramos A e B passariam a julgar a versao ANTERIOR do mapa e diriam
+# "identica" sobre um arquivo que nao e o do repositorio — a familia
+# "existe != e o de agora". Invoca-se o binario local direto; npx e ultimo recurso.
+TSC_LOG="$(cd "$(dirname "$0")" && pwd)/.ctxmap_tsc.log"
+trap 'rm -f "$LIVE_JSON" "$TSC_LOG"' EXIT
 if command -v node >/dev/null 2>&1; then
-  ( cd "$SCHEMAS" && npx tsc >/tmp/ctxmap_tsc.log 2>&1 ) \
-    || { huh "tsc dos schemas reprovou — ver /tmp/ctxmap_tsc.log"; }
+  # ⚠️ relativo ao SCHEMAS, resolvido DEPOIS do cd. Montá-lo antes (com $SCHEMAS,
+  # que e relativo ao repo) faz o caminho virar packages/schemas/packages/schemas/...
+  # e o ramo cai no ELSE — que era o npx quebrado. Errar isto devolve o mesmo
+  # INCONCLUSIVO com outra causa, que e como um conserto parece nao ter efeito.
+  if [ -f "$SCHEMAS/node_modules/typescript/bin/tsc" ]; then
+    ( cd "$SCHEMAS" && node ./node_modules/typescript/bin/tsc >"$TSC_LOG" 2>&1 )       || { huh "tsc dos schemas reprovou — ver $TSC_LOG"; }
+  else
+    ( cd "$SCHEMAS" && npx tsc >"$TSC_LOG" 2>&1 )       || { huh "tsc dos schemas reprovou (via npx) — ver $TSC_LOG"; }
+  fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,11 +135,11 @@ if [ -z "$LIVE" ]; then
 elif ! echo "$LIVE" | grep -q '"context_map"'; then
   bad "masking.context_map AUSENTE na config viva (o seed nao aplicou)"
 else
-  echo "$LIVE" > /tmp/ctxmap_live.json
+  echo "$LIVE" > "$LIVE_JSON"
   B=$(cd "$SCHEMAS" && node -e '
     const fs = require("fs")
     const { DEFAULT_CONTEXT_MAP } = require("./dist/context-map.js")
-    const body    = JSON.parse(fs.readFileSync("/tmp/ctxmap_live.json", "utf8"))
+    const body    = JSON.parse(fs.readFileSync(process.env.LIVE_JSON, "utf8"))
     const entries = body.entries || body
     const raw     = entries.context_map
     const live    = (raw && typeof raw === "object" && "value" in raw) ? raw.value : raw
@@ -136,6 +156,14 @@ else
   ' 2>/dev/null)
   if echo "$B" | grep -q '"same":true'; then
     ok "config viva identica a TS ($(echo "$B" | sed -E 's/.*"nLive":([0-9-]+).*/\1/') campos)"
+  elif [ -z "$B" ]; then
+    # Sem saida do comparador nao ha o que comparar. Antes isto caia no `bad` e
+    # publicava "DIVERGENCIA ... : " com o payload VAZIO — veredicto sobre uma medicao
+    # que nao aconteceu, a familia que a regra transversal do ADR proibe. Medido em
+    # 2026-09-01: node com cwd em UNC resolve "/tmp/x" fora do /tmp do shell, o
+    # readFileSync estourava e o 2>/dev/null engolia. A diferenca importa — um diz
+    # "conserte o mirror", o outro diz "conserte a bancada".
+    huh "comparador vivo x TS nao executou (dist/ ausente? cwd UNC?) — sem veredicto"
   else
     bad "DIVERGENCIA config viva x TS: $B — o mirror do seed.py saiu de sincronia"
   fi
@@ -152,10 +180,10 @@ echo "-- B2. VIVO x VIVO (o mapa vivo so cita tipo que o catalogo vivo tem) --"
 # ("nao existe") em vez do certo ("nao mascara"): veredicto correto, proposicao
 # vizinha.
 if [ -n "${LIVE:-}" ] && echo "$LIVE" | grep -q '"context_map"'; then
-  echo "$LIVE" > /tmp/ctxmap_live.json
+  echo "$LIVE" > "$LIVE_JSON"
   B2=$(cd "$SCHEMAS" && node -e '
     const fs = require("fs")
-    const body    = JSON.parse(fs.readFileSync("/tmp/ctxmap_live.json", "utf8"))
+    const body    = JSON.parse(fs.readFileSync(process.env.LIVE_JSON, "utf8"))
     const entries = body.entries || body
     const unwrap  = k => { const r = entries[k]; return (r && typeof r === "object" && "value" in r) ? r.value : r }
     const map = unwrap("context_map"), cat = unwrap("types")
