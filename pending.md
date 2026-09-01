@@ -34,6 +34,29 @@ Arco entregue até V3/D8 e a FATIA 1 da D9. **A V4 inverte o default e não é r
 | ALW-05 | V5 (metade) — fechar aliases | `bloqueado` — por **tempo**, não esforço: depende do contador decair | índice `CLAUDE.md` |
 | ALW-06 | D7 (metade) — tela de proveniência: global × override por nó | `aberto` | índice `CLAUDE.md` |
 
+⚠️ **ALW-02 está subdimensionada.** A §1.7 do ADR diz `12 HSET`; remedido em 2026-09-01 dá
+**16 em 3 serviços + 1 escritor nomeado num 4º** (`ai-gateway/sentiment_emitter.py`), e um
+contador textual mais largo dá 18. Nenhum critério de contagem está declarado — ver CNS-06.
+
+---
+
+## `docs/product/contextstore-core-namespace-spec.md` — namespace do CORE do ContextStore
+
+Reformulação do dono (2026-09-01), feita sem a linguagem do ADR da allowlist. Convergiu em
+quatro pontos e acrescentou três. **É pré-requisito prático do arco ALW-\***: a padronização mata **23 dos 69 aliases**
+sem tocar em vocabulário de skill, porque quem os escreve é o core. **CNS-02 fechou em
+2026-09-01** — a reserva é o root `core.*`; `session.`/`journey.`/`segment.` ficam livres.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| CNS-01 | Confirmar os skills válidos contra os slots `current` VIVOS (o YAML é seed-if-absent, é declaração e não estado); apagar os 7 órfãos sem citação; resolver os 3 pools apontando para skill sem arquivo | `bloqueado` — precisa da stack de pé | spec §1.2 |
+| CNS-03 | Declarar a rota de `core.` na tabela de prefixos do SDK (hoje cairia no default) **e** acrescentar `core.segment.` a `dynamic_prefixes`. É a guarda contra `core.journey.x` receber 4 h em silêncio | `aberto` | spec §2.2 |
+| CNS-04 | O mapa passa a aceitar roots de tenant — hoje o topo é o enum fechado `session\|journey\|customer` e o oráculo acusaria `unknown_scope` | `aberto` | spec §6 |
+| CNS-05 | **D-A** — o cadastro RECUSA root `core` vindo de tenant. Predicado de uma linha, não lista de pastas | `aberto` | spec §2.1 |
+| CNS-06 | Declarar o critério de contagem dos escritores diretos e cruzar instrumento × oráculo — hoje há três números (12 na §1.7 do ADR, 16 estrutural, 18 textual) e nenhum critério escrito. Redimensiona ALW-02 | `aberto` | spec §1, `pending.md` ALW-02 |
+| CNS-08 | Dar superfície de configuração ao `masking.context_map` — não há tela nem rota de escrita, só o seed (seed-if-absent ⇒ editar o arquivo é no-op). Viola *"Every config field is UI-editable"* | `aberto` | spec §5.1 |
+| CNS-11 | **O commit único** — 36 nomes do core migram para `core.*`, em **65 arquivos** (39 de código · 14 skills, que os LEEM · 12 de teste). Big bang atômico: sem escrita dupla, sem alias na leitura; a rede é a exaustividade do `grep` (0 nomes dinâmicos, medido). Os aliases FICAM no mapa, como política do registro histórico durável | `bloqueado` por CNS-03/04 | spec §4.1 |
+
 ---
 
 ## `docs/adr/adr-historico-unificado-duas-visoes.md` — ler um processo num lugar só

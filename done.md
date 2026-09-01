@@ -17,6 +17,17 @@ história no `CHANGELOG.md`. Nada registrado aqui ainda.)*
 
 ---
 
+## `docs/product/contextstore-core-namespace-spec.md` — namespace do CORE do ContextStore
+
+| id | tarefa | data | âncora |
+|---|---|---|---|
+| CNS-07 | Tela de tipos completa — `mascara.by_role` e `lgpd` editáveis | 2026-09-01 | `CHANGELOG.md` § 2026-09-01 CNS-07 |
+| CNS-02 | Reserva do ContextStore fechada no root `core.*` (e não no `session.*`) | 2026-09-01 | `TODO.md` § CNS-02 |
+| CNS-09 | **D-C dissolvida pela CNS-02** — tirar `portabilidade`/`reembolso` da estrutura deixou de ser tarefa: sob `core.*` aquilo é espaço de TENANT, e a plataforma não dita vocabulário de negócio. Sobrevive como conselho de modelagem na spec §3, não como trabalho | 2026-09-01 | `TODO.md` § CNS-02 |
+| CNS-10 | **Absorvida pela CNS-11** — sob `core.*` nenhum skill renomeia vocabulário próprio; o que muda são as **referências de leitura** a nomes do core em 14 skills, e isso é parte do commit único | 2026-09-01 | `TODO.md` § CNS-02 |
+
+---
+
 ## `docs/adr/adr-historico-unificado-duas-visoes.md` — ler um processo num lugar só
 
 | id | tarefa | fechada em | âncora |

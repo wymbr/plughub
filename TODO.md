@@ -1,5 +1,72 @@
 # TODO — PlugHub Itens Pendentes
 
+
+## CNS-02 — a reserva do ContextStore é o root `core.*`, não o `session.*` *(decidido 2026-09-01)*
+
+**Decisão do dono**, depois de duas voltas. A pergunta era *"quais pastas do `session.` são do
+core?"*, e a resposta certa foi mudar a pergunta.
+
+### O que foi recusado, e por quê
+
+**(1) Reserva parcial do `session.*`** — lista de pastas do core (`contact`, `workflow`,
+`survey`, `campaign`, `pool`, `queue`, `sentiment`, `copilot`) com o resto livre. Recusada pelo
+dono com o argumento decisivo: *"depois não tem como saber se é core ou não"*. Reserva parcial
+exige **consulta**; reserva de root inteiro é **regra**, e um nome se explica sozinho. É a mesma
+preferência que o `CLAUDE.md` registra noutro lugar — quando a correção pode ser *"marcar cada
+caso"* ou *"remover a alternativa"*, a segunda não depende de memória.
+
+**(2) Reserva total do `session.*`** — chegou a ser aceita e caiu na medição do custo:
+**112 nomes** mudariam (36 do core + 76 tocados por skill), contra **36** na alternativa. E ela
+criava um problema novo: o `delegate`/`collect` compõe `session.<chave>` **no código do
+gateway** (`webhook.py:1693`), então o próprio gateway violaria a reserva a cada delegação.
+
+**(3) Reservar `journey.*` e `segment.*`** — recusada por medição. O core **não escreve nada**
+sob `journey.` (as 5 escritas são de skill) e `journey.` é o **único** store de 30 dias: um root
+de tenant cai no hash da sessão, 4 h. Reservá-lo mataria o canal de processo sem substituto —
+medido funcionando de ponta a ponta (`skill_limite_processo_v1` escreve 4 tags,
+`skill_limite_entrada_v1` lê as 4, em sessões diferentes). E `segment.{segId}.*` é, por desenho
+documentado no `CLAUDE.md`, o namespace de **isolamento por agente** que skills devem usar.
+
+### A decisão
+
+> **O que é da plataforma vive sob `core.*`. Todo o resto do ContextStore é dos skills.**
+
+O que a inverteu foi notar qual conjunto se enumera: **o core é pequeno, fechado e semeado (36
+nomes); o espaço do tenant é aberto.** Reservar o pequeno e liberar o aberto custa um terço do
+trabalho e não obriga ninguém a enumerar a coisa grande.
+
+`insight.historico.*` e `pricing.*` entram como **`core.customer.*`** — estavam fora de todas as
+listas e são os de **maior** risco: roteiam para o hash do cliente, **90 dias**, e hoje um skill
+pode escrever PII ali sem nada impedir.
+
+### A guarda que a decisão exige, e que é o ponto de falha silenciosa
+
+O primeiro segmento hoje carrega **escopo** (retenção); com `core.*` ele passa a carregar
+**propriedade**, e o escopo sai dos nomes do core. Aceitável porque os 36 são todos de sessão —
+**medido**. Mas `core.` cairia no *default* do roteamento do SDK, e no dia em que o core precisar
+de um fato de processo, `core.journey.x` não começa com `journey.`, cai no default e recebe 4 h
+em vez de 30 dias, **sem erro em lugar nenhum**.
+
+Por isso `core.` entra **explicitamente** na tabela de prefixos, apontando para o hash da sessão,
+em vez de herdar o default. É a § *Degradação NUNCA é silenciosa* aplicada antes de o defeito
+existir. O §7 da spec exige o teste que prova que a linha não é decorativa.
+
+### Correção de um número que eu publiquei errado
+
+Afirmei que o CNS-10 iria a **zero** — que nenhum skill precisaria mudar. **Falso.** Medido: os
+36 nomes do core aparecem em **65 arquivos**, dos quais **14 são skills**, porque skills **leem**
+fatos do core (`@ctx.session.pool.id`). Eles não renomeiam vocabulário próprio, mas as
+referências mudam. Não zero; muito menor que 76.
+
+**Fecha:** decisão aberta **#3** do ADR da allowlist (lista de domínios) deixa de ser problema da
+plataforma — vocabulário de negócio é do tenant, e o único domínio que a plataforma fecha é o
+seu próprio.
+
+Detalhe, tabelas e critério de vermelho:
+[`docs/product/contextstore-core-namespace-spec.md`](docs/product/contextstore-core-namespace-spec.md).
+
+---
+
 ## `permissions[]` — DECISÃO TOMADA (B), e as duas refutações que a execução produziu
 
 > **Decidido em 2026-09-01: opção B (dar produtor), pelo ato do dono — *"seguir com cap-06"*.**
