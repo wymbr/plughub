@@ -1,5 +1,68 @@
 # TODO — PlugHub Itens Pendentes
 
+## `permissions[]` — a decisão A/B, e por que o transporte já está resolvido (CAP-05/CAP-06, 2026-09-01)
+
+Levantado depois de fechar o arco `agent_role`, a partir da pergunta do dono: *"vejo que ele
+deveria ser eliminado por desuso — pode avaliar?"*. A medição **não confirmou a premissa**, e o
+motivo é uma assimetria com o `agent_role` que vale registrar.
+
+### O desuso é real
+
+Produtor: **nenhum** (`registry-client.ts:64` fixa `[]`). Skills declarando `tools`: **0 de 44**.
+Agentes `external-mcp`: **0**. Linhas em `session_timeline` (destino do `mcp.audit`): **0**.
+
+### Mas o campo tem TRÊS comportamentos, não um
+
+| caminho | lista vazia significa |
+|---|---|
+| `inference.py:128` (tool list ao LLM) | **sem filtro** → 73 tools expostas |
+| `invoke` no mcp-server | **NEGA TUDO** (`invoke-audit.ts:55`) |
+| proxy sidecar | **sem filtro** (aceita curinga `server:*`) |
+
+A assimetria `invoke` × sidecar está **documentada no próprio código** como deliberada
+("só se pode fechá-la ABRINDO acesso"). Ela só importa se o campo ficar.
+
+### Por que "eliminar por desuso" não fecha como fechou no `agent_role`
+
+O gate do `agent_role` estava **ativo e deixava passar quem quisesse** — garantia falsa; removê-lo
+tornou o sistema honesto. `permissions[]` **não mente**: é mecanismo correto e faminto, e no lado
+estrito falha FECHADO.
+
+O custo de eliminar não é o campo: é ter de **apagar dois invariantes declarados** no `CLAUDE.md`
+(*"Never send tool list to LLM without applying `permissions[]` filter"* e *"All domain MCP calls
+are intercepted — permission validation"*) mais o `AuditRecord.permissions_checked`, que é contrato
+LGPD. Isso é decisão de produto — *"a plataforma abre mão de autorização de tool por agente"* —, não
+limpeza, e colide com o posicionamento de governança do próprio `CLAUDE.md`.
+
+**Eliminar o campo e deixar os invariantes escritos seria o pior dos mundos**: promessa sem
+mecanismo, a família do DDL de `participation_intervals`.
+
+### A decisão, em duas opções
+
+- **(A) eliminar** — defensável SE os agentes forem sempre de primeira parte. Exige remover o campo
+  **junto com** os dois invariantes e o campo de auditoria, nomeando a decisão.
+- **(B) dar produtor** — a CAP-06. Popular antes de inverter (forma da AUT-03).
+
+### O que a análise do transporte resolveu, e não precisa ser rediscutido
+
+A proposta natural — *"declarar no YAML e o executor passar as permissões na chamada ao MCP"* — está
+**certa na primeira metade e errada na segunda**. Passar a lista como ARGUMENTO faz o chamador
+declarar a própria autorização: `judgeInvoke(lista_que_veio_na_mensagem, …)` sempre passa, porque
+basta mandar uma lista maior. É o defeito exato do gate removido na CAP-01, e o comentário que
+sobreviveu no `registry-client.ts` já diz a frase: *"um agente declarar 'sou evaluator' seria
+asserção, não autorização"*.
+
+**O transporte seguro já existe e já está ligado**: a lista viaja ASSINADA no `session_token`. O
+executor já manda o token no `invoke`; o MCP já lê as permissões do token verificado e já impõe.
+Falta só o token **conter** a lista — 4 dos 5 elos existem (ver CAP-06).
+
+### Resíduo de prosa a corrigir junto
+
+O comentário em `registry-client.ts` afirma que a config *"now lives on the pool's deploy slot"*
+(o `config_json` só tem `form_id` e `max_concurrent_sessions`) e que vazio ⇒ *"no MCP tool
+filtering"* (falso no `invoke`). Duas frases erradas ao lado da linha que causa o problema.
+
+
 
 ## ✅ SETE decisões do dono — sessão de 2026-08-30 *(registro ÚNICO; não duplicar)*
 
