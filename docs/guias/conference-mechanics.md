@@ -115,10 +115,10 @@ Namespace: `{tenant_id}:ctx:{session_id}` (Redis Hash)
 
 | Campo do hash | Escrito por | Usado por | Valor |
 |---|---|---|---|
-| `session.close_origin` | Bridge (pré-hooks) | `fire_pool_hooks()` (nps_on_disconnect check) | `"agent_closed"` ou `"customer_disconnect"` |
-| `session.customer_participant_id` | Bridge (pré-hooks) | `fire_pool_hooks()` | participant_id do cliente |
-| `session.human_agent_participant_id` | Bridge (pré-hooks) | `fire_pool_hooks()` (side=agent participants SET) | participant_id do agente humano |
-| `session.pool.id` | Routing Engine (Pool Context Enrichment) | Agentes (contexto de pool) | pool_id alocado |
+| `core.contact.close_origin` | Bridge (pré-hooks) | `fire_pool_hooks()` (nps_on_disconnect check) | `"agent_closed"` ou `"customer_disconnect"` |
+| `core.contact.customer_participant_id` | Bridge (pré-hooks) | `fire_pool_hooks()` | participant_id do cliente |
+| `core.contact.human_agent_participant_id` | Bridge (pré-hooks) | `fire_pool_hooks()` (side=agent participants SET) | participant_id do agente humano |
+| `core.pool.id` | Routing Engine (Pool Context Enrichment) | Agentes (contexto de pool) | pool_id alocado |
 
 ---
 
@@ -442,9 +442,9 @@ Agente clica "Encerrar"
     Pool tem on_human_end: [nps_bot_pool(customer), wrapup_bot_pool(agent)]
 
     Pre-hook ContextStore writes:
-      session.close_origin = "agent_closed"
-      session.customer_participant_id = "cust_xyz"
-      session.human_agent_participant_id = "human-pool_id"
+      core.contact.close_origin = "agent_closed"
+      core.contact.customer_participant_id = "cust_xyz"
+      core.contact.human_agent_participant_id = "human-pool_id"
 
     fire_pool_hooks("on_human_end"):
       Hook 1 — NPS (side=customer):
@@ -719,7 +719,7 @@ segment-id do wrap-up).
    disparou na conclusão do NPS ou imediatamente sem hooks de cliente, ANTES do wrap-up terminar);
    e `_close_contact_layer` (cobre wrap-up terminando antes do fechamento — corrige também o
    outcome de SESSÃO via `last_outcome`).
-4. **`close_reason` pela INICIATIVA**: fonte preferida é `session.close_origin` (ContextStore,
+4. **`close_reason` pela INICIATIVA**: fonte preferida é `core.contact.close_origin` (ContextStore,
    gravado PRE-hook, congelado no instante do fim do contato). O marcador `session:{id}:closed` é
    sobrescrito pelo teardown do WS do cliente pós-NPS (`client_disconnect`) e corrompia a
    iniciativa (Encerrar do agente virava `customer_disconnect`). Fallback no marcador só quando
@@ -772,7 +772,7 @@ da visão final (avaliador via calendário; ver TODO).
    e semeia o acumulador `session:{id}:seg_signal:{segment_id}` com o registro + `outcome`
    placeholder (do `agent_done`).
 2. `fire_pool_hooks` (recebe o `pool_id` do humano): lê `human_seg:{pool}`, deriva `close_reason`
-   da iniciativa (`session.close_origin`), e **carimba o `segment_id` no `hook_conf`** (5º campo:
+   da iniciativa (`core.contact.close_origin`), e **carimba o `segment_id` no `hook_conf`** (5º campo:
    `{hook}:{target}:{side}:{origin}:{segment_id}`).
 3. Na conclusão de cada hook (`process_routed`): a disposição/NPS vêm do
    **`agent_result.pipeline_state.results`** do próprio agente (`wrapup_classificacao`/`wrapup_resumo`
@@ -894,7 +894,7 @@ o transfer é funcional sem ele (o segmento que sai registra `outcome=transferre
 
 **Problema**: o wrap-up (`on_human_end` side=agent) só funcionava com o humano sendo o **segmento
 final** do contato. Em multi-humano (humano convidado como specialist; origem+destino de transfer)
-o isolamento dependia de **um** campo de SESSÃO `session.human_agent_participant_id`, lido por 4
+o isolamento dependia de **um** campo de SESSÃO `core.contact.human_agent_participant_id`, lido por 4
 componentes (`fire_pool_hooks` `_fixed_pid`; `mcp-server` `menu_submit` e texto WS; visibility da
 `agente_wrapup_v1.yaml`) e **sobrescrito** a cada humano que sai → colapsa com ≥2 humanos. Saída
 mal-endereçada (visibility errada) + entrega broadcast (`forward()` fazia `ws.send` incondicional) +
@@ -917,7 +917,7 @@ entrada resolvendo o humano errado. Ver
   (= `ctx.instanceId` = chave do `menu:waiting` = sufixo do BLPOP); o Console ecoa como `agent_key`.
 
 **Keys novas**: `session:{id}:hook_served_human:{conference_id}` (TTL 4h, side=agent) ·
-ctx `segment.{segId}.served_human_participant_id`. **`session.human_agent_participant_id`** mantido só
+ctx `segment.{segId}.served_human_participant_id`. **`core.contact.human_agent_participant_id`** mantido só
 como fallback single-humano (não aposentado). **Limitação**: o `author_id` do echo no `menu_submit`
 (botão) ainda sai do campo global — cosmético, roteamento já correto.
 
@@ -1268,7 +1268,7 @@ hook e segura a sessão. Princípio: skills são customizáveis, não regra de p
 
 **Pool reutilizado + grão por contexto.** Usa-se o **mesmo pool `nps_ia`** do humano (já bootstrapado),
 não um pool novo. O skill `skill_nps_v1` ganhou um step `escolher_grao` (choice): se
-`@ctx.session.surveyed_segment_id` existe (humano — carimbado pelo bridge) → grão **segment**
+`@ctx.core.survey.segment_id` existe (humano — carimbado pelo bridge) → grão **segment**
 (atribuível ao agente); senão (contato só-IA, sem segmento humano) → grão **session** (origin = a
 própria sessão). Um pool, dois grãos. Carimbar o segmento do primário IA para habilitar `grain=segment`
 por `deploy_version` no caso IA é evolução futura.
@@ -1369,7 +1369,7 @@ adicionou `dispatch: "inline"|"detached"` ao `PoolHookEntry` (default inline; pa
    (`POST {CHANNEL_GATEWAY_URL}/v1/channels/webhook/pool/{target_pool}`, novo env `CHANNEL_GATEWAY_URL`):
    `origin_session_id = session_id` + `journey: "inherit"` (a sessão-filha **herda o `root_session_id`**
    transitivo → membro da mesma journey) + `context` com a **referência de segmento**
-   (`session.surveyed_segment_id`/`surveyed_agent_key`, `session.close_origin`, `hook.type`,
+   (`core.survey.segment_id`/`surveyed_agent_key`, `core.contact.close_origin`, `hook.type`,
    `hook.origin_pool`). O agente destacado lê `@ctx.session.surveyed_*` e grava atribuído ao segmento —
    **sem** ser fisicamente um segmento da conferência. Não-2xx/erro é **logado** (degradação nunca silenciosa).
 3. **Fecha o contato na hora** quando a leva de finalização é **100% detached** (`_detached_fired and not
@@ -1406,8 +1406,8 @@ o wiring expôs.
 
 **Wiring.** `fire_pool_hooks` já computava `_hook_human_seg_id`/`_surveyed_agent_key` e semeava o `seg_signal`
 (`_seed_segment_signal`); o gap era o `_fire_detached_hook` passar `origin_session_id` só no top-level do body.
-Agora ele **também injeta `session.origin_session_id` no `context`** — o workflow de wrap-up lê
-`@ctx.session.origin_session_id` no briefing (transcrição) e no `segment_outcome_record`. E2E validado com
+Agora ele **também injeta `core.workflow.origin_session_id` no `context`** — o workflow de wrap-up lê
+`@ctx.core.workflow.origin_session_id` no briefing (transcrição) e no `segment_outcome_record`. E2E validado com
 atendimento real (`Detached hook fired … → wrapup_detached_ia` + gravação no segmento real).
 
 **Regressão 1 — NPS do cliente derrubado (corrigida).** O fim-de-atendimento dispara DUAS levas em paralelo:
@@ -2415,7 +2415,7 @@ que os dois já implementam.
   `agentInstanceId`, que vem de `conversation.assigned.instance_id` **ou**, em fallback, de
   `participant_id`; o SET da conferência já mistura as duas fontes (`_fixed_pid` é um `instance_id`
   com nome de pid). Publicar só uma faria o defeito voltar de forma **intermitente**.
-- ⚠️ **`session.human_agent_participant_id` é campo de escopo LARGO** e num conferência multi-humano
+- ⚠️ **`core.contact.human_agent_participant_id` é campo de escopo LARGO** e num conferência multi-humano
   nomeia o humano errado. É seguro **aqui e só aqui** porque o caminho roda dentro de
   `remaining <= 0`: a origem era o ÚLTIMO humano, logo não há peer ativo cuja tela pudesse ser
   liberada por engano. Não copiar este padrão para outro call site sem refazer essa conta.
@@ -2443,7 +2443,7 @@ segment release published: session=bf7bac13… recipients=['human-c30b50d9…']
 ```
 
 ⚠️ **O que a medição NÃO cobre — e o log diz qual é.** `recipients` saiu com **um** elemento: o
-`session.human_agent_participant_id` estava ausente, então a segunda forma de nomear o humano — a
+`core.contact.human_agent_participant_id` estava ausente, então a segunda forma de nomear o humano — a
 defesa contra o retorno INTERMITENTE do defeito — **nunca foi exercida em tráfego real**. Tem teste
 unitário; não tem população. Ramo coberto por teste e não por uso continua sendo promessa parcial.
 

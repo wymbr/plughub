@@ -152,9 +152,9 @@ Após **toda alocação bem-sucedida**, o Routing Engine chama `_write_pool_cont
 
 | Tag | Conteúdo |
 |---|---|
-| `session.pool.id` | `pool_id` do pool alocado |
-| `session.pool.channels` | `channel_types` do pool |
-| `session.pool.mentionable_pools` | quando o `PoolConfig` declara `mentionable_pools` |
+| `core.pool.id` | `pool_id` do pool alocado |
+| `core.pool.channels` | `channel_types` do pool |
+| `core.pool.mentionable_pools` | quando o `PoolConfig` declara `mentionable_pools` |
 
 Atributos da escrita: `source: "routing_engine"`, `confidence: 1.0`, `visibility: "agents_only"`, TTL 24h (NX — não sobrescreve). A leitura usa o cache Redis próprio do Routing Engine — sem I/O adicional. `PoolConfig.mentionable_pools` (`dict[str, str]`) é populado a partir dos eventos `pool.registered`.
 

@@ -19,7 +19,7 @@ Duas camadas, com papéis distintos:
 
 - **Mecânica = plataforma (fixa).** Roteamento por namespace, TTL, resolução da raiz da journey, migração
   no merge e um conjunto de tags que a plataforma popula sozinha (`session.pool.*`, `session.sentimento.*`,
-  `session.root_session_id`, …). O desenvolvedor não controla isso.
+  `core.contact.root_session_id`, …). O desenvolvedor não controla isso.
 - **Semântica = contrato do desenvolvedor.** Quais tags de negócio existem, o que significam, quem escreve e
   quem lê — acordo prévio entre o flow produtor e o consumidor. Sem esse contrato a tag não existe para o leitor.
 
@@ -43,7 +43,7 @@ O **prefixo da tag decide DUAS coisas**: em qual hash ela vive e qual o TTL. Rot
 Notas de TTL:
 
 - **`journey.*`** precisa de TTL de processo (30d), não de sessão — senão evaporaria entre dois contatos da
-  mesma journey. A raiz canônica (`{root}`) é resolvida por union-find (proveniência `session.root_session_id`
+  mesma journey. A raiz canônica (`{root}`) é resolvida por union-find (proveniência `core.contact.root_session_id`
   → floresta de aliases), a mesma via do bridge e do `journey_merge`.
 - **`session.pool.*`** é escrito com **TTL 24h NX** (estende a chave da sessão), pelo Routing Engine.
 - **`insight.historico.*` / `pricing.*`** só roteiam para o hash do cliente **quando há `customerId`**; sem ele,
@@ -118,26 +118,26 @@ Subgrupos **de plataforma** (P):
 
 | Tag | Origem | Escritor | Uso |
 |---|---|---|---|
-| `session.pool.id` / `.channels` / `.mentionable_pools` / `.agent_groups` / `.max_reply_time_ms` / `.llm_account_ids` | P | Routing Engine `_write_pool_context` (conf 1.0, `routing_engine`, TTL 24h NX) | pool alocado e sua config para o agente |
-| `session.queue.position` / `.eta_ms` | P | Routing Engine (efêmero) | posição/ETA na fila |
-| `session.sentimento.current` / `.categoria` | P | AI Gateway `sentiment_emitter` (conf 0.80) | score −1..1 e categoria satisfied/neutral/frustrated/angry |
-| `session.copilot.sugestao_resposta` / `.flags_risco` / `.acoes_recomendadas` / `.ultima_analise` | P | AI Gateway `copilot_emitter` | assistência ao agente humano |
-| `session.root_session_id` | P | channel-gateway (webhook) | raiz de proveniência da journey (base do union-find) |
-| `session.origin_session_id` / `session.spawn_reason` | P | channel-gateway / bridge | 1 salto de proveniência + por que a sessão nasceu |
-| `session.close_origin` | P | bridge (pré-hook) | origem do fechamento (lido por hooks NPS/wrap-up) |
-| `session.customer_participant_id` | P | bridge (pré-hook) | participant do cliente (visibilidade de NPS) |
-| `session.human_agent_participant_id` | P | bridge (pré-hook) | participant do agente humano (visibilidade de wrap-up) |
-| `session.last_primary_segment_id` / `.last_primary_agent_key` | P | bridge | último segmento/agente primário (alvo de survey) |
-| `session.surveyed_segment_id` / `.surveyed_agent_key` | P | bridge | segmento/agente pesquisado |
-| `session.process_outcome` / `session.contact_outcome` | P | bridge / payload do hook de close | desfecho do processo/contato (o runner de survey decide "ciclo fechado") |
-| `session.workflow_resume_token` | P | channel-gateway | token de resume (Arc 19 suspend/resume) |
+| `core.pool.id` / `.channels` / `.mentionable_pools` / `.agent_groups` / `.max_reply_time_ms` / `.llm_account_ids` | P | Routing Engine `_write_pool_context` (conf 1.0, `routing_engine`, TTL 24h NX) | pool alocado e sua config para o agente |
+| `core.queue.position` / `.eta_ms` | P | Routing Engine (efêmero) | posição/ETA na fila |
+| `core.sentiment.current` / `.category` | P | AI Gateway `sentiment_emitter` (conf 0.80) | score −1..1 e categoria satisfied/neutral/frustrated/angry |
+| `core.copilot.suggested_reply` / `.risk_flags` / `.recommended_actions` / `.last_analysis` | P | AI Gateway `copilot_emitter` | assistência ao agente humano |
+| `core.contact.root_session_id` | P | channel-gateway (webhook) | raiz de proveniência da journey (base do union-find) |
+| `core.workflow.origin_session_id` / `core.contact.spawn_reason` | P | channel-gateway / bridge | 1 salto de proveniência + por que a sessão nasceu |
+| `core.contact.close_origin` | P | bridge (pré-hook) | origem do fechamento (lido por hooks NPS/wrap-up) |
+| `core.contact.customer_participant_id` | P | bridge (pré-hook) | participant do cliente (visibilidade de NPS) |
+| `core.contact.human_agent_participant_id` | P | bridge (pré-hook) | participant do agente humano (visibilidade de wrap-up) |
+| `core.contact.last_primary_segment_id` / `.last_primary_agent_key` | P | bridge | último segmento/agente primário (alvo de survey) |
+| `core.survey.segment_id` / `.surveyed_agent_key` | P | bridge | segmento/agente pesquisado |
+| `core.process.outcome` / `session.contact_outcome` | P | bridge / payload do hook de close | desfecho do processo/contato (o runner de survey decide "ciclo fechado") |
+| `core.workflow.resume_token` | P | channel-gateway | token de resume (Arc 19 suspend/resume) |
 | `session.approval_threshold` / `.deploy_version` / `.approval_segment_id` | P | channel-gateway | contexto de passo de aprovação |
 
 Estado de **negócio/fluxo** (D) — vivem na sessão, escritos via `context_set`/`context_tags`/reason outputs.
 Exemplos concretos: `session.numero_pedido`, `session.motivo_reembolso`, `session.numero_atual`,
 `session.operadora_destino`, `session.confirmation_channel`, `session.contact_identifier`,
-`session.customer_present`, `session.resume_origin`, `session.delegate_resume_token`,
-`session.dialog_form_id`, `session.review_decision`/`current_round`/`max_rounds`/`reviewer_type`/`result_id`,
+`session.customer_present`, `session.resume_origin`, `core.workflow.delegate_resume_token`,
+`core.workflow.dialog_form_id`, `core.workflow.review_decision`/`current_round`/`max_rounds`/`reviewer_type`/`result_id`,
 `session.escalar_solicitado`, `session.historico_mensagens`/`historico_resumo`, e as `session.survey_*` /
 `session.campaign_id` / `session.delivery_id` dos flows de outbound/survey.
 
@@ -198,7 +198,7 @@ neste monorepo.
 ```yaml
 input:
   nome_cliente: "@ctx.caller.nome"
-  sentimento:   "@ctx.session.sentimento.categoria"
+  sentimento:   "@ctx.core.sentiment.category"
   pedido:       "@ctx.journey.pedido_id"        # lê do hash do processo
 ```
 
@@ -313,6 +313,6 @@ stream/segments; faça o briefing de quem entra unir os dois.
 | Engine | `packages/skill-flow-engine/src/context-accumulator-util.ts` | escrita de `context_tags` (roteia `journey.`) |
 | Routing | `packages/routing-engine/…/main.py` | `_write_pool_context` (`session.pool.*`, `session.queue.*`) |
 | AI Gateway | `packages/ai-gateway/…/sentiment_emitter.py`, `copilot_emitter.py` | `session.sentimento.*`, `session.copilot.*` |
-| Bridge | `packages/orchestrator-bridge/…/main.py` | tags de pré-hook/close/journey (`session.close_origin`, `*_participant_id`, `root_session_id`) |
+| Bridge | `packages/orchestrator-bridge/…/main.py` | tags de pré-hook/close/journey (`core.contact.close_origin`, `*_participant_id`, `root_session_id`) |
 | Schema | `packages/schemas/src/context-store.ts` | `ContextEntry`, regex de tag, `required_context`, `__gaps__` |
 | Smoke | `infra/test/smoke_journey_context.sh` | roteamento journey da escrita imperativa (J5a) |

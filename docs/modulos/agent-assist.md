@@ -149,7 +149,7 @@ Aparece **somente** em encerramento manual explícito pelo agente. Campos:
 
 ## Modo Substituição de Menu
 
-Botão "🔄 Substituir" na ActionBar ativa modo substituição. Menus `interaction.request` ficam interativos (button/list/checklist/form/text). O clique chama `POST /api/menu_submit/:sessionId` → XADD `interaction_result` no stream Redis → Skill Flow Engine retoma o suspend step. Auto-disable após submit bem-sucedido. Roteamento por `participant_id` via ContextStore (`session.human_agent_participant_id`).
+Botão "🔄 Substituir" na ActionBar ativa modo substituição. Menus `interaction.request` ficam interativos (button/list/checklist/form/text). O clique chama `POST /api/menu_submit/:sessionId` → XADD `interaction_result` no stream Redis → Skill Flow Engine retoma o suspend step. Auto-disable após submit bem-sucedido. Roteamento por `participant_id` via ContextStore (`core.contact.human_agent_participant_id`).
 
 ## Co-pilot (Aba Capacidades)
 
@@ -157,10 +157,10 @@ O AI Gateway analisa cada mensagem do cliente em background usando `claude-haiku
 
 | Tag | Conteúdo |
 |---|---|
-| `session.copilot.sugestao_resposta` | Sugestão de resposta personalizada |
-| `session.copilot.flags_risco` | Badges de risco (sentimento, intenção) |
-| `session.copilot.acoes_recomendadas` | Ações recomendadas pelo contexto |
-| `session.copilot.ultima_analise` | Timestamp da última análise |
+| `core.copilot.suggested_reply` | Sugestão de resposta personalizada |
+| `core.copilot.risk_flags` | Badges de risco (sentimento, intenção) |
+| `core.copilot.recommended_actions` | Ações recomendadas pelo contexto |
+| `core.copilot.last_analysis` | Timestamp da última análise |
 
 O hook `useCopilotState` re-busca ao receber `copilot.updated` via Redis pub/sub.
 

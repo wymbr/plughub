@@ -107,17 +107,17 @@ Tags de infraestrutura e estado da sessão atual. Sem PII — produzidas por com
 
 | Tag | Tipo | Escrito por | Display |
 |---|---|---|---|
-| `session.pool.id` | string | routing_engine | Completo |
-| `session.pool.channels` | string[] | routing_engine | Completo |
-| `session.pool.mentionable_pools` | object | routing_engine | Completo |
+| `core.pool.id` | string | routing_engine | Completo |
+| `core.pool.channels` | string[] | routing_engine | Completo |
+| `core.pool.mentionable_pools` | object | routing_engine | Completo |
 | `session.pool.mentionable_journeys` | object | routing_engine | Completo |
-| `session.pool.max_reply_time_ms` | number | routing_engine | Completo |
-| `session.pool.agent_groups` | string[] | routing_engine | Completo |
-| `session.sentimento.current` | number | ai_inferred | Completo |
-| `session.sentimento.categoria` | string | ai_inferred | Completo |
-| `session.close_origin` | string | routing_engine | Completo |
-| `session.customer_participant_id` | string | orchestrator-bridge | Completo |
-| `session.human_agent_participant_id` | string | orchestrator-bridge | Completo |
+| `core.pool.max_reply_time_ms` | number | routing_engine | Completo |
+| `core.pool.agent_groups` | string[] | routing_engine | Completo |
+| `core.sentiment.current` | number | ai_inferred | Completo |
+| `core.sentiment.category` | string | ai_inferred | Completo |
+| `core.contact.close_origin` | string | routing_engine | Completo |
+| `core.contact.customer_participant_id` | string | orchestrator-bridge | Completo |
+| `core.contact.human_agent_participant_id` | string | orchestrator-bridge | Completo |
 | `session.copilot.*` | object | ai_inferred:copilot | Completo |
 | `session.escalar_solicitado` | boolean | reason step | Completo |
 | `session.ultima_resposta` | string | reason step | Completo |

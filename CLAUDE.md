@@ -721,13 +721,45 @@ Kubernetes-style reconciliation controller in `orchestrator-bridge/instance_boot
 
 ## ContextStore & Context-Aware Progressive Resolution
 
-Redis hash `{tenantId}:ctx:{sessionId}`. `ContextEntry`: `{value, confidence 0-1, source, visibility, updated_at}`. Tag namespaces: `caller.*` (customer data), `session.*` (session state), `account.*` (account data), `segment.{segId}.*` (per-agent isolated). Confidence: ≥0.9 confirmed; ≥0.7 high certainty; 0.4-0.7 uncertain; <0.4 unknown.
+Redis hash `{tenantId}:ctx:{sessionId}`. `ContextEntry`: `{value, confidence 0-1, source, visibility, updated_at}`. Confidence: ≥0.9 confirmed; ≥0.7 high certainty; 0.4-0.7 uncertain; <0.4 unknown.
 
-`@ctx.*` resolves in step inputs, choice conditions (`exists`/`confidence_gte`/`eq`/etc.), and visibility arrays. `@segment.*` prefixed with `segment.{segId}.` isolates parallel agents. `context_tags` on reason/invoke/notify: `inputs` (pre-call) + `outputs` (post-call, fire-and-forget, confidence + merge strategy). Sentiment emitter writes **`session.sentimento.current` apenas** (score, confidence 0.80, TTL 4h) — `…categoria` NÃO é escrita: classificar usa faixas configuráveis por tenant e é feito na LEITURA, pelo consumidor (ver § Sentiment Tracking; classificador canônico em `analytics-api/sessions.py`). *Corrigido 2026-08-02: o emitter chamava um `_classify` já removido, fora do `try`, e o `NameError` matava as DUAS escritas — o `copilot_emitter`, que lia `categoria`, degradava sem log.*
+### O root `core.*` é RESERVADO à plataforma — tudo o mais é dos skills
+
+*(CNS-02/CNS-11, 2026-09-01. Detalhe em [`docs/product/contextstore-core-namespace-spec.md`](docs/product/contextstore-core-namespace-spec.md).)*
+
+```
+core.*      plataforma — semeado; o cadastro RECUSA root `core` vindo de tenant
+            contact · workflow · survey · pool · queue · sentiment · copilot
+            process.outcome · channel · segment.{segId} · customer
+session.*   skills   (hash da sessão,  4 h)   ex.: session.card.{type,number}
+journey.*   skills   (hash da journey, 30 d)  o canal de processo entre sessões
+segment.*   skills   isolamento por agente
+outro root  skills   cai no hash da sessão, sem tocar em roteamento
+```
+
+**Por que o pequeno é que se reserva:** o core é fechado e semeado (35 nomes); o espaço do
+tenant é aberto. Reservar `session.*` custaria mover 112 nomes contra 35, e faria o próprio
+gateway violar a regra — ele compõe `session.<chave>` no `delegate`/`collect`.
+
+⚠️ **O escopo de uma tag do core é o SEGUNDO segmento**, e as duas rotas não-sessão são
+DECLARADAS (`CONTEXT_ROUTE_PREFIXES`, em `@plughub/schemas` — casa única, o SDK importa):
+`core.customer.*` → hash do cliente, **90 d** (absorve `insight.historico.*`/`pricing.*`) ·
+`core.journey.*` → hash da journey, **30 d**. Deixá-las cair no default moveria dado de
+retenção trimestral para um hash de 4 h **sem erro em lugar nenhum**.
+
+⚠️ **`customer.` NÃO roteia para o hash do cliente** — o nome do store e o prefixo que roteia
+para ele não são a mesma string. O oráculo do mapa acusa isso (`mismatched_retention`).
+
+⚠️ **As canônicas antigas viraram `legado`, e ficam**: o snapshot durável guarda os nomes
+velhos para sempre, e é o alias que mantém aquele histórico MASCARADO. Não são migração.
+
+Tag namespaces legados ainda resolvidos na borda: `caller.*`, `account.*`, `insight.*`.
+
+`@ctx.*` resolves in step inputs, choice conditions (`exists`/`confidence_gte`/`eq`/etc.), and visibility arrays. `@segment.*` prefixed with `segment.{segId}.` isolates parallel agents. `context_tags` on reason/invoke/notify: `inputs` (pre-call) + `outputs` (post-call, fire-and-forget, confidence + merge strategy). Sentiment emitter writes **`core.sentiment.current` apenas** (score, confidence 0.80, TTL 4h) — `…categoria` NÃO é escrita: classificar usa faixas configuráveis por tenant e é feito na LEITURA, pelo consumidor (ver § Sentiment Tracking; classificador canônico em `analytics-api/sessions.py`). *Corrigido 2026-08-02: o emitter chamava um `_classify` já removido, fora do `try`, e o `NameError` matava as DUAS escritas — o `copilot_emitter`, que lia `categoria`, degradava sem log.*
 
 **Step `resolve`**: 5-phase inline accumulation (gap check → CRM → LLM question → BLPOP → LLM extract). **agente_contexto_ia_v1**: 0 LLM when CRM resolves; max 2 when collecting. **Copilot**: fire-and-forget analysis per client message → `session.copilot.*` tags. `supervisor_state` returns `context_snapshot` from ContextStore.
 
-**Pool Context Enrichment** (Routing Engine): after every successful allocation, `_write_pool_context()` writes `session.pool.id`, `session.pool.channels`, and (when set) `session.pool.mentionable_pools` to ContextStore (source: `routing_engine`, confidence: 1.0, visibility: `agents_only`, TTL 24h NX). Reads from routing engine's own Redis cache — no extra I/O. `PoolConfig.mentionable_pools: dict[str, str]` populated from `pool.registered` events.
+**Pool Context Enrichment** (Routing Engine): after every successful allocation, `_write_pool_context()` writes `core.pool.id`, `core.pool.channels`, and (when set) `core.pool.mentionable_pools` to ContextStore (source: `routing_engine`, confidence: 1.0, visibility: `agents_only`, TTL 24h NX). Reads from routing engine's own Redis cache — no extra I/O. `PoolConfig.mentionable_pools: dict[str, str]` populated from `pool.registered` events.
 
 → See [`docs/guias/context-store.md`](docs/guias/context-store.md)
 
@@ -799,7 +831,7 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 > teria deixado a barra dizendo "Neutral" com o commit no lugar. Hoje as duas chamam
 > **`lib/session-sentiment.ts`**, fonte única.
 >
-> **Fonte canônica = ContextStore** (`{tenant}:ctx:{sid}` → `session.sentimento.current`), e isso é
+> **Fonte canônica = ContextStore** (`{tenant}:ctx:{sid}` → `core.sentiment.current`), e isso é
 > medição, não gosto: todo caminho que produz score passa por `update_partial_params` →
 > `write_context_store_sentiment`, inclusive o auto-reporte do `output_schema`. O ctx é
 > **superconjunto estrito** de `partial_params`; ler as duas fontes seria redundante *e* perderia dado.
@@ -1530,9 +1562,9 @@ Endpoints: `GET /v1/pricing/invoice/{tenant_id}` (JSON + `?format=xlsx`), `POST 
 
 Hooks declared in pool YAML (`PoolHooks.on_human_start`/`on_human_end`/`post_human`). Bridge dispatches synthetic `conversations.inbound` with `conference_id` — reuses 100% of conference infrastructure.
 
-**on_human_end** → NPS + wrap-up agents activated in parallel. NPS visibility = `["@ctx.session.customer_participant_id"]` (customer-only). Wrap-up visibility = `["@ctx.session.human_agent_participant_id"]` (agent-only). **Phase B**: `agent_done` does NOT close WS; bridge holds close until all hook agents complete. `hook_pending` Redis counter controls when `_trigger_contact_close()` fires. **Phase C**: `post_human` hooks fire after all `on_human_end` agents complete. Participation events (`conversations.participants`) written by bridge for analytics.
+**on_human_end** → NPS + wrap-up agents activated in parallel. NPS visibility = `["@ctx.core.contact.customer_participant_id"]` (customer-only). Wrap-up visibility = `["@ctx.core.contact.human_agent_participant_id"]` (agent-only). **Phase B**: `agent_done` does NOT close WS; bridge holds close until all hook agents complete. `hook_pending` Redis counter controls when `_trigger_contact_close()` fires. **Phase C**: `post_human` hooks fire after all `on_human_end` agents complete. Participation events (`conversations.participants`) written by bridge for analytics.
 
-Pre-hook ContextStore writes (before hooks fire): `session.close_origin`, `session.customer_participant_id`, `session.human_agent_participant_id`.
+Pre-hook ContextStore writes (before hooks fire): `core.contact.close_origin`, `core.contact.customer_participant_id`, `core.contact.human_agent_participant_id`.
 
 → See [`docs/guias/pool-hooks.md`](docs/guias/pool-hooks.md), [`docs/guias/conference-mechanics.md`](docs/guias/conference-mechanics.md)
 
@@ -1554,7 +1586,7 @@ ClickHouse tables: `analytics.segments` (`ReplacingMergeTree` ORDER BY `(tenant_
 
 Config: `PLUGHUB_ANTHROPIC_API_KEYS=sk-1,sk-2,sk-3` (multi-key activates AccountSelector). `PLUGHUB_OPENAI_API_KEYS` optional fallback. Model profiles (`ModelProfile` Literal = `fast | balanced | powerful | evaluation`): `fast`/`powerful` (antigo `realtime`), `balanced` (Haiku), `evaluation` (Haiku — carga isolada; o Literal do request DEVE incluir `evaluation`, senão o Pydantic 422 antes do mapa). Config API namespace `ai_gateway`: `account_rotation_enabled`, `throttle_retry_after_s`, `evaluation_model`.
 
-**LLM Accounts Catalog (2026-07-01)**: config-api namespace `llm_accounts` (platform-ui: Resources → LLM Accounts) stores non-secret account metadata (`provider`, `display_name`, `rpm_limit`, `tpm_limit`, `active`) per catalog id; the API key itself stays exclusively in env var `PLUGHUB_LLM_ACCOUNT_<ID_UPPER_SNAKE>_API_KEY` on ai-gateway (naming-convention binding, no stored env-var-name field). ai-gateway loads the catalog at boot (`load_llm_accounts_catalog()`), falling back gracefully to the legacy `PLUGHUB_ANTHROPIC_API_KEYS`/`PLUGHUB_OPENAI_API_KEYS` construction if config-api is unreachable. `Pool.llm_account_ids: string[]` (preference order) is written to ContextStore as `session.pool.llm_account_ids[]` by Routing Engine, read by the skill-flow-engine `reason` step, and forwarded as `preferred_config_ids` to `AccountSelector.pick()` — same fallback semantics as the pre-existing evaluation-campaign usage. `ReasonEngine` (`/v1/reason`) was upgraded to be account-aware as part of this change (it previously had no multi-account support, unlike `/v1/inference`).
+**LLM Accounts Catalog (2026-07-01)**: config-api namespace `llm_accounts` (platform-ui: Resources → LLM Accounts) stores non-secret account metadata (`provider`, `display_name`, `rpm_limit`, `tpm_limit`, `active`) per catalog id; the API key itself stays exclusively in env var `PLUGHUB_LLM_ACCOUNT_<ID_UPPER_SNAKE>_API_KEY` on ai-gateway (naming-convention binding, no stored env-var-name field). ai-gateway loads the catalog at boot (`load_llm_accounts_catalog()`), falling back gracefully to the legacy `PLUGHUB_ANTHROPIC_API_KEYS`/`PLUGHUB_OPENAI_API_KEYS` construction if config-api is unreachable. `Pool.llm_account_ids: string[]` (preference order) is written to ContextStore as `core.pool.llm_account_ids[]` by Routing Engine, read by the skill-flow-engine `reason` step, and forwarded as `preferred_config_ids` to `AccountSelector.pick()` — same fallback semantics as the pre-existing evaluation-campaign usage. `ReasonEngine` (`/v1/reason`) was upgraded to be account-aware as part of this change (it previously had no multi-account support, unlike `/v1/inference`).
 
 → See [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md)
 
@@ -1930,7 +1962,7 @@ serve chamadores que **podem suspender**. **Hooks de `on_contact_end` NÃO podem
 suspende o hook agent, o bridge trata `suspended` como hook concluído e **fecha o contato antes de
 renderizar**; por isso o NPS ativo consome o primitivo **INLINE** (`form_get` + menu dinâmico). Os
 dois compartilham `DialogForm` + `form_get` + menu dinâmico; só divergem em suspender-ou-não.
-Delegate é de **nível único** — aninhar no collector colide em `session.delegate_resume_token`.
+Delegate é de **nível único** — aninhar no collector colide em `core.workflow.delegate_resume_token`.
 
 **Três superfícies, um conteúdo:** chat (runner) · inline (hook) · página web pública
 `GET /survey/{token}`. Entrega real do link (SMS/e-mail) é trilha à parte, ainda não construída.

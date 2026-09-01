@@ -941,12 +941,12 @@ EvaluationCampaign.review_workflow_skill_id = "skill_revisao_simples_v1"
    → verifica anti-replay: round_body == result.current_round ou rejeita 409
    → grava no banco (audit trail)
    → escreve no ContextStore:
-       session.review_decision  = "approved" | "contested"
+       core.workflow.review_decision  = "approved" | "contested"
        session.reviewer_id      = caller.user_id
-       session.round_echoed     = 1
+       core.workflow.round_echoed     = 1
    → POST /v1/workflow/resume { token: result.resume_token, decision: "input" }
 
-3. Workflow lê @ctx.session.review_decision no choice step → transita
+3. Workflow lê @ctx.core.workflow.review_decision no choice step → transita
    → próximo suspend: escreve current_round incrementado no ContextStore
    → workflow.events consumer atualiza action_required, current_round, deadline_at, resume_token
 
@@ -958,7 +958,7 @@ EvaluationCampaign.review_workflow_skill_id = "skill_revisao_simples_v1"
 
 ### Padrão do round counter — controlado pelo workflow, ecoado pela UI
 
-O workflow escreve `@ctx.session.current_round` ao entrar em cada suspend. A UI lê o valor recebido no result e o devolve no submit. O evaluation-api usa esse valor para o anti-replay check. O YAML é o único lugar com lógica de quantas voltas existem.
+O workflow escreve `@ctx.core.workflow.current_round` ao entrar em cada suspend. A UI lê o valor recebido no result e o devolve no submit. O evaluation-api usa esse valor para o anti-replay check. O YAML é o único lugar com lógica de quantas voltas existem.
 
 ```yaml
 # Fragmento — o workflow incrementa o próprio contador
@@ -966,22 +966,22 @@ O workflow escreve `@ctx.session.current_round` ao entrar em cada suspend. A UI 
   type: invoke
   tool: context_write
   input:
-    tag: session.current_round
-    value: "{{add(@ctx.session.current_round, 1)}}"
+    tag: core.workflow.current_round
+    value: "{{add(@ctx.core.workflow.current_round, 1)}}"
   on_success: verificar_limite
 
 - id: verificar_limite
   type: choice
   conditions:
-    - field: "@ctx.session.review_decision"
+    - field: "@ctx.core.workflow.review_decision"
       operator: eq
       value: "approved"
       next: encerrar_aprovado
-    - field: "@ctx.session.current_round"
+    - field: "@ctx.core.workflow.current_round"
       operator: gt
       value: 3              # tréplica: único lugar onde o limite existe
       next: congelar_resultado
-    - field: "@ctx.session.review_decision"
+    - field: "@ctx.core.workflow.review_decision"
       operator: eq
       value: "contested"
       next: aguardar_contestacao
@@ -993,11 +993,11 @@ Clientes com réplica configuram `value: 2`; tréplica, `value: 3` — sem nenhu
 
 | Tag | Valor | Escrito por |
 |---|---|---|
-| `session.current_round` | `number` | Workflow (ao entrar no suspend) |
+| `core.workflow.current_round` | `number` | Workflow (ao entrar no suspend) |
 | `session.action_required` | `"review" \| "contestation"` | Workflow (ao entrar no suspend) |
-| `session.review_decision` | `"approved" \| "contested"` | evaluation-api (antes do resume) |
+| `core.workflow.review_decision` | `"approved" \| "contested"` | evaluation-api (antes do resume) |
 | `session.reviewer_id` | `user_id` | evaluation-api (antes do resume) |
-| `session.round_echoed` | `number` | evaluation-api (confirmação do anti-replay) |
+| `core.workflow.round_echoed` | `number` | evaluation-api (confirmação do anti-replay) |
 
 TTL: os campos de workflow de avaliação usam TTL de 7 dias (`604800s`) — diferente do TTL padrão de 4h do ContextStore — para suportar ciclos de revisão longos. Configurável via Config API namespace `evaluation` key `workflow_context_ttl_s`.
 
@@ -1040,7 +1040,7 @@ steps:
   - id: init_round
     type: invoke
     tool: context_write
-    input: { tag: session.current_round, value: 1 }
+    input: { tag: core.workflow.current_round, value: 1 }
     on_success: aguardar_revisao
 
   - id: aguardar_revisao
@@ -1054,11 +1054,11 @@ steps:
   - id: verificar_decisao
     type: choice
     conditions:
-      - field: "@ctx.session.review_decision"
+      - field: "@ctx.core.workflow.review_decision"
         operator: eq
         value: "approved"
         next: encerrar_aprovado
-      - field: "@ctx.session.review_decision"
+      - field: "@ctx.core.workflow.review_decision"
         operator: eq
         value: "contested"
         next: incrementar_round
@@ -1067,14 +1067,14 @@ steps:
     type: invoke
     tool: context_write
     input:
-      tag: session.current_round
-      value: "{{add(@ctx.session.current_round, 1)}}"
+      tag: core.workflow.current_round
+      value: "{{add(@ctx.core.workflow.current_round, 1)}}"
     on_success: verificar_limite
 
   - id: verificar_limite
     type: choice
     conditions:
-      - field: "@ctx.session.current_round"
+      - field: "@ctx.core.workflow.current_round"
         operator: gt
         value: 3
         next: congelar_resultado
@@ -1344,7 +1344,7 @@ Todos os componentes abaixo foram implementados:
 - ✅ `EvaluationContestation`: campos `round_number`, `authority_level` (DDL em `db.py`)
 - ✅ `GET /v1/evaluation/results/{id}` — `available_actions` computado server-side via `_compute_available_actions(result, jwt_payload, pool_id)` (ABAC; Bearer opcional)
 - ✅ `POST /v1/evaluation/results/{id}/review` — JWT decode, `_check_abac_permission(…, "revisar", pool_id)`, anti-replay de `round`, ContextStore write, workflow resume
-- ✅ `POST /v1/evaluation/contestations` — JWT decode, `_check_abac_permission(…, "contestar", pool_id)`, anti-replay de `round`, ContextStore write (`session.review_decision = "contested"`), workflow resume
+- ✅ `POST /v1/evaluation/contestations` — JWT decode, `_check_abac_permission(…, "contestar", pool_id)`, anti-replay de `round`, ContextStore write (`core.workflow.review_decision = "contested"`), workflow resume
 - ✅ Consumer `workflow.events` no `evaluation-api/main.py` — `_on_workflow_event()`: atualiza `action_required`, `current_round`, `deadline_at`, `resume_token`, `locked`, `lock_reason` via `update_result_workflow_state()` e `lock_result()`
 - ✅ Trigger de workflow ao submeter resultado: `POST /v1/workflow/trigger` com `flow_id = campaign.review_workflow_skill_id`
 - ✅ `packages/skill-flow-engine/skills/skill_revisao_simples_v1.yaml` — ciclo simples (1 round, 6 steps)
@@ -1366,5 +1366,5 @@ Todos os componentes abaixo foram implementados:
 - Nunca pular a verificação de `round` no submit — `round_body != result.current_round` → 409
 - Nunca escrever `resume_token` em logs — é um segredo de retomada do workflow
 - Nunca modificar resultado com `locked=true` — qualquer tentativa retorna 409
-- Nunca fazer `workflow/resume` sem antes gravar `session.review_decision` no ContextStore — o choice step do workflow depende desse valor
+- Nunca fazer `workflow/resume` sem antes gravar `core.workflow.review_decision` no ContextStore — o choice step do workflow depende desse valor
 - O YAML da skill é o único lugar com lógica de quantos rounds existem — nunca hardcodar `max_rounds` no evaluation-api

@@ -130,7 +130,7 @@ participante + NPS multi-humano] → **Fase 1 (wrap-up do não-último)** → **
 
 Resolve o **gap (2)** do §7 (roteamento de menu por participante) e o report "wrap-up só funciona no
 segmento final". Causa-raiz: identidade do humano vivia num único campo de SESSÃO
-(`session.human_agent_participant_id`), lido por 4 componentes e sobrescrito a cada humano. Movida
+(`core.contact.human_agent_participant_id`), lido por 4 componentes e sobrescrito a cada humano. Movida
 para `segment.{segId}.served_human_participant_id` (fonte única por escopo — ver
 [`docs/adr/adr-participant-identity-single-source.md`](../adr/adr-participant-identity-single-source.md)).
 Três partes: (a) endereçamento por-segmento (bridge `fire_pool_hooks`+join, YAML `@segment.*`);
@@ -161,8 +161,8 @@ primary  operator@… 22:21:09→09    resolved        closed
 O segmento do **primeiro** primário (admin, handoff#1) fica **`in progress` indefinidamente** — o
 `agent_done`/handoff não encerra o segmento quando há outro primário ativo. Consequência em cadeia:
 o contato nunca atinge "todos os primários encerraram" → **`on_human_end` não dispara** (sem wrap-up
-nem NPS) → **não fecha** → **re-enfileira** (ContextStore da sessão só tinha `session.pool.id`+
-`session.queue.position=1`, nenhum `served_human`/`human_agent_participant_id`/`close_origin`).
+nem NPS) → **não fecha** → **re-enfileira** (ContextStore da sessão só tinha `core.pool.id`+
+`core.queue.position=1`, nenhum `served_human`/`human_agent_participant_id`/`close_origin`).
 
 **Conclusão**: o wrap-up/NPS ausentes nesse cenário são **sintoma**, não causa. A causa é o
 encerramento de segmento do primário não-último (segment-end no handoff/close com N primários). A

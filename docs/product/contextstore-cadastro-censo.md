@@ -1,5 +1,12 @@
 # Censo de cadastro do ContextStore — a lista da D9 por análise estática
 
+> ⚠️ **Os nomes deste relatório são os de 2026-08-30 e NÃO foram reescritos.** A CNS-11
+> (2026-09-01) migrou os 35 nomes da plataforma para o root `core.*` — `session.pool.id`
+> virou `core.pool.id`, `session.close_origin` virou `core.contact.close_origin`, e assim
+> por diante. Um censo é uma **medição datada**: reescrevê-lo faria o documento afirmar
+> que mediu algo que não existia quando ele rodou. A tabela de-para vive em
+> [`contextstore-core-namespace-spec.md`](contextstore-core-namespace-spec.md) §4.
+
 > **Medido em 2026-08-30**, sobre `packages/skill-flow-engine/skills/` (42 YAML) e os
 > escritores de código de plataforma. É a fase de **análise estática** que a
 > [D9](../adr/adr-contextstore-allowlist.md) prometeu no lugar do *loop-until-dry* da V4

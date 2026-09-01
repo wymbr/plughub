@@ -55,7 +55,7 @@ suplementar (posição histórica), não como fonte de verdade.
 3. **Canal é hard filter**: o pool de fila deve cobrir os `channel_types` do pool-alvo
    (voz exige capacidade de mídia — música de espera + anúncios são um skill-flow).
 4. **Custo controlável**: o skill-flow de fila pode ser mecânico (`notify` + `receive` +
-   posição via ContextStore escrita pelo Routing — `session.queue.position`, `session.queue.eta`)
+   posição via ContextStore escrita pelo Routing — `core.queue.position`, `session.queue.eta`)
    com **zero chamada de LLM**. "Fila muda" é um skill-flow que não fala nada.
 
 ## O endereço do agente de fila é um POOL — `queue_config.pool_id` (P2/F2, 2026-08-18)
@@ -336,7 +336,7 @@ emissão do evento analítico:
 |---|---|
 | **schemas** | enum `outcome`; `pool_kind` + `queue_pool_id` no PoolConfig; `max_session_pool` opcional (reserva); `outage_cause` |
 | **agent-registry** | CRUD/YAML dos novos campos de pool |
-| **routing-engine** | **admissão híbrida** (reserva por pool + shared = total − Σ reservas, INCR-check-rollback); sem recurso → aloca pool de fila (mantém pedido pendente no alvo); no allocated → dispensa agente de fila; escreve `session.queue.position/eta` no ContextStore; sem pool de fila → caminho outage com **segmento sintético** (`agent_type=system`, `outcome=outage`, `outage_cause`) em `conversations.participants` |
+| **routing-engine** | **admissão híbrida** (reserva por pool + shared = total − Σ reservas, INCR-check-rollback); sem recurso → aloca pool de fila (mantém pedido pendente no alvo); no allocated → dispensa agente de fila; escreve `core.queue.position/eta` no ContextStore; sem pool de fila → caminho outage com **segmento sintético** (`agent_type=system`, `outcome=outage`, `outage_cause`) em `conversations.participants` |
 | **orchestrator-bridge** | sinal de dispensa ao skill-flow de fila; mapeamento outcome→close_reason auditado |
 | **Core** | sessão criada sempre (outage incluso); fechar-sempre no disconnect; metering pula outage |
 | **channel-gateway** | render de rejeição por canal; detecção de disconnect → close (caminho atendido já existe) |
@@ -393,8 +393,8 @@ emissão do evento analítico:
   (role=queue, `participant_id=queue-{session_id}`, instance_id="") antes do
   `activate_native_agent` e `participant_left` (duration, outcome do flow, flow_id) na
   conclusão; **não** toca `segment_seq`/`primary_segment`/`last_outcome` (só primary dirige
-  outcome de sessão); (3) routing `_write_queue_context` — `session.queue.position` (tamanho
-  do bucket pós-SADD, 1-based) + `session.queue.eta_ms` (posição × sla_target_ms × 0.7) no
+  outcome de sessão); (3) routing `_write_queue_context` — `core.queue.position` (tamanho
+  do bucket pós-SADD, 1-based) + `core.queue.eta_ms` (posição × sla_target_ms × 0.7) no
   ContextStore a cada tentativa de enqueue (drain re-attempts refrescam posição); (4) ~~default
   de tenant — Config API namespace `session` keys `queue_default_agent_type_id`/
   `queue_default_skill_id` (seed + `session_config.py`); pool sem `queue_config` cai no

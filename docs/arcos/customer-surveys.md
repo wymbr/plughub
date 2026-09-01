@@ -59,7 +59,7 @@ Validado nos artefatos do repositório:
   (hoje usado para wrap-up `side: agent`).
 - **`skill_nps_v1`** (arquivo `agente_nps_v1.yaml`) é a "pesquisa simples" citada: pergunta 0–10
   ("recomendaria…"), disparada no fim de contato, ramifica o grão (`segment` se há
-  `@ctx.session.surveyed_segment_id`, senão `session`) e grava via `survey_record`.
+  `@ctx.core.survey.segment_id`, senão `session`) e grava via `survey_record`.
   **→ Achado de nomenclatura (reportado pelo usuário):** o slot é **transacional** (fim de cada ciclo)
   — estruturalmente um **CSAT** —, mas o instrumento embutido é **NPS** (escala 0–10, "recomendaria").
   Instrumento e gatilho estão **colados** num skill por métrica. O §3 corrige isso.
@@ -167,7 +167,7 @@ Branching e múltiplas métricas já são nativos do skill-flow + `survey_record
 ### Contrato (separação plataforma × skill)
 
 - **Plataforma (mecanismo)** — despacha o hook, segura a sessão do cliente (`posatt:customer_active`)
-  e **expõe o outcome no ContextStore** antes de disparar: além de `session.close_origin`/
+  e **expõe o outcome no ContextStore** antes de disparar: além de `core.contact.close_origin`/
   `surveyed_segment_id`/`surveyed_agent_key` (já escritos), carimba **`session.contact_outcome`** e
   **`session.segment_outcome`** (o fato; não a decisão). Esse é o **único pré-requisito de plataforma**
   desta revisão — expor um dado, não uma regra.
@@ -706,8 +706,8 @@ quarentena Redis + ledger PG + amostragem + lock). Auditada (AuditPolicy → Mcp
 ```yaml
 # skill_survey_runner_v1.yaml — DECIDE-NO-SKILL: outcome → elegibilidade → instrumento → registro.
 # Plataforma despacha SEMPRE; este skill decide se pesquisa. Substitui o skill_nps_v1.
-# Pré-req ContextStore (bridge, pré-hook): session.contact_outcome, session.close_origin,
-#   session.customer_participant_id, session.surveyed_segment_id, session.surveyed_agent_key,
+# Pré-req ContextStore (bridge, pré-hook): session.contact_outcome, core.contact.close_origin,
+#   core.contact.customer_participant_id, core.survey.segment_id, core.survey.agent_key,
 #   session.contact_identifier (null = anônimo), session.survey_id.
 id: skill_survey_runner_v1
 name: "Survey Runner v1 — pesquisa de satisfação genérica"
@@ -720,7 +720,7 @@ steps:
   - id: gate_outcome
     type: choice
     conditions:
-      - { field: "@ctx.session.close_origin",   operator: eq, value: "customer_disconnect", next: encerrar }
+      - { field: "@ctx.core.contact.close_origin",   operator: eq, value: "customer_disconnect", next: encerrar }
       - { field: "@ctx.session.contact_outcome", operator: eq, value: "resolved",            next: check_eligibility }
     default: encerrar          # escalated/abandoned/suspended → não pesquisa
 
@@ -748,14 +748,14 @@ steps:
   - id: agradecer
     type: notify
     message: "Obrigado pelo contato! Pode avaliar este atendimento?"
-    visibility: ["@ctx.session.customer_participant_id"]
+    visibility: ["@ctx.core.contact.customer_participant_id"]
     on_success: pergunta_csat
     on_failure: encerrar
   - id: pergunta_csat
     type: menu
     interaction: button
     prompt: "Em uma escala de 1 a 5, quão satisfeito você ficou com este atendimento?"
-    visibility: ["@ctx.session.customer_participant_id"]
+    visibility: ["@ctx.core.contact.customer_participant_id"]
     timeout_s: 60
     options: [ {id: "1", label: "1"}, {id: "2", label: "2"}, {id: "3", label: "3"}, {id: "4", label: "4"}, {id: "5", label: "5"} ]
     output_as: csat_resposta
@@ -766,7 +766,7 @@ steps:
   - id: agradecer_final
     type: notify
     message: "Agradecemos sua avaliação! ✅"
-    visibility: ["@ctx.session.customer_participant_id"]
+    visibility: ["@ctx.core.contact.customer_participant_id"]
     on_success: escolher_grao
     on_failure: escolher_grao
   # (branching do §4.6: detrator → oferta de callback; promotor → link de review — choice opcional aqui)
@@ -775,7 +775,7 @@ steps:
   - id: escolher_grao
     type: choice
     conditions:
-      - { field: "@ctx.session.surveyed_segment_id", operator: exists, next: gravar_segmento }
+      - { field: "@ctx.core.survey.segment_id", operator: exists, next: gravar_segmento }
     default: gravar_sessao
   - id: gravar_segmento
     type: invoke
@@ -784,8 +784,8 @@ steps:
       tenant_id: "$.tenant_id"
       origin_session_id: "$.session_id"
       grain: "segment"
-      segment_id: "@ctx.session.surveyed_segment_id"
-      agent_key: "@ctx.session.surveyed_agent_key"
+      segment_id: "@ctx.core.survey.segment_id"
+      agent_key: "@ctx.core.survey.agent_key"
       signals: [ { metric: "csat", value: "$.pipeline_state.csat_resposta" } ]
     on_success: encerrar
     on_failure: encerrar

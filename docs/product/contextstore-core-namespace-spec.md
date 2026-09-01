@@ -26,14 +26,14 @@ Quatro consequências:
 ### Por que reservar o core, e não o `session.*`
 
 A primeira versão desta spec reservava `session.*`. O dono inverteu, e a inversão é melhor por
-uma razão que se mede: **o core é pequeno, fechado e semeado (36 nomes); o espaço do tenant é
+uma razão que se mede: **o core é pequeno, fechado e semeado (35 nomes); o espaço do tenant é
 aberto.** Reservar o conjunto pequeno e liberar o aberto custa um terço do trabalho e não obriga
 ninguém a enumerar a coisa grande.
 
 | proposta | nomes que teriam de mudar |
 |---|---|
-| reservar `session.*` | 36 do core **+ 76 de skill** = 112 |
-| **reservar `core.*`** | **36**, só os do core |
+| reservar `session.*` | 35 do core **+ 76 de skill** = 111 |
+| **reservar `core.*`** | **35**, só os do core |
 
 E resolve de graça uma pergunta que a versão anterior deixava aberta: o `delegate`/`collect`
 compõe `session.<chave>` **no código do gateway** (`webhook.py:1693`). Sob a reserva de
@@ -82,7 +82,7 @@ em `infra/test`, `packages/e2e-tests` ou `infra/scripts`. As duas exceções:
 
 | origem | nomes | grafia |
 |---|---|---|
-| **plataforma** | **36** | 13 já canônicos · 23 planos/legados |
+| **plataforma** | **35** | 13 já canônicos · 22 planos/legados |
 | **tenant** (skills) | 61 | 48 legados · resto canônico |
 
 ### 1.4 Idioma do core
@@ -146,14 +146,29 @@ journey.                    → hash da journey   (30 d)
 qualquer outro prefixo      → hash da SESSÃO    ( 4 h)   ← o default
 ```
 
-`core.` cairia no default e ganharia o hash da sessão — **que é exatamente onde os 36 já vivem
-hoje**, logo nada muda agora. O risco é futuro e é silencioso: no dia em que o core precisar de
-um fato de processo, `core.journey.x` **não** começa com `journey.`, cai no default e recebe
-4 h em vez de 30 dias, sem erro em lugar nenhum.
+> ⚠️ **EMENDA — a versão original desta seção estava ERRADA, e a CNS-03 a refutou ao
+> implementá-la.** Ela dizia que `core.` cairia no default *"que é exatamente onde os 36 já
+> vivem hoje, logo nada muda agora"*, e propunha declarar `core.` inteiro apontando para a
+> sessão. Falso: **`core.customer.*` absorve `insight.historico.*` e `pricing.*`, que roteiam
+> para o hash do CLIENTE com 90 dias.** Declarar `core.` para a sessão teria movido dado de
+> retenção trimestral para um hash de 4 horas — o defeito que a seção existia para evitar,
+> cometido pela própria correção. E a proposta original tinha um segundo problema: uma rota
+> que devolve o mesmo que o default é **decorativa por construção**, e nenhum teste poderia
+> reprová-la.
 
-**Por isso `core.` entra explicitamente na tabela**, apontando para o hash da sessão, em vez de
-herdar o default. Uma linha em três casas. Assim quem precisar de `core` com outro escopo bate
-numa tabela declarada e tem de decidir.
+**O que ficou (CNS-03): o escopo de uma tag do core é o seu SEGUNDO segmento**, e só as rotas
+que DIVERGEM do default são declaradas:
+
+```
+core.customer.*  → hash do CLIENTE,  90 d   (junto de insight.historico, pricing)
+core.journey.*   → hash da JOURNEY,  30 d   (junto de journey.)
+core.*  (resto)  → hash da SESSÃO,    4 h   (como qualquer outro root)
+```
+
+A tabela (`CONTEXT_ROUTE_PREFIXES`) mudou de casa na **CNS-04**: vive em `@plughub/schemas`, o
+pacote base, e o SDK a importa. Antes havia duas listas para a mesma pergunta e elas
+discordavam — o oráculo admitia `customer` como root prometendo 90 d, enquanto `customer.` não
+roteia para lugar nenhum.
 
 > É a família de defeito que o `CLAUDE.md` cataloga em *"Degradação NUNCA é silenciosa"*: um
 > default que "conserta" a ausência troca falha barulhenta por mentira tranquila.
@@ -161,8 +176,13 @@ numa tabela declarada e tem de decidir.
 ### 2.3 O eixo que a decisão sacrifica, declarado
 
 Hoje o primeiro segmento carrega **escopo** (retenção). Com `core.*` ele passa a carregar
-**propriedade**, e o escopo sai dos nomes do core. Aceito porque **os 36 nomes do core são todos
-de sessão** — medido, não suposto. A guarda da §2.2 é o que impede isso de virar dívida muda.
+**propriedade**.
+
+⚠️ Esta seção afirmava que o escopo *saía* dos nomes do core, *"aceito porque os 36 nomes do
+core são todos de sessão — medido, não suposto"*. **A afirmação era falsa** (ver a emenda da
+§2.2), e o adjetivo *"medido"* a tornava pior: dava a uma suposição a autoridade de uma
+medição. O escopo não saiu — **desceu um segmento**, e as duas rotas não-sessão estão
+declaradas.
 
 ### 2.4 `core.customer.*` — o de maior risco, e estava fora de todas as listas
 
@@ -314,3 +334,24 @@ sobretudo declarar que o campo existe, e a proteção de PII é a fatia menor.
 **O que esta spec RESOLVE do ADR:** a decisão aberta **#3** (lista de domínios) deixa de existir
 como problema da plataforma — o vocabulário de negócio é do tenant, e o único domínio que a
 plataforma fecha é o seu próprio, sob `core.`.
+
+---
+
+## 9. As-built — CNS-11, executada em 2026-09-01
+
+**84 arquivos e 368 ocorrências** na passada mecânica, mais **34 folhas** movidas de
+`contexto.session.*` para `contexto.core.*` nos dois mirrors do mapa. Detalhe e achados no
+`CHANGELOG.md` § 2026-09-01 CNS-11.
+
+**São 35 nomes, não 36.** `session.copilot.mode` **ficou de fora**: é o único cuja escrita é
+ambígua — código de plataforma (bridge · `bpm.ts` · `mention-commands.ts`) executando um nome
+que o SKILL declara em `mention_commands.set_context`. Movê-lo faria um skill nomear chave do
+core, que é o alçapão que a reserva existe para fechar. **Decisão em aberto**, não esquecimento.
+
+**Os aliases foram de 82 para 116** (+34): cada canônica antiga entrou no `legado` da nova. Não
+é migração — é o que mantém o snapshot durável mascarado, e por isso **fica**.
+
+**A prova de completude** foi o censo voltar exatamente aos números anteriores — escritos 91,
+não cobertos 4, lidos sem escritor 21, dinâmicos 0 —, depois de o próprio censo aprender o
+vocabulário novo. Ele havia publicado `plataforma 0` sobre 35 escritas vivas: **instrumento que
+não aprende o vocabulário novo não mede menos, mede errado, e para o lado tranquilizador.**
