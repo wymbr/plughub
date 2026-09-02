@@ -22,6 +22,11 @@ USER_ID="${USER_ID:-deploy_migration}"
 declare -A POOLS=(
   [copilot_sac]="skill_copilot_sac_v1 10"
   [nps_ia]="skill_nps_v1 20"
+  # ⚠️ MORTA desde a Camada E2 Fase 3 (wrap-up unificado): o pool `wrapup_ia` foi
+  # removido (ver `infra/registry/tenant_demo.yaml`) e o `skill_wrapup_v1.yaml`
+  # apagado em 2026-09-01 (CNS-15). A linha FICA porque este script e um registro
+  # do que a Fase 3c migrou — remove-la faria o script mentir sobre o que ele fez.
+  # Quem o re-executar hoje ja falharia neste pool, com ou sem o arquivo.
   [wrapup_ia]="skill_wrapup_v1 20"
   [portabilidade_processo_ia]="skill_portabilidade_demo_v1 20"
   [portabilidade_confirmacao]="skill_agente_confirmacao_portabilidade_v1 10"

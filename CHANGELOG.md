@@ -1,5 +1,55 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-15: três skills apagados, nove mantidos com razão nomeada
+
+Decisão caso a caso sobre os 12 sem deploy vivo que a CNS-01 mediu. **Apagar em bloco
+teria removido quatro skills que o código chama** — e dois achados mudaram a conta.
+
+### Os dois achados que encurtaram a decisão
+
+**`skill_survey_runner_v1.yaml` carrega "Quarentena documentada"**, e `survey_trigger_v1`
+e `survey_outbound_v1` apontam para essa nota. É o mesmo critério com que o repositório
+mantém os dois pacotes fósseis: *"apagá-los troca um erro documentado por um buraco
+mudo"*. Ficam os três, por decisão já tomada.
+
+**`skill_scheduled_deploy_v1` tem dependência FUNCIONAL** — `agent-registry/src/routes/
+skills.ts:522` monta `?flow_id=skill_scheduled_deploy_v1&status=suspended`. Numa leitura
+grosseira ele teria ido junto; as outras citações dele são comentário, e só a leitura
+sítio a sítio separou uma coisa da outra.
+
+### O que ficou, e por quê
+
+| ficam | razão |
+|---|---|
+| `survey_runner_v1` · `survey_trigger_v1` · `survey_outbound_v1` | quarentena declarada no próprio arquivo |
+| `atendimento_portabilidade_v1` · `atendimento_reembolso_v1` | Fase 2 encenada, declarada no cabeçalho — **não-deployado ≠ abandonado** |
+| `scheduled_deploy_v1` | código consulta instâncias por `flow_id=` esse nome |
+| `revisao_treplica_v1` · `pre_revisao_v1` · `revisao_v1` | motor de revisão legado; o `CLAUDE.md` já prescreve remover **o motor inteiro** (consumer + coluna + seletor). Apagar só os arquivos deixaria a `CampaignsPage` oferecendo skill inexistente |
+
+### O que saiu
+
+* **`skill_journey_demo_v1`** — única citação era comentário noutro skill.
+* **`agente_wrapup_v1`** (`skill_wrapup_v1`) — o **pool** foi explicitamente removido
+  (`tenant_demo.yaml:634`: *"wrapup_ia REMOVIDO — Camada E2 Phase 3"*) e substituído pelo
+  `wrapup_detached`, que está deployado. Resíduo de feature descomissionada.
+* **`skill_reembolso_demo_v1`** — única citação é comentário num gate, que aliás diz
+  *"nenhum pool os usa"*.
+
+`scripts/migrate_conference_pools.sh` **foi anotado, não editado**: a entrada `wrapup_ia`
+fica, porque o script é registro do que a Fase 3c migrou e removê-la o faria mentir sobre
+o que ele fez. Quem o re-executar hoje já falharia naquele pool, com ou sem o arquivo.
+
+### Efeito medido no censo
+
+`escritos 91 → 85` · `não cobertos 4 → 3`. O que caiu foi `session.journey_demo_ping`,
+escrito pelo skill apagado.
+
+⚠️ **`session.journey_echo` SOBREVIVEU**, e isso corrige uma suposição: os "dois ecos de
+demo" da decisão aberta #4 do ADR não vinham do mesmo lugar — este é escrito por
+`skill_survey_outbound_v1.yaml:103`, que está em **quarentena declarada** e fica. A
+decisão #4 passa a ser sobre **um** tag, e o dono dele não é descartável.
+
+
 ## 2026-09-01 — CNS-01: o inventário de skills, medido ao vivo — e a tarefa era falsa
 
 ### As duas metades da tarefa caíram na medição

@@ -77,7 +77,8 @@ e o `agente_fila_v1` **não tocam** o ContextStore.
 > **3 pools fantasma NÃO EXISTEM** — eram referência de YAML que nunca virou deploy. É a
 > regra da casa se cobrando: *"para deploy, pergunte ao agent-registry, NUNCA ao YAML"*.
 
-**42 arquivos · 30 com deploy vivo · 12 sem.** E *"sem deploy"* **não é sinônimo de morto** —
+**39 arquivos · 30 com deploy vivo · 9 sem** *(eram 42/12 antes da CNS-15, que apagou três:
+`journey_demo_v1`, `wrapup_v1` e `reembolso_demo_v1`).* E *"sem deploy"* **não é sinônimo de morto** —
 classificando os 12 por quem os cita (varredura completa em `packages/`, `infra/`, `scripts/`,
 não só nos diretórios de teste):
 
@@ -87,7 +88,7 @@ não só nos diretórios de teste):
 | **desenho encenado** (Fase 2 declarada no próprio cabeçalho) | 2 | `atendimento_portabilidade_v1` · `atendimento_reembolso_v1` |
 | citado por **teste** | 2 | `reembolso_demo_v1` (`gate_external_resume.sh`) · `survey_runner_v1` |
 | citação só **histórica** (migration SQL, script de migração) | 3 | `pre_revisao_v1` · `revisao_v1` · `wrapup_v1` |
-| **sem citação funcional** | 1 | `journey_demo_v1` (só um comentário noutro skill) |
+| ~~**sem citação funcional**~~ | ~~1~~ | `journey_demo_v1` — **apagado** na CNS-15 |
 
 **Conclusão: apagar em bloco não é ação segura, e a premissa da CNS-01 caiu.** Dos 12, **um**
 é inequivocamente descartável. Os outros 11 têm razão — e a razão é diferente em cada balde,
