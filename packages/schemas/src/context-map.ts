@@ -120,6 +120,35 @@ export const ContextMapFieldSchema = z.object({
    */
   legado: z.array(z.string().min(1)).optional(),
   label: z.string().optional(),
+  /**
+   * Campo ARQUIVADO — separa ESCRITA de LEITURA (E1, 2026-09-02).
+   *
+   * `true` significa *"não use mais este campo"*, e não *"este campo não existe"*:
+   *
+   *   · **W (escrita)** — o portão de publish RECUSA um flow que escreva nele;
+   *   · **R (leitura)** — a folha continua aqui, com o tipo, então o histórico já
+   *     gravado **segue mascarado**. Apagar a folha o desmascararia.
+   *
+   * É a forma que a casa já escolheu para `DialogForm`
+   * (`adr-dialog-form-deletion.md`, aceito e implementado): DELETE é ARQUIVAR,
+   * reversível, e purga real só do que nunca foi usado. Aqui o "nunca foi usado" é
+   * medível — é o balde C de `infra/test/aliases_v5_buckets.py`: sem produtor e sem
+   * história durável.
+   *
+   * `.optional()` e não `.default(false)` pela MESMA razão que `legado`: com
+   * `default` o campo vira obrigatório no tipo de SAÍDA do Zod, e as ~97 folhas
+   * teriam de repetir `arquivado: false` sem acrescentar nada. Ausente já significa
+   * "ativo" para todo consumidor.
+   */
+  /**
+   * ⚠️ Quem consome este campo é o **portão de publish**, e ele o lê do MAPA, não do
+   * `ContextTagIndex`. O índice é a abstração compartilhada com o gêmeo Python
+   * (`plughub_contextstore`), e o runtime — que é quem usa o gêmeo — não precisa saber
+   * de arquivamento: uma folha arquivada segue declarada, resolve `canonical` e mascara
+   * igual. Pôr o fato no índice criaria um campo que só metade dos gêmeos tem, para
+   * ninguém usar do outro lado.
+   */
+  arquivado: z.boolean().optional(),
 })
 export type ContextMapField = z.infer<typeof ContextMapFieldSchema>
 

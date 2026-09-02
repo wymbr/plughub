@@ -114,6 +114,21 @@
   "contextMapPage": {
     "title": "Campos do ContextStore",
     "subtitle": "Quais campos existem no ContextStore, em escopo.dominio.campo, cada um nomeando um tipo do catálogo. O mapa é a allowlist: campo que não está aqui não está declarado. O catálogo em si — o que cada tipo mascara e sua classe LGPD — é configurado em Mascaramento.",
-    "catalogueNote": "A lista de tipos vem do catálogo e não pode ser estendida aqui. O que um tipo mascara, para quais papéis, e sua classe LGPD são configurados em Mascaramento — uma concessão separada, porque são uma decisão separada."
+    "catalogueNote": "A lista de tipos vem do catálogo e não pode ser estendida aqui. O que um tipo mascara, para quais papéis, e sua classe LGPD são configurados em Mascaramento — uma concessão separada, porque são uma decisão separada.",
+    "addField": "Cadastrar campo",
+    "domain": "domínio",
+    "field": "campo",
+    "add": "Cadastrar",
+    "pickType": "Escolha um tipo do catálogo.",
+    "pickTypeShort": "tipo…",
+    "exists": "já existe",
+    "threeSegments": "Use escopo.dominio.campo — três segmentos.",
+    "rename": "Renomear (mantém um alias)",
+    "confirmRename": "Renomear",
+    "renamed": "Renomeado. \"{{old}}\" ficou como alias, para o dado já gravado seguir mascarado.",
+    "renameNote": "O dado já gravado permanece com o nome ANTIGO. A grafia antiga entra automaticamente nos aliases deste campo, para o histórico continuar mascarado.",
+    "archive": "Arquivar — bloqueia escrita nova, mantém o histórico mascarado",
+    "unarchive": "Desarquivar",
+    "addNote": "O escopo é lista fechada porque o primeiro segmento decide o store e a retenção: session = 4h, journey = 30d. Digitar um escopo novo decidiria retenção de PII por acidente."
   }
 }

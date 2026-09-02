@@ -142,7 +142,21 @@ esac
 
 # ── C. A PROPOSIÇÃO CENTRAL: o mapa vivo é DERIVÁVEL dos arquivos ────────────
 echo
-echo "-- C. reprodutibilidade: SEMENTE + arquivo == mapa VIVO --"
+# ⚠️ **CONTENÇÃO, não igualdade — mudou na E6 (2026-09-02).** Enquanto a tela de cadastro
+# era só leitura de tipo, `vivo == semente + arquivo` valia e era a asserção mais forte.
+# Com a tela criando campo (E2), a PRIMEIRA criação deixaria este ramo vermelho — e um
+# gate que fica vermelho porque o produto funcionou ensina todo mundo a ignorá-lo.
+#
+# A convenção da casa decide: **seed-if-absent / DB-owned**. Config editada na UI sobrevive
+# ao rebuild; o arquivo só semeia store vazio. É o mesmo que vale para pool, skill e hook,
+# e é a mesma correção que a ALW-04 já aplicou ao gate irmão (`probe_context_map_audit`
+# ramo B passou a medir por contenção e contar o excedente).
+#
+# O que se PERDE é real e fica dito: este ramo deixa de provar que o vivo se reconstrói
+# INTEIRO dos arquivos. Ele passa a provar que o vivo CONTÉM o que os arquivos declaram, e
+# o excedente vira número. O que nasce pela tela segue sem provisionamento e some num
+# `--wipe` — é a ALW-14, registrada, não esquecida.
+echo "-- C. reprodutibilidade: o vivo CONTÉM semente + arquivo (excedente contado) --"
 C=$(PYTHONPATH=$PYSRC python3 - <<PY 2>&1
 import io, json, urllib.request
 from plughub_contextstore.default_map import DEFAULT_CONTEXT_MAP as SEED
@@ -161,24 +175,37 @@ u = "${CONFIG_API}/config/masking/context_map?tenant_id=${TENANT}"
 with urllib.request.urlopen(u, timeout=8) as r:
     vivo = json.loads(r.read().decode("utf-8"))["value"]
 
-c = lambda x: json.dumps(x, sort_keys=True, ensure_ascii=False)
-i = build_context_tag_index(vivo)
+i  = build_context_tag_index(vivo)
+ie = build_context_tag_index(esperado)
+
+# FALTANDO = declarado nos arquivos e ausente do vivo. É o defeito que este ramo existe
+# para pegar: o seed não aplicou, ou alguém apagou do store o que os arquivos declaram.
+faltando = sorted(set(ie.canonical) - set(i.canonical))
+# DIFERE = mesma folha, conteúdo diferente. Também é defeito: o arquivo e o store discordam
+# sobre o TIPO, e o tipo é política de mascaramento.
+difere = sorted(k for k in ie.canonical if k in i.canonical and i.canonical[k] != ie.canonical[k])
+# EXCEDENTE = no vivo e não nos arquivos. NÃO reprova — é o que a tela cadastrou.
+excedente = sorted(set(i.canonical) - set(ie.canonical))
+
 if colisao:
     print("COLISAO " + ",".join(colisao))
-elif c(esperado) == c(vivo):
-    print("OK %d canonicas / %d aliases" % (len(i.canonical), len(i.alias)))
+elif faltando or difere:
+    print("QUEBRA faltando=%s difere=%s" % (faltando[:4], difere[:4]))
 else:
-    ie = build_context_tag_index(esperado)
-    print("DIVERGE vivo=%d/%d esperado=%d/%d"
-          % (len(i.canonical), len(i.alias), len(ie.canonical), len(ie.alias)))
+    print("OK %d canonicas no vivo, %d vindas dos arquivos, %d cadastradas pela tela%s"
+          % (len(i.canonical), len(ie.canonical), len(excedente),
+             (" (" + ", ".join(excedente[:3]) + ("…" if len(excedente) > 3 else "") + ")")
+             if excedente else ""))
 PY
 )
 case "$C" in
-  OK*)      ok "C: o mapa vivo é semente+arquivo — $C" ;;
+  OK*)      ok "C: $C" ;;
   COLISAO*) falha "C: o arquivo redeclara domínio DA PLATAFORMA — $C
        (o arquivo é a CONTRAPARTE da semente, não um override dela)" ;;
-  DIVERGE*) falha "C: o mapa vivo NÃO se reconstrói dos arquivos — $C
-       (é exatamente o defeito da ALW-12: estado que só existe porque já existia)" ;;
+  QUEBRA*)  falha "C: o vivo NÃO contém o que os arquivos declaram — $C
+       'faltando' = o seed não aplicou, ou apagaram do store o que o arquivo declara.
+       'difere'   = arquivo e store discordam do TIPO, que é política de mascaramento.
+       Excedente da tela NÃO cai aqui — ver o cabeçalho deste ramo." ;;
   *)        inc "C: não foi possível conferir ($C)" ;;
 esac
 
@@ -330,4 +357,7 @@ if [ "$FALHAS" -gt 0 ]; then
 elif [ "$INCONCL" -gt 0 ]; then
   echo "INCONCLUSIVO — $INCONCL ramo(s) sem julgar (nunca OK com ramo inconclusivo)"; exit 2
 fi
-echo "OK — o mapa do tenant se reconstrói de arquivos, e o seed não danifica a plataforma"
+# A frase mudou junto com o ramo C (E6): ele não prova mais RECONSTRUÇÃO, prova CONTENÇÃO.
+# Deixar "se reconstrói de arquivos" aqui seria o resumo afirmando mais do que o ramo mede —
+# e o resumo é o que a maioria lê.
+echo "OK — o vivo contém o que os arquivos declaram, e o seed não danifica a plataforma"

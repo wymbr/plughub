@@ -114,6 +114,21 @@
   "contextMapPage": {
     "title": "ContextStore fields",
     "subtitle": "Which fields exist in the ContextStore, in escopo.dominio.campo, each naming a type from the catalogue. The map is the allowlist: a field that is not here is not declared. The catalogue itself — what each type masks, and its LGPD class — is configured under Masking.",
-    "catalogueNote": "The type list comes from the catalogue and cannot be extended here. What a type masks, for which roles, and its LGPD class are configured under Masking — a separate grant, because they are a separate decision."
+    "catalogueNote": "The type list comes from the catalogue and cannot be extended here. What a type masks, for which roles, and its LGPD class are configured under Masking — a separate grant, because they are a separate decision.",
+    "addField": "Register a field",
+    "domain": "domain",
+    "field": "field",
+    "add": "Register",
+    "pickType": "Choose a type from the catalogue.",
+    "pickTypeShort": "type…",
+    "exists": "already exists",
+    "threeSegments": "Use escopo.dominio.campo — three segments.",
+    "rename": "Rename (keeps an alias)",
+    "confirmRename": "Rename",
+    "renamed": "Renamed. \"{{old}}\" kept as an alias so already-stored data stays masked.",
+    "renameNote": "Data already stored keeps the OLD name. The old spelling is added to this field's aliases automatically, so that history stays masked.",
+    "archive": "Archive — blocks new writes, keeps history masked",
+    "unarchive": "Unarchive",
+    "addNote": "The scope is a closed list because the first segment decides the store and its retention: session = 4h, journey = 30d. Typing a new scope would decide PII retention by accident."
   }
 }

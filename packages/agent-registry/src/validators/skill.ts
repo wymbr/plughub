@@ -294,6 +294,21 @@ export async function validateMaskedTypeRefs(
  * ser observação (*"rodar tráfego, esperar aparecer, repetir até secar"*). O primeiro que
  * aparecer tem de ser uma decisão consciente, não um silêncio.
  */
+/**
+ * Prefixo que marca a linha de tag ARQUIVADA dentro do array devolvido por
+ * `validateContextTagRegistration`.
+ *
+ * Aquela função devolve `string[]` (contrato herdado dos vizinhos `validateMasked*`),
+ * e quem a chama precisa distinguir as DUAS famílias para dar `code` diferente — o
+ * editor escolhe a afordância pelo código, e *"cadastre este campo"* é o conselho
+ * ERRADO para um campo que existe e foi aposentado: cadastrá-lo de novo com o mesmo
+ * nome desfaria, em silêncio, a decisão de quem arquivou.
+ *
+ * Marcador no texto e não um tipo de retorno novo: mudar a assinatura obrigaria a
+ * mudar os três validadores irmãos por um fato que só um deles tem.
+ */
+export const ARCHIVED_PREFIX = "[arquivada] "
+
 export async function validateContextTagRegistration(
   flow: SkillFlow,
   opts: { tenantId: string; configApiUrl: string; fetchImpl?: typeof fetch },
@@ -313,6 +328,7 @@ export async function validateContextTagRegistration(
   }
 
   let index: ContextTagIndex
+  const arquivadasNoMapa = new Set<string>()
   try {
     const url  = `${opts.configApiUrl}/config/masking?tenant_id=${encodeURIComponent(opts.tenantId)}`
     const resp = await (opts.fetchImpl ?? fetch)(url)
@@ -322,6 +338,14 @@ export async function validateContextTagRegistration(
     const mapa = (typeof raw === "string" ? JSON.parse(raw) : raw) as ContextMap | undefined
     if (!mapa?.contexto) throw new Error("resposta sem `entries.context_map.contexto`")
     index = buildContextTagIndex(mapa)
+    // Do MAPA, não do índice — ver o comentário de `arquivado` em `context-map.ts`.
+    for (const [escopo, doms] of Object.entries(mapa.contexto)) {
+      for (const [dom, campos] of Object.entries(doms)) {
+        for (const [campo, folha] of Object.entries(campos)) {
+          if (folha?.arquivado) arquivadasNoMapa.add(`${escopo}.${dom}.${campo}`)
+        }
+      }
+    }
   } catch (err) {
     // PASSA, GRITANDO — ver o cabeçalho. A frase diz o que deixou de valer, não que
     // "usou o default": um aviso genérico é um aviso que ninguém lê.
@@ -335,14 +359,37 @@ export async function validateContextTagRegistration(
     return []
   }
 
+  // ── ARQUIVADAS — declaradas, mas proibidas para escrita NOVA (E1) ─────────
+  //
+  // Separado das não cadastradas de propósito: a mensagem tem de dizer coisas
+  // diferentes. "Não existe, cadastre" manda o autor criar; "existe mas foi
+  // aposentada" manda escolher outra — e criar de novo com o mesmo nome seria
+  // desfazer a decisão de quem arquivou, em silêncio.
+  const arquivadas = writes.filter(w => {
+    const r = resolveContextTag(w.tag, index)
+    return r.origin !== "unknown" && arquivadasNoMapa.has(r.canonical)
+  })
+
   const naoCadastradas = writes.filter(w => resolveContextTag(w.tag, index).origin === "unknown")
-  if (naoCadastradas.length === 0) return []
+  if (naoCadastradas.length === 0 && arquivadas.length === 0) return []
+
+  const msgsArquivadas = arquivadas.map(w => ARCHIVED_PREFIX + (() => {
+    const canon = resolveContextTag(w.tag, index).canonical
+    const via   = canon === w.tag ? "" : ` (alias de "${canon}")`
+    return (
+      `step "${w.step ?? "?"}" (${w.surface}): a tag "${w.tag}"${via} está ARQUIVADA no ` +
+      `mapa do ContextStore. Ela continua declarada — o histórico já gravado segue ` +
+      `mascarado — mas escrita NOVA não é aceita. Use outro campo, ou desarquive em ` +
+      `/config/context-map se a aposentadoria foi engano.`
+    )
+  })())
+  if (naoCadastradas.length === 0) return msgsArquivadas
 
   // Uma linha por tag, e ela diz EXATAMENTE o que registrar — é a metade que faltava da
   // decisão #2 do ADR (*"o erro de publish precisa dizer exatamente o que registrar"*).
   // `escopo.dominio.campo` porque é essa a forma do mapa, e sem ela o autor abre a tela
   // sem saber em que caixa digitar.
-  return naoCadastradas.map(w => {
+  return [...msgsArquivadas, ...naoCadastradas.map(w => {
     const partes = w.tag.split(".")
     const forma  = partes.length >= 3
       ? `escopo "${partes[0]}", domínio "${partes[1]}", campo "${partes.slice(2).join(".")}"`
@@ -353,7 +400,7 @@ export async function validateContextTagRegistration(
       `escolhendo um tipo do catálogo. Enquanto não estiver, ela é gravada mas resolve ` +
       `para o mais RESTRITIVO na leitura, e um operador legítimo pode não ver o valor.`
     )
-  })
+  })]
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -447,10 +494,15 @@ export async function validateSkillPayload(
     }
     if (errors.length === 0) {
       for (const m of await validateContextTagRegistration(body.flow, opts)) {
-        // `code` estável e específico: é por ELE que o editor decide oferecer o atalho
-        // para `/config/context-map`. Um código genérico obrigaria o cliente a casar
-        // texto de mensagem, que é a forma mais frágil de acoplamento entre camadas.
-        errors.push({ code: "unregistered_context_tag", message: m })
+        // `code` estável e específico: é por ELE que o editor decide a afordância. Um
+        // código genérico obrigaria o cliente a casar texto de mensagem, que é a forma
+        // mais frágil de acoplamento entre camadas — e as duas famílias pedem conselhos
+        // OPOSTOS: "cadastre" × "escolha outro campo, ou desarquive".
+        const arq = m.startsWith(ARCHIVED_PREFIX)
+        errors.push({
+          code:    arq ? "archived_context_tag" : "unregistered_context_tag",
+          message: arq ? m.slice(ARCHIVED_PREFIX.length) : m,
+        })
       }
     }
   }

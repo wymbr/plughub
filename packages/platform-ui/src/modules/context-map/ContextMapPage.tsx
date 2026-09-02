@@ -48,7 +48,28 @@ import { useNamespace, putConfig } from '../config-plataforma/api/config-hooks'
  *  `probe_seed_drift_named` passaria a acusar uma divergência que a tela criou. */
 const PLATFORM_ROOT = 'core'
 
-interface ContextMapLeaf { tipo: string; legado?: string[]; label?: string }
+/**
+ * Escopos que o autor pode criar. **Lista fechada, e isso não é conservadorismo.**
+ *
+ * O primeiro segmento da tag ROTEIA hash e TTL (`CONTEXT_ROUTE_PREFIXES`, em
+ * `@plughub/schemas`): `session` → 4 h, `journey` → 30 d. Um escopo inventado aqui cairia
+ * no default sem que nada reclamasse — retenção de PII decidida por digitação, degradando
+ * mudo. `core` fica de fora porque é da plataforma, sem exceção.
+ */
+const ESCOPOS_AUTORAVEIS = ['session', 'journey'] as const
+
+/** `escopo.dominio.campo` — três segmentos, minúsculas, `_` e dígitos. */
+const SEG = /^[a-z][a-z0-9_]*$/
+
+function validaNome(escopo: string, dominio: string, campo: string): string | null {
+  if (!ESCOPOS_AUTORAVEIS.includes(escopo as typeof ESCOPOS_AUTORAVEIS[number]))
+    return `escopo inválido — use ${ESCOPOS_AUTORAVEIS.join(' ou ')}`
+  if (!SEG.test(dominio)) return 'domínio: minúsculas, dígitos e _ , começando por letra'
+  if (!SEG.test(campo))   return 'campo: minúsculas, dígitos e _ , começando por letra'
+  return null
+}
+
+interface ContextMapLeaf { tipo: string; legado?: string[]; label?: string; arquivado?: boolean }
 interface ContextMapDoc {
   mode?:             string
   dynamic_prefixes?: string[]
@@ -60,6 +81,11 @@ interface DataTypeCatalog { types: DataTypeEntry[] }
 export default function ContextMapPage() {
   const { t } = useTranslation('masking')
   const { tenantId, session } = useAuth()
+
+  // ── E2/E3/E4 — a tela deixou de ser só leitura de tipo ────────────────────
+  const [novoCampo, setNovoCampo] = useState({ escopo: 'session', dominio: '', campo: '', tipo: '' })
+  const [renomeando, setRenomeando] = useState<{ root: string; dom: string; campo: string } | null>(null)
+  const [novoNome, setNovoNome] = useState('')
   const bearer = session?.accessToken ?? ''
   const [saving, setSaving] = useState(false)
   const [toast,  setToast]  = useState<{ msg: string; ok: boolean } | null>(null)
@@ -106,6 +132,95 @@ export default function ContextMapPage() {
         ...c,
         [root]: { ...c[root], [dom]: { ...c[root]?.[dom], [campo]: { ...c[root]?.[dom]?.[campo], tipo } } },
       },
+    })
+  }
+
+  /** E2 — CRIAR campo. Aditivo: não há dado gravado sob um nome que ainda não existe. */
+  function criarCampo() {
+    const { escopo, dominio, campo, tipo } = novoCampo
+    const erro = validaNome(escopo, dominio, campo)
+    if (erro)  { showToast(erro, false); return }
+    if (!tipo) { showToast(t('contextMapPage.pickType', { defaultValue: 'Choose a type from the catalogue.' }), false); return }
+    const c = contextMap.contexto ?? {}
+    if (c[escopo]?.[dominio]?.[campo]) {
+      showToast(`${escopo}.${dominio}.${campo} ${t('contextMapPage.exists', { defaultValue: 'already exists' })}`, false)
+      return
+    }
+    saveContextMap({
+      ...contextMap,
+      contexto: { ...c, [escopo]: { ...c[escopo], [dominio]: { ...c[escopo]?.[dominio], [campo]: { tipo } } } },
+    })
+    setNovoCampo({ escopo, dominio, campo: '', tipo: '' })
+  }
+
+  /**
+   * E3 — RENOMEAR, e **o nome velho vira alias automaticamente**.
+   *
+   * Renomear parece "alterar", mas o valor JÁ GRAVADO não se move junto: ele continua no
+   * hash sob a grafia antiga. Sem o alias, tudo que existe passa a resolver como não
+   * declarado — o histórico inteiro deixa de ser mascarado, que é o oposto do que o mapa
+   * existe para fazer.
+   *
+   * O array `legado` É o mecanismo de rename; não é resíduo. Por isso quem gera é a tela,
+   * e não o autor lembrar. Os 119 aliases que a V5 mediu são renames que já aconteceram.
+   */
+  function renomearCampo(root: string, dom: string, campoVelho: string, alvo: string) {
+    const partes = alvo.split('.')
+    if (partes.length !== 3) { showToast(t('contextMapPage.threeSegments', { defaultValue: 'Use escopo.dominio.campo — three segments.' }), false); return }
+    const [escopo, dominio, campo] = partes as [string, string, string]
+    const erro = validaNome(escopo, dominio, campo)
+    if (erro) { showToast(erro, false); return }
+
+    const c = contextMap.contexto ?? {}
+    const folha = c[root]?.[dom]?.[campoVelho]
+    if (!folha) { showToast('folha não encontrada', false); return }
+    if (c[escopo]?.[dominio]?.[campo]) { showToast(`${alvo} já existe`, false); return }
+
+    const nomeVelho = `${root}.${dom}.${campoVelho}`
+    const legado = [...new Set([...(folha.legado ?? []), nomeVelho])]
+
+    // Clone profundo e mutação imperativa, de propósito: a versão anterior fazia isto com
+    // spreads aninhados e condicionais `root === escopo`, e o caso "renomear dentro do
+    // MESMO domínio" dependia de três ternários casarem. Um erro ali apagaria as folhas
+    // irmãs em silêncio — o mapa é a allowlist, e perder folha aqui é desmascarar
+    // histórico. Legibilidade neste ponto é propriedade de segurança, não estilo.
+    const próximo: ContextMapDoc['contexto'] = JSON.parse(JSON.stringify(c))
+    delete próximo[root]![dom]![campoVelho]
+    if (Object.keys(próximo[root]![dom]!).length === 0) delete próximo[root]![dom]
+    if (Object.keys(próximo[root]!).length === 0)       delete próximo[root]
+    próximo[escopo]            ??= {}
+    próximo[escopo]![dominio]  ??= {}
+    próximo[escopo]![dominio]![campo] = { ...folha, legado }
+
+    saveContextMap({ ...contextMap, contexto: próximo })
+    setRenomeando(null)
+    showToast(t('contextMapPage.renamed', {
+      defaultValue: 'Renamed. "{{old}}" kept as alias so already-stored data stays masked.',
+      old: nomeVelho,
+    }), true)
+  }
+
+  /**
+   * E4 — ARQUIVAR / desarquivar. **Não apaga**, e a distinção é o ponto:
+   *
+   *   · W (escrita)  — o portão de publish RECUSA um flow que escreva nela;
+   *   · R (leitura)  — a folha fica, com o tipo, e o histórico segue mascarado.
+   *
+   * Mesma forma que `adr-dialog-form-deletion` escolheu para o DialogForm. Purga real
+   * existe só para o que nunca foi usado, e "nunca foi usado" é medível — balde C de
+   * `infra/test/aliases_v5_buckets.py` —, então ela NÃO mora nesta tela: aqui não há como
+   * saber se algum produtor ainda escreve o campo.
+   */
+  function alternarArquivo(root: string, dom: string, campo: string, arquivar: boolean) {
+    const c = contextMap.contexto ?? {}
+    const folha = c[root]?.[dom]?.[campo]
+    if (!folha) return
+    const nova: ContextMapLeaf = { ...folha }
+    if (arquivar) nova.arquivado = true
+    else delete nova.arquivado          // ausente = ativo; `false` seria ruído no JSON
+    saveContextMap({
+      ...contextMap,
+      contexto: { ...c, [root]: { ...c[root], [dom]: { ...c[root]?.[dom], [campo]: nova } } },
     })
   }
 
@@ -172,7 +287,14 @@ export default function ContextMapPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 6 }}>
                     {Object.entries(campos).sort(([a], [b]) => a.localeCompare(b)).map(([campo, leaf]) => (
                       <div key={campo} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#0a1628', borderRadius: 6, padding: '5px 10px' }}>
-                        <code style={{ fontSize: 11, color: '#cbd5e1', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{campo}</code>
+                        <code style={{
+                          fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis',
+                          // Arquivado tem de SE ANUNCIAR na lista: um campo que o publish
+                          // recusa e que parece igual aos outros é a mesma armadilha do
+                          // valor plausível, do lado da tela.
+                          color: leaf.arquivado ? '#78716c' : '#cbd5e1',
+                          textDecoration: leaf.arquivado ? 'line-through' : 'none',
+                        }}>{campo}</code>
                         {daPlataforma ? (
                           <code style={{ fontSize: 11, color: '#7dd3fc' }}>{leaf.tipo}</code>
                         ) : (
@@ -195,6 +317,24 @@ export default function ContextMapPage() {
                             style={{ fontSize: 10, color: '#64748b', cursor: 'help' }}
                           >{leaf.legado?.length} {t('section.contextMap.aliases', { defaultValue: 'aliases' })}</span>
                         )}
+                        {!daPlataforma && (
+                          <>
+                            <button
+                              title={t('contextMapPage.rename', { defaultValue: 'Rename (keeps an alias)' })}
+                              disabled={saving}
+                              onClick={() => { setRenomeando({ root, dom, campo }); setNovoNome(`${root}.${dom}.${campo}`) }}
+                              style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 11, cursor: 'pointer' }}
+                            >✎</button>
+                            <button
+                              title={leaf.arquivado
+                                ? t('contextMapPage.unarchive', { defaultValue: 'Unarchive' })
+                                : t('contextMapPage.archive',   { defaultValue: 'Archive — blocks new writes, keeps history masked' })}
+                              disabled={saving}
+                              onClick={() => alternarArquivo(root, dom, campo, !leaf.arquivado)}
+                              style={{ background: 'none', border: 'none', color: leaf.arquivado ? '#fbbf24' : '#64748b', fontSize: 11, cursor: 'pointer' }}
+                            >{leaf.arquivado ? '⊘' : '⊗'}</button>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -203,6 +343,53 @@ export default function ContextMapPage() {
             </div>
           )
         })}
+
+        {/* ── E2 — cadastrar campo ──────────────────────────────────────────── */}
+        <div style={{ marginTop: 14, padding: '12px 16px', background: '#0f172a', borderRadius: 8, border: '1px solid #1e293b' }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0', marginBottom: 8 }}>
+            {t('contextMapPage.addField', { defaultValue: 'Register a field' })}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            {/* Escopo é SELECT e não texto: o primeiro segmento roteia hash e TTL. */}
+            <select
+              value={novoCampo.escopo}
+              disabled={saving}
+              onChange={e => setNovoCampo({ ...novoCampo, escopo: e.target.value })}
+              style={{         background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '4px 7px' }}
+            >
+              {ESCOPOS_AUTORAVEIS.map(x => <option key={x} value={x}>{x}</option>)}
+            </select>
+            <span style={{ color: '#475569' }}>.</span>
+            <input
+              value={novoCampo.dominio} disabled={saving}
+              onChange={e => setNovoCampo({ ...novoCampo, dominio: e.target.value })}
+              placeholder={t('contextMapPage.domain', { defaultValue: 'domain' })}
+              style={{         background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '4px 7px', width: 130 }}
+            />
+            <span style={{ color: '#475569' }}>.</span>
+            <input
+              value={novoCampo.campo} disabled={saving}
+              onChange={e => setNovoCampo({ ...novoCampo, campo: e.target.value })}
+              placeholder={t('contextMapPage.field', { defaultValue: 'field' })}
+              style={{         background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '4px 7px', width: 150 }}
+            />
+            <select
+              value={novoCampo.tipo} disabled={saving}
+              onChange={e => setNovoCampo({ ...novoCampo, tipo: e.target.value })}
+              style={{         background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '4px 7px' }}
+            >
+              <option value="">{t('contextMapPage.pickTypeShort', { defaultValue: 'type…' })}</option>
+              {dataTypes.map(dt => <option key={dt.id} value={dt.id}>{dt.id}</option>)}
+            </select>
+            <button
+              onClick={criarCampo} disabled={saving}
+              style={{ background: '#1d4ed8', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, padding: '5px 14px', cursor: saving ? 'default' : 'pointer' }}
+            >{t('contextMapPage.add', { defaultValue: 'Register' })}</button>
+          </div>
+          <p style={{ margin: '8px 0 0', fontSize: 11, color: '#64748b', lineHeight: 1.6 }}>
+            {t('contextMapPage.addNote', { defaultValue: 'The scope is a closed list because the first segment routes the store and its retention: session = 4h, journey = 30d. Typing a new scope would decide PII retention by accident.' })}
+          </p>
+        </div>
 
         <div style={{ marginTop: 12, padding: '10px 14px', background: '#0f172a', borderRadius: 8, border: '1px solid #1e293b' }}>
           <p style={{ margin: 0, fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
@@ -213,6 +400,35 @@ export default function ContextMapPage() {
           </p>
         </div>
       </div>
+
+      {renomeando && (
+        <div style={{ position: 'fixed', inset: 0, background: '#00000099', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
+          <div style={{ background: '#0d1f38', border: '1px solid #1e293b', borderRadius: 10, padding: 20, width: 460 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: '#e2e8f0', marginBottom: 6 }}>
+              {t('contextMapPage.rename', { defaultValue: 'Rename (keeps an alias)' })}
+            </div>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#94a3b8', lineHeight: 1.6 }}>
+              {t('contextMapPage.renameNote', { defaultValue: 'Data already stored keeps the OLD name. The old spelling is added to this field aliases automatically, so that history stays masked.' })}
+            </p>
+            <code style={{ fontSize: 11, color: '#64748b' }}>{renomeando.root}.{renomeando.dom}.{renomeando.campo}</code>
+            <input
+              value={novoNome} autoFocus
+              onChange={e => setNovoNome(e.target.value)}
+              style={{ display: 'block', width: '100%', marginTop: 8, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, color: '#e2e8f0', fontSize: 12, padding: '7px 9px' }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+              <button onClick={() => setRenomeando(null)}
+                style={{ background: 'none', border: '1px solid #1e293b', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '5px 14px', cursor: 'pointer' }}
+              >{t('cancel', { defaultValue: 'Cancel' })}</button>
+              <button
+                disabled={saving}
+                onClick={() => renomearCampo(renomeando.root, renomeando.dom, renomeando.campo, novoNome.trim())}
+                style={{ background: '#1d4ed8', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, padding: '5px 14px', cursor: 'pointer' }}
+              >{t('contextMapPage.confirmRename', { defaultValue: 'Rename' })}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div style={{

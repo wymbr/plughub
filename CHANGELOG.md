@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — O cadastro do ContextStore vira EDITOR (E1–E7), e as quatro operações não são simétricas
+
+Defeito relatado pelo dono: *"o editor de context store é read only, neste caso serve para nada"*.
+Medido — a tela tinha 227 linhas, listava escopo → domínio → campo e trocava o **`tipo`** de folha
+existente. **Não criava, não renomeava, não removia.** E a V4, entregue duas horas antes, manda o
+autor *"Registre em /config/context-map"*: a mensagem apontava para uma tela que não registra.
+Promessa sem mecanismo, criada por mim no mesmo dia.
+
+O dono então corrigiu o escopo: *"assim como chaves são criadas elas são removidas e alteradas"*.
+Concordo — e a medição mostra que a simetria aparente é falsa. O que separa as quatro é o que cada
+uma faz com **dado já gravado**:
+
+| operação | dado já gravado | desenho |
+|---|---|---|
+| criar | não havia | aditivo |
+| alterar tipo | muda como o histórico é **exibido** | já existia |
+| **renomear** | fica no nome **velho** | o alias é **gerado pela tela**, não pelo autor lembrar |
+| **remover** | vira não declarado | **arquivar**, não apagar |
+
+### E1 — arquivar separa ESCRITA de LEITURA
+
+`arquivado?: boolean` na folha. **W**: o portão de publish recusa um flow que escreva nela.
+**R**: a folha fica, com o tipo, e o histórico segue mascarado — apagá-la o desmascararia.
+
+É a forma que a casa já escolheu para `DialogForm` (`adr-dialog-form-deletion`, aceito e
+implementado): DELETE é arquivar, reversível, purga só do nunca-usado. Aqui o "nunca-usado" é
+medível — balde C de `aliases_v5_buckets.py` —, e por isso a purga **não** mora na tela: dali não
+há como saber se algum produtor ainda escreve o campo.
+
+`.optional()` e não `.default(false)` pela mesma razão que `legado`: com `default` o campo vira
+obrigatório no tipo de saída do Zod e as 97 folhas repetiriam `arquivado: false` sem acrescentar
+nada.
+
+⚠️ **Recuo durante a implementação:** a primeira versão pôs o conjunto de arquivadas no
+`ContextTagIndex`. Isso criaria um campo que só metade dos gêmeos tem — o índice é a abstração
+compartilhada com `plughub_contextstore`, e o **runtime não precisa** saber de arquivamento (uma
+folha arquivada segue declarada, resolve `canonical` e mascara igual). O fato foi para onde é
+consumido: o publish, lendo o mapa direto.
+
+⚠️ **E o `code` precisou ser próprio.** A primeira versão devolvia `unregistered_context_tag` para
+tag arquivada, com a mensagem certa. Mas o editor decide afordância pelo **código**, e *"cadastre
+este campo"* é o conselho errado para um campo que existe e foi aposentado — recadastrá-lo com o
+mesmo nome desfaria, em silêncio, a decisão de quem arquivou. Hoje: `archived_context_tag`.
+
+### E3 — renomear gera o alias, e é aí que estava o risco
+
+Renomear parece "alterar", mas o valor gravado não se move junto: continua no hash sob a grafia
+antiga. Sem alias, o histórico inteiro passa a resolver como não declarado — o oposto do que o mapa
+existe para fazer. **O array `legado` É o mecanismo de rename**, não resíduo. Os 119 aliases que a
+V5 mediu são renames que já aconteceram; a tela passa a produzi-los corretamente.
+
+⚠️ A primeira versão fazia isso com spreads aninhados e três ternários `root === escopo`. Foi
+reescrita com clone profundo e mutação imperativa: um erro ali apagaria folhas irmãs em silêncio, e
+perder folha no mapa é desmascarar histórico. **Legibilidade neste ponto é propriedade de
+segurança**, não estilo.
+
+### E2 — o escopo é lista fechada, e isso é medição
+
+`session` e `journey`, `<select>` e não texto. O primeiro segmento **roteia store e retenção**
+(`CONTEXT_ROUTE_PREFIXES`: 4 h × 30 d). Um escopo digitado cairia no default sem que nada
+reclamasse — retenção de PII decidida por acidente. `core` fica fora, sem exceção.
+
+### E6 — o ramo C do gate trocou igualdade por CONTENÇÃO
+
+A ALW-12 fez o mapa vivo ser reproduzível de arquivos, e o gate afirmava `vivo == semente +
+arquivo`. **A primeira criação pela tela deixaria esse ramo vermelho** — e um gate que fica
+vermelho porque o produto funcionou ensina todo mundo a ignorá-lo.
+
+A convenção da casa decide: **seed-if-absent / DB-owned**. Hoje o ramo mede contenção e **conta e
+nomeia** o excedente (mesma correção que a ALW-04 aplicou ao gate irmão). O que se perde está dito
+no cabeçalho e no resumo — que também mudou, porque *"se reconstrói de arquivos"* passou a afirmar
+mais do que o ramo mede.
+
+Falseabilidade por mutação: campo só no vivo → **passa**, contando `1 cadastrada pela tela
+(session.tela.campo_novo)`; campo do arquivo ausente do vivo → **reprova**, nomeando `faltando`.
+
+### Medições
+
+Cadeia da E1 ao vivo, com controle positivo: arquivado → `valid:false`,
+`code=archived_context_tag`; ativo → `valid:true`. Mapa restaurado por trap.
+
+Oito gates verdes. Bundle conferido no artefato servido.
+
+⚠️ **Nota de instrumento:** a primeira conferência do bundle procurou `criarCampo` e
+`ESCOPOS_AUTORAVEIS` e achou **0** — identificadores locais, que a minificação renomeia. Só string
+literal sobrevive (`contextMapPage.addField`). Um `0` ali teria passado por "o deploy não pegou".
+
+### O que fica aberto — ALW-14
+
+Campo cadastrado pela tela vive só no store: `infra/context-map/{tenant}.json` é semente, e o
+browser não escreve nele. Some num `--wipe`. É a mesma classe da ALW-12, agora **por decisão em vez
+de omissão**, com o excedente contado pelo gate. Três caminhos registrados, e gatilho declarado.
+
+E5 (editar aliases à mão) não entrou: mexe no mesmo material da V5, que ficou parada por evidência
+jovem.
+
 ## 2026-09-02 — ALW-08: a afordância exigia o dry-run, e o dry-run exigia extrair o verificador
 
 Último item aberto do arco ALLOWLIST. A tarefa era *"mostrar no editor as tags que o flow usa e
