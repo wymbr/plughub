@@ -268,29 +268,22 @@ describe("AgentTypeRegistrationSchema", () => {
     ).toThrow()
   })
 
-  it("validates orchestrator agent with skill", () => {
-    expect(() =>
-      AgentTypeRegistrationSchema.parse({
-        ...baseAgent,
-        agent_type_id: "agente_orquestrador_onboarding_v1",
-        role:          "orchestrator" as const,
-        skills: [
-          { skill_id: "skill_onboarding_finserv_v1", version_policy: "stable" as const },
-        ],
-      })
-    ).not.toThrow()
-  })
-
-  it("rejects orchestrator agent without skills", () => {
-    expect(() =>
-      AgentTypeRegistrationSchema.parse({
-        ...baseAgent,
-        agent_type_id: "agente_orquestrador_v1",
-        role:          "orchestrator" as const,
-        skills:        [],
-      })
-    ).toThrow()
-  })
+  // ── LÁPIDE — os dois testes de `role: "orchestrator"` saíram em 2026-09-02 (CAP-17).
+  //
+  // O campo `role` e o `.refine()` que exigia skill para orquestrador foram removidos
+  // com o eixo (CAP-03), e a lápide em `agent-registry.ts` registra o motivo que decide
+  // esta remoção também: a regra era **INALCANÇÁVEL** — `orchestrator` teve ZERO
+  // portadores em 44 skills, e nunca reprovou nada em nenhum momento da vida dela.
+  //
+  // Por isso apagar aqui NÃO troca um vermelho por um silêncio: nunca houve sinal. É a
+  // pergunta que o ledger deixou aberta no CAP-17, e a lápide do schema a responde.
+  //
+  // ⚠️ E o irmão VERDE era o pior dos dois. `rejects…` ficou vermelho, que ao menos
+  // avisa; `validates orchestrator agent with skill` seguia PASSANDO — `.not.toThrow()`
+  // sobre uma entrada que, sem o refinement, não tem como lançar. Verde por ausência de
+  // regra, indistinguível de verde por regra cumprida. Um teste que não pode reprovar
+  // custa mais que um que reprova errado, e este arco removeu os dois juntos de
+  // propósito — deixar só o verde seria manter a parte enganosa.
 
   it("validates version_policy exact with declared exact_version", () => {
     expect(() =>

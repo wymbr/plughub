@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — CAP-17: a suíte de schemas volta ao verde, e o teste PERIGOSO era o que passava
+
+### A pergunta que o ledger deixou aberta, respondida pela lápide
+
+O CAP-17 registrava um vermelho — `agent-registry.test.ts` esperando que o schema recusasse
+um agente `orchestrator` sem skills, validação removida junto com o eixo `agent_role`
+(CAP-03). A nota dizia que apagar não era óbvio: *"o teste guardava «orquestrador sem skill
+não faz sentido», e se essa proposição ainda valer sob outro discriminador, ela precisa de
+instrumento novo — senão a remoção troca um vermelho por um silêncio"*.
+
+A lápide deixada no próprio `agent-registry.ts` responde:
+
+> o `.refine()` … era **INALCANÇÁVEL**: `orchestrator` teve **zero portadores** em 44
+> skills, então a regra **nunca reprovou nada em nenhum momento da vida dela**.
+
+**A proposição nunca teve sujeito.** Não há silêncio a trocar: nunca houve sinal.
+
+### E o teste que passava era o pior dos dois
+
+Saíram **dois**, não um. O irmão `validates orchestrator agent with skill` seguia **VERDE**
+— `.not.toThrow()` sobre uma entrada que, sem o refinement, não tem como lançar. Verde por
+**ausência de regra**, indistinguível de verde por regra cumprida.
+
+O vermelho ao menos avisa. O verde vazio compra confiança sem dar nada, e teria sobrevivido
+a qualquer limpeza que só perseguisse falhas. Remover só o que estava vermelho seria manter
+exatamente a metade enganosa.
+
+Uma lápide no lugar dos dois registra por que saíram, para que ninguém os reintroduza
+achando que cobrem alguma coisa.
+
+**Suíte de schemas: 177/177, nove arquivos — verde pela primeira vez desde a remoção do
+eixo.** `tsc` limpo.
+
+
 ## 2026-09-02 — CNS-06: o número que dimensiona a ALW-02 ganha critério — e o desenho dela muda
 
 ### Três números, nenhum critério
