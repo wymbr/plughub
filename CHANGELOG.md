@@ -1,5 +1,94 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-04: a plataforma parava de distribuir `reembolso` — e distribuía havia dois dias
+
+### A advertência do ADR já tinha se realizado
+
+A decisão #3 dizia que a lista de domínios *"só deve fechar com o critério de PAPEL — nunca
+por caber nos demos"*. Medido antes de decidir: **7 dos 24 domínios declarados (20 campos,
+21 aliases) eram vocabulário de demo** — `cartao`, `conta`, `portabilidade`, `processo`,
+`reembolso` —, que entraram no seed da plataforma pela FATIA 1 da D9 em 2026-08-30. Toda
+instalação recebia um domínio chamado `reembolso`.
+
+| categoria | domínios | campos | aliases |
+|---|---|---|---|
+| maquinaria da plataforma | 15 | 58 | 76 |
+| negócio **universal** (`cliente`, `contato`) | 2 | 16 | 19 |
+| **específico do tenant — SAIU** | **7** | **20** | **21** |
+
+**O critério é uma pergunta só:** *de que o domínio FALA — da plataforma, ou do negócio do
+tenant?* `queue`, `pool`, `workflow`, `hook`, `wrapup` existem em qualquer vertical porque
+são o que a plataforma faz; `reembolso` é o negócio de um tenant.
+
+Declaração: **24 → 17 domínios · 94 → 74 campos · 116 → 95 aliases**.
+
+*(De passagem: o índice do `CLAUDE.md` e o ADR diziam "82 aliases". Eram **116** — o número
+estava velho desde a FATIA 1.)*
+
+### Sair da DECLARAÇÃO não é sair do mapa
+
+Os 20 campos continuam no mapa vivo. **Mudaram de dono, não de existência**: viraram cadastro
+do tenant, pela tela que a ALW-03 acabou de criar. Por isso o `probe_context_map_audit`
+deixou de comparar por igualdade e passa a medir **CONTENÇÃO**:
+
+```
+faltando   campo DECLARADO que o vivo não tem   →  DEFEITO (o seed não aplicou)
+extra      campo VIVO que a declaração não tem  →  cadastro do tenant, CONTADO
+```
+
+As duas direções continuam medidas e **não são simétricas**. Exigir igualdade obrigaria a
+plataforma a redistribuir `reembolso`, que é exatamente o que a decisão proíbe.
+
+### O mecanismo, e onde ele mora
+
+`PLATFORM_CONTEXT_DOMAINS` em `@plughub/schemas` — **a lista com o critério escrito ao lado**,
+onde alguém edita o mapa, não só onde alguém roda o gate. Imposta por `verifyContextMap`
+(`non_platform_domains`) e reprovada pelo ramo A. Mutação verificada: devolvendo `reembolso`
+à declaração, o oráculo reprova **nomeando o domínio**.
+
+⚠️ **`journey` ficou VAZIO na declaração**, e isso é medição, não esquecimento: os dois
+domínios que ele tinha eram do fluxo de demo de limite. A plataforma não declara nada em
+escopo de journey hoje.
+
+### A outra metade da decisão está BLOQUEADA, e eu a sub-custei ao perguntar
+
+O dono decidiu mover `cliente` e `contato` para `core.customer.*` — retenção de 90 d, que é
+a certa para dado de cadastro. Eu apresentei o custo como *"migração de 16 campos + 19
+aliases"*. **Medindo o caminho de escrita depois, o custo é outro:**
+
+- o hash do cliente (`{t}:ctx:customer:{id}`) existe **só no SDK e no gêmeo de e2e** —
+  nenhum serviço de produção o escreve;
+- o funil TS roteia por prefixo **hardcoded** (`journey.` / `core.journey.`), não por
+  `resolveContextStore`. Então `core.customer.*` cairia no **hash da sessão**, em silêncio,
+  a 4 h em vez de 90 d — a `mismatched_retention` acontecendo em runtime;
+- o funil Python **recusa** escopo não-sessão (`ContextScopeRefused`), então todo escritor
+  Python migrado passaria a levantar;
+- blast radius real: **48 arquivos**, incluindo o step `resolve`, a `ClienteTab` do Console e
+  5 YAMLs de skill.
+
+Virou **ALW-09**, `bloqueado`, com o pré-requisito nomeado: os dois funis honrarem
+`resolveContextStore` e receberem `customer_id`. **`cliente` e `contato` ficam na lista da
+plataforma até lá**, marcados como dívida no próprio comentário da constante.
+
+*O erro de método foi meu: ofereci três opções e custei a terceira sem ter medido o caminho
+de escrita dela. A opção era boa; o número que eu dei junto, não.*
+
+### Um instrumento que contava a declaração como produtor
+
+Ao classificar os domínios, a primeira versão do censo deu **PLATAFORMA para todos os 24** —
+porque contava `default_map.py`, `context-map.ts` e `seed.py` como escritores. Excluídas as
+casas da declaração, apareceram os `SO-YAML`. E ainda sobrava ruído: `skill.ts` e
+`context-store.ts` usam `session.cartao.numero` como **exemplo em docstring**, e o casador de
+texto não distingue exemplo de uso. A classificação final é declarada à mão, com a medição
+como insumo — não há como derivar *"de que o domínio fala"* de texto.
+
+### Verificação
+
+Gates: mapa (contenção + lista fechada) · seed-drift · paridade · censo · grant-split ·
+visibility-selector · ledger — verdes. Suítes: schemas 187, py-contextstore 73,
+config-api 57. `tsc` limpo. Mutação da lista fechada pega e nomeia.
+
+
 ## 2026-09-02 — ALW-03: o cadastro do ContextStore alcança quem AUTORA, e o catálogo fica com compliance
 
 ### Os dois critérios do ADR discordavam, e medir foi o que desempatou

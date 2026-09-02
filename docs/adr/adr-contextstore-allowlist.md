@@ -940,8 +940,42 @@ declarado no read* e passa a ser sobre *tag não cadastrada no publish*.
    exatamente o que registrar"* depende da V4, que é a ALW-01. E a afordância no editor
    (mostrar as tags não cadastradas do flow aberto) é a **ALW-08** — hoje o editor é um
    Monaco de YAML sem noção nenhuma de context tag.
-3. **A lista de domínios**, que só deve fechar com o critério de PAPEL acima — nunca por caber
-   nos demos.
+3. ~~**A lista de domínios**~~ — **FECHADA em 2026-09-02 (ALW-04). E a advertência desta
+   linha não era teórica: já tinha acontecido.**
+
+   Medido antes de decidir: dos **24 domínios** declarados, **7 (20 campos, 21 aliases) eram
+   vocabulário de demo** — `cartao`, `conta`, `portabilidade`, `processo`, `reembolso` —, que
+   entraram no seed da plataforma pela FATIA 1 da D9. A plataforma distribuía `reembolso`
+   para toda instalação.
+
+   **O critério é uma pergunta só:** *de que o domínio FALA — da plataforma, ou do negócio do
+   tenant?* `queue`, `pool`, `workflow`, `hook`, `wrapup` falam da máquina e existem em
+   qualquer vertical; `reembolso` fala do negócio de um tenant.
+
+   | categoria | domínios | campos |
+   |---|---|---|
+   | maquinaria da plataforma | 15 | 58 |
+   | negócio UNIVERSAL (`cliente`, `contato`) | 2 | 16 |
+   | **específico do tenant — SAIU** | **7** | **20** |
+
+   Declaração: **24 → 17 domínios, 94 → 74 campos, 116 → 95 aliases**. Os 20 campos
+   **continuam no mapa vivo** — mudaram de dono, não de existência: são cadastro do tenant
+   (a tela da ALW-03), e o `probe_context_map_audit` passou a medir a config viva por
+   **CONTENÇÃO** (viva ⊇ declarada), contando o excedente em vez de reprovar. Exigir
+   igualdade obrigaria a plataforma a redistribuí-los, que é o que esta decisão proíbe.
+
+   Mecanismo: `PLATFORM_CONTEXT_DOMAINS` em `@plughub/schemas` — a lista, com o critério
+   escrito onde alguém edita o mapa — imposta por `verifyContextMap`
+   (`non_platform_domains`) e reprovada pelo ramo A do gate.
+
+   ⚠️ **`journey` ficou VAZIO na declaração**, e isso é medição: os dois domínios que ele
+   tinha eram do fluxo de demo de limite. A plataforma não declara nada em escopo de journey.
+
+   ⚠️ **A metade dos UNIVERSAIS está BLOQUEADA.** A decisão do dono foi mover `cliente` e
+   `contato` para `core.customer.*` (90 d, a retenção certa para cadastro). Medindo o
+   caminho: o hash do cliente existe **só no SDK**, nenhum serviço de produção o escreve; o
+   funil TS roteia por prefixo **hardcoded**, então `core.customer.*` cairia no hash da
+   SESSÃO em silêncio; e o funil Python **recusa** escopo não-sessão. É a **ALW-09**.
 4. **O destino de `linha_em_servico`**, criado hoje a partir de um fluxo de demonstração: a
    distinção finalidade × cadastro é boa; o tipo pode estar sobre-ajustado.
 5. **Classe LGPD para não-cliente** — `session.reviewer_id` é identidade de USUÁRIO da

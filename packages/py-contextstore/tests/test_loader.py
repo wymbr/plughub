@@ -177,9 +177,21 @@ class TestMapaEmbutido:
         # justamente no momento em que é preciso.
         from plughub_contextstore import build_context_tag_index
         idx = build_context_tag_index(DEFAULT_CONTEXT_MAP)
-        assert len(idx.canonical) >= 90     # 94 na medição de 2026-08-30
-        assert len(idx.alias) >= 80         # 82 na mesma medição
+        # Pisos de PRESENÇA, não alvos: o que se afirma é que o mapa embutido não está
+        # vazio nem pela metade. Baixaram de 90/80 para 60/70 na ALW-04 (2026-09-02),
+        # quando os 7 domínios ESPECÍFICOS do tenant saíram da declaração da plataforma:
+        # 94→74 canônicas e 116→95 aliases. Um piso que acompanha cada remoção legítima
+        # não mede nada; um que fica muito abaixo também não. Estes ficam folgados o
+        # bastante para sobreviver a decisão de escopo e apertados o bastante para pegar
+        # um mapa que carregou pela metade.
+        assert len(idx.canonical) >= 60     # 74 na medição de 2026-09-02 (ALW-04)
+        assert len(idx.alias) >= 70         # 95 na mesma medição
         assert "core.segment." in idx.dynamic_prefixes
+        # E o que a ALW-04 fechou: a declaração da plataforma não carrega domínio de
+        # negócio do tenant. `reembolso` é o caso testemunha — saiu naquele dia.
+        assert not any(k.startswith(("session.reembolso.", "session.portabilidade.",
+                                     "session.cartao.", "journey.cartao."))
+                       for k in idx.canonical)
 
 
 class TestTransporteRegistrado:

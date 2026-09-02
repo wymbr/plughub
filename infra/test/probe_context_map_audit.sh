@@ -101,7 +101,10 @@ if [ -f "$SCHEMAS/dist/context-map.js" ]; then
   A=$(cd "$SCHEMAS" && node -e '
     const m = require("./dist/context-map.js")
     const v = m.verifyContextMap()
-    const bad = ["unknown_types","mismatched_retention","ambiguous_aliases","alias_shadows_canonical"]
+    // `non_platform_domains` entrou na ALW-04: a lista de dominios da PLATAFORMA e
+    // FECHADA, e o criterio e PAPEL (de que o dominio FALA), nunca "cabe nos demos" —
+    // que ja aconteceu uma vez, com 7 dominios de demo dentro do seed.
+    const bad = ["unknown_types","mismatched_retention","ambiguous_aliases","alias_shadows_canonical","non_platform_domains"]
       .filter(k => (v[k] || []).length > 0)
     console.log(JSON.stringify({ declared: v.declared, aliases: v.aliases, bad,
       detail: Object.fromEntries(bad.map(k => [k, v[k]])) }))
@@ -149,13 +152,50 @@ else
       : (o && typeof o === "object")
         ? Object.fromEntries(Object.keys(o).sort().map(k => [k, sortDeep(o[k])]))
         : o
-    const same = JSON.stringify(sortDeep(live)) === JSON.stringify(sortDeep(DEFAULT_CONTEXT_MAP))
-    const nLive = live && live.contexto
-      ? Object.values(live.contexto).reduce((a,d)=>a+Object.values(d).reduce((b,c)=>b+Object.keys(c).length,0),0) : -1
-    console.log(JSON.stringify({ same, nLive }))
+    // ── ALW-04 (2026-09-02): CONTENCAO, nao igualdade ──────────────────────
+    //
+    // Ate aqui o ramo exigia que a config viva fosse IDENTICA a declaracao. Isso
+    // deixou de ser o contrato quando os 7 dominios ESPECIFICOS DO TENANT sairam da
+    // declaracao da plataforma: eles continuam no mapa vivo, agora como vocabulario
+    // que o TENANT cadastra (a tela da ALW-03). Exigir igualdade obrigaria a
+    // plataforma a redistribuir `reembolso`/`portabilidade` para toda instalacao, que
+    // e exatamente o que a decisao #3 do ADR proibe.
+    //
+    // As DUAS direcoes continuam medidas, e elas nao sao simetricas:
+    //
+    //   faltando  campo DECLARADO que o vivo nao tem  -> DEFEITO. O seed nao aplicou,
+    //             ou alguem apagou vocabulario da plataforma.
+    //   extra     campo VIVO que a declaracao nao tem -> cadastro do tenant. Legitimo,
+    //             mas CONTADO: se crescer sem ninguem olhar, volta a ser o "fechar por
+    //             caber nos demos" pelo outro lado.
+    const folhas = (m) => {
+      const out = {}
+      for (const [e, doms] of Object.entries((m && m.contexto) || {}))
+        for (const [d, campos] of Object.entries(doms))
+          for (const c of Object.keys(campos)) out[`${e}.${d}.${c}`] = sortDeep(campos[c])
+      return out
+    }
+    const fLive = folhas(live), fDecl = folhas(DEFAULT_CONTEXT_MAP)
+    const faltando = Object.keys(fDecl).filter(k => !(k in fLive))
+    const extra    = Object.keys(fLive).filter(k => !(k in fDecl))
+    const difere   = Object.keys(fDecl).filter(k => k in fLive
+                        && JSON.stringify(fLive[k]) !== JSON.stringify(fDecl[k]))
+    console.log(JSON.stringify({
+      contem: faltando.length === 0 && difere.length === 0,
+      nLive: Object.keys(fLive).length, nDecl: Object.keys(fDecl).length,
+      faltando: faltando.slice(0, 8), difere: difere.slice(0, 8),
+      nExtra: extra.length, extraDominios: [...new Set(extra.map(k => k.split(".").slice(0,2).join(".")))].sort(),
+    }))
   ' 2>/dev/null)
-  if echo "$B" | grep -q '"same":true'; then
-    ok "config viva identica a TS ($(echo "$B" | sed -E 's/.*"nLive":([0-9-]+).*/\1/') campos)"
+  if echo "$B" | grep -q '"contem":true'; then
+    N_LIVE=$(echo "$B" | sed -E 's/.*"nLive":([0-9-]+).*/\1/')
+    N_DECL=$(echo "$B" | sed -E 's/.*"nDecl":([0-9-]+).*/\1/')
+    N_EXTRA=$(echo "$B" | sed -E 's/.*"nExtra":([0-9-]+).*/\1/')
+    ok "config viva CONTEM a declaracao ($N_DECL declarados de $N_LIVE vivos)"
+    if [ "${N_EXTRA:-0}" -gt 0 ] 2>/dev/null; then
+      echo "     + $N_EXTRA campos cadastrados pelo TENANT, em: $(echo "$B" | sed -E 's/.*"extraDominios":\[([^]]*)\].*/\1/')"
+      echo "       (vocabulario de negocio; a plataforma nao o distribui — decisao ALW-04)"
+    fi
   elif [ -z "$B" ]; then
     # Sem saida do comparador nao ha o que comparar. Antes isto caia no `bad` e
     # publicava "DIVERGENCIA ... : " com o payload VAZIO — veredicto sobre uma medicao
@@ -165,7 +205,10 @@ else
     # "conserte o mirror", o outro diz "conserte a bancada".
     huh "comparador vivo x TS nao executou (dist/ ausente? cwd UNC?) — sem veredicto"
   else
-    bad "DIVERGENCIA config viva x TS: $B — o mirror do seed.py saiu de sincronia"
+    bad "config viva NAO CONTEM a declaracao: $B"
+    echo "       'faltando' = campo que a plataforma declara e o vivo nao tem (seed nao aplicou)."
+    echo "       'difere'   = mesmo campo com conteudo diferente (tipo ou alias divergente)."
+    echo "       Excedente do tenant NAO reprova este ramo — ver a decisao ALW-04."
   fi
 fi
 
@@ -283,7 +326,11 @@ if [ -f "$SCHEMAS/dist/context-map.js" ]; then
     const o = t => resolveContextTag(t, ix).origin
     console.log(JSON.stringify({
       naoDeclarada: o("session.campo_que_ninguem_declarou"),
-      lacunaFechada: o("session.vencimento_cartao"),
+      // ⚠️ Este fixture era `session.vencimento_cartao`, alias de `session.cartao.vencimento`
+      // — um dos 20 campos que a ALW-04 tirou da declaracao da plataforma. Trocado por um
+      // alias que FICA (grafia legada de core.contact.close_origin), senao o ramo passa a medir a remocao em vez de medir o
+      // par alias/canonica que ele existe para julgar.
+      lacunaFechada: o("session.close_origin"),
       agente:       o("agent.part_123.foo"),
       segmento:     o("segment.seg_9.bar"),
     }))
@@ -296,21 +343,23 @@ if [ -f "$SCHEMAS/dist/context-map.js" ]; then
       || bad "F: tag fora do mapa nao foi acusada — $F"
     # 2026-08-30 (D8.3) — a assercao INVERTEU, e a inversao E a entrega.
     #
-    # Ate aqui session.vencimento_cartao era a lacuna DELIBERADA da V3: campo com
-    # politica viva (last_2) cujo tipo nao existia no catalogo. O ramo exigia que
-    # caisse em unknown, isto e, que a auditoria a ACUSASSE. O catalogo ganhou
-    # card_expiry e o campo entrou no mapa como session.cartao.vencimento, entao a
-    # grafia antiga passou a resolver como ALIAS.
+    # A proposicao deste ramo e: uma grafia legada REAL resolve como alias, e nao volta a
+    # ser nao-declarada em silencio. O caso SINTETICO (naoDeclarada) ja cobre 'o balde
+    # unknown funciona'; este cobre um campo de verdade, que e o que uma regressao atinge.
     #
-    # A assercao NAO foi removida, porque a proposicao a proteger mudou e nao sumiu:
-    # era "a lacuna e visivel", hoje e "a lacuna esta FECHADA e nao volta em
-    # silencio". Um ramo apagado deixaria o campo poder virar nao-declarado outra vez
-    # sem nada ficar vermelho. O caso SINTETICO (naoDeclarada) segue cobrindo "o
-    # balde unknown funciona"; este cobre um campo REAL e medido, que e o que uma
-    # regressao de verdade atingiria.
+    # ⚠️ A TESTEMUNHA MUDOU em 2026-09-02 (ALW-04), e o motivo importa. Era
+    # session.vencimento_cartao, a lacuna deliberada da V3 que a D8 fechou criando o tipo
+    # card_expiry. Aquele campo saiu da declaracao da PLATAFORMA junto com os 7 dominios
+    # especificos do tenant — hoje e vocabulario que o TENANT cadastra, e medir contra a
+    # declaracao passou a dar `unknown` CORRETAMENTE. Manter o fixture faria o ramo medir a
+    # REMOCAO em vez da proposicao, ou seja, ficar vermelho por um motivo que nao e o dele.
+    #
+    # A testemunha nova (session.close_origin, grafia legada de core.contact.close_origin)
+    # e do core.*, que a CNS-02 reservou a plataforma — logo ela nao pode sair da
+    # declaracao por decisao de escopo, so por defeito.
     echo "$F" | grep -q '"lacunaFechada":"alias"' \
-      && ok "F: session.vencimento_cartao resolve como ALIAS — lacuna do catalogo FECHADA" \
-      || bad "F: esperado alias (lacuna fechada), veio — $F"
+      && ok "F: grafia legada REAL resolve como ALIAS — a lacuna nao reabre em silencio" \
+      || bad "F: esperado alias, veio — $F"
     if echo "$F" | grep -q '"agente":"dynamic"' && echo "$F" | grep -q '"segmento":"dynamic"'; then
       ok "F: agent.*/segment.* no balde DINAMICO — nao inflam a lista da V4"
     else

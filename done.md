@@ -17,6 +17,7 @@ história no `CHANGELOG.md`.)*
 
 | id | tarefa | data | âncora no `CHANGELOG.md` |
 |---|---|---|---|
+| ALW-04 | Lista de domínios da plataforma FECHADA por critério de PAPEL: os 7 domínios específicos do tenant (20 campos, 21 aliases) saíram da declaração e viraram cadastro; `PLATFORM_CONTEXT_DOMAINS` + oráculo impõem, e o gate passou a medir a config viva por CONTENÇÃO | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-04 |
 | ALW-03 | Onde mora o cadastro: divisão por FATO — catálogo de tipos fica em `config.masking` (compliance), o MAPA ganha `config.context_map` com o **developer** no preset e tela própria em `/config/context-map` | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-03 |
 | ALW-02 | Choke point de escrita do ContextStore: carimbo do `atributo` (D9.6) nos dois funis, gate de paridade TS × Python sobre fixture única, e os 21 sítios roteados. Censo 8/22 → 2/2 | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-02 |
 

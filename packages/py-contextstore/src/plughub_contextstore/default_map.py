@@ -108,17 +108,6 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
                 "intencao_primaria": {"tipo": "texto", "legado": ["caller.intencao_primaria"]},
                 "sentimento_atual": {"tipo": "texto", "legado": ["caller.sentimento_atual"]}
             },
-            "conta": {
-                "plano_atual": {"tipo": "texto", "legado": ["account.plano_atual", "caller.plano_atual"]},
-                "status": {"tipo": "texto", "legado": ["account.status"]}
-            },
-            "cartao": {
-                "numero": {"tipo": "credit_card", "legado": ["session.numero_cartao"]},
-                "cpf": {"tipo": "cpf", "legado": ["session.cpf_titular"]},
-                "vencimento": {"tipo": "card_expiry", "legado": ["session.vencimento_cartao"]},
-                "limite_solicitado": {"tipo": "financial", "legado": ["session.limite_solicitado"]},
-                "limite_aprovado": {"tipo": "financial", "legado": ["session.limite_aprovado"]}
-            },
             "copilot": {
                 "mode": {"tipo": "texto", "label": "Interruptor — `mention.set_context`"}
             },
@@ -152,14 +141,6 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
                 "origin_pool": {"tipo": "texto", "legado": ["session.survey_origin_pool"]},
                 "customer_key": {"tipo": "texto", "legado": ["session.survey_customer_key"]}
             },
-            "portabilidade": {
-                "numero_atual": {"tipo": "linha_em_servico", "legado": ["session.numero_atual"]},
-                "operadora_destino": {"tipo": "texto", "legado": ["session.operadora_destino"]}
-            },
-            "reembolso": {
-                "numero_pedido": {"tipo": "texto", "legado": ["session.numero_pedido"]},
-                "motivo_reembolso": {"tipo": "texto", "legado": ["session.motivo_reembolso"]}
-            },
             "deploy": {
                 "notes": {"tipo": "texto", "legado": ["session.deploy_notes"]},
                 "deployed_by": {"tipo": "texto", "legado": ["session.deployed_by"]},
@@ -169,10 +150,6 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
                 "campaign_id": {"tipo": "texto", "legado": ["session.campaign_id"]},
                 "delivery_id": {"tipo": "texto", "legado": ["session.delivery_id"]}
             },
-            "processo": {
-                "parecer": {"tipo": "texto", "legado": ["session.parecer"]},
-                "resultado": {"tipo": "texto", "legado": ["session.resultado"]}
-            },
             "hook": {
                 "wrapup_pool": {"tipo": "texto", "legado": ["hook.wrapup_pool"]},
                 "dialog_form_id": {"tipo": "texto", "legado": ["hook.dialog_form_id"]},
@@ -180,17 +157,6 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
             }
         },
         "journey": {
-            "processo": {
-                "resultado": {"tipo": "texto", "legado": ["journey.resultado"]},
-                "parecer": {"tipo": "texto", "legado": ["journey.parecer"]},
-                "numero_pedido": {"tipo": "texto", "legado": ["journey.numero_pedido"]},
-                "pedido": {"tipo": "texto", "legado": ["journey.pedido"]},
-                "origin_process_session": {"tipo": "texto", "legado": ["journey.origin_process_session"]}
-            },
-            "cartao": {
-                "numero": {"tipo": "credit_card", "legado": ["journey.numero_cartao"]},
-                "limite_aprovado": {"tipo": "financial", "legado": ["journey.limite_aprovado"]}
-            }
         }
     }
 }

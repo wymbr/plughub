@@ -251,7 +251,7 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         origin_session_id: { tipo: "texto", legado: ["session.workflow.origin_session_id", "session.origin_session_id"] },
         resume_token: { tipo: "credential", legado: ["session.workflow.resume_token", "session.workflow_resume_token"] },
         review_decision: { tipo: "texto", legado: ["session.workflow.review_decision", "session.review_decision"] },
-        round_echoed: { tipo: "texto", legado: ["session.workflow.round_echoed", "session.round_echoed"] },
+        round_echoed: { tipo: "texto", legado: ["session.workflow.round_echoed", "session.round_echoed"] }
       },
     },
     session: {
@@ -268,33 +268,7 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         sentimento_atual:  { tipo: "texto",      legado: ["caller.sentimento_atual"] },
       },
       // ── Dados da conta — hoje no namespace `account.*` ───────────────────
-      conta: {
-        plano_atual: { tipo: "texto", legado: ["account.plano_atual", "caller.plano_atual"] },
-        status:      { tipo: "texto", legado: ["account.status"] },
-      },
       // ── Pacote de aprovação (aumento de limite) — hoje achatado em `session.*` ──
-      cartao: {
-        numero:            { tipo: "credit_card", legado: ["session.numero_cartao"] },
-        // `cpf`, e não `cpf_titular` (decisão do dono, 2026-08-30): o discriminador
-        // mora no segmento de DOMÍNIO, nunca no nome da folha. Medido — o casador de
-        // regra NÃO tem glob de meio (`context-masking.ts:80-160` aceita exato,
-        // `*.sufixo`, `prefixo.*` e `*`), então um `*cpf*` seria regra INERTE, sem
-        // nada ficar vermelho. Com a canônica terminando em `.cpf`, o glob genérico
-        // já a cobre: princípio e mecanismo coincidem.
-        //
-        // ⚠️ A grafia legada NÃO tem produtor — o campo de tela saiu do formulário e
-        // foi substituído por `vencimento_cartao` (`skill_limite_processo_v1.yaml:88-91`;
-        // o form vivo tem 4 campos e nenhum é ele). O alias fica para que o CONTADOR
-        // prove o fóssil extinto em vez de nós afirmarmos: apagá-lo faria a tag, se
-        // algum tenant ainda a escrever, cair em "não declarada" sem ninguém saber
-        // que ela já fora prevista.
-        cpf:               { tipo: "cpf",         legado: ["session.cpf_titular"] },
-        // Entrou em 2026-08-30, junto do tipo `card_expiry`. Ver o critério de
-        // semeadura no cabeçalho: o campo esperava TIPO, não decisão.
-        vencimento:        { tipo: "card_expiry", legado: ["session.vencimento_cartao"] },
-        limite_solicitado: { tipo: "financial",   legado: ["session.limite_solicitado"] },
-        limite_aprovado:   { tipo: "financial",   legado: ["session.limite_aprovado"] },
-      },
       // ── Já CANÔNICOS: escritos em `escopo.dominio.campo` pelo routing-engine ──
       // Nenhum `legado`, e é isso que dá ao contador do D3 o seu par: sem tag
       // canônica viva, "ninguém migrou" e "ninguém usa" seriam indistinguíveis.
@@ -403,18 +377,6 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         origin_pool:         { tipo: "texto", legado: ["session.survey_origin_pool"] },
         customer_key:        { tipo: "texto", legado: ["session.survey_customer_key"] },
       },
-      portabilidade: {
-        // `linha_em_servico`, não `phone` — decisão do dono, 2026-08-30: é a linha
-        // SENDO PORTADA, objeto do atendimento e não dado de cadastro. O telefone de
-        // CADASTRO continua protegido, em `session.cliente.telefone`. Ver o achado de
-        // exposição no cabeçalho e o tipo em `audit.ts`.
-        numero_atual:      { tipo: "linha_em_servico", legado: ["session.numero_atual"] },
-        operadora_destino: { tipo: "texto", legado: ["session.operadora_destino"] },
-      },
-      reembolso: {
-        numero_pedido:    { tipo: "texto", legado: ["session.numero_pedido"] },
-        motivo_reembolso: { tipo: "texto", legado: ["session.motivo_reembolso"] },
-      },
       deploy: {
         notes:       { tipo: "texto", legado: ["session.deploy_notes"] },
         deployed_by: { tipo: "texto", legado: ["session.deployed_by"] },
@@ -436,29 +398,14 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       // `skill_survey_trigger_v1.yaml:65-68` testa os dois porque "so uma delas
       // existe em cada disparo" — `on_process_end` x `on_contact_end`. Carimbado
       // pelo bridge pre-hook (`main.py:5284`).
-      processo: {
-        parecer:   { tipo: "texto", legado: ["session.parecer"] },
-        resultado: { tipo: "texto", legado: ["session.resultado"] },
-      },
       hook: {
         wrapup_pool:       { tipo: "texto", legado: ["hook.wrapup_pool"] },
         dialog_form_id:    { tipo: "texto", legado: ["hook.dialog_form_id"] },
-        acw_timeout_hours: { tipo: "texto", legado: ["hook.acw_timeout_hours"] },
+        acw_timeout_hours: { tipo: "texto", legado: ["hook.acw_timeout_hours"] }
       },
     },
     journey: {
-      processo: {
-        resultado:              { tipo: "texto", legado: ["journey.resultado"] },
-        parecer:                { tipo: "texto", legado: ["journey.parecer"] },
-        numero_pedido:          { tipo: "texto", legado: ["journey.numero_pedido"] },
-        pedido:                 { tipo: "texto", legado: ["journey.pedido"] },
-        origin_process_session: { tipo: "texto", legado: ["journey.origin_process_session"] },
-      },
       // PII no hash de 30 DIAS — o custo de errar aqui é 180× o de errar na sessão.
-      cartao: {
-        numero:          { tipo: "credit_card", legado: ["journey.numero_cartao"] },
-        limite_aprovado: { tipo: "financial",   legado: ["journey.limite_aprovado"] },
-      },
     },
     // `customer` (`{t}:ctx:customer:{id}`, 90 d) tem roteamento vivo
     // (`LONG_TTL_PREFIXES = ["insight.historico", "pricing"]`) e **zero ocorrências
@@ -611,6 +558,49 @@ export function stampContextEntry(
 }
 
 // ─────────────────────────────────────────────
+// A lista FECHADA de domínios da PLATAFORMA (ALW-04)
+// ─────────────────────────────────────────────
+
+/**
+ * Domínios que o `DEFAULT_CONTEXT_MAP` pode declarar — e **só** eles.
+ *
+ * ── O critério é PAPEL, e ele tem uma pergunta única ─────────────────────────
+ *
+ * > **De que o domínio FALA — da plataforma, ou do negócio do tenant?**
+ *
+ * `queue`, `pool`, `workflow`, `hook`, `survey`, `wrapup`, `deploy` falam da máquina:
+ * existem em qualquer vertical, porque são o que a plataforma faz. `reembolso`,
+ * `portabilidade`, `cartao` falam do negócio de UM tenant — e a plataforma não tem por
+ * que distribuí-los para todas as instalações.
+ *
+ * ⚠️ **O critério NUNCA é "cabe nos demos"**, e essa advertência do ADR não era teórica:
+ * medido em 2026-09-02, **7 dos 24 domínios (20 campos, 21 aliases) eram vocabulário de
+ * demo** que entrou no seed da plataforma pela FATIA 1 da D9. Saíram nesse dia.
+ *
+ * ── O que a lista NÃO fecha ──────────────────────────────────────────────────
+ *
+ * O mapa VIVO. O tenant cadastra os domínios dele pela tela da ALW-03, e o
+ * `probe_context_map_audit` mede a config viva por **contenção** (viva ⊇ declarada),
+ * contando o excedente em vez de reprovar. Fechar o mapa vivo bloquearia o produto;
+ * fechar a DECLARAÇÃO é o que impede a plataforma de crescer por acidente.
+ *
+ * ⚠️ **`journey` está vazio na declaração, e isso é medição, não esquecimento**: os dois
+ * domínios que ele tinha (`cartao`, `processo`) eram do fluxo de demo de limite. A
+ * plataforma não declara nada em escopo de journey hoje.
+ */
+export const PLATFORM_CONTEXT_DOMAINS: ReadonlySet<string> = new Set([
+  // maquinaria do contato e do roteamento
+  "contact", "pool", "queue", "sentiment", "copilot", "process",
+  // maquinaria de processo e de trabalho humano
+  "workflow", "hook", "wrapup", "deploy", "survey", "campanha",
+  // negócio, mas UNIVERSAL: todo contact center tem cliente e canal de contato.
+  // ⚠️ Estes dois são dívida DECLARADA — a decisão do dono foi movê-los para
+  // `core.customer.*` (retenção de 90 d, que é a certa para cadastro), e isso está
+  // BLOQUEADO: `core.customer.*` é rota declarada SEM ESCRITOR VIVO. Ver ALW-09.
+  "cliente", "contato",
+])
+
+// ─────────────────────────────────────────────
 // Oráculo do mapa
 // ─────────────────────────────────────────────
 
@@ -631,6 +621,11 @@ export interface ContextMapVerification {
   ambiguous_aliases:       Array<{ legado: string; claimed_by: string[] }>
   /** Grafia legada que também é canônica de outro nó: o alias sombrearia um campo real. */
   alias_shadows_canonical: Array<{ legado: string; canonical_of: string }>
+  /**
+   * Domínio declarado que **não** está em `PLATFORM_CONTEXT_DOMAINS` (ALW-04). Só se
+   * aplica ao mapa DECLARADO — o mapa vivo é do tenant e cresce por cadastro.
+   */
+  non_platform_domains:    Array<{ root: string; dominio: string; campos: number }>
 }
 
 /**
@@ -661,6 +656,7 @@ export function verifyContextMap(
   const unknown_types:  Array<{ field: string; tipo: string }> = []
   const mismatched_retention: Array<{ root: string; anuncia: ContextStoreKind; roteia_para: ContextStoreKind }> = []
   const claims = new Map<string, string[]>()   // legado → canônicas que o reivindicam
+  const non_platform_domains: ContextMapVerification["non_platform_domains"] = []
 
   for (const [escopo, dominios] of Object.entries(map.contexto)) {
     // O root é LIVRE (CNS-02): `core` é da plataforma, o resto é do tenant, e tudo o
@@ -679,6 +675,13 @@ export function verifyContextMap(
       }
     }
     for (const [dominio, campos] of Object.entries(dominios)) {
+      // ALW-04 — a lista de dominios da PLATAFORMA e fechada. Ver o comentario de
+      // `PLATFORM_CONTEXT_DOMAINS`: o criterio e PAPEL (de que o dominio FALA), nunca
+      // "cabe nos demos". So o mapa DECLARADO e julgado por isto; o vivo cresce por
+      // cadastro do tenant, e o gate o mede por contencao.
+      if (!PLATFORM_CONTEXT_DOMAINS.has(dominio)) {
+        non_platform_domains.push({ root: escopo, dominio, campos: Object.keys(campos).length })
+      }
       for (const [campo, leaf] of Object.entries(campos)) {
         const name = `${escopo}.${dominio}.${campo}`
         if (!typeIds.has(leaf.tipo)) unknown_types.push({ field: name, tipo: leaf.tipo })
@@ -704,6 +707,7 @@ export function verifyContextMap(
     mismatched_retention,
     ambiguous_aliases,
     alias_shadows_canonical,
+    non_platform_domains,
   }
 }
 
