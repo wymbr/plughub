@@ -47,6 +47,17 @@
 # so a cobaia.
 #
 # Tres estados: OK / FALHA / INCONCLUSIVO (nunca OK com ramo inconclusivo).
+# ⚠️ UTF-8 explicito na SAIDA do python. No Windows o `stdout` decodifica com cp1252 e
+# um `print` de texto acentuado estoura `UnicodeEncodeError`, derrubando o probe por
+# motivo de bancada — ou, pior, mutila o texto que o shell vai comparar.
+#
+# ⚠️ E o que esta linha NAO conserta, porque o diagnostico foi REFEITO em 2026-09-02:
+# a corrupcao que motivou a CNS-12 nao vinha do `sys.stdin` (medido: `curl | python3 ->
+# arquivo` preserva `Almoco`/`Reuniao` intactos). Vinha da VARIAVEL DE SHELL — passar
+# JSON nao-ASCII por `VAR=$(…)` o mutila, medido 321 bytes contra 325. Contra isso a
+# unica defesa e nao passar por variavel: producao e consumo por ARQUIVO.
+export PYTHONIOENCODING=utf-8
+
 set -u
 
 cd "$(dirname "$0")/../.." || exit 2
@@ -76,12 +87,15 @@ SNAP_F="$(cd "$(dirname "$0")" && pwd)/.seed_drift_snapshot.json"
 MUT_F="$(cd "$(dirname "$0")" && pwd)/.seed_drift_mutated.json"
 export SNAP_F MUT_F
 
-# ⚠️ E a segunda metade do mesmo defeito, que era a CAUSA RAIZ: no Windows o
-# `sys.stdin` do python decodifica com **cp1252**, nao UTF-8. Entao `curl | python3 -c
-# 'json.load(sys.stdin)'` recebia bytes CORRETOS e os destruia na LEITURA — antes de
-# qualquer escrita. Por isso o snapshot ja nascia corrompido e a restauracao devolvia
-# a cobaia estragada, parecendo intacta. Todo `json.load` aqui le de `sys.stdin.buffer`,
-# que entrega bytes e deixa o json decodificar em UTF-8 — sem depender de env.
+# ⚠️ CORRECAO DE DIAGNOSTICO (2026-09-02, CNS-17). Este bloco afirmava que a causa
+# raiz era o `sys.stdin` do python decodificando em cp1252. **Falso, e remedido:**
+# `curl | python3 -c 'json.load(sys.stdin)' -> arquivo` preserva `Almoco`/`Reuniao`
+# intactos. A causa e SO a VARIAVEL DE SHELL — 321 bytes contra 325 na mesma volta.
+#
+# O conserto funcionou, mas pelo outro motivo: o que salvou foi migrar para ARQUIVO,
+# nao o `sys.stdin.buffer`. Este ficou porque e explicito e nao custa nada, mas nao e
+# ele que impede a corrupcao — atribuir o conserto ao mecanismo errado e como se
+# reintroduz o defeito no proximo probe, 'copiando a parte que nao era a que curou'.
 
 # Key-cobaia: lista de dicts com `id`, sem consumidor critico, restaurada no fim.
 PROBE_NS="agent_activity"

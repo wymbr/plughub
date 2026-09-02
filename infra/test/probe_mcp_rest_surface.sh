@@ -58,6 +58,17 @@
 # Env:  BORDA=http://localhost:5174   DIRETO=http://localhost:3100
 #
 # Veredicto de TRÊS estados: 0 = OK · 1 = REPROVOU · 3 = INCONCLUSIVO
+# ⚠️ UTF-8 explicito na SAIDA do python. No Windows o `stdout` decodifica com cp1252 e
+# um `print` de texto acentuado estoura `UnicodeEncodeError`, derrubando o probe por
+# motivo de bancada — ou, pior, mutila o texto que o shell vai comparar.
+#
+# ⚠️ E o que esta linha NAO conserta, porque o diagnostico foi REFEITO em 2026-09-02:
+# a corrupcao que motivou a CNS-12 nao vinha do `sys.stdin` (medido: `curl | python3 ->
+# arquivo` preserva `Almoco`/`Reuniao` intactos). Vinha da VARIAVEL DE SHELL — passar
+# JSON nao-ASCII por `VAR=$(…)` o mutila, medido 321 bytes contra 325. Contra isso a
+# unica defesa e nao passar por variavel: producao e consumo por ARQUIVO.
+export PYTHONIOENCODING=utf-8
+
 set -uo pipefail
 
 BORDA="${BORDA:-http://localhost:5174}"

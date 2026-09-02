@@ -1,5 +1,55 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — CNS-17: o diagnóstico da CNS-12 estava ERRADO, e o conserto curou pelo outro motivo
+
+### A correção
+
+A entrada da CNS-12, escrita horas antes, afirmava a causa raiz assim:
+
+> No Windows, `sys.stdin` decodifica com cp1252, não UTF-8. Os bytes chegam corretos do
+> curl e são destruídos **na leitura**.
+
+**Falso.** Medido hoje, isolando os dois caminhos sobre o mesmo dado:
+
+| caminho | resultado |
+|---|---|
+| `curl → python(stdin) → arquivo` | `Almoço`, `Reunião` — **íntegros** |
+| `curl → python → VARIÁVEL de shell → arquivo` | `Almo?o`, `Reuni?o` — **corrompidos** |
+
+A causa é **só a variável de shell**: passar JSON não-ASCII por `VAR=$(…)` o mutila — 321
+bytes contra 325 na mesma volta. O `sys.stdin` nunca esteve envolvido.
+
+### Por que o conserto funcionou mesmo assim, e por que isso é o achado
+
+Na CNS-12 eu mudei **duas** coisas ao mesmo tempo: migrei o fluxo para ARQUIVO **e** troquei
+`sys.stdin` por `sys.stdin.buffer`. O gate ficou verde, e eu atribuí a cura à segunda.
+
+Era a primeira. **Duas mudanças, um verde, e a conclusão foi para a errada** — que é o modo
+de falha que este repositório cataloga na forma "o teste passou, logo a hipótese está
+certa". A hipótese não foi isolada; foi assumida.
+
+O custo do engano: eu levei essa causa raiz para **26 arquivos** de `infra/test/` numa
+varredura, com o motivo errado escrito em cada um.
+
+### O que ficou, e com que justificativa
+
+O `export PYTHONIOENCODING=utf-8` **fica nos 26** — mas pelo motivo REAL, agora escrito lá:
+o `stdout` do python em cp1252 estoura `UnicodeEncodeError` ao imprimir texto acentuado,
+derrubando o probe por bancada, ou mutila o texto que o shell vai comparar. É defeito que eu
+mesmo encontrei várias vezes nesta sessão. Não é o conserto da corrupção — e o comentário
+diz isso explicitamente, junto com o que **realmente** defende: não passar JSON por variável.
+
+O `sys.stdin.buffer` do `probe_seed_drift_named` também fica, com a lápide corrigida ao
+lado: *atribuir o conserto ao mecanismo errado é como se reintroduz o defeito no próximo
+probe, copiando a parte que não era a que curou.*
+
+### Medição que de-riscou a varredura
+
+Antes de tocar nos 26, procurei mojibake **gravado** em asserção (`Ã§`, `Ã£`, `Ã©`, `Ã¡`) em
+todo `infra/test/*.sh`: **zero**. O risco que o próprio CNS-17 registrava — *"a comparação
+pode depender da forma corrompida"* — não se materializa, e isso é medição, não confiança.
+
+
 ## 2026-09-02 — CAP-17: a suíte de schemas volta ao verde, e o teste PERIGOSO era o que passava
 
 ### A pergunta que o ledger deixou aberta, respondida pela lápide
