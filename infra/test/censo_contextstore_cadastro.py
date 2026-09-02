@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Censo de cadastro do ContextStore — a lista da D9 por ANÁLISE ESTÁTICA.
 
-    python3 infra/test/censo_contextstore_cadastro.py [--json]
+    python3 infra/test/censo_contextstore_cadastro.py [--json] [--tenant T] [--config-api URL]
 
 ⚠️ **Isto é um INSTRUMENTO, não um gate.** Não tem veredicto: não há proposição
 que ele possa reprovar. Ele produz a LISTA e os números que dimensionam a
@@ -27,9 +27,47 @@ E há a origem que NENHUMA análise estática alcança: o corpo HTTP do webhook
 (`webhook.py:630` escreve cada chave verbatim, sem prefixo). É de lá que vêm as
 duas únicas tags sem namespace, `campaign_id` e `target_pool`.
 
-Resultado de referência (2026-08-30, mapa 75 canônicas / 53 aliases):
-    91 escritos (61 tenant · 35 plataforma) · 54 cobertos · 37 a cadastrar
-    21 lidos sem escritor · 0 dinâmicos
+O veredicto é PARTIDO POR ORIGEM, e a partição não é cosmética
+------------------------------------------------------------
+Até 2026-09-02 havia um número só de "não cobertos", medido contra o mapa
+SEMENTE. Ele estava errado de duas maneiras ao mesmo tempo:
+
+  (1) **Mapa errado.** A semente é o que o fonte TS declara (77/98); o mapa que
+      roda é o do config-api (97/119 no demo), com as adições do tenant. Lido
+      como pré-condição da V4, o censo publicou **18 não declaradas onde a
+      resposta era 2** — 16 nomes já cadastrados enviados de volta para a fila.
+      Os dois números respondem perguntas legítimas e diferentes; o defeito era
+      o relatório não dizer qual respondia.
+
+  (2) **Populações somadas.** Escrita de CÓDIGO de plataforma e escrita de SKILL
+      não têm o mesmo peso nem o mesmo juiz. Código roda para todo tenant, tem
+      de estar na SEMENTE, e **nenhum portão de publish o alcança**. Skill é
+      julgada pelo mapa VIVO, que é o que o portão consulta — e neste
+      repositório os skills são FIXTURES de teste, em rotação: um portão que
+      recuse um deles está funcionando, e o custo é zero. Somar as duas fazia o
+      número grande (descartável) esconder o pequeno (que carrega peso).
+
+Resultado de referência (2026-09-02, semente 77/98 · vivo 97/119):
+    66 escritos · 0 dinâmicos · 27 lidos sem escritor
+    PLATAFORMA 14 escritas, 1 não declarada  (core.workflow.reviewer_id — decisão #5)
+    TENANT     52 escritas, 1 não declarada  (session.journey_echo — passo de demo)
+
+⚠️ ACHADO QUE ESTE CONSERTO PRODUZIU — o número muda depois de um `--wipe`
+------------------------------------------------------------------------
+O mapa vivo do demo tem 20 canônicas de domínio de TENANT (`cartao`, `conta`,
+`portabilidade`, `processo`, `reembolso`) que **nenhum arquivo provisiona**. A
+ALW-04 encolheu a semente para só-plataforma, o que está certo; o que não
+existe é a contraparte — não há `infra/context-map/` como há `infra/dialog/`.
+Aquelas 20 vivem no store porque alguém as escreveu pela API, uma vez.
+
+Medido: contra a SEMENTE (o estado pós-`--wipe`), **17 das 52** escritas de
+skill ficam não declaradas. Com o portão de publish da V4 ligado, o
+`RegistrySyncer` as recusaria no boot — e ele **não bloqueia o startup**
+(`registry_syncer.py:623`), então a stack sobe, os skills ficam sem publicar e
+o único sinal é o contador `skills_errors`.
+
+É a regra do CLAUDE.md sobre ambiente que só sobe porque já subiu antes. Rodar
+este censo com `--sem-vivo` mostra o estado de instalação limpa.
 
 O zero de dinâmicos foi CONFERIDO por mutação (2026-08-30): trocando um
 `tag: "approval.summary"` por `"approval.{{$.pipeline_state.x}}"` o contador
@@ -43,7 +81,10 @@ import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from collections import defaultdict
+from urllib.parse import quote
 
 try:
     import yaml
@@ -82,7 +123,15 @@ MARCA_W = re.compile(r"ctx_writes\[|mapping\[|hset\(|\bmapping\b\s*[:=]|_write_c
 
 
 # ── mapa vigente ─────────────────────────────────────────────────────────────
-def ler_mapa():
+def ler_mapa_semente():
+    """O mapa SEMENTE - `DEFAULT_CONTEXT_MAP` do fonte TS.
+
+    (!) Isto NAO e o mapa que roda. O vivo (config-api) carrega as adicoes do tenant
+    e e maior: medido em 2026-09-02, semente 77/98 contra vivo 97/119. Ler a semente e
+    chamar o resultado de "nao cadastrado" publicou **18** onde a resposta era **2**.
+    Os dois numeros estao certos para perguntas diferentes; o defeito era o relatorio
+    nao dizer qual respondia. Ver `ler_mapa_vivo` e `main`.
+    """
     src = io.open(MAPTS, encoding="utf-8").read()
     bloco = src[src.index("export const DEFAULT_CONTEXT_MAP"):]
     aliases, canonicas = {}, {}
@@ -207,20 +256,74 @@ def censo_plataforma():
     return escritas
 
 
+def ler_mapa_vivo(tenant, base):
+    """O mapa VIVO, do config-api — o que o portão de publish vai consultar.
+
+    **Levanta em qualquer falha; NUNCA devolve a semente.** Cair na semente em silêncio
+    é exatamente o defeito que este conserto remove: os dois mapas respondem perguntas
+    diferentes, e um relatório que troca um pelo outro sem dizer manda alguém cadastrar
+    16 nomes que já estão cadastrados.
+    """
+    url = "%s/config/masking?tenant_id=%s" % (base.rstrip("/"), quote(tenant, safe=""))
+    with urllib.request.urlopen(url, timeout=8) as r:
+        body = json.loads(r.read().decode("utf-8"))
+    raw = (body.get("entries") or {}).get("context_map")
+    if raw is None:
+        raise RuntimeError("config-api respondeu sem `entries.context_map`")
+    mapa = raw if isinstance(raw, dict) else json.loads(raw)
+    contexto = mapa.get("contexto")
+    if not isinstance(contexto, dict):
+        raise RuntimeError("mapa vivo sem nó `contexto`")
+    canonicas, aliases = {}, {}
+    for esc, doms in contexto.items():
+        if not isinstance(doms, dict):
+            continue
+        for dom, campos in doms.items():
+            if not isinstance(campos, dict):
+                continue
+            for campo, folha in campos.items():
+                if not isinstance(folha, dict):
+                    continue
+                nome = "%s.%s.%s" % (esc, dom, campo)
+                canonicas[nome] = folha.get("tipo") or "?"
+                leg = folha.get("legado") or []
+                if isinstance(leg, str):
+                    leg = [leg]
+                for a in leg:
+                    if isinstance(a, str):
+                        aliases[a] = nome
+    return canonicas, aliases
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--tenant", default=os.environ.get("TENANT", "tenant_demo"))
+    ap.add_argument("--config-api",
+                    default=os.environ.get("PLUGHUB_CONFIG_API_URL", "http://localhost:3600"))
+    ap.add_argument("--sem-vivo", action="store_true",
+                    help="não consulta o config-api; a metade TENANT sai INCONCLUSIVA")
     args = ap.parse_args()
 
-    canonicas, aliases = ler_mapa()
+    sem_can, sem_ali = ler_mapa_semente()
+    vivo_can = vivo_ali = None
+    if args.sem_vivo:
+        vivo_erro = "--sem-vivo"
+    else:
+        vivo_erro = None
+        try:
+            vivo_can, vivo_ali = ler_mapa_vivo(args.tenant, args.config_api)
+        except Exception as exc:                            # noqa: BLE001
+            vivo_erro = "%s: %s" % (type(exc).__name__, str(exc)[:120])
+
     tenant, leituras, dinamicas = censo_tenant()
     plat = censo_plataforma()
 
-    def estado(n):
-        if n in aliases:
-            return "alias -> " + aliases[n]
-        if n in canonicas:
-            return "canonica (%s)" % canonicas[n]
+    def estado(n, can, ali):
+        if n in ali:
+            return "alias -> " + ali[n]
+        if n in can:
+            return "canonica (%s)" % can[n]
         if n.startswith("segment.{segId}."):
             return "FAMILIA dinamica"
         return "NAO DECLARADO"
@@ -233,13 +336,43 @@ def main():
         todos[n]["orig"].add("plataforma")
         todos[n]["sup"] |= {"codigo:" + a for a in v}
 
-    nao_decl = sorted(n for n in todos if estado(n) == "NAO DECLARADO")
+    # ── A PARTIÇÃO, e por que ela não é cosmética ────────────────────────────
+    #
+    # Código de plataforma roda para TODO tenant, logo tem de estar na SEMENTE —
+    # declarar só no mapa vivo de um tenant não cobre os outros. E nenhum portão de
+    # publish o alcança: código não se publica.
+    #
+    # Skill autorada é julgada pelo mapa VIVO, que é o que o portão consulta.
+    #
+    # Nome escrito pelos DOIS cai no lado da PLATAFORMA: a exigência mais forte vence,
+    # mesma forma do `resolve_scope` e do `core.fileMode`.
+    #
+    # Antes desta partição havia um número só, e ele misturava a metade descartável
+    # (fixtures de teste) com a metade que carrega peso (código). O número grande
+    # escondia o pequeno.
+    plat_nomes = sorted(n for n in todos if "plataforma" in todos[n]["orig"])
+    ten_nomes = sorted(n for n in todos
+                       if "tenant" in todos[n]["orig"] and "plataforma" not in todos[n]["orig"])
+
+    plat_nao = [n for n in plat_nomes if estado(n, sem_can, sem_ali) == "NAO DECLARADO"]
+    ten_nao = (None if vivo_can is None
+               else [n for n in ten_nomes if estado(n, vivo_can, vivo_ali) == "NAO DECLARADO"])
+
+    ref_can, ref_ali = (vivo_can, vivo_ali) if vivo_can is not None else (sem_can, sem_ali)
     sem_escritor = sorted(set(leituras) - set(todos))
 
     if args.json:
         json.dump({
-            "canonicas": len(canonicas), "aliases": len(aliases),
-            "escritos": sorted(todos), "nao_declarados": nao_decl,
+            "mapa_semente": {"canonicas": len(sem_can), "aliases": len(sem_ali)},
+            "mapa_vivo": (None if vivo_can is None
+                          else {"canonicas": len(vivo_can), "aliases": len(vivo_ali),
+                                "tenant": args.tenant}),
+            "mapa_vivo_erro": vivo_erro,
+            "escritos": sorted(todos),
+            "plataforma": {"escritos": plat_nomes, "nao_declarados": plat_nao,
+                           "julgado_contra": "semente"},
+            "tenant": {"escritos": ten_nomes, "nao_declarados": ten_nao,
+                       "julgado_contra": (None if vivo_can is None else "vivo")},
             "lidos_sem_escritor": sem_escritor,
             "dinamicos": [list(d) for d in dinamicas],
         }, sys.stdout, ensure_ascii=False, indent=1)
@@ -249,25 +382,56 @@ def main():
     print("CENSO DE CADASTRO DO CONTEXTSTORE (D9) — %d nomes escritos" % len(todos))
     print("=" * 88)
     for n in sorted(todos):
-        print("  %-46s %-11s %s" % (n[:46], "+".join(sorted(todos[n]["orig"]))[:11], estado(n)))
-
-    print("\nNAO DECLARADOS — %d" % len(nao_decl))
-    for n in nao_decl:
-        print("  %-46s %s" % (n, " · ".join(sorted(todos[n]["sup"]))[:38]))
+        print("  %-46s %-11s %s" % (n[:46], "+".join(sorted(todos[n]["orig"]))[:11],
+                                    estado(n, ref_can, ref_ali)))
 
     print("\nLIDOS SEM ESCRITOR CONHECIDO — %d" % len(sem_escritor))
     for n in sem_escritor:
-        print("  %-46s %s" % (n, estado(n)))
+        print("  %-46s %s" % (n, estado(n, ref_can, ref_ali)))
 
     print("\n" + "=" * 88)
-    print("  mapa vigente     : %d canonicas · %d aliases" % (len(canonicas), len(aliases)))
-    print("  escritos         : %d  (tenant %d · plataforma %d)" % (len(todos), len(tenant), len(plat)))
-    print("  ja cobertos      : %d" % (len(todos) - len(nao_decl)))
-    print("  NAO cobertos     : %d" % len(nao_decl))
-    print("  lidos s/ escritor: %d" % len(sem_escritor))
-    print("  DINAMICOS        : %d   <- a premissa da D9.2 vive deste zero" % len(dinamicas))
+    print("  mapa SEMENTE (schemas/context-map.ts) : %d canonicas · %d aliases"
+          % (len(sem_can), len(sem_ali)))
+    if vivo_can is None:
+        print("  mapa VIVO    (config-api)             : INDISPONIVEL — %s" % vivo_erro)
+    else:
+        print("  mapa VIVO    (config-api, %-14s) : %d canonicas · %d aliases"
+              % (args.tenant, len(vivo_can), len(vivo_ali)))
+    print("  escritos                              : %d  (tenant %d · plataforma %d)"
+          % (len(todos), len(tenant), len(plat)))
+    print("  DINAMICOS                             : %d   <- a premissa da D9.2 vive deste zero"
+          % len(dinamicas))
     for d in dinamicas:
         print("      %s" % (d,))
+
+    print("\n" + "-" * 88)
+    print("PLATAFORMA (código) — julgado contra a SEMENTE, porque roda para TODO tenant")
+    print("-" * 88)
+    print("  escritas: %d   NAO DECLARADAS: %d" % (len(plat_nomes), len(plat_nao)))
+    for n in plat_nao:
+        print("     x %-44s %s" % (n, " · ".join(sorted(todos[n]["sup"]))[:34]))
+    if not plat_nao:
+        print("     (nenhuma)")
+    print("  ^ É esta a metade que CARREGA PESO: nenhum portão de publish a alcança, e")
+    print("    uma tag `core.*` não semeada viola o namespace fechado da plataforma.")
+
+    print("\n" + "-" * 88)
+    print("TENANT (skill YAML) — julgado contra o mapa VIVO, que é o que o portão consulta")
+    print("-" * 88)
+    if ten_nao is None:
+        print("  INCONCLUSIVO — sem o mapa vivo não há contra o que julgar (%s)." % vivo_erro)
+        print("  NÃO caindo na semente de propósito: ela publicaria como não-declaradas")
+        print("  tags que o portão aceita. Suba o config-api ou passe --config-api.")
+    else:
+        print("  escritas: %d   NAO DECLARADAS: %d" % (len(ten_nomes), len(ten_nao)))
+        for n in ten_nao:
+            print("     x %-44s %s" % (n, " · ".join(sorted(todos[n]["sup"]))[:34]))
+        if not ten_nao:
+            print("     (nenhuma)")
+    print("  (!) PESO: os skills deste repositório são FIXTURES de teste, simplificados e")
+    print("      em rotação com a evolução da plataforma. Um portão que recuse um deles")
+    print("      está FUNCIONANDO, e o custo é zero. Não dimensione a decisão por este")
+    print("      número — dimensione pela metade PLATAFORMA acima.")
 
 
 if __name__ == "__main__":
