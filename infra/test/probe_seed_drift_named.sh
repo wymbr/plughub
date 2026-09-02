@@ -47,15 +47,19 @@
 # so a cobaia.
 #
 # Tres estados: OK / FALHA / INCONCLUSIVO (nunca OK com ramo inconclusivo).
-# ⚠️ UTF-8 explicito na SAIDA do python. No Windows o `stdout` decodifica com cp1252 e
-# um `print` de texto acentuado estoura `UnicodeEncodeError`, derrubando o probe por
-# motivo de bancada — ou, pior, mutila o texto que o shell vai comparar.
+# ⚠️ UTF-8 explicito na saida do python — e esta linha E o conserto, nao um paliativo.
 #
-# ⚠️ E o que esta linha NAO conserta, porque o diagnostico foi REFEITO em 2026-09-02:
-# a corrupcao que motivou a CNS-12 nao vinha do `sys.stdin` (medido: `curl | python3 ->
-# arquivo` preserva `Almoco`/`Reuniao` intactos). Vinha da VARIAVEL DE SHELL — passar
-# JSON nao-ASCII por `VAR=$(…)` o mutila, medido 321 bytes contra 325. Contra isso a
-# unica defesa e nao passar por variavel: producao e consumo por ARQUIVO.
+# Nesta bancada o `stdout` do python usa cp1252. Um `print` com acento sai em bytes
+# cp1252, e todo consumidor a jusante — `grep` com padrao UTF-8, outro python, o proprio
+# shell — deixa de casar sobre um texto que ESTA la. Medido com A/B em 2026-09-02
+# (CNS-18): sem a env, `grep -c 'meta NAO escrito'` devolve 0 pelos DOIS caminhos
+# (arquivo e variavel); com a env, devolve 1 pelos dois.
+#
+# ⚠️ O diagnostico levou TRES tentativas e as duas primeiras foram publicadas erradas:
+# `sys.stdin` (CNS-12) e a variavel de shell (CNS-17). Nao era o fluxo de ENTRADA nem o
+# transporte — era a SAIDA. Variavel e arquivo sao ambos inocentes, e `docker logs`
+# tambem: medido, sobrevive intacto pelos dois. Se voce for mexer nisto, o teste que
+# separa as hipoteses e o A/B na propria env, com UMA variavel por vez.
 export PYTHONIOENCODING=utf-8
 
 set -u
@@ -87,15 +91,18 @@ SNAP_F="$(cd "$(dirname "$0")" && pwd)/.seed_drift_snapshot.json"
 MUT_F="$(cd "$(dirname "$0")" && pwd)/.seed_drift_mutated.json"
 export SNAP_F MUT_F
 
-# ⚠️ CORRECAO DE DIAGNOSTICO (2026-09-02, CNS-17). Este bloco afirmava que a causa
-# raiz era o `sys.stdin` do python decodificando em cp1252. **Falso, e remedido:**
-# `curl | python3 -c 'json.load(sys.stdin)' -> arquivo` preserva `Almoco`/`Reuniao`
-# intactos. A causa e SO a VARIAVEL DE SHELL — 321 bytes contra 325 na mesma volta.
+# ⚠️ DIAGNOSTICO, na TERCEIRA e definitiva versao (2026-09-02, CNS-18). As duas
+# primeiras foram publicadas erradas e ficam registradas de proposito: `sys.stdin`
+# (CNS-12) e a variavel de shell (CNS-17). A causa e o **`stdout` do python em
+# cp1252** — texto acentuado sai em bytes cp1252 e nenhum consumidor UTF-8 o casa.
+# Provado por A/B na env: sem `PYTHONIOENCODING`, `grep` devolve 0 por arquivo E por
+# variavel; com ela, 1 pelos dois. Variavel, arquivo e `docker logs` sao inocentes.
 #
-# O conserto funcionou, mas pelo outro motivo: o que salvou foi migrar para ARQUIVO,
-# nao o `sys.stdin.buffer`. Este ficou porque e explicito e nao custa nada, mas nao e
-# ele que impede a corrupcao — atribuir o conserto ao mecanismo errado e como se
-# reintroduz o defeito no proximo probe, 'copiando a parte que nao era a que curou'.
+# O que curou ESTE probe foi o `PYTHONIOENCODING` no topo. A migracao para ARQUIVO e o
+# `sys.stdin.buffer` ficam por serem explicitos, mas nao sao o conserto — e atribuir a
+# cura ao mecanismo errado foi exatamente o que me fez levar a causa falsa para 26
+# arquivos. Quando duas mudancas entram juntas e o verde aparece, a hipotese nao foi
+# isolada: foi assumida.
 
 # Key-cobaia: lista de dicts com `id`, sem consumidor critico, restaurada no fim.
 PROBE_NS="agent_activity"

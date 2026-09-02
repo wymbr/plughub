@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — CNS-18: a causa era o `stdout`, e eu publiquei duas causas erradas antes
+
+### O A/B que fecha a questão
+
+Terceira e última versão do diagnóstico. As duas anteriores estão neste mesmo changelog e
+ficam de propósito — **`sys.stdin`** (CNS-12) e a **variável de shell** (CNS-17).
+
+A causa é o **`stdout` do python em cp1252**. Texto acentuado sai em bytes cp1252, e nenhum
+consumidor UTF-8 a jusante o casa. Provado variando **uma coisa só**:
+
+| | arquivo | variável |
+|---|---|---|
+| sem `PYTHONIOENCODING` | **0** | **0** |
+| com `PYTHONIOENCODING=utf-8` | **1** | **1** |
+
+Variável e arquivo dão o **mesmo** resultado nas duas linhas — logo nenhum dos dois é o
+culpado. E `docker logs` também é inocente: medido, sobrevive intacto pelos dois caminhos.
+
+### Por que errei duas vezes, e o que separa isto de azar
+
+Nas duas primeiras eu mudei **mais de uma coisa** e li o verde como confirmação:
+
+* **CNS-12** — migrei para arquivo *e* troquei `sys.stdin` por `sys.stdin.buffer`. Verde.
+  Atribuí ao segundo.
+* **CNS-17** — comparei "stdin" contra "variável" **sem controlar a env**, então os dois
+  braços do teste tinham python imprimindo em cp1252. O braço que "passou" passou porque
+  python escrevia com `encoding="utf-8"` explícito num arquivo, não porque a variável fosse
+  o problema. Comparei duas coisas achando que variava uma.
+
+O teste que finalmente separou foi trivial e eu podia tê-lo feito primeiro: **variar a env,
+e só a env**, medindo os dois caminhos em cada braço.
+
+### O que ficou
+
+O `export PYTHONIOENCODING=utf-8` **fica nos 26** — e agora é o conserto, não um paliativo.
+O comentário de cada arquivo traz a causa verificada, o A/B, e a lista do que é inocente,
+para que ninguém refaça a investigação por outro caminho errado.
+
+**Revertidas duas mudanças que eu fizera nesta mesma rodada**:
+`probe_fase_b_release_on_reload.sh` e `probe_session_meta_ownership.sh` foram migradas para
+grep-por-arquivo sob a hipótese da variável. Eles leem `docker logs`, que é inocente — logo
+**consertavam um defeito que não tinham**, com um comentário afirmando uma causa falsa.
+Manter mudança justificada por diagnóstico errado é pior que não a fazer.
+
+### A lição, que é de método e não de encoding
+
+**Quando duas mudanças entram juntas e o verde aparece, a hipótese não foi isolada — foi
+assumida.** Foi isso, duas vezes seguidas, e a segunda ainda me levou a espalhar a causa
+falsa por 26 arquivos. O custo não foi o encoding; foi ter escrito com confiança um
+mecanismo que ninguém tinha separado.
+
+
 ## 2026-09-02 — CNS-17: o diagnóstico da CNS-12 estava ERRADO, e o conserto curou pelo outro motivo
 
 ### A correção

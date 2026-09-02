@@ -7,15 +7,19 @@
 # e confere que NÃO houve re-drain (claim idempotente por UNIQUE(campaign_id, entry)).
 #
 # Uso (raiz do repo, demo no ar):  bash infra/test/smoke_outbound_fase1.sh
-# ⚠️ UTF-8 explicito na SAIDA do python. No Windows o `stdout` decodifica com cp1252 e
-# um `print` de texto acentuado estoura `UnicodeEncodeError`, derrubando o probe por
-# motivo de bancada — ou, pior, mutila o texto que o shell vai comparar.
+# ⚠️ UTF-8 explicito na saida do python — e esta linha E o conserto, nao um paliativo.
 #
-# ⚠️ E o que esta linha NAO conserta, porque o diagnostico foi REFEITO em 2026-09-02:
-# a corrupcao que motivou a CNS-12 nao vinha do `sys.stdin` (medido: `curl | python3 ->
-# arquivo` preserva `Almoco`/`Reuniao` intactos). Vinha da VARIAVEL DE SHELL — passar
-# JSON nao-ASCII por `VAR=$(…)` o mutila, medido 321 bytes contra 325. Contra isso a
-# unica defesa e nao passar por variavel: producao e consumo por ARQUIVO.
+# Nesta bancada o `stdout` do python usa cp1252. Um `print` com acento sai em bytes
+# cp1252, e todo consumidor a jusante — `grep` com padrao UTF-8, outro python, o proprio
+# shell — deixa de casar sobre um texto que ESTA la. Medido com A/B em 2026-09-02
+# (CNS-18): sem a env, `grep -c 'meta NAO escrito'` devolve 0 pelos DOIS caminhos
+# (arquivo e variavel); com a env, devolve 1 pelos dois.
+#
+# ⚠️ O diagnostico levou TRES tentativas e as duas primeiras foram publicadas erradas:
+# `sys.stdin` (CNS-12) e a variavel de shell (CNS-17). Nao era o fluxo de ENTRADA nem o
+# transporte — era a SAIDA. Variavel e arquivo sao ambos inocentes, e `docker logs`
+# tambem: medido, sobrevive intacto pelos dois. Se voce for mexer nisto, o teste que
+# separa as hipoteses e o A/B na propria env, com UMA variavel por vez.
 export PYTHONIOENCODING=utf-8
 
 set -euo pipefail
