@@ -1,5 +1,61 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-08: o mapa do ContextStore ganha tela, e a porta perigosa fecha
+
+### A pergunta do dono reescreveu a tarefa
+
+A CNS-08 era *"dar tela e API ao `masking.context_map`"*. Perguntado se a árvore é única
+ou por tenant, medi: **`platform_config` é uma tabela só, multi-tenant por LINHA**
+(`__global__` 83 chaves · `tenant_demo` 4, nenhuma delas esta). Bancos e schemas são
+separados por **serviço**, nunca por tenant.
+
+E o SQL de resolução é `LIMIT 1` — **tenant vence o global POR INTEIRO**. Logo qualquer
+override de tenant nesta chave substituiria as 94 folhas da plataforma; medido em
+2026-09-01, um `PUT` com uma folha deixou o tenant com **1 no lugar de 94**.
+
+### Eu recomendei construir para uma população de zero, e revisei
+
+Cheguei a propor chave separada + merge na leitura. A medição diz que **zero tenants
+sobrescrevem esta chave e existe um tenant na instalação** — é política contra população
+zero, o erro que esta casa cataloga. Recomendação corrigida e aceita pelo dono:
+
+1. a tela edita o **`__global__`**;
+2. o portão da CNS-05 passa a recusar **qualquer** override de tenant nesta chave, não só
+   o root `core` — porque o dano nunca dependeu do root;
+3. o merge fica **registrado com gatilho** (CNS-16): o segundo tenant que precise de
+   vocabulário próprio.
+
+Isso troca *"construir merge que ninguém usa"* por *"fechar a porta que só faz mal"*.
+
+### A tela
+
+Seção nova em `/config/masking`: a árvore por root, domínio e folha, com o tipo de cada
+uma e a contagem de aliases. **`core.*` é somente leitura**, com selo e nota — ele é
+semeado pelo `seed.py`, que é o dono dele, e editá-lo pela tela criaria drift que o
+`probe_seed_drift_named` acusaria como divergência que a própria tela criou.
+
+Verificado ao vivo: **`core.*` com 0 selects e selo · `journey.*` 7 · `session.*` 53** —
+60 editáveis + 34 do core = 94. Round-trip completo pela tela (`texto` → `cpf` →
+recarrega lendo `cpf` → `texto`), gravando no **global**, com `legado` preservado, 94
+folhas intactas e **zero** overrides de tenant no banco depois.
+
+### Dois testes que mudaram de proposição, e a inversão é a decisão
+
+`test_reserved_core_root.py` tinha o par C-1 × C-2, onde o C-2 afirmava que *o tenant
+segue escrevendo o que é dele*. Sob a CNS-08 ele **inverteu**: a recusa é total nesta
+chave. A testemunha de que o portão não recusa tudo mudou de casa — é o C-4 (outras
+chaves do namespace passam) somado ao C-3 (a plataforma escreve no global), e a prova ao
+vivo mostra as duas: `context_map` de tenant **422**, `context_rules` do mesmo tenant
+**200**.
+
+O C-5 também mudou: antes media *"payload torto não vira 500"* com o portão inspecionando
+o valor; agora ele decide por ESCOPO e não olha conteúdo, então o que se afirma é que
+**nenhum formato muda o desfecho**. O caso fica porque a inspeção **volta** no dia da
+chave de tenant.
+
+57/57 na suíte do config-api.
+
+
 ## 2026-09-01 — CNS-15: três skills apagados, nove mantidos com razão nomeada
 
 Decisão caso a caso sobre os 12 sem deploy vivo que a CNS-01 mediu. **Apagar em bloco

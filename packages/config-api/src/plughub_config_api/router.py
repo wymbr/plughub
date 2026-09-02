@@ -185,51 +185,53 @@ async def list_all(
     })
 
 
-# ─── CNS-05 — o root `core.*` é RESERVADO à plataforma ───────────────────────
+# ─── CNS-05/CNS-08 — o `masking.context_map` é da PLATAFORMA ─────────────────
 
-#: Root do ContextStore que só a plataforma declara. A reserva inteira é este nome:
-#: um predicado, não uma lista de pastas — é o que a torna uma REGRA (um nome se
-#: explica sozinho) em vez de uma CONSULTA, e o que a impede de envelhecer quando
-#: nascer a próxima pasta do core.
+#: Root do ContextStore que só a plataforma declara. Continua exportado porque a
+#: reserva é um fato do modelo, citado por doc e por teste — e porque, quando a chave
+#: de tenant existir (CNS-16), é ele que o mesclador vai excluir.
 RESERVED_CONTEXT_ROOT = "core"
 
 
-def _reject_tenant_core_root(namespace: str, key: str, tenant_id, value) -> None:
-    """Recusa um `masking.context_map` de TENANT que declare o root `core`.
+def _reject_tenant_context_map(namespace: str, key: str, tenant_id, value) -> None:
+    """Recusa QUALQUER `masking.context_map` vindo de tenant.
 
-    Até 2026-09-01 a reserva era decisão sem mecanismo, e isso foi MEDIDO, não
-    suposto: um `PUT` com `tenant_id` de tenant declarando `contexto.core.contact`
-    voltava **HTTP 200**, e a leitura de volta mostrava o dano maior — o override
-    SUBSTITUI a chave inteira, então aquele tenant passava a ter **1 folha no lugar
-    das 94** da plataforma. A invasão do `core` e o apagamento do mapa eram o mesmo
-    gesto.
+    ── Por que a recusa é total, e não só do root `core` (CNS-08, 2026-09-01) ──
 
-    Escopo deliberado: só o par (`masking`, `context_map`) e só quando há tenant. O
-    seed da plataforma escreve `core` no `__global__` e tem de continuar podendo —
-    é ele o dono do root.
+    A CNS-05 recusava o root `core` de tenant, porque um tenant declarando ali invadia
+    o espaço da plataforma. Medindo o mecanismo por inteiro, o dano não dependia do
+    root: **a resolução de config é `LIMIT 1`, tenant vence o global POR INTEIRO**
+    (`db.py`, comentário do schema). Qualquer override de tenant nesta chave substitui
+    as 94 folhas da plataforma por aquilo que o tenant mandou — foi medido em
+    2026-09-01: um `PUT` com uma folha deixou o tenant com **1 no lugar de 94**.
 
-    ⚠️ **Isto NÃO fecha o buraco vizinho:** quem tem `config.masking` também pode
-    escrever o `__global__` (mandando `tenant_id: null`) e de lá reescrever o `core`
-    à vontade. É outra fronteira — a de quem pode editar o default da plataforma — e
-    fechá-la aqui, de carona, misturaria duas decisões. Fica registrado, não fingido.
+    E não há uso legítimo do outro lado hoje: medido no mesmo dia, **zero** tenants
+    sobrescrevem esta chave, e a instalação tem **um** tenant (`platform_config`:
+    `__global__` 83 chaves, `tenant_demo` 4, nenhuma delas esta).
+
+    ⚠️ **Isto NÃO é o desenho final — é a porta fechada enquanto não há quem entre.**
+    Quando existir um segundo tenant que precise de vocabulário próprio, o desenho é
+    chave SEPARADA (`masking.context_map_tenant`) mesclada na leitura: cada chave mantém
+    a semântica uniforme de config, e o tenant não alcança `core` **por construção do
+    mesclador**, não por um portão que alguém pode esquecer de chamar. Construir o merge
+    agora seria política contra população zero. Ver CNS-16.
+
+    ⚠️ E o buraco vizinho continua aberto e registrado: quem tem `config.masking` escreve
+    o `__global__` mandando `tenant_id: null` (CNS-14). É outra fronteira.
     """
     if namespace != "masking" or key != "context_map":
         return
     if not tenant_id or tenant_id == "__global__":
         return
-    if not isinstance(value, dict):
-        return
-    contexto = value.get("contexto")
-    if not isinstance(contexto, dict) or RESERVED_CONTEXT_ROOT not in contexto:
-        return
     raise HTTPException(
         status_code=422,
         detail=(
-            f"root `{RESERVED_CONTEXT_ROOT}` é RESERVADO à plataforma e não pode ser "
-            f"declarado por tenant (tenant_id={tenant_id!r}). O que a plataforma escreve "
-            f"vive sob `core.*`; tudo o mais do ContextStore é do tenant — use "
-            f"`session.*` (4 h), `journey.*` (30 d) ou qualquer outro root, que cai no "
-            f"hash da sessão. Ver docs/product/contextstore-core-namespace-spec.md §2."
+            f"`masking.context_map` não aceita override por tenant (tenant_id={tenant_id!r}). "
+            f"A resolução de config é tenant-vence-global POR INTEIRO, então o override "
+            f"substituiria as folhas declaradas pela plataforma em vez de acrescentar às "
+            f"delas. O mapa é editado no escopo GLOBAL (`tenant_id: null`). Vocabulário "
+            f"próprio por tenant é desenho registrado (chave separada + merge na leitura), "
+            f"ainda não construído — ver docs/product/contextstore-core-namespace-spec.md."
         ),
     )
 
@@ -249,7 +251,7 @@ async def put_config(
     body.tenant_id = "xyz" → sets tenant-specific override.
     Publishes config.changed to Kafka after a successful write (fire-and-forget).
     """
-    _reject_tenant_core_root(namespace, key, body.tenant_id, body.value)
+    _reject_tenant_context_map(namespace, key, body.tenant_id, body.value)
     store   = request.app.state.store
     emitter = request.app.state.emitter
     await store.set(

@@ -50,6 +50,16 @@
       "voice": "Voice channel",
       "echoCustomer": "Echo to customer",
       "echoOperator": "Echo to operator"
+    },
+    "contextMap": {
+      "title": "ContextStore map — declared fields",
+      "description": "Which fields exist in the ContextStore, in escopo.dominio.campo, each naming its type. The map is the allowlist. Saved to the GLOBAL scope.",
+      "absent": "masking.context_map is not set — the platform seeds it at boot.",
+      "leaves": "fields",
+      "aliases": "aliases",
+      "platform": "platform — read only",
+      "platformNote": "Declared by the platform seed and reserved: a tenant cannot write here. Change it in seed.py and reapply.",
+      "scopeNote": "Edits are saved to the GLOBAL scope. A per-tenant override would replace the platform declarations wholesale instead of adding to them, so the Config API refuses it (422)."
     }
   },
   "lgpd": {

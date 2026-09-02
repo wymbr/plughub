@@ -50,6 +50,16 @@
       "voice": "Canal de voz",
       "echoCustomer": "Eco para o cliente",
       "echoOperator": "Eco para o operador"
+    },
+    "contextMap": {
+      "title": "Mapa do ContextStore — campos declarados",
+      "description": "Quais campos existem no ContextStore, em escopo.dominio.campo, cada um nomeando o seu tipo. O mapa é a allowlist. Gravado no escopo GLOBAL.",
+      "absent": "masking.context_map não está definido — a plataforma o semeia no boot.",
+      "leaves": "campos",
+      "aliases": "aliases",
+      "platform": "plataforma — somente leitura",
+      "platformNote": "Declarado pelo seed da plataforma e reservado: tenant não escreve aqui. Altere no seed.py e reaplique.",
+      "scopeNote": "As edições são gravadas no escopo GLOBAL. Um override por tenant substituiria as declarações da plataforma por inteiro em vez de somar a elas, então o Config API o recusa (422)."
     }
   },
   "lgpd": {
