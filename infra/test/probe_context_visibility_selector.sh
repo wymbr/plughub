@@ -70,7 +70,15 @@ echo "=== probe_context_visibility_selector — D6 do arco ALLOWLIST ==="
 # Recompila SEMPRE. Um `dist/` herdado faria os ramos que o leem julgarem uma
 # versao anterior do schema — o simbolo existe e nao e o de agora.
 if command -v node >/dev/null 2>&1; then
-  ( cd "$SCHEMAS" && npx tsc >/tmp/cvsel_tsc.log 2>&1 ) || huh "tsc dos schemas reprovou — ver /tmp/cvsel_tsc.log"
+  # `npx` quebra com ERR_INVALID_URL a partir de um caminho UNC (`\wsl.localhost\...`),
+  # e o ramo saia INCONCLUSIVO por motivo de BANCADA, nao por defeito medido. Mesmo
+  # conserto ja aplicado no `probe_context_map_audit.sh`: chamar o binario direto
+  # quando ele existe, e so cair no `npx` como ultimo recurso.
+  if [ -f "$SCHEMAS/node_modules/typescript/bin/tsc" ]; then
+    ( cd "$SCHEMAS" && node ./node_modules/typescript/bin/tsc >/tmp/cvsel_tsc.log 2>&1 ) || huh "tsc dos schemas reprovou — ver /tmp/cvsel_tsc.log"
+  else
+    ( cd "$SCHEMAS" && npx tsc >/tmp/cvsel_tsc.log 2>&1 ) || huh "tsc dos schemas reprovou (via npx) — ver /tmp/cvsel_tsc.log"
+  fi
 else
   huh "node ausente — o ramo E nao pode rodar (defina NODE_BIN)"
 fi

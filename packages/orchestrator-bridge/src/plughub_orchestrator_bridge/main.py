@@ -48,6 +48,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+
+from plughub_contextstore.writer import write_context_tags
 import os
 import uuid
 from datetime import datetime, timezone
@@ -1383,18 +1385,15 @@ async def _write_pre_hook_context(
       core.contact.human_agent_participant_id — instance_id do agente humano que saiu;
                                            usado pelo wrap-up para visibility array
     """
-    ctx_key = f"{tenant_id}:ctx:{session_id}"
     now_iso = datetime.now(timezone.utc).isoformat()
     try:
+        # ALW-02 (2026-09-02) — os CINCO `hset` deste bloco viraram UMA chamada ao funil,
+        # que CARIMBA o `atributo` a partir do cadastro (D9.6). Além do carimbo, é menos
+        # ida-e-volta: eram cinco round-trips para a mesma chave.
+        ctx_tags: dict[str, object] = {}
+
         # 1. close_origin — permite que o agente NPS saiba se o cliente está ativo
-        entry_origin = json.dumps({
-            "value":      close_origin,
-            "confidence": 1.0,
-            "source":     "bridge:pre_hook",
-            "visibility": "agents_only",
-            "updated_at": now_iso,
-        })
-        await redis_client.hset(ctx_key, "core.contact.close_origin", entry_origin)
+        ctx_tags["core.contact.close_origin"] = close_origin
 
         # 2. customer_participant_id — o agente NPS usa para montar o array de
         #    visibility [customer_participant_id] das suas mensagens.
@@ -1405,31 +1404,16 @@ async def _write_pre_hook_context(
         if not cust_pid and customer_participant_id:
             cust_pid = customer_participant_id
         if cust_pid:
-            pid_str = cust_pid if isinstance(cust_pid, str) else cust_pid.decode()
-            entry_pid = json.dumps({
-                "value":      pid_str,
-                "confidence": 1.0,
-                "source":     "bridge:pre_hook",
-                "visibility": "agents_only",
-                "updated_at": now_iso,
-            })
-            await redis_client.hset(ctx_key, "core.contact.customer_participant_id", entry_pid)
+            ctx_tags["core.contact.customer_participant_id"] = (
+                cust_pid if isinstance(cust_pid, str) else cust_pid.decode()
+            )
 
         # 3. human_agent_participant_id — o agente de wrap-up usa para montar o
         #    array de visibility [human_instance_id] das suas mensagens, garantindo
         #    que apenas o agente humano que encerrou veja o wrap-up (e não
         #    supervisores ou outros participantes da conferência).
         if human_instance_id:
-            entry_human = json.dumps({
-                "value":      human_instance_id,
-                "confidence": 1.0,
-                "source":     "bridge:pre_hook",
-                "visibility": "agents_only",
-                "updated_at": now_iso,
-            })
-            await redis_client.hset(
-                ctx_key, "core.contact.human_agent_participant_id", entry_human,
-            )
+            ctx_tags["core.contact.human_agent_participant_id"] = human_instance_id
 
         # 4. Fatos do ÚLTIMO SEGMENTO PRIMARY — insumo para survey de grão `segment`.
         #
@@ -1444,21 +1428,16 @@ async def _write_pre_hook_context(
         # sessão" é, por definição, um fato de sessão: existe exatamente um.
         _last_seg = await redis_client.get(f"session:{session_id}:primary_segment")
         if _last_seg:
-            _seg_str = _last_seg if isinstance(_last_seg, str) else _last_seg.decode()
-            await redis_client.hset(
-                ctx_key,
-                "core.contact.last_primary_segment_id",
-                json.dumps({
-                    "value":      _seg_str,
-                    "confidence": 1.0,
-                    "source":     "bridge:pre_hook",
-                    "visibility": "agents_only",
-                    "updated_at": now_iso,
-                }),
+            ctx_tags["core.contact.last_primary_segment_id"] = (
+                _last_seg if isinstance(_last_seg, str) else _last_seg.decode()
             )
 
         # agent_key — atribuição do sinal de segmento: user_login (humano) ou
         # agent_type_id/skill (IA). Lido do meta da sessão, que o process_routed mantém.
+        #
+        # O `try` interno guarda a LEITURA do meta, não a escrita: meta ilegível não pode
+        # derrubar as quatro tags acima. Ele continua estreito depois da ALW-02 — a
+        # escrita agora é uma só, e acontece FORA dele.
         try:
             _raw_meta = await redis_client.get(f"session:{session_id}:meta")
             if _raw_meta:
@@ -1467,21 +1446,14 @@ async def _write_pre_hook_context(
                 )
                 _agent_key = _meta.get("user_login") or _meta.get("agent_type_id") or ""
                 if _agent_key:
-                    await redis_client.hset(
-                        ctx_key,
-                        "core.contact.last_primary_agent_key",
-                        json.dumps({
-                            "value":      _agent_key,
-                            "confidence": 1.0,
-                            "source":     "bridge:pre_hook",
-                            "visibility": "agents_only",
-                            "updated_at": now_iso,
-                        }),
-                    )
+                    ctx_tags["core.contact.last_primary_agent_key"] = _agent_key
         except Exception:
             pass
 
-        await redis_client.expire(ctx_key, _stl())
+        await write_context_tags(
+            redis_client, tenant_id, session_id, ctx_tags,
+            source="bridge:pre_hook", updated_at=now_iso, ttl_s=_stl(),
+        )
         logger.info(
             "pre_hook context written: session=%s close_origin=%s cust_pid=%s human_pid=%s "
             "last_seg=%s",
@@ -2216,19 +2188,15 @@ async def fire_pool_hooks(
                             _inst[len("human-"):] if _inst.startswith("human-")
                             else (_hs_rec.get("user_login", "") or _inst)
                         )
-                        _sv_now = datetime.now(timezone.utc).isoformat()
-                        await redis_client.hset(f"{tenant_id}:ctx:{session_id}", mapping={
-                            "core.survey.segment_id": json.dumps({
-                                "value": _hook_human_seg_id, "confidence": 1.0,
-                                "source": "on_human_end_hook", "visibility": "agents_only",
-                                "updated_at": _sv_now,
-                            }),
-                            "core.survey.agent_key": json.dumps({
-                                "value": _surveyed_agent_key, "confidence": 1.0,
-                                "source": "on_human_end_hook", "visibility": "agents_only",
-                                "updated_at": _sv_now,
-                            }),
-                        })
+                        # ALW-02 — pelo funil, que CARIMBA o `atributo` (D9.6).
+                        await write_context_tags(
+                            redis_client, tenant_id, session_id, {
+                                "core.survey.segment_id": _hook_human_seg_id,
+                                "core.survey.agent_key":  _surveyed_agent_key,
+                            },
+                            source="on_human_end_hook",
+                            updated_at=datetime.now(timezone.utc).isoformat(),
+                        )
                     except Exception as _sv_exc:
                         logger.debug("F10.3b: surveyed_* ctx write failed: session=%s — %s",
                                      session_id, _sv_exc)
@@ -4783,18 +4751,17 @@ async def process_routed(
                     _parsed_meta = json.loads(_raw_meta)
                     _inviter_id  = _parsed_meta.get("instance_id", "")
                 if _inviter_id:
-                    _ctx_key   = f"{tenant_id}:ctx:{session_id}"
-                    _ctx_now   = datetime.now(timezone.utc).isoformat()
-                    _ctx_field = f"segment.{_part_seg_id}.inviter_participant_id"
-                    _ctx_entry = json.dumps({
-                        "value":      _inviter_id,
-                        "confidence": 1.0,
-                        "source":     "bridge:conference",
-                        "visibility": "agents_only",
-                        "updated_at": _ctx_now,
-                    })
-                    await redis_client.hset(_ctx_key, _ctx_field, _ctx_entry)
-                    await redis_client.expire(_ctx_key, _stl())
+                    # ALW-02 — pelo funil. A tag e `segment.{id}.…`, que casa um PREFIXO
+                    # DINAMICO do mapa: o carimbo sai `{origem: "dynamic"}`, sem tipo, e
+                    # isso e correto — familia dinamica nao e declaravel folha a folha, e
+                    # por isso nao conta como `unknown` na populacao que a V4 mede.
+                    await write_context_tags(
+                        redis_client, tenant_id, session_id,
+                        {f"segment.{_part_seg_id}.inviter_participant_id": _inviter_id},
+                        source="bridge:conference",
+                        updated_at=datetime.now(timezone.utc).isoformat(),
+                        ttl_s=_stl(),
+                    )
                     logger.debug(
                         "inviter_participant_id written: session=%s seg=%s inviter=%s",
                         session_id, _part_seg_id, _inviter_id,
@@ -4821,17 +4788,15 @@ async def process_routed(
                         _served_raw if isinstance(_served_raw, str) else _served_raw.decode()
                     )
                     if _served_pid:
-                        _ctx_key   = f"{tenant_id}:ctx:{session_id}"
-                        _ctx_now   = datetime.now(timezone.utc).isoformat()
-                        _ctx_field = f"segment.{_part_seg_id}.served_human_participant_id"
-                        await redis_client.hset(_ctx_key, _ctx_field, json.dumps({
-                            "value":      _served_pid,
-                            "confidence": 1.0,
-                            "source":     "bridge:wrapup_hook",
-                            "visibility": "agents_only",
-                            "updated_at": _ctx_now,
-                        }))
-                        await redis_client.expire(_ctx_key, _stl())
+                        # ALW-02 — pelo funil. Tag de prefixo dinamico, como a do inviter.
+                        await write_context_tags(
+                            redis_client, tenant_id, session_id,
+                            {f"segment.{_part_seg_id}.served_human_participant_id":
+                                _served_pid},
+                            source="bridge:wrapup_hook",
+                            updated_at=datetime.now(timezone.utc).isoformat(),
+                            ttl_s=_stl(),
+                        )
                         logger.debug(
                             "served_human_participant_id written: session=%s seg=%s human=%s",
                             session_id, _part_seg_id, _served_pid,
@@ -5261,15 +5226,12 @@ async def process_routed(
                     # já está em core.contact.root_session_id (J1) e o customer_id nativo em
                     # caller.customer_id — o agente de survey lê ambos p/ gravar grain=journey.
                     try:
-                        await redis_client.hset(
-                            f"{tenant_id}:ctx:{session_id}", "core.process.outcome",
-                            json.dumps({
-                                "value":      _ai_outcome,
-                                "confidence": 1.0,
-                                "source":     "bridge:pre_hook",
-                                "visibility": "agents_only",
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            }),
+                        # ALW-02 — pelo funil, que CARIMBA o `atributo` (D9.6).
+                        await write_context_tags(
+                            redis_client, tenant_id, session_id,
+                            {"core.process.outcome": _ai_outcome},
+                            source="bridge:pre_hook",
+                            updated_at=datetime.now(timezone.utc).isoformat(),
                         )
                     except Exception:
                         pass
@@ -8471,19 +8433,26 @@ async def dispatch_mention_command(
             )
 
     elif set_ctx:
-        ctx_key = f"{tenant_id}:ctx:{session_id}"
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
-            for field, value in set_ctx.items():
-                entry = json.dumps({
-                    "value":      value,
-                    "confidence": 1.0,
-                    "source":     "mention_command",
-                    "visibility": "agents_only",
-                    "updated_at": now_iso,
-                })
-                await redis_client.hset(ctx_key, field, entry)
-            await redis_client.expire(ctx_key, _stl())
+            # ALW-02 — pelo funil, que CARIMBA o `atributo` (D9.6).
+            #
+            # ⚠️ Este bloco e a SEGUNDA CASA da mesma acao: `mcp-server/tools/bpm.ts`
+            # implementa o mesmo `set_context` do mesmo `mention_commands` do YAML, e a
+            # ALW-02 passo 1 ja o roteou pelo funil TS. Duas casas para o mesmo fato e
+            # divida propria; o que a migracao fecha aqui e a metade Python.
+            #
+            # `on_foreign_scope="warn"`: as tags vem do YAML de `mention_commands`, isto
+            # e, sao AUTORADAS pelo tenant. O censo de 2026-09-02 achou UMA declaracao
+            # viva (`session.copilot.mode`, escopo de sessao), mas recusar mudaria o
+            # comportamento de config existente; o funil grava como antes e AVISA. A casa
+            # TS ROTEIA `journey.*` de verdade — e por isso que as duas divergem hoje, e
+            # e mais um motivo para elas virarem uma so.
+            await write_context_tags(
+                redis_client, tenant_id, session_id, dict(set_ctx),
+                source="mention_command", updated_at=now_iso, ttl_s=_stl(),
+                on_foreign_scope="warn",
+            )
             logger.info(
                 "mention_command dispatch: set_context fields=%s session=%s",
                 list(set_ctx.keys()), session_id,

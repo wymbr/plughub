@@ -64,6 +64,7 @@ async def write_context_tags(
     updated_at: str,
     ttl_s: int | None = None,
     ttl_nx: bool = False,
+    on_foreign_scope: str = "raise",
 ) -> dict[str, Any]:
     """Grava N tags no hash da sessão, cada uma CARIMBADA.
 
@@ -77,15 +78,34 @@ async def write_context_tags(
     os outros `httpx`.
 
     Devolve `{"written": [tag…], "fallback": bool, "atributos": {tag: carimbo}}`.
-    Levanta `ContextScopeRefused` se alguma tag não for de escopo sessão — **antes** de
-    escrever qualquer uma, para não deixar a chamada meio aplicada.
+
+    `on_foreign_scope` decide o que fazer com tag de escopo não-sessão, e as **duas**
+    posturas existem porque há duas espécies de chamador:
+
+      · `"raise"` (default) — os 19 sítios que escrevem tags FIXAS e conhecidas. Se uma
+        delas virar `journey.*`, é bug de quem escreveu o código, e a falha tem de ser alta.
+        A verificação roda sobre o conjunto INTEIRO antes do primeiro `hset`: chamada meio
+        aplicada é pior que recusada.
+      · `"warn"` — o sítio que escreve tag ARBITRÁRIA (corpo de webhook, `context` de
+        `delegate`/`collect`). Ali a tag vem de fora, recusar mudaria o comportamento de
+        chamador externo, e hoje ela É gravada no hash da sessão. Este ramo preserva isso e
+        **diz que está errado** em vez de fingir que não. Dívida: ALW-03.
     """
     fora = [t for t in tags if resolve_context_store(t) != "session"]
-    if fora:
+    if fora and on_foreign_scope == "raise":
         raise ContextScopeRefused(
             f"tags de escopo nao-sessao oferecidas ao funil Python: {sorted(fora)} — "
             f"esta metade so escreve no hash da sessao (ver o cabecalho de writer.py); "
             f"use a tool `context_set` do mcp-server, que roteia"
+        )
+    if fora:
+        logger.warning(
+            "[ctx-writer] tenant=%s session=%s: tags de escopo NAO-SESSAO gravadas no "
+            "hash da sessao mesmo assim: %s. O valor fica legivel, mas no lugar errado — "
+            "uma tag `journey.*` pertence ao hash do PROCESSO (TTL 30d) e sera perdida "
+            "quando a sessao expirar. Este ramo existe para NAO mudar o comportamento de "
+            "chamador externo (corpo de webhook e arbitrario); ver ALW-03.",
+            tenant_id, session_id, sorted(fora),
         )
     if not tags:
         return {"written": [], "fallback": False, "atributos": {}}

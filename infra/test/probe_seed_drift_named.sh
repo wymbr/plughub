@@ -251,8 +251,19 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 echo
 echo "-- F. COMPARADOR PURO --"
+# Separador de PYTHONPATH: `:` em POSIX, `;` no Python de WINDOWS — e esta bancada roda
+# Git Bash sobre um `python3` de Windows (o `CLAUDE.md` ja cataloga a toolchain mista).
+# Com o separador errado o caminho inteiro vira UMA entrada invalida e o import falha,
+# o que reprova o ramo F como se o comparador estivesse quebrado.
+SEP=":"; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";";; esac
+PP="src${SEP}../py-contextstore/src${SEP}../py-authz/src"
+
 if command -v python3 >/dev/null 2>&1 && python3 -m pytest --version >/dev/null 2>&1; then
-  if ( cd packages/config-api && PYTHONPATH=src python3 -m pytest \
+  # PYTHONPATH inclui as libs IRMAS: desde a ALW-02 (2026-09-02) o `seed.py` importa
+  # `plughub_contextstore.default_map` — o mapa embutido mudou de casa para a lib, para
+  # servir de fallback ao carregador Python. Sem isto o ramo F reprova por
+  # ModuleNotFoundError no COLLECT, o que PARECE defeito do comparador e nao e.
+  if ( cd packages/config-api && PYTHONPATH="$PP" python3 -m pytest \
         src/plughub_config_api/tests/test_config_drift.py \
         src/plughub_config_api/tests/test_store.py -q >/tmp/seed_drift_pytest.log 2>&1 ); then
     ok "F: testes do comparador e do seed verdes ($(grep -oE '[0-9]+ passed' /tmp/seed_drift_pytest.log | head -1))"

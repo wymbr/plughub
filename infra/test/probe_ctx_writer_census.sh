@@ -51,7 +51,12 @@ huh() { echo "  ? $1"; FAIL=2; }
 #: no ctx e passou a chamar `writeContextTag`. Saiu do instrumento e entrou no oráculo,
 #: como os outros dois chamadores do funil.
 #:
-#: 8/22 → 4/16 ainda no mesmo dia (passo 3, migração): `routing-engine` (2),
+#: 4/16 → 2/2 no fim do passo 3: `channel-gateway` (4) e `orchestrator-bridge` (10)
+#: migraram, e o ALVO FOI ATINGIDO — os 2 que restam SÃO os dois funis. Daqui em diante o
+#: piso é PARADO: qualquer subida é escritor direto novo, sem exceção legítima. Se algum
+#: dia um terceiro funil for legítimo, ele entra no `ESPERADO_INST` junto com o piso.
+#:
+#: 8/22 → 4/16 antes disso (passo 3, primeiros três serviços): `routing-engine` (2),
 #: `ai-gateway` (2) e `evaluation-api` (1) passaram a chamar o funil Python. O ai-gateway
 #: perdeu DOIS arquivos porque o falso positivo declarado do `sentiment_emitter:163` (a
 #: escrita em `sentiment_live`) sumiu junto: ele existia por causa de uma variável `key`
@@ -63,8 +68,8 @@ huh() { echo "  ? $1"; FAIL=2; }
 #: oposto de regressão. **Trajetória esperada daqui**: cada serviço migrado tira os seus
 #: sítios do instrumento, e o piso desce até **2 arquivos / 2 sítios**, que são os DOIS
 #: funis. Se parar acima disso, sobrou escritor direto.
-PISO_ARQUIVOS=4
-PISO_SITIOS=16
+PISO_ARQUIVOS=2
+PISO_SITIOS=2
 
 echo "=== probe_ctx_writer_census — CNS-06 (dimensiona a ALW-02) ==="
 echo
@@ -107,10 +112,12 @@ packages/py-contextstore/src/plughub_contextstore/writer.py"
 #: passado a chamar o funil.
 ESPERADO_ORAC="packages/ai-gateway/src/plughub_ai_gateway/copilot_emitter.py
 packages/ai-gateway/src/plughub_ai_gateway/sentiment_emitter.py
+packages/channel-gateway/src/plughub_channel_gateway/adapters/webhook.py
 packages/evaluation-api/src/plughub_evaluation_api/router.py
 packages/mcp-server-plughub/src/server.ts
 packages/mcp-server-plughub/src/tools/bpm.ts
 packages/mcp-server-plughub/src/tools/session.ts
+packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py
 packages/routing-engine/src/plughub_routing/main.py"
 if [ "$INST_ONLY" = "$ESPERADO_INST" ]; then
   ok "C: so-no-instrumento sao os DOIS funis (writeContextTag + write_context_tags)"

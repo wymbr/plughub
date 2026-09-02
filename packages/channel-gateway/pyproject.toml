@@ -10,6 +10,7 @@ dependencies    = [
     # Path dep do monorepo (instalada pelo Dockerfile antes deste pacote);
     # nao existe no PyPI.
     "plughub-authz",
+    "plughub-contextstore",
     "websockets>=13.0",
     "aiokafka>=0.11.0",
     "redis[hiredis]>=5.2.0",

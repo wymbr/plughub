@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-02 (fecha): os 21 sítios roteados, e o censo desce a 2/2 — que são os dois funis
+
+### O número que fecha o arco
+
+`infra/test/probe_ctx_writer_census.sh`: **8/22 → 2/2**, e os dois que restam **são** o
+`writeContextTag` (TS) e o `write_context_tags` (Python). A trajetória estava declarada no
+próprio gate desde o passo 3a, e o piso agora é PARADO: daqui em diante qualquer subida é
+escritor direto novo, sem exceção legítima.
+
+| serviço | sítios | nota |
+|---|---|---|
+| `orchestrator-bridge` | 10 → 0 | os **cinco** do pre-hook viraram UMA chamada: além do carimbo, eram cinco round-trips para a mesma chave |
+| `channel-gateway` | 4 → 0 | `_ctx_entry` REMOVIDO — era ele que serializava no chamador |
+| `routing-engine` | 2 → 0 | `ttl_nx` preserva o `EXPIRE NX` |
+| `ai-gateway` | 2 → 0 | e o falso positivo do censo sumiu junto |
+| `evaluation-api` | 1 → 0 | saiu a pipeline: N tags num `hset` só |
+
+### Duas posturas de escopo, e as duas são medidas
+
+O funil Python escreve no hash da SESSÃO e **recusa** tag de escopo não-sessão — decisão do
+passo 3a, com número atrás (19 dos 20 sítios escrevem tags fixas, todas de sessão). Mas
+**dois** sítios recebem tag ARBITRÁRIA de fora, e ali recusar mudaria o comportamento de
+chamador externo:
+
+- o corpo do webhook, escrito verbatim e sem prefixo (a **terceira** origem de autoria que
+  o censo de 2026-08-30 mediu, e a fonte de `campaign_id`/`target_pool`);
+- o `context` de `delegate`/`collect`, e o `set_ctx` do `mention_command`.
+
+Daí `on_foreign_scope="warn"`: **grava como antes e diz que está errado**. Calar seria o
+fallback mudo que este repositório cataloga; recusar seria mudar contrato de terceiro sem
+aviso. O teste que carrega o peso é a testemunha de que o aviso **não** dispara quando tudo
+é de sessão — aviso incondicional treina todo mundo a ignorá-lo.
+
+### A dívida que o arco DEIXA, nomeada
+
+⚠️ **As duas casas divergem no escopo**: a TS **roteia** `journey.*` para o hash do processo,
+a Python **grava na sessão e avisa**. E `bridge:8485` × `bpm.ts:1122` são duas
+implementações do MESMO `mention_command set_context`, lendo o mesmo YAML. *Duas respostas
+para o mesmo fato significam que a mais permissiva é a que vale* — é a regra do split de
+`config.users`, aqui de novo. Virou **ALW-07**.
+
+O gate de paridade **não** pega isso, e por construção: ele compara a função PURA, e a
+divergência é de I/O (union-find sobre `{t}:journey:aliases`). Um censo desenhado para um
+eixo não prova nada sobre o vizinho — terceira vez que esta regra aparece neste repositório.
+
+### Duas limpezas que a migração revelou, e que não são higiene
+
+**Cinco variáveis mortas.** Tirado o `hset`, sobraram `ctx_key` em quatro blocos do gateway
+e uma no `sentiment_emitter`. A última importava: era ela que mantinha o **falso positivo
+declarado** do censo (o `hset` em `sentiment_live` casava porque o índice de atribuições é
+de escopo de arquivo e pegava a última `key =`). Removida, o arquivo saiu da conta — e o
+censo passou de "21 contados, 20 a rotear" para 20 e 20.
+
+**Um log que citava a variável morta.** A falha do sentiment imprimia `key=%s`; passou a
+nomear tenant e sessão.
+
+### Três coisas que só apareceram ao levar isto até o deploy
+
+1. **`pip install -e .` procura no PyPI o que não está instalado antes.** Os **seis**
+   Dockerfiles precisaram do bloco que o `py-authz` já tinha — copiar e instalar a lib
+   ANTES do serviço. Sem ele o build falha com `No matching distribution`.
+2. **`build` não recria container.** As imagens ficaram novas e os containers continuaram
+   com o código velho; o ramo A do `probe_seed_drift_named.sh` acusou exatamente isso
+   (*"seed.py do container != do repo"*), que é a razão pela qual aquele ramo existe.
+   Recriados os seis, e a verificação foi feita **contra a IMAGEM**, não contra o container.
+3. **`PYTHONPATH` usa `;` no Python de Windows.** O ramo F do mesmo gate roda no host, e
+   `src:../py-contextstore/src` virou uma entrada inválida — `ModuleNotFoundError` no
+   collect, que **parece** defeito do comparador. Hoje o separador é detectado por `uname`.
+   Terceira mordida da toolchain mista neste arco.
+
+### De carona: um gate que saía INCONCLUSIVO por bancada
+
+`probe_context_visibility_selector.sh` chamava `npx tsc`, e `npx` quebra com
+`ERR_INVALID_URL` a partir de caminho UNC. Mesmo conserto já aplicado no
+`probe_context_map_audit.sh`: chamar o binário direto, com o `npx` só como último recurso.
+Passou de INCONCLUSIVO a VERDE — e a diferença entre os dois é justamente o que o terceiro
+desfecho existe para preservar.
+
+### Verificação
+
+Gates: censo · paridade · mapa · seed-drift · visibility-selector · ledger — todos verdes.
+Suítes: bridge 109, gateway 699, routing 150, ai-gateway 182, evaluation 237, config-api 57,
+py-contextstore 73. Import OK nas seis imagens, medido com `docker run` sobre a IMAGEM.
+
+
 ## 2026-09-02 — ALW-02 passo 2: o gêmeo Python, e o gate que é a diferença entre (c) e (a)
 
 ### O gate É a decisão, não um acessório dela

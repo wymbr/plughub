@@ -15,6 +15,8 @@ passar a rotear, ótimo — mas aí ele tem de mudar junto, deliberadamente.
 """
 import asyncio
 import json
+import logging
+from contextlib import contextmanager
 
 import pytest
 
@@ -59,6 +61,27 @@ def _limpa():
     invalidate_context_map_cache()
     yield
     invalidate_context_map_cache()
+
+
+@contextmanager
+def caplog_vazio():
+    """Captura de log independente do fixture, para o caso que afirma AUSÊNCIA."""
+    import io as _io
+    buf = _io.StringIO()
+    h = logging.StreamHandler(buf)
+    lg = logging.getLogger("plughub_contextstore.writer")
+    lg.addHandler(h)
+    lg.setLevel(logging.WARNING)
+
+    class _Cap:
+        @property
+        def text(self) -> str:
+            return buf.getvalue()
+
+    try:
+        yield _Cap()
+    finally:
+        lg.removeHandler(h)
 
 
 def _run(c):
@@ -235,3 +258,65 @@ class TestVazio:
         assert res["written"] == []
         assert r.hashes == {}
         assert chamadas == []
+
+
+class TestEscopoModoWarn:
+    """O sítio que escreve tag ARBITRÁRIA (corpo de webhook) não pode recusar: a tag vem de
+    fora, e hoje ela É gravada no hash da sessão. O ramo preserva isso e DIZ que está
+    errado — a alternativa (recusar) mudaria o comportamento de chamador externo, e a outra
+    (calar) é o fallback mudo que este repositório cataloga."""
+
+    def test_warn_GRAVA_a_tag_de_journey_no_hash_da_sessao(self) -> None:
+        r = FakeRedis()
+        res = _run(write_context_tags(
+            r, "t1", "s1", {"journey.pedido.id": "x"},
+            fetch_json=_fetch_ok, source="webhook", updated_at=AGORA,
+            on_foreign_scope="warn",
+        ))
+        assert res["written"] == ["journey.pedido.id"]
+        assert "journey.pedido.id" in r.hashes["t1:ctx:s1"]
+
+    def test_warn_LOGA_nomeando_a_tag_e_o_dano(self, caplog) -> None:
+        r = FakeRedis()
+        with caplog.at_level("WARNING"):
+            _run(write_context_tags(
+                r, "t1", "s1", {"journey.pedido.id": "x", "session.cliente.cpf": "1"},
+                fetch_json=_fetch_ok, source="webhook", updated_at=AGORA,
+                on_foreign_scope="warn",
+            ))
+        assert "journey.pedido.id" in caplog.text
+        assert "session.cliente.cpf" not in caplog.text   # só as de fora são nomeadas
+        assert "30d" in caplog.text                       # diz QUAL é o dano
+
+    def test_warn_carimba_a_tag_de_fora_como_qualquer_outra(self) -> None:
+        # Estar no hash errado não é motivo para deixar de carimbar: `atributo` ausente
+        # significa "não passou pelo funil", e esta passou.
+        r = FakeRedis()
+        _run(write_context_tags(
+            r, "t1", "s1", {"journey.pedido.id": "x"},
+            fetch_json=_fetch_ok, source="webhook", updated_at=AGORA,
+            on_foreign_scope="warn",
+        ))
+        assert "atributo" in _lido(r, "t1", "s1", "journey.pedido.id")
+
+    def test_TESTEMUNHA_warn_NAO_loga_quando_tudo_e_de_sessao(self) -> None:
+        # Sem esta, um aviso incondicional passaria nos casos acima e treinaria todo mundo
+        # a ignorá-lo.
+        r = FakeRedis()
+        with caplog_vazio() as cap:
+            _run(write_context_tags(
+                r, "t1", "s1", {"session.cliente.cpf": "1"},
+                fetch_json=_fetch_ok, source="webhook", updated_at=AGORA,
+                on_foreign_scope="warn",
+            ))
+        assert "NAO-SESSAO" not in cap.text
+
+    def test_o_DEFAULT_continua_recusando(self) -> None:
+        # A postura permissiva tem de ser PEDIDA. Se `warn` virasse o default, os 19
+        # sítios de tag fixa perderiam a falha alta que os protege.
+        r = FakeRedis()
+        with pytest.raises(ContextScopeRefused):
+            _run(write_context_tags(
+                r, "t1", "s1", {"journey.pedido.id": "x"},
+                fetch_json=_fetch_ok, source="t", updated_at=AGORA,
+            ))

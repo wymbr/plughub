@@ -13,7 +13,11 @@
 ## `docs/adr/adr-contextstore-allowlist.md` — ContextStore como ALLOWLIST
 
 *(V0–V3, V1b, V2b, D6, D7-metade, D8 e a FATIA 1 da D9 fecharam antes deste ledger existir —
-história no `CHANGELOG.md`. Nada registrado aqui ainda.)*
+história no `CHANGELOG.md`.)*
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| ALW-02 | Choke point de escrita do ContextStore: carimbo do `atributo` (D9.6) nos dois funis, gate de paridade TS × Python sobre fixture única, e os 21 sítios roteados. Censo 8/22 → 2/2 | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-02 |
 
 ---
 

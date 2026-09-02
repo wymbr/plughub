@@ -3,6 +3,13 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+# Gemeo Python das funcoes puras do ContextStore (packages/py-contextstore) — o funil
+# de escrita que CARIMBA o `atributo` (ALW-02/D9.6). Instalado ANTES do servico pelo
+# mesmo motivo do py-authz: o `pip install -e .` dele precisa achar a dependencia ja
+# satisfeita, senao a procura no PyPI, onde ela nao existe.
+COPY packages/py-contextstore ./packages/py-contextstore
+RUN pip install --no-cache-dir -e ./packages/py-contextstore
+
 COPY packages/orchestrator-bridge  ./packages/orchestrator-bridge
 # Skills YAML fallback (used when Agent Registry has no skills registered)
 COPY packages/skill-flow-engine/skills ./packages/skill-flow-engine/skills
