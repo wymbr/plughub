@@ -1,5 +1,88 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-02 passo 2: o gêmeo Python, e o gate que é a diferença entre (c) e (a)
+
+### O gate É a decisão, não um acessório dela
+
+O passo 1 escolheu **declaração compartilhada + duas implementações finas + gate
+comparativo**. Sem o gate, essa escolha **é** o gêmeo solto com melhores intenções — o
+precedente do repositório dá o tamanho do risco: o cálculo de sentimento teve duas
+implementações idênticas e, quando uma foi consertada, a que desenhava a tela ficou para
+trás. Meses de *"Neutral"* sobre um cliente medido em −0,50.
+
+**`packages/py-contextstore`** — lib Python, **sem dependência nenhuma**, e a ausência é
+requisito: o gate roda as duas metades lado a lado, e um `requests` aqui dentro tornaria a
+metade Python incomparável. Espelha `build_context_tag_index`, `resolve_context_tag`,
+`stamp_context_entry` e `resolve_context_store`.
+
+**`infra/test/probe_context_stamp_parity.sh`** — fixture única
+(`fixtures/context_stamp_cases.json`, 15 casos) alimenta os dois runners; saídas com chaves
+ordenadas, comparadas linha a linha. Caso novo entra na fixture e as duas metades passam a
+ser medidas contra ele de graça — caso escrito dentro de um runner mediria uma metade só.
+
+Mutações: **5 no gêmeo Python + 1 no TS, todas pegas.** A que importa é a **M1 — alias
+antes de canônica**, que é o único ramo em que uma reimplementação razoável diverge sem
+parecer errada (o tipo resolvido seria outro, a máscara seria outra, nada vermelho).
+
+### Uma divergência que o passo 1 não previa: mapa malformado
+
+O gêmeo TS recebe um `ContextMap` **já validado pelo Zod**; se não passa, `getContextMap`
+cai no embutido e marca `fallback: true`. Se a metade Python tolerasse folha torta, as duas
+divergiriam **justamente no caso perigoso**: o Python carimbaria a partir de meio mapa
+afirmando `fallback: false` — dizendo *"o tipo é o que o tenant declarou"* sobre folhas
+descartadas em silêncio. Um índice com 40 das 94 folhas funciona perfeitamente para as 40.
+
+Desfecho: `build_context_tag_index` é **estrito e levanta `ValueError`**, para o carregador
+capturar — mesmo desenho do Zod, validação na borda, desfecho único. A alternativa seria um
+segundo validador estrutural espelhando o `ContextMapSchema`: outra cópia a manter em
+sincronia, e mais superfície do que o arco comprou.
+
+O gate **declara que não compara mapa malformado** — são duas bordas diferentes chegando ao
+mesmo desfecho, e comparar o meio mediria a implementação em vez do contrato. A estritude
+tem teste próprio (28 casos, 4/4 mutações pegas).
+
+### Três defeitos do INSTRUMENTO, e nenhum era do produto
+
+O gate ficou vermelho três vezes antes do primeiro verde legítimo, e as três causas foram
+minhas:
+
+1. **`__dirname` do bundle.** A metade TS roda via `esbuild --bundle` (único transpilador
+   presente e a bancada não tem rede no container), e o `__dirname` do bundle é o diretório
+   de saída. Conserto: caminho da fixture por **argumento** nos dois runners — remove a
+   fragilidade em vez de contorná-la.
+2. **`"confidence":1.0` × `1`.** Os 15 casos divergiram, e o `atributo` era byte a byte
+   igual nos 15 — JS não separa inteiro de float. Eram **duas proposições numa comparação
+   só**, e a barulhenta escondia a que importa. Conserto: o gate compara o **carimbo**; a
+   testemunha de passagem (*"não toca nos campos do escritor"*) é medida **dentro** de cada
+   runner, com igualdade nativa, e reportada como booleano — nunca atravessa JSON.
+3. **CRLF, e eu normalizei a metade errada.** O `print()` do python de Windows traduz LF em
+   CRLF em modo texto — o `CLAUDE.md` já cataloga o gêmeo disto para escrita de arquivo. Eu
+   havia normalizado a saída **TS**, presumindo que o `wsl.exe` a sujava, **sem medir**.
+   Conserto na fonte (`sys.stdout.reconfigure`) e cinto nas duas metades, com a atribuição
+   correta escrita ao lado.
+
+O terceiro é o mesmo erro de método da saga do encoding, três dias atrás: **presumir a
+causa e ler o verde como confirmação.** Ficou escrito no comentário do próprio gate.
+
+### O runner TS mede o FONTE, e passa pelo Zod
+
+Duas propriedades load-bearing do `_stamp_runner.ts`: `--bundle` puxa o fonte do schemas
+(nunca um `dist/` atrasado), e o mapa passa por **`ContextMapSchema.parse`**, que é o
+caminho de produção. A primeira versão aplicava o `.default()` de `dynamic_prefixes` **à
+mão** — um runner que remenda o default **compensa** a falha em vez de medi-la, e o caso
+`prefixos_dinamicos_AUSENTES_usam_o_default` ficaria verde mesmo se alguém removesse o
+`.default()` do schema.
+
+### Achado de passagem: 37 gates de 103 estão no manifesto
+
+Ao registrar os dois gates deste arco, medi: o `gates.manifest` tem **37** entradas para
+**103** scripts, e **nenhum gate do arco ALLOWLIST estava lá** desde a CNS-06. É o modo de
+falha que o `run_gates.sh` foi escrito para impedir, acontecendo dentro de casa. Os dois
+deste arco entraram; os outros 66 viraram **GAT-01** no balde `sem-demanda` (contador
+0 → 1), e a tarefa não é registrar todos — é **triar com critério declarado e deixar a
+ausência contada**, para que o manifesto pare de parecer completo por ser uma lista.
+
+
 ## 2026-09-02 — ALW-02 passo 1: o funil TS passa a CARIMBAR, e recebe o objeto para que o carimbo não seja evitável
 
 ### A decisão, e o número que a produziu

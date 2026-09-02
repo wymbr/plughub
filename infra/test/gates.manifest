@@ -138,6 +138,14 @@ probe_dashboard_card_title.sh
 # Chave repetida em locale: JSON valido, build verde, e a ultima ocorrencia apaga a
 # anterior. Um probe de PARIDADE EN x pt-BR nao pega (os dois quebram igual).
 probe_i18n_duplicate_keys.sh
+
+# -- ContextStore / arco ALLOWLIST -------------------------------------------
+# Nenhum gate deste arco estava no manifesto ate 2026-09-02, embora existissem desde a
+# CNS-06. E o modo de falha que este runner foi criado para impedir, acontecendo dentro
+# de casa: gate que ninguem roda nao e cobertura.
+# O de paridade exige DOCKER (a metade TS roda em container) e sai INCONCLUSIVO sem ele.
+probe_ctx_writer_census.sh
+probe_context_stamp_parity.sh
 # Precisa de um principal de escopo ESTREITO — com admin o marcador nasce correto
 # e o defeito nao e exercido (o proprio probe declara isso e sai INCONCLUSIVO).
 ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_chip_scoped_marker.sh

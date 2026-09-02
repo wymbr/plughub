@@ -28,7 +28,7 @@ Arco entregue até V3/D8 e a FATIA 1 da D9. **A V4 inverte o default e não é r
 | id | tarefa | estado | evidência |
 |---|---|---|---|
 | ALW-01 | **V4** — inverter o default: campo sem regra deixa de ser acessível. Exige `unknown == 0` na auditoria | `bloqueado` por ALW-02/03/04 | `TODO.md:381` |
-| ALW-02 | D9 #1 — choke point de escrita, que habilita o carimbo do `atributo` (D9.6). Desenho **decidido e medido em 2026-09-02**: declaração pura compartilhada (`stampContextEntry` em `@plughub/schemas`) + duas implementações finas + gate comparativo — as alternativas caíram por medição (o mapa já viaja como JSON, então só ~42 linhas puras precisam de gêmeo; e 4 dos 5 serviços Python já falam com o config-api). **PASSO 1 ENTREGUE**: o funil TS carimba, recebe o objeto (o carimbo deixou de ser evitável) e `bpm.ts` entrou nele — censo **8/22 → 7/21**. **Passo 2** = gêmeo Python + gate comparativo; **passo 3** = migrar bridge (10) → webhook (4) → routing (2) → ai-gateway (1) → evaluation-api (1, único que ganha dependência). ⚠️ **20 a rotear, 21 contados** — `sentiment_emitter.py:163` é falso positivo declarado | `aberto` | ADR §1.7 |
+| ALW-02 | D9 #1 — choke point de escrita, que habilita o carimbo do `atributo` (D9.6). **PASSOS 1 e 2 ENTREGUES** (2026-09-02): o funil TS carimba e recebe o objeto (o carimbo deixou de ser evitável), `bpm.ts` entrou nele, e o gêmeo Python existe em `packages/py-contextstore` com gate de paridade sobre fixture única (`probe_context_stamp_parity.sh`, 15 casos, 5 mutações Python + 1 TS pegas). **Resta o PASSO 3**: o carregador do mapa em Python (fetch+cache+fallback, espelhando `getContextMap`) e a migração dos sítios — bridge (10) → webhook (4) → routing (2) → ai-gateway (1) → evaluation-api (1, único que ganha dependência nova). ⚠️ **20 a rotear, 21 contados** — `sentiment_emitter.py:163` é falso positivo declarado | `aberto` | ADR §1.7 |
 | ALW-03 | D9 #2 — decidir onde mora a tela de cadastro; é a ausência dela que faz gente contornar | `aberto` | `TODO.md:326` |
 | ALW-04 | D9 #3 — lista de domínios (critério de PAPEL); bloqueia o mapa crescer além dos domínios existentes | `aberto` | `TODO.md:326` |
 | ALW-05 | V5 (metade) — fechar aliases | `bloqueado` — por **tempo**, não esforço: depende do contador decair | índice `CLAUDE.md` |
@@ -247,8 +247,10 @@ sem ela, "trocar o eixo" é reproposto em três meses.
 
 ## `sem-demanda` — trabalho sem decisão por trás
 
-**Contador: 0.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho
+**Contador: 1.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho
 sem ADR nem spec — informação de gestão, não detalhe de formato. Segue o precedente do balde
 `unknown` do rollup de capacidade: publicado como tipo próprio, contado, nunca dobrado no vizinho.
 
-*(vazio)*
+| id | tarefa | status | âncora |
+|---|---|---|---|
+| GAT-01 | **37 dos 103 gates estão no `gates.manifest`; os outros 66 ninguém roda.** Achado de passagem em 2026-09-02: os dois gates do arco ALLOWLIST não estavam registrados desde a CNS-06, e foram acrescentados no mesmo commit — mas o número diz que isso não é caso isolado, e sim o padrão. É exatamente o modo de falha que o `run_gates.sh` foi escrito para impedir (*"gate que ninguém roda não é cobertura, e o modo de falha é AUSÊNCIA"*), acontecendo dentro de casa. A tarefa **não é registrar os 66** — parte deles é assistido, obsoleto ou exige ambiente; é **triar com critério declarado** e deixar a ausência CONTADA, para que o manifesto pare de parecer completo por ser uma lista. | `aberto` | `infra/test/run_gates.sh` (cabeçalho) |

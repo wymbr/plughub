@@ -1,0 +1,135 @@
+{
+  "_": [
+    "CONTRATO do carimbo do ContextStore — ALW-02 passo 2.",
+    "",
+    "Este arquivo é a ÚNICA fonte dos casos. As duas implementações o leem e as saídas são",
+    "comparadas por `infra/test/probe_context_stamp_parity.sh`:",
+    "  TS     packages/schemas/src/context-map.ts        stampContextEntry",
+    "  Python packages/py-contextstore/.../__init__.py   stamp_context_entry",
+    "",
+    "Caso novo entra AQUI e nas duas metades passam a ser medidas contra ele de graça. Caso",
+    "escrito dentro de um dos runners mede uma metade só, que é o oposto do que o gate existe",
+    "para fazer.",
+    "",
+    "O que este gate deliberadamente NÃO compara: MAPA MALFORMADO. O lado TS recebe um mapa já",
+    "validado pelo Zod (`getContextMap` descarta o inválido e cai no embutido, marcando",
+    "`fallback: true`); o lado Python valida ele mesmo, levantando `ValueError` para o",
+    "carregador capturar. São duas bordas diferentes chegando ao mesmo desfecho, e comparar o",
+    "MEIO delas mediria a implementação em vez do contrato. A estritude do lado Python tem",
+    "teste próprio em `packages/py-contextstore/tests/`."
+  ],
+
+  "maps": {
+    "base": {
+      "mode": "audit",
+      "dynamic_prefixes": ["segment.", "agent."],
+      "contexto": {
+        "session": {
+          "cliente": {
+            "cpf":      { "tipo": "cpf_br", "legado": ["caller.cpf", "session.cpf"] },
+            "telefone": { "tipo": "telefone_br" }
+          },
+          "contato": {
+            "fone_antigo": { "tipo": "opaque", "legado": ["session.cliente.telefone"] }
+          },
+          "nota": { "texto": { "tipo": "texto" } }
+        },
+        "journey": { "pedido": { "id": { "tipo": "texto" } } },
+        "core":    { "queue":  { "position": { "tipo": "texto" } } }
+      }
+    },
+
+    "sem_prefixos_dinamicos": {
+      "mode": "audit",
+      "contexto": {
+        "session": { "cliente": { "cpf": { "tipo": "cpf_br" } } }
+      }
+    },
+
+    "alias_orfao": {
+      "mode": "audit",
+      "dynamic_prefixes": [],
+      "contexto": {
+        "session": { "cliente": { "cpf": { "tipo": "cpf_br", "legado": ["caller.cpf"] } } }
+      }
+    }
+  },
+
+  "cases": [
+    {
+      "name": "canonica",
+      "why": "caminho feliz — o tipo sai do cadastro, o escritor não declara nada",
+      "map": "base", "tag": "session.cliente.cpf", "fallback": false
+    },
+    {
+      "name": "alias",
+      "why": "grava sob a grafia legada; o carimbo é o que torna a entrada autodescritiva",
+      "map": "base", "tag": "caller.cpf", "fallback": false
+    },
+    {
+      "name": "alias_segunda_grafia",
+      "why": "o MESMO nó tem duas grafias vivas (`legado` é ARRAY desde a V3)",
+      "map": "base", "tag": "session.cpf", "fallback": false
+    },
+    {
+      "name": "ORDEM_canonica_vence_alias",
+      "why": "O CASO QUE CARREGA O PESO. `session.cliente.telefone` é canônica (telefone_br) E está declarada como legado de `session.contato.fone_antigo` (opaque). Consultar o alias primeiro daria `opaque` — máscara diferente, nada vermelho. É o único ramo em que um gêmeo razoável diverge sem parecer errado.",
+      "map": "base", "tag": "session.cliente.telefone", "fallback": false
+    },
+    {
+      "name": "dinamica",
+      "why": "prefixo com id de runtime — não é declarável campo a campo, logo não é `unknown`",
+      "map": "base", "tag": "segment.seg_1.served_human_participant_id", "fallback": false
+    },
+    {
+      "name": "dinamica_segundo_prefixo",
+      "why": "a lista tem N prefixos e o casamento é por QUALQUER um, não só o primeiro",
+      "map": "base", "tag": "agent.foo.bar", "fallback": false
+    },
+    {
+      "name": "canonica_sob_prefixo_dinamico",
+      "why": "`core.queue.position` casaria um prefixo dinâmico se a ordem fosse outra; canônica é consultada ANTES",
+      "map": "base", "tag": "core.queue.position", "fallback": false
+    },
+    {
+      "name": "desconhecida",
+      "why": "runtime NUNCA recusa — registra. É esta população que a V4 conta.",
+      "map": "base", "tag": "session.nao.cadastrado", "fallback": false
+    },
+    {
+      "name": "desconhecida_sem_namespace",
+      "why": "o corpo HTTP do webhook escreve chave verbatim e sem prefixo (`campaign_id`) — terceira origem de autoria, medida no censo de 2026-08-30",
+      "map": "base", "tag": "campaign_id", "fallback": false
+    },
+    {
+      "name": "journey_canonica",
+      "why": "tag de processo resolve como qualquer outra — a ROTA é decisão separada do CARIMBO",
+      "map": "base", "tag": "journey.pedido.id", "fallback": false
+    },
+    {
+      "name": "fallback_true",
+      "why": "mapa embutido: o carimbo acontece, mas deixa de afirmar o que o TENANT declarou",
+      "map": "base", "tag": "session.cliente.cpf", "fallback": true
+    },
+    {
+      "name": "fallback_true_desconhecida",
+      "why": "as duas marcas convivem — `unknown` sob mapa embutido pode ser `unknown` só PORQUE o mapa é o embutido",
+      "map": "base", "tag": "session.nao.cadastrado", "fallback": true
+    },
+    {
+      "name": "prefixos_dinamicos_AUSENTES_usam_o_default",
+      "why": "`dynamic_prefixes` ausente é mapa VÁLIDO no Zod e ganha o `.default()`. Cair em lista vazia faria toda tag `segment.*` virar `unknown` e inflar a população da V4.",
+      "map": "sem_prefixos_dinamicos", "tag": "segment.seg_1.x", "fallback": false
+    },
+    {
+      "name": "prefixos_dinamicos_VAZIOS_nao_casam",
+      "why": "testemunha do caso acima: lista vazia DECLARADA é diferente de ausente, e aí `segment.*` é mesmo `unknown`",
+      "map": "alias_orfao", "tag": "segment.seg_1.x", "fallback": false
+    },
+    {
+      "name": "campo_texto_sem_mascara",
+      "why": "`texto` é tipo que NÃO mascara (D8) — o carimbo o trata como qualquer outro; decidir em claro é decidir",
+      "map": "base", "tag": "session.nota.texto", "fallback": false
+    }
+  ]
+}

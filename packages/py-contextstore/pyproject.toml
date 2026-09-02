@@ -1,0 +1,21 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name            = "plughub-contextstore"
+version         = "0.1.0"
+description     = "Gêmeo Python das funções puras do ContextStore (carimbo do atributo + rota de retenção). Sem I/O, por exigência do gate de paridade."
+requires-python = ">=3.11"
+# Sem dependências, e isso é requisito e não sorte: o gate de paridade
+# (infra/test/probe_context_stamp_parity.sh) roda as duas metades lado a lado, e uma
+# dependência de rede aqui dentro tornaria a metade Python incomparável com a TS.
+dependencies    = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
