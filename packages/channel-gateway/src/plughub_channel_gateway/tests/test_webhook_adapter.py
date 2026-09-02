@@ -547,25 +547,79 @@ async def test_get_status_reads_correct_key(adapter, mock_redis):
 
 # ── Identity Resolver nível b — Thread A (cross-channel reconnect) ────────────
 
-def test_pending_context_preview_masks_numero_keeps_operadora():
-    """numero_atual (phone/PII) masked to last 4; operadora_destino kept clear."""
-    preview = WebhookAdapter._pending_context_preview({
+# ⚠️ Estes três mudaram na decisão #6 (2026-09-02), e a mudança é de VOCABULÁRIO.
+#
+# O spec de preview passou a nomear TIPOS do catálogo em vez de máscaras, e o motor deixou
+# de ser o `_apply_preview_mask` local (5 das 9 máscaras) para ser o canônico compartilhado
+# com a TS. Como consequência os testes precisam de um CATÁLOGO — sem ele todo tipo é
+# desconhecido e o desfecho conservador é mascarar tudo, que é o quarto caso abaixo.
+#
+# O `numero_atual` mudou de `***7777` para CLARO, e isso é a D8 chegando aqui: o telefone
+# que é o OBJETO do atendimento (a linha sendo portada) tem tipo `linha_em_servico`, com
+# `by_role: {}` — aberto por FINALIDADE, classe LGPD preservada. A máscara anterior era a
+# omissão que aquela decisão corrigiu.
+
+_CATALOGO_FAKE = {
+    "texto":            {"id": "texto", "mascara": {"by_role": {}}},
+    "linha_em_servico": {"id": "linha_em_servico", "mascara": {"by_role": {}}},
+    "phone":            {"id": "phone", "mascara": {"by_role": {"operator": "last_4"}}},
+}
+
+
+@pytest.fixture
+def _catalogo(monkeypatch):
+    async def _fake(tenant_id):
+        return _CATALOGO_FAKE
+    monkeypatch.setattr(
+        "plughub_channel_gateway.adapters.webhook.get_masking_catalog", _fake
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_context_preview_tipo_aberto_por_finalidade(_catalogo):
+    """A spec legada nomeia tipos; `linha_em_servico` é aberto por finalidade (D8)."""
+    preview = await WebhookAdapter._pending_context_preview({
         "numero_atual":      "11988887777",
         "operadora_destino": "VIVO",
-        "contact_identifier": "nao@entra.com",   # not part of the preview
-    })
-    assert preview == {"operadora_destino": "VIVO", "numero_atual": "***7777"}
+        "contact_identifier": "nao@entra.com",   # fora do spec → não entra (allowlist)
+    }, "t1")
+    assert preview == {"operadora_destino": "VIVO", "numero_atual": "11988887777"}
 
 
-def test_pending_context_preview_handles_session_prefix_and_short():
-    preview = WebhookAdapter._pending_context_preview({
-        "session.numero_atual": "12",             # < 4 digits → fully masked
-    })
+@pytest.mark.asyncio
+async def test_pending_context_preview_MASCARA_quando_o_tipo_mascara(_catalogo):
+    """Testemunha POSITIVA: sem ela, um motor que devolvesse tudo em claro passaria no
+    caso acima. `phone` declara `last_4` para operador, e a audiência cliente cai nele."""
+    preview = await WebhookAdapter._pending_context_preview({
+        "preview":      '{"numero_atual": "phone"}',
+        "numero_atual": "11988887777",
+    }, "t1")
+    assert preview == {"numero_atual": "***7777"}
+
+
+@pytest.mark.asyncio
+async def test_pending_context_preview_handles_session_prefix(_catalogo):
+    preview = await WebhookAdapter._pending_context_preview({
+        "preview":              '{"numero_atual": "phone"}',
+        "session.numero_atual": "12",             # < 4 dígitos → mascarado inteiro
+    }, "t1")
+    assert preview == {"numero_atual": "***12"}
+
+
+@pytest.mark.asyncio
+async def test_pending_context_preview_empty_when_absent(_catalogo):
+    assert await WebhookAdapter._pending_context_preview({"foo": "bar"}, "t1") == {}
+
+
+@pytest.mark.asyncio
+async def test_pending_context_preview_tipo_DESCONHECIDO_mascara(_catalogo):
+    """Tipo que o catálogo não conhece resolve `full` — esconde, não revela. É o mesmo
+    desfecho de catálogo indisponível, e é o que torna a indisponibilidade segura."""
+    preview = await WebhookAdapter._pending_context_preview({
+        "preview":      '{"numero_atual": "tipo_que_nao_existe"}',
+        "numero_atual": "11988887777",
+    }, "t1")
     assert preview == {"numero_atual": "***"}
-
-
-def test_pending_context_preview_empty_when_absent():
-    assert WebhookAdapter._pending_context_preview({"foo": "bar"}) == {}
 
 
 @pytest.mark.asyncio

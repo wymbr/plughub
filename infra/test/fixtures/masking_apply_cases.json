@@ -1,0 +1,50 @@
+{
+  "_": [
+    "CONTRATO da aplicação de máscara por TIPO — passo 2 da decisão #6.",
+    "",
+    "Fonte única dos casos. As duas implementações a leem e as saídas são comparadas por",
+    "`infra/test/probe_masking_apply_parity.sh`:",
+    "  TS     packages/mcp-server-plughub/src/lib/context-masking.ts   applyMaskingTypeToValue",
+    "  Python packages/py-contextstore/.../masking.py                  apply_masking_type_to_value",
+    "",
+    "Por que existe: o levantamento de 2026-09-02 achou DOIS motores na família 'por tipo',",
+    "com 9/9 e 5/9 de cobertura, e o menor prometia no docstring espelhar o maior. A",
+    "consequência era muda — `financial` não existia no menor, então um campo daquele tipo",
+    "seria OMITIDO do preview em vez de mascarado.",
+    "",
+    "⚠️ `hidden` devolve STRING VAZIA nos dois lados, e isso é contrato: é sinal para o",
+    "chamador omitir o campo, não 'o valor é vazio'. Quem decide omitir é o chamador.",
+    "",
+    "⚠️ `last_N` opera sobre DÍGITOS, não alfanuméricos. É onde as duas implementações",
+    "divergiam antes: o preview usava `isalnum()`. Num cartão coincide; num identificador",
+    "com letras, não — e é por isso que há caso para isso aqui."
+  ],
+
+  "cases": [
+    { "name": "plain",                "mask": "plain",        "raw": "12000",              "why": "não toca no valor" },
+    { "name": "hidden_e_vazio",       "mask": "hidden",       "raw": "segredo",            "why": "string VAZIA é o sinal de omitir — contrato dos dois lados" },
+    { "name": "full",                 "mask": "full",         "raw": "qualquer coisa",     "why": "esconde tudo, sem revelar tamanho" },
+
+    { "name": "last_2",               "mask": "last_2",       "raw": "529.883.653-09",     "why": "CPF formatado — a pontuação não conta" },
+    { "name": "last_2_curto",         "mask": "last_2",       "raw": "7",                  "why": "menos dígitos que o pedido cai em *** inteiro" },
+    { "name": "last_4",               "mask": "last_4",       "raw": "4111 1111 1111 3345", "why": "cartão com espaços" },
+    { "name": "last_4_parcial",       "mask": "last_4",       "raw": "123",                "why": "1..3 dígitos: o canônico devolve ***123, NÃO *** — ramo próprio" },
+    { "name": "last_4_vazio",         "mask": "last_4",       "raw": "",                   "why": "sem dígito nenhum" },
+    { "name": "last_4_ALFANUMERICO",  "mask": "last_4",       "raw": "AB1234CD",           "why": "O CASO QUE CARREGA O PESO: dígitos (1234) x alfanuméricos (34CD). É aqui que as duas implementações divergiam." },
+
+    { "name": "first_1",              "mask": "first_1",      "raw": "Maria Silva",        "why": "primeira letra" },
+    { "name": "first_1_vazio",        "mask": "first_1",      "raw": "",                   "why": "vazio cai em ***" },
+    { "name": "first_word",           "mask": "first_word",   "raw": "Rua das Flores 123", "why": "endereço: só o primeiro token" },
+    { "name": "first_word_um_token",  "mask": "first_word",   "raw": "Centro",             "why": "sem espaço" },
+    { "name": "first_word_vazio",     "mask": "first_word",   "raw": "   ",                "why": "só espaços — o split não devolve token" },
+
+    { "name": "email_domain",         "mask": "email_domain", "raw": "maria@exemplo.com",  "why": "preserva o domínio" },
+    { "name": "email_sem_arroba",     "mask": "email_domain", "raw": "naoehemail",         "why": "sem @ cai no first_1 implícito" },
+    { "name": "email_arroba_inicial", "mask": "email_domain", "raw": "@dominio.com",       "why": "@ na posição 0: `at > 0` é FALSO, então NÃO é o ramo de e-mail" },
+
+    { "name": "financial",            "mask": "financial",    "raw": "12000",              "why": "valor fixo, não revela ordem de grandeza" },
+
+    { "name": "DESCONHECIDA",         "mask": "nao_existe",   "raw": "sensivel",           "why": "default é *** nos dois lados; OMITIR é decisão do chamador, não deste motor" },
+    { "name": "vazia",                "mask": "",             "raw": "x",                  "why": "string vazia como nome de máscara também cai no default" }
+  ]
+}

@@ -140,6 +140,33 @@ else
   ok "D: escrita em outro hash NAO entra — o marcador e a chave, nao o receptor"
 fi
 
+# ── E — quem USA o funil REGISTRA o transporte ───────────────────────────────
+#
+# Acrescentado em 2026-09-02, depois de o defeito acontecer. A ALW-02 migrou os sitios de
+# escrita de cinco servicos e esqueceu o `set_context_map_fetcher` em DOIS deles
+# (channel-gateway, orchestrator-bridge). Ficou invisivel por dois dias porque o carregador
+# do MAPA tem fallback embutido: as escritas seguiram funcionando, carimbadas com
+# `atributo.fallback: true` — o sinal existia e ninguem o contava. Medido ao vivo: 16 de 16
+# entradas com fallback, e campos DECLARADOS saindo como `unknown` porque o mapa embutido
+# nao tem o vocabulario do tenant.
+#
+# Quem denunciou foi o CATALOGO de tipos, que nao tem fallback de proposito. A licao e a do
+# ramo: **a resiliencia de um componente esconde a fiacao faltando de outro**, e por isso a
+# fiacao precisa de teste PROPRIO, nao da ausencia de sintoma.
+echo
+SEM_FIACAO=""
+for d in packages/*/src; do
+  svc="$(echo "$d" | cut -d/ -f2)"
+  grep -rq "write_context_tags" "$d" 2>/dev/null || continue
+  [ "$svc" = "py-contextstore" ] && continue          # e a lib, nao um consumidor
+  grep -rq "set_context_map_fetcher" "$d" 2>/dev/null || SEM_FIACAO="$SEM_FIACAO $svc"
+done
+if [ -z "$SEM_FIACAO" ]; then
+  ok "E: todo servico que usa o funil registra o transporte no boot"
+else
+  bad "E: usa o funil e NAO registra o transporte:$SEM_FIACAO — as escritas vao sair com atributo.fallback:true, em silencio"
+fi
+
 echo
 if [ "$FAIL" = "0" ]; then
   echo "OK — o numero da ALW-02 tem criterio, piso e divergencia explicada"

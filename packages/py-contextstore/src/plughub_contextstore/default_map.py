@@ -124,7 +124,12 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
                 "title": {"tipo": "texto", "legado": ["session.title"]},
                 "summary": {"tipo": "texto", "legado": ["session.summary", "approval.summary"]},
                 "status": {"tipo": "texto", "legado": ["session.status"]},
-                "approval_threshold": {"tipo": "texto", "legado": ["session.approval_threshold"]}
+                "approval_threshold": {"tipo": "texto", "legado": ["session.approval_threshold"]},
+                # `preview` e SPEC DE CONTROLE, nao dado do titular: o JSON que o `delegate` usa
+                # para declarar quais campos o cliente ve da pendencia, e com que TIPO. Dominio
+                # `workflow` pela mesma razao que title/summary/decisions — chega pelo MESMO
+                # `delegate.context`. `texto` porque a classe LGPD e genuinamente `none`.
+                "preview": {"tipo": "texto", "legado": ["session.preview"]}
             },
             "contato": {
                 "contact_channel": {"tipo": "texto", "legado": ["session.contact_channel"]},

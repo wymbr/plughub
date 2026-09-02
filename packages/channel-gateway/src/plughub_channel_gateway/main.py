@@ -16,6 +16,9 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 
+import httpx
+from plughub_contextstore.loader import set_context_map_fetcher
+
 import asyncpg
 import redis.asyncio as aioredis
 import uvicorn
@@ -152,6 +155,27 @@ async def lifespan(app: FastAPI):
 
     settings    = get_settings()
     instance_id = str(uuid.uuid4())
+
+    # ALW-02 — transporte do carregador de config do ContextStore (mapa + catalogo de
+    # tipos), registrado UMA vez no boot.
+    #
+    # ⚠️ FALTAVA AQUI, e ficou invisivel por dois dias. Os sitios de escrita foram
+    # migrados para o funil em 2026-09-02 e este registro nao; como o carregador do MAPA
+    # tem fallback embutido, as escritas continuaram funcionando — carimbadas com
+    # `atributo.fallback: true`, que era o sinal, e ninguem o contava. Medido ao vivo:
+    # 16 de 16 entradas com fallback, e campos DECLARADOS saindo como `unknown` porque o
+    # mapa embutido nao tem o vocabulario do tenant.
+    #
+    # Quem denunciou foi o CATALOGO de tipos, que NAO tem fallback de proposito: o
+    # preview saiu com tudo `***` na primeira execucao. A resiliencia de um escondeu a
+    # fiacao faltando; a recusa do outro a expos em uma rodada.
+    async def _ctx_cfg_fetch(url: str) -> object:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            return resp.json()
+
+    set_context_map_fetcher(_ctx_cfg_fetch)
 
     _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 

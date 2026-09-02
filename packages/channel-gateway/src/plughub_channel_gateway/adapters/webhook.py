@@ -45,6 +45,10 @@ import json
 import logging
 
 from plughub_contextstore.writer import write_context_tags
+from plughub_contextstore.loader import get_masking_catalog
+from plughub_contextstore.masking import (
+    apply_masking_type_to_value, resolve_mask_for_audience,
+)
 import os
 import re
 import secrets
@@ -1794,7 +1798,7 @@ class WebhookAdapter(ChannelAdapter):
                                 skill_id=context.get("skill_id"),
                                 intent=context.get("intent"),
                                 policy=resume_policy,
-                                context_preview=self._pending_context_preview(context),
+                                context_preview=await self._pending_context_preview(context, tenant_id),
                                 root_session_id=caller_root,   # Journey J3
                             ),
                             ttl_s=ttl_s,
@@ -2249,54 +2253,75 @@ class WebhookAdapter(ChannelAdapter):
 
     # Spec de preview usada quando o delegate NÃO declara `preview`. Preserva o
     # comportamento histórico (portabilidade) para os fluxos que já existiam.
+    # ⚠️ Migrado em 2026-09-02 (decisao #6): nomeia TIPOS do catalogo, nao mascaras.
+    # Era `{"operadora_destino": "plain", "numero_atual": "last_4"}` — vocabulario proprio,
+    # a quarta casa de mascara do repositorio. Os tipos escolhidos sao os que o MAPA ja
+    # declara para esses campos: `texto` (operadora e enum, sem politica) e
+    # `linha_em_servico` (o telefone que e o OBJETO do atendimento — D8).
+    #
+    # Note que `linha_em_servico` tem `by_role: {}`, isto e, ABERTO por finalidade. O
+    # comportamento muda: antes o numero saia `***4321`, agora sai em claro. E o CERTO —
+    # nao se atende portabilidade sem ver a linha, e foi exatamente essa a decisao do dono
+    # em 2026-08-30 ao criar o tipo. A mascara anterior era a omissao que a D8 corrigiu.
     _LEGACY_PREVIEW_SPEC: dict[str, str] = {
-        "operadora_destino": "plain",
-        "numero_atual":      "last_4",
+        "operadora_destino": "texto",
+        "numero_atual":      "linha_em_servico",
     }
 
-    @staticmethod
-    def _apply_preview_mask(value: str, mask: str) -> str | None:
-        """
-        Aplica UMA máscara de preview. Devolve None quando o campo não deve ser
-        exibido — seja por `hidden`, seja por máscara desconhecida (o chamador
-        loga esta segunda). Vocabulário espelha `masking.context_rules`.
-        """
-        if mask == "hidden":
-            return None
-        if mask == "plain":
-            return value
-        if mask in ("last_2", "last_4"):
-            keep = 2 if mask == "last_2" else 4
-            alnum = "".join(ch for ch in value if ch.isalnum())
-            return ("***" + alnum[-keep:]) if len(alnum) >= keep else "***"
-        if mask == "email_domain":
-            local, sep, domain = value.partition("@")
-            if not sep or not domain:
-                return "***"
-            return f"{local[:1]}***@{domain}" if local else f"***@{domain}"
-        return None
+    # ── `_apply_preview_mask` REMOVIDO (decisao #6, 2026-09-02) ──────────────
+    #
+    # Ele implementava 5 das 9 mascaras do catalogo — faltavam `full`, `first_1`,
+    # `first_word` e **`financial`** — e o docstring dele PROMETIA espelhar
+    # `masking.context_rules`. Promessa sem mecanismo, a familia do DDL de
+    # `participation_intervals`.
+    #
+    # A consequencia era muda e concreta: um campo de tipo `financial` (o
+    # `limite_solicitado` do fluxo de limite) cairia em "mascara desconhecida" e seria
+    # OMITIDO do preview. Quem "consertasse" o spec para nomear o tipo certo faria o campo
+    # sumir da tela do cliente sem erro em lugar nenhum.
+    #
+    # Alem disso divergia no `last_N`: usava alfanumericos onde o canonico usa DIGITOS.
+    # Num cartao coincide; num identificador com letras, nao.
+    #
+    # Hoje o motor e `plughub_contextstore.masking.apply_masking_type_to_value`, gemeo do
+    # `applyMaskingTypeToValue` (mcp-server) com gate de paridade sobre fixture unica
+    # (`infra/test/probe_masking_apply_parity.sh`, 20 casos). A decisao de OMITIR fica
+    # aqui, no chamador, que e onde ela sempre esteve.
 
     @staticmethod
-    def _pending_context_preview(context: dict[str, Any]) -> dict[str, str]:
+    async def _pending_context_preview(
+        context: dict[str, Any],
+        tenant_id: str,
+    ) -> dict[str, str]:
         """
-        Build a minimal, PII-conscious preview for the pending entry — shown to
-        the customer in the cross-channel reconnect offer.
+        Monta o preview PII-consciente da pendencia — o que o cliente ve ao reconectar,
+        possivelmente por outro canal.
 
-        O delegate declara O QUE mostrar e COMO mascarar, num mapa JSON em
-        `context["preview"]`:
+        O delegate declara QUAIS campos mostrar, nomeando o TIPO de cada um:
 
-            preview: '{"numero_cartao": "last_4", "limite_solicitado": "plain"}'
+            preview: '{"numero_cartao": "credit_card", "limite_solicitado": "texto"}'
 
-        Máscaras: plain | last_2 | last_4 | email_domain | hidden (omite).
-        Sem `preview`, cai na spec legada (portabilidade) — fluxos anteriores a
-        esta mudança seguem idênticos.
+        ⚠️ **Nomeia TIPO, nao mascara** (decisao #6, 2026-09-02). Antes o spec trazia
+        `last_4`/`plain` — vocabulario proprio, que fazia deste o quarto motor de mascara
+        do repositorio e divergia do catalogo em silencio. Hoje o tipo vem do catalogo, que
+        e a mesma casa que responde por `masked:` no menu e no DialogForm desde a T6.
 
-        Duas decisões de segurança, ambas deliberadas:
-          * máscara DESCONHECIDA omite o campo E loga. Rebaixar para `plain` seria
-            trocar um erro de configuração por um vazamento silencioso.
-          * spec ilegível cai no legado e loga — nunca em "mostrar tudo".
+        A mascara sai de `resolve_mask_for_audience(tipo, "customer")`:
 
-        Chaves ausentes no contexto são simplesmente omitidas.
+            by_role VAZIO            -> plain   (tipo de FINALIDADE, aberto por decisao)
+            audiencia declarada      -> a dela
+            audiencia nao declarada  -> a do `operator` (a unica que o catalogo declara hoje)
+
+        Continua sendo ALLOWLIST: campo fora do spec nao aparece, e o smoke do fluxo de
+        limite afirma isso (CPF e vencimento viajam no mesmo contexto e NAO vazam).
+
+        Tres posturas de seguranca, todas deliberadas:
+          * tipo DESCONHECIDO pelo catalogo resolve `full` — mascara, nao revela;
+          * `hidden` (string vazia do motor) OMITE o campo;
+          * spec ilegivel cai no legado e loga — nunca em "mostrar tudo".
+
+        Catalogo indisponivel => todo tipo e desconhecido => o preview sai vazio. E o
+        desfecho conservador, e o carregador loga nomeando.
         """
         raw_spec = context.get("preview") or context.get("session.preview")
         spec: dict[str, str] = dict(WebhookAdapter._LEGACY_PREVIEW_SPEC)
@@ -2306,22 +2331,26 @@ class WebhookAdapter(ChannelAdapter):
                 spec = {str(k): str(v) for k, v in dict(parsed).items()}
             except (ValueError, TypeError, AttributeError) as exc:
                 logger.warning(
-                    "pending preview: spec ilegível (%s) — caindo na spec legada. raw=%r",
+                    "pending preview: spec ilegivel (%s) — caindo na spec legada. raw=%r",
                     exc, raw_spec,
                 )
 
+        catalogo = await get_masking_catalog(tenant_id)
+
         preview: dict[str, str] = {}
-        for key, mask in spec.items():
+        for key, tipo_id in spec.items():
             value = context.get(key) or context.get(f"session.{key}")
             if value in (None, ""):
                 continue
-            masked = WebhookAdapter._apply_preview_mask(str(value), mask)
-            if masked is None:
-                if mask != "hidden":
-                    logger.warning(
-                        "pending preview: máscara desconhecida %r no campo %r — campo OMITIDO",
-                        mask, key,
-                    )
+            entry = catalogo.get(tipo_id)
+            if entry is None:
+                logger.warning(
+                    "pending preview: tipo %r desconhecido no campo %r — MASCARADO (full)",
+                    tipo_id, key,
+                )
+            mask = resolve_mask_for_audience(entry, "customer")
+            masked = apply_masking_type_to_value(str(value), mask)
+            if masked == "":          # `hidden` — sinal de omitir
                 continue
             preview[key] = masked
         return preview
@@ -2794,7 +2823,7 @@ class WebhookAdapter(ChannelAdapter):
                                 skill_id=context.get("skill_id"),
                                 intent=context.get("intent"),
                                 policy=resume_policy,
-                                context_preview=self._pending_context_preview(context),
+                                context_preview=await self._pending_context_preview(context, tenant_id),
                                 root_session_id=_conf_root,   # Journey J3
                             ),
                             ttl_s=ttl_s,

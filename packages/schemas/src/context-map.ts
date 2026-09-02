@@ -336,6 +336,16 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         summary:               { tipo: "texto", legado: ["session.summary", "approval.summary"] },
         status:                { tipo: "texto", legado: ["session.status"] },
         approval_threshold:    { tipo: "texto", legado: ["session.approval_threshold"] },
+        // ⚠️ `preview` é SPEC DE CONTROLE, não dado do titular: o JSON que o `delegate`
+        // usa para declarar quais campos o cliente vê da própria pendência, e com que
+        // TIPO. Entra no domínio `workflow` pela mesma razão que `title`/`summary`/
+        // `decisions` entraram na FATIA 1 — chega pelo MESMO `delegate.context`, e não é
+        // domínio novo.
+        //
+        // `texto` está CERTO aqui, e não é o "plain de exceção" que a D8 proíbe: a classe
+        // LGPD dele é genuinamente `none` — não há dado de titular dentro, só nomes de
+        // campo e nomes de tipo. É o caso para o qual o `texto` foi criado na V3.
+        preview:               { tipo: "texto", legado: ["session.preview"] },
         // Revisao de avaliacao (evaluation-api `router.py:2336-2338`, `:2455-2457`).
         // `round_echoed` e' o par de `current_round` acima; `review_decision`, o de
         // `decisions` — mesma familia, mesmo dominio.

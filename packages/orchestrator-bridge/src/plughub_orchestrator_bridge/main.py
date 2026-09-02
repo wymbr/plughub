@@ -50,6 +50,7 @@ import json
 import logging
 
 from plughub_contextstore.writer import write_context_tags
+from plughub_contextstore.loader import set_context_map_fetcher
 import os
 import uuid
 from datetime import datetime, timezone
@@ -9938,6 +9939,26 @@ async def run() -> None:
     )
 
     async with aiohttp.ClientSession() as http:
+            # ALW-02 — transporte do carregador de config do ContextStore (mapa + catalogo de
+        # tipos), registrado UMA vez no boot.
+        #
+        # ⚠️ FALTAVA AQUI, e ficou invisivel por dois dias. Os sitios de escrita foram
+        # migrados para o funil em 2026-09-02 e este registro nao; como o carregador do MAPA
+        # tem fallback embutido, as escritas continuaram funcionando — carimbadas com
+        # `atributo.fallback: true`, que era o sinal, e ninguem o contava. Medido ao vivo:
+        # 16 de 16 entradas com fallback, e campos DECLARADOS saindo como `unknown` porque o
+        # mapa embutido nao tem o vocabulario do tenant.
+        #
+        # Quem denunciou foi o CATALOGO de tipos, que NAO tem fallback de proposito: o
+        # preview saiu com tudo `***` na primeira execucao. A resiliencia de um escondeu a
+        # fiacao faltando; a recusa do outro a expos em uma rodada.
+        async def _ctx_cfg_fetch(url: str) -> object:
+            async with http.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                r.raise_for_status()
+                return await r.json()
+
+        set_context_map_fetcher(_ctx_cfg_fetch)
+
         # 0. Load session TTLs from Config API — replaces hardcoded 14400 literals.
         #    Falls back silently to defaults if Config API is unreachable.
         #    ⚠️ `configure_tenant` ANTES do reload: sem tenant o GET sai sem

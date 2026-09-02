@@ -146,6 +146,8 @@ probe_i18n_duplicate_keys.sh
 # O de paridade exige DOCKER (a metade TS roda em container) e sai INCONCLUSIVO sem ele.
 probe_ctx_writer_census.sh
 probe_context_stamp_parity.sh
+# Decisao #6: um motor de mascara por TIPO, nao dois. Exige DOCKER (metade TS em container).
+probe_masking_apply_parity.sh
 # ALW-03: exige a stack de pe (o ramo G cria uma cobaia, loga e escreve o mapa de volta
 # IDENTICO). Sem ela sai SEM AMOSTRA, que nao e verde.
 probe_context_map_grant_split.sh

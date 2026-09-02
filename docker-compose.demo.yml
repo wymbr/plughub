@@ -1638,6 +1638,11 @@ services:
       # = PLUGHUB_ANALYTICS_SERVICE_TOKEN da analytics-api. Sem ele o backfill de
       # campanha devolve scanned=0 MUDO e a transcricao da tela de Qualidade da 502.
       PLUGHUB_EVALUATION_ANALYTICS_SERVICE_TOKEN: changeme_analytics_service_token_demo
+      # ALW-02 / decisão #6 — o funil do ContextStore e o catálogo de máscara leem daqui.
+      # FALTAVA: medido em 2026-09-02, este era o único dos cinco serviços do funil sem a
+      # variável, e sem ela o carregador cai em `localhost:3600` (o próprio container) e
+      # carimba com o mapa EMBUTIDO — `atributo.fallback: true`, em silêncio.
+      PLUGHUB_CONFIG_API_URL:                 http://config-api:3600
       PLUGHUB_EVALUATION_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_EVALUATION_REDIS_URL:           redis://redis:6379
       PLUGHUB_EVALUATION_KAFKA_BROKERS:       kafka:29092

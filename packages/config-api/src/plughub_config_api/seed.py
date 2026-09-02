@@ -726,6 +726,22 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "lgpd": "pessoal",
                     "declared_only": True,
                 },
+                # valor_declarado_pelo_cliente — o SEGUNDO tipo de finalidade
+                # (2026-09-02). Mesmo molde do linha_em_servico: mascara vazia,
+                # CLASSE preservada (`financeiro`). Nasceu porque o `preview` de uma
+                # pendencia mostra ao cliente o valor que ELE MESMO pediu, e a
+                # mascara de operador do `financial` o esconderia dele. A saida NAO
+                # foi um eixo de audiencia no catalogo: o eixo que resolve ja existe
+                # e e a FINALIDADE. Nao usar para valor que a EMPRESA decidiu
+                # (limite aprovado, saldo) — esses seguem `financial`.
+                {
+                    "id": "valor_declarado_pelo_cliente",
+                    "label": "Valor declarado pelo próprio cliente (objeto do pedido)", "icon": "🧾",
+                    "formato": {},
+                    "mascara": {"by_role": {}},
+                    "lgpd": "financeiro",
+                    "declared_only": True,
+                },
                 # texto — o tipo que NAO faz nada (V3 do arco ALLOWLIST). Existe
                 # porque o MAPA do ContextStore declara todo campo, e a maioria e
                 # encanamento sem PII (`session.pool.id`, `session.survey.grain`).

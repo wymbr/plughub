@@ -101,7 +101,17 @@ steps:
       # devolve etapa nem progresso — a pendência é binária —, então o status viaja
       # aqui e volta pelo context_preview.
       status:  "Em análise pelo time de crédito"
-      preview: '{"status": "plain", "numero_cartao": "last_4", "limite_solicitado": "plain"}'
+      # ⚠️ Migrado em 2026-09-02 (decisão #6): o spec nomeia **TIPOS do catálogo**, não
+      # máscaras. Era `{"status":"plain","numero_cartao":"last_4","limite_solicitado":"plain"}`
+      # — vocabulário próprio, que fazia o gateway ser o quarto motor de máscara do
+      # repositório. É a MESMA migração que o `masked:` do menu fez na T6: o campo não
+      # deixou de declarar, passou a nomear um tipo.
+      #
+      # `limite_solicitado` usa `valor_declarado_pelo_cliente`, tipo de FINALIDADE criado
+      # no mesmo dia: o valor que o próprio titular pediu não é dado a proteger DELE, e o
+      # `financial` (máscara de operador) o esconderia de quem o declarou. A classe LGPD
+      # continua `financeiro` — o que se declara vazio é a máscara, nunca a classe (D8).
+      preview: '{"status": "texto", "numero_cartao": "credit_card", "limite_solicitado": "valor_declarado_pelo_cliente"}'
     timeout_hours: 48
     business_hours: false
     on_resume:

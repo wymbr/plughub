@@ -981,8 +981,34 @@ declarado no read* e passa a ser sobre *tag não cadastrada no publish*.
 5. **Classe LGPD para não-cliente** — `session.reviewer_id` é identidade de USUÁRIO da
    plataforma, e nenhuma das 5 classes foi pensada para isso. Lacuna de classe, pequena e
    real. *(Sobreviveu à depreciação da D9.5, onde estava só coabitando.)*
-6. **`session.preview`** — política de mascaramento guardada como valor de tag. Decidir se
-   isso continua morando no ContextStore antes de lhe dar um tipo.
+6. ~~**`session.preview`**~~ — **RESOLVIDA em 2026-09-02, e a pergunta estava mal posta.**
+
+   Não era mecanismo de plataforma: era **resíduo pré-uniformização** (decisão do dono).
+   O `preview` declara variáveis negociais de uma aplicação, e declarava a máscara de cada
+   uma com **vocabulário próprio** — o que fazia do gateway o quarto motor de máscara do
+   repositório. O conserto é o mesmo que a T6 fez no `menu`: o campo **não deixou de
+   declarar, passou a nomear um TIPO**.
+
+   ```
+   antes  '{"status":"plain","numero_cartao":"last_4","limite_solicitado":"plain"}'
+   depois '{"status":"texto","numero_cartao":"credit_card",
+            "limite_solicitado":"valor_declarado_pelo_cliente"}'
+   ```
+
+   **A audiência-cliente NÃO virou eixo novo** (decisão do dono): o eixo que resolve já
+   existe e é a **FINALIDADE**. `valor_declarado_pelo_cliente` é o segundo tipo do molde da
+   D8 — máscara vazia, **classe LGPD preservada** (`financeiro`). Um valor que o próprio
+   titular declarou não é dado a proteger dele.
+
+   `_apply_preview_mask` (5 das 9 máscaras) **foi removido**; o motor agora é o canônico,
+   com gêmeo Python e gate de paridade sobre fixture única
+   (`probe_masking_apply_parity.sh`, 20 casos). E `session.workflow.preview` está declarado
+   como `texto` — a classe dele é genuinamente `none`: só nomes de campo e de tipo.
+
+   ⚠️ **O levantamento que fechou esta decisão achou muito mais** — ver o `CHANGELOG.md` de
+   2026-09-02: `display_voice`/`echo_to_customer`/`echo_to_operator` têm **zero
+   consumidores**, e a fiação do funil da ALW-02 estava quebrada em **cinco de cinco**
+   serviços.
 
 > ⚠️ A antiga #5 (*marcação de conteúdo livre*) **saiu**: a D9.5 foi depreciada pela própria
 > D9 no mesmo dia — ver acima. Nenhuma decisão de mecanismo bloqueia a migração.

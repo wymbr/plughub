@@ -46,6 +46,7 @@ __all__ = [
     "config_api_base",
     "context_map_url",
     "get_context_map",
+    "get_masking_catalog",
     "invalidate_context_map_cache",
     "set_context_map_fetcher",
 ]
@@ -59,6 +60,13 @@ CONTEXT_MAP_CACHE_TTL_S = 60.0
 
 #: tenant → (index, fallback, expira_em)
 _cache: dict[str, tuple[ContextTagIndex, bool, float]] = {}
+
+#: tenant → (catalogo, expira_em). Cache SEPARADO do mapa, sobre a MESMA URL — o
+#: `/config/masking` devolve o namespace inteiro, então em tese caberia um cache só.
+#: Ficaram dois porque o do mapa tem semântica de FALLBACK (mapa embutido) que o
+#: catálogo não tem, e fundir os dois faria o fallback de um decidir pelo outro. O custo
+#: é uma requisição a mais por tenant por minuto.
+_cache_catalogo: dict[str, tuple[dict[str, Any], float]] = {}
 
 #: Transporte registrado pelo serviço no boot. Existe porque os escritores do ContextStore
 #: são fire-and-forget e não têm o cliente HTTP à mão — enfiá-lo por dez assinaturas seria
@@ -82,11 +90,30 @@ def set_context_map_fetcher(fetch_json: Callable[[str], Awaitable[Any]] | None) 
 _FALLBACK_INDEX: ContextTagIndex = build_context_tag_index(DEFAULT_CONTEXT_MAP)
 
 
+#: Os DOIS nomes que o compose usa para o mesmo fato. Medido em 2026-09-02:
+#: `PLUGHUB_CONFIG_API_URL` em routing-engine, ai-gateway e channel-gateway;
+#: `CONFIG_API_URL` no orchestrator-bridge; NENHUM na evaluation-api.
+#:
+#: Ler só um deles fez **quatro dos cinco** caírem no default `localhost:3600` — que dentro
+#: do container é o próprio container —, e com isso TODO carimbo escrito desde a ALW-02
+#: saiu com `atributo.fallback: true`. Ficou invisível porque o mapa tem fallback embutido:
+#: as escritas funcionavam, com o tipo do CÓDIGO em vez do tipo do TENANT.
+#:
+#: ⚠️ Ler os dois é remendo, e está declarado como tal: a dívida é o compose ter duas
+#: convenções (a mesma do `JWT_SECRET` × `PLUGHUB_JWT_SECRET` da CAP-12). O específico
+#: vence o genérico.
+_ENV_NAMES = ("PLUGHUB_CONFIG_API_URL", "CONFIG_API_URL")
+
+
 def config_api_base() -> str:
     """Base do config-api. Default `:3600` — e o número importa: o `CLAUDE.md` registra um
     caso em que o default hardcoded apontava para `:3500` (analytics-api) e o namespace
     inteiro ficou inerte, degradando para "usa o default" sem nada ficar vermelho."""
-    return (os.environ.get("CONFIG_API_URL") or "http://localhost:3600").rstrip("/")
+    for nome in _ENV_NAMES:
+        v = os.environ.get(nome)
+        if v:
+            return v.rstrip("/")
+    return "http://localhost:3600"
 
 
 def context_map_url(tenant_id: str) -> str:
@@ -101,8 +128,66 @@ def invalidate_context_map_cache(tenant_id: str | None = None) -> None:
     `config.changed` deve chamar quando não souber o tenant afetado."""
     if tenant_id is None:
         _cache.clear()
+        _cache_catalogo.clear()
     else:
         _cache.pop(tenant_id, None)
+        _cache_catalogo.pop(tenant_id, None)
+
+
+async def get_masking_catalog(
+    tenant_id: str,
+    fetch_json: Callable[[str], Awaitable[Any]] | None = None,
+) -> dict[str, Any]:
+    """Catálogo de tipos (`masking.types`), indexado por id. Cache de 60 s.
+
+    Devolve `{}` quando não consegue carregar — e o `{}` é HONESTO, não um default: quem
+    consome (hoje o preview de pendência) trata tipo ausente como `full`, isto é, mascara
+    tudo. Um catálogo vazio faz o consumidor esconder, nunca revelar.
+
+    ⚠️ Não há mapa embutido de fallback aqui, ao contrário de `get_context_map`. É
+    deliberado: o catálogo declara POLÍTICA (o que cada tipo esconde), e um espelho
+    embutido que envelhecesse aplicaria política velha achando que é a do tenant. Melhor
+    esconder por não saber do que revelar por lembrar errado.
+    """
+    agora = time.monotonic()
+    em_cache = _cache_catalogo.get(tenant_id)
+    if em_cache is not None and em_cache[1] > agora:
+        return em_cache[0]
+
+    catalogo: dict[str, Any] = {}
+    transporte = fetch_json or _fetcher
+    try:
+        if transporte is None:
+            raise RuntimeError(
+                "nenhum transporte registrado — chame set_context_map_fetcher() no boot"
+            )
+        body = await transporte(context_map_url(tenant_id))
+        if not isinstance(body, Mapping):
+            raise ValueError("corpo da resposta não é objeto")
+        entries = body.get("entries")
+        if not isinstance(entries, Mapping):
+            entries = body
+        raw = entries.get("types")
+        if isinstance(raw, Mapping) and "value" in raw:
+            raw = raw["value"]
+        tipos = (raw or {}).get("types") if isinstance(raw, Mapping) else None
+        if not isinstance(tipos, list):
+            raise ValueError("chave masking.types ausente ou sem lista `types`")
+        catalogo = {t["id"]: t for t in tipos if isinstance(t, Mapping) and t.get("id")}
+        if not catalogo:
+            raise ValueError("catálogo vazio")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[masking-catalog] tenant=%s catálogo INDISPONÍVEL (%s). Deixa de valer: quem "
+            "resolve máscara por tipo passa a tratar TODO tipo como desconhecido, e o "
+            "desfecho conservador é esconder — o preview de pendência sai vazio. Não há "
+            "espelho embutido de propósito: política velha aplicada como se fosse a do "
+            "tenant é pior que ausência declarada.",
+            tenant_id, exc,
+        )
+
+    _cache_catalogo[tenant_id] = (catalogo, agora + CONTEXT_MAP_CACHE_TTL_S)
+    return catalogo
 
 
 def _extract(body: Any) -> Any:

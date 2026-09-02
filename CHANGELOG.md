@@ -1,5 +1,104 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — Decisão #6: o `preview` era resíduo, e procurá-lo achou a fiação do funil quebrada em CINCO de cinco serviços
+
+### A decisão, e por que a pergunta estava mal posta
+
+Eu vinha tratando `session.preview` como uma **lacuna do catálogo** — *"não há máscara-por-
+cliente"*. A leitura do dono desfez isso: `preview` são **variáveis negociais de uma
+aplicação**, e ele declarava a máscara de cada uma com vocabulário próprio porque foi escrito
+**antes** da uniformização. Não é mecanismo de plataforma; é skill que não migrou.
+
+O conserto é o mesmo que a T6 fez no `menu`: o campo **não deixou de declarar — passou a
+nomear um TIPO**.
+
+```
+antes  '{"status":"plain","numero_cartao":"last_4","limite_solicitado":"plain"}'
+depois '{"status":"texto","numero_cartao":"credit_card",
+         "limite_solicitado":"valor_declarado_pelo_cliente"}'
+```
+
+E a audiência-cliente **não virou eixo novo**, também por decisão do dono: o eixo que resolve
+já existe e é a **FINALIDADE**. `valor_declarado_pelo_cliente` é o segundo tipo do molde da D8
+— máscara vazia, **classe LGPD preservada** (`financeiro`), porque *o que se declara vazio é a
+máscara, nunca a classe*. Um valor que o próprio titular declarou não é dado a proteger dele.
+
+*(Minha contribuição aqui foi a correção do molde: eu havia proposto um eixo novo, e a
+proposta do dono — um tipo a mais — é menos superfície. A única emenda que a medição exigiu
+foi não usar `texto`, que derrubaria a classe de `financeiro` para `none`.)*
+
+### O levantamento que precedeu, e o que ele mediu
+
+Cinco eixos. Dois achados que mudaram o trabalho:
+
+**Seis motores de máscara, em duas famílias.** Na família "por TIPO" havia dois, com **9/9**
+(`applyMaskingTypeToValue`) e **5/9** (`_apply_preview_mask`) — e o menor **prometia no
+docstring** espelhar o maior. Promessa sem mecanismo. A consequência era muda: `financial`
+não existia no menor, então um campo daquele tipo seria **omitido** do preview, e quem
+"consertasse" o spec para nomeá-lo faria o campo sumir da tela do cliente.
+
+**Três campos de canal, zero consumidores.** `display_voice`, `echo_to_customer` e
+`echo_to_operator` são editáveis na tela e **ninguém os lê** — nem o canal de voz. A
+pergunta *"o que eco significa no WhatsApp?"* ainda não custou nada porque eco não faz nada
+em canal nenhum. `display_screen` tem um consumidor (`MaskedToken`).
+
+### E o que a migração revelou: a fiação da ALW-02 estava quebrada nos CINCO serviços
+
+O preview saiu com **tudo `***`** na primeira execução. A causa não era uma:
+
+| causa | escopo |
+|---|---|
+| `set_context_map_fetcher` nunca registrado | **channel-gateway, orchestrator-bridge** |
+| o loader lia `CONFIG_API_URL`; o compose usa `PLUGHUB_CONFIG_API_URL` | **routing-engine, ai-gateway, channel-gateway** |
+| nenhuma das duas variáveis definida | **evaluation-api** |
+
+Somadas: **nenhum dos cinco** estava lendo o mapa do tenant. Medido ao vivo antes do
+conserto: **16 de 16** entradas com `atributo.fallback: true`, e campos **declarados** saindo
+como `unknown` porque o mapa embutido não tem o vocabulário do tenant.
+
+**O sinal existia desde o primeiro dia e ninguém o contava.** O `fallback: true` é
+literalmente o campo que a ALW-02 criou para dizer isso.
+
+⚠️ **A lição é sobre resiliência, não sobre distração.** O carregador do MAPA tem fallback
+embutido, então a fiação faltando **não produzia sintoma** — as escritas funcionavam, com o
+tipo do código no lugar do tipo do tenant. Quem denunciou foi o **catálogo de tipos**, que
+não tem fallback de propósito: uma execução, e tudo veio `***`. *A resiliência de um
+componente esconde a fiação faltando de outro, e por isso a fiação precisa de teste próprio
+— não da ausência de sintoma.* Virou o **ramo E** do `probe_ctx_writer_census.sh`, que reprova
+e **nomeia o serviço**.
+
+### Duas armadilhas documentadas, ambas pagas de novo
+
+- **Editar o YAML de skill semeado é no-op.** O spec migrado não chegava à produção até
+  `_publish_skill.py` (publicar **e** promover o slot).
+- **Tenant vence global por inteiro.** O tipo novo foi escrito no escopo global e não
+  apareceu: `masking.types` tem override de tenant, e ele substitui a chave toda. Medido:
+  global 14 tipos, `tenant_demo` 13. Escrito no escopo em vigor.
+
+### O resultado, medido
+
+`smoke_limite_tres_acessos`: **18 ✅ · 0 ❌** — a saída ao cliente é idêntica à de antes
+(`***1234`, `12000`), agora vinda do catálogo e não do vocabulário do skill.
+
+| medição | antes | depois |
+|---|---|---|
+| carimbos com `fallback: true` | 16 de 16 | **0 de 6** |
+| carimbos com `origem: unknown` | vários | **0** |
+| auditoria de leitura: `unknown` | 1 (`session.preview`) | **0** |
+
+**`unknown = 0` e `overflow = 0`** — a pré-condição da V4 está cumprida. A **ALW-01
+está desbloqueada**, com o aviso registrado no ledger: a amostra é de UM fluxo, e a medição
+deve ser refeita imediatamente antes de virar, porque a inversão não é reversível.
+
+### O que fica aberto
+
+`_LEGACY_PREVIEW_SPEC` migrou junto e mudou de comportamento **de propósito**: `numero_atual`
+usa `linha_em_servico`, que é aberto por finalidade — o número sai em claro, que é a decisão
+que a D8 tomou em 2026-08-30. A máscara anterior era a omissão que aquela decisão corrigiu.
+
+Os três campos de canal sem consumidor (`display_voice`, `echo_*`) seguem editáveis e inertes.
+
+
 ## 2026-09-02 — ALW-01: a pré-condição da V4, medida com a série cortada (e eu tinha errado o bloqueio)
 
 ### A correção primeiro

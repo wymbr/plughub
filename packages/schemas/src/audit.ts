@@ -713,6 +713,42 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       lgpd:          "pessoal",
       declared_only: true,
     },
+    // ── valor_declarado_pelo_cliente — o segundo tipo de FINALIDADE ──────────
+    //
+    // Mesmo molde do `linha_em_servico` (D8, 2026-08-30): a razão de existir é a
+    // FINALIDADE, não o formato, e por isso a máscara é vazia enquanto a **classe LGPD
+    // é preservada**. Aqui o valor é financeiro e continua `financeiro`; o que se
+    // declara vazio é a máscara, nunca a classe.
+    //
+    // ── Por que ele nasceu (2026-09-02) ──────────────────────────────────────
+    //
+    // O `preview` de uma pendência mostra ao cliente o que ele mesmo pediu — no fluxo de
+    // aumento de limite, `limite_solicitado`. O tipo daquele campo era `financial`, cuja
+    // máscara de operador é `financial`; aplicá-la ao CLIENTE esconderia dele o valor que
+    // ele acabou de solicitar.
+    //
+    // A saída NÃO foi acrescentar um eixo de audiência ao catálogo (decisão do dono): o
+    // eixo que resolve já existe e é a finalidade. Um valor que o próprio titular
+    // declarou não é dado a proteger DELE — é o objeto da conversa, exatamente como a
+    // linha sendo portada.
+    //
+    // ⚠️ O nome é a FINALIDADE, não o formato. Um `valor_aberto` ou `numero_plain` seria
+    // arma carregada apontada para o próximo campo financeiro — que é precisamente o que
+    // o comentário do `linha_em_servico` avisa sobre `phone_open`.
+    //
+    // ⚠️ NÃO usar para valor que a EMPRESA decidiu (limite aprovado, saldo, fatura):
+    // aqueles o cliente não declarou, e a assimetria é o critério. `limite_aprovado`
+    // segue `financial`.
+    {
+      id:      "valor_declarado_pelo_cliente",
+      label:   "Valor declarado pelo próprio cliente (objeto do pedido)",
+      icon:    "🧾",
+      formato: {},
+      // `by_role` VAZIO — ver o comentário acima. Não é omissão.
+      mascara: { by_role: {} },
+      lgpd:          "financeiro",
+      declared_only: true,
+    },
     // ── texto — o tipo que NÃO faz nada, e por que ele precisa existir ────────
     //
     // Acrescentado na V3 do arco ALLOWLIST. O mapa do ContextStore (D2) declara
