@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-08: a afordância exigia o dry-run, e o dry-run exigia extrair o verificador
+
+Último item aberto do arco ALLOWLIST. A tarefa era *"mostrar no editor as tags que o flow usa e
+quais não estão cadastradas"*. O caminho óbvio — rodar `collectContextTagWrites` no browser —
+está **fechado**, e por duas razões que o `adr-skill-flow-editor-validation.md` já tinha medido:
+
+- **empacotamento**: o platform-ui **não declara `@plughub/schemas`**; não há workspaces no
+  monorepo, e o `Dockerfile` copia só `packages/platform-ui/`;
+- **fundo (D2)**: duas implementações da mesma regra divergem, e aqui a divergência apareceria
+  como *"o editor disse que estava bom e o save recusou"*.
+
+Então a afordância pergunta e o **servidor** responde.
+
+### F1 do ADR do editor, entregue em PARIDADE
+
+`validateSkillPayload()` — uma função, chamada pelo `PUT` e pelo dry-run
+`POST /v1/skills/validate`. Roda exatamente o que o `PUT` já rodava: lápide do `agent_role`
+(sobre o corpo **cru**, porque depois do parse a chave desconhecida sumiu), Zod, bloco masked,
+tipos masked, cadastro de ContextStore.
+
+⚠️ **O `validateFlow` que a D3 prevê mover para cá ficou de FORA.** Ele é mudança de
+comportamento — hoje um ciclo não-guardado passa no save e só explode em execução — e tem
+pré-requisito medido: rodar sobre os 42 YAMLs antes de ligar. Juntá-lo ao commit da extração
+tornaria impossível dizer qual das duas coisas quebrou o que quebrasse.
+
+Duas decisões de contrato:
+
+- **o dry-run não devolve 422.** `200 {valid:false, errors:[…]}` é uma resposta bem-sucedida
+  sobre um payload ruim; status não-2xx fica reservado para falha de verdade. Um dry-run que
+  responde erro no status obriga o cliente a distinguir "payload inválido" de "a chamada
+  falhou" pelo mesmo canal.
+- **o 422 do `PUT` é ADITIVO**: `errors` estruturado **ao lado** de `details`, que é o que o
+  platform-ui já renderiza. Trocar um pelo outro deixaria o autor com um 422 mudo até a UI
+  acompanhar.
+
+### O painel, e a degradação alta
+
+Debounce de 700 ms → dry-run → painel. Estados: `checking` · `ok` · `invalid` · **`unavailable`**
+· `yaml_error`.
+
+**D5 respeitada:** endpoint fora do ar diz *"NÃO VERIFICADO — isto não quer dizer que está tudo
+bem"*, nunca verde. Painel vazio é indistinguível de "sem erros", e é assim que um verificador
+vira decoração. YAML quebrado tem estado PRÓPRIO: dizer "inválido" ali misturaria erro de
+sintaxe com erro de contrato e manda o autor procurar no lugar errado.
+
+O atalho para `/config/context-map` é decidido pelo **`code`** (`unregistered_context_tag`),
+nunca por casar texto da mensagem — acoplar a afordância à prosa do servidor quebra na primeira
+reescrita da frase.
+
+### O que a medição corrigiu
+
+**O defeito que a D4 nomeia já não valia para o save.** A D4 diz que *"o erro de bloco masked é
+hoje invisível ao autor"* porque o front lê só `body.detail`. Medido: o save usa `apiFetchRaw` →
+`_formatApiError`, que lê `detail ?? details ?? error` e trata array — foi corrigido em algum
+momento. O leitor cru sobrevive só no `handleDelete`, onde o servidor não manda `details`.
+
+O resíduo real era outro, e saiu junto: aquele helper tratava **todo** elemento de array como
+objeto, então `details` de string — que é o formato que a V4 produz — saía escapado por
+`JSON.stringify`. Legível, e ruidoso justamente onde o texto foi escrito para ser lido.
+
+### Medições
+
+Dry-run e `PUT` dão o **mesmo veredicto** (D3), com controle positivo nos dois:
+
+| chamada | payload | resultado |
+|---|---|---|
+| `POST /validate` | tag não cadastrada | `200 valid:false`, `code=unregistered_context_tag` |
+| `POST /validate` | tag cadastrada | `200 valid:true` |
+| `PUT /:id` | tag não cadastrada | `422` com `details` **e** `errors` |
+| `PUT /:id` | tag cadastrada | `200` |
+
+**O caminho do BROWSER foi medido, não presumido:** `POST` pelo proxy do platform-ui devolveu
+**401**, não 404 — a requisição chegou à camada de auth do agent-registry pelo caminho novo. A
+rota herda `requireResourceWrite` do mount do router (`app.ts:46`), então não nasceu aberta.
+
+O bundle foi conferido no **artefato servido** (`nginx/html/assets/*.js`), não no fonte.
+
+⚠️ **Nota de bancada:** um `docker compose build` reprovado reportou `BUILD_RC=0` com
+`failed to solve` impresso no log — terceira vez nesta sessão que um código de saída enganou. O
+script de build passou a acusar `RC=0` acompanhado de `error TS` no log em vez de confiar no
+número sozinho.
+
 ## 2026-09-02 — V5: o critério estava medindo tráfego, e a medição derrubou minha própria correção duas vezes
 
 Fui executar *"fechar os aliases cujo contador zerou"* e **não removi nenhum**. O que segue é

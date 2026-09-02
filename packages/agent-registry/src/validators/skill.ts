@@ -355,3 +355,107 @@ export async function validateContextTagRegistration(
     )
   })
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * VERIFICADOR ÚNICO DE PAYLOAD DE SKILL — F1 do ADR do editor (D2/D3)
+ * ────────────────────────────────────────────────────────────────────────────*/
+
+export interface SkillValidationError {
+  /** Código estável, para o cliente decidir afordância (ex.: link para o cadastro). */
+  code:     string
+  message:  string
+  /** Caminho no corpo, formato YAML-ish (`steps[3].on_success`) quando conhecido. */
+  path?:    string
+  step_id?: string
+}
+
+export interface SkillValidationResult {
+  valid:   boolean
+  errors:  SkillValidationError[]
+  /** O corpo já parseado, quando válido — para o `PUT` não parsear duas vezes. */
+  parsed?: z.infer<typeof CreateSkillSchema>
+}
+
+/**
+ * O que o `PUT /v1/skills/:id` aceita — em UMA função, chamada pelo `PUT` e pelo
+ * dry-run `POST /v1/skills/validate`.
+ *
+ * ── Por que extrair, e o que deliberadamente NÃO mudou ──────────────────────
+ *
+ * D3 do `adr-skill-flow-editor-validation.md`: *"se divergirem, volta-se ao padrão de
+ * duas respostas"* — o editor perguntaria a um verificador e o save rodaria outro, que é
+ * a forma mais cara de um erro aparecer só no save.
+ *
+ * ⚠️ **Esta extração é PARIDADE, não endurecimento.** A D3 também prevê mover o
+ * `validateFlow` (detecção de ciclo não-guardado, hoje só no engine) para cá — e avisa
+ * que isso é *"mudança de comportamento, não refactor"*, com pré-requisito medido: rodar
+ * o verificador sobre os 42 YAMLs existentes antes de ligar. **Aquilo fica de fora
+ * daqui**: ligar um verificador mais estrito no mesmo commit em que se extrai o
+ * verificador tornaria impossível dizer qual das duas coisas quebrou o que quebrar.
+ *
+ * A ordem das checagens é a do `PUT` de hoje, e importa: a lápide do `agent_role`
+ * pergunta ao corpo **CRU**, porque depois do parse a chave desconhecida já sumiu e não
+ * haveria o que recusar.
+ */
+export async function validateSkillPayload(
+  raw:  unknown,
+  opts: { tenantId: string; configApiUrl: string; fetchImpl?: typeof fetch },
+): Promise<SkillValidationResult> {
+  const errors: SkillValidationError[] = []
+
+  // ── lápide do `agent_role` — sobre o corpo CRU ────────────────────────────
+  if (raw != null && typeof raw === "object" && "agent_role" in (raw as Record<string, unknown>)) {
+    return {
+      valid: false,
+      errors: [{
+        code: "agent_role_removed",
+        path: "agent_role",
+        message:
+          "O campo `agent_role` foi REMOVIDO em 2026-09-01. Ele tinha um consumidor só — " +
+          "o gate de evaluation_context_get/evaluation_submit — e esse gate saiu por não " +
+          "impedir cenário nenhum (lia o papel do participant_id do INPUT). Remova o campo " +
+          "do payload: mandá-lo não declara mais nada. Ver docs/adr/adr-remove-agent-role-axis.md.",
+      }],
+    }
+  }
+
+  // ── forma (Zod) ───────────────────────────────────────────────────────────
+  const p = CreateSkillSchema.safeParse(raw)
+  if (!p.success) {
+    // `safeParse` e não `parse`: o dry-run precisa DEVOLVER os erros, não lançá-los
+    // para o handler global. O `PUT` mantém o mesmo desfecho porque quem responde 422
+    // é a rota, com o mesmo conteúdo.
+    return {
+      valid: false,
+      errors: p.error.issues.map(i => ({
+        code:    "invalid_shape",
+        path:    i.path.join("."),
+        message: i.message,
+      })),
+    }
+  }
+  const body = p.data
+
+  if (body.flow) {
+    for (const m of validateMaskedBlock(body.flow)) {
+      errors.push({ code: "invalid_masked_block", message: m })
+    }
+    if (errors.length === 0) {
+      for (const m of await validateMaskedTypeRefs(body.flow, opts)) {
+        errors.push({ code: "invalid_masked_type", message: m })
+      }
+    }
+    if (errors.length === 0) {
+      for (const m of await validateContextTagRegistration(body.flow, opts)) {
+        // `code` estável e específico: é por ELE que o editor decide oferecer o atalho
+        // para `/config/context-map`. Um código genérico obrigaria o cliente a casar
+        // texto de mensagem, que é a forma mais frágil de acoplamento entre camadas.
+        errors.push({ code: "unregistered_context_tag", message: m })
+      }
+    }
+  }
+
+  return errors.length > 0
+    ? { valid: false, errors }
+    : { valid: true, errors: [], parsed: body }
+}

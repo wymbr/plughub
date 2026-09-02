@@ -141,8 +141,14 @@ function _formatApiError(body: Record<string, unknown>, status: number): string 
   if (Array.isArray(detail)) {
     return detail
       .map((e) => {
+        // Elemento STRING é o caso comum desde a V4: `details` do agent-registry é um
+        // array de frases prontas. Sem este ramo ele caía no `JSON.stringify` abaixo e o
+        // autor via a mensagem inteira entre aspas e com escapes — legível, mas ruidosa
+        // justamente onde o texto foi escrito para ser lido.
+        if (typeof e === "string") return e
         const o = e as Record<string, unknown>
-        const path = Array.isArray(o["path"]) ? (o["path"] as unknown[]).join(".") : ""
+        const path = Array.isArray(o["path"]) ? (o["path"] as unknown[]).join(".")
+                   : typeof o["path"] === "string" ? (o["path"] as string) : ""
         const msg  = (o["message"] as string) ?? JSON.stringify(o)
         return path ? `${path}: ${msg}` : msg
       })
@@ -150,6 +156,119 @@ function _formatApiError(body: Record<string, unknown>, status: number): string 
   }
   if (detail && typeof detail === "object") return JSON.stringify(detail)
   return `HTTP ${status}`
+}
+
+/** Um erro do verificador do servidor. Espelha `SkillValidationError` do agent-registry. */
+interface DryRunError { code: string; message: string; path?: string; step_id?: string }
+
+type DryRunState =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'ok' }
+  | { kind: 'invalid';     errors: DryRunError[] }
+  | { kind: 'unavailable'; reason: string }
+  | { kind: 'yaml_error';  reason: string }
+
+/**
+ * Afordância preventiva do editor (ALW-08).
+ *
+ * ── O veredicto é do SERVIDOR, e isso não é preguiça ────────────────────────
+ *
+ * D2 do `adr-skill-flow-editor-validation.md`. Reimplementar a checagem aqui exigiria
+ * `@plughub/schemas` no browser — e o platform-ui **não o declara**: não há workspaces no
+ * monorepo, o `Dockerfile` copia só `packages/platform-ui/`, e o risco de dual-instance de
+ * Zod já está documentado no `agent-registry/src/app.ts`. Mais fundo que o empacotamento:
+ * duas implementações da mesma regra divergem, e a divergência aqui apareceria como
+ * *"o editor disse que estava bom e o save recusou"*.
+ *
+ * Então o editor PERGUNTA (`POST /v1/skills/validate`) e o servidor responde com a mesma
+ * função que o `PUT` roda.
+ *
+ * ── Degradação é ALTA (D5) ──────────────────────────────────────────────────
+ *
+ * Endpoint fora do ar ⇒ **"não verificado"**, nunca verde. Painel vazio é indistinguível
+ * de "sem erros", e é assim que um verificador vira decoração.
+ */
+function useDryRun(yaml: string, tenantId: string): DryRunState {
+  const [state, setState] = useState<DryRunState>({ kind: 'idle' })
+
+  useEffect(() => {
+    if (!yaml.trim()) { setState({ kind: 'idle' }); return }
+    let vivo = true
+    const timer = setTimeout(async () => {
+      const parsed = yamlToJson(yaml)
+      if (!parsed.ok) {
+        // YAML quebrado não é veredicto do servidor: dizer "inválido" aqui misturaria
+        // erro de SINTAXE com erro de CONTRATO, e manda o autor procurar no lugar errado.
+        if (vivo) setState({ kind: 'yaml_error', reason: parsed.error })
+        return
+      }
+      if (vivo) setState({ kind: 'checking' })
+      try {
+        const res = await apiFetch('/v1/skills/validate', {
+          method:  'POST',
+          headers: operatorHeaders(tenantId),
+          body:    JSON.stringify(parsed.data),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const body = await res.json() as { valid: boolean; errors?: DryRunError[] }
+        if (!vivo) return
+        setState(body.valid ? { kind: 'ok' } : { kind: 'invalid', errors: body.errors ?? [] })
+      } catch (e) {
+        if (vivo) setState({ kind: 'unavailable', reason: e instanceof Error ? e.message : 'erro' })
+      }
+    }, 700)
+    return () => { vivo = false; clearTimeout(timer) }
+  }, [yaml, tenantId])
+
+  return state
+}
+
+function DryRunPanel({ state }: { state: DryRunState }) {
+  // `useTranslation` aqui e nao um `t` por prop: o invariante de i18n exige o `t`
+  // explicito para helpers FORA de componentes; este e um componente. Passa-lo por
+  // prop custava tipar `TFunction` na fronteira, que foi onde o build reprovou.
+  const { t } = useTranslation('agentFlow')
+  if (state.kind === 'idle') return null
+
+  const base = 'border-t px-3 py-2 text-xs'
+  if (state.kind === 'checking')
+    return <div className={`${base} border-slate-200 bg-slate-50 text-slate-500`}>{t('editor.dryRun.checking')}</div>
+  if (state.kind === 'yaml_error')
+    return <div className={`${base} border-slate-200 bg-slate-50 text-slate-500`}>{t('editor.dryRun.yamlPending')}</div>
+  if (state.kind === 'unavailable')
+    return (
+      <div className={`${base} border-warning/30 bg-warning/5 text-warning`}>
+        {t('editor.dryRun.unavailable', { reason: state.reason })}
+      </div>
+    )
+  if (state.kind === 'ok')
+    return <div className={`${base} border-green/30 bg-green/5 text-green`}>{t('editor.dryRun.ok')}</div>
+
+  // ⚠️ O atalho é decidido pelo `code`, NUNCA por casar texto da mensagem — acoplar a
+  // afordância à prosa do servidor quebra na primeira reescrita da frase.
+  const temTagNaoCadastrada = state.errors.some(e => e.code === 'unregistered_context_tag')
+  return (
+    <div className={`${base} max-h-40 overflow-y-auto border-red/30 bg-red/5`}>
+      <div className="mb-1 font-medium text-red">
+        {t('editor.dryRun.invalid', { count: state.errors.length })}
+      </div>
+      <ul className="space-y-1 text-slate-700">
+        {state.errors.map((e, i) => (
+          <li key={i}>
+            <span className="mr-1 rounded bg-slate-200 px-1 font-mono text-[10px]">{e.code}</span>
+            {e.path ? <span className="mr-1 font-mono text-[10px] text-slate-500">{e.path}</span> : null}
+            {e.message}
+          </li>
+        ))}
+      </ul>
+      {temTagNaoCadastrada && (
+        <a href="/config/context-map" className="mt-2 inline-block font-medium text-primary underline">
+          {t('editor.dryRun.registerLink')}
+        </a>
+      )}
+    </div>
+  )
 }
 
 async function apiFetchRaw(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
@@ -494,6 +613,9 @@ const SkillFlowsPage: React.FC = () => {
   const [isNew,       setIsNew]       = useState(true)
 
   const isModified = editorValue !== savedValue
+
+  // ALW-08 — o servidor responde "isto passaria?" enquanto se digita.
+  const dryRun = useDryRun(editorValue, tenantId)
   const canSave    = statusKind !== 'saving' && (isModified || isNew)
   const editorRef  = useRef<unknown>(null)
 
@@ -862,6 +984,7 @@ const SkillFlowsPage: React.FC = () => {
             />
           </div>
 
+          <DryRunPanel state={dryRun} />
           <StatusBar kind={statusKind} message={statusMsg} />
         </div>
       </div>

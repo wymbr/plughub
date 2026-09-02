@@ -1,6 +1,25 @@
 # ADR: Feedback de validação no editor de skill-flow — AFORDÂNCIA ≠ VEREDICTO
 
-**Status:** Proposto
+**Status:** Proposto — **a F1 (verificador único extraído + dry-run) foi ENTREGUE em 2026-09-02**, como pré-requisito da ALW-08 do arco ALLOWLIST.
+
+> ⚠️ **A F1 saiu em PARIDADE, não em endurecimento.** `validateSkillPayload()` roda
+> exatamente o que o `PUT` já rodava (lápide do `agent_role` sobre o corpo cru · Zod ·
+> `validateMaskedBlock` · `validateMaskedTypeRefs` · `validateContextTagRegistration`).
+> O `validateFlow` que a D3 prevê mover para cá **ficou de fora**: é mudança de
+> comportamento, tem pré-requisito medido (rodar sobre os 42 YAMLs antes de ligar), e
+> juntá-la ao commit da extração tornaria impossível dizer qual das duas quebrou o que
+> quebrasse.
+>
+> A **D4** foi atendida de forma ADITIVA: o 422 passou a levar `errors` estruturado
+> **ao lado** de `details`, que é o que o platform-ui já renderiza. Trocar um pelo
+> outro deixaria o autor com um 422 mudo até a UI acompanhar.
+>
+> Medido ao fechar: o defeito que a D4 nomeia (*"o erro de bloco masked é hoje
+> invisível ao autor"*) **já não valia para o save** — `apiFetchRaw` usa
+> `_formatApiError`, que lê `detail ?? details ?? error`. O leitor cru sobrevive só no
+> `handleDelete`. O resíduo real era outro e foi corrigido: aquele helper tratava todo
+> elemento de array como objeto, e `details` de string saía escapado por
+> `JSON.stringify`.
 **Data:** 2026-08-29
 **Componentes:** `packages/platform-ui` (`modules/skill-flows/SkillFlowsPage.tsx` — o editor),
 `packages/agent-registry` (`routes/skills.ts`, `validators/skill.ts`, `app.ts` — o verificador),

@@ -9,7 +9,7 @@
 
 import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }      from "../db"
-import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock, validateMaskedTypeRefs, validateContextTagRegistration } from "../validators/skill"
+import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock, validateMaskedTypeRefs, validateContextTagRegistration, validateSkillPayload } from "../validators/skill"
 import { publishRegistryChanged } from "../infra/kafka"
 import { config } from "../config"
 
@@ -197,6 +197,38 @@ skillsRouter.get("/:skill_id/delegation-schema", async (req: Request, res: Respo
 })
 
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// POST /v1/skills/validate  — DRY-RUN, não persiste (D2 do ADR do editor)
+// ─────────────────────────────────────────────
+//
+// Existe para o editor poder perguntar *"o servidor aceitaria isto?"* sem tentar salvar.
+// Roda `validateSkillPayload`, a MESMA função do `PUT` — se rodasse outra, o editor
+// diria uma coisa e o save outra, que é o padrão de duas respostas que a D3 proíbe.
+//
+// ⚠️ **Precisa vir ANTES de `/:skill_id`.** O Express casa por ordem de registro, e
+// `PUT /:skill_id` não colidiria (método diferente), mas um `GET /:skill_id` com id
+// `validate` sim — e mais importante: registrar depois convidaria a próxima rota de
+// verbo coincidente a ser engolida em silêncio.
+//
+// ⚠️ **Não devolve 422.** Um dry-run que RESPONDE erro no status HTTP obriga o cliente a
+// distinguir "o payload é inválido" de "a chamada falhou" pelo mesmo canal. Aqui o
+// resultado é o CORPO: `200 {valid:false, errors:[...]}` é uma resposta bem-sucedida
+// sobre um payload ruim. Status não-2xx fica reservado para falha de verdade.
+skillsRouter.post("/validate", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = _getTenantId(req)
+    const r = await validateSkillPayload(req.body, {
+      tenantId:     tenantId,
+      configApiUrl: config.config_api_url,
+    })
+    // `parsed` NÃO viaja: o dry-run responde sobre a forma, não devolve o objeto. Mandá-lo
+    // convidaria o cliente a usar o retorno como se fosse o recurso salvo.
+    return res.json({ valid: r.valid, errors: r.errors })
+  } catch (err) {
+    return next(err)
+  }
+})
+
 // PUT /v1/skills/:skill_id  — replace flow (upsert-style)
 // ─────────────────────────────────────────────
 skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFunction) => {
@@ -204,79 +236,30 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
     const tenantId  = _getTenantId(req)
     const skillId   = req.params["skill_id"]!
 
-    const body      = CreateSkillSchema.parse({ ...req.body, skill_id: skillId })
-
-    // ── LÁPIDE — `agent_role` recusado NOMEANDO (CAP-03, 2026-09-01) ─────────
+    // ── VERIFICADOR ÚNICO (D3 do ADR do editor) ──────────────────────────────
     //
-    // O campo foi removido do modelo. Zod ignora chave desconhecida em silêncio,
-    // então quem continuasse mandando `{"agent_role": "evaluator"}` receberia 200
-    // sobre um no-op e acharia que declarou algo. Foi o custo MEDIDO da remoção do
-    // `unrestricted` (2026-08-31): `PATCH {"unrestricted":true}` → 200.
+    // O `PUT` e o dry-run `POST /v1/skills/validate` rodam ESTA função e mais nenhuma.
+    // Antes as checagens viviam inline aqui, e o editor não tinha como perguntar
+    // "isto passaria?" sem tentar salvar — que é o que a ALW-08 precisa oferecer.
     //
-    // A pergunta é feita ao corpo CRU pela mesma razão de antes: depois do parse a
-    // chave desconhecida já sumiu, e não haveria o que recusar.
-    if (
-      req.body != null &&
-      typeof req.body === "object" &&
-      "agent_role" in (req.body as Record<string, unknown>)
-    ) {
+    // ⚠️ **O corpo do 422 é ADITIVO, de propósito.** `details` (array de strings) é o
+    // que o platform-ui já sabe renderizar (`_formatApiError`); `errors` (estruturado,
+    // com `code` e `path`) é a forma-alvo da D4, que o editor consome para decidir
+    // afordância — por exemplo, oferecer o atalho para `/config/context-map` quando o
+    // código é `unregistered_context_tag`. Trocar `details` por `errors` de uma vez
+    // deixaria o autor com um 422 mudo até a UI acompanhar.
+    const _v = await validateSkillPayload({ ...req.body, skill_id: skillId }, {
+      tenantId:     tenantId,
+      configApiUrl: config.config_api_url,
+    })
+    if (!_v.valid) {
       return res.status(422).json({
-        error:  "agent_role_removed",
-        detail:
-          "O campo `agent_role` foi REMOVIDO em 2026-09-01. Ele tinha um consumidor " +
-          "só — o gate de evaluation_context_get/evaluation_submit — e esse gate saiu " +
-          "por não impedir cenário nenhum (lia o papel do participant_id do INPUT). " +
-          "Remova o campo do payload: mandá-lo não declara mais nada. A verificação de " +
-          "que um pool avaliador roda um flow de avaliação vive agora no create/update " +
-          "de campanha (evaluation-api). Ver docs/adr/adr-remove-agent-role-axis.md.",
+        error:   _v.errors[0]!.code,
+        details: _v.errors.map(e => e.message),
+        errors:  _v.errors,
       })
     }
-
-    // ── Validação de bloco masked ──
-    if (body.flow) {
-      const maskedErrors = validateMaskedBlock(body.flow)
-      if (maskedErrors.length > 0) {
-        return res.status(422).json({
-          error:   "invalid_masked_block",
-          details: maskedErrors,
-        })
-      }
-
-      // ── T5 — portão de DEPLOY do `masked` tipado (ADR D3) ──────────────────
-      // Só busca o catálogo quando o flow declara ALGUM tipo (string). Flow sem
-      // declaração tipada não paga a dependência do config-api para ser salvo —
-      // é o que impede este portão de virar acoplamento geral.
-      const typeErrors = await validateMaskedTypeRefs(body.flow, {
-        tenantId:     tenantId,
-        configApiUrl: config.config_api_url,
-      })
-      if (typeErrors.length > 0) {
-        return res.status(422).json({
-          error:   "invalid_masked_type",
-          details: typeErrors,
-        })
-      }
-
-      // ── V4 — PORTÃO DE CADASTRO do ContextStore (ADR allowlist, D9.1) ──────
-      //
-      // Toda tag que o flow ESCREVE tem de estar no mapa do tenant. Aqui é o portão
-      // ALTO e ESTÁTICO; no runtime nada é rejeitado (grava, resolve restritivo, loga).
-      //
-      // ⚠️ A postura ao NÃO CONSEGUIR conferir é OPOSTA à do portão acima, e está
-      // justificada no cabeçalho de `validateContextTagRegistration`: lá o acoplamento
-      // ao config-api é escopado a quem declara tipo; aqui seria universal, e recusar
-      // por indisponibilidade poria o boot inteiro do RegistrySyncer atrás dele.
-      const ctxErrors = await validateContextTagRegistration(body.flow, {
-        tenantId:     tenantId,
-        configApiUrl: config.config_api_url,
-      })
-      if (ctxErrors.length > 0) {
-        return res.status(422).json({
-          error:   "unregistered_context_tag",
-          details: ctxErrors,
-        })
-      }
-    }
+    const body = _v.parsed!
 
     // ── UMA definição, sem rascunho (2026-07-13) ─────────────────────────────
     // Antes havia dois canais: o editor gravava `flow_draft` e o sync/deploy gravava
