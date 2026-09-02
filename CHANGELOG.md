@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-05: a reserva do `core.*` deixa de ser promessa e vira portão
+
+### Medido antes de construir, e o achado foi maior que a tarefa
+
+Um `PUT /config/masking/context_map` com `tenant_id` de tenant, declarando
+`contexto.core.contact.invadido`, voltava **HTTP 200**. Até aqui a reserva existia em
+decisão (CNS-02), em documentação (`CLAUDE.md`, a spec) e **em nada mais** — a família
+"promessa sem mecanismo" que este repositório cataloga.
+
+**E a leitura de volta mostrou o dano maior:** o override SUBSTITUI a chave inteira,
+então aquele tenant passava a ter **1 folha no lugar das 94** da plataforma. Declarar
+no `core` e apagar o mapa eram **o mesmo gesto**.
+
+### O portão
+
+`_reject_tenant_core_root` no `put_config` — o único caminho de escrita de config. Um
+predicado sobre um nome (`root == "core"`), **não** uma lista de pastas: é o que o torna
+uma REGRA em vez de uma CONSULTA, e o que o impede de envelhecer quando nascer a próxima
+pasta do core. Escopo deliberado: só o par (`masking`, `context_map`) e só quando há
+tenant — o seed escreve `core` no `__global__` e tem de continuar podendo.
+
+A recusa **nomeia o caminho certo** (`session.*`, `journey.*`, outro root). Um 422 mudo
+manda o autor adivinhar, e de fora não é óbvio para onde ir.
+
+⚠️ **Não fecha o buraco vizinho, e isso está escrito no código:** quem tem
+`config.masking` também escreve o `__global__` (mandando `tenant_id: null`) e de lá
+reescreve o `core` à vontade. É outra fronteira — quem pode editar o default da
+plataforma — e fechá-la de carona misturaria duas decisões.
+
+### Testes: 11 casos, e o par é que dá valor
+
+`test_reserved_core_root.py`. **C-1 × C-2** é o par: recusar o `core` de tenant só
+significa algo junto com a prova de que o tenant **continua escrevendo o que é dele** —
+um portão que recusasse tudo passaria em C-1 sozinho. C-3 guarda o seed da plataforma
+(recusá-lo quebraria o provisionamento), C-4 a fronteira de chave/namespace, e C-5
+parametriza payload torto: o portão roda **antes** do store, e se ele estourar num corpo
+não normalizado o 422 vira 500 — a recusa deixa de ser diagnosticável.
+
+**Prova ao vivo, com as três testemunhas:** o mesmo `PUT` que dava 200 agora dá **422**;
+o mesmo tenant escrevendo `session.card` segue **200**; a plataforma escrevendo `core`
+no global segue **200**.
+
+### Eu corrompi a config viva, e o gate pegou
+
+Ao provar a terceira testemunha, reescrevi o mapa global fazendo-o dar uma volta pelo
+shell — e o UTF-8 foi **duplo-codificado**: `—` virou `â€”` em três labels
+(`core.sentiment.category`, `session.cliente.customer_id`, `session.copilot.mode`).
+
+O `probe_context_map_audit` acusou, e acusou **bem**: com payload
+(`{"same":false,"nLive":94}`) em vez do vazio de antes — ou seja, o conserto do ramo B
+feito horas antes funcionou exatamente como desenhado, distinguindo *"não rodou"* de
+*"diverge"*. Reparado pela via oficial (`plughub-config-seed --overwrite`), que escreve
+de dentro do container sem passar pelo shell.
+
+**A lição fica:** provisionamento é pela API/CLI oficial, nunca por `curl` de ida e
+volta — o round-trip pelo shell do Windows não é neutro sobre UTF-8. É a invariante
+*"Provisioning only via official API"* ganhando um motivo a mais.
+
+
 ## 2026-09-01 — CNS-11: os 35 nomes do core migram para `core.*` (o commit único)
 
 ### O que mudou

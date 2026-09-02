@@ -185,6 +185,55 @@ async def list_all(
     })
 
 
+# ─── CNS-05 — o root `core.*` é RESERVADO à plataforma ───────────────────────
+
+#: Root do ContextStore que só a plataforma declara. A reserva inteira é este nome:
+#: um predicado, não uma lista de pastas — é o que a torna uma REGRA (um nome se
+#: explica sozinho) em vez de uma CONSULTA, e o que a impede de envelhecer quando
+#: nascer a próxima pasta do core.
+RESERVED_CONTEXT_ROOT = "core"
+
+
+def _reject_tenant_core_root(namespace: str, key: str, tenant_id, value) -> None:
+    """Recusa um `masking.context_map` de TENANT que declare o root `core`.
+
+    Até 2026-09-01 a reserva era decisão sem mecanismo, e isso foi MEDIDO, não
+    suposto: um `PUT` com `tenant_id` de tenant declarando `contexto.core.contact`
+    voltava **HTTP 200**, e a leitura de volta mostrava o dano maior — o override
+    SUBSTITUI a chave inteira, então aquele tenant passava a ter **1 folha no lugar
+    das 94** da plataforma. A invasão do `core` e o apagamento do mapa eram o mesmo
+    gesto.
+
+    Escopo deliberado: só o par (`masking`, `context_map`) e só quando há tenant. O
+    seed da plataforma escreve `core` no `__global__` e tem de continuar podendo —
+    é ele o dono do root.
+
+    ⚠️ **Isto NÃO fecha o buraco vizinho:** quem tem `config.masking` também pode
+    escrever o `__global__` (mandando `tenant_id: null`) e de lá reescrever o `core`
+    à vontade. É outra fronteira — a de quem pode editar o default da plataforma — e
+    fechá-la aqui, de carona, misturaria duas decisões. Fica registrado, não fingido.
+    """
+    if namespace != "masking" or key != "context_map":
+        return
+    if not tenant_id or tenant_id == "__global__":
+        return
+    if not isinstance(value, dict):
+        return
+    contexto = value.get("contexto")
+    if not isinstance(contexto, dict) or RESERVED_CONTEXT_ROOT not in contexto:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"root `{RESERVED_CONTEXT_ROOT}` é RESERVADO à plataforma e não pode ser "
+            f"declarado por tenant (tenant_id={tenant_id!r}). O que a plataforma escreve "
+            f"vive sob `core.*`; tudo o mais do ContextStore é do tenant — use "
+            f"`session.*` (4 h), `journey.*` (30 d) ou qualquer outro root, que cai no "
+            f"hash da sessão. Ver docs/product/contextstore-core-namespace-spec.md §2."
+        ),
+    )
+
+
 # ─── PUT /config/{namespace}/{key} ───────────────────────────────────────────
 
 @router.put("/{namespace}/{key}", dependencies=[Depends(_require_config_write)])
@@ -200,6 +249,7 @@ async def put_config(
     body.tenant_id = "xyz" → sets tenant-specific override.
     Publishes config.changed to Kafka after a successful write (fire-and-forget).
     """
+    _reject_tenant_core_root(namespace, key, body.tenant_id, body.value)
     store   = request.app.state.store
     emitter = request.app.state.emitter
     await store.set(
