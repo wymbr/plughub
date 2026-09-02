@@ -50,7 +50,8 @@
  */
 import { z }             from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { JourneyMergedEventSchema } from "@plughub/schemas"
+import { JourneyMergedEventSchema, stampContextEntry, type ContextEntryStamp } from "@plughub/schemas"
+import { getContextMap } from "../lib/context-map"
 import type { RedisClient }   from "../infra/redis"
 import type { KafkaProducer } from "../infra/kafka"
 import { verifySessionToken, InvalidTokenError } from "../infra/jwt"
@@ -157,26 +158,42 @@ export async function resolveJourneyRoot(
 }
 
 /**
- * J5a — roteamento de escrita de UMA tag de contexto.
+ * J5a + D9.6 — o CHOKE POINT de escrita de UMA tag de contexto.
  *
- * Uma tag `journey.*` NÃO pertence ao hash da sessão: pertence ao PROCESSO, que vive
- * além da sessão (TTL 30d) e é compartilhado por N contatos da mesma journey. Toda escrita
- * imperativa (`context_set` do skill-flow, `/api/inject-context` do supervisor) tem de rotear
- * por AQUI — senão a tag cai no hash da sessão, evapora em 4h e não é vista pelos outros
- * contatos, quebrando o `@ctx.journey.*` que a leitura (interpolate) já resolve.
+ * Faz DUAS coisas, e a segunda chegou na ALW-02 (2026-09-02):
+ *
+ *   1. **Roteia** — uma tag `journey.*` não pertence ao hash da sessão: pertence ao
+ *      PROCESSO, que vive além dela (TTL 30d) e é compartilhado por N contatos da mesma
+ *      journey. Cair no hash da sessão a faria evaporar em 4 h sem erro nenhum.
+ *   2. **Carimba o `atributo`** a partir do cadastro (`masking.context_map`). O escritor
+ *      não declara tipo — não tem o que errar —, e o dado guardado fica autodescritivo
+ *      para o snapshot durável (F5) e para export LGPD.
+ *
+ * ⚠️ **A assinatura recebe o OBJETO, nunca o JSON já serializado.** Foi assim que o
+ * carimbo deixou de ser evitável: com `entryJson: string` qualquer chamador podia
+ * serializar por fora e passar ao largo, e o furo seria mudo — que é exatamente o que a
+ * D9.6 avisa. Remover a alternativa custa menos que lembrar de não usá-la.
  *
  * Resolve a raiz canônica pela MESMA via que o bridge e o `journey_merge`: raiz de
- * proveniência = `core.contact.root_session_id` do ctx (o que o bridge carimba; fallback = a
- * própria sessão) → `resolveJourneyRoot` (find da componente na floresta de aliases).
- * `entryJson` já vem serializado — este helper só decide a CHAVE e o TTL, nunca o conteúdo.
+ * proveniência = `core.contact.root_session_id` do ctx (o que o bridge carimba; fallback =
+ * a própria sessão) → `resolveJourneyRoot` (find da componente na floresta de aliases).
+ *
+ * Degradação do carimbo é BOUNDED e barulhenta: `getContextMap` nunca levanta — cai no
+ * mapa embutido, loga o que deixa de valer, e o carimbo sai com `fallback: true`. A
+ * escrita acontece de qualquer jeito; recusá-la deixaria o ContextStore refém do
+ * config-api, o que é uma troca pior que carimbar com o mapa do código.
  */
 export async function writeContextTag(
   redis:     RedisClient,
   tenantId:  string,
   sessionId: string,
   tag:       string,
-  entryJson: string,
-): Promise<{ scope: "journey" | "session"; journeyRoot?: string }> {
+  entry:     Record<string, unknown>,
+): Promise<{ scope: "journey" | "session"; journeyRoot?: string; atributo: ContextEntryStamp }> {
+  const { index, fallback } = await getContextMap(tenantId)
+  const stamped   = stampContextEntry(entry, tag, index, fallback)
+  const entryJson = JSON.stringify(stamped)
+  const atributo  = stamped["atributo"] as ContextEntryStamp
   // CNS-03 — `core.journey.*` roteia igual a `journey.*`: o escopo de uma tag do core é
   // o SEGUNDO segmento. Terceira das três casas que roteiam por prefixo; as outras duas
   // são `sdk/context-store.ts` (TTL + chave) e `skill-flow-engine/interpolate.ts` (leitura).
@@ -195,11 +212,11 @@ export async function writeContextTag(
     await redis.hset(key, tag, entryJson)
     // TTL do processo (30d) — igual ao migrateJourneyContext do merge.
     await redis.expire(key, 30 * 24 * 3600)
-    return { scope: "journey", journeyRoot: canonicalRoot }
+    return { scope: "journey", journeyRoot: canonicalRoot, atributo }
   }
 
   await redis.hset(`${tenantId}:ctx:${sessionId}`, tag, entryJson)
-  return { scope: "session" }
+  return { scope: "session", atributo }
 }
 
 /**

@@ -915,13 +915,13 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
       try {
         const { session_id, tenant_id, tag, value, confidence, source, visibility } =
           ContextSetInputSchema.parse(input)
-        const entry = JSON.stringify({
+        const entry = {
           value:      String(value),
           confidence: confidence ?? 1.0,
           source:     source ?? "context_set",
           visibility: visibility ?? "agents_only",
           updated_at: new Date().toISOString(),
-        })
+        }
 
         // J5a — roteamento journey.* → hash do processo (raiz canônica, TTL 30d);
         // demais tags → hash da sessão. Lógica única em writeContextTag (journey.ts).

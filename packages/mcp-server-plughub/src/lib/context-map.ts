@@ -54,7 +54,7 @@ const CONFIG_API_URL = process.env["CONFIG_API_URL"] ?? "http://localhost:3600"
 
 // ── cache do mapa (mesmo TTL e mesmo motivo do de `context-masking.ts`) ───────
 const CONTEXT_MAP_CACHE_TTL_MS = 60_000
-interface CachedMap { map: ContextMap; index: ContextTagIndex; expiresAt: number }
+interface CachedMap { map: ContextMap; index: ContextTagIndex; fallback: boolean; expiresAt: number }
 const contextMapCache = new Map<string, CachedMap>()
 
 export function invalidateContextMapCache(tenantId: string): void {
@@ -69,11 +69,19 @@ export function invalidateContextMapCache(tenantId: string): void {
  * tipado: config malformada não pode virar comportamento novo, e `mode` fora do
  * enum (o caso que importa: alguém escrevendo `"enforce"` à mão) cai aqui.
  */
-export async function getContextMap(tenantId: string): Promise<{ map: ContextMap; index: ContextTagIndex }> {
+export async function getContextMap(
+  tenantId: string,
+): Promise<{ map: ContextMap; index: ContextTagIndex; fallback: boolean }> {
   const cached = contextMapCache.get(tenantId)
-  if (cached && cached.expiresAt > Date.now()) return { map: cached.map, index: cached.index }
+  if (cached && cached.expiresAt > Date.now()) {
+    return { map: cached.map, index: cached.index, fallback: cached.fallback }
+  }
 
   let map: ContextMap = DEFAULT_CONTEXT_MAP
+  // Desde a ALW-02 este booleano não é só diagnóstico: ele viaja para o CARIMBO da
+  // entrada (`atributo.fallback`), porque "o tipo que o tenant declarou" e "o tipo que
+  // o código trouxe" são dois fatos, e num export LGPD a diferença precisa sobreviver.
+  let fallback = false
   try {
     const base = CONFIG_API_URL.replace(/\/$/, "")
     const url  = `${base}/config/masking?tenant_id=${encodeURIComponent(tenantId)}`
@@ -90,17 +98,21 @@ export async function getContextMap(tenantId: string): Promise<{ map: ContextMap
     if (!parsed.success) throw new Error(`mapa inválido: ${parsed.error.issues.map(i => i.path.join(".")).join(", ")}`)
     map = parsed.data
   } catch (err) {
+    fallback = true
     console.warn(
       `[context-map] tenant=${tenantId} usando o mapa EMBUTIDO (${String(err)}). ` +
-      `Deixa de valer: a auditoria do ContextStore mede contra o default do código, ` +
+      `Deixa de valer: (1) a auditoria do ContextStore mede contra o default do código, ` +
       `não contra o mapa do tenant — aliases e campos declarados SÓ na config não ` +
-      `são reconhecidos e aparecem como não-declarados. Nenhuma máscara muda.`,
+      `são reconhecidos e aparecem como não-declarados; (2) desde a ALW-02, o CARIMBO ` +
+      `do atributo sai do mesmo mapa, então toda entrada escrita nesta janela leva ` +
+      `\`atributo.fallback: true\` — o tipo gravado é o que o código trouxe, não o que ` +
+      `o tenant declarou. Nenhuma máscara muda: o carimbo não é lido por política hoje.`,
     )
   }
 
   const index = buildContextTagIndex(map)
-  contextMapCache.set(tenantId, { map, index, expiresAt: Date.now() + CONTEXT_MAP_CACHE_TTL_MS })
-  return { map, index }
+  contextMapCache.set(tenantId, { map, index, fallback, expiresAt: Date.now() + CONTEXT_MAP_CACHE_TTL_MS })
+  return { map, index, fallback }
 }
 
 // ── classificação (pura) ──────────────────────────────────────────────────────

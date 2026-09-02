@@ -15,6 +15,7 @@ import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { resolveAgentTypeForSession } from "../lib/routing-ref"
+import { writeContextTag }    from "./journey"
 import type { Skill }         from "@plughub/schemas"
 
 /**
@@ -1109,17 +1110,20 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       // ── 3. Execute action ─────────────────────────────────────────────────
 
       if ("set_context" in action && redis) {
-        const ctxKey = `${parsed.tenant_id}:ctx:${parsed.session_id}`
+        // ALW-02 (2026-09-02) — passa pelo funil `writeContextTag` em vez de `hset` cru.
+        // Ganha as DUAS coisas que o funil faz, e a primeira era um defeito latente:
+        // um `@mention` com tag `journey.*` caía no hash da SESSÃO e evaporava em 4 h,
+        // silenciosamente, em vez de ir para o hash do processo (TTL 30d). A segunda é
+        // o carimbo do `atributo` (D9.6), que este sítio não tinha como fazer sozinho.
         for (const [tag, value] of Object.entries(action.set_context)) {
           try {
-            const entry = JSON.stringify({
+            await writeContextTag(redis, parsed.tenant_id, parsed.session_id, tag, {
               value,
               confidence: 1.0,
               source:     `mention_command:${parsed.command_name}`,
               visibility: "agents_only",
               updated_at: now,
             })
-            await redis.hset(ctxKey, tag, entry)
           } catch { /* non-fatal */ }
         }
       }

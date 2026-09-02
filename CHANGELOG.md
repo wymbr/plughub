@@ -1,5 +1,118 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-02 passo 1: o funil TS passa a CARIMBAR, e recebe o objeto para que o carimbo não seja evitável
+
+### A decisão, e o número que a produziu
+
+A ALW-02 é o choke point de escrita do ContextStore — pré-requisito da D9.6, em que **o
+escritor não declara tipo nenhum** e o caminho de escrita carimba o `atributo` a partir do
+cadastro. A pergunta de desenho era: **um funil ou dois?** O funil que existe
+(`writeContextTag`) é TypeScript, e 20 dos 21 sítios são Python.
+
+Três saídas estavam na mesa, e a medição decidiu:
+
+| | por quê |
+|---|---|
+| (a) gêmeo Python solto | duas implementações da mesma regra — o defeito que este arco persegue |
+| (b) Python chamando o funil por rede | 20 sítios de caminho quente ganhando salto, e o alvo seria a **3100**, que saiu da LAN ontem (CAP-13) justamente por servir transporte anônimo |
+| **(c) declaração compartilhada + duas implementações finas + gate comparativo** | **escolhida** |
+
+A **(c)** ficou barata por dois fatos que só apareceram ao medir:
+
+1. **Os dados já são neutros de linguagem.** O mapa viaja como JSON pelo config-api — não
+   há constante a espelhar. O que é só-TS são três funções puras, sem I/O:
+   `buildContextTagIndex` (14 linhas) + `resolveContextTag` (18) + `resolveContextStore`
+   (10). **~42 linhas**, e função pura é a única espécie que se cross-checa barato entre
+   duas linguagens.
+2. **A dependência nova já está quase toda paga.** O carimbo exige ler o mapa do
+   config-api; medido, quatro dos cinco serviços Python já falam com ele
+   (bridge 5 arquivos · gateway 8 · routing 10 · ai-gateway 6). O único que não fala é a
+   `evaluation-api` — e ela tem **1** sítio.
+
+### O que o passo 1 entrega
+
+**`stampContextEntry`** em `@plughub/schemas` (`context-map.ts`) — a metade **pura**, ao
+lado de `resolveContextTag`, porque é ela que o gêmeo Python vai espelhar e o gate
+comparar. O carimbo é **um objeto só**:
+
+```
+"atributo": { "tipo": "cpf_br", "origem": "alias", "canonica": "session.cliente.cpf" }
+```
+
+**`writeContextTag`** passou a receber o **objeto**, nunca o JSON já serializado. Não é
+estilo: com `entryJson: string` qualquer chamador podia serializar por fora e passar ao
+largo do carimbo, e o furo seria mudo — exatamente o que a D9.6 avisa. *Remover a
+alternativa custa menos que lembrar de não usá-la* — a mesma forma do ramo que saiu
+inteiro no portão grant-first, em vez de virar flag por regra.
+
+**`tools/bpm.ts` entrou no funil**, e o `hset` cru que ele tinha escondia um **defeito
+latente**: um `@mention` com `set_context` de tag `journey.*` caía no hash da SESSÃO e
+evaporava em 4 h, em vez de ir para o hash do processo (TTL 30 d). Rotear pelo funil
+consertou isso de carona.
+
+### Três propriedades que o desenho compra, e nenhuma é decorativa
+
+- **`atributo` ausente significa "não passou pelo funil"** — e é por isso que `dynamic` e
+  `unknown` também carimbam, mesmo sem tipo a declarar. Se não carimbassem, a entrada de
+  uma tag não cadastrada ficaria byte a byte igual à de um `HSET` direto, e o furo que a
+  D9.6 chama de silencioso continuaria silencioso, agora com a aparência de cobertura.
+  **É este campo que mede se o choke point está completo.**
+- **`fallback: true`** quando o mapa veio embutido (config-api fora). A escrita acontece de
+  qualquer jeito — recusá-la deixaria o ContextStore refém da config —, mas *"o tipo que o
+  tenant declarou"* e *"o tipo que o código trouxe"* são dois fatos, e num export LGPD a
+  diferença precisa sobreviver. **Ausente, nunca `false`**: a entrada vai para toda folha
+  de todo hash de ctx.
+- **O aviso de degradação foi reescrito** para nomear o que o carimbo acrescenta. O texto
+  antigo terminava em *"Nenhuma máscara muda"*, verdadeiro antes e enganoso depois — o
+  mapa agora alimenta o carimbo. Comentário que promete o que o mecanismo não honra é a
+  família de `participation_intervals`.
+
+### Departura declarada da regra de língua
+
+`atributo`/`tipo`/`origem`/`canonica` são português. O MAPA já é
+(`contexto.escopo.dominio.campo`, com `tipo`/`legado`) e o valor de `tipo` vem verbatim de
+lá; nomear o destino diferente da fonte convida a pergunta *"são o mesmo fato?"*. Dívida do
+vocabulário do mapa, não nova — declarada no cabeçalho da função para não passar por
+descuido.
+
+### Gates
+
+- `packages/schemas/src/context-map.stamp.test.ts` — 10 casos, **5/5 mutações pegas**. Dois
+  carregam o peso: **a ordem canônica-antes-de-alias** (o único ramo em que um gêmeo
+  razoável diverge sem parecer errado — consultar o alias primeiro deixa uma canônica ser
+  sombreada por grafia legada, com máscara diferente e nada vermelho) e **a ausência
+  distinguível**.
+- `packages/mcp-server-plughub/src/__tests__/context-tag-funnel.test.ts` — 6 casos, **4/4
+  mutações pegas**. O caso que carrega o peso é `journey.*` carimbada: são dois `hset` em
+  ramos diferentes, e carimbar só um deixaria metade do ContextStore sem selo.
+- `infra/test/probe_ctx_writer_census.sh` — piso **8/22 → 7/21**, com o motivo nomeado, e
+  `bpm.ts` movido para a lista de chamadores do funil.
+
+Suítes: schemas 187/187 · mcp-server 253/253 · `tsc --noEmit` limpo nos dois.
+
+### Duas imprecisões do instrumento, agora escritas
+
+Nenhuma move o número hoje; as duas movem se alguém mexer perto, e imprecisão silenciosa
+num instrumento que dimensiona trabalho é a família do teste que não pode reprovar.
+
+1. **Um falso positivo, na direção declarada.** `sentiment_emitter.py:163` escreve em
+   `{tenant}:pool:{p}:sentiment_live`, não no ctx — entra porque o índice de atribuições é
+   de escopo de ARQUIVO e pega a última `key =`. É o erro para o lado de INCLUIR que o
+   critério assume; primeiro caso confirmado. **21 contados, 20 a rotear.**
+2. **O varredor de TS não resolve variável** e por isso vê 1 dos 2 `hset` de ctx do funil.
+   Por critério o helper conta uma vez, então o número está certo — mas chega ao certo por
+   sorte, não pela regra. Um terceiro `hset` literal dentro do funil faria o gate acusar
+   "escritor novo" sobre o próprio choke point.
+
+### Bancada
+
+Um `RC=0` com `error TS2345` impresso na tela quase virou verde. A causa não era o `npx`:
+era o aninhamento de aspas Git Bash → `wsl bash` → `docker sh`, que comia o `$?`. **Prova
+por script em arquivo**: com o erro introduzido, `RC=1`; restaurado, `RC=0`. Fica a regra
+já conhecida, agora com uma terceira ocorrência: *nesta bancada, veredicto sai de script em
+arquivo, nunca de comando aninhado em três camadas de aspas.*
+
+
 ## 2026-09-02 — CNS-18: a causa era o `stdout`, e eu publiquei duas causas erradas antes
 
 ### O A/B que fecha a questão

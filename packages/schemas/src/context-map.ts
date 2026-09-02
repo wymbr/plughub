@@ -552,6 +552,65 @@ export function resolveContextTag(tag: string, index: ContextTagIndex): ContextT
 }
 
 // ─────────────────────────────────────────────
+// Carimbo do atributo (D9.6) — a metade PURA do choke point de escrita
+// ─────────────────────────────────────────────
+
+/**
+ * O carimbo que uma entrada do ContextStore carrega depois de passar pelo funil.
+ *
+ * `atributo` AUSENTE numa entrada significa uma coisa só: **ela não passou pelo funil**.
+ * É por isso que `dynamic` e `unknown` também carimbam — sem eles, a entrada de uma tag
+ * não cadastrada ficaria byte a byte igual à de um `HSET` direto, e o furo que a D9.6
+ * chama de silencioso continuaria silencioso, agora com a aparência de cobertura.
+ */
+export interface ContextEntryStamp {
+  /** Tipo do catálogo. Ausente em `dynamic`/`unknown` — não há folha que o declare. */
+  tipo?:     string
+  origem:    ContextTagOrigin
+  /** Só em `alias`: o nome canônico. O valor fica gravado sob a grafia legada. */
+  canonica?: string
+  /**
+   * Só quando o mapa usado foi o EMBUTIDO (config-api inalcançável). O carimbo continua
+   * acontecendo — recusar deixaria a escrita refém da config —, mas deixa de afirmar o
+   * que o TENANT declarou, e num export LGPD essa distinção precisa sobreviver.
+   * Ausente, nunca `false`: a entrada vai para toda folha de todo hash de ctx.
+   */
+  fallback?: true
+}
+
+/**
+ * Carimba o `atributo` numa entrada do ContextStore a partir do cadastro (D9.6).
+ *
+ * ⚠️ **Esta função é ESPELHADA em Python** (ALW-02 passo 2) e um gate compara as duas
+ * saídas. Ela é pura e sem I/O exatamente por isso: função pura é a única espécie que se
+ * cross-checa barato entre duas linguagens. Qualquer mudança aqui move o gate junto.
+ *
+ * ⚠️ **Departura declarada da regra de língua** (`CLAUDE.md` § Language Rule): os nomes
+ * `atributo`/`tipo`/`origem`/`canonica` são português porque o MAPA já é
+ * (`contexto.escopo.dominio.campo` com `tipo`/`legado`), e o valor de `tipo` vem verbatim
+ * de lá. Nomear o destino diferente da fonte convida a pergunta *"são o mesmo fato?"*,
+ * que é o custo que esta linha compra para evitar. Dívida do vocabulário do mapa, não nova.
+ *
+ * Nunca muta a entrada recebida — o escritor reusa o objeto num `mapping=` de N tags, e
+ * mutar faria a segunda herdar o carimbo da primeira.
+ */
+export function stampContextEntry(
+  entry:         Record<string, unknown>,
+  tag:           string,
+  index:         ContextTagIndex,
+  mapIsFallback: boolean,
+): Record<string, unknown> {
+  const r = resolveContextTag(tag, index)
+
+  const atributo: ContextEntryStamp = { origem: r.origin }
+  if (r.tipo !== undefined)      atributo.tipo     = r.tipo
+  if (r.origin === "alias")      atributo.canonica = r.canonical
+  if (mapIsFallback)             atributo.fallback = true
+
+  return { ...entry, atributo }
+}
+
+// ─────────────────────────────────────────────
 // Oráculo do mapa
 // ─────────────────────────────────────────────
 

@@ -218,6 +218,18 @@ de produção, helper contado UMA vez): **8 arquivos · 22 sítios**.
 censo os listar. A tarefa deixa de ser *"construir um choke point"* e passa a ser
 **"estender o que já está lá para o Python e rotear os 21 sítios restantes"**.
 
+> ✅ **PASSO 1 EXECUTADO em 2026-09-02, e o número virou 7/21.** `tools/bpm.ts` saiu do
+> `hset` cru e entrou no funil; com ele veio de carona um defeito latente (um `@mention`
+> com tag `journey.*` caía no hash da SESSÃO e evaporava em 4 h). O funil também mudou de
+> natureza: ele prometia no docstring *"só decide a CHAVE e o TTL, nunca o conteúdo"* e
+> agora **carimba o `atributo`** (D9.6). E passou a receber o **objeto**, nunca o JSON já
+> serializado — com `entryJson: string` qualquer chamador podia serializar por fora e
+> passar ao largo do carimbo, mudo. Detalhe e gates no `CHANGELOG.md` de 2026-09-02.
+>
+> ⚠️ **21 contados, 20 a rotear.** `sentiment_emitter.py:163` escreve em
+> `{tenant}:pool:{p}:sentiment_live`, não no ctx — é o erro para o lado de INCLUIR que o
+> critério do censo assume, e o primeiro caso confirmado.
+
 ⚠️ **O oráculo e o instrumento divergem de propósito, e a divergência é a informação.** O
 censo de cadastro lista 9 arquivos porque precisa varrer os NOMES das tags, e o nome está
 literal no chamador; o censo de escritores lista 8 porque conta PONTOS a rotear. Cada
@@ -886,8 +898,16 @@ declarado no read* e passa a ser sobre *tag não cadastrada no publish*.
 
 #### Decisões que esta emenda deixa ABERTAS
 
-1. **O choke point de escrita** — desenho e migração dos 12 `HSET` diretos. É o pré-requisito
-   do carimbo (D9.6) e o item de maior esforço.
+1. ~~**O choke point de escrita** — desenho e migração dos 12 `HSET` diretos.~~
+   **DESENHO DECIDIDO em 2026-09-02** (ALW-02); a migração segue aberta. A pergunta era *um
+   funil ou dois?* — o funil que existe é TS e 20 dos 21 sítios são Python. Escolhida a
+   **declaração pura compartilhada + duas implementações finas + gate comparativo**, e a
+   medição é o que a tornou barata: o mapa **já viaja como JSON** pelo config-api (nada a
+   espelhar; só ~42 linhas de função pura precisam de gêmeo), e **4 dos 5 serviços Python
+   já falam com o config-api** — o único que não fala tem 1 sítio. As duas alternativas
+   caíram por medição: gêmeo solto reintroduz a cópia divergente que este arco persegue, e
+   chamar o funil por rede poria 20 sítios de caminho quente contra a porta 3100, que saiu
+   da LAN em 2026-09-01 (CAP-13) por servir transporte anônimo.
 2. **Onde mora a tela de cadastro** — e a fricção que ela cria: campo novo passa a exigir
    registro. É a *feature*, e é também o que faz gente contornar. O erro de publish precisa
    dizer exatamente o que registrar, e o cadastro precisa morar onde o autor já está.

@@ -25,13 +25,16 @@
 #   + journey.ts   o instrumento acha, o oráculo não: é o `writeContextTag`, o FUNIL
 #                  que já existe. Contá-lo é o que revela que a ALW-02 não é "construir
 #                  um choke point", é "estender o que já está lá".
-#   − server.ts    o oráculo lista, o instrumento não: ambos IMPORTAM e chamam
+#   − server.ts    o oráculo lista, o instrumento não: os TRÊS importam e chamam
 #   − session.ts   `writeContextTag`. São chamadores do funil, não escritores diretos —
-#                  e o critério diz que o helper conta UMA vez, no helper.
+#   − bpm.ts       e o critério diz que o helper conta UMA vez, no helper.
+#                  (`bpm.ts` entrou nesta lista em 2026-09-02, no passo 1 da ALW-02.)
 #
-# Um quarto item em qualquer direção significa que alguém escreveu no ContextStore por
+# Um item a mais em qualquer direção significa que alguém escreveu no ContextStore por
 # um caminho novo, ou que o funil ganhou/perdeu um cliente. Nos dois casos, a ALW-02
-# mudou de tamanho e alguém precisa saber.
+# mudou de tamanho e alguém precisa saber. Enquanto a migração corre, o esperado é o
+# instrumento ENCOLHER e o oráculo CRESCER, sítio a sítio — e cada passo baixa o piso
+# aqui, nomeando quem saiu.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 
@@ -42,8 +45,12 @@ huh() { echo "  ? $1"; FAIL=2; }
 
 #: Piso, não alvo. Baixar exige explicar o que saiu; subir sem explicar é escritor novo
 #: entrando sem passar pela decisão da ALW-02.
-PISO_ARQUIVOS=8
-PISO_SITIOS=22
+#:
+#: 8/22 → 7/21 em 2026-09-02 (ALW-02 passo 1): `tools/bpm.ts` deixou de fazer `hset` cru
+#: no ctx e passou a chamar `writeContextTag`. Saiu do instrumento e entrou no oráculo,
+#: como os outros dois chamadores do funil.
+PISO_ARQUIVOS=7
+PISO_SITIOS=21
 
 echo "=== probe_ctx_writer_census — CNS-06 (dimensiona a ALW-02) ==="
 echo
@@ -80,6 +87,7 @@ INST_ONLY=$(printf '%s' "$OUT" | sed -n 's/^     + //p' | sort)
 ORAC_ONLY=$(printf '%s' "$OUT" | sed -n 's/^     - //p' | sort)
 ESPERADO_INST="packages/mcp-server-plughub/src/tools/journey.ts"
 ESPERADO_ORAC="packages/mcp-server-plughub/src/server.ts
+packages/mcp-server-plughub/src/tools/bpm.ts
 packages/mcp-server-plughub/src/tools/session.ts"
 if [ "$INST_ONLY" = "$ESPERADO_INST" ]; then
   ok "C: so-no-instrumento e o FUNIL esperado (writeContextTag)"
@@ -87,9 +95,9 @@ else
   bad "C: so-no-instrumento mudou — esperado o funil, veio: $(echo $INST_ONLY)"
 fi
 if [ "$ORAC_ONLY" = "$ESPERADO_ORAC" ]; then
-  ok "C: so-no-oraculo sao os dois CHAMADORES do funil"
+  ok "C: so-no-oraculo sao os CHAMADORES do funil"
 else
-  bad "C: so-no-oraculo mudou — esperados server.ts e session.ts, veio: $(echo $ORAC_ONLY)"
+  bad "C: so-no-oraculo mudou — esperados server/bpm/session.ts, veio: $(echo $ORAC_ONLY)"
 fi
 
 # D — testemunha NEGATIVA: hash que nao e ContextStore fica de fora.

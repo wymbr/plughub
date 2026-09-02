@@ -104,6 +104,7 @@ export {
   DEFAULT_CONTEXT_MAP,
   buildContextTagIndex,
   resolveContextTag,
+  stampContextEntry,
   verifyContextMap,
   contextVisibilityOptions,
 } from "./context-map"
@@ -116,6 +117,7 @@ export type {
   ContextTagOrigin,
   ContextTagResolution,
   ContextTagIndex,
+  ContextEntryStamp,
   ContextMapVerification,
   ContextVisibilityOptions,
   ContextVisibilityNamespaceOption,

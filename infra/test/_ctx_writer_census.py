@@ -35,6 +35,26 @@ confusão: **arquivos** diz quantos módulos abrir; **sítios** diz quantas edi�
 3. **Convenção de nome.** `ctx_key` em Python × `ctxKey` em TS; exigir uma só perdia
    `bpm.ts` inteiro. Daí o casamento case-insensitive.
 
+── Duas imprecisões CONHECIDAS, medidas em 2026-09-02 no passo 1 da ALW-02 ───
+
+Nenhuma das duas move o número hoje, e as duas movem se alguém mexer perto. Ficam
+escritas porque uma imprecisão silenciosa num instrumento que dimensiona trabalho é a
+mesma família do teste que não pode reprovar.
+
+1. **Um falso positivo, na direção declarada.** `sentiment_emitter.py:163` escreve em
+   `{tenant}:pool:{p}:sentiment_live`, não no ctx. Entra porque o índice de atribuições é
+   de escopo de ARQUIVO e pega a ÚLTIMA `key =` (a `:218`, do ctx). É exatamente o erro
+   para o lado de INCLUIR que o critério assume — primeiro caso confirmado. Logo: **21
+   contados, 20 a rotear.**
+
+2. **O varredor de TS não resolve variável, e por isso vê 1 dos 2 `hset` de ctx do
+   funil.** `writeContextTag` tem dois — o do ramo journey usa a variável `key` (que não
+   casa o marcador) e o do ramo sessão tem a chave literal. Por CRITÉRIO o helper conta
+   UMA vez, então o número está certo; ele chega ao certo por sorte, não pela regra. Um
+   terceiro `hset` com chave literal dentro do funil faria o gate acusar "escritor novo"
+   sobre código que é o próprio choke point. Consertar exige índice de atribuições em TS,
+   que hoje não se paga: o Python tem 20 dos 21 sítios.
+
 ── Instrumento × oráculo ─────────────────────────────────────────────────────
 
 Este arquivo é o INSTRUMENTO. O ORÁCULO é a lista `ESCRITORES` de
