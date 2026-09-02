@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — CNS-12: o seed nunca reescreveu nada; era o instrumento que corrompia
+
+### A acusação, e a causa raiz
+
+O `probe_seed_drift_named` reprovava dois ramos, e o **E** acusava o produto do pior
+jeito possível: *"o seed REESCREVEU a key divergente"* — justamente a única decisão que
+a D7 faz questão de não tomar (consertar sozinho).
+
+Lido o código, o seed está **correto**: com `not overwrite` e a entrada existindo, ele
+loga e faz `continue`, sem escrever. Então a falha estava na medição — e a causa raiz é
+uma linha que aparece em **26 arquivos** de `infra/test/`:
+
+```
+curl … | python3 -c 'json.load(sys.stdin)'
+```
+
+**No Windows, `sys.stdin` decodifica com cp1252, não UTF-8.** Os bytes chegam corretos do
+curl e são destruídos **na leitura**, antes de qualquer escrita. Medido: 321 bytes via
+variável de shell contra 325 direto, e **cada ciclo empilha outra camada** de
+duplo-encoding — o rótulo `Reunião` chegou a ter dezenas.
+
+O efeito no gate era circular: o probe gravava um valor, lia de volta o que ele mesmo
+corrompera, comparava com o que **pensava** ter escrito, e chamava a diferença de
+*"o seed reescreveu"*. Pior — cada rodada corrompia a cobaia **de verdade**, e a
+"restauração" do `trap` devolvia o dado estragado parecendo intacto.
+
+### O conserto, em duas camadas
+
+1. **`sys.stdin.buffer`** em vez de `sys.stdin` — entrega bytes e deixa o `json`
+   decodificar em UTF-8, sem depender de env. É a causa raiz.
+2. **O JSON não passa mais por variável de shell**: snapshot, mutação e PUT viajam por
+   ARQUIVO (`--data-binary @file`), e a comparação do ramo E acontece **dentro do
+   python**, contra o arquivo enviado. Verificado que o caminho por arquivo preserva
+   acento (`Ação` volta íntegro).
+
+**Resultado: OK, todos os oito ramos verdes** — *"divergência contada, nomeada nas duas
+direções, e não consertada em silêncio"*. O ramo C, que antes cobrava
+`DIFEREM=1 [intervalo.label]` e recebia `DIFEREM=2 [intervalo.label, reuniao.label]`,
+fecha: o segundo item era o rótulo corrompido, não uma divergência real.
+
+### Duas coisas que eu devo dizer
+
+**Eu também corrompi o store hoje**, três vezes, pelo mesmo mecanismo — duas vezes o
+`masking.context_map` (reparado no mesmo dia, e o gate do mapa foi quem pegou) e várias o
+`agent_activity.pause_reasons`. Todas reparadas por `plughub-config-seed --overwrite`, que
+escreve de dentro do container e não passa pelo shell. Conferido ao fim: os cinco rótulos
+da cobaia íntegros (`Almoço`, `Reunião`).
+
+**E o padrão está em 26 arquivos**, com dois riscos de tamanhos diferentes: quem só lê e
+compara pode dar **veredicto falso** sobre dado acentuado; quem lê-altera-grava **corrompe
+o store**. Só o segundo é urgente, e só este probe fazia isso — registrado como CNS-17.
+
+
 ## 2026-09-01 — CNS-08: o mapa do ContextStore ganha tela, e a porta perigosa fecha
 
 ### A pergunta do dono reescreveu a tarefa

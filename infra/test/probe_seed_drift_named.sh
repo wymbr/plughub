@@ -64,6 +64,25 @@ CONTAINER="${CONFIG_CONTAINER:-plughub-demo-config-api-1}"
 export MSYS_NO_PATHCONV=1
 IN_CONTAINER="/app/packages/config-api/src/plughub_config_api"
 
+# ⚠️ O JSON da cobaia NAO passa por variavel de shell, e isto e conserto medido
+# (2026-09-02). O valor tem acento (`Almoco`, `Reuniao`), e nesta bancada a ida-e-volta
+# por variavel DUPLO-CODIFICA o UTF-8: medido 321 bytes via shell contra 325 direto, e
+# cada ciclo empilha mais uma camada. O efeito no gate era o pior possivel — o ramo E
+# comparava o gravado com o que ele PENSAVA ter escrito, nunca batia, e publicava
+# "o seed REESCREVEU a key divergente": acusacao ao PRODUTO por defeito da BANCADA,
+# e justamente sobre a unica decisao que esta ADR faz questao de nao tomar (consertar
+# sozinho). Pior: cada rodada corrompia a cobaia de verdade.
+SNAP_F="$(cd "$(dirname "$0")" && pwd)/.seed_drift_snapshot.json"
+MUT_F="$(cd "$(dirname "$0")" && pwd)/.seed_drift_mutated.json"
+export SNAP_F MUT_F
+
+# ⚠️ E a segunda metade do mesmo defeito, que era a CAUSA RAIZ: no Windows o
+# `sys.stdin` do python decodifica com **cp1252**, nao UTF-8. Entao `curl | python3 -c
+# 'json.load(sys.stdin)'` recebia bytes CORRETOS e os destruia na LEITURA — antes de
+# qualquer escrita. Por isso o snapshot ja nascia corrompido e a restauracao devolvia
+# a cobaia estragada, parecendo intacta. Todo `json.load` aqui le de `sys.stdin.buffer`,
+# que entrega bytes e deixa o json decodificar em UTF-8 — sem depender de env.
+
 # Key-cobaia: lista de dicts com `id`, sem consumidor critico, restaurada no fim.
 PROBE_NS="agent_activity"
 PROBE_KEY="pause_reasons"
@@ -81,14 +100,17 @@ echo "=== probe_seed_drift_named — D7 do arco ALLOWLIST ==="
 
 SNAPSHOT=""
 restore() {
-  if [ -n "$SNAPSHOT" ]; then
+  # Restaura do ARQUIVO, nunca de variavel: o snapshot tem acento e a volta pelo shell
+  # duplo-codifica (ver o comentario de SNAP_F). Restauracao corrompida e pior que
+  # nenhuma — devolve a cobaia parecendo intacta, com o dado estragado.
+  if [ -s "$SNAP_F" ]; then
     curl -sS -o /dev/null -X PUT \
       -H "X-Admin-Token: $CONFIG_TOKEN" -H 'Content-Type: application/json' \
       "$CONFIG_API/config/$PROBE_NS/$PROBE_KEY" \
-      -d "{\"tenant_id\": null, \"value\": $SNAPSHOT, \"description\": \"restaurado por probe_seed_drift_named\"}" \
-      2>/dev/null
+      --data-binary "@$SNAP_F" 2>/dev/null
     echo "  (cobaia $PROBE_NS.$PROBE_KEY restaurada)"
   fi
+  rm -f "$SNAP_F" "$MUT_F"
 }
 trap restore EXIT
 
@@ -128,20 +150,21 @@ else
   # `?tenant_id=` e OBRIGATORIO neste GET (422 sem ele) — omiti-lo faz o ramo sair
   # INCONCLUSIVO parecendo "servico fora do ar". E a mesma pegadinha ja registrada
   # no CLAUDE.md sobre a leitura de config falhar em camadas de aparencia igual.
-  SNAPSHOT=$(curl -sS --max-time 10 "$CONFIG_API/config/$PROBE_NS/$PROBE_KEY?tenant_id=__global__" 2>/dev/null \
-    | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin)["value"]))' 2>/dev/null)
-  if [ -z "$SNAPSHOT" ] || [ "$SNAPSHOT" = "null" ]; then
+  curl -sS --max-time 10 "$CONFIG_API/config/$PROBE_NS/$PROBE_KEY?tenant_id=__global__" 2>/dev/null \
+    | python3 -c 'import sys,json,io,os;json.dump({"tenant_id":None,"value":json.load(sys.stdin.buffer)["value"],"description":"restaurado por probe_seed_drift_named"},io.open(os.environ["SNAP_F"],"w",encoding="utf-8"),ensure_ascii=False)' 2>/dev/null
+  SNAPSHOT=$([ -s "$SNAP_F" ] && echo ok)
+  if [ -z "$SNAPSHOT" ]; then
     huh "B-E: nao consegui ler $PROBE_NS.$PROBE_KEY em $CONFIG_API"
   else
     # A injecao produz as TRES formas de divergencia de uma vez:
     #   · `almoco` sai           → so no DECLARADO
     #   · `probe_drift` entra    → so no GRAVADO  (a direcao destrutiva)
     #   · `intervalo.label` muda → DIFEREM
-    MUTATED=$(printf '%s' "$SNAPSHOT" | python3 "infra/test/_seed_drift_mutate.py")
+    python3 -c 'import json,io,os,subprocess,sys;snap=json.load(io.open(os.environ["SNAP_F"],encoding="utf-8"))["value"];r=subprocess.run([sys.executable,"infra/test/_seed_drift_mutate.py"],input=json.dumps(snap),capture_output=True,text=True,encoding="utf-8");json.dump({"tenant_id":None,"value":json.loads(r.stdout),"description":"injetado por probe_seed_drift_named"},io.open(os.environ["MUT_F"],"w",encoding="utf-8"),ensure_ascii=False)'
     code=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
       -H "X-Admin-Token: $CONFIG_TOKEN" -H 'Content-Type: application/json' \
       "$CONFIG_API/config/$PROBE_NS/$PROBE_KEY" \
-      -d "{\"tenant_id\": null, \"value\": $MUTATED, \"description\": \"injetado por probe_seed_drift_named\"}" 2>/dev/null)
+      --data-binary "@$MUT_F" 2>/dev/null)
     if [ "$code" != "200" ]; then
       huh "B-E: PUT da divergencia devolveu $code (token?)"
     else
@@ -190,10 +213,12 @@ else
       fi
 
       # E — NAO CURA
-      AFTER=$(curl -sS --max-time 10 "$CONFIG_API/config/$PROBE_NS/$PROBE_KEY?tenant_id=__global__" 2>/dev/null \
-        | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin)["value"],sort_keys=True))' 2>/dev/null)
-      EXPECT=$(printf '%s' "$MUTATED" | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin),sort_keys=True))')
-      if [ "$AFTER" = "$EXPECT" ]; then
+      # A comparacao acontece DENTRO do python, contra o arquivo que foi enviado —
+      # nunca entre duas variaveis de shell. Era ali que o UTF-8 se perdia e o ramo
+      # acusava o produto por um estrago da bancada.
+      VEREDICTO=$(curl -sS --max-time 10 "$CONFIG_API/config/$PROBE_NS/$PROBE_KEY?tenant_id=__global__" 2>/dev/null \
+        | python3 -c 'import sys,json,io,os;esperado=json.load(io.open(os.environ["MUT_F"],encoding="utf-8"))["value"];gravado=json.load(sys.stdin.buffer)["value"];print("IGUAL" if json.dumps(gravado,sort_keys=True,ensure_ascii=False)==json.dumps(esperado,sort_keys=True,ensure_ascii=False) else "DIFERE")' 2>/dev/null)
+      if [ "$VEREDICTO" = "IGUAL" ]; then
         ok "E: o valor gravado segue INTACTO — o seed nomeia, nao conserta"
       else
         bad "E: o seed REESCREVEU a key divergente — conserto automatico nao e a decisao desta ADR"
