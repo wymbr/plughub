@@ -68,15 +68,30 @@ defensável, não veredicto.
 Os dois maiores skills de atendimento (`skill_atendimento_sac_v1`, `skill_atendimento_auth_v1`)
 e o `agente_fila_v1` **não tocam** o ContextStore.
 
-### 1.2 Inventário de skills
+### 1.2 Inventário de skills — medido AO VIVO (CNS-01, 2026-09-01)
 
-**42 arquivos · 33 declarados em algum pool · 9 órfãos.** Dos 9 órfãos, **7 sem citação nenhuma**
-em `infra/test`, `packages/e2e-tests` ou `infra/scripts`. As duas exceções:
-`skill_reembolso_demo_v1` (usado por `infra/test/gate_external_resume.sh`) e
-`skill_survey_outbound_v1` (só num README).
+> ⚠️ **A versão anterior desta seção vinha do YAML e estava errada nas duas metades.** Ela
+> dizia *"33 declarados em algum pool · 9 órfãos"* e *"3 pools apontam para skill sem
+> arquivo"*. Consultado o agent-registry vivo (36 pools, campos `deployed_skill_id` /
+> `webhook_skill_id` / `queue_config.skill_id`): são **30 com deploy vivo e 12 sem**, e os
+> **3 pools fantasma NÃO EXISTEM** — eram referência de YAML que nunca virou deploy. É a
+> regra da casa se cobrando: *"para deploy, pergunte ao agent-registry, NUNCA ao YAML"*.
 
-**3 pools apontam para skill sem arquivo**: `skill_survey_v1`, `skill_survey_nps_v1`,
-`skill_survey_reconnect_v1`.
+**42 arquivos · 30 com deploy vivo · 12 sem.** E *"sem deploy"* **não é sinônimo de morto** —
+classificando os 12 por quem os cita (varredura completa em `packages/`, `infra/`, `scripts/`,
+não só nos diretórios de teste):
+
+| classe | n | quais |
+|---|---|---|
+| citado por **código vivo** | 4 | `revisao_treplica_v1` (6 sítios: `journey.ts`, evaluation-api, `CampaignsPage`, i18n) · `survey_outbound_v1` (3) · `scheduled_deploy_v1` (2) · `survey_trigger_v1` (1) |
+| **desenho encenado** (Fase 2 declarada no próprio cabeçalho) | 2 | `atendimento_portabilidade_v1` · `atendimento_reembolso_v1` |
+| citado por **teste** | 2 | `reembolso_demo_v1` (`gate_external_resume.sh`) · `survey_runner_v1` |
+| citação só **histórica** (migration SQL, script de migração) | 3 | `pre_revisao_v1` · `revisao_v1` · `wrapup_v1` |
+| **sem citação funcional** | 1 | `journey_demo_v1` (só um comentário noutro skill) |
+
+**Conclusão: apagar em bloco não é ação segura, e a premissa da CNS-01 caiu.** Dos 12, **um**
+é inequivocamente descartável. Os outros 11 têm razão — e a razão é diferente em cada balde,
+então a decisão é caso a caso, não varredura.
 
 ### 1.3 Quem escreve o quê
 

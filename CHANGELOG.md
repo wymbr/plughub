@@ -1,5 +1,50 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-01 — CNS-01: o inventário de skills, medido ao vivo — e a tarefa era falsa
+
+### As duas metades da tarefa caíram na medição
+
+A CNS-01 dizia: *"apagar os 7 órfãos sem citação e resolver os 3 pools apontando para
+skill sem arquivo"*. Consultado o **agent-registry vivo** (36 pools, campos
+`deployed_skill_id` / `webhook_skill_id` / `queue_config.skill_id`):
+
+* **os 3 pools fantasma NÃO EXISTEM.** `skill_survey_v1`, `skill_survey_nps_v1` e
+  `skill_survey_reconnect_v1` são referência de **YAML** que nunca virou deploy. Não há
+  nada a resolver.
+* **não são 9 órfãos, são 12 sem deploy** — e três deles eu contava como ativos, entre
+  eles o `agente_wrapup_v1`.
+
+É a regra da casa se cobrando de mim: *"para deploy, pergunte ao agent-registry, NUNCA ao
+YAML"*. Os números anteriores eram a **declaração**; o YAML é seed-if-absent.
+
+### E "sem deploy" não é sinônimo de morto
+
+A premissa de apagar vinha de um `grep` estreito — só `infra/test`, `packages/e2e-tests` e
+`infra/scripts`. Varrendo `packages/`, `infra/` e `scripts/` inteiros, os 12 se separam:
+
+| classe | n |
+|---|---|
+| citado por **código vivo** | **4** — `revisao_treplica_v1` (6 sítios), `survey_outbound_v1` (3), `scheduled_deploy_v1` (2), `survey_trigger_v1` (1) |
+| **desenho encenado** — Fase 2 declarada no próprio cabeçalho | 2 |
+| citado por **teste** | 2 |
+| citação só **histórica** (migration SQL, script de migração) | 3 |
+| **sem citação funcional** | **1** |
+
+**Dos 12, um é inequivocamente descartável.** Os outros 11 têm razão, e a razão é
+diferente em cada balde — logo a decisão é caso a caso, nunca varredura.
+
+### O que foi entregue, já que apagar não era
+
+**Nada foi apagado.** A entrega é o inventário classificado, na §1.2 da spec, substituindo
+os números do YAML que estavam lá. O valor está em não pagar essa medição duas vezes — e
+em não ter apagado quatro skills que o código chama.
+
+⚠️ Nota sobre o balde do *desenho encenado*: `skill_atendimento_portabilidade_v1` e
+`skill_atendimento_reembolso_v1` se descrevem, no próprio cabeçalho, como orquestradores
+**Tier 2 da Fase 2**. Apagá-los por "não está deployado" jogaria fora trabalho encenado de
+propósito. Não-deployado e abandonado são estados diferentes, e só o segundo se apaga.
+
+
 ## 2026-09-01 — CNS-05: a reserva do `core.*` deixa de ser promessa e vira portão
 
 ### Medido antes de construir, e o achado foi maior que a tarefa
