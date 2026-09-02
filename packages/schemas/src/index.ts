@@ -105,6 +105,7 @@ export {
   buildContextTagIndex,
   resolveContextTag,
   stampContextEntry,
+  collectContextTagWrites,
   verifyContextMap,
   contextVisibilityOptions,
 } from "./context-map"
@@ -118,6 +119,8 @@ export type {
   ContextTagResolution,
   ContextTagIndex,
   ContextEntryStamp,
+  ContextTagWrite,
+  ContextWriteSurface,
   ContextMapVerification,
   ContextVisibilityOptions,
   ContextVisibilityNamespaceOption,

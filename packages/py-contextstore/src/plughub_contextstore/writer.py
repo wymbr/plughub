@@ -51,6 +51,52 @@ class ContextScopeRefused(Exception):
     """Tag de escopo não-sessão oferecida ao funil Python. Ver o cabeçalho do módulo."""
 
 
+
+def _avisar_nao_cadastradas(
+    tenant_id: str,
+    session_id: str,
+    atributos: dict,
+    mapa_e_fallback: bool,
+) -> None:
+    """Metade RUNTIME da D9.1: nunca rejeita, mas **loga nomeando**.
+
+    ── Por que `unknown` e `fallback` NAO podem sair na mesma mensagem ──────────
+
+    `origem: "unknown"` significa *"esta tag nao esta no mapa"*. Mas se o mapa em uso e o
+    **fallback embutido** — porque o config-api nao respondeu —, entao `unknown` nao e
+    evidencia de cadastro faltando: e evidencia de que o mapa nao carregou, e a tag pode
+    estar perfeitamente cadastrada no mapa vivo.
+
+    Mandar as duas pela mesma frase manda alguem cadastrar o que ja existe. Medido em
+    2026-09-02 na forma exata: o censo lia o mapa SEMENTE e publicava 18 nao-declaradas
+    onde a resposta era 2. Aqui a assimetria e a mesma, e a mensagem a separa.
+
+    `dynamic` NAO entra: `agent.*`/`segment.*` sao familias declaradas como abertas, e
+    avisar sobre elas ensinaria a ignorar o aviso.
+    """
+    nao_cadastradas = sorted(
+        t for t, a in atributos.items()
+        if isinstance(a, dict) and a.get("origem") == "unknown"
+    )
+    if not nao_cadastradas:
+        return
+    if mapa_e_fallback:
+        logger.warning(
+            "[ctx-writer] tenant=%s session=%s: %d tag(s) sem correspondencia no mapa, "
+            "MAS o mapa em uso e o FALLBACK EMBUTIDO — o config-api nao respondeu. NAO "
+            "conclua que falta cadastro: estas tags podem estar no mapa vivo. Conserte o "
+            "transporte antes de cadastrar qualquer coisa. Tags: %s",
+            tenant_id, session_id, len(nao_cadastradas), nao_cadastradas,
+        )
+        return
+    logger.warning(
+        "[ctx-writer] tenant=%s session=%s: %d tag(s) NAO CADASTRADAS no mapa do "
+        "ContextStore foram gravadas mesmo assim (o runtime nunca rejeita — D9.1). Elas "
+        "resolvem para o mais RESTRITIVO na leitura, entao um operador legitimo pode nao "
+        "ver o valor. Cadastre em /config/context-map. Tags: %s",
+        tenant_id, session_id, len(nao_cadastradas), nao_cadastradas,
+    )
+
 async def write_context_tags(
     redis: Any,
     tenant_id: str,
@@ -127,6 +173,8 @@ async def write_context_tags(
         )
         mapping[tag] = json.dumps(carimbada)
         atributos[tag] = carimbada["atributo"]
+
+    _avisar_nao_cadastradas(tenant_id, session_id, atributos, fallback)
 
     await redis.hset(f"{tenant_id}:ctx:{session_id}", mapping=mapping)
     if ttl_s is not None:

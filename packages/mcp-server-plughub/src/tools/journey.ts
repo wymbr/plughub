@@ -158,6 +158,50 @@ export async function resolveJourneyRoot(
 }
 
 /**
+ * Metade RUNTIME da D9.1: o publish RECUSA, o runtime **nunca rejeita** — grava, resolve
+ * para o mais restritivo e **LOGA nomeando**. Sem esta metade a primeira troca um
+ * vazamento por uma queda, e a § Postura de Engenharia já cataloga o padrão.
+ *
+ * ── `unknown` e `fallback` são fatos DIFERENTES, e a mensagem os separa ──────────
+ *
+ * `origem: "unknown"` diz *"esta tag não está no mapa"*. Mas se o mapa em uso é o
+ * **fallback embutido** — porque o config-api não respondeu —, `unknown` deixa de ser
+ * evidência de cadastro faltando e passa a ser evidência de que o mapa não carregou: a
+ * tag pode estar perfeitamente registrada no mapa vivo.
+ *
+ * Emitir as duas na mesma frase manda alguém cadastrar o que já existe. Medido em
+ * 2026-09-02 nessa forma exata: o censo lia o mapa SEMENTE e publicava 18 não-declaradas
+ * onde a resposta era 2 — 16 nomes já cadastrados enviados de volta para a fila.
+ *
+ * `dynamic` fica FORA de propósito: `agent.*`/`segment.*` são famílias declaradas como
+ * abertas, e avisar sobre elas ensinaria a ignorar o aviso.
+ */
+function warnUnregisteredTag(
+  tenantId:  string,
+  sessionId: string,
+  tag:       string,
+  atributo:  ContextEntryStamp,
+  fallback:  boolean,
+): void {
+  if (atributo.origem !== "unknown") return
+  if (fallback) {
+    console.warn(
+      `[ctx-writer] tenant=${tenantId} session=${sessionId}: tag "${tag}" sem ` +
+      `correspondência no mapa, MAS o mapa em uso é o FALLBACK EMBUTIDO — o config-api ` +
+      `não respondeu. NÃO conclua que falta cadastro: ela pode estar no mapa vivo. ` +
+      `Conserte o transporte antes de cadastrar qualquer coisa.`,
+    )
+    return
+  }
+  console.warn(
+    `[ctx-writer] tenant=${tenantId} session=${sessionId}: tag "${tag}" NÃO CADASTRADA ` +
+    `no mapa do ContextStore, gravada mesmo assim (o runtime nunca rejeita — D9.1). Ela ` +
+    `resolve para o mais RESTRITIVO na leitura, então um operador legítimo pode não ver o ` +
+    `valor. Cadastre em /config/context-map.`,
+  )
+}
+
+/**
  * J5a + D9.6 — o CHOKE POINT de escrita de UMA tag de contexto.
  *
  * Faz DUAS coisas, e a segunda chegou na ALW-02 (2026-09-02):
@@ -194,6 +238,7 @@ export async function writeContextTag(
   const stamped   = stampContextEntry(entry, tag, index, fallback)
   const entryJson = JSON.stringify(stamped)
   const atributo  = stamped["atributo"] as ContextEntryStamp
+  warnUnregisteredTag(tenantId, sessionId, tag, atributo, fallback)
   // CNS-03 — `core.journey.*` roteia igual a `journey.*`: o escopo de uma tag do core é
   // o SEGUNDO segmento. Terceira das três casas que roteiam por prefixo; as outras duas
   // são `sdk/context-store.ts` (TTL + chave) e `skill-flow-engine/interpolate.ts` (leitura).

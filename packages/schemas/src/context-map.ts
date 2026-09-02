@@ -823,3 +823,162 @@ export function contextVisibilityOptions(map: ContextMap = DEFAULT_CONTEXT_MAP):
   tags.sort((a, b) => a.tag.localeCompare(b.tag))
   return { namespaces, tags }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * COLETOR DE ESCRITAS DE CONTEXTO NUM FLOW — a metade estática da V4
+ * ────────────────────────────────────────────────────────────────────────────*/
+
+/**
+ * Os nomes de superfície são CONTRATO, não rótulo de exibição: o gêmeo Python
+ * (`extrair_de_doc`, no censo) emite exatamente estas strings, e
+ * `probe_context_tag_extractor_parity.sh` compara as duas saídas literalmente.
+ *
+ * Foram alinhados em 2026-09-02 — o Python dizia `"context_json (string)"` e
+ * `"invoke context_set"`, o TS dizia `"context_json"` e `"invoke.tag"`. Divergência
+ * de rótulo faria o gate acusar 100% das linhas e a divergência REAL sumiria no ruído.
+ */
+/** Superfície de autoria pela qual a escrita foi declarada. */
+export type ContextWriteSurface =
+  | "context_tags.outputs"
+  | "delegate.context"
+  | "collect.context"
+  | "mention.set_context"
+  | "context_json"
+  | "invoke.context_set"
+  | "invoke.context_write"
+
+export interface ContextTagWrite {
+  /** Nome FINAL da tag, já com o prefixo que o gateway compõe. */
+  tag:     string
+  surface: ContextWriteSurface
+  /** Id do step, quando a superfície é de step. */
+  step?:   string
+  /**
+   * `true` quando o nome NÃO é literal (interpolação `@ctx.`/`$.`/`{{…}}`).
+   *
+   * A D9.2 mediu ZERO destes em 2026-08-30, e é desse zero que o modelo inteiro
+   * vive: se um nome só existe em runtime, a análise estática não fecha e o
+   * portão volta a ser observação. Por isso eles são COLETADOS e marcados, nunca
+   * descartados — um coletor que os ignorasse ficaria verde justamente quando a
+   * premissa quebrasse.
+   */
+  dynamic: boolean
+}
+
+const INTERPOLADO = /@ctx\.|\$\.|\{\{/
+
+/**
+ * Toda tag de ContextStore que um flow ESCREVE, pelas cinco superfícies de autoria.
+ *
+ * ── Por que não é um walker de árvore, e por que isso é load-bearing ─────────
+ *
+ * A D9 contava DUAS superfícies de autoria. São **seis**, e quatro não aparecem
+ * caminhando a árvore do YAML (medido em 2026-08-30, `contextstore-cadastro-censo.md`):
+ *
+ *   1. `context_tags.outputs`   — anotação de step; a única óbvia
+ *   2. `delegate.context` / `collect.context` — as chaves são prefixadas com
+ *      `session.` **no gateway** (`webhook.py`), então o nome final NÃO está no arquivo
+ *   3. `mention_commands.set_context` — vive no FLOW, não num step
+ *   4. `input.context_json`     — uma **string JSON** dentro do YAML; um walker a vê
+ *                                 como texto e segue em frente (7 skills, 15 nomes)
+ *   5. `invoke tool: context_set|context_write` — o nome mora em `input.tag`, um campo
+ *                                 de step como outro qualquer
+ *
+ * A sexta é código de PLATAFORMA, e nenhum portão de publish a alcança (D9.3) — ela
+ * se registra pela semente, não por aqui.
+ *
+ * *"Um portão escrito da forma óbvia ficaria verde com quatro superfícies passando por
+ * baixo: fail-open por invisibilidade, que é o valor plausível do lado do instrumento."*
+ *
+ * ⚠️ **Só ESCRITAS.** `context_tags.inputs` e as referências `@ctx.` são LEITURAS, e
+ * gatear leitura teria blast radius diferente e não medido: um skill lê legitimamente
+ * tags escritas pela plataforma. O contrato da D9.1 é sobre escrita.
+ *
+ * ⚠️ **Gêmeo Python obrigatório.** O censo (`infra/test/censo_contextstore_cadastro.py`)
+ * implementa o mesmo extrator, e as duas saídas são comparadas sobre fixture única por
+ * `infra/test/probe_context_tag_extractor_parity.sh`. Duas implementações sem gate é
+ * como nasce a cópia divergente que este arco inteiro persegue.
+ */
+export function collectContextTagWrites(flow: unknown): ContextTagWrite[] {
+  const out: ContextTagWrite[] = []
+  const push = (tag: unknown, surface: ContextWriteSurface, step?: string): void => {
+    if (typeof tag !== "string" || tag.length === 0) return
+    out.push({ tag, surface, ...(step ? { step } : {}), dynamic: INTERPOLADO.test(tag) })
+  }
+
+  const f = flow as { steps?: unknown[]; mention_commands?: unknown }
+
+  // ── 3. mention_commands.set_context — fato do FLOW, não de step ────────────
+  const mc = f?.mention_commands
+  if (mc && typeof mc === "object") {
+    for (const cmd of Object.values(mc as Record<string, unknown>)) {
+      const sc = (cmd as { set_context?: unknown })?.set_context
+      if (sc && typeof sc === "object") {
+        for (const k of Object.keys(sc as Record<string, unknown>)) {
+          push(k, "mention.set_context")
+        }
+      }
+    }
+  }
+
+  for (const raw of f?.steps ?? []) {
+    const s = raw as {
+      id?: string
+      type?: string
+      tool?: string
+      context_tags?: { outputs?: Record<string, unknown> }
+      context?: Record<string, unknown>
+      input?: { tag?: unknown; context_json?: unknown }
+    }
+    const step = typeof s?.id === "string" ? s.id : undefined
+
+    // ── 1. context_tags.outputs ──────────────────────────────────────────────
+    const outs = s?.context_tags?.outputs
+    if (outs && typeof outs === "object") {
+      for (const ent of Object.values(outs as Record<string, unknown>)) {
+        const tag = (typeof ent === "string") ? ent : (ent as { tag?: unknown })?.tag
+        const escopo = (typeof ent === "object" && ent !== null)
+          ? (ent as { scope?: unknown }).scope : undefined
+        // `scope: "segment"` compõe `segment.{segId}.` — família dinâmica DECLARADA
+        // (D9.4). Ela não é "nome em runtime": o prefixo é fixo e a folha é literal.
+        push(escopo === "segment" && typeof tag === "string" ? `segment.{segId}.${tag}` : tag,
+             "context_tags.outputs", step)
+      }
+    }
+
+    // ── 2. delegate.context / collect.context ────────────────────────────────
+    if ((s?.type === "delegate" || s?.type === "collect") && s?.context && typeof s.context === "object") {
+      for (const k of Object.keys(s.context)) {
+        // O PREFIXO É COMPOSTO NO GATEWAY (`webhook.py`), não no arquivo. Coletar a
+        // chave crua faria o portão conferir um nome que nunca existe no store.
+        push(k.startsWith("session.") ? k : `session.${k}`,
+             s.type === "delegate" ? "delegate.context" : "collect.context", step)
+      }
+    }
+
+    // ── 4. input.context_json — string JSON dentro do YAML ───────────────────
+    const cj = s?.input?.context_json
+    if (typeof cj === "string" && cj.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(cj) as unknown
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          for (const k of Object.keys(parsed as Record<string, unknown>)) {
+            push(k, "context_json", step)
+          }
+        }
+      } catch {
+        // JSON ilegível não é escrita nenhuma — e NÃO é problema deste coletor:
+        // quem recusa payload malformado é o schema do step. Engolir aqui evita
+        // que um portão de CADASTRO reprove por um defeito de SINTAXE, dizendo a
+        // coisa errada a quem lê o erro.
+      }
+    }
+
+    // ── 5. invoke context_set / context_write — o nome mora em `input.tag` ───
+    if (s?.tool === "context_set" || s?.tool === "context_write") {
+      push(s?.input?.tag, s.tool === "context_set" ? "invoke.context_set" : "invoke.context_write", step)
+    }
+  }
+
+  return out
+}

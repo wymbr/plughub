@@ -155,6 +155,9 @@ probe_context_map_grant_split.sh
 # recusa desde a CNS-08) e apaga o cache Redis do config-api — nunca toca `__global__`,
 # e o trap limpa em EXIT/INT/TERM. Sem stack sai INCONCLUSIVO.
 probe_context_map_seed.sh
+# V4/F2: paridade do EXTRATOR de escritas de ctx (TS x Python) sobre fixture unica.
+# Exige DOCKER (metade TS roda em node:20-alpine com esbuild). Nao precisa da stack.
+probe_context_tag_extractor_parity.sh
 # Precisa de um principal de escopo ESTREITO — com admin o marcador nasce correto
 # e o defeito nao e exercido (o proprio probe declara isso e sai INCONCLUSIVO).
 ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_chip_scoped_marker.sh

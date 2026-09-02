@@ -9,7 +9,7 @@
 
 import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }      from "../db"
-import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock, validateMaskedTypeRefs } from "../validators/skill"
+import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock, validateMaskedTypeRefs, validateContextTagRegistration } from "../validators/skill"
 import { publishRegistryChanged } from "../infra/kafka"
 import { config } from "../config"
 
@@ -254,6 +254,26 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         return res.status(422).json({
           error:   "invalid_masked_type",
           details: typeErrors,
+        })
+      }
+
+      // ── V4 — PORTÃO DE CADASTRO do ContextStore (ADR allowlist, D9.1) ──────
+      //
+      // Toda tag que o flow ESCREVE tem de estar no mapa do tenant. Aqui é o portão
+      // ALTO e ESTÁTICO; no runtime nada é rejeitado (grava, resolve restritivo, loga).
+      //
+      // ⚠️ A postura ao NÃO CONSEGUIR conferir é OPOSTA à do portão acima, e está
+      // justificada no cabeçalho de `validateContextTagRegistration`: lá o acoplamento
+      // ao config-api é escopado a quem declara tipo; aqui seria universal, e recusar
+      // por indisponibilidade poria o boot inteiro do RegistrySyncer atrás dele.
+      const ctxErrors = await validateContextTagRegistration(body.flow, {
+        tenantId:     tenantId,
+        configApiUrl: config.config_api_url,
+      })
+      if (ctxErrors.length > 0) {
+        return res.status(422).json({
+          error:   "unregistered_context_tag",
+          details: ctxErrors,
         })
       }
     }

@@ -181,7 +181,25 @@ def ler_mapa_semente():
 
 
 # ── metade TENANT: as cinco superfícies de autoria ───────────────────────────
-def censo_tenant():
+def extrair_de_doc(doc, arq="<doc>"):
+    """Extrator sobre UM documento de skill. **É esta a função que o gate consome.**
+
+    Existe separada de `censo_tenant()` porque a D9.2 previu que *"o gate consumirá este
+    mesmo extrator"*, e porque o gêmeo TypeScript
+    (`collectContextTagWrites`, em `@plughub/schemas/context-map.ts`) precisa de um lado
+    Python comparável sobre a MESMA entrada. Duas implementações sem fixture comum é
+    como nasce a cópia divergente que este arco inteiro persegue —
+    `infra/test/probe_context_tag_extractor_parity.sh` é o mecanismo.
+
+    Devolve `(escritas, leituras, dinamicas)`, cada `escritas[tag]` um conjunto de
+    `(arquivo, superficie)`.
+
+    ⚠️ Os nomes de SUPERFICIE sao CONTRATO, nao rotulo: o gemeo TS emite exatamente
+    estas strings e o gate compara literalmente. Alinhados em 2026-09-02 —
+    `"context_json (string)"` virou `"context_json"` e `"invoke X"` virou
+    `"invoke.X"`. Divergencia de rotulo faria o gate acusar 100% das linhas, e a
+    divergencia REAL sumiria no ruido.
+    """
     escritas, leituras, dinamicas = defaultdict(set), defaultdict(set), []
 
     def anda(node, arq):
@@ -217,13 +235,13 @@ def censo_tenant():
             cj = inp.get("context_json")
             if isinstance(cj, str):                        # (d) string JSON
                 for k in JSONKEY.findall(cj):
-                    escritas[k].add((arq, "context_json (string)"))
+                    escritas[k].add((arq, "context_json"))
             if node.get("tool") in ("context_set", "context_write"):   # (e) input.tag
                 t = inp.get("tag")
                 if isinstance(t, str) and "@" not in t and "$" not in t:
-                    escritas[t].add((arq, "invoke " + node["tool"]))
+                    escritas[t].add((arq, "invoke." + node["tool"]))
                 elif t is not None:
-                    dinamicas.append((arq, "invoke " + str(node.get("tool")), repr(t)[:60]))
+                    dinamicas.append((arq, "invoke." + str(node.get("tool")), repr(t)[:60]))
             for v in node.values():
                 anda(v, arq)
         elif isinstance(node, list):
@@ -235,9 +253,23 @@ def censo_tenant():
                 (dinamicas.append((arq, "@ctx", nome)) if "{" in nome
                  else leituras[nome].add((arq, "@ctx")))
 
+    anda(doc, arq)
+    return escritas, leituras, dinamicas
+
+
+def censo_tenant():
+    """Varre `packages/skill-flow-engine/skills/` inteiro, mesclando por documento."""
+    escritas, leituras, dinamicas = defaultdict(set), defaultdict(set), []
     for fn in sorted(os.listdir(SKILLS)):
-        if fn.endswith((".yaml", ".yml")):
-            anda(yaml.safe_load(io.open(os.path.join(SKILLS, fn), encoding="utf-8").read()), fn)
+        if not fn.endswith((".yaml", ".yml")):
+            continue
+        e, l, d = extrair_de_doc(
+            yaml.safe_load(io.open(os.path.join(SKILLS, fn), encoding="utf-8").read()), fn)
+        for k, v in e.items():
+            escritas[k] |= v
+        for k, v in l.items():
+            leituras[k] |= v
+        dinamicas.extend(d)
     return escritas, leituras, dinamicas
 
 

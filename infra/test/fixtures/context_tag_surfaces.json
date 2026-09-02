@@ -1,0 +1,119 @@
+{
+  "_": [
+    "CONTRATO da EXTRAÇÃO de escritas de ContextStore num flow — fatia F2 da V4.",
+    "",
+    "Fonte única. As duas implementações leem este arquivo e as saídas são comparadas por",
+    "`infra/test/probe_context_tag_extractor_parity.sh`:",
+    "  TS     packages/schemas/src/context-map.ts          collectContextTagWrites",
+    "  Python infra/test/censo_contextstore_cadastro.py    extrair_de_doc",
+    "",
+    "Por que existe: a D9.2 mede que o extrator NÃO é um walker de árvore — a D9 contava",
+    "duas superfícies de autoria e são seis, quatro invisíveis a quem caminha o YAML. Um",
+    "portão escrito da forma óbvia ficaria verde com quatro superfícies passando por",
+    "baixo: fail-open POR INVISIBILIDADE. Duas implementações sem fixture comum é como",
+    "nasce a cópia divergente que este arco inteiro persegue.",
+    "",
+    "Cada caso abaixo existe para separar as duas implementações num ponto específico. Os",
+    "que carregam mais peso estão marcados no comentário do próprio step."
+  ],
+
+  "entry": "s1",
+
+  "mention_commands": {
+    "@supervisor": {
+      "_": "SUPERFÍCIE 3 — vive no FLOW, não num step. Quem só percorre `steps` a perde.",
+      "set_context": {
+        "session.mention.aprovado": true,
+        "session.mention.motivo": "texto"
+      }
+    }
+  },
+
+  "steps": [
+    {
+      "id": "s1",
+      "_": "SUPERFÍCIE 1 — a única óbvia. `inputs` é LEITURA e NÃO pode entrar na saída.",
+      "type": "reason",
+      "context_tags": {
+        "inputs":  { "cpf": { "tag": "session.cliente.cpf" } },
+        "outputs": {
+          "plano":  { "tag": "session.conta.plano_atual" },
+          "direto": "session.conta.status"
+        }
+      }
+    },
+    {
+      "id": "s2",
+      "_": "SUPERFÍCIE 1b — `scope: segment` compõe `segment.{segId}.`. Família DINÂMICA DECLARADA (D9.4): o prefixo é fixo e a folha é literal, então NÃO é nome-em-runtime.",
+      "type": "reason",
+      "context_tags": {
+        "outputs": { "nota": { "tag": "avaliacao.nota", "scope": "segment" } }
+      }
+    },
+    {
+      "id": "s3",
+      "_": "SUPERFÍCIE 2 — O CASO QUE CARREGA MAIS PESO. O prefixo `session.` é composto NO GATEWAY (webhook.py), não no arquivo: coletar a chave crua faria o portão conferir um nome que nunca existe no store. Uma chave já vem prefixada e a outra não — as duas têm de sair iguais.",
+      "type": "delegate",
+      "context": {
+        "numero_pedido": "12345",
+        "session.parecer": "ok"
+      }
+    },
+    {
+      "id": "s4",
+      "_": "SUPERFÍCIE 2b — mesma regra, superfície diferente. Se as duas implementações colapsarem delegate e collect num rótulo só, este caso não acusa nada; por isso o rótulo entra na comparação.",
+      "type": "collect",
+      "context": { "motivo_reembolso": "@ctx.session.motivo" }
+    },
+    {
+      "id": "s5",
+      "_": "SUPERFÍCIE 4 — string JSON DENTRO do YAML. Um walker a vê como texto e segue em frente. 7 skills e 15 nomes no repositório real.",
+      "type": "invoke",
+      "tool": "workflow_trigger",
+      "input": {
+        "context_json": "{\"session.cartao.numero\": \"4111\", \"session.cartao.vencimento\": \"12/28\"}"
+      }
+    },
+    {
+      "id": "s6",
+      "_": "SUPERFÍCIE 4b — JSON ILEGÍVEL. Não é escrita nenhuma, e não é problema deste coletor: quem recusa payload malformado é o schema do step. As duas metades têm de IGNORAR, não inventar tag nem estourar.",
+      "type": "invoke",
+      "tool": "workflow_trigger",
+      "input": { "context_json": "{isto nao e json" }
+    },
+    {
+      "id": "s7",
+      "_": "SUPERFÍCIE 5 — o nome mora em `input.tag`, um campo de step como outro qualquer.",
+      "type": "invoke",
+      "tool": "context_set",
+      "input": { "tag": "journey.processo.resultado", "value": "aprovado" }
+    },
+    {
+      "id": "s8",
+      "_": "SUPERFÍCIE 5b — `context_write` é a outra tool da mesma superfície. Rótulo distinto de propósito.",
+      "type": "invoke",
+      "tool": "context_write",
+      "input": { "tag": "core.customer.segmento", "value": "ouro" }
+    },
+    {
+      "id": "s9",
+      "_": "DINÂMICO — a D9.2 mediu ZERO destes, e o modelo inteiro vive desse zero. Têm de ser COLETADOS E MARCADOS, nunca descartados: um coletor que os ignorasse ficaria verde justamente quando a premissa quebrasse.",
+      "type": "invoke",
+      "tool": "context_set",
+      "input": { "tag": "session.@ctx.dinamica", "value": "x" }
+    },
+    {
+      "id": "s10",
+      "_": "NEGATIVO — invoke de outra tool, com `tag` no input. NÃO é escrita de contexto. Sem este caso, um coletor que casasse `input.tag` sem olhar a tool passaria.",
+      "type": "invoke",
+      "tool": "knowledge_search",
+      "input": { "tag": "isto_nao_e_contexto", "query": "x" }
+    },
+    {
+      "id": "s11",
+      "_": "NEGATIVO — step com `context` mas de tipo que NÃO delega nem coleta. A composição do prefixo é do gateway e só acontece em delegate/collect.",
+      "type": "reason",
+      "context": { "nao_deve_aparecer": "x" }
+    }
+  ]
+}

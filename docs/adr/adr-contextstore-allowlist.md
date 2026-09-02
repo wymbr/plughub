@@ -8,9 +8,13 @@ V2b · **V3** · **D8** · **V5 (metade — a D6)** · **D7 (metade — o seed)*
 decisão). Gates verdes: `probe_context_map_audit.sh` · `probe_context_visibility_selector.sh` ·
 `probe_seed_drift_named.sh` · `probe_legacy_display_rule_closed.sh` · `probe_type_catalog.sh`.
 
-**A próxima fase é a V4, e ela NÃO é mais "a inversão"** — a D9 a redefiniu para *"ligar o portão
-de PUBLISH sobre o cadastro"*, e ela é bloqueada por **três decisões abertas** (§ *Decisões que
-esta emenda deixa ABERTAS*, itens 1–3), não por esforço de código. A outra metade da V5 — fechar
+**A V4 foi ENTREGUE em 2026-09-02**, e ela não era "a inversão": a D9 a redefiniu para *"ligar o
+portão de PUBLISH sobre o cadastro"*, com runtime que **nunca rejeita**. As três decisões que a
+bloqueavam fecharam no mesmo dia (#1 ALW-02 · #2 ALW-03 · #3 ALW-04). O portão vive no
+`PUT /v1/skills` (`validateContextTagRegistration`), o coletor das cinco superfícies de autoria
+mora em `@plughub/schemas`, e a paridade com o extrator do censo é gateada
+(`probe_context_tag_extractor_parity.sh`). **Restam a V5** — fechar aliases, bloqueada por
+TEMPO — **e a ALW-08**, a afordância preventiva no editor. A outra metade da V5 — fechar
 os aliases — depende do contador da V3 decair, logo é bloqueada por **TEMPO**.
 
 ⚠️ *Esta linha já ficou atrás da §6 uma vez (ver a nota de data abaixo) e ficou de novo entre

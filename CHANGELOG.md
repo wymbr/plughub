@@ -1,5 +1,125 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — V4 (ALW-01): o portão de cadastro do ContextStore, e a postura que diverge do vizinho de propósito
+
+Última fase estrutural do arco ALLOWLIST. **A V4 não é mais "a inversão"**: a D9 a redefiniu
+para *"ligar o portão de PUBLISH sobre o cadastro"*, com runtime que **nunca rejeita**. As três
+decisões que a bloqueavam fecharam hoje (#1 ALW-02, #2 ALW-03, #3 ALW-04), e a pré-condição foi
+remedida: **tenant 51 escritas / 0 não declaradas**.
+
+### F1 — o runtime LOGA, e `unknown` ≠ `fallback`
+
+A tabela da D9.1 pede *"grava, resolve para o mais restritivo e **LOGA nomeando**"*. As duas
+primeiras já existiam (tipo ausente resolve `full` nos dois motores; o `unknown` é contado pela
+auditoria da V3). Faltava o log, e ele entrou nos dois funis.
+
+**A distinção que a mensagem carrega é o ponto:** `origem: "unknown"` significa *"esta tag não
+está no mapa"* — **mas** se o mapa em uso é o fallback embutido, porque o config-api não
+respondeu, então `unknown` deixa de ser evidência de cadastro faltando e passa a ser evidência
+de que o mapa não carregou. Emitir as duas na mesma frase manda alguém cadastrar o que já
+existe. Não é hipótese: aconteceu hoje, na ALW-11, na forma exata — o censo lia o mapa semente e
+publicava 18 não-declaradas onde a resposta era 2.
+
+### F2 — o coletor das cinco superfícies, e o gate que impede a sétima cópia
+
+`collectContextTagWrites` em `@plughub/schemas` (e não no agent-registry: a ALW-08 vai precisar
+dele na platform-ui). Cobre as cinco superfícies de AUTORIA — `context_tags.outputs`,
+`delegate/collect.context` (com o prefixo `session.` que o **gateway** compõe, não o arquivo),
+`mention_commands.set_context` (que vive no flow, não num step), `input.context_json` (uma
+string JSON dentro do YAML) e `invoke context_set|context_write` (nome em `input.tag`). A sexta
+é código de plataforma, e nenhum portão de publish a alcança — ela se registra pela semente.
+
+O extrator do censo é Python e o portão é TS; nenhum dos dois pode virar o outro. A resposta é a
+mesma de sempre nesta casa: **fixture única + comparação literal**
+(`probe_context_tag_extractor_parity.sh`, 5 ramos). Sem ela a divergência é fail-open no portão
+— uma superfície que só o Python vê é uma superfície pela qual uma tag não cadastrada entra.
+
+Dois cuidados que o gate impõe e que não são óbvios:
+- **o ramo B exige que a fixture exerça as 7 superfícies.** Duas implementações que ignorassem a
+  mesma superfície concordariam perfeitamente, e o gate ficaria verde exatamente no caso que ele
+  existe para pegar;
+- **nome dinâmico é COLETADO e MARCADO, nunca descartado** (ramo C). A D9.2 mediu zero deles em
+  21 escritas, e o modelo inteiro vive desse zero: um coletor que os ignorasse ficaria verde
+  justamente quando a premissa quebrasse.
+
+Falseabilidade por mutação no produto, com **assinaturas de ramo diferentes** — o que mostra que
+o gate discrimina em vez de só reprovar:
+
+| mutação no coletor TS | ramos vermelhos |
+|---|---|
+| o prefixo `session.` do gateway deixa de ser composto | só **E** (a superfície continua aparecendo; só o conteúdo diverge) |
+| a superfície `context_json` some | **B + E** |
+| `mention_commands` deixa de ser lido | **B + E** |
+
+Alinhamento necessário: os nomes de superfície viraram **contrato**. O Python dizia
+`"context_json (string)"` e `"invoke context_set"`; o TS, `"context_json"` e `"invoke.tag"`.
+Divergência de rótulo faria o gate acusar 100% das linhas e a divergência real sumiria no ruído.
+
+### F3/F4 — onde o portão mora, e por que a postura é OPOSTA à do vizinho
+
+**Achado que mudou o desenho:** `x-skill-publish` é **no-op** desde 2026-07-13. Há uma definição
+(`flow`), e produção roda o snapshot do slot — então "publish" no sentido do ADR poderia ser o
+`promote`. Ficou no `PUT`, que é onde o **autor** recebe a resposta; gatear no promote deixaria
+ele salvar e descobrir no deploy, mais tarde e pior. É também o ponto do vizinho
+(`validateMaskedTypeRefs`).
+
+**Mas a postura ao não conseguir conferir é a inversa da dele, e isso é medição, não descuido:**
+
+| | `validateMaskedTypeRefs` (T5) | `validateContextTagRegistration` (V4) |
+|---|---|---|
+| acoplamento ao config-api | **escopado** — só quem declara tipo paga | **universal** — quase todo flow escreve tag |
+| catálogo/mapa inalcançável | **RECUSA** | **PASSA, gritando** |
+| rede de segurança no runtime | nenhuma | carimbo `unknown` + contador da auditoria + log da F1 |
+
+Recusar por indisponibilidade poria cada `PUT` de skill — e com ele o boot inteiro do
+RegistrySyncer — atrás da disponibilidade do config-api. É a forma exata do defeito que a ALW-12
+consertou hoje. E o que escapa não é vazamento: é um campo que resolve restritivo e aparece em
+**três** instrumentos.
+
+Nome **interpolado** é recusado antes de qualquer I/O, nomeando a premissa da D9.2 — o primeiro
+que aparecer tem de ser decisão consciente, não silêncio.
+
+**F4 vem de graça na mensagem**, e fecha a metade aberta da decisão #2 do ADR (*"o erro de
+publish precisa dizer exatamente o que registrar"*). Medido ao vivo:
+
+```
+HTTP 422  unregistered_context_tag
+  step "s1" (invoke.context_set): a tag "session.tag_que_ninguem_registrou" NÃO está
+  cadastrada no mapa do ContextStore deste tenant. Registre em /config/context-map —
+  ⚠️ o nome tem 2 segmento(s); o mapa é "escopo.dominio.campo" — ...
+```
+
+### Medições, e uma que ficou INCONCLUSIVA
+
+Ao vivo, com **controle positivo obrigatório**: tag não cadastrada → 422; nome interpolado →
+422; tag cadastrada → **200**. A primeira rodada deste teste usou a env errada do token e as
+**três** voltaram 422 — foi o controle positivo que denunciou. Sem ele, dois 422 pareceriam o
+portão funcionando.
+
+⚠️ **O boot NÃO exercitou o portão.** Reiniciado o bridge, o relatório foi
+`skills(upserted=0 skip=39 err=0)`: seed-if-absent pulou todos, então `err=0` não é evidência de
+que o portão aceita a população real. A evidência é outra, e o warrant é explícito: o censo roda
+o gêmeo Python **provado igual ao TS pelo gate de paridade** sobre os 39 skills contra o mapa
+vivo, e dá **0 não declaradas**. Instalação limpa segue sendo o caminho não medido — e é
+exatamente o que a ALW-12 passou a provisionar.
+
+### As-built
+
+- `packages/schemas/src/context-map.ts` — `collectContextTagWrites`, `ContextTagWrite`,
+  `ContextWriteSurface`
+- `packages/agent-registry/src/validators/skill.ts` — `validateContextTagRegistration`
+- `packages/agent-registry/src/routes/skills.ts` — ligado no `PUT`, erro `unregistered_context_tag`
+- `packages/py-contextstore/.../writer.py` + `packages/mcp-server-plughub/src/tools/journey.ts` — F1
+- `infra/test/censo_contextstore_cadastro.py` — `extrair_de_doc()` exposto (a D9.2 previu que o
+  gate consumiria este extrator)
+- Gate: `infra/test/probe_context_tag_extractor_parity.sh` + fixture, no manifesto
+
+Deploy: seis serviços reconstruídos e recriados, com o código conferido **dentro** de cada um.
+Oito gates verdes.
+
+**O arco ALLOWLIST fica com a V5** — fechar aliases, bloqueada por TEMPO (o contador precisa
+decair), e a ALW-08 (afordância no editor), agora sem bloqueio.
+
 ## 2026-09-02 — ALW-01: sai o `ler_journey_ctx`, e ele já não era instrumento — era um passo que só podia falhar
 
 **O pedido era pequeno; o achado, não.** `session.journey_echo` era a **única** tag escrita por

@@ -9,6 +9,10 @@
 import { z }           from "zod"
 import { SkillSchema, typeMasksSomething } from "@plughub/schemas"
 import type { FlowStep, SkillFlow, DataType } from "@plughub/schemas"
+import {
+  buildContextTagIndex, collectContextTagWrites, resolveContextTag,
+  type ContextMap, type ContextTagIndex,
+} from "@plughub/schemas"
 
 export const CreateSkillSchema = SkillSchema
 
@@ -245,4 +249,109 @@ export async function validateMaskedTypeRefs(
     )
 
   return [...unknown, ...doesNotMask]
+}
+
+/**
+ * V4 — o PORTÃO DE CADASTRO do ContextStore (ADR allowlist, D9.1).
+ *
+ * Toda tag que o flow ESCREVE tem de estar no mapa do tenant. O que não está não passa
+ * aqui; no runtime nada é rejeitado (grava, resolve restritivo e LOGA).
+ *
+ * ── ONDE ele mora, e por que não é no promote ───────────────────────────────
+ *
+ * `x-skill-publish` virou no-op em 2026-07-13: há UMA definição (`flow`), e produção roda
+ * o snapshot do slot (set-next → promote). "Publish" no sentido do ADR poderia então ser
+ * o promote. Está aqui, no `PUT`, de propósito: é onde o AUTOR recebe a resposta. Gatear
+ * no promote deixaria o autor salvar e descobrir no deploy — mais tarde e pior. É também
+ * o ponto do vizinho (`validateMaskedTypeRefs`, o portão da T5).
+ *
+ * ── A POSTURA É OPOSTA À DO VIZINHO, e isso é medição ───────────────────────
+ *
+ * `validateMaskedTypeRefs` RECUSA quando não consegue conferir — *"mascaramento é a
+ * política em que 'não sei' nunca pode virar 'pode passar'"*. Aqui é o contrário, por
+ * duas diferenças concretas:
+ *
+ *   **(1) O acoplamento é universal, não escopado.** Lá, só quem declara um tipo paga a
+ *   dependência do config-api, e quase nenhum flow declara. Aqui, praticamente TODO flow
+ *   escreve alguma tag — então recusar-por-não-saber poria cada `PUT` de skill, e com ele
+ *   o boot inteiro do RegistrySyncer, atrás da disponibilidade do config-api. É a forma
+ *   exata do defeito que a ALW-12 acabou de consertar: provisionamento que falha em
+ *   silêncio derruba o runtime.
+ *
+ *   **(2) O runtime tem rede de segurança, e o de masking não tinha.** Uma tag que escapa
+ *   daqui é gravada, CARIMBADA como `unknown`, CONTADA pela auditoria da V3 e LOGADA pelo
+ *   funil (F1) — e resolve para o mais restritivo na leitura. Não é vazamento: é um campo
+ *   que o operador legítimo pode não ver, e que aparece em três instrumentos.
+ *
+ * Então: catálogo inalcançável ⇒ **passa, gritando**. A mensagem nomeia o que deixou de
+ * valer, em vez de dizer "using default" — a § Configuration já registra que foi
+ * exatamente essa frase genérica que ninguém leu por meses.
+ *
+ * ── Nome DINÂMICO é recusado, e não é preciosismo ───────────────────────────
+ *
+ * A D9.2 mediu **zero** nomes interpolados em 21 escritas, e o modelo inteiro vive desse
+ * zero: se um nome só existe em runtime, a análise estática não fecha e o portão volta a
+ * ser observação (*"rodar tráfego, esperar aparecer, repetir até secar"*). O primeiro que
+ * aparecer tem de ser uma decisão consciente, não um silêncio.
+ */
+export async function validateContextTagRegistration(
+  flow: SkillFlow,
+  opts: { tenantId: string; configApiUrl: string; fetchImpl?: typeof fetch },
+): Promise<string[]> {
+  const writes = collectContextTagWrites(flow)
+  if (writes.length === 0) return []          // flow que não escreve ctx ⇒ sem dependência
+
+  // Dinâmico não depende do mapa: recusa antes de qualquer I/O.
+  const dinamicos = writes.filter(w => w.dynamic)
+  if (dinamicos.length > 0) {
+    return dinamicos.map(w =>
+      `step "${w.step ?? "?"}" (${w.surface}): a tag "${w.tag}" tem nome INTERPOLADO. ` +
+      `O cadastro do ContextStore é conferido por análise estática, e um nome que só ` +
+      `existe em runtime não pode ser conferido — a premissa medida da D9.2 é que não há ` +
+      `nenhum (0 em 21 escritas). Use um nome literal, ou traga a decisão para o ADR.`,
+    )
+  }
+
+  let index: ContextTagIndex
+  try {
+    const url  = `${opts.configApiUrl}/config/masking?tenant_id=${encodeURIComponent(opts.tenantId)}`
+    const resp = await (opts.fetchImpl ?? fetch)(url)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const body = await resp.json() as { entries?: Record<string, unknown> }
+    const raw  = body?.entries?.["context_map"]
+    const mapa = (typeof raw === "string" ? JSON.parse(raw) : raw) as ContextMap | undefined
+    if (!mapa?.contexto) throw new Error("resposta sem `entries.context_map.contexto`")
+    index = buildContextTagIndex(mapa)
+  } catch (err) {
+    // PASSA, GRITANDO — ver o cabeçalho. A frase diz o que deixou de valer, não que
+    // "usou o default": um aviso genérico é um aviso que ninguém lê.
+    console.warn(
+      `[ctx-gate] tenant=${opts.tenantId}: NÃO foi possível conferir o cadastro do ` +
+      `ContextStore contra o config-api (${String(err)}). ${writes.length} escrita(s) de ` +
+      `tag neste flow passaram SEM conferência. Deixa de valer: a garantia de que toda ` +
+      `tag escrita está registrada. Segue valendo: o carimbo de origem, o contador de ` +
+      `\`unknown\` da auditoria e o aviso do funil em runtime.`,
+    )
+    return []
+  }
+
+  const naoCadastradas = writes.filter(w => resolveContextTag(w.tag, index).origin === "unknown")
+  if (naoCadastradas.length === 0) return []
+
+  // Uma linha por tag, e ela diz EXATAMENTE o que registrar — é a metade que faltava da
+  // decisão #2 do ADR (*"o erro de publish precisa dizer exatamente o que registrar"*).
+  // `escopo.dominio.campo` porque é essa a forma do mapa, e sem ela o autor abre a tela
+  // sem saber em que caixa digitar.
+  return naoCadastradas.map(w => {
+    const partes = w.tag.split(".")
+    const forma  = partes.length >= 3
+      ? `escopo "${partes[0]}", domínio "${partes[1]}", campo "${partes.slice(2).join(".")}"`
+      : `⚠️ o nome tem ${partes.length} segmento(s); o mapa é "escopo.dominio.campo"`
+    return (
+      `step "${w.step ?? "?"}" (${w.surface}): a tag "${w.tag}" NÃO está cadastrada no ` +
+      `mapa do ContextStore deste tenant. Registre em /config/context-map — ${forma} — ` +
+      `escolhendo um tipo do catálogo. Enquanto não estiver, ela é gravada mas resolve ` +
+      `para o mais RESTRITIVO na leitura, e um operador legítimo pode não ver o valor.`
+    )
+  })
 }

@@ -21,6 +21,7 @@ história no `CHANGELOG.md`.)*
 | ALW-03 | Onde mora o cadastro: divisão por FATO — catálogo de tipos fica em `config.masking` (compliance), o MAPA ganha `config.context_map` com o **developer** no preset e tela própria em `/config/context-map` | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-03 |
 | ALW-02 | Choke point de escrita do ContextStore: carimbo do `atributo` (D9.6) nos dois funis, gate de paridade TS × Python sobre fixture única, e os 21 sítios roteados. Censo 8/22 → 2/2 | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-02 |
 | ALW-12 | Provisionamento do mapa de contexto do TENANT: `infra/context-map/tenant_demo.json` + `infra/seed/seed_context_map.py` + serviço `context-map-seed`, com o orchestrator-bridge ordenado depois dele. Pós-`--wipe` deixa de perder 20 canônicas | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-12 |
+| ALW-01 | **V4** — portão de cadastro do ContextStore no `PUT /v1/skills`: coletor das 5 superfícies de autoria em `@plughub/schemas`, gate de paridade TS × Python sobre fixture única, e o runtime passa a LOGAR a tag não cadastrada nos dois funis | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 V4 |
 
 ---
 
