@@ -76,7 +76,7 @@
     "edit": "Editar",
     "days": "dias"
   },
-  "loading": "Carregando configurações…",
+  "loading": "Carregando…",
   "toast": {
     "tokenRequired": "Admin token obrigatório para salvar",
     "keySaved": "{{key}} salvo"
@@ -110,5 +110,10 @@
     "silence": "Silêncio",
     "beep": "Bipe",
     "placeholder": "Falar placeholder"
+  },
+  "contextMapPage": {
+    "title": "Campos do ContextStore",
+    "subtitle": "Quais campos existem no ContextStore, em escopo.dominio.campo, cada um nomeando um tipo do catálogo. O mapa é a allowlist: campo que não está aqui não está declarado. O catálogo em si — o que cada tipo mascara e sua classe LGPD — é configurado em Mascaramento.",
+    "catalogueNote": "A lista de tipos vem do catálogo e não pode ser estendida aqui. O que um tipo mascara, para quais papéis, e sua classe LGPD são configurados em Mascaramento — uma concessão separada, porque são uma decisão separada."
   }
 }

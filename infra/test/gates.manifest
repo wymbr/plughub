@@ -146,6 +146,9 @@ probe_i18n_duplicate_keys.sh
 # O de paridade exige DOCKER (a metade TS roda em container) e sai INCONCLUSIVO sem ele.
 probe_ctx_writer_census.sh
 probe_context_stamp_parity.sh
+# ALW-03: exige a stack de pe (o ramo G cria uma cobaia, loga e escreve o mapa de volta
+# IDENTICO). Sem ela sai SEM AMOSTRA, que nao e verde.
+probe_context_map_grant_split.sh
 # Precisa de um principal de escopo ESTREITO — com admin o marcador nasce correto
 # e o defeito nao e exercido (o proprio probe declara isso e sai INCONCLUSIVO).
 ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_chip_scoped_marker.sh

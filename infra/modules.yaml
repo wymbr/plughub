@@ -347,12 +347,29 @@ modules:
         role_defaults:
           admin: read_write
       masking:
-        label: Configuração de mascaramento de dados
+        label: Configuração de mascaramento de dados (catálogo de tipos)
         domain: [none, read_only, read_write]
         scopable: false
         default: none
         role_defaults:
           admin: read_write
+      # ALW-03 (2026-09-02) — grant PRÓPRIO para o MAPA do ContextStore, separado do
+      # catálogo de tipos acima. Os dois viviam em `masking`, e por isso o cadastro de
+      # campo ficava fora do alcance de quem AUTORA flow: `skill_flows.operacao`/`editar`
+      # nascem para admin+developer, `config.masking` só para admin. O ADR nomeia essa
+      # fricção como o que faz gente contornar o cadastro.
+      #
+      # O `developer` está no preset DE PROPÓSITO: é a metade da decisão que a torna
+      # mecanismo em vez de prosa. O que ele NÃO ganha é o catálogo — pode dizer que um
+      # campo é `cpf_br`, não pode redefinir o que `cpf_br` mascara nem sua classe LGPD.
+      context_map:
+        label: Cadastro de campos do ContextStore (o mapa)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+        role_defaults:
+          admin: read_write
+          developer: read_write
 
   # ── Skill Flows / AgentFlow ───────────────────────────────────────────────────
   - module_id: skill_flows

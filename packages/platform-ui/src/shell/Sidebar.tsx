@@ -192,6 +192,11 @@ const Sidebar: React.FC = () => {
         // Outbound (fatia 1b) — grant-first (strict): visível só com outbound.configurar.
         { label: t('nav.outbound'),      href: '/config/outbound',      icon: Send,            abac: { module: 'outbound', field: 'configurar' } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
+        // ALW-03 (2026-09-02) — o MAPA do ContextStore tem entrada e grant PROPRIOS.
+        // Sem isto a divisao seria decorativa: o item acima e `config.masking`
+        // (admin-only), entao quem recebesse so `config.context_map` nao veria caminho
+        // nenhum ate a tela. Grant que nao tem porta e grant que nao concede.
+        { label: t('nav.contextMap'),    href: '/config/context-map',   icon: Archive,         abac: { module: 'config', field: 'context_map' } },
         // Idem: escrita do dialog-api gateada por `config.dialog_forms` (read_write). Ate
         // 2026-08-27 `PLUGHUB_DIALOG_ADMIN_TOKEN` ausente no compose deixava o
         // `_require_admin` inerte (`if expected and ...`) — criar E PUBLICAR form sem

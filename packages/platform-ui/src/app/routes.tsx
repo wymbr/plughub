@@ -8,6 +8,7 @@ import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
 import MaskingPage from '@/modules/masking/MaskingPage'
+import ContextMapPage from '@/modules/context-map/ContextMapPage'
 // Workflow / Fluxo
 import WorkflowEditorPage   from '@/modules/workflows/WorkflowEditorPage'
 import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
@@ -207,6 +208,7 @@ export const routes: RouteObject[] = [
       { path: 'config/channels',   element: <ConfigChannelsIndex /> },
       { path: 'config/canais',     element: <Navigate to="/config/channels" replace /> },
       { path: 'config/masking',    element: <MaskingPage /> },
+      { path: 'config/context-map', element: <ContextMapPage /> },
       { path: 'config/dialog-forms', element: <DialogFormsPage /> },
       { path: 'config/billing',    element: <BillingPage /> },
       { path: 'config/agent-reports', element: <Navigate to="/analise/agents"    replace /> },

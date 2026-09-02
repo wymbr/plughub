@@ -64,6 +64,7 @@
     "schedules": "Agendas",
     "outbound": "Outbound",
     "masking": "Mascaramento",
+    "contextMap": "Campos do ContextStore",
     "dialogForms": "Formulários de Diálogo",
     "billing": "Faturamento",
     "agent_reports": "Relatórios de Agentes",

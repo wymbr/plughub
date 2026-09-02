@@ -70,11 +70,33 @@ _NS_FIELD_OVERRIDES = {
 }
 
 
-def _ns_field(namespace: str) -> str:
+# ⚠️ ALW-03 (2026-09-02) — UM caso resolve por (namespace, KEY), e a excecao e a
+# decisao. "Cadastrar um campo do ContextStore" sao DOIS fatos com donos diferentes:
+#
+#   · o CATALOGO de tipos (o que `cpf_br` mascara, sua classe LGPD)  → compliance
+#   · o MAPA (quais campos existem, e qual tipo cada um usa)          → quem AUTORA flow
+#
+# Os dois viviam no namespace `masking` e portanto no mesmo grant (`config.masking`,
+# preset ADMIN-ONLY), enquanto o autor de flow e `developer`. O ADR nomeia essa friccao
+# como o que faz gente CONTORNAR o cadastro. Medido em 2026-09-02: `skill_flows.operacao`
+# e `.editar` nascem para admin+developer; `config.masking` so para admin.
+#
+# E o mesmo formato do split `config.users` x `config.permissions`: um rotulo com "e"
+# costuma ser dois fatos, e quando um deles decide politica, ele merece grant proprio.
+_NS_KEY_FIELD_OVERRIDES = {
+    ("masking", "context_map"): "context_map",
+}
+
+
+def _ns_field(namespace: str, key: str | None = None) -> str:
+    if key is not None:
+        por_key = _NS_KEY_FIELD_OVERRIDES.get((namespace, key))
+        if por_key is not None:
+            return por_key
     return _NS_FIELD_OVERRIDES.get(namespace, "platform")
 
 
-async def _require_config_write(namespace: str, request: Request) -> None:
+async def _require_config_write(namespace: str, key: str, request: Request) -> None:
     """Write guard: admin-token (seed/sistema) OU Bearer + ABAC `config.{ns_field}` (read_write).
 
     MIGRADO para `plughub_authz` em 2026-08-28 (passo 2 da consolidação dos seis
@@ -83,9 +105,10 @@ async def _require_config_write(namespace: str, request: Request) -> None:
     `.get(min_access, 0)`, que fazia um `min_access` digitado errado virar rank 0 e,
     com isso, qualquer grant não-`none` passar. O canônico levanta `ValueError`.
 
-    O campo continua sendo resolvido AQUI, por `_ns_field(namespace)`: ele depende da
+    O campo continua sendo resolvido AQUI, por `_ns_field(namespace, key)`: ele depende da
     rota, então não cabe numa dependência estática — é fato do call site, não do
-    verificador.
+    verificador. Desde a ALW-03 a `key` entra na resolução, porque `masking.context_map`
+    tem dono diferente de `masking.types` — ver o comentário de `_NS_KEY_FIELD_OVERRIDES`.
 
     ⚠️ **O `?admin_token=` SAIU** (D5, decidido 2026-08-28). Ele existia como parâmetro
     de query ao lado do header. Medido antes de remover: **um** chamador em todo o
@@ -102,8 +125,8 @@ async def _require_config_write(namespace: str, request: Request) -> None:
         admin_token=getattr(settings, "admin_token", None) or "",
         jwt_secret=getattr(settings, "jwt_secret", ""),
         module="config",
-        field=_ns_field(namespace),
-        what=f"escrita de config no namespace `{namespace}`",
+        field=_ns_field(namespace, key),
+        what=f"escrita de config em `{namespace}.{key}`",
     )
 
 

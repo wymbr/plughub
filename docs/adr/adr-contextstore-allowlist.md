@@ -908,9 +908,38 @@ declarado no read* e passa a ser sobre *tag não cadastrada no publish*.
    caíram por medição: gêmeo solto reintroduz a cópia divergente que este arco persegue, e
    chamar o funil por rede poria 20 sítios de caminho quente contra a porta 3100, que saiu
    da LAN em 2026-09-01 (CAP-13) por servir transporte anônimo.
-2. **Onde mora a tela de cadastro** — e a fricção que ela cria: campo novo passa a exigir
-   registro. É a *feature*, e é também o que faz gente contornar. O erro de publish precisa
-   dizer exatamente o que registrar, e o cadastro precisa morar onde o autor já está.
+2. ~~**Onde mora a tela de cadastro**~~ — **DECIDIDA em 2026-09-02 (ALW-03): divisão por
+   FATO, não por tela.** Ao medir, os dois critérios desta linha **discordavam**: *"o
+   cadastro precisa morar onde o autor já está"* aponta para o editor, e a analogia da
+   própria D9 (*"como um DialogForm"*) aponta para Configuração, admin-only. A analogia não
+   transfere neste eixo — um DialogForm é conteúdo de negócio, um campo de ContextStore é
+   declaração técnica que o flow precisa, e os autores são pessoas diferentes.
+
+   O desempate foi ver que **"cadastrar um campo" são dois fatos com donos diferentes**:
+
+   | fato | dono | onde |
+   |---|---|---|
+   | o **catálogo de tipos** — o que `cpf_br` mascara, para quais papéis, sua classe LGPD | compliance | `/config/masking`, grant `config.masking` |
+   | o **mapa** — quais campos existem e qual tipo cada um usa | quem AUTORA flow | `/config/context-map`, grant **`config.context_map`** |
+
+   Mesma forma do split `config.users` × `config.permissions`: *um rótulo com "e"
+   provavelmente são dois fatos*. Medido antes de decidir: `skill_flows.operacao` e
+   `.editar` nascem para admin **+ developer**; `config.masking` só para admin — logo o
+   cadastro estava, por construção, fora do alcance de quem autora.
+
+   **O autor ESCOLHE o tipo, do catálogo fechado** (decisão do dono). Ele pode dizer que um
+   campo é `cpf_br`; não pode criar tipo nem mudar o que um tipo significa. Escolher `texto`
+   para um campo sensível é possível, e o próprio ADR já licenciou isso na depreciação da
+   D9.5: o contrato da §1.1 é que **alguém decidiu**, explicitamente e de forma auditável —
+   *"garantir que a decisão seja BOA nunca foi o contrato"*.
+
+   Gate: `infra/test/probe_context_map_grant_split.sh` (8 ramos; o **G** é ao vivo e tem
+   controle POSITIVO obrigatório — sem ele um split que proibisse tudo passaria).
+
+   ⚠️ **A outra metade desta decisão segue aberta**: *"o erro de publish precisa dizer
+   exatamente o que registrar"* depende da V4, que é a ALW-01. E a afordância no editor
+   (mostrar as tags não cadastradas do flow aberto) é a **ALW-08** — hoje o editor é um
+   Monaco de YAML sem noção nenhuma de context tag.
 3. **A lista de domínios**, que só deve fechar com o critério de PAPEL acima — nunca por caber
    nos demos.
 4. **O destino de `linha_em_servico`**, criado hoje a partir de um fluxo de demonstração: a

@@ -280,46 +280,10 @@ export default function MaskingPage() {
 
   // ── Context Store masking rules ─────────────────────────────────────────────
 
-  // ── Mapa do ContextStore (CNS-08) ───────────────────────────────────────────
-  //
-  // ⚠️ Grava no ESCOPO GLOBAL (`tenantId` = null), e isso é decisão medida, não
-  // descuido. A resolução de config é tenant-vence-global POR INTEIRO (`LIMIT 1`),
-  // então um override de tenant nesta chave substituiria as folhas da plataforma em
-  // vez de acrescentar às delas — medido: um `PUT` com uma folha deixou o tenant com
-  // 1 no lugar de 94. O config-api RECUSA (422) override de tenant nesta chave; aqui
-  // a tela nem oferece o caminho. Vocabulário por tenant é desenho registrado (chave
-  // separada + merge), adiado por população zero — ver CNS-16.
-  const rawContextMap = maskingEntries['context_map']?.value ?? maskingEntries['context_map']
-  const contextMap: ContextMapDoc = (rawContextMap && typeof rawContextMap === 'object')
-    ? (rawContextMap as ContextMapDoc)
-    : { contexto: {} }
-
-  async function saveContextMap(next: ContextMapDoc) {
-    if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
-    setSaving('context_map')
-    try {
-      await putConfig('masking', 'context_map', next, null, '', adminToken)
-      reloadMasking()
-      showToast(t('toast.keySaved', { key: 'context_map' }), true)
-    } catch (e) {
-      showToast(String(e), false)
-    } finally {
-      setSaving(null)
-    }
-  }
-
-  /** Muda o tipo de UMA folha, preservando `legado`/`label` — o resto do nó é dado
-   *  que a tela não autora e não pode perder num round-trip de edição. */
-  function setLeafTipo(root: string, dom: string, campo: string, tipo: string) {
-    const c = contextMap.contexto ?? {}
-    saveContextMap({
-      ...contextMap,
-      contexto: {
-        ...c,
-        [root]: { ...c[root], [dom]: { ...c[root]?.[dom], [campo]: { ...c[root]?.[dom]?.[campo], tipo } } },
-      },
-    })
-  }
+  // O estado do mapa saiu junto com a secao (ALW-03) — vive em
+  // `modules/context-map/ContextMapPage.tsx`. `PLATFORM_ROOT` e o tipo `ContextMapDoc`
+  // seguem aqui porque a pagina nova os redeclara: sao 6 linhas, e o platform-ui ainda
+  // nao depende de `@plughub/schemas` (divida ja registrada no TODO.md).
 
   const rawContextRules = maskingEntries['context_rules']?.value ?? maskingEntries['context_rules']
   const contextRulesConfig: ContextMaskingConfig = (
@@ -674,76 +638,19 @@ export default function MaskingPage() {
           </div>
         </Section>
 
-        {/* ── Section 5b: o MAPA do ContextStore (CNS-08) ──────────────────── */}
-        <Section
-          icon={Archive}
-          title={t('section.contextMap.title', { defaultValue: 'ContextStore map — declared fields' })}
-          desc={t('section.contextMap.description', { defaultValue: 'Which fields exist in the ContextStore, in escopo.dominio.campo, each naming its type. The map is the allowlist. Saved to the GLOBAL scope.' })}
-        >
-          {Object.keys(contextMap.contexto ?? {}).length === 0 && (
-            <div style={{ marginTop: 12, padding: '10px 14px', background: '#1a1206', border: '1px solid #78350f', borderRadius: 8, fontSize: 12, color: '#fbbf24' }}>
-              {t('section.contextMap.absent', { defaultValue: 'masking.context_map is not set — the platform seeds it at boot.' })}
-            </div>
-          )}
-          {Object.entries(contextMap.contexto ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([root, doms]) => {
-            const daPlataforma = root === PLATFORM_ROOT
-            const nFolhas = Object.values(doms).reduce((n, c) => n + Object.keys(c).length, 0)
-            return (
-              <div key={root} style={{ marginTop: 14, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '12px 16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                  <code style={{ fontSize: 13, fontWeight: 700, color: daPlataforma ? '#7dd3fc' : '#e2e8f0' }}>{root}.*</code>
-                  <span style={{ fontSize: 11, color: '#64748b' }}>{nFolhas} {t('section.contextMap.leaves', { defaultValue: 'fields' })}</span>
-                  {daPlataforma && badge(t('section.contextMap.platform', { defaultValue: 'platform — read only' }), '#7dd3fc')}
-                </div>
-                {daPlataforma && (
-                  /*
-                    O `core` é semeado pelo `seed.py`, que é o dono dele. Editá-lo aqui
-                    criaria drift contra a declaração, e o `probe_seed_drift_named`
-                    passaria a acusar uma divergência que a própria tela criou.
-                  */
-                  <p style={{ margin: '0 0 10px', fontSize: 11, color: '#64748b', lineHeight: 1.6 }}>
-                    {t('section.contextMap.platformNote', { defaultValue: 'Declared by the platform seed and reserved: a tenant cannot write here. Change it in seed.py and reapply.' })}
-                  </p>
-                )}
-                {Object.entries(doms).sort(([a], [b]) => a.localeCompare(b)).map(([dom, campos]) => (
-                  <div key={dom} style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, marginBottom: 4 }}>{dom}</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 6 }}>
-                      {Object.entries(campos).sort(([a], [b]) => a.localeCompare(b)).map(([campo, leaf]) => (
-                        <div key={campo} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#0a1628', borderRadius: 6, padding: '5px 10px' }}>
-                          <code style={{ fontSize: 11, color: '#cbd5e1', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{campo}</code>
-                          {daPlataforma ? (
-                            <code style={{ fontSize: 11, color: '#7dd3fc' }}>{leaf.tipo}</code>
-                          ) : (
-                            <select
-                              value={leaf.tipo}
-                              disabled={saving === 'context_map'}
-                              onChange={e => setLeafTipo(root, dom, campo, e.target.value)}
-                              style={{ ...selectStyle, fontSize: 11, padding: '3px 6px' }}
-                            >
-                              {dataTypes.map(dt => <option key={dt.id} value={dt.id}>{dt.id}</option>)}
-                            </select>
-                          )}
-                          {(leaf.legado?.length ?? 0) > 0 && (
-                            <span
-                              title={leaf.legado?.join(', ')}
-                              style={{ fontSize: 10, color: '#64748b', cursor: 'help' }}
-                            >{leaf.legado?.length} {t('section.contextMap.aliases', { defaultValue: 'aliases' })}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
-          })}
-          <div style={{ marginTop: 12, padding: '10px 14px', background: '#0f172a', borderRadius: 8, border: '1px solid #1e293b' }}>
-            <p style={{ margin: 0, fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
-              {t('section.contextMap.scopeNote', { defaultValue: 'Edits are saved to the GLOBAL scope. A per-tenant override would replace the platform declarations wholesale instead of adding to them, so the Config API refuses it (422).' })}
-            </p>
-          </div>
-        </Section>
+        {/* ── O MAPA do ContextStore MUDOU DE CASA (ALW-03, 2026-09-02) ─────
+            Ele morava aqui desde a CNS-08 e foi para `/config/context-map`, com grant
+            proprio (`config.context_map`, preset admin + DEVELOPER).
+
+            O motivo e uma divisao por FATO, decidida pelo dono: "cadastrar um campo"
+            sao duas coisas com donos diferentes — o CATALOGO de tipos (o que `cpf_br`
+            mascara, sua classe LGPD) e politica de compliance e fica AQUI; o MAPA
+            (quais campos existem, qual tipo cada um usa) e AUTORIA e cresce a cada flow.
+
+            Enquanto os dois dividiam `config.masking` (preset admin-only), o cadastro
+            ficava fora do alcance de quem autora — `skill_flows.operacao`/`editar`
+            nascem para admin+developer. O ADR nomeia essa friccao como o que faz gente
+            CONTORNAR o cadastro.                                                   */}
 
         {/* ── Section 6: Context Store field-level masking rules ─────────── */}
         <Section

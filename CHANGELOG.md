@@ -1,5 +1,137 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-03: o cadastro do ContextStore alcança quem AUTORA, e o catálogo fica com compliance
+
+### Os dois critérios do ADR discordavam, e medir foi o que desempatou
+
+A decisão #2 da D9 dava duas regras: *"o cadastro precisa morar onde o autor já está"*
+(→ editor de fluxo) e *"como um DialogForm"* (→ Configuração, admin-only). **Elas apontam
+para lados opostos.** A analogia não transfere neste eixo: um DialogForm é conteúdo de
+negócio; um campo de ContextStore é declaração técnica que o flow precisa, e os autores são
+pessoas diferentes.
+
+O desempate saiu de uma medição simples:
+
+| campo | `role_defaults` |
+|---|---|
+| `skill_flows.operacao` (editor) | admin, **developer** |
+| `skill_flows.editar` | admin, **developer** |
+| `config.masking` (cadastro, até hoje) | **admin, e só** |
+
+O autor de flow **é** `developer`, e o cadastro estava por construção fora do alcance dele.
+Ao vivo o dano ainda é zero — 8 usuários ativos, e o único que autora é o `admin@`, que tem
+os dois papéis. **A população viva não decide nada aqui; quem decide é o preset**, que é o
+que todo usuário novo recebe. É a distinção exposição × dano da D14.1, com o sinal
+invertido: aqui o dano é latente-estrutural, não inexistente.
+
+### A decisão: dividir por FATO, não por tela
+
+*"Cadastrar um campo"* são **dois fatos com donos diferentes** — mesma forma do split
+`config.users` × `config.permissions` (*um rótulo com "e" provavelmente são dois fatos*):
+
+| fato | dono | onde | grant |
+|---|---|---|---|
+| **catálogo de tipos** — o que `cpf_br` mascara, para quais papéis, classe LGPD | compliance | `/config/masking` | `config.masking` (admin) |
+| **mapa** — quais campos existem, qual tipo cada um usa | quem AUTORA flow | `/config/context-map` | **`config.context_map`** (admin + **developer**) |
+
+E o **autor escolhe o tipo, do catálogo fechado** (decisão do dono). Pode dizer que um campo
+é `cpf_br`; não pode criar tipo nem mudar o que um tipo significa — o `<select>` só oferece o
+catálogo. Escolher `texto` para um campo sensível é possível, e o ADR já licenciou isso ao
+depreciar a D9.5: o contrato da §1.1 é que **alguém decidiu**, não que a decisão seja boa.
+
+### O que torna a decisão mecanismo, e não prosa
+
+Três peças, e **cada uma sozinha deixaria a divisão decorativa**:
+
+1. **`config.context_map` com o `developer` no preset.** Sem ele o campo existe e não alcança
+   ninguém novo.
+2. **O portão do config-api resolve por `(namespace, KEY)`.** `masking.context_map` e
+   `masking.types` dividiam namespace e portanto grant; hoje `_NS_KEY_FIELD_OVERRIDES` separa
+   **essa key e só ela** — o gate tem testemunha de que `types` continua em `masking`, porque
+   um portão que devolvesse `context_map` para tudo teria **entregado o catálogo ao autor**.
+3. **Porta própria no menu.** *Grant sem porta não concede nada* — o item de Mascaramento é
+   `config.masking`, então quem recebesse só o campo novo não veria caminho até a tela. O
+   repositório já pagou por isso (a `AgentReportsPage` órfã; os 11 grants do supervisor que o
+   `roles:` do menu tornava inertes).
+
+A seção do mapa **saiu** da `MaskingPage` (onde nasceu na CNS-08) para
+`modules/context-map/ContextMapPage.tsx`.
+
+### O ramo positivo do gate pegou uma mudança INERTE
+
+`probe_context_map_grant_split.sh` tem 8 ramos, e o **G é ao vivo**: cria um principal com
+`config.context_map` e **sem** `config.masking`, e mede as duas escritas. Ele acusou
+`PUT context_map=403` — o autor não escrevia nada. Três causas empilhadas, e nenhuma
+apareceria num gate estático:
+
+1. o container do config-api estava atrás do repo (a mudança do `router.py` veio depois do
+   último build) — *`build` não recria container*, pela terceira vez neste dia;
+2. o `infra/modules.yaml` é **copiado para dentro da imagem** da auth-api, e o registry
+   (`auth.module_registry`) só é reconciliado no boot. Sem rebuild + recreate, o campo novo
+   **não existia no banco** — medido: 9 campos em `config`, sem `context_map`;
+3. a cobaia do próprio gate **sobreviveu entre execuções**: a limpeza lia `user_id` e o
+   endpoint devolve `id`, então o `POST` batia em *"Email already registered"* e o ramo
+   passava a medir um usuário de outra rodada, com `module_config` vazio.
+
+Desfecho: `context_map=422 · types=403`. **Sem o controle positivo o gate teria ficado
+verde nas três** — um split que proíbe tudo passa em qualquer teste que só olhe a recusa.
+
+### ⚠️ O gate CORROMPEU a config viva, e a correção não foi escrever com mais cuidado
+
+A primeira versão do ramo G relia o mapa e o reescrevia *"idêntico"*. **Não era idêntico.** O
+payload tem ~7,6 kB com acentos e atravessava uma variável de shell; nesta bancada isso
+mangla os bytes, e o rótulo `Classificada na LEITURA — sem produtor próprio` foi gravado
+como `â€" sem produtor prÃ³prio`. As execuções seguintes leram o mapa já corrompido e o
+preservaram fielmente. Quem denunciou foi o `probe_context_map_audit.sh`, que compara a
+config viva com a TS.
+
+Reparado a partir de `py-contextstore/default_map.py` — o espelho que a ALW-02 acabou de
+criar, e que o gate prova idêntico à TS. **O reparo precisou do `X-Admin-Token`**, e o
+motivo é o próximo achado.
+
+A correção do gate **não foi serializar melhor — foi parar de escrever.** O portão vive num
+`Depends`, logo decide **antes** da validação do corpo:
+
+```
+não autorizado          →  403   (o portão)
+autorizado + corpo mau  →  422   (a validação, e nada é gravado)
+```
+
+Um corpo deliberadamente inválido separa os dois casos sem tocar em dado. *Um gate que
+precisa escrever em produção para medir autorização está medindo do jeito errado.*
+
+### O split REMOVEU capacidade de quem já existia — e isso é regressão, não decisão
+
+Preset só se aplica na **criação** (*"editar o preset não muda quem já existe"*). Então
+separar `context_map` de `masking` tirou o mapa de quem tinha o campo antigo: o
+`admin@plughub.local` passou a levar **403** ao gravar o mapa, e foi assim que o reparo
+acima precisou do token de sistema.
+
+Backfill feito (`config.context_map` ← `config.masking`, **1 usuário**, 0 restantes), e o
+invariante virou o **ramo H** do gate em vez de um SQL de uma vez só: *quem tem o catálogo
+não pode ter perdido o mapa*. Provado falseável desfazendo o backfill.
+
+### Bancada, de novo, e de novo por presunção
+
+- O payload do ramo G tem ~7,6 kB com acentos, e atravessar `$( )` neste ambiente (Git Bash +
+  python de Windows) manglava os bytes: o servidor devolvia **500** (`invalid input syntax
+  for type json`), que **parece** o portão recusando. Payload passou a ir por **arquivo**,
+  como no `probe_seed_drift_named`.
+- **Crase dentro de aspas duplas é substituição de comando em bash.** Usei crases de markdown
+  nas mensagens do gate e ele imprimiu `config.context_map: command not found` no meio dos
+  ramos — verde no veredicto, ilegível na saída.
+- E um `RC=0` depois de um pipe para `head` quase validou um `tsc` que eu não tinha medido —
+  quarta ocorrência do mesmo `$?` nesta sessão.
+
+### O que ALW-03 NÃO fecha
+
+A outra metade da decisão #2 — *"o erro de publish precisa dizer exatamente o que
+registrar"* — depende da V4, que é a **ALW-01**. E a afordância no editor (mostrar as tags do
+flow aberto que **não** estão cadastradas) virou **ALW-08**: medido hoje, o editor é um Monaco
+de YAML de 872 linhas, **sem noção nenhuma de context tag** e sem validação contra o servidor.
+O grant já alcança o autor; o que ele ainda não tem é **ver** o que falta registrar.
+
+
 ## 2026-09-02 — ALW-02 (fecha): os 21 sítios roteados, e o censo desce a 2/2 — que são os dois funis
 
 ### O número que fecha o arco
