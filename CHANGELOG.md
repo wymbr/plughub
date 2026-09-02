@@ -1,5 +1,107 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-12: o mapa do tenant não tinha provisionamento, e o `--wipe` o perdia
+
+**Como apareceu.** Não foi procurado: caiu ao consertar o censo (ALW-11). Ao conferir de onde
+vinham as 20 canônicas que existem no mapa vivo e não na semente, elas eram todas de domínio de
+**tenant** — `cartao`, `conta`, `portabilidade`, `processo`, `reembolso`, `journey.cartao`,
+`journey.processo`. A ALW-04 tinha encolhido a semente para só-plataforma, o que está certo. O
+que não existia era a **contraparte**: há `infra/dialog/*.json`, há `infra/registry/*.yaml`, e
+não havia `infra/context-map/`. Aquelas 20 estavam no store porque alguém as escreveu pela API,
+uma vez.
+
+**O número, e por que ele é da V4.** Contra a semente — que **é** o estado pós-`--wipe` — **17
+das 52** escritas de skill ficam não declaradas. Com o portão de publish da V4 ligado, o
+`RegistrySyncer` as recusaria no boot; e ele **não bloqueia o startup**
+(`registry_syncer.py:623`), então a stack sobe, os skills ficam sem publicar, e o único sinal é
+o contador `skills_errors`. É a regra do `CLAUDE.md` sobre ambiente que só sobe porque já subiu
+antes — e a previsão foi feita por análise estática e depois **reproduzida ao vivo**: encolhido
+o mapa para a semente, o censo acusou exatamente 17.
+
+**O escopo da escrita é GLOBAL, e isso é forçado.** Medido: `masking.context_map` tem UMA linha,
+`__global__` (8362 bytes). Criar um override de `tenant_demo` seria construir de propósito o
+defeito da ALW-06 — tenant vence global **por inteiro**, então a linha do tenant teria de
+carregar o mapa completo e toda atualização futura da plataforma ficaria invisível para ele, em
+silêncio. Aliás a API já não permite: a **CNS-08** recusa qualquer `PUT` de `masking.context_map`
+com escopo de tenant (422), pela mesma razão. O preço aceito é o inverso e é menor — os domínios
+do demo ficam no default global. Quem conserta isso é a ALW-06, não este seed.
+
+**O grão do seed-if-absent é o DOMÍNIO, não a chave.** `masking.context_map` é um valor único
+para o mapa inteiro; seed-if-absent no grão da chave nunca acrescentaria nada, porque a chave
+sempre existe — seria um seed que passa sem semear. Domínio já presente não é tocado (o store
+vence, edição de UI sobrevive a rebuild); `CONTEXT_MAP_SEED_RECONCILE=true` inverte, domínio a
+domínio. **Nada é removido em modo nenhum**, pela mesma razão que a D7 recusou o `--overwrite`
+cego.
+
+**Catálogo antes do mapa (D8.3) vira mecanismo.** Todo `tipo` do arquivo é conferido contra
+`masking.types` antes de qualquer escrita, e tipo desconhecido faz o seed recusar o **arquivo
+inteiro** — não campo a campo, porque semear metade de um domínio deixaria o skill escrevendo
+num nome declarado e noutro não.
+
+### O defeito que a mutação achou, e que eu tinha escrito
+
+A primeira versão mesclava no mapa **EFETIVO** (resolvido por tenant) e escrevia o resultado no
+**GLOBAL**. Enquanto os dois coincidem — o caso normal, garantido pela CNS-08 — nada acontece.
+Divergindo, o `PUT` grava o conteúdo do TENANT por cima da plataforma: **medido, o mapa global
+caiu de 97 canônicas para 20 e a metade `core.*` desapareceu**. Restaurado do backup.
+
+A conferência do efeito que eu já tinha escrito **pegou o sintoma e reprovou — depois de já ter
+gravado**. É a lição: *conferir o efeito não substitui escolher a base certa*. Hoje são duas
+conferências, e elas não se substituem — **antes** de escrever, global e efetivo têm de ser
+iguais (divergência ⇒ recusa, sem escrever, nomeando que o override veio de fora da API);
+**depois**, os domínios têm de aparecer na leitura efetiva.
+
+### Três diagnósticos errados sobre o cache, e o que os causou
+
+O ramo que monta o cenário de divergência ficava ora INCONCLUSIVO, ora verde. Eu publiquei duas
+explicações erradas antes da certa:
+
+1. *"o config-api cacheia"* — certo, mas incompleto;
+2. *"não há cache, era o global danificado"* — **errado**, e eu retratei a explicação correta
+   sem medir;
+3. o real: o cache é **em Redis** (`plughub:cfg:{tenant}:{ns}:{key}`), **não em processo** —
+   logo reiniciar o config-api não invalida coisa nenhuma. A invalidação é o `DEL` da chave.
+
+O que tornava o comportamento intermitente é a parte que generaliza: **o cache era esquentado
+por um ramo ANTERIOR do próprio gate** (o ramo D lê o mapa). Rodado isolado, o cenário montava;
+dentro do gate, não. *Estado compartilhado entre ramos é entrada não declarada do ramo seguinte* —
+mesma família do ambiente que só sobe porque já subiu antes.
+
+### As-built
+
+- **`infra/context-map/tenant_demo.json`** — 7 domínios, 20 campos, 21 aliases, gerado a partir
+  do mapa vivo (não transcrito à mão). Carrega no próprio arquivo por que existe e o que não é.
+- **`infra/seed/seed_context_map.py`** — via API oficial, escopo global, merge por domínio, as
+  duas conferências, e a checagem de catálogo.
+- **`docker-compose.demo.yml`** — serviço `context-map-seed` (depois do `config-seed`), e o
+  **`orchestrator-bridge` passa a depender dele**. Acoplamento deliberado: falha de
+  provisionamento passa a impedir o bridge de subir, o que é a troca certa contra runtime mudo e
+  quebrado quando a V4 ligar o portão.
+
+### Gate
+
+`infra/test/probe_context_map_seed.sh`, 6 ramos, no manifesto. A proposição central é o ramo
+**C** — *o mapa vivo é derivável de arquivos versionados?* — respondida por reconstrução
+determinística (semente + arquivo == vivo), que é mais forte que rodar o seed e ver se ele não
+reclama: um seed que não faz nada também não reclama.
+
+Falseabilidade provada por mutação no PRODUTO, e as duas mutações deram mensagens **diferentes**,
+o que mostra que o ramo F não julga só pelo exit code:
+
+| mutação no seeder | o gate disse |
+|---|---|
+| guarda prévia removida | *"o seed PASSOU com override divergente — a guarda prévia é inerte"* |
+| base de mescla = efetivo (o bug real) | *"recusou (exit 1) mas por outro motivo"* |
+
+Fora do gate por decisão: a restauração pós-`--wipe` de verdade (encolher o global e ver o seed
+recompor). Foi validada à mão — 17 não declaradas → 1, resultado **byte-idêntico** ao estado
+anterior — e fica fora porque exige escrever na linha `__global__`: uma interrupção no meio
+deixaria a instalação com o mapa da plataforma pela metade. O ramo F, em contraste, só insere e
+remove uma linha de TENANT e nunca toca o global.
+
+Estado final conferido: uma linha `__global__` de 8362 bytes, mapa vivo idêntico a semente +
+arquivo, nenhum resíduo de tenant.
+
 ## 2026-09-02 — Decisão #6: o `preview` era resíduo, e procurá-lo achou a fiação do funil quebrada em CINCO de cinco serviços
 
 ### A decisão, e por que a pergunta estava mal posta

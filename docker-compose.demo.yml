@@ -1123,6 +1123,44 @@ services:
       - plughub-demo
     restart: "no"
 
+  # ─── context-map-seed (ALW-12) ─────────────────────────────────────────────
+  #
+  # Provisiona os DOMÍNIOS DE NEGÓCIO do tenant no `masking.context_map`. A
+  # semente da plataforma (config-seed, acima) traz só o vocabulário da
+  # PLATAFORMA — decisão da ALW-04, e correta. Sem este container, os 20 campos
+  # de `cartao`/`conta`/`portabilidade`/`processo`/`reembolso` só existem porque
+  # alguém os escreveu pela API uma vez, e um `--wipe` os perde: medido em
+  # 2026-09-02, 17 das 52 escritas de skill voltam a NÃO DECLARADAS.
+  #
+  # Roda DEPOIS do config-seed porque acrescenta ao mapa dele — sozinho, sobre um
+  # store vazio, ele recusa (o GET dá 404 e o seed sai dizendo por quê, em vez de
+  # publicar um mapa sem os domínios de plataforma).
+  context-map-seed:
+    image: python:3.11-slim
+    volumes:
+      - ./infra/seed:/seed:ro
+      - ./infra/context-map:/context-map:ro
+    environment:
+      CONFIG_API_URL:   http://config-api:3600
+      CONTEXT_MAP_DIR:  /context-map
+      TENANT_ID:        tenant_demo
+      SEED_MAX_WAIT:    "120"
+      # ESPELHO de PLUGHUB_CONFIG_ADMIN_TOKEN do serviço config-api. Os dois nomes
+      # diferem porque o serviço usa env_prefix `PLUGHUB_CONFIG_` (pydantic-settings)
+      # e o seed lê a env crua — mesma armadilha que o dialog-seed documenta.
+      CONFIG_ADMIN_TOKEN: demo_config_admin_token
+      # Inverte a precedência: o arquivo vence, domínio a domínio.
+      CONTEXT_MAP_SEED_RECONCILE: ${CONTEXT_MAP_SEED_RECONCILE:-}
+    command: ["python", "/seed/seed_context_map.py"]
+    depends_on:
+      config-api:
+        condition: service_healthy
+      config-seed:
+        condition: service_completed_successfully
+    networks:
+      - plughub-demo
+    restart: "no"
+
   # demo-seed REMOVIDO (config-consolidation F1.1b, 2026-06-11): provisionamento de
   # pools/channel_endpoints é via RegistrySyncer (orchestrator-bridge) a partir de
   # infra/registry/tenant_demo.yaml. agent_types entidade aposentada; Redis derivado
@@ -1623,6 +1661,18 @@ services:
         condition: service_healthy
       skill-flow-service:
         condition: service_healthy
+      # ALW-12 — ACOPLAMENTO DELIBERADO, e ele existe para um defeito FUTURO.
+      # O RegistrySyncer publica os 44 skills no boot. Quando a V4 ligar o portão
+      # de publish sobre o cadastro, um skill que escreva tag não declarada será
+      # RECUSADO — e o syncer `never blocks startup on skill sync errors`
+      # (registry_syncer.py:623): a stack subiria com os skills sem publicar e o
+      # único sinal seria o contador `skills_errors`.
+      #
+      # O preço é real e está aceito: falha do seed passa a impedir o bridge de
+      # subir. É a troca certa — falha barulhenta de provisionamento contra runtime
+      # mudo e quebrado.
+      context-map-seed:
+        condition: service_completed_successfully
     restart: on-failure
     networks:
       - plughub-demo

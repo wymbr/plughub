@@ -151,6 +151,10 @@ probe_masking_apply_parity.sh
 # ALW-03: exige a stack de pe (o ramo G cria uma cobaia, loga e escreve o mapa de volta
 # IDENTICO). Sem ela sai SEM AMOSTRA, que nao e verde.
 probe_context_map_grant_split.sh
+# ALW-12: exige a stack. O ramo F escreve uma linha de TENANT direto no banco (a API a
+# recusa desde a CNS-08) e apaga o cache Redis do config-api — nunca toca `__global__`,
+# e o trap limpa em EXIT/INT/TERM. Sem stack sai INCONCLUSIVO.
+probe_context_map_seed.sh
 # Precisa de um principal de escopo ESTREITO — com admin o marcador nasce correto
 # e o defeito nao e exercido (o proprio probe declara isso e sai INCONCLUSIVO).
 ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_chip_scoped_marker.sh

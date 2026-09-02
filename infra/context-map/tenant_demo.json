@@ -1,0 +1,178 @@
+{
+  "_": [
+    "DOMÍNIOS DE NEGÓCIO do tenant no mapa do ContextStore — provisionamento.",
+    "",
+    "Por que este arquivo existe (ALW-12, 2026-09-02)",
+    "------------------------------------------------",
+    "A ALW-04 encolheu a SEMENTE da plataforma para só-plataforma, o que está certo:",
+    "`cartao`, `portabilidade` e `reembolso` são vocabulário de quem usa, não da",
+    "plataforma. Mas a contraparte não existia — há `infra/dialog/*.json` e",
+    "`infra/registry/*.yaml`, e não havia `infra/context-map/`. Os 20 campos abaixo",
+    "viviam no store apenas porque alguém os escreveu pela API, uma vez, durante a",
+    "FATIA 1 da D9.",
+    "",
+    "Medido em 2026-09-02: contra a semente — que É o estado pós-`--wipe` — 17 das 52",
+    "escritas de skill ficavam NÃO DECLARADAS. Com o portão de publish da V4 ligado, o",
+    "RegistrySyncer as recusaria no boot, e ele não bloqueia o startup",
+    "(`registry_syncer.py:623`): a stack sobe, os skills ficam sem publicar, e o único",
+    "sinal é o contador `skills_errors`. Ambiente que só sobe porque já subiu antes.",
+    "",
+    "O que este arquivo NÃO é",
+    "------------------------",
+    "Não é a semente da plataforma. `DEFAULT_CONTEXT_MAP` (@plughub/schemas) continua",
+    "sendo a autoridade do que a PLATAFORMA declara, e nada aqui pode colidir com ela:",
+    "o seed é por DOMÍNIO e seed-if-absent, então domínio que a plataforma já declare",
+    "nunca é tocado.",
+    "",
+    "Também não é uma allowlist nova: os tipos (`credit_card`, `financial`, `cpf`,",
+    "`card_expiry`, `linha_em_servico`, `texto`) vêm todos do catálogo existente. Um",
+    "tipo que o catálogo não conheça faz o seed RECUSAR — a ordem é catálogo antes do",
+    "mapa (D8.3), e semear um tipo inexistente escreveria política que ninguém decidiu.",
+    "",
+    "Os `legado` são as grafias que os skills de demo escrevem HOJE. Elas são também",
+    "os 17 aliases que a ALW-05 espera decair — migrar os skills para as canônicas faz",
+    "o contador cair por CONSERTO, e é trabalho separado deste arquivo."
+  ],
+  "tenant_id": "tenant_demo",
+  "contexto": {
+    "journey": {
+      "cartao": {
+        "limite_aprovado": {
+          "legado": [
+            "journey.limite_aprovado"
+          ],
+          "tipo": "financial"
+        },
+        "numero": {
+          "legado": [
+            "journey.numero_cartao"
+          ],
+          "tipo": "credit_card"
+        }
+      },
+      "processo": {
+        "numero_pedido": {
+          "legado": [
+            "journey.numero_pedido"
+          ],
+          "tipo": "texto"
+        },
+        "origin_process_session": {
+          "legado": [
+            "journey.origin_process_session"
+          ],
+          "tipo": "texto"
+        },
+        "parecer": {
+          "legado": [
+            "journey.parecer"
+          ],
+          "tipo": "texto"
+        },
+        "pedido": {
+          "legado": [
+            "journey.pedido"
+          ],
+          "tipo": "texto"
+        },
+        "resultado": {
+          "legado": [
+            "journey.resultado"
+          ],
+          "tipo": "texto"
+        }
+      }
+    },
+    "session": {
+      "cartao": {
+        "cpf": {
+          "legado": [
+            "session.cpf_titular"
+          ],
+          "tipo": "cpf"
+        },
+        "limite_aprovado": {
+          "legado": [
+            "session.limite_aprovado"
+          ],
+          "tipo": "financial"
+        },
+        "limite_solicitado": {
+          "legado": [
+            "session.limite_solicitado"
+          ],
+          "tipo": "financial"
+        },
+        "numero": {
+          "legado": [
+            "session.numero_cartao"
+          ],
+          "tipo": "credit_card"
+        },
+        "vencimento": {
+          "legado": [
+            "session.vencimento_cartao"
+          ],
+          "tipo": "card_expiry"
+        }
+      },
+      "conta": {
+        "plano_atual": {
+          "legado": [
+            "account.plano_atual",
+            "caller.plano_atual"
+          ],
+          "tipo": "texto"
+        },
+        "status": {
+          "legado": [
+            "account.status"
+          ],
+          "tipo": "texto"
+        }
+      },
+      "portabilidade": {
+        "numero_atual": {
+          "legado": [
+            "session.numero_atual"
+          ],
+          "tipo": "linha_em_servico"
+        },
+        "operadora_destino": {
+          "legado": [
+            "session.operadora_destino"
+          ],
+          "tipo": "texto"
+        }
+      },
+      "processo": {
+        "parecer": {
+          "legado": [
+            "session.parecer"
+          ],
+          "tipo": "texto"
+        },
+        "resultado": {
+          "legado": [
+            "session.resultado"
+          ],
+          "tipo": "texto"
+        }
+      },
+      "reembolso": {
+        "motivo_reembolso": {
+          "legado": [
+            "session.motivo_reembolso"
+          ],
+          "tipo": "texto"
+        },
+        "numero_pedido": {
+          "legado": [
+            "session.numero_pedido"
+          ],
+          "tipo": "texto"
+        }
+      }
+    }
+  }
+}
