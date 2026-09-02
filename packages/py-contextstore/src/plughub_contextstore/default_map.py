@@ -153,7 +153,13 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
             "hook": {
                 "wrapup_pool": {"tipo": "texto", "legado": ["hook.wrapup_pool"]},
                 "dialog_form_id": {"tipo": "texto", "legado": ["hook.dialog_form_id"]},
-                "acw_timeout_hours": {"tipo": "texto", "legado": ["hook.acw_timeout_hours"]}
+                "acw_timeout_hours": {"tipo": "texto", "legado": ["hook.acw_timeout_hours"]},
+                # ALW-01 pre-requisito (2026-09-02): as DUAS unicas tags que a auditoria viva
+                # acusava como `unknown` (30 leituras). Escritas pelo bridge em
+                # `_fire_detached_hook` na grafia PLANA; os tres irmaos acima ja declaravam o
+                # alias, estes dois nao existiam. `texto` porque sao identificador e enum.
+                "type": {"tipo": "texto", "legado": ["hook.type"]},
+                "origin_pool": {"tipo": "texto", "legado": ["hook.origin_pool"]}
             }
         },
         "journey": {

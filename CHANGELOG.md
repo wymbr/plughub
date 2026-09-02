@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-01: a pré-condição da V4, medida com a série cortada (e eu tinha errado o bloqueio)
+
+### A correção primeiro
+
+Eu disse que a ALW-01 estava *"bloqueada por ALW-05"*. **Errado, e o ledger dizia o certo:**
+`bloqueado por ALW-02/03/04` — os três fecharam hoje. A ALW-05 bloqueia a **outra** metade da
+V5 (fechar aliases), que é outro item. Falei de memória sobre um arquivo que estava aberto.
+
+### O que realmente bloqueia é medível, e agora está medido
+
+`unknown` estava em **2 tags / 30 leituras**: `hook.type` e `hook.origin_pool`. Ambas do
+`session.hook` — domínio de **plataforma** — que declarava 3 campos e devia declarar 5. Os
+três irmãos já traziam o alias plano; estes dois simplesmente não existiam. Mesma forma das
+nove canônicas de `survey` que a FATIA 1 consertou: **canônica ausente, grafia viva órfã**.
+
+Declarados (`texto`, como os irmãos — `type` é enum de hook, `origin_pool` é um `pool_id`),
+nas duas casas, com paridade TS × Python reconferida byte a byte. Declaração **74 → 76
+campos, 95 → 97 aliases**; mapa vivo **94 → 96** pelo merge (declaração vence folha a folha,
+excedente do tenant preservado).
+
+### A medição só vale se a amostra exercitar o parque
+
+A série anterior era **um único burst de 2026-09-01 18:25**. `unknown == 0` sobre isso não
+autoriza uma mudança que o ADR marca como não reversível — e o próprio ADR avisa por quê: *a
+auditoria observa a LEITURA, e campo escrito e nunca lido é invisível*.
+
+Série cortada e `smoke_limite_tres_acessos` rodado de ponta a ponta (**18 ✅ · 0 ❌**), que é
+justamente o fluxo que exercita o vocabulário retirado da declaração pela ALW-04. Resultado:
+
+```
+canon      6 tags     alias   16 tags     dynamic  0     unknown  1
+overflow   0
+```
+
+**E o 1 é `session.preview`** — a **decisão aberta #6 do ADR** (*política de mascaramento
+guardada como valor de tag*), deixada de fora **por decisão**, não por descuido. É o mesmo
+resíduo que a FATIA 1 já havia isolado.
+
+### Duas confirmações que valiam a rodada
+
+1. **Os 20 campos que a ALW-04 tirou da declaração resolveram como ALIAS**, não `unknown` —
+   `session.numero_cartao`, `session.vencimento_cartao`, `journey.numero_cartao`. Confirma
+   que sair da declaração da plataforma não os quebrou: o runtime lê o mapa **vivo**, e lá
+   eles continuam, agora como vocabulário do tenant.
+2. **`overflow = 0`**, que é o outro pré-requisito nomeado pelo ADR — o teto do balde não foi
+   tocado, então o `unknown` conta a população inteira e não uma amostra truncada.
+
+### O bloqueio que resta, e seu tamanho
+
+Sob a V4, tag não registrada não passa no **publish**. Medido: **uma** skill declara
+`preview` — `skill_limite_processo_v1.yaml:104`, dentro de um `delegate.context`, de onde o
+gateway compõe `session.preview`. Logo a V4 hoje bloquearia o publish daquela skill.
+
+O bloqueio da ALW-01, portanto, **não é tarefa: é a decisão #6**, e ela é curta — declarar
+`preview` com um tipo, ou tirá-lo do ContextStore. O ledger foi atualizado para dizer isso em
+vez de apontar tarefas já fechadas.
+
+
 ## 2026-09-02 — ALW-04: a plataforma parava de distribuir `reembolso` — e distribuía havia dois dias
 
 ### A advertência do ADR já tinha se realizado

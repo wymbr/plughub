@@ -401,7 +401,18 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       hook: {
         wrapup_pool:       { tipo: "texto", legado: ["hook.wrapup_pool"] },
         dialog_form_id:    { tipo: "texto", legado: ["hook.dialog_form_id"] },
-        acw_timeout_hours: { tipo: "texto", legado: ["hook.acw_timeout_hours"] }
+        acw_timeout_hours: { tipo: "texto", legado: ["hook.acw_timeout_hours"] },
+        // ALW-01 pré-requisito (2026-09-02): as DUAS únicas tags que a auditoria viva
+        // acusava como `unknown` (30 leituras). Mesmo defeito que as nove canônicas de
+        // `survey` tinham na V3 — canônica ausente e grafia PLANA viva, escrita pelo
+        // bridge em `_fire_detached_hook` (`main.py:1739`). Os três irmãos acima já
+        // declaravam o alias plano; estes dois simplesmente não existiam.
+        //
+        // `texto` porque são identificador e enum: `type` é `on_human_end`/
+        // `on_contact_end`/`on_process_end`, `origin_pool` é um `pool_id`. Nenhum
+        // carrega dado do cliente — é a mesma escolha dos três irmãos.
+        type:              { tipo: "texto", legado: ["hook.type"] },
+        origin_pool:       { tipo: "texto", legado: ["hook.origin_pool"] }
       },
     },
     journey: {
