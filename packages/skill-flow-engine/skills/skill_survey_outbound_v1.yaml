@@ -77,34 +77,34 @@ config_params:
       contexto do chamador. `segment` NÃO é suportado por aqui (survey_record exige
       segment_id, que o workflow outbound não conhece).
 
-entry: ler_journey_ctx
+entry: pesquisar
 
 steps:
 
-  # ── J5a-1 (demo/E2E): LÊ o contexto compartilhado do processo ───────────────
+  # ── `ler_journey_ctx` REMOVIDO (ALW-01, 2026-09-02) ────────────────────────
   #
-  # Esta sessão é OUTRA (webhook próprio), mas da MESMA journey que o processo. Se o
-  # `@ctx.journey.*` estiver funcionando, `journey.origin_process_session` — escrito pelo
-  # `skill_journey_demo_v1` na SESSÃO DELE — é legível aqui. Ecoamos o valor numa tag de
-  # sessão para poder observá-lo no Redis sem instrumentar nada.
+  # Era a metade LEITORA de um par de demo: `marcar_journey` (em
+  # `skill_journey_demo_v1`) escrevia `journey.origin_process_session` na sessão do
+  # PROCESSO, e este passo o lia daqui — outra sessão da mesma journey — ecoando em
+  # `session.journey_echo` para provar que `@ctx.journey.*` cruza sessões.
   #
-  # Se o roteamento de journey estiver quebrado, o `@ctx.journey.*` resolve para null, o
-  # `value` (string|number|boolean) rejeita, o invoke falha e a tag de eco NÃO existe —
-  # o teste falha de forma VISÍVEL, em vez de silenciosamente ler a caixa errada (que era
-  # exatamente o defeito: o namespace lia o hash da sessão sem nunca reclamar).
+  # ⚠️ **O escritor já não existe**: `skill_journey_demo_v1` foi removido, e o censo
+  # lista `journey.origin_process_session` em "lidos sem escritor". Pelo contrato do
+  # próprio passo — *"se o roteamento estiver quebrado, o `@ctx.journey.*` resolve
+  # para null, o `value` rejeita e o invoke falha"* — ele passou a falhar SEMPRE,
+  # caindo no `on_failure`. Deixou de ser instrumento e virou ruído: uma falha que
+  # não distingue mais roteamento quebrado de par desfeito.
   #
-  # Passo de demo — remover quando houver um consumidor real de `@ctx.journey.*`.
-  - id: ler_journey_ctx
-    type: invoke
-    tool: context_set
-    input:
-      session_id: "$.session_id"
-      tenant_id:  "$.tenant_id"
-      tag:        "session.journey_echo"
-      value:      "@ctx.journey.origin_process_session"
-    output_as: journey_echo
-    on_success: pesquisar
-    on_failure: pesquisar     # a pesquisa não pode depender da demo de contexto
+  # O gatilho declarado no `CHANGELOG.md` de 2026-08-13 era *"remover quando houver
+  # um consumidor real de `@ctx.journey.*`"*. O desfecho foi o outro: o produtor sumiu
+  # antes. Decisão do dono em 2026-09-02, no contexto da V4 — `session.journey_echo`
+  # era a única tag de skill que o portão de publish recusaria, e registrá-la seria
+  # cadastrar detrito.
+  #
+  # A prova de que `@ctx.journey.*` cruza sessões continua registrada: `CHANGELOG.md`
+  # de 2026-08-13, com TTL medido (2591667s) e controle negativo (a tag NÃO aparece no
+  # hash da sessão do processo). Quem precisar reexercer isso escreve um gate, não um
+  # passo em skill de produto.
 
   # ── collect outbound — convite + espera assíncrona SEM recurso ──────────────
   - id: pesquisar

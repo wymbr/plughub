@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-01: sai o `ler_journey_ctx`, e ele já não era instrumento — era um passo que só podia falhar
+
+**O pedido era pequeno; o achado, não.** `session.journey_echo` era a **única** tag escrita por
+skill que o portão de publish da V4 recusaria. O passo que a escreve se autodeclarava de demo
+(*"remover quando houver um consumidor real de `@ctx.journey.*`"*), e a decisão do dono foi
+remover em vez de cadastrar — cadastrar seria registrar detrito.
+
+**Ao olhar antes de cortar, o passo não era o que o comentário dizia.** Ele documentava um
+instrumento honesto: *"se o roteamento estiver quebrado, o `@ctx.journey.*` resolve para null, o
+`value` rejeita, o invoke falha e a tag de eco NÃO existe — o teste falha de forma VISÍVEL"*. Só
+que ele era a metade **LEITORA** de um par, e **o escritor já não existe**:
+`skill_journey_demo_v1` foi removido, com o `marcar_journey` dentro. O censo já dizia isso em voz
+alta — `journey.origin_process_session` aparecia em *"lidos sem escritor conhecido"* — e ninguém
+tinha juntado as duas metades.
+
+Consequência: pelo próprio contrato do passo, ele **falhava sempre**, caindo no
+`on_failure: pesquisar`. Deixou de distinguir *roteamento de journey quebrado* de *par desfeito*,
+que era exatamente o que ele existia para distinguir. É a família do comentário que promete uma
+invariante sem mecanismo — só que aqui o mecanismo existiu e foi retirado por baixo dele.
+
+**Era o `entry` do flow**, então a remoção não é só apagar: `entry` passa a `pesquisar`. Grafo
+conferido depois — 3 steps, entry existente, nenhum alvo de transição órfão, nenhuma referência
+remanescente ao id.
+
+### Medição
+
+| | antes | depois |
+|---|---|---|
+| tenant (skill YAML) | 51 escritas, **1** não declarada | 51 escritas, **0** |
+| plataforma (código) | 14 escritas, 1 não declarada | 14, 1 — inalterado |
+
+O que sobra é `core.workflow.reviewer_id`, e ela **não bloqueia a V4**: é escrita por código
+(`evaluation-api/router.py:2427`, `:2546`) e portão de publish nenhum alcança código. É a decisão
+#5 do ADR — lacuna de classe LGPD para identidade de **usuário da plataforma**.
+
+### Editar o YAML não bastava, e isso custou uma conferência
+
+Skill é **seed-if-absent**: o arquivo mudou e o store não. Medido — o registry ainda servia
+`entry: ler_journey_ctx` com os 4 steps. Publicado com `_publish_skill.py`, e o store passou a
+`entry: pesquisar` com 3.
+
+Nenhum pool deploya `skill_survey_outbound_v1`, então o helper ganhou **`pool_id = '-'`**:
+publica e **não promove**, imprimindo que pulou. A alternativa — passar um pool qualquer —
+promoveria naquele pool um skill que ele não roda. E o silêncio seria pior que os dois: *"publiquei
+e nada mudou em produção"* é a confusão que o cabeçalho daquele helper já existia para evitar.
+
+### Resíduo registrado, não removido (ALW-13)
+
+`journey.origin_process_session` ficou **órfã nas duas pontas** — sem escritor desde a remoção do
+skill de demo, e agora sem leitor. Continua declarada no mapa vivo e em
+`infra/context-map/tenant_demo.json`. Não foi removida porque tirá-la exigiria tocar o mapa vivo
+além do arquivo (o ramo C do gate compara semente+arquivo com o vivo), e o nome é um fato de
+journey plausível que a documentação referencia (`docs/guias/context-store.md:163`). Decidir se
+vira campo real ou sai.
+
+A prova de que `@ctx.journey.*` cruza sessões **não se perde**: está no `CHANGELOG.md` de
+2026-08-13, com TTL medido (2591667s) e controle negativo (a tag não aparece no hash da sessão do
+processo). Quem precisar reexercer isso escreve um gate, não um passo em skill de produto.
+
 ## 2026-09-02 — ALW-12: o mapa do tenant não tinha provisionamento, e o `--wipe` o perdia
 
 **Como apareceu.** Não foi procurado: caiu ao consertar o censo (ALW-11). Ao conferir de onde

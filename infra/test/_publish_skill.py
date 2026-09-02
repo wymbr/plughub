@@ -18,7 +18,14 @@ RegistrySyncer monta (`registry_syncer.py:663-705`) — reimplementar a montagem
 lugar criaria uma segunda verdade sobre o formato.
 
 Uso:  python3 /tmp/_publish_skill.py <skill_file.yaml> <pool_id> [tenant_id]
+      python3 /tmp/_publish_skill.py <skill_file.yaml> -          [tenant_id]
 Saída: uma linha por passo, com o HTTP. Código 0 = os dois passos OK.
+
+`pool_id` = `-` publica e **não promove**, para skill que nenhum pool deploya. É um
+estado legítimo (há skills de fixture sem deploy), e o alternativo é pior: passar um
+pool qualquer promoveria naquele pool um skill que ele não roda. A saída DIZ que
+pulou, porque *"publiquei e nada mudou em produção"* é justamente a confusão que o
+cabeçalho acima existe para evitar.
 """
 import json
 import os
@@ -88,6 +95,12 @@ def main() -> int:
     print(f"PUBLISH {skill_id} HTTP {st} {body[:160]}", flush=True)
     if st not in (200, 201):
         return 1
+
+    if pool_id == "-":
+        print("PROMOTE pulado — nenhum pool deploya este skill (pool_id='-'). "
+              "`skill.flow` atualizado; nenhum slot `current` foi re-snapshotado.",
+              flush=True)
+        return 0
 
     # ── 2. promover ───────────────────────────────────────────────────────────
     # `config_json` é PRESERVADO do slot corrente. Mandar `{}` apagaria config de
