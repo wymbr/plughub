@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — CNS-06: o número que dimensiona a ALW-02 ganha critério — e o desenho dela muda
+
+### Três números, nenhum critério
+
+*"Quantos escritores diretos do ContextStore existem?"* tinha **12** (§1.7 do ADR),
+**16** (contagem estrutural) e **18** (textual). A ALW-02 é a maior tarefa do arco
+ALLOWLIST e estava sendo dimensionada por um número que ninguém sabia reproduzir.
+
+O critério agora está escrito e é derivado da pergunta que a ALW-02 faz — *quantos pontos
+precisam passar a chamar um choke point?*: conta escrita direta num hash de ContextStore,
+em código de produção; **não** conta teste, `hset` em outro hash, leitura, nem call site de
+helper que já centraliza (o helper é UM ponto, e é nele que o carimbo entra).
+
+**Medido: 8 arquivos · 22 sítios.** Duas unidades porque respondem a perguntas diferentes —
+arquivos diz quantos módulos abrir, sítios diz quantas edições fazer; confundi-las foi
+metade da confusão.
+
+### O achado que reescreve a tarefa: o funil já existe
+
+`writeContextTag` (`mcp-server-plughub/src/tools/journey.ts`) **já centraliza** a escrita, e
+`server.ts` e `session.ts` já a usam. A ALW-02 deixa de ser *"construir um choke point"* e
+passa a ser **"estender o que já está lá para o Python e rotear os 21 sítios restantes"**.
+
+Isso só apareceu porque o instrumento e o oráculo foram comparados: o oráculo (a lista
+`ESCRITORES` do censo de cadastro) lista `server.ts` e `session.ts` — que o instrumento
+**não** acha, justamente por serem chamadores do funil — e **não** lista `journey.ts`, que é
+o funil. Os dois medem coisas diferentes e ambos estão certos para o próprio fim.
+
+### Três modos de falha que o instrumento teve antes de ficar de pé
+
+1. **Marcador no RECEPTOR.** A primeira versão casava a linha, e `ctx.redis.hset(waitingKey…)`
+   passava — o `ctx` ali é o objeto do step, não a chave. Trouxe três falsos positivos do
+   skill-flow-engine, que escrevem em `menu:waiting:`. O marcador tem de estar no ARGUMENTO.
+2. **Variável não resolvida.** Metade dos escritores faz `hset(key, …)` com
+   `key = f"{t}:ctx:{sid}"` linhas acima; olhar só o argumento dava 4 arquivos onde o
+   oráculo tem 9. O instrumento resolve a variável até a atribuição.
+3. **Convenção de nome.** `ctx_key` × `ctxKey` — exigir uma só perdia `bpm.ts` inteiro.
+
+⚠️ E um quarto, meu: o `replace` do bloco TS **falhou em silêncio** (sem `assert`), e como
+eu havia alargado o padrão na mesma rodada, o código antigo passou a casar o receptor. O
+sintoma foi um censo que crescia sem motivo. *Patch sem asserção é a mesma família do teste
+que não pode reprovar.*
+
+### Gate
+
+`infra/test/probe_ctx_writer_census.sh`, quatro ramos: o instrumento roda · o número não
+regride contra um **piso declarado** · a divergência com o oráculo é a **declarada** (uma
+nova reprova) · **testemunha negativa** — escrita em outro hash não entra.
+
+**Mutação EXECUTADA:** voltar a casar o receptor → 3 ramos vermelhos; parar de excluir teste
+→ 2; deixar de resolver a variável → 2. Revertido, verde.
+
+
 ## 2026-09-02 — CNS-12: o seed nunca reescreveu nada; era o instrumento que corrompia
 
 ### A acusação, e a causa raiz

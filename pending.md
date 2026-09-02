@@ -28,15 +28,11 @@ Arco entregue até V3/D8 e a FATIA 1 da D9. **A V4 inverte o default e não é r
 | id | tarefa | estado | evidência |
 |---|---|---|---|
 | ALW-01 | **V4** — inverter o default: campo sem regra deixa de ser acessível. Exige `unknown == 0` na auditoria | `bloqueado` por ALW-02/03/04 | `TODO.md:381` |
-| ALW-02 | D9 #1 — choke point de escrita (hoje **12 `HSET` diretos**), que habilita o carimbo do `atributo` (D9.6). Maior esforço do arco | `aberto` | `TODO.md:326` |
+| ALW-02 | D9 #1 — choke point de escrita, que habilita o carimbo do `atributo` (D9.6). **Redimensionada pela CNS-06 (2026-09-02): 8 arquivos · 22 sítios**, com critério declarado em `_ctx_writer_census.py` e gate `probe_ctx_writer_census.sh`. ⚠️ **E o desenho muda: um funil JÁ EXISTE** — `writeContextTag` (`tools/journey.ts`), usado por `server.ts` e `session.ts`. A tarefa é **estender ao Python e rotear os 21 sítios restantes**, não construir do zero | `aberto` | ADR §1.7 |
 | ALW-03 | D9 #2 — decidir onde mora a tela de cadastro; é a ausência dela que faz gente contornar | `aberto` | `TODO.md:326` |
 | ALW-04 | D9 #3 — lista de domínios (critério de PAPEL); bloqueia o mapa crescer além dos domínios existentes | `aberto` | `TODO.md:326` |
 | ALW-05 | V5 (metade) — fechar aliases | `bloqueado` — por **tempo**, não esforço: depende do contador decair | índice `CLAUDE.md` |
 | ALW-06 | D7 (metade) — tela de proveniência: global × override por nó | `aberto` | índice `CLAUDE.md` |
-
-⚠️ **ALW-02 está subdimensionada.** A §1.7 do ADR diz `12 HSET`; remedido em 2026-09-01 dá
-**16 em 3 serviços + 1 escritor nomeado num 4º** (`ai-gateway/sentiment_emitter.py`), e um
-contador textual mais largo dá 18. Nenhum critério de contagem está declarado — ver CNS-06.
 
 ---
 
@@ -49,7 +45,6 @@ sem tocar em vocabulário de skill, porque quem os escreve é o core. **CNS-02 f
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| CNS-06 | Declarar o critério de contagem dos escritores diretos e cruzar instrumento × oráculo — hoje há três números (12 na §1.7 do ADR, 16 estrutural, 18 textual) e nenhum critério escrito. Redimensiona ALW-02 | `aberto` | spec §1, `pending.md` ALW-02 |
 | CNS-16 | **Vocabulário de ContextStore por tenant** — chave SEPARADA (`masking.context_map_tenant`) mesclada na leitura, para que cada chave mantenha a semântica uniforme de config e o tenant não alcance `core` **por construção do mesclador**, não por portão que alguém pode esquecer. Desenhada na CNS-08 e **adiada por população zero**: medido em 2026-09-01, zero tenants sobrescrevem o mapa e a instalação tem um tenant. ⚠️ Um banco por tenant **não** substitui isto — troca *override substitui* por *reseed sobrescreve*, que é o mesmo dilema de duas direções da D7; a questão é de PROPRIEDADE do dado, não de topologia | `adiado` — gatilho: segundo tenant que precise de vocabulário próprio | `CHANGELOG.md` § 2026-09-01 CNS-08 |
 | CNS-17 | **`json.load(sys.stdin)` em 26 arquivos de `infra/test/` — no Windows decodifica cp1252, não UTF-8.** Causa raiz achada na CNS-12: os bytes chegam corretos do `curl` e são destruídos na LEITURA. Dois riscos de tamanhos diferentes: quem só **lê e compara** pode dar veredicto falso sobre dado acentuado; quem **lê-altera-grava** corrompe o store — e só o `probe_seed_drift_named` fazia isso (já consertado). Conserto: `sys.stdin.buffer`. ⚠️ Varrer em bloco é tentador e não é seguro: cada probe precisa da conferência de que o dado que ele move tem não-ASCII e de que a comparação não dependia da forma corrompida | `aberto` | `CHANGELOG.md` § 2026-09-02 CNS-12 |
 | CNS-14 | **Quem tem `config.masking` escreve o `__global__`** — mandando `tenant_id: null`, e de lá reescreve o `core.*` que a CNS-05 protegeu do lado do tenant. Fronteira distinta: *quem pode editar o default da PLATAFORMA*. Registrada ao fechar a CNS-05, e deliberadamente não fechada junto — misturaria duas decisões | `aberto` | `router.py` `_reject_tenant_core_root` (docstring) |

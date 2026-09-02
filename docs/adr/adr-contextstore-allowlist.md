@@ -195,18 +195,34 @@ estar simultaneamente certa (namespaces existem) e **errada onde importa**: ela 
 
 ### 1.7 Achado — não existe choke point de ESCRITA
 
-Medido nesta sessão: **12 `HSET` diretos no hash de contexto, em código de produção**, sem passar por
-nenhum roteador de escopo, validação ou política:
+> ⚠️ **O `12` desta seção era um número SEM CRITÉRIO, e por isso não dimensionava nada.**
+> Remedido em 2026-09-02 (CNS-06): existiam **três** números para a mesma pergunta — 12 aqui,
+> 16 numa contagem estrutural e 18 numa textual — e nenhum dizia o que contava. O critério
+> agora está escrito no cabeçalho de `infra/test/_ctx_writer_census.py`, e o gate
+> `infra/test/probe_ctx_writer_census.sh` impede que volte a ser opinião.
 
-| serviço | sites |
+Medido em 2026-09-02, com critério declarado (escrita direta num hash de ContextStore, código
+de produção, helper contado UMA vez): **8 arquivos · 22 sítios**.
+
+| serviço | sítios |
 |---|---|
-| `orchestrator-bridge/.../main.py` | :1322 · :1341 · :2145 · :4721 · :4752 · :8410 |
-| `channel-gateway/.../adapters/webhook.py` | :562 · :1628 · :2169 · :2663 |
-| `routing-engine/.../main.py` | :1175 · :1255 |
+| `orchestrator-bridge/.../main.py` | 10 |
+| `channel-gateway/.../adapters/webhook.py` | 4 |
+| `routing-engine/.../main.py` | 2 |
+| `ai-gateway/.../sentiment_emitter.py` | 2 |
+| `ai-gateway/.../copilot_emitter.py` · `evaluation-api/.../router.py` · `mcp-server/tools/bpm.ts` · `mcp-server/tools/journey.ts` | 1 cada |
 
-Mais os caminhos legítimos (SDK `ContextStore.set`, `context_set` do mcp-server, `context_tags` do
-engine). **Qualquer política de escrita precisa decidir o que fazer com estes doze** — e a resposta
-honesta não pode ser "presumir que passam pelo mesmo lugar", porque não passam.
+**E o achado que reescreve a ALW-02: um funil JÁ EXISTE.** `writeContextTag`
+(`mcp-server-plughub/src/tools/journey.ts`) centraliza a escrita e já é usado por
+`server.ts` e `session.ts` — que por isso **não** aparecem na lista, apesar de o oráculo do
+censo os listar. A tarefa deixa de ser *"construir um choke point"* e passa a ser
+**"estender o que já está lá para o Python e rotear os 21 sítios restantes"**.
+
+⚠️ **O oráculo e o instrumento divergem de propósito, e a divergência é a informação.** O
+censo de cadastro lista 9 arquivos porque precisa varrer os NOMES das tags, e o nome está
+literal no chamador; o censo de escritores lista 8 porque conta PONTOS a rotear. Cada
+divergência é declarada no gate — um quarto item significa escritor novo ou cliente novo do
+funil, e nos dois casos a ALW-02 mudou de tamanho.
 
 ### 1.8 Blast radius
 
