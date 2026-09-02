@@ -45,6 +45,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+
+from plughub_contextstore.writer import write_context_tags
 from datetime import datetime, timezone
 from typing import Any
 
@@ -190,23 +192,18 @@ async def _write_copilot_context(
     key = f"{tenant_id}:ctx:{session_id}"
     now = datetime.now(timezone.utc).isoformat()
 
-    def _entry(value: Any) -> str:
-        return json.dumps({
-            "value":      value,
-            "confidence": 0.75,
-            "source":     "ai_inferred:copilot_emitter",
-            "visibility": "agents_only",
-            "updated_at": now,
-        })
-
     try:
-        await redis.hset(key, mapping={
-            "core.copilot.suggested_reply":  _entry(sugestao_resposta),
-            "core.copilot.risk_flags":        _entry(flags_risco),
-            "core.copilot.recommended_actions": _entry(acoes_recomendadas),
-            "core.copilot.last_analysis":     _entry(now),
-        })
-        await redis.expire(key, _CTX_SESSION_TTL)
+        # ALW-02 — pelo funil, que CARIMBA o `atributo` (D9.6).
+        await write_context_tags(
+            redis, tenant_id, session_id, {
+                "core.copilot.suggested_reply":     sugestao_resposta,
+                "core.copilot.risk_flags":          flags_risco,
+                "core.copilot.recommended_actions": acoes_recomendadas,
+                "core.copilot.last_analysis":       now,
+            },
+            source="ai_inferred:copilot_emitter", confidence=0.75,
+            updated_at=now, ttl_s=_CTX_SESSION_TTL,
+        )
     except Exception as exc:
         logger.warning(
             "Failed to write copilot context key=%s: %s", key, exc,

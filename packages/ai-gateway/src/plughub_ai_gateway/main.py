@@ -18,6 +18,7 @@ from typing import Any, AsyncGenerator
 
 import logging
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -32,6 +33,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+from plughub_contextstore.loader import set_context_map_fetcher
 
 from .account_selector      import AccountSelector, LLMAccount
 from .cache                 import SemanticCache
@@ -146,6 +149,18 @@ async def _probe_credentials_on_boot(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
+
+    # ALW-02 — transporte do carregador do mapa do ContextStore (`masking.context_map`),
+    # registrado UMA vez. Os escritores de ctx são fire-and-forget e não têm cliente HTTP
+    # à mão; um default de stdlib poria I/O bloqueante num caminho async. Não registrar
+    # não quebra nada — o carregador cai no mapa embutido e AVISA nomeando a causa.
+    async def _ctx_map_fetch(url: str) -> object:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            return resp.json()
+
+    set_context_map_fetcher(_ctx_map_fetch)
 
     # Shared infrastructure
     redis = await get_redis()

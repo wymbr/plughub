@@ -47,6 +47,7 @@ __all__ = [
     "context_map_url",
     "get_context_map",
     "invalidate_context_map_cache",
+    "set_context_map_fetcher",
 ]
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,23 @@ CONTEXT_MAP_CACHE_TTL_S = 60.0
 
 #: tenant → (index, fallback, expira_em)
 _cache: dict[str, tuple[ContextTagIndex, bool, float]] = {}
+
+#: Transporte registrado pelo serviço no boot. Existe porque os escritores do ContextStore
+#: são fire-and-forget e não têm o cliente HTTP à mão — enfiá-lo por dez assinaturas seria
+#: pior que um registro único, e um default de stdlib (`urllib`) poria I/O BLOQUEANTE num
+#: caminho async quente.
+_fetcher: Callable[[str], Awaitable[Any]] | None = None
+
+
+def set_context_map_fetcher(fetch_json: Callable[[str], Awaitable[Any]] | None) -> None:
+    """Registra o transporte, uma vez, no boot do serviço.
+
+    Não registrar não quebra nada: `get_context_map` cai no mapa embutido e AVISA nomeando
+    a causa. Bounded e diagnosticável — mas é degradação, não regime normal.
+    """
+    global _fetcher
+    _fetcher = fetch_json
+
 
 #: Índice do mapa EMBUTIDO, construído uma vez. Se este `build` levantar, o pacote está
 #: quebrado na origem e é melhor descobrir no import do que numa queda do config-api.
@@ -106,7 +124,7 @@ def _extract(body: Any) -> Any:
 
 async def get_context_map(
     tenant_id: str,
-    fetch_json: Callable[[str], Awaitable[Any]],
+    fetch_json: Callable[[str], Awaitable[Any]] | None = None,
 ) -> tuple[ContextTagIndex, bool]:
     """Índice do mapa do tenant, com cache de 60 s. Devolve `(index, fallback)`.
 
@@ -125,8 +143,13 @@ async def get_context_map(
         return em_cache[0], em_cache[1]
 
     index, fallback = _FALLBACK_INDEX, True
+    transporte = fetch_json or _fetcher
     try:
-        index = build_context_tag_index(_extract(await fetch_json(context_map_url(tenant_id))))
+        if transporte is None:
+            raise RuntimeError(
+                "nenhum transporte registrado — chame set_context_map_fetcher() no boot"
+            )
+        index = build_context_tag_index(_extract(await transporte(context_map_url(tenant_id))))
         fallback = False
     except Exception as exc:  # noqa: BLE001 — qualquer falha cai no mesmo desfecho
         logger.warning(

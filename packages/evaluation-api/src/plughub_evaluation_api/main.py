@@ -14,6 +14,8 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+
+from plughub_contextstore.loader import set_context_map_fetcher
 import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -563,6 +565,19 @@ def create_app() -> FastAPI:
         # Redis (for ContextStore writes)
         logger.info("connecting to Redis…")
         app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+
+        # ALW-02 — transporte do carregador do mapa do ContextStore, registrado UMA vez.
+        # Este é o ÚNICO dos cinco serviços que não falava com o config-api antes (medido
+        # em 2026-09-02: bridge 5 arquivos, gateway 8, routing 10, ai-gateway 6, este 0),
+        # e ele tem um único sítio de escrita no ctx. Não registrar não quebra nada — o
+        # carregador cai no mapa embutido e AVISA nomeando a causa.
+        async def _ctx_map_fetch(url: str) -> object:
+            async with httpx.AsyncClient(timeout=5.0) as c:
+                resp = await c.get(url)
+                resp.raise_for_status()
+                return resp.json()
+
+        set_context_map_fetcher(_ctx_map_fetch)
         logger.info("Redis client ready")
 
         # Kafka producer

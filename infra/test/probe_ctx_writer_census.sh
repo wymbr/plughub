@@ -51,14 +51,20 @@ huh() { echo "  ? $1"; FAIL=2; }
 #: no ctx e passou a chamar `writeContextTag`. Saiu do instrumento e entrou no oráculo,
 #: como os outros dois chamadores do funil.
 #:
-#: 7/21 → 8/22 no MESMO dia (passo 3): nasceu o funil Python
+#: 8/22 → 4/16 ainda no mesmo dia (passo 3, migração): `routing-engine` (2),
+#: `ai-gateway` (2) e `evaluation-api` (1) passaram a chamar o funil Python. O ai-gateway
+#: perdeu DOIS arquivos porque o falso positivo declarado do `sentiment_emitter:163` (a
+#: escrita em `sentiment_live`) sumiu junto: ele existia por causa de uma variável `key`
+#: que ficou morta quando o `hset` de ctx saiu.
+#:
+#: 7/21 → 8/22 antes disso (passo 3, funil): nasceu o funil Python
 #: (`py-contextstore/.../writer.py`). O instrumento não distingue funil de escritor — por
 #: CRITÉRIO o helper conta uma vez, no helper —, então o piso sobe por um motivo que é o
 #: oposto de regressão. **Trajetória esperada daqui**: cada serviço migrado tira os seus
 #: sítios do instrumento, e o piso desce até **2 arquivos / 2 sítios**, que são os DOIS
 #: funis. Se parar acima disso, sobrou escritor direto.
-PISO_ARQUIVOS=8
-PISO_SITIOS=22
+PISO_ARQUIVOS=4
+PISO_SITIOS=16
 
 echo "=== probe_ctx_writer_census — CNS-06 (dimensiona a ALW-02) ==="
 echo
@@ -95,9 +101,17 @@ INST_ONLY=$(printf '%s' "$OUT" | sed -n 's/^     + //p' | sort)
 ORAC_ONLY=$(printf '%s' "$OUT" | sed -n 's/^     - //p' | sort)
 ESPERADO_INST="packages/mcp-server-plughub/src/tools/journey.ts
 packages/py-contextstore/src/plughub_contextstore/writer.py"
-ESPERADO_ORAC="packages/mcp-server-plughub/src/server.ts
+#: Chamadores dos funis. A lista CRESCE a cada serviço migrado, e atualizá-la é a
+#: fricção certa: migração é ato deliberado, e uma lista derivada não reprovaria o dia em
+#: que um arquivo sair do instrumento por ter parado de escrever, em vez de por ter
+#: passado a chamar o funil.
+ESPERADO_ORAC="packages/ai-gateway/src/plughub_ai_gateway/copilot_emitter.py
+packages/ai-gateway/src/plughub_ai_gateway/sentiment_emitter.py
+packages/evaluation-api/src/plughub_evaluation_api/router.py
+packages/mcp-server-plughub/src/server.ts
 packages/mcp-server-plughub/src/tools/bpm.ts
-packages/mcp-server-plughub/src/tools/session.ts"
+packages/mcp-server-plughub/src/tools/session.ts
+packages/routing-engine/src/plughub_routing/main.py"
 if [ "$INST_ONLY" = "$ESPERADO_INST" ]; then
   ok "C: so-no-instrumento sao os DOIS funis (writeContextTag + write_context_tags)"
 else
@@ -106,7 +120,7 @@ fi
 if [ "$ORAC_ONLY" = "$ESPERADO_ORAC" ]; then
   ok "C: so-no-oraculo sao os CHAMADORES do funil"
 else
-  bad "C: so-no-oraculo mudou — esperados server/bpm/session.ts, veio: $(echo $ORAC_ONLY)"
+  bad "C: so-no-oraculo mudou — veio: $(echo $ORAC_ONLY)"
 fi
 
 # D — testemunha NEGATIVA: hash que nao e ContextStore fica de fora.

@@ -57,12 +57,13 @@ async def write_context_tags(
     session_id: str,
     tags: Mapping[str, Any],
     *,
-    fetch_json: Callable[[str], Awaitable[Any]],
+    fetch_json: Callable[[str], Awaitable[Any]] | None = None,
     source: str,
     confidence: float = 1.0,
     visibility: Any = "agents_only",
     updated_at: str,
     ttl_s: int | None = None,
+    ttl_nx: bool = False,
 ) -> dict[str, Any]:
     """Grava N tags no hash da sessão, cada uma CARIMBADA.
 
@@ -109,6 +110,12 @@ async def write_context_tags(
 
     await redis.hset(f"{tenant_id}:ctx:{session_id}", mapping=mapping)
     if ttl_s is not None:
-        await redis.expire(f"{tenant_id}:ctx:{session_id}", ttl_s)
+        # `nx=True` = nunca ENCURTAR um TTL que outro componente já pôs. O routing-engine
+        # depende disso (reconexão não pode reiniciar a vida da sessão), e é semântica de
+        # política, não detalhe — por isso viaja no funil em vez de o chamador repetir.
+        if ttl_nx:
+            await redis.expire(f"{tenant_id}:ctx:{session_id}", ttl_s, nx=True)
+        else:
+            await redis.expire(f"{tenant_id}:ctx:{session_id}", ttl_s)
 
     return {"written": list(mapping), "fallback": fallback, "atributos": atributos}

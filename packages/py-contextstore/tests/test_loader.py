@@ -24,6 +24,7 @@ from plughub_contextstore.loader import (
     context_map_url,
     get_context_map,
     invalidate_context_map_cache,
+    set_context_map_fetcher,
 )
 
 MAPA_TENANT = {
@@ -51,8 +52,10 @@ def _fetcher(resultado=None, erro=None, registro=None):
 @pytest.fixture(autouse=True)
 def _limpa_cache():
     invalidate_context_map_cache()
+    set_context_map_fetcher(None)
     yield
     invalidate_context_map_cache()
+    set_context_map_fetcher(None)
 
 
 def _run(coro):
@@ -177,3 +180,29 @@ class TestMapaEmbutido:
         assert len(idx.canonical) >= 90     # 94 na medição de 2026-08-30
         assert len(idx.alias) >= 80         # 82 na mesma medição
         assert "core.segment." in idx.dynamic_prefixes
+
+
+class TestTransporteRegistrado:
+    """O serviço registra o transporte uma vez no boot; os escritores fire-and-forget não
+    têm o cliente HTTP à mão e enfiá-lo por dez assinaturas seria pior."""
+
+    def test_usa_o_fetcher_registrado_quando_nenhum_e_passado(self) -> None:
+        reg: list[str] = []
+        set_context_map_fetcher(_fetcher(_corpo(MAPA_TENANT), registro=reg))
+        idx, fb = _run(get_context_map("t1"))
+        assert fb is False
+        assert len(reg) == 1
+        assert resolve_context_tag("session.proprio.campo", idx).tipo == "cpf_br"
+
+    def test_o_argumento_VENCE_o_registrado(self) -> None:
+        set_context_map_fetcher(_fetcher(erro=OSError("registrado")))
+        _, fb = _run(get_context_map("t1", _fetcher(_corpo(MAPA_TENANT))))
+        assert fb is False
+
+    def test_SEM_transporte_cai_no_fallback_e_diz_por_que(self, caplog) -> None:
+        # Esquecer o registro é degradação diagnosticável, nunca crash — mas o aviso
+        # tem de nomear a causa, senão parece queda de rede.
+        with caplog.at_level("WARNING"):
+            _, fb = _run(get_context_map("t1"))
+        assert fb is True
+        assert "set_context_map_fetcher" in caplog.text

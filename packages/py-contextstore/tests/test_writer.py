@@ -38,8 +38,11 @@ class FakeRedis:
         self.hashes.setdefault(key, {}).update(mapping or {})
         return len(mapping or {})
 
-    async def expire(self, key, ttl):
+    async def expire(self, key, ttl, nx=False):
+        if nx and key in self.expires:
+            return 0                      # NX: nunca sobrescreve TTL existente
         self.expires[key] = ttl
+        self.nx_usado = nx
         return 1
 
 
@@ -184,6 +187,27 @@ class TestTtl:
             fetch_json=_fetch_ok, source="t", updated_at=AGORA, ttl_s=86_400,
         ))
         assert r.expires["t1:ctx:s1"] == 86_400
+
+    def test_ttl_nx_NAO_encurta_o_que_ja_existe(self) -> None:
+        # Reconexão não pode reiniciar a vida da sessão — o routing-engine depende disso.
+        r = FakeRedis()
+        r.expires["t1:ctx:s1"] = 999
+        _run(write_context_tags(
+            r, "t1", "s1", {"session.cliente.cpf": "1"},
+            fetch_json=_fetch_ok, source="t", updated_at=AGORA,
+            ttl_s=10, ttl_nx=True,
+        ))
+        assert r.expires["t1:ctx:s1"] == 999
+
+    def test_ttl_SEM_nx_sobrescreve(self) -> None:
+        # Testemunha: sem ela, um funil que sempre usasse NX passaria no caso acima.
+        r = FakeRedis()
+        r.expires["t1:ctx:s1"] = 999
+        _run(write_context_tags(
+            r, "t1", "s1", {"session.cliente.cpf": "1"},
+            fetch_json=_fetch_ok, source="t", updated_at=AGORA, ttl_s=10,
+        ))
+        assert r.expires["t1:ctx:s1"] == 10
 
     def test_sem_ttl_NAO_toca_na_expiracao(self) -> None:
         # Encurtar um TTL que outro componente já pôs é o defeito que o `EXPIRE ... NX`

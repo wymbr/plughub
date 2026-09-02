@@ -18,6 +18,8 @@ import redis.asyncio as aioredis
 
 from .admission import AdmissionController, AdmissionDecision
 from .config import get_settings
+from plughub_contextstore.loader import set_context_map_fetcher
+from plughub_contextstore.writer import write_context_tags
 from .crash_detector import CrashDetector
 from .evaluation_consumer import EvaluationConsumer, load_evaluation_flow
 from .models import (
@@ -47,6 +49,18 @@ async def run() -> None:
     # Initialise dependencies
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     http_client  = httpx.AsyncClient()
+
+    # ALW-02 — transporte do carregador do mapa do ContextStore (`masking.context_map`),
+    # registrado UMA vez. Os escritores de ctx são fire-and-forget e não têm o cliente à
+    # mão; enfiá-lo por dez assinaturas seria pior que um registro único, e um default de
+    # stdlib poria I/O bloqueante num caminho async quente. Não registrar não quebra nada
+    # — o carregador cai no mapa embutido e AVISA nomeando a causa.
+    async def _ctx_map_fetch(url: str) -> object:
+        resp = await http_client.get(url, timeout=5.0)
+        resp.raise_for_status()
+        return resp.json()
+
+    set_context_map_fetcher(_ctx_map_fetch)
 
     instance_registry = InstanceRegistry(redis_client)
     pool_registry     = PoolRegistry(redis_client)
@@ -1157,23 +1171,18 @@ async def _write_queue_context(
         # Agora ela omite pelo motivo certo, e o `None` não estoura o `//`.
         avg_handle_ms = (eta_ms // position) if (eta_ms is not None and position) else 0
 
-        def _entry(value: object) -> str:
-            return json.dumps({
-                "value":      value,
-                "confidence": 1.0,
-                "source":     "routing_engine",
-                "visibility": "agents_only",
-                "updated_at": now_str,
-            })
-
-        mapping: dict[str, str] = {
-            "core.queue.position": _entry(position),
-        }
+        tags: dict[str, object] = {"core.queue.position": position}
         if avg_handle_ms > 0:
-            mapping["core.queue.eta_ms"] = _entry(eta_ms)
+            tags["core.queue.eta_ms"] = eta_ms
 
-        await redis_client.hset(ctx_key, mapping=mapping)
-        await redis_client.expire(ctx_key, ttl_seconds, nx=True)
+        # ALW-02 — pelo funil, que CARIMBA o `atributo` a partir do cadastro (D9.6).
+        # `ttl_nx` preserva a semântica de antes: nunca encurtar um TTL que outro
+        # componente já pôs (reconexão não reinicia a vida da sessão).
+        await write_context_tags(
+            redis_client, tenant_id, session_id, tags,
+            source="routing_engine", updated_at=now_str,
+            ttl_s=ttl_seconds, ttl_nx=True,
+        )
 
         logger.debug(
             "ContextStore queue context written: tenant=%s session=%s pool=%s position=%d",
@@ -1230,32 +1239,27 @@ async def _write_pool_context(
             max_reply_time_ms = pool_cfg.get("max_reply_time_ms") or None
             llm_account_ids   = pool_cfg.get("llm_account_ids") or []
 
-        def _entry(value: object) -> str:
-            return json.dumps({
-                "value":      value,
-                "confidence": 1.0,
-                "source":     "routing_engine",
-                "visibility": "agents_only",
-                "updated_at": now_str,
-            })
-
-        mapping: dict[str, str] = {
-            "core.pool.id":       _entry(pool_id),
-            "core.pool.channels": _entry(channel_types),
+        tags: dict[str, object] = {
+            "core.pool.id":       pool_id,
+            "core.pool.channels": channel_types,
         }
         if mentionable_pools:
-            mapping["core.pool.mentionable_pools"] = _entry(mentionable_pools)
+            tags["core.pool.mentionable_pools"] = mentionable_pools
         if agent_groups:
-            mapping["core.pool.agent_groups"] = _entry(agent_groups)
+            tags["core.pool.agent_groups"] = agent_groups
         if max_reply_time_ms is not None:
-            mapping["core.pool.max_reply_time_ms"] = _entry(max_reply_time_ms)
+            tags["core.pool.max_reply_time_ms"] = max_reply_time_ms
         if llm_account_ids:
-            mapping["core.pool.llm_account_ids"] = _entry(llm_account_ids)
+            tags["core.pool.llm_account_ids"] = llm_account_ids
 
-        await redis_client.hset(ctx_key, mapping=mapping)
-        # EXPIRE with NX: only sets TTL if no TTL is currently on the key,
-        # so we never shorten an expiry already set by another component.
-        await redis_client.expire(ctx_key, ttl_seconds, nx=True)
+        # ALW-02 — pelo funil, que CARIMBA o `atributo` (D9.6). `ttl_nx` preserva o
+        # EXPIRE NX de antes: só a primeira alocação define o TTL, e eventos de
+        # reconexão não esticam a vida da chave além da sessão original.
+        await write_context_tags(
+            redis_client, tenant_id, session_id, tags,
+            source="routing_engine", updated_at=now_str,
+            ttl_s=ttl_seconds, ttl_nx=True,
+        )
 
         logger.debug(
             "ContextStore pool context written: tenant=%s session=%s pool=%s channels=%s",

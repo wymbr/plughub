@@ -60,6 +60,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+
+from plughub_contextstore.writer import write_context_tags
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -299,20 +301,15 @@ def _redis(request: Request) -> Any:
 async def _write_ctx(redis_client: Any, tenant_id: str, session_id: str, fields: dict[str, Any]) -> None:
     """Fire-and-forget write to ContextStore hash {tenant}:ctx:{session_id}."""
     try:
-        key = f"{tenant_id}:ctx:{session_id}"
-        now = datetime.now(timezone.utc).isoformat()
-        pipe = redis_client.pipeline()
-        for tag, value in fields.items():
-            entry = json.dumps({
-                "value": value,
-                "confidence": 1.0,
-                "source": "evaluation-api",
-                "visibility": "agents_only",
-                "updated_at": now,
-            })
-            pipe.hset(key, tag, entry)
-        pipe.expire(key, settings.workflow_context_ttl_s)
-        await pipe.execute()
+        # ALW-02 — pelo funil, que CARIMBA o `atributo` a partir do cadastro (D9.6).
+        # A pipeline saiu junto: o funil escreve as N tags num `hset` só, que é menos
+        # ida-e-volta do que a pipeline fazia (um `hset` por tag).
+        await write_context_tags(
+            redis_client, tenant_id, session_id, fields,
+            source="evaluation-api",
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            ttl_s=settings.workflow_context_ttl_s,
+        )
     except Exception as exc:
         logger.warning("ContextStore write failed (non-fatal): %s", exc)
 

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 import logging
+
+from plughub_contextstore.writer import write_context_tags
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -215,25 +217,20 @@ async def write_context_store_sentiment(
     """
     if redis is None:
         return
-    key = f"{tenant_id}:ctx:{session_id}"
     now = datetime.now(timezone.utc).isoformat()
 
-    entry_current = json.dumps({
-        "value":      round(score, 4),
-        "confidence": 0.80,
-        "source":     "ai_inferred:sentiment_emitter",
-        "visibility": "agents_only",
-        "updated_at": now,
-    })
-
     try:
-        await redis.hset(
-            key,
-            mapping={"core.sentiment.current": entry_current},
+        # ALW-02 — pelo funil, que CARIMBA o `atributo` a partir do cadastro (D9.6).
+        # TTL renovado SEM `nx`, como antes: sentimento é medido ao longo da sessão e
+        # cada medição estende a vida do hash de propósito.
+        await write_context_tags(
+            redis, tenant_id, session_id,
+            {"core.sentiment.current": round(score, 4)},
+            source="ai_inferred:sentiment_emitter", confidence=0.80,
+            updated_at=now, ttl_s=_CTX_SESSION_TTL,
         )
-        # Renew TTL on the session context hash
-        await redis.expire(key, _CTX_SESSION_TTL)
     except Exception as exc:
         logger.warning(
-            "Failed to write context_store sentiment key=%s: %s", key, exc,
+            "Failed to write context_store sentiment tenant=%s session=%s: %s",
+            tenant_id, session_id, exc,
         )
