@@ -22,9 +22,10 @@
 # caminhos independentes e para fins diferentes. Eles DIVERGEM de propósito em três
 # arquivos, e cada um dos três é uma informação:
 #
-#   + journey.ts   o instrumento acha, o oráculo não: é o `writeContextTag`, o FUNIL
-#                  que já existe. Contá-lo é o que revela que a ALW-02 não é "construir
-#                  um choke point", é "estender o que já está lá".
+#   + journey.ts   o instrumento acha, o oráculo não: são os DOIS FUNIS — o
+#   + writer.py    `writeContextTag` (TS, já existia) e o `write_context_tags`
+#                  (Python, ALW-02 passo 3). Contá-los é o que revela que a ALW-02 não
+#                  era "construir um choke point", e sim estender o que já estava lá.
 #   − server.ts    o oráculo lista, o instrumento não: os TRÊS importam e chamam
 #   − session.ts   `writeContextTag`. São chamadores do funil, não escritores diretos —
 #   − bpm.ts       e o critério diz que o helper conta UMA vez, no helper.
@@ -49,8 +50,15 @@ huh() { echo "  ? $1"; FAIL=2; }
 #: 8/22 → 7/21 em 2026-09-02 (ALW-02 passo 1): `tools/bpm.ts` deixou de fazer `hset` cru
 #: no ctx e passou a chamar `writeContextTag`. Saiu do instrumento e entrou no oráculo,
 #: como os outros dois chamadores do funil.
-PISO_ARQUIVOS=7
-PISO_SITIOS=21
+#:
+#: 7/21 → 8/22 no MESMO dia (passo 3): nasceu o funil Python
+#: (`py-contextstore/.../writer.py`). O instrumento não distingue funil de escritor — por
+#: CRITÉRIO o helper conta uma vez, no helper —, então o piso sobe por um motivo que é o
+#: oposto de regressão. **Trajetória esperada daqui**: cada serviço migrado tira os seus
+#: sítios do instrumento, e o piso desce até **2 arquivos / 2 sítios**, que são os DOIS
+#: funis. Se parar acima disso, sobrou escritor direto.
+PISO_ARQUIVOS=8
+PISO_SITIOS=22
 
 echo "=== probe_ctx_writer_census — CNS-06 (dimensiona a ALW-02) ==="
 echo
@@ -85,14 +93,15 @@ fi
 # C — a divergencia contra o oraculo e a DECLARADA
 INST_ONLY=$(printf '%s' "$OUT" | sed -n 's/^     + //p' | sort)
 ORAC_ONLY=$(printf '%s' "$OUT" | sed -n 's/^     - //p' | sort)
-ESPERADO_INST="packages/mcp-server-plughub/src/tools/journey.ts"
+ESPERADO_INST="packages/mcp-server-plughub/src/tools/journey.ts
+packages/py-contextstore/src/plughub_contextstore/writer.py"
 ESPERADO_ORAC="packages/mcp-server-plughub/src/server.ts
 packages/mcp-server-plughub/src/tools/bpm.ts
 packages/mcp-server-plughub/src/tools/session.ts"
 if [ "$INST_ONLY" = "$ESPERADO_INST" ]; then
-  ok "C: so-no-instrumento e o FUNIL esperado (writeContextTag)"
+  ok "C: so-no-instrumento sao os DOIS funis (writeContextTag + write_context_tags)"
 else
-  bad "C: so-no-instrumento mudou — esperado o funil, veio: $(echo $INST_ONLY)"
+  bad "C: so-no-instrumento mudou — esperados os dois funis, veio: $(echo $INST_ONLY)"
 fi
 if [ "$ORAC_ONLY" = "$ESPERADO_ORAC" ]; then
   ok "C: so-no-oraculo sao os CHAMADORES do funil"
