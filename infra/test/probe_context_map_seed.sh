@@ -260,6 +260,69 @@ limpar_override
 invalidar_cache
 trap - EXIT INT TERM
 
+# ── G. as DUAS cópias da SEMENTE concordam ───────────────────────────────────
+#
+# A semente vive em dois arquivos: `packages/schemas/src/context-map.ts` (a AUTORIDADE)
+# e `packages/py-contextstore/.../default_map.py` (cópia mantida à mão, que existe
+# porque o carregador Python precisa do mesmo fallback que o TS tem).
+#
+# ⚠️ **A justificativa original deste ramo estava ERRADA, e a mutação a derrubou.** Ela
+# dizia que nenhum gate pegava *alias só na Python* — que o `probe_context_map_audit`
+# mediria a TS contra o vivo por mera CONTENÇÃO de chaves e deixaria passar. Medido:
+# removida uma grafia só da TS, o ramo B daquele gate REPROVOU, porque ele compara o
+# CONTEÚDO da folha e não só a presença (`difere: ["core.survey.agent_key"]`).
+#
+# As duas direções já eram cobertas, transitivamente pelo store vivo: `B` (vivo ⊇ TS, por
+# conteúdo) mais `C` (vivo == Python + arquivo do tenant) fecham o triângulo.
+#
+# O que este ramo acrescenta é MENOR, e vale registrado como é:
+#   · **diagnóstico direto** — diz "TS × Python", em vez de "a config viva não contém a
+#     declaração", que manda procurar no lugar errado;
+#   · **funciona com a stack DE PÉ OU NÃO** — B e C dependem do config-api; este não.
+# Manter o texto anterior seria prosa afirmando uma lacuna inexistente: a família do DDL
+# de `participation_intervals`, e do lado que este arco menos pode se permitir.
+echo
+echo "-- G. as duas cópias da SEMENTE (TS × Python) --"
+G=$(python3 - <<'PY' 2>&1
+import io, json, re, subprocess, sys
+sys.path.insert(0, "packages/py-contextstore/src")
+from plughub_contextstore.default_map import DEFAULT_CONTEXT_MAP as PY
+from plughub_contextstore import build_context_tag_index
+
+# A TS é lida pelo MESMO caminho que o oráculo do outro gate usa: o fonte, via node.
+# Ler o `dist/` responderia sobre um artefato que pode estar atrasado.
+js = subprocess.run(
+    ["docker", "run", "--rm", "-v", "%s:/repo" % subprocess.run(
+        ["pwd"], capture_output=True, text=True).stdout.strip(),
+     "node:20-alpine", "sh", "-c",
+     "cd /repo/packages/schemas && ./node_modules/.bin/esbuild --bundle --platform=node "
+     "--format=cjs --log-level=error --outfile=/tmp/m.cjs src/context-map.ts >/dev/null 2>&1 "
+     "&& node -e \"const m=require('/tmp/m.cjs');console.log(JSON.stringify(m.DEFAULT_CONTEXT_MAP))\""],
+    capture_output=True, text=True)
+if js.returncode != 0 or not js.stdout.strip():
+    print("INCONCLUSIVO %s" % (js.stderr or "")[:120]); sys.exit(0)
+TS = json.loads(js.stdout)
+
+its, ipy = build_context_tag_index(TS), build_context_tag_index(PY)
+so_ts = sorted(set(its.alias) - set(ipy.alias))
+so_py = sorted(set(ipy.alias) - set(its.alias))
+c_ts  = sorted(set(its.canonical) - set(ipy.canonical))
+c_py  = sorted(set(ipy.canonical) - set(its.canonical))
+if so_ts or so_py or c_ts or c_py:
+    print("DIVERGE alias_so_TS=%s alias_so_PY=%s canon_so_TS=%s canon_so_PY=%s"
+          % (so_ts[:4], so_py[:4], c_ts[:4], c_py[:4]))
+else:
+    print("OK %d canonicas / %d aliases nas duas" % (len(its.canonical), len(its.alias)))
+PY
+)
+case "$G" in
+  OK*)           ok "G: TS e Python declaram a MESMA semente — $G" ;;
+  DIVERGE*)      falha "G: as duas cópias da semente DIVERGEM — $G
+       Editar uma e esquecer a outra é a operação da V5. A direção 'só na Python'
+       passava nos outros dois gates." ;;
+  *)             inc "G: não foi possível comparar ($G)" ;;
+esac
+
 echo
 echo "======================"
 if [ "$FALHAS" -gt 0 ]; then

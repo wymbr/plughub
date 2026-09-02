@@ -13,8 +13,31 @@ portão de PUBLISH sobre o cadastro"*, com runtime que **nunca rejeita**. As tr�
 bloqueavam fecharam no mesmo dia (#1 ALW-02 · #2 ALW-03 · #3 ALW-04). O portão vive no
 `PUT /v1/skills` (`validateContextTagRegistration`), o coletor das cinco superfícies de autoria
 mora em `@plughub/schemas`, e a paridade com o extrator do censo é gateada
-(`probe_context_tag_extractor_parity.sh`). **Restam a V5** — fechar aliases, bloqueada por
-TEMPO — **e a ALW-08**, a afordância preventiva no editor. A outra metade da V5 — fechar
+(`probe_context_tag_extractor_parity.sh`). **Resta a V5** — fechar aliases — **e a ALW-08**, a afordância preventiva no editor.
+
+> **O critério da V5 foi CORRIGIDO em 2026-09-02, e ele tem TRÊS dimensões, não uma.**
+> A especificação dizia *"fechamento dos aliases cujo contador zerou"* por N dias.
+> Medido: aquele contador mede **TRÁFEGO**, não produtor — os 17 aliases observados
+> eram as grafias que os skills de DEMO escrevem, e reaparecem a cada execução. Um
+> zero ali é indistinguível de *"ninguém rodou o demo"*. É o mesmo movimento que a
+> D9.2 fez na V4: sai observação, entra enumeração.
+>
+> | dimensão | pergunta | fonte |
+> |---|---|---|
+> | **produtor** | alguém escreve a grafia? | censo (gêmeo TS gateado) — critério FORTE |
+> | **história durável** | está em `session_context_snapshot`? | se sim FICA: é o alias que mantém aquele histórico mascarado |
+> | **idade** | o alias já teve tempo de pegar um retardatário? | `git log -S` na semente |
+>
+> A terceira nasceu de a segunda medição derrubar a primeira conclusão: **29 dos 49
+> "removíveis" tinham UM DIA** — eram as redes do rename do core (CNS), armadas no
+> mesmo ato em que os produtores migraram. Remover uma rede no dia seguinte a
+> pendurá-la é remover justamente o que ainda não teve tempo de pegar nada.
+>
+> ⚠️ **A remoção NÃO foi executada, e a razão é assimetria de custo.** Manter um alias
+> morto custa ~zero (declaração inerte); removê-lo cedo custa uma grafia que resolve
+> restritivo. Com o benefício sendo honestidade de vocabulário, o ônus da prova é de
+> quem remove — e a evidência tem dias, não semanas. Instrumento:
+> `infra/test/aliases_v5_buckets.py`; executor: `infra/scripts/remove_dead_aliases.py`. A outra metade da V5 — fechar
 os aliases — depende do contador da V3 decair, logo é bloqueada por **TEMPO**.
 
 ⚠️ *Esta linha já ficou atrás da §6 uma vez (ver a nota de data abaixo) e ficou de novo entre

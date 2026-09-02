@@ -1,5 +1,85 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — V5: o critério estava medindo tráfego, e a medição derrubou minha própria correção duas vezes
+
+Fui executar *"fechar os aliases cujo contador zerou"* e **não removi nenhum**. O que segue é
+por que, e o que ficou no lugar.
+
+### O critério do ADR mede a coisa errada
+
+*"Contador zerado por N dias"* mede **TRÁFEGO**, não produtor. Os 17 aliases observados hoje são
+as grafias legadas que os skills de DEMO escrevem — não decaem esperando, reaparecem a cada
+execução. Um zero ali é indistinguível de *"ninguém rodou o demo"*: a família do teste que não
+pode reprovar.
+
+É o mesmo movimento que a D9.2 já tinha feito na V4 — sai observação (*"rodar tráfego até
+secar"*), entra enumeração. O contador **fica**, como rede para as superfícies que a análise
+estática não alcança (corpo HTTP de webhook, chamador externo).
+
+### Primeira correção: os 119 aliases em três baldes
+
+| balde | n | critério |
+|---|---|---|
+| **A** | 49 | tem produtor vivo — o alias é o que o mantém funcionando |
+| **B** | 21 | sem produtor, mas **na história durável** — fica por regra: é o alias que mantém aquele histórico mascarado |
+| **C** | 49 | sem produtor e sem história — candidato |
+
+Janela do durável medida: **7 dias** (nasceu com a F5), 240 sessões, **sem política de purga**.
+Sozinha a ausência dali seria evidência fraca; o que sustenta o balde C é o critério de
+produtor.
+
+### Segunda correção: 29 dos 49 tinham UM DIA
+
+Ao datar cada um com `git log -S`: **29 entraram em 2026-09-01** — são as redes do rename do
+core (CNS), armadas no mesmo ato em que os produtores migraram. Remover uma rede no dia seguinte
+a pendurá-la é remover justamente o que ainda não teve tempo de pegar nada.
+
+Eu estava certo sobre o contador e **errado** ao concluir que nenhuma dimensão temporal importa.
+Importa outra: a **idade do alias**. O critério passou a ter três dimensões.
+
+### Terceira correção: minha própria proxy de idade é fraca
+
+Datar pela *entrada no mapa* está errado — o que importa é **quando o produtor parou de
+escrever**. Medindo isso, a resposta saiu contaminada: os commits de hoje (o mapa mudou de casa
+na ALW-02, mais o `seed_context_map.py` e o probe) tocaram as 20 grafias, então todas datam de
+hoje. Refinar exigiria uma lista de exclusões que envelhece mal.
+
+### Por que NÃO removi, e por que isso não é indecisão
+
+Assimetria de custo. Manter um alias morto custa ~zero — é uma declaração inerte. Removê-lo cedo
+custa uma grafia que resolve restritivo. O benefício é honestidade de vocabulário: real, e
+pequeno. Com essa razão, o ônus da prova é de quem remove, e a evidência tem **dias**, não
+semanas — depois de a mesma medição ter derrubado duas conclusões minhas na mesma sessão.
+
+O que ficou é o que torna a execução futura barata e correta:
+
+- **`infra/test/aliases_v5_buckets.py`** — instrumento versionado, três critérios, sem veredicto.
+  Recusa rodar sem o snapshot durável: ausência de banco não pode virar "balde C maior" em
+  silêncio.
+- **`infra/scripts/remove_dead_aliases.py`** — executor. `--antes DATA` filtra por idade;
+  **sem `--aplicar` só mostra**. Trata as TRÊS casas (TS, Python, store vivo) como UMA operação,
+  e reescreve o vivo a partir das fontes em vez de editá-lo à parte — editá-lo criaria a quarta
+  casa.
+- **Gatilho declarado** na ALW-05: balde C com ≥14 dias e durável cobrindo o período.
+
+### Um defeito de verdade, e a correção do que eu disse sobre ele
+
+Ao preparar a remoção notei que a semente vive em **dois** arquivos — `context-map.ts` (a
+autoridade) e `default_map.py` (cópia à mão) — e afirmei que nenhum gate os comparava, que
+*alias só na Python* passaria em todos.
+
+**A mutação derrubou a afirmação.** Removida uma grafia só da TS, o ramo B do
+`probe_context_map_audit` REPROVOU: ele compara o **conteúdo da folha**, não só a presença da
+chave (`difere: ["core.survey.agent_key"]`). As duas direções já eram cobertas
+transitivamente — `B` (vivo ⊇ TS, por conteúdo) mais `C` (vivo == Python + arquivo do tenant)
+fecham o triângulo.
+
+O **ramo G** ficou, com a justificativa reescrita para o que ele de fato acrescenta, que é
+menor: **diagnóstico direto** (diz "TS × Python" em vez de "a config viva não contém a
+declaração", que manda procurar no lugar errado) e **funciona com a stack fora do ar** (B e C
+dependem do config-api). Manter o texto anterior seria prosa afirmando uma lacuna inexistente —
+a família do DDL de `participation_intervals`, e do lado que este arco menos pode se permitir.
+
 ## 2026-09-02 — V4 (ALW-01): o portão de cadastro do ContextStore, e a postura que diverge do vizinho de propósito
 
 Última fase estrutural do arco ALLOWLIST. **A V4 não é mais "a inversão"**: a D9 a redefiniu
