@@ -1,5 +1,76 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — Arco NIV: verificação NO AR, ordenação da reentrada da voz, e fechamento
+
+Fecha o arco de nível único autorado. Duas coisas entram: a prova de ponta a ponta que faltava
+e a **ordem** em que a voz volta.
+
+### A verificação que faltava, e por que os 16 unitários não bastavam
+
+Os testes provam a **decisão** (dado um canal e um menu, recusa ou entrega). Não provam a
+**cadeia**: que o canal é lido de `session:{id}:meta` no Redis real, que a recusa acontece antes
+do `conversations.outbound`, e que o menu normal continua saindo. `notification_send` está no
+caminho de **todo menu de todo fluxo** — regressão ali não é local.
+
+O smoke que existia **não alcança** essa condição: `smoke_limite_tres_acessos.sh` declara no
+cabeçalho que não julga o render do formulário, e a rodada dele (18 asserções, 0 falhas, com o
+stack já atualizado) não produziu uma linha de `coletar_dados`. Verde num teste que não alcança
+a condição não é evidência sobre ela.
+
+Novo: **`infra/test/gate_masked_menu_channel_live.sh`**, três proposições medidas no ar —
+**A** webchat + menu mascarado → entrega, com `masked_fields` no evento · **B** whatsapp + o
+**mesmo** menu → recusa nomeando, e **nada** publicado · **C** whatsapp + menu sem máscara →
+entrega, **controle positivo obrigatório**.
+
+A e B formam o par discriminante: payload idêntico, canais diferentes, desfechos opostos — a
+única variável é o valor em `session:{id}:meta`. Sem **C**, o zero de **B** não seria evidência:
+Kafka fora, tópico errado ou consumidor mal posicionado produzem o mesmo zero. Medição:
+2 eventos capturados, `webchat=1 whatsapp=1 mascarados=0`.
+
+### Dois defeitos de instrumento, e o segundo era invisível
+
+**(1) O gate nasceu VERDE com contagem zero.** `grep -c X || echo 0` imprime **duas** linhas —
+`grep -c` já devolve `0` *e* sai com status 1 —, então `[ "$N" -lt 1 ]` virou erro de sintaxe;
+erro de `[` é status ≠ 0, o `if` leu como "condição falsa" e o fluxo caiu no ramo **OK**. Ele
+anunciou *"webchat entregou o menu mascarado (0 evento(s))"*. Hoje há `conta()` normalizando e um
+**guarda numérico** que declara INCONCLUSIVO em vez de deixar erro virar aprovação.
+
+**(2) O consumidor lia do listener errado, em silêncio.** O broker anuncia `PLAINTEXT` como
+`localhost:9093` — a porta do **controller** dentro do container. Um consumidor que entre por
+`localhost:9092` conecta, recebe o endereço anunciado e falha ao buscar, devolvendo **zero
+mensagem sem erro**. O caminho certo é o listener interno, `kafka:29092`.
+
+Quem denunciou os dois foi o **ramo de controle positivo**. É o argumento inteiro para exigi-lo:
+sem o C, este gate teria entrado no repositório verde, medindo nada.
+
+### A ordenação da reentrada da voz — e um erro meu, corrigido antes de virar linha
+
+Voz **suporta** coleta mascarada por natureza: em SIP/WebRTC o dígito viaja fora do áudio
+(RFC 4733 / 2833) e o eco é um bipe. O que a impede é o **estado da implementação**, não a
+natureza — medido: `voice.py` tem **18 menções a DTMF e ZERO a "masked"**; o adapter coleta
+dígito e não distingue campo sensível de comum. A NIV-03 não removeu suporte: trocou **vazamento
+silencioso por recusa alta**.
+
+`pending.md` ganhou o quadro do conjunto de reentrada, com a ordem: **VOZ-01** (SFU) →
+**VOZ-03** (o collect de voz completar) → **NIV-05** (capacidade pela GARANTIA) → **NIV-06**
+(eco) → **NIV-07** (out-of-band no SDP) → **NIV-08** (recusar `input_mode: voice`) → **só então**
+declarar `masked_input` para `voice`.
+
+⚠️ **Correção:** eu havia proposto adiar a NIV-08 com gatilho *"voz ganhar `masked_input`"*. A
+ordem está invertida — ela **precede** a declaração; com aquele gatilho, a recusa seria construída
+**depois** de o buraco abrir. Corrigido antes de virar linha de ledger.
+
+Quando a declaração acontecer, **nenhuma guarda muda**: elas leem a tabela. Uma linha na casa
+canônica (mais o gêmeo, com o gate de paridade) e, no mesmo instante, o deploy para de bloquear,
+o runtime para de recusar e o negociador passa a **eleger** voz para coleta mascarada.
+
+### Estado do arco
+
+Fechadas: **NIV-01**, **NIV-02**, **NIV-03**, **MSK-01**. Abertas: **NIV-04** (adiada por decisão
+do dono, caso a caso), **NIV-09** e **NIV-10** (adiadas, cada uma com gatilho **guardado por ramo
+de gate**), e o conjunto de voz. Nada fica meio-feito — **o arco está estável e fechado
+temporariamente**.
+
 ## 2026-09-03 — NIV-03: valor mascarado deixa de sair por canal que não sabe mascarar (e fecha a MSK-01)
 
 **O que estava aberto.** MSK-01, medida no mesmo dia: o pool `limite_ia` declara
