@@ -2424,7 +2424,20 @@ async def review_result(result_id: str, tenant_id: str, body: ReviewBody, reques
     if result.get("session_id"):
         await _write_ctx(redis_client, tenant_id, result["session_id"], {
             "core.workflow.review_decision": body.decision,
-            "core.workflow.reviewer_id":     caller_user_id,
+            # ⚠️ `core.workflow.reviewer_id` SAIU em 2026-09-03 (ALW-11). Era escrita
+            # nas duas rotas e **não tinha leitor nenhum** — nem YAML, nem código; as
+            # duas irmãs deste mesmo dicionário são declaradas e uma delas (o
+            # `review_decision`) é de fato consumida por `skill_revisao_treplica_v1`.
+            # Ou seja: alguém acrescentou um campo ao lado de dois registrados e não o
+            # registrou, e nenhum portão alcançava isso (o gate de publish lê YAML de
+            # skill, não código Python). Foi o censo do ContextStore que achou.
+            #
+            # Removida em vez de declarada, por três razões somadas: `core.*` é o
+            # namespace FECHADO da plataforma, onde cada nome precisa ser merecido; o
+            # valor identifica uma PESSOA; e `write_context_tags` grava `agents_only`,
+            # então sem `tipo` no cadastro não há máscara por papel nem classe LGPD —
+            # o id do revisor ficava legível a todo agente da sessão. Declarar um campo
+            # sem consumidor teria custado a mesma linha e mantido a exposição.
             "core.workflow.round_echoed":    body.round,
         })
 
@@ -2543,7 +2556,6 @@ async def create_contestation(body: ContestationCreate, request: Request) -> dic
     if result.get("session_id"):
         await _write_ctx(redis_client, body.tenant_id, result["session_id"], {
             "core.workflow.review_decision": "contested",
-            "core.workflow.reviewer_id":     caller_user_id,
             "core.workflow.round_echoed":    body.round,
         })
 

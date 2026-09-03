@@ -52,6 +52,25 @@ Resultado de referência (2026-09-02, semente 77/98 · vivo 97/119):
     PLATAFORMA 14 escritas, 1 não declarada  (core.workflow.reviewer_id — decisão #5)
     TENANT     52 escritas, 1 não declarada  (session.journey_echo — passo de demo)
 
+── 2026-09-03 (ALW-11): isto deixou de ser instrumento e virou PORTÃO ───────────
+As duas metades foram a ZERO e o script passou a ter veredicto (exit 0/1/2):
+
+    PLATAFORMA 13 escritas, 0 não declaradas   (o `reviewer_id` foi REMOVIDO —
+               escrita sem leitor, em namespace fechado, com id de pessoa
+               `agents_only` e sem tipo; ver o comentário no `router.py`)
+    TENANT     51 escritas, 0 não declaradas
+
+Um portão que nasce vermelho ensina todo mundo a ignorá-lo — por isso o achado foi
+consertado ANTES da promoção. Envelope: `infra/test/probe_contextstore_cadastro.sh`.
+
+⚠️ **E o extrator de plataforma estava perdendo tag por DISTÂNCIA.** A regra era
+*"marca de escrita nas 6 linhas antes do literal"*; um comentário dentro de um
+`_write_ctx({...})` empurrava a tag para fora e ela sumia do censo — descoberto ao
+escrever o comentário que documenta a remoção acima. O relatório **não mudou de
+número**, porque a mesma tag é escrita num segundo sítio e o resultado é dedupado
+por nome: a redundância mascarou a perda. Hoje vale o ESCOPO DA CHAMADA (balanceia
+brackets, pula strings), e `--autoteste` guarda a regressão contra texto sintético.
+
 ⚠️ ACHADO QUE ESTE CONSERTO PRODUZIU — o número muda depois de um `--wipe`
 ------------------------------------------------------------------------
 O mapa vivo do demo tem 20 canônicas de domínio de TENANT (`cartao`, `conta`,
@@ -274,17 +293,145 @@ def censo_tenant():
 
 
 # ── metade PLATAFORMA ────────────────────────────────────────────────────────
+def _fim_do_escopo(texto, ini):
+    """Índice do fecho do bracket aberto em/depois de `ini`, ou None.
+
+    Conta `()`, `[]` e `{}` juntos e PULA o conteúdo de strings — sem isso um
+    literal com bracket dentro desequilibraria a contagem.
+    """
+    n = len(texto)
+    i = ini
+    while i < n and texto[i] not in "([{":
+        if texto[i] == "\n":
+            return None            # o bracket tem de abrir na MESMA linha da marca
+        i += 1
+    if i >= n:
+        return None
+    prof = 0
+    aspas = None
+    while i < n:
+        c = texto[i]
+        if aspas:
+            if c == "\\":
+                i += 2
+                continue
+            if c == aspas:
+                aspas = None
+        elif c in "\"'":
+            aspas = c
+        elif c in "([{":
+            prof += 1
+        elif c in ")]}":
+            prof -= 1
+            if prof == 0:
+                return i
+        i += 1
+    return None
+
+
+def _tags_do_texto(texto):
+    """Nomes de tag escritos por `texto`, um por ocorrência de marca de escrita.
+
+    Função PURA para que o autoteste possa exercê-la sem tocar o repositório —
+    era exatamente o que faltava quando a janela de 6 linhas passou despercebida.
+    """
+    fora = []
+    for marca in MARCA_W.finditer(texto):
+        fim = _fim_do_escopo(texto, marca.end() - 1)
+        if fim is None:
+            # Marca sem bracket na própria linha: cai no comportamento mínimo (a
+            # linha da marca), nunca em "ignora" — silêncio aqui seria o mesmo
+            # defeito, com outra causa.
+            fim = texto.find("\n", marca.end())
+            fim = len(texto) if fim == -1 else fim
+        for m in LIT.finditer(texto[marca.start():fim + 1]):
+            fora.append(m.group(1))
+    return fora
+
+
+def autoteste():
+    """Prova que o extrator não perde tag por DISTÂNCIA. Devolve 0 ou 1.
+
+    ── Por que este autoteste existe ───────────────────────────────────────────
+
+    Em 2026-09-03 o extrator usava uma janela de 6 linhas antes do literal. Um
+    comentário escrito DENTRO de um `_write_ctx({...})` empurrou uma tag para fora
+    da janela e ela sumiu do censo. O relatório não mudou de número porque a mesma
+    tag é escrita num segundo sítio e o resultado é deduplicado por nome — ou seja,
+    **a redundância mascarou o defeito**, e uma volta à janela passaria verde.
+
+    Por isso a asserção é sobre um texto SINTÉTICO com a chave deliberadamente
+    longe da marca: é a única forma de a regressão ficar vermelha sem depender de
+    como o repositório real está escrito hoje.
+    """
+    LONGO = (
+        'await _write_ctx(r, t, s, {\n'
+        '    "core.workflow.primeira": a,\n'
+        + "".join('    # comentario de enchimento linha %d\n' % i for i in range(12))
+        + '    "core.workflow.distante": b,\n'
+        '})\n'
+    )
+    achadas = set(_tags_do_texto(LONGO))
+    erros = []
+    if "core.workflow.primeira" not in achadas:
+        erros.append("perdeu a tag ADJACENTE à marca")
+    if "core.workflow.distante" not in achadas:
+        erros.append("perdeu a tag DISTANTE da marca (a janela voltou?)")
+
+    # Testemunha do outro lado: o que está FORA da chamada não pode contar.
+    FORA = (
+        'await _write_ctx(r, t, s, {"core.workflow.dentro": a})\n'
+        '# "core.workflow.fora" aparece depois do fecho e NAO e escrita\n'
+        'logger.info("core.workflow.fora")\n'
+    )
+    de_fora = set(_tags_do_texto(FORA))
+    if "core.workflow.dentro" not in de_fora:
+        erros.append("perdeu a tag de uma chamada de uma linha")
+    if "core.workflow.fora" in de_fora:
+        erros.append("contou como escrita algo FORA da chamada")
+
+    # String com bracket dentro não pode desequilibrar a contagem.
+    ASPAS = 'await _write_ctx(r, t, s, {"core.workflow.chave": "vaor com ) e ]", "core.workflow.depois": x})\n'
+    com_aspas = set(_tags_do_texto(ASPAS))
+    if "core.workflow.depois" not in com_aspas:
+        erros.append("bracket dentro de string desequilibrou o escopo")
+
+    if erros:
+        print("AUTOTESTE REPROVADO:")
+        for e in erros:
+            print("   x %s" % e)
+        return 1
+    print("autoteste do extrator: OK (distancia, fronteira e aspas)")
+    return 0
+
+
 def censo_plataforma():
+    """Tags escritas por CÓDIGO de plataforma, pelo ESCOPO da chamada de escrita.
+
+    ⚠️ **Isto era uma JANELA de 6 linhas, e a janela apagava escritas em silêncio**
+    (medido em 2026-09-03, ALW-11). A regra antiga era *"a marca de escrita aparece
+    nas 6 linhas antes do literal"*; bastava um comentário no meio do dicionário — ou
+    um dicionário com mais de seis chaves — para o literal cair fora do alcance e a
+    escrita sumir do censo.
+
+    Foi descoberto do pior jeito possível: escrevendo o comentário que documenta a
+    remoção de `core.workflow.reviewer_id`, eu empurrei a irmã `round_echoed` para
+    fora da janela naquele sítio. O relatório não mudou de número **porque a mesma tag
+    é escrita num segundo sítio** e o resultado é deduplicado por nome — ou seja, o
+    defeito estava mascarado por redundância, e teria continuado assim.
+
+    A regra nova não tem distância: acha a marca, abre no primeiro bracket da linha e
+    consome até ele fechar. O que estiver DENTRO da chamada conta; o que estiver fora,
+    não. Comentário, quebra de linha e número de chaves deixam de importar.
+    """
     escritas = defaultdict(set)
     for rel in ESCRITORES:
         p = os.path.join(ROOT, rel)
         if not os.path.exists(p):
             continue
-        linhas = io.open(p, encoding="utf-8", errors="ignore").read().split("\n")
-        for i, ln in enumerate(linhas):
-            for m in LIT.finditer(ln):
-                if MARCA_W.search("\n".join(linhas[max(0, i - 6):i + 2])):
-                    escritas[m.group(1)].add(os.path.basename(rel))
+        texto = io.open(p, encoding="utf-8", errors="ignore").read()
+        for nome in _tags_do_texto(texto):
+            escritas[nome].add(os.path.basename(rel))
     return escritas
 
 
@@ -333,9 +480,14 @@ def main():
     ap.add_argument("--tenant", default=os.environ.get("TENANT", "tenant_demo"))
     ap.add_argument("--config-api",
                     default=os.environ.get("PLUGHUB_CONFIG_API_URL", "http://localhost:3600"))
+    ap.add_argument("--autoteste", action="store_true",
+                    help="exercita o extrator contra texto sintetico e sai")
     ap.add_argument("--sem-vivo", action="store_true",
                     help="não consulta o config-api; a metade TENANT sai INCONCLUSIVA")
     args = ap.parse_args()
+
+    if args.autoteste:
+        return autoteste()
 
     sem_can, sem_ali = ler_mapa_semente()
     vivo_can = vivo_ali = None
@@ -408,7 +560,10 @@ def main():
             "lidos_sem_escritor": sem_escritor,
             "dinamicos": [list(d) for d in dinamicas],
         }, sys.stdout, ensure_ascii=False, indent=1)
-        return
+        # ⚠️ Devolve o VEREDICTO, nunca `return` seco. Um `return` aqui daria
+        # `sys.exit(None)` = 0, e o modo `--json` — justamente o que um CI usaria —
+        # seria um portao que nao pode reprovar.
+        return veredicto(plat_nao, ten_nao, dinamicas, vivo_erro)
 
     print("=" * 88)
     print("CENSO DE CADASTRO DO CONTEXTSTORE (D9) — %d nomes escritos" % len(todos))
@@ -465,6 +620,56 @@ def main():
     print("      está FUNCIONANDO, e o custo é zero. Não dimensione a decisão por este")
     print("      número — dimensione pela metade PLATAFORMA acima.")
 
+    return veredicto(plat_nao, ten_nao, dinamicas, vivo_erro)
+
+
+def veredicto(plat_nao, ten_nao, dinamicas, vivo_erro):
+    """0 = verde · 1 = reprovado · 2 = inconclusivo (ALW-11, 2026-09-03).
+
+    ── Por que as DUAS metades reprovam ────────────────────────────────────
+
+    A metade PLATAFORMA é a que carrega peso: é código, roda para todo tenant, e
+    **nenhum portão de publish a alcança** — o gate da V4 lê YAML de skill. Foi
+    ela que entregou o achado que motivou esta promoção (`core.workflow.reviewer_id`,
+    id de pessoa escrito `agents_only` sem tipo, ao lado de duas irmãs declaradas).
+
+    A metade TENANT também reprova, e isso é o que o próprio relatório argumenta:
+    *um portão que recuse um fixture está FUNCIONANDO, e o custo é zero*. Ela não é
+    redundante com o gate de publish — aquele julga o ATO de publicar, este julga o
+    ESTADO dos arquivos, e um YAML que nunca foi republicado escapa do primeiro.
+
+    ── Linha de base: 0 e 0, medidas em 2026-09-03 ─────────────────────────
+
+    O gate nasce verde porque o único achado foi consertado antes. Um gate que
+    nasce vermelho ensina todo mundo a ignorá-lo.
+
+    ── INCONCLUSIVO é ramo próprio ─────────────────────────────────────────
+
+    Sem o mapa vivo a metade TENANT não tem contra o que ser julgada, e cair na
+    semente publicaria como não-declaradas tags que o portão aceita. Verde por
+    ausência de amostra é a família *teste que não pode reprovar*.
+
+    ⚠️ **Dinâmicas são CONTADAS e nomeadas, nunca fatais.** Um nome composto em
+    runtime escapa deste censo E do gate de publish, então zero é a premissa da
+    D9.2 — mas reprovar exigiria saber a ORIGEM de cada dinâmica, e o extrator não
+    a carrega hoje. Contar sem poder julgar é honesto; julgar sem poder distinguir
+    seria o instrumento medindo a proposição vizinha outra vez.
+    """
+    print()
+    if dinamicas:
+        print('  (!) %d nome(s) DINAMICO(s) — fora do alcance deste censo e do gate '
+              'de publish: %s' % (len(dinamicas), ', '.join(map(str, dinamicas[:6]))))
+
+    if plat_nao or ten_nao:
+        print('REPROVADO — plataforma %d, tenant %s nao declarada(s)'
+              % (len(plat_nao), 'INCONCLUSIVO' if ten_nao is None else len(ten_nao)))
+        return 1
+    if ten_nao is None:
+        print('INCONCLUSIVO — metade TENANT nao julgada (%s); plataforma limpa' % vivo_erro)
+        return 2
+    print('VERDE — nenhuma tag escrita fora do cadastro, nas duas metades')
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

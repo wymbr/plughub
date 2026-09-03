@@ -1,5 +1,117 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — ALW-11 + ALW-13: o censo do ContextStore vira PORTÃO, e ao promovê-lo o instrumento revelou estar cego por distância
+
+O censo media desde 2026-09-02 e ninguém o rodava — instrumento sem veredicto não impede
+a próxima ocorrência. A promoção a portão começou pela medição, e ela entregou o achado
+que justifica o arco inteiro.
+
+### O achado: a metade que nenhum portão alcança
+
+```
+PLATAFORMA (código)  : 14 escritas ·  1 NÃO DECLARADA
+TENANT (skill YAML)  : 51 escritas ·  0 não declaradas
+```
+
+A metade do tenant estava zerada — o portão de publish da V4 está segurando. A da
+plataforma tinha uma, e ela é o caso exemplar:
+
+`evaluation-api/router.py`, **duas rotas**, o mesmo dicionário:
+
+```
+core.workflow.review_decision   ✓ declarada — e LIDA por skill_revisao_treplica_v1
+core.workflow.reviewer_id       ✗ NÃO declarada, e sem leitor nenhum
+core.workflow.round_echoed      ✓ declarada
+```
+
+Alguém acrescentou um campo ao lado de dois registrados e não o registrou. Quatro fatos
+somados decidiram por **remover** em vez de declarar:
+
+- é **`core.*`**, o namespace fechado da plataforma, onde cada nome precisa ser merecido;
+- **não tem leitor** — nem YAML, nem código (os outros `reviewer_id` do repositório são
+  campo de API da evaluation, coisa diferente);
+- o valor é `caller_user_id`, que **identifica uma pessoa**;
+- `write_context_tags` grava `agents_only`, e sem `tipo` no cadastro **não há máscara por
+  papel nem classe LGPD** — o id do revisor ficava legível a todo agente da sessão.
+
+Declarar teria custado a mesma linha e mantido a exposição.
+
+### O defeito do instrumento, que eu mesmo criei ao consertar o defeito do produto
+
+O extrator da metade PLATAFORMA usava uma **janela de 6 linhas** antes do literal. Ao
+escrever o comentário que documenta a remoção acima, empurrei a tag irmã `round_echoed`
+para fora da janela **naquele sítio**.
+
+⚠️ **E o relatório não mudou de número.** A mesma tag é escrita num segundo sítio, e o
+resultado é deduplicado por nome: a redundância mascarou a perda. O censo continuou
+dizendo 13/0, que por acaso era a resposta certa pelo motivo errado.
+
+Só apareceu porque a mutação de falseabilidade — reintroduzir uma tag não declarada de
+plataforma — **passou verde**. O gate não pegava o que existia para pegar.
+
+Hoje o extrator usa o **escopo da chamada**: acha a marca de escrita, abre no primeiro
+bracket da linha e consome até ele fechar, balanceando `()[]{}`  e pulando o conteúdo de
+strings. Não há distância; comentário, quebra de linha e número de chaves deixam de
+importar.
+
+### O autoteste, e por que ele usa texto sintético
+
+`--autoteste` exercita `_tags_do_texto` contra três textos construídos:
+
+| caso | o que guarda |
+|---|---|
+| chave a 13 linhas da marca | a janela não voltou |
+| literal **depois** do fecho da chamada | não conta leitura como escrita |
+| string com `)` e `]` dentro | bracket em string não desequilibra |
+
+Sintético de propósito: uma asserção sobre o repositório real ficaria verde de novo assim
+que a redundância mascarasse a perda — foi exatamente o que aconteceu. Falseabilidade
+provada desligando o escopo: o autoteste reprova nomeando *"a janela voltou?"*.
+
+### O veredicto, e o ramo que quase nasceu inerte
+
+O script passou a devolver **0 · 1 · 2**. As duas metades reprovam:
+
+- **PLATAFORMA** porque é código, roda para todo tenant e nenhum portão de publish a
+  alcança;
+- **TENANT** porque — como o próprio relatório já argumentava — *um portão que recuse um
+  fixture está funcionando, e o custo é zero*. Não é redundante com o gate de publish:
+  aquele julga o ATO de publicar, este julga o ESTADO dos arquivos, e um YAML nunca
+  republicado escapa do primeiro.
+
+**INCONCLUSIVO** é ramo próprio: sem o mapa vivo a metade TENANT não tem contra o que ser
+julgada, e cair na semente publicaria como não-declaradas tags que o portão aceita.
+
+⚠️ O modo `--json` fazia `return` seco → `sys.exit(None)` → **exit 0 sempre**. É o modo
+que um CI usaria, ou seja, o portão não podia reprovar exatamente onde importa. Hoje ele
+devolve o mesmo veredicto, e o ramo C do envelope compara os dois códigos.
+
+Dinâmicas seguem **contadas e nomeadas, nunca fatais**: um nome composto em runtime escapa
+deste censo *e* do gate de publish, mas reprovar exigiria saber a ORIGEM de cada uma, e o
+extrator não a carrega. Contar sem poder julgar é honesto; julgar sem poder distinguir
+seria o instrumento medindo a proposição vizinha outra vez. Hoje são zero.
+
+### ALW-13 — a órfã das duas pontas
+
+`journey.processo.origin_process_session` não tinha escritor (`marcar_journey`, removido) 
+nem leitor (`ler_journey_ctx`, removido em 2026-09-02). Restavam a declaração e um exemplo
+no guia. Saiu do arquivo do tenant e do mapa vivo — **97 → 96 folhas, exatamente uma**,
+conferido depois de gravar e também na leitura efetiva do tenant.
+
+No guia o exemplo virou **nota datada** em vez de sumir: nome que sai do mapa e continua
+vivo num exemplo de documentação volta como pendência redescoberta — foi assim que essa
+mesma folha sobreviveu a duas limpezas.
+
+### Medições
+
+`probe_contextstore_cadastro.sh` **VERDE** (3 ramos) · `probe_context_map_seed` OK (96
+canônicas, 96 vindas dos arquivos, 0 pela tela) · `probe_masking_display_domain` e
+`probe_config_scope_provenance` verdes · evaluation-api **237 passed**.
+
+Mutações: tag de plataforma não declarada → **REPROVADO**, nomeando `codigo:router.py`;
+tag de tenant não declarada → **REPROVADO**, nomeando `context_tags.outputs`; escopo
+desligado → **autoteste REPROVADO**.
+
 ## 2026-09-02 — ALW-10: o domínio de exibição e eco vira ABSTRATO, e a fronteira eco × armazenamento fica escrita
 
 Três campos com **zero consumidores** — `display_voice`, `echo_to_customer`,

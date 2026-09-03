@@ -159,9 +159,15 @@ namespace cross-sessão e durável. Escrito por **D** (skills via `context_tags`
 `journey.`) e migrado na união (`journey_merge` → `migrateJourneyContext`, a raiz canônica vence). Lido por
 `@ctx.journey.*` e pelo AI Gateway (`_build_journey_context_block`, ignora confidence < 0.3).
 
-Exemplos: `journey.pedido_id`, `journey.numero_pedido`, `journey.operadora_destino`,
-`journey.origin_process_session`. Regra: promova para `journey.*` **só** o punhado de fatos que um contato
-**futuro/distinto** vai precisar ler — não o estado transiente do turno.
+Exemplos: `journey.pedido_id`, `journey.numero_pedido`, `journey.operadora_destino`. Regra: promova
+para `journey.*` **só** o punhado de fatos que um contato **futuro/distinto** vai precisar ler —
+não o estado transiente do turno.
+
+> ⚠️ `journey.origin_process_session` era o quarto exemplo e **saiu do mapa em 2026-09-03**
+> (ALW-13): ficou órfã nas duas pontas — o escritor (`marcar_journey`) e o leitor
+> (`ler_journey_ctx`) foram removidos, e sobrou só a declaração. A nota fica porque nome
+> que sai do mapa e continua vivo em exemplo de documentação volta como pendência
+> redescoberta — foi assim que ela mesma sobreviveu a duas limpezas.
 
 ### `insight.*`
 

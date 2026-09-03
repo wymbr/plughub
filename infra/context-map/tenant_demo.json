@@ -57,12 +57,6 @@
           ],
           "tipo": "texto"
         },
-        "origin_process_session": {
-          "legado": [
-            "journey.origin_process_session"
-          ],
-          "tipo": "texto"
-        },
         "parecer": {
           "legado": [
             "journey.parecer"
