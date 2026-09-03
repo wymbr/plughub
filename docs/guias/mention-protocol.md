@@ -218,9 +218,13 @@ Mecânica do fix (duas pontas):
    interrupts do dispatch e por `session:closed` (disconnect).
 2. **Dispatch instance-scoped**: o specialist roda com `instance_id` → seu
    BLPOP é em `menu:result:{sid}:{iid}`. O `dispatch_mention_command` (bridge)
-   e a tool `mention_command_dispatch` (bpm.ts) agora miram a chave
-   instance-scoped (lendo `instance_id` do `specialist_key`); antes empurravam
-   para a session-scoped e o interrupt nunca chegava.
+   mira a chave instance-scoped (lendo `instance_id` do `specialist_key`); antes
+   empurrava para a session-scoped e o interrupt nunca chegava.
+   ⚠️ **Casa ÚNICA desde 2026-09-02 (ALW-07).** Havia uma segunda, a tool MCP
+   `mention_command_dispatch` (`bpm.ts`), cuja descrição dizia ser chamada pelo
+   bridge — e o bridge nunca a chamou. Ela divergia da que roda (roteava
+   `journey.*` para o hash do processo; a do bridge grava no da sessão e avisa)
+   e foi REMOVIDA: com uma das duas morta, não há merge, há escolha.
 3. **Validador de ciclos do engine**: o ciclo do copilot
    (`aguardar → analisar → sugerir → aguardar`) era rejeitado pelo
    `validateFlow` ("unguarded cycles") e o flow morria na entrada — segmento

@@ -472,8 +472,10 @@ export const MenuStepSchema = z.object({
   /**
    * Standby de @mention (mention-protocol): quando true, este menu NÃO recebe
    * mensagens comuns dos roteadores (texto do agente humano / menu_submit) —
-   * acorda exclusivamente pelos interrupts do mention_command_dispatch
-   * (_mention_trigger_step / _mention_terminate) e por session:closed.
+   * acorda exclusivamente pelos interrupts que o orchestrator-bridge empurra
+   * (`dispatch_mention_command`: _mention_trigger_step / _mention_terminate) e
+   * por session:closed. ⚠️ Este texto dizia `mention_command_dispatch`, que era
+   * a tool MCP homônima — removida em 2026-09-02 (ALW-07) por não ter chamador.
    * Usado pelo step de espera de especialistas controlados por @mention
    * (ex.: co-pilot), que sem a flag acordava com qualquer mensagem do primary.
    */

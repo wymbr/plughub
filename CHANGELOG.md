@@ -1,5 +1,89 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-07: as duas casas do `mention_command set_context` viram uma, e a decisão foi remoção porque uma delas nunca rodou
+
+A tarefa pedia *"decidir qual casa fica"*. A medição respondeu antes da decisão: **uma das duas
+não tem chamador**, e aí não há merge a fazer — há código morto a apagar.
+
+### O que havia
+
+`set_context` de `mention_commands` estava implementado duas vezes, sobre o **mesmo** bloco de
+YAML:
+
+| casa | onde | escopo não-sessão |
+|---|---|---|
+| Python | `orchestrator-bridge` `dispatch_mention_command` | grava no hash da SESSÃO e **avisa** (`on_foreign_scope="warn"`) |
+| TS | `mcp-server-plughub` tool `mention_command_dispatch` | **roteia** `journey.*` para o hash do processo |
+
+Divergentes desde a ALW-02 — e, pela regra da casa, duas respostas para o mesmo fato significam
+que a permissiva é a que vale.
+
+### Qual roda
+
+A Python. Está ligada ao consumer Kafka: `main.py:9136` → `process_mention_routing` →
+`dispatch_mention_command`. Caminho vivo para qualquer inbound com `mention_routing:true`.
+
+A TS **não tem chamador nenhum**: nem no bridge, nem em skill YAML, nem na UI, nem no e2e. O
+único texto que a ligava a alguém era a **descrição dela mesma** — *"Chamado pelo orchestrator
+bridge quando detecta `mention_routing:true`"* —, e o bridge nunca chamou: ele implementa a ação
+por dentro. Promessa sem mecanismo, no lugar mais convincente possível: a documentação do próprio
+artefato.
+
+⚠️ **O log não discrimina, e isso está dito.** Nos containers no ar (≈3 h), zero linhas para as
+duas casas — o comando `@mention` simplesmente não foi exercido na janela. A evidência que
+decide é estática (quem está ligado a um produtor), não de tráfego; registrar o contrário seria
+usar ausência de amostra como prova.
+
+Confirmação lateral: `routeMentions` (o caminho WS do Console) **não** trata `mention_commands` —
+ele roteia `@alias` para pool de especialista, que é invocação, não comando. O dispatch de
+comando é inteiramente do bridge.
+
+### Por que remover a casa CORRETA
+
+Porque a virtude dela é inexercida. O censo de hoje achou **uma** declaração viva de
+`set_context` no repositório inteiro — `agente_copilot_v1` / `pausa` → `session.copilot.mode`,
+escopo de sessão — e **zero** `journey.*`. O roteamento que a casa TS fazia melhor nunca teve o
+que rotear.
+
+E as alternativas eram piores:
+
+· manter as duas → é o defeito, não o conserto;
+· mover o comportamento correto para a casa Python → passaria por trocar o
+  `on_foreign_scope="warn"`, que é **compartilhado** com os sítios de tag arbitrária (corpo de
+  webhook, `context` de `delegate`/`collect`) e é dívida nomeada na ALW-03;
+· usar `on_foreign_scope="raise"` → converteria escrita errada-mas-barulhenta em falha de
+  runtime, contra a postura que a V4 fixou hoje mesmo (*o publish recusa; o runtime nunca
+  rejeita*).
+
+O que sobrevive, dito por inteiro: `journey.*` num `mention_command` cai no hash da sessão e
+expira em 4 h **com log dizendo exatamente isso**. É a dívida ALW-03, já registrada lá — não uma
+nova.
+
+### Bônus medido
+
+A tool estava na tabela do `probe_mcp_tool_guard_census.sh` como `guard|divida`: superfície MCP
+**sem credencial** (CAP-09). Uma porta destrancada para uma sala onde ninguém entrava. Some uma:
+`guard` 16 → 15, dívida 48 → 47, total 72 → 71.
+
+### Os textos que creditavam o morto
+
+Três comentários descreviam o interrupt de menu como vindo da tool TS
+(`schemas/src/skill.ts`, `skill-flow-engine/src/steps/menu.ts` em dois pontos) e um trecho do
+`docs/guias/mention-protocol.md` afirmava que **as duas** casas miravam a chave instance-scoped.
+Todos passaram a nomear o produtor real (o bridge). Não é limpeza cosmética: comentário que
+credita mecanismo à casa errada é como se descobre a casa errada da próxima vez.
+
+### Medições
+
+`probe_mcp_tool_guard_census.sh` **verde** — 71 no fonte × 71 ao vivo, conjuntos batendo,
+nenhuma camada derivada. Suíte do mcp-server: **253 passed** (17 arquivos). Build da imagem:
+verde, com dois imports órfãos (`writeContextTag`, `Skill`) removidos junto.
+
+⚠️ **E o próprio censo tinha um número cravado**: a mensagem de sucesso dizia *"as 72 estão
+classificadas"*, literal, ao lado de um `total=` que ela mesma calculava. Ficou velho na primeira
+remoção de tool da história do gate. Virou derivado — número fixo em mensagem de **verde** não
+reprova nada e passa a mentir sozinho.
+
 ## 2026-09-02 — ALW-06 / CNS-14: a Config API passa a dizer QUAL escopo está em vigor, e uma rota que prometia isso estava morta havia tempo
 
 O dono mandou fazer as duas juntas por serem o mesmo eixo — `__global__` × tenant —, sendo a

@@ -15,8 +15,6 @@ import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { resolveAgentTypeForSession } from "../lib/routing-ref"
-import { writeContextTag }    from "./journey"
-import type { Skill }         from "@plughub/schemas"
 
 /**
  * Generates a session ID that satisfies SessionIdSchema:
@@ -166,25 +164,6 @@ const ConversationEscalateInputSchema = z.object({
   escalation_reason: z.string().optional(),
 })
 
-const MentionCommandDispatchInputSchema = z.object({
-  /** ID do tenant */
-  tenant_id:    z.string(),
-  /** ID da sessão onde o comando foi enviado */
-  session_id:   z.string(),
-  /**
-   * ID da instância do agente especialista alvo.
-   * Necessário para terminate_self (identifica a sessão do agente).
-   * Opcional para set_context e trigger_step.
-   */
-  instance_id:  z.string().optional(),
-  /**
-   * Skill ID do agente especialista — usado para carregar o mapa mention_commands
-   * do Redis (key: {tenant_id}:skill:{skill_id}).
-   */
-  skill_id:     z.string(),
-  /** Nome do comando extraído de args_raw (ex: "ativa", "para") */
-  command_name: z.string(),
-})
 
 // ─────────────────────────────────────────────
 // Registro das tools de BPM
@@ -1059,122 +1038,29 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     }),
   )
 
-  // ── mention_command_dispatch ─────────────────
-  server.tool(
-    "mention_command_dispatch",
-    "Processa um @mention command endereçado a um agente especialista. " +
-    "Chamado pelo orchestrator bridge quando detecta mention_routing:true em NormalizedInboundEvent. " +
-    "Carrega mention_commands do skill do agente, executa a ação declarada (set_context, " +
-    "trigger_step ou terminate_self) e opcionalmente envia acknowledgment agents_only. " +
-    "Comandos desconhecidos são ignorados silenciosamente. Spec: docs/guias/mention-protocol.md.",
-    MentionCommandDispatchInputSchema.shape as any,
-    withGuard("mention_command_dispatch", async (input: Record<string, unknown>) => {
-      const parsed    = MentionCommandDispatchInputSchema.parse(input)
-      const redis     = deps?.redis
-      const now       = new Date().toISOString()
-      // Specialists run with instance_id → their menu BLPOP key is
-      // instance-scoped (menu:result:{sid}:{iid}). Interrupts MUST target it;
-      // session-scoped is only a fallback for legacy agents without instance.
-      const resultKey = parsed.instance_id
-        ? `menu:result:${parsed.session_id}:${parsed.instance_id}`
-        : `menu:result:${parsed.session_id}`
+  // ── mention_command_dispatch — REMOVIDA em 2026-09-02 (ALW-07) ──────────────
+  //
+  // Era a SEGUNDA casa do `set_context` de `mention_commands`, e **nao tinha
+  // chamador**. A propria descricao dela dizia *"Chamado pelo orchestrator bridge
+  // quando detecta mention_routing:true"* — e o bridge nunca chamou: ele implementa
+  // a acao por dentro (`main.py` `process_mention_routing` -> `dispatch_mention_command`,
+  // ligado ao consumer Kafka). Medido: zero referencias em bridge, skill YAML, UI e
+  // e2e; o unico texto que restava era o desta descricao, prometendo um chamador.
+  //
+  // Por que REMOVER e nao unificar: as duas casas divergiam desde a ALW-02 (esta
+  // roteava `journey.*` para o hash do processo; a Python grava no da sessao e AVISA),
+  // e duas respostas para o mesmo fato significam que a permissiva vale. Com uma delas
+  // morta, escolher e deletar — nao ha o que mesclar. A casa que fica e a que RODA.
+  //
+  // ⚠️ O que se perde, dito por inteiro: o roteamento correto de `journey.*` neste
+  // caminho. Nao ha regressao hoje — o censo de 2026-09-02 achou UMA declaracao viva
+  // de `set_context` no repositorio (`agente_copilot_v1` / `pausa` ->
+  // `session.copilot.mode`, escopo de sessao) e ZERO `journey.*`. A limitacao que
+  // sobrevive e a divida ALW-03 do funil Python, ja registrada la, e ela degrada
+  // BARULHENTA: `write_context_tags(on_foreign_scope="warn")` grava e loga que gravou
+  // no lugar errado.
+  //
+  // Bonus medido: a tool estava na tabela do `probe_mcp_tool_guard_census.sh` como
+  // `guard|divida` — superficie MCP sem credencial (CAP-09). Some uma.
 
-      // ── 1. Load skill definition from Redis ──────────────────────────────
-      let mentionCommands: NonNullable<Skill["mention_commands"]> = {}
-
-      if (redis) {
-        try {
-          const raw = await redis.get(`${parsed.tenant_id}:skill:${parsed.skill_id}`)
-          if (raw) {
-            const skill = JSON.parse(raw) as Skill
-            mentionCommands = skill.mention_commands ?? {}
-          }
-        } catch {
-          // Non-fatal — if skill can't be loaded, command is unrecognised (handled below)
-        }
-      }
-
-      // ── 2. Look up command ────────────────────────────────────────────────
-      const cmd = mentionCommands[parsed.command_name]
-      if (!cmd) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({ handled: false, reason: "unknown_command" }),
-          }],
-        }
-      }
-
-      const action = cmd.action
-
-      // ── 3. Execute action ─────────────────────────────────────────────────
-
-      if ("set_context" in action && redis) {
-        // ALW-02 (2026-09-02) — passa pelo funil `writeContextTag` em vez de `hset` cru.
-        // Ganha as DUAS coisas que o funil faz, e a primeira era um defeito latente:
-        // um `@mention` com tag `journey.*` caía no hash da SESSÃO e evaporava em 4 h,
-        // silenciosamente, em vez de ir para o hash do processo (TTL 30d). A segunda é
-        // o carimbo do `atributo` (D9.6), que este sítio não tinha como fazer sozinho.
-        for (const [tag, value] of Object.entries(action.set_context)) {
-          try {
-            await writeContextTag(redis, parsed.tenant_id, parsed.session_id, tag, {
-              value,
-              confidence: 1.0,
-              source:     `mention_command:${parsed.command_name}`,
-              visibility: "agents_only",
-              updated_at: now,
-            })
-          } catch { /* non-fatal */ }
-        }
-      }
-
-      if ("trigger_step" in action && redis) {
-        // Interrupt any blocked menu:result BLPOP — the menu step detects this special payload
-        // and jumps to the specified step instead of returning a normal on_success result.
-        try {
-          await redis.lpush(resultKey, JSON.stringify({
-            _mention_trigger_step: (action as { trigger_step: string }).trigger_step,
-          }))
-        } catch { /* non-fatal */ }
-      }
-
-      if ("terminate_self" in action && (action as { terminate_self: boolean }).terminate_self && redis) {
-        // Wake up any blocked menu BLPOP with a terminate signal.
-        // Wake up any blocked menu BLPOP with a terminate signal.
-        // The menu step (or the engine's completion logic) handles agent_done.
-        try {
-          await redis.lpush(resultKey, JSON.stringify({ _mention_terminate: true }))
-        } catch { /* non-fatal */ }
-      }
-
-      // ── 4. Acknowledgment — agents_only message ───────────────────────────
-      if (cmd.acknowledge && redis) {
-        try {
-          await writeStreamEntry(redis, {
-            stream_key:  `session:${parsed.session_id}:stream`,
-            type:        "message",
-            author_id:   parsed.instance_id ?? "mention_dispatcher",
-            author_role: "specialist",
-            visibility:  "agents_only",
-            payload: {
-              content: { type: "text", text: `[mention_command] /${parsed.command_name} acknowledged` },
-            },
-            timestamp: now,
-          })
-        } catch { /* non-fatal */ }
-      }
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            handled:        true,
-            command_name:   parsed.command_name,
-            action_type:    Object.keys(action)[0] ?? "unknown",
-            acknowledged:   cmd.acknowledge,
-          }),
-        }],
-      }
-    }),
-  )
 }

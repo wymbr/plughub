@@ -17,6 +17,8 @@
 #
 # Linha de base medida em 2026-09-01 (72 tools):
 #   token 23/72 · guard 16/72 · permission 1/72 · audit 1/72 · SEM camada nenhuma 33
+# Atualizada em 2026-09-02 (71 tools): saiu `mention_command_dispatch`, a casa TS
+# morta do `mention_command set_context` — ALW-07. `guard` 16 -> 15, divida 48 -> 47.
 # A única com as quatro é `invoke` — a borda `external-mcp`. As tools da PRÓPRIA
 # plataforma não seguem aquele modelo, e o `deploy.ts:7-13` afirma que seguem
 # (*"permission-checked, injection-guarded and audited by the McpInterceptor"*), com a
@@ -142,7 +144,6 @@ invoke|token+permission+audit|ok|UNICA com as quatro camadas: e a borda external
 journey_merge|token|ok|verifica session_token assinado
 mailing_add|nenhuma|divida|politica pendente (CAP-09)
 mailing_unsubscribe|nenhuma|divida|opt-out de contato sem credencial — politica pendente (CAP-09)
-mention_command_dispatch|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
 message_send|token|ok|verifica session_token assinado
 notification_send|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
 otp_challenge|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
@@ -272,7 +273,11 @@ PY
     echo "$SAIDA" | grep '^ERRO ' | sed 's/^ERRO //' | while read -r l; do echo "  ❌ $l"; done
     FAIL=$((FAIL + $(echo "$SAIDA" | grep -c '^ERRO ')))
   else
-    ok "as 72 estão classificadas e nenhuma camada derivou"
+    # DERIVADO do que acabou de ser contado. Estava cravado em "72" e ficou velho na
+    # primeira remocao de tool (ALW-07) — numero fixo em mensagem de VERDE nao
+    # reprova nada e passa a mentir sozinho.
+    TOTAL_CLASSIF="$(printf %s "$SAIDA" | sed -n 's/^CONTAGEM .*total=\([0-9]*\).*/\1/p')"
+    ok "as ${TOTAL_CLASSIF:-?} estão classificadas e nenhuma camada derivou"
   fi
 else
   inc "sem o censo AST, não há o que classificar"

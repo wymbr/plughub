@@ -247,7 +247,8 @@ export async function executeMenu(
     // dimensoes do caminho de DETECCAO, onde existem token e vault.
     masked_types:  masked.types,
     // Mention-protocol standby: routers must NOT feed plain messages to this
-    // BLPOP — it wakes only via mention_command_dispatch interrupts.
+    // BLPOP — it wakes only via the interrupts the orchestrator-bridge pushes
+    // (`dispatch_mention_command`). A tool MCP de mesmo nome saiu na ALW-07.
     standby:       step.standby === true,
   })
   try {
@@ -362,8 +363,8 @@ export async function executeMenu(
       }
 
       // ── @mention command interrupts ───────────────────────────────────────
-      // The mention_command_dispatch BPM tool may LPUSH a special JSON payload to
-      // menu:result:{sessionId} to interrupt a blocked menu step:
+      // O bridge (`dispatch_mention_command`) pode LPUSH um payload JSON especial
+      // em menu:result:{sessionId} para interromper um menu step bloqueado:
       //   { "_mention_trigger_step": "step_id" }  — jump to a specific step
       //   { "_mention_terminate": true }           — agent should exit the conference
       //
