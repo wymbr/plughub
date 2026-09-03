@@ -299,25 +299,77 @@ export const DataTypeFormatSchema = z.object({
 })
 export type DataTypeFormat = z.infer<typeof DataTypeFormatSchema>
 
-/** Canal de exibição de um token mascarado — tela */
-export const DisplayScreenSchema = z.enum(["display_partial", "full_mask", "hidden"])
-export type DisplayScreen = z.infer<typeof DisplayScreenSchema>
+/**
+ * Como um TOKEN mascarado aflora quando a mensagem é renderizada.
+ *
+ * ── É CHANNEL-ABSTRACT (ALW-10, 2026-09-02) ─────────────────────────────────
+ * Chamava-se `display_screen` e tinha um irmão `display_voice`
+ * (`beep | silence | speak_placeholder`) — duas declarações para a mesma
+ * intenção, uma por canal. A política é do TIPO; **traduzi-la é do adapter**,
+ * que é o invariante que o `CLAUDE.md` já enuncia (*"never implement
+ * channel-specific rendering logic outside channel-gateway"*).
+ *
+ *   `display_partial` — mostra o parcial embutido no token (`***-00`).
+ *                       Em voz, o adapter fala o parcial.
+ *   `full_mask`       — substituto não-informativo (`•••••`). Em voz: bipe ou
+ *                       placeholder falado — escolha do adapter, não do tenant.
+ *   `hidden`          — não aflora. Em voz: silêncio.
+ *
+ * ⚠️ O parcial existe AQUI e não no eco porque o token JÁ o carrega:
+ * `[cpf:tk_b7d2:***-00]`. Não há re-mascaramento na borda; há leitura de um
+ * campo que o produtor do token gravou.
+ */
+export const TokenDisplayModeSchema = z.enum(["display_partial", "full_mask", "hidden"])
+export type TokenDisplayMode = z.infer<typeof TokenDisplayModeSchema>
 
-/** Canal de exibição de um token mascarado — voz */
-export const DisplayVoiceSchema = z.enum(["beep", "silence", "speak_placeholder"])
-export type DisplayVoice = z.infer<typeof DisplayVoiceSchema>
+/**
+ * ECO — a entrada FRESCA do cliente volta, e em que forma?
+ *
+ * ── Sem parcial, e isso é estrutural (ALW-10, 2026-09-02) ───────────────────
+ * Eco não renderiza token: devolve o que a pessoa acabou de digitar. Não há
+ * `display_partial` embutido para ler, e produzir um exigiria re-mascarar na
+ * borda — inventando uma terceira resposta para *"quanto do valor aparece"*,
+ * ao lado de `mascara.by_role` (9 valores) e `TokenDisplayMode` (3).
+ * Por isso o domínio é ternário e grosso: volta, não volta, ou volta cego.
+ *
+ *   `plain`  — volta como veio
+ *   `none`   — não volta
+ *   `masked` — volta um substituto NÃO-INFORMATIVO (`••••••`, bipe, silêncio…)
+ *
+ * ⚠️ **As duas pontas não têm a mesma força, e confundi-las seria caro.**
+ * `echo_to_operator` é FRONTEIRA DE CONFIDENCIALIDADE — o operador não conhece
+ * o valor, e a plataforma controla as três casas que o exibem.
+ * `echo_to_customer` é ADVISORY: o cliente digitou o valor, já o conhece, e o
+ * que a plataforma pode fazer é DECLARAR o modo no evento de interação para o
+ * cliente do canal obedecer. É medida contra quem olha por cima do ombro, não
+ * contra o titular do dado.
+ *
+ * ⚠️ **Isto não governa PERSISTÊNCIA.** Dos cinco destinos de
+ * `redact_customer_reply` (bridge), três não são superfície de conversa —
+ * Kafka→ClickHouse, log do bridge e o stream de Analytics. Foi neles que o
+ * vazamento de 2026-08-29 aconteceu (`senha` e `codigo_2fa` no ClickHouse), e
+ * quem os cobre continua sendo a redação por `masked`, não este campo.
+ */
+export const EchoModeSchema = z.enum(["plain", "none", "masked"])
+export type EchoMode = z.infer<typeof EchoModeSchema>
 
 /**
  * MaskingDisplayRule — a dimensão CANAL do mascaramento.
  * Vivia apenas em `platform-ui/src/components/MaskedToken.tsx` (sem contrato
  * compartilhado) e era gravada solta como `masking.rule.{category}` no config-api.
  * Passa a ser propriedade do tipo (§D1: `mascara` opcionalmente carrega canal).
+ *
+ * ⚠️ **Default de `echo_to_operator` é `masked`, e a migração do booleano segue
+ * o COMPORTAMENTO, não o nome do campo.** O antigo `echo_to_operator: true`
+ * lia-se "ecoa", mas o que as três casas fazem com ele é `••••••`
+ * (`_MASKED_FIELD_PLACEHOLDER`). Mapear `true → plain` transformaria a política
+ * vigente num vazamento no instante em que alguém ligasse o fio — ela virou
+ * `masked`. Ver `infra/scripts/migrate_masking_display_rule.py`.
  */
 export const MaskingDisplayRuleSchema = z.object({
-  display_screen:   DisplayScreenSchema.default("display_partial"),
-  display_voice:    DisplayVoiceSchema.default("silence"),
-  echo_to_customer: z.boolean().default(false),
-  echo_to_operator: z.boolean().default(true),
+  token_display:    TokenDisplayModeSchema.default("display_partial"),
+  echo_to_customer: EchoModeSchema.default("none"),
+  echo_to_operator: EchoModeSchema.default("masked"),
 })
 export type MaskingDisplayRule = z.infer<typeof MaskingDisplayRuleSchema>
 
@@ -472,7 +524,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "last_2" },
-        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
       },
       lgpd: "pessoal",
     },
@@ -488,7 +540,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "last_4" },
-        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
       },
       lgpd: "financeiro",
     },
@@ -512,7 +564,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "last_4" },
-        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
       },
       lgpd: "pessoal",
     },
@@ -527,7 +579,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "email_domain" },
-        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
       },
       lgpd: "pessoal",
     },
@@ -580,7 +632,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: {},
       mascara: {
         by_role: { operator: "hidden" },
-        display: { display_screen: "hidden", display_voice: "silence", echo_to_customer: false, echo_to_operator: false },
+        display: { token_display: "hidden", echo_to_customer: "none", echo_to_operator: "none" },
       },
       lgpd:          "credencial",
       declared_only: true,
@@ -602,7 +654,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: {},
       mascara: {
         by_role: { operator: "hidden" },
-        display: { display_screen: "hidden", display_voice: "silence", echo_to_customer: false, echo_to_operator: false },
+        display: { token_display: "hidden", echo_to_customer: "none", echo_to_operator: "none" },
       },
       lgpd:          "financeiro",
       declared_only: true,
@@ -621,8 +673,8 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
     //     o que é), daí `declared_only`;
     //   · `by_role.operator: "hidden"` — o operador não vê. `hidden` remove o campo,
     //     e é o mais forte do `ContextMaskingType`;
-    //   · `display`: some da tela, silencia na voz e **não ecoa para ninguém** —
-    //     `echo_to_operator: false` é o único do catálogo, e é deliberado;
+    //   · `display`: não aflora em canal nenhum e **não ecoa para ninguém** —
+    //     `echo_to_operator: "none"` é o único do catálogo, e é deliberado;
     //   · `lgpd: "nao_classificado"` — ver o comentário do enum. Dizer `none` seria
     //     afirmar que não é dado pessoal; dizer `sensivel`/`credencial` seria uma
     //     afirmação jurídica que ninguém fez.
@@ -633,7 +685,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: {},
       mascara: {
         by_role: { operator: "hidden" },
-        display: { display_screen: "hidden", display_voice: "silence", echo_to_customer: false, echo_to_operator: false },
+        display: { token_display: "hidden", echo_to_customer: "none", echo_to_operator: "none" },
       },
       lgpd:          "nao_classificado",
       declared_only: true,
@@ -669,7 +721,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: { display: "##/##" },
       mascara: {
         by_role: { operator: "last_2" },
-        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
       },
       lgpd:          "financeiro",
       declared_only: true,

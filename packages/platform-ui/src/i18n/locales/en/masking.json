@@ -46,10 +46,9 @@
       "inert": "This type masks nothing for any role, so it cannot be used in a skill's `masked:` declaration — deploy will be refused. Valid for ContextStore map fields that only declare plumbing."
     },
     "displayRules": {
-      "screen": "Screen display",
-      "voice": "Voice channel",
       "echoCustomer": "Echo to customer",
-      "echoOperator": "Echo to operator"
+      "echoOperator": "Echo to operator",
+      "token": "Masked token"
     },
     "contextMap": {
       "title": "ContextStore map — declared fields",
@@ -101,16 +100,6 @@
     "email_domain": "Domain visible",
     "financial": "Financial value"
   },
-  "displayScreen": {
-    "partial": "Partial (***-00)",
-    "full": "Full mask (•••••)",
-    "hidden": "Label only"
-  },
-  "displayVoice": {
-    "silence": "Silence",
-    "beep": "Beep tone",
-    "placeholder": "Speak placeholder"
-  },
   "contextMapPage": {
     "title": "ContextStore fields",
     "subtitle": "Which fields exist in the ContextStore, in escopo.dominio.campo, each naming a type from the catalogue. The map is the allowlist: a field that is not here is not declared. The catalogue itself — what each type masks, and its LGPD class — is configured under Masking.",
@@ -139,5 +128,15 @@
     "diverges": "differs from the platform default",
     "identical": "identical to the platform default (the override adds nothing and only blocks future updates)",
     "unavailable": "Could not determine which scope is in effect ({{err}}). Saving still works, but this screen cannot tell you whether your edit reaches the platform default or only this tenant."
+  },
+  "tokenDisplay": {
+    "partial": "Partial (***-00)",
+    "full": "Full mask (•••••)",
+    "hidden": "Label only"
+  },
+  "echoMode": {
+    "none": "No echo",
+    "masked": "Masked (••••••)",
+    "plain": "Plain value"
   }
 }

@@ -17,7 +17,7 @@ import { Users, ClipboardList, Timer, Monitor, Archive, Lock, Check, X, AlertTri
 import { useAuth } from '@/auth/useAuth'
 import { useNamespace, useProvenance, putConfig } from '../config-plataforma/api/config-hooks'
 import type { KeyProvenance } from '../config-plataforma/api/config-hooks'
-import type { DisplayScreen, DisplayVoice, MaskingDisplayRule } from '@/components/MaskedToken'
+import type { TokenDisplayMode, EchoMode, MaskingDisplayRule } from '@/components/MaskedToken'
 import { DEFAULT_DISPLAY_RULE } from '@/components/MaskedToken'
 
 // ── Catálogo de tipos (mirror de DataTypeCatalog em @plughub/schemas/audit.ts) ──
@@ -536,61 +536,47 @@ export default function MaskingPage() {
                   {/* Controls row */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
 
-                    {/* display_screen */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
-                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                        {t('section.displayRules.screen', { defaultValue: 'Screen display' })}
+                    {/* token_display — CHANNEL-ABSTRACT (ALW-10). Absorveu o antigo
+                        `display_voice`: a politica e do TIPO, a traducao e do adapter. */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 150 }}>
+                      <label style={labelStyle}>
+                        {t('section.displayRules.token', { defaultValue: 'Masked token' })}
                       </label>
                       <select
-                        value={rule.display_screen}
+                        value={rule.token_display}
                         disabled={isSaving}
-                        onChange={e => update({ display_screen: e.target.value as DisplayScreen })}
+                        onChange={e => update({ token_display: e.target.value as TokenDisplayMode })}
                         style={{ ...selectStyle }}
                       >
-                        <option value="display_partial">{t('displayScreen.partial', { defaultValue: 'Partial (***-00)' })}</option>
-                        <option value="full_mask">{t('displayScreen.full', { defaultValue: 'Full mask (•••••)' })}</option>
-                        <option value="hidden">{t('displayScreen.hidden', { defaultValue: 'Label only' })}</option>
+                        <option value="display_partial">{t('tokenDisplay.partial', { defaultValue: 'Partial (***-00)' })}</option>
+                        <option value="full_mask">{t('tokenDisplay.full', { defaultValue: 'Full mask (•••••)' })}</option>
+                        <option value="hidden">{t('tokenDisplay.hidden', { defaultValue: 'Label only' })}</option>
                       </select>
                     </div>
 
-                    {/* display_voice */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
-                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                        {t('section.displayRules.voice', { defaultValue: 'Voice channel' })}
-                      </label>
-                      <select
-                        value={rule.display_voice}
-                        disabled={isSaving}
-                        onChange={e => update({ display_voice: e.target.value as DisplayVoice })}
-                        style={{ ...selectStyle }}
-                      >
-                        <option value="silence">{t('displayVoice.silence', { defaultValue: 'Silence' })}</option>
-                        <option value="beep">{t('displayVoice.beep', { defaultValue: 'Beep tone' })}</option>
-                        <option value="speak_placeholder">{t('displayVoice.placeholder', { defaultValue: 'Speak placeholder' })}</option>
-                      </select>
-                    </div>
-
-                    {/* echo_to_customer */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    {/* echo_to_customer — ADVISORY: o cliente digitou o valor e ja o
+                        conhece; a plataforma DECLARA o modo, o cliente do canal obedece. */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 150 }}>
+                      <label style={labelStyle}>
                         {t('section.displayRules.echoCustomer', { defaultValue: 'Echo to customer' })}
                       </label>
-                      <MiniToggle
-                        active={rule.echo_to_customer}
-                        onToggle={() => update({ echo_to_customer: !rule.echo_to_customer })}
+                      <EchoSelect
+                        value={rule.echo_to_customer}
                         disabled={isSaving}
+                        onChange={v => update({ echo_to_customer: v })}
                       />
                     </div>
 
-                    {/* echo_to_operator */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <label style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    {/* echo_to_operator — FRONTEIRA de confidencialidade: o operador nao
+                        conhece o valor, e a plataforma controla as casas que o exibem. */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 150 }}>
+                      <label style={labelStyle}>
                         {t('section.displayRules.echoOperator', { defaultValue: 'Echo to operator' })}
                       </label>
-                      <MiniToggle
-                        active={rule.echo_to_operator}
-                        onToggle={() => update({ echo_to_operator: !rule.echo_to_operator })}
+                      <EchoSelect
+                        value={rule.echo_to_operator}
                         disabled={isSaving}
+                        onChange={v => update({ echo_to_operator: v })}
                       />
                     </div>
 
@@ -816,6 +802,43 @@ function ProvenanceBanner({ tenantId, groups }: {
   )
 }
 
+/** Rotulo das colunas do editor de tipo — extraido porque os tres eixos o repetiam. */
+const labelStyle: React.CSSProperties = {
+  fontSize: 10, color: '#64748b', fontWeight: 600,
+  textTransform: 'uppercase', letterSpacing: '0.06em',
+}
+
+/**
+ * EchoSelect — o dominio de ECO, igual nas duas pontas (ALW-10, 2026-09-02).
+ *
+ * Tres valores e nenhum parcial, e a ausencia do parcial e ESTRUTURAL: eco devolve
+ * a entrada FRESCA do cliente, nao renderiza um token. Nao ha `***-00` embutido
+ * para ler, e fabricar um exigiria re-mascarar na borda — inventando uma terceira
+ * resposta para "quanto do valor aparece", ao lado de `by_role` (9 valores) e
+ * `token_display` (3).
+ *
+ * O dominio e CHANNEL-ABSTRACT de proposito: cada adapter traduz conforme o canal
+ * (em voz, `masked` e bipe ou placeholder falado; em texto, `••••••`). E o mesmo
+ * invariante que o CLAUDE.md ja enuncia para renderizacao por canal.
+ */
+function EchoSelect({ value, onChange, disabled }: {
+  value: EchoMode; onChange: (v: EchoMode) => void; disabled: boolean
+}) {
+  const { t } = useTranslation('masking')
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={e => onChange(e.target.value as EchoMode)}
+      style={{ ...selectStyle }}
+    >
+      <option value="none">{t('echoMode.none', { defaultValue: 'No echo' })}</option>
+      <option value="masked">{t('echoMode.masked', { defaultValue: 'Masked (••••••)' })}</option>
+      <option value="plain">{t('echoMode.plain', { defaultValue: 'Plain value' })}</option>
+    </select>
+  )
+}
+
 function ToggleCard({ label, sublabel, active, onToggle, saving, warning }: {
   label: string; sublabel: string; active: boolean
   onToggle: () => void; saving: boolean; warning?: string
@@ -924,27 +947,10 @@ const editBtnStyle: React.CSSProperties = {
   background: 'none', color: '#64748b', border: '1px solid #334155', cursor: 'pointer',
 }
 
-function MiniToggle({ active, onToggle, disabled }: {
-  active: boolean; onToggle: () => void; disabled?: boolean
-}) {
-  return (
-    <button
-      onClick={onToggle}
-      disabled={disabled}
-      style={{
-        width: 40, height: 22, borderRadius: 11, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
-        background: active ? '#3b82f6' : '#1e293b', position: 'relative', transition: 'background 0.2s',
-        opacity: disabled ? 0.6 : 1,
-      }}
-    >
-      <span style={{
-        position: 'absolute', top: 2, left: active ? 20 : 2,
-        width: 18, height: 18, borderRadius: '50%',
-        background: active ? '#fff' : '#64748b', transition: 'left 0.2s',
-      }} />
-    </button>
-  )
-}
+// ⚠️ `MiniToggle` saiu com a ALW-10 (2026-09-02). Servia só aos dois interruptores
+// de eco, que eram BOOLEANOS; o domínio virou ternário e o controle virou
+// `EchoSelect`. Componente sem chamador é a mesma família da tool que a ALW-07
+// removeu no mesmo dia — some junto em vez de esperar alguém reencontrá-lo.
 
 const selectStyle: React.CSSProperties = {
   background: '#0a1628', border: '1px solid #334155', borderRadius: 6,

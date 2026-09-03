@@ -46,10 +46,9 @@
       "inert": "Este tipo não mascara para papel nenhum, logo não pode ser usado num `masked:` de skill — o deploy será recusado. Válido para campos do mapa do ContextStore que só declaram encanamento."
     },
     "displayRules": {
-      "screen": "Exibição na tela",
-      "voice": "Canal de voz",
       "echoCustomer": "Eco para o cliente",
-      "echoOperator": "Eco para o operador"
+      "echoOperator": "Eco para o operador",
+      "token": "Token mascarado"
     },
     "contextMap": {
       "title": "Mapa do ContextStore — campos declarados",
@@ -101,16 +100,6 @@
     "email_domain": "Domínio visível",
     "financial": "Valor financeiro"
   },
-  "displayScreen": {
-    "partial": "Parcial (***-00)",
-    "full": "Máscara total (•••••)",
-    "hidden": "Só o rótulo"
-  },
-  "displayVoice": {
-    "silence": "Silêncio",
-    "beep": "Bipe",
-    "placeholder": "Falar placeholder"
-  },
   "contextMapPage": {
     "title": "Campos do ContextStore",
     "subtitle": "Quais campos existem no ContextStore, em escopo.dominio.campo, cada um nomeando um tipo do catálogo. O mapa é a allowlist: campo que não está aqui não está declarado. O catálogo em si — o que cada tipo mascara e sua classe LGPD — é configurado em Mascaramento.",
@@ -139,5 +128,15 @@
     "diverges": "difere do default da plataforma",
     "identical": "idêntica ao default da plataforma (o override não acrescenta nada e só bloqueia atualizações futuras)",
     "unavailable": "Não foi possível determinar qual escopo está em vigor ({{err}}). Salvar continua funcionando, mas esta tela não sabe dizer se a sua edição alcança o default da plataforma ou apenas este tenant."
+  },
+  "tokenDisplay": {
+    "partial": "Parcial (***-00)",
+    "full": "Máscara total (•••••)",
+    "hidden": "Só o rótulo"
+  },
+  "echoMode": {
+    "none": "Sem eco",
+    "masked": "Mascarado (••••••)",
+    "plain": "Valor em claro"
   }
 }

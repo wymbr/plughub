@@ -4,7 +4,7 @@
  * Token format in stream: [category:tk_xxx:display_partial]
  * e.g. [cpf:tk_b7d2:***-00]  [credit_card:tk_a8f3:****1234]
  *
- * display_screen behaviour (from masking config):
+ * token_display behaviour (from masking config, channel-abstract):
  *   display_partial — show the display_partial value embedded in the token (default)
  *   full_mask       — always show •••••  regardless of display_partial
  *   hidden          — show only the category label, no value
@@ -38,21 +38,29 @@ export function parseToken(raw: string): ParsedToken | null {
 
 // ── Display rule types ─────────────────────────────────────────────────────────
 
-export type DisplayScreen = 'display_partial' | 'full_mask' | 'hidden'
-export type DisplayVoice  = 'beep' | 'silence' | 'speak_placeholder'
+// ⚠️ Espelho de `MaskingDisplayRule` (@plughub/schemas/audit.ts). A deduplicacao
+// exige o platform-ui depender de @plughub/schemas — divida registrada no TODO.md.
+// Enquanto for copia, ela ACOMPANHA o canonico (ALW-10, 2026-09-02).
+
+/** Como um TOKEN mascarado aflora. CHANNEL-ABSTRACT: absorveu `display_voice`,
+ *  e cada adapter traduz (em voz, `full_mask` vira bipe ou placeholder falado). */
+export type TokenDisplayMode = 'display_partial' | 'full_mask' | 'hidden'
+
+/** ECO — a entrada FRESCA do cliente volta, e como. SEM parcial: eco nao
+ *  renderiza token, devolve o que a pessoa digitou, e nao ha parcial embutido
+ *  para ler. Eco e coisa de INPUT; armazenamento segue o masking padrao. */
+export type EchoMode = 'plain' | 'none' | 'masked'
 
 export interface MaskingDisplayRule {
-  display_screen:    DisplayScreen
-  display_voice:     DisplayVoice
-  echo_to_customer:  boolean
-  echo_to_operator:  boolean
+  token_display:     TokenDisplayMode
+  echo_to_customer:  EchoMode
+  echo_to_operator:  EchoMode
 }
 
 export const DEFAULT_DISPLAY_RULE: MaskingDisplayRule = {
-  display_screen:   'display_partial',
-  display_voice:    'silence',
-  echo_to_customer: false,
-  echo_to_operator: true,
+  token_display:    'display_partial',
+  echo_to_customer: 'none',
+  echo_to_operator: 'masked',
 }
 
 export type MaskingRulesMap = Record<string, MaskingDisplayRule>
@@ -82,7 +90,7 @@ function getCategoryMeta(category: string) {
 
 interface MaskedTokenProps {
   token: ParsedToken
-  /** display context — 'screen' drives display_screen rule */
+  /** display context — 'screen' aplica `token_display`; outros canais sao do adapter */
   context?: 'screen'
   /** masking rules map — if omitted, DEFAULT_DISPLAY_RULE is used */
   rules?: MaskingRulesMap
@@ -94,8 +102,8 @@ export function MaskedToken({ token, context = 'screen', rules }: MaskedTokenPro
 
   let displayValue: string | null
   if (context === 'screen') {
-    if (rule.display_screen === 'hidden')       displayValue = null
-    else if (rule.display_screen === 'full_mask') displayValue = '•••••'
+    if (rule.token_display === 'hidden')         displayValue = null
+    else if (rule.token_display === 'full_mask') displayValue = '•••••'
     else                                         displayValue = token.display // display_partial
   } else {
     displayValue = token.display
