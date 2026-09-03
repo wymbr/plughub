@@ -28,14 +28,20 @@
 #   C  uma SEGUNDA casa de capacidade reaparecer                              → VERMELHO
 #   D  canal elegível fora de `_CHANNEL_PRIORITY` (desempate por acidente)    → VERMELHO
 #   E  **`voice` ganhar `masked_input`**                                      → VERMELHO
-#      — é a testemunha de segurança. São TRÊS impedimentos empilhados, e a
-#        primeira redação deste probe citava só o primeiro:
+#      — é a testemunha de segurança. São impedimentos EMPILHADOS, e as duas
+#        primeiras redações deste probe erraram a lista:
 #          (a) o canal não está provisionado (Arc 15) — resolve-se por DEPLOY;
-#          (b) não existe supressão de DTMF, nem em transcript nem em gravação,
-#              e DTMF é decodificável do áudio gravado — é TRABALHO (NIV-06);
-#          (c) a definição da capacidade é por MECANISMO
+#          (b) o TRATAMENTO de eco não existe no adapter (zero ocorrências de
+#              "masked" em `voice.py`) — é lacuna, não vazamento (NIV-06);
+#          (c) a negociação out-of-band do DTMF não é asserida (NIV-07);
+#          (d) `masked` + `input_mode: voice` não é recusado — aí o cliente FALA
+#              o valor e o STT o transcreve, e nenhum RFC ajuda (NIV-08);
+#          (e) a definição da capacidade é por MECANISMO
 #              (`password-overlay … (webchat)`), o que exclui voz por
-#              construção — enquanto for assim, (a) e (b) não bastam (NIV-05).
+#              construção — enquanto for assim, nada acima basta (NIV-05).
+#        ⚠️ **NÃO** está na lista "DTMF decodificável da gravação": era o
+#        impedimento que eu citava e ele está ERRADO para SIP/WebRTC (o dígito
+#        viaja fora do áudio) e inaplicável em CTI (a gravação é do PABX).
 #        ⚠️ Nada disto restringe o TRATAMENTO de eco em voz (`plain` verbaliza
 #        o dígito · `masked` bipa · `none` cala): esse é o `EchoMode` da ALW-10,
 #        traduzido pelo adapter, e está intacto. O que E guarda é ELEIÇÃO.
@@ -108,10 +114,11 @@ print("ERRO|D|canal elegivel fora de _CHANNEL_PRIORITY (desempate por acidente):
 
 # ── E — testemunha de seguranca ─────────────────────────────────────────────
 if "masked_input" in tabela.get("voice", set()):
-    print("ERRO|E|`voice` declara masked_input — tres impedimentos seguem de pe: canal "
-          "nao provisionado (Arc 15), supressao de DTMF inexistente (NIV-06) e a "
-          "definicao da capacidade por MECANISMO, que exclui voz por construcao "
-          "(NIV-05). Isso o tornaria elegivel para um CVV num canal que nao funciona")
+    print("ERRO|E|`voice` declara masked_input — seguem de pe: canal nao provisionado "
+          "(Arc 15), tratamento de eco INEXISTENTE no adapter (NIV-06, zero ocorrencias "
+          "de masked em voice.py), negociacao out-of-band nao asserida (NIV-07), "
+          "`input_mode: voice` nao recusado (NIV-08) e a definicao da capacidade por "
+          "MECANISMO, que exclui voz por construcao (NIV-05)")
 else:
     quem = sorted(ch for ch, cs in tabela.items() if "masked_input" in cs)
     print("OK|E|masked_input so em %s; voice permanece fora (gatilho no registry)" % quem)

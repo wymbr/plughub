@@ -55,10 +55,22 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     #   (a) **o canal não funciona** — sem SFU, sem env `LIVEKIT_*`, provider em
     #       `_dev_mode` devolvendo token placebo (`CLAUDE.md` § Arc 15). Temporário,
     #       e resolve-se por DEPLOY (arco V-F0..V-F5).
-    #   (b) **a garantia não está construída** — DTMF é mascarado por natureza *se* o
-    #       dígito não vazar; medido: **não existe supressão de DTMF** neste adapter,
-    #       nem em transcript nem em gravação. E DTMF é decodificável a partir do
-    #       áudio gravado. É TRABALHO, não deploy → **NIV-06**.
+    #   (b) **o tratamento não está construído** — medido: `voice.py` tem ZERO
+    #       ocorrências de "masked". Não há eco a mascarar porque não há eco: o
+    #       adapter não verbaliza, não bipa e não cala por política. É LACUNA, não
+    #       vazamento → **NIV-06**. Ao lado dela, duas fronteiras: a negociação
+    #       out-of-band precisa ser ASSERIDA (**NIV-07**) e `masked` +
+    #       `input_mode: voice` precisa ser RECUSADO (**NIV-08**).
+    #
+    #       ⚠️ Correção de 2026-09-03, apontada pelo dono: a primeira redação disto
+    #       dizia que **DTMF é decodificável do áudio gravado**, e usava isso como
+    #       impedimento. **Está errado para os transportes que a plataforma usa.** Em
+    #       WebRTC (RFC 4733 `telephone-event`) e em SIP (RFC 2833 / SIP INFO) o
+    #       dígito viaja FORA do fluxo de áudio; o beep audível é gerado local ou pela
+    #       rede — tom uniforme, sem o par dual-tone que codifica a tecla. E em modo
+    #       CTI a gravação é do PABX: **não é superfície da plataforma**. O que
+    #       sobrevive do argumento é só a NIV-07 — out-of-band é NEGOCIADO no SDP, e
+    #       garantia sem mecanismo que a imponha é promessa.
     #   (c) **a definição da capacidade exclui voz por construção** — o enum diz
     #       `masked_input // password-overlay masked field (webchat)`, ou seja,
     #       descreve o MECANISMO e nomeia o canal. Enquanto for assim, nenhum avanço
