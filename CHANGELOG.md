@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — CNS-21: o NPS invisível e o OTP travado vinham do MESMO lugar — snapshot de slot anterior à CNS-11
+
+**Dois sintomas, uma causa, e a segunda metade dela é minha.**
+
+### O que estava quebrado
+
+* **NPS** — a mensagem entra no stream com `visibility: "agents_only"`, e é isso que o filtro do
+  webchat descarta. O valor vem do fallback deliberado de `resolveVisibility`: quando todos os
+  itens `@ctx.` do array resolvem vazio, ele devolve `agents_only` em vez de `all`. Sem cliente
+  para responder, o menu espera os seus `timeout_s: 30` — **o fecho tardio é sintoma, não causa**.
+* **OTP** — `skill_dialog_runner_v1` recebe `form_id: null`, o `form_get` recusa por validação, o
+  runner cai em `on_failure` e termina em 16 ms. O cliente nunca vê *"Digite o código"*.
+
+### A causa
+
+**O bridge executa o SNAPSHOT do slot `current`, não o YAML.** A CNS-11 migrou os YAMLs e os
+leitores de código para `core.*` e **não re-promoveu nenhum pool**. Medido: os slots de
+`dialog_runner` e `nps_ia` são de **2026-08-10** — três semanas antes — e leem
+`@ctx.session.dialog_form_id` e `@ctx.session.customer_participant_id`.
+
+Provado por instrumentação temporária do `resolveCtxRef` no dist do engine:
+
+```
+[CTXDBG] tag=session.dialog_form_id      session=8fb491b2… store=sim valor=null
+[CTXDBG] tag=session.delegate_resume_token session=8fb491b2… store=sim valor=null
+```
+
+O runner pedia o **nome velho**. A tag estava lá, no nome novo.
+
+### ⚠️ A CNS-19 antecipou o defeito no OTP — isso é meu
+
+Enquanto o produtor escrevia o alias, o snapshot velho **funcionava por coincidência**: ambos
+falavam `session.dialog_form_id`. A CNS-19 moveu o produtor para a canônica — correto em si — e o
+snapshot velho ficou cego no mesmo instante. O NPS não: aquele já estava quebrado desde a CNS-11,
+e há sessão de 20:08 provando.
+
+*A lição é simétrica e vale escrever: a CNS-11 renomeou consumidores deixando o produtor; a
+CNS-19 renomeou o produtor deixando consumidores — e os "consumidores" que faltavam não estavam
+no código, estavam **congelados em snapshot de deploy**. Quem procura consumidor por `grep` no
+repositório não os vê.*
+
+### O conserto
+
+Re-promoção de `dialog_runner` e `nps_ia`. Verificado ao vivo, dirigindo o `limite_ia` até o
+delegate do OTP:
+
+```
+[CTXDBG] tag=core.workflow.dialog_form_id session=b44df2e1… valor="dialog_otp_possession"
+```
+
+e o prompt *"Enviamos um código de 6 dígitos… Digite o código para confirmar:"* no stream do
+cliente. A instrumentação saiu com um `--force-recreate` (ela vive no dist, e é por isso que foi
+escolhida: um `up -d` a apaga sozinha).
+
+### Registrado — CNS-22
+
+O censo achou **8 pools** com snapshot pré-CNS-11 lendo alias; dois foram re-promovidos porque
+bloqueavam o demo. **Restam seis**: `wrapup_detached_ia`, `outbound_survey_worker`,
+`portabilidade_confirmacao`, `limite_retorno`, `survey_multi_ia`, `copilot_sac`.
+
+⚠️ **Re-promover em bloco é perigoso** — cada leitura só passa a funcionar se o PRODUTOR daquela
+tag também escrever a canônica. Medir produtor por produtor: foi exatamente a metade que faltou na
+CNS-11. E falta o mecanismo: **nada reprova um snapshot que lê alias**, então sem ele isto volta.
+
 ## 2026-09-03 — CNS-19: a chave de `delegate.context` que é vocabulário de PLATAFORMA passa a ser gravada no nome canônico
 
 **Sintoma reportado:** no Console, item de fila **pull** — aprovação **e** wrap-up — abria no chat
