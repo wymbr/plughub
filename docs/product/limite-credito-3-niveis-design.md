@@ -1,5 +1,18 @@
 # Aumento de limite de crédito — cenário de referência do modelo de 3 níveis
 
+> ⚠️ **SUPERSEDIDO COMO MODELO DE TRABALHO em 2026-09-03** — ver
+> [`adr-agent-flow-single-authored-level.md`](../adr/adr-agent-flow-single-authored-level.md).
+> O tenant autora **um** nível (o processo); o que este documento chama de N1 e N2 se
+> distribui em três destinos — mecânica → canal, roteiro → `DialogForm`, e o resto já
+> era primitivo de plataforma. A medição que virou a decisão saiu **deste** cenário:
+> o `skill_limite_entrada_v1` tem a pauta inteira do N2 como `invoke` de tools MCP, e
+> dois dos três artefatos previstos aqui nunca foram escritos.
+>
+> **O texto abaixo fica intacto de propósito.** É raciocínio de época e a evidência de
+> como se chegou lá — inclusive o §1, que argumenta corretamente que N2 não é workflow
+> e que a decisão de canal é *fato de step*. Essa parte não foi refutada; foi levada às
+> últimas consequências.
+
 > **Status:** design. §1–§5 são desenho fechado; §6 é o fatiamento; §7 são dívidas que o cenário
 > expõe. Escrito em 2026-08-11.
 > **Motivação:** hoje **não existe nenhum skill-flow as-built com os 3 níveis separados**. O padrão real

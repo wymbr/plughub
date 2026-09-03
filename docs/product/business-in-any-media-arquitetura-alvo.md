@@ -32,6 +32,19 @@ O slogan operacional disso é: **o negócio não pertence a um canal**. Ele nasc
 
 ## 2. O modelo de três níveis
 
+> ⚠️ **A pendência do nível (b) foi RESPONDIDA em 2026-09-03, e a resposta inverte a
+> intenção** — ver
+> [`adr-agent-flow-single-authored-level.md`](../adr/adr-agent-flow-single-authored-level.md).
+> A tabela abaixo classifica (b) como *"parcial / a consolidar — as peças existem
+> dispersas, mas não como camada explícita e reusável"*. Medido: as peças dispersas
+> **já são primitivos de plataforma** (`customer_resolve`, `pending_workflow_get`,
+> `workflow_resume`, `otp_*`, `select_channel`), e consolidá-las numa camada de FLUXO
+> criaria contêiner para o que já tem casa. Decisão: **(b) não vira camada**; o tenant
+> autora só (a), e (c) se parte entre canal (mecânica) e `DialogForm` (roteiro).
+>
+> A **regra de ouro** logo abaixo da tabela continua valendo palavra por palavra — ela
+> descreve uma separação de responsabilidades, não uma contagem de artefatos.
+
 | Nível | Responsabilidade | Perfil / primitivas | Estado hoje |
 |---|---|---|---|
 | **(a) Fluxo negocial** | A lógica de negócio, **totalmente abstraída de canal**. Não importa por onde o cliente acessou. | Perfil `workflow` (pool `webhook`). Steps `task/choice/catch/escalate/complete/invoke/reason/suspend/collect/receive`. **Proibido** `menu/notify/begin/end_transaction`. `session_id` persistente; `suspend`/`resume` via Redis TTL. | **Implementado** — e o perfil `workflow` do Arc 19 *força por contrato* que (a) não toque canal. |

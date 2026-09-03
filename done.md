@@ -169,6 +169,13 @@ história no `CHANGELOG.md`.)*
 
 ---
 
+## `docs/adr/adr-agent-flow-single-authored-level.md` — um nível autorado
+
+*(grupo aberto em 2026-09-03 com a ADR; nada fechou ainda.)*
+
+| id | tarefa | data | ancora no `CHANGELOG.md` |
+|---|---|---|---|
+
 ## `docs/guias/masked-input.md` — mascaramento de entrada por canal
 
 *(grupo aberto em 2026-09-03 com a MSK-01; nada fechou ainda. O lugar de pousar existe
