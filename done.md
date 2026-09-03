@@ -169,6 +169,14 @@ história no `CHANGELOG.md`.)*
 
 ---
 
+## `docs/guias/masked-input.md` — mascaramento de entrada por canal
+
+*(grupo aberto em 2026-09-03 com a MSK-01; nada fechou ainda. O lugar de pousar existe
+antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver la.)*
+
+| id | tarefa | data | ancora no `CHANGELOG.md` |
+|---|---|---|---|
+
 ## `sem-demanda`
 
 *(vazio)*
