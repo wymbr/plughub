@@ -190,7 +190,7 @@ export type {
 export {
   InboundEventSchema,
   OutboundEventSchema,
-  ChannelCapabilitiesSchema,
+  MaskedFallbackPolicySchema,
   GatewayConfigSchema,
   GatewayHeartbeatSchema,
 } from "./channel-events"
@@ -198,7 +198,7 @@ export {
 export type {
   InboundEvent,
   OutboundEvent,
-  ChannelCapabilities,
+  MaskedFallbackPolicy,
   GatewayConfig,
   GatewayHeartbeat,
 } from "./channel-events"

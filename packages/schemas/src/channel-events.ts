@@ -124,47 +124,54 @@ export type OutboundEvent = z.infer<typeof OutboundEventSchema>
  * Registrado pelo gateway no Agent Registry na inicialização.
  * Usado pelo Channel Gateway para decidir degradação graceful vs. fallback.
  */
-export const ChannelCapabilitiesSchema = z.object({
-  channel:             ChannelSchema,
-  supports_buttons:    z.boolean().default(false),
-  /** Limite de botões exibíveis simultaneamente (WhatsApp: 3, webchat: sem limite) */
-  max_buttons:         z.number().int().positive().optional(),
-  supports_lists:      z.boolean().default(false),
-  supports_checklist:  z.boolean().default(false),
-  supports_form:       z.boolean().default(false),
-  supports_rich_media: z.boolean().default(false),  // image, video, audio
-  supports_location:   z.boolean().default(false),
-  supports_template:   z.boolean().default(false),
+/**
+ * MaskedFallbackPolicy — o que fazer quando o canal NÃO sabe mascarar.
+ *
+ * ── O que saiu daqui, e por quê (NIV-01, 2026-09-03) ────────────────────────
+ *
+ * Este objeto era `ChannelCapabilitiesSchema`, e declarava CAPACIDADE por canal
+ * como booleanos de config por tenant (`supports_masked_input`, `supports_buttons`,
+ * `supports_lists`, …). Foi removido por três razões medidas:
+ *
+ *   1. **Capacidade é fato do PROTOCOLO, não config de tenant.** Ninguém faz o SMS
+ *      suportar campo de senha marcando um booleano — e o campo configurável convida
+ *      exatamente isso: marca-se `true` para whatsapp e a plataforma acredita.
+ *   2. **Era a SEGUNDA casa do mesmo fato, com vocabulário DIFERENTE.** A casa que
+ *      roda é `channel_capability_registry.CHANNEL_CAPABILITIES`, chaveada pelo
+ *      `ChannelCapabilitySchema` (`skill.ts`) — o vocabulário que `collect.requires[]`
+ *      usa. Aqui era `supports_X: boolean`; lá é `X ∈ caps`. Duas respostas para o
+ *      mesmo fato significam que a permissiva vale.
+ *   3. **As duas já DISCORDAVAM**, em `voice`: este objeto afirmava
+ *      `supports_masked_input: true — DTMF nativo`, e o registry não declara
+ *      `masked_input` para voz. A divergência estava dormente porque este objeto tinha
+ *      **zero consumidores** — inclusive `GatewayConfig.capabilities`, que nunca foi
+ *      lido. Dar-lhe um leitor sem resolver isso teria feito `voice` ganhar capacidade
+ *      de mascaramento em silêncio.
+ *
+ * ── O que FICA, e por que não some junto ────────────────────────────────────
+ *
+ * *Se* o canal sabe mascarar é fato do protocolo. *O que fazer quando não sabe* é
+ * decisão de tenant — e continua sendo, aqui. É a distinção que impede este conserto
+ * de virar remoção cega: a política nunca foi duplicada, só o inventário.
+ *
+ * ⚠️ **Ainda sem leitor** — é a NIV-03 que o dá (`select_channel` devolvendo `None`
+ * hoje gera `logger.warning` + `return`: o collect não acontece, o que não é entrega
+ * nem recusa). Enquanto isso, este schema é declaração, não mecanismo.
+ */
+export const MaskedFallbackPolicySchema = z.object({
+  channel: ChannelSchema,
   /**
-   * Quando true, o canal suporta captura mascarada de dados sensíveis.
-   * O Channel Gateway renderiza o formulário em overlay seguro e nunca
-   * expõe valores mascarados no DOM / histórico de mensagens.
-   *
-   * Canal          supports_masked_input
-   * webchat        true  — overlay/modal + <input type="password">
-   * voice          true  — DTMF nativo (mascarado por natureza)
-   * whatsapp       false — executa masked_fallback
-   * sms            false — executa masked_fallback
-   * email          false — executa masked_fallback
-   *
-   * Default: false (seguro por omissão)
-   */
-  supports_masked_input: z.boolean().default(false),
-  /**
-   * Comportamento quando supports_masked_input = false e um step masked chega.
+   * Comportamento quando o canal não tem a capacidade `masked_input` e um step
+   * mascarado chega.
    *   "message"  — envia mensagem configurável ao cliente (padrão MVP)
    *   "link"     — gera URL one-time para webchat seguro (Horizonte 2)
    *   "decline"  — recusa a operação com mensagem de erro
-   * Default: "message"
    */
-  masked_fallback:        z.enum(["message", "link", "decline"]).default("message"),
-  /**
-   * Mensagem enviada ao cliente quando masked_fallback = "message".
-   * Suporta interpolação simples com {{canal}} etc.
-   */
+  masked_fallback:         z.enum(["message", "link", "decline"]).default("message"),
+  /** Mensagem ao cliente quando `masked_fallback = "message"`. Interpola `{{canal}}`. */
   masked_fallback_message: z.string().optional(),
 })
-export type ChannelCapabilities = z.infer<typeof ChannelCapabilitiesSchema>
+export type MaskedFallbackPolicy = z.infer<typeof MaskedFallbackPolicySchema>
 
 // ─────────────────────────────────────────────
 // GatewayConfig — registro de gateway no Agent Registry
@@ -179,7 +186,13 @@ export const GatewayConfigSchema = z.object({
   gateway_id:    z.string().min(1),
   tenant_id:     z.string().min(1),
   channels:      z.array(ChannelSchema).min(1),
-  capabilities:  z.array(ChannelCapabilitiesSchema).default([]),
+  /**
+   * ⚠️ Era `z.array(ChannelCapabilitiesSchema)` e **nunca foi lido por ninguém**
+   * (medido na NIV-01). Passa a carregar a POLÍTICA de fallback, que é o que
+   * sobreviveu daquele objeto; a CAPACIDADE mudou de casa para
+   * `channel_capability_registry.py`, porque é fato do protocolo e não de tenant.
+   */
+  capabilities:  z.array(MaskedFallbackPolicySchema).default([]),
   /** URL base do gateway para callbacks internos (mTLS obrigatório) */
   callback_url:  z.string().url().optional(),
   metadata:      z.record(z.unknown()).default({}),

@@ -175,6 +175,7 @@ história no `CHANGELOG.md`.)*
 
 | id | tarefa | data | ancora no `CHANGELOG.md` |
 |---|---|---|---|
+| NIV-01 | Capacidade de canal passa a ter **uma casa** (`channel_capability_registry`, em código, porque é fato do PROTOCOLO) e a política de fallback fica no tenant (`MaskedFallbackPolicySchema`) — a segunda casa era `ChannelCapabilitiesSchema`, com vocabulário DIFERENTE, zero consumidores, e **já discordava em `voice`**. A tabela virou exaustiva sobre `ChannelSchema` (6 → 9 canais; `instagram`/`telegram` nunca eram eleitos, em silêncio) | 2026-09-03 | `CHANGELOG.md` § 2026-09-03 NIV-01 |
 
 ## `docs/guias/masked-input.md` — mascaramento de entrada por canal
 

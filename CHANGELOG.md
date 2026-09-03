@@ -1,5 +1,102 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — NIV-01: capacidade de canal passa a ter UMA casa, e a tabela deixa de ser silenciosa
+
+Primeira fatia da [ADR de nível único autorado](docs/adr/adr-agent-flow-single-authored-level.md),
+e pré-requisito declarado das duas seguintes. Três defeitos medidos, todos mudos.
+
+### 1. Duas casas, e nem no mesmo vocabulário
+
+A casa que **roda** é `channel_capability_registry.CHANNEL_CAPABILITIES` — mapa canal → conjunto,
+chaveada pelo `ChannelCapabilitySchema` (`skill.ts`), que é o vocabulário de `collect.requires[]`
+e o que `select_channel()` consome.
+
+A outra era `ChannelCapabilitiesSchema` (`channel-events.ts`), declarando **os mesmos fatos como
+booleanos** (`supports_masked_input`, `supports_buttons`, `supports_lists`…), como **config por
+tenant**. Não é só duplicação: é o mesmo fato em duas gramáticas, `X ∈ caps` × `supports_X: true`.
+
+### 2. E elas já discordavam — em `voice`
+
+O schema afirmava, em comentário de tabela:
+
+> `voice  true — DTMF nativo (mascarado por natureza)`
+
+O registry dá a `voice` apenas `{"audio"}`. **A divergência estava dormente porque o schema tinha
+zero consumidores** — inclusive `GatewayConfig.capabilities`, que aponta para ele e nunca foi
+lido. Dar-lhe um leitor sem resolver isto teria feito voz ganhar capacidade de mascaramento em
+silêncio, e a permissiva é sempre a que vale.
+
+### 3. A tabela cobria 6 dos 9 canais do domínio
+
+`ChannelSchema` tem nove; a tabela tinha seis. `instagram` e `telegram` caíam no
+`.get(ch, frozenset())` → satisfaziam requisito nenhum → **nunca eram eleitos**. Restritivo, que é
+o default certo; **mudo**, que não é. Canal novo no domínio nascia inelegível sem uma linha de
+aviso.
+
+### A decisão: separar por NATUREZA, não apagar um lado
+
+**Capacidade é fato do PROTOCOLO.** Ninguém faz o SMS suportar campo de senha marcando um
+booleano — e o campo configurável convida exatamente isso: marca-se `true` para whatsapp e a
+plataforma acredita. Casa: o registry, em código.
+
+**Política é fato do TENANT.** *Se* o canal sabe mascarar é protocolo; *o que fazer quando não
+sabe* é decisão de quem opera. `masked_fallback` e `masked_fallback_message` sobreviveram em
+`MaskedFallbackPolicySchema`, e `GatewayConfig.capabilities` passou a apontar para ela.
+
+É essa distinção que impede o conserto de virar remoção cega: **a política nunca foi duplicada,
+só o inventário**.
+
+### `voice` continua sem `masked_input`, e isso é decisão
+
+O argumento do schema removido é bom — DTMF é mascarado por natureza *se* a plataforma não
+transcrever os dígitos. Mas o plano de mídia de voz **não está provisionado** (sem SFU, sem env
+`LIVEKIT_*`, provider em `_dev_mode` devolvendo token placebo). Declarar a capacidade tornaria
+`voice` elegível para um CVV **num canal que não funciona**.
+
+**Capacidade se declara quando está implementada, não quando é concebível.** Gatilho para
+reabrir, escrito no próprio registry: o arco V-F0..V-F5 de pé, com a supressão do dígito no
+transcript provada.
+
+### Os nove canais agora são explícitos
+
+`instagram` e `telegram` ganharam linha (texto + mídia; nenhuma superfície de entrada mascarada).
+`webhook` ganhou linha **vazia de propósito** — é o canal de workflow, não há cliente do outro
+lado; omiti-lo devolveria a ausência silenciosa que a tabela existe para fechar.
+
+`_CHANNEL_PRIORITY` também foi completada: canal fora dela caía no fim por
+`priority.get(ch, len(...))` — desempate por **acidente**, não por decisão.
+
+### Gate
+
+`infra/test/probe_channel_capability_single_house.sh`, cinco ramos, **cinco mutações, cinco
+vermelhos**:
+
+| ramo | mutação | resultado |
+|---|---|---|
+| A exaustividade | tirar `telegram` da tabela | `sem linha: ['telegram']` |
+| B vocabulário | `sms` ganha `"biometria"` | `capacidade fora do vocabulario` |
+| C casa única | `ChannelCapabilitiesSchema` volta | nomeia arquivo e linha |
+| D prioridade | tirar os dois novos da lista | `canal elegivel fora de _CHANNEL_PRIORITY` |
+| E **testemunha** | `voice` ganha `masked_input` | reprova explicando o CVV |
+
+O ramo E é o que dá valor ao resto: adicionar uma capacidade a um canal não quebra build nenhum e
+não aparece em tela nenhuma. Se a decisão sobre voz mudar, que mude com alguém olhando.
+
+O ramo C ignora linhas de comentário de propósito — o cabeçalho do registry **cita** os nomes
+removidos para explicar a remoção, e um contador ingênuo acusaria a prosa que documenta o
+conserto.
+
+### Medições
+
+`schemas` **187 passed** · `channel-gateway` **701 passed** · typecheck de `schemas`,
+`mcp-server` e `skill-flow-service` limpos · `probe_contextstore_cadastro`,
+`probe_masking_display_domain`, `probe_config_scope_provenance` e `probe_edge_surface` verdes.
+
+### O que isto destrava
+
+NIV-02 (derivar `requires ⊇ {masked_input}` do `masked:`) e NIV-03 (recusa no deploy e no
+runtime) estavam `bloqueado` esperando exatamente esta decisão: sobre qual casa construir.
+
 ## 2026-09-03 — ALW-11 + ALW-13: o censo do ContextStore vira PORTÃO, e ao promovê-lo o instrumento revelou estar cego por distância
 
 O censo media desde 2026-09-02 e ninguém o rodava — instrumento sem veredicto não impede

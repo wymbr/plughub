@@ -21,23 +21,64 @@ import logging
 logger = logging.getLogger("plughub.channel-gateway.capability")
 
 
-# ── Capability sets per channel ───────────────────────────────────────────────
-# Keep in sync with ChannelCapabilitySchema in @plughub/schemas/src/skill.ts.
-# Values: "text" | "audio" | "video" | "file_upload" | "masked_input" | "rich_menu"
+# ── Capacidade de canal — CASA ÚNICA (NIV-01, 2026-09-03) ────────────────────
+#
+# Capacidade é fato do PROTOCOLO, não config de tenant. Ninguém faz o SMS suportar
+# campo de senha marcando um booleano — e um campo configurável convida exatamente
+# isso: alguém marca `true` para whatsapp e a plataforma acredita.
+#
+# Por isso a casa é esta, em código, chaveada pelo vocabulário do
+# `ChannelCapabilitySchema` (@plughub/schemas/src/skill.ts) — que é o vocabulário
+# que os consumidores realmente usam (`collect.requires[]`).
+#
+# ⚠️ Havia uma SEGUNDA casa, e ela nem falava o mesmo vocabulário:
+# `ChannelCapabilitiesSchema` (plural, `channel-events.ts`) declarava os mesmos fatos
+# como booleanos (`supports_masked_input`, `supports_buttons`, …), como config POR
+# TENANT, com **zero consumidores** — e **discordava desta** em `voice`. Foi removida;
+# o que era política (`masked_fallback`) sobreviveu em `MaskedFallbackPolicySchema`,
+# porque *o que fazer quando não dá* é decisão de tenant, ao contrário de *se dá*.
+#
+# ⚠️ **A tabela é EXAUSTIVA sobre `ChannelSchema`**, e o gate impõe isso. Antes ela
+# tinha 6 chaves para 9 canais do domínio: `instagram` e `telegram` caíam no
+# `.get(ch, frozenset())`, satisfaziam requisito nenhum e **nunca eram eleitos, em
+# silêncio**. Restritivo é o default certo; mudo não é. Canal novo agora obriga uma
+# linha aqui — ou o gate reprova.
 
 CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
-    "whatsapp": frozenset({"text", "file_upload", "rich_menu"}),
-    "sms":      frozenset({"text"}),
-    "email":    frozenset({"text", "file_upload"}),
-    "voice":    frozenset({"audio"}),
-    "webchat":  frozenset({"text", "file_upload", "rich_menu", "masked_input"}),
-    "webrtc":   frozenset({"text", "audio", "video", "file_upload"}),
+    "whatsapp":  frozenset({"text", "file_upload", "rich_menu"}),
+    "sms":       frozenset({"text"}),
+    "email":     frozenset({"text", "file_upload"}),
+    # ⚠️ `voice` NÃO declara `masked_input`, e isto é decisão, não esquecimento.
+    # A casa removida afirmava `true — DTMF nativo (mascarado por natureza)`, e o
+    # argumento é bom: DTMF é mascarado por natureza SE a plataforma não transcrever
+    # os dígitos. Mas o plano de mídia de voz **não está provisionado** (sem SFU, sem
+    # env `LIVEKIT_*`, provider em `_dev_mode` devolvendo token placebo — ver
+    # `CLAUDE.md` § Arc 15). Declarar a capacidade tornaria `voice` elegível para um
+    # CVV num canal que não funciona. **Capacidade se declara quando está
+    # implementada, não quando é concebível.**
+    # Gatilho para reabrir: o arco V-F0..V-F5 do `adr-voice-media-plane.md` de pé,
+    # com a supressão do dígito no transcript provada.
+    "voice":     frozenset({"audio"}),
+    "webchat":   frozenset({"text", "file_upload", "rich_menu", "masked_input"}),
+    "webrtc":    frozenset({"text", "audio", "video", "file_upload"}),
+    # Entraram na NIV-01 para que a ausência deixasse de ser silenciosa. As duas são
+    # canais de mensagem com mídia; nenhuma tem superfície de entrada mascarada.
+    "instagram": frozenset({"text", "file_upload"}),
+    "telegram":  frozenset({"text", "file_upload", "rich_menu"}),
+    # `webhook` é o canal de WORKFLOW (Arc 19): não há cliente do outro lado, e por
+    # isso ele não tem capacidade de interação nenhuma. Declarado VAZIO de propósito —
+    # omiti-lo devolveria a ausência silenciosa que esta tabela existe para fechar.
+    "webhook":   frozenset(),
 }
 
 # Priority ordering when no preference is set (most capable → least).
 # Channels not listed fall to the end.
+# ⚠️ Canal FORA desta lista cai no fim (`priority.get(ch, len(...))`) — o que é um
+# desempate por acidente, não por decisão. `instagram`/`telegram` entram aqui pelo
+# mesmo motivo que entraram na tabela acima. `webhook` fica fora de propósito: ele não
+# tem capacidade nenhuma, logo nunca é eleito, e listá-lo sugeriria que poderia ser.
 _CHANNEL_PRIORITY: list[str] = [
-    "webrtc", "whatsapp", "webchat", "email", "voice", "sms",
+    "webrtc", "whatsapp", "webchat", "telegram", "instagram", "email", "voice", "sms",
 ]
 
 
