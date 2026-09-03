@@ -1,5 +1,38 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — CNS-21 (adendo): a defasagem tinha TRÊS superfícies, e a do NPS era a terceira
+
+O diagnóstico acima achou o snapshot de slot. Re-promover `nps_ia` **não** consertou o NPS — e o
+motivo é que a referência de visibilidade **não vive no fluxo**: vive no `DialogForm`. O fluxo só
+passa `$.pipeline_state.dialog.render.visibility`.
+
+E o **DialogForm publicado também é seed-if-absent**: editar `infra/dialog/*.json` de um form já
+publicado é **no-op**, exatamente como o YAML de skill. Medido:
+
+```
+dialog_nps_buttons   v2 publicado:  ['@ctx.session.customer_participant_id']
+dialog_nps_buttons      arquivo:    ['@ctx.core.contact.customer_participant_id']
+```
+
+Censo dos 11 forms: **um** divergente, e era esse. Republicado (v3).
+
+**Então são três superfícies de defasagem, e a CNS-11 só alcançou uma:** código ✅ · snapshot de
+slot ❌ · DialogForm publicado ❌. Um `grep` no repositório não enxerga as duas últimas — elas
+vivem no agent-registry e no dialog-api.
+
+### Mais dois pools re-promovidos, pelo mesmo mecanismo
+
+O relato de *"o `limite_ia` não desliga e, ao reconectar, mostra o status de novo"* é a mesma
+causa: o especialista `limite_retorno` lê `@ctx.core.workflow.delegate_resume_token` para retomar
+o pai, o snapshot dele era de 2026-08-12 e lia `session.delegate_resume_token`, e depois da CNS-19
+o produtor escreve a canônica — o token resolve `null`, o `workflow_resume` falha, **o pai nunca
+retoma** e a pendência do processo continua armada. O contato só cai por timeout de inatividade
+(~3 min), e o próximo acesso reencontra a pendência.
+
+Re-promovidos `limite_retorno` e `portabilidade_confirmacao` (o outro que lê os mesmos dois
+tokens). Restam quatro no censo — e `wrapup_detached_ia` **funciona hoje**, então promovê-lo às
+cegas trocaria um verde por um vermelho.
+
 ## 2026-09-03 — CNS-21: o NPS invisível e o OTP travado vinham do MESMO lugar — snapshot de slot anterior à CNS-11
 
 **Dois sintomas, uma causa, e a segunda metade dela é minha.**
