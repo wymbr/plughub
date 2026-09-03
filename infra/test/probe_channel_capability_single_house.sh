@@ -28,10 +28,17 @@
 #   C  uma SEGUNDA casa de capacidade reaparecer                              → VERMELHO
 #   D  canal elegível fora de `_CHANNEL_PRIORITY` (desempate por acidente)    → VERMELHO
 #   E  **`voice` ganhar `masked_input`**                                      → VERMELHO
-#      — é a testemunha de segurança: o plano de mídia de voz não está
-#        provisionado, e declarar a capacidade tornaria `voice` elegível para
-#        um CVV num canal que não funciona. Se a decisão mudar, que mude com
-#        alguém olhando; o gatilho está nomeado no próprio registry.
+#      — é a testemunha de segurança. São TRÊS impedimentos empilhados, e a
+#        primeira redação deste probe citava só o primeiro:
+#          (a) o canal não está provisionado (Arc 15) — resolve-se por DEPLOY;
+#          (b) não existe supressão de DTMF, nem em transcript nem em gravação,
+#              e DTMF é decodificável do áudio gravado — é TRABALHO (NIV-06);
+#          (c) a definição da capacidade é por MECANISMO
+#              (`password-overlay … (webchat)`), o que exclui voz por
+#              construção — enquanto for assim, (a) e (b) não bastam (NIV-05).
+#        ⚠️ Nada disto restringe o TRATAMENTO de eco em voz (`plain` verbaliza
+#        o dígito · `masked` bipa · `none` cala): esse é o `EchoMode` da ALW-10,
+#        traduzido pelo adapter, e está intacto. O que E guarda é ELEIÇÃO.
 #
 # Uso:  bash infra/test/probe_channel_capability_single_house.sh
 set -uo pipefail
@@ -101,8 +108,10 @@ print("ERRO|D|canal elegivel fora de _CHANNEL_PRIORITY (desempate por acidente):
 
 # ── E — testemunha de seguranca ─────────────────────────────────────────────
 if "masked_input" in tabela.get("voice", set()):
-    print("ERRO|E|`voice` declara masked_input — o plano de midia nao esta provisionado; "
-          "isso o torna elegivel para um CVV num canal que nao funciona")
+    print("ERRO|E|`voice` declara masked_input — tres impedimentos seguem de pe: canal "
+          "nao provisionado (Arc 15), supressao de DTMF inexistente (NIV-06) e a "
+          "definicao da capacidade por MECANISMO, que exclui voz por construcao "
+          "(NIV-05). Isso o tornaria elegivel para um CVV num canal que nao funciona")
 else:
     quem = sorted(ch for ch, cs in tabela.items() if "masked_input" in cs)
     print("OK|E|masked_input so em %s; voice permanece fora (gatilho no registry)" % quem)

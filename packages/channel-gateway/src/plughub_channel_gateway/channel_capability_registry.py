@@ -48,16 +48,27 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     "whatsapp":  frozenset({"text", "file_upload", "rich_menu"}),
     "sms":       frozenset({"text"}),
     "email":     frozenset({"text", "file_upload"}),
-    # ⚠️ `voice` NÃO declara `masked_input`, e isto é decisão, não esquecimento.
-    # A casa removida afirmava `true — DTMF nativo (mascarado por natureza)`, e o
-    # argumento é bom: DTMF é mascarado por natureza SE a plataforma não transcrever
-    # os dígitos. Mas o plano de mídia de voz **não está provisionado** (sem SFU, sem
-    # env `LIVEKIT_*`, provider em `_dev_mode` devolvendo token placebo — ver
-    # `CLAUDE.md` § Arc 15). Declarar a capacidade tornaria `voice` elegível para um
-    # CVV num canal que não funciona. **Capacidade se declara quando está
-    # implementada, não quando é concebível.**
-    # Gatilho para reabrir: o arco V-F0..V-F5 do `adr-voice-media-plane.md` de pé,
-    # com a supressão do dígito no transcript provada.
+    # ⚠️ `voice` NÃO declara `masked_input`, e isto é decisão, não esquecimento — mas
+    # a decisão tem TRÊS impedimentos empilhados, e confundi-los foi erro meu na
+    # primeira redação (corrigido 2026-09-03, a pedido do dono):
+    #
+    #   (a) **o canal não funciona** — sem SFU, sem env `LIVEKIT_*`, provider em
+    #       `_dev_mode` devolvendo token placebo (`CLAUDE.md` § Arc 15). Temporário,
+    #       e resolve-se por DEPLOY (arco V-F0..V-F5).
+    #   (b) **a garantia não está construída** — DTMF é mascarado por natureza *se* o
+    #       dígito não vazar; medido: **não existe supressão de DTMF** neste adapter,
+    #       nem em transcript nem em gravação. E DTMF é decodificável a partir do
+    #       áudio gravado. É TRABALHO, não deploy → **NIV-06**.
+    #   (c) **a definição da capacidade exclui voz por construção** — o enum diz
+    #       `masked_input // password-overlay masked field (webchat)`, ou seja,
+    #       descreve o MECANISMO e nomeia o canal. Enquanto for assim, nenhum avanço
+    #       em (a) ou (b) torna voz elegível: o gatilho não fecha → **NIV-05**.
+    #
+    # ⚠️ Nada disto restringe o TRATAMENTO de eco em voz, que é outro eixo e está
+    # intacto: `EchoMode` (`plain` verbaliza o dígito · `masked` bipa · `none` cala)
+    # é traduzido pelo adapter, e o eco existe justamente para dar feedback de tecla.
+    # O que a linha abaixo nega é ELEIÇÃO — voz não é escolhida para COLETAR um campo
+    # mascarado —, não a capacidade de tratar o eco.
     "voice":     frozenset({"audio"}),
     "webchat":   frozenset({"text", "file_upload", "rich_menu", "masked_input"}),
     "webrtc":    frozenset({"text", "audio", "video", "file_upload"}),
