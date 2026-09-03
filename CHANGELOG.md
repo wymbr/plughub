@@ -1,5 +1,144 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-06 / CNS-14: a Config API passa a dizer QUAL escopo está em vigor, e uma rota que prometia isso estava morta havia tempo
+
+O dono mandou fazer as duas juntas por serem o mesmo eixo — `__global__` × tenant —, sendo a
+CNS-14 a metade de **autorização** (quem pode escrever o global) e a ALW-06 a de **afordância**
+(a tela dizer o escopo antes de deixar salvar). A medição confirmou o eixo e **inverteu o peso
+das duas metades**: a de autorização é cerca contra população um; a de afordância guarda um
+defeito vivo.
+
+### O mecanismo, em uma linha
+
+A resolução de config é `LIMIT 1` com o tenant na frente: **o override de tenant vence o global
+POR INTEIRO**. Não acrescenta, não mescla — substitui. Depois que a linha do tenant existe,
+nenhuma correção de plataforma naquela key alcança aquele tenant, e nada fica vermelho.
+
+### Quatro medições, e a quarta é a que dói
+
+As três primeiras já estavam no ledger. A quarta apareceu ao contar o parque:
+
+| | medição |
+|---|---|
+| 1 | `PUT` global de `masking.types` → **200 e efeito nenhum** (o tenant tem override). Só apareceu contando os tipos nos dois escopos: 14 × 13 |
+| 2 | `masking.context_map` tem **só** a linha `__global__`, e a CNS-08 recusa `PUT` de tenant ali com 422 — o comportamento **difere por key** dentro do MESMO namespace |
+| 3 | o `seed_context_map.py` precisou de guarda PRÉVIA: conferir só o efeito pega o sintoma **depois** de ter gravado |
+| 4 | **`tenant_demo` sombreia duas keys, e as duas de jeitos diferentes** |
+
+A quarta, por extenso. `masking.types` tem override **byte-idêntico** ao global (mesmo md5,
+`39a4139c…`, 14 tipos dos dois lados): informação zero, e serve unicamente para engolir toda
+edição futura da plataforma. `masking.context_rules` **já divergiu** — uma correção de rótulo
+feita no global (`*.resume_token`) nunca chegou ao tenant.
+
+⚠️ **E aqui a medição me impediu de publicar um defeito que não existe.** O diff mostrava que o
+global declara `session.vencimento_cartao → last_2` e o tenant **não** — leitura óbvia: campo de
+cartão desmascarado para operador num tenant que roda `skill_limite_entrada_v1`, que escreve
+essa tag. Fui conferir a cobertura por glob: o tenant tem `*.vencimento_cartao → last_2`,
+**mesmo tipo, mesmo papel**. Exposição real, **dano zero**. É a D14.1 outra vez, e do lado certo
+desta vez: *"isto machuca?"* são dois números, nunca um ramo só.
+
+O que a deriva custou até agora, então, é **um rótulo velho**. O motivo de tratá-la assim mesmo
+é que o mecanismo não distingue rótulo de regra: da próxima vez o que não atravessa é uma
+máscara.
+
+### A rota que prometia exatamente isto, e estava morta
+
+`GET /config/{namespace}/raw` existia, com docstring dizendo *"mostra o que está sobrescrevendo
+o default global"* — a pergunta da ALW-06, literalmente. Estava declarada **200 linhas depois**
+de `GET /config/{namespace}/{key}`, e o FastAPI casa por ordem de registro: `/config/masking/raw`
+caía na paramétrica com `key="raw"` e respondia `404 No config found for masking.raw`.
+
+**Zero chamadores, zero testes.** Nunca funcionou, e o modo de falha explica por que ninguém
+notou: num endpoint de leitura, um 404 parece *"não há dado"*, não *"não há rota"*.
+
+Removida em vez de movida — a pergunta dela é a que `/_provenance` responde, e melhor. Manter as
+duas seria duas casas para o mesmo fato, e a casa já sabe como isso termina.
+
+### O que foi construído
+
+**`GET /config/{namespace}/_provenance?tenant_id=`** — por key: `effective_scope`,
+`global_present`, `tenant_present`, `diverges`. Registrada **antes** da paramétrica, com o
+prefixo `_` para que a colisão não volte por outro caminho (uma key chamada `provenance` é
+plausível; `_provenance` não é).
+
+Duas decisões dentro dela:
+
+· **não passa pelo cache**, de propósito. O cache serve leitura de runtime; aqui a pergunta é de
+  autoria (*"o que eu vou sombrear se salvar?"*), e uma resposta velha recriaria exatamente o
+  silêncio que o relatório existe para remover — quem acabou de criar um override veria a tela
+  dizer que não há nenhum;
+· **`diverges` compara pela forma canônica de `config_drift.canonical`**, a mesma que o relatório
+  de seed já usa. Dois jeitos de decidir *"é igual?"* acabariam divergindo, e aí a permissiva
+  vale;
+· e a ausência de linha **some da chave** em vez de virar `None`: um `null` gravado no tenant
+  VENCE o global, ausência não vence nada. Colapsá-los faria o relatório dizer "o tenant
+  sobrescreve" para quem não sobrescreve.
+
+**`shadowed_by[]` na resposta do `PUT`** — numa escrita global, os tenants com linha própria
+daquela key, para quem a escrita não tem efeito. **Nomeia, nunca recusa**: tenant com config
+própria é uso legítimo, e recusar quebraria o caminho de seed. O que não pode é ser mudo. Se o
+próprio relatório falhar, a escrita **não** é desfeita e o log diz que o que falhou foi o
+relatório — degradar aqui não pode virar degradar a escrita.
+
+**Banner na tela de Mascaramento** (`ProvenanceBanner`), sobre os dois namespaces que ela grava.
+O fato que a tela nunca disse: **todo `putConfig` dali manda `tenantId`**, ou seja, a primeira
+gravação de uma key CRIA o override e desliga aquele tenant das atualizações da plataforma,
+para sempre. O banner distingue os dois casos de sombra — *difere do default* × *idêntico ao
+default (não acrescenta nada e só bloqueia atualizações futuras)* —, porque são conselhos
+opostos. Degradação barulhenta se `/_provenance` cair: a tela diz que **não sabe** o escopo, em
+vez de calar.
+
+### CNS-14 — `adiado`, com gatilho, e o título estava velho
+
+Medido antes de decidir, como o ledger mandava:
+
+· **1 portador** de `config.masking` e **1** de `config.context_map` — o mesmo
+  `admin@plughub.local` (papéis `{admin,developer}`), num tenant só, 8 usuários;
+· e a premissa do título **caducou na ALW-03**: `_ns_field('masking','context_map')` resolve
+  para o campo próprio, então `config.masking` **já não alcança** o `core.*` do mapa.
+
+Uma cerca aqui não separa ninguém de nada — política contra população zero, que este repositório
+cataloga. E a cerca certa nem é óbvia: o administrador da plataforma **precisa** escrever o
+global, e distinguir *operador da plataforma* de *administrador do tenant* é um conceito que o
+modelo não tem. Isso é desenho, não portão.
+
+O que fica fechado é a metade que machucava — o silêncio. **Gatilho para reabrir:** um segundo
+tenant, ou um portador desses grants que não seja operador da plataforma.
+
+### Gate
+
+`infra/test/probe_config_scope_provenance.sh`, seis ramos, todos provados falseáveis:
+
+| ramo | mutação | resultado |
+|---|---|---|
+| A | — | `/_provenance` responde com `keys` |
+| B | `effective_scope` sempre `"global"` | **reprova**, nomeando `context_rules` e `types` |
+| C | três fixtures | idêntico→`false` · diferente→`true` · um lado só→`null` |
+| D | `tenants_overriding` → `[]` | **reprova** o positivo; o negativo segue verde (proposição outra) |
+| E | rota literal depois da paramétrica | **reprova**, nomeando quem sombreia |
+| F | `title` repetida em `en/masking.json` | **reprova** |
+
+Dois detalhes de desenho do gate:
+
+· **o ramo B tem oráculo independente** — compara o veredicto da rota com o Postgres lido direto,
+  não com outra chamada da mesma rota;
+· **o ramo D tem controle de EFEITO**, e sem ele o resto seria decorativo: depois da escrita
+  global sombreada, a leitura efetiva do tenant tem de continuar no valor **antigo**. É isso que
+  prova que a lista descreve um fato, e não que a lista está bem formada;
+· **o ramo E é estrutural e cobre a CLASSE** (`_route_shadow_check.py`, sobre a ordem de registro
+  no `/openapi.json`), não a ocorrência conhecida. Bater só em `/raw` seria lista de exceção, e
+  lista de exceção envelhece.
+
+Fixtures saem por `trap` — override deixado para trás por um probe vira override de verdade, que
+é o defeito que este probe existe por causa de.
+
+### Medições finais
+
+Suíte da config-api na IMAGEM: **57 passed**. Build do platform-ui (`tsc -b && vite build`):
+verde. Bundle servido conferido por **string literal** (`provenance.writesToTenant`,
+`provenance.identical`, `provenance.unavailable`, `_provenance?tenant_id=`) — identificador local
+não serve, a minificação o renomeia.
+
 ## 2026-09-02 — O cadastro do ContextStore vira EDITOR (E1–E7), e as quatro operações não são simétricas
 
 Defeito relatado pelo dono: *"o editor de context store é read only, neste caso serve para nada"*.

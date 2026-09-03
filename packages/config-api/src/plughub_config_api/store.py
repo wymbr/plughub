@@ -30,10 +30,12 @@ from .db import (
     db_delete,
     db_get,
     db_get_raw,
+    db_key_provenance,
     db_list_all,
     db_list_namespace,
     db_list_namespace_entries,
     db_set,
+    db_tenants_overriding,
     ensure_schema,
 )
 
@@ -104,6 +106,41 @@ class ConfigStore:
         Not cached — intended for admin/diagnostic use only.
         """
         return await db_list_all(self._pool, tenant_id)
+
+    async def provenance(self, tenant_id: str, namespace: str) -> dict[str, dict]:
+        """Por key: qual escopo RESPONDE, e se o outro existe e diverge (ALW-06).
+
+        ⚠️ **Não passa pelo cache, de propósito.** O cache serve leitura de runtime,
+        onde o valor resolvido é o que importa. Aqui a pergunta é de AUTORIA — *"o
+        que eu vou sombrear se salvar?"* — e uma resposta velha recriaria exatamente
+        o silêncio que este relatório existe para remover: quem acabou de criar um
+        override veria a tela dizer que não há nenhum.
+
+        `diverges` compara pela forma canônica de `config_drift.canonical`, a MESMA
+        que o relatório de seed usa. Duas formas de decidir "é igual?" acabariam
+        divergindo, e aí a permissiva é a que vale.
+        """
+        from .config_drift import canonical
+
+        bruto = await db_key_provenance(self._pool, tenant_id, namespace)
+        out: dict[str, dict] = {}
+        for key, lados in sorted(bruto.items()):
+            tem_global = "global" in lados
+            tem_tenant = "tenant" in lados
+            diverge = None
+            if tem_global and tem_tenant:
+                diverge = canonical(lados["global"]) != canonical(lados["tenant"])
+            out[key] = {
+                "effective_scope": "tenant" if tem_tenant else "global",
+                "global_present":  tem_global,
+                "tenant_present":  tem_tenant,
+                "diverges":        diverge,
+            }
+        return out
+
+    async def tenants_overriding(self, namespace: str, key: str) -> list[str]:
+        """Tenants para quem uma escrita no `__global__` desta key não tem efeito."""
+        return await db_tenants_overriding(self._pool, namespace, key)
 
     async def list_namespace_raw(
         self, tenant_id: str, namespace: str

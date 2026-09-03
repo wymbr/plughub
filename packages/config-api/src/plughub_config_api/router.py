@@ -12,17 +12,20 @@ Routes:
   GET  /config?tenant_id=xxx
        All resolved config for the tenant, grouped by namespace.
 
+  GET  /config/{namespace}/_provenance?tenant_id=xxx
+       Por key: qual ESCOPO responde (`tenant`|`global`), se o outro existe, e se
+       os dois divergem. Registrada ANTES da paramétrica acima — ver o comentário
+       na rota, que conta como a `/raw` morreu por ordem de registro.
+
   PUT  /config/{namespace}/{key}
        Body: {"tenant_id": null|"...", "value": <any>, "description": "..."}
        Upsert. tenant_id=null sets the global platform default.
+       A resposta traz `shadowed_by[]`: numa escrita GLOBAL, os tenants com override
+       próprio desta key — para quem a escrita NÃO tem efeito. Nomeia, não recusa.
 
   DELETE /config/{namespace}/{key}?tenant_id=xxx
        Removes an explicit entry. Returns 404 if not found.
        tenant_id=null or omitted targets the global default.
-
-  GET  /config/{namespace}/raw?tenant_id=xxx
-       Raw (non-resolved) entries explicitly set for (tenant_id, namespace).
-       Useful for seeing what overrides are active.
 
 Escrita: portao DUAL — `X-Admin-Token` (= PLUGHUB_CONFIG_ADMIN_TOKEN, caminho de
 seed/sistema) OU `Authorization: Bearer <jwt>` com ABAC `config.{campo do namespace}`
@@ -136,6 +139,53 @@ class PutConfigBody(BaseModel):
     value:       Any
     tenant_id:   Optional[str] = None   # None → global default
     description: str           = ""
+
+
+# ─── GET /config/{namespace}/_provenance ─────────────────────────────────────
+#
+# ⚠️ REGISTRADA ANTES de `/{namespace}/{key}` — e a ordem é o mecanismo, não estilo.
+# O FastAPI casa na ORDEM de registro, então uma rota literal declarada depois de uma
+# paramétrica que a cobre nunca é alcançada. Foi assim que a `GET /{namespace}/raw`
+# morreu: declarada 200 linhas abaixo de `/{namespace}/{key}`, ela respondia
+# `404 No config found for masking.raw` — com docstring prometendo exatamente
+# *"o que está sobrescrevendo o default global"*, zero chamadores e zero testes.
+# Medida em 2026-09-02 e REMOVIDA no mesmo commit: rota inalcançável não é contrato.
+#
+# O prefixo `_` existe para que a colisão não volte por outro caminho: uma key de
+# config chamada `provenance` é plausível, uma chamada `_provenance` não é.
+
+@router.get("/{namespace}/_provenance")
+async def key_provenance(
+    namespace: str,
+    request:   Request,
+    tenant_id: str = Query(..., description="Tenant whose provenance to describe"),
+) -> JSONResponse:
+    """Por key do namespace: qual ESCOPO responde, e se o outro existe e diverge.
+
+    ── Por que existe (ALW-06 / CNS-14, 2026-09-02) ─────────────────────────────
+
+    A resolução é `LIMIT 1` com o tenant na frente: **o override de tenant vence o
+    global POR INTEIRO**. A consequência é que um `PUT` global numa key sombreada
+    responde `200` e não muda nada para aquele tenant — medido três vezes no mesmo
+    dia, e nenhuma delas ficou vermelha em lugar nenhum.
+
+    O que torna isso caro não é o `PUT` perdido, é a DERIVA. Medido em `tenant_demo`:
+    `masking.types` tem override **byte-idêntico** ao global (mesmo md5) — um sombra
+    que não carrega informação nenhuma e só serve para engolir toda edição futura; e
+    `masking.context_rules` já divergiu, com um rótulo corrigido no global que nunca
+    chegou ao tenant. Hoje custou um rótulo velho; da próxima vez custa uma regra de
+    máscara.
+
+    Não bloqueia nada e não conserta nada — **nomeia**. Escolher qual lado vence é
+    política, e política é de gente; o mesmo desenho que `config_drift` já adotou
+    para a divergência declarado × gravado.
+    """
+    store = request.app.state.store
+    return JSONResponse(content={
+        "tenant_id": tenant_id,
+        "namespace": namespace,
+        "keys":      await store.provenance(tenant_id, namespace),
+    })
 
 
 # ─── GET /config/{namespace}/{key} ───────────────────────────────────────────
@@ -292,13 +342,41 @@ async def put_config(
         operation = "set",
     )
     effective_tenant = body.tenant_id or "__global__"
+
+    # ── Uma escrita global que não alcança ninguém não pode responder só `ok` ──
+    #
+    # `LIMIT 1`, tenant na frente: quem tem linha própria para esta key não vê nada
+    # do que acabou de ser gravado. O `200` já era verdade sobre a LINHA e mentira
+    # sobre o EFEITO, e a diferença só aparecia contando os dois escopos à mão.
+    #
+    # Nomeia, nunca recusa: um tenant sobrescrever config é uso legítimo, e recusar
+    # a escrita global por causa dele quebraria o caminho de seed. O que não pode é
+    # ser mudo — a mesma regra do resto da casa.
+    shadowed_by: list[str] = []
+    if body.tenant_id is None:
+        try:
+            shadowed_by = await store.tenants_overriding(namespace, key)
+        except Exception:  # pragma: no cover - relatório nunca derruba a escrita
+            logger.exception(
+                "provenance_lookup_failed ns=%s key=%s — a escrita FOI feita; o que "
+                "falhou foi o relatório de quem a sombreia", namespace, key,
+            )
+            shadowed_by = []
+        if shadowed_by:
+            logger.warning(
+                "global_write_shadowed ns=%s key=%s tenants=%s — a escrita no "
+                "`__global__` não tem efeito para estes tenants (override próprio)",
+                namespace, key, shadowed_by,
+            )
+
     return JSONResponse(
         status_code=200,
         content={
-            "ok":        True,
-            "tenant_id": effective_tenant,
-            "namespace": namespace,
-            "key":       key,
+            "ok":           True,
+            "tenant_id":    effective_tenant,
+            "namespace":    namespace,
+            "key":          key,
+            "shadowed_by":  shadowed_by,
         },
     )
 
@@ -338,23 +416,15 @@ async def delete_config(
     return JSONResponse(content={"ok": True, "deleted": True})
 
 
-# ─── GET /config/{namespace}/raw ─────────────────────────────────────────────
-
-@router.get("/{namespace}/raw")
-async def list_namespace_raw(
-    namespace: str,
-    request:   Request,
-    tenant_id: str = Query(..., description="Which tenant's explicit entries to list"),
-) -> JSONResponse:
-    """
-    Raw (non-resolved) entries explicitly set for (tenant_id, namespace).
-    Shows what is overriding the global default for a specific tenant.
-    Pass tenant_id='__global__' to see the global defaults themselves.
-    """
-    store   = request.app.state.store
-    entries = await store.list_namespace_raw(tenant_id, namespace)
-    return JSONResponse(content={
-        "tenant_id": tenant_id,
-        "namespace": namespace,
-        "entries":   entries,
-    })
+# ─── GET /config/{namespace}/raw — REMOVIDA em 2026-09-02 ────────────────────
+#
+# Estava declarada AQUI, depois de `/{namespace}/{key}`, e por isso era inalcançável:
+# `GET /config/masking/raw` casava a paramétrica com `key="raw"` e respondia
+# `404 No config found for masking.raw`. Medido ao vivo. Zero chamadores no
+# repositório, zero testes — ou seja, nunca funcionou e ninguém percebeu, porque um
+# 404 numa rota de leitura parece "não há dado" e não "não há rota".
+#
+# Não foi movida para cima: a pergunta dela (*"o que está sobrescrevendo o global?"*)
+# é a mesma que `/_provenance` responde, e melhor — por key, com o veredicto de
+# divergência. Manter as duas seria duas respostas para o mesmo fato, e a casa já
+# sabe como isso termina. `store.list_namespace_raw` fica, sem chamador HTTP.

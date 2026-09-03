@@ -15,7 +15,8 @@ import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Users, ClipboardList, Timer, Monitor, Archive, Lock, Check, X, AlertTriangle, Pencil } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
-import { useNamespace, putConfig } from '../config-plataforma/api/config-hooks'
+import { useNamespace, useProvenance, putConfig } from '../config-plataforma/api/config-hooks'
+import type { KeyProvenance } from '../config-plataforma/api/config-hooks'
 import type { DisplayScreen, DisplayVoice, MaskingDisplayRule } from '@/components/MaskedToken'
 import { DEFAULT_DISPLAY_RULE } from '@/components/MaskedToken'
 
@@ -166,6 +167,15 @@ export default function MaskingPage() {
   // masking namespace stores per-category display rules
   const { entries: maskingEntries, reload: reloadMasking } = useNamespace(tenantId, 'masking')
 
+  // ALW-06 — proveniência dos DOIS namespaces que esta tela escreve. Não é enfeite:
+  // todo `putConfig` daqui manda `tenantId`, ou seja, a primeira gravação de uma key
+  // CRIA um override e desliga aquele tenant das atualizações da plataforma, para
+  // sempre e em silêncio. Medido em `tenant_demo`: `masking.types` acabou com uma
+  // cópia byte-idêntica do global (mesmo md5) — informação zero, e engole toda edição
+  // futura; `masking.context_rules` já divergiu de fato.
+  const provMasking = useProvenance(tenantId, 'masking')
+  const provAudit   = useProvenance(tenantId, 'audit_policy')
+
   // Resolved values with defaults — entries[key].value holds the actual config value
   const val = (key: string): unknown => entries[key]?.value ?? entries[key]
 
@@ -190,6 +200,7 @@ export default function MaskingPage() {
     try {
       await putConfig('audit_policy', key, value, tenantId, '', adminToken)
       reload()
+      provAudit.reload()   // a 1a gravacao CRIA o override — o banner muda junto
       showToast(t('toast.keySaved', { key }), true)
     } catch (e) {
       showToast(String(e), false)
@@ -239,6 +250,7 @@ export default function MaskingPage() {
       }
       await putConfig('masking', 'types', next, tenantId, '', adminToken)
       reloadMasking()
+      provMasking.reload()
       showToast(t('toast.keySaved', { key: `types.${category}` }), true)
     } catch (e) {
       showToast(String(e), false)
@@ -296,6 +308,7 @@ export default function MaskingPage() {
     try {
       await putConfig('masking', 'context_rules', config, tenantId, '', adminToken)
       reloadMasking()
+      provMasking.reload()
       showToast('Regras de ContextStore salvas com sucesso', true)
     } catch (e) {
       showToast(String(e), false)
@@ -345,6 +358,15 @@ export default function MaskingPage() {
       {error   && <div style={{ ...infoBox('#7f1d1d22', '#fca5a5'), display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={14} aria-hidden="true" />{error}</div>}
 
       <div style={{ padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+        {/* ── ALW-06: qual escopo está em vigor ────────────────────────────── */}
+        <ProvenanceBanner
+          tenantId={tenantId}
+          groups={[
+            { ns: 'masking',      ...provMasking },
+            { ns: 'audit_policy', ...provAudit   },
+          ]}
+        />
 
         {/* ── Section 1: Access Policy ─────────────────────────────────────── */}
         <Section
@@ -684,6 +706,112 @@ function Section({ icon: SectionIcon, title, desc, children }: {
         </div>
       </div>
       {children}
+    </div>
+  )
+}
+
+/**
+ * ProvenanceBanner — ALW-06 / CNS-14 (2026-09-02)
+ *
+ * ── O que ele responde, e por que a pergunta não era óbvia ──────────────────
+ *
+ * *"O que eu estou editando: o default da PLATAFORMA ou o override deste tenant?"*
+ * A tela nunca disse, e a resposta não é uniforme nem dentro de um namespace: hoje
+ * `masking.types` e `masking.context_rules` são respondidos pelo TENANT, enquanto
+ * `masking.context_map` é respondido pelo GLOBAL — e a Config API recusa com 422
+ * qualquer tentativa de sobrescrever este último por tenant (CNS-08).
+ *
+ * O dano não é o `PUT` perdido; é a DERIVA. Como a resolução é `LIMIT 1` com o
+ * tenant na frente, o override substitui o global POR INTEIRO: depois que ele
+ * existe, nenhuma correção de plataforma alcança aquele tenant, e nada fica
+ * vermelho. Medido: uma regra de máscara corrigida no global (`*.resume_token`)
+ * nunca chegou ao `tenant_demo`; custou um rótulo velho, e da próxima vez custa
+ * uma regra.
+ *
+ * ⚠️ Ele NÃO bloqueia salvar. Tenant com config própria é uso legítimo; o que não
+ * pode é ser mudo. O banner nomeia, e quem decide é gente — mesmo desenho que o
+ * `config_drift` do seed adotou para a divergência declarado × gravado.
+ */
+function ProvenanceBanner({ tenantId, groups }: {
+  tenantId: string
+  groups: Array<{
+    ns:      string
+    keys:    Record<string, KeyProvenance>
+    loading: boolean
+    error:   string | null
+  }>
+}) {
+  const { t } = useTranslation('masking')
+
+  const erros = groups.filter(g => g.error)
+  const carregando = groups.some(g => g.loading)
+  // "sombreada" = tem linha própria do tenant, logo o global não a alcança mais.
+  const sombreadas = groups.flatMap(g =>
+    Object.entries(g.keys)
+      .filter(([, p]) => p.tenant_present && p.global_present)
+      .map(([k, p]) => ({ id: `${g.ns}.${k}`, diverges: p.diverges })),
+  )
+
+  // Degradação BARULHENTA: sem o relatório a tela volta a não saber o escopo, e
+  // esconder isso seria trocar um silêncio por outro.
+  if (erros.length > 0) {
+    return (
+      <div style={{ ...infoBox('#7f1d1d22', '#fca5a5'), display: 'flex', alignItems: 'center', gap: 8 }}>
+        <AlertTriangle size={14} aria-hidden="true" />
+        {t('provenance.unavailable', {
+          defaultValue: 'Could not determine which scope is in effect ({{err}}). Saving still works, but this screen cannot tell you whether your edit reaches the platform default or only this tenant.',
+          err: erros.map(e => e.error).join('; '),
+        })}
+      </div>
+    )
+  }
+  if (carregando) return null
+
+  return (
+    <div style={{
+      background: sombreadas.length > 0 ? '#78350f22' : '#0f172a',
+      border: `1px solid ${sombreadas.length > 0 ? '#b45309' : '#1e293b'}`,
+      borderRadius: 8, padding: '12px 16px', fontSize: 12, color: '#cbd5e1',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#e2e8f0' }}>
+        <Lock size={13} aria-hidden="true" />
+        {t('provenance.title', { defaultValue: 'Scope in effect' })}
+      </div>
+
+      <p style={{ margin: '6px 0 0' }}>
+        {t('provenance.writesToTenant', {
+          defaultValue: 'Edits on this screen are saved as an override for the tenant "{{tenant}}", never as the platform default.',
+          tenant: tenantId,
+        })}
+      </p>
+
+      {sombreadas.length === 0 ? (
+        <p style={{ margin: '6px 0 0', color: '#94a3b8' }}>
+          {t('provenance.noneShadowed', {
+            defaultValue: 'No key is overridden yet — every value shown comes from the platform default. The first save on a key creates an override, and from then on platform updates to that key no longer reach this tenant.',
+          })}
+        </p>
+      ) : (
+        <>
+          <p style={{ margin: '6px 0 4px', color: '#fbbf24' }}>
+            {t('provenance.shadowedIntro', {
+              count: sombreadas.length,
+              defaultValue: 'These keys already have a tenant override, so platform updates to them no longer reach this tenant:',
+            })}
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {sombreadas.map(s => (
+              <li key={s.id} style={{ margin: '2px 0' }}>
+                <code style={{ color: '#e2e8f0', background: '#1e293b', padding: '0 4px', borderRadius: 3 }}>{s.id}</code>
+                {' — '}
+                {s.diverges
+                  ? t('provenance.diverges', { defaultValue: 'differs from the platform default' })
+                  : t('provenance.identical', { defaultValue: 'identical to the platform default (the override adds nothing and only blocks future updates)' })}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   )
 }

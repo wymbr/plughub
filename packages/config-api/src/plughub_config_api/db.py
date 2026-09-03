@@ -237,6 +237,56 @@ async def db_list_all(
     return result
 
 
+async def db_key_provenance(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    namespace: str,
+) -> dict[str, dict[str, Any]]:
+    """Para cada key do namespace: o que existe no GLOBAL e o que existe no tenant.
+
+    Uma consulta só, os dois escopos juntos — não duas. Duas consultas dariam duas
+    fotos de instantes diferentes, e a pergunta aqui é justamente sobre a RELAÇÃO
+    entre elas: um `set` no meio do caminho faria o relatório dizer que o tenant não
+    sombreia uma key que ele acabou de sombrear.
+
+    Devolve `{key: {"global": <valor>, "tenant": <valor>}}` com o lado **AUSENTE
+    DA CHAVE** quando não há linha — nunca `None`. A distinção é real: um `null`
+    gravado no tenant VENCE o global; a ausência de linha não vence nada. Se a
+    ausência virasse `None`, os dois casos ficariam indistinguíveis e o relatório
+    diria "o tenant sobrescreve" para quem não sobrescreve.
+    """
+    rows = await pool.fetch(
+        "SELECT key, tenant_id, value FROM public.platform_config "
+        "WHERE namespace = $1 AND tenant_id IN ($2, $3)",
+        namespace, tenant_id, GLOBAL,
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        lado = "global" if r["tenant_id"] == GLOBAL else "tenant"
+        out.setdefault(r["key"], {})[lado] = json.loads(r["value"])
+    return out
+
+
+async def db_tenants_overriding(
+    pool: asyncpg.Pool,
+    namespace: str,
+    key: str,
+) -> list[str]:
+    """Tenants com linha PRÓPRIA para (namespace, key) — ou seja, para quem uma
+    escrita no `__global__` não tem efeito nenhum.
+
+    A resolução é `LIMIT 1` com o tenant na frente: o override substitui o global
+    POR INTEIRO. Então esta lista não é curiosidade, é a resposta a *"a escrita que
+    acabei de fazer alcança quem?"*.
+    """
+    rows = await pool.fetch(
+        "SELECT tenant_id FROM public.platform_config "
+        "WHERE namespace = $1 AND key = $2 AND tenant_id <> $3 ORDER BY tenant_id",
+        namespace, key, GLOBAL,
+    )
+    return [r["tenant_id"] for r in rows]
+
+
 async def db_list_namespace_entries(
     pool: asyncpg.Pool,
     tenant_id: str,

@@ -104,6 +104,51 @@ export function useNamespace(tenantId: string, ns: string): {
   return { entries, loading, error, reload }
 }
 
+// ─── useProvenance ───────────────────────────────────────────────────────────
+//
+// ALW-06 (2026-09-02) — a tela precisa dizer QUAL escopo está em vigor antes de
+// deixar salvar. A resolução do config-api é `LIMIT 1` com o tenant na frente: um
+// override de tenant substitui o global POR INTEIRO, então um `PUT` global numa key
+// sombreada responde 200 e não muda nada. Só se descobre contando os dois escopos —
+// que é exatamente o que `/config/{ns}/_provenance` faz do lado do servidor.
+
+export interface KeyProvenance {
+  /** Qual escopo RESPONDE a leitura deste tenant. */
+  effective_scope: 'tenant' | 'global'
+  global_present:  boolean
+  tenant_present:  boolean
+  /** `null` quando só um dos lados existe — não há o que comparar. */
+  diverges:        boolean | null
+}
+
+export function useProvenance(tenantId: string, ns: string): {
+  keys:    Record<string, KeyProvenance>
+  loading: boolean
+  /** Degradação BARULHENTA: sem isto a tela cairia no silêncio que ela existe p/ tirar. */
+  error:   string | null
+  reload:  () => void
+} {
+  const [keys,    setKeys]    = useState<Record<string, KeyProvenance>>({})
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+  const [tick,    setTick]    = useState(0)
+
+  const reload = useCallback(() => setTick(t => t + 1), [])
+
+  useEffect(() => {
+    if (!tenantId || !ns) return
+    setLoading(true)
+    setError(null)
+    apiFetch(`/config/${ns}/_provenance?tenant_id=${encodeURIComponent(tenantId)}`)
+      .then(r => safeJson<{ keys?: Record<string, KeyProvenance>; detail?: string }>(r)
+        .then(j => r.ok ? j : Promise.reject(j.detail ?? `HTTP ${r.status}`)))
+      .then(j => { setKeys(j.keys ?? {}); setLoading(false) })
+      .catch(e => { setError(String(e)); setLoading(false) })
+  }, [tenantId, ns, tick])
+
+  return { keys, loading, error, reload }
+}
+
 // ─── useMultiNamespace ───────────────────────────────────────────────────────
 // Fetches multiple namespaces in parallel and merges them.
 // Each ConfigEntry gets entry.namespace set to its source namespace.

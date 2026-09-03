@@ -130,5 +130,14 @@
     "archive": "Arquivar — bloqueia escrita nova, mantém o histórico mascarado",
     "unarchive": "Desarquivar",
     "addNote": "O escopo é lista fechada porque o primeiro segmento decide o store e a retenção: session = 4h, journey = 30d. Digitar um escopo novo decidiria retenção de PII por acidente."
+  },
+  "provenance": {
+    "title": "Escopo em vigor",
+    "writesToTenant": "As edições desta tela são gravadas como override do tenant “{{tenant}}”, nunca como default da plataforma.",
+    "noneShadowed": "Nenhuma chave tem override ainda — todo valor exibido vem do default da plataforma. A primeira gravação numa chave cria o override, e a partir daí as atualizações da plataforma naquela chave deixam de alcançar este tenant.",
+    "shadowedIntro": "Estas chaves já têm override do tenant, então atualizações da plataforma nelas não alcançam mais este tenant:",
+    "diverges": "difere do default da plataforma",
+    "identical": "idêntica ao default da plataforma (o override não acrescenta nada e só bloqueia atualizações futuras)",
+    "unavailable": "Não foi possível determinar qual escopo está em vigor ({{err}}). Salvar continua funcionando, mas esta tela não sabe dizer se a sua edição alcança o default da plataforma ou apenas este tenant."
   }
 }
