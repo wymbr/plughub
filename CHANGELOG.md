@@ -1,5 +1,76 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — CNS-19: a chave de `delegate.context` que é vocabulário de PLATAFORMA passa a ser gravada no nome canônico
+
+**Sintoma reportado:** no Console, item de fila **pull** — aprovação **e** wrap-up — abria no chat
+com *"Awaiting messages…"* em vez de renderizar o formulário. Fila **push** funcionava.
+
+**Não era rebuild.** A imagem do `platform-ui` é de 2026-09-03 01:11 e o último commit que tocou o
+pacote é de 2026-09-02 22:17.
+
+### A causa
+
+O Console decide *"isto é tarefa de formulário?"* por
+`!!snap["core.workflow.dialog_form_id"] && !!resumeToken`. Na sessão medida ao vivo havia
+`session.dialog_form_id` e `core.workflow.delegate_resume_token` — **a canônica do form id,
+ausente**. Predicado falso ⇒ cai no chat.
+
+O commit **`d4bdf9c0` (CNS-11, "os 35 nomes do core migram para `core.*`")** migrou os **leitores**:
+Console, `skill_dialog_runner_v1`, `skill_survey_runner_v1`, `WebhookSegmentDetail` e o step de
+desarme do `skill_limite_processo_v1`. O **produtor** não foi junto: o laço de
+`delegate.context`/`collect.context` no channel-gateway prefixa **toda** chave com `session.`, e
+isso é do commit original do delegate — não da CNS.
+
+**Por que ficou invisível.** O caminho de *collect-engage* escreve `core.workflow.dialog_form_id`
+direto (`webhook.py:2237`), então metade continuou funcionando. E o funil **carimba** a canônica no
+`atributo` sem renomear a chave — o registro traz `"canonica": "core.workflow.dialog_form_id"` e a
+chave continua `session.dialog_form_id`. O dado parece certo numa inspeção e é ilegível para quem lê
+pelo nome novo, porque `resolveCtxRef` (engine) e o snapshot do Console são leitura direta de chave:
+**ninguém resolve alias na leitura**.
+
+### O conserto, e o escopo dele
+
+`store_key_for_context_entry` compõe `session.<k>` como sempre — **salvo** quando o mapa declara
+aquele nome como alias de uma canônica do **`core.*`**; aí grava na canônica, e **diz no log** que
+renomeou. Um sítio (usado pelos dois laços), e conserta todos os leitores de uma vez — inclusive o
+step de desarme.
+
+⚠️ **Só `core.*`, e isso é escopo, não timidez.** São **56** aliases apontando para `core.*` e
+outros ~40 apontando para canônicas `session.*` (`session.cpf` → `session.cliente.cpf`). Renomear
+estes últimos é a **fase V4** do `adr-contextstore-allowlist` — inversão declarada **não
+reversível**, com decisão e medição próprias. Ela não pode chegar de carona num conserto de
+regressão.
+
+Efeito medido no pacote de aprovação: das 11 chaves do `delegate.context`, **uma** muda de destino —
+`dialog_form_id`. É exatamente o defeito, e nada além dele.
+
+### Verificação
+
+`test_context_key_canonical.py`, 5 testes em pares: renomear (`dialog_form_id`, e também quando o
+chamador já escreveu `session.dialog_form_id`) × **não** renomear (`cpf` e `decisions`, cujas
+canônicas são de sessão; e chave desconhecida, que é dado de tela do chamador). Sem o segundo par,
+um produtor que mandasse tudo para a canônica passaria no primeiro caso.
+
+Ao vivo, no smoke de aprovação: o log do gateway registra
+*"'session.dialog_form_id' e alias declarado de 'core.workflow.dialog_form_id' — gravando na
+canonica"*, e o smoke segue **18 ✅ / 0 ❌**. Suíte do channel-gateway: **724 verdes**.
+
+**O wrap-up entra pelo mesmo conserto:** `skill_wrapup_detached_v1` também é um `delegate` com
+`dialog_form_id` no context — o que casa com o relato de que aprovação e wrap-up quebraram juntas.
+
+### Registrado, não consertado — CNS-20
+
+**(a) A asserção 7b do smoke era vazia.** Ela lê `core.workflow.dialog_form_id` para provar o
+desarme; como o produtor escrevia o alias, aquele nome **nunca existia** e o teste passava por
+ausência. O defeito que ela existe para pegar — o item de parking se passar por aprovação — estava
+invisível. Com a CNS-19 o nome passa a existir, mas a asserção continua **sem controle positivo**:
+precisa provar que o pacote esteve ARMADO antes de provar que foi limpo.
+
+**(b) Suspeita a medir, não conclusão:** o `limpar_form_do_pacote` roda na sessão do PROCESSO,
+enquanto o pacote que o Console lê vive na sessão FILHA do `delegate`. Se o filho não refletir a
+limpeza, o desarme não desarma. Fica para medição — mudar asserção por suposição é pior que
+deixá-la marcada.
+
 ## 2026-09-03 — NIV-04: o roteiro sai do YAML — endereçamento por nó (fatia A) e o fluxo piloto (fatia B)
 
 **A linha do ledger media a população errada, e a medição mudou o plano.** Ela dizia *"os `notify`

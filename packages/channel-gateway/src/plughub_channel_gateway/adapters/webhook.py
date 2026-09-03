@@ -44,8 +44,9 @@ import asyncio
 import json
 import logging
 
+from plughub_contextstore import resolve_context_tag
 from plughub_contextstore.writer import write_context_tags
-from plughub_contextstore.loader import get_masking_catalog
+from plughub_contextstore.loader import get_context_map, get_masking_catalog
 from plughub_contextstore.masking import (
     apply_masking_type_to_value, resolve_mask_for_audience,
 )
@@ -71,6 +72,57 @@ from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
 
 logger = logging.getLogger("plughub.channel-gateway.webhook")
+
+
+async def store_key_for_context_entry(tenant_id: str, key: str) -> str:
+    """Chave de armazenamento de UMA entrada de `delegate.context`/`collect.context`.
+
+    Regra: compõe `session.<k>` como sempre — **salvo** quando o mapa declara que
+    aquele nome é ALIAS de uma canônica do **`core.*`**. Aí grava na canônica.
+
+    ── POR QUE (CNS-19, medido 2026-09-03) ─────────────────────────────────────
+    O laço original prefixava TUDO com `session.`, e isso é certo para vocabulário
+    do TENANT. Mas a CNS-11 moveu 56 nomes de plataforma para `core.*` e migrou os
+    LEITORES — o Console (`isFormFillSnapshot` lê `core.workflow.dialog_form_id`),
+    o `skill_dialog_runner_v1`, o `skill_survey_runner_v1` e o step de desarme do
+    `skill_limite_processo_v1`. **Este produtor não foi migrado junto**, e o
+    resultado é uma tarefa de fila PULL que o Console não reconhece: aprovação e
+    wrap-up abrem no chat, com "Awaiting messages…", em vez de renderizar o form.
+
+    Ficou invisível porque o caminho de *collect-engage* escreve a canônica direto
+    (o `pending["form_id"]`), então metade continuou funcionando; e porque o funil
+    CARIMBA a canônica no `atributo` sem renomear a chave — o dado parece certo
+    numa inspeção e é ilegível para quem lê pelo nome novo.
+
+    ⚠️ **Só `core.*`, e isso é escopo, não timidez.** Renomear também os aliases
+    cuja canônica é `session.*` (`session.cpf` → `session.cliente.cpf`, e outros 40)
+    é a **fase V4** do `adr-contextstore-allowlist` — inversão declarada como NÃO
+    reversível, com decisão e medição próprias. O que esta função conserta é só a
+    metade que a CNS-11 deixou pela metade: nome de PLATAFORMA, que código de
+    plataforma lê pela canônica.
+
+    ⚠️ **A renomeação é NOMEADA no log.** Alias que vira canônica em silêncio é a
+    mesma família do defeito que ela conserta.
+    """
+    store_key = key if key.startswith("session.") else f"session.{key}"
+    try:
+        index, _fallback = await get_context_map(tenant_id, None)
+    except Exception as exc:  # noqa: BLE001 — sem mapa, o comportamento antigo vale
+        logger.warning(
+            "ctx: nao consegui carregar o mapa para normalizar '%s' (%s: %s) — "
+            "gravando como '%s'. Se for nome de plataforma, o leitor nao vai achar",
+            key, type(exc).__name__, exc, store_key,
+        )
+        return store_key
+
+    r = resolve_context_tag(store_key, index)
+    if r.origin == "alias" and r.canonical.startswith("core."):
+        logger.info(
+            "ctx: '%s' e alias declarado de '%s' (canonica de plataforma) — gravando "
+            "na canonica, que e onde o leitor procura (CNS-19)", store_key, r.canonical,
+        )
+        return r.canonical
+    return store_key
 
 # A5.4 — masking net-pass de PII em valores de edição de aprovação (defesa em
 # profundidade; o mecanismo primário é o `masked` field-level do DialogForm, que
@@ -1675,10 +1727,10 @@ class WebhookAdapter(ChannelAdapter):
         # Journey T4: rótulo da aresta — este filho existe porque um workflow delegou I/O.
         ctx_writes["core.contact.spawn_reason"] = "delegate"
 
-        # Write caller-provided context entries with session. prefix
+        # Write caller-provided context entries with session. prefix — salvo nome de
+        # PLATAFORMA, que vai para a canonica `core.*` (CNS-19; ver o helper).
         for key, value in context.items():
-            # Avoid double-prefix if caller already used "session." prefix
-            store_key = key if key.startswith("session.") else f"session.{key}"
+            store_key = await store_key_for_context_entry(tenant_id, key)
             ctx_writes[store_key] = str(value)
 
         ttl_s = int(timeout_hours * 3600) + 3600  # +1h buffer
@@ -2761,9 +2813,10 @@ class WebhookAdapter(ChannelAdapter):
         except Exception as _e:
             logger.warning("delegate_conference: could not write resume_token: %s", _e)
 
-        # Write context entries so specialist reads @ctx.session.* correctly
+        # Write context entries so the specialist reads @ctx.session.* correctly —
+        # salvo nome de PLATAFORMA, que vai para a canonica `core.*` (CNS-19).
         for key, value in context.items():
-            store_key = key if key.startswith("session.") else f"session.{key}"
+            store_key = await store_key_for_context_entry(tenant_id, key)
             ctx_writes[store_key] = str(value)
 
         # Write Session A-new's delegate resume_token so the specialist can
