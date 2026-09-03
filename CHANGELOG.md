@@ -1,5 +1,34 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — CNS-22 (mecanismo): gate do censo de artefato PUBLICADO lendo alias
+
+Fecha a metade que faltava do episódio: **nada reprovava um artefato publicado que lê um alias
+cuja canônica é `core.*`**. Sem isso, a próxima renomeação repete os três sintomas.
+
+`infra/test/gate_published_alias_census.sh` consulta os **serviços**, não o working tree — e essa é
+a razão de existir: os dois artefatos que a CNS-11 não alcançou (**snapshot do slot `current`** e
+**DialogForm publicado**) vivem no agent-registry e no dialog-api, e `grep` no repositório não vê
+nenhum dos dois. Foi por isso que a migração pôde ser declarada completa com dois terços do parque
+para trás.
+
+**Quatro ramos:** **A** snapshot novo lendo alias · **B** form publicado novo lendo alias ·
+**C** linha da tabela de dívida que já não se aplica · **D** controle positivo (o censo tem de
+ALCANÇAR os artefatos — sem ele, *"zero achados"* e *"não li nada"* são o mesmo número).
+
+**A tabela de dívida existe para o gate nascer VERDE.** Gate que nasce vermelho ensina todo mundo
+a ignorá-lo. Ele guarda o que for NOVO; os quatro pools remanescentes estão declarados, e o ramo C
+garante que a tabela **encolha** — dívida quitada que continua listada esconde a próxima.
+
+**Falseabilidade — os quatro ramos, e o B ponta a ponta.** Para o B foi publicado um DialogForm
+isca de verdade, com `@ctx.session.customer_participant_id`: o gate ficou vermelho nomeando-o, e a
+isca foi removida. A e C por mutação da tabela (nos dois sentidos), D apontando o registry para uma
+porta morta → INCONCLUSIVO. Medição do verde: **30 snapshots e 11 forms** alcançados.
+
+⚠️ **Limite declarado no cabeçalho:** form ARQUIVADO sai do catálogo e do censo. O ponto cego é
+limitado de propósito — arquivado não é vinculável a contato novo, então um alias ali não pode
+estrear um defeito; alcança só contato em andamento e história encerrada. Foi medido ao falsear o
+ramo B.
+
 ## 2026-09-03 — CNS-21 (adendo): a defasagem tinha TRÊS superfícies, e a do NPS era a terceira
 
 O diagnóstico acima achou o snapshot de slot. Re-promover `nps_ia` **não** consertou o NPS — e o
