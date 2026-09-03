@@ -27,9 +27,23 @@ logger = logging.getLogger("plughub.channel-gateway.capability")
 # campo de senha marcando um booleano — e um campo configurável convida exatamente
 # isso: alguém marca `true` para whatsapp e a plataforma acredita.
 #
-# Por isso a casa é esta, em código, chaveada pelo vocabulário do
+# Por isso a casa é em CÓDIGO, chaveada pelo vocabulário do
 # `ChannelCapabilitySchema` (@plughub/schemas/src/skill.ts) — que é o vocabulário
 # que os consumidores realmente usam (`collect.requires[]`).
+#
+# ⚠️ **MUDOU NA NIV-03 (2026-09-03): esta tabela é o GÊMEO, não o canônico.**
+# O canônico é `@plughub/schemas/src/channel-capabilities.ts`. Não é reversão da
+# NIV-01 — é o conserto do que ela não tinha como ver: *a casa única precisa ser
+# LEGÍVEL por toda linguagem que decide sobre capacidade*, e dois decisores que
+# apareceram na NIV-03 são TypeScript — o `notification_send` do mcp-server (único
+# ponto por onde um menu mascarado sai para o canal do cliente) e, na metade de
+# deploy, o `set-next`/`promote` do agent-registry sobre `Pool.channel_types`.
+#
+# O gêmeo continua existindo porque o channel-gateway é Python e não importa TS.
+# A paridade é IMPOSTA pelo ramo F de
+# `infra/test/probe_channel_capability_single_house.sh` — mesmo arranjo de
+# `py-contextstore`: um canônico, um gêmeo, e um gate que CONTA a duplicação em
+# vez de deixá-la envelhecer calada. **Editar aqui sem editar lá reprova.**
 #
 # ⚠️ Havia uma SEGUNDA casa, e ela nem falava o mesmo vocabulário:
 # `ChannelCapabilitiesSchema` (plural, `channel-events.ts`) declarava os mesmos fatos

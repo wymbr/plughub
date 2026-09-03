@@ -1,5 +1,115 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — NIV-03: valor mascarado deixa de sair por canal que não sabe mascarar (e fecha a MSK-01)
+
+**O que estava aberto.** MSK-01, medida no mesmo dia: o pool `limite_ia` declara
+`[webchat, whatsapp]` e roda um fluxo que mascara CVV. No WhatsApp o campo virava **formulário
+comum** — sem fallback, sem aviso, sem recusa. O `supports_masked_input: false` que a tabela
+antiga atribuía a whatsapp/sms/email era **comentário sem leitor** (removido na NIV-01).
+Exposição real; dano medido ~zero (2 sessões WhatsApp na instalação inteira, sem credencial de
+provedor). Não era incidente: era porta aberta.
+
+### As duas metades, e por que nenhuma substitui a outra
+
+**RUNTIME — `notification_send` (mcp-server).** É o **único** ponto por onde um menu sai para o
+canal do cliente. Menu com `masked_fields` em canal sem `masked_input` é recusado ali, e a
+escolha do sítio carrega três propriedades que nenhuma alternativa tinha:
+
+* é **antes do Kafka** — nada mascarado chega a ser publicado;
+* a recusa vira `isError`, e o `menu` step **já** converte isso em `on_failure` pelo `try/catch`
+  que existe em volta da chamada. Sem protocolo novo, e o fluxo falha **na hora** em vez de
+  esperar `timeout_s` inteiro;
+* não cria um terceiro escritor de `menu:result:{sid}` — chave cuja composição já produziu um
+  bug silencioso documentado (o agente de fila surdo ao cliente).
+
+`agents_only` fica **fora de propósito**: aquele menu vai ao Agent Assist, não ao canal do
+cliente. Guardá-lo recusaria wrap-up e NPS interno sem ganho nenhum.
+
+**DEPLOY — `set-next` / `promote` (agent-registry).** Pega o pool em que **nenhum** canal sabe
+mascarar: ali o deploy não funciona em contato algum, e o runtime só descobriria isso com
+cliente do outro lado. Rollback **isento**, pela mesma razão que o `deployViolation` de
+capacidade já era: operação de emergência nunca bloqueia.
+
+### Bloquear × avisar não é gradação de rigor — é natureza da pergunta
+
+Pool com **zero** canais capazes é estático ⇒ **422**. Pool **parcialmente** capaz depende de por
+onde o contato chega, o que não é decidível no deploy ⇒ **aviso**, no corpo da resposta **e** no
+log do serviço. Recusar o parcial proibiria a configuração legítima que `auth_ia` e
+`auth_form_ia` têm hoje (webchat + whatsapp, coleta sensível só no webchat); calar seria a MSK-01
+outra vez, que é literalmente esta situação. O aviso vai às duas casas porque a UI pode não
+renderizar o corpo e o log pode não ser lido — dependendo de uma só, o fato some.
+
+`channel_types` **vazio não é zero**: é omissão. Bloquear ali converteria "ninguém declarou" em
+recusa, e o parque tem pools assim.
+
+### O pré-requisito que a fatia descobriu — e por que ele REFINA a NIV-01
+
+A NIV-01 fechou duas casas em uma e escolheu a de Python, com o argumento (que continua de pé) de
+que capacidade é fato do **protocolo**, não config de tenant. O que ela não tinha como ver é que
+**a casa única precisa ser LEGÍVEL por toda linguagem que decide sobre capacidade** — e os dois
+decisores que a NIV-03 trouxe são TypeScript.
+
+Então o mapa virou canônico em **`@plughub/schemas/src/channel-capabilities.ts`**, e
+`channel_capability_registry.py` passou a **gêmeo declarado**, com paridade imposta pelo **ramo F**
+de `probe_channel_capability_single_house.sh`. É o arranjo do `py-contextstore`: um canônico, um
+gêmeo, e um gate que **conta** a duplicação em vez de deixá-la envelhecer calada. As alternativas
+foram pesadas: copiar o dicionário para TS **sem** gate é o defeito que a NIV-01 removeu (e seria
+pior que o original, que ao menos tinha vocabulários distintos, o que denunciava a cópia); um
+endpoint HTTP no channel-gateway poria dependência de rede dentro de um caminho quente e obrigaria
+a decidir a política de indisponibilidade uma vez por consumidor.
+
+### Isto é RECUSA, não fallback — e a diferença está escrita na mensagem
+
+`MaskedFallbackPolicySchema` prevê `message` e `link`. **Nenhum dos dois existe**: medido,
+`GET /v1/config/masking` devolve 404 — não há namespace, logo não há política a consultar. Sem
+política, o restritivo é o único desfecho honesto, e a mensagem de recusa **diz isso** em vez de
+fingir que consultou. A distinção importa: *decidimos recusar* e *não sabemos o que fazer* são
+fatos diferentes, e só o segundo é dívida. Virou **NIV-10**, `adiado` com gatilho.
+
+### O que o deploy NÃO enxerga, por decisão de escopo
+
+Máscara declarada em `DialogForm` referenciado por id — o caso do `dialog_limite_solicitacao`
+(`cvv`). Resolver aquilo no deploy exigiria o agent-registry falar com o dialog-api dentro do
+caminho de promoção. **Não fica descoberto:** a guarda de runtime pega, porque lá o menu já chega
+com `masked_fields` preenchido, venha de onde vier. No deploy pega-se o que é estático.
+
+### Verificação
+
+* `mcp-server-plughub`: **6 testes** em pares — recusar × entregar · mascarado × não mascarado ·
+  cliente × `agents_only`. E a asserção que mais importa **não é o `isError`**: é que nada foi
+  publicado em `conversations.outbound`. Recusar e publicar ao mesmo tempo seria o pior dos dois
+  mundos.
+* `agent-registry`: **10 testes** — bloquear × avisar × deixar em paz, e o par
+  `channel_types` declarado × ausente.
+* Gate `infra/test/probe_masked_channel_gate.sh`, 5 ramos: **A/B** as suítes rodadas contra a
+  **IMAGEM** (imagem sem o arquivo ⇒ INCONCLUSIVO, nunca verde por ausência) · **C** a guarda
+  presente e **antes** do publish · **D** julgamento no set-next e no promote, e **nunca** no
+  rollback · **E** `masked_fallback` ganhar leitor sem a guarda consultá-lo.
+* **8 mutações no produto, 8 vermelhos**, cada um no teste que o nomeia; mais 4 contra os ramos
+  C/D/E e o F da paridade.
+* Suítes na imagem: `mcp-server-plughub` **259**, `agent-registry` **47**, `skill-flow-engine`
+  **167**, `schemas` **187** — **660 verdes**, nenhum vermelho.
+
+### Duas armadilhas de arnês, ambas do mesmo tipo
+
+**A pré-condição do gate respondia outra pergunta.** `docker run IMG test -f <caminho absoluto>`
+devolvia 1 para um arquivo que o `ls` do MESMO container mostra — o entrypoint da imagem node
+reescreve o argv conforme o primeiro argumento. O gate acusou **INCONCLUSIVO**, que é o desenho
+funcionando: falhou para o lado seguro em vez de inventar um verde. Hoje a checagem vai por
+`sh -c`.
+
+**E o veredicto da bateria de mutação precisava dizer QUAL teste reprovou.** Com `tail -n 30` o
+sumário sobrevivia e os nomes dos testes eram cortados, então "reprovou" e "reprovou pelo motivo
+certo" ficavam indistinguíveis — a mesma família do achado da D14.1, um instrumento honesto
+medindo a proposição vizinha.
+
+### Efeito medido no parque
+
+Nenhum deploy é recusado hoje: os dois pools com `masked` no snapshot (`auth_ia`,
+`auth_form_ia`) declaram `webchat`, então caem no **aviso**, não no bloqueio. O que mudou de
+verdade é o runtime: contato que chegar por WhatsApp a esses pools passa a receber `on_failure`
+em vez de um campo de senha em claro.
+
 ## 2026-09-03 — NIV-02: a exigência de canal do `collect` passa a ser DERIVADA, e a eleição que roda passa a consultá-la
 
 **A tarefa pedia meia coisa, e a medição mostrou qual metade faltava de verdade.** A ADR de

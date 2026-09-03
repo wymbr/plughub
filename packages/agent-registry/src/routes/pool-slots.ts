@@ -20,6 +20,7 @@ import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma } from "../db"
 import { publishRegistryChanged } from "../infra/kafka"
 import { deployViolation, slotDeclared } from "../lib/capacity"
+import { judgeMaskedDeploy } from "../lib/masked-deploy"
 
 export const poolSlotsRouter = Router({ mergeParams: true })
 
@@ -160,6 +161,21 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
       })
     }
 
+    // NIV-03 (deploy) — skill que MASCARA em pool sem canal capaz. Mesma forma do
+    // `deployViolation` acima: feedback cedo aqui, re-checado no promote, porque
+    // `Pool.channel_types` pode mudar entre a declaração e a promoção.
+    const vereditoNext = judgeMaskedDeploy(
+      snapshot,
+      (pool as { channel_types?: unknown }).channel_types,
+      { poolId, skillId: skill_id },
+    )
+    if (vereditoNext.kind === "block") {
+      return res.status(422).json({ error: vereditoNext.error, message: vereditoNext.message })
+    }
+    if (vereditoNext.kind === "warn") {
+      console.warn(`[pool-slots:set-next] ${vereditoNext.warning}`)
+    }
+
     const row = await (prisma as any).poolSkillSlot.upsert({
       where:  { pool_id_tenant_id_slot: { pool_id: poolId, tenant_id: tenantId, slot: "next" } },
       update: {
@@ -180,7 +196,13 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
       },
     }) as Record<string, unknown>
 
-    return res.json(_formatSlot(row, "next"))
+    // O aviso viaja no CORPO e no log. Duas casas de propósito: a UI pode não
+    // renderizar o corpo, e o log pode não ser lido — se depender de uma só, o
+    // fato some, que é como a MSK-01 sobreviveu.
+    return res.json({
+      ..._formatSlot(row, "next"),
+      ...(vereditoNext.kind === "warn" ? { warnings: [vereditoNext.warning] } : {}),
+    })
   } catch (err) {
     return next(err)
   }
@@ -219,6 +241,23 @@ poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextF
       tenantId, poolId, slotDeclared(nextSlot["config_json"]),
     )
     if (violation) return res.status(422).json(violation)
+
+    // NIV-03 (deploy) — re-julga masked × canais. NÃO é redundante com o set-next:
+    // `Pool.channel_types` pode ter perdido o canal capaz entre uma coisa e outra, e
+    // o promote é o instante em que o snapshot passa a atender contato de verdade.
+    // O ROLLBACK fica isento pelo mesmo motivo que o de capacidade: operação de
+    // emergência nunca bloqueia.
+    const vereditoProm = judgeMaskedDeploy(
+      nextSlot["yaml_snapshot"],
+      (pool as { channel_types?: unknown }).channel_types,
+      { poolId, skillId: (nextSlot["skill_id"] as string) || "(sem skill)" },
+    )
+    if (vereditoProm.kind === "block") {
+      return res.status(422).json({ error: vereditoProm.error, message: vereditoProm.message })
+    }
+    if (vereditoProm.kind === "warn") {
+      console.warn(`[pool-slots:promote] ${vereditoProm.warning}`)
+    }
 
     const now = new Date()
 

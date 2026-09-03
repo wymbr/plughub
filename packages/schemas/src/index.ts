@@ -203,6 +203,14 @@ export type {
   GatewayHeartbeat,
 } from "./channel-events"
 
+// ── NIV-03: mapa canal -> capacidades (CANONICO; gemeo Python sob gate) ──────
+export {
+  CHANNEL_CAPABILITIES,
+  MASKED_INPUT,
+  channelSatisfies,
+  maskingChannels,
+} from "./channel-capabilities"
+
 // ── v2: Routing Engine ───────────────────────
 export {
   AgentStatusSchema,

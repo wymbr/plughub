@@ -155,11 +155,20 @@ a tradução já é feita por primitivos.
   collect renderiza) **e** a eleição VIVA passou a consultá-la, inclusive no ramo do
   `channel:` fixo — sem isso o portão seria desligável escrevendo uma linha no YAML. Gate:
   `infra/test/probe_collect_masked_requirement.sh`.
-- **F3 — recusa em DOIS momentos.** No **deploy**: skill com campo `masked` promovida a pool
-  sem nenhum canal `masked_input` é decidível estaticamente, e pega antes de haver cliente do
-  outro lado. No **runtime**: conjunto elegível vazio → recusar alto (`masked_fallback: decline`
-  já nomeia o desfecho). Hoje `select_channel` devolvendo `None` gera `logger.warning` e
-  `return` — o collect simplesmente não acontece, o que não é entrega nem recusa.
+- ~~**F3 — recusa em DOIS momentos.**~~ **Entregue 2026-09-03** (NIV-03), e a divisão
+  bloquear × avisar não é gradação de rigor: é natureza da pergunta. No **runtime**, o
+  `notification_send` do mcp-server não publica menu mascarado em canal sem `masked_input`
+  — recusa ANTES do Kafka (nada mascarado viaja) e devolve `isError`, que o `menu` step já
+  converte em `on_failure`, sem protocolo novo. No **deploy**, `set-next`/`promote`
+  recusam (422) skill que mascara em pool sem NENHUM canal capaz — estático, decidível sem
+  cliente do outro lado — e **avisam** no pool parcialmente capaz, porque ali o desfecho
+  depende de por onde o contato chega; recusar proibiria a configuração legítima que
+  `auth_ia`/`auth_form_ia` têm hoje. Rollback isento (emergência nunca bloqueia).
+  Fecha a **MSK-01**. Pré-requisito que a fatia descobriu: o mapa canal→capacidade virou
+  canônico em `@plughub/schemas`, com o gêmeo Python sob gate de paridade — **refina a F1,
+  não a reverte**: a casa única precisa ser LEGÍVEL por toda linguagem que decide, e os
+  dois decisores novos são TypeScript. Gate:
+  `infra/test/probe_masked_channel_gate.sh`.
 - **F4 — os `notify` cravados migram para `DialogForm`**, caso a caso, quando o fluxo for
   tocado. Não é varredura.
 

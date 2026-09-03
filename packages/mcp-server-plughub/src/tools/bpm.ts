@@ -15,6 +15,7 @@ import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { resolveAgentTypeForSession } from "../lib/routing-ref"
+import { channelSatisfies, MASKED_INPUT, maskingChannels } from "@plughub/schemas"
 
 /**
  * Generates a session ID that satisfies SessionIdSchema:
@@ -487,6 +488,55 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       const hasMenu    = parsed.menu && (parsed.menu.interaction !== "text" || hasMaskedText)
       const agentsOnly    = parsed.visibility === "agents_only"
       const isArrayVis    = Array.isArray(parsed.visibility)
+
+      // ── NIV-03 (runtime) — um menu MASCARADO nunca sai para canal que não
+      //    sabe mascarar. Fecha a MSK-01, que era exatamente isto: o pool
+      //    `limite_ia` declara `[webchat, whatsapp]`, o fluxo mascara CVV, e no
+      //    WhatsApp o campo virava formulário comum — sem fallback, sem aviso,
+      //    sem recusa. O `supports_masked_input: false` que a tabela antiga
+      //    atribuía a whatsapp/sms/email era comentário sem leitor.
+      //
+      //    **Por que AQUI e não no channel-gateway.** Este é o único ponto por
+      //    onde um menu sai para o canal do cliente, e é ANTES do Kafka: nada
+      //    mascarado chega a ser publicado. Além disso a recusa vira `isError`,
+      //    que o `menu` step já converte em `on_failure` (o `try/catch` em volta
+      //    do `notification_send`) — o fluxo segue o caminho de falha na hora, em
+      //    vez de esperar `timeout_s` inteiro. Recusar no gateway obrigaria a
+      //    inventar um sinal novo em `menu:result:{sid}`, chave cuja composição já
+      //    produziu um bug silencioso documentado (o agente de fila surdo).
+      //
+      //    **`agents_only` fica FORA de propósito.** Aquele menu não vai ao
+      //    canal do cliente — vai ao Agent Assist, que é superfície de operador.
+      //    Guardá-lo recusaria wrap-up e NPS interno sem nenhum ganho.
+      //
+      //    ⚠️ **Isto é RECUSA, não fallback.** `MaskedFallbackPolicySchema` prevê
+      //    `message` e `link`, e nenhum dos dois existe: não há namespace
+      //    `masking` no config-api (medido 2026-09-03 — `GET /v1/config/masking`
+      //    devolve 404), logo não há política a consultar. Sem política, o único
+      //    desfecho honesto é o restritivo. Quando a política ganhar casa, é ESTE
+      //    ponto que a lê — e o `decline` já é o comportamento atual.
+      const maskedIds = parsed.menu?.masked_fields ?? []
+      if (hasMenu && !agentsOnly && maskedIds.length > 0 &&
+          !channelSatisfies(channel, [MASKED_INPUT])) {
+        // Os IDs entram no log; os VALORES nunca existiram aqui (campo mascarado
+        // não trafega no payload de saída — só o nome do campo).
+        console.error(
+          `[notification_send] RECUSADO: menu mascarado em canal sem '${MASKED_INPUT}' — ` +
+          `session=${parsed.session_id} channel=${channel} campos=[${maskedIds.join(",")}] ` +
+          `instance=${parsed.instance_id ?? "-"}. Canais que sabem mascarar: ` +
+          `[${maskingChannels().join(",")}]. Sem política de fallback configurada ` +
+          `(namespace 'masking' do config-api não existe), a recusa é o desfecho. ` +
+          `Conserto: tirar '${channel}' do pool, ou não mascarar neste fluxo.`,
+        )
+        return {
+          isError: true,
+          content: [{
+            type: "text" as const,
+            text: `masked_input_unsupported: o canal '${channel}' não coleta valor ` +
+                  `mascarado (campos: ${maskedIds.join(", ")}). O menu NÃO foi enviado.`,
+          }],
+        }
+      }
 
       // Use instance_id as the author identifier when available.
       // instance_id is the agent's name (e.g. "agente_nps_v1-001"),

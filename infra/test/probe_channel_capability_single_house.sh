@@ -28,6 +28,12 @@
 #   C  uma SEGUNDA casa de capacidade reaparecer                              → VERMELHO
 #   D  canal elegível fora de `_CHANNEL_PRIORITY` (desempate por acidente)    → VERMELHO
 #   E  **`voice` ganhar `masked_input`**                                      → VERMELHO
+#   F  o gêmeo Python DIVERGIR do canônico em `@plughub/schemas`             → VERMELHO
+#      — desde a NIV-03 o canônico é `schemas/src/channel-capabilities.ts`, porque
+#        dois decisores de capacidade são TypeScript (`notification_send` e o
+#        `set-next`/`promote`). O gêmeo fica porque o gateway é Python. Duas cópias
+#        com gate é o arranjo do `py-contextstore`; duas cópias SEM gate foi o
+#        defeito que a NIV-01 removeu.
 #      — é a testemunha de segurança. São impedimentos EMPILHADOS, e as duas
 #        primeiras redações deste probe erraram a lista:
 #          (a) o canal não está provisionado (Arc 15) — resolve-se por DEPLOY;
@@ -129,6 +135,49 @@ while IFS='|' read -r st ramo msg; do
   [ -z "${st:-}" ] && continue
   if [ "$st" = "OK" ]; then ok "$ramo — $msg"; else bad "$ramo — $msg"; fi
 done <<< "$SAIDA"
+
+# ── F — o gêmeo Python bate com o canônico TS ────────────────────────────────
+SAIDA_F="$(cd "$RAIZ" && python3 - <<'PY'
+import ast, io, json, re
+
+PY_ = "packages/channel-gateway/src/plughub_channel_gateway/channel_capability_registry.py"
+TS_ = "packages/schemas/src/channel-capabilities.ts"
+
+# gemeo: por AST, para nao contar nome citado em comentario
+tab_py = None
+for no in ast.parse(io.open(PY_, encoding="utf-8").read()).body:
+    if (isinstance(no, ast.AnnAssign) and isinstance(no.target, ast.Name)
+            and no.target.id == "CHANNEL_CAPABILITIES"):
+        tab_py = {k.value: sorted(a.value for a in v.args[0].elts) if v.args else []
+                  for k, v in zip(no.value.keys, no.value.values)}
+
+# canonico: o corpo do objeto literal, por recorte + regex de linha
+ts = io.open(TS_, encoding="utf-8").read()
+m = re.search(r"CHANNEL_CAPABILITIES[^=]*=\s*\{(.*?)\n\}", ts, re.S)
+tab_ts = {}
+if m:
+    for linha in m.group(1).split("\n"):
+        mm = re.match(r'\s*([a-z_]+):\s*\[(.*?)\],', linha)
+        if mm:
+            tab_ts[mm.group(1)] = sorted(re.findall(r'"([a-z_]+)"', mm.group(2)))
+
+if tab_py is None or not tab_ts:
+    print("ERRO|F|nao consegui ler as duas tabelas (py=%s ts=%s)"
+          % (tab_py is not None, bool(tab_ts)))
+elif tab_py != tab_ts:
+    so_py = {k: v for k, v in tab_py.items() if tab_ts.get(k) != v}
+    so_ts = {k: v for k, v in tab_ts.items() if tab_py.get(k) != v}
+    print("ERRO|F|gemeo DIVERGE do canonico: python=%s typescript=%s"
+          % (json.dumps(so_py, sort_keys=True), json.dumps(so_ts, sort_keys=True)))
+else:
+    print("OK|F|gemeo Python identico ao canonico TS (%d canais)" % len(tab_ts))
+PY
+)"
+while IFS='|' read -r st ramo msg; do
+  [ -z "${st:-}" ] && continue
+  if [ "$st" = "OK" ]; then ok "$ramo — $msg"; else bad "$ramo — $msg"; fi
+done <<< "$SAIDA_F"
+[ -z "$SAIDA_F" ] && bad "F — RAMO AUSENTE: o censo de paridade nao chegou a julgar"
 
 # ── C — a segunda casa não voltou ────────────────────────────────────────────
 # Só linhas de CÓDIGO: os comentários citam os nomes antigos de propósito, para
