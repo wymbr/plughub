@@ -1,0 +1,99 @@
+{
+  "form_id": "dialog_limite_roteiro",
+  "name": "Aumento de limite — roteiro do fluxo de entrada",
+  "description": "O ROTEIRO do skill_limite_entrada_v1: as frases que o cliente lê, fora do YAML. Consumido por `render.by_node` — UMA carga (`form_get`) no início do fluxo e cada notify/menu referencia o seu nó. Não é um diálogo linear: os nós vivem em ramos diferentes do processo, e é por isso que o consumo é por NÓ, não pelo render single-turn. Os ids dos nós são os ids dos STEPS, para a correspondência ser auditável. Piloto da NIV-04 (ADR adr-agent-flow-single-authored-level § F4).",
+  "default_locale": "pt-BR",
+  "locales": [
+    "pt-BR"
+  ],
+  "tags": [
+    "limite",
+    "roteiro"
+  ],
+  "nodes": [
+    {
+      "id": "saudacao",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Olá! Posso te ajudar com o aumento de limite do seu cartão. Vou precisar te identificar primeiro."
+      }
+    },
+    {
+      "id": "coletar_contato",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Qual é o seu CPF? (só números, ex: 52998224725)"
+      }
+    },
+    {
+      "id": "oferecer_verificacao",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Alterações de limite exigem confirmar sua identidade. Posso enviar um código de verificação?"
+      }
+    },
+    {
+      "id": "avisar_transferencia_sac",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Sem problemas, vou te transferir para um atendente. Um instante..."
+      }
+    },
+    {
+      "id": "avisar_encerramento_verificacao",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Sem a confirmação de identidade não consigo prosseguir com o aumento de limite agora. Você pode tentar de novo quando quiser."
+      }
+    },
+    {
+      "id": "avisar_verificacao_falhou",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Não consegui confirmar o código. Vamos seguir com uma solicitação nova."
+      }
+    },
+    {
+      "id": "confirmar_consulta",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Perfeito. Sua solicitação segue em análise e você será avisado por aqui assim que houver resposta. 👍"
+      }
+    },
+    {
+      "id": "avisar_cancelamento",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "❌ Solicitação cancelada. Se mudar de ideia, é só pedir de novo por aqui."
+      }
+    },
+    {
+      "id": "avisar_erro_retomada",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Não consegui processar sua solicitação agora. Pode tentar novamente em alguns minutos?"
+      }
+    },
+    {
+      "id": "avisar_registro",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "✅ Pedido registrado! A análise leva até 1 dia útil.\\n\\nQuando quiser, volte aqui para consultar a situação — eu te reconheço pelo CPF e já trago o andamento."
+      }
+    },
+    {
+      "id": "avisar_indisponivel",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Não consegui registrar seu pedido agora. Pode tentar novamente em alguns minutos?"
+      }
+    },
+    {
+      "id": "avisar_timeout",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Sua sessão expirou por inatividade. É só entrar em contato de novo quando quiser."
+      }
+    }
+  ]
+}

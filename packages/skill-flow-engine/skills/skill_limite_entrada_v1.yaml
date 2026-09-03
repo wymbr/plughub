@@ -36,13 +36,46 @@ classification:
   type: orchestrator
   domain: credito
 
-entry: saudacao
+entry: carregar_roteiro
 
 steps:
+  # ══ Roteiro — CONTEÚDO, fora do fluxo (NIV-04) ═════════════════════════════
+  # As frases que o cliente lê vivem em `dialog_limite_roteiro`, editável em
+  # /config/dialog-forms sem deploy. UMA carga aqui; cada notify/menu referencia
+  # o seu nó por `render.by_node.<id do step>`.
+  #
+  # ⚠️ Por que o consumo é por NÓ e não pelo `render` normal: o `render` é
+  # single-turn (statements viram satélites de UMA pergunta), e este roteiro não é
+  # um diálogo linear — os avisos vivem em ramos diferentes do processo.
+  #
+  # ⚠️ Três frases FICAM no YAML de propósito: `menu_continuidade`,
+  # `confirmar_recebimento` e o prompt de `coletar_dados` interpolam
+  # `$.pipeline_state.*`, e o `interpolate` do engine é de PASSE ÚNICO — texto
+  # vindo da forma com `{{…}}` chegaria ao cliente com as chaves literais.
+  - id: carregar_roteiro
+    type: invoke
+    tool: form_get
+    input:
+      form_id:   "dialog_limite_roteiro"
+      tenant_id: "$.tenant_id"
+    output_as: roteiro
+    on_success: saudacao
+    on_failure: falha_roteiro
+
+  # ⚠️ A ÚNICA frase que continua cravada, e ela tem de continuar: é o caminho de
+  # degradação de quem carrega o roteiro. Buscá-la na mesma forma que acabou de
+  # falhar deixaria o fluxo MUDO — e mensagem vazia é um valor plausível, que
+  # ninguém nota.
+  - id: falha_roteiro
+    type: notify
+    message: "Estamos com uma instabilidade e não consigo te atender agora. Tente de novo em alguns minutos."
+    on_success: finalizar_erro
+    on_failure: finalizar_erro
+
   # ══ Abertura e identificação ═══════════════════════════════════════════════
   - id: saudacao
     type: notify
-    message: "Olá! Posso te ajudar com o aumento de limite do seu cartão. Vou precisar te identificar primeiro."
+    message: "{{$.pipeline_state.roteiro.render.by_node.saudacao}}"
     on_success: coletar_contato
     on_failure: coletar_contato
 
@@ -52,7 +85,7 @@ steps:
   # genérico de propósito: é "o valor que identifica", não mais "o telefone").
   - id: coletar_contato
     type: menu
-    prompt: "Qual é o seu CPF? (só números, ex: 52998224725)"
+    prompt: "{{$.pipeline_state.roteiro.render.by_node.coletar_contato}}"
     interaction: text
     output_as: contato
     timeout_s: 180
@@ -117,7 +150,7 @@ steps:
 
   - id: oferecer_verificacao
     type: menu
-    prompt: "Alterações de limite exigem confirmar sua identidade. Posso enviar um código de verificação?"
+    prompt: "{{$.pipeline_state.roteiro.render.by_node.oferecer_verificacao}}"
     interaction: button
     options:
       - id: sim
@@ -154,7 +187,7 @@ steps:
 
   - id: avisar_transferencia_sac
     type: notify
-    message: "Sem problemas, vou te transferir para um atendente. Um instante..."
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_transferencia_sac}}"
     on_success: escalar_sac
     on_failure: escalar_sac
 
@@ -170,7 +203,7 @@ steps:
 
   - id: avisar_encerramento_verificacao
     type: notify
-    message: "Sem a confirmação de identidade não consigo prosseguir com o aumento de limite agora. Você pode tentar de novo quando quiser."
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_encerramento_verificacao}}"
     on_success: finalizar
     on_failure: finalizar
 
@@ -222,7 +255,7 @@ steps:
 
   - id: avisar_verificacao_falhou
     type: notify
-    message: "Não consegui confirmar o código. Vamos seguir com uma solicitação nova."
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_verificacao_falhou}}"
     on_success: iniciar_solicitacao
     on_failure: iniciar_solicitacao
 
@@ -353,7 +386,7 @@ steps:
   # não usado — é o que torna o acesso 2 uma leitura, não uma ação.
   - id: confirmar_consulta
     type: notify
-    message: "Perfeito. Sua solicitação segue em análise e você será avisado por aqui assim que houver resposta. 👍"
+    message: "{{$.pipeline_state.roteiro.render.by_node.confirmar_consulta}}"
     on_success: finalizar
     on_failure: finalizar
 
@@ -375,13 +408,13 @@ steps:
 
   - id: avisar_cancelamento
     type: notify
-    message: "❌ Solicitação cancelada. Se mudar de ideia, é só pedir de novo por aqui."
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_cancelamento}}"
     on_success: finalizar
     on_failure: finalizar
 
   - id: avisar_erro_retomada
     type: notify
-    message: "Não consegui processar sua solicitação agora. Pode tentar novamente em alguns minutos?"
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_erro_retomada}}"
     on_success: finalizar
     on_failure: finalizar
 
@@ -478,13 +511,13 @@ steps:
 
   - id: avisar_registro
     type: notify
-    message: "✅ Pedido registrado! A análise leva até 1 dia útil.\n\nQuando quiser, volte aqui para consultar a situação — eu te reconheço pelo CPF e já trago o andamento."
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_registro}}"
     on_success: finalizar
     on_failure: finalizar
 
   - id: avisar_indisponivel
     type: notify
-    message: "Não consegui registrar seu pedido agora. Pode tentar novamente em alguns minutos?"
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_indisponivel}}"
     on_success: finalizar_erro
     on_failure: finalizar_erro
 
@@ -500,7 +533,7 @@ steps:
 
   - id: avisar_timeout
     type: notify
-    message: "Sua sessão expirou por inatividade. É só entrar em contato de novo quando quiser."
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_timeout}}"
     on_success: finalizar_timeout
     on_failure: finalizar_timeout
 

@@ -76,6 +76,27 @@ interface DialogRender {
   fields:          RenderField[]
   statement_after: string
   captures:        Record<string, unknown>
+  // NIV-04 fatia A — projeção POR NÓ: `node_id → texto resolvido`. Statements dão
+  // o próprio texto; questions dão o `prompt`.
+  //
+  // POR QUE ELA EXISTE. O `render` acima é single-turn: statements só existem como
+  // satélites de uma pergunta (`menu_prompt` os junta com `\n\n`). Isso serve o
+  // dialog-runner, e **não serve** o roteiro de um fluxo de agente — cujos avisos
+  // estão espalhados por ramos diferentes (saudação, transferência, encerramento).
+  // Sem endereçamento por nó, migrar roteiro para `DialogForm` exigiria uma forma
+  // por aviso: medido em 2026-09-03, **79 pontos estáticos em 24 skills** virariam
+  // ~79 formas e ~79 `invoke` novos, quase dobrando a contagem de steps.
+  //
+  // Com `by_node`, o fluxo carrega **uma** forma (o seu roteiro) num `invoke` só e
+  // cada `notify` referencia o seu nó.
+  //
+  // ⚠️ **O texto NÃO é re-interpolado.** O `interpolate` do engine é de PASSE ÚNICO:
+  // ele coleta os `{{…}}` do template ORIGINAL, resolve e substitui — um valor
+  // inserido que contenha `{{…}}` chega ao cliente com as chaves literais. Logo nó
+  // com texto dinâmico ainda NÃO migra; são 20 pontos, contados, e a decisão sobre
+  // uma segunda passada tem vetor próprio (quem edita conteúdo passaria a poder
+  // injetar referências ao `pipeline_state`).
+  by_node:         Record<string, string>
 }
 
 // Flatten a question's retry (LocalizedText reprompt → string) for the menu step.
@@ -94,14 +115,17 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
   const fields: RenderField[] = []
   const questions: RenderQuestion[] = []
   const captures: Record<string, unknown> = {}
+  const byNode: Record<string, string> = {}
   let seenQuestion = false
   let firstQuestion: QuestionNode | null = null
 
   for (const node of form.nodes) {
     if (node.kind === "statement") {
       const txt = resolveLocalizedText(node.text, locale, dl)
+      byNode[node.id] = txt
       if (txt) (seenQuestion ? after : before).push(txt)
     } else {
+      byNode[node.id] = resolveLocalizedText(node.prompt, locale, dl)
       seenQuestion = true
       if (!firstQuestion) firstQuestion = node
       // Multi-field form (interaction: "form", approval "form padrão"): emit each
@@ -179,7 +203,31 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
     fields,
     statement_after: after.join("\n\n"),
     captures,
+    by_node: byNode,
   }
+}
+
+/**
+ * Ids de nó repetidos dentro de uma forma.
+ *
+ * Um mapa `node_id → texto` é AMBÍGUO quando dois nós compartilham o id: o segundo
+ * sobrescreve o primeiro e tudo que só existia no primeiro **deixa de existir, sem
+ * erro**. É o mesmo defeito que a chave duplicada num arquivo de locale produziu
+ * (o parser fica com a última, e a tela mostra a chave crua) — e aqui seria pior,
+ * porque a referência não resolvida vira string VAZIA e o cliente recebe um aviso
+ * em branco, que é um valor plausível.
+ *
+ * Medido em 2026-09-03: **zero** duplicatas nas 10 formas semeadas. Fechar a classe
+ * agora custa nada e remove a possibilidade, em vez de exigir vigilância.
+ */
+function duplicateNodeIds(form: DialogForm): string[] {
+  const vistos = new Set<string>()
+  const dup    = new Set<string>()
+  for (const n of form.nodes) {
+    if (vistos.has(n.id)) dup.add(n.id)
+    vistos.add(n.id)
+  }
+  return [...dup].sort()
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -210,7 +258,10 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
     "Load a versioned DialogForm (scripted-dialog content: statements + questions, i18n) from the " +
     "dialog-api. Defaults to the published (current) version. Returns { form, render } where `render` " +
     "is a single-turn normalization for the dialog-runner: menu_prompt (leading statements), fields " +
-    "(one per question), statement_after, and a domain-blind capture echo. Content only; no control flow.",
+    "(one per question), statement_after, and a domain-blind capture echo. Content only; no control flow. " +
+    "`render.by_node` maps node_id -> resolved text (statements: their text; questions: their prompt) so a " +
+    "flow can address ONE line of the script instead of the whole turn — the text is NOT re-interpolated, " +
+    "so nodes carrying {{...}} refs are not migratable yet (NIV-04 fatia C).",
     FormGetInputSchema.shape as any,
     async (rawInput: Record<string, unknown>) => {
       let input: z.infer<typeof FormGetInputSchema>
@@ -237,6 +288,19 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           return mcpError("dialog_api_error", `Dialog API returned ${resp.status}: ${body}`)
         }
         const form = (await resp.json()) as DialogForm
+        // Ambiguidade no mapa `by_node` NUNCA sai calada: o segundo nó sobrescreveria
+        // o primeiro, e uma referência ao id perdido resolveria para string VAZIA —
+        // o cliente receberia um aviso em branco, que é um valor plausível. Recusa
+        // alto, aqui, onde a causa está visível.
+        const dup = duplicateNodeIds(form)
+        if (dup.length) {
+          return mcpError(
+            "duplicate_node_id",
+            `A forma '${form.form_id}' repete o(s) id(s) de nó [${dup.join(", ")}]. ` +
+            `O mapa render.by_node ficaria ambíguo e a referência ao nó perdido viraria ` +
+            `texto vazio, sem erro. Renomeie os nós.`,
+          )
+        }
         const render = buildRender(form, input.locale)
         return ok({ form_id: form.form_id, version: form.version, status: form.status, render, form })
       } catch (err) {

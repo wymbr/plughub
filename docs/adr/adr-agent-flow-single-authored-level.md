@@ -169,8 +169,16 @@ a tradução já é feita por primitivos.
   não a reverte**: a casa única precisa ser LEGÍVEL por toda linguagem que decide, e os
   dois decisores novos são TypeScript. Gate:
   `infra/test/probe_masked_channel_gate.sh`.
-- **F4 — os `notify` cravados migram para `DialogForm`**, caso a caso, quando o fluxo for
-  tocado. Não é varredura.
+- ~~**F4 — os `notify` cravados migram para `DialogForm`.**~~ **Mecanismo e piloto entregues
+  2026-09-03** (NIV-04), e a redação original media a população errada: são **99 pontos em 24
+  skills** (79 estáticos + 20 dinâmicos), e o `prompt` de um `menu` é roteiro tanto quanto o
+  texto de um `notify`. O bloqueio que a fatia descobriu: um `DialogForm` é **um turno** —
+  statements só existem como satélites de uma pergunta —, então sem endereçamento por nó cada
+  frase pediria uma forma e um `invoke`. `form_get` passou a expor `render.by_node`, e o
+  `skill_limite_entrada_v1` virou o exemplar (12 frases fora do YAML, provado com contato real).
+  ⚠️ **A frase de degradação de cada fluxo FICA cravada** — sem ela, um store de conteúdo fora
+  do ar deixa o fluxo mudo. Resto em **NIV-11** (caso a caso) e **NIV-12** (os dinâmicos, presos
+  ao `interpolate` de passe único). Gate: `infra/test/gate_form_by_node.sh`.
 
 ## 6. O que esta ADR NÃO decide
 

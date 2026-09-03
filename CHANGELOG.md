@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — NIV-04: o roteiro sai do YAML — endereçamento por nó (fatia A) e o fluxo piloto (fatia B)
+
+**A linha do ledger media a população errada, e a medição mudou o plano.** Ela dizia *"os `notify`
+cravados migram para `DialogForm` — 11 só no `skill_limite_entrada_v1`"*. Medido antes de tocar em
+nada: **99 pontos de roteiro cravado em 24 skills** — 69 `notify` e 31 `menu`, dos quais **79
+estáticos e 20 com interpolação**. E o mesmo arquivo já tinha um `menu` **migrado** (`coletar_dados`,
+alimentado por `form_get`), o que mostra que o alvo nunca foi só o `notify`: o `prompt` de um `menu` é
+uma frase igual.
+
+### O bloqueio que a fatia descobriu: um `DialogForm` é UM TURNO
+
+`form_get` achata a forma inteira num bloco single-turn — *leading statements → `menu_prompt`,
+questions → `fields`, trailing statements → `statement_after`*. Statements só existem como satélites
+de uma pergunta, e **não havia como pedir "o nó X da forma Y"**.
+
+Isso serve o dialog-runner e **não serve** o roteiro de um fluxo de agente, cujos avisos vivem em
+ramos diferentes (saudação, transferência, encerramento, timeout). Migrar um-para-um exigiria uma
+forma por frase: **~79 formas e ~79 `invoke form_get` novos**, quase dobrando a contagem de steps dos
+fluxos. E não havia **um único precedente** de `notify` alimentado por forma — todo consumidor
+existente é um `menu`.
+
+### Fatia A — `render.by_node`
+
+`form_get` passa a expor `by_node` (`node_id → texto resolvido`; statements dão o texto, questions
+dão o `prompt`), preservando o `render` atual. Com ela o fluxo carrega **uma** forma — o seu roteiro
+— num `invoke` só, e cada `notify`/`menu` referencia o seu nó.
+
+**Id de nó repetido virou recusa**, não escolha silenciosa: num mapa `node_id → texto` o segundo nó
+sobrescreve o primeiro e a referência ao id perdido resolve para **string vazia** — o cliente
+receberia um aviso em branco, que é um valor plausível. É o mesmo defeito da chave duplicada num
+arquivo de locale. Medido: **zero** duplicatas nas 10 formas semeadas, então fechar a classe agora
+custou nada.
+
+⚠️ **O texto não é re-interpolado**, e isso está na descrição do tool.
+
+### Fatia B — o piloto, e o que ele prova
+
+`skill_limite_entrada_v1`: 12 frases estáticas saíram para `dialog_limite_roteiro`. A forma foi
+**gerada a partir do YAML**, não redigitada — o texto é provadamente idêntico, incluindo o `👍` e as
+quebras de linha. Os ids dos nós são os ids dos **steps**, para a correspondência ser auditável.
+
+**Uma frase continua cravada, e tem de continuar:** `falha_roteiro`, o caminho de degradação de quem
+falhou ao carregar o roteiro. Buscá-la na mesma forma que acabou de falhar deixaria o fluxo **mudo** —
+e mensagem vazia não aparece em log nenhum. É a consequência de tirar conteúdo do código: *o fluxo
+precisa saber dizer uma frase sem depender do store de conteúdo.*
+
+**Três frases FICAM no YAML por medição, não por esquecimento** — `menu_continuidade`,
+`confirmar_recebimento` e o prompt de `coletar_dados` interpolam `$.pipeline_state.*`, e isso é a
+NIV-12 abaixo.
+
+### Verificação — e o smoke verde que não provava nada
+
+Gate `infra/test/gate_form_by_node.sh`, 6 ramos: **A** `by_node` cobre todos os nós · **B** o texto
+bate com a forma publicada (com **sentinela**, porque um `jq` que falha devolve vazio, que é o mesmo
+valor de "nada divergiu") · **C** o piloto não voltou a cravar roteiro · **D** a frase de degradação
+segue no YAML · **E** nenhuma forma repete id de nó · **F** **contato real**.
+
+O **F** existe porque o smoke que já havia é verde e **não alcança a condição**: ele dispara o pool do
+*processo* por webhook e nunca passa pelo agente de entrada. Medido — rodada verde, **zero**
+ocorrências de `carregar_roteiro` nos logs. Foi a segunda vez no dia que um verde não era evidência.
+
+Medição do F, com contato real no `limite_ia`: saíram exatamente as duas frases da forma — a saudação
+e o pedido de CPF. E o **discriminador** foi exercido à parte: com o **dialog-api parado**, o mesmo
+contato produziu *"Estamos com uma instabilidade…"* em vez de silêncio. A degradação funciona.
+
+Falseabilidade: C, D e E reprovaram por mutação. **A e B não foram mutados** — exigiriam rebuild da
+imagem —, e isso fica dito em vez de omitido; o F cobre os dois indiretamente (sem `by_node` a
+saudação não sairia). A tentativa de falsear o F derrubando o dialog-api parou antes, em
+INCONCLUSIVO: o próprio gate precisa ler a forma para comparar. Correto, e registrado.
+
+Suíte do `mcp-server-plughub`: **259 verdes**.
+
+### O que fica aberto, contado
+
+**NIV-11** — os 23 fluxos restantes (**67 pontos estáticos**), com o padrão pronto; segue *caso a
+caso, na próxima edição de cada fluxo*, porque cada migração custa `set-next`+`promote` e não muda
+comportamento nenhum. Rótulos de `options[]` ficam fora: `by_node` mapeia texto de nó, e endereçar
+opção pede outro passo.
+
+**NIV-12** — os 20 pontos dinâmicos. `interpolate` é de **passe único**: coleta os `{{…}}` do template
+original, resolve e substitui, e um valor inserido que contenha `{{…}}` é colocado verbatim. Texto da
+forma com referência a `$.pipeline_state.*` chegaria **com as chaves literais na tela**. Habilitar
+pede uma segunda passada, e ela tem vetor próprio: quem edita conteúdo passaria a poder injetar
+referências ao `pipeline_state` — hoje conteúdo é texto e nada mais.
+
 ## 2026-09-03 — Arco NIV: verificação NO AR, ordenação da reentrada da voz, e fechamento
 
 Fecha o arco de nível único autorado. Duas coisas entram: a prova de ponta a ponta que faltava
