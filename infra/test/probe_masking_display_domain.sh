@@ -209,6 +209,64 @@ PY
 )"
 case "$E_OUT" in OK*) ok "${E_OUT#OK }" ;; *) bad "${E_OUT#ERRO }" ;; esac
 
+# ── F — a fiação: o tipo viaja, e as duas casas do operador concordam ────────
+echo
+echo "${BLD}F) fiação: \`masked_types\` chega às duas casas de ECO do operador${RST}"
+F_OUT="$(cd "$RAIZ" && python3 - <<'PY'
+import io, re
+erros = []
+
+# ── F1: todo forward de `masked_fields` no produtor leva `masked_types` junto ──
+# Mesma forma de `test_todo_destino_chama_o_redator`: não afirma QUAIS destinos,
+# afirma que nenhum ficou para trás. Um destino novo com só metade do par entrega
+# ao consumidor a informação de que o campo é secreto SEM a de qual é a política —
+# e aí ele cai no fallback para sempre, sem nada ficar vermelho.
+bpm = io.open("packages/mcp-server-plughub/src/tools/bpm.ts", encoding="utf-8").read()
+campos = len(re.findall(r"^\s*masked_fields:\s*parsed\.menu", bpm, re.M))
+tipos = len(re.findall(r"^\s*masked_types:\s*parsed\.menu", bpm, re.M))
+if campos != tipos:
+    erros.append("bpm.ts: %d forwards de masked_fields x %d de masked_types" % (campos, tipos))
+elif campos == 0:
+    erros.append("bpm.ts: nenhum forward encontrado — o censo perdeu o alvo")
+
+# ── F2: o produtor do menu emite os dois ──────────────────────────────────────
+menu = io.open("packages/skill-flow-engine/src/steps/menu.ts", encoding="utf-8").read()
+if menu.count("masked_types:") < 3:      # 2 payloads de canal + 1 waitingMeta
+    erros.append("menu.ts: masked_types em %d sítios (esperado >=3)" % menu.count("masked_types:"))
+
+# ── F3: as DUAS casas de eco do operador consomem e apertam ──────────────────
+# bridge (destino 1) e echo do Console. As duas têm de tratar `none` REMOVENDO,
+# e nenhuma pode devolver o valor cru para `plain` — o tipo aperta, nunca afrouxa.
+bridge = io.open("packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py",
+                 encoding="utf-8").read()
+if "echo_policy" not in bridge:
+    erros.append("bridge: destino 1 não passa echo_policy")
+if 'modo == "none"' not in bridge:
+    erros.append("bridge: `none` não remove o campo")
+
+console = io.open("packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx",
+                  encoding="utf-8").read()
+if "masked_types" not in console:
+    erros.append("Console: o eco não lê masked_types")
+if 'modo === "none"' not in console or "delete redacted[fieldId]" not in console:
+    erros.append("Console: `none` não remove o campo")
+# A regressão que importa: o Console voltar a exibir o valor cru de campo mascarado.
+if re.search(r"redacted\[fieldId\]\s*=\s*(result|value)", console):
+    erros.append("Console: campo mascarado recebendo valor CRU")
+
+# ── F4: a política NÃO alcança armazenamento ─────────────────────────────────
+# `echo_policy` só pode aparecer no destino 1. Se surgir num dos quatro destinos
+# de persistência, a fronteira "eco é input" foi apagada.
+usos = len(re.findall(r"echo_policy\s*=\s*echo_policy", bridge))
+if usos != 1:
+    erros.append("bridge: echo_policy passada a %d destinos (esperado 1 — só o Agent Assist)" % usos)
+
+print("OK bpm=%d pares, menu=%d, as 2 casas apertam, 1 só destino recebe a política"
+      % (campos, menu.count("masked_types:")) if not erros else "ERRO " + " ; ".join(erros[:6]))
+PY
+)"
+case "$F_OUT" in OK*) ok "${F_OUT#OK }" ;; *) bad "${F_OUT#ERRO }" ;; esac
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "${RED}${BLD}REPROVADO${RST} — $FAIL falha(s), $INC inconclusivo(s)"; exit 1

@@ -621,6 +621,8 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
           targetsSelf,
           masked_fields: (event.masked_fields as string[] | null | undefined)
             ?.filter((f): f is string => typeof f === "string") ?? undefined,
+          masked_types: (event.masked_types as Record<string, string> | null | undefined)
+            ?? undefined,
         },
       };
       setContacts(prev => {

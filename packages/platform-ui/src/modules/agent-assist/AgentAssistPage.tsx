@@ -58,6 +58,7 @@ import {
 import { CopilotBanner }   from "./components/CopilotBanner";
 import { WebRTCOverlay }   from "./components/WebRTCOverlay";
 import { apiFetch } from '@/api/apiFetch'
+import { useMaskingDisplayRules } from "@/components/MaskedToken";
 import { loadConversationHistory } from "./api";
 
 // Set vazio estável para o preview read-only (ChatArea sem seleção de mensagens).
@@ -66,6 +67,10 @@ const EMPTY_MESSAGE_IDS: Set<string> = new Set<string>();
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
   const { t } = useTranslation("agentAssist");
+  // ALW-10 — catálogo de tipos, que o Console já carrega. É dele que sai o modo
+  // de eco; o payload do menu traz o TIPO, não o modo, para a política seguir
+  // viva: editar o catálogo muda o eco sem reenviar o menu.
+  const maskingRules = useMaskingDisplayRules();
   const { session } = useAuth();
   const agentName   = session?.name ?? t("session.none");
 
@@ -396,12 +401,27 @@ export const AgentAssistPage: React.FC = () => {
         const opt = menuMsg?.menuData?.options?.find(o => o.id === result);
         displayText = opt ? opt.label : result;
       } else {
-        // Form submission — redact masked field values before echoing to Console
+        // Form submission — ECO ao Console (ALW-10).
+        //
+        // Esta é uma das duas casas de eco do lado do OPERADOR; a outra é o
+        // bridge (`redact_customer_reply`, destino 1). As duas têm de concordar:
+        // este eco é OTIMISTA (aparece antes do round-trip), e se divergir do que
+        // o bridge manda depois, o campo pisca — aparece e some.
+        //
+        // ⚠️ Armazenamento NÃO passa por aqui. O histórico e a analytics seguem
+        // com o masking padrão, por decisão: eco é coisa de input.
         const maskedFields = menuMsg?.menuData?.masked_fields;
         if (maskedFields && maskedFields.length > 0) {
+          const maskedTypes = menuMsg?.menuData?.masked_types ?? {};
           const redacted: Record<string, unknown> = { ...(result as Record<string, unknown>) };
           for (const fieldId of maskedFields) {
-            if (fieldId in redacted) redacted[fieldId] = "••••••";
+            if (!(fieldId in redacted)) continue;
+            // O tipo APERTA, nunca afrouxa: um campo declarado `masked:` no fluxo
+            // não é desdeclarável pelo catálogo, então `plain` cai em `masked`.
+            // Mesma regra do `masking_types.resolve_echo_operator` no bridge.
+            const modo = maskingRules[maskedTypes[fieldId] ?? ""]?.echo_to_operator;
+            if (modo === "none") delete redacted[fieldId];
+            else                 redacted[fieldId] = "••••••";
           }
           displayText = JSON.stringify(redacted);
         } else {

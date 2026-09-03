@@ -182,6 +182,8 @@ export async function executeMenu(
         options:       resolvedOptions,
         fields:        resolvedFields,
         masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
+        // ALW-10 — o TIPO viaja junto, para o canal decidir o eco ao cliente.
+        masked_types:  Object.keys(masked.types ?? {}).length > 0 ? masked.types : undefined,
       },
     })
   } catch {
@@ -411,6 +413,8 @@ export async function executeMenu(
               options:       resolvedOptions,
               fields:        resolvedFields,
               masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
+              // ALW-10 — o TIPO viaja junto, para o canal decidir o eco ao cliente.
+              masked_types:  Object.keys(masked.types ?? {}).length > 0 ? masked.types : undefined,
             },
           })
         } catch {

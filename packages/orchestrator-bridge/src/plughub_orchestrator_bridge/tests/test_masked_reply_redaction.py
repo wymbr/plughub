@@ -205,3 +205,116 @@ def test_todo_destino_chama_o_redator() -> None:
         f"esperado 6 (1 def + 5 destinos), encontrado {chamadas} — "
         "um destino foi adicionado ou removido sem revisar a redação"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ALW-10 — `echo_policy`: eco é INPUT, e o tipo só APERTA
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# O que estes testes guardam, e por que cada um pode reprovar:
+#
+#   · sem `echo_policy` nada muda — é a regressão que protege os QUATRO destinos
+#     de armazenamento, que não passam a política e não podem passar a mudar;
+#   · `none` REMOVE o campo, não o substitui — se virar `••••••`, o operador
+#     descobre que o campo existe, que é o que `none` existe para evitar;
+#   · `plain` não desdeclara um campo `masked:` do fluxo — é a regra
+#     "restritivo vence", e sem teste ela é só um comentário.
+
+from plughub_orchestrator_bridge import masking_types
+
+
+def test_sem_echo_policy_o_comportamento_e_o_de_antes() -> None:
+    """Regressão dos quatro destinos de ARMAZENAMENTO.
+
+    Eles chamam o redator sem `echo_policy`, e a ALW-10 não pode tê-los mudado:
+    persistência segue com o masking padrão, por decisão.
+    """
+    out, _ = redact_customer_reply(
+        FORM_REPLY, msg_type="menu_result", any_masked=False,
+        masked_fields=FORM_MASKED_FIELDS,
+    )
+    assert "hunter2" not in out and "914455" not in out
+    assert out.count("••••••") == 2
+    assert "cliente@exemplo.com" in out
+
+
+def test_none_remove_o_campo_em_vez_de_substituir() -> None:
+    out, _ = redact_customer_reply(
+        FORM_REPLY, msg_type="menu_result", any_masked=False,
+        masked_fields=FORM_MASKED_FIELDS,
+        echo_policy={"senha": "none", "codigo_2fa": "masked"},
+    )
+    assert "senha" not in out, "`none` tem de REMOVER a chave, não mascarar o valor"
+    assert "hunter2" not in out
+    assert out.count("••••••") == 1          # só o codigo_2fa
+    assert "codigo_2fa" in out
+    assert "cliente@exemplo.com" in out      # campo livre sobrevive
+
+
+def test_masked_e_o_default_para_campo_sem_politica() -> None:
+    """Campo mascarado ausente do mapa não vira `plain` por omissão."""
+    out, _ = redact_customer_reply(
+        FORM_REPLY, msg_type="menu_result", any_masked=False,
+        masked_fields=FORM_MASKED_FIELDS,
+        echo_policy={"senha": "none"},       # codigo_2fa sem entrada
+    )
+    assert "914455" not in out
+    assert "codigo_2fa" in out and out.count("••••••") == 1
+
+
+def test_echo_policy_nao_alcanca_campo_livre() -> None:
+    """A política decide sobre o que JÁ é segredo; não cria segredo novo."""
+    out, _ = redact_customer_reply(
+        FORM_REPLY, msg_type="menu_result", any_masked=False,
+        masked_fields=FORM_MASKED_FIELDS,
+        echo_policy={"email": "none"},       # email NÃO está em masked_fields
+    )
+    assert "cliente@exemplo.com" in out
+
+
+def test_any_masked_vence_a_politica() -> None:
+    """Step inteiro mascarado suprime tudo, e nenhum `plain` reabre isso."""
+    out, vis = redact_customer_reply(
+        FORM_REPLY, msg_type="menu_result", any_masked=True,
+        masked_fields=FORM_MASKED_FIELDS,
+        echo_policy={"senha": "plain", "codigo_2fa": "plain"},
+    )
+    assert out == _MASKED_SUPPRESSED and vis == "agents_only"
+    assert "hunter2" not in out
+
+
+# ── a resolução do modo, isolada ─────────────────────────────────────────────
+
+def test_tipo_aperta_e_plain_e_rebaixado(caplog) -> None:
+    tipos = {
+        "credential": {"echo_to_operator": "none"},
+        "cpf":        {"echo_to_operator": "masked"},
+        "phone":      {"echo_to_operator": "plain"},
+    }
+    with caplog.at_level("INFO"):
+        fora = masking_types.resolve_echo_operator(
+            tipos,
+            masked_fields={"senha", "doc", "tel"},
+            masked_types={"senha": "credential", "doc": "cpf", "tel": "phone"},
+        )
+    assert fora == {"senha": "none", "doc": "masked", "tel": "masked"}, (
+        "`plain` não pode desdeclarar um campo `masked:` do fluxo"
+    )
+    assert "rebaixado" in caplog.text, "o rebaixamento tem de ser LOGADO, nunca mudo"
+
+
+def test_tipo_desconhecido_cai_no_fallback_seguro() -> None:
+    """Sem tipo (ou catálogo vazio) NÃO vira `plain`."""
+    fora = masking_types.resolve_echo_operator({}, {"senha"}, {})
+    assert fora == {"senha": masking_types.FALLBACK}
+    assert masking_types.FALLBACK == "masked", (
+        "o fallback é `masked`: não vaza, e não muda o comportamento por outage"
+    )
+
+
+def test_ordem_de_restricao_e_a_unica_casa() -> None:
+    """`none` < `masked` < `plain`, e o mínimo é o mais restritivo."""
+    assert masking_types._min("none", "plain") == "none"
+    assert masking_types._min("plain", "masked") == "masked"
+    assert masking_types._min("masked", "masked") == "masked"
+    assert set(masking_types.ECHO_MODES) == {"none", "masked", "plain"}

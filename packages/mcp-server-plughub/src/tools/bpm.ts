@@ -148,6 +148,12 @@ const NotificationSendInputSchema = z.object({
      *   - outros canais: aplicar masked_fallback (link ou texto de instrução)
      */
     masked_fields: z.array(z.string()).optional(),
+    /**
+     * ALW-10 — `field_id` → id do tipo do catálogo, para os campos mascarados.
+     * O canal decide o eco ao cliente por ele. Opcional: ausente = comportamento
+     * anterior (todo campo mascarado vira input de senha).
+     */
+    masked_types: z.record(z.string()).optional(),
   }).optional(),
 })
 
@@ -555,6 +561,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                   options:       parsed.menu!.options        ?? [],
                   fields:        parsed.menu!.fields         ?? null,
                   masked_fields: parsed.menu!.masked_fields  ?? null,
+                  masked_types: parsed.menu!.masked_types   ?? null,
                 },
                 timestamp,
               })
@@ -630,6 +637,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               options:       parsed.menu!.options        ?? [],
               fields:        parsed.menu!.fields         ?? null,
               masked_fields: parsed.menu!.masked_fields  ?? null,
+                  masked_types: parsed.menu!.masked_types   ?? null,
               visibility:    parsed.visibility,
               timestamp,
             })
@@ -674,6 +682,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                 options:      parsed.menu!.options       ?? [],
                 fields:       parsed.menu!.fields        ?? [],
                 masked_fields: parsed.menu!.masked_fields ?? undefined,
+                masked_types: parsed.menu!.masked_types ?? undefined,
                 timestamp,
                 visibility:   parsed.visibility,
               }))
@@ -703,6 +712,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                   options:       parsed.menu!.options        ?? [],
                   fields:        parsed.menu!.fields         ?? null,
                   masked_fields: parsed.menu!.masked_fields  ?? null,
+                  masked_types: parsed.menu!.masked_types   ?? null,
                 },
                 timestamp,
               })
@@ -764,6 +774,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                 options:       parsed.menu!.options        ?? [],
                 fields:        parsed.menu!.fields         ?? null,
                 masked_fields: parsed.menu!.masked_fields  ?? null,
+                  masked_types: parsed.menu!.masked_types   ?? null,
                 timestamp,
               })
             } else {

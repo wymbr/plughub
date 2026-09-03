@@ -173,6 +173,9 @@ class WsMenuRender(BaseModel):
     #              masked overlay (outside chat transcript)
     #   others   — outbound_consumer applies masked_fallback strategy (link / text instruction)
     masked_fields: list[str] | None = None
+    #: ALW-10 — `field_id` -> id do tipo do catalogo. O cliente do canal decide
+    #: o eco por ele (`mascara.display.echo_to_customer`). Ausente = como antes.
+    masked_types: dict[str, str] | None = None
 
 
 class WsAgentTyping(BaseModel):

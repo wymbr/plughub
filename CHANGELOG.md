@@ -1,5 +1,151 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-02 — ALW-10: o domínio de exibição e eco vira ABSTRATO, e a fronteira eco × armazenamento fica escrita
+
+Três campos com **zero consumidores** — `display_voice`, `echo_to_customer`,
+`echo_to_operator` — editáveis na tela e lidos por ninguém. Minha recomendação foi
+**remover**; o dono recusou e deu duas regras que mudaram a resposta. As duas procedem, e
+a segunda ainda corrigiu a conta da fiação.
+
+### As duas regras do dono, e o que cada uma resolveu
+
+**(1) "O domínio é abstrato, vale para todo canal, inclusive voz; cada canal interpreta
+conforme suas características."** Isso desfaz a duplicação: `display_screen` e
+`display_voice` eram duas declarações da mesma intenção, uma por canal. A política é do
+TIPO; traduzir é do adapter — invariante que o `CLAUDE.md` já enuncia.
+
+**(2) "Eco só se aplica a INPUT de dados, não a armazenamento; no armazenamento vale o
+masking padrão."** Isso desfaz a minha objeção principal e recorta o escopo.
+
+```
+display_screen   →  token_display                (mesmos 3 valores, agnóstico)
+display_voice    →  (sai; o adapter traduz)
+echo_*: boolean  →  EchoMode = plain | none | masked
+```
+
+### Por que o eco não tem parcial — e por que era a minha objeção
+
+Eu havia recusado o ternário porque `eco mascarado` seria uma **terceira** resposta para
+*"quanto do valor aparece"*, ao lado de `mascara.by_role` (9 valores) e `token_display`
+(3). A regra do dono dissolve isso, e a razão é estrutural: **eco devolve entrada FRESCA,
+não renderiza token**. Não há `***-00` embutido para ler — o parcial existe no
+`token_display` porque o token literalmente o carrega (`[cpf:tk_b7d2:***-00]`). Fabricar
+um parcial no eco exigiria re-mascarar na borda. Sem parcial, não há colisão.
+
+### A regra (2) mudou a CONTA, e essa é a lição de método do arco
+
+O comentário em `main.py:9261` nomeia **três casas** que produzem o placeholder — bridge,
+webchat adapter, echo do Console — e avisa que mudá-lo numa só as faria divergir. Peguei
+essa lista como sendo a lista de casas de eco. Errado: ela agrupa por *"quem produz o
+`••••••`"*, que é **eixo diferente** de *"isto é eco ou é armazenamento?"*.
+
+Medido sob a regra do dono, o `agent_summary` do webchat vai para
+`_registry.append_message` — **histórico**. É armazenamento, e sai do escopo do eco. Em
+compensação, a superfície do CLIENTE, que não estava na lista de três, entra.
+
+É a mesma armadilha que este repositório cataloga na § Security: *um censo desenhado para
+um eixo não prova nada sobre o eixo vizinho*. Aqui o censo era um comentário, e eu o li
+como se fosse a partição.
+
+| destino | o que é | governado por |
+|---|---|---|
+| bridge → Agent Assist | **eco** (operador vê a entrada) | `echo_to_operator` ✅ |
+| echo do Console (`AgentAssistPage`) | **eco** (mesmo fato, otimista) | `echo_to_operator` ✅ |
+| cliente do canal (WS) | **eco** advisory | ALW-15 |
+| Kafka → ClickHouse · log · stream de Analytics | armazenamento | masking padrão |
+| `agent_summary` do webchat → histórico | armazenamento | masking padrão |
+| step `receive` | fluxo de dado | masking padrão |
+
+### As duas pontas do eco não têm a mesma força
+
+`echo_to_operator` é **fronteira de confidencialidade**: o operador não conhece o valor, e
+a plataforma controla as casas que o exibem. `echo_to_customer` é **advisory**: o cliente
+digitou o valor e já o conhece; é medida contra quem olha por cima do ombro, não contra o
+titular do dado. Por isso só a primeira foi fiada com enforcement.
+
+### O tipo APERTA, nunca afrouxa
+
+Um campo `masked:` na skill é declaração do AUTOR do fluxo; o catálogo é declaração do
+TENANT sobre o tipo. Onde discordam, vence o restritivo — `resolve_scope` e `core.fileMode`
+outra vez, pelo mesmo motivo: a permissiva degrada mudo.
+
+```
+none  <  masked  <  plain          efetivo = min(masked, política do tipo)
+
+tipo diz `none`    →  none    (o campo SOME do objeto — semântica de `hidden`)
+tipo diz `masked`  →  masked  (o que as casas já faziam)
+tipo diz `plain`   →  masked  (o campo vence — e o rebaixamento é LOGADO)
+```
+
+### O fallback é `masked`, e não o mais restritivo
+
+Com o catálogo indisponível a tentação é `none` ("o mais seguro"). Errado: (a) `masked` já
+não vaza — é placeholder; (b) `none` faria uma **indisponibilidade mudar o comportamento
+do produto**, tirando do operador até o `••••••` que ele enxerga hoje. Fallback tem de ser
+seguro **e** não ser mudança disparada por outage. E loga, nomeando o que deixou de valer.
+
+### A migração seguiu o COMPORTAMENTO, não o nome
+
+`echo_to_operator: true` lia-se *"ecoa"*, mas o que as casas fazem com ele é `••••••`.
+Mapear `true → plain` viraria vazamento no instante em que alguém ligasse o fio. `true`
+virou **`masked`**; `credential`, `card_cvv` e `opaque` seguem `none/none/hidden`.
+
+O store vivo foi migrado nos **dois escopos** por
+`infra/scripts/migrate_masking_display_rule.py`, que **enumera** os escopos por
+`/_provenance` em vez de supor o global — `tenant_demo` tem linha própria, e uma escrita
+global não a alcançaria. O `shadowed_by` da ALW-06, de hoje, reportou isso durante a
+execução: as duas features do dia se encontraram.
+
+### O payload carrega o TIPO, nunca o modo pronto
+
+`masked_types` (`field_id → type_id`) viaja nos cinco forwards do `notification_send`. É
+deliberado não mandar o modo resolvido: **a política é config viva**, e congelá-la no
+instante do envio faria uma edição do catálogo não valer para um menu já na tela. O
+Console resolve com `useMaskingDisplayRules()`, que ele já carrega.
+
+### Gate
+
+`infra/test/probe_masking_display_domain.sh`, seis ramos. Os dois que dão valor ao resto:
+
+**E — a testemunha de segurança.** Uma renomeação que troque `hidden` por
+`display_partial`, ou `none` por `plain`, não quebra build nenhum e não aparece em tela
+nenhuma. O ramo asserta o VALOR dos três tipos de restrição máxima, nos dois escopos.
+Mutação: `opaque.echo_to_operator = "plain"` → reprova nomeando.
+
+**F — o censo dos sítios.** Todo forward de `masked_fields` tem de levar `masked_types`
+junto; um destino novo com metade do par entrega *"é secreto"* sem *"qual a política"*, e
+o consumidor cai no fallback para sempre sem nada ficar vermelho. Mutação: remover um dos
+cinco → `5 forwards de masked_fields x 4 de masked_types`. F também asserta que
+`echo_policy` chega a **um só** destino — se aparecer num dos de persistência, a fronteira
+eco × armazenamento foi apagada.
+
+Os oito testes novos em `test_masked_reply_redaction.py` foram provados por duas mutações
+simultâneas (`none` deixa de remover; `_min` devolve o mais permissivo): **4 reprovaram**,
+e a regressão dos destinos de armazenamento **ficou verde** — que é o resultado certo,
+porque é outra proposição.
+
+### Achado no próprio instrumento
+
+A mutação do ramo C revelou um defeito no script de migração: com `token_display` e
+`display_screen` convivendo, ele removia o residual **sem contar**, então dizia *"0
+mudanças"* enquanto mudava — e o ramo de idempotência ficava verde sobre store sujo.
+Corrigido.
+
+### Aberto — ALW-15
+
+O cliente do canal recebe o `masked_types` mas **não pode resolvê-lo**: o catálogo é
+config da plataforma, e o cliente é a webapp do tenant. Para aquela ponta o campo honesto
+é o **modo já resolvido**, e resolver no envio é correto ali — a instrução de render é
+efêmera, ao contrário de um registro durável. Exige um leitor de catálogo no
+`notification_send`. Advisory por natureza: a plataforma declara, o cliente obedece.
+
+### Medições
+
+`schemas` 187 · `mcp-server` 253 · `skill-flow-engine` 167 · `orchestrator-bridge` 109+8
+· `config-api` 57. Build das cinco imagens verde; censo de tools 71×71 verde;
+`probe_config_scope_provenance`, `probe_i18n_duplicate_keys`, `probe_seed_drift_named` e
+`probe_task_ledger` verdes.
+
 ## 2026-09-02 — ALW-07: as duas casas do `mention_command set_context` viram uma, e a decisão foi remoção porque uma delas nunca rodou
 
 A tarefa pedia *"decidir qual casa fica"*. A medição respondeu antes da decisão: **uma das duas

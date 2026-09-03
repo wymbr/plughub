@@ -102,6 +102,16 @@ export const OutboundEventSchema = z.object({
    *   - Executar masked_fallback se o canal não suportar masked input
    */
   masked_fields: z.array(z.string()).optional(),
+  /**
+   * ALW-10 — `field_id` → id do TIPO do catálogo (`masking.types`), para os
+   * campos mascarados. Carrega o TIPO, nunca o MODO já resolvido: resolver na
+   * origem congelaria a política no instante do envio, e ela é config viva.
+   *
+   * Quem consome decide o eco pelo `mascara.display.echo_to_customer` daquele
+   * tipo. **Ausente quando não houve campo declarado** — nunca `{}`, que
+   * devolveria a ambiguidade que o campo remove.
+   */
+  masked_types: z.record(z.string()).optional(),
 })
 export type OutboundEvent = z.infer<typeof OutboundEventSchema>
 

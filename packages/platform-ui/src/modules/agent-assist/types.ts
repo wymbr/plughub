@@ -49,6 +49,11 @@ export interface WsMenuRender {
   fields?: Array<{ id: string; label: string; type: string }>;
   /** Field IDs whose values must be masked (rendered as ●●●●●● in echoes). */
   masked_fields?: string[] | null;
+  /** ALW-10 — `field_id` → id do tipo do catálogo. O Console resolve o modo de
+   *  eco por `useMaskingDisplayRules()`, que ele já carrega; carregar o TIPO (e
+   *  não o modo pronto) mantém a política viva: editar o catálogo muda o eco
+   *  sem reenviar o menu. */
+  masked_types?: Record<string, string> | null;
 }
 
 // ── Menu card data (attached to ChatMessage for rich rendering) ───────────────
@@ -83,6 +88,11 @@ export interface ChatMenuData {
   /** Field IDs that are masked (type="password" in webchat). Used to redact values
    *  in the stream echo so the operator Console never displays raw masked input. */
   masked_fields?: string[];
+  /** ALW-10 — `field_id` → id do tipo do catálogo. O Console resolve o modo de
+   *  eco por `useMaskingDisplayRules()`, que ele já carrega; carregar o TIPO (e
+   *  não o modo pronto) mantém a política viva: editar o catálogo muda o eco
+   *  sem reenviar o menu. */
+  masked_types?: Record<string, string>;
 }
 
 export interface WsAgentTyping {

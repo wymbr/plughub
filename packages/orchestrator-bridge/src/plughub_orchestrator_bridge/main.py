@@ -64,6 +64,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from .instance_bootstrap import InstanceBootstrap
 from .registry_syncer import RegistrySyncer
 from .session_config import session_config
+from . import masking_types
 
 logging.basicConfig(
     level=logging.INFO,
@@ -310,6 +311,20 @@ _MASKED_SUPPRESSED_HUMAN = "[entrada mascarada — conteúdo não disponível]"
 _MASKED_FIELD_PLACEHOLDER = "••••••"
 
 
+async def resolve_session_tenant(redis_client, session_id: str) -> str:
+    """Tenant da sessão, com o fallback de ambiente.
+
+    Extraído em 2026-09-02 (ALW-10) porque um SEGUNDO sítio passou a precisar do
+    mesmo fato dentro de `process_inbound`. Duas cópias desta resolução dariam duas
+    respostas no dia em que o fallback mudasse — e a que decide masking seria a que
+    ninguém lembraria de atualizar.
+    """
+    valor = await redis_client.get(f"session:{session_id}:tenant_id")
+    if valor and isinstance(valor, bytes):
+        valor = valor.decode()
+    return valor or os.environ.get("PLUGHUB_TENANT_ID", "tenant_demo")
+
+
 def redact_customer_reply(
     reply_text: str,
     *,
@@ -318,6 +333,7 @@ def redact_customer_reply(
     masked_fields: set[str] | None = None,
     suppressed_text: str = _MASKED_SUPPRESSED,
     decorate_non_text: bool = True,
+    echo_policy: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """Decide o que de `reply_text` pode ser publicado, e com que visibilidade.
 
@@ -339,6 +355,26 @@ def redact_customer_reply(
 
     A visibilidade devolvida é sugestão para os destinos que a usam (1 e 3);
     os destinos 2 e 4 publicam com visibilidade própria e ignoram o segundo item.
+
+    ── `echo_policy` — ECO é INPUT, e só um destino é eco (ALW-10, 2026-09-02) ──
+
+    `{field_id: "none"|"masked"|"plain"}`, vindo de `masking_types`. **Só o
+    destino 1 (Agent Assist) o passa**, e a assinatura é onde essa fronteira fica
+    visível: eco governa o que o operador VÊ da entrada fresca; os destinos 2, 3 e
+    4 são Kafka→ClickHouse, log e stream de Analytics — armazenamento —, e ali
+    continua valendo o masking padrão. Confundir os dois eixos reabriria por outro
+    lado o vazamento de 2026-08-29.
+
+    Ausente (o default) ⇒ comportamento idêntico ao anterior à ALW-10. É o que
+    mantém os quatro outros destinos intactos sem um ramo por destino.
+
+    Semântica por campo, quando presente:
+      `none`   → o campo SOME do objeto (mesma semântica de `hidden` em
+                 `ContextMaskingType`: remove, não substitui);
+      `masked` → `••••••`, como antes;
+      `plain`  → `••••••` também. O rebaixamento acontece em
+                 `masking_types.resolve_echo_operator`, que o LOGA: um campo
+                 declarado `masked` no fluxo não é desdeclarável pelo catálogo.
     """
     if any_masked:
         return suppressed_text, "agents_only"
@@ -347,10 +383,15 @@ def redact_customer_reply(
         try:
             result_obj = json.loads(reply_text) if isinstance(reply_text, str) else reply_text
             if isinstance(result_obj, dict):
-                redacted = {
-                    k: (_MASKED_FIELD_PLACEHOLDER if k in masked_fields else v)
-                    for k, v in result_obj.items()
-                }
+                redacted = {}
+                for k, v in result_obj.items():
+                    if k not in masked_fields:
+                        redacted[k] = v
+                        continue
+                    modo = (echo_policy or {}).get(k, "masked")
+                    if modo == "none":
+                        continue          # some do objeto — semântica de `hidden`
+                    redacted[k] = _MASKED_FIELD_PLACEHOLDER
                 return f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]", "all"
             # Resposta não-dict com campos mascarados declarados: não dá para
             # redigir seletivamente, e devolver o cru seria o vazamento de novo.
@@ -9296,12 +9337,45 @@ async def process_inbound(
             # stated in docs/guias/masked-input.md (maskedScope is memory-only).
             # Destino 1 — Agent Assist. Ver `redact_customer_reply`: a decisão é
             # única para as quatro portas; aqui só o placeholder é mais explícito.
+            #
+            # ── O ÚNICO destino que passa `echo_policy` (ALW-10) ────────────────
+            # Eco é o que o operador VÊ da entrada fresca. Os destinos 2, 3 e 4
+            # (Kafka→ClickHouse, log, stream de Analytics) são armazenamento e
+            # seguem com o masking padrão — a política de tipo não os alcança, de
+            # propósito. Falha na leitura do catálogo NÃO derruba a mensagem: cai
+            # em `masked`, que é o comportamento anterior, e loga.
+            echo_policy: dict[str, str] = {}
+            if all_masked_fields and msg_type == "menu_result" and http is None:
+                # `http` é opcional em `process_inbound`. Sem ele não há catálogo, e
+                # isso é condição NORMAL — não merece traceback. Mas merece linha:
+                # sem ela, "não apertou porque o tipo não pede" e "não apertou porque
+                # não perguntei" ficam indistinguíveis no log.
+                logger.info(
+                    "echo_policy não consultada session=%s — sem sessão HTTP neste "
+                    "caminho; campos mascarados seguem em %r",
+                    session_id, masking_types.FALLBACK,
+                )
+            elif all_masked_fields and msg_type == "menu_result":
+                try:
+                    _tenant = await resolve_session_tenant(redis_client, session_id)
+                    _tipos = await masking_types.politica_por_tipo(
+                        CONFIG_API_URL, _tenant, http,
+                    )
+                    echo_policy = masking_types.resolve_echo_operator(
+                        _tipos, all_masked_fields, all_masked_types,
+                    )
+                except Exception:
+                    logger.exception(
+                        "echo_policy indisponível session=%s — os campos mascarados "
+                        "seguem com o placeholder padrão", session_id,
+                    )
             display_text, visibility = redact_customer_reply(
                 reply_text,
                 msg_type        = msg_type,
                 any_masked      = any_masked,
                 masked_fields   = all_masked_fields,
                 suppressed_text = _MASKED_SUPPRESSED_HUMAN,
+                echo_policy     = echo_policy,
             )
             if any_masked:
                 logger.info(
@@ -9354,10 +9428,7 @@ async def process_inbound(
         # This must happen for ALL customer messages regardless of delivery target,
         # so messages survive Redis stream TTL expiration.
         try:
-            _tenant_for_analytics = await redis_client.get(f"session:{session_id}:tenant_id")
-            if _tenant_for_analytics and isinstance(_tenant_for_analytics, bytes):
-                _tenant_for_analytics = _tenant_for_analytics.decode()
-            _tenant_for_analytics = _tenant_for_analytics or os.environ.get("PLUGHUB_TENANT_ID", "tenant_demo")
+            _tenant_for_analytics = await resolve_session_tenant(redis_client, session_id)
 
             _analytics_event = {
                 "event_type":   "message_sent",
