@@ -20,6 +20,15 @@ Censo dos 11 forms: **um** divergente, e era esse. Republicado (v3).
 slot ❌ · DialogForm publicado ❌. Um `grep` no repositório não enxerga as duas últimas — elas
 vivem no agent-registry e no dialog-api.
 
+### Confirmado pelo dono no demo (2026-09-03)
+
+Os três caminhos foram exercitados na interface, com o cliente webchat e o Console: **OTP do
+`limite_ia`**, **retorno com o status aprovado** (o contato agora fecha sozinho e a pendência não
+reaparece no acesso seguinte) e **NPS do `sac_ia`**. Sem ressalvas.
+
+É a evidência que faltava: até aqui o veredicto vinha de log e de Redis, e nenhum dos dois vê a
+tela. Os três sintomas relatados eram o mesmo defeito em três artefatos publicados diferentes.
+
 ### Mais dois pools re-promovidos, pelo mesmo mecanismo
 
 O relato de *"o `limite_ia` não desliga e, ao reconectar, mostra o status de novo"* é a mesma
