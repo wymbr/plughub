@@ -176,6 +176,7 @@ história no `CHANGELOG.md`.)*
 | id | tarefa | data | ancora no `CHANGELOG.md` |
 |---|---|---|---|
 | NIV-01 | Capacidade de canal passa a ter **uma casa** (`channel_capability_registry`, em código, porque é fato do PROTOCOLO) e a política de fallback fica no tenant (`MaskedFallbackPolicySchema`) — a segunda casa era `ChannelCapabilitiesSchema`, com vocabulário DIFERENTE, zero consumidores, e **já discordava em `voice`**. A tabela virou exaustiva sobre `ChannelSchema` (6 → 9 canais; `instagram`/`telegram` nunca eram eleitos, em silêncio) | 2026-09-03 | `CHANGELOG.md` § 2026-09-03 NIV-01 |
+| NIV-02 | A exigência de canal do `collect` passa a ser **DERIVADA** da declaração `masked:` do `DialogForm` (um sítio: `collect_requirements.py`) **e** a eleição VIVA (`WebhookAdapter._negotiate_channel`) passa a consultá-la — inclusive no ramo do `channel:` fixo. Medição refutou a premissa da ADR: o portão que se ia alimentar (`select_channel`) está em ramo MORTO, e a eleição que roda era cega, descartando o `requires` que já chegava até ela | 2026-09-03 | `CHANGELOG.md` § 2026-09-03 NIV-02 |
 
 ## `docs/guias/masked-input.md` — mascaramento de entrada por canal
 

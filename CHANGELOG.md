@@ -1,5 +1,137 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-03 — NIV-02: a exigência de canal do `collect` passa a ser DERIVADA, e a eleição que roda passa a consultá-la
+
+**A tarefa pedia meia coisa, e a medição mostrou qual metade faltava de verdade.** A ADR de
+nível único autorado registrava, como premissa (3), que a eleição de canal era um *"portão vivo
+que nunca recebeu uma exigência real"*: `select_channel()` existe, é pura, é testada,
+`masked_input` é capacidade declarada, e **nenhum YAML do repositório declara `requires:`**. A
+F2 era, portanto, *"fornecer o insumo"*.
+
+Medido antes de escrever uma linha — e a premissa caiu:
+
+1. **`select_channel` está em RAMO MORTO.** Ela só é alcançada por `main.py::_dispatch_collect`,
+   consumidor de `collect.requested` no tópico `collect.events`. O **único** produtor desse
+   evento é `workflow_api.kafka_emitter.emit_collect_requested`, e ele tem **zero chamadores** —
+   medido por **AST**, não por `grep`, porque o nome aparece no `import` e passaria por uso. As
+   duas rotas de collect da workflow-api (`/collect/persist`, `/collect/respond`) respondem
+   **410** desde o Arc 19 Fase D. A analytics-api já sabia e escrevia isso em `reports.py`:
+   *"GATILHO: quando `collect_events` tiver produtor"*.
+   ⇒ Alimentar `requires[]` ali não mudaria comportamento nenhum.
+
+2. **A eleição que RODA é outra, e era cega a capacidade.** O caminho vivo é
+   `skill-flow-service` → `POST /v1/channels/webhook/collect` → `WebhookAdapter.handle_collect`
+   → `_negotiate_channel`, que escolhia por `preferred_order` ∩ `channels` e **nunca perguntava
+   o que o canal sabe fazer**.
+
+3. **E o `requires` já chegava lá — e era jogado fora.** O engine o envia (`steps/collect.ts`),
+   o `skill-flow-service` o repassa no corpo do POST, o `main.py` o desempacota
+   (`requires = body.get("requires")`), e o `handle_collect` o **declara no parâmetro e nunca
+   lê**: zero ocorrências em `Load` num corpo de 228 linhas, medido por AST.
+
+**Duas implementações de eleição de canal, e a que decide é a permissiva.** É exatamente a forma
+que a NIV-01 acabou de fechar um nível abaixo, no **inventário** de capacidade — agora repetida
+um nível acima, na **eleição**. Por isso esta fatia entrega as duas metades: sem (i) o insumo é
+inerte; sem (ii) o insumo não é lido.
+
+### O que passou a existir
+
+**`packages/channel-gateway/src/plughub_channel_gateway/collect_requirements.py`** (novo):
+
+* `derive_collect_requires(declared, form_masked)` — o **sítio único** da derivação. Ela
+  **acrescenta** e nunca substitui: apagar um `requires:` escrito à mão seria mudar em silêncio
+  o que o autor pediu.
+* `form_masks(form)` — puro, varre o `DialogForm` nas **duas alturas** em que `masked` pode
+  aparecer no `QuestionNodeSchema` (nó e campo). A varredura não ramifica por `kind` de
+  propósito: um `kind` novo que colete entra coberto em vez de entrar mudo.
+* `DialogFormMaskProbe` — busca o formulário publicado no dialog-api (dependência que o
+  channel-gateway **já tinha**: `dialog_api_url`, usado pelo survey web).
+
+**A fonte da declaração é o `DialogForm`, e isso é escolha.** `CollectStep.fields[]` **não tem**
+campo `masked` e não ganhou um aqui: inventar um segundo sítio de declaração é o que a própria
+fatia proíbe. Se um dia ganhar, o lugar de somar é aquela função — não outro `if` no adapter.
+
+### Três decisões que o desenho carrega
+
+**Formulário ilegível ⇒ EXIGE `masked_input`, com log alto.** É *restritivo vence* aplicado à
+ELEIÇÃO, e não uma recusa: o collect continua acontecendo, só que no canal que sabe mascarar. O
+oposto — assumir *"não mascara"* — mandaria um CVV por SMS na primeira instabilidade do
+dialog-api, em silêncio. Se **nenhum** canal do mapa mascarar, aí sim o negociador levanta
+`ValueError` → **409** → o engine lança; a recusa **nomeia** que a exigência é derivada, porque
+o autor não a escreveu em lugar nenhum e não teria por onde começar a procurar.
+
+**O cache dos dois veredictos NÃO envelhece no mesmo prazo.** Servir `True` velho superprotege
+(elege o canal que mascara — inócuo); servir `False` velho **subprotege**: um formulário que
+acabou de ganhar campo mascarado seguiria elegendo SMS, e o autor veria a máscara "não
+funcionar" exatamente enquanto a testa. Logo `True` vive 300 s e `False` vive 30 s. Falha de
+rede **nunca** é cacheada — o `True` conservador de 2 s de indisponibilidade não pode estreitar
+a eleição pelos 5 min seguintes. É a mesma assimetria do `core.fileMode`: o lado restritivo é o
+que pode ficar.
+
+**O ramo do `channel:` FIXO também confere capacidade.** Antes ele só verificava se o canal
+estava no mapa. Sem a conferência, a exigência derivada seria contornável escrevendo uma linha
+no YAML — *um portão que o autor desliga sozinho não é portão*.
+
+**`requires` não fere a cegueira ao processo** do `_negotiate_channel`. Ele é uma lista de
+capacidades, derivada do que a interação COLETA — nunca `skill_id`, `campaign_id` nem o
+`dialog_form_id` de onde veio. Passar o id do formulário ali é que seria a violação; por isso ele
+fica do lado de fora, e o comentário na assinatura diz isso.
+
+### Verificação
+
+`packages/channel-gateway/.../tests/test_collect_masked_requirement.py` — **18 testes**, em
+**pares obrigatórios**, porque cada metade sozinha passa pelo motivo errado: derivar × **não**
+derivar (senão toda pesquisa NPS só poderia sair por webchat) · eleger × **recusar** (eleger
+prova a preferência, não o portão) · negociado × canal **FIXO**.
+
+Gate `infra/test/probe_collect_masked_requirement.sh`, 5 ramos:
+**A** comportamento, rodado contra a **IMAGEM** (imagem sem o módulo ⇒ INCONCLUSIVO, nunca verde
+por ausência) · **B** `handle_collect` repassa a exigência ao negociador · **C** o ramo do
+`channel:` fixo confere capacidade · **D** censo das casas de eleição (uma **terceira** reprova)
+· **E** o ramo morto continua sem produtor.
+
+**Falseabilidade: 7 mutações no produto, 7 vermelhos, cada um no teste que o nomeia**; e mais 4
+mutações contra os ramos B–E do gate. Suíte completa do channel-gateway: **719 passed** (eram
+701).
+
+### Duas lições de arnês, ambas pagas nesta fatia
+
+**A primeira bateria de mutação reportou "MUTAÇÃO SOBREVIVEU" para as sete — e estava errada.**
+O script ia para o container por `bash -c` com heredoc aninhado, que quebrou; o `pytest` **nunca
+rodou**, e "nenhum `failed` na saída" foi lido como suíte fraca. O arnês ganhou **dois**
+controles: a mutação foi aplicada (âncora encontrada uma vez) **e** o pytest produziu sumário.
+Um arnês sem o segundo controle é indistinguível de um produto sem teste.
+
+**E o CR viajou pelo CANO, não por um arquivo.** Com `subprocess.run(..., text=True)` no Windows,
+o wrapper de texto traduz LF em CRLF **ao escrever no stdin**, e o bash do container recebeu
+`tail -n 25\r`. É a regra do `CLAUDE.md` sobre gravar arquivo com ferramenta Windows, aplicada a
+um pipe: o script passou a ir em **bytes**.
+
+**O gate tinha o mesmo buraco e foi fechado junto:** se o bloco AST morre (um `SyntaxError` em
+qualquer arquivo analisado), o `while` não itera, nenhum `bad` é chamado e o probe fica **verde
+por ausência de veredicto**. Foi assim que a mutação E sobreviveu na primeira rodada. Agora o
+probe confere que os quatro ramos **produziram julgamento** — *veredicto que não sai não é
+veredicto que passa*.
+
+### Efeito medido no parque
+
+**Zero collects mudam de comportamento hoje**, e isso é esperado, não decepção: dos 10
+DialogForms do tenant apenas **1** declara campo mascarado (`dialog_limite_solicitacao`, o
+`cvv`), e ele é renderizado por `menu interaction: form` num fluxo de agente — não por um
+`collect`. O valor da fatia é o da própria ADR: *a política de canal passa a valer para todo
+fluxo, inclusive os que ninguém escreveu ainda.*
+
+### Registrado, não consertado
+
+O ramo morto virou **NIV-09**, `adiado` **com gatilho declarado** (`emit_collect_requested`
+ganhar chamador), guardado pelo ramo E do gate. Enquanto o produtor estiver parado há duas
+eleições e **uma só decide** — estável, e por isso não é defeito. O que não pode é o produtor
+voltar sem alguém escolher: aí voltam a ser duas, com semânticas diferentes (`requires[]`
+declarado × derivado), e a permissiva vence.
+
+A ADR foi **corrigida no lugar**: a premissa (3) ganhou a nota de refutação, e F1/F2 saíram de
+"em aberto" para entregues.
+
 ## 2026-09-03 — NIV-01: capacidade de canal passa a ter UMA casa, e a tabela deixa de ser silenciosa
 
 Primeira fatia da [ADR de nível único autorado](docs/adr/adr-agent-flow-single-authored-level.md),

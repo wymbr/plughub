@@ -54,6 +54,27 @@ declarada e **só o webchat a tem**, e `select_channel()` é chamada de `main.py
 `collect.requested`. Mas o `requires[]` é **declarado pelo autor do fluxo**, e **nenhum YAML do
 repositório declara `requires:`**. Portão vivo que nunca recebeu uma exigência real.
 
+> ⚠️ **CORREÇÃO de 2026-09-03, ao implementar a F2 — a premissa acima está PELA METADE, e a
+> metade errada era a tranquilizadora.** *"Portão vivo"* é falso: `select_channel` só é chamada
+> de `main.py::_dispatch_collect`, consumidor de `collect.requested`, e o **único** produtor
+> desse evento (`workflow_api.kafka_emitter.emit_collect_requested`) tem **zero chamadores**
+> (medido por AST — `grep` acha o nome, mas ele aparece só no `import`). As duas rotas de
+> collect da workflow-api respondem **410** desde o Arc 19 Fase D, e a analytics-api já
+> carregava o comentário *"GATILHO: quando `collect_events` tiver produtor"*. Alimentar
+> `requires[]` ali não mudaria nada — seria construir o insumo de um portão que não roda.
+>
+> A eleição que **roda** é `WebhookAdapter._negotiate_channel` (via
+> `POST /v1/channels/webhook/collect`), e ela era **cega a capacidade**: escolhia por
+> `preferred_order` e nunca perguntava o que o canal sabe fazer. Pior, o `requires` **já
+> chegava até ela** — engine → skill-flow-service → corpo do POST → parâmetro declarado — e era
+> **descartado sem uso** (zero ocorrências em `Load` no corpo de 228 linhas).
+>
+> São **duas implementações de eleição, e a que decide é a permissiva** — exatamente a forma
+> que a F1 fechou um nível abaixo, no INVENTÁRIO de capacidade. Por isso a F2 entregue faz as
+> duas metades: derivar a exigência **e** fazer a eleição viva consultá-la. *A lição de método
+> é a de sempre: antes de alimentar um portão, meça se ele roda — "está implementado e testado"
+> não é "está no caminho".*
+
 **(4) O roteiro está cravado no fluxo.** O mesmo `skill_limite_entrada_v1` tem **11 `notify`**
 com texto em português literal (*"Olá! Posso te ajudar com o aumento de limite…"*). Isso não é
 I/O nem negócio.
@@ -122,11 +143,18 @@ a tradução já é feita por primitivos.
 
 ## 5. Fatias em aberto (nenhuma implementada)
 
-- **F1 — uma casa só para capacidade de canal.** `CHANNEL_CAPABILITIES` (hardcoded) × 
-  `supports_masked_input` (config, sem leitor). Decidir qual fica **antes** de construir sobre
-  qualquer uma; duas respostas para o mesmo fato significam que a permissiva vale.
-- **F2 — derivar `requires ⊇ {masked_input}` da declaração `masked:`**, num sítio só, em vez de
-  o autor declarar. É o insumo que falta ao `select_channel`, não um mecanismo novo.
+- ~~**F1 — uma casa só para capacidade de canal.**~~ **Entregue 2026-09-03** (NIV-01).
+  `CHANNEL_CAPABILITIES` fica (capacidade é fato do PROTOCOLO); `ChannelCapabilitiesSchema`
+  saiu, e o que era política sobreviveu em `MaskedFallbackPolicySchema`. A tabela virou
+  **exaustiva** sobre o `ChannelSchema` — cobria 6 dos 9 canais, e os 3 ausentes nunca eram
+  eleitos, em silêncio. Gate: `infra/test/probe_channel_capability_single_house.sh`.
+- ~~**F2 — derivar `requires` ⊇ `{masked_input}` da declaração `masked:`**~~ **Entregue
+  2026-09-03** (NIV-02), em **duas** metades e não uma — a redação original supunha que
+  faltasse só o insumo, e a premissa (3) acima está corrigida no lugar. A derivação tem um
+  sítio (`collect_requirements.derive_collect_requires`, alimentado pelo `DialogForm` que o
+  collect renderiza) **e** a eleição VIVA passou a consultá-la, inclusive no ramo do
+  `channel:` fixo — sem isso o portão seria desligável escrevendo uma linha no YAML. Gate:
+  `infra/test/probe_collect_masked_requirement.sh`.
 - **F3 — recusa em DOIS momentos.** No **deploy**: skill com campo `masked` promovida a pool
   sem nenhum canal `masked_input` é decidível estaticamente, e pega antes de haver cliente do
   outro lado. No **runtime**: conjunto elegível vazio → recusar alto (`masked_fallback: decline`

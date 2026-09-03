@@ -61,6 +61,11 @@ import jwt as pyjwt          # Journey J4c — mint the webchat JWT that pre-bin
 import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
+from ..channel_capability_registry import channel_satisfies
+from ..collect_requirements import (
+    DialogFormMaskProbe,
+    derive_collect_requires,
+)
 from ..config import Settings
 from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
@@ -363,6 +368,11 @@ class WebhookAdapter(ChannelAdapter):
         self._producer = producer
         self._redis    = redis
         self._settings = settings
+
+        # NIV-02 — o collect exige `masked_input` quando o DialogForm que ele
+        # renderiza tem campo mascarado. Cache curto: o veredicto é fato do
+        # formulário publicado, não da chamada.
+        self._form_mask = DialogFormMaskProbe(getattr(settings, "dialog_api_url", ""))
 
         # Identity Resolver (Fase A) — co-located module. Redis index (Slice 1) +
         # optional PG durability (Slice 2, reuses the gateway's asyncpg pool).
@@ -1834,6 +1844,7 @@ class WebhookAdapter(ChannelAdapter):
         tenant_id:      str,
         customer_id:    str,
         channel_policy: dict[str, Any] | None,
+        requires:       list[str] | None = None,
     ) -> tuple[str, str]:
         """
         Journey J4c — resolvedor N2. Devolve **(canal, pool)**.
@@ -1848,6 +1859,13 @@ class WebhookAdapter(ChannelAdapter):
           - política do tenant (slot — vazio v1)
           - o `channel_policy` DECLARATIVO, que é **config de negócio injetada no
             deploy** (`config_json` do slot → `$.config.*`), não conteúdo do skill.
+          - `requires` — capacidades que o canal PRECISA ter (NIV-02).
+
+        ⚠️ `requires` **não fere a cegueira ao processo**. Ele é uma lista de
+        capacidades (`masked_input`, …), derivada do que a interação COLETA —
+        nunca `skill_id`, `campaign_id` nem o `dialog_form_id` de onde veio. É da
+        mesma natureza da alcançabilidade: fato transversal da interação. Passar o
+        id do formulário aqui SERIA a violação; por isso ele fica do lado de fora.
 
         O mapa `channels` (canal → pool) é a peça central: suas CHAVES são os canais
         permitidos e seus VALORES, o pool que atende cada um. Antes o pool vinha de
@@ -1882,6 +1900,29 @@ class WebhookAdapter(ChannelAdapter):
                 f"nenhum canal elegível: mapa={list(channels)} exclude={sorted(exclude)} "
                 f"alcançáveis={reachable}"
             )
+
+        # NIV-02 — CAPACIDADE. Até 2026-09-03 esta eleição escolhia por
+        # preferência e pronto: nada perguntava o que o canal sabe fazer. A
+        # função pura que sabe (`channel_satisfies`, sobre a casa única da
+        # NIV-01) existia e só era chamada no `_dispatch_collect`, cujo produtor
+        # de evento tem ZERO chamadores — ou seja, o portão de capacidade rodava
+        # em ramo morto enquanto o vivo passava tudo.
+        if requires:
+            capazes = [c for c in allowed if channel_satisfies(c, requires)]
+            if not capazes:
+                raise ValueError(
+                    f"nenhum canal elegível SATISFAZ {sorted(requires)}: "
+                    f"candidatos={allowed}. A exigência é DERIVADA do que a"
+                    f" interação coleta (NIV-02), não declarada à mão — se ela"
+                    f" surpreende, o formulário tem campo mascarado e o mapa"
+                    f" `channel_policy.channels` não oferece canal que mascare."
+                )
+            if len(capazes) != len(allowed):
+                logger.info(
+                    "collect: capacidade %s estreitou a eleição de %s para %s",
+                    sorted(requires), allowed, capazes,
+                )
+            allowed = capazes
 
         chosen = next((c for c in preferred if c in allowed), allowed[0])
         return chosen, channels[chosen]
@@ -1941,16 +1982,38 @@ class WebhookAdapter(ChannelAdapter):
         # ── N2: negocia canal E pool a partir do mapa de negócio (config de deploy) ──
         # O `channel` fixo só existe para transporte realmente fixo (collect interno a
         # um sistema); para outbound-ao-cliente ele seria N3 escolhendo o canal.
+        #
+        # NIV-02 — a exigência de capacidade é DERIVADA, num sítio só. Até aqui
+        # `requires` era um parâmetro RECEBIDO E DESCARTADO (zero usos no corpo,
+        # medido por AST), e nenhum YAML o declarava: portão sem insumo de um lado,
+        # insumo sem leitor do outro.
+        form_mascara, motivo = await self._form_mask.masks(tenant_id, dialog_form_id)
+        requires_efetivo = derive_collect_requires(requires, form_mascara)
+        if form_mascara:
+            logger.info(
+                "collect: form %s exige masked_input (motivo=%s) — requires=%s",
+                dialog_form_id or "(nenhum)", motivo, requires_efetivo,
+            )
+
         if channel:
             pool_from_map = ((channel_policy or {}).get("channels") or {}).get(channel)
             if not pool_from_map:
                 raise ValueError(
                     f"`channel` fixo '{channel}' não está no mapa channel_policy.channels"
                 )
+            # O canal FIXO não escapa da capacidade. Sem esta linha, a exigência
+            # derivada seria contornável escrevendo `channel:` no YAML — um portão
+            # que o autor desliga sozinho não é portão.
+            if requires_efetivo and not channel_satisfies(channel, requires_efetivo):
+                raise ValueError(
+                    f"`channel` fixo '{channel}' não satisfaz "
+                    f"{sorted(requires_efetivo)} (exigência DERIVADA do que a "
+                    f"interação coleta, NIV-02)"
+                )
             negotiated, pool_id = channel, pool_from_map
         else:
             negotiated, pool_id = await self._negotiate_channel(
-                tenant_id, customer_id, channel_policy,
+                tenant_id, customer_id, channel_policy, requires_efetivo,
             )
 
         # ── S2: grão → CHAVE do sinal ─────────────────────────────────────────
