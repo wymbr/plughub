@@ -87,7 +87,6 @@ interface MenuValidation {
   /** Nome de entrada do catálogo de formatos. Decide afordância e veredicto. */
   format?:     string
   numeric?:    boolean
-  pattern?:    string
   min_length?: number
   max_length?: number
   min?:        number
@@ -125,9 +124,11 @@ function validateFormat(value: string, v: MenuValidation): boolean {
   const s = value ?? ""
   if (v.format && !validateDialogFormat(s, v.format).ok) return false
   if (v.numeric && (s.trim() === "" || Number.isNaN(Number(s)))) return false
-  if (v.pattern) {
-    try { if (!new RegExp(v.pattern).test(s)) return false } catch { /* invalid regex → skip */ }
-  }
+  // `pattern` REMOVIDO na F3. As três linhas que estavam aqui continham um
+  // fail-open: o `catch` de regex inválida caía FORA do `if`, então a função
+  // seguia e retornava `true` — um `^[0-9{6}$` digitado errado no editor
+  // liberava qualquer entrada, sem log. Removê-lo apaga o defeito por
+  // construção, em vez de exigir que alguém lembre de consertá-lo.
   if (v.min_length !== undefined && s.length < v.min_length) return false
   if (v.max_length !== undefined && s.length > v.max_length) return false
   if (v.min !== undefined || v.max !== undefined) {

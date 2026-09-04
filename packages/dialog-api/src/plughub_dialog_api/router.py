@@ -32,6 +32,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from plughub_authz import enforce_write
 from pydantic import BaseModel, Field
 
+from .format_guard import conflitos_de_formato
 from .db import (
     FormArchivedError,
     db_create_form,
@@ -191,6 +192,29 @@ async def publish_form(
 ) -> dict:
     tenant_id = _require_tenant(x_tenant_id)
     _require_admin(request, x_admin_token)
+
+    # §D8 — o campo nomeia o tipo UMA vez. `masked: "cpf"` ja deriva o formato;
+    # declarar `format` junto e DIFERENTE e contradicao que o schema aceitaria,
+    # e o efeito seria mascara dizendo uma coisa e veredicto julgando outra.
+    # Recusa aqui, no publish, que e onde ha autor para ler — e nomeando os DOIS
+    # lados, porque "conflito de formato" sem os nomes devolve a mesma
+    # investigacao que a ausencia de mensagem.
+    rascunho = await db_get_form(_pool(request), tenant_id, form_id, version=version)
+    if rascunho:
+        conflitos = conflitos_de_formato(rascunho.get("nodes") or [])
+        if conflitos:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "format_declaration_conflict",
+                    "message": (
+                        "A declaracao de formato contradiz o tipo mascarado. "
+                        "Remova `validation.format` (o tipo ja o deriva) ou troque o tipo."
+                    ),
+                    "conflicts": conflitos,
+                },
+            )
+
     try:
         form = await db_publish_form(_pool(request), tenant_id, form_id, version)
     except FormArchivedError as exc:

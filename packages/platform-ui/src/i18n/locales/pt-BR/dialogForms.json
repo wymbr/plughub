@@ -32,10 +32,16 @@
     "timeout": "Timeout (s)",
     "minLength": "Mín. car.",
     "maxLength": "Máx. car.",
-    "pattern": "Padrão (regex)",
     "retry": "Reprompt",
     "repromptPlaceholder": "Valor inválido, tente de novo",
-    "maxAttempts": "Tentativas"
+    "maxAttempts": "Tentativas",
+    "format": "Formato",
+    "formatNone": "(sem formato)",
+    "formatDerived": "Formato {{format}} herdado do tipo {{tipo}} — declarado uma vez só.",
+    "formatConflict": "Conflito: o formato declarado ({{declarado}}) discorda do derivado do tipo mascarado ({{derivado}}). A publicação será recusada.",
+    "maskedType": "Mascarar como",
+    "maskedNone": "(não mascarar)",
+    "catalogUnavailable": "Catálogo indisponível — a lista está vazia por falha de leitura, não por não haver formatos."
   },
   "dimensions": {
     "title": "Instrumentos",

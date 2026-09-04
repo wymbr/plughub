@@ -10,6 +10,14 @@ WORKDIR /app
 COPY packages/py-authz ./packages/py-authz
 RUN pip install --no-cache-dir -e ./packages/py-authz
 
+# Gemeo Python de dados PUROS compartilhados com a TS (packages/py-contextstore).
+# Aqui ele traz o catalogo de formatos, que o guarda da §D8 le no publish para
+# saber qual formato cada tipo mascarado deriva. Dado, sem I/O e sem rede — a
+# alternativa (perguntar ao config-api no publish) acoplaria publicar uma forma
+# a um servico que nao tem nada com isso.
+COPY packages/py-contextstore ./packages/py-contextstore
+RUN pip install --no-cache-dir -e ./packages/py-contextstore
+
 COPY packages/dialog-api ./packages/dialog-api
 
 WORKDIR /app/packages/dialog-api

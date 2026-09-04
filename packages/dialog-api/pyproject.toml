@@ -4,6 +4,8 @@ version         = "1.0.0"
 description     = "PlugHub Platform — Dialog Form store (generic scripted-dialog primitive: survey + OTP)"
 requires-python = ">=3.10"
 dependencies    = [
+    # Catalogo de formatos (gemeo puro, gerado da TS) — lido pelo guarda da §D8.
+    "plughub-contextstore",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     # Verificador canonico de JWT de usuario + portao ABAC. Path dep do monorepo

@@ -1,5 +1,117 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — F3 do catalogo de formatos: `pattern` sai, e o editor deixa de emitir declaracao anonima
+
+Terceira fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).
+
+### `pattern` removido, e o fail-open saiu junto
+
+Censo re-conferido antes de apagar: **0 de 12** formas publicadas, **0** semeadas,
+**0** YAMLs de skill. Tres consumidores no codigo, todos removidos — schema
+(`dialog.ts` + `skill.ts`), engine e editor.
+
+O ganho maior nao e a limpeza. As tres linhas que saíram do `validateFormat`
+continham um **fail-open**: o `catch` de regex invalida caía FORA do `if`, entao a
+funcao seguia e retornava `true`. Um `^[0-9{6}$` digitado errado no editor
+liberava qualquer entrada, sem log. **Remover apaga o defeito por construcao**, em
+vez de exigir que alguem lembre de conserta-lo — e tira do event loop compartilhado
+do engine uma regex autorada por terceiro.
+
+A regex nao saiu do sistema: **mudou de autor**. Hoje e a implementacao de uma
+entrada de catalogo, escrita e revisada uma vez.
+
+### O editor: dois seletores no lugar de dois defeitos
+
+**Formato** — o campo livre de regex virou seletor do catalogo, lido do
+**config-api** e nao do default embutido: a fonte de verdade em runtime e o
+STORE, e ler o embutido faria a tela mostrar um catalogo enquanto o tenant tem
+outro. O cache e por PROMESSA e nao por resultado, para que as N perguntas de um
+formulario compartilhem UMA requisicao em voo, e uma falha nao fique cacheada
+para sempre.
+
+**Tipo mascarado (FMT-08)** — o checkbox virou seletor. `MaskedDeclarationSchema`
+e `false | string` desde a T1 e a referencia tipada ja era usada (`card_cvv` em
+`dialog_limite_solicitacao`), mas vinha de JSON semeado a mao: o checkbox so
+conseguia emitir `true`, que significa `opaque` (*"mascarado SEM tipo"*). **O ADR
+que aboliu a declaracao anonima deixava a unica superficie de autoria emitindo
+justamente a anonima.** `opaque` continua disponivel — agora como opcao NOMEADA.
+
+### D8 — a derivacao trava o seletor, e o publish RECUSA
+
+Quando `masked` nomeia um tipo com contraparte, o formato e DERIVADO e o seletor
+fica travado com o rotulo do que herdou: deixar os dois editaveis convida a
+contradicao. Para o que vem de fora da tela (JSON semeado, API), o editor MOSTRA
+o conflito em vez de corrigir sozinho, e o **publish devolve 422** nomeando os
+dois lados. Escolher um vencedor em silencio e como se paga a diferenca depois.
+
+O guarda (`dialog-api/format_guard.py`) percorre pergunta **e** campo — cobrir so
+um deixaria metade do formulario sem guarda, que e como a D6 nasceu. E tem uma
+assimetria deliberada: ele le o catalogo EMBUTIDO, entao um formato que o tenant
+tenha ACRESCENTADO nao e conhecido e o conflito **passa despercebido** — nunca o
+contrario. Um guarda que INVENTASSE conflito bloquearia forma valida, que e o
+dano maior. Mesma divida do FMT-09, na direcao segura.
+
+`dialog-api` ganhou o gemeo puro como dependencia (pyproject + Dockerfile), pelo
+mesmo padrao de `config-api` e `channel-gateway`. A alternativa — perguntar ao
+config-api no publish — acoplaria publicar uma forma a um servico que nao tem
+nada com isso.
+
+### TERCEIRA ocorrencia da familia do tipo espelhado
+
+`platform-ui/src/api/dialog-hooks.ts` estava atras em DOIS pontos: nao tinha
+`format`, e declarava `masked?: boolean` onde o canonico e `false | string`. O
+segundo e o mais instrutivo — **o estreitamento tornava a declaracao TIPADA
+inexprimivel pela tela**, que e exatamente o defeito da FMT-08 visto pelo lado do
+tipo. Um espelho que estreita o original transforma perda de caso em codigo que
+compila.
+
+Contagem da familia neste par de arquivos: `capture.kind` (DTO-01, 2026-09-04) ·
+`fields[].validation` (D6, F2) · `format`+`masked` (aqui).
+
+### Gate
+
+`infra/test/probe_dialog_format_declaration.sh` — seis ramos, todos com controle
+positivo:
+
+| ramo | prova |
+|---|---|
+| **A** | a **IMAGEM** em execucao DESCARTA `pattern` |
+| **A'** | ...e ainda deixa passar `format` e `max_length` — senao o A passaria por descartar tudo |
+| **B** | censo de regressao: 0 de 12 formas publicadas |
+| **C** | publish RECUSA `masked=cpf` + `format=date_br` (422) |
+| **C'** | forma COERENTE publica — senao o C passaria por recusar qualquer coisa |
+| **D** | editor sem campo livre de regex e com os dois seletores |
+
+**D e `grep`, e esta declarado como tal** no proprio arquivo: prova ausencia da
+afordancia antiga e presenca da nova no FONTE, nao que a tela funcione. A metade
+que falta e a divida conhecida do `platform-ui` sem runner.
+
+Bateria `infra/test/mut_dialog_format_declaration.sh`:
+
+| mutacao | ramo |
+|---|---|
+| M1 `pattern` restaurado no schema | **A** (discriminador) |
+| M2 guarda neutralizado | **C** |
+| M3 guarda recusando tudo | **C'** |
+| M4 campo livre de regex de volta | **D** |
+
+⚠️ **M1 e mais fraca que as outras, e isso esta escrito no cabecalho da bateria.**
+Refutar o A de verdade exigiria reconstruir o agent-registry com o schema velho;
+o que a M1 falseia e o DISCRIMINADOR, rodando o mesmo JS contra o `dist` local.
+Quem cobre a metade restante e o A', que reprova se o probe estiver lendo nada.
+
+### A bateria achou um defeito no proprio gate
+
+Na restauracao, o gate voltou **vermelho** por `C' → HTTP 409`. Nao era o guarda:
+`DELETE` de DialogForm e **arquivar** (`adr-dialog-form-deletion`), e purga real so
+existe para o nunca-publicado — entao a limpeza deixava as duas sondas arquivadas
+e a **segunda rodada batia em 409**. Um gate que so passa na primeira execucao
+ensina todo mundo a ignora-lo. Hoje ele desarquiva antes de criar, reusa os mesmos
+ids e nao acumula lixo; a idempotencia foi provada rodando duas vezes seguidas.
+
+Suites: schemas 211 · mcp-server-plughub 259 · dialog-api 27 (na IMAGEM).
+Gates do arco re-executados: paridade VERDE, F2 VERDE, i18n duplicadas VERDE.
+
 ## 2026-09-04 — F2 do catalogo de formatos: o engine julga, e validar deixou de depender de retry
 
 Segunda fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).

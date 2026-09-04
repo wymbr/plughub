@@ -32,10 +32,16 @@
     "timeout": "Timeout (s)",
     "minLength": "Min len",
     "maxLength": "Max len",
-    "pattern": "Pattern (regex)",
     "retry": "Reprompt",
     "repromptPlaceholder": "Invalid, try again",
-    "maxAttempts": "Attempts"
+    "maxAttempts": "Attempts",
+    "format": "Format",
+    "formatNone": "(no format)",
+    "formatDerived": "Format {{format}} inherited from type {{tipo}} — declared only once.",
+    "formatConflict": "Conflict: the declared format ({{declarado}}) disagrees with the one derived from the masked type ({{derivado}}). Publishing will be refused.",
+    "maskedType": "Mask as",
+    "maskedNone": "(do not mask)",
+    "catalogUnavailable": "Catalog unavailable — the list is empty because the read failed, not because there are no formats."
   },
   "dimensions": {
     "title": "Instruments",

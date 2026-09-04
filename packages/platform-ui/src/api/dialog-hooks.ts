@@ -20,8 +20,16 @@ const BASE = '/v1/dialog/forms'
 export type LocalizedText = string | Record<string, string>
 
 export interface DialogValidation {
+  /**
+   * Nome de entrada do catálogo `dialog.formats` — a declaração PRIMÁRIA desde
+   * o ADR `adr-dialog-input-format-catalog`. Decide afordância (máscara de
+   * digitação, teclado, comprimento) e veredicto em dois níveis.
+   */
+  format?: string
   numeric?: boolean
-  pattern?: string
+  // `pattern` REMOVIDO na F3 (2026-09-04), junto com o campo livre de regex no
+  // editor. Censo antes de remover: 0 de 12 formas publicadas, 0 semeadas, 0
+  // YAMLs.
   min_length?: number
   max_length?: number
   min?: number
@@ -85,7 +93,13 @@ export interface DialogField {
   label: LocalizedText
   type: string
   required?: boolean
-  masked?: boolean
+  /**
+   * `false | string`: a string NOMEIA um tipo de `masking.types` (T1 do
+   * `adr-masked-typed-declaration`); `true` legado resolve para `opaque`.
+   * Era `boolean` aqui, e o estreitamento tornava a declaração TIPADA
+   * inexprimível pela tela — terceira ocorrência da família DTO-01.
+   */
+  masked?: boolean | string
   validation?: DialogValidation
   capture?: DialogCapture
 }
@@ -118,7 +132,13 @@ export interface QuestionNode {
   interaction: DialogInteraction
   options?: DialogOption[]
   fields?: DialogField[]
-  masked?: boolean
+  /**
+   * `false | string`: a string NOMEIA um tipo de `masking.types` (T1 do
+   * `adr-masked-typed-declaration`); `true` legado resolve para `opaque`.
+   * Era `boolean` aqui, e o estreitamento tornava a declaração TIPADA
+   * inexprimível pela tela — terceira ocorrência da família DTO-01.
+   */
+  masked?: boolean | string
   output_key: string
   capture?: DialogCapture
   validation?: DialogValidation

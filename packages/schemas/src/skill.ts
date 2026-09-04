@@ -431,10 +431,12 @@ export const NotifyStepSchema = z.object({
  * aprovado), que é controle do chamador.
  */
 const MenuValidationShape = z.object({
-  /** Nome de entrada do catálogo de formatos (ADR adr-dialog-input-format-catalog). */
+  /**
+   * Nome de entrada do catálogo de formatos (ADR adr-dialog-input-format-catalog).
+   * ⚠️ Substituiu `pattern`, removido na F3 — ver `DialogValidationSchema`.
+   */
   format:     z.string().optional(),
   numeric:    z.boolean().optional(),
-  pattern:    z.string().optional(),
   min_length: z.number().int().nonnegative().optional(),
   max_length: z.number().int().nonnegative().optional(),
   min:        z.number().optional(),

@@ -64,13 +64,16 @@ export const DialogValidationSchema = z
      * abaixo continuam válidos e são aplicados POR CIMA — um `max_length` na
      * pergunta aperta o do formato, nunca o afrouxa.
      *
-     * ⚠️ `pattern` está em remoção (F3): regex crua não guia digitação, não
-     * produz mensagem localizada e não alcança validade semântica — `31/02/2026`
-     * casa qualquer regex de data.
+     * ⚠️ **`pattern` NÃO existe mais** (F3, 2026-09-04). Regex crua não guia
+     * digitação, não produz mensagem localizada e não alcança validade
+     * semântica — `31/02/2026` casa qualquer regex de data. Removida com censo
+     * ZERO (0 de 12 formas publicadas, 0 semeadas, 0 YAMLs) e apagando por
+     * construção um fail-open: regex inválida caía num `catch` e liberava tudo.
+     * A regex não saiu do sistema, mudou de AUTOR — hoje é a implementação de
+     * uma entrada de catálogo, revisada e testada uma vez.
      */
     format:     z.string().optional(),
     numeric:    z.boolean().optional(),
-    pattern:    z.string().optional(), // regex, format only
     min_length: z.number().int().nonnegative().optional(),
     max_length: z.number().int().nonnegative().optional(),
     min:        z.number().optional(),

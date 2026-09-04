@@ -40,6 +40,9 @@ import {
   type AskWhenOp,
 } from '@/api/dialog-hooks'
 import { type Block, buildBlocks, flattenBlocks } from './dialog-blocks'
+import {
+  useFormatCatalog, useMaskedTypes, formatLabel, formatForMasked,
+} from './catalog-hooks'
 
 // ── LocalizedText / visibility helpers ────────────────────────────────────────
 
@@ -734,6 +737,28 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLo
 const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; priorKeys: string[]; onChange: (n: DialogNode) => void }> =
 ({ node, locale, defaultLocale, scored, priorKeys, onChange }) => {
   const { t } = useTranslation('dialogForms')
+  const { tenantId } = useAuth()
+  // Os dois catálogos vêm do STORE (config-api), nunca do default embutido: é
+  // ele a fonte de verdade em runtime, e ler o embutido faria a tela mostrar um
+  // catálogo enquanto o tenant tem outro. O cache do módulo faz as N perguntas
+  // de um formulário compartilharem UMA requisição.
+  const { formats, erro: errFmt }  = useFormatCatalog(tenantId)
+  const { types: maskedTypes, erro: errMsk } = useMaskedTypes(tenantId)
+  const catalogoErro = errFmt ?? errMsk
+
+  // D8 — o campo nomeia o tipo UMA vez. Se `masked` nomeia um tipo com
+  // contraparte de formato, o formato é DERIVADO e o seletor fica travado:
+  // deixar os dois editáveis convida à contradição que a §D8 recusa no publish.
+  const maskedId  = node.masked === true ? 'opaque' : (typeof node.masked === 'string' ? node.masked : undefined)
+  const derivado  = formatForMasked(maskedId, formats)
+  // Conflito só existe quando o autor declarou AMBOS e eles discordam — estado
+  // alcançável por forma criada fora da tela (JSON semeado, API). A tela o
+  // MOSTRA em vez de corrigir sozinha: escolher um vencedor em silêncio é como
+  // se paga a diferença depois.
+  const conflito  = derivado && node.validation?.format && node.validation.format !== derivado.id
+    ? derivado.id
+    : undefined
+
   const setOptions = (options: DialogOption[]) => onChange({ ...node, options })
   return (
     <div className="space-y-2">
@@ -767,10 +792,29 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
 
       {!scored && (
         <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={!!node.masked}
-              onChange={e => onChange({ ...node, masked: e.target.checked || undefined })} />
-            {t('field.masked')}
+          {/*
+            FMT-08 — o checkbox virou SELETOR DE TIPO.
+            `MaskedDeclarationSchema` é `false | string` desde a T1, e a
+            referência tipada já era usada (`card_cvv` em
+            `dialog_limite_solicitacao`) — mas vinha de JSON semeado à mão,
+            porque o checkbox só conseguia emitir `true`, que significa
+            `opaque` ("mascarado SEM tipo"). O ADR que aboliu a declaração
+            anônima deixava a única superfície de autoria emitindo justamente a
+            anônima. Afordância ausente não é neutra: ela escolhe o default.
+            `opaque` continua disponível, agora como opção NOMEADA.
+          */}
+          <label className="flex items-center gap-1">{t('field.maskedType')}
+            <select
+              value={node.masked === true ? 'opaque' : (node.masked || '')}
+              onChange={e => onChange({ ...node, masked: e.target.value || undefined })}
+              className="border rounded px-1 py-0.5 bg-white">
+              <option value="">{t('field.maskedNone')}</option>
+              {maskedTypes.map(mt => (
+                <option key={mt.id} value={mt.id}>
+                  {(mt.icon ? mt.icon + ' ' : '') + (mt.label ?? mt.id)}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="flex items-center gap-1">{t('field.timeout')}
             <input type="number" value={node.timeout_s ?? ''} className="w-16 border rounded px-1 py-0.5 bg-white"
@@ -804,11 +848,40 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
                 onChange={e => onChange({ ...node, validation: { ...node.validation, max_length: e.target.value === '' ? undefined : Number(e.target.value) } })} />
             </label>
           </div>
-          <label className="flex items-center gap-1 text-xs text-gray-600">{t('field.pattern')}
-            <input value={node.validation?.pattern ?? ''} placeholder="^[0-9]{6}$"
-              onChange={e => onChange({ ...node, validation: { ...node.validation, pattern: e.target.value || undefined } })}
-              className="flex-1 border rounded px-2 py-0.5 bg-white font-mono" />
+          {/*
+            F3 — o campo LIVRE de regex virou seletor de catálogo.
+            Regex crua não fala com o teclado, não tem rótulo de erro e não
+            alcança validade semântica (`31/02/2026` casa qualquer regex de
+            data). A regex não saiu do sistema: mudou de AUTOR, e hoje é a
+            implementação de uma entrada revisada uma vez.
+          */}
+          <label className="flex items-center gap-1 text-xs text-gray-600">{t('field.format')}
+            <select
+              value={node.validation?.format ?? ''}
+              disabled={!!derivado}
+              onChange={e => onChange({ ...node, validation: { ...node.validation, format: e.target.value || undefined } })}
+              className="flex-1 border rounded px-2 py-0.5 bg-white disabled:bg-gray-100">
+              <option value="">{t('field.formatNone')}</option>
+              {formats.map(f => (
+                <option key={f.id} value={f.id}>{formatLabel(f, locale)}</option>
+              ))}
+            </select>
           </label>
+          {/* D8 — o campo nomeia o tipo UMA vez. */}
+          {derivado && (
+            <p className="text-[11px] text-blue-700">
+              {t('field.formatDerived', { format: formatLabel(derivado, locale), tipo: String(node.masked) })}
+            </p>
+          )}
+          {conflito && (
+            <p className="text-[11px] text-red-700 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              {t('field.formatConflict', { declarado: node.validation?.format ?? '', derivado: conflito })}
+            </p>
+          )}
+          {catalogoErro && (
+            <p className="text-[11px] text-amber-700">{t('field.catalogUnavailable')}</p>
+          )}
           <div className="flex items-center gap-2 text-xs text-gray-600">
             <span>{t('field.retry')}</span>
             <input value={ltToStr(node.retry?.reprompt, locale, defaultLocale)} placeholder={t('field.repromptPlaceholder')}
