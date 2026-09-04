@@ -33,7 +33,7 @@
  */
 import {
   deriveAudience, maskForSite, maskChangesValue, maskOmitsField,
-  applyMaskingTypeToValue, flattenContextMap,
+  applyMaskingTypeToValue, maskFreeText, flattenContextMap,
   type CtxAudience, type CtxReadMask, type DataTypeCatalog,
 } from "@plughub/schemas"
 
@@ -168,11 +168,17 @@ export async function filtrarLeituraCtx(
     const quem = `tag=${tag} tipo=${tipo ?? "NÃO DECLARADA"}`
 
     if (!maskChangesValue(mascara)) {
-      // `undecided` / `unknown` — a fase que decide não é esta.
+      // `undecided` / `unknown` — a fase que DECIDE não é esta, e continua não sendo:
+      // o log fica. O que mudou na F5 é que o `unknown` deixa de sair sem nada — a
+      // REDE (§D12, camada 3) passa por cima dele. Isso não decide a V4: a rede é
+      // mitigação por FORMA e não declara tipo nenhum; a tag continua indeclarada e
+      // continua sendo contada como tal.
       registra(`${sitio.stepId ?? "?"}|${tag}|${plateia}|${mascara}`, () => console.warn(
         `[ctx-audit] NÃO aplicado (${mascara === "undecided" ? "§D5, fase F4" : "§D4, é a V4 da allowlist"}): ` +
         `${quem} ${onde} → ${mascara}`))
-      return valor
+      return mascara === "unknown"
+        ? redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${tag}`)
+        : valor
     }
 
     const filtrado = applyMaskingTypeToValue(String(valor), mascara)
@@ -188,6 +194,61 @@ export async function filtrarLeituraCtx(
       `[ctx-audit] FALHA ao filtrar tag=${tag} step=${sitio.stepId ?? "?"} (${String(e)}) — ` +
       "o valor saiu SEM filtro. Isto não é 'nada a mascarar'."
     )
+    return valor
+  }
+}
+
+/**
+ * redeParaTextoLivre — a camada 3 da §D12, e ela é MITIGAÇÃO.
+ *
+ * Roda onde não há tipo declarado: `$.pipeline_state.*` (que o mapa não alcança — ele
+ * tipa tag de ContextStore, não chave de pipeline_state) e tag fora do mapa.
+ *
+ * ⚠️ **Não confundir com cobertura.** Ela pega 4 dos 15 tipos, só por FORMA. A garantia
+ * é declarar o campo num `DialogForm`; esta função reduz dano onde a captura já
+ * aconteceu em texto livre.
+ *
+ * ⚠️ **Só para plateia de gente.** `system` recebe o valor inteiro — o CRM precisa dele,
+ * e é a mesma razão do `plain` da §D2. Rodar a rede ali quebraria o `invoke` sem que
+ * nenhuma política pedisse.
+ *
+ * Segura sobre valor JÁ mascarado: os `replacement` não contêm padrão de PII, então a
+ * segunda passada é no-op (§D12, medido). É o que permitiu à F5 dispensar o carimbo.
+ */
+function redeParaTextoLivre(
+  valor:   unknown,
+  plateia: CtxAudience,
+  onde:    string,
+): unknown {
+  if (plateia !== "customer" && plateia !== "operator") return valor
+  const r = maskFreeText(valor)
+  if (r.categories.length === 0) return valor
+  registra(`rede|${onde}|${[...new Set(r.categories)].sort().join(",")}`, () => console.info(
+    `[ctx-audit] REDE (mitigação, §D12): ${onde} plateia=${plateia} — ` +
+    `categorias=${[...new Set(r.categories)].sort().join(",")} em ${r.fields.length} campo(s). ` +
+    "Isto é dado capturado em TEXTO LIVRE; o certo é declará-lo num DialogForm."))
+  return r.value
+}
+
+/**
+ * filtrarTextoLivre — a porta da F5, para o que NÃO tem tag.
+ *
+ * O `interpolate` a chama para `$.pipeline_state.*`. Não há tipo a consultar, então não
+ * há catálogo a carregar e nada que possa falhar por rede — é regex puro e síncrono.
+ */
+export function filtrarTextoLivre(
+  valor: unknown,
+  sitio: SitioInterpolacao,
+  ref:   string,
+): unknown {
+  try {
+    if (valor === undefined || valor === null || valor === "") return valor
+    const plateia = deriveAudience(sitio.stepType, sitio.visibility)
+    return redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${ref}`)
+  } catch (e) {
+    console.warn(
+      `[ctx-audit] FALHA na rede para ${ref} step=${sitio.stepId ?? "?"} (${String(e)}) — ` +
+      "o valor saiu SEM filtro. Isto não é 'nada a mascarar'.")
     return valor
   }
 }

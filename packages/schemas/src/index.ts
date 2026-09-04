@@ -865,13 +865,15 @@ export {
   deriveAudience,
   resolveMaskForAudience,
   applyMaskingTypeToValue,
+  maskFreeText,
+  freeTextNetSize,
   maskForSite,
   maskOmitsField,
   maskChangesValue,
   flattenContextMap,
 } from "./ctx-audience"
 
-export type { CtxAudience, CtxReadMask } from "./ctx-audience"
+export type { CtxAudience, CtxReadMask, FreeTextMaskResult } from "./ctx-audience"
 
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {

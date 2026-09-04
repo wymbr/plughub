@@ -21,7 +21,9 @@
 import { z } from "zod"
 import {
   DEFAULT_DATA_TYPE_CATALOG,
+  DEFAULT_MASKING_RULES,
   type DataTypeCatalog, type DataType, type ContextMaskingType,
+  type DataCategory as ContextMaskingCategory,
 } from "./audit"
 
 // ─────────────────────────────────────────────
@@ -299,6 +301,105 @@ export function maskOmitsField(m: CtxReadMask): boolean {
  */
 export function maskChangesValue(m: CtxReadMask): m is ContextMaskingType {
   return m !== "plain" && m !== "undecided" && m !== "unknown"
+}
+
+// ─────────────────────────────────────────────
+// A REDE — detecção de PII em texto livre (§D12)
+// ─────────────────────────────────────────────
+
+/**
+ * ⚠️ **MITIGAÇÃO, nunca controle.** Leia a §D12 antes de confiar nisto.
+ *
+ * A garantia vem de DECLARAR o campo (`DialogForm` → tipo → §D6), e a regra de produto
+ * é **nunca capturar dado em texto livre quando um `DialogForm` puder fazê-lo**. Esta
+ * rede existe para reduzir dano onde a captura já aconteceu — apresentá-la como
+ * cobertura faria alguém relaxar sobre a captura, que é o anestésico mais caro que este
+ * arco pode produzir.
+ *
+ * Limites medidos em 2026-09-04:
+ *
+ *   · **4 de 15 tipos** têm `detect_pattern` — `cpf`, `credit_card`, `phone`,
+ *     `email_addr`. Os 11 restantes não são detectáveis, e vários POR DECISÃO (o
+ *     `card_expiry` não tem padrão porque `\d{2}/\d{2}` casaria qualquer data);
+ *   · pega o que é reconhecível por FORMA, nada do que é sensível por CONTEXTO;
+ *   · nem com LLM o acerto é 100% — LLM melhoraria a estimativa, não a transformaria
+ *     em garantia. E ficaria FORA daqui: esta função é pura e síncrona, e é chamada
+ *     por interpolação, dentro do turno.
+ *
+ * **Idempotente**, e é isso que a torna segura sobre valor que já passou por máscara:
+ * os `replacement` não contêm padrão de PII, então uma segunda passada é no-op.
+ * Medido nos quatro tipos — `***4444`, `***.***.***.--`, `(##) ****-4321` e
+ * `m***@exemplo.com` não casam nada.
+ *
+ * ⚠️ **Mudou de casa em 2026-09-04 (F5).** O corpo vivia em
+ * `sdk/src/mcp-interceptor.ts` (R7a). O engine precisou dela e não importa o sdk — e
+ * copiar faria a enésima casa de mascaramento. O sdk agora reexporta.
+ */
+export interface FreeTextMaskResult {
+  value:      unknown
+  /** Caminhos em notação de ponto onde houve substituição. */
+  fields:     string[]
+  categories: ContextMaskingCategory[]
+}
+
+const _REDE: { re: RegExp; category: ContextMaskingCategory; replacement: string }[] =
+  DEFAULT_MASKING_RULES.flatMap(r => {
+    try {
+      return [{ re: new RegExp(r.pattern, "g"), category: r.category, replacement: r.replacement }]
+    } catch {
+      // Regra com regex inválida SAI da rede em vez de derrubar o processo. É
+      // degradação, e ela é contável: `_REDE.length` < `DEFAULT_MASKING_RULES.length`.
+      return []
+    }
+  })
+
+/** Quantas regras da rede compilaram. Menor que o catálogo ⇒ alguma regex é inválida. */
+export function freeTextNetSize(): number {
+  return _REDE.length
+}
+
+/**
+ * maskFreeText — anda o valor recursivamente e mascara PII nas folhas de string.
+ *
+ * Devolve a cópia mascarada, os caminhos onde houve substituição e as categorias
+ * detectadas. Pura e síncrona — sem cofre, sem I/O. Conteúdo não-PII fica intacto.
+ */
+export function maskFreeText(value: unknown, path = ""): FreeTextMaskResult {
+  if (typeof value === "string") {
+    let masked = value
+    const categories: ContextMaskingCategory[] = []
+    for (const rule of _REDE) {
+      rule.re.lastIndex = 0
+      if (rule.re.test(masked)) {
+        masked = masked.replace(rule.re, rule.replacement)
+        categories.push(rule.category)
+      }
+    }
+    return categories.length > 0
+      ? { value: masked, fields: [path || "$"], categories }
+      : { value, fields: [], categories: [] }
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = []
+    const fields: string[] = []
+    const categories: ContextMaskingCategory[] = []
+    value.forEach((item, i) => {
+      const r = maskFreeText(item, path ? `${path}[${i}]` : `[${i}]`)
+      out.push(r.value); fields.push(...r.fields); categories.push(...r.categories)
+    })
+    return { value: out, fields, categories }
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    const fields: string[] = []
+    const categories: ContextMaskingCategory[] = []
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const r = maskFreeText(v, path ? `${path}.${k}` : k)
+      out[k] = r.value; fields.push(...r.fields); categories.push(...r.categories)
+    }
+    return { value: out, fields, categories }
+  }
+  return { value, fields: [], categories: [] }
 }
 
 // ─────────────────────────────────────────────

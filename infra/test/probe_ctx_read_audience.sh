@@ -160,9 +160,9 @@ fi
 V1=$(docker run --rm -v "$RAIZ:/w" -w /w/packages/schemas node:20-alpine \
        npx vitest run src/ctx-audience.test.ts 2>&1 | grep -oE 'Tests +[0-9]+ passed' | head -1)
 V2=$(docker run --rm -v "$RAIZ:/w" -w /w/packages/skill-flow-engine node:20-alpine \
-       npx vitest run src/__tests__/ctx-audit.test.ts 2>&1 | grep -oE 'Tests +[0-9]+ passed' | head -1)
+       npx vitest run src/__tests__/ctx-audit.test.ts src/__tests__/ctx-free-text.test.ts 2>&1 | grep -oE 'Tests +[0-9]+ passed' | head -1)
 if [ -n "$V1" ] && [ -n "$V2" ]; then
-  ok "E. derivação ($V1) e runtime ($V2)"
+  ok "E. derivação ($V1) e runtime — filtro + rede ($V2)"
 else
   bad "E. suíte da derivação ou do runtime reprovou (derivação='$V1' runtime='$V2')"
 fi
@@ -211,6 +211,51 @@ elif [ -n "$TEM_VELHO" ]; then
   inc "F. o engine roda a versao SO-AUDITORIA (achou auditarLeituraCtx, nao filtrarLeituraCtx) — a F3 esta no codigo e NAO na imagem; falta rebuild"
 else
   inc "F. nao encontrei nenhuma das duas versoes em $DIST — o container serve outra coisa"
+fi
+
+# ── H — a REDE da F5 (§D12), viva e com os limites AFIRMADOS ─────────────────
+# Tres coisas no mesmo ramo, e a terceira e a que impede a leitura errada:
+#   1. pega PII em texto livre  (senao a fase nao entregou nada)
+#   2. NAO toca valor ja mascarado (idempotencia — e o que dispensou o carimbo)
+#   3. NAO pega o que e sensivel por CONTEXTO, e o gate DIZ isso
+#
+# ⚠️ O ramo 3 nao e decorativo. A rede e MITIGACAO, e um gate que so mostrasse ela
+# acertando deixaria a impressao de cobertura — o anestesico que faria alguem relaxar
+# sobre capturar em texto livre. A garantia e declarar o campo num DialogForm.
+if [ -n "$TEM_FILTRO" ]; then
+  H=$(docker exec "$ENG_CT" node -e '
+    const { filtrarTextoLivre } = require("'"$DIST"'/ctx-audit.js")
+    const cli = { stepType: "notify", visibility: "all", stepId: "probe" }
+    const sis = { stepType: "invoke", stepId: "probe" }
+    console.log(JSON.stringify({
+      pega:       filtrarTextoLivre("cartao 1111 2222 3333 4444", cli, "$.x"),
+      idempotente:filtrarTextoLivre("cartao ***4444", cli, "$.x"),
+      sistema:    filtrarTextoLivre("cartao 1111 2222 3333 4444", sis, "$.x"),
+      contexto:   filtrarTextoLivre("Rua das Flores 123", cli, "$.x"),
+    }))
+  ' 2>/dev/null | grep -o "{.*}" | tail -1)
+  H_PEGA=$(echo "$H" | jq -r '.pega // empty')
+  H_IDEM=$(echo "$H" | jq -r '.idempotente // empty')
+  H_SIS=$(echo  "$H" | jq -r '.sistema // empty')
+  H_CTX=$(echo  "$H" | jq -r '.contexto // empty')
+
+  if [ -z "$H_PEGA" ]; then
+    inc "H. a rede esta na imagem mas nao foi exercitavel — $(echo "$H" | head -c 100)"
+  else
+    case "$H_PEGA" in
+      *1111*) bad "H. a rede NAO mascarou o cartao em texto livre: $H_PEGA" ;;
+      *)      ok  "H. rede viva: cartao em texto livre -> $H_PEGA" ;;
+    esac
+    [ "$H_IDEM" = "cartao ***4444" ] \
+      && ok  "H. idempotente: valor ja mascarado atravessa intacto (dispensa o carimbo)" \
+      || bad "H. a rede ESTRAGOU valor ja mascarado: $H_IDEM"
+    [ "$H_SIS" = "cartao 1111 2222 3333 4444" ] \
+      && ok  "H. ao SISTEMA sai inteiro — controle positivo (o CRM precisa do numero)" \
+      || bad "H. a rede mascarou para o SISTEMA: $H_SIS"
+    [ "$H_CTX" = "Rua das Flores 123" ] \
+      && ok  "H. LIMITE afirmado: sensivel por CONTEXTO passa inteiro — rede e MITIGACAO, nao cobertura" \
+      || bad "H. a rede mascarou por contexto, o que ela nao sabe fazer: $H_CTX"
+  fi
 fi
 
 echo

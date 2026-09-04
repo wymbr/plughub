@@ -273,7 +273,18 @@ proveniência"* (T3 do ADR do `masked` tipado). Carimbar o tipo ao gravar a resp
 Fica fora da fase 1 porque é maior e tem decisão própria (o que fazer com valor derivado — uma
 concatenação de dois campos herda o tipo de qual?).
 
-### D11 — a F5 está bloqueada, e o carimbo virou requisito de CORREÇÃO
+### D11 — ~~a F5 está bloqueada~~ · **REBAIXADA pela §D12 (2026-09-04)**
+
+> ⚠️ **O bloqueio caiu no mesmo dia, e por medição.** Esta seção concluía que sem carimbo
+> de proveniência não havia aplicação segura, porque `pendencia.context.*` já nasce
+> mascarado e re-mascarar corromperia. **A premissa que faltava: a rede de detecção é
+> IDEMPOTENTE** — o valor já mascarado não casa padrão nenhum (medido nos quatro tipos).
+> Logo aplicar sobre ele é no-op, e o carimbo deixa de ser pré-requisito de segurança.
+>
+> O carimbo continua **desejável**, por precisão: a rede pega 4 de 15 tipos e só por
+> forma, enquanto o carimbo daria o tipo declarado. Vira dívida (CTX-10), não bloqueio.
+>
+> O resto desta seção continua valendo como a MEDIÇÃO que a produziu.
 
 *(Medido em 2026-09-04.)*
 
@@ -310,11 +321,96 @@ allowlist fechou exatamente esse defeito.
 não for tomada, o carimbo não tem regra para os casos compostos — e são eles a maior parte
 de `roteiro.render.*`. Registrado como **CTX-10**.
 
+### D12 — a ordem é DECLARAR > aplicar > rede, e a rede é MITIGAÇÃO, nunca controle
+
+*(Decisão do dono, 2026-09-04. Ela reordena a §D8 — ver o fim desta seção.)*
+
+**A regra de produto vem primeiro, e é ela que carrega o peso:**
+
+> Sempre que possível, **nunca capturar dado em texto livre** — usar `DialogForm`, que
+> declara o campo e o tipo. O LLM fica no **orquestrador**; os agentes especialistas
+> devem ser `DialogForm` sempre que der.
+
+Isso não é preferência de estilo: é a única camada que dá **garantia**. Um campo
+declarado tem tipo, e tipo é fato. Tudo abaixo disso é estimativa.
+
+| camada | o que dá | alcance |
+|---|---|---|
+| **1. declarar** (`DialogForm`) | garantia | o que o roteiro coleta |
+| **2. aplicar na leitura** (F3) | garantia, para o que foi declarado | tag no mapa |
+| **3. rede de detecção** | **mitigação** | o que é reconhecível por FORMA |
+
+⚠️ **A camada 3 não é cobertura, e chamá-la assim seria o pior desfecho deste arco.**
+Uma rede apresentada como controle faz alguém relaxar sobre capturar em texto livre — é
+o "valor plausível" na forma mais cara: um anestésico que remove o incômodo que levaria
+a declarar o campo. Ela existe para reduzir dano onde a captura já aconteceu, nunca para
+autorizá-la.
+
+**Os limites, medidos em 2026-09-04:**
+
+- **4 de 15 tipos** têm `detect_pattern` — `cpf`, `credit_card`, `phone`, `email_addr`.
+  Os 11 restantes não são detectáveis, e vários **por decisão** (o `card_expiry` não tem
+  padrão porque `\d{2}/\d{2}` casaria qualquer data).
+- Ela pega o que é reconhecível por **forma**; nada do que é sensível por **contexto**.
+- Nem com LLM o acerto é 100% — e por isso o LLM não transforma a camada 3 em garantia,
+  só melhora uma estimativa.
+- **"Existe a função" ≠ "ela roda aqui"**: o MSK-02 é a prova — o cartão chegou CRU ao
+  stream canônico apesar de o padrão casar 16 dígitos.
+
+**O que a rede tem de bom, e foi o que destravou a F5:** ela é **idempotente**. Medido
+nos quatro tipos detectáveis — o valor cru casa, o já mascarado **não**:
+
+| tipo | cru | já mascarado |
+|---|---|---|
+| `credit_card` | casa | `***4444` não casa |
+| `cpf` | casa | `***.***.***.--` não casa |
+| `phone` | casa | `(##) ****-4321` não casa |
+| `email_addr` | casa | `m***@exemplo.com` não casa |
+
+É isso que dissolve o bloqueio da §D11: aplicar a rede sobre `pendencia.context.*`, que
+**já nasce mascarado**, é no-op. **O carimbo de proveniência deixa de ser pré-requisito
+de segurança** — vira otimização de precisão, e a §D11 é rebaixada de bloqueio a dívida.
+
+⚠️ **Correção de premissa que o dono levantou e que vale registrar:** *"quando o tipo
+existe, o valor já está gravado no formato adequado"* vale para **FORMATO**
+(`dd/mm/aaaa`, moldado na coleta pelo catálogo de formatos) e **não** para **MÁSCARA**. O
+`adr-masked-typed-declaration` decide que o tipo governa exibição e classe, **nunca
+persistência** — medido aqui: `session.numero_cartao` está cru no ctx e em dois streams
+canônicos (MSK-02). O valor tipado é persistido inteiro **de propósito** (o `invoke` do
+CRM precisa dele), e é por isso que a máscara é aplicada na LEITURA.
+
+**Onde o LLM entra, se entrar:** fora do caminho síncrono. As duas implementações da rede
+são declaradamente *"Pure/synchronous — no vault, no I/O"*, e são chamadas por
+interpolação, dentro do turno. Um LLM ali muda o contrato de todos os chamadores — custo
+e latência por interpolação, num caminho que hoje é O(regex). O precedente é o
+sentimento: chamada dedicada, fora do turno.
+
+### D12.1 — isto NÃO reabre o defeito que a §D8 fechou
+
+A §D8 diz que este arco *"não absorve a DETECÇÃO"*, e a V2b do ADR da allowlist fechou o
+defeito de tê-las fundidas. A distinção que sustenta a §D12:
+
+- **o que a V2b proibiu** foi um campo do catálogo respondendo às DUAS perguntas — *"que
+  máscara este tipo usa?"* e *"como reconheço este dado num texto?"* —, porque aí uma
+  resposta contamina a outra;
+- **o que a §D12 faz** é usá-las como dois mecanismos SEPARADOS, em momentos diferentes,
+  com status diferentes: declaração dá garantia, rede dá mitigação, e a hierarquia entre
+  as duas é explícita.
+
+E há um fato novo que a §D8 não tinha: **a idempotência foi medida depois dela.** Quando
+escrevi *"não absorve a detecção"* eu não sabia que a rede podia rodar sobre valor já
+mascarado sem estragá-lo — e era esse o risco que justificava mantê-la fora.
+
 ### D8 — não absorve a DETECÇÃO
 
 `detect_pattern` acha PII em texto livre; este leitor aplica política a um valor **declarado**. São
 perguntas diferentes em momentos diferentes, e a V2b do ADR da allowlist fechou exatamente o defeito
 de tê-las fundidas.
+
+⚠️ **REORDENADA pela §D12 (2026-09-04).** O que segue continua valendo para a camada de
+DECLARAÇÃO — detectar e declarar seguem sendo perguntas diferentes, e fundi-las num campo
+só continua proibido. O que mudou é que a detecção passou a ter lugar **abaixo** da
+declaração, como mitigação nomeada, em vez de ficar inteiramente fora. Ver §D12.1.
 
 ⚠️ Registro de uma pergunta que este ADR **não** responde e que a medição levantou: o
 `detect_pattern` de `credit_card` casa 16 dígitos sem separador, e mesmo assim a mensagem de saída
@@ -469,7 +565,7 @@ quebraria os 10 usos legítimos, e um arco que quebra o produto na primeira fase
 | **F2** | ~~exceção declarada~~ — **sem conteúdo** (D9.1/D9.2). O que a fase exigia virou tipagem por FINALIDADE, feita em 2026-09-04: `valor_informado_ao_cliente` criado e 3 tags retipadas | A população de exceção é zero e o mecanismo é desnecessário. O que restava (o limite mascarado) era declaração errada, não falta de exceção |
 | **F3** ✅ | aplicar em `notify`/`menu` — o caminho de cliente. **Entregue em 2026-09-04**: `filtrarLeituraCtx` SUBSTITUI o valor no `interpolate`, e `auditarLeituraCtx` foi REMOVIDA (duas funções calculando a mesma regra é o defeito deste arco) | Onde estão os defeitos medidos |
 | **F4** ✅ | `invoke` e `reason` — **MEDIDA, não construída** (2026-09-04). O `invoke` segue cru e o gate que a §D2 citava **não existe** (§D10). O `reason` tem população **ZERO**, então decidir a §D5 agora seria política contra zero: o fato virou **gate** (ramo G), que é o gatilho da fase | Confirmar era o trabalho, e confirmar produziu duas correções |
-| **F5** | `$.pipeline_state.*` via carimbo de proveniência (D7) — **BLOQUEADA por decisão em aberto** (§D11). Censo entregue: 228 por regex → **142** estruturais → **35** ao cliente, 30 chaves | O carimbo deixou de ser refino e virou requisito de CORREÇÃO |
+| **F5** ✅ | `$.pipeline_state.*` — entregue em 2026-09-04 pela **REDE** (§D12), não pelo carimbo. Censo: 228 por regex → **142** estruturais → **35** ao cliente, 30 chaves | A idempotência da rede dispensou o carimbo, que virou dívida de PRECISÃO em vez de bloqueio |
 
 ---
 

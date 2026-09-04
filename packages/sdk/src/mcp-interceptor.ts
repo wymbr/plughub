@@ -34,6 +34,7 @@ import { DEFAULT_MASKING_RULES } from "@plughub/schemas"
 import { AuditKafkaWriter, type AuditKafkaConfig }     from "./infra/audit-kafka"
 import { ContextAccumulator } from "./context-accumulator"
 import type { ContextStore }  from "./context-store"
+import { maskFreeText, type FreeTextMaskResult } from "@plughub/schemas"
 
 // ─────────────────────────────────────────────
 // R7a — Output snapshot masking (pattern-based, symmetric to input)
@@ -45,64 +46,20 @@ import type { ContextStore }  from "./context-store"
 // faithfulness-vs-ferramenta sobre fatos não sensíveis.
 // ─────────────────────────────────────────────
 
-const _OUTPUT_MASK_RULES: { re: RegExp; category: DataCategory; replacement: string }[] =
-  DEFAULT_MASKING_RULES.flatMap(r => {
-    try {
-      return [{ re: new RegExp(r.pattern, "g"), category: r.category, replacement: r.replacement }]
-    } catch {
-      return []
-    }
-  })
-
-interface OutputMaskResult {
-  value:      unknown
-  fields:     string[]
-  categories: DataCategory[]
-}
-
 /**
- * Recursively walks `value`, masking PII in string leaves by pattern. Returns the
- * masked copy, the dot-notation paths where masking occurred, and the categories
- * detected. Pure/synchronous — no vault, no I/O. Non-PII content is preserved.
- * Exported for unit testing (R7a).
+ * ⚠️ **O corpo MUDOU DE CASA em 2026-09-04 (F5).** Ele vive em `@plughub/schemas`
+ * (`maskFreeText`), e aqui só há reexportação com o nome que os chamadores da R7a já
+ * usam.
+ *
+ * O motivo é topologia: o `skill-flow-engine` precisou da rede e **não importa o sdk**
+ * — copiar faria mais uma casa de mascaramento, que é o que o comentário do
+ * `_build_pending_preview` existe para impedir. Mesma manobra do masker na CTX-07.
+ *
+ * ⚠️ E leia a §D12 antes de tratar isto como cobertura: a rede é **mitigação**. A
+ * garantia vem de declarar o campo num `DialogForm`.
  */
-export function maskOutputForAudit(value: unknown, path = ""): OutputMaskResult {
-  if (typeof value === "string") {
-    let masked = value
-    const categories: DataCategory[] = []
-    for (const rule of _OUTPUT_MASK_RULES) {
-      rule.re.lastIndex = 0
-      if (rule.re.test(masked)) {
-        masked = masked.replace(rule.re, rule.replacement)
-        categories.push(rule.category)
-      }
-    }
-    return categories.length > 0
-      ? { value: masked, fields: [path || "$"], categories }
-      : { value, fields: [], categories: [] }
-  }
-  if (Array.isArray(value)) {
-    const out: unknown[] = []
-    const fields: string[] = []
-    const categories: DataCategory[] = []
-    value.forEach((item, i) => {
-      const r = maskOutputForAudit(item, path ? `${path}[${i}]` : `[${i}]`)
-      out.push(r.value); fields.push(...r.fields); categories.push(...r.categories)
-    })
-    return { value: out, fields, categories }
-  }
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {}
-    const fields: string[] = []
-    const categories: DataCategory[] = []
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const r = maskOutputForAudit(v, path ? `${path}.${k}` : k)
-      out[k] = r.value; fields.push(...r.fields); categories.push(...r.categories)
-    }
-    return { value: out, fields, categories }
-  }
-  return { value, fields: [], categories: [] }
-}
+export type OutputMaskResult = FreeTextMaskResult
+export const maskOutputForAudit = maskFreeText
 
 // ─────────────────────────────────────────────
 // Injection guard (inline — sync with mcp-server-plughub/src/infra/injection_guard.ts)

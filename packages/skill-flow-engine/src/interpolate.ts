@@ -16,7 +16,7 @@
 
 import type { IContextStore } from "./context-types"
 import type { StepContext }   from "./executor"
-import { filtrarLeituraCtx, type SitioInterpolacao } from "./ctx-audit"
+import { filtrarLeituraCtx, filtrarTextoLivre, type SitioInterpolacao } from "./ctx-audit"
 
 // ── Regex ─────────────────────────────────────────────────────────────────────
 
@@ -51,10 +51,20 @@ export async function resolveRef(
   if (ref.startsWith("@ctx.")) {
     return resolveCtxRef(ref, ctx, contextStore, sitio)
   }
-  // `$.pipeline_state.*` NÃO é auditado aqui: o mapa tipa tag de ContextStore,
-  // não chave de pipeline_state. São 225 interpolações e é a F5 (§D7) — auditar
-  // sem tipo produziria 225 linhas de `unknown`, que é ruído, não medição.
-  return resolveJsonPathRef(ref, ctx)
+  // ── F5 (§D12) — `$.pipeline_state.*` não tem tipo a consultar ─────────────
+  //
+  // O mapa tipa tag de ContextStore, não chave de `pipeline_state`. Consultá-lo aqui
+  // produziria `unknown` em todas, que é ruído e não medição — foi por isso que a
+  // CTX-02 deixou este caminho de fora.
+  //
+  // O que a F5 acrescenta não é tipo: é a REDE (§D12, camada 3), que reconhece PII
+  // por FORMA e só roda para plateia de gente. ⚠️ É MITIGAÇÃO, nunca cobertura — a
+  // garantia é declarar o campo num `DialogForm`, e capturar em texto livre continua
+  // sendo o que se deve evitar. Ela é segura sobre valor JÁ mascarado (idempotente),
+  // e é isso que dispensou o carimbo de proveniência.
+  const bruto = resolveJsonPathRef(ref, ctx)
+  if (!sitio) return bruto
+  return filtrarTextoLivre(bruto, sitio, ref)
 }
 
 // ── interpolate — interpola um template de string ────────────────────────────

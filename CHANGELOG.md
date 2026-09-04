@@ -1,5 +1,94 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (7) — F5: a rede fecha o arco, e ela e MITIGACAO por decisao
+
+CTX-06. A ultima fase do [`adr-context-read-audience-policy`](docs/adr/adr-context-read-audience-policy.md).
+
+### A hierarquia, que e a decisao do dono (§D12)
+
+> Sempre que possivel, **nunca capturar dado em texto livre** — usar `DialogForm`, que
+> declara o campo e o tipo. O LLM fica no **orquestrador**; agentes especialistas devem
+> ser `DialogForm` sempre que der.
+
+| camada | o que da | alcance |
+|---|---|---|
+| 1. declarar (`DialogForm`) | **garantia** | o que o roteiro coleta |
+| 2. aplicar na leitura (F3) | **garantia** | tag no mapa |
+| 3. rede de deteccao | **mitigacao** | o que e reconhecivel por FORMA |
+
+⚠️ **A camada 3 nao e cobertura, e chama-la assim seria o pior desfecho deste arco** — uma
+rede apresentada como controle faz alguem relaxar sobre capturar em texto livre, que e o
+anestesico mais caro possivel aqui.
+
+### O desbloqueio veio de uma propriedade medida, nao de um projeto
+
+A §D11 concluia que sem carimbo de proveniencia nao havia aplicacao segura:
+`pendencia.context.*` **ja nasce mascarado** e re-mascarar daria `*****4444**`.
+
+Medido: **a rede e IDEMPOTENTE.**
+
+| tipo | cru | ja mascarado |
+|---|---|---|
+| `credit_card` | casa | `***4444` **nao** casa |
+| `cpf` | casa | `***.***.***.--` **nao** casa |
+| `phone` | casa | `(##) ****-4321` **nao** casa |
+| `email_addr` | casa | `m***@exemplo.com` **nao** casa |
+
+Aplicar sobre valor ja mascarado e no-op. **O carimbo caiu de pre-requisito de seguranca
+para divida de precisao** (CTX-10) — ele ainda daria o TIPO onde a rede so tem FORMA.
+
+### A rede mudou de casa (mover, nunca copiar)
+
+O corpo vivia em `sdk/src/mcp-interceptor.ts` (R7a). O engine precisou dela e **nao
+importa o sdk** — copiar faria mais uma casa de mascaramento. Hoje mora em
+`@plughub/schemas` como `maskFreeText`, e o sdk reexporta com o nome que a R7a ja usava.
+Mesma manobra do masker na CTX-07.
+
+### Uma premissa do dono que a medicao corrigiu
+
+*"Quando o tipo existe, o valor ja esta gravado no formato adequado"* vale para **FORMATO**
+(`dd/mm/aaaa`, moldado na coleta) e **nao** para **MASCARA**: o
+`adr-masked-typed-declaration` decide que o tipo governa exibicao e classe, **nunca
+persistencia**. Medido: `session.numero_cartao` esta cru no ctx e em dois streams (MSK-02).
+O valor tipado e persistido inteiro de proposito — o `invoke` do CRM precisa dele —, e por
+isso a mascara e aplicada na LEITURA.
+
+### Onde o LLM NAO entra
+
+As duas implementacoes da rede sao declaradamente *"Pure/synchronous — no vault, no I/O"* e
+sao chamadas por interpolacao, dentro do turno. Um LLM ali muda o contrato de todo chamador
+(custo e latencia por interpolacao). Se entrar, entra como camada assincrona fora do turno —
+o precedente e o sentimento. E nem com LLM o acerto e 100%: ele melhora a estimativa, nao a
+transforma em garantia.
+
+### Gate — o ramo H AFIRMA os limites, e isso e metade do valor
+
+`probe_ctx_read_audience.sh`, ramo **H**, quatro sub-ramos ao vivo no engine deployado:
+
+```
+rede viva      cartao em texto livre  -> **** **** **** ****
+idempotente    "cartao ***4444"       -> intacto
+sistema        controle positivo      -> sai INTEIRO (o CRM precisa)
+LIMITE         "Rua das Flores 123"   -> passa INTEIRO
+```
+
+⚠️ O quarto nao e decorativo: um gate que so mostrasse a rede acertando deixaria a
+impressao de cobertura. Ele **afirma** que sensivel-por-contexto passa — que e o argumento
+de produto para nao capturar em texto livre.
+
+Falseado no `dist` DEPLOYADO (`infra/test/mut_ctx_f5_net.sh`): **M1** desliga a rede (o
+cartao sai inteiro ao cliente), **M2** remove o limite de plateia (a rede passa a mascarar
+para o SISTEMA, quebrando o `invoke`). Cada uma reprova o sub-ramo certo.
+
+⚠️ O ramo **E** rodava so um dos dois arquivos de teste — media metade do que o gate julga.
+Corrigido.
+
+Suites: schemas **235**, sdk **75**, skill-flow-engine **205** (13 novos, e 4 deles existem
+para provar o que a rede NAO faz). `tsc --noEmit` limpo nos tres.
+
+**Arco F0–F5 completo.** Aberto: CTX-08 (duas casas tag->tipo), CTX-09 (o `invoke` sem
+gate), CTX-10 (o carimbo, agora divida de precisao).
+
 ## 2026-09-04 (6) — F4 e F5: confirmar era o trabalho, e confirmar derrubou duas premissas
 
 CTX-05 (F4) fecha. CTX-06 (F5) fica **bloqueada, com o motivo medido**. Nenhuma linha de
