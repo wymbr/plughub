@@ -17,6 +17,7 @@
  */
 import type {
   DialogForm, DialogNode, DialogDimension, QuestionNode, DialogOption, DialogInteraction,
+  DialogCapture,
 } from '@/api/dialog-hooks'
 
 export const DIALOG_KEY = '__dialog__'
@@ -133,8 +134,18 @@ export function flattenBlocks(blocks: Block[]): { nodes: DialogNode[]; dimension
     } else {
       for (const n of block.nodes) {
         if (n.kind === 'question') {
-          const metric = n.capture?.metric
-          nodes.push({ ...n, capture: metric ? { metric } : undefined })
+          // DENYLIST, nao allowlist. Um dialog-block so precisa SOLTAR o que
+          // pertence ao modelo de instrumento (`dimension_id`/`weight`); todo o
+          // resto e semantica da propria pergunta e sobrevive.
+          //
+          // A versao anterior enumerava o que MANTER (`{ metric }`) e por isso
+          // perdeu `capture.kind` quando o schema cresceu — abrir um form com
+          // captura Arc 12 no editor e salvar desarmava a metrica, e o unico
+          // vestigio era um `console.log` no mcp-server. Allowlist envelhece com
+          // o schema; denylist sobrevive ao proximo campo.
+          const { dimension_id: _dim, weight: _w, ...rest } = n.capture ?? {}
+          const cap = Object.keys(rest).length ? (rest as DialogCapture) : undefined
+          nodes.push({ ...n, capture: cap })
         } else {
           nodes.push(n)
         }

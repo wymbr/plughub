@@ -37,6 +37,14 @@ export interface DialogCapture {
   weight?: number
   /** Fixed machine value for an option/field (e.g. button "4" → score 4). */
   value?: number | string
+  /**
+   * Arc 12 event shape (`DialogCaptureSchema.kind` no canonico). AUSENTE aqui ate
+   * 2026-09-04, e a ausencia era o que tornava o descarte em `flattenBlocks`
+   * invisivel ao compilador: um tipo espelhado que perde um campo transforma
+   * perda de dado em codigo que compila. `deriveAgentEvents` exige `kind` E
+   * `metric` — sem `kind` a metrica simplesmente para de ser emitida.
+   */
+  kind?: 'scored' | 'nominal'
 }
 
 /** Numeric scale of an instrument (inherited by member questions). */
