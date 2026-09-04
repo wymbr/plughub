@@ -614,17 +614,37 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         // — coordenam pelo task step). O roteamento é adicional — a mensagem já foi
         // entregue acima.
         //
-        // F5: o gate exige `roleResolved`. Enquanto o `role` do participante não for
-        // efetivamente escrito no hash `agent:instance:{participant_id}`, esta
-        // superfície não consegue PROVAR que o emissor é humano — e um gate que não
-        // prova nada não deve autorizar. O Console não passa por aqui (usa o WS, que
-        // conhece o agente pela conexão), então isso não afeta o caminho vivo.
+        // F5: o gate exige `roleResolved` — sem role provado, esta superfície não
+        // consegue mostrar que o emissor é humano, e um gate que não prova nada não
+        // deve autorizar. A fonte do role é o ROSTER `session:{id}:participants`
+        // (§1055 Fatia B); o texto anterior apontava para o hash
+        // `agent:instance:{participant_id}`, que nunca teve produtor e hoje não é
+        // nem lido. O Console não passa por aqui (usa o WS, que conhece o agente
+        // pela conexão), então isso não afeta o caminho vivo.
+        //
+        // ⚠️ O gate testa `role ∈ {primary, human}` e a INVARIANTE que ele diz
+        // aplicar ("IA nunca emite @mention") é OUTRA coisa: `primary` é POSIÇÃO na
+        // sessão, não espécie do participante, e a IA que conduz a conversa É a
+        // `primary`. Medido falso em 2026-09-01 (MEN-01) — nada foi mudado no
+        // comportamento, e este comentário existe para o próximo leitor não deduzir
+        // do código uma garantia que ele não dá.
         if (content.type === "text" && content.text && parseMentions(content.text).has_mentions) {
           if (!roleResolved) {
+            // Aponta para o ROSTER, que e de onde `resolveParticipantRole` le desde
+            // a Fatia B do §1055. A versao anterior mandava quem depura para
+            // `{tenant}:agent:instance:{pid}` — hash que nao tem o campo, nao tem
+            // escritor e nao tem leitor (medido: 0 de 5). Mensagem que nomeia a casa
+            // errada custa a mesma investigacao que a ausencia de mensagem, com a
+            // agravante de parecer uma pista.
+            //
+            // NAO re-diagnostica: `resolveParticipantRole` ja logou `[role]` com o
+            // motivo ESPECIFICO (roster ausente x participante fora do roster), e
+            // duas explicacoes para a mesma falha fazem a mais generica vencer.
             console.warn(
               `[message_send] @mention NÃO roteada: role do participante ${participant_id} ` +
-              `não pôde ser lido (hash ${tenant_id}:agent:instance:${participant_id} sem campo ` +
-              `"role"). Invariante: só role primary/human emite @mention.`
+              `não foi resolvido no roster session:${session_id}:participants ` +
+              `(motivo específico no log [role] logo acima). ` +
+              `Invariante: só role primary/human emite @mention.`
             )
           } else if (role !== "primary" && role !== "human") {
             console.warn(

@@ -293,6 +293,45 @@ echo "$CLAIM" | grep -q '"claimed": *true' \
   || die "claim recusado — ${CLAIM:0:200}"
 ok "item reivindicado pelo aprovador"
 
+# ── CONTROLE POSITIVO da 7b: o pacote esta ARMADO antes da decisao? ──────────
+# A 7b prova o DESARME exigindo duas tags VAZIAS — e asserção dessa forma passa por
+# AUSENCIA: se a tag nunca existiu (nome errado, sessao errada, produtor mudo), ela
+# fica verde sem que nada tenha sido desarmado.
+#
+# Nao e hipotese: ate a CNS-19 (2026-09-03) o produtor escrevia
+# `session.dialog_form_id` e a 7b lia `core.workflow.dialog_form_id`. O nome lido
+# NUNCA existia, o `[ -z "$FID" ]` era verdadeiro por vazio, e o defeito que a
+# asserção existe para pegar — o parking se passando por aprovacao, consumindo o
+# acesso 3 do cliente — ficou invisivel enquanto o smoke dizia OK.
+#
+# Sem pacote armado AQUI nao ha o que desarmar, e o veredicto correto e
+# INCONCLUSIVO, nunca verde. (`die` = exit 2.)
+# FONTE UNICA das tags do pacote. O controle positivo (abaixo) e a assercao 7b
+# leem ESTA lista, nunca literais proprios: duas listas para a mesma pergunta
+# reintroduziriam o verde por ausencia — bastaria a 7b ler um nome que o controle
+# nao le, e agora com o carimbo de "tem controle positivo".
+PKG_TAGS="core.workflow.dialog_form_id session.decisions"
+pkg_read() { redis HGET "${TENANT}:ctx:${SID}" "$1" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null; }
+
+PKG_ANTES=""; PKG_VAZIAS=""
+for _tag in $PKG_TAGS; do
+  _v=$(pkg_read "$_tag")
+  [ -n "$_v" ] && PKG_ANTES="$PKG_ANTES $_tag='${_v:0:30}'" || PKG_VAZIAS="$PKG_VAZIAS $_tag"
+done
+if [ -n "$PKG_VAZIAS" ]; then
+  die "o pacote de aprovacao NAO esta armado no ctx de $SID antes da decisao
+        (vazias:$PKG_VAZIAS · armadas:${PKG_ANTES:-<nenhuma>}).
+        A 7b nao tem o que julgar — exigir tag vazia depois de ela nunca ter existido
+        e verde por ausencia. Ou o delegate parou de semear o pacote, ou os NOMES
+        mudaram: confira o produtor (channel-gateway delegate_conference ->
+        store_key_for_context_entry) contra o mapa em @plughub/schemas.
+        ⚠️ O delegate grava no ctx da SESSAO CHAMADORA, nao num filho: todo
+        `type: delegate` roda como especialista de conferencia DENTRO da sessao do
+        chamador (skill-flow-service: persistDelegate -> /delegate-conference), e o
+        `child_session_id` devolvido E o proprio $SID."
+fi
+ok "pacote de aprovacao ARMADO antes da decisao ($(echo $PKG_ANTES)) — a 7b tem o que julgar"
+
 RTOK=$(redis HGET "${TENANT}:ctx:${SID}" "core.workflow.delegate_resume_token" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 [ -n "$RTOK" ] || die "não achei o resume token no ctx da sessão $SID"
 
@@ -349,12 +388,15 @@ if [ "$SNAP_OK" = "0" ]; then
 fi
 
 sleep 3
-FID=$(redis HGET "${TENANT}:ctx:${SID}" "core.workflow.dialog_form_id" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
-DEC=$(redis HGET "${TENANT}:ctx:${SID}" "session.decisions"      | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
-if [ -z "$FID" ] && [ -z "$DEC" ]; then
-  ok "dialog_form_id e decisions limpos — o parking não se passa por aprovação"
+PKG_DEPOIS=""
+for _tag in $PKG_TAGS; do
+  _v=$(pkg_read "$_tag")
+  [ -n "$_v" ] && PKG_DEPOIS="$PKG_DEPOIS $_tag='${_v:0:40}'"
+done
+if [ -z "$PKG_DEPOIS" ]; then
+  ok "pacote DESARMADO — todas as tags ($PKG_TAGS) vazias (antes:$PKG_ANTES). O parking não se passa por aprovação"
 else
-  bad "pacote de aprovação AINDA ARMADO após a decisão (dialog_form_id='${FID:-}' decisions='${DEC:0:40}').
+  bad "pacote de aprovação AINDA ARMADO após a decisão ($PKG_DEPOIS).
         O item de parking vai reaparecer no Console como tarefa de aprovação e,
         se alguém decidir, consome o acesso 3 do cliente."
 fi

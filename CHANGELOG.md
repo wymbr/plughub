@@ -1,5 +1,74 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — CNS-20/MEN-03: a assercao que passava por ausencia, e o log que apontava para casa vazia
+
+### CNS-20 (a) — a 7b nao tinha ANTES
+
+A assercao 7b do `smoke_limite_tres_acessos` prova que o pacote de aprovacao foi
+DESARMADO lendo duas tags do ctx e exigindo-as VAZIAS. Assercao dessa forma **passa por
+AUSENCIA**: se a tag nunca existiu — nome errado, sessao errada, produtor mudo — ela fica
+verde sem que nada tenha sido desarmado.
+
+Nao e hipotese. Ate a CNS-19 (2026-09-03) o produtor escrevia `session.dialog_form_id` e a
+7b lia `core.workflow.dialog_form_id`: o nome lido **nunca existia**, o `[ -z "$FID" ]` era
+verdadeiro por vazio, e o defeito que a assercao existe para pegar — o item de parking se
+passando por aprovacao no Console, consumindo o acesso 3 do cliente — ficou invisivel
+enquanto o smoke dizia OK.
+
+**Conserto em duas partes, e a segunda so apareceu ao tentar falsear a primeira.** A
+primeira versao acrescentou o controle positivo (o pacote tem de estar ARMADO antes da
+decisao; senao `die` = INCONCLUSIVO, nunca verde) — mas com **lista propria de tags**, ao
+lado da lista da 7b. Duas listas para a mesma pergunta reintroduzem exatamente o verde por
+ausencia, agora com o carimbo de *"tem controle positivo"*: bastaria a 7b ler um nome que o
+controle nao le. Hoje as tags vivem em **`PKG_TAGS`, fonte unica**, e um helper `pkg_read`
+que as duas metades usam.
+
+**Falseado por mutacao, e a M2 e demonstracao e nao argumento:**
+
+| mutacao | veredicto |
+|---|---|
+| M1 — `PKG_TAGS` aponta para o nome PRE-CNS-19 | **INCONCLUSIVO** (rc=2), nomeando qual tag faltou (`vazias: session.dialog_form_id · armadas: session.decisions=…`) |
+| M2 — controle REMOVIDO + nome velho | **VERDE** (rc=0) — o defeito historico reproduzido em laboratorio |
+
+Estado atual: 19 ✅ / 0 ❌, com o pacote medido armado (`dialog_limite_aprovacao`) antes e
+limpo depois. O desarme funciona; o que faltava era poder saber disso.
+
+### CNS-20 (b) — REFUTADA
+
+A suspeita registrada era: *"o `limpar_form_do_pacote` roda na sessao do PROCESSO, enquanto
+o pacote que o Console le vive na sessao FILHA criada pelo `delegate`"* — se procedesse, o
+desarme nao desarmaria.
+
+Medido, e refutado por **duas evidencias independentes**. (1) O dispatcher e explicito:
+*"delegate() is A2A — the target agent **ALWAYS** runs as a conference specialist INSIDE the
+caller's session (a segment, never a standalone session nor a child workflow) […] child
+workflows are created by `task()`, not by `delegate()`"*, e ele retorna
+`{ child_session_id: data.session_id } // = parent session_id`. Todo `type: delegate` vai
+por `/delegate-conference`, que grava `ctx_writes` em `session_id` — o PAI. (2) O trace de
+um wrap-up real mostra `child session: …9069b556d6a3` na sessao `4b251243-…-9069b556d6a3`:
+a mesma.
+
+⚠️ O que confundiu e que **existem dois escritores com nomes parecidos**: `delegate_step`
+(`webhook.py:1733`) cria sessao-filho e semeia o ctx DELA; `delegate_conference`
+(`webhook.py:2819`) semeia o ctx do PAI. So o segundo tem chamador no engine.
+
+### MEN-03 — a mensagem apontava para a casa abandonada
+
+O aviso do gate de @mention dizia *"hash `{t}:agent:instance:{id}` sem campo `role`"*, mas
+`resolveParticipantRole` le o ROSTER `session:{id}:participants` desde a Fatia B do §1055 —
+o hash citado tem **0 de 5** com o campo, nenhum escritor e nenhum leitor. *Mensagem que
+nomeia a casa errada custa a mesma investigacao que a ausencia de mensagem, com a agravante
+de parecer pista.*
+
+Dois ajustes alem do nome: o aviso **deixou de re-diagnosticar** (o resolvedor ja loga
+`[role]` com o motivo especifico — roster ausente x participante fora do roster —, e duas
+explicacoes para a mesma falha fazem a generica vencer); e o **comentario do gate**, que
+prometia a mesma casa errada, foi corrigido junto e passou a registrar o achado MEN-01: o
+gate testa `role ∈ {primary, human}`, e `primary` e POSICAO na sessao, nao especie do
+participante — a IA que conduz a conversa E a `primary`, entao a invariante que o
+comentario afirmava aplicar nao e a que o codigo aplica. Nada foi mudado no comportamento;
+o comentario existe para o proximo leitor nao deduzir do codigo uma garantia que ele nao da.
+
 ## 2026-09-04 — `checklist` era single-select nas DUAS superficies de formulario
 
 Achado ao exercitar o wrap-up com captura Arc 12 no demo: marcar dois servicos so
