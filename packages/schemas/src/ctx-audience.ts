@@ -288,8 +288,16 @@ export function maskOmitsField(m: CtxReadMask): boolean {
  * `plain` não muda. `undecided` e `unknown` **não são máscaras** e por isso
  * também respondem `false`: a F3 só pode aplicar o que está decidido, e
  * responder `true` aqui faria o aplicador escolher por um arco que se absteve.
+ *
+ * ⚠️ **É um type predicate, e isso é load-bearing.** Como `boolean`, ele exprimia
+ * a intenção e não a provava: o aplicador passava um `CtxReadMask` a
+ * `applyMaskingTypeToValue`, que só aceita `ContextMaskingType`, e nada impedia
+ * `undecided` de chegar lá — onde cairia no `default` e viraria `***`, aplicando
+ * justamente a decisão de que este ADR se absteve (§D5). Foi o compilador quem
+ * apontou, na F3. Estreitar para `ContextMaskingType` é sadio: o que sobra depois
+ * dos três excluídos é exatamente esse conjunto.
  */
-export function maskChangesValue(m: CtxReadMask): boolean {
+export function maskChangesValue(m: CtxReadMask): m is ContextMaskingType {
   return m !== "plain" && m !== "undecided" && m !== "unknown"
 }
 

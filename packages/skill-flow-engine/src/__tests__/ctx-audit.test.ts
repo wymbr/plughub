@@ -1,30 +1,39 @@
 /**
- * ctx-audit.test.ts — CTX-02: a auditoria de plateia dispara, e cala quando deve.
+ * ctx-audit.test.ts — CTX-04 (F3): o filtro por plateia APLICA, e cala quando deve.
  *
- * ⚠️ **Por que este teste existe, e não uma prova ao vivo.** A tentativa de
- * provar rodando `smoke_limite_tres_acessos` saiu MUDA — e corretamente: aquele
- * smoke só exercita `skill_limite_processo_v1`, que tem zero steps
- * `notify`/`menu`. Um log vazio ali é consistente com o censo, não evidência de
- * que a auditoria funciona. *"Não achou" e "não rodou" produzem o mesmo
- * silêncio*, e é justamente essa confusão que este arco combate.
+ * ⚠️ **Por que este teste existe, e não uma prova ao vivo.** A tentativa de provar
+ * rodando `smoke_limite_tres_acessos` saiu MUDA — e corretamente: aquele smoke só
+ * exercita `skill_limite_processo_v1`, que tem zero steps `notify`/`menu`. Um log
+ * vazio ali é consistente com o censo, não evidência de que o filtro funciona.
+ * *"Não achou" e "não rodou" produzem o mesmo silêncio*, e é essa confusão que o
+ * arco inteiro combate.
  *
- * Os dois defeitos vivos estão em `skill_limite_retorno_v1`, cujo `notify` só
- * dispara depois de uma aprovação chegar ao cliente. A confirmação ao vivo fica
- * dependendo de um contato real; a garantia re-executável é esta.
+ * ── O caso que carrega o peso é o CONTROLE POSITIVO ──────────────────────────
+ * Um filtro que mascara TUDO passa em qualquer teste que só verifique mascaramento.
+ * Por isso a mesma tag, indo ao SISTEMA, tem de sair INTEIRA — e é o `invoke` que
+ * manda o número ao CRM.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import type { StepContext } from "../executor"
 
 const MAPA = {
-  value: { contexto: { session: { cartao: {
-    numero: { tipo: "credit_card", legado: ["session.numero_cartao"] },
-  } } } },
+  value: { contexto: { session: {
+    cartao: { numero: { tipo: "credit_card", legado: ["session.numero_cartao"] } },
+    limite: { aprovado: { tipo: "valor_informado_ao_cliente", legado: ["session.limite_aprovado"] } },
+    segredo: { pin: { tipo: "credential", legado: ["session.pin"] } },
+  } } },
 }
 const TIPOS = {
-  value: { types: [{
-    id: "credit_card", formato: {}, lgpd: "financeiro",
-    mascara: { by_role: { operator: "last_4" } },
-  }] },
+  value: { types: [
+    // `by_role` só com `operator` é o REGIME VIVO: `customer` não é declarado em
+    // nenhum dos 15 tipos, e é o teto do agente que responde por ele (§D9.1).
+    { id: "credit_card", formato: {}, lgpd: "financeiro",
+      mascara: { by_role: { operator: "last_4" } } },
+    // Tipo de FINALIDADE — `by_role` vazio é ABERTO declarado, não omissão.
+    { id: "valor_informado_ao_cliente", formato: {}, lgpd: "financeiro",
+      mascara: { by_role: {} } },
+    { id: "credential", formato: {}, lgpd: "credencial",
+      mascara: { by_role: { operator: "hidden" } } },
+  ] },
 }
 
 function stubFetch(): void {
@@ -34,117 +43,116 @@ function stubFetch(): void {
   })))
 }
 
-const ctx = { tenantId: "t1", sessionId: "s1" } as unknown as StepContext
+const espiaWarn = () => vi.spyOn(console, "warn").mockImplementation(() => {})
+const espiaInfo = () => vi.spyOn(console, "info").mockImplementation(() => {})
 
 async function carrega() {
   vi.resetModules()
   return import("../ctx-audit")
 }
 
-// `ReturnType<typeof vi.spyOn>` (sem argumentos) instancia os genéricos em
-// `unknown[]`, e a instância concreta de `console.warn` não é atribuível a ela —
-// `tsc --noEmit` reprovava enquanto o `vitest` passava, porque ele não checa
-// tipo. Derivar do helper fixa os genéricos no que a chamada REAL produz.
-const espiaWarn = () => vi.spyOn(console, "warn").mockImplementation(() => {})
+const CLIENTE = { stepType: "notify", visibility: "all",         stepId: "notificar_aprovado" }
+const OPERADOR = { stepType: "notify", visibility: "agents_only", stepId: "nota_interna" }
+const SISTEMA  = { stepType: "invoke",                            stepId: "chamar_crm" }
+const MODELO   = { stepType: "reason",                            stepId: "avaliar" }
 
-describe("auditarLeituraCtx", () => {
+describe("filtrarLeituraCtx — o leitor SUBSTITUI o valor", () => {
   let warn: ReturnType<typeof espiaWarn>
+  let info: ReturnType<typeof espiaInfo>
 
-  beforeEach(() => { warn = espiaWarn() })
-  afterEach(() => { warn.mockRestore(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+  beforeEach(() => { warn = espiaWarn(); info = espiaInfo(); stubFetch(); vi.stubEnv("CONFIG_API_URL", "http://config") })
+  afterEach(() => { warn.mockRestore(); info.mockRestore(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
-  it("AVISA nomeando a MÁSCARA que sairia ao cliente", async () => {
-    vi.stubEnv("CONFIG_API_URL", "http://config")
-    stubFetch()
-    const { auditarLeituraCtx } = await carrega()
-    await auditarLeituraCtx("session.numero_cartao",
-      { stepType: "notify", visibility: "all", stepId: "notificar_aprovado" }, "t1")
+  it("ao CLIENTE o cartão sai mascarado — e é o mesmo `***4444` da outra tela", async () => {
+    const { filtrarLeituraCtx } = await carrega()
+    const fora = await filtrarLeituraCtx("1111222233334444", "session.numero_cartao", CLIENTE, "t1")
+    expect(fora).toBe("***4444")
+    expect(info.mock.calls.flat().join(" ")).toContain("APLICADO")
+  })
+
+  it("ao SISTEMA o MESMO valor sai INTEIRO — controle positivo do arco", async () => {
+    // Sem este caso, um filtro que bloqueia tudo passaria em todos os outros.
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("1111222233334444", "session.numero_cartao", SISTEMA, "t1"))
+      .toBe("1111222233334444")
+  })
+
+  it("ao OPERADOR também mascara — e hoje com a MESMA máscara do cliente", async () => {
+    // Não é redundância: as duas plateias recebem `last_4` porque `customer` não é
+    // declarado e cai no teto do operador. Registrar isso é o que fará alguém notar
+    // quando o eixo `customer` for preenchido e as duas passarem a divergir.
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("1111222233334444", "session.numero_cartao", OPERADOR, "t1"))
+      .toBe("***4444")
+  })
+
+  it("tipo de FINALIDADE sai INTEIRO ao cliente — `by_role: {}` é aberto declarado", async () => {
+    // O limite aprovado é o que a mensagem existe para anunciar (§D9.2). Se este
+    // caso virar `R$ ****,**`, a F3 quebrou o produto que ela deveria proteger.
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("5000", "session.limite_aprovado", CLIENTE, "t1")).toBe("5000")
+  })
+
+  it("`hidden` devolve VAZIO — o sinal de omitir o campo", async () => {
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("1234", "session.pin", CLIENTE, "t1")).toBe("")
+  })
+
+  it("plateia `model` NÃO é aplicada, e o motivo é logado (§D5)", async () => {
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("1111222233334444", "session.numero_cartao", MODELO, "t1"))
+      .toBe("1111222233334444")
     const txt = warn.mock.calls.flat().join(" ")
-    expect(txt).toContain("AUDITORIA (não aplicado)")
-    expect(txt).toContain("credit_card")
-    expect(txt).toContain("plateia=customer")
-    // Nomear a máscara é o ganho do eixo `by_role`: `last_4` diz o que a F3 vai
-    // fazer. O `echo_to_*` que esta linha lia antes só dizia que havia alguma.
-    expect(txt).toContain("máscara=last_4")
+    expect(txt).toContain("NÃO aplicado")
+    expect(txt).toContain("F4")
   })
 
-  it("CALA quando a mesma tag vai ao SISTEMA — controle positivo", async () => {
-    // Sem este caso o teste acima passaria por uma auditoria que avisa sempre,
-    // e o arco inteiro seria um filtro que bloqueia tudo.
-    vi.stubEnv("CONFIG_API_URL", "http://config")
-    stubFetch()
-    const { auditarLeituraCtx } = await carrega()
-    await auditarLeituraCtx("session.numero_cartao",
-      { stepType: "invoke", stepId: "chamar_crm" }, "t1")
-    expect(warn.mock.calls.flat().join(" ")).not.toContain("AUDITORIA")
-  })
-
-  it("avisa também quando a plateia é operador — e com a MESMA máscara", async () => {
-    // Não é redundância com o caso do cliente: hoje as duas plateias recebem
-    // `last_4` porque `customer` não é declarado e cai no `operator`. Registrar
-    // isso no teste é o que fará alguém notar quando o eixo `customer` for
-    // preenchido e as duas passarem a divergir.
-    vi.stubEnv("CONFIG_API_URL", "http://config")
-    stubFetch()
-    const { auditarLeituraCtx } = await carrega()
-    await auditarLeituraCtx("session.numero_cartao",
-      { stepType: "notify", visibility: "agents_only", stepId: "nota_interna" }, "t1")
-    expect(warn.mock.calls.flat().join(" ")).toContain("máscara=last_4")
+  it("tag FORA do mapa não é aplicada, e o motivo é a V4 da allowlist (§D4)", async () => {
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("valor", "session.nao_declarada", CLIENTE, "t1")).toBe("valor")
+    expect(warn.mock.calls.flat().join(" ")).toContain("V4")
   })
 
   it("não repete a mesma combinação — o volume esconderia o achado", async () => {
-    vi.stubEnv("CONFIG_API_URL", "http://config")
-    stubFetch()
-    const { auditarLeituraCtx, estadoAuditoriaCtx } = await carrega()
-    const sitio = { stepType: "notify", visibility: "all", stepId: "n1" }
-    await auditarLeituraCtx("session.numero_cartao", sitio, "t1")
-    await auditarLeituraCtx("session.numero_cartao", sitio, "t1")
-    await auditarLeituraCtx("session.numero_cartao", sitio, "t1")
-    expect(warn.mock.calls.filter(c => String(c[0]).includes("AUDITORIA")).length).toBe(1)
+    const { filtrarLeituraCtx, estadoAuditoriaCtx } = await carrega()
+    for (let i = 0; i < 3; i++) {
+      await filtrarLeituraCtx("1111222233334444", "session.numero_cartao", CLIENTE, "t1")
+    }
+    expect(info.mock.calls.filter(c => String(c[0]).includes("APLICADO")).length).toBe(1)
     expect(estadoAuditoriaCtx().achados).toBe(1)
   })
 
-  it("sem CONFIG_API_URL, a degradação NOMEIA o que deixa de valer", async () => {
-    // A frase genérica "using default values" é a que ninguém leu por meses no
-    // bridge, segundo o próprio CLAUDE.md. Aqui o aviso precisa dizer QUAL
-    // capacidade caiu, e que vazio ≠ zero achados.
-    vi.stubEnv("CONFIG_API_URL", "")
-    const { auditarLeituraCtx, estadoAuditoriaCtx } = await carrega()
-    await auditarLeituraCtx("session.numero_cartao",
-      { stepType: "notify", visibility: "all" }, "t1")
-    const txt = warn.mock.calls.flat().join(" ")
-    expect(txt).toContain("AUDITORIA DE PLATEIA não roda")
-    expect(txt).toContain("VAZIO")
-    expect(estadoAuditoriaCtx().configurado).toBe(false)
-  })
-
-  it("nunca lança — auditar é observação, não pode derrubar um turno", async () => {
-    vi.stubEnv("CONFIG_API_URL", "http://config")
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("rede caiu") }))
-    const { auditarLeituraCtx } = await carrega()
-    await expect(auditarLeituraCtx("session.numero_cartao",
-      { stepType: "notify", visibility: "all" }, "t1")).resolves.toBeUndefined()
+  it("valor ausente atravessa sem tocar no catálogo", async () => {
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx(undefined, "session.numero_cartao", CLIENTE, "t1")).toBeUndefined()
+    expect(await filtrarLeituraCtx("", "session.numero_cartao", CLIENTE, "t1")).toBe("")
   })
 })
 
-describe("interpolate passa o SÍTIO adiante", () => {
-  it("um `notify` audita; um template sem @ctx. não", async () => {
-    vi.stubEnv("CONFIG_API_URL", "http://config")
-    stubFetch()
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    vi.resetModules()
-    const { interpolate } = await import("../interpolate")
-    const store = {
-      getValue: async () => "1111222233334444",
-    } as unknown as Parameters<typeof interpolate>[2]
+describe("degradação — o valor passa CRU, e isso nunca é silencioso", () => {
+  let warn: ReturnType<typeof espiaWarn>
+  beforeEach(() => { warn = espiaWarn() })
+  afterEach(() => { warn.mockRestore(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
-    await interpolate("Cartão: {{@ctx.session.numero_cartao}}", ctx, store,
-      { stepType: "notify", visibility: "all", stepId: "notificar_aprovado" })
-    // A auditoria é disparada sem `await` (não entra no caminho crítico do
-    // turno), então o teste espera pelas TASKS em vez de contar yields.
-    await new Promise(r => setTimeout(r, 20))
-    expect(warn.mock.calls.flat().join(" ")).toContain("AUDITORIA (não aplicado)")
-    warn.mockRestore()
-    vi.unstubAllGlobals(); vi.unstubAllEnvs()
+  it("sem CONFIG_API_URL o valor sai INTEIRO, e o aviso NOMEIA o que caiu", async () => {
+    // Mascarar tudo faria toda mensagem do parque virar `***` por uma queda de
+    // config. Sem catálogo toda tag é `unknown`, e `unknown` já está decidido como
+    // contar-e-não-aplicar (§D4) — o que não pode é o silêncio.
+    vi.stubEnv("CONFIG_API_URL", "")
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("1111222233334444", "session.numero_cartao", CLIENTE, "t1"))
+      .toBe("1111222233334444")
+    const txt = warn.mock.calls.flat().join(" ")
+    expect(txt).toContain("CONFIG_API_URL")
+    expect(txt.toLowerCase()).toContain("plateia")
+  })
+
+  it("catálogo que responde erro também deixa passar, avisando", async () => {
+    vi.stubEnv("CONFIG_API_URL", "http://config")
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })))
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("1111222233334444", "session.numero_cartao", CLIENTE, "t1"))
+      .toBe("1111222233334444")
+    expect(warn.mock.calls.flat().join(" ")).toContain("indisponíveis")
   })
 })

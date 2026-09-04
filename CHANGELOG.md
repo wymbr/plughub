@@ -1,5 +1,80 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (5) — F3: o leitor de contexto passa a APLICAR, e e um so
+
+CTX-04. Primeira fase deste arco que **muda o que o cliente ve**.
+
+### UM leitor, que SUBSTITUI
+
+`filtrarLeituraCtx` troca o valor dentro do `interpolate`. Nao existe `getMasked()` ao
+lado do `get()` (§D1) — duas portas para o mesmo dado e so uma trancada e o achado do
+`/sessions/{id}/stream`, e quem escreve template escolhe a que funciona.
+
+`auditarLeituraCtx` foi **REMOVIDA**. Ela calculava exatamente a mesma coisa; mante-la
+seria duas implementacoes da mesma regra, que e o defeito que este arco existe para
+corrigir — cometê-lo no coracao dele seria o pior lugar possivel.
+
+E agora e **AGUARDADO**. A auditoria era fire-and-forget de proposito (observar nao
+entra no caminho critico de um turno); filtrar nao pode ser: um filtro que a resposta
+nao espera nao filtra nada.
+
+### O que NAO e aplicado, e por que
+
+| desfecho | acao | razao |
+|---|---|---|
+| `plain` | nada | inclui `system`, `none` e o `by_role: {}` aberto |
+| `undecided` | **nao aplica**, loga | plateia `model` (§D5) — decisao propria, fase F4 |
+| `unknown` | **nao aplica**, loga | tag fora do mapa (§D4) — e a V4 da allowlist, irreversivel |
+
+Os dois ultimos sao logados porque e deles que a proxima fase precisa.
+
+**Catalogo indisponivel deixa o valor passar CRU**, e isso nao e conveniencia: sem
+catalogo toda tag e `unknown`, que ja esta decidido como contar-e-nao-aplicar. Mascarar
+tudo faria toda mensagem do parque virar `***` por uma queda de config; recusar o passo
+trocaria conformidade por disponibilidade. O carregador **grita nomeando**, e o `catch`
+do filtro tambem — *"o valor saiu SEM filtro. Isto nao e 'nada a mascarar'"*.
+
+### O compilador exigiu que a abstencao fosse PROVADA
+
+`maskChangesValue` devolvia `boolean`. Como `boolean` ele exprimia a intencao e nao a
+provava: o aplicador passava um `CtxReadMask` a `applyMaskingTypeToValue`, que so aceita
+`ContextMaskingType`, e nada impedia `undecided` de chegar la — onde cairia no `default`
+e viraria `***`, aplicando justamente a decisao de que o ADR se absteve. Virou **type
+predicate** (`m is ContextMaskingType`), e o estreitamento e sadio: o que sobra depois
+dos tres excluidos e exatamente esse conjunto.
+
+### O gate passou a separar CODIGO de IMAGEM, e nao era teorico
+
+Ramo **F** novo: o filtro esta no `dist/` que o engine roda? No dia da entrega, com
+`tsc` verde e 192 testes passando, **o container ainda servia a versao so-auditoria**.
+Nao-implantado sai **INCONCLUSIVO**, nunca REPROVA — fato de deploy nao e defeito de
+codigo, e um gate que fica vermelho por faltar build ensina todo mundo a ignora-lo.
+
+Depois do rebuild, exercido contra o **catalogo vivo**, com controle positivo:
+
+```
+cliente  session.numero_cartao -> ***4444
+sistema  session.numero_cartao -> 1111222233334444
+```
+
+Sem o segundo, um filtro que bloqueia tudo passaria.
+
+**Falseado por mutacao no `dist` DEPLOYADO** (`infra/test/mut_ctx_f3_deployed.sh`): com
+o masker desligado, o ramo F reprova nomeando os dois valores. ⚠️ A primeira tentativa
+de mutacao **nao aplicou e o assert nao acusou** — o `sed` aninhado em tres camadas de
+aspas nao casou nada. Virou script em arquivo com `grep -qF` antes e depois, que e a
+forma que o `CLAUDE.md` ja prescrevia.
+
+### Estado
+
+Aplicam-se hoje **2** interpolacoes, ambas `session.numero_cartao` -> `last_4`, nos dois
+`notify` de `skill_limite_retorno_v1` — exatamente os dois defeitos que a tela do dono
+exibiu. A tela 3 passa a mostrar o mesmo `***4444` da tela 2.
+
+Suites: schemas **235**, skill-flow-engine **192**. `tsc --noEmit` limpo. Gates:
+`probe_ctx_read_audience` **VERDE** (6 ramos), `probe_masking_apply_parity` 30/30,
+`probe_task_ledger` VERDE.
+
 ## 2026-09-04 (4) — CTX-07: o masker muda de casa, e a F3 perde o bloqueio
 
 `applyMaskingTypeToValue` sai de `mcp-server-plughub/src/lib/context-masking.ts` e passa a

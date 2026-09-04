@@ -16,7 +16,7 @@
 
 import type { IContextStore } from "./context-types"
 import type { StepContext }   from "./executor"
-import { auditarLeituraCtx, type SitioInterpolacao } from "./ctx-audit"
+import { filtrarLeituraCtx, type SitioInterpolacao } from "./ctx-audit"
 
 // ── Regex ─────────────────────────────────────────────────────────────────────
 
@@ -250,12 +250,6 @@ async function resolveCtxRef(
   // "@ctx.caller.cpf" → "caller.cpf"
   const tag = ref.replace(/^@ctx\./, "")
 
-  // CTX-02 — MODO AUDITORIA: calcula o que o filtro faria e loga, sem aplicar.
-  // Deliberadamente NÃO aguardado: auditar é observação, e fazê-la entrar no
-  // caminho crítico de um turno trocaria um problema de conformidade por um de
-  // latência. A função nunca lança.
-  if (sitio) void auditarLeituraCtx(tag, sitio, ctx.tenantId)
-
   // Arc 16: @ctx.journey.* reads from the journey Redis hash
   // The SDK maps getValue("journey:{journeyId}", tag) → {tenant}:ctx:journey:{journeyId}
   //
@@ -264,11 +258,23 @@ async function resolveCtxRef(
   // roteiam por prefixo têm de concordar — esta, o `ttlFor`/`isJourneyTag` do SDK e o
   // `writeContextTag` do mcp-server. Duas concordando e uma não é escrita indo para um
   // hash e leitura vindo de outro, que degrada como "a tag não existe".
-  if ((tag.startsWith("journey.") || tag.startsWith("core.journey.")) && ctx.journeyId) {
-    return contextStore.getValue(`journey:${ctx.journeyId}`, tag, ctx.customerId)
-  }
+  const bruto = (tag.startsWith("journey.") || tag.startsWith("core.journey.")) && ctx.journeyId
+    ? await contextStore.getValue(`journey:${ctx.journeyId}`, tag, ctx.customerId)
+    : await contextStore.getValue(ctx.sessionId, tag, ctx.customerId)
 
-  return contextStore.getValue(ctx.sessionId, tag, ctx.customerId)
+  // CTX-04 (F3) — O FILTRO POR PLATEIA. Ele SUBSTITUI o valor; não existe uma
+  // segunda porta que devolva o cru (§D1).
+  //
+  // ⚠️ Aqui é AGUARDADO, ao contrário da auditoria da CTX-02, que era
+  // fire-and-forget de propósito. Observar podia ficar fora do caminho crítico;
+  // filtrar não pode — um filtro que a resposta não espera não filtra nada.
+  //
+  // ⚠️ Sem `sitio` não há plateia derivável, e sem plateia não há decisão a tomar.
+  // O parâmetro é opcional porque torná-lo obrigatório quebraria call sites que
+  // não renderizam para ninguém; os três sítios de plateia (`notify`, `menu`,
+  // `receive.notify`) o declaram.
+  if (!sitio) return bruto
+  return filtrarLeituraCtx(bruto, tag, sitio, ctx.tenantId)
 }
 
 /**

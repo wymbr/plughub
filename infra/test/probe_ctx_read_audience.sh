@@ -135,6 +135,52 @@ else
   bad "E. suíte da derivação ou do runtime reprovou (derivação='$V1' runtime='$V2')"
 fi
 
+# ── F — o filtro da F3 esta DEPLOYADO? ───────────────────────────────────────
+# `tsc` verde e suite verde provam o CODIGO. Nenhum dos dois prova que o processo
+# que atende contato tem o filtro: o engine roda o `dist/` da IMAGEM, e um `up -d`
+# recria o container a partir dela. E a separacao declaracao x imagem x execucao
+# que o CLAUDE.md manda fazer — e aqui ela nao e teorica: no dia em que a F3 foi
+# escrita, o container ainda servia a versao SO-AUDITORIA.
+#
+# ⚠️ Nao implantado NAO e falha de codigo — e fato de deploy. Por isso sai
+# INCONCLUSIVO para a metade viva, nunca REPROVA: um gate que fica vermelho por
+# faltar um build ensina todo mundo a ignora-lo.
+DIST=/app/packages/skill-flow-engine/dist
+TEM_FILTRO=$(docker exec "$ENG_CT" sh -lc "grep -rl filtrarLeituraCtx $DIST 2>/dev/null | head -1" 2>/dev/null)
+TEM_VELHO=$(docker exec "$ENG_CT" sh -lc "grep -rl auditarLeituraCtx $DIST 2>/dev/null | head -1" 2>/dev/null)
+
+if [ -n "$TEM_FILTRO" ]; then
+  # Implantado: exerce contra o CATALOGO VIVO, com controle positivo. Um filtro que
+  # mascara tudo passa em qualquer prova que so verifique mascaramento.
+  OUT=$(docker exec "$ENG_CT" node -e '
+    const { filtrarLeituraCtx } = require("'"$DIST"'/ctx-audit.js")
+    const cli = { stepType: "notify", visibility: "all", stepId: "probe" }
+    const sis = { stepType: "invoke", stepId: "probe" }
+    const t = process.argv[1]
+    Promise.all([
+      filtrarLeituraCtx("1111222233334444", "session.numero_cartao", cli, t),
+      filtrarLeituraCtx("1111222233334444", "session.numero_cartao", sis, t),
+    ]).then(([c, s]) => console.log(JSON.stringify({ cliente: c, sistema: s })))
+     .catch(e => console.log(JSON.stringify({ erro: String(e) })))
+  ' "$TENANT" 2>/dev/null | grep -o '{.*}' | tail -1)
+  # O proprio filtro LOGA em stdout ao aplicar, e a primeira versao deste ramo
+  # colou o log ao JSON e saiu INCONCLUSIVO com a prova na tela. Pega-se a linha
+  # do objeto, nao a saida inteira.
+  CLI_V=$(echo "$OUT" | jq -r '.cliente // empty' 2>/dev/null)
+  SIS_V=$(echo "$OUT" | jq -r '.sistema // empty' 2>/dev/null)
+  if [ "$CLI_V" = "***4444" ] && [ "$SIS_V" = "1111222233334444" ]; then
+    ok "F. F3 VIVA no engine: cliente=$CLI_V · sistema=$SIS_V (controle positivo)"
+  elif [ -z "$CLI_V" ]; then
+    inc "F. o filtro esta na imagem mas nao foi exercitavel — $(echo "$OUT" | head -c 120)"
+  else
+    bad "F. o filtro esta VIVO e respondeu errado: cliente=$CLI_V sistema=$SIS_V"
+  fi
+elif [ -n "$TEM_VELHO" ]; then
+  inc "F. o engine roda a versao SO-AUDITORIA (achou auditarLeituraCtx, nao filtrarLeituraCtx) — a F3 esta no codigo e NAO na imagem; falta rebuild"
+else
+  inc "F. nao encontrei nenhuma das duas versoes em $DIST — o container serve outra coisa"
+fi
+
 echo
 echo "======================"
 if [ "$FALHAS" -gt 0 ]; then echo "REPROVADO ($FALHAS)"; exit 1; fi

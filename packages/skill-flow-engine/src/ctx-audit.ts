@@ -1,8 +1,20 @@
 /**
- * ctx-audit.ts — CTX-02: o resolvedor de plateia em MODO AUDITORIA.
+ * ctx-audit.ts — o resolvedor de plateia. **APLICA desde a F3 (2026-09-04).**
  *
- * Ele calcula o que o filtro FARIA e **loga sem aplicar**. Ver
- * `docs/adr/adr-context-read-audience-policy.md` §4 (F1).
+ * Nasceu em modo auditoria (CTX-02): calculava o que o filtro faria e logava sem
+ * aplicar. A F3 (CTX-04) o fez substituir o valor. Ver
+ * `docs/adr/adr-context-read-audience-policy.md` §4.
+ *
+ * ⚠️ **O nome do arquivo e o prefixo `[ctx-audit]` do log FICARAM**, e a escolha é
+ * deliberada: os dois são identidade greppável em gate, runbook e histórico, e
+ * renomeá-los quebraria a busca de quem investiga um contato antigo sem mudar uma
+ * linha de comportamento. O que precisava dizer a verdade é o TEXTO do log, e ele
+ * diz — `APLICADO` × `NÃO aplicado`, com o motivo do segundo.
+ *
+ * ── UM leitor, que SUBSTITUI (§D1) ──────────────────────────────────────────
+ * Não existe `getMasked()` ao lado do `get()`. Duas portas para o mesmo dado e só
+ * uma trancada é o achado do `/sessions/{id}/stream`, e quem escreve template
+ * escolheria a que funciona — que é sempre a permissiva.
  *
  * ── Por que auditar em runtime, se já existe o censo estático ────────────────
  * O censo (`q_ctx_read_audience_census.ts`) lê os YAMLs do disco. **O bridge não
@@ -20,7 +32,8 @@
  * corrigir.
  */
 import {
-  deriveAudience, maskForSite, flattenContextMap,
+  deriveAudience, maskForSite, maskChangesValue, maskOmitsField,
+  applyMaskingTypeToValue, flattenContextMap,
   type CtxAudience, type CtxReadMask, type DataTypeCatalog,
 } from "@plughub/schemas"
 
@@ -95,51 +108,87 @@ async function catalogos(tenantId: string): Promise<Catalogos | null> {
 // achado — que é o inverso do que a auditoria existe para fazer.
 const jaLogado = new Set<string>()
 
+/** Loga UMA vez por combinação distinta. Compartilhado pelas duas entradas. */
+function registra(chave: string, emitir: () => void): void {
+  if (jaLogado.has(chave)) return
+  jaLogado.add(chave)
+  emitir()
+}
+
 /**
- * Audita UMA leitura de contexto. Não altera nada e nunca lança: a auditoria não
- * pode ser a causa de um atendimento cair.
+ * filtrarLeituraCtx — o LEITOR. Devolve o valor que a plateia daquele sítio pode ver.
  *
- * Só registra o que MUDARIA (uma máscara real) e o que não sabe decidir
- * (`unknown` / `undecided`). Logar os `plain` seria imprimir 72 linhas do censo
- * para dizer que está tudo certo.
+ * Substitui o valor; nunca o duplica numa segunda porta (§D1). É a mesma decisão que
+ * a auditoria da CTX-02 já calculava — e é a MESMA função, não uma segunda: duas
+ * implementações da mesma regra é o defeito que este arco existe para corrigir, e
+ * cometê-lo aqui seria cometê-lo no coração dele.
  *
- * ⚠️ A máscara é nomeada no log, e isso é o ganho do eixo `by_role` sobre o
- * `echo_to_*` que esta função lia até 2026-09-04: *"sairia `last_4`"* diz o que
- * a F3 vai fazer; *"tem alguma máscara"* não dizia.
+ * ── O que NÃO é aplicado, e por quê ─────────────────────────────────────────
+ *
+ *   plain      → nada a fazer (inclui `system` e `none`, e o `by_role: {}` aberto)
+ *   undecided  → plateia `model` (§D5): decisão própria, fase F4. Aplicar aqui
+ *                seria escolher por um arco que se absteve.
+ *   unknown    → tag fora do mapa (§D4): é a V4 da allowlist, irreversível e com
+ *                população própria sendo contada. Este ADR CONTA, não decide.
+ *
+ * Os dois últimos **são logados** — é justamente deles que a próxima fase precisa.
+ *
+ * ── Catálogo indisponível ───────────────────────────────────────────────────
+ *
+ * Devolve o valor intacto, e isso **não é conveniência**: sem catálogo toda tag é
+ * `unknown`, e `unknown` já está decidido acima como *contar, não aplicar*. O
+ * carregador (`buscar`) é quem grita, NOMEANDO o que deixa de valer — mascarar tudo
+ * faria toda mensagem do parque virar `***` por uma queda de config, e recusar o
+ * passo trocaria um problema de conformidade por um de disponibilidade.
+ *
+ * ── Nunca lança ─────────────────────────────────────────────────────────────
+ *
+ * Um erro do filtro derrubando um atendimento seria pior que o vazamento que ele
+ * evita. Em qualquer falha o valor sai como veio, e o `catch` **loga**.
  */
-export async function auditarLeituraCtx(
+export async function filtrarLeituraCtx(
+  valor:    unknown,
   tag:      string,
   sitio:    SitioInterpolacao,
   tenantId: string,
-): Promise<void> {
+): Promise<unknown> {
   try {
+    if (valor === undefined || valor === null || valor === "") return valor
+
     const c = await catalogos(tenantId)
-    if (!c) return
+    if (!c) return valor
 
     const plateia: CtxAudience = deriveAudience(sitio.stepType, sitio.visibility)
     const tipo                 = c.mapa.get(tag)
     const mascara: CtxReadMask = maskForSite(tipo, plateia, c.tipos)
 
-    // `plain` é o único desfecho sem nada a dizer. `undecided` e `unknown`
-    // também respondem `false` a `maskChangesValue` — mas por não estarem
-    // DECIDIDOS, e é exatamente esse o achado que a F3 precisa ver antes de
-    // aplicar qualquer coisa; por isso eles são logados e o `plain` não.
-    if (mascara === "plain") return
+    if (mascara === "plain") return valor
 
-    const chave = `${sitio.stepId ?? "?"}|${tag}|${plateia}|${mascara}`
-    if (jaLogado.has(chave)) return
-    jaLogado.add(chave)
+    const onde = `step=${sitio.stepId ?? "?"}:${sitio.stepType} plateia=${plateia}`
+    const quem = `tag=${tag} tipo=${tipo ?? "NÃO DECLARADA"}`
 
-    // "AUDITORIA" no texto de propósito: quem grep-ar o log precisa distinguir
-    // o que o filtro FARIA do que ele FEZ — e na F1 ele ainda não faz nada.
+    if (!maskChangesValue(mascara)) {
+      // `undecided` / `unknown` — a fase que decide não é esta.
+      registra(`${sitio.stepId ?? "?"}|${tag}|${plateia}|${mascara}`, () => console.warn(
+        `[ctx-audit] NÃO aplicado (${mascara === "undecided" ? "§D5, fase F4" : "§D4, é a V4 da allowlist"}): ` +
+        `${quem} ${onde} → ${mascara}`))
+      return valor
+    }
+
+    const filtrado = applyMaskingTypeToValue(String(valor), mascara)
+    registra(`${sitio.stepId ?? "?"}|${tag}|${plateia}|${mascara}`, () => console.info(
+      `[ctx-audit] APLICADO: ${quem} ${onde} → máscara=${mascara}` +
+      (maskOmitsField(mascara) ? " (campo OMITIDO — `hidden` devolve vazio)" : "")))
+    return filtrado
+  } catch (e) {
+    // Degradação NUNCA silenciosa: aqui ela deixa passar um valor CRU, que é o fato
+    // mais caro que este arquivo pode produzir. Sem esta linha o vazamento seria
+    // indistinguível de um tipo `plain`.
     console.warn(
-      `[ctx-audit] AUDITORIA (não aplicado): tag=${tag} tipo=${tipo ?? "NÃO DECLARADA"} ` +
-      `step=${sitio.stepId ?? "?"}:${sitio.stepType} plateia=${plateia} → máscara=${mascara}`
+      `[ctx-audit] FALHA ao filtrar tag=${tag} step=${sitio.stepId ?? "?"} (${String(e)}) — ` +
+      "o valor saiu SEM filtro. Isto não é 'nada a mascarar'."
     )
-  } catch {
-    // Silêncio aqui é a única degradação muda aceitável do arquivo, e a razão
-    // está no contrato: auditar é observação. Um erro dela derrubar o turno
-    // trocaria um problema de conformidade por um de disponibilidade.
+    return valor
   }
 }
 

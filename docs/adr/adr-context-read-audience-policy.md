@@ -391,7 +391,7 @@ quebraria os 10 usos legítimos, e um arco que quebra o produto na primeira fase
 | **F0** | censo re-executável: interpolações por sítio × tipo × plateia derivada, com os 20 **classificados** (legítimo / defeito / sem plateia de cliente) | O número sozinho não diz de qual proposição é evidência (§1.3) |
 | **F1** | o resolvedor de plateia + **modo auditoria**: calcula o que faria e LOGA, sem aplicar | Mesmo desenho da V3 da allowlist. É o que transforma "acho que são 10" em contagem |
 | **F2** | ~~exceção declarada~~ — **sem conteúdo** (D9.1/D9.2). O que a fase exigia virou tipagem por FINALIDADE, feita em 2026-09-04: `valor_informado_ao_cliente` criado e 3 tags retipadas | A população de exceção é zero e o mecanismo é desnecessário. O que restava (o limite mascarado) era declaração errada, não falta de exceção |
-| **F3** | aplicar em `notify`/`menu` — o caminho de cliente | Onde estão os defeitos medidos |
+| **F3** ✅ | aplicar em `notify`/`menu` — o caminho de cliente. **Entregue em 2026-09-04**: `filtrarLeituraCtx` SUBSTITUI o valor no `interpolate`, e `auditarLeituraCtx` foi REMOVIDA (duas funções calculando a mesma regra é o defeito deste arco) | Onde estão os defeitos medidos |
 | **F4** | `invoke` (confirmar que o cru é intencional e gateado) e depois `reason` (D5) | `reason` só depois de ter decisão própria |
 | **F5** | `$.pipeline_state.*` via carimbo de proveniência (D7) | Fatia própria |
 
