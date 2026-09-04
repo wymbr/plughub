@@ -84,11 +84,24 @@ RED, GRN, YEL, RST = "\033[31m", "\033[32m", "\033[33m", "\033[0m"
 #
 # Quitar uma linha = re-promover o pool e APAGAR a linha. O ramo C reprova quem
 # esquecer da segunda parte.
+# QUITADA em 2026-09-04: `wrapup_detached_ia`. O que a tirou daqui nao foi coragem,
+# foi medicao — o produtor (`_fire_detached_hook`, bridge) escreve as TRES canonicas,
+# conferido tag a tag contra o YAML ANTES de promover.
+#
+# Ela permanecia porque "o wrap-up funciona". E funcionava mesmo — a metade VISIVEL:
+# cartao renderiza, humano preenche, flow fecha `resolved`. A metade que GRAVA estava
+# morta desde a CNS-11 (`d4bdf9c0`, 2026-09-01): `segment_id` e `origin_session_id`
+# resolviam `null` e o `segment_outcome_record` caia em `seg_signal_not_seeded`, que
+# persiste o outcome no hash e NAO publica `participant_left` — disposicao nenhuma
+# chegava ao segmento. Medido em `plughub_demo.segments`: 175 de 361 segmentos
+# humanos com `wrapup_summary`, o ultimo em 2026-09-01 18:24, e **0 de 22** de 09-02
+# em diante. O controle positivo (a coluna JA foi preenchida, e muito) e o que separa
+# "parou de funcionar" de "nunca funcionou".
 DIVIDA = {
-    ("pool", "wrapup_detached_ia"): [
-        "session.origin_session_id", "session.surveyed_agent_key",
-        "session.surveyed_segment_id",
-    ],
+    # Os tres abaixo NAO sao "ainda nao deu tempo": os snapshots sao de 2026-08-10/12
+    # e, nos testes de 2026-09-03/04, nenhum recebeu trafego. Re-promove-los sem medir
+    # o produtor de cada tag e exatamente o erro que a CNS-19 cometeu no OTP.
+    # Gatilho para quitar: o pool voltar a ser exercido — ai o produtor se mede.
     ("pool", "outbound_survey_worker"): ["session.survey_grain"],
     ("pool", "survey_multi_ia"):        ["session.pool.id"],
     ("pool", "copilot_sac"):            ["session.sentimento.categoria"],

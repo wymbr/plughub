@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — CNS-22: o wrap-up "que funcionava" gravava nada havia tres dias
+
+**Contexto.** `wrapup_detached_ia` era a unica linha da divida declarada do
+`gate_published_alias_census` que tinha chance de estar em uso, e a razao para nao
+promove-la era explicita: *"funciona hoje, promover as cegas troca um verde por um
+vermelho"*. A medicao inverteu a frase.
+
+**O que estava vivo.** A config VIVA confirma o uso — `retencao_humano.on_human_end`
+aponta para `wrapup_detached_ia` com `dispatch: detached`, e o bridge registra a
+execucao completa em 2026-09-03 21:47 (`outcome=resolved`). Nao ha duvida de que o
+pool roda.
+
+**O que estava morto.** O snapshot promovido era de **2026-08-10** e lia tres aliases
+(`@ctx.session.origin_session_id`, `surveyed_agent_key`, `surveyed_segment_id`)
+enquanto o produtor — `_fire_detached_hook`, no bridge — passou a escrever as
+canonicas `core.workflow.origin_session_id`, `core.survey.agent_key` e
+`core.survey.segment_id` na **CNS-11** (`d4bdf9c0`, 2026-09-01). E a leitura **nao
+resolve alias**: `resolveCtxRef` repassa a tag crua e o SDK faz `HGET` com ela
+(`context-store.ts:220`). Tres refs resolvendo `null`, em tres lugares que importam:
+`assigned_to` (o item de pull deixa de ser author-bound), `briefing_session_id` (o
+wrap-up perde a transcricao) e o par `segment_id`/`origin_session_id` do
+`segment_outcome_record` — que sem eles cai em `seg_signal_not_seeded`, persiste o
+outcome no hash e **nao publica `participant_left`**. Disposicao nenhuma chegava ao
+segmento.
+
+**A metade visivel e a metade que grava sao fatos diferentes.** Cartao renderiza,
+humano preenche, flow fecha `resolved`. Nada fica vermelho. E o valor plausivel mais
+barato de produzir: um fluxo que termina bem.
+
+**Medicao, com controle positivo.** Em `plughub_demo.segments`: **175 de 361**
+segmentos humanos carregam `wrapup_summary`, o ultimo em **2026-09-01 18:24**, e **0
+de 22** de 09-02 em diante. O controle positivo e o que separa *"parou de
+funcionar"* de *"nunca funcionou"* — sem ele, uma coluna sempre vazia seria a mesma
+leitura. A data do corte casa com o commit do produtor no dia anterior.
+
+**Conserto.** Conferencia 1:1 das tags lidas pelo YAML contra as escritas pelo
+produtor (8 tags, todas casando) **antes** de promover — que e a metade que faltou na
+CNS-11 e o que quebrou o OTP na CNS-19. Depois
+`deploy_skill_to_slot.sh … wrapup_detached_ia core.survey.segment_id`; snapshot novo
+em `2026-09-04T09:48`, `config_json` preservado
+(`{"max_concurrent_sessions": 5}`). O `seg_signal` e semeado com o mesmo
+`_ha_seg_id` que vira `core.survey.segment_id`, entao a chave casa.
+
+⚠️ **Mudanca de comportamento a observar no proximo teste:** com `assigned_to`
+resolvendo, o item de wrap-up volta a ser **author-bound** ao humano que atendeu, em
+vez de cair na fila para qualquer um.
+
+**Divida.** A tabela do gate encolheu de 4 para 3 (`outbound_survey_worker`,
+`survey_multi_ia`, `copilot_sac`) — snapshots de 2026-08-10/12, sem trafego medido, e
+o gatilho para quitar cada um e o pool voltar a ser exercido. O ramo C do gate reprova
+quem re-promover e esquecer de apagar a linha; ele foi quem exigiu esta atualizacao.
+
 ## 2026-09-03 — CNS-22 (mecanismo): gate do censo de artefato PUBLICADO lendo alias
 
 Fecha a metade que faltava do episódio: **nada reprovava um artefato publicado que lê um alias
