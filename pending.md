@@ -312,6 +312,24 @@ seguem sem tarefa aberta neste ledger.)*
 | id | tarefa | status | referencia |
 |---|---|---|---|
 
+## `docs/adr/adr-dialog-input-format-catalog.md` — catalogo de formatos de entrada
+
+ADR **proposto** em 2026-09-04. Censo do mesmo dia: `pattern` tem **0 usuarios** (0 de 11 formas
+publicadas, 0 de 11 semeadas, 0 YAMLs de skill); **2** formas declaram validacao e **1 delas e
+inerte**; `fields[].validation` e descartado no `form_get`; Console e pagina web nao validam nada.
+**F2 antes de F3** e a unica ordem que nao pode inverter — remover `pattern` antes de o engine
+entender `format` abriria janela sem validacao nenhuma.
+
+| id | tarefa | status | referencia |
+|---|---|---|---|
+| FMT-01 | **F0 — censo re-executavel.** Os numeros da §1 do ADR foram medidos a mao em 2026-09-04. `infra/test/q_dialog_format_census.sh` deve reproduzir: uso de `pattern` por populacao (publicadas / semeadas / YAMLs), formas com `validation` sem `retry` (as inertes), e campos `fields[].validation` que nao sobrevivem ao `form_get`. **Achado sem instrumento volta a ser lembranca** — e a F3 depende de re-confirmar o zero antes de remover | `aberto` | ADR §1, §4 |
+| FMT-02 | **F1 — catalogo `dialog.formats`.** Namespace novo no config-api (seed + default espelhado em `@plughub/schemas`), com `afordancia` (mask, inputmode, maxlength, chave i18n) e `veredicto` (`shape_pattern` ancorada + `semantic` nomeada). Entradas de PII declaram `from_masked_type` e **herdam** a mascara de `masking.types.*.formato.display` em vez de reescreve-la — `cpf`, `credit_card`, `phone` e `card_expiry` ja existem la, e repetir a string seria a segunda casa afirmando o mesmo fato. ⚠️ `detect_pattern` **nao** serve de `shape_pattern`: e um *finder* nao ancorado, e como validador aceita `meu cpf e 111.222.333-44 obrigado` | `aberto` | ADR §D2, §D3, §D4 |
+| FMT-03 | **F2 — o engine resolve `format`, e a validacao deixa de depender de `retry`.** `validateFormat` (`skill-flow-engine/src/steps/menu.ts:100`) vira interpretador do catalogo. Junto entram **D5** (hoje `retryEnabled = maxAttempts > 1 && !!resolvedValidation` gateia a propria validacao, entao o campo mais restritivo e o que degrada) e **D6** (`RenderField` em `mcp-server-plughub/src/tools/dialog.ts:41` e allowlist e descarta `fields[].validation` — segunda ocorrencia da familia DTO-01, mesmo desenho de tipo espelhado). Populacao contada antes de virar a D5: **exatamente 1** forma muda de comportamento (`dialog_nps_v1`), sem consumidor de producao | `aberto` | ADR §D5, §D6 |
+| FMT-04 | **F3 — editor troca regex por seletor; `pattern` sai do schema.** So depois da FMT-03, com o re-censo da FMT-01 confirmando o zero. Remover apaga **por construcao** o fail-open de `menu.ts:104` (`catch { }` fora do `if` ⇒ regex invalida libera tudo, em silencio) e tira codigo autorado por tenant do event loop compartilhado. `numeric: true` sobrevive como **alias contado** de `format: "decimal"` (2 usuarios vivos), com data, nunca migracao muda | `aberto` | ADR §D1, §1.2(c)(d), §1.3 |
+| FMT-05 | **F4 — afordancia e veredicto no Console e na pagina web.** As duas superfícies onde o wrap-up e a aprovacao vivem hoje nao validam nada. Cada uma ganha o interpretador generico da D2 (~15 linhas sobre a MESMA tabela) — **nao** uma copia da politica, que e como o `evaluateAskWhen` virou tres implementacoes por topologia (React x `<script>` servido por Python x Node). ⚠️ **afordancia ≠ veredicto**: mascara e `inputmode` guiam, nao autorizam; superfície que so ganhou afordancia **nao esta validada** | `aberto` | ADR §D2, §D7, §1.5 |
+| FMT-06 | **F5 — os cinco gates, cada um com controle positivo.** O que carrega o arco e `probe_dialog_format_surfaces.sh`: as tres superfícies tem de dar o **mesmo** veredicto para a mesma entrada, e ele e a unica coisa que impede a D2 de virar o `askWhen` de novo com o tempo. Os outros quatro: catalogo resolve (`from_masked_type` inexistente ⇒ reprova), veredicto semantico (`31/02/2026` e `000.000.000-00` recusados, **com data valida aceita ao lado** — senao passa por recusar tudo), validacao vale sem `retry`, e `fields[].validation` sobrevive ao round-trip | `aberto` | ADR §5 |
+| FMT-07 | **`masking.types` declara `display: "R$ #.##0,00"` para `address`, `health` e `financial`.** Endereco nao se exibe como moeda — e copy-paste, encontrado pelo censo da FMT-01 e deixado de fora do ADR de proposito: mexe em politica de mascaramento, que tem dono proprio. Efeito hoje e cosmetico (os tres nao tem `detect_pattern`, entao nao ha caminho de deteccao que use a mascara), mas a FMT-02 passa a **ler** esse bloco via `from_masked_type`, e um valor errado ali deixa de ser cosmetico | `aberto` | ADR §D3 (nota), `config-api/seed.py:554` |
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 2.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho
