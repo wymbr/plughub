@@ -348,7 +348,11 @@ SURVEY_COLLECT_PAGE_HTML = """<!DOCTYPE html>
 # Reads the token from the URL, fetches the frozen form, renders statements +
 # questions, and submits answers. Same DialogForm content as the chat runner —
 # here it becomes a <form> page. No build step: plain HTML/JS.
-SURVEY_PAGE_HTML = """<!DOCTYPE html>
+# ⚠️ RAW (`r"""`): esta pagina embute regex JS (`\d`, `\D`), e num literal
+# comum cada uma delas e um escape invalido — hoje SyntaxWarning, e o Python
+# ja anunciou que vira SyntaxError. Um aviso que ninguem le e o degrau antes
+# de um servico que nao sobe.
+SURVEY_PAGE_HTML = r"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
@@ -367,6 +371,7 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
   .opts { display:flex; flex-wrap:wrap; gap:8px; }
   .opt { border:1px solid #cbd5e1; border-radius:10px; padding:8px 14px; cursor:pointer; background:#fff; }
   .opt.sel { background:#1B4F8A; color:#fff; border-color:#1B4F8A; }
+  .fmt-err { color:#b91c1c; font-size:12px; margin-top:4px; }
   input[type=text], input[type=number], textarea {
     width:100%; border:1px solid #cbd5e1; border-radius:10px; padding:10px; font-size:15px; }
   button.submit { margin-top:20px; background:#1B4F8A; color:#fff; border:none; border-radius:10px;
@@ -432,6 +437,7 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
       }
       var ok = node.output_key;
       nodeOk[i] = ok;
+      nodePorOk[ok] = node;
       h += '<div class="q" data-node="' + i + '" data-ok="' + esc(ok) + '">';
       h += '<div class="q-prompt">' + esc(lt(node.prompt, dl)) + '</div>';
       var it = node.interaction;
@@ -444,7 +450,20 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
         });
         h += '</div>';
       } else {
-        h += '<input type="text" data-input="' + esc(ok) + '" />';
+        // AFORDANCIA — guia a digitacao. Nao autoriza (§D7): o veredicto fala
+        // no envio, com a mensagem que o catalogo carrega.
+        var ent = entradaDe(node);
+        var af  = (ent && ent.affordance) || {};
+        var dcl = declDe(node) || {};
+        var mx  = af.maxlength !== undefined
+          ? (dcl.max_length !== undefined ? Math.min(af.maxlength, dcl.max_length) : af.maxlength)
+          : dcl.max_length;
+        h += '<input type="text" data-input="' + esc(ok) + '"'
+           + (af.mask ? ' data-mask="' + esc(af.mask) + '" placeholder="' + esc(af.mask) + '"' : '')
+           + (af.inputmode ? ' inputmode="' + esc(af.inputmode) + '"' : '')
+           + (mx !== undefined ? ' maxlength="' + mx + '"' : '')
+           + ' />';
+        h += '<div class="fmt-err" data-err="' + esc(ok) + '" style="display:none"></div>';
       }
       h += '</div>';
     });
@@ -474,15 +493,156 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
       });
     });
     root.querySelectorAll('input[data-input]').forEach(function (el) {
-      el.addEventListener('input', function () { answers[el.getAttribute('data-input')] = el.value; refresh(); });
+      el.addEventListener('input', function () {
+        var ok = el.getAttribute('data-input');
+        var mask = el.getAttribute('data-mask');
+        if (mask) { el.value = aplicaMascara(el.value, mask); }
+        answers[ok] = el.value;
+        julgaCampo(ok, el.value);
+        refresh();
+      });
     });
     document.getElementById('submit-btn').addEventListener('click', submit);
     refresh();
   }
 
+
+  // <<<FORMAT-INTERPRETER>>>  (marcador: extraido pelo gate das tres superficies)
+  // ── catalogo de formatos: afordancia + veredicto ────────────────────────────
+  // TERCEIRA implementacao das primitivas semanticas, e a duplicacao e DECLARADA
+  // (§D2 do adr-dialog-input-format-catalog): as tres superficies nao compartilham
+  // import — foi assim que `evaluateAskWhen` acabou com tres copias, por topologia
+  // e nao por desleixo. O que impede a divergencia e a POLITICA ser dado (shape,
+  // mascara, teclado, mensagem vem do catalogo) e cada entrada carregar seus
+  // VETORES, rodados contra as tres implementacoes pelo gate das superficies.
+  var FORMATS = [];
+  var invalidos = {};
+  var nodePorOk = {};
+
+  function ehDataCalendario(s) {
+    var m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s); if (!m) return false;
+    var d = +m[1], mo = +m[2], y = +m[3];
+    if (mo < 1 || mo > 12 || d < 1) return false;
+    return d <= new Date(y, mo, 0).getDate();
+  }
+  function ehHora(s) {
+    var m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s); if (!m) return false;
+    return +m[1] <= 23 && +m[2] <= 59 && (m[3] === undefined || +m[3] <= 59);
+  }
+  function ehCpf(s) {
+    var d = String(s).replace(/\D/g, '');
+    if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+    function dv(ate) {
+      var soma = 0, i;
+      for (i = 0; i < ate; i++) soma += (+d[i]) * (ate + 1 - i);
+      var r = (soma * 10) % 11; return r === 10 ? 0 : r;
+    }
+    return dv(9) === +d[9] && dv(10) === +d[10];
+  }
+  function ehLuhn(s) {
+    var d = String(s).replace(/\D/g, ''); if (d.length < 12) return false;
+    var soma = 0, alt = false, i, n;
+    for (i = d.length - 1; i >= 0; i--) {
+      n = +d[i]; if (alt) { n *= 2; if (n > 9) n -= 9; } soma += n; alt = !alt;
+    }
+    return soma % 10 === 0;
+  }
+  function ehMesAno(s) {
+    var m = /^(\d{2})\/(\d{2})$/.exec(s); if (!m) return false;
+    return +m[1] >= 1 && +m[1] <= 12;
+  }
+  var SEMANTICAS = {
+    none: function () { return true; }, calendar_date: ehDataCalendario,
+    clock_time: ehHora, cpf_checkdigit: ehCpf, luhn: ehLuhn, month_year: ehMesAno
+  };
+
+  function fmtPorId(id) {
+    for (var i = 0; i < FORMATS.length; i++) if (FORMATS[i].id === id) return FORMATS[i];
+    return null;
+  }
+  // D8 — o campo nomeia o tipo UMA vez: `masked: "cpf"` deriva o formato.
+  function fmtPorMasked(tipo) {
+    if (!tipo) return null;
+    for (var i = 0; i < FORMATS.length; i++)
+      if (FORMATS[i].from_masked_type === tipo) return FORMATS[i];
+    return null;
+  }
+  function declDe(node) {
+    var d = node.validation || null;
+    if (d && d.format) return d;
+    var tipo = node.masked === true ? 'opaque' : (typeof node.masked === 'string' ? node.masked : null);
+    var der = fmtPorMasked(tipo);
+    if (!der) return d;
+    var out = {}; if (d) for (var k in d) out[k] = d[k];
+    out.format = der.id; return out;
+  }
+  function entradaDe(node) {
+    var d = declDe(node);
+    return d && d.format ? fmtPorId(d.format) : null;
+  }
+  // Semantica desconhecida RECUSA: aceitar o que nao sabemos checar e fail-open
+  // com cara de tolerancia.
+  function julgaFormato(valor, ent) {
+    if (!ent) return false;
+    var s = valor == null ? '' : String(valor);
+    var v = ent.verdict || {};
+    if (v.shape) { try { if (!new RegExp(v.shape).test(s)) return false; } catch (e) { return false; } }
+    var fn = SEMANTICAS[v.semantic || 'none'];
+    if (!fn) return false;
+    return fn(s);
+  }
+  function julgaDeclaracao(valor, decl) {
+    if (!decl) return true;
+    var s = valor == null ? '' : String(valor);
+    if (decl.format && !julgaFormato(s, fmtPorId(decl.format))) return false;
+    if (decl.numeric && (s.trim() === '' || isNaN(Number(s)))) return false;
+    if (decl.min_length !== undefined && s.length < decl.min_length) return false;
+    if (decl.max_length !== undefined && s.length > decl.max_length) return false;
+    if (decl.min !== undefined && Number(s) < decl.min) return false;
+    if (decl.max !== undefined && Number(s) > decl.max) return false;
+    return true;
+  }
+  // A mascara GUIA e nao briga: consome so os digitos, insere os separadores e
+  // descarta o excedente. Mascara que rejeita tecla vira veredicto disfarcado.
+  function aplicaMascara(valor, mask) {
+    if (!mask) return valor;
+    var dig = String(valor || '').replace(/\D/g, ''), out = '', i = 0, k;
+    for (k = 0; k < mask.length; k++) {
+      if (i >= dig.length) break;
+      if (mask[k] === '#') { out += dig[i]; i++; } else { out += mask[k]; }
+    }
+    return out;
+  }
+  function txt(ent, loc) {
+    var e = ent && ent.verdict && ent.verdict.error;
+    if (!e) return 'Formato invalido.';
+    return typeof e === 'string' ? e : (e[loc] || e['pt-BR'] || Object.keys(e).map(function (k) { return e[k]; })[0]);
+  }
+  // <<<END-FORMAT-INTERPRETER>>>
+
+  // So julga o que tem VALOR: campo vazio e assunto de obrigatoriedade, nao de
+  // formato — reprovar vazio faria a pagina nascer vermelha.
+  function julgaCampo(ok, valor) {
+    var node = nodePorOk[ok];
+    var alvo = document.querySelector('[data-err="' + ok + '"]');
+    var mau  = false;
+    if (node && valor) { mau = !julgaDeclaracao(valor, declDe(node)); }
+    if (mau) { invalidos[ok] = 1; } else { delete invalidos[ok]; }
+    if (alvo) {
+      alvo.textContent = mau ? txt(entradaDe(node), 'pt-BR') : '';
+      alvo.style.display = mau ? 'block' : 'none';
+    }
+    var btn = document.getElementById('submit-btn');
+    if (btn) { btn.disabled = Object.keys(invalidos).length > 0; }
+  }
+
   function submit() {
     var btn = document.getElementById('submit-btn');
-    btn.disabled = true;
+    // O bloqueio ja aconteceu no botao, e o motivo esta impresso ao lado do
+    // campo. Esta segunda checagem existe porque o botao pode ser acionado por
+    // teclado antes do primeiro `input` — e um envio que passasse aqui gravaria
+    // um sinal com formato que a plataforma acabou de recusar noutra superficie.
+    if (Object.keys(invalidos).length > 0) { return; }
     fetch('/v1/survey/web/' + encodeURIComponent(token) + '/submit', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ answers: answers })
@@ -496,6 +656,10 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
     .then(function (r) { if (!r.ok) throw new Error('not found'); return r.json(); })
     .then(function (data) {
       if (data.status && data.status !== 'open') { root.innerHTML = '<div class="done">Esta pesquisa já foi respondida. Obrigado!</div>'; return; }
+      // Catalogo indisponivel ⇒ lista vazia, e `julgaFormato` RECUSA quem
+      // nomear formato. Campo sem formato segue livre, entao uma queda do
+      // config-api nao trava um survey que nao usa formato nenhum.
+      FORMATS = data.formats || [];
       render(data.form || {});
     })
     .catch(function () { root.innerHTML = '<div class="err">Pesquisa não encontrada ou expirada.</div>'; });
@@ -546,6 +710,11 @@ class SurveyWebService:
         # S8/S9 — store operacional (evaluation-api). Vazio → degrada p/ emit-only.
         self._eval_url   = evaluation_api_url.rstrip("/")
         self._eval_token = evaluation_service_token
+        # Cache do catálogo de formatos por tenant. Vive no __init__ e não no
+        # `create_link`: lá ele seria REATRIBUÍDO a cada link criado, e um cache
+        # que se esvazia sozinho é indistinguível de cache nenhum — só mais lento
+        # de descobrir.
+        self._fmt_cache: dict[str, list[dict[str, Any]]] = {}
 
     def invalidate_delivery_config(self, tenant_id: str | None = None) -> None:
         """Called on config.changed(survey) — drops the delivery layer's cached
@@ -617,6 +786,48 @@ class SurveyWebService:
     async def get(self, token: str) -> dict[str, Any] | None:
         raw = await self._redis.get(self._key(token))
         return json.loads(raw) if raw else None
+
+    async def format_catalog(self, tenant_id: str) -> list[dict[str, Any]]:
+        """Catálogo de formatos (`dialog.formats`) para a página julgar e guiar.
+
+        Lido no GET e **não congelado no token**: o catálogo pode mudar entre
+        criar o link e a pessoa responder, e a fonte de verdade em runtime é o
+        store. Congelá-lo faria a página validar contra uma política aposentada.
+
+        Degrada para lista VAZIA com log NOMEANDO o motivo. A consequência está
+        no interpretador da página: sem catálogo, campo que NOMEIE um formato é
+        recusado — não sabemos julgar, então não deixamos passar como se
+        soubéssemos. Campo sem `format` segue livre, então uma queda do
+        config-api não trava um survey que não usa formato nenhum.
+        """
+        if tenant_id in self._fmt_cache:
+            return self._fmt_cache[tenant_id]
+        formatos: list[dict[str, Any]] = []
+        if self._config_api_url:
+            try:
+                async with httpx.AsyncClient(timeout=3) as client:
+                    resp = await client.get(
+                        f"{self._config_api_url}/config/dialog/formats",
+                        params={"tenant_id": tenant_id},
+                    )
+                if resp.status_code == 200:
+                    valor = (resp.json() or {}).get("value") or {}
+                    bruto = valor.get("formats")
+                    if isinstance(bruto, list):
+                        formatos = bruto
+                else:
+                    logger.warning(
+                        "catalogo de formatos indisponivel (HTTP %s) — a pagina de survey "
+                        "vai RECUSAR campo que declare formato, e aceitar os demais",
+                        resp.status_code,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "catalogo de formatos indisponivel (%s) — a pagina de survey vai "
+                    "RECUSAR campo que declare formato, e aceitar os demais", exc,
+                )
+        self._fmt_cache[tenant_id] = formatos
+        return formatos
 
     async def submit(self, token: str, answers: dict[str, Any]) -> dict[str, Any]:
         """

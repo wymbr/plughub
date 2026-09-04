@@ -1229,7 +1229,10 @@ async def survey_web_get(token: str) -> dict:
     rec = await _survey_web.get(token)
     if rec is None:
         raise HTTPException(status_code=404, detail="survey not found")
-    return {"form": rec.get("form"), "status": rec.get("status")}
+    # O catálogo viaja no GET, e não congelado no token: ele pode mudar entre a
+    # criação do link e a resposta, e a fonte de verdade em runtime é o store.
+    formatos = await _survey_web.format_catalog(rec.get("tenant_id") or "")
+    return {"form": rec.get("form"), "status": rec.get("status"), "formats": formatos}
 
 
 @app.post("/v1/survey/web/{token}/submit", status_code=200)

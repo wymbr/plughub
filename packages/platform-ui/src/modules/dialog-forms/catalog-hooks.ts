@@ -26,7 +26,20 @@ export interface FormatEntry {
   label?:            string | Record<string, string>
   from_masked_type?: string
   affordance?:       { mask?: string; inputmode?: string; maxlength?: number }
-  verdict?:          { shape?: string; semantic?: string }
+  verdict?:          {
+    shape?:    string
+    semantic?: string
+    /**
+     * Mensagem ao cliente quando o veredicto recusa — `LocalizedText` (string
+     * ou mapa por locale), como todo texto de tenant no DialogForm.
+     *
+     * Faltava aqui, e a ausência tem nome: é a QUARTA vez neste arco que um
+     * tipo espelhado fica atrás do canônico. A diferença é que desta vez o
+     * compilador pegou, porque a superfície tentou LER o campo — nas três
+     * anteriores o espelho só ESCREVIA, e a perda passava calada.
+     */
+    error?:    string | Record<string, string>
+  }
 }
 
 export interface MaskedTypeEntry {

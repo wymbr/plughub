@@ -108,6 +108,21 @@ function evalAskWhen(g: AskWhen | undefined, answers: Record<string, AnswerValue
   }
 }
 
+import { useFormatCatalog, formatForMasked, type FormatEntry } from "@/modules/dialog-forms/catalog-hooks"
+import {
+  julgaDeclaracao, aplicaMascara, maxEfetivo,
+} from "@/modules/dialog-forms/format-interpreter"
+
+/** A declaração de formato como ela viaja no DialogForm publicado. */
+export interface DeclFormato {
+  format?:     string
+  numeric?:    boolean
+  min_length?: number
+  max_length?: number
+  min?:        number
+  max?:        number
+}
+
 // ── DialogForm shapes (loose — the published JSON from dialog-api) ────────────
 
 interface DialogOption { id: string; label: unknown; value?: string }
@@ -120,6 +135,8 @@ export interface DialogFormField {
   options?: DialogOption[]
   /** Declaração de mascaramento — `boolean | string` desde a T2 (string = id de tipo). */
   masked?: boolean | string
+  /** Declaração de formato (F2/D6). `format` nomeia uma entrada do catálogo. */
+  validation?: DeclFormato
 }
 interface DialogNode {
   id: string
@@ -132,6 +149,7 @@ interface DialogNode {
   output_key?: string
   ask_when?: AskWhen
   masked?: boolean | string
+  validation?: DeclFormato
 }
 interface DialogFormDoc {
   name?: string
@@ -194,6 +212,14 @@ export interface DialogFormActionsState {
   closedElsewhere: boolean
   /** Submit a fully-formed resume payload. busyKey drives a per-button spinner. */
   submit:      (payload: Record<string, unknown>, busyKey?: string) => Promise<void>
+  /**
+   * Campos que reprovaram o formato (id → motivo). Vazio = pode enviar.
+   *
+   * Viaja no estado porque a barra de ações pode ser SUBSTITUÍDA por um overlay
+   * (aprovação), e um overlay que não soubesse do veredicto enviaria o que a
+   * barra nativa bloqueia — o mesmo defeito do `closedElsewhere` logo acima.
+   */
+  formatoInvalido: Record<string, string>
 }
 
 interface DialogFormRendererProps {
@@ -392,8 +418,58 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
     }
   }
 
+  // Catálogo lido do STORE (config-api), como no editor. Indisponível ⇒ lista
+  // vazia, e aí `julgaDeclaracao` recusa todo campo que NOMEIE um formato — o
+  // que é a postura certa: não sabemos julgar, então não deixamos passar como
+  // se soubéssemos. Campo sem `format` segue livre.
+  const { formats } = useFormatCatalog(tenantId)
+
+  /** Resolve a declaração efetiva de um alvo: a D8 deriva o formato do tipo
+   *  mascarado quando o autor não o declarou. Mesma regra do editor. */
+  const declDe = (alvo: { masked?: boolean | string; validation?: DeclFormato }): DeclFormato | undefined => {
+    const d = alvo.validation
+    if (d?.format) return d
+    const tipo = alvo.masked === true ? "opaque" : (typeof alvo.masked === "string" ? alvo.masked : undefined)
+    const derivado = formatForMasked(tipo, formats)
+    if (!derivado) return d
+    return { ...(d ?? {}), format: derivado.id }
+  }
+
+  const entradaDe = (alvo: { masked?: boolean | string; validation?: DeclFormato }): FormatEntry | undefined => {
+    const id = declDe(alvo)?.format
+    return id ? formats.find(f => f.id === id) : undefined
+  }
+
+  // O veredicto é recalculado a cada render sobre o que está digitado. Só julga
+  // o que tem VALOR: campo vazio é assunto de `required`, não de formato — e
+  // reprovar vazio aqui faria o formulário nascer vermelho.
+  const formatoInvalido = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {}
+    for (const n of form?.nodes ?? []) {
+      if (n.kind !== "question") continue
+      if (!evalAskWhen(n.ask_when, answers)) continue
+      for (const f of n.fields ?? []) {
+        const v = fieldValues[f.id]
+        if (!v) continue
+        const r = julgaDeclaracao(v, declDe(f), formats)
+        if (!r.ok) out[f.id] = r.reason ?? "shape"
+      }
+      const ok = n.output_key ?? n.id
+      const bruto = answers[ok]
+      if (typeof bruto === "string" && bruto) {
+        const r = julgaDeclaracao(bruto, declDe(n), formats)
+        if (!r.ok) out[ok] = r.reason ?? "shape"
+      }
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form, answers, fieldValues, formats])
+
+  const temInvalido = Object.keys(formatoInvalido).length > 0
+
   const actionsState: DialogFormActionsState = {
     answers, fieldValues, baseline, formFields, busy, closedElsewhere, submit,
+    formatoInvalido,
   }
 
   if (done) {
@@ -436,16 +512,38 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
           <option value="">—</option>
           {(f.options ?? []).map(o => <option key={o.id} value={o.value ?? o.id}>{locStr(o.label, o.id)}</option>)}
         </select>
-      ) : (
-        <input
-          type={f.type === "date" ? "date" : "text"}
-          inputMode={f.type === "money" || f.type === "number" ? "decimal" : undefined}
-          value={fieldValues[f.id] ?? ""}
-          disabled={disabled}
-          onChange={e => setFieldValues(p => ({ ...p, [f.id]: e.target.value }))}
-          className="text-sm border border-border-strong rounded px-2 py-1.5 bg-white text-dark placeholder-muted-light disabled:bg-slate-50"
-        />
-      )}
+      ) : (() => {
+        // AFORDÂNCIA — guia a digitação. Não autoriza (§D7): o veredicto é o
+        // bloco `formatoInvalido`, e ele fala no envio.
+        const ent  = entradaDe(f)
+        const decl = declDe(f)
+        const mask = ent?.affordance?.mask
+        const ruim = formatoInvalido[f.id]
+        return (
+          <>
+            <input
+              type={f.type === "date" ? "date" : "text"}
+              inputMode={
+                (ent?.affordance?.inputmode as React.HTMLAttributes<HTMLInputElement>["inputMode"]) ??
+                (f.type === "money" || f.type === "number" ? "decimal" : undefined)
+              }
+              maxLength={maxEfetivo(ent, decl?.max_length)}
+              placeholder={ent?.affordance?.mask ?? undefined}
+              value={fieldValues[f.id] ?? ""}
+              disabled={disabled}
+              onChange={e => setFieldValues(p => ({ ...p, [f.id]: aplicaMascara(e.target.value, mask) }))}
+              className={`text-sm border rounded px-2 py-1.5 bg-white text-dark placeholder-muted-light disabled:bg-slate-50 ${
+                ruim ? "border-red-500" : "border-border-strong"
+              }`}
+            />
+            {ruim && (
+              <span className="text-[11px] text-red-700">
+                {locStr(ent?.verdict?.error, t("formFill.formatInvalid", { defaultValue: "Invalid format." }))}
+              </span>
+            )}
+          </>
+        )
+      })()}
     </div>
   )
 
@@ -507,15 +605,33 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
               )
             })}
           </div>
-        ) : (
-          <input
-            type="text"
-            value={answers[ok] ?? ""}
-            disabled={disabled}
-            onChange={e => setAnswers(p => ({ ...p, [ok]: e.target.value }))}
-            className="text-sm border border-border-strong rounded px-2 py-1.5 bg-white text-dark placeholder-muted-light disabled:bg-slate-50"
-          />
-        )}
+        ) : (() => {
+          const ent  = entradaDe(n)
+          const decl = declDe(n)
+          const mask = ent?.affordance?.mask
+          const ruim = formatoInvalido[ok]
+          return (
+            <>
+              <input
+                type="text"
+                inputMode={ent?.affordance?.inputmode as React.HTMLAttributes<HTMLInputElement>["inputMode"]}
+                maxLength={maxEfetivo(ent, decl?.max_length)}
+                placeholder={mask ?? undefined}
+                value={typeof answers[ok] === "string" ? (answers[ok] as string) : ""}
+                disabled={disabled}
+                onChange={e => setAnswers(p => ({ ...p, [ok]: aplicaMascara(e.target.value, mask) }))}
+                className={`text-sm border rounded px-2 py-1.5 bg-white text-dark placeholder-muted-light disabled:bg-slate-50 ${
+                  ruim ? "border-red-500" : "border-border-strong"
+                }`}
+              />
+              {ruim && (
+                <span className="text-[11px] text-red-700">
+                  {locStr(ent?.verdict?.error, t("formFill.formatInvalid", { defaultValue: "Invalid format." }))}
+                </span>
+              )}
+            </>
+          )
+        })()}
       </div>
     )
   })
@@ -620,7 +736,10 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                     <button
                       type="button"
                       onClick={() => submit({ decision: "input", source: "operator", answers })}
-                      disabled={busy !== null || disabled || closedElsewhere}
+                      // O bloqueio é do BOTÃO, e o motivo já está impresso ao lado
+                      // de cada campo — um envio que falhasse sem dizer onde
+                      // devolveria a mesma adivinhação que o formulário sem regra.
+                      disabled={busy !== null || disabled || closedElsewhere || temInvalido}
                       className="text-sm px-4 py-2 rounded font-medium bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-40"
                     >
                       {busy ? "…" : t("formFill.submit", { defaultValue: "Submit" })}

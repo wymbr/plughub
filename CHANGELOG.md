@@ -1,5 +1,100 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — F4 do catalogo de formatos: as duas superficies passam a guiar E julgar
+
+Quarta fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).
+E a fase que entrega o valor do arco: quem digita passa a ser **guiado** (mascara,
+teclado, comprimento) e **julgado** (forma + validade), nas duas superficies onde
+nao havia nada.
+
+### Console
+
+`DialogFormRenderer` ganhou afordancia e veredicto na pergunta escalar E no campo
+de `interaction: form`. O catalogo vem do **STORE** (config-api), como no editor —
+ler o default embutido faria a tela julgar por uma politica que o tenant nao tem.
+
+Tres decisoes que valem mais que o codigo:
+
+- **`formatoInvalido` viaja no `actionsState`.** A barra de acoes pode ser
+  SUBSTITUIDA por um overlay (aprovacao), e um overlay que nao soubesse do
+  veredicto enviaria o que a barra nativa bloqueia — o mesmo desenho do
+  `closedElsewhere`, pelo mesmo motivo.
+- **So julga o que tem VALOR.** Campo vazio e assunto de obrigatoriedade, nao de
+  formato; reprovar vazio faria o formulario nascer vermelho.
+- **A mascara nao briga com quem digita**: consome os digitos, insere os
+  separadores, descarta o excedente. Mascara que rejeita tecla vira veredicto
+  disfarcado — e veredicto tem hora (o envio) e mensagem propria.
+
+### Pagina publica de survey
+
+Mesmo tratamento, com uma escolha a mais: **o catalogo viaja no GET e NAO e
+congelado no token**. Ele pode mudar entre criar o link e a pessoa responder, e a
+fonte de verdade em runtime e o store; congela-lo faria a pagina validar contra
+politica aposentada.
+
+Catalogo indisponivel degrada NOMEANDO: a pagina recusa quem declara formato
+(nao sabemos julgar, entao nao deixamos passar como se soubessemos) e aceita os
+demais — uma queda do config-api nao trava survey que nao usa formato nenhum.
+
+O template da pagina virou **raw string**: ele embute regex JS, e `\d` num
+literal comum e escape invalido — hoje `SyntaxWarning`, e o Python ja anunciou
+que vira `SyntaxError`. Um aviso que ninguem le e o degrau antes de um servico
+que nao sobe.
+
+### O gate que CARREGA o arco
+
+`infra/test/probe_dialog_format_surfaces.sh` — **79 vetores × 3 implementacoes**,
+e os vetores vivem no CATALOGO, nao no teste.
+
+E o que separa a duplicacao declarada da §D2 do `evaluateAskWhen` triplicado. As
+tres superficies nao compartilham import (engine em Node · Console em React ·
+`<script>` servido por Python), entao a duplicacao das PRIMITIVAS e inevitavel; o
+que nao pode e ela divergir em silencio. Falseado dos dois lados: remover a
+guarda de repeticao do CPF no Console ou na pagina reprova **nomeando qual
+superficie** divergiu.
+
+Ele achou uma assimetria REAL de contrato na primeira execucao: o interpretador
+do Console devolve `{ok, reason}` (a tela precisa do motivo para escolher a
+mensagem) e o da pagina devolve booleano (ela so acende a linha vermelha). A
+normalizacao ficou EXPLICITA no gate — comparar as formas cruas o faria reprovar
+por assinatura e nunca chegar a julgar comportamento.
+
+### Um verde que era meu erro, e vale mais que o gate
+
+A primeira bateria de mutacao deste gate deu **verde com a mutacao aplicada** — e
+a leitura obvia (*"o gate nao pega"*) estava errada. O script de mutacao usava
+`str.replace` **sem assert**, a ancora nao casava, e nada tinha sido mutado.
+*Mutacao que nao aplica e gate robusto dao exatamente o mesmo verde.* Com o
+assert, os dois lados reprovam. E a regra do CLAUDE.md (*"antes de aceitar um
+verde, pergunte o que o faria ficar vermelho"*) valendo para o instrumento do
+instrumento.
+
+### QUARTA ocorrencia do tipo espelhado — e a primeira que o compilador pegou
+
+`catalog-hooks.ts` nao tinha `verdict.error`. A diferenca para as tres anteriores
+e instrutiva: **desta vez a superficie tentou LER o campo**, e o `tsc` reprovou
+na hora. Nas outras o espelho so ESCREVIA, e a perda passava calada. Espelho que
+so escreve nao tem quem o denuncie.
+
+### FMT-10 continua aberta, com razao mais nitida
+
+A demonstracao natural seria aplicar `format` a `dialog_limite_solicitacao`.
+Medido antes de mexer: aquela forma e consumida por um step `menu` de
+`skill_limite_entrada_v1` — ou seja, e renderizada pelo **CANAL**, nao pelo
+Console. **A afordancia desta fase alcancou duas superficies e o chat nao e uma
+delas**: o adapter recebe `masked_types` (overlay de senha) mas nunca uma mascara
+de digitacao. Ligar formato estrito ali continua hostil, pela mesma razao da F2.
+
+Aberta como **FMT-11**: levar a afordancia ao canal, e so entao aplicar formato a
+fixture viva.
+
+### Verificacao
+
+Gates do arco, todos verdes: paridade · engine (F2) · declaracao (F3) ·
+superficies (F4) · i18n duplicadas · ledger.
+Suites: channel-gateway **724**, schemas 211, mcp-server 259, dialog-api 27,
+skill-flow-engine 181.
+
 ## 2026-09-04 — F3 do catalogo de formatos: `pattern` sai, e o editor deixa de emitir declaracao anonima
 
 Terceira fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).
