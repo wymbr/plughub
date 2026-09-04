@@ -437,9 +437,10 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
       var it = node.interaction;
       if (it === 'button' || it === 'list' || it === 'checklist') {
         h += '<div class="opts">';
+        var multi = it === 'checklist' ? '1' : '0';
         (node.options || []).forEach(function (o) {
           var val = o.value != null ? o.value : o.id;
-          h += '<div class="opt" data-ok="' + esc(ok) + '" data-val="' + esc(val) + '">' + esc(lt(o.label, dl)) + '</div>';
+          h += '<div class="opt" data-ok="' + esc(ok) + '" data-multi="' + multi + '" data-val="' + esc(val) + '">' + esc(lt(o.label, dl)) + '</div>';
         });
         h += '</div>';
       } else {
@@ -453,9 +454,22 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
     root.querySelectorAll('.opt').forEach(function (el) {
       el.addEventListener('click', function () {
         var ok = el.getAttribute('data-ok');
-        answers[ok] = el.getAttribute('data-val');
-        root.querySelectorAll('.opt[data-ok="' + ok + '"]').forEach(function (e2) { e2.classList.remove('sel'); });
-        el.classList.add('sel');
+        var val = el.getAttribute('data-val');
+        if (el.getAttribute('data-multi') !== '1') {
+          answers[ok] = val;
+          root.querySelectorAll('.opt[data-ok="' + ok + '"]').forEach(function (e2) { e2.classList.remove('sel'); });
+          el.classList.add('sel');
+        } else {
+          var cur = Array.isArray(answers[ok]) ? answers[ok] : [];
+          var at = cur.indexOf(val);
+          if (at >= 0) { cur.splice(at, 1); el.classList.remove('sel'); }
+          else { cur.push(val); el.classList.add('sel'); }
+          // Zero marcacoes REMOVE a chave em vez de gravar `[]`: `awEval` trata
+          // ausencia como "nao respondeu" e `[]` nao casa com nenhum teste de
+          // vazio, entao um array vazio faria pergunta nao respondida parecer
+          // respondida. Mesma regra do renderer do Console.
+          if (cur.length) answers[ok] = cur; else delete answers[ok];
+        }
         refresh();
       });
     });

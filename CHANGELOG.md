@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — `checklist` era single-select nas DUAS superficies de formulario
+
+Achado ao exercitar o wrap-up com captura Arc 12 no demo: marcar dois servicos so
+guardava um. O contato real emitiu `retencao_humano.wrapup.fcr = 1` e **uma** linha
+`…servico.segunda_via`, quando deveria emitir uma por servico marcado.
+
+**O defeito nao era o clique, era o TIPO.** `DialogFormRenderer` (Console) declarava
+`answers: Record<string, string>` — escalar por construcao. Com esse tipo, guardar a
+segunda marcacao era impossivel: o clique so podia sobrescrever a primeira. Por isso o
+ramo de opcoes colapsava `button | list | checklist` num unico caminho single-select
+(`answers[ok] = val`), e nada ficava vermelho — o tipo tornava o comportamento errado o
+unico comportamento representavel.
+
+O consumidor ja estava pronto do outro lado: `deriveAgentEvents` faz
+`for (const item of Array.isArray(raw) ? raw : [raw])`, e o
+`smoke_wrapup_arc12_capture.sh` (que posta o array direto, sem UI) sempre produziu as
+duas categorias — as 9 linhas de 2026-08-30 incluem `servico.segunda_via` **e**
+`servico.alteracao_plano`. **O backend estava gateado; o produtor humano e que nao.**
+
+⚠️ **Duas superficies, mesmo defeito** — o `survey_web.py` colapsa os tres do mesmo
+jeito (`answers[ok] = el.getAttribute('data-val')` + remove `.sel` dos irmaos). Censo do
+dia: **1** form publicado usa `checklist` (`dialog_wrapup_arc12_v1`), e ele sai pelo
+Console — entao a web e exposicao **latente**, nao viva. Consertada junto assim mesmo:
+duas superficies que renderizam o MESMO DialogForm com comportamentos diferentes
+produzem dados diferentes para a mesma pergunta, e a divergencia so apareceria no dia em
+que alguem publicasse um survey com checklist. O contraexemplo que prova a intencao da
+plataforma e o `MenuCard` do chat, que ja tinha `ChecklistInteraction` com `Set<string>`.
+
+**Regra escolhida nas duas casas: zero marcacoes REMOVE a chave, nunca grava `[]`.** O
+avaliador de `ask_when` testa vazio como `undefined | null | ""`, e `[]` nao casa com
+nenhum — um array vazio faria pergunta NAO respondida parecer respondida, que e a
+familia do valor plausivel.
+
+⚠️ **`ask_when` sobre resposta de checklist segue comportamento INDEFINIDO, e de
+proposito.** O avaliador canonico (`@plughub/schemas: evaluateAskWhen`) compara
+`String(a)`, entao um array vira `"a,b"`. Isso vale igual nas tres implementacoes
+(canonica, Console, web). Nao foi mexido aqui: consertar um espelho quebraria a paridade
+que hoje existe, e a triplicacao e decisao em aberto do `adr-dialog-conditional-skip-logic`.
+
+### Sem gate automatizado, e isso esta DECLARADO
+
+O conserto do backend ja tem gate (o smoke). A metade de UI **nao tem**, porque
+`platform-ui` nao tem nenhum teste nem runner configurado — adicionar um e decisao
+transversal, nao parte desta correcao. A verificacao aqui foi manual: contato real,
+marcar N servicos, contar N linhas em `agent_business_events`. Registrado como ausencia
+conhecida em vez de coberto por um gate de `grep`, que daria conforto sem evidencia.
+
 ## 2026-09-04 — wrap-up passa a emitir captura Arc 12, e o editor para de desarma-la
 
 Duas metades que so fazem sentido juntas: o form com captura existia e nunca foi

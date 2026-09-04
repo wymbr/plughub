@@ -74,6 +74,14 @@ export function locStr(x: unknown, fallback = ""): string {
   return fallback
 }
 
+/**
+ * Uma resposta e escalar, EXCETO em `interaction:"checklist"`, onde e a lista de
+ * opcoes marcadas. Alargar o tipo e o conserto de verdade: enquanto ele foi
+ * `Record<string,string>`, guardar a segunda marcacao era impossivel — o clique
+ * apenas sobrescrevia a primeira, e nada ficava vermelho.
+ */
+export type AnswerValue = string | string[]
+
 // ── ask_when — declarative skip-logic (mirror of @plughub/schemas evaluateAskWhen,
 //    adr-dialog-conditional-skip-logic; kept inline like survey_web.py) ─────────
 
@@ -84,7 +92,7 @@ function awEq(a: unknown, b: unknown): boolean {
   if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb
   return String(a) === String(b)
 }
-function evalAskWhen(g: AskWhen | undefined, answers: Record<string, string>): boolean {
+function evalAskWhen(g: AskWhen | undefined, answers: Record<string, AnswerValue>): boolean {
   if (!g) return true
   const a = answers[g.field]
   if (a === undefined || a === null || a === "") return false
@@ -164,8 +172,12 @@ export function maskedDeclarations(form: DialogFormDoc | null | undefined): stri
 // ── Render-prop state exposed to a consumer overlay (approval etc.) ───────────
 
 export interface DialogFormActionsState {
-  /** Scalar question answers, keyed by output_key. The generic submit payload. */
-  answers:     Record<string, string>
+  /**
+   * Question answers, keyed by output_key. `string[]` para `interaction:"checklist"`
+   * (multissselecao) e `string` para o resto — o consumidor do Arc 12 ja trata os
+   * dois (`deriveAgentEvents`: `Array.isArray(raw) ? raw : [raw]`).
+   */
+  answers:     Record<string, AnswerValue>
   /** Editable values of `interaction:"form"` fields, keyed by field id. */
   fieldValues: Record<string, string>
   /** Initial fieldValues (pre-fill) — the immutable "before" of an edit audit. */
@@ -234,7 +246,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   const summary           = snapVal(snapshot, "session.summary")
 
   const [form,        setForm]        = useState<DialogFormDoc | null>(null)
-  const [answers,     setAnswers]     = useState<Record<string, string>>({})
+  const [answers,     setAnswers]     = useState<Record<string, AnswerValue>>({})
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
   const [baseline,    setBaseline]    = useState<Record<string, string>>({})
   const [briefing,    setBriefing]    = useState<ChatMessage[]>([])
@@ -458,14 +470,34 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
         ) : (it === "button" || it === "list" || it === "checklist") ? (
           <div className="flex flex-wrap gap-2">
             {(n.options ?? []).map(o => {
-              const val = o.value ?? o.id
-              const sel = answers[ok] === val
+              const val = String(o.value ?? o.id)
+              // `checklist` e o UNICO multisselecao do vocabulario (mesma leitura do
+              // MenuCard do chat, que ja o trata assim). Os tres compartilham o
+              // desenho de chips; o que difere e o que um clique faz.
+              const multi = it === "checklist"
+              const cur = answers[ok]
+              const sel = multi ? Array.isArray(cur) && cur.includes(val) : cur === val
               return (
                 <button
                   key={o.id}
                   type="button"
                   disabled={disabled}
-                  onClick={() => setAnswers(p => ({ ...p, [ok]: val }))}
+                  onClick={() => setAnswers(p => {
+                    if (!multi) return { ...p, [ok]: val }
+                    const antes = Array.isArray(p[ok]) ? (p[ok] as string[]) : []
+                    const depois = antes.includes(val)
+                      ? antes.filter(v => v !== val)
+                      : [...antes, val]
+                    // Zero marcacoes REMOVE a chave em vez de gravar `[]`: o avaliador
+                    // de ask_when trata ausencia como "nao respondeu" e `[]` nao casa
+                    // com nenhum dos testes de vazio (`undefined|null|""`), entao um
+                    // array vazio faria uma pergunta nunca respondida parecer respondida.
+                    if (!depois.length) {
+                      const { [ok]: _fora, ...resto } = p
+                      return resto
+                    }
+                    return { ...p, [ok]: depois }
+                  })}
                   className={`text-sm px-3 py-1.5 rounded border transition-colors disabled:opacity-40 ${
                     sel ? "bg-primary text-white border-primary" : "border-border-strong text-dark hover:bg-slate-50"
                   }`}
