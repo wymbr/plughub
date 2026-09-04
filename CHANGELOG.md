@@ -1,5 +1,99 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (3) — CTX: o `operator` nao e fallback, e "mostravel" e uma finalidade
+
+Fecha a F2 do [`adr-context-read-audience-policy`](docs/adr/adr-context-read-audience-policy.md)
+**esvaziando-a**. Nada e filtrado ainda; o que mudou foi a razao e a tipagem.
+
+### A decisao do dono, que refuta a §D9.1 escrita horas antes
+
+Quem compoe um `notify` e um **AGENTE**, e agente — IA ou humano — so pode mostrar ao
+cliente o que ele proprio ve. A visao dele e a do `operator`. Logo o segundo ramo de
+`resolve_mask_for_audience` **nao e fallback**: e o teto correto por construcao.
+
+Consequencia grande: **`by_role.customer` nunca precisa existir.** Some a segunda
+declaracao da mesma intencao que a versao anterior estava criando — e a F2 fica sem
+conteudo, porque a populacao de excecao e zero e o mecanismo passou a ser desnecessario.
+
+O codigo nao mudou: `maskForSite` ja fazia isso.
+
+### O caso que restava era declaracao errada, nao leitor errado
+
+`notificar_aprovado` / `session.limite_aprovado` -> tipo `financial` -> `R$ ****,**`, sobre
+o limite que a mensagem existe para anunciar. Sob a regra acima isso e **propagacao fiel**
+de uma declaracao — e o que se inspeciona e a declaracao.
+
+O criterio geral e do dono: *consulta de saldo que mascara o saldo nao e produto*. Existe
+uma classe de valor monetario cujo processo existe para comunica-lo.
+
+### O catalogo ja tinha METADE do eixo, e a exclusao dele estava incompleta
+
+`valor_declarado_pelo_cliente` (2026-09-02) resolveu o `limite_solicitado` pela
+**assimetria** — *"valor que o titular declarou nao e dado a proteger DELE"* — e excluia
+explicitamente o outro lado: *"NAO usar para valor que a EMPRESA decidiu (limite aprovado,
+saldo, fatura)"*.
+
+A exclusao nao estava errada; estava **incompleta**. A assimetria responde *"e dado do
+titular?"*, e nao *"o processo existe para comunicar isto?"*. Por que a lacuna passou: a
+decisao foi tomada contra o caminho do **preview**, cuja spec declara `status`,
+`numero_cartao` e `limite_solicitado` — `limite_aprovado` **nao aparece la**. Quem o mostra
+e o `notify`, e ali nada aplicava politica ainda.
+
+Nasce a segunda ponta, mesmo molde, mascara vazia e classe LGPD preservada:
+
+| tipo | finalidade | `by_role` | `lgpd` |
+|---|---|---|---|
+| `valor_declarado_pelo_cliente` | o cliente pediu | `{}` | `financeiro` |
+| **`valor_informado_ao_cliente`** | a empresa respondeu — limite, saldo, extrato | `{}` | `financeiro` |
+
+⚠️ **O nome e a FINALIDADE, nunca o formato**, e a advertencia e do proprio catalogo:
+`moeda`, `valor_aberto` ou `numero_plain` seriam *"arma carregada apontada para o proximo
+campo financeiro"* — todo valor monetario futuro herdaria a permissao por PARECER dinheiro.
+
+Retipadas 3 tags (`limite_aprovado` x2 -> o novo; `limite_solicitado` ->
+`valor_declarado_pelo_cliente`, alinhando as duas casas). **Censo: 3 -> 2**, e as 2 que
+sobram sao os dois cartoes da tela do dono, ambos `-> last_4` = o `***4444` correto.
+
+### Um buraco MUDO achado ao criar o irmao
+
+`valor_declarado_pelo_cliente` estava no `audit.ts` e na config VIVA e **nao estava no
+`seed.py`**. Numa instalacao limpa ele nao existe, o `preview` de
+`skill_limite_processo_v1` cita tipo desconhecido, o caminho conservador mascara com `full`
+e o cliente deixa de ver o valor que ele mesmo pediu. Ninguem fica vermelho — e a familia
+*"ambiente que so sobe porque ja subiu antes"*, com o agravante de a copia divergente ser a
+que ninguem roda no dia a dia.
+
+Gate novo: **`infra/test/probe_masking_types_seed_parity.sh`** (4 ramos). O ramo C pegou um
+defeito no proprio instrumento antes de julgar o produto — `JSON.stringify(o, ids)` usa o 2o
+argumento como **replacer**, nao como ordenacao, e zerava os 15 objetos.
+
+### Dois erros meus de escopo de config, medidos e desfeitos
+
+**(1)** Gravei `masking.types` com `tenant_id=tenant_demo` e criei o override que o guard da
+chave IRMA existe para impedir — `context_map` recusa (`router.py:311`) porque a resolucao e
+tenant-vence-global POR INTEIRO; `masking.types` tem o mesmo modo de falha e **nao tem
+guard**. Global ficou com 14 e o tenant congelado em 15. Desfeito por `DELETE`; registrado
+como **CNS-23**.
+
+**(2)** A conferencia lia o `tenant_id` da resposta do `GET` como "escopo que respondeu" —
+ele **ecoa o que foi PEDIDO**. Acusei um override ja removido. Quem responde a pergunta e
+`_provenance` (`effective_scope` / `tenant_present`), e o script passou a usa-lo.
+
+Aplicador idempotente e conferido por releitura:
+`infra/scripts/apply_valor_informado_type.py`.
+
+### Divida registrada
+
+- **CTX-08** — duas casas ligam valor -> tipo (`context_map` x spec `preview` do delegate,
+  por call site) e ja discordaram sobre `limite_solicitado`. Alinhadas a mao; nada impede a
+  proxima.
+- **CNS-23** — o guard de escopo cobre uma chave de um par com o mesmo modo de falha.
+
+Suites: schemas **235**. Gates: `probe_masking_types_seed_parity` (novo, 4 ramos),
+`probe_ctx_read_audience` VERDE, `probe_context_map_audit` verde nos 15 ramos que julga
+(o passo de `tsc` sai INCONCLUSIVO por nao haver `node` no host — pre-existente, conferido
+com a arvore limpa), `probe_task_ledger` VERDE.
+
 ## 2026-09-04 (2) — CTX: o eixo estava errado, e o leitor que o ADR ia construir ja existia
 
 Emenda ao arco de leitura por plateia, **horas depois** de ele ser commitado. Nenhum

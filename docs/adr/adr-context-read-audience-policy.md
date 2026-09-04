@@ -302,30 +302,68 @@ daquele consumidor existe para impedir.
 recebe a audiência PRONTA e nunca soube derivá-la de um sítio. E o gêmeo TS do resolvedor, que não
 existia.
 
-### D9.1 — o fallback ao `operator` serve para AUDITAR e **não** para aplicar
+### D9.1 — o `operator` não é fallback: é o TETO do que um agente pode mostrar
 
-Os três ramos de `resolve_mask_for_audience` mandam a audiência não declarada cair na do
-`operator`, e isso é **declarado, não é ordenação de severidade** — hoje `operator` é a única
-audiência que o catálogo preenche (11 de 14; `customer` em **nenhum**).
+> ⚠️ **Esta seção foi REESCRITA em 2026-09-04, e a versão anterior está refutada.** Ela
+> dizia que o fallback ao `operator` *"é evidência boa e aplicador ruim"*, e que o remédio
+> era declarar `by_role.customer` por tipo. Errado nos dois pontos, pela razão do dono:
+> **quem compõe um `notify` é um AGENTE**, e um agente — IA ou humano — só pode mostrar ao
+> cliente o que ele próprio vê. A visão dele é a do `operator`.
+>
+> Logo o segundo ramo de `resolve_mask_for_audience` não é *"a única audiência declarada,
+> então serve"*: é o **teto correto por construção**, com razão nomeada. E `by_role.customer`
+> **nunca precisa existir** — o que remove a segunda declaração da mesma intenção que a
+> versão anterior estava criando.
 
-O censo estrutural mostrou o que isso produz, e os dois casos discordam:
+Consequências, e a terceira é a que fecha o desenho:
 
-| ponto | tipo | máscara pelo fallback | veredicto |
+1. **A F2 perde o conteúdo.** Não há exceção a declarar nem eixo novo a preencher. A
+   ordenação *"a exceção vem ANTES da aplicação"* foi escrita supondo exceções; a população
+   é zero e o mecanismo passou a ser desnecessário.
+2. **O que sobra de residual é estritamente menor que hoje.** Um template que ponha valor
+   interno num `notify` de cliente vaza no nível do operador, não cru — e hoje vaza cru.
+   Fechar mais exigiria a declaração que este ADR deixou de pedir.
+3. **Quando o resultado parece errado, o que se inspeciona é a DECLARAÇÃO** — nunca o
+   leitor. Foi o que aconteceu no primeiro caso medido, abaixo.
+
+### D9.2 — "mostrável ao cliente" é uma FINALIDADE, e precisa de tipo próprio
+
+O censo estrutural achou `notificar_aprovado` / `session.limite_aprovado` → tipo `financial`
+→ máscara `financial` (`R$ ****,**`) — sobre o limite que a mensagem existe para anunciar.
+
+Sob a §D9.1 isso **não é o leitor mascarando demais**: é propagação fiel de uma declaração.
+O que estava errado era a declaração, e a razão é geral — *consulta de saldo que mascara o
+saldo não é produto*. Existe uma classe de valor monetário cujo processo existe para
+comunicá-lo, e ela precisava de tipo.
+
+O catálogo já tinha metade do eixo. `valor_declarado_pelo_cliente` (2026-09-02) resolveu o
+`limite_solicitado` pelo critério da **assimetria**: *"um valor que o próprio titular
+declarou não é dado a proteger DELE"*. E excluía explicitamente o outro lado:
+
+> ⚠️ **NÃO usar para valor que a EMPRESA decidiu (limite aprovado, saldo, fatura)** — aqueles
+> o cliente não declarou, e a assimetria é o critério.
+
+**A exclusão não estava errada; estava incompleta.** A assimetria responde *"é dado do
+titular?"*, e não responde *"o processo existe para comunicar isto?"*. São duas perguntas, e
+só a primeira tinha resposta. Por que a lacuna passou: a decisão foi tomada contra o caminho
+do **preview**, cuja spec declara `status`, `numero_cartao` e `limite_solicitado` —
+`limite_aprovado` **não aparece lá**. Quem o mostra é o `notify`, e ali nada aplicava política
+ainda. **A F3 é o que faz esse caminho passar a aplicar.**
+
+Nasce então a segunda ponta, mesmo molde, máscara vazia e classe LGPD preservada:
+
+| tipo | finalidade | `by_role` | `lgpd` |
 |---|---|---|---|
-| `notificar_aprovado` / `session.numero_cartao` | `credit_card` | `last_4` → `***4444` | **certo** — é o que a tela 2 já mostra |
-| `notificar_aprovado` / `session.limite_aprovado` | `financial` | `financial` → `R$ ****,**` | **errado** — é o limite que a mensagem existe para anunciar |
+| `valor_declarado_pelo_cliente` | o cliente pediu | `{}` | `financeiro` |
+| **`valor_informado_ao_cliente`** | a empresa respondeu — limite, saldo, extrato | `{}` | `financeiro` |
 
-**Mesmo fallback, um acerto e um erro.** Logo ele é evidência boa (mostra que há decisão a tomar) e
-aplicador ruim (decidiria por conta).
+⚠️ **O nome é a FINALIDADE, não o formato**, e a advertência é do próprio catálogo: `moeda`,
+`valor_aberto` ou `numero_plain` seriam *"arma carregada apontada para o próximo campo
+financeiro"* — todo valor monetário futuro herdaria a permissão por **parecer** dinheiro. Aqui
+a permissão vem de a empresa ter decidido informar **aquele** valor **àquele** titular.
 
-A conclusão **não** é uma tabela de exceções: é que a F3 exige `by_role.customer` **declarado por
-tipo**, que é o grão que a §D6 já escolheu e mora onde compliance edita. Uma tabela por
-`(skill, tag)` viveria em código e envelheceria por skill; a declaração vive na config e vale para
-todo template de uma vez.
-
-⚠️ **O modo de falha do fallback é BARULHENTO, e isso é sorte a favor:** ele erra
-*sobre*-mascarando, e o cliente que recebe `R$ ****,**` reclama. Não fosse assim, o mesmo fallback
-poderia vazar em silêncio — e é por isso que ele fica no auditor e não no aplicador.
+Efeito medido no censo: **3 → 2**. Sobram as duas interpolações de `session.numero_cartao`,
+ambas `→ last_4`, que é o `***4444` que a outra tela já mostra.
 
 ---
 
@@ -352,7 +390,7 @@ quebraria os 10 usos legítimos, e um arco que quebra o produto na primeira fase
 |---|---|---|
 | **F0** | censo re-executável: interpolações por sítio × tipo × plateia derivada, com os 20 **classificados** (legítimo / defeito / sem plateia de cliente) | O número sozinho não diz de qual proposição é evidência (§1.3) |
 | **F1** | o resolvedor de plateia + **modo auditoria**: calcula o que faria e LOGA, sem aplicar | Mesmo desenho da V3 da allowlist. É o que transforma "acho que são 10" em contagem |
-| **F2** | **`by_role.customer` declarado por tipo** (D9.1) + a exceção declarada por sítio (D3) para o que sobrar | Precisa existir **antes** da F3: sem a declaração, o fallback ao `operator` apagaria o limite anunciado |
+| **F2** | ~~exceção declarada~~ — **sem conteúdo** (D9.1/D9.2). O que a fase exigia virou tipagem por FINALIDADE, feita em 2026-09-04: `valor_informado_ao_cliente` criado e 3 tags retipadas | A população de exceção é zero e o mecanismo é desnecessário. O que restava (o limite mascarado) era declaração errada, não falta de exceção |
 | **F3** | aplicar em `notify`/`menu` — o caminho de cliente | Onde estão os defeitos medidos |
 | **F4** | `invoke` (confirmar que o cru é intencional e gateado) e depois `reason` (D5) | `reason` só depois de ter decisão própria |
 | **F5** | `$.pipeline_state.*` via carimbo de proveniência (D7) | Fatia própria |
@@ -381,6 +419,16 @@ verifique bloqueio.**
 - **Valor derivado em `pipeline_state`** — concatenação de dois campos herda o tipo de qual (§D7).
 - **O `display` copiado de moeda** em `address`/`health`/`financial` de `masking.types` (FMT-07):
   aqui ele passa a ser LIDO, então deixa de ser cosmético.
+- **DUAS casas ligam valor → tipo, e elas já discordaram** (CTX-08): `masking.context_map`
+  (que a F3 vai usar) e a spec `preview` do `delegate`, declarada por call site
+  (`skill_limite_processo_v1.yaml:114`). Sobre `limite_solicitado` diziam `financial` e
+  `valor_declarado_pelo_cliente` — mascarado num caminho, aberto no outro. Alinhadas à mão em
+  2026-09-04; nada impede a próxima divergência.
+- **O guard de escopo cobre UMA chave de um par com o mesmo modo de falha** (CNS-17):
+  `masking.context_map` recusa override de tenant porque a resolução é tenant-vence-global
+  POR INTEIRO; `masking.types` é a chave irmã, tem o mesmo modo de falha e **não tem o
+  guard**. Medido ao errar: um `PUT` com `tenant_id` criou o override e congelou o catálogo
+  do tenant em 15 tipos, desligado do global.
 - **O masker não é alcançável a partir do engine** (CTX-07): `applyMaskingTypeToValue` vive em
   `mcp-server-plughub/src/lib/context-masking.ts`, não em `@plughub/schemas`. O engine consegue
   hoje decidir **qual** máscara aplicar (`resolveMaskForAudience`) e **não** consegue aplicá-la.

@@ -801,6 +801,42 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       lgpd:          "financeiro",
       declared_only: true,
     },
+    // ── valor_informado_ao_cliente — o TERCEIRO tipo de FINALIDADE ───────────
+    //
+    // Espelho do anterior, e nasceu (2026-09-04) porque o critério dele tinha um
+    // lado só. O comentário acima diz:
+    //
+    //     ⚠️ NÃO usar para valor que a EMPRESA decidiu (limite aprovado, saldo,
+    //        fatura): aqueles o cliente não declarou, e a assimetria é o critério.
+    //
+    // A assimetria responde *"é dado do titular?"*. Ela não responde *"o processo
+    // existe para comunicar isto?"* — e consulta de saldo que mascara o saldo não é
+    // produto. São duas perguntas, e a segunda faltava.
+    //
+    // Por que a exclusão passou despercebida: ela foi decidida contra o caminho do
+    // PREVIEW, cuja spec declara `status`, `numero_cartao` e `limite_solicitado` —
+    // `limite_aprovado` **não aparece lá**. O caminho que o mostra é o `notify`
+    // (`skill_limite_retorno_v1`), e ali nada aplicava política ainda. A F3 do
+    // `adr-context-read-audience-policy` é quem faz esse caminho passar a aplicar.
+    //
+    // ⚠️ O nome é a FINALIDADE, não o formato — a mesma advertência do
+    // `linha_em_servico`. `moeda`, `valor_aberto` ou `numero_plain` seriam arma
+    // carregada apontada para o próximo campo financeiro: todo valor monetário
+    // futuro herdaria a permissão por PARECER dinheiro. Aqui a permissão vem de a
+    // empresa ter decidido informar AQUELE valor àquele titular.
+    //
+    // Classe LGPD **preservada** (`financeiro`), como nos outros dois: o que se
+    // declara vazio é a máscara, nunca a classe.
+    {
+      id:      "valor_informado_ao_cliente",
+      label:   "Valor que a empresa informa ao cliente (limite, saldo, extrato)",
+      icon:    "💰",
+      formato: {},
+      // `by_role` VAZIO — ver o comentário acima. Não é omissão.
+      mascara: { by_role: {} },
+      lgpd:          "financeiro",
+      declared_only: true,
+    },
     // ── texto — o tipo que NÃO faz nada, e por que ele precisa existir ────────
     //
     // Acrescentado na V3 do arco ALLOWLIST. O mapa do ContextStore (D2) declara

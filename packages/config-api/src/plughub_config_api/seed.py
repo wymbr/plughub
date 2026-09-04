@@ -755,6 +755,41 @@ _SEED: list[tuple[str, str, object, str]] = [
                 # nenhum — e e isso que torna o tipo INELEGIVEL a `masked:` no portao
                 # de deploy (`typeMasksSomething`). Um campo `masked: "texto"` seria
                 # declarado-mascarado e exibido em claro.
+                # ── Os DOIS tipos de FINALIDADE de valor ─────────────────────────
+                #
+                # ⚠️ `valor_declarado_pelo_cliente` faltava aqui, e o buraco era MUDO.
+                # Ele nasceu em 2026-09-02 escrito no `audit.ts` e na config VIVA, e
+                # nunca neste seed — então numa instalação limpa ele não existe, o
+                # `preview` de `skill_limite_processo_v1` referencia tipo desconhecido,
+                # e a postura conservadora daquele caminho mascara (`full`) o valor que
+                # o cliente ele mesmo pediu. Ninguém fica vermelho: é a família
+                # *"ambiente que só sobe porque já subiu antes"* do `CLAUDE.md`.
+                #
+                # Medido em 2026-09-04 ao criar o irmão. Portão contra a terceira
+                # ocorrência: `infra/test/probe_masking_types_seed_parity.sh`.
+                #
+                # Os dois são o mesmo molde e formam UM eixo de duas pontas:
+                #   declarado pelo cliente  → não é dado a proteger DELE
+                #   informado ao cliente    → o processo existe para comunicá-lo
+                # Máscara vazia, classe LGPD preservada.
+                {
+                    "id": "valor_declarado_pelo_cliente",
+                    "label": "Valor declarado pelo próprio cliente (objeto do pedido)",
+                    "icon": "🧾",
+                    "formato": {},
+                    "mascara": {"by_role": {}},
+                    "lgpd": "financeiro",
+                    "declared_only": True,
+                },
+                {
+                    "id": "valor_informado_ao_cliente",
+                    "label": "Valor que a empresa informa ao cliente (limite, saldo, extrato)",
+                    "icon": "💰",
+                    "formato": {},
+                    "mascara": {"by_role": {}},
+                    "lgpd": "financeiro",
+                    "declared_only": True,
+                },
                 {
                     "id": "texto", "label": "Texto sem classificação (encanamento, ids internos)", "icon": "📄",
                     "formato": {},
