@@ -23,7 +23,7 @@ const MAPA = {
 const TIPOS = {
   value: { types: [{
     id: "credit_card", formato: {}, lgpd: "financeiro",
-    mascara: { display: { echo_to_customer: "none", echo_to_operator: "masked" } },
+    mascara: { by_role: { operator: "last_4" } },
   }] },
 }
 
@@ -41,13 +41,19 @@ async function carrega() {
   return import("../ctx-audit")
 }
 
-describe("auditarLeituraCtx", () => {
-  let warn: ReturnType<typeof vi.spyOn>
+// `ReturnType<typeof vi.spyOn>` (sem argumentos) instancia os genéricos em
+// `unknown[]`, e a instância concreta de `console.warn` não é atribuível a ela —
+// `tsc --noEmit` reprovava enquanto o `vitest` passava, porque ele não checa
+// tipo. Derivar do helper fixa os genéricos no que a chamada REAL produz.
+const espiaWarn = () => vi.spyOn(console, "warn").mockImplementation(() => {})
 
-  beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => {}) })
+describe("auditarLeituraCtx", () => {
+  let warn: ReturnType<typeof espiaWarn>
+
+  beforeEach(() => { warn = espiaWarn() })
   afterEach(() => { warn.mockRestore(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
-  it("AVISA quando o valor não poderia ecoar ao cliente", async () => {
+  it("AVISA nomeando a MÁSCARA que sairia ao cliente", async () => {
     vi.stubEnv("CONFIG_API_URL", "http://config")
     stubFetch()
     const { auditarLeituraCtx } = await carrega()
@@ -57,7 +63,9 @@ describe("auditarLeituraCtx", () => {
     expect(txt).toContain("AUDITORIA (não aplicado)")
     expect(txt).toContain("credit_card")
     expect(txt).toContain("plateia=customer")
-    expect(txt).toContain("política=none")
+    // Nomear a máscara é o ganho do eixo `by_role`: `last_4` diz o que a F3 vai
+    // fazer. O `echo_to_*` que esta linha lia antes só dizia que havia alguma.
+    expect(txt).toContain("máscara=last_4")
   })
 
   it("CALA quando a mesma tag vai ao SISTEMA — controle positivo", async () => {
@@ -71,13 +79,17 @@ describe("auditarLeituraCtx", () => {
     expect(warn.mock.calls.flat().join(" ")).not.toContain("AUDITORIA")
   })
 
-  it("avisa MASKED quando a plateia é operador", async () => {
+  it("avisa também quando a plateia é operador — e com a MESMA máscara", async () => {
+    // Não é redundância com o caso do cliente: hoje as duas plateias recebem
+    // `last_4` porque `customer` não é declarado e cai no `operator`. Registrar
+    // isso no teste é o que fará alguém notar quando o eixo `customer` for
+    // preenchido e as duas passarem a divergir.
     vi.stubEnv("CONFIG_API_URL", "http://config")
     stubFetch()
     const { auditarLeituraCtx } = await carrega()
     await auditarLeituraCtx("session.numero_cartao",
       { stepType: "notify", visibility: "agents_only", stepId: "nota_interna" }, "t1")
-    expect(warn.mock.calls.flat().join(" ")).toContain("política=masked")
+    expect(warn.mock.calls.flat().join(" ")).toContain("máscara=last_4")
   })
 
   it("não repete a mesma combinação — o volume esconderia o achado", async () => {

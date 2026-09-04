@@ -862,13 +862,15 @@ export type {
 // ── Leitura de contexto por PLATEIA (ADR adr-context-read-audience-policy) ────
 export {
   CtxAudienceSchema,
-  EchoPolicySchema,
   deriveAudience,
-  resolveEchoPolicy,
+  resolveMaskForAudience,
+  maskForSite,
+  maskOmitsField,
+  maskChangesValue,
   flattenContextMap,
 } from "./ctx-audience"
 
-export type { CtxAudience, EchoPolicy } from "./ctx-audience"
+export type { CtxAudience, CtxReadMask } from "./ctx-audience"
 
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {

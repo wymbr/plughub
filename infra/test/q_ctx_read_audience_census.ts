@@ -21,8 +21,8 @@ import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import YAML from "/w/packages/agent-registry/node_modules/yaml/dist/index.js"
 import {
-  deriveAudience, resolveEchoPolicy, flattenContextMap,
-  type CtxAudience, type EchoPolicy,
+  deriveAudience, maskForSite, maskChangesValue, flattenContextMap,
+  type CtxAudience, type CtxReadMask,
 } from "/w/packages/schemas/dist/index.js"
 
 const SKILLS = "/w/packages/skill-flow-engine/skills"
@@ -48,6 +48,12 @@ const LEGITIMOS: Array<{ skill: string; tag: string; porque: string }> = [
   // "none"`, dos quais 10 eram `credential`. A leitura foi: *"são tokens em
   // links que o cliente precisa receber"*.
   //
+  // ⚠️ Aquele censo errou DUAS vezes, e só a primeira foi corrigida no mesmo
+  // dia. A segunda: `echo_to_customer` é ADVISORY e trata do valor que o
+  // cliente DIGITOU (`audit.ts:342`) — não do quanto de um valor armazenado a
+  // plataforma mostra. O eixo desta medição hoje é `mascara.by_role`, com o
+  // resolvedor canônico que já existia.
+  //
   // **A medição estrutural refutou isso.** Aqueles `credential` estão em steps
   // `invoke` (`tool: workflow_resume`, `input.resume_token`) — plateia
   // `system`, argumento de tool. Nenhum deles chega a cliente nenhum. A regex
@@ -72,7 +78,7 @@ const REF = /@ctx\.([a-zA-Z0-9_.]+)/g
 interface Achado {
   skill: string; step: string; tipoStep: string
   tag: string; tipo: string | undefined
-  plateia: CtxAudience; politica: EchoPolicy
+  plateia: CtxAudience; mascara: CtxReadMask
   legitimo: string | undefined
 }
 
@@ -85,7 +91,7 @@ function textosDoStep(s: Record<string, unknown>): string {
 
 const mapa  = flattenContextMap(JSON.parse(readFileSync(MAPA, "utf-8")).value)
 const tipos = JSON.parse(readFileSync(TIPOS, "utf-8")).value as { types: Array<{ id: string }> }
-const catalogo = tipos as unknown as Parameters<typeof resolveEchoPolicy>[2]
+const catalogo = tipos as unknown as Parameters<typeof maskForSite>[2]
 
 const achados: Achado[] = []
 let totalRefs = 0
@@ -104,7 +110,7 @@ for (const f of readdirSync(SKILLS).filter(x => x.endsWith(".yaml")).sort()) {
       const tipo = mapa.get(tag)
       achados.push({
         skill: f, step: String(s.id ?? "?"), tipoStep, tag, tipo,
-        plateia, politica: resolveEchoPolicy(tipo, plateia, catalogo),
+        plateia, mascara: maskForSite(tipo, plateia, catalogo),
         legitimo: ehLegitimo(f, tag),
       })
     }
@@ -114,10 +120,24 @@ for (const f of readdirSync(SKILLS).filter(x => x.endsWith(".yaml")).sort()) {
 // ── veredicto ────────────────────────────────────────────────────────────────
 
 const porPlateia = (p: CtxAudience) => achados.filter(a => a.plateia === p).length
-const bloquearia = achados.filter(a => a.politica === "none")
-const semDeclarar = bloquearia.filter(a => !a.legitimo)
+
+/**
+ * `mudaria` substituiu `bloquearia`, e a troca é do EIXO, não de palavra.
+ *
+ * O `echo_to_*` respondia *"o valor volta?"* — ternário, e o balde que importava
+ * era o `none`. O `by_role` responde *"quanto do valor aparece?"* e devolve a
+ * máscara NOMEADA, então o balde é *"alguma máscara se aplicaria"* e o relatório
+ * pode dizer QUAL. `hidden` continua sendo o caso que remove o campo, e por isso
+ * é contado à parte.
+ */
+const mudaria     = achados.filter(a => maskChangesValue(a.mascara))
+const omitiria    = achados.filter(a => a.mascara === "hidden")
+const semDeclarar = mudaria.filter(a => !a.legitimo)
 const declaradosOrfaos = LEGITIMOS.filter(
-  l => !bloquearia.some(a => a.skill === l.skill && a.tag === l.tag))
+  l => !mudaria.some(a => a.skill === l.skill && a.tag === l.tag))
+
+const porMascara: Record<string, number> = {}
+for (const a of achados) porMascara[a.mascara] = (porMascara[a.mascara] ?? 0) + 1
 
 console.log(JSON.stringify({
   refs: totalRefs,
@@ -125,18 +145,15 @@ console.log(JSON.stringify({
     customer: porPlateia("customer"), operator: porPlateia("operator"),
     system: porPlateia("system"), model: porPlateia("model"), none: porPlateia("none"),
   },
-  por_politica: {
-    none:      achados.filter(a => a.politica === "none").length,
-    masked:    achados.filter(a => a.politica === "masked").length,
-    plain:     achados.filter(a => a.politica === "plain").length,
-    undecided: achados.filter(a => a.politica === "undecided").length,
-    unknown:   achados.filter(a => a.politica === "unknown").length,
-  },
+  por_mascara: porMascara,
   // A tag fora do mapa é CONTADA e não decidida (§D4) — evidência para a V4 da
   // allowlist, nunca autorização para ela.
   tags_nao_declaradas: [...new Set(achados.filter(a => !a.tipo).map(a => a.tag))].sort(),
-  bloquearia: bloquearia.length,
-  legitimos_declarados: bloquearia.filter(a => a.legitimo).length,
-  a_declarar: semDeclarar.map(a => ({ skill: a.skill, step: a.step, tag: a.tag, tipo: a.tipo })),
+  mudaria: mudaria.length,
+  omitiria: omitiria.length,
+  legitimos_declarados: mudaria.filter(a => a.legitimo).length,
+  a_declarar: semDeclarar.map(a => ({
+    skill: a.skill, step: a.step, tag: a.tag, tipo: a.tipo, mascara: a.mascara,
+  })),
   legitimos_orfaos: declaradosOrfaos.map(l => `${l.skill}:${l.tag}`),
 }, null, 2))

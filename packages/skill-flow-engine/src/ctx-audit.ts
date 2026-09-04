@@ -14,14 +14,14 @@
  * `$.`/`@ctx.`, e caminhos que nenhum YAML no disco descreve.
  *
  * ── A regra é IMPORTADA, não reescrita ──────────────────────────────────────
- * `deriveAudience` e `resolveEchoPolicy` vêm de `@plughub/schemas`, os mesmos que
+ * `deriveAudience` e `maskForSite` vêm de `@plughub/schemas`, os mesmos que
  * o censo usa. Uma cópia aqui poderia dizer que está tudo bem enquanto a outra
  * mede outra coisa — e é literalmente o defeito que este arco existe para
  * corrigir.
  */
 import {
-  deriveAudience, resolveEchoPolicy, flattenContextMap,
-  type CtxAudience, type EchoPolicy, type DataTypeCatalog,
+  deriveAudience, maskForSite, flattenContextMap,
+  type CtxAudience, type CtxReadMask, type DataTypeCatalog,
 } from "@plughub/schemas"
 
 /** O sítio de onde a interpolação parte. É ele que decide a plateia (§D2). */
@@ -99,9 +99,13 @@ const jaLogado = new Set<string>()
  * Audita UMA leitura de contexto. Não altera nada e nunca lança: a auditoria não
  * pode ser a causa de um atendimento cair.
  *
- * Só registra o que MUDARIA (`none` / `masked`) e o que não sabe decidir
+ * Só registra o que MUDARIA (uma máscara real) e o que não sabe decidir
  * (`unknown` / `undecided`). Logar os `plain` seria imprimir 72 linhas do censo
  * para dizer que está tudo certo.
+ *
+ * ⚠️ A máscara é nomeada no log, e isso é o ganho do eixo `by_role` sobre o
+ * `echo_to_*` que esta função lia até 2026-09-04: *"sairia `last_4`"* diz o que
+ * a F3 vai fazer; *"tem alguma máscara"* não dizia.
  */
 export async function auditarLeituraCtx(
   tag:      string,
@@ -112,13 +116,17 @@ export async function auditarLeituraCtx(
     const c = await catalogos(tenantId)
     if (!c) return
 
-    const plateia: CtxAudience  = deriveAudience(sitio.stepType, sitio.visibility)
-    const tipo                  = c.mapa.get(tag)
-    const politica: EchoPolicy  = resolveEchoPolicy(tipo, plateia, c.tipos)
+    const plateia: CtxAudience = deriveAudience(sitio.stepType, sitio.visibility)
+    const tipo                 = c.mapa.get(tag)
+    const mascara: CtxReadMask = maskForSite(tipo, plateia, c.tipos)
 
-    if (politica === "plain") return
+    // `plain` é o único desfecho sem nada a dizer. `undecided` e `unknown`
+    // também respondem `false` a `maskChangesValue` — mas por não estarem
+    // DECIDIDOS, e é exatamente esse o achado que a F3 precisa ver antes de
+    // aplicar qualquer coisa; por isso eles são logados e o `plain` não.
+    if (mascara === "plain") return
 
-    const chave = `${sitio.stepId ?? "?"}|${tag}|${plateia}|${politica}`
+    const chave = `${sitio.stepId ?? "?"}|${tag}|${plateia}|${mascara}`
     if (jaLogado.has(chave)) return
     jaLogado.add(chave)
 
@@ -126,7 +134,7 @@ export async function auditarLeituraCtx(
     // o que o filtro FARIA do que ele FEZ — e na F1 ele ainda não faz nada.
     console.warn(
       `[ctx-audit] AUDITORIA (não aplicado): tag=${tag} tipo=${tipo ?? "NÃO DECLARADA"} ` +
-      `step=${sitio.stepId ?? "?"}:${sitio.stepType} plateia=${plateia} → política=${politica}`
+      `step=${sitio.stepId ?? "?"}:${sitio.stepType} plateia=${plateia} → máscara=${mascara}`
     )
   } catch {
     // Silêncio aqui é a única degradação muda aceitável do arquivo, e a razão

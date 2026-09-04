@@ -46,5 +46,61 @@
 
     { "name": "DESCONHECIDA",         "mask": "nao_existe",   "raw": "sensivel",           "why": "default é *** nos dois lados; OMITIR é decisão do chamador, não deste motor" },
     { "name": "vazia",                "mask": "",             "raw": "x",                  "why": "string vazia como nome de máscara também cai no default" }
+  ],
+
+  "__resolve": [
+    "SEGUNDA METADE, acrescentada em 2026-09-04 pela CTX-01: o RESOLVEDOR.",
+    "",
+    "  TS     packages/schemas/src/ctx-audience.ts          resolveMaskForAudience",
+    "  Python packages/py-contextstore/.../masking.py       resolve_mask_for_audience",
+    "",
+    "Aplicar a máscara e ESCOLHER a máscara são passos diferentes, e o gêmeo TS do",
+    "segundo nasceu neste dia. Ele vive na mesma fixture porque criar gate próprio",
+    "abriria a quarta casa que o comentário do `_build_pending_preview` existe para",
+    "impedir.",
+    "",
+    "⚠️ O caso que carrega o peso é `customer_VAZIO_cai_no_operator`: o original usa",
+    "`or` (falsy), e um gêmeo escrito com `??` (nullish) divergiria SÓ nele. Foi",
+    "escrito primeiro com `??`, e é este vetor que o pegou."
+  ],
+
+  "resolve_cases": [
+    { "name": "r_declarada",          "audiencia": "customer",
+      "tipo": { "mascara": { "by_role": { "operator": "last_4", "customer": "plain" } } },
+      "why": "audiência declarada ganha a dela, e não a do operator" },
+
+    { "name": "r_fallback_operator",  "audiencia": "customer",
+      "tipo": { "mascara": { "by_role": { "operator": "last_4" } } },
+      "why": "REGIME VIVO: `customer` não é declarado em nenhum dos 14 tipos, então todo cliente cai aqui" },
+
+    { "name": "r_by_role_vazio",      "audiencia": "customer",
+      "tipo": { "mascara": { "by_role": {} } },
+      "why": "ABERTO declarado (tipo de finalidade) — `plain`, nunca a do operator" },
+
+    { "name": "r_tipo_ausente",       "audiencia": "customer", "tipo": null,
+      "why": "recusa alta: tipo que a config não conhece não vira `plain` por omissão" },
+
+    { "name": "r_sem_mascara",        "audiencia": "customer", "tipo": {},
+      "why": "entrada sem bloco `mascara` — `by_role` ausente é `full`, não `plain`" },
+
+    { "name": "r_by_role_nao_mapa",   "audiencia": "customer",
+      "tipo": { "mascara": { "by_role": "last_4" } },
+      "why": "config malformada: `by_role` que não é mapa recusa alto nos dois lados" },
+
+    { "name": "r_customer_VAZIO_cai_no_operator", "audiencia": "customer",
+      "tipo": { "mascara": { "by_role": { "customer": "", "operator": "last_4" } } },
+      "why": "O VETOR QUE PEGOU A DIVERGÊNCIA: `or` cai no operator; `??` não cairia e devolveria `full`" },
+
+    { "name": "r_ambos_VAZIOS",       "audiencia": "customer",
+      "tipo": { "mascara": { "by_role": { "customer": "", "operator": "" } } },
+      "why": "sem declaração utilizável em ramo nenhum — `full`" },
+
+    { "name": "r_operator_ele_mesmo", "audiencia": "operator",
+      "tipo": { "mascara": { "by_role": { "operator": "email_domain" } } },
+      "why": "controle positivo: a audiência declarada recebe a dela, e não o default" },
+
+    { "name": "r_audiencia_desconhecida", "audiencia": "supervisor",
+      "tipo": { "mascara": { "by_role": { "operator": "hidden" } } },
+      "why": "audiência que ninguém declara também cai no operator — inclusive as que não são cliente" }
   ]
 }

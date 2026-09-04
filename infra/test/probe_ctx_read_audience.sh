@@ -50,7 +50,8 @@ else
   REFS=$(echo "$CENSO" | jq -r '.refs')
   CLI=$(echo  "$CENSO" | jq -r '.por_plateia.customer')
   SIS=$(echo  "$CENSO" | jq -r '.por_plateia.system')
-  BLQ=$(echo  "$CENSO" | jq -r '.bloquearia')
+  MUD=$(echo  "$CENSO" | jq -r '.mudaria')
+  OMI=$(echo  "$CENSO" | jq -r '.omitiria')
   ORF=$(echo  "$CENSO" | jq -r '.legitimos_orfaos | length')
   NAO=$(echo  "$CENSO" | jq -r '.tags_nao_declaradas | length')
 
@@ -70,15 +71,15 @@ else
     bad "B. a amostra não tem as duas plateias (cliente=$CLI sistema=$SIS); a classificação não foi exercida"
   fi
 
-  echo "  ....         C. bloqueariam=$BLQ · legítimos órfãos=$ORF · tags não declaradas=$NAO"
+  echo "  ....         C. mudariam=$MUD (omitiriam=$OMI) · legítimos órfãos=$ORF · tags não declaradas=$NAO"
   if [ "${ORF:-1}" -eq 0 ]; then
     ok "C. nenhuma exceção declarada está órfã (toda linha da tabela ainda se aplica)"
   else
     bad "C. $ORF exceção(ões) declarada(s) que não se aplicam mais — a tabela tem de encolher"
     echo "$CENSO" | jq -r '.legitimos_orfaos[]' | head -6 | sed 's/^/       /'
   fi
-  if [ "${BLQ:-0}" -ge 1 ]; then
-    echo "$CENSO" | jq -r '.a_declarar[] | "       a declarar: \(.skill):\(.step) \(.tag) [\(.tipo)]"'
+  if [ "${MUD:-0}" -ge 1 ]; then
+    echo "$CENSO" | jq -r '.a_declarar[] | "       a declarar: \(.skill):\(.step) \(.tag) [\(.tipo)] → \(.mascara)"'
   fi
 fi
 

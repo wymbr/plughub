@@ -19,7 +19,10 @@
  */
 
 import { z } from "zod"
-import { DEFAULT_DATA_TYPE_CATALOG, type DataTypeCatalog } from "./audit"
+import {
+  DEFAULT_DATA_TYPE_CATALOG,
+  type DataTypeCatalog, type DataType, type ContextMaskingType,
+} from "./audit"
 
 // ─────────────────────────────────────────────
 // Plateia
@@ -84,46 +87,140 @@ export function deriveAudience(stepType: string, visibility?: unknown): CtxAudie
 // ─────────────────────────────────────────────
 
 /**
- * O que a plateia pode ver.
+ * ⚠️ **O EIXO desta seção foi TROCADO em 2026-09-04, horas depois de escrita.**
  *
- *   plain     — valor inteiro
- *   masked    — parcial, conforme o tipo
- *   none      — não sai
- *   undecided — a plateia `model` (§D5), que ainda não tem política declarada.
- *               É valor PRÓPRIO e não um sinônimo de `plain`: chamar de `plain`
- *               transformaria uma decisão pendente numa permissão, que é como
- *               omissões viram política nesta casa.
- *   unknown   — o tipo não está no catálogo. Não é decidido aqui (§D4).
+ * A primeira versão leu `mascara.display.echo_to_customer` / `echo_to_operator`
+ * e devolveu um modo (`none` | `masked` | `plain`). Ao medir para começar a F3,
+ * apareceu que **aquele campo responde outra pergunta** — e o próprio schema já
+ * dizia (`audit.ts:342`): *"`echo_to_customer` é ADVISORY: o cliente digitou o
+ * valor, já o conhece"*.
+ *
+ *   `echo_to_*`  — o valor que o cliente DIGITOU volta no evento de interação?
+ *                  É sobre entrada mascarada, e é medida contra quem olha por
+ *                  cima do ombro — não contra o titular do dado.
+ *   este arco    — quanto de um valor ARMAZENADO a plataforma mostra ao
+ *                  renderizá-lo num template?
+ *
+ * O eixo certo para a segunda pergunta já existia, com as três peças prontas:
+ *
+ *   · `mascara.by_role` diz QUAL máscara (`last_4`, `email_domain`, `hidden`),
+ *     enquanto `echo_to_*` só diz que há alguma — e para RENDERIZAR `masked` a
+ *     `by_role` seria necessária de qualquer forma;
+ *   · o resolvedor canônico é `resolve_mask_for_audience`
+ *     (`py-contextstore/masking.py:87`), e o docstring dele **antecipa este
+ *     arco**: *"quando o eixo `customer` existir, o segundo ramo o pega sem
+ *     mudar nada aqui"*;
+ *   · já há consumidor com a audiência `customer` VIVA —
+ *     `_build_pending_preview` (`channel-gateway/adapters/webhook.py:2466`),
+ *     que é o `***4444` medido na tela do dono.
+ *
+ * Insistir no `echo_to_*` teria criado um TERCEIRO vocabulário para a mesma
+ * decisão — e o comentário daquele consumidor existe justamente para impedir
+ * isso: ele nomeia o TIPO, e não a máscara, para não virar *"o quarto motor de
+ * máscara do repositório"*.
+ *
+ * O que sobrevive da primeira versão é `deriveAudience`: o resolvedor canônico
+ * recebe a audiência PRONTA e nunca soube derivá-la de um sítio.
  */
-export const EchoPolicySchema = z.enum(["plain", "masked", "none", "undecided", "unknown"])
-export type EchoPolicy = z.infer<typeof EchoPolicySchema>
 
 /**
- * resolveEchoPolicy — o TIPO decide o quê; a plateia só escolhe a coluna (§D6).
+ * resolveMaskForAudience — gêmeo TS FIEL de `resolve_mask_for_audience`.
  *
- * Um template não pode afrouxar: ele só pode pedir EXCEÇÃO, que é declarada,
- * greppável e auditada (§D3). É isso que mantém uma única política de CPF no
- * tenant, editável por quem responde por conformidade.
+ * Três ramos, na ordem do original:
+ *
+ *     by_role VAZIO            → "plain"   (tipo de FINALIDADE, aberto por decisão)
+ *     audiência declarada      → a dela
+ *     audiência não declarada  → a do `operator`
+ *
+ * ⚠️ `by_role: {}` significa ABERTO **declarado**, não "esqueceram de
+ * preencher" — é a marca dos tipos de finalidade (medido: 3 de 14). Tratá-lo
+ * como ausência e cair no `operator` esconderia do cliente o que ele declarou.
+ *
+ * ⚠️ O fallback para `operator` é **declarado, não é ordenação de severidade**.
+ * Hoje `operator` é a única audiência que o catálogo preenche (11 de 14, e
+ * `customer` em nenhum). Inventar um "mais restritivo" exigiria ordenar as nove
+ * máscaras por força, que é opinião; usar a única declarada é fato.
+ *
+ * Tipo ausente do catálogo → `"full"`. Recusa alta: tipo que a config não
+ * conhece não pode virar `plain` por omissão.
+ *
+ * ⚠️ **Fidelidade é requisito, não estilo** — divergir aqui reabriria as duas
+ * respostas para *"quanto do valor aparece"* que o `_build_pending_preview`
+ * existe para não criar.
  */
-export function resolveEchoPolicy(
-  typeId:   string | undefined,
-  audience: CtxAudience,
+export function resolveMaskForAudience(
+  tipoEntry: DataType | undefined,
+  audiencia: string,
+): ContextMaskingType {
+  if (!tipoEntry) return "full"
+  const byRole = tipoEntry.mascara?.by_role
+  if (!byRole || typeof byRole !== "object") return "full"
+  if (Object.keys(byRole).length === 0) return "plain"
+  // ⚠️ `||`, e NUNCA `??`. O original é `by_role.get(audiencia) or
+  // by_role.get("operator")`, e `or` cai no fallback para QUALQUER valor falsy —
+  // inclusive a string vazia. Com `??` o par divergiria em
+  // `{ customer: "", operator: "last_4" }`: Python devolve `last_4`, o `??`
+  // devolveria `full`. É a Mudança 35 do `CLAUDE.md` (`??` × truthiness) na
+  // versão mais cara possível — dentro de um gêmeo cuja única obrigação é não
+  // divergir. Há vetor de paridade para exatamente este caso.
+  const m = byRole[audiencia] || byRole["operator"]
+  return (typeof m === "string" && m) ? (m as ContextMaskingType) : "full"
+}
+
+/**
+ * O que a PLATEIA derivada do sítio recebe.
+ *
+ * Dois valores que NÃO são máscara, e são distintos de propósito:
+ *
+ *   `"undecided"` — plateia `model` (§D5), que ainda não tem política.
+ *   `"unknown"`   — a tag não está no `context_map`. Este arco **não decide** o
+ *                   default de tag desconhecida (§D4): isso é a V4 da allowlist.
+ *                   Ele CONTA, e conta em balde próprio.
+ *
+ * Os dois ficam no tipo de retorno — e não colapsados em `"plain"` — para que o
+ * compilador force o chamador a tratá-los; chamá-los de `plain` transformaria
+ * uma decisão pendente numa permissão, que é como omissão vira política aqui.
+ */
+export type CtxReadMask = ContextMaskingType | "undecided" | "unknown"
+
+/**
+ * maskForSite — junta os dois eixos: o SÍTIO já virou plateia
+ * (`deriveAudience`); aqui o TIPO decide quanto ela vê.
+ *
+ * As três plateias que o catálogo não conhece são decididas aqui, cada uma por
+ * um motivo diferente:
+ *
+ *   system — o valor sai INTEIRO. O CRM precisa do número, e o portão daquele
+ *            caminho é o `AuditPolicy.data_categories` da tool, não este.
+ *   none   — não é renderizado para ninguém; não há o que filtrar.
+ *   model  — `undecided` (§D5): um prompt SAI da plataforma, e mandar um CPF ao
+ *            provedor de modelo é outro fato que mostrá-lo a um operador logado.
+ */
+export function maskForSite(
+  tipoId:   string | undefined,
+  plateia:  CtxAudience,
   catalog:  DataTypeCatalog = DEFAULT_DATA_TYPE_CATALOG,
-): EchoPolicy {
-  if (audience === "none")   return "plain"      // não é renderizado; nada a filtrar
-  if (audience === "system") return "plain"      // o gate do `invoke` é o AuditPolicy da tool
-  if (audience === "model")  return "undecided"  // §D5
-  if (!typeId) return "unknown"
+): CtxReadMask {
+  if (plateia === "system" || plateia === "none") return "plain"
+  if (plateia === "model") return "undecided"
+  if (!tipoId) return "unknown"   // §D4 — contada, não decidida
+  return resolveMaskForAudience(catalog.types.find(x => x.id === tipoId), plateia)
+}
 
-  const t = catalog.types.find(x => x.id === typeId)
-  if (!t) return "unknown"
+/** `hidden` é o sinal de OMITIR o campo — o masker devolve string vazia para ele. */
+export function maskOmitsField(m: CtxReadMask): boolean {
+  return m === "hidden"
+}
 
-  const d = t.mascara?.display
-  const bruto = audience === "customer" ? d?.echo_to_customer : d?.echo_to_operator
-  if (bruto === "none" || bruto === "masked" || bruto === "plain") return bruto
-  // Tipo declarado que não declara eco: `unknown` e não `plain`. A diferença
-  // importa — `plain` afirmaria uma permissão que ninguém escreveu.
-  return "unknown"
+/**
+ * A máscara mudaria o valor?
+ *
+ * `plain` não muda. `undecided` e `unknown` **não são máscaras** e por isso
+ * também respondem `false`: a F3 só pode aplicar o que está decidido, e
+ * responder `true` aqui faria o aplicador escolher por um arco que se absteve.
+ */
+export function maskChangesValue(m: CtxReadMask): boolean {
+  return m !== "plain" && m !== "undecided" && m !== "unknown"
 }
 
 // ─────────────────────────────────────────────

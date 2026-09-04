@@ -7,7 +7,8 @@
  */
 import { describe, expect, it } from "vitest"
 import {
-  deriveAudience, resolveEchoPolicy, flattenContextMap,
+  deriveAudience, resolveMaskForAudience, maskForSite, maskChangesValue,
+  flattenContextMap,
 } from "./ctx-audience"
 import { DEFAULT_DATA_TYPE_CATALOG } from "./audit"
 
@@ -45,38 +46,73 @@ describe("deriveAudience — a plateia vem do SÍTIO", () => {
   })
 })
 
-describe("resolveEchoPolicy — o TIPO decide, a plateia escolhe a coluna", () => {
-  it("credit_card não ecoa ao cliente, mas sai mascarado ao operador", () => {
-    expect(resolveEchoPolicy("credit_card", "customer")).toBe("none")
-    expect(resolveEchoPolicy("credit_card", "operator")).toBe("masked")
+describe("resolveMaskForAudience — gêmeo fiel do resolvedor canônico", () => {
+  const tipo = (id: string) => DEFAULT_DATA_TYPE_CATALOG.types.find(x => x.id === id)
+
+  it("audiência DECLARADA ganha a máscara dela", () => {
+    expect(resolveMaskForAudience(tipo("credit_card"), "operator")).toBe("last_4")
+    expect(resolveMaskForAudience(tipo("email_addr"), "operator")).toBe("email_domain")
   })
 
+  it("audiência NÃO declarada cai na do `operator` — e é assim que `customer` funciona hoje", () => {
+    // Medido: `customer` não é declarado em NENHUM dos 14 tipos. Este ramo é o
+    // que faz o `_build_pending_preview` produzir `***4444` desde 2026-09-02,
+    // e é a resposta para a tela 3 do dono — política nova, nenhuma.
+    expect(resolveMaskForAudience(tipo("credit_card"), "customer")).toBe("last_4")
+  })
+
+  it("`by_role` VAZIO é ABERTO declarado, não omissão", () => {
+    // Tipo de FINALIDADE. Cair no `operator` aqui esconderia do cliente o que
+    // ele mesmo declarou.
+    const finalidade = DEFAULT_DATA_TYPE_CATALOG.types.filter(
+      x => Object.keys(x.mascara?.by_role ?? {}).length === 0)
+    expect(finalidade.length).toBeGreaterThan(0)   // testemunha de presença
+    for (const f of finalidade) {
+      expect(resolveMaskForAudience(f, "customer")).toBe("plain")
+    }
+  })
+
+  it("tipo fora do catálogo RECUSA ALTO — `full`, nunca `plain`", () => {
+    expect(resolveMaskForAudience(undefined, "customer")).toBe("full")
+  })
+})
+
+describe("maskForSite — o sítio já virou plateia; aqui o tipo decide quanto ela vê", () => {
   it("para o SISTEMA o valor sai inteiro — o CRM precisa dele", () => {
     // Controle positivo do arco inteiro: sem este caso, um filtro que bloqueia
     // tudo passaria em qualquer teste que só verifique bloqueio.
-    expect(resolveEchoPolicy("credit_card", "system")).toBe("plain")
+    expect(maskForSite("credit_card", "system")).toBe("plain")
+    expect(maskChangesValue(maskForSite("credit_card", "system"))).toBe(false)
+  })
+
+  it("ao CLIENTE o cartão sai `last_4` — o mesmo que a tela 2 já mostrava", () => {
+    expect(maskForSite("credit_card", "customer")).toBe("last_4")
+    expect(maskChangesValue(maskForSite("credit_card", "customer"))).toBe(true)
   })
 
   it("`model` é `undecided`, e isso NÃO é sinônimo de `plain`", () => {
     // §D5. Chamar de `plain` transformaria uma decisão pendente numa permissão.
-    expect(resolveEchoPolicy("cpf", "model")).toBe("undecided")
-    expect(resolveEchoPolicy("cpf", "model")).not.toBe("plain")
+    expect(maskForSite("cpf", "model")).toBe("undecided")
+    expect(maskForSite("cpf", "model")).not.toBe("plain")
+    // E `undecided` não autoriza aplicação nenhuma na F3.
+    expect(maskChangesValue(maskForSite("cpf", "model"))).toBe(false)
   })
 
-  it("sítio que não renderiza não tem eco a filtrar", () => {
-    expect(resolveEchoPolicy("credit_card", "none")).toBe("plain")
+  it("sítio que não renderiza não tem o que filtrar", () => {
+    expect(maskForSite("credit_card", "none")).toBe("plain")
   })
 
-  it("tipo ausente ou fora do catálogo é `unknown`, nunca `plain`", () => {
-    // §D4 — este ADR não decide o default do desconhecido; ele o CONTA. Devolver
-    // `plain` seria decidir, e afirmar uma permissão que ninguém escreveu.
-    expect(resolveEchoPolicy(undefined, "customer")).toBe("unknown")
-    expect(resolveEchoPolicy("tipo_que_nao_existe", "customer")).toBe("unknown")
+  it("tag fora do mapa é `unknown` — CONTADA, não decidida (§D4)", () => {
+    // Este ADR não decide o default do desconhecido; isso é a V4 da allowlist.
+    // Devolver `plain` afirmaria uma permissão que ninguém escreveu; devolver
+    // `full` decidiria a V4 de esguelha.
+    expect(maskForSite(undefined, "customer")).toBe("unknown")
+    expect(maskChangesValue(maskForSite(undefined, "customer"))).toBe(false)
   })
 
-  it("tipo declarado SEM política de eco também é `unknown`", () => {
-    const cat = { types: [{ id: "mudo", formato: {}, mascara: {}, lgpd: "none" }] }
-    expect(resolveEchoPolicy("mudo", "customer", cat as never)).toBe("unknown")
+  it("tipo no mapa mas fora do catálogo é outro fato, e recusa alto", () => {
+    // Não é tag indeclarada (§D4) — é config inconsistente, e aí o gêmeo manda.
+    expect(maskForSite("tipo_que_nao_existe", "customer")).toBe("full")
   })
 })
 
@@ -105,7 +141,7 @@ describe("flattenContextMap — os ALIASES são o que importa", () => {
     const real = flattenContextMap({
       contexto: { session: { cartao: { numero: { tipo: "credit_card", legado: ["session.numero_cartao"] } } } },
     })
-    expect(resolveEchoPolicy(real.get("session.numero_cartao"), "customer",
-      DEFAULT_DATA_TYPE_CATALOG)).toBe("none")
+    expect(maskForSite(real.get("session.numero_cartao"), "customer",
+      DEFAULT_DATA_TYPE_CATALOG)).toBe("last_4")
   })
 })

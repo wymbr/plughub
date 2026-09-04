@@ -25,15 +25,28 @@ faltou política: faltou quem a consultasse.
 
 As três peças de *"pegar o dado já filtrado"* existem em duas casas e faltam numa:
 
+> ⚠️ **Esta tabela foi CORRIGIDA em 2026-09-04, horas depois de escrita, e a correção
+> muda o EIXO do ADR.** A versão original apontava `mascara.display.echo_to_*` como a
+> peça de política e declarava o leitor inexistente. As duas linhas estavam erradas, e
+> a segunda é a mais grave: **o leitor existe, é canônico, e um caminho já o usa** —
+> foi ele que produziu o `***4444` da tela. Ver §1.1 e §D9.
+
 | peça | onde | estado |
 |---|---|---|
 | tag → **tipo** | `masking.context_map` | ✅ 214 tags (com legado) |
-| tipo → **política por plateia** | `masking.types.*.mascara.display` | ✅ `echo_to_customer` / `echo_to_operator` |
-| **leitor** que aplica | `interpolate` / `resolveCtxRef` | ❌ `HGET` cru, não consulta nenhuma |
+| tipo → **máscara por plateia** | `masking.types.*.mascara.by_role` | ✅ 11 de 14 declaram `operator`; **`customer` em nenhum** |
+| resolver plateia → máscara | `resolve_mask_for_audience` (`py-contextstore/masking.py:87`) | ✅ existe, e o docstring dele ANTECIPA este arco |
+| aplicar a máscara ao valor | `apply_masking_type_to_value` / `applyMaskingTypeToValue` | ✅ com gate de paridade TS↔Python |
+| derivar a plateia do **SÍTIO** | — | ❌ **é a peça que faltava**, e é o que este ADR acrescenta |
+| **leitor** que junta as quatro | `interpolate` / `resolveCtxRef` | ❌ `HGET` cru — mas `_build_pending_preview` já faz o equivalente no outro caminho |
 
 A decisão é fazer o leitor **um só** e ensiná-lo a perguntar duas coisas: *qual é o tipo?* (o mapa
 responde) e *para quem vai?* (o **sítio** responde). Sem a segunda pergunta nenhum default serve —
 cru é o de hoje, e mascarado quebra o `invoke` que manda o número ao CRM.
+
+**Só a segunda pergunta é nova.** A primeira já tem resolvedor canônico e masker com paridade
+medida; o que nunca existiu é derivar a plateia de um sítio (§D9). Reconhecer isso encolheu o
+arco e evitou um terceiro vocabulário para *"quanto do valor aparece"*.
 
 O que a medição acrescentou, e que muda o desenho: **quase nenhum dos acertos de um filtro por
 TAG seria defeito.** Um censo por regex encontrou 20 pontos resolvendo para tipo com
@@ -67,9 +80,26 @@ skill_limite_entrada_v1:356   ← $.pipeline_state.pendencia.context.numero_cart
 skill_limite_retorno_v1:71    ← @ctx.session.numero_cartao                         →  cru
 ```
 
-O primeiro lê um preview que **alguém mascarou à mão**; o segundo lê o ContextStore direto. A
-proteção existe num e não no outro porque é decisão de cada template — que é a definição de
-*"política por formulário"*, o defeito que o ADR do `masked` tipado nomeia.
+> ⚠️ **CORRIGIDA em 2026-09-04, e é o TERCEIRO erro deste arco produzido por inferir em
+> vez de medir.** Esta passagem dizia que o primeiro caminho *"lê um preview que alguém
+> mascarou à mão"*. **É falso.** `_build_pending_preview`
+> (`channel-gateway/adapters/webhook.py:2408-2472`) é allowlist, nomeia o **tipo** e
+> resolve por `resolve_mask_for_audience(tipo, "customer")` + `apply_masking_type_to_value`
+> — o leitor canônico, ciente de plateia, que este ADR estava propondo construir. O
+> comentário dele (`:2424`) diz por que nomeia o tipo e não a máscara: para não virar
+> *"o quarto motor de máscara do repositório"*.
+>
+> Os dois erros anteriores foram do mesmo feitio (§1.3, e o eixo em §D9): **afirmar a
+> partir do tipo de coisa em vez de ler o código que a produz.**
+
+O primeiro lê um preview produzido pelo **leitor canônico ciente de plateia**; o segundo lê o
+ContextStore direto. A proteção existe num e não no outro porque o segundo caminho nunca foi
+ligado a ele — não porque alguém a tenha escrito à mão.
+
+**Isso reduz o arco e muda o alvo.** O que a tela 3 precisa não é política nova:
+`resolve_mask_for_audience(credit_card, "customer")` devolve `last_4` **hoje** (pelo fallback ao
+`operator`, o único eixo declarado), e `apply_masking_type_to_value("1111222233334444", "last_4")`
+= `***4444` — exatamente o que a tela 2 mostra. Falta o segundo caminho perguntar.
 
 Varredura do Redis no mesmo dia: o valor **cru** está em **2 streams canônicos** e **3 hashes de
 ctx** (sessão + journey).
@@ -79,14 +109,21 @@ ctx** (sessão + journey).
 ```
 context_map:  contexto.session.cartao.numero → credit_card
               legado: ["session.numero_cartao"]        ← a tag que o flow LÊ
-masking.types.credit_card.mascara.display:
-              echo_to_customer: "none"
-              echo_to_operator: "masked"
-              by_role: { operator: "last_4" }
+masking.types.credit_card.mascara:
+              by_role: { operator: "last_4" }        ← o eixo de EXIBIÇÃO (este ADR)
+              display.echo_to_customer: "none"       ← outro eixo: eco da ENTRADA mascarada
+              display.echo_to_operator: "masked"
 ```
 
-A tag que o flow interpola **é alias declarado** da canônica tipada. O tipo **proíbe** eco ao
-cliente. Nada disso é consultado na leitura.
+A tag que o flow interpola **é alias declarado** da canônica tipada. Nada disso é consultado na
+leitura.
+
+⚠️ **Os dois campos respondem perguntas diferentes, e este ADR leu o errado por algumas horas.**
+`echo_to_*` trata do valor que o cliente **digitou** voltando no evento de interação, e o próprio
+schema o declara ADVISORY (`audit.ts:342`: *"o cliente digitou o valor, já o conhece"*) — é medida
+contra quem olha por cima do ombro, não contra o titular do dado. A pergunta deste arco é *quanto
+de um valor ARMAZENADO a plataforma mostra ao renderizá-lo*, e quem a responde é `by_role`. Ver
+§D9.
 
 ⚠️ As regras `*.numero_cartao → last_4` de `masking.context_rules` existem e estão vivas — mas com
 `role: operator`. Elas protegem **quem lê o ctx**, não a interpolação num texto. É outro eixo, e
@@ -117,11 +154,18 @@ confundi-los faria parecer que já havia cobertura.
 | interpolações `@ctx.*` em campo que vira texto ou argumento | **88** |
 | que alcançam o **cliente** | **7** |
 | operador · sistema · modelo | 3 · 72 · 6 |
-| **que seriam BLOQUEADAS** (`echo_to_customer: none`) | **2** |
+| **que MUDARIAM** (alguma máscara se aplicaria) | **3** |
 | tags fora do mapa (contadas, não decididas — §D4) | 6 nomes |
 
-As duas bloqueadas são `skill_limite_retorno_v1` / `notificar_aprovado` e `notificar_recusado`,
-ambas `session.numero_cartao` → `credit_card`. **São exatamente as duas que a tela do dono exibiu.**
+> ⚠️ **Eram 2 sob o eixo `echo_to_*`; são 3 sob `by_role`, e o terceiro é o achado que só o
+> eixo certo produz.** Ver §D9.1.
+
+Duas são `skill_limite_retorno_v1` / `notificar_aprovado` e `notificar_recusado`, ambas
+`session.numero_cartao` → `credit_card` → **`last_4`**. **São exatamente as duas que a tela do dono
+exibiu**, e a máscara que sairia é a mesma `***4444` da tela 2.
+
+A terceira é `notificar_aprovado` / `session.limite_aprovado` → `financial` → **`financial`**
+(`R$ ****,**`), e ela **não é defeito: é o fallback errando** (§D9.1).
 
 **É esta diferença — 20 contra 2 — que decide o desenho.** Um filtro por TAG reprovaria os 20, e o
 modo de falha seria o `workflow_resume` parando de receber o token: *"o processo travou"*, que
@@ -152,8 +196,8 @@ carrega a informação:
 
 | sítio | plateia | política |
 |---|---|---|
-| `notify` / `menu`, `visibility: "all"` | cliente | `echo_to_customer` |
-| `notify` / `menu`, `agents_only` ou array de participantes | operador | `echo_to_operator` |
+| `notify` / `menu`, `visibility: "all"` | cliente | `by_role.customer` (hoje: fallback ao `operator`) |
+| `notify` / `menu`, `agents_only` ou array de participantes | operador | `by_role.operator` |
 | `invoke` — argumento de tool | sistema | **cru**, e o gate é o que já existe (`AuditPolicy.data_categories`) |
 | `reason` — prompt de LLM | ver **D5** | decisão própria |
 
@@ -193,7 +237,7 @@ tag não declarada. Se o número for alto, é evidência para a V4; não é auto
 Um prompt de LLM sai da plataforma. Mandar um CPF para o provedor de modelo é um fato diferente de
 mostrá-lo a um operador logado — outra fronteira, outro contrato, outra classe LGPD em jogo.
 
-Dobrar `reason` em `echo_to_operator` seria escolher a política mais frouxa por conveniência de
+Dobrar `reason` em `by_role.operator` seria escolher a política mais frouxa por conveniência de
 tabela. Fica com decisão própria e **não entra na primeira fase**: hoje é o caminho mais permissivo
 por omissão, e trocar omissão por decisão errada não é progresso.
 
@@ -228,6 +272,61 @@ de tê-las fundidas.
 foi persistida crua no stream. **Por que a detecção não mascarou aquela mensagem** é assunto do
 `adr-message-masking`, e está registrado como MSK-02.
 
+### D9 — o eixo é `by_role`, e o resolvedor é o que JÁ EXISTE
+
+*(Decisão tomada em 2026-09-04, algumas horas depois da primeira versão deste ADR, ao medir para
+começar a F3. Ela **substitui** o uso de `mascara.display.echo_to_*` que a versão original fazia.)*
+
+São dois campos, e eles respondem perguntas diferentes:
+
+| campo | pergunta | força |
+|---|---|---|
+| `mascara.display.echo_to_*` | o valor que o cliente **digitou** volta no evento de interação? | ADVISORY para o cliente, por declaração do schema (`audit.ts:342`) |
+| `mascara.by_role` | quanto de um valor **armazenado** aparece para um papel? | é o eixo que o masker consome |
+
+A pergunta deste arco é a segunda. Três consequências:
+
+1. **`by_role` é estritamente mais expressivo** — diz QUAL máscara (`last_4`, `email_domain`,
+   `hidden`), e não apenas que há alguma. Para *renderizar* `masked` a `by_role` seria necessária
+   de qualquer forma; construir sobre `echo_to_*` teria exigido consultá-la logo depois.
+2. **O resolvedor não precisa ser escrito** — `resolve_mask_for_audience`
+   (`py-contextstore/masking.py:87`) tem os três ramos e o docstring dele **antecipa este arco**:
+   *"quando o eixo `customer` existir, o segundo ramo o pega sem mudar nada aqui"*.
+3. **Já há consumidor com a plateia `customer` viva** — `_build_pending_preview` (§1.1).
+
+Insistir no `echo_to_*` teria criado um **terceiro** vocabulário para *"quanto do valor aparece"*,
+ao lado de `by_role` (9 valores) e `TokenDisplayMode` (3) — que é exatamente o que o comentário
+daquele consumidor existe para impedir.
+
+**O que este ADR de fato acrescenta**, depois da correção: `deriveAudience` — o resolvedor canônico
+recebe a audiência PRONTA e nunca soube derivá-la de um sítio. E o gêmeo TS do resolvedor, que não
+existia.
+
+### D9.1 — o fallback ao `operator` serve para AUDITAR e **não** para aplicar
+
+Os três ramos de `resolve_mask_for_audience` mandam a audiência não declarada cair na do
+`operator`, e isso é **declarado, não é ordenação de severidade** — hoje `operator` é a única
+audiência que o catálogo preenche (11 de 14; `customer` em **nenhum**).
+
+O censo estrutural mostrou o que isso produz, e os dois casos discordam:
+
+| ponto | tipo | máscara pelo fallback | veredicto |
+|---|---|---|---|
+| `notificar_aprovado` / `session.numero_cartao` | `credit_card` | `last_4` → `***4444` | **certo** — é o que a tela 2 já mostra |
+| `notificar_aprovado` / `session.limite_aprovado` | `financial` | `financial` → `R$ ****,**` | **errado** — é o limite que a mensagem existe para anunciar |
+
+**Mesmo fallback, um acerto e um erro.** Logo ele é evidência boa (mostra que há decisão a tomar) e
+aplicador ruim (decidiria por conta).
+
+A conclusão **não** é uma tabela de exceções: é que a F3 exige `by_role.customer` **declarado por
+tipo**, que é o grão que a §D6 já escolheu e mora onde compliance edita. Uma tabela por
+`(skill, tag)` viveria em código e envelheceria por skill; a declaração vive na config e vale para
+todo template de uma vez.
+
+⚠️ **O modo de falha do fallback é BARULHENTO, e isso é sorte a favor:** ele erra
+*sobre*-mascarando, e o cliente que recebe `R$ ****,**` reclama. Não fosse assim, o mesmo fallback
+poderia vazar em silêncio — e é por isso que ele fica no auditor e não no aplicador.
+
 ---
 
 ## 3. Alternativas refutadas
@@ -239,6 +338,8 @@ foi persistida crua no stream. **Por que a detecção não mascarou aquela mensa
 | **Declarar a plateia em cada interpolação** | 392 declarações e 392 chances de esquecer; e a que faltar degrada para o permissivo |
 | **Filtrar no adapter de canal** | Tarde demais: quando o texto chega lá, o valor **já está** no `pipeline_state` e no stream canônico — medido, 2 streams com o número cru. Filtrar na borda protege a tela e não o registro |
 | **Mascarar tudo por default, sem plateia** | Quebra `invoke`: o CRM precisa do número inteiro. Um default único está errado para metade dos sítios |
+| **Usar `mascara.display.echo_to_*` como eixo** (a 1ª versão deste ADR) | Responde outra pergunta — eco da ENTRADA mascarada, e ADVISORY para o cliente por declaração do schema. Seria um terceiro vocabulário para *"quanto do valor aparece"*, e ainda precisaria de `by_role` para renderizar `masked` (§D9) |
+| **Aplicar o fallback ao `operator` também ao cliente** | Mesmo fallback, um acerto (`credit_card`) e um erro (`financial`, que apagaria o limite anunciado). É evidência, não decisão (§D9.1) |
 
 ---
 
@@ -251,7 +352,7 @@ quebraria os 10 usos legítimos, e um arco que quebra o produto na primeira fase
 |---|---|---|
 | **F0** | censo re-executável: interpolações por sítio × tipo × plateia derivada, com os 20 **classificados** (legítimo / defeito / sem plateia de cliente) | O número sozinho não diz de qual proposição é evidência (§1.3) |
 | **F1** | o resolvedor de plateia + **modo auditoria**: calcula o que faria e LOGA, sem aplicar | Mesmo desenho da V3 da allowlist. É o que transforma "acho que são 10" em contagem |
-| **F2** | a exceção declarada (D3): marca no template, greppável e auditada | Precisa existir **antes** da F3, senão o link quebra |
+| **F2** | **`by_role.customer` declarado por tipo** (D9.1) + a exceção declarada por sítio (D3) para o que sobrar | Precisa existir **antes** da F3: sem a declaração, o fallback ao `operator` apagaria o limite anunciado |
 | **F3** | aplicar em `notify`/`menu` — o caminho de cliente | Onde estão os defeitos medidos |
 | **F4** | `invoke` (confirmar que o cru é intencional e gateado) e depois `reason` (D5) | `reason` só depois de ter decisão própria |
 | **F5** | `$.pipeline_state.*` via carimbo de proveniência (D7) | Fatia própria |
@@ -265,6 +366,7 @@ quebraria os 10 usos legítimos, e um arco que quebra o produto na primeira fase
 | `probe_ctx_read_audience_census.sh` | o censo da F0 reproduz os números, classificados | zero interpolações ⇒ INCONCLUSIVO, nunca verde |
 | `probe_ctx_read_audience_resolve.sh` | a plateia derivada bate com o sítio nos quatro casos da D2 | sítio `agents_only` **não** pode derivar `cliente` |
 | `probe_ctx_read_policy_applied.sh` | `credit_card` para plateia cliente não sai cru | o **mesmo** valor para plateia sistema (`invoke`) sai INTEIRO — senão o gate passa por bloquear tudo |
+| paridade do gêmeo (§D9) | `resolveMaskForAudience` (TS) e `resolve_mask_for_audience` (Python) concordam nos três ramos | um ramo divergente reprova — divergir aqui reabre as duas respostas que o `_build_pending_preview` existe para não criar |
 | `probe_ctx_read_exception_visible.sh` | a exceção declarada aparece no censo e no registro | exceção não declarada ⇒ valor bloqueado, e o gate prova os dois lados |
 
 O terceiro é o que carrega o arco: **um filtro que bloqueia tudo passa em qualquer teste que só
@@ -279,3 +381,7 @@ verifique bloqueio.**
 - **Valor derivado em `pipeline_state`** — concatenação de dois campos herda o tipo de qual (§D7).
 - **O `display` copiado de moeda** em `address`/`health`/`financial` de `masking.types` (FMT-07):
   aqui ele passa a ser LIDO, então deixa de ser cosmético.
+- **O masker não é alcançável a partir do engine** (CTX-07): `applyMaskingTypeToValue` vive em
+  `mcp-server-plughub/src/lib/context-masking.ts`, não em `@plughub/schemas`. O engine consegue
+  hoje decidir **qual** máscara aplicar (`resolveMaskForAudience`) e **não** consegue aplicá-la.
+  A F3 depende de mover o masker para a casa compartilhada, sob o mesmo gate de paridade.

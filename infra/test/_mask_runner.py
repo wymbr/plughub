@@ -16,7 +16,10 @@ if hasattr(sys.stdout, "reconfigure"):
 _AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(os.path.dirname(_AQUI))
 sys.path.insert(0, os.path.join(RAIZ, "packages", "py-contextstore", "src"))
-from plughub_contextstore.masking import apply_masking_type_to_value  # noqa: E402
+from plughub_contextstore.masking import (  # noqa: E402
+    apply_masking_type_to_value,
+    resolve_mask_for_audience,
+)
 
 FIXTURE = (sys.argv[1] if len(sys.argv) > 1
            else os.path.join(_AQUI, "fixtures", "masking_apply_cases.json"))
@@ -27,6 +30,13 @@ def main() -> int:
     for c in fx["cases"]:
         print(json.dumps(
             {"name": c["name"], "out": apply_masking_type_to_value(c["raw"], c["mask"])},
+            sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        ))
+    # Segunda metade: o RESOLVEDOR. Mesma fixture, mesma forma de linha.
+    for c in fx.get("resolve_cases", []):
+        print(json.dumps(
+            {"name": c["name"],
+             "out": resolve_mask_for_audience(c["tipo"], c["audiencia"])},
             sort_keys=True, ensure_ascii=False, separators=(",", ":"),
         ))
     return 0

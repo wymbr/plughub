@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# probe_masking_apply_parity.sh — decisao #6, passo 2: UM motor de mascara por TIPO.
+# probe_masking_apply_parity.sh — decisao #6, passo 2: UM motor de mascara por TIPO,
+# e (desde 2026-09-04, CTX-01) UM resolvedor de mascara por PLATEIA.
+#
+# Duas metades na mesma fixture, porque sao dois passos da MESMA pergunta:
+#   escolher a mascara   resolve_mask_for_audience  x  resolveMaskForAudience
+#   aplicar a mascara    apply_masking_type_to_value x  applyMaskingTypeToValue
+# Gate proprio para a primeira abriria a quarta casa que o comentario do
+# `_build_pending_preview` existe para impedir.
 #
 # ── Por que este gate existe ─────────────────────────────────────────────────────
 #
@@ -39,7 +46,7 @@ echo
 N_FIX=$(python3 -c "
 import io,json
 fx=json.load(io.open('infra/test/fixtures/masking_apply_cases.json',encoding='utf-8'))
-print(len(fx['cases']))
+print(len(fx['cases'])+len(fx.get('resolve_cases',[])))
 " 2>/dev/null)
 if [ -z "${N_FIX:-}" ] || [ "$N_FIX" -lt 1 ] 2>/dev/null; then
   huh "A: fixture ilegivel ou vazia"

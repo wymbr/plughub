@@ -1,5 +1,104 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (2) — CTX: o eixo estava errado, e o leitor que o ADR ia construir ja existia
+
+Emenda ao arco de leitura por plateia, **horas depois** de ele ser commitado. Nenhum
+comportamento de producao mudou: as duas fases continuam so medindo. O que mudou foi
+o EIXO da medicao — e, com ele, o tamanho do arco.
+
+### Tres afirmacoes minhas, refutadas por medicao no mesmo dia
+
+| onde | o que eu afirmei | o que a medicao mostrou |
+|---|---|---|
+| ADR §1.3 | *"10 dos 20 sao `credential` num link legitimo"* | sao argumentos de `invoke`, plateia `system` — corrigido no commit anterior |
+| ADR §1.1 | *"o primeiro le um preview que alguem mascarou a mao"* | e o leitor CANONICO ciente de plateia, e ele ja existia |
+| ADR §0/§D6 | o eixo de politica e `mascara.display.echo_to_*` | aquele campo responde OUTRA pergunta; o eixo e `mascara.by_role` |
+
+**As tres tem a mesma forma:** afirmar a partir do TIPO de coisa em vez de ler o codigo
+que a produz. A terceira e a mais cara porque sobreviveu a uma implementacao inteira.
+
+### O leitor ja existia, e um caminho ja o usava
+
+`_build_pending_preview` (`channel-gateway/adapters/webhook.py:2408-2472`) e allowlist,
+nomeia o TIPO e resolve por `resolve_mask_for_audience(tipo, "customer")` +
+`apply_masking_type_to_value`. **E ele que produz o `***4444` da tela 2 do dono.** O
+comentario dele (`:2424`) diz por que nomeia o tipo e nao a mascara: para nao virar *"o
+quarto motor de mascara do repositorio"* — exatamente o que eu ia fazer.
+
+Consequencia pratica: **a tela 3 nao precisa de politica nova.**
+`resolve_mask_for_audience(credit_card, "customer")` devolve `last_4` hoje, e
+`apply_masking_type_to_value("1111222233334444", "last_4")` = `***4444`. Falta o segundo
+caminho perguntar.
+
+### `echo_to_*` x `by_role` — nao e o eixo mais fraco, e o eixo de outra pergunta
+
+O proprio schema declara (`audit.ts:342`): *"`echo_to_customer` e ADVISORY: o cliente
+digitou o valor, ja o conhece"*.
+
+| campo | pergunta |
+|---|---|
+| `mascara.display.echo_to_*` | o valor que o cliente DIGITOU volta no evento de interacao? |
+| `mascara.by_role` | quanto de um valor ARMAZENADO aparece para um papel? |
+
+Construir sobre o primeiro teria criado um TERCEIRO vocabulario para *"quanto do valor
+aparece"* — e ainda precisaria do `by_role` na hora de renderizar `masked`.
+
+**O que sobrevive do arco:** `deriveAudience`, que e a peca que de fato nao existia — o
+resolvedor canonico recebe a audiencia PRONTA e nunca soube deriva-la de um sitio.
+
+### O gemeo TS nasceu com uma divergencia, e ela apareceu ao escrever o vetor
+
+`resolveMaskForAudience` (`@plughub/schemas/ctx-audience.ts`) foi escrito com `??` onde o
+original usa `or`. Os dois so divergem quando a audiencia esta declarada com string
+VAZIA:
+
+```
+by_role: { customer: "", operator: "last_4" }   →  Python "last_4"   ??  daria "full"
+```
+
+E a Mudanca 35 do `CLAUDE.md` (`??` x truthiness) na versao mais cara possivel: dentro de
+um gemeo cuja unica obrigacao e nao divergir. Consertado para `||`, com o vetor
+`r_customer_VAZIO_cai_no_operator` na fixture.
+
+### O censo passou de 2 para 3, e o terceiro inverte a CTX-03
+
+| ponto | tipo | mascara pelo fallback | veredicto |
+|---|---|---|---|
+| `notificar_aprovado` / `session.numero_cartao` | `credit_card` | `last_4` → `***4444` | **certo** — e o que a tela 2 mostra |
+| `notificar_recusado` / `session.numero_cartao` | `credit_card` | `last_4` | **certo** |
+| `notificar_aprovado` / `session.limite_aprovado` | `financial` | `financial` → `R$ ****,**` | **errado** — e o limite que a mensagem existe para anunciar |
+
+Causa: **`customer` nao e declarado em NENHUM dos 14 tipos**, entao o fallback entrega ao
+cliente a mascara do operador. Mesmo fallback, um acerto e um erro — logo ele e evidencia
+boa e **aplicador ruim**.
+
+Isso reabre a CTX-03, cuja populacao sob o eixo antigo era **zero**. O remedio nao e
+tabela de excecao: e declarar `by_role.customer` **por TIPO** — grao que a §D6 ja
+escolheu, que mora onde compliance edita, e que vale para todo template de uma vez.
+
+⚠️ **O modo de falha do fallback e BARULHENTO, e isso e sorte a favor:** ele erra
+*sobre*-mascarando, e quem recebe `R$ ****,**` reclama. Nao fosse assim, o mesmo fallback
+poderia vazar em silencio.
+
+### Gates
+
+`probe_masking_apply_parity.sh` ganhou a segunda metade — **20 casos de APLICAR + 10 de
+ESCOLHER = 30**, mesma fixture, mesmos dois runners. Gate proprio para o resolvedor
+abriria a quarta casa que o comentario do `_build_pending_preview` existe para impedir.
+
+Bateria nova `infra/test/mut_masking_resolver.py`, 3 mutacoes com assert de aplicacao:
+`||`→`??` · `by_role` vazio caindo no operator · tipo ausente virando `plain`. As tres
+reprovam.
+
+`probe_ctx_read_audience.sh`: o balde `bloquearia` virou `mudaria` (o eixo devolve mascara
+NOMEADA, nao um ternario) e o log diz QUAL mascara sairia. Bateria de mutacao existente
+re-executada, 3 de 3 vermelhas.
+
+Consertado de passagem um `tsc --noEmit` vermelho herdado do commit anterior
+(`ReturnType<typeof vi.spyOn>` sem argumentos instancia os genericos em `unknown[]`).
+
+Suites: schemas **235**, skill-flow-engine **188**. `tsc --noEmit` limpo nos dois.
+
 ## 2026-09-04 — CTX-01/CTX-02: o censo que refutou o proprio ADR, e a auditoria que ainda nao aplica
 
 Primeiras duas fases do
