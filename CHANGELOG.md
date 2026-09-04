@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (6) — F4 e F5: confirmar era o trabalho, e confirmar derrubou duas premissas
+
+CTX-05 (F4) fecha. CTX-06 (F5) fica **bloqueada, com o motivo medido**. Nenhuma linha de
+politica nova — as duas fases eram para CONFIRMAR, e a confirmacao produziu correcoes.
+
+### F4 no `invoke` — o gate que o ADR citava NAO existe
+
+A §D2 dizia que o valor inteiro num argumento de tool era aceitavel porque *"o gate e o que
+ja existe (`AuditPolicy.data_categories`)"*. Medido no repositorio inteiro:
+
+| fato | medicao |
+|---|---|
+| declarado no schema | ✅ `audit.ts:35` |
+| tools que o declaram | **0** |
+| ocorrencias em `mcp-server-plughub/src` | **0** |
+| quem o LE | `sdk/src/mcp-interceptor.ts` — que o `CLAUDE.md` mede como **nunca instanciado** |
+
+**A decisao nao muda**: mascarar argumento de tool quebraria o produto, e o `invoke` segue
+cru. O que sai e a citacao de um gate inexistente como se fosse a razao — *comentario que
+promete invariante sem mecanismo*, a familia que o `CLAUDE.md` caca, desta vez dentro de um
+ADR de conformidade. Vira **§D10** e a divida e **CTX-09**.
+
+### F4 no `reason` — populacao ZERO, e por isso a §D5 NAO foi decidida
+
+Seis interpolacoes `@ctx.*` chegam a prompt, em cinco tags: tres sao `texto` (`by_role`
+vazio, aberto por declaracao) e duas nao estao no mapa. **Nenhuma carrega tipo que mascare.**
+
+Decidir a §D5 agora seria politica contra populacao zero — o erro que este repositorio ja
+registrou. O que protege o prompt hoje nao e uma regra: e o fato de ninguem estar mandando
+PII para la. **Esse fato virou gate.**
+
+Ramo **G** novo: reprova no instante em que uma tag de tipo que mascara aparecer num
+`reason`. E o gatilho da fase, nao a fase.
+
+⚠️ **Ele precisou existir a parte porque `mudaria` nao cobre `model`**: `maskForSite`
+devolve `undecided` para essa plateia, entao esses pontos nunca entram naquela conta e um
+censo que so a olhasse concluiria que nao ha risco num prompt. Proposicao adjacente,
+veredicto inutil.
+
+Falseado **ao vivo** (`infra/test/mut_ctx_d5_population.py`): retipa `core.sentiment.category`
+de `texto` para `credit_card` no catalogo real, o ramo G reprova, e o restore e conferido por
+releitura — um catalogo deixado mutado seria pior que o teste nao existir.
+
+### F5 — o numero muda de novo, e o bloqueio nao e tamanho
+
+Mesmo padrao da CTX-01: o ADR cita **225**, e veio de regex.
+
+| grandeza | n |
+|---|---|
+| `$.pipeline_state.*` por regex | **228** |
+| em campo que vira texto ou argumento | **142** |
+| que alcancam o **cliente** | **35** (30 chaves) |
+| operador · sistema · modelo | 3 · 74 · 30 |
+
+Das 35, 16 sao `roteiro.render.by_node.*` e `dialog.render.*` — texto de DialogForm ja
+renderizado. O que sobra de PII e um punhado.
+
+**O bloqueio e que aplicar hoje CORROMPERIA valor.** `pendencia.context.*` **ja nasce
+mascarado** — quem o escreve e o `_build_pending_preview`, e o proprio skill documenta
+(`skill_limite_entrada_v1.yaml:346`): *"o cartao vem ***1234"*, com o aviso de que envolve-lo
+produziria `*****4444**`.
+
+Olhando so o valor, `***4444` e o numero cru sao indistinguiveis quanto a *"isto ja passou
+por uma mascara?"*. Logo o carimbo de proveniencia **deixou de ser refino e virou requisito
+de correcao**: sem ele nao existe aplicacao segura, so aplicacao que as vezes mascara duas
+vezes.
+
+⚠️ A saida obvia esta **proibida pela §D8**: procurar `***` no valor seria construir um
+detector onde o arco exige declaracao — o defeito que a V2b da allowlist fechou.
+
+**A decisao que falta e do dono** e ja estava anunciada na §D7: valor DERIVADO (concatenacao,
+resumo de LLM) herda o tipo de qual? Sao eles a maior parte das chaves que chegam ao cliente.
+Vira **§D11** e a tarefa e **CTX-10**.
+
+### Gate
+
+`probe_ctx_read_audience.sh` tem agora **7 saidas**: A/B/C (censo), **F5 informativa**,
+**G** (populacao da §D5), D (config), E (suites), F (F3 viva na imagem).
+
+⚠️ A linha da F5 e **publicada e nao julgada**, de proposito: nao ha politica para
+`$.pipeline_state.*`, entao um ramo que reprovasse exigiria o que a F5 nao construiu e um que
+aprovasse afirmaria seguranca que ninguem verificou.
+
+Suites inalteradas: schemas **235**, skill-flow-engine **192**.
+
 ## 2026-09-04 (5) — F3: o leitor de contexto passa a APLICAR, e e um so
 
 CTX-04. Primeira fase deste arco que **muda o que o cliente ve**.

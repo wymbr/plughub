@@ -81,6 +81,38 @@ else
   if [ "${MUD:-0}" -ge 1 ]; then
     echo "$CENSO" | jq -r '.a_declarar[] | "       a declarar: \(.skill):\(.step) \(.tag) [\(.tipo)] → \(.mascara)"'
   fi
+
+# ── G — F4/§D5: a plateia `model` nao tem politica, e a populacao e ZERO ─────
+# Um prompt SAI da plataforma. Enquanto a §D5 nao decidir o que pode ir num, o que
+# protege nao e uma regra — e o fato de NINGUEM estar mandando PII para la.
+#
+# ⚠️ Este ramo existe porque `mudaria` NAO cobre a plateia `model`: `maskForSite`
+# devolve `undecided` para ela, entao esses pontos nunca aparecem naquela conta e
+# um censo que so a olhasse concluiria que nao ha risco num prompt. Proposicao
+# adjacente, veredicto inutil — a familia que o CLAUDE.md nomeia.
+#
+# Zero aqui e o que torna legitimo NAO decidir a D5 agora: decidir contra
+# populacao zero e o erro que este repositorio ja registrou. Deixar de ser zero e
+# o gatilho da fase, e o gate e quem avisa.
+  # ── F5 — publicado, NAO julgado ────────────────────────────────────────────
+  # Nao ha politica para `$.pipeline_state.*`: o mapa tipa tag de ContextStore, nao
+  # chave de pipeline_state, entao toda chave aqui e indeclaravel hoje. Um ramo que
+  # reprovasse exigiria o que a F5 ainda nao construiu; um que aprovasse afirmaria
+  # seguranca que ninguem verificou. Publica-se o numero para quem desenhar o
+  # carimbo de proveniencia — e para que a diferenca regex x estrutural fique a vista.
+  PS_T=$(echo "$CENSO" | jq -r '.pipeline_state.total // 0')
+  PS_C=$(echo "$CENSO" | jq -r '.pipeline_state.por_plateia.customer // 0')
+  PS_K=$(echo "$CENSO" | jq -r '.pipeline_state.chaves_ao_cliente | length')
+  echo "  ....         F5 (sem veredicto). pipeline_state: $PS_T em campo que sai · $PS_C ao cliente · $PS_K chaves distintas"
+
+  MOD=$(echo  "$CENSO" | jq -r '.ao_modelo // 0')
+  SENS=$(echo "$CENSO" | jq -r '.modelo_com_tipo_que_mascara | length')
+  if [ "${SENS:-0}" -eq 0 ]; then
+    ok "G. §D5 sem populacao: $MOD interpolacoes ao MODELO, nenhuma de tipo que mascara"
+  else
+    bad "G. $SENS interpolacao(oes) mandam tipo que MASCARA para um prompt — a §D5 deixou de ser hipotetica"
+    echo "$CENSO" | jq -r '.modelo_com_tipo_que_mascara[] | "       \(.skill):\(.step) \(.tag) [\(.tipo)]"'
+  fi
 fi
 
 # ── D — a auditoria de runtime está CONFIGURADA ──────────────────────────────

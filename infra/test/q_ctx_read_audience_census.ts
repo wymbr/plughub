@@ -74,6 +74,7 @@ const ehLegitimo = (skill: string, tag: string): string | undefined =>
 // ── varredura ────────────────────────────────────────────────────────────────
 
 const REF = /@ctx\.([a-zA-Z0-9_.]+)/g
+const REF_PS = /\$\.pipeline_state\.([a-zA-Z0-9_.]+)/g
 
 interface Achado {
   skill: string; step: string; tipoStep: string
@@ -96,6 +97,23 @@ const catalogo = tipos as unknown as Parameters<typeof maskForSite>[2]
 const achados: Achado[] = []
 let totalRefs = 0
 
+/**
+ * F5 — `$.pipeline_state.*`, contado pela MESMA derivação de plateia.
+ *
+ * O ADR cita **225** para esta população, e o número veio de regex. A CTX-01 já
+ * mostrou o que isso mede: *"a chave APARECE no arquivo"*, não *"a chave CHEGA a
+ * alguém"*. Aqui a diferença volta a ser grande, e por isso ela é contada.
+ *
+ * ⚠️ **Sem veredicto, de propósito.** Não há política para esta população — o mapa
+ * tipa tag de ContextStore, não chave de `pipeline_state`, então toda chave aqui é
+ * indeclarável hoje. Um ramo que reprovasse estaria exigindo o que a F5 ainda não
+ * construiu; um que aprovasse afirmaria segurança que ninguém verificou. O número
+ * é publicado para ser LIDO por quem desenhar o carimbo de proveniência.
+ */
+const psPorPlateia: Record<string, number> = {}
+const psAoCliente: Array<{ skill: string; step: string; chave: string }> = []
+let psTotal = 0
+
 for (const f of readdirSync(SKILLS).filter(x => x.endsWith(".yaml")).sort()) {
   const doc = YAML.parse(readFileSync(join(SKILLS, f), "utf-8")) as Record<string, unknown>
   const steps = ((doc.flow as Record<string, unknown> | undefined)?.steps
@@ -104,6 +122,13 @@ for (const f of readdirSync(SKILLS).filter(x => x.endsWith(".yaml")).sort()) {
     const tipoStep = String(s.type ?? "")
     const plateia  = deriveAudience(tipoStep, s.visibility)
     const texto    = textosDoStep(s)
+    for (const m of texto.matchAll(REF_PS)) {
+      psTotal++
+      psPorPlateia[plateia] = (psPorPlateia[plateia] ?? 0) + 1
+      if (plateia === "customer") {
+        psAoCliente.push({ skill: f, step: String(s.id ?? "?"), chave: m[1].replace(/\.$/, "") })
+      }
+    }
     for (const m of texto.matchAll(REF)) {
       totalRefs++
       const tag = m[1].replace(/\.$/, "")
@@ -139,6 +164,28 @@ const declaradosOrfaos = LEGITIMOS.filter(
 const porMascara: Record<string, number> = {}
 for (const a of achados) porMascara[a.mascara] = (porMascara[a.mascara] ?? 0) + 1
 
+/**
+ * F4 — a população que a §D5 teria de decidir, e ela precisa ser contada à parte.
+ *
+ * `maskForSite` devolve `undecided` para a plateia `model`, então esses pontos
+ * NUNCA entram em `mudaria` — e um censo que só olhasse `mudaria` concluiria que
+ * não há nada em risco num prompt. É a proposição adjacente de novo.
+ *
+ * A pergunta certa é outra: **das interpolações que vão ao MODELO, quantas
+ * carregam tipo que mascara para alguém?** Se for zero, a D5 estaria decidindo
+ * política contra população zero — o erro que este repositório já nomeou. Se
+ * deixar de ser zero, alguém começou a mandar PII para fora da plataforma, e é
+ * disso que a F4 precisa saber ANTES de escolher.
+ */
+const tipoMascaraAlguem = (id: string | undefined): boolean => {
+  if (!id) return false
+  const e = tipos.types.find((x: { id: string }) => x.id === id) as
+    { mascara?: { by_role?: Record<string, unknown> } } | undefined
+  return Object.keys(e?.mascara?.by_role ?? {}).length > 0
+}
+const aoModelo = achados.filter(a => a.plateia === "model")
+const modeloSensivel = aoModelo.filter(a => tipoMascaraAlguem(a.tipo))
+
 console.log(JSON.stringify({
   refs: totalRefs,
   por_plateia: {
@@ -149,7 +196,19 @@ console.log(JSON.stringify({
   // A tag fora do mapa é CONTADA e não decidida (§D4) — evidência para a V4 da
   // allowlist, nunca autorização para ela.
   tags_nao_declaradas: [...new Set(achados.filter(a => !a.tipo).map(a => a.tag))].sort(),
+  // F5 — publicado, não julgado (ver o comentário na declaração).
+  pipeline_state: {
+    total: psTotal,
+    por_plateia: psPorPlateia,
+    chaves_ao_cliente: [...new Set(psAoCliente.map(x => x.chave))].sort(),
+  },
   mudaria: mudaria.length,
+  ao_modelo: aoModelo.length,
+  // F4/§D5 — tem de ficar em ZERO enquanto a plateia `model` não tiver política.
+  modelo_com_tipo_que_mascara: modeloSensivel.map(
+    a => ({ skill: a.skill, step: a.step, tag: a.tag, tipo: a.tipo })),
+  modelo_tags_nao_declaradas: [...new Set(
+    aoModelo.filter(a => !a.tipo).map(a => a.tag))].sort(),
   omitiria: omitiria.length,
   legitimos_declarados: mudaria.filter(a => a.legitimo).length,
   a_declarar: semDeclarar.map(a => ({

@@ -198,7 +198,7 @@ carrega a informação:
 |---|---|---|
 | `notify` / `menu`, `visibility: "all"` | cliente | `by_role.customer` (hoje: fallback ao `operator`) |
 | `notify` / `menu`, `agents_only` ou array de participantes | operador | `by_role.operator` |
-| `invoke` — argumento de tool | sistema | **cru**, e o gate é o que já existe (`AuditPolicy.data_categories`) |
+| `invoke` — argumento de tool | sistema | **cru**. ⚠️ *"e o gate é o que já existe"* era FALSO — ver §D10 |
 | `reason` — prompt de LLM | ver **D5** | decisão própria |
 
 `visibility` já é resolvido antes do envio, em todo `notify` e `menu`. A derivação não pede campo
@@ -241,6 +241,18 @@ Dobrar `reason` em `by_role.operator` seria escolher a política mais frouxa por
 tabela. Fica com decisão própria e **não entra na primeira fase**: hoje é o caminho mais permissivo
 por omissão, e trocar omissão por decisão errada não é progresso.
 
+> **Medido na F4 (2026-09-04): a população é ZERO, e é isso que sustenta o adiamento.**
+> Seis interpolações `@ctx.*` chegam a prompt, em cinco tags distintas — três são `texto`
+> (`by_role` vazio, aberto por declaração) e duas não estão no mapa
+> (`session.historico_mensagens`, `session.historico_resumo`, que caem no §D4). **Nenhuma
+> carrega tipo que mascare para alguém.**
+>
+> Decidir a D5 agora seria política contra população zero, que é o erro que este
+> repositório já registrou. O que protege o prompt hoje não é uma regra — é o fato de
+> ninguém estar mandando PII para lá, e **esse fato virou gate** (ramo G): ele reprova no
+> instante em que uma tag de tipo que mascara aparecer num `reason`. É o gatilho da fase,
+> não a fase.
+
 ### D6 — a política é do TIPO, e o sítio só escolhe a coluna
 
 O sítio responde *para quem*; **quem decide o quê** é sempre o tipo, no catálogo. Um template não
@@ -260,6 +272,43 @@ proveniência"* (T3 do ADR do `masked` tipado). Carimbar o tipo ao gravar a resp
 
 Fica fora da fase 1 porque é maior e tem decisão própria (o que fazer com valor derivado — uma
 concatenação de dois campos herda o tipo de qual?).
+
+### D11 — a F5 está bloqueada, e o carimbo virou requisito de CORREÇÃO
+
+*(Medido em 2026-09-04.)*
+
+**O número muda, como na CTX-01.** O ADR cita 225, e veio de regex. O censo estrutural — a
+mesma derivação de plateia que o produto usa:
+
+| grandeza | n |
+|---|---|
+| `$.pipeline_state.*` por regex | **228** |
+| em campo que vira texto ou argumento | **142** |
+| que alcançam o **cliente** | **35** (30 chaves distintas) |
+| operador · sistema · modelo | 3 · 74 · 30 |
+
+E das 35, a maioria não é dado do titular: 11 são `roteiro.render.by_node.*` e 5
+`dialog.render.*` — texto de DialogForm já renderizado. O que sobra de PII é um punhado.
+
+**O bloqueio não é tamanho: é que aplicar hoje CORROMPERIA valor.** `pendencia.context.*`
+**já nasce mascarado** — é o `_build_pending_preview` que o escreve, e o próprio skill
+documenta (`skill_limite_entrada_v1.yaml:346`): *"o cartão vem ***1234"*, com o aviso de que
+envolvê-lo produziria `*****4444**`.
+
+Olhando só o valor, `***4444` e `1111222233334444` são indistinguíveis quanto a *"isto já
+passou por uma máscara?"*. Logo:
+
+> **O carimbo de proveniência deixou de ser refino e passou a ser requisito de correção.**
+> Sem ele não existe aplicação segura — só aplicação que às vezes mascara duas vezes.
+
+⚠️ E a tentação óbvia está **proibida pela §D8**: detectar se o valor "parece mascarado"
+(procurar `***`) seria construir um detector onde o arco exige declaração, e a V2b do ADR da
+allowlist fechou exatamente esse defeito.
+
+**A decisão que falta é do dono**, e ela é a que o §D7 já anunciava: um valor DERIVADO
+(concatenação de dois campos, um resumo gerado por LLM) herda o tipo de qual? Enquanto ela
+não for tomada, o carimbo não tem regra para os casos compostos — e são eles a maior parte
+de `roteiro.render.*`. Registrado como **CTX-10**.
 
 ### D8 — não absorve a DETECÇÃO
 
@@ -365,6 +414,33 @@ a permissão vem de a empresa ter decidido informar **aquele** valor **àquele**
 Efeito medido no censo: **3 → 2**. Sobram as duas interpolações de `session.numero_cartao`,
 ambas `→ last_4`, que é o `***4444` que a outra tela já mostra.
 
+### D10 — o `invoke` sai CRU e **não é gateado**; a §D2 afirmava o contrário
+
+*(Medido na F4, 2026-09-04. Corrige uma afirmação da própria §D2.)*
+
+A §D2 dizia que o valor cru num argumento de tool era aceitável porque *"o gate é o que já
+existe (`AuditPolicy.data_categories`)"*. **Esse gate não está em vigor.** Medido no
+repositório inteiro:
+
+| fato | medição |
+|---|---|
+| `data_categories` declarado no schema | ✅ `audit.ts:35` |
+| tools que o declaram | **0** |
+| quem o LÊ | `sdk/src/mcp-interceptor.ts` — e o `CLAUDE.md` mede que ele **nunca é instanciado** |
+| ocorrências em `mcp-server-plughub/src` | **0** |
+
+Ou seja: o caminho `invoke` manda o valor inteiro, e **nenhuma das duas metades da frase
+se sustenta como proteção** — é intencional (o CRM precisa do número), e não é gateado.
+
+**A decisão NÃO muda:** mascarar argumento de tool quebraria o produto, e o `invoke` continua
+cru. O que muda é parar de citar um gate inexistente como se fosse a razão — *comentário que
+promete invariante sem mecanismo* é a família que o `CLAUDE.md` caça, e aqui ela estava dentro
+de um ADR de conformidade.
+
+O buraco em si é maior que este arco (é a borda MCP, e tem ADR próprio:
+[`adr-mcp-interception-single-border`](adr-mcp-interception-single-border.md)). Fica
+registrado como **CTX-09**.
+
 ---
 
 ## 3. Alternativas refutadas
@@ -392,8 +468,8 @@ quebraria os 10 usos legítimos, e um arco que quebra o produto na primeira fase
 | **F1** | o resolvedor de plateia + **modo auditoria**: calcula o que faria e LOGA, sem aplicar | Mesmo desenho da V3 da allowlist. É o que transforma "acho que são 10" em contagem |
 | **F2** | ~~exceção declarada~~ — **sem conteúdo** (D9.1/D9.2). O que a fase exigia virou tipagem por FINALIDADE, feita em 2026-09-04: `valor_informado_ao_cliente` criado e 3 tags retipadas | A população de exceção é zero e o mecanismo é desnecessário. O que restava (o limite mascarado) era declaração errada, não falta de exceção |
 | **F3** ✅ | aplicar em `notify`/`menu` — o caminho de cliente. **Entregue em 2026-09-04**: `filtrarLeituraCtx` SUBSTITUI o valor no `interpolate`, e `auditarLeituraCtx` foi REMOVIDA (duas funções calculando a mesma regra é o defeito deste arco) | Onde estão os defeitos medidos |
-| **F4** | `invoke` (confirmar que o cru é intencional e gateado) e depois `reason` (D5) | `reason` só depois de ter decisão própria |
-| **F5** | `$.pipeline_state.*` via carimbo de proveniência (D7) | Fatia própria |
+| **F4** ✅ | `invoke` e `reason` — **MEDIDA, não construída** (2026-09-04). O `invoke` segue cru e o gate que a §D2 citava **não existe** (§D10). O `reason` tem população **ZERO**, então decidir a §D5 agora seria política contra zero: o fato virou **gate** (ramo G), que é o gatilho da fase | Confirmar era o trabalho, e confirmar produziu duas correções |
+| **F5** | `$.pipeline_state.*` via carimbo de proveniência (D7) — **BLOQUEADA por decisão em aberto** (§D11). Censo entregue: 228 por regex → **142** estruturais → **35** ao cliente, 30 chaves | O carimbo deixou de ser refino e virou requisito de CORREÇÃO |
 
 ---
 
