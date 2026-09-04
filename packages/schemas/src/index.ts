@@ -859,6 +859,17 @@ export type {
   DialogFormatResult,
 } from "./dialog-format"
 
+// ── Leitura de contexto por PLATEIA (ADR adr-context-read-audience-policy) ────
+export {
+  CtxAudienceSchema,
+  EchoPolicySchema,
+  deriveAudience,
+  resolveEchoPolicy,
+  flattenContextMap,
+} from "./ctx-audience"
+
+export type { CtxAudience, EchoPolicy } from "./ctx-audience"
+
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {
   ContextVisibilitySchema,

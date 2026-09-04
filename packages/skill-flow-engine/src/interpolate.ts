@@ -16,6 +16,7 @@
 
 import type { IContextStore } from "./context-types"
 import type { StepContext }   from "./executor"
+import { auditarLeituraCtx, type SitioInterpolacao } from "./ctx-audit"
 
 // ── Regex ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ export async function resolveRef(
   ref:          string,
   ctx:          StepContext,
   contextStore:  IContextStore | undefined,
+  sitio?:       SitioInterpolacao,
 ): Promise<unknown> {
   if (ref.startsWith("@masked.")) {
     return resolveMaskedRef(ref, ctx)
@@ -47,8 +49,11 @@ export async function resolveRef(
     return resolveSegmentRef(ref, ctx, contextStore)
   }
   if (ref.startsWith("@ctx.")) {
-    return resolveCtxRef(ref, ctx, contextStore)
+    return resolveCtxRef(ref, ctx, contextStore, sitio)
   }
+  // `$.pipeline_state.*` NÃO é auditado aqui: o mapa tipa tag de ContextStore,
+  // não chave de pipeline_state. São 225 interpolações e é a F5 (§D7) — auditar
+  // sem tipo produziria 225 linhas de `unknown`, que é ruído, não medição.
   return resolveJsonPathRef(ref, ctx)
 }
 
@@ -73,6 +78,18 @@ export async function interpolate(
   template:     string,
   ctx:          StepContext,
   contextStore?: IContextStore,
+  /**
+   * CTX-02 — de onde esta interpolação parte. É o SÍTIO que decide a plateia
+   * (§D2 do `adr-context-read-audience-policy`), e sem ele a auditoria não tem
+   * o que julgar.
+   *
+   * Opcional de propósito: os chamadores que não o passam continuam
+   * funcionando, e a auditoria simplesmente não roda para eles. Torná-lo
+   * obrigatório agora quebraria 5 call sites por uma fase que ainda só observa
+   * — e um parâmetro obrigatório preenchido às pressas com um valor plausível
+   * é pior que a ausência dele.
+   */
+  sitio?:       SitioInterpolacao,
 ): Promise<string> {
   // Coleta todos os matches e resolve em paralelo
   const matches: Array<{ placeholder: string; ref: string }> = []
@@ -86,7 +103,7 @@ export async function interpolate(
 
   // Resolve em paralelo para eficiência
   const resolved = await Promise.all(
-    matches.map(({ ref }) => resolveRef(ref, ctx, contextStore))
+    matches.map(({ ref }) => resolveRef(ref, ctx, contextStore, sitio))
   )
 
   // Substitui na string
@@ -226,11 +243,18 @@ async function resolveCtxRef(
   ref:          string,
   ctx:          StepContext,
   contextStore:  IContextStore | undefined,
+  sitio?:       SitioInterpolacao,
 ): Promise<unknown> {
   if (!contextStore) return undefined
 
   // "@ctx.caller.cpf" → "caller.cpf"
   const tag = ref.replace(/^@ctx\./, "")
+
+  // CTX-02 — MODO AUDITORIA: calcula o que o filtro faria e loga, sem aplicar.
+  // Deliberadamente NÃO aguardado: auditar é observação, e fazê-la entrar no
+  // caminho crítico de um turno trocaria um problema de conformidade por um de
+  // latência. A função nunca lança.
+  if (sitio) void auditarLeituraCtx(tag, sitio, ctx.tenantId)
 
   // Arc 16: @ctx.journey.* reads from the journey Redis hash
   // The SDK maps getValue("journey:{journeyId}", tag) → {tenant}:ctx:journey:{journeyId}

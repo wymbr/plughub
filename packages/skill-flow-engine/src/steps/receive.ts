@@ -83,7 +83,8 @@ export async function executeReceive(
   // Usa "agents_only" por padrão — nunca chega ao cliente.
   if (step.notify) {
     try {
-      const resolvedMessage    = await interpolate(step.notify.message, ctx, ctx.contextStore)
+      const resolvedMessage    = await interpolate(step.notify.message, ctx, ctx.contextStore,
+        { stepType: "notify", visibility: step.notify.visibility, stepId: step.id })
       const resolvedVisibility = await resolveVisibility(step.notify.visibility ?? "agents_only", ctx, ctx.contextStore)
       await ctx.mcpCall("notification_send", {
         session_id: ctx.sessionId,

@@ -35,10 +35,14 @@ A decisão é fazer o leitor **um só** e ensiná-lo a perguntar duas coisas: *q
 responde) e *para quem vai?* (o **sítio** responde). Sem a segunda pergunta nenhum default serve —
 cru é o de hoje, e mascarado quebra o `invoke` que manda o número ao CRM.
 
-O que a medição acrescentou, e que muda o desenho: **os acertos do filtro não são todos defeitos.**
-Dos 20 pontos que resolvem para tipo com `echo_to_customer: "none"`, metade é `credential` num link
-que o cliente **precisa** receber. Uma regra por TAG reprovaria os 20 e quebraria o survey. É por
-isso que a plateia é derivada do **sítio**, e não uma propriedade da tag.
+O que a medição acrescentou, e que muda o desenho: **quase nenhum dos acertos de um filtro por
+TAG seria defeito.** Um censo por regex encontrou 20 pontos resolvendo para tipo com
+`echo_to_customer: "none"`; o censo ESTRUTURAL — que sabe em que step cada interpolação está —
+encontrou **2**. Os outros 18 não alcançam cliente nenhum: a maioria são argumentos de `invoke`
+(`workflow_resume`), e quatro estão num skill sem `notify`/`menu`.
+
+Uma regra por TAG reprovaria os 20 e quebraria o `workflow_resume`. É por isso que a plateia é
+derivada do **sítio**, e não uma propriedade da tag.
 
 Três coisas que este ADR deliberadamente **não** faz:
 
@@ -90,23 +94,42 @@ confundi-los faria parecer que já havia cobertura.
 
 ### 1.3 Os acertos do filtro NÃO são todos defeitos
 
+> ⚠️ **Esta seção foi CORRIGIDA em 2026-09-04, no mesmo dia, pelo censo estrutural (CTX-01).** A
+> versão anterior dizia que *"10 dos 20 são `credential` num link que o cliente precisa receber"*.
+> Isso era **inferência a partir do TIPO**, não medição do sítio — e o parse estrutural a refutou:
+> aqueles `credential` estão em steps `invoke` (`tool: workflow_resume`, `input.resume_token`),
+> plateia `system`. Não chegam a cliente nenhum. A conclusão do ADR sobrevive e sai mais forte; o
+> que estava errado era a evidência que a sustentava. *É o próprio erro que o ADR nomeia — medir a
+> tag em vez do sítio — cometido ao escrever o ADR.*
+
+**Censo por REGEX** (o primeiro, e o que mede a proposição errada):
+
 | população | n |
 |---|---|
 | interpolações `@ctx.*` nas skills | **167** |
 | interpolações `$.pipeline_state.*` | **225** |
 | `@ctx.*` que resolvem para tipo com `echo_to_customer: "none"` | **20** |
 
-Dos 20:
+**Censo ESTRUTURAL** (`q_ctx_read_audience_census.ts` — sabe em que step cada uma está):
 
-- **10 são `credential`** (`resume_token` / `delegate_resume_token`) — e um token dentro de um link
-  de survey ou OTP vai ao cliente **por desenho**;
-- **4 estão em `skill_limite_processo_v1`**, que tem **zero** steps `notify`/`menu`: é workflow, o
-  perfil o proíbe de falar com o cliente. Não há eco a filtrar;
-- **os restantes**, entre eles os dois de `skill_limite_retorno_v1` (`credit_card`), são os defeitos.
+| grandeza | n |
+|---|---|
+| interpolações `@ctx.*` em campo que vira texto ou argumento | **88** |
+| que alcançam o **cliente** | **7** |
+| operador · sistema · modelo | 3 · 72 · 6 |
+| **que seriam BLOQUEADAS** (`echo_to_customer: none`) | **2** |
+| tags fora do mapa (contadas, não decididas — §D4) | 6 nomes |
 
-**É esta linha que decide o desenho.** Um filtro que julgasse pela TAG reprovaria os 20 — e o modo
-de falha seria *"o cliente recebeu a mensagem sem o link"*, que ninguém liga a uma política de
-mascaramento.
+As duas bloqueadas são `skill_limite_retorno_v1` / `notificar_aprovado` e `notificar_recusado`,
+ambas `session.numero_cartao` → `credit_card`. **São exatamente as duas que a tela do dono exibiu.**
+
+**É esta diferença — 20 contra 2 — que decide o desenho.** Um filtro por TAG reprovaria os 20, e o
+modo de falha seria o `workflow_resume` parando de receber o token: *"o processo travou"*, que
+ninguém liga a uma política de mascaramento.
+
+**Consequência de método, e ela vale mais que o número:** a regex responde *"a tag APARECE no
+arquivo?"*; a pergunta era *"a tag CHEGA a alguém?"*. As duas se parecem o bastante para uma passar
+por outra, e a diferença aqui foi de uma ordem de grandeza.
 
 ---
 
@@ -211,7 +234,7 @@ foi persistida crua no stream. **Por que a detecção não mascarou aquela mensa
 
 | alternativa | por que não |
 |---|---|
-| **Filtrar por TAG** (a tag sensível nunca sai) | Reprovaria os 20, e 10 são legítimos (§1.3). Quebraria survey link e OTP, com o sintoma *"a mensagem chegou sem o link"* — que ninguém liga a mascaramento |
+| **Filtrar por TAG** (a tag sensível nunca sai) | Reprovaria 20 pontos onde o censo estrutural acha **2** (§1.3). Os 18 restantes são majoritariamente argumento de `invoke`, então o sintoma seria o `workflow_resume` parando — *"o processo travou"*, que ninguém liga a mascaramento |
 | **Segunda porta (`getMasked()` ao lado do `get()`)** | Duas portas, e a destrancada é a que vale. É o achado do `/sessions/{id}/stream`, verbatim |
 | **Declarar a plateia em cada interpolação** | 392 declarações e 392 chances de esquecer; e a que faltar degrada para o permissivo |
 | **Filtrar no adapter de canal** | Tarde demais: quando o texto chega lá, o valor **já está** no `pipeline_state` e no stream canônico — medido, 2 streams com o número cru. Filtrar na borda protege a tela e não o registro |

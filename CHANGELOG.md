@@ -1,5 +1,111 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — CTX-01/CTX-02: o censo que refutou o proprio ADR, e a auditoria que ainda nao aplica
+
+Primeiras duas fases do
+[`adr-context-read-audience-policy`](docs/adr/adr-context-read-audience-policy.md). **Nada e
+filtrado ainda** — as duas fases medem.
+
+### A regra mora numa casa so, e isso foi decidido antes de escrever qualquer censo
+
+`deriveAudience` e `resolveEchoPolicy` sao funcoes PURAS em `@plughub/schemas`, importadas
+pelos DOIS consumidores: o censo estatico e o runtime. A alternativa obvia — censo em
+Python, runtime em TS — teria posto a mesma regra em duas linguagens, e a copia estatica
+diria que esta tudo bem enquanto a de runtime deixa passar. Seria o defeito do arco
+cometido no instrumento do arco.
+
+### O censo refutou uma afirmacao do ADR escrito HORAS antes
+
+O ADR dizia: *"dos 20 pontos sensiveis, 10 sao `credential` num link que o cliente precisa
+receber"*. Era **inferencia a partir do TIPO**, feita sobre um censo por regex.
+
+O censo ESTRUTURAL — que parseia o YAML e sabe em que step cada interpolacao esta —
+mediu outra coisa:
+
+| grandeza | regex | estrutural |
+|---|---|---|
+| pontos sensiveis | **20** | **2** |
+
+Os `credential` estao em steps `invoke` (`tool: workflow_resume`, `input.resume_token`),
+plateia `system`. **Nao chegam a cliente nenhum.** As 2 que sobram sao
+`skill_limite_retorno_v1` / `notificar_aprovado` e `notificar_recusado` — exatamente as
+duas que a tela do dono exibiu.
+
+A conclusao do ADR sobrevive e sai mais forte (uma regra por TAG continuaria errada, agora
+por quebrar o `workflow_resume`), mas a evidencia estava errada e o ADR foi **corrigido no
+lugar**, com o motivo. *E o proprio erro que ele nomeia — medir a tag em vez do sitio —
+cometido ao escreve-lo.*
+
+**Consequencia de metodo:** a regex responde *"a tag APARECE no arquivo?"*; a pergunta era
+*"a tag CHEGA a alguem?"*. As duas se parecem o bastante para uma passar por outra, e aqui
+a diferenca foi de uma ordem de grandeza.
+
+Retrato completo: **88** interpolacoes `@ctx.*` em campo que vira texto ou argumento — 7
+alcancam o cliente, 3 o operador, 72 o sistema, 6 o modelo. Bloqueariam: **2**. Tags fora
+do mapa: **6 nomes**, contadas e nao decididas (§D4 — evidencia para a V4 da allowlist,
+nunca autorizacao para ela).
+
+### A tabela de excecoes nasceu VAZIA, e isso e resultado
+
+Ela nasceu com seis linhas escritas a partir do censo por regex. Todas viraram **orfas** no
+censo estrutural, e o proprio ramo C do gate as acusou. Foram removidas com o motivo
+escrito onde a tabela esta.
+
+### CTX-02 — a auditoria roda no runtime, e o runtime ve o que o disco nao mostra
+
+O censo le YAML do disco; **o bridge executa o snapshot do slot**. As duas divergem por
+construcao (seed-if-absent), e foi essa divergencia que deixou o wrap-up gravando nada por
+tres dias. O runtime tambem ve `visibility` que chega como ref.
+
+O `interpolate` ganhou um parametro **`sitio`** (opcional de proposito: torna-lo
+obrigatorio quebraria 5 call sites por uma fase que so observa, e parametro obrigatorio
+preenchido as pressas com valor plausivel e pior que a ausencia dele). Os tres sitios de
+plateia — `notify`, `menu`, `receive.notify` — o declaram.
+
+A auditoria **nao e aguardada**: observar nao pode entrar no caminho critico de um turno.
+E ela **nunca lanca** — um erro de auditoria derrubando um atendimento trocaria um problema
+de conformidade por um de disponibilidade.
+
+### Faltava `CONFIG_API_URL` no engine — a primeira das tres camadas do CLAUDE.md
+
+O `skill-flow-service` nao tinha a env. Sem ela a auditoria simplesmente nao roda, e o log
+vazio dela seria indistinguivel de um parque limpo. O aviso de degradacao **NOMEIA o que
+deixa de valer** em vez de dizer *"using default values"* — que e a frase que, segundo o
+proprio `CLAUDE.md`, ninguem leu por meses no bridge.
+
+### Duas provas que sairam MUDAS, e o que cada silencio significava
+
+**(1)** Rodar o `smoke_limite_tres_acessos` nao produziu linha de auditoria nenhuma. A
+leitura obvia seria *"nao funciona"*. Medido: aquele smoke so exercita
+`skill_limite_processo_v1`, que tem **zero** steps `notify`/`menu`. O silencio era
+CONSISTENTE com o censo — e nao evidencia de nada. Os dois defeitos vivos estao num flow
+que so dispara depois de uma aprovacao chegar ao cliente.
+
+A garantia re-executavel virou teste: 7 casos exercitando `interpolate` → `resolveCtxRef` →
+auditoria, com **controle positivo** (a mesma tag indo ao SISTEMA nao avisa; sem esse caso
+o teste passaria por uma auditoria que avisa sempre).
+
+**(2)** A mutacao M1 da bateria deu VERDE, e o defeito era do gate: ele fazia `grep -c` no
+compose INTEIRO, e o `mcp-server-plughub` declara a mesma env — a contagem nunca chegava a
+zero. O ramo media *"alguem declara"* quando a pergunta era *"o engine declara"*. Hoje le o
+bloco do servico.
+
+**(3)** E um vermelho FALSO, na mesma familia: o ramo D media alcance com `wget` e reprovava
+com a env certa e o servico no ar. Hoje mede com o `fetch` do proprio Node — o mesmo cliente
+que o engine usa, que e mais fiel de qualquer forma. *Um gate que reprova por si mesmo
+ensina a mesma desconfianca que um que aprova por si mesmo.*
+
+### Gates
+
+`infra/test/probe_ctx_read_audience.sh` — cinco ramos. O que carrega e o **D**: ele separa
+*"a auditoria nao achou nada"* de *"a auditoria nao rodou"*, e verifica as tres coisas que
+podem falhar em separado (a env no COMPOSE, no CONTAINER, e o alcance real).
+
+Bateria `infra/test/mut_ctx_read_audience.sh`, 3 mutacoes com ASSERT de aplicacao: compose
+sem a env → **D**; excecao declarada orfa → **C**; censo sem amostra → **A**.
+
+Suites: schemas **231**, skill-flow-engine **188**.
+
 ## 2026-09-04 — F4 do catalogo de formatos: as duas superficies passam a guiar E julgar
 
 Quarta fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).

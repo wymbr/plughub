@@ -194,7 +194,8 @@ export async function executeMenu(
   // 1. Enviar prompt ao cliente via notification_send
   //    Interpola {{$.pipeline_state.*}} antes de enviar — permite que o prompt
   //    use valores calculados em steps anteriores (ex: pergunta gerada por reason).
-  const resolvedPrompt = await interpolate(step.prompt, ctx, ctx.contextStore)
+  const resolvedPrompt = await interpolate(step.prompt, ctx, ctx.contextStore,
+    { stepType: "menu", visibility: step.visibility, stepId: step.id })
   // §17.4 — interaction/visibility may be a runtime ref; resolve before use.
   const rawInteraction = await resolveDynamicValue(step.interaction, ctx, ctx.contextStore)
   const resolvedInteraction = (typeof rawInteraction === "string" && rawInteraction.length > 0)

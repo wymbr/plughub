@@ -35,7 +35,8 @@ export async function executeNotify(
     }
   }
 
-  const message = await interpolate(step.message, ctx, ctx.contextStore)
+  const message = await interpolate(step.message, ctx, ctx.contextStore,
+    { stepType: "notify", visibility: step.visibility, stepId: step.id })
   const resolvedVisibility = await resolveVisibility(step.visibility ?? "all", ctx, ctx.contextStore)
 
   // ── Fase 1: gravar sentinel "dispatched" antes de enviar ─────────────────

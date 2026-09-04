@@ -192,6 +192,13 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | id | tarefa | data | ancora no `CHANGELOG.md` |
 |---|---|---|---|
 
+## `docs/adr/adr-context-read-audience-policy.md` — leitura de contexto por plateia
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| CTX-01 | **O censo estrutural REFUTOU o ADR escrito horas antes — 20 viraram 2.** O ADR dizia que 10 dos 20 pontos sensiveis eram `credential` em link legitimo; era inferencia a partir do TIPO, sobre um censo por regex. O parse estrutural (que sabe em que step cada interpolacao esta) mostrou que aqueles `credential` vivem em steps `invoke` — plateia `system`, nao chegam a cliente nenhum. Sobram **2**, e sao exatamente as duas da tela do dono. A regex responde *"a tag APARECE no arquivo?"*; a pergunta era *"a tag CHEGA a alguem?"* — uma ordem de grandeza de diferenca. O ADR foi corrigido no lugar, com o motivo. A tabela de excecoes nasceu VAZIA (as seis linhas viraram orfas e o proprio ramo C as acusou). Retrato: 88 interpolacoes, 7 ao cliente, 2 bloqueariam, 6 tags fora do mapa contadas e nao decididas | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 CTX-01/CTX-02 |
+| CTX-02 | **A auditoria de plateia roda no runtime, e ainda nao aplica nada.** `interpolate` ganhou o parametro `sitio` (opcional de proposito) e os tres sitios de plateia o declaram; a auditoria nao e aguardada (observar nao entra no caminho critico) e nunca lanca (auditar nao pode derrubar atendimento). Faltava `CONFIG_API_URL` no `skill-flow-service` — sem ela nao roda, e o log vazio seria indistinguivel de parque limpo; o aviso NOMEIA o que deixa de valer em vez do *"using default values"* que ninguem leu no bridge. ⚠️ **Tres provas saíram enganosas e as tres viraram conserto:** o smoke saiu mudo (consistente — aquele flow nao tem `notify`), a mutacao M1 deu verde (o gate fazia `grep` no compose INTEIRO e outro servico declara a mesma env), e o ramo D deu vermelho FALSO (media alcance com `wget`; hoje usa o `fetch` do proprio engine). Garantia re-executavel: 7 testes com controle positivo | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 CTX-01/CTX-02 |
+
 ## `docs/adr/adr-dialog-input-format-catalog.md` — catalogo de formatos de entrada
 
 | id | tarefa | data | âncora no `CHANGELOG.md` |

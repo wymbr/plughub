@@ -845,6 +845,12 @@ services:
       REDIS_URL: redis://redis:6379
       MCP_SERVER_URL: http://mcp-server-plughub:3100
       MCP_AUTH_URL:   http://mcp-server-auth:3150
+      # CTX-02 — sem esta env a AUDITORIA DE PLATEIA nao roda, e o censo de
+      # runtime sai VAZIO (que nao e o mesmo que zero achados). E a primeira das
+      # tres camadas que o CLAUDE.md documenta para o bridge: env ausente, porta
+      # errada no default, e GET sem tenant_id. As tres degradam para "usa o
+      # default", e consertar a de cima nao move o numero.
+      CONFIG_API_URL: http://config-api:3600
       AI_GATEWAY_URL: http://ai-gateway:3200
       CALENDAR_API_URL: http://calendar-api:3700
       CHANNEL_GATEWAY_URL: http://channel-gateway:8010
