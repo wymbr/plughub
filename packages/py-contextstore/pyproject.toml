@@ -2,10 +2,27 @@
 requires      = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# ── Por que o escopo é "gêmeos puros" e não "ContextStore" (2026-09-04) ───────
+# O pacote nasceu com um gêmeo só e foi batizado pelo conteúdo. Ao entrar o
+# segundo (`dialog_formats.py`, catálogo de formatos de entrada), havia três
+# saídas: um pacote novo por gêmeo, hospedar aqui com nome mentindo, ou renomear
+# a INTENÇÃO. A terceira é esta.
+#
+# O que define este pacote não é o domínio, é o CONTRATO: dado/função pura, zero
+# dependências, comparável linha a linha com a metade TS por um gate. Os dois
+# consumidores do catálogo de formatos (config-api no seed, channel-gateway na
+# página de survey) já dependiam daqui, então um pacote novo custaria duas
+# fiações para não mudar nada — e hospedar sem renomear deixaria o nome afirmando
+# um escopo que o conteúdo não tem, que é a família de defeito que este
+# repositório persegue.
+#
+# Se um terceiro gêmeo chegar de um domínio distante, a conversa se reabre —
+# separar um módulo é barato; desfazer um nome que virou contrato, não.
+
 [project]
 name            = "plughub-contextstore"
 version         = "0.1.0"
-description     = "Gêmeo Python das funções puras do ContextStore (carimbo do atributo + rota de retenção). Sem I/O, por exigência do gate de paridade."
+description     = "Gêmeos Python de dados e funções PURAS compartilhados entre TS e Python: ContextStore (carimbo do atributo + rota de retenção) e catálogo de formatos do DialogForm. Sem I/O, por exigência dos gates de paridade."
 requires-python = ">=3.11"
 # Sem dependências, e isso é requisito e não sorte: o gate de paridade
 # (infra/test/probe_context_stamp_parity.sh) roda as duas metades lado a lado, e uma

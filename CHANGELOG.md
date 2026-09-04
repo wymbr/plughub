@@ -1,5 +1,110 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — F1 do catalogo de formatos: a tabela existe, e ela tem UMA casa
+
+Primeira fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).
+Nada de comportamento mudou — nenhuma superficie le o catalogo ainda. O que existe
+agora e a tabela, o interpretador, o oraculo e o gate.
+
+### O catalogo
+
+`packages/schemas/src/dialog-format.ts` — 13 formatos, e a lista foi escolhida por
+disciplina e nao por imaginacao: **so entra o que tem razao de existir hoje**, pela
+mesma regra que expulsou `iban`/`passport` do catalogo de mascaramento. As duas
+fontes sao o pedido de produto (dominio, data, hora, comprimento) e a contraparte
+que ja existe em `masking.types`. `cep` e `cnpj` ficaram de fora: acrescentar e uma
+linha, remover depois de virar contrato nao e.
+
+Cada entrada carrega as duas metades que antes nao tinham casa — **afordancia**
+(mascara, `inputmode`, `maxlength`, placeholder) e **veredicto**.
+
+### O veredicto tem DOIS niveis, e o catalogo prova isso por construcao
+
+`shape` (regex **ancorada**, exigida pelo oraculo) e `semantic` (conjunto FECHADO
+de 5 checagens). Cada entrada declara os proprios **vetores de conformidade**, e o
+par que aparece em cinco entradas e a demonstracao:
+
+```
+date_br      01/01/2026 passa · 31/02/2026 casa a FORMA e falha a semantica
+cpf          529.982.247-25   · 000.000.000-00 casa a FORMA e falha o digito
+credit_card  4539…6467        · 4539…6468 casa a FORMA e falha o Luhn
+```
+
+Os vetores vivem na ENTRADA e nao no teste, e isso e mecanismo: um teste que carrega
+os proprios vetores testa a si mesmo. Como sao dado, o gate das tres superficies (F5)
+vai comparar as tres implementacoes contra a MESMA tabela.
+
+### Uma casa, e o limite da afirmacao esta escrito
+
+O `shape` e dado e atravessa qualquer runtime; a funcao `semantic` e **codigo**, e
+cada runtime precisa da sua. Isso e dito no proprio arquivo em vez de deixado para
+alguem descobrir: o que impede a triplicacao do `evaluateAskWhen` de se repetir e o
+conjunto ser fechado (5 nomes) e cada entrada carregar seus vetores — um runtime que
+implemente `cpf_checkdigit` errado REPROVA, em vez de divergir calado. A politica
+(qual formato usa qual checagem) segue sendo dado; so a primitiva e codigo.
+
+### A heranca da mascara, que era o risco central
+
+Entrada com `from_masked_type` **nao declara mascara propria** — ela vem de
+`masking.types.<id>.formato.display`, resolvida por `resolveFormatMask`. O oraculo
+**reprova** quem declarar as duas. Nao e DRY: e o que torna provavel por construcao
+que a mascara com que o cliente DIGITA o CPF seja a mesma com que aquele CPF e
+REDIGIDO no historico.
+
+⚠️ Os ids nao coincidem — o tipo mascarado e `email_addr` e o formato e `email`;
+`phone` × `phone_br`. Por isso o vinculo e campo declarado e nao igualdade de nome.
+
+### Formato desconhecido RECUSA
+
+Escolha oposta a do `validateFormat` que este catalogo substitui, onde regex invalida
+caia num `catch` e liberava tudo. Nome que o catalogo nao conhece significa forma
+publicada contra catalogo que mudou, e nesse estado *"aceita qualquer coisa"* e o pior
+desfecho possivel para um campo que alguem restringiu de proposito.
+
+### O gemeo Python, e por que ele mora onde mora
+
+`plughub_contextstore/dialog_formats.py` e **GERADO** de TS
+(`infra/scripts/gen_dialog_formats_py.ts`), como o `default_map.py`. Os dois
+consumidores Python (seed do config-api hoje, pagina de survey na F4) ja dependiam
+do pacote.
+
+O pacote mudou de escopo e isso foi **declarado, nao deduzido**: ele nao e definido
+pelo dominio (ContextStore) e sim pelo CONTRATO — dado puro, zero dependencias,
+comparavel linha a linha com a metade TS por gate. Pacote novo custaria duas fiacoes
+para nao mudar nada; hospedar sem renomear deixaria o nome afirmando escopo que o
+conteudo nao tem.
+
+### ABAC: o namespace `dialog` aponta para `dialog_forms`, nao para o catch-all
+
+Formato e conteudo de dialogo, nao politica de compliance: quem autora a forma escolhe
+o formato do campo. Ele REFERENCIA `masking.types` mas nao pode mudar o que e mascarado
+nem a classe LGPD — essa segue atras de `config.masking`. Sem o override o namespace
+cairia em `platform`, que e grant de admin, e o autor de forma nao conseguiria editar o
+formato que a propria forma usa. Mesma forma do split `masking.context_map`.
+
+### Gates
+
+`infra/test/probe_dialog_formats_parity.sh` — 5 ramos, nenhum passando por ausencia:
+**A** regenerar da TS da arquivo identico · **B** testemunha de presenca (13 formatos) ·
+**C** todo `from_masked_type` resolve contra o `masking.types` **VIVO** · **D** o
+config-api serve os mesmos ids · **E** o oraculo da TS aprova (24 testes).
+
+**C e o ramo que o unitario nao cobre**: la o catalogo de mascaramento e o default
+embutido; aqui e o que o tenant realmente tem. Tenant que renomeie um tipo quebra a
+heranca, e o unitario ficaria verde.
+
+Falseado por `infra/test/mut_dialog_formats.sh` — os 4 ramos reprovaveis reprovam:
+
+| mutacao | ramo |
+|---|---|
+| M1 alguem edita o gerado a mao | **A** |
+| M2 `from_masked_type` pendurado | **C** (e **E** junto — populacoes diferentes) |
+| M3 `shape` sem ancora (finder disfarcado) | **E** |
+| M4 catalogo esvaziado | **B** |
+
+Medicao lateral que o ramo C DISSE em vez de esconder: `email -> email_addr` herda
+mascara nenhuma, porque aquele tipo nao tem `display`. Correto, e agora visivel.
+
 ## 2026-09-04 — CNS-20/MEN-03: a assercao que passava por ausencia, e o log que apontava para casa vazia
 
 ### CNS-20 (a) — a 7b nao tinha ANTES

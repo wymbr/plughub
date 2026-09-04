@@ -56,6 +56,7 @@ import logging
 import asyncpg
 
 from plughub_contextstore.default_map import DEFAULT_CONTEXT_MAP
+from plughub_contextstore.dialog_formats import DIALOG_FORMAT_CATALOG
 import redis.asyncio as aioredis
 
 from .cache import ConfigCache
@@ -798,6 +799,31 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Mapa do ContextStore (escopo.dominio.campo -> tipo + aliases legados). "
         "Allowlist da V3; em modo auditoria NAO esconde nada, apenas conta "
         "alias x canonica x nao-declarada. Gerado de @plughub/schemas."
+    ),
+
+    # ── dialog.formats — CATÁLOGO DE FORMATOS DE ENTRADA (F1 do ADR do catálogo) ──
+    # Espelho GERADO de DEFAULT_DIALOG_FORMAT_CATALOG em @plughub/schemas/dialog-format.ts
+    # (via infra/scripts/gen_dialog_formats_py.ts; divergência reprovada por
+    # infra/test/probe_dialog_formats_parity.sh).
+    #
+    # `validation.format` nomeia uma entrada daqui. Cada entrada carrega AFORDÂNCIA
+    # (máscara de digitação, inputmode, maxlength, placeholder) e VEREDICTO em DOIS
+    # níveis — `shape` (regex ancorada) e `semantic` (checagem de conjunto fechado),
+    # porque `^\d{2}/\d{2}/\d{4}$` aceita `31/02/2026`.
+    #
+    # ⚠️ Entrada com `from_masked_type` NÃO declara máscara própria: ela é HERDADA de
+    # `masking.types.<id>.formato.display`. Repetir a string faria a máscara com que o
+    # cliente DIGITA divergir da máscara com que o dado é REDIGIDO no histórico, e a
+    # divergência seria muda.
+    #
+    # Fonte de verdade é ESTE store, não o arquivo — editar o gerado depois de a base
+    # estar semeada é NO-OP (seed-if-absent).
+    (
+        "dialog", "formats",
+        DIALOG_FORMAT_CATALOG,
+        "Catalogo de formatos de entrada do DialogForm (afordancia + veredicto de "
+        "dois niveis). Nomeado por validation.format. Entradas de PII herdam a "
+        "mascara de masking.types via from_masked_type. Gerado de @plughub/schemas."
     ),
 
     # ── pricing ───────────────────────────────────────────────────────────────

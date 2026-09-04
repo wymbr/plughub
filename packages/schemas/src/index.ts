@@ -830,6 +830,35 @@ export type {
   DialogForm,
 } from "./dialog"
 
+// ── DialogForm — catálogo de FORMATOS de entrada (ADR adr-dialog-input-format-catalog) ──
+export {
+  DialogInputModeSchema,
+  DialogFormatAffordanceSchema,
+  DialogSemanticCheckSchema,
+  DialogFormatVerdictSchema,
+  DialogFormatVectorsSchema,
+  DialogFormatEntrySchema,
+  DialogFormatCatalogSchema,
+  DEFAULT_DIALOG_FORMAT_CATALOG,
+  indexDialogFormats,
+  validateDialogFormat,
+  resolveFormatMask,
+  formatForMaskedType,
+  verifyDialogFormatCatalog,
+} from "./dialog-format"
+
+export type {
+  DialogInputMode,
+  DialogFormatAffordance,
+  DialogSemanticCheck,
+  DialogFormatVerdict,
+  DialogFormatVectors,
+  DialogFormatEntry,
+  DialogFormatCatalog,
+  DialogFormatRejection,
+  DialogFormatResult,
+} from "./dialog-format"
+
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {
   ContextVisibilitySchema,

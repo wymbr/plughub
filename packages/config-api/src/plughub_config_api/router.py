@@ -70,6 +70,14 @@ _NS_FIELD_OVERRIDES = {
     # menu×backend do Channels (menu em `platform`, backend em `channels`) é o defeito
     # que este passo fecha, e repeti-lo aqui seria criá-lo de novo.
     "dashboards":   "dashboards",
+    # O catálogo de FORMATOS é conteúdo de diálogo, não política de compliance:
+    # quem autora a forma escolhe o formato do campo. Ele REFERENCIA `masking.types`
+    # (herda a máscara) mas não pode mudar o que é mascarado nem a classe LGPD —
+    # essa continua atrás de `config.masking`. Sem este override o namespace cairia
+    # no catch-all `platform`, que é grant de admin, e o autor de forma (que já tem
+    # `config.dialog_forms` para publicar a forma) não conseguiria editar o formato
+    # que a própria forma usa.
+    "dialog":       "dialog_forms",
 }
 
 

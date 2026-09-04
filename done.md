@@ -192,6 +192,12 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | id | tarefa | data | ancora no `CHANGELOG.md` |
 |---|---|---|---|
 
+## `docs/adr/adr-dialog-input-format-catalog.md` — catalogo de formatos de entrada
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| FMT-02 | **F1 — o catalogo `dialog.formats` existe, com uma casa so.** 13 formatos em `@plughub/schemas/dialog-format.ts`, escolhidos por disciplina (so o que tem razao de existir hoje — `cep`/`cnpj` ficaram de fora). Cada entrada carrega AFORDANCIA e VEREDICTO de dois niveis, com `shape` ancorado exigido pelo oraculo e `semantic` de conjunto FECHADO. Entrada com `from_masked_type` **nao declara mascara propria**: herda de `masking.types` e o oraculo reprova quem declarar as duas — e o que torna provavel por construcao que a mascara de DIGITAR e a de REDIGIR sejam a mesma string. Formato desconhecido **RECUSA** (oposto do `catch` que liberava tudo). Gemeo Python GERADO, e o pacote que o hospeda teve o escopo **declarado** em vez de deduzido. Namespace ABAC aponta para `dialog_forms`, nao para o catch-all `platform`. Gate de 5 ramos com os 4 reprovaveis falseados por mutacao | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 F1 do catalogo de formatos |
+
 ## `docs/adr/adr-dialog-tree-options.md` — opcoes em ARVORE no DialogForm
 
 | id | tarefa | data | âncora no `CHANGELOG.md` |
