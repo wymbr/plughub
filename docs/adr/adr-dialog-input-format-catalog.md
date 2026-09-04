@@ -245,6 +245,49 @@ Consequência que precisa ser dita: hoje o Console e a página web não têm ver
 da F4 continuarão sem ele até a F3 alcançá-las. O plano é explícito sobre em que fase cada
 superfície ganha o quê (§4).
 
+### D8 — `masked: "<tipo>"` IMPLICA o formato; o campo nomeia o tipo UMA vez
+
+`MaskedDeclarationSchema` é `false | string`, então **a referência a um tipo de mascaramento já
+existe** e já é usada — medido em 2026-09-04: uma declaração tipada viva
+(`dialog_limite_solicitacao`, campo `cvv` = `card_cvv`), zero booleanas.
+
+Mas o editor emite **só** o booleano (`DialogFormsPage.tsx:771` —
+`masked: e.target.checked || undefined`), e `masked: true` significa `opaque`, o tipo *"mascarado
+sem tipo"*. **O ADR que aboliu a declaração anônima deixou a única superfície de autoria emitindo
+exatamente a anônima**, e por isso a única declaração tipada do parque veio de um JSON semeado à
+mão, não da tela. Afordância ausente não é neutra: ela escolhe o default.
+
+Regra de campo, para o autor não declarar duas vezes:
+
+| declarado | formato vale |
+|---|---|
+| `masked: "cpf"`, sem `format` | **derivado** do formato cujo `from_masked_type == "cpf"` |
+| `format: "date_br"`, sem `masked` | o declarado (campo não mascarado) |
+| `masked: "credential"` (sem contraparte de formato) | nenhum — mascarar não implica formatar |
+| ambos, **concordando** | redundante, aceito, com aviso no publish |
+| ambos, **discordando** | **erro no publish**, nomeando os dois |
+
+A última linha é a que importa. `masked: "cpf", format: "date_br"` é absurdo e o schema de hoje o
+aceitaria; escolher um vencedor em silêncio é como se paga a diferença depois. Recusa alto, no
+publish, onde há autor para ler.
+
+**Invariante do catálogo que sustenta a derivação:** **no máximo UM formato por tipo de
+mascaramento**. Sem isso a busca reversa (`masked: "cpf"` → qual formato?) é ambígua, e ambiguidade
+resolvida por ordem de iteração é defeito que só aparece quando a tabela cresce. Gate na F5.
+
+⚠️ **Os ids NÃO coincidem sempre** — o tipo de mascaramento é `email_addr` e o formato natural é
+`email`. É por isso que o vínculo é o campo explícito `from_masked_type` e não a igualdade de nome:
+igualdade de nome é convenção, e convenção quebra sem ficar vermelha.
+
+⚠️ **Mascarar e formatar são eixos ORTOGONAIS, e a sobreposição é parcial nos dois sentidos.**
+Medido: `cpf`/`credit_card`/`phone`/`card_expiry` são os dois; `date_br`/`digits`/`integer`/`cep`
+só formatam; `credential`/`opaque`/`card_cvv` só mascaram. Uma tabela só obrigaria `date_br` a
+inventar classe LGPD e bloco `mascara` — é a mesma razão da D3, vista do outro lado.
+
+**Consequência de editor, que vira tarefa própria:** o checkbox de `masked` passa a ser **seletor de
+tipo**, com `opaque` como opção NOMEADA em vez de resultado silencioso do "marcar". Enquanto for
+checkbox, a D8 não tem como ser exercida por quem autora forma na tela — que é todo mundo.
+
 ---
 
 ## 3. Alternativas refutadas
@@ -252,6 +295,7 @@ superfície ganha o quê (§4).
 | alternativa | por que não |
 |---|---|
 | **Regex crua como declaração do tenant** *(a ideia original)* | Não produz afordância (teclado, máscara, `maxlength`), não produz mensagem localizada, não alcança validade semântica (§D4), falha aberta com typo (§1.2c), e é código de terceiro no event loop (§1.2d). Além disso: **0 adoção em dois meses de disponibilidade** |
+| **Um catálogo só (fundir formato e mascaramento)** | A sobreposição é PARCIAL nos dois sentidos (§D8): `date_br` teria de inventar classe LGPD, `credential` teria de inventar máscara de digitação. Dois catálogos, um vínculo declarado |
 | **Dobrar formatos dentro de `masking.types`** | Contêiner largo para fato estreito — `date_br` teria de inventar classe LGPD e bloco `mascara` |
 | **Catálogo novo, autossuficiente, com `cpf` repetido** | Segunda casa para a mesma máscara; divergem, e a divergência é muda (§1.4) |
 | **Validar só no servidor** | Mata a afordância, que é metade do que foi pedido |
@@ -289,6 +333,8 @@ que preservar"* darem o mesmo verde.
 | `probe_dialog_format_verdict.sh` | `31/02/2026` recusado por `date_br`; `000.000.000-00` recusado por `cpf` | data válida aceita — senão o gate passa por recusar tudo |
 | `probe_dialog_validation_applies.sh` | validação vale **sem** `retry` (D5) | forma sem `validation` ⇒ INCONCLUSIVO, nunca verde |
 | `probe_dialog_field_validation_travels.sh` | `fields[].validation` sobrevive ao `form_get` (D6) | campo sem validation round-trip limpo |
+| `probe_dialog_masked_format_link.sh` | no máximo **um** formato por `from_masked_type`; `masked: "cpf"` sem `format` deriva o formato do cpf (D8) | tipo mascarado SEM contraparte (`credential`) ⇒ sem formato, e isso é um ramo verde — não uma falha |
+| `probe_dialog_declaration_conflict.sh` | `masked: "cpf"` + `format: "date_br"` é RECUSADO no publish, nomeando os dois | par concordante publica — senão o gate passa por recusar tudo |
 | `probe_dialog_format_surfaces.sh` | as três superfícies dão o **mesmo** veredicto para a mesma entrada | uma superfície divergindo ⇒ REPROVA nomeando qual |
 
 O último é o que importa mais: ele é a única coisa que impede a D2 de virar, com o tempo, o
