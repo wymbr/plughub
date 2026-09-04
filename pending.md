@@ -330,6 +330,23 @@ entender `format` abriria janela sem validacao nenhuma.
 | FMT-06 | **F5 — os cinco gates, cada um com controle positivo.** O que carrega o arco e `probe_dialog_format_surfaces.sh`: as tres superfícies tem de dar o **mesmo** veredicto para a mesma entrada, e ele e a unica coisa que impede a D2 de virar o `askWhen` de novo com o tempo. Os outros quatro: catalogo resolve (`from_masked_type` inexistente ⇒ reprova), veredicto semantico (`31/02/2026` e `000.000.000-00` recusados, **com data valida aceita ao lado** — senao passa por recusar tudo), validacao vale sem `retry`, e `fields[].validation` sobrevive ao round-trip | `aberto` | ADR §5 |
 | FMT-07 | **`masking.types` declara `display: "R$ #.##0,00"` para `address`, `health` e `financial`.** Endereco nao se exibe como moeda — e copy-paste, encontrado pelo censo da FMT-01 e deixado de fora do ADR de proposito: mexe em politica de mascaramento, que tem dono proprio. Efeito hoje e cosmetico (os tres nao tem `detect_pattern`, entao nao ha caminho de deteccao que use a mascara), mas a FMT-02 passa a **ler** esse bloco via `from_masked_type`, e um valor errado ali deixa de ser cosmetico | `aberto` | ADR §D3 (nota), `config-api/seed.py:554` |
 
+## `docs/adr/adr-context-read-audience-policy.md` — leitura de contexto por plateia
+
+ADR **proposto** em 2026-09-04, disparado por um teste do dono: o mesmo cartao apareceu `***4444`
+numa tela e cru na outra. Censo do mesmo dia: **167** interpolacoes `@ctx.*`, **225**
+`$.pipeline_state.*`, **214** tags tipadas no mapa, e **20** pontos resolvendo para tipo com
+`echo_to_customer: none` — dos quais **10 sao legitimos** (token em link) e 4 estao num skill sem
+`notify`/`menu`. **A EXCECAO (F2) vem antes da APLICACAO (F3)** — inverter quebra survey link e OTP.
+
+| id | tarefa | status | referencia |
+|---|---|---|---|
+| CTX-01 | **F0 — censo re-executavel, com os 20 CLASSIFICADOS.** Interpolacao por sitio x tipo x plateia derivada, separando legitimo (token em link) / defeito / sem plateia de cliente. Os numeros da §1 do ADR foram medidos a mao. ⚠️ O ramo que importa nao e a contagem: e a CLASSIFICACAO. Um censo que so contasse os 20 seria evidencia da proposicao errada — *"quantos o filtro pegaria"* nao e *"quantos deveriam ser pegos"* | `aberto` | ADR §1.3, §4 |
+| CTX-02 | **F1 — o resolvedor de plateia, em MODO AUDITORIA.** Deriva a plateia do sitio (`visibility` do notify/menu · argumento de invoke · prompt de reason), calcula o que FARIA e **loga sem aplicar**. Mesmo desenho da V3 da allowlist, e o que transforma *"acho que sao 10"* em contagem. Acrescenta o contador de tag NAO declarada — que e evidencia para a V4 da allowlist, **nunca autorizacao para ela** | `aberto` | ADR §D2, §D4 |
+| CTX-03 | **F2 — a excecao declarada, greppavel e auditada.** O token dentro do link e excecao LEGITIMA e precisa aparecer como tal, nao sobreviver por o filtro nao existir. Tres exigencias, nenhuma decorativa: greppavel (achar as 10 sem ler 44 YAMLs), auditada (*"o valor saiu em claro"* e fato de conformidade) e contada (se crescer, a politica virou carimbo). **Vem ANTES da F3** | `aberto` | ADR §D3 |
+| CTX-04 | **F3 — aplicar em `notify`/`menu`, o caminho de cliente.** Um leitor SO, que SUBSTITUI o atual no `interpolate` — nunca um `getMasked()` ao lado, porque duas portas para o mesmo dado e so uma trancada e o achado do `/sessions/{id}/stream`, verbatim. A politica e do TIPO; o sitio so escolhe a coluna, e template nao pode afrouxar | `aberto` | ADR §D1, §D6 |
+| CTX-05 | **F4 — `invoke` e depois `reason`.** No `invoke` o cru e intencional (o CRM precisa do numero) e o gate ja existe (`AuditPolicy.data_categories`) — a fase confirma, nao muda. `reason` e plateia PROPRIA e nao "operador": um prompt SAI da plataforma, e mandar um CPF ao provedor de modelo e outro fato que mostra-lo a um operador logado. Dobrar os dois seria escolher a politica mais frouxa por conveniencia de tabela | `aberto` | ADR §D5 |
+| CTX-06 | **F5 — `$.pipeline_state.*` via carimbo de proveniencia.** 225 interpolacoes que o mapa nao alcanca (ele tipa tag de ContextStore, nao chave de pipeline_state) — e e dai que sai o `***4444` da tela. Caminho nomeado: o `menu` ja envia `masked_types` ao bridge *para REGISTRAR a proveniencia* (T3); carimbar o tipo ao gravar a resposta daria ao interpolador a mesma pergunta respondida. ⚠️ Tem decisao propria embutida: valor DERIVADO (concatenacao de dois campos) herda o tipo de qual | `aberto` | ADR §D7 |
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 2.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho
