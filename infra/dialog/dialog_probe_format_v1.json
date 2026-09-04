@@ -1,0 +1,32 @@
+{
+  "form_id": "dialog_probe_format_v1",
+  "title": "Sonda do catálogo de formatos",
+  "description": "Fixture do gate infra/test/probe_dialog_format_engine.sh (ramo C). Existe para dar ao gate um `interaction: form` com `fields[].validation` — sem isso o ramo não teria o que medir e ficaria verde por ausência, que é exatamente o defeito que a D6 fecha. NÃO é usado por skill nenhuma; nenhum contato passa por aqui.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "nodes": [
+    {
+      "id": "dados",
+      "kind": "question",
+      "prompt": "Sonda — não é um formulário de atendimento.",
+      "interaction": "form",
+      "output_key": "sonda",
+      "timeout_s": 30,
+      "fields": [
+        {
+          "id": "com_regra",
+          "label": "Campo COM regra (data)",
+          "type": "text",
+          "required": true,
+          "validation": { "format": "date_br", "max_length": 10 }
+        },
+        {
+          "id": "sem_regra",
+          "label": "Campo SEM regra — testemunha negativa",
+          "type": "text",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

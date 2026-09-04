@@ -44,6 +44,15 @@ interface RenderField {
   // per-field options (select). Absent for plain capture-only survey fields.
   value?:   string | number | boolean
   options?: RenderOption[]
+  /**
+   * D6 do ADR do catálogo de formatos. Até 2026-09-04 este campo NÃO existia e a
+   * construção abaixo era uma ALLOWLIST — logo `fields[].validation` era
+   * descartado aqui, e todo `interaction: "form"` (aprovação, solicitação de
+   * limite, promoção de deploy) era estruturalmente incapaz de validar, sem
+   * nada ficar vermelho. Segunda ocorrência da família DTO-01, no mesmo desenho
+   * de tipo espelhado.
+   */
+  validation?: unknown
 }
 interface RenderOption { id: string; label: string }
 // Retry affordance flattened for the menu step: reprompt localized, counter fixed.
@@ -133,8 +142,18 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
       // single scalar answer → one field keyed by output_key (survey/OTP behavior).
       if (node.fields && node.fields.length) {
         for (const f of node.fields) {
+          // DENYLIST, nunca allowlist. Quatro coisas SAEM, cada uma com motivo:
+          // `label` e `options` são reescritos aqui (i18n resolvida); `capture`
+          // pertence ao mapa `captures`, não ao campo; e `value` é atribuído
+          // logo abaixo, condicionalmente, porque `exactOptionalPropertyTypes`
+          // recusa um `value: undefined` explícito.
+          //
+          // Todo o resto — `validation` inclusive, e o próximo campo que o
+          // schema ganhar — atravessa. Enumerar o que FICA é o que fez
+          // `validation` sumir daqui sem ninguém notar.
+          const { label: _lbl, options: _opts, capture: _cap, value: _val, ...restoDoCampo } = f
           const rf: RenderField = {
-            id:       f.id,
+            ...restoDoCampo,
             label:    resolveLocalizedText(f.label, locale, dl),
             type:     f.type,
             required: f.required ?? false,
@@ -157,6 +176,11 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
           label:    resolveLocalizedText(node.prompt, locale, dl),
           type:     node.interaction === "text" ? "text" : "choice",
           required: true,
+          // A pergunta escalar aparece nas DUAS vistas (`render.validation` no
+          // topo e um campo aqui). Carregar nas duas é de propósito: quem
+          // renderiza a vista de formulário não deveria precisar saber que
+          // existe uma vista single-turn ao lado para descobrir a regra.
+          ...(node.validation ? { validation: node.validation } : {}),
           masked:   node.masked ?? false,   // verbatim — ver acima
         })
       }

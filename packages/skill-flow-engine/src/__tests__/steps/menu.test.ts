@@ -399,3 +399,154 @@ describe("executeMenu — endereçamento da espera (hash × BLPOP)", () => {
     }
   })
 })
+
+// ─────────────────────────────────────────────
+// F2 do ADR do catálogo de formatos — D5, `format` e D6
+// ─────────────────────────────────────────────
+
+function stepEscalar(v: MenuStep["validation"], retry?: MenuStep["retry"]): MenuStep {
+  return {
+    id: "coletar", type: "menu", prompt: "Informe",
+    interaction: "text", on_success: "proximo", on_failure: "falhou",
+    timeout_s: 30, output_as: "resposta",
+    ...(v ? { validation: v } : {}),
+    ...(retry ? { retry } : {}),
+  } as MenuStep
+}
+
+describe("D5 — validar e reofertar sao dois fatos", () => {
+  // A regressao que este bloco guarda e a mais tentadora do arco: ate 2026-09-04
+  // `retryEnabled = maxAttempts > 1 && !!validation`, entao declarar validacao
+  // SEM retry nao validava nada. `dialog_nps_v1` carregava {numeric, 0..10}
+  // inerte por causa disso, e a tela que escreveu a regra nao dizia.
+
+  it("recusa valor invalido MESMO sem retry declarado", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "abc"])
+    const r = await executeMenu(stepEscalar({ numeric: true }), ctx)
+    expect(r.transition_reason).toBe("on_failure")
+    expect(r.next_step_id).toBe("falhou")
+  })
+
+  it("aceita valor valido sem retry declarado (controle positivo)", async () => {
+    // Sem este caso o anterior passaria por recusar TUDO.
+    const ctx = makeCtx([`menu:result:s1`, "42"])
+    const r = await executeMenu(stepEscalar({ numeric: true }), ctx)
+    expect(r.transition_reason).toBe("on_success")
+    expect(r.output_value).toBe("42")
+  })
+
+  it("com retry, a recusa REOFERTA na mesma superficie antes de falhar", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "abc"])
+    const r = await executeMenu(
+      stepEscalar({ numeric: true }, { reprompt: "So numeros, por favor", max_attempts: 2 }),
+      ctx,
+    )
+    expect(r.transition_reason).toBe("on_failure")
+    const enviadas = (ctx.mcpCall as ReturnType<typeof vi.fn>).mock.calls
+      .filter(c => c[0] === "notification_send")
+    // duas: o prompt e o reprompt. Sem retry seria uma so.
+    expect(enviadas.length).toBe(2)
+    // A asserção de comprimento acima nao estreita o tipo para o compilador
+    // (`noUncheckedIndexedAccess`), e o `?.` sozinho tornaria o teste incapaz de
+    // reprovar: `undefined` casaria com um `toMatchObject` frouxo. Extrai-se e
+    // exige-se presenca antes de julgar o conteudo.
+    const reprompt = enviadas[1]
+    expect(reprompt).toBeDefined()
+    expect(reprompt?.[1]).toMatchObject({ message: "So numeros, por favor" })
+  })
+
+  it("sem validacao declarada, qualquer resposta passa (nao inventamos regra)", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "qualquer coisa"])
+    const r = await executeMenu(stepEscalar(undefined), ctx)
+    expect(r.transition_reason).toBe("on_success")
+  })
+})
+
+describe("`format` resolve pelo catalogo", () => {
+  it("date_br recusa 31/02/2026 — casa a FORMA e falha a semantica", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "31/02/2026"])
+    const r = await executeMenu(stepEscalar({ format: "date_br" }), ctx)
+    expect(r.transition_reason).toBe("on_failure")
+  })
+
+  it("date_br aceita 29/02/2024 (bissexto) — controle positivo", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "29/02/2024"])
+    const r = await executeMenu(stepEscalar({ format: "date_br" }), ctx)
+    expect(r.transition_reason).toBe("on_success")
+  })
+
+  it("formato desconhecido RECUSA, nunca libera", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "qualquer"])
+    const r = await executeMenu(stepEscalar({ format: "nao_existe" }), ctx)
+    expect(r.transition_reason).toBe("on_failure")
+  })
+
+  it("campo estreito aperta o formato, nunca o afrouxa", async () => {
+    // `digits` aceitaria 123456; o max_length da pergunta o recusa.
+    const ctx = makeCtx([`menu:result:s1`, "123456"])
+    const r = await executeMenu(stepEscalar({ format: "digits", max_length: 4 }), ctx)
+    expect(r.transition_reason).toBe("on_failure")
+  })
+})
+
+describe("D6 — o campo de um form valida sozinho", () => {
+  const stepForm = (campos: unknown[]): MenuStep => ({
+    id: "dados", type: "menu", prompt: "Preencha",
+    interaction: "form", on_success: "proximo", on_failure: "falhou",
+    timeout_s: 30, output_as: "dados",
+    fields: campos,
+  } as unknown as MenuStep)
+
+  const CAMPOS = [
+    { id: "nascimento", label: "Nascimento", type: "text", required: true,
+      validation: { format: "date_br" } },
+    { id: "obs", label: "Observacao", type: "text", required: false },
+  ]
+
+  it("recusa quando um campo do form falha o formato, e NOMEIA o campo", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const ctx = makeCtx([`menu:result:s1`,
+      JSON.stringify({ nascimento: "31/02/2026", obs: "oi" })])
+    const r = await executeMenu(stepForm(CAMPOS), ctx)
+    expect(r.transition_reason).toBe("on_failure")
+    // "o formulario esta invalido" obriga quem responde a adivinhar qual campo e.
+    expect(spy.mock.calls.flat().join(" ")).toContain("nascimento")
+    spy.mockRestore()
+  })
+
+  it("aceita quando todos os campos passam (controle positivo)", async () => {
+    const ctx = makeCtx([`menu:result:s1`,
+      JSON.stringify({ nascimento: "01/01/2026", obs: "oi" })])
+    const r = await executeMenu(stepForm(CAMPOS), ctx)
+    expect(r.transition_reason).toBe("on_success")
+  })
+
+  it("campo NAO obrigatorio vazio nao reprova — formato nao e preenchimento", async () => {
+    const campos = [{ id: "nascimento", label: "N", type: "text", required: false,
+                      validation: { format: "date_br" } }]
+    const ctx = makeCtx([`menu:result:s1`, JSON.stringify({ nascimento: "" })])
+    const r = await executeMenu(stepForm(campos), ctx)
+    expect(r.transition_reason).toBe("on_success")
+  })
+
+  it("campo OBRIGATORIO vazio reprova", async () => {
+    const ctx = makeCtx([`menu:result:s1`, JSON.stringify({ obs: "so isso" })])
+    const r = await executeMenu(stepForm(CAMPOS), ctx)
+    expect(r.transition_reason).toBe("on_failure")
+  })
+
+  it("form sem campo declarando validacao segue passando", async () => {
+    // Desfecho legitimo, e o teste existe para que ninguem "conserte" isso com
+    // um default: nao ha o que julgar quando ninguem declarou regra.
+    const campos = [{ id: "livre", label: "Livre", type: "text", required: false }]
+    const ctx = makeCtx([`menu:result:s1`, JSON.stringify({ livre: "$$$" })])
+    const r = await executeMenu(stepForm(campos), ctx)
+    expect(r.transition_reason).toBe("on_success")
+  })
+
+  it("resposta de form que nao e JSON reprova quando ha regra a aplicar", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "isto nao e json"])
+    const r = await executeMenu(stepForm(CAMPOS), ctx)
+    expect(r.transition_reason).toBe("on_failure")
+  })
+})

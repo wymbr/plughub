@@ -420,6 +420,34 @@ export const NotifyStepSchema = z.object({
 })
 
 /**
+ * Validação de FORMATO de uma resposta escalar — o mesmo objeto vale para o STEP
+ * (resposta escalar) e para cada CAMPO de um `interaction: "form"`.
+ *
+ * Existe como constante compartilhada, e não repetida nos dois sítios, porque as
+ * duas cópias divergiriam no primeiro campo novo — e a divergência apareceria
+ * como "no formulário não valida", que é indistinguível de "não configurei".
+ *
+ * Somente formato — NUNCA semântica de negócio (código OTP correto, limite
+ * aprovado), que é controle do chamador.
+ */
+const MenuValidationShape = z.object({
+  /** Nome de entrada do catálogo de formatos (ADR adr-dialog-input-format-catalog). */
+  format:     z.string().optional(),
+  numeric:    z.boolean().optional(),
+  pattern:    z.string().optional(),
+  min_length: z.number().int().nonnegative().optional(),
+  max_length: z.number().int().nonnegative().optional(),
+  min:        z.number().optional(),
+  max:        z.number().optional(),
+})
+
+/** União objeto | ref ($./@ctx.) — o ref traz a validation de um DialogForm via form_get. */
+const MenuValidationSchema = z.union([
+  MenuValidationShape,
+  z.string().regex(/^(\$\.|@ctx\.)/, "validation deve ser um objeto ou um ref $./@ctx."),
+])
+
+/**
  * MenuStep — envia um prompt ao cliente e suspende a execução até receber resposta.
  * Spec: plughub_spec_v1.docx seção 9 — step type "menu"
  *
@@ -498,6 +526,14 @@ export const MenuStepSchema = z.object({
        * (field-level tem precedência sobre step-level)
        */
       masked:   MaskedDeclarationSchema.optional(),
+      /**
+       * D6 do ADR do catálogo de formatos: o campo de um `interaction: "form"`
+       * valida sozinho. Até 2026-09-04 esta declaração não existia aqui E era
+       * descartada pelo `RenderField` do `form_get` — então todo formulário
+       * (aprovação, solicitação de limite, promoção de deploy) era
+       * estruturalmente incapaz de validar, sem nada ficar vermelho.
+       */
+      validation: MenuValidationSchema.optional(),
     })),
     z.string(),
   ]).optional(),
@@ -510,17 +546,7 @@ export const MenuStepSchema = z.object({
    * ($./@ctx.) — o ref traz a validation vinda de um DialogForm via form_get.
    * Aplicada apenas a interações escalares (não `form`).
    */
-  validation: z.union([
-    z.object({
-      numeric:    z.boolean().optional(),
-      pattern:    z.string().optional(),
-      min_length: z.number().int().nonnegative().optional(),
-      max_length: z.number().int().nonnegative().optional(),
-      min:        z.number().optional(),
-      max:        z.number().optional(),
-    }),
-    z.string().regex(/^(\$\.|@ctx\.)/, "validation deve ser um objeto ou um ref $./@ctx."),
-  ]).optional(),
+  validation: MenuValidationSchema.optional(),
   /**
    * Reprompt na MESMA superfície quando a validação de formato falha (dialog
    * primitive — retry). `max_attempts` conta as tentativas totais de coleta; ao

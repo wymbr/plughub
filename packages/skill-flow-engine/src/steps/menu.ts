@@ -25,6 +25,7 @@
  */
 
 import type { MenuStep } from "@plughub/schemas"
+import { validateDialogFormat } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { interpolate, resolveVisibility, resolveInputValue } from "../interpolate"
 import { resolveMaskedFields, isFieldMasked, isStepMasked } from "../masking-policy"
@@ -36,7 +37,16 @@ import { redisKeys } from "../redis-keys"
 // DialogForm loaded via form_get. Resolve to a concrete array before rendering;
 // the resolved shape is identical to the static path.
 type MenuOption = { id: string; label: string }
-type MenuField  = { id: string; label: string; type: string; required?: boolean; masked?: boolean }
+// `masked` é `false | string` no schema (MaskedDeclarationSchema): o tipo local
+// dizia `boolean` e só não quebrava porque `resolveMenuArray` faz cast. Um tipo
+// espelhado que estreita o original transforma perda de caso em código que
+// compila — corrigido junto porque a linha estava sendo tocada de qualquer forma.
+type MenuField  = {
+  id: string; label: string; type: string
+  required?: boolean; masked?: boolean | string
+  /** D6 — o campo de um `form` valida sozinho. Chega do `form_get`. */
+  validation?: MenuValidation
+}
 
 async function resolveMenuArray<T>(
   value:        unknown,
@@ -74,6 +84,8 @@ async function resolveDynamicValue(
 // render). Format-only (numeric/pattern/length/range) — never semantic. Applied
 // to the scalar answer of non-`form` interactions; `form` (multi-field) is skipped.
 interface MenuValidation {
+  /** Nome de entrada do catálogo de formatos. Decide afordância e veredicto. */
+  format?:     string
   numeric?:    boolean
   pattern?:    string
   min_length?: number
@@ -96,9 +108,22 @@ async function resolveObjectRef<T>(
   return resolved && typeof resolved === "object" ? (resolved as T) : undefined
 }
 
-/** True when the scalar answer satisfies the format validation. Empty rules ⇒ pass. */
+/**
+ * True when the scalar answer satisfies the format validation. Empty rules ⇒ pass.
+ *
+ * ⚠️ **O catálogo lido aqui é o DEFAULT EMBUTIDO de `@plughub/schemas`, não o
+ * `dialog.formats` do config-api.** O engine não tem cliente de config, e a
+ * fonte de verdade em runtime é o store — logo um tenant que EDITE o catálogo
+ * verá o engine seguir o embutido. Hoje os dois concordam por construção (o
+ * store foi semeado do mesmo default e ninguém editou), e é exatamente por isso
+ * que a divergência precisa estar escrita: ela nasceria muda. Tarefa FMT-09.
+ *
+ * A ordem é catálogo PRIMEIRO, campos estreitos DEPOIS: um `max_length` na
+ * pergunta aperta o do formato, nunca o afrouxa.
+ */
 function validateFormat(value: string, v: MenuValidation): boolean {
   const s = value ?? ""
+  if (v.format && !validateDialogFormat(s, v.format).ok) return false
   if (v.numeric && (s.trim() === "" || Number.isNaN(Number(s)))) return false
   if (v.pattern) {
     try { if (!new RegExp(v.pattern).test(s)) return false } catch { /* invalid regex → skip */ }
@@ -112,6 +137,53 @@ function validateFormat(value: string, v: MenuValidation): boolean {
     if (v.max !== undefined && n > v.max) return false
   }
   return true
+}
+
+/**
+ * Julga a resposta INTEIRA. Duas formas, porque `form` não tem um escalar:
+ *   escalar  → `step.validation`
+ *   form     → cada `field.validation` do campo correspondente (D6)
+ *
+ * Devolve o CAMPO que reprovou quando há um, porque *"o formulário está
+ * inválido"* obriga quem responde a adivinhar qual dos quatro campos é.
+ */
+function judgeAnswer(
+  raw:         string,
+  interaction: string,
+  validation:  MenuValidation | undefined,
+  fields:      MenuField[],
+): { ok: boolean; field?: string } {
+  if (interaction !== "form") {
+    if (!validation) return { ok: true }
+    return { ok: validateFormat(raw, validation) }
+  }
+
+  // `form`: sem campo declarando validação não há o que julgar — e isso é
+  // desfecho legítimo, não ausência a "consertar" com um default.
+  const comRegra = fields.filter(f => f.validation)
+  if (!comRegra.length) return { ok: true }
+
+  let mapa: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    mapa = typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : {}
+  } catch {
+    // Resposta de `form` que não é JSON não pode ser julgada campo a campo.
+    // Aceitar aqui deixaria passar exatamente o que a regra existe para barrar.
+    return { ok: false }
+  }
+
+  for (const f of comRegra) {
+    const bruto = mapa[f.id]
+    // Campo AUSENTE só reprova se for obrigatório: validação é de FORMATO, e
+    // "não preencheu" é outra pergunta, com dono declarado (`required`).
+    if (bruto === undefined || bruto === null || bruto === "") {
+      if (f.required) return { ok: false, field: f.id }
+      continue
+    }
+    if (!validateFormat(String(bruto), f.validation!)) return { ok: false, field: f.id }
+  }
+  return { ok: true }
 }
 
 export async function executeMenu(
@@ -151,9 +223,16 @@ export async function executeMenu(
     resolvedRetry && typeof resolvedRetry.max_attempts === "number" && resolvedRetry.max_attempts >= 1
       ? resolvedRetry.max_attempts
       : 1
-  // Retry only makes sense for scalar answers with a validation rule.
-  const retryEnabled =
-    maxAttempts > 1 && !!resolvedValidation && resolvedInteraction !== "form"
+  // ── D5 — VALIDAR e REOFERTAR são dois fatos ────────────────────────────────
+  // Até 2026-09-04 isto era uma condição só (`maxAttempts > 1 && !!validation &&
+  // interaction !== "form"`), e o efeito era que **declarar validação sem retry
+  // não validava nada**: o campo mais restritivo era o que degradava, e a tela
+  // que escreveu a regra não dizia. Medido: `dialog_nps_v1` carregava
+  // `{numeric, 0..10}` INERTE por isso.
+  //
+  // Agora `retry` governa só o desfecho da recusa — reofertar na mesma
+  // superfície, ou seguir direto para `on_failure`.
+  const podeRetentar = maxAttempts > 1 && !!resolvedRetry
   // Computa a lista de IDs mascarados usando a política centralizada.
   // Declarado fora do try para que waitingMeta (abaixo) possa referenciá-lo.
   // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
@@ -393,10 +472,19 @@ export async function executeMenu(
         }
       }
 
-      // Cliente respondeu com `raw`. Gate de retry: formato apenas, escalar.
-      if (retryEnabled && resolvedValidation && !validateFormat(raw, resolvedValidation)) {
-        if (attempt >= maxAttempts) {
-          // Formato nunca satisfeito dentro de max_attempts → falha (chamador decide).
+      // Cliente respondeu com `raw`. Gate de FORMATO — escalar pelo
+      // `step.validation`, `form` campo a campo (D6).
+      const veredicto = judgeAnswer(raw, resolvedInteraction, resolvedValidation, resolvedFields)
+      if (!veredicto.ok) {
+        if (!podeRetentar || attempt >= maxAttempts) {
+          // Sem retry configurado, a recusa segue direto para on_failure — o
+          // chamador decide. O que NÃO acontece mais é o valor inválido ser
+          // aceito só porque ninguém declarou reprompt.
+          console.warn(
+            `[menu] formato recusado em ${step.id}` +
+            (veredicto.field ? ` (campo ${veredicto.field})` : "") +
+            ` — ${podeRetentar ? "tentativas esgotadas" : "sem retry configurado"}, on_failure`
+          )
           return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
         // Reprompt na mesma superfície e espera de novo.

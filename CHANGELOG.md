@@ -1,5 +1,105 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — F2 do catalogo de formatos: o engine julga, e validar deixou de depender de retry
+
+Segunda fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).
+Esta **muda comportamento**.
+
+### D5 — validar e reofertar eram uma condicao so, e por isso a mais restritiva perdia
+
+`menu.ts:155` dizia `retryEnabled = maxAttempts > 1 && !!validation && interaction !== "form"`,
+e o efeito era que **declarar validacao sem declarar retry nao validava nada**. O editor
+deixa marcar `numeric` + faixa sem tocar em retry, e nada avisava.
+
+Nao e hipotese: `dialog_nps_v1` carrega `{numeric, min:0, max:10}` e **nenhum retry** — a
+regra estava inerte desde que foi escrita. Das duas formas publicadas com validacao, uma
+nao valia nada.
+
+Agora sao dois fatos. A validacao **sempre** roda; `retry` governa so o desfecho da recusa
+— reofertar na mesma superficie, ou seguir direto para `on_failure`. E a recusa **loga
+dizendo qual dos dois caminhos tomou**, porque *"formato recusado"* sem o motivo devolve a
+mesma investigacao que a ausencia de log.
+
+**Populacao contada antes de virar:** exatamente **uma** forma muda de comportamento
+(`dialog_nps_v1`), e ela nao tem consumidor de producao — a unica referencia no repositorio
+e um teste.
+
+### O engine resolve `format`, e o limite disso esta escrito
+
+`validateFormat` passou a consultar o catalogo antes dos campos estreitos, nessa ordem: um
+`max_length` na pergunta **aperta** o do formato, nunca o afrouxa.
+
+⚠️ **O catalogo lido pelo engine e o DEFAULT EMBUTIDO, nao o `dialog.formats` do
+config-api.** O engine nao tem cliente de config. Hoje os dois concordam por construcao (o
+store foi semeado do mesmo default e ninguem editou), e e exatamente por isso que a
+divergencia precisa estar escrita no proprio arquivo: ela nasceria muda. Tarefa **FMT-09**.
+
+### D6 — o campo de um `form` valida sozinho, e faltavam as DUAS metades
+
+Nao era so o `RenderField` descartando: **`MenuField` nem tinha o campo `validation`**.
+Duas ausencias empilhadas, e consertar uma so nao moveria nada.
+
+- **schema** — `MenuValidationShape` virou constante compartilhada pelo step e pelo campo.
+  Repetir o objeto nos dois sitios os faria divergir no primeiro campo novo, e a divergencia
+  apareceria como *"no formulario nao valida"*, indistinguivel de *"nao configurei"*.
+- **entrega** — `RenderField` virou **denylist**: saem `label` e `options` (reescritos com
+  i18n resolvida), `capture` (pertence ao mapa `captures`) e `value` (atribuido
+  condicionalmente por causa de `exactOptionalPropertyTypes`). Todo o resto atravessa,
+  `validation` inclusive e o proximo campo que o schema ganhar.
+- **julgamento** — `judgeAnswer` julga escalar pelo `step.validation` e `form` campo a
+  campo, e **nomeia o campo** que reprovou: *"o formulario esta invalido"* obriga quem
+  responde a adivinhar qual dos quatro e.
+
+Duas decisoes de borda, ambas com teste: campo **nao obrigatorio** vazio nao reprova
+(formato e uma pergunta, preenchimento e outra, com dono declarado em `required`); e `form`
+cuja resposta nao e JSON **reprova** quando ha regra a aplicar — aceitar ali deixaria passar
+exatamente o que a regra existe para barrar.
+
+Corrigido de passagem, porque a linha estava sendo tocada: `MenuField.masked` era
+`boolean` no tipo local enquanto o schema e `false | string`. So nao quebrava porque
+`resolveMenuArray` faz cast. Tipo espelhado que estreita o original transforma perda de caso
+em codigo que compila.
+
+### O que esta fase DELIBERADAMENTE nao fez, e o achado que a impediu
+
+A demonstracao natural seria aplicar `format` a `dialog_limite_solicitacao`, que tem
+`numero_cartao`, `vencimento_cartao` e `limite_solicitado` sem regra nenhuma e com
+contraparte pronta no catalogo. **Nao foi feito, e a razao virou regra de ordenacao:**
+
+> **Veredicto estrito sem afordancia e HOSTIL.** `credit_card` exige
+> `#### #### #### ####` e `card_expiry` exige `mm/aa`. Enquanto a mascara de digitacao nao
+> chega a tela (F4), ligar a forma estrita recusa quem digitar `4539148803436467` ou `1226`
+> — entradas que a pessoa nao tem como saber que estao erradas, porque nada as guiou.
+
+E a §D7 (*afordancia ≠ veredicto*) mordendo na pratica: as duas metades do catalogo servem
+para ser ligadas **juntas**, por superficie. Fixtures vivas so ganham `format` na F4, junto
+com a mascara. O gate usa uma forma dedicada (`dialog_probe_format_v1`), que nenhuma skill
+consome.
+
+### Gate
+
+`infra/test/probe_dialog_format_engine.sh` — quatro proposicoes que falham de formas
+diferentes:
+
+| ramo | prova | resultado |
+|---|---|---|
+| **A** | a **IMAGEM** em execucao preserva `validation.format` | `=date_br` |
+| **B** | a **IMAGEM** preserva a validacao do CAMPO | `format=date_br max_length=10` |
+| **B'** | testemunha negativa: campo sem regra continua sem | ok |
+| **C** | `form_get` entrega a validacao do campo | 1 com regra, 1 sem |
+| **D** | o engine julga | 27 testes de menu |
+
+**A e B perguntam a IMAGEM, nao ao fonte**, e isso e o ponto: o Zod descarta campo
+desconhecido em SILENCIO, entao uma layer com schema velho aceita a skill, grava validacao
+nula e nada fica vermelho. `grep` no fonte responderia a pergunta errada.
+
+**C exige as DUAS contagens.** So `com >= 1` passaria por um render que carimbasse validacao
+em todo campo; a testemunha negativa e o que separa *"entrega o que foi declarado"* de
+*"entrega alguma coisa"*.
+
+Suites: schemas 211 · skill-flow-engine 181 · mcp-server-plughub 259, todas verdes, cada uma
+rodada **no WORKDIR do pacote** (da raiz o rootdir muda e a contagem vira ficcao).
+
 ## 2026-09-04 — F1 do catalogo de formatos: a tabela existe, e ela tem UMA casa
 
 Primeira fase do [`adr-dialog-input-format-catalog`](docs/adr/adr-dialog-input-format-catalog.md).
