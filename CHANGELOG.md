@@ -47,6 +47,26 @@ em `2026-09-04T09:48`, `config_json` preservado
 resolvendo, o item de wrap-up volta a ser **author-bound** ao humano que atendeu, em
 vez de cair na fila para qualquer um.
 
+**Confirmado no demo (2026-09-04 09:57 e 10:00), nos DOIS modos.** Dois contatos de
+`retencao_humano`, um com `dispatch: detached` e outro com `inline` (a config virou as
+10:00:12, entre eles). Ambos os segmentos PESQUISADOS voltaram a receber a disposicao:
+`wrapup_summary` + `issue_status=resolvido` + `outcome=resolved` na linha
+`retencao_humano/primary` de cada contato.
+
+⚠️ **O wrap-up e SEMPRE destacado; `dispatch` nao escolhe veiculo, escolhe comportamento
+do CONSOLE.** Para `side: agent` os dois modos viajam pela mesma sessao-filho de workflow
+(`main.py:1637`) — no `inline` o Console SEGURA a sessao e reivindica sozinho
+(`auto_attend`), no `detached` a tarefa fica no pull manual da inbox. Consequencia para
+quem depura: a linha **"Detached hook fired" nomeia o VEICULO, nao o modo**, e le-la como
+modo faz uma config `inline` parecer ignorada — foi o que aconteceu ao conferir este
+conserto, com o agravante de a config ter mudado entre os dois testes, o que dava a
+cronologia perfeita para a conclusao errada.
+
+⚠️ **Segunda leitura que engana na mesma conferencia:** filtrar `agent_type='human'` traz
+tambem os segmentos das sessoes INTERNAS de wrap-up (`wrapup_detached_ia` +
+`retencao_humano-int`), e la `wrapup_summary` NULL e o CORRETO — o humano e o veiculo,
+nao o segmento pesquisado. Sem separar os dois tipos, metade das linhas parece defeito.
+
 **Divida.** A tabela do gate encolheu de 4 para 3 (`outbound_survey_worker`,
 `survey_multi_ia`, `copilot_sac`) — snapshots de 2026-08-10/12, sem trafego medido, e
 o gatilho para quitar cada um e o pool voltar a ser exercido. O ramo C do gate reprova
