@@ -429,7 +429,8 @@ verifique bloqueio.**
   POR INTEIRO; `masking.types` é a chave irmã, tem o mesmo modo de falha e **não tem o
   guard**. Medido ao errar: um `PUT` com `tenant_id` criou o override e congelou o catálogo
   do tenant em 15 tipos, desligado do global.
-- **O masker não é alcançável a partir do engine** (CTX-07): `applyMaskingTypeToValue` vive em
-  `mcp-server-plughub/src/lib/context-masking.ts`, não em `@plughub/schemas`. O engine consegue
-  hoje decidir **qual** máscara aplicar (`resolveMaskForAudience`) e **não** consegue aplicá-la.
-  A F3 depende de mover o masker para a casa compartilhada, sob o mesmo gate de paridade.
+- ~~**O masker não é alcançável a partir do engine** (CTX-07)~~ — **fechado em 2026-09-04.** O
+  corpo de `applyMaskingTypeToValue` mudou de casa para `@plughub/schemas` e o `mcp-server`
+  reexporta; o gate de paridade (30 vetores) segue verde e passou a medir a casa canônica.
+  Provado do engine: `credit_card` ao cliente sai `***4444`, ao sistema sai cru. **A F3 deixa de
+  ter bloqueio técnico.**

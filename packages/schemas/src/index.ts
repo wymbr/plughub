@@ -864,6 +864,7 @@ export {
   CtxAudienceSchema,
   deriveAudience,
   resolveMaskForAudience,
+  applyMaskingTypeToValue,
   maskForSite,
   maskOmitsField,
   maskChangesValue,

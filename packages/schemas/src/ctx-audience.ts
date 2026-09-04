@@ -207,6 +207,76 @@ export function maskForSite(
   return resolveMaskForAudience(catalog.types.find(x => x.id === tipoId), plateia)
 }
 
+// ─────────────────────────────────────────────
+// Aplicação de máscara por TIPO
+// ─────────────────────────────────────────────
+
+/**
+ * applyMaskingTypeToValue — aplica UMA máscara do catálogo a um valor.
+ *
+ * ── Por que mora AQUI e não no `mcp-server` (CTX-07, 2026-09-04) ─────────────
+ *
+ * Ela nasceu em `mcp-server-plughub/src/lib/context-masking.ts` e ficou lá
+ * enquanto os consumidores eram daquele pacote. A CTX-01 quebrou isso: o
+ * `skill-flow-engine` passou a **decidir** qual máscara aplicar
+ * (`resolveMaskForAudience`) e não conseguia **aplicá-la** — o engine não importa
+ * o mcp-server, e nunca deve (a dependência é na direção contrária).
+ *
+ * As saídas eram duas, e uma delas é proibida: copiar para o engine faria a QUARTA
+ * casa de mascaramento do repositório, que é exatamente o que o comentário do
+ * `_build_pending_preview` existe para impedir. Então ela **mudou de casa** para a
+ * base que todo mundo já importa, e o `mcp-server` passou a REEXPORTAR — nunca a
+ * redefinir, pela regra do `CLAUDE.md`.
+ *
+ * ⚠️ **O gêmeo Python (`apply_masking_type_to_value`) NÃO se mexeu**, e a paridade
+ * entre os dois é o portão `infra/test/probe_masking_apply_parity.sh` (30 vetores).
+ * Mudar de casa sem mudar de comportamento é o requisito, e o gate é quem afirma.
+ *
+ * ⚠️ `hidden` devolve **string vazia**, que é SINAL para o chamador omitir o campo —
+ * não é "o valor é vazio". O gêmeo Python faz o mesmo, e manter a convenção é o que
+ * permite comparar as duas saídas.
+ *
+ * Cada tipo é apresentação VISUAL pura — nenhuma semântica de tipo de dado.
+ */
+export function applyMaskingTypeToValue(raw: string, type: ContextMaskingType): string {
+  const digits = raw.replace(/\D/g, "")
+  switch (type) {
+    case "plain":
+      return raw
+    case "hidden":
+      return ""   // sinal: o chamador omite o campo
+    case "full":
+      return "***"
+    case "last_2":
+      return digits.length >= 2
+        ? `***${digits.slice(-2)}`
+        : "***"
+    case "last_4":
+      return digits.length >= 4
+        ? `***${digits.slice(-4)}`
+        : digits.length > 0 ? `***${digits}` : "***"
+    case "first_1":
+      return raw.length > 0 ? `${raw[0]}***` : "***"
+    case "first_word": {
+      const word = raw.split(/\s+/)[0] ?? ""
+      return word.length > 0 ? `${word} ***` : "***"
+    }
+    case "email_domain": {
+      const atIdx = raw.indexOf("@")
+      if (atIdx > 0) {
+        const local  = raw.slice(0, atIdx)
+        const domain = raw.slice(atIdx) // inclui o "@"
+        return `${local[0] ?? "*"}***${domain}`
+      }
+      return raw.length > 0 ? `${raw[0]}***` : "***"
+    }
+    case "financial":
+      return "R$ ****,**"
+    default:
+      return "***"
+  }
+}
+
 /** `hidden` é o sinal de OMITIR o campo — o masker devolve string vazia para ele. */
 export function maskOmitsField(m: CtxReadMask): boolean {
   return m === "hidden"

@@ -192,48 +192,24 @@ export function resolveContextMaskingRule(
 // ── Visual type application ───────────────────────────────────────────────────
 
 /**
- * Apply a ContextMaskingType to a raw value string.
+ * ⚠️ **`applyMaskingTypeToValue` MUDOU DE CASA em 2026-09-04 (CTX-07).**
  *
- * Each type is a pure visual presentation — no data-type semantics.
+ * O corpo dela vive agora em `@plughub/schemas` (`ctx-audience.ts`), e este arquivo
+ * apenas REEXPORTA — os chamadores daqui continuam intactos.
+ *
+ * O motivo é topologia, não arrumação: o `skill-flow-engine` passou a decidir QUAL
+ * máscara aplicar (`resolveMaskForAudience`, CTX-01) e não conseguia aplicá-la, porque
+ * não importa o mcp-server — e não deve, a dependência é na direção contrária. Copiar
+ * para lá faria a QUARTA casa de mascaramento do repositório.
+ *
+ * Reexportar, e não redefinir, é a regra do `CLAUDE.md` (*"never redefine types from
+ * `@plughub/schemas` locally"*) — aqui aplicada a comportamento, não só a tipo.
  */
-export function applyMaskingTypeToValue(raw: string, type: ContextMaskingType): string {
-  const digits = raw.replace(/\D/g, "")
-  switch (type) {
-    case "plain":
-      return raw
-    case "hidden":
-      return ""   // signal: caller will omit field
-    case "full":
-      return "***"
-    case "last_2":
-      return digits.length >= 2
-        ? `***${digits.slice(-2)}`
-        : "***"
-    case "last_4":
-      return digits.length >= 4
-        ? `***${digits.slice(-4)}`
-        : digits.length > 0 ? `***${digits}` : "***"
-    case "first_1":
-      return raw.length > 0 ? `${raw[0]}***` : "***"
-    case "first_word": {
-      const word = raw.split(/\s+/)[0] ?? ""
-      return word.length > 0 ? `${word} ***` : "***"
-    }
-    case "email_domain": {
-      const atIdx = raw.indexOf("@")
-      if (atIdx > 0) {
-        const local  = raw.slice(0, atIdx)
-        const domain = raw.slice(atIdx) // includes "@"
-        return `${local[0] ?? "*"}***${domain}`
-      }
-      return raw.length > 0 ? `${raw[0]}***` : "***"
-    }
-    case "financial":
-      return "R$ ****,**"
-    default:
-      return "***"
-  }
-}
+// Importado E reexportado. `export … from` sozinho reexporta mas NAO traz o nome ao
+// escopo local, e `maskContextForPersistence` (abaixo) o chama. O compilador pegou —
+// e so pegou porque este arquivo LE a funcao: quem apenas a repassasse ficaria verde.
+import { applyMaskingTypeToValue } from "@plughub/schemas"
+export { applyMaskingTypeToValue }
 
 /**
  * Snapshot do ContextStore em grau OPERATOR, **sem portão de namespace**.

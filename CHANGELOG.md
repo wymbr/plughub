@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (4) — CTX-07: o masker muda de casa, e a F3 perde o bloqueio
+
+`applyMaskingTypeToValue` sai de `mcp-server-plughub/src/lib/context-masking.ts` e passa a
+morar em `@plughub/schemas`. Nenhum comportamento mudou — o gate de paridade e quem afirma.
+
+### Por que mover, e por que NAO copiar
+
+A CTX-01 deixou o `skill-flow-engine` sabendo **decidir** qual mascara aplicar
+(`resolveMaskForAudience`) sem conseguir **aplica-la**: o masker vivia num pacote que ele nao
+importa, e nao deve — a dependencia declarada e `skill-flow -> mcp-server`, nao o inverso.
+
+Copiar para o engine faria a **quarta** casa de mascaramento do repositorio, que e exatamente o
+que o comentario do `_build_pending_preview` existe para impedir. Entao o corpo **mudou de
+casa** para a base que todos ja importam, e o `mcp-server` passou a REEXPORTAR — nunca a
+redefinir, pela regra do `CLAUDE.md`.
+
+O gemeo Python nao se mexeu. Mudar de casa sem mudar de comportamento e o requisito, e
+`probe_masking_apply_parity.sh` (30 vetores) segue **verde**.
+
+### Duas armadilhas, e as duas foram pegas
+
+**(1) O compilador.** `export { X } from "…"` reexporta mas **nao traz o nome ao escopo
+local**, e `maskContextForPersistence` o chama duas linhas abaixo. Virou
+`import` + `export`. Ele so pegou porque aquele arquivo **LE** a funcao — um arquivo que apenas
+a repassasse ficaria verde, que e o padrao dos tipos espelhados deste arco.
+
+**(2) O runner de paridade media a casa errada depois da mudanca.** Ele importava de
+`mcp-server-plughub/src/lib/context-masking`, que agora REEXPORTA — continuaria compilando e
+passando, medindo o repassador em vez de quem decide, e um gemeo divergente no schemas ficaria
+verde. Reapontado para `packages/schemas/src/ctx-audience`.
+
+### Provado do engine, com controle positivo
+
+```
+maskForSite("credit_card","customer") -> last_4 -> ***4444      (o da tela 2)
+maskForSite("credit_card","system")   -> plain  -> 1111222233334444
+```
+
+Sem o segundo, um filtro que bloqueia tudo passaria.
+
+### Gates
+
+`probe_masking_apply_parity.sh` **30/30 verde**, agora sobre a casa canonica. A bateria
+`mut_masking_resolver.py` ganhou a **M4** — `hidden` deixando de devolver string vazia (o sinal
+de OMITIR) —, porque as tres anteriores so exercitavam o resolvedor e o gate julga os dois: um
+teste que cobre metade do que o gate mede da a impressao de cobrir tudo. **4 de 4 vermelhas.**
+
+Suites: schemas **235**, mcp-server **259**, skill-flow-engine **188**. `tsc --noEmit` limpo nos
+tres. `probe_ctx_read_audience` VERDE, `probe_masking_display_parity` OK, `probe_task_ledger`
+VERDE.
+
+**A F3 (CTX-04) deixa de ter bloqueio tecnico.**
+
 ## 2026-09-04 (3) — CTX: o `operator` nao e fallback, e "mostravel" e uma finalidade
 
 Fecha a F2 do [`adr-context-read-audience-policy`](docs/adr/adr-context-read-audience-policy.md)

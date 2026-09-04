@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Bateria de mutacao do gemeo TS de `resolve_mask_for_audience` (CTX-01, 2026-09-04).
 
-Prova que a metade `resolve_cases` de `probe_masking_apply_parity.sh` pode ficar
+Prova que `probe_masking_apply_parity.sh` pode ficar
 VERMELHA. Sem isto, um gemeo com os tres ramos trocados passaria: a fixture mede os
 DOIS lados contra a mesma entrada, e duas implementacoes igualmente erradas concordam
 perfeitamente.
@@ -31,6 +31,12 @@ MUTACOES = [
     ("M3 tipo ausente vira `plain` em vez de recusar alto",
      'if (!tipoEntry) return "full"',
      'if (!tipoEntry) return "plain"'),
+    # M4 e do MASKER, que mudou de casa na CTX-07 e agora mora neste mesmo arquivo.
+    # Sem ela a bateria provaria so o resolvedor, e o gate mede os dois — um teste
+    # que cobre metade do que o gate julga da a impressao de cobrir tudo.
+    ("M4 `hidden` deixa de devolver string vazia (o sinal de OMITIR)",
+     'return ""   // sinal: o chamador omite o campo',
+     'return "***"   // sinal: o chamador omite o campo'),
 ]
 
 orig = io.open(ALVO, encoding="utf-8").read()
@@ -57,5 +63,6 @@ finally:
     io.open(ALVO, "w", encoding="utf-8", newline="").write(orig)
 
 print()
-print("BATERIA REPROVADA (%d verdes indevidos)" % falhas if falhas else "BATERIA OK — as 3 mutacoes ficam vermelhas")
+print("BATERIA REPROVADA (%d verdes indevidos)" % falhas if falhas else
+      "BATERIA OK — as %d mutacoes ficam vermelhas" % len(MUTACOES))
 sys.exit(1 if falhas else 0)

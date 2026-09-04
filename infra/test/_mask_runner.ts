@@ -4,10 +4,17 @@
  */
 import * as fs   from "fs"
 import * as path from "path"
-import { applyMaskingTypeToValue } from "../../packages/mcp-server-plughub/src/lib/context-masking"
-// O resolvedor vem do FONTE do schemas, e não do `dist/` — o bundle do esbuild
+// As DUAS metades vêm do FONTE do schemas, e não do `dist/` — o bundle do esbuild
 // puxa a fonte junto, então o runner nunca mede um build atrasado.
-import { resolveMaskForAudience } from "../../packages/schemas/src/ctx-audience"
+//
+// ⚠️ `applyMaskingTypeToValue` era importada de
+// `mcp-server-plughub/src/lib/context-masking` até 2026-09-04 (CTX-07), quando o
+// corpo mudou de casa. O mcp-server ainda a reexporta, e importar de lá continuaria
+// COMPILANDO e passando — medindo a casa que repassa em vez da que decide. Um
+// gêmeo divergente introduzido no schemas ficaria verde.
+import {
+  applyMaskingTypeToValue, resolveMaskForAudience,
+} from "../../packages/schemas/src/ctx-audience"
 import type { ContextMaskingType, DataType } from "@plughub/schemas"
 
 const FIXTURE = process.argv[2]
