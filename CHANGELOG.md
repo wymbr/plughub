@@ -1,5 +1,91 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 — wrap-up passa a emitir captura Arc 12, e o editor para de desarma-la
+
+Duas metades que so fazem sentido juntas: o form com captura existia e nunca foi
+ligado; e liga-lo sem consertar o editor teria armado uma armadilha.
+
+### O que existia, e por que ninguem usava
+
+`dialog_wrapup_arc12_v1` esta publicado (v1) e o caminho inteiro ja estava provado:
+**9 eventos** em `plughub_demo.agent_business_events`, todos `retencao_humano.wrapup.*`,
+todos de 2026-08-30 16:01 — a rodada do `smoke_wrapup_arc12_capture.sh`. Nenhuma decisao
+o barrava; ele so era **fixture de teste** (`TODO.md:1172`). O hook de
+`retencao_humano.on_human_end` apontava para o `dialog_wrapup_v1`, sem captura.
+
+Ele e superset estrito do atual: mesmas tres chaves (`classificacao`, `resumo`,
+`proximos_passos`) mais `fcr` (`kind: scored`, sim→1 / nao→0) e `servico`
+(`kind: nominal`, checklist). Nenhum consumidor perde campo; `segment_outcome_record`
+segue mapeando o nucleo, e as duas novas viram
+`retencao_humano.wrapup.fcr` e `retencao_humano.wrapup.servico.<folha>`.
+
+### A troca e CONFIG DE POOL, nao deploy — e isso e escopo, nao acaso
+
+O `dialog_form_id` vem de `@ctx.hook.dialog_form_id`, injetado pelo bridge a partir de
+`PoolHookEntry.context` do pool de **ORIGEM** — nao do `config_json` do slot do pool de
+wrap-up. Ha os dois mecanismos vivos no repositorio, e a escolha entre eles e de escopo:
+
+| pool | de onde vem o form | como troca |
+|---|---|---|
+| `survey_multi_ia` | `$.config.form_id` ← `PoolSkillSlot.config_json` | parametro de deploy + re-deploy |
+| `wrapup_detached_ia` | `@ctx.hook.dialog_form_id` ← `PoolHookEntry.context` da ORIGEM | dropdown na config do pool, **sem promote** |
+
+`wrapup_detached_ia` e um pool COMPARTILHADO: o skill e generico e o que varia e a
+configuracao de QUEM o invocou. Se o form morasse no `config_json`, todo pool de origem
+seria forcado ao mesmo formulario — fato de escopo estreito guardado em campo largo.
+Consequencia boa e nao-obvia: por ser config e nao deploy, a escolha **nao congela em
+snapshot de slot**, logo nao sofre da defasagem que custou o dia de 2026-09-03.
+
+Trocado via `PUT /v1/pools/retencao_humano` (parcial), o mesmo campo que o dropdown de
+Lifecycle Hooks escreve. `infra/registry/tenant_demo.yaml` foi alinhado junto: semente
+que discorda do que roda faz o proximo `--wipe` reverter o comportamento sem que ninguem
+ligue uma coisa a outra.
+
+### A armadilha que a adocao armaria — e o conserto (F0 do ADR da arvore)
+
+`flattenBlocks` (o "salvar" do editor) reescrevia o `capture` de pergunta de dialog-block
+por **ALLOWLIST**:
+
+    const metric = n.capture?.metric
+    nodes.push({ ...n, capture: metric ? { metric } : undefined })
+
+Elege o que fica. Quando o schema canonico ganhou `capture.kind`, a lista nao cresceu
+junto — e `deriveAgentEvents` exige `kind` **E** `metric`
+(`segment.ts`: `if (!cap?.kind || !cap.metric) continue`). Efeito: abrir o form no editor
+e salvar **desarma a metrica**, com o unico vestigio num `console.log` do mcp-server.
+Hoje o dano era zero porque o form nao era usado; adota-lo e o que arma a armadilha — e
+adota-lo por config de pool o torna conteudo vivo de tenant, que e justamente o que
+alguem abre no editor.
+
+⚠️ **A perda era invisivel ao compilador.** O tipo espelhado na UI
+(`dialog-hooks.ts: DialogCapture`) tambem nao tinha `kind`. *Um tipo espelhado que perde
+um campo transforma perda de dado em codigo que compila* — por isso o conserto tem duas
+metades, e a segunda e a que explica por que a primeira durou.
+
+Allowlist virou **DENYLIST**: o dialog-block solta o que e do modelo de instrumento
+(`dimension_id`/`weight`) e preserva o resto. Allowlist envelhece com o schema; denylist
+sobrevive ao proximo campo sem ninguem lembrar.
+
+### Gate
+
+`infra/test/gate_dialog_capture_roundtrip.sh` — exercita `buildBlocks` + `flattenBlocks`
+sobre o form **publicado real**, transpilando a unidade sob teste num `node:20-alpine`
+(o import e type-only, entao elide). Quatro ramos, **todos falseados por mutacao**, o D
+de forma independente (mutacao em campo NAO-capture):
+
+- **A** controle positivo — form sem captura da **INCONCLUSIVO**, nunca verde. Sem ele,
+  *"o round-trip preservou tudo"* e *"nao havia nada a preservar"* sao o mesmo verde: e o
+  defeito da assercao 7b do smoke do limite (CNS-20), que passava por ausencia do dado
+  que existia para conferir.
+- **B** `capture.kind` sobrevive.
+- **C** `option.capture.value` sobrevive — no `scored` o NUMERO mora na opcao, e sem ele
+  `Number("sim")` vira `NaN` e a metrica some pelo outro caminho.
+- **D** form sem `dimensions[]` faz round-trip lossless — a rede geral, que pega o
+  PROXIMO campo que o schema ganhar sem ninguem estender este gate.
+
+⚠️ **Limite declarado:** o gate guarda a TRANSFORMACAO, nao a tela. Se a pagina parar de
+chamar o flatten, ele segue verde.
+
 ## 2026-09-04 — CNS-22: o wrap-up "que funcionava" gravava nada havia tres dias
 
 **Contexto.** `wrapup_detached_ia` era a unica linha da divida declarada do

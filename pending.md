@@ -299,6 +299,21 @@ intocado. "Três níveis" nomeia dois modelos neste repositório — ver a desam
 | id | tarefa | estado | onde |
 |---|---|---|---|
 
+## `docs/adr/adr-dialog-tree-options.md` — opcoes em ARVORE no DialogForm
+
+*(A F0 — `flattenBlocks` lossless — fechou em 2026-09-04; ver `done.md`. As demais fases
+seguem sem tarefa aberta neste ledger.)*
+
+| id | tarefa | status | referencia |
+|---|---|---|---|
+
+## `docs/arcos/arc12-agent-business-events.md` — eventos de negocio do agente
+
+*(O wrap-up real passou a emitir captura Arc 12 em 2026-09-04; ver `done.md`.)*
+
+| id | tarefa | status | referencia |
+|---|---|---|---|
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 2.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho

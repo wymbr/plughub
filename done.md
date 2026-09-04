@@ -191,6 +191,18 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | id | tarefa | data | ancora no `CHANGELOG.md` |
 |---|---|---|---|
 
+## `docs/adr/adr-dialog-tree-options.md` — opcoes em ARVORE no DialogForm
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| DTO-01 | **F0 — `flattenBlocks` lossless.** Salvar um DialogForm no editor descartava `capture.kind`, porque o flatten reescrevia o `capture` por ALLOWLIST (`{ metric }`) e a lista nao cresceu quando o schema canonico ganhou o campo. Como `deriveAgentEvents` exige `kind` E `metric`, abrir e salvar desarmava a metrica Arc 12, com vestigio so num `console.log`. A perda era invisivel ao compilador: o tipo espelhado na UI tambem nao tinha `kind`. Allowlist virou DENYLIST (solta `dimension_id`/`weight`, preserva o resto), e o gate exercita o round-trip sobre o form PUBLICADO real | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 wrap-up Arc 12 |
+
+## `docs/arcos/arc12-agent-business-events.md` — eventos de negocio do agente
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| EVT-01 | **O wrap-up real passa a emitir captura Arc 12.** O `dialog_wrapup_arc12_v1` existia, publicado e com o caminho inteiro provado desde 2026-08-30 (9 eventos no ClickHouse, todos do smoke), mas nenhum hook o referenciava — era fixture. Trocado o `dialog_form_id` do hook `on_human_end` de `retencao_humano`, que e **config de pool, nao deploy** (o skill de wrap-up e generico e compartilhado; qual form usar e fato de QUEM invocou). Semente `tenant_demo.yaml` alinhada junto, para o proximo `--wipe` nao reverter em silencio | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 wrap-up Arc 12 |
+
 ## `sem-demanda`
 
 *(vazio)*
