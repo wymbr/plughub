@@ -53,6 +53,24 @@ Três coisas que este ADR deliberadamente **não** faz:
 
 Medição de 2026-09-04, ambiente demo, 11 formas publicadas.
 
+> ⚠️ **De que estas contagens são evidência — e de que NÃO são.** O ambiente medido é de
+> desenvolvimento/teste/demo; **não há nada em produção** e as formas existentes são fixtures
+> simples. Logo *"0 de 11"* e *"1 forma afetada"* **não** medem adoção de produto: num sistema
+> pré-produção toda contagem é perto de zero, e usá-las como fundamento seria decidir pela
+> espessura da amostra. Elas entram como **referência** — dizem o custo de migração HOJE, que é
+> aproximadamente nulo.
+>
+> O que é load-bearing neste ADR é a §1.1 e a §1.2: propriedades do **código**, verdadeiras
+> independentemente de quem usa (`RenderField` é allowlist · `retryEnabled` gateia a própria
+> validação · o `catch` libera regex inválida · duas superfícies não validam · `masking.types` já
+> carrega as máscaras). Essas não encolhem se a amostra encolher.
+>
+> **Corolário de ordenação, e ele inverte a leitura ingênua:** custo de remoção quase nulo não é
+> razão para adiar, é razão para **fazer agora** — a janela de baratice está aberta e só fecha. E
+> priorizar fase por *"onde a fixture tem lacuna"* ordena o trabalho pela amostra em vez de pela
+> capacidade que o produto precisa ter; as três superfícies precisam validar porque o tenant usará
+> a que couber, não a que o demo exercitou.
+
 ### 1.1 A declaração existe e é rica; a aplicação quase não existe
 
 | camada | declara | aplica |
@@ -99,7 +117,7 @@ todos os fluxos do processo.
 | formas semeadas (`infra/dialog/*.json`) | **0 de 11** |
 | YAMLs de skill (`MenuStep.validation`) | **0** |
 
-Disponível desde 2026-07-07 e nunca adotado. Removê-lo é dívida que **morre contada**, não decreto.
+Disponível desde 2026-07-07 e nunca usado. **Isto mede custo de remoção, não desinteresse** (ver a nota de ambiente acima) — e custo nulo é argumento para remover CEDO, não para adiar. A razão de remover está na §1.2(c)(d) e na D4, não aqui.
 
 ### 1.4 Metade do catálogo já existe — e é o risco central deste ADR
 
