@@ -39,6 +39,17 @@ proposito.** O avaliador canonico (`@plughub/schemas: evaluateAskWhen`) compara
 (canonica, Console, web). Nao foi mexido aqui: consertar um espelho quebraria a paridade
 que hoje existe, e a triplicacao e decisao em aberto do `adr-dialog-conditional-skip-logic`.
 
+**Confirmado no demo (2026-09-04 13:00), com a contagem como criterio.** Wrap-up real
+com os QUATRO servicos marcados produziu **5 linhas** em `agent_business_events` — um
+`retencao_humano.wrapup.fcr` mais uma `…servico.<folha>` por servico —, todas sob o mesmo
+`segment_id` (`77bc529a…`). A rodada anterior, com um servico so, tinha produzido 2. E a
+CONTAGEM que separa "consertou" de "parece que consertou": marcar N e receber 1 era
+exatamente o sintoma, e nenhum erro aparecia em lugar nenhum.
+
+Cruza com a correcao da manha: o `segment_id` preenchido nessas linhas so existe porque o
+snapshot do `wrapup_detached_ia` deixou de ler alias no mesmo dia — antes, `core.survey
+.segment_id` resolvia `null` e a atribuicao por participante nao acontecia.
+
 ### Sem gate automatizado, e isso esta DECLARADO
 
 O conserto do backend ja tem gate (o smoke). A metade de UI **nao tem**, porque
