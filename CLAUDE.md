@@ -1980,7 +1980,21 @@ agent-registry rejeita o ref com 422.
 **seed-if-absent**. Editar um JSON onde o form já está publicado é **no-op** — mesma pegadinha do
 YAML de skill (`DIALOG_SEED_RECONCILE=true` inverte).
 
-**Pendente (Fatia 2):** `channel_policy: elect`; timeout dinâmico do runner; preview no editor;
+**A autoria de `fields[]` é o editor JSON, e o VEREDICTO é do servidor** *(2026-09-04)*. `fields[]` —
+a lista que `interaction: form` coleta — não tem widget: a forma **é** JSON (a dialog-api persiste
+`nodes` como `list[dict[str, Any]]`), e o `DialogJsonPanel` importa/edita/exporta/pré-visualiza o
+documento inteiro. Aplicar **não grava**: Salvar/Publicar continua o caminho único.
+`POST /api/dialog/preview` (mcp-server) devolve `{valid, errors[], render}` rodando a **mesma**
+`buildRender`/`validateDialogForm` do `form_get` — que por isso mudaram para `@plughub/schemas`.
+O platform-ui **não importa `@plughub/schemas`** (sem workspaces, risco de dual-instance de Zod),
+então checar no browser seria a segunda casa da mesma regra — mesma D2 do
+`adr-skill-flow-editor-validation`. Degradação ALTA: verificador fora do ar ⇒ *"não verificado"*,
+**nunca** verde. ⚠️ Ele **não cobre** o conflito `format`×`masked` (§D8), que precisa do catálogo de
+formatos e segue no publish da dialog-api — e a tela **diz** isso.
+⚠️ O preview mostra o bloco **`render`**, nunca uma maquete de canal: a mesma forma já é desenhada
+por três superfícies que divergem, e a quarta seria aquela em que o autor confia.
+
+**Pendente (Fatia 2):** `channel_policy: elect`; timeout dinâmico do runner;
 entrega real do link web.
 
 → See [`docs/product/dialog-primitive-and-runner-design.md`](docs/product/dialog-primitive-and-runner-design.md),

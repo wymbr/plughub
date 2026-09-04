@@ -154,3 +154,35 @@ export function flattenBlocks(blocks: Block[]): { nodes: DialogNode[]; dimension
   }
   return { nodes, dimensions }
 }
+
+/**
+ * O que a projeção de blocos REESCREVERIA neste documento.
+ *
+ * `flattenBlocks` não é identidade: ela reescreve o `capture` de cada pergunta
+ * (vínculo de dimensão) e materializa `interaction`/`options` a partir do
+ * instrumento. Enquanto a única entrada era o próprio editor de widgets isso era
+ * invisível — os widgets só produziam o que a projeção já produziria. Com o
+ * editor JSON o autor passa a escrever à mão, e uma reescrita silenciosa vira
+ * *"editei, apliquei e o campo mudou sozinho"*.
+ *
+ * Devolve um item por nó divergente, nomeando as CHAVES — a regra da casa é que
+ * degradação não é silenciosa, e aqui a "degradação" é a edição do próprio autor
+ * sendo desfeita.
+ */
+export function reprojectionDrift(form: DialogForm): Array<{ node_id: string; keys: string[] }> {
+  const { nodes } = flattenBlocks(buildBlocks(form))
+  const depois = new Map(nodes.map(n => [n.id, n] as const))
+  const saida: Array<{ node_id: string; keys: string[] }> = []
+
+  for (const antes of form.nodes ?? []) {
+    const dep = depois.get(antes.id)
+    if (!dep) { saida.push({ node_id: antes.id, keys: ['(removido)'] }); continue }
+    const chaves = [...new Set([...Object.keys(antes), ...Object.keys(dep)])].filter(k => {
+      const a = (antes as unknown as Record<string, unknown>)[k]
+      const d = (dep   as unknown as Record<string, unknown>)[k]
+      return JSON.stringify(a ?? null) !== JSON.stringify(d ?? null)
+    })
+    if (chaves.length) saida.push({ node_id: antes.id, keys: chaves })
+  }
+  return saida
+}

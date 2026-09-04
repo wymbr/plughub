@@ -129,5 +129,60 @@
     "nodesRequired": "Adicione ao menos um nó.",
     "instrumentType": "Todo bloco de instrumento precisa de um tipo (CSAT/NPS/…) ou chave personalizada.",
     "askWhenRef": "A guarda \"só perguntar se\" referencia \"{{field}}\", que não é uma pergunta anterior."
+  },
+  "form": {
+    "fields": "Campos ({{n}})",
+    "editJson": "Editar no JSON",
+    "empty": "Nenhum campo declarado — esta pergunta não coleta nada. Abra o JSON e declare `fields[]`.",
+    "required": "obrigatório",
+    "prefilled": "pré-preenchido",
+    "inert": "Nesta interação o runtime ignora: {{keys}}. Os valores continuam no documento — edite-os no JSON."
+  },
+  "json": {
+    "open": "JSON",
+    "title": "JSON do formulário",
+    "tab": {
+      "json": "JSON",
+      "preview": "Pré-visualização"
+    },
+    "import": "Importar arquivo",
+    "export": "Exportar",
+    "apply": "Aplicar",
+    "applyAnyway": "Aplicar mesmo assim",
+    "applyAnywayHint": "O verificador reprovou. Aplicar só muda o rascunho — nada é gravado.",
+    "applyHint": "Aplicar só troca o rascunho; gravar continua sendo Salvar/Publicar.",
+    "cancel": "Cancelar",
+    "applied": "JSON aplicado ao rascunho.",
+    "drift": "Aplicado, mas a projeção de blocos reescreveu: {{nodes}}.",
+    "err": {
+      "notObject": "O JSON precisa ser um objeto de formulário.",
+      "formIdLocked": "form_id não pode mudar numa forma existente (esperado: {{id}})."
+    },
+    "verdict": {
+      "checking": "verificando...",
+      "ok": "válido",
+      "invalid": "{{n}} erro(s)",
+      "syntax": "JSON inválido",
+      "syntaxDetail": "Sintaxe: {{reason}}",
+      "unavailable": "não verificado",
+      "unavailableDetail": "O verificador não respondeu ({{reason}}). Isto NÃO é “sem erros” — é “não verificado”.",
+      "okDetail": "Estrutura válida. Não cobre o conflito formato × máscara (§D8), que é verificado ao publicar."
+    },
+    "preview": {
+      "disclaimer": "Este é o bloco `render` que o runner recebe — não é uma maquete de canal. Cada canal desenha do seu jeito.",
+      "unavailable": "A pré-visualização aparece quando o JSON é válido.",
+      "interaction": "Interação",
+      "outputKey": "Chave de saída",
+      "timeout": "Timeout",
+      "prompt": "Prompt (turno único)",
+      "menuPrompt": "Prompt do formulário",
+      "statementAfter": "Depois",
+      "options": "Opções",
+      "fields": "Campos ({{n}})",
+      "type": "Tipo",
+      "required": "Obrigatório",
+      "validation": "Validação",
+      "raw": "render completo (JSON)"
+    }
   }
 }

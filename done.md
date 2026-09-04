@@ -236,3 +236,15 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 ## `sem-demanda`
 
 *(vazio)*
+
+---
+
+## `docs/product/dialog-primitive-and-runner-design.md` — primitivo de dialogo (survey + OTP)
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| DLG-01 | **`fields[]` ganhou autoria, e ela é o editor JSON.** `DialogJsonPanel` (importar arquivo · editar em Monaco · exportar · pré-visualizar), com o veredicto vindo de `POST /api/dialog/preview` — a MESMA `validateDialogForm`/`buildRender` que o `form_get` roda. Aplicar **não grava**: troca o rascunho, e Salvar/Publicar segue caminho único. Degradação ALTA (verificador fora do ar ⇒ *"não verificado"*, nunca verde) e **escopo declarado**: não cobre o conflito `format`×`masked`, que precisa do catálogo e segue no publish. O achado do arco foi que o *"canonical validator on the TS side"* prometido pela dialog-api **não existia em lugar nenhum** — os widgets eram validador por acidente de afordância, e o JSON remove o acidente | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 (8) |
+| DLG-02 | **`menu_prompt` descartava o prompt da pergunta** — `before.join() \|\| qPrompt` curto-circuitava, e as três formas `form` do repositório perdiam os três prompts. Corrigido com teste falseado por mutação e controle positivo ao lado. **Muda o texto de três formas publicadas**, decidido pelo dono | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 (8) |
+| DLG-03 | **O runner genérico passou a alcançar `interaction: form`** — `choice` sobre `render.interaction` → `coletar_form` com `fields`. Passar `fields` sempre não era opção: `render.fields` SEMPRE tem entrada (sintética por pergunta escalar) e o WhatsApp dispara coleta sequencial com `len(fields) > 0`. Contrato declarado: no ramo `form`, `payload.value` é MAPA | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 (8) |
+| DLG-04 | **`buildRender`/`duplicateNodeIds` mudaram para `@plughub/schemas/dialog-render.ts`** — função pura com dois consumidores (o `form_get` e o preview do editor). O `resolveLocalizedText` já nomeava *"the editor preview"* como consumidor previsto desde que foi escrito | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 (8) |
+

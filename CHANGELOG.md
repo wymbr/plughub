@@ -1,5 +1,99 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (8) — DLG: `fields[]` ganha autoria, e ela é o JSON
+
+O editor de DialogForm oferecia `form` no seletor de interação e **não sabia autorá-la**.
+Medido: `grep fields DialogFormsPage.tsx` = **zero**, enquanto o runtime a suporta inteira
+(`buildRender` → step `menu` → adapters de canal). Escolher `form` produzia uma pergunta
+com `interaction: "form"` e nenhum campo — e no `form_get` isso degenera num campo
+sintético `{id: output_key, type: "choice"}` **sem opções**. O publish aceita (o `fields` é
+opcional no Zod, e a dialog-api é frouxa por decisão). **Nó morto, nada vermelho** — a
+família *valor plausível*, agora na superfície de autoria.
+
+### A decisão: superfície JSON, não widget aninhado (do dono)
+
+Um editor de widgets para `fields[]` seria o **5º nível** de aninhamento (bloco → nó →
+pergunta → campo → opção/validação), com ~8 atributos por campo e dois deles compostos. A
+forma **é** JSON — a dialog-api persiste `nodes` como `list[dict[str, Any]]`, opaco por
+decisão —, então a superfície de poder edita o documento e o widget continua dono do que já
+cobre bem. O JSON cobre o schema INTEIRO, inclusive o que ele ganhar depois: é a mesma
+razão pela qual `flattenBlocks` usa denylist e não allowlist.
+
+### O veredicto é do SERVIDOR, e o achado é que ele não existia em lugar nenhum
+
+`FormUpsert` (dialog-api) diz no docstring *"the canonical validator is the Zod
+DialogFormSchema on the TS side"*. Medido: **do lado TS ninguém parseia** — o `save()` da
+tela faz quatro checagens à mão e dá `PUT`; o `dialog-hooks.ts` não parseia; e o próprio
+`form_get` admite em comentário que *"form JSON is raw-cast, not Zod-parsed"*. Promessa sem
+mecanismo, a família do DDL de `participation_intervals`. Até aqui não mordia porque **os
+widgets não conseguiam emitir forma inválida** — o editor era validador por acidente de
+afordância, e o JSON remove exatamente esse acidente.
+
+`POST /api/dialog/preview` (mcp-server, rota FINA) devolve `{valid, errors[], render}`
+rodando a mesma função do `form_get`. No browser não dá: o platform-ui **não importa**
+`@plughub/schemas` (sem workspaces, Dockerfile copia só o pacote, risco de dual-instance de
+Zod), e reimplementar compraria *"o editor disse que estava bom e o save recusou"* — D2 do
+`adr-skill-flow-editor-validation`, aplicada tal qual.
+
+- **Degradação ALTA**: verificador fora do ar ⇒ *"não verificado"*, **nunca** verde.
+- **Não cobre** o conflito `format` × `masked` (§D8) — precisa do catálogo de formatos
+  (config-api), que função pura não tem. Segue no publish, e **a tela diz isso**: validador
+  que insinua completude é como se compra a divergência que ele deveria impedir.
+- `DialogFormDraftSchema` omite `tenant_id`/`created_at`/`updated_at` — os três campos que o
+  STORE é dono. Sem esse corte o validador reprovaria **toda forma nova**, e validador que
+  reprova o caso normal ensina a ser ignorado.
+
+### O preview mostra o `render`, não uma maquete de canal
+
+A mesma forma já é desenhada por TRÊS superfícies que divergem (Console, webchat, página
+web). Uma quarta, inventada para o editor, seria o `evaluateAskWhen` triplicado outra vez —
+e logo naquela em que o autor confia. Mostra-se o bloco `render`: fiel por construção,
+porque vem da função de produção. **Reaproveitar o caminhador do `DialogFormRenderer` foi
+recusado nesta fatia por medição** — o `platform-ui` não tem infraestrutura de teste alguma
+(AUT-25), e refatorar um componente vivo que serve aprovação e wrap-up sem rede embaixo,
+junto de endpoint novo e mudança de casa, é como se quebra aprovação em silêncio.
+
+### Duas correções de contrato que vieram junto
+
+**`menu_prompt` descartava o prompt da pergunta.** Era `before.join("
+
+") || qPrompt`, e
+o `||` curto-circuita: havendo statement de abertura, o prompt sumia. As **três** formas
+`form` do repositório têm as duas coisas, então os três prompts nunca chegaram a ninguém —
+*"Preencha os dados da solicitação:"*, *"Dados da aprovação"*, *"Análise de crédito"*.
+Ninguém notou porque o statement sozinho faz sentido. **Muda o texto de três formas
+publicadas**, decidido pelo dono.
+
+**O runner genérico não alcançava `form`.** `skill_dialog_runner_v1` passava
+`interaction/options/validation/retry` e **não** `fields` — dos cinco consumidores de
+`form_get`, só `skill_limite_entrada_v1` (fiado à mão) passava. Agora há `choice` sobre
+`render.interaction` → `coletar_form`. **Não dá para passar `fields` sempre**: `render.fields`
+SEMPRE tem entrada (sintética, uma por pergunta escalar) e o adapter de WhatsApp entra em
+coleta sequencial com `if interaction == "form" or len(fields) > 0` — toda pergunta escalar
+viraria formulário. ⚠️ Consequência declarada: no ramo `form`, `payload.value` é um **MAPA**
+`{field_id: valor}`.
+
+### Também
+
+- `buildRender`/`duplicateNodeIds` mudaram para `@plughub/schemas/dialog-render.ts` (função
+  pura, dois consumidores). O `resolveLocalizedText` já antecipava o segundo: *"kept here so
+  the runner, **the editor preview** and any renderer resolve identically"*.
+- **Aviso de reprojeção** — `flattenBlocks` não é identidade (reescreve `capture`, materializa
+  `interaction`/`options` de instrumento). Invisível com widgets; com JSON à mão viraria
+  *"editei, apliquei e mudou sozinho"*. Ao aplicar, a tela **nomeia nós e chaves** reescritas.
+- **Ramo `form` do painel de widgets** deixa de exibir o que o runtime ignora ali (`options`,
+  `validation`, `retry`, `masked` do nó — este porque o `form_get` escreve `masked: f.masked ??
+  false` por campo e nunca propaga o do nó) e passa a mostrar o **resumo dos campos**. Se o nó
+  carregar valor num deles, avisa em vez de sumir com o dado. O `timeout_s` FICA: é do turno.
+- Quarta ocorrência do tipo espelhado atrasado (família DTO-01): `DialogField` do
+  `dialog-hooks.ts` não tinha `value` nem `options`. `value` ganhou o aviso medido — **só o
+  Console o honra** (`DialogFormRenderer` semeia `fieldValues`); webchat e página web montam o
+  `<input>` sem `value`, e WhatsApp/SMS não têm a noção.
+- Testes: `packages/schemas/src/dialog-render.test.ts` (8 casos). Os dois do `menu_prompt`
+  foram **falseados por mutação** (dropar `qPrompt` da junção ⇒ 2 vermelhos), e há controle
+  positivo ao lado (sem statement, o prompt continua sozinho).
+
+
 ## 2026-09-04 (7) — F5: a rede fecha o arco, e ela e MITIGACAO por decisao
 
 CTX-06. A ultima fase do [`adr-context-read-audience-policy`](docs/adr/adr-context-read-audience-policy.md).

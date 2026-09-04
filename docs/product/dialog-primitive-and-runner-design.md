@@ -458,8 +458,69 @@ Fecha os itens antes deferidos (§6.1) e formaliza o achado dos **dois veículos
   no chamador. `form_get` expõe validation/retry no render; runner + loop consumer passam os refs.
 
 **Deferido residual (Fatia 2):** entrega real do link web (provedor SMS/e-mail); timeout dinâmico do runner;
-`channel_policy: elect`; plumbing `$.config` bridge→slot; multi-locale + preview + auth no editor.
+`channel_policy: elect`; plumbing `$.config` bridge→slot; multi-locale + auth no editor.
 Follow-up de demo-infra: vazamento de instância no `portabilidade_ia`.
+
+## 6.3 As-built — autoria de `fields[]` e a superfície JSON (2026-09-04)
+
+O editor de widgets oferecia `form` no seletor de interação e **não sabia autorá-la**: medido,
+`grep fields DialogFormsPage.tsx` = **zero**. Escolher `form` produzia uma pergunta com
+`interaction: "form"` e nenhum campo — no `form_get` isso degenera num campo sintético
+`{id: output_key, type: "choice"}` **sem opções**, e o publish aceita (o `fields` é opcional no Zod
+e a dialog-api é frouxa por decisão). Nó morto, nada vermelho.
+
+**Decisão do dono: superfície JSON, não widget aninhado.** A forma **é** JSON — a dialog-api
+persiste `nodes` como `list[dict[str, Any]]` —, e um editor de widgets para `fields[]` seria o 5º
+nível de aninhamento (bloco → nó → pergunta → campo → opção/validação) com ~8 atributos por campo,
+dois deles compostos. O widget continua dono do que já cobre bem (statement, texto, botões,
+instrumento); o JSON é a superfície de poder, e cobre o schema INTEIRO, inclusive o que ele ganhar
+depois.
+
+- **`DialogJsonPanel`** (`platform-ui`) — importar arquivo · editar (Monaco, já era dependência) ·
+  exportar · **pré-visualizar**. Aplicar **não grava**: troca o rascunho em memória, e
+  Salvar/Publicar segue o único caminho de escrita (regras de arquivado e 409 intactas).
+- **O veredicto é do SERVIDOR** — `POST /api/dialog/preview` (mcp-server) devolve
+  `{ valid, errors[], render }` rodando a MESMA função do `form_get`. O platform-ui não importa
+  `@plughub/schemas` (sem workspaces; risco de dual-instance de Zod), e reimplementar a checagem no
+  browser compraria *"o editor disse que estava bom e o save recusou"* — mesma D2 do
+  `adr-skill-flow-editor-validation`. Degradação **ALTA**: verificador fora do ar ⇒ *"não
+  verificado"*, nunca verde.
+  ⚠️ **Não cobre** o conflito `format` × `masked` (§D8): aquela regra precisa do catálogo de
+  formatos (config-api), que uma função pura não tem — segue no publish da dialog-api, e a tela diz
+  isso em vez de insinuar completude.
+- **`buildRender` mudou de casa** para `@plughub/schemas/dialog-render.ts` (função pura, dois
+  consumidores). O `resolveLocalizedText` já antecipava: *"kept here so the runner, the editor
+  preview and any renderer resolve identically"*.
+- **O preview mostra o bloco `render`**, não uma maquete de canal. A mesma forma já é desenhada por
+  três superfícies que divergem (Console, webchat, página web); uma quarta, inventada para o editor,
+  seria a divergência do `evaluateAskWhen` outra vez — e logo naquela em que o autor confia.
+- **Aviso de reprojeção** — `flattenBlocks` não é identidade (reescreve `capture`, materializa
+  `interaction`/`options` de instrumento). Com widgets isso era invisível; com JSON à mão viraria
+  *"editei, apliquei e mudou sozinho"*. Ao aplicar, a tela **nomeia os nós e as chaves** reescritas.
+- **Ramo `form` do editor de widgets** — deixa de mostrar os controles que o runtime ignora nessa
+  interação (`options`, `validation`, `retry`, `masked` do nó) e passa a mostrar o **resumo dos
+  campos** + porta para o JSON. Se o nó carregar valor num desses campos, a tela **avisa** em vez de
+  sumir com o dado.
+
+### Duas correções de contrato que vieram junto
+
+1. **`menu_prompt` descartava o prompt da pergunta.** Era `before.join("\n\n") || qPrompt` — o `||`
+   curto-circuitava, então havendo statement de abertura o prompt sumia. As **três** formas `form`
+   do repositório têm as duas coisas, logo os três prompts nunca chegavam a ninguém
+   (*"Preencha os dados da solicitação:"*, *"Dados da aprovação"*, *"Análise de crédito"*). Corrigido
+   — **isto muda o texto de três formas publicadas**, mudança decidida pelo dono.
+2. **O runner genérico não alcançava `form`.** `skill_dialog_runner_v1` passava
+   `interaction/options/validation/retry` e **não** `fields`, então forma `form` só funcionava em
+   skill fiado à mão (`skill_limite_entrada_v1`). Agora há um `choice` sobre
+   `render.interaction` → `coletar_form`. Não dá para passar `fields` sempre: `render.fields`
+   **sempre** tem entrada (sintética, uma por pergunta escalar) e o adapter de WhatsApp entra em
+   coleta sequencial com `if interaction == "form" or len(fields) > 0` — toda pergunta escalar
+   viraria formulário.
+   ⚠️ **Consequência de contrato:** no ramo `form`, `payload.value` é um **MAPA**
+   `{field_id: valor}`, não escalar (§3.2 continua valendo para os demais modos). Campo `masked`
+   não aparece nele — fica no escopo em memória do engine.
+   Segue aberto para `skill_survey_runner_v1` e `agente_nps_v1` (formas de survey são escalares por
+   natureza; ver `pending.md`).
 
 ## 7. Pontos a validar em runtime (quando implementar)
 

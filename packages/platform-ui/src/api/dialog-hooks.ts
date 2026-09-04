@@ -100,6 +100,17 @@ export interface DialogField {
    * inexprimível pela tela — terceira ocorrência da família DTO-01.
    */
   masked?: boolean | string
+  /**
+   * Valor pré-preenchido que o humano pode EDITAR (aprovação, `form_ext`).
+   * ⚠️ Só o Console o honra — medido em 2026-09-04: `DialogFormRenderer` semeia
+   * `fieldValues` a partir dele, enquanto o webchat (`webchat-test.html`) e a
+   * página web (`survey_web.py`) montam o `<input>` SEM `value`, e
+   * WhatsApp/SMS não têm noção de campo pré-preenchido. Logo é afordância de
+   * aprovação/wrap-up, nunca de formulário voltado ao cliente.
+   */
+  value?: string | number | boolean
+  /** Lista de opções de um campo `select`/`checklist` (distinta das opções da PERGUNTA). */
+  options?: DialogOption[]
   validation?: DialogValidation
   capture?: DialogCapture
 }

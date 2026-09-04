@@ -60,8 +60,49 @@ steps:
       form_id:   "@ctx.core.workflow.dialog_form_id"
       tenant_id: "$.tenant_id"
     output_as: dialog
-    on_success: coletar
+    on_success: escolher_superficie
     on_failure: retornar_falha
+
+  # ── 1b. Uma forma, DUAS superficies ─────────────────────────────────────────
+  # `interaction: form` coleta N campos nomeados num turno so, e o step precisa de
+  # `fields` — que os outros modos nao usam. Nao da para passar `fields` sempre:
+  # `render.fields` SEMPRE tem entrada (sintetica, uma por pergunta escalar) e o
+  # adapter de WhatsApp entra em coleta sequencial com
+  # `if interaction == "form" or len(fields) > 0` — toda pergunta escalar viraria
+  # formulario. Por isso o ramo e explicito.
+  #
+  # Ate 2026-09-04 este runner nao tinha o ramo, entao forma com `interaction:
+  # form` so funcionava em skill fiado a mao (`skill_limite_entrada_v1`).
+  - id: escolher_superficie
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.dialog.render.interaction"
+        operator: eq
+        value:    "form"
+        next:     coletar_form
+    default: coletar
+
+  # ── 2a. Coleta MULTI-CAMPO (interaction: form) ──────────────────────────────
+  # `interaction: form` LITERAL: `render.interaction` ja vale "form" neste ramo, e
+  # escrever a referencia faria o mesmo — o literal e mais legivel e nao depende
+  # de o choice ter acertado.
+  #
+  # ⚠️ CONTRATO: aqui `$.pipeline_state.answers` e um MAPA (`{field_id: valor}`),
+  # nao um escalar. O `retornar` abaixo o devolve em `payload.value` do mesmo
+  # jeito — quem chama uma forma `form` recebe objeto, e precisa saber disso.
+  # Campo `masked` NAO aparece nesse mapa: fica no escopo em memoria do engine.
+  - id: coletar_form
+    type: menu
+    interaction: form
+    prompt: "{{$.pipeline_state.dialog.render.menu_prompt}}"
+    fields: "$.pipeline_state.dialog.render.fields"
+    visibility: "$.pipeline_state.dialog.render.visibility"
+    output_as: answers
+    timeout_s: "$.pipeline_state.dialog.render.timeout_s"
+    on_success: retornar
+    on_failure: retornar_falha
+    on_timeout: retornar_falha
+    on_disconnect: retornar_falha
 
   # ── 2. Collect the customer's input (channel) ────────────────────────────────
   # §17.4 single-question NATIVE render: interaction/options/visibility come from
@@ -88,7 +129,10 @@ steps:
     on_disconnect: retornar_falha
 
   # ── 3. Return the raw answer to the caller (control stays with the caller) ────
-  # Uniform contract: payload.value = the collected scalar. The caller's delegate
+  # Uniform contract: payload.value = the collected answer — ESCALAR nos modos
+  # text/button/list/checklist, e um MAPA `{field_id: valor}` quando a pergunta e
+  # `interaction: form` (2026-09-04). A referencia abaixo resolve os dois; quem
+  # chama e que precisa saber qual pediu. The caller's delegate
   # step resumes with output_value = payload, so the answer lands in the caller's
   # $.pipeline_state.<delegate_step>.value. verify/record happen there (domain).
   - id: retornar

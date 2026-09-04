@@ -129,5 +129,60 @@
     "nodesRequired": "Add at least one node.",
     "instrumentType": "Every instrument block needs a type (CSAT/NPS/…) or a custom key.",
     "askWhenRef": "The \"only ask if\" guard references \"{{field}}\", which is not a prior question."
+  },
+  "form": {
+    "fields": "Fields ({{n}})",
+    "editJson": "Edit in JSON",
+    "empty": "No fields declared — this question collects nothing. Open the JSON and declare `fields[]`.",
+    "required": "required",
+    "prefilled": "pre-filled",
+    "inert": "In this interaction the runtime ignores: {{keys}}. The values stay in the document — edit them in the JSON."
+  },
+  "json": {
+    "open": "JSON",
+    "title": "Form JSON",
+    "tab": {
+      "json": "JSON",
+      "preview": "Preview"
+    },
+    "import": "Import file",
+    "export": "Export",
+    "apply": "Apply",
+    "applyAnyway": "Apply anyway",
+    "applyAnywayHint": "The checker rejected it. Applying only changes the draft — nothing is saved.",
+    "applyHint": "Apply only swaps the draft; saving is still Save/Publish.",
+    "cancel": "Cancel",
+    "applied": "JSON applied to the draft.",
+    "drift": "Applied, but the block projection rewrote: {{nodes}}.",
+    "err": {
+      "notObject": "The JSON must be a form object.",
+      "formIdLocked": "form_id cannot change on an existing form (expected: {{id}})."
+    },
+    "verdict": {
+      "checking": "checking...",
+      "ok": "valid",
+      "invalid": "{{n}} error(s)",
+      "syntax": "invalid JSON",
+      "syntaxDetail": "Syntax: {{reason}}",
+      "unavailable": "not verified",
+      "unavailableDetail": "The checker did not answer ({{reason}}). This is NOT \"no errors\" — it is \"not verified\".",
+      "okDetail": "Structure is valid. Does not cover the format x mask conflict (D8), which is checked on publish."
+    },
+    "preview": {
+      "disclaimer": "This is the `render` block the runner receives — not a channel mockup. Each channel draws it its own way.",
+      "unavailable": "The preview appears once the JSON is valid.",
+      "interaction": "Interaction",
+      "outputKey": "Output key",
+      "timeout": "Timeout",
+      "prompt": "Prompt (single turn)",
+      "menuPrompt": "Form prompt",
+      "statementAfter": "After",
+      "options": "Options",
+      "fields": "Fields ({{n}})",
+      "type": "Type",
+      "required": "Required",
+      "validation": "Validation",
+      "raw": "full render (JSON)"
+    }
   }
 }

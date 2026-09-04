@@ -830,6 +830,26 @@ export type {
   DialogForm,
 } from "./dialog"
 
+// ── DialogForm — normalização `render` + veredicto estrutural (dry-run) ───────
+// Mora em `@plughub/schemas` porque tem DOIS consumidores: o `form_get` do
+// mcp-server e o preview do editor JSON (via `POST /api/dialog/preview`).
+export {
+  DialogFormDraftSchema,
+  buildRender,
+  duplicateNodeIds,
+  validateDialogForm,
+} from "./dialog-render"
+
+export type {
+  RenderField,
+  RenderOption,
+  RenderRetry,
+  RenderQuestion,
+  DialogRender,
+  DialogFormIssue,
+  DialogFormVerdict,
+} from "./dialog-render"
+
 // ── DialogForm — catálogo de FORMATOS de entrada (ADR adr-dialog-input-format-catalog) ──
 export {
   DialogInputModeSchema,

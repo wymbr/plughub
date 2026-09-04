@@ -45,6 +45,8 @@ import type { AgentEventDeps }      from "./tools/agent-events"
 import { registerJourneyTools, writeContextTag, resolveJourneyRoot, journeyCtxKey } from "./tools/journey"
 import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
+// Dry-run do editor de DialogForm: a MESMA função que o `form_get` roda.
+import { validateDialogForm }       from "@plughub/schemas"
 import { registerSegmentTools }     from "./tools/segment"
 import { registerWorkflowTools }    from "./tools/workflow"
 import type { WorkflowDeps }        from "./tools/workflow"
@@ -1972,6 +1974,53 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Written by channel-gateway (inbound via WebchatAdapter, outbound via OutboundConsumer).
   // Key: session:{sessionId}:messages — Redis List (RPUSH, LRANGE).
   // Each entry is a JSON-serialised ChatMessage { id, author, text, timestamp }.
+  /**
+   * DRY-RUN do editor de DialogForm (2026-09-04) — veredicto + `render`.
+   *
+   * O editor JSON do platform-ui precisa de duas respostas antes de salvar:
+   * *"esta forma é válida?"* e *"o que o runner receberia?"*. As duas saem da
+   * MESMA função que o `form_get` roda (`@plughub/schemas/dialog-render`), e é
+   * por isso que a rota vive aqui e não na dialog-api: reimplementar o contrato
+   * em Python seria a segunda casa da mesma regra, e a divergência apareceria
+   * como *"o editor disse que estava bom e o save recusou"*
+   * (`adr-skill-flow-editor-validation`, D2).
+   *
+   * ⚠️ Rota FINA de propósito — o invariante *"never add business logic to
+   * mcp-server"* continua valendo: ela não decide nada, só expõe a normalização
+   * que já existia.
+   *
+   * AUTENTICA, mas NÃO exige papel — e isso é decidido, não esquecido. A rota é
+   * função PURA sobre o corpo que o chamador já tem: não lê store, não devolve
+   * dado que não foi enviado. Um `requireJwtRole` aqui criaria um SEGUNDO portão
+   * sobre a tela de Dialog Forms, mais grosseiro que o ABAC `config.dialog_forms`
+   * que a governa — e dois portões sobre a mesma decisão significam que o
+   * grosseiro é o único que vale. Se um dia ela LER a forma do store (preview por
+   * `form_id`), ganha o portão de escopo ANTES.
+   */
+  app.post("/api/dialog/preview", (req: Request, res: Response) => {
+    try {
+      verifyJwtPayload(req.headers.authorization)
+    } catch (err) {
+      if (respondeFalhaDeAuth(err, res)) return
+      res.status(401).json({ error: "Unauthorized" })
+      return
+    }
+    const body   = (req.body ?? {}) as Record<string, unknown>
+    const doc    = body["form"] ?? body
+    const locale = typeof body["locale"] === "string" ? (body["locale"] as string) : undefined
+    try {
+      res.json(validateDialogForm(doc, locale))
+    } catch (err) {
+      // Documento tão malformado que nem o veredicto sai (ex.: `nodes` não é
+      // array e um guard interno estourou). 500 mudo aqui viraria "não
+      // verificado" na tela sem dizer por quê.
+      res.status(500).json({
+        error:  "preview_failed",
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })
+
   // CAP-12 (2026-09-01): esta rota é PUBLICADA pela borda (`location ~ ^/api` no
   // nginx que o `packages/platform-ui/Dockerfile` gera) e respondia SEM credencial
   // — medido, anônimo e com Bearer devolviam exatamente o mesmo. O Console já
