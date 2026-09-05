@@ -27,6 +27,9 @@
 #      — é a testemunha NEGATIVA, e ela é o motivo do probe existir.
 #   D  marcação ÚNICA deixar de produzir 1 evento                             → VERMELHO
 #      (regressão do caminho escalar, que continua sendo o de todo dia)
+#   E  o CAMINHO da taxonomia ser colapsado, ou estourar o teto de            → VERMELHO
+#      segmentos da `category` (F4) — o teto é LIDO do schema, nunca escrito
+#      aqui, então subir a profundidade da árvore sem subir o teto reprova.
 #
 # A cadeia exercitada é a REAL, recortada dos dois arquivos: `coerceMultiAnswer`
 # (o que o engine grava no `pipeline_state`) → `deriveAgentEvents` (o que a tool
@@ -37,6 +40,7 @@
 # ────────────
 #   1. `coerceMultiAnswer` devolvendo `raw` para checklist   → B e C vermelhos
 #   2. `deriveAgentEvents` sem o ramo `Array.isArray(raw)`   → B vermelho
+#   3. `sanitizeCategoryPath` voltando a trocar `.` por `_`  → E vermelho
 #
 # Uso:  bash infra/test/probe_multi_answer_events.sh
 set -uo pipefail
@@ -90,9 +94,13 @@ NL = chr(10)
 alvos = [
     ("coerceMultiAnswer",
      "packages/skill-flow-engine/src/steps/menu.ts", "coerce.ts", ""),
+    ("sanitizeCategoryPath",
+     "packages/mcp-server-plughub/src/tools/segment.ts", "sanitize.ts", ""),
     ("deriveAgentEvents",
      "packages/mcp-server-plughub/src/tools/segment.ts", "derive.ts",
-     "type FormQuestion = any" + NL),
+     "type FormQuestion = any" + NL
+     + 'import { sanitizeCategoryPath } from "./sanitize.js"' + NL
+     + "const AGENT_EVENT_CATEGORY_MAX_SEGMENTS = Number(process.env.MAXSEG)" + NL),
 ]
 falhou = False
 for nome, rel, arq, prelude in alvos:
@@ -113,7 +121,7 @@ PY
 docker run --rm -v "$TMP:/t" -v "$RAIZ:/w:ro" -w /t "$NODE_IMG" \
   node /w/packages/platform-ui/node_modules/typescript/bin/tsc \
   --module es2020 --target es2020 --moduleResolution bundler \
-  --noResolve --skipLibCheck --outDir /t coerce.ts derive.ts >"$TMP/tsc.log" 2>&1
+  --noResolve --skipLibCheck --outDir /t coerce.ts derive.ts sanitize.ts >"$TMP/tsc.log" 2>&1
 [ -s "$TMP/coerce.js" ] && [ -s "$TMP/derive.js" ] || {
   sed 's/^/      /' "$TMP/tsc.log" | head -10
   inconclusivo "não transpilei os recortes (log acima)"; }
@@ -136,10 +144,17 @@ const duas  = deriveAgentEvents(form, { [key]: doEngine(doCanal(['suporte', 'fin
 const uma   = deriveAgentEvents(form, { [key]: doEngine(doCanal(['suporte'])) }, ctx)
 const crua  = deriveAgentEvents(form, { [key]: doEngine('suporte') }, ctx)  // canal sem JSON
 
-console.log(JSON.stringify({ duas, uma, crua }))
+// F4 — o caminho da taxonomia tem de sobreviver como CAMINHO. O sanitizador
+// antigo trocava `.` por `_` e colapsava a hierarquia num segmento so.
+const caminho = deriveAgentEvents(
+  form, { [key]: doEngine(doCanal(['financeiro.cobranca.indevida'])) }, ctx)
+
+console.log(JSON.stringify({ duas, uma, crua, caminho }))
 JS
 
-SAIDA="$(docker run --rm -v "$TMP:/t" -w /t "$NODE_IMG" node /t/run.mjs "$OK_KEY" 2>&1)"
+MAXSEG="$(grep -oE "AGENT_EVENT_CATEGORY_MAX_SEGMENTS = [0-9]+" "$RAIZ/packages/schemas/src/agent-events.ts" | grep -oE "[0-9]+$")"
+[ -n "$MAXSEG" ] || inconclusivo "nao li AGENT_EVENT_CATEGORY_MAX_SEGMENTS do schema"
+SAIDA="$(docker run --rm -e MAXSEG="$MAXSEG" -v "$TMP:/t" -w /t "$NODE_IMG" node /t/run.mjs "$OK_KEY" 2>&1)"
 echo "$SAIDA" | head -c 1 | grep -q '{' || {
   echo "$SAIDA" | sed 's/^/      /' | head -12
   inconclusivo "o runner não produziu JSON (log acima)"; }
@@ -150,6 +165,7 @@ d=json.loads(sys.stdin.read())
 print('DUAS', len(d['duas']), ' '.join(e['category'] for e in d['duas']))
 print('UMA', len(d['uma']), ' '.join(e['category'] for e in d['uma']))
 print('CRUA', len(d['crua']), ' '.join(e['category'] for e in d['crua']))
+print('CAMINHO', len(d['caminho']), ' '.join(e['category'] for e in d['caminho']))
 " <<<"$SAIDA")"
 
 # ── B — duas marcações, dois eventos ──────────────────────────────────────────
@@ -181,6 +197,22 @@ else
   bad "esperado 1 evento em cada; vieram JSON=$NU cru=$NC"
   echo "$CATS" | sed 's/^/        /'
 fi
+
+echo
+echo "E — caminho de taxonomia mantem os pontos e cabe na categoria do Arc 12"
+CAT="$(grep "^CAMINHO" <<<"$CATS" | cut -d" " -f3)"
+NSEG="$(awk -F. "{print NF}" <<<"$CAT")"
+if [[ "$CAT" != *".financeiro.cobranca.indevida" ]]; then
+  bad "o caminho foi colapsado: $CAT"
+elif [ "$NSEG" -gt "$MAXSEG" ]; then
+  bad "categoria com $NSEG segmentos, acima do teto $MAXSEG — o evento seria REJEITADO"
+else
+  ok "$CAT — $NSEG segmentos, teto $MAXSEG"
+fi
+case "$CAT" in
+  *".financeiro."*) ok "alcancavel por startsWith(...'.financeiro.')" ;;
+  *) bad "o prefixo da pasta nao alcanca a folha — a agregacao hierarquica da D10 nao funciona" ;;
+esac
 
 echo
 if [ "$FAIL" -gt 0 ]; then

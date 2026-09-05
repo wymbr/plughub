@@ -29,6 +29,7 @@ import { z }         from "zod"
 import { randomUUID } from "crypto"
 import type { RedisClient } from "../infra/redis"
 import { buildAgentBusinessEvent } from "./agent-events"
+import { AGENT_EVENT_CATEGORY_MAX_SEGMENTS } from "@plughub/schemas"
 
 export interface SegmentDeps {
   redis: RedisClient
@@ -95,6 +96,35 @@ async function fetchPublishedForm(
 }
 
 /**
+ * sanitizeCategoryPath — normaliza a resposta em segmentos de categoria,
+ * **preservando o `.` como separador** (F4 do `adr-dialog-tree-options`).
+ *
+ * O sanitizador anterior era `replace(/[^a-z0-9_]+/g, "_")` sobre a resposta
+ * inteira, e o ponto caía nessa classe: `financeiro.cobranca.indevida` virava
+ * `financeiro_cobranca_indevida` — **um** segmento. Três consequências, todas
+ * mudas:
+ *
+ *   · a hierarquia morria no emissor, então o teto de segmentos nunca era
+ *     alcançado e a subida dele não teria efeito nenhum;
+ *   · `startsWith(category, "…motivo.financeiro.")` — o recorte da D10 — não
+ *     casaria com nada, porque não havia ponto onde procurar;
+ *   · a pasta `financeiro.cobranca` e uma folha chamada `financeiro_cobranca`
+ *     colidiriam na MESMA categoria, duas coisas numa série só.
+ *
+ * Cada segmento continua sendo saneado como antes; o que muda é sanear POR
+ * segmento em vez de sobre a string toda.
+ */
+function sanitizeCategoryPath(v: string): string {
+  return v
+    .trim()
+    .toLowerCase()
+    .split(".")
+    .map((seg) => seg.replace(/[^a-z0-9_]+/g, "_"))
+    .filter((seg) => seg.length > 0)
+    .join(".")
+}
+
+/**
  * Deriva os eventos Arc 12 das respostas, lendo o form. Devolve [] quando não há
  * form, o que é diferente de "o form não tinha captura" — o chamador loga os dois.
  */
@@ -130,9 +160,20 @@ export function deriveAgentEvents(
     // nominal — a resposta VIRA a folha. Multi-select chega como array ⇒ N eventos.
     // A folha sai do valor da OPÇÃO (lista controlada), nunca de texto livre (§D3).
     for (const item of Array.isArray(raw) ? raw : [raw]) {
-      const leaf = String(item).trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_")
+      const leaf = sanitizeCategoryPath(String(item))
       if (!leaf) continue
-      out.push({ category: `${base}.${leaf}`, value: 1 })
+      const category = `${base}.${leaf}`
+      if (category.split(".").length > AGENT_EVENT_CATEGORY_MAX_SEGMENTS) {
+        // Emitir aqui produziria um evento que o schema do Arc 12 REJEITA depois,
+        // longe daqui — recusar na origem, nomeando, é o que transforma isso em
+        // erro de autoria em vez de buraco na série.
+        console.warn(
+          "[segment_outcome_record] caminho fundo demais para a categoria do Arc 12: %s (%d segmentos, teto %d) — evento NÃO emitido",
+          category, category.split(".").length, AGENT_EVENT_CATEGORY_MAX_SEGMENTS,
+        )
+        continue
+      }
+      out.push({ category, value: 1 })
     }
   }
   return out

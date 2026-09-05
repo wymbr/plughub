@@ -329,6 +329,51 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## As-built da F4 (2026-09-05)
+
+**O achado 4 era metade da verdade, e a outra metade era pior.** Ele dizia que a regex do Arc 12
+aceita 2–5 segmentos e que a profundidade decidida daria 8 — bloqueio. Verdade. Mas medindo o
+emissor antes de subir o teto: **a hierarquia nunca chegava lá**. O sanitizador de
+`deriveAgentEvents` era `replace(/[^a-z0-9_]+/g, "_")` sobre a resposta INTEIRA, e o ponto cai
+nessa classe: `financeiro.cobranca.indevida` virava `financeiro_cobranca_indevida`, **um**
+segmento. Subir a regex sozinha não teria efeito nenhum — a categoria nunca passava de 4.
+
+Três consequências, todas mudas:
+
+- a hierarquia morria no emissor, e o teto nunca era alcançado;
+- `startsWith(category, "…motivo.financeiro.")` — o recorte da **D10** — não casaria com nada,
+  porque não havia ponto onde procurar;
+- a pasta `financeiro.cobranca` e uma folha chamada `financeiro_cobranca` colidiriam na MESMA
+  categoria: duas coisas numa série só.
+
+Hoje o saneamento é POR SEGMENTO (`split(".") → sanea → join(".")`), preservando o `.` como
+separador. Medido antes de mudar: **0 de 49** opções publicadas têm ponto no `value`/`id`, então
+nada muda para o dado existente — só passa a existir o que a árvore precisa.
+
+### O teto é DERIVADO, e a derivação tem mecanismo
+
+`AGENT_EVENT_CATEGORY_MAX_SEGMENTS = 8` = 3 (`pool.skill.metric`) + 5 (`DIALOG_OPTION_MAX_DEPTH`),
+e a regex é construída a partir dele. A relação entre as duas constantes é **conferida por teste**,
+não por comentário: quem mexer na D3 vê vermelho apontando para a regex. Duas casas afirmando o
+mesmo número por prosa é exatamente como ele diverge.
+
+**E o emissor recusa na origem** quando o caminho estoura o teto, nomeando no log — emitir ali
+produziria um evento que o schema rejeita depois, longe dali, e o buraco na série não teria
+endereço.
+
+### `decomposeCategoryLevels` fica em QUATRO, e agora isso é fixado por teste
+
+Do 5º segmento em diante o valor existe **só** em `category`. As colunas `l1..l4` servem ao ÍNDICE
+(o `ORDER BY` da tabela começa por elas); o recorte hierárquico é por prefixo sobre a `category`
+completa. O que seria defeito é alguém "consertar" `l4` para significar folha — aí ele significaria
+coisas diferentes conforme a profundidade do ramo. Há teste que reprova essa mudança.
+
+Gate: ramo **E** de `probe_multi_answer_events.sh`, que lê o teto DO SCHEMA (nunca escrito no
+probe) e confere as duas metades: o caminho sobreviveu com os pontos, e o prefixo da pasta alcança
+a folha. A mutação que colapsa o ponto reproduz o defeito literalmente.
+
+---
+
 ## As-built da F2 (2026-09-05)
 
 Entregue: `coerceMultiAnswer` no `menu` step — a resposta de `checklist` vira uma LISTA no
@@ -410,7 +455,7 @@ falseada desligando a chamada).
 | **F1** ✅ | **Schema** *(2026-09-05)* | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos. `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). ⚠️ A **obrigatoriedade derivada (D7) NÃO entrou**: `QuestionNode` não tem `required`, então ela é regra de RENDER e foi para a F3. | `probe_ask_when_parity.sh` (DLG-09) |
 | **F2** ✅ | **Resposta multi de verdade** *(2026-09-05)* | `menu.ts` para de tratar `checklist` como escalar — **o unico item que faltava**. Os renderizadores ja faziam multi, e o `json.dumps` do bridge e TRANSPORTE, nao defeito (ver a correcao do achado 3). Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
 | **F3** | **Renderer Miller + recusa alta** | Colunas no Console (pasta abre coluna, arquivo seleciona); `form_get` recusa em canal pobre (D11); invariante de pai comum conferido no submit (D5). | F1, F2 |
-| **F4** | **Categoria de caminho** | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
+| **F4** ✅ | **Categoria de caminho** *(2026-09-05)* | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** | **Editor de árvore** | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
 | **F6** | **Validação** | Wrap-up real ponta a ponta com árvore de 3+ níveis e multi-folha; contagem por prefixo confere com os eventos emitidos. | todas |
 

@@ -23,10 +23,32 @@ import { z } from "zod"
 // ─────────────────────────────────────────────
 
 /**
- * Regex para category: 2–5 segmentos snake_case separados por ponto.
- * Ex: "pool.skill.key" ou "pool.skill.group.key"
+ * Teto de segmentos de uma `category`. **É derivado, não escolhido** (F4 do
+ * `adr-dialog-tree-options`):
+ *
+ *     3  (`pool.skill.metric`, o prefixo que o emissor sempre põe)
+ *   + 5  (`DIALOG_OPTION_MAX_DEPTH` — a profundidade máxima da taxonomia)
+ *   = 8
+ *
+ * Antes eram **5**, e isso não era teto suave: uma taxonomia de 3 níveis já dá 6
+ * segmentos, e o evento seria **rejeitado** — a árvore ficaria autorável e
+ * incontável ao mesmo tempo.
+ *
+ * ⚠️ A relação com a profundidade da árvore é conferida por teste
+ * (`agent-events.test.ts`), não por comentário: quem mexer na D3 vê vermelho
+ * apontando para cá. Uma constante em `dialog.ts` e outra aqui, ligadas por
+ * prosa, seriam duas casas afirmando o mesmo número — que é como ele diverge.
  */
-export const AGENT_EVENT_CATEGORY_REGEX = /^[a-z0-9_]+(\.[a-z0-9_]+){1,4}$/
+export const AGENT_EVENT_CATEGORY_MAX_SEGMENTS = 8
+
+/**
+ * Regex para category: de 2 a `AGENT_EVENT_CATEGORY_MAX_SEGMENTS` segmentos
+ * snake_case separados por ponto. Ex.: "pool.skill.key" ou
+ * "pool.skill.motivo.financeiro.cobranca.indevida".
+ */
+export const AGENT_EVENT_CATEGORY_REGEX = new RegExp(
+  `^[a-z0-9_]+(\\.[a-z0-9_]+){1,${AGENT_EVENT_CATEGORY_MAX_SEGMENTS - 1}}$`,
+)
 
 /**
  * Chaves de tags que referenciam dados pessoais — bloqueadas por governança.
@@ -191,6 +213,18 @@ export function decomposeCategoryLevels(category: string): {
   l3: string
   l4: string
 } {
+  // ⚠️ QUATRO níveis, e isso é DECLARADO, não esquecido (D10 do
+  // `adr-dialog-tree-options`). Com profundidade variável, `l4` de um ramo curto
+  // é folha e de um ramo longo é intermediário — agregar por nível fixo somaria
+  // granularidades diferentes. As colunas servem ao ÍNDICE (o `ORDER BY` da
+  // tabela começa por `l1,l2,l3`); o recorte hierárquico é
+  // `startsWith(category, 'pool.skill.motivo.financeiro.')`, sobre a `category`
+  // COMPLETA, que é sempre gravada inteira.
+  //
+  // Ou seja: do 5º segmento em diante o valor existe SÓ em `category`. Isso é
+  // limite conhecido, não perda — o que seria defeito é alguém "consertar" `l4`
+  // para significar folha, porque aí ele passaria a significar coisas diferentes
+  // conforme a profundidade do ramo. Há teste fixando exatamente isso.
   const [l1 = "", l2 = "", l3 = "", l4 = ""] = category.split(".")
   return { l1, l2, l3, l4 }
 }

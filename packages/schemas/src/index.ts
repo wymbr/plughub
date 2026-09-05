@@ -746,6 +746,7 @@ export type {
 // ── Agent Business Events (Arc 12) ───────────────────────────────────────────
 export {
   AGENT_EVENT_CATEGORY_REGEX,
+  AGENT_EVENT_CATEGORY_MAX_SEGMENTS,
   AGENT_EVENT_PII_TAG_KEYS,
   AgentBusinessEventSchema,
   AgentEventInputSchema,
