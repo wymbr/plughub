@@ -475,3 +475,10 @@ smoke_wrapup_slot_handoff.sh
 # ══ ASSISTIDOS (continuacao) ═════════════════════════════════════════════════
 !probe_fase_b_release_on_reload.sh                    o proprio script se declara MANUAL
 !smoke_claim_possession.sh                            o proprio script se declara MANUAL
+
+# -- 2026-09-05: paridade da skip-logic (pre-requisito da D12) ---------------
+# `ask_when` existe TRES vezes e o triplicamento e topologia (nem o platform-ui
+# nem o JS-dentro-do-Python do survey_web podem importar a canonica). Nada as
+# comparava: nenhum .sh de infra/test mencionava `ask_when`. Entra AUTO porque
+# rodou verde e a bateria de mutacao provou os tres ramos falseaveis.
+probe_ask_when_parity.sh

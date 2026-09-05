@@ -1,6 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
-## 2026-09-05 — DLG-07: `form` deixa de ser um valor do seletor e vira TIPO DE BLOCO
+## 2026-09-05 (2) — DLG-09: a skip-logic tem três implementações e nada as comparava
+
+`evaluateAskWhen` responde *"esta pergunta é APRESENTADA?"* e existe três vezes. O ADR de
+skip-logic já registrava o triplicamento como **topologia, não desleixo**; o que ninguém tinha
+registrado é que **nenhum teste as comparava** — medido hoje: nenhum `.sh` de `infra/test/`
+sequer mencionava `ask_when`.
+
+### Unificar não estava disponível, e isso mudou a decisão
+
+A pergunta parecia ser *"unifica ou aceita a triplicação?"*. Medindo, a primeira opção não
+existe para duas das três:
+
+| cópia | casa | por que não importa a canônica |
+|---|---|---|
+| canônica | `schemas/src/dialog.ts` | — (o engine a importa, `loop.ts:25`) |
+| console | `DialogFormRenderer.tsx` | platform-ui não importa `@plughub/schemas` (sem workspaces, dual-instance de Zod) |
+| web | `survey_web.py` | **não é Python**: é JavaScript dentro de uma string, o script inline da página servida por um serviço Python |
+
+Restavam duas posturas — **gerar** as duas espelhadas a partir da canônica, ou **conferir** que
+decidem igual. Escolhida a segunda, proporcional à população: **12 formas no store, 1 nó com
+guarda** (`dialog_survey_multi_v1`, op `lt`). Gerar é o caminho quando o custo da divergência
+subir; conferir é o que faz o próximo op nascer coberto.
+
+### O probe recorta o fonte REAL, e por quê
+
+`_ask_when_extract.py` recorta as três dos seus arquivos, por casamento de chaves, a cada
+execução. Copiar os corpos para dentro do gate seria a **quarta cópia** — e um gate que testa a
+própria cópia é verde garantido. Função renomeada ⇒ **INCONCLUSIVO**, nunca verde por ausência.
+
+**Achado do recorte:** a aridade não é a mesma. A cópia da web é `awEval(g)` — ela **fecha sobre
+o `answers` da página** em vez de recebê-lo. Duas implementações da mesma regra com assinaturas
+diferentes não são substituíveis uma pela outra nem por acidente.
+
+**Estado medido: as três são equivalentes hoje** — mesmos 7 ops, mesma regra de ausência
+(`undefined`/`null`/`""` ⇒ não apresenta), mesma coerção do `eq` (numérica quando os dois
+coagem a finito, senão string). Diferente dos seis verificadores de JWT, que **já** divergiam em
+seis pontos quando foram contados: aqui o risco é prospectivo, e o gatilho é a **D12** do
+`adr-dialog-tree-options`, que acrescenta o op `prefix`. Op novo aplicado a duas das três é
+skip-logic que diverge por superfície — a pergunta **aparece** no Console e **some** na web, com
+o mesmo form publicado.
+
+### Três ramos, e o C é o que trabalha sozinho
+
+- **A** controle positivo: a tabela tem de separar verdadeiro de falso — sem ele, três
+  implementações que sempre dissessem `false` passariam;
+- **B** divergência de veredicto entre as três, em qualquer caso;
+- **C** op que a canônica conhece e a tabela não exercita — a lista de ops é **lida do `switch`
+  recortado**, nunca escrita no probe. Quem acrescentar `prefix` e esquecer a linha reprova aqui,
+  **antes** de espalhar a divergência.
+
+A mutação prova que B e C não se substituem: acrescentar um op ao `switch` deixa **B verde** (nenhum
+caso o exercita) e **C vermelho**. Bateria completa: `lte`→`ltx` no Console ⇒ B vermelho ·
+`case "startswith"` na canônica ⇒ C vermelho · `awEval` renomeado ⇒ INCONCLUSIVO.
+
+**Limite declarado no cabeçalho:** o probe compara as três **entre si**, nunca contra uma
+expectativa escrita nele — escrevê-la seria a quarta cópia. Logo, as três erradas do mesmo jeito
+passam; quem julga se a canônica está CERTA é o `dialog.test.ts`. Paridade e correção são dois
+fatos, e o probe afirma um só.
+
+Gate: `infra/test/probe_ask_when_parity.sh` (+ `_ask_when_extract.py`), declarado AUTO no
+`gates.manifest` — 95 AUTO de 283.
+
+
+## 2026-09-05 (1) — DLG-07: `form` deixa de ser um valor do seletor e vira TIPO DE BLOCO
 
 Ontem `fields[]` ganhou autoria pelo editor JSON (DLG-01). O dono voltou ao problema com um
 diagnóstico melhor, e ele desloca a fatia inteira: **`form` não é "mais um formato de resposta"**.

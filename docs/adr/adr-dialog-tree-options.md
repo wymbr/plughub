@@ -319,12 +319,22 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 |---|---|---|---|
 | **F0** | **`flattenBlocks` lossless** | O editor edita o objeto parseado in-place; nunca reconstrói `capture`. Gate de round-trip: abrir + salvar `dialog_wrapup_arc12_v1` preserva `kind`. | — |
 | ~~**F0b**~~ | ~~Pin de versão~~ — **movida** para a fase **S1** de [`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md), que mata a corrida removendo a segunda leitura em vez de sincronizá-la (ver D9). | — |
-| **F1** | **Schema** | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos, obrigatoriedade derivada (D7). `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). | — |
+| **F1** | **Schema** | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos, obrigatoriedade derivada (D7). `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). | `probe_ask_when_parity.sh` (DLG-09) |
 | **F2** | **Resposta multi de verdade** | `menu.ts` para de tratar `checklist` como escalar; bridge para de `json.dumps` a lista; `DialogFormRenderer`/`survey_web` permitem multi. Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
 | **F3** | **Renderer Miller + recusa alta** | Colunas no Console (pasta abre coluna, arquivo seleciona); `form_get` recusa em canal pobre (D11); invariante de pai comum conferido no submit (D5). | F1, F2 |
 | **F4** | **Categoria de caminho** | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** | **Editor de árvore** | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
 | **F6** | **Validação** | Wrap-up real ponta a ponta com árvore de 3+ níveis e multi-folha; contagem por prefixo confere com os eventos emitidos. | todas |
+
+
+> **Emenda de 2026-09-05 (DLG-09).** A D12 acrescenta o op `prefix` a um avaliador que existe
+> **tres vezes**, e nenhuma das tres podia importar as outras — o platform-ui nao importa
+> `@plughub/schemas`, e a copia do `survey_web.py` e **JavaScript dentro de uma string Python**.
+> Ate hoje nada as comparava. `infra/test/probe_ask_when_parity.sh` passou a conferir, e o ramo **C**
+> le a lista de ops do proprio `switch` canonico: quem acrescentar `prefix` sem a linha na tabela
+> reprova **antes** de espalhar a divergencia. Por isso a F1 deixou de depender de nada e passou a
+> depender dele. ⚠️ O mesmo trabalho encontrou uma divergencia REAL, e ela nao e do veredicto:
+> a resposta de um no pulado e **apagada** na web e **mantida** no Console (DLG-10).
 
 **Ordem inegociável:** F0 antes de F5 (editor sobre projeção com perda destrói árvore inteira, em silêncio) e
 F2 antes de F4 (categoria de caminho sobre resposta escalar-com-JSON-dentro produz lixo, não hierarquia).
