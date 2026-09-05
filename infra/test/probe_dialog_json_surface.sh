@@ -29,6 +29,9 @@
 #   S5  `fields[]` sumir do render, ou `masked` tipado virar   → VERMELHO
 #       booleano (`=== true` faria `"card_cvv"` sair DESMASCARADO)
 #   S6  o veredicto divergir do que a forma REAL semeada produz → VERMELHO
+#   S7  a subárvore sumir do `render`, ou `options_tree` deixar de ser  → VERMELHO
+#       DERIVADO da estrutura (F3) — achatar faria a PASTA virar resposta,
+#       e o operador gravaria "Financeiro" onde devia gravar a folha
 #       (`dialog_limite_solicitacao`, 4 campos, `cvv` mascarado — é a ancoragem
 #        em dado de produção, não em fixture do próprio probe)
 #
@@ -177,6 +180,44 @@ assert 'Preencha os dados' in b['render']['menu_prompt'], b['render']['menu_prom
                 || bad "a forma REAL não produz o render esperado"
 fi
 
+# -- S7 -- a ARVORE chega ao render, e a exigencia e DERIVADA -----------------
+head_ "S7 — a subárvore sobrevive ao render, e options_tree é derivado"
+ARVORE='{"form":{"form_id":"probe_arvore","name":"arvore","default_locale":"pt-BR",
+ "locales":["pt-BR"],"dimensions":[],"tags":[],
+ "nodes":[{"id":"q_motivo","kind":"question","prompt":"Motivo?","interaction":"list",
+  "output_key":"motivo","timeout_s":300,
+  "options":[{"id":"financeiro","label":"Financeiro","options":[
+    {"id":"cobranca","label":"Cobranca","options":[{"id":"indevida","label":"Indevida"}]}]},
+   {"id":"nao_se_aplica","label":"Nao se aplica"}]}]}}'
+R=$(preview "$JWT" "$ARVORE")
+if echo "$R" | python3 -c "
+import json,sys
+b=json.loads(sys.stdin.read())
+assert b.get('valid') is True, b.get('errors')
+r=b['render']
+assert r.get('options_tree') is True, ('options_tree deveria ser True', r.get('options_tree'))
+fin=[o for o in r['options'] if o['id']=='financeiro'][0]
+assert fin.get('options'), ('a subarvore foi descartada', fin)
+assert fin['options'][0]['options'][0]['id']=='indevida', fin
+" 2>/dev/null; then
+  ok "3 níveis chegam ao render, options_tree=true"
+else
+  bad "a subárvore não sobreviveu — escolher a PASTA viraria a resposta"
+fi
+
+# controle positivo: a mesma forma SEM aninhamento nao pode exigir arvore
+PLANA=$(python3 -c "
+import json,sys
+d=json.loads(sys.stdin.read())
+d['form']['nodes'][0]['options']=[{'id':'a','label':'A'},{'id':'b','label':'B'}]
+print(json.dumps(d))" <<<"$ARVORE")
+R=$(preview "$JWT" "$PLANA")
+MT=$(jqp "import json,sys;print(json.loads(sys.stdin.read())['render']['options_tree'])" <<<"$R")
+if [ "$MT" = "False" ]; then
+  ok "forma plana: options_tree=false (controle positivo)"
+else
+  bad "options_tree=$MT numa forma SEM aninhamento — a exigência não é derivada"
+fi
 # ── veredicto ─────────────────────────────────────────────────────────────────
 echo
 if [ "$FAIL" -gt 0 ]; then

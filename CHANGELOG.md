@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (6) — F3 (parcial): a subárvore chega à tela, e a PASTA deixa de virar resposta
+
+A F1 tornou a taxonomia autorável. O que ela abriu junto: `buildRender` mapeava opção como
+`{id, label}` e **descartava os filhos** — uma forma com árvore chegaria à superfície como lista PLANA
+de raízes, e escolher *"Financeiro"* gravaria a **pasta** como resposta. Dado errado, sem nada
+vermelho. É o mesmo modo de falha que a D4 recusa no schema (render parcial de subárvore),
+reaparecendo um andar abaixo. Fatia de segurança, não de conforto.
+
+### A D11 não era implementável onde estava, e mudou de casa
+
+Ela dizia *"`form_get` recusa quando o canal não suporta"*. Medindo: **o `form_get` não conhece o
+canal** — e dar-lhe um parâmetro de canal cruzaria a costura conteúdo × canal, uma das quatro
+inegociáveis do primitivo. Quem conhece o canal é o gateway.
+
+A decisão fica de pé mudando de LUGAR, não de conteúdo: o `render` carrega `options_tree: boolean`,
+**derivado da presença de subárvore** — que é literalmente o que a D11 pedia (*"inferida da estrutura,
+não declarada num campo"*) —, e cada superfície decide. O Console desenha; as demais precisam recusar.
+
+**A recusa em si continua ABERTA** (`DLG-15`), de propósito: depende de saber quais canais sabem
+desenhar árvore, e essa medição não foi feita. Política contra mecanismo não medido é o erro que este
+arco vem evitando desde a F2.
+
+### Colunas Miller, e a D5 passa a valer por construção
+
+Pasta abre coluna, folha seleciona; a resposta é o caminho de `id`s, nunca o rótulo (D6). **Navegar
+limpa as marcações** — e é assim que *"multi-seleção é DENTRO de uma pasta"* vira invariante desta
+superfície: não há como montar cesta cross-ramo clicando. A conferência no submit (para um segundo
+chamador, que hoje não existe) fica como `DLG-16`.
+
+`active: false` é filtrado no `buildRender` — a folha aposentada sai da OFERTA e permanece no form.
+⚠️ Pasta que fica sem filho ativo **não** emite `options: []`: emitir abriria uma coluna vazia na
+tela, e sem a chave ela vira folha selecionável, que é o comportamento derivado da D2.
+
+### D7 — obrigatória por construção, com o motivo impresso
+
+Pergunta com opções aninhadas não pode ser enviada sem folha: o botão bloqueia e a razão aparece ao
+lado da pergunta — o padrão que o renderer já usava para formato inválido, pela mesma razão (envio que
+falha sem dizer onde devolve a adivinhação). Pergunta pulada por `ask_when` não conta: ela não foi
+feita. Continua não existindo `required` em `QuestionNode`, e não deve existir — um `required` burlado
+grava NULL, indistinguível de *"não perguntamos"*; a folha de escape `nao_se_aplica` transforma isso
+em fato contável.
+
+Gates: `dialog-render.test.ts` (três casos, duas mutações provadas) e o ramo **S7** de
+`probe_dialog_json_surface.sh` — que mede o dry-run **ao vivo** e foi falseado com o serviço
+**reconstruído a partir do código mutado**, não só no fonte.
+
+
 ## 2026-09-05 (5) — F4: a hierarquia morria no EMISSOR, e por isso o teto nunca importou
 
 O achado 4 do ADR dizia que `AGENT_EVENT_CATEGORY_REGEX` aceita 2–5 segmentos e que a profundidade

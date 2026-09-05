@@ -133,7 +133,34 @@ export interface DeclFormato {
 
 // ── DialogForm shapes (loose — the published JSON from dialog-api) ────────────
 
-interface DialogOption { id: string; label: unknown; value?: string }
+interface DialogOption {
+  id: string; label: unknown; value?: string
+  /** Presente ⇒ PASTA (só navega). Ausente ⇒ folha (selecionável). Derivado, D2. */
+  options?: DialogOption[]
+  /** `false` = aposentada: sai da oferta, permanece no form (D6). */
+  active?: boolean
+}
+
+// ── Taxonomia em árvore (F3 do `adr-dialog-tree-options`) ────────────────────
+// A resposta é o CAMINHO de ids (`financeiro.cobranca.indevida`), nunca o rótulo:
+// o caminho compõe a categoria do Arc 12, e `label` é livre para ser reescrito e
+// traduzido. Ver D6.
+const SEP = "."
+const valOf = (o: DialogOption) => String(o.value ?? o.id)
+const ofertadas = (opts?: DialogOption[]) => (opts ?? []).filter(o => o.active !== false)
+const ehPasta = (o: DialogOption) => ofertadas(o.options).length > 0
+const temArvore = (opts?: DialogOption[]) => ofertadas(opts).some(ehPasta)
+
+/** As opções de um nível, descendo o caminho navegado. */
+function nivelDe(raiz: DialogOption[] | undefined, caminho: string[]): DialogOption[] {
+  let atual = ofertadas(raiz)
+  for (const passo of caminho) {
+    const achou = atual.find(o => valOf(o) === passo)
+    if (!achou) return []
+    atual = ofertadas(achou.options)
+  }
+  return atual
+}
 export interface DialogFormField {
   id: string
   label: unknown
@@ -281,6 +308,10 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
 
   const [form,        setForm]        = useState<DialogFormDoc | null>(null)
   const [answers,     setAnswers]     = useState<Record<string, AnswerValue>>({})
+  // Caminho navegado por pergunta de ARVORE (F3). Mora fora de `answers` porque
+  // navegar nao e responder: abrir "Financeiro" nao grava nada, e a resposta so
+  // existe quando uma FOLHA e escolhida.
+  const [millerPath,  setMillerPath]  = useState<Record<string, string[]>>({})
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
   const [baseline,    setBaseline]    = useState<Record<string, string>>({})
   const [briefing,    setBriefing]    = useState<ChatMessage[]>([])
@@ -475,6 +506,27 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
 
   const temInvalido = Object.keys(formatoInvalido).length > 0
 
+  /**
+   * D7 — pergunta com opcoes ANINHADAS e obrigatoria POR CONSTRUCAO. Nao ha
+   * `required` em `QuestionNode`, e nao deve haver: `required` transforma "nao
+   * respondeu" em ERRO, e um `required` burlado (bug, versao antiga, canal
+   * degradado) grava NULL — indistinguivel de "nao perguntamos". Quem quiser
+   * permitir pular declara a folha de escape `nao_se_aplica`, que pela D2 e
+   * simplesmente um ARQUIVO na raiz, ao lado das pastas: vira fato CONTAVEL.
+   *
+   * Pergunta pulada por `ask_when` nao conta — ela nao foi feita.
+   */
+  const arvoreSemFolha = useMemo(
+    () => (form?.nodes ?? []).filter(n => {
+      if (n.kind !== "question" || !temArvore(n.options)) return false
+      if (!evalAskWhen(n.ask_when, answers)) return false
+      const cur = answers[n.output_key ?? n.id]
+      return Array.isArray(cur) ? cur.length === 0 : !cur
+    }).map(n => n.output_key ?? n.id),
+    [form, answers],
+  )
+  const faltaFolha = arvoreSemFolha.length > 0
+
   const actionsState: DialogFormActionsState = {
     answers, fieldValues, baseline, formFields, busy, closedElsewhere, submit,
     formatoInvalido,
@@ -557,6 +609,82 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
 
   // Walk the DialogForm nodes (mirror of survey_web.py render). ask_when hides a
   // node whose guard is false, clearing any answer it left (→ NA on submit).
+  // ── Colunas Miller (F3) ─────────────────────────────────────────────────────
+  // Pasta abre coluna, folha seleciona. Descer 4 níveis por indentação numa lista
+  // longa é ruim de operar; colunas mantêm o caminho inteiro visível, que é o que
+  // o operador precisa conferir antes de enviar.
+  const renderMiller = (ok: string, raiz: DialogOption[] | undefined, multi: boolean) => {
+    const caminho = millerPath[ok] ?? []
+    const marcadas = (() => {
+      const cur = answers[ok]
+      if (multi) return Array.isArray(cur) ? (cur as string[]) : []
+      return typeof cur === "string" && cur ? [cur] : []
+    })()
+
+    // Uma coluna por nível navegado, mais a raiz.
+    const colunas = [nivelDe(raiz, []), ...caminho.map((_, k) => nivelDe(raiz, caminho.slice(0, k + 1)))]
+      .filter(c => c.length > 0)
+
+    const clique = (col: number, o: DialogOption) => {
+      const prefixo = caminho.slice(0, col)
+      const val     = valOf(o)
+      if (ehPasta(o)) {
+        // Navegar LIMPA as marcações: a multi-seleção é DENTRO de uma pasta (D5),
+        // e o prefixo comum é o invariante que o submit confere. Sem isto o
+        // operador montaria uma cesta cross-ramo sem perceber.
+        setMillerPath(p => ({ ...p, [ok]: [...prefixo, val] }))
+        setAnswers(p => { const { [ok]: _fora, ...resto } = p; return resto })
+        return
+      }
+      const completo = [...prefixo, val].join(SEP)
+      setAnswers(p => {
+        if (!multi) return { ...p, [ok]: completo }
+        const antes  = Array.isArray(p[ok]) ? (p[ok] as string[]) : []
+        const depois = antes.includes(completo)
+          ? antes.filter(v => v !== completo)
+          : [...antes, completo]
+        if (!depois.length) { const { [ok]: _fora, ...resto } = p; return resto }
+        return { ...p, [ok]: depois }
+      })
+    }
+
+    return (
+      <div className="flex flex-col gap-1.5">
+        <div className="flex overflow-x-auto border border-border rounded-lg bg-white">
+          {colunas.map((col, ci) => (
+            <div key={ci} className="min-w-[11rem] shrink-0 border-r border-border last:border-r-0 p-1">
+              {col.map(o => {
+                const val   = valOf(o)
+                const pasta = ehPasta(o)
+                const aberta = caminho[ci] === val
+                const escolhida = marcadas.includes([...caminho.slice(0, ci), val].join(SEP))
+                return (
+                  <button
+                    key={o.id}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => clique(ci, o)}
+                    className={`w-full flex items-center justify-between gap-2 text-left text-sm px-2 py-1.5 rounded border transition-colors disabled:opacity-40 ${
+                      escolhida ? "bg-green-50 border-green text-green font-medium"
+                      : aberta   ? "bg-slate-100 border-border-strong font-medium"
+                      : "border-transparent hover:bg-slate-50 text-dark"
+                    }`}
+                  >
+                    <span className="truncate">{locStr(o.label, o.id)}</span>
+                    {pasta && <span className="text-slate-400 text-xs">›</span>}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+        {marcadas.length > 0 && (
+          <div className="text-xs text-slate-500 font-mono break-all">{marcadas.join("  ·  ")}</div>
+        )}
+      </div>
+    )
+  }
+
   const renderNodes = () => (form?.nodes ?? []).map((n, i) => {
     if (!evalAskWhen(n.ask_when, answers)) return null
     if (n.kind === "statement") {
@@ -573,6 +701,17 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
         <div className="text-sm font-medium text-dark">{locStr(n.prompt, "")}</div>
         {it === "form" && Array.isArray(n.fields) ? (
           <div className="space-y-3">{n.fields.map(renderField)}</div>
+        ) : (it === "list" || it === "checklist") && temArvore(n.options) ? (
+          <>
+            {renderMiller(ok, n.options, it === "checklist")}
+            {arvoreSemFolha.includes(ok) && (
+              <div className="text-xs text-warning">
+                {t("formFill.tree.leafRequired", {
+                  defaultValue: "Desça até uma opção final — pastas não são resposta.",
+                })}
+              </div>
+            )}
+          </>
         ) : (it === "button" || it === "list" || it === "checklist") ? (
           <div className="flex flex-wrap gap-2">
             {(n.options ?? []).map(o => {
@@ -747,7 +886,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                       // O bloqueio é do BOTÃO, e o motivo já está impresso ao lado
                       // de cada campo — um envio que falhasse sem dizer onde
                       // devolveria a mesma adivinhação que o formulário sem regra.
-                      disabled={busy !== null || disabled || closedElsewhere || temInvalido}
+                      disabled={busy !== null || disabled || closedElsewhere || temInvalido || faltaFolha}
                       className="text-sm px-4 py-2 rounded font-medium bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-40"
                     >
                       {busy ? "…" : t("formFill.submit", { defaultValue: "Submit" })}

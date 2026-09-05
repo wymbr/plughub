@@ -149,3 +149,46 @@ describe("validateDialogForm — árvore de opções (F1, adr-dialog-tree-option
       .toBe("nodes.0.fields.0.options.0.options")
   })
 })
+
+describe("buildRender — a subárvore chega à superfície (F3)", () => {
+  const arvore = [
+    { id: "financeiro", label: "Financeiro", options: [
+      { id: "cobranca", label: "Cobrança", options: [{ id: "indevida", label: "Indevida" }] },
+    ] },
+    { id: "nao_se_aplica", label: "Não se aplica" },
+  ]
+  const comArvore = (opts: unknown = arvore) => ({ ...base, nodes: [
+    { id: "q1", kind: "question", prompt: "Motivo?", interaction: "list",
+      output_key: "motivo", timeout_s: 300, options: opts },
+  ] } as unknown as DialogForm)
+
+  it("preserva os filhos — achatar gravaria a PASTA como resposta", () => {
+    // O mapeamento antigo era `{id,label}` e descartava `options`. A forma chegava
+    // como lista plana de raízes, e escolher "Financeiro" gravava a pasta.
+    const r = buildRender(comArvore())
+    expect(r.options.map(o => o.id)).toEqual(["financeiro", "nao_se_aplica"])
+    expect(r.options[0].options?.[0].options?.[0].id).toBe("indevida")
+    // e a mesma árvore na visão por-pergunta
+    expect(r.questions[0].options[0].options?.[0].id).toBe("cobranca")
+  })
+
+  it("`options_tree` é DERIVADO da estrutura, com controle positivo", () => {
+    expect(buildRender(comArvore()).options_tree).toBe(true)
+    const plana = comArvore([{ id: "a", label: "A" }, { id: "b", label: "B" }])
+    expect(buildRender(plana).options_tree).toBe(false)
+  })
+
+  it("folha aposentada sai da OFERTA e não vira `options: []` na pasta", () => {
+    const r = buildRender(comArvore([
+      { id: "financeiro", label: "Financeiro", options: [
+        { id: "cobranca", label: "Cobrança", active: false },
+      ] },
+      { id: "ativa", label: "Ativa" },
+    ]))
+    // a pasta ficou sem filho ATIVO: não pode emitir `options: []`, senão a
+    // superfície abre uma coluna vazia
+    expect(r.options[0].options).toBeUndefined()
+    expect(r.options.map(o => o.id)).toEqual(["financeiro", "ativa"])
+    expect(r.options_tree).toBe(false)
+  })
+})

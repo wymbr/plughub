@@ -58,7 +58,20 @@ export interface RenderField {
    */
   validation?: unknown
 }
-export interface RenderOption { id: string; label: string }
+/**
+ * RenderOption — uma opção e, quando há, a SUBÁRVORE dela (F3 do
+ * `adr-dialog-tree-options`).
+ *
+ * Até a F3 o mapeamento era `{id, label}` e **descartava os filhos**. Uma forma
+ * com taxonomia chegava à superfície como uma lista PLANA de raízes, e escolher
+ * "Financeiro" gravava a PASTA como resposta — dado errado, sem nada vermelho.
+ * Perder subárvore em silêncio é o modo de falha que a D4 já recusava no schema;
+ * aqui ele reaparecia um andar abaixo.
+ *
+ * `active: false` (D6) é filtrado AQUI: a folha aposentada sai da OFERTA e
+ * permanece no form, para o histórico continuar explicável.
+ */
+export interface RenderOption { id: string; label: string; options?: RenderOption[] }
 // Retry affordance flattened for the menu step: reprompt localized, counter fixed.
 export interface RenderRetry { reprompt: string; max_attempts: number }
 export interface RenderQuestion {
@@ -110,9 +123,49 @@ export interface DialogRender {
   // uma segunda passada tem vetor próprio (quem edita conteúdo passaria a poder
   // injetar referências ao `pipeline_state`).
   by_node:         Record<string, string>
+  /**
+   * F3/D11 — a forma EXIGE uma superficie que desenhe arvore. DERIVADO da
+   * presenca de subarvore, nunca declarado pelo autor: campo pode ser esquecido,
+   * a estrutura nao.
+   *
+   * Quem consome decide o que fazer com um `true` que nao sabe desenhar — e a
+   * unica resposta aceitavel e RECUSAR ALTO. Achatar `Financeiro > Cobranca
+   * indevida` numa lista de 40 botoes e emulacao muda: entrega uma tela que
+   * parece certa e perde a hierarquia que a serie do Arc 12 vai contar.
+   */
+  options_tree:    boolean
 }
 
 // Flatten a question's retry (LocalizedText reprompt → string) for the menu step.
+/** Mapeia opções resolvendo i18n e PRESERVANDO a subárvore; descarta aposentadas. */
+function mapOptions(
+  opts: ReadonlyArray<{ id: string; value?: string; label: unknown; options?: unknown; active?: boolean }> | undefined,
+  locale: string | undefined,
+  dl: string,
+): RenderOption[] {
+  return (opts ?? [])
+    .filter(o => o.active !== false)
+    .map(o => {
+      const filhos = Array.isArray(o.options)
+        ? mapOptions(o.options as Parameters<typeof mapOptions>[0], locale, dl)
+        : []
+      const ro: RenderOption = {
+        id:    o.value ?? o.id,
+        label: resolveLocalizedText(o.label as never, locale, dl),
+      }
+      // Pasta que ficou VAZIA por aposentadoria vira folha selecionável — e o
+      // rótulo viraria resposta. Emitir `options: []` seria pior (a superfície
+      // abriria uma coluna vazia), então a chave só existe quando há filho.
+      if (filhos.length) ro.options = filhos
+      return ro
+    })
+}
+
+/** True quando ALGUMA opção tem subárvore — derivado, nunca declarado pelo autor. */
+function temArvore(opts: ReadonlyArray<RenderOption>): boolean {
+  return opts.some(o => (o.options?.length ?? 0) > 0)
+}
+
 function flattenRetry(q: QuestionNode, locale: string | undefined, dl: string): RenderRetry | undefined {
   if (!q.retry) return undefined
   return {
@@ -191,10 +244,7 @@ export function buildRender(form: DialogForm, locale?: string): DialogRender {
       questions.push({
         prompt:      resolveLocalizedText(node.prompt, locale, dl),
         interaction: node.interaction,
-        options:     (node.options ?? []).map(o => ({
-          id:    o.value ?? o.id,
-          label: resolveLocalizedText(o.label, locale, dl),
-        })),
+        options:     mapOptions(node.options, locale, dl),
         output_key:  node.output_key,
         capture:     node.capture ?? {},
         visibility:  node.visibility ?? "all",
@@ -210,10 +260,7 @@ export function buildRender(form: DialogForm, locale?: string): DialogRender {
   const qPrompt = q ? resolveLocalizedText(q.prompt, locale, dl) : ""
   // Fold leading statements into the single-question prompt (§17.4 native render).
   const prompt  = before.length ? `${before.join("\n\n")}\n\n${qPrompt}` : qPrompt
-  const options: RenderOption[] = (q?.options ?? []).map(o => ({
-    id:    o.value ?? o.id,
-    label: resolveLocalizedText(o.label, locale, dl),
-  }))
+  const options: RenderOption[] = mapOptions(q?.options, locale, dl)
 
   return {
     interaction: q?.interaction ?? "text",
@@ -241,6 +288,7 @@ export function buildRender(form: DialogForm, locale?: string): DialogRender {
     statement_after: after.join("\n\n"),
     captures,
     by_node: byNode,
+    options_tree: temArvore(options) || questions.some(x => temArvore(x.options)),
   }
 }
 

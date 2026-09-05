@@ -329,6 +329,58 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## As-built da F3 — PARCIAL (2026-09-05)
+
+Entregue: a subárvore chega à superfície, a exigência é derivada, o Console desenha colunas Miller
+e a D7 passou a valer. **Não** entregue: a recusa alta em canal pobre (D11) — ver abaixo.
+
+### O achado que obrigou a fatia: a F1 abriu um buraco
+
+`buildRender` mapeava opção como `{id, label}` e **descartava os filhos**. Depois da F1 uma forma
+com taxonomia já podia ser autorada e publicada — e chegaria à superfície como lista PLANA de
+raízes. Escolher *"Financeiro"* gravaria a **pasta** como resposta: dado errado, sem nada vermelho.
+É o mesmo modo de falha que a D4 recusa no schema (render parcial de subárvore), reaparecendo um
+andar abaixo. Fatia de segurança, não de conforto.
+
+### `options_tree` é DERIVADO, e a recusa é de quem desenha
+
+⚠️ **A D11 dizia *"`form_get` recusa quando o canal não suporta"*, e isso não é implementável ali:**
+o `form_get` **não conhece o canal**, e dar-lhe um parâmetro de canal cruzaria a costura
+conteúdo × canal, que é uma das quatro inegociáveis. Quem conhece o canal é o gateway.
+
+A decisão fica de pé mudando de LUGAR, não de conteúdo: o `render` passa a carregar
+`options_tree: boolean`, **derivado da presença de subárvore** (campo pode ser esquecido, a
+estrutura não — que é exatamente o que a D11 pedia), e cada superfície decide. O Console desenha; as
+demais precisam recusar.
+
+**A recusa em si continua ABERTA** (`DLG-15`), e de propósito: ela depende de saber quais canais
+sabem desenhar árvore, e isso é medição que ainda não fiz. Política contra mecanismo não medido é o
+erro que este arco vem evitando desde a F2.
+
+### Colunas Miller, e a resposta é o CAMINHO
+
+Pasta abre coluna, folha seleciona; a resposta é o caminho de `id`s (`financeiro.cobranca.indevida`),
+nunca o rótulo (D6). **Navegar LIMPA as marcações**, e é assim que a D5 (multi dentro de UMA pasta)
+passa a valer **por construção** nesta superfície — não há como montar cesta cross-ramo clicando.
+
+`active: false` é filtrado no `buildRender`: a folha aposentada sai da OFERTA e permanece no form.
+⚠️ Pasta que fica sem filho ATIVO **não** emite `options: []` — emitir abriria uma coluna vazia na
+tela; sem a chave ela vira folha selecionável, que é o comportamento derivado da D2.
+
+### D7 — obrigatória por construção, e o motivo aparece
+
+Pergunta com opções aninhadas **não pode ser enviada sem folha**: o botão bloqueia e a razão é
+impressa ao lado da pergunta (o padrão que o renderer já usava para formato inválido — envio que
+falha sem dizer onde devolve a adivinhação). Pergunta pulada por `ask_when` não conta: ela não foi
+feita. Quem quiser permitir pular declara a folha de escape `nao_se_aplica`.
+
+Gates: `dialog-render.test.ts` (subárvore preservada · `options_tree` derivado com controle
+positivo · aposentada fora da oferta e sem `options: []`), duas mutações provadas; e o ramo **S7**
+de `probe_dialog_json_surface.sh`, que mede o dry-run **AO VIVO** — falseado com o serviço
+reconstruído a partir do código mutado, não só no fonte.
+
+---
+
 ## As-built da F4 (2026-09-05)
 
 **O achado 4 era metade da verdade, e a outra metade era pior.** Ele dizia que a regex do Arc 12
@@ -454,7 +506,7 @@ falseada desligando a chamada).
 | ~~**F0b**~~ | ~~Pin de versão~~ — **movida** para a fase **S1** de [`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md), que mata a corrida removendo a segunda leitura em vez de sincronizá-la (ver D9). | — |
 | **F1** ✅ | **Schema** *(2026-09-05)* | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos. `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). ⚠️ A **obrigatoriedade derivada (D7) NÃO entrou**: `QuestionNode` não tem `required`, então ela é regra de RENDER e foi para a F3. | `probe_ask_when_parity.sh` (DLG-09) |
 | **F2** ✅ | **Resposta multi de verdade** *(2026-09-05)* | `menu.ts` para de tratar `checklist` como escalar — **o unico item que faltava**. Os renderizadores ja faziam multi, e o `json.dumps` do bridge e TRANSPORTE, nao defeito (ver a correcao do achado 3). Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
-| **F3** | **Renderer Miller + recusa alta** | Colunas no Console (pasta abre coluna, arquivo seleciona); `form_get` recusa em canal pobre (D11); invariante de pai comum conferido no submit (D5). | F1, F2 |
+| **F3** 🟡 | **Renderer Miller + recusa alta** *(parcial, 2026-09-05)* | ✅ colunas no Console · ✅ subárvore no `render` + `options_tree` derivado · ✅ D7. ❌ recusa em canal pobre (D11) — mudou de casa (o `form_get` NÃO conhece o canal) e virou `DLG-15`. D5 vale POR CONSTRUÇÃO nesta superfície (navegar limpa as marcações); a conferência no submit é `DLG-16`. | F1, F2 |
 | **F4** ✅ | **Categoria de caminho** *(2026-09-05)* | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** | **Editor de árvore** | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
 | **F6** | **Validação** | Wrap-up real ponta a ponta com árvore de 3+ níveis e multi-folha; contagem por prefixo confere com os eventos emitidos. | todas |
