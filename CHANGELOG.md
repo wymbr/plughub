@@ -1,5 +1,60 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (11) — com o Console em dia, a árvore mediu: caminho até a folha, guarda `prefix` e a D10 com dado
+
+Contato `4919af4a-6c97-48d0-aaef-b783dc1f46a0`, segmento humano `cfbafa41`, wrap-up às 17:20. A verdade
+de origem é o `__resume_payload__` do delegate, lido do `pipeline_state` da sessão de wrap-up `46c4e8d9`:
+
+```json
+{ "classificacao": "resolvido",
+  "motivo":        "financeiro.pagamento.nao_identificado",
+  "servico":       ["cadastro.troca_titularidade"],
+  "resumo":        "tudo bem" }
+```
+
+Cinco fatos que só contato real prova, e nenhum era observável na passada anterior:
+
+1. **A resposta é o CAMINHO até a folha**, não a pasta — os 3 níveis. As colunas Miller entregaram o
+   que a D2 e a D7 pedem, e o `motivo.tecnico` da véspera não se repetiu.
+2. **`checklist` chega como LISTA** — `["cadastro.troca_titularidade"]`, não a string `'["…"]'` que a
+   F2 removeu. O array sobreviveu engine → tool.
+3. **A guarda `prefix` (D12) rodou discriminando.** `valor_contestado` está **ausente**: o
+   `ask_when {op: prefix, value: financeiro.cobranca}` não disparou porque o caminho foi
+   `financeiro.pagamento.*` — começa com `financeiro.` e **não** com `financeiro.cobranca`.
+4. **A classificação virou desfecho** — `resolvido` → `outcome: resolved` no segmento, por referência;
+   a tool devolveu `agent_events: 2`, que é o número de linhas no ClickHouse.
+5. **A categoria coube**: 6 segmentos contra o teto de 8 derivado na F4, pontos preservados por segmento.
+
+### A asserção da fase, sobre dado real
+
+| medida | n |
+|---|---|
+| por **PREFIXO** (D10) — `…motivo.financeiro.` | **1** |
+| por **PREFIXO** — `…motivo.` (os dois contatos) | **2** |
+| por **ÍNDICE** `l4 = financeiro` | 1 |
+| por **ÍNDICE** `l4 = nao_identificado` (a FOLHA) | **0** |
+
+A última linha é o ponto da D10 com dado: **`l4` não alcança a folha**. A decomposição para em quatro
+por decisão, e quem agregar por índice conta o galho — por isso o relatório agrega por `startsWith`
+sobre a `category` inteira, e os `l1..l4` servem o ÍNDICE.
+
+### O que ainda não foi exercido, e por que a fase segue 🟡
+
+**Multi-folha.** O operador marcou **um** serviço, e uma lista de um elemento não distingue *"o emissor
+itera a lista"* de *"o emissor pega o primeiro"* — exatamente a proposição que a F2 sustenta. O
+`probe_multi_answer_events.sh` cobre 2 folhas na cadeia **engine → tool**; falta a ponta de cima, a tela
+emitindo um array de 2 a partir das caixas dentro de uma pasta. `DLG-22`.
+
+⚠️ **Resíduo declarado:** os 2 eventos de 17:03 (`motivo.tecnico`, `servico.cadastro`) são valores de
+PASTA numa série de folha, produzidos pelo Console velho. A série é append-only por desenho (D6) e eles
+continuam contando em qualquer agregação por `…motivo.` — como se vê no 2 da tabela, que mistura uma
+folha e uma pasta. São 2 linhas num ambiente de demo; ficam, nomeadas.
+
+Arquivos: `docs/adr/adr-dialog-tree-options.md` (2ª medição da F6 + tabela de fases) · `done.md`
+(DLG-21) · `pending.md` (DLG-22).
+
+---
+
 ## 2026-09-05 (10) — a F6 mediu, e o que ela mediu foi o Console atrás do build
 
 Primeiro contato real sobre a árvore: sessão `4db6dbff-4e15-422b-b6ae-8eea1321ff33`, segmento humano

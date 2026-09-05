@@ -329,6 +329,63 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## Medicao da F6, segunda passada (2026-09-05, apos o rebuild) — a arvore mediu
+
+Console rebuildado, contato novo: sessao `4919af4a-6c97-48d0-aaef-b783dc1f46a0`, segmento humano
+`cfbafa41`, wrap-up as 17:20. A **verdade de origem** (o `__resume_payload__` do delegate, lido do
+`pipeline_state` da sessao de wrap-up `46c4e8d9`) diz o que o operador respondeu:
+
+```json
+{ "classificacao": "resolvido",
+  "motivo":        "financeiro.pagamento.nao_identificado",
+  "servico":       ["cadastro.troca_titularidade"],
+  "resumo":        "tudo bem" }
+```
+
+Cinco coisas ficam provadas por contato real, e nenhuma delas era observavel na primeira passada:
+
+1. **A resposta e o CAMINHO ate a folha**, nao a pasta — `financeiro.pagamento.nao_identificado`, os
+   3 niveis. As colunas Miller entregaram o que a D2 e a D7 pedem.
+2. **`checklist` chega como LISTA** (`["cadastro.troca_titularidade"]`), nao como a string
+   `'["..."]'` que a F2 removeu. O array sobreviveu engine → tool.
+3. **A guarda `prefix` (D12) rodou, e rodou discriminando.** `valor_contestado` esta **ausente** das
+   respostas: o `ask_when {field: motivo, op: prefix, value: financeiro.cobranca}` nao disparou
+   porque o caminho foi `financeiro.pagamento.*`. Comeca com `financeiro.` e **nao** com
+   `financeiro.cobranca` — a pergunta condicional foi corretamente **nao feita**.
+4. **A classificacao virou desfecho**: `resolvido` → `outcome: resolved` no segmento `cfbafa41`, por
+   referencia, e a tool devolveu `agent_events: 2` — que e o numero de linhas no ClickHouse.
+5. **A categoria coube**: 6 segmentos (`retencao_humano.wrapup.motivo.financeiro.pagamento.nao_identificado`)
+   contra o teto de 8 derivado na F4, com os pontos preservados por segmento.
+
+### A asserção que a fase pede
+
+*Contagem por prefixo confere com os eventos emitidos* — medido sobre o dado real:
+
+| medida | n |
+|---|---|
+| por **PREFIXO** (D10) — `…motivo.financeiro.` | **1** |
+| por **PREFIXO** — `…motivo.` (os dois contatos) | **2** |
+| por **INDICE** `l4 = financeiro` | 1 |
+| por **INDICE** `l4 = nao_identificado` (a FOLHA) | **0** |
+
+A ultima linha e o ponto da D10, agora com dado: **`l4` nao alcanca a folha** — a decomposicao para
+em quatro por decisao, e quem agrega por indice conta o galho. Por isso o relatorio agrega por
+`startsWith` sobre a `category` inteira, e os `l1..l4` servem o INDICE.
+
+### O que a F6 ainda nao exerceu, e por que importa
+
+**Multi-folha.** O operador marcou **um** servico. Uma lista de um elemento nao distingue *"o emissor
+itera a lista"* de *"o emissor pega o primeiro"* — e essa e exatamente a proposicao que a F2
+existe para sustentar. O `probe_multi_answer_events.sh` cobre 2 folhas, mas na cadeia **engine →
+tool**; o que falta e a ponta de cima, a tela emitindo um array de 2 a partir das caixas dentro de
+uma pasta. Um terceiro contato marcando **duas folhas dentro da mesma pasta** em `servico` fecha a
+fase. Registrado como `DLG-22`.
+
+⚠️ **Residuo declarado:** os 2 eventos de 17:03 (`motivo.tecnico`, `servico.cadastro`) sao valores de
+PASTA numa serie de folha, produzidos pelo Console velho. A serie e append-only por desenho (D6), e
+eles continuam contando em qualquer agregacao por `…motivo.` — como se ve na tabela acima, onde o 2
+mistura uma folha e uma pasta. Sao 2 linhas num ambiente de demo; ficam, nomeados aqui.
+
 ## Medicao da F6 (2026-09-05) — a cadeia funcionou, e o VALOR saiu errado
 
 Contato real atravessou o `retencao_humano` as 17:02-17:03 (sessao
@@ -642,7 +699,7 @@ falseada desligando a chamada).
 | **F3** 🟡 | **Renderer Miller + recusa alta** *(parcial, 2026-09-05)* | ✅ colunas no Console · ✅ subárvore no `render` + `options_tree` derivado · ✅ D7. ❌ recusa em canal pobre (D11) — mudou de casa (o `form_get` NÃO conhece o canal) e virou `DLG-15`. D5 vale POR CONSTRUÇÃO nesta superfície (navegar limpa as marcações); a conferência no submit é `DLG-16`. | F1, F2 |
 | **F4** ✅ | **Categoria de caminho** *(2026-09-05)* | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** ✅ | **Editor de árvore** *(2026-09-05)* | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
-| **F6** 🟡 | **Validação** *(pré-requisito atendido, 2026-09-05)* | ✅ **A forma está ligada a um pool**: `retencao_humano.on_human_end.context.dialog_form_id` = `dialog_wrapup_arvore_v1`, mudado no **agent-registry** (a config viva, nunca o YAML) a pedido do dono, para teste. ❌ falta o **contato real** atravessando: wrap-up ponta a ponta com árvore de 3+ níveis e multi-folha, e a contagem por prefixo conferindo com os eventos emitidos. | todas |
+| **F6** 🟡 | **Validação** *(quase: falta multi-folha ao vivo, 2026-09-05)* | ✅ forma ligada ao `retencao_humano` · ✅ contato real com árvore de **3 níveis até a FOLHA (`financeiro.pagamento.nao_identificado`, 6 segmentos, teto 8) · ✅ `checklist` chegou como **lista** · ✅ guarda `prefix` discriminou (`valor_contestado` corretamente **não** perguntada sob `financeiro.pagamento`) · ✅ classificação → `outcome: resolved` · ✅ **contagem por prefixo confere** (`…motivo.financeiro.` = 1; `l4` **não** alcança a folha, que é a D10). ❌ **multi-folha**: o operador marcou UM serviço, e lista de um elemento não distingue *iterar* de *pegar o primeiro* → `DLG-22`. | todas |
 
 
 > **Emenda de 2026-09-05 (DLG-09).** A D12 acrescenta o op `prefix` a um avaliador que existe
