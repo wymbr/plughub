@@ -98,14 +98,51 @@ Com isso a multi-seleção **não precisa de vocabulário novo**:
 | `list` | árvore, resposta = **um** path |
 | `checklist` | árvore, resposta = **lista** de paths |
 
-### D5 — Multi-seleção é DENTRO DE UMA PASTA
+### ~~D5 — Multi-seleção é DENTRO DE UMA PASTA~~ — **REVOGADA em 2026-09-05**
 
-Marcar vários arquivos da coluna atual; não há cesta cross-ramo. Consequência que vira mecanismo: **todos os
-paths selecionados compartilham o mesmo pai**, e isso é um invariante **conferível** — `segment_outcome_record`
-recusa alto quando dois paths chegam sem prefixo comum, em vez de gravar séries que não deviam coexistir.
+> **O texto original fica**, porque decisão revogada em silêncio volta a ser tomada:
+>
+> *"Marcar vários arquivos da coluna atual; não há cesta cross-ramo. Consequência que vira mecanismo: todos os
+> paths selecionados compartilham o mesmo pai, e isso é um invariante conferível — `segment_outcome_record`
+> recusa alto quando dois paths chegam sem prefixo comum. Ganho analítico de graça: N eventos com prefixo comum
+> até a pasta."*
 
-Ganho analítico de graça: N eventos com prefixo comum até a pasta. `count` por `…motivo.financeiro.cobranca.%`
-dá quantos wrap-ups tocaram a pasta; as folhas quebram por dentro.
+**Por que caiu, e não foi por ergonomia — foi por perda MEDIDA de poder de registro.**
+
+A regra dizia *"dentro de uma pasta"*, mas o que ela impõe é **mesmo pai imediato**. Consequência: *o que pode
+ser registrado junto passa a depender de onde o autor ARQUIVOU a folha* — decisão de arrumação, não de domínio.
+Na forma publicada, `servico` filou as folhas em `cadastro` (segunda_via, troca_titularidade) e `plano`
+(alteracao, cancelamento). Antes da árvore elas eram todas irmãs na raiz, logo combináveis. Medido no
+ClickHouse, na época anterior ao carimbo:
+
+| combinação gravada | contatos |
+|---|---|
+| `segunda_via` + `alteracao_plano` | **6** |
+| as **quatro** folhas no mesmo contato | 2 |
+
+Ou seja: a árvore não reorganizou o vocabulário — ela **apagou uma combinação que o dado real exercia**, e o
+apagamento veio de organizar o menu. Uma restrição cuja incidência depende da forma da árvore não é regra de
+domínio; é acidente de autoria promovido a invariante.
+
+**E o ganho analítico não exigia a restrição.** O rollup por `arrayJoin` de prefixos com `uniqExact` já conta
+cross-pasta corretamente — o contato aparece uma vez em cada pasta tocada e **UMA** vez na raiz —, e a lente já
+desenha essa não-aditividade (é a divergência entre *marks* e *contacts*). A D5 não acrescentava poder
+analítico: só removia um caso.
+
+**O risco que ela citava é de PERCEPÇÃO, e trata-se por exibição.** *"Montar cesta cross-ramo sem perceber"*
+se resolve mostrando a cesta, não proibindo-a. O renderer já a mostrava; agora cada caminho marcado é também
+o botão que o desmarca — necessário, porque com marcação fora das colunas visíveis o operador chegaria a um
+estado que só se desfaz navegando de volta.
+
+**Não vira flag.** `multi_scope: sibling | any_leaf` foi considerado e recusado: o default teria de ser
+`any_leaf` (é o comportamento correto), e a alternativa restritiva ficaria sendo config que ninguém liga —
+mais um estado a lembrar. Quem quiser *"escolha dentro de uma área só"* modela **duas perguntas**, que é o
+mecanismo que já existe. Mesma preferência do resto do arco: remover a alternativa em vez de marcá-la caso a
+caso.
+
+**O que sobrevive da D5:** o ganho de prefixo continua real sempre que as marcações *de fato* compartilham
+pasta — só deixou de ser garantido. E o invariante que importa nunca foi o prefixo comum, é **todo path é
+FOLHA** (D2), cuja detecção já mora no relatório (`own > 0` em pasta).
 
 ### D6 — A resposta é o caminho de `id`s; `label` nunca entra na série
 
@@ -951,7 +988,7 @@ falseada desligando a chamada).
 | ~~**F0b**~~ | ~~Pin de versão~~ — **movida** para a fase **S1** de [`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md), que mata a corrida removendo a segunda leitura em vez de sincronizá-la (ver D9). | — |
 | **F1** ✅ | **Schema** *(2026-09-05)* | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos. `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). ⚠️ A **obrigatoriedade derivada (D7) NÃO entrou**: `QuestionNode` não tem `required`, então ela é regra de RENDER e foi para a F3. | `probe_ask_when_parity.sh` (DLG-09) |
 | **F2** ✅ | **Resposta multi de verdade** *(2026-09-05)* | `menu.ts` para de tratar `checklist` como escalar — **o unico item que faltava**. Os renderizadores ja faziam multi, e o `json.dumps` do bridge e TRANSPORTE, nao defeito (ver a correcao do achado 3). Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
-| **F3** 🟡 | **Renderer Miller + recusa alta** *(parcial, 2026-09-05)* | ✅ colunas no Console · ✅ subárvore no `render` + `options_tree` derivado · ✅ D7. ❌ recusa em canal pobre (D11) — mudou de casa (o `form_get` NÃO conhece o canal) e virou `DLG-15`. D5 vale POR CONSTRUÇÃO nesta superfície (navegar limpa as marcações); a conferência no submit é `DLG-16`. | F1, F2 |
+| **F3** 🟡 | **Renderer Miller + recusa alta** *(parcial, 2026-09-05)* | ✅ colunas no Console · ✅ subárvore no `render` + `options_tree` derivado · ✅ D7. ❌ recusa em canal pobre (D11) — mudou de casa (o `form_get` NÃO conhece o canal) e virou `DLG-15`. **D5 REVOGADA em 2026-09-05** (ver a seção): navegar deixou de limpar as marcações, e a cesta abaixo das colunas desmarca sem navegar de volta. Com ela cai a `DLG-16`, que existia para conferir o prefixo comum. | F1, F2 |
 | **F4** ✅ | **Categoria de caminho** *(2026-09-05)* | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** ✅ | **Editor de árvore** *(2026-09-05)* | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
 | **F6** ✅ | **Validação** *(2026-09-05)* | Contato real com `motivo` = `tecnico.conectividade.lentidao` (folha, 3 níveis, 6 segmentos, teto 8) e `servico` = **duas folhas na MESMA pasta** (`cadastro.segunda_via` + `cadastro.troca_titularidade`) ⇒ **3 eventos**, provando que o emissor ITERA a lista. Guarda `prefix` discriminou; classificação → `outcome`; contagem por prefixo confere, e a divergência **marçações 2 × contatos 1** na pasta `cadastro` existe agora em dado real. Eventos carimbados com `dialog_form_id` + `version` (D14). Gate: `probe_agent_event_form_stamp.sh`. | todas |

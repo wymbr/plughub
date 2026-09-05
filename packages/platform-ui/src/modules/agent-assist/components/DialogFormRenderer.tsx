@@ -613,6 +613,17 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   // Pasta abre coluna, folha seleciona. Descer 4 níveis por indentação numa lista
   // longa é ruim de operar; colunas mantêm o caminho inteiro visível, que é o que
   // o operador precisa conferir antes de enviar.
+  /** Desmarca um caminho a partir da CESTA, sem exigir que ele esteja na coluna. */
+  const desmarcar = (ok: string, caminho: string, multi: boolean) => {
+    setAnswers(p => {
+      if (!multi) { const { [ok]: _fora, ...resto } = p; return resto }
+      const antes  = Array.isArray(p[ok]) ? (p[ok] as string[]) : []
+      const depois = antes.filter(v => v !== caminho)
+      if (!depois.length) { const { [ok]: _fora, ...resto } = p; return resto }
+      return { ...p, [ok]: depois }
+    })
+  }
+
   const renderMiller = (ok: string, raiz: DialogOption[] | undefined, multi: boolean) => {
     const caminho = millerPath[ok] ?? []
     const marcadas = (() => {
@@ -629,11 +640,19 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
       const prefixo = caminho.slice(0, col)
       const val     = valOf(o)
       if (ehPasta(o)) {
-        // Navegar LIMPA as marcações: a multi-seleção é DENTRO de uma pasta (D5),
-        // e o prefixo comum é o invariante que o submit confere. Sem isto o
-        // operador montaria uma cesta cross-ramo sem perceber.
+        // Navegar NÃO mexe nas marcações — **a D5 foi REVOGADA em 2026-09-05**, por
+        // medição. A regra dizia "multi-seleção dentro de UMA pasta", mas o que ela
+        // impõe de fato é *mesmo pai imediato*: o que pode ser registrado junto
+        // passava a depender de onde o autor ARQUIVOU a folha, que é arrumação e
+        // não domínio. Medido: antes da árvore, `segunda_via` + `alteracao` foi
+        // gravado por 6 contatos (2 deles marcaram as quatro folhas); ao filar as
+        // folhas em `cadastro` e `plano`, a árvore APAGOU essa combinação — remoção
+        // de poder de registro que o dado real exercia, causada por organização.
+        //
+        // O risco que a D5 citava (montar cesta cross-ramo sem perceber) é de
+        // PERCEPÇÃO, e se trata por exibição: a cesta abaixo das colunas mostra
+        // todo caminho marcado e permite desmarcar sem navegar de volta.
         setMillerPath(p => ({ ...p, [ok]: [...prefixo, val] }))
-        setAnswers(p => { const { [ok]: _fora, ...resto } = p; return resto })
         return
       }
       const completo = [...prefixo, val].join(SEP)
@@ -678,8 +697,27 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
             </div>
           ))}
         </div>
+        {/* A cesta deixou de ser só eco. Com a D5 revogada existe marcação FORA das
+            colunas visíveis, e sem isto ela só poderia ser desfeita navegando de
+            volta até a pasta dela — estado alcançável sem saída a partir de onde o
+            operador está. Cada caminho é o botão que o desmarca. */}
         {marcadas.length > 0 && (
-          <div className="text-xs text-slate-500 font-mono break-all">{marcadas.join("  ·  ")}</div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted">{t("formFill.tree.selected")}</span>
+            {marcadas.map(p => (
+              <button
+                key={p}
+                type="button"
+                disabled={disabled}
+                onClick={() => desmarcar(ok, p, multi)}
+                title={t("formFill.tree.unselect")}
+                className="flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full border border-green/40 bg-green-50 text-green hover:border-green disabled:opacity-40"
+              >
+                <span className="break-all">{p}</span>
+                <span aria-hidden="true" className="text-green/70">×</span>
+              </button>
+            ))}
+          </div>
         )}
       </div>
     )

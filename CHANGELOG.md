@@ -1,5 +1,61 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (25) — D5 revogada: a árvore tinha apagado uma combinação que o dado real exercia
+
+A D5 dizia *"multi-seleção é DENTRO de uma pasta"*, e o renderer a cumpria limpando as marcações ao
+navegar. O dono foi usar e não conseguiu marcar dois serviços de grupos diferentes. **Não era defeito — era
+a decisão funcionando.** O que a medição mostrou é que a decisão custava mais do que se via quando foi
+tomada.
+
+### A regra não é "uma pasta": é "mesmo pai imediato"
+
+E daí sai o problema. *O que pode ser registrado junto passa a depender de onde o autor ARQUIVOU a folha* —
+decisão de arrumação, não de domínio. Na forma publicada, `servico` filou as folhas em `cadastro`
+(segunda_via, troca_titularidade) e `plano` (alteracao, cancelamento). Antes da árvore as quatro eram irmãs
+na raiz, logo combináveis. Medido no ClickHouse, na época anterior ao carimbo:
+
+| combinação gravada | contatos |
+|---|---|
+| `segunda_via` + `alteracao_plano` | **6** |
+| as **quatro** folhas no mesmo contato | 2 |
+
+A árvore não reorganizou o vocabulário: **apagou uma combinação que o dado real exercia**, e o apagamento
+veio de organizar o menu. Uma restrição cuja incidência depende da forma da árvore não é regra de domínio —
+é acidente de autoria promovido a invariante.
+
+### O que a D5 comprava, e por que não precisava dela
+
+O **ganho analítico** (prefixo comum até a pasta) não exigia a restrição: o rollup por `arrayJoin` de
+prefixos com `uniqExact` já conta cross-pasta corretamente — o contato aparece uma vez em cada pasta tocada
+e **UMA** vez na raiz —, e a lente já desenha essa não-aditividade. A restrição não acrescentava poder
+analítico; só removia um caso.
+
+O **risco** que ela citava (*"montar cesta cross-ramo sem perceber"*) é de PERCEPÇÃO, e trata-se por
+exibição: mostra-se a cesta, não se proíbe. O renderer já a mostrava; agora cada caminho marcado é também o
+botão que o desmarca — necessário, e não enfeite: com marcação fora das colunas visíveis, desfazê-la exigiria
+navegar de volta até a pasta dela, um estado sem saída a partir de onde o operador está.
+
+### Recusado virar flag
+
+`multi_scope: sibling | any_leaf` foi considerado e recusado. O default teria de ser `any_leaf` (é o
+comportamento correto), e a alternativa restritiva ficaria sendo config que ninguém liga — mais um estado a
+lembrar. Quem quiser *"escolha dentro de uma área só"* modela **duas perguntas**, mecanismo que já existe. É
+a preferência que este arco já exerceu no `form` virando tipo de bloco e na pasta×folha derivada: **remover a
+alternativa em vez de marcá-la caso a caso.**
+
+⚠️ Cai junto a **DLG-16** (conferir prefixo comum no submit), encerrada **sem implementação**: ela existia
+para impor a D5, e dois paths sem prefixo comum passaram a ser registro legítimo. O invariante que sobrevive
+nunca foi o prefixo — é **todo path é FOLHA** (D2), cuja detecção já mora no relatório (`own > 0` em pasta).
+
+O texto original da D5 fica no ADR, tachado: decisão revogada em silêncio volta a ser tomada.
+
+Verificação: `tsc --noEmit` limpo; i18n agentAssist **493 × 493**.
+
+Arquivos: `packages/platform-ui/src/modules/agent-assist/components/DialogFormRenderer.tsx` ·
+`packages/platform-ui/src/i18n/locales/{en,pt-BR}/agentAssist.json` · `docs/adr/adr-dialog-tree-options.md`.
+
+---
+
 ## 2026-09-05 (24) — Misturar e não saber são dois fatos, e só um tinha evidência
 
 O aviso da época sem carimbo (*"this stretch still mixes vocabularies"*) pendurava em

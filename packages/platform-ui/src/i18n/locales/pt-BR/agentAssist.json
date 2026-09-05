@@ -291,7 +291,9 @@
       "dismiss": "Tirar da minha lista"
     },
     "tree": {
-      "leafRequired": "Desça até uma opção final — pastas não são resposta."
+      "leafRequired": "Desça até uma opção final — pastas não são resposta.",
+      "selected": "Marcado:",
+      "unselect": "Clique para desmarcar"
     }
   },
   "empty": {

@@ -291,7 +291,9 @@
       "dismiss": "Remove from my list"
     },
     "tree": {
-      "leafRequired": "Drill down to a final option — folders are not an answer."
+      "leafRequired": "Drill down to a final option — folders are not an answer.",
+      "selected": "Selected:",
+      "unselect": "Click to unselect"
     }
   },
   "empty": {
