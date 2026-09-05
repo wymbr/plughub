@@ -77,6 +77,9 @@ interface Epoch {
 }
 
 interface TreeMeta {
+  // As formas CARIMBADAS na janela. Duas ou mais e mistura MEDIDA — distinta do
+  // `single_vocabulary`, que tambem cai por evento sem carimbo (ausencia, nao mistura).
+  vocabularies?:      string[]
   unstamped_events?:  number
   single_vocabulary?: boolean
 }
@@ -178,14 +181,32 @@ function EpochBlock({
       )}
 
       {/* Só sobra aviso DENTRO de uma época quando ela é a sem-carimbo: ali o recorte
-          não separa, porque a forma nunca foi gravada. */}
+          não separa, porque a forma nunca foi gravada.
+
+          ⚠️ **MISTURA e NÃO-SEI são fatos diferentes, e só um deles tem evidência.**
+          `single_vocabulary` é `len(formas) <= 1 and sem_carimbo == 0` — dentro da época
+          sem carimbo ele é falso POR CONSTRUÇÃO, não por medição. Afirmar "mistura"
+          sobre ele é a tela alegando um defeito que pode não existir: medido em
+          `motivo`, zero rótulos repetidos e o aviso aparecia mesmo assim. É a mesma
+          família do vazio que se declarava confiável, na direção inversa.
+
+          Mistura só é afirmada com EVIDÊNCIA na própria janela: duas formas carimbadas,
+          ou o mesmo rótulo em mais de um caminho (o que as linhas já mostram, com o pai
+          desambiguando). Sem isso a tela diz que não sabe — e não sabe mesmo. */}
       {meta.single_vocabulary === false && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-xs text-dark">
           <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" aria-hidden="true" />
-          <div>
-            <b>{t('lens.taxonomy.mixedInEpoch')}</b>
-            <div className="text-muted mt-0.5">{t('lens.taxonomy.mixedInEpochHint')}</div>
-          </div>
+          {(meta.vocabularies?.length ?? 0) > 1 || ambiguos.size > 0 ? (
+            <div>
+              <b>{t('lens.taxonomy.mixedInEpoch')}</b>
+              <div className="text-muted mt-0.5">{t('lens.taxonomy.mixedInEpochHint')}</div>
+            </div>
+          ) : (
+            <div>
+              <b>{t('lens.taxonomy.unknownVocab')}</b>
+              <div className="text-muted mt-0.5">{t('lens.taxonomy.unknownVocabHint')}</div>
+            </div>
+          )}
         </div>
       )}
 

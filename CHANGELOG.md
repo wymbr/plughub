@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (24) — Misturar e não saber são dois fatos, e só um tinha evidência
+
+O aviso da época sem carimbo (*"this stretch still mixes vocabularies"*) pendurava em
+`single_vocabulary`, que o servidor deriva como `len(formas) <= 1 and sem_carimbo == 0`. Dentro da época
+sem carimbo **todo** evento é sem carimbo, então a flag é falsa **por construção, não por medição** — o
+aviso aparecia sempre, e não era evidência de nada.
+
+| raiz | formas carimbadas | rótulos em mais de um caminho | o que a tela dizia | o que ela diz agora |
+|---|---|---|---|---|
+| `motivo` | 0 | **nenhum** | "mistura vocabulários" | "vocabulário desconhecido neste trecho" |
+| `servico` | 0 | `troca_titularidade` | "mistura vocabulários" | "mistura vocabulários" (agora medido) |
+
+Em `motivo` a tela alegava um defeito que **pode não existir**. É a mesma família do vazio que se
+declarava confiável — corrigido horas antes, na entrada (23) — só que na direção inversa: lá a tela
+negava dado que existia, aqui ela afirma mistura que ninguém viu. As duas nascem de tratar um valor
+derivado como se fosse uma observação.
+
+Mistura passa a ser afirmada só com **evidência na própria janela**: duas formas carimbadas, ou o mesmo
+rótulo em mais de um caminho. E o predicado é o **mesmo `ambiguos`** que já desambigua as linhas pelo pai
+— então o aviso é verdadeiro **se e somente se** o leitor consegue ver a evidência na tabela logo abaixo.
+Uma casa só decide, e a afirmação vem com o seu próprio rastro.
+
+Sem evidência a tela diz **que não sabe**, e diz por quê: a forma daqueles eventos nunca foi gravada, eles
+podem falar um vocabulário ou vários, e esta superfície não adivinha. Novas chaves
+`lens.taxonomy.unknownVocab`/`unknownVocabHint` nos dois locales.
+
+Verificação: `tsc --noEmit` limpo; i18n **779 × 779**, sem duplicadas; veredicto conferido contra o dado
+vivo das duas raízes.
+
+Arquivos: `packages/platform-ui/src/modules/analise/TaxonomyTreeLens.tsx` ·
+`packages/platform-ui/src/i18n/locales/{en,pt-BR}/contacts.json`.
+
+---
+
 ## 2026-09-05 (23) — O limite andava para trás: a época ficava vazia sobre os próprios eventos
 
 Dois defeitos achados olhando as telas da lente de taxonomia. O segundo é o caro.

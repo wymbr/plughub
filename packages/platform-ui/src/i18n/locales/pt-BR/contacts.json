@@ -1017,7 +1017,9 @@
         "hint": "O formulário do pool mudou dentro deste período. Cada bloco é um trecho com UM vocabulário — somar através dos blocos contaria categorias que não descrevem a mesma coisa."
       },
       "mixedInEpoch": "Este trecho ainda mistura vocabulários",
-      "mixedInEpochHint": "São eventos anteriores ao carimbo de formulário: a forma que os descreve nunca foi gravada, então nenhum recorte os separa. Vale para o passado; do carimbo em diante cada trecho fala um vocabulário só."
+      "mixedInEpochHint": "São eventos anteriores ao carimbo de formulário: a forma que os descreve nunca foi gravada, então nenhum recorte os separa. Vale para o passado; do carimbo em diante cada trecho fala um vocabulário só.",
+      "unknownVocab": "Vocabulário desconhecido neste trecho",
+      "unknownVocabHint": "Estes eventos são anteriores ao carimbo de formulário, então a forma que os descreve nunca foi gravada. Eles podem falar um vocabulário só ou vários — esta superfície não tem como saber, e não adivinha. Do carimbo em diante cada trecho fala um vocabulário único."
     }
   }
 }

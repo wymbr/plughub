@@ -1017,7 +1017,9 @@
         "hint": "The pool's form changed within this period. Each block is a stretch with ONE vocabulary — adding across blocks would count categories that do not describe the same thing."
       },
       "mixedInEpoch": "This stretch still mixes vocabularies",
-      "mixedInEpochHint": "These are events predating the form stamp: the form describing them was never recorded, so no slicing separates them. It applies to the past; from the stamp onwards each stretch speaks a single vocabulary."
+      "mixedInEpochHint": "These are events predating the form stamp: the form describing them was never recorded, so no slicing separates them. It applies to the past; from the stamp onwards each stretch speaks a single vocabulary.",
+      "unknownVocab": "Vocabulary unknown for this stretch",
+      "unknownVocabHint": "These events predate the form stamp, so the form describing them was never recorded. They may all speak one vocabulary or several — this surface cannot tell, and does not guess. From the stamp onwards each stretch speaks a single vocabulary."
     }
   }
 }
