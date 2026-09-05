@@ -68,6 +68,7 @@ from ..collect_requirements import (
     derive_collect_requires,
 )
 from ..config import Settings
+from ..dialog_form_pin import resolve_published_version
 from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
 
@@ -2818,6 +2819,28 @@ class WebhookAdapter(ChannelAdapter):
         for key, value in context.items():
             store_key = await store_key_for_context_entry(tenant_id, key)
             ctx_writes[store_key] = str(value)
+
+        # ── PIN DE VERSÃO (S1 do adr-deploy-time-content-snapshot · D14 da árvore) ──
+        # O form é lido duas vezes — pelo renderer no claim e pelo
+        # `segment_outcome_record` no submit — com `timeout_s: -1` e ACW de até 24 h
+        # no meio, e nada as amarra. Pinar aqui faz as duas apontarem para a MESMA
+        # versão: a corrida deixa de ser removida e passa a ser INÓCUA.
+        #
+        # Aqui e não no render porque **quem grava o pin é o SERVIDOR** (requisito
+        # inegociável da S1): vindo do cliente, um browser escolheria qual versão do
+        # formulário descreve a própria resposta.
+        #
+        # Ausência da tag = comportamento anterior (cada leitura resolve a última
+        # publicada). Por isso omitir é seguro — e por isso o resolvedor LOGA o que
+        # deixa de valer em vez de inventar versão.
+        form_id_pin = ctx_writes.get("core.workflow.dialog_form_id")
+        if form_id_pin:
+            versao = await resolve_published_version(
+                getattr(self._settings, "dialog_api_url", ""),
+                tenant_id, str(form_id_pin),
+            )
+            if versao is not None:
+                ctx_writes["core.workflow.dialog_form_version"] = str(versao)
 
         # Write Session A-new's delegate resume_token so the specialist can
         # call workflow_resume a second time to close Session A-new properly.
