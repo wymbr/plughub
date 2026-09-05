@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (17) — F6 fechada: a árvore mediu inteira, com o pin no ar
+
+Terceiro contato real (sessão `d36639f8`, wrap-up `88a98d26`), já com o pin implantado. Verdade de
+origem, lida do `pipeline_state`:
+
+```json
+{ "classificacao": "resolvido",
+  "motivo":        "tecnico.conectividade.lentidao",
+  "servico":       ["cadastro.segunda_via", "cadastro.troca_titularidade"] }
+```
+
+### O que só este contato provou
+
+**Multi-folha.** Duas folhas na **mesma pasta** renderam **3 eventos** (1 de motivo + 2 de serviço).
+Lista de um elemento — o caso das duas passadas anteriores — não distingue *o emissor itera a lista* de
+*o emissor pega o primeiro*; duas distinguem. É a metade multi da F2 exercida fora do gate, e fecha a
+`DLG-22`.
+
+**O prefixo comum da D5 ganhou testemunha:** as duas folhas compartilham `servico.cadastro` — navegar
+no renderer limpa as marcações, então cesta cross-ramo não é montável pela tela.
+
+**O pin atravessou as três pontes.** `core.workflow.dialog_form_version = "1"` no ctx da sessão de
+wrap-up, `source: delegate_conference`, gravado às 19:33:47 — **antes** do render; e as três linhas do
+ClickHouse saem com `tags {dialog_form_id: dialog_wrapup_arvore_v1, dialog_form_version: 1}`.
+
+### A divergência deixou de ser argumento e virou dado
+
+| medida, na pasta `servico.cadastro` | n |
+|---|---|
+| marcações (`countIf` por prefixo) | **2** |
+| contatos (`uniqExactIf` por prefixo) | **1** |
+
+É o caso que sustenta a decisão de exibir **as duas colunas, sem padrão**: publicar só a soma faria
+`servico` totalizar mais que o número de atendimentos, e alguém tiraria percentual disso. E `uniqExact`
+não soma — por isso a coluna de contatos é **server-side por necessidade**, não por gosto.
+
+### A publicação exigiu as duas metades do seed-if-absent
+
+Editar o YAML do skill é no-op (`PUT /v1/skills` com `x-skill-publish`), **e** o pool usa slot — o
+bridge executa o snapshot do `current`, então também `set-next` + `promote`. Conferido no banco:
+`current` com o pin, `previous` sem, rollback preservado. Sem a segunda metade, produção seguiria
+rodando o fluxo antigo com o commit no lugar.
+
+### Gate
+
+`infra/test/probe_agent_event_form_stamp.sh` — 4 ramos, com **INCONCLUSIVO como ramo próprio**: sem
+evento na janela ele NÃO fica verde, porque *"todos carimbados"* sobre população zero é verdade vazia.
+Falseado por três mutações: época no futuro (sem amostra), forma inexistente no store (carimbo que
+aponta para documento que não existe é pior que carimbo nenhum) e ClickHouse inalcançável. Declarado no
+`gates.manifest` (285 scripts prestando contas).
+
+**`DLG-25` (época por forma) fica desbloqueada** — o dado já está carimbado.
+
+Arquivos: `infra/test/probe_agent_event_form_stamp.sh` (novo) · `infra/test/gates.manifest` ·
+`docs/adr/adr-dialog-tree-options.md` (F6 ✅) · `done.md` (DLG-22, DLG-24) · `pending.md` (DLG-25).
+
+---
+
 ## 2026-09-05 (16) — D14: o carimbo é `(form_id, version)`, e nasce no render
 
 Proposta do dono: *"gravar o id + timestamp da publicação do DialogForm, sempre com os dados

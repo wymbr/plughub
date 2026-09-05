@@ -210,6 +210,7 @@ probe_dialog_format_engine.sh
 probe_dialog_format_surfaces.sh
 probe_dialog_formats_parity.sh
 probe_dialog_json_surface.sh
+probe_agent_event_form_stamp.sh
 probe_duration_definitions.sh
 probe_edge_surface.sh
 probe_entry_pool_fww.sh

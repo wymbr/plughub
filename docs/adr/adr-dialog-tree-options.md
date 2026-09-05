@@ -329,6 +329,48 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## F6 FECHADA (2026-09-05) — a arvore mediu inteira, com o pin no ar
+
+Terceiro contato real, ja com o pin implantado (sessao `d36639f8`, wrap-up `88a98d26`). Verdade de
+origem:
+
+```json
+{ "classificacao": "resolvido",
+  "motivo":        "tecnico.conectividade.lentidao",
+  "servico":       ["cadastro.segunda_via", "cadastro.troca_titularidade"] }
+```
+
+**O que so este contato provou:** `servico` com **duas folhas na MESMA pasta** rendeu **3 eventos**
+(1 de motivo + 2 de servico). Lista de um elemento — que era o caso das passadas anteriores — nao
+distingue *o emissor itera a lista* de *o emissor pega o primeiro*; duas distinguem. E a metade multi
+da F2 exercida por contato real, e fecha a `DLG-22`.
+
+**O prefixo comum da D5 vale por construcao, e agora tem testemunha:** as duas folhas compartilham
+`servico.cadastro` — navegar no renderer limpa as marcacoes, entao cesta cross-ramo nao e montavel
+pela tela.
+
+**O pin atravessou as tres pontes.** `core.workflow.dialog_form_version = "1"` no ctx da sessao de
+wrap-up, `source: delegate_conference`, gravado as 19:33:47 — **antes** do render; e as tres linhas do
+ClickHouse saem com `tags {dialog_form_id: dialog_wrapup_arvore_v1, dialog_form_version: 1}`.
+
+### A divergéncia deixou de ser argumento e virou dado
+
+| medida, na pasta `servico.cadastro` | n |
+|---|---|
+| marcacoes (`countIf` por prefixo) | **2** |
+| contatos (`uniqExactIf` por prefixo) | **1** |
+
+E o caso que sustenta a decisao do dono de exibir **as duas colunas, sem padrao**: publicar so a soma
+faria `servico` totalizar mais que o numero de atendimentos, e alguem tiraria percentual disso.
+`uniqExact` nao soma — por isso a coluna de contatos e **server-side por necessidade**, nao por gosto.
+
+### Gate
+
+`infra/test/probe_agent_event_form_stamp.sh` — 4 ramos, com **INCONCLUSIVO como ramo proprio**: sem
+evento na janela ele NAO fica verde, porque *"todos carimbados"* sobre populacao zero e verdade vazia.
+Falseado por tres mutacoes: epoca no futuro (sem amostra), forma inexistente no store (o carimbo que
+aponta para documento que nao existe e pior que carimbo nenhum), e ClickHouse inalcancavel.
+
 ## D14 — o carimbo e `(form_id, version)`, e nasce no RENDER (decidida 2026-09-05)
 
 Proposta do dono: *"gravar o id + timestamp da publicacao do dialogform, sempre com os dados
@@ -854,7 +896,7 @@ falseada desligando a chamada).
 | **F3** 🟡 | **Renderer Miller + recusa alta** *(parcial, 2026-09-05)* | ✅ colunas no Console · ✅ subárvore no `render` + `options_tree` derivado · ✅ D7. ❌ recusa em canal pobre (D11) — mudou de casa (o `form_get` NÃO conhece o canal) e virou `DLG-15`. D5 vale POR CONSTRUÇÃO nesta superfície (navegar limpa as marcações); a conferência no submit é `DLG-16`. | F1, F2 |
 | **F4** ✅ | **Categoria de caminho** *(2026-09-05)* | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** ✅ | **Editor de árvore** *(2026-09-05)* | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
-| **F6** 🟡 | **Validação** *(quase: falta multi-folha ao vivo, 2026-09-05)* | ✅ forma ligada ao `retencao_humano` · ✅ contato real com árvore de **3 níveis até a FOLHA (`financeiro.pagamento.nao_identificado`, 6 segmentos, teto 8) · ✅ `checklist` chegou como **lista** · ✅ guarda `prefix` discriminou (`valor_contestado` corretamente **não** perguntada sob `financeiro.pagamento`) · ✅ classificação → `outcome: resolved` · ✅ **contagem por prefixo confere** (`…motivo.financeiro.` = 1; `l4` **não** alcança a folha, que é a D10). ❌ **multi-folha**: o operador marcou UM serviço, e lista de um elemento não distingue *iterar* de *pegar o primeiro* → `DLG-22`. | todas |
+| **F6** ✅ | **Validação** *(2026-09-05)* | Contato real com `motivo` = `tecnico.conectividade.lentidao` (folha, 3 níveis, 6 segmentos, teto 8) e `servico` = **duas folhas na MESMA pasta** (`cadastro.segunda_via` + `cadastro.troca_titularidade`) ⇒ **3 eventos**, provando que o emissor ITERA a lista. Guarda `prefix` discriminou; classificação → `outcome`; contagem por prefixo confere, e a divergência **marçações 2 × contatos 1** na pasta `cadastro` existe agora em dado real. Eventos carimbados com `dialog_form_id` + `version` (D14). Gate: `probe_agent_event_form_stamp.sh`. | todas |
 
 
 > **Emenda de 2026-09-05 (DLG-09).** A D12 acrescenta o op `prefix` a um avaliador que existe
