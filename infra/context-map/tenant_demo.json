@@ -41,7 +41,7 @@
           "legado": [
             "journey.limite_aprovado"
           ],
-          "tipo": "financial"
+          "tipo": "valor_informado_ao_cliente"
         },
         "numero": {
           "legado": [
@@ -89,13 +89,13 @@
           "legado": [
             "session.limite_aprovado"
           ],
-          "tipo": "financial"
+          "tipo": "valor_informado_ao_cliente"
         },
         "limite_solicitado": {
           "legado": [
             "session.limite_solicitado"
           ],
-          "tipo": "financial"
+          "tipo": "valor_declarado_pelo_cliente"
         },
         "numero": {
           "legado": [

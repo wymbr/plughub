@@ -140,7 +140,17 @@ echo "-- D. casas que produzem o placeholder de campo mascarado ----"
 # --include restringe a FONTE: sem isso o `grep -rl` conta os `.pyc` do __pycache__,
 # que sao a MESMA casa compilada N vezes (medido: 3 copias de webchat.py e 1 de
 # main.py inflavam 3 para 7). Contador de casas tem de contar CASAS.
-CASAS="$(grep -rlE '"•{6}"|•{6}' \
+#
+# E conta LITERAL, nunca MENCAO (corrigido 2026-09-04, GAT-01). A alternativa
+# solta `|•{6}` casava o placeholder dentro de PROSA: a partir de 5fe9adcc o
+# ramo reprovava por `masking_types.py`, cuja unica ocorrencia esta numa linha
+# de docstring explicando o fallback. Quarta casa que nao produz nada — e o
+# agravante e que o commit acusado foi justamente o que "corrigiu a CONTA das
+# casas". Mesma familia do `.pyc` que este comentario ja descrevia, um passo
+# adiante: la contava-se a mesma casa N vezes, aqui contava-se quem so FALA
+# dela. As duas aspas ficam na classe para nao trocar um falso positivo por um
+# falso negativo: casa nova que escreva '••••••' em Python continua contando.
+CASAS="$(grep -rlE "['\"]•{6}['\"]" \
           --include=*.py --include=*.ts --include=*.tsx \
           packages/orchestrator-bridge/src packages/channel-gateway/src \
           packages/platform-ui/src/modules/agent-assist 2>/dev/null \

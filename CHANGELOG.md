@@ -1,5 +1,158 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-04 (9) — GAT-01: o manifesto passa a prestar contas, e 100 gates rodavam para ninguém
+
+`run_gates.sh` garante que tudo o que o manifesto **cita** foi executado. Nada garantia que
+ele **citasse tudo o que existe** — e esse é o mesmo modo de falha que o runner foi escrito
+para impedir, uma casa acima: *uma lista parece completa por ser uma lista*, e o que falta
+não aparece em contagem nenhuma.
+
+Medição de hoje sobre `infra/test/`: **281 scripts `.sh`, 44 declarados, 237 não**. Dos 237,
+144 tinham cara de gate; rodaram-se **os 144** (`GATE_MANIFEST` apontando para um manifesto
+temporário, `GATE_TIMEOUT=60`) e **100 saíram VERDES**. Não era dívida teórica: era cobertura
+que já funcionava e que ninguém colhia.
+
+### O critério foi refutado duas vezes, e a segunda mudou o desenho
+
+A primeira ideia era cobrar só os scripts "com cara de gate", por um critério textual. Ele
+caiu duas vezes:
+
+- **v1** contava `$1` como *"exige argumento posicional"* e por isso classificava 218 de 280
+  como assistidos. `$1` em `awk` é referência de **campo**. O critério perdia **41 dos 44**
+  que já estavam no manifesto — e a lição não é "apertar a regex": um critério que exclui 93%
+  da população conhecida está **refutado**. Daí a calibração virar regra: *o critério é
+  testado contra os 44 conhecidos, e tem de manter os 44.*
+- **v2** perdia `exit "$FAIL"` (só via `exit [1-9]`) e com ele
+  `probe_internal_service_callers.sh` — gate citado por nome no `CLAUDE.md`. E perdia **em
+  bloco os 35 `test_*`**, que julgam e saem 1 mas se pronunciam com `✅`/`❌` em vez do
+  vocabulário desta casa.
+
+Dois sistemáticos em duas tentativas, e nos dois o erro foi **falso NEGATIVO** — a família que
+não aparece em contagem nenhuma, porque o script simplesmente deixa de ser cobrado. Como é
+exatamente a falha que a GAT-01 existe para fechar, o desenho mudou: **a população passou a ser
+TODO `.sh` de `infra/test/`**, sem critério no meio. Não há falso negativo possível quando a
+população é "tudo".
+
+O critério textual sobreviveu **rebaixado a informação**: ele ordena a fila de triagem
+(*"destes não-triados, 39 têm cara de gate"*), não decide quem entra. Critério errado agora
+custa prioridade, nunca cobertura. Ficam fora do inventário apenas `.py`/`.ts`/`.mjs`, que são
+censos e harnesses invocados **por** um `.sh` — declará-los faria o manifesto listar as peças
+de dentro dos gates.
+
+### Quatro classes, e a terceira não é a quarta
+
+| classe | prefixo | o que significa |
+|---|---|---|
+| AUTO | *(nenhum)* | o runner executa |
+| ASSISTIDO | `!` | precisa de estado vivo ou argumento humano; é **listado** com o requisito |
+| ISENTO | `=` | **decidido** que não roda, com o motivo na linha |
+| NÃO TRIADO | `?` | **dívida nomeada**: ninguém decidiu ainda |
+
+ISENTO e NÃO TRIADO são tabelas separadas pela mesma razão que `_SCOPE_EXEMPT` e `_SCOPE_DEBT`
+na analytics-api: juntá-las faria a dívida herdar a tranquilidade da decisão.
+
+As quatro razões de isenção, cada uma escrita uma vez no manifesto: **ferramenta** (o runner e
+o helper de credencial são peça, não unidade medida) · **provisionamento** (semeiam, promovem,
+expurgam — o veredicto de um seed é *"consegui escrever"*) · **mutação** (quebram de propósito
+para provar que um gate reprova; o valor é pontual) · **medição-de-momento** (leem o estado do
+mundo *daquele dia* — *"de onde vieram os +167 contatos"*, *"a lacuna 2b tem número?"* —, e o
+vermelho delas não acusa regressão, acusa que o mundo mudou).
+
+**Promoção a AUTO exigiu ter rodado.** Só entraram os VERDES cuja descrição afirma um
+INVARIANTE. Registrar um gate que nunca se rodou seria a GAT-01 outra vez, uma casa acima.
+
+Estado final, sobre os 282 `.sh` (os 281 medidos mais os três arquivos que este trabalho
+criou): **94 AUTO** (eram 40) · **6 ASSISTIDOS** · **72 ISENTOS** · **110 NÃO TRIADOS**, dos
+quais 39 têm cara de gate. Cobertura declarada: 60%.
+
+### O achado maior: o runner também não estava sendo rodado
+
+Rodar o manifesto **inteiro** ao fim do trabalho devolveu **7 não-verdes em 94** — e os sete
+vieram dos **40 que já estavam declarados**, nenhum dos 54 promovidos hoje. A premissa da
+GAT-01 era *"66 gates ninguém roda"*; a medição diz mais que isso: **ninguém roda o runner**.
+Registrar deixou de bastar no dia em que registrar virou a única coisa que se fazia.
+
+Dois desses sete foram diagnosticados e consertados aqui (§ defeitos 2 e 3 abaixo). A rodada
+final ficou em **88 verdes e 6 não-verdes de 94**, e os seis são os que sobraram daqueles
+quarenta: `gate_supervisor_tenant_guard` · `probe_nav_backend_field_agreement` ·
+`probe_role_preset_on_create` · `gate_sla_segment_target` (vermelhos) ·
+`gate_queue_report_per_wait` e o ramo F de `probe_context_map_seed` (inconclusivos). Ficaram
+na fila da GAT-03 em vez de virarem conserto apressado — mas ficaram **contados**, que é a
+diferença entre dívida e esquecimento. **Nenhum dos 54 promovidos hoje está entre eles**, o que
+era requisito: promover foi consequência de ter rodado.
+
+### A triagem achou quatro defeitos, e o primeiro é o mais instrutivo
+
+**1. `probe_masked_type_provenance.sh`, ramo D — contava MENÇÃO como CASA.** O ramo congela em
+3 o número de casas que produzem o placeholder `••••••`, e estava VERMELHO: encontrava 4. A
+quarta era `orchestrator-bridge/masking_types.py`, cuja única ocorrência está **numa linha de
+docstring explicando o fallback**. O padrão era `'"•{6}"|•{6}'` — a segunda alternativa, solta,
+casava prosa. É a mesma família do comentário que o próprio ramo já carregava sobre os `.pyc`
+(*"contador de casas tem de contar CASAS"*), um passo adiante: lá contava-se a mesma casa N
+vezes, aqui contava-se quem só **fala** dela. O agravante: o commit que introduziu a menção foi
+`5fe9adcc`, cujo assunto é *"a regra do dono corrigiu a CONTA das casas"*. Corrigido para exigir
+**literal entre aspas** (`['"]•{6}['"]`, as duas aspas na classe para não trocar um falso
+positivo por um falso negativo). Falseabilidade conferida: um quarto arquivo com
+`= "••••••"` volta a reprovar.
+
+**2. `probe_ctx_writer_census.sh`, ramo E — a MESMA família, no mesmo dia.** O ramo exige que
+todo pacote que usa o funil `write_context_tags` registre o transporte
+(`set_context_map_fetcher`). Estava vermelho apontando `mcp-server-plughub` — que é
+**TypeScript** e entrou na lista por **um comentário** em `bpm.ts:1121` citando o funil pelo
+nome. Os dois nomes são Python; um pacote TS não tem como registrar aquele fetcher, então
+incluí-lo na população só podia gerar falso positivo. Corrigido com `--include=*.py`, com
+mutação plantada (`pricing-api` usando o funil sem registrar volta a reprovar). **Vermelho
+desde 2026-09-02, e este gate JÁ estava no manifesto** — não faltava registro, faltava rodar.
+
+**3. `probe_context_map_seed.sh`, ramo C — e o buraco era MEU.** O ramo compara o mapa VIVO com
+o que `infra/context-map/tenant_demo.json` declara. Divergiam em três tags:
+`journey.cartao.limite_aprovado` e `session.cartao.limite_aprovado`
+(`financial` → `valor_informado_ao_cliente`) e `session.cartao.limite_solicitado`
+(`financial` → `valor_declarado_pelo_cliente`). Retipei as três na config **viva** na F4/F5 de
+ontem, por script, e **não atualizei o arquivo de provisionamento** — um `--wipe` teria
+revertido o tipo e o cliente voltaria a ver `Novo limite: ••••••`, que é exatamente o
+comportamento que a F3 existe para não produzir. É o espelho da falha que eu tinha achado na
+véspera no `seed.py` (um tipo vivo desde 2026-09-02 e nunca semeado): **mudar config viva sem
+mudar a fonte de provisionamento é criar a mesma dívida do outro lado**. Arquivo alinhado; o
+ramo C ficou verde. *(O ramo F do mesmo gate segue INCONCLUSIVO por cenário que não monta —
+condição anterior, na fila da GAT-03.)*
+
+**4. `probe_mcp_permissions_producer.sh` — saía 1 por pré-requisito ausente.** Sem `node` no
+host, o probe se declarava VERMELHO (*"mediu e reprovou"*). É INCONCLUSIVO, e o script já tinha
+o helper `skip()` sem usá-lo naquele ramo. Um vermelho que não é defeito é o que ensina a
+ignorar o vermelho.
+
+### O mecanismo
+
+**`probe_gates_manifest_coverage.sh`** — 5 ramos. **B** todo `.sh` está declarado em exatamente
+uma classe · **C** todo nome do manifesto existe em disco · **D** nenhum nome em duas classes ·
+**E** o critério informativo ainda discrimina (controle **positivo** e **negativo**; sem eles um
+critério que aceitasse tudo ficaria verde — foi assim que a v1 contou 228 de 280) · **F** o
+placar, **sem veredicto**: não há número-alvo para "quantos não-triados são demais", e inventar
+um seria teatro. O valor do F é a **ausência contada** — enquanto o número é impresso a cada
+execução, a lista para de parecer completa.
+
+**Por que a lista de não-triados é NOMEADA e não um contador:** um número não sabe dizer se um
+script novo entrou e outro saiu no mesmo commit — mesma razão do `probe_authz_single_verifier`.
+Com a lista, criar script sem triar deixa o ramo B vermelho, e triar um é uma edição visível no
+diff. A lista só pode encolher.
+
+**`mut_gates_manifest_coverage.sh`** — bateria com **controle positivo** (sem mutação o probe
+tem de estar verde, senão nada abaixo prova coisa alguma), quatro mutações (script não
+declarado → B · nome sem arquivo → C · nome em duas classes → D · critério aceitando tudo → E)
+e **conferência de restauração** do censo. As quatro foram pegas, cada uma pelo ramo certo.
+
+`run_gates.sh` ganhou as três classes novas no parser, no `--list` e no rodapé, mais o aviso de
+que *"nao-triado e DIVIDA nomeada, nao isencao"*.
+
+### O que NÃO fecha
+
+Os **110 não triados** são a dívida que sobrou, e ela está nomeada linha a linha: os 35
+`test_*` (julgam, mas com vocabulário próprio e datados de 2026-06 — nenhum foi rodado nesta
+triagem), os `smoke_*` não medidos, e **todo desfecho não-verde** da medição de hoje. Promover
+um vermelho a AUTO sem saber se o defeito é do produto ou do gate trocaria cobertura por ruído
+— e há pelo menos um caso de cada nas duas primeiras horas de triagem.
+
 ## 2026-09-04 (8) — DLG: `fields[]` ganha autoria, e ela é o JSON
 
 O editor de DialogForm oferecia `form` no seletor de interação e **não sabia autorá-la**.

@@ -12,13 +12,30 @@
 # `probe_*` tem veredicto e reprovam, e varios `gate_*` foram escritos antes da
 # convencao. A lista abaixo e por COMPORTAMENTO, nao por nome.
 #
-# DUAS CLASSES, E A SEGUNDA NAO E DECORACAO
-# -----------------------------------------
+# QUATRO CLASSES, E NENHUMA DELAS E DECORACAO
+# -------------------------------------------
 #   AUTO       roda sem assistencia. E o que o runner executa.
 #   ASSISTIDO  (linha comecando com `!`) precisa de argumento ou de estado vivo
 #              que so um humano produz: um agente logado no Console, um T0 colhido
 #              ANTES de um fluxo, uma instancia concreta. O runner NAO os executa —
 #              LISTA, com o requisito ao lado.
+#   ISENTO     (linha comecando com `=`) decidido que NAO roda, com a classe do
+#              motivo na propria linha. Sao quatro classes de isencao, cada uma
+#              explicada uma vez na secao ISENTO la embaixo.
+#   NAOTRIADO  (linha comecando com `?`) DIVIDA nomeada: ninguem decidiu ainda.
+#
+# ⚠️ ISENTO e NAO TRIADO sao tabelas SEPARADAS de proposito. "Decidimos que nao
+# roda" e "ainda nao sabemos" sao fatos diferentes, e junta-los faria a divida
+# herdar a tranquilidade da decisao — a mesma razao de `_SCOPE_EXEMPT` x
+# `_SCOPE_DEBT` na analytics-api.
+#
+# A LISTA COBRE TODO `.sh` DE infra/test/, e isso e conferido
+# ---------------------------------------------------------
+# Acrescentado pela GAT-01 (2026-09-04). O `run_gates.sh` garante que rodou o que
+# esta lista CITA; que a lista CITE tudo o que existe e outro fato, e mediu-se
+# 44 de 281. Quem confere agora e o `probe_gates_manifest_coverage.sh`: script
+# sem classe deixa o ramo B VERMELHO. Por isso NAO existe "nao consta" — existe
+# `?`, que e a mesma ausencia, com nome e contador.
 #
 # Por que listar em vez de rodar e chamar de INCONCLUSIVO: um runner
 # permanentemente vermelho por nao-defeito ensina a ignorar o vermelho, e ai ele
@@ -169,3 +186,292 @@ ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_ch
 !gate_queue_segment_not_born_without_flow.sh   exige T0 colhido ANTES do fluxo: T0=$(date -u +%FT%TZ)
 !gate_sentiment_engine_half.sh   exige T0 colhido ANTES de abrir o contato, e um contato que ENFILEIRE
 !probe_release_reclaim_race.sh   exige <pool_id> <instance_id> de uma instancia viva
+
+# ── GAT-01 (2026-09-04): existiam e ninguem rodava ───────────────────────────
+# Os 54 abaixo entraram DEPOIS de rodar, nesta ordem: mediu-se o desfecho dos
+# 144 candidatos com `GATE_MANIFEST=... run_gates.sh`, e so os VERDES cuja
+# descricao afirma um INVARIANTE foram promovidos. Registrar um gate que nunca
+# se rodou seria a GAT-01 outra vez, uma casa acima.
+gate_dialog_capture_roundtrip.sh
+gate_form_by_node.sh
+gate_masked_menu_channel_live.sh
+gate_published_alias_census.sh
+probe_accessible_pools_scope.sh
+probe_audit_surface.sh
+probe_channel_capability_single_house.sh
+probe_chip_breakdown.sh
+probe_collect_masked_requirement.sh
+probe_config_scope_provenance.sh
+probe_context_visibility_selector.sh
+probe_contextstore_cadastro.sh
+probe_ctx_read_audience.sh
+probe_dialog_format_declaration.sh
+probe_dialog_format_engine.sh
+probe_dialog_format_surfaces.sh
+probe_dialog_formats_parity.sh
+probe_dialog_json_surface.sh
+probe_duration_definitions.sh
+probe_edge_surface.sh
+probe_entry_pool_fww.sh
+probe_evaluator_pool_validation.sh
+probe_f4_direction_and_classes.sh
+probe_gates_manifest_coverage.sh
+probe_i18n_contacts_parity.sh
+probe_journey_merge_status_access.sh
+probe_legacy_display_rule_closed.sh
+probe_llm_credential_health.sh
+probe_masked_channel_gate.sh
+probe_masked_type_provenance.sh
+probe_masking_display_domain.sh
+probe_masking_display_parity.sh
+probe_masking_types_seed_parity.sh
+probe_reclaim_duplication.sh
+probe_report_surface.sh
+probe_route_credential_coverage.sh
+probe_sentiment_producer.sh
+probe_session_content_scope.sh
+probe_spawn_reason_collect.sh
+probe_task_ledger.sh
+probe_transition.sh
+probe_ts_suites.sh
+probe_type_catalog.sh
+probe_webhook_endpoint_inventory.sh
+smoke_admission_licensing.sh
+smoke_approval_segment_closes.sh
+smoke_bff_jwt_verification.sh
+smoke_config_write_auth.sh
+smoke_directed_pull.sh
+smoke_f5_available_agents_null.sh
+smoke_limite_tres_acessos.sh
+smoke_resume_terminal_once.sh
+smoke_wrapup_arc12_capture.sh
+smoke_wrapup_slot_handoff.sh
+
+# ══ ISENTO ═══════════════════════════════════════════════════════════════════
+# Decidido que NAO rodam, com o motivo. Isencao e DECISAO; divida e outra coisa
+# e mora na secao seguinte — juntar as duas faria a divida herdar a
+# tranquilidade da decisao (mesma separacao de `_SCOPE_EXEMPT` x `_SCOPE_DEBT`
+# na analytics-api).
+
+# -- ferramenta (2) --
+# o proprio runner e o helper de credencial: sao PECA, nao unidade medida
+=_auth.sh                                             ferramenta
+=run_gates.sh                                         ferramenta
+
+# -- provisionamento (25) --
+# mudam estado de proposito (semeiam, promovem, expurgam). Roda-los a cada
+# execucao do runner reprovisionaria a stack, e um seed nao julga nada — o
+# veredicto dele e 'consegui escrever'
+=apply_masking_suffix_rules.sh                        provisionamento
+=mk_unrestricted_principal.sh                         provisionamento
+=purge_orphan_segments.sh                             provisionamento
+=redeploy_limite_entrada.sh                           provisionamento
+=repromote_edited_skills.sh                           provisionamento
+=seed_ai_eval_form.sh                                 provisionamento
+=seed_customer_history_demo.sh                        provisionamento
+=seed_deploy_lens_demo.sh                             provisionamento
+=seed_dialog_formfill_demo_form.sh                    provisionamento
+=seed_dialog_limite_forms.sh                          provisionamento
+=seed_dialog_nps_buttons_form.sh                      provisionamento
+=seed_dialog_nps_form.sh                              provisionamento
+=seed_dialog_otp_form.sh                              provisionamento
+=seed_dialog_promocao_deploy_form.sh                  provisionamento
+=seed_dialog_survey_multi_form.sh                     provisionamento
+=seed_dialog_wrapup_arc12_form.sh                     provisionamento
+=seed_dialog_wrapup_form.sh                           provisionamento
+=seed_epoch_demo.sh                                   provisionamento
+=seed_outbound_demo.sh                                provisionamento
+=seed_r8c_blind_review.sh                             provisionamento
+=seed_volume_demo.sh                                  provisionamento
+=seed_withheld_demo.sh                                provisionamento
+=set_user_pools.sh                                    provisionamento
+=setup_deploy_promote_pool.sh                         provisionamento
+=wait_registry_converged.sh                           provisionamento
+
+# -- mutacao (7) --
+# quebram o produto de PROPOSITO para provar que um gate reprova. O valor e
+# pontual (quando o gate nasce); no runner, deixariam a stack instavel a
+# cada execucao
+=mut_gates_manifest_coverage.sh                      mutacao
+=mut_ctx_f3_deployed.sh                               mutacao
+=mut_ctx_f5_net.sh                                    mutacao
+=mut_ctx_read_audience.sh                             mutacao
+=mut_dialog_format_declaration.sh                     mutacao
+=mut_dialog_formats.sh                                mutacao
+=mutation_claim_lease_slot.sh                         mutacao
+=mutation_occupancy_peak.sh                           mutacao
+
+# -- medicao-de-momento (37) --
+# leem e imprimem o estado do mundo NAQUELE dia — 'de onde vieram os +167
+# contatos', 'a lacuna 2b tem numero?'. O vermelho delas nao acusa
+# regressao, acusa que o mundo mudou; no runner viraria o vermelho
+# permanente por nao-defeito
+=diag_sac_ia_sampling.sh                              medicao-de-momento
+=measure_capacity_licensing_baseline.sh               medicao-de-momento
+=probe_contacts_count_funnel.sh                       medicao-de-momento
+=probe_context_map_audit.sh                           medicao-de-momento
+=probe_entry_pool_base.sh                             medicao-de-momento
+=probe_family_a_queue_signal.sh                       medicao-de-momento
+=probe_family_b_suspend_resume.sh                     medicao-de-momento
+=probe_fase_e_drop_footprint.sh                       medicao-de-momento
+=probe_fase_f_terminal_footprint.sh                   medicao-de-momento
+=probe_first_queued_on_real_item.sh                   medicao-de-momento
+=probe_hygiene.sh                                     medicao-de-momento
+=probe_invisibility_window.sh                         medicao-de-momento
+=probe_mcp_tool_guard_census.sh                       medicao-de-momento
+=probe_orphan_concurrency_rate.sh                     medicao-de-momento
+=probe_orphan_segment_exception.sh                    medicao-de-momento
+=probe_pause_capacity_baseline.sh                     medicao-de-momento
+=probe_pool_registration.sh                           medicao-de-momento
+=probe_session_meta_ownership.sh                      medicao-de-momento
+=probe_session_volume_origin.sh                       medicao-de-momento
+=q_analytics_authless_inventory.sh                    medicao-de-momento
+=q_chip_row_dump.sh                                   medicao-de-momento
+=q_masked_declaration_census.sh                       medicao-de-momento
+=q_masking_display_parity.sh                          medicao-de-momento
+=q_process_chip_delta.sh                              medicao-de-momento
+=q_queue_collision_witness.sh                         medicao-de-momento
+=q_queue_multirow_impact.sh                           medicao-de-momento
+=q_scope_delta_stage2.sh                              medicao-de-momento
+=q_scope_leak_check.sh                                medicao-de-momento
+=q_sla_band_wait_witness.sh                           medicao-de-momento
+=q_type_catalog_state.sh                              medicao-de-momento
+=report_open_human_segments.sh                        medicao-de-momento
+=report_registry_fossil_tables.sh                     medicao-de-momento
+=report_suite_skips.sh                                medicao-de-momento
+=smoke_config_routing_orphan_keys.sh                  medicao-de-momento
+=sweep_ctx_tags.sh                                    medicao-de-momento
+=triage_failing_suites.sh                             medicao-de-momento
+=watch_queue_marker.sh                                medicao-de-momento
+
+# ══ NAO TRIADO — divida NOMEADA (GAT-01) ═════════════════════════════════════
+# Ninguem decidiu ainda se rodam. NAO e isencao: e o que sobrou da triagem de
+# 2026-09-04, e cada linha aqui e uma pergunta em aberto.
+#
+# POR QUE NOMEADA e nao um contador: um numero nao sabe dizer se um script novo
+# entrou e outro saiu no mesmo commit — mesma razao do
+# `probe_authz_single_verifier`. Com a lista, criar script sem triar deixa o
+# ramo B do `probe_gates_manifest_coverage` VERMELHO, e triar um e uma edicao
+# visivel no diff. A lista so pode ENCOLHER.
+#
+# O que sobrou aqui, e por que:
+#   · os 35 `test_*` — julgam e saem 1, mas com vocabulario proprio (✅/❌) e
+#     datados de 2026-06: nenhum foi rodado nesta triagem;
+#   · os `smoke_*` que nao foram medidos ou nao passaram;
+#   · TODO desfecho nao-verde da medicao de 2026-09-04 (INCONCLUSIVO, VERMELHO,
+#     TIMEOUT). Promover um vermelho a AUTO sem saber se o defeito e do produto
+#     ou do gate e trocar cobertura por ruido.
+?check_close_reason_persisted.sh
+?check_fase_e_drop_stamp.sh
+?check_wrapup_prose_persisted.sh
+?check_wrapup_summary.sh
+?probe_apifetch_reauth.sh
+?probe_block2.sh
+?probe_claim_capacity_sources.sh
+?probe_console_restore_after_reload.sh
+?probe_contacts_count_internal_pools.sh
+?probe_context_snapshot_endpoint.sh
+?probe_context_visibility.sh
+?probe_context_withheld.sh
+?probe_f3_contact_list_contract.sh
+?probe_flow_transitions.sh
+?probe_internal_service_callers.sh
+?probe_journey_limite.sh
+?probe_journeys_window_applied.sh
+?probe_llm_call_paths.sh
+?probe_masked_field_sinks.sh
+?probe_mcp_permissions_producer.sh
+?probe_mcp_rest_surface.sh
+?probe_open_segments_closed_sessions.sh
+?probe_operational_tools_reach.sh
+?probe_participant_event_in_kafka.sh
+?probe_pool_coverage.sh
+?probe_python_suites.sh
+?probe_queue_member_resurrect.sh
+?probe_queue_segment_exit_paths.sh
+?probe_report_row_scope.sh
+?probe_requeue_culprit.sh
+?probe_resume_outlives_meta.sh
+?probe_seed_drift_named.sh
+?probe_segment_rmt_version_tie.sh
+?probe_sequence_index.sh
+?probe_supervisor_tool_masking.sh
+?probe_ts_scope_resolvers.sh
+?probe_workflow_cancel_callers.sh
+?smoke_acw_expire.sh
+?smoke_agent_registry_write_auth.sh
+?smoke_agent_role_gate.sh
+?smoke_close_bugs_20260713.sh
+?smoke_config_usuarios_auth.sh
+?smoke_detached_hook.sh
+?smoke_directed_delegate.sh
+?smoke_eval_finalize_timeout.sh
+?smoke_formfill_renderer.sh
+?smoke_gprobe_curar_auth.sh
+?smoke_gprobe_service_auth.sh
+?smoke_human_instance_identity.sh
+?smoke_internal_work_queue.sh
+?smoke_journey_context.sh
+?smoke_journey_root.sh
+?smoke_knowledge_rest_auth.sh
+?smoke_occupancy_peak_flusher.sh
+?smoke_origin_reeval.sh
+?smoke_outbound_fase1.sh
+?smoke_outbound_fase2.sh
+?smoke_outbound_fase2b.sh
+?smoke_outbound_fase3a.sh
+?smoke_outbound_fase3b.sh
+?smoke_outbound_fase4.sh
+?smoke_outbound_fase5a.sh
+?smoke_outbound_fase5b.sh
+?smoke_outbound_ordering.sh
+?smoke_pricing_write_auth.sh
+?smoke_quality_export.sh
+?smoke_quality_ingest.sh
+?smoke_quality_ingest_sourcemap.sh
+?smoke_scheduled_promote.sh
+?smoke_scheduler_fire_now.sh
+?smoke_segment_outcome.sh
+?smoke_shared_capacity_fanout.sh
+?smoke_survey_response_read.sh
+?smoke_survey_response_store.sh
+?smoke_work_task_pending.sh
+?test_5c_contestation.sh
+?test_h1_customer_history_drill.sh
+?test_h2_customer_history_search.sh
+?test_identity_resolver_slice1.sh
+?test_identity_resolver_slice2.sh
+?test_r1_session_metrics.sh
+?test_r5_tier2_smoke.sh
+?test_r6_ai_eval_e2e.sh
+?test_r8c_blind_rescore.sh
+?test_r8c_blind_resolve.sh
+?test_r8c_blind_sampling.sh
+?test_t10c_visibility_scope.sh
+?test_t10d2_threads_grouped.sh
+?test_t10d_arc13_tenant_fallback.sh
+?test_t11_quality_report.sh
+?test_t12_ai_review.sh
+?test_t13_degradation.sh
+?test_t14_calibration_criterion.sh
+?test_t15_dispatcher.sh
+?test_t17_backfill.sh
+?test_t17_period_window.sh
+?test_t6a_form_model.sh
+?test_t6b_form_versioning.sh
+?test_t7a_aggregation.sh
+?test_t7b1_reason_toolschema.sh
+?test_t7b2_evaluator_e2e.sh
+?test_t7b2_schema_conveyance.sh
+?test_t8a_rubric_template.sh
+?test_t8b2_effective_rubric.sh
+?test_t8b_rubric_preview.sh
+?test_t8d_abac_rubrica.sh
+?test_t9a2_campaign_summary.sh
+?test_t9c1_transcript_window.sh
+?test_t9c2_transcript.sh
+?test_t9cfix_criterion_evidence.sh
+
+# ══ ASSISTIDOS (continuacao) ═════════════════════════════════════════════════
+!probe_fase_b_release_on_reload.sh                    o proprio script se declara MANUAL
+!smoke_claim_possession.sh                            o proprio script se declara MANUAL

@@ -455,6 +455,20 @@ system_error         — unrecoverable error
   > pacote. O que denunciou foi comparar com uma medição anterior do MESMO serviço
   > (`channel-gateway`: 699/0 antes, 594/187 depois, **mesmo código**) — um número sozinho não
   > diz de qual proposição ele é evidência.
+  >
+  > **Corolário medido em 2026-09-04 (GAT-01) — "rodou tudo o que a lista cita" e "a lista cita
+  > tudo" são DOIS fatos, e só o primeiro tinha mecanismo.** O `run_gates.sh` executava fielmente
+  > o `gates.manifest`; o manifesto declarava **44 de 281** scripts de `infra/test/`. Rodando os
+  > 144 não declarados com cara de gate, **100 saíram VERDES** — cobertura que já funcionava e
+  > ninguém colhia. É a mesma família do teste que não pode reprovar, uma casa acima: *uma lista
+  > parece completa por ser uma lista*, e o que falta não aparece em contagem nenhuma. Hoje o
+  > manifesto presta contas de TODO `.sh` em quatro classes (AUTO · `!`assistido · `=`isento com
+  > motivo · `?`não-triado NOMEADO), e `probe_gates_manifest_coverage.sh` reprova script que não
+  > caia em nenhuma. ⚠️ **A população é "tudo" por medição, não por zelo**: um critério textual
+  > para *"quem precisa ser declarado"* foi refutado duas vezes, nas duas por falso NEGATIVO
+  > (`exit "$FAIL"` fora do padrão; os 35 `test_*` que julgam com `✅`/`❌`) — e critério que
+  > decide quem é COBRADO pode esconder arquivo, que é justamente o defeito a fechar. O critério
+  > sobrevive rebaixado a INFORMAÇÃO, ordenando a fila de triagem.
 
 - **Guarda sobre valor decodificado testa `if not x`, NUNCA `is None` — o vazio é o valor plausível
   mais barato de produzir.** Os decodificadores deste repo normalizam ausência para string vazia

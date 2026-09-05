@@ -153,13 +153,23 @@ fi
 # Quem denunciou foi o CATALOGO de tipos, que nao tem fallback de proposito. A licao e a do
 # ramo: **a resiliencia de um componente esconde a fiacao faltando de outro**, e por isso a
 # fiacao precisa de teste PROPRIO, nao da ausencia de sintoma.
+#
+# ⚠️ `--include=*.py`, e isso NAO e detalhe (corrigido 2026-09-04, GAT-01). O funil e o
+# registro do transporte sao NOMES PYTHON: um pacote TypeScript nao tem como registrar um
+# `set_context_map_fetcher`, entao inclui-lo na populacao so pode gerar falso positivo. Foi
+# o que aconteceu — `mcp-server-plughub` entrou na lista por UM COMENTARIO em `bpm.ts` que
+# cita o funil pelo nome, e o ramo ficou vermelho de 2026-09-02 ate hoje. Mesma familia do
+# ramo D do `probe_masked_type_provenance`, achada no mesmo dia: **contar quem MENCIONA como
+# se fosse quem USA**. O agravante e que este gate ja estava no manifesto — nao faltava
+# registro, faltava alguem RODAR o runner.
 echo
 SEM_FIACAO=""
 for d in packages/*/src; do
   svc="$(echo "$d" | cut -d/ -f2)"
-  grep -rq "write_context_tags" "$d" 2>/dev/null || continue
+  grep -rq --include=*.py "write_context_tags" "$d" 2>/dev/null || continue
   [ "$svc" = "py-contextstore" ] && continue          # e a lib, nao um consumidor
-  grep -rq "set_context_map_fetcher" "$d" 2>/dev/null || SEM_FIACAO="$SEM_FIACAO $svc"
+  grep -rq --include=*.py "set_context_map_fetcher" "$d" 2>/dev/null \
+    || SEM_FIACAO="$SEM_FIACAO $svc"
 done
 if [ -z "$SEM_FIACAO" ]; then
   ok "E: todo servico que usa o funil registra o transporte no boot"

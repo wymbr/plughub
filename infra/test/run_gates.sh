@@ -25,12 +25,25 @@
 #      MISSING        o manifesto cita um arquivo que nao existe
 #      TIMEOUT        estourou o limite (default 300s, `GATE_TIMEOUT`)
 #
-# ASSISTIDOS (linhas com `!` no manifesto) NAO sao executados: precisam de estado
-# vivo ou argumento que so um humano produz. Sao LISTADOS com o requisito.
-# Rodar-os assim mesmo os deixaria INCONCLUSIVO para sempre, e um runner
+# QUATRO CLASSES NO MANIFESTO (as tres ultimas nao sao executadas)
+#   <nome>    AUTO       roda sem assistencia. E o que este runner executa.
+#   !<nome>   ASSISTIDO  precisa de estado vivo ou argumento que so um humano
+#                        produz. E LISTADO com o requisito.
+#   =<nome>   ISENTO     decidido que nao roda, com o motivo na propria linha
+#                        (provisionamento, bateria de mutacao, consulta de
+#                        momento, ferramenta).
+#   ?<nome>   NAO TRIADO divida NOMEADA: ninguem decidiu ainda. (GAT-01)
+#
+# Rodar um assistido assim mesmo o deixaria INCONCLUSIVO para sempre, e um runner
 # permanentemente vermelho por nao-defeito ensina a ignorar o vermelho — perdendo
-# o unico valor que ele tem. Omiti-los faria a cobertura parecer maior do que e.
-# Sao dois erros opostos; a lista evita os dois.
+# o unico valor que ele tem. Omiti-lo faria a cobertura parecer maior do que e.
+# Sao dois erros opostos; a lista evita os dois. Vale igual para as outras duas
+# classes, e e por isso que ISENTO e NAO TRIADO tem CONTADOR impresso no fim.
+#
+# ⚠️ Este runner garante que tudo o que o manifesto CITA foi executado. Que o
+# manifesto CITE tudo o que existe e outro fato, e tem gate proprio:
+# `probe_gates_manifest_coverage.sh` (GAT-01). Sem ele, a lista parece completa
+# por ser uma lista — mediu-se 37 de 103 em 2026-09-02.
 #
 # Uso:
 #   bash infra/test/run_gates.sh                  # tudo do manifesto
@@ -54,7 +67,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --only) ONLY="${2:-}"; shift 2 ;;
     --list) LIST_ONLY=1; shift ;;
-    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,55p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "argumento desconhecido: $1" >&2; exit 64 ;;
   esac
 done
@@ -71,6 +84,8 @@ yell()  { printf '\033[33m%s\033[0m' "$1"; }
 
 SCRIPTS=()      # linhas AUTO, com eventual prefixo de env
 ASSISTED=()     # linhas `!`, nunca executadas — listadas com o requisito
+EXEMPT=()       # linhas `=`, decidido que NAO rodam — o motivo vai na linha
+UNTRIAGED=()    # linhas `?`, divida NOMEADA da GAT-01
 while IFS= read -r line; do
   line="${line%%#*}"
   # apara so as bordas: o miolo pode ter env prefix e o requisito do assistido
@@ -81,6 +96,12 @@ while IFS= read -r line; do
       entry="${line#\!}"
       [ -n "$ONLY" ] && case "$entry" in *"$ONLY"*) : ;; *) continue ;; esac
       ASSISTED+=("$entry")
+      continue ;;
+    '='*)
+      EXEMPT+=("${line#=}")
+      continue ;;
+    '?'*)
+      UNTRIAGED+=("${line#\?}")
       continue ;;
   esac
   [ -n "$ONLY" ] && case "$line" in *"$ONLY"*) : ;; *) continue ;; esac
@@ -94,13 +115,15 @@ if [ "${#SCRIPTS[@]}" -eq 0 ]; then
 fi
 
 if [ "$LIST_ONLY" -eq 1 ]; then
-  [ "${#SCRIPTS[@]}" -gt 0 ] && printf '%s\n' "${SCRIPTS[@]}"
-  [ "${#ASSISTED[@]}" -gt 0 ] && printf '!%s\n' "${ASSISTED[@]}"
+  [ "${#SCRIPTS[@]}" -gt 0 ]   && printf '%s\n'  "${SCRIPTS[@]}"
+  [ "${#ASSISTED[@]}" -gt 0 ]  && printf '!%s\n' "${ASSISTED[@]}"
+  [ "${#EXEMPT[@]}" -gt 0 ]    && printf '=%s\n' "${EXEMPT[@]}"
+  [ "${#UNTRIAGED[@]}" -gt 0 ] && printf '?%s\n' "${UNTRIAGED[@]}"
   exit 0
 fi
 
-printf '\033[1mrun_gates\033[0m — %d gates AUTO (+%d assistidos, nao executados)' \
-  "${#SCRIPTS[@]}" "${#ASSISTED[@]}"
+printf '\033[1mrun_gates\033[0m — %d gates AUTO (+%d assistidos, %d isentos, %d nao triados)' \
+  "${#SCRIPTS[@]}" "${#ASSISTED[@]}" "${#EXEMPT[@]}" "${#UNTRIAGED[@]}"
 [ -n "$ONLY" ] && printf " (filtro: %s)" "$ONLY"
 printf '\n  timeout por gate: %ss   logs: %s\n\n' "$TIMEOUT" "$RUNDIR"
 
@@ -167,6 +190,19 @@ if [ "${#ASSISTED[@]}" -gt 0 ]; then
     printf '  %-46s %s\n' "$nome" "${req:-(requisito nao declarado no manifesto)}"
   done
   printf '  Estes NAO contam como falha — mas tambem NAO contam como cobertura.\n'
+fi
+
+# O placar da GAT-01. Isentos e nao-triados nao sao executados nem julgados aqui;
+# sao IMPRESSOS porque a lista so para de parecer completa enquanto o numero
+# aparece. Quem confere que todo `.sh` cai em alguma destas quatro classes e o
+# `probe_gates_manifest_coverage.sh`, que e um gate como qualquer outro.
+if [ "${#EXEMPT[@]}" -gt 0 ] || [ "${#UNTRIAGED[@]}" -gt 0 ]; then
+  printf '\n\033[1mFORA DA EXECUCAO\033[0m — %d isentos (motivo declarado) · %d NAO TRIADOS\n' \
+    "${#EXEMPT[@]}" "${#UNTRIAGED[@]}"
+  if [ "${#UNTRIAGED[@]}" -gt 0 ]; then
+    printf '  Nao-triado e DIVIDA nomeada, nao isencao: ninguem decidiu ainda se roda.\n'
+    printf '  `bash %s --list | grep ^?` para ver quais.\n' "infra/test/run_gates.sh"
+  fi
 fi
 
 printf '\n'

@@ -71,8 +71,13 @@ skip() { echo "  ⏭️  $* (INCONCLUSIVO)"; SKIPPED=$((SKIPPED+1)); }
 echo "══ pré-condições ══"
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "  ❌ node ausente — este probe precisa do cliente MCP; não há caminho em shell puro."
-  exit 1
+  # `exit 2`, não `exit 1` (corrigido 2026-09-04, GAT-01). Falta de pré-requisito
+  # é NÃO CONSEGUI MEDIR, e o `run_gates.sh` tem ramo próprio para isso. Saindo 1
+  # este probe se declarava VERMELHO — *"mediu e reprovou"* — por node ausente no
+  # host, e um vermelho que não é defeito é o que ensina a ignorar o vermelho.
+  echo "  ⏭️  node ausente — este probe precisa do cliente MCP; não há caminho em"
+  echo "      shell puro. INCONCLUSIVO: nada foi medido."
+  exit 2
 fi
 ok "node presente ($(node --version))"
 
