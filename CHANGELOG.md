@@ -1,5 +1,40 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (26) — O caso cross-pasta saiu do papel, e provou a coluna que ninguém precisava até hoje
+
+Com a D5 revogada (entrada 25), o dono refez o wrap-up marcando folhas de **pastas diferentes**. Registrou:
+`cadastro.segunda_via` + `plano.alteracao` no mesmo contato. Era o único caso do arco da árvore que nunca
+tinha tido dado real — e ele prova a existência de `branch_contacts`:
+
+| nó | marcas | contatos |
+|---|---|---|
+| `servico` (raiz) | 6 | **3** |
+| `servico.cadastro` | 5 | 3 |
+| `servico.plano` | 1 | 1 |
+
+As **marcas somam** (5 + 1 = 6). Os **contatos não** (3 + 1 = 4 ≠ 3), porque o contato que tocou as duas
+pastas é UM só. Até aqui, com toda marcação vivendo numa pasta única, a soma dos irmãos coincidia com a raiz
+**por acidente da população** — um consumidor que somasse filhos acertaria sempre, e a coluna pareceria
+redundante. Agora ele erra em 33%.
+
+O contraste na mesma tela ajuda a ler: `motivo` é pergunta de resposta única (`list`) e ali a soma fecha
+(1 + 2 = 3 = raiz); `servico` é `checklist` e não fecha. A divergência não é ruído — é a assinatura da
+multi-seleção.
+
+⚠️ **Não virou ramo de gate**, e a razão é a mesma que rege o resto do arco. O erro que este caso expõe é do
+**consumidor** (somar a coluna), não do servidor: `uniqExact` sobre a expansão de ancestrais não tem como
+produzir a versão aditiva por engano. O ramo C do `probe_agent_event_tree_rollup` já reprova a troca de
+`uniqExact` por contagem — que é o erro que o servidor *pode* cometer. Um ramo novo aqui seria instrumento
+medindo a proposição vizinha, com o agravante de parecer cobertura nova.
+
+Gate re-executado com o dado novo: `probe_agent_event_tree_rollup` **VERDE**, com a não-aditividade exercida
+e a aritmética de marcas fechando em toda pasta.
+
+Arquivos: `docs/adr/adr-dialog-tree-options.md` (a passagem que declarava a cesta cross-ramo *"não montável
+pela tela"* fica tachada, com o resultado ao lado).
+
+---
+
 ## 2026-09-05 (25) — D5 revogada: a árvore tinha apagado uma combinação que o dado real exercia
 
 A D5 dizia *"multi-seleção é DENTRO de uma pasta"*, e o renderer a cumpria limpando as marcações ao

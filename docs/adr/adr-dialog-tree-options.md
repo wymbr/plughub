@@ -382,9 +382,30 @@ origem:
 distingue *o emissor itera a lista* de *o emissor pega o primeiro*; duas distinguem. E a metade multi
 da F2 exercida por contato real, e fecha a `DLG-22`.
 
-**O prefixo comum da D5 vale por construcao, e agora tem testemunha:** as duas folhas compartilham
+~~**O prefixo comum da D5 vale por construcao, e agora tem testemunha:** as duas folhas compartilham
 `servico.cadastro` — navegar no renderer limpa as marcacoes, entao cesta cross-ramo nao e montavel
-pela tela.
+pela tela.~~
+
+> **Superado em 2026-09-05 pela revogacao da D5.** A cesta cross-pasta passou a ser montavel, e o caso
+> foi exercido no mesmo dia: um contato gravou `cadastro.segunda_via` + `plano.alteracao`. Era o unico
+> caso do arco que nunca tinha tido dado real, e ele **prova a coluna `branch_contacts`**:
+>
+> | no | marcas | contatos |
+> |---|---|---|
+> | `servico` (raiz) | 6 | **3** |
+> | `servico.cadastro` | 5 | 3 |
+> | `servico.plano` | 1 | 1 |
+>
+> As MARCAS somam (5 + 1 = 6); os CONTATOS **nao** (3 + 1 = 4 ≠ 3), porque o contato que tocou as duas
+> pastas e UM so. Ate aqui, com toda marcacao vivendo numa pasta unica, a soma dos irmaos coincidia com
+> a raiz por acidente da populacao — e um consumidor que somasse filhos acertaria sempre. Agora erra em
+> 33%. E a evidencia de que `branch_contacts` tem de vir do servidor (`uniqExact`), nao ser derivada.
+
+⚠️ **Nao virou ramo de gate, e a razao e a mesma que rege o resto do arco.** O erro que este caso expoe
+e do CONSUMIDOR (somar a coluna), nao do servidor: `uniqExact` sobre a expansao de ancestrais nao tem
+como produzir a versao aditiva por engano. O ramo C do `probe_agent_event_tree_rollup` ja reprova a
+troca de `uniqExact` por contagem — que e o erro que o servidor PODE cometer. Acrescentar um ramo aqui
+seria instrumento medindo a proposicao vizinha, com a agravante de parecer cobertura nova.
 
 **O pin atravessou as tres pontes.** `core.workflow.dialog_form_version = "1"` no ctx da sessao de
 wrap-up, `source: delegate_conference`, gravado as 19:33:47 — **antes** do render; e as tres linhas do
