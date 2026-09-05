@@ -2,8 +2,9 @@
  * TaxonomyTreeLens — a lente de **taxonomia** da superfície A.
  *
  * Desenha a árvore de respostas do wrap-up com a contagem subindo de cada folha para
- * as pastas que a contêm (D10 do `adr-dialog-tree-options`). Fonte:
- * `GET /reports/agent-events/tree` — nenhum dado novo foi produzido para esta tela.
+ * as pastas que a contêm (D10 do `adr-dialog-tree-options`), **recortada por ÉPOCA**
+ * de vocabulário (D13). Fontes: `GET /reports/agent-events/{epochs,tree}` — nenhum
+ * dado novo foi produzido para esta tela.
  *
  * ── Três contagens, e por que não duas ──────────────────────────────────────
  *
@@ -14,28 +15,38 @@
  * As duas últimas coincidem em pergunta de resposta única e divergem em `checklist`:
  * medido em 2026-09-05, `servico.cadastro` com 2 marcações para 1 atendimento. Exibir
  * só a soma faria a lente totalizar mais que o número de atendimentos, e alguém
- * tiraria percentual disso.
+ * tiraria percentual disso. **`contatos` não é derivável aqui** — `uniqExact` não
+ * soma —, e é por isso que a lente consome um endpoint próprio.
  *
- * **`contatos` não é derivável aqui.** `uniqExact` não soma — não há como obtê-lo a
- * partir das folhas —, e é por isso que a lente consome um endpoint próprio em vez de
- * fazer rollup em cima do `/summary`.
+ * ── Por que ÉPOCA, e não um aviso ───────────────────────────────────────────
+ *
+ * Repontar o hook de um pool troca o vocabulário **sob a mesma série**: medido, o
+ * mesmo `segunda_via` existindo na raiz (forma plana) e sob `cadastro` (forma em
+ * árvore), 9 e 1, sem nenhuma linha dizendo 10. A primeira versão desta tela avisava
+ * e somava assim mesmo. Recortar o período por época faz o conflito **deixar de
+ * existir** em vez de ser tratado — dentro de um bloco há um vocabulário só, então
+ * total e percentual voltam a ser legítimos sem guarda nenhuma.
+ *
+ * O bloco é por **run contíguo**, não por forma: rollback do hook faria "um bloco por
+ * forma" fundir duas fases e apagar a do meio.
+ *
+ * ⚠️ **A época NÃO conserta o que não foi gravado.** Evento anterior ao carimbo
+ * (2026-09-05) não tem forma; ele vira uma época própria, rotulada como tal, e essa
+ * ainda pode misturar vocabulários — o endpoint declara e a tela repassa. Forward-only
+ * por construção: a forma vigente no passado não é recuperável, porque a tabela
+ * `pools` é atualizada no lugar e não guarda histórico de hook.
  *
  * ── O que esta tela NÃO tem, e é decisão ────────────────────────────────────
  *
- * **Sem coluna de participação.** Ela dividiria por marcações, e em `checklist` a
- * soma passa do número de atendimentos — um percentual que fecha 100% sobre a base
- * errada é pior que percentual nenhum. Quem quiser proporção tem os dois números.
+ * **Sem coluna de participação** (dividiria por marcações, e em `checklist` a soma
+ * passa do número de atendimentos) e **sem soma de rodapé** (somar contatos dá mais
+ * que o universo). O total honesto está na raiz de cada bloco.
  *
- * **Sem soma do rodapé.** Somar a coluna de contatos dá mais que o universo (um
- * atendimento que marca serviço em duas pastas conta nas duas). É correto e seria
- * lido como erro; o total honesto está na raiz da árvore, que o endpoint já devolve.
+ * ── O que ela HONRA da barra ────────────────────────────────────────────────
  *
- * ── O que ela HONRA da barra, e o que não ───────────────────────────────────
- *
- * Só o período (`honors: 'period_only'` no contrato). E o filtro de pool não está
- * faltando: o pool é o **primeiro segmento** da categoria por construção do Arc 12,
- * então escolher a raiz JÁ escolhe o pool. Aplicar os dois seria filtrar duas vezes
- * pela mesma coisa, com chance de discordarem.
+ * Só o período (`honors: 'period_only'`). O filtro de pool não está faltando: o pool
+ * é o **primeiro segmento** da categoria por construção do Arc 12, então escolher a
+ * raiz JÁ escolhe o pool.
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
@@ -53,15 +64,19 @@ interface TreeNode {
   branch_marks:    number
   branch_contacts: number
   derived_leaf:    number | boolean
-  first_seen?:     string
-  last_seen?:      string
 }
 
-interface Vocabulary { form_id: string; version: string | null; events: number }
+interface Epoch {
+  form_id:  string
+  from_dt:  string
+  to_dt:    string
+  events:   number
+  contacts: number
+  versions: string[]
+  stamped:  boolean
+}
 
 interface TreeMeta {
-  root?:              string
-  vocabularies?:      Vocabulary[]
   unstamped_events?:  number
   single_vocabulary?: boolean
 }
@@ -70,54 +85,37 @@ interface Props { fromDt?: string; toDt?: string }
 
 const isLeaf = (n: TreeNode) => n.derived_leaf === true || n.derived_leaf === 1
 
-export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
+const quando = (iso: string) => {
+  try { return new Date(iso).toLocaleString() } catch { return iso }
+}
+
+// ── Um bloco por época ───────────────────────────────────────────────────────
+
+function EpochBlock({
+  root, epoch, unica,
+}: { root: string; epoch: Epoch | null; unica: boolean }) {
   const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
-
-  const [roots,   setRoots]   = useState<string[]>([])
-  const [root,    setRoot]    = useState<string>('')
   const [nodes,   setNodes]   = useState<TreeNode[]>([])
   const [meta,    setMeta]    = useState<TreeMeta>({})
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
   const [fechados, setFechados] = useState<Set<string>>(() => new Set())
 
-  const qs = useCallback((extra: Record<string, string>) => {
-    const p = new URLSearchParams({ tenant_id: tenantId ?? '', ...extra })
-    if (fromDt) p.set('from_dt', fromDt)
-    if (toDt)   p.set('to_dt',   toDt)
-    return p.toString()
-  }, [tenantId, fromDt, toDt])
-
-  // ── Raízes: DERIVADAS do dado, nunca listadas à mão ────────────────────────
-  // Uma lista fixa de taxonomias envelheceria a cada pergunta nova no editor de
-  // formulário — que é exatamente o acoplamento que a fatia 3 do wrap-up removeu.
-  // A raiz é `pool.skill.métrica`, os três primeiros segmentos da categoria.
   useEffect(() => {
-    if (!tenantId) return
-    let vivo = true
-    apiFetch(`/reports/agent-events/categories?${qs({})}`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(body => {
-        if (!vivo) return
-        const achadas = new Set<string>()
-        for (const row of (body?.data ?? []) as Array<{ category?: string }>) {
-          const segs = String(row.category ?? '').split('.')
-          if (segs.length >= 4) achadas.add(segs.slice(0, 3).join('.'))
-        }
-        const lista = [...achadas].sort()
-        setRoots(lista)
-        setRoot(r => r || lista[0] || '')
-      })
-      .catch(() => { if (vivo) setRoots([]) })
-    return () => { vivo = false }
-  }, [tenantId, qs])
-
-  useEffect(() => {
-    if (!tenantId || !root) { setNodes([]); return }
+    if (!tenantId || !root) return
     let vivo = true
     setLoading(true); setError(null)
-    apiFetch(`/reports/agent-events/tree?${qs({ root })}`)
+    const p = new URLSearchParams({ tenant_id: tenantId, root })
+    if (epoch) {
+      p.set('from_dt', epoch.from_dt)
+      p.set('to_dt',   epoch.to_dt)
+      // String VAZIA é a época anterior ao carimbo — uma época legítima. Por isso o
+      // parâmetro é sempre enviado quando há época: omiti-lo significaria "sem
+      // filtro", que é outra coisa.
+      p.set('form_id', epoch.form_id)
+    }
+    apiFetch(`/reports/agent-events/tree?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(body => {
         if (!vivo) return
@@ -127,11 +125,10 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
       .catch(e => { if (vivo) { setError(String(e)); setNodes([]) } })
       .finally(() => { if (vivo) setLoading(false) })
     return () => { vivo = false }
-  }, [tenantId, root, qs])
+  }, [tenantId, root, epoch])
 
   const raizProf = root ? root.split('.').length : 0
 
-  /** Visíveis: um nó só aparece se nenhum ancestral está fechado. */
   const visiveis = useMemo(() => nodes.filter(n => {
     const segs = n.prefix.split('.')
     for (let i = raizProf; i < segs.length; i++) {
@@ -143,73 +140,55 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
   const orfas = useMemo(() => nodes.filter(n => !isLeaf(n) && n.own > 0), [nodes])
 
   /**
-   * Rótulos que aparecem em MAIS DE UM caminho da árvore.
+   * Rótulos que aparecem em MAIS DE UM caminho.
    *
-   * Acontece de verdade e é o sintoma visível da mistura de vocabulários: quando a
-   * forma do pool troca, `segunda_via` pode existir como folha na raiz (forma plana)
-   * e sob `cadastro` (forma em árvore) ao mesmo tempo — o mesmo serviço do mundo
-   * real em dois caminhos. Medido em 2026-09-05: duas linhas `segunda_via`, 9 e 1.
-   *
-   * Fundi-las seria errado (são vocabulários diferentes, e o endpoint conta por
-   * caminho), mas exibi-las com o mesmo rótulo e nada que as separe é pior — o
-   * leitor não tem como saber por que o mesmo nome aparece duas vezes. A saída é
-   * DESAMBIGUAR pelo pai, e só onde há ambiguidade: pôr o caminho em toda linha
-   * empurraria ruído para os 99% que não precisam.
+   * Dentro de uma época carimbada isto deve ficar vazio — é o sinal de que o recorte
+   * funcionou. Quando aparece (tipicamente na época SEM carimbo, que não é
+   * separável), é o mesmo item do mundo real em dois caminhos: fundir seria errado, e
+   * deixar dois rótulos iguais é pior, então desambigua-se pelo pai.
    */
   const ambiguos = useMemo(() => {
     const conta = new Map<string, number>()
     for (const n of nodes) {
-      const rotulo = n.prefix.split('.').slice(-1)[0] ?? ''
-      conta.set(rotulo, (conta.get(rotulo) ?? 0) + 1)
+      const r = n.prefix.split('.').slice(-1)[0] ?? ''
+      conta.set(r, (conta.get(r) ?? 0) + 1)
     }
     return new Set([...conta].filter(([, c]) => c > 1).map(([r]) => r))
   }, [nodes])
 
-  if (!root && !loading) {
-    return <EmptyState title={t('lens.taxonomy.noRoots')} description={t('lens.taxonomy.noRootsHint')} />
-  }
-
   return (
-    <div className="flex flex-col gap-3">
-      {/* Seletor de raiz. A raiz carrega o pool no primeiro segmento — trocar de
-          raiz é trocar de taxonomia E de pool ao mesmo tempo, de propósito. */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <label className="text-xs font-medium text-muted" htmlFor="tax-root">
-          {t('lens.taxonomy.root')}
-        </label>
-        <select
-          id="tax-root"
-          value={root}
-          onChange={e => { setRoot(e.target.value); setFechados(new Set()) }}
-          className="text-xs border border-border rounded-md px-2 py-1 bg-white text-dark"
-        >
-          {roots.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-      </div>
+    <div className="flex flex-col gap-2">
+      {!unica && epoch && (
+        <div className="flex items-baseline gap-2 flex-wrap pt-1">
+          <span className={`text-sm font-semibold ${epoch.stamped ? 'text-dark' : 'text-muted'}`}>
+            {epoch.stamped ? epoch.form_id : t('lens.taxonomy.epoch.unstamped')}
+          </span>
+          {epoch.versions.length > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-muted text-muted">
+              v{epoch.versions.join(', v')}
+            </span>
+          )}
+          <span className="text-xs text-muted">
+            {quando(epoch.from_dt)} → {quando(epoch.to_dt)}
+          </span>
+          <span className="text-xs text-muted">
+            · {t('lens.taxonomy.epoch.counts', { events: epoch.events, contacts: epoch.contacts })}
+          </span>
+        </div>
+      )}
 
-      {/* Comparabilidade DECLARADA (`comparability: 'same_form'`). Com mais de um
-          vocabulário na janela os totais misturam taxonomias, e a tela tem de dizer
-          isso — somar em silêncio é o defeito que a D14 mediu. */}
+      {/* Só sobra aviso DENTRO de uma época quando ela é a sem-carimbo: ali o recorte
+          não separa, porque a forma nunca foi gravada. */}
       {meta.single_vocabulary === false && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-xs text-dark">
           <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" aria-hidden="true" />
           <div>
-            {/* Duas causas distintas para o mesmo aviso, e o titulo tem de dizer
-                QUAL: com uma forma so + eventos sem carimbo, escrever "mais de um
-                formulario" e a tela afirmando o que a propria linha desmente. */}
-            <b>{(meta.vocabularies ?? []).length > 1
-              ? t('lens.taxonomy.mixed')
-              : t('lens.taxonomy.mixedUnstamped')}</b>{' '}
-            {(meta.vocabularies ?? []).map(v => `${v.form_id}${v.version ? ` v${v.version}` : ''} (${v.events})`).join(' · ')}
-            {(meta.unstamped_events ?? 0) > 0 &&
-              ` · ${t('lens.taxonomy.unstamped', { n: meta.unstamped_events })}`}
-            <div className="text-muted mt-0.5">{t('lens.taxonomy.mixedHint')}</div>
+            <b>{t('lens.taxonomy.mixedInEpoch')}</b>
+            <div className="text-muted mt-0.5">{t('lens.taxonomy.mixedInEpochHint')}</div>
           </div>
         </div>
       )}
 
-      {/* Integridade: resposta que parou numa PASTA. Não é comportamento — pasta não
-          é selecionável —, então é sintoma de superfície que não desenha a árvore. */}
       {orfas.length > 0 && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-xs text-dark">
           <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" aria-hidden="true" />
@@ -240,17 +219,11 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
                   {t('lens.taxonomy.col.node')}
                 </th>
                 <th className="text-right text-xs font-semibold text-muted uppercase tracking-wide px-4 py-2.5 whitespace-nowrap"
-                    title={t('lens.taxonomy.col.ownHint')}>
-                  {t('lens.taxonomy.col.own')}
-                </th>
+                    title={t('lens.taxonomy.col.ownHint')}>{t('lens.taxonomy.col.own')}</th>
                 <th className="text-right text-xs font-semibold text-muted uppercase tracking-wide px-4 py-2.5 whitespace-nowrap"
-                    title={t('lens.taxonomy.col.marksHint')}>
-                  {t('lens.taxonomy.col.marks')}
-                </th>
+                    title={t('lens.taxonomy.col.marksHint')}>{t('lens.taxonomy.col.marks')}</th>
                 <th className="text-right text-xs font-semibold text-muted uppercase tracking-wide px-4 py-2.5 whitespace-nowrap"
-                    title={t('lens.taxonomy.col.contactsHint')}>
-                  {t('lens.taxonomy.col.contacts')}
-                </th>
+                    title={t('lens.taxonomy.col.contactsHint')}>{t('lens.taxonomy.col.contacts')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -259,10 +232,8 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
                 const recuo    = Math.max(0, n.depth - raizProf)
                 const segs     = n.prefix.split('.')
                 const rotulo   = segs[segs.length - 1] ?? ''
-                // Pai só quando o rótulo se repete noutro caminho — ver `ambiguos`.
                 const paiAmbiguo = ambiguos.has(rotulo) && segs.length > raizProf + 1
-                  ? segs[segs.length - 2]
-                  : null
+                  ? segs[segs.length - 2] : null
                 const anomalia = !folha && n.own > 0
                 const diverge  = n.branch_contacts !== n.branch_marks
                 return (
@@ -277,12 +248,11 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
                               x.has(n.prefix) ? x.delete(n.prefix) : x.add(n.prefix)
                               return x
                             })}
-                            aria-label={fechados.has(n.prefix) ? t('lens.taxonomy.expand') : t('lens.taxonomy.collapse')}
+                            aria-label={fechados.has(n.prefix)
+                              ? t('lens.taxonomy.expand') : t('lens.taxonomy.collapse')}
                             className="text-muted hover:text-dark"
                           >
-                            {fechados.has(n.prefix)
-                              ? <ChevronRight size={13} />
-                              : <ChevronDown size={13} />}
+                            {fechados.has(n.prefix) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                           </button>
                         )}
                         <span className={folha ? '' : 'font-semibold'}>
@@ -296,11 +266,9 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
                         {anomalia && <AlertTriangle size={12} className="text-warning" aria-hidden="true" />}
                       </span>
                     </td>
-                    {/* `own` so tem informacao em PASTA: numa folha ele e IGUAL a
-                        `branch_marks` por definicao (`derived_leaf` e justamente
-                        `count() = countIf(category = prefix)`), entao pinta-lo de
-                        alerta ali dilui o unico sinal que a coluna existe para dar —
-                        medido na tela: tres numeros em laranja, um so era problema. */}
+                    {/* `own` só tem informação em PASTA: numa folha ele é IGUAL a
+                        `branch_marks` por definição, e pintá-lo de alerta ali dilui o
+                        único sinal que a coluna existe para dar. */}
                     <td className="px-4 py-2 text-right tabular-nums text-xs">
                       {folha
                         ? <span className="text-muted" title={t('lens.taxonomy.col.ownLeaf')}>—</span>
@@ -320,9 +288,105 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
         </div>
       )}
 
-      <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.footnote')}</p>
       {ambiguos.size > 0 && (
         <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.ambiguous')}</p>
+      )}
+    </div>
+  )
+}
+
+// ── A lente ──────────────────────────────────────────────────────────────────
+
+export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
+  const { t } = useTranslation('contacts')
+  const { tenantId } = useAuth()
+
+  const [roots,  setRoots]  = useState<string[]>([])
+  const [root,   setRoot]   = useState<string>('')
+  const [epochs, setEpochs] = useState<Epoch[]>([])
+  const [carregandoEpocas, setCarregandoEpocas] = useState(false)
+
+  const qs = useCallback((extra: Record<string, string>) => {
+    const p = new URLSearchParams({ tenant_id: tenantId ?? '', ...extra })
+    if (fromDt) p.set('from_dt', fromDt)
+    if (toDt)   p.set('to_dt',   toDt)
+    return p.toString()
+  }, [tenantId, fromDt, toDt])
+
+  // Raízes DERIVADAS do dado, nunca listadas à mão: lista fixa envelheceria a cada
+  // pergunta nova no editor de formulário. A raiz é `pool.skill.métrica`.
+  useEffect(() => {
+    if (!tenantId) return
+    let vivo = true
+    apiFetch(`/reports/agent-events/categories?${qs({})}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(body => {
+        if (!vivo) return
+        const achadas = new Set<string>()
+        for (const row of (body?.data ?? []) as Array<{ category?: string }>) {
+          const segs = String(row.category ?? '').split('.')
+          if (segs.length >= 4) achadas.add(segs.slice(0, 3).join('.'))
+        }
+        const lista = [...achadas].sort()
+        setRoots(lista)
+        setRoot(r => r || lista[0] || '')
+      })
+      .catch(() => { if (vivo) setRoots([]) })
+    return () => { vivo = false }
+  }, [tenantId, qs])
+
+  useEffect(() => {
+    if (!tenantId || !root) { setEpochs([]); return }
+    let vivo = true
+    setCarregandoEpocas(true)
+    apiFetch(`/reports/agent-events/epochs?${qs({ root })}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(body => { if (vivo) setEpochs((body?.data ?? []) as Epoch[]) })
+      .catch(() => { if (vivo) setEpochs([]) })
+      .finally(() => { if (vivo) setCarregandoEpocas(false) })
+    return () => { vivo = false }
+  }, [tenantId, root, qs])
+
+  if (!root && !carregandoEpocas) {
+    return <EmptyState title={t('lens.taxonomy.noRoots')} description={t('lens.taxonomy.noRootsHint')} />
+  }
+
+  // Uma época (ou nenhuma detectada) ⇒ um bloco só, sem cabeçalho de época: a janela
+  // inteira fala um vocabulário, e ganhar cabeçalho ali seria ruído.
+  const unica = epochs.length <= 1
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-xs font-medium text-muted" htmlFor="tax-root">
+          {t('lens.taxonomy.root')}
+        </label>
+        <select
+          id="tax-root"
+          value={root}
+          onChange={e => setRoot(e.target.value)}
+          className="text-xs border border-border rounded-md px-2 py-1 bg-white text-dark"
+        >
+          {roots.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        {!unica && (
+          <span className="text-xs text-muted">
+            · {t('lens.taxonomy.epoch.count', { n: epochs.length })}
+          </span>
+        )}
+      </div>
+
+      {carregandoEpocas && epochs.length === 0 && <Spinner />}
+
+      {unica
+        ? <EpochBlock root={root} epoch={epochs[0] ?? null} unica />
+        : epochs.map(e => (
+            <EpochBlock key={`${e.form_id}|${e.from_dt}`} root={root} epoch={e} unica={false} />
+          ))}
+
+      <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.footnote')}</p>
+      {!unica && (
+        <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.epoch.hint')}</p>
       )}
     </div>
   )

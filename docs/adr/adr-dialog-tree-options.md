@@ -371,6 +371,46 @@ evento na janela ele NAO fica verde, porque *"todos carimbados"* sobre populacao
 Falseado por tres mutacoes: epoca no futuro (sem amostra), forma inexistente no store (o carimbo que
 aponta para documento que nao existe e pior que carimbo nenhum), e ClickHouse inalcancavel.
 
+## As-built da D13 (2026-09-05) — a epoca recorta, e o conflito some
+
+`GET /reports/agent-events/epochs` devolve um bloco por **run contiguo**, por sessionizacao:
+marca-se a TRANSICAO de `tags['dialog_form_id']` e soma-se acumuladamente para obter o id do run.
+O `/tree` ganhou `form_id` para recortar.
+
+**A prova de que recortar resolve, medida ao vivo:**
+
+| consulta | `single_vocabulary` | o que a arvore mostra |
+|---|---|---|
+| sem recorte | **false** | `segunda_via` em DOIS caminhos (9 na raiz, 1 sob `cadastro`) |
+| recortada na epoca carimbada | **true** | so `cadastro.*` — a duplicata nao existe |
+
+O conflito nao passa a ser tratado: ele **deixa de existir**. Dentro de um bloco ha um vocabulario
+so, entao total e percentual voltam a ser legitimos sem guarda nenhuma — que e a preferencia que
+este arco ja exerceu no `form` virando tipo de bloco e na pasta×folha sendo derivada.
+
+### A run SEM CARIMBO e uma run
+
+Evento anterior ao carimbo tem `form_id` vazio. Ele nao e descartado (esconderia dado real) nem
+atribuido a uma forma (inventaria proveniencia): vira uma epoca propria, rotulada como tal. E ela
+**ainda mistura vocabularios** — a tela diz isso, porque a forma daqueles eventos nunca foi
+gravada e nenhum recorte os separa. Forward-only, como declarado na D14.
+
+⚠️ **O `form_id` vazio e uma EPOCA, nao ausencia de filtro** — e o discriminador no servidor e
+`is not None`, nunca truthiness. Um `if form_id:` colapsaria a epoca anterior ao carimbo com
+*todas as epocas*, que e a familia do `if not x` catalogada na § Postura de Engenharia. O ramo D do
+gate existe so para prender isso, e a mutacao correspondente o deixa vermelho com a mensagem exata.
+
+### Limite declarado: o discriminador run × forma NAO foi exercido
+
+Nao houve rollback de hook nestes dados, entao nunca existiu a mesma forma em dois runs separados.
+A mutacao que troca `GROUP BY forma, grupo` por `GROUP BY forma` foi detectada — mas por **quebrar
+o SQL** (coluna fora do agrupamento), nao pela proposicao. O desenho segue o decidido na D13; o que
+falta e um caso que o prove. **Gatilho:** o primeiro rollback de `dialog_form_id` num pool.
+
+Gate: `infra/test/probe_agent_event_epochs.sh` — 4 ramos, com **B** conferindo que as epocas
+PARTICIONAM (a soma delas e o total da janela: nada perdido, nada contado duas vezes) e **C**
+comparando recortada × nao recortada, porque *"o endpoint responde"* nao e a proposicao.
+
 ## D14 — o carimbo e `(form_id, version)`, e nasce no RENDER (decidida 2026-09-05)
 
 Proposta do dono: *"gravar o id + timestamp da publicacao do dialogform, sempre com os dados

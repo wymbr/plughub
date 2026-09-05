@@ -74,6 +74,7 @@ from .reports_query import (
     query_agent_events_summary,
     query_agent_events_categories,
     query_agent_events_tree,
+    query_agent_events_epochs,
     query_evaluator_calibration,
 )
 from .timeseries_query import (
@@ -1877,6 +1878,52 @@ async def get_agent_events_summary(
     return _respond(data, format, f"agent_events_summary_{_today_label()}.csv")
 
 
+# ─── GET /reports/agent-events/epochs ────────────────────────────────────────
+
+@router.get("/agent-events/epochs")
+async def get_agent_events_epochs(
+    request:   Request,
+    tenant_id: str           = Query(...,  description="Tenant identifier"),
+    root:      str           = Query(...,  description="Raiz da árvore (prefixo de categoria, sem ponto final)"),
+    from_dt:   Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
+    to_dt:     Optional[str] = Query(None, description="ISO8601 end (default: now)"),
+    pool_id:   Optional[str] = Query(None, description="Filter by pool_id"),
+    format:    str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    ÉPOCAS de vocabulário sob `root` — um bloco por **run contíguo** de formulário.
+
+    Existe porque repontar o hook de um pool troca o vocabulário **sob a mesma série**:
+    o mesmo item do mundo real passa a ser contado em dois caminhos, e nenhuma regra de
+    exibição conserta isso (medido em 2026-09-05: `servico.segunda_via` da forma plana
+    convivendo com `servico.cadastro.segunda_via` da forma em árvore). Recortar o
+    período por época faz o conflito **deixar de existir** em vez de ser tratado.
+
+    **Run, não forma:** rollback do hook faz a mesma forma valer em dois períodos
+    separados; agrupar por forma funde os dois e apaga a fase do meio.
+
+    **Dos eventos, não da configuração** — e não por conveniência: o registry tem
+    `skill_deployments` para promotes e **nada equivalente para hooks**, então o
+    `dialog_form_id` anterior deixa de existir no instante do `PUT`. Derivar do evento
+    também é melhor: troca sem tráfego não produz época, e não deve.
+
+    A run **sem carimbo** (`form_id: ""`) é uma run legítima — dado anterior ao carimbo
+    de 2026-09-05. Não é descartada nem atribuída a forma alguma.
+    """
+    data = await query_agent_events_epochs(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        root      = root,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        pool_id   = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, format, f"agent_events_epochs_{_today_label()}.csv")
+
+
 # ─── GET /reports/agent-events/tree ──────────────────────────────────────────
 
 @router.get("/agent-events/tree")
@@ -1887,6 +1934,7 @@ async def get_agent_events_tree(
     from_dt:   Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
     to_dt:     Optional[str] = Query(None, description="ISO8601 end (default: now)"),
     pool_id:   Optional[str] = Query(None, description="Filter by pool_id"),
+    form_id:   Optional[str] = Query(None, description="Recorte por ÉPOCA: id do DialogForm. String VAZIA = a época anterior ao carimbo. Ausente = sem filtro"),
     format:    str           = Query("json", pattern="^(json|csv)$"),
     pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
@@ -1922,6 +1970,7 @@ async def get_agent_events_tree(
         from_dt   = from_dt,
         to_dt     = to_dt,
         pool_id   = pool_id,
+        form_id   = form_id,
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"agent_events_tree_{_today_label()}.csv")

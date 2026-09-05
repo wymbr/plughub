@@ -994,7 +994,6 @@
       "folder": "folder",
       "expand": "Expand branch",
       "collapse": "Collapse branch",
-      "mixed": "More than one form in this window:",
       "mixedHint": "The tree mixes different vocabularies — totals add up categories that do not describe the same thing. Narrow the period to a single form.",
       "unstamped": "{{n}} event(s) predating the form stamp",
       "orphan": "{{n}} answer(s) stopped at a folder:",
@@ -1010,8 +1009,15 @@
         "ownLeaf": "On a leaf, own always equals marks — the column only informs on folders."
       },
       "footnote": "Marks add up; contacts do not. In single-answer questions the two coincide; in multi-select they diverge, and the gap is whoever marked more than one leaf of the same branch.",
-      "mixedUnstamped": "Part of this window predates the form stamp:",
-      "ambiguous": "When the pool's form changes, the same item can appear in two paths (e.g. at the root and under a folder). They are not merged — they are different vocabularies — and the row shows the parent to tell them apart."
+      "ambiguous": "When the pool's form changes, the same item can appear in two paths (e.g. at the root and under a folder). They are not merged — they are different vocabularies — and the row shows the parent to tell them apart.",
+      "epoch": {
+        "unstamped": "Before the form stamp",
+        "count": "{{n}} vocabulary epochs",
+        "counts": "{{events}} mark(s) · {{contacts}} contact(s)",
+        "hint": "The pool's form changed within this period. Each block is a stretch with ONE vocabulary — adding across blocks would count categories that do not describe the same thing."
+      },
+      "mixedInEpoch": "This stretch still mixes vocabularies",
+      "mixedInEpochHint": "These are events predating the form stamp: the form describing them was never recorded, so no slicing separates them. It applies to the past; from the stamp onwards each stretch speaks a single vocabulary."
     }
   }
 }

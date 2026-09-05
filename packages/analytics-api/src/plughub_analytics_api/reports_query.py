@@ -7500,6 +7500,149 @@ def _fetch_agent_events_summary(
     }
 
 
+async def query_agent_events_epochs(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    root:      str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:  str | None = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """
+    EPOCAS de vocabulario sob `root` — um bloco por RUN CONTIGUO de formulario.
+    D13 do `adr-dialog-tree-options`.
+
+    ── Por que RUN, e nao "por forma" ───────────────────────────────────────────
+
+    Rollback do hook faz a mesma forma valer em dois periodos separados. Agrupar por
+    forma funde os dois e **apaga a fase do meio**; agrupar por run mostra as tres
+    fases como foram. Mesma distincao do `queue_wait_segment_id`: o fenomeno e a
+    PASSAGEM, nao o conteiner.
+
+    ── Por que dos EVENTOS, e nao da configuracao ──────────────────────────────
+
+    Porque a configuracao **nao sabe**: o registry tem `skill_deployments` (append-log
+    dos promotes) e **nada equivalente para hooks** — a tabela `pools` e atualizada no
+    lugar, entao o `dialog_form_id` anterior deixa de existir no instante do `PUT`.
+    E derivar do evento e MELHOR, nao um consolo: troca de forma sem trafego nao
+    produz epoca, e nao deve — epoca e periodo em que se MEDIU algo.
+
+    ── A run sem carimbo e uma run ─────────────────────────────────────────────
+
+    Evento anterior ao carimbo (2026-09-05) tem `form_id` vazio. Ele **nao e**
+    descartado nem atribuido a forma alguma: vira uma epoca com `form_id: ""`, que a
+    tela rotula como *anterior ao carimbo*. Descartar esconderia dado real; atribuir
+    inventaria proveniencia.
+
+    ⚠️ **A fronteira e uma FAIXA, nao uma linha.** Com `acw_timeout_hours` de ate 24 h,
+    um wrap-up reivindicado antes da troca e submetido depois carrega a forma NOVA —
+    entao duas epocas podem se sobrepor por ate um dia. A deteccao por transicao
+    produz, nesse caso, runs curtas alternadas, e isso e o dado, nao ruido.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    raiz  = (root or "").strip().strip(".")
+    if not raiz:
+        return {"data": [], "meta": {"error": "root_required"}}
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": _meta(1, 0, 0, since, until)}
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_events_epochs, client, database, tenant_id,
+            since, until, raiz, pool_id, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_events_epochs failed tenant=%s root=%s: %s",
+                       tenant_id, raiz, exc)
+        return {"data": [], "meta": _meta(1, 0, 0, since, until),
+                "error": "data_unavailable"}
+
+
+def _fetch_agent_events_epochs(
+    client:    Any,
+    db:        str,
+    tenant_id: str,
+    since:     str,
+    until:     str,
+    raiz:      str,
+    pool_id:   str | None,
+    accessible_pools: "list[str] | None" = None,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+        "(category = {raiz:String} OR startsWith(category, {raiz_dot:String}))",
+    ]
+    params: dict = {"tenant_id": tenant_id, "raiz": raiz, "raiz_dot": raiz + "."}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
+    where = " AND ".join(conditions)
+
+    # Sessionizacao classica: marca a TRANSICAO de forma e soma-a acumuladamente para
+    # obter o id do run. A ordem inclui `forma` como desempate porque dois eventos do
+    # MESMO submit compartilham o milissegundo — sem o desempate, a ordem entre eles
+    # seria nao-deterministica e produziria transicoes fantasmas entre execucoes.
+    result = client.query(f"""
+        SELECT
+            forma,
+            grupo,
+            min(emitted_at) AS from_dt,
+            max(emitted_at) AS to_dt,
+            count()         AS events,
+            uniqExact(session_id) AS contacts,
+            groupUniqArray(versao)  AS versions
+        FROM (
+            SELECT
+                emitted_at, session_id, forma, versao,
+                sum(troca) OVER (ORDER BY emitted_at, forma
+                                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS grupo
+            FROM (
+                SELECT
+                    emitted_at,
+                    session_id,
+                    tags['dialog_form_id']      AS forma,
+                    tags['dialog_form_version'] AS versao,
+                    forma != lagInFrame(forma) OVER (ORDER BY emitted_at, forma
+                                                     ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS troca
+                FROM {db}.agent_business_events
+                WHERE {where}
+            )
+        )
+        GROUP BY forma, grupo
+        ORDER BY from_dt DESC
+    """, parameters=params)
+
+    linhas = _rows_to_dicts(result)
+    for r in linhas:
+        # `versions` sai como lista; ordena para a tela nao mudar de ordem entre
+        # execucoes (groupUniqArray nao garante ordem).
+        v = [x for x in (r.get("versions") or []) if x]
+        r["versions"] = sorted(v)
+        r["stamped"] = bool(r.get("forma"))
+        r["form_id"] = r.pop("forma", "")
+        r.pop("grupo", None)
+
+    return {
+        "data": linhas,
+        "meta": {
+            "root":    raiz,
+            "from_dt": since,
+            "to_dt":   until,
+            "epochs":  len(linhas),
+            # Uma epoca so ⇒ a janela inteira fala um vocabulario, e a arvore pode ser
+            # lida sem recorte. E a mesma pergunta que `single_vocabulary` responde no
+            # `/tree`, aqui pela outra ponta.
+            "single_epoch": len(linhas) <= 1,
+        },
+    }
+
+
 async def query_agent_events_tree(
     client:    Any,
     database:  str,
@@ -7509,6 +7652,7 @@ async def query_agent_events_tree(
     to_dt:     str | None = None,
     *,
     pool_id:  str | None = None,
+    form_id:  str | None = None,
     accessible_pools: list[str] | None = None,
 ) -> dict:
     """
@@ -7570,7 +7714,7 @@ async def query_agent_events_tree(
     try:
         return await asyncio.to_thread(
             _fetch_agent_events_tree, client, database, tenant_id,
-            since, until, raiz, pool_id, accessible_pools,
+            since, until, raiz, pool_id, form_id, accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_agent_events_tree failed tenant=%s root=%s: %s",
@@ -7587,6 +7731,7 @@ def _fetch_agent_events_tree(
     until:     str,
     raiz:      str,
     pool_id:   str | None,
+    form_id:   str | None,
     accessible_pools: "list[str] | None" = None,
 ) -> dict:
     conditions = [
@@ -7601,6 +7746,15 @@ def _fetch_agent_events_tree(
     if pool_id:
         conditions.append("pool_id = {pool_id:String}")
         params["pool_id"] = pool_id
+
+    # Recorte por EPOCA (D13). `None` = sem filtro; string VAZIA = a run sem carimbo,
+    # que e uma run legitima e nao "ausencia de filtro" — por isso o discriminador e
+    # `is not None`, nunca truthiness: `if form_id:` colapsaria a epoca anterior ao
+    # carimbo com "todas as epocas", que e o defeito da familia `if not x`.
+    form_id_filtro = form_id
+    if form_id_filtro is not None:
+        conditions.append("tags['dialog_form_id'] = {form_id:String}")
+        params["form_id"] = form_id_filtro
 
     # ABAC pool-scope (AUT-01, F-A): a linha carrega `pool_id` como fato PROPRIO.
     # NAO confundir com o `?pool_id=` acima — aquele e o filtro que o operador PEDIU,

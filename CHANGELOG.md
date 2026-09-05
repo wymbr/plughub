@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (22) — D13 implementada: a época recorta, e o conflito deixa de existir
+
+`GET /reports/agent-events/epochs` devolve um bloco por **run contíguo** de formulário, e o `/tree`
+ganhou `form_id` para recortar. A lente passa a desenhar um bloco por época — mesma tabela, mesma
+manipulação, muda só a janela.
+
+### A prova, medida ao vivo
+
+| consulta | `single_vocabulary` | a árvore mostra |
+|---|---|---|
+| sem recorte | **false** | `segunda_via` em DOIS caminhos (9 na raiz, 1 sob `cadastro`) |
+| recortada na época carimbada | **true** | só `cadastro.*` — a duplicata não existe |
+
+O conflito não passa a ser tratado: **deixa de existir**. Dentro de um bloco há um vocabulário só,
+então total e percentual voltam a ser legítimos sem guarda nenhuma. É a mesma preferência que este arco
+já exerceu duas vezes — o `form` virando tipo de bloco, e pasta×folha sendo derivada em vez de flag.
+
+### A run sem carimbo é uma run
+
+Evento anterior ao carimbo vira época própria (`form_id: ""`), rotulada como tal — nem descartada
+(esconderia dado real) nem atribuída a uma forma (inventaria procedência). E ela **ainda mistura**, o
+que a tela diz: aqueles eventos não carregam a forma, e nenhum recorte os separa. Forward-only, como a
+D14 declarou.
+
+⚠️ **`form_id` vazio é uma ÉPOCA, não ausência de filtro** — o discriminador é `is not None`, nunca
+truthiness. Um `if form_id:` colapsaria a época anterior ao carimbo com *todas*, que é a família do
+`if not x` do catálogo. O ramo D do gate existe só para prender isso, e a mutação o deixa vermelho com
+a mensagem exata (`form_id vazio devolveu o MESMO que sem filtro (26)`).
+
+### Limite declarado, e não é detalhe
+
+O discriminador **run × forma NÃO foi exercido**: não houve rollback de hook nestes dados. A mutação
+que agrupa por forma foi detectada, mas por **quebrar o SQL**, não pela proposição. O desenho segue o
+decidido na D13; falta um caso que o prove, e o gatilho é o primeiro rollback de `dialog_form_id`.
+Registrar isto é o que separa *gate verde* de *proposição verificada*.
+
+Gate: `probe_agent_event_epochs.sh` — 4 ramos, INCONCLUSIVO próprio, e o ramo **B** confere que as
+épocas **particionam** (soma das épocas = total da janela: nada perdido, nada contado duas vezes).
+Mutações: truthiness → VERMELHO · agrupar por forma → detectada (com a ressalva acima) · descartar a
+run sem carimbo → VERMELHO (`soma das epocas (2) != total (26)`). Suíte 754/754; rollup e cobertura de
+rota verdes; i18n 777 × 777.
+
+⚠️ Removidas as chaves `lens.taxonomy.mixed`/`mixedUnstamped`: o aviso de janela inteira foi
+substituído pelo recorte em blocos, e chave sem consumidor é a dívida que o gate de i18n cobra.
+
+Arquivos: `packages/analytics-api/src/plughub_analytics_api/{reports_query,reports}.py` ·
+`packages/platform-ui/src/modules/analise/TaxonomyTreeLens.tsx` ·
+`i18n/locales/{en,pt-BR}/contacts.json` · `infra/test/probe_agent_event_epochs.sh` (novo) ·
+`infra/test/gates.manifest` · `docs/adr/adr-dialog-tree-options.md`.
+
+---
+
 ## 2026-09-05 (21) — a mistura de vocabulários ficou VISÍVEL, e a tela não a separava
 
 Com os dois consertos anteriores no ar, a árvore de `servico` mostrou o terceiro problema — e este
