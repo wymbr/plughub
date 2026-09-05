@@ -1,5 +1,66 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (18) — `/reports/agent-events/tree`: a contagem sobe da folha para as pastas
+
+O endpoint que a D10 descrevia e ninguém tinha escrito. Sob uma raiz, devolve a árvore com **três**
+contagens por nó — e são três porque duas seriam mentira:
+
+| campo | o que é | soma? |
+|---|---|---|
+| `own` | eventos parados EXATAMENTE neste nó | — |
+| `branch_marks` | marcações no ramo (este nó + descendentes) | **sim** |
+| `branch_contacts` | atendimentos distintos no ramo (`uniqExact`) | **não** |
+
+**`branch_contacts` não é derivável no cliente** — `uniqExact` não soma, então não há como obtê-lo a
+partir das folhas. É a razão de a rota existir em vez de um rollup em JavaScript sobre o `/summary`.
+Medido ao vivo na mesma janela: `servico` = **26 marcações / 13 contatos**.
+
+**`own` fica em coluna própria de propósito.** Pasta não é selecionável (a guarda D7 trava o Salvar),
+então `own > 0` numa pasta só pode vir de superfície que não desenha a árvore. Somado ao ramo, sumiria
+dentro de um número legítimo; separado, o relatório vira detector. Medido: `servico.cadastro` com
+`own = 1` — a linha órfã do Console desatualizado, aparecendo como o que é.
+
+### O rollup é um `arrayJoin`, não uma segunda passada
+
+Cada evento é expandido nos seus ancestrais: um evento em `a.b.c` conta em `a`, `a.b` e `a.b.c`. Então
+`count()` por grupo **já é** o `branch_marks` e `uniqExact(session_id)` **já é** o `branch_contacts` —
+sem somar nada no Python, e sem uma consulta por nível.
+
+### O endpoint DECLARA a comparabilidade
+
+`meta.vocabularies` lista as formas que caíram na janela e `meta.single_vocabulary` resume. Com mais de
+uma, a árvore mistura vocabulários e quem desenha tem de **recusar os totais** em vez de somar em
+silêncio (`comparability: 'same_form'`). `meta.unstamped_events` conta o que é anterior ao carimbo, sem
+atribuí-lo a forma nenhuma. Medido hoje: `single_vocabulary = false`, com 24 eventos sem carimbo — a
+série realmente mistura, e agora ela diz isso sozinha.
+
+⚠️ **Duas honestidades declaradas.** `root` é obrigatório (422 sem ele): floresta somada não é árvore, e
+um default aqui juntaria taxonomias sem raiz comum. E `derived_leaf` significa *nenhum evento desceu
+abaixo deste nó no período* — **não** *é folha na forma*: uma pasta cujos filhos ninguém escolheu
+aparece como folha, porque o esqueleto vem dos dados. Cruzar com a forma publicada, para dar zeros
+explícitos, depende da versão (D14) e é outra fase.
+
+### Gate
+
+`infra/test/probe_agent_event_tree_rollup.sh` — 5 ramos. **B** confere a aritmética (pasta = próprio +
+soma dos filhos diretos), **C** exige uma TESTEMUNHA de não-aditividade e se declara **INCONCLUSIVO**
+sem ela (verde ali seria verde por ausência), **E** confere que a raiz irmã truncada não vaza e que
+`root` não tem default. Quatro mutações: `branch_marks` sem descendentes → VERMELHO · `uniqExact` →
+`count` → **INCONCLUSIVO** (o ramo C fazendo exatamente o seu trabalho) · raiz sem o ponto → VERMELHO
+("casou 8 nós") · `own` zerado → VERMELHO. Suíte da analytics-api: 754/754.
+
+⚠️ **Achado de passagem, alheio a esta mudança:** `probe_report_row_scope.sh` reprova em
+`customers/360` (admin=21, escopado=21). **Não é regressão daqui** — o diff é 51/0 e 184/0, nenhuma
+linha existente tocada. O mecanismo de recorte existe (`_session_scope_clause`,
+`reports_query.py:3637`), e o ramo compara CONTAGENS: se todas as sessões do cliente sorteado caem em
+pools que o principal escopado alcança, a igualdade é o comportamento certo e o gate grita lobo.
+Registrado como `AUT-36`, com o discriminador que falta nomeado.
+
+Arquivos: `packages/analytics-api/src/plughub_analytics_api/reports_query.py` ·
+`.../reports.py` · `infra/test/probe_agent_event_tree_rollup.sh` (novo) · `infra/test/gates.manifest`.
+
+---
+
 ## 2026-09-05 (17) — F6 fechada: a árvore mediu inteira, com o pin no ar
 
 Terceiro contato real (sessão `d36639f8`, wrap-up `88a98d26`), já com o pin implantado. Verdade de

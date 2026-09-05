@@ -7500,6 +7500,190 @@ def _fetch_agent_events_summary(
     }
 
 
+async def query_agent_events_tree(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    root:      str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:  str | None = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """
+    Arvore de taxonomia sob `root`, com a contagem SUBINDO de cada folha para as
+    pastas que a contem. D10 do `adr-dialog-tree-options`.
+
+    ── As tres contagens, e por que sao tres ────────────────────────────────────
+
+      own              eventos gravados EXATAMENTE neste no
+      branch_marks     marcacoes no ramo (este no + tudo abaixo) — SOMA
+      branch_contacts  atendimentos DISTINTOS que tocaram o ramo — NAO SOMA
+
+    As duas ultimas coincidem em pergunta de resposta unica e **divergem em
+    `checklist`**: medido em 2026-09-05, na pasta `servico.cadastro`, 2 marcacoes
+    para 1 atendimento. Publicar so a soma faria a lente totalizar mais que o numero
+    de atendimentos, e alguem tiraria percentual disso — a mesma falacia de
+    aditividade que o rollup de capacidade recusa no topo.
+
+    ⚠️ **`branch_contacts` nao e derivavel no cliente.** `uniqExact` nao soma: nao ha
+    como obte-lo a partir das folhas. E por isso que esta consulta existe no servidor,
+    e nao como um rollup em JavaScript sobre o `/summary`.
+
+    `own > 0` numa PASTA e sintoma, nao dado: pasta nao e selecionavel (a guarda D7
+    desabilita o Salvar), entao a linha so pode ter vindo de superficie que nao
+    desenha a arvore — Console desatualizado, ou canal que achata a hierarquia.
+    Fica em coluna PROPRIA de proposito: somado ao ramo, sumiria dentro de um numero
+    legitimo.
+
+    ── Como o rollup e feito ────────────────────────────────────────────────────
+
+    Cada evento e expandido nos seus PREFIXOS (`arrayJoin`) e agrupado por prefixo.
+    Um evento em `a.b.c` conta em `a`, `a.b` e `a.b.c` — entao `count()` por grupo JA
+    e o `branch_marks` e `uniqExact(session_id)` JA e o `branch_contacts`, sem segunda
+    passada e sem somar nada no Python.
+
+    ── Duas honestidades declaradas ─────────────────────────────────────────────
+
+    **`derived_leaf` nao e "e folha na forma".** Ele diz *"nenhum evento desceu abaixo
+    deste no no periodo"* — uma pasta cujos filhos ninguem escolheu aparece como folha.
+    O esqueleto vem dos DADOS, nao do formulario; cruzar com a forma publicada, para
+    dar zeros explicitos, e outra fase e depende da versao (D14).
+
+    **`meta.vocabularies` conta as formas na janela.** Repontar o hook de um pool troca
+    o vocabulario SOB a mesma serie (medido: `servico.troca_titularidade` da forma plana
+    convivendo com `servico.cadastro.troca_titularidade` da forma em arvore, no mesmo
+    pool e no mesmo dia). Com mais de uma forma a arvore mistura vocabularios, e o
+    consumidor tem de DIZER isso em vez de somar em silencio — e o
+    `comparability: 'same_form'` do contrato de lentes decide o que fazer. Evento
+    anterior ao carimbo (2026-09-05) nao tem forma: sai contado a parte, em
+    `unstamped_events`, nunca atribuido a uma.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    raiz  = (root or "").strip().strip(".")
+    if not raiz:
+        return {"data": [], "meta": {"error": "root_required"}}
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": _meta(1, 0, 0, since, until)}
+    try:
+        return await asyncio.to_thread(
+            _fetch_agent_events_tree, client, database, tenant_id,
+            since, until, raiz, pool_id, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_agent_events_tree failed tenant=%s root=%s: %s",
+                       tenant_id, raiz, exc)
+        return {"data": [], "meta": _meta(1, 0, 0, since, until),
+                "error": "data_unavailable"}
+
+
+def _fetch_agent_events_tree(
+    client:    Any,
+    db:        str,
+    tenant_id: str,
+    since:     str,
+    until:     str,
+    raiz:      str,
+    pool_id:   str | None,
+    accessible_pools: "list[str] | None" = None,
+) -> dict:
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+        # A raiz entra como igualdade OU prefixo COM o ponto: `startsWith(c, 'motivo')`
+        # sozinho casaria uma categoria irma chamada `motivos`.
+        "(category = {raiz:String} OR startsWith(category, {raiz_dot:String}))",
+    ]
+    params: dict = {"tenant_id": tenant_id, "raiz": raiz, "raiz_dot": raiz + "."}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+
+    # ABAC pool-scope (AUT-01, F-A): a linha carrega `pool_id` como fato PROPRIO.
+    # NAO confundir com o `?pool_id=` acima — aquele e o filtro que o operador PEDIU,
+    # este e o conjunto que ele ALCANCA.
+    _apply_pool_scope(conditions, accessible_pools)
+    where = " AND ".join(conditions)
+
+    prof_raiz = len(raiz.split("."))
+
+    result = client.query(f"""
+        SELECT
+            prefix,
+            length(splitByChar('.', prefix))     AS depth,
+            countIf(category = prefix)           AS own,
+            count()                              AS branch_marks,
+            uniqExact(session_id)                AS branch_contacts,
+            count() = countIf(category = prefix) AS derived_leaf,
+            min(emitted_at)                      AS first_seen,
+            max(emitted_at)                      AS last_seen
+        FROM (
+            SELECT
+                session_id,
+                category,
+                -- `emitted_at` tem de vir na subconsulta: o `arrayJoin` cria um
+                -- escopo novo, e a agregacao de fora so enxerga o que sai daqui.
+                emitted_at,
+                arrayJoin(arrayMap(
+                    i -> arrayStringConcat(arraySlice(splitByChar('.', category), 1, i), '.'),
+                    range({prof_raiz}, length(splitByChar('.', category)) + 1)
+                )) AS prefix
+            FROM {db}.agent_business_events
+            WHERE {where}
+        )
+        GROUP BY prefix
+        ORDER BY prefix
+    """, parameters=params)
+
+    linhas = _rows_to_dicts(result)
+
+    # ── Vocabularios na janela (D13/D14) ───────────────────────────────────────
+    # Fato do CONJUNTO, nao da linha: uma arvore com dois vocabularios nao e uma
+    # arvore com uma coluna a mais — e um agregado que o consumidor precisa RECUSAR
+    # a somar. Por isso vai em `meta`, onde nao se confunde com no.
+    vocab = client.query(f"""
+        SELECT
+            tags['dialog_form_id']      AS form_id,
+            tags['dialog_form_version'] AS version,
+            count()                     AS events
+        FROM {db}.agent_business_events
+        WHERE {where}
+        GROUP BY form_id, version
+        ORDER BY events DESC
+    """, parameters=params)
+
+    formas: list[dict] = []
+    sem_carimbo = 0
+    for v in _rows_to_dicts(vocab):
+        if not v.get("form_id"):
+            sem_carimbo += int(v.get("events") or 0)
+            continue
+        formas.append({
+            "form_id": v["form_id"],
+            "version": v.get("version") or None,
+            "events":  int(v.get("events") or 0),
+        })
+
+    return {
+        "data": linhas,
+        "meta": {
+            "root":            raiz,
+            "from_dt":         since,
+            "to_dt":           until,
+            "nodes":           len(linhas),
+            "vocabularies":    formas,
+            # Anterior ao carimbo de 2026-09-05. Contado, nunca atribuido a uma forma.
+            "unstamped_events": sem_carimbo,
+            # A consulta DECLARA; quem desenha decide. Uma forma so (e nada sem
+            # carimbo) ⇒ os totais do topo sao legitimos.
+            "single_vocabulary": len(formas) <= 1 and sem_carimbo == 0,
+        },
+    }
+
+
 async def query_agent_events_categories(
     client:    Any,
     database:  str,

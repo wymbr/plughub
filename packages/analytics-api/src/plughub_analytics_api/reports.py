@@ -73,6 +73,7 @@ from .reports_query import (
     query_agent_events_series,
     query_agent_events_summary,
     query_agent_events_categories,
+    query_agent_events_tree,
     query_evaluator_calibration,
 )
 from .timeseries_query import (
@@ -1874,6 +1875,56 @@ async def get_agent_events_summary(
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"agent_events_summary_{_today_label()}.csv")
+
+
+# ─── GET /reports/agent-events/tree ──────────────────────────────────────────
+
+@router.get("/agent-events/tree")
+async def get_agent_events_tree(
+    request:   Request,
+    tenant_id: str           = Query(...,  description="Tenant identifier"),
+    root:      str           = Query(...,  description="Raiz da árvore (prefixo de categoria, sem ponto final) — ex.: retencao_humano.wrapup.motivo"),
+    from_dt:   Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
+    to_dt:     Optional[str] = Query(None, description="ISO8601 end (default: now)"),
+    pool_id:   Optional[str] = Query(None, description="Filter by pool_id"),
+    format:    str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Árvore de taxonomia sob `root`, com a contagem subindo da folha para as pastas.
+
+    **`root` é obrigatório e não tem default.** Uma árvore precisa de raiz: sem ela a
+    resposta seria o conjunto de TODAS as taxonomias do tenant enraizadas em nada, o
+    que não é uma árvore — é uma floresta somada. Ausente ⇒ 422 do FastAPI, que é
+    melhor que um default que ninguém pediu.
+
+    Cada nó traz TRÊS contagens, e são três porque só duas seriam mentira:
+
+      * `own`             — eventos gravados exatamente neste nó. Em PASTA isto é
+                            sintoma (pasta não é selecionável), e fica em coluna
+                            própria para não sumir dentro do total do ramo;
+      * `branch_marks`    — marcações no ramo. **Soma.**
+      * `branch_contacts` — atendimentos distintos no ramo. **Não soma** — medido em
+                            2026-09-05: 2 marcações para 1 atendimento em
+                            `servico.cadastro`. Não é derivável no cliente
+                            (`uniqExact` não soma), e é por isso que esta rota existe.
+
+    `meta.vocabularies` diz quantas FORMAS caíram na janela. Com mais de uma, a árvore
+    mistura vocabulários e quem desenha tem de recusar os totais em vez de somar em
+    silêncio (`comparability: 'same_form'`). `meta.unstamped_events` conta o que é
+    anterior ao carimbo, sem atribuí-lo a forma nenhuma.
+    """
+    data = await query_agent_events_tree(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        root      = root,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        pool_id   = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, format, f"agent_events_tree_{_today_label()}.csv")
 
 
 # ─── GET /reports/agent-events/categories ────────────────────────────────────
