@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (14) — a série de taxonomia já está misturada, e não é por causa do filtro
+
+Registro de três achados de desenho, todos vindos de perguntas do dono sobre a maquete do relatório
+de taxonomia. Nenhum é código ainda — o que mudou foi o ADR e o ledger.
+
+### 1. "Resposta em pasta" não é comportamento — é integridade
+
+A maquete trazia um indicador *"Respostas em pasta"*, e a pergunta foi certeira: **só dá para marcar
+folha**. A guarda D7 desabilita o Salvar enquanto a resposta parar num galho
+(`DialogFormRenderer.tsx:889`). Logo aquele número nunca foi escolha de atendente: é linha que só uma
+superfície incapaz de desenhar a árvore consegue produzir. Virou **tarja de integridade** — aparece só
+quando há o que avisar, nomeia os caminhos, e sai da conta sozinha quando os dias saem do período.
+
+O lugar de manchete passou para a **folha de escape** (`nao_se_aplica` / `nenhum`), que é a versão
+contável do *"não encaixa em lugar nenhum"* — a D7 inteira. Abrir a pasta, olhar e concluir que o caso
+é outro **não deixa rastro** (navegar não emite; só o Salvar emite), e isso é de propósito: o
+formulário registra a resposta, não a navegação. Instrumentar navegação mediria hesitação da pessoa,
+com uso duvidoso e custo de privacidade real.
+
+### 2. Canal pobre e build velho produzem a MESMA linha
+
+Generalização que fecha a `DLG-15` num ponto: não importa **por que** a superfície falhou — categoria
+parada numa pasta é assinatura de *superfície que não desenha a árvore*, e o detector mora no
+relatório, não na borda. Muda o que o gate daquela tarefa deve vigiar: não *"o canal X recusou?"*, e
+sim *"apareceu linha parada em pasta?"*.
+
+### 3. O evento não carrega a FORMA — e a série já está misturada
+
+A dúvida foi *"com o filtro em 'tudo', não mistura formulários de pools diferentes?"*. Está certa, e é
+**pior**: não precisa de dois pools. Medido num pool só, no mesmo dia:
+
+```
+retencao_humano.wrapup.servico.troca_titularidade            prof 1   n=2   ← forma arc12
+retencao_humano.wrapup.servico.cadastro.troca_titularidade   prof 2   n=1   ← forma árvore
+```
+
+O `arc12` tem `servico` como lista plana; a árvore tem `servico.cadastro.*`. Repontar o hook às 17h
+trocou o vocabulário **sob a mesma série** — e o mesmo serviço do mundo real passou a ser contado em
+dois caminhos.
+
+**Filtro nenhum conserta.** Forçar um pool falha (a troca é temporal, não espacial); resolver
+forma→pools na consulta responde o **agora** e reescreve o passado; encurtar o período só estreita a
+classe de falha. É a regra da **identidade derivada**: o discriminador tem de ser do FENÔMENO
+(*resposta a este vocabulário*), nunca do contêiner (o pool) — mesma forma do `queue_wait_segment_id`,
+que carimbava a sessão enquanto o fato era a passagem pela fila.
+
+Fecha carimbando `dialog_form_id` + versão **na emissão** (o `deriveAgentEvents` já lê o formulário —
+o dado está na mão), forward-only e com corte em data declarada, como a `SEGMENT_SLA_EPOCH`. Antes
+disso, a colisão tem **assinatura nos próprios dados** (mesmo id em profundidades diferentes sob o
+mesmo pai) e a lente pode recusar total e percentual nomeando o conflito — que é o
+`comparability: 'same_form'` do contrato de lentes fazendo o seu trabalho.
+
+⚠️ **O que não fazer: proibir o "tudo".** Não resolve, e quebra o caso que a taxonomia controlada
+existe para servir — N pools sob o MESMO vocabulário são comparáveis **de propósito**.
+
+Arquivos: `docs/adr/adr-dialog-tree-options.md` · `pending.md` (DLG-15 emendada, DLG-24 nova).
+
+---
+
 ## 2026-09-05 (13) — a série de eventos dava 500 COM dado e 200 SEM dado
 
 Ao avaliar se dá para desenhar a curva de uma folha da taxonomia ao longo do tempo, medi o endpoint que

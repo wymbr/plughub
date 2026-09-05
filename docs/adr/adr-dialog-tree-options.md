@@ -329,6 +329,61 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## O evento nao carrega a FORMA, e a serie ja esta misturada (2026-09-05)
+
+Achado ao desenhar o relatorio de taxonomia, a partir de uma duvida do dono: *"o formulario
+de wrap-up e por pool; com o filtro em 'tudo', nao vai misturar formularios diferentes?"*.
+
+**Esta certo, e e pior — nao precisa de dois pools.** Medido ao vivo, num pool so, no mesmo dia:
+
+```
+retencao_humano.wrapup.servico.troca_titularidade            prof 1   n=2   <- forma arc12
+retencao_humano.wrapup.servico.cadastro.troca_titularidade   prof 2   n=1   <- forma arvore
+```
+
+O `dialog_wrapup_arc12_v1` tem `servico` como **lista plana**; o `dialog_wrapup_arvore_v1` tem
+`servico.cadastro.*`. Repontar o hook do pool (o que foi feito as 17h) trocou o vocabulario **sob
+a mesma serie**. O mesmo servico do mundo real passou a ser contado em dois caminhos, e uma
+agregacao por prefixo `…servico.` soma os dois como se fossem coisas diferentes — ou, pior, um
+deles vira "pasta" e o outro "folha" na mesma arvore.
+
+### Por que filtro nenhum conserta isto
+
+O vinculo **pool → formulario** e `PoolHookEntry.context.dialog_form_id`: config do pool, mutavel
+a qualquer momento. Logo:
+
+| tentativa | por que falha |
+|---|---|
+| forcar **um pool** no filtro | o mesmo pool troca de forma ao longo do periodo — medido acima |
+| resolver **forma → pools** na consulta | resolve o **agora**, nao o periodo; a consulta de amanha reescreve o passado |
+| encurtar o periodo | so estreita a classe de falha, nao a remove — a troca pode cair dentro de qualquer janela |
+
+E a regra da casa outra vez: **identidade derivada tem de conter o discriminador do FENOMENO,
+nunca o do conteiner**. O fenomeno aqui e *"resposta a ESTE vocabulario"*; o pool e o conteiner,
+e nao o identifica. Mesma forma do `queue_wait_segment_id`, que carimbava a SESSAO enquanto o fato
+era a PASSAGEM pela fila.
+
+### A correcao que fecha, e a que da para fazer agora
+
+**Fecha:** o evento carrega `dialog_form_id` (e a versao). O `deriveAgentEvents` **ja le o
+formulario** para derivar a categoria — o dado esta na mao no instante da emissao; nao ha consulta
+nova. E forward-only: linha antiga fica sem forma, e o corte se declara em data, como a
+`SEGMENT_SLA_EPOCH` — nunca se fabrica a forma do passado.
+
+**Da para fazer antes disso, sem coluna nova:** a colisao tem **assinatura nos proprios dados** —
+o mesmo id aparecendo em profundidades diferentes sob o mesmo pai, ou um id que e folha numa linha
+e pasta noutra. Detectando, a lente **recusa total e percentual** e nomeia as formas em conflito,
+em vez de somar em silencio. E o `comparability: 'same_form'` do contrato de lentes operando —
+campo que ja existe, nascido da guarda cross-form da lente `quality`.
+
+### O que NAO fazer: proibir o "tudo"
+
+Tentador e errado por duas razoes. **(1)** Nao resolve — a mistura e temporal, nao espacial.
+**(2)** Proibir quebra o caso que a taxonomia controlada existe para servir: N pools compartilhando
+o MESMO vocabulario e comparaveis de proposito (Retencao × Cobranca sob a mesma arvore e o
+objetivo, nao o risco). O eixo de comparabilidade e a FORMA, e o filtro deve dize-lo — mostrando
+quantas formas distintas cairam na janela — em vez de restringir o pool, que e a proxy errada.
+
 ## Medicao da F6, segunda passada (2026-09-05, apos o rebuild) — a arvore mediu
 
 Console rebuildado, contato novo: sessao `4919af4a-6c97-48d0-aaef-b783dc1f46a0`, segmento humano
