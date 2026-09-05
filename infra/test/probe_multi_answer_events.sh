@@ -49,7 +49,7 @@ RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NODE_IMG="${NODE_IMG:-node:20-alpine}"
 DA="${DIALOG_API:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
-FORMA="${WRAPUP_FORM:-dialog_wrapup_arc12_v1}"
+FORMA="${WRAPUP_FORM:-dialog_wrapup_arvore_v1}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 FAIL=0
@@ -79,8 +79,20 @@ for n in d.get('nodes',[]):
     if n.get('interaction')=='checklist' and (n.get('capture') or {}).get('kind'):
         print(n.get('output_key') or n['id']); break
 ")"
+OK_KEY_FUNDA="$(python3 -c "
+import json
+d=json.load(open('$TMP/form.json'))
+def prof(o,k=1):
+    return max([prof(c,k+1) for c in (o.get('options') or [])], default=k)
+for n in d.get('nodes',[]):
+    opts=n.get('options') or []
+    if (n.get('capture') or {}).get('kind') and opts and max(prof(o) for o in opts) >= 3:
+        print(n.get('output_key') or n['id']); break
+")"
 [ -n "$OK_KEY" ] || inconclusivo "'$FORMA' não tem pergunta checklist com capture.kind — nada a julgar"
 ok "pergunta '$OK_KEY' é checklist e declara captura"
+[ -n "$OK_KEY_FUNDA" ] || inconclusivo "a forma nao tem pergunta com captura e arvore de 3+ niveis — o ramo E passaria por ausencia"
+ok "pergunta '$OK_KEY_FUNDA' tem arvore de 3+ niveis (o ramo E mede nela)"
 
 # ── recorte da cadeia REAL ────────────────────────────────────────────────────
 python3 - "$RAIZ" "$TMP" <<'PY'
@@ -133,6 +145,7 @@ import { deriveAgentEvents } from '/t/derive.js'
 
 const form = JSON.parse(readFileSync('/t/form.json', 'utf8'))
 const key  = process.argv[2]
+const keyFunda = process.argv[3]
 const ctx  = { poolId: 'sac_humano', skillId: 'wrapup' }
 
 // A cadeia REAL: o bridge codifica a lista em JSON (transporte), o engine a
@@ -140,21 +153,21 @@ const ctx  = { poolId: 'sac_humano', skillId: 'wrapup' }
 const doCanal = (marcacoes) => JSON.stringify(marcacoes)
 const doEngine = (transporte) => coerceMultiAnswer(transporte, 'checklist')
 
-const duas  = deriveAgentEvents(form, { [key]: doEngine(doCanal(['suporte', 'financeiro'])) }, ctx)
-const uma   = deriveAgentEvents(form, { [key]: doEngine(doCanal(['suporte'])) }, ctx)
-const crua  = deriveAgentEvents(form, { [key]: doEngine('suporte') }, ctx)  // canal sem JSON
+const duas  = deriveAgentEvents(form, { [key]: doEngine(doCanal(['cadastro.segunda_via', 'cadastro.troca_titularidade'])) }, ctx)
+const uma   = deriveAgentEvents(form, { [key]: doEngine(doCanal(['cadastro.segunda_via'])) }, ctx)
+const crua  = deriveAgentEvents(form, { [key]: doEngine('nenhum') }, ctx)  // canal sem JSON
 
 // F4 — o caminho da taxonomia tem de sobreviver como CAMINHO. O sanitizador
 // antigo trocava `.` por `_` e colapsava a hierarquia num segmento so.
 const caminho = deriveAgentEvents(
-  form, { [key]: doEngine(doCanal(['financeiro.cobranca.indevida'])) }, ctx)
+  form, { [keyFunda]: doEngine(doCanal(['financeiro.cobranca.indevida'])) }, ctx)
 
 console.log(JSON.stringify({ duas, uma, crua, caminho }))
 JS
 
 MAXSEG="$(grep -oE "AGENT_EVENT_CATEGORY_MAX_SEGMENTS = [0-9]+" "$RAIZ/packages/schemas/src/agent-events.ts" | grep -oE "[0-9]+$")"
 [ -n "$MAXSEG" ] || inconclusivo "nao li AGENT_EVENT_CATEGORY_MAX_SEGMENTS do schema"
-SAIDA="$(docker run --rm -e MAXSEG="$MAXSEG" -v "$TMP:/t" -w /t "$NODE_IMG" node /t/run.mjs "$OK_KEY" 2>&1)"
+SAIDA="$(docker run --rm -e MAXSEG="$MAXSEG" -v "$TMP:/t" -w /t "$NODE_IMG" node /t/run.mjs "$OK_KEY" "$OK_KEY_FUNDA" 2>&1)"
 echo "$SAIDA" | head -c 1 | grep -q '{' || {
   echo "$SAIDA" | sed 's/^/      /' | head -12
   inconclusivo "o runner não produziu JSON (log acima)"; }

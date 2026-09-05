@@ -1,5 +1,43 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (8) — a árvore ganhou dado REAL, e os gates trocaram a fixture por ele
+
+`dialog_wrapup_arvore_v1` foi semeado e publicado (v1): wrap-up com vocabulário controlado
+hierárquico — `motivo` em **3 níveis** (nominal, resposta única), `servico` em **2** (nominal, multi
+dentro de uma pasta), e uma pergunta que só aparece sob `financeiro.cobranca` via
+`ask_when {op: "prefix"}`. Profundidade VARIÁVEL de propósito (o ramo `comercial` tem 2 níveis):
+é o caso que a D10 existe para tratar, e agora ele existe no store.
+
+Provisionado pelo caminho oficial — `docker compose run --rm dialog-seed` —, não por `INSERT` nem
+por script ad-hoc. O seeder o criou como ausente e deixou os outros 12 intactos, que é a semântica
+seed-if-absent funcionando à vista.
+
+### Por que isto vem ANTES da F6, e não junto
+
+Três gates da árvore se apoiavam em **fixture sintética**, e a razão era honesta: nenhuma forma
+publicada tinha árvore, e esperar o dado real deixaria o gate vermelho só **depois** de alguém perder
+uma taxonomia. Mas fixture que envelhece à parte do dado é a próxima a mentir — o precedente está no
+próprio ADR (o achado 3, medido em 08-29, já estava obsoleto quando a F2 chegou nele).
+
+Com a forma publicada, as duas âncoras trocaram:
+
+- **ramo F** de `gate_dialog_capture_roundtrip.sh` — passou a projetar e reconstruir a árvore REAL
+  (`motivo`, 3 níveis). O controle positivo continua dentro do ramo: sem árvore de 3 níveis no
+  artefato, ele **reprova** em vez de passar por ausência;
+- **`probe_multi_answer_events.sh`** — a forma padrão virou esta, e o ramo E passou a medir na
+  pergunta que tem árvore FUNDA (resolvida do artefato, não escrita no probe): a categoria
+  `sac_humano.wrapup.motivo.financeiro.cobranca.indevida`, 6 segmentos contra o teto de 8. A
+  multi-seleção do ramo B agora usa duas folhas da MESMA pasta (`cadastro.segunda_via` e
+  `cadastro.troca_titularidade`), como a D5 manda.
+
+### O que falta para a F6, e por que não fiz
+
+A forma **não está ligada a pool nenhum**. Ligá-la muda o wrap-up que o agente humano vê num pool de
+produção — é decisão de operação (`PoolHookEntry.context.dialog_form_id`), não de seed, e o README
+diz isso na linha dela. A F6 (wrap-up real ponta a ponta, com a contagem por prefixo conferindo com
+os eventos emitidos) depende dessa decisão e de um contato real.
+
+
 ## 2026-09-05 (7) — F5: a taxonomia ficou autorável, e duas casas espelhadas estavam para trás
 
 O editor de opções era `add`/`remove` com ↑↓ sobre uma lista plana. Agora é a MESMA tabela com um

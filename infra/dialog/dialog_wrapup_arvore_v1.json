@@ -1,0 +1,138 @@
+{
+  "form_id": "dialog_wrapup_arvore_v1",
+  "name": "Wrap-up do atendimento (taxonomia em árvore)",
+  "description": "Wrap-up com vocabulário CONTROLADO hierárquico: motivo em 3 níveis (nominal, resposta única), serviços em 2 níveis (nominal, multi dentro de uma pasta) e uma pergunta que só aparece sob o ramo financeiro.cobranca (ask_when op prefix). A classificação vira outcome do segmento; motivo e serviço viram agent_business_events com a categoria de CAMINHO.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["wrapup", "arc12", "arvore"],
+  "nodes": [
+    {
+      "id": "intro",
+      "kind": "statement",
+      "text": { "pt-BR": "Revise a conversa ao lado e registre a disposição do seu atendimento." }
+    },
+    {
+      "id": "classificacao",
+      "kind": "question",
+      "prompt": { "pt-BR": "Como este atendimento terminou?" },
+      "interaction": "button",
+      "output_key": "classificacao",
+      "timeout_s": -1,
+      "options": [
+        { "id": "resolvido", "label": { "pt-BR": "Resolvido" }, "value": "resolvido" },
+        { "id": "pendente",  "label": { "pt-BR": "Pendente" },  "value": "pendente" },
+        { "id": "escalado",  "label": { "pt-BR": "Escalado" },  "value": "escalado" },
+        { "id": "cancelado", "label": { "pt-BR": "Cancelado pelo cliente" }, "value": "cancelado" }
+      ]
+    },
+    {
+      "id": "motivo",
+      "kind": "question",
+      "prompt": { "pt-BR": "Qual foi o motivo do contato?" },
+      "interaction": "list",
+      "output_key": "motivo",
+      "timeout_s": -1,
+      "capture": { "metric": "motivo", "kind": "nominal" },
+      "options": [
+        {
+          "id": "financeiro",
+          "label": { "pt-BR": "Financeiro" },
+          "options": [
+            {
+              "id": "cobranca",
+              "label": { "pt-BR": "Cobrança" },
+              "options": [
+                { "id": "indevida",      "label": { "pt-BR": "Cobrança indevida" } },
+                { "id": "duvida_fatura", "label": { "pt-BR": "Dúvida na fatura" } }
+              ]
+            },
+            {
+              "id": "pagamento",
+              "label": { "pt-BR": "Pagamento" },
+              "options": [
+                { "id": "nao_identificado", "label": { "pt-BR": "Pagamento não identificado" } },
+                { "id": "reembolso",        "label": { "pt-BR": "Reembolso" } }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "tecnico",
+          "label": { "pt-BR": "Técnico" },
+          "options": [
+            {
+              "id": "conectividade",
+              "label": { "pt-BR": "Conectividade" },
+              "options": [
+                { "id": "sem_sinal", "label": { "pt-BR": "Sem sinal" } },
+                { "id": "lentidao",  "label": { "pt-BR": "Lentidão" } }
+              ]
+            },
+            {
+              "id": "equipamento",
+              "label": { "pt-BR": "Equipamento" },
+              "options": [
+                { "id": "troca_aparelho", "label": { "pt-BR": "Troca de aparelho" } }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "comercial",
+          "label": { "pt-BR": "Comercial" },
+          "options": [
+            { "id": "portabilidade", "label": { "pt-BR": "Portabilidade" } },
+            { "id": "cancelamento",  "label": { "pt-BR": "Cancelamento" } }
+          ]
+        },
+        { "id": "nao_se_aplica", "label": { "pt-BR": "Não se aplica" } }
+      ]
+    },
+    {
+      "id": "valor_contestado",
+      "kind": "question",
+      "prompt": { "pt-BR": "Valor contestado (R$)" },
+      "interaction": "text",
+      "output_key": "valor_contestado",
+      "timeout_s": -1,
+      "ask_when": { "field": "motivo", "op": "prefix", "value": "financeiro.cobranca" },
+      "validation": { "numeric": true }
+    },
+    {
+      "id": "servico",
+      "kind": "question",
+      "prompt": { "pt-BR": "Quais serviços você executou?" },
+      "interaction": "checklist",
+      "output_key": "servico",
+      "timeout_s": -1,
+      "capture": { "metric": "servico", "kind": "nominal" },
+      "options": [
+        {
+          "id": "cadastro",
+          "label": { "pt-BR": "Cadastro" },
+          "options": [
+            { "id": "segunda_via",        "label": { "pt-BR": "Segunda via de fatura" } },
+            { "id": "troca_titularidade", "label": { "pt-BR": "Troca de titularidade" } }
+          ]
+        },
+        {
+          "id": "plano",
+          "label": { "pt-BR": "Plano" },
+          "options": [
+            { "id": "alteracao",    "label": { "pt-BR": "Alteração de plano" } },
+            { "id": "cancelamento", "label": { "pt-BR": "Cancelamento de plano" } }
+          ]
+        },
+        { "id": "nenhum", "label": { "pt-BR": "Nenhum" } }
+      ]
+    },
+    {
+      "id": "resumo",
+      "kind": "question",
+      "prompt": { "pt-BR": "Resumo do atendimento" },
+      "interaction": "text",
+      "output_key": "resumo",
+      "timeout_s": -1
+    }
+  ]
+}

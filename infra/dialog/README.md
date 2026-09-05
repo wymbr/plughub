@@ -43,6 +43,7 @@ versão nova).
 | `dialog_nps_buttons` | `agente_nps_v1` (hook `on_contact_end` do `sac_ia`/`retencao_humano`), `skill_survey_outbound_v1` |
 | `dialog_wrapup_v1` | `skill_wrapup_detached_v1` via `retencao_humano.on_human_end.context.dialog_form_id` |
 | `dialog_wrapup_arc12_v1` | idem, variante com captura Arc 12 (FCR + serviços) — não referenciada pelo YAML por padrão |
+| `dialog_wrapup_arvore_v1` | idem, variante com **taxonomia em árvore** (motivo em 3 níveis · serviços em 2 · `ask_when` com `prefix`) — **ainda não referenciada por pool nenhum**: é o artefato REAL em que os gates da árvore se ancoram, e o pré-requisito da F6 do `adr-dialog-tree-options`. Ligá-la a um pool muda o wrap-up que o agente vê, e por isso é decisão de operação, não de seed |
 | `dialog_otp_possession` | `agente_portabilidade_intake_v1` (step-up de OTP via `dialog_runner`) |
 | `dialog_formfill_demo` | `skill_formfill_demo_v1` (demo genérico do `DialogFormRenderer`) |
 | `dialog_promocao_deploy` | `skill_gate_promocao_v1` (aprovação de promoção) |

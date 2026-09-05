@@ -59,6 +59,7 @@ FORM="${FORM_ID:-dialog_wrapup_arc12_v1}"
 # pergunta `form` ao mesmo tempo, e reusar uma so faria um dos ramos passar
 # por ausencia.
 FORM_COM_FIELDS="${FORM_FIELDS_ID:-dialog_limite_solicitacao}"
+FORM_ARVORE="${FORM_ARVORE_ID:-dialog_wrapup_arvore_v1}"
 NODE_IMG="${NODE_IMAGE:-node:20-alpine}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
@@ -82,6 +83,8 @@ curl -sf "$DA/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" 
 curl -sf "$DA/v1/dialog/forms/$FORM_COM_FIELDS?status=published" -H "X-Tenant-ID: $TENANT" \
   -o "$TMP/form_fields.json" \
   || inconclusivo "dialog-api não serviu o form publicado '$FORM_COM_FIELDS' em $DA"
+
+curl -sf "$DA/v1/dialog/forms/$FORM_ARVORE?status=published" -H "X-Tenant-ID: $TENANT" -o "$TMP/form_arvore.json" || inconclusivo "dialog-api nao serviu a forma com arvore: $FORM_ARVORE"
 
 # ── transpila a UNIDADE SOB TESTE (o import é type-only ⇒ elidido) ─────────────
 cp "$RAIZ/packages/platform-ui/src/modules/dialog-forms/dialog-blocks.ts" "$TMP/blocks.ts"
@@ -217,38 +220,27 @@ if ((form.dimensions || []).length) {
 }
 
 // -- F -- a ARVORE sobrevive ao round-trip (F5 do adr-dialog-tree-options) ----
-// SINTETICA de proposito, e o motivo importa: NENHUMA forma publicada tem arvore
-// ainda — a F5 e justamente o que torna a autoria possivel. Um gate que
-// esperasse o dado real so ficaria vermelho DEPOIS do primeiro save que
-// destruisse a taxonomia de alguem, que e tarde demais. O controle positivo
-// mora dentro do ramo: ele confere que a fixture TEM arvore antes de julgar.
-const arvoreDoc = {
-  form_id: 'gate_arvore', name: 'g', default_locale: 'pt-BR', locales: ['pt-BR'],
-  dimensions: [], tags: [],
-  nodes: [{
-    id: 'q_motivo', kind: 'question', prompt: 'Motivo?', interaction: 'list',
-    output_key: 'motivo', timeout_s: 300,
-    options: [
-      { id: 'financeiro', label: 'Financeiro', options: [
-        { id: 'cobranca', label: 'Cobranca', options: [{ id: 'indevida', label: 'Indevida' }] },
-        { id: 'antiga', label: 'Antiga', active: false },
-      ] },
-      { id: 'nao_se_aplica', label: 'Nao se aplica' },
-    ],
-  }],
-}
+// A forma e a REAL publicada, nao uma fixture: o ramo nasceu sintetico porque
+// nenhuma forma tinha arvore, e trocou no dia em que uma passou a ter. Fixture
+// que envelhece a parte do dado e a proxima a mentir.
+// O controle positivo mora DENTRO do ramo: sem arvore de 3 niveis no artefato,
+// ele REPROVA, em vez de passar por ausencia.
+const arvoreDoc = JSON.parse(readFileSync('/t/form_arvore.json', 'utf8'))
 const prof = (o) => (o.options || []).reduce((m, c) => Math.max(m, 1 + prof(c)), 0)
 const profundidadeDe = (ns) => Math.max(...ns.flatMap(n => (n.options || []).map(o => 1 + prof(o))), 0)
-if (profundidadeDe(arvoreDoc.nodes) < 3) {
-  bad('F', 'a fixture do ramo F perdeu a arvore — o ramo passaria por ausencia')
+const qArvore = (arvoreDoc.nodes || []).find(n => (n.options || []).some(o => (o.options || []).length))
+if (!qArvore || profundidadeDe(arvoreDoc.nodes) < 3) {
+  bad('F', `'${arvoreDoc.form_id}' nao tem arvore de 3 niveis — o ramo passaria por ausencia`)
 } else {
   const voltou = flattenBlocks(buildBlocks(arvoreDoc)).nodes
-  const a = JSON.stringify(arvoreDoc.nodes[0].options)
-  const b = JSON.stringify((voltou[0] || {}).options)
+  const dep = porId(voltou).get(qArvore.id)
+  const a = JSON.stringify(qArvore.options)
+  const b = JSON.stringify((dep || {}).options)
   if (a !== b) {
-    bad('F', 'a arvore NAO sobreviveu a abrir-e-salvar: ' + b)
+    bad('F', `a arvore de '${qArvore.id}' NAO sobreviveu a abrir-e-salvar: ${String(b).slice(0, 160)}`)
   } else {
-    ok('F', 'arvore de 3 niveis e `active:false` preservados no round-trip')
+    ok('F', `arvore REAL de ${profundidadeDe(arvoreDoc.nodes)} niveis preservada ` +
+            `('${arvoreDoc.form_id}', pergunta '${qArvore.id}')`)
   }
 }
 console.log(JSON.stringify({ resultados: out }))
