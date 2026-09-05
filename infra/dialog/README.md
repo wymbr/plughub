@@ -41,9 +41,9 @@ versão nova).
 | Form | Consumidor |
 |---|---|
 | `dialog_nps_buttons` | `agente_nps_v1` (hook `on_contact_end` do `sac_ia`/`retencao_humano`), `skill_survey_outbound_v1` |
-| `dialog_wrapup_v1` | `skill_wrapup_detached_v1` via `retencao_humano.on_human_end.context.dialog_form_id` |
-| `dialog_wrapup_arc12_v1` | idem, variante com captura Arc 12 (FCR + serviços) — não referenciada pelo YAML por padrão |
-| `dialog_wrapup_arvore_v1` | idem, variante com **taxonomia em árvore** (motivo em 3 níveis · serviços em 2 · `ask_when` com `prefix`) — **ainda não referenciada por pool nenhum**: é o artefato REAL em que os gates da árvore se ancoram, e o pré-requisito da F6 do `adr-dialog-tree-options`. Ligá-la a um pool muda o wrap-up que o agente vê, e por isso é decisão de operação, não de seed |
+| `dialog_wrapup_v1` | **nenhum consumidor hoje** — foi o form do `retencao_humano.on_human_end` ate 2026-09-04. Esta linha dizia que ele ainda era o referenciado, e era falsa desde aquela data: quem lia o README lia o YAML de antes, nao a config viva |
+| `dialog_wrapup_arc12_v1` | idem, variante com captura Arc 12 (FCR + servicos). Referenciado de 2026-09-04 a 2026-09-05; hoje sem consumidor |
+| `dialog_wrapup_arvore_v1` | `skill_wrapup_detached_v1` via `retencao_humano.on_human_end.context.dialog_form_id` — variante com **taxonomia em arvore** (motivo em 3 niveis, servicos em 2, `ask_when` com `prefix`). **Ligado ao pool em 2026-09-05, a pedido do dono, para o teste da F6** do `adr-dialog-tree-options`: e o wrap-up que o atendente humano de retencao ve agora. E tambem o artefato REAL em que os gates da arvore se ancoram. **O estado que vale e o do agent-registry**, nunca o YAML (seed-if-absent) — conferir com `GET :3300/v1/pools/retencao_humano` (header `x-tenant-id`) |
 | `dialog_otp_possession` | `agente_portabilidade_intake_v1` (step-up de OTP via `dialog_runner`) |
 | `dialog_formfill_demo` | `skill_formfill_demo_v1` (demo genérico do `DialogFormRenderer`) |
 | `dialog_promocao_deploy` | `skill_gate_promocao_v1` (aprovação de promoção) |

@@ -1,5 +1,53 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (9) — a árvore entrou em produção num pool, e o README que dizia quem consome estava mentindo
+
+`retencao_humano.on_human_end.context.dialog_form_id` passou de `dialog_wrapup_arc12_v1` para
+**`dialog_wrapup_arvore_v1`**. É o pré-requisito da F6 do `adr-dialog-tree-options`, e foi
+decisão do dono (*"pode deixar no pool retencao_humano para teste"*) — ligar a forma muda o
+wrap-up que o atendente humano daquele pool vê, então nunca foi item de seed.
+
+**A mudança foi no agent-registry — a config VIVA —, nunca no YAML.** `PUT /v1/pools/retencao_humano`
+com o bloco `hooks` inteiro (o `UpdatePoolSchema` aceita o campo por completo, não por caminho),
+autenticado com `x-service-token`. O corolário do `CLAUDE.md` é literal aqui: o YAML é
+seed-if-absent, editar pool já semeado é no-op, e o DB vence. A conferência foi feita relendo a
+rota EXATA que o bridge consome — `GET /v1/pools/{pool_id}` com `x-tenant-id` —, e não a resposta
+do próprio `PUT`, que seria eco.
+
+**Sem restart.** `get_pool_config` (`orchestrator-bridge/main.py:694`) se declara **não cacheada**,
+justamente porque config de pool muda em runtime; o próximo `agent_done` de um humano de retenção
+já lê a forma nova.
+
+A semente (`infra/registry/tenant_demo.yaml`) foi atualizada junto, pelo mesmo motivo que o
+comentário de 2026-09-04 já registrava naquele bloco: **semente que discorda do que roda faz o
+próximo `--wipe` reverter o comportamento** sem que ninguém ligue uma coisa a outra.
+
+### O achado: o `infra/dialog/README.md` mentia, e já antes desta mudança
+
+A tabela *"quem consome cada form"* dizia que o pool referenciava `dialog_wrapup_v1`. A config
+viva apontava para `dialog_wrapup_arc12_v1` **desde 2026-09-04** — a linha foi escrita lendo o
+YAML de antes, e ficou um dia inteiro afirmando um consumidor que não existia mais. É o corolário
+do `CLAUDE.md` outra vez (*"para `hooks`, pergunte ao agent-registry, NUNCA ao YAML"*), desta vez
+cometido **num README que existe para orientar quem não sabe onde perguntar** — a mesma forma do
+docstring de `channel-gateway/auth.py`, que prometia ser o ponto compartilhado enquanto cinco
+serviços reimplementavam.
+
+As três linhas foram reescritas: `dialog_wrapup_v1` e `dialog_wrapup_arc12_v1` passam a dizer
+**"sem consumidor hoje"**, com as datas em que cada um foi o referenciado, e a linha do `arvore`
+diz **onde conferir o estado que vale** (`GET :3300/v1/pools/retencao_humano`). Um índice que
+nomeia a fonte errada é pior que índice nenhum: ele responde.
+
+### O que a F6 ainda espera
+
+O que não se fabrica — **um contato real** atravessando o pool, com árvore de 3+ níveis e
+multi-folha, para a contagem por prefixo ser conferida contra os `agent_business_events`
+emitidos. A fase segue 🟡, com o pré-requisito ✅.
+
+Arquivos: `infra/registry/tenant_demo.yaml` · `infra/dialog/README.md` ·
+`docs/adr/adr-dialog-tree-options.md` (as-built do pré-requisito da F6 + tabela de fases).
+
+---
+
 ## 2026-09-05 (8) — a árvore ganhou dado REAL, e os gates trocaram a fixture por ele
 
 `dialog_wrapup_arvore_v1` foi semeado e publicado (v1): wrap-up com vocabulário controlado

@@ -329,6 +329,38 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## As-built do pre-requisito da F6 (2026-09-05)
+
+A forma da arvore deixou de ser artefato so de gate: **`retencao_humano.on_human_end`**
+passou a apontar para `dialog_wrapup_arvore_v1`. Foi decisao do dono (*"pode deixar no pool
+retencao_humano para teste"*), e nao de seed — ligar muda o wrap-up que o atendente humano
+daquele pool ve.
+
+**A mudanca foi no agent-registry, nunca no YAML.** `PUT /v1/pools/retencao_humano` com o
+bloco `hooks` inteiro (o schema aceita o campo por completo, nao por caminho), autenticado
+pelo `x-service-token`. O YAML e seed-if-absent: editar pool ja semeado e no-op, e o DB vence.
+Verificado relendo a rota EXATA que o bridge consome — `GET /v1/pools/{pool_id}` com
+`x-tenant-id` —, nao a resposta do proprio PUT, que seria eco.
+
+**Nao precisa de restart.** `get_pool_config` (bridge, `main.py:694`) declara-se **nao
+cacheada** justamente porque config de pool muda em runtime; o proximo `agent_done` de um
+humano de retencao ja le a forma nova.
+
+**A semente acompanha, e isso e a regra da casa, nao zelo.** O `tenant_demo.yaml` foi
+atualizado junto pelo mesmo motivo que o comentario de 2026-09-04 ja registrava ali: semente
+que discorda do que roda faz o proximo `--wipe` reverter o comportamento sem que ninguem ligue
+uma coisa a outra.
+
+⚠️ **O `infra/dialog/README.md` estava mentindo, e ja antes desta mudanca.** A tabela
+*"quem consome cada form"* dizia que o pool referenciava `dialog_wrapup_v1`, quando a config
+viva apontava para `dialog_wrapup_arc12_v1` **desde 2026-09-04** — a linha foi escrita lendo o
+YAML de antes. E o corolario do `CLAUDE.md` outra vez (*"para hooks, pergunte ao
+agent-registry, NUNCA ao YAML"*), desta vez cometido num README que existe para orientar quem
+nao sabe onde perguntar. As tres linhas foram reescritas, e a do `arvore` agora diz **onde
+conferir o estado que vale**.
+
+Falta da F6 so o que nao se fabrica: **um contato real** atravessando o pool com arvore de 3+
+niveis e multi-folha, para a contagem por prefixo ser conferida contra os eventos emitidos.
 ## As-built da F5 (2026-09-05)
 
 A taxonomia passou a ser autorável sem JSON. É a MESMA tabela de opções que já existia, com um
@@ -561,7 +593,7 @@ falseada desligando a chamada).
 | **F3** 🟡 | **Renderer Miller + recusa alta** *(parcial, 2026-09-05)* | ✅ colunas no Console · ✅ subárvore no `render` + `options_tree` derivado · ✅ D7. ❌ recusa em canal pobre (D11) — mudou de casa (o `form_get` NÃO conhece o canal) e virou `DLG-15`. D5 vale POR CONSTRUÇÃO nesta superfície (navegar limpa as marcações); a conferência no submit é `DLG-16`. | F1, F2 |
 | **F4** ✅ | **Categoria de caminho** *(2026-09-05)* | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** ✅ | **Editor de árvore** *(2026-09-05)* | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
-| **F6** | **Validação** | Wrap-up real ponta a ponta com árvore de 3+ níveis e multi-folha; contagem por prefixo confere com os eventos emitidos. | todas |
+| **F6** 🟡 | **Validação** *(pré-requisito atendido, 2026-09-05)* | ✅ **A forma está ligada a um pool**: `retencao_humano.on_human_end.context.dialog_form_id` = `dialog_wrapup_arvore_v1`, mudado no **agent-registry** (a config viva, nunca o YAML) a pedido do dono, para teste. ❌ falta o **contato real** atravessando: wrap-up ponta a ponta com árvore de 3+ níveis e multi-folha, e a contagem por prefixo conferindo com os eventos emitidos. | todas |
 
 
 > **Emenda de 2026-09-05 (DLG-09).** A D12 acrescenta o op `prefix` a um avaliador que existe

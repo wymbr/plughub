@@ -405,11 +405,16 @@ pools:
           # retencao_humano-int) o bridge deriva sozinho da flag acima.
           context:
             # 2026-09-04: passou de `dialog_wrapup_v1` para a variante com captura
-            # Arc 12 (FCR pontuável + serviços executados). A semente acompanha a
-            # config VIVA de proposito — seed-if-absent so vale em base vazia, e
-            # uma semente que discorda do que roda faz o proximo `--wipe` reverter
-            # o comportamento sem que ninguem ligue uma coisa a outra.
-            dialog_form_id: dialog_wrapup_arc12_v1
+            # Arc 12 (FCR pontuável + serviços executados).
+            # 2026-09-05: passou para a variante em ÁRVORE (motivo em 3 níveis,
+            # serviços em 2, `ask_when` com `prefix`) — pré-requisito da F6 do
+            # `adr-dialog-tree-options`, ligada A PEDIDO DO DONO para teste com
+            # contato real. É o wrap-up que o atendente humano deste pool vê.
+            # A semente acompanha a config VIVA de proposito — seed-if-absent so
+            # vale em base vazia, e uma semente que discorda do que roda faz o
+            # proximo `--wipe` reverter o comportamento sem que ninguem ligue uma
+            # coisa a outra.
+            dialog_form_id: dialog_wrapup_arvore_v1
             # Prazo do ACW (I5). Mesmo argumento do form: quanto tempo o atendente
             # tem para classificar o próprio atendimento é fato DESTE pool —
             # Retenção e Cobrança podem divergir. Ausente ⇒ o engine usa 24 h e loga.
