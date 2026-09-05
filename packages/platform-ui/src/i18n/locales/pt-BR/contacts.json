@@ -1002,13 +1002,15 @@
       "col": {
         "node": "Nó",
         "own": "Próprio",
-        "ownHint": "Eventos gravados exatamente neste nó. Numa pasta, é sintoma.",
+        "ownHint": "Resposta que parou EXATAMENTE nesta pasta, em vez de descer até a folha. Numa folha a coluna fica vazia: ali o número seria o mesmo das marcações.",
         "marks": "Marcações no ramo",
         "marksHint": "Este nó mais tudo abaixo dele. Soma.",
         "contacts": "Contatos no ramo",
-        "contactsHint": "Atendimentos distintos que tocaram o ramo. NÃO soma — quem marca duas folhas conta uma vez."
+        "contactsHint": "Atendimentos distintos que tocaram o ramo. NÃO soma — quem marca duas folhas conta uma vez.",
+        "ownLeaf": "Numa folha, o próprio é sempre igual às marcações — a coluna só informa em pasta."
       },
-      "footnote": "Marcações somam; contatos não. Em pergunta de resposta única os dois coincidem; em múltipla escolha divergem, e a diferença é quem marcou mais de uma folha do mesmo ramo."
+      "footnote": "Marcações somam; contatos não. Em pergunta de resposta única os dois coincidem; em múltipla escolha divergem, e a diferença é quem marcou mais de uma folha do mesmo ramo.",
+      "mixedUnstamped": "Parte desta janela é anterior ao carimbo de formulário:"
     }
   }
 }

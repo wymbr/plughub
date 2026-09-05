@@ -171,7 +171,12 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-xs text-dark">
           <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" aria-hidden="true" />
           <div>
-            <b>{t('lens.taxonomy.mixed')}</b>{' '}
+            {/* Duas causas distintas para o mesmo aviso, e o titulo tem de dizer
+                QUAL: com uma forma so + eventos sem carimbo, escrever "mais de um
+                formulario" e a tela afirmando o que a propria linha desmente. */}
+            <b>{(meta.vocabularies ?? []).length > 1
+              ? t('lens.taxonomy.mixed')
+              : t('lens.taxonomy.mixedUnstamped')}</b>{' '}
             {(meta.vocabularies ?? []).map(v => `${v.form_id}${v.version ? ` v${v.version}` : ''} (${v.events})`).join(' · ')}
             {(meta.unstamped_events ?? 0) > 0 &&
               ` · ${t('lens.taxonomy.unstamped', { n: meta.unstamped_events })}`}
@@ -259,9 +264,17 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
                         {anomalia && <AlertTriangle size={12} className="text-warning" aria-hidden="true" />}
                       </span>
                     </td>
+                    {/* `own` so tem informacao em PASTA: numa folha ele e IGUAL a
+                        `branch_marks` por definicao (`derived_leaf` e justamente
+                        `count() = countIf(category = prefix)`), entao pinta-lo de
+                        alerta ali dilui o unico sinal que a coluna existe para dar —
+                        medido na tela: tres numeros em laranja, um so era problema. */}
                     <td className="px-4 py-2 text-right tabular-nums text-xs">
-                      {n.own > 0 ? <span className="text-warning font-semibold">{n.own}</span>
-                                 : <span className="text-muted">—</span>}
+                      {folha
+                        ? <span className="text-muted" title={t('lens.taxonomy.col.ownLeaf')}>—</span>
+                        : n.own > 0
+                          ? <span className="text-warning font-semibold">{n.own}</span>
+                          : <span className="text-muted">—</span>}
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums font-medium">{n.branch_marks}</td>
                     <td className={`px-4 py-2 text-right tabular-nums ${diverge ? 'text-warning font-semibold' : ''}`}>

@@ -1002,13 +1002,15 @@
       "col": {
         "node": "Node",
         "own": "Own",
-        "ownHint": "Events recorded exactly on this node. On a folder, that is a symptom.",
+        "ownHint": "Answers that stopped EXACTLY on this folder instead of reaching a leaf. On a leaf the column is blank: there the number would just repeat the marks.",
         "marks": "Marks in branch",
         "marksHint": "This node plus everything below it. Adds up.",
         "contacts": "Contacts in branch",
-        "contactsHint": "Distinct contacts that touched the branch. Does NOT add up — marking two leaves counts once."
+        "contactsHint": "Distinct contacts that touched the branch. Does NOT add up — marking two leaves counts once.",
+        "ownLeaf": "On a leaf, own always equals marks — the column only informs on folders."
       },
-      "footnote": "Marks add up; contacts do not. In single-answer questions the two coincide; in multi-select they diverge, and the gap is whoever marked more than one leaf of the same branch."
+      "footnote": "Marks add up; contacts do not. In single-answer questions the two coincide; in multi-select they diverge, and the gap is whoever marked more than one leaf of the same branch.",
+      "mixedUnstamped": "Part of this window predates the form stamp:"
     }
   }
 }

@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (20) — dois defeitos da lente `taxonomy`, achados ao olhar a tela com dado real
+
+A lente subiu e funcionou; o que ela mostrou foram dois erros meus, ambos de **sinalização** — o
+número certo dizendo a coisa errada.
+
+### 1. `own` em laranja numa FOLHA é alarme falso
+
+Numa folha, `own` é **sempre** igual a `branch_marks`: `derived_leaf` é literalmente
+`count() = countIf(category = prefix)`. Então a coluna só carrega informação em pasta — e pintá-la de
+alerta na folha dilui o único sinal que ela existe para dar. Medido na tela: **três números em laranja,
+e só um era problema** (`tecnico`, a resposta que parou no galho; `nao_identificado` e `lentidao` eram
+folhas se comportando normalmente).
+
+Agora a folha mostra `—`, com o motivo no tooltip. A coluna passa a significar exatamente uma coisa:
+*resposta que parou aqui, onde não devia*.
+
+### 2. O aviso dizia "mais de um formulário" e listava UM
+
+O gatilho estava certo — os 2 eventos sem carimbo são mesmo de outro vocabulário (a forma plana do
+`arc12`) — mas o título afirmava o que a própria linha desmentia. São **duas causas** para o mesmo
+aviso, e ele tem de dizer qual: mais de uma forma na janela, ou parte da janela anterior ao carimbo.
+Título agora escolhido pela causa (`mixedUnstamped`).
+
+É a mesma família dos achados deste arco: a tela que afirma um pouco além do que mediu. Só que desta
+vez foi a minha.
+
+Verificado: `tsc --noEmit` verde · `probe_i18n_duplicate_keys` · `probe_i18n_contacts_parity`
+(772 × 772).
+
+Arquivos: `packages/platform-ui/src/modules/analise/TaxonomyTreeLens.tsx` ·
+`i18n/locales/{en,pt-BR}/contacts.json`.
+
+---
+
 ## 2026-09-05 (19) — a lente `taxonomy`: a árvore chegou à tela
 
 Quarta forma da superfície A, consumindo o `/reports/agent-events/tree`. Forma **própria**
