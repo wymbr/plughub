@@ -984,6 +984,31 @@
       "contacts": "Contatos",
       "noPool": "sem segmento",
       "noPoolNote": "{{count}} linha(s) sem pool: o segment_id do evento não casou com segmento algum — chave não propagada."
+    },
+    "taxonomy": {
+      "title": "Taxonomia do wrap-up",
+      "root": "Taxonomia",
+      "noRoots": "Nenhuma taxonomia no período",
+      "noRootsHint": "Só aparecem raízes com pelo menos um evento de negócio gravado na janela.",
+      "leaf": "folha",
+      "folder": "pasta",
+      "expand": "Abrir ramo",
+      "collapse": "Fechar ramo",
+      "mixed": "Mais de um formulário nesta janela:",
+      "mixedHint": "A árvore mistura vocabulários diferentes — os totais somam categorias que não descrevem a mesma coisa. Estreite o período até um formulário só.",
+      "unstamped": "{{n}} evento(s) anteriores ao carimbo de formulário",
+      "orphan": "{{n}} resposta(s) pararam numa pasta:",
+      "orphanHint": "Pasta não é selecionável, então isto não é escolha de ninguém: só uma superfície que não desenha a árvore produz esta linha.",
+      "col": {
+        "node": "Nó",
+        "own": "Próprio",
+        "ownHint": "Eventos gravados exatamente neste nó. Numa pasta, é sintoma.",
+        "marks": "Marcações no ramo",
+        "marksHint": "Este nó mais tudo abaixo dele. Soma.",
+        "contacts": "Contatos no ramo",
+        "contactsHint": "Atendimentos distintos que tocaram o ramo. NÃO soma — quem marca duas folhas conta uma vez."
+      },
+      "footnote": "Marcações somam; contatos não. Em pergunta de resposta única os dois coincidem; em múltipla escolha divergem, e a diferença é quem marcou mais de uma folha do mesmo ramo."
     }
   }
 }

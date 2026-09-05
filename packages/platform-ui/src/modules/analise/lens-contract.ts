@@ -190,6 +190,14 @@ export type LensChart =
    * desenhar é do componente — é o que `evidence: 'delegated'` já significa.
    */
   | 'pool_panel'
+  /**
+   * Árvore de taxonomia com a contagem subindo da folha para as pastas.
+   *
+   * Forma PRÓPRIA, e não `disposition_summary` reaproveitada: aquela responde
+   * *como as pendências terminaram*; esta responde *o que foi respondido*, e a
+   * hierarquia é a forma do dado, não decoração.
+   */
+  | 'taxonomy_tree'
   /** Tabela de consumo por CONTA LLM × modelo × origem (F3 · a metade B do token). */
   | 'account_tokens'
 
@@ -399,6 +407,24 @@ export const REPORT_LENSES = [
     chart: 'disposition_summary',
     surface: 'contacts',
   },
+  {
+    // Taxonomia do wrap-up (D10 do `adr-dialog-tree-options`).
+    //
+    // **`period_only` e o pool NÃO está faltando**: no Arc 12 o pool é o PRIMEIRO
+    // segmento da categoria, então escolher a raiz já escolhe o pool. Aplicar
+    // também o filtro da barra seria filtrar duas vezes pela mesma coisa, com
+    // chance de discordarem. O resto da barra (canal, etc.) a lente não honra —
+    // declarar `all` aqui seria a declaração mentindo.
+    //
+    // **`same_form` é load-bearing**: repontar o hook de um pool troca o
+    // vocabulário SOB a mesma série (medido 2026-09-05). O componente lê
+    // `meta.single_vocabulary` e AVISA em vez de somar taxonomias diferentes.
+    id: 'taxonomy', entity: 'contact', domain: 'human',
+    metrics: [], evidence: 'delegated', comparability: 'same_form',
+    source: 'own', honors: 'period_only',
+    chart: 'taxonomy_tree',
+    surface: 'contacts',
+  },
   // ── Superfície B · Recursos (F3) ────────────────────────────────────────────
   //
   // As quatro sub-abas de `/analise/pools` viram lentes: o endereço morre, o
@@ -597,7 +623,7 @@ export function lensById(id: string): ReportLens | undefined {
  * nomeia como a mais cara, porque não fica vermelha.
  *
  * Onde o tipo já prova que o ramo é inalcançável (o `SessionsPage`, cujo `lensDef` vem
- * de `CONTACT_LENSES` e por isso tem `chart` estreitado a três valores), o `throw`
+ * de `CONTACT_LENSES` e por isso tem `chart` estreitado às formas da superfície A), o `throw`
  * nunca roda — e é justamente esse o ponto: acrescentar uma lente de contato com forma
  * nova deixa de compilar ali, em vez de cair num ramo genérico.
  */

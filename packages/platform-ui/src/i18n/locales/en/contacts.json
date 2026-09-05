@@ -984,6 +984,31 @@
       "contacts": "Contacts",
       "noPool": "no segment",
       "noPoolNote": "{{count}} row(s) without a pool: the event segment_id matched no segment — key not propagated."
+    },
+    "taxonomy": {
+      "title": "Wrap-up taxonomy",
+      "root": "Taxonomy",
+      "noRoots": "No taxonomy in this period",
+      "noRootsHint": "Only roots with at least one business event recorded in the window appear here.",
+      "leaf": "leaf",
+      "folder": "folder",
+      "expand": "Expand branch",
+      "collapse": "Collapse branch",
+      "mixed": "More than one form in this window:",
+      "mixedHint": "The tree mixes different vocabularies — totals add up categories that do not describe the same thing. Narrow the period to a single form.",
+      "unstamped": "{{n}} event(s) predating the form stamp",
+      "orphan": "{{n}} answer(s) stopped at a folder:",
+      "orphanHint": "A folder cannot be selected, so this is nobody's choice: only a surface that cannot draw the tree produces such a row.",
+      "col": {
+        "node": "Node",
+        "own": "Own",
+        "ownHint": "Events recorded exactly on this node. On a folder, that is a symptom.",
+        "marks": "Marks in branch",
+        "marksHint": "This node plus everything below it. Adds up.",
+        "contacts": "Contacts in branch",
+        "contactsHint": "Distinct contacts that touched the branch. Does NOT add up — marking two leaves counts once."
+      },
+      "footnote": "Marks add up; contacts do not. In single-answer questions the two coincide; in multi-select they diverge, and the gap is whoever marked more than one leaf of the same branch."
     }
   }
 }

@@ -1,5 +1,59 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (19) — a lente `taxonomy`: a árvore chegou à tela
+
+Quarta forma da superfície A, consumindo o `/reports/agent-events/tree`. Forma **própria**
+(`taxonomy_tree`), não `disposition_summary` reaproveitada: aquela responde *como as pendências
+terminaram*, esta responde *o que foi respondido*.
+
+**Três colunas — próprio / marcações no ramo / contatos no ramo** — e o rodapé diz por quê: marcações
+somam, contatos não. Em resposta única coincidem; em múltipla escolha divergem, e a diferença é quem
+marcou mais de uma folha do mesmo ramo.
+
+### O que a tela NÃO tem, e é decisão
+
+**Sem coluna de participação.** Ela dividiria por marcações, e em `checklist` a soma passa do número de
+atendimentos — um percentual que fecha 100% sobre a base errada é pior que percentual nenhum. Quem quer
+proporção tem os dois números.
+
+**Sem soma de rodapé.** Somar a coluna de contatos dá mais que o universo (um atendimento que marca
+serviço em duas pastas conta nas duas). É correto e seria lido como erro; o total honesto está na raiz
+da árvore, que o endpoint já devolve.
+
+**Raízes derivadas do dado**, nunca listadas à mão: o seletor lê `/agent-events/categories` e agrupa
+por `l1.l2.l3`. Lista fixa envelheceria a cada pergunta nova no editor de formulário — o acoplamento
+que a fatia 3 do wrap-up removeu.
+
+### Duas declarações do contrato fizeram trabalho real
+
+**`honors: 'period_only'`, e o filtro de pool não está faltando.** No Arc 12 o pool é o **primeiro
+segmento** da categoria, então escolher a raiz já escolhe o pool; aplicar também o filtro da barra seria
+filtrar duas vezes pela mesma coisa, com chance de discordarem. O resto da barra a lente não honra —
+declarar `all` seria a declaração mentindo, e é essa linha que faz a tela ganhar o selo de *só período*.
+
+**`comparability: 'same_form'` deixou de ser vocabulário e virou comportamento.** O componente lê
+`meta.single_vocabulary` e **avisa** quando a janela mistura formulários, em vez de somar taxonomias
+diferentes. Até aqui o campo só existia para a guarda cross-form da lente `quality`; agora tem um
+segundo consumidor, com semântica própria — recusar **soma**, não recusar comparação entre entidades.
+
+### O `assertNever` cobrou, e da outra superfície
+
+Acrescentar a forma quebrou o build do `AgentsBenchPage`, que exaure `LensChart`: a mesa teve de
+**declarar** que não desenha esta forma. É o mecanismo funcionando — forma nova para o build em vez de
+cair calada num render genérico, com a geometria da última lente da lista.
+
+Corrigido de passagem um comentário que dizia que o `chart` do `SessionsPage` estava *"estreitado a três
+valores"*: agora são quatro. Comentário que afirma número é da família que envelhece sozinha.
+
+Verificado: `tsc --noEmit` verde · `probe_i18n_duplicate_keys` (54 arquivos) ·
+`probe_i18n_contacts_parity` (770 × 770). A tela só muda no próximo build do `platform-ui`.
+
+Arquivos: `packages/platform-ui/src/modules/analise/TaxonomyTreeLens.tsx` (novo) ·
+`.../lens-contract.ts` · `.../AgentsBenchPage.tsx` · `.../contacts/SessionsPage.tsx` ·
+`i18n/locales/{en,pt-BR}/contacts.json` · `docs/adr/adr-relatorios-duas-superficies-e-lentes.md`.
+
+---
+
 ## 2026-09-05 (18) — `/reports/agent-events/tree`: a contagem sobe da folha para as pastas
 
 O endpoint que a D10 descrevia e ninguém tinha escrito. Sob uma raiz, devolve a árvore com **três**

@@ -1012,13 +1012,14 @@ function LensChart({
         return resp.meta.mode === 'epoch'
           ? <DeployEpochChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
           : <DeployChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
-      // Formas que a MESA não desenha: as duas da superfície A (`contact_list`,
+      // Formas que a MESA não desenha: as da superfície A (`contact_list`, `taxonomy_tree`,
       // `disposition_summary`, despachadas pelo `SessionsPage`) e o painel de pool
       // (`pool_panel`, do modo EVOLUIR da superfície B — a mesa é o modo comparar).
       // Nenhuma é alcançável, porque a faixa só oferece `COMPARE_LENSES`; o ramo
       // existe para o `assertNever` poder ser exaustivo, e é ele que faz uma forma
       // NOVA parar o build em vez de cair calada num render genérico.
       case 'contact_list':
+      case 'taxonomy_tree':
       case 'disposition_summary':
       case 'pool_panel':
       case 'account_tokens':

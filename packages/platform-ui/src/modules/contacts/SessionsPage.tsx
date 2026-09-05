@@ -41,6 +41,7 @@ import { DEFAULT_FILTERS } from './types'
 import { ListaTab }        from './tabs/ListaTab'
 import ContactLensChart    from './ContactLensChart'
 import WrapupSummaryPage   from '@/modules/analise/WrapupSummaryPage'
+import TaxonomyTreeLens   from '@/modules/analise/TaxonomyTreeLens'
 import { CONTACT_LENSES, assertNever, isContactLens } from '@/modules/analise/lens-contract'
 import type { ContactLensId } from '@/modules/analise/lens-contract'
 // Mesmo componente que a coluna "Processo" da lista usa — ver o comentário do
@@ -647,6 +648,11 @@ export default function SessionsPage() {
           // re-hospedado. Recebe o intervalo da barra — sem isso a tela teria DUAS
           // janelas de tempo, e a de dentro venceria em silêncio.
           <WrapupSummaryPage fromDt={filters.fromDt} toDt={filters.toDt} />
+        ) : shape === 'taxonomy_tree' ? (
+          // Recebe o intervalo da barra pelo mesmo motivo do painel de
+          // disposição: duas janelas de tempo na mesma tela seriam dois recortes
+          // concorrentes, e a de dentro venceria em silêncio.
+          <TaxonomyTreeLens fromDt={filters.fromDt} toDt={filters.toDt} />
         ) : shape === 'metric_lines' ? (
           // Toda lente de série é o MESMO componente, dirigido pela declaração —
           // nunca um branch por lente. Ver `ContactLensChart`.
