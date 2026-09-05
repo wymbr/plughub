@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (15) — D13: troca de forma vira época, derivada dos eventos
+
+Decisão do dono sobre a pergunta que ficou aberta ontem à tarde (*histórico continua na mesma lente,
+ou a troca é corte de série?*): **um bloco por forma, recortando o período**. Manipulação e exibição
+idênticas, muda só a janela; o dado fica inteiro e a troca fica legível.
+
+O argumento decisivo a favor é que **não é conceito novo**: a lente `deploy` já tem `mode=epoch`
+lendo por `(pool, deploy_version)`. É o mesmo idioma com outro discriminador, e por isso custa zero
+conceito de exibição — que é exatamente o que a D5 do ADR de relatórios cobra.
+
+Três regras que a medição fixou:
+
+**(a) A época sai dos EVENTOS, nunca da configuração** — e não por preferência: a configuração **não
+sabe**. Medido: o registry tem `skill_deployments` (append-log dos promotes) e **nada equivalente para
+hooks**; a tabela `pools` é atualizada no lugar, então o `dialog_form_id` anterior deixou de existir no
+instante do `PUT` de ontem. Só o `updated_at` lembra que algo mudou. E derivar do evento é *melhor*,
+não um consolo: troca de forma sem tráfego não produz época — e não deve, porque época é período em
+que se **mediu** algo. Config sem evento é intenção, não medição.
+
+**(b) O bloco é por RUN contíguo, não por forma.** Rollback do hook faz a mesma forma valer em dois
+períodos separados; *"um bloco por forma"* funde os dois e apaga a fase do meio. Mesma distinção do
+`queue_wait_segment_id`: o fenômeno é a passagem, não o contêiner.
+
+**(c) A fronteira é uma FAIXA, e a largura é medível.** O ACW do pool é `acw_timeout_hours: 24`, então
+um wrap-up reivindicado antes da troca e submetido depois carrega a forma nova — duas épocas podem se
+sobrepor por até um dia inteiro. Derivar dos eventos exibe isso como sobreposição real; um corte por
+timestamp de config fingiria um instante que não existe.
+
+⚠️ **Resíduo declarado:** `form_id` não pega edição in-place — pela D6 o id é imutável e acrescentar
+uma folha não o muda. Acrescentar é compatível e não deveria partir a série; reestruturar é. Em vez de
+inventar um critério que envelhece (*"é adição pura?"*), parte-se por `form_id` e **marcam-se as
+versões dentro do bloco**, como os marcadores de deploy já fazem. Se a marcação mostrar que
+reestruturação silenciosa é comum, a regra se revisa com dado.
+
+**Pré-requisito único:** o evento carregar `dialog_form_id` + versão (`DLG-24`). Sem o carimbo não há
+como recortar, e a alternativa — inferir a forma pela silhueta da árvore — é heurística que quebra
+quando duas formas compartilham prefixo.
+
+Arquivos: `docs/adr/adr-dialog-tree-options.md` (D13) · `pending.md` (DLG-25, bloqueada por DLG-24).
+
+---
+
 ## 2026-09-05 (14) — a série de taxonomia já está misturada, e não é por causa do filtro
 
 Registro de três achados de desenho, todos vindos de perguntas do dono sobre a maquete do relatório

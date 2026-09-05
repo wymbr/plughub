@@ -329,6 +329,58 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## D13 — troca de forma vira EPOCA, derivada dos eventos (decidida 2026-09-05)
+
+Fecha a pergunta que a secao abaixo deixou aberta (*historico continua visivel na mesma lente, ou a
+troca e corte de serie?*). **Decisao do dono: um bloco por forma, mesmo periodo recortado** — a
+manipulacao e a exibicao ficam identicas, muda so a janela; o dado fica inteiro e a troca fica
+legivel.
+
+**Nao e conceito novo.** A lente `deploy` ja tem `mode=epoch`, lendo por `(pool, deploy_version)`,
+com overlay de cobertura. Isto e o mesmo idioma com outro discriminador — o que e o argumento
+principal a favor: custa **zero** conceito de exibicao, e a D5 do ADR de relatorios existe para
+cobrar exatamente isso.
+
+### A epoca se deriva dos EVENTOS, nunca da configuracao
+
+Nao e preferencia — **a configuracao nao sabe**. Medido: o registry tem `skill_deployments`
+(append-log dos promotes) e **nada equivalente para hooks**; a tabela `pools` e atualizada no lugar,
+entao o `dialog_form_id` anterior deixou de existir no instante do `PUT`. So o `updated_at` lembra
+que *algo* mudou.
+
+E derivar do evento e **melhor**, nao um consolo: troca de forma sem trafego nenhum nao produz
+epoca — e nao deve mesmo, porque epoca e periodo em que se MEDIU algo. Config sem evento e intencao,
+nao medicao.
+
+### O bloco e por RUN CONTIGUO, nao por forma
+
+Rollback do hook faz a mesma forma valer em dois periodos separados. *"Um bloco por forma"* funde os
+dois e apaga a fase do meio; *"um bloco por run"* mostra as tres fases como foram. Mesma distincao do
+`queue_wait_segment_id`: o fenomeno e a PASSAGEM, nao o conteiner — e o discriminador tem de
+descreve-la.
+
+### A fronteira e uma FAIXA, e a largura e medivel
+
+O ACW deste pool e `acw_timeout_hours: 24`. Um wrap-up reivindicado antes da troca e submetido depois
+carrega a forma NOVA — logo duas epocas podem se sobrepor por ate **um dia inteiro**. Derivar dos
+eventos exibe isso como sobreposicao real; qualquer corte por timestamp de config fingiria um instante
+que nao existe. **A sobreposicao e dado, nao ruido**, e some sozinha quando a janela se afasta da
+troca.
+
+### Residuo declarado: `form_id` nao pega edicao in-place
+
+Pela D6 o `id` da forma e imutavel e a serie e append-only — acrescentar uma folha **nao** muda o
+`form_id`. Acrescentar e compativel (caminho antigo segue valido) e nao deveria partir a serie;
+reestruturar nao e. Em vez de inventar um criterio que envelhece (*"e adicao pura?"*), a escolha e:
+**partir por `form_id`, marcar as VERSOES dentro do bloco**, como os marcadores de deploy ja fazem.
+Se a marcacao mostrar que reestruturacoes silenciosas sao comuns, a regra se revisa com dado.
+
+### Pre-requisito unico
+
+Tudo acima depende de **uma** coisa: o evento carregar `dialog_form_id` + versao (`DLG-24`). Sem o
+carimbo nao ha como recortar, e a alternativa — inferir a forma pela SILHUETA da arvore — e heuristica
+que quebra quando duas formas compartilham prefixo.
+
 ## O evento nao carrega a FORMA, e a serie ja esta misturada (2026-09-05)
 
 Achado ao desenhar o relatorio de taxonomia, a partir de uma duvida do dono: *"o formulario
