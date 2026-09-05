@@ -26,6 +26,17 @@ Sem evidência a tela diz **que não sabe**, e diz por quê: a forma daqueles ev
 podem falar um vocabulário ou vários, e esta superfície não adivinha. Novas chaves
 `lens.taxonomy.unknownVocab`/`unknownVocabHint` nos dois locales.
 
+### A mesma afirmação estava numa segunda casa
+
+Com o aviso corrigido, a tela do `motivo` passou a dizer *"vocabulário desconhecido"* — e a nota de
+rodapé, duas linhas abaixo, seguia dizendo *"cada bloco é um trecho com UM vocabulário"*, sem condição.
+Duas frases contrárias na mesma tela outra vez, agora entre um aviso medido e um rodapé fixo.
+
+O que é verdade por construção é sobre a **FORMA**, não sobre o vocabulário: a sessionização recorta por
+transição de `dialog_form_id`, então cada bloco é um run contíguo de **uma forma**. Que essa forma
+corresponda a **um vocabulário** só vale onde a forma foi gravada — e o trecho anterior ao carimbo é a
+exceção, agora NOMEADA no próprio rodapé em vez de contradita por ele.
+
 Verificação: `tsc --noEmit` limpo; i18n **779 × 779**, sem duplicadas; veredicto conferido contra o dado
 vivo das duas raízes.
 

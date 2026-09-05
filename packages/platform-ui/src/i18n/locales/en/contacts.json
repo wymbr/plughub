@@ -1014,7 +1014,7 @@
         "unstamped": "Before the form stamp",
         "count": "{{n}} vocabulary epochs",
         "counts": "{{events}} mark(s) · {{contacts}} contact(s)",
-        "hint": "The pool's form changed within this period. Each block is a stretch with ONE vocabulary — adding across blocks would count categories that do not describe the same thing."
+        "hint": "The pool's form changed within this period. Each block is a contiguous stretch of a SINGLE form — adding across blocks would count categories that do not describe the same thing. The stretch before the stamp is the exception: its form was never recorded, so what it speaks is unknown, and the block itself says so."
       },
       "mixedInEpoch": "This stretch still mixes vocabularies",
       "mixedInEpochHint": "These are events predating the form stamp: the form describing them was never recorded, so no slicing separates them. It applies to the past; from the stamp onwards each stretch speaks a single vocabulary.",

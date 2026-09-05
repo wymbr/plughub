@@ -1014,7 +1014,7 @@
         "unstamped": "Antes do carimbo de formulário",
         "count": "{{n}} épocas de vocabulário",
         "counts": "{{events}} marcação(ões) · {{contacts}} atendimento(s)",
-        "hint": "O formulário do pool mudou dentro deste período. Cada bloco é um trecho com UM vocabulário — somar através dos blocos contaria categorias que não descrevem a mesma coisa."
+        "hint": "O formulário do pool mudou dentro deste período. Cada bloco é um trecho contínuo de UMA forma — somar entre blocos contaria categorias que não descrevem a mesma coisa. O trecho anterior ao carimbo é a exceção: a forma dele nunca foi gravada, então o que ele fala é desconhecido, e o próprio bloco diz isso."
       },
       "mixedInEpoch": "Este trecho ainda mistura vocabulários",
       "mixedInEpochHint": "São eventos anteriores ao carimbo de formulário: a forma que os descreve nunca foi gravada, então nenhum recorte os separa. Vale para o passado; do carimbo em diante cada trecho fala um vocabulário só.",
