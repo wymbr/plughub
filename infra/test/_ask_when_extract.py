@@ -37,7 +37,7 @@ ALVOS = [
     (
         "canonico",
         "packages/schemas/src/dialog.ts",
-        ["evaluateAskWhen", "_num", "_eq"],
+        ["evaluateAskWhen", "_num", "_eq", "_sobPrefixo"],
         "evaluateAskWhen",
         "canon.ts",
         "direta",
@@ -45,7 +45,7 @@ ALVOS = [
     (
         "console",
         "packages/platform-ui/src/modules/agent-assist/components/DialogFormRenderer.tsx",
-        ["evalAskWhen", "awNum", "awEq"],
+        ["evalAskWhen", "awNum", "awEq", "awSobPrefixo"],
         "evalAskWhen",
         "console.ts",
         "direta",
@@ -53,7 +53,7 @@ ALVOS = [
     (
         "web",
         "packages/channel-gateway/src/plughub_channel_gateway/survey_web.py",
-        ["awEval", "awNum", "awEq"],
+        ["awEval", "awNum", "awEq", "awSobPrefixo"],
         "awEval",
         "web.js",
         "closure",

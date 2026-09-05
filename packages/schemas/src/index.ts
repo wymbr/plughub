@@ -808,6 +808,8 @@ export {
   resolveLocalizedText,
   evaluateAskWhen,
   askWhenForwardRefErrors,
+  optionTreeIssues,
+  DIALOG_OPTION_MAX_DEPTH,
 } from "./dialog"
 
 export type {
@@ -828,6 +830,7 @@ export type {
   DialogNode,
   DialogFormStatus,
   DialogForm,
+  OptionTreeIssue,
 } from "./dialog"
 
 // ── DialogForm — normalização `render` + veredicto estrutural (dry-run) ───────

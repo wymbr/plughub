@@ -92,18 +92,26 @@ function awEq(a: unknown, b: unknown): boolean {
   if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb
   return String(a) === String(b)
 }
+/** `caminho` é o próprio prefixo ou desce dele por um separador de segmento. */
+function awSobPrefixo(caminho: string, prefixo: string): boolean {
+  return caminho === prefixo || caminho.startsWith(prefixo + ".")
+}
 function evalAskWhen(g: AskWhen | undefined, answers: Record<string, AnswerValue>): boolean {
   if (!g) return true
   const a = answers[g.field]
   if (a === undefined || a === null || a === "") return false
+  if (Array.isArray(a) && a.length === 0) return false
+  const multi = Array.isArray(a)
+  const vals: unknown[] = multi ? (a as unknown[]) : [a]
   switch (g.op) {
-    case "lt":  return awNum(a) <  awNum(g.value)
-    case "lte": return awNum(a) <= awNum(g.value)
-    case "gt":  return awNum(a) >  awNum(g.value)
-    case "gte": return awNum(a) >= awNum(g.value)
-    case "eq":  return awEq(a, g.value)
-    case "ne":  return !awEq(a, g.value)
-    case "in":  return Array.isArray(g.value) && g.value.some(v => awEq(a, v))
+    case "lt":  return multi ? false : awNum(a) <  awNum(g.value)
+    case "lte": return multi ? false : awNum(a) <= awNum(g.value)
+    case "gt":  return multi ? false : awNum(a) >  awNum(g.value)
+    case "gte": return multi ? false : awNum(a) >= awNum(g.value)
+    case "eq":  return vals.some(v => awEq(v, g.value))
+    case "ne":  return !vals.some(v => awEq(v, g.value))
+    case "in":  return Array.isArray(g.value) && vals.some(v => (g.value as unknown[]).some(x => awEq(v, x)))
+    case "prefix": return vals.some(v => awSobPrefixo(String(v), String(g.value)))
     default:    return false
   }
 }

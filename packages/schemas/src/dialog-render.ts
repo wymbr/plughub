@@ -32,6 +32,7 @@ import type {
 import {
   DialogFormSchema,
   askWhenForwardRefErrors,
+  optionTreeIssues,
   resolveLocalizedText,
 } from "./dialog"
 
@@ -285,7 +286,10 @@ export interface DialogFormIssue {
   /** Endereço no documento, no formato do zod: `nodes.1.fields.0.type`. */
   path:    string
   message: string
-  code:    "schema" | "duplicate_node_id" | "ask_when_forward_ref"
+  code:
+    | "schema" | "duplicate_node_id" | "ask_when_forward_ref"
+    | "option_duplicate_sibling_id" | "option_nesting_not_allowed"
+    | "option_depth" | "option_empty_folder"
 }
 
 export interface DialogFormVerdict {
@@ -328,6 +332,28 @@ export function validateDialogForm(doc: unknown, locale?: string): DialogFormVer
       code:    "duplicate_node_id",
     })
   }
+
+  // Árvore de opções (F1 do `adr-dialog-tree-options`). O aninhamento é
+  // permitido pela INTERAÇÃO da pergunta, e recusado no campo: `DialogField` não
+  // tem interação, logo não há superfície que saiba desenhar sua subárvore.
+  form.nodes.forEach((node, i) => {
+    if (node.kind !== "question") return
+    const permite = node.interaction === "list" || node.interaction === "checklist"
+    for (const issue of optionTreeIssues(node.options, {
+      allowNesting: permite,
+      base: `nodes.${i}.options`,
+    })) {
+      errors.push({ path: issue.path, message: issue.message, code: issue.code })
+    }
+    ;(node.fields ?? []).forEach((f, j) => {
+      for (const issue of optionTreeIssues(f.options, {
+        allowNesting: false,
+        base: `nodes.${i}.fields.${j}.options`,
+      })) {
+        errors.push({ path: issue.path, message: issue.message, code: issue.code })
+      }
+    })
+  })
 
   for (const { node_id, field } of askWhenForwardRefErrors(form)) {
     errors.push({

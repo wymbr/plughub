@@ -1,5 +1,59 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (3) — F1 do `adr-dialog-tree-options`: a recursão entra em `DialogOption`
+
+`DialogOption` ganhou `options[]` (recursivo) e `active`, `evaluateAskWhen` ganhou o op `prefix`
+com normalização escalar→lista, e as regras da árvore (profundidade 5, `id` único entre irmãos,
+aninhamento só sob `list`/`checklist`) passaram a ser julgadas pelo validador canônico.
+
+`nodes` continua **plano**. Taxonomia é domínio de VALOR, não control-flow: `Financeiro > Cobrança
+> indevida` é *uma* resposta cujo valor é hierárquico, e não decide o que vem depois. As seis
+superfícies que percorrem `nodes` mantêm o laço linear.
+
+### As regras não moram num `superRefine`, e isso é medição, não gosto
+
+`superRefine` devolve `ZodEffects` — que **não entra em `discriminatedUnion`** (o `DialogNodeSchema`)
+e **não aceita `.omit()`** (o `DialogFormDraftSchema`, que o dry-run do editor usa). Pô-las no schema
+quebraria as duas construções. Ficaram numa função pura, `optionTreeIssues`, chamada por
+`validateDialogForm` — a mesma casa de `duplicateNodeIds`, e a mesma que o `form_get` roda. **O
+schema carrega a FORMA; o veredicto carrega as REGRAS.**
+
+`allowNesting` é parâmetro do chamador porque a permissão é da PERGUNTA, não da opção: só
+`list`/`checklist` desenham árvore. Em `DialogField` o aninhamento é recusado sempre — campo não tem
+interação, logo não há superfície que saiba desenhar sua subárvore.
+
+### Duas decisões que a D12 não fixava
+
+- **`prefix` casa por SEGMENTO, nunca por substring.** `startsWith` cru faria a guarda de
+  `financeiro` casar `financeiro_avulso`, que não é filho do ramo — a pergunta errada apareceria sem
+  nada ficar vermelho.
+- **`ne` é a NEGAÇÃO de `eq`, nunca "algum difere".** Com multi-resposta, "algum difere" faria uma
+  marcação com X e Y satisfazer `eq X` **e** `ne X` ao mesmo tempo, e *"pergunte a menos que tenham
+  escolhido X"* mentiria. `ne === !eq` vale para qualquer resposta, escalar ou lista.
+
+Duas ausências também são decisão: **lista vazia é "não respondeu"** (mesma guarda de `""`), e
+**`options: []` é RECUSADO** — pasta sem filho lê-se de dois jeitos.
+
+### O gate de ontem cobrou hoje
+
+Acrescentar `prefix` só à canônica deixou `probe_ask_when_parity.sh` **VERMELHO** na primeira
+execução — exatamente o cenário que ele foi escrito para pegar 24 h antes. Só ficou verde com as
+**três** cópias mexidas. Um op novo em duas das três seria a pergunta aparecendo no Console e sumindo
+na web, com o mesmo form publicado.
+
+### O que NÃO entrou, e está declarado
+
+A **obrigatoriedade derivada (D7)** — pergunta com opções aninhadas é obrigatória por construção —
+**não tem superfície de schema**: `QuestionNode` não tem `required`. É regra de render e foi para a
+F3. Dizer que a F1 a entregou seria criar a ausência que ninguém nota até um operador pular a
+pergunta.
+
+Testes: `dialog.test.ts` 22 casos (três mutações provadas: `prefix` virando `startsWith` cru, `ne`
+virando "algum difere", off-by-one na profundidade) · `dialog-render.test.ts` cobre a **LIGAÇÃO** da
+regra ao veredicto, falseada desligando a chamada — sem ela, a regra podia estar desconectada com as
+unidades todas verdes. Suíte do pacote: 259 passando.
+
+
 ## 2026-09-05 (2) — DLG-09: a skip-logic tem três implementações e nada as comparava
 
 `evaluateAskWhen` responde *"esta pergunta é APRESENTADA?"* e existe três vezes. O ADR de

@@ -104,3 +104,48 @@ describe("validateDialogForm", () => {
     expect(v.render).toBeNull()
   })
 })
+
+describe("validateDialogForm — árvore de opções (F1, adr-dialog-tree-options)", () => {
+  // Estes casos existem porque a REGRA e a LIGAÇÃO dela são dois fatos: as
+  // unidades de `optionTreeIssues` vivem no `dialog.test.ts` e continuariam
+  // verdes com a chamada desligada aqui — que é o veredicto que o `form_get` e
+  // o dry-run do editor realmente rodam.
+  const arvore = [{
+    id: "financeiro", label: "Financeiro",
+    options: [{ id: "cobranca", label: "Cobrança", options: [{ id: "indevida", label: "Indevida" }] }],
+  }]
+
+  it("recusa aninhamento sob interação que não desenha árvore, nomeando o nó", () => {
+    const form = { ...base, nodes: [
+      { id: "q1", kind: "question", prompt: "Motivo?", interaction: "button",
+        output_key: "motivo", timeout_s: 300, options: arvore },
+    ] }
+    const v = validateDialogForm(form)
+    expect(v.valid).toBe(false)
+    expect(v.errors.map(e => e.code)).toContain("option_nesting_not_allowed")
+    expect(v.errors.find(e => e.code === "option_nesting_not_allowed")?.path)
+      .toBe("nodes.0.options.0.options")
+  })
+
+  it("controle positivo: a MESMA árvore sob `list` passa e chega ao render", () => {
+    const form = { ...base, nodes: [
+      { id: "q1", kind: "question", prompt: "Motivo?", interaction: "list",
+        output_key: "motivo", timeout_s: 300, options: arvore },
+    ] }
+    const v = validateDialogForm(form)
+    expect(v.valid).toBe(true)
+    expect(v.render?.options.map(o => o.id)).toEqual(["financeiro"])
+  })
+
+  it("recusa subárvore em CAMPO — `DialogField` não tem interação que a desenhe", () => {
+    const form = { ...base, nodes: [
+      { id: "q1", kind: "question", prompt: "Dados:", interaction: "form",
+        output_key: "dados", timeout_s: 300,
+        fields: [{ id: "motivo", label: "Motivo", type: "select", options: arvore }] },
+    ] }
+    const v = validateDialogForm(form)
+    expect(v.valid).toBe(false)
+    expect(v.errors.find(e => e.code === "option_nesting_not_allowed")?.path)
+      .toBe("nodes.0.fields.0.options.0.options")
+  })
+})

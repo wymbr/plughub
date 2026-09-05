@@ -394,18 +394,24 @@ SURVEY_PAGE_HTML = r"""<!DOCTYPE html>
   // Mirror of @plughub/schemas evaluateAskWhen (adr-dialog-conditional-skip-logic).
   function awNum(x){ return typeof x === 'number' ? x : Number(x); }
   function awEq(a, b){ var na = awNum(a), nb = awNum(b); if (isFinite(na) && isFinite(nb)) return na === nb; return String(a) === String(b); }
+  function awSobPrefixo(caminho, prefixo){ return caminho === prefixo || caminho.indexOf(prefixo + '.') === 0; }
   function awEval(g){
     if (!g) return true;
     var a = answers[g.field];
     if (a === undefined || a === null || a === '') return false;
+    if (Array.isArray(a) && a.length === 0) return false;
+    var multi = Array.isArray(a);
+    var vals = multi ? a : [a];
     switch (g.op) {
-      case 'lt':  return awNum(a) <  awNum(g.value);
-      case 'lte': return awNum(a) <= awNum(g.value);
-      case 'gt':  return awNum(a) >  awNum(g.value);
-      case 'gte': return awNum(a) >= awNum(g.value);
-      case 'eq':  return awEq(a, g.value);
-      case 'ne':  return !awEq(a, g.value);
-      case 'in':  return Array.isArray(g.value) && g.value.some(function (v) { return awEq(a, v); });
+      case 'lt':  return multi ? false : awNum(a) <  awNum(g.value);
+      case 'lte': return multi ? false : awNum(a) <= awNum(g.value);
+      case 'gt':  return multi ? false : awNum(a) >  awNum(g.value);
+      case 'gte': return multi ? false : awNum(a) >= awNum(g.value);
+      case 'eq':  return vals.some(function (v) { return awEq(v, g.value); });
+      case 'ne':  return !vals.some(function (v) { return awEq(v, g.value); });
+      case 'in':  return Array.isArray(g.value) && vals.some(function (v) {
+                    return g.value.some(function (x) { return awEq(v, x); }); });
+      case 'prefix': return vals.some(function (v) { return awSobPrefixo(String(v), String(g.value)); });
       default:    return false;
     }
   }

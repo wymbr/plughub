@@ -96,8 +96,15 @@ export type DialogInteraction = z.infer<typeof DialogInteractionSchema>
 // Conditional skip-logic — declarative guard (ADR adr-dialog-conditional-skip-logic)
 // ─────────────────────────────────────────────
 
-/** Comparison operators for an `ask_when` guard. */
-export const AskWhenOpSchema = z.enum(["lt", "lte", "gt", "gte", "eq", "ne", "in"])
+/**
+ * Comparison operators for an `ask_when` guard.
+ *
+ * `prefix` (D12 do `adr-dialog-tree-options`) existe porque a skip-logic natural
+ * sobre TAXONOMIA é *"se o motivo está em qualquer lugar sob Financeiro"* — sem
+ * ele seria preciso listar todas as folhas do ramo num `in`, e a lista
+ * envelheceria a cada folha nova, em silêncio.
+ */
+export const AskWhenOpSchema = z.enum(["lt", "lte", "gt", "gte", "eq", "ne", "in", "prefix"])
 export type AskWhenOp = z.infer<typeof AskWhenOpSchema>
 
 /**
@@ -240,14 +247,56 @@ export type DialogDimension = z.infer<typeof DialogDimensionSchema>
 // Options / fields
 // ─────────────────────────────────────────────
 
-export const DialogOptionSchema = z.object({
-  id:      z.string().min(1),
-  label:   LocalizedTextSchema,
+/**
+ * DialogOption — uma opção, e possivelmente uma SUBÁRVORE de opções.
+ *
+ * A recursão entra AQUI, nunca em `DialogNode` (D1 do `adr-dialog-tree-options`):
+ * uma taxonomia (`Financeiro > Cobrança > indevida`) é **domínio de valor**, não
+ * control-flow — é UMA resposta cujo valor é hierárquico, e não decide o que vem
+ * depois. Com isso `nodes` continua plano e as seis superfícies que o percorrem
+ * mantêm o laço linear.
+ *
+ * **Pasta × folha é DERIVADO**, nunca declarado: selecionável ⟺ sem `options`.
+ * Não há flag a marcar nem a esquecer. `value` é ignorado numa pasta.
+ *
+ * ⚠️ `id` é IMUTÁVEL (D6) — ele compõe a categoria do Arc 12, e a série histórica
+ * é append-only. `label` pode ser reescrito e traduzido à vontade; mudou de
+ * conceito, é folha NOVA, e a antiga sai da oferta com `active: false`.
+ */
+export interface DialogOption {
+  id:       string
+  label:    LocalizedText
   /** Machine value returned to the runner; defaults to `id` when absent. */
-  value:   z.string().optional(),
-  capture: DialogCaptureSchema,
-})
-export type DialogOption = z.infer<typeof DialogOptionSchema>
+  value?:   string
+  capture?: DialogCapture
+  /** Presente ⇒ é PASTA (não selecionável). Ausente/vazio ⇒ folha. */
+  options?: DialogOption[]
+  /** `false` = APOSENTADA: sai da oferta e permanece no form (D6) — o dado
+   *  histórico continua explicável. Ausente = ativa. */
+  active?:  boolean
+}
+
+/**
+ * Recursão em Zod exige `z.lazy` COM anotação explícita — `z.infer` não deduz o
+ * tipo sozinho, e por isso `DialogOption` acima é declarado à mão.
+ *
+ * ⚠️ As REGRAS da árvore (profundidade, `id` único entre irmãos, aninhamento só
+ * sob `list`/`checklist`) **não** moram num `superRefine` daqui: `superRefine`
+ * devolve `ZodEffects`, que não pode entrar num `discriminatedUnion` (o
+ * `DialogNodeSchema`) nem aceitar `.omit()` (o `DialogFormDraftSchema`). Elas
+ * vivem em `optionTreeIssues`, chamada pelo validador canônico — a mesma casa de
+ * `duplicateNodeIds`.
+ */
+export const DialogOptionSchema: z.ZodType<DialogOption> = z.lazy(() =>
+  z.object({
+    id:      z.string().min(1),
+    label:   LocalizedTextSchema,
+    value:   z.string().optional(),
+    capture: DialogCaptureSchema,
+    options: z.array(DialogOptionSchema).optional(),
+    active:  z.boolean().optional(),
+  }),
+)
 
 export const DialogFieldSchema = z.object({
   id:         z.string().min(1),
@@ -445,18 +494,39 @@ export function evaluateAskWhen(
 ): boolean {
   if (!guard) return true
   const a = answers[guard.field]
+  // Ausência é "não respondeu" ⇒ não apresenta. Lista VAZIA entra aqui pela
+  // mesma razão que `""`: um `checklist` sem marcação nenhuma não é resposta.
   if (a === undefined || a === null || a === "") return false
+  if (Array.isArray(a) && a.length === 0) return false
+
   const { op, value } = guard
+  const multi = Array.isArray(a)
+  const vals: unknown[] = multi ? (a as unknown[]) : [a]
+
   switch (op) {
-    case "lt":  return _num(a) <  _num(value)
-    case "lte": return _num(a) <= _num(value)
-    case "gt":  return _num(a) >  _num(value)
-    case "gte": return _num(a) >= _num(value)
-    case "eq":  return _eq(a, value)
-    case "ne":  return !_eq(a, value)
-    case "in":  return Array.isArray(value) && value.some(v => _eq(a, v))
+    // ORDENAÇÃO sobre multi-resposta é INDEFINIDA (D12) ⇒ guarda falsa. Escolher
+    // "o menor" ou "o maior" seria inventar uma ordem que o autor não declarou.
+    case "lt":  return multi ? false : _num(a) <  _num(value)
+    case "lte": return multi ? false : _num(a) <= _num(value)
+    case "gt":  return multi ? false : _num(a) >  _num(value)
+    case "gte": return multi ? false : _num(a) >= _num(value)
+    // Igualdade sobre multi = "ALGUM casa"; e `ne` é a NEGAÇÃO de `eq`, nunca
+    // "algum difere" — senão uma marcação com X e Y satisfaria `eq X` e `ne X`
+    // ao mesmo tempo, e "pergunte a menos que tenham escolhido X" mentiria.
+    case "eq":  return vals.some(v => _eq(v, value))
+    case "ne":  return !vals.some(v => _eq(v, value))
+    case "in":  return Array.isArray(value) && vals.some(v => value.some(x => _eq(v, x)))
+    // `prefix` casa por SEGMENTO, não por string: `startsWith` cru faria a guarda
+    // de `financeiro` casar `financeiro_avulso`, que não é filho do ramo — a
+    // pergunta errada apareceria sem nada ficar vermelho.
+    case "prefix": return vals.some(v => _sobPrefixo(String(v), String(value)))
     default:    return false
   }
+}
+
+/** `caminho` é o próprio prefixo ou desce dele por um separador de segmento. */
+function _sobPrefixo(caminho: string, prefixo: string): boolean {
+  return caminho === prefixo || caminho.startsWith(prefixo + ".")
 }
 
 /**
@@ -465,6 +535,84 @@ export function evaluateAskWhen(
  * offending { node_id, field } pairs (forward or unknown reference). Used by the
  * editor (client-side) and deploy/sync validation.
  */
+/** Profundidade máxima da árvore de opções (D3). Acima disso é erro de AUTORIA,
+ *  nunca truncamento — truncar perderia subárvore inteira em silêncio. */
+export const DIALOG_OPTION_MAX_DEPTH = 5
+
+export interface OptionTreeIssue {
+  path:    string
+  code:
+    | "option_duplicate_sibling_id"
+    | "option_nesting_not_allowed"
+    | "option_depth"
+    | "option_empty_folder"
+  message: string
+}
+
+/**
+ * optionTreeIssues — as regras da árvore de opções, puras e sem I/O.
+ *
+ * Mora aqui, e não num `superRefine`, porque `superRefine` devolve `ZodEffects`:
+ * `DialogNodeSchema` é `discriminatedUnion` (não aceita efeitos) e
+ * `DialogFormDraftSchema` faz `.omit()` (idem). Chamada pelo validador canônico
+ * (`validateDialogForm`) e disponível ao editor, que não importa Zod.
+ *
+ * `allowNesting` é do CHAMADOR porque a permissão é da PERGUNTA, não da opção:
+ * só `list`/`checklist` renderizam árvore (D4). Sob `button`/`form` o aninhamento
+ * é erro de schema, nunca render parcial — um renderizador que desenhasse só o
+ * primeiro nível perderia subárvores sem reclamar.
+ */
+export function optionTreeIssues(
+  options: DialogOption[] | undefined,
+  opts: { allowNesting: boolean; base?: string },
+): OptionTreeIssue[] {
+  const issues: OptionTreeIssue[] = []
+  const walk = (list: DialogOption[], path: string, depth: number): void => {
+    const vistos = new Set<string>()
+    list.forEach((opt, i) => {
+      const p = `${path}.${i}`
+      if (vistos.has(opt.id)) {
+        issues.push({
+          path: `${p}.id`,
+          code: "option_duplicate_sibling_id",
+          message: `'${opt.id}' repetido entre irmãos — o caminho deixa de identificar a folha, e duas séries do Arc 12 se fundem`,
+        })
+      }
+      vistos.add(opt.id)
+
+      const filhos = opt.options
+      if (filhos === undefined) return
+      if (filhos.length === 0) {
+        issues.push({
+          path: `${p}.options`,
+          code: "option_empty_folder",
+          message: `'${opt.id}' declara 'options' vazio — pasta sem filho lê-se de dois jeitos; remova a chave para ser folha, ou dê filhos a ela`,
+        })
+        return
+      }
+      if (!opts.allowNesting) {
+        issues.push({
+          path: `${p}.options`,
+          code: "option_nesting_not_allowed",
+          message: `'${opt.id}' tem subopções, e aninhamento só existe sob 'list'/'checklist' — sob os demais o render perderia a subárvore inteira, sem erro`,
+        })
+        return
+      }
+      if (depth + 1 > DIALOG_OPTION_MAX_DEPTH) {
+        issues.push({
+          path: `${p}.options`,
+          code: "option_depth",
+          message: `profundidade acima de ${DIALOG_OPTION_MAX_DEPTH} sob '${opt.id}' — é erro de autoria, e truncar perderia a subárvore em silêncio`,
+        })
+        return
+      }
+      walk(filhos, `${p}.options`, depth + 1)
+    })
+  }
+  walk(options ?? [], opts.base ?? "options", 1)
+  return issues
+}
+
 export function askWhenForwardRefErrors(
   form: Pick<DialogForm, "nodes">,
 ): Array<{ node_id: string; field: string }> {

@@ -313,13 +313,50 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## As-built da F1 (2026-09-05)
+
+Entregue: `DialogOption.options`/`active` recursivo (`z.lazy` com anotacao explicita, porque
+`z.infer` nao deduz), `optionTreeIssues` (profundidade 5, `id` unico entre IRMAOS, aninhamento so
+sob `list`/`checklist`) e o op `prefix` no avaliador, com normalizacao escalar→lista.
+
+**As regras NAO moram num `superRefine`.** `superRefine` devolve `ZodEffects`, que nao entra em
+`discriminatedUnion` (o `DialogNodeSchema`) nem aceita `.omit()` (o `DialogFormDraftSchema`, que o
+dry-run do editor usa). Elas vivem numa funcao PURA chamada pelo validador canonico
+(`validateDialogForm`) — a mesma casa de `duplicateNodeIds`, e a mesma que o `form_get` roda. O
+schema carrega a FORMA; o veredicto carrega as REGRAS.
+
+**Duas decisoes que a D12 nao fixava, e que a implementacao teve de fechar:**
+
+- **`prefix` casa por SEGMENTO, nunca por substring.** `startsWith` cru faria a guarda de
+  `financeiro` casar `financeiro_avulso`, que nao e filho do ramo — a pergunta errada apareceria
+  sem nada ficar vermelho. Vale `caminho === prefixo || caminho.startsWith(prefixo + ".")`.
+- **`ne` e a NEGACAO de `eq`, nunca "algum difere".** Com multi-resposta, "algum difere" faria uma
+  marcacao com X e Y satisfazer `eq X` **e** `ne X` ao mesmo tempo, e *"pergunte a menos que tenham
+  escolhido X"* mentiria. Consequencia declarada: `ne === !eq` para qualquer resposta, escalar ou
+  lista.
+
+Duas ausencias tambem sao decisao: **lista VAZIA e "nao respondeu"** (entra na mesma guarda de
+`""`), e **`options: []` e RECUSADO** — pasta sem filho le-se de dois jeitos, e a D2 ja avisa que
+pasta que perde o ultimo filho vira folha selecionavel.
+
+**A D7 nao tem superficie de schema.** `QuestionNode` nao tem `required`; a obrigatoriedade
+derivada do aninhamento e regra de RENDER, e fica com a F3. Registrar isso importa: seria facil
+dizer que a F1 a entregou e ninguem notaria a falta ate um operador pular a pergunta.
+
+Gates: `probe_ask_when_parity.sh` (as tres copias, que a D12 obrigou a mexer juntas — o op novo
+nasceu VERMELHO ali, com a canonica sozinha, e so ficou verde com as tres) · `dialog.test.ts`
+(22 casos, tres mutacoes provadas) · `dialog-render.test.ts` (a LIGACAO da regra ao veredicto,
+falseada desligando a chamada).
+
+---
+
 ## Fases
 
 | # | Fase | Entrega | Depende de |
 |---|---|---|---|
 | **F0** | **`flattenBlocks` lossless** | O editor edita o objeto parseado in-place; nunca reconstrói `capture`. Gate de round-trip: abrir + salvar `dialog_wrapup_arc12_v1` preserva `kind`. | — |
 | ~~**F0b**~~ | ~~Pin de versão~~ — **movida** para a fase **S1** de [`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md), que mata a corrida removendo a segunda leitura em vez de sincronizá-la (ver D9). | — |
-| **F1** | **Schema** | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos, obrigatoriedade derivada (D7). `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). | `probe_ask_when_parity.sh` (DLG-09) |
+| **F1** ✅ | **Schema** *(2026-09-05)* | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos. `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). ⚠️ A **obrigatoriedade derivada (D7) NÃO entrou**: `QuestionNode` não tem `required`, então ela é regra de RENDER e foi para a F3. | `probe_ask_when_parity.sh` (DLG-09) |
 | **F2** | **Resposta multi de verdade** | `menu.ts` para de tratar `checklist` como escalar; bridge para de `json.dumps` a lista; `DialogFormRenderer`/`survey_web` permitem multi. Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
 | **F3** | **Renderer Miller + recusa alta** | Colunas no Console (pasta abre coluna, arquivo seleciona); `form_get` recusa em canal pobre (D11); invariante de pai comum conferido no submit (D5). | F1, F2 |
 | **F4** | **Categoria de caminho** | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |

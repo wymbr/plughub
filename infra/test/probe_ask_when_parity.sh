@@ -19,7 +19,8 @@
 # tem de onde importar nada. Restam duas posturas — gerar as duas espelhadas a
 # partir da canônica, ou CONFERIR que decidem igual. Este probe é a segunda.
 #
-# Medido em 2026-09-05, antes de existir: as três eram equivalentes (mesmos 7 ops,
+# Medido em 2026-09-05, antes de existir: as três eram equivalentes (7 ops — o
+# `prefix` da D12 entrou DEPOIS, e este probe é quem cobrou as três cópias,
 # mesma coerção numérica, mesma regra de ausência) e **nenhum teste as comparava**
 # — nenhum `.sh` de `infra/test/` sequer mencionava `ask_when`. Paridade sem
 # mecanismo é promessa, a mesma família do DDL de `participation_intervals`.
@@ -48,7 +49,7 @@
 # COMO FALSEAR (bateria de mutação)
 # ─────────────────────────────────
 #   1. trocar `case "lte"` por `case "lt"` em DialogFormRenderer.tsx  → B vermelho
-#   2. acrescentar `case "prefix":` ao switch de dialog.ts            → C vermelho
+#   2. acrescentar `case "startswith":` ao switch de dialog.ts        → C vermelho
 #   3. renomear `awEval` em survey_web.py                             → D inconclusivo
 #
 # Uso:  bash infra/test/probe_ask_when_parity.sh
@@ -120,7 +121,15 @@ const CASOS = [
   ['in nao casa',           { field: 'a', op: 'in',  value: ['a','b'] }, { a: 'c' }],
   ['in com valor nao-array',{ field: 'a', op: 'in',  value: 'a' },       { a: 'a' }],
   ['op desconhecido',       { field: 'a', op: 'zzz', value: 1 },         { a: 1 }],
-  ['prefix (D12, futuro)',  { field: 'a', op: 'prefix', value: 'fin' },  { a: 'fin.cob' }],
+  ['prefix desce o ramo',   { field: 'a', op: 'prefix', value: 'financeiro.cobranca' }, { a: 'financeiro.cobranca.indevida' }],
+  ['prefix e o proprio no', { field: 'a', op: 'prefix', value: 'financeiro' },          { a: 'financeiro' }],
+  ['prefix NAO e substring',{ field: 'a', op: 'prefix', value: 'financeiro' },          { a: 'financeiro_avulso' }],
+  ['prefix fora do ramo',   { field: 'a', op: 'prefix', value: 'financeiro' },          { a: 'tecnico.sinal' }],
+  ['multi: eq algum casa',  { field: 'a', op: 'eq',  value: 'b' },        { a: ['a','b'] }],
+  ['multi: ne e negacao',   { field: 'a', op: 'ne',  value: 'b' },        { a: ['a','b'] }],
+  ['multi: ordenacao nao',  { field: 'a', op: 'lt', value: 9 },           { a: [1,2] }],
+  ['multi: prefix algum',   { field: 'a', op: 'prefix', value: 'financeiro' }, { a: ['tecnico.x','financeiro.cobranca.indevida'] }],
+  ['multi: lista vazia',    { field: 'a', op: 'ne',  value: 'b' },        { a: [] }],
 ]
 
 const IMPL = [['canonico', canonico], ['console', consoleUi], ['web', web]]
