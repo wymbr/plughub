@@ -71,12 +71,52 @@ NL = chr(10)
 
 
 def recorta(fonte: str, nome: str) -> str:
-    """Corpo completo de `function <nome>(...)`, por casamento de chaves."""
+    """Corpo completo de `function <nome>(...)`, por casamento de chaves.
+
+    ⚠️ A chave do CORPO não é "a primeira `{` depois do nome" — essa regra ingênua
+    para no primeiro `{` da LISTA DE PARÂMETROS (`form: { nodes: X[] }`) e devolve
+    um recorte curto que ainda PARECE código. Medido em 2026-09-05 ao recortar
+    `deriveAgentEvents`: 73 caracteres, sintaticamente plausíveis, e só quebrou
+    porque o módulo emitido ficou sem o export. Um recorte errado que compila é a
+    pior saída possível para um gate.
+
+    Regra correta, em dois passos: fecha-se a lista de parâmetros pelo PARÊNTESE
+    correspondente, e só então se procura a `{` do corpo — pulando o tipo de
+    retorno, que também pode conter chaves (`): Array<{…}> {`). Para isso conta-se
+    a profundidade de `<>`: a chave do corpo é a primeira em profundidade zero.
+    """
     m = re.search(r"^[ \t]*(?:export\s+)?function\s+" + re.escape(nome) + r"\s*\(",
                   fonte, re.M)
     if not m:
         return ""
-    i = fonte.index("{", m.end() - 1)
+
+    # 1. fecha a lista de parâmetros
+    par, k = 0, m.end() - 1
+    while k < len(fonte):
+        if fonte[k] == "(":
+            par += 1
+        elif fonte[k] == ")":
+            par -= 1
+            if par == 0:
+                break
+        k += 1
+    if par != 0:
+        return ""
+
+    # 2. a `{` do corpo é a primeira fora de `<...>` (tipo de retorno)
+    ang, i = 0, k + 1
+    while i < len(fonte):
+        c = fonte[i]
+        if c == "<":
+            ang += 1
+        elif c == ">":
+            ang = max(0, ang - 1)
+        elif c == "{" and ang == 0:
+            break
+        i += 1
+    if i >= len(fonte):
+        return ""
+
     nivel, j = 0, i
     while j < len(fonte):
         if fonte[j] == "{":

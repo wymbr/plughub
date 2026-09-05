@@ -482,3 +482,9 @@ smoke_wrapup_slot_handoff.sh
 # comparava: nenhum .sh de infra/test mencionava `ask_when`. Entra AUTO porque
 # rodou verde e a bateria de mutacao provou os tres ramos falseaveis.
 probe_ask_when_parity.sh
+
+# -- 2026-09-05: testemunha negativa da multi-selecao (F2) --------------------
+# `["a","b"]` tem de render DOIS eventos do Arc 12, nunca a categoria colada
+# `_a_b_`. Exercita a CADEIA (canal -> engine -> tool) sobre a forma publicada;
+# testar so a ponta passaria com o defeito no lugar. Duas mutacoes provadas.
+probe_multi_answer_events.sh

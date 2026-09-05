@@ -187,6 +187,34 @@ function judgeAnswer(
   return { ok: true }
 }
 
+/**
+ * coerceMultiAnswer — a resposta de `checklist` é uma LISTA, e o pipeline_state
+ * tem de guardá-la como tal (F2 do `adr-dialog-tree-options`).
+ *
+ * O transporte é string: o bridge faz `LPUSH` de texto e, para uma lista, manda
+ * o JSON dela. Isso está CERTO como transporte e não é o defeito — o defeito era
+ * ninguém desfazer a codificação: a string `'["a","b"]'` era gravada como escalar,
+ * e o único consumidor que espera array (`deriveAgentEvents`) produzia a
+ * categoria-lixo `_a_b_` — **uma** série inventada no lugar de **duas** reais.
+ *
+ * Escalar de canal que não manda JSON vira lista de UM. Uma marcação só continua
+ * sendo uma marcação, e o consumidor não precisa de dois caminhos.
+ *
+ * Medido antes de mudar: **zero** steps `menu` com `interaction: checklist` nos
+ * skills, e **uma** pergunta `checklist` publicada (a fixture do Arc 12). Não há
+ * o que migrar — e é por isso que a semântica pôde ser escolhida limpa.
+ */
+export function coerceMultiAnswer(raw: string, interaction: string): string | string[] {
+  if (interaction !== "checklist") return raw
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (Array.isArray(parsed)) return parsed.map(v => String(v))
+  } catch {
+    // não é JSON — o canal mandou um escalar; cai na lista de um, abaixo
+  }
+  return [raw]
+}
+
 export async function executeMenu(
   step: MenuStep,
   ctx:  StepContext
@@ -538,7 +566,7 @@ export async function executeMenu(
       const successResult: StepResult = {
         next_step_id:      step.on_success,
         transition_reason: "on_success",
-        output_value:      value,
+        output_value:      coerceMultiAnswer(value, resolvedInteraction),
       }
       if (step.output_as !== undefined) {
         successResult.output_as = step.output_as
@@ -587,9 +615,13 @@ export async function executeMenu(
 
     // Para interações não-form, o scalar mascarado era a única saída → nada a persistir
     // Para form, pode haver mix de mascarados e não-mascarados
+    // O escalar não-mascarado pode não existir (todos os campos mascarados);
+    // coagir `undefined` faria a lista de um nascer com a string "undefined".
+    const escalarNaoMascarado = nonMaskedOutput[step.output_as ?? step.id]
     const outputValue =
       resolvedInteraction === "form" && hasNonMasked ? nonMaskedOutput
-      : resolvedInteraction !== "form" && hasNonMasked ? nonMaskedOutput[step.output_as ?? step.id]
+      : resolvedInteraction !== "form" && escalarNaoMascarado !== undefined
+        ? coerceMultiAnswer(escalarNaoMascarado, resolvedInteraction)
       : undefined
 
     const successResult: StepResult = {

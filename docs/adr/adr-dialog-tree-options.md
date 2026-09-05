@@ -229,6 +229,22 @@ primeiro form de produção com árvore a desarma para cima de si. **Daí a F0 s
 
 ### 3. O ramo multi-select é CÓDIGO MORTO, e o caminho real corrompe a categoria
 
+> ⚠️ **Corrigido em 2026-09-05, ao implementar a F2 — metade deste achado ENVELHECEU.**
+> Os dois renderizadores passaram a fazer multi-seleção de verdade em algum ponto entre
+> 2026-08-29 e hoje (`survey_web.py` e `DialogFormRenderer.tsx` têm o toggle, e ambos já trazem
+> a regra *"zero marcações REMOVE a chave em vez de gravar `[]`"*). O que continuava verdadeiro
+> era a OUTRA metade, e ela é a que produzia o dano.
+>
+> **E o alvo estava errado:** *"o bridge para de `json.dumps` a lista"* não é o conserto — o
+> `LPUSH` carrega texto, então codificar a lista em JSON é o TRANSPORTE, e removê-lo mandaria
+> uma repr de Python ou nada. O que faltava era o outro lado: **o engine nunca desfazia a
+> codificação**. `menu.ts` gravava a string `'["a","b"]'` como escalar no `pipeline_state`, e
+> `deriveAgentEvents` — único consumidor que espera array — a colava em `_a_b_`.
+>
+> Lição de método: um achado nomeia o SINTOMA com precisão e ainda assim aponta o componente
+> errado. Antes de implementar a fase, re-medir os arquivos que ela cita.
+
+
 O comentário *"multi-select ⇒ N eventos"* aparece em dois lugares (`segment.ts:56-57`,
 `schemas/src/dialog.ts:157-158`) e descreve comportamento que **nenhuma UI produz**:
 
@@ -313,6 +329,41 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## As-built da F2 (2026-09-05)
+
+Entregue: `coerceMultiAnswer` no `menu` step — a resposta de `checklist` vira uma LISTA no
+`pipeline_state`, em vez da string JSON que ninguém desfazia.
+
+**Metade da fase já estava pronta**, e só a medição mostrou isso: os dois renderizadores fazem
+multi-seleção desde antes (ver a correção do achado 3). O que faltava era o engine, e o bridge
+nunca foi o alvo.
+
+**A promessa existia em DOIS lugares e não tinha produtor em nenhum:** o comentário de
+`deriveAgentEvents` (*"Multi-select chega como array ⇒ N eventos"*) e o `CLAUDE.md` do
+`skill-flow-engine`, que declara **em tabela** `checklist → string[]`. Prosa afirmando invariante
+sem mecanismo é a família do DDL de `participation_intervals`; aqui foram duas casas afirmando o
+mesmo fato falso.
+
+**Escalar de canal que não manda JSON vira lista de UM.** Uma marcação continua sendo uma
+marcação, e o consumidor não precisa de dois caminhos. Medido antes de escolher: **zero** steps
+`menu` com `interaction: checklist` nos skills e **uma** pergunta `checklist` publicada (a
+fixture do Arc 12) — não havia o que migrar, e por isso a semântica pôde ser escolhida limpa.
+
+**Consequência declarada no lado do survey:** `SurveyRecordInputSchema.answers` é
+`string | number | null`, então uma resposta multi passou a ser **RECUSADA no limite do schema**
+(medido: array reprova, escalares passam). Antes ela era aceita como string JSON, virava `NaN` no
+`scoreOfAnswer` e sumia como NA **silencioso**. Trocar um NA mudo por uma recusa barulhenta é a
+direção certa, e fecha a decisão em aberto #3 na prática: **árvore e multi são `nominal`, nunca
+`scored`** — uma marcação múltipla não tem UM valor a compor.
+
+Gate: `infra/test/probe_multi_answer_events.sh`, sobre a forma REAL publicada, exercitando a
+CADEIA (canal → engine → tool) e não só a ponta. Testar só o `deriveAgentEvents` passaria com o
+defeito no lugar: ele sempre soube tratar array; quem não entregava array era o engine. A mutação
+que devolve o escalar reproduz o defeito histórico **literalmente** —
+`sac_humano.wrapup.servico._suporte_financeiro_`.
+
+---
+
 ## As-built da F1 (2026-09-05)
 
 Entregue: `DialogOption.options`/`active` recursivo (`z.lazy` com anotacao explicita, porque
@@ -357,7 +408,7 @@ falseada desligando a chamada).
 | **F0** | **`flattenBlocks` lossless** | O editor edita o objeto parseado in-place; nunca reconstrói `capture`. Gate de round-trip: abrir + salvar `dialog_wrapup_arc12_v1` preserva `kind`. | — |
 | ~~**F0b**~~ | ~~Pin de versão~~ — **movida** para a fase **S1** de [`adr-deploy-time-content-snapshot.md`](adr-deploy-time-content-snapshot.md), que mata a corrida removendo a segunda leitura em vez de sincronizá-la (ver D9). | — |
 | **F1** ✅ | **Schema** *(2026-09-05)* | `DialogOption.options`/`active` (`z.lazy` + anotação), `superRefine` de profundidade (D3), nesting só sob `list`/`checklist` (D4), `id` único entre irmãos. `evaluateAskWhen` + `prefix` e normalização escalar→lista (D12). ⚠️ A **obrigatoriedade derivada (D7) NÃO entrou**: `QuestionNode` não tem `required`, então ela é regra de RENDER e foi para a F3. | `probe_ask_when_parity.sh` (DLG-09) |
-| **F2** | **Resposta multi de verdade** | `menu.ts` para de tratar `checklist` como escalar; bridge para de `json.dumps` a lista; `DialogFormRenderer`/`survey_web` permitem multi. Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
+| **F2** ✅ | **Resposta multi de verdade** *(2026-09-05)* | `menu.ts` para de tratar `checklist` como escalar — **o unico item que faltava**. Os renderizadores ja faziam multi, e o `json.dumps` do bridge e TRANSPORTE, nao defeito (ver a correcao do achado 3). Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
 | **F3** | **Renderer Miller + recusa alta** | Colunas no Console (pasta abre coluna, arquivo seleciona); `form_get` recusa em canal pobre (D11); invariante de pai comum conferido no submit (D5). | F1, F2 |
 | **F4** | **Categoria de caminho** | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
 | **F5** | **Editor de árvore** | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |

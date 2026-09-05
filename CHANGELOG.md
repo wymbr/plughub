@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (4) — F2: a multi-seleção chega ao Arc 12 como N eventos, não como uma colagem
+
+O `menu` step gravava a resposta de `checklist` como **escalar**. Como o transporte é texto, o que
+ia para o `pipeline_state` era a string `'["a","b"]'` — e `deriveAgentEvents`, único consumidor que
+espera array, fazia `String(item).replace(/[^a-z0-9_]+/g,"_")` sobre ela, produzindo
+**`_a_b_`**: uma série inventada, no lugar de duas reais.
+
+Nada ficava vermelho. O wrap-up era gravado, o outcome registrado, e só a série do Arc 12 nascia com
+uma categoria fora do vocabulário — que ninguém procura, porque ninguém sabe que deveria estar lá.
+
+### A promessa existia em DUAS casas e não tinha produtor em nenhuma
+
+- o comentário de `deriveAgentEvents`: *"Multi-select chega como array ⇒ N eventos"*;
+- o `CLAUDE.md` do `skill-flow-engine`, que declara **em tabela**: `checklist → string[]`.
+
+Prosa afirmando invariante sem mecanismo é a família do DDL de `participation_intervals` — aqui em
+dose dupla. Hoje a tabela do `CLAUDE.md` ficou verdadeira sem precisar mudar uma palavra.
+
+### Metade da fase já estava pronta, e o alvo declarado estava errado
+
+O ADR (medido em 2026-08-29) mandava consertar quatro coisas. Re-medindo antes de implementar:
+
+- ✅ `survey_web.py` e `DialogFormRenderer.tsx` **já faziam** multi-seleção — os dois trazem inclusive
+  a regra *"zero marcações REMOVE a chave em vez de gravar `[]`"*;
+- ❌ o engine, que era o item real;
+- e *"o bridge para de `json.dumps` a lista"* **não é conserto**: o `LPUSH` carrega texto, então
+  codificar a lista é o TRANSPORTE. Removê-lo mandaria uma repr de Python. O que faltava era o outro
+  lado — ninguém **desfazia** a codificação.
+
+Lição registrada no próprio ADR: um achado pode nomear o sintoma com precisão e ainda apontar o
+componente errado. Antes de implementar a fase, re-medir os arquivos que ela cita.
+
+### A semântica pôde ser escolhida limpa porque a população é zero
+
+Medido: **zero** steps `menu` com `interaction: checklist` nos skills, **uma** pergunta `checklist`
+publicada (a fixture do Arc 12). Sem nada a migrar, escalar de canal que não manda JSON vira **lista
+de um** — uma marcação continua sendo uma marcação, e o consumidor não precisa de dois caminhos.
+
+### Consequência declarada no survey: NA mudo virou recusa barulhenta
+
+`SurveyRecordInputSchema.answers` é `string | number | null`, então uma resposta multi passou a ser
+**recusada no limite do schema** (medido: array reprova, escalares passam). Antes ela era aceita como
+string JSON, virava `NaN` no `scoreOfAnswer` e sumia como NA **silencioso**. Isso fecha na prática a
+decisão em aberto #3 do ADR: **árvore e multi são `nominal`, nunca `scored`** — marcação múltipla não
+tem UM valor a compor.
+
+### O gate exercita a CADEIA, não a ponta
+
+`infra/test/probe_multi_answer_events.sh` roda canal → engine → tool sobre a forma REAL publicada.
+Testar só o `deriveAgentEvents` passaria com o defeito no lugar: ele **sempre** soube tratar array;
+quem não entregava array era o engine. Quatro ramos (controle positivo · 2 eventos · testemunha
+negativa da colagem · o caminho escalar não regrediu), e a mutação que devolve o escalar reproduz o
+defeito histórico **literalmente**: `sac_humano.wrapup.servico._suporte_financeiro_`.
+
+### E o recortador compartilhado tinha um defeito silencioso
+
+O `_ask_when_extract.recorta` (DLG-09) achava a chave do corpo como *"a primeira `{` depois do nome"*
+— regra que para no primeiro `{` da **lista de parâmetros**. Com `deriveAgentEvents(form: { nodes:
+FormQuestion[] }, …)` ela devolvia **73 caracteres sintaticamente plausíveis**, e só quebrou porque o
+módulo emitido ficou sem o export. Um recorte errado que compila é a pior saída para um gate. Hoje
+fecha o parêntese da assinatura primeiro e só então procura a `{` do corpo, pulando o tipo de retorno
+(que também tem chaves: `): Array<{…}> {`). Os dois probes que usam o recorte seguem verdes.
+
+
 ## 2026-09-05 (3) — F1 do `adr-dialog-tree-options`: a recursão entra em `DialogOption`
 
 `DialogOption` ganhou `options[]` (recursivo) e `active`, `evaluateAskWhen` ganhou o op `prefix`
