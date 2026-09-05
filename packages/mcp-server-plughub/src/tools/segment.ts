@@ -73,17 +73,37 @@ type FormQuestion = {
   options?: Array<{ id?: string; value?: number | string; capture?: { value?: number | string } }>
 }
 
-/** Busca o DialogForm publicado — mesmo caminho que `survey_record` usa (§D3). */
+/**
+ * Busca o DialogForm — mesmo caminho que `survey_record` usa (§D3).
+ *
+ * **Com `version`, busca AQUELA versão; sem, a última publicada.** É a metade de
+ * leitura do pin (S1 do `adr-deploy-time-content-snapshot`, D14 da árvore): o
+ * servidor gravou no delegate qual versão o atendente veria, e aqui ela é honrada.
+ * Sem o pin, esta função se comporta exatamente como antes — por isso a ausência
+ * degrada sem quebrar, e é a razão de o pin poder ser omitido lá atrás.
+ *
+ * ⚠️ A versão vem do CONTEXTO (`@ctx.core.workflow.dialog_form_version`, escrito
+ * pelo servidor), nunca do payload de quem submete: senão o cliente escolheria
+ * qual documento descreve a própria resposta.
+ */
 async function fetchPublishedForm(
-  dialogApiUrl: string, tenantId: string, formId: string,
+  dialogApiUrl: string, tenantId: string, formId: string, version?: number,
 ): Promise<{ nodes: FormQuestion[] } | null> {
+  const query = version != null
+    ? `version=${encodeURIComponent(String(version))}`
+    : "status=published"
   try {
     const resp = await fetch(
-      `${dialogApiUrl}/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`,
+      `${dialogApiUrl}/v1/dialog/forms/${encodeURIComponent(formId)}?${query}`,
       { headers: { "X-Tenant-ID": tenantId } },
     )
     if (!resp.ok) {
-      console.warn("[segment_outcome_record] dialog-api %s ao buscar form=%s", resp.status, formId)
+      // A versão entra no log: um 404 com pin significa "a versão que o atendente
+      // viu sumiu do store", que é diagnóstico diferente de "o form não existe".
+      console.warn(
+        "[segment_outcome_record] dialog-api %s ao buscar form=%s (%s)",
+        resp.status, formId, query,
+      )
       return null
     }
     return (await resp.json()) as { nodes: FormQuestion[] }
@@ -190,6 +210,25 @@ const WRAPUP_OUTCOME_MAP: Record<string, string> = {
 const segSignalKey = (sessionId: string, segmentId: string) =>
   `session:${sessionId}:seg_signal:${segmentId}`
 
+/**
+ * Converte o pin de versão para inteiro — ou `undefined`, NUNCA um palpite.
+ *
+ * O valor chega do ContextStore, onde tudo é string. `Number("")` é `0` e
+ * `Number("1abc")` é `NaN`: os dois passariam por uma coerção descuidada, e um `0`
+ * viraria `?version=0` (404) enquanto um `NaN` viraria `?version=NaN`. Ambos
+ * quebrariam a captura Arc 12 num caminho que a §D3 manda degradar sem perder a
+ * disposição — mas quebrariam por motivo INVENTADO aqui, não por defeito real.
+ *
+ * `undefined` = sem pin = última publicada, que é o comportamento anterior ao
+ * mecanismo. É a degradação certa, e ela é LOGADA no chamador.
+ */
+function parsePin(raw: string | number | undefined): number | undefined {
+  if (raw == null || raw === "") return undefined
+  const n = typeof raw === "number" ? raw : Number(raw.trim())
+  if (!Number.isInteger(n) || n < 1) return undefined
+  return n
+}
+
 function mcpOk(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
 }
@@ -212,6 +251,15 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
       // Fatia 3 — o caminho preferido: respostas cruas + o form que as descreve.
       answers:           z.record(z.any()).optional().describe("Respostas do DialogForm ($.pipeline_state.coletar.answers). Preferido — dispensa mapear campo a campo"),
       dialog_form_id:    z.string().optional().describe("Form respondido (@ctx.core.workflow.dialog_form_id) — dirige a captura Arc 12"),
+      // Pin de versão (S1 / D14). Vem do CONTEXTO, escrito pelo servidor no delegate —
+      // nunca do payload de quem submete. Ausente ⇒ última publicada (comportamento
+      // anterior ao pin), o que mantém os chamadores antigos funcionando.
+      // Chega como STRING (o ContextStore guarda strings) ou número, se um chamador
+      // programático o mandar. A conversão é EXPLÍCITA (`parsePin`), nunca `z.coerce`:
+      // coerção transforma lixo em número plausível em silêncio, que é o modo de falha
+      // que este arco inteiro existe para fechar.
+      dialog_form_version: z.union([z.string(), z.number()]).optional()
+        .describe("Versão PINADA do form (@ctx.core.workflow.dialog_form_version). Ausente ⇒ última publicada"),
       // Contrato antigo (4 campos nomeados) — mantido para os chamadores que ainda
       // mapeiam campo a campo. `answers` VENCE quando presente.
       classificacao:     z.string().optional().describe("Disposição crua: resolvido | pendente | escalado | cancelado"),
@@ -220,9 +268,13 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
       proximos_passos:   z.string().optional().describe("Próximos passos (→ wrapup_next_steps, SEMPRE gravado)"),
       tenant_id:         z.string().optional(),
     } as any,
+    // ⚠️ Este tipo é ESCRITO À MÃO, não inferido do schema acima — então campo novo
+    // no schema que não entre aqui não chega ao handler, e o TypeScript avisa (foi o
+    // que aconteceu ao acrescentar o pin). Mantê-los em par é obrigação de quem edita.
     async (args: {
       origin_session_id: string; segment_id: string; classificacao?: string
       answers?: Record<string, unknown>; dialog_form_id?: string
+      dialog_form_version?: string | number
       resumo?: string; escalation_reason?: string; proximos_passos?: string; tenant_id?: string
     }) => {
       const { origin_session_id, segment_id } = args
@@ -363,7 +415,19 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
           captureNote = "dialog_api_url_ausente — captura Arc 12 desligada nesta instância"
           console.warn("[segment_outcome_record] %s", captureNote)
         } else {
-          const form = await fetchPublishedForm(dialogApiUrl, tenant, args.dialog_form_id)
+          // Pin resolvido UMA vez: a mesma versão dirige a leitura do form e o
+          // carimbo do evento. Resolver duas vezes abriria a porta para a leitura
+          // e o rótulo discordarem — que é exatamente o defeito que o pin fecha.
+          const pin = parsePin(args.dialog_form_version)
+          if (args.dialog_form_version != null && pin == null) {
+            console.warn(
+              "[segment_outcome_record] pin de versão inválido (%j) para form=%s — " +
+              "seguindo com a última publicada. O submit pode ler documento diferente " +
+              "do que o atendente viu se houve publicação durante o ACW.",
+              args.dialog_form_version, args.dialog_form_id,
+            )
+          }
+          const form = await fetchPublishedForm(dialogApiUrl, tenant, args.dialog_form_id, pin)
           // `skill_id` da categoria = "wrapup", constante: o produtor É o wrap-up, e o
           // l2 existe para dizer QUEM emitiu. Usar o skill do workflow faria a série
           // quebrar a cada rename de skill, sem que a métrica tenha mudado.
@@ -391,6 +455,20 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
                 // agora nenhum produtor exercitava.
                 segment_id:    segId,
                 instance_id:   participantId || null,
+                // ── D14 — o VOCABULÁRIO que descreve esta categoria ──────────────
+                // Sem isto a série é ilegível quando a forma do pool muda: medido
+                // em 2026-09-05, `servico.troca_titularidade` (forma plana) e
+                // `servico.cadastro.troca_titularidade` (forma em árvore) convivem
+                // no MESMO pool e no MESMO dia, e nada na linha diz qual é qual.
+                //
+                // Vai em `tags` porque a coluna já existe (`Map(String,String)` em
+                // `agent_business_events`) — nenhum DDL, nenhum consumer novo. A
+                // versão só entra quando há PIN: sem ele, carimbar "a última
+                // publicada" seria afirmar uma precisão que a leitura não teve.
+                tags: {
+                  dialog_form_id: args.dialog_form_id,
+                  ...(pin != null ? { dialog_form_version: String(pin) } : {}),
+                },
               }))
               agentEvents++
             } catch (err) {

@@ -92,6 +92,16 @@ steps:
       # tocar em skill, sem deploy.
       answers:           "$.pipeline_state.coletar.answers"
       dialog_form_id:    "@ctx.hook.dialog_form_id"
+      # Pin de versão (S1 do adr-deploy-time-content-snapshot · D14 da árvore). O
+      # SERVIDOR gravou esta tag no delegate, resolvendo qual versão o atendente
+      # veria; aqui ela volta para que o submit leia o MESMO documento, e não "a
+      # última publicada" — que pode ter mudado durante as até 24 h de ACW.
+      #
+      # ⚠️ Vem do CONTEXTO, nunca do payload do renderizador: senão o browser
+      # escolheria qual versão do formulário descreve a própria resposta.
+      # Ausente (dialog-api fora do ar no delegate) ⇒ a tool cai na última
+      # publicada, que é o comportamento anterior ao pin.
+      dialog_form_version: "@ctx.core.workflow.dialog_form_version"
     output_as: wrapup_record
     on_success: encerrar
     on_failure: encerrar   # gravação falha não deve prender o wrap-up (já logado/isError)
