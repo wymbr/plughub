@@ -825,20 +825,43 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
 }
 
 // ── Events view — Arc 12 business events ──────────────────────────────────
+//
+// ⚠️ Esta vista nasceu no Arc 19 falando um contrato que o endpoint NUNCA teve, e
+// ficou vazia desde então — quatro divergências, todas mudas (medido 2026-09-05, ao
+// procurar onde ver as contagens da árvore de wrap-up):
+//
+//   1. lia `data.rows`; a resposta é `{data, meta}` ⇒ `rows` = `[]` ⇒ a tabela
+//      renderizava o estado "nenhum evento" SEMPRE, inclusive com 9 linhas no ar;
+//   2. mandava `period=24h`; o endpoint recebe `from_dt`/`to_dt` ⇒ o parâmetro caía
+//      no chão (FastAPI ignora query desconhecida) e a janela real era o default de
+//      7 dias, sob um título que promete 24 h;
+//   3. mandava `category_regex`; o filtro é `category`, e é **prefixo**, não regex
+//      (`startsWith`) ⇒ o operador digitava e nada acontecia;
+//   4. lia `row.category`/`row.pool_id`; a linha traz `group_key` e, agrupando por
+//      categoria, **não tem pool** — a coluna Pool era estruturalmente vazia.
+//
+// Prefixo não é um filtro pior que regex aqui: é o recorte que a taxonomia em
+// árvore pede (D10 do `adr-dialog-tree-options`) — `pool.skill.motivo.financeiro.`
+// alcança o ramo inteiro, e é assim que a agregação por caminho é feita do lado do
+// servidor. O rótulo foi corrigido junto; dizer "regex" era a tela mentindo.
 
+/** Espelho do que `/reports/agent-events/summary` devolve por linha. */
 interface AgentEventSummaryRow {
-  category:   string
-  pool_id:    string | null
-  count:      number
-  sum_value:  number | null
-  avg_value:  number | null
-  first_seen: string
-  last_seen:  string
+  group_key:   string
+  count:       number
+  total_value: number | null
+  avg_value:   number | null
+  min_value:   number | null
+  max_value:   number | null
+  first_seen:  string
+  last_seen:   string
 }
+
+const EVENTS_WINDOW_H = 24
 
 function EventsView({ tenantId }: { tenantId: string }) {
   const { t } = useTranslation('contacts')
-  const [categoryFilter, setCategoryFilter] = useState('')
+  const [categoryPrefix, setCategoryPrefix] = useState('')
   const [rows,    setRows]    = useState<AgentEventSummaryRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
@@ -848,21 +871,28 @@ function EventsView({ tenantId }: { tenantId: string }) {
     setLoading(true)
     setError(null)
     try {
+      // A janela é DECLARADA, não implícita: o título promete 24 h e o endpoint
+      // defaulta para 7 dias. Sem esta linha a tela mostra sete vezes mais período
+      // do que diz — divergência que nenhum estado vazio denuncia.
+      const from = new Date(Date.now() - EVENTS_WINDOW_H * 3600_000).toISOString()
       const params = new URLSearchParams({
         tenant_id: tenantId,
-        period:    '24h',
-        ...(categoryFilter.trim() ? { category_regex: categoryFilter.trim() } : {}),
+        from_dt:   from,
+        ...(categoryPrefix.trim() ? { category: categoryPrefix.trim() } : {}),
       })
       const res = await apiFetch(`/reports/agent-events/summary?${params}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-      setRows(Array.isArray(data) ? data : data.rows ?? [])
+      const body = await res.json()
+      // `data` é a chave do contrato. O `Array.isArray` fica como tolerância a um
+      // envelope que o endpoint não usa hoje — mas `?? []` sobre a chave ERRADA é
+      // como esta tela passou meses vazia, então o fallback nomeia a chave certa.
+      setRows(Array.isArray(body) ? body : body.data ?? [])
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [tenantId, categoryFilter])
+  }, [tenantId, categoryPrefix])
 
   useEffect(() => {
     fetchData()
@@ -878,8 +908,8 @@ function EventsView({ tenantId }: { tenantId: string }) {
         <span className="text-sm font-semibold text-dark">{t('monitor.events.title')}</span>
         <input
           type="text"
-          value={categoryFilter}
-          onChange={e => setCategoryFilter(e.target.value)}
+          value={categoryPrefix}
+          onChange={e => setCategoryPrefix(e.target.value)}
           placeholder={t('monitor.events.filterPlaceholder')}
           className="ml-auto w-64 text-xs border border-border rounded-md px-3 py-1.5 bg-white text-dark placeholder-muted focus:outline-none focus:ring-1 focus:ring-primary"
         />
@@ -917,9 +947,12 @@ function EventsView({ tenantId }: { tenantId: string }) {
             <table className="w-full text-sm">
               <thead className="bg-surface-muted border-b border-border sticky top-0 z-10">
                 <tr>
+                  {/* Sem coluna Pool: agrupando por categoria a linha NÃO traz pool.
+                      Uma coluna estruturalmente vazia é pior que coluna nenhuma —
+                      ela sugere que o dado existe e não chegou. O pool está no
+                      PRIMEIRO segmento da categoria, por construção do Arc 12. */}
                   {[
                     t('monitor.events.col.category'),
-                    t('monitor.events.col.pool'),
                     t('monitor.events.col.count'),
                     t('monitor.events.col.avg'),
                     t('monitor.events.col.lastSeen'),
@@ -935,10 +968,7 @@ function EventsView({ tenantId }: { tenantId: string }) {
                 {rows.map((row, i) => (
                   <tr key={i} className="hover:bg-primary/5 transition-colors">
                     <td className="px-4 py-2.5">
-                      <code className="text-xs text-secondary font-mono">{row.category}</code>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-muted">
-                      {row.pool_id ?? '—'}
+                      <code className="text-xs text-secondary font-mono">{row.group_key}</code>
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       <span className="font-bold tabular-nums text-dark">{row.count}</span>

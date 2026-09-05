@@ -342,13 +342,12 @@
     },
     "events": {
       "title": "Eventos de negócio (últimas 24h)",
-      "filterPlaceholder": "Filtrar por categoria (regex)…",
+      "filterPlaceholder": "Filtrar por prefixo de categoria (ex.: retencao_humano.wrapup.motivo.)…",
       "refresh": "↻ Atualizar",
       "loading": "Carregando eventos…",
       "empty": "Nenhum evento de negócio nas últimas 24 horas.",
       "col": {
         "category": "Categoria",
-        "pool": "Pool",
         "count": "Qtd.",
         "avg": "Valor médio",
         "lastSeen": "Último evento"

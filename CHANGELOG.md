@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (12) — a vista de Eventos do Monitor estava vazia desde que nasceu, e ninguém tinha por que notar
+
+Ao procurar **onde ver as contagens da árvore de wrap-up**, a resposta era "na aba Eventos do Monitor".
+Medido: aquela aba renderiza o estado *"nenhum evento"* **sempre**, desde o Arc 19 que a criou. São
+quatro divergências com o contrato de `/reports/agent-events/summary`, e as quatro degradam mudo:
+
+| # | a tela mandava/lia | o endpoint tem | efeito |
+|---|---|---|---|
+| 1 | `data.rows` | `{data, meta}` | `rows` = `undefined` ⇒ `?? []` ⇒ **tabela vazia com 9 linhas no ar** |
+| 2 | `period=24h` | `from_dt`/`to_dt` | FastAPI ignora query desconhecida ⇒ janela real de **7 dias** sob um título que promete 24 h |
+| 3 | `category_regex=…` | `category` (prefixo) | o filtro **não fazia nada** — o operador digitava e a lista não mudava |
+| 4 | `row.category`, `row.pool_id` | `group_key`; sem pool ao agrupar por categoria | coluna de categoria em branco, coluna Pool estruturalmente vazia |
+
+O item 1 é o que dá o nome ao achado: **`?? []` sobre a chave errada** é indistinguível de "não há
+dado". É a mesma família do `catch {}` sobre o `handoff-status` (que publicava *0 sessões ativas* porque
+a env não existia) — caminho que degrada num valor plausível sem dizer que degradou. E o item 2 é o par
+dele no outro sentido: um parâmetro que o servidor **ignora em silêncio** faz a tela mostrar sete vezes
+mais período do que anuncia, sem nada ficar vermelho.
+
+**Prefixo não é um filtro pior que regex — é o certo.** `startsWith` sobre a `category` inteira é
+exatamente o recorte que a taxonomia em árvore pede (D10 do `adr-dialog-tree-options`):
+`retencao_humano.wrapup.motivo.financeiro.` alcança o ramo inteiro. O rótulo foi corrigido nos dois
+locales — dizer "regex" era a tela mentindo sobre o que o botão faz.
+
+**A coluna Pool saiu**, com a chave de i18n junto: agrupando por categoria a linha não traz pool, e
+coluna estruturalmente vazia é pior que coluna nenhuma — sugere que o dado existe e não chegou. O pool
+é o **primeiro segmento** da categoria, por construção do Arc 12.
+
+Verificado: `tsc --noEmit` verde · `probe_i18n_duplicate_keys` (54 arquivos) · `probe_i18n_contacts_parity`
+(749 × 749, árvores idênticas). A tela só muda de verdade no próximo build do `platform-ui`.
+
+⚠️ **Não confundir com o relatório de wrap-up que "sumiu"**: `/analise/wrapup` não foi removido, foi
+**absorvido** como lente `disposition` na superfície de Contatos (D7 do
+`adr-relatorios-duas-superficies-e-lentes`). E ele mede outra coisa — desfecho da pendência de ACW
+(entregue / expirado / fechado por supervisor / tempo médio de preenchimento), **nunca o que foi
+respondido**. As duas perguntas têm superfícies diferentes e é correto que tenham.
+
+Arquivos: `packages/platform-ui/src/modules/contacts/tabs/MonitorTab.tsx` ·
+`packages/platform-ui/src/i18n/locales/{en,pt-BR}/contacts.json` · `pending.md` (DLG-23).
+
+---
+
 ## 2026-09-05 (11) — com o Console em dia, a árvore mediu: caminho até a folha, guarda `prefix` e a D10 com dado
 
 Contato `4919af4a-6c97-48d0-aaef-b783dc1f46a0`, segmento humano `cfbafa41`, wrap-up às 17:20. A verdade

@@ -342,13 +342,12 @@
     },
     "events": {
       "title": "Business Events (last 24h)",
-      "filterPlaceholder": "Filter by category regex…",
+      "filterPlaceholder": "Filter by category prefix (e.g. retencao_humano.wrapup.motivo.)…",
       "refresh": "↻ Refresh",
       "loading": "Loading events…",
       "empty": "No business events in the last 24 hours.",
       "col": {
         "category": "Category",
-        "pool": "Pool",
         "count": "Count",
         "avg": "Avg value",
         "lastSeen": "Last seen"
