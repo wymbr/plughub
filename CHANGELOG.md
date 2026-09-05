@@ -1,5 +1,48 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (10) — a F6 mediu, e o que ela mediu foi o Console atrás do build
+
+Primeiro contato real sobre a árvore: sessão `4db6dbff-4e15-422b-b6ae-8eea1321ff33`, segmento humano
+`68bc8aed`, wrap-up às 17:03. A cadeia inteira funcionou — a classificação virou `outcome: resolved`
+no segmento por referência, e saíram **2** eventos de negócio com a forma certa (`pool.skill.métrica…`,
+`l1..l4` decompostos, um por pergunta).
+
+**E o valor gravado está errado**: `retencao_humano.wrapup.motivo.tecnico` e `…servico.cadastro` são
+**PASTAS**, não folhas. O que se queria contar era `tecnico.conectividade.sem_sinal`. É o modo de falha
+que a D2 e a D7 existem para impedir — agora com dado no ClickHouse.
+
+### A causa, medida nos dois lados
+
+A imagem do `platform-ui` é das **09:32**; a F3 (colunas Miller + guarda D7) entrou depois. O
+`form_get` entregou a subárvore com `options_tree: true`, e a tela **ignorou**: desenhou só o nível de
+cima e deixou submeter.
+
+Provado com **controle positivo dentro do bundle servido** — sem ele o zero não significa nada, porque
+um grep que não alcança o arquivo também devolve zero: `maskedRefused` (chave i18n pré-existente)
+aparece **3×**; `leafRequired` e `options_tree`, **0**. Do outro lado, o `@plughub/schemas` do
+mcp-server em execução **tem** `options_tree` e **tem** o `sanitizeCategoryPath` da F4 — logo um caminho
+completo teria chegado com os pontos intactos, em 6 segmentos. A resposta submetida era mesmo a pasta.
+
+### O que isto muda na DLG-15 (D11)
+
+Ela estava escrita como risco **prospectivo**, com gatilho *"primeira forma com árvore endereçada a
+canal não-web"*. Foi reproduzida ao vivo por um caminho que a redação não previa: o degrade não veio de
+canal pobre, veio de **superfície desatualizada**. A lição é sobre onde a recusa pode morar — **quem não
+sabe desenhar árvore nem sempre se declara**, então política que dependa de o consumidor se identificar
+tem um buraco do tamanho de um deploy atrasado.
+
+### O que a F6 ainda espera
+
+Conferir prefixo sobre **pasta** não responde a pergunta da fase: é a mesma família da categoria
+`_a_b_` que a F2 removeu — série que existe e não significa. Falta rebuildar o Console e um segundo
+contato que desça até folha em `motivo` e marque **2+ folhas dentro de uma pasta** em `servico`; sem
+multi-folha, a D5 e a metade multi da F2 não foram exercidas por contato real nenhum. `DLG-21`.
+
+Arquivos: `docs/adr/adr-dialog-tree-options.md` (medição da F6) · `pending.md` (DLG-15 reclassificada,
+DLG-21 nova).
+
+---
+
 ## 2026-09-05 (9) — a árvore entrou em produção num pool, e o README que dizia quem consome estava mentindo
 
 `retencao_humano.on_human_end.context.dialog_form_id` passou de `dialog_wrapup_arc12_v1` para

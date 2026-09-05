@@ -329,6 +329,55 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## Medicao da F6 (2026-09-05) — a cadeia funcionou, e o VALOR saiu errado
+
+Contato real atravessou o `retencao_humano` as 17:02-17:03 (sessao
+`4db6dbff-4e15-422b-b6ae-8eea1321ff33`, segmento humano `68bc8aed`). O wrap-up rodou, gravou
+`outcome: resolved` no segmento por referencia, e emitiu **2** eventos de negocio:
+
+```
+retencao_humano.wrapup.motivo.tecnico     l1=retencao_humano l2=wrapup l3=motivo  l4=tecnico
+retencao_humano.wrapup.servico.cadastro   l1=retencao_humano l2=wrapup l3=servico l4=cadastro
+```
+
+**A forma esta certa e o conteudo esta errado**: `tecnico` e `cadastro` sao **PASTAS**, nao folhas.
+O que se quis contar era `tecnico.conectividade.sem_sinal`; o que existe no ClickHouse e o rotulo do
+galho. E o modo de falha que a D2 e a D7 existem para impedir, agora com dado gravado.
+
+### Por que aconteceu, medido nos dois lados
+
+**O Console servido estava ATRAS do build.** A imagem do `platform-ui` e das 09:32; a F3 (colunas
+Miller + guarda D7) entrou depois. Provado com **controle positivo** dentro do bundle servido — sem
+ele o zero nao significaria nada, porque grep que nao alcanca o arquivo tambem devolve zero:
+
+| marcador | ocorrencias no bundle servido | o que prova |
+|---|---|---|
+| `maskedRefused` (chave i18n pre-existente) | **3** | o grep alcanca os locales embutidos |
+| `leafRequired` (guarda D7, so pos-F3) | **0** | a tela nao tinha a guarda |
+| `options_tree` (declaracao derivada, F3) | **0** | a tela nao lia a declaracao |
+
+**E o outro lado estava em dia**, o que descarta as hipoteses alternativas: o `@plughub/schemas` do
+mcp-server em execucao **tem** `options_tree` (logo o `form_get` entregou a subarvore, declarada como
+arvore) e **tem** o `sanitizeCategoryPath` da F4 (logo um caminho completo teria chegado com os pontos
+intactos, em 6 segmentos). A resposta submetida era mesmo a pasta.
+
+### O que isto acrescenta a D11, e nao e detalhe
+
+A `DLG-15` estava escrita como risco **prospectivo**, com o gatilho *"primeira forma com arvore
+endereçada a canal nao-web"*. Ela acabou de ser **reproduzida ao vivo**, e por um caminho que a
+redacao nao previa: o degrade nao veio de canal pobre, veio de **superficie desatualizada**. A licao
+e sobre onde a recusa pode morar — **quem nao sabe desenhar arvore nem sempre se declara**, entao uma
+politica que dependa de o consumidor se identificar tem um buraco do tamanho de um deploy atrasado.
+
+### Estado da F6
+
+Segue 🟡. O que a fase pede — *contagem por prefixo confere com os eventos emitidos* — e conferivel
+mecanicamente hoje (`startsWith` acha 1 evento por pergunta), mas conferir prefixo sobre **pasta** nao
+responde a pergunta: e a mesma familia da categoria `_a_b_` que a F2 removeu, uma serie que existe e
+nao significa. Falta rebuildar o Console e um SEGUNDO contato que desça ate folha em `motivo` e marque
+**2+ folhas dentro de uma pasta** em `servico` — sem multi-folha, a D5 e a metade multi da F2 nao sao
+exercidas por contato real nenhum. Registrado como `DLG-21`.
+
 ## As-built do pre-requisito da F6 (2026-09-05)
 
 A forma da arvore deixou de ser artefato so de gate: **`retencao_humano.on_human_end`**
