@@ -1,5 +1,43 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (13) — a série de eventos dava 500 COM dado e 200 SEM dado
+
+Ao avaliar se dá para desenhar a curva de uma folha da taxonomia ao longo do tempo, medi o endpoint que
+ela usaria. `/reports/agent-events/series` estava assim:
+
+| chamada | resposta |
+|---|---|
+| prefixo que **casa** linhas | **500** |
+| prefixo que não casa nada | 200 |
+| mesmo dado, `format=csv` | 200 |
+| `/agent-events/summary`, mesmo dado (controle) | 200 |
+
+A causa é uma assimetria de `datetime`: **`date` não é subclasse de `datetime`** — é o contrário,
+`datetime` herda de `date`. `_rows_to_dicts`, que é a casa única de conversão, tratava só `datetime`,
+então o `toDate(emitted_at) AS period` chegava ao `JSONResponse` como objeto cru e o encoder levantava
+`TypeError`. As irmãs usam `DateTime64` e por isso nunca mostraram o defeito; o CSV passava porque não
+serializa JSON.
+
+⚠️ **O que faz este defeito durar: ele é invisível em instalação limpa.** Sem linha o endpoint responde
+200, e um smoke test numa stack recém-subida passa. É a família do *teste que não pode reprovar* — a
+asserção nunca alcança a condição que deveria julgar. Por isso o teste que acompanha o conserto
+**carrega uma linha** e usa o próprio `json.dumps` como veredicto: asserir `isinstance(v, str)` deixaria
+passar um `repr` qualquer.
+
+O `elif` vem **depois** do ramo de `datetime`, e isso é load-bearing: invertido, ele capturaria todo
+`datetime` e **apagaria a hora** de todo relatório da casa — dano muito maior que o 500 que se estava
+consertando, e mudo. É o que o controle positivo do teste existe para prender.
+
+Bateria de mutação, as três vermelhas: remover o ramo (reproduz o 500) · inverter a ordem (apaga a
+hora) · serializar o dia como meia-noite UTC (inventa um instante que ninguém mediu). Suíte completa do
+analytics-api: **754 passam**. Verificado ao vivo depois do rebuild: 200 com dado, e o `period` sai como
+`"2026-09-05"`, sem hora fabricada.
+
+Arquivos: `packages/analytics-api/src/plughub_analytics_api/reports_query.py` ·
+`packages/analytics-api/src/plughub_analytics_api/tests/test_rows_to_dicts_date_bucket.py` (novo).
+
+---
+
 ## 2026-09-05 (12) — a vista de Eventos do Monitor estava vazia desde que nasceu, e ninguém tinha por que notar
 
 Ao procurar **onde ver as contagens da árvore de wrap-up**, a resposta era "na aba Eventos do Monitor".

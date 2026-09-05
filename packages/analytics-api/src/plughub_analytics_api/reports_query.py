@@ -16,7 +16,7 @@ import asyncio
 import csv
 import io
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from . import sla_source, survey_catalog
@@ -77,6 +77,20 @@ def _rows_to_dicts(result: Any) -> list[dict]:
             if isinstance(v, datetime):
                 if v.tzinfo is None:
                     v = v.replace(tzinfo=timezone.utc)
+                d[k] = v.isoformat()
+            # `date` NAO e subclasse de `datetime` — e o contrario: `datetime`
+            # herda de `date`. Entao o ramo acima nunca alcanca um `toDate(...)`,
+            # e a coluna saia como objeto `date` cru ate o `JSONResponse`, que
+            # levanta `TypeError` e vira **500**. Este `elif` tem de vir DEPOIS:
+            # invertida, a ordem capturaria todo datetime aqui e perderia a hora.
+            #
+            # ⚠️ Media em 2026-09-05: o modo de falha e invisivel em ambiente
+            # vazio. `/reports/agent-events/series` devolvia 200 sem linha e 500
+            # com linha — ou seja, um smoke test numa instalacao limpa PASSA, e o
+            # unico jeito de ver e ter dado. Mesma familia do teste que nao pode
+            # reprovar; por isso o teste que acompanha este conserto carrega uma
+            # linha de verdade em vez de exercitar a funcao a seco.
+            elif isinstance(v, date):
                 d[k] = v.isoformat()
         rows.append(d)
     return rows
