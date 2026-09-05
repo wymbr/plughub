@@ -1,5 +1,48 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (21) — a mistura de vocabulários ficou VISÍVEL, e a tela não a separava
+
+Com os dois consertos anteriores no ar, a árvore de `servico` mostrou o terceiro problema — e este
+não é de sinalização, é de leitura:
+
+```
+servico                 26  13
+  alteracao_plano        9   9
+  cadastro          1    4   3
+    segunda_via          1   1     ← forma em ÁRVORE
+    troca_titularidade   2   2     ← forma em ÁRVORE
+  cancelamento           2   2
+  segunda_via            9   9     ← forma PLANA (arc12)
+  troca_titularidade     2   2     ← forma PLANA
+```
+
+**`segunda_via` aparece em dois caminhos, e as duas linhas eram indistinguíveis.** É o mesmo serviço do
+mundo real partido pela troca de vocabulário — a colisão que a `DLG-24` mediu no ClickHouse, agora na
+tela. A tarja avisava que a janela mistura formas, mas a tabela mostrava dois `segunda_via` (9 e 1) sem
+nada que os separasse, porque o rótulo é o último segmento do caminho.
+
+**Fundir seria errado** — são vocabulários diferentes e o endpoint conta por caminho. **Deixar
+ambíguo é pior** — o leitor não tem como saber por que o mesmo nome aparece duas vezes. A saída é
+desambiguar pelo pai (`cadastro › segunda_via`), e **só onde há ambiguidade**: pôr o caminho completo em
+toda linha empurraria ruído para as que não precisam. O caminho inteiro passou a viver no `title` de
+cada linha, que é sempre certo e custa nada.
+
+A nota de rodapé sobre o caso só aparece quando há rótulo repetido — nota permanente sobre situação
+eventual vira decoração que ninguém lê.
+
+⚠️ **Isto reforça a `DLG-25` (época por forma) com um argumento que antes era teórico:** enquanto as
+duas formas convivem na mesma janela, a árvore é legível mas não é somável — `segunda_via` tem 10
+marcações no mundo real e nenhuma linha da tabela diz 10. Recortar o período por forma resolve isso
+por construção, sem a tela precisar de nenhuma regra nova.
+
+Verificado: `tsc --noEmit` verde · `probe_i18n_duplicate_keys` · `probe_i18n_contacts_parity`
+(773 × 773).
+
+Arquivos: `packages/platform-ui/src/modules/analise/TaxonomyTreeLens.tsx` ·
+`i18n/locales/{en,pt-BR}/contacts.json`.
+
+---
+
 ## 2026-09-05 (20) — dois defeitos da lente `taxonomy`, achados ao olhar a tela com dado real
 
 A lente subiu e funcionou; o que ela mostrou foram dois erros meus, ambos de **sinalização** — o

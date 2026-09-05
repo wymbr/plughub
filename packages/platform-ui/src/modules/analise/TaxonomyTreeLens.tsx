@@ -142,6 +142,29 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
 
   const orfas = useMemo(() => nodes.filter(n => !isLeaf(n) && n.own > 0), [nodes])
 
+  /**
+   * Rótulos que aparecem em MAIS DE UM caminho da árvore.
+   *
+   * Acontece de verdade e é o sintoma visível da mistura de vocabulários: quando a
+   * forma do pool troca, `segunda_via` pode existir como folha na raiz (forma plana)
+   * e sob `cadastro` (forma em árvore) ao mesmo tempo — o mesmo serviço do mundo
+   * real em dois caminhos. Medido em 2026-09-05: duas linhas `segunda_via`, 9 e 1.
+   *
+   * Fundi-las seria errado (são vocabulários diferentes, e o endpoint conta por
+   * caminho), mas exibi-las com o mesmo rótulo e nada que as separe é pior — o
+   * leitor não tem como saber por que o mesmo nome aparece duas vezes. A saída é
+   * DESAMBIGUAR pelo pai, e só onde há ambiguidade: pôr o caminho em toda linha
+   * empurraria ruído para os 99% que não precisam.
+   */
+  const ambiguos = useMemo(() => {
+    const conta = new Map<string, number>()
+    for (const n of nodes) {
+      const rotulo = n.prefix.split('.').slice(-1)[0] ?? ''
+      conta.set(rotulo, (conta.get(rotulo) ?? 0) + 1)
+    }
+    return new Set([...conta].filter(([, c]) => c > 1).map(([r]) => r))
+  }, [nodes])
+
   if (!root && !loading) {
     return <EmptyState title={t('lens.taxonomy.noRoots')} description={t('lens.taxonomy.noRootsHint')} />
   }
@@ -234,11 +257,17 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
               {visiveis.map(n => {
                 const folha    = isLeaf(n)
                 const recuo    = Math.max(0, n.depth - raizProf)
-                const rotulo   = n.prefix.split('.').slice(-1)[0]
+                const segs     = n.prefix.split('.')
+                const rotulo   = segs[segs.length - 1] ?? ''
+                // Pai só quando o rótulo se repete noutro caminho — ver `ambiguos`.
+                const paiAmbiguo = ambiguos.has(rotulo) && segs.length > raizProf + 1
+                  ? segs[segs.length - 2]
+                  : null
                 const anomalia = !folha && n.own > 0
                 const diverge  = n.branch_contacts !== n.branch_marks
                 return (
-                  <tr key={n.prefix} className={anomalia ? 'bg-warning/5' : undefined}>
+                  <tr key={n.prefix} title={n.prefix}
+                      className={anomalia ? 'bg-warning/5' : undefined}>
                     <td className="px-4 py-2">
                       <span className="flex items-center gap-2" style={{ paddingLeft: recuo * 18 }}>
                         {folha ? <span className="w-3.5" /> : (
@@ -256,7 +285,10 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
                               : <ChevronDown size={13} />}
                           </button>
                         )}
-                        <span className={folha ? '' : 'font-semibold'}>{rotulo}</span>
+                        <span className={folha ? '' : 'font-semibold'}>
+                          {paiAmbiguo && <span className="text-muted font-normal">{paiAmbiguo} › </span>}
+                          {rotulo}
+                        </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                           folha ? 'bg-green-50 text-green-700' : 'bg-surface-muted text-muted'}`}>
                           {folha ? t('lens.taxonomy.leaf') : t('lens.taxonomy.folder')}
@@ -289,6 +321,9 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
       )}
 
       <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.footnote')}</p>
+      {ambiguos.size > 0 && (
+        <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.ambiguous')}</p>
+      )}
     </div>
   )
 }

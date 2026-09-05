@@ -1010,7 +1010,8 @@
         "ownLeaf": "Numa folha, o próprio é sempre igual às marcações — a coluna só informa em pasta."
       },
       "footnote": "Marcações somam; contatos não. Em pergunta de resposta única os dois coincidem; em múltipla escolha divergem, e a diferença é quem marcou mais de uma folha do mesmo ramo.",
-      "mixedUnstamped": "Parte desta janela é anterior ao carimbo de formulário:"
+      "mixedUnstamped": "Parte desta janela é anterior ao carimbo de formulário:",
+      "ambiguous": "Quando o formulário do pool muda, o mesmo item pode aparecer em dois caminhos (ex.: na raiz e sob uma pasta). Não são fundidos — são vocabulários diferentes —, e a linha mostra o pai para separá-los."
     }
   }
 }

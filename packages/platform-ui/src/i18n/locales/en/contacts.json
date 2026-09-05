@@ -1010,7 +1010,8 @@
         "ownLeaf": "On a leaf, own always equals marks — the column only informs on folders."
       },
       "footnote": "Marks add up; contacts do not. In single-answer questions the two coincide; in multi-select they diverge, and the gap is whoever marked more than one leaf of the same branch.",
-      "mixedUnstamped": "Part of this window predates the form stamp:"
+      "mixedUnstamped": "Part of this window predates the form stamp:",
+      "ambiguous": "When the pool's form changes, the same item can appear in two paths (e.g. at the root and under a folder). They are not merged — they are different vocabularies — and the row shows the parent to tell them apart."
     }
   }
 }
