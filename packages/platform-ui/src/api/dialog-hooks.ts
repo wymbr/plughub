@@ -86,6 +86,19 @@ export interface DialogOption {
   label: LocalizedText
   value?: string
   capture?: DialogCapture
+  /**
+   * Subárvore (F1 do `adr-dialog-tree-options`). Presente ⇒ é PASTA, e a opção
+   * deixa de ser selecionável; ausente ⇒ folha. A distinção é DERIVADA, nunca
+   * declarada — não há flag a marcar nem a esquecer.
+   *
+   * ⚠️ Este tipo é ESPELHADO do `@plughub/schemas` (o platform-ui não o importa).
+   * Espelho que perde campo transforma perda de dado em código que compila — foi
+   * assim que `capture.kind` sumia a cada salvamento até a F0.
+   */
+  options?: DialogOption[]
+  /** `false` = APOSENTADA: sai da oferta e permanece no form, para o histórico
+   *  continuar explicável (D6). Ausente = ativa. */
+  active?: boolean
 }
 
 export interface DialogField {
@@ -117,7 +130,12 @@ export interface DialogField {
 
 export type DialogVisibility = 'all' | 'agents_only' | string[]
 
-export type AskWhenOp = 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'ne' | 'in'
+/**
+ * ⚠️ ESPELHO de `AskWhenOpSchema` (`@plughub/schemas`), que o platform-ui não
+ * importa. `prefix` entrou no schema com a F1 e faltava aqui — espelho que perde
+ * um caso transforma ausência de afordância em código que compila.
+ */
+export type AskWhenOp = 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'ne' | 'in' | 'prefix'
 
 /** Declarative skip-logic guard (references a prior question's output_key). */
 export interface AskWhen {

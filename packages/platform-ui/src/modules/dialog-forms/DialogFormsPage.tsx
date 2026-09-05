@@ -42,6 +42,7 @@ import {
 import { type Block, buildBlocks, flattenBlocks, reprojectionDrift, formQuestionOf } from './dialog-blocks'
 import DialogJsonPanel from './DialogJsonPanel'
 import FormBlockEditor from './FormBlockEditor'
+import { OptionTreeEditor } from './OptionTreeEditor'
 import {
   useFormatCatalog, useMaskedTypes, formatLabel, d8Verdict,
 } from './catalog-hooks'
@@ -162,6 +163,8 @@ const DialogFormsPage: React.FC = () => {
   const [editLocale, setEditLocale] = useState('pt-BR')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [adjust, setAdjust]     = useState<Set<number>>(new Set())
+  /** Caminhos de opção do documento CARREGADO — travam a edição do `id` (D6). */
+  const [idsSalvos, setIdsSalvos] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
     if (draft) setEditLocale(draft.default_locale || 'pt-BR')
@@ -170,6 +173,7 @@ const DialogFormsPage: React.FC = () => {
 
   const openNew = () => {
     setDraft(emptyForm('pt-BR')); setBlocks([]); setIsNew(true); setMsg(null)
+    setIdsSalvos(new Set())
     setExpanded(new Set()); setAdjust(new Set())
   }
   const openEdit = useCallback(async (formId: string) => {
@@ -177,6 +181,7 @@ const DialogFormsPage: React.FC = () => {
     try {
       const full = await getDialogForm(TENANT, formId)
       setDraft(full); setBlocks(buildBlocks(full)); setIsNew(false)
+      setIdsSalvos(caminhosDeOpcao(full.nodes))
       setExpanded(new Set()); setAdjust(new Set())
     } catch (e) {
       setMsg({ kind: 'err', text: String(e) })
@@ -293,7 +298,7 @@ const DialogFormsPage: React.FC = () => {
       setMsg({ kind: 'ok', text: publish ? t('msg.published') : t('msg.saved') })
       await reload()
       const fresh = await getDialogForm(TENANT, draft.form_id)
-      setDraft(fresh); setBlocks(buildBlocks(fresh))
+      setDraft(fresh); setBlocks(buildBlocks(fresh)); setIdsSalvos(caminhosDeOpcao(fresh.nodes))
     } catch (e) {
       setMsg({ kind: 'err', text: String(e) })
     } finally {
@@ -325,7 +330,7 @@ const DialogFormsPage: React.FC = () => {
       if (res.purged) { setDraft(null); setBlocks([]) }
       else {
         const fresh = await getDialogForm(TENANT, draft.form_id)
-        setDraft(fresh); setBlocks(buildBlocks(fresh))
+        setDraft(fresh); setBlocks(buildBlocks(fresh)); setIdsSalvos(caminhosDeOpcao(fresh.nodes))
       }
     } catch (e) {
       setMsg({ kind: 'err', text: String(e) })
@@ -340,7 +345,7 @@ const DialogFormsPage: React.FC = () => {
       setMsg({ kind: 'ok', text: t('msg.restored') })
       await reload()
       const fresh = await getDialogForm(TENANT, draft.form_id)
-      setDraft(fresh); setBlocks(buildBlocks(fresh))
+      setDraft(fresh); setBlocks(buildBlocks(fresh)); setIdsSalvos(caminhosDeOpcao(fresh.nodes))
     } catch (e) {
       setMsg({ kind: 'err', text: String(e) })
     } finally { setBusy(false) }
@@ -470,7 +475,7 @@ const DialogFormsPage: React.FC = () => {
               {blocks.map((block, idx) => (
                 <BlockCard key={idx} block={block} idx={idx} total={blocks.length}
                   instruments={instruments} locale={editLocale} defaultLocale={draft.default_locale}
-                  priorKeys={priorKeys} compositeOn={!!draft.composite}
+                  priorKeys={priorKeys} idsSalvos={idsSalvos} compositeOn={!!draft.composite}
                   expanded={expanded} onToggleExpand={toggleExpand}
                   adjust={adjust.has(idx)} onToggleAdjust={() => toggleAdjust(idx)}
                   onChange={b => updateBlock(idx, b)} onRemove={() => removeBlock(idx)}
@@ -567,6 +572,7 @@ interface BlockCardProps {
   locale: string
   defaultLocale: string
   priorKeys: Record<string, string[]>
+  idsSalvos: Set<string>
   compositeOn: boolean
   expanded: Set<string>
   onToggleExpand: (id: string) => void
@@ -578,7 +584,7 @@ interface BlockCardProps {
 }
 
 const BlockCard: React.FC<BlockCardProps> = ({
-  block, idx, total, instruments, locale, defaultLocale, priorKeys, compositeOn, expanded, onToggleExpand,
+  block, idx, total, instruments, locale, defaultLocale, priorKeys, idsSalvos, compositeOn, expanded, onToggleExpand,
   adjust, onToggleAdjust, onChange, onRemove, onMove,
 }) => {
   const { t } = useTranslation('dialogForms')
@@ -782,6 +788,7 @@ const BlockCard: React.FC<BlockCardProps> = ({
           <NodeRow key={node.id} node={node} first={i === 0} last={i === block.nodes.length - 1}
             locale={locale} defaultLocale={defaultLocale} scored={isInstrument}
             priorKeys={priorKeys[node.id] ?? []}
+            idsSalvos={idsSalvos}
             expanded={expanded.has(node.id)} onToggle={() => onToggleExpand(node.id)}
             showWeight={isInstrument && adjust} pct={node.kind === 'question' ? pctOf(node) : 0}
             onChange={n => updateNode(i, n)} onRemove={() => removeNode(i)} onMove={dir => moveNode(i, dir)} />
@@ -818,8 +825,9 @@ const NodeRow: React.FC<{
   node: DialogNode; first: boolean; last: boolean; locale: string; defaultLocale: string; scored: boolean
   priorKeys: string[]
   expanded: boolean; onToggle: () => void; showWeight: boolean; pct: number
+  idsSalvos: Set<string>
   onChange: (n: DialogNode) => void; onRemove: () => void; onMove: (dir: -1 | 1) => void
-}> = ({ node, first, last, locale, defaultLocale, scored, priorKeys, expanded, onToggle, showWeight, pct, onChange, onRemove, onMove }) => {
+}> = ({ node, first, last, locale, defaultLocale, scored, priorKeys, idsSalvos, expanded, onToggle, showWeight, pct, onChange, onRemove, onMove }) => {
   const { t } = useTranslation('dialogForms')
   const isQ = node.kind === 'question'
   const summary = ltToStr(node.kind === 'question' ? node.prompt : node.text, locale, defaultLocale)
@@ -851,7 +859,7 @@ const NodeRow: React.FC<{
         <div className="px-3 pb-2">
           {node.kind === 'statement'
             ? <StatementEditor node={node} locale={locale} defaultLocale={defaultLocale} priorKeys={priorKeys} onChange={onChange} />
-            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} scored={scored} priorKeys={priorKeys} onChange={onChange} />}
+            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} scored={scored} priorKeys={priorKeys} idsSalvos={idsSalvos} onChange={onChange} />}
         </div>
       )}
     </div>
@@ -875,8 +883,34 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLo
   )
 }
 
-const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; priorKeys: string[]; onChange: (n: DialogNode) => void }> =
-({ node, locale, defaultLocale, scored, priorKeys, onChange }) => {
+/**
+ * Todos os caminhos de `id` de opção do documento como ele foi CARREGADO.
+ * É este conjunto que trava a edição do `id` (D6): o que veio do store tem
+ * série histórica atrás, e trocar o `id` funde duas coisas na agregação por
+ * prefixo, em silêncio. O que é novo ainda não tem histórico — pode ser
+ * corrigido à vontade até salvar.
+ */
+function caminhosDeOpcao(nodes: DialogNode[] | undefined): Set<string> {
+  const out = new Set<string>()
+  const anda = (opts: DialogOption[] | undefined, prefixo: string): void => {
+    for (const o of opts ?? []) {
+      const id = o.value ?? o.id
+      if (!id) continue
+      const cam = prefixo ? `${prefixo}.${id}` : id
+      out.add(cam)
+      anda(o.options, cam)
+    }
+  }
+  for (const n of nodes ?? []) {
+    if (n.kind !== "question") continue
+    anda(n.options, "")
+    for (const f of n.fields ?? []) anda(f.options, "")
+  }
+  return out
+}
+
+const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; priorKeys: string[]; idsSalvos: Set<string>; onChange: (n: DialogNode) => void }> =
+({ node, locale, defaultLocale, scored, priorKeys, idsSalvos, onChange }) => {
   const { t } = useTranslation('dialogForms')
   const { tenantId } = useAuth()
   // Os dois catálogos vêm do STORE (config-api), nunca do default embutido: é
@@ -1038,28 +1072,13 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
       )}
 
       {!scored && HAS_OPTIONS(node.interaction) && (
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-gray-600">{t('field.options')}</span>
-            <button onClick={() => setOptions([...(node.options ?? []), { id: '', label: '' }])}
-              className="text-[11px] border px-1.5 py-0.5 rounded hover:bg-white">+ {t('field.option')}</button>
-          </div>
-          {(node.options ?? []).map((opt, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input value={opt.id} placeholder="id"
-                onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i]!, id: e.target.value }; setOptions(o) }}
-                className="w-24 border rounded px-2 py-0.5 text-xs bg-white" />
-              <input value={ltToStr(opt.label, locale, defaultLocale)} placeholder={t('field.label')}
-                onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i]!, label: setLt(o[i]!.label, locale, e.target.value, defaultLocale) }; setOptions(o) }}
-                className="flex-1 border rounded px-2 py-0.5 text-xs bg-white" />
-              <input value={opt.value ?? ''} placeholder={t('field.value')}
-                onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i]!, value: e.target.value || undefined }; setOptions(o) }}
-                className="w-16 border rounded px-2 py-0.5 text-xs bg-white" />
-              <button onClick={() => setOptions((node.options ?? []).filter((_, k) => k !== i))}
-                className="text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
-            </div>
-          ))}
-        </div>
+        <OptionTreeEditor
+          options={node.options ?? []}
+          onChange={setOptions}
+          locale={locale}
+          defaultLocale={defaultLocale}
+          idsSalvos={idsSalvos}
+        />
       )}
 
       <AskWhenRow guard={node.ask_when} priorKeys={priorKeys} onSet={g => onChange({ ...node, ask_when: g })} />
@@ -1069,7 +1088,11 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
 
 // ── ask_when guard builder (conditional skip-logic) ─────────────────────────────
 
-const AW_OPS: AskWhenOp[] = ['lt', 'lte', 'gt', 'gte', 'eq', 'ne', 'in']
+// `prefix` (D12) entrou no schema com a F1 e faltava AQUI: o avaliador conhecia
+// o op e o autor não tinha como escolhê-lo. Lista de op é mais uma casa que
+// afirma o mesmo conjunto — quando divergem, o editor é quem fica para trás,
+// e a falta aparece como "o schema aceita mas a tela não oferece".
+const AW_OPS: AskWhenOp[] = ['lt', 'lte', 'gt', 'gte', 'eq', 'ne', 'in', 'prefix']
 const isNum = (s: string) => /^-?\d+(\.\d+)?$/.test(s.trim())
 function parseAwValue(op: AskWhenOp, raw: string): AskWhen['value'] {
   if (op === 'in') return raw.split(',').map(s => s.trim()).filter(Boolean).map(s => (isNum(s) ? Number(s) : s))

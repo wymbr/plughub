@@ -329,6 +329,58 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## As-built da F5 (2026-09-05)
+
+A taxonomia passou a ser autorável sem JSON. É a MESMA tabela de opções que já existia, com um
+chevron por linha: descer um nível é abrir a linha, não trocar de tela. Sem drag-and-drop, porque
+não há lib de DnD no projeto e a ordem se resolve com ↑↓ como no resto do editor.
+
+**Editor e renderer desenham DIFERENTE, e isso é decisão:** o autor precisa ver a árvore inteira de
+uma vez (tabela aninhada); quem responde precisa descer rápido sem se perder (colunas Miller, F3).
+Duas perguntas, dois desenhos.
+
+### As três regras que a tela impõe
+
+- **D2** — pasta × folha derivado, e o aviso vem ANTES: apagar o ÚLTIMO filho converte a pasta em
+  folha selecionável e o rótulo dela vira resposta. O `confirm` nomeia a pasta.
+- **D6, `id` imutável** — o campo do `id` é editável **só na opção que não veio do documento
+  carregado**. Comparar com o carregado (e não marcar linha a linha) é o que torna a regra estável
+  através das reescritas imutáveis da árvore; o `id` de quem está no store tem série histórica
+  atrás, e trocá-lo funde duas coisas na agregação por prefixo, em silêncio.
+- **D6, aposentar ≠ apagar** — o botão de aposentadoria põe `active: false`: sai da OFERTA, fica no
+  documento. Apagar continua existindo, para quem nunca publicou aquela folha.
+
+Mais duas afordâncias que dizem a regra em vez de comentá-la: o `value` fica **desabilitado** numa
+pasta (ela não é resposta), e `+ opção` **desabilita** ao atingir a profundidade da D3.
+
+### Duas casas que estavam para trás, e apareceram ao ligar a tela
+
+A F1 pôs `prefix` no schema, e o editor **não o oferecia** — nem no seletor de op (`AW_OPS`) nem no
+tipo espelhado (`AskWhenOp`, em `dialog-hooks.ts`, que o platform-ui mantém porque não importa
+`@plughub/schemas`). Espelho que perde um caso transforma ausência de afordância em código que
+compila — a mesma família do `capture.kind` da F0, e a terceira ocorrência registrada.
+
+⚠️ **Correção de uma afirmação minha, de horas antes:** eu disse que `ask_when` só era autorável
+POR BLOCO e que a F5 dependeria de torná-lo por pergunta. **Falso** — o `AskWhenRow` já existe
+dentro do editor de pergunta *e* do de statement; o de bloco é uma conveniência que fan-out. A
+dependência que anunciei não existia.
+
+### O que NÃO entrou
+
+O botão *"+ pergunta"* na linha da opção — criar a pergunta IRMÃ já com `ask_when {op: prefix}`
+preenchido, mostrada indentada sob a opção que a dispara. É a síntese que o mockup propôs, e não é
+requisito desta fase. Fica como `DLG-18`, com a nota de desenho que a implementação revelou: a
+versão do mockup editava prompt/`output_key` INLINE, e isso seria um **segundo editor** para o
+mesmo nó. A vista deve mostrar um chip e levar ao editor existente, nunca duplicá-lo.
+
+Gate: ramo **F** de `gate_dialog_capture_roundtrip.sh` — a árvore (3 níveis + `active:false`)
+sobrevive a abrir-e-salvar. É o defeito do `capture.kind` (F0) um andar abaixo: projeção que
+descarte a subárvore mata a taxonomia no PRIMEIRO save. Fixture sintética de propósito — nenhuma
+forma publicada tem árvore ainda, e esperar o dado real deixaria o gate vermelho só DEPOIS de
+destruir a taxonomia de alguém. Falseado: a reconstrução voltando a ser allowlist deixa F vermelho.
+
+---
+
 ## As-built da F3 — PARCIAL (2026-09-05)
 
 Entregue: a subárvore chega à superfície, a exigência é derivada, o Console desenha colunas Miller
@@ -508,7 +560,7 @@ falseada desligando a chamada).
 | **F2** ✅ | **Resposta multi de verdade** *(2026-09-05)* | `menu.ts` para de tratar `checklist` como escalar — **o unico item que faltava**. Os renderizadores ja faziam multi, e o `json.dumps` do bridge e TRANSPORTE, nao defeito (ver a correcao do achado 3). Testemunha negativa: `["a","b"]` produz **2** eventos, nunca 1 com categoria `_a_b_`. | F1 |
 | **F3** 🟡 | **Renderer Miller + recusa alta** *(parcial, 2026-09-05)* | ✅ colunas no Console · ✅ subárvore no `render` + `options_tree` derivado · ✅ D7. ❌ recusa em canal pobre (D11) — mudou de casa (o `form_get` NÃO conhece o canal) e virou `DLG-15`. D5 vale POR CONSTRUÇÃO nesta superfície (navegar limpa as marcações); a conferência no submit é `DLG-16`. | F1, F2 |
 | **F4** ✅ | **Categoria de caminho** *(2026-09-05)* | Regex sobe para a profundidade da D3; `decomposeCategoryLevels` mantém 4 **declaradamente**; relatório por `startsWith` (D10). | F2 |
-| **F5** | **Editor de árvore** | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
+| **F5** ✅ | **Editor de árvore** *(2026-09-05)* | Autoria da árvore, aviso de pasta-que-virou-arquivo (D2), `id` bloqueado para edição e `active` como aposentadoria (D6). | F0, F1 |
 | **F6** | **Validação** | Wrap-up real ponta a ponta com árvore de 3+ níveis e multi-folha; contagem por prefixo confere com os eventos emitidos. | todas |
 
 

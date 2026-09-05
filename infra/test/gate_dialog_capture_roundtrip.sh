@@ -35,6 +35,9 @@
 #      — no `scored` o NÚMERO mora na opção (`fcr`: sim→1, nao→0); perdê-lo faz
 #        `Number("sim")` → NaN e a métrica some pelo outro caminho.
 #   D  form SEM `dimensions[]` faz round-trip LOSSLESS               → VERMELHO
+#   F  a ÁRVORE de opções (`options` aninhado + `active`) sobreviver a  → VERMELHO
+#      abrir-e-salvar — o defeito do `capture.kind` (F0) um andar abaixo:
+#      se a projeção descartar a subárvore, a taxonomia morre no PRIMEIRO save
 #      — a rede geral: pega o PRÓXIMO campo que o schema ganhar, sem que ninguém
 #        precise lembrar de estender este gate. B e C ficam por nomearem o perigo.
 #
@@ -213,6 +216,41 @@ if ((form.dimensions || []).length) {
   }
 }
 
+// -- F -- a ARVORE sobrevive ao round-trip (F5 do adr-dialog-tree-options) ----
+// SINTETICA de proposito, e o motivo importa: NENHUMA forma publicada tem arvore
+// ainda — a F5 e justamente o que torna a autoria possivel. Um gate que
+// esperasse o dado real so ficaria vermelho DEPOIS do primeiro save que
+// destruisse a taxonomia de alguem, que e tarde demais. O controle positivo
+// mora dentro do ramo: ele confere que a fixture TEM arvore antes de julgar.
+const arvoreDoc = {
+  form_id: 'gate_arvore', name: 'g', default_locale: 'pt-BR', locales: ['pt-BR'],
+  dimensions: [], tags: [],
+  nodes: [{
+    id: 'q_motivo', kind: 'question', prompt: 'Motivo?', interaction: 'list',
+    output_key: 'motivo', timeout_s: 300,
+    options: [
+      { id: 'financeiro', label: 'Financeiro', options: [
+        { id: 'cobranca', label: 'Cobranca', options: [{ id: 'indevida', label: 'Indevida' }] },
+        { id: 'antiga', label: 'Antiga', active: false },
+      ] },
+      { id: 'nao_se_aplica', label: 'Nao se aplica' },
+    ],
+  }],
+}
+const prof = (o) => (o.options || []).reduce((m, c) => Math.max(m, 1 + prof(c)), 0)
+const profundidadeDe = (ns) => Math.max(...ns.flatMap(n => (n.options || []).map(o => 1 + prof(o))), 0)
+if (profundidadeDe(arvoreDoc.nodes) < 3) {
+  bad('F', 'a fixture do ramo F perdeu a arvore — o ramo passaria por ausencia')
+} else {
+  const voltou = flattenBlocks(buildBlocks(arvoreDoc)).nodes
+  const a = JSON.stringify(arvoreDoc.nodes[0].options)
+  const b = JSON.stringify((voltou[0] || {}).options)
+  if (a !== b) {
+    bad('F', 'a arvore NAO sobreviveu a abrir-e-salvar: ' + b)
+  } else {
+    ok('F', 'arvore de 3 niveis e `active:false` preservados no round-trip')
+  }
+}
 console.log(JSON.stringify({ resultados: out }))
 JS
 

@@ -190,5 +190,18 @@
       "validation": "Validation",
       "raw": "full render (JSON)"
     }
+  },
+  "tree": {
+    "expand": "Expand",
+    "folder": "folder",
+    "leaf": "leaf",
+    "addChild": "Child option — one level down the taxonomy",
+    "maxDepth": "Maximum depth ({{n}}) reached",
+    "idLocked": "The id composes the Arc 12 category and the series is append-only: changing it merges two things in aggregation. Concept changed? Create a new leaf and retire this one.",
+    "retire": "Retire — leaves the offer, stays in the form",
+    "reactivate": "Reactivate",
+    "confirmLastChild": "\"{{pasta}}\" would be left with no children and become a selectable LEAF: the folder label would become an answer. Remove anyway?",
+    "depth": "depth {{d}} of {{max}}",
+    "hint": "A row with children is a folder (navigate only); without children it is a leaf (selectable). Value is ignored on a folder."
   }
 }

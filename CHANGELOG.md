@@ -1,5 +1,55 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (7) — F5: a taxonomia ficou autorável, e duas casas espelhadas estavam para trás
+
+O editor de opções era `add`/`remove` com ↑↓ sobre uma lista plana. Agora é a MESMA tabela com um
+chevron por linha: descer um nível é abrir a linha, não trocar de tela. Sem drag-and-drop — não há
+lib de DnD no projeto, e a ordem se resolve com ↑↓ como no resto do editor.
+
+**Editor e renderer desenham diferente, e isso é decisão.** O autor precisa ver a árvore inteira de
+uma vez (tabela aninhada); quem responde precisa descer rápido sem se perder (colunas Miller, F3).
+Duas perguntas, dois desenhos.
+
+### As regras aparecem na tela, em vez de virarem comentário
+
+- **D2** — apagar o ÚLTIMO filho converte a pasta em folha selecionável, e o rótulo dela vira
+  resposta. O aviso vem **antes**, nomeando a pasta.
+- **D6 (`id` imutável)** — o campo do `id` é editável **só na opção que não veio do documento
+  carregado**. Comparar com o carregado (em vez de marcar linha a linha) é o que torna a regra
+  estável através das reescritas imutáveis da árvore. O `id` de quem está no store tem série
+  histórica atrás, e trocá-lo funde duas coisas na agregação por prefixo, em silêncio.
+- **D6 (aposentar ≠ apagar)** — `active: false` tira a folha da OFERTA e a mantém no documento.
+
+E duas afordâncias que dizem a regra em vez de explicá-la: `value` fica **desabilitado** em pasta
+(pasta não é resposta) e `+ opção` **desabilita** ao atingir a profundidade da D3.
+
+### Duas casas espelhadas estavam para trás — e só apareceram ao ligar a tela
+
+A F1 pôs `prefix` no schema, e o editor **não o oferecia**: nem em `AW_OPS` (o seletor de op) nem em
+`AskWhenOp` (o tipo espelhado em `dialog-hooks.ts`, que existe porque o platform-ui não importa
+`@plughub/schemas`). Espelho que perde um caso transforma ausência de afordância em código que
+compila — mesma família do `capture.kind` da F0, terceira ocorrência registrada. O gate de paridade
+(DLG-09) cobre o AVALIADOR; a superfície de AUTORIA é outro eixo, e continua sem censo.
+
+⚠️ **Correção de uma afirmação minha, de horas antes:** eu disse que `ask_when` só era autorável por
+BLOCO e que a F5 dependeria de torná-lo por pergunta. **Falso** — o `AskWhenRow` já existe dentro do
+editor de pergunta *e* do de statement; o de bloco é conveniência que fan-out. A dependência que
+anunciei não existia.
+
+### O que não entrou, e a nota de desenho que a implementação revelou
+
+O botão *"+ pergunta"* na linha da opção (criar a pergunta irmã já guardada por `prefix`) fica como
+`DLG-18`. E a versão do mockup precisa mudar: ela editava prompt/`output_key` **inline**, o que seria
+um **segundo editor** para o mesmo nó — o defeito de duas casas, desta vez em widget. A vista deve
+mostrar um chip e levar ao editor existente.
+
+Gate: ramo **F** de `gate_dialog_capture_roundtrip.sh` — árvore de 3 níveis + `active:false`
+sobrevive a abrir-e-salvar. É o defeito do `capture.kind` (F0) um andar abaixo: projeção que descarte
+a subárvore mata a taxonomia no PRIMEIRO save. Fixture sintética de propósito — nenhuma forma
+publicada tem árvore ainda, e esperar o dado real deixaria o gate vermelho só **depois** de destruir
+a taxonomia de alguém. Falseado com a reconstrução voltando a ser allowlist.
+
+
 ## 2026-09-05 (6) — F3 (parcial): a subárvore chega à tela, e a PASTA deixa de virar resposta
 
 A F1 tornou a taxonomia autorável. O que ela abriu junto: `buildRender` mapeava opção como

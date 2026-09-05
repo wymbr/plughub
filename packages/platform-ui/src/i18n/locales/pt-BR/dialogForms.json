@@ -190,5 +190,18 @@
       "validation": "Validação",
       "raw": "render completo (JSON)"
     }
+  },
+  "tree": {
+    "expand": "Expandir",
+    "folder": "pasta",
+    "leaf": "folha",
+    "addChild": "Opção filha — desce um nível na taxonomia",
+    "maxDepth": "Profundidade máxima ({{n}}) atingida",
+    "idLocked": "O id compõe a categoria do Arc 12 e a série é append-only: trocá-lo funde duas coisas na agregação. Mudou de conceito? Crie uma folha nova e aposente esta.",
+    "retire": "Aposentar — sai da oferta, permanece no formulário",
+    "reactivate": "Reativar",
+    "confirmLastChild": "\"{{pasta}}\" ficaria sem filhos e viraria uma FOLHA selecionável: o rótulo da pasta passaria a ser resposta. Remover mesmo assim?",
+    "depth": "profundidade {{d}} de {{max}}",
+    "hint": "Linha com filhos é pasta (só navega); sem filhos é folha (selecionável). O valor é ignorado em pasta."
   }
 }
