@@ -106,6 +106,59 @@ else
   ok "sem carimbo=${VAZIO} != sem filtro=${SEMFILTRO} — a string vazia FILTRA"
 fi
 
+# ────────────────────────────────────────────────────────────────────────────
+# E: a epoca CONTEM os proprios eventos (o recorte que a TELA faz)
+#
+# Os ramos acima recortam so por `form_id`. A lente recorta pelos limites EXATOS da
+# epoca — `from_dt`/`to_dt` como o endpoint os devolveu —, e era ali que o defeito
+# vivia: `emitted_at` e `DateTime64(3)`, o servidor truncava o limite para o segundo
+# inteiro, e o limite SUPERIOR andava para TRAS. A epoca carimbada (dois eventos no
+# mesmo milissegundo) devolvia arvore VAZIA logo abaixo do proprio cabecalho dizendo
+# quantas marcacoes tinha.
+#
+# O gate passou VERDE nos dois estados — antes e depois do conserto — porque media
+# uma proposicao VIZINHA: *"o form_id filtra"* em vez de *"a epoca contem os seus"*.
+# E o catalogo: instrumento falseavel e honesto que julga a pergunta errada.
+printf '\n\033[1mE - a epoca contem os PROPRIOS eventos (recorte da tela)\033[0m\n'
+FALHAS=0
+VISTAS=0
+while IFS="|" read -r EFID EFROM ETO EEV; do
+  [ -z "$EFROM" ] && continue
+  # CR fora: quem gera a lista pode ser um python de Windows sobre este mesmo mount
+  # (`os.linesep`), e um \r invisivel no ultimo campo faz a comparacao numerica
+  # falhar com os DOIS lados imprimindo o mesmo numero — vermelho ilegivel.
+  EEV=$(printf '%s' "$EEV" | tr -d '\r')
+  VISTAS=$((VISTAS+1))
+  MARCAS=$(get "${API}/reports/agent-events/tree?tenant_id=${TENANT}&root=${ROOT}&from_dt=${EFROM}&to_dt=${ETO}&form_id=${EFID}" \
+          | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+r = [x for x in d["data"] if x["prefix"] == d["meta"]["root"]]
+print(r[0]["branch_marks"] if r else 0)' 2>/dev/null)
+  ROTULO="${EFID:-<sem carimbo>}"
+  if [ "${MARCAS:-0}" = "0" ]; then
+    bad "epoca ${ROTULO} diz ter ${EEV} evento(s), mas a arvore nos SEUS limites veio VAZIA"
+    FALHAS=$((FALHAS+1))
+  elif [ "$MARCAS" != "$EEV" ]; then
+    bad "epoca ${ROTULO}: ${EEV} evento(s) declarado(s), ${MARCAS} na arvore dos seus limites"
+    FALHAS=$((FALHAS+1))
+  fi
+done <<EOF
+$(printf "%s" "$EP" | python3 -c '
+import sys, json
+from urllib.parse import quote
+# O `+00:00` do ISO tem de viajar CODIFICADO: `+` cru na query string decodifica
+# como ESPACO, e o servidor cai no default de janela — o proprio gate produziria
+# o vermelho que ele existe para detectar, pela razao errada.
+for e in json.load(sys.stdin)["data"]:
+    print("%s|%s|%s|%s" % (e["form_id"], quote(e["from_dt"]), quote(e["to_dt"]), e["events"]))')
+EOF
+if [ "$VISTAS" = "0" ]; then
+  info "nenhuma epoca para conferir — ramo E sem amostra"
+elif [ "$FALHAS" = "0" ]; then
+  ok "as ${VISTAS} epoca(s) contem os proprios eventos nos proprios limites"
+fi
+
 printf '\n'
 if [ "$FAIL" != "0" ]; then
   printf '\033[31m\033[1mVERMELHO\033[0m\n'; exit 1

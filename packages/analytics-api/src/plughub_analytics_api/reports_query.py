@@ -42,6 +42,19 @@ def _ch_fmt(iso: str | None, upper: bool = False) -> str:
 
     When upper=True and the input is a date-only string (YYYY-MM-DD), the time is
     set to 23:59:59 so the full day is included in upper-bound filters.
+
+    ⚠️ **Sub-segundo do CHAMADOR sobrevive** (2026-09-05). `emitted_at` de
+    `agent_business_events` e `DateTime64(3)`, e truncar aqui movia o limite
+    SUPERIOR para TRAS: um recorte pedido em `19:34:45.858` virava
+    `19:34:45`, e os eventos daquele milissegundo ficavam de fora. Medido: 39
+    eventos com o literal em ms, 36 truncado — e a lente de taxonomia, que recorta
+    pelos limites exatos da propria epoca, desenhava "sem amostra no periodo"
+    logo abaixo de um cabecalho dizendo "2 marcacoes, 1 contato". Duas afirmacoes
+    contrarias na MESMA tela, e a errada era a que parecia ausencia de dado.
+
+    A precisao so aparece quando o chamador a envia: entrada `YYYY-MM-DD` (o que a
+    barra de filtros manda) sai identica a antes, entao a mudanca e inerte para
+    todo consumidor existente.
     """
     if not iso:
         return _default_to()
@@ -58,7 +71,10 @@ def _ch_fmt(iso: str | None, upper: bool = False) -> str:
         # Date-only input (no time component): for upper bounds use end-of-day
         if upper and len(stripped) <= 10:
             dt = dt.replace(hour=23, minute=59, second=59)
-        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        dt = dt.astimezone(timezone.utc)
+        if dt.microsecond:
+            return dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return _default_to()
 

@@ -411,6 +411,24 @@ Gate: `infra/test/probe_agent_event_epochs.sh` — 4 ramos, com **B** conferindo
 PARTICIONAM (a soma delas e o total da janela: nada perdido, nada contado duas vezes) e **C**
 comparando recortada × nao recortada, porque *"o endpoint responde"* nao e a proposicao.
 
+### Emenda de 2026-09-05 — a epoca tem de CONTER os proprios eventos
+
+O recorte por epoca so vale se os limites que o endpoint devolve contiverem os eventos que ele contou.
+Nao continham: `emitted_at` e `DateTime64(3)` e o `_ch_fmt` truncava para o segundo, movendo o limite
+SUPERIOR para tras. A epoca carimbada (dois eventos no mesmo milissegundo) desenhava arvore VAZIA logo
+abaixo do proprio cabecalho dizendo quantas marcacoes tinha — e a mensagem de vazio afirma, em letras
+grandes, que aquilo e *ausencia de dado, nao zero*. Uma tela que se contradiz e pior que uma tela errada:
+a metade falsa vinha com garantia de honestidade.
+
+⚠️ **O gate passou VERDE nos DOIS estados.** Os ramos C e D recortam so por `form_id`; a lente recorta
+pelos limites da epoca. Instrumento falseavel julgando a proposicao VIZINHA — o mesmo padrao catalogado
+na § Postura de Engenharia. O ramo **E** consulta como a tela consulta e confere a contagem contra a que
+a propria epoca declara.
+
+**Regra derivada, e ela e do desenho, nao do conserto:** quando um endpoint devolve uma JANELA e outro a
+consome como FILTRO, os dois precisam da mesma resolucao de tempo. Truncar um limite superior nunca e
+neutro — ele so pode ser arredondado para CIMA, ou nao ser tocado.
+
 ## D14 — o carimbo e `(form_id, version)`, e nasce no RENDER (decidida 2026-09-05)
 
 Proposta do dono: *"gravar o id + timestamp da publicacao do dialogform, sempre com os dados

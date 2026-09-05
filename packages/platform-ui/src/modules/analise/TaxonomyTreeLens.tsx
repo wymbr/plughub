@@ -356,8 +356,13 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
   const unica = epochs.length <= 1
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 flex-wrap">
+    // A lente vive dentro de um `flex-1 overflow-hidden` (`SessionsPage`), entao o
+    // scroll e DELA: sem dono aqui, tudo o que passa da altura da janela e cortado
+    // SEM barra — e a arvore e justamente o conteudo que cresce por linha, com um
+    // bloco por epoca abaixo do outro. Mesma forma do `WrapupSummaryPage`, que e a
+    // lente irma nesta mesma superficie: cabecalho fixo, corpo rolante.
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-3 pb-2 flex-shrink-0">
         <label className="text-xs font-medium text-muted" htmlFor="tax-root">
           {t('lens.taxonomy.root')}
         </label>
@@ -376,18 +381,20 @@ export default function TaxonomyTreeLens({ fromDt, toDt }: Props) {
         )}
       </div>
 
-      {carregandoEpocas && epochs.length === 0 && <Spinner />}
+      <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-4">
+        {carregandoEpocas && epochs.length === 0 && <Spinner />}
 
-      {unica
-        ? <EpochBlock root={root} epoch={epochs[0] ?? null} unica />
-        : epochs.map(e => (
-            <EpochBlock key={`${e.form_id}|${e.from_dt}`} root={root} epoch={e} unica={false} />
-          ))}
+        {unica
+          ? <EpochBlock root={root} epoch={epochs[0] ?? null} unica />
+          : epochs.map(e => (
+              <EpochBlock key={`${e.form_id}|${e.from_dt}`} root={root} epoch={e} unica={false} />
+            ))}
 
-      <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.footnote')}</p>
-      {!unica && (
-        <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.epoch.hint')}</p>
-      )}
+        <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.footnote')}</p>
+        {!unica && (
+          <p className="text-[11px] text-muted leading-snug">{t('lens.taxonomy.epoch.hint')}</p>
+        )}
+      </div>
     </div>
   )
 }

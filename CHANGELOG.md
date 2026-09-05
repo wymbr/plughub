@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (23) — O limite andava para trás: a época ficava vazia sobre os próprios eventos
+
+Dois defeitos achados olhando as telas da lente de taxonomia. O segundo é o caro.
+
+### O limite superior perdia o milissegundo
+
+`agent_business_events.emitted_at` é `DateTime64(3)`, e `_ch_fmt` truncava para o segundo inteiro. Truncar
+um limite **superior** o move para TRÁS: um recorte pedido em `19:34:45.858` virava `19:34:45`, e os
+eventos daquele milissegundo ficavam de fora. Medido direto no ClickHouse:
+
+| corte | eventos |
+|---|---|
+| `emitted_at <= '2026-09-05 19:34:45'` (o que o servidor fazia) | 36 |
+| `emitted_at <= '2026-09-05 19:34:45.858'` (o que o chamador pediu) | **39** |
+
+Ninguém tinha notado porque a barra de filtros manda `YYYY-MM-DD`, onde truncar não custa nada. Quem
+expôs foi a **lente de taxonomia**, que recorta pelos limites EXATOS da própria época — e a época
+carimbada tem os dois eventos no mesmo milissegundo. Resultado na tela: *"sem amostra no período — isto é
+ausência de dado, não zero"* desenhado logo abaixo do próprio cabeçalho dizendo *"2 marcações · 1
+contato"*. **Duas afirmações contrárias na mesma tela, e a falsa era a que tinha cara de ausência de
+dado** — o *valor plausível* da § Postura de Engenharia, na variante mais cruel: a mensagem de vazio
+afirmava explicitamente ser confiável.
+
+Conserto no `_ch_fmt`: **sub-segundo do CHAMADOR sobrevive**. O risco de mexer num helper com 67 call
+sites foi medido, não estimado — toda entrada sem fração sai **byte a byte idêntica** (`2026-09-05` →
+`2026-09-05 00:00:00`; `upper=True` → `23:59:59`; ISO sem fração → igual; `.000000` → sem sufixo, porque
+emitir `.000` mudaria a forma da string sem ganhar precisão). A mudança é inerte para todo consumidor de
+hoje.
+
+Teste: `test_ch_fmt_subsecond.py`. **O caso que importa ali não é o novo — é o controle negativo**, que
+prende a entrada da barra de filtros à saída que ela sempre teve; sem ele, preservar sub-segundo poderia
+mover os outros 67 em silêncio. Sob a mutação (`if dt.microsecond:` → `if False:`) o caso novo reprova e
+os dois controles seguem verdes, que é exatamente o esperado de um controle.
+
+### O gate estava VERDE nos dois estados
+
+⚠️ `probe_agent_event_epochs.sh` passou **antes e depois** do conserto. Não por ser frouxo: por medir uma
+proposição **vizinha** — *"o `form_id` filtra"* em vez de *"a época contém os próprios eventos"*. Os ramos
+C e D recortam só por `form_id`; a TELA recorta por `from_dt`/`to_dt` da época, e era ali que o defeito
+vivia. É o catálogo outra vez: instrumento falseável, ramificado e honesto, julgando a pergunta ao lado.
+
+Ramo **E** acrescentado — consulta a árvore como a lente consulta, e exige que a contagem bata com a que a
+própria época declara. Sob a mutação ele nomeia as duas épocas (`diz ter 2 evento(s), mas a árvore nos
+SEUS limites veio VAZIA` · `24 declarado(s), 23 na árvore`). Dois modos de falha do próprio gate foram
+consertados no caminho, e os dois davam vermelho pela razão errada: `+00:00` cru na query string decodifica
+como **espaço** (agora `quote()`), e um `` invisível do python de Windows fazia a comparação numérica
+falhar com os dois lados imprimindo o mesmo número.
+
+### E a lente não tinha dono do scroll
+
+A árvore era cortada no fim da janela, **sem barra**. A lente vive dentro de um `flex-1 overflow-hidden`
+(`SessionsPage`), então o scroll é dela — e é o conteúdo que mais cresce por linha, com um bloco por época
+abaixo do outro. Passou a ter a forma da lente irmã da mesma superfície (`WrapupSummaryPage`): cabeçalho
+`flex-shrink-0`, corpo `flex-1 overflow-y-auto`, mais o `p-4` que faltava.
+
+Verificação: suíte da analytics-api **757/757**; `probe_agent_event_epochs` (5 ramos), `tree_rollup` e
+`form_stamp` verdes; `tsc --noEmit` limpo.
+
+Arquivos: `packages/analytics-api/src/plughub_analytics_api/reports_query.py` ·
+`packages/analytics-api/src/plughub_analytics_api/tests/test_ch_fmt_subsecond.py` (novo) ·
+`packages/platform-ui/src/modules/analise/TaxonomyTreeLens.tsx` · `infra/test/probe_agent_event_epochs.sh`.
+
+---
+
 ## 2026-09-05 (22) — D13 implementada: a época recorta, e o conflito deixa de existir
 
 `GET /reports/agent-events/epochs` devolve um bloco por **run contíguo** de formulário, e o `/tree`
