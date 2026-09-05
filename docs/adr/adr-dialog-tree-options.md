@@ -329,6 +329,54 @@ Duas ressalvas que a medição encontrou e este ADR **não** resolve:
 
 ---
 
+## D14 — o carimbo e `(form_id, version)`, e nasce no RENDER (decidida 2026-09-05)
+
+Proposta do dono: *"gravar o id + timestamp da publicacao do dialogform, sempre com os dados
+enviados"*. Resolve — e a medicao do store melhora a chave e endurece o requisito.
+
+### A versao publicada e IMUTAVEL — entao a chave e `version`, nao o timestamp
+
+Medido em `dialog-api/db.py`:
+
+| operacao | efeito |
+|---|---|
+| `db_put_form`, ultima versao e **rascunho** | edita a linha do rascunho no lugar |
+| `db_put_form`, ultima versao e **publicada** | cria **`N+1`** como rascunho |
+| `db_publish_form` | so `SET status='published'` — promove, **nunca reescreve conteudo** |
+
+Logo o conteudo de uma versao publicada **nunca muda**, e `(tenant_id, form_id, version)` ja e a
+PRIMARY KEY: e a identidade exata do documento. O timestamp e chave mais fraca para o mesmo fato — e
+`updated_at` e bumpado pelo PROPRIO publish, o que o coloca na familia *"foi escrito ≠ mudou"* (o
+`updated_at` bumped a cada boot, § Postura de Engenharia).
+
+⚠️ **Isto REVOGA o residuo da D13.** La ficou escrito que *"`form_id` nao pega edicao in-place"* e que
+marcar versoes dentro do bloco era aposta. Falso: edicao in-place de versao PUBLICADA nao existe. E o
+desfecho e melhor que a aposta — com a identidade exata gravada, **partir ou nao partir por versao vira
+decisao de EXIBICAO**, tomada na leitura. Grava-se o exato; agrega-se conforme a pergunta.
+
+### O carimbo nasce no RENDER, nunca no submit
+
+E a metade forte da proposta (*"sempre com os dados enviados"*), e ela tem mecanismo obrigatorio: o
+**achado 1** deste ADR mede que o formulario e lido DUAS VEZES — o renderer no claim (o que o atendente
+ve) e `segment.ts:325` no submit (o que deriva os eventos) — com `timeout_s: -1` e ACW de 24 h no meio,
+e **nada as amarra**.
+
+Carimbo tirado no submit nomearia um documento que o atendente nunca viu. E o dano nao e o rotulo
+errado: os eventos seriam **derivados da arvore NOVA sobre resposta dada na VELHA** — um caminho que
+era folha pode ter virado pasta, e a categoria sai reinterpretada sem nada ficar vermelho.
+
+### Convergencia: e a S1 do `adr-deploy-time-content-snapshot`
+
+Aquela fase e **pin de versao (caminho A)**, decidida pelo dono em 2026-08-29 e nao iniciada; a
+supersessao da F0b deste ADR ficou SUSPENSA esperando-a. A proposta de hoje e a mesma peca chegando
+pelo outro lado — leitura (relatorio) em vez de escrita (execucao). **Uma implementacao serve as
+duas**, e a ordem se resolve sozinha: o pin grava a versao que o render usou; o emissor a copia para o
+evento.
+
+⚠️ **O pin e gravado pelo SERVIDOR**, nao enviado pelo cliente — decisao ja tomada naquele ADR. Versao
+vinda do cliente seria o chamador declarando a propria identidade, a forma que derrubou o gate de
+avaliador na CAP-01.
+
 ## D13 — troca de forma vira EPOCA, derivada dos eventos (decidida 2026-09-05)
 
 Fecha a pergunta que a secao abaixo deixou aberta (*historico continua visivel na mesma lente, ou a

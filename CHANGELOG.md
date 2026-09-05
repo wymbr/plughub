@@ -1,5 +1,50 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (16) — D14: o carimbo é `(form_id, version)`, e nasce no render
+
+Proposta do dono: *"gravar o id + timestamp da publicação do DialogForm, sempre com os dados
+enviados"*. Resolve — e medir o store melhorou a chave e endureceu o requisito.
+
+### A versão publicada é imutável, então a chave é `version`
+
+| operação | efeito |
+|---|---|
+| `db_put_form`, última versão é **rascunho** | edita a linha do rascunho no lugar |
+| `db_put_form`, última versão é **publicada** | cria **`N+1`** como rascunho |
+| `db_publish_form` | só `SET status='published'` — promove, **nunca reescreve conteúdo** |
+
+O conteúdo de uma versão publicada nunca muda, e `(tenant_id, form_id, version)` já é a PRIMARY KEY —
+a identidade exata do documento. O timestamp seria chave mais fraca para o mesmo fato, e `updated_at` é
+bumpado **pelo próprio publish**, o que o coloca na família *"foi escrito ≠ mudou"*.
+
+⚠️ **Isto revoga um resíduo escrito horas antes.** A D13 dizia que `form_id` não pega edição in-place e
+que marcar versões dentro do bloco era aposta. Falso: edição de versão **publicada** não existe. E o
+desfecho é melhor que a aposta — com a identidade exata gravada, **partir ou não por versão vira decisão
+de exibição**, tomada na leitura. Grava-se o exato; agrega-se conforme a pergunta.
+
+### O carimbo nasce no RENDER, nunca no submit
+
+É a metade forte da proposta (*"sempre com os dados enviados"*), e tem mecanismo obrigatório: o achado 1
+deste ADR mede que o formulário é lido **duas vezes** — o renderer no claim (o que o atendente vê) e o
+`segment.ts:325` no submit (o que deriva os eventos) — com `timeout_s: -1` e ACW de 24 h no meio, e nada
+as amarra. Carimbo tirado no submit nomearia um documento que o atendente nunca viu, e o dano não é o
+rótulo: os eventos sairiam **derivados da árvore nova sobre resposta dada na velha** — um caminho que era
+folha pode ter virado pasta, e a categoria sai reinterpretada sem nada ficar vermelho.
+
+### Convergência com uma decisão que já existia
+
+A **S1** do `adr-deploy-time-content-snapshot` é *pin de versão (caminho A)*, decidida em 2026-08-29 e
+**não iniciada**; a supersessão da F0b do ADR da árvore ficou suspensa esperando-a. A proposta de hoje é
+a mesma peça chegando pelo outro lado — leitura (relatório) em vez de execução. Uma implementação serve
+as duas: o pin grava a versão que o render usou, e o emissor a copia para o evento. O pin é gravado pelo
+**servidor**, nunca enviado pelo cliente — versão vinda do cliente seria o chamador declarando a própria
+identidade, a forma que derrubou o gate de avaliador na CAP-01.
+
+Arquivos: `docs/adr/adr-dialog-tree-options.md` (D14) · `pending.md` (DLG-24 com o desenho fechado;
+resíduo da DLG-25 revogado).
+
+---
+
 ## 2026-09-05 (15) — D13: troca de forma vira época, derivada dos eventos
 
 Decisão do dono sobre a pergunta que ficou aberta ontem à tarde (*histórico continua na mesma lente,
