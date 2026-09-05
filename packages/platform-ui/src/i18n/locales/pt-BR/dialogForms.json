@@ -73,7 +73,8 @@
     "dialogHint": "sem pontuação — falas, verbatim, OTP",
     "weightsAdjust": "pesos iguais · ajustar",
     "weightsHide": "ocultar pesos",
-    "anchors": "rótulos da escala"
+    "anchors": "rótulos da escala",
+    "form": "Formulário"
   },
   "askWhen": {
     "label": "só perguntar se",
@@ -131,12 +132,17 @@
     "askWhenRef": "A guarda \"só perguntar se\" referencia \"{{field}}\", que não é uma pergunta anterior."
   },
   "form": {
+    "prompt": "Cabeçalho do formulário",
+    "promptPlaceholder": "Ex.: Preencha os dados da solicitação:",
     "fields": "Campos ({{n}})",
-    "editJson": "Editar no JSON",
-    "empty": "Nenhum campo declarado — esta pergunta não coleta nada. Abra o JSON e declare `fields[]`.",
-    "required": "obrigatório",
-    "prefilled": "pré-preenchido",
-    "inert": "Nesta interação o runtime ignora: {{keys}}. Os valores continuam no documento — edite-os no JSON."
+    "field": "campo",
+    "empty": "Nenhum campo declarado — este formulário não coleta nada.",
+    "required": "obrig.",
+    "value": "Valor inicial",
+    "valueHint": "só o Console pré-preenche",
+    "optionsCount": "{{n}} opção(ões) declarada(s) — edite no JSON",
+    "selectNoOptions": "tipo `select` sem opções — declare-as no JSON",
+    "confirmToDialog": "Converter para Diálogo apaga os {{n}} campo(s) declarados — uma pergunta comum não os coleta. Continuar?"
   },
   "json": {
     "open": "JSON",

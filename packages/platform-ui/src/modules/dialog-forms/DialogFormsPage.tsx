@@ -39,10 +39,11 @@ import {
   type AskWhen,
   type AskWhenOp,
 } from '@/api/dialog-hooks'
-import { type Block, buildBlocks, flattenBlocks, reprojectionDrift } from './dialog-blocks'
+import { type Block, buildBlocks, flattenBlocks, reprojectionDrift, formQuestionOf } from './dialog-blocks'
 import DialogJsonPanel from './DialogJsonPanel'
+import FormBlockEditor from './FormBlockEditor'
 import {
-  useFormatCatalog, useMaskedTypes, formatLabel, formatForMasked,
+  useFormatCatalog, useMaskedTypes, formatLabel, d8Verdict,
 } from './catalog-hooks'
 
 // ── LocalizedText / visibility helpers ────────────────────────────────────────
@@ -78,7 +79,22 @@ function selectToVis(s: VisSelect): DialogVisibility | undefined {
   return undefined
 }
 
-const INTERACTIONS: DialogInteraction[] = ['text', 'button', 'list', 'checklist', 'form']
+/**
+ * `form` SAIU daqui em 2026-09-05 e virou TIPO DE BLOCO.
+ *
+ * Os quatro que sobraram dizem todos a mesma categoria de coisa — *um escalar por
+ * turno*. `form` era o quinto valor de uma uniao discriminada: escolhe-lo mudava
+ * o significado do painel inteiro e tornava inertes quatro controles da pergunta
+ * (`options`, `validation` escalar, `retry`, `masked` do no). Como bloco, esse
+ * estado deixa de EXISTIR em vez de precisar ser escondido.
+ *
+ * ⚠️ Valor legado (`form` numa pergunta de INSTRUMENTO, onde a dimensao vence)
+ * ainda e exibido pelo `interactionOptions` abaixo — dropdown que nao mostra o
+ * valor corrente o reescreve em silencio no primeiro `onChange`.
+ */
+const INTERACTIONS: DialogInteraction[] = ['text', 'button', 'list', 'checklist']
+const interactionOptions = (atual?: DialogInteraction): DialogInteraction[] =>
+  atual && !INTERACTIONS.includes(atual) ? [...INTERACTIONS, atual] : INTERACTIONS
 const HAS_OPTIONS = (i?: DialogInteraction) => i === 'button' || i === 'list' || i === 'checklist'
 
 let _seq = 0
@@ -116,6 +132,15 @@ function newQuestion(): QuestionNode { return { id: nid('q'), kind: 'question', 
 
 const DIALOG_TYPE = '__dialog__'
 const CUSTOM_TYPE = '__custom__'
+const FORM_TYPE   = '__form__'
+
+/** Tipos de campo que os renderizadores reconhecem. `DialogField.type` e string
+ *  ABERTA no schema ("adapter maps to UI"), entao valor desconhecido e
+ *  PRESERVADO como opcao extra — dropdown que nao mostra o valor corrente o
+ *  apaga no primeiro toque. */
+const FIELD_TYPES = ['text', 'number', 'money', 'date', 'bool', 'select']
+const fieldTypeOptions = (atual?: string): string[] =>
+  atual && !FIELD_TYPES.includes(atual) ? [...FIELD_TYPES, atual] : FIELD_TYPES
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -438,10 +463,6 @@ const DialogFormsPage: React.FC = () => {
                 <h3 className="text-sm font-semibold text-gray-700">{t('blocks.title')}</h3>
                 <span className="text-[11px] text-gray-400">{t('dimensions.hint')}</span>
                 <div className="flex-1" />
-                <button onClick={() => setJsonOpen(true)}
-                  className="flex items-center gap-1 text-xs border px-2 py-1 rounded hover:bg-gray-50">
-                  <Braces size={13} /> {t('json.open')}
-                </button>
                 <button onClick={addBlock}
                   className="text-xs border px-2 py-1 rounded hover:bg-gray-50">+ {t('blocks.add')}</button>
               </div>
@@ -452,7 +473,6 @@ const DialogFormsPage: React.FC = () => {
                   priorKeys={priorKeys} compositeOn={!!draft.composite}
                   expanded={expanded} onToggleExpand={toggleExpand}
                   adjust={adjust.has(idx)} onToggleAdjust={() => toggleAdjust(idx)}
-                  onOpenJson={() => setJsonOpen(true)}
                   onChange={b => updateBlock(idx, b)} onRemove={() => removeBlock(idx)}
                   onMove={dir => moveBlock(idx, dir)} />
               ))}
@@ -480,6 +500,13 @@ const DialogFormsPage: React.FC = () => {
                   `*-gray-N` existe no CSS construído. Aqui isso era invisível no pior
                   sentido: fundo nenhum + `text-white` = botão branco no branco, com a
                   área de clique intacta. Ver TODO § classes gray-N inertes. */}
+              {/* O painel edita o DOCUMENTO inteiro (form_id, name, locales, nodes),
+                  entao ele mora na linha de acoes do documento. No cabecalho de
+                  `Blocks` ele afirmava, pela posicao, um escopo menor do que tem. */}
+              <button onClick={() => setJsonOpen(true)}
+                className="flex items-center gap-1 text-sm border border-border px-3 py-1.5 rounded hover:bg-surface-muted">
+                <Braces size={14} /> {t('json.open')}
+              </button>
               <button disabled={busy || isArchived} onClick={() => save(false)}
                 title={isArchived ? t('archive.readOnly') : undefined}
                 className="text-sm bg-dark text-white px-3 py-1.5 rounded hover:opacity-90 disabled:opacity-50">
@@ -548,13 +575,11 @@ interface BlockCardProps {
   onChange: (b: Block) => void
   onRemove: () => void
   onMove: (dir: -1 | 1) => void
-  /** Abre o editor JSON do documento — a superficie que autora `fields[]`. */
-  onOpenJson: () => void
 }
 
 const BlockCard: React.FC<BlockCardProps> = ({
   block, idx, total, instruments, locale, defaultLocale, priorKeys, compositeOn, expanded, onToggleExpand,
-  adjust, onToggleAdjust, onChange, onRemove, onMove, onOpenJson,
+  adjust, onToggleAdjust, onChange, onRemove, onMove,
 }) => {
   const { t } = useTranslation('dialogForms')
   const isInstrument = block.kind === 'instrument'
@@ -563,7 +588,11 @@ const BlockCard: React.FC<BlockCardProps> = ({
 
   // Node ops within this block
   const setNodes = (nodes: DialogNode[]) =>
-    onChange(block.kind === 'instrument' ? { kind: 'instrument', dim: block.dim, nodes } : { kind: 'dialog', nodes })
+    onChange(
+      block.kind === 'instrument' ? { kind: 'instrument', dim: block.dim, nodes }
+      : block.kind === 'form'     ? { kind: 'form', nodes }
+      : { kind: 'dialog', nodes },
+    )
   const addNode = (n: DialogNode) => setNodes([...block.nodes, n])
   const updateNode = (i: number, n: DialogNode) => setNodes(block.nodes.map((x, j) => (j === i ? n : x)))
   const removeNode = (i: number) => setNodes(block.nodes.filter((_, j) => j !== i))
@@ -574,7 +603,40 @@ const BlockCard: React.FC<BlockCardProps> = ({
   }
 
   const changeType = (val: string) => {
-    if (val === DIALOG_TYPE) { onChange({ kind: 'dialog', nodes: block.nodes }); return }
+    if (val === DIALOG_TYPE) {
+      // Sair de `form` devolve a pergunta ao mundo escalar — e os `fields[]` TEM
+      // de sair junto. Guarda-los "por seguranca" criaria o pior estado possivel:
+      // `buildRender` testa `node.fields?.length` ANTES da interacao, entao uma
+      // pergunta `text` com campos residuais continuaria renderizando como
+      // formulario (e o WhatsApp dispararia coleta sequencial por
+      // `len(fields) > 0`) sem que a tela mostrasse campo nenhum.
+      //
+      // Como e perda de trabalho do autor, ela e CONSENTIDA, nunca silenciosa.
+      if (block.kind === 'form') {
+        const q = block.nodes.find((n): n is QuestionNode => n.kind === 'question')
+        const n = q?.fields?.length ?? 0
+        if (n > 0 && !window.confirm(t('form.confirmToDialog', { n }))) return
+      }
+      const nodes = block.kind === 'form'
+        ? block.nodes.map(x => {
+            if (x.kind !== 'question' || x.interaction !== 'form') return x
+            const q2 = { ...x, interaction: 'text' as DialogInteraction }
+            delete (q2 as { fields?: unknown }).fields
+            return q2
+          })
+        : block.nodes
+      onChange({ kind: 'dialog', nodes }); return
+    }
+    if (val === FORM_TYPE) {
+      // Um bloco form E uma pergunta `form`. Se ja ha pergunta, ela vira o
+      // formulario (preservando prompt/output_key/campos); se nao ha, cria-se.
+      const jaTem = block.nodes.some(n => n.kind === 'question')
+      const nodes = jaTem
+        ? block.nodes.map((n, i) => (n.kind === 'question' && block.nodes.findIndex(x => x.kind === 'question') === i
+            ? { ...n, interaction: 'form' as DialogInteraction } : n))
+        : [...block.nodes, { ...newQuestion(), interaction: 'form' as DialogInteraction, output_key: 'dados' }]
+      onChange({ kind: 'form', nodes }); return
+    }
     if (val === CUSTOM_TYPE) {
       onChange({ kind: 'instrument', dim: { dimension_id: '', scale: { min: 1, max: 5 }, aggregation: 'weighted_mean' }, nodes: block.nodes })
       return
@@ -605,8 +667,18 @@ const BlockCard: React.FC<BlockCardProps> = ({
   const wsum = qs.reduce((a, q) => a + (q.capture?.weight ?? 1), 0)
   const pctOf = (q: QuestionNode) => (wsum > 0 ? Math.round(((q.capture?.weight ?? 1) / wsum) * 100) : 0)
 
-  const typeValue = !isInstrument ? DIALOG_TYPE : (isCustom ? CUSTOM_TYPE : dim!.dimension_id)
-  const accent = isInstrument ? 'border-l-blue-400' : 'border-l-gray-300'
+  const isForm = block.kind === 'form'
+  const formQ  = block.kind === 'form' ? formQuestionOf(block) : undefined
+  const typeValue = isInstrument ? (isCustom ? CUSTOM_TYPE : dim!.dimension_id)
+                  : isForm       ? FORM_TYPE
+                  : DIALOG_TYPE
+  const accent = isInstrument ? 'border-l-blue-400' : isForm ? 'border-l-emerald-400' : 'border-l-gray-300'
+
+  /** Patch na pergunta que DA identidade ao bloco form. */
+  const updateFormQ = (patch: Partial<QuestionNode>) => {
+    if (!formQ) return
+    setNodes(block.nodes.map(n => (n.id === formQ.id ? { ...(n as QuestionNode), ...patch } : n)))
+  }
 
   // Block-level ask_when guard = the guard all nodes share (fan-out on set). Its
   // field references questions BEFORE the block (the first node's prior keys).
@@ -624,6 +696,7 @@ const BlockCard: React.FC<BlockCardProps> = ({
         <select value={typeValue} onChange={e => changeType(e.target.value)}
           className="border rounded px-2 py-1 text-sm bg-white font-medium">
           <option value={DIALOG_TYPE}>{t('block.dialog')}</option>
+          <option value={FORM_TYPE}>{t('block.form')}</option>
           {instruments.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}
           <option value={CUSTOM_TYPE}>{t('dimensions.custom')}</option>
         </select>
@@ -654,7 +727,7 @@ const BlockCard: React.FC<BlockCardProps> = ({
             <select value={dim!.interaction ?? 'button'}
               onChange={e => updateDim({ interaction: e.target.value as DialogInteraction })}
               className="border rounded px-1 py-0.5 text-xs bg-white">
-              {INTERACTIONS.map(i => <option key={i} value={i}>{i}</option>)}
+              {interactionOptions(dim!.interaction).map(i => <option key={i} value={i}>{i}</option>)}
             </select>
             {compositeOn && (
               <span className="flex items-center gap-1 text-xs text-gray-500">
@@ -694,15 +767,23 @@ const BlockCard: React.FC<BlockCardProps> = ({
         </div>
       )}
 
-      {/* nodes */}
+      {/* corpo do bloco FORM: a pergunta que o identifica vira o cabecalho */}
+      {isForm && formQ && (
+        <FormBlockEditor node={formQ} locale={locale} defaultLocale={defaultLocale}
+          onChange={updateFormQ}
+          visibilityRow={<VisibilityRow value={formQ.visibility}
+            onChange={v => updateFormQ({ visibility: v })} />} />
+      )}
+
+      {/* nodes — no bloco form a pergunta e o proprio bloco, entao nao vira linha */}
       <div className="space-y-1.5 pl-2 border-l-2 border-gray-100">
         {block.nodes.map((node, i) => (
+          isForm && node.id === formQ?.id ? null :
           <NodeRow key={node.id} node={node} first={i === 0} last={i === block.nodes.length - 1}
             locale={locale} defaultLocale={defaultLocale} scored={isInstrument}
             priorKeys={priorKeys[node.id] ?? []}
             expanded={expanded.has(node.id)} onToggle={() => onToggleExpand(node.id)}
             showWeight={isInstrument && adjust} pct={node.kind === 'question' ? pctOf(node) : 0}
-            onOpenJson={onOpenJson}
             onChange={n => updateNode(i, n)} onRemove={() => removeNode(i)} onMove={dir => moveNode(i, dir)} />
         ))}
       </div>
@@ -714,7 +795,11 @@ const BlockCard: React.FC<BlockCardProps> = ({
 
       {/* footer */}
       <div className="flex items-center gap-2 text-xs text-gray-500 pt-1">
-        <button onClick={() => addNode(newQuestion())} className="hover:text-gray-800"><Plus size={12} className="inline" /> {t('node.question')}</button>
+        {/* Bloco form ja TEM a sua pergunta — o bloco e o turno, e uma segunda
+            pergunta faria a tela prometer dois turnos onde o runner faz um. */}
+        {!isForm && (
+          <button onClick={() => addNode(newQuestion())} className="hover:text-gray-800"><Plus size={12} className="inline" /> {t('node.question')}</button>
+        )}
         <button onClick={() => addNode(newStatement())} className="hover:text-gray-800"><Plus size={12} className="inline" /> {t('node.statement')}</button>
         <div className="flex-1" />
         {isInstrument && qs.length > 0 && (
@@ -732,9 +817,9 @@ const BlockCard: React.FC<BlockCardProps> = ({
 const NodeRow: React.FC<{
   node: DialogNode; first: boolean; last: boolean; locale: string; defaultLocale: string; scored: boolean
   priorKeys: string[]
-  expanded: boolean; onToggle: () => void; showWeight: boolean; pct: number; onOpenJson: () => void
+  expanded: boolean; onToggle: () => void; showWeight: boolean; pct: number
   onChange: (n: DialogNode) => void; onRemove: () => void; onMove: (dir: -1 | 1) => void
-}> = ({ node, first, last, locale, defaultLocale, scored, priorKeys, expanded, onToggle, showWeight, pct, onOpenJson, onChange, onRemove, onMove }) => {
+}> = ({ node, first, last, locale, defaultLocale, scored, priorKeys, expanded, onToggle, showWeight, pct, onChange, onRemove, onMove }) => {
   const { t } = useTranslation('dialogForms')
   const isQ = node.kind === 'question'
   const summary = ltToStr(node.kind === 'question' ? node.prompt : node.text, locale, defaultLocale)
@@ -766,7 +851,7 @@ const NodeRow: React.FC<{
         <div className="px-3 pb-2">
           {node.kind === 'statement'
             ? <StatementEditor node={node} locale={locale} defaultLocale={defaultLocale} priorKeys={priorKeys} onChange={onChange} />
-            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} scored={scored} priorKeys={priorKeys} onOpenJson={onOpenJson} onChange={onChange} />}
+            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} scored={scored} priorKeys={priorKeys} onChange={onChange} />}
         </div>
       )}
     </div>
@@ -790,8 +875,8 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLo
   )
 }
 
-const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; priorKeys: string[]; onOpenJson: () => void; onChange: (n: DialogNode) => void }> =
-({ node, locale, defaultLocale, scored, priorKeys, onOpenJson, onChange }) => {
+const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; priorKeys: string[]; onChange: (n: DialogNode) => void }> =
+({ node, locale, defaultLocale, scored, priorKeys, onChange }) => {
   const { t } = useTranslation('dialogForms')
   const { tenantId } = useAuth()
   // Os dois catálogos vêm do STORE (config-api), nunca do default embutido: é
@@ -802,18 +887,14 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
   const { types: maskedTypes, erro: errMsk } = useMaskedTypes(tenantId)
   const catalogoErro = errFmt ?? errMsk
 
-  // D8 — o campo nomeia o tipo UMA vez. Se `masked` nomeia um tipo com
-  // contraparte de formato, o formato é DERIVADO e o seletor fica travado:
-  // deixar os dois editáveis convida à contradição que a §D8 recusa no publish.
-  const maskedId  = node.masked === true ? 'opaque' : (typeof node.masked === 'string' ? node.masked : undefined)
-  const derivado  = formatForMasked(maskedId, formats)
-  // Conflito só existe quando o autor declarou AMBOS e eles discordam — estado
-  // alcançável por forma criada fora da tela (JSON semeado, API). A tela o
-  // MOSTRA em vez de corrigir sozinha: escolher um vencedor em silêncio é como
-  // se paga a diferença depois.
-  const conflito  = derivado && node.validation?.format && node.validation.format !== derivado.id
-    ? derivado.id
-    : undefined
+  // D8 — o campo nomeia o tipo UMA vez: `masked` que tenha contraparte de formato
+  // DERIVA o formato e trava o seletor; declarar os dois com valores diferentes é
+  // conflito, que a tela MOSTRA em vez de corrigir sozinha (o publish recusa 422).
+  //
+  // A regra mora em `d8Verdict` desde 2026-09-05, porque o editor de CAMPO passou
+  // a fazer a mesma pergunta — duas implementações divergiriam, e a divergência
+  // aqui seria "o campo aceita o que a pergunta recusa".
+  const { derivado, conflito } = d8Verdict(node.masked, node.validation?.format, formats)
 
   const setOptions = (options: DialogOption[]) => onChange({ ...node, options })
   return (
@@ -833,7 +914,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
             <select value={node.interaction}
               onChange={e => onChange({ ...node, interaction: e.target.value as DialogInteraction })}
               className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white">
-              {INTERACTIONS.map(i => <option key={i} value={i}>{i}</option>)}
+              {interactionOptions(node.interaction).map(i => <option key={i} value={i}>{i}</option>)}
             </select>
           </label>
         )}
@@ -845,20 +926,6 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
       </div>
 
       <VisibilityRow value={node.visibility} onChange={v => onChange({ ...node, visibility: v })} />
-
-      {/*
-        Ramo `form`: o painel é OUTRO CORPO, não uma seção a mais.
-        Medido em 2026-09-04: com `interaction: "form"` quase todo controle desta
-        tela deixa de valer — `validation`/`retry` (o `judgeAnswer` só lê
-        `field.validation`), `options[]` (o runtime lê `field.options`) e o
-        `masked` do nó (o `form_get` escreve `masked: f.masked ?? false` por campo
-        e nunca propaga o do nó). Mostrá-los aqui seria a tela oferecendo cinco
-        controles que não fazem nada.
-        A autoria de `fields[]` mora no editor JSON — ver `DialogJsonPanel`.
-      */}
-      {!scored && node.interaction === 'form' && (
-        <FormFieldsSummary node={node} locale={locale} defaultLocale={defaultLocale} onOpenJson={onOpenJson} />
-      )}
 
       {!scored && (
         <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
@@ -996,71 +1063,6 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
       )}
 
       <AskWhenRow guard={node.ask_when} priorKeys={priorKeys} onSet={g => onChange({ ...node, ask_when: g })} />
-    </div>
-  )
-}
-
-// ── Pergunta `form`: resumo dos campos + porta para o JSON ────────────────────
-
-/**
- * `interaction: "form"` coleta N valores nomeados num turno só, e eles vivem em
- * `fields[]` — a única parte do schema que esta tela não autora por widget (ver
- * `DialogJsonPanel`, § Por que ele existe). Aqui a pergunta MOSTRA o que carrega,
- * em vez de aparecer vazia: até 2026-09-04 escolher `form` no dropdown deixava o
- * painel em branco, e o nó ia para produção sem campo nenhum.
- *
- * Mostra também o que o nó carrega e o runtime IGNORA nesta interação. Esconder
- * calado trocaria um controle inerte por um dado invisível — que é pior, porque
- * o dado continua no documento.
- */
-const FormFieldsSummary: React.FC<{
-  node: QuestionNode; locale: string; defaultLocale: string; onOpenJson: () => void
-}> = ({ node, locale, defaultLocale, onOpenJson }) => {
-  const { t } = useTranslation('dialogForms')
-  const fields = node.fields ?? []
-  const inertes = [
-    node.options?.length ? 'options' : null,
-    node.validation      ? 'validation' : null,
-    node.retry           ? 'retry' : null,
-    node.masked          ? 'masked' : null,
-  ].filter(Boolean) as string[]
-
-  return (
-    <div className="space-y-1.5 border-t pt-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-gray-600">
-          {t('form.fields', { n: fields.length })}
-        </span>
-        <div className="flex-1" />
-        <button onClick={onOpenJson}
-          className="flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] hover:bg-white">
-          <Braces size={12} /> {t('form.editJson')}
-        </button>
-      </div>
-
-      {fields.length === 0 ? (
-        <p className="flex items-start gap-1 text-[11px] text-amber-700">
-          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-          {t('form.empty')}
-        </p>
-      ) : (
-        <ul className="space-y-0.5">
-          {fields.map(f => (
-            <li key={f.id} className="flex items-center gap-2 text-[11px] text-gray-600">
-              <code className="font-mono text-gray-800">{f.id}</code>
-              <span className="truncate">{ltToStr(f.label, locale, defaultLocale) || '—'}</span>
-              <span className="rounded bg-gray-100 px-1">{f.type}</span>
-              {f.required && <span className="text-gray-400">{t('form.required')}</span>}
-              {f.masked && <span className="text-amber-700">🔒 {String(f.masked)}</span>}
-              {f.value !== undefined && <span className="text-blue-700">{t('form.prefilled')}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {inertes.length > 0 && (
-        <p className="text-[11px] text-amber-700">{t('form.inert', { keys: inertes.join(', ') })}</p>
-      )}
     </div>
   )
 }

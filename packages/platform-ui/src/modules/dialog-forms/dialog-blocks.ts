@@ -22,6 +22,30 @@ import type {
 
 export const DIALOG_KEY = '__dialog__'
 
+/**
+ * Prefixo de chave do bloco FORM (2026-09-05).
+ *
+ * `interaction: "form"` nao e "mais um formato de resposta": e o unico em que UM
+ * turno coleta N valores nomeados. Enquanto ele morava no dropdown de interacao
+ * da pergunta, aquele seletor era uma uniao discriminada — escolher o quinto
+ * valor mudava o significado do painel inteiro, e quatro controles da pergunta
+ * (`retry`/`options`/`validation` escalar/`masked` do no) passavam a ser inertes.
+ *
+ * Como bloco, isso deixa de EXISTIR em vez de ser tratado. E custa nada no
+ * modelo: bloco e PROJECAO sobre o `nodes[]` plano, entao nada muda no schema,
+ * no runtime ou nos dados — a pergunta continua sendo uma pergunta com
+ * `interaction: "form"`; muda so como a tela a agrupa.
+ *
+ * A chave leva o id do no (`__form__:<id>`) para que cada formulario seja o seu
+ * proprio run: dois formularios seguidos sao dois blocos, nunca um. ⚠️ Isso NAO
+ * impede duas perguntas `form` no documento — o `buildRender` funde os `fields`
+ * das duas num turno so, e quem denuncia e o preview. Proibir sem populacao
+ * (medido: zero ocorrencias) seria politica contra ninguem.
+ */
+export const FORM_KEY = '__form__'
+const formKeyOf = (id: string) => `${FORM_KEY}:${id}`
+export const isFormKey = (k: string) => k === FORM_KEY || k.startsWith(`${FORM_KEY}:`)
+
 const HAS_OPTIONS = (i: DialogInteraction) => i === 'button' || i === 'list' || i === 'checklist'
 
 /** Derive the option list of a scored instrument from its scale + anchor labels
@@ -38,23 +62,39 @@ export function deriveOptions(dim: DialogDimension): DialogOption[] {
 
 export interface InstrumentBlock { kind: 'instrument'; dim: DialogDimension; nodes: DialogNode[] }
 export interface DialogBlock { kind: 'dialog'; nodes: DialogNode[] }
-export type Block = InstrumentBlock | DialogBlock
+/** Bloco FORM: os `nodes` sao statements satelites + EXATAMENTE UMA pergunta
+ *  `interaction: "form"`, que e quem da identidade ao bloco. O statement de
+ *  abertura fica JUNTO de proposito — o `buildRender` o dobra no `menu_prompt`
+ *  do formulario, entao agrupa-los na tela espelha o runtime, e mover o bloco
+ *  leva o texto junto. */
+export interface FormBlock { kind: 'form'; nodes: DialogNode[] }
+export type Block = InstrumentBlock | DialogBlock | FormBlock
+
+/** A pergunta que DA identidade a um bloco form (a primeira, e deve haver uma). */
+export function formQuestionOf(block: FormBlock): QuestionNode | undefined {
+  return block.nodes.find((n): n is QuestionNode => n.kind === 'question')
+}
 
 /** The block key a node belongs to: a real dimension id (instrument) or DIALOG_KEY.
  *  Statements have no binding — they inherit the NEXT question's key (an intro
  *  statement leads its block); a trailing statement falls back to DIALOG_KEY. */
 function keyOfNode(nodes: DialogNode[], i: number, dimIds: Set<string>): string {
-  const n = nodes[i]
-  if (n.kind === 'question') {
-    const d = n.capture?.dimension_id
-    return d && dimIds.has(d) ? d : DIALOG_KEY
+  // A DIMENSAO VENCE, e isso e decisao: pergunta com `dimension_id` E
+  // `interaction: "form"` e contraditoria (instrumento rende UM numero,
+  // formulario rende N valores). Deixar o form vencer arrancaria a pergunta do
+  // instrumento e mudaria a nota; deixar a dimensao vencer preserva o que o
+  // `flattenBlocks` ja fazia antes deste bloco existir.
+  const keyOfQuestion = (q: QuestionNode): string => {
+    const d = q.capture?.dimension_id
+    if (d && dimIds.has(d)) return d
+    return q.interaction === 'form' ? formKeyOf(q.id) : DIALOG_KEY
   }
+
+  const n = nodes[i]
+  if (n.kind === 'question') return keyOfQuestion(n)
   for (let j = i + 1; j < nodes.length; j++) {
     const m = nodes[j]
-    if (m.kind === 'question') {
-      const d = m.capture?.dimension_id
-      return d && dimIds.has(d) ? d : DIALOG_KEY
-    }
+    if (m.kind === 'question') return keyOfQuestion(m)
   }
   return DIALOG_KEY
 }
@@ -77,6 +117,7 @@ export function buildBlocks(form: DialogForm): Block[] {
   }
 
   const blocks: Block[] = runs.map(run => {
+    if (isFormKey(run.key)) return { kind: 'form', nodes: run.nodes }
     if (run.key === DIALOG_KEY) return { kind: 'dialog', nodes: run.nodes }
     let dim = dimById.get(run.key)!
     // Migration: infer the instrument-level interaction from its questions when
@@ -132,6 +173,12 @@ export function flattenBlocks(blocks: Block[]): { nodes: DialogNode[]; dimension
         }
       }
     } else {
+      // `dialog` E `form` compartilham este ramo de proposito: os dois sao
+      // "nao-instrumento", e o que o achatamento faz e SOLTAR o vinculo de
+      // dimensao. O bloco form nao materializa nada — `interaction: "form"` e
+      // `fields[]` ja estao no no, e reescreve-los aqui recriaria a classe de
+      // defeito que a materializacao de instrumento tem (o editor muda o que o
+      // autor digitou sem dizer).
       for (const n of block.nodes) {
         if (n.kind === 'question') {
           // DENYLIST, nao allowlist. Um dialog-block so precisa SOLTAR o que

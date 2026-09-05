@@ -131,3 +131,27 @@ export function formatForMasked(
   if (!maskedType) return undefined
   return formats.find(f => f.from_masked_type === maskedType)
 }
+
+/**
+ * D8 numa casa so — "o campo nomeia o tipo UMA vez".
+ *
+ * Quando `masked` nomeia um tipo com contraparte de formato, o formato e
+ * DERIVADO (o seletor trava) e declarar os dois com valores diferentes e
+ * CONFLITO — que a tela MOSTRA, nunca corrige sozinha (escolher um vencedor em
+ * silencio e como se paga a diferenca depois; o publish da dialog-api recusa
+ * com 422).
+ *
+ * Extraida em 2026-09-05 porque o editor de CAMPO passou a fazer a mesma
+ * pergunta que o de pergunta ja fazia. Duas implementacoes da mesma regra
+ * divergem, e aqui a divergencia seria "o campo aceita o que a pergunta recusa".
+ */
+export function d8Verdict(
+  masked:  boolean | string | undefined,
+  format:  string | undefined,
+  formats: FormatEntry[],
+): { derivado?: FormatEntry; conflito?: string } {
+  const maskedId = masked === true ? 'opaque' : (typeof masked === 'string' ? masked : undefined)
+  const derivado = formatForMasked(maskedId, formats)
+  if (!derivado) return {}
+  return format && format !== derivado.id ? { derivado, conflito: derivado.id } : { derivado }
+}

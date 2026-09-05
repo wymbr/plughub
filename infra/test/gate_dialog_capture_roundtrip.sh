@@ -51,6 +51,11 @@ RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DA="${DIALOG_API_URL:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
 FORM="${FORM_ID:-dialog_wrapup_arc12_v1}"
+# Segunda forma REAL: a do ramo E (bloco `form`). Sao dois artefatos porque sao
+# duas populacoes — nenhuma forma do repositorio declara captura Arc 12 E
+# pergunta `form` ao mesmo tempo, e reusar uma so faria um dos ramos passar
+# por ausencia.
+FORM_COM_FIELDS="${FORM_FIELDS_ID:-dialog_limite_solicitacao}"
 NODE_IMG="${NODE_IMAGE:-node:20-alpine}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
@@ -70,6 +75,10 @@ trap 'rm -rf "$TMP"' EXIT
 curl -sf "$DA/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" \
   -o "$TMP/form.json" \
   || inconclusivo "dialog-api não serviu o form publicado '$FORM' em $DA"
+
+curl -sf "$DA/v1/dialog/forms/$FORM_COM_FIELDS?status=published" -H "X-Tenant-ID: $TENANT" \
+  -o "$TMP/form_fields.json" \
+  || inconclusivo "dialog-api não serviu o form publicado '$FORM_COM_FIELDS' em $DA"
 
 # ── transpila a UNIDADE SOB TESTE (o import é type-only ⇒ elidido) ─────────────
 cp "$RAIZ/packages/platform-ui/src/modules/dialog-forms/dialog-blocks.ts" "$TMP/blocks.ts"
@@ -148,6 +157,62 @@ if ((form.dimensions || []).length) {
     ok('D', 'round-trip lossless (form sem dimensions[])')
   }
 }
+// ── E — o bloco FORM: projeção nova, round-trip INTACTO ───────────────────────
+// `interaction: "form"` deixou de morar no dropdown de interação da pergunta e
+// passou a ser um TIPO DE BLOCO (2026-09-05). A mudança é só de projeção — o nó
+// continua sendo uma pergunta com `interaction: "form"` —, e é exatamente por
+// isso que ela precisa de rede: uma projeção que não reconstrói o mesmo `nodes[]`
+// perde o formulário do autor SEM erro nenhum, porque o editor continua abrindo.
+{
+  const f2 = JSON.parse(readFileSync('/t/form_fields.json', 'utf8'))
+  const n2 = f2.nodes || []
+  const formQs = n2.filter(n => n.kind === 'question' && n.interaction === 'form')
+
+  if (!formQs.length) {
+    // Controle positivo próprio: sem pergunta `form` neste artefato, E passaria
+    // por ausência — o defeito da asserção 7b outra vez.
+    bad('E', `o form '${f2.form_id}' não declara pergunta \`interaction: "form"\` — ` +
+             `sem essa população o ramo E não mede nada (troque FORM_FIELDS_ID)`)
+  } else {
+    const blocos = buildBlocks(f2)
+    const bForm  = blocos.filter(b => b.kind === 'form')
+
+    if (bForm.length !== formQs.length) {
+      bad('E', `${formQs.length} pergunta(s) \`form\` viraram ${bForm.length} bloco(s) 'form' — ` +
+               `a projeção não as reconheceu (ou fundiu duas num bloco só)`)
+    } else if (bForm.some(b => b.nodes.filter(n => n.kind === 'question').length !== 1)) {
+      bad('E', `há bloco 'form' com mais de uma pergunta — o bloco é o TURNO, e duas ` +
+               `perguntas nele fariam a tela prometer dois turnos onde o runner faz um`)
+    } else {
+      const volta = flattenBlocks(blocos).nodes
+      if (JSON.stringify(n2) !== JSON.stringify(volta)) {
+        const i = n2.findIndex((x, k) => JSON.stringify(x) !== JSON.stringify(volta[k]))
+        bad('E', `round-trip do bloco 'form' NÃO é lossless em '${f2.form_id}'. ` +
+                 `Primeira divergência no índice ${i}:
+        antes : ${JSON.stringify(n2[i])}
+` +
+                 `        depois: ${JSON.stringify(volta[i])}`)
+      } else {
+        // A decisão de agrupamento: o statement de abertura fica NO bloco do
+        // formulário. Se ele caísse fora, mover o bloco deixaria o texto para
+        // trás — e o `buildRender` o dobra no `menu_prompt` justamente por ele
+        // pertencer àquele turno.
+        const idxQ = n2.findIndex(n => n.kind === 'question' && n.interaction === 'form')
+        const stmtAntes = idxQ > 0 && n2[idxQ - 1].kind === 'statement' ? n2[idxQ - 1] : null
+        const dono = bForm.find(b => b.nodes.some(n => n.id === n2[idxQ].id))
+        if (stmtAntes && !dono.nodes.some(n => n.id === stmtAntes.id)) {
+          bad('E', `o statement '${stmtAntes.id}' que abre o formulário ficou FORA do bloco ` +
+                   `— mover o bloco deixaria o texto para trás`)
+        } else {
+          ok('E', `bloco 'form' projetado e reconstruído sem perda ` +
+                  `(${bForm.length} bloco(s), ${(dono.nodes.find(n => n.kind === 'question').fields || []).length} campo(s)` +
+                  `${stmtAntes ? ', com o statement de abertura junto' : ''})`)
+        }
+      }
+    }
+  }
+}
+
 console.log(JSON.stringify({ resultados: out }))
 JS
 

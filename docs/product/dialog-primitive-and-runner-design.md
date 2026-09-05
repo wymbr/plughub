@@ -522,6 +522,67 @@ depois.
    Segue aberto para `skill_survey_runner_v1` e `agente_nps_v1` (formas de survey são escalares por
    natureza; ver `pending.md`).
 
+## 6.4 As-built — `form` vira TIPO DE BLOCO (2026-09-05)
+
+A fatia anterior (§6.3) deu autoria a `fields[]` pelo editor JSON. O dono voltou ao problema com um
+diagnóstico melhor: **`form` não é "mais um formato de resposta"**, e enquanto morasse no seletor de
+interação da pergunta, aquele seletor era uma **união discriminada** — o quinto valor mudava o
+significado do painel inteiro e obrigava a esconder quatro controles.
+
+Agora `form` é um tipo de bloco, ao lado de Diálogo e dos instrumentos (CSAT/NPS/…). O que se ganha:
+
+- **o estado ruim deixa de existir** em vez de ser tratado: `interaction` volta a ter quatro valores
+  que dizem todos *um escalar por turno*;
+- **mais raso**: bloco → campos, sem o nível intermediário "pergunta" que não significava nada
+  quando aquela pergunta *é* o formulário inteiro;
+- **custo zero no modelo**: bloco é PROJEÇÃO (`dialog-blocks.ts`) sobre o `nodes[]` plano. Nada muda
+  no schema, no runtime ou nos dados — o nó continua sendo uma pergunta com `interaction: "form"`;
+  muda só como a tela o agrupa. As quatro formas semeadas passaram a **aparecer** diferente, sem
+  migração.
+
+E o modelo já se comportava assim: `buildRender` **concatena** os `fields` de todas as perguntas num
+único `render.fields`, ou seja, o bloco que o runner recebe é single-turn e enxerga o documento como
+*um* formulário. Medido: as quatro formas com `form` têm **exatamente uma** pergunta `form` cada.
+
+### Decisões
+
+- **A dimensão vence.** Pergunta com `capture.dimension_id` *e* `interaction: "form"` é contraditória
+  (instrumento rende um número). O bloco form só recolhe pergunta não vinculada — que é o que o
+  `flattenBlocks` já fazia antes de o bloco existir.
+- **O statement de abertura fica DENTRO do bloco form.** O `buildRender` o dobra no `menu_prompt`
+  daquele turno, então agrupá-los na tela espelha o runtime — e mover o bloco leva o texto junto.
+- **Campo não é pergunta.** Os conjuntos de atributos não coincidem: só a pergunta tem
+  `retry`/`visibility`/`timeout_s`/`ask_when`/`interaction`; só o campo tem `required`/`value`.
+  Reusar o `QuestionEditor` mostraria quatro controles inertes e esconderia dois reais — o defeito
+  que esta mesma família de mudanças fechou. Daí o `FormBlockEditor` com editor de campo próprio.
+- **A regra D8 mora numa casa** (`d8Verdict`, em `catalog-hooks.ts`), agora que pergunta e campo
+  fazem a mesma pergunta sobre `masked` × `format`. Duas implementações divergiriam, e a divergência
+  seria *"o campo aceita o que a pergunta recusa"*.
+- **Converter Form → Diálogo apaga os campos, e pede confirmação.** Mantê-los seria o pior estado:
+  `buildRender` testa `node.fields?.length` **antes** da interação, então uma pergunta `text` com
+  campos residuais continuaria renderizando como formulário (e o WhatsApp dispararia coleta
+  sequencial por `len(fields) > 0`) sem a tela mostrar campo nenhum. Perda de trabalho do autor é
+  **consentida**, nunca silenciosa.
+
+### Escopo medido do editor de campo
+
+Entre os 10 campos publicados: tipos `text` (9) e `bool` (1); **zero** com `options` (select),
+**zero** com `capture`, **um** com `validation`. Por isso as opções POR CAMPO — o único nível mais
+profundo — não ganharam widget: sobrevivem ao round-trip e a tela as **anuncia**. Widget para
+população zero é trabalho contra ninguém.
+
+### O editor JSON continua, demovido
+
+Deixou de ser a autoria de `fields[]` e ficou com o que widget nenhum cobre: importar/exportar (8 das
+12 formas semeadas não têm pergunta `form`), o dry-run e o preview do `render`. Saiu do cabeçalho de
+`Blocks` — onde afirmava, pela posição, um escopo menor do que tem — e foi para a linha de ações do
+documento.
+
+**Gate:** ramo **E** de `infra/test/gate_dialog_capture_roundtrip.sh` — projeta e reconstrói a forma
+REAL publicada (`dialog_limite_solicitacao`), com controle positivo próprio (sem pergunta `form` no
+artefato, o ramo REPROVA em vez de passar por ausência) e verificação de que o statement de abertura
+ficou no bloco. Falseado por mutação.
+
 ## 7. Pontos a validar em runtime (quando implementar)
 
 - Plumbing do `config_json` no launch para **hook `on_*` (bridge)** e **webhook (worker)** — os dois dispatchers.

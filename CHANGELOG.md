@@ -1,5 +1,83 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 — DLG-07: `form` deixa de ser um valor do seletor e vira TIPO DE BLOCO
+
+Ontem `fields[]` ganhou autoria pelo editor JSON (DLG-01). O dono voltou ao problema com um
+diagnóstico melhor, e ele desloca a fatia inteira: **`form` não é "mais um formato de resposta"**.
+
+Enquanto morasse dentro de `Question/Interaction`, aquele seletor era uma **união discriminada** —
+quatro valores dizem *um escalar por turno* e o quinto muda o significado do painel inteiro. Foi
+exatamente esse defeito que a tela vinha pagando: escolher `form` escondia quatro controles
+(`options`, `validation`, `masked`, `format`) e não revelava nenhum. Esconder controle inerte é
+tratar o sintoma; o estado ruim continuava existindo.
+
+Agora `form` é bloco, ao lado de Diálogo e dos instrumentos (CSAT/NPS/…):
+
+- **o estado ruim deixa de existir por construção**, em vez de ser tratado;
+- **um nível a menos**: bloco → campos, sem a "pergunta" intermediária que não significava nada
+  quando aquela pergunta *é* o formulário inteiro;
+- **custo zero no modelo.** Bloco é PROJEÇÃO (`dialog-blocks.ts`) sobre o `nodes[]` plano — nada
+  muda no schema, no runtime ou nos dados. O nó continua sendo uma pergunta com
+  `interaction: "form"`; muda só como a tela o agrupa. As quatro formas semeadas passaram a
+  **aparecer** diferente, sem migração nenhuma.
+
+E o modelo já se comportava assim: `buildRender` **concatena** os `fields` de todas as perguntas
+num único `render.fields`, ou seja, o bloco que o runner recebe é single-turn e enxerga o documento
+como *um* formulário. Medido antes de decidir: as quatro formas com `form` têm **exatamente uma**
+pergunta `form` cada.
+
+### As quatro decisões, e a medição de cada uma
+
+**A dimensão VENCE.** Pergunta com `capture.dimension_id` *e* `interaction: "form"` é contraditória
+— instrumento rende um número. O bloco form só recolhe pergunta **não vinculada**, que é o que o
+`flattenBlocks` já fazia antes de o bloco existir.
+
+**O statement de abertura fica DENTRO do bloco form.** O `buildRender` o dobra no `menu_prompt`
+daquele turno; agrupá-los na tela espelha o runtime, e mover o bloco leva o texto junto.
+
+**Campo NÃO é pergunta**, e por isso não reusa o `QuestionEditor`. Os conjuntos de atributos não
+coincidem: só a pergunta tem `retry`/`visibility`/`timeout_s`/`ask_when`/`interaction`; só o campo
+tem `required`/`value`. Reusar mostraria quatro controles inertes e esconderia dois reais — o
+defeito que esta mesma mudança fechou, renascendo um nível abaixo.
+
+**A regra D8 (`masked` que nomeia tipo com contraparte de formato DERIVA o formato) mora numa
+casa.** Extraída para `d8Verdict`, em `catalog-hooks.ts`, agora que pergunta e campo fazem a mesma
+pergunta. Duas implementações divergiriam, e a divergência seria *"o campo aceita o que a pergunta
+recusa"*.
+
+### Converter Form → Diálogo APAGA os campos, e pede confirmação
+
+Mantê-los seria o pior estado possível: `buildRender` testa `node.fields?.length` **antes** da
+interação, então uma pergunta `text` com campos residuais **continuaria renderizando como
+formulário** — e no WhatsApp dispararia coleta sequencial por `len(fields) > 0` — sem a tela mostrar
+campo nenhum. O `window.confirm` nomeia quantos campos serão perdidos: perda de trabalho do autor é
+**consentida**, nunca silenciosa.
+
+### Escopo do editor de campo, medido
+
+Entre os 10 campos publicados: tipos `text` (9) e `bool` (1); **zero** com `options`, **zero** com
+`capture`, **um** com `validation`. As opções POR CAMPO — o único nível mais profundo — não ganharam
+widget: sobrevivem ao round-trip e a tela as **anuncia** (`select` sem opções aparece dito, não
+silenciado). Widget para população zero é trabalho contra ninguém; registrado como `adiado` com
+gatilho (DLG-08).
+
+### O editor JSON continua, demovido
+
+Deixou de ser a autoria de `fields[]` e ficou com o que widget nenhum cobre: importar/exportar (8
+das 12 formas semeadas não têm pergunta `form`), o dry-run e o preview do `render`. Saiu do cabeçalho
+de `Blocks` — onde afirmava, **pela posição**, um escopo menor do que tem — e foi para a linha de
+ações do DOCUMENTO.
+
+**Gate:** ramo **E** de `infra/test/gate_dialog_capture_roundtrip.sh`, sobre a forma REAL publicada
+(`dialog_limite_solicitacao`): projeta → reconstrói e compara, exige **exatamente uma** pergunta por
+bloco form e o statement de abertura agrupado. Tem controle positivo próprio — sem pergunta `form`
+no artefato o ramo REPROVA, em vez de passar por ausência de amostra. Falseado por mutação
+(`keyOfQuestion` devolvendo `DIALOG_KEY` deixa o E vermelho).
+
+Arquivos: `packages/platform-ui/src/modules/dialog-forms/{dialog-blocks.ts,FormBlockEditor.tsx,DialogFormsPage.tsx,catalog-hooks.ts}`,
+i18n `dialogForms.json` (pt-BR + en), `infra/test/gate_dialog_capture_roundtrip.sh`.
+
+
 ## 2026-09-04 (9) — GAT-01: o manifesto passa a prestar contas, e 100 gates rodavam para ninguém
 
 `run_gates.sh` garante que tudo o que o manifesto **cita** foi executado. Nada garantia que

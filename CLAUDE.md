@@ -1994,10 +1994,28 @@ agent-registry rejeita o ref com 422.
 **seed-if-absent**. Editar um JSON onde o form já está publicado é **no-op** — mesma pegadinha do
 YAML de skill (`DIALOG_SEED_RECONCILE=true` inverte).
 
-**A autoria de `fields[]` é o editor JSON, e o VEREDICTO é do servidor** *(2026-09-04)*. `fields[]` —
-a lista que `interaction: form` coleta — não tem widget: a forma **é** JSON (a dialog-api persiste
-`nodes` como `list[dict[str, Any]]`), e o `DialogJsonPanel` importa/edita/exporta/pré-visualiza o
-documento inteiro. Aplicar **não grava**: Salvar/Publicar continua o caminho único.
+**`form` é um TIPO DE BLOCO, não um valor do seletor de interação** *(2026-09-05)*. `interaction`
+responde *que forma tem a RESPOSTA*, e os quatro valores que sobraram (`text`/`button`/`list`/
+`checklist`) dizem todos a mesma categoria — **um escalar por turno**. `form` era o quinto, e
+escolhê-lo mudava o significado do painel inteiro: quatro controles da pergunta (`options`,
+`validation` escalar, `retry`, `masked` do nó) viravam inertes, porque no ramo `form` o runtime lê os
+equivalentes **por campo**. Como bloco (ao lado de Diálogo/CSAT/NPS), esse estado **deixa de existir**
+em vez de ser escondido — e custa **nada** no modelo: bloco é PROJEÇÃO sobre o `nodes[]` plano, então
+schema, runtime e dados seguem idênticos; o nó continua uma pergunta com `interaction: "form"`.
+⚠️ **A dimensão VENCE** o form: pergunta com `capture.dimension_id` é do instrumento (rende UM
+número), e deixar o form ganhar arrancaria a pergunta da nota.
+⚠️ **Campo NÃO é pergunta** — medido: só a pergunta tem `retry`/`visibility`/`timeout_s`/`ask_when`,
+só o campo tem `required`/`value`. Reusar o editor de pergunta mostraria quatro controles inertes e
+esconderia dois reais; por isso `FormBlockEditor` tem editor de campo próprio, com a regra D8
+(`masked` deriva `format`) numa casa só (`d8Verdict`). Gate: ramo E de
+`gate_dialog_capture_roundtrip.sh` (round-trip da projeção sobre a forma REAL publicada).
+
+**O editor JSON continua, como escape hatch — e o VEREDICTO é do servidor** *(2026-09-04)*. Ele
+deixou de ser a autoria de `fields[]` e ficou com o que widget nenhum cobre: **importar/exportar** (8
+das 12 formas semeadas não têm pergunta `form` e ainda assim se beneficiam), o **dry-run** e o
+**preview do `render`**. O `DialogJsonPanel` edita o documento inteiro — por isso mora na linha de
+ações do DOCUMENTO, nunca no cabeçalho de `Blocks`, onde afirmaria pela posição um escopo menor do
+que tem. Aplicar **não grava**: Salvar/Publicar continua o caminho único.
 `POST /api/dialog/preview` (mcp-server) devolve `{valid, errors[], render}` rodando a **mesma**
 `buildRender`/`validateDialogForm` do `form_get` — que por isso mudaram para `@plughub/schemas`.
 O platform-ui **não importa `@plughub/schemas`** (sem workspaces, risco de dual-instance de Zod),

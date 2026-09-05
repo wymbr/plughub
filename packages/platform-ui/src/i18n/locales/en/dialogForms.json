@@ -73,7 +73,8 @@
     "dialogHint": "no scoring — statements, verbatim, OTP",
     "weightsAdjust": "equal weights · adjust",
     "weightsHide": "hide weights",
-    "anchors": "scale labels"
+    "anchors": "scale labels",
+    "form": "Form"
   },
   "askWhen": {
     "label": "only ask if",
@@ -131,12 +132,17 @@
     "askWhenRef": "The \"only ask if\" guard references \"{{field}}\", which is not a prior question."
   },
   "form": {
+    "prompt": "Form header",
+    "promptPlaceholder": "e.g. Fill in the request details:",
     "fields": "Fields ({{n}})",
-    "editJson": "Edit in JSON",
-    "empty": "No fields declared — this question collects nothing. Open the JSON and declare `fields[]`.",
-    "required": "required",
-    "prefilled": "pre-filled",
-    "inert": "In this interaction the runtime ignores: {{keys}}. The values stay in the document — edit them in the JSON."
+    "field": "field",
+    "empty": "No fields declared — this form collects nothing.",
+    "required": "req.",
+    "value": "Initial value",
+    "valueHint": "only the Console pre-fills it",
+    "optionsCount": "{{n}} option(s) declared — edit them in the JSON",
+    "selectNoOptions": "`select` type with no options — declare them in the JSON",
+    "confirmToDialog": "Switching to Dialog deletes the {{n}} declared field(s) — a plain question does not collect them. Continue?"
   },
   "json": {
     "open": "JSON",
