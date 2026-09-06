@@ -841,6 +841,7 @@ export {
   DialogFormDraftSchema,
   buildRender,
   duplicateNodeIds,
+  optionsAtPath,
   validateDialogForm,
 } from "./dialog-render"
 
@@ -852,6 +853,7 @@ export type {
   DialogRender,
   DialogFormIssue,
   DialogFormVerdict,
+  TreeLevel,
 } from "./dialog-render"
 
 // ── DialogForm — catálogo de FORMATOS de entrada (ADR adr-dialog-input-format-catalog) ──

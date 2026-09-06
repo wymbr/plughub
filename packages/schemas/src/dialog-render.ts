@@ -166,6 +166,67 @@ function temArvore(opts: ReadonlyArray<RenderOption>): boolean {
   return opts.some(o => (o.options?.length ?? 0) > 0)
 }
 
+/**
+ * Um NIVEL da arvore de opcoes, projetado a partir de um caminho.
+ *
+ * Existe porque navegar uma arvore com o CLIENTE e turno-a-turno: o `menu` step
+ * mostra uma lista PLANA por vez, enquanto o `render` traz a arvore inteira
+ * aninhada. Sem esta projecao, apontar a ref do menu para o render entregaria so o
+ * nivel de cima e os filhos ficariam invisiveis — o mesmo achatamento mudo que o
+ * adapter de WhatsApp produz, por outro caminho.
+ */
+export interface TreeLevel {
+  /**
+   * O caminho RESOLVEU? ⚠️ Segmento desconhecido devolve `false` com `options`
+   * VAZIO — nunca a raiz. Degradar para a raiz seria o valor plausivel mais barato
+   * de produzir aqui: a tela voltaria ao menu principal e pareceria certa, com o
+   * cliente perdendo a navegacao sem que nada ficasse vermelho.
+   */
+  found:    boolean
+  /**
+   * O no DO CAMINHO e folha (selecionavel). DERIVADO da ausencia de filhos — a
+   * mesma D2 do `adr-dialog-tree-options`, e por isso pasta esvaziada por
+   * aposentadoria JA chega aqui como folha (o `mapOptions` omite `options` vazio).
+   */
+  is_leaf:  boolean
+  /** Filhos do no do caminho, UM nivel, sem aninhamento. Vazio quando folha. */
+  options:  RenderOption[]
+  /** O caminho consultado, ecoado — o chamador guarda o cursor, esta funcao nao. */
+  path:     string[]
+}
+
+/**
+ * Projeta UM nivel da arvore de opcoes a partir de um caminho de ids.
+ *
+ * Pura e sem estado: o cursor e do chamador. `path` vazio devolve a raiz.
+ *
+ * ⚠️ **O gemeo do Console NAO pode ser este.** `platform-ui` nao depende de
+ * `@plughub/schemas` (sem workspaces, risco de dual-instance de Zod), entao o
+ * `nivelDe` do `DialogFormRenderer` continua sendo copia — TOPOLOGIA, como o
+ * `evaluateAskWhen` triplicado, nao desleixo. O que os separa alem disso e o
+ * INSUMO: la se caminha o `DialogOption` cru (chaveado por `value ?? id`), aqui o
+ * `RenderOption` ja normalizado.
+ */
+export function optionsAtPath(
+  roots: ReadonlyArray<RenderOption>,
+  path:  ReadonlyArray<string>,
+): TreeLevel {
+  const trilha = [...path]
+  let nivel: RenderOption[] = [...roots]
+  let atual: RenderOption | undefined
+
+  for (const passo of trilha) {
+    const achado = nivel.find(o => o.id === passo)
+    if (!achado) return { found: false, is_leaf: false, options: [], path: trilha }
+    atual = achado
+    nivel = achado.options ?? []
+  }
+
+  // Raiz (caminho vazio) nao e um no: nao e folha, e os filhos sao as raizes.
+  if (!atual) return { found: true, is_leaf: false, options: nivel, path: trilha }
+  return { found: true, is_leaf: nivel.length === 0, options: nivel, path: trilha }
+}
+
 function flattenRetry(q: QuestionNode, locale: string | undefined, dl: string): RenderRetry | undefined {
   if (!q.retry) return undefined
   return {
