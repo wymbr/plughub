@@ -295,7 +295,7 @@ inteiro.
 | **F0** ✅ | **Medir** — inventário de menus, espécies A×B, zero produtores de demanda, sanção de ciclo, alvo literal do `escalate` | — |
 | **F1** | **O eixo de demanda passa a existir**: árvore autorada no `DialogForm` + `agent_event` com o caminho, **ainda escalando pelo `choice` atual**. Sem tocar no engine | F0 |
 | **F2** | **Renderização em canal** (`DLG-15`): hoje nenhum canal de cliente desenha árvore — o adapter de WhatsApp trata `options` como lista plana, dimensionada por `len()` | F0 |
-| **F3** | `escalate` com **alvo interpolável** + mapa `caminho → pool` na config do pool (D2) | F2 |
+| **F3** ✅ | `escalate` com **alvo interpolável** + mapa `caminho → pool` na config do pool (D2) | ~~F2~~ — ver emenda |
 | **F4** | O **runner genérico** assume a navegação; `agente_triagem_v2` sai | F1, F3 |
 | **F5** | **Paridade LLM** (D6): o orquestrador IA aterrissa nas mesmas folhas declaradas | F4 |
 
@@ -349,9 +349,38 @@ inteiro.
 
 ## Riscos e questões abertas
 
+> **Emenda de 2026-09-06 — a F3 NÃO dependia da F2, e isso foi medido.** Esta tabela dizia
+> `F3 ← F2`, e a linha do ledger repetia *"depende da ORQ-02 para ser testável ponta a ponta"*. O
+> contato real da F1 refutou: a navegação desce **um nível por turno** (`optionsAtPath` projeta um
+> nível; o `menu` renderiza uma lista PLANA), então **nenhum canal precisa desenhar árvore** para o
+> caminho inteiro funcionar. A F2 melhora a experiência — menos turnos —, não destrava a F3.
+> Dependência herdada de raciocínio, desfeita por medição.
+>
+> **O que a F3 entregou:** `escalate.target.pool` aceita referência (`$.`/`@ctx.`/`{{…}}`), resolvida
+> no engine · `pools.navigation_pools` (`Record<caminho, pool_id>`, forma idêntica à do
+> `mentionable_pools`, migração `20260906120000`) · tool `pool_route_resolve` (prefixo mais longo
+> por SEGMENTO) · superfície de UI em *Configuração → Recursos → Pools*, reusando o editor do
+> `mentionable_pools` em vez de copiá-lo. O `skill_navegacao_v1` foi de **16 para 12 steps**: saíram
+> um `choice` de 5 condições e 5 `escalate` literais — a tabela de roteamento que estava escrita no
+> controle de fluxo.
+>
+> ⚠️ **Não há default, por decisão.** Caminho sem prefixo declarado é `isError` nomeando o caminho e
+> as chaves existentes; o fluxo o manda ao humano. Um destino de emergência dentro do resolvedor
+> seria o `queue_pool_id or pool_id` do `CLAUDE.md`: config ausente convertida em despacho para o
+> lugar errado, em silêncio.
+>
+> ⚠️ **E o prefixo é por SEGMENTO.** Um `startsWith` cru faria `sac_premium` casar com a chave `sac`
+> e mandar o contato para o pool errado **com o log dizendo que casou**. É o caso que carrega o peso
+> nos testes do resolvedor, e foi verificado por mutação.
+
 - **A F3 é a porta da erosão.** Tornar o alvo do `escalate` interpolável é necessário — e é exatamente
   por onde *"roteamento condicional no formulário"* entraria depois. A guarda da D10 precisa nascer
   **junto** com a interpolação, não depois.
+  **✅ Nasceu junto (2026-09-06):** ramo **G** do `probe_orchestrator_tree_nav.sh` — varre as 14
+  formas publicadas e o `DialogOptionSchema` atrás de **nove** nomes que significariam destino
+  (`pool`, `pool_id`, `target`, `target_pool`, `escalate_to`, `route`, `route_to`, `skill_id`,
+  `agent_type_id`). As **duas** metades importam: forma limpa hoje não impede campo novo amanhã, e
+  *campo que existe acaba usado*. Verificado por mutação (uma folha com `pool` ⇒ VERMELHO).
 - **`options_tree` é hoje uma declaração sem consumidor** (medido: aparece só dentro de
   `packages/schemas` — definição, derivação, teste e `.d.ts`; o Console decide por conta própria com
   `temArvore`). A F2 é quem lhe dá o primeiro consumidor — e, de quebra, impede a terceira cópia da

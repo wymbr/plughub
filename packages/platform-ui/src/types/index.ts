@@ -200,6 +200,8 @@ export interface Pool {
   supervisor_config?: PoolSupervisorConfig | null
   /** Mapa alias → pool_id dos agentes endereçáveis via @mention. */
   mentionable_pools?: Record<string, string> | null
+  /** F3 do orquestrador por arvore: caminho de navegacao -> pool (prefixo mais longo). */
+  navigation_pools?: Record<string, string> | null
   /** IDs dos Agent Groups (Arc 9) a que o pool pertence. */
   agent_groups?: string[]
   /** LLM Accounts (config-api namespace `llm_accounts`) preferidas por este pool, em ordem. */
@@ -235,6 +237,8 @@ interface PoolGapFields {
   hooks?: PoolHooks | null
   supervisor_config?: PoolSupervisorConfig | null
   mentionable_pools?: Record<string, string> | null
+  /** F3 do orquestrador por arvore: caminho de navegacao -> pool (prefixo mais longo). */
+  navigation_pools?: Record<string, string> | null
   agent_groups?: string[]
   llm_account_ids?: string[]
   evaluation?: PoolEvaluationConfig | null

@@ -133,6 +133,7 @@ export async function syncInternalQueueMirror(
       supervisor_config:  Prisma.DbNull,
       queue_config:       Prisma.DbNull,
       mentionable_pools:  Prisma.DbNull,
+      navigation_pools:   Prisma.DbNull,
       hooks:              Prisma.DbNull,
       context_visibility: Prisma.DbNull,
       ...derived,

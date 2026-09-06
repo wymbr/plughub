@@ -13,9 +13,11 @@
 # o que o AGENTE diz que o contato foi (wrap-up) e nada do que o CLIENTE disse
 # que queria.
 #
-# ⚠️ ESTA FASE NÃO TOCA NO ENGINE E NÃO MEXE NO ROTEAMENTO. O despacho continua
-# sendo o `choice` + `escalate` literais de sempre (ver `rotear`). Tornar o alvo
-# do `escalate` interpolável é a F3/ORQ-03, e é lá que o mapa caminho→pool nasce.
+# ⚠️ ATUALIZADO NA F3/ORQ-03 (2026-09-06). O cabeçalho dizia que esta fase *"não
+# toca no engine e não mexe no roteamento"*, e as duas metades caducaram: o engine
+# mudou duas vezes (sentinela de ciclo, ORQ-07; alvo interpolável, esta), e o
+# despacho deixou de ser `choice` + 5 `escalate` literais. O mapa caminho→pool
+# nasceu, e mora na config do POOL (`navigation_pools`), nunca na folha da forma.
 #
 # ⚠️ A FOLHA CARREGA O CAMINHO, NUNCA O POOL (D2). O `DialogForm` é congelado no
 # promote e o pool é DB-owned: um `pool_id` dentro da forma seria segunda fonte de
@@ -169,75 +171,42 @@ steps:
       tags:
         dialog_form_id:      "$.pipeline_state.nivel.form_id"
         dialog_form_version: "{{$.pipeline_state.nivel.version}}"
-    on_success: rotear
-    on_failure: rotear
+    on_success: resolver_rota
+    on_failure: resolver_rota
 
-  # ── 6. Roteamento — INALTERADO nesta fase ───────────────────────────────────
-  # Casa o PRIMEIRO segmento do caminho (`root_id`), que a tool devolve em campo
-  # próprio para a composição do caminho não ficar em duas casas.
-  - id: rotear
-    type: choice
-    conditions:
-      - field: "$.pipeline_state.nivel.root_id"
-        operator: eq
-        value: "sac"
-        next: escalar_sac
-      - field: "$.pipeline_state.nivel.root_id"
-        operator: eq
-        value: "portabilidade"
-        next: escalar_portabilidade
-      - field: "$.pipeline_state.nivel.root_id"
-        operator: eq
-        value: "reembolso"
-        next: escalar_reembolso
-      - field: "$.pipeline_state.nivel.root_id"
-        operator: eq
-        value: "auth_form"
-        next: escalar_auth
-      - field: "$.pipeline_state.nivel.root_id"
-        operator: eq
-        value: "auth_sac"
-        next: escalar_auth_sac
-    default: escalar_humano
+  # ── 6. Roteamento — a TABELA saiu do fluxo (F3) ──────────────────────
+  # Antes desta fase o despacho eram 6 steps: um `choice` de 5 condições sobre o
+  # `root_id` mais um `escalate` LITERAL por destino. Isso é a tabela de roteamento
+  # escrita no controle de fluxo — cada destino novo virava dois blocos de YAML, um
+  # deploy de skill, e um lugar a mais para divergir da config do pool.
+  #
+  # ⚠️ O mapa mora no POOL (`navigation_pools`), NUNCA na folha da forma (D2): a forma
+  # é congelada no promote e o pool é DB-owned e editável na UI. Trocar o pool que
+  # atende `sac` é uma edição de config; não republica conteúdo nem redeploya skill.
+  - id: resolver_rota
+    type: invoke
+    tool: pool_route_resolve
+    input:
+      session_id: "$.session_id"
+      path:       "$.pipeline_state.nivel.category_path"
+      tenant_id:  "$.tenant_id"
+    output_as: rota
+    on_success: escalar
+    # Caminho sem rota declarada NÃO inventa destino — cai no humano, que é a mesma
+    # coisa que a folha de escape pede. A DIFERENÇA entre "escolheu escape" e "escolheu
+    # algo que ninguém mapeou" já está no `category_path` do evento, então o desfecho
+    # pode coincidir sem que a medição os confunda.
+    on_failure: escalar_humano
 
-  - id: escalar_sac
+  # O alvo é uma REFERÊNCIA, e é isto que a F3 destrava. Se ela não resolver, o step
+  # vai para `on_failure` NOMEANDO o que faltou — nunca despacha para um literal de
+  # emergência, que seria o `queue_pool_id or pool_id` outra vez.
+  - id: escalar
     type: escalate
     target:
-      pool: sac_ia
+      pool: "$.pipeline_state.rota.pool"
     context: pipeline_state
-    handoff_reason: "Cliente escolheu SAC na navegação"
-    on_failure: encerrar_fallback
-
-  - id: escalar_portabilidade
-    type: escalate
-    target:
-      pool: portabilidade_ia
-    context: pipeline_state
-    handoff_reason: "Cliente escolheu portabilidade na navegação"
-    on_failure: encerrar_fallback
-
-  - id: escalar_reembolso
-    type: escalate
-    target:
-      pool: reembolso_ia
-    context: pipeline_state
-    handoff_reason: "Cliente escolheu reembolso na navegação"
-    on_failure: encerrar_fallback
-
-  - id: escalar_auth
-    type: escalate
-    target:
-      pool: auth_form_ia
-    context: pipeline_state
-    handoff_reason: "Cliente escolheu o demo de formulário mascarado"
-    on_failure: encerrar_fallback
-
-  - id: escalar_auth_sac
-    type: escalate
-    target:
-      pool: auth_sac_ia
-    context: pipeline_state
-    handoff_reason: "Cliente escolheu SAC autenticado"
+    handoff_reason: "Navegação: caminho escolhido pelo cliente"
     on_failure: encerrar_fallback
 
   # A folha de ESCAPE (D7 do ADR da árvore) e o default do roteamento caem no

@@ -1,5 +1,72 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (7) — F3/ORQ-03: a tabela de roteamento sai do fluxo
+
+`skill_navegacao_v1`: **16 → 12 steps**. Saíram um `choice` de 5 condições e 5 `escalate` literais —
+que juntos eram a tabela de roteamento escrita no controle de fluxo. Cada destino novo custava dois
+blocos de YAML, um deploy de skill, e mais um lugar para divergir da config do pool.
+
+**Quatro peças:**
+
+* **`escalate.target.pool` aceita referência** (`$.`/`@ctx.`/`{{…}}`), resolvida no engine. Era o
+  entregável nomeado do ADR: *"despache para o pool que ESTA FOLHA endereça"* não era expressível,
+  porque o alvo ia CRU para o `conversation_escalate`;
+* **`pools.navigation_pools`** — `Record<caminho, pool_id>`, forma idêntica à do `mentionable_pools`,
+  na mesma tabela e pela mesma razão: é config de POOL, DB-owned e editável na UI. Migração
+  `20260906120000_pool_navigation_pools`, aditiva e anulável;
+* **tool `pool_route_resolve`** — traduz caminho em pool lendo o mapa do pool da SESSÃO (nunca do
+  chamador). A tradução é um `invoke` visível no fluxo, com `on_failure` próprio, de propósito:
+  escondida dentro do `escalate` daria o mesmo despacho sem lugar para o erro aparecer;
+* **superfície de UI** em *Configuração → Recursos → Pools*, **reusando** o editor do
+  `mentionable_pools` (mesma forma `chave → pool`) em vez de copiá-lo — nesta base já se pagou caro
+  por cópia que diverge.
+
+### As duas decisões que o resolvedor toma, e por que são essas
+
+**Prefixo mais longo, não igualdade.** Com igualdade o mapa precisaria de uma entrada por FOLHA, e
+cada folha nova na forma exigiria editar config em outro serviço para não quebrar — acoplamento
+entre conteúdo e roteamento, que é o que a D2 desfaz. Com prefixo, `sac` cobre a subárvore e
+`sac.especialista → retencao_humano` derrota `sac → sac_ia` sem reescrever nada.
+
+**⚠️ O prefixo é por SEGMENTO, nunca por caractere.** `startsWith("sac")` faria `sac_premium` casar
+e mandar o contato para o pool errado **com o log dizendo que casou**. É o caso que carrega o peso
+nos 8 testes do resolvedor, e a mutação para `startsWith` cru derruba dois deles.
+
+**E não há default.** Caminho sem prefixo declarado é `isError` nomeando o caminho e as chaves que
+existiam; o fluxo manda ao humano. Um destino de emergência dentro do resolvedor seria o
+`queue_pool_id or pool_id`: config ausente virando despacho para o lugar errado, em silêncio.
+
+### A guarda da erosão nasceu JUNTO, como o ADR exigia
+
+O ADR chama a F3 de *"porta da erosão"*: interpolar o alvo é necessário, e é por onde *"roteamento
+condicional no formulário"* entraria depois. O **ramo G** varre as 14 formas publicadas **e** o
+`DialogOptionSchema` atrás de nove nomes que significariam destino. As duas metades importam: forma
+limpa hoje não impede campo novo amanhã, e campo que existe acaba usado. Escrever a guarda depois
+seria escrevê-la com uma forma já contaminada — regra virando migração.
+
+### Uma dependência do próprio ADR, refutada por medição
+
+A tabela de fases dizia `F3 ← F2`, e o ledger repetia *"depende da ORQ-02 para ser testável ponta a
+ponta"*. **Falso**, e o contato real da F1 já tinha provado: a navegação desce um nível por turno, o
+`menu` renderiza lista PLANA, e nenhum canal precisa desenhar árvore para o caminho funcionar. A F2
+reduz turnos; não destrava a F3. Dependência herdada de raciocínio, não de medição.
+
+### Medido ao vivo
+
+Contra o servidor, com o mapa de 7 chaves do `demo_ia`:
+
+```
+sac.info_plano       -> sac_ia            (chave sac — herda da PASTA)
+sac.especialista     -> retencao_humano   (especifico VENCE)
+portabilidade        -> portabilidade_ia  (folha de 1o nivel)
+sac_premium.x        -> RECUSA            (prefixo e por SEGMENTO)
+caminho_inexistente  -> RECUSA            (sem default)
+```
+
+Gate em **7 ramos**, F e G verificados por mutação. Suítes: engine 211/211, mcp-server 267/267;
+`tsc` limpo em schemas, agent-registry, mcp-server, engine e platform-ui; migração aplicada com
+`[bootstrap-db] Schema verified in sync`.
+
 ## 2026-09-06 (6) — O eixo de demanda EXISTE: primeiro contato real da F1
 
 ```

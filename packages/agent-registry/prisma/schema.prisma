@@ -60,6 +60,7 @@ model Pool {
   supervisor_config      Json?
   queue_config           Json?
   mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
+  navigation_pools       Json?   // Record<caminho, pool_id> — F3 do orquestrador por arvore
   agent_groups              String[] @default([]) // Agent group IDs this pool belongs to (Arc 9)
   // Preferred LLM Account ids (config-api namespace `llm_accounts`), preference order —
   // see PoolRegistrationSchema.llm_account_ids (@plughub/schemas) for full semantics.

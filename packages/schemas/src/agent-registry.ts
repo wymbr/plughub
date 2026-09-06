@@ -439,6 +439,30 @@ export const PoolRegistrationSchema = z.object({
    */
   mentionable_pools:      z.record(z.string()).optional(),
   /**
+   * Mapa `caminho de navegação → pool`, do orquestrador dirigido por `DialogForm`
+   * (F3 do `adr-orchestrator-tree-navigation`). Mesma forma do `mentionable_pools`
+   * logo acima, e pelo mesmo motivo: é config de POOL, DB-owned e editável na UI.
+   *
+   * ⚠️ **Mora AQUI, e não na folha do formulário, por decisão (D2).** O form publicado
+   * é congelado no promote e o pool é DB-owned: um `pool_id` dentro do snapshot seria
+   * segunda fonte de verdade de roteamento, **invisível de quem administra pools** e
+   * imutável até o próximo promote da forma. E o editor de formulário viraria editor
+   * de roteamento — a linha que a D10 protege.
+   *
+   * A chave é um caminho pontuado da árvore; o casamento é por **prefixo mais
+   * longo**, então `sac` cobre `sac.info_plano` e `sac.status_servico` sem uma
+   * entrada por folha, e uma entrada mais específica vence a genérica. Caminho sem
+   * nenhum prefixo declarado **não tem default**: recusa nomeando (ver
+   * `pool_route_resolve`).
+   *
+   * Exemplo:
+   *   navigation_pools:
+   *     sac:            sac_ia          # sac.* inteiro
+   *     sac.especialista: retencao_humano  # exceção, vence o `sac`
+   *     portabilidade:  portabilidade_ia
+   */
+  navigation_pools:       z.record(z.string()).optional(),
+  /**
    * IDs dos Agent Groups (Arc 9) aos quais este pool pertence.
    * Escrito no ContextStore como core.pool.agent_groups[] após cada roteamento.
    */

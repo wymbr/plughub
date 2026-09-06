@@ -197,6 +197,14 @@
       "granted": "Pool \"{{pool}}\" added to your scope.",
       "askAdmin": "Pool \"{{pool}}\" created, but it is not in anyone's scope yet — and routing does not consult scope, so it can already receive contacts without showing in Monitor. Ask whoever administers permissions to assign it.",
       "failed": "Pool \"{{pool}}\" created, but it could NOT be added to your scope. Assign it in Configuration › Access."
+    },
+    "navigation": {
+      "label": "Orchestrator navigation",
+      "hint": "Tree path → serving pool. Longest-prefix match: `sac` covers `sac.info_plano`, and `sac.especialista` beats `sac`. An unmapped path has no default target — the contact goes to a human.",
+      "none": "No navigation route declared",
+      "pathPlaceholder": "sac.info_plano",
+      "selectPool": "Select pool",
+      "add": "+ Add route"
     }
   },
   "competencySkills": {

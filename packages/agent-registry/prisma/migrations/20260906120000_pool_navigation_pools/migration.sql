@@ -1,0 +1,28 @@
+-- `pools.navigation_pools` — o mapa `caminho de navegação → pool` (F3/ORQ-03, 2026-09-06).
+--
+-- POR QUE UMA COLUNA NOVA, E NÃO UM CAMPO NA FOLHA DO FORMULÁRIO
+-- =============================================================
+-- A alternativa óbvia era pendurar `pool_id` na `DialogOption` — a folha já sabe o que
+-- endereça. A D2 do `adr-orchestrator-tree-navigation` a recusa por dois motivos, e
+-- nenhum é de gosto:
+--
+--   1. Ciclos de vida incompatíveis. O form publicado é CONGELADO no promote
+--      (`adr-deploy-time-content-snapshot`); pool é DB-owned, editável na UI, com
+--      seed-if-absent. Um `pool_id` dentro do snapshot seria segunda fonte de verdade de
+--      roteamento, invisível de quem administra pools e imutável até o próximo promote
+--      da FORMA — trocar o pool de destino exigiria republicar conteúdo.
+--
+--   2. O editor de formulário viraria editor de roteamento, que é a linha que a D10
+--      protege.
+--
+-- Forma idêntica à do `mentionable_pools` (Record<chave, pool_id>, Json?), na mesma
+-- tabela e pela mesma razão: é config de POOL. Ali a chave é um alias de @mention; aqui
+-- é um caminho pontuado da árvore, casado por PREFIXO MAIS LONGO — `sac` cobre
+-- `sac.info_plano` sem uma entrada por folha, e `sac.especialista` vence `sac`.
+--
+-- Aditiva e anulável: pool existente fica com NULL e o `pool_route_resolve` recusa
+-- NOMEANDO, em vez de despachar para um default. Não há default possível — fallback de
+-- ENDEREÇO manda o contato para o lugar errado em silêncio (a lição do
+-- `queue_pool_id or pool_id`, CLAUDE.md § Invariants).
+
+ALTER TABLE "pools" ADD COLUMN IF NOT EXISTS "navigation_pools" JSONB;

@@ -10,6 +10,8 @@
 #   C  caminho DESCONHECIDO não degrada para a raiz   ← o que sustenta o resto
 #   D  o ciclo `menu → … → menu` é ACEITO e o ciclo SEM menu é RECUSADO
 #   E  o evento de demanda nasce COM época — e as duas pontas do carimbo casam
+#   F  o alvo do `escalate` é REFERÊNCIA, e a resolução é um step visível (F3)
+#   G  guarda da D10: nenhuma folha carrega destino, e o schema não tem onde pô-lo
 #
 # ⚠️ O ramo C é o único que não tem cara de teste feliz, e é o que importa. Se
 # `optionsAtPath` devolvesse a raiz para um segmento inexistente, a tela voltaria
@@ -186,6 +188,51 @@ elif grep -q "dialog_form_id" "$LENTE" && grep -q "dialog_form_version" "$LENTE"
 else
   bad "a lente nao le mais dialog_form_id/dialog_form_version — o carimbo virou orfao"
 fi
+
+# ── F: o alvo do escalate é referência, e o mapa mora no POOL ─────────────
+printf '\n\033[1mF — o alvo do escalate e REFERENCIA, e o mapa esta no POOL\033[0m\n'
+GUARDA="$(dirname "$0")/_nav_route_guard.py"
+ROTA=$(python3 "$GUARDA" F "$SKILL" 2>/dev/null)
+case "$ROTA" in
+  SEM_YAML|"")                info "PyYAML ausente ou leitor mudo — ramo F nao exercido"; INCONC=1 ;;
+  SEM_SKILL)                  bad "skill de navegacao ausente" ;;
+  NENHUM_ESCALATE_INTERPOLADO*) bad "nenhum escalate usa referencia — a tabela continua no fluxo: ${ROTA}" ;;
+  SEM_RESOLUCAO_DE_ROTA)      bad "nao ha step pool_route_resolve — a traducao caminho→pool sumiu do fluxo" ;;
+  RESOLUCAO_SEM_ON_FAILURE)   bad "a resolucao de rota nao tem on_failure — caminho sem rota nao teria para onde ir" ;;
+  F3_OK*)                     ok "escalate interpolado + resolucao visivel (${ROTA})" ;;
+  *)                          bad "veredicto inesperado: ${ROTA}" ;;
+esac
+
+# A outra metade: o mapa tem de existir NO POOL, nao no fluxo nem na forma. Sem
+# este ramo, um `escalate` interpolado apontando para nada ficaria verde acima.
+MAPA=$(curl -s -H "x-tenant-id: ${TENANT}" -H "x-service-token: ${PLUGHUB_REGISTRY_TOKEN:-changeme_agent_registry_service_token_demo}" \
+  "${PLUGHUB_REGISTRY_URL:-http://localhost:3300}/v1/pools/${PLUGHUB_NAV_POOL:-demo_ia}" 2>/dev/null \
+  | python3 -c 'import sys,json
+try: d=json.load(sys.stdin)
+except Exception: print("ERRO"); raise SystemExit
+m=d.get("navigation_pools")
+print("SEM_MAPA" if not m else "MAPA %d" % len(m))' 2>/dev/null)
+case "${MAPA:-ERRO}" in
+  "MAPA "*) ok "pool declara navigation_pools (${MAPA#MAPA } chaves) — config de POOL, nao conteudo" ;;
+  SEM_MAPA) bad "o pool orquestrador nao declara navigation_pools — o alvo interpolado nao resolve" ;;
+  *)        info "agent-registry fora do ar — metade viva do ramo F nao exercida"; INCONC=1 ;;
+esac
+
+# ── G: a guarda da D10 — o formulário não vira roteador ──────────────────
+# O ADR chama a F3 de *"porta da erosao"*: interpolar o alvo e necessario, e e por
+# onde "roteamento condicional no formulario" entraria depois. Este ramo nasce
+# JUNTO com a interpolacao de proposito — depois ja haveria forma com destino
+# dentro, e a regra viraria migracao.
+printf '\n\033[1mG — guarda da D10: a folha carrega CAMINHO, nunca destino\033[0m\n'
+GDA=$(python3 "$GUARDA" G 2>/dev/null)
+case "$GDA" in
+  GUARDA_OK*)         ok "nenhuma folha publicada carrega destino, e o schema nao tem campo (${GDA})" ;;
+  FORMA_COM_DESTINO*) bad "ha folha com campo de DESTINO — o roteamento vazou para o conteudo congelado: ${GDA}" ;;
+  SCHEMA_COM_DESTINO*) bad "DialogOption ganhou campo de destino — campo que existe acaba usado: ${GDA}" ;;
+  SEM_SCHEMA|SEM_DIALOG_OPTION) info "dialog.ts nao lido — metade do schema nao exercida"; INCONC=1 ;;
+  "")                 info "leitor mudo — ramo G nao exercido"; INCONC=1 ;;
+  *)                  bad "veredicto inesperado: ${GDA}" ;;
+esac
 
 printf '\n'
 if [ "$FAIL" != "0" ]; then

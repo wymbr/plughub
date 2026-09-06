@@ -372,18 +372,34 @@ function PoolListEditor({
   )
 }
 
-// ── @mention specialists editor (mentionable_pools: alias → pool) ───────────────
+// ── Editor de mapa CHAVE → POOL ─────────────────────────────────────
+//
+// Serve DOIS mapas de mesma forma (`Record<chave, pool_id>`):
+//   · `mentionable_pools`  — alias de @mention → pool
+//   · `navigation_pools`   — caminho da arvore → pool (F3 do orquestrador)
+//
+// E o mesmo componente de proposito. Uma copia divergiria — e nesta base ja se
+// pagou por isso mais de uma vez (o verificador de JWT eram seis).
 
 interface MentionEntry { alias: string; pool: string }
 
 function MentionListEditor({
-  entries, onChange, poolOptions,
+  entries, onChange, poolOptions, prefixo, rotulos,
 }: {
   entries:     MentionEntry[]
   onChange:    (e: MentionEntry[]) => void
   poolOptions: PoolOption[]
+  /** Simbolo antes da chave (`@` para mention). Ausente = sem simbolo. */
+  prefixo?:    string
+  rotulos?:    { none?: string; keyPlaceholder?: string; selectPool?: string; add?: string }
 }) {
   const { t } = useTranslation('configRecursos')
+  const rot = {
+    none:           rotulos?.none           ?? t('pools.mention.none'),
+    keyPlaceholder: rotulos?.keyPlaceholder ?? t('pools.mention.aliasPlaceholder'),
+    selectPool:     rotulos?.selectPool     ?? t('pools.mention.selectPool'),
+    add:            rotulos?.add            ?? t('pools.mention.add'),
+  }
 
   const add    = () => onChange([...entries, { alias: '', pool: '' }])
   const remove = (i: number) => onChange(entries.filter((_, idx) => idx !== i))
@@ -398,15 +414,15 @@ function MentionListEditor({
   return (
     <div className="space-y-2">
       {entries.length === 0 ? (
-        <p className="text-xs text-muted-light italic">{t('pools.mention.none')}</p>
+        <p className="text-xs text-muted-light italic">{rot.none}</p>
       ) : entries.map((entry, i) => (
         <div key={i} className="flex items-center gap-2">
-          <div className="flex items-center gap-1 w-32 shrink-0">
-            <span className="text-sm text-muted-light">@</span>
+          <div className="flex items-center gap-1 w-40 shrink-0">
+            {prefixo ? <span className="text-sm text-muted-light">{prefixo}</span> : null}
             <input
               type="text"
               value={entry.alias}
-              placeholder={t('pools.mention.aliasPlaceholder')}
+              placeholder={rot.keyPlaceholder}
               onChange={e => update(i, { alias: e.target.value })}
               className="w-full min-w-0 text-sm border border-border-strong rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
             />
@@ -416,7 +432,7 @@ function MentionListEditor({
             onChange={e => pickPool(i, e.target.value)}
             className="flex-1 min-w-0 text-sm border border-border-strong rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
           >
-            <option value="">{t('pools.mention.selectPool')}</option>
+            <option value="">{rot.selectPool}</option>
             {poolOptions.map(o => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
@@ -427,7 +443,7 @@ function MentionListEditor({
       ))}
       <button type="button" onClick={add}
         className="text-xs text-secondary hover:text-primary transition-colors">
-        {t('pools.mention.add')}
+        {rot.add}
       </button>
     </div>
   )
@@ -683,6 +699,8 @@ const PoolsPage: React.FC = () => {
     escalation_pools:            [] as string[],
     // @mention specialists (mentionable_pools) as an editable alias→pool list
     mention_pools:               [] as MentionEntry[],
+    // Navegacao do orquestrador (navigation_pools): caminho da arvore → pool
+    navigation_pools:            [] as MentionEntry[],
     // LLM Accounts preferidas por este pool, em ordem de preferência.
     llm_account_ids:             [] as string[],
   })
@@ -835,7 +853,7 @@ const PoolsPage: React.FC = () => {
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
       queue_pool_id: '', queue_skill_id: '', queue_max_wait_s: null,
       hooks: { ...EMPTY_HOOKS },
-      escalation_pools: [], mention_pools: [],
+      escalation_pools: [], mention_pools: [], navigation_pools: [],
       llm_account_ids: [],
     })
     setCalExceptions([])
@@ -873,6 +891,9 @@ const PoolsPage: React.FC = () => {
       escalation_pools: pool.supervisor_config?.escalation_pools ?? [],
       mention_pools: Object.entries(pool.mentionable_pools ?? {}).map(
         ([alias, p]) => ({ alias, pool: p }),
+      ),
+      navigation_pools: Object.entries(pool.navigation_pools ?? {}).map(
+        ([caminho, p]) => ({ alias: caminho, pool: p }),
       ),
       llm_account_ids: pool.llm_account_ids ?? [],
     })
@@ -968,6 +989,17 @@ const PoolsPage: React.FC = () => {
       const hadMentions = !!(editingPool?.mentionable_pools &&
         Object.keys(editingPool.mentionable_pools).length > 0)
 
+      // Navegacao → navigation_pools (caminho → pool). Linha incompleta e DESCARTADA,
+      // nunca gravada pela metade: uma chave com pool vazio viraria rota que resolve
+      // para "" — um pool_id bem-formado que nao existe.
+      const cleanNavigation: Record<string, string> = {}
+      for (const n of formData.navigation_pools) {
+        const caminho = n.alias.trim()
+        if (caminho && n.pool) cleanNavigation[caminho] = n.pool
+      }
+      const hadNavigation = !!(editingPool?.navigation_pools &&
+        Object.keys(editingPool.navigation_pools).length > 0)
+
       const payload = {
         description:       formData.description,
         channel_types:     formData.channel_types,
@@ -1029,6 +1061,9 @@ const PoolsPage: React.FC = () => {
         // @mention specialists: send when present; send {} to clear; else omit.
         ...(Object.keys(cleanMentions).length > 0 ? { mentionable_pools: cleanMentions }
           : (hadMentions ? { mentionable_pools: {} } : {})),
+        // Navegacao: envia quando ha; envia {} para limpar; senao omite.
+        ...(Object.keys(cleanNavigation).length > 0 ? { navigation_pools: cleanNavigation }
+          : (hadNavigation ? { navigation_pools: {} } : {})),
         // Preferred LLM Accounts (config-api namespace `llm_accounts`), preference
         // order. Send when present; send [] to clear when previously set; else omit.
         ...(formData.llm_account_ids.length > 0 ? { llm_account_ids: formData.llm_account_ids }
@@ -1543,6 +1578,26 @@ const PoolsPage: React.FC = () => {
               entries={formData.mention_pools}
               onChange={e => setFormData(prev => ({ ...prev, mention_pools: e }))}
               poolOptions={poolComboOptions}
+              prefixo="@"
+            />
+          </div>
+
+          {/* ── Navegacao do orquestrador (navigation_pools: caminho → pool) ───── */}
+          <div>
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">{t('pools.navigation.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.navigation.hint')}</p>
+            </div>
+            <MentionListEditor
+              entries={formData.navigation_pools}
+              onChange={e => setFormData(prev => ({ ...prev, navigation_pools: e }))}
+              poolOptions={poolComboOptions}
+              rotulos={{
+                none:           t('pools.navigation.none'),
+                keyPlaceholder: t('pools.navigation.pathPlaceholder'),
+                selectPool:     t('pools.navigation.selectPool'),
+                add:            t('pools.navigation.add'),
+              }}
             />
           </div>
 

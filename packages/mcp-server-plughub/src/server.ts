@@ -38,6 +38,7 @@ import type { OutboundDeps }        from "./tools/outbound"
 import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerAgentEventTools }  from "./tools/agent-events"
+import { registerNavigationTools }  from "./tools/navigation"
 import type { AgentEventDeps }      from "./tools/agent-events"
 // `resolveJourneyRoot` + `journeyCtxKey` entram aqui pelo snapshot de PERSISTÊNCIA
 // (F5): a raiz canônica do processo tem de ser resolvida pela MESMA via do
@@ -188,6 +189,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerOutboundTools(server, outboundDeps)
   registerCalendarTools(server, calendarDeps)
   registerAgentEventTools(server, agentEventDeps)
+  registerNavigationTools(server, {
+    redis,
+    agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
+    tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  })
   registerJourneyTools(server, agentEventDeps)
   registerSurveyTools(server, surveyDeps)
   registerSegmentTools(server, {
@@ -1253,6 +1259,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
       tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerAgentEventTools(mcpServer, { redis, kafka })
+    registerNavigationTools(mcpServer, {
+      redis,
+      agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
+      tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
     registerJourneyTools(mcpServer, { redis, kafka })
     registerSurveyTools(mcpServer, {
       kafka,
