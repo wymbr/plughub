@@ -1,5 +1,82 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (1) — DOC-02: a meta do `CLAUDE.md` vai a 1 750, e nasce cumprida (1 883 → 1 688)
+
+Decisão do dono, depois de a proposta anterior ser **refutada por aritmética minha própria**. Na
+`DOC-01` eu recomendei 1 200 sem fazer a conta; a conta diz:
+
+```
+total ontem                                    1 883
+Saúde (198) + Security (189) + Postura (180)     567
+apagando as TRÊS inteiras                      1 316   ← ainda 116 acima de 1 200
+```
+
+Ou seja **1 200 ficava abaixo do piso que as próprias regras protegem** — só se alcança revogando a
+proteção do catálogo medido. Alvo assim não é exigente, é inalcançável, e o dano é específico: ele
+fica permanentemente vermelho e ensina a próxima sessão a cortar justamente as seções que fazem o
+repositório produzir trabalho bom. *É a mesma família do número plausível que a § Postura manda
+caçar — com o agravante de ter saído de uma recomendação, que é onde um número errado viaja mais
+longe.*
+
+### Onde estava o piso, medido
+
+| bloco | linhas | pelas regras |
+|---|---|---|
+| cabeçalho (antes da 1ª seção) | 43 | — |
+| catálogo + invariantes (4 seções) | 665 | **FICAM** |
+| as outras 51 seções | 1 175 | já em formato de resumo — média **23** |
+
+Das 16 seções acima de 30 linhas, 4 eram o catálogo e 6 eram categorias que a tabela *O que FICA*
+nomeia. Sobravam **5 seções de arco** ligeiramente fora do formato — e foram elas, mais o índice.
+
+### Movimento 1 — o índice de `docs/` sai do arquivo que toda sessão carrega
+
+As 95 linhas da *Estrutura de arquivos de referência* foram para
+**`docs/INDEX.md` § *Índice anotado da arquitetura***. O ponto não é o tamanho: **já existia um
+portal de documentação** naquele arquivo, datado de 2026-05-25, enquanto a árvore do `CLAUDE.md` era
+mantida a cada arco. Duas casas indexando o mesmo acervo, e a mais nova era cobrada de **toda**
+sessão no boot para dizer onde ficam documentos que a maioria não abre. A seção movida declara, no
+próprio corpo, que **vence o resto do portal onde discordarem** — sem isso a fusão trocaria
+duplicação por contradição.
+
+Fica no `CLAUDE.md` um ponteiro de 7 linhas com a convenção de pastas, que é regra de **onde
+escrever** — não catálogo do que existe.
+
+### Movimento 2 — as cinco seções de arco ao formato
+
+| seção | linhas | destino do detalhe |
+|---|---|---|
+| ContextStore | 46 → 42 | `docs/guias/context-store.md` (step `resolve`, copilot, Pool Context Enrichment, `CONTEXT_ROUTE_PREFIXES`) |
+| Audit LGPD | 46 → 21 | `docs/arcos/audit-lgpd.md` (os 5 ramos do gate, a correção de 08-22, a trilha da recusa) |
+| Outbound | 40 → 24 | `docs/arcos/outbound.md` (já cobria) |
+| Dialog Primitive | 33 → 22 | design doc (já cobria) |
+| Scheduler | 31 → 21 | `docs/product/scheduler-agenda-spec.md` (+ as duas camadas e `scheduler:timers`) |
+
+**ContextStore parou em 42 e não em 20 de propósito:** o bloco do root `core.*` é invariante recente
+(CNS-02/CNS-11) e a tabela de escopos é o que impede um `core.journey.x` de receber 4 h em silêncio.
+Apertá-lo até o número seria o que este arco existe para não fazer.
+
+Nos dois destinos que estavam **desatualizados** (`context-store.md` sem o `resolve`/enrichment;
+`audit-lgpd.md` sem o gate, sem a correção de 08-22 e sem os dois testes que a guardam), o conteúdo
+foi **apendado no mesmo commit** — resumir apontando para doc que não cobre é apagar, não mover.
+
+### A conferência de perda é mecânica, não confiança
+
+`26 afirmações distintivas` das seis seções movidas (`CONTEXT_ROUTE_PREFIXES`, `_check_audit_access`,
+`enforce_write`, `scheduler:timers`, `PLUGHUB_MAILING_IMPORT_MAX_ROWS`, `delegate_resume_token`, a
+última linha da árvore de índice, …) buscadas no conjunto dos sete arquivos de destino:
+**0 perdidas**. Links relativos: **0 quebrados** — os do índice mudaram de base ao entrar em `docs/`
+e foram conferidos por existência de arquivo, não por leitura.
+
+### Estado
+
+`CLAUDE.md`: **1 688 linhas**, alvo **≤ 1 750**, folga de **62**. A folga é estreita de propósito e é
+o orçamento de crescimento: seção de arco nova que passe de 20 linhas estoura o alvo, que é
+exatamente o que ele deve cobrar. As três maiores continuam sendo `Security` (189), `Postura` (180) e
+`What Never To Do` (98) — o catálogo, intacto.
+
+Ledger: `DOC-02` em `done.md`. Gate `infra/test/probe_task_ledger.sh`: VERDE.
+
 ## 2026-09-05 (28) — DOC-01: higiene do `CLAUDE.md`, e o alvo posto em revisão em vez de forçado
 
 `CLAUDE.md`: **2 203 → 1 883 linhas**. A tarefa era bater o alvo declarado de **800**; ela não bate, e

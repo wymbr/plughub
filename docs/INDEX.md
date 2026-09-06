@@ -26,6 +26,113 @@ Ponto de entrada único de toda a documentação do PlugHub. Cada seção mapeia
 
 ---
 
+## Índice anotado da arquitetura *(movido do `CLAUDE.md` em 2026-09-06 — DOC-02)*
+
+> **Onde esta seção e o resto deste arquivo discordarem, esta vence.** Ela veio do `CLAUDE.md`,
+> onde era mantida a cada arco; o resto do portal está datado de 2026-05-25. A mudança não é
+> cosmética: eram **duas casas indexando o mesmo acervo**, e a mais nova vivia no arquivo que toda
+> sessão carrega no boot — 95 linhas de índice cobradas de toda sessão para dizer onde ficam os
+> documentos que a maioria delas não abre. É o mesmo defeito que a § *Pending* teve (`DOC-01`).
+>
+> O `CLAUDE.md` guarda um ponteiro de sete linhas com a convenção de pastas; a lista anotada é aqui.
+
+
+```
+plughub/
+  CLAUDE.md          ← arquitetura viva, regras, invariantes, resumos (≤ 800 linhas)
+  pending.md         ← trabalho ABERTO, agrupado por demanda (ADR/spec). É a lista de tarefas
+  done.md            ← ÍNDICE do que fechou, com os MESMOS grupos. Nunca narrativa
+  TODO.md            ← raciocínio e medição por assunto. NÃO é lista de tarefas (medido: 78% é prosa)
+  CHANGELOG.md       ← histórico de implementações concluídas, com o porquê
+  docs/
+    modulos/                  ← docs de páginas/features da UI (uma por rota)
+    arcos/                    ← docs de implementação por Arc (detalhe técnico)
+      arc4-workflow.md        ← Arc 4 completo (workflow, calendar, collect, webhooks)
+      delegate-workflow-io.md ← Padrão delegate: workflow delega I/O a agente via suspend/resume
+      arc5-segments.md        ← Arc 5 ContactSegment analytics
+      arc6-evaluation.md      ← Arc 6 Evaluation platform completo
+      arc-evaluation-metrics-methodology.md ← métricas de avaliação (session_metric.*) + dimensões qualitativas IA + metodologia + roteiro
+      arc7-auth.md            ← Arc 7 Auth + ABAC completo
+      arc8-agent-availability.md ← Arc 8 disponibilidade e pausas
+      arc9-agent-groups.md    ← Arc 9 Agent Groups + Supervisor Scope
+      arc10-journey.md        ← Arc 10 Journey multi-session
+      instance-bootstrap.md   ← reconciliação, RegistrySyncer, hot-reload
+      operational-visibility.md ← snapshot de pool, ocupação derivada do semáforo, picos event-driven, rollup por tipo de licença (movido do CLAUDE.md em 2026-09-05)
+      platform-ui.md          ← Frontend Architecture + Agent Assist UI
+      ai-gateway.md           ← AI Gateway multi-account, copilot, stateless
+      usage-metering.md       ← metering por dimensão, Redis, quota
+      pricing.md              ← faturamento por capacidade, billing API
+      session-replayer.md     ← Session Replayer, Hydrator, ReplayContext
+      session-conference-lifecycle.md ← modelo de 3 camadas, gaps conhecidos
+      dashboard.md            ← Dashboard #35, DisplayTool registry, catalog
+      queue-attended-model.md ← fila sempre atendida: admissão híbrida, outage, role queue, relatório Fila/SLA, max_wait (A–E ✅)
+      pools-infra-report.md   ← relatório Pools/Infra: volume, fila, capacidade, SLA
+      customer-surveys.md     ← spec/ADR módulo de pesquisas de satisfação (CSAT/NPS/CES/PMF/FCR)
+      customer-contact-history.md ← histórico de contatos do cliente (lista/transcrição/busca) — transversal
+    guias/
+      context-store.md        ← ContextStore, @ctx.*, segment-scoped
+      sentiment-tracking.md   ← cadeia inteira do sentimento: engine → gateway → ctx → Console (movido do CLAUDE.md em 2026-09-05)
+      masked-input.md         ← Masked Input, begin_transaction
+      mention-protocol.md     ← @mention protocol
+      pool-hooks.md           ← Pool lifecycle hooks
+      orchestrator-working-memory.md ← Working memory pattern para orquestradores em loop
+      conference-mechanics.md ← Mecanismo de conferência: Redis keys, eventos, posatt, teardown
+      session-meta-ownership.md ← `session:{id}:meta`: partição de propriedade (porta × bridge),
+                                  helper `session_meta_merge` (3 modos, EVAL único), regra do MAIOR
+                                  TTL (-1/-2 DEFINEM). Fatia A ✅; B (recusar campo alheio) e C
+                                  (`entry_pool_id` × `pool_id`) abertas
+      abac-permission-system.md ← ABAC: guia de implementação (módulos, campos, access levels)
+      context-store-taxonomy.md ← ContextStore: taxonomia de namespaces e controle de visibilidade
+      context-masking-rules.md ← ContextStore: mascaramento dinâmico por variável × role
+      timeouts-e-deteccao-de-falhas.md ← timeouts e detecção de falhas por camada
+      gitagent.md             ← GitAgent: ciclo de vida completo (repo Git como fonte de verdade do agente)
+      conferencia-agente-ia-mapeamento.md ← ⚠️ OBSOLETO por auto-declaração: mapeava gaps de conferência multi-agente/@mention já implementados. Indexado para não ser redescoberto como pendente
+      changelog-2026-04-{15,16,16b,29}.md ← fragmentos datados de changelog (histórico; o canônico é `CHANGELOG.md`)
+    adr/
+      adr-message-masking.md  ← masking architecture decision
+      adr-contextstore-allowlist.md  ← ContextStore como ALLOWLIST: **TIPO é a declaração única** (formato × máscara-por-papel × classe LGPD), MAPA em `escopo.dominio.campo`, legado vira `alias` contado e datado. Pré-requisito: a omissão deixa de ser MUDA antes da inversão. Fases V0→V5 + D6–D9 — **V0–V4 e D6–D9 entregues; resta a V5 (fechar aliases) e a ALW-08 (afordância no editor)** — Aceito, parcialmente implementado. ⚠️ *Corrigido aqui em 2026-09-04: esta linha dizia **"a V4 (inverter o default) é a próxima e NÃO é reversível"**, e as duas metades eram falsas — a **D9 REDEFINIU** a V4 (deixou de ser inverter o default de leitura e passou a ser **ligar o portão de PUBLISH sobre o cadastro**, com runtime que nunca rejeita), e nela foi **ENTREGUE em 2026-09-02** como ALW-01. O ADR já registra que este mesmo erro aconteceu antes (§ correção de 2026-08-30): quem lista pendência lê o ÍNDICE, então índice velho é a casa em que o erro renasce*
+      adr-context-read-audience-policy.md ← leitura de contexto com política por PLATEIA: as três peças de *"pegar o dado já filtrado"* existem em duas casas (`context_map` tipa a tag · `masking.types.*.mascara.by_role` declara a máscara por papel) e a terceira — **o leitor — JÁ EXISTE e é canônico**: `resolve_mask_for_audience` + `apply_masking_type_to_value`, usados por `_build_pending_preview` desde 2026-09-02. ⚠️ **O ADR nasceu apontando o eixo errado** (`display.echo_to_*`, que é ADVISORY e trata do eco da ENTRADA mascarada) e foi corrigido no mesmo dia (§D9). O que faltava mesmo era derivar a PLATEIA do sítio, e o gêmeo TS do resolvedor. A plateia é derivada do **SÍTIO** (`visibility` do notify/menu · argumento de invoke · prompt de reason), nunca da tag: dos 20 acertos, **10 são token em link legítimo** e 4 estão num skill que não fala com cliente. UM leitor que SUBSTITUI (segunda porta é o achado do `/sessions/{id}/stream`). ⚠️ NÃO decide o default de tag desconhecida (é a V4 da allowlist), NÃO absorve a detecção, e `$.pipeline_state.*` (225 pontos) é fase 2 via carimbo de proveniência. **A exceção vem ANTES da aplicação** — inverter quebra survey link e OTP. Fases F0–F5 — proposto
+      adr-masked-typed-declaration.md ← `masked` deixa de ser BOOLEANO e passa a nomear um TIPO do catálogo (`true` = `opaque`, não a ausência de tipo); o tipo decide EXIBIÇÃO e CLASSE, **nunca PERSISTÊNCIA**; detecção fica fora. Fases T0–T7 — **T1–T6 e T7-A entregues; T7-B (tolerância do runtime) BLOQUEADA** — proposto
+      adr-mcp-interception-single-border.md ← borda única de interceptação MCP: veredicto no mcp-server (3 bordas → 1), proxy externo vira mapeador de vocabulário, `McpInterceptor` fica como caminho de portabilidade; requisito T = domain server inalcançável a partir do agente (borda é rede, não código); fases M0(medir)/B1(pool c/ health-check)/B2(mcpCall nativo)/B3(assimetrias)/T — proposto
+      adr-webchat-channel.md  ← webchat channel architecture
+      adr-session-replayer.md ← session replayer architecture
+      adr-contact-segments.md ← Arc 5 architecture
+      adr-instance-bootstrap.md
+      adr-evaluation-sampling.md ← amostragem: cota por agente (virada para estado) + carimbo de versão
+      adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; implementado ✅)
+      adr-survey-form-scoring-composition.md ← composição de nota em survey (dimension+perguntas ponderadas; primitivo `scoring.ts` compartilhado c/ Quality) — proposto
+      adr-dialog-conditional-skip-logic.md ← skip-logic em DialogForm: guarda declarativa `ask_when`, **não** control-flow — guarda LOAD-BEARING (ceder reconstrói o editor de fluxo dentro do editor de formulário). Avaliador canônico `evaluateAskWhen`, hoje **triplicado** — **Aceito + implementado 2026-07-08**; 1 das 3 decisões segue aberta
+      adr-dialog-form-deletion.md    ← `DELETE` de DialogForm é **arquivar** (reversível), não apagar — separa ARMAZENAMENTO de LEITURA; o catálogo fecha mas `GET /{form_id}` continua servindo; purga real só do nunca-publicado — **Aceito + implementado 2026-08-28**
+      adr-dialog-input-format-catalog.md ← campo de coleta: `format` NOMEIA uma entrada de catálogo (forma do `adr-masked-typed-declaration`) e **`pattern` SAI** — 0 usuários medidos, e removê-lo apaga por construção um fail-open (regex inválida libera tudo, mudo) além de tirar regex de tenant do event loop. O catálogo é **DADO** e cada superfície tem um interpretador (política em código vira o `evaluateAskWhen` triplicado, que é TOPOLOGIA e não desleixo); entrada de PII **referencia** `masking.types` em vez de repetir a máscara. ⚠️ `detect_pattern` é *finder*, **nunca** validador; e veredicto tem DOIS níveis — regex não recusa `31/02/2026`. Fases F0–F5, **F2 antes de F3** — proposto
+      adr-deploy-time-content-snapshot.md ← conteúdo referenciado (DialogForm) resolvido no **PROMOTE** e congelado no snapshot do slot, nunca em runtime; promote OTIMISTA com `409`+diff. **A S1 original foi REFUTADA por medição; decisão do dono = pin de versão gravado pelo SERVIDOR** — proposto
+      adr-skill-flow-editor-validation.md ← validação no editor de skill-flow: **AFORDÂNCIA ≠ VEREDICTO** — `zod-to-json-schema` não representa refinements, então JSON Schema serve para autocomplete e o veredicto vem do SERVIDOR (dry-run `POST /v1/skills/validate`, mesmo `validateSkillPayload()` do `PUT`). Fases F0–F4; F1 antes de F2 — proposto
+      adr-dialog-tree-options.md     ← opções em ÁRVORE no DialogForm: a recursão entra em `DialogOption`, **nunca em `DialogNode`** — taxonomia é DOMÍNIO DE VALOR, não control-flow, então `nodes` segue plano e as seis superfícies mantêm o laço linear. Fases F0–F6; F0 antes de F5, F2 antes de F4 — proposto
+      adr-orchestrator-tree-navigation.md ← navegação de ORQUESTRADOR como árvore de `DialogForm`: pasta navega, folha endereça SERVIÇO, e o runner genérico do dialog faz roteamento sem LLM e sem virar linguagem — o laço `menu → choice → menu` é ciclo que o engine JÁ sanciona (`menu` bloqueia em I/O). ⚠️ **A folha carrega o CAMINHO, NUNCA o pool**: form é congelado no promote × pool é DB-owned, então `pool_id` no snapshot seria segunda fonte de verdade de roteamento invisível de quem administra pools; o mapa mora na config do pool (precedente `mentionable_pools`). Medido em 2026-09-05: `agente_triagem_v2` gasta **15 steps** para uma tabela de 5 entradas; os menus são de DUAS espécies (navegação × coleta) e só a primeira sobe; e **o eixo de DEMANDA não tem produtor — 0 `agent_event` nos cinco skills de atendimento**, ou seja toda resposta de menu do cliente é hoje descartada. A árvore é o contrato COMUM ao orquestrador determinístico e ao com LLM (o LLM navega livre mas aterrissa em folha declarada ⇒ mesma série, escape leaf = *"não sei"* contável, roteador avaliável). Fases F0–F5, **F1 entrega o eixo de demanda sozinha, sem tocar no engine** — proposto
+      adr-outbound-survey-as-collect-contact.md ← survey web outbound = contato via `collect` (canal survey/web), membro N1 da journey; sinal solto vira legado/anônimo (Journey J4c) — proposto
+      adr-customer-360-two-surfaces.md ← Cliente 360 (Console 4 abas × Analytics): Contexto/Histórico(jornadas em aberto)/Cliente(cadastro manual+360 quality/survey)/Ações; jornadas = filtro `customer_id` no `/reports/journeys`; cadastro v1 reusa Resolvedor Fase A/B (merge=Fase C) — proposto
+      adr-human-approval-workflow-step.md ← Aprovação humana = passo de workflow (collect/delegate a pool, dispatch_mode config); conteúdo=DialogForm (reuso), aprovador=agente logado (Modo A), Console/inbox responsivo, retorno→choice; omnichannel adiado (canal-agnóstico); fases A1–A6 — proposto (fechado)
+      adr-wrapup-detached-pull.md    ← Camada E2: wrap-up humano destacado = item de pull `assigned_to`. **Path α, renderer-first** — o renderer é o tratamento genérico de collect-form no Console, servindo aprovação+wrap-up+survey **sem skill por caso** — proposto
+      adr-work-item-requeue-and-agent-affinity.md ← devolução de item à fila, posse e afinidade (D1–D8): posse é registro durável do **ÁRBITRO**, não do ledger `work_task`; resume terminal-uma-vez com `SET NX`. **Arco A–F completo + F2 (o Console lê o 409)** — implementado
+      adr-historico-unificado-duas-visoes.md ← `/analise/sessions` + `/analise/processos` colapsam num módulo (contatos × processo): **processo é PIVÔ, nunca navegação livre**; segmento é a FOLHA. **F0–F4 entregues (as duas visões na tela); resta a F5** — proposto
+      adr-a2a-server-binding.md      ← PlugHub como **servidor** A2A: binding de borda sobre pool+sessão (`Task`=sessão), sem motor nem contêiner novo; AgentCard = PROJEÇÃO do agent-registry; A2A é binding, não `channel` ⇒ zero diff no routing. Fases A0–A6 — proposto
+      adr-cti-gateway-multi-driver.md ← telefonia legada como canal: `cti-gateway` on-prem com N drivers sobre **perfil reduzido de CSTA**; o PABX é o ÂNCORA e o CTI é o EFETUADOR, nunca o árbitro; capability por driver, recusa alto, nunca emulação muda. A fronteira é **modo CTI × modo SIP**, que não são fases um do outro. Fases F0–F2 — proposto
+      adr-voice-media-plane.md       ← arco de VOZ PRÓPRIA (modo SIP): terminação SIP + SFU + STT/TTS + perna do agente + gravação, **independente de PABX**; o plano de mídia acompanha o deploy da plataforma e `_dev_mode` SAI (sem credencial o provider RECUSA). Fases V-F0→V-F5 — proposto
+      adr-relatorios-duas-superficies-e-lentes.md ← relatórios colapsam em DUAS superfícies (Contatos=demanda × Recursos=oferta) com nível × lente × modo; a mesa de comparação é MODO, não página; lente vira DECLARAÇÃO (`aggregation`/`emptiness`/`comparability`). **ARCO COMPLETO — F0–F4 + T0–T3** — implementado
+      adr-agent-licensing-and-pool-isolation.md ← licenciamento de agentes e isolamento entre pools (D9 partição por pool, D10 licenças materializadas; D6 revogada) — proposto
+      adr-pool-capacity-reserved-shared.md ← capacidade de IA por pool: `reserved` × `shared`, no provisionamento e na admissão de pools `agent_kind: ai` — proposto
+      adr-pool-no-resource-policy.md ← desfecho do roteamento quando o pool não tem recurso: enfileirar ou recusar — proposto
+      adr-ai-gateway-separation.md   ← separação do AI Gateway entre carga OPERACIONAL e AVALIAÇÃO (perfil `evaluation` isolado) — Aceito, implementado
+      adr-identity-channel-possession.md ← plataforma é autoridade de POSSE DE CANAL (OTP), nunca de identidade-de-registro; `verification_class` (`claimed` × `possessed`) e `otp_verify` como única via para `possessed` — Aceito, implementado
+      adr-internal-work-queue-author-bound.md ← fila interna por pool: trabalho **author-bound** não é trabalho pooled — Aceito; I1–I4 e o núcleo da I5 implementados, relatório de pendências em aberto
+      adr-webhook-endpoint-single-registry.md ← webhook com registro ÚNICO de endpoint e identificador opaco — Aceito, arco A–F completo; remoção do legado e auth saem como arcos próprios
+      adr-survey-response-store.md   ← store operacional por-resposta de survey: schema PG dedicado × estender a dialog-api — Aceito, pré-implementação (gate antes de codar o S8)
+      adr-remove-agent-role-axis.md ← REMOÇÃO do terceiro eixo de papel: o gate de evaluator não autentica o chamador (o `session_token` carrega `instance_id` e as tools o DESCARTAM, consultando o papel do `participant_id` do INPUT) e o cenário de PII não fecha (o ReplayContext exige sessão fechada ∧ amostrada ∧ dentro do TTL de 1 h). O que ele separa é avaliador MAL CONFIGURADO — erro de deploy, não fronteira. `agent_role` sai junto, com `orchestrator` (zero portadores). ⚠️ Contém a alternativa REFUTADA (trocar o eixo) e a tabela dos DOIS gates de papel que autorizam pela string do input — **Aceito e IMPLEMENTADO em 2026-09-01 — R1, R2, R3 e a mitigação CAP-04**
+      adr-agent-flow-single-authored-level.md ← o tenant autora **UM** nível (o processo); o que o modelo de 3 níveis chamava de N1/N2 vai para **três** destinos — mecânica → canal (adapter; cliente só onde existe, logo não em voz/WhatsApp/SMS) · roteiro → `DialogForm` · o resto **já era primitivo de plataforma** (`customer_resolve`, `pending_workflow_get`, `workflow_resume`, `otp_*`, `select_channel`). "Um nível" é um nível **autorado**: a segregação de perfil proíbe workflow de falar com o cliente, então do outro lado do `collect` fica o runner genérico da plataforma. ⚠️ **NÃO confundir com o modelo de escopo `segment`/`session`/`journey`** — "três níveis" nomeia dois modelos aqui, e este só dissolve o de FLUXO DE AGENTE. Fatias F1–F4 (`NIV-01..04`), nenhuma implementada — proposto
+```
+
+
+---
+
 ## Documentos transversais (raiz)
 
 | Arquivo | Conteúdo |

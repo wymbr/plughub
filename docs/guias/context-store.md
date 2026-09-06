@@ -322,3 +322,51 @@ stream/segments; faça o briefing de quem entra unir os dois.
 | Bridge | `packages/orchestrator-bridge/…/main.py` | tags de pré-hook/close/journey (`core.contact.close_origin`, `*_participant_id`, `root_session_id`) |
 | Schema | `packages/schemas/src/context-store.ts` | `ContextEntry`, regex de tag, `required_context`, `__gaps__` |
 | Smoke | `infra/test/smoke_journey_context.sh` | roteamento journey da escrita imperativa (J5a) |
+
+---
+
+## Detalhe movido do `CLAUDE.md` em 2026-09-06 (DOC-02)
+
+O `CLAUDE.md` guarda o invariante — **o root `core.*` é reservado à plataforma, todo o resto é dos
+skills** — e o mapa de escopos. O mecanismo abaixo estava lá e é arco, não invariante.
+
+### Rotas de escopo são DECLARADAS, nunca herdadas do default
+
+`CONTEXT_ROUTE_PREFIXES` vive em `@plughub/schemas` (casa única; o SDK importa) e nomeia
+explicitamente as duas rotas não-sessão: `core.customer.*` → hash do cliente (**90 d**) ·
+`core.journey.*` → hash da journey (**30 d**). `core.` também entra na tabela apontando para o hash
+da sessão, em vez de cair no default — a linha existe para que, no dia em que o core precisar de um
+fato de processo, `core.journey.x` não receba 4 h em silêncio.
+
+⚠️ `customer.` **não** roteia para o hash do cliente: o nome do store e o prefixo que roteia para
+ele não são a mesma string. O oráculo do mapa acusa isso (`mismatched_retention`).
+
+### Step `resolve` — acumulação inline em 5 fases
+
+`gap check → CRM → pergunta ao LLM → BLPOP → extração pelo LLM`. Custo medido no
+**`agente_contexto_ia_v1`**: **0 chamadas de LLM** quando o CRM resolve; no máximo **2** quando
+precisa coletar.
+
+### Copilot
+
+Análise fire-and-forget por mensagem do cliente → tags `core.copilot.*`. `supervisor_state` devolve
+o `context_snapshot` a partir do ContextStore.
+
+### Pool Context Enrichment (Routing Engine)
+
+Depois de **toda** alocação bem-sucedida, `_write_pool_context()` escreve `core.pool.id`,
+`core.pool.channels` e — quando definido — `core.pool.mentionable_pools`
+(`source: routing_engine`, `confidence: 1.0`, `visibility: agents_only`, TTL 24 h **NX**). Lê do
+cache Redis do próprio routing engine, sem I/O extra. `PoolConfig.mentionable_pools: dict[str, str]`
+é populado pelos eventos `pool.registered`.
+
+### `context_tags` e o emissor de sentimento
+
+`context_tags` em `reason`/`invoke`/`notify`: `inputs` (pré-chamada) + `outputs` (pós-chamada,
+fire-and-forget, com `confidence` e estratégia de merge).
+
+O emissor de sentimento escreve **`core.sentiment.current` apenas** (score, `confidence` 0.80,
+TTL 4 h). **`…categoria` NÃO é escrita**: classificar usa faixas configuráveis por tenant e é feito
+na LEITURA, pelo consumidor — classificador canônico em `analytics-api/sessions.py`.
+*Corrigido em 2026-08-02: o emitter chamava um `_classify` já removido, FORA do `try`, e o
+`NameError` matava as DUAS escritas; o `copilot_emitter`, que lia `categoria`, degradava sem log.*

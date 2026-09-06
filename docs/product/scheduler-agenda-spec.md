@@ -222,3 +222,12 @@ Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. Smoke `infra/t
 - **Porta + transporte → 3650 + HTTP síncrono no v1.** O disparo já devolve `session_id` síncrono; `timer.fired`
   como evento Kafka só entra na migração dos timers legados (pub/sub pros donos reagirem).
 - **`misfire_policy` default → `skip` (recorrente) / `fire_late` (one-shot).** Campo já no schema; só o default.
+
+---
+
+## Nota movida do `CLAUDE.md` em 2026-09-06 (DOC-02)
+
+**As duas camadas, nomeadas:** Redis (sorted-set **`scheduler:timers`** + poller de 15 s +
+re-hidratação no boot) sobre Postgres (schema `scheduler`, **fonte de verdade**). O Redis é
+aceleração de disparo, nunca o registro — um flush do Redis é recuperado pela re-hidratação; uma
+perda no Postgres não é.

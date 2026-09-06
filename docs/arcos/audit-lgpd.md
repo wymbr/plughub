@@ -144,3 +144,63 @@ Subject Access Requests (data_requests) require:
 ### Phase 5 — config_snapshot
 
 Read-only snapshot of `masking` namespace from Config API, accessible to DPO for verification that masking rules are correctly configured.
+
+---
+
+## O gate `_check_audit_access` — detalhe movido do `CLAUDE.md` em 2026-09-06 (DOC-02)
+
+`analytics-api` expõe dois endpoints em `/v1/audit`: `GET /sessions/{id}/messages` e
+`GET /mcp-calls`. O portão é `_check_audit_access(request, field)` (`audit.py`), com **cinco ramos
+declarados**, cada um com o seu código:
+
+| ramo | desfecho | por quê |
+|---|---|---|
+| `analytics_open_access` | **LIBERA**, nomeando o ator como `open_access` | modo aberto de demo, e a trilha registra quem foi |
+| sem `auth_jwt_secret` | **503** | falha do SERVIÇO — postura **oposta** à do `pool_auth`, que degrada aberto: lá é escopo de leitura, aqui é dado pessoal |
+| credencial ausente ou não verificável | **401** | — |
+| `module_config.audit.{sessions\|mcp_calls}` ≥ `read_only` | **LIBERA** | — |
+| senão | **403**, e a recusa **nomeia quem foi barrado** | — |
+
+O verificador é o CANÔNICO (`plughub_authz`) desde 2026-08-28 — a lista indexada local, onde
+`write_only` era maior que `read_only`, saiu junto. **Nunca `enforce_write` aqui:** ele responde
+direto, e esta casa precisa GRAVAR antes de responder.
+
+### A trilha só vale se a recusa também for gravada — e a sem credencial não era *(fechado 2026-08-28)*
+
+As duas rotas carregavam `optional_pool_principal` só pelo `tenant_id` (o `accessible_pools` nunca
+foi lido: auditoria é ortogonal a pool). Sendo um `Depends`, o `401` dele era levantado **antes do
+corpo do handler**, então `_record_access` nunca rodava — e o banner da tela prometia que todo
+acesso fica registrado.
+
+> **Regra derivada:** portão que decide dentro de um `Depends` não pode ter efeito colateral no
+> handler; se a recusa precisa gravar, ela decide onde grava.
+
+Hoje a identidade sai do próprio portão. Gates: `infra/test/probe_audit_surface.sh` (P4) +
+`tests/test_audit_handler_trail.py` — este último nasceu porque uma mutação
+(`status_code=denied.status` → `403`) sobreviveu a **23 testes verdes**: eles cobriam o VEREDICTO, e
+nada atravessava a rota.
+
+### ⚠️ Correção de 2026-08-22, por medição
+
+O `CLAUDE.md` afirmava `_require_audit_access()` e o dual-write `[timeline_row, mcp_audit_log_row]`
+como entregues (CHANGELOG de 2026-05-14). **Nada disso existia na árvore:** nenhum gate no handler —
+só `optional_pool_principal`, que confere ASSINATURA e não autorização, então qualquer token válido
+do tenant lia dado pessoal —, nenhum `INSERT`, e nenhuma das duas tabelas em `_ALL_DDL`
+(`probe_audit_surface.sh`: 0 de 2, com `session_timeline` de testemunha). O `401` que o token
+malformado devolve é o que fazia o buraco parecer coberto.
+
+### ClickHouse — uma tabela existe, a outra não, e isso é decisão
+
+`audit_access_log` é `MergeTree` e **nunca** deduplicado, por design LGPD: o valor da trilha é dizer
+**quantas vezes** um dado foi acessado e por quem.
+
+**`mcp_audit_log` NÃO existe e não foi criada de propósito** — medido zero tráfego na borda `invoke`
+neste ambiente (`session_timeline` recebe linha de um único parser, o de `mcp.audit`, e está vazia),
+e criar tabela que ninguém preenche é o *"existe ≠ está pronto"* de novo. Dívida dormente registrada
+no `TODO.md`. `parse_mcp_audit_event()` grava **uma** linha, em `session_timeline`, que é de onde
+`/v1/audit/mcp-calls` lê.
+
+### platform-ui
+
+`AuditPage` em `/audit` — 5 abas (Sessions + MCP Calls ativos; 3 stubs). Entrada de nav standalone
+"Auditoria LGPD" (🔍) com gate ABAC `audit.sessions`. Banner de aviso: todo acesso é registrado.
