@@ -70,7 +70,12 @@ steps:
   # resposta ÚNICA; `checklist` descreveria o que aconteceu, não para quem ir.
   - id: mostrar
     type: menu
-    prompt:      "$.pipeline_state.nivel.prompt"
+    # ⚠️ `{{...}}`, NUNCA ref pura. O `menu` passa o `prompt` por `interpolate`, que
+    # só troca `{{...}}` — uma ref pura (`$.`) atravessa INTACTA e o cliente lê a
+    # própria referência na tela. Medido em contato real. As `options` ao lado usam
+    # ref pura de propósito: elas passam por `resolveInputValue`, que é outro
+    # caminho, e ali `{{...}}` devolveria string em vez de array.
+    prompt:      "{{$.pipeline_state.nivel.prompt}}"
     interaction: list
     options:     "$.pipeline_state.nivel.options"
     output_as:   escolha

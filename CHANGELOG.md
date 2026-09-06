@@ -1,5 +1,53 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (5) — A sentinela protegia a QUEDA e esterilizava o CICLO
+
+Contato real no `demo_ia`: o cliente escolhe *SAC*, desce um nível, escolhe
+*Informações sobre o plano* — e a tela remonta o **mesmo** menu. O `pipeline_state` disse por quê:
+`escolha = "info_plano"` correto, `nivel.path = ["sac"]` parado, e um `descer:__invoked__ =
+"completed"` nos `results`.
+
+**A sentinela de idempotência é chaveada só pelo `step.id`.** Ela não dizia *"esta chamada MCP já
+aconteceu nesta execução"*, dizia *"este step já rodou, alguma vez"*. Num ciclo
+`menu → invoke → choice → menu`, a segunda visita ao `invoke` devolvia o resultado guardado e nunca
+mais chamava o mundo. **O validador de fluxo SANCIONA esse ciclo** — back-edge por step que bloqueia
+em I/O é política declarada desde 2026-06-04 — e o runtime o esterilizava: duas casas respondendo
+diferente à mesma pergunta, e a silenciosa vencendo. O step relatava `on_success` todas as vezes.
+
+**Conserto: `addTransition` limpa as sentinelas do step em que se ENTRA.** Entrar por transição é
+invocação nova; retomar após queda não é. A distinção é exata pela FORMA do laço do engine — a
+retomada começa executando `current_step_id` **sem passar por `addTransition`** —, então a
+idempotência através de queda continua intacta por estrutura, não por promessa. O RESULTADO não é
+apagado junto: outros steps o referenciam por `$.pipeline_state.*`, e apagá-lo abriria uma janela em
+que a ref resolve vazio.
+
+**O teste que decide não é o primeiro.** *"Re-executa ao reentrar"* sozinho ficaria verde numa
+implementação que simplesmente nunca gravasse a sentinela — e essa implementação mandaria **duas**
+mensagens ao cliente. Por isso o controle negativo (*retomada preserva o carimbo*) é o load-bearing.
+6 casos em `sentinel-cycle.test.ts`, verificados por mutação; suíte do engine 211/211.
+
+**Censo antes de mexer — 3 de 40 skills têm step sentinelado dentro de ciclo:** `skill_navegacao_v1`,
+`agente_fila_v1` (`enviar_resposta` notify — o agente de fila ficaria **mudo** depois da primeira
+resposta, com o `reason` ao lado continuando a gastar token) e `agente_copilot_v1`
+(`enviar_sugestao`). Os três QUEREM re-executar, então o conserto os corrige em vez de mudá-los.
+⚠️ **Só o primeiro foi medido como DANO**; os outros dois são **exposição** — procurei estado
+persistido que provasse a mudez do agente de fila e não achei. São dois números, e eu só tenho um.
+
+### E o meu ramo D estava medindo a proposição vizinha
+
+O `probe_orchestrator_tree_nav` tem um ramo que prova, por mutação, que o validador **distingue** o
+ciclo pelo `menu` do ciclo sem ele. Ele ficou verde o tempo todo — e estava certo. Só que a pergunta
+que importava era *"o ciclo RODA?"*, e ele respondia *"o ciclo é ACEITO?"*. Instrumento falseável,
+ramificado e honesto medindo o vizinho. A metade de runtime passou a viver no teste do engine, e o
+cabeçalho do gate agora diz qual das duas ele é.
+
+### E um defeito de referência, meu, na mesma tela
+
+O `prompt` do `menu` aparecia **literal** para o cliente: `$.pipeline_state.nivel.prompt`. O `menu`
+passa o `prompt` por `interpolate`, que só troca `{{...}}` — ref pura atravessa intacta. As `options`
+ao lado usam ref pura de propósito, porque elas vão por `resolveInputValue`, onde `{{...}}`
+devolveria string em vez de array. **Dois campos do mesmo step, dois caminhos de resolução.**
+
 ## 2026-09-06 (4) — ORQ-06: o Arc 12 ganha uma porta que COMPÕE a categoria, em vez de conferi-la
 
 A F1 tinha entregado tudo menos o número que lhe dá nome. O motivo estava medido na ORQ-06: o

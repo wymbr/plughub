@@ -16,6 +16,13 @@
 # ao menu principal, pareceria certa, e o cliente perderia a navegação sem que
 # nada ficasse vermelho — o valor plausível mais barato de produzir aqui.
 #
+# ⚠️ O ramo D mede o VALIDADOR, e só ele — registrado aqui porque custou caro.
+# Ele ficou verde enquanto o ciclo, EM EXECUÇÃO, estava esterilizado: a sentinela de
+# idempotência fazia a segunda visita ao `invoke` devolver o resultado guardado. Um
+# instrumento falseável, ramificado e honesto medindo a proposição ADJACENTE. A metade
+# de runtime vive em `skill-flow-engine/src/__tests__/sentinel-cycle.test.ts`, e o que
+# a sustenta lá é o controle negativo (retomada de queda NÃO pode re-executar).
+#
 # ⚠️ O ramo E existe por um defeito REAL, cometido ao escrever esta fase: o
 # `registrar_demanda` carimbava `tags.form_id`, e a lente lê
 # `tags['dialog_form_id']`. Nada fica vermelho — o evento apenas nasce SEM época

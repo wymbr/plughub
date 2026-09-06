@@ -196,15 +196,61 @@ export class PipelineStateManager {
   }
 
   /** Registra uma transição de step no histórico. */
+  /**
+   * Sentinelas de idempotencia, por step. Sao a metade "ja chamei o mundo" do
+   * protocolo de duas fases de `invoke`/`notify`/`task`.
+   *
+   * Vivem AQUI, e nao espalhadas pelos steps, porque quem as APAGA e esta casa:
+   * uma lista em dois lugares esquece um item, e o item esquecido nao fica
+   * vermelho — ele so congela um step para sempre.
+   */
+  private static readonly SENTINELAS = ["__invoked__", "__notified__", "__job_id__"] as const
+
+  /**
+   * Transita para `toStep` e LIMPA as sentinelas dele.
+   *
+   * ── Por que a limpeza mora na transicao ─────────────────────────────────────
+   *
+   * A sentinela existe para tornar a chamada MCP inocua atraves de uma QUEDA:
+   * retomando o MESMO step, `"completed"` devolve o resultado guardado em vez de
+   * repetir o efeito colateral. Ela nunca quis dizer *"este step so roda uma vez
+   * no fluxo"* — mas era isso que ela fazia, porque a chave e so o `step.id`.
+   *
+   * Consequencia medida em contato real (2026-09-06): num ciclo
+   * `menu -> invoke -> choice -> menu`, a SEGUNDA visita ao `invoke` devolvia o
+   * resultado da primeira e nunca mais falava com o mundo. O cursor de navegacao
+   * ficava parado no mesmo nivel, a tela remontava o mesmo menu, e **nada ficava
+   * vermelho** — o step "teve sucesso" todas as vezes. O validador de fluxo
+   * SANCIONA esse ciclo (back-edge por step que bloqueia em I/O e politica
+   * declarada); o runtime o esterilizava. Duas casas respondendo diferente a
+   * mesma pergunta, e a silenciosa vencia.
+   *
+   * **Entrar num step por transicao e invocacao NOVA; retomar apos queda nao e.**
+   * E essa distincao que a limpeza aqui expressa, e ela e exata pela FORMA do
+   * laco do engine: a retomada comeca executando `current_step_id` **sem passar
+   * por aqui**, entao a sentinela gravada antes da queda sobrevive e continua
+   * protegendo. A idempotencia atraves de queda fica intacta; o que acaba e o
+   * efeito colateral de o step ser irrepetivel pelo resto da sessao.
+   *
+   * ⚠️ O RESULTADO (`output_as`) NAO e apagado junto, e isso e decisao: outros
+   * steps o referenciam por `$.pipeline_state.*`, e apaga-lo abriria uma janela
+   * em que a ref resolve vazio. A re-execucao o sobrescreve, que e o que se quer.
+   */
   static addTransition(
     state:    PipelineState,
     fromStep: string,
     toStep:   string,
     reason:   PipelineState["transitions"][number]["reason"],
   ): PipelineState {
+    const results = { ...state.results }
+    for (const sufixo of PipelineStateManager.SENTINELAS) {
+      delete results[`${toStep}:${sufixo}`]
+    }
+
     return {
       ...state,
       current_step_id: toStep,
+      results,
       updated_at:      new Date().toISOString(),
       transitions: [
         ...state.transitions,

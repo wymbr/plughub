@@ -209,11 +209,47 @@ task:    {step.id}:__job_id__    (existing, same pattern)
 ### On failure: sentinel stays as "dispatched"
 
 When the MCP call throws, the sentinel remains `"dispatched"`. This is intentional:
-- There is no way to remove entries from `pipeline_state.results` (append-only structure)
+- On the *failure* path nothing removes the sentinel — it is left as `"dispatched"` on purpose
+  (this line previously claimed `pipeline_state.results` was append-only; that is no longer true —
+  see **Sentinel scope: one INVOCATION, not one flow** below)
 - On retry (via a `catch` step), the step re-executes with sentinel = `"dispatched"`,
   which correctly triggers a new MCP call
 - The `"dispatched"` state never prevents a retry — it only affects the crash recovery
   path when `"completed"` would suppress re-execution
+
+### Sentinel scope: one INVOCATION, not one flow
+
+**`addTransition` clears the entering step's sentinels** (`__invoked__`, `__notified__`,
+`__job_id__`) before persisting. Entering a step through a transition is a NEW logical
+invocation; resuming after a crash is not.
+
+**Why this exists — measured on a real contact, 2026-09-06.** The sentinel key is just the
+`step.id`, so it did not say *"this MCP call already happened in this execution"*, it said
+*"this step already ran, ever"*. In a cycle `menu → invoke → choice → menu` — a shape the flow
+validator explicitly SANCTIONS, because the back-edge passes through a step that blocks on I/O —
+the second visit to the `invoke` returned the stored result and never called the world again. The
+navigation cursor stayed on the same level, the customer saw the same menu rebuilt, and **nothing
+went red**: the step reported `on_success` every time. The validator and the runtime were answering
+the same question differently, and the silent one won.
+
+**Crash idempotency is untouched, and that is structural, not a promise.** The engine's resume path
+starts by executing `current_step_id` **without calling `addTransition`** — so a sentinel written
+before a crash survives and still suppresses the duplicate side effect. The unit test carries that
+as its load-bearing case: *"re-executes on re-entry"* alone would stay green under an implementation
+that simply never wrote the sentinel, and that implementation would send the customer two messages.
+
+**The step's RESULT is not cleared with it.** Other steps reference it via `$.pipeline_state.*`, and
+deleting it would open a window where the ref resolves empty. Re-execution overwrites it, which is
+the wanted behaviour.
+
+**Census at the time of the change** — 3 of 40 skills had a sentinel-bearing step inside a cycle:
+`skill_navegacao_v1` (`descer`/`nivel_raiz` invoke, `reiniciar` notify), `agente_fila_v1`
+(`enviar_resposta` notify — the queue agent would go MUTE after its first reply while the `reason`
+step kept burning tokens) and `agente_copilot_v1` (`enviar_sugestao` notify). All three WANT
+re-execution, so the change fixes them rather than altering them. ⚠️ Only the first was measured as
+damaged; the other two are **exposure**, not confirmed damage — two different numbers.
+
+Tests: `src/__tests__/sentinel-cycle.test.ts` (6 cases, verified by mutation).
 
 ### Scope: invoke and notify only
 
