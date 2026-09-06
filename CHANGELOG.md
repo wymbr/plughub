@@ -1,5 +1,48 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (9) — Os DOIS eixos convivem num contato, e discordam
+
+Ciclo completo, validado pelo dono — navegação → especialista → fila → humano → NPS → wrap-up:
+
+```
+demo_ia          native  primary      3 460 ms  escalated_human
+sac_ia           native  primary     66 827 ms  escalated_human
+retencao_humano  system  queue       31 998 ms  handoff
+fila_humano      native  specialist  32 010 ms  escalated_human
+retencao_humano  human   primary     51 479 ms  resolved
+auth_form_ia     native  specialist   4 985 ms  escalated_human
+nps_ia           native  specialist   3 760 ms  resolved
+```
+
+O atalho da F4 está provado pela cronologia, não pela tela: `session.navegacao.path` foi escrita em
+`16:12:16.106` e o segmento do `sac_ia` começou em `16:12:16.143` — **37 ms depois**. O especialista
+respondeu direto; o menu duplicado não apareceu.
+
+### O que este contato mostra e nenhum outro mostrou
+
+Os eventos de negócio da MESMA sessão:
+
+```
+demo_ia.navegacao.destino.sac.info_plano                    ← o que o CLIENTE pediu
+retencao_humano.wrapup.motivo.comercial.portabilidade       ← o que o ATENDIMENTO foi
+retencao_humano.wrapup.servico.cadastro.troca_titularidade
+retencao_humano.wrapup.servico.cadastro.segunda_via
+retencao_humano.wrapup.servico.plano.cancelamento
+```
+
+**É a primeira vez que os dois eixos existem lado a lado**, e eles **discordam** — entrou por
+*informações sobre o plano*, terminou em portabilidade, cadastro e cancelamento. Até a F1 a
+plataforma media com precisão só a segunda metade; a primeira era descartada com a sessão.
+
+O ADR previu exatamente isto, e previu que seria o produto: *"a divergência entre elas é o produto —
+'12 entraram por `financeiro`, 5 terminaram em `tecnico`' — e obrigar as duas a coincidir destruiria
+justamente o sinal"*. Um contato não é uma série; o que ele fecha é a pergunta de mecanismo.
+
+⚠️ **E a leitura fácil está errada.** Divergência aqui **não** é erro de navegação nem de wrap-up: o
+cliente pediu uma coisa e a conversa virou outra, que é o que conversa faz. Quem quiser transformar
+isso em métrica precisa contar a POPULAÇÃO antes de chamar de defeito — exposição e dano são dois
+números, e aqui só existe o primeiro.
+
 ## 2026-09-06 (8) — F4/ORQ-04: o menu duplicado morre, e a instalação limpa reproduz o arco
 
 A triagem já tinha saído — efeito colateral da F1, quando a navegação foi promovida no `demo_ia`.
