@@ -207,10 +207,124 @@ def ramo_h():
     return "H_OK skills=%d" % conferidos
 
 
+# ── Ramo J — a D6: o LLM aterrissa em folha DECLARADA, e isso e conferido ─────
+
+LLM_SKILL   = "skill_navegacao_llm_v1"
+DET_SKILL   = "skill_navegacao_v1"
+
+
+def _steps(skill_id):
+    import yaml
+    p = os.path.join(RAIZ, "packages", "skill-flow-engine", "skills", skill_id + ".yaml")
+    if not os.path.isfile(p):
+        return None
+    d = yaml.safe_load(io.open(p, encoding="utf-8").read())
+    return {s["id"]: s for s in (d.get("steps") or []) if isinstance(s, dict) and "id" in s}
+
+
+def _serie(passos):
+    """(emitter, metric_key) do `agent_event_record` — a unidade de medida."""
+    for s in passos.values():
+        if s.get("tool") == "agent_event_record":
+            i = s.get("input") or {}
+            return (i.get("emitter"), i.get("metric_key"))
+    return None
+
+
+def ramo_j():
+    """Duas proposicoes, e a primeira e a que costuma ser so promessa.
+
+    (1) A resposta do LLM e CONFERIDA contra o vocabulario — nao apenas pedida no
+        prompt. Instrucao nao e mecanismo: o modelo pode devolver um caminho
+        plausivel que nao existe, e sem conferencia ele viraria uma categoria que
+        a lente desenha como se alguem a tivesse autorado.
+    (2) Os DOIS orquestradores emitem a MESMA serie. Metricas diferentes tornam a
+        comparacao impossivel, que e justamente o que a fase existe para permitir.
+    """
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        return "SEM_YAML"
+
+    llm = _steps(LLM_SKILL)
+    det = _steps(DET_SKILL)
+    if llm is None:
+        return "SEM_SKILL_LLM"
+    if det is None:
+        return "SEM_SKILL_DET"
+
+    # (1) o LLM decide...
+    reason = [s for s in llm.values() if s.get("type") == "reason"]
+    if not reason:
+        return "SEM_REASON"
+    r = reason[0]
+    saida = r.get("output_as")
+    if not saida:
+        return "REASON_SEM_OUTPUT_AS"
+
+    # ...e a decisao passa por uma CONFERENCIA que usa a projecao.
+    conf = [
+        s for s in llm.values()
+        if s.get("tool") == "dialog_tree_level"
+        and saida in str((s.get("input") or {}).get("chosen_id", ""))
+    ]
+    if not conf:
+        return "SEM_CONFERENCIA"
+    if r.get("on_success") != conf[0]["id"]:
+        return "REASON_NAO_VAI_PARA_CONFERENCIA(%s)" % r.get("on_success")
+
+    # E o veredicto tem de ramificar sobre found/is_leaf — senao a conferencia
+    # roda e ninguem olha o resultado.
+    julga = []
+    for s in llm.values():
+        if s.get("type") != "choice":
+            continue
+        campos = {str(c.get("field", "")) for c in (s.get("conditions") or [])}
+        if any(x.endswith(".found") for x in campos) and any(x.endswith(".is_leaf") for x in campos):
+            julga.append(s)
+    if not julga:
+        return "SEM_VEREDICTO_FOUND_IS_LEAF"
+
+    # O escape tem de ser CONTAVEL: o caminho de recusa precisa alcancar o
+    # registro do evento, senao "o LLM nao soube" vira um nulo indistinguivel de
+    # "nao perguntamos" — exatamente o que a D7 recusa.
+    alvos_recusa = {c.get("next") for c in (julga[0].get("conditions") or [])}
+    registra = {s["id"] for s in llm.values() if s.get("tool") == "agent_event_record"}
+    alcanca = False
+    for a in alvos_recusa:
+        vistos, fila = set(), [a]
+        while fila:
+            n = fila.pop()
+            if n in vistos or n not in llm:
+                continue
+            vistos.add(n)
+            if n in registra:
+                alcanca = True
+                break
+            for k, v in llm[n].items():
+                if (k.startswith("on_") or k in ("next", "default")) and isinstance(v, str):
+                    fila.append(v)
+        if alcanca:
+            break
+    if not alcanca:
+        return "ESCAPE_NAO_CONTAVEL"
+
+    # (2) mesma unidade de medida
+    sl, sd = _serie(llm), _serie(det)
+    if sl is None or sd is None:
+        return "SEM_EVENTO(llm=%s det=%s)" % (sl, sd)
+    if sl != sd:
+        return "SERIES_DIFERENTES(llm=%s det=%s)" % (sl, sd)
+
+    return "J_OK serie=%s.%s" % sl
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "F":
         print(ramo_f(sys.argv[2]))
     elif sys.argv[1] == "H":
         print(ramo_h())
+    elif sys.argv[1] == "J":
+        print(ramo_j())
     else:
         print(ramo_g())

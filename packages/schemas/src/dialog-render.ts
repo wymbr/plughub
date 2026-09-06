@@ -227,6 +227,37 @@ export function optionsAtPath(
   return { found: true, is_leaf: nivel.length === 0, options: nivel, path: trilha }
 }
 
+/**
+ * Todos os caminhos de FOLHA sob `roots`, pontuados e em ordem de autoria.
+ *
+ * É o **vocabulário de desfechos permitidos** — a D6 do
+ * `adr-orchestrator-tree-navigation`: com LLM quem navega é o LLM, mas ele tem de
+ * **aterrissar numa folha declarada**. Sem isso o roteador é inauditável, e os dois
+ * orquestradores (determinístico e com LLM) mediriam em unidades diferentes — não
+ * haveria como provar que um roteia melhor que o outro.
+ *
+ * ⚠️ **Serve a duas metades que não se substituem**: alimentar o prompt E conferir a
+ * resposta. Mandar a lista ao LLM sem conferir o que ele devolve é promessa sem
+ * mecanismo — a família do DDL de `participation_intervals`. A conferência usa a
+ * MESMA projeção (`optionsAtPath` com o caminho pontuado), não uma segunda leitura.
+ *
+ * Pasta com `options` vazio conta como FOLHA, pela D2: folha × pasta é derivado de
+ * *"tem filhos?"*, nunca de um campo declarado.
+ */
+export function leafPaths(roots: ReadonlyArray<RenderOption>): string[] {
+  const saida: string[] = []
+  const anda = (opts: ReadonlyArray<RenderOption>, trilha: string[]): void => {
+    for (const o of opts) {
+      const aqui = [...trilha, o.id]
+      const filhos = o.options ?? []
+      if (filhos.length === 0) saida.push(aqui.join("."))
+      else anda(filhos, aqui)
+    }
+  }
+  anda(roots, [])
+  return saida
+}
+
 function flattenRetry(q: QuestionNode, locale: string | undefined, dl: string): RenderRetry | undefined {
   if (!q.retry) return undefined
   return {

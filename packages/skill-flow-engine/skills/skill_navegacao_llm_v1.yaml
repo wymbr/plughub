@@ -1,0 +1,245 @@
+# skill_navegacao_llm_v1.yaml
+#
+# F5 do `docs/adr/adr-orchestrator-tree-navigation.md` (ORQ-05) — a PARIDADE.
+#
+# Este é o gêmeo com LLM do `skill_navegacao_v1`. A diferença de mecânica é toda
+# num ponto: lá o cliente NAVEGA a árvore (menu por nível); aqui ele FALA, e o LLM
+# escolhe o destino. O que os dois têm em comum é o que a fase existe para provar.
+#
+# ── D6: a árvore é o contrato COMUM ─────────────────────────────────────────────
+#
+# Com LLM quem navega é o LLM — não a árvore. Mas a árvore continua sendo o
+# **domínio de desfechos permitidos**: o LLM navega livre e tem de **aterrissar
+# numa folha declarada**. Três consequências, e nenhuma é enfeite:
+#
+#   1. Os dois orquestradores emitem o MESMO `category` (`{pool}.navegacao.destino.
+#      {caminho}`) ⇒ mesma série, mesma lente, COMPARÁVEIS. Sem isso não há como
+#      provar que o LLM roteia melhor: mediriam em unidades diferentes.
+#   2. A folha de ESCAPE vira o *"não sei"* do LLM — e um fato CONTÁVEL, em vez de
+#      um nulo indistinguível de "não perguntamos".
+#   3. Restringir a saída a um vocabulário declarado é o que torna um roteador LLM
+#      AVALIÁVEL. Livre, ele é inauditável.
+#
+# ⚠️ **O vocabulário é mandado E CONFERIDO, e as duas metades não se substituem.**
+# Pôr a lista no prompt é instrução; o LLM pode devolver qualquer string, inclusive
+# uma folha plausível que não existe. Quem decide é o `conferir` — a MESMA projeção
+# que o orquestrador determinístico usa (`dialog_tree_level` com o caminho pontuado,
+# F2). Confiar só no prompt seria promessa sem mecanismo.
+#
+# ⚠️ **O que este skill NÃO faz:** roteamento próprio. O mapa `caminho → pool` é o
+# mesmo `navigation_pools` do pool (F3/D2), e a resolução é o mesmo
+# `pool_route_resolve`. Um mapa próprio aqui seria a segunda casa do roteamento.
+
+id: skill_navegacao_llm_v1
+name: "Navegação LLM v1 — orquestrador com aterrissagem declarada"
+version: "1.0"
+description: |
+  Orquestrador com LLM que recebe a demanda em TEXTO LIVRE e escolhe um destino
+  dentro do vocabulário declarado no mesmo DialogForm que o orquestrador
+  determinístico usa. Emite a mesma série do Arc 12, então os dois são
+  comparáveis; o que o LLM não souber classificar cai na folha de escape, que é
+  contável em vez de nula.
+classification:
+  type: orchestrator
+  domain: customer_service
+
+entry: vocabulario
+
+steps:
+
+  # ── 1. O vocabulário de desfechos ───────────────────────────────────────────
+  # `path: []` ⇒ `leaves` é a árvore INTEIRA. É esta lista que vai ao prompt e é
+  # contra ela que a resposta é conferida — a mesma fonte para as duas metades,
+  # senão o LLM receberia opções que a plataforma depois recusaria e o escape
+  # contaria alto por defeito NOSSO.
+  - id: vocabulario
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:    "dialog_navegacao_atendimento_v1"
+      output_key: "destino"
+      path:       []
+      tenant_id:  "$.tenant_id"
+    output_as: nivel
+    on_success: saudar
+    on_failure: sem_navegacao
+
+  - id: saudar
+    type: notify
+    message: "Olá! Sou o assistente da PlugHub. Me conte com suas palavras o que você precisa."
+    on_success: ouvir
+    on_failure: ouvir
+
+  # ── 2. A demanda em TEXTO LIVRE ─────────────────────────────────────────────
+  # `interaction: text` é a diferença visível para o cliente. Onde o determinístico
+  # oferece uma lista, aqui ele fala.
+  - id: ouvir
+    type: menu
+    prompt:      "Pode escrever aqui o que você precisa."
+    interaction: text
+    output_as:   fala
+    timeout_s: 120
+    on_success: classificar
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # ── 3. O LLM escolhe DENTRO do vocabulário ──────────────────────────────────
+  # ⚠️ `destinos_permitidos` vem do `vocabulario`, nunca de um literal aqui: um
+  # literal envelheceria calado quando a forma mudasse, e o LLM passaria a ser
+  # instruído com opções que não existem mais.
+  - id: classificar
+    type: reason
+    prompt_id: navigation_router_v1
+    customer_utterance: "$.pipeline_state.fala"
+    input:
+      instrucoes: |
+        Você é o roteador de um atendimento. Leia o que o cliente escreveu e
+        escolha UM destino da lista `destinos_permitidos`, devolvendo o caminho
+        EXATAMENTE como aparece na lista. Não invente caminhos e não componha
+        caminhos novos. Se nada na lista servir, ou se você não tiver confiança
+        suficiente, devolva a string vazia em `destino` — dizer "não sei" é uma
+        resposta válida e preferível a um palpite.
+      destinos_permitidos: "$.pipeline_state.nivel.leaves"
+      fala_do_cliente:     "$.pipeline_state.fala"
+    output_schema:
+      destino:
+        type: string
+      confianca:
+        type: number
+    output_as: classificacao
+    on_success: conferir
+    on_failure: escapar
+
+  # ── 4. A CONFERÊNCIA — é ela que faz a D6 valer ─────────────────────────────
+  # O prompt pediu; isto verifica. Usa a MESMA projeção do orquestrador
+  # determinístico, com o caminho pontuado (F2): `found && is_leaf` é a definição
+  # de "aterrissou numa folha declarada". Caminho inventado, pasta em vez de folha,
+  # string vazia — os três caem no mesmo lugar, e o lugar é contável.
+  - id: conferir
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:    "dialog_navegacao_atendimento_v1"
+      output_key: "destino"
+      path:       []
+      chosen_id:  "$.pipeline_state.classificacao.destino"
+      tenant_id:  "$.tenant_id"
+    output_as: nivel
+    on_success: avaliar
+    on_failure: escapar
+
+  - id: avaliar
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.nivel.found"
+        operator: eq
+        value: false
+        next: escapar
+      - field: "$.pipeline_state.nivel.is_leaf"
+        operator: eq
+        value: false
+        next: escapar
+    default: registrar_demanda
+
+  # ── 5. O ESCAPE é um FATO, não um buraco ────────────────────────────────────
+  # D6.2 + D7 do ADR da árvore: sem esta folha, "o LLM não soube" seria um nulo
+  # indistinguível de "não perguntamos". Com ela, é uma linha na MESMA série — dá
+  # para contar quantos por cento o roteador não classificou, que é a métrica que
+  # decide se ele presta.
+  #
+  # ⚠️ Vai pela projeção também, e não por um literal montado aqui: se a folha de
+  # escape sumir da forma, isto tem de falhar, não fabricar um caminho que a lente
+  # desenharia como se alguém o tivesse autorado.
+  - id: escapar
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:    "dialog_navegacao_atendimento_v1"
+      output_key: "destino"
+      path:       []
+      chosen_id:  "nao_se_aplica"
+      tenant_id:  "$.tenant_id"
+    output_as: nivel
+    on_success: registrar_demanda
+    on_failure: sem_navegacao
+
+  # ── 6. A MESMA série do determinístico ──────────────────────────────────────
+  # `emitter` e `metric_key` IDÊNTICOS aos do `skill_navegacao_v1` — é isto que
+  # torna os dois comparáveis. O que os separa é o `l1`, que é o POOL, e o pool é
+  # a dimensão certa: "o pool com LLM classificou 82% e escapou em 18%; o
+  # determinístico não escapa mas exige dois turnos".
+  - id: registrar_demanda
+    type: invoke
+    tool: agent_event_record
+    input:
+      session_id: "$.session_id"
+      segment_id: "$.segment_id"
+      emitter:    "navegacao"
+      metric_key: "destino"
+      path:       "$.pipeline_state.nivel.category_path"
+      value: 1
+      tags:
+        dialog_form_id:      "$.pipeline_state.nivel.form_id"
+        dialog_form_version: "{{$.pipeline_state.nivel.version}}"
+    on_success: marcar_navegacao
+    on_failure: marcar_navegacao
+
+  - id: marcar_navegacao
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:   "session.navegacao.path"
+      value: "$.pipeline_state.nivel.category_path"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: resolver_rota
+    on_failure: resolver_rota
+
+  # ── 7. Roteamento — o MESMO mapa, a MESMA tool ──────────────────────────────
+  - id: resolver_rota
+    type: invoke
+    tool: pool_route_resolve
+    input:
+      session_id: "$.session_id"
+      path:       "$.pipeline_state.nivel.category_path"
+      tenant_id:  "$.tenant_id"
+    output_as: rota
+    on_success: escalar
+    on_failure: escalar_humano
+
+  - id: escalar
+    type: escalate
+    target:
+      pool: "$.pipeline_state.rota.pool"
+    context: pipeline_state
+    handoff_reason: "Navegação LLM: destino classificado a partir da fala do cliente"
+    on_failure: encerrar_fallback
+
+  - id: escalar_humano
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    handoff_reason: "Navegação LLM terminou em atendimento humano"
+    on_failure: encerrar_fallback
+
+  - id: sem_navegacao
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    handoff_reason: "DialogForm de navegação indisponível"
+    on_failure: encerrar_fallback
+
+  - id: encerrar_fallback
+    type: complete
+    outcome: failed
+    issue_status: "Escalação falhou — pool de destino indisponível"
+
+  - id: finalizar
+    type: complete
+    outcome: resolved
+    issue_status: "Cliente encerrou durante a navegação"

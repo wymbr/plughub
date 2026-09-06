@@ -14,6 +14,7 @@
 #   G  guarda da D10: nenhuma folha carrega destino, e o schema não tem onde pô-lo
 #   H  o especialista RECONHECE as folhas que a navegação lhe manda (menu duplicado)
 #   I  o CANAL (Python) e o FLUXO (TS) concordam sobre o id da linha — duas linguagens
+#   J  D6: o LLM aterrissa em folha DECLARADA (conferido, nao instruído) e mede na mesma série
 #
 # ⚠️ O ramo C é o único que não tem cara de teste feliz, e é o que importa. Se
 # `optionsAtPath` devolvesse a raiz para um segmento inexistente, a tela voltaria
@@ -298,6 +299,30 @@ process.stdin.on("end", () => {
     esac
   fi
 ;; esac
+
+# ── J: a D6 — aterrissagem declarada, e a MESMA unidade de medida ──────────
+# ⚠️ A parte frágil da D6 não é o prompt — é a CONFERÊNCIA. Pedir ao modelo que
+# escolha da lista é instrução; ele pode devolver um caminho plausível que não
+# existe, e sem conferir isso vira uma categoria que a lente desenha como se
+# alguém a tivesse autorado. Este ramo exige o MECANISMO: `reason` -> projeção com
+# o caminho -> veredicto sobre `found`/`is_leaf` -> escape que CHEGA ao evento.
+printf '\n\033[1mJ — o LLM aterrissa em folha DECLARADA, e mede na mesma serie\033[0m\n'
+D6=$(python3 "$GUARDA" J 2>/dev/null)
+case "$D6" in
+  SEM_YAML|"")                 info "PyYAML ausente — ramo J nao exercido"; INCONC=1 ;;
+  SEM_SKILL_LLM)               info "nao ha orquestrador com LLM — ramo J nao se aplica"; INCONC=1 ;;
+  SEM_SKILL_DET)               bad "o orquestrador deterministico sumiu — nao ha com o que comparar" ;;
+  SEM_REASON)                  bad "o skill LLM nao tem step reason — nao ha LLM decidindo nada" ;;
+  REASON_SEM_OUTPUT_AS)        bad "o reason nao guarda a decisao — nao ha o que conferir" ;;
+  SEM_CONFERENCIA)             bad "a resposta do LLM NAO e conferida contra o vocabulario — o prompt virou a unica guarda: ${D6}" ;;
+  REASON_NAO_VAI_PARA_CONFERENCIA*) bad "o reason desvia da conferencia: ${D6}" ;;
+  SEM_VEREDICTO_FOUND_IS_LEAF) bad "a conferencia roda e ninguem olha found/is_leaf" ;;
+  ESCAPE_NAO_CONTAVEL)         bad "o escape do LLM nao alcanca o evento — 'nao sei' vira nulo, nao fato (D7)" ;;
+  SERIES_DIFERENTES*)          bad "os dois orquestradores medem em unidades diferentes — incomparaveis: ${D6}" ;;
+  SEM_EVENTO*)                 bad "algum dos dois nao emite evento de demanda: ${D6}" ;;
+  J_OK*)                       ok "conferencia + veredicto + escape contavel, e a MESMA serie (${D6})" ;;
+  *)                           bad "veredicto inesperado: ${D6}" ;;
+esac
 
 printf '\n'
 if [ "$FAIL" != "0" ]; then

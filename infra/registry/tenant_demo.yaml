@@ -25,6 +25,10 @@ channel_endpoints:
     pool_id: demo_ia
     display_name: "WebChat Demo IA"
   - channel: webchat
+    identifier: demo_llm
+    pool_id: demo_llm_ia
+    display_name: "WebChat Demo IA (orquestrador com LLM)"
+  - channel: webchat
     identifier: sac
     pool_id: sac_ia
     display_name: "WebChat SAC IA"
@@ -169,6 +173,28 @@ pools:
     #
     # Casa por prefixo mais longo: `sac` cobre `sac.info_plano`, e a entrada mais
     # específica vence — `sac.especialista` vai ao humano, não ao `sac_ia`.
+    navigation_pools:
+      sac:               sac_ia
+      sac.especialista:  retencao_humano
+      portabilidade:     portabilidade_ia
+      reembolso:         reembolso_ia
+      auth_form:         auth_form_ia
+      auth_sac:          auth_sac_ia
+      nao_se_aplica:     retencao_humano
+
+  # ── O gêmeo com LLM (F5/ORQ-05) ────────────────────────────────────
+  #
+  # Mesmo `navigation_pools` do `demo_ia`, e isso é o ponto: os dois orquestradores
+  # roteiam pelo MESMO mapa e emitem a MESMA série (`{pool}.navegacao.destino.*`).
+  # O que os separa é o `l1` — o pool —, que é exatamente a dimensão pela qual se
+  # quer compará-los. Um mapa próprio aqui seria a segunda casa do roteamento; uma
+  # métrica própria destruiria a comparação que a F5 existe para permitir.
+  - pool_id: demo_llm_ia
+    agent_kind: ai
+    deploy: { skill_id: skill_navegacao_llm_v1, max_concurrent_sessions: 10 }
+    description: "Pool IA — orquestrador com LLM, aterrissagem em folha declarada"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 480000
     navigation_pools:
       sac:               sac_ia
       sac.especialista:  retencao_humano

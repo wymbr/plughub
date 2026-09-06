@@ -297,7 +297,7 @@ inteiro.
 | **F2** ✅ | **Renderização em canal** (`DLG-15`) — seções no WhatsApp, grupos no webchat, e recusa NOMEADA onde não cabe | F0 |
 | **F3** ✅ | `escalate` com **alvo interpolável** + mapa `caminho → pool` na config do pool (D2) | ~~F2~~ — ver emenda |
 | **F4** ✅ | O **runner genérico** assume a navegação; `agente_triagem_v2` sai | F1, F3 |
-| **F5** | **Paridade LLM** (D6): o orquestrador IA aterrissa nas mesmas folhas declaradas | F4 |
+| **F5** ✅ | **Paridade LLM** (D6): o orquestrador IA aterrissa nas mesmas folhas declaradas | F4 |
 
 > **Emenda de 2026-09-06 — D12: a categoria é COMPOSTA no servidor, não conferida.**
 > Esta tabela dizia *"`agent_event` com o caminho"*, e a F1 descobriu que **aquela tool é
@@ -346,6 +346,34 @@ inteiro.
 | **LLM roteando sem a árvore** | Perde a comparabilidade e a auditabilidade; o *"não sei"* volta a ser nulo em vez de folha contável (D6) |
 
 ---
+
+> **Emenda de 2026-09-06 — F5 entregue; o arco fecha.** O gatilho pedia *"F4 entregue **e** um pool
+> de orquestração IA candidato"*. A primeira metade fechou hoje; a segunda **não existia** — medidos
+> 6 skills com `reason`, e nenhum decide DESTINO (respondem, sugerem, extraem contexto, avaliam). O
+> candidato foi criado: `skill_navegacao_llm_v1` no pool `demo_llm_ia`, com o MESMO
+> `navigation_pools` do `demo_ia`.
+>
+> **As três consequências da D6, uma a uma:**
+>
+> 1. **Mesma série.** `emitter` e `metric_key` idênticos (`navegacao.destino`); o que separa os dois
+>    é o `l1`, que é o POOL — e o pool é exatamente a dimensão pela qual se quer compará-los.
+> 2. **Escape contável.** Caminho inventado, pasta em vez de folha e string vazia caem os três em
+>    `nao_se_aplica`, que é uma linha na mesma série — dá para ler *"o roteador não classificou X%"*.
+> 3. **Auditável.** A saída é restrita ao vocabulário, e restringir é o que permite avaliar.
+>
+> ⚠️ **A parte frágil da D6 não é o prompt — é a CONFERÊNCIA.** Mandar a lista ao modelo é
+> instrução; ele pode devolver um caminho plausível que não existe, e sem conferir isso viraria uma
+> categoria que a lente desenha **como se alguém a tivesse autorado**. Quem decide é o step
+> `conferir`, que usa a MESMA projeção do orquestrador determinístico (`dialog_tree_level` com o
+> caminho pontuado, F2) — não uma segunda leitura. Medido ao vivo: `financeiro.boleto_2via` RECUSA,
+> `sac` (pasta) RECUSA, `""` RECUSA, `sac.info_plano` ACEITA.
+>
+> `leafPaths` em `@plughub/schemas` dá o vocabulário, e ele alimenta as **duas** metades — prompt e
+> conferência — da mesma fonte. Fontes separadas fariam o modelo receber opções que a plataforma
+> depois recusaria, e o escape contaria alto por defeito NOSSO.
+>
+> Ramo **J** do gate, verificado por duas mutações: pular a conferência ⇒ VERMELHO; medir noutra
+> unidade ⇒ VERMELHO.
 
 ## Riscos e questões abertas
 

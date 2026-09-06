@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest"
 
-import { optionsAtPath } from "./dialog-render"
+import { leafPaths, optionsAtPath } from "./dialog-render"
 import { DialogOptionSchema } from "./dialog"
 import type { RenderOption } from "./dialog-render"
 
@@ -112,5 +112,34 @@ describe("id de opcao × separador de caminho", () => {
     const unico = optionsAtPath(raizes, "sac.info_plano".split("."))
     expect(unico).toEqual(passo)
     expect(unico.is_leaf).toBe(true)
+  })
+})
+
+// ── D6: o VOCABULARIO de desfechos permitidos ───────────────────────────────
+//
+// Com LLM quem navega e o LLM — mas ele tem de aterrissar numa folha DECLARADA.
+// Esta lista e o contrato: alimenta o prompt E confere a resposta. Mandar sem
+// conferir seria promessa sem mecanismo.
+describe("leafPaths", () => {
+  it("lista TODAS as folhas, pontuadas, e nenhuma pasta", () => {
+    const fs = leafPaths(ARVORE)
+    expect(fs).toContain("sac.info_plano")
+    expect(fs).toContain("portabilidade")
+    // `sac` e PASTA: aparecer aqui faria o LLM "aterrissar" num lugar que nao
+    // enderessa servico nenhum, e o roteamento receberia um caminho intermediario.
+    expect(fs).not.toContain("sac")
+  })
+
+  it("toda folha listada RESOLVE pela mesma projecao — as duas metades casam", () => {
+    // Se o vocabulario e a conferencia divergissem, o LLM receberia opcoes que a
+    // plataforma depois recusaria: o escape contaria alto por defeito nosso.
+    for (const c of leafPaths(ARVORE)) {
+      const n = optionsAtPath(ARVORE, c.split("."))
+      expect({ c, found: n.found, leaf: n.is_leaf }).toEqual({ c, found: true, leaf: true })
+    }
+  })
+
+  it("arvore vazia devolve lista vazia — nunca um caminho fabricado", () => {
+    expect(leafPaths([])).toEqual([])
   })
 })

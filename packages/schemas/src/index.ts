@@ -843,6 +843,7 @@ export {
   buildRender,
   duplicateNodeIds,
   optionsAtPath,
+  leafPaths,
   validateDialogForm,
 } from "./dialog-render"
 

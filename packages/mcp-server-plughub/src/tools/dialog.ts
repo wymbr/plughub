@@ -12,7 +12,7 @@
 
 import { z }                     from "zod"
 import type { McpServer }        from "@modelcontextprotocol/sdk/server/mcp.js"
-import { buildRender, duplicateNodeIds, optionsAtPath } from "@plughub/schemas"
+import { buildRender, duplicateNodeIds, optionsAtPath, leafPaths } from "@plughub/schemas"
 import type { DialogForm }               from "@plughub/schemas"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
@@ -230,6 +230,10 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           node_label:    nodeLabel,
           found:         nivel.found,
           is_leaf:       nivel.is_leaf,
+          // Vocabulario de desfechos SOB o cursor (D6). Em `path: []` e a arvore
+          // inteira — o que o orquestrador com LLM manda ao prompt E confere na
+          // volta. As duas metades: mandar sem conferir e promessa sem mecanismo.
+          leaves:        leafPaths(nivel.options).map(c => [...trilha, c].join(".")),
           options:       nivel.options,
           path:          nivel.path,
           // Cauda da `category` do Arc 12 — o chamador nao precisa juntar, e assim

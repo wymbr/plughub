@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (11) — F5/ORQ-05: o orquestrador com LLM aterrissa em folha declarada
+
+O gatilho da fase pedia *"F4 entregue **e** um pool de orquestração IA candidato"*. A primeira
+metade fechou hoje. A segunda **não existia**: medidos 6 skills com step `reason`, e nenhum decide
+DESTINO — respondem ao cliente (`agente_fila_v1`), sugerem ao atendente (`agente_copilot_v1`),
+extraem contexto, avaliam. O candidato foi criado.
+
+`skill_navegacao_llm_v1` no pool `demo_llm_ia`: o cliente **escreve** o que precisa, o LLM escolhe
+um destino, e o resto do caminho é o mesmo do determinístico — mesmo `navigation_pools`, mesmo
+`pool_route_resolve`, mesmo `escalate` interpolado. Um mapa próprio seria a segunda casa do
+roteamento; uma métrica própria destruiria a comparação que a fase existe para permitir.
+
+### A parte frágil da D6 não é o prompt — é a conferência
+
+Pôr o vocabulário no prompt é **instrução**. O modelo pode devolver qualquer string, inclusive uma
+folha plausível que não existe — e sem conferir, aquilo viraria uma `category` que a lente de
+árvore desenha **como se alguém a tivesse autorado**. Promessa sem mecanismo, a família do DDL de
+`participation_intervals`.
+
+Quem decide é o step `conferir`, e ele usa a MESMA projeção do orquestrador determinístico
+(`dialog_tree_level` com o caminho pontuado, entregue na F2) — não uma segunda leitura que poderia
+divergir. Medido ao vivo contra a forma publicada:
+
+```
+inventado  "financeiro.boleto_2via" -> RECUSA (found=false leaf=false)
+pasta      "sac"                    -> RECUSA (found=true  leaf=false)
+vazio      ""                       -> RECUSA (found=true  leaf=false)
+declarado  "sac.info_plano"         -> ACEITA (found=true  leaf=true)
+```
+
+Os três recusados caem na folha de ESCAPE, e é aí que a D6.2 encontra a D7: *"o LLM não soube"*
+vira **uma linha na mesma série**, em vez de um nulo indistinguível de *"não perguntamos"*. Dá para
+ler quantos por cento o roteador não classificou — que é a métrica que decide se ele presta.
+
+### `leafPaths`: uma fonte para as DUAS metades
+
+O vocabulário sai de `leafPaths` (`@plughub/schemas`, 3 testes) e chega pelo campo `leaves` do
+`dialog_tree_level`. A mesma lista alimenta o prompt e a conferência — de propósito. Fontes
+separadas fariam o modelo receber opções que a plataforma depois recusaria, e o escape contaria alto
+**por defeito nosso**, não por limitação do modelo. Um dos testes exige exatamente isso: toda folha
+listada resolve pela mesma projeção.
+
+Pasta não entra na lista: `sac` fora, `sac.info_plano` dentro. Uma pasta ali faria o LLM
+"aterrissar" onde não há serviço, e o roteamento receberia um caminho intermediário.
+
+### O que agora dá para perguntar, e antes não dava
+
+Os dois pools emitem `{pool}.navegacao.destino.{caminho}` — verificado no slot `current` dos dois.
+A mesma lente de árvore, com `pool_id` como filtro, responde: *quantos o LLM classificou, quantos
+escapou, e para onde cada um mandou* — contra o determinístico, que não escapa mas exige dois
+turnos. **Ainda não há série** (o pool nasceu agora); o que fechou é a pergunta de mecanismo.
+
+Ramo **J** do gate: exige `reason` → conferência → veredicto sobre `found`/`is_leaf` → escape que
+ALCANÇA o evento, e as duas séries idênticas. Duas mutações: pular a conferência ⇒ VERMELHO
+(*"o prompt virou a única guarda"*); medir noutra unidade ⇒ VERMELHO (*"incomparáveis"*).
+
+Gate em **10 ramos**. `demo_llm_ia` no seletor do webchat de teste, ao lado do `demo_ia`.
+
 ## 2026-09-06 (10) — F2/ORQ-02: o canal desenha a árvore, ou diz por que não
 
 A linha do ledger dizia *"nenhum canal de cliente desenha árvore"*. É verdade — e não é o dano. O
