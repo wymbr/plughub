@@ -3,6 +3,19 @@
 
 ## DOC-01 — higiene do `CLAUDE.md`: onde estão as 2 204 linhas, e o que NÃO deve sair *(medido 2026-09-05)*
 
+> ✅ **EXECUTADO no mesmo dia — `2 203 → 1 883`. Ver `CHANGELOG.md` § 2026-09-05 (28) e `done.md`
+> `DOC-01`.** Esta seção fica como **medição datada**, não como pendência: reescrevê-la corromperia
+> a evidência que orientou a execução. Dois pontos em que a execução ACRESCENTOU à medição:
+> **(1)** *Sentiment Tracking* e *Operational Visibility* não tinham destino — o `CLAUDE.md` era a
+> única casa do mecanismo, e resumir sem criar `docs/guias/sentiment-tracking.md` e
+> `docs/arcos/operational-visibility.md` teria apagado, não movido; **(2)** dos 13 itens do
+> `Pending`, **6 não estavam no ledger** e viraram 15 ids novos em `pending.md` — a conferência
+> item-a-item antes de remover não era formalidade.
+>
+> **O prognóstico desta seção se confirmou:** depois dos ~480 movidos, nenhuma seção restante
+> qualifica pela regra, e os 800 só se alcançam cortando `Postura de Engenharia` e `Security`. O
+> alvo ficou **em revisão**, com a medição escrita ao lado no próprio `CLAUDE.md`.
+
 Medição feita para uma sessão dedicada de higiene não a re-derivar. Alvo declarado pelo próprio
 arquivo: **≤ 800 linhas**. Estado: **2 204**.
 

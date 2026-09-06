@@ -591,3 +591,21 @@ ficou no bloco. Falseado por mutação.
 - Conference specialist (runner) rodando dentro de sessão-filho de `collect` no caminho cross-canal (§3.4) —
   reusa o ponto a validar já registrado em `delegate-workflow-io.md` (specialist em sessão sem cliente vivo).
 - Retorno cru chegando ao chamador via `workflow_resume` com o `payload` (answers/captures) intacto.
+
+---
+
+## Invariantes movidos do `CLAUDE.md` (DOC-01, 2026-09-05)
+
+A seção *Dialog Primitive* do `CLAUDE.md` passara de 76 linhas e foi reduzida a resumo + link.
+Quase todo o corpo já vivia aqui; **estas duas linhas não viviam**, e por isso viajaram em vez de
+serem apagadas.
+
+- **Delegate é de nível ÚNICO.** O runner-especialista é invocado por `delegate()`; aninhar um
+  delegate dentro do collector colide em `core.workflow.delegate_resume_token` — a chave é uma só
+  por sessão, então o segundo nível sobrescreveria o token do primeiro e o chamador de fora nunca
+  seria retomado.
+
+- **Invariante de build:** mexer no `MenuStepSchema` obriga a **rebuildar junto** todo serviço TS
+  que valida skills (`agent-registry`), o engine (`skill-flow-service`) e o `mcp-server`. Sem isso o
+  agent-registry rejeita o ref com **422** — o pacote `@plughub/schemas` é compilado dentro de cada
+  imagem, então uma imagem velha valida contra um contrato velho e a falha aparece longe da mudança.

@@ -54,7 +54,23 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 
 ## Saúde do CLAUDE.md — Regras de Manutenção
 
-> **Target: ≤ 800 linhas.** Quando ultrapassar, aplicar as regras abaixo.
+> **Target declarado: ≤ 800 linhas.** Quando ultrapassar, aplicar as regras abaixo.
+>
+> ⚠️ **Estado medido em 2026-09-05 (DOC-01), e o alvo está EM REVISÃO — decisão do dono pendente.**
+> A higiene daquele dia aplicou as regras abaixo até o fim: saíram as quatro seções de arco > 50
+> linhas (*Sentiment Tracking* · *Operational Visibility* · *Arc 7* · *Dialog Primitive*, cada uma
+> com resumo + destino criado no mesmo commit) e a seção *Pending*, que virara segunda casa do
+> ledger. Resultado: **2 203 → 1 865** pelos cinco movimentos (**1 883** contando esta nota, o indexamento dos dois novos docs e os
+> ponteiros consertados). Depois disso **nenhuma seção restante qualifica pela regra**:
+> as três maiores são *Security* (189), esta (180) e *Postura de Engenharia* (180), e as duas
+> primeiras carregam o **catálogo medido** — pela linha *"invariantes e regras"* da tabela abaixo,
+> elas PERTENCEM. As demais 50 seções já cabem no formato de resumo.
+>
+> Ou seja: os 800 só se alcançam cortando o catálogo, que é **otimizar a métrica contra o propósito**
+> — a mesma família do gate que fica verde por medir a pergunta ao lado. O candidato honesto é
+> **rever o alvo** (o número foi fixado antes de *Postura* e *Security* crescerem para carregar o
+> catálogo), não espremer o catálogo para caber nele. Enquanto a decisão não vem, o 800 fica escrito
+> **com esta medição ao lado**, para não virar promessa que o arquivo não cumpre.
 
 ### O que FICA no CLAUDE.md
 
@@ -68,7 +84,7 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 | Kafka topics | tabela de tópicos × producer × consumer |
 | Convenções de nomenclatura | padrões de ID |
 | Seções de arquitetura ativa | resumo de 15–20 linhas com link para `docs/arcos/` |
-| Pending genuíno | máx 50 linhas — apenas itens não implementados |
+| ~~Pending genuíno~~ | **NÃO fica.** Trabalho aberto mora em `pending.md`, sob o grupo da demanda — ver § *Pending — o ledger, não esta seção* |
 
 ### O que NÃO pertence ao CLAUDE.md
 
@@ -103,6 +119,7 @@ plughub/
       arc9-agent-groups.md    ← Arc 9 Agent Groups + Supervisor Scope
       arc10-journey.md        ← Arc 10 Journey multi-session
       instance-bootstrap.md   ← reconciliação, RegistrySyncer, hot-reload
+      operational-visibility.md ← snapshot de pool, ocupação derivada do semáforo, picos event-driven, rollup por tipo de licença (movido do CLAUDE.md em 2026-09-05)
       platform-ui.md          ← Frontend Architecture + Agent Assist UI
       ai-gateway.md           ← AI Gateway multi-account, copilot, stateless
       usage-metering.md       ← metering por dimensão, Redis, quota
@@ -116,6 +133,7 @@ plughub/
       customer-contact-history.md ← histórico de contatos do cliente (lista/transcrição/busca) — transversal
     guias/
       context-store.md        ← ContextStore, @ctx.*, segment-scoped
+      sentiment-tracking.md   ← cadeia inteira do sentimento: engine → gateway → ctx → Console (movido do CLAUDE.md em 2026-09-05)
       masked-input.md         ← Masked Input, begin_transaction
       mention-protocol.md     ← @mention protocol
       pool-hooks.md           ← Pool lifecycle hooks
@@ -179,7 +197,7 @@ plughub/
 1. **Feature pequena** (< 20 linhas): inline na seção H2 existente mais próxima.
 2. **Feature média** (20–50 linhas): subseção `###` dentro da seção H2 mais próxima.
 3. **Feature grande** (> 50 linhas): criar `docs/arcos/{nome}.md`; adicionar resumo de 15–20 linhas aqui.
-4. **Fase pendente concluída**: mover do `## Pending` para `CHANGELOG.md`; atualizar `TODO.md`; **nunca deixar ✅ aqui**.
+4. **Fase pendente concluída**: mover a linha de `pending.md` para `done.md` (o índice) e escrever o porquê no `CHANGELOG.md`; **nunca deixar ✅ aqui**.
 
 ### Regra de persistência de planejamento
 
@@ -798,118 +816,30 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 
 ## Sentiment Tracking
 
-> ✅ **A plataforma MEDE sentimento, e isso está provado de ponta a ponta (2026-08-24).**
-> Duas metades, dois gates: `probe_sentiment_producer.sh` (contrato → analisador → três emissores,
-> com **testemunha negativa**: chamada sem `customer_utterance` não pode escrever nada) e
-> `gate_sentiment_engine_half.sh` (contato REAL: referência resolvida pelo engine → skill-flow-service
-> → gateway → ctx + `sentiment_live`). Medição de referência: score `-0.50`, pool `sac_ia`.
->
-> ⚠️ **O bloqueio de credencial que dominava esta seção CAIU** — a chave do demo foi reposta e o
-> `/v1/health` responde 200/`ok`. O diagnóstico de 08-22 (*"124 `status_401`, todo step `reason` de
-> todo skill caindo no `on_failure`"*) está **encerrado**, mas a causa dele merece registro: o
-> `docker-compose.demo.yml` não tinha `env_file`, então o `.env.demo` **nunca era lido** e a chave
-> vinha exportada da shell de quem subiu a stack. Estado de shell não é entrada declarada.
->
-> **Contrato de 2026-08-23 — a plataforma passou a MEDIR.** O diagnóstico anterior desta
-> seção descrevia o defeito e apontava `/inference` como o caminho a resgatar. A medição refutou a
-> premissa: `/inference` isola a fala, mas entrega a `extract_context_from_response`
-> (`context.py:53-64`), que é **contagem de palavras-chave em português** — e a rota não tem chamador
-> algum. Os dois caminhos pareciam medir e nenhum media (`/v1/reason` lia `sentiment_score` do
-> `output_schema`, que nenhum skill declara ⇒ sempre `0.0`).
->
-> Desenho vigente, em três peças: **(1)** `ReasonStepSchema.customer_utterance` — referência
-> (`$.` / `@ctx.`, **nunca literal**) ao texto do cliente, resolvida pelo engine e enviada nomeada em
-> `ReasonRequest`; nomear é declarar ENTRADA, não pedir que o modelo dê a própria nota. **(2)**
-> `sentiment_analyzer.py` — chamada dedicada (haiku) fora do turno, alimentando os três emissores que
-> já existiam. **(3)** `sentiment_score: float | None`, onde **`None` = não medido** e o pipeline é
-> pulado; publicar `0.0` faria toda sessão parecer medida-e-neutra. `tenant_id` passou a viajar nos
-> dois chamadores (`engine-runner.ts`, `skill-flow-service`), injetado onde o tenant é conhecido — sem
-> ele as chaves nasciam sem prefixo. O analisador **recusa** tenant vazio.
->
-> **Declarado (2026-08-24):** `agente_fila_v1.responder_cliente` traz
-> `customer_utterance: "$.pipeline_state.ultima_mensagem"` — **o único** step `reason` sobre fala de
-> cliente no repositório (`skill_atendimento_sac_v1`, apesar da descrição *"via LLM"*, é todo
-> menu/choice/notify). Enquanto for o único, sentimento só existe para contato que passou pela FILA.
->
-> **Três defeitos que esta trilha revelou, e que não são de sentimento** (detalhe no `CHANGELOG.md`
-> de 2026-08-24) — todos da família *valor plausível*, cada um mascarado pelo anterior:
-> · a medição **nunca rodara**: o provider era buscado em `inference_engine.providers`, atributo
->   inexistente (é `_providers`), e o `getattr(..., {})` fazia defeito de fiação sair pela porta de
->   "ambiente sem chave". Hoje: `app.state.llm_providers` + `main.sentiment_provider()`, que separa
->   os dois motivos;
-> · **ordem dos emissores**: Kafka vinha antes das escritas locais e `producer.send` BLOQUEIA (não
->   levanta) com broker inalcançável — o score ficava ilegível por 40 s. Hoje: Redis primeiro, Kafka
->   por último sob `wait_for` de 5 s;
-> · `session:{id}:meta` é **String (JSON)**, e o ai-gateway a lia com `HGET` em duas cópias ⇒
->   `WRONGTYPE` ⇒ toda medição de contato real agregada sob `unknown`. Hoje: helper único
->   `sentiment_emitter.resolve_session_pool_id`, com quatro ramos de saída nomeados.
->
-> ✅ **MEDIR não é EXIBIR — a leitura foi consertada (2026-08-25), e o achado mudou o alvo.**
-> A passagem apontava `tools/supervisor.ts:118`; medindo, o cálculo tinha **duas implementações
-> independentes e idênticas**, e a que desenha a tela é a OUTRA — o endpoint HTTP
-> `GET /api/supervisor_state/:sessionId` (`server.ts`), que a Console consome. Consertar só a tool
-> teria deixado a barra dizendo "Neutral" com o commit no lugar. Hoje as duas chamam
-> **`lib/session-sentiment.ts`**, fonte única.
->
-> **Fonte canônica = ContextStore** (`{tenant}:ctx:{sid}` → `core.sentiment.current`), e isso é
-> medição, não gosto: todo caminho que produz score passa por `update_partial_params` →
-> `write_context_store_sentiment`, inclusive o auto-reporte do `output_schema`. O ctx é
-> **superconjunto estrito** de `partial_params`; ler as duas fontes seria redundante *e* perderia dado.
-> Lê-se sempre o hash **CRU**, nunca o `contextSnapshot` já filtrado por `applyContextMaskingDynamic`
-> — o filtro é por namespace de operador, configurável POR POOL, e um pool que estreitasse a lista
-> apagaria o sentimento em silêncio.
->
-> **`current: null` = NÃO MEDIDO**, e nenhuma superfície renderiza sem valor. O `?? 0` convertia
-> ausência num ponto legítimo da escala; pior, **desarmava a guarda que a UI já tinha** (`ActionBar`
-> só renderiza com valor não-nulo) antes que ela pudesse agir. *Um default no produtor derruba a
-> guarda do consumidor sem deixar rastro.* Idem `trend`, cujo default era `"stable"` — invenção da
-> mesma família.
->
-> **Quatro superfícies, três graus de proteção** — inventário que a passagem não tinha: `ActionBar` e
-> `ContactList` guardavam por `!== null` (desarmadas); `ChatArea` inventara `!== 0`, que protegia por
-> acidente **e escondia um `0.0` medido de verdade**; `EstadoTab` não tinha guarda nenhuma e
-> anunciava "0% neutral" em toda sessão. *(O `packages/agent-assist-ui/` renderizava a mesma tela e caiu no mesmo conserto — app legado,
-> **APOSENTADO em 2026-08-27**; a porta 5173 hoje serve só os ativos estáticos de `infra/demo/web/`.)*
->
-> Gate: `infra/test/gate_console_sentiment_source.sh` (re-executável, sem contato real; testemunha
-> negativa = ctx presente com outra tag e sentimento ausente ⇒ tem de vir `null`, nunca `0`).
->
-> ⚠️ **Sem histórico**: o ctx guarda só o valor corrente. `trajectory` é `[]` e `trend` é `null` —
-> `consolidated_turns` não serve de substituto (o `float(… or 0.0)` já achatou lá dentro, tornando um
-> `0.0` medido indistinguível de turno sem medição). O array `session:{id}:sentiment` documentado
-> abaixo **não tem produtor**; enquanto não tiver, gráfico e seta ficam ausentes em vez de fabricados.
->
-> ⚠️ **Dívida nomeada:** o `pool_id` do meta é o pool de **ENTRADA**, não o que atende — sentimento
-> medido pelo agente de fila agrega sob o pool onde o contato começou. É a fatia C de
-> `session:{id}:meta` (`entry_pool_id` × `pool_id`), ver `docs/guias/session-meta-ownership.md`.
->
-> Gates: `infra/test/probe_sentiment_producer.sh` (metade gateway) +
-> `infra/test/gate_sentiment_engine_half.sh` (metade engine, reprodução manual com contato que
-> ENFILEIRE). Detalhe em [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md) § Medição de
-> sentimento.
->
-> **A recusa deixou de ser invisível (2026-08-23).** O `/v1/health` do ai-gateway decidia
-> `anthropic: "ok"` pela PRESENÇA da string da chave — nada contatava o provedor —, então as 124
-> recusas conviveram com verde no `docker ps`. Agora o estado é medido: desfecho gravado no funil
-> único de erro + sonda de boot, `credentials` por conta, e **503 quando a chave está configurada e
-> é recusada** (ausente ≠ recusada: só a segunda reprova). `unknown` nunca vira `ok` e `rate_limit`
-> nunca vira `invalid`. Gate `infra/test/probe_llm_credential_health.sh`; detalhe em
-> [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md) § Health de credencial.
+**A plataforma MEDE sentimento, e está provado de ponta a ponta (2026-08-24).** Contrato:
+`reason.customer_utterance` declara uma REFERÊNCIA (`$.`/`@ctx.`, nunca literal) à fala do cliente;
+o engine resolve, o ai-gateway mede em chamada dedicada FORA do turno e alimenta três destinos —
+`{t}:ctx:{sid}` (`core.sentiment.current`), `{t}:pool:{p}:sentiment_live` e o tópico
+`sentiment.updated`. Gates: `probe_sentiment_producer.sh` · `gate_sentiment_engine_half.sh` ·
+`gate_console_sentiment_source.sh`.
 
-Score-only array in Redis during session. Labels calculated at read time using tenant-configurable ranges. Persisted to PostgreSQL (`sentiment_timeline JSONB`) on session close. Never published to canonical stream.
+- **`None` = NÃO MEDIDO, e nenhuma superfície renderiza sem valor.** `0.0` é ponto legítimo da escala;
+  um `?? 0` no produtor converte ausência em medição *e desarma a guarda do consumidor* sem rastro.
+  Idem `trend`, cujo default `"stable"` era invenção da mesma família.
+- **Fonte canônica = ContextStore, lida CRUA** — nunca o `contextSnapshot` já filtrado por
+  `applyContextMaskingDynamic`, cuja lista é por POOL e apagaria o sentimento em silêncio.
+- **A plataforma nunca CLASSIFICA** — emite score; a faixa é configurável por tenant e aplicada na
+  LEITURA (classificador canônico: `analytics-api/sessions.py`).
+- **Um cálculo, uma casa** (`lib/session-sentiment.ts`): eram duas implementações idênticas e só a
+  segunda — o endpoint HTTP, não a tool — alimentava a Console.
 
-```
-session:{id}:sentiment → [{ score: 0.40, timestamp: "..." }, ...]
-TTL: same as session TTL
-Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → frustrated | [-1.0,-0.6] → angry
-```
+⚠️ **Sem histórico por sessão:** `session:{id}:sentiment` **não tem produtor**, logo `trajectory` é
+`[]` e `trend` é `null` — ausentes por decisão, nunca fabricados.
+⚠️ **Dívida:** o `pool_id` do meta é o de ENTRADA, não o que atende (fatia C de `session-meta-ownership`).
 
-> ⚠️ **`session:{id}:sentiment` NÃO TEM PRODUTOR** (medido 2026-08-25: nenhum componente escreve a
-> chave). É promessa sem produtor — a mesma família de `participation_intervals`, cujo DDL *afirmava
-> em prosa* a ordenação que ninguém impunha. O emitter grava três destinos e nenhum é este:
-> `{tenant}:ctx:{sid}` (valor corrente, sobrescrito), `{tenant}:pool:{p}:sentiment_live` (agregado por
-> pool) e o tópico `sentiment.updated`. Consequência viva: **não existe histórico por sessão**, logo
-> trajetória e tendência são ausentes por decisão, não fabricadas. Ver `TODO.md`.
+→ See [`docs/guias/sentiment-tracking.md`](docs/guias/sentiment-tracking.md) (cadeia inteira, catálogo
+dos defeitos medidos, as quatro superfícies), [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md)
+§ Medição de sentimento.
 
 ## Skill Flow — Fourteen Step Types
 
@@ -1185,109 +1115,33 @@ plughub-sdk proxy              # starts proxy sidecar on localhost:7422
 
 ## Operational Visibility — Section 3.3c
 
-Routing Engine writes pool snapshot to Redis: `{tenant_id}:pool:{pool_id}:snapshot`
-(**TTL 3600s**) — `{ pool_id, available, busy, busy_elsewhere, untagged, paused_capacity,
-total_instances, queue_length, sla_target_ms, channel_types, model, updated_at }`.
+Routing Engine escreve `{tenant_id}:pool:{pool_id}:snapshot` (TTL 3600s) — `{ pool_id, available,
+busy, busy_elsewhere, untagged, paused_capacity, total_instances, queue_length, sla_target_ms,
+channel_types, model, updated_at }`.
 
-**A PAUSA é fato da ARITMÉTICA, não só do roteamento** (2026-08-21). O recompute lê `status` da
-instância (`_INACTIVE_STATES` = `paused|logged_out|logout|draining`, **fonte única** — o trecho Lua é
-gerado do conjunto Python). Instância inativa contribui **capacidade zero** e mantém a ocupação:
-pausar **não** interrompe a sessão em curso, e o que sai de circulação são as vagas **livres** —
-`paused_capacity = Σ max(0, max_concurrent − ocupação)` **por instância**. Com `max_concurrent=3` e 1
-sessão viva, saem **2**, não 3. **INVARIANTE: a linha FECHA** —
-`total_instances = busy + busy_elsewhere + paused_capacity + available` (salvo sobre-alocação, em que
-`available` clampa em zero). `paused_capacity` é obrigatório na linha pelo mesmo motivo de
-`busy_elsewhere`: sem ele `available < total − busy` fica inexplicável e alguém reverte para o modelo
-sem pausa. **A pausa NÃO limpa o `busy_set`** (só o logout limpa) — limpar zeraria o `busy` com sessão
-em andamento e deflacionaria o `busy_elsewhere` dos pools irmãos do mesmo recurso. Gate:
-`infra/test/gate_pause_capacity.sh`.
+- **Ocupação é DERIVADA do semáforo do RECURSO, nunca de um contador.** `{t}:pool:{p}:active_count`
+  foi removido: contava por POOL uma capacidade que é do RECURSO (1 humano de 3 vagas em 3 pools dava
+  soma 6 para uma verdade de 2). `current_sessions` não foi promovido a fonte — é da mesma família.
+- **A LINHA FECHA:** `total_instances = busy + busy_elsewhere + paused_capacity + available`. Os dois
+  do meio são obrigatórios; sem eles a conta não fecha e alguém reverte para o modelo sem pausa e sem
+  capacidade compartilhada.
+- **Pausa é fato da ARITMÉTICA** — instância inativa contribui capacidade zero e MANTÉM a ocupação; o
+  que sai de circulação são as vagas LIVRES. A pausa não limpa o `busy_set` (só o logout limpa).
+- **`Σ available(pool)` NÃO é somável**, e não é corrigível na linha do pool. O rollup
+  `{t}:capacity:snapshot` agrega instâncias DISTINTAS **por TIPO de licença** — humano e IA são moedas
+  não-fungíveis, logo não existe `available` escalar no topo. `by_channel` é PROJEÇÃO, não partição.
+- **Pico é EVENT-DRIVEN, gravado na TRANSIÇÃO** (`record_pool_peak`, três chamadores e nenhum a mais).
+  O bump NUNCA mora dentro de `write_pool_snapshot` — lá volta a ser amostragem, sem ficar vermelho.
+- **Contador só existe porque é CONFERIDO** (`reconcile_tenant_occupancy`, 1×/min, loga o drift) e
+  **não clampa negativo**: total impossível é a única evidência de caminho de vaga fora dos ganchos.
+- **`untagged` denuncia escritor de ocupante fora do `claim_instance`** — deve ir a zero em ≤24 h.
+- **`pool_status_get` devolve `available: null` sem snapshot**, nunca o `SCARD` de pertencimento, que
+  conta instância lotada como disponível num tool que decide oferta de canal AO CLIENTE.
 
-**A ocupação é DERIVADA do semáforo do RECURSO, nunca de um contador** (fatia 2 da capacidade
-compartilhada, 2026-08-02). Um recompute em Lua (`_RECOMPUTE_POOL_OCCUPANCY_LUA`) sobre
-`ready_set ∪ busy_set` do pool:
+Três MCP tools (grupo `operational`): `queue_context_get`, `pool_status_get`, `system_availability_check`.
 
-```
-total_capacity = Σ max_concurrent(i)                    available      = max(0, total_capacity − used_global)
-used_global    = Σ SCARD({t}:instance:{i}:sessions)     busy           = used_here
-used_here      = Σ #{ m : occupant_pool(m) = P }        busy_elsewhere = used_global − used_here
-```
-
-`{t}:pool:{p}:active_count` foi **removido** (contava por POOL uma capacidade que é do RECURSO
-— 1 humano de 3 vagas em 3 pools dava três linhas `available 3`, soma 6, verdade 2), e com ele o
-INCR/DECR e o patch `available += 1` (com o teto/chão que o remendo exigia). `current_sessions`
-**não** foi promovido a fonte: é da mesma família, e trocar um contador por outro só muda qual
-mente depois. **`busy_elsewhere` é obrigatório na linha** — sem ele `available = total − busy` não
-fecha e o modelo compartilhado parece bug. **`untagged` denuncia escritor de ocupante fora do
-`claim_instance`**: deve ir a zero em ≤24 h (TTL do SET); persistente é bug, não ruído.
-
-Gatilhos: `route()` (pool roteado) + **fan-out sobre `pools(instance)`** em `mark_busy`,
-`remove_conversation`, `release_session_from_pool` e — desde a **F3a** (2026-08-02) —
-`work_task_release`/`work_task_expire` (`refresh_snapshots_for_instance`; só reescreve
-pool que já tem snapshot — inventar `sla_target_ms`/`channel_types` seria publicar config falsa).
-`work_task_claim` entra de carona no `mark_busy`. O bootstrap (`instance_bootstrap._refresh_pool_snapshots`, NX, TTL 60 s) é
-uma segunda implementação: publica `model: "bootstrap_placeholder"` com `available`/`total_instances`
-derivados do SCARD e **omite `busy`/`busy_elsewhere`/`untagged`** — ausência é honesta, zero não
-seria.
-
-**Defeito C — `Σ available(pool)` conta o mesmo recurso uma vez por pool** e **não é corrigível na
-linha do pool**: a linha está certa (aquele pool alcança mesmo N vagas); somá-la é que não pode, e a
-informação de sobreposição não está lá. Segunda superfície, **F4a ✅ 2026-08-02**: rollup
-`{t}:capacity:snapshot` (`compute_tenant_capacity`, throttle 5 s, TTL 1 h) agregando `max(0,
-max_concurrent − SCARD)` sobre instâncias **DISTINTAS**, **por TIPO de licença** — humano e IA são
-moedas não-fungíveis, então **não existe `available` escalar no topo** (somá-las seria a falácia de
-aditividade um nível acima). Tipo vem de `Pool.agent_kind` (autoridade canônica, nunca de
-`source`/`agent_type_id`); pool sem `agent_kind` ou instância em pools de tipos DIFERENTES cai no
-balde **`unknown`**, publicado como tipo próprio e logado — dobrar em `human` seria escolher a moeda
-cara em silêncio. `pools_available` sobrevive como contagem aditiva ("há por onde entrar?"), mas
-chaveada por **(tipo, canal)**: contá-la só por canal fazia `human/whatsapp` publicar 19 num tenant
-com 2 pools humanos. **`by_channel` é PROJEÇÃO, não partição** — instância que serve 2 canais conta
-nos dois, então `Σ by_channel` excede o total do tipo (628 p/ 353 instâncias no demo); não existe
-soma válida entre canais. Gatilhos: fan-out (`refresh_snapshots_for_instance`) + flusher (cobre
-tenant ocioso). `system_availability_check` devolve `available_by_kind` do rollup; rollup ausente →
-`null` + `capacity_unknown`, **nunca** voltando a somar as linhas (a soma é o defeito, não o fallback
-dele). **F4b ✅:** `/v1/operational/pools` repassa em `summary.capacity` e `MonitorTab`/`PoolsPage`
-mostram um cartão por tipo. **Escopo (`accessible_pools`) exige RECOMPUTE, não recorte** — a dedução
-não projeta sobre subconjunto: `compute_tenant_capacity(only_pools=…)` via `GET /v1/capacity?pools=`
-(porta 3550), chamado pelo agent-registry com cache 5 s. Recurso logado dentro E fora do domínio
-conta INTEIRO (escopo = "quanto os MEUS pools alcançam"); `only_pools=[]` ≠ `None`.
-**F4c ✅:** na série `pool_occupancy_peaks`, `__total__.provisioned_capacity` passou à capacidade
-deduplicada e entraram linhas `__capacity_{kind}__` (a linha do pool **não** mudou — está certa e é
-não-aditiva). Janela de arranque (1–2 min pós-restart, sem rollup) publica o `Σ` inflado com log
-**e marcador na própria série**: minuto sem linhas `__capacity_*` ⇒ `__total__` não confiável.
-Ocupação por tipo segue AMOSTRADA (`max` de somas — P2).
-
-**F5b ✅ 2026-08-02:** o *live fallback* de `pool_status_get` devolvia `SCARD(pool:instances)` —
-PERTENCIMENTO, não capacidade (conta instância lotada como disponível, ignora vaga gasta em pool
-irmão, não filtra pausa/wrap-up), num tool que o Skill Flow usa para decidir oferta de canal **ao
-cliente**. Agora devolve `available: null`, `status: "unknown"` e o motivo; a fila segue respondida
-(é fato do pool). **Mudança de contrato**: fluxo que compare `available` numericamente recebe `null`
-no caso sem snapshot.
-
-**Pico de ocupação é EVENT-DRIVEN, não amostrado** (P1, 2026-08-02). Pico é o máximo de uma função
-escada: qualquer intervalo de amostra pode cair inteiro entre duas subidas, e encurtar o intervalo
-só estreita a classe de falha. O valor é gravado na TRANSIÇÃO — watermark `{t}:pool:{p}:peak:{minuto}`
-(+ `:peakcap:` com a capacidade **do instante do pico**, TTL 2 h), por `record_pool_peak`, com três
-chamadores e nenhum a mais: **(1) alocação** (`mark_busy`, sobre o `used_here` que o recompute já
-devolveu — único que faz o pico SUBIR), **(2) virada do bucket** no flusher (carga carregada:
-`max(novo) := ocupação corrente`), **(3) liberação** (`release_instance`, com o valor de ANTES — o
-mesmo seed da virada, disparado por evento, para o pico que sobe e desce entre duas passadas do
-flusher). **INVARIANTE: o bump NUNCA mora dentro de `write_pool_snapshot`** — lá ele faria a F3a
-bumpar em liberações e o pico voltaria a ser *amostrado nos instantes de escrita de snapshot*, sem
-nada ficar vermelho; `write_pool_snapshot` apenas **devolve** o recompute. `_occupancy_sampler` virou
-**flusher** (mesmo tópico `pool.occupancy`, mesma tabela `pool_occupancy_peaks`, mesmo endpoint,
-mesma UI); segue amostrando só os agregados de admissão (item 7b).
-
-**P2 ✅ — o `__total__` do tenant também é event-driven.** Não é derivável dos watermarks por pool
-(`max` de SOMAS ≠ soma de `max`: quatro pools com pico 1 no mesmo minuto e total real 2). Fonte =
-ZSET `{t}:occupancy` (`instance → ocupação`, `ZREM` em zero ⇒ cardinalidade O(ocupadas)); atalho O(1)
-= contador `{t}:occupancy:total`, ambos escritos num Lua que tira o delta de `ZSCORE` antes/depois.
-Ganchos DENTRO de `claim_instance`/`release_instance`/`swap_to_hold` (nunca nos call sites), FORA do
-Lua da vaga (que é single-key/cluster-safe por decisão). **INVARIANTE: o contador só existe porque é
-CONFERIDO** — `reconcile_tenant_occupancy` roda 1×/min no flusher, corrige para a fonte e LOGA o
-drift; sem ela este contador é o `active_count` que o arco removeu, e deve sair junto. Não clampa
-negativo: total impossível é a única evidência de caminho de vaga fora dos ganchos. **Descontinuidade na série:**
-a fonte mudou de `active_count` (derivava para cima) para `used_here`, e agora o método mudou —
-marcar a data no eixo se a série virar base de dimensionamento.
+→ See [`docs/arcos/operational-visibility.md`](docs/arcos/operational-visibility.md),
+[`docs/product/shared-capacity-pool-as-tag-design.md`](docs/product/shared-capacity-pool-as-tag-design.md)
 
 ## Admissão de sessão — UM gate, na moeda certa
 
@@ -1638,86 +1492,28 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 ## Arc 7 — Auth, RBAC + ABAC, Performance Routing
 
-**auth-api** (port 3200): users + sessions in PostgreSQL schema `auth`. JWT HS256 TTL 1h; refresh token rotation (43-char opaque, SHA-256 stored). Silent re-auth from `localStorage('plughub_refresh_token')`. `accessible_pools[]` in JWT: empty = all pools; non-empty = row-level filter in analytics-api.
+**auth-api** (porta 3200): users + sessions no schema PG `auth`. JWT HS256 TTL 1h; refresh token opaco
+de 43 chars com rotação e SHA-256 no store. `accessible_pools[]` no JWT filtra LINHAS na analytics-api.
+**ABAC** (`module_config` no JWT, `auth.module_registry` semeado de `infra/modules.yaml`): 8 módulos,
+cada campo com `access: none|read_only|write_only|read_write` + `scope[]`;
+`PermissionChecker.can(module, field, minAccess?, scopeId?)`. **Roteamento por performance**:
+`performance_score = resolution_rate × (1 − escalation_rate)`, blending por `performance_score_weight`
+(default 0.0), Redis `{tenant}:agent_perf:{agent_type_id}` (TTL 6h), batch a cada 5 min.
 
-> ⚠️ **ADMINISTRAR uma pessoa nunca é o mesmo campo que CONCEDER capacidade a ela**
-> *(split de 2026-08-27)*. `config.users` era a chave-mestra do tenant: cobria criar/editar usuário
-> **e** conceder papel, módulo e escopo de pool, então toda fronteira ABAC do produto colapsava em
-> *"tem `config.users`"* — quem o recebesse para gerir a operação podia marcar qualquer módulo em si
-> mesmo, virar `admin`, ligar `unrestricted`, ou redefinir a senha do admin e entrar como ele.
-> Hoje: **`config.users`** = pessoa (criar, editar dados, ativar/desativar, grupos) · **`config.permissions`**
-> = capacidade (papéis, módulos/campos, escopo de pools).
->
-> **O portão tem QUATRO portas, e fechar só a primeira é decorativo:** a **rota** (`/permissions`,
-> `/templates`, `/modules`, `module-config`), o **corpo** (`roles`/`accessible_pools`
-> num `POST`/`PATCH /users`, cuja porta é `config.users`), o **alvo** (editar/apagar quem
-> *detém* `config.permissions`) e o **escopo** (`POST`/`DELETE /v1/groups/{id}/supervisors`).
->
-> *`unrestricted` saiu do conjunto do corpo em 2026-08-31 porque saiu do MODELO (AUT-15).
-> Campo que ninguém pode mandar não precisa de portão — mas precisa **não ser aceito em
-> silêncio**: pydantic ignora chave desconhecida, então a rota o recusa com 422 nomeando.*
->
-> A porta do alvo existe por causa da **senha**: resetá-la é campo de PESSOA e tem de seguir permitido, então quem
-> barra o *"reseto a senha do admin e entro como admin"* é a proteção do alvo, nunca a guarda de
-> corpo. A do escopo existe porque `resolve_supervisor_scope` deriva `supervised_user_ids` de quem a
-> pessoa SUPERVISIONA, e a evaluation-api consome esse claim para decidir de quem ela vê avaliações —
-> auto-nomear-se supervisor de um grupo é conceder. **Membership fica** em `config.users`: alargar por
-> ali só alcança grupo que já se supervisiona, que é a definição do escopo, não uma extensão dele.
->
-> **O discriminador do corpo é `model_fields_set`, não o valor** — omitir `roles` aceita o default;
-> enviá-lo é conceder, ainda que o valor coincida. Comparar valores deixaria passar *"mandei o mesmo
-> papel de novo"*, e a tela manda o formulário inteiro. **Corolário de modelagem:** um campo cujo
-> rótulo tem **"e"** provavelmente são dois fatos — e se um deles concede capacidade, é chave-mestra
-> até prova em contrário. Gate: `infra/test/probe_config_permissions_split.sh`.
+- **ADMINISTRAR uma pessoa nunca é o mesmo campo que CONCEDER capacidade a ela.** `config.users` =
+  pessoa (criar, editar, ativar, grupos); `config.permissions` = capacidade (papéis, módulos, escopo).
+  O portão tem **QUATRO portas** — rota, corpo, alvo e escopo — e fechar só a primeira é decorativo.
+  O discriminador do corpo é `model_fields_set`, não o valor: enviar o campo é conceder.
+- **Papel é PRESET DE NASCIMENTO, nunca portão.** `role_defaults` aplicado UMA vez, na criação; trocar
+  o papel depois não reescreve grants, e múltiplos papéis rendem o MAIOR acesso por campo.
+- **O menu tem um portão só, e ele é GRANT-FIRST.** Ausência de grants nunca é autorização — mesma
+  inversão de `accessible_pools`, pela mesma razão.
+- **ESCOPO e CAPACIDADE são eixos distintos**, e um claim de escopo nunca concede capacidade.
 
-> **PAPEL É PRESET DE NASCIMENTO, NUNCA PORTÃO** *(passo 3, 2026-08-27)*. Cada campo do
-> catálogo declara `role_defaults`; `create_user` aplica o preset dos papéis **uma vez**, na
-> criação. Antes disso o `INSERT` não gravava `module_config` e **todo usuário criado pela tela
-> nascia com config vazio** — dentro da degradação graciosa. O menu funcionava porque o buraco o
-> sustentava, e inverter a degradação sem preset faria cada usuário novo **nascer cego**.
->
-> Consequências aceitas: **editar o preset não muda quem já existe** (mesma semântica de
-> seed-if-absent do resto da casa — política se aplica por edição, não por decreto), e **trocar o
-> papel depois não reescreve grants** (rebaixar é ato deliberado; deduzi-lo da troca apagaria em
-> silêncio o que foi dado à mão). Múltiplos papéis rendem o **maior** acesso por campo, nunca a
-> interseção. Gate: `infra/test/probe_role_preset_on_create.sh`.
-
-> **O MENU TEM UM PORTÃO SÓ, E ELE É GRANT-FIRST** *(passo 5, 2026-08-27)*. Eram três
-> mecanismos empilhados, e dois invisíveis para quem lia só o `Sidebar.tsx`: o `roles:` por
-> item/grupo, o papel `admin`/`supervisor` liberando dentro de `passesAbacRule`, e — o mais
-> silencioso — **`module_config` vazio liberando**, de modo que bastava um usuário sem grants
-> para ver a plataforma inteira com o menu parecendo normal.
->
-> **Os `roles:` não eram "um passo depois": eram o que tornava o grant INERTE.** O cabeçalho do
-> grupo decidia antes da ABAC, então conceder o campo do filho não mudava o que a pessoa via —
-> medido, 11 grants do supervisor que ele não alcançava. Regra derivada: **dois portões sobre a
-> mesma decisão significam que o mais grosseiro é o único que vale**, e conceder no fino vira
-> no-op silencioso.
->
-> **O ramo saiu INTEIRO, não virou flag por regra.** Marcar cada regra com `strict: true`
-> deixaria a porta aberta para a próxima entrada escrita sem a flag; sem o ramo não há flag a
-> esquecer. Corolário: quando a correção pode ser *"marcar cada caso"* ou *"remover a alternativa"*,
-> a segunda é a que não depende de memória.
->
-> **Ausência de grants nunca é autorização** — mesma inversão de `accessible_pools`, pela mesma
-> razão. E **NÃO existe porta larga**, nem sequer o claim `unrestricted` — que desde
-> 2026-08-31 (AUT-12/13/15) não é cunhado, não é lido, e nem existe mais como campo:
->
-> > **ESCOPO e CAPACIDADE são eixos distintos, e um claim de escopo nunca concede capacidade**
-> > *(corrigido em 2026-08-27, no mesmo dia em que foi introduzido)*. `unrestricted` responde
-> > *"quais linhas/pools/pessoas eu alcanço"*; `module_config` responde *"quais funções eu posso
-> > exercer"*. A primeira versão do portão grant-first deixou o claim liberar o menu, e a
-> > evidência de que isso é defeito é concreta: `probe@` (unrestricted, **zero grants**) passou a
-> > ver `nav.audit` — o módulo de **Auditoria LGPD**, que existe para ser concedido
-> > individualmente ao DPO. A alternativa (manter o atalho e excluir os módulos de concessão
-> > individual) seria lista de exceção, que envelhece. Não falta a ninguém: o admin tem os grants.
->
-> Gate: `infra/test/probe_nav_grant_first.sh` (o S6 guarda exatamente essa regressão, que é a mais
-> tentadora do arco — o claim está à mão e parece atalho razoável até alguém contar o que abre).
-
-**ABAC** (`module_config` in JWT): `auth.module_registry` seeded from `infra/modules.yaml`. 8 modules: `evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`. Each field has `access: none|read_only|write_only|read_write` + `scope[]`. `PermissionChecker.can(module, field, minAccess?, scopeId?)`. Graceful degradation for legacy accounts without `module_config`.
-
-**Performance routing** (Arc 7d): `performance_score = resolution_rate × (1 − escalation_rate)`. Blending: `(1-w) × competency + w × performance`; `w = performance_score_weight` (default 0.0, env `PLUGHUB_PERFORMANCE_SCORE_WEIGHT`). Redis key `{tenant}:agent_perf:{agent_type_id}` (TTL 6h). Batch job in analytics-api runs every 5min, lookback 7 days, min 5 sessions for statistical significance.
+Dois corolários de MÉTODO que este arco produziu, e que ficam aqui por serem regra de implementação:
+**(1)** um campo cujo rótulo tem **"e"** provavelmente são dois fatos — e se um deles concede
+capacidade, é chave-mestra até prova em contrário; **(2)** quando a correção pode ser *"marcar cada
+caso"* ou *"remover a alternativa"*, a segunda é a que não depende de memória.
 
 → See [`docs/arcos/arc7-auth.md`](docs/arcos/arc7-auth.md)
 
@@ -1932,7 +1728,7 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 > fica vermelho. **Antes de qualquer trabalho de WebRTC, provisionar o SFU é pré-requisito, não detalhe
 > de deploy.**
 
-Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (ver § Pending).
+Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (`VOZ-02` em `pending.md`, bloqueado por `VOZ-01`).
 
 → See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
 
@@ -1962,77 +1758,34 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 ## Dialog Primitive — Scripted-Dialog Runner (survey + OTP)
 
-Primitivo de "interação scriptada delegada" compartilhado por survey e OTP
-(ADR `docs/adr/adr-otp-workflow-and-dialog-primitive.md`).
+Primitivo de "interação scriptada delegada" compartilhado por survey e OTP. **DialogForm**
+(`@plughub/schemas/dialog.ts`) é script **linear** de nodes `statement` (→ notify) e `question`
+(→ menu), versionado, com i18n embutido, `capture` e `validation`. Store canônico **`dialog-api`**
+(porta 3760); a tool MCP **`form_get`** resolve o publicado e normaliza num bloco `render`.
+Provisionamento por `infra/dialog/*.json`, **seed-if-absent** (`DIALOG_SEED_RECONCILE=true` inverte).
+Três superfícies, um conteúdo: chat (runner) · inline (hook) · página web `GET /survey/{token}`.
 
-**Quatro costuras inegociáveis:** conteúdo (DialogForm JSON) × controle (skill/workflow chamador) ×
-canal (runner) × **segredo** (`OtpService`). O código do OTP **nunca** passa pela mão de um
-agente/runner — gerar/enviar/verificar ficam no serviço confiável; o runner só carrega o que o
-**cliente** digitou. Vale igual para survey: resposta é do cliente, nunca fabricada.
+- **Quatro costuras inegociáveis:** conteúdo (JSON) × controle (skill) × canal (runner) × **segredo**
+  (`OtpService`). O código do OTP nunca passa pela mão de um agente ou runner.
+- **Sem `next` condicional — branching é do skill**, senão o JSON vira linguagem.
+- **DOIS veículos, e a divisão é mecânica:** runner-especialista via `delegate()` para quem PODE
+  suspender; hook de `on_contact_end` consome **INLINE** (`form_get` + menu dinâmico), porque delegar
+  suspende o hook, o bridge o trata como concluído e fecha o contato **antes de renderizar**.
+  Delegate é de **nível único** — aninhar colide em `core.workflow.delegate_resume_token`.
+- **`form` é um TIPO DE BLOCO, não um valor de `interaction`.** `interaction` responde *que forma tem
+  a RESPOSTA*; escolher `form` ali tornava quatro controles da pergunta inertes. Bloco é PROJEÇÃO
+  sobre o `nodes[]` plano — schema, runtime e dados idênticos. A **dimensão VENCE** o form, e **campo
+  NÃO é pergunta** (só a pergunta tem `retry`/`visibility`/`timeout_s`/`ask_when`).
+- **O editor JSON é escape hatch e o VEREDICTO é do SERVIDOR** (`POST /api/dialog/preview`, mesma
+  `buildRender`/`validateDialogForm` do `form_get`). Verificador fora do ar ⇒ *"não verificado"*,
+  nunca verde. **Aplicar não grava** — Salvar/Publicar segue o caminho único.
+- **Invariante de build:** mexer no `MenuStepSchema` obriga a rebuildar `agent-registry`,
+  `skill-flow-service` e `mcp-server` juntos, senão o registry rejeita o ref com 422.
 
-**DialogForm** (`@plughub/schemas/dialog.ts`): script **linear** de nodes `statement` (→ notify) e
-`question` (→ menu), versionado (draft/published), i18n embutido, `capture` (binding de métrica) e
-`validation` (formato). **Sem `next` condicional — branching é do skill, nunca no JSON**, senão vira
-linguagem em JSON. Store canônico **`dialog-api`** (porta 3760); a tool MCP **`form_get`** resolve o
-form publicado e normaliza num bloco `render` single-turn. **Contrato uniforme:** o runner devolve
-`payload = { value: <escalar> }` e o domínio faz verify/record — não unificar, vira `if` gigante.
-
-⚠️ **DOIS veículos, e a divisão é mecânica, não estética.** O runner-especialista (via `delegate()`)
-serve chamadores que **podem suspender**. **Hooks de `on_contact_end` NÃO podem delegar** — delegar
-suspende o hook agent, o bridge trata `suspended` como hook concluído e **fecha o contato antes de
-renderizar**; por isso o NPS ativo consome o primitivo **INLINE** (`form_get` + menu dinâmico). Os
-dois compartilham `DialogForm` + `form_get` + menu dinâmico; só divergem em suspender-ou-não.
-Delegate é de **nível único** — aninhar no collector colide em `core.workflow.delegate_resume_token`.
-
-**Três superfícies, um conteúdo:** chat (runner) · inline (hook) · página web pública
-`GET /survey/{token}`. Entrega real do link (SMS/e-mail) é trilha à parte, ainda não construída.
-
-**Invariante de build:** mexer no `MenuStepSchema` obriga a **rebuildar junto** todo serviço TS que
-valida skills (`agent-registry`), o engine (`skill-flow-service`) e o `mcp-server` — senão o
-agent-registry rejeita o ref com 422.
-
-**Provisionamento:** `infra/dialog/*.json` aplicado no boot pelo `dialog-seed`, via API oficial e
-**seed-if-absent**. Editar um JSON onde o form já está publicado é **no-op** — mesma pegadinha do
-YAML de skill (`DIALOG_SEED_RECONCILE=true` inverte).
-
-**`form` é um TIPO DE BLOCO, não um valor do seletor de interação** *(2026-09-05)*. `interaction`
-responde *que forma tem a RESPOSTA*, e os quatro valores que sobraram (`text`/`button`/`list`/
-`checklist`) dizem todos a mesma categoria — **um escalar por turno**. `form` era o quinto, e
-escolhê-lo mudava o significado do painel inteiro: quatro controles da pergunta (`options`,
-`validation` escalar, `retry`, `masked` do nó) viravam inertes, porque no ramo `form` o runtime lê os
-equivalentes **por campo**. Como bloco (ao lado de Diálogo/CSAT/NPS), esse estado **deixa de existir**
-em vez de ser escondido — e custa **nada** no modelo: bloco é PROJEÇÃO sobre o `nodes[]` plano, então
-schema, runtime e dados seguem idênticos; o nó continua uma pergunta com `interaction: "form"`.
-⚠️ **A dimensão VENCE** o form: pergunta com `capture.dimension_id` é do instrumento (rende UM
-número), e deixar o form ganhar arrancaria a pergunta da nota.
-⚠️ **Campo NÃO é pergunta** — medido: só a pergunta tem `retry`/`visibility`/`timeout_s`/`ask_when`,
-só o campo tem `required`/`value`. Reusar o editor de pergunta mostraria quatro controles inertes e
-esconderia dois reais; por isso `FormBlockEditor` tem editor de campo próprio, com a regra D8
-(`masked` deriva `format`) numa casa só (`d8Verdict`). Gate: ramo E de
-`gate_dialog_capture_roundtrip.sh` (round-trip da projeção sobre a forma REAL publicada).
-
-**O editor JSON continua, como escape hatch — e o VEREDICTO é do servidor** *(2026-09-04)*. Ele
-deixou de ser a autoria de `fields[]` e ficou com o que widget nenhum cobre: **importar/exportar** (8
-das 12 formas semeadas não têm pergunta `form` e ainda assim se beneficiam), o **dry-run** e o
-**preview do `render`**. O `DialogJsonPanel` edita o documento inteiro — por isso mora na linha de
-ações do DOCUMENTO, nunca no cabeçalho de `Blocks`, onde afirmaria pela posição um escopo menor do
-que tem. Aplicar **não grava**: Salvar/Publicar continua o caminho único.
-`POST /api/dialog/preview` (mcp-server) devolve `{valid, errors[], render}` rodando a **mesma**
-`buildRender`/`validateDialogForm` do `form_get` — que por isso mudaram para `@plughub/schemas`.
-O platform-ui **não importa `@plughub/schemas`** (sem workspaces, risco de dual-instance de Zod),
-então checar no browser seria a segunda casa da mesma regra — mesma D2 do
-`adr-skill-flow-editor-validation`. Degradação ALTA: verificador fora do ar ⇒ *"não verificado"*,
-**nunca** verde. ⚠️ Ele **não cobre** o conflito `format`×`masked` (§D8), que precisa do catálogo de
-formatos e segue no publish da dialog-api — e a tela **diz** isso.
-⚠️ O preview mostra o bloco **`render`**, nunca uma maquete de canal: a mesma forma já é desenhada
-por três superfícies que divergem, e a quarta seria aquela em que o autor confia.
-
-**Pendente (Fatia 2):** `channel_policy: elect`; timeout dinâmico do runner;
-entrega real do link web.
+**Pendente (Fatia 2):** `channel_policy: elect`; timeout dinâmico do runner; entrega real do link web.
 
 → See [`docs/product/dialog-primitive-and-runner-design.md`](docs/product/dialog-primitive-and-runner-design.md),
-[`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md).
-História (editor, loop, retry, multi-locale, datas) no `CHANGELOG.md`.
+[`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md)
 
 ---
 
@@ -2107,97 +1860,24 @@ História fase-a-fase, gates e datas no `CHANGELOG.md`.
 
 ---
 
-## Pending (Next Iteration)
+## Pending — o ledger, não esta seção
 
-> **Só itens NÃO implementados.** Arco concluído sai daqui para o `CHANGELOG.md` — item pronto dentro
-> de uma seção chamada *Pending* volta a ser triado como trabalho em aberto, que é o custo real de
-> deixá-lo. Detalhe, fases e evidência por item vivem no `TODO.md` e nos `docs/`; aqui fica **o que
-> está aberto e por que importa**.
+> **Esta seção foi ESVAZIADA em 2026-09-05 (DOC-01), e não deve renascer.** Ela nasceu antes do ledger
+> `pending.md`/`done.md` (2026-08-31) e, desde então, era uma segunda casa afirmando o que está aberto
+> — exatamente o defeito que o ledger existe para fechar. Duas casas para o mesmo fato não têm dois
+> valores: têm o da casa que ninguém confere. Já custou uma vez, aqui: seis itens de Customer History
+> listados como abertos por **seis semanas** depois de fechados, com o `TODO.md` dizendo o certo o
+> tempo todo — e a casa errada era a que o índice lia.
 >
-> **Os baldes da triagem de 2026-08-17 foram REMOVIDOS em 2026-08-31** — a direção que os ancorava
-> caiu em 2026-08-18 ([`n8n-arco-abortado-2026-08-18.md`](docs/product/n8n-arco-abortado-2026-08-18.md)),
-> e por treze dias eles custaram contexto em toda sessão para dizer que não valiam. A evidência por
-> item da triagem continua válida; os baldes e as âncoras de fase, não. **No lugar do alvo:** A2A
-> server binding e editor gráfico próprio alavancado por *execução observável* — a direção
-> *"config + interpretador genérico"* sobrevive inteira e **nunca dependeu do n8n**.
-
-### Arc 15 — WebRTC
-**Provisionar o SFU** é pré-requisito, não detalhe de deploy: não há LiveKit em compose algum, nem env
-`LIVEKIT_*`, nem manifesto k8s, nem o SDK como dependência — o canal roda inteiro em `_dev_mode`, que
-devolve token bem-formado e falso. Bloqueia qualquer medição de WebRTC e a decisão do bridge
-PSTN→WebRTC via SIP Ingress.
-
-### Usage Metering — adaptadores de canal
-`whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages`: as funções existem em
-`usage_emitter.py`, os adaptadores não as chamam. *(Separado: `llm_tokens_*` não emitido no
-`/v1/reason` é **defeito**, não item de direção.)*
-
-### Pricing — integração metering × pricing
-Módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
-
-### Audit LGPD — Fases 2–5
-`original_content` desmascarado (exige endpoint batch em Core) · logs `user_access` · pipeline
-SAR/erasure · `config_snapshot` para o DPO. Pendentes por obrigação legal, razão própria e
-independente de qualquer direção de produto.
-
-### Quality Ingest — concerns abertos
-(a) `ReplayContext` entrega `session_meta`/`participants`/`sentiment` em default para importados;
-(b) correlação por-requisição: `pool_id` degrada se um contato vier partido entre POSTs.
-
-### Isolamento do substrato por `origin` — Fase 2
-Partição ClickHouse `PARTITION BY (…, origin)` + `pool.origin_class`. É governança/lifecycle, não
-correção — **adiada por decisão**, aguardando gatilho próprio: importação externa real com obrigação
-de retenção/erasure (`DROP PARTITION`).
-
-### Business in Any Media — processo channel-abstract + comércio
-**Fica:** resolvedor de identidade Fase C (`external_refs` + merge de clientes), gate de
-identificação, commerce-cards com checkout mascarado e repasse ao PSP, novas `ChannelCapability`.
-**A rejulgar (tarefa B1 do `TODO.md`):** o nível (a) *"fluxo negocial channel-abstract"*, o contrato
-delegate-por-pool e o intake-flow — cortados com a razão *"vira template n8n"*, fundamento que caiu.
-O critério agora é *quanto disso vira config + interpretador genérico*.
-
-### Journey — modelo de 3 níveis
-Abertos: cache `sessions.journey_id` não refrescado no merge (**otimização adiada por decisão**;
-leituras vão por union-find) · guard de rota ABAC em `analise/*` (dívida app-wide de segurança) ·
-exibição do sinal N3 no drill da própria Vista Processos.
-→ See [`docs/product/journey-retorno-modelo-3-niveis-design.md`](docs/product/journey-retorno-modelo-3-niveis-design.md),
-[`docs/product/journey-3-niveis-implementation-spec.md`](docs/product/journey-3-niveis-implementation-spec.md). Diagrama: `docs/product/journey-3-cenarios-unionfind.svg`.
-
-### Fila de trabalho humano — aprovação R1
-O pull genérico e o renderer genérico de collect-form (R0) estão entregues, e o wrap-up destacado
-também. Aberto: **R1** — anexos, masking e ABAC completos na aprovação. Follow-up medido: o ingress
-de resume aplica `approvals.decide` a **qualquer** resume com JWT; parametrizar por tipo de tarefa.
-
-### Detach de hooks / pull direcionado — dívida de verificação
-O arco A–F está completo, mas **duas lacunas são fato, não conflito**: a própria F4 declara que a
-**lease não foi medida** (não há reaper), e **não existe gate re-executável da Camada F** — ela foi
-validada por medição manual instrumentada. *Arco declarado completo sem gate versionado volta a ser
-lembrança, não verificação.*
-
-### Record/Replay Harness *(proposta)*
-Harness de gravação/replay em todas as costuras, para regressão determinística e **gate de
-promoção**. Falta captura full-fidelity MCP/AI Gateway, clock/seed injetável, gravação seletiva.
-
-### Customer Surveys — módulo de pesquisas
-**Fica:** S5/S8/S9–S11, store per-response e o **S7 (editor de DialogForm)**, que *ganha* importância
-com a reversão — o conteúdo conversacional segue autorado em casa e a guarda do `ask_when` (sem
-control-flow no form) segue load-bearing. **Resíduos do S1:** nenhum produtor de CES/PMF/FCR;
-`value_label` ignorado em `CustomerVoicePage.tsx:161`. **A decidir:** se o S2 (runner genérico) volta
-a ter dono próprio (tarefa C2); e o resíduo do `value_label` foi citado com **arquivo errado** na
-triagem, a remedir antes de entrar em plano (C4).
-
-### Outbound — refinamentos
-`responded` por-delivery (submit → `campaign_delivery_result`) · skill de processo que auto-alimenta
-a mailing no `complete` (hoje seed direto) · pertença à journey via `journey_merge` · pacing
-`look_ahead` para o discador de voz, que depende do plano de mídia.
-
-### Histórico de contatos do cliente / Cliente 360
-⚠️ **Corrigido em 2026-08-31 por validação contra o CHANGELOG.** Esta entrada listava H3, HJ,
-H4-geral, C1a, C1b e H5 como abertos; `CHANGELOG.md:17339` (2026-07-16) declara *"Fecha o Customer
-History no v1: H1 · H2 · H3 · HJ · H4-geral · C1a · C1b · H5"* — **os seis estavam fechados havia
-seis semanas**. O `TODO.md:6778` já dizia o certo; eram duas casas afirmando e a errada era a que
-o índice lia. Abertos de verdade, ambos por gatilho e não por esforço:
-- **busca full-text `GIN(tsvector)`** — a busca de mensagens usa substring no ClickHouse, suficiente
-  no volume atual; é **otimização, não correção**. Gatilho: latência/volume medidos.
-- **H4-survey** — origem+resultado do survey no briefing de retorno, **BLOQUEADO** porque o briefing
-  ainda não existe.
+> **A lista de trabalho aberto é [`pending.md`](pending.md); o índice do que fechou é
+> [`done.md`](done.md).** As regras vivem em § *Ledger de tarefas* acima; quem as impõe é
+> `infra/test/probe_task_ledger.sh`, não a boa vontade de quem edita. Raciocínio e medição por assunto
+> ficam no `TODO.md`; o porquê de cada entrega, no `CHANGELOG.md`.
+>
+> **Nada foi perdido na mudança, e isso foi CONFERIDO item a item antes de remover.** Dos itens que
+> esta seção carregava, sete já estavam no ledger (`VOZ-01/02` · `JRN-03` · `PUL-01/02` · `APR-01` ·
+> `SUR-01..06` · `IDN-01..05`); os demais **não estavam** e foram escritos lá no mesmo commit, sob
+> grupo próprio: `USG-01` · `PRC-01` · `AUD-01..04` · `QIN-01/02` · `QSI-01` · `RRH-01` ·
+> `OUT-01..04` · `CCH-01/02`, mais `JRN-04` (sinal N3 no drill), `AUT-37` (guard de rota ABAC em
+> `analise/*`, sob a demanda de ABAC e não sob a da Journey) e `APR-09` (o ingress de resume aplica
+> `approvals.decide` a qualquer resume com JWT).

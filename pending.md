@@ -111,6 +111,7 @@ v1 **entregue em 2026-07-17**. O que resta é segunda onda, não v1 inacabado.
 | APR-04 | A6 — notificações e SLA na inbox | `aberto` | idem |
 | APR-05 | A6 — rework rate (Bancada / Arc 6) | `aberto` | idem |
 | APR-06 | A6 — auto-aprovação (pool IA) | `aberto` | idem |
+| APR-09 | **O ingress de resume aplica `approvals.decide` a QUALQUER resume com JWT** — follow-up medido do R1; parametrizar por tipo de tarefa. Um portão que decide sobre a espécie errada de trabalho autoriza a certa pelo motivo errado | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
 | APR-07 | Promote real: `invoke` de deploy no `efetuar_promocao`, hoje `complete` | `adiado` — não-objetivo v1. Gatilho: promoção agendada precisar valer em produção | idem |
 
 ---
@@ -157,6 +158,8 @@ O arco ABAC TOTAL (8 passos) está em `done.md`. Aqui fica só o que não fechou
 | AUT-32 | **Coluna física `auth.users.unrestricted` sobrevive ao código.** O `DROP COLUMN` é irreversível e apagaria as 2 linhas que hoje a têm `true`; o precedente da casa é o oposto (`agent_group_members`/`agent_group_shifts`, 2026-07-02: *"podem existir fisicamente em bancos antigos — o código não mais as cria/lê/escreve"*). O `CREATE TABLE` deixou de criá-la e o `ALTER ... ADD COLUMN` saiu, então ela não renasce a cada boot. Fechar exige decidir se vale uma migração destrutiva por uma coluna inerte | `adiado` — gatilho: próxima migração destrutiva já planejada em `auth.users` | `CHANGELOG.md` § lápide do `unrestricted` |
 | AUT-36 | **`probe_report_row_scope.sh` reprova em `customers/360` (admin=21, escopado=21) e nao se sabe se e defeito ou artefato do dado.** Achado de passagem ao acrescentar a rota da arvore; **nao e regressao minha** (o diff e 51/0 e 184/0 — nenhuma linha existente tocada). O mecanismo de recorte EXISTE: `_fetch_customer_360` chama `_session_scope_clause(db, accessible_pools, alias='s')` (`reports_query.py:3637`), e o `CHANGELOG:6429` registra exatamente estes 21=21 como o vazamento que a AUT-01 fechou. ⚠️ **O ramo compara CONTAGENS, entao igualdade so prova ausencia de filtro se o dado puder diferir** — e o cliente e escolhido dinamicamente (o de mais sessoes): se todas as sessoes dele caem em pools que o principal escopado alcanca, 21=21 e o comportamento CERTO e o gate grita lobo. E a familia do *instrumento falseavel que mede a proposicao vizinha* (D14.1). **Discriminador que falta:** fixture com cliente cujas sessoes atravessem pool FORA do escopo — sem ela, nem o vermelho nem o verde deste ramo significam algo. **Gatilho:** antes de confiar neste ramo em qualquer arco de escopo | `aberto` | medido 2026-09-05, pre-existente ao commit da arvore |
 
+| AUT-37 | **Guard de rota ABAC em `analise/*`** — dívida app-wide de segurança, achada pelo arco da Journey e registrada sob a demanda de ABAC, não sob a dela. Rota de UI sem gate é o eixo mais grosseiro dos três censos: não há decisor para censo nenhum contar | `aberto` | `CLAUDE.md` § Pending (Journey), movido em 2026-09-05 |
+
 ⚠️ **Por que AUT-03 é `bloqueado` e não `aberto`.** O interruptor é único e os testes cobrem os
 dois estados, então virar é uma linha. O que não está pronto é a **cauda**: `resolve_scope` passa a
 devolver `[]`, e todo consumidor que trate lista vazia como "sem filtro" converte restrição em
@@ -191,6 +194,7 @@ Frente fechada (ver `done.md`); resta um item **adiado por decisão**.
 | id | tarefa | estado | evidência |
 |---|---|---|---|
 | JRN-03 | Refrescar o cache `sessions.journey_id` no merge | `adiado` por decisão — as leituras vão por union-find. Gatilho: custo de leitura medido | `CHANGELOG.md:17736` |
+| JRN-04 | **Exibição do sinal N3 no drill da própria Vista Processos** — o sinal é produzido e não aparece onde o operador o procuraria | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
 
 ---
 
@@ -309,12 +313,6 @@ seguem sem tarefa aberta neste ledger.)*
 | id | tarefa | status | referencia |
 |---|---|---|---|
 
-## `CLAUDE.md` — saude do arquivo de contexto
-
-| id | tarefa | status | referencia |
-|---|---|---|---|
-| DOC-01 | **Higiene do `CLAUDE.md`: 2 204 linhas contra o alvo declarado de 800.** Medicao pronta no `TODO.md` § DOC-01 — onde esta o peso (as 14 maiores secoes = 63% do arquivo), o que sai pelas regras do proprio arquivo (~480 linhas: `Pending` que hoje duplica o ledger, mais 4 secoes de arco > 50 linhas que pertencem a `docs/arcos/`), e ⚠️ **o que NAO deve sair**: `Postura de Engenharia` e `Security` carregam o CATALOGO MEDIDO, e corta-las para bater o numero e otimizar a metrica contra o proposito — se faltar depois dos 480, revise o ALVO. ⚠️ Refutacao ja paga: o indice de ADRs **nao** e a fatia grande (40 linhas, 1%) — parece por ter linhas longas. ⚠️ Sessao dedicada: o arquivo e carregado no boot de TODA sessao, entao quem tiver sessao viva relê ao retomar | `aberto` | medido 2026-09-05, `TODO.md` § DOC-01 |
-
 ## `docs/adr/adr-orchestrator-tree-navigation.md` — navegacao de orquestrador como arvore
 
 *(F0 — medicao — fechou em 2026-09-05 ao escrever o ADR; ver `done.md`.)*
@@ -380,6 +378,94 @@ REDESENHADA em 2026-09-05 — `form` e TIPO DE BLOCO, com widget por campo (ver 
 | DLG-15 | **A recusa alta em canal pobre (D11) nao tem casa ainda.** O `render` ja DECLARA `options_tree` (derivado da estrutura), e o Console desenha; falta quem RECUSE onde nao sabe desenhar. ⚠️ O lugar obvio nao serve: o `form_get` **nao conhece o canal**, e dar-lhe um parametro cruzaria a costura conteudo x canal. Quem conhece e o gateway — logo a recusa e do adapter, onde a renderizacao por canal ja mora por invariante. Antes de escrever politica, MEDIR: existe mecanismo de `ChannelCapability` para tipo de interacao, ou ele nasce aqui? Quais canais sabem desenhar arvore (web sim; WhatsApp `list` nao)? Achatar `Financeiro > Cobranca indevida` em 40 botoes e emulacao muda — a tela parece certa e a hierarquia que a serie do Arc 12 conta se perde. ⚠️ **DEIXOU DE SER PROSPECTIVO: reproduzido AO VIVO em 2026-09-05** (medicao da F6). O Console servido estava num build anterior a F3; o `form_get` entregou a subarvore com `options_tree: true` e a tela **ignorou** — desenhou so o nivel de cima e deixou submeter. O contato real gravou `retencao_humano.wrapup.motivo.tecnico` e `...servico.cadastro`, **duas PASTAS**, que e exatamente a emulacao muda descrita acima, agora com dado no ClickHouse. O agravante e a forma: o degrade nao veio de canal pobre, veio de **superficie DESATUALIZADA** — quem nao sabe desenhar arvore nem sempre se declara, entao a recusa nao pode depender de o consumidor se identificar. ⚠️ **Generalizacao de 2026-09-05 (ao desenhar o relatorio):** canal pobre e build velho produzem **a MESMA linha** no ClickHouse — categoria que para numa pasta. Logo a deteccao nao precisa saber POR QUE a superficie falhou: `own > 0` numa pasta e detector generico de *superficie que nao desenha a arvore*, e ele mora no relatorio, nao na borda. Isso muda o que o gate desta tarefa deve vigiar — nao "o canal X recusou?", e sim "apareceu linha parada em pasta?". | `aberto` | medido 2026-09-05, `form_get` sem parametro de canal; reproduzido ao vivo no mesmo dia |
 | DLG-18 | **O botao "+ pergunta" na linha da opcao — a pergunta IRMA ja guardada por `prefix`.** E a sintese aprovada no mockup: o autor ve o aninhamento (pergunta indentada sob a opcao que a dispara) e o JSON continua PLANO, porque o que se cria e uma irma com `ask_when {op:"prefix", value:<caminho>}` preenchido. Ninguem digita a guarda. ⚠️ **Nota de desenho que a implementacao da F5 revelou:** o mockup editava prompt/`output_key` INLINE, e isso seria um SEGUNDO editor para o mesmo no — o defeito de duas casas, em widget. A vista deve mostrar um CHIP e levar ao editor existente, nunca duplica-lo. Pre-requisito ja atendido: `ask_when` e autoravel por pergunta, e o op `prefix` esta no seletor desde a F5. **Gatilho:** decisao do dono — e afordancia, nao correcao | `aberto` | mockup aprovado 2026-09-05; `AskWhenRow` por pergunta ja existe |
 | DLG-23 | **O `category` do Arc 12 nao tem SERIE por caminho na tela, so a tabela.** A vista de Eventos do Monitor foi consertada (ver `CHANGELOG` 2026-09-05 (12)) e ja responde a pergunta "quantos por caminho", mas e uma tabela de 24 h: nao ha como ver `motivo.financeiro.*` **ao longo do tempo** sem montar um cartao de dashboard a mao. O `/reports/agent-events/series` existe e aceita o mesmo prefixo; falta a superficie. ⚠️ Antes de desenhar, decidir de quem e a casa — a lente de contato (`adr-relatorios-duas-superficies-e-lentes`) ja tem forma `metric_lines`, e uma tela nova de eventos seria a terceira superficie a desenhar serie. **Gatilho:** primeira pergunta de tendencia sobre taxonomia de wrap-up ("cobranca indevida esta subindo?") | `aberto` | medido 2026-09-05, `/reports/agent-events/series` sem consumidor de UI |
+
+---
+
+## `docs/arcos/usage-metering.md` — metering por dimensão
+
+Movido do `CLAUDE.md` § *Pending* em 2026-09-05 (DOC-01): aquela seção era a segunda casa do que
+este ledger existe para dizer, e nasceu antes dele.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| USG-01 | **Quatro dimensões têm função e não têm chamador** — `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` existem em `usage_emitter.py` e nenhum adapter as chama. É *promessa sem produtor*: o painel de consumo mostra zero e zero é um valor plausível. *(Separado: `llm_tokens_*` não emitido no `/v1/reason` é **defeito**, não item de direção)* | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
+
+---
+
+## `docs/arcos/pricing.md` — faturamento por capacidade
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| PRC-01 | **Integração metering × pricing** — módulo que aplica planos e escreve `{tenant}:quota:limit:*`. Hoje os limites de quota são escritos na ativação de plano e **não** semeados pelo Config API; falta o elo que fecha o ciclo consumo → plano → limite | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
+
+---
+
+## `docs/arcos/audit-lgpd.md` — trilha e direitos do titular
+
+Fase 1 entregue (rotas `sessions` e `mcp_calls` gateadas, trilha gravada inclusive na recusa). As
+quatro abaixo são **obrigação legal com razão própria** — não dependem de nenhuma direção de
+produto, e por isso não caducam com ela.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| AUD-01 | `original_content` desmascarado na trilha — exige endpoint batch em Core | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
+| AUD-02 | Logs `user_access` — campo ABAC já declarado, sem produtor | `aberto` | idem |
+| AUD-03 | Pipeline SAR / erasure (direito de acesso e de eliminação) | `aberto` | idem |
+| AUD-04 | `config_snapshot` para o DPO | `aberto` | idem |
+
+---
+
+## `docs/arcos/quality-ingest.md` — leitor de histórico plugável
+
+Arco A–D completo. O que resta são **concerns nomeados no fechamento**, não fases inacabadas.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| QIN-01 | `ReplayContext` entrega `session_meta` / `participants` / `sentiment` em **default** para contatos importados — default é valor plausível, e aqui ele viaja para dentro da avaliação | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
+| QIN-02 | Correlação **por-requisição**: `pool_id` degrada se um contato vier partido entre POSTs | `aberto` | idem |
+
+---
+
+## `docs/adr/adr-quality-substrate-isolation.md` — isolamento do substrato por `origin`
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| QSI-01 | **Fase 2** — partição ClickHouse `PARTITION BY (…, origin)` + `pool.origin_class`. É governança/lifecycle, não correção | `adiado` — gatilho: importação externa real com obrigação de retenção/erasure (`DROP PARTITION`) | `CLAUDE.md` § Pending, movido em 2026-09-05 |
+
+---
+
+## `docs/product/record-replay-harness-spec.md` — harness de gravação e replay
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| RRH-01 | Harness de gravação/replay em todas as costuras, para regressão determinística e **gate de promoção**. Falta captura full-fidelity MCP / AI Gateway, clock e seed injetáveis, gravação seletiva. ⚠️ Segue **proposta**: o spec existe, dono não | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
+
+---
+
+## `docs/arcos/outbound.md` — mailing, campanha e delivery
+
+Fases 1–5 entregues. Abaixo, refinamentos.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| OUT-01 | `responded` por-delivery (submit → `campaign_delivery_result`) | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
+| OUT-02 | Skill de processo que auto-alimenta a mailing no `complete` — hoje o seed é direto | `aberto` | idem |
+| OUT-03 | Pertença à journey via `journey_merge` | `aberto` | idem |
+| OUT-04 | Pacing `look_ahead` para o discador de voz | `bloqueado` por `VOZ-01` — depende do plano de mídia | idem |
+
+---
+
+## `docs/arcos/customer-contact-history.md` — histórico de contatos do cliente
+
+⚠️ **Correção paga em 2026-08-31 e preservada aqui:** o `CLAUDE.md` listava H3, HJ, H4-geral, C1a,
+C1b e H5 como abertos; `CHANGELOG.md:17339` (2026-07-16) declara os seis fechados havia seis
+semanas. O `TODO.md:6778` já dizia o certo — duas casas afirmando, e a errada era a que o índice
+lia. É o defeito que este ledger existe para não repetir.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| CCH-01 | Busca full-text `GIN(tsvector)` — a busca de mensagens usa substring no ClickHouse, suficiente no volume atual. **Otimização, não correção** | `adiado` — gatilho: latência/volume medidos | `CHANGELOG.md:17339` |
+| CCH-02 | **H4-survey** — origem + resultado do survey no briefing de retorno | `bloqueado` — o briefing de retorno ainda não existe | idem |
 
 ---
 

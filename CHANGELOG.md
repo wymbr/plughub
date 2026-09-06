@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (28) — DOC-01: higiene do `CLAUDE.md`, e o alvo posto em revisão em vez de forçado
+
+`CLAUDE.md`: **2 203 → 1 883 linhas**. A tarefa era bater o alvo declarado de **800**; ela não bate, e
+o desfecho honesto é este registro — as regras do próprio arquivo foram aplicadas até o fim, e o que
+sobra só se corta violando outra regra do mesmo arquivo.
+
+### O que saiu, e para onde (é MOVER, nunca apagar)
+
+Cada seção deixou resumo de 15–20 linhas com os invariantes que a sessão precisa ler no boot, e o
+destino foi **criado ou atualizado no mesmo commit** — resumo apontando para arquivo inexistente
+trocaria duplicação por buraco.
+
+| seção | linhas | destino |
+|---|---|---|
+| Sentiment Tracking | 115 → 24 | **novo** `docs/guias/sentiment-tracking.md` (transversal: engine · gateway · ctx · Console) |
+| Operational Visibility — 3.3c | 106 → 26 | **novo** `docs/arcos/operational-visibility.md` |
+| Arc 7 — Auth, RBAC + ABAC | 87 → 26 | `docs/arcos/arc7-auth.md` (já cobria tudo; ganhou nota de casa canônica) |
+| Dialog Primitive | 76 → 30 | `docs/product/dialog-primitive-and-runner-design.md` (+ 2 invariantes que só existiam no `CLAUDE.md`) |
+| Pending (Next Iteration) | 95 → 20 | `pending.md` / `done.md` |
+
+**Os dois novos arquivos existem porque a medição os exigiu, não por simetria.** Para *Operational
+Visibility*, nenhum outro doc do repositório descreve `record_pool_peak`, `paused_capacity`,
+`busy_elsewhere` ou `untagged` — o `CLAUDE.md` era a única casa, e resumir sem destino teria
+**apagado** o mecanismo. Para *Sentiment*, `docs/arcos/ai-gateway.md` cobre a metade PRODUTORA e
+nada cobria a metade LEITURA (o conserto de 2026-08-25, as quatro superfícies, `current: null`).
+
+Nas duas seções cujo destino já existia, a conferência foi por afirmação, não por volume: em `Arc 7`
+sobreviveram apenas **dois corolários de MÉTODO** que o arco produziu (*"um campo cujo rótulo tem
+'e' provavelmente são dois fatos"* · *"entre marcar cada caso e remover a alternativa, a segunda não
+depende de memória"*) — e eles **ficaram no `CLAUDE.md`**, porque são regra de como implementar, não
+documentação daquele arco. Em `Dialog Primitive`, duas linhas não viviam no design doc (delegate de
+nível único; o invariante de build do `MenuStepSchema`) e viajaram para lá.
+
+### `Pending` era a segunda casa do ledger, e sair dali é fechar um defeito conhecido
+
+A seção nasceu **antes** do ledger `pending.md`/`done.md` (2026-08-31). Desde então eram duas casas
+afirmando o que está aberto — e duas casas para o mesmo fato não têm dois valores: têm o da casa que
+ninguém confere. **Já custou uma vez, nesta mesma seção:** seis itens de Customer History listados
+como abertos por seis semanas depois de fechados, com o `TODO.md` dizendo o certo o tempo todo.
+
+Por isso a remoção foi **conferida item a item antes**, não depois. Dos 13 itens:
+
+- **7 já estavam no ledger** — `VOZ-01/02` · `JRN-03` · `PUL-01/02` · `APR-01` · `SUR-01..06` ·
+  `IDN-01..05`;
+- **15 ids novos foram escritos** em `pending.md`, cada um sob grupo que titula documento existente:
+  `USG-01` (metering) · `PRC-01` (pricing) · `AUD-01..04` (LGPD fases 2–5) · `QIN-01/02`
+  (quality-ingest) · `QSI-01` (`adiado`, gatilho declarado) · `RRH-01` (harness) · `OUT-01..04`
+  (`OUT-04` `bloqueado` por `VOZ-01`) · `CCH-01/02`, mais `JRN-04`, `AUT-37` e `APR-09`.
+
+`AUT-37` (guard de rota ABAC em `analise/*`) mudou de demanda de propósito: a seção o listava sob
+*Journey* por ter sido achado lá, mas é dívida app-wide de ABAC, e o ledger agrupa por **demanda**,
+não por origem do achado.
+
+### O alvo de 800 não é alcançável sem cortar o catálogo — e isso é resultado, não desistência
+
+Depois dos cinco movimentos, **nenhuma seção restante qualifica pela regra**. As três maiores são
+`Security` (189), `Saúde do CLAUDE.md` (195, com a nota nova) e `Postura de Engenharia` (180); as
+duas primeiras da lista original carregam o **catálogo medido** — o "valor plausível", o `if not x`
+sobre valor decodificado, o `ReplacingMergeTree` que substitui a linha inteira, a ordem por partição
+no Kafka, o censo por eixo, o instrumento que mede a proposição vizinha. Pela linha *"invariantes e
+regras"* da tabela do próprio arquivo, elas **pertencem**. As outras ~50 seções já cabem no formato
+de resumo.
+
+Cortá-las para bater 800 seria **otimizar a métrica contra o propósito** — a mesma família do gate
+que fica verde por medir a pergunta ao lado. O alvo fica escrito, agora **com a medição ao lado** e
+marcado *em revisão*, aguardando decisão do dono. Escrever um número que o arquivo não cumpre, sem
+dizer isso, seria promessa sem mecanismo.
+
+### Ponteiros que a mudança teria deixado velhos, e foram consertados junto
+
+- a linha `| Pending genuíno | máx 50 linhas |` da tabela *O que FICA* — a regra passou a mandar o
+  trabalho aberto para `pending.md`;
+- o passo 4 de *Como adicionar uma nova feature*, que mandava mover do `## Pending`;
+- `§ Arc 15`, que fechava com *"(ver § Pending)"* — agora aponta `VOZ-02`.
+
+*Refutação já paga e preservada no `TODO.md` § DOC-01: o índice de ADRs **não** é a fatia grande (40
+linhas, 1%). Ele parece enorme porque cada entrada é um parágrafo numa linha só, e a métrica
+declarada é LINHA.*
+
+Ledger: `DOC-01` movido de `pending.md` para `done.md` (grupo `CLAUDE.md`, que ficou sem linha aberta
+e por isso saiu do `pending.md` inteiro). Gate `infra/test/probe_task_ledger.sh`: **VERDE**, 238 ids.
+
 ## 2026-09-05 (27) — ADR de navegação de orquestrador, e a medição que muda o valor dele
 
 Escrito `docs/adr/adr-orchestrator-tree-navigation.md` (proposto): o menu de um orquestrador é a **mesma

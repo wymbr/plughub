@@ -1,5 +1,12 @@
 # Arc 7 — Autenticação Real, Permissões e Roteamento por Performance
 
+> **Casa canônica desde 2026-09-05 (DOC-01).** A seção *Arc 7* do `CLAUDE.md` passara de 87 linhas
+> e foi reduzida a resumo + link para este arquivo. Nada foi perdido na mudança: cada afirmação
+> daquela seção foi conferida aqui antes de sair de lá. **Exceção deliberada:** os dois *corolários
+> de método* que o arco produziu — *"um campo cujo rótulo tem 'e' provavelmente são dois fatos"* e
+> *"entre marcar cada caso e remover a alternativa, a segunda não depende de memória"* — ficaram no
+> `CLAUDE.md`, porque são regra de como implementar, não documentação deste arco.
+
 > Última atualização: 2026-05-25 · Estado: Arc 16
 
 ## Arc 7a — auth-api (✅ implementado)
