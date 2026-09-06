@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest"
 
 import { optionsAtPath } from "./dialog-render"
+import { DialogOptionSchema } from "./dialog"
 import type { RenderOption } from "./dialog-render"
 
 // Espelha a forma real publicada em `dialog_wrapup_arvore_v1`/navegacao: pasta tem
@@ -81,5 +82,35 @@ describe("optionsAtPath", () => {
     const antes = JSON.stringify(ARVORE)
     optionsAtPath(ARVORE, ["sac"])
     expect(JSON.stringify(ARVORE)).toBe(antes)
+  })
+})
+
+// ── F2: o ponto e separador de CAMINHO, logo id nao pode conte-lo ────────────
+//
+// Tres mecanismos ja assumiam esta regra sem ninguem impo-la: `category_path` do
+// Arc 12, o casamento por prefixo de `navigation_pools`, e o `chosen_id` pontuado
+// que deixa um canal responder a arvore inteira num turno. Um id com ponto
+// acrescentaria um segmento a serie SEM erro em lugar nenhum.
+describe("id de opcao × separador de caminho", () => {
+  it("RECUSA id com ponto — o mecanismo que os tres pressupunham", () => {
+    const r = DialogOptionSchema.safeParse({
+      id: "sac.info_plano", label: { "pt-BR": "x" },
+    })
+    expect(r.success).toBe(false)
+  })
+
+  it("aceita id normal — controle POSITIVO (senao o teste acima passa pelo motivo errado)", () => {
+    const r = DialogOptionSchema.safeParse({ id: "info_plano", label: { "pt-BR": "x" } })
+    expect(r.success).toBe(true)
+  })
+
+  it("um caminho pontuado projeta o MESMO nivel que os segmentos um a um", () => {
+    // E a proposicao que o `chosen_id` pontuado precisa: turno unico e turno a
+    // turno tem de aterrissar no mesmo lugar, senao o canal muda o resultado.
+    const raizes = ARVORE
+    const passo = optionsAtPath(raizes, ["sac", "info_plano"])
+    const unico = optionsAtPath(raizes, "sac.info_plano".split("."))
+    expect(unico).toEqual(passo)
+    expect(unico.is_leaf).toBe(true)
   })
 })

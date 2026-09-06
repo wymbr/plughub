@@ -289,7 +289,25 @@ export interface DialogOption {
  */
 export const DialogOptionSchema: z.ZodType<DialogOption> = z.lazy(() =>
   z.object({
-    id:      z.string().min(1),
+    /**
+     * ⚠️ **Sem PONTO, e isso é estrutural.** O ponto é o separador de CAMINHO da
+     * árvore em três lugares que já existiam antes desta guarda:
+     *
+     *   · `category_path` (`path.join(".")`), que vira a cauda da `category` do
+     *     Arc 12 — um id com ponto acrescentaria um segmento à série **em
+     *     silêncio**, e a lente de árvore desenharia um nível que ninguém autorou;
+     *   · `navigation_pools`, cujo casamento é por prefixo de segmento (F3);
+     *   · `chosen_id` do `dialog_tree_level`, que aceita caminho pontuado para o
+     *     canal poder responder a árvore inteira num turno só (F2).
+     *
+     * Os três já assumiam esta regra sem ninguém impô-la — promessa sem mecanismo,
+     * a família do DDL de `participation_intervals`. Medido antes de fechar:
+     * **0 de 87** ids nas 14 formas publicadas têm ponto, então a guarda não
+     * invalida nada que exista.
+     */
+    id:      z.string().min(1).regex(/^[^.]+$/, {
+      message: "option id nao pode conter '.' — o ponto e o separador de caminho da arvore",
+    }),
     label:   LocalizedTextSchema,
     value:   z.string().optional(),
     capture: DialogCaptureSchema,

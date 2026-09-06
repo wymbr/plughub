@@ -48,7 +48,12 @@ const TreeLevelInputSchema = z.object({
   // reinventaria a concatenacao — ou pior, guardaria o caminho como string e
   // fabricaria o separador, que e o mesmo ponto onde a categoria do Arc 12 nasce.
   chosen_id:  z.string().optional()
-                .describe("Id just picked by the customer; appended to `path` before projecting"),
+                .describe(
+                  "What the customer just picked, appended to `path` before projecting. " +
+                  "May be a DOTTED PATH (`sac.info_plano`) when the channel drew the whole " +
+                  "tree and the customer reached a leaf in one turn — each segment is " +
+                  "appended in order, so the flow is turn-agnostic.",
+                ),
   status:     z.enum(["draft", "published"]).default("published"),
   version:    z.number().int().positive().optional(),
   locale:     z.string().optional(),
@@ -200,7 +205,16 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           )
         }
 
-        const trilha = input.chosen_id ? [...input.path, input.chosen_id] : input.path
+        // ⚠️ SPLIT, nao append cru (F2). Um canal que desenhou a arvore agrupada
+        // responde com o CAMINHO (`sac.info_plano`), nao com um id de um nivel; sem
+        // dividir, a projecao procuraria uma opcao chamada literalmente
+        // "sac.info_plano", nao acharia, e devolveria `found: false` — a navegacao
+        // reiniciaria e a tela pareceria certa. O ponto e separador seguro porque
+        // `DialogOptionSchema` proibe ponto no id (medido: 0 de 87).
+        const escolhidos = input.chosen_id
+          ? input.chosen_id.split(".").filter(x => x !== "")
+          : []
+        const trilha = [...input.path, ...escolhidos]
         const nivel = optionsAtPath(q.options, trilha)
         // Rotulo do no do cursor — para a superficie compor o prompt do nivel de baixo
         // sem repetir a pergunta da raiz. Usa a MESMA projecao, um passo acima.

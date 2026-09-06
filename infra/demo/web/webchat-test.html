@@ -65,6 +65,8 @@
   .ia-badge { font-size: 10px; background: #e0e7ff; color: #4338ca;
               border-radius: 4px; padding: 1px 5px; margin-left: 5px; vertical-align: middle; }
   .ia-prompt { margin-bottom: 8px; color: #1e293b; }
+    .ia-grupo { font-size:12px; font-weight:600; text-transform:uppercase;
+               letter-spacing:.04em; color:#64748b; margin:10px 0 4px; }
   .ia-opt-btn { display: block; width: 100%; margin: 3px 0; padding: 6px 10px;
                 background: white; color: #1e293b; border: 1px solid #cbd5e1;
                 border-radius: 6px; cursor: pointer; text-align: left; font-size: 13px; }
@@ -357,11 +359,38 @@
 
     if (msg.interaction === 'button' || msg.interaction === 'list') {
       const opts = msg.options || [];
-      opts.forEach(opt => {
-        html += `<button class="ia-opt-btn"
-          onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${escHtml(opt.id)}','${escHtml(opt.label)}')"
-          >${escHtml(opt.label)}</button>`;
-      });
+      // ── F2: opcao com FILHOS vira grupo, e a folha responde com o CAMINHO ────
+      //
+      // Antes desta fase os filhos eram descartados em SILENCIO: o cliente via so
+      // as pastas e, num menu que esperasse uma folha, nao havia como chegar la —
+      // sem erro em lugar nenhum. Agora a pasta vira um cabecalho e as folhas
+      // viram botoes.
+      //
+      // ⚠️ O botao responde com o CAMINHO (`sac.info_plano`), nao com o id da
+      // folha. `dialog_tree_level` divide o `chosen_id` por ponto; sem isso a
+      // projecao procuraria `info_plano` na RAIZ, nao acharia, e a navegacao
+      // reiniciaria PARECENDO certa. O ponto e separador seguro porque o schema
+      // proibe ponto no id da opcao.
+      const ehPasta = o => Array.isArray(o.options) && o.options.length > 0;
+      // Profundidade > 2 nao e desenhavel aqui (grupo dentro de grupo); nesse caso
+      // mostra o nivel corrente e deixa o fluxo descer, como antes.
+      const fundo = opts.some(o => (o.options || []).some(ehPasta));
+      const agrupar = !fundo && opts.some(ehPasta);
+
+      const botao = (id, label) =>
+        `<button class="ia-opt-btn"
+          onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${escHtml(id)}','${escHtml(label)}')"
+          >${escHtml(label)}</button>`;
+
+      if (agrupar) {
+        opts.forEach(opt => {
+          if (!ehPasta(opt)) { html += botao(opt.id, opt.label); return; }
+          html += `<div class="ia-grupo">${escHtml(opt.label)}</div>`;
+          opt.options.forEach(f => { html += botao(opt.id + '.' + f.id, f.label); });
+        });
+      } else {
+        opts.forEach(opt => { html += botao(opt.id, opt.label); });
+      }
 
     } else if (msg.interaction === 'text') {
       // Mascarado quando masked_fields contém qualquer campo (step scalar usa output_as/id como campo implícito)

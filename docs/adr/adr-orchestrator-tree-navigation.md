@@ -294,7 +294,7 @@ inteiro.
 |---|---|---|
 | **F0** ✅ | **Medir** — inventário de menus, espécies A×B, zero produtores de demanda, sanção de ciclo, alvo literal do `escalate` | — |
 | **F1** | **O eixo de demanda passa a existir**: árvore autorada no `DialogForm` + `agent_event` com o caminho, **ainda escalando pelo `choice` atual**. Sem tocar no engine | F0 |
-| **F2** | **Renderização em canal** (`DLG-15`): hoje nenhum canal de cliente desenha árvore — o adapter de WhatsApp trata `options` como lista plana, dimensionada por `len()` | F0 |
+| **F2** ✅ | **Renderização em canal** (`DLG-15`) — seções no WhatsApp, grupos no webchat, e recusa NOMEADA onde não cabe | F0 |
 | **F3** ✅ | `escalate` com **alvo interpolável** + mapa `caminho → pool` na config do pool (D2) | ~~F2~~ — ver emenda |
 | **F4** ✅ | O **runner genérico** assume a navegação; `agente_triagem_v2` sai | F1, F3 |
 | **F5** | **Paridade LLM** (D6): o orquestrador IA aterrissa nas mesmas folhas declaradas | F4 |
@@ -408,6 +408,28 @@ inteiro.
 > pacotes em quarentena, e com uma razão a mais medida: os promotes sucessivos deixaram o slot
 > `previous` do `demo_ia` com outra versão da própria navegação, então **um rollback não traz a
 > triagem de volta** e este arquivo é a última receita dela fora do git.
+
+> **Emenda de 2026-09-06 — F2 entregue, e o alvo não era o que a linha dizia.** *"Nenhum canal
+> desenha árvore"* é verdade e não é o dano. O dano é que os filhos eram descartados **em
+> silêncio**: inofensivo quando o fluxo desce nível a nível, e beco sem saída quando um runner
+> genérico entrega o `render` inteiro a um `menu` — o cliente vê só as pastas e nunca alcança uma
+> folha. **Exposição: 4 runners** (`agente_nps_v1`, `skill_dialog_runner_v1`,
+> `skill_survey_multi_v1`, `skill_survey_runner_v1`). **Dano: zero** — nenhuma das formas deles tem
+> árvore hoje. É guarda, não conserto de dano vivo, e a fase foi dimensionada por isso.
+>
+> Entregue: `option_tree.py` no channel-gateway (`is_tree`/`tree_depth`/`flatten_to_sections`, 7
+> testes) · WhatsApp desenha **seções tituladas** quando cabe e **loga nomeando** quando não ·
+> webchat agrupa · `chosen_id` aceita caminho pontuado, então turno-único e turno-a-turno aterrissam
+> idênticos (medido) · `DialogOptionSchema` proíbe ponto no id.
+>
+> ⚠️ **O ponto já era separador em três mecanismos e ninguém o impunha** — `category_path` do Arc 12,
+> o prefixo de `navigation_pools` (F3) e agora o `chosen_id`. Promessa sem mecanismo, a família do
+> DDL de `participation_intervals`. Medido antes de fechar: **0 de 87** ids têm ponto.
+>
+> ⚠️ **A paridade Python×TS é o ramo I, e ela não é zelo.** São duas implementações em duas
+> linguagens, sem código compartilhado possível. Trocar o separador de um lado só mantém a linha
+> bonita na tela e faz a projeção devolver `found: false` — a navegação reinicia parecendo certa.
+> Verificado por mutação (`.` → `|` só no Python: VERMELHO, nomeando as 4 linhas).
 
 - **`options_tree` é hoje uma declaração sem consumidor** (medido: aparece só dentro de
   `packages/schemas` — definição, derivação, teste e `.d.ts`; o Console decide por conta própria com

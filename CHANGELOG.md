@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (10) — F2/ORQ-02: o canal desenha a árvore, ou diz por que não
+
+A linha do ledger dizia *"nenhum canal de cliente desenha árvore"*. É verdade — e não é o dano. O
+dano é que os filhos eram descartados **em silêncio**: o adapter montava as linhas com o `label` do
+topo e `options` aninhado não existia para ele. Quando o FLUXO desce nível a nível isso é inócuo (a
+navegação só precisa dos ids do topo); quando um runner genérico entrega o `render` inteiro a um
+`menu`, o cliente vê **só as pastas** e nunca alcança uma folha — o menu renderiza, ele escolhe, e a
+resposta é um id de pasta que o skill não espera.
+
+**Exposição: 4 runners** (`agente_nps_v1`, `skill_dialog_runner_v1`, `skill_survey_multi_v1`,
+`skill_survey_runner_v1`, medidos). **Dano: zero** — nenhuma das formas deles tem árvore hoje (2 de
+14 formas têm, e as duas vão por outro caminho). Isto é guarda, não conserto de dano vivo, e a fase
+foi dimensionada por isso em vez de pelo susto.
+
+### O ponto já era separador em três mecanismos, e ninguém o impunha
+
+`category_path` do Arc 12, o casamento por prefixo de `navigation_pools` (F3) e agora o `chosen_id`
+pontuado — os três assumiam que um id de opção não contém ponto, e `DialogOptionSchema` aceitava
+`z.string().min(1)`. Promessa sem mecanismo, a família do DDL de `participation_intervals`. Um id
+com ponto acrescentaria um segmento à série do Arc 12 **em silêncio**, e a lente desenharia um nível
+que ninguém autorou. Medido antes de fechar: **0 de 87** ids nas 14 formas publicadas. A guarda não
+invalida nada que exista.
+
+### O que mudou
+
+* **`option_tree.py`** no channel-gateway — `is_tree` / `tree_depth` / `flatten_to_sections`, puro,
+  7 testes. `flatten_to_sections` devolve `None` quando o canal **não pode** desenhar (fundo > 2, ou
+  acima do teto de 10 linhas do WhatsApp), e recusar é o ponto: o chamador então mostra o nível
+  corrente e o fluxo desce. O que não pode acontecer é mandar pasta com cara de folha;
+* **WhatsApp** — seções tituladas onde cabe (pasta → título, folha → linha), e onde não cabe o
+  nível corrente **com log nomeando** a profundidade e o tamanho;
+* **webchat** — pasta vira cabeçalho de grupo, folhas viram botões;
+* **`chosen_id` aceita caminho pontuado** — e é esta a peça load-bearing. Sem ela, desenhar a árvore
+  seria REGRESSÃO: o cliente responderia `sac.info_plano`, a projeção procuraria uma opção com esse
+  nome na raiz, não acharia, e a navegação reiniciaria parecendo certa.
+
+Medido ao vivo, e é a proposição inteira da fase:
+
+```
+turno unico    found=true  is_leaf=true  path=["sac","info_plano"]  category=sac.info_plano
+turno a turno  found=true  is_leaf=true  path=["sac","info_plano"]  category=sac.info_plano
+folha rasa     found=true  is_leaf=true  path=["portabilidade"]     category=portabilidade
+desconhecido   found=false is_leaf=false                            category=sac.nao_existe
+```
+
+### O ramo I, e por que paridade aqui não é zelo
+
+O canal decide o id da linha (Python); o fluxo decide o que aquele id significa (TypeScript). São
+duas implementações em duas linguagens e **não há código a compartilhar** — a resposta desta casa
+para isso é paridade por gate, como em `py-contextstore`. O modo de falha é mudo dos dois lados:
+trocar o separador de um lado só mantém a linha bonita na tela e faz a projeção devolver
+`found: false`. Mutação (`.` → `|` só no Python): VERMELHO, nomeando as 4 linhas que deixaram de
+resolver.
+
+Gate em **9 ramos**; F, G, H e I por mutação. Suíte do channel-gateway **743/743 na IMAGEM**
+(`docker run`, não `docker exec` — a instalância responderia sobre um estado que um `up -d` apaga);
+schemas 279.
+
 ## 2026-09-06 (9) — Os DOIS eixos convivem num contato, e discordam
 
 Ciclo completo, validado pelo dono — navegação → especialista → fila → humano → NPS → wrap-up:

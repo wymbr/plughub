@@ -46,6 +46,34 @@ adapters/
 | `checklist` | Sequential + comma input | Sequential + comma input | Native checkboxes | Not supported → on_failure |
 | `form` | Sequential field-by-field | Sequential field-by-field | Native HTML form | Not supported → on_failure |
 
+### Opções em ÁRVORE — `option_tree.py`
+
+Uma opção pode ter `options` (filhos). Até 2026-09-06 o adapter os descartava em
+**silêncio**: montava as linhas com o `label` do topo e os filhos não existiam para
+ele. Inócuo quando o FLUXO desce nível a nível (a navegação do orquestrador só
+precisa dos ids do topo) — e um beco sem saída quando quem manda espera que o
+cliente alcance uma folha: o menu renderiza, o cliente escolhe, e a resposta é um id
+de pasta que o skill não espera.
+
+| situação | o adapter faz |
+|---|---|
+| não é árvore | como sempre (botões / lista / texto numerado) |
+| árvore de 1 nível que **cabe** (≤ 10 linhas) | seções tituladas: pasta → título, folha → linha |
+| árvore funda (> 2) ou acima do teto | nível corrente **+ log nomeando** por que não desenhou |
+
+⚠️ **A linha responde com o CAMINHO** (`sac.info_plano`), nunca com o id da folha. O
+`dialog_tree_level` divide o `chosen_id` por ponto, então turno-único e turno-a-turno
+aterrissam no mesmo lugar e o fluxo é agnóstico de quantos turnos o canal usou. Sem
+isso a projeção procuraria a folha na RAIZ, não acharia, e a navegação **reiniciaria
+parecendo certa**. O ponto é separador seguro porque `DialogOptionSchema` proíbe
+ponto no id (medido: 0 de 87 ids nas 14 formas publicadas).
+
+⚠️ **`is_tree`/`tree_depth` são gêmeos Python do `temArvore` de `@plughub/schemas`.**
+Duas linguagens, nenhum código compartilhado — a paridade é conferida por gate (ramo
+I de `probe_orchestrator_tree_nav.sh`), como em `py-contextstore`. O modo de falha é
+mudo dos dois lados: trocar o separador de um lado só mantém a linha bonita e faz a
+projeção devolver `found: false`.
+
 **Sequential fallback protocol**: The adapter sends each field/option as a separate
 WhatsApp/SMS message, stores partial responses in the adapter's session state (Redis TTL),
 and emits a single `MenuSubmitEvent` to Kafka only when all required fields are collected.
