@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (12) — Os dois orquestradores medem lado a lado, e o escape ainda não foi exercido
+
+Primeiro contato pelo `demo_llm_ia`. O cliente escreveu *"quero saber sobre meu plano"* e o roteador
+classificou em `sac.info_plano` — **a mesma folha** que o usuário de menu alcança em dois turnos, em
+um só, a partir de texto livre. A série comparativa que a D6 existe para permitir passou a existir:
+
+```
+pool          category                                       marcas  contatos
+demo_ia       demo_ia.navegacao.destino.sac.info_plano            2         2
+demo_llm_ia   demo_llm_ia.navegacao.destino.sac.info_plano        1         1
+```
+
+Mesma métrica, mesma folha, `l1` diferente — exatamente a forma que torna *"qual roteia melhor?"*
+uma consulta em vez de uma opinião.
+
+### ⚠️ A transferência ao humano NÃO foi o escape do roteador
+
+A leitura natural da tela é que *"pedi algo fora do escopo e ele transferiu"*. O dado diz outra
+coisa, e a diferença importa:
+
+```
+demo_llm_ia      16:54:23.947  22 864 ms  escalated_human
+sac_ia           16:54:46.825  53 991 ms  escalated_human
+retencao_humano  16:55:40.847  33 685 ms  resolved
+```
+
+O segmento do orquestrador **já tinha fechado** quando a segunda frase foi escrita. *"Agora sobre o
+custo do meu plano, está muito alto"* chegou com o menu de botões do SAC na tela, caiu no `default`
+do `roteador_resolucao` dele e virou *"Falar com especialista"* — o escape **do SAC**, não o
+`nao_se_aplica` da navegação.
+
+**Consequência registrada:** a folha de escape do roteador LLM **continua sem ter sido exercida ao
+vivo** — zero ocorrências na série. O mecanismo está medido (inventado, pasta e vazio RECUSAM, e o
+ramo J exige que a recusa alcance o evento), mas a taxa de escape — que é a métrica que decide se o
+roteador presta — ainda é uma célula vazia. Para exercê-la, a frase fora do domínio tem de vir no
+PRIMEIRO turno, quando quem pergunta é o `demo_llm_ia`.
+
+É a distinção de sempre entre *"o mecanismo existe"* e *"o número existe"* — e confundir o escape de
+um agente com o do outro produziria uma taxa de escape que não é de ninguém.
+
+### E os dois eixos divergiram de novo, agora com informação
+
+Demanda: `sac.info_plano`. Wrap-up: `financeiro.cobranca.duvida_fatura` +
+`servico.plano.alteracao` + `servico.cadastro.troca_titularidade`. O cliente entrou perguntando
+sobre o plano e a conversa virou cobrança — que é exatamente o que a segunda frase dele dizia. A
+divergência aqui não é erro de classificação: é a conversa andando.
+
 ## 2026-09-06 (11) — F5/ORQ-05: o orquestrador com LLM aterrissa em folha declarada
 
 O gatilho da fase pedia *"F4 entregue **e** um pool de orquestração IA candidato"*. A primeira
