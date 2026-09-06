@@ -9,11 +9,19 @@
 #   B  a projeção desce: raiz → pasta → folha, um nível por vez
 #   C  caminho DESCONHECIDO não degrada para a raiz   ← o que sustenta o resto
 #   D  o ciclo `menu → … → menu` é ACEITO e o ciclo SEM menu é RECUSADO
+#   E  o evento de demanda nasce COM época — e as duas pontas do carimbo casam
 #
 # ⚠️ O ramo C é o único que não tem cara de teste feliz, e é o que importa. Se
 # `optionsAtPath` devolvesse a raiz para um segmento inexistente, a tela voltaria
 # ao menu principal, pareceria certa, e o cliente perderia a navegação sem que
 # nada ficasse vermelho — o valor plausível mais barato de produzir aqui.
+#
+# ⚠️ O ramo E existe por um defeito REAL, cometido ao escrever esta fase: o
+# `registrar_demanda` carimbava `tags.form_id`, e a lente lê
+# `tags['dialog_form_id']`. Nada fica vermelho — o evento apenas nasce SEM época
+# para sempre, e a árvore devolve `single_vocabulary: false` sem saber dizer por
+# quê. Por isso ele mede as DUAS pontas: o produtor escreve as chaves, e o
+# consumidor ainda as lê. Uma ponta só ficaria verde depois de qualquer renomeio.
 #
 # ⚠️ O ramo D carrega a PRÓPRIA MUTAÇÃO: ele não pergunta "o validador roda?",
 # pergunta "o validador DISTINGUE?". Um validador que aceitasse os dois fluxos
@@ -149,6 +157,27 @@ console.log(real + " " + julga(mut))
     INCONC=1
   fi
   rm -f "$TMPF"
+fi
+
+# ── E: o carimbo de época casa nas duas pontas ────────────────────────────
+printf '\n\033[1mE — o evento de demanda nasce COM epoca, e as duas pontas casam\033[0m\n'
+LENTE="$RAIZ/packages/analytics-api/src/plughub_analytics_api/reports_query.py"
+LEITOR="$(dirname "$0")/_nav_epoch_stamp.py"
+PROD=$(python3 "$LEITOR" "$SKILL" 2>/dev/null)
+case "$PROD" in
+  SEM_YAML|"")   info "PyYAML ausente ou leitor mudo — ramo E nao exercido"; INCONC=1 ;;
+  SEM_STEP)      bad "o skill nao tem registrar_demanda — o eixo de demanda nao tem produtor" ;;
+  *TAGS_FALTAM*) bad "nao carimba dialog_form_id/dialog_form_version — evento nasce SEM epoca: ${PROD}" ;;
+  *REF_LITERAL*) bad "o carimbo e LITERAL, nao vem da saida da tool: ${PROD}" ;;
+  *TAGS_OK*REF_OK*agent_event_record) ok "produtor carimba as duas chaves, vindas do render" ;;
+  *)             bad "produtor inesperado: ${PROD}" ;;
+esac
+if [ ! -f "$LENTE" ]; then
+  info "reports_query.py ausente — ponta do consumidor nao exercida"; INCONC=1
+elif grep -q "dialog_form_id" "$LENTE" && grep -q "dialog_form_version" "$LENTE"; then
+  ok "a lente ainda LE essas mesmas chaves — as duas pontas casam"
+else
+  bad "a lente nao le mais dialog_form_id/dialog_form_version — o carimbo virou orfao"
 fi
 
 printf '\n'

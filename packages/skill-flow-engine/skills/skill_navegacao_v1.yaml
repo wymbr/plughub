@@ -121,28 +121,49 @@ steps:
     on_failure: nivel_raiz
 
   # ── 5. A DEMANDA vira evento ────────────────────────────────────────────────
-  # É a entrega desta fase. `category` = `{pool}.{skill}.{métrica}.{caminho}` — o
-  # primeiro segmento é o pool por invariante do Arc 12, e a cauda é o caminho
-  # escolhido, então a lente de árvore que já existe desenha isto sem uma linha
-  # de código nova.
+  # É a entrega desta fase. A categoria resultante é
+  # `{pool}.navegacao.destino.{caminho}` — o primeiro segmento é o pool por
+  # invariante do Arc 12, e a cauda é o caminho escolhido, então a lente de árvore
+  # que já existe desenha isto sem uma linha de código nova.
   #
-  # ⚠️ Falhar aqui NÃO pode derrubar o atendimento: medir é secundário ao
-  # atender. `on_failure` segue para o roteamento — mas o `invoke` já loga o
-  # motivo, então a degradação é barulhenta, não muda.
+  # ⚠️ NÃO é o `agent_event`, e a diferença não é de conveniência. Aquele exige
+  # `session_token` de `agent_login`, e o bridge não emite nenhum para agente
+  # nativo de skill-flow (medido: ZERO ocorrências) — o eixo de demanda ficaria
+  # inalcançável por este caminho. O `agent_event_record` identifica pela SESSÃO e
+  # COMPÕE a categoria no servidor, lendo o pool do meta: o isolamento de namespace
+  # que o Arc 12 exige passa a valer por CONSTRUÇÃO, em vez de por conferência de
+  # uma string que o chamador montou. Por isso não há `{{@ctx.core.pool.id}}` aqui
+  # — o pool deixou de ser assunto de quem emite.
+  #
+  # ⚠️ `emitter` é rótulo ESTÁVEL, nunca o `skill_id`: renomear o skill quebraria a
+  # série no meio, e a série é o produto desta fase.
+  #
+  # ⚠️ Falhar aqui NÃO pode derrubar o atendimento: medir é secundário a atender.
+  # `on_failure` segue para o roteamento — mas o `invoke` já loga o motivo, então a
+  # degradação é barulhenta, não muda.
   - id: registrar_demanda
     type: invoke
-    tool: agent_event
+    tool: agent_event_record
     input:
-      # ⚠️ O PRIMEIRO segmento TEM de ser o pool da sessão — o `agent_event` confere
-      # isso (isolamento de namespace) e recusa o resto. Por isso ele vem do ctx e
-      # não do YAML: o mesmo skill roda em N pools, e um literal aqui amarraria a
-      # série a um deles. `{{...}}` é interpolação de template, suportada em input
-      # de `invoke` (`resolveInputValue`); ref pura (`$.`) substituiria o valor
-      # INTEIRO e não serve para compor.
-      category: "{{@ctx.core.pool.id}}.navegacao.destino.{{$.pipeline_state.nivel.category_path}}"
+      session_id: "$.session_id"
+      segment_id: "$.segment_id"
+      emitter:    "navegacao"
+      metric_key: "destino"
+      path:       "$.pipeline_state.nivel.category_path"
       value: 1
+      # ⚠️ O CARIMBO DE ÉPOCA são estas DUAS chaves, com estes nomes exatos: é por
+      # `tags['dialog_form_id']` e `tags['dialog_form_version']` que a lente de
+      # árvore separa vocabulários (D13/D14). Escrever `form_id` aqui não dá erro
+      # em lugar nenhum — o evento simplesmente nasce SEM época, para sempre, e a
+      # lente passa a devolver `single_vocabulary: false` sem saber dizer por quê.
+      # Medido antes de corrigir: era exatamente isso que acontecia.
+      #
+      # E os dois valores vêm da SAÍDA da tool, não do YAML: o carimbo é fato do
+      # RENDER, e `dialog_tree_level` é quem renderizou. Um literal aqui poderia
+      # discordar da forma que o cliente realmente viu.
       tags:
-        form_id: "dialog_navegacao_atendimento_v1"
+        dialog_form_id:      "$.pipeline_state.nivel.form_id"
+        dialog_form_version: "{{$.pipeline_state.nivel.version}}"
     on_success: rotear
     on_failure: rotear
 

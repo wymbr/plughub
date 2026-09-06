@@ -31,8 +31,10 @@ import { z }             from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import {
   AgentEventInputSchema,
+  AGENT_EVENT_CATEGORY_MAX_SEGMENTS,
   AGENT_EVENT_PII_TAG_KEYS,
   decomposeCategoryLevels,
+  sanitizeCategoryPath,
 } from "@plughub/schemas"
 import type { RedisClient }   from "../infra/redis"
 import type { KafkaProducer } from "../infra/kafka"
@@ -55,6 +57,27 @@ const AgentEventToolInputSchema = AgentEventInputSchema.extend({
   session_token: z.string().min(1),
   /** Current session — used for rate-limit key and pool_id resolution. */
   session_id: z.string().min(1),
+})
+
+/**
+ * Entrada do `agent_event_record` — a porta de skill-flow para o Arc 12.
+ *
+ * ⚠️ NAO recebe `category`: ela e COMPOSTA no servidor a partir do pool da sessao.
+ * Receber a string inteira obrigaria a CONFERIR o primeiro segmento depois (o que o
+ * `agent_event` faz); compondo, o isolamento de namespace vale por construcao.
+ */
+const AgentEventRecordInputSchema = z.object({
+  session_id: z.string().min(1),
+  /** l2 — rotulo ESTAVEL do produtor. Nunca um `skill_id`: rename quebraria a serie. */
+  emitter:    z.string().min(1),
+  /** l3 — o que se mede. */
+  metric_key: z.string().min(1),
+  /** Cauda pontuada abaixo da metrica (ex.: `sac.info_plano`). */
+  path:       z.string().optional(),
+  value:      z.number().default(1),
+  tags:       z.record(z.string()).optional(),
+  segment_id: z.string().optional(),
+  tenant_id:  z.string().optional(),
 })
 
 // ─── Rate-limit config ─────────────────────────────────────────────────────────
@@ -299,6 +322,93 @@ export function registerAgentEventTools(
           return mcpError("invalid_token", "session_token is invalid or expired")
         }
         return mcpError("internal_error", String(e))
+      }
+    },
+  )
+  // ── agent_event_record ──────────────────────────────────────────────────────
+  //
+  // A tool `agent_event` exige `session_token` de `agent_login` — e um agente NATIVO
+  // de skill-flow nao tem nenhum: o orchestrator-bridge nao emite token (a palavra
+  // `session_token` aparece ZERO vezes no `main.py` dele) e o `session_context` que
+  // ele monta traz `contact_id`/`channel`/`tenant_id`/`agent_type`/`session_id`, mais
+  // nada. Medido em 2026-09-06: e por isso que `agent_event` tinha ZERO chamadores.
+  //
+  // Esta e a MESMA postura que o `segment_outcome_record` ja usa para o wrap-up
+  // ("roda como workflow, sem agente logado"): identifica-se pela SESSAO, nao por
+  // token. A formula do evento continua numa casa so — `buildAgentBusinessEvent` —,
+  // e o que muda entre as portas e apenas COMO o emissor e identificado.
+  //
+  // ⚠️ A CATEGORIA E COMPOSTA AQUI, nunca aceita pronta. `agent_event` recebe a
+  // string inteira e depois CONFERE que o primeiro segmento e o pool da sessao;
+  // compondo, o isolamento de namespace passa a valer **por construcao** — nao ha
+  // string que o chamador possa mandar para furar. E o chamador deixa de precisar
+  // saber em que pool ele roda, o que importa porque o mesmo skill roda em N pools.
+  server.tool(
+    "agent_event_record",
+    "Emit an Arc 12 business event from a skill-flow agent, identified by SESSION (no " +
+    "agent_login token — the native skill-flow path has none). The category is COMPOSED " +
+    "server-side as {pool}.{emitter}.{metric_key}[.{path}], with the pool read from the " +
+    "session meta: namespace isolation holds by construction, and the caller does not " +
+    "need to know which pool it runs in. `emitter` is a STABLE label (e.g. \"navegacao\"), " +
+    "never a skill_id — using the skill id would break the series on every rename.",
+    AgentEventRecordInputSchema.shape as any,
+    async (raw: Record<string, unknown>) => {
+      let a: z.infer<typeof AgentEventRecordInputSchema>
+      try {
+        a = AgentEventRecordInputSchema.parse(raw)
+      } catch (e) {
+        if (e instanceof z.ZodError) {
+          return mcpError("validation_error", e.errors.map(x => `${x.path.join(".")}: ${x.message}`).join("; "))
+        }
+        throw e
+      }
+
+      try {
+        // Pool e tenant vem do META da sessao — nunca do chamador. E a diferenca
+        // entre isolamento por construcao e isolamento por conferencia.
+        const metaRaw = await redis.get(`session:${a.session_id}:meta`)
+        if (!metaRaw) {
+          return mcpError(
+            "session_not_found",
+            `sessao ${a.session_id} sem meta no Redis — sem pool nao ha categoria, e ` +
+            `inventar um l1 poria o evento no namespace de outro pool`,
+          )
+        }
+        const meta = JSON.parse(metaRaw) as Record<string, unknown>
+        const poolId = typeof meta["pool_id"] === "string" ? meta["pool_id"] : ""
+        if (!poolId) {
+          return mcpError("pool_unknown", `sessao ${a.session_id} sem pool_id no meta — categoria indeterminavel`)
+        }
+        const tenantId = a.tenant_id || (typeof meta["tenant_id"] === "string" ? meta["tenant_id"] : "")
+
+        const partes = [poolId, a.emitter, a.metric_key]
+        if (a.path) partes.push(a.path)
+        const category = sanitizeCategoryPath(partes.join("."))
+
+        // Teto do Arc 12: recusar AQUI, nomeando, transforma caminho fundo demais em
+        // erro de autoria. Emitir produziria um evento que o schema rejeita depois,
+        // longe daqui — buraco na serie em vez de mensagem.
+        if (category.split(".").length > AGENT_EVENT_CATEGORY_MAX_SEGMENTS) {
+          return mcpError(
+            "category_too_deep",
+            `categoria ${category} tem ${category.split(".").length} segmentos, teto ${AGENT_EVENT_CATEGORY_MAX_SEGMENTS}`,
+          )
+        }
+
+        await kafka.publish("agent.events", buildAgentBusinessEvent({
+          tenant_id:     tenantId,
+          session_id:    a.session_id,
+          category,
+          value:         a.value ?? 1,
+          agent_type_id: typeof meta["agent_type_id"] === "string" ? meta["agent_type_id"] : "",
+          skill_id:      a.emitter,
+          pool_id:       poolId,
+          segment_id:    a.segment_id ?? null,
+          tags:          a.tags ?? {},
+        }))
+        return ok({ emitted: true, category, pool_id: poolId })
+      } catch (err) {
+        return mcpError("emit_failed", err instanceof Error ? err.message : String(err))
       }
     },
   )

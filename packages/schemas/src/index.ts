@@ -751,6 +751,7 @@ export {
   AgentBusinessEventSchema,
   AgentEventInputSchema,
   decomposeCategoryLevels,
+  sanitizeCategoryPath,
 } from "./agent-events"
 
 export type {

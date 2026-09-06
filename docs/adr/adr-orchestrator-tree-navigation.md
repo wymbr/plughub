@@ -299,6 +299,36 @@ inteiro.
 | **F4** | O **runner genérico** assume a navegação; `agente_triagem_v2` sai | F1, F3 |
 | **F5** | **Paridade LLM** (D6): o orquestrador IA aterrissa nas mesmas folhas declaradas | F4 |
 
+> **Emenda de 2026-09-06 — D12: a categoria é COMPOSTA no servidor, não conferida.**
+> Esta tabela dizia *"`agent_event` com o caminho"*, e a F1 descobriu que **aquela tool é
+> inalcançável** deste caminho: ela exige `session_token` de `agent_login`, e o orchestrator-bridge
+> não emite nenhum (`session_token` aparece **0 vezes** no `main.py` dele). Era o bloqueio da
+> ORQ-06. A saída escolhida pelo dono foi a **(b)**: `agent_event_record`, identificado pela
+> SESSÃO.
+>
+> **A troca não é de credencial, é de quem compõe.** O `agent_event` recebe a `category` pronta e
+> **confere** que o primeiro segmento é o pool — e conferir depois obriga o chamador a saber em que
+> pool roda, que é por que o YAML precisava interpolar `{{@ctx.core.pool.id}}`. O
+> `agent_event_record` recebe `emitter` + `metric_key` + `path` e compõe
+> `{pool}.{emitter}.{metric_key}[.{path}]` lendo o pool do `session:{id}:meta`: o isolamento de
+> namespace do Arc 12 vale **por construção**, e o chamador deixa de precisar da informação.
+> `emitter` é rótulo estável, nunca um `skill_id` — renomear partiria a série.
+>
+> **A afirmação de que a lente existente cobre esta série foi MEDIDA, não lida.** Um evento real
+> (sessão sintética, depois apagada) saiu
+> `demo_ia.navegacao.destino.sac.info_plano`, chegou ao ClickHouse e a lente o desenhou nos **três**
+> níveis (`depth` 3/4/5, `derived_leaf` na folha). Havia risco real: as colunas pré-decompostas
+> param em `category_l4` e o caminho tem 5 segmentos — mas a lente não as usa, ela fatia o
+> `category` inteiro.
+>
+> ⚠️ **E há um carimbo que a F1 quase perdeu em silêncio.** A época (D13/D14) viaja em
+> `tags['dialog_form_id']` + `tags['dialog_form_version']`; a primeira versão do skill escreveu
+> `form_id`. Nada fica vermelho — o evento só nasce **sem época para sempre**, e a árvore devolve
+> `single_vocabulary: false` sem saber dizer por quê. Os dois valores têm de vir da **saída do
+> `dialog_tree_level`**, porque o carimbo é fato do RENDER e um literal pode discordar da forma que
+> o cliente viu. Guardado pelo **ramo E** do gate, que mede as duas pontas (produtor escreve,
+> consumidor lê) e foi testado por mutação.
+
 > **Por que a F1 vem antes de tudo, e sozinha:** ela entrega a medição que hoje é **zero** sem depender
 > de canal nem de engine. Se a F2 ou a F3 demorarem, o eixo de demanda já existe e já é legível na lente
 > de árvore. É o oposto do arco que só dá valor no fim.

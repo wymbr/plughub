@@ -46,6 +46,30 @@ export const AGENT_EVENT_CATEGORY_MAX_SEGMENTS = 8
  * snake_case separados por ponto. Ex.: "pool.skill.key" ou
  * "pool.skill.motivo.financeiro.cobranca.indevida".
  */
+/**
+ * Normaliza uma resposta em segmentos de categoria, **preservando o `.` como
+ * separador** (F4 do `adr-dialog-tree-options`).
+ *
+ * MUDOU DE CASA em 2026-09-06: vivia em `mcp-server/tools/segment.ts` e ganhou um
+ * segundo consumidor (`agent_event_record`). Mora aqui porque e aqui que o regex e
+ * o teto de segmentos ja moram — a regra da categoria numa casa so.
+ *
+ * ⚠️ O sanitizador ANTERIOR era `replace(/[^a-z0-9_]+/g, "_")` sobre a string
+ * inteira, e o ponto caia nessa classe: `financeiro.cobranca.indevida` virava UM
+ * segmento. Tres consequencias, todas mudas: a hierarquia morria no emissor, o
+ * recorte por prefixo nao casava com nada, e uma pasta `a.b` colidia com uma folha
+ * `a_b` na mesma serie. Saneia-se POR segmento, nunca sobre a string toda.
+ */
+export function sanitizeCategoryPath(v: string): string {
+  return v
+    .trim()
+    .toLowerCase()
+    .split(".")
+    .map((seg) => seg.replace(/[^a-z0-9_]+/g, "_"))
+    .filter((seg) => seg.length > 0)
+    .join(".")
+}
+
 export const AGENT_EVENT_CATEGORY_REGEX = new RegExp(
   `^[a-z0-9_]+(\\.[a-z0-9_]+){1,${AGENT_EVENT_CATEGORY_MAX_SEGMENTS - 1}}$`,
 )

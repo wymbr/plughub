@@ -1,5 +1,74 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (4) — ORQ-06: o Arc 12 ganha uma porta que COMPÕE a categoria, em vez de conferi-la
+
+A F1 tinha entregado tudo menos o número que lhe dá nome. O motivo estava medido na ORQ-06: o
+`agent_event` exige `session_token` de `agent_login`, e o orchestrator-bridge não emite nenhum —
+`session_token` aparece **0 vezes** no `main.py` dele. Um agente nativo de skill-flow simplesmente
+não alcança a tool, e é por isso que o Arc 12 tinha zero chamadores no caminho de atendimento.
+
+Das três saídas levantadas, o dono escolheu a **(b)**. O resultado é `agent_event_record`.
+
+**O ponto não é a credencial — é quem COMPÕE a categoria.** O `agent_event` recebe a `category`
+pronta e **confere** que o primeiro segmento é o pool da sessão. Conferir depois obriga o chamador a
+saber em que pool roda, e era exatamente por isso que o YAML da navegação precisava interpolar
+`{{@ctx.core.pool.id}}` — um literal ali amarraria a série a um pool, e o mesmo skill roda em N.
+O `agent_event_record` recebe `emitter` + `metric_key` + `path` e **compõe**
+`{pool}.{emitter}.{metric_key}[.{path}]`, lendo o pool do `session:{id}:meta`. O isolamento de
+namespace do Arc 12 passa a valer **por construção**, e o chamador deixa de precisar da informação.
+
+`emitter` é rótulo **estável**, nunca um `skill_id`: renomear o skill partiria a série no meio, e a
+série é o produto da fase.
+
+**Recusa NOMEANDO, em três casos** — sem meta, sem `pool_id`, categoria acima do teto de 8 segmentos.
+Emitir em qualquer um deles produziria um evento que o schema rejeita **longe dali**, virando buraco
+na série em vez de mensagem para quem autorou.
+
+`sanitizeCategoryPath` mudou de casa — de `mcp-server/tools/segment.ts` para
+`@plughub/schemas/agent-events.ts`, ao lado do `AGENT_EVENT_CATEGORY_REGEX` e do
+`AGENT_EVENT_CATEGORY_MAX_SEGMENTS` que ela serve. Duas casas para a mesma regra é como as cópias do
+verificador de JWT começaram.
+
+### O que foi MEDIDO, e não só escrito
+
+Exercido contra o servidor vivo, com os dois controles:
+
+* **negativo** — sessão inexistente: `RECUSOU`, nomeando (*"sem pool nao ha categoria, e inventar um
+  l1 poria o evento no namespace de outro pool"*);
+* **positivo** — `session:{id}:meta` real: `EMITIU`, e a categoria saiu
+  `demo_ia.navegacao.destino.sac.info_plano` com o l1 vindo do **meta** — o chamador nunca disse
+  `demo_ia`. Um negativo sozinho passa pelo motivo errado: qualquer lixo recusa.
+
+A linha chegou ao ClickHouse, e **a lente de árvore a desenhou nos três níveis** (`depth` 3/4/5,
+`derived_leaf` na folha). A afirmação do ADR de que *"a lente que já existe desenha isto sem uma
+linha de código nova"* deixou de ser leitura de SQL — e ela tinha um risco real que a medição
+descartou: as colunas pré-decompostas param em `category_l4`, e o caminho tem 5 segmentos. A lente
+não as usa; ela fatia o `category` inteiro com `splitByChar`. A linha sintética foi **apagada**
+depois, para não poluir a árvore do teste real.
+
+### O defeito que eu cometi, e que virou ramo de gate
+
+A primeira versão do `registrar_demanda` carimbava `tags.form_id`. A lente lê
+`tags['dialog_form_id']` e `tags['dialog_form_version']`. **Nada fica vermelho** — o evento apenas
+nasce **sem época, para sempre**, e a árvore devolve `single_vocabulary: false` sem saber dizer por
+quê; quem desenha então recusa os totais de um eixo que nunca misturou vocabulário nenhum. Foi a
+própria medição ao vivo que o denunciou (`unstamped_events: 1`), e não a leitura do YAML.
+
+O **ramo E** do `probe_orchestrator_tree_nav.sh` mede as **duas pontas** — o produtor escreve as
+chaves (e as tira da SAÍDA da tool, porque o carimbo é fato do RENDER e um literal poderia discordar
+da forma que o cliente viu), e o consumidor ainda as lê. Uma ponta só ficaria verde depois de
+qualquer renomeio. **Testado por mutação:** com `form_id` de volta, o ramo fica VERMELHO nomeando
+*"evento nasce SEM epoca"*.
+
+### Estado
+
+`demo_ia` roda `skill_navegacao_v1` no slot `current`, com `max_concurrent_sessions: 10`
+preservado — o primeiro `set-next` desta sessão o havia derrubado, por mandar só o `skill_id`, e
+isso foi medido e restaurado antes de seguir.
+
+**A ORQ-01 continua ABERTA**, e de propósito: falta o contato real. O eixo tem mecanismo e **zero**
+medição; declarar que ele existe agora seria exatamente o *"existe != está pronto"*.
+
 ## 2026-09-06 (3) — F1 da navegação: o mecanismo está pronto e verificado (a medição, ainda não)
 
 Quatro peças, e a que sustenta as outras é a menos vistosa.
