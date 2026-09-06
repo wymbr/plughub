@@ -43,6 +43,12 @@ const TreeLevelInputSchema = z.object({
   // quem sobrevive a queda (ver D11 do ADR).
   path:       z.array(z.string()).default([])
                 .describe("Cursor: ids already chosen, outermost first. Empty = root level"),
+  // O APPEND mora aqui porque o fluxo nao tem primitiva para isso: `choice` compara,
+  // `menu` coleta, e nenhum step concatena array. Sem este campo cada skill
+  // reinventaria a concatenacao — ou pior, guardaria o caminho como string e
+  // fabricaria o separador, que e o mesmo ponto onde a categoria do Arc 12 nasce.
+  chosen_id:  z.string().optional()
+                .describe("Id just picked by the customer; appended to `path` before projecting"),
   status:     z.enum(["draft", "published"]).default("published"),
   version:    z.number().int().positive().optional(),
   locale:     z.string().optional(),
@@ -194,11 +200,12 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           )
         }
 
-        const nivel = optionsAtPath(q.options, input.path)
+        const trilha = input.chosen_id ? [...input.path, input.chosen_id] : input.path
+        const nivel = optionsAtPath(q.options, trilha)
         // Rotulo do no do cursor — para a superficie compor o prompt do nivel de baixo
         // sem repetir a pergunta da raiz. Usa a MESMA projecao, um passo acima.
-        const pai   = optionsAtPath(q.options, input.path.slice(0, -1))
-        const ultimo = input.path[input.path.length - 1]
+        const pai   = optionsAtPath(q.options, trilha.slice(0, -1))
+        const ultimo = trilha[trilha.length - 1]
         const nodeLabel = ultimo ? pai.options.find(o => o.id === ultimo)?.label : undefined
 
         return ok({
@@ -214,6 +221,10 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           // Cauda da `category` do Arc 12 — o chamador nao precisa juntar, e assim
           // ha UMA forma de compor o caminho, nao uma por skill.
           category_path: nivel.path.join("."),
+          // Primeiro segmento em campo PROPRIO: e por ele que o roteamento decide, e
+          // depender de indice em JSONPath no `choice` poria a composicao do caminho
+          // em duas casas.
+          root_id:       nivel.path[0] ?? null,
         })
       } catch (err) {
         return mcpError("network_error", err instanceof Error ? err.message : String(err))

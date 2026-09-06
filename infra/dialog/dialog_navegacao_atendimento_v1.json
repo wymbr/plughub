@@ -1,0 +1,44 @@
+{
+  "form_id": "dialog_navegacao_atendimento_v1",
+  "name": "Navegação de atendimento (orquestrador)",
+  "description": "Árvore de navegação do orquestrador: pastas navegam, folhas endereçam um serviço. Conteúdo do menu que hoje vive hardcoded em agente_triagem_v2 + skill_atendimento_sac_v1. A folha NÃO carrega o pool — só o caminho; o mapa caminho→pool mora na config do pool orquestrador (ADR adr-orchestrator-tree-navigation, D2).",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["orquestrador", "navegacao", "demanda"],
+  "nodes": [
+    {
+      "id": "saudacao",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Olá! Sou o assistente virtual da PlugHub."
+      }
+    },
+    {
+      "id": "destino",
+      "kind": "question",
+      "prompt": {
+        "pt-BR": "Como posso te ajudar hoje?"
+      },
+      "interaction": "list",
+      "output_key": "destino",
+      "timeout_s": -1,
+      "options": [
+        {
+          "id": "sac",
+          "label": { "pt-BR": "💬 SAC — Atendimento ao cliente" },
+          "options": [
+            { "id": "info_plano",       "label": { "pt-BR": "📋 Informações sobre o plano" } },
+            { "id": "status_servico",   "label": { "pt-BR": "🔍 Status do serviço" } },
+            { "id": "problema_tecnico", "label": { "pt-BR": "🔧 Problema técnico" } },
+            { "id": "especialista",     "label": { "pt-BR": "👤 Falar com especialista humano" } }
+          ]
+        },
+        { "id": "portabilidade", "label": { "pt-BR": "📱 Portabilidade de número" } },
+        { "id": "reembolso",     "label": { "pt-BR": "💰 Solicitar reembolso" } },
+        { "id": "auth_form",     "label": { "pt-BR": "🔐 Demo de formulário mascarado" } },
+        { "id": "auth_sac",      "label": { "pt-BR": "🔑 SAC autenticado (auth + SAC)" } },
+        { "id": "nao_se_aplica", "label": { "pt-BR": "❓ Nenhuma dessas — falar com atendente" } }
+      ]
+    }
+  ]
+}

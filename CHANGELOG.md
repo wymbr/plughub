@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (3) — F1 da navegação: o mecanismo está pronto e verificado (a medição, ainda não)
+
+Quatro peças, e a que sustenta as outras é a menos vistosa.
+
+**1. `optionsAtPath` em `@plughub/schemas`** — projeta UM nível da árvore a partir de um caminho.
+Existe porque navegar com o cliente é turno-a-turno: o `menu` mostra uma lista PLANA por vez e o
+`render` traz a árvore inteira aninhada; apontar a ref do menu para o render entregaria só o nível de
+cima e os filhos ficariam invisíveis — o mesmo achatamento mudo do adapter de WhatsApp, por outro
+caminho. **O caso que a sustenta não é o feliz:** segmento desconhecido devolve `found:false` com
+`options` VAZIO, **nunca a raiz** — degradar ali faria a tela voltar ao menu principal, parecer certa, e
+o cliente perder a navegação sem nada ficar vermelho. Mutação aplicada: três ramos vermelhos.
+
+**2. Tool `dialog_tree_level`** — própria, não um parâmetro do `form_get` (aquele responde *qual é o
+conteúdo publicado* e tem três consumidores; alargar `render.options` para servir um deles seria
+container largo para fato estreito). Ela também faz o **append** do id escolhido, porque o fluxo não tem
+primitiva que concatene array — e guardar o caminho como string obrigaria cada skill a fabricar o
+separador, justo onde a categoria do Arc 12 nasce.
+
+**3. Forma `dialog_navegacao_atendimento_v1`** publicada: 9 folhas, 2 níveis, com a folha de escape.
+
+**4. `skill_navegacao_v1.yaml`** — dry-run do servidor `valid: true`. E o que importa mais: o **validador
+de ciclos do engine ACEITA** o fluxo e **RECUSA** a mutação em que `avaliar` volta para `descer` (ciclo
+de `invoke`+`choice`, sem step que bloqueie no mundo externo). A afirmação central do ADR — *"o ciclo é
+sancionado por construção"* — deixou de ser leitura de comentário.
+
+Gate `probe_orchestrator_tree_nav.sh`, 4 ramos, **com a mutação DENTRO dele**: o ramo D não pergunta *"o
+validador roda?"*, pergunta *"o validador DISTINGUE?"*. `node`/`dist` ausentes ⇒ INCONCLUSIVO nomeado,
+nunca verde (a armadilha do `probe_mcp_permissions_producer`).
+
+### ⚠️ A fase NÃO fecha aqui, e isso é a regra da casa
+
+Nenhum pool roda a skill, então o `agent_event` de demanda continua **zero** — exatamente o número que a
+fase existe para mudar. Chamar isto de entregue seria o *"existe ≠ está pronto"*. Falta (a) um pool com
+a skill deployada e (b) um contato real. `ORQ-01` segue **aberta**, com o estado escrito na linha.
+
+### Dois achados do caminho
+
+- Esta skill é o **primeiro chamador de `agent_event` do repositório** — coerente com *"o eixo de demanda
+  não tem produtor"*, e explica por que não havia idioma a copiar.
+- A `category` **tem de começar pelo pool da SESSÃO** (isolamento de namespace, verificado pela tool), e
+  o mesmo skill roda em N pools — logo ela se compõe por `{{@ctx.core.pool.id}}`, nunca por literal no
+  YAML. Interpolação `{{...}}` é suportada em input de `invoke`; ref pura (`$.`) substituiria o valor
+  inteiro e não serve para compor.
+- ⚠️ Corrigido de passagem: o cabeçalho do `agent_event` dizia *"category: 2–5 segmentos"* e a constante
+  é **8**.
+
+Verificação: schemas 276/276 · `tsc` limpo em schemas e mcp-server · dry-run do registry `valid:true` ·
+gate novo VERDE · manifesto 288 scripts, cobertura verde.
+
+---
+
 ## 2026-09-06 (2) — Correção: a D11 mediu com um `grep` truncado, e o achado central estava errado
 
 A entrada anterior (D11) afirmava que **`menu` não salva estado** e que **ninguém reinvoca `run()`** —

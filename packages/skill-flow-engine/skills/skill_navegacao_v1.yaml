@@ -1,0 +1,248 @@
+# skill_navegacao_v1.yaml
+#
+# F1 do `docs/adr/adr-orchestrator-tree-navigation.md` (ORQ-01).
+#
+# Orquestrador determinístico cujo MENU é conteúdo autorado (`DialogForm`), não
+# YAML. Substitui funcionalmente o `agente_triagem_v2` + o sub-menu do
+# `skill_atendimento_sac_v1`, que hoje são dois artefatos com dois deploys.
+#
+# O QUE MUDA DE VERDADE (e é a razão da fase): **o eixo de DEMANDA passa a
+# existir**. Medido em 2026-09-05: os cinco skills do caminho de atendimento
+# emitem ZERO `agent_event` — toda resposta de menu que o cliente dá hoje é
+# descartada, vive no `pipeline_state` e morre com a sessão. Medimos com precisão
+# o que o AGENTE diz que o contato foi (wrap-up) e nada do que o CLIENTE disse
+# que queria.
+#
+# ⚠️ ESTA FASE NÃO TOCA NO ENGINE E NÃO MEXE NO ROTEAMENTO. O despacho continua
+# sendo o `choice` + `escalate` literais de sempre (ver `rotear`). Tornar o alvo
+# do `escalate` interpolável é a F3/ORQ-03, e é lá que o mapa caminho→pool nasce.
+#
+# ⚠️ A FOLHA CARREGA O CAMINHO, NUNCA O POOL (D2). O `DialogForm` é congelado no
+# promote e o pool é DB-owned: um `pool_id` dentro da forma seria segunda fonte de
+# verdade de roteamento, invisível de quem administra pools.
+#
+# O LAÇO: `mostrar` (menu) → `descer` → `avaliar` → `mostrar`. É ciclo, e é
+# CONTROLADO por construção — o validador do engine aceita back-edge quando o
+# ciclo passa por um step que bloqueia esperando o mundo externo, e `menu` é um
+# deles por política declarada (2026-06-04). Sem step novo, sem iterador novo.
+#
+# ⚠️ DURABILIDADE (D11): o `pipeline_state` — e portanto o cursor `nivel.path` —
+# É persistido no Redis a cada transição, e o engine retoma do `current_step_id`.
+# O que NÃO sobrevive a uma queda é a ESPERA do `menu` (BLPOP em processo, sem
+# reentrada). Isso é PARIDADE com o skill que este substitui, que tem exatamente
+# a mesma propriedade — não é regressão. O modelo contextless é a `DUR-01`.
+
+id: skill_navegacao_v1
+name: "Navegação v1 — orquestrador dirigido por DialogForm"
+version: "1.0"
+description: |
+  Orquestrador determinístico (sem LLM) que navega uma ÁRVORE de opções autorada
+  num DialogForm: pastas navegam, folhas endereçam um serviço. Emite a demanda do
+  cliente como `agent_event` (eixo que hoje não existe) e escala ao pool do
+  serviço escolhido. Conteúdo no DialogForm; controle aqui; roteamento na
+  config — três casas, nunca uma.
+classification:
+  type: orchestrator
+  domain: customer_service
+
+entry: nivel_raiz
+
+steps:
+
+  # ── 1. Nível raiz ───────────────────────────────────────────────────────────
+  # `path: []` explícito. O primeiro nível não vem de lugar nenhum: dar-lhe um
+  # default implícito faria "sem cursor" e "cursor vazio" virarem o mesmo fato.
+  - id: nivel_raiz
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:    "dialog_navegacao_atendimento_v1"
+      output_key: "destino"
+      path:       []
+      tenant_id:  "$.tenant_id"
+    output_as: nivel
+    on_success: mostrar
+    on_failure: sem_navegacao
+
+  # ── 2. Mostrar o nível corrente ─────────────────────────────────────────────
+  # `prompt` e `options` vêm por REF do nível projetado — é isto que faz o menu
+  # ser conteúdo e não código. `interaction: list` por decisão (D4): navegação é
+  # resposta ÚNICA; `checklist` descreveria o que aconteceu, não para quem ir.
+  - id: mostrar
+    type: menu
+    prompt:      "$.pipeline_state.nivel.prompt"
+    interaction: list
+    options:     "$.pipeline_state.nivel.options"
+    output_as:   escolha
+    timeout_s: 120
+    on_success: descer
+    on_failure: finalizar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # ── 3. Descer um nível ──────────────────────────────────────────────────────
+  # O APPEND é da tool, não daqui: o fluxo não tem primitiva que concatene array,
+  # e guardar o caminho como string obrigaria cada skill a fabricar o separador —
+  # justo o ponto onde a categoria do Arc 12 nasce.
+  - id: descer
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:    "dialog_navegacao_atendimento_v1"
+      output_key: "destino"
+      path:       "$.pipeline_state.nivel.path"
+      chosen_id:  "$.pipeline_state.escolha"
+      tenant_id:  "$.tenant_id"
+    output_as: nivel
+    on_success: avaliar
+    on_failure: sem_navegacao
+
+  # ── 4. Folha ou pasta? ──────────────────────────────────────────────────────
+  # `found: false` é DADO, não erro: a forma pode ter mudado no meio do contato
+  # (época), e aí o cursor deixa de resolver. Reiniciar a navegação é honesto;
+  # seguir com um caminho que não existe mais seria inventar demanda.
+  - id: avaliar
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.nivel.found"
+        operator: eq
+        value: false
+        next: reiniciar
+      - field: "$.pipeline_state.nivel.is_leaf"
+        operator: eq
+        value: true
+        next: registrar_demanda
+    default: mostrar
+
+  - id: reiniciar
+    type: notify
+    message: "Desculpe, não reconheci essa opção. Vamos começar de novo."
+    on_success: nivel_raiz
+    on_failure: nivel_raiz
+
+  # ── 5. A DEMANDA vira evento ────────────────────────────────────────────────
+  # É a entrega desta fase. `category` = `{pool}.{skill}.{métrica}.{caminho}` — o
+  # primeiro segmento é o pool por invariante do Arc 12, e a cauda é o caminho
+  # escolhido, então a lente de árvore que já existe desenha isto sem uma linha
+  # de código nova.
+  #
+  # ⚠️ Falhar aqui NÃO pode derrubar o atendimento: medir é secundário ao
+  # atender. `on_failure` segue para o roteamento — mas o `invoke` já loga o
+  # motivo, então a degradação é barulhenta, não muda.
+  - id: registrar_demanda
+    type: invoke
+    tool: agent_event
+    input:
+      # ⚠️ O PRIMEIRO segmento TEM de ser o pool da sessão — o `agent_event` confere
+      # isso (isolamento de namespace) e recusa o resto. Por isso ele vem do ctx e
+      # não do YAML: o mesmo skill roda em N pools, e um literal aqui amarraria a
+      # série a um deles. `{{...}}` é interpolação de template, suportada em input
+      # de `invoke` (`resolveInputValue`); ref pura (`$.`) substituiria o valor
+      # INTEIRO e não serve para compor.
+      category: "{{@ctx.core.pool.id}}.navegacao.destino.{{$.pipeline_state.nivel.category_path}}"
+      value: 1
+      tags:
+        form_id: "dialog_navegacao_atendimento_v1"
+    on_success: rotear
+    on_failure: rotear
+
+  # ── 6. Roteamento — INALTERADO nesta fase ───────────────────────────────────
+  # Casa o PRIMEIRO segmento do caminho (`root_id`), que a tool devolve em campo
+  # próprio para a composição do caminho não ficar em duas casas.
+  - id: rotear
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.nivel.root_id"
+        operator: eq
+        value: "sac"
+        next: escalar_sac
+      - field: "$.pipeline_state.nivel.root_id"
+        operator: eq
+        value: "portabilidade"
+        next: escalar_portabilidade
+      - field: "$.pipeline_state.nivel.root_id"
+        operator: eq
+        value: "reembolso"
+        next: escalar_reembolso
+      - field: "$.pipeline_state.nivel.root_id"
+        operator: eq
+        value: "auth_form"
+        next: escalar_auth
+      - field: "$.pipeline_state.nivel.root_id"
+        operator: eq
+        value: "auth_sac"
+        next: escalar_auth_sac
+    default: escalar_humano
+
+  - id: escalar_sac
+    type: escalate
+    target:
+      pool: sac_ia
+    context: pipeline_state
+    handoff_reason: "Cliente escolheu SAC na navegação"
+    on_failure: encerrar_fallback
+
+  - id: escalar_portabilidade
+    type: escalate
+    target:
+      pool: portabilidade_ia
+    context: pipeline_state
+    handoff_reason: "Cliente escolheu portabilidade na navegação"
+    on_failure: encerrar_fallback
+
+  - id: escalar_reembolso
+    type: escalate
+    target:
+      pool: reembolso_ia
+    context: pipeline_state
+    handoff_reason: "Cliente escolheu reembolso na navegação"
+    on_failure: encerrar_fallback
+
+  - id: escalar_auth
+    type: escalate
+    target:
+      pool: auth_form_ia
+    context: pipeline_state
+    handoff_reason: "Cliente escolheu o demo de formulário mascarado"
+    on_failure: encerrar_fallback
+
+  - id: escalar_auth_sac
+    type: escalate
+    target:
+      pool: auth_sac_ia
+    context: pipeline_state
+    handoff_reason: "Cliente escolheu SAC autenticado"
+    on_failure: encerrar_fallback
+
+  # A folha de ESCAPE (D7 do ADR da árvore) e o default do roteamento caem no
+  # mesmo lugar — e isso é decisão, não preguiça: "nenhuma dessas" e "escolheu
+  # algo que não sei rotear" pedem a mesma coisa do cliente (um humano), e a
+  # DIFERENÇA entre os dois já está registrada no `category_path` do evento.
+  - id: escalar_humano
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    handoff_reason: "Navegação terminou em atendimento humano"
+    on_failure: encerrar_fallback
+
+  # ── Terminais ───────────────────────────────────────────────────────────────
+  # Forma indisponível NÃO cai num menu hardcoded de emergência: isso seria a
+  # segunda casa do conteúdo, e ela envelheceria calada. Escala ao humano.
+  - id: sem_navegacao
+    type: escalate
+    target:
+      pool: retencao_humano
+    context: pipeline_state
+    handoff_reason: "DialogForm de navegação indisponível"
+    on_failure: encerrar_fallback
+
+  - id: encerrar_fallback
+    type: complete
+    outcome: failed
+    issue_status: "Escalação falhou — pool de destino indisponível"
+
+  - id: finalizar
+    type: complete
+    outcome: resolved
+    issue_status: "Cliente encerrou durante a navegação"
