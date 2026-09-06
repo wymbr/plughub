@@ -15,7 +15,9 @@
  *                    PII keywords are blocked (cpf, email, token, …)
  *
  * Governance enforced here:
- *   - category regex: 2–5 dot-separated snake_case segments
+ *   - category regex: 2–AGENT_EVENT_CATEGORY_MAX_SEGMENTS dot-separated snake_case
+ *     segments (hoje 8; a constante vive em `@plughub/schemas/agent-events.ts` e e
+ *     quem manda — este comentario dizia 5 e estava OBSOLETO)
  *   - namespace isolation: category_l1 === session's pool_id (from session meta)
  *   - PII tag keys blocked
  *   - max 10 tags, 64 chars per key/value

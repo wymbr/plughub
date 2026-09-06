@@ -1,5 +1,44 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (2) — Correção: a D11 mediu com um `grep` truncado, e o achado central estava errado
+
+A entrada anterior (D11) afirmava que **`menu` não salva estado** e que **ninguém reinvoca `run()`** —
+logo, morto o processo, a resposta do cliente ficaria na lista até o TTL. **As duas metades estavam
+erradas.** O `grep` que as produziu tinha `| head`, e eu li uma lista **truncada** como se fosse
+completa: é a família catalogada na § Postura de Engenharia — *uma lista parece completa por ser uma
+lista* —, cometida justamente ao MEDIR durabilidade, que era a pergunta do dono.
+
+| fato | como estava registrado | medido completo |
+|---|---|---|
+| quem chama `saveState` | 3 steps | **9** (`catch` `collect` `delegate` `invoke` `loop` `notify` `receive` `suspend` `task`) |
+| efeito colateral de MCP | não avaliado | `invoke`/`notify` têm **sentinela de duas fases** (`dispatched`→`completed`), idempotente através de queda |
+| reentrada após queda | *"não existe"* | **existe** — `CrashDetector` re-enfileira, e o engine retoma do `current_step_id` |
+
+A reentrada é guardada contra falso positivo por dois sinais: o *execution lock*
+(`{t}:pipeline:{sid}:running`) e o *activity flag* (`{t}:session:{sid}:active_instance:{iid}`, TTL 30 s
+**renovado por um timer dentro do processo** — morto o processo, o timer morre e o flag expira). Com os
+dois ausentes, a conversa é re-enfileirada, re-roteada, e o `run()` retoma do `menu`.
+
+**O fluxo não se perde.** O que se perde é menor, e ainda assim real: a resposta em voo (a chave
+`menu:result:{sid}:{iid}` carrega o `instance_id` do processo morto, então a nova instância nunca a lê e
+o cliente **é perguntado de novo**), o tempo até recuperar (até ~180 s para um menu de 120 s), e a
+**licença de IA retida durante a espera**.
+
+### O que a correção muda na decisão
+
+A **paridade da F1–F4 segue de pé** — e mais firme, porque a recuperação que existe vale igual para o
+skill que a ORQ substitui. O que muda é o **mérito da `DUR-01`**: deixa de ser robustez (*"o fluxo se
+perde"*) e passa a ser **capacidade + latência**. O argumento que era o terceiro da lista — pela Arc 19,
+`suspend` devolve o agente ao pool, logo o modelo contextless **libera a licença de IA entre turnos** —
+passa a ser o principal.
+
+O texto original da D11 **não foi apagado**: a correção fica ao lado dele no ADR, porque erro de medição
+apagado é erro que volta.
+
+Arquivos: `docs/adr/adr-orchestrator-tree-navigation.md` (D11) · `pending.md` (DUR-01).
+
+---
+
 ## 2026-09-06 — D11: o DialogForm não vira contexto em memória; o que não sobrevive é a ESPERA
 
 Pergunta do dono antes de destravar a F1: para substituir o skill a contento, o modelo teria de ser

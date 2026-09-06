@@ -199,14 +199,43 @@ precisaria ser contextless e persistir as paradas no Redis — ou o `DialogForm`
 | não re-disparar trabalho feito | **sim** | teste `"retoma task step após crash — não re-dispara agent_delegate"`, via `job_id` persistido |
 | **a ESPERA do `menu`** | **NÃO** | ver abaixo |
 
-⚠️ **O buraco é a espera, não o estado.** `menu` faz **BLPOP em processo** e **não chama `ctx.saveState`**
-antes de bloquear — só `catch`, `collect` e `delegate` chamam. Do outro lado, o bridge apenas faz **LPUSH**
-em `menu:result:{sid}:{iid}`, e o `CLAUDE.md` dele declara: *"Never access pipeline_state directly — only
-menu:result and session:closed lists"*. **Ninguém reinvoca `run()`** quando a resposta chega: o desenho
-pressupõe uma corrotina viva. Se o processo morre, o Redis sabe que o fluxo está no `menu`, mas nada o
-reentra, e a resposta do cliente fica na lista até o TTL. *(Varredura do repositório: o único escritor de
-`pipeline_state` no Redis é o `PipelineStateManager`; o acerto em `skill-flow-worker/workflow-client.ts:82`
-é corpo HTTP para a workflow-api, não Redis.)*
+> ### ⚠️ CORREÇÃO de 2026-09-06 — a D11 nasceu com o achado central ERRADO
+>
+> A versão original desta decisão afirmava: *"`menu` não chama `saveState`, só `catch`, `collect` e
+> `delegate` chamam"* e *"**ninguém reinvoca `run()`**; morto o processo, a resposta do cliente fica na
+> lista até o TTL"*. **As duas metades estavam erradas**, e o erro foi de método: o `grep` que as
+> produziu tinha `| head`, e eu li uma lista TRUNCADA como se fosse completa. É a família catalogada na
+> § Postura de Engenharia — *uma lista parece completa por ser uma lista* —, agora cometida ao MEDIR a
+> durabilidade, que era justamente a pergunta do dono.
+>
+> **O que a medição completa mostra:**
+>
+> | fato | correto |
+> |---|---|
+> | quem chama `saveState` | **nove** arquivos de step, não três (`catch`, `collect`, `delegate`, `invoke`, `loop`, `notify`, `receive`, `suspend`, `task`) |
+> | efeito colateral de MCP | `invoke`/`notify` têm **sentinela de duas fases** (`dispatched`→`completed`) que torna a chamada idempotente através de queda |
+> | reentrada após queda | **EXISTE** — o `CrashDetector` re-enfileira a conversa, e o engine retoma do `current_step_id` |
+>
+> A reentrada é guardada contra falso positivo por DOIS sinais: o *execution lock*
+> (`{t}:pipeline:{sid}:running`, TTL 400 s, renovado para `timeout+60` antes do BLPOP) e o *activity
+> flag* (`{t}:session:{sid}:active_instance:{iid}`, TTL 30 s **renovado por um timer dentro do
+> processo**). Morto o processo, o timer morre com ele: o flag some em ≤30 s, o lock expira, e o
+> `CrashDetector` re-enfileira → re-roteia → `run()` retoma do `current_step_id`, que é o `menu`.
+>
+> **O fluxo NÃO se perde.** O que se perde é menor e ainda assim real:
+>
+> 1. a resposta em voo, empurrada para `menu:result:{sid}:{iid}` — a chave carrega o `instance_id` do
+>    processo morto, então a nova instância nunca a lê e o cliente **é perguntado de novo**;
+> 2. o tempo até a recuperação, limitado pelo TTL do lock (para um menu de 120 s, até ~180 s);
+> 3. a licença de IA, retida durante toda a espera.
+>
+> **`menu` segue sendo o único step de espera sem `saveState` próprio** — mas isso importa muito menos
+> do que a versão original dizia: a transição PARA o menu já foi salva pelo laço do engine, então o
+> `current_step_id` está correto no Redis e é dele que a retomada parte.
+>
+> **Consequência para a `DUR-01`:** o mérito dela MUDA de natureza. Não é mais *"o fluxo se perde"* —
+> é **latência de recuperação, uma repergunta ao cliente, e licença retida na espera**. O argumento de
+> CAPACIDADE (liberar a licença entre turnos), que era o terceiro da lista, passa a ser o principal.
 
 **Decisão: a F1–F4 miram PARIDADE.** O skill que elas substituem tem exatamente a mesma propriedade —
 `agente_triagem_v2` é um `menu` num BLPOP, e `skill_atendimento_sac_v1` também. O modelo com `DialogForm`
