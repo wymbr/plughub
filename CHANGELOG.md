@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (13) — ADR: o orquestrador é dono do contato, o especialista é executor
+
+Discussão de arquitetura que nasceu de uma leitura do dono sobre os testes do arco da árvore, e que a
+medição confirmou e reenquadrou. `docs/adr/adr-orchestrator-specialist-contract.md`, proposto.
+
+### A assimetria está na trilha de segmentos, não na teoria
+
+```
+demo_ia          native  primary     ← orquestrador IA: escalou e PERDEU o contato
+sac_ia           native  primary     ← virou dono
+retencao_humano  human   primary     ← orquestrador humano: assumiu
+auth_form_ia     native  specialist  ← entrou SOB ele, e saiu
+nps_ia           native  specialist  ← idem
+```
+
+Quando quem orquestra é humano, o especialista entra como `specialist` e sai — o humano nunca deixa
+de ser dono. Quando é IA, o `escalate` transfere a titularidade. **É essa assimetria que justifica o
+modelo**, e o ADR nasce dizendo isso porque a justificativa óbvia não sobrevive à medição.
+
+### A frequência foi medida, e ela PROÍBE o argumento fácil
+
+Em 1 151 contatos: 77 % tocam um pool só, e **2+ pools de IA acontece em 5**. ⚠️ Mas esses 5 não são
+evidência contra — o `escalate` é terminal, logo o modelo atual **não consegue produzir** o salto.
+Seria medir demanda por uma capacidade usando dados gerados pela ausência dela. O número serve para
+uma coisa: proibir que a mudança seja vendida como *"vai rotear melhor"*. O ganho é de governança e
+medição.
+
+### Quatro medições que mudaram o desenho
+
+* **Nenhum dos 5 especialistas é executor puro** — todos encerram sozinhos, 3 escalam, todos
+  perguntam. Herança de terem nascido como atendentes exclusivos; é custo de migração, não defeito.
+* **3 menus de DEMANDA dentro de folhas** — `sac.menu_motivo`, `sac.menu_resolucao` e
+  **`auth.menu_continuar`, ainda não observado**. ⚠️ Isto **reclassifica a F4**: o atalho por
+  `session.navegacao.path` foi tratado como conserto e é tratamento de SINTOMA — `auth_sac_ia` tem a
+  mesma folha-que-navega e produzirá a mesma tela que o dono confundiu com bug.
+* **O contrato de contexto tem a entrada pronta e ociosa, e a saída inexistente.** O engine computa
+  `@ctx.__gaps__` antes do primeiro step (`engine.ts:507`) e **0 de 41** skills leem; **1 de 41**
+  declara `required_context`; **0 de 41** usa o step `resolve`. O que o skill PRODUZ não tem onde ser
+  declarado — e sem isso a cadeia orquestrador→especialista→orquestrador não se compõe.
+* **A regra que proíbe `delegate` em perfil de agente não tem mecanismo.** O schema diz em comentário
+  *"Agents must never use delegate"*; o `CLAUDE.md` afirma *"validado em parse do YAML + guard no
+  engine"*. Não existe allowlist de step por perfil em lugar nenhum — nem no validador, nem no
+  executor, nem no engine. Por isso a **G1 vem antes da G3 e vale sozinha**: decidir contra uma regra
+  que ninguém impõe é escolher com base em nada.
+
+### Uma correção minha, no registro
+
+Eu afirmei nesta discussão que `task` *"nunca retorna ao chamador"*. **Errado** — eu havia descrito
+só o caminho `async`. Em `sync` (o default) ele faz polling inline e segue para `on_success` com o
+resultado. O que descarta o `task` são outras três coisas, todas medidas: endereça **skill**, carrega
+o YAML **do disco** ignorando o slot promovido, e **não acha 3 dos 5 especialistas** (o loader casa
+por nome de arquivo, e 14 de 41 skills têm `id` ≠ nome).
+
+### O risco que o ADR registra sem resolver
+
+Cadeia `delegate → delegate` **colide**: `core.workflow.delegate_resume_token` é tag única da sessão,
+e `agente_portabilidade_intake_v1` já delega ao `dialog_runner`. Orquestrador → portabilidade →
+dialog_runner sobrescreve o token do orquestrador, que nunca retoma. Está como questão **aberta**, não
+como decisão — é o risco número um do modelo.
+
+⚠️ E fica anotado que **a ORQ-07 virou alicerce sem ter sido feita para isso**: o conserto da
+sentinela é o que permite ao orquestrador delegar várias vezes no mesmo contato. Revertê-lo quebraria
+este modelo sem erro visível.
+
 ## 2026-09-06 (12) — Os dois orquestradores medem lado a lado, e o escape ainda não foi exercido
 
 Primeiro contato pelo `demo_llm_ia`. O cliente escreveu *"quero saber sobre meu plano"* e o roteador
