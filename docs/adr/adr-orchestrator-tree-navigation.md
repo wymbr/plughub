@@ -184,6 +184,59 @@ Guarda declarativa é sancionada (`adr-dialog-conditional-skip-logic`): ocultar 
 (*"só oferece 2ª via a quem tem fatura"*) é legítimo. No instante em que uma condição **escolhe
 destino**, é workflow — não formulário. Esta é a linha que a D2 protege, e é por onde a erosão entraria.
 
+### D11 — A navegação HERDA a durabilidade do `menu`, e isso é PARIDADE, não escolha
+
+*(Levantada pelo dono em 2026-09-06, com a pergunta certa: para substituir o skill a contento, o modelo
+precisaria ser contextless e persistir as paradas no Redis — ou o `DialogForm` vira contexto em memória?)*
+
+**Ele NÃO vira contexto em memória.** Medido, peça por peça:
+
+| peça | durável? | evidência |
+|---|---|---|
+| conteúdo do form (`render` no `pipeline_state`) | **sim** | `PipelineStateManager.save` no laço do engine, a cada transição concluída |
+| cursor da navegação (saída de `invoke`) | **sim** | `invoke` conclui na hora, e o `output_as` entra no mesmo `save` |
+| posição (`current_step_id`) | **sim, e o engine RETOMA dali** | teste `"retoma do current_step_id sem reiniciar do entry"` |
+| não re-disparar trabalho feito | **sim** | teste `"retoma task step após crash — não re-dispara agent_delegate"`, via `job_id` persistido |
+| **a ESPERA do `menu`** | **NÃO** | ver abaixo |
+
+⚠️ **O buraco é a espera, não o estado.** `menu` faz **BLPOP em processo** e **não chama `ctx.saveState`**
+antes de bloquear — só `catch`, `collect` e `delegate` chamam. Do outro lado, o bridge apenas faz **LPUSH**
+em `menu:result:{sid}:{iid}`, e o `CLAUDE.md` dele declara: *"Never access pipeline_state directly — only
+menu:result and session:closed lists"*. **Ninguém reinvoca `run()`** quando a resposta chega: o desenho
+pressupõe uma corrotina viva. Se o processo morre, o Redis sabe que o fluxo está no `menu`, mas nada o
+reentra, e a resposta do cliente fica na lista até o TTL. *(Varredura do repositório: o único escritor de
+`pipeline_state` no Redis é o `PipelineStateManager`; o acerto em `skill-flow-worker/workflow-client.ts:82`
+é corpo HTTP para a workflow-api, não Redis.)*
+
+**Decisão: a F1–F4 miram PARIDADE.** O skill que elas substituem tem exatamente a mesma propriedade —
+`agente_triagem_v2` é um `menu` num BLPOP, e `skill_atendimento_sac_v1` também. O modelo com `DialogForm`
+não é regressão, e o critério *"substituir a contento"* está cumprido sem nada de novo.
+
+**A contagem de esperas fica NEUTRA**, o que não era óbvio: hoje são duas (menu da triagem + menu do
+`sac_ia`, em **dois** agentes); com a árvore são duas também (nível 1 + nível 2), num agente só. Mesma
+exposição, uma passagem a menos.
+
+#### O modelo contextless já existe — e por isso é arco PRÓPRIO, não fatia desta ADR
+
+O par `collect`/`suspend`/`delegate` já faz exatamente o que a pergunta descreve: salva o estado, devolve
+`__suspended__`, e um evento externo reinvoca `run()`, que retoma do `current_step_id`. Fazer o `menu`
+seguir esse padrão é viável com as peças que existem — e mesmo assim **não entra aqui**, por três
+consequências que são de plataforma, não de feature:
+
+1. **Atinge todo skill de agente**, não o orquestrador — `menu` é o cavalo de batalha (17 skills o usam).
+2. **Muda o ciclo de vida do segmento:** pela Arc 19, `suspend` devolve o agente ao pool. Para um menu isso
+   significaria **liberar a licença de IA entre turnos** — ganho real de capacidade, mas que mexe na
+   semântica de ocupação que a § *Operational Visibility* mede e publica.
+3. **Exige que o bridge REINVOQUE** em vez de fazer LPUSH — inversão do contrato que ele declara hoje.
+
+Enfiar isso aqui seria a *"wide container for a narrow fact"* que esta própria ADR recusa noutro eixo: uma
+decisão de plataforma entrando pela porta de uma feature. Vai para `DUR-01`, com mérito próprio.
+
+⚠️ **Ordem, se a durabilidade virar prioridade:** ela vem **antes da F4** (quando o `agente_triagem_v2`
+sai), nunca depois — senão o orquestrador nasce no modelo antigo e é migrado duas vezes.
+
+---
+
 ---
 
 ## A árvore que sai da medição

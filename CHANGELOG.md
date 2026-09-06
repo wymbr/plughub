@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 — D11: o DialogForm não vira contexto em memória; o que não sobrevive é a ESPERA
+
+Pergunta do dono antes de destravar a F1: para substituir o skill a contento, o modelo teria de ser
+contextless e persistir as paradas no Redis — ou o `DialogForm` acaba virando contexto em memória? O ADR
+era **silencioso** sobre durabilidade. Medido peça por peça:
+
+| peça | durável? | evidência |
+|---|---|---|
+| conteúdo do form (`render` no `pipeline_state`) | **sim** | `PipelineStateManager.save`, a cada transição concluída |
+| cursor da navegação (saída de `invoke`) | **sim** | `invoke` conclui na hora; `output_as` entra no mesmo save |
+| posição (`current_step_id`) | **sim, e o engine RETOMA dali** | teste *"retoma do current_step_id sem reiniciar do entry"* |
+| não re-disparar trabalho feito | **sim** | teste *"não re-dispara agent_delegate"*, via `job_id` persistido |
+| **a ESPERA do `menu`** | **NÃO** | BLPOP em processo |
+
+**O buraco é a espera, não o estado.** `menu` **não** chama `ctx.saveState` antes de bloquear — só
+`catch`, `collect` e `delegate` chamam —, e o bridge apenas faz LPUSH em `menu:result:{sid}:{iid}`
+(`main.py:9226`), sem reinvocar `run()`. O desenho pressupõe corrotina viva: morto o processo, o Redis
+sabe que o fluxo está no `menu`, mas nada o reentra e a resposta do cliente fica na lista até o TTL.
+Varredura do repositório: o **único** escritor de `pipeline_state` no Redis é o `PipelineStateManager`
+(o acerto em `skill-flow-worker/workflow-client.ts:82` é corpo HTTP para a workflow-api).
+
+### A decisão é PARIDADE, e ela é medida, não conveniência
+
+O skill que a ORQ substitui tem **exatamente a mesma propriedade** — `agente_triagem_v2` é um `menu` num
+BLPOP, e `skill_atendimento_sac_v1` também. Logo o modelo com `DialogForm` **não é regressão**, e
+*"substituir a contento"* está cumprido sem nada de novo.
+
+E a contagem de esperas fica **neutra**, o que não era óbvio: hoje são duas (menu da triagem + menu do
+`sac_ia`, em **dois** agentes); com a árvore são duas também (nível 1 + nível 2), num agente só — mesma
+exposição, uma passagem a menos.
+
+### O modelo contextless já existe, e por isso vira arco PRÓPRIO
+
+`collect`/`suspend`/`delegate` já fazem o que a pergunta descreve (salva → `__suspended__` → evento
+externo reinvoca → retoma do `current_step_id`). Fazer o `menu` seguir isso é viável com as peças que
+existem, e mesmo assim **não entra na ORQ**, por três consequências de plataforma: atinge **17 skills**;
+pela Arc 19 `suspend` devolve o agente ao pool, o que liberaria a **licença de IA entre turnos** (ganho
+de capacidade, mas mexe na ocupação que a § Operational Visibility publica); e exige que o bridge
+**reinvoque** em vez de LPUSH, invertendo o contrato que ele declara. Enfiar isso na ORQ seria a *"wide
+container for a narrow fact"* que o próprio ADR recusa noutro eixo.
+
+⚠️ **Ordem registrada:** se a durabilidade virar prioridade, ela vem **antes da ORQ-04** (quando o
+`agente_triagem_v2` sai), nunca depois — senão o orquestrador nasce no modelo antigo e é migrado duas
+vezes.
+
+Ledger: **`DUR-01`**, `adiado` com gatilho declarado. Fica sob o grupo deste ADR — e **não** no balde
+`sem-demanda`, cujo contador significa *"entrou trabalho sem decisão por trás"*: aqui a decisão existe, é
+a própria D11 que o deferiu. O prefixo próprio é o que diz que não é fase da ORQ.
+
+Arquivos: `docs/adr/adr-orchestrator-tree-navigation.md` (D11) · `pending.md`.
+
+---
+
 ## 2026-09-06 (1) — DOC-02: a meta do `CLAUDE.md` vai a 1 750, e nasce cumprida (1 883 → 1 688)
 
 Decisão do dono, depois de a proposta anterior ser **refutada por aritmética minha própria**. Na
