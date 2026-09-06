@@ -261,13 +261,37 @@ protocolo.
 | **G0** ✅ | **Medir** — este documento: a assimetria na trilha, os 3 menus de demanda em folhas, o contrato em 1/41 e 0/41, os dois verbos, a regra sem mecanismo | — |
 | **G1** | **Dar mecanismo à regra de perfil** (§7): allowlist de step por perfil, no validador, com gate. Vale sozinha, independe do resto | G0 |
 | **G2** | **`provides` simétrico ao `requires`** + conferência ao fim do skill + gate da disciplina `__gaps__` (hoje 1/41 e 0/41) | G0 |
-| **G3** | **`delegate` no orquestrador**: mantém `primary`, especialista entra como `specialist`; ramo F do gate passa a aceitar `delegate.pool` | G1 |
-| **G4** | **Especialistas viram executores**: os 3 menus de demanda sobem; `menu_resolucao` vira o retorno | G3, D2 |
+| **G4** | **Especialistas viram executores**: os 3 menus de demanda sobem; `menu_resolucao` vira o retorno; **e cada desfecho devolve o controle via `workflow_resume`** | G1, D2 |
+| **G3** | **`delegate` no orquestrador**: mantém `primary`, especialista entra como `specialist`; ramo F do gate passa a aceitar `delegate.pool` | **G4** |
 | **G5** | **Origem no evento** (D4) e **fronteira do AgentCard** (D8) | G2 |
 
 > **Por que G1 vem antes de G3, e sozinha:** decidir usar `delegate` em perfil de agente contra uma
 > regra que existe só como comentário é escolher com base no que ninguém impõe. Dar mecanismo à regra
 > **primeiro** transforma a decisão em mudança declarada, e a G1 vale mesmo que o resto seja adiado.
+
+> ⚠️ **CORREÇÃO MEDIDA (2026-09-06, ao executar a G3): a ordem `G3 → G4` estava INVERTIDA.**
+> A premissa da G3 se confirmou — `limite_ia` delega ao `dialog_runner` e a trilha mostra
+> `limite_ia primary seq=0` → `dialog_runner specialist seq=0` → `limite_ia primary seq=1`;
+> **24 segmentos do alvo, 100 % `specialist`; 49 do chamador, 100 % `primary`**. O chamador
+> retoma, e a D1 não é teoria.
+>
+> Mas **delegar é SUSPENDER o chamador**, e ele só volta se o especialista chamar
+> `workflow_resume`. Medido nos **6 destinos distintos** de `navigation_pools` do parque:
+> **zero são delegáveis** — 4 não chamam `workflow_resume`, 1 tem cadeia de `delegate` (colide
+> no token, CTR-06) e 1 não tem deploy. Ligar o `delegate` hoje penduraria o contato até o
+> `timeout_hours`, e o modo de falha é o do catálogo: o cliente vê o especialista atender, o
+> especialista encerra o próprio segmento, e **nada fica vermelho**.
+>
+> Logo a dependência real é **G4 → G3**: um especialista que não devolve transforma o
+> `delegate` numa suspensão sem retorno. E o retorno **não é um adendo de dez linhas** — o
+> especialista tem vários desfechos (resolvido, timeout, escalou ao humano), e cada um precisa
+> devolver com a sua `decision`. Isso é o corpo da G4, não um detalhe da G3.
+>
+> O que a G3 entregou nesta rodada foi o **instrumento**:
+> `infra/test/probe_orchestrator_delegability.sh` mede a delegabilidade por destino, com os três
+> disqualificadores nomeados (`sem_deploy` · `nao_retorna` · `cadeia_delegate`), e **trava**
+> orquestrador que delegue a alvo não-delegável — inclusive quando o `pool` é uma ref, caso em que
+> cobra o mapa inteiro, porque o alvo é decidido em runtime. É ele que dirá quando a G3 destrava.
 
 ---
 

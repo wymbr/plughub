@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (15) — CTR-03: a premissa se confirmou, a ORDEM se refutou
+
+A CTR-03 pedia trocar o `escalate` terminal do orquestrador por `delegate`, para que ele mantivesse
+a titularidade do contato e decidisse o desfecho. A premissa foi medida **antes** de escrever
+qualquer coisa, e ela esta certa. O que nao estava certo era a ordem das fases.
+
+### A D1 nao e teoria — ela tem 24 segmentos
+
+`limite_ia` ja delega ao `dialog_runner`, e a trilha viva mostra o padrao inteiro:
+
+```
+limite_ia      primary     seq=0   ← o chamador atende
+dialog_runner  specialist  seq=0   ← o alvo entra SOB ele
+limite_ia      primary     seq=1   ← e o chamador RETOMA
+```
+
+Contado: **`dialog_runner` 24 segmentos, 100 % `specialist`; `limite_ia` 49, 100 % `primary`**.
+Nenhum `primary` no alvo, nenhum `specialist` no chamador. O mecanismo e o
+`/v1/channels/webhook/delegate-conference`, que roteia o alvo **para dentro** da sessao existente
+com `conference_id` — o cliente nem troca de WebSocket.
+
+### Mas delegar e SUSPENDER, e ninguem devolve
+
+O orquestrador so volta se o especialista chamar `workflow_resume` com o token. **Nao ha retorno
+automatico**: o bridge nao o dispara no `agent_done`, e o unico padrao existente e explicito
+(`skill_dialog_runner_v1`, steps `retornar` / `retornar_falha`).
+
+Medido nos **6 destinos distintos** de `navigation_pools` do parque — **zero delegaveis**:
+
+```
+nao_retorna      4   auth_form_ia · auth_sac_ia · reembolso_ia · sac_ia
+cadeia_delegate  1   portabilidade_ia — o token unico da sessao colide (CTR-06)
+sem_deploy       1   retencao_humano — pool humano, nao ha skill que retorne
+```
+
+Ligar o `delegate` hoje penduraria o contato ate o `timeout_hours`, e o modo de falha e o do
+catalogo: **o cliente ve o especialista atender normalmente, o especialista encerra o proprio
+segmento, e nada fica vermelho**. O orquestrador espera um sinal que nunca vem.
+
+⚠️ E a ironia e medida: o **unico** destino que sabe devolver (`portabilidade_ia`) e justamente o
+que tem cadeia de `delegate` — o alvo preparado e o alvo proibido.
+
+### A ordem do ADR estava invertida, e foi corrigida la
+
+O ADR fixava `G3 → G4`. A dependencia real e **`G4 → G3`**: um especialista que nao devolve
+transforma o `delegate` numa suspensao sem retorno. E o retorno **nao e um adendo de dez linhas** —
+o especialista tem varios desfechos (resolvido, timeout, escalou ao humano) e cada um precisa
+devolver com a sua `decision`. Isso e o corpo da G4.
+
+Por isso o YAML dos orquestradores **nao foi tocado**. Construir o ramo `delegar` agora seria
+codigo morto no melhor caso, e um contato pendurado no pior — e um ramo que nunca dispara e o
+"teste que nao pode reprovar" na forma de produto.
+
+### O que ficou pronto: o instrumento que decide quando a G3 destrava
+
+`infra/test/probe_orchestrator_delegability.sh` (+ `_delegability_probe.py`), verde:
+
+- **A — censo** da delegabilidade por destino, com os tres disqualificadores **nomeados**
+  (`sem_deploy` · `nao_retorna` · `cadeia_delegate`). "0 de 6" nao e falha: e o estado medido.
+- **B — a trava**: orquestrador que DELEGUE a alvo nao-delegavel **reprova**. Hoje passa porque
+  nenhum delega; no dia em que alguem ligar sem preparar o alvo, fica vermelho — que e exatamente
+  o defeito que esta tarefa quase cometeu. ⚠️ `pool` por **ref** (`$.pipeline_state.rota.pool`) faz
+  a trava cobrar o **mapa inteiro**: o alvo e decidido em runtime, e recusar-se a julgar a ref
+  deixaria passar justamente a forma que o orquestrador usa.
+- **C — mutacao**: finge que o orquestrador delega a todos os destinos e exige que a trava
+  **acuse** (acusa 12). Sem ela o verde do B seria por AUSENCIA de `delegate`, que e o modo de
+  falha do catalogo.
+
+⚠️ Le o **snapshot vivo do slot**, nunca o YAML: skill e seed-if-absent e editar YAML ja semeado e
+no-op, entao medir o arquivo responderia sobre um artefato que pode nao ser o que roda. A primeira
+medicao desta sessao foi por `grep` no YAML e foi refeita por isso.
+
+### Arquivos
+
+- `infra/test/probe_orchestrator_delegability.sh`, `infra/test/_delegability_probe.py` (novos)
+- `infra/test/gates.manifest` — declarado
+- `docs/adr/adr-orchestrator-specialist-contract.md` — ordem `G3`/`G4` invertida, com a medicao
+- `pending.md` — CTR-03 bloqueada pela **CTR-04**; CTR-04 **destravada** e com a metade nova
+  (cada desfecho devolve com a sua `decision`); `done.md` — CTR-07
+
+---
+
 ## 2026-09-06 (14) — CTR-01: a regra de perfil de step ganhou mecanismo, e perdeu um item
 
 O Arc 19 declarou que cada **perfil** admite certos tipos de step, o `CLAUDE.md` afirmava que isso

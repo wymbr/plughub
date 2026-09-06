@@ -145,6 +145,13 @@ probe_slot_required_config.sh
 # recusaria dois pools em producao. Cinco ramos; o ramo E existe para que um portao
 # que recuse TUDO nao passe.
 probe_skill_profile_steps.sh
+# E o irmao de RUNTIME do de cima: o de cima diz que tipos de step o perfil admite;
+# este diz a QUEM se pode delegar. Delegar e SUSPENDER o chamador, e ele so volta se o
+# alvo chamar `workflow_resume` -- medido: 0 de 6 destinos de navegacao sao delegaveis
+# hoje (4 nao retornam, 1 tem cadeia de delegate, 1 sem deploy). O censo e informativo;
+# quem trava e o ramo B, que reprova orquestrador delegando a alvo que nao devolve --
+# o contato ficaria pendurado ate o timeout_hours sem nada ficar vermelho.
+probe_orchestrator_delegability.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh
