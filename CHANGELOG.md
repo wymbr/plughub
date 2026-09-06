@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-05 (27) — ADR de navegação de orquestrador, e a medição que muda o valor dele
+
+Escrito `docs/adr/adr-orchestrator-tree-navigation.md` (proposto): o menu de um orquestrador é a **mesma
+estrutura** que a taxonomia de wrap-up — pastas navegam, folhas endereçam serviço —, então o runner
+genérico de `DialogForm` pode rotear sem LLM e sem virar linguagem.
+
+### A F0 é medição, e ela reordenou as fases
+
+**1. O orquestrador já existe, escrito à mão.** `agente_triagem_v2` gasta **15 steps** (6 notify + 5
+escalate + 1 choice de 5 condições + 1 menu + 2 complete) para expressar uma tabela de 5 entradas.
+
+**2. Os menus são de duas espécies.** Navegação (*para onde ir*) × coleta (*o serviço trabalhando*). Só a
+primeira sobe: absorver a segunda coletaria dado do especialista **antes de ele existir** e multiplicaria
+a profundidade, que é o recurso escasso — o cliente vê um nível por turno.
+
+**3. O achado que muda o tamanho da coisa: o eixo de DEMANDA não tem produtor.**
+
+```
+agente_triagem_v2  ·  skill_atendimento_sac_v1  ·  skill_atendimento_auth_v1
+agente_reembolso_intake_v1  ·  agente_portabilidade_intake_v1
+        → agent_event / segment_outcome_record:  0
+```
+
+**Toda resposta de menu que o cliente dá hoje é descartada** — vive no `pipeline_state` e morre com a
+sessão. Medimos com precisão o que o *agente* diz que o contato foi (wrap-up, com árvore, época e lente
+própria) e **nada** do que o *cliente* disse que queria. O ADR não move um menu de lugar: ele faz o eixo
+da demanda **passar a existir**, e ele cai na lente que já está pronta.
+
+**4. A descida já é expressável — o engine não muda.** O validador de ciclos sanciona back-edge quando o
+ciclo passa por step que bloqueia em I/O externo, e `menu` é um deles por política declarada. Logo
+`menu → choice → menu` é ciclo controlado por construção.
+
+**5. Falta UMA primitiva.** `EscalateTargetSchema` é `{ pool: z.string() }` e o executor passa
+`step.target.pool` **cru** (`steps/escalate.ts:22`). *"Despache para o pool que esta folha endereça"* não
+é expressável — é o caminho crítico inteiro.
+
+### O que a medição impôs ao plano
+
+A **F1 entrega o eixo de demanda sozinha**, sem tocar no engine e sem depender de canal: árvore autorada
++ `agent_event` com o caminho, ainda escalando pelo `choice` atual. Se a F2 (canal) ou a F3 (engine)
+demorarem, a medição que hoje é zero já existe. É o oposto do arco que só paga no fim.
+
+### Decisões que valem registrar
+
+**A folha carrega o CAMINHO, nunca o pool** (D2) — form é congelado no promote × pool é DB-owned, então
+`pool_id` no snapshot seria segunda fonte de verdade de roteamento, invisível de quem administra pools; e
+o editor de formulário viraria editor de roteamento. O mapa mora na config do pool, com precedente de
+forma idêntica (`mentionable_pools`).
+
+**A árvore é o contrato COMUM ao orquestrador determinístico e ao com LLM** (D6) — o LLM navega livre mas
+aterrissa em folha declarada. Mesma série, folha de escape como *"não sei"* **contável**, roteador
+avaliável. Sem isso os dois medem em unidades diferentes e não há como provar que o LLM roteia melhor.
+
+⚠️ **A F3 é a porta da erosão**: tornar o alvo do `escalate` interpolável é necessário e é exatamente por
+onde *"roteamento condicional no formulário"* entraria depois. A guarda (D10: `ask_when` esconde ramo,
+nunca escolhe alvo) nasce **junto** com a interpolação.
+
+Ledger: grupo `ORQ` aberto (ORQ-01..05), F0 fechada como `ORQ-00`.
+
+Arquivos: `docs/adr/adr-orchestrator-tree-navigation.md` (novo) · `CLAUDE.md` (índice) · `pending.md` ·
+`done.md`.
+
+---
+
 ## 2026-09-05 (26) — O caso cross-pasta saiu do papel, e provou a coluna que ninguém precisava até hoje
 
 Com a D5 revogada (entrada 25), o dono refez o wrap-up marcando folhas de **pastas diferentes**. Registrou:

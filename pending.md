@@ -309,6 +309,18 @@ seguem sem tarefa aberta neste ledger.)*
 | id | tarefa | status | referencia |
 |---|---|---|---|
 
+## `docs/adr/adr-orchestrator-tree-navigation.md` — navegacao de orquestrador como arvore
+
+*(F0 — medicao — fechou em 2026-09-05 ao escrever o ADR; ver `done.md`.)*
+
+| id | tarefa | status | referencia |
+|---|---|---|---|
+| ORQ-01 | **F1 — o eixo de DEMANDA passa a existir.** Arvore de navegacao autorada no `DialogForm` + `agent_event` com o caminho, **ainda escalando pelo `choice` atual**. Nao toca no engine, nao depende de canal. Entrega a medicao que hoje e **zero** (medido: 0 `agent_event` nos cinco skills de atendimento — toda resposta de menu do cliente e descartada) e cai direto na lente de arvore que ja existe. ⚠️ Raiz de `category` compartilhada com o wrap-up, para que demanda × desfecho fiquem comparaveis; formas DIFERENTES sao esperadas (a divergencia e o produto). **Gatilho:** nenhum — e a primeira fatia | `aberto` | ADR F1; medido 2026-09-05 |
+| ORQ-02 | **F2 — renderizacao de arvore em canal de CLIENTE** (mesma tarefa da `DLG-15`, vista do lado do orquestrador). Medido: nenhum canal de cliente desenha arvore — o adapter de WhatsApp trata `options` como lista PLANA dimensionada por `len()` (≤3 botoes, 4–10 lista, >10 texto), entao filho aninhado nao existe para ele e a arvore achata em silencio. ⚠️ `options_tree` e hoje **declaracao sem consumidor** (so dentro de `packages/schemas`: definicao, derivacao, teste e `.d.ts`; o Console decide sozinho com `temArvore`) — esta fase lhe da o PRIMEIRO consumidor e impede a terceira copia da regra *"isto e arvore?"* | `aberto` | ADR F2; medido 2026-09-05 |
+| ORQ-03 | **F3 — `escalate` com alvo INTERPOLAVEL + mapa `caminho → pool` na config do pool.** Hoje `EscalateTargetSchema = z.object({ pool: z.string() })` e o executor passa `step.target.pool` **cru** (`steps/escalate.ts:22`): *"despache para o pool que esta folha endereca"* nao e expressavel. E o caminho critico inteiro do ADR. ⚠️ **E a porta da erosao** — a guarda da D10 (`ask_when` esconde ramo, nunca escolhe alvo) tem de nascer JUNTO com a interpolacao, nao depois. Mapa com precedente de forma identica: `mentionable_pools: z.record(z.string())` | `bloqueado` | impedimento: depende da ORQ-02 para ser testavel ponta a ponta |
+| ORQ-04 | **F4 — o runner generico assume, e o `agente_triagem_v2` sai.** 15 steps (6 notify + 5 escalate + 1 choice de 5 condicoes + 1 menu + 2 complete) para uma tabela de 5 entradas viram um form de 9 folhas + um mapa de 8 entradas. Remove tambem o MENU DUPLICADO medido: triagem pergunta *"como posso te ajudar?"*, escala para `sac_ia`, que pergunta *"qual o motivo do contato?"* — dois artefatos, dois deploys, zero medicao | `bloqueado` | impedimento: ORQ-01 + ORQ-03 |
+| ORQ-05 | **F5 — paridade LLM (D6).** O orquestrador com LLM navega livre mas **aterrissa em folha declarada**: mesma serie do Arc 12, folha de escape como *"nao sei"* contavel, roteador avaliavel. Sem isso os dois orquestradores medem em unidades diferentes e nao da para provar que o LLM roteia melhor. **Gatilho:** F4 entregue e um pool de orquestracao IA candidato | `adiado` | gatilho declarado; ADR D6 |
+
 ## `docs/arcos/arc12-agent-business-events.md` — eventos de negocio do agente
 
 *(O wrap-up real passou a emitir captura Arc 12 em 2026-09-04; ver `done.md`.)*
