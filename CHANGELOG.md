@@ -1,5 +1,91 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (14) — CTR-01: a regra de perfil de step ganhou mecanismo, e perdeu um item
+
+O Arc 19 declarou que cada **perfil** admite certos tipos de step, o `CLAUDE.md` afirmava que isso
+era *"validado em parse do YAML + guard no engine"*, e o comentario do `DelegateStep` dizia, em
+letras claras, *"Only valid in workflow profile. Agents must never use delegate."*
+
+**Medido: nao existia allowlist de step por perfil em lugar nenhum** — nem no validador do
+agent-registry, nem no `executor.ts`, nem no `engine.ts`. A regra vivia em prosa e num comentario de
+schema. E a familia do DDL de `participation_intervals`: promessa sem mecanismo.
+
+### A tarefa era dar mecanismo a regra; a medicao mudou a regra
+
+Antes de escrever o portao, contei quem ele recusaria. Duas violacoes, **as duas `delegate` em perfil
+de agente**, e nenhuma delas e ramo morto:
+
+```
+limite_ia          skill_limite_entrada_v1        delegate -> dialog_runner, limite_retorno
+                   186 segmentos, o ultimo em 2026-09-05
+portabilidade_ia   skill_portabilidade_intake_v1  delegate -> dialog_runner, portabilidade_confirmacao
+                   alvo dialog_runner: 24 segmentos, ultimo em 2026-09-03
+```
+
+Impor a regra ao pe da letra **recusaria dois pools em producao**. *Quando a spec e o codigo
+discordam, desconfie dos dois* — e aqui quem estava errado era a spec: `delegate` saiu da lista de
+proibidos do perfil `agent`. `suspend` e `collect` ficaram, e `menu`/`notify`/transacao continuam
+fora do `workflow`. Com a lista corrigida: **0 violacoes em 31 deploys vivos**, ou seja ela pode ser
+imposta hoje sem migracao nenhuma.
+
+⚠️ Isto **nao** e afrouxar por conveniencia: mudou **um** item, e mudou porque havia contraprova
+medida. O resto da lista fechou no mesmo instante em que passou a existir.
+
+### Onde o portao mora, e por que nao no publish
+
+O perfil e fato do **POOL**, nao do skill — o mesmo skill pode ser deployado em pools de perfis
+diferentes. Logo `PUT /v1/skills/:id` **nao tem como saber** o perfil; validar ali exigiria adivinhar
+onde o skill vai rodar. O portao e o **DEPLOY**: `set-next` (feedback cedo, na declaracao) e
+`promote` (re-checado, porque `Pool.channel_types` pode mudar entre os dois — e e justamente essa
+mudanca que vira o perfil). Mesma casa, mesma forma e mesma isencao de rollback das duas checagens
+que ja viviam ali (`deployViolation` e `judgeMaskedDeploy`).
+
+Sem ramo `warn`, e a ausencia e decisao: no `masked-deploy` o desfecho depende de por onde o contato
+chega, o que nao e estatico; aqui o perfil e **um** para o pool inteiro. Um aviso diria *"talvez
+funcione"* sobre algo que ja se sabe que nao.
+
+### As duas afirmacoes falsas foram corrigidas onde moravam
+
+`CLAUDE.md` § Arc 19 (a frase do *"validado em parse"*) e o comentario do `DelegateStep` em
+`skill.ts` — os dois agora carregam a medicao que os refutou, em vez de sumirem em silencio.
+
+### O gate, e por que ele tem cinco ramos
+
+`infra/test/probe_skill_profile_steps.sh` (+ `_profile_steps_probe.py`), verde:
+
+- **A** censo do parque VIVO (slot `current`) sob a lista canonica — 31 deploys, 0 violacoes — com
+  **testemunha de presenca**: tem de existir `delegate` em perfil agente (2 pools). Sem a testemunha
+  o censo ficaria verde sem lastro e a decisao que removeu `delegate` perderia a base; por isso a
+  ausencia dela e **INCONCLUSIVO, nunca verde**.
+- **B** **mutacao**: injeta `delegate` nos proibidos do agente e exige que o censo ACUSE (acusa 2).
+  Um censo que continuasse verde estava verde por cegueira, nao por conformidade.
+- **C/D** ao vivo, o portao **recusa** (`422 step_fora_do_perfil`): `suspend` em pool de agente,
+  `menu` em pool webhook.
+- **E/F** ao vivo, o portao **deixa passar**: `delegate` em perfil agente, `suspend` em workflow.
+  O **E** carrega dois pesos — impede que um portao que recusasse TUDO passasse em C e D, e e o
+  **unico** lugar do gate onde a decisao real do servico (TypeScript) e comparada com a lista do
+  helper (Python). Devolver `delegate` a lista dos proibidos deixa E vermelho, com a mesma forma do
+  gate de paridade cross-language do channel-gateway.
+
+Fixtures `probe_profile_agent` / `probe_profile_workflow` sao criadas seed-if-absent pelo probe e
+ficam **inertes**: so recebem o slot `next` e nunca sao promovidas, e o bridge executa exclusivamente
+o snapshot do slot `current`.
+
+### Arquivos
+
+- `packages/schemas/src/skill-profile.ts` (novo) — a lista, a derivacao do perfil e a medicao que a
+  produziu; exportado no `index.ts`
+- `packages/agent-registry/src/lib/profile-steps.ts` (novo) — o veredicto, irmao de `masked-deploy.ts`
+- `packages/agent-registry/src/routes/pool-slots.ts` — o portao em `set-next` e `promote`
+- `packages/agent-registry/src/__tests__/profile-steps.test.ts` (novo, 9 testes, verdes)
+- `packages/schemas/src/skill.ts`, `CLAUDE.md` — as duas afirmacoes falsas, corrigidas
+- `infra/test/probe_skill_profile_steps.sh`, `infra/test/_profile_steps_probe.py`, `gates.manifest`
+
+**Destrava a CTR-03**: decidir usar `delegate` no orquestrador contra uma regra que ninguem impunha
+era escolher com base em nada. Agora a regra existe, e ela **permite**.
+
+---
+
 ## 2026-09-06 (13) — ADR: o orquestrador é dono do contato, o especialista é executor
 
 Discussão de arquitetura que nasceu de uma leitura do dono sobre os testes do arco da árvore, e que a

@@ -137,6 +137,14 @@ probe_force_complete_branches.sh
 # o `form_id` obrigatorio — o primeiro step caia no `on_failure` e o fluxo morria
 # calado. Declaracao sem mecanismo que a imponha.
 probe_slot_required_config.sh
+# Irmao do de cima, e o mesmo modo de falha uma casa acima: o Arc 19 declarou que
+# cada PERFIL (workflow x agente) proibe certos tipos de step, o CLAUDE.md dizia que
+# isso era validado em parse + guard no engine, e NAO HAVIA allowlist em lugar
+# nenhum. A medicao ainda refutou um item da propria regra: `delegate` em perfil de
+# agente e caminho vivo (limite_ia, 186 segmentos), logo impo-la ao pe da letra
+# recusaria dois pools em producao. Cinco ramos; o ramo E existe para que um portao
+# que recuse TUDO nao passe.
+probe_skill_profile_steps.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh

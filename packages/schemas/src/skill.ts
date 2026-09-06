@@ -1161,10 +1161,18 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
     on_reject:      z.object({ next: z.string() }).optional(),
     metadata:       z.record(z.unknown()).optional(),
   }),
-  // Delegate — workflow suspends and dispatches an agent to handle I/O.
-  // The agent calls workflow_resume (MCP tool) when done. Only valid in
-  // workflow profile (channel_type: webhook). Agents must never use delegate.
-  // See: docs/arcos/delegate-workflow-io.md
+  // Delegate — the caller suspends and dispatches an agent to handle I/O.
+  // The agent calls workflow_resume (MCP tool) when done.
+  //
+  // ⚠️ Este comentário dizia "Only valid in workflow profile. Agents must never
+  // use delegate.", e foi MEDIDO FALSO em 2026-09-06 (CTR-01): `limite_ia` e
+  // `portabilidade_ia` são pools de perfil AGENTE e delegam ao `dialog_runner` —
+  // 186 segmentos no primeiro, 24 no alvo, o último em 2026-09-05. A regra nunca
+  // teve mecanismo, e impô-la ao pé da letra recusaria dois pools vivos. Hoje o
+  // que vale é a lista de `skill-profile.ts`, imposta no DEPLOY (o perfil é fato
+  // do POOL, e aqui não se sabe onde o skill vai rodar).
+  //
+  // See: docs/arcos/delegate-workflow-io.md, docs/adr/adr-orchestrator-specialist-contract.md
   z.object({
     type:           z.literal("delegate"),
     id:             z.string(),

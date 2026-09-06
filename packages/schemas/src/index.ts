@@ -759,6 +759,15 @@ export type {
   AgentEventInput,
 } from "./agent-events"
 
+// ── Perfil de execução × tipos de step admitidos (CTR-01 / Arc 19) ───────────
+export {
+  SKILL_PROFILE_FORBIDDEN_STEPS,
+  skillProfileFor,
+  forbiddenStepsForProfile,
+} from "./skill-profile"
+
+export type { SkillProfile } from "./skill-profile"
+
 // ── Session Signals — survey grão session/workflow/journey (F10) ──────────────
 export {
   SignalGrainSchema,

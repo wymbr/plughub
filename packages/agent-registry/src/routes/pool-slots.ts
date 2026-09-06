@@ -21,6 +21,7 @@ import { prisma, Prisma } from "../db"
 import { publishRegistryChanged } from "../infra/kafka"
 import { deployViolation, slotDeclared } from "../lib/capacity"
 import { judgeMaskedDeploy } from "../lib/masked-deploy"
+import { judgeProfileSteps } from "../lib/profile-steps"
 
 export const poolSlotsRouter = Router({ mergeParams: true })
 
@@ -176,6 +177,20 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
       console.warn(`[pool-slots:set-next] ${vereditoNext.warning}`)
     }
 
+    // CTR-01 (G1) — step que o PERFIL do pool não admite. Mesma casa e mesma forma
+    // que as duas checagens acima: o perfil é fato do POOL (Arc 19), então o
+    // publish do skill não tem como saber. Re-checado no promote porque
+    // `Pool.channel_types` pode mudar entre a declaração e a promoção — e é
+    // justamente essa mudança que vira o perfil.
+    const perfilNext = judgeProfileSteps(
+      snapshot,
+      (pool as { channel_types?: unknown }).channel_types,
+      { poolId, skillId: skill_id },
+    )
+    if (perfilNext.kind === "block") {
+      return res.status(422).json({ error: perfilNext.error, message: perfilNext.message })
+    }
+
     const row = await (prisma as any).poolSkillSlot.upsert({
       where:  { pool_id_tenant_id_slot: { pool_id: poolId, tenant_id: tenantId, slot: "next" } },
       update: {
@@ -257,6 +272,17 @@ poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextF
     }
     if (vereditoProm.kind === "warn") {
       console.warn(`[pool-slots:promote] ${vereditoProm.warning}`)
+    }
+
+    // CTR-01 (G1) — re-julga perfil × steps. O ROLLBACK fica isento, pelo mesmo
+    // motivo das outras duas: operação de emergência nunca bloqueia.
+    const perfilProm = judgeProfileSteps(
+      nextSlot["yaml_snapshot"],
+      (pool as { channel_types?: unknown }).channel_types,
+      { poolId, skillId: (nextSlot["skill_id"] as string) || "(sem skill)" },
+    )
+    if (perfilProm.kind === "block") {
+      return res.status(422).json({ error: perfilProm.error, message: perfilProm.message })
     }
 
     const now = new Date()
