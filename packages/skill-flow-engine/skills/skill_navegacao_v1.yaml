@@ -171,6 +171,33 @@ steps:
       tags:
         dialog_form_id:      "$.pipeline_state.nivel.form_id"
         dialog_form_version: "{{$.pipeline_state.nivel.version}}"
+    on_success: marcar_navegacao
+    on_failure: marcar_navegacao
+
+  # ── 5b. O caminho vira FATO DA SESSÃO ─────────────────────────────────
+  # É assim que o especialista sabe que a navegação JÁ perguntou, e não pergunta de
+  # novo — o menu duplicado que a F0 mediu e que um contato real confundiu com bug.
+  #
+  # ⚠️ **NÃO dá para mandar isso no `escalate`.** O `conversation_escalate` publica
+  # `process_context: { pipeline_state }` no evento, e **ninguém lê** — medido em
+  # 2026-09-06: `process_context` aparece uma única vez no repositório, na declaração
+  # do modelo do routing-engine, sem consumidor. Declaração sem consumidor é a mesma
+  # família do `options_tree`, e confiar nela seria mandar o fato para o vazio.
+  #
+  # O canal entre agentes da MESMA sessão é o ContextStore, e o namespace é
+  # `session.*` — `core.*` é reservado à plataforma (CNS-02).
+  - id: marcar_navegacao
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:   "session.navegacao.path"
+      value: "$.pipeline_state.nivel.category_path"
+      confidence: 1.0
+      visibility: "agents_only"
+    # Falhar aqui degrada para o MENU DUPLICADO, que é o comportamento antigo —
+    # ruim, mas atende. Bloquear o contato por causa de uma tag seria pior.
     on_success: resolver_rota
     on_failure: resolver_rota
 

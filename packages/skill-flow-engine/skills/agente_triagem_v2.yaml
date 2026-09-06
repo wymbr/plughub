@@ -1,3 +1,34 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# APOSENTADO em 2026-09-06 (F4/ORQ-04) — substituído por `skill_navegacao_v1`.
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# **Nenhum pool o executa** (medido no agent-registry, não lido daqui), e o seed
+# `infra/registry/tenant_demo.yaml` passou a declarar `skill_navegacao_v1` no
+# `demo_ia`. Este arquivo não deploya nada sozinho: skills são seed-if-absent.
+#
+# ── Por que ele FICA no repositório ─────────────────────────────────────────
+#
+# Mesmo critério dos pacotes em quarentena (`conversation-writer`,
+# `clickhouse-consumer`): apagar troca um artefato ROTULADO por um buraco mudo.
+# E aqui há uma razão a mais, medida: os slots do `demo_ia` já rodaram vários
+# promotes de `skill_navegacao_v1`, então o slot `previous` **não contém mais o
+# snapshot da triagem** — um rollback não a traz de volta. Este arquivo é a última
+# receita dela fora do histórico do git.
+#
+# ── O que o substituiu, e por que é menor ───────────────────────────────────
+#
+#   15 steps (6 notify + 5 escalate + 1 choice de 5 condições + 1 menu + 2 complete)
+#   → uma forma de 9 folhas + um mapa de 7 entradas na config do pool.
+#
+# O conteúdo saiu para o `DialogForm` (editável sem deploy), o roteamento saiu para
+# `pools.navigation_pools` (editável na UI), e o controle ficou com 13 steps que não
+# mencionam destino nenhum. Ver `docs/adr/adr-orchestrator-tree-navigation.md`.
+#
+# ⚠️ **Não religar sem ler o ADR.** Repor este skill num pool que hoje navega
+# reintroduz o MENU DUPLICADO (ele pergunta *"como posso te ajudar?"*, escala para
+# `sac_ia`, que pergunta *"qual o motivo do contato?"*) e zera o eixo de demanda —
+# ele não emite `agent_event` nenhum.
+
 # agente_triagem_v2.yaml
 # Triagem v2 — Agente IVR Determinístico Multi-Cenário (Tier 3)
 #

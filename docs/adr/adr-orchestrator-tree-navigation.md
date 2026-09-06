@@ -296,7 +296,7 @@ inteiro.
 | **F1** | **O eixo de demanda passa a existir**: árvore autorada no `DialogForm` + `agent_event` com o caminho, **ainda escalando pelo `choice` atual**. Sem tocar no engine | F0 |
 | **F2** | **Renderização em canal** (`DLG-15`): hoje nenhum canal de cliente desenha árvore — o adapter de WhatsApp trata `options` como lista plana, dimensionada por `len()` | F0 |
 | **F3** ✅ | `escalate` com **alvo interpolável** + mapa `caminho → pool` na config do pool (D2) | ~~F2~~ — ver emenda |
-| **F4** | O **runner genérico** assume a navegação; `agente_triagem_v2` sai | F1, F3 |
+| **F4** ✅ | O **runner genérico** assume a navegação; `agente_triagem_v2` sai | F1, F3 |
 | **F5** | **Paridade LLM** (D6): o orquestrador IA aterrissa nas mesmas folhas declaradas | F4 |
 
 > **Emenda de 2026-09-06 — D12: a categoria é COMPOSTA no servidor, não conferida.**
@@ -381,6 +381,34 @@ inteiro.
   (`pool`, `pool_id`, `target`, `target_pool`, `escalate_to`, `route`, `route_to`, `skill_id`,
   `agent_type_id`). As **duas** metades importam: forma limpa hoje não impede campo novo amanhã, e
   *campo que existe acaba usado*. Verificado por mutação (uma folha com `pool` ⇒ VERMELHO).
+> **Emenda de 2026-09-06 — F4 entregue, e o menu duplicado morreu por CONDIÇÃO, não por remoção.**
+> A triagem já tinha saído como efeito da F1 (o promote da navegação no `demo_ia`); o que faltava era
+> o menu duplicado, e ele **não podia ser apagado**: o `sac_ia` tem endpoint de canal próprio, então
+> o cliente pode cair lá sem passar por navegação nenhuma. Apagar consertaria o caminho novo e
+> quebraria o antigo. O menu **fica**; deixa de ser o Único caminho.
+>
+> A navegação grava `session.navegacao.path` no ContextStore e o especialista ramifica sobre ele.
+> ⚠️ **O `escalate` NÃO serve de veículo:** o `conversation_escalate` publica
+> `process_context: { pipeline_state }` no evento e **ninguém lê** — medido, uma única ocorrência no
+> repositório, na declaração do modelo do routing-engine. Declaração sem consumidor, a mesma família
+> do `options_tree` logo abaixo.
+>
+> ⚠️ **E o `default` desse `choice` é PERGUNTAR** — seguro, e por isso mesmo um esconderijo:
+> renomear uma folha faria o especialista deixar de reconhecer o caminho e voltar a perguntar, **sem
+> nada ficar vermelho**. Daí o ramo **H** do gate, que compara de fora os dois conjuntos (folhas
+> roteadas para um pool × ramos do skill daquele pool) e foi verificado por mutação.
+>
+> ⚠️ **O seed foi a parte que quase escapou.** `infra/registry/tenant_demo.yaml` ainda declarava
+> `skill_triagem_v2` no `demo_ia`, e o mapa `navigation_pools` só existia no DB. Como o YAML é
+> seed-if-absent, isso é **inerte hoje e volta a valer num `--wipe`**: a triagem renasceria e o
+> `pool_route_resolve` recusaria TODO caminho por `route_map_absent`. Instalação limpa é um teste, e
+> teste que nunca roda não é cobertura.
+>
+> `agente_triagem_v2.yaml` **fica no repositório**, rotulado como aposentado — mesmo critério dos
+> pacotes em quarentena, e com uma razão a mais medida: os promotes sucessivos deixaram o slot
+> `previous` do `demo_ia` com outra versão da própria navegação, então **um rollback não traz a
+> triagem de volta** e este arquivo é a última receita dela fora do git.
+
 - **`options_tree` é hoje uma declaração sem consumidor** (medido: aparece só dentro de
   `packages/schemas` — definição, derivação, teste e `.d.ts`; o Console decide por conta própria com
   `temArvore`). A F2 é quem lhe dá o primeiro consumidor — e, de quebra, impede a terceira cópia da

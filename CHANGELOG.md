@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (8) — F4/ORQ-04: o menu duplicado morre, e a instalação limpa reproduz o arco
+
+A triagem já tinha saído — efeito colateral da F1, quando a navegação foi promovida no `demo_ia`.
+Medido hoje: **nenhum pool executa `skill_triagem_v2`**. O que faltava desta fase era o menu
+duplicado, e a parte que quase escapou.
+
+### O menu duplicado morre por CONDIÇÃO, não por remoção
+
+Apagar o `menu_motivo` do `sac_ia` seria o conserto óbvio e estaria errado: aquele pool tem
+**endpoint de canal próprio**, então o cliente pode cair lá sem passar por navegação nenhuma.
+Consertaria o caminho novo e quebraria o antigo. O menu **fica**; deixa de ser o único caminho.
+
+A navegação grava `session.navegacao.path` no ContextStore, e o especialista ramifica sobre ele:
+caminho reconhecido ⇒ pula direto para a resposta; ausente ou desconhecido ⇒ pergunta, como sempre.
+
+⚠️ **O `escalate` não serve de veículo.** O `conversation_escalate` publica
+`process_context: { pipeline_state }` no evento — e **ninguém lê**: medido, uma única ocorrência no
+repositório, na declaração do modelo do routing-engine, sem consumidor. Confiar nela seria mandar o
+fato para o vazio. O canal entre agentes da mesma sessão é o ContextStore.
+
+### O registry recusou a primeira tentativa, e estava certo
+
+`session.navegacao_path` levou **422 `unregistered_context_tag`**: a tag não estava no mapa do
+ContextStore e tinha 2 segmentos onde o padrão é `escopo.dominio.campo`. O domínio foi declarado em
+`infra/context-map/tenant_demo.json` (a fonte do seed, para sobreviver a um wipe) e aplicado pela
+API oficial; a tag virou `session.navegacao.path`. Portao do arco CNS fazendo exatamente o trabalho
+dele — e note o que ele impediu: um skill publicado escrevendo num namespace que ninguém declarou.
+
+### O ramo H existe porque o `default` seguro é um esconderijo
+
+O `default` do novo `choice` é **perguntar**. Isso é certo em runtime e péssimo como sinal:
+renomear uma folha na forma faria o especialista deixar de reconhecer o caminho e voltar a
+perguntar — o menu duplicado ressuscita e **nada fica vermelho**, porque o fallback é o
+comportamento antigo. O ramo H compara os dois conjuntos **de fora**: para cada folha da árvore,
+resolve o pool pelo mapa do seed e exige que o skill daquele pool tenha o ramo correspondente.
+Mutação (renomear `info_plano` → `informacoes_plano` sem tocar no skill): VERMELHO, nomeando os dois
+lados (`ramo_sem_folha` + `folha_sem_ramo`).
+
+### A parte que quase escapou: a instalação limpa
+
+`infra/registry/tenant_demo.yaml` ainda declarava `skill_triagem_v2` no `demo_ia`, e o mapa
+`navigation_pools` só existia no banco (eu o gravei por PUT na F3). Como o YAML é seed-if-absent,
+isso é **inerte hoje** — e volta a valer num `rebuild-all.sh --wipe`: a triagem renasceria e o
+`pool_route_resolve` recusaria TODO caminho por `route_map_absent`. Três arcos de trabalho desfeitos,
+visíveis só no dia em que alguém instala do zero. Hoje o seed declara a skill e as 7 rotas.
+
+### `agente_triagem_v2.yaml` fica, rotulado
+
+Mesmo critério dos pacotes em quarentena — apagar troca um artefato rotulado por um buraco mudo. E
+há uma razão a mais, medida: os promotes sucessivos deixaram o slot `previous` do `demo_ia` com
+outra versão da própria navegação, então **um rollback não traz a triagem de volta**; este arquivo é
+a última receita dela fora do histórico do git. O cabeçalho diz isso, e diz o que religar custaria.
+
+### Contas
+
+`skill_navegacao_v1` 13 steps · `skill_atendimento_sac_v1` 15 (era 14) — a fase **acrescenta** um
+step de cada lado e remove um artefato inteiro de 15. Gate em **8 ramos**; F, G e H por mutação.
+`probe_context_map_audit` e `probe_masking_types_seed_parity` verdes após a mudança do mapa.
+
 ## 2026-09-06 (7) — F3/ORQ-03: a tabela de roteamento sai do fluxo
 
 `skill_navegacao_v1`: **16 → 12 steps**. Saíram um `choice` de 5 condições e 5 `escalate` literais —

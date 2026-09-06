@@ -125,6 +125,12 @@
           "tipo": "texto"
         }
       },
+      "navegacao": {
+        "path": {
+          "tipo": "texto",
+          "_": "Caminho da arvore de navegacao que o CLIENTE escolheu, pontuado (ex.: sac.info_plano). Escrito por skill_navegacao_v1 no `context_set` logo apos a folha; lido pelo especialista para NAO repetir o menu que a navegacao ja fez (F4/ORQ-04). Nao carrega pool: o mapa caminho->pool mora em pools.navigation_pools (D2)."
+        }
+      },
       "portabilidade": {
         "numero_atual": {
           "legado": [

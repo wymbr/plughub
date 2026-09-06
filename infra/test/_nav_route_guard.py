@@ -98,8 +98,119 @@ def ramo_f(skill_path):
         len(refs), len(literais), res[0]["id"])
 
 
+# ── Ramo H — o especialista cobre as folhas que a navegacao lhe manda ───────
+
+def _folhas(nodes):
+    """Todos os caminhos de FOLHA da arvore (pasta = tem `options`)."""
+    saida = []
+
+    def anda(opts, trilha):
+        for o in opts or []:
+            if not isinstance(o, dict):
+                continue
+            aqui = (trilha + [str(o.get("id"))])
+            filhos = o.get("options")
+            if filhos:
+                anda(filhos, aqui)
+            else:
+                saida.append(".".join(aqui))
+
+    for n in nodes or []:
+        anda(n.get("options"), [])
+    return saida
+
+
+def _resolve(mapa, caminho):
+    segs = [x for x in caminho.split(".") if x]
+    for n in range(len(segs), 0, -1):
+        k = ".".join(segs[:n])
+        v = mapa.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def ramo_h():
+    """Cada folha roteada para um pool casa com um ramo do skill DAQUELE pool.
+
+    ⚠️ O defeito que este ramo existe para pegar e SILENCIOSO: renomear uma folha
+    na forma, ou acrescentar uma sob uma pasta ja mapeada, faz o especialista
+    deixar de reconhecer o caminho e **voltar a perguntar** — o menu duplicado
+    ressuscita, e nada fica vermelho porque o `default` do `choice` e justamente
+    "pergunte". Default seguro esconde regressao: por isso a checagem e de fora.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return "SEM_YAML"
+
+    seed = os.path.join(RAIZ, "infra", "registry", "tenant_demo.yaml")
+    if not os.path.isfile(seed):
+        return "SEM_SEED"
+    cfg = yaml.safe_load(io.open(seed, encoding="utf-8").read())
+    pools = {p["pool_id"]: p for p in (cfg.get("pools") or []) if isinstance(p, dict)}
+
+    orquestradores = {pid: p for pid, p in pools.items() if p.get("navigation_pools")}
+    if not orquestradores:
+        return "SEM_ORQUESTRADOR"
+
+    problemas, conferidos = [], 0
+    for pid, p in orquestradores.items():
+        mapa = p["navigation_pools"]
+        folhas = []
+        for fp in sorted(glob.glob(os.path.join(RAIZ, "infra", "dialog", "*.json"))):
+            try:
+                d = json.load(io.open(fp, encoding="utf-8"))
+            except Exception:
+                continue
+            if "navegacao" not in os.path.basename(fp):
+                continue
+            folhas += _folhas(d.get("nodes"))
+
+        porpool = {}
+        for f in folhas:
+            alvo = _resolve(mapa, f)
+            if alvo:
+                porpool.setdefault(alvo, set()).add(f)
+
+        for alvo, esperadas in sorted(porpool.items()):
+            skill_id = ((pools.get(alvo) or {}).get("deploy") or {}).get("skill_id")
+            if not skill_id:
+                continue   # pool humano, ou sem skill declarada no seed
+            sp = os.path.join(RAIZ, "packages", "skill-flow-engine", "skills", skill_id + ".yaml")
+            if not os.path.isfile(sp):
+                continue
+            sk = yaml.safe_load(io.open(sp, encoding="utf-8").read())
+            ramos = set()
+            for st in sk.get("steps") or []:
+                if st.get("type") != "choice":
+                    continue
+                for c in st.get("conditions") or []:
+                    if str(c.get("field", "")).endswith("session.navegacao.path"):
+                        ramos.add(str(c.get("value")))
+            if not ramos:
+                # Skill que nao declara o atalho continua perguntando — comportamento
+                # antigo, nao regressao. Nao ha promessa a conferir.
+                continue
+            conferidos += 1
+            orfas   = ramos - esperadas         # ramo que a navegacao nunca manda
+            perdidas = esperadas - ramos        # folha que chega e o skill nao reconhece
+            if orfas:
+                problemas.append("%s:ramo_sem_folha(%s)" % (skill_id, ",".join(sorted(orfas))))
+            if perdidas:
+                problemas.append("%s:folha_sem_ramo(%s)" % (skill_id, ",".join(sorted(perdidas))))
+
+    if not conferidos:
+        return "NENHUM_ATALHO_DECLARADO"
+    if problemas:
+        return "DIVERGE " + " ".join(problemas)
+    return "H_OK skills=%d" % conferidos
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "F":
         print(ramo_f(sys.argv[2]))
+    elif sys.argv[1] == "H":
+        print(ramo_h())
     else:
         print(ramo_g())

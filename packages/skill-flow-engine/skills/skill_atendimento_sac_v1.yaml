@@ -62,8 +62,41 @@ steps:
   - id: saudacao
     type: notify
     message: "Olá! Você está no SAC PlugHub Demo. Sua jornada de atendimento foi registrada e estamos prontos para ajudar."
-    on_success: menu_motivo
-    on_failure: menu_motivo
+    on_success: veio_da_navegacao
+    on_failure: veio_da_navegacao
+
+  # ── O menu DUPLICADO morre aqui (F4/ORQ-04) ──────────────────────────
+  # Medido em contato real (2026-09-06): o cliente escolhia *SAC → Informações sobre o
+  # plano* na navegação, era escalado para cá em 3 s, e este skill perguntava **a mesma
+  # coisa de novo**. As duas listas casavam por id — não eram menus parecidos, era o
+  # MESMO menu em dois artefatos, com dois deploys. Quem viu a tela leu como defeito
+  # da navegação.
+  #
+  # ⚠️ **O menu FICA, e isso é decisão.** Este pool tem endpoint de canal próprio: o
+  # cliente pode cair aqui direto, sem passar por navegação nenhuma. Apagar o menu
+  # consertaria o caminho novo e quebraria o antigo. O que muda é que ele deixa de ser
+  # o ÚNICO caminho — quem chega com o caminho já escolhido pula direto para a resposta.
+  #
+  # ⚠️ Compara o CAMINHO INTEIRO (`sac.info_plano`), não a folha: folha sozinha se
+  # repete entre pastas, e um dia `financeiro.status_servico` cairia no ramo errado.
+  - id: veio_da_navegacao
+    type: choice
+    conditions:
+      - field: "@ctx.session.navegacao.path"
+        operator: eq
+        value: "sac.info_plano"
+        next: resposta_info_plano
+      - field: "@ctx.session.navegacao.path"
+        operator: eq
+        value: "sac.status_servico"
+        next: resposta_status
+      - field: "@ctx.session.navegacao.path"
+        operator: eq
+        value: "sac.problema_tecnico"
+        next: coletar_descricao
+    # Sem tag (entrada direta) ou caminho que este skill não cobre ⇒ pergunta, como
+    # sempre fez. Default que PERGUNTA é seguro; default que adivinha o motivo não.
+    default: menu_motivo
 
   # ── Etapa 2: menu de motivo ───────────────────────────────────────────────────
   # list suporta mais de 3 opções. Channel Gateway adapta para canais sem suporte.

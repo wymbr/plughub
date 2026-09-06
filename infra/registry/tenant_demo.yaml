@@ -153,10 +153,30 @@ pools:
 
   - pool_id: demo_ia
     agent_kind: ai
-    deploy: { skill_id: skill_triagem_v2, max_concurrent_sessions: 10 }
-    description: "Pool IA — entry point do fluxo IVR com botões (agente_demo_ia_v1)"
+    deploy: { skill_id: skill_navegacao_v1, max_concurrent_sessions: 10 }
+    description: "Pool IA — orquestrador de navegação dirigido por DialogForm"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
+    # ── Mapa `caminho de navegação → pool` (F3/ORQ-03) ────────────────────
+    #
+    # ⚠️ Isto é o que faz uma INSTALAÇÃO LIMPA reproduzir o que está rodando. O YAML
+    # é seed-if-absent — num banco já semeado ele é no-op e o DB vence —, então
+    # editar aqui não muda o ambiente de pé; ele existe para o `--wipe`. Sem estas
+    # linhas, um `rebuild-all.sh --wipe` traria de volta o `skill_triagem_v2` e um
+    # pool sem mapa, e o `pool_route_resolve` recusaria TODO caminho
+    # (`route_map_absent`) — regressão silenciosa de dois arcos, visível só no dia em
+    # que alguém instala do zero.
+    #
+    # Casa por prefixo mais longo: `sac` cobre `sac.info_plano`, e a entrada mais
+    # específica vence — `sac.especialista` vai ao humano, não ao `sac_ia`.
+    navigation_pools:
+      sac:               sac_ia
+      sac.especialista:  retencao_humano
+      portabilidade:     portabilidade_ia
+      reembolso:         reembolso_ia
+      auth_form:         auth_form_ia
+      auth_sac:          auth_sac_ia
+      nao_se_aplica:     retencao_humano
 
   - pool_id: sac_ia
     agent_kind: ai

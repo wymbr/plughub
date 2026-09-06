@@ -12,6 +12,7 @@
 #   E  o evento de demanda nasce COM época — e as duas pontas do carimbo casam
 #   F  o alvo do `escalate` é REFERÊNCIA, e a resolução é um step visível (F3)
 #   G  guarda da D10: nenhuma folha carrega destino, e o schema não tem onde pô-lo
+#   H  o especialista RECONHECE as folhas que a navegação lhe manda (menu duplicado)
 #
 # ⚠️ O ramo C é o único que não tem cara de teste feliz, e é o que importa. Se
 # `optionsAtPath` devolvesse a raiz para um segmento inexistente, a tela voltaria
@@ -232,6 +233,23 @@ case "$GDA" in
   SEM_SCHEMA|SEM_DIALOG_OPTION) info "dialog.ts nao lido — metade do schema nao exercida"; INCONC=1 ;;
   "")                 info "leitor mudo — ramo G nao exercido"; INCONC=1 ;;
   *)                  bad "veredicto inesperado: ${GDA}" ;;
+esac
+
+# ── H: o menu duplicado não ressuscita ──────────────────────────────
+# A navegação grava `session.navegacao_path` e o especialista pula o próprio menu
+# quando reconhece o caminho. ⚠️ O `default` desse `choice` e PERGUNTAR — default
+# seguro, e por isso mesmo um esconderijo: renomear uma folha na forma faz o
+# especialista deixar de reconhecer e voltar a perguntar, sem nada ficar vermelho.
+# Este ramo compara os DOIS conjuntos de fora.
+printf '\n\033[1mH — o especialista reconhece as folhas que a navegacao lhe manda\033[0m\n'
+DUP=$(python3 "$GUARDA" H 2>/dev/null)
+case "$DUP" in
+  SEM_YAML|SEM_SEED|"")   info "PyYAML/seed ausente — ramo H nao exercido"; INCONC=1 ;;
+  SEM_ORQUESTRADOR)       bad "nenhum pool do seed declara navigation_pools — instalacao limpa nao navega" ;;
+  NENHUM_ATALHO_DECLARADO) info "nenhum especialista declara o atalho — todos continuam perguntando"; INCONC=1 ;;
+  H_OK*)                  ok "folhas roteadas casam com os ramos do especialista (${DUP})" ;;
+  DIVERGE*)               bad "o menu DUPLICADO volta em silencio: ${DUP}" ;;
+  *)                      bad "veredicto inesperado: ${DUP}" ;;
 esac
 
 printf '\n'
