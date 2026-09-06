@@ -1,5 +1,48 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (6) — O eixo de demanda EXISTE: primeiro contato real da F1
+
+```
+category   demo_ia.navegacao.destino.sac.info_plano
+pool_id    demo_ia          forma  dialog_navegacao_atendimento_v1 v1
+segmentos  demo_ia 14:26:29.920  →  sac_ia 14:26:32.837
+lente      depth 3 / 4 / 5   single_vocabulary: true   unstamped_events: 0
+```
+
+Antes desta linha a plataforma media com precisão o que o **agente** diz que o contato foi (wrap-up)
+e **nada** do que o **cliente** disse que queria. Os cinco skills do caminho de atendimento emitiam
+zero `agent_event`; toda resposta de menu vivia no `pipeline_state` e morria com a sessão. Agora o
+cliente navegou uma árvore autorada, a folha virou evento, e a lente que já existia desenhou a
+árvore sem uma linha de código nova.
+
+**A ORQ-01 fecha aqui, e só aqui** — o mecanismo estava pronto desde a manhã, e dizer que o eixo
+existia naquele momento teria sido exatamente o *"existe != está pronto"* que esta casa persegue.
+
+### O que a tela pareceu dizer, e o que o dado disse
+
+Quem olhou a tela viu o menu **voltar** depois de escolher *Informações sobre o plano*, e leu como
+defeito da navegação. Não era: a navegação desceu, emitiu e escalou em **3 s**. O que perguntou de
+novo foi o `sac_ia`, com o **mesmo menu** — `menu_motivo` do `skill_atendimento_sac_v1` casa por id
+com a pasta `sac` da forma (`info_plano`, `status_servico`, `problema_tecnico`; o quarto é
+`especialista` × `falar_especialista`). Não são menus parecidos: é o mesmo menu em dois artefatos,
+com dois deploys.
+
+**Isso promove a ORQ-04 de derivada a OBSERVADA.** A duplicação estava descrita desde a F0, lida do
+YAML; agora foi vista por quem usa, e confundida com um bug — que é o argumento mais forte que ela
+podia ganhar.
+
+### O preço da fase, e ele foi pago em defeito silencioso
+
+Dois defeitos chegaram até o cliente, e **nenhum** ficava vermelho em teste que existisse antes:
+
+* o `prompt` do `menu` aparecia **literal** na tela (`$.pipeline_state.nivel.prompt`) — `interpolate`
+  só troca `{{...}}`, e a `options` ao lado usa ref pura de propósito porque vai por
+  `resolveInputValue`. Dois campos do mesmo step, dois resolvedores;
+* a sentinela de idempotência esterilizava o ciclo (§ 2026-09-06 (5)).
+
+Os dois só apareceram porque alguém **usou**. É o argumento de sempre a favor do contato real como
+critério de fechamento, e desta vez ele cobrou.
+
 ## 2026-09-06 (5) — A sentinela protegia a QUEDA e esterilizava o CICLO
 
 Contato real no `demo_ia`: o cliente escolhe *SAC*, desce um nível, escolhe
