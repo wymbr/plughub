@@ -54,9 +54,9 @@ steps:
     output_as: numero_pedido
     timeout_s: 180
     on_success: coletar_motivo
-    on_failure: finalizar_timeout
-    on_timeout: finalizar_timeout
-    on_disconnect: finalizar_timeout
+    on_failure: sair_timeout
+    on_timeout: sair_timeout
+    on_disconnect: sair_timeout
 
   # ── Etapa 3: coletar motivo do reembolso ─────────────────────────────────────
   - id: coletar_motivo
@@ -77,9 +77,9 @@ steps:
     output_as: motivo_reembolso
     timeout_s: 120
     on_success: confirmar_dados
-    on_failure: finalizar_timeout
-    on_timeout: finalizar_timeout
-    on_disconnect: finalizar_timeout
+    on_failure: sair_timeout
+    on_timeout: sair_timeout
+    on_disconnect: sair_timeout
 
   # ── Etapa 4: confirmar dados coletados ───────────────────────────────────────
   - id: confirmar_dados
@@ -116,15 +116,71 @@ steps:
   - id: avisar_inicio
     type: notify
     message: "✅ Solicitação de reembolso registrada com sucesso!\n\n📋 Protocolo: {{$.pipeline_state.numero_pedido}}\n⏱️ Prazo de análise: até 3 dias úteis\n\nSe aprovado, o valor será creditado em até 5 dias úteis adicionais. Você receberá uma mensagem aqui com a atualização."
+    on_success: sair_resolvido
+    on_failure: sair_resolvido
+
+  # ── Saída do EXECUTOR (CTR-04) ────────────────────────────────────────────────
+  #
+  # Este skill é um EXECUTOR: quem decide o desfecho do CONTATO é quem o chamou.
+  # Todo desfecho passa por um `sair_*`, que devolve o controle ao chamador ANTES
+  # de fechar o próprio segmento.
+  #
+  # ⚠️ **O retorno é CONDICIONAL, e a condição não é zelo.** Um especialista pode
+  # ser alcançado de duas formas — delegado por um orquestrador (há token) ou por
+  # porta própria de canal (não há). Medido em 2026-09-06: dos 5 especialistas,
+  # `sac_ia` TEM endpoint de canal (`webchat/sac`). Devolver incondicionalmente
+  # faria o `workflow_resume` falhar em todo contato direto, e erro rotineiro em
+  # log é ruído que treina todo mundo a ignorar o log.
+  #
+  # ⚠️ **`on_failure` do retorno vai para o mesmo `complete`, de propósito.** Se o
+  # token existir mas estiver vencido ou já consumido, o segmento fecha do mesmo
+  # jeito — o cliente não paga pelo chamador ter desistido. A falha aparece no log
+  # do `invoke`, que é onde ela é acionável.
+  - id: sair_resolvido
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_resolvido
+    default: finalizar
+
+  - id: devolver_resolvido
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "input"
+      payload:
+        outcome:       "resolved"
+        numero_pedido: "$.pipeline_state.numero_pedido"
+        motivo:        "$.pipeline_state.motivo_reembolso"
     on_success: finalizar
     on_failure: finalizar
 
-  # ── Etapa 8: finalização normal ───────────────────────────────────────────────
+  - id: sair_timeout
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_timeout
+    default: finalizar_timeout
+
+  - id: devolver_timeout
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "timeout"
+      payload:
+        outcome: "failed"
+    on_success: finalizar_timeout
+    on_failure: finalizar_timeout
+
+  # ── Terminais (fecham o SEGMENTO deste executor, nunca o contato) ─────────────
   - id: finalizar
     type: complete
     outcome: resolved
 
-  # ── Timeout / disconnect ───────────────────────────────────────────────────────
   - id: finalizar_timeout
     type: complete
     outcome: failed

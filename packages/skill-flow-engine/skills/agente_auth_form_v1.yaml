@@ -54,12 +54,12 @@ steps:
       type: notify
       message: "Para prosseguir, precisamos verificar sua identidade. Preencha o formulário a seguir."
       on_success: tx_inicio
-      on_failure: falha_autenticacao
+      on_failure: sair_falha
 
     # ── Início da transação segura ─────────────────────────────────────────────
     - id: tx_inicio
       type: begin_transaction
-      on_failure: falha_autenticacao
+      on_failure: sair_falha
 
     # ── Coleta via formulário com campos mistos ────────────────────────────────
     # email:      sem masked → vai para pipeline_state.dados_coletados.email
@@ -91,8 +91,8 @@ steps:
             confidence: 1.0
             merge: overwrite
       on_success: validar_senha
-      on_failure: falha_autenticacao
-      on_timeout: falha_autenticacao
+      on_failure: sair_falha
+      on_timeout: sair_falha
 
     # ── Validação da senha via MCP ─────────────────────────────────────────────
     # @masked.senha lê do maskedScope em memória — nunca de pipeline_state
@@ -108,7 +108,7 @@ steps:
         pin: "@masked.senha"
       output_as: validacao_senha
       on_success: verificar_resultado
-      on_failure: falha_autenticacao
+      on_failure: sair_falha
 
     # ── Verificação do resultado: valid true → tx_fim | valid false → retry ────
     - id: verificar_resultado
@@ -127,12 +127,12 @@ steps:
       type: notify
       message: "Credenciais inválidas. Tente novamente — senha deve ter 6 dígitos começando com 1 (ex: 123456)."
       on_success: tx_inicio_retry
-      on_failure: falha_autenticacao
+      on_failure: sair_falha
 
     # ── Segunda tentativa: bloco com on_failure terminal (sem loop) ───────────
     - id: tx_inicio_retry
       type: begin_transaction
-      on_failure: falha_autenticacao
+      on_failure: sair_falha
 
     - id: coletar_dados_retry
       type: menu
@@ -159,8 +159,8 @@ steps:
             confidence: 1.0
             merge: overwrite
       on_success: validar_senha_retry
-      on_failure: falha_autenticacao
-      on_timeout: falha_autenticacao
+      on_failure: sair_falha
+      on_timeout: sair_falha
 
     - id: validar_senha_retry
       type: invoke
@@ -172,7 +172,7 @@ steps:
         pin: "@masked.senha"
       output_as: validacao_senha
       on_success: verificar_resultado_retry
-      on_failure: falha_autenticacao
+      on_failure: sair_falha
 
     - id: verificar_resultado_retry
       type: choice
@@ -181,13 +181,13 @@ steps:
           operator: eq
           value: true
           next: tx_fim
-      default: falha_autenticacao
+      default: sair_falha
 
     # ── Fim da transação — persiste metadados, descarta campos mascarados ──────
     - id: tx_fim
       type: end_transaction
       result_as: auth_status
-      on_success: aviso_sucesso_agente
+      on_success: sair_autenticado
 
     # ── Aviso interno de sucesso ao agente (agents_only) ──────────────────────
     # O e-mail está em pipeline_state.dados_coletados.email — senha e codigo_2fa ausentes.
@@ -234,6 +234,71 @@ steps:
       context: pipeline_state
       handoff_reason: "Falha na autenticação via formulário seguro"
       on_failure: encerrar_fallback
+
+    # ── Saída do EXECUTOR (CTR-04) ───────────────────────────────────────────
+    #
+    # ⚠️ **Os DOIS desfechos deste skill escalavam sozinhos** para
+    # `retencao_humano` — sucesso e falha. Ele decidia o destino do contato nos
+    # dois casos, que é a prerrogativa de quem o chamou. Sob o contrato de
+    # executor ele devolve o VEREDICTO da autenticação e quem roteia é o
+    # orquestrador.
+    #
+    # ⚠️ A interceptação é ANTES das mensagens ao cliente, e isso não é detalhe:
+    # `confirmacao` diz *"Transferindo para um especialista"* e
+    # `falha_autenticacao` diz *"Um especialista irá atendê-lo em seguida"*.
+    # Devolver ao chamador DEPOIS delas deixaria o cliente lendo uma promessa que
+    # ninguém vai cumprir — a mensagem é do caminho antigo e só vale nele.
+    - id: sair_autenticado
+      type: choice
+      conditions:
+        - field: "@ctx.core.workflow.delegate_resume_token"
+          operator: exists
+          next: devolver_autenticado
+      default: aviso_sucesso_agente
+
+    - id: devolver_autenticado
+      type: invoke
+      tool: workflow_resume
+      input:
+        resume_token: "@ctx.core.workflow.delegate_resume_token"
+        decision: "input"
+        payload:
+          outcome:     "resolved"
+          autenticado: "true"
+      on_success: finalizar
+      on_failure: aviso_sucesso_agente   # sem retomada, segue o caminho antigo
+
+    - id: sair_falha
+      type: choice
+      conditions:
+        - field: "@ctx.core.workflow.delegate_resume_token"
+          operator: exists
+          next: devolver_falha
+      default: falha_autenticacao
+
+    # `rejected`, não `timeout`: a autenticação TERMINOU com veredicto negativo.
+    - id: devolver_falha
+      type: invoke
+      tool: workflow_resume
+      input:
+        resume_token: "@ctx.core.workflow.delegate_resume_token"
+        decision: "rejected"
+        payload:
+          outcome:     "failed"
+          autenticado: "false"
+          motivo:      "identidade_nao_verificada"
+      on_success: finalizar_falha
+      on_failure: falha_autenticacao
+
+    # ── Terminais (fecham o SEGMENTO deste executor, nunca o contato) ─────────
+    - id: finalizar
+      type: complete
+      outcome: resolved
+
+    - id: finalizar_falha
+      type: complete
+      outcome: failed
+      issue_status: "Identidade não verificada — devolvido ao chamador"
 
     # ── Terminal fallback — quando escalate falha (MCP indisponível) ──────────
     - id: encerrar_fallback

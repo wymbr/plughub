@@ -1,5 +1,104 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (16) — CTR-04 (metade do retorno): o especialista propoe, o chamador dispoe
+
+A rodada anterior mediu que **nenhum** dos 6 destinos de navegacao era delegavel — 4 nao chamavam
+`workflow_resume`, e por isso a CTR-03 nao podia ser entregue. Esta rodada fecha essa metade: os
+**4 executores devolvem o controle em todos os desfechos**.
+
+### O contrato de saida
+
+Todo desfecho (resolvido · negativo · timeout) passa por um `sair_*`, que devolve o controle ao
+chamador ANTES de fechar o proprio segmento:
+
+```yaml
+- id: sair_resolvido
+  type: choice
+  conditions:
+    - field: "@ctx.core.workflow.delegate_resume_token"
+      operator: exists
+      next: devolver_resolvido
+  default: finalizar_resolvido      # sem chamador, o caminho antigo, inteiro
+```
+
+⚠️ **O retorno e CONDICIONAL, e a condicao nao e zelo.** Um especialista e alcancavel de duas
+formas — delegado (ha token) ou por porta propria de canal (nao ha). Medido: dos 5, **`sac_ia` TEM
+endpoint** (`webchat/sac`). Devolver incondicionalmente faria o `workflow_resume` falhar em **todo**
+contato direto, e erro rotineiro em log e ruido que treina todo mundo a ignorar o log.
+
+⚠️ **`on_failure` do retorno vai para o mesmo terminal, de proposito.** Token vencido ou ja
+consumido fecha o segmento do mesmo jeito — o cliente nao paga pelo chamador ter desistido.
+
+### Dois deles DECIDIAM o destino do contato
+
+Este e o coracao da CTR-04, e nao era so *"acrescentar um retorno"*:
+
+- `skill_atendimento_auth_v1`, autenticado, **escalava sozinho para o `sac_ia`**;
+- `agente_auth_form_v1` **escalava para `retencao_humano` nos DOIS desfechos** (sucesso e falha).
+
+Agora eles **propoem** — `payload.proximo: sac`, `payload.motivo: identidade_nao_verificada` — e
+quem roteia e o chamador. O `sac_ia` idem: o pedido de humano virou `decision: rejected` com
+`motivo: precisa_humano`, em vez de um `escalate` proprio.
+
+⚠️ **A interceptacao vem ANTES das mensagens ao cliente**, e isso nao e detalhe: `confirmacao` diz
+*"Transferindo para um especialista"* e `avisar_escalada` diz *"vou conectar voce agora"*. Devolver
+depois delas deixaria o cliente lendo uma promessa que ninguem vai cumprir.
+
+### `rejected` x `timeout` sao fatos diferentes
+
+Desfecho negativo usa `decision: rejected` (o delegate resolve `on_reject`, com fallback para
+`on_resume`); so prazo/desconexao usa `timeout`. Colapsar os dois faria o orquestrador tratar
+*"identidade nao verificada"* como *"o especialista nao respondeu"*.
+
+### A prova: o gate da rodada anterior virou sozinho
+
+`probe_orchestrator_delegability.sh` **nao foi tocado** e passou de **0 para 4 delegaveis**:
+
+```
+auth_form_ia · auth_sac_ia · reembolso_ia · sac_ia   DELEGAVEL
+portabilidade_ia                                     cadeia_delegate   (CTR-06)
+retencao_humano                                      sem_deploy        (pool humano)
+```
+
+⚠️ **Corolario para a CTR-03**: como 2 dos 6 continuam fora, o ramo `delegar` do orquestrador
+precisa do verbo **derivado por destino** — um `delegate` unico para `$.pipeline_state.rota.pool`
+penduraria o contato de portabilidade.
+
+### Publicar nao basta, e promover tambem nao bastava sozinho
+
+Editar YAML de skill ja semeado e **no-op** (seed-if-absent), e o bridge executa o **snapshot do
+slot `current`** — entao foram as duas etapas, com CONFERENCIA do que ficou vivo (contando as
+invocacoes de `workflow_resume` no snapshot promovido, nunca confiando no 200). O `set-next`
+**reenvia o `config_json` do current**: mandar so o `skill_id` ja derrubou `max_concurrent_sessions`
+de um pool nesta base.
+
+### Dois erros meus, os dois pegos por instrumento
+
+- **Renomear referencia com `str.replace` mutilou a definicao**: `": finalizar
+"` casa tambem em
+  `"  - id: finalizar
+"`. O `assert` do proprio patch barrou antes de gravar; a versao boa usa
+  regex ancorada nas chaves de transicao (`on_*`/`next`/`default`) e afirma que os `- id:`
+  sobreviveram.
+- **Meu validador declarou 15 steps inalcancaveis no `agente_auth_form_v1`** — falso positivo:
+  `begin_transaction`/`end_transaction` avancam pelo **step SEGUINTE na ordem do array**
+  (`engine.ts`, sentinelas `__transaction_begin__`/`__end__`), aresta implicita que eu nao
+  modelava. O que denunciou foi a lista apontar para steps **antigos**, que nao tinham sido
+  tocados.
+
+### Arquivos
+
+- `packages/skill-flow-engine/skills/`: `agente_reembolso_intake_v1.yaml` ·
+  `skill_atendimento_auth_v1.yaml` · `agente_auth_form_v1.yaml` · `skill_atendimento_sac_v1.yaml`
+- `infra/test/_ctr04_publish.py` (novo) — publish + deploy com conferencia do snapshot vivo;
+  documenta o envelope do `PUT /v1/skills/:id`, que nao e o YAML cru
+- `pending.md` (CTR-03 **destravada**; CTR-04 reduzida aos 3 menus de demanda) · `done.md` (CTR-08)
+
+Regressao: `probe_orchestrator_tree_nav.sh` verde nos 10 ramos, incluindo o H (*o especialista
+reconhece as folhas que a navegacao lhe manda*).
+
+---
+
 ## 2026-09-06 (15) — CTR-03: a premissa se confirmou, a ORDEM se refutou
 
 A CTR-03 pedia trocar o `escalate` terminal do orquestrador por `delegate`, para que ele mantivesse

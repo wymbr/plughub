@@ -77,9 +77,9 @@ steps:
     output_as: codigo_digitado
     timeout_s: 120
     on_success: validar_codigo
-    on_failure: encerrar_timeout
-    on_timeout: encerrar_timeout
-    on_disconnect: encerrar_timeout
+    on_failure: sair_timeout
+    on_timeout: sair_timeout
+    on_disconnect: sair_timeout
 
   # ── Etapa 3: validar código (Phase 1 — hardcoded demo) ───────────────────────
   # Phase 2: substituir por invoke mcp-server-auth:validate_pin com @masked.codigo
@@ -112,9 +112,9 @@ steps:
     output_as: decisao_pos_auth
     timeout_s: 120
     on_success: roteador_pos_auth
-    on_failure: finalizar
-    on_timeout: finalizar
-    on_disconnect: finalizar
+    on_failure: sair_encerrado
+    on_timeout: sair_encerrado
+    on_disconnect: sair_encerrado
 
   - id: roteador_pos_auth
     type: choice
@@ -122,8 +122,8 @@ steps:
       - field: "$.pipeline_state.decisao_pos_auth"
         operator: eq
         value: "sac"
-        next: avisar_sac
-    default: finalizar
+        next: sair_autenticado
+    default: sair_encerrado
 
   - id: avisar_sac
     type: notify
@@ -155,9 +155,9 @@ steps:
     output_as: codigo_digitado_2
     timeout_s: 120
     on_success: validar_codigo_2
-    on_failure: encerrar_timeout
-    on_timeout: encerrar_timeout
-    on_disconnect: encerrar_timeout
+    on_failure: sair_timeout
+    on_timeout: sair_timeout
+    on_disconnect: sair_timeout
 
   - id: validar_codigo_2
     type: choice
@@ -173,14 +173,109 @@ steps:
   - id: encerrar_falha
     type: notify
     message: "❌ Não foi possível verificar sua identidade após 2 tentativas. Por segurança, o acesso foi encerrado. Se precisar de ajuda, entre em contato com nosso suporte."
-    on_success: finalizar_falha
-    on_failure: finalizar_falha
+    on_success: sair_falha
+    on_failure: sair_falha
 
   - id: encerrar_fallback
     type: complete
     outcome: failed
     issue_status: "Escalação para sac_ia falhou após auth bem-sucedida"
 
+  # ── Saída do EXECUTOR (CTR-04) ────────────────────────────────────────────────
+  #
+  # ⚠️ **O desfecho de SUCESSO deste skill é o que mais muda de dono.** Autenticado,
+  # ele ESCALAVA sozinho para o `sac_ia` — decidia o destino do contato, que é a
+  # prerrogativa de quem o chamou. Sob o contrato de executor ele **propõe**
+  # (`payload.proximo: sac`) e quem dispõe é o orquestrador.
+  #
+  # ⚠️ **E o caminho antigo fica intacto**, porque a condição é o token: sem
+  # chamador (porta própria de canal, ou escalação vinda de outro lugar), ele
+  # escala como sempre fez. Apagar o `escalar_sac` consertaria o caminho novo e
+  # quebraria o antigo — o mesmo raciocínio que preservou o `menu_motivo` do SAC.
+  - id: sair_autenticado
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_autenticado
+    default: avisar_sac
+
+  - id: devolver_autenticado
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "input"
+      payload:
+        outcome:  "resolved"
+        # PROPOSTA de destino, nunca despacho: quem roteia é o chamador.
+        proximo:  "sac"
+    on_success: finalizar
+    on_failure: avisar_sac   # sem retomada possível, segue o caminho antigo
+
+  - id: sair_falha
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_falha
+    default: finalizar_falha
+
+  # `rejected` e não `timeout`: o especialista TERMINOU e o resultado foi negativo.
+  # O delegate resolve `on_reject` (com fallback para `on_resume`), então o
+  # orquestrador pode tratar identidade-não-verificada sem confundir com prazo.
+  - id: devolver_falha
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "rejected"
+      payload:
+        outcome: "failed"
+        motivo:  "identidade_nao_verificada"
+    on_success: finalizar_falha
+    on_failure: finalizar_falha
+
+  - id: sair_timeout
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_timeout
+    default: encerrar_timeout
+
+  - id: devolver_timeout
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "timeout"
+      payload:
+        outcome: "failed"
+    on_success: encerrar_timeout
+    on_failure: encerrar_timeout
+
+  - id: sair_encerrado
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_encerrado
+    default: finalizar
+
+  - id: devolver_encerrado
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "input"
+      payload:
+        outcome: "resolved"
+        motivo:  "cliente_encerrou"
+    on_success: finalizar
+    on_failure: finalizar
+
+  # ── Terminais (fecham o SEGMENTO deste executor, nunca o contato) ─────────────
   - id: finalizar
     type: complete
     outcome: resolved

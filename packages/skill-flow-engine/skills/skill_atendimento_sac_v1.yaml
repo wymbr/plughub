@@ -116,9 +116,9 @@ steps:
     output_as: motivo_contato
     timeout_s: 120
     on_success: roteador_motivo
-    on_failure: finalizar_timeout
-    on_timeout: finalizar_timeout
-    on_disconnect: finalizar_timeout
+    on_failure: sair_timeout
+    on_timeout: sair_timeout
+    on_disconnect: sair_timeout
 
   # ── Etapa 3: roteador por motivo ─────────────────────────────────────────────
   - id: roteador_motivo
@@ -139,7 +139,7 @@ steps:
       - field: "$.pipeline_state.motivo_contato"
         operator: eq
         value: "falar_especialista"
-        next: avisar_escalada
+        next: sair_humano
     default: menu_motivo
 
   # ── Caminho A: Informações sobre o plano ─────────────────────────────────────
@@ -181,9 +181,9 @@ steps:
     output_as: descricao_problema
     timeout_s: 180
     on_success: acusar_recebimento
-    on_failure: finalizar_timeout
-    on_timeout: finalizar_timeout
-    on_disconnect: finalizar_timeout
+    on_failure: sair_timeout
+    on_timeout: sair_timeout
+    on_disconnect: sair_timeout
 
   # Phase 2: substituir por step reason que analisa a descrição e decide se resolve
   # diretamente ou escala para humano.
@@ -207,9 +207,9 @@ steps:
     output_as: decisao_resolucao
     timeout_s: 120
     on_success: roteador_resolucao
-    on_failure: finalizar_resolvido
-    on_timeout: finalizar_resolvido
-    on_disconnect: finalizar_resolvido
+    on_failure: sair_resolvido
+    on_timeout: sair_resolvido
+    on_disconnect: sair_resolvido
 
   - id: roteador_resolucao
     type: choice
@@ -217,12 +217,12 @@ steps:
       - field: "$.pipeline_state.decisao_resolucao"
         operator: eq
         value: "resolvido"
-        next: finalizar_resolvido
+        next: sair_resolvido
       - field: "$.pipeline_state.decisao_resolucao"
         operator: eq
         value: "especialista"
-        next: avisar_escalada
-    default: avisar_escalada
+        next: sair_humano
+    default: sair_humano
 
   # ── NPS: hook on_contact_end (mecanismo genérico de fim-de-contato) ───────────
   # O NPS NÃO é disparado pelo skill: é coletado na conferência pelo hook
@@ -261,7 +261,80 @@ steps:
     outcome: failed
     issue_status: "Escalação para humano falhou — pool retencao_humano indisponível"
 
-  # ── Fechamentos ───────────────────────────────────────────────────────────────
+  # ── Saída do EXECUTOR (CTR-04) ────────────────────────────────────────────────
+  #
+  # ⚠️ **Este skill tem PORTA PRÓPRIA** (`webchat/sac` → `sac_ia`, medido
+  # 2026-09-06) — é o único dos cinco especialistas que atende contato direto. Por
+  # isso o retorno é condicional ao token e o caminho antigo fica inteiro: sem
+  # chamador ele resolve, escala e encerra exatamente como sempre fez.
+  #
+  # ⚠️ **O pedido de humano é PROPOSTA, não despacho.** Antes ele escalava sozinho
+  # para `retencao_humano`; com chamador, devolve `precisa_humano` e quem decide
+  # transferir é o orquestrador — que é a razão de ele existir. A interceptação vem
+  # ANTES do `avisar_escalada`, senão o cliente lê *"vou conectar você agora a um
+  # de nossos especialistas"* e o contato volta para o menu.
+  - id: sair_resolvido
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_resolvido
+    default: finalizar_resolvido
+
+  - id: devolver_resolvido
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "input"
+      payload:
+        outcome: "resolved"
+        # O caminho da árvore que trouxe o cliente até aqui, devolvido ao chamador
+        # para que o evento de desfecho case com o de demanda (D4).
+        caminho: "@ctx.session.navegacao.path"
+    on_success: finalizar_resolvido
+    on_failure: finalizar_resolvido
+
+  - id: sair_humano
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_humano
+    default: avisar_escalada
+
+  - id: devolver_humano
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "rejected"
+      payload:
+        outcome: "escalated"
+        motivo:  "precisa_humano"
+    on_success: finalizar_resolvido
+    on_failure: avisar_escalada   # sem retomada, escala como sempre fez
+
+  - id: sair_timeout
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: devolver_timeout
+    default: finalizar_timeout
+
+  - id: devolver_timeout
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision: "timeout"
+      payload:
+        outcome: "failed"
+    on_success: finalizar_timeout
+    on_failure: finalizar_timeout
+
+  # ── Fechamentos (fecham o SEGMENTO deste executor, nunca o contato) ───────────
   - id: finalizar_resolvido
     type: complete
     outcome: resolved
