@@ -1,6 +1,69 @@
 # TODO — PlugHub Itens Pendentes
 
 
+## DOC-01 — higiene do `CLAUDE.md`: onde estão as 2 204 linhas, e o que NÃO deve sair *(medido 2026-09-05)*
+
+Medição feita para uma sessão dedicada de higiene não a re-derivar. Alvo declarado pelo próprio
+arquivo: **≤ 800 linhas**. Estado: **2 204**.
+
+### Onde está o peso
+
+| linhas | seção |
+|---|---|
+| 189 | Security — Section 9.5 |
+| 180 | Saúde do CLAUDE.md — Regras de Manutenção |
+| 180 | Postura de Engenharia — invariantes de MÉTODO |
+| 115 | Sentiment Tracking |
+| 106 | Operational Visibility — Section 3.3c |
+| 98 | What Never To Do |
+| 95 | Pending (Next Iteration) |
+| 87 | Arc 7 — Auth, RBAC + ABAC |
+| 76 | Dialog Primitive |
+| 64 | Repository Structure |
+| 57 | Configuration — Single Source Invariants |
+| 54 | Naming Conventions |
+| 51 | MCP Interception |
+| 47 | Unified Session Model |
+
+As 14 maiores somam **1 399 linhas — 63% do arquivo**.
+
+### ⚠️ Refutação: o índice de ADRs NÃO é a fatia grande
+
+A hipótese óbvia (*"são os 39 ADRs indexados"*) está **errada**: o bloco inteiro tem **40 linhas, 1%
+do arquivo**. Ele *parece* enorme porque cada entrada é um parágrafo numa linha só — mas a métrica
+declarada é LINHA, e por ela cortar o índice não move o número. Quem for fazer a higiene provavelmente
+terá a mesma intuição; ela custa uma hora e não entrega nada.
+
+*(Esta passagem existe porque a intuição errada foi minha, e foi dita ao dono antes de eu medir.)*
+
+### O que sai pelas REGRAS DO PRÓPRIO ARQUIVO (~480 linhas)
+
+- **Pending (Next Iteration)** — 95 linhas, e a regra a limita a **50**. Mais forte: o ledger
+  `pending.md`/`done.md` **não existia** quando essa seção foi escrita (nasceu em 2026-08-31), então
+  hoje ela é uma segunda casa afirmando o que está aberto — exatamente o defeito que o ledger fechou.
+- **Sentiment Tracking** (115) · **Operational Visibility** (106) · **Arc 7** (87) · **Dialog
+  Primitive** (76) — documentação de arco > 50 linhas, que a regra manda para `docs/arcos/`, deixando
+  resumo de 15–20 linhas com link.
+
+### ⚠️ O que NÃO deve sair, e o motivo é de propósito, não de zelo
+
+**Postura de Engenharia** (180) e **Security** (189) são onde mora o **catálogo medido** — o "valor
+plausível", o `if not x` sobre valor decodificado, o `ReplacingMergeTree` que substitui a linha
+inteira, a ordem por partição no Kafka, o censo por eixo, o instrumento que mede a proposição vizinha.
+É o que faz as sessões deste repo produzirem trabalho bom, e pelas regras do próprio arquivo
+(*"invariantes e regras"*, *"como implementar, depurar e questionar"*) elas **pertencem**.
+
+Cortá-las para bater 800 é otimizar a métrica contra o propósito — a mesma família do gate que fica
+verde por medir a pergunta ao lado. **Se depois dos ~480 ainda faltar, o candidato honesto é REVER O
+ALVO DE 800**, que foi fixado antes dessas seções crescerem para carregar o catálogo — não espremer o
+catálogo para caber num número.
+
+### Nota de sessão
+
+`CLAUDE.md` é o único arquivo que **toda** sessão carrega no boot. Sessão que o edite enquanto outra
+está aberta transforma a cópia da outra em *lembrança*, não verificação. Quem estiver com sessão viva
+deve **reler o arquivo** ao retomar, em vez de confiar no que tem em contexto.
+
 ## CNS-02 — a reserva do ContextStore é o root `core.*`, não o `session.*` *(decidido 2026-09-01)*
 
 **Decisão do dono**, depois de duas voltas. A pergunta era *"quais pastas do `session.` são do

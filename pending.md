@@ -309,6 +309,12 @@ seguem sem tarefa aberta neste ledger.)*
 | id | tarefa | status | referencia |
 |---|---|---|---|
 
+## `CLAUDE.md` — saude do arquivo de contexto
+
+| id | tarefa | status | referencia |
+|---|---|---|---|
+| DOC-01 | **Higiene do `CLAUDE.md`: 2 204 linhas contra o alvo declarado de 800.** Medicao pronta no `TODO.md` § DOC-01 — onde esta o peso (as 14 maiores secoes = 63% do arquivo), o que sai pelas regras do proprio arquivo (~480 linhas: `Pending` que hoje duplica o ledger, mais 4 secoes de arco > 50 linhas que pertencem a `docs/arcos/`), e ⚠️ **o que NAO deve sair**: `Postura de Engenharia` e `Security` carregam o CATALOGO MEDIDO, e corta-las para bater o numero e otimizar a metrica contra o proposito — se faltar depois dos 480, revise o ALVO. ⚠️ Refutacao ja paga: o indice de ADRs **nao** e a fatia grande (40 linhas, 1%) — parece por ter linhas longas. ⚠️ Sessao dedicada: o arquivo e carregado no boot de TODA sessao, entao quem tiver sessao viva relê ao retomar | `aberto` | medido 2026-09-05, `TODO.md` § DOC-01 |
+
 ## `docs/adr/adr-orchestrator-tree-navigation.md` — navegacao de orquestrador como arvore
 
 *(F0 — medicao — fechou em 2026-09-05 ao escrever o ADR; ver `done.md`.)*
