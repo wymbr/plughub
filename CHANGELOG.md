@@ -1,5 +1,93 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (17) — ADR: a folha DEVOLVE (execucao de agente e etapa, nao desfecho)
+
+`docs/adr/adr-tree-return-continuation.md`, proposto. Nasceu do beco em que a CTR-04 parou, e o
+diagnostico e do dono: **a execucao de agente estava sendo tratada como etapa final, e nao deveria**.
+
+### O beco, que era real e nao de esforco
+
+O `menu_resolucao` do SAC nao podia subir para o orquestrador porque, no instante em que ele
+pergunta *"posso ajudar com mais alguma coisa?"*, o orquestrador **ja saiu da sessao** — o
+`escalate` e terminal. Apagar o menu nao moveria a pergunta para cima: ela deixaria de ser feita, e
+o cliente perderia a opcao de pedir um especialista depois de resolvido. Regressao de produto, nao
+refatoracao.
+
+### A decisao central: PONTEIRO, nunca switch
+
+A folha ganha **um campo** — `on_return: <question_id>` — apontando a question que o CHAMADOR
+executa quando o agente devolve o controle. Folha de verdade passa a ser so `escalate` e `complete`.
+
+A alternativa avaliada e **recusada** era um no `output`, que ramificaria sobre o codigo de retorno
+do agente. Ela era mais expressiva (discriminava `resolved` x `failed` na topologia), e caiu por
+colidir com um invariante escrito no proprio schema — *"`nodes` order IS the flow — there is
+deliberately no conditional `next` (branching = control, owned by the calling skill)"*. Um switch
+por codigo **e** branching no JSON: exigiria emendar aquele invariante e defender a emenda. Um
+ponteiro e aresta unica e nao emenda nada.
+
+⚠️ **A economia nao e de linhas, e de nao mexer numa regra.** Como a folha continua folha (ganha um
+ponteiro, nao filhos), `leafPaths`, `is_tree`, `flatten_to_sections`, o achatamento em canal e o
+gate da arvore **nao mudam**. Era exatamente onde o `output` custaria.
+
+⚠️ **O preco, declarado:** sem switch, *"resolvi"* e *"nao consegui"* apontam para a MESMA
+continuacao — a discriminacao por resultado passa a viver no agente (ele escala quando falha,
+devolve quando resolve), nao na arvore.
+
+### Medicoes que sustentaram o desenho
+
+- `QuestionNode` **ja tem `id`** — "questions identificadas com `main` como entrada" e convencao,
+  nao campo novo;
+- "bloco" e **projecao**, nao entidade: `buildRender` agrupa statements em `before`/`after` pela
+  primeira question, e nao ha id de bloco. Logo **apontar para a question e apontar para o bloco**,
+  e a continuacao pode abrir com mensagem antes do menu sem entidade nova;
+- ⚠️ mas isso mexe no render: ele assume UMA question por form e passa a receber de qual partir — a
+  mesma funcao serve o `form_get` **e** a preview do editor.
+
+### A licenca de IA: sao DUAS moedas, e so uma solta
+
+Pergunta do dono, medida e registrada na D9 para nao ser re-derivada:
+
+```
+vaga de atendimento (instancia)     LIBERADA na delegacao
+  → os dois segmentos do chamador tem duration_ms preenchido: fecham e reabrem
+licenca de IA ({t}:admission:kind:ai)   RETIDA
+  → e SET de session_id; solta no fechamento ou na migracao para pool humano
+```
+
+⚠️ **Nao e o contexto que prende a licenca — e a sessao estar aberta.** Passar contexto no chamado
+nao a libera, e nem precisa: o contexto **ja** viaja pelo ContextStore (que e por sessao) e a
+instancia **ja** e fungivel. Consequencia: **o ciclo nao cria custo de licenca novo** — permite que
+o contato dure mais, e um contato longo ja custava o mesmo. Por isso o teto e **contador de
+iteracoes**, nunca tempo: `session_timeout` e por INATIVIDADE, e ciclo ativo nunca bate nele.
+
+### A emenda que o ERRO tornou inevitavel
+
+A D6 declara a titularidade como **PARCIAL**: o agente chamado pode encerrar o contato, e ai o
+orquestrador o perde. Isso emenda a D1 do ADR do contrato, e a emenda esta escrita — senao daqui a
+tres meses alguem le aquela decisao e trata o agente que escala como defeito.
+
+Nao e concessao. Como o dono colocou: **casos de finalizacao por erro tem que estar tratados de
+qualquer forma** — falha de MCP, pool indisponivel, excecao. Um desenho em que o chamado nunca
+termina o contato seria falso no primeiro incidente. Trata-se o caminho; nao se deseja que ele nao
+exista.
+
+Corolario obrigatorio (D7): chamado que encerra exige **cancelar o `resume_token` pendente** no
+fechamento, senao o `pipeline_state` do chamador fica suspenso no Redis e o timeout scanner tenta
+retomar uma sessao que ja fechou.
+
+### Fases e ledger
+
+R1 (`on_return` + render) → R2 (`delegate` com verbo **derivado por destino** — nunca um unico para
+a rota, porque 2 dos 6 destinos nao sao delegaveis) → R3 (cancelamento) → R4 (teto) → R5 (os menus
+de continuidade sobem). Grupo **RET-01..05** em `pending.md`; indexado em `docs/INDEX.md`.
+
+Riscos abertos registrados: `portabilidade_ia` vira folha **por defeito** e nao por desenho (a
+CTR-06 sobe de prioridade) · o eixo de demanda vira N por contato · o `on_contact_end` do `sac_ia`
+dispararia NPS no meio do contato · e **2 dos 4 executores da CTR-04 nunca rodaram** (`auth_sac_ia` e
+`reembolso_ia`, zero segmentos).
+
+---
+
 ## 2026-09-06 (16) — CTR-04 (metade do retorno): o especialista propoe, o chamador dispoe
 
 A rodada anterior mediu que **nenhum** dos 6 destinos de navegacao era delegavel — 4 nao chamavam
