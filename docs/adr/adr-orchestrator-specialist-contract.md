@@ -259,10 +259,10 @@ protocolo.
 | fase | entrega | depende de |
 |---|---|---|
 | **G0** ✅ | **Medir** — este documento: a assimetria na trilha, os 3 menus de demanda em folhas, o contrato em 1/41 e 0/41, os dois verbos, a regra sem mecanismo | — |
-| **G1** | **Dar mecanismo à regra de perfil** (§7): allowlist de step por perfil, no validador, com gate. Vale sozinha, independe do resto | G0 |
-| **G2** | **`provides` simétrico ao `requires`** + conferência ao fim do skill + gate da disciplina `__gaps__` (hoje 1/41 e 0/41) | G0 |
+| **G1** ✅ | **Dar mecanismo à regra de perfil** (§7): allowlist de step por perfil, com gate. Entregue como **CTR-01** (2026-09-06) — e a lista **perdeu `delegate` por contraprova**: era declarado proibido em perfil de agente e é caminho VIVO | G0 |
+| **G2** ⚠️ | **`provides` simétrico ao `requires`** + conferência. **REBAIXADA em 2026-09-07:** a justificativa desta fase — *"sem ela a cadeia não se compõe"* — foi refutada; a cadeia se compõe por `delegate` + `on_return`, validada em contato real. Sobra declarar pré-condição, que é menor e não bloqueia. Gatilho em `pending.md` (CTR-02) | G0 |
 | **G4** | **Especialistas viram executores**: os 3 menus de demanda sobem; `menu_resolucao` vira o retorno; **e cada desfecho devolve o controle via `workflow_resume`** | G1, D2 |
-| **G3** | **`delegate` no orquestrador**: mantém `primary`, especialista entra como `specialist`; ramo F do gate passa a aceitar `delegate.pool` | **G4** |
+| **G3** ✅ | **`delegate` no orquestrador**: mantém `primary`, especialista entra como `specialist`. Entregue como **RET-02** e validada em contato real (2026-09-07), com o verbo **derivado por destino** — não um `delegate` único, porque nem todo destino devolve | **G4** |
 | **G5** | **Origem no evento** (D4) e **fronteira do AgentCard** (D8) | G2 |
 
 > **Por que G1 vem antes de G3, e sozinha:** decidir usar `delegate` em perfil de agente contra uma
