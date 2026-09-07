@@ -64,7 +64,33 @@ NAV_NS_platform=routing
 NAV_NS_channels=webchat
 NAV_NS_masking=masking
 NAV_NS_dashboards=dashboards
-NAVS="nav.platform nav.channels nav.masking nav.dashboards"
+NAV_NS_contextMap=masking
+
+# TODOS os navs de config — a base da derivacao e da cobertura.
+NAVS="nav.platform nav.channels nav.masking nav.dashboards nav.contextMap"
+
+# Os que a concordancia mede por ESCRITA de rascunho.
+NAVS_ESCRITA="nav.platform nav.channels nav.masking nav.dashboards"
+
+# ── nav.contextMap: medido SEM ESCREVER, e isto e declarado ─────────────────
+# Desde a ALW-03 o campo do config-api e funcao de (namespace, KEY), nao so do
+# namespace: `_NS_KEY_FIELD_OVERRIDES[("masking","context_map")] = "context_map"`,
+# porque o MAPA tem dono diferente das REGRAS que vivem no mesmo namespace. Logo a
+# UNICA chave que exerce `config.context_map` e `masking/context_map` — e essa e o
+# mapa da PLATAFORMA (94 folhas, gerado de `@plughub/schemas/context-map.ts`).
+#
+# Escrever um rascunho ali SUBSTITUI o mapa: a resolucao de config e tenant-vence-
+# global POR INTEIRO. Aconteceu de verdade em 2026-09-07, durante a triagem da
+# GAT-03 — o mapa foi a 1 folha e precisou ser restaurado da lib canonica. Um probe
+# nao pode ter esse poder, entao a concordancia deste nav e medida pelos DOIS
+# codigos de recusa, sem escrita nenhuma:
+#   P+  quem tem `config.context_map`  -> 422  (passou o ABAC; barrou na regra do
+#                                               mapa, que e outra proposicao)
+#   P-  quem tem so `config.masking`   -> 403  (o override por KEY e consultado em
+#                                               runtime, nao so declarado)
+# Um 403 no P+ significaria que o campo do MENU nao basta — que e exatamente o que
+# este probe existe para achar.
+NAVS_SEM_ESCRITA="nav.contextMap"
 
 # campos `config.*` NAO servidos pelo config-api — declarados para que a conferencia
 # de cobertura nao os cobre (e para que a lista seja visivel no diff)
@@ -76,6 +102,7 @@ ns_de() {  # nav.x -> namespace
     nav.channels)   printf '%s' "$NAV_NS_channels" ;;
     nav.masking)    printf '%s' "$NAV_NS_masking" ;;
     nav.dashboards) printf '%s' "$NAV_NS_dashboards" ;;
+    nav.contextMap) printf '%s' "$NAV_NS_contextMap" ;;
   esac
 }
 
@@ -142,11 +169,31 @@ set_cfg() {
 login_nav() { curl -s -X POST "$AUTH/login" -H 'content-type: application/json' \
   -d "{\"email\":\"$NAV_EMAIL\",\"password\":\"$NAV_PASS\",\"tenant_id\":\"$TENANT\"}" \
   | jq -r '.access_token // empty'; }
+# ⚠️ O escopo da ESCRITA vai no CORPO. Ate 2026-09-07 esta funcao mandava
+# `?tenant_id=$TENANT` na QUERY, e o `PUT` do config-api DESCARTAVA o parametro (o
+# `GET` e o `DELETE` da mesma rota o leem — tres verbos, um discordando de onde mora
+# o escopo). Resultado medido: as quatro escritas de rascunho pousavam no
+# `__global__` da PLATAFORMA respondendo 200, e a limpeza abaixo apagava a linha do
+# TENANT, que nunca existiu — quatro linhas `probe_nav_agreement` acumuladas no
+# escopo global. Hoje o config-api RECUSA a query com 422 nomeando isto.
 escreve() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X PUT \
-    "$CFG/config/$2/probe_nav_agreement?tenant_id=$TENANT" \
+    "$CFG/config/$2/probe_nav_agreement" \
     -H "Authorization: Bearer $1" -H 'content-type: application/json' \
-    -d '{"value":"probe"}'
+    -d "{\"value\":\"probe\",\"tenant_id\":\"$TENANT\"}"
+}
+
+# `masking/context_map`, SEM escrever: o corpo declara tenant, o ABAC decide, e a
+# regra do mapa recusa depois. Devolve "CODIGO detail".
+tenta_ctxmap() {
+  local out code body
+  out="$(curl -s -w '\n%{http_code}' --max-time 15 -X PUT \
+         "$CFG/config/masking/context_map" \
+         -H "Authorization: Bearer $1" -H 'content-type: application/json' \
+         -d "{\"value\":{\"__probe__\":\"nao deve chegar\"},\"tenant_id\":\"$TENANT\"}")"
+  code="${out##*$'\n'}"
+  body="${out%$'\n'*}"
+  printf '%s %s' "$code" "$(printf '%s' "$body" | head -c 120 | tr -d '\n')"
 }
 
 # ── testemunha negativa ─────────────────────────────────────────────────────
@@ -156,7 +203,7 @@ sec "testemunha negativa - sem campo config.*, o backend recusa"
 T_NAV="$(login_nav)"
 [ -z "$T_NAV" ] && { inc "login de $NAV_EMAIL falhou"; exit 2; }
 vazio_ok=1
-for nav in $NAVS; do
+for nav in $NAVS_ESCRITA; do
   ns="$(ns_de "$nav")"
   c="$(escreve "$T_NAV" "$ns")"
   if [ "$c" != "403" ]; then
@@ -170,6 +217,7 @@ done
 # ── o teste ─────────────────────────────────────────────────────────────────
 sec "concordancia - o campo que o MENU exige basta para ESCREVER"
 printf '%s\n' "$DERIV" | grep -v '^SEMREGRA:' | while IFS=: read -r campo nav; do
+  case " $NAVS_SEM_ESCRITA " in *" $nav "*) continue ;; esac
   ns="$(ns_de "$nav")"
   st="$(set_cfg "{\"config\":{\"$campo\":{\"access\":\"read_write\",\"scope\":[]}}}")"
   if [ "$st" != "200" ]; then
@@ -190,12 +238,51 @@ cat /tmp/_nav_agree_out.$$
 grep -q 'FALHA\|INCONCLUSIVO' /tmp/_nav_agree_out.$$ && fail=1
 rm -f /tmp/_nav_agree_out.$$
 
+# ── nav.contextMap — concordancia SEM escrita ───────────────────────────────
+sec "concordancia sem escrita - masking/context_map (o campo e por (ns, KEY))"
+CAMPO_CTX="$(printf '%s\n' "$DERIV" | grep -v '^SEMREGRA:' | awk -F: '$2 == "nav.contextMap" { print $1 }')"
+if [ -z "$CAMPO_CTX" ]; then
+  bad "nav.contextMap nao foi derivado do Sidebar — ou a entrada sumiu do menu,"
+  info "ou perdeu a regra ABAC. Nos dois casos nao ha o que conferir."
+else
+  info "campo DERIVADO do Sidebar: config.$CAMPO_CTX  (nunca copiado para ca)"
+  # P+ — o campo do MENU passa pelo ABAC. O 422 vem DEPOIS, da regra do mapa.
+  st="$(set_cfg "{\"config\":{\"$CAMPO_CTX\":{\"access\":\"read_write\",\"scope\":[]}}}")"
+  if [ "$st" != "200" ]; then
+    inc "nao consegui conceder config.$CAMPO_CTX (HTTP $st)"
+  else
+    R="$(tenta_ctxmap "$(login_nav)")"; C="${R%% *}"
+    case "$C" in
+      422) ok "P+ config.$CAMPO_CTX passa o ABAC; 422 e a regra do mapa (nada escrito)" ;;
+      403) bad "P+ config.$CAMPO_CTX NAO basta para escrever masking/context_map (403)"
+           info "Menu e backend discordam: quem tem este campo ve a tela e erra ao salvar." ;;
+      2*)  bad "P+ devolveu $C — a escrita FOI ACEITA, e ela SUBSTITUI o mapa da"
+           info "plataforma. O guard \`_reject_tenant_context_map\` nao disparou."
+           info "Restaure de \`plughub_contextstore.default_map\` antes de seguir." ;;
+      *)   inc "P+ devolveu HTTP $C (nem 422, nem 403, nem 2xx)" ;;
+    esac
+  fi
+  # P- — o override por KEY e consultado em RUNTIME: `config.masking` nao serve.
+  st="$(set_cfg '{"config":{"masking":{"access":"read_write","scope":[]}}}')"
+  if [ "$st" != "200" ]; then
+    inc "nao consegui conceder config.masking para o controle negativo (HTTP $st)"
+  else
+    R="$(tenta_ctxmap "$(login_nav)")"; C="${R%% *}"
+    case "$C" in
+      403) ok "P- config.masking NAO abre masking/context_map (403) — o override por KEY vale em runtime" ;;
+      *)   bad "P- config.masking alcancou masking/context_map (HTTP $C)"
+           info "O split da ALW-03 existe porque o MAPA tem dono diferente das REGRAS;"
+           info "se o campo do namespace serve, o split e so declaracao." ;;
+    esac
+  fi
+fi
+
 # ── limpeza ─────────────────────────────────────────────────────────────────
 # ⚠️ NAO zerar para `{}`: config vazio e o segundo bypass (degradacao graciosa — sem
 # grants, `passesAbacRule` libera). Zerar aqui fabricaria, a cada execucao, mais um
 # principal que ve o menu inteiro. Deixa-se um grant minimo e inofensivo.
 set_cfg '{"contacts":{"visualizar":{"access":"read_only","scope":[]}}}' >/dev/null
-for nav in $NAVS; do
+for nav in $NAVS_ESCRITA; do
   curl -s -o /dev/null --max-time 10 -X DELETE \
     "$CFG/config/$(ns_de "$nav")/probe_nav_agreement?tenant_id=$TENANT" \
     -H "Authorization: Bearer $T_ADMIN"

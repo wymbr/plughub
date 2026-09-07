@@ -69,7 +69,42 @@ if [ "${N_POOLS:-0}" -eq 0 ]; then
   echo "  armadilha com nome de irrestrito."
   exit 2
 fi
-echo "--- pools do tenant: $N_POOLS (enumerados a partir do agent-registry) ---"
+
+# ── O REGISTRY nao e a populacao do LEDGER (medido 2026-09-07, GAT-03) ───────
+#
+# Os tres gates que consomem este principal comparam um agregado da API contra o
+# ledger lido DIRETO. Enumerar do registry responde *"quais pools existem HOJE"*; o
+# ledger guarda *"quais pools APARECERAM em alguma linha"* — e os dois conjuntos
+# divergem por construcao: pool renomeado ou removido deixa linha para tras e nao ha
+# como enumera-lo de volta.
+#
+# Medido: `limite_processo_wh` tem 2 esperas em `analytics.segments` e **nao existe**
+# no registry (41 pools). Com o recorte por linha da AUT-01, essas 2 sumiam do
+# relatorio, e o `gate_queue_report_per_wait` saia INCONCLUSIVO com delta -2 — um
+# delta que o proprio gate sugeria explicar por *"sessao outage / origin != live"*.
+# Contado: **zero** das 148 esperas cai nessas exclusoes. A explicacao oferecida
+# estava errada, e teria absolvido o numero pelo motivo errado.
+#
+# Daí a uniao. O ledger e a fonte SECUNDARIA de propósito: se o ClickHouse nao
+# responder, o registry sozinho ainda produz um principal util — so que menos amplo,
+# e a linha abaixo diz qual dos dois entrou.
+POOLS_LEDGER="[]"
+if command -v docker >/dev/null 2>&1; then
+  POOLS_LEDGER="$(docker compose -f "${COMPOSE_FILE:-docker-compose.demo.yml}" \
+      exec -T clickhouse clickhouse-client -q \
+      "SELECT DISTINCT pool_id FROM ${CH_DB:-plughub_demo}.segments FINAL
+       WHERE tenant_id = '$TENANT' AND pool_id != '' FORMAT TSV" < /dev/null 2>/dev/null \
+    | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null)"
+  [ -z "$POOLS_LEDGER" ] && POOLS_LEDGER="[]"
+fi
+N_LEDGER="$(printf '%s' "$POOLS_LEDGER" | jq 'length' 2>/dev/null || echo 0)"
+POOLS_JSON="$(jq -nc --argjson a "$POOLS_JSON" --argjson b "$POOLS_LEDGER" '$a + $b | unique')"
+N_UNIAO="$(printf '%s' "$POOLS_JSON" | jq 'length')"
+echo "--- pools do tenant: $N_UNIAO = registry $N_POOLS ∪ ledger $N_LEDGER ---"
+if [ "$N_LEDGER" -eq 0 ]; then
+  echo "    ⚠️ o ledger nao respondeu: o principal cobre so o registry, e um gate que"
+  echo "       compare com o ClickHouse pode acusar delta que e de ESCOPO, nao de conta."
+fi
 
 echo "--- criando $EMAIL ---"
 BODY="$(jq -nc --arg t "$TENANT" --arg e "$EMAIL" --arg p "$PASS" --argjson pools "$POOLS_JSON" \

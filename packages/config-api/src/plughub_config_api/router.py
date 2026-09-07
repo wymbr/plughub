@@ -325,6 +325,13 @@ async def put_config(
     key:       str,
     body:      PutConfigBody,
     request:   Request,
+    tenant_id: Optional[str] = Query(
+        default=None,
+        description=(
+            "NÃO ACEITO nesta rota — existe só para ser RECUSADO. O escopo da "
+            "ESCRITA vem do corpo (`body.tenant_id`). Ver o comentário abaixo."
+        ),
+    ),
 ) -> JSONResponse:
     """
     Upsert a config value.
@@ -332,6 +339,50 @@ async def put_config(
     body.tenant_id = "xyz" → sets tenant-specific override.
     Publishes config.changed to Kafka after a successful write (fire-and-forget).
     """
+    # ── Escopo pedido na QUERY não é ignorado em silêncio (medido 2026-09-07) ──
+    #
+    # `GET` e `DELETE` desta MESMA rota leem `?tenant_id=` (o DELETE o declara como
+    # `Query(...)` trinta linhas abaixo). O `PUT` nunca leu: o escopo dele vem do
+    # CORPO. Três verbos no mesmo caminho, e um deles discordando de onde mora o
+    # escopo — quem lê com `?tenant_id=X` escreve com `?tenant_id=X` por simetria.
+    #
+    # O que acontecia então: o parâmetro era descartado, `body.tenant_id` ficava
+    # `None`, e a escrita pousava no **`__global__` da plataforma** com `200` e
+    # `ok: true`. O corpo da resposta dizia a verdade (`"tenant_id": "__global__"`),
+    # e ninguém lê corpo de resposta de escrita. É o *valor plausível* na forma mais
+    # cara: o chamador pediu um escopo e recebeu outro, sem erro em lugar nenhum.
+    #
+    # MEDIDO, e não hipotético: foi assim que `masking.context_map` — o mapa da
+    # plataforma, 94 folhas — foi substituído por uma folha só durante a triagem da
+    # GAT-03, por um `PUT .../context_map?tenant_id=tenant_demo` que pretendia
+    # escrever no tenant. O `_reject_tenant_context_map` logo abaixo existe
+    # exatamente para impedir isso e **não disparou**, porque ele julga
+    # `body.tenant_id`, que estava `None`. O guard não tinha defeito; ele foi
+    # contornado por um escopo que o chamador achou que tinha declarado.
+    #
+    # RECUSAR, e não passar a honrar: honrar faria do parâmetro um SEGUNDO escritor
+    # do mesmo fato, e a pergunta "qual escopo?" voltaria a ter duas casas — com a
+    # precedência a decidir em silêncio quando os dois viessem preenchidos. O corpo
+    # é a casa (é o que a UI usa: `putConfig(ns, key, value, tenantId, ...)`).
+    #
+    # População que a recusa quebra, contada antes: UM chamador em todo o
+    # repositório (`infra/test/probe_nav_backend_field_agreement.sh`), corrigido no
+    # mesmo commit — e ele vinha deixando quatro linhas de rascunho no `__global__`
+    # a cada execução, porque a limpeza apagava a linha do TENANT, que nunca existiu.
+    if tenant_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"`?tenant_id={tenant_id!r}` não é aceito no PUT: o escopo da ESCRITA "
+                f"vem do corpo (`{{\"tenant_id\": ...}}`), e o parâmetro de query era "
+                f"DESCARTADO — a escrita pousava no `__global__` da plataforma "
+                f"respondendo 200. Reenvie com o tenant no corpo, ou omita o "
+                f"parâmetro para escrever no escopo global de propósito. "
+                f"(O GET e o DELETE desta mesma rota leem `?tenant_id=`; é o PUT que "
+                f"nunca leu.)"
+            ),
+        )
+
     _reject_tenant_context_map(namespace, key, body.tenant_id, body.value)
     store   = request.app.state.store
     emitter = request.app.state.emitter

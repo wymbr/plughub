@@ -271,6 +271,15 @@ DEMO_USERS = [
                 "users":        {"access": "read_write", "scope": []},
                 "permissions":  {"access": "read_write", "scope": []},
                 "masking":      {"access": "read_write", "scope": []},
+                # A ALW-03 partiu o namespace `masking` em DOIS donos: as REGRAS
+                # (`config.masking`, admin) e o MAPA (`config.context_map`, admin
+                # + DEVELOPER, porque quem AUTORA flow precisa cadastrar campo). O
+                # `role_defaults` do catálogo ganhou o campo e este seed não — e
+                # preset só vale no NASCIMENTO, então o admin do demo ficou sem a
+                # tela de Cadastro de campos e sem nada ficar vermelho. Achado pela
+                # S6 do `probe_role_preset_on_create.sh`, que compara as duas
+                # declarações justamente porque elas já divergiram três vezes.
+                "context_map": {"access": "read_write", "scope": []},
             },
             "skill_flows": {
                 "operacao":   {"access": "read_write", "scope": []},

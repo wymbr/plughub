@@ -1,5 +1,115 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (11) — GAT-03 (a): os cinco vermelhos do manifesto, e por que quatro eram do INSTRUMENTO
+
+O `run_gates.sh` executava cinco gates que **sempre** reprovavam. Enquanto houver vermelho
+não triado no conjunto declarado, o runner ensina a ignorar o vermelho — foi por isso que esta
+metade veio primeiro. Triados um a um, com a pergunta da GAT-03: *o defeito é do produto ou do
+gate?* **Quatro eram do gate, um era de config, e um defeito de PRODUTO apareceu de lado.**
+
+### 1 · `gate_supervisor_tenant_guard` — duas premissas mortas no mesmo arquivo
+
+**(a)** O cabeçalho dizia usar *"o principal IRRESTRITO … com escopo irrestrito o
+`_authorize_live_session` retorna cedo e a dimensão POOL sai do caminho"*. Nada disso existe
+desde 2026-09-01: a AUT-13 parou de cunhar o claim, a AUT-03 inverteu `[]` para NENHUM pool, a
+AUT-15 removeu o campo, e desde 2026-08-30 o conteúdo **RECUSA** escopo indeterminável. A sessão
+de rascunho do gate não tem pool em lugar nenhum, então o P0 — o CONTROLE — recusava com
+`session_pools_undeterminable`: **a dimensão POOL passou a decidir antes do tenant**, e o gate
+reprovava sem nunca alcançar a proposição que existe para medir.
+
+**(b)** O PA — a testemunha de que a camada de autenticação está na frente — mandava a chamada
+*sem* credencial e recebia 403 em vez de 401. Causa: o topo do próprio arquivo chama
+`plughub_auth_curl_shim`, que sombreia `curl` e anexa a credencial a tudo que vai para :3500,
+**inclusive à chamada cujo propósito é não ter nenhuma**. A testemunha estava desarmada pelo
+mecanismo instalado no mesmo arquivo; o shim nasceu depois (CAP-12) e não tinha como saber que
+havia um call site que precisava ficar de fora. **Quando um shim decide por todo mundo, quem
+precisa da exceção tem de pedi-la explicitamente** — hoje é `command curl`.
+
+Terceira mudança, e é a que dá poder novo: **o código sozinho deixou de discriminar.** Até
+2026-08-30 o único 403 desta rota era o guard de tenant; hoje o recorte por pool devolve o mesmo
+403. Um gate que só olhasse o número ficaria **verde com o guard de tenant removido**. Ele agora
+afere o `detail` (`tenant_unverifiable` · `tenant_mismatch_token`). Provado por mutação no
+serviço RODANDO (`docker cp` + `restart`): o mutante *fail-open* derruba o P1 pelo código; o
+mutante que só troca qual guard fala derruba **apenas pelo detail** — o gate antigo passaria.
+
+### 2 · `probe_nav_backend_field_agreement` — o ramo de cobertura fez o seu trabalho
+
+Reprovava por `config.context_map` **sem classificação**. É o ramo que existe para impedir que
+campo novo passe por OMISSÃO, e ele pegou um. Classificar exigiu um terceiro balde: desde a
+ALW-03 o campo do config-api é função de **(namespace, KEY)** — `("masking","context_map") →
+context_map` —, e a única chave que exerce esse campo é **o mapa da plataforma**. Escrever um
+rascunho ali o SUBSTITUI. Então a concordância deste nav é medida sem escrever, pelos dois
+códigos de recusa: **422** para quem tem `config.context_map` (passou o ABAC, barrou na regra do
+mapa) e **403** para quem tem só `config.masking` (o override por KEY vale em runtime, não só na
+declaração). O campo continua **DERIVADO** do `Sidebar.tsx` — copiá-lo faria o probe repetir o
+erro que ele denuncia.
+
+### 3 · ⚠️ O defeito de PRODUTO que caiu do lado: `PUT /config` descartava o `?tenant_id=`
+
+`GET` e `DELETE` de `/config/{ns}/{key}` leem `?tenant_id=`; o **`PUT` nunca leu** — o escopo dele
+vem do corpo. Três verbos no mesmo caminho e um discordando de onde mora o escopo. Um
+`PUT …?tenant_id=tenant_demo` voltava **200** e a linha pousava no **`__global__` da plataforma**.
+A resposta dizia a verdade (`"tenant_id": "__global__"`) e ninguém lê corpo de resposta de escrita:
+o *valor plausível* na forma mais cara — **o chamador pediu um escopo e recebeu outro**.
+
+**Medido, não hipotético: foi assim que eu apaguei `masking.context_map` durante esta triagem** —
+o mapa foi de 97 folhas a 1, por um `PUT` que pretendia escrever no tenant. O
+`_reject_tenant_context_map` existe exatamente para impedir isso e **não disparou**, porque julga
+`body.tenant_id`, que estava `None`. O guard não tinha defeito; foi contornado por um escopo que o
+chamador achou que tinha declarado. Restaurado de `plughub_contextstore.default_map` + o
+provisionamento da ALW-12, conferido por `probe_context_map_audit.sh` e `probe_context_map_seed.sh`.
+
+O `PUT` agora **RECUSA** o parâmetro com 422 nomeando o corpo como o lugar certo. Recusar e não
+honrar: honrar faria do parâmetro um SEGUNDO escritor do mesmo fato, e *"qual escopo?"* voltaria a
+ter duas casas. População contada antes de quebrar: **um** chamador em todo o repositório — o
+próprio probe, corrigido no mesmo commit —, e ele vinha deixando **quatro linhas
+`probe_nav_agreement` no `__global__`** a cada execução, porque a limpeza apagava a linha do TENANT,
+que nunca existiu. Mecanismo: `test_put_scope.py`, 4 casos com mutação verificada (sem o guard, os
+dois negativos caem e os dois positivos seguem verdes).
+
+### 4 · `probe_role_preset_on_create` — o seed ficou para trás do catálogo
+
+A S6 acusou: o `role_defaults` de `infra/modules.yaml` dá `config.context_map` a **admin +
+developer** (decisão da ALW-03: quem AUTORA flow precisa cadastrar campo) e o seed do demo não
+dava. **Preset só vale no NASCIMENTO**, então corrigir o arquivo não alcança quem já existe: o
+admin do demo estava sem a tela de Cadastro de campos, sem nada ficar vermelho. Seed corrigido +
+backfill dos **2** usuários vivos cujo papel já previa o grant.
+
+### 5 · `gate_sla_segment_target` — a fixture não cabia no escopo enumerado
+
+`pool_a`/`pool_b`/`pool_c` são linhas que o gate insere no ClickHouse e que **não existem no
+registry**; `mk_unrestricted_principal.sh` enumera do registry, logo nenhuma enumeração pode
+incluí-las. Com o recorte por linha da AUT-01, o relatório descartava as esperas sintéticas e
+devolvia `by_pool: []` — enquanto o veredicto 1, que lê o ClickHouse direto, seguia verde. **O gate
+acusava o RELATÓRIO por um defeito que era do escopo do CHAMADOR.** Quem cria a fixture põe-na no
+próprio escopo e **tira depois** (restauração no `trap`): três pools fantasmas num principal
+compartilhado seriam resíduo.
+
+### 6 · `gate_queue_report_per_wait` — e a regra geral que ele revelou
+
+Saía INCONCLUSIVO com delta **-2** (API 146 × ledger 148), e o próprio gate sugeria explicar por
+*"sessão outage / origin != live"*. **Contado: zero das 148 esperas cai nessas exclusões** — a
+explicação oferecida estava errada e teria absolvido o número pelo motivo errado. As duas esperas
+são do pool **`limite_processo_wh`**, que tem linha em `analytics.segments` e **não existe no
+registry**.
+
+Daí a regra, que vale para os três gates que dependem daquele principal: **"ver o tenant inteiro"
+enumerando o REGISTRY não é o mesmo que ver todas as LINHAS do ledger.** O registry responde
+*"quais pools existem hoje"*; o ledger guarda *"quais pools apareceram em alguma linha"*, e pool
+renomeado ou removido deixa linha para trás sem forma de enumerá-lo de volta. O helper passou a
+enumerar a **união** — medido: 43 = registry 41 ∪ ledger 26 — e o gate fechou em **148 = 148**. O
+ledger é fonte secundária de propósito: se o ClickHouse não responder, a linha impressa diz qual
+dos dois entrou, em vez de o principal encolher em silêncio.
+
+### Estado
+
+Os cinco do lote (a) **verdes**, mais `probe_context_map_seed` e `probe_context_map_audit`, que a
+restauração precisou provar. Sem resíduo: zero `probe_*` em `platform_config`, zero linha de tenant
+sintético no ClickHouse, escopo do principal devolvido. Fica aberta a metade **(b)** da GAT-03 — os
+8 do conjunto NÃO TRIADO.
+
+---
+
 ## 2026-09-07 (10) — VOZ-03: não era um método faltando; era o caminho de entrada inteiro
 
 A ficha da VOZ-03 dizia *"o `collect` de voz NUNCA completa — `_normalize_menu_result` é chamado e

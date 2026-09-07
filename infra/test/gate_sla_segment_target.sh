@@ -44,10 +44,21 @@ set -uo pipefail
 # (falta `formfill_demo_ia`) e saia INCONCLUSIVO. Ate o passo 2 ele dependia do caminho
 # SEM HEADER, e era por isso que endurecer o demo estava bloqueado aqui.
 #
-# Criar um usuario com `accessible_pools: []` teria resolvido e seria retrabalho por
-# construcao: o passo 3 inverte `[]` para "nenhum pool". O principal usado abaixo declara
-# `unrestricted: true` COM lista vazia — e o unico arranjo que sobrevive ao passo 3, ja
-# que o ramo restritivo vence a lista nao-vazia.
+# ⚠️ CORRIGIDO EM 2026-09-07 (GAT-03). Este bloco dizia que o principal declara
+# `unrestricted: true` COM lista vazia — arranjo que deixou de existir: a AUT-13 parou
+# de cunhar o claim, a AUT-03 inverteu `[]` para NENHUM pool, e a AUT-15 removeu o campo
+# do produto. Hoje `mk_unrestricted_principal.sh` ENUMERA os pools lidos do
+# agent-registry, e e ai que este gate quebrava: `pool_a`/`pool_b`/`pool_c` sao FIXTURES
+# que ele mesmo insere no ClickHouse e que **nao existem no registry** — nenhuma
+# enumeracao pode inclui-los. Com o recorte por linha da AUT-01 (2026-08-31) o relatorio
+# passou a filtrar por `accessible_pools`, e as duas esperas sinteticas eram descartadas:
+# `by_pool: []`. O veredicto 1 (que le o ClickHouse DIRETO) continuava verde, entao o
+# gate acusava o RELATORIO por um defeito que era do escopo do CHAMADOR.
+#
+# Quem cria a fixture tem de coloca-la no proprio escopo — e tira-la depois. E o que a
+# secao "escopo das fixtures" abaixo faz, restaurando no `trap`: deixar tres pools
+# fantasmas no escopo de um principal COMPARTILHADO seria residuo, e residuo de
+# instrumento e o que esta triagem passou o dia limpando.
 PLUGHUB_TEST_EMAIL="${PLUGHUB_TEST_EMAIL:-probe@plughub.local}"
 PLUGHUB_TEST_PASS="${PLUGHUB_TEST_PASS:-changeme_probe}"
 export PLUGHUB_TEST_EMAIL PLUGHUB_TEST_PASS
@@ -69,6 +80,82 @@ FAIL=0
 note() { printf '%s\n' "$*"; }
 bad()  { printf '🔴 %s\n' "$*"; FAIL=1; }
 ok()   { printf '🟢 %s\n' "$*"; }
+
+# ── escopo das FIXTURES: os pools sinteticos entram na lista do principal ────
+#
+# `pool_a`/`pool_b`/`pool_c` nao existem no agent-registry — sao linhas que este gate
+# insere no ClickHouse. Desde a AUT-01 o relatorio recorta por `accessible_pools`, entao
+# sem este passo o `by_pool` volta VAZIO e o gate acusa o relatorio por um defeito de
+# escopo do chamador.
+#
+# ⚠️ O escopo viaja no TOKEN, cunhado no LOGIN: patchar a lista sem invalidar o token em
+# cache faria a chamada seguinte viajar com o escopo VELHO — verde ou vermelho pelo
+# motivo errado, conforme o dia. Dai o `_PH_TOK=""` explicito (interno do `_auth.sh`, e
+# por isso NOMEADO aqui em vez de silencioso).
+POOLS_FIXTURE="pool_a pool_b pool_c"
+ESCOPO_ORIG=""
+ESCOPO_UID=""
+
+_escopo_ler() {  # token → duas linhas: uid, depois a lista JSON
+  python3 - "$AUTH" "$1" "$PLUGHUB_TEST_EMAIL" "$TENANT" <<'PY'
+import json, sys, urllib.request
+auth, tok, email, tenant = sys.argv[1:5]
+r = urllib.request.Request("%s/users?tenant_id=%s" % (auth, tenant),
+                           headers={"Authorization": "Bearer %s" % tok})
+with urllib.request.urlopen(r, timeout=20) as resp:
+    users = json.load(resp)
+u = next((x for x in users if x["email"] == email), None)
+if u is None:
+    raise SystemExit(1)
+print(u["id"])
+print(json.dumps(u.get("accessible_pools") or []))
+PY
+}
+
+_escopo_gravar() {  # uid  lista_json  token → codigo HTTP
+  python3 - "$AUTH" "$3" "$1" "$2" <<'PY'
+import json, sys, urllib.request
+auth, tok, uid, pools = sys.argv[1:5]
+r = urllib.request.Request("%s/users/%s" % (auth, uid),
+                           data=json.dumps({"accessible_pools": json.loads(pools)}).encode(),
+                           headers={"Authorization": "Bearer %s" % tok,
+                                    "content-type": "application/json"},
+                           method="PATCH")
+with urllib.request.urlopen(r, timeout=20) as resp:
+    print(resp.status)
+PY
+}
+
+restaurar_escopo() {
+  [ -z "$ESCOPO_UID" ] && return 0
+  _escopo_gravar "$ESCOPO_UID" "$ESCOPO_ORIG" "$(plughub_token)" >/dev/null 2>&1
+  _PH_TOK=""
+}
+trap restaurar_escopo EXIT
+
+TOK0="$(plughub_token)"
+LIDO="$(_escopo_ler "$TOK0" 2>/dev/null)"
+ESCOPO_UID="$(printf '%s\n' "$LIDO" | sed -n '1p')"
+ESCOPO_ORIG="$(printf '%s\n' "$LIDO" | sed -n '2p')"
+if [ -z "$ESCOPO_UID" ] || [ -z "$ESCOPO_ORIG" ]; then
+  ESCOPO_UID=""
+  note "INCONCLUSIVO: nao consegui ler o escopo de $PLUGHUB_TEST_EMAIL."
+  note "  Sem os pools sinteticos no escopo o relatorio volta VAZIO, e o gate"
+  note "  acusaria o relatorio por um defeito que e do chamador."
+  exit 2
+fi
+NOVO="$(python3 -c 'import json,sys
+a = json.loads(sys.argv[1])
+for p in sys.argv[2].split():
+    if p not in a:
+        a.append(p)
+print(json.dumps(a))' "$ESCOPO_ORIG" "$POOLS_FIXTURE")"
+if [ "$(_escopo_gravar "$ESCOPO_UID" "$NOVO" "$TOK0" 2>/dev/null)" != "200" ]; then
+  note "INCONCLUSIVO: nao consegui acrescentar $POOLS_FIXTURE ao escopo do principal."
+  exit 2
+fi
+_PH_TOK=""   # o escopo viaja no TOKEN: o cache morre junto com a lista antiga
+note "== escopo: $POOLS_FIXTURE acrescentados ao principal (restaurados no fim)"
 
 q() {
   curl -s --fail-with-body \
