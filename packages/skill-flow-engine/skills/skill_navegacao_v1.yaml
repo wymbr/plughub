@@ -259,6 +259,23 @@ steps:
     type: delegate
     pool: "$.pipeline_state.rota.pool"
     timeout_hours: 4
+    # ── Teto do CICLO (RET-04) ────────────────────────────────────────────────
+    # O ciclo `folha → agente → menu → folha` é sancionado pelo validador (passa
+    # por steps que bloqueiam), e é justamente por ser sancionado que precisa de
+    # fim: sem teto, navegar-ser atendido-voltar ao menu não para nunca.
+    #
+    # ⚠️ **Contador, nunca tempo:** `session_timeout` é por INATIVIDADE, e um
+    # ciclo ativo — cliente escolhendo, agente atendendo — nunca bate nele.
+    #
+    # ⚠️ **Não é teto de licença.** Medido (D9 do ADR): a licença de IA é retida
+    # pela SESSÃO estar aberta, não pelo laço; um cliente que faz muitas
+    # perguntas a retém igual. O que isto impede é o laço SEM FIM.
+    #
+    # 5 é o orçamento de um atendimento razoável (resolver, voltar, resolver
+    # outra coisa…). Estourou: o cliente claramente quer mais do que a árvore
+    # sabe dar, e a saída é gente.
+    max_iterations: 5
+    on_max_iterations: escalar_humano
     # `input`/`approved` ⇒ o especialista concluiu e devolveu o controle.
     on_resume:  { next: continuar }
     # `rejected` ⇒ concluiu com veredicto NEGATIVO (o `precisa_humano` que os

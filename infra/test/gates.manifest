@@ -164,6 +164,12 @@ probe_dialog_return_pointer.sh
 # e paridade cross-language por vetores compartilhados: o criterio esta escrito em
 # TypeScript e em Python, e paridade presumida entre linguagens ja custou caro aqui.
 probe_orchestrator_delegate_verb.sh
+# RET-04: o ciclo `folha -> agente -> menu -> folha` tem FIM. Duas metades que quase se
+# anulam: limpar as sentinelas do delegate faz o ciclo GIRAR; um contador com teto o faz
+# TERMINAR -- e se o contador usasse o padrao `{id}:__x__` a limpeza o zeraria a cada
+# volta, dando laco infinito com `max_iterations` declarado ao lado. O ramo C existe
+# porque a lista de limpeza JA nasceu incompleta uma vez (so a familia do invoke).
+probe_delegate_cycle_cap.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh

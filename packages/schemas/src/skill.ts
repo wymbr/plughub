@@ -1264,6 +1264,29 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
     on_reject:      z.object({ next: z.string() }).optional(),
     /** Next step when timeout_hours elapses without a resume. */
     on_timeout:     z.object({ next: z.string() }),
+    /**
+     * TETO DO CICLO (RET-04 do `adr-tree-return-continuation.md`) — quantas vezes
+     * ESTE step pode delegar no mesmo contato. Ausente = sem teto (o
+     * comportamento de sempre; a esmagadora maioria dos `delegate` não cicla).
+     *
+     * ⚠️ **É contador, e NUNCA tempo, e isso é medição:** `session_timeout` é por
+     * INATIVIDADE, e um ciclo ativo — cliente escolhendo, agente atendendo —
+     * nunca bate nele. Um teto de horas também não serviria: o custo do laço não
+     * é a duração de uma volta, é o número delas.
+     *
+     * ⚠️ **O teto não protege LICENÇA.** Medido (D9 do ADR): a licença de IA é
+     * retida pela SESSÃO estar aberta, não pelo ciclo — um cliente que faz muitas
+     * perguntas a retém igual. O que este campo impede é o laço SEM FIM: navegar,
+     * ser atendido, voltar ao menu, para sempre, sem ninguém decidir encerrar.
+     *
+     * Mesma forma do `receive.max_iterations`: o contador vive em
+     * `pipeline_state.results._delegate_iterations_{id}`, é incrementado ANTES de
+     * suspender, e zera ao estourar (para que um reinício de fluxo volte a contar
+     * do começo).
+     */
+    max_iterations:    z.number().int().positive().optional(),
+    /** Para onde ir quando o teto é atingido. Ausente ⇒ `on_timeout.next`. */
+    on_max_iterations: z.string().optional(),
   }),
 
   // ── loop — iterate a sub-flow (body) over an array (dialog primitive Fatia 2) ──

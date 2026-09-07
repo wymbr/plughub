@@ -1,5 +1,82 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (2) — RET-04: o ciclo tem fim, e a tarefa achou o defeito que o impedia de girar
+
+O teto era a tarefa. Ao desenha-lo apareceu que o ciclo **nao giraria** de qualquer forma — e nao
+adianta limitar um laco que trava na segunda volta.
+
+### O defeito: a lista de sentinelas nasceu incompleta
+
+A ORQ-07 (2026-09-06) consertou a esterilizacao do ciclo limpando as sentinelas do step que ENTRA.
+Mas limpou **tres** sufixos — `__invoked__`, `__notified__`, `__job_id__` — porque o caso medido era
+um `invoke`. A razao, porem, nunca foi do `invoke`: e de **qualquer sentinela chaveada so pelo
+`step.id`**. Ficaram de fora `delegate`, `collect` e `suspend`.
+
+Consequencia no `delegate`, que e o step do ciclo novo: na SEGUNDA volta ao mesmo step,
+`__resume_decision__` ainda esta preenchido, entao ele entra no ramo de *replay idempotency* e
+**devolve o resultado da primeira delegacao**. O especialista nunca e chamado, o orquestrador segue
+como se tivesse sido, o step relata sucesso — e **nada fica vermelho**. E o mesmo defeito da ORQ-07,
+uma familia adiante.
+
+Lista estendida de **3 para 15** sufixos, cobrindo as tres familias que suspendem. ⚠️ O
+**controle negativo** foi estendido junto: retomar sem transitar (o que a queda faz) tem de
+PRESERVAR o carimbo — sem esse caso, uma implementacao que simplesmente apagasse tudo passaria e
+destruiria a idempotencia que a sentinela existe para dar.
+
+### O teto: contador, e a chave importa mais que o numero
+
+`delegate.max_iterations` + `on_max_iterations`, na forma do `receive`: contado ANTES de suspender
+(contar no retorno deixaria de fora o especialista que nunca devolve, e o laco giraria pelo
+`on_timeout`), e zerado ao estourar (senao uma nova navegacao no mesmo contato nasceria com o
+orcamento do atendimento anterior gasto). Declarado **5** nos dois orquestradores, saindo por
+`escalar_humano`.
+
+⚠️ **As duas metades desta tarefa quase se anularam.** Se o contador usasse o padrao
+`{id}:__x__`, a limpeza da primeira metade o zeraria a cada volta e o teto **nunca dispararia** —
+laco infinito com `max_iterations` declarado ao lado, dando a impressao contraria. Por isso a chave e
+`_delegate_iterations_{id}`, **fora** do padrao de sentinela: imunidade por construcao, nao por
+alguem lembrar de nao incluir. O ramo B do gate reprova ate quem esteja no padrao mas ainda nao
+listado — e um passo de virar defeito, e quem mexer na lista depois nao tem como saber.
+
+⚠️ **E nao e teto de licenca.** Medido na D9 do ADR: a licenca de IA e retida pela SESSAO estar
+aberta, nao pelo laco; um cliente que faz muitas perguntas a retem igual. O que o teto impede e o
+laco SEM FIM.
+
+### O publish REMOVIA o campo, em silencio
+
+Depois de declarar `max_iterations` no YAML e republicar com sucesso, o gate continuou vermelho. O
+snapshot vivo nao tinha o campo: o Zod do agent-registry ainda nao o conhecia e fazia **strip** de
+chave desconhecida. E o invariante de build que o `CLAUDE.md` ja registra para o `MenuStepSchema`,
+valendo aqui — rebuildar o registry resolveu.
+
+⚠️ Vale o registro porque o modo de falha e o do catalogo: `PUT` **200**, `promote` **200**, e o
+campo simplesmente nao existe do outro lado. Sem o gate lendo o SNAPSHOT VIVO, o teto teria sido dado
+como entregue.
+
+### Gate
+
+`infra/test/probe_delegate_cycle_cap.sh`, 3 ramos: **A** todo `delegate` em ciclo (ha caminho de
+volta ate ele) declara teto — 11 delegates vivos, **2 em ciclo**; zero ciclicos seria INCONCLUSIVO,
+porque o teto nao seria exercido. **B** a chave do contador esta fora do padrao de sentinela.
+**C** a limpeza cobre as familias que suspendem — este ramo existe porque a lista ja nasceu
+incompleta uma vez.
+
+### Arquivos
+
+- `packages/skill-flow-engine/src/state.ts` — `SENTINELAS` 3 → 15, com o porque
+- `packages/skill-flow-engine/src/steps/delegate.ts` — o teto
+- `packages/schemas/src/skill.ts` — `max_iterations` / `on_max_iterations` no `DelegateStep`
+- `__tests__/delegate-cycle-cap.test.ts` (novo, 5) · `sentinel-cycle.test.ts` (3 casos novos)
+- `skills/skill_navegacao_v1.yaml` · `skill_navegacao_llm_v1.yaml` — teto 5
+- `infra/test/probe_delegate_cycle_cap.sh` · `_ret04_cap_probe.py` · `gates.manifest`
+
+219 testes do engine verdes. Regressao verde em `probe_orchestrator_tree_nav` (10 ramos),
+`probe_orchestrator_delegate_verb`, `probe_orchestrator_delegability`, `probe_dialog_return_pointer`
+e `probe_skill_profile_steps`. Rebuildados `skill-flow-service` (o engine) e `agent-registry` (o
+schema). **Destrava a RET-05**, que e quem finalmente liga o ciclo.
+
+---
+
 ## 2026-09-07 (1) — RET-02: o orquestrador delega, e o verbo e derivado por destino
 
 Segunda fase do `adr-tree-return-continuation.md`, e o ponto em que as tres pecas se encontram: o

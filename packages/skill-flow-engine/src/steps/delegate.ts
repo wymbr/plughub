@@ -114,6 +114,55 @@ export async function executeDelegate(
     return { next_step_id: "__suspended__", transition_reason: "suspended" }
   }
 
+  // ── TETO DO CICLO (RET-04) ──────────────────────────────────────────────────
+  //
+  // Mesma forma do `receive.max_iterations`, e pela mesma razão: `delegate`
+  // BLOQUEIA, então o validador de fluxo SANCIONA um ciclo através dele — e um
+  // ciclo sancionado sem teto é laço sem fim (navegar, ser atendido, voltar ao
+  // menu, para sempre).
+  //
+  // ⚠️ **A chave é `_delegate_iterations_{id}`, FORA do padrão `{id}:__x__`, e
+  // isso não é estilo.** As sentinelas daquele padrão são LIMPAS ao reentrar no
+  // step (`PipelineStateManager.SENTINELAS`) — que é justamente o conserto que
+  // faz este ciclo girar. Um contador com aquela forma seria zerado a cada
+  // volta e o teto NUNCA dispararia: as duas metades desta tarefa se anulariam,
+  // em silêncio. Ficando fora do padrão, a imunidade é por construção e não
+  // depende de ninguém lembrar de não a incluir na lista.
+  //
+  // ⚠️ Contado AQUI e não no `choice` da continuação: este é o ponto por onde
+  // toda volta passa obrigatoriamente. Contar no ramo de retorno deixaria de
+  // fora quem reentra por outra aresta, e o teto viraria decorativo.
+  //
+  // ⚠️ Incrementado ANTES de suspender: contando no retorno, um especialista que
+  // nunca devolve não somaria, e o laço poderia girar pelo `on_timeout`.
+  //
+  // ⚠️ E ZERA ao estourar, para que uma nova navegação no mesmo contato volte a
+  // contar do começo — senão o segundo atendimento nasceria com o orçamento do
+  // primeiro já gasto.
+  const iterKey = `_delegate_iterations_${step.id}`
+  if (step.max_iterations !== undefined) {
+    const atual = (ctx.state.results?.[iterKey] as number | undefined) ?? 0
+    if (atual >= step.max_iterations) {
+      await ctx.saveState({
+        ...ctx.state,
+        results: { ...(ctx.state.results ?? {}), [iterKey]: 0 },
+      })
+      console.warn(
+        `[delegate] teto do ciclo atingido: step="${step.id}" ` +
+        `iteracoes=${atual} max=${step.max_iterations} — saindo por ` +
+        `"${step.on_max_iterations ?? step.on_timeout.next}"`,
+      )
+      return {
+        next_step_id:      step.on_max_iterations ?? step.on_timeout.next,
+        transition_reason: "on_failure",
+      }
+    }
+    await ctx.saveState({
+      ...ctx.state,
+      results: { ...(ctx.state.results ?? {}), [iterKey]: atual + 1 },
+    })
+  }
+
   // ── First execution — suspend + dispatch agent ──────────────────────────────
 
   // 0. Resolve the TARGET POOL. Ele aceita ref (@ctx.* / $.pipeline_state.*) porque o

@@ -106,3 +106,74 @@ describe("sentinela de idempotência × ciclo", () => {
     expect(antes.results["descer:__invoked__"]).toBe("completed")
   })
 })
+
+// ── RET-04: a lista nasceu incompleta, e o defeito reapareceu no `delegate` ───
+//
+// A ORQ-07 limpava so a familia do `invoke`, porque era o caso medido. Mas a
+// razao nunca foi do `invoke`: e de qualquer sentinela chaveada so pelo
+// `step.id`. Os testes abaixo cobrem as familias que ficaram de fora — e o
+// CONTROLE NEGATIVO vale para todas elas, nao so para a primeira.
+
+describe("sentinela × ciclo — as familias que a ORQ-07 deixou de fora", () => {
+  // O caso que motivou a RET-04. Sem esta limpeza, a SEGUNDA volta ao mesmo
+  // step `delegate` devolve o resultado da PRIMEIRA delegacao: o especialista
+  // nunca e chamado, o orquestrador segue como se tivesse sido, e o step relata
+  // sucesso — o ciclo da RET-02 giraria em falso.
+  it("delegate: reentrar limpa decisao, payload, token e carimbo de despacho", () => {
+    const antes = estado({
+      "delegar:__delegated__":        "delegated",
+      "delegar:__resume_decision__":  "input",
+      "delegar:__resume_payload__":   { outcome: "resolved" },
+      "delegar:__resume_token__":     "tok-1",
+      "delegar:__expires_at__":       "2026-01-01T00:00:00Z",
+      "sobrevive":                    "sim",
+    }, "nivel_continuacao")
+
+    const depois = PipelineStateManager.addTransition(
+      antes, "nivel_continuacao", "delegar", "on_success",
+    )
+    for (const k of ["__delegated__", "__resume_decision__", "__resume_payload__",
+                     "__resume_token__", "__expires_at__"]) {
+      expect(depois.results[`delegar:${k}`]).toBeUndefined()
+    }
+    // ⚠️ Limpa as do step que ENTRA, nunca as dos outros — senao a transicao
+    // viraria um reset de fluxo.
+    expect(depois.results["sobrevive"]).toBe("sim")
+  })
+
+  it("collect: idem, incluindo a sessao-filho", () => {
+    const antes = estado({
+      "coletar:__collected__":         "collected",
+      "coletar:__collect_token__":     "ct-1",
+      "coletar:__collect_decision__":  "input",
+      "coletar:__collect_response__":  { v: 1 },
+      "coletar:__child_session_id__":  "s-filho",
+    }, "outro")
+    const depois = PipelineStateManager.addTransition(antes, "outro", "coletar", "on_success")
+    for (const k of Object.keys(antes.results)) {
+      expect(depois.results[k]).toBeUndefined()
+    }
+  })
+
+  // ── O CONTROLE NEGATIVO, agora para as familias novas ──────────────────────
+  //
+  // Este e o teste load-bearing: uma implementacao que simplesmente APAGASSE as
+  // sentinelas sempre passaria em tudo acima e destruiria a idempotencia de
+  // queda, que e a razao de elas existirem. O crash-resume retoma o MESMO step
+  // SEM transitar — entao nao passa por aqui, e o carimbo TEM de sobreviver.
+  it("CONTROLE NEGATIVO: retomar sem transitar preserva as sentinelas do delegate", () => {
+    const durante = estado({
+      "delegar:__delegated__":       "delegated",
+      "delegar:__resume_token__":    "tok-1",
+    }, "delegar")
+
+    // Ninguem chamou addTransition: e exatamente o que a retomada por queda faz.
+    expect(durante.results["delegar:__delegated__"]).toBe("delegated")
+    expect(durante.results["delegar:__resume_token__"]).toBe("tok-1")
+
+    // E transitar para OUTRO step tambem nao pode toca-las.
+    const saindo = PipelineStateManager.addTransition(durante, "delegar", "continuar", "resumed")
+    expect(saindo.results["delegar:__delegated__"]).toBe("delegated")
+    expect(saindo.results["delegar:__resume_token__"]).toBe("tok-1")
+  })
+})

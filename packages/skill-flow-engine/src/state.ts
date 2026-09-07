@@ -204,7 +204,38 @@ export class PipelineStateManager {
    * uma lista em dois lugares esquece um item, e o item esquecido nao fica
    * vermelho — ele so congela um step para sempre.
    */
-  private static readonly SENTINELAS = ["__invoked__", "__notified__", "__job_id__"] as const
+  /**
+   * Sufixos de sentinela limpos ao ENTRAR num step.
+   *
+   * ⚠️ **A lista nasceu com TRES e isso foi um defeito de escopo (RET-04,
+   * 2026-09-07).** A ORQ-07 consertou a familia do `invoke` porque era o caso
+   * medido — um ciclo `menu → invoke → choice → menu`. Mas a razao nao e do
+   * `invoke`: e de QUALQUER step cuja sentinela seja chaveada so pelo `step.id`.
+   * Ficaram de fora `delegate`, `collect` e `suspend`, e o defeito reapareceu
+   * exatamente onde o ciclo novo o encontraria.
+   *
+   * O caso do `delegate` (achado ao construir a RET-04): na SEGUNDA volta ao
+   * mesmo step, `__resume_decision__` ainda esta preenchido, entao ele devolve o
+   * resultado da PRIMEIRA delegacao sem delegar de novo — o especialista nunca e
+   * chamado, o orquestrador segue como se tivesse sido, e nada fica vermelho.
+   *
+   * ⚠️ **Limpar aqui NAO enfraquece a idempotencia de queda**, e isso e o
+   * controle negativo da suite: o crash-resume NAO passa por `addTransition` —
+   * ele retoma o MESMO step sem transitar —, entao a sentinela sobrevive
+   * exatamente onde precisa sobreviver.
+   */
+  private static readonly SENTINELAS = [
+    // invoke / notify (ORQ-07)
+    "__invoked__", "__notified__", "__job_id__", "__notify_error__",
+    // delegate
+    "__delegated__", "__resume_token__", "__expires_at__",
+    "__resume_decision__", "__resume_payload__",
+    // collect
+    "__collected__", "__collect_token__", "__collect_decision__",
+    "__collect_response__", "__child_session_id__",
+    // suspend
+    "__send_at__",
+  ] as const
 
   /**
    * Transita para `toStep` e LIMPA as sentinelas dele.
