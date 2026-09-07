@@ -225,6 +225,39 @@ probe_adapter_self_calls.sh
 # para o consumidor. A chave e MEDIDA no leitor, nunca escrita no gate -- constante mediria
 # a concordancia com o gate e deixaria os 4 produtores verdes contra um leitor que mudou.
 probe_menu_result_contract.sh
+
+# ── GAT-03 (b) · os seis que a triagem de 2026-09-07 promoveu ────────────────
+# Estavam em NAO TRIADO e saiam nao-verdes. Triados um a um, CINCO eram defeito do
+# INSTRUMENTO e um so precisava de um interprete. Nenhum acusava defeito de produto.
+#
+# `probe_report_row_scope` ja tinha sido consertado no mesmo dia (AUT-36): o par
+# (cliente, escopo) do ramo do 360 nao discriminava.
+probe_report_row_scope.sh
+# Verde sem intervencao — estava na lista por nunca ter sido rodado, nao por reprovar.
+probe_seed_drift_named.sh
+# O censo procurava `emit_llm_tokens(` e achava ZERO — a emissao ganhou uma INDIRECAO
+# (`schedule_llm_tokens`, do arco de 2026-08-30) e o padrao ficou para tras. Ele
+# declarava *"a cobertura de emissao DIMINUIU — era 4, virou 0"*, ou seja apagao de
+# medicao de CUSTO, enquanto a propria secao C do mesmo relatorio contava 356 eventos.
+# Ganhou o ramo E, que CONFRONTA as duas metades: codigo sem emissor + eventos
+# chegando so pode significar que o censo perdeu o caminho — e o veredicto passa a ser
+# contra o instrumento. Ganhou tambem o ramo F, que impoe o que o docstring do
+# agendador prometia (ninguem faz `ensure_future` direto sobre o emissor).
+probe_llm_call_paths.sh
+# INCONCLUSIVO PERMANENTE nao e veredicto: saia 2 em TODA execucao por `node` ausente
+# no WSL, e por isso nunca mediu nada. Hoje cai para um container `node:20` na rede do
+# compose quando o host nao tem node — e os SEIS ramos passam.
+probe_mcp_permissions_producer.sh
+# Somava EXPOSICAO com DANO. O cabecalho dele ja dizia qual e' o dano (`ORFAOS`), mas o
+# veredicto reprovava tambem por `CONDENADOS` — tokens cujo meta morre antes, sem
+# vitima ainda. Vermelho permanente por `timeout_hours` alto. Hoje reprova por dano e
+# CONTA a exposicao (que tem ficha propria: os dois prazos nunca foram conciliados).
+probe_resume_outlives_meta.sh
+# Os 4 abertos sobreviventes sao residuo DATADO: todos de 2026-08-21, papel `queue`,
+# ids sinteticos de E2E — e desde entao passaram 1 548 segmentos em 867 sessoes sem UM
+# novo. Declarados por ID EXATO (nunca por padrao ou data, que absolveriam o proximo
+# defeito nascido numa bateria E2E) e contados fora do veredicto.
+probe_open_segments_closed_sessions.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh
@@ -363,6 +396,12 @@ smoke_wrapup_slot_handoff.sh
 =seed_customer_history_demo.sh                        provisionamento
 =seed_deploy_lens_demo.sh                             provisionamento
 =seed_dialog_formfill_demo_form.sh                    provisionamento
+# GAT-03 (b): CORRIGIDO na triagem (checava `session.dialog_form_id`, grafia anterior
+# a CNS-02 — o produto escreve `core.workflow.*` desde 2026-09-01) e classificado
+# AQUI, nao como AUTO: ele DISPARA um workflow e cria uma sessao-filha a cada
+# execucao. No runner injetaria um contato sintetico por rodada, e ha probes que
+# CONTAM contatos — o instrumento moveria o numero que outro instrumento mede.
+=smoke_formfill_renderer.sh                           provisionamento
 =seed_dialog_limite_forms.sh                          provisionamento
 =seed_dialog_nps_buttons_form.sh                      provisionamento
 =seed_dialog_nps_form.sh                              provisionamento
@@ -401,6 +440,12 @@ smoke_wrapup_slot_handoff.sh
 =diag_sac_ia_sampling.sh                              medicao-de-momento
 =measure_capacity_licensing_baseline.sh               medicao-de-momento
 =probe_contacts_count_funnel.sh                       medicao-de-momento
+# GAT-03 (b): o irmao do de cima, e o exemplo que a descricao desta classe ja citava
+# ("de onde vieram os +167 contatos"). Investigacao FALSEAVEL de um incidente de
+# 2026-08 (118 -> 285 na mesma janela), com previsao escrita antes de rodar; o
+# veredicto dele e "a hipotese explica 15 dos 167", que e resultado de pesquisa e nao
+# invariante. Nao pode ficar verde no futuro: o numero e historico.
+=probe_contacts_count_internal_pools.sh               medicao-de-momento
 =probe_context_map_audit.sh                           medicao-de-momento
 =probe_entry_pool_base.sh                             medicao-de-momento
 =probe_family_a_queue_signal.sh                       medicao-de-momento
@@ -461,7 +506,6 @@ smoke_wrapup_slot_handoff.sh
 ?probe_block2.sh
 ?probe_claim_capacity_sources.sh
 ?probe_console_restore_after_reload.sh
-?probe_contacts_count_internal_pools.sh
 ?probe_context_snapshot_endpoint.sh
 ?probe_context_visibility.sh
 ?probe_context_withheld.sh
@@ -470,21 +514,15 @@ smoke_wrapup_slot_handoff.sh
 ?probe_internal_service_callers.sh
 ?probe_journey_limite.sh
 ?probe_journeys_window_applied.sh
-?probe_llm_call_paths.sh
 ?probe_masked_field_sinks.sh
-?probe_mcp_permissions_producer.sh
 ?probe_mcp_rest_surface.sh
-?probe_open_segments_closed_sessions.sh
 ?probe_operational_tools_reach.sh
 ?probe_participant_event_in_kafka.sh
 ?probe_pool_coverage.sh
 ?probe_python_suites.sh
 ?probe_queue_member_resurrect.sh
 ?probe_queue_segment_exit_paths.sh
-?probe_report_row_scope.sh
 ?probe_requeue_culprit.sh
-?probe_resume_outlives_meta.sh
-?probe_seed_drift_named.sh
 ?probe_segment_rmt_version_tie.sh
 ?probe_sequence_index.sh
 ?probe_supervisor_tool_masking.sh
@@ -498,7 +536,6 @@ smoke_wrapup_slot_handoff.sh
 ?smoke_detached_hook.sh
 ?smoke_directed_delegate.sh
 ?smoke_eval_finalize_timeout.sh
-?smoke_formfill_renderer.sh
 ?smoke_gprobe_curar_auth.sh
 ?smoke_gprobe_service_auth.sh
 ?smoke_human_instance_identity.sh

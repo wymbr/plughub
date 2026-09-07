@@ -70,16 +70,49 @@ skip() { echo "  ⏭️  $* (INCONCLUSIVO)"; SKIPPED=$((SKIPPED+1)); }
 
 echo "══ pré-condições ══"
 
-if ! command -v node >/dev/null 2>&1; then
-  # `exit 2`, não `exit 1` (corrigido 2026-09-04, GAT-01). Falta de pré-requisito
-  # é NÃO CONSEGUI MEDIR, e o `run_gates.sh` tem ramo próprio para isso. Saindo 1
-  # este probe se declarava VERMELHO — *"mediu e reprovou"* — por node ausente no
-  # host, e um vermelho que não é defeito é o que ensina a ignorar o vermelho.
-  echo "  ⏭️  node ausente — este probe precisa do cliente MCP; não há caminho em"
-  echo "      shell puro. INCONCLUSIVO: nada foi medido."
+# ── Como o cliente MCP é executado (GAT-03 b, 2026-09-07) ────────────────────
+#
+# `exit 2`, não `exit 1` (corrigido 2026-09-04, GAT-01): falta de pré-requisito é NÃO
+# CONSEGUI MEDIR, e o `run_gates.sh` tem ramo próprio para isso.
+#
+# ⚠️ Mas INCONCLUSIVO permanente não é veredicto — é ausência com nome bonito. Este
+# probe saía 2 em TODA execução deste ambiente (o `node` não existe no WSL daqui, e a
+# toolchain é de Windows), então vivia na lista dos não-triados sem nunca ter medido
+# nada. Medido em 2026-09-07: rodando o MESMO `.mjs` dentro de um container com node,
+# os SEIS ramos passam. O que faltava era o INTÉRPRETE, não o produto.
+#
+# Ordem: node do HOST → container. O fallback é DECLARADO, nunca silencioso: a linha
+# diz qual dos dois respondeu, porque "passou aqui" e "passou lá dentro" não são a
+# mesma medição — de dentro da rede do compose a borda é alcançada por outro endereço.
+NODE_RUNNER=""
+REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+if command -v node >/dev/null 2>&1; then
+  NODE_RUNNER="host"
+  ok "node presente no host ($(node --version))"
+elif command -v docker >/dev/null 2>&1; then
+  # A rede sai do container que roda o mcp-server, nunca de um literal: o nome da rede
+  # do compose é derivado do diretório do projeto e muda de máquina para máquina.
+  MCP_CID="$(docker ps --filter 'name=mcp-server-plughub' --format '{{.ID}}' | head -1)"
+  NET="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{break}}{{end}}' "$MCP_CID" 2>/dev/null)"
+  if [ -z "$NET" ]; then
+    echo "  ⏭️  node ausente no host e o mcp-server não está de pé — sem rede para"
+    echo "      alcançar a borda de dentro de um container. INCONCLUSIVO."
+    exit 2
+  fi
+  NODE_RUNNER="container"
+  # O discriminador é o VALOR, não uma flag: se ainda é o default de `localhost`, o
+  # chamador não declarou nada e o endereço de DENTRO da rede é o do SERVIÇO. Se ele
+  # declarou, respeita-se — reescrever por cima seria decidir no lugar de quem pediu.
+  REGISTRY_URL_C="$REGISTRY_URL"
+  MCP_SSE_URL_C="$MCP_SSE_URL"
+  [ "$REGISTRY_URL" = "http://localhost:3300" ]     && REGISTRY_URL_C="http://agent-registry:3300"
+  [ "$MCP_SSE_URL"  = "http://localhost:3100/sse" ] && MCP_SSE_URL_C="http://mcp-server-plughub:3100/sse"
+  ok "node ausente no host — cliente MCP roda em node:20 na rede '$NET'"
+else
+  echo "  ⏭️  nem node nem docker — este probe precisa do cliente MCP; não há caminho"
+  echo "      em shell puro. INCONCLUSIVO: nada foi medido."
   exit 2
 fi
-ok "node presente ($(node --version))"
 
 for svc in "$REGISTRY_URL/v1/skills:registry" "${MCP_SSE_URL%/sse}/health:mcp-server"; do
   url="${svc%:*}"; nome="${svc##*:}"
@@ -97,7 +130,18 @@ done
 echo
 echo "══ atravessando a borda (agent_login + invoke, MCP sobre SSE) ══"
 
-OUT="$(node "$NODE_PROBE" 2>&1)"
+if [ "$NODE_RUNNER" = "host" ]; then
+  OUT="$(node "$NODE_PROBE" 2>&1)"
+else
+  # `:ro` de propósito: um probe não escreve na árvore que mede.
+  OUT="$(docker run --rm --network "$NET" \
+      -v "$REPO_ROOT:/repo:ro" \
+      -e REGISTRY_URL="$REGISTRY_URL_C" \
+      -e MCP_SSE_URL="$MCP_SSE_URL_C" \
+      -e TENANT_ID="$TENANT_ID" \
+      -e AGENT_REGISTRY_SERVICE_TOKEN="${AGENT_REGISTRY_SERVICE_TOKEN:-changeme_agent_registry_service_token_demo}" \
+      node:20 node "/repo/infra/test/$(basename "$NODE_PROBE")" 2>&1)"
+fi
 echo "$OUT" | grep -v '^RESULT ' | sed 's/^/     /' | grep -v '^     $' || true
 
 declare -A RAMO=(

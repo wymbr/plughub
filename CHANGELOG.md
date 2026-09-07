@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (14) — GAT-03 (b): os oito não-triados, e sete eram do INSTRUMENTO
+
+A metade (a) fechou os cinco que viviam DENTRO do manifesto. Esta fecha os oito que estavam
+na dívida nomeada — nunca classificados, seis deles não-verdes. Triados um a um com a mesma
+pergunta: *o defeito é do produto ou do gate?* **Nenhum acusava defeito de produto.**
+
+| gate | veredicto da triagem |
+|---|---|
+| `probe_report_row_scope` | já consertado no mesmo dia (AUT-36) → **AUTO** |
+| `probe_seed_drift_named` | verde sem intervenção — estava na lista por nunca ter rodado → **AUTO** |
+| `probe_llm_call_paths` | censo procurava um nome que ganhou indireção → **AUTO** |
+| `probe_mcp_permissions_producer` | INCONCLUSIVO permanente por falta de intérprete → **AUTO** |
+| `probe_resume_outlives_meta` | somava exposição com dano → **AUTO** + ficha de produto |
+| `probe_open_segments_closed_sessions` | resíduo E2E datado, sem caso novo em 17 dias → **AUTO** |
+| `smoke_formfill_renderer` | grafia anterior à CNS-02 → corrigido, **ISENTO** (cria sessão) |
+| `probe_contacts_count_internal_pools` | investigação de um incidente de agosto → **ISENTO** |
+
+### O achado que vale por si: um probe que se contradizia dentro do próprio relatório
+
+`probe_llm_call_paths` declarava *"a cobertura de emissão DIMINUIU — era 4, virou 0"*. Lido
+sem contexto, isso é **apagão da medição de CUSTO de LLM** — o repositório inteiro tem regra
+sobre isso (*"num produtor de CUSTO isso é fail-silent com a evidência na FATURA"*).
+
+Medido: o censo procurava `emit_llm_tokens(`, e a emissão tinha ganhado uma **indireção** —
+`schedule_llm_tokens`, introduzida pelo arco de 2026-08-30 (a task que o CPython podia coletar
+no meio). Os quatro caminhos vivos chamam o agendador. A linha de base de 4 estava intacta.
+
+⚠️ **E o próprio probe já carregava a contraprova, três seções abaixo: 356 eventos de usage.**
+Duas metades do MESMO instrumento discordando, e o veredicto saiu da que foi impressa primeiro.
+Corrigir o padrão conserta hoje e envelhece na próxima indireção; o que **não** envelhece é a
+contradição — código sem emissor **e** eventos chegando só pode significar que o censo perdeu o
+caminho. Virou o **ramo E**, e o veredicto dele é contra o INSTRUMENTO, nunca contra o produto.
+Ganhou também o **ramo F**, que impõe o que o docstring do agendador prometia e ninguém
+verificava: nenhum `ensure_future` direto sobre o emissor.
+
+### INCONCLUSIVO permanente não é veredicto — é ausência com nome bonito
+
+`probe_mcp_permissions_producer` saía `2` em **toda** execução deste ambiente: `node` não
+existe no WSL daqui. Estava na lista dos não-triados sem nunca ter medido nada — e um portão
+que nunca mede é indistinguível de um que não existe.
+
+Hoje, sem node no host, ele roda o MESMO `.mjs` num container `node:20` na rede do compose (a
+rede é **derivada** do container do mcp-server, nunca um literal: o nome vem do diretório do
+projeto). Os **seis ramos passam** — o que faltava era o intérprete. E o fallback é declarado:
+a linha diz qual dos dois respondeu, porque *"passou aqui"* e *"passou lá dentro"* não são a
+mesma medição.
+
+### Exposição e dano, de novo — e desta vez o probe já sabia
+
+`probe_resume_outlives_meta` reprovava somando `ORFAOS + CONDENADOS`, enquanto o cabeçalho do
+mesmo arquivo já dizia qual dos dois é o dano. Órfão é vítima consumada (o meta morreu, o token
+vive); condenado é **exposição** (o meta morrerá antes, e ainda não morreu). Reprovar por
+exposição deixava o probe permanentemente vermelho por um `suspend` de `timeout_hours` alto.
+
+Duas correções de leitura vieram junto, e a segunda mudou o número: a amostra imprimia `meta`
+em minutos e `token` em horas truncadas (`meta=1437min token=23h` parecia contradizer o próprio
+veredicto), e sem tolerância de fronteira **2 dos 3 "condenados" tinham `descoberto = 0 min`** —
+os dois prazos escritos em momentos diferentes do mesmo fluxo. Com unidade única, margem
+explícita e tolerância DECLARADA de 60 s, a exposição real é **1**, com 24 h descobertas.
+
+A exposição não foi absolvida: virou ficha própria (`RSM-01`) — o prazo do token
+(`timeout_hours*3600 + 3600`) e o do meta (24 h) vêm de fontes que ninguém conciliou.
+
+### Resíduo declarado por ID EXATO, nunca por padrão
+
+`probe_open_segments_closed_sessions` acusava 4 abertos em sessão fechada. Medidos: **todos de
+2026-08-21**, papel `queue`, ids sintéticos de E2E — e desde então passaram **1 548 segmentos em
+867 sessões sem um único novo**. O produtor (a publicação sem chave em
+`conversations.participants`, consertada em 2026-08-18) está mesmo consertado.
+
+Os quatro entram numa lista de **ids exatos**, contados fora do veredicto e com aviso se
+sumirem. Uma regra por padrão (*"ignore ids `sess_2026…`"*) ou por data absolveria o próximo
+defeito que nascesse numa bateria E2E — e o valor deste gate é justamente poder ficar vermelho.
+⚠️ Isto **não** substitui o expurgo, que é o conserto do precedente (os 9 históricos foram
+apagados em 2026-08-18 pela mesma razão).
+
+### Duas isenções, e as duas são decisão
+
+`probe_contacts_count_internal_pools` é investigação falseável de um incidente de agosto
+(118 → 285 na mesma janela), com previsão escrita antes de rodar; o veredicto dele é *"a
+hipótese explica 15 dos 167"* — resultado de pesquisa, não invariante, e o número é histórico.
+Cai na classe `medicao-de-momento`, cuja descrição já o citava pelo nome.
+
+`smoke_formfill_renderer` **foi consertado** (checava `session.dialog_form_id`, grafia anterior
+à CNS-02; o produto escreve `core.workflow.*` desde 2026-09-01 — e o cabeçalho do próprio
+arquivo já dizia o nome novo, só o código não sabia). Mas ficou ISENTO: ele **dispara um
+workflow e cria uma sessão-filha a cada execução**, e há probes que CONTAM contatos — no runner,
+o instrumento moveria o número que outro instrumento mede.
+
+### Estado do manifesto
+
+**AUTO 112 → 118 · ISENTO 72 → 74 · NÃO TRIADO 110 → 102 · cobertura 63% → 66%**, sobre os
+mesmos 300 scripts. A GAT-03 fecha inteira; a GAT-02 (o resto da dívida nomeada) encolhe.
+
+---
+
 ## 2026-09-07 (13) — AUT-36: a hipótese estava certa, e provar isso exigiu o caso que faltava
 
 O ramo `customers/360` do `probe_report_row_scope.sh` reprovava com `admin=21` e

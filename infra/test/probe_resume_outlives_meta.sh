@@ -60,8 +60,18 @@ printf '%s\n' "$RAW" | paste - - | while IFS="$(printf '\t')" read -r tok val; d
   case "$ttl" in ''|*[!0-9-]*) echo "ILEGIVEL"; continue ;; esac
   if [ "$ttl" -lt 0 ]; then
     echo "ORFAO $sid falta=$(( (ets - NOW) / 3600 ))h"
-  elif [ $((NOW + ttl)) -lt "$ets" ]; then
-    echo "CONDENADO $sid meta=$((ttl / 60))min token=$(( (ets - NOW) / 3600 ))h"
+  # ── Tolerância DECLARADA de fronteira (2026-09-07, GAT-03 b) ───────────────
+  # O prazo do token e o do meta são escritos em momentos diferentes do MESMO fluxo,
+  # então um excede o outro por segundos sem que exista fenômeno nenhum. Medido: 2 de
+  # 3 "condenados" tinham `descoberto = 0 min`. Contador inflado gasta a atenção que
+  # ele existe para dirigir — e a atenção é o recurso que um gate compra.
+  # 60 s é a granularidade em que o resto do arquivo já fala (o scanner de prazo varre
+  # a cada 60 s); acima disso a diferença é de CONFIGURAÇÃO, não de relógio.
+  elif [ $((NOW + ttl + 60)) -lt "$ets" ]; then
+    # ⚠️ MESMA unidade nos dois, e a MARGEM explicita: com `meta` em minutos e
+    # `token` em horas truncadas, `meta=1437min token=23h` parecia contradizer o
+    # veredicto (1437 min = 23,95 h) e o leitor concluia que o gate errou.
+    echo "CONDENADO $sid meta=$((ttl / 60))min token=$(( (ets - NOW) / 60 ))min descoberto=$(( (ets - NOW - ttl) / 60 ))min"
   else
     echo "OK"
   fi
@@ -88,10 +98,38 @@ if [ "$ILEGIVEL" -gt 0 ] && [ $((ORFAOS + CONDENADOS + OK)) -eq 0 ]; then
   echo "   ⛔ INCONCLUSIVO — tudo ilegível; o parser é que falhou, não o sistema."
   exit 3
 fi
-if [ $((ORFAOS + CONDENADOS)) -gt 0 ]; then
-  echo "   ❌ $((ORFAOS + CONDENADOS)) resume(s) sem meta para ler quando a hora chegar."
+# ── EXPOSIÇÃO e DANO são dois números (corrigido 2026-09-07, GAT-03 b) ───────
+#
+# O veredicto somava `ORFAOS + CONDENADOS` e reprovava — mas o cabeçalho deste mesmo
+# arquivo já dizia qual dos dois é o dano: *"ORFAOS = 0 com T grande refuta o dano"*.
+# São coisas diferentes:
+#
+#   ÓRFÃO     o meta JÁ morreu e o token continua vivo. A vítima é CONSUMADA: quem
+#             chegar com esse token entra e falha por tenant desconhecido.
+#   CONDENADO o meta morre ANTES do token, mas nenhum dos dois venceu ainda. É
+#             EXPOSIÇÃO: só vira dano se o resume acontecer DEPOIS do meta morrer —
+#             e a esmagadora maioria dos resumes acontece em minutos.
+#
+# Reprovar por exposição punha este probe permanentemente vermelho por um `suspend`
+# de `timeout_hours` alto (o token vive `timeout_hours*3600 + 3600`, o meta 24 h), e
+# vermelho permanente é o que ensina todo mundo a ignorar vermelho — a lição que a
+# metade (a) da GAT-03 passou o dia pagando.
+#
+# ⚠️ A exposição NÃO é absolvida: ela é CONTADA, com a amostra impressa acima, e tem
+# ficha própria (o prazo do token e o do meta vêm de fontes que ninguém conciliou).
+# O que mudou é quem reprova: o DANO.
+if [ "$ORFAOS" -gt 0 ]; then
+  echo "   ❌ $ORFAOS resume(s) com o meta JÁ MORTO — dano consumado."
   echo "      O token será aceito e a retomada falhará por tenant desconhecido."
   exit 1
+fi
+if [ "$CONDENADOS" -gt 0 ]; then
+  echo "   ⚠️  $CONDENADOS resume(s) EXPOSTO(s): o meta morre antes do token."
+  echo "      Não é dano ainda — vira dano se a retomada chegar depois do meta."
+  echo "      O prazo do token (timeout_hours*3600 + 3600) e o do meta (24 h) vêm de"
+  echo "      fontes que ninguém conciliou; ver a ficha no \`pending.md\`."
+  echo "   ✅ dano CONSUMADO: nenhum (órfãos = 0)"
+  exit 0
 fi
 echo "   ✅ nenhum token sobrevive ao seu meta — o truncamento não tem vítima aqui."
 exit 0

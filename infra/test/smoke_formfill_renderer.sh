@@ -73,15 +73,34 @@ echo "  ✓ item na fila: $CHILD"
 echo "3) Conferindo o ctx da sessão-filha (o que o renderer lê) ..."
 CTX=$($COMPOSE exec -T redis redis-cli HGETALL "${TENANT}:ctx:${CHILD}")
 FAIL=0
+
+# ── As TAGS são as do renderer, e não mais um prefixo fixo (2026-09-07, GAT-03 b) ──
+#
+# Este bloco compunha `session.$1` para todas, e reprovava desde a CNS-02/CNS-11
+# (2026-09-01), que reservou o root `core.*` à plataforma: `dialog_form_id` e o token
+# passaram a viver em `core.workflow.*`, e o smoke continuou perguntando pelo nome
+# velho. Duas casas dentro do MESMO arquivo — o cabeçalho aqui em cima JÁ dizia
+# `core.workflow.dialog_form_id`, e só o código não sabia.
+#
+# ⚠️ E não é um prefixo novo aplicado a todas: `session.briefing_session_id` é do
+# espaço do SKILL e continua onde estava (o ContextStore a resolve como alias de
+# `session.workflow.briefing_session_id`). Trocar o prefixo em bloco teria consertado
+# duas e quebrado a terceira.
+#
+# A lista de aceitos do token é a MESMA que o `DialogFormRenderer.resumeTokenOf` usa
+# (`:56-58`): o caminho de conferência escreve `delegate_resume_token`, o delegate
+# webhook simples escreve `resume_token`, e o `collect` escreve
+# `session.collect_resume_token`. Um smoke que aceitasse menos reprovaria um caminho
+# vivo; um que aceitasse mais deixaria de medir o contrato.
 have() {
-  if echo "$CTX" | grep -q "session.$1"; then echo "  ✓ session.$1"; else echo "  ❌ falta session.$1"; FAIL=1; fi
+  if echo "$CTX" | grep -q "$1"; then echo "  ✓ $1"; else echo "  ❌ falta $1"; FAIL=1; fi
 }
-have dialog_form_id
-have briefing_session_id
-if echo "$CTX" | grep -qE "session\.(delegate|workflow|collect)_resume_token"; then
+have core.workflow.dialog_form_id
+have session.briefing_session_id
+if echo "$CTX" | grep -qE "core\.workflow\.(delegate_)?resume_token|session\.collect_resume_token"; then
   echo "  ✓ resume token"
 else
-  echo "  ❌ falta resume token"; FAIL=1
+  echo "  ❌ falta resume token (nenhuma das três grafias que o renderer aceita)"; FAIL=1
 fi
 
 echo

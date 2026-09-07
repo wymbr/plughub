@@ -180,6 +180,31 @@ chq "
    FORMAT PrettyCompactMonoBlock"
 echo
 
+# ── RESÍDUO DATADO, por ID EXATO (GAT-03 b, 2026-09-07) ─────────────────────────
+#
+# Quatro abertos sobreviveram ao expurgo de 2026-08-18, e medi-los mostrou que são
+# resíduo, não defeito em curso:
+#   · TODOS de 2026-08-21, papel `queue`, com id de sessão SINTÉTICO (`sess_2026…`,
+#     participantes `e2e-*`) — vieram de uma bateria E2E, não de contato;
+#   · desde então passaram **1 548 segmentos em 867 sessões** e apareceram **ZERO**
+#     novos. O produtor (a publicação sem chave em `conversations.participants`,
+#     consertada em 2026-08-18) está mesmo consertado.
+#
+# ⚠️ A lista é de IDs EXATOS, e isso é a diferença entre baseline e anistia. Uma regra
+# por PADRÃO (*"ignore ids `sess_2026…`"*) ou por DATA absolveria também o próximo
+# defeito que nascer numa bateria E2E — e o valor deste gate é justamente poder ficar
+# vermelho. Com ids exatos, qualquer linha nova reprova, inclusive de E2E.
+#
+# ⚠️ Isto NÃO substitui o expurgo, que é o conserto do precedente (os 9 históricos
+# foram apagados em 2026-08-18 pela MESMA razão: irrecuperáveis, e mantê-los cegava o
+# gate). Rodado `purge_orphan_segments.sh` sobre estes quatro, esta lista sai daqui e
+# a baseline volta a ser um zero sem exceção.
+RESIDUO_CONHECIDO="
+  'sess_20260821T122326_1HURH2CN9E9IA3A62FDQJI',
+  'sess_20260821T122326_XUDB0VTYWYUINNUGWFRI8J',
+  'sess_20260821T122910_6BWRJZ90MEXSMTGXXOB1NI',
+  'sess_20260821T122910_WSYVFV6FCL7HMWJGYCH7GH'"
+
 # ── veredicto de 3 ramos — AUSENTE é INCONCLUSIVO, nunca verde ──────────────────
 ABERTOS=$(chq "
   SELECT count()
@@ -187,7 +212,25 @@ ABERTOS=$(chq "
    INNER JOIN (SELECT session_id FROM $DB.sessions FINAL
                 WHERE tenant_id='$TENANT' AND closed_at IS NOT NULL) AS s
       ON s.session_id = g.session_id
-   WHERE g.tenant_id='$TENANT' AND g.ended_at IS NULL" | tr -d '\r')
+   WHERE g.tenant_id='$TENANT' AND g.ended_at IS NULL
+     AND g.session_id NOT IN ($RESIDUO_CONHECIDO)" | tr -d '\r')
+
+# O resíduo é CONTADO em separado, nunca escondido: se ele for a zero (expurgo), a
+# linha grita para que a lista acima seja removida — tabela de exceção que envelhece
+# vira permissão, e é a mesma regra da `DIVIDA` do censo de adapters.
+RESIDUO_VIVO=$(chq "
+  SELECT count()
+    FROM $DB.segments AS g FINAL
+   INNER JOIN (SELECT session_id FROM $DB.sessions FINAL
+                WHERE tenant_id='$TENANT' AND closed_at IS NOT NULL) AS s
+      ON s.session_id = g.session_id
+   WHERE g.tenant_id='$TENANT' AND g.ended_at IS NULL
+     AND g.session_id IN ($RESIDUO_CONHECIDO)" | tr -d '\r')
+echo "   resíduo declarado de 2026-08-21 (E2E, fora do veredicto): ${RESIDUO_VIVO:-?} de 4"
+if [ "${RESIDUO_VIVO:-4}" = "0" ]; then
+  echo "   ⚠️  o resíduo SUMIU (expurgo?) — remova \`RESIDUO_CONHECIDO\` deste probe:"
+  echo "      lista de exceção que sobrevive ao fato vira permissão."
+fi
 
 echo "── veredicto ───────────────────────────────────────────────────────────────"
 case "${ABERTOS:-x}" in

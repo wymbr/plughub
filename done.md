@@ -238,7 +238,9 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 
 ## `sem-demanda`
 
-*(vazio)*
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| GAT-03 | **13 gates não-verdes triados um a um, e 11 eram do INSTRUMENTO.** Metade **(a)**, os 5 que viviam DENTRO do manifesto e faziam o runner reprovar sempre: duas premissas mortas no gate do supervisor (o principal irrestrito que a AUT-15 removeu; a testemunha `noauth` desarmada pelo shim do próprio arquivo) · o ramo de cobertura do `nav_backend` acusando `config.context_map` sem classificação · o seed do demo atrás do `role_defaults` · e os dois de escopo pela MESMA raiz — *ver o tenant inteiro enumerando o REGISTRY não é ver todas as LINHAS do ledger*. Um defeito de PRODUTO caiu de lado: o `PUT /config` descartava o `?tenant_id=` e escrevia no `__global__` com 200 (foi assim que o mapa da plataforma foi a 1 folha durante a própria triagem). Metade **(b)**, os 8 do NÃO TRIADO: um censo que procurava um nome que ganhou indireção — e que se contradizia dentro do próprio relatório (0 emissores × 356 eventos), hoje com ramo que CONFRONTA as duas metades · um INCONCLUSIVO permanente por falta de `node`, hoje rodando num container · um que somava exposição com dano · um resíduo E2E datado, declarado por ID exato · dois consertados e ISENTOS por natureza. **Manifesto: AUTO 112 → 118, ISENTO 72 → 74, NÃO TRIADO 110 → 102, cobertura 63% → 66%** | 2026-09-07 | `CHANGELOG.md` § 2026-09-07 (11) e (14) |
 
 ---
 

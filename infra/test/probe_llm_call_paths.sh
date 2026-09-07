@@ -82,8 +82,25 @@ if [ ${#UNDECLARED[@]} -gt 0 ]; then
 fi
 
 # Quantos arquivos realmente chamam o emissor.
+#
+# ⚠️ CORRIGIDO EM 2026-09-07 (GAT-03 b). O padrao era `emit_llm_tokens\(` e passou a
+# achar ZERO — nao porque a emissao sumiu, mas porque ganhou uma INDIRECAO: o arco de
+# 2026-08-30 (a task de emissao que o CPython podia coletar no meio) introduziu
+# `schedule_llm_tokens`, e os quatro caminhos vivos passaram a chamar o AGENDADOR. O
+# censo continuou contando o nome antigo e declarou *"a cobertura de emissao DIMINUIU
+# — era 4, virou 0"*, ou seja acusou apagao de medicao de CUSTO onde nao havia nenhum.
+#
+# **O proprio probe ja carregava a contraprova e nao a lia**: a secao C contava 356
+# eventos de usage no mesmo relatorio. Duas metades do MESMO instrumento discordando,
+# e a estatica ganhando por ser impressa primeiro. Dai o ramo E, la embaixo, que as
+# CONFRONTA.
+#
+# O padrao casa os DOIS nomes de proposito: `schedule_llm_tokens` e o caminho de
+# producao (todo chamador usa o agendador, por decisao escrita no docstring dele) e
+# `emit_llm_tokens` segue valido para quem chame direto. O que se conta e *"este
+# arquivo alcanca o emissor"*, nao *"este arquivo digita um identificador".*
 mapfile -t EMITTERS < <(
-  grep -rlE '\bemit_llm_tokens\(' --include=*.py "$SRC" 2>/dev/null \
+  grep -rlE '\b(emit|schedule)_llm_tokens\(' --include=*.py "$SRC" 2>/dev/null \
   | grep -v '/tests/' | grep -v 'usage_emitter.py' \
   | xargs -r -n1 basename | sort -u
 )
@@ -102,11 +119,11 @@ echo "   cada caminho declarado 'SIM' emite?"
 for f in "${!SITES[@]}"; do
   IFS='|' read -r path emits note <<< "${SITES[$f]}"
   [ "$emits" = "SIM" ] || continue
-  if grep -qE '\bemit_llm_tokens\(' "$SRC/$f" 2>/dev/null; then
+  if grep -qE '\b(emit|schedule)_llm_tokens\(' "$SRC/$f" 2>/dev/null; then
     printf '      ✅ %s\n' "$f"
   else
     FAIL=1
-    printf '      ❌ %s — declarado SIM e SEM chamada a emit_llm_tokens\n' "$f"
+    printf '      ❌ %s — declarado SIM e sem chamada ao emissor (nem direta, nem pelo agendador)\n' "$f"
     echo   "         Um caminho que gasta e não publica subconta o custo em silêncio."
   fi
 done
@@ -248,6 +265,60 @@ else
   else
     echo "   ✅ $TOTZ eventos, nenhum com quantity = 0"
   fi
+fi
+
+# ── E) as DUAS METADES se conferem (GAT-03 b, 2026-09-07) ─────────────────────
+#
+# Este probe tem uma metade ESTATICA (quem chama o emissor, secao A) e uma de RUNTIME
+# (quantos eventos existem, secao C) — e ate hoje elas nunca se olhavam. Em 2026-09-07
+# ele imprimiu, no MESMO relatorio: *"emissores de usage.events: 0 de 6 (linha de base:
+# 4)"* e *"356 eventos"*. Uma das duas estava errada e o veredicto saiu da que foi
+# impressa primeiro — acusando apagao de medicao de CUSTO onde nao havia nenhum.
+#
+# A estatica e' que estava errada: a emissao tinha ganhado uma INDIRECAO
+# (`schedule_llm_tokens`) e o `grep` procurava o nome antigo.
+#
+# ⚠️ Nao basta ter corrigido o padrao: o padrao vai envelhecer de novo na proxima
+# indirecao, e o modo de falha e sempre este. O que NAO envelhece e' a CONTRADICAO —
+# codigo sem emissor + eventos chegando so pode significar que o censo perdeu o
+# caminho. Este ramo transforma isso em veredicto, e o veredicto e' contra o
+# INSTRUMENTO, nunca contra o produto.
+echo
+echo "── E) coerência entre a metade ESTÁTICA e a de RUNTIME ──"
+if [ -z "${TOT:-}" ]; then
+  echo "   ⛔ INCONCLUSIVO — a seção C não mediu; sem o par não há o que confrontar."
+elif [ "${N_EMIT:-0}" -eq 0 ] && [ "${TOT:-0}" -gt 0 ]; then
+  FAIL=1
+  echo "   ❌ CONTRADIÇÃO: o censo achou 0 emissores e o ledger tem $TOT eventos."
+  echo "      Quem está errado é ESTE PROBE, não o produto: a emissão existe e o"
+  echo "      padrão do censo deixou de alcançá-la (indireção nova? renomeação?)."
+  echo "      Conserte o padrão da seção A antes de ler qualquer outro ramo daqui."
+elif [ "${N_EMIT:-0}" -gt 0 ] && [ "${TOT:-0}" -eq 0 ]; then
+  echo "   ⚠️  $N_EMIT emissor(es) no código e ZERO eventos no ledger pós-época."
+  echo "      Não reprova — pode ser janela sem tráfego —, mas é a forma de um"
+  echo "      produtor parado, e a seção C já se declara sem amostra nesse caso."
+else
+  echo "   ✅ coerentes: $N_EMIT emissor(es) no código · $TOT evento(s) no ledger"
+fi
+
+# ── F) o AGENDADOR é o único caminho, e isso deixa de ser promessa ────────────
+#
+# O docstring de `schedule_llm_tokens` diz: *"todo chamador usa ESTE agendador — nunca
+# `ensure_future` direto"*. A razao e' forte: `ensure_future` solto deixa o loop como
+# unico dono da task, e o CPython avisa que ela pode ser coletada no meio — num
+# produtor de CUSTO isso e' fail-silent com a evidencia na FATURA. Mas era promessa
+# sem mecanismo, exatamente a familia que este repositorio cataloga.
+echo
+echo "── F) ninguém agenda a emissão por fora do agendador ──"
+SOLTO="$(grep -rnE 'ensure_future\(\s*emit_llm_tokens\(' --include=*.py "$SRC" 2>/dev/null \
+         | grep -v 'usage_emitter.py' || true)"
+if [ -n "$SOLTO" ]; then
+  FAIL=1
+  echo "   ❌ há \`ensure_future(emit_llm_tokens(...))\` fora do agendador:"
+  printf '%s\n' "$SOLTO" | sed 's/^/      /'
+  echo "      Sem o set de tasks do agendador, a emissão pode ser coletada no meio."
+else
+  echo "   ✅ nenhum \`ensure_future\` direto sobre o emissor"
 fi
 
 echo
