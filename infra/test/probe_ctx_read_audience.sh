@@ -258,6 +258,27 @@ if [ -n "$TEM_FILTRO" ]; then
   fi
 fi
 
+# ── I — a SEGUNDA casa de interpolação, e ela não vê este filtro ─────────────
+#
+# `steps/suspend.ts` tem um `_interpolate` PRÓPRIO (`:274`) que resolve
+# `{{$.pipeline_state.*}}` e `{{$.session.*}}` sem passar por `interpolate()` — logo
+# sem `sitio`, sem plateia e sem filtro. O `visibility` default dele é `agents_only`,
+# mas o campo é declarável, e `all` faz a plateia virar CLIENTE.
+#
+# Medido em 2026-09-07 (MSK-02): 5 steps `suspend` no parque, ZERO com `notify`.
+# População zero, então o que fica é o FATO contado — construir o filtro agora seria
+# política contra população zero, o erro que este repositório já registrou duas vezes.
+# Mesma forma do ramo G da CTX-05, que guarda a plateia `model` no `reason`.
+echo
+echo "-- I. a segunda casa de interpolacao (suspend._interpolate) tem populacao? --"
+I_RC=0
+python3 infra/test/_ctx_suspend_notify.py || I_RC=$?
+case "$I_RC" in
+  0) ok  "I. suspend.notify ao cliente: populacao ZERO — a segunda casa nao e exercitada" ;;
+  3) inc "I. censo sem amostra (ver acima)" ;;
+  *) bad "I. ha suspend.notify com plateia de CLIENTE, e o filtro da CTX-04 nao alcanca aquele caminho" ;;
+esac
+
 echo
 echo "======================"
 if [ "$FALHAS" -gt 0 ]; then echo "REPROVADO ($FALHAS)"; exit 1; fi

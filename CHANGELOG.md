@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (12) — MSK-02: a tarefa estava SUPERADA, e provar isso achou a segunda casa
+
+A ficha dizia: *"o MESMO número de cartão chega ao cliente mascarado num caminho e CRU no
+outro"*, com dois escopos em aberto — declarar `masked: "credit_card"` no campo, ou entender
+por que a detecção não mascarou a saída. **Nenhum dos dois era o trabalho.** O mecanismo que
+fecha a MSK-02 foi entregue no MESMO dia em que ela foi escrita, pelo arco CTX
+(CTX-04 · CTX-07, 2026-09-04), e a linha do ledger nunca foi atualizada — uma segunda casa
+afirmando um defeito que o código já não sustenta, que é exatamente o que o ledger existe
+para não deixar acontecer.
+
+### A prova tem duas formas, e elas são independentes
+
+**(1) O gate exercita a tag EXATA da MSK-02.** O ramo F de `probe_ctx_read_audience.sh` roda
+contra o `dist` deployado: `filtrarLeituraCtx("1111222233334444", "session.numero_cartao",
+{stepType: "notify", visibility: "all"})` → **`***4444`**, e o mesmo valor com sítio `invoke`
+→ **`1111222233334444`**. Plateia CLIENTE mascara, plateia SISTEMA não — controle positivo no
+mesmo par.
+
+**(2) O ledger durável parou de produzir o defeito na data do conserto.** Em
+`session_stream_events` (o substrato que o replayer/avaliador lê), mensagens ao cliente com 16
+dígitos seguidos:
+
+| população | janela | linhas |
+|---|---|---|
+| número CRU | 2026-08-13 → **2026-09-04** | **14** |
+| número CRU **depois** de 2026-09-04 | — | **0** |
+| forma mascarada (`***`) | 2026-08-11 → **2026-09-07** | 58 |
+
+A forma mascarada continua até hoje; a crua para no dia do conserto. Não é o gate dizendo que
+funciona: é o registro mostrando que deixou de acontecer. As 14 têm `original_content` nulo e
+`masked_categories` **vazio** — nada as mascarou, o que confirma que saíram antes de existir
+filtro. ⚠️ `analytics.session_timeline` tem **zero** — a exposição estava no stream durável,
+não no ledger analítico; são dois registros com alcances diferentes.
+
+**Resíduo declarado, não apagado:** as 14 linhas ficam. São números de fixture do demo, não há
+vazamento, e apagar história para melhorar um número é o oposto do que este repositório faz.
+
+### O que a verificação ACHOU, e é finding novo
+
+`interpolate()` só filtra quando recebe o `sitio` — `if (!sitio) return bruto`. Os três sítios
+de plateia declaram (`notify.ts:38`, `menu.ts:225`, `receive.ts:86`). **Mas `steps/suspend.ts`
+não usa `interpolate()`:** ele tem um `_interpolate` PRÓPRIO (`:274`) que resolve
+`{{resume_token}}`, `{{$.pipeline_state.*}}` e `{{$.session.*}}` por conta própria — sem sítio,
+sem plateia, sem filtro. O `visibility` default dele é `agents_only`, mas o campo é declarável,
+e `all` faz a plateia virar CLIENTE.
+
+É a MESMA forma que o arco CTX passou o dia fechando (a CTX-04 removeu `auditarLeituraCtx` com
+a frase *"manter as duas seria duas implementações da mesma regra"*), sobrevivendo num arquivo
+que ninguém tinha olhado.
+
+**Medido antes de decidir: 5 steps `suspend` no parque, ZERO declaram `notify`.** População
+zero. Construir o filtro agora seria política contra população zero — o erro que este
+repositório já registrou duas vezes. O que fica é o FATO, contado, com reprovação no dia em que
+deixar de ser zero: **ramo I** de `probe_ctx_read_audience.sh`, com censo estrutural (`notify:`
+aparece em três lugares diferentes de um YAML; `grep` acusaria inocentes). Mutação verificada
+nos DOIS sentidos, numa cópia da árvore: `visibility: all` → reprova nomeando; `agents_only` →
+passa. O ramo discrimina, não recusa tudo.
+
+⚠️ **O que o ramo I NÃO afirma:** que o `_interpolate` do suspend é seguro. Ele afirma que
+ninguém o exercita com plateia de cliente. São duas proposições, e só a segunda é mensurável
+hoje.
+
+### E o comentário do template ganhou dono
+
+`skill_limite_retorno_v1.yaml` dizia *"`numero_cartao` já chega mascarado"* — quando foi
+escrito, era promessa sem mecanismo, e a medição achou as 14 mensagens saindo daquele mesmo
+template. O comentário fica, mas agora nomeia **quem** o torna verdadeiro (o filtro de plateia
+da CTX-04) e **onde está a prova** (o ramo F do gate), além de proibir explicitamente mascarar à
+mão ali — seriam duas casas, e a segunda produziria `*****4444**`.
+
+---
+
 ## 2026-09-07 (11) — GAT-03 (a): os cinco vermelhos do manifesto, e por que quatro eram do INSTRUMENTO
 
 O `run_gates.sh` executava cinco gates que **sempre** reprovavam. Enquanto houver vermelho

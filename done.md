@@ -190,6 +190,7 @@ história no `CHANGELOG.md`.)*
 antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver la.)*
 
 | id | tarefa | data | ancora no `CHANGELOG.md` |
+| MSK-02 | **Estava SUPERADA, e provar isso achou a segunda casa.** A ficha dizia *"o mesmo número de cartão chega mascarado num caminho e CRU no outro"*, com dois escopos em aberto — declarar `masked` no campo, ou entender a detecção. **Nenhum dos dois era o trabalho:** o mecanismo saiu no MESMO dia, pelo arco CTX (CTX-04/CTX-07), e a linha nunca foi atualizada — segunda casa afirmando defeito que o código já não sustenta. Prova em duas formas independentes: o ramo F do gate exercita a tag EXATA contra o `dist` deployado (cliente `***4444` × sistema cru), e o stream durável mostra a população crua parando em **2026-09-04** (14 linhas, 2026-08-13→09-04, **zero** depois) enquanto a mascarada segue até hoje — o registro mostrando que deixou de acontecer, não o gate dizendo que funciona. ⚠️ **Finding novo:** `steps/suspend.ts` tem interpolador PRÓPRIO que não passa pelo filtro de plateia; população medida **ZERO** (5 `suspend`, nenhum com `notify`), então virou o **ramo I** do gate, com mutação nos dois sentidos, em vez de mecanismo contra população zero | 2026-09-07 | `CHANGELOG.md` § 2026-09-07 (12) |
 |---|---|---|---|
 
 ## `docs/adr/adr-context-read-audience-policy.md` — leitura de contexto por plateia

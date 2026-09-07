@@ -64,8 +64,17 @@ steps:
 
   # ⚠️ SEM markdown: o webchat usa `textContent` e `**` sairia literal na tela.
   # A estrutura vem de `\n` + `•` (o `.msg` tem `white-space: pre-wrap` desde
-  # 2026-08-12). `numero_cartao` já chega mascarado — asterisco de máscara e
-  # asterisco de ênfase disputam o mesmo caractere.
+  # 2026-08-12). `numero_cartao` chega mascarado — asterisco de máscara e asterisco
+  # de ênfase disputam o mesmo caractere.
+  #
+  # ⚠️ QUEM o mascara, e por que a frase acima precisou de dono (MSK-02, 2026-09-07):
+  # até 2026-09-04 ela era promessa SEM mecanismo, e a medição do stream durável achou
+  # **14 mensagens ao cliente com os 16 dígitos inteiros** — daqui, deste template.
+  # Quem passou a impô-la é o filtro de PLATEIA da CTX-04 (`filtrarLeituraCtx`, chamado
+  # de `interpolate` com o sítio do step): `notify` sem `visibility` é plateia CLIENTE,
+  # e o tipo do campo no mapa manda mascarar. A prova viva é o ramo F de
+  # `infra/test/probe_ctx_read_audience.sh`, que exercita esta MESMA tag.
+  # NÃO mascare à mão aqui: seriam duas casas, e a segunda produziria `*****4444**`.
   - id: notificar_aprovado
     type: notify
     message: "🎉 Boa notícia! Seu aumento de limite foi aprovado.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Novo limite: R$ {{@ctx.session.limite_aprovado}}\n\nO limite já está disponível para uso."
