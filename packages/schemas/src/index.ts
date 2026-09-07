@@ -854,6 +854,7 @@ export {
   optionsAtPath,
   leafPaths,
   entryQuestionId,
+  categoryPathFor,
   returnRefErrors,
   validateDialogForm,
 } from "./dialog-render"

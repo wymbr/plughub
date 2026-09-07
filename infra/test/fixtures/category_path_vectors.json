@@ -1,0 +1,75 @@
+{
+  "_comentario": [
+    "Vetores da composicao de `category_path` (D5 do adr-tree-return-continuation).",
+    "Lidos pelas DUAS implementacoes:",
+    "  TypeScript  packages/schemas/src/dialog-return.test.ts   (categoryPathFor)",
+    "  Python      infra/test/_ret05_continuation_probe.py      (modo `composicao`)",
+    "",
+    "Existem porque o caminho e composto em duas casas e ate 2026-09-07 elas",
+    "DISCORDAVAM: a tool fazia `path.join('.')` para toda question, entao a",
+    "continuacao media `outra_coisa` enquanto o fluxo e o `navigation_pools`",
+    "comparavam `pos_atendimento.outra_coisa`. Nenhum dos dois estava errado",
+    "sozinho — e o gate da RET-05 usava a composicao do FLUXO, entao ficou verde",
+    "sobre um runtime que compunha diferente. Um contato real achou.",
+    "",
+    "⚠️ ENDERECO x MEDICAO: `path` e `leaves` voltam para dentro da tool e NAO",
+    "levam prefixo; `category_path` e `root_id` levam. Os dois ultimos vetores sao",
+    "o par que carrega peso — mesma trilha, questions diferentes, saidas opostas."
+  ],
+  "vetores": [
+    {
+      "nome": "question de ENTRADA nao prefixa (a serie do Arc 12 nao pode ser renomeada)",
+      "entry": "destino", "question": "destino",
+      "path": ["sac", "info_plano"],
+      "category_path": "sac.info_plano"
+    },
+    {
+      "nome": "PESO — a MESMA trilha vinda da continuacao vira raiz propria",
+      "entry": "destino", "question": "pos_atendimento",
+      "path": ["outra_coisa"],
+      "category_path": "pos_atendimento.outra_coisa"
+    },
+    {
+      "nome": "PESO — o gemeo dela na entrada continua sem prefixo",
+      "entry": "destino", "question": "destino",
+      "path": ["outra_coisa"],
+      "category_path": "outra_coisa"
+    },
+    {
+      "nome": "cursor na raiz da continuacao: so a raiz, sem ponto solto",
+      "entry": "destino", "question": "pos_atendimento",
+      "path": [],
+      "category_path": "pos_atendimento"
+    },
+    {
+      "nome": "cursor na raiz da entrada e vazio — nada a medir ainda",
+      "entry": "destino", "question": "destino",
+      "path": [],
+      "category_path": ""
+    },
+    {
+      "nome": "convencao `main` como entrada (D3)",
+      "entry": "main", "question": "main",
+      "path": ["a", "b"],
+      "category_path": "a.b"
+    },
+    {
+      "nome": "sem question nomeada, comportamento de sempre",
+      "entry": "destino", "question": null,
+      "path": ["a", "b"],
+      "category_path": "a.b"
+    },
+    {
+      "nome": "forma sem entrada resolvivel nao inventa prefixo",
+      "entry": null, "question": "pos_atendimento",
+      "path": ["x"],
+      "category_path": "pos_atendimento.x"
+    },
+    {
+      "nome": "continuacao com dois niveis",
+      "entry": "destino", "question": "pos_atendimento",
+      "path": ["especialista", "tecnico"],
+      "category_path": "pos_atendimento.especialista.tecnico"
+    }
+  ]
+}

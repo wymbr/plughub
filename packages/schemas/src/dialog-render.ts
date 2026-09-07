@@ -311,6 +311,48 @@ export function entryQuestionId(form: DialogForm): string | undefined {
 }
 
 /**
+ * `category_path` — a MEDIÇÃO do caminho, que **não** é o mesmo que o endereço.
+ *
+ * ── Por que são duas coisas, e confundi-las custou um contato real ───────────
+ *
+ * `path` e `leaves` são **ENDEREÇO**: voltam para dentro da própria tool como
+ * `input.path` / `chosen_id`, e `optionsAtPath` caminha o `options` da question
+ * corrente. Prefixá-los com o id da question faria a projeção procurar uma opção
+ * chamada `pos_atendimento` na raiz, não achar, e a navegação **reiniciaria
+ * parecendo certa** — é o mesmo modo de falha que o split por ponto da F2 existe
+ * para impedir.
+ *
+ * `category_path` é **MEDIÇÃO**: é a `category` do Arc 12 e é a chave de
+ * `navigation_pools`. A D5 do `adr-tree-return-continuation.md` decide que a
+ * continuação é **raiz própria** — `pos_atendimento.especialista`, nunca
+ * `sac.info_plano.pos_atendimento.especialista` — para que a série separe *"o que
+ * o cliente pediu ao entrar"* de *"o que pediu depois de ser atendido"*.
+ *
+ * ⚠️ **Medido em contato real (2026-09-07):** a tool compunha `path.join(".")`
+ * para toda question, então a continuação media `outra_coisa` enquanto o fluxo e o
+ * `navigation_pools` comparavam com `pos_atendimento.outra_coisa`. Nenhum dos dois
+ * estava errado sozinho — **eles compunham o mesmo caminho em duas casas** e só
+ * uma era o runtime. Consequência: o comando não casava, o caminho seguia como
+ * DEMANDA, `pool_route_resolve` recusava alto (sem default, por decisão) e o
+ * contato caía na fila humana. E *"falar com um especialista"* chegava ao destino
+ * certo **pelo motivo errado** — pela falha de rota, não pelo mapa.
+ *
+ * A raiz da continuação é o **id da question**, porque é ele que o `on_return`
+ * nomeia — nada de campo novo.
+ */
+export function categoryPathFor(
+  entryId:    string | undefined,
+  questionId: string | undefined,
+  path:       ReadonlyArray<string>,
+): string {
+  const cru = path.join(".")
+  // A question de ENTRADA não prefixa: `sac.info_plano` é o que a série já mede,
+  // e prefixá-la renomearia todo o histórico do Arc 12 num deploy.
+  if (!questionId || questionId === entryId) return cru
+  return cru ? `${questionId}.${cru}` : questionId
+}
+
+/**
  * Monta o render de UM turno.
  *
  * `fromQuestionId` (D4 do ADR do retorno) escolhe de qual question partir — é

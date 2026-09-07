@@ -12,7 +12,9 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { buildRender, entryQuestionId, returnRefErrors, validateDialogForm } from "./dialog-render"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
+import { buildRender, categoryPathFor, entryQuestionId, returnRefErrors, validateDialogForm } from "./dialog-render"
 import type { DialogForm } from "./dialog"
 
 const base = {
@@ -141,5 +143,40 @@ describe("on_return — o ponteiro viaja, e é CONFERIDO (D2)", () => {
       }],
     } as unknown as DialogForm
     expect(returnRefErrors(aninhada).map(e => e.option_id)).toEqual(["folha"])
+  })
+})
+
+/**
+ * `categoryPathFor` — ENDERECO x MEDICAO (D5), e a discordancia que custou um
+ * contato real em 2026-09-07.
+ *
+ * A tool compunha `path.join(".")` para TODA question, entao a continuacao media
+ * `outra_coisa` enquanto o fluxo e o `navigation_pools` comparavam
+ * `pos_atendimento.outra_coisa`. Nenhum dos dois estava errado sozinho: eles
+ * compunham o mesmo caminho em DUAS casas, e so uma era o runtime. O comando nao
+ * casava, o caminho seguia como demanda, e o contato caia na fila humana.
+ *
+ * ⚠️ Os vetores sao COMPARTILHADOS com o gemeo Python
+ * (`infra/test/_ret05_continuation_probe.py`, modo `composicao`) — paridade
+ * presumida entre linguagens ja custou caro neste repositorio.
+ */
+describe("categoryPathFor — vetores compartilhados com o probe Python", () => {
+  const vetores = JSON.parse(
+    readFileSync(resolve(__dirname, "../../../infra/test/fixtures/category_path_vectors.json"), "utf8"),
+  ) as { vetores: Array<{ nome: string; entry: string | null; question: string | null; path: string[]; category_path: string }> }
+
+  it.each(vetores.vetores.map(v => [v.nome, v] as const))("%s", (_nome, v) => {
+    expect(categoryPathFor(v.entry ?? undefined, v.question ?? undefined, v.path)).toBe(v.category_path)
+  })
+
+  // ── O que NAO pode mudar junto ──────────────────────────────────────────────
+  it("o ENDERECO nao leva prefixo — prefixa-lo reiniciaria a navegacao em silencio", () => {
+    // `path` volta para dentro da tool como `input.path`, e `optionsAtPath` caminha
+    // o `options` da question corrente. Um `pos_atendimento` na frente faria a
+    // projecao procurar uma opcao com esse id na raiz, nao achar, e devolver
+    // `found: false` — a navegacao reiniciaria e a tela pareceria certa.
+    const trilha = ["outra_coisa"]
+    expect(categoryPathFor("destino", "pos_atendimento", trilha)).toBe("pos_atendimento.outra_coisa")
+    expect(trilha).toEqual(["outra_coisa"])
   })
 })

@@ -8,6 +8,9 @@ Modos:
              COMANDO (declarado no fluxo). Nenhum orfao
   menus      os especialistas PULAM o menu de continuidade quando ha chamador,
              senao o cliente e perguntado duas vezes
+  composicao o gemeo Python de `categoryPathFor` casa com os vetores que o
+             TypeScript le — a discordancia entre as duas casas custou um contato
+             real em 2026-09-07 (o comando de continuacao nunca casava)
 """
 import io
 import json
@@ -211,6 +214,50 @@ def menus():
     return 0
 
 
+# ── composicao ───────────────────────────────────────────────────────────────
+
+def _category_path(entry, question, path):
+    """Gemeo do `categoryPathFor` de `@plughub/schemas` — MESMA regra, outra casa.
+
+    ⚠️ E copia de proposito (topologia, como `is_tree`/`temArvore`): o Python nao
+    importa TypeScript. O que impede a divergencia sao os VETORES compartilhados,
+    nao a boa vontade de quem editar.
+    """
+    cru = ".".join(path)
+    if not question or question == entry:
+        return cru
+    return "%s.%s" % (question, cru) if cru else question
+
+
+def composicao():
+    import os
+    caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "fixtures", "category_path_vectors.json")
+    try:
+        vet = json.load(io.open(caminho, encoding="utf-8"))["vetores"]
+    except Exception as e:
+        print("VEREDICTO: SEM AMOSTRA — nao li os vetores (%s)" % e)
+        return 3
+
+    falhas = 0
+    for v in vet:
+        obtido = _category_path(v.get("entry"), v.get("question"), v["path"])
+        ok = obtido == v["category_path"]
+        if not ok:
+            falhas += 1
+            print("   FALHA  %-58s esperado=%-34s obtido=%s" % (
+                v["nome"][:58], v["category_path"], obtido))
+    print("   vetores: %d · divergencias Python x contrato: %d" % (len(vet), falhas))
+    if falhas:
+        print("VEREDICTO: FALHA — as duas casas compoem o caminho DIFERENTE.")
+        print("           Foi assim que o comando de continuacao nunca casou: o")
+        print("           fluxo comparava `pos_atendimento.outra_coisa` e o runtime")
+        print("           media `outra_coisa`. Nenhum dos dois errado sozinho.")
+        return 1
+    print("VEREDICTO: OK — o gemeo Python casa com os vetores (o TS os le na sua suite)")
+    return 0
+
+
 if __name__ == "__main__":
     modo = sys.argv[1] if len(sys.argv) > 1 else "ponteiros"
     if modo == "ponteiros":
@@ -219,6 +266,8 @@ if __name__ == "__main__":
         sys.exit(caminhos())
     elif modo == "menus":
         sys.exit(menus())
+    elif modo == "composicao":
+        sys.exit(composicao())
     else:
         print("modo desconhecido: %s" % modo)
         sys.exit(2)

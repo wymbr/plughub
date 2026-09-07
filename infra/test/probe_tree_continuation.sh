@@ -65,6 +65,7 @@ echo "probe_tree_continuation — o ciclo esta ligado, e onde pode girar (RET-05
 rodar "A — so continua quem tem para onde voltar"  ponteiros
 rodar "B — pool declarado ou comando do fluxo"     caminhos
 rodar "C — o especialista nao pergunta duas vezes" menus
+rodar "D · COMPOSICAO — as duas casas compoem o mesmo `category_path`" composicao
 
 echo ""
 echo "═════════════════════════════════════════════════════════════════════"

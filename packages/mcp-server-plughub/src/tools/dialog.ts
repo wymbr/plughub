@@ -12,7 +12,8 @@
 
 import { z }                     from "zod"
 import type { McpServer }        from "@modelcontextprotocol/sdk/server/mcp.js"
-import { buildRender, duplicateNodeIds, optionsAtPath, leafPaths } from "@plughub/schemas"
+import { buildRender, duplicateNodeIds, optionsAtPath, leafPaths,
+         entryQuestionId, categoryPathFor } from "@plughub/schemas"
 import type { DialogForm }               from "@plughub/schemas"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
@@ -274,11 +275,19 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           path:          nivel.path,
           // Cauda da `category` do Arc 12 — o chamador nao precisa juntar, e assim
           // ha UMA forma de compor o caminho, nao uma por skill.
-          category_path: nivel.path.join("."),
+          //
+          // ⚠️ **MEDICAO, nao endereco.** `path` e `leaves` acima voltam para dentro
+          // desta tool (`input.path` / `chosen_id`) e por isso NAO levam o prefixo;
+          // `category_path` e `root_id` levam, porque a D5 faz da continuacao uma
+          // RAIZ PROPRIA (`pos_atendimento.especialista`). Ate 2026-09-07 esta linha
+          // era `nivel.path.join(".")` para toda question, e a continuacao media
+          // `outra_coisa` enquanto o fluxo comparava `pos_atendimento.outra_coisa` —
+          // duas casas compondo o mesmo caminho, e so uma era o runtime.
+          category_path: categoryPathFor(entryQuestionId(form), q.id, nivel.path),
           // Primeiro segmento em campo PROPRIO: e por ele que o roteamento decide, e
           // depender de indice em JSONPath no `choice` poria a composicao do caminho
           // em duas casas.
-          root_id:       nivel.path[0] ?? null,
+          root_id:       categoryPathFor(entryQuestionId(form), q.id, nivel.path).split(".")[0] || null,
         })
       } catch (err) {
         return mcpError("network_error", err instanceof Error ? err.message : String(err))
