@@ -111,6 +111,24 @@ function evaluateCtxCondition(
 
 /**
  * Avalia condições de comparação de valor (operadores padrão).
+ *
+ * ⚠️ **Este avaliador serve DOIS ramos**: o de `$.` (direto) e o de `@ctx.`
+ * (através do `evaluateCtxCondition`, para os operadores que não são dele). Um
+ * operador que exista só no outro ramo NÃO cai num erro aqui — cai no `default`,
+ * que devolve `false`. E `false` numa condição de `choice` não é um erro: é o
+ * `default` do step, que quase sempre é um caminho legítimo.
+ *
+ * Foi assim que `exists` sobre `$.` passou de RET-05 a 2026-09-07 sempre falso:
+ * o `continuar` do orquestrador testava `$.pipeline_state.nivel.on_return` com
+ * o ponteiro PRESENTE no estado, caía no `default: finalizar`, e o contato
+ * terminava parecendo um fim normal — medido em contato real, com o
+ * `pipeline_state` mostrando `continuar -> finalizar default` ao lado de
+ * `"on_return": "pos_atendimento"`. Nada ficou vermelho em lugar nenhum.
+ *
+ * **Ao acrescentar um operador, acrescente nos DOIS ramos ou recuse no schema.**
+ * Quem impõe isso é `infra/test/probe_choice_operator_parity.sh`, não este
+ * comentário — a restrição já vivia como prosa (o docstring do `ConditionSchema`
+ * dizia *"tag presente no ContextStore"*) e prosa não impediu nada.
  */
 function evaluateCondition(
   fieldValue: unknown,
@@ -118,6 +136,15 @@ function evaluateCondition(
   expected:   unknown
 ): boolean {
   switch (operator) {
+    // ── `exists` sobre `$.` — o CRITÉRIO é `undefined`, nunca truthiness ─────
+    //
+    // `resolveJsonPath` usa `wrap: false`, então caminho ausente resolve para
+    // `undefined`. `null`, `0`, `false` e `""` são valores PRESENTES, e é isso
+    // que mantém a semântica igual à do ramo `@ctx.`, onde `exists` é
+    // "entry presente com qualquer valor". Usar truthiness aqui faria um
+    // contador zerado desaparecer — a família de defeito que o CLAUDE.md
+    // cataloga em `if not x` × `is None`, na direção inversa.
+    case "exists":   return fieldValue !== undefined
     case "eq":       return fieldValue === expected
     case "neq":      return fieldValue !== expected
     case "gt":       return typeof fieldValue === "number" && fieldValue > (expected as number)

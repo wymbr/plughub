@@ -144,4 +144,69 @@ describe("executeChoice", () => {
     const result = await executeChoice(stepConf, ctx)
     expect(result.next_step_id).toBe("coletar_nome")
   })
+
+  // ── `exists` sobre `$.` — o defeito medido em contato real (2026-09-07) ────
+  //
+  // Ate aqui `exists` existia SO no ramo `@ctx.`; no ramo `$.` caia no `default`
+  // do switch e devolvia `false`. Uma condicao que nunca casa nao vira erro num
+  // `choice`: vira o `default` do step, que quase sempre e caminho legitimo.
+  // Foi assim que o `continuar` do orquestrador terminou o contato com o
+  // ponteiro de continuacao PRESENTE no pipeline_state.
+  describe("operador exists sobre $. (RET-05/2026-09-07)", () => {
+    const passo: ChoiceStep = {
+      id: "c", type: "choice",
+      conditions: [{ field: "$.pipeline_state.nivel.on_return", operator: "exists", next: "continuar" }],
+      default: "finalizar",
+    }
+
+    it("o CASO MEDIDO: ponteiro presente leva a continuacao, nao ao default", async () => {
+      const ctx = makeCtx({ nivel: { on_return: "pos_atendimento" } })
+      expect((await executeChoice(passo, ctx)).next_step_id).toBe("continuar")
+    })
+
+    it("ausente cai no default — o controle negativo", async () => {
+      const ctx = makeCtx({ nivel: { category_path: "sac.info_plano" } })
+      expect((await executeChoice(passo, ctx)).next_step_id).toBe("finalizar")
+    })
+
+    it("caminho intermediario ausente tambem cai no default", async () => {
+      expect((await executeChoice(passo, makeCtx({}))).next_step_id).toBe("finalizar")
+    })
+
+    // ── O CASO QUE CARREGA PESO ────────────────────────────────────────────
+    //
+    // O criterio e `!== undefined`, NUNCA truthiness. Estes quatro sao valores
+    // PRESENTES, e no ramo `@ctx.` `exists` ja os aceitava ("entry presente com
+    // qualquer valor"). Uma implementacao com `if (fieldValue)` passaria nos
+    // tres testes acima e faria um contador zerado, uma flag `false` ou uma
+    // string vazia DESAPARECEREM — e os dois ramos voltariam a discordar, que e
+    // exatamente o defeito que este conserto fecha.
+    it.each([
+      ["zero",          0],
+      ["false",         false],
+      ["string vazia",  ""],
+      ["null explicito", null],
+    ])("valor %s é PRESENTE — exists nao e truthiness", async (_rotulo, valor) => {
+      const ctx = makeCtx({ nivel: { on_return: valor } })
+      expect((await executeChoice(passo, ctx)).next_step_id).toBe("continuar")
+    })
+
+    it("paridade com o ramo @ctx: os dois decidem igual para o mesmo fato", async () => {
+      const entry: ContextEntry = {
+        value: 0, confidence: 1, source: "teste",
+        visibility: "agents_only", updated_at: new Date().toISOString(),
+      }
+      const viaCtx = await executeChoice({
+        id: "c", type: "choice",
+        conditions: [{ field: "@ctx.x.y", operator: "exists", next: "continuar" }],
+        default: "finalizar",
+      }, makeCtxWithStore({}, { "x.y": entry }))
+      const viaPipeline = await executeChoice({
+        id: "c", type: "choice",
+        conditions: [{ field: "$.pipeline_state.x.y", operator: "exists", next: "continuar" }],
+        default: "finalizar",
+      }, makeCtx({ x: { y: 0 } }))
+      expect(viaPipeline.next_step_id).toBe(viaCtx.next_step_id)
+    })
+  })
 })

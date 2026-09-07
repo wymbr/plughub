@@ -186,10 +186,22 @@ const StepInputSchema = z.record(StepInputValueSchema)
 const ConditionSchema = z.object({
   field:    JsonPathSchema,
   /**
-   * Operadores disponíveis:
-   *   eq, neq, gt, gte, lt, lte, contains — comparação de valor
-   *   exists          — tag presente no ContextStore com qualquer valor
-   *   confidence_gte  — confidence da ContextEntry ≥ value (apenas @ctx.*)
+   * Operadores disponíveis, e **o `field` decide quais valem**:
+   *
+   * | operador | `$.` | `@ctx.` / `@segment.` |
+   * |---|---|---|
+   * | eq, neq, gt, gte, lt, lte, contains | ✅ | ✅ (sobre o `value` da entry) |
+   * | `exists` — presente com QUALQUER valor (`null`/`0`/`false` incluídos) | ✅ | ✅ |
+   * | `confidence_gte` — confidence da `ContextEntry` ≥ value | ❌ | ✅ |
+   *
+   * ⚠️ Esta tabela dizia *"`exists` — tag presente no ContextStore"*, e a
+   * restrição vivia **só aqui**: o avaliador de `$.` não implementava `exists` e
+   * o caía no `default`, ou seja, a condição era **sempre falsa** — nunca um
+   * erro, sempre o caminho `default` do `choice`. Custou o `continuar` do
+   * orquestrador inteiro (ver `CHANGELOG.md` 2026-09-07). Hoje `exists` vale nos
+   * dois lados; `confidence_gte` continua sendo só do ContextStore, porque
+   * `pipeline_state` não tem confiança a comparar — e agora quem impõe isso é
+   * `infra/test/probe_choice_operator_parity.sh`, não este comentário.
    */
   operator: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "contains", "exists", "confidence_gte"]),
   value:    z.union([z.string(), z.number(), z.boolean()]).optional(),  // opcional para "exists"
