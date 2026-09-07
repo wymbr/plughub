@@ -1,5 +1,67 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (13) — AUT-36: a hipótese estava certa, e provar isso exigiu o caso que faltava
+
+O ramo `customers/360` do `probe_report_row_scope.sh` reprovava com `admin=21` e
+`escopado=21`, e a ficha não sabia dizer se era defeito de recorte ou artefato do dado. Ela
+nomeava a suspeita com precisão: *"o ramo compara CONTAGENS, então igualdade só prova
+ausência de filtro se o dado PUDER diferir"*. **A suspeita estava certa — o gate gritava
+lobo —, e o que fechou a questão foram duas medições que se sustentam sozinhas.**
+
+### 1 · A rota RECORTA, e isso foi medido contra ela mesma
+
+Com um principal escopado a `retencao_humano` — pool que **não entra nem atende** nenhuma
+sessão do cliente `cus_2dec…` —, o `/customers/{id}/360` devolveu **0 contra 21 do admin**.
+O predicado de escopo é uma UNIÃO (*entrou por pool meu **ou** um pool meu ATENDEU*), e ela
+foi conferida no ledger antes da chamada: dos três pools que atenderam aquelas 21 sessões
+(`limite_ia`, `limite_retorno`, `dialog_runner`), nenhum é o do escopo. A união alcança
+**0 de 21**, e a rota devolveu 0. O mecanismo funciona.
+
+### 2 · O par que o gate sorteava não tinha como discriminar
+
+O probe escolhia `POOL` = *"o pool com mais sessões"* e `CID` = *"o cliente com mais
+sessões"*, **independentes um do outro**. Numa rodada o sorteio deu `POOL=limite_ia` e o
+mesmo `cus_2dec…`, cujas **21 sessões estão TODAS em `limite_ia`**: `21 = 21` era o
+comportamento CERTO. É a família do *instrumento falseável que mede a proposição vizinha*
+(D14.1) na forma mais barata — o ramo tinha veredicto, tinha controle positivo ao lado, e
+ainda assim não podia distinguir *"não filtrou"* de *"não havia o que filtrar"*.
+
+O custo não era só aquele ramo: **um vermelho que ninguém sabe ler desqualifica o portão
+inteiro**, que é o mesmo argumento que fez a metade (a) da GAT-03 vir primeiro hoje de manhã.
+
+### 3 · O conserto é escolher o par DEPOIS, e perguntando ao produto
+
+O cliente do 360 deixou de ser escolhido junto com o pool. Ele passa a ser escolhido **depois
+que o principal escopado existe**, entre os que **não aparecem na lista de contatos daquele
+escopo** — e é a lista que responde, não uma regra escrita aqui.
+
+⚠️ **Por que perguntar ao produto, e não derivar:** o predicado é uma união, então um cliente
+cujas sessões entraram por outro pool ainda pode ser legitimamente visível se o meu pool
+atendeu. Reimplementar a união no gate seria a **segunda casa do mesmo predicado** — o
+defeito que a AUT-01 fechou, renascendo dentro do instrumento que a guarda. A lista escopada
+já aplica a união; cliente que não está nela é invisível **por construção**.
+
+Com o par certo a asserção muda de natureza: deixa de ser *"os números diferem"* e passa a
+ser **`escopado == 0`**, expectativa exata. O `!=` anterior deixaria passar um vazamento de 1.
+
+**E ausência de par vira `SEM AMOSTRA`, nunca verde:** se nenhum cliente for invisível ao
+escopo, o ramo declara que não pode julgar — porque ali contagens iguais seriam o
+comportamento correto, e um verde afirmaria o que não se mediu.
+
+### Garantia
+
+Rodada corrente: par discriminante `sys:task:e7996fc2` (admin=2, escopado=0), duas execuções
+seguidas com o mesmo veredicto. **Mutação no serviço RODANDO** (`docker cp` + `restart`):
+removido o `sess_conds.append(_scope)` do `_fetch_customer_360`, o ramo acusa —
+*"escopado=2 num cliente que o escopo NÃO alcança"* — e volta a verde com o restore, com
+zero marcadores de mutante na imagem em execução. Vizinhos conferidos:
+`probe_session_content_scope`, `probe_route_credential_coverage`,
+`probe_internal_service_callers`, todos verdes.
+
+O usuário que a reprodução criou (`aut36probe@`) foi removido: resíduo de instrumento não fica.
+
+---
+
 ## 2026-09-07 (12) — MSK-02: a tarefa estava SUPERADA, e provar isso achou a segunda casa
 
 A ficha dizia: *"o MESMO número de cartão chega ao cliente mascarado num caminho e CRU no

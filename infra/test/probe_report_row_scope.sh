@@ -95,8 +95,11 @@ SESS="$(curl -s -H "Authorization: Bearer $T_ADMIN" "$AN/reports/sessions?tenant
 # O pool com MAIS sessoes: escolher um pool raro faria toda rota sair `SEM AMOSTRA` e
 # o portao ficaria verde sem julgar nada.
 POOL="$(printf '%s' "$SESS" | jq -r '[.data[]?.pool_id // empty] | map(select(. != "")) | group_by(.) | max_by(length) | .[0] // empty')"
-CID="$( printf '%s' "$SESS" | jq -r '[.data[]?.customer_id // empty] | map(select(. != "")) | group_by(.) | max_by(length) | .[0] // empty')"
 [ -n "$POOL" ] || inc "nenhum pool com sessao — sem populacao para medir"
+# ⚠️ O CLIENTE do 360 NAO e escolhido aqui, e a razao esta na secao C: ele so tem
+# poder de julgar depois que o principal escopado existe, porque a escolha precisa
+# perguntar ao PRODUTO o que aquele escopo alcanca.
+printf '%s' "$SESS" > /tmp/_rowscope_admin.json
 
 OLD="$(probe_id)"
 [ -n "$OLD" ] && curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $T_ADMIN" "$AUTH/auth/users/$OLD"
@@ -121,10 +124,6 @@ CASOS="$(printf '%s\n' \
   "/reports/evaluations/quality?tenant_id=$TENANT	(.data|length)	evaluations/quality" \
   "/reports/agent-events/summary?tenant_id=$TENANT	(.data|length)	agent-events/summary" \
   "/reports/agent-events/categories?tenant_id=$TENANT	(.data|length)	agent-events/categories")"
-if [ -n "$CID" ]; then
-  CASOS="$CASOS
-/reports/customers/$CID/360?tenant_id=$TENANT	.contacts.total	customers/360"
-fi
 
 CONTROLE_MOVEU=0
 # `while read` alimentado por here-string, NUNCA por pipe: o pipe roda o laco num
@@ -150,6 +149,73 @@ done <<< "$CASOS"
 # desde sempre — nao move, o que nao moveu foi o instrumento.
 [ "$CONTROLE_MOVEU" -eq 1 ] || inc "o controle positivo (/reports/sessions) nao moveu — o instrumento nao mede"
 
+echo
+echo "C. 360 — o par (cliente, escopo) tem de DISCRIMINAR"
+# ── Por que esta secao saiu da lista generica (AUT-36, 2026-09-07) ───────────
+#
+# O ramo do `/customers/{id}/360` comparava CONTAGENS, e igualdade so prova ausencia
+# de filtro se o dado PUDER diferir. O cliente era escolhido pelo criterio *"o de mais
+# sessoes"*, INDEPENDENTE do pool do escopo — entao nada garantia que ele tivesse
+# alguma sessao fora do alcance daquele escopo.
+#
+# Medido em 2026-09-07: numa rodada o par sorteado foi POOL=`limite_ia` e o cliente
+# `cus_2dec…`, cujas **21 sessoes estao TODAS em `limite_ia`**. `21 = 21` era o
+# comportamento CERTO, e o gate gritava lobo. Noutra rodada, com o mesmo cliente e
+# escopo `retencao_humano` — que nao entra nem atende nenhuma sessao dele —, a rota
+# devolveu **0 contra 21 do admin**: o recorte funciona. O defeito era do INSTRUMENTO,
+# e o vermelho dele custava a leitura de todo o portao.
+#
+# ⚠️ E a discriminacao NAO pode ser derivada aqui. O predicado de escopo e uma UNIAO
+# (entrou por pool meu **ou** um pool meu ATENDEU), entao um cliente cujas sessoes
+# entraram por outro pool ainda pode ser legitimamente visivel se o meu pool atendeu.
+# Reimplementar a uniao no gate seria a SEGUNDA casa do mesmo predicado — o defeito
+# que a AUT-01 fechou. Entao pergunta-se ao PRODUTO: a lista de contatos escopada ja
+# aplica a uniao, e o cliente que nao aparece nela e, por construcao, invisivel.
+#
+# Com o par certo a assercao deixa de ser *"os numeros diferem"* e passa a ser
+# **`escopado == 0`** — expectativa EXATA. `!=` deixaria passar um vazamento de 1.
+VIS="$(curl -s -H "Authorization: Bearer $T_PROBE" \
+       "$AN/reports/sessions?tenant_id=$TENANT&page_size=500")"
+printf '%s' "$VIS" > /tmp/_rowscope_vis.json
+CID="$(python3 - /tmp/_rowscope_admin.json /tmp/_rowscope_vis.json <<'PY'
+import collections, json, sys
+
+def linhas(p):
+    try:
+        return json.load(open(p)).get("data") or []
+    except Exception:
+        return []
+
+admin, visiveis = linhas(sys.argv[1]), linhas(sys.argv[2])
+vistos = {s.get("customer_id") for s in visiveis if s.get("customer_id")}
+por_cliente = collections.Counter(
+    s["customer_id"] for s in admin if s.get("customer_id"))
+# O de MAIS sessoes entre os que o escopo nao alcanca em NENHUMA delas.
+cands = [(n, c) for c, n in por_cliente.items() if c not in vistos]
+print(sorted(cands, reverse=True)[0][1] if cands else "")
+PY
+)"
+if [ -z "$CID" ]; then
+  nte "customers/360: nenhum cliente INVISIVEL ao escopo — o par nao discrimina."
+  printf '               %s\n' "Sem ele, nem o verde nem o vermelho deste ramo significam algo:"
+  printf '               %s\n' "contagens iguais seriam o comportamento correto."
+else
+  A360="$(conta "/reports/customers/$CID/360?tenant_id=$TENANT" "$T_ADMIN" ".contacts.total")"
+  P360="$(conta "/reports/customers/$CID/360?tenant_id=$TENANT" "$T_PROBE" ".contacts.total")"
+  printf '               cliente discriminante: %s (admin=%s)\n' "$CID" "$A360"
+  if [ -z "$A360" ] || [ "$A360" = "null" ] || [ "$A360" = "0" ]; then
+    nte "customers/360: o admin nao ve contato deste cliente — sem populacao"
+  elif [ "$P360" = "0" ] || [ "$P360" = "null" ]; then
+    ok "customers/360: admin=$A360 e escopado=$P360 — recorta, e o zero e EXATO"
+  else
+    bad "customers/360: escopado=$P360 num cliente que o escopo NAO alcanca (admin=$A360)"
+    printf '               %s\n' "A lista escopada nao mostra NENHUMA sessao deste cliente,"
+    printf '               %s\n' "entao o 360 esta contando linha que o chamador nao pode abrir."
+  fi
+fi
+rm -f /tmp/_rowscope_admin.json /tmp/_rowscope_vis.json
+
+echo
 # Testemunha negativa: `[]` = NENHUM pool nao pode voltar a significar "todos" (AUT-03).
 PID="$(probe_id)"
 curl -s -o /dev/null -X PATCH "$AUTH/auth/users/$PID" -H "Authorization: Bearer $T_ADMIN" \
