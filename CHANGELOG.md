@@ -1,5 +1,59 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (17) — ORF-01: o expurgo dos quatro, e a exceção que sai junto com o fato
+
+Os quatro segmentos abertos de 2026-08-21 foram **expurgados**, e com eles saiu a lista
+`RESIDUO_CONHECIDO` de `probe_open_segments_closed_sessions.sh`. As duas metades andam
+juntas por construção: a lista nasceu, em 2026-09-07 de manhã, com a própria remoção
+escrita dentro dela — *"rodado `purge_orphan_segments.sh` sobre estes quatro, esta lista
+sai daqui e a baseline volta a ser um zero sem exceção"*.
+
+### 1 · O alvo foi OLHADO antes de ser apagado, e o corte teve de ser movido
+
+O `purge_orphan_segments.sh` traz `CUTOFF=2026-08-15` — o conserto do publish sem chave
+entrou em 2026-08-18, e o corte existe para **não apagar defeito novo**, que é achado e não
+lixo. Os quatro são de **2026-08-21**, ou seja, depois do corte: com o default o script
+**aborta**, e essa recusa está certa. Passou-se `CUTOFF=2026-08-22`, que mantém a guarda
+para qualquer coisa mais nova.
+
+O dry-run nomeou as linhas em vez de contá-las, e elas conferem com a lista declarada — os
+mesmos quatro `session_id`, **um** segmento cada, todos `queue` / `retencao_humano` /
+`native`, entre 12:23 e 12:29 de 2026-08-21. A testemunha do próprio script disse o que
+importava: **`abertos DEPOIS do corte = 0`** — não havia defeito vivo sendo apagado junto.
+
+Apply: 4 removidos por lista EXPLÍCITA de `segment_id` (nunca por predicado), mutação
+concluída, **2 376 segmentos restantes** — a testemunha que separa expurgo de tabela
+truncada. Rodado de novo, o script diz `alvos = 0` com `abertos depois do corte = 0`, que
+é a diferença entre *"já foi feito"* e *"o corte não pega nada"*.
+
+### 2 · A exceção sai porque o fato acabou
+
+Exceção que sobrevive ao fato **vira permissão**: uma lista de ids que não corresponde mais
+a linha nenhuma ensina quem lê que o gate tem descontos. O probe já previa isso e imprimia
+o aviso quando o resíduo fosse a zero. Hoje o veredicto é **baseline ZERO, sem exceção** —
+qualquer aberto em sessão fechada, de qualquer origem, inclusive E2E, reprova.
+
+### 3 · Um gate que perde um filtro tem de provar que ainda reprova
+
+O ramo vermelho não era exercido desde que a lista existia (com ela, `ABERTOS` dava 0 e os
+quatro iam para o contador separado). Bateria sobre tenant **sintético**
+(`tenant_probe_fixture`, criado e apagado no mesmo script, com o `tenant_demo` conferido em
+2 376 antes e depois):
+
+| | fixture | rc | |
+|---|---|---|---|
+| aberto em sessão fechada | 1 segmento sem `ended_at` | **1** | reprova |
+| controle positivo | o mesmo segmento, fechado | **0** | verde |
+| tenant sem segmento | tabelas vazias | **2** | INCONCLUSIVO, nunca verde |
+
+⚠️ **A primeira tentativa da bateria saiu "FALHA" por defeito MEU, não do probe**, e vale
+registrar porque é o modo de falha da casa: passei o tenant como `TENANT=` (env), e este
+probe o toma por **argumento posicional** — ele mediu o `tenant_demo` e respondeu 0, um
+verde correto para a pergunta errada. Antes disso, o `INSERT` da sessão falhou por coluna
+inexistente (`started_at`; a tabela tem `opened_at`) e o fixture ficou sem sessão fechada
+nenhuma — de novo um 0 que parecia veredicto. Nos dois casos o número era plausível e a
+proposição não tinha sido medida.
+
 ## 2026-09-07 (16) — RSM-01: o `suspend` estendia quatro chaves da sessão, e não a que a retomada lê
 
 O token de resume vive `timeout_hours*3600 + 3600` (48 h no default). O
