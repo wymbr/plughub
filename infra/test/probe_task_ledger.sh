@@ -17,6 +17,20 @@
 #       nenhum, e o segundo caso e silencioso. Trocar status velho por tarefa
 #       sumida seria piorar.
 #
+#   (3) LEDGER PARADO — o terceiro, achado em 2026-09-07 ao ORGANIZAR a lista,
+#       nao ao mante-la. Os ramos A-F garantem que toda tarefa existe, uma vez
+#       so, com titulo honesto; nenhum deles pergunta se ela ainda pode ANDAR.
+#       Duas formas: um bloqueio cujo bloqueador ja fechou (ramo G, populacao
+#       medida = 1: a `MOD-07` esperou uma `AUT-01` fechada sete dias antes), e
+#       um `adiado` sem nenhuma condicao de retorno (ramo H, populacao 0 — e
+#       guarda, nao limpeza). Os dois moram em `_ledger_stall_audit.py`, porque
+#       a pergunta e por-CELULA e a ficha tem `|` no meio do texto.
+#
+#       ⚠️ O ramo H le a LINHA INTEIRA, e isso e cicatriz. A primeira medicao
+#       leu so a coluna de status e acusou ONZE fichas sem gatilho; as 38
+#       declaravam, espalhado por tres colunas (18 status · 6 ancora · 6 corpo).
+#       Censo desenhado para uma coluna nao prova nada sobre a vizinha.
+#
 # Nao precisa de stack de pe: le arquivo e o git. Falseabilidade conferida
 # apagando um id, duplicando um id e pondo "concluido" num titulo de grupo.
 #
@@ -100,6 +114,35 @@ if [ "$BADT" -gt 0 ]; then
 else
   echo "F. verde — nenhum titulo de grupo afirma status"
 fi
+
+# ------------------------------- ramos G e H: o ledger PARADO (ver cabecalho)
+# Auxiliar em Python de proposito: `grep` nao sabe qual `|` separa coluna.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "G/H. INCONCLUSIVO — python3 ausente; os dois ramos nao mediriam nada"
+  echo "======================"
+  exit 2
+fi
+
+STALL="$(dirname "$0")/_ledger_stall_audit.py"
+[ -f "$STALL" ] || { echo "INCONCLUSIVO: $STALL nao existe"; exit 2; }
+
+G_OUT="$(python3 "$STALL" G 2>&1)"; G_RC=$?
+case "$G_RC" in
+  0) echo "G. verde — nenhum bloqueio sobrevive ao proprio bloqueador"; echo "   $(printf '%s' "$G_OUT" | head -1)" ;;
+  1) echo "G. VERMELHO — bloqueio cujo bloqueador ja esta em $DONE:"; printf '%s
+' "$G_OUT" | sed 's/^/   /'; FAIL=1 ;;
+  *) echo "G. INCONCLUSIVO — o auditor nao mediu:"; printf '%s
+' "$G_OUT" | sed 's/^/   /'; FAIL=1 ;;
+esac
+
+H_OUT="$(python3 "$STALL" H 2>&1)"; H_RC=$?
+case "$H_RC" in
+  0) echo "H. verde — toda ficha nao-aberta declara como volta a andar"; echo "   $(printf '%s' "$H_OUT" | head -1)" ;;
+  1) echo "H. VERMELHO — adiado/bloqueado sem condicao de retorno em lugar nenhum:"; printf '%s
+' "$H_OUT" | sed 's/^/   /'; FAIL=1 ;;
+  *) echo "H. INCONCLUSIVO — o auditor nao mediu:"; printf '%s
+' "$H_OUT" | sed 's/^/   /'; FAIL=1 ;;
+esac
 
 echo "======================"
 [ "$FAIL" -eq 0 ] && { echo "VERDE"; exit 0; }

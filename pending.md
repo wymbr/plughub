@@ -182,7 +182,7 @@ de existir o veiculo tira a contratacao do supervisor sem dar nada em troca.
 | MOD-04 | **G3 — revogar `config.permissions`** de `supervisor@` e de quem mais o censo apontar, pela API oficial | `bloqueado` por MOD-03 | ADR fase G3 |
 | MOD-05 | **G4 — corte #1**: `contacts.operacao` -> `monitorar` x `atender`. Inclui backfill de todo portador do campo largo, senao o corte rebaixa em silencio | `aberto` | ADR D6 #1 |
 | MOD-06 | **G5 — cortes #2 e #3**: `workflows.operacao` (Editor x Monitor) e `config.resources` (Pools x Skills) | `bloqueado` por MOD-05 | ADR D6 #2/#3 |
-| MOD-07 | **G6 — corte #4**: recorte de `contacts.visualizar` por superficie de Analytics | `bloqueado` por AUT-01 | ADR D6 #4 |
+| MOD-07 | **G6 — corte #4**: recorte de `contacts.visualizar` por superficie de Analytics. ⚠️ **DESTRAVADA em 2026-09-07** — estava `bloqueado por AUT-01`, e a **AUT-01 fechou em 2026-08-31** (escopo de LINHA nos agregados da analytics-api). O bloqueio sobreviveu ao bloqueador por sete dias sem que nada pudesse ficar vermelho; quem passou a cobrar isso e o **ramo G** do `probe_task_ledger.sh`. Nao ha outro impedimento conhecido: os cortes #1..#3 sao das MOD-05/MOD-06 e sao independentes deste | `aberto` | ADR D6 #4 |
 
 ---
 

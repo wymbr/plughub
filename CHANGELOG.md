@@ -1,5 +1,74 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (15) — LDG-01: o ledger sabia que a tarefa EXISTE, não que ela ainda ANDA
+
+Veio de um pedido de organização (*"pode listar e organizar tarefas existentes?"*), não de
+manutenção — e é essa a parte que importa: **os ramos A–F do `probe_task_ledger.sh` garantem
+que toda tarefa existe, uma vez só, com título honesto, e nenhum deles pergunta se ela ainda
+pode andar.** Um ledger íntegro e parado passa nos seis.
+
+### 1 · O bloqueio que sobreviveu ao bloqueador
+
+`MOD-07` (*G6 — corte #4, recorte de `contacts.visualizar` por superfície de Analytics*) estava
+`bloqueado por AUT-01`. A **AUT-01 fechou em 2026-08-31** — o escopo de LINHA dos agregados da
+analytics-api, entrada (1) daquele dia. O bloqueio esperou **sete dias** por uma coisa que já
+tinha acontecido, e nada podia ficar vermelho: os dois arquivos estavam perfeitos, cada id no seu
+lugar, títulos sem status. Um bloqueio é uma **aresta**, e o ledger só conferia os **nós**.
+
+População medida do defeito: **1 em 38** não-abertas. Uma só — e é justamente por ser uma só que
+ninguém a acha lendo; é o tipo de coisa que só aparece quando alguém cruza as duas listas.
+
+### 2 · O achado que eu fabriquei, e o mecanismo que o refutou
+
+O mesmo levantamento acusou **onze fichas `adiado`/`bloqueado` sem gatilho escrito** — e a
+conclusão vinha com a moral pronta (*adiamento sem gatilho é o INCONCLUSIVO permanente do
+ledger*). **Estava errado.** Medido depois, na ficha inteira: **38 de 38** declaram a condição de
+retorno. O que eu li foi **uma coluna** — a de status — e as 38 escrevem a condição espalhada por
+**três**: 18 no status, **6 na âncora**, **6 no corpo da tarefa**.
+
+É o defeito que a § *Security* deste arquivo já cataloga por EIXO (*um censo desenhado para um
+eixo não prova nada sobre o eixo vizinho*), aqui uma casa abaixo — por **célula**. E o agravante é
+a forma: um censo parcial não devolve "não sei", devolve uma **lista de culpados**, que é
+indistinguível de um achado real para quem lê. O sintoma foi barato desta vez (onze fichas
+acusadas, zero editadas); o que o teria tornado caro era exatamente a etapa seguinte, "consertar"
+as onze escrevendo gatilho onde já havia.
+
+**A correção não foi disciplina de coluna, foi o ramo ler a LINHA INTEIRA.** Normalizar as três
+colunas seria pedir vigilância a cada ficha nova; ler a linha remove a exigência — a mesma escolha
+do corolário *"quando a correção pode ser marcar cada caso ou remover a alternativa, a segunda é a
+que não depende de memória"*.
+
+### 3 · Os dois ramos, e por que as populações são opostas
+
+| ramo | proposição | população ao nascer |
+|---|---|---|
+| **G** | nenhum bloqueio sobrevive ao próprio bloqueador | **1** (`MOD-07`) — é limpeza |
+| **H** | toda ficha não-aberta declara como volta a andar | **0** (38/38) — é guarda |
+
+Estão em `infra/test/_ledger_stall_audit.py`, não em `grep`, porque a pergunta é **por célula** e a
+ficha tem `|` no meio do texto — qual `|` separa coluna não é decidível por linha.
+
+⚠️ **O ramo H não julga a QUALIDADE do gatilho**, e isso é decisão: ele reprova a ausência total,
+que é verificável; *"este gatilho é bom?"* não é. O vocabulário é largo de propósito — falso
+negativo aqui é barato (passa um gatilho ruim), falso positivo seria caro (ensina todo mundo a
+ignorar o gate, que é pior que gate nenhum).
+
+⚠️ **Zero fichas não-abertas não é verde, é `INCONCLUSIVO`** — verde por ausência de amostra é o
+modo de falha do catálogo, e o auditor sai 2 nesse caso.
+
+### Falseabilidade
+
+O ramo G **reproduziu o defeito antes do conserto**: rodado com a `MOD-07` ainda bloqueada, saiu
+VERMELHO nomeando-a; com ela aberta, verde. O ramo H nasceu com população zero e por isso precisou
+de mutação — bateria de **dez** casos sobre cópia dos dois arquivos, todos no comportamento
+esperado: bloqueador fechado reprova · bloqueador **vivo** não reprova · `adiado` pelado reprova ·
+gatilho **no corpo** não reprova · gatilho **na âncora** não reprova (os dois últimos são a
+cicatriz do §2, virada teste) · ficha `aberto` pelada não reprova em nenhum dos dois · ledger sem
+fichas sai INCONCLUSIVO.
+
+`probe_task_ledger.sh`: A–F verdes como antes, G e H verdes depois da `MOD-07`; manifesto intacto
+(300 scripts, cobertura 66%).
+
 ## 2026-09-07 (14) — GAT-03 (b): os oito não-triados, e sete eram do INSTRUMENTO
 
 A metade (a) fechou os cinco que viviam DENTRO do manifesto. Esta fecha os oito que estavam
