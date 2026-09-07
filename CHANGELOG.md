@@ -1,5 +1,62 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (3) — RET-03: o token do chamador morre com o contato
+
+Fecha a D7 do `adr-tree-return-continuation.md`, que nao era detalhe de limpeza: **decorre da D6**.
+
+Aquela decisao admite que o agente CHAMADO encerre o contato, e o motivo, nas palavras do dono, e
+que **casos de finalizacao por erro tem que estar tratados de qualquer forma** — falha de MCP, pool
+indisponivel, excecao. Um desenho em que o chamado nunca termina seria falso no primeiro incidente.
+
+Mas encerrando sem devolver, o token do CHAMADOR nunca e consumido: o `pipeline_state` fica suspenso
+no Redis, a entrada fica no hash, e o timeout scanner — que so olha PRAZO — acaba chamando
+`handle_resume` numa sessao ja fechada. O orquestrador tentaria continuar um contato que acabou.
+
+### Duas defesas, e elas nao se substituem
+
+**(1) Cancelamento no fechamento.** `cancel_pending_resumes` vive no dono dos tokens e e chamado de
+**UM lugar**: o consumidor de `session.closed`, que ve todo canal. ⚠️ Um gancho por adapter seriam N
+ganchos, e o esquecido reabre o buraco — a mesma razao pela qual a borda do gateway e allowlist e nao
+proibicao. ⚠️ E o gancho vem **ANTES** das guardas de `contact_id`/`channel`/adapter, de proposito: o
+cancelamento e sobre a SESSAO, nao sobre a entrega ao canal, e um fechamento em canal sem adapter
+registrado ainda tem de limpar (o ramo B do gate cobra a ordem das linhas).
+
+**(2) Guarda no scanner.** Rede de seguranca para o token que escapou e para o **passivo**, que o
+cancelamento nao alcanca. ⚠️ So decide sobre token **JA VENCIDO**, e e isso que torna seguro usar a
+ausencia do `session:{id}:meta` como sinal: aquele meta tem TTL proprio (~6 h, medido) e poderia
+expirar antes de um delegate longo — mas naquele ponto o token ia ser consumido de qualquer forma, e
+a escolha e entre RETOMAR e APAGAR, nunca entre manter e apagar.
+
+### O caso que carrega peso e o CONTROLE POSITIVO
+
+Nao e *"apaga o token da sessao que fechou"* — e **o token de OUTRA sessao sobrevive**. Uma
+implementacao que limpasse o hash inteiro passaria no teste obvio e derrubaria todo `delegate`
+pendente do tenant, com contatos alheios caindo no `on_timeout` sem ninguem relacionar as duas
+coisas.
+
+Junto com ele, o caso do `session_id` que e **prefixo** de outro: comparar por prefixo de string
+apagaria `sess-10` ao fechar `sess-1`. A comparacao e do PRIMEIRO CAMPO inteiro.
+
+E a falha de leitura degrada **barulhento**: deixa o token vivo, o dano volta, e o log diz isso —
+mas nao aborta o fechamento por causa de uma limpeza.
+
+### Gate
+
+`infra/test/probe_resume_token_cancel.sh`, 4 ramos: metodo + chamador unico · a **ordem** das linhas
+(gancho antes da guarda de canal) · o scanner descartando em vez de retomar, com log que nomeia · e a
+suite de unidade rodando **na IMAGEM**, nunca no container com `docker cp` — `up -d` recria a partir
+da imagem, e teste que so passa no container e estado herdado.
+
+### Arquivos
+
+- `adapters/webhook.py` — `cancel_pending_resumes` + guarda no `_scan_expired_resume_tokens`
+- `outbound_consumer.py` — o gancho unico, antes das guardas
+- `tests/test_ret03_cancel_resumes.py` (novo, 7) · `probe_resume_token_cancel.sh` · `gates.manifest`
+
+750 testes do channel-gateway verdes. `channel-gateway` reconstruido.
+
+---
+
 ## 2026-09-07 (2) — RET-04: o ciclo tem fim, e a tarefa achou o defeito que o impedia de girar
 
 O teto era a tarefa. Ao desenha-lo apareceu que o ciclo **nao giraria** de qualquer forma — e nao

@@ -170,6 +170,12 @@ probe_orchestrator_delegate_verb.sh
 # volta, dando laco infinito com `max_iterations` declarado ao lado. O ramo C existe
 # porque a lista de limpeza JA nasceu incompleta uma vez (so a familia do invoke).
 probe_delegate_cycle_cap.sh
+# RET-03: o resume_token do CHAMADOR morre com o contato. A D6 do ADR admite que o
+# agente chamado encerre -- porque finalizacao por ERRO existe de qualquer forma --, e
+# ai o token nunca e consumido e o scanner de prazo acaba retomando uma sessao fechada.
+# Duas defesas que nao se substituem: cancelamento no fechamento (um lugar, o consumidor
+# de session.closed, que ve todo canal) e guarda no scanner (rede para o passivo).
+probe_resume_token_cancel.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh

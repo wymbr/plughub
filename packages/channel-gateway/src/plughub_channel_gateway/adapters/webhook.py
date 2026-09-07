@@ -2985,6 +2985,75 @@ class WebhookAdapter(ChannelAdapter):
     # Timeout scanner (Arc 19 Fase D) — expira suspends/delegates vencidos
     # ──────────────────────────────────────────────────────────────────────────
 
+    async def cancel_pending_resumes(self, tenant_id: str, session_id: str) -> int:
+        """
+        Invalida os resume_tokens de uma sessao que FECHOU (RET-03 / D7 do ADR
+        `adr-tree-return-continuation.md`). Devolve quantos apagou.
+
+        ── Por que isto existe, e por que nao e opcional ────────────────────────
+
+        A D6 daquele ADR admite que o agente CHAMADO encerre o contato — e a
+        razao nao e conveniencia: **finalizacao por erro existe de qualquer
+        forma** (falha de MCP, pool indisponivel, excecao), entao um desenho em
+        que o chamado nunca termina seria falso no primeiro incidente.
+
+        Mas quando ele encerra sem devolver, o token do CHAMADOR nunca e
+        consumido: o `pipeline_state` fica suspenso, a entrada fica no hash, e o
+        timeout scanner — que so olha PRAZO — acaba chamando `handle_resume` numa
+        sessao que ja fechou. O orquestrador tentaria continuar um contato que
+        acabou.
+
+        ⚠️ **Chamado de UM lugar: o consumidor de `session.closed`.** Um gancho
+        por adapter seriam N ganchos, e o esquecido reabre o buraco inteiro —
+        mesma razao pela qual a borda do gateway e allowlist e nao proibicao.
+
+        ⚠️ **Degrada BARULHENTO.** Falhar aqui deixa o token vivo, e o dano volta;
+        o log nomeia a sessao para que o resto do fechamento nao seja abortado
+        por causa de uma limpeza.
+        """
+        hash_key = f"{tenant_id}:resume_tokens"
+        try:
+            entries = await self._redis.hgetall(hash_key)
+        except Exception as exc:
+            logger.warning(
+                "cancel_pending_resumes: nao li %s (session=%s): %s — "
+                "token(s) podem sobreviver ao fechamento",
+                hash_key, session_id, exc,
+            )
+            return 0
+
+        alvos: list[str] = []
+        for raw_token, raw_value in (entries or {}).items():
+            token = raw_token if isinstance(raw_token, str) else raw_token.decode()
+            value = raw_value if isinstance(raw_value, str) else raw_value.decode()
+            # value: {session_id}:{step_id}:{expires_at_iso} — compara o PRIMEIRO
+            # campo inteiro, nunca por prefixo de string: um session_id que seja
+            # prefixo de outro apagaria token alheio.
+            if value.split(":", 1)[0] == session_id:
+                alvos.append(token)
+
+        if not alvos:
+            return 0
+
+        apagados = 0
+        for token in alvos:
+            try:
+                await self._redis.hdel(hash_key, token)
+                await self._redis.delete(_resume_meta_key(tenant_id, token))
+                apagados += 1
+            except Exception as exc:
+                logger.warning(
+                    "cancel_pending_resumes: falhei em apagar token=%s (session=%s): %s",
+                    token, session_id, exc,
+                )
+
+        logger.info(
+            "cancel_pending_resumes: session=%s tenant=%s — %d token(s) invalidado(s) "
+            "no fechamento (o chamador nao sera retomado num contato encerrado)",
+            session_id, tenant_id, apagados,
+        )
+        return apagados
+
     async def run_timeout_scanner(self, interval_s: int = 60) -> None:
         """
         Background task: expira tokens de resume vencidos.
@@ -3032,6 +3101,33 @@ class WebhookAdapter(ChannelAdapter):
                     continue
                 if now <= expires_at:
                     continue
+                # ── RET-03: a sessao ainda existe? ───────────────────────────
+                # Rede de seguranca para o token que escapou do cancelamento no
+                # fechamento — e para o PASSIVO, que o cancelamento nao alcanca.
+                # Retomar aqui faria o chamador continuar um contato encerrado.
+                #
+                # ⚠️ So decide sobre token JA VENCIDO, e isso e o que torna seguro
+                # usar a ausencia do meta como sinal: `session:{id}:meta` tem TTL
+                # proprio (~6 h) e poderia expirar antes de um delegate longo, mas
+                # neste ponto o token ia ser consumido de qualquer forma — a
+                # escolha e entre RETOMAR e APAGAR, nunca entre manter e apagar.
+                try:
+                    vive = await self._redis.exists(f"session:{parts[0]}:meta")
+                except Exception:
+                    vive = 1  # duvida ⇒ segue o caminho antigo, que e o conhecido
+                if not vive:
+                    try:
+                        await self._redis.hdel(key, token)
+                        await self._redis.delete(_resume_meta_key(tenant_id, token))
+                    except Exception:
+                        pass
+                    logger.info(
+                        "webhook timeout scanner: token de sessao MORTA descartado sem "
+                        "retomar — session=%s step=%s tenant=%s deadline=%s",
+                        parts[0], parts[1], tenant_id, parts[2],
+                    )
+                    continue
+
                 logger.info(
                     "webhook timeout scanner: expiring token session=%s step=%s tenant=%s deadline=%s",
                     parts[0], parts[1], tenant_id, parts[2],

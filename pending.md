@@ -339,7 +339,6 @@ seguem sem tarefa aberta neste ledger.)*
 
 | id | o que falta | estado | ancora |
 |---|---|---|---|
-| RET-03 | **R3 — cancelar `resume_token` pendente no fechamento do contato.** Decorre da D6 e **nao e opcional**: chamado que encerra sem devolver deixa o `pipeline_state` do chamador suspenso no Redis e o token no hash, e o timeout scanner tenta retomar **uma sessao que ja fechou**. O segmento nao e o problema (o chamador ja fechou o dele ao delegar); o problema e estado morto com scanner ativo em cima | `aberto` | destravada pela RET-02 (2026-09-07) |
 | RET-05 | **R5 — `menu_resolucao` e `menu_continuar` viram questions de continuacao**, e o `navigation_pools` ganha os prefixos (D5). E a metade da CTR-04 que ficou parada por nao haver dono para receber a pergunta. ⚠️ `sac.menu_motivo` **NAO entra**: fica por decisao, porque `sac_ia` tem porta propria de canal ⚠️ **E a RET-05 e quem LIGA o ciclo** — hoje 0 de 14 formas declaram `on_return`, entao o mecanismo esta inteiro e inerte. Com o teto (RET-04) e o cancelamento (RET-03) no lugar, ligar deixa de ser laco sem fim | `aberto` | destravada pela RET-04 (2026-09-07) |
 ## `docs/arcos/arc12-agent-business-events.md` — eventos de negocio do agente
 

@@ -42,6 +42,32 @@ class OutboundConsumer:
         self._adapters  = adapters
         self._settings  = settings
 
+    async def _cancelar_resumes_pendentes(self, payload: dict) -> None:
+        """Delega ao dono dos tokens. Nunca aborta o fechamento por causa disto."""
+        session_id = payload.get("session_id")
+        tenant_id  = payload.get("tenant_id") or getattr(self._settings, "tenant_id", "")
+        if not session_id or not tenant_id:
+            logger.warning(
+                "RET-03: session.closed sem session_id/tenant_id (session=%r tenant=%r) — "
+                "resume_tokens NAO invalidados; o scanner pode tentar retomar um contato encerrado",
+                session_id, tenant_id,
+            )
+            return
+        alvo = self._adapters.get("webhook")
+        cancelar = getattr(alvo, "cancel_pending_resumes", None)
+        if cancelar is None:
+            logger.warning(
+                "RET-03: adapter `webhook` ausente ou sem cancel_pending_resumes — "
+                "resume_tokens da sessao %s NAO invalidados", session_id,
+            )
+            return
+        try:
+            await cancelar(tenant_id, session_id)
+        except Exception as exc:
+            logger.warning(
+                "RET-03: cancelamento de resume_tokens falhou (session=%s): %s", session_id, exc,
+            )
+
     async def run(self) -> None:
         consumer = AIOKafkaConsumer(
             self._settings.kafka_topic_outbound,
@@ -69,6 +95,18 @@ class OutboundConsumer:
         msg_type   = payload.get("type")
         contact_id = payload.get("contact_id")
         channel    = payload.get("channel")
+
+        # ── RET-03: fechou a sessao ⇒ invalida os resume_tokens dela ──────────
+        #
+        # ANTES das guardas de `contact_id`/`channel`/adapter, de proposito: o
+        # cancelamento e sobre a SESSAO, nao sobre a entrega ao canal. Um
+        # fechamento de canal sem adapter registrado ainda tem de limpar o token,
+        # senao o buraco volta pela porta menos vigiada.
+        #
+        # ⚠️ UM lugar, e nao um gancho por adapter: `session.closed` chega aqui
+        # para todo canal, e N ganchos e o esquecido reabrindo tudo.
+        if msg_type == "session.closed":
+            await self._cancelar_resumes_pendentes(payload)
 
         if not contact_id or not channel:
             if msg_type or channel:
