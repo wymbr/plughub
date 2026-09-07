@@ -189,7 +189,14 @@ steps:
   # diretamente ou escala para humano.
   - id: acusar_recebimento
     type: notify
-    message: "✅ Problema registrado! Nossa equipe de suporte técnico irá analisar e retornar em até 2 horas úteis. Enquanto isso, posso te ajudar com mais alguma coisa?"
+    # ⚠️ A frase terminava em *"Enquanto isso, posso te ajudar com mais alguma
+    # coisa?"* e foi removida em 2026-09-07, com o ciclo da RET-05 ja no ar:
+    # um `notify` NAO COLETA, entao a pergunta ficava sem quem a respondesse.
+    # Com chamador, o orquestrador abria em seguida um menu com a MESMA frase
+    # (visto em contato real); sem chamador, quem pergunta e o `menu_resolucao`
+    # logo abaixo. Redundante nos dois caminhos — nao e o caso do `menu_motivo`,
+    # que fica porque o pool tem porta propria.
+    message: "✅ Problema registrado! Nossa equipe de suporte técnico irá analisar e retornar em até 2 horas úteis."
     on_success: continuar_ou_devolver
     on_failure: continuar_ou_devolver
 

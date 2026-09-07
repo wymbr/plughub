@@ -1,5 +1,374 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (9) — RET-07: o arco VALIDADO em contato real, e o preço da D2 refutado
+
+O dono exercitou o arco inteiro com cliente do outro lado: **vários ciclos de continuação**, depois
+**escalate para humano com NPS e wrap-up**. `folha → agente → menu → folha → humano → hooks` roda
+ponta a ponta. A R2–R5 do `adr-tree-return-continuation.md` saiu do gate para a produção.
+
+### A pergunta da RET-07 tinha uma premissa falsa
+
+O ADR declarava o preço da D2 assim: *"sem switch, 'resolvi' e 'não consegui' apontam para a MESMA
+continuação"*. **Medido: não apontam.** O step `delegate` tem TRÊS arestas e os quatro executores já
+as usam:
+
+| devolve | `decision` | vai para |
+|---|---|---|
+| resolvido | `input` | `on_resume` → `continuar` → menu |
+| precisa humano · identidade não verificada | `rejected` | `on_reject` → `escalar_humano` |
+| timeout | `timeout` | `on_timeout` → `escalar_humano` |
+
+**Só o sucesso alcança a continuação.** O switch que a D2 recusou *no JSON* já existia *no YAML* —
+exatamente onde o invariante do `DialogFormSchema` diz que controle mora. A D2 não pagou o preço que
+declarou; ela o transferiu para a casa certa, e a casa certa já estava ocupada. Correção escrita no
+ADR.
+
+### O que estava estranho de verdade, e era conteúdo
+
+Uma pergunta feita duas vezes seguidas, visível na captura do contato real:
+
+```
+SAC:          "…retornar em até 2 horas úteis. Enquanto isso, posso te ajudar com mais alguma coisa?"
+Orquestrador: [menu] "Posso te ajudar em mais alguma coisa?"
+```
+
+Duas mudanças, **ambas de conteúdo, nenhuma de mecanismo**:
+
+- `skill_atendimento_sac_v1.acusar_recebimento` perdeu a pergunta final. Um `notify` **não coleta** —
+  a pergunta ficava sem quem a respondesse. Com chamador ela duplicava; sem chamador quem pergunta é
+  o `menu_resolucao` logo abaixo. Redundante nos dois caminhos, o que a distingue do `menu_motivo`
+  (que fica porque o pool tem porta própria).
+- `pos_atendimento` deixou de ecoar a mesma frase: *"Tudo certo por aqui. O que mais posso fazer por
+  você?"* — e some a repetição literal na terceira volta do ciclo.
+
+### O que eu deliberadamente NÃO construí
+
+`auth_sac_ia` devolve `proximo: "sac"` (proposta explícita) e `motivo: cliente_encerrou`, e ninguém
+os lê. O dado já chega ao fluxo (`$.pipeline_state.delegar.*`), então o consumo seria só YAML.
+
+**Não foi feito, e o motivo é medição:** `auth_sac_ia` tem **zero segmentos** na história — seria
+mecanismo para caminho que nunca rodou, o mesmo erro que a análise das CTR apontou. E ler o `proximo`
+abre um caso de demanda com **origem PROCESSO** que a CTR-05 ainda não decidiu; emiti-lo sem
+distinguir poluiria a série que a F1 criou. Registrado como `RET-10`, com gatilho: o primeiro contato
+real naquele pool, ou a CTR-05 fechar.
+
+⚠️ **O nó `output` continua recusado, agora com um motivo a mais**: a discriminação por resultado já
+vive na aresta do `delegate`. Acrescentá-la ao JSON seria a terceira casa da mesma decisão — o padrão
+que custou três defeitos neste mesmo dia.
+
+### As-built
+
+- `packages/skill-flow-engine/skills/skill_atendimento_sac_v1.yaml` — publicado + promovido em
+  `sac_ia` (22 steps, 3 devoluções), conferido no snapshot VIVO.
+- `infra/dialog/dialog_navegacao_atendimento_v1.json` — forma **v4**, conferida no publicado.
+- `docs/adr/adr-tree-return-continuation.md` § D2 — a correção do preço.
+
+## 2026-09-07 (8) — RET-09: duas casas decidiam "o contato acabou?", e discordavam
+
+Terceiro defeito do dia achado por contato real, e o **terceiro do mesmo padrão**: uma pergunta
+respondida em dois lugares.
+
+### O ciclo, antes de tudo: VALIDADO
+
+Antes deste defeito, o dono exercitou *"Tenho outro assunto"* em várias voltas seguidas, com cliente
+do outro lado. `folha → agente → menu → folha` roda ponta a ponta, e o teto de iterações
+(`max_iterations: 5`, RET-04) saiu do papel pela primeira vez. **A R2–R5 do
+`adr-tree-return-continuation.md` está provada em produção**, não só em gate.
+
+### O defeito
+
+```python
+# process_routed  — o caminho de SEMPRE
+_escalation_outcomes = ("escalated_human", "escalated_ai", "transferred", "suspended")
+if not conference_id and _ai_outcome not in _escalation_outcomes: ...fecha...
+
+# session_resumed — o caminho do RESUME
+if _ai_outcome != "suspended":                      # ← UM elemento
+    _spawn(_trigger_contact_close(...))
+```
+
+O caminho do resume nasceu para o Arc 19, onde um workflow retomado termina em `complete`. **Fluxo
+retomado que termina em `escalate` não existia** — passou a existir quando a RET-02 deu `delegate` ao
+orquestrador. A partir dali o desfecho passou a depender de por onde o fluxo chegou:
+
+| escalate | passa por | lista | resultado |
+|---|---|---|---|
+| sem `delegate` antes | `process_routed` | 4 outcomes | contato **segue** ✅ |
+| depois de `delegate` | `session_resumed` | 1 outcome | contato **fecha** ❌ |
+
+Medido no contato `13484fe6` — o fechamento vence a alocação por **30 ms**:
+
+```
+12:11:41,658  outcome=escalated_human
+12:11:41,660  _close_contact_layer                      ← fecha
+12:11:41,668  Activating queue agent → retencao_humano  ← e só então enfileira
+12:11:41,690  outcome=abandoned wait_ms=21
+```
+
+⚠️ **O comentário do caminho certo já dizia o motivo** — *"a sessão continua com outro agente; fechar
+aqui causaria race condition"* — e a outra casa não o lia. Comentário não é mecanismo: é a mesma
+família do DDL de `participation_intervals` e do docstring do `queue_wait_segment_id`.
+
+### Exposição × dano, medidos separados
+
+**3 de 31** deploys vivos são retomáveis **e** escalam (`demo_ia`, `demo_llm_ia`, `limite_ia`). Dano
+**confirmado em 2 contatos**, ambos de hoje. `limite_ia` escalou **uma vez** na história e foi pelo
+caminho não-resume, chegando ao SAC — lá é exposição, não dano. São dois números porque são dois
+fatos.
+
+### O conserto: predicado, não constante
+
+`contato_encerra_com(outcome)` em `main.py`, e os dois call sites passam por ele. **Predicado e não
+constante compartilhada** porque constante ainda admite que alguém escreva a comparação de um jeito
+novo — e este é o terceiro caso do dia.
+
+⚠️ **Ausência ENCERRA**, e está declarado: outcome vazio é fluxo que terminou sem se declarar, e
+manter o contato aberto ali o deixaria pendurado até o TTL com o cliente olhando uma tela muda.
+
+### As-built
+
+- `packages/orchestrator-bridge/.../main.py` — `_OUTCOMES_QUE_NAO_FECHAM` + `contato_encerra_com`,
+  usados em `process_routed` e em `session_resumed`.
+- `tests/test_contact_close_outcomes.py` — 14 casos. O par load-bearing é `escalated_human` (não
+  fecha) × `escalated` (fecha), lado a lado: uma implementação por `startswith` passaria no resto.
+- Gate: `infra/test/probe_contact_close_outcomes.sh` — **A** censo AST (toda condição cujo corpo
+  fecha o contato decide pelo predicado) · **B** a lista não foi aparada · **C** mutação que injeta
+  uma terceira casa. ⚠️ AST e não `grep`: `"suspended"` também aparece em comentário, log e numa
+  comparação legítima de outro assunto (o ramo que publica `session_suspended`).
+
+## 2026-09-07 (7) — RET-08: `category_path` era composto em duas casas, e só uma era o runtime
+
+**O segundo contato real encontrou o defeito que o primeiro não podia alcançar.** Com a RET-06 no ar
+a continuação finalmente apareceu — *"Posso te ajudar em mais alguma coisa?"* com as três opções. Aí
+**qualquer** escolha derrubava o contato na fila humana.
+
+### O diagnóstico
+
+`dialog_tree_level` compunha `category_path: nivel.path.join(".")` para **toda** question. Na
+continuação a trilha é `["outra_coisa"]`, então a medição saía `outra_coisa` — enquanto o fluxo
+comparava com o literal `pos_atendimento.outra_coisa` e o `navigation_pools` declarava
+`pos_atendimento.especialista`.
+
+**Nenhum dos dois estava errado sozinho.** Eles compunham o mesmo caminho em **duas casas**, e só uma
+era o runtime. Consequência em cadeia, medida nos segmentos:
+
+```
+comando nao casa  ->  segue como DEMANDA  ->  pool_route_resolve recusa alto
+                                              (sem default, por decisao)
+                  ->  on_failure: escalar_humano  ->  fila sem humano  ->  abandoned
+```
+
+⚠️ **E *"falar com um especialista humano"* chegava ao destino CERTO pelo motivo ERRADO** — pela
+falha de rota, não pelo mapa. Um caminho que parece funcionar e não funciona é pior que um quebrado:
+ele teria sobrevivido a qualquer inspeção de tela.
+
+### Por que o gate da RET-05 ficou verde sobre isto
+
+O ramo B (`caminhos`) compunha os caminhos **prefixando o id da question** — a mesma regra do fluxo.
+Ou seja: o gate e o fluxo concordavam, e **a terceira casa (a tool) não estava na conversa**. Um
+censo desenhado sobre duas implementações não prova nada sobre a terceira; é a regra da § Security
+(*"um censo desenhado para um eixo não prova nada sobre o eixo vizinho"*) aplicada a composição de
+caminho.
+
+### A distinção que o conserto torna explícita: ENDEREÇO × MEDIÇÃO
+
+| campo | é | leva prefixo? |
+|---|---|---|
+| `path`, `leaves` | **endereço** — voltam para dentro da tool (`input.path` / `chosen_id`) | **não** |
+| `category_path`, `root_id` | **medição** — série do Arc 12 e chave do `navigation_pools` | **sim**, fora da entrada |
+
+Prefixar o endereço faria `optionsAtPath` procurar uma opção `pos_atendimento` na raiz, não achar, e
+devolver `found: false` — a navegação **reiniciaria parecendo certa**, o mesmo modo de falha que o
+split por ponto da F2 existe para impedir. Por isso o teste que guarda essa metade está na suíte.
+
+A raiz da continuação é o **id da question**, que é o que o `on_return` já nomeia — nenhum campo
+novo. E a question de **entrada não prefixa**: `sac.info_plano` é o que a série do Arc 12 já mede, e
+prefixá-la renomearia o histórico inteiro num deploy.
+
+### As-built
+
+- `packages/schemas/src/dialog-render.ts` — `categoryPathFor(entry, question, path)`, **uma casa**.
+- `packages/mcp-server-plughub/src/tools/dialog.ts` — `category_path` e `root_id` passam por ela.
+- `infra/test/fixtures/category_path_vectors.json` — **9 vetores compartilhados** entre o TypeScript
+  (`dialog-return.test.ts`) e o gêmeo Python (ramo D novo de `probe_tree_continuation.sh`), no mesmo
+  padrão do `verb_vectors.json`: paridade presumida entre linguagens já custou caro aqui. O par que
+  carrega peso é *mesma trilha, questions diferentes, saídas opostas*.
+- Suítes: schemas 52 (dialog-return 14 → 24) · mcp-server 287. Mutação (voltar ao `join` cru) derruba
+  **5**.
+
+### O que este contato provou de positivo
+
+`demo_ia primary seq=0 suspended` → `sac_ia specialist` → `demo_ia primary seq=1` **com o menu de
+continuação renderizado pelo orquestrador**. O ciclo do arco existe ponta a ponta; o que faltava era
+o caminho casar.
+
+## 2026-09-07 (6) — RET-06: `exists` sobre `$.` era sempre falso, e o contato real achou
+
+**O primeiro contato real do arco encontrou o defeito que cinco gates verdes não encontraram.**
+
+### O que o cliente viu, e o que era
+
+Cliente entra em `demo_ia`, escolhe *"Informações sobre o plano"*, o SAC responde — e o contato
+**encerra**, sem o menu de continuação. Parecia o agente terminando por conta própria.
+
+Não era. A trilha de segmentos mostra o modelo funcionando pela primeira vez na história do banco:
+
+```
+demo_ia  primary  seq=0  suspended   36 839 ms
+sac_ia   specialist      resolved         58 ms
+demo_ia  primary  seq=1  resolved          9 ms     ← RETOMOU
+```
+
+O orquestrador delegou, o especialista entrou como `specialist`, devolveu, e o chamador retomou. O
+`pipeline_state` mostra onde parou:
+
+```
+delegar    ->  continuar   resumed
+continuar  ->  finalizar   default        ← e o dado que a condição procurava ESTAVA lá:
+                                            "nivel": { "on_return": "pos_atendimento" }
+```
+
+### A causa: dois avaliadores, um `switch` cada
+
+`choice.ts` tem `evaluateCondition` (para `$.`) e `evaluateCtxCondition` (para `@ctx.`/`@segment.`).
+`exists` estava implementado **só no segundo**. No primeiro caía no `default` do switch e devolvia
+`false` — ou seja, **`operator: "exists"` sobre `$.pipeline_state.*` era sempre falso**.
+
+⚠️ **E o modo de falha é o pior do catálogo, porque não há erro em lugar nenhum:** condição sempre
+falsa não explode, ela vira o `default` do STEP — e o `default` quase sempre é um caminho legítimo.
+Aqui era `finalizar`, que o cliente lê como um fim normal.
+
+⚠️ **A restrição já existia como PROSA e não impediu nada.** O docstring do `ConditionSchema` dizia
+*"`exists` — tag presente no ContextStore"*, e o `field` aceita `$.` ou `@ctx.` no mesmo enum de
+operadores. Terceira ocorrência deste padrão neste repositório (DDL de `participation_intervals`,
+docstring do `queue_wait_segment_id`, e agora este).
+
+### Por que os gates da RET-05 não pegaram, e é falha de desenho de instrumento
+
+Eles conferiam que o ponteiro existe, que o destino devolve, que o caminho é pool ou comando, que o
+especialista pula o próprio menu. **Nenhum perguntava se a condição podia disparar** — todos mediam a
+proposição vizinha, que é exatamente o defeito que a § Postura cataloga.
+
+### Censo — e o colateral é de outro arco
+
+**3 condições mortas** em snapshots promovidos contra **16 vivas** (`@ctx`):
+
+| pool | step | consequência |
+|---|---|---|
+| `demo_ia` · `demo_llm_ia` | `continuar` | a continuação nunca ligava |
+| **`avaliacao_ia`** | `check_rag_needed` | **`search_knowledge` nunca rodou** — o avaliador do Arc 6 nunca carregou snippets |
+
+⚠️ **Ligar o terceiro é seguro por construção, e isso foi medido antes de consertar:**
+`search_knowledge` tem `on_success` **e** `on_failure` apontando para `evaluate`, então voltar a
+executá-lo não pode desviar o fluxo — o único efeito observável é `rag_snippets` chegando ao prompt,
+que é o que o autor declarou.
+
+### O conserto
+
+`case "exists": return fieldValue !== undefined` — **o critério é `undefined`, nunca truthiness**.
+`resolveJsonPath` usa `wrap: false`, então caminho ausente resolve para `undefined`; `null`, `0`,
+`false` e `""` são valores PRESENTES, que é a mesma semântica do ramo `@ctx.` (*"entry presente com
+qualquer valor"*). Truthiness faria um contador zerado desaparecer — a família do `if not x` × `is
+None`, e é esse o caso load-bearing da suíte (4 valores + a paridade entre os dois ramos),
+verificado por mutação.
+
+`confidence_gte` **continua sendo só de `@ctx.`**, por decisão declarada: `pipeline_state` não tem
+confiança a comparar.
+
+### As-built
+
+- `packages/skill-flow-engine/src/steps/choice.ts` — `exists` no avaliador de `$.`.
+- `packages/schemas/src/skill.ts` — a prosa virou tabela operador × ramo, apontando para o gate.
+- Testes: `src/__tests__/steps/choice.test.ts` 8 → 17 (232 na suíte do engine); mutação para
+  truthiness derruba 5.
+- Gate: `infra/test/probe_choice_operator_parity.sh` — **A** fonte (todo operador do enum tem `case`
+  no ramo do seu campo; a exceção é declarada COM MOTIVO) · **B** deploy vivo (77 condições
+  promovidas) · **C** mutação do B. A e B não se substituem: A pega o operador acrescentado a um ramo
+  só, B pega o YAML que usa combinação que o código nunca suportou. Os dois verificados por mutação.
+
+### O que ainda NÃO se sabe
+
+Se a continuação é **natural** para o cliente. O contato 2 (desfecho negativo) é o que julga o preço
+declarado da D2 — sem switch, *"resolvi"* e *"não consegui"* apontam para a mesma continuação. Isso
+segue por medir.
+
+## 2026-09-07 (5) — CTR-06: a cadeia `delegate → delegate` deixou de colidir
+
+Era o **risco número um** do `adr-tree-return-continuation.md`, registrado lá como questão ABERTA.
+
+### O defeito é de ESCOPO, e o invariante que ele viola já estava escrito
+
+`core.workflow.delegate_resume_token` é tag ÚNICA da sessão, e o token que ela carrega é fato da
+**ARESTA** (chamador → chamado). Guardar fato estreito em campo largo é exatamente a regra do
+`CLAUDE.md` — *"never store a narrower-scope fact in a wider-scope field"* —, e aqui ela cobra:
+
+```
+A delega a B   →  tag = T_A
+B delega a C   →  tag = T_B      ← T_A foi SOBRESCRITO
+C devolve a B  →  B lê a tag, acha T_B, e retoma A SI MESMO
+A nunca volta  →  contato pendurado até o `timeout_hours`
+```
+
+Modo de falha do pior tipo do catálogo: o cliente vê o especialista atender, o especialista encerra
+o próprio segmento, e **nada fica vermelho**.
+
+### O conserto tem duas metades, e sozinhas nenhuma serve
+
+1. **CAPTURAR** — ao nascer, o pipeline copia a tag para o próprio `pipeline_state`. Essa é a casa
+   mais estreita que conhece a aresta: para especialista de conferência o estado é isolado
+   (`{session}--seg--{iso}`, medido no bridge `main.py:1073`), e nascer é o único instante em que a
+   tag descreve com certeza a MINHA delegação — o `delegate_conference` a escreve logo antes de me
+   rotear.
+2. **RESTAURAR** — ao retomar (desempilhar), a tag volta a valer o token do MEU chamador.
+
+Capturar sem restaurar é uma chave que ninguém lê; restaurar sem capturar não tem o que escrever.
+
+⚠️ **É a metade 2 que dispensou migrar os 8 skills que leem a tag.** O nome volta a significar o que
+promete, e nenhum YAML mudou. A alternativa (chave privada + migrar os 8) trocaria fail-open por
+fail-closed em quem não fosse migrado.
+
+⚠️ **A chave do capturado é `_caller_resume_token`, FORA do padrão `{id}:__x__`** — a mesma lição da
+RET-04. Aquela família é apagada ao ENTRAR num step, e `delegate` é justamente o step em que se
+reentra: dentro do padrão, as duas metades se anulariam em silêncio.
+
+⚠️ **Dois escritores para uma chave** é o padrão que o `CLAUDE.md` manda desconfiar. Aqui eles não
+disputam por cadência: são as duas pontas de um protocolo de **PILHA** (o gateway escreve ao
+empilhar, o engine ao desempilhar). Por isso a restauração só grava **quando o valor difere**, e
+**loga quando grava** — cada linha dessas é uma colisão que existiu e foi reparada. Uma versão que
+gravasse sempre passaria em todos os testes positivos e transformaria a evidência em ruído; é o caso
+negativo que carrega peso na suíte, e ele foi verificado por mutação.
+
+### O critério de delegabilidade: tirar um sem apertar o outro abriria um buraco
+
+`decideVerb` perdeu o disqualificador `cadeia_delegate` — a cadeia deixou de ser fato do artefato.
+Mas `nao_retorna` perguntava *"existe um step com `tool: workflow_resume`?"*, **proposição adjacente**
+à que interessa: `agente_portabilidade_intake_v1` invoca a tool **cinco vezes** e nenhuma delas
+retoma o chamador — retoma um `suspend` PRÓPRIO (`$.pipeline_state.pendencia.resume_token`). Ele só
+não era delegável porque o outro critério vinha antes. Hoje o critério afere o **token**.
+
+Medido antes e depois, ao vivo: **4 de 6 destinos delegáveis nos dois estados** — nenhuma regressão,
+e `portabilidade_ia` agora recusado pelo motivo VERDADEIRO (`nao_retorna`).
+
+### Resíduo, nomeado
+
+`portabilidade_ia` **pode** devolver agora e ainda não devolve. Isso é a metade restante da CTR-04
+(fazê-lo executor), não um limite do modelo — e é o que mantém o ramo C do gate em INCONCLUSIVO
+quando não houver cadeia entre os destinos.
+
+### As-built
+
+- `packages/skill-flow-engine/src/engine.ts` — `_capturarTokenDoChamador` (ramo do pipeline novo) e
+  `_restaurarTokenDoChamador` (ramo da retomada), escrita com `merge: "overwrite"` porque quem
+  escreveu por cima gravou com a mesma confiança e `highest_confidence` faria um no-op silencioso.
+- `packages/mcp-server-plughub/src/tools/navigation.ts` — `decideVerb` com dois disqualificadores.
+- Testes: `src/__tests__/caller-token-chain.test.ts` (5, dois negativos load-bearing, duas mutações
+  verificadas) · `navigation.test.ts` (28, com o par *"retoma o chamador"* × *"retoma um suspend
+  próprio"*) · `infra/test/fixtures/verb_vectors.json` (12 vetores, paridade TS × Python).
+- Gate: `infra/test/probe_caller_token_chain.sh` (3 ramos). ⚠️ O ramo C pergunta ao **`dist` que está
+  de pé**, nunca só ao fonte — é a lição do `max_iterations` que a API deu strip na RET-04, e ele
+  ficou **vermelho de verdade** antes do rebuild.
+- Gates ajustados: `probe_orchestrator_delegability.sh`, `probe_orchestrator_delegate_verb.sh`.
+
 ## 2026-09-07 (4) — RET-05: o ciclo ligado, e o gate que estava certo
 
 Ultima fase do `adr-tree-return-continuation.md`, e a **primeira entrega do arco que o cliente ve**.
@@ -1824,7 +2193,8 @@ Ramo **E** acrescentado — consulta a árvore como a lente consulta, e exige qu
 própria época declara. Sob a mutação ele nomeia as duas épocas (`diz ter 2 evento(s), mas a árvore nos
 SEUS limites veio VAZIA` · `24 declarado(s), 23 na árvore`). Dois modos de falha do próprio gate foram
 consertados no caminho, e os dois davam vermelho pela razão errada: `+00:00` cru na query string decodifica
-como **espaço** (agora `quote()`), e um `` invisível do python de Windows fazia a comparação numérica
+como **espaço** (agora `quote()`), e um `
+` invisível do python de Windows fazia a comparação numérica
 falhar com os dois lados imprimindo o mesmo número.
 
 ### E a lente não tinha dono do scroll

@@ -75,6 +75,23 @@ economia não é de linhas; é de não mexer numa regra que protege o `DialogFor
 continuação. A discriminação por resultado passa a viver no AGENTE (D6), não na árvore — ele escala
 quando falha e devolve quando resolve. É consistente, e é consequência direta desta escolha.
 
+> ✅ **CORREÇÃO medida em 2026-09-07 — o preço acima é MENOR do que este parágrafo afirma, e a
+> diferença importa.** *"Resolvi"* e *"não consegui"* **não** apontam para a mesma continuação: o
+> step `delegate` tem TRÊS arestas (`on_resume` · `on_reject` · `on_timeout`) e os quatro executores
+> já as usam — `decision: "input"` para resolvido, `"rejected"` para *precisa humano* /
+> *identidade não verificada*, `"timeout"` para prazo. No orquestrador, `on_reject` e `on_timeout`
+> vão a `escalar_humano`; **só o sucesso alcança a question de continuação**.
+>
+> Ou seja: o switch que a D2 recusou **no JSON** já existe **no YAML**, que é exatamente onde o
+> invariante do `DialogFormSchema` diz que controle mora. A escolha da D2 não pagou o preço que ela
+> declarou — ela o transferiu para a casa certa, e a casa certa já estava ocupada.
+>
+> **O que sobra de real** (medido nos retornos publicados, todos no ramo do SUCESSO): `auth_sac_ia`
+> devolve `payload.proximo: "sac"` — proposta explícita — e ninguém a lê; e `devolver_encerrado`
+> manda `motivo: cliente_encerrou` com `decision: "input"`, então a continuação pergunta *"mais
+> alguma coisa?"* a quem acabou de dizer que terminou. Os dois são do `auth_sac_ia`, que tem **zero
+> segmentos** na história — exposição sem dano. Registrados como `RET-10`.
+
 ### D3 — Questions identificadas, `main` é a entrada
 
 O form de navegação passa a declarar N questions no topo. A executada quando o form é chamado é
@@ -201,7 +218,8 @@ registrar um reembolso veria o mesmo menu de quem acabou de entrar.
 | **R5** | Migrar `menu_resolucao` e `menu_continuar` para questions de continuação; `navigation_pools` ganha os prefixos (D5) | R2 |
 
 > **Por que a R2 precisa do verbo DERIVADO, e não de um `delegate` único:** 2 dos 6 destinos não são
-> delegáveis — `portabilidade_ia` (`cadeia_delegate`) e `retencao_humano` (`sem_deploy`). Um
+> delegáveis — `portabilidade_ia` (`nao_retorna` desde a CTR-06; era `cadeia_delegate`) e
+> `retencao_humano` (`sem_deploy`). Um
 > `delegate` para `$.pipeline_state.rota.pool` penduraria o contato de portabilidade. O critério já
 > existe e é derivado do artefato: `probe_orchestrator_delegability.sh`.
 
@@ -209,10 +227,16 @@ registrar um reembolso veria o mesmo menu de quem acabou de entrar.
 
 ## Riscos e questões abertas
 
-- **`portabilidade_ia` vira folha POR DEFEITO, não por desenho.** É um agente de IA que deveria ser
-  continuável e não pode devolver (o token único da sessão colide — CTR-06). Sob este ADR isso deixa
-  de ser um caso esquisito e vira **inconsistência visível**: um nó que parece continuável e não é.
-  A CTR-06 sobe de prioridade.
+- ~~**`portabilidade_ia` vira folha POR DEFEITO, não por desenho.**~~ ✅ **A CAUSA caiu em
+  2026-09-07 (CTR-06)**, e o resíduo mudou de natureza. O token do chamador é fato da ARESTA e vivia
+  numa tag ÚNICA da sessão; hoje o engine o captura no nascimento do pipeline (isolado por segmento)
+  e o restaura na retomada, então delegar por dentro **não** sobrescreve mais o token de quem chamou.
+  `portabilidade_ia` continua não-delegável, mas pelo motivo VERDADEIRO — `nao_retorna`, porque ele
+  ainda não devolve o controle. Isso é a metade restante da CTR-04, não um limite do modelo.
+  ⚠️ **Tirar o `cadeia_delegate` sozinho teria aberto um buraco:** `nao_retorna` perguntava *"existe
+  um step com `tool: workflow_resume`?"* — proposição ADJACENTE. `agente_portabilidade_intake_v1`
+  invoca a tool **cinco vezes** e nenhuma delas retoma o chamador (retoma um `suspend` PRÓPRIO); ele
+  só era barrado porque o outro critério vinha antes. O critério agora afere o TOKEN.
 - **O eixo de demanda vira N por contato.** Deixa de ser uma marca. `branch_marks` × `branch_contacts`
   sai de curiosidade e vira leitura obrigatória — a árvore já sabe contar as duas, os consumidores
   ainda leem como se fosse uma. A D5 mitiga (separa entrada de continuação), não resolve.

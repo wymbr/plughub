@@ -288,8 +288,10 @@ protocolo.
 > devolver com a sua `decision`. Isso é o corpo da G4, não um detalhe da G3.
 >
 > O que a G3 entregou nesta rodada foi o **instrumento**:
-> `infra/test/probe_orchestrator_delegability.sh` mede a delegabilidade por destino, com os três
-> disqualificadores nomeados (`sem_deploy` · `nao_retorna` · `cadeia_delegate`), e **trava**
+> `infra/test/probe_orchestrator_delegability.sh` mede a delegabilidade por destino, com os
+> disqualificadores nomeados (`sem_deploy` · `nao_retorna`; o terceiro, `cadeia_delegate`, SAIU na
+> CTR-06 — o engine passou a reparar a cadeia, e no mesmo movimento o `nao_retorna` deixou de medir
+> a presença da tool para medir o TOKEN do chamador), e **trava**
 > orquestrador que delegue a alvo não-delegável — inclusive quando o `pool` é uma ref, caso em que
 > cobra o mapa inteiro, porque o alvo é decidido em runtime. É ele que dirá quando a G3 destrava.
 

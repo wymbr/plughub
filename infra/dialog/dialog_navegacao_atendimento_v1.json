@@ -103,7 +103,7 @@
       "id": "pos_atendimento",
       "kind": "question",
       "prompt": {
-        "pt-BR": "Posso te ajudar em mais alguma coisa?"
+        "pt-BR": "Tudo certo por aqui. O que mais posso fazer por você?"
       },
       "interaction": "list",
       "output_key": "pos_atendimento",

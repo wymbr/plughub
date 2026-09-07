@@ -38,6 +38,11 @@ _TODOS = {
         ("packages/skill-flow-engine/skills/skill_atendimento_sac_v1.yaml",
          "skill_atendimento_sac_v1", "sac_ia"),
     ],
+    # RET-07 — so o SAC, que perdeu a pergunta duplicada do `notify`.
+    "ret07": [
+        ("packages/skill-flow-engine/skills/skill_atendimento_sac_v1.yaml",
+         "skill_atendimento_sac_v1", "sac_ia"),
+    ],
     # RET-02 — os dois orquestradores, que ganharam o ramo do verbo.
     "ret02": [
         ("packages/skill-flow-engine/skills/skill_navegacao_v1.yaml",

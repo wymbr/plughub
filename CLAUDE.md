@@ -1603,7 +1603,14 @@ o publicado num bloco `render`. Provisionamento `infra/dialog/*.json`, **seed-if
 - **Sem `next` condicional — branching é do skill**, senão o JSON vira linguagem.
 - **DOIS veículos, divisão mecânica:** `delegate()` para quem PODE suspender; hook de
   `on_contact_end` consome **INLINE**, porque delegar suspende o hook e o bridge fecha o contato
-  antes de renderizar. Delegate é de **nível único** (colide em `core.workflow.delegate_resume_token`).
+  antes de renderizar. ⚠️ **Delegate era de nível único, e deixou de ser em 2026-09-07
+  (CTR-06).** O token do chamador é fato da ARESTA e vivia numa tag ÚNICA da sessão
+  (`core.workflow.delegate_resume_token`), então `A → B → C` fazia a delegação de dentro
+  sobrescrever o token de quem chamou — e A ficava pendurado até o `timeout_hours`, com o
+  cliente vendo o especialista atender e **nada ficando vermelho**. Hoje o engine CAPTURA
+  o token no nascimento do pipeline (isolado por segmento, `{sid}--seg--{iso}`) e o
+  RESTAURA na retomada; a tag volta a significar o que promete, e os 8 skills que a leem
+  não mudaram. Gate: `infra/test/probe_caller_token_chain.sh`.
 - **`form` é um TIPO DE BLOCO, não um valor de `interaction`** — bloco é PROJEÇÃO sobre o `nodes[]`
   plano. A **dimensão VENCE** o form, e **campo NÃO é pergunta**.
 - **O editor JSON é escape hatch e o VEREDICTO é do SERVIDOR** (`POST /api/dialog/preview`, mesma

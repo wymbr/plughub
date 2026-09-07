@@ -149,6 +149,10 @@ probe_skill_profile_steps.sh
 # este diz a QUEM se pode delegar. Delegar e SUSPENDER o chamador, e ele so volta se o
 # alvo chamar `workflow_resume` -- medido: 0 de 6 destinos de navegacao sao delegaveis
 # hoje (4 nao retornam, 1 tem cadeia de delegate, 1 sem deploy). O censo e informativo;
+# ⚠️ Numeros de 2026-09-06. Em 2026-09-07 a CTR-06 removeu o disqualificador
+# `cadeia_delegate` e APERTOU o `nao_retorna` (que media a presenca da tool, e passou a
+# medir o token do CHAMADOR): 4 de 6 delegaveis, `portabilidade_ia` recusado pelo motivo
+# verdadeiro.
 # quem trava e o ramo B, que reprova orquestrador delegando a alvo que nao devolve --
 # o contato ficaria pendurado ate o timeout_hours sem nada ficar vermelho.
 probe_orchestrator_delegability.sh
@@ -182,6 +186,28 @@ probe_resume_token_cancel.sh
 # cobra que o especialista pule o proprio menu quando ha chamador, senao o cliente e
 # perguntado DUAS vezes -- a mesma tela que o dono leu como defeito no menu_motivo.
 probe_tree_continuation.sh
+# CTR-06: a cadeia `delegate -> delegate`. O token do chamador e fato da ARESTA e vivia
+# numa tag UNICA da sessao: B delegando a C sobrescrevia o token que retomaria A. O
+# conserto tem duas metades que so valem juntas (capturar no nascimento do pipeline,
+# restaurar na retomada), e por isso sao UM ramo. O ramo C pergunta ao `dist` que esta de
+# pe, nunca so ao fonte -- e a licao do `max_iterations` que a API deu strip na RET-04.
+probe_caller_token_chain.sh
+# Achado pelo PRIMEIRO contato real do arco (2026-09-07): `exists` existia so no
+# avaliador de `@ctx.`; sobre `$.` caia no `default` do switch e devolvia false. Uma
+# condicao sempre falsa nao explode -- ela vira o `default` do STEP, que quase sempre e
+# caminho legitimo, entao o contato terminava parecendo um fim normal. Cinco gates verdes
+# ao redor mediam a proposicao vizinha (o ponteiro existe? a rota existe?) e nenhum
+# perguntava se a condicao podia disparar. Ramo A e fonte, B e deploy, e um nao substitui
+# o outro.
+probe_choice_operator_parity.sh
+# Achado pelo TERCEIRO contato real do mesmo dia: a decisao *"o contato acabou?"* vivia em
+# DUAS casas do bridge e elas divergiam em `escalated_human`/`escalated_ai`/`transferred`.
+# O caminho do RESUME (Arc 19) so conhecia `suspended`, porque fluxo retomado que termina
+# em `escalate` nao existia antes de a RET-02 dar `delegate` ao orquestrador. Sintoma:
+# contato entrava na fila humana e saia dela em 30 ms (`abandoned wait_ms=21`), e a tela
+# dizia "encerrado". Ramo A e AST e nao grep -- o literal "suspended" tambem aparece em
+# comentario, log e numa comparacao legitima de outro assunto.
+probe_contact_close_outcomes.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh
