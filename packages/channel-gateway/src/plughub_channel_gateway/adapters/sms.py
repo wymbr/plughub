@@ -409,11 +409,19 @@ class SMSAdapter(ChannelAdapter):
                 channel          = "sms",
                 content_type     = "text",
                 author           = MessageAuthor(type="customer"),
+                # ⚠️ A chave era `answers`, e NINGUEM a le: o consumidor
+                # (`orchestrator-bridge`) faz `content["payload"]["result"]` e, na
+                # ausencia, entrega string VAZIA ao step `menu` — o `choice`
+                # seguinte comparava com "" e caia no `default`, em silencio.
+                # Achado no censo da VOZ-03 (2026-09-07): dos quatro emissores de
+                # `menu_result`, webchat e whatsapp usavam `result`, o sms usava
+                # `answers` e o voice nao emitia nada. Um contrato, uma chave.
                 content          = MessageContent(
                     type    = "menu_result",
                     payload = {
-                        "menu_id": collect_state["menu_id"],
-                        "answers": answers,
+                        "menu_id":     collect_state["menu_id"],
+                        "interaction": "form",
+                        "result":      answers,
                     },
                 ),
                 context_snapshot = ContextSnapshot(),

@@ -287,6 +287,25 @@ system_error         — unrecoverable error
   verde, pergunte o que o faria ficar vermelho** — e prefira que o teste se declare INCONCLUSIVO a
   passar por ausência de amostra.
 
+  > **Corolário medido em 2026-09-07 (VOZ-03) — um mock não verifica que o alvo existe; ele o
+  > CRIA.** `voice.py` chamava **seis** métodos que não existiam em lugar nenhum do MRO, e a
+  > suíte os mockava sob o comentário *"Mock inherited base methods"*: o comentário afirmava
+  > herança e a atribuição da linha seguinte tornava a afirmação verdadeira **dentro do teste**.
+  > O teste prova a CHAMADA e esconde a AUSÊNCIA. No produto o `AttributeError` caía num
+  > `except Exception` largo que o reportava como fim NORMAL do laço, em `debug` — o canal de voz
+  > nunca publicou nada e nada ficou vermelho. Regra: **ao mockar um método do próprio objeto sob
+  > teste, asserte `hasattr` antes**; e o censo que vale é AST sobre a população (`hasattr`
+  > responde por uma classe de cada vez e exige a imagem de pé). Gate:
+  > `infra/test/probe_adapter_self_calls.sh`.
+  >
+  > **E o irmão de CONTRATO, do mesmo dia:** `sms.py` publicava `payload["answers"]` e o bridge
+  > lê `payload["result"]` — ninguém lia `answers`, e o teste do SMS afirmava `answers`. Produtor
+  > e teste olhando um para o outro, **nenhum dos dois para o consumidor**. Um contrato de payload
+  > não mora em nenhum dos lados: mora ENTRE eles, e por isso nenhum `grep` num arquivo o alcança.
+  > O gate que o fecha (`probe_menu_result_contract.sh`) **mede a chave no LEITOR** — escrevê-la
+  > como constante mediria a concordância dos produtores com o gate, e trocar a chave no bridge
+  > deixaria os quatro verdes contra um leitor que mudou.
+
   > **Corolário de assincronia, medido em 2026-08-30 — esperar por CONTAGEM DE YIELDS é
   > adivinhar a estrutura interna da corrotina.** `await asyncio.sleep(0)` depois de um
   > `ensure_future` não espera a task: espera **um** turno do loop. Medido no emissor de tokens,

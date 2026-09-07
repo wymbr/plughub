@@ -112,13 +112,31 @@ def _make_adapter(settings=None, redis=None, producer=None) -> VoiceAdapter:
         stt_provider   = MockSTTProvider(),
         tts_provider   = MockTTSProvider(synthesize_returns_none=True),
     )
-    # Mock inherited base methods
+    # ⚠️ O comentario aqui dizia *"Mock inherited base methods"* e era FALSO: os
+    # SEIS nao existiam em lugar nenhum do MRO, e era a propria atribuicao que os
+    # criava — dentro do teste. E o *teste que nao pode reprovar* na forma mais
+    # pura: prova a CHAMADA e esconde a AUSENCIA. Um mock nao verifica que o alvo
+    # existe; ele o CRIA. (VOZ-03, 2026-09-07.)
+    #
+    # Os tres de PUBLICACAO passaram a existir e por isso sao mockados com
+    # `patch.object`, que EXPLODE se o nome sumir do produto — a diferenca entre
+    # espionar um metodo e inventa-lo.
+    for _nome in ("_publish_inbound", "_normalize_text", "_normalize_menu_result"):
+        assert hasattr(VoiceAdapter, _nome), (
+            "VoiceAdapter perdeu `%s` — o teste NAO pode inventa-lo de volta" % _nome
+        )
+    adapter._publish_inbound = AsyncMock()
+    adapter._normalize_text  = MagicMock(return_value={})
+    adapter._normalize_menu_result = MagicMock(return_value={})
+
+    # ⚠️ Estes TRES continuam sem existir, e o mock aqui e ANDAIME declarado, nao
+    # afirmacao de que existem: sao o ciclo de vida de sessao do canal, escrito
+    # contra uma API de classe-base que nunca houve. Divida com ficha (VOZ-03,
+    # metade restante) e contada por `infra/test/probe_adapter_self_calls.sh` —
+    # quando ela for paga, estas tres linhas viram `patch.object` como as de cima.
     adapter._open_session   = AsyncMock()
     adapter._close_session  = AsyncMock()
     adapter._route_inbound  = AsyncMock()
-    adapter._publish_inbound = AsyncMock()
-    adapter._normalize_text  = MagicMock(return_value=MagicMock())
-    adapter._normalize_menu_result = MagicMock(return_value=MagicMock())
     return adapter
 
 

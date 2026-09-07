@@ -83,7 +83,7 @@ construir — o oposto foi o que produziu os nove títulos velhos.
 |---|---|---|---|
 | VOZ-01 | **Provisionar o SFU.** Não há LiveKit em compose, env `LIVEKIT_*`, manifesto k8s, nem o SDK no `pyproject`; o canal roda em `_dev_mode`, que devolve token bem-formado e falso | `aberto` | `CLAUDE.md` § Arc 15 |
 | VOZ-02 | Decidir o bridge PSTN→WebRTC via SIP Ingress | `bloqueado` por VOZ-01 — não se decide topologia de mídia sobre um SFU que não existe | idem |
-| VOZ-03 | **O `collect` de voz NUNCA completa — `_normalize_menu_result` é chamado e nunca definido.** `voice.py:716` o invoca quando todos os campos foram coletados; medido contra a IMAGEM construída: `hasattr(VoiceAdapter, "_normalize_menu_result")` é `False`, e o MRO é `VoiceAdapter → ChannelAdapter → ABC → object` — nenhum o tem. O `AttributeError` cai no `except Exception` largo do laço da WS de mídia (`voice.py:527`) e sai como `logger.debug("voice media WS receive loop ended")`: **falha silenciosa, em nível debug, reportada como fim normal do laço**. ⚠️ **E o teste passa porque MOCKA o método que não existe** (`test_voice_adapter.py:121` atribui um `MagicMock` à instância, `:727` asserta que foi chamado) — é o *teste que não pode reprovar* na forma mais pura: ele prova a CHAMADA e esconde a ausência. Exposição real; dano medido ~zero (1 sessão de voz em toda a instalação, canal em `_dev_mode`). Achado em 2026-09-03 ao confirmar se a redação do bridge alcança o `menu_result` vindo de voz — **alcança, e é channel-agnóstica** (chaveia em `menu:waiting:{sid}`, escrito pelo step, não pelo canal), mas o evento nunca chega lá | `aberto` | `voice.py:716` · `test_voice_adapter.py:121` |
+| VOZ-03 | **Metade entregue em 2026-09-07; falta o ciclo de vida de SESSÃO.** O enunciado anterior desta linha (*"o `collect` de voz nunca completa — `_normalize_menu_result` é chamado e nunca definido"*) media o sintoma que alguém tinha olhado: medido contra a IMAGEM construída, eram **seis** métodos ausentes, e o defeito era *o canal de voz nunca publicou nada* — transcrição de STT (`:574`), evento de gravação (`:440`) e resultado de coleta (`:732`) morriam no mesmo `AttributeError`, dentro de um `except` largo que o reportava como fim NORMAL do laço, em `debug`. **Entregues:** `_publish_inbound` · `_normalize_text` · `_normalize_menu_result`, mais o `except` barulhento e o teste que mockava os inexistentes. **Restam três, e não é "definir três métodos":** `_open_session` (`voice.py:243`) · `_route_inbound` (`:254`) · `_close_session` (`:323`) — é decidir como uma chamada PSTN abre sessão na plataforma, roteia a um pool e fecha com a taxonomia de `contact_closed`, e a semântica depende do plano de mídia. Fabricá-los agora escolheria isso no lugar errado. A dívida é CONTADA pelo gate a cada rodada, e some do placar quando os três existirem | `bloqueado` por `VOZ-01` — a semântica de sessão PSTN não se decide sobre um SFU que não existe | `voice.py:243`/`:254`/`:323` · `infra/test/probe_adapter_self_calls.sh` (tabela `DIVIDA`) · `CHANGELOG.md` 2026-09-07 (10) |
 
 ---
 
@@ -284,8 +284,10 @@ intocado. "Três níveis" nomeia dois modelos neste repositório — ver a desam
 > Ordem das pré-condições:
 >
 > 1. **VOZ-01** — provisionar o SFU. Sem canal de pé nada disto é testável.
-> 2. **VOZ-03** — o `collect` de voz completar. Hoje o menu de voz não fecha nem
->    sem máscara (método chamado e nunca definido).
+> 2. **VOZ-03** — o ciclo de vida de SESSÃO do canal (`_open_session`,
+>    `_route_inbound`, `_close_session`, ainda ausentes). A publicação do
+>    `menu_result` de voz foi entregue em 2026-09-07, mas sem abertura e
+>    fechamento de sessão o caminho não roda ponta a ponta.
 > 3. **NIV-05** — redefinir a capacidade pela **GARANTIA**. Enquanto o enum disser
 >    `password-overlay … (webchat)`, voz não qualifica nem com tudo pronto.
 > 4. **NIV-06** — construir o eco (`plain` verbaliza · `masked` bipa · `none` cala).

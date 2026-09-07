@@ -38,6 +38,13 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from fastapi import WebSocket
 
+from ..models import (
+    ContextSnapshot,
+    MessageAuthor,
+    MessageContent,
+    NormalizedInboundEvent,
+)
+
 from ..attachment_store import AttachmentStore
 from ..config import Settings
 from .base import ChannelAdapter
@@ -525,7 +532,16 @@ class VoiceAdapter(ChannelAdapter):
                         )
                         break
             except Exception as exc:
-                logger.debug("voice media WS receive loop ended: %s", exc)
+                # ⚠️ Era `logger.debug(...)` e ESCONDEU a VOZ-03 por meses: tres
+                # metodos chamados e nunca definidos morriam aqui como "fim
+                # normal do laco". `debug` sobre um `except Exception` largo nao
+                # e resiliencia, e cegueira — quem chega ate aqui saiu do laco
+                # por um MOTIVO, e o motivo tem de aparecer.
+                logger.warning(
+                    "voice media WS receive loop ABORTOU: call=%s session=%s — %s: %s",
+                    call_sid, session_id, type(exc).__name__, exc,
+                    exc_info=not isinstance(exc, (asyncio.CancelledError,)),
+                )
             finally:
                 await audio_queue.put(None)   # signal STT to stop
                 await stt_queue.put(None)     # signal collect loop to stop
@@ -1026,6 +1042,94 @@ class VoiceAdapter(ChannelAdapter):
             "voice outbound collect: call=%s target=%s pool=%s token=%s",
             call_sid, target, pool_id, collect_token,
         )
+
+    # ── Inbound: normalizar e publicar ───────────────────────────────────────
+    #
+    # ⚠️ **As tres funcoes abaixo eram CHAMADAS e nunca definidas** (VOZ-03,
+    # consertado em 2026-09-07). Medido contra a IMAGEM construida, nao contra o
+    # fonte: `hasattr(VoiceAdapter, "_publish_inbound")`, `_normalize_text` e
+    # `_normalize_menu_result` eram os TRES `False`, e o MRO
+    # (`VoiceAdapter -> ChannelAdapter -> ABC -> object`) nao as tinha.
+    #
+    # Ou seja: nao era so o `collect` que nao completava — **o caminho de entrada
+    # INTEIRO do canal de voz nunca publicou nada**. Transcricao de STT (`:565`),
+    # evento de gravacao (`:433`) e resultado de coleta (`:724`) morriam no mesmo
+    # `AttributeError`, dentro do `except Exception` largo do laco da WS de midia,
+    # que o reportava como `logger.debug("voice media WS receive loop ended")` —
+    # fim NORMAL do laco, em nivel debug.
+    #
+    # ⚠️ **E o teste passava porque MOCKAVA o metodo inexistente**: atribuia um
+    # `MagicMock` a instancia e assertava que fora chamado. E o *teste que nao pode
+    # reprovar* na forma mais pura — ele prova a CHAMADA e esconde a AUSENCIA.
+    # Quem impede a proxima e `infra/test/probe_adapter_self_calls.sh`.
+
+    async def _publish_inbound(self, payload: dict) -> None:
+        """Publica um evento normalizado no topico de inbound."""
+        await self._producer.send(
+            self._settings.kafka_topic_inbound,
+            value=json.dumps(payload).encode(),
+        )
+
+    def _normalize_text(
+        self,
+        text:         str,
+        session_id:   str,
+        contact_id:   str,
+        tenant_id:    str,
+        content_type: str = "text",
+    ) -> dict:
+        """Fala transcrita (ou evento de sistema) no formato canonico de inbound.
+
+        `content_type="audio_transcript"` diz ao consumidor que o texto veio de
+        STT e deve ser tratado como palavra FALADA — e por isso o default aqui e
+        `"text"`, nunca o inverso: quem chama e que sabe a origem.
+        """
+        return NormalizedInboundEvent(
+            message_id       = str(uuid.uuid4()),
+            contact_id       = contact_id,
+            session_id       = session_id,
+            channel          = "voice",
+            content_type     = content_type,
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(type="text", text=text),
+            context_snapshot = ContextSnapshot(),
+        ).model_dump()
+
+    def _normalize_menu_result(
+        self,
+        menu_id:     str,
+        interaction: str,
+        result:      Any,
+        session_id:  str,
+        contact_id:  str,
+        tenant_id:   str,
+    ) -> dict:
+        """Coleta concluida no formato canonico de `menu_result`.
+
+        ⚠️ **A chave e `result`, e isso NAO e escolha de estilo** — e o que o
+        consumidor le: `orchestrator-bridge` faz
+        `content["payload"]["result"]` e, na ausencia, entrega string VAZIA ao
+        step `menu`. O `sms.py` publicava `answers` e por isso a coleta
+        sequencial dele entregava vazio em silencio (achado no mesmo censo,
+        consertado junto). Um contrato, uma chave.
+        """
+        return NormalizedInboundEvent(
+            message_id       = str(uuid.uuid4()),
+            contact_id       = contact_id,
+            session_id       = session_id,
+            channel          = "voice",
+            content_type     = "text",
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(
+                type    = "menu_result",
+                payload = {
+                    "menu_id":     menu_id,
+                    "interaction": interaction,
+                    "result":      result,
+                },
+            ),
+            context_snapshot = ContextSnapshot(),
+        ).model_dump()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

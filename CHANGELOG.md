@@ -1,5 +1,97 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (10) — VOZ-03: não era um método faltando; era o caminho de entrada inteiro
+
+A ficha da VOZ-03 dizia *"o `collect` de voz NUNCA completa — `_normalize_menu_result` é chamado e
+nunca definido"*. **Medido contra a IMAGEM construída** (`docker run` sobre
+`plughub-demo-channel-gateway`, nunca `docker exec` num container que já subiu), `hasattr` era
+`False` para **seis** nomes, não um:
+
+| método | quem chamava | o que morria |
+|---|---|---|
+| `_publish_inbound` | `voice.py:440` · `:581` · `:740` | **tudo** — é o único publicador |
+| `_normalize_text` | `:441` · `:574` | transcrição de STT e evento de gravação |
+| `_normalize_menu_result` | `:732` | resultado do collect |
+| `_open_session` | `:243` | abertura de sessão da chamada PSTN |
+| `_route_inbound` | `:254` | roteamento do primeiro evento |
+| `_close_session` | `:323` | fechamento no hangup |
+
+O MRO é `VoiceAdapter → ChannelAdapter → ABC → object` e **nenhum dos três tem qualquer um deles** —
+foram escritos contra uma classe-base que nunca existiu. Ou seja: o enunciado da tarefa media o
+sintoma que alguém tinha olhado, e o defeito era *"o canal de voz nunca publicou nada"*.
+
+### Por que nada ficava vermelho, em duas camadas
+
+**No produto**, o `AttributeError` caía no `except Exception` largo do laço da WS de mídia e saía como
+`logger.debug("voice media WS receive loop ended: %s", exc)` — **fim NORMAL do laço, em nível debug**.
+Um `except` que classifica a exceção como término esperado é a *degradação silenciosa* da §
+Postura na forma mais barata: não há sequer um `warning` para alguém procurar. Hoje é
+`logger.warning("voice media WS receive loop ABORTOU", exc_info=…)`, e a linha diz o que deixou de
+valer, não só que algo terminou.
+
+**No instrumento**, a suíte **mockava os inexistentes**:
+
+```python
+# Mock inherited base methods          ← a afirmação era FALSA
+adapter._normalize_text = MagicMock()
+adapter._normalize_menu_result = MagicMock()
+```
+
+O comentário afirmava herança; a atribuição da linha seguinte tornava a afirmação verdadeira **dentro
+do teste**. É o *teste que não pode reprovar* na forma mais pura, e a regra que faltava é nova o
+bastante para ficar escrita: **um mock não verifica que o alvo existe — ele o CRIA.** Hoje o teste
+asserta `hasattr(VoiceAdapter, nome)` **antes** de mockar os três que existem, e os três de ciclo de
+vida ficam mockados sob rótulo explícito de andaime com dívida ao lado.
+
+### O censo achou um SEGUNDO defeito, noutro canal
+
+Ao contar os produtores de `menu_result` para saber o que a metade implementada tinha de emitir:
+`sms.py` publicava `payload = {"menu_id", "answers"}` e o bridge lê `content["payload"]["result"]`
+(`main.py:9243`, leitor **único**). **Ninguém lia `answers`.** O collect sequencial de SMS entregava
+string vazia ao skill — o `.get("result", "")` devolve o default e o `choice` seguinte compara contra
+`""` como se o cliente tivesse respondido isso. `webchat.py` e `whatsapp.py` estavam certos.
+
+E a suíte do SMS estava **verde por cima**: ela afirmava `payload["answers"]["topic"] == "suporte"`.
+Produtor e teste olhando um para o outro, **nenhum dos dois para o consumidor** — é o diagnóstico
+recorrente do arco (*a mesma pergunta respondida em duas casas*) na variante mais difícil de ver: o
+contrato de um payload não mora em nenhum dos dois lados, mora **entre** eles, e por isso não há
+arquivo onde um `grep` o encontre.
+
+### O que foi entregue, e o que fica
+
+Entregue: `_publish_inbound` · `_normalize_text` · `_normalize_menu_result` em `voice.py`; o `except`
+barulhento; a chave do `sms.py`; o teste corrigido.
+
+**Fica como dívida DECLARADA, com dono e ficha: `_open_session` · `_route_inbound` ·
+`_close_session`.** Não é "definir três métodos" — é decidir como uma chamada PSTN abre sessão na
+plataforma, roteia a um pool e fecha com a taxonomia de `contact_closed`, e essa decisão depende do
+plano de mídia (VOZ-01, SFU não provisionado). Fabricá-los agora seria escolher a semântica no lugar
+errado.
+
+### Dois gates, porque são duas proposições
+
+- **`probe_adapter_self_calls.sh`** — censo AST de `self.X(...)` nos seis adapters. Medido: **217
+  chamadas, exatamente 3 órfãs**, todas em `voice.py`, todas na tabela `DIVIDA`. A dívida é
+  **contada no placar toda vez que roda**, e nome que sai do fonte e continua na tabela também
+  REPROVA (ramo FANTASMA) — tabela de dívida que envelhece vira permissão. AST e não `hasattr`
+  porque o `hasattr` responde por uma classe de cada vez e exige a imagem de pé; o censo responde
+  pela população inteira e roda no repositório, que é onde a órfã nasce.
+- **`probe_menu_result_contract.sh`** — a chave é **medida no leitor**, nunca escrita no gate: uma
+  constante mediria a concordância dos produtores com o *gate*, e trocar a chave no bridge deixaria
+  os quatro verdes contra um leitor que mudou. Mais de um leitor com chaves diferentes também
+  reprova — seria o mesmo defeito do lado do consumidor.
+
+Ambos com ramo de mutação verificado. Suíte do `channel-gateway` na imagem: **748 passam** (as duas
+que reprovavam eram as do SMS, afirmando a chave velha).
+
+### Exposição × dano
+
+Exposição total no canal (todo o inbound de voz), **dano medido ~zero**: 1 sessão de voz em toda a
+instalação, e o canal roda em `_dev_mode` porque o SFU não está provisionado (VOZ-01). O dano real
+desta entrega está no **SMS**, que é canal de pé.
+
+---
+
 ## 2026-09-07 (9) — RET-07: o arco VALIDADO em contato real, e o preço da D2 refutado
 
 O dono exercitou o arco inteiro com cliente do outro lado: **vários ciclos de continuação**, depois

@@ -642,7 +642,12 @@ class TestSequentialCollect:
         # Single-field collect → publishes menu_result
         published = json.loads(mock_producer.send.call_args[0][1].decode())
         assert published["content"]["type"] == "menu_result"
-        assert published["content"]["payload"]["answers"]["topic"] == "suporte"
+        # ⚠️ A chave e `result`, e nao `answers`, porque quem LE e o bridge
+        # (`content["payload"]["result"]`). Ate 2026-09-07 o adapter publicava
+        # `answers` e este teste afirmava `answers` — os dois olhando para o
+        # produtor, nenhum para o consumidor. O collect sequencial de SMS
+        # entregava string VAZIA ao skill, em silencio, com a suite verde.
+        assert published["content"]["payload"]["result"]["topic"] == "suporte"
 
     @pytest.mark.asyncio
     async def test_invalid_option_reprompts(
@@ -695,7 +700,7 @@ class TestSequentialCollect:
         call_args = mock_producer.send.call_args[0]
         published = json.loads(call_args[1].decode())
         assert published["content"]["type"] == "menu_result"
-        assert published["content"]["payload"]["answers"]["feedback"] == "Muito bom!"
+        assert published["content"]["payload"]["result"]["feedback"] == "Muito bom!"
 
     @pytest.mark.asyncio
     async def test_masked_field_prompt_adds_privacy_note(

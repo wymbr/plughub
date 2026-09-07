@@ -208,6 +208,23 @@ probe_choice_operator_parity.sh
 # dizia "encerrado". Ramo A e AST e nao grep -- o literal "suspended" tambem aparece em
 # comentario, log e numa comparacao legitima de outro assunto.
 probe_contact_close_outcomes.sh
+# VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
+# medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
+# voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta
+# morriam no mesmo `AttributeError`, dentro de um `except` largo que o reportava como fim
+# NORMAL do laco, em nivel debug. E a suite mockava os inexistentes sob o comentario
+# "Mock inherited base methods" -- um mock nao verifica que o alvo existe, ele o CRIA.
+# As 3 chamadas restantes sao divida DECLARADA com dono, e o gate as CONTA: nome que sai
+# do fonte e continua na tabela tambem reprova, para a divida nao envelhecer em permissao.
+probe_adapter_self_calls.sh
+# Irmao do de cima, achado pelo mesmo censo: `sms.py` publicava `payload["answers"]` e o
+# bridge le `payload["result"]`. Ninguem lia `answers`, entao o collect sequencial de SMS
+# entregava string VAZIA ao skill -- o `.get("result", "")` devolvia o default e o `choice`
+# seguinte comparava contra "" como se o cliente tivesse respondido isso. O teste do SMS
+# afirmava `payload["answers"]`: produtor e teste olhando um para o outro, nenhum dos dois
+# para o consumidor. A chave e MEDIDA no leitor, nunca escrita no gate -- constante mediria
+# a concordancia com o gate e deixaria os 4 produtores verdes contra um leitor que mudou.
+probe_menu_result_contract.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh
