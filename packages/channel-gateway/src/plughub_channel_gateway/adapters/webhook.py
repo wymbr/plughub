@@ -1173,6 +1173,75 @@ class WebhookAdapter(ChannelAdapter):
                 resume_token, tenant_id, exc,
             )
 
+        # RSM-01 — o horizonte do TOKEN vale também para o meta que a retomada lê.
+        # Fora do `try` acima de propósito: as duas escritas são independentes, e
+        # perder o registro por-token não é razão para deixar o meta curto.
+        await self._extend_session_meta_ttl(session_id, ttl_s)
+
+    async def _extend_session_meta_ttl(self, session_id: str, ttl_s: int) -> None:
+        """
+        `EXPIRE` em `session:{id}:meta` que só ESTENDE — nunca encurta, nunca cria.
+
+        **RSM-01.** O caminho do `suspend` já estendia QUATRO chaves da sessão
+        (`stream`, `ctx`, `pipeline`, `status`) e não esta — e é justamente ela que
+        carrega o `tenant_id` que a retomada lê. O token vive
+        `timeout_hours*3600 + 3600` (48 h no default) e o meta nasce com 24 h fixas
+        (a escrita do trigger, neste arquivo), então todo `timeout_hours > 23`
+        produzia um token que sobrevive ao dado do qual ele depende: a retomada é
+        ACEITA e morre em `tenant_unknown`, que é a recusa do arco P2 fazendo o seu
+        trabalho sobre uma chave que ninguém estendeu. Medido em 2026-09-07
+        (`probe_resume_outlives_meta.sh`): **1 exposto, 24 h descobertas, 0 órfãos**.
+
+        ⚠️ **A causa é uma LISTA**, e por isso o conserto não é mudar um número: a
+        `sessionKeys` do `persistSuspendWebhook` parecia completa por ser uma lista,
+        e o que falta numa lista não aparece em contagem nenhuma. Mesma família do
+        manifesto de gates da GAT-01.
+
+        ⚠️ **`-1` aqui NÃO é bootstrap**, e a divergência com `_extend_hash_ttl` é
+        deliberada. Lá a chave nasce sem TTL no próprio `HSET`, então tratar `-1`
+        como "infinito a preservar" a tornava imortal. Aqui **todo** escritor do meta
+        usa `SETEX`/`EX` (a porta neste arquivo; o `session_meta_merge` do bridge),
+        logo `-1` é anomalia — e pôr prazo em chave sem prazo seria ENCURTAR, a
+        única direção que esta função existe para proibir. Loga e não toca.
+
+        `-2` (ausente) é no-op declarado: criar o meta daqui inventaria `tenant_id`
+        sem ter de onde tirá-lo — a ausência tem dono e conserto próprios (a escrita
+        do trigger), e o `conversation_escalate` já recusa em vez de adivinhar.
+
+        Gate: `infra/test/probe_resume_outlives_meta.sh` (o mesmo que contou o 1).
+        """
+        key = f"session:{session_id}:meta"
+        try:
+            current = await self._redis.ttl(key)
+            if current is None:
+                return
+            if current == -2:
+                logger.debug(
+                    "resume_meta: %s ausente — nada a estender (a escrita do trigger "
+                    "é quem responde por isso)", key,
+                )
+                return
+            if current == -1:
+                logger.warning(
+                    "resume_meta: %s existe SEM prazo — não toco (definir seria "
+                    "encurtar). Chave de sessão imortal é vazamento: quem a criou "
+                    "assim não usou SETEX", key,
+                )
+                return
+            if current < ttl_s:
+                await self._redis.expire(key, ttl_s)
+                logger.info(
+                    "resume_meta: %s estendido %ss → %ss para cobrir o prazo do token",
+                    key, current, ttl_s,
+                )
+        except Exception as exc:
+            # Barulhento: sem o log, um meta curto volta a ser invisível e o
+            # sintoma reaparece lá na frente como `tenant_unknown` sem causa.
+            logger.warning(
+                "resume_meta: não consegui estender %s (%s: %s) — a retomada pode "
+                "chegar depois do meta", key, type(exc).__name__, exc,
+            )
+
     async def _read_resume_meta(
         self, tenant_id: str, resume_token: str,
     ) -> dict[str, Any] | None:

@@ -19,6 +19,28 @@
 # T − 9 deles já perderam o meta: previsão de ORFAOS ≥ T − 9.
 # ⇒ ORFAOS = 0 com T grande refuta o dano: significa que os tokens morrem junto.
 #
+# ── ÉPOCA (RSM-01, 2026-09-07) — exposição VELHA e exposição NOVA são dois fatos ──
+# A correção entrou no `persistSuspendWebhook` (skill-flow-service) e no
+# `_write_resume_meta` (channel-gateway): o `suspend` passou a estender o
+# `session:{id}:meta` até o horizonte do token, com a mesma regra do
+# `session_meta_merge` do bridge (só ESTENDE, nunca encurta).
+#
+# Mas o conserto é FORWARD-ONLY: token escrito antes dele continua exposto por até
+# 48 h, e nenhuma migração o alcança (o prazo já foi gravado). Sem datar a
+# exposição, este probe fica com o contador acima de zero por dois dias e ninguém
+# consegue dizer se a correção pegou — e, pior, uma REGRESSÃO nasceria invisível no
+# meio do resíduo. Mesma escolha da `SEGMENT_SLA_EPOCH` da D14: corte em data
+# DECLARADA, nunca fallback que mistura duas fontes num número só.
+#
+# A data foi medida, não estimada: o par de controle do dia bracketa o deploy —
+# `2e05d57d` (23:34:55Z, código antigo) saiu CONDENADO com 24 h descobertas;
+# `cc410b80` (23:36:34Z, código novo) saiu COBERTO, meta 2 940 min × token 2 880.
+#
+# ⚠️ Token sem `{t}:resume_meta:{token}` é INDATÁVEL e conta como resíduo — os
+#    produtores de hoje escrevem esse registro sempre, logo a ausência dele é
+#    anterior a ele. Erra para o lado de NÃO acusar, e o contador fica visível.
+RSM01_EPOCH="${RSM01_EPOCH:-2026-09-07T23:36:00Z}"
+
 # Veredicto de TRÊS estados: 0 = ninguém sofre · 1 = há vítimas · 3 = INCONCLUSIVO
 set -uo pipefail
 
@@ -40,6 +62,10 @@ HASH_TTL="$(R TTL "$TENANT:resume_tokens")"
 echo "      entradas no hash: $((NLINES / 2)) · TTL do hash: $HASH_TTL"
 
 NOW="$(date +%s)"
+EPOCH_TS="$(date -d "$RSM01_EPOCH" +%s 2>/dev/null)" || EPOCH_TS=""
+if [ -z "$EPOCH_TS" ]; then
+  echo "   ⛔ INCONCLUSIVO — RSM01_EPOCH ilegível: $RSM01_EPOCH"; exit 3
+fi
 ORFAOS=0     # token futuro, meta JÁ morto            ← a vítima consumada
 CONDENADOS=0 # token futuro, meta vivo mas curto demais ← a vítima futura
 OK=0         # meta cobre o prazo do token
@@ -51,6 +77,11 @@ printf '%s\n' "$RAW" | paste - - | while IFS="$(printf '\t')" read -r tok val; d
   [ -n "${val:-}" ] || continue
   sid="${val%%:*}"                 # UUID não tem ':' — corte seguro
   exp="${val#*:}"; exp="${exp#*:}" # o resto é o ISO, que TEM ':'
+  # ⚠️ `date -d ""` NAO falha: devolve HOJE 00:00. Sem esta guarda, um token com
+  # `expires_at` vazio virava um instante no passado e era contado como VENCIDO —
+  # o balde que existe justamente para nao contar. Valor plausivel esconde; valor
+  # ausente denuncia. Medido em 2026-09-07, ao construir a bateria da RSM-01.
+  if [ -z "$exp" ]; then echo "ILEGIVEL"; continue; fi
   ets="$(date -d "$exp" +%s 2>/dev/null)" || ets=""
   if [ -z "$ets" ]; then
     echo "ILEGIVEL"; continue
@@ -71,14 +102,33 @@ printf '%s\n' "$RAW" | paste - - | while IFS="$(printf '\t')" read -r tok val; d
     # ⚠️ MESMA unidade nos dois, e a MARGEM explicita: com `meta` em minutos e
     # `token` em horas truncadas, `meta=1437min token=23h` parecia contradizer o
     # veredicto (1437 min = 23,95 h) e o leitor concluia que o gate errou.
-    echo "CONDENADO $sid meta=$((ttl / 60))min token=$(( (ets - NOW) / 60 ))min descoberto=$(( (ets - NOW - ttl) / 60 ))min"
+    #
+    # RSM-01 — DATAR a exposição. `opened_at` vem do registro por-token, escrito
+    # pelo mesmo `suspend` que criou o prazo: é o carimbo do FENÔMENO, não da
+    # leitura. Antes da época = resíduo forward-only; depois = o produto ainda
+    # está criando exposição, e aí é vermelho.
+    op="$(R GET "$TENANT:resume_meta:$tok" | sed -n 's/.*"opened_at"[^"]*"\([^"]*\)".*/\1/p')"
+    # Mesma guarda: sem ela o INDATAVEL era ramo MORTO — `$op` vazio virava hoje
+    # 00:00, que cai antes da epoca e sai como "residuo". Um token sem registro
+    # seria absolvido por uma data que ninguem escreveu.
+    if [ -n "$op" ]; then ots="$(date -d "$op" +%s 2>/dev/null)" || ots=""; else ots=""; fi
+    if [ -z "$ots" ]; then
+      echo "CONDENADO_INDATAVEL $sid meta=$((ttl / 60))min token=$(( (ets - NOW) / 60 ))min descoberto=$(( (ets - NOW - ttl) / 60 ))min"
+    elif [ "$ots" -ge "$EPOCH_TS" ]; then
+      echo "CONDENADO_NOVO $sid aberto=$op meta=$((ttl / 60))min token=$(( (ets - NOW) / 60 ))min descoberto=$(( (ets - NOW - ttl) / 60 ))min"
+    else
+      echo "CONDENADO_RESIDUO $sid aberto=$op meta=$((ttl / 60))min token=$(( (ets - NOW) / 60 ))min descoberto=$(( (ets - NOW - ttl) / 60 ))min"
+    fi
   else
     echo "OK"
   fi
 done > /tmp/_meta_resume_out.txt
 
 ORFAOS="$(grep -c '^ORFAO ' /tmp/_meta_resume_out.txt)"
-CONDENADOS="$(grep -c '^CONDENADO ' /tmp/_meta_resume_out.txt)"
+COND_NOVOS="$(grep -c '^CONDENADO_NOVO ' /tmp/_meta_resume_out.txt)"
+COND_RESID="$(grep -c '^CONDENADO_RESIDUO ' /tmp/_meta_resume_out.txt)"
+COND_INDAT="$(grep -c '^CONDENADO_INDATAVEL ' /tmp/_meta_resume_out.txt)"
+CONDENADOS=$((COND_NOVOS + COND_RESID + COND_INDAT))
 OK="$(grep -c '^OK$' /tmp/_meta_resume_out.txt)"
 PASSADO="$(grep -c '^PASSADO$' /tmp/_meta_resume_out.txt)"
 ILEGIVEL="$(grep -c '^ILEGIVEL$' /tmp/_meta_resume_out.txt)"
@@ -86,12 +136,15 @@ ILEGIVEL="$(grep -c '^ILEGIVEL$' /tmp/_meta_resume_out.txt)"
 echo
 echo "      órfãos     (token vivo, meta JÁ morto) : $ORFAOS"
 echo "      condenados (meta morre antes do token) : $CONDENADOS"
+echo "         · nascidos APÓS a correção (RSM-01) : $COND_NOVOS   ← o produto"
+echo "         · resíduo anterior à correção       : $COND_RESID"
+echo "         · indatáveis (sem resume_meta)      : $COND_INDAT"
 echo "      cobertos   (meta cobre o token)        : $OK"
 echo "      vencidos   (token no passado)          : $PASSADO"
 echo "      ilegíveis  (instrumento, não fenômeno) : $ILEGIVEL"
 echo
 echo "── amostra ───────────────────────────────────────────────────────────────"
-grep -E '^(ORFAO|CONDENADO) ' /tmp/_meta_resume_out.txt | head -12 | sed 's/^/      /'
+grep -E '^(ORFAO|CONDENADO)' /tmp/_meta_resume_out.txt | head -12 | sed 's/^/      /'
 
 echo
 if [ "$ILEGIVEL" -gt 0 ] && [ $((ORFAOS + CONDENADOS + OK)) -eq 0 ]; then
@@ -123,11 +176,24 @@ if [ "$ORFAOS" -gt 0 ]; then
   echo "      O token será aceito e a retomada falhará por tenant desconhecido."
   exit 1
 fi
+# RSM-01 — o que reprova agora é exposição que o produto AINDA CRIA. Um condenado
+# nascido depois da correção significa que o `suspend` voltou a não estender o meta
+# (ou que um quinto produtor de token apareceu sem passar pelos dois funis).
+if [ "$COND_NOVOS" -gt 0 ]; then
+  echo "   ❌ $COND_NOVOS resume(s) EXPOSTO(s) nascido(s) APÓS a correção da RSM-01."
+  echo '      Não é resíduo: o `suspend` deixou de estender `session:{id}:meta`'
+  echo '      até o horizonte do token — ou um produtor novo não passa pelos dois'
+  echo '      funis (`persistSuspendWebhook` no skill-flow-service ·'
+  echo '      `_write_resume_meta` no channel-gateway).'
+  echo "      Época em uso: $RSM01_EPOCH"
+  exit 1
+fi
 if [ "$CONDENADOS" -gt 0 ]; then
   echo "   ⚠️  $CONDENADOS resume(s) EXPOSTO(s): o meta morre antes do token."
   echo "      Não é dano ainda — vira dano se a retomada chegar depois do meta."
-  echo "      O prazo do token (timeout_hours*3600 + 3600) e o do meta (24 h) vêm de"
-  echo "      fontes que ninguém conciliou; ver a ficha no \`pending.md\`."
+  echo "      TODOS anteriores à correção da RSM-01 ($RSM01_EPOCH): o conserto é"
+  echo "      forward-only e nenhuma migração alcança prazo já gravado. Some sozinho"
+  echo "      quando o último token velho vencer (≤ 48 h)."
   echo "   ✅ dano CONSUMADO: nenhum (órfãos = 0)"
   exit 0
 fi

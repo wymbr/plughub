@@ -455,6 +455,48 @@ app.post("/execute", async (req: Request, res: Response) => {
             try { await dedicatedRedis.expire(key, ttlS) } catch { /* non-fatal */ }
           }
 
+          // -- RSM-01: session:{id}:meta, e por que ela NAO entra na lista acima --
+          //
+          // A lista tinha quatro chaves e parecia completa por ser uma lista; faltava
+          // exatamente a que carrega o `tenant_id` que a RETOMADA le. O token vive
+          // `timeout_hours*3600 + 3600` (48 h no default) e o meta nasce com 24 h
+          // fixas na porta do webhook => todo `timeout_hours > 23` gerava um token que
+          // sobrevive ao dado de que depende: o resume e ACEITO e morre em
+          // `tenant_unknown`. Medido em 2026-09-07: 1 exposto, 24 h descobertas.
+          //
+          // Fica FORA do laco porque a semantica e outra: as quatro sao per-sessao e
+          // com escritor unico, entao redefinir o prazo e o comportamento certo. O
+          // meta tem SEIS escritores em quatro pacotes, com horizontes diferentes, e
+          // por isso a regra dele e a mesma do `session_meta_merge` do bridge: o
+          // prazo so ESTENDE. Um `expire` cru aqui encurtaria o meta de quem escreveu
+          // com horizonte maior, que e o defeito que aquele helper ja pagou caro.
+          //
+          // /!\ `-1` aqui NAO e bootstrap (ao contrario de `hashKey` logo abaixo):
+          // todo escritor do meta usa SETEX/EX, entao `-1` e anomalia e definir prazo
+          // seria ENCURTAR. `-2` (ausente) e no-op: criar o meta daqui inventaria
+          // tenant, e a ausencia tem dono proprio (a escrita do trigger).
+          //
+          // Espelho de `_extend_session_meta_ttl` no channel-gateway; as duas
+          // implementacoes tem de concordar, como ja vale para o TTL do hash.
+          try {
+            const metaKey = `session:${params.session_id}:meta`
+            const metaTtl = await dedicatedRedis.ttl(metaKey)
+            if (metaTtl >= 0 && metaTtl < ttlS) {
+              await dedicatedRedis.expire(metaKey, ttlS)
+            } else if (metaTtl === -1) {
+              console.warn(
+                `[skill-flow-service] ${metaKey} existe SEM prazo — nao estendido ` +
+                `(definir seria encurtar); chave de sessao imortal e vazamento`,
+              )
+            }
+          } catch (err) {
+            // Nunca calado: um meta curto reaparece como `tenant_unknown` sem causa.
+            console.warn(
+              `[skill-flow-service] nao estendi session:${params.session_id}:meta ` +
+              `para ${ttlS}s — a retomada pode chegar depois do meta: ${err}`,
+            )
+          }
+
           // ── Write resume_token to hash ───────────────────────────────────────
           // WebhookAdapter.handle_resume() does HGET on this hash for token lookup.
           const tokenValue = `${params.session_id}:${params.step_id}:${expiresAt}`

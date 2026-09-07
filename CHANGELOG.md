@@ -1,5 +1,89 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (16) — RSM-01: o `suspend` estendia quatro chaves da sessão, e não a que a retomada lê
+
+O token de resume vive `timeout_hours*3600 + 3600` (48 h no default). O
+`session:{id}:meta` — de onde saem `tenant_id` e `agent_type_id` — nasce com **24 h fixas**.
+Todo fluxo com `timeout_hours > 23` produzia um token que sobrevive ao dado do qual ele
+depende: a retomada é ACEITA e morre em `tenant_unknown`, que é a recusa do arco P2 fazendo
+o seu trabalho sobre uma chave que ninguém estendeu.
+
+### 1 · A causa é uma LISTA, e por isso o conserto não é mudar um número
+
+`persistSuspendWebhook` (skill-flow-service) já estendia as chaves da sessão ao suspender:
+
+```
+session:{id}:stream · {t}:ctx:{id} · {t}:pipeline:{id} · {t}:session:{id}:status
+```
+
+Quatro. Faltava exatamente a quinta — a que carrega o tenant. **Uma lista parece completa
+por ser uma lista**, e o que falta nela não aparece em contagem nenhuma: é a mesma forma do
+`gates.manifest` da GAT-01, que declarava 44 de 281 e prestava contas impecáveis dos 44.
+
+### 2 · Dois produtores, uma regra — e a assimetria do `-1` é deliberada
+
+O conserto entrou nos dois funis: `persistSuspendWebhook` (TS) e `_write_resume_meta`
+(channel-gateway), por onde os escritores de token do adapter — `collect` e
+`delegate_conference` — já passavam. A regra do meta é a do `session_meta_merge` do bridge:
+**o prazo só ESTENDE**. Um `expire` cru encurtaria o meta de quem escreveu com horizonte
+maior, que é o defeito medido em 2026-08-22 (86 397 → 14 398 na alocação).
+
+⚠️ **`-1` aqui NÃO é bootstrap**, ao contrário do `_extend_hash_ttl` a poucas linhas dali —
+e a divergência está escrita nos dois lados. Lá a chave nasce sem TTL no próprio `HSET`, e
+tratar `-1` como "infinito a preservar" a tornou imortal por meses. Aqui **todo** escritor
+do meta usa `SETEX`/`EX`, logo `-1` é anomalia, e pôr prazo em chave sem prazo seria
+ENCURTAR — a única direção que a função existe para proibir. `-2` (ausente) é no-op
+declarado: criar o meta daqui inventaria `tenant_id`.
+
+### 3 · A prova é ao vivo, com o mesmo instrumento dos dois lados
+
+Disparado o mesmo pool (`portabilidade_processo_ia`, suspend de 48 h), antes e depois do
+build, sem tocar em mais nada:
+
+| | sessão | prazo do token | TTL do meta | veredicto |
+|---|---|---|---|---|
+| **antes** | `2e05d57d` | 2 880 min | 1 440 min | CONDENADO — 24 h descobertas |
+| **depois** | `cc410b80` | 2 880 min | **2 940 min** | COBERTO |
+
+Mecanismo: `test_resume_meta_horizon.py` (6 casos). O que ele julga não é a função e sim a
+CHAMADA — **T5** falha se a linha sumir de `_write_resume_meta`, que é exatamente o estado
+anterior, com a extensão perfeita e ninguém a invocando. Bateria de mutação: apagar a
+chamada reprova só o T5; trocar a comparação por `expire` cru reprova o T2 (o controle
+negativo). Suíte do channel-gateway inteira: **756 passam**.
+
+### 4 · O instrumento também mudou: exposição passou a ser DATADA
+
+O conserto é **forward-only** — token já gravado continua exposto por até 48 h e nenhuma
+migração alcança prazo escrito. Sem datar, o probe ficaria acima de zero por dois dias e
+ninguém saberia dizer se a correção pegou; pior, **uma regressão nasceria invisível no meio
+do resíduo**. Mesma escolha da `SEGMENT_SLA_EPOCH` da D14: corte em data DECLARADA
+(`RSM01_EPOCH`), nunca fallback que mistura duas fontes num número só. A data foi medida —
+o par de controle acima bracketa o deploy. Hoje o veredicto reprova por **exposição que o
+produto ainda cria**; resíduo é contado e nomeado à parte.
+
+### 5 · E o probe novo tinha um defeito do catálogo, achado ao falseá-lo
+
+O balde INDATÁVEL (token sem `resume_meta`) era **ramo morto**: `date -d ""` **não falha** —
+devolve *hoje à meia-noite*. O `|| ots=""` nunca disparava, e um token sem registro recebia
+uma data que ninguém escreveu, caindo em "resíduo". *Valor plausível esconde bugs; valor
+ausente os denuncia* — e aqui o valor plausível era fabricado pela própria ferramenta de
+medida. A guarda `[ -z "$op" ]` fecha, e a **mesma linha existia desde antes no `expires_at`
+do token**, onde um valor vazio virava um instante no passado e era contado como VENCIDO —
+o balde que existe justamente para não contar. Os dois pontos foram corrigidos.
+
+Bateria do probe sobre tenant SINTÉTICO (`tenant_rsm_fixture`, criado e apagado no mesmo
+script, sem encostar no `tenant_demo`): órfão reprova · condenado pós-época reprova ·
+resíduo + indatável **não** reprovam · os cinco baldes alcançáveis. Época ilegível sai
+INCONCLUSIVO, nunca verde.
+
+Gates ao redor, todos verdes: `probe_resume_outlives_meta` · `probe_meta_ttl_bridge_off` ·
+`gate_external_resume` · `probe_resume_token_cancel` · `probe_family_b_suspend_resume`.
+
+⚠️ **Observação de lado, registrada para não ser re-derivada:** o `package.json` do
+`skill-flow-service` se descreve como *"Thin HTTP wrapper — E2E test harness only"*, e ele é
+o executor de skill-flow do `docker-compose.demo.yml`. O rótulo é da mesma família dos
+comentários que prometem invariante sem mecanismo; ficha `SFS-01`.
+
 ## 2026-09-07 (15) — LDG-01: o ledger sabia que a tarefa EXISTE, não que ela ainda ANDA
 
 Veio de um pedido de organização (*"pode listar e organizar tarefas existentes?"*), não de
