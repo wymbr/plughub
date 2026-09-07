@@ -96,7 +96,10 @@ steps:
     tool: dialog_tree_level
     input:
       form_id:    "dialog_navegacao_atendimento_v1"
-      output_key: "destino"
+      # RET-02 — a question ATIVA, nunca a raiz fixa: depois de uma continuação o
+      # cursor vive noutra question, e um `output_key` literal aqui levaria a
+      # navegação de volta à árvore de entrada sem nada ficar vermelho.
+      question_id: "$.pipeline_state.nivel.question_id"
       path:       "$.pipeline_state.nivel.path"
       chosen_id:  "$.pipeline_state.escolha"
       tenant_id:  "$.tenant_id"
@@ -218,7 +221,7 @@ steps:
       path:       "$.pipeline_state.nivel.category_path"
       tenant_id:  "$.tenant_id"
     output_as: rota
-    on_success: escalar
+    on_success: decidir_verbo
     # Caminho sem rota declarada NÃO inventa destino — cai no humano, que é a mesma
     # coisa que a folha de escape pede. A DIFERENÇA entre "escolheu escape" e "escolheu
     # algo que ninguém mapeou" já está no `category_path` do evento, então o desfecho
@@ -228,6 +231,70 @@ steps:
   # O alvo é uma REFERÊNCIA, e é isto que a F3 destrava. Se ela não resolver, o step
   # vai para `on_failure` NOMEANDO o que faltou — nunca despacha para um literal de
   # emergência, que seria o `queue_pool_id or pool_id` outra vez.
+  # ── RET-02: DELEGAR ou ESCALAR? ─────────────────────────────────────────────
+  #
+  # O verbo vem do `pool_route_resolve`, DERIVADO do que está promovido no
+  # destino — nunca declarado no mapa nem aqui. Delegar é SUSPENDER este fluxo, e
+  # ele só volta se o alvo chamar `workflow_resume`; um alvo que não devolve
+  # deixaria o contato pendurado até o `timeout_hours`, com o cliente vendo o
+  # especialista atender e nada ficando vermelho.
+  #
+  # ⚠️ **O default é ESCALAR**, e não é zelo: `escalate` é o comportamento de
+  # sempre e não pendura ninguém. Qualquer dúvida — registry mudo, destino sem
+  # deploy, cadeia de delegate — resolve para cá, com o motivo em
+  # `rota.verb_reason`.
+  - id: decidir_verbo
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.rota.verb"
+        operator: eq
+        value: "delegate"
+        next: delegar
+    default: escalar
+
+  # O orquestrador MANTÉM `primary`; o especialista entra como `specialist` e sai.
+  # Medido antes de existir: `limite_ia primary seq=0` → `dialog_runner specialist
+  # seq=0` → `limite_ia primary seq=1`, em 24 delegações vivas.
+  - id: delegar
+    type: delegate
+    pool: "$.pipeline_state.rota.pool"
+    timeout_hours: 4
+    # `input`/`approved` ⇒ o especialista concluiu e devolveu o controle.
+    on_resume:  { next: continuar }
+    # `rejected` ⇒ concluiu com veredicto NEGATIVO (o `precisa_humano` que os
+    # executores devolvem). Quem decide transferir é este fluxo, não a folha.
+    on_reject:  { next: escalar_humano }
+    # Prazo estourado: o especialista não devolveu. Não se adivinha o desfecho.
+    on_timeout: { next: escalar_humano }
+
+  # ── O retorno: continua a árvore, ou encerra? ───────────────────────────────
+  #
+  # ⚠️ **Sem `on_return` declarado, ENCERRA** — que é o comportamento de hoje.
+  # Por isso esta entrega não liga ciclo nenhum sozinha: nenhuma forma publicada
+  # declara o ponteiro (medido: 0 de 14). Quem o ligar precisa do teto da RET-04
+  # antes, senão o laço não tem fim.
+  - id: continuar
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.nivel.on_return"
+        operator: exists
+        next: nivel_continuacao
+    default: finalizar
+
+  # Reentra no MESMO laço de navegação, uma question adiante. O cursor volta à
+  # raiz daquela question (`path: []`), porque a continuação é raiz própria (D5).
+  - id: nivel_continuacao
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:     "dialog_navegacao_atendimento_v1"
+      question_id: "$.pipeline_state.nivel.on_return"
+      path:        []
+      tenant_id:   "$.tenant_id"
+    output_as: nivel
+    on_success: mostrar
+    on_failure: escalar_humano
+
   - id: escalar
     type: escalate
     target:

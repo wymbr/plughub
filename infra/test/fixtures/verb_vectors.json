@@ -1,0 +1,90 @@
+{
+  "_comentario": [
+    "Vetores do criterio de VERBO (RET-02). Lidos pelas DUAS implementacoes:",
+    "  TypeScript  packages/mcp-server-plughub/src/tools/navigation.ts  (decideVerb)",
+    "  Python      infra/test/_ret02_verb_probe.py                      (criterio_python)",
+    "",
+    "Existem porque o criterio esta escrito duas vezes, e paridade PRESUMIDA entre",
+    "linguagens e o defeito que o gate de paridade do channel-gateway existe para",
+    "pegar. Um vetor novo aqui obriga as duas casas a concordarem.",
+    "",
+    "⚠️ O default e ESCALATE. Delegar e suspender o chamador: qualquer duvida tem",
+    "de resolver para o verbo que NAO pendura ninguem."
+  ],
+  "vetores": [
+    {
+      "nome": "devolve o controle",
+      "snapshot": { "steps": [
+        { "id": "a", "type": "menu" },
+        { "id": "b", "type": "invoke", "tool": "workflow_resume" }
+      ] },
+      "verb": "delegate",
+      "reason": "devolve_o_controle"
+    },
+    {
+      "nome": "nao invoca workflow_resume",
+      "snapshot": { "steps": [
+        { "id": "a", "type": "menu" },
+        { "id": "b", "type": "complete" }
+      ] },
+      "verb": "escalate",
+      "reason": "nao_retorna"
+    },
+    {
+      "nome": "cadeia de delegate vence a devolucao",
+      "snapshot": { "steps": [
+        { "id": "a", "type": "delegate", "pool": "x" },
+        { "id": "b", "type": "invoke", "tool": "workflow_resume" }
+      ] },
+      "verb": "escalate",
+      "reason": "cadeia_delegate"
+    },
+    {
+      "nome": "sem steps",
+      "snapshot": { "steps": [] },
+      "verb": "escalate",
+      "reason": "sem_deploy"
+    },
+    {
+      "nome": "snapshot vazio",
+      "snapshot": {},
+      "verb": "escalate",
+      "reason": "sem_deploy"
+    },
+    {
+      "nome": "snapshot nulo",
+      "snapshot": null,
+      "verb": "escalate",
+      "reason": "sem_deploy"
+    },
+    {
+      "nome": "steps nao e array",
+      "snapshot": { "steps": "nao-e-array" },
+      "verb": "escalate",
+      "reason": "sem_deploy"
+    },
+    {
+      "nome": "steps com lixo, sem devolucao",
+      "snapshot": { "steps": [null, 7, "x", { "id": "a", "type": "menu" }] },
+      "verb": "escalate",
+      "reason": "nao_retorna"
+    },
+    {
+      "nome": "lixo ao lado de uma devolucao legitima",
+      "snapshot": { "steps": [null, { "id": "a", "type": "invoke", "tool": "workflow_resume" }] },
+      "verb": "delegate",
+      "reason": "devolve_o_controle"
+    },
+    {
+      "nome": "delegate no meio de um fluxo longo",
+      "snapshot": { "steps": [
+        { "id": "a", "type": "menu" },
+        { "id": "b", "type": "invoke", "tool": "context_set" },
+        { "id": "c", "type": "delegate", "pool": "$.pipeline_state.x" },
+        { "id": "d", "type": "complete" }
+      ] },
+      "verb": "escalate",
+      "reason": "cadeia_delegate"
+    }
+  ]
+}

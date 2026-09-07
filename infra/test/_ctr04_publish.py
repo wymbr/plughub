@@ -25,16 +25,28 @@ H = {"x-tenant-id": "tenant_demo",
      "content-type": "application/json"}
 
 # (arquivo, skill_id, pool)
-ALVOS = [
-    ("packages/skill-flow-engine/skills/agente_reembolso_intake_v1.yaml",
-     "skill_reembolso_intake_v1", "reembolso_ia"),
-    ("packages/skill-flow-engine/skills/skill_atendimento_auth_v1.yaml",
-     "skill_atendimento_auth_v1", "auth_sac_ia"),
-    ("packages/skill-flow-engine/skills/agente_auth_form_v1.yaml",
-     "skill_auth_form_v1", "auth_form_ia"),
-    ("packages/skill-flow-engine/skills/skill_atendimento_sac_v1.yaml",
-     "skill_atendimento_sac_v1", "sac_ia"),
-]
+import os
+
+_TODOS = {
+    "ctr04": [
+        ("packages/skill-flow-engine/skills/agente_reembolso_intake_v1.yaml",
+         "skill_reembolso_intake_v1", "reembolso_ia"),
+        ("packages/skill-flow-engine/skills/skill_atendimento_auth_v1.yaml",
+         "skill_atendimento_auth_v1", "auth_sac_ia"),
+        ("packages/skill-flow-engine/skills/agente_auth_form_v1.yaml",
+         "skill_auth_form_v1", "auth_form_ia"),
+        ("packages/skill-flow-engine/skills/skill_atendimento_sac_v1.yaml",
+         "skill_atendimento_sac_v1", "sac_ia"),
+    ],
+    # RET-02 — os dois orquestradores, que ganharam o ramo do verbo.
+    "ret02": [
+        ("packages/skill-flow-engine/skills/skill_navegacao_v1.yaml",
+         "skill_navegacao_v1", "demo_ia"),
+        ("packages/skill-flow-engine/skills/skill_navegacao_llm_v1.yaml",
+         "skill_navegacao_llm_v1", "demo_llm_ia"),
+    ],
+}
+ALVOS = _TODOS[os.environ.get("GRUPO", "ctr04")]
 
 
 def req(metodo, url, corpo=None, extra=None):
@@ -112,14 +124,15 @@ for arq, skill_id, pool in ALVOS:
     snap = novo.get("yaml_snapshot") or {}
     passos = [x for x in (snap.get("steps") or []) if isinstance(x, dict)]
     devolve = sum(1 for x in passos if x.get("tool") == "workflow_resume")
+    delega  = sum(1 for x in passos if x.get("type") == "delegate")
     cfg_novo = novo.get("config_json") or {}
     perdeu = sorted(set(cfg.keys()) - set(cfg_novo.keys()))
 
-    print("%-28s OK  pool=%-16s steps=%-3d devolucoes=%d%s" % (
-        skill_id, pool, len(passos), devolve,
+    print("%-28s OK  pool=%-16s steps=%-3d devolucoes=%d delegates=%d%s" % (
+        skill_id, pool, len(passos), devolve, delega,
         ("  CONFIG PERDIDA: " + ",".join(perdeu)) if perdeu else ""))
-    if devolve == 0:
-        print("     ⚠️ o snapshot VIVO nao invoca workflow_resume — publish nao pegou")
+    if devolve == 0 and delega == 0:
+        print("     ⚠️ o snapshot VIVO nao invoca workflow_resume nem delega — publish nao pegou")
         falhas += 1
     if perdeu:
         falhas += 1

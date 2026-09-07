@@ -36,8 +36,17 @@ const FormGetInputSchema = z.object({
 
 const TreeLevelInputSchema = z.object({
   form_id:    z.string().min(1).describe("Dialog form id to resolve"),
-  output_key: z.string().min(1)
+  output_key: z.string().min(1).optional()
                 .describe("Which question of the form owns the options tree (its output_key)"),
+  // RET-02: `on_return` (D2 do ADR do retorno) aponta para o `id` do NODE, nao
+  // para o `output_key` — que nomeia a RESPOSTA, nao a pergunta. Sem endereçar
+  // por id, o ponteiro que `returnRefErrors` valida seria inenderecavel pela
+  // propria tool que o consome: a continuacao existiria e ninguem a renderizaria.
+  question_id: z.string().min(1).optional()
+                .describe(
+                  "Which question to project, by NODE id. Alternative to `output_key` — this " +
+                  "is what `on_return` names. Exactly one of the two must be given.",
+                ),
   // O CURSOR e do chamador, nunca desta tool: ela e pura sobre (forma, caminho).
   // Guardar cursor aqui criaria estado de navegacao fora do `pipeline_state`, que e
   // quem sobrevive a queda (ver D11 do ADR).
@@ -196,12 +205,28 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
 
         // Pergunta INEXISTENTE recusa alto. Cair na primeira pergunta da forma seria
         // navegar uma arvore que o chamador nao pediu — e a tela pareceria certa.
-        const q = render.questions.find(x => x.output_key === input.output_key)
+        // Exatamente UM dos dois enderecos. Aceitar nenhum cairia na primeira
+        // pergunta (navegar arvore que o chamador nao pediu); aceitar os dois
+        // exigiria uma precedencia, e precedencia entre dois enderecos e o
+        // comeco da pergunta *"qual deles respondeu?"*.
+        if ((input.output_key ? 1 : 0) + (input.question_id ? 1 : 0) !== 1) {
+          return mcpError(
+            "address_ambiguous",
+            "informe EXATAMENTE um de `output_key` ou `question_id` — " +
+            `recebi output_key=${JSON.stringify(input.output_key)} question_id=${JSON.stringify(input.question_id)}`,
+          )
+        }
+        const q = input.question_id
+          ? render.questions.find(x => x.id === input.question_id)
+          : render.questions.find(x => x.output_key === input.output_key)
         if (!q) {
           return mcpError(
             "question_not_found",
-            `A forma '${form.form_id}' nao tem pergunta com output_key '${input.output_key}'. ` +
-            `Disponiveis: [${render.questions.map(x => x.output_key).join(", ")}]`,
+            input.question_id
+              ? `A forma '${form.form_id}' nao tem pergunta com id '${input.question_id}'. ` +
+                `Disponiveis: [${render.questions.map(x => x.id).join(", ")}]`
+              : `A forma '${form.form_id}' nao tem pergunta com output_key '${input.output_key}'. ` +
+                `Disponiveis: [${render.questions.map(x => x.output_key).join(", ")}]`,
           )
         }
 
@@ -230,6 +255,17 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           node_label:    nodeLabel,
           found:         nivel.found,
           is_leaf:       nivel.is_leaf,
+          question_id:   q.id,
+          // RET-02 — ponteiro de continuacao do NO DO CURSOR. Ausente ⇒ a folha
+          // encerra o fluxo do chamador (o comportamento de sempre). Viaja aqui
+          // e nao no `options` porque quem continua e a folha ESCOLHIDA, e o
+          // chamador precisa dele DEPOIS da escolha, ja com o cursor sobre ela.
+          //
+          // ⚠️ A CHAVE so existe quando ha ponteiro, e isso nao e estilo: o
+          // operador `exists` do `choice` olha a CHAVE, nao o valor, entao um
+          // `on_return: null` explicito faria TODO caminho parecer ter
+          // continuacao — o valor plausivel mais barato de produzir aqui.
+          ...(nivel.on_return ? { on_return: nivel.on_return } : {}),
           // Vocabulario de desfechos SOB o cursor (D6). Em `path: []` e a arvore
           // inteira — o que o orquestrador com LLM manda ao prompt E confere na
           // volta. As duas metades: mandar sem conferir e promessa sem mecanismo.

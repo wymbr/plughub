@@ -1,5 +1,97 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (1) — RET-02: o orquestrador delega, e o verbo e derivado por destino
+
+Segunda fase do `adr-tree-return-continuation.md`, e o ponto em que as tres pecas se encontram: o
+ponteiro (RET-01), os executores que devolvem (CTR-04) e o criterio de delegabilidade (CTR-07).
+
+### Por que NAO um `delegate` unico
+
+O alvo do orquestrador e uma REFERENCIA (`$.pipeline_state.rota.pool`), entao um unico step
+`delegate` alcancaria TODOS os destinos do mapa. Medido: **2 dos 6 nao sao delegaveis** —
+`portabilidade_ia` tem cadeia de `delegate` (o token e tag unica da sessao e colide, CTR-06) e
+`retencao_humano` nao tem deploy. Delegar para eles penduraria o contato ate o `timeout_hours`.
+
+Por isso o `pool_route_resolve` passou a devolver **`verb` + `verb_reason`**, lendo o snapshot
+PROMOVIDO no destino. ⚠️ **Derivado do artefato, nunca declarado**: um campo `delegavel: true` no
+pool seria segunda fonte de verdade que envelhece calada — bastaria publicar um skill sem o retorno
+para a declaracao virar mentira. ⚠️ **E o default e ESCALATE**: registry mudo, slots indisponivel,
+formato inesperado — tudo resolve para o verbo que NAO pendura ninguem, com o motivo nomeado.
+
+### O fluxo, nos dois orquestradores
+
+```
+resolver_rota → decidir_verbo ─ verb == "delegate" → delegar ─ on_resume  → continuar
+                              └ default            → escalar          ├ on_reject  → escalar_humano
+                                                                      └ on_timeout → escalar_humano
+continuar ─ on_return existe → nivel_continuacao → (reentra no laco)
+          └ default          → finalizar
+```
+
+`on_reject` e `on_timeout` vao para o humano, e a distincao importa: `rejected` e o
+*"precisa_humano"* que os executores devolvem depois de CONCLUIR; `timeout` e o especialista que nao
+respondeu. Colapsa-los faria o orquestrador tratar um veredicto como um prazo.
+
+⚠️ **A reentrada e diferente nos dois, e nao por acidente:** o determinista volta ao `mostrar` (ele
+LISTA), o com LLM volta ao `ouvir` (ele ESCUTA). E no LLM o `nivel_continuacao` reescreve
+`nivel.leaves`, entao o modelo passa a classificar dentro da subarvore da continuacao — sem isso ele
+aterrissaria numa folha que aquele ponto do fluxo nao oferece.
+
+### Duas correcoes de enderecamento que a tarefa revelou
+
+- **`on_return` nomeia o `id` do NODE, e a tool so sabia enderecar por `output_key`** (que nomeia a
+  RESPOSTA). O ponteiro validado por `returnRefErrors` era inenderecavel pela propria tool que o
+  consome. `dialog_tree_level` ganhou `question_id`, e `RenderQuestion` passou a carregar o `id`.
+  Exatamente UM dos dois enderecos e aceito: precedencia entre dois enderecos e o comeco da pergunta
+  *"qual deles respondeu?"*.
+- **`on_return` viaja so quando EXISTE.** A primeira versao emitia `null`, e o operador `exists` do
+  `choice` olha a CHAVE, nao o valor — todo caminho pareceria ter continuacao.
+
+### O gate de delegabilidade ficou VERMELHO, e a resposta certa nao era afrouxa-lo
+
+Com o `delegate` por referencia, a trava da CTR-07 acusou 4 infracoes: ela cobrava o mapa inteiro,
+porque foi escrita quando NAO havia guarda em runtime. Estava certa entao.
+
+A correcao foi torna-la **mais precisa, nao mais frouxa**: ref **guardada** por um `choice` que
+condiciona sobre `.verb == "delegate"` nao cobra o mapa; ref **desguardada** continua cobrando. E a
+guarda tem de estar em TODOS os predecessores do `delegate` — um caminho lateral que chegue nele sem
+passar pelo verbo reabre o buraco inteiro.
+
+⚠️ **E isso exigiu um ramo D de mutacao, porque o C nao servia.** O ramo C finge a lista de alvos
+diretamente e **nao passa** pela funcao que decide o alcance: um defeito nela que a fizesse devolver
+sempre vazio deixaria a trava verde com a mutacao C acusando ao lado — falsa tranquilidade, a
+proposicao adjacente outra vez. O ramo D muta o INSUMO (desarma o `choice`) e exige que a funcao
+volte a cobrar o mapa: medido **0 alvos guardado × 6 desguardado**.
+
+### Paridade cross-language por VETORES
+
+O criterio do verbo esta escrito duas vezes — TypeScript em `navigation.ts`, Python no probe. Os dois
+leem os **mesmos 10 vetores** (`infra/test/fixtures/verb_vectors.json`), entao um caso novo obriga as
+duas casas a concordarem. Paridade presumida entre linguagens e o defeito que o gate do
+channel-gateway existe para pegar.
+
+### ⚠️ Esta entrega NAO liga ciclo nenhum
+
+O retorno so continua se a folha declarar `on_return`, e **nenhuma forma publicada declara** (0 de
+14). Sem ponteiro, o `continuar` cai em `finalizar` — o comportamento de hoje. Consequencia para a
+ordem: a **RET-04 (teto por contador) vem ANTES da RET-05**, que e quem liga o ciclo.
+
+### Arquivos
+
+- `packages/schemas/src/dialog-render.ts` — `RenderQuestion.id`, `TreeLevel.on_return`
+- `packages/mcp-server-plughub/src/tools/navigation.ts` — `decideVerb` + verbo no resolve;
+  `tools/dialog.ts` — `question_id` e `on_return`; `navigation.test.ts` (24 testes)
+- `packages/skill-flow-engine/skills/skill_navegacao_v1.yaml` · `skill_navegacao_llm_v1.yaml`
+- `infra/test/probe_orchestrator_delegate_verb.sh` · `_ret02_verb_probe.py` ·
+  `fixtures/verb_vectors.json` · `_delegability_probe.py` (ramo D) · `_ctr04_publish.py` (grupo)
+
+Publicado e promovido nos dois pools, com o mcp-server reconstruido ANTES — o fluxo depende de tools
+que a imagem antiga nao tinha. Regressao: `probe_orchestrator_tree_nav.sh` (10 ramos),
+`probe_dialog_return_pointer.sh`, `probe_skill_profile_steps.sh` e `probe_orchestrator_delegability.sh`
+todos verdes.
+
+---
+
 ## 2026-09-06 (18) — RET-01: o ponteiro de continuacao entra, e as formas publicadas nao mudam
 
 Primeira fase do `adr-tree-return-continuation.md`. A folha ganha `on_return: <question_id>`, a

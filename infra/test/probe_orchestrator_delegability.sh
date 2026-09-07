@@ -44,6 +44,11 @@
 #   C  MUTACAO da trava: finge que o orquestrador delega a todos os destinos e
 #      exige que ela ACUSE. Sem isso, o verde do B poderia ser cegueira -- ele
 #      passa hoje por AUSENCIA de delegate, que e o modo de falha do catalogo.
+#   D  MUTACAO da GUARDA (RET-02): desarma o `choice` que decide o verbo e exige
+#      que a trava volte a cobrar o mapa inteiro. Existe porque o ramo C NAO passa
+#      pela funcao que decide o alcance -- ele finge a lista de alvos. Sem o D, um
+#      defeito naquela funcao deixaria a trava verde COM a mutacao C acusando ao
+#      lado, dando falsa tranquilidade: a proposicao adjacente outra vez.
 #
 # ⚠️ Le o SNAPSHOT VIVO do slot, nunca o YAML do disco: skill e seed-if-absent, e
 #    editar YAML ja semeado e no-op. Medir o arquivo responderia sobre um
@@ -77,6 +82,7 @@ echo "probe_orchestrator_delegability — quem pode receber delegate (CTR-03/G3)
 rodar "A — censo da delegabilidade"        censo
 rodar "B — a trava"                        trava
 rodar "C — mutacao: a trava acusa?"        trava-mut
+rodar "D — mutacao da GUARDA do verbo"     guarda-mut
 
 echo ""
 echo "═════════════════════════════════════════════════════════════════════"

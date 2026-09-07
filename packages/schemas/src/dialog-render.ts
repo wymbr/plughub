@@ -81,6 +81,15 @@ export interface RenderOption {
 // Retry affordance flattened for the menu step: reprompt localized, counter fixed.
 export interface RenderRetry { reprompt: string; max_attempts: number }
 export interface RenderQuestion {
+  /**
+   * `id` do NODE — não confundir com `output_key`, que nomeia a RESPOSTA.
+   *
+   * Passou a viajar na RET-02 porque `on_return` (D2 do ADR do retorno) aponta
+   * para o id do node, e sem ele a projeção de árvore só sabia endereçar por
+   * `output_key`: o ponteiro validado por `returnRefErrors` seria inendereçável
+   * pela própria tool que o consome.
+   */
+  id:          string
   prompt:      string
   interaction: string
   options:     RenderOption[]
@@ -193,6 +202,14 @@ export interface TreeLevel {
    */
   found:    boolean
   /**
+   * `on_return` do NÓ DO CURSOR (D2 do `adr-tree-return-continuation.md`) — a
+   * question que o chamador executa quando o agente desta folha devolver.
+   *
+   * ⚠️ É do nó do CURSOR, nunca dos filhos: quem continua é a folha ESCOLHIDA.
+   * Ausente ⇒ a folha encerra o fluxo do chamador, que é o comportamento de hoje.
+   */
+  on_return?: string
+  /**
    * O no DO CAMINHO e folha (selecionavel). DERIVADO da ausencia de filhos — a
    * mesma D2 do `adr-dialog-tree-options`, e por isso pasta esvaziada por
    * aposentadoria JA chega aqui como folha (o `mapOptions` omite `options` vazio).
@@ -233,7 +250,9 @@ export function optionsAtPath(
 
   // Raiz (caminho vazio) nao e um no: nao e folha, e os filhos sao as raizes.
   if (!atual) return { found: true, is_leaf: false, options: nivel, path: trilha }
-  return { found: true, is_leaf: nivel.length === 0, options: nivel, path: trilha }
+  const saida: TreeLevel = { found: true, is_leaf: nivel.length === 0, options: nivel, path: trilha }
+  if (atual.on_return) saida.on_return = atual.on_return
+  return saida
 }
 
 /**
@@ -411,6 +430,7 @@ export function buildRender(form: DialogForm, locale?: string, fromQuestionId?: 
         })
       }
       questions.push({
+        id:          node.id,
         prompt:      resolveLocalizedText(node.prompt, locale, dl),
         interaction: node.interaction,
         options:     mapOptions(node.options, locale, dl),

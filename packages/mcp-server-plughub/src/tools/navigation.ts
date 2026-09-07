@@ -79,6 +79,52 @@ export function matchNavigationRoute(
   return null
 }
 
+// ─── Verbo: delegar ou escalar? ───────────────────────────────────────────────
+
+/**
+ * Um destino pode receber `delegate` sem pendurar o contato?
+ *
+ * **Delegar é SUSPENDER o chamador**, e ele só volta se o alvo chamar
+ * `workflow_resume`. Um alvo que não devolve deixa o orquestrador suspenso até o
+ * `timeout_hours`, e o modo de falha é o pior do catálogo: o cliente vê o
+ * especialista atender normalmente, o especialista encerra o próprio segmento, e
+ * **nada fica vermelho**.
+ *
+ * ⚠️ **DERIVADO do artefato, nunca declarado.** Um campo `delegavel: true` no
+ * pool seria uma segunda fonte de verdade que envelhece calada — bastaria alguém
+ * publicar um skill sem o retorno para a declaração virar mentira. Aqui a
+ * resposta vem do snapshot que está PROMOVIDO naquele pool, que é o que roda.
+ *
+ * ⚠️ **A recusa é o default.** Só devolve `delegate` quando os três fatos são
+ * positivos; qualquer dúvida (registry mudo, snapshot ausente, formato
+ * inesperado) resolve para `escalate`, que é o comportamento de hoje e não
+ * pendura ninguém.
+ *
+ * Os três motivos de recusa, cada um com nome — o gate
+ * `probe_orchestrator_delegability.sh` usa exatamente estes:
+ *   `sem_deploy`       o pool não tem slot `current` com snapshot (pools humanos)
+ *   `nao_retorna`      o snapshot não invoca `workflow_resume`
+ *   `cadeia_delegate`  o snapshot usa `delegate`, e `core.workflow.delegate_resume_token`
+ *                      é tag ÚNICA da sessão: a delegação de dentro SOBRESCREVE o
+ *                      token do orquestrador, que nunca retoma (CTR-06)
+ */
+export function decideVerb(snapshot: unknown): { verb: "delegate" | "escalate"; reason: string } {
+  const flow = snapshot as { steps?: unknown[] } | null | undefined
+  if (!flow || !Array.isArray(flow.steps) || flow.steps.length === 0) {
+    return { verb: "escalate", reason: "sem_deploy" }
+  }
+  const passos = flow.steps.filter(
+    (x): x is Record<string, unknown> => !!x && typeof x === "object",
+  )
+  if (passos.some(p => p["type"] === "delegate")) {
+    return { verb: "escalate", reason: "cadeia_delegate" }
+  }
+  if (!passos.some(p => p["tool"] === "workflow_resume")) {
+    return { verb: "escalate", reason: "nao_retorna" }
+  }
+  return { verb: "delegate", reason: "devolve_o_controle" }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 type ToolResult = {
@@ -173,11 +219,41 @@ export function registerNavigationTools(server: McpServer, deps: NavigationDeps)
           )
         }
 
+        // RET-02 — o VERBO vem junto do endereço, derivado do que está promovido
+        // no destino. Uma consulta a mais, no mesmo lugar: se o chamador tivesse
+        // de perguntar isso à parte, haveria dois momentos em que o mapa e o
+        // artefato podem discordar, e o skill escolheria com base no mais velho.
+        //
+        // ⚠️ Falha ao ler o destino resolve para `escalate` com motivo NOMEADO —
+        // nunca para `delegate`. Degradar para o verbo que suspende o chamador
+        // seria transformar "não consegui perguntar" em contato pendurado.
+        let verbo: { verb: "delegate" | "escalate"; reason: string }
+        try {
+          const rSlots = await fetch(
+            `${agentRegistryUrl}/v1/pools/${encodeURIComponent(achado.pool)}/slots`,
+            { headers: { "x-tenant-id": tenantId } },
+          )
+          if (!rSlots.ok) {
+            verbo = { verb: "escalate", reason: `slots_indisponivel_${rSlots.status}` }
+          } else {
+            const corpo = await rSlots.json() as { slots?: { current?: { yaml_snapshot?: unknown } } }
+            verbo = decideVerb(corpo?.slots?.current?.yaml_snapshot)
+          }
+        } catch (e) {
+          verbo = { verb: "escalate", reason: "slots_erro" }
+          console.warn(
+            `[pool_route_resolve] nao consegui ler o deploy de ${achado.pool} ` +
+            `(${e instanceof Error ? e.message : String(e)}) — verbo resolve para escalate`,
+          )
+        }
+
         return ok({
           pool:        achado.pool,
           matched_key: achado.matched_key,
           path:        a.path,
           source_pool: poolId,
+          verb:        verbo.verb,
+          verb_reason: verbo.reason,
         })
       } catch (err) {
         return mcpError("resolve_failed", err instanceof Error ? err.message : String(err))

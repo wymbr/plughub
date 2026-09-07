@@ -158,6 +158,12 @@ probe_orchestrator_delegability.sh
 # question, entao a janela e OPT-IN e este gate cobra a paridade sobre a POPULACAO,
 # com mutacao do comparador ao lado.
 probe_dialog_return_pointer.sh
+# RET-02: o orquestrador escolhe DELEGAR ou ESCALAR por destino, e o verbo e DERIVADO
+# do que esta promovido la (nunca declarado no mapa). O alvo do delegate e REFERENCIA,
+# entao sem a guarda ele alcancaria os 6 destinos -- e 2 nao sao delegaveis. O ramo C
+# e paridade cross-language por vetores compartilhados: o criterio esta escrito em
+# TypeScript e em Python, e paridade presumida entre linguagens ja custou caro aqui.
+probe_orchestrator_delegate_verb.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh

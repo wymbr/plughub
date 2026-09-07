@@ -138,6 +138,83 @@ def censo():
 
 # ── trava ────────────────────────────────────────────────────────────────────
 
+def _guarda_do_verbo(p):
+    """O step e a guarda que decide DELEGAR? (RET-02)
+
+    Um `choice` com condicao sobre um campo terminado em `.verb`, valendo
+    "delegate". E assim que o orquestrador filtra o alcance de um `delegate` cujo
+    `pool` e referencia.
+    """
+    if p.get("type") != "choice":
+        return False
+    for c in p.get("conditions") or []:
+        if not isinstance(c, dict):
+            continue
+        campo = str(c.get("field") or "")
+        if campo.endswith(".verb") and c.get("value") == "delegate":
+            return True
+    return False
+
+
+def _alvos_alcancaveis(snap, nav):
+    """Destinos que um step `delegate` deste fluxo pode realmente alcancar.
+
+    ⚠️ **Esta funcao mudou em 2026-09-07 (RET-02), e a mudanca e um APERTO com
+    cara de afrouxamento — vale ler o porque.**
+
+    Ate a RET-02 nao havia guarda nenhuma: um `delegate` com `pool` por ref
+    (`$.pipeline_state.rota.pool`) alcancava QUALQUER destino do mapa, e a trava
+    cobrava o mapa inteiro. Estava certo entao.
+
+    A RET-02 introduziu o `decidir_verbo`: o `pool_route_resolve` devolve o VERBO
+    derivado do deploy do destino, e o `choice` so entra no `delegate` quando ele
+    e "delegate". Ou seja, o alcance REAL passou a ser filtrado em runtime, e
+    continuar cobrando o mapa inteiro faria o gate reprovar um fluxo CORRETO —
+    um teste que reprova a proposicao errada, que e o defeito da secao Postura.
+
+    Entao: ref GUARDADA nao cobra o mapa; ref DESGUARDADA continua cobrando. A
+    guarda tem de estar em TODOS os predecessores do delegate — um caminho
+    lateral que chegue nele sem passar pelo verbo reabre o buraco inteiro.
+    """
+    ps = passos(snap)
+    porid = dict((p.get("id"), p) for p in ps if p.get("id"))
+
+    def predecessores(alvo_id):
+        out = []
+        for p in ps:
+            saidas = set()
+            for k in ("on_success", "on_failure", "on_timeout", "on_disconnect", "default"):
+                v = p.get(k)
+                if isinstance(v, str):
+                    saidas.add(v)
+            for k in ("on_resume", "on_reject", "on_timeout"):
+                v = p.get(k)
+                if isinstance(v, dict) and v.get("next"):
+                    saidas.add(v["next"])
+            for c in p.get("conditions") or []:
+                if isinstance(c, dict) and c.get("next"):
+                    saidas.add(c["next"])
+            if alvo_id in saidas:
+                out.append(p)
+        return out
+
+    alvos = []
+    for p in ps:
+        if p.get("type") != "delegate":
+            continue
+        alvo = str(p.get("pool") or "")
+        if alvo.startswith("$.") or alvo.startswith("@ctx."):
+            preds = predecessores(p.get("id"))
+            guardado = bool(preds) and all(_guarda_do_verbo(q) for q in preds)
+            if not guardado:
+                alvos.extend(nav.values())
+        elif alvo:
+            alvos.append(alvo)
+    return sorted(set(alvos))
+
+
+
+
 def trava(mutar):
     """Orquestrador que DELEGA a alvo nao-delegavel reprova.
 
@@ -158,24 +235,12 @@ def trava(mutar):
         examinados += 1
 
         if mutar:
-            # Finge o pior caso: delega para TODOS os destinos declarados.
+            # Finge o pior caso: um delegate DESGUARDADO para todos os destinos.
+            # Precisa ser desguardado — com guarda a trava (corretamente) nao
+            # acusa, e a mutacao nao provaria nada.
             alvos = sorted(set(nav.values()))
         else:
-            # Alvos REAIS de step delegate. O `pool` pode ser uma ref
-            # ($.pipeline_state.rota.pool) — nesse caso o alvo e decidido em
-            # runtime e QUALQUER destino do mapa e alcancavel, entao a trava
-            # cobra o mapa inteiro. Recusar-se a julgar a ref seria deixar
-            # passar exatamente a forma que o orquestrador usa.
-            alvos = []
-            for p in passos(snap):
-                if p.get("type") != "delegate":
-                    continue
-                alvo = p.get("pool") or ""
-                if alvo.startswith("$.") or alvo.startswith("@ctx."):
-                    alvos.extend(nav.values())
-                elif alvo:
-                    alvos.append(alvo)
-            alvos = sorted(set(alvos))
+            alvos = _alvos_alcancaveis(snap, nav)
 
         for alvo in alvos:
             ok, motivo, sid = julga(alvo)
@@ -209,6 +274,59 @@ def trava(mutar):
     return 0
 
 
+def guarda_mut():
+    """A mutacao da GUARDA — e ela que exercita `_alvos_alcancaveis`.
+
+    ⚠️ Existe porque a mutacao `trava-mut` NAO passa por aquela funcao: ela finge
+    a lista de alvos diretamente. Se `_alvos_alcancaveis` tivesse um defeito que
+    a fizesse devolver sempre vazio, a trava ficaria verde e a `trava-mut`
+    continuaria acusando — verde por cegueira, com a mutacao ao lado dando falsa
+    tranquilidade. E o defeito de medir a proposicao ADJACENTE.
+
+    Aqui a mutacao e no INSUMO: tira as condicoes do `choice` que decide o verbo
+    e exige que a funcao volte a cobrar o mapa inteiro.
+    """
+    orqs = orquestradores()
+    if not orqs:
+        print("VEREDICTO: SEM AMOSTRA — nenhum orquestrador")
+        return 3
+
+    examinados, cegos = 0, []
+    for pid, nav in orqs:
+        _sid, snap = snapshot_vivo(pid)
+        if snap is None:
+            continue
+        antes = _alvos_alcancaveis(snap, nav)
+        if not any(p.get("type") == "delegate" for p in passos(snap)):
+            continue
+        examinados += 1
+
+        # Desarma a guarda: o choice deixa de condicionar sobre `.verb`.
+        import copy
+        mutado = copy.deepcopy(snap)
+        for p in passos(mutado):
+            if p.get("type") == "choice":
+                for c in p.get("conditions") or []:
+                    if isinstance(c, dict) and str(c.get("field") or "").endswith(".verb"):
+                        c["field"] = "$.pipeline_state.qualquer_outra_coisa"
+        depois = _alvos_alcancaveis(mutado, nav)
+
+        ok = len(depois) > len(antes)
+        print("   %-14s guardado=%d alvo(s) · desguardado=%d alvo(s)  %s" % (
+            pid, len(antes), len(depois), "OK" if ok else "FALHA"))
+        if not ok:
+            cegos.append(pid)
+
+    if examinados == 0:
+        print("VEREDICTO: SEM AMOSTRA — nenhum orquestrador com step delegate")
+        return 3
+    if cegos:
+        print("VEREDICTO: FALHA — a funcao nao reagiu a remocao da guarda: %s" % ", ".join(cegos))
+        return 1
+    print("VEREDICTO: OK — sem a guarda, a trava volta a cobrar o mapa inteiro")
+    return 0
+
+
 if __name__ == "__main__":
     modo = sys.argv[1] if len(sys.argv) > 1 else "censo"
     if modo == "censo":
@@ -217,6 +335,8 @@ if __name__ == "__main__":
         sys.exit(trava(False))
     elif modo == "trava-mut":
         sys.exit(trava(True))
+    elif modo == "guarda-mut":
+        sys.exit(guarda_mut())
     else:
         print("modo desconhecido: %s" % modo)
         sys.exit(2)
