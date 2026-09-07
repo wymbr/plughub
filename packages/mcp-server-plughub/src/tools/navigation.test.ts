@@ -73,10 +73,11 @@ describe("matchNavigationRoute", () => {
 describe("decideVerb — o verbo e DERIVADO do que esta promovido", () => {
   const passo = (o: Record<string, unknown>) => o
 
-  it("snapshot que devolve o controle ⇒ delegate", () => {
+  it("snapshot que devolve o controle AO CHAMADOR ⇒ delegate", () => {
     const v = decideVerb({ steps: [
       passo({ id: "a", type: "menu" }),
-      passo({ id: "b", type: "invoke", tool: "workflow_resume" }),
+      passo({ id: "b", type: "invoke", tool: "workflow_resume",
+              input: { resume_token: "@ctx.core.workflow.delegate_resume_token" } }),
     ] })
     expect(v).toEqual({ verb: "delegate", reason: "devolve_o_controle" })
   })
@@ -86,14 +87,38 @@ describe("decideVerb — o verbo e DERIVADO do que esta promovido", () => {
     expect(v).toEqual({ verb: "escalate", reason: "nao_retorna" })
   })
 
-  it("snapshot com `delegate` proprio ⇒ escalate/cadeia_delegate, mesmo devolvendo", () => {
-    // O token e tag UNICA da sessao: a delegacao de dentro sobrescreve a de fora.
-    // Devolver NAO salva este caso, e por isso a checagem da cadeia vem ANTES.
+  it("snapshot com `delegate` proprio JA NAO desqualifica (CTR-06)", () => {
+    // Ate 2026-09-07 este caso saia `escalate/cadeia_delegate`: o token era tag
+    // UNICA da sessao e a delegacao de dentro sobrescrevia a de fora. O engine
+    // passou a CAPTURAR o token no nascimento do pipeline (isolado por segmento)
+    // e a RESTAURA-LO na retomada, entao a cadeia deixou de ser fato do artefato.
     const v = decideVerb({ steps: [
       passo({ id: "a", type: "delegate", pool: "x" }),
-      passo({ id: "b", type: "invoke", tool: "workflow_resume" }),
+      passo({ id: "b", type: "invoke", tool: "workflow_resume",
+              input: { resume_token: "@ctx.core.workflow.delegate_resume_token" } }),
     ] })
-    expect(v).toEqual({ verb: "escalate", reason: "cadeia_delegate" })
+    expect(v).toEqual({ verb: "delegate", reason: "devolve_o_controle" })
+  })
+
+  // ── O PAR QUE CARREGA PESO ───────────────────────────────────────
+  //
+  // Tirar o `cadeia_delegate` sem apertar o `nao_retorna` abriria um buraco: ele
+  // media a mera PRESENCA da tool, proposicao adjacente a que interessa. O
+  // `agente_portabilidade_intake_v1` invoca `workflow_resume` cinco vezes e
+  // nenhuma delas retoma o chamador -- retoma um `suspend` PROPRIO. Ele so nao
+  // era delegavel porque o outro criterio o barrava antes.
+  it("retomar um suspend PROPRIO nao e devolver o controle", () => {
+    const v = decideVerb({ steps: [
+      passo({ id: "a", type: "suspend" }),
+      passo({ id: "b", type: "invoke", tool: "workflow_resume",
+              input: { resume_token: "$.pipeline_state.pendencia.resume_token" } }),
+    ] })
+    expect(v).toEqual({ verb: "escalate", reason: "nao_retorna" })
+  })
+
+  it("workflow_resume sem `input` nenhum nao vale como devolucao", () => {
+    const v = decideVerb({ steps: [passo({ id: "b", type: "invoke", tool: "workflow_resume" })] })
+    expect(v).toEqual({ verb: "escalate", reason: "nao_retorna" })
   })
 
   it("sem deploy ⇒ escalate/sem_deploy (e o caso dos pools humanos)", () => {

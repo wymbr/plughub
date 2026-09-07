@@ -499,10 +499,19 @@ export class SkillFlowEngine {
       // Resetting to a fresh state here would discard all idempotency keys and
       // cause every prior suspend/collect step to re-execute on replay.
       state = { ...state, status: "in_progress" as const }
+      // CTR-06 — retomar é DESEMPILHAR: o token do meu chamador volta a valer.
+      await this._restaurarTokenDoChamador(sessionId, customerId, state)
       await this.stateManager.save(tenantId, pipelineSessionId, state)
     } else {
       // Novo pipeline — inicia do entry
       state = PipelineStateManager.create(skillId, flow.entry)
+
+      // ── CTR-06: o token do CHAMADOR é fato da ARESTA, não da sessão ────────
+      // Nascer é o único momento em que a tag da sessão descreve com certeza a
+      // MINHA delegação: o `delegate_conference` a escreve logo antes de me
+      // rotear. Daqui em diante ela é um cursor de quem estiver mais fundo na
+      // pilha — se eu delegar, ela passa a apontar para o MEU delegado.
+      state = await this._capturarTokenDoChamador(sessionId, customerId, state)
 
       // ── required_context: computar @ctx.__gaps__ antes do primeiro step ──
       // Se o skill declara required_context e há um ContextStore disponível,
@@ -793,6 +802,104 @@ export class SkillFlowEngine {
     }
 
     return ctx
+  }
+
+  // ── CTR-06 — a cadeia `delegate → delegate` ────────────────────────────────
+  //
+  // `core.workflow.delegate_resume_token` é tag ÚNICA da sessão, e o token que ela
+  // carrega é fato da ARESTA (chamador → chamado), não da sessão. Guardar fato
+  // estreito em campo largo é o invariante do CLAUDE.md, e aqui ele cobra:
+  //
+  //   A delega a B   → tag = T_A  (token que retoma A)
+  //   B delega a C   → tag = T_B  (token que retoma B) — T_A foi SOBRESCRITO
+  //   C devolve a B  → B retoma, lê a tag, acha T_B e **retoma a si mesmo**
+  //   A nunca volta  → o contato fica pendurado até o `timeout_hours`
+  //
+  // O modo de falha é o pior do catálogo: o cliente vê o especialista atender, o
+  // especialista encerra o próprio segmento, e nada fica vermelho.
+  //
+  // O conserto é de ESCOPO, em duas metades que só funcionam juntas:
+  //   1. **capturar** — ao NASCER, cada pipeline copia a tag para o próprio
+  //      `pipeline_state`, que é isolado por segmento (`{sid}--seg--{iso}`) e é a
+  //      casa mais estreita que conhece a aresta;
+  //   2. **restaurar** — ao RETOMAR (desempilhar), a tag volta a valer o token do
+  //      MEU chamador, que é o quadro ativo de novo.
+  //
+  // A metade 2 é o que dispensa migrar os 8 skills que hoje leem a tag: eles
+  // continuam lendo o mesmo nome, e o nome volta a significar o que promete. A
+  // metade 1 sozinha seria uma chave nova que ninguém lê.
+  //
+  // ⚠️ **A chave do capturado fica FORA do padrão `{id}:__x__`** (mesma lição da
+  // RET-04): aquela família é apagada ao entrar num step, e o `delegate` é
+  // exatamente o step em que se reentra — as duas metades se anulariam em
+  // silêncio.
+  //
+  // ⚠️ **Dois escritores para uma chave** (o `delegate_conference` do gateway e
+  // esta casa) é o padrão que o CLAUDE.md manda desconfiar. Aqui eles não
+  // disputam por cadência: são as duas pontas de um protocolo de PILHA — o
+  // gateway escreve ao empilhar, o engine ao desempilhar. É por isso que a
+  // restauração só grava quando o valor DIFERE, e **loga quando grava**: cada
+  // linha dessas é uma colisão que existiu e foi reparada.
+
+  /** Nome da tag canônica que carrega o token de retomada do chamador. */
+  private static readonly TAG_TOKEN_CHAMADOR = "core.workflow.delegate_resume_token"
+
+  /** Cópia própria do token, no `results` — fora do padrão de sentinela. */
+  private static readonly CHAVE_TOKEN_CHAMADOR = "_caller_resume_token"
+
+  /** Copia a tag para o `pipeline_state` no nascimento deste pipeline. */
+  private async _capturarTokenDoChamador(
+    sessionId:  string,
+    customerId: string,
+    state:      PipelineState,
+  ): Promise<PipelineState> {
+    const store = this.config.contextStore
+    if (!store) return state
+    try {
+      const bruto = await store.getValue(sessionId, SkillFlowEngine.TAG_TOKEN_CHAMADOR, customerId)
+      if (typeof bruto !== "string" || !bruto) return state
+      return PipelineStateManager.setResult(state, SkillFlowEngine.CHAVE_TOKEN_CHAMADOR, bruto)
+    } catch (e) {
+      // Degradação BARULHENTA: sem a cópia, uma cadeia futura volta a colidir.
+      console.warn(
+        `[engine] CTR-06: nao capturei o token do chamador (session=${sessionId}): ${String(e)}`,
+      )
+      return state
+    }
+  }
+
+  /** Devolve à tag o token do MEU chamador — o quadro que volta a ser o ativo. */
+  private async _restaurarTokenDoChamador(
+    sessionId:  string,
+    customerId: string,
+    state:      PipelineState,
+  ): Promise<void> {
+    const store = this.config.contextStore
+    if (!store) return
+    const meu = state.results[SkillFlowEngine.CHAVE_TOKEN_CHAMADOR]
+    if (typeof meu !== "string" || !meu) return
+    try {
+      const atual = await store.getValue(sessionId, SkillFlowEngine.TAG_TOKEN_CHAMADOR, customerId)
+      if (atual === meu) return
+      await store.set(
+        sessionId,
+        SkillFlowEngine.TAG_TOKEN_CHAMADOR,
+        { value: meu, confidence: 1, source: "skill_flow_engine", visibility: "agents_only" },
+        // `overwrite` e nao `highest_confidence`: quem escreveu por cima gravou
+        // com a MESMA confianca, entao a estrategia default nao substituiria e a
+        // restauracao seria um no-op silencioso.
+        "overwrite",
+        customerId,
+      )
+      console.warn(
+        `[engine] CTR-06: token do chamador RESTAURADO na retomada ` +
+        `(session=${sessionId}) — a tag apontava para uma delegacao mais funda`,
+      )
+    } catch (e) {
+      console.warn(
+        `[engine] CTR-06: nao restaurei o token do chamador (session=${sessionId}): ${String(e)}`,
+      )
+    }
   }
 
   /** Procura job_id ativo no pipeline_state para reportar no PRECONDITION_FAILED. */

@@ -9,14 +9,24 @@
     "pegar. Um vetor novo aqui obriga as duas casas a concordarem.",
     "",
     "⚠️ O default e ESCALATE. Delegar e suspender o chamador: qualquer duvida tem",
-    "de resolver para o verbo que NAO pendura ninguem."
+    "de resolver para o verbo que NAO pendura ninguem.",
+    "",
+    "⚠️ REVISADOS em 2026-09-07 (CTR-06). O motivo `cadeia_delegate` SAIU: o engine",
+    "captura o token do chamador no nascimento do pipeline e o restaura na retomada,",
+    "entao um `delegate` por dentro nao sobrescreve mais o token de quem chamou.",
+    "No lugar dele, `nao_retorna` deixou de medir a presenca da TOOL e passou a medir",
+    "a proposicao que interessa: o `resume_token` e a TAG DO CHAMADOR?",
+    "Os dois ultimos vetores sao o par que carrega peso — mesmo step, tokens",
+    "diferentes, veredictos opostos. Sem eles, uma implementacao que so procurasse",
+    "`tool: workflow_resume` passaria em todos os outros."
   ],
   "vetores": [
     {
-      "nome": "devolve o controle",
+      "nome": "devolve o controle ao chamador",
       "snapshot": { "steps": [
         { "id": "a", "type": "menu" },
-        { "id": "b", "type": "invoke", "tool": "workflow_resume" }
+        { "id": "b", "type": "invoke", "tool": "workflow_resume",
+          "input": { "resume_token": "@ctx.core.workflow.delegate_resume_token" } }
       ] },
       "verb": "delegate",
       "reason": "devolve_o_controle"
@@ -31,13 +41,14 @@
       "reason": "nao_retorna"
     },
     {
-      "nome": "cadeia de delegate vence a devolucao",
+      "nome": "cadeia de delegate NAO desqualifica mais (CTR-06)",
       "snapshot": { "steps": [
         { "id": "a", "type": "delegate", "pool": "x" },
-        { "id": "b", "type": "invoke", "tool": "workflow_resume" }
+        { "id": "b", "type": "invoke", "tool": "workflow_resume",
+          "input": { "resume_token": "@ctx.core.workflow.delegate_resume_token" } }
       ] },
-      "verb": "escalate",
-      "reason": "cadeia_delegate"
+      "verb": "delegate",
+      "reason": "devolve_o_controle"
     },
     {
       "nome": "sem steps",
@@ -71,20 +82,40 @@
     },
     {
       "nome": "lixo ao lado de uma devolucao legitima",
-      "snapshot": { "steps": [null, { "id": "a", "type": "invoke", "tool": "workflow_resume" }] },
+      "snapshot": { "steps": [null, { "id": "a", "type": "invoke", "tool": "workflow_resume",
+        "input": { "resume_token": "@ctx.core.workflow.delegate_resume_token" } }] },
       "verb": "delegate",
       "reason": "devolve_o_controle"
     },
     {
-      "nome": "delegate no meio de um fluxo longo",
+      "nome": "delegate no meio de um fluxo longo que devolve",
       "snapshot": { "steps": [
         { "id": "a", "type": "menu" },
         { "id": "b", "type": "invoke", "tool": "context_set" },
         { "id": "c", "type": "delegate", "pool": "$.pipeline_state.x" },
-        { "id": "d", "type": "complete" }
+        { "id": "d", "type": "invoke", "tool": "workflow_resume",
+          "input": { "resume_token": "@ctx.core.workflow.delegate_resume_token" } }
+      ] },
+      "verb": "delegate",
+      "reason": "devolve_o_controle"
+    },
+    {
+      "nome": "PESO — retoma um suspend PROPRIO, nunca o chamador",
+      "snapshot": { "steps": [
+        { "id": "a", "type": "suspend" },
+        { "id": "b", "type": "invoke", "tool": "workflow_resume",
+          "input": { "resume_token": "$.pipeline_state.pendencia.resume_token" } }
       ] },
       "verb": "escalate",
-      "reason": "cadeia_delegate"
+      "reason": "nao_retorna"
+    },
+    {
+      "nome": "PESO — workflow_resume sem `input` nenhum",
+      "snapshot": { "steps": [
+        { "id": "b", "type": "invoke", "tool": "workflow_resume" }
+      ] },
+      "verb": "escalate",
+      "reason": "nao_retorna"
     }
   ]
 }

@@ -10,13 +10,24 @@ suspenso até o `timeout_hours` — e o modo de falha é o pior do catálogo: o
 cliente vê o especialista atender normalmente, o especialista encerra o próprio
 segmento, e o contato fica pendurado sem erro em lugar nenhum.
 
-TRÊS DISQUALIFICADORES, cada um com nome:
+DOIS DISQUALIFICADORES, cada um com nome:
   sem_deploy       o pool não tem slot `current` com snapshot — não há skill a
                    quem delegar que possa retornar (é o caso dos pools humanos)
-  nao_retorna      o snapshot não invoca `workflow_resume` — delegar pendura
-  cadeia_delegate  o snapshot usa `delegate` — `core.workflow.delegate_resume_token`
-                   é tag ÚNICA da sessão, então a delegação de dentro SOBRESCREVE
-                   o token do orquestrador, que nunca retoma (CTR-06)
+  nao_retorna      o snapshot não invoca `workflow_resume` **com o token do
+                   CHAMADOR** — delegar pendura
+
+⚠️ `cadeia_delegate` SAIU em 2026-09-07 (CTR-06). Ele recusava todo snapshot com
+um `delegate`, porque `core.workflow.delegate_resume_token` é tag ÚNICA da sessão
+e a delegação de dentro sobrescrevia o token do orquestrador. O engine passou a
+CAPTURAR o token no nascimento do pipeline (isolado por segmento) e a RESTAURÁ-LO
+na retomada, então a cadeia deixou de ser fato do artefato.
+
+⚠️ **Tirá-lo sozinho abriria um buraco**, e isso é medição: `nao_retorna`
+perguntava *"existe um step com `tool: workflow_resume`?"* — proposição ADJACENTE.
+O `agente_portabilidade_intake_v1` invoca a tool cinco vezes e nenhuma delas
+retoma o chamador (retoma um `suspend` PRÓPRIO); ele passava por ser barrado antes
+pelo outro critério. Hoje o critério exige que o `resume_token` seja a TAG do
+chamador, que é a pergunta que se queria fazer desde o começo.
 
 ⚠️ Lê o SNAPSHOT VIVO do slot, nunca o YAML do disco. O YAML é seed-if-absent e
 editar skill já semeado é no-op — medir o arquivo responderia sobre um artefato
@@ -67,12 +78,18 @@ def passos(snap):
     return [x for x in (snap or {}).get("steps") or [] if isinstance(x, dict)]
 
 
-def invoca(snap, tool):
-    return any(p.get("tool") == tool for p in passos(snap))
+TAG_CHAMADOR = "@ctx.core.workflow.delegate_resume_token"
 
 
-def usa_tipo(snap, tipo):
-    return any(p.get("type") == tipo for p in passos(snap))
+def devolve_ao_chamador(snap):
+    """Invoca `workflow_resume` COM O TOKEN DO CHAMADOR — não só a tool."""
+    for p in passos(snap):
+        if p.get("tool") != "workflow_resume":
+            continue
+        ent = p.get("input")
+        if isinstance(ent, dict) and ent.get("resume_token") == TAG_CHAMADOR:
+            return True
+    return False
 
 
 def orquestradores():
@@ -90,9 +107,7 @@ def julga(alvo):
     skill_id, snap = snapshot_vivo(alvo)
     if snap is None:
         return False, "sem_deploy", None
-    if usa_tipo(snap, "delegate"):
-        return False, "cadeia_delegate", skill_id
-    if not invoca(snap, "workflow_resume"):
+    if not devolve_ao_chamador(snap):
         return False, "nao_retorna", skill_id
     return True, "delegavel", skill_id
 
@@ -119,7 +134,7 @@ def censo():
 
     delegaveis = sum(1 for v in vistos.values() if v[0])
     print("destinos DISTINTOS: %d · delegaveis: %d" % (len(vistos), delegaveis))
-    for motivo in ("nao_retorna", "cadeia_delegate", "sem_deploy"):
+    for motivo in ("nao_retorna", "sem_deploy"):
         n = sum(1 for v in vistos.values() if v[1] == motivo)
         if n:
             print("   %-16s %d" % (motivo, n))

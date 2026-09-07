@@ -47,6 +47,28 @@ def passos(snap):
     return [x for x in (snap or {}).get("steps") or [] if isinstance(x, dict)]
 
 
+TAG_CHAMADOR = "@ctx.core.workflow.delegate_resume_token"
+
+
+def devolve_ao_chamador(ps):
+    """Invoca `workflow_resume` COM O TOKEN DO CHAMADOR — nao so a tool.
+
+    ⚠️ `cadeia_delegate` saiu em 2026-09-07 (CTR-06): o engine passou a capturar
+    o token do chamador no nascimento do pipeline e a restaura-lo na retomada,
+    entao delegar por dentro deixou de sobrescrever o token de quem chamou.
+    Tira-lo SOZINHO abriria um buraco — `nao_retorna` media a mera presenca da
+    tool, e `agente_portabilidade_intake_v1` a invoca cinco vezes sem retomar o
+    chamador uma unica vez (retoma um `suspend` proprio).
+    """
+    for p in ps:
+        if p.get("tool") != "workflow_resume":
+            continue
+        ent = p.get("input")
+        if isinstance(ent, dict) and ent.get("resume_token") == TAG_CHAMADOR:
+            return True
+    return False
+
+
 def criterio_python(alvo):
     """A MESMA regra do `_delegability_probe.py`, reescrita aqui de proposito:
     e ela que serve de contraprova ao TypeScript no modo `paridade`."""
@@ -54,9 +76,7 @@ def criterio_python(alvo):
     ps = passos(snap)
     if not ps:
         return "escalate", "sem_deploy"
-    if any(p.get("type") == "delegate" for p in ps):
-        return "escalate", "cadeia_delegate"
-    if not any(p.get("tool") == "workflow_resume" for p in ps):
+    if not devolve_ao_chamador(ps):
         return "escalate", "nao_retorna"
     return "delegate", "devolve_o_controle"
 
@@ -135,9 +155,7 @@ def criterio_puro(snap):
     ps = passos(snap) if isinstance(snap, dict) else []
     if not ps:
         return "escalate", "sem_deploy"
-    if any(p.get("type") == "delegate" for p in ps):
-        return "escalate", "cadeia_delegate"
-    if not any(p.get("tool") == "workflow_resume" for p in ps):
+    if not devolve_ao_chamador(ps):
         return "escalate", "nao_retorna"
     return "delegate", "devolve_o_controle"
 

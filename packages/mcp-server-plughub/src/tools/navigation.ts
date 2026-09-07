@@ -100,14 +100,36 @@ export function matchNavigationRoute(
  * inesperado) resolve para `escalate`, que é o comportamento de hoje e não
  * pendura ninguém.
  *
- * Os três motivos de recusa, cada um com nome — o gate
+ * Os dois motivos de recusa, cada um com nome — o gate
  * `probe_orchestrator_delegability.sh` usa exatamente estes:
  *   `sem_deploy`       o pool não tem slot `current` com snapshot (pools humanos)
- *   `nao_retorna`      o snapshot não invoca `workflow_resume`
- *   `cadeia_delegate`  o snapshot usa `delegate`, e `core.workflow.delegate_resume_token`
- *                      é tag ÚNICA da sessão: a delegação de dentro SOBRESCREVE o
- *                      token do orquestrador, que nunca retoma (CTR-06)
+ *   `nao_retorna`      o snapshot não invoca `workflow_resume` **com o token do
+ *                      CHAMADOR**
+ *
+ * ── `cadeia_delegate` SAIU, e a troca não é de um critério por nenhum ────────
+ *
+ * Ele recusava todo snapshot que contivesse um `delegate`, porque
+ * `core.workflow.delegate_resume_token` é tag ÚNICA da sessão e a delegação de
+ * dentro sobrescrevia o token do orquestrador. **A CTR-06 fechou isso no
+ * engine**, que captura o token no nascimento do pipeline (isolado por segmento)
+ * e o RESTAURA na retomada — a tag volta a significar o que promete, e a cadeia
+ * deixa de ser um fato do ARTEFATO.
+ *
+ * ⚠️ **Tirar o `cadeia_delegate` sozinho abriria um buraco**, e isso é medição,
+ * não zelo: `nao_retorna` perguntava *"existe um step com `tool:
+ * workflow_resume`?"* — proposição ADJACENTE à que interessa. O
+ * `agente_portabilidade_intake_v1` invoca a tool cinco vezes e **nenhuma** delas
+ * retoma o chamador: ele retoma um `suspend` PRÓPRIO
+ * (`$.pipeline_state.pendencia.resume_token`). Ele passava por ser barrado antes,
+ * pelo outro critério; sem o aperto abaixo, ele viraria "delegável" e o contato
+ * ficaria pendurado — exatamente o dano que os dois critérios existem para
+ * impedir. Hoje o critério exige que o `resume_token` seja a TAG do chamador, que
+ * é a pergunta que se queria fazer desde o começo.
  */
+
+/** A tag que carrega o token capaz de retomar QUEM CHAMOU. */
+const TAG_TOKEN_CHAMADOR = "@ctx.core.workflow.delegate_resume_token"
+
 export function decideVerb(snapshot: unknown): { verb: "delegate" | "escalate"; reason: string } {
   const flow = snapshot as { steps?: unknown[] } | null | undefined
   if (!flow || !Array.isArray(flow.steps) || flow.steps.length === 0) {
@@ -116,10 +138,13 @@ export function decideVerb(snapshot: unknown): { verb: "delegate" | "escalate"; 
   const passos = flow.steps.filter(
     (x): x is Record<string, unknown> => !!x && typeof x === "object",
   )
-  if (passos.some(p => p["type"] === "delegate")) {
-    return { verb: "escalate", reason: "cadeia_delegate" }
-  }
-  if (!passos.some(p => p["tool"] === "workflow_resume")) {
+  const devolveAoChamador = passos.some(p => {
+    if (p["tool"] !== "workflow_resume") return false
+    const input = p["input"]
+    if (!input || typeof input !== "object") return false
+    return (input as Record<string, unknown>)["resume_token"] === TAG_TOKEN_CHAMADOR
+  })
+  if (!devolveAoChamador) {
     return { verb: "escalate", reason: "nao_retorna" }
   }
   return { verb: "delegate", reason: "devolve_o_controle" }
