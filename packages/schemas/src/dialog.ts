@@ -274,6 +274,14 @@ export interface DialogOption {
   /** `false` = APOSENTADA: sai da oferta e permanece no form (D6) — o dado
    *  histórico continua explicável. Ausente = ativa. */
   active?:  boolean
+  /**
+   * D2 do `adr-tree-return-continuation.md` — a question que o CHAMADOR executa
+   * quando o agente desta folha DEVOLVE o controle. Ausente = a folha encerra o
+   * fluxo do chamador, que é o comportamento de hoje.
+   *
+   * ⚠️ **PONTEIRO, nunca switch.** Ver o comentário do campo no schema Zod.
+   */
+  on_return?: string
 }
 
 /**
@@ -313,6 +321,35 @@ export const DialogOptionSchema: z.ZodType<DialogOption> = z.lazy(() =>
     capture: DialogCaptureSchema,
     options: z.array(DialogOptionSchema).optional(),
     active:  z.boolean().optional(),
+    /**
+     * **A folha DEVOLVE** (D2 do `adr-tree-return-continuation.md`): id da
+     * question que o CHAMADOR executa quando o agente desta folha devolve o
+     * controle. Ausente = a folha encerra, como hoje.
+     *
+     * ── Por que um PONTEIRO e não um switch ─────────────────────────────────
+     *
+     * A alternativa avaliada era um nó `output`, ramificando sobre o CÓDIGO de
+     * retorno do agente (`resolved` × `failed`). Ela era mais expressiva e foi
+     * RECUSADA por colidir com o invariante do próprio `DialogFormSchema`:
+     * *"`nodes` order IS the flow — there is deliberately no conditional `next`
+     * (branching = control, owned by the calling skill)"*. Um switch por código
+     * **é** branching no JSON; um ponteiro é aresta única e não emenda nada.
+     *
+     * A consequência prática é a economia: como a folha ganha um ponteiro e
+     * **não filhos**, ela CONTINUA folha — `leafPaths`, `is_tree`,
+     * `flattenToSections` e o achatamento em canal não mudam. Era exatamente
+     * onde o `output` custaria.
+     *
+     * ⚠️ **O preço, declarado:** sem switch, *"resolvi"* e *"não consegui"*
+     * apontam para a MESMA continuação. A discriminação por resultado vive no
+     * AGENTE (D6: ele escala quando falha, devolve quando resolve), não aqui.
+     *
+     * ⚠️ **Referência conferida, não prometida** — `returnRefErrors` recusa um
+     * `on_return` que não nomeie uma question existente. Sem isso o ponteiro
+     * quebrado renderizaria vazio, que é o valor plausível mais barato de
+     * produzir (a mesma família do id de nó duplicado).
+     */
+    on_return: z.string().min(1).optional(),
   }),
 )
 

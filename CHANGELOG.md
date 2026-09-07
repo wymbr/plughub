@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-06 (18) — RET-01: o ponteiro de continuacao entra, e as formas publicadas nao mudam
+
+Primeira fase do `adr-tree-return-continuation.md`. A folha ganha `on_return: <question_id>`, a
+convencao `main` nomeia a entrada, e `buildRender` aprende a renderizar A PARTIR de uma question.
+
+### O que custou pouco, e por que
+
+`QuestionNode.id` **ja existia** — logo "questions identificadas" (D3) e convencao, nao schema. E
+como a folha ganha um PONTEIRO e nao filhos, ela continua folha: `leafPaths`, `is_tree`,
+`flattenToSections` e o achatamento em canal **nao foram tocados**. Era exatamente onde o `output`
+recusado custaria.
+
+O schema ganhou **um campo** (`DialogOption.on_return`), e o render passou a carrega-lo — porque quem
+decide o que fazer no retorno e o CHAMADOR, e ele le a arvore pelo render, nunca o form cru.
+
+### O risco nao era o ponteiro — era o render
+
+`buildRender` serve o `form_get` **e** a preview do editor (que e o VEREDICTO do servidor). Ele
+assumia UMA question por form: `before`/`after` decidido por `seenQuestion`. Renderizar a partir de
+uma question pede uma JANELA — statements desde a question anterior ate a seguinte.
+
+**Medido antes de escolher: 5 das 14 formas publicadas tem mais de uma question** (survey e
+wrap-up). Aplicar a janela a toda chamada mudaria o `statement_after` delas **em silencio**. Por isso
+ela e **opt-in**: sem `fromQuestionId`, o caminho e literalmente o de antes.
+
+⚠️ **O primeiro rascunho errou exatamente ai, e o teste pegou.** Com janela, o discriminador
+before/after nao pode ser o `seenQuestion` global: a question de ENTRADA vem antes do alvo e ja
+tinha virado a chave, jogando para `after` um statement que ABRE o bloco pedido. O discriminador
+certo e a posicao relativa ao alvo.
+
+⚠️ `fromQuestionId` inexistente **cai no padrao**, nunca em render vazio. Quem recusa ponteiro
+quebrado e a validacao, onde ha alguem para ler o erro; render vazio aqui seria um aviso em branco
+na cara do cliente.
+
+### Referencia conferida, nunca prometida
+
+`returnRefErrors` — irma de `duplicateNodeIds` e `askWhenForwardRefErrors` — recusa `on_return` que
+nao nomeie uma question do form, com o codigo `return_ref_unknown` no validador canonico. Cobre
+tambem apontar para **statement** (statement nao escuta: produziria um turno que fala e deixa o
+chamador suspenso esperando retorno) e o ponteiro **aninhado em qualquer profundidade** da arvore.
+
+Sem isso, o ponteiro quebrado renderizaria o turno padrao e a arvore se comportaria como se a folha
+nao continuasse — valor plausivel, a mesma familia do id de no duplicado.
+
+### Cobertura, e o que cada via prova
+
+- `packages/schemas/src/dialog-return.test.ts` — **14 testes**, e o que carrega peso e o
+  `mantem o comportamento de sempre` (o caso multi-question, que **nao estava coberto** antes desta
+  tarefa: os testes existentes de `buildRender` usam formas de UMA question);
+- suite do `schemas`: **296 verdes**, incluindo os de `buildRender` que provam o caso 1-question;
+- `infra/test/probe_dialog_return_pointer.sh` — 3 ramos: **paridade sobre as 14 formas reais** (com
+  a testemunha *5 multi-question · 0 declarando `on_return`*, que e o que torna o campo novo inocuo
+  para a populacao), **mutacao do comparador** (adultera uma copia da base e exige reprovacao) e a
+  checagem de que o **dist** esta construido — o probe le o artefato, nao o fonte.
+
+⚠️ **A linha de base e POS-mudanca e o cabecalho do gate diz isso**: ela protege o futuro (o dia em
+que alguem tornar a janela incondicional), nao prova o passado. O passado esta coberto pelas duas
+primeiras vias, e nenhuma sozinha bastava.
+
+### Arquivos
+
+- `packages/schemas/src/dialog.ts` — `on_return` no schema e na interface
+- `packages/schemas/src/dialog-render.ts` — `RenderOption.on_return`, `entryQuestionId`,
+  `buildRender(form, locale?, fromQuestionId?)`, `returnRefErrors` + codigo no validador
+- `packages/schemas/src/index.ts` · `dialog-return.test.ts` (novo)
+- `infra/test/probe_dialog_return_pointer.sh` · `_return_render_parity.mjs` ·
+  `fixtures/return_render_baseline.json` · `gates.manifest`
+
+Destrava a **RET-02** (o `delegate` no orquestrador, com verbo derivado por destino).
+
+---
+
 ## 2026-09-06 (17) — ADR: a folha DEVOLVE (execucao de agente e etapa, nao desfecho)
 
 `docs/adr/adr-tree-return-continuation.md`, proposto. Nasceu do beco em que a CTR-04 parou, e o

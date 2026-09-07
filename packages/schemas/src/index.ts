@@ -853,6 +853,8 @@ export {
   duplicateNodeIds,
   optionsAtPath,
   leafPaths,
+  entryQuestionId,
+  returnRefErrors,
   validateDialogForm,
 } from "./dialog-render"
 

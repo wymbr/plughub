@@ -71,7 +71,13 @@ export interface RenderField {
  * `active: false` (D6) é filtrado AQUI: a folha aposentada sai da OFERTA e
  * permanece no form, para o histórico continuar explicável.
  */
-export interface RenderOption { id: string; label: string; options?: RenderOption[] }
+export interface RenderOption {
+  id: string; label: string; options?: RenderOption[]
+  /** D2 do `adr-tree-return-continuation.md` — a question de continuação desta folha.
+   *  Viaja no render porque quem decide o que fazer no retorno é o CHAMADOR, e ele lê
+   *  a árvore pelo render, nunca o form cru. */
+  on_return?: string
+}
 // Retry affordance flattened for the menu step: reprompt localized, counter fixed.
 export interface RenderRetry { reprompt: string; max_attempts: number }
 export interface RenderQuestion {
@@ -139,7 +145,7 @@ export interface DialogRender {
 // Flatten a question's retry (LocalizedText reprompt → string) for the menu step.
 /** Mapeia opções resolvendo i18n e PRESERVANDO a subárvore; descarta aposentadas. */
 function mapOptions(
-  opts: ReadonlyArray<{ id: string; value?: string; label: unknown; options?: unknown; active?: boolean }> | undefined,
+  opts: ReadonlyArray<{ id: string; value?: string; label: unknown; options?: unknown; active?: boolean; on_return?: string }> | undefined,
   locale: string | undefined,
   dl: string,
 ): RenderOption[] {
@@ -157,6 +163,9 @@ function mapOptions(
       // rótulo viraria resposta. Emitir `options: []` seria pior (a superfície
       // abriria uma coluna vazia), então a chave só existe quando há filho.
       if (filhos.length) ro.options = filhos
+      // D2 do ADR do retorno: o ponteiro de continuação viaja para quem decide
+      // o que fazer no retorno — o CHAMADOR, que lê a árvore pelo render.
+      if (o.on_return) ro.on_return = o.on_return
       return ro
     })
 }
@@ -266,7 +275,43 @@ function flattenRetry(q: QuestionNode, locale: string | undefined, dl: string): 
   }
 }
 
-export function buildRender(form: DialogForm, locale?: string): DialogRender {
+/**
+ * Question de ENTRADA do form — D3 do `adr-tree-return-continuation.md`.
+ *
+ * A convenção é `id: "main"`; na ausência dela, a PRIMEIRA question, que é o
+ * comportamento de sempre. Por isso as 14 formas publicadas (5 delas com mais de
+ * uma question) continuam resolvendo exatamente o que resolviam.
+ *
+ * ⚠️ É convenção e não campo porque `QuestionNode.id` **já existe** — inventar um
+ * `entry` no form seria uma segunda fonte para um fato que o id já carrega.
+ */
+export function entryQuestionId(form: DialogForm): string | undefined {
+  const qs = form.nodes.filter(n => n.kind === "question")
+  const main = qs.find(q => q.id === "main")
+  return (main ?? qs[0])?.id
+}
+
+/**
+ * Monta o render de UM turno.
+ *
+ * `fromQuestionId` (D4 do ADR do retorno) escolhe de qual question partir — é
+ * assim que o chamador renderiza a question de continuação apontada por
+ * `on_return`. Ausente ⇒ **comportamento idêntico ao de sempre**.
+ *
+ * ⚠️ **A compatibilidade aqui é medida, não presumida.** Sem `fromQuestionId` o
+ * `before`/`after` continua sendo *"tudo antes / tudo depois da PRIMEIRA
+ * question"*. A janela por bloco (statements desde a question anterior até a
+ * seguinte) vale **só** quando alguém pede uma question específica — e ela é
+ * diferente: medido em 2026-09-06, **5 das 14 formas publicadas têm mais de uma
+ * question** (survey e wrap-up), e aplicar a janela nova a todas mudaria o
+ * `statement_after` delas em silêncio.
+ *
+ * ⚠️ `fromQuestionId` que não existe **cai no comportamento padrão**, nunca em
+ * render vazio: quem recusa ponteiro quebrado é `returnRefErrors`, na validação,
+ * onde há alguém para ler o erro. Render vazio aqui seria um aviso em branco na
+ * cara do cliente.
+ */
+export function buildRender(form: DialogForm, locale?: string, fromQuestionId?: string): DialogRender {
   const dl = form.default_locale
   const before: string[] = []
   const after:  string[] = []
@@ -277,18 +322,50 @@ export function buildRender(form: DialogForm, locale?: string): DialogRender {
   let seenQuestion = false
   let firstQuestion: QuestionNode | null = null
 
+  // Índice da question ALVO e a janela de statements que lhe pertence. Só existe
+  // quando o chamador pede uma question específica (ver o cabeçalho).
+  const idxAlvo = fromQuestionId
+    ? form.nodes.findIndex(n => n.kind === "question" && n.id === fromQuestionId)
+    : -1
+  const janela = (() => {
+    if (idxAlvo < 0) return null
+    let ini = 0
+    for (let k = idxAlvo - 1; k >= 0; k--) {
+      if (form.nodes[k]!.kind === "question") { ini = k + 1; break }
+    }
+    let fim = form.nodes.length
+    for (let k = idxAlvo + 1; k < form.nodes.length; k++) {
+      if (form.nodes[k]!.kind === "question") { fim = k; break }
+    }
+    return { ini, fim }
+  })()
+
   for (const node of form.nodes) {
+    // Fora da janela do bloco pedido: o nó ainda entra em `questions[]` e
+    // `by_node` (que descrevem a FORMA inteira), mas não no turno renderizado.
+    const iNo = form.nodes.indexOf(node)
+    const foraDaJanela = janela !== null && (iNo < janela.ini || iNo >= janela.fim)
     if (node.kind === "statement") {
       const txt = resolveLocalizedText(node.text, locale, dl)
       byNode[node.id] = txt
-      if (txt) (seenQuestion ? after : before).push(txt)
+      // ⚠️ Com janela o discriminador é a POSIÇÃO relativa ao alvo, nunca o
+      // `seenQuestion` global: a question de ENTRADA vem antes e já teria virado
+      // a chave, jogando para `after` um statement que abre o bloco pedido.
+      // Foi assim que o primeiro rascunho errou, e o teste da janela o pegou.
+      const antesDoAlvo = janela ? iNo < idxAlvo : !seenQuestion
+      if (txt && !foraDaJanela) (antesDoAlvo ? before : after).push(txt)
     } else {
       byNode[node.id] = resolveLocalizedText(node.prompt, locale, dl)
       seenQuestion = true
-      if (!firstQuestion) firstQuestion = node
+      // Com janela, a question do TURNO é a pedida; sem ela, a primeira.
+      if (janela ? iNo === idxAlvo : !firstQuestion) firstQuestion = node
       // Multi-field form (interaction: "form", approval "form padrão"): emit each
       // declared field with its own type/value/options. Otherwise the question is a
       // single scalar answer → one field keyed by output_key (survey/OTP behavior).
+      // `fields` é do TURNO renderizado, então respeita a janela. Já
+      // `questions[]`, `captures` e `by_node` descrevem a FORMA INTEIRA e
+      // seguem completos: quem lê a forma (editor, `form_get`) precisa dela toda.
+      const alvoFields = foraDaJanela ? ([] as RenderField[]) : fields
       if (node.fields && node.fields.length) {
         for (const f of node.fields) {
           // DENYLIST, nunca allowlist. Quatro coisas SAEM, cada uma com motivo:
@@ -317,10 +394,10 @@ export function buildRender(form: DialogForm, locale?: string): DialogRender {
               label: resolveLocalizedText(o.label, locale, dl),
             }))
           }
-          fields.push(rf)
+          alvoFields.push(rf)
         }
       } else {
-        fields.push({
+        alvoFields.push({
           id:       node.output_key,
           label:    resolveLocalizedText(node.prompt, locale, dl),
           type:     node.interaction === "text" ? "text" : "choice",
@@ -427,7 +504,7 @@ export interface DialogFormIssue {
   path:    string
   message: string
   code:
-    | "schema" | "duplicate_node_id" | "ask_when_forward_ref"
+    | "schema" | "duplicate_node_id" | "ask_when_forward_ref" | "return_ref_unknown"
     | "option_duplicate_sibling_id" | "option_nesting_not_allowed"
     | "option_depth" | "option_empty_folder"
 }
@@ -452,6 +529,47 @@ export interface DialogFormVerdict {
  * insinua completude é como se compra o "editor disse que estava bom e o save
  * recusou".
  */
+/**
+ * Ponteiros de continuação (`on_return`) que não nomeiam uma question existente.
+ *
+ * D2 do `adr-tree-return-continuation.md`. Irmã de `duplicateNodeIds` e de
+ * `askWhenForwardRefErrors`, e existe pela mesma razão que elas: **referência
+ * declarada sem mecanismo é promessa**. Um `on_return` quebrado não explode —
+ * o chamador renderizaria o turno padrão, ou nada, e o cliente veria a árvore se
+ * comportar como se a folha não continuasse. Valor plausível outra vez.
+ *
+ * ⚠️ Aponta para QUESTION, nunca para statement: statement não é ponto de
+ * retomada (não coleta resposta), e apontar para um deles produziria um turno
+ * que fala e não escuta — com o chamador suspenso esperando um retorno.
+ */
+export function returnRefErrors(form: DialogForm): Array<{ path: string; option_id: string; target: string }> {
+  const questionIds = new Set(
+    form.nodes.filter(n => n.kind === "question").map(n => n.id),
+  )
+  const out: Array<{ path: string; option_id: string; target: string }> = []
+
+  const anda = (
+    opts: ReadonlyArray<{ id: string; on_return?: string; options?: unknown }> | undefined,
+    base: string,
+  ): void => {
+    ;(opts ?? []).forEach((o, i) => {
+      const aqui = `${base}.${i}`
+      if (o.on_return && !questionIds.has(o.on_return)) {
+        out.push({ path: `${aqui}.on_return`, option_id: o.id, target: o.on_return })
+      }
+      if (Array.isArray(o.options)) {
+        anda(o.options as Parameters<typeof anda>[0], `${aqui}.options`)
+      }
+    })
+  }
+
+  form.nodes.forEach((node, i) => {
+    if (node.kind !== "question") return
+    anda(node.options, `nodes.${i}.options`)
+  })
+  return out
+}
+
 export function validateDialogForm(doc: unknown, locale?: string): DialogFormVerdict {
   const errors: DialogFormIssue[] = []
 
@@ -494,6 +612,14 @@ export function validateDialogForm(doc: unknown, locale?: string): DialogFormVer
       }
     })
   })
+
+  for (const { path, option_id, target } of returnRefErrors(form)) {
+    errors.push({
+      path,
+      message: `on_return da opção '${option_id}' aponta para '${target}', que não é uma question deste form — a folha diria que continua e não continuaria`,
+      code:    "return_ref_unknown",
+    })
+  }
 
   for (const { node_id, field } of askWhenForwardRefErrors(form)) {
     errors.push({
