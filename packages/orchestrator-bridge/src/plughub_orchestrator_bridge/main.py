@@ -3285,6 +3285,44 @@ async def _destroy_conference(
         )
 
 
+# ── "o contato acabou?" — UM predicado, uma casa ──────────────────────────────
+#
+# Outcomes em que o fluxo terminou mas **a sessão continua com outro agente**.
+# Fechar o WS do cliente aqui é corrida contra a alocação do próximo agente: o
+# `escalate` já publicou `conversations.inbound` para enfileirar o destino, e o
+# fechamento chega antes.
+#
+# ⚠️ **Isto era DUAS listas, e elas divergiam em três outcomes** (medido em
+# contato real, 2026-09-07). O `process_routed` tinha os quatro; o caminho do
+# RESUME (`session_resumed`) tinha `if _ai_outcome != "suspended"` — um só. O
+# caminho do resume nasceu para o Arc 19, onde um workflow retomado termina em
+# `complete`; **fluxo retomado que termina em `escalate` não existia** até a
+# RET-02 dar `delegate` ao orquestrador. A partir dali:
+#
+#     escalate SEM delegate antes  ->  process_routed   ->  contato SEGUE   ✅
+#     escalate DEPOIS de delegar   ->  session_resumed  ->  contato FECHA   ❌
+#
+# O sintoma media 30 ms: o contato entrava na fila humana e era retirado dela
+# pelo `contact_closed`, com `outcome=abandoned wait_ms=21`. Nada ficava
+# vermelho — para quem olhava a tela, o atendimento "encerrou".
+#
+# É a terceira ocorrência do mesmo padrão no mesmo dia (`exists` em dois
+# `switch`; `category_path` composto em duas casas; e esta). Por isso a decisão
+# não é uma constante compartilhada e sim um **predicado**: constante ainda
+# admite que alguém escreva a comparação de um jeito novo.
+_OUTCOMES_QUE_NAO_FECHAM = ("escalated_human", "escalated_ai", "transferred", "suspended")
+
+
+def contato_encerra_com(outcome: str) -> bool:
+    """O contato acaba com este outcome? Único juiz da pergunta no bridge.
+
+    ⚠️ Ausência **encerra**, e isso é decisão: outcome vazio é fluxo que terminou
+    sem se declarar, e manter o contato aberto ali o deixaria pendurado até o TTL
+    da sessão com o cliente olhando uma tela muda. O caminho barulhento é fechar.
+    """
+    return (outcome or "") not in _OUTCOMES_QUE_NAO_FECHAM
+
+
 async def _trigger_contact_close(
     redis_client: aioredis.Redis,
     session_id:   str,
@@ -5204,9 +5242,8 @@ async def process_routed(
         # Arc 19: "suspended" is added so webhook sessions are NOT closed when
         # the engine returns outcome: "suspended" — the session persists in Redis
         # (TTL extended by persistSuspendWebhook) awaiting a resume signal.
-        _escalation_outcomes = ("escalated_human", "escalated_ai", "transferred", "suspended")
         _ai_outcome = (agent_result or {}).get("outcome", "")
-        if not conference_id and _ai_outcome not in _escalation_outcomes:
+        if not conference_id and contato_encerra_com(_ai_outcome):
             # G1 fix: freeze AHT at primary AI completion, before any hook agents run.
             await _mark_contact_ended(redis_client, session_id)
             # ── on_contact_end no fim de contato de primário IA (completude do hook) ──
@@ -9031,9 +9068,12 @@ async def _handle_webhook_session_resumed(
                 session_id, _claimant_instance_id, _cl_pool, _cl_seg_id, _cl_duration_ms,
             )
 
-    # "suspended" = flow hit another suspend step; session persists in Redis.
-    # Any other terminal outcome closes the session.
-    if _ai_outcome != "suspended":
+    # ⚠️ Aqui dizia `if _ai_outcome != "suspended"`, e essa era a SEGUNDA casa da
+    # mesma decisão — divergindo do `process_routed` em `escalated_human`,
+    # `escalated_ai` e `transferred`. Um fluxo retomado que ESCALA fechava o
+    # contato 30 ms antes de a fila recebê-lo (medido; ver `contato_encerra_com`).
+    # A pergunta agora tem um juiz só.
+    if contato_encerra_com(_ai_outcome):
         await _mark_contact_ended(redis_client, session_id)
         _spawn(_trigger_contact_close(redis_client, session_id))
 
