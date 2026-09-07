@@ -176,6 +176,12 @@ probe_delegate_cycle_cap.sh
 # Duas defesas que nao se substituem: cancelamento no fechamento (um lugar, o consumidor
 # de session.closed, que ve todo canal) e guarda no scanner (rede para o passivo).
 probe_resume_token_cancel.sh
+# RET-05: o ciclo finalmente LIGADO — a forma ganhou a question de continuacao e as
+# folhas que podem continuar apontam para ela. O ramo A e o que carrega peso: ponteiro
+# em folha cujo destino NAO devolve pendura o contato ate o timeout_hours. E o ramo C
+# cobra que o especialista pule o proprio menu quando ha chamador, senao o cliente e
+# perguntado DUAS vezes -- a mesma tela que o dono leu como defeito no menu_motivo.
+probe_tree_continuation.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh

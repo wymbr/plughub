@@ -118,6 +118,36 @@ steps:
         operator: eq
         value: false
         next: reiniciar
+      # ── COMANDO, e nao demanda (RET-05) ────────────────────────────────────
+      # A árvore roteia demanda para POOL; "encerrar" não é pool nenhum. A D2 do
+      # ADR da árvore manda a folha carregar CAMINHO e nunca destino, e isso
+      # continua valendo — o que muda é que existe um gênero de folha que é
+      # CONTROLE do orquestrador (o ADR da árvore já o previa: *"folha seria
+      # execução, seja especialistas ou comandos como transfere e desliga"*).
+      #
+      # ⚠️ Comando é do FLUXO, não do mapa: pôr `pos_atendimento.encerrar` no
+      # `navigation_pools` exigiria inventar um pool que significasse "fim", e
+      # roteamento passaria a carregar semântica de controle.
+      #
+      # ⚠️ Dívida NOMEADA: hoje é UM caminho declarado aqui. Se aparecer um
+      # terceiro comando, o gênero precisa subir para a árvore de verdade (um
+      # `kind` de folha), senão o fluxo vira catálogo de caminhos — que é a
+      # segunda casa do conteúdo que a D2 existe para impedir.
+      - field: "$.pipeline_state.nivel.category_path"
+        operator: eq
+        value: "pos_atendimento.encerrar"
+        next: finalizar
+      # "Tenho outro assunto" REINICIA a navegacao na raiz — e comando, nao
+      # destino. A alternativa avaliada era uma folha `pos_atendimento.sac`
+      # apontando para o pool do SAC; foi RECUSADA porque quem diz *"outro
+      # assunto"* nao disse QUAL, entao cairia no menu de motivo do especialista
+      # e ficaria preso ao SAC, quando o que quer e a arvore inteira. Quem achou
+      # isso foi o ramo H do gate da arvore, que mede folha roteada sem ramo no
+      # destino — o gate estava certo e a forma e que estava errada.
+      - field: "$.pipeline_state.nivel.category_path"
+        operator: eq
+        value: "pos_atendimento.outra_coisa"
+        next: nivel_raiz
       - field: "$.pipeline_state.nivel.is_leaf"
         operator: eq
         value: true

@@ -97,8 +97,24 @@ steps:
   - id: auth_sucesso
     type: notify
     message: "✅ Identidade verificada com sucesso! Você agora tem acesso ao SAC autenticado."
-    on_success: menu_continuar
-    on_failure: menu_continuar
+    on_success: continuar_ou_devolver
+    on_failure: continuar_ou_devolver
+
+  # ── Quem pergunta *"e agora?"* — eu ou meu chamador? (RET-05) ───────────────
+  #
+  # Autenticado, este skill perguntava para onde ir (SAC ou encerrar) e ROTEAVA.
+  # Sob o contrato de executor, com chamador ele apenas DEVOLVE `proximo: sac`, e
+  # quem oferece o proximo passo e a question de continuacao da arvore.
+  #
+  # ⚠️ Sem chamador o menu roda como sempre — este pool pode ser alcancado por
+  # escalacao de outro fluxo, e ai nao ha a quem devolver.
+  - id: continuar_ou_devolver
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: sair_autenticado
+    default: menu_continuar
 
   - id: menu_continuar
     type: menu

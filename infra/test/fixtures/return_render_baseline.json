@@ -52,16 +52,16 @@
     "ret_errors": 0
   },
   "dialog_navegacao_atendimento_v1": {
-    "questions": 1,
+    "questions": 2,
     "entry": "destino",
     "prompt": "Olá! Sou o assistente virtual da PlugHub.\n\nComo posso te ajudar hoje?",
     "menu_prompt": "Olá! Sou o assistente virtual da PlugHub.\n\nComo posso te ajudar hoje?",
     "statement_after": "",
     "output_key": "destino",
     "interaction": "list",
-    "n_fields": 1,
-    "n_questions": 1,
-    "options": "[{\"id\":\"sac\",\"label\":\"💬 SAC — Atendimento ao cliente\",\"options\":[{\"id\":\"info_plano\",\"label\":\"📋 Informações sobre o plano\"},{\"id\":\"status_servico\",\"label\":\"🔍 Status do serviço\"},{\"id\":\"problema_tecnico\",\"label\":\"🔧 Problema técnico\"},{\"id\":\"especialista\",\"label\":\"👤 Falar com especialista humano\"}]},{\"id\":\"portabilidade\",\"label\":\"📱 Portabilidade de número\"},{\"id\":\"reembolso\",\"label\":\"💰 Solicitar reembolso\"},{\"id\":\"auth_form\",\"label\":\"🔐 Demo de formulário mascarado\"},{\"id\":\"auth_sac\",\"label\":\"🔑 SAC autenticado (auth + SAC)\"},{\"id\":\"nao_se_aplica\",\"label\":\"❓ Nenhuma dessas — falar com atendente\"}]",
+    "n_fields": 2,
+    "n_questions": 2,
+    "options": "[{\"id\":\"sac\",\"label\":\"💬 SAC — Atendimento ao cliente\",\"options\":[{\"id\":\"info_plano\",\"label\":\"📋 Informações sobre o plano\",\"on_return\":\"pos_atendimento\"},{\"id\":\"status_servico\",\"label\":\"🔍 Status do serviço\",\"on_return\":\"pos_atendimento\"},{\"id\":\"problema_tecnico\",\"label\":\"🔧 Problema técnico\",\"on_return\":\"pos_atendimento\"},{\"id\":\"especialista\",\"label\":\"👤 Falar com especialista humano\"}]},{\"id\":\"portabilidade\",\"label\":\"📱 Portabilidade de número\"},{\"id\":\"reembolso\",\"label\":\"💰 Solicitar reembolso\",\"on_return\":\"pos_atendimento\"},{\"id\":\"auth_form\",\"label\":\"🔐 Demo de formulário mascarado\",\"on_return\":\"pos_atendimento\"},{\"id\":\"auth_sac\",\"label\":\"🔑 SAC autenticado (auth + SAC)\",\"on_return\":\"pos_atendimento\"},{\"id\":\"nao_se_aplica\",\"label\":\"❓ Nenhuma dessas — falar com atendente\"}]",
     "ret_errors": 0
   },
   "dialog_nps_buttons": {

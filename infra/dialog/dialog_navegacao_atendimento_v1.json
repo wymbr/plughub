@@ -3,8 +3,14 @@
   "name": "Navegação de atendimento (orquestrador)",
   "description": "Árvore de navegação do orquestrador: pastas navegam, folhas endereçam um serviço. Conteúdo do menu que hoje vive hardcoded em agente_triagem_v2 + skill_atendimento_sac_v1. A folha NÃO carrega o pool — só o caminho; o mapa caminho→pool mora na config do pool orquestrador (ADR adr-orchestrator-tree-navigation, D2).",
   "default_locale": "pt-BR",
-  "locales": ["pt-BR"],
-  "tags": ["orquestrador", "navegacao", "demanda"],
+  "locales": [
+    "pt-BR"
+  ],
+  "tags": [
+    "orquestrador",
+    "navegacao",
+    "demanda"
+  ],
   "nodes": [
     {
       "id": "saudacao",
@@ -25,19 +31,102 @@
       "options": [
         {
           "id": "sac",
-          "label": { "pt-BR": "💬 SAC — Atendimento ao cliente" },
+          "label": {
+            "pt-BR": "💬 SAC — Atendimento ao cliente"
+          },
           "options": [
-            { "id": "info_plano",       "label": { "pt-BR": "📋 Informações sobre o plano" } },
-            { "id": "status_servico",   "label": { "pt-BR": "🔍 Status do serviço" } },
-            { "id": "problema_tecnico", "label": { "pt-BR": "🔧 Problema técnico" } },
-            { "id": "especialista",     "label": { "pt-BR": "👤 Falar com especialista humano" } }
+            {
+              "id": "info_plano",
+              "label": {
+                "pt-BR": "📋 Informações sobre o plano"
+              },
+              "on_return": "pos_atendimento"
+            },
+            {
+              "id": "status_servico",
+              "label": {
+                "pt-BR": "🔍 Status do serviço"
+              },
+              "on_return": "pos_atendimento"
+            },
+            {
+              "id": "problema_tecnico",
+              "label": {
+                "pt-BR": "🔧 Problema técnico"
+              },
+              "on_return": "pos_atendimento"
+            },
+            {
+              "id": "especialista",
+              "label": {
+                "pt-BR": "👤 Falar com especialista humano"
+              }
+            }
           ]
         },
-        { "id": "portabilidade", "label": { "pt-BR": "📱 Portabilidade de número" } },
-        { "id": "reembolso",     "label": { "pt-BR": "💰 Solicitar reembolso" } },
-        { "id": "auth_form",     "label": { "pt-BR": "🔐 Demo de formulário mascarado" } },
-        { "id": "auth_sac",      "label": { "pt-BR": "🔑 SAC autenticado (auth + SAC)" } },
-        { "id": "nao_se_aplica", "label": { "pt-BR": "❓ Nenhuma dessas — falar com atendente" } }
+        {
+          "id": "portabilidade",
+          "label": {
+            "pt-BR": "📱 Portabilidade de número"
+          }
+        },
+        {
+          "id": "reembolso",
+          "label": {
+            "pt-BR": "💰 Solicitar reembolso"
+          },
+          "on_return": "pos_atendimento"
+        },
+        {
+          "id": "auth_form",
+          "label": {
+            "pt-BR": "🔐 Demo de formulário mascarado"
+          },
+          "on_return": "pos_atendimento"
+        },
+        {
+          "id": "auth_sac",
+          "label": {
+            "pt-BR": "🔑 SAC autenticado (auth + SAC)"
+          },
+          "on_return": "pos_atendimento"
+        },
+        {
+          "id": "nao_se_aplica",
+          "label": {
+            "pt-BR": "❓ Nenhuma dessas — falar com atendente"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pos_atendimento",
+      "kind": "question",
+      "prompt": {
+        "pt-BR": "Posso te ajudar em mais alguma coisa?"
+      },
+      "interaction": "list",
+      "output_key": "pos_atendimento",
+      "capture": {},
+      "options": [
+        {
+          "id": "outra_coisa",
+          "label": {
+            "pt-BR": "🔄 Tenho outro assunto"
+          }
+        },
+        {
+          "id": "especialista",
+          "label": {
+            "pt-BR": "👤 Falar com um especialista humano"
+          }
+        },
+        {
+          "id": "encerrar",
+          "label": {
+            "pt-BR": "✅ Não, obrigado — pode encerrar"
+          }
+        }
       ]
     }
   ]

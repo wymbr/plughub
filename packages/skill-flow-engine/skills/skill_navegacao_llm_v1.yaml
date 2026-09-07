@@ -140,6 +140,30 @@ steps:
         operator: eq
         value: false
         next: escapar
+      # ── COMANDO, e nao demanda (RET-05) ────────────────────────────────────
+      # A árvore roteia demanda para POOL; "encerrar" não é pool nenhum. Comando
+      # é do FLUXO, não do mapa: pôr `pos_atendimento.encerrar` no
+      # `navigation_pools` exigiria inventar um pool que significasse "fim", e o
+      # roteamento passaria a carregar semântica de controle.
+      #
+      # ⚠️ Dívida NOMEADA: hoje é UM caminho declarado aqui. Um terceiro comando
+      # obriga o gênero a subir para a árvore (um `kind` de folha), senão o fluxo
+      # vira catálogo de caminhos — a segunda casa do conteúdo que a D2 impede.
+      - field: "$.pipeline_state.nivel.category_path"
+        operator: eq
+        value: "pos_atendimento.encerrar"
+        next: finalizar
+      # "Tenho outro assunto" REINICIA a navegacao na raiz — e comando, nao
+      # destino. A alternativa avaliada era uma folha `pos_atendimento.sac`
+      # apontando para o pool do SAC; foi RECUSADA porque quem diz *"outro
+      # assunto"* nao disse QUAL, entao cairia no menu de motivo do especialista
+      # e ficaria preso ao SAC, quando o que quer e a arvore inteira. Quem achou
+      # isso foi o ramo H do gate da arvore, que mede folha roteada sem ramo no
+      # destino — o gate estava certo e a forma e que estava errada.
+      - field: "$.pipeline_state.nivel.category_path"
+        operator: eq
+        value: "pos_atendimento.outra_coisa"
+        next: vocabulario
     default: registrar_demanda
 
   # ── 5. O ESCAPE é um FATO, não um buraco ────────────────────────────────────

@@ -154,8 +154,8 @@ steps:
       • Plano Enterprise: todos os canais, 24/7, SLA garantido de 1h
 
       Para contratar ou migrar de plano, posso conectá-lo a um especialista.
-    on_success: menu_resolucao
-    on_failure: menu_resolucao
+    on_success: continuar_ou_devolver
+    on_failure: continuar_ou_devolver
 
   # ── Caminho B: Status do serviço ─────────────────────────────────────────────
   # Phase 2: substituir por invoke ao status-api ou step reason.
@@ -170,8 +170,8 @@ steps:
       • API Gateway:     ✅ Operacional
 
       Última verificação: há menos de 1 minuto. Sem incidentes ativos.
-    on_success: menu_resolucao
-    on_failure: menu_resolucao
+    on_success: continuar_ou_devolver
+    on_failure: continuar_ou_devolver
 
   # ── Caminho C: Problema técnico ──────────────────────────────────────────────
   - id: coletar_descricao
@@ -190,11 +190,30 @@ steps:
   - id: acusar_recebimento
     type: notify
     message: "✅ Problema registrado! Nossa equipe de suporte técnico irá analisar e retornar em até 2 horas úteis. Enquanto isso, posso te ajudar com mais alguma coisa?"
-    on_success: menu_resolucao
-    on_failure: menu_resolucao
+    on_success: continuar_ou_devolver
+    on_failure: continuar_ou_devolver
 
   # ── Menu de resolução ─────────────────────────────────────────────────────────
   # Botões (≤ 3) — funciona nativamente em WhatsApp e WebChat.
+  # ── Quem pergunta *"mais alguma coisa?"* — eu ou meu chamador? (RET-05) ──────
+  #
+  # ⚠️ **Sem isto o cliente e perguntado DUAS vezes.** Com chamador, este skill
+  # devolve o controle e o orquestrador abre a question de continuacao da arvore;
+  # se o menu abaixo rodasse antes, o cliente responderia aqui e seria perguntado
+  # de novo la — foi exatamente a tela que o dono leu como defeito no `menu_motivo`,
+  # um turno adiante.
+  #
+  # ⚠️ **E o menu FICA, como o `menu_motivo` ficou**: `sac_ia` tem endpoint de canal
+  # proprio (`webchat/sac`, 198 segmentos medidos), entao ha cliente que chega aqui
+  # sem orquestrador nenhum. Apagar consertaria o caminho novo e quebraria o antigo.
+  - id: continuar_ou_devolver
+    type: choice
+    conditions:
+      - field: "@ctx.core.workflow.delegate_resume_token"
+        operator: exists
+        next: sair_resolvido
+    default: menu_resolucao
+
   - id: menu_resolucao
     type: menu
     prompt: "Posso te ajudar com mais alguma coisa?"

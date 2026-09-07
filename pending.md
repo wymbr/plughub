@@ -339,7 +339,6 @@ seguem sem tarefa aberta neste ledger.)*
 
 | id | o que falta | estado | ancora |
 |---|---|---|---|
-| RET-05 | **R5 — `menu_resolucao` e `menu_continuar` viram questions de continuacao**, e o `navigation_pools` ganha os prefixos (D5). E a metade da CTR-04 que ficou parada por nao haver dono para receber a pergunta. ⚠️ `sac.menu_motivo` **NAO entra**: fica por decisao, porque `sac_ia` tem porta propria de canal ⚠️ **E a RET-05 e quem LIGA o ciclo** — hoje 0 de 14 formas declaram `on_return`, entao o mecanismo esta inteiro e inerte. Com o teto (RET-04) e o cancelamento (RET-03) no lugar, ligar deixa de ser laco sem fim | `aberto` | destravada pela RET-04 (2026-09-07) |
 ## `docs/arcos/arc12-agent-business-events.md` — eventos de negocio do agente
 
 *(O wrap-up real passou a emitir captura Arc 12 em 2026-09-04; ver `done.md`.)*

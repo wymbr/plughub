@@ -1,5 +1,73 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-07 (4) — RET-05: o ciclo ligado, e o gate que estava certo
+
+Ultima fase do `adr-tree-return-continuation.md`, e a **primeira entrega do arco que o cliente ve**.
+As quatro anteriores foram mecanismo inerte: 0 de 14 formas declaravam `on_return`, entao o
+`continuar` do orquestrador caia sempre em `finalizar`.
+
+### O que foi ligado
+
+A forma de navegacao ganhou a question **`pos_atendimento`** — raiz propria (D5), com
+*"tenho outro assunto"* · *"falar com especialista"* · *"pode encerrar"* — e **6 das 9 folhas**
+apontam para ela.
+
+⚠️ **As 3 que ficaram sem ponteiro sao exatamente as que nao podem continuar**: `portabilidade`
+(cadeia de `delegate`, CTR-06), `sac.especialista` e `nao_se_aplica` (humano, sem deploy). Apontar
+ali penduraria o contato ate o `timeout_hours` — e e disso que o ramo A do gate novo cuida.
+
+Os especialistas **pulam o proprio menu** de continuidade quando ha chamador. Sem isso o cliente e
+perguntado DUAS vezes: o especialista pergunta *"mais alguma coisa?"*, devolve, e o orquestrador abre
+a continuacao — a mesma tela que o dono leu como defeito no `menu_motivo`, um turno adiante.
+⚠️ O menu **fica**: `sac_ia` tem endpoint de canal proprio (198 segmentos medidos), entao ha cliente
+que chega la sem orquestrador nenhum. Mesma decisao que preservou o `menu_motivo`.
+
+### O ramo H reprovou, e estava CERTO
+
+A primeira versao tinha uma opcao `pos_atendimento.sac` mapeada para o pool do SAC. O ramo H do gate
+da arvore (*"o especialista reconhece as folhas que a navegacao lhe manda"*) ficou **vermelho**, e a
+leitura facil seria que o gate envelheceu.
+
+Nao envelheceu: quem diz *"outro assunto"* **nao disse qual**, entao cairia no menu de motivo do SAC
+— e ficaria preso ao SAC, quando o que quer e a arvore inteira. A opcao virou o comando
+`outra_coisa`, que **reinicia na raiz**. O gate estava certo e a forma e que estava errada.
+
+### Comando nao e pool — e a divida que isso abre
+
+A arvore roteia demanda para POOL, e *"encerrar"* / *"outro assunto"* nao sao pool nenhum. Pô-los no
+`navigation_pools` exigiria inventar um pool que significasse "fim", e roteamento passaria a carregar
+semantica de controle.
+
+Hoje sao **dois** caminhos declarados no fluxo, e o ADR da arvore ja previa o genero (*"folha seria
+execucao, seja especialistas ou comandos como transfere e desliga"*). ⚠️ **Divida nomeada:** um
+terceiro comando obriga o genero a subir para a arvore (um `kind` de folha), senao o fluxo vira
+catalogo de caminhos — a segunda casa do conteudo que a D2 existe para impedir.
+
+### Gate
+
+`infra/test/probe_tree_continuation.sh`, 3 ramos: **A** so continua quem tem para onde voltar (6 com
+ponteiro, 3 sem, e as 3 sao as certas) · **B** toda continuacao e pool declarado ou comando do fluxo,
+porque o `pool_route_resolve` **nao tem default por decisao** e um orfao seria recusa na cara do
+cliente · **C** o especialista nao pergunta duas vezes.
+
+⚠️ A linha de base do `probe_dialog_return_pointer` foi **regravada**, e so depois de conferir que as
+4 divergencias eram todas na forma que mudou de proposito (+1 question, +1 field, os 6 ponteiros) e
+que **nenhuma outra das 14 formas** se mexeu.
+
+### Arquivos
+
+- `infra/dialog/dialog_navegacao_atendimento_v1.json` — a question de continuacao + 6 ponteiros
+- `skills/skill_navegacao_v1.yaml` · `skill_navegacao_llm_v1.yaml` — os dois comandos
+- `skills/skill_atendimento_sac_v1.yaml` · `skill_atendimento_auth_v1.yaml` — a guarda do menu
+- `navigation_pools` de `demo_ia` e `demo_llm_ia` — `pos_atendimento.especialista`
+- `infra/test/probe_tree_continuation.sh` · `_ret05_continuation_probe.py` ·
+  `_ret05_publish_form.py` · `fixtures/return_render_baseline.json` · `gates.manifest`
+
+Forma publicada v3; 6 skills republicados e promovidos. **Os 7 gates do arco verdes.**
+**Grupo RET completo.**
+
+---
+
 ## 2026-09-07 (3) — RET-03: o token do chamador morre com o contato
 
 Fecha a D7 do `adr-tree-return-continuation.md`, que nao era detalhe de limpeza: **decorre da D6**.
