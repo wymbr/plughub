@@ -18,9 +18,11 @@ interface ListResponse<T> {
   total: number
 }
 
-// G-PROBE platform-wide: o agent-registry gateia as mutações de config (pools/skills/
-// channels/channel-endpoints) em Bearer+ABAC `config.resources`. Anexa o Bearer do
-// operador (do token-store) quando presente; GETs são abertos (header ignorado).
+// G-PROBE platform-wide: o agent-registry gateia as mutações de config em Bearer+ABAC,
+// e desde a MOD-06 (2026-09-08) o campo é POR ROUTER — cada um é o que a TELA daquele
+// backend declara no menu: `/v1/pools` → `config.resources`, `/v1/skills` →
+// `skill_flows.editar`, `/v1/channels` e `/v1/channel-endpoints` → `config.channels`.
+// Anexa o Bearer do operador (do token-store) quando presente; GETs são abertos.
 const bearer = (): Record<string, string> => {
   const t = getAccessToken()
   return t ? { Authorization: `Bearer ${t}` } : {}

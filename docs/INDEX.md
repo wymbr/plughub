@@ -204,7 +204,7 @@ Um arquivo por módulo da UI. Cobre o que cada módulo faz, suas abas, gates de 
 
 | Arquivo | Rota UI | Roles | Descrição |
 |---|---|---|---|
-| [modulos/configuracao-recursos.md](modulos/configuracao-recursos.md) | `/config/resources` | admin | Pools, Agent Types, Skills, Instâncias, Canais, Agentes Humanos |
+| [modulos/configuracao-recursos.md](modulos/configuracao-recursos.md) | `/config/resources` | admin | Pools, competências e contas de LLM (as outras abas do texto não existem — ver correção de 2026-09-08 no topo do doc) |
 | [modulos/configuracao-plataforma.md](modulos/configuracao-plataforma.md) | `/config/platform` | admin | Namespaces de configuração via Config API |
 | [modulos/mascaramento.md](modulos/mascaramento.md) | `/config/masking` | admin | Regras de mascaramento de dados sensíveis, audit capture, retenção |
 | [modulos/controle-acesso.md](modulos/controle-acesso.md) | `/config/access` | admin | Usuários RBAC + ABAC, JWT, module_config |

@@ -1,5 +1,100 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (11) — MOD-06 (G5): um campo em frente a cinco telas, e um corte sem sujeito
+
+### 1 · O corte #3 não era `pools × skills`
+
+A D6 propunha dividir `config.resources` em `config.pools` × `config.skills`, com a
+pergunta *"Agent Types e Instâncias seguem quem?"*. Medido antes de cortar, o campo
+gateava:
+
+| backend | quem escreve | campo que a TELA já declarava |
+|---|---|---|
+| `/v1/pools` | Config → Recursos → Pools | `config.resources` ✔ |
+| `/v1/skills` | Fluxo → Editor | `skill_flows.operacao` / `.editar` ✗ |
+| `/v1/channels`, `/v1/channel-endpoints` | Config → Canais | `config.channels` ✗ |
+| `competency_skills`, `llm_accounts` (config-api) | as outras duas abas de Recursos | caíam no catch-all `config.platform` ✗ |
+
+Ou seja: **não havia campo novo a criar — havia campo alheio a devolver.** As duas
+perguntas da D6 dissolveram-se na medição: `/v1/agent-types` não existe como rota e
+`/v1/instances` está fora do gate por decisão declarada, enquanto o rótulo do campo
+prometia os dois.
+
+### 2 · Dois defeitos, medidos ao vivo com o preset REAL de cada papel
+
+```
+PUT  /v1/skills   com o preset do `developer` -> 403 "requires config.resources"
+POST /v1/channels com `config.channels`       -> 403 "requires config.resources"
+```
+
+O primeiro é defeito de produto: o menu **oferece** o Editor de Fluxo ao developer
+(`skill_flows.operacao` nasce para admin+developer) e `skill_flows.editar` existe
+dizendo *"Criar e editar skill flows"* — mas quem salvava era um grant **admin-only**.
+O developer via a tela e não conseguia gravar.
+
+O segundo é o defeito que o config-api **já havia fechado no seu lado** em 2026-08-27
+(menu em `config.platform`, backend em `config.channels`). Ele sobreviveu **um store
+adiante**: o censo daquele arco perguntava pelo config-api, e o agent-registry serve as
+mesmas telas. É a regra de método pela quarta vez — *um censo desenhado para um eixo não
+prova nada sobre o eixo vizinho* —, com a diferença de que aqui o eixo era o MESMO e o
+**store** é que era outro.
+
+### 3 · O conserto: o campo é do ROUTER, não do serviço
+
+`requireResourceWrite` virou a fábrica `requireAbacWrite(modulo, campo)` — a mesma forma
+do `_NS_FIELD_OVERRIDES` do config-api, que resolve o campo por namespace. Um gate único
+com o campo fixo dentro obriga toda tela a caber no mesmo grant, que é o que se desfez.
+A recusa passou a **nomear o campo que falta**: com campo por router, *"forbidden"* seco
+manda adivinhar entre três.
+
+Do outro lado, `competency_skills` e `llm_accounts` ganharam override para `resources`,
+alinhando as **três abas** da tela Recursos ao campo que o menu dela declara.
+
+**Sem renomear campo e sem migração de dados — e isso é medição, não sorte:** o censo
+mostrou 2 portadores de `config.resources` (`admin@`, `probe@`), ambos já com
+`config.channels` e `skill_flows.editar`. Ninguém perdeu capacidade.
+
+### 4 · O corte #2 não tem sujeito
+
+O módulo `workflows` inteiro é **órfão**: os seis campos (`operacao`, `visualizar`,
+`cancelar`, `webhooks`, `journey_read`, `journey_resume`) não têm consumidor nenhum no
+repositório. `/workflows` é redirect para `/flow/monitor`, gateado por
+`contacts.monitorar`; e os dois `journey_*` nomeiam tools removidas na Fase F do Arc 19.
+Dividir `workflows.operacao` renderia **dois órfãos** — o defeito que o as-built do corte
+#1 nomeia, evitado lá por medir antes.
+
+O que a medição achou no lugar é de outra natureza e virou ficha própria (**MOD-11**):
+`POST /v1/workflow/trigger` **não tem dependência de autorização nenhuma** e a página que
+o chama não manda header algum; três rotas de workflow estão em `routes.tsx` **sem
+`RequireAbac`**; e o CRUD de webhooks fica atrás de um admin-token cujo vazio **libera**.
+Cortar um campo que ninguém lê não fecharia nada disso.
+
+### 5 · O instrumento ganhou o segundo store — e uma seção que cobra o CATÁLOGO
+
+`probe_nav_backend_field_agreement.sh` media só o config-api, e tinha `resources`
+declarado **fora** da população (*"não servido pelo config-api"*). A exclusão era
+verdadeira e mesmo assim escondia o defeito. Hoje ele mede os dois stores, com par
+positivo+negativo por rota.
+
+⚠️ **A terceira tela precisou de regime próprio, e isso é decisão, não exceção.** No
+Editor de Fluxo o menu declara `skill_flows.operacao` (**ver**) e a escrita exige
+`.editar` (**escrever**) — exigir a igualdade ali reprovaria um split correto. Então o
+que se cobra é outra coisa: o comportamento (`editar` escreve, `operacao` **não** — senão
+o split é só declaração) **e o CATÁLOGO**, que todo papel com `operacao` também tenha
+`editar`. Sem essa segunda metade, um preset novo daria a alguém uma tela que ele não
+consegue usar — o mesmo *"salvei e deu erro"* por outro caminho. Provado falseável por
+mutante: tirar `developer` de `skill_flows.editar` deixa o ramo vermelho **nomeando o
+papel**.
+
+`_nav_fields.py` passou a aceitar `--module`: filtrar por um módulo fixo fazia o probe
+declarar `SEMREGRA` para uma entrada que **tem** regra.
+
+**Gates**: `probe_nav_backend_field_agreement.sh` (dois stores) ·
+`abac-field-per-router.test.ts` (7 casos, incluindo a testemunha de que `/v1/pools` **não**
+afrouxou) · `smoke_agent_registry_write_auth.sh`, que passou a recusar o campo **vizinho**
+— sem esse caso, reverter o `app.ts` não ficaria vermelho · suíte do agent-registry (63) ·
+`probe_python_suites.sh`.
+
 ## 2026-09-08 (10) — MOD-05 (G4, corte #1): o campo estreito já existia, órfão
 
 `contacts.operacao` carregava **dois fatos com detentores diferentes**, e o próprio rótulo os

@@ -15,7 +15,7 @@ import { channelEndpointsRouter } from "./routes/channel-endpoints"
 import { poolSlotsRouter }        from "./routes/pool-slots"
 import { operationalRouter }      from "./routes/operational"
 import { contextMapRouter }       from "./routes/context-map"
-import { requireResourceWrite }   from "./middleware/require-resource-write"
+import { requireResourceWrite, requireAbacWrite } from "./middleware/require-resource-write"
 
 export const app = express()
 
@@ -36,17 +36,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json())
 
 // ── Rotas ──────────────────────────────────
-// G-PROBE platform-wide: gate DUAL (service-token OU Bearer+ABAC config.resources) nas
-// MUTAÇÕES dos routers de config que a UI (PoolsPage/registry.ts) edita diretamente.
+// G-PROBE platform-wide: gate DUAL (service-token OU Bearer+ABAC) nas MUTAÇÕES dos
+// routers de config que a UI (PoolsPage/registry.ts/editor de fluxo) edita direto.
 // GET aberto (o middleware deixa passar). FORA do gate por ora (runtime/deploy interno,
 // cadeia de callers maior): instances, operational e pool-slots (promote/rollback do
 // Fluxo→Deploy, mediado por mcp-server) — fatia própria.
+// MOD-06 (corte #3): o campo é POR ROUTER, e cada um é o que a TELA daquele
+// backend já declara no menu. Antes, os quatro exigiam `config.resources` — e a
+// medição ao vivo mostrou o developer sem conseguir salvar um flow que o menu lhe
+// oferece, e `config.channels` recusado pela API da tela de Canais.
 app.use("/v1/pools",              requireResourceWrite, poolsRouter)
 app.use("/v1/pools/:pool_id",     poolSlotsRouter)   // slots sub-routes (deploy) — não gateado nesta fatia
-app.use("/v1/skills",             requireResourceWrite, skillsRouter)
+app.use("/v1/skills",             requireAbacWrite("skill_flows", "editar"), skillsRouter)
 app.use("/v1/instances",          instancesRouter)
-app.use("/v1/channels",           requireResourceWrite, channelsRouter)
-app.use("/v1/channel-endpoints",  requireResourceWrite, channelEndpointsRouter)
+app.use("/v1/channels",           requireAbacWrite("config", "channels"), channelsRouter)
+app.use("/v1/channel-endpoints",  requireAbacWrite("config", "channels"), channelEndpointsRouter)
 app.use("/v1/operational",        operationalRouter)
 // D6 — vocabulário do seletor de `context_visibility`. Somente LEITURA e
 // derivado do mapa; não escreve nada, por isso fora do `requireResourceWrite`.

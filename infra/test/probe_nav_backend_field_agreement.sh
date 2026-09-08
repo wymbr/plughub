@@ -30,6 +30,20 @@
 #   entrada de menu sem regra ABAC (nao ha o que conferir);
 #   campo `config.*` novo no catalogo sem classificacao aqui (passaria por OMISSAO).
 #
+# DOIS STORES, UM EIXO (MOD-06, 2026-09-08)
+# -----------------------------------------
+# Ate aqui este probe media so o config-api, e `resources` estava declarado FORA da
+# populacao ("nao servido pelo config-api"). A exclusao era verdadeira e mesmo assim
+# escondia o defeito: as telas de Recursos, Canais e Fluxo->Editor escrevem no
+# AGENT-REGISTRY, e la um campo unico (`config.resources`) estava em frente as tres.
+# Medido antes do conserto, com o preset REAL de cada papel:
+#
+#   PUT  /v1/skills   com o preset do `developer` -> 403 "requires config.resources"
+#   POST /v1/channels com `config.channels`       -> 403 "requires config.resources"
+#
+# E a regra de metodo que isto repete pela quarta vez: um censo desenhado para um eixo
+# nao prova nada sobre o eixo vizinho — aqui o eixo era o mesmo e o STORE, outro.
+#
 # TESTEMUNHA NEGATIVA (sem ela o probe passaria se a porta estivesse aberta):
 #   o mesmo principal, SEM campo `config.*` algum, tem de levar 403 nas mesmas rotas.
 #
@@ -65,12 +79,17 @@ NAV_NS_channels=webchat
 NAV_NS_masking=masking
 NAV_NS_dashboards=dashboards
 NAV_NS_contextMap=masking
+# MOD-06: a tela Recursos tem tres abas e DUAS escrevem no config-api
+# (`competency_skills`, `llm_accounts`). As duas caiam no catch-all `platform`, entao
+# quem recebia `config.resources` abria a tela, salvava Pools e levava 403 nas outras
+# duas abas — o mesmo "salvei e deu erro" que o override de `dashboards` fechou.
+NAV_NS_resources=competency_skills
 
 # TODOS os navs de config — a base da derivacao e da cobertura.
-NAVS="nav.platform nav.channels nav.masking nav.dashboards nav.contextMap"
+NAVS="nav.platform nav.channels nav.masking nav.dashboards nav.contextMap nav.resources"
 
 # Os que a concordancia mede por ESCRITA de rascunho.
-NAVS_ESCRITA="nav.platform nav.channels nav.masking nav.dashboards"
+NAVS_ESCRITA="nav.platform nav.channels nav.masking nav.dashboards nav.resources"
 
 # ── nav.contextMap: medido SEM ESCREVER, e isto e declarado ─────────────────
 # Desde a ALW-03 o campo do config-api e funcao de (namespace, KEY), nao so do
@@ -94,7 +113,11 @@ NAVS_SEM_ESCRITA="nav.contextMap"
 
 # campos `config.*` NAO servidos pelo config-api — declarados para que a conferencia
 # de cobertura nao os cobre (e para que a lista seja visivel no diff)
-NAO_CONFIG_API="resources users permissions calendars dialog_forms"
+# `resources` SAIU desta lista na MOD-06 — ele passou a ser servido pelo config-api
+# (as duas abas da tela Recursos), e continua servido tambem pelo agent-registry
+# (`/v1/pools`), medido na secao REGISTRY abaixo. Um campo pode ter dois backends;
+# o que ele nao pode e ter dois CAMPOS para a mesma tela.
+NAO_CONFIG_API="users permissions calendars dialog_forms"
 
 ns_de() {  # nav.x -> namespace
   case "$1" in
@@ -103,6 +126,7 @@ ns_de() {  # nav.x -> namespace
     nav.masking)    printf '%s' "$NAV_NS_masking" ;;
     nav.dashboards) printf '%s' "$NAV_NS_dashboards" ;;
     nav.contextMap) printf '%s' "$NAV_NS_contextMap" ;;
+    nav.resources)  printf '%s' "$NAV_NS_resources" ;;
   esac
 }
 
@@ -275,6 +299,114 @@ else
            info "se o campo do namespace serve, o split e so declaracao." ;;
     esac
   fi
+fi
+
+# ── o MESMO eixo no outro store: agent-registry (MOD-06) ────────────────────
+#
+# Tres telas escrevem aqui, e cada uma declara o seu campo no menu. Ate a MOD-06 as
+# tres exigiam `config.resources`. O par POSITIVO+NEGATIVO e obrigatorio: um gate que
+# recusasse tudo passaria em qualquer negativo sozinho.
+#
+# O corpo enviado e INVALIDO de proposito — o que se mede e o PORTAO, e um 4xx de
+# validacao prova que ele foi atravessado sem criar recurso nenhum.
+sec "concordancia no agent-registry - campo por ROUTER"
+REG="${REG:-http://localhost:3300}"
+escreve_reg() {  # $1=token  $2=rota
+  curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST "$REG$2" \
+    -H "Authorization: Bearer $1" -H 'content-type: application/json' -d '{"__probe__":true}'
+}
+
+# tela -> rota. O CAMPO continua vindo do Sidebar, nunca declarado aqui.
+REG_CASOS="nav.resources:/v1/pools nav.channels:/v1/channels"
+
+for caso in $REG_CASOS; do
+  nav="${caso%%:*}"; rota="${caso#*:}"; modulo=config
+  campo="$(printf '%s\n' "$DERIV" | grep -v '^SEMREGRA:' | awk -F: -v n="$nav" '$2 == n { print $1 }')"
+  if [ -z "$campo" ]; then
+    bad "$nav sem campo derivado do Sidebar — nao ha o que conferir"
+    continue
+  fi
+  st="$(set_cfg "{\"$modulo\":{\"$campo\":{\"access\":\"read_write\",\"scope\":[]}}}")"
+  if [ "$st" != "200" ]; then inc "nao consegui conceder $modulo.$campo (HTTP $st)"; continue; fi
+  T3="$(login_nav)"
+  c="$(escreve_reg "$T3" "$rota")"
+  case "$c" in
+    401|403) bad "$nav gateia em $modulo.$campo, que NAO basta para escrever em $rota ($c)" ;;
+    *)       ok  "$nav ($modulo.$campo)  ->  $rota  (HTTP $c, passou o portao)" ;;
+  esac
+done
+
+# ── Fluxo->Editor: aqui menu e backend DIVERGEM DE PROPOSITO ────────────────
+#
+# As duas telas acima tem um campo so (ver == escrever). O Editor de Fluxo tem DOIS,
+# e o catalogo os declara: `skill_flows.operacao` ("Acesso operacional") decide quem VE
+# e `skill_flows.editar` ("Criar e editar skill flows") decide quem SALVA. Exigir a
+# igualdade aqui reprovaria um split correto.
+#
+# O que ainda pode dar errado, e e o que se mede: se algum papel recebe o campo de VER
+# sem o de ESCREVER, ele ganha uma tela que nao consegue usar — o mesmo "salvei e deu
+# erro" por outro caminho. Entao sao duas afirmacoes:
+#   (1) COMPORTAMENTO: `editar` escreve; `operacao` sozinho NAO (senao o split e so
+#       declaracao, como o P- do context_map);
+#   (2) CATALOGO: todo papel com `operacao` tambem tem `editar`.
+sec "Fluxo->Editor - ver e escrever sao campos distintos, e isso e declarado"
+VER="$(python3 "$HERE/_nav_fields.py" "$SIDEBAR" --module skill_flows nav.flow.editor 2>/dev/null | grep -v '^SEMREGRA:' | cut -d: -f1)"
+if [ -z "$VER" ]; then
+  bad "nav.flow.editor sem regra ABAC de modulo skill_flows no Sidebar"
+else
+  info "campo de VER, DERIVADO do Sidebar: skill_flows.$VER"
+  st="$(set_cfg '{"skill_flows":{"editar":{"access":"read_write","scope":[]}}}')"
+  if [ "$st" != "200" ]; then
+    inc "nao consegui conceder skill_flows.editar (HTTP $st)"
+  else
+    c="$(escreve_reg "$(login_nav)" /v1/skills)"
+    case "$c" in
+      401|403) bad "skill_flows.editar NAO basta para escrever em /v1/skills ($c)" ;;
+      *)       ok  "skill_flows.editar  ->  /v1/skills  (HTTP $c, passou o portao)" ;;
+    esac
+  fi
+  st="$(set_cfg "{\"skill_flows\":{\"$VER\":{\"access\":\"read_write\",\"scope\":[]}}}")"
+  if [ "$st" != "200" ]; then
+    inc "nao consegui conceder skill_flows.$VER (HTTP $st)"
+  else
+    c="$(escreve_reg "$(login_nav)" /v1/skills)"
+    case "$c" in
+      403) ok  "P- skill_flows.$VER (ver) NAO escreve em /v1/skills (403) — o split vale em runtime" ;;
+      *)   bad "P- skill_flows.$VER alcancou a ESCRITA (HTTP $c) — o split e so declaracao" ;;
+    esac
+  fi
+  # (2) o catalogo: quem ve, salva.
+  ORFAOS="$(python3 - "$ROOT/infra/modules.yaml" "$VER" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+ver = sys.argv[2]
+esq = {}
+for m in d["modules"]:
+    if m["module_id"] == "skill_flows":
+        esq = m["permission_schema"]
+rd = lambda c: {p for p, v in ((esq.get(c) or {}).get("role_defaults") or {}).items() if v != "none"}
+print(" ".join(sorted(rd(ver) - rd("editar"))))
+PY
+)"
+  if [ -n "$ORFAOS" ]; then
+    bad "papel(is) com skill_flows.$VER e SEM skill_flows.editar:$ORFAOS"
+    info "Eles nascem vendo o Editor e sem poder salvar — o defeito que a MOD-06 fechou."
+  else
+    ok "todo papel que nasce com skill_flows.$VER tambem nasce com .editar"
+  fi
+fi
+
+# testemunha negativa do MESMO store: sem campo algum, as tres recusam.
+st="$(set_cfg '{"contacts":{"visualizar":{"access":"read_only","scope":[]}}}')"
+if [ "$st" = "200" ]; then
+  T4="$(login_nav)"; neg_ok=1
+  for rota in /v1/pools /v1/channels /v1/skills; do
+    c="$(escreve_reg "$T4" "$rota")"
+    [ "$c" = "403" ] || { bad "$rota aceitou escrita SEM campo algum (HTTP $c)"; neg_ok=0; }
+  done
+  [ "$neg_ok" = "1" ] && ok "as tres rotas do registry recusam quem nao tem campo algum"
+else
+  inc "nao consegui preparar a testemunha negativa do registry (HTTP $st)"
 fi
 
 # ── limpeza ─────────────────────────────────────────────────────────────────

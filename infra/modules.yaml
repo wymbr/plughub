@@ -324,7 +324,11 @@ modules:
         role_defaults:
           admin: read_write
       resources:
-        label: Pools, Agent Types, Skills, Instâncias
+        # MOD-06 (2026-09-08): o rotulo citava quatro coisas e o campo nao gateava tres
+        # delas — `/v1/instances` esta FORA do gate por decisao, `/v1/agent-types` nao
+        # existe como rota, e `/v1/skills` (skill flows) passou a exigir
+        # `skill_flows.editar`, que e o campo que a tela do Editor ja declarava.
+        label: Recursos de roteamento (Pools, competências, contas de LLM)
         domain: [none, read_only, read_write]
         scopable: false
         default: none

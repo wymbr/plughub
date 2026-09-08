@@ -78,6 +78,13 @@ _NS_FIELD_OVERRIDES = {
     # `config.dialog_forms` para publicar a forma) não conseguiria editar o formato
     # que a própria forma usa.
     "dialog":       "dialog_forms",
+    # MOD-06 (2026-09-08). As TRES abas de Config -> Recursos sao uma tela so, e o menu
+    # a gateia por `config.resources`; duas delas escrevem AQUI e caiam no catch-all
+    # `platform`. Efeito: quem recebia `config.resources` abria a tela, salvava Pools
+    # (agent-registry) e levava 403 nas abas Competencias e Contas de LLM — o mesmo
+    # "salvei e deu erro" que o override de `dashboards` fechou em 2026-08-27.
+    "competency_skills": "resources",
+    "llm_accounts":      "resources",
 }
 
 

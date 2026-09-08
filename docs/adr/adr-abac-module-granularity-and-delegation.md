@@ -128,12 +128,52 @@ Candidatos medidos, na ordem em que o rótulo denuncia:
 | # | campo | corte proposto |
 |---|---|---|
 | 1 | `contacts.operacao` | `contacts.monitorar` (observar) × ~~`contacts.atender`~~ **`agent_assist.atender`** — ver as-built |
-| 2 | `workflows.operacao` | `workflows.editar` × `workflows.monitorar` (calendário já é `config.calendars`) |
-| 3 | `config.resources` | `config.pools` × `config.skills` (Agent Types e Instâncias seguem quem?) |
+| 2 | `workflows.operacao` | ~~`editar` × `monitorar`~~ **corte SEM SUJEITO** — ver as-built |
+| 3 | `config.resources` | ~~`config.pools` × `config.skills`~~ — o corte foi outro: ver as-built |
 | 4 | `contacts.visualizar` | recorte de Analytics por superfície — depende da AUT-01, que ainda não tem filtro de pool nos agregados |
 
 Cada corte é uma **migração de dados**, não só de catálogo: todo portador do campo largo precisa
 de backfill para os estreitos, senão o corte **rebaixa em silêncio** quem já trabalhava.
+
+> **As-built dos cortes #2 e #3 (MOD-06, 2026-09-08) — e nenhum dos dois era o corte previsto.**
+>
+> **#3 não era `pools × skills`: era UM campo em frente a CINCO telas.** Medido antes de
+> cortar, `config.resources` gateava as mutações de `/v1/pools`, `/v1/skills`,
+> `/v1/channels` e `/v1/channel-endpoints` no agent-registry, mais — pelo catch-all
+> `platform` do config-api — duas das três abas da própria tela Recursos. Três dessas
+> telas **já declaravam campo próprio no menu**, então não havia campo novo a criar: havia
+> campo alheio a devolver. Duas consequências medidas ao vivo, com o preset real de cada
+> papel:
+>
+> ```
+> PUT  /v1/skills   com o preset do `developer` -> 403 "requires config.resources"
+> POST /v1/channels com `config.channels`       -> 403 "requires config.resources"
+> ```
+>
+> A primeira é defeito de produto: o menu do developer **oferece** o Editor de Fluxo
+> (`skill_flows.operacao`) e `skill_flows.editar` existe dizendo *"Criar e editar skill
+> flows"* — mas quem salvava era um grant admin-only. A segunda é o defeito que o
+> config-api já fechara no seu lado em 2026-08-27 (menu em `config.platform`, backend em
+> `config.channels`), **sobrevivendo um store adiante** porque o censo daquele arco
+> perguntava pelo config-api. Hoje o campo é resolvido **por router** — a mesma forma do
+> `_NS_FIELD_OVERRIDES`, que resolve por namespace — e a tela Recursos responde a
+> `config.resources` nos dois stores. Sem renomear campo e sem migração de dados: o censo
+> mostrou que os 2 portadores de `config.resources` já detinham os outros dois campos.
+>
+> **#2 não tem sujeito: o módulo `workflows` inteiro é órfão.** Os seis campos
+> (`operacao`, `visualizar`, `cancelar`, `webhooks`, `journey_read`, `journey_resume`) têm
+> **zero consumidores** em todo o repositório — nem UI, nem serviço. `/workflows` é
+> redirect para `/flow/monitor`, gateado por `contacts.monitorar`; os dois últimos campos
+> nomeiam tools (`journey_list_suspended`, `journey_resume`) que **não existem mais** desde
+> a Fase F do Arc 19. Dividir `workflows.operacao` produziria **dois órfãos** — exatamente
+> o defeito que o as-built do corte #1 nomeia, e que ali foi evitado por medir antes.
+>
+> O que a medição achou no lugar é outra natureza de problema, e por isso virou ficha
+> própria (**MOD-11**), não um corte: `POST /v1/workflow/trigger` **não tem dependência de
+> autorização nenhuma** e a página que o chama não manda header algum; `/workflow/editor`,
+> `/workflow/calendar` e `/workflow/triggers` estão roteadas **sem `RequireAbac`**; e o
+> CRUD de webhooks fica atrás de `X-Admin-Token` com `if settings.admin_token and …`, ou
+> seja, **vazio libera**. Cortar um campo que ninguém lê não fecharia nada disso.
 
 > **As-built do corte #1 (MOD-05, 2026-09-08) — o campo estreito JÁ EXISTIA, órfão.**
 > A proposta era criar `contacts.atender`. Ao medir os consumidores antes de cortar apareceu
@@ -380,7 +420,7 @@ conseguiu, porque a senha tinha de ficar com quem administra pessoas.
 | **G1b** | Presets desenhados + gate do par `⊆`; `developer` -> `devops` | **nova** — pré-requisito de o G1 entregar contratação |
 | **G2** | Rota de apply-template (capacidade do template, nunca do corpo) + proveniência carimbada + UI | a D3 sobrevive; a D5 já está fechada pela E1 |
 | **G3** | Revogar `config.permissions` de quem o censo apontar | **destravada** — a ordem G1->G2->G3 continua, mas por coerência, não por risco de tirar a contratação |
-| **G4–G6** | Cortes da D6 (#1 `contacts.operacao` ✅ MOD-05, #2/#3, #4 Analytics) | ⚠️ O corte #1 **não** produziu `contacts.atender`: reusou o órfão `agent_assist.atender` (as-built na D6). A AUT-38 passa a ter um alvo declarado para os 17 portões de papel |
+| **G4–G6** | Cortes da D6 (#1 ✅ MOD-05, #3 ✅ MOD-06, #2 **sem sujeito** → MOD-11, #4 Analytics) | ⚠️ Nenhum dos três primeiros foi o corte previsto — os as-builts estão na D6. Padrão que se repetiu: **medir os consumidores antes de cortar** trocou o desenho nas três vezes |
 
 **A ordem G1->G1b é a única inegociável desta emenda:** guard de rank sobre presets não
 desenhados bloqueia a contratação mais ordinária do sistema.

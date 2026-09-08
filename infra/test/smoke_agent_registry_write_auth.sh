@@ -5,7 +5,13 @@
 # As mutações de config (pools/skills/channels/channel-endpoints) deixam de ser
 # abertas e exigem:
 #   - X-Service-Token (callers internos: RegistrySyncer/deploy), OU
-#   - Bearer + ABAC `config.resources` (read_write) — a UI (PoolsPage/registry.ts).
+#   - Bearer + ABAC do campo DAQUELE router (read_write) — a UI.
+#
+# ⚠️ O campo passou a ser POR ROUTER na MOD-06 (2026-09-08): um campo único em frente
+# aos quatro deixava o `developer` vendo o Editor de Fluxo e sem poder salvar (medido:
+# 403 "requires config.resources" com o preset real dele). Hoje:
+#   /v1/pools -> config.resources · /v1/skills -> skill_flows.editar ·
+#   /v1/channels e /v1/channel-endpoints -> config.channels
 # GET (leituras) seguem abertos. instances/operational/pool-slots NÃO são gateados.
 #
 # Sonda: DELETE de um skill inexistente — o middleware roda ANTES do handler, então
@@ -43,9 +49,12 @@ del() { code -X DELETE "$REG/v1/skills/smoke_gprobe_nonexistent" -H "x-tenant-id
 echo "══ aguardando agent-registry ══"
 for i in $(seq 1 30); do $CURL "$REG/v1/health" >/dev/null 2>&1 && break; [ "$i" = 30 ] && { echo "  ✗ timeout"; exit 1; }; sleep 1; done
 
-echo "══ mint tokens (resources rw / ro / sem grant) ══"
-TOK_RW=$(mint   '{"config":{"resources":{"access":"read_write","scope":[]}}}')
-TOK_RO=$(mint   '{"config":{"resources":{"access":"read_only","scope":[]}}}')
+echo "══ mint tokens (skill_flows.editar rw / ro / vizinho / sem grant) ══"
+TOK_RW=$(mint   '{"skill_flows":{"editar":{"access":"read_write","scope":[]}}}')
+TOK_RO=$(mint   '{"skill_flows":{"editar":{"access":"read_only","scope":[]}}}')
+# O VIZINHO: era o campo que abria esta rota até a MOD-06. Ele tem de ser recusado
+# agora — sem este caso, trocar o campo no `app.ts` de volta não ficaria vermelho.
+TOK_VIZ=$(mint  '{"config":{"resources":{"access":"read_write","scope":[]}}}')
 TOK_NONE=$(mint '{"contacts":{"monitorar":{"access":"read_write","scope":[]}}}')
 [ -n "$TOK_RW" ] && [ -n "$TOK_RO" ] && [ -n "$TOK_NONE" ] || { echo "  ✗ mint falhou"; exit 1; }
 echo "  ✓ tokens mintados"
@@ -54,8 +63,9 @@ echo "══ 1. mutação gateada (DELETE /v1/skills/:id) ══"
 assert       "sem credencial → 401"            401 "$(del)"
 assert       "Bearer read_only → 403"          403 "$(del -H "Authorization: Bearer $TOK_RO")"
 assert       "Bearer sem grant → 403"          403 "$(del -H "Authorization: Bearer $TOK_NONE")"
+assert       "Bearer config.resources → 403"   403 "$(del -H "Authorization: Bearer $TOK_VIZ")"
 assert_pass  "X-Service-Token (callers internos)" "$(del -H "x-service-token: $SVC")"
-assert_pass  "Bearer resources:rw (UI)"           "$(del -H "Authorization: Bearer $TOK_RW")"
+assert_pass  "Bearer skill_flows.editar:rw (UI)"  "$(del -H "Authorization: Bearer $TOK_RW")"
 
 echo "══ 2. leitura aberta (GET /v1/skills) ══"
 assert "GET lista sem credencial → 200" 200 "$(code "$REG/v1/skills?tenant_id=$TENANT" -H "x-tenant-id: $TENANT")"

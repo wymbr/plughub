@@ -57,8 +57,9 @@ async function patch(url: string, body: unknown, headers?: Record<string, string
 export class RegistryClient {
   /**
    * `serviceToken` — credencial de SERVIÇO do agent-registry. As MUTAÇÕES de
-   * `/v1/pools` e `/v1/skills` são gateadas por `requireResourceWrite`, que
-   * aceita `x-service-token` OU `Bearer` + ABAC `config.resources`. O runner e2e
+   * `/v1/pools` e `/v1/skills` são gateadas por `requireAbacWrite`, que aceita
+   * `x-service-token` OU `Bearer` + ABAC do campo daquele router (`config.resources`
+   * e `skill_flows.editar`, respectivamente — MOD-06). O runner e2e
    * é caller interno e não carrega JWT de usuário, então usa o token de serviço
    * — o MESMO padrão, e a MESMA variável de ambiente, de `mcp-server/server.ts`
    * e `tools/deploy.ts`.

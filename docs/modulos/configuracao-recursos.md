@@ -2,7 +2,18 @@
 
 > Última atualização: 2026-05-25 · Estado: Arc 16
 
-> Rota UI: `/config/resources` | Roles: admin, developer
+> Rota UI: `/config/resources` | ABAC: `config.resources`
+
+> **Correção de 2026-09-08 (MOD-06), e ela é de DUAS naturezas.**
+> **(a) As abas.** A tabela abaixo lista seis abas; `modules/config-recursos/index.tsx`
+> tem **três**: Pools, Competências (`competency_skills`, no config-api) e Contas de LLM
+> (`llm_accounts`, idem). Agent Types, Instances, Canais e Agentes Humanos não são abas
+> desta tela — Canais tem tela própria (`/config/channels`, `config.channels`).
+> **(b) O campo.** As duas abas servidas pelo config-api caíam no catch-all
+> `config.platform`: quem recebia `config.resources` abria a tela, salvava Pools e levava
+> **403** nas outras duas. Hoje os dois namespaces respondem a `config.resources`, e o
+> agent-registry resolve o campo por ROUTER. Gate:
+> `infra/test/probe_nav_backend_field_agreement.sh`.
 
 ## O que é
 
