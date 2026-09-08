@@ -1,5 +1,46 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (6) — o backfill do supervisor, e por que a classe C não é uma fila de trabalho
+
+A MOD-08 acrescentou `approvals.decide`, `approvals.operacao` e `evaluation.contestar` ao
+preset do `supervisor` — os três sem os quais ele não contrata um `operator` sob o guard de
+RANK. Mas **preset é certidão de nascimento**: quem já existia não recebeu nada, e o sintoma
+só apareceria depois da MOD-04, como *"a tela parou de deixar"*.
+
+`infra/scripts/backfill_preset_fields.py`: escreve pela **API oficial**, **dry-run por
+default**, **nunca rebaixa** (só preenche onde `rank(preset) > rank(atual)`), e o VALOR vem do
+catálogo para os papéis daquele usuário — nunca de literal no script. Idempotente: a segunda
+execução diz *"nada a fazer"*.
+
+### O alvo é EXPLÍCITO, e essa é a decisão de desenho
+
+A tentação era varrer a classe C do censo. **Ela mistura três causas, e só a primeira é
+backfill:** o preset mudou depois do nascimento (é este caso) · foi revogado ou nunca
+concedido de propósito · o preset falhou ao aplicar no nascimento (foi a AUT-12).
+
+Medido: dos **5** em C, um era `navprobe@` — papel `operator`, sem campos que o preset de
+operator **sempre** declarou. Não é caso 1: é a fixture mínima do probe de navegação, e
+completá-la mudaria o que aquele probe mede. Um script que varresse C inteira consertaria o
+caso 1 e estragaria o caso 2, sem nada ficar vermelho. Por isso `--emails`/`--papel` são
+obrigatórios.
+
+### A verificação foi a SIMULAÇÃO da revogação, não o "aplicou com sucesso"
+
+`supervisor@` detém `config.permissions` hoje, então é master e contrataria de qualquer jeito
+— um teste funcional agora passaria pelo motivo errado. Removendo a chave-mestra **em
+memória**, que é exatamente o que a MOD-04 fará: `e_master = False`, e ele **ainda contrata
+operator e ainda dá o próprio pool**. É isso que o backfill existia para garantir.
+
+Censo dos três campos: **3A/5C → 4A/4C**.
+
+### O que fica para a MOD-04
+
+Os 4 restantes em C são fixtures (`aut01probe@`, `probe_rowscope@`, `useradmin@`,
+`navprobe@`), deixados de propósito. Três delas têm papel `supervisor` — revogar
+`config.permissions` sem backfillá-las as deixa sem poder contratar. Decisão registrada na
+ficha, não resolvida por conta própria.
+
+
 ## 2026-09-08 (5) — MOD-02 (G1): o guard de RANK, e a Costura 1 fechada
 
 `packages/auth-api/src/plughub_auth_api/grants.py` — predicado ÚNICO para os dois
