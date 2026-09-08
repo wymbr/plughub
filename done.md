@@ -142,7 +142,9 @@ história no `CHANGELOG.md`.)*
 
 ## `docs/adr/adr-abac-module-granularity-and-delegation.md` — granularidade e delegacao ABAC
 
-*(nada fechado ainda)*
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| MOD-03 | **G2 — D5 respondida: quem aplica, e sobre quais campos.** Fechada por DECISÃO, não por código: a emenda de 2026-09-08 ao ADR (E1) resolveu a D5 sem campo novo — **master** = `config.permissions: read_write` (só o `admin@`, por seed, concede qualquer campo) × **delegado** = `config.users: read_write` (concede `≤` o que detém, campo a campo, com escopo `⊆`). As três formas que a D5 deixara abertas foram descartadas com razão escrita: a opção *c* (discriminar por NÍVEL dentro de `config.users`) fundiria de volta os dois fatos que o split de 08-27 separou, e as opções *a*/*b* criariam campo para o que o `config.permissions` já declara — *"Conceder permissões (papéis, módulos, escopo de pools)"*. A implementação da UI de criação por template migrou para a **MOD-09**, junto da proveniência carimbada | 2026-09-08 | `CHANGELOG.md` § 2026-09-08 (1) |
 
 ---
 

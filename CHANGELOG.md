@@ -1,5 +1,107 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (1) — ABAC: o guard é de RANK, e a delegação por PACOTE sai (emenda ao ADR)
+
+Sessão de desenho com o dono, sem mudança de código. O
+`adr-abac-module-granularity-and-delegation.md` ganhou uma **emenda** (168 → 356 linhas) que
+substitui a **D2** (veículo da delegação) e a **D4** (`delegable`), e **fecha a D5**. As
+decisões originais ficam na íntegra, com aviso no cabeçalho: reescrevê-las apagaria a evidência
+de por que o desenho mudou, e quem implementasse a D4 lendo só a primeira metade construiria um
+mecanismo que a emenda removeu.
+
+### 1 · A hierarquia de papéis foi proposta e refutada pelo próprio catálogo
+
+A ideia era *"ninguém aplica template de papel acima do seu"*, com a cadeia
+`admin > developer > supervisor > operator,business`. Medido nos `role_defaults`: **nenhum par
+adjacente está ordenado**. `supervisor` tem 9 campos que `developer` não tem; `operator` tem 3
+que `supervisor` não tem — e um deles, `evaluation.contestar`, é assim **de propósito** (o
+operador contesta a própria avaliação; o supervisor revisa). Só `admin` é topo real; os outros
+quatro formam uma **anticadeia**. São funções, não níveis — a mesma razão pela qual a
+granularidade existe.
+
+Pior que a ordem errada: **o rótulo não sabe o que tem dentro.** Editar o template "supervisor"
+para incluir `config.permissions` o mantém rotulado supervisor, e o guard fica verde enquanto a
+escalação acontece.
+
+### 2 · O guard por conteúdo, sozinho, produz a DIAGONAL
+
+Trocada a hierarquia por *"não concede o que não detém"*, a medição seguinte mostrou que o
+guard aplicado aos presets deixa **cada papel criando apenas um clone de si mesmo**: o
+supervisor não consegue criar um **operador**, bloqueado exatamente nos 3 campos acima. A
+incomparabilidade que matou a ordem mata também o guard-como-regra-única.
+
+O diagnóstico, porém, é de **dado**: os presets são engenharia reversa do `seed_auth.py`
+(`arc7-auth.md` já declarava `developer`/`business` como *"declarações mínimas que precisam de
+decisão"*). Daí a fase **G1b**, nova e pré-requisito da G1: presets desenhados + **gate do par
+`⊆`** para cada contratação legítima. Sem ele, a próxima edição de preset quebra a contratação
+em silêncio, e o sintoma não parece "preset errado" — parece "a tela não deixa".
+
+### 3 · RANK × PRESENÇA foi decidido por um caminho de personificação medido
+
+Sob **presença** (deter o módulo em qualquer nível autoriza concedê-lo em qualquer nível), o
+delegado cria um usuário, concede-lhe `read_write` num campo que ele só tem em `read_only`,
+define a senha — `CreateUserRequest.password` é **escolhida por quem cria** — e entra na conta:
+`read_only` vira `read_write` por procuração. Sob **rank**, a procuração nunca excede o
+outorgante, e o mesmo caminho não ganha nada. Ficou o rank, e com ele o corte da personificação
+deixa de ser pré-requisito (segue devido: o vetor existe hoje contra qualquer alvo não
+privilegiado).
+
+### 4 · `delegable` sai; o campo "master" já existia
+
+Sem travessia do guard não há pacote a aprovar — e o `delegable` era subespecificado: booleano
+global não responde *"para quem"*. O regime final usa **os dois campos que já existem**:
+`config.permissions: read_write` = master (só o `admin@`, por seed) · `config.users: read_write`
+= delegado, concedendo `≤` o que detém, campo a campo, com escopo `⊆`. O split de 08-27 fica
+**preservado** — a alternativa (discriminar por NÍVEL dentro de `config.users`) fundiria os dois
+fatos de volta num campo.
+
+Três precisões que a implementação não pode perder: o guard roda sobre **`preset(role) ∪
+module_config`** (senão `{role: "admin", module_config: {}}` passa e concede 44 campos pela porta
+do preset); `scope: []` é **global** em `abac_can` enquanto `accessible_pools` vazio vai virar
+**"nenhum"** na AUT-03 — sentidos opostos no mesmo formulário; e o guard vale também no
+`PUT /users/{id}/module-config`, que hoje não compara nada com o config do chamador.
+
+### 5 · Template: proveniência CARIMBADA, nunca referência viva
+
+Confirmado que hoje é cópia pura (sem coluna em `auth.users`, `applyTemplate` client-side, a
+rota `POST /templates/{id}/apply` removida em 2026-08-30, e **zero templates** na instalação). O
+modelo *"mantém a referência se nada mudou, exceto pools"* foi recusado: torna o template
+política viva para um subconjunto imprevisível, e a exceção dos pools o faz sobreviver
+justamente à edição que mais quebra a equivalência. Fica `created_from_template_id` + hash,
+imutáveis e nunca consultados para autorizar — padrão do `deploy_version`: carimbo, não
+ponteiro. E o template **não carrega pools**: eles vêm do aplicador, dentre os dele.
+
+### 6 · Cinco achados medidos, que viram trabalho próprio
+
+- **`audit` não existe no catálogo** — 11 módulos no YAML e no `module_registry` vivo, `audit`
+  em nenhum; mas `Sidebar.tsx:170` o gateia e a analytics-api o enforça. Sob grant-first, o item
+  do DPO é **invisível para todos** e inconcedível pela tela. Terceira testemunha: `access.json`
+  tem 12 entradas em `moduleNames`, incluindo `audit`.
+- **Os 44 rótulos de campo não passam por `t()`** — o nome do MÓDULO usa `t()` com
+  `defaultValue`; o do CAMPO é cru do YAML, em português. A paridade EN×pt-BR está "perfeita"
+  porque não há o que comparar.
+- **`write_only` sai em dois passos** — zero domínios o oferecem e zero grants o usam (128: 106
+  `read_write`, 22 `read_only`), mas **dois call sites** passam `min_access="write_only"` e
+  `abac_can` levanta `ValueError`: removê-lo primeiro vira **500**, não negação. São **7 cópias**
+  da tabela de rank (canônica + 4 em TS + 2 em `infra/test/`), e a da UI é **indexada** — carrega
+  a "divergência 2" que o `py-authz` dá por fechada.
+- **17 rotas do `mcp-server-plughub` gateiam por PAPEL literal**, julgando por **`roles[0]`** —
+  autorização dependente da ordem em que os papéis foram digitados. Não são a cauda de papel
+  fechada em 08-27 (aquela lista **bypasses**); são portões nunca migrados, e caem entre os três
+  censos. O alvo já existe **órfão**: `agent_assist.atender` e `agent_assist.supervisionar`.
+- **`config.users` é `scopable: false`** e as rotas de usuário não recortam: um supervisor
+  lista, edita, desativa e **reseta a senha** do operador de qualquer outro supervisor.
+
+### 7 · E a decisão sobre papéis
+
+`developer` → **`devops`** (o preset atual é de *autor de fluxo*, papel que os DialogForms
+tornaram obsoleto). Custo medido: **1 linha** — `admin@`, que também tem `admin`. **`agente` não
+é criado**: identificador é inglês por regra da casa, e `operator` já É o agente humano.
+
+**Ledger:** MOD-02 reescrita · MOD-03 fechada (D5 respondida) · MOD-04 repontada para MOD-02 ·
+MOD-08/MOD-09 novas · AUT-38..42 novas · AUT-29 de `adiado` para `aberto`.
+
+
 ## 2026-09-07 (17) — ORF-01: o expurgo dos quatro, e a exceção que sai junto com o fato
 
 Os quatro segmentos abertos de 2026-08-21 foram **expurgados**, e com eles saiu a lista
