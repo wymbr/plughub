@@ -443,7 +443,7 @@ conseguiu, porque a senha tinha de ficar com quem administra pessoas.
 |---|---|---|
 | **G0** | Censo de `config.permissions` (MOD-01) | inalterada — continua destravando tudo |
 | **G1** | Guard de RANK nas duas portas (`apply` e `PUT module-config`), computado sobre `preset(role) ∪ module_config`, com escopo | substitui `delegable` + recusa derivada |
-| **G1b** | Presets desenhados + gate do par `⊆`; `developer` -> `devops` | **nova** — pré-requisito de o G1 entregar contratação |
+| **G1b** | Presets desenhados + gate do par `⊆`; `developer` -> `devops` ✅ MOD-10 (2026-09-08) | **nova** — pré-requisito de o G1 entregar contratação |
 | **G2** | Rota de apply-template (capacidade do template, nunca do corpo) + proveniência carimbada + UI | a D3 sobrevive; a D5 já está fechada pela E1 |
 | **G3** | Revogar `config.permissions` de quem o censo apontar | **destravada** — a ordem G1->G2->G3 continua, mas por coerência, não por risco de tirar a contratação |
 | **G4–G6** | Cortes da D6 (#1 ✅ MOD-05, #3 ✅ MOD-06, #2 **sem sujeito** → MOD-11, #4 Analytics) | ⚠️ Nenhum dos três primeiros foi o corte previsto — os as-builts estão na D6. Padrão que se repetiu: **medir os consumidores antes de cortar** trocou o desenho nas três vezes |

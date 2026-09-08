@@ -7,7 +7,7 @@ Claims do access token:
   tenant_id                 — tenant do usuário
   email                     — e-mail
   name                      — nome de exibição
-  roles                     — lista de roles (operator | supervisor | admin | developer | business)
+  roles                     — lista de roles (operator | supervisor | admin | devops | business)
   accessible_pools          — lista de pool_ids que o usuario alcanca.
                               [] = NENHUM pool (o `unrestricted` saiu em 2026-08-31: sob ABAC
                               total nao ha porta larga por CLAIM, porque pools sao do TENANT e

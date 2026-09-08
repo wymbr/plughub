@@ -150,7 +150,7 @@
     "noTenant": "Nenhum tenant selecionado.",
     "error": "Erro",
     "slotsTitle": "Slots de versão",
-    "slotsDesc": "Próxima → Corrente → Anterior · Desenvolvedor configura Próxima; Operador promove ou reverte",
+    "slotsDesc": "Próxima → Corrente → Anterior · DevOps configura Próxima; Operador promove ou reverte",
     "promote": "↑ Promover (Próxima → Corrente)",
     "rollbackBtn": "↩ Rollback (Anterior → Corrente)",
     "promoteTitle": "Promover versão",
@@ -189,15 +189,15 @@
     "selectSkillAlert": "Selecione uma skill-flow",
     "selectOption": "Selecione…",
     "newField": "novo",
-    "bannerDeveloper": "Você pode configurar o slot Próxima. Apenas operadores e supervisores podem promover ou reverter.",
-    "bannerOperator": "Você pode promover e reverter deploys. Apenas desenvolvedores podem configurar o slot Próxima.",
+    "bannerDevops": "Você pode configurar o slot Próxima. Apenas operadores e supervisores podem promover ou reverter.",
+    "bannerOperator": "Você pode promover e reverter deploys. Apenas o devops pode configurar o slot Próxima.",
     "slots": {
       "previous": "Anterior",
       "current": "Corrente",
       "next": "Próxima",
       "previousDesc": "Alvo seguro de rollback — somente leitura",
       "currentDesc": "Versão em produção — somente leitura",
-      "nextDesc": "Candidata preparada pelo desenvolvedor"
+      "nextDesc": "Candidata preparada pelo devops"
     }
   },
   "report": {

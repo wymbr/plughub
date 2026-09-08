@@ -42,7 +42,7 @@ const SESSION_META_KEY  = 'plughub_session_meta'
  *  Developer-only users still see Skill Flows and Developer Tools.
  */
 function primaryRole(roles: string[]): UserRole {
-  const priority: UserRole[] = ['admin', 'developer', 'supervisor', 'operator', 'business']
+  const priority: UserRole[] = ['admin', 'devops', 'supervisor', 'operator', 'business']
   for (const r of priority) {
     if (roles.includes(r)) return r
   }

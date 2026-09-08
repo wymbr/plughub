@@ -3,7 +3,7 @@
 seed_auth.py — Cria usuários demo no auth-api para o ambiente docker-demo.
 
 Usuários criados:
-  admin@plughub.local       / changeme_admin     (roles: admin, developer)
+  admin@plughub.local       / changeme_admin     (roles: admin, devops)
       → seeded pelo próprio auth-api no startup; este script é idempotente
 
   supervisor@plughub.local  / changeme_supervisor (roles: supervisor)
@@ -218,7 +218,7 @@ DEMO_USERS = [
         "email":    "admin@plughub.local",
         "name":     "Demo Admin",
         "password": "changeme_admin",
-        "roles":    ["admin", "developer"],
+        "roles":    ["admin", "devops"],
         # Sem recorte de pool, DECLARADO (decisão do dono, 2026-08-27). O admin do demo
         # carregava 22 pools de 36 — resíduo de teste, não política ("na prática todos os
         # pools são criados dinamicamente").

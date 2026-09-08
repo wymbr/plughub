@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (14) — MOD-10: o papel `developer` virou `devops`
+
+### 1 · Por que o rename, e por que só agora
+
+O preset de `developer` era de **autor de fluxo** (`skill_flows.*` + `config.context_map`)
+— papel que os DialogForms tornaram obsoleto. Quem existe na operação é infraestrutura.
+A decisão é da **E3** do ADR (2026-09-08) e foi adiada por **sequência**: 7 das ocorrências
+do papel eram listas de `requireJwtRole` no `mcp-server-plughub`, e renomear antes seria
+editar duas vezes o que a **AUT-38** ia remover. Ela removeu; a sobra do `mcp-server` para
+esta ficha foi **zero**.
+
+### 2 · A superfície, e o que ela obrigou a decidir
+
+Catálogo (5 campos + o par de `hiring_pairs`) · `auth-api` (`Role` Literal,
+`_ROLES_VALIDOS`, docstring do emissor de JWT) · `seed_auth.py` · `platform-ui` em 7
+arquivos (`types`, `AuthContext`, `AccessPage`, `RoleDefaultsModal`, `DashboardsPage`,
+`MaskingPage`, `AgentFlowDeployPage`) · 4 locales, incluindo a **chave** `bannerDeveloper`
+→ `bannerDevops` (nome de chave é identificador técnico) e os textos visíveis que diziam
+*"apenas desenvolvedores"* · 3 probes e 1 teste.
+
+⚠️ **A troca foi por VALOR, nunca pela palavra.** A palavra sobrevive na prosa que narra
+medições antigas (a hierarquia refutada em `grants.py`, o default de seed em `config.py`,
+o par `admin,developer` em `presets.py`) — reescrever aquilo apagaria o registro de
+decisões que continuam valendo. O que mudou foi onde `developer` era **valor de papel**.
+
+### 3 · O dado migra por MECANISMO, não por promessa
+
+A ficha dizia que re-semear migraria a única linha (`admin@`), porque o `upsert_user` do
+seed manda `roles`. Isso é **promessa**: depende de alguém rodar o seed, e o seed é
+`seed-if-absent` — a instalação onde o admin já existe não passa por ele. E uma linha com
+papel fora do `Role` Literal **atravessa a leitura** (as respostas declaram `list[str]`) e
+só estoura no primeiro `PATCH` que reenvie `roles` — o pior momento para descobrir.
+
+Entrou `DDL_MIGRATE_ROLE_DEVOPS` (`array_replace`), com **marcador**, ao lado das outras.
+Medido: `admin@` `{admin,developer}` → `{admin,devops}` no boot, uma linha.
+
+### 4 · Um controle que virou tautologia, e não podia
+
+`probe_role_preset_on_create.sh` ficou INCONCLUSIVO ao criar o papel `developer` — a lista
+dele é **literal de propósito**: ela é o CONTROLE do ramo S2, que deriva os papéis do
+catálogo. Derivar nos dois lados faria o probe concordar consigo mesmo, inclusive no dia
+em que o catálogo perdesse um papel. A lista foi atualizada à mão, que é o preço de ela
+existir — e o comentário agora diz isso, para que a próxima pessoa não a "conserte"
+derivando.
+
+**Gates**: `probe_role_preset_on_create.sh` (os 5 papéis nascem com preset) ·
+`probe_hiring_pairs_subset.sh` (`admin → devops`) · `probe_context_map_grant_split.sh`
+(o AUTOR alcança o mapa — a fixture criava um `developer` e passou a criar `devops`) ·
+`probe_mcp_agent_assist_grants.sh` · `probe_i18n_duplicate_keys.sh` · 14 suítes Python ·
+848 testes TS.
+
 ## 2026-09-08 (13) — AUT-38: a autorização dependia da ORDEM em que os papéis foram digitados
 
 ### 1 · O defeito, medido antes de tocar em nada

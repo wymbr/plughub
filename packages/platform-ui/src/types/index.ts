@@ -1,4 +1,4 @@
-export type UserRole = 'operator' | 'supervisor' | 'admin' | 'developer' | 'business'
+export type UserRole = 'operator' | 'supervisor' | 'admin' | 'devops' | 'business'
 
 // ── ABAC module-config types ──────────────────────────────────────────────────
 

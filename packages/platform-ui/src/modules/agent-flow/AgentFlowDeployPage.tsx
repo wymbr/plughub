@@ -930,7 +930,7 @@ function ConfirmModal({
 // ── Role helpers ───────────────────────────────────────────────────────────────
 
 function hasEditRole(roles: string[]): boolean {
-  return roles.some(r => r === 'developer' || r === 'admin')
+  return roles.some(r => r === 'devops' || r === 'admin')
 }
 
 function hasOperateRole(roles: string[]): boolean {
@@ -947,7 +947,7 @@ export default function AgentFlowDeployPage() {
   const canEdit    = hasEditRole(roles)
   const canOperate = hasOperateRole(roles)
 
-  const bannerRole = roles.includes('developer') ? 'developer'
+  const bannerRole = roles.includes('devops') ? 'devops'
     : roles.includes('supervisor')               ? 'supervisor'
     : roles.includes('operator')                 ? 'operator'
     : null
@@ -1131,11 +1131,11 @@ export default function AgentFlowDeployPage() {
         {/* Role permission banner */}
         {showBanner && bannerRole && (
           <div className={`px-3.5 py-2 rounded-md text-xs border shrink-0 ${
-            bannerRole === 'developer'
+            bannerRole === 'devops'
               ? 'bg-blue-50 border-blue-200 text-blue-700'
               : 'bg-green-50 border-green-200 text-green-700'
           }`}>
-            🔑 {t(bannerRole === 'developer' ? 'deploy.bannerDeveloper' : 'deploy.bannerOperator')}
+            🔑 {t(bannerRole === 'devops' ? 'deploy.bannerDevops' : 'deploy.bannerOperator')}
           </div>
         )}
 

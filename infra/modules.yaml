@@ -153,7 +153,7 @@ modules:
         role_defaults:
           admin: read_only
           business: read_only
-          developer: read_only
+          devops: read_only
           operator: read_only
           supervisor: read_only
       transcricao:
@@ -417,7 +417,7 @@ modules:
         default: none
         role_defaults:
           admin: read_write
-          developer: read_write
+          devops: read_write
 
   # ── Skill Flows / AgentFlow ───────────────────────────────────────────────────
   - module_id: skill_flows
@@ -432,7 +432,7 @@ modules:
         default: none
         role_defaults:
           admin: read_write
-          developer: read_write
+          devops: read_write
       visualizar:
         label: Visualizar relatórios de agent flow
         domain: [none, read_only]
@@ -441,7 +441,7 @@ modules:
         role_defaults:
           admin: read_only
           business: read_only
-          developer: read_only
+          devops: read_only
       editar:
         label: Criar e editar skill flows
         domain: [none, read_write]
@@ -449,7 +449,7 @@ modules:
         default: none
         role_defaults:
           admin: read_write
-          developer: read_write
+          devops: read_write
 
   # ── Aprovações (fila de trabalho humano) ──────────────────────────────────────
   # ADR docs/adr/adr-human-approval-workflow-step.md. Aprovação = passo de workflow
@@ -617,11 +617,10 @@ modules:
 # Conferido por `infra/test/probe_hiring_pairs_subset.sh`.
 hiring_pairs:
   - contratante: admin
-    # ⚠️ `developer` e nao `devops`: o rename foi DECIDIDO (MOD-08/E3) e ADIADO
-    # para a MOD-10. Motivo de sequencia, medido em 2026-09-08: o papel e lido
-    # em 3 pacotes, e 7 das ocorrencias sao listas de `requireJwtRole` no
-    # `mcp-server-plughub` que a AUT-38 vai REMOVER ao migrar aqueles portoes
-    # para campo ABAC. Renomear antes e editar duas vezes o que vai sumir.
-    contratados: [supervisor, operator, business, developer]
+    # ✅ `devops` desde a MOD-10 (2026-09-08). O rename foi decidido na E3 e adiado
+    # por SEQUENCIA: 7 das ocorrencias eram listas de `requireJwtRole` no
+    # `mcp-server-plughub`, que a AUT-38 removeu ao migrar aqueles portoes para
+    # campo ABAC — renomear antes seria editar duas vezes o que ia sumir.
+    contratados: [supervisor, operator, business, devops]
   - contratante: supervisor
     contratados: [operator]

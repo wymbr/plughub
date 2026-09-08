@@ -9,8 +9,9 @@
 #   · o MAPA (quais campos existem, e qual tipo cada um usa)          → quem AUTORA flow
 #
 # Ate 2026-09-02 os dois viviam no namespace `masking` e portanto no MESMO grant
-# (`config.masking`, preset ADMIN-ONLY), enquanto o autor de flow e `developer`. Medido
-# naquele dia: `skill_flows.operacao` e `.editar` nascem para admin+developer;
+# (`config.masking`, preset ADMIN-ONLY), enquanto o autor de flow e o `devops` (papel
+# chamado `developer` ate a MOD-10). Medido naquele dia: `skill_flows.operacao` e
+# `.editar` nascem para admin+devops;
 # `config.masking` so para admin. O ADR nomeia essa friccao como o que faz gente
 # CONTORNAR o cadastro — e cadastro contornado e a §1.1 de volta (o valor visivel porque
 # ninguem decidiu).
@@ -18,7 +19,7 @@
 # ── Por que estes ramos, e nao outros ────────────────────────────────────────────
 #
 #   A. o campo EXISTE no catalogo de modulos
-#   B. e o `developer` esta no preset — sem isso a divisao e decorativa, porque o autor
+#   B. e o `devops` esta no preset — sem isso a divisao e decorativa, porque o autor
 #      continua sem alcancar o cadastro. E ESTA a metade que fecha a decisao.
 #   C. o portao do config-api resolve `masking.context_map` para `context_map`…
 #   D. …e `masking.types` CONTINUA em `masking`. Testemunha obrigatoria: um portao que
@@ -68,11 +69,11 @@ case "$PRESET" in
 esac
 echo "     preset medido: ${PRESET:-<nenhum>}"
 case "|$PRESET|" in
-  *"|developer|"*|"developer|"*|*"|developer") ok "B: o AUTOR (developer) esta no preset — a divisao alcanca quem autora" ;;
+  *"|devops|"*|"devops|"*|*"|devops") ok "B: o AUTOR (devops) esta no preset — a divisao alcanca quem autora" ;;
   *) case "$PRESET" in
-       *developer*) ok "B: o AUTOR (developer) esta no preset — a divisao alcanca quem autora" ;;
+       *devops*) ok "B: o AUTOR (devops) esta no preset — a divisao alcanca quem autora" ;;
        "")          bad "B: sem preset para medir" ;;
-       *)           bad "B: preset e '$PRESET' — sem 'developer' a divisao e DECORATIVA: o autor continua sem alcancar o cadastro" ;;
+       *)           bad "B: preset e '$PRESET' — sem 'devops' a divisao e DECORATIVA: o autor continua sem alcancar o cadastro" ;;
      esac ;;
 esac
 
@@ -162,7 +163,7 @@ print(next((u.get('id') or u.get('user_id','') for u in us if u.get('email')=='$
   UID_NEW="$(curl -s --max-time 10 -X POST "$AUTH/users" -H "Authorization: Bearer $T_ADMIN" \
     -H 'content-type: application/json' -d "{
       \"email\":\"$EMAIL\",\"password\":\"$PASS\",\"full_name\":\"ALW-03 probe\",
-      \"tenant_id\":\"$TENANT\",\"roles\":[\"developer\"],
+      \"tenant_id\":\"$TENANT\",\"roles\":[\"devops\"],
       \"module_config\":{\"config\":{\"context_map\":{\"access\":\"read_write\",\"scope\":[]}}}
     }" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('id') or d.get('user_id',''))" 2>/dev/null)"
 

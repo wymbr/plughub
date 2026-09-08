@@ -379,6 +379,31 @@ WHERE (module_config -> 'contacts') ? 'visualizar'
   AND NOT ((module_config -> 'contacts') ? 'transcricao')
 """
 
+# ── MOD-10: o papel `developer` virou `devops` ────────────────────────────────
+#
+# O preset de `developer` era de AUTOR DE FLUXO (`skill_flows.*` + `config.context_map`),
+# papel que os DialogForms tornaram obsoleto; quem existe na operacao e infraestrutura.
+# O rename foi decidido na E3 do ADR e adiado por SEQUENCIA — 7 das ocorrencias eram
+# listas de `requireJwtRole` que a AUT-38 removeu.
+#
+# ⚠️ POR QUE MIGRACAO E NAO "o seed re-semeia". A ficha dizia que `upsert_user` manda
+# `roles` e portanto re-semear migraria. Isso e PROMESSA: depende de alguem rodar o
+# seed, e o seed e `seed-if-absent` — a instalacao onde o admin ja existe nao passa por
+# ele. Uma linha com papel fora do `Role` Literal atravessa a leitura (as respostas
+# declaram `list[str]`) e so estoura no primeiro PATCH que reenvie `roles`, que e o pior
+# momento para descobrir.
+#
+# Idempotente por CONTEUDO (`WHERE 'developer' = ANY(roles)`), mas com MARCADOR mesmo
+# assim: sem ele, um usuario a quem alguem devolvesse o papel antigo de proposito seria
+# renomeado de novo no boot seguinte — a mesma familia do guard por ausencia que desfazia
+# a MOD-04. Aqui a origem some, entao a guarda por presenca bastaria; o marcador e o que
+# torna a decisao VISIVEL na tabela, ao lado das outras.
+DDL_MIGRATE_ROLE_DEVOPS = """
+UPDATE auth.users
+SET roles = array_replace(roles, 'developer', 'devops')
+WHERE 'developer' = ANY(roles)
+"""
+
 # ── Arc 9 — Agent Groups & Supervisor Scope ───────────────────────────────────
 
 DDL_AGENT_GROUPS = """
@@ -445,6 +470,11 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
                 "SELECT EXISTS(SELECT 1 FROM auth.users "
                 "WHERE module_config -> 'config' ? 'dashboards')")
             await conn.execute(DDL_MIGRATE_ABAC_OPERACAO_SPLIT)
+            await _migracao_uma_vez(
+                conn, "role_developer_to_devops_2026_09_08",
+                DDL_MIGRATE_ROLE_DEVOPS,
+                "SELECT NOT EXISTS(SELECT 1 FROM auth.users "
+                "WHERE 'developer' = ANY(roles))")
             await _migracao_uma_vez(
                 conn, "abac_transcricao_split_2026_09_08",
                 DDL_MIGRATE_ABAC_TRANSCRICAO_SPLIT,

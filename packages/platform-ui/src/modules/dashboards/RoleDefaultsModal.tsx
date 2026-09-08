@@ -13,7 +13,7 @@ import { ENDPOINT_CATALOG } from '@/dashboard/catalog'
 import { loadRoleCatalog, saveRoleCatalog } from '@/api/dashboard-hooks'
 import type { DashboardTemplate } from '@/types'
 
-const ROLES = ['operator', 'supervisor', 'admin', 'developer', 'business'] as const
+const ROLES = ['operator', 'supervisor', 'admin', 'devops', 'business'] as const
 
 export function RoleDefaultsModal({
   tenantId,

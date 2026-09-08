@@ -68,7 +68,7 @@ const PLATFORM_ROOT = 'core'
 
 interface DataTypeCatalog { types: DataTypeEntry[] }
 
-const ROLES_OPTIONS = ['evaluator', 'reviewer', 'supervisor', 'admin', 'developer']
+const ROLES_OPTIONS = ['evaluator', 'reviewer', 'supervisor', 'admin', 'devops']
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

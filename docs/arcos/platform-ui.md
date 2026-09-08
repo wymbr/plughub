@@ -48,7 +48,7 @@ Font: Inter (via Google Fonts). Never write hex colors inline — always use Tai
 
 ```typescript
 import { useAuth } from '@/auth/useAuth'
-const { session } = useAuth()  // session.role: 'operator' | 'supervisor' | 'admin' | 'developer' | 'business'
+const { session } = useAuth()  // session.role: 'operator' | 'supervisor' | 'admin' | 'devops' | 'business'
 ```
 
 ## Roles
@@ -60,7 +60,7 @@ Os grupos de navegação são: Home 🏠, Console 🖥️, Monitor 📡, Fluxo �
 | `operator` | Home, Console, Monitor, Avaliação |
 | `supervisor` | operator + Fluxo, Analytics |
 | `admin` | supervisor + Configuração |
-| `developer` | admin + Fluxo (Editor/Deploy), DevTools |
+| `devops` | admin + Fluxo (Editor/Deploy), DevTools |
 | `business` | Home, Fluxo, Avaliação, Analytics, Configuração (cross-cutting, sem itens operacionais — `operacao: none` no ABAC) |
 
 ## Migrated panels — config-recursos tabs
@@ -128,7 +128,7 @@ Route: `/config/billing` (role: `admin`). Nav entry: 💳 Faturamento under Conf
 
 `packages/platform-ui/src/modules/skill-flows/SkillFlowsPage.tsx` — migrated from the former `operator-console` SkillFlowEditor.
 
-Route: `/agent-flow/editor` (roles: `admin`, `developer`). Replaces the former `PlaceholderPage`. The legacy path `/skill-flows` redirects to `/agent-flow/editor`.
+Route: `/agent-flow/editor` (roles: `admin`, `devops`). Replaces the former `PlaceholderPage`. The legacy path `/skill-flows` redirects to `/agent-flow/editor`.
 
 ### Features (fully ported)
 
@@ -204,7 +204,7 @@ Source of truth: `src/shell/Sidebar.tsx`. Sidebar is collapsible (icon-only stri
 
 | Item | Icon | href | Roles | ABAC gate |
 |------|------|------|-------|-----------|
-| Home | 🏠 | `/` | operator, supervisor, admin, developer, business | — |
+| Home | 🏠 | `/` | operator, supervisor, admin, devops, business | — |
 | Console | 🖥️ | `/console` | operator, supervisor, admin | `contacts.operacao` |
 
 ### Monitor group (navKey: `monitor`)
@@ -221,7 +221,7 @@ Icon: 📡 — roles: operator, supervisor, admin
 
 ### Fluxo group (navKey: `flow`)
 
-Icon: 🔄 — roles: admin, developer, business, supervisor
+Icon: 🔄 — roles: admin, devops, business, supervisor
 
 | Child | Icon | href | ABAC gate |
 |-------|------|------|-----------|

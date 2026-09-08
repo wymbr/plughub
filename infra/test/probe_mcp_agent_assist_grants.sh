@@ -16,8 +16,8 @@
 # sempre pelo PRIMEIRO papel da lista — a autorização dependia da ORDEM em que os
 # papéis foram digitados. Medido ao vivo antes da troca, mesma rota, mesmos papéis:
 #
-#     roles=["admin","developer"]  -> passa
-#     roles=["developer","admin"]  -> 403 Insufficient role
+#     roles=["admin","devops"]  -> passa
+#     roles=["devops","admin"]  -> 403 Insufficient role
 #
 # `admin@` tem `{admin,developer}` e passava por sorte de ordenação. E o modo de
 # falha é o pior: quem perde acesso lê *"Insufficient role"* nomeando um papel que
@@ -114,8 +114,8 @@ AMBOS='{"agent_assist":{"atender":{"access":"read_write","scope":[]},"supervisio
 
 T_ATENDE=$(mint '["operator"]' "$ATENDER")
 T_SUPER=$(mint  '["supervisor"]' "$SUPERV")
-T_AMBOS1=$(mint '["admin","developer"]' "$AMBOS")
-T_AMBOS2=$(mint '["developer","admin"]' "$AMBOS")
+T_AMBOS1=$(mint '["admin","devops"]' "$AMBOS")
+T_AMBOS2=$(mint '["devops","admin"]' "$AMBOS")
 T_SOPAPEL=$(mint '["admin","supervisor"]' '{}')
 for v in T_ATENDE T_SUPER T_AMBOS1 T_AMBOS2 T_SOPAPEL; do
   eval "t=\$$v"
@@ -163,9 +163,9 @@ sec "E. a ORDEM dos papeis nao decide mais (era o defeito original)"
 c1=$(post "$R_FC" "$T_AMBOS1")
 c2=$(post "$R_FC" "$T_AMBOS2")
 if [ "$c1" = "$c2" ]; then
-  ok "roles=[admin,developer] e [developer,admin] dao o MESMO veredicto ($c1)"
+  ok "roles=[admin,devops] e [devops,admin] dao o MESMO veredicto ($c1)"
 else
-  bad "a ordem ainda decide: [admin,developer]=$c1 x [developer,admin]=$c2"
+  bad "a ordem ainda decide: [admin,devops]=$c1 x [devops,admin]=$c2"
   info "Era exatamente isto que o \`roles[0]\` fazia."
 fi
 

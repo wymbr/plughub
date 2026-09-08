@@ -471,7 +471,7 @@ def _user_token(**over) -> str:
     """JWT no formato que o auth-api emite (o do login da UI)."""
     payload = {
         "sub": "c30b50d9", "tenant_id": TENANT, "email": "admin@plughub.local",
-        "roles": ["admin", "developer"], "accessible_pools": [], "unrestricted": True,
+        "roles": ["admin", "devops"], "accessible_pools": [], "unrestricted": True,
     }
     payload.update(over)
     return jwt.encode(payload, SECRET_USER, algorithm="HS256")

@@ -71,7 +71,7 @@
     "access": "Access",
     "groups": "Groups",
     "audit": "Audit",
-    "developer": "Developer"
+    "devops": "DevOps"
   },
   "topbar": {
     "logout": "Logout",

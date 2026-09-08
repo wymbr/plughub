@@ -140,7 +140,10 @@ fi
 # reiniciar o auth-api faz os dois discordarem — e a discordancia e informacao
 # ("existe" != "esta aplicado"), nao defeito do gate.
 sec "S1 - usuario criado nasce com module_config preenchido (catalogo DEPLOYADO)"
-for papel in operator supervisor admin developer business; do
+# ⚠️ Lista LITERAL de proposito: ela e o CONTROLE do S2, que deriva os papeis do
+# catalogo. Derivar aqui tambem faria os dois lados concordarem sempre — inclusive
+# quando o catalogo perdesse um papel. `developer` virou `devops` na MOD-10.
+for papel in operator supervisor admin devops business; do
   EM="preset_probe_${papel}@plughub.local"
   apaga "$(uid_de "$EM")"
   ID="$(cria "$EM" "[\"$papel\"]")"

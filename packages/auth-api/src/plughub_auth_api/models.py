@@ -12,7 +12,7 @@ from pydantic import AfterValidator, BaseModel, EmailStr, Field
 
 # ─── Roles ────────────────────────────────────────────────────────────────────
 
-Role = Literal["operator", "supervisor", "admin", "developer", "business"]
+Role = Literal["operator", "supervisor", "admin", "devops", "business"]
 
 
 # ─── Requests ─────────────────────────────────────────────────────────────────

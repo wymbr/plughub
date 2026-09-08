@@ -23,7 +23,7 @@ Renovação automática 60 s antes da expiração. Ao montar a UI com refresh_to
 | `operator` | Monitor, Agent Assist, Analytics |
 | `supervisor` | operator + Avaliação, Relatórios |
 | `admin` | supervisor + Configuração, AgentFlow |
-| `developer` | admin + Developer Tools |
+| `devops` | admin + DevOps Tools (infra, fluxo, mapa de contexto) |
 | `business` | Home, Analytics, Business (cross-cutting: incluído em todos os grupos, mas com gates ABAC operacionais aplicados) |
 
 ## ABAC — Permissões por módulo e campo

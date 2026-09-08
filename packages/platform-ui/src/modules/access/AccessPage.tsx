@@ -17,14 +17,14 @@ import { computeCoverage, orphansAfter } from './pool-coverage'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ALL_ROLES = ['operator', 'supervisor', 'admin', 'developer', 'business'] as const
+const ALL_ROLES = ['operator', 'supervisor', 'admin', 'devops', 'business'] as const
 type RoleKey = typeof ALL_ROLES[number]
 
 const ROLE_COLORS: Record<RoleKey, { bg: string; text: string }> = {
   operator:   { bg: 'bg-green-light',    text: 'text-green-text'  },
   supervisor: { bg: 'bg-primary-light',  text: 'text-primary'     },
   admin:      { bg: 'bg-ai-light',       text: 'text-ai-text'     },
-  developer:  { bg: 'bg-info-light',     text: 'text-info-text'   },
+  devops:  { bg: 'bg-info-light',     text: 'text-info-text'   },
   business:   { bg: 'bg-warning-light',  text: 'text-warning-text'},
 }
 
@@ -32,7 +32,7 @@ const ROLE_LABELS: Record<RoleKey, string> = {
   operator:   'Operator',
   supervisor: 'Supervisor',
   admin:      'Admin',
-  developer:  'Developer',
+  devops:  'Developer',
   business:   'Business',
 }
 

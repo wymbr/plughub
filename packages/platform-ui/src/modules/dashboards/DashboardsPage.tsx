@@ -155,7 +155,7 @@ function NewTemplateModal({
 export default function DashboardsPage() {
   const { t } = useTranslation('dashboards')
   const { session, tenantId, currentUser } = useAuth()
-  const isAdmin  = session?.role === 'admin' || session?.role === 'developer'
+  const isAdmin  = session?.role === 'admin' || session?.role === 'devops'
   const userId   = currentUser?.userId ?? 'anonymous'
 
   // G-PROBE platform-wide: as escritas de template usam o Bearer do operador + ABAC

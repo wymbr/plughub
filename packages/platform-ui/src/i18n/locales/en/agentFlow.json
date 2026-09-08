@@ -150,7 +150,7 @@
     "noTenant": "No tenant selected.",
     "error": "Error",
     "slotsTitle": "Version slots",
-    "slotsDesc": "Next → Current → Previous · Developer configures Next; Operator promotes or reverts",
+    "slotsDesc": "Next → Current → Previous · DevOps configures Next; Operator promotes or reverts",
     "promote": "↑ Promote (Next → Current)",
     "rollbackBtn": "↩ Rollback (Previous → Current)",
     "promoteTitle": "Promote version",
@@ -189,15 +189,15 @@
     "selectSkillAlert": "Please select a skill-flow",
     "selectOption": "Select…",
     "newField": "new",
-    "bannerDeveloper": "You can configure the Next slot. Only operators and supervisors can promote or rollback.",
-    "bannerOperator": "You can promote and rollback deploys. Only developers can configure the Next slot.",
+    "bannerDevops": "You can configure the Next slot. Only operators and supervisors can promote or rollback.",
+    "bannerOperator": "You can promote and rollback deploys. Only devops can configure the Next slot.",
     "slots": {
       "previous": "Previous",
       "current": "Current",
       "next": "Next",
       "previousDesc": "Safe rollback target — read only",
       "currentDesc": "Production version — read only",
-      "nextDesc": "Candidate prepared by developer"
+      "nextDesc": "Candidate prepared by devops"
     }
   },
   "report": {

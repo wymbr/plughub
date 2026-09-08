@@ -63,7 +63,7 @@ def get_settings() -> Settings:
 
 # Papeis validos — espelha o `Role` de `models.py`. Importar de la criaria ciclo
 # (models -> config), entao a conferencia acontece no consumidor, com a lista a mao.
-_ROLES_VALIDOS = frozenset({"operator", "supervisor", "admin", "developer", "business"})
+_ROLES_VALIDOS = frozenset({"operator", "supervisor", "admin", "devops", "business"})
 
 
 def seed_admin_roles() -> list[str]:
