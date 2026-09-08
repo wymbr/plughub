@@ -1383,6 +1383,18 @@ cada campo com `access: none|read_only|write_only|read_write` + `scope[]`;
 - **O menu tem um portão só, e ele é GRANT-FIRST.** Ausência de grants nunca é autorização — mesma
   inversão de `accessible_pools`, pela mesma razão.
 - **ESCOPO e CAPACIDADE são eixos distintos**, e um claim de escopo nunca concede capacidade.
+- **POOL é dado do TENANT, nunca da plataforma — logo seed de plataforma NÃO declara
+  `accessible_pools`, e a atribuição é PÓS-CRIAÇÃO do usuário.** Pools são criados
+  dinamicamente pelo tenant; um seed que os enumerasse estaria inventando dado que não é dele
+  (o `seed_auth.py` já carregou 22 de 36 assim, e eram resíduo de teste). Consequência que
+  parece defeito e não é: usuário recém-criado nasce com `accessible_pools = []`, o que desde a
+  AUT-03 significa **nenhum pool**, e por isso **não vê linha nenhuma** em relatório escopado
+  até alguém lhe atribuir escopo. *(Medido em 2026-09-08: `admin@` com `{}` respondendo `200` e
+  0 linhas contra 1 196 sessões — install não provisionado, não bug. Diagnostiquei errado duas
+  vezes antes de o dono corrigir; os dois fatos moram aqui para que a terceira não aconteça.)*
+  ⚠️ **Corolário para instrumentos:** *"pool sem vigia"* só é medível excluindo fixtures — o
+  aviso `orphansAfter` da tela lê verde porque `probe@` carrega todos os pools; sem ela, 36 de
+  41 estão sem vigia. Ver `AUT-43`.
 
 Dois corolários de MÉTODO que este arco produziu, e que ficam aqui por serem regra de implementação:
 **(1)** um campo cujo rótulo tem **"e"** provavelmente são dois fatos — e se um deles concede
