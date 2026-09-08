@@ -93,11 +93,14 @@ def main() -> int:
         return INCONCLUSIVO
 
     criados: list[str] = []
+    templates: list[str] = []
     falhas = 0
 
     def limpar():
         for uid in criados:
             call(f"/auth/users/{uid}", tok=tok_master, method="DELETE")
+        for tid in templates:
+            call(f"/auth/templates/{tid}", tok=tok_master, method="DELETE")
 
     try:
         # ── o delegado ────────────────────────────────────────────────────────
@@ -172,6 +175,53 @@ def main() -> int:
         else:
             print(f"  INCONCLUSIVO — nao consegui criar o alvo da segunda porta ({st})")
             return INCONCLUSIVO
+
+        print("\nT1..T3 - a TERCEIRA porta (`from-template`, MOD-09)")
+        st, t_ok = call("/auth/templates", {
+            "tenant_id": TENANT, "name": PREFIXO + "Operador", "description": "probe",
+            "config": {"role": "operator",
+                       "module_config": {"contacts": {"operacao": {"access": "read_write", "scope": []}}},
+                       "accessible_pools": ["sac_ia"]}}, tok=tok_master)
+        st2, t_mau = call("/auth/templates", {
+            "tenant_id": TENANT, "name": PREFIXO + "AdminTotal", "description": "probe",
+            "config": {"role": "admin", "module_config": {}}}, tok=tok_master)
+        if st != 201 or st2 != 201:
+            print("  INCONCLUSIVO - nao consegui criar os templates (%s/%s)" % (st, st2))
+            return INCONCLUSIVO
+        templates.extend([t_ok["id"], t_mau["id"]])
+
+        def cenario_tpl(rot, tid, corpo, esperado, deve_citar=None, checar=None):
+            nonlocal falhas
+            body = {"tenant_id": TENANT, "email": PREFIXO + "tpl@plughub.local",
+                    "password": "password123"}
+            body.update(corpo)
+            st, d = call("/auth/users/from-template/" + tid, body, tok=tok)
+            det = str(d.get("detail", "")) if isinstance(d, dict) else ""
+            ok = st == esperado and (deve_citar is None or deve_citar in det)
+            extra = ""
+            if st == 201:
+                if checar:
+                    ok2, extra = checar(d)
+                    ok = ok and ok2
+                call("/auth/users/" + d["id"], tok=tok_master, method="DELETE")
+            if not ok:
+                falhas += 1
+            print("  %s - %s: %s (esperado %s)%s%s" % (
+                "verde" if ok else "VERMELHO", rot, st, esperado, extra,
+                (" - " + det[:90]) if det else ""))
+
+        def confere_proveniencia(d):
+            veio = d.get("created_from_template_id") == t_ok["id"]
+            tem_hash = bool(d.get("created_from_template_hash"))
+            pools_ok = d.get("accessible_pools") == ["limite_ia"]
+            return (veio and tem_hash and pools_ok,
+                    " - proveniencia=%s hash=%s pools_do_aplicador=%s" % (veio, tem_hash, pools_ok))
+
+        cenario_tpl("aplica template dentro do alcance", t_ok["id"],
+                    {"accessible_pools": ["limite_ia"]}, 201, checar=confere_proveniencia)
+        cenario_tpl("aplica template 'Admin Total'", t_mau["id"], {}, 403, "nao pode conceder")
+        cenario_tpl("pool fora do escopo do aplicador", t_ok["id"],
+                    {"accessible_pools": ["sac_ia"]}, 403, "accessible_pools")
 
         print(f"\n== {falhas} cenario(s) reprovado(s) ==")
         return VERMELHO if falhas else VERDE

@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (9) — MOD-09 (G2): criação por template com proveniência; e a migração que desfazia a MOD-04 a cada boot
+
+### 1 · O achado, que é maior que a entrega
+
+Testando a rota nova, um supervisor aplicou o template *"Admin Total"* e recebeu **201**.
+Diagnostiquei "o guard não roda" — errado pela **segunda vez no mesmo dia**: ele era MASTER, e
+o 201 estava certo. Mas a pergunta seguinte era a boa: **por que ele voltou a ser master, se a
+MOD-04 revogou horas antes?**
+
+`DDL_MIGRATE_ABAC_PERMISSIONS` roda em **todo** `ensure_schema`:
+
+```sql
+UPDATE auth.users SET module_config = ... || jsonb_build_object('permissions', ... -> 'users')
+WHERE (module_config -> 'config') ? 'users' AND NOT ((module_config -> 'config') ? 'permissions')
+```
+
+A guarda é a **AUSÊNCIA do destino**. Isso a torna idempotente contra **re-execução** e **não**
+contra **revogação** — e as duas parecem a mesma coisa até alguém revogar. Depois do split de
+2026-08-27, "tem `config.users` e não tem `config.permissions`" é o estado **normal de todo
+delegado**: a migração re-concede a chave-mestra a cada boot, a quem quer que a perca.
+
+`DDL_MIGRATE_ABAC_PLATFORM_SPLIT` tem o mesmo defeito (`dashboards`, `calendars`,
+`dialog_forms`).
+
+⚠️ **Agravante que atrasou o diagnóstico:** sendo SQL cru, a re-concessão **não bumpa
+`updated_at`**. A linha volta com a chave-mestra carregando o carimbo de tempo da *revogação* —
+a evidência aponta para o momento errado, e passei um bom tempo procurando um escritor que não
+existia.
+
+**Isso invalidou a MOD-04**, que eu havia dado por fechada: o censo dizia `0B`, o token dizia
+ausente, e o boot seguinte devolvia tudo. A linha do `done.md` foi corrigida em vez de
+reescrita.
+
+**Correção:** `auth.schema_migrations` com marcador por migração, e a **linha de base é MEDIDA,
+não presumida** — se o banco já mostra o efeito, marca-se `baseline` sem rodar (presumir *"todos
+já migraram"* trocaria um defeito medido por uma suposição). Re-verificado: revogar → restart →
+`2A/0B/0C`, e sobrevive a `up -d --force-recreate`.
+
+### 2 · A entrega
+
+`POST /auth/users/from-template/{id}`.
+
+- **A capacidade vem da linha do template, nunca do corpo (D3).** `CreateUserFromTemplateRequest`
+  não declara `roles` nem `module_config` — fecha o caminho da cópia-no-cliente, onde o
+  formulário mandava a capacidade num `POST /users` comum e o servidor não sabia que havia
+  template envolvido.
+- **`accessible_pools` fica no corpo, e é a exceção com razão (E4).** O template **não** carrega
+  pools: pool é do aplicador, escolhido dentre os seus e conferido pelo guard. Assim um mesmo
+  template *"Operador"* serve todos os supervisores. Template com `accessible_pools` tem o campo
+  **ignorado com log que diz isso** — aplicar em silêncio faria o operador crer que o template
+  definiu o escopo.
+- **Proveniência**: `created_from_template_id` + **hash canônico**, gravados no **INSERT**
+  (carimbo em `UPDATE` posterior pode faltar, e carimbo que às vezes existe não responde
+  auditoria), imutáveis e **nunca consultados para autorizar**. O hash é o que faz o carimbo
+  valer: sem ele, *"veio do template X"* não distingue quem nasceu do X de ontem de quem nasceu
+  do X de hoje — e o template é editável.
+- **Sem `delegable`**: ele existia para aprovar um pacote que atravessaria o guard, e sem
+  travessia não há o que aprovar.
+
+Medido ao vivo com delegado real: template no alcance → **201** com proveniência e pools do
+aplicador; *"Admin Total"* → **403**; pool fora do escopo → **403**. Virou os ramos **T1..T3**
+do `probe_rank_grant_guard.sh`, porque medição que só existe no transcript não é cobertura.
+
+
 ## 2026-09-08 (8) — MOD-04 (G3): a chave-mestra revogada de quem a detinha contra a declaração
 
 Censo de `config.permissions`: **2A / 4B / 0C → 2A / 0B / 0C**. Sobraram `admin@` e `probe@`,

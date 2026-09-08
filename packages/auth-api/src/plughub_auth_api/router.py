@@ -12,6 +12,7 @@ Autenticação de sessão (me/refresh/logout): header Authorization: Bearer <acc
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Annotated, Any
 
@@ -33,6 +34,7 @@ from .jwt_utils import (
 )
 from .models import (
     CreateTemplateRequest,
+    CreateUserFromTemplateRequest,
     CreateUserRequest,
     LoginRequest,
     LogoutRequest,
@@ -267,6 +269,9 @@ def _user_to_response(row: dict[str, Any]) -> UserResponse:
         active=row["active"],
         created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
         updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else str(row["updated_at"]),
+        created_from_template_id=(str(row["created_from_template_id"])
+                                  if row.get("created_from_template_id") else None),
+        created_from_template_hash=row.get("created_from_template_hash"),
     )
 
 
@@ -465,6 +470,109 @@ async def create_user(
     if cfg:
         row["module_config"] = cfg
 
+    return _user_to_response(row)
+
+
+# ─── Criacao POR TEMPLATE (MOD-09 / G2) ───────────────────────────────────────
+#
+# D3: **a capacidade vem do TEMPLATE, nunca do corpo.** O corpo desta rota nao aceita
+# `roles` nem `module_config` — o servidor os le da linha armazenada. Isso preserva o
+# discriminador `model_fields_set` das outras rotas (o que o chamador ENVIOU e que e
+# conceder) e fecha o caminho que a copia-no-cliente tinha: ate aqui o formulario
+# copiava o template e mandava a capacidade num `POST /users` comum, e o servidor nao
+# tinha como saber que um template estava envolvido.
+#
+# E4: **o template nao carrega pools.** Pool e do APLICADOR — ele escolhe dentre os
+# seus, e o guard de RANK confere a contencao. Um mesmo template "Operador" serve
+# entao todos os supervisores, e a pergunta "qual template para qual time" deixa de
+# existir. Se a linha do template trouxer `accessible_pools` (formato antigo da tela),
+# ele e IGNORADO — e a resposta diz isso, em vez de aplicar em silencio.
+#
+# ⚠️ NAO existe `delegable`. Ele foi removido na emenda: existia para aprovar um
+# pacote que ATRAVESSARIA o guard, e sem travessia nao ha o que aprovar. Quem protege
+# aqui e o mesmo `_assert_pode_conceder` das outras portas — um template mais rico que
+# o aplicador e recusado NOMEANDO o campo, independentemente de quem o escreveu.
+
+def _hash_config(config: dict[str, Any]) -> str:
+    """SHA-256 da forma canonica do que foi aplicado.
+
+    Sem o hash, "veio do template X" nao distingue quem nasceu do X de ontem de quem
+    nasceu do X de hoje — e o template e editavel. Canonico = chaves ordenadas e sem
+    espacos, senao a mesma config gera hashes diferentes por ordem de insercao.
+    """
+    import hashlib
+    bruto = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(bruto.encode("utf-8")).hexdigest()
+
+
+@router.post("/users/from-template/{template_id}", response_model=UserResponse,
+             status_code=201, dependencies=[Depends(_USUARIOS_WRITE)])
+async def create_user_from_template(
+    template_id: str,
+    body: CreateUserFromTemplateRequest,
+    request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
+) -> UserResponse:
+    pool = _get_pool(request)
+    linha = await perms_mod.get_template(pool, template_id)
+    if not linha:
+        raise HTTPException(status_code=404, detail="Template not found")
+    cfg = linha.get("config")
+    if isinstance(cfg, str):
+        cfg = json.loads(cfg)
+    cfg = cfg if isinstance(cfg, dict) else {}
+
+    papel = cfg.get("role")
+    roles = [papel] if isinstance(papel, str) and papel else ["operator"]
+    tpl_mc = cfg.get("module_config") if isinstance(cfg.get("module_config"), dict) else {}
+
+    # O guard de RANK vale AQUI como em qualquer outra concessao. E ele roda sobre o
+    # EFEITO (`preset(role) UNIAO module_config`), senao um template `{role: "admin"}`
+    # com `module_config` vazio atravessaria concedendo tudo pela porta do preset.
+    await _assert_pode_conceder(
+        pool, claims, f"aplicar o template `{linha.get('name', template_id)}`",
+        module_config=tpl_mc, roles=roles,
+        accessible_pools=body.accessible_pools,
+    )
+
+    existing = await db_mod.get_user_by_email(pool, body.tenant_id, body.email)
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already registered in this tenant")
+
+    aplicado = {"role": papel, "module_config": tpl_mc}
+    row = await db_mod.create_user(
+        pool,
+        tenant_id=body.tenant_id,
+        email=body.email,
+        password_hash=hash_password(body.password),
+        name=body.name,
+        roles=roles,
+        accessible_pools=body.accessible_pools,
+        max_concurrent_sessions=int(cfg.get("max_concurrent_sessions") or 3),
+        created_from_template_id=str(linha["id"]),
+        created_from_template_hash=_hash_config(aplicado),
+    )
+
+    # Preset do papel PRIMEIRO, template por cima: o template e a intencao explicita de
+    # quem aplicou, e o preset e o piso do papel. A ordem inversa deixaria o preset
+    # sobrescrevendo uma escolha deliberada.
+    base = await presets_mod.apply_role_preset(pool, str(row["id"]), roles, body.email)
+    final = dict(base or {})
+    for modulo, campos in tpl_mc.items():
+        if isinstance(campos, dict):
+            final.setdefault(modulo, {}).update(campos)
+    if final:
+        await db_mod.set_user_module_config(pool, str(row["id"]), final)
+        row["module_config"] = final
+
+    if cfg.get("accessible_pools"):
+        # E4: pool e do aplicador. Ignorar em silencio faria o operador crer que o
+        # template definiu o escopo — e o escopo real seria outro.
+        logger.info(
+            "template %s traz `accessible_pools` e ele foi IGNORADO (E4: pool e do "
+            "aplicador); valeram os pools do corpo: %s",
+            template_id, body.accessible_pools,
+        )
     return _user_to_response(row)
 
 

@@ -120,6 +120,32 @@ class UserResponse(BaseModel):
     active: bool
     created_at: str
     updated_at: str
+    # PROVENIENCIA (MOD-09 / E4): de qual template esta pessoa NASCEU, e com qual
+    # conteudo. Carimbo IMUTAVEL, nunca consultado para autorizar — o template e
+    # preset, e quem nasceu dele segue a propria vida. Serve a pergunta de auditoria
+    # ("quem veio do template X?"), que a copia pura nao sabia responder.
+    created_from_template_id: str | None = None
+    created_from_template_hash: str | None = None
+
+
+class CreateUserFromTemplateRequest(BaseModel):
+    """Corpo da criacao POR TEMPLATE — sem NENHUM campo de capacidade de modulo.
+
+    ⚠️ `roles` e `module_config` NAO estao aqui de proposito (D3): a capacidade vem da
+    LINHA ARMAZENADA do template, nunca do corpo. Aceita-los reabriria o caminho que a
+    copia-no-cliente tinha — o formulario mandava a capacidade e o servidor so via um
+    `POST /users` comum, sem saber que um template estava envolvido.
+
+    ⚠️ `accessible_pools` FICA, e e a excecao com razao: pelo E4 o template NAO carrega
+    pools. Pool e do aplicador — ele escolhe dentre os seus, e o guard de RANK confere
+    a contencao. Assim um mesmo template "Operador" serve todos os supervisores, e a
+    pergunta "qual template para qual time" deixa de existir.
+    """
+    tenant_id: str
+    email: str
+    password: str = Field(min_length=8)
+    name: str = ""
+    accessible_pools: list[str] = []
 
 
 class MeResponse(BaseModel):

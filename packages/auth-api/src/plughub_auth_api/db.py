@@ -73,6 +73,30 @@ ALTER TABLE auth.users
     ADD COLUMN IF NOT EXISTS module_config JSONB NOT NULL DEFAULT '{}'
 """
 
+# ── Proveniencia de template (MOD-09 / E4, 2026-09-08) ────────────────────────
+#
+# CARIMBO, NUNCA PONTEIRO. O template e preset: a config e COPIADA no nascimento e a
+# pessoa segue a propria vida. Estas duas colunas registram DE ONDE ela nasceu, e sao
+# IMUTAVEIS e NUNCA CONSULTADAS PARA AUTORIZAR.
+#
+# O modelo alternativo — "a referencia sobrevive se nada foi alterado" — foi recusado
+# na emenda: tornaria o template politica viva para um subconjunto imprevisivel, e
+# quem cai de que lado da comparacao seria invisivel na tela. Mesma forma do
+# `deploy_version` dos segmentos: carimbo, nao ponteiro.
+#
+# O HASH e o que faz o carimbo valer alguma coisa: sem ele, "veio do template X" nao
+# distingue quem nasceu do X de ontem de quem nasceu do X de hoje — e o template e
+# editavel. Com ele, a pergunta de auditoria tem resposta exata.
+DDL_MIGRATE_USERS_TEMPLATE_ID = """
+ALTER TABLE auth.users
+    ADD COLUMN IF NOT EXISTS created_from_template_id UUID
+"""
+
+DDL_MIGRATE_USERS_TEMPLATE_HASH = """
+ALTER TABLE auth.users
+    ADD COLUMN IF NOT EXISTS created_from_template_hash TEXT
+"""
+
 DDL_MIGRATE_USERS_MAX_CONCURRENT = """
 ALTER TABLE auth.users
     ADD COLUMN IF NOT EXISTS max_concurrent_sessions INT NOT NULL DEFAULT 3
@@ -111,6 +135,66 @@ ALTER TABLE auth.users
 # Quem contava a população: 8 usuários, **2** com `true`, e **1** privilegiado SÓ por
 # ela — `probe@plughub.local`, fixture de portão. Mesma forma da medição que fechou o
 # ramo legado da evaluation-api: política contra população de fixture.
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MIGRACAO DE DADOS QUE RODA UMA VEZ — e por que isto nao e zelo (2026-09-08)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Duas das migracoes abaixo COPIAM um campo para outro e sao guardadas pela AUSENCIA
+# do destino:
+#
+#   DDL_MIGRATE_ABAC_PERMISSIONS      WHERE ... ? 'users'    AND NOT ... ? 'permissions'
+#   DDL_MIGRATE_ABAC_PLATFORM_SPLIT   WHERE ... ? 'platform' AND NOT ... ? 'dashboards'
+#
+# Isso as torna idempotentes contra RE-EXECUCAO, e **nao** contra REVOGACAO — e as
+# duas coisas parecem a mesma ate alguem revogar. Medido em 2026-09-08, durante a
+# MOD-09: a MOD-04 revogou `config.permissions` de quatro usuarios, o censo confirmou
+# `0B`, o token confirmou a ausencia — e **o restart seguinte devolveu o campo aos
+# quatro**. A condicao `NOT ... ? 'permissions'` nao distingue "nunca migrado" de
+# "revogado de proposito", e depois do split de 2026-08-27 a segunda e o estado NORMAL
+# de todo delegado.
+#
+# Agravante que atrasou o diagnostico: sendo SQL cru, a re-concessao **nao bumpa
+# `updated_at`**. A linha volta a ter a chave-mestra com o carimbo de tempo da
+# revogacao — a evidencia aponta para o momento errado.
+#
+# A correcao e tornar cada migracao de dados UMA VEZ POR BANCO, com marcador. E a
+# LINHA DE BASE e MEDIDA, nunca presumida: se o banco ja mostra o efeito da migracao,
+# ela e marcada como aplicada SEM rodar (senao esta mudanca desfaria a MOD-04 no
+# proximo boot); se nao mostra, roda e marca. Presumir "todo mundo ja migrou" seria
+# trocar um defeito medido por uma suposicao.
+DDL_SCHEMA_MIGRATIONS = """
+CREATE TABLE IF NOT EXISTS auth.schema_migrations (
+    id         TEXT        PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    baseline   BOOL        NOT NULL DEFAULT FALSE
+)
+"""
+
+
+async def _migracao_uma_vez(conn, ident: str, sql: str, evidencia_sql: str) -> None:
+    """Roda `sql` no maximo UMA vez por banco.
+
+    `evidencia_sql` devolve `true` quando o banco JA mostra o efeito da migracao —
+    nesse caso ela e marcada como `baseline` sem rodar. E o que separa "ja aconteceu"
+    de "presumi que aconteceu".
+    """
+    ja = await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM auth.schema_migrations WHERE id = $1)", ident)
+    if ja:
+        return
+    tem_efeito = await conn.fetchval(evidencia_sql)
+    if not tem_efeito:
+        await conn.execute(sql)
+    await conn.execute(
+        "INSERT INTO auth.schema_migrations (id, baseline) VALUES ($1, $2) "
+        "ON CONFLICT (id) DO NOTHING", ident, bool(tem_efeito))
+    logger.info(
+        "migracao de dados `%s`: %s", ident,
+        "ja refletida no banco — marcada como baseline, nao executada" if tem_efeito
+        else "executada e marcada")
+
 
 # ── Language Cleanup Phase 2 — rename Portuguese ABAC field keys in module_config
 # Each UPDATE is idempotent: the WHERE clause only matches rows that still carry
@@ -270,6 +354,8 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_SESSIONS_IDX_EXP)
             await conn.execute(DDL_MODULE_REGISTRY)
             await conn.execute(DDL_MIGRATE_USERS_MODULE_CONFIG)
+            await conn.execute(DDL_MIGRATE_USERS_TEMPLATE_ID)
+            await conn.execute(DDL_MIGRATE_USERS_TEMPLATE_HASH)
             await conn.execute(DDL_MIGRATE_USERS_MAX_CONCURRENT)
             # Language Cleanup Phase 2 — rename Portuguese ABAC field names
             await conn.execute(DDL_MIGRATE_ABAC_RELATORIO)
@@ -278,8 +364,19 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_MIGRATE_ABAC_PLATAFORMA)
             await conn.execute(DDL_MIGRATE_ABAC_CANAIS)
             await conn.execute(DDL_MIGRATE_ABAC_USUARIOS)
-            await conn.execute(DDL_MIGRATE_ABAC_PERMISSIONS)
-            await conn.execute(DDL_MIGRATE_ABAC_PLATFORM_SPLIT)
+            # ⚠️ Estas DUAS sao guardadas por AUSENCIA do destino, entao
+            # re-executa-las DESFAZ revogacao. Ver o bloco no topo.
+            await conn.execute(DDL_SCHEMA_MIGRATIONS)
+            await _migracao_uma_vez(
+                conn, "abac_permissions_split_2026_08_27",
+                DDL_MIGRATE_ABAC_PERMISSIONS,
+                "SELECT EXISTS(SELECT 1 FROM auth.users "
+                "WHERE module_config -> 'config' ? 'permissions')")
+            await _migracao_uma_vez(
+                conn, "abac_platform_split_2026_08_27",
+                DDL_MIGRATE_ABAC_PLATFORM_SPLIT,
+                "SELECT EXISTS(SELECT 1 FROM auth.users "
+                "WHERE module_config -> 'config' ? 'dashboards')")
             # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
             # docs/arcos/arc9-agent-groups.md; tables may still exist physically
             # in older DBs, just no longer created/read/written by this service)
@@ -301,18 +398,25 @@ async def create_user(
     roles: list[str],
     accessible_pools: list[str],
     max_concurrent_sessions: int = 3,
+    created_from_template_id: str | None = None,
+    created_from_template_hash: str | None = None,
 ) -> dict[str, Any]:
+    """Cria o usuario. A PROVENIENCIA (MOD-09) entra AQUI, no INSERT, e nao num
+    `UPDATE` posterior: carimbo aplicado depois pode faltar se o segundo passo falhar,
+    e um carimbo que as vezes existe nao serve de resposta para auditoria."""
     row = await pool.fetchrow(
         """
         INSERT INTO auth.users
             (tenant_id, email, password_hash, name, roles, accessible_pools,
-             max_concurrent_sessions)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+             max_concurrent_sessions, created_from_template_id,
+             created_from_template_hash)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING id, tenant_id, email, name, roles, accessible_pools,
-                  max_concurrent_sessions, active, created_at, updated_at
+                  max_concurrent_sessions, active, created_at, updated_at,
+                  created_from_template_id, created_from_template_hash
         """,
         tenant_id, email, password_hash, name, roles, accessible_pools,
-        max_concurrent_sessions,
+        max_concurrent_sessions, created_from_template_id, created_from_template_hash,
     )
     return dict(row)
 
@@ -360,7 +464,8 @@ async def list_users(
     rows = await pool.fetch(
         """
         SELECT id, tenant_id, email, name, roles, accessible_pools,
-               module_config, max_concurrent_sessions, active, created_at, updated_at
+               module_config, max_concurrent_sessions, active, created_at, updated_at,
+               created_from_template_id, created_from_template_hash
         FROM auth.users
         WHERE tenant_id = $1
         ORDER BY created_at DESC
