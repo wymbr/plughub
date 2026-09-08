@@ -1,5 +1,44 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (14) — PRM-02: os dois pools de navegação deployados, e o campo de capacidade que veio junto
+
+O arco da parametrização fecha: `demo_ia` e `demo_llm_ia` rodam o snapshot parametrizado, com
+a árvore escolhida no deploy.
+
+```
+demo_ia      current  {"form_id": "dialog_navegacao_atendimento_v1", "max_concurrent_sessions": 10}
+demo_llm_ia  current  {"form_id": "dialog_navegacao_atendimento_v1", "max_concurrent_sessions": 10}
+instâncias vivas: demo_ia 10 · demo_llm_ia 10
+```
+
+`probe_slot_required_params` verde e **sem nenhuma linha de informação pendente** — o estado
+intermediário (declaração mais nova que o deploy) desapareceu porque o deploy aconteceu, que
+é o desfecho que aquela linha existia para acompanhar.
+
+⚠️ **Os dois pools apontam para a MESMA árvore hoje** (`dialog_navegacao_atendimento_v1`), e
+isso é o desenho: eles existem para serem comparáveis na mesma série do Arc 12. O ganho da
+parametrização não é apontar para árvores diferentes agora — é que passou a ser **possível**
+sem tocar em código, e que um terceiro pool de navegação não precisa de um terceiro skill.
+
+### ⚠️ O campo de capacidade viaja no MESMO `config_json`, e mordeu na primeira tentativa
+
+O primeiro deploy do `demo_ia` (20:53) promoveu `max_concurrent_sessions: 1` sobre um pool que
+rodava **10**. O bootstrap reagiu na hora — o pool ficou com **uma** instância, servindo uma
+sessão simultânea. Corrigido às 20:57 com um novo deploy; hoje o `previous` do `demo_ia` é
+justamente aquele slot de capacidade 1.
+
+Não foi o parâmetro novo: `max_concurrent_sessions` já morava no `config_json` do slot, e o
+formulário de deploy carrega os dois no mesmo corpo. A consequência é que **quem parametriza
+um skill herda o risco de zerar a capacidade do pool sem perceber** — e o número não parece
+errado, porque `1` é um valor plausível.
+
+**Medida a causa, ela é do formulário** (`AgentFlowDeployPage.tsx:693`): o campo inicializa a
+partir do slot **`next`** — vazio no caso normal, porque `next` só existe entre um `set-next` e
+o `promote` — com fallback **`1`**. Para um pool com `current` rodando 10 e `next` vazio, a
+tela abre propondo 1. O botão *"Copy from Current"* resolve, mas é ação do operador: a defesa
+depende de alguém lembrar, que é a forma de defesa que este repositório recusa. Registrado
+como `PRM-04`.
+
 ## 2026-09-08 (13) — PRM-03: o irmão LLM entra no mesmo formato, os dois são publicados, e o probe da PRM-01 media a proposição errada
 
 Continuação direta da `PRM-01`. Três coisas, e a terceira é a que vale registrar.
