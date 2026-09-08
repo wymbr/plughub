@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (8) — MOD-04 (G3): a chave-mestra revogada de quem a detinha contra a declaração
+
+Censo de `config.permissions`: **2A / 4B / 0C → 2A / 0B / 0C**. Sobraram `admin@` e `probe@`,
+ambos com papel `admin`, que é quem declara o campo.
+
+### A regra veio do CENSO, não de uma lista
+
+Revoga-se a **classe B** — detém e nenhum papel declara. E `infra/scripts/revoke_field.py`
+**RECUSA** tocar na classe A sem `--forcar`: quem detém porque o papel declara não é deriva, e
+revogá-lo contrariaria a declaração em vez de reconciliá-la. Testado: `--emails
+admin@plughub.local` → *"RECUSADO — classe A"*.
+
+Ele é o irmão do `backfill_preset_fields.py`, e **não** um `--remover` dele: preencher e
+revogar têm posturas de segurança opostas, e um flag no mesmo caminho de código faria a
+diferença entre elas virar um `if`.
+
+### Só foi seguro porque o backfill veio antes — e o script mede isso ANTES de escrever
+
+Sob o guard de RANK, revogar rebaixa de master a delegado, e delegado só concede o que detém.
+Um supervisor sem os campos do preset vira administrador de pessoas **incapaz de contratar**,
+com o sintoma *"a tela parou de deixar"*. Por isso `--simular-contratacao operator` imprime,
+por alvo, o que ele perde:
+
+```
+aut01probe@      -> apos a revogacao CONTRATA operator
+probe_rowscope@  -> apos a revogacao CONTRATA operator
+supervisor@      -> apos a revogacao CONTRATA operator
+useradmin@       -> ⚠️ NAO contrata (falta 2: contacts.operacao, contacts.visualizar)
+```
+
+### Verificado ao vivo, não simulado
+
+`supervisor@`, já sem `config.permissions` no token: cria `operator` no próprio pool → **201**;
+tenta criar `admin` → **403**, nomeando o campo. É a Costura 1 funcionando **depois** da
+revogação, que era a coisa toda que a ordem G1→G1b→G3 existia para garantir.
+
+### `useradmin@` ficou sem contratar, de propósito
+
+Opção (a) do dono. Aquela conta é a fixture **mínima** do `probe_config_permissions_split`,
+cujo assunto é exatamente *"administra pessoas e não pode conceder"* — completá-la apagaria o
+único exemplar desse caso na instalação. E a revogação **restaura a premissa** daquele probe,
+que aborta com INCONCLUSIVO se o token do `useradmin@` declarar o campo (*"o experimento não
+existe"*): ele estava, portanto, medindo o nada.
+
+### O corolário operacional que o dono nomeou
+
+*"Nos casos que nem o do `useradmin`, o jeito mais simples é atribuir o módulo que ele precisa
+atribuir, mesmo que não acesse."* Sob RANK isso é exato: **poder conceder implica ter**, porque
+`rank(concedido) ≤ rank(detido)`. O custo aceito é que quem administra grants acumula
+capacidades que não exerce — e o instrumento que torna isso visível já existe: é a classe B do
+censo, que passa a contar exatamente essa população.
+
+
 ## 2026-09-08 (7) — backfill das três fixtures supervisor, e o que ele NÃO alcançou
 
 Decisão do dono: completar também `aut01probe@`, `probe_rowscope@` e `useradmin@`. Aplicado
