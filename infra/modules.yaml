@@ -29,6 +29,11 @@ modules:
         role_defaults:
           admin: read_write
           operator: read_write
+        # MOD-08/G1b (2026-09-08): o supervisor CONTRATA operador, e o guard de RANK
+        # da MOD-02 exige `preset(operator)` contido em `preset(supervisor)`. Sem este
+        # campo o supervisor nao consegue criar o operador mais ordinario do sistema —
+        # medido, e foi o que refutou a ideia de hierarquia de papeis.
+          supervisor: read_write
       revisar:
         label: Revisar e decidir sobre avaliações
         domain: [none, read_only, read_write]
@@ -426,6 +431,11 @@ modules:
         role_defaults:
           admin: read_write
           operator: read_write
+        # MOD-08/G1b (2026-09-08): o supervisor CONTRATA operador, e o guard de RANK
+        # da MOD-02 exige `preset(operator)` contido em `preset(supervisor)`. Sem este
+        # campo o supervisor nao consegue criar o operador mais ordinario do sistema —
+        # medido, e foi o que refutou a ideia de hierarquia de papeis.
+          supervisor: read_write
       decide:
         label: Decidir (aprovar / recusar / encaminhar)
         domain: [none, read_write]
@@ -434,6 +444,11 @@ modules:
         role_defaults:
           admin: read_write
           operator: read_write
+        # MOD-08/G1b (2026-09-08): o supervisor CONTRATA operador, e o guard de RANK
+        # da MOD-02 exige `preset(operator)` contido em `preset(supervisor)`. Sem este
+        # campo o supervisor nao consegue criar o operador mais ordinario do sistema —
+        # medido, e foi o que refutou a ideia de hierarquia de papeis.
+          supervisor: read_write
 
   # ── Agendas (Scheduler) ───────────────────────────────────────────────────────
   # Scheduler Fase 3. Grant-first (strict, sem bypass de admin): a nav /config/schedules
@@ -533,3 +548,37 @@ modules:
         domain: [none, read_only]
         scopable: false
         default: none
+
+# ── Pares de CONTRATAÇÃO ──────────────────────────────────────────────────────
+# MOD-08 / fase G1b do `adr-abac-module-granularity-and-delegation.md`.
+#
+# Declara quem pode CRIAR usuário de qual papel. Não é hierarquia — a cadeia
+# `admin > developer > supervisor > operator` foi proposta em 2026-09-08 e refutada
+# pelo próprio catálogo: nenhum par adjacente estava ordenado, e `operator` tem
+# campos que `supervisor` não tem de propósito (o operador CONTESTA a própria
+# avaliação; o supervisor REVISA). Papéis são funções, não níveis — isto aqui é um
+# grafo declarado, não uma ordem derivada.
+#
+# POR QUE ELE PRECISA EXISTIR COMO DADO
+# -------------------------------------
+# O guard de RANK da MOD-02 (`rank(concedido) <= rank(detido)`, campo a campo) só
+# entrega contratação enquanto valer `preset(contratado) ⊆ preset(contratante)`.
+# Isso NÃO é derivável de nada: é decisão de produto sobre quem contrata quem. Mas
+# uma vez declarado, o `⊆` é conferível — e sem gate, a próxima edição de preset
+# quebra a contratação em silêncio, com sintoma que não parece "preset errado" e sim
+# "a tela não deixa".
+#
+# ⚠️ Editar um `role_defaults` acima E um par aqui têm de caber no MESMO diff. É
+# para isso que os dois moram neste arquivo.
+#
+# Conferido por `infra/test/probe_hiring_pairs_subset.sh`.
+hiring_pairs:
+  - contratante: admin
+    # ⚠️ `developer` e nao `devops`: o rename foi DECIDIDO (MOD-08/E3) e ADIADO
+    # para a MOD-10. Motivo de sequencia, medido em 2026-09-08: o papel e lido
+    # em 3 pacotes, e 7 das ocorrencias sao listas de `requireJwtRole` no
+    # `mcp-server-plughub` que a AUT-38 vai REMOVER ao migrar aqueles portoes
+    # para campo ABAC. Renomear antes e editar duas vezes o que vai sumir.
+    contratados: [supervisor, operator, business, developer]
+  - contratante: supervisor
+    contratados: [operator]

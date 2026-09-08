@@ -307,6 +307,9 @@ DEMO_USERS = [
         "roles":    ["supervisor"],
         "module_config": {
             "evaluation": {
+                # MOD-08/G1b: o supervisor contrata operador, e o preset do
+                # operador traz `contestar` — o guard de RANK exige contencao.
+                "contestar": {"access": "read_write", "scope": []},
                 "revisar": {"access": "read_write", "scope": []},  # revisa/decide
                 "report":  {"access": "read_only",  "scope": []},  # relatórios de qualidade
                 "curar":   {"access": "read_write", "scope": []},  # G-PROBE 2026-07-02: curadoria/calibração
@@ -323,6 +326,10 @@ DEMO_USERS = [
             # Calendars e Schedules. `config.permissions` fica de FORA de propósito —
             # com ele o supervisor reescreveria a própria fronteira e as decisões 2 e 4
             # viravam sugestão (ver o split do passo 1).
+            "approvals": {
+                "operacao": {"access": "read_write", "scope": []},
+                "decide":   {"access": "read_write", "scope": []},
+            },
             "config": {
                 "users":     {"access": "read_write", "scope": []},   # Access + Groups
                 "calendars": {"access": "read_write", "scope": []},

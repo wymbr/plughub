@@ -63,6 +63,14 @@ import urllib.request
 
 VERDE, VERMELHO, INCONCLUSIVO = 0, 1, 2
 
+# stdout em UTF-8 e independente do console: sem isto, um `⊆` no relatorio
+# derruba o helper por `UnicodeEncodeError` em terminal cp1252 — instrumento que
+# falha por AMBIENTE, exatamente o que ele existe para nao ser.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001
+    pass
+
 # `read_only` e `write_only` colapsam em 1 — tabela canonica em `plughub_authz`.
 # Aqui basta "detem ou nao", entao o rank nao entra: qualquer coisa != none conta.
 NAO_DETEM = ("none", "", None)

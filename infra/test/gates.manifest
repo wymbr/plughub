@@ -72,6 +72,13 @@ probe_config_permissions_split.sh
 # coisa errada) e R2 (arquivo x deployado discordando, o "existe != esta aplicado" de
 # quem edita o YAML sem reiniciar). Os dois provados falseaveis em 2026-09-08.
 probe_config_permissions_census.sh
+# MOD-08 / fase G1b: `preset(contratado)` contido em `preset(contratante)`, por
+# aresta declarada em `hiring_pairs:`. Existe porque o guard de RANK da MOD-02
+# sozinho produzia A DIAGONAL — cada papel so criava um clone de si, e o
+# supervisor nao criava um operador. NAO e hierarquia: papeis sao funcoes, e os
+# pares sao grafo declarado. Estatico (le o arquivo, nao a stack). Tres ramos
+# provados falseaveis em 2026-09-08.
+probe_hiring_pairs_subset.sh
 # calendar-api e dialog-api aceitavam escrita ANONIMA ate 2026-08-27 (`POST
 # /v1/calendars` sem credencial -> 201; criar E publicar DialogForm -> 200), enquanto
 # os campos `config.calendars`/`config.dialog_forms` decidiam so o MENU. Fechadas com

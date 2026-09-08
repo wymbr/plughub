@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (4) — MOD-08 (G1b): os presets deixaram de ser engenharia reversa, e a aresta de contratação virou dado
+
+Fase **G1b**, criada pela emenda de hoje e declarada pré-requisito da G1. A razão é
+aritmética, não estética: o guard de RANK da MOD-02, aplicado aos presets como estavam,
+produzia **a diagonal** — cada papel só conseguia criar um clone de si mesmo.
+
+### 1 · O supervisor não criava um operador
+
+```
+supervisor -> operator: 3 campo(s) que o contratante NAO alcanca
+     approvals.decide:    contratado nasce `read_write`, contratante tem `none`
+     approvals.operacao:  contratado nasce `read_write`, contratante tem `none`
+     evaluation.contestar: contratado nasce `read_write`, contratante tem `none`
+```
+
+É a contratação mais ordinária do sistema, e o sintoma não se pareceria com *"preset
+errado"* — pareceria *"a tela não deixa"*. O diagnóstico é de **dado**, não de modelo: os
+presets eram engenharia reversa do `seed_auth.py`, e o `arc7-auth.md` já declarava
+`developer`/`business` como *"declarações mínimas que precisam de decisão"*.
+
+Os três campos entraram no preset do `supervisor` (13 campos agora) **e no seed**, com o
+comentário dizendo por quê ao lado de cada um. `_seed_vs_preset.py` continua verde: as duas
+declarações batem sem lista de exceção.
+
+### 2 · A aresta de contratação virou DADO, e mora ao lado do preset que ela restringe
+
+`hiring_pairs:` em `infra/modules.yaml`: `admin → {supervisor, operator, business,
+developer}` e `supervisor → operator`.
+
+Fica no mesmo arquivo dos `role_defaults` de propósito — **editar um preset e a aresta que
+ele quebra tem de caber no mesmo diff**. E é *declarado* porque não é derivável de nada:
+quem contrata quem é decisão de produto. O que é derivável, e portanto conferível, é a
+propriedade `preset(contratado) ⊆ preset(contratante)`.
+
+⚠️ **Não é hierarquia.** A cadeia `admin > developer > supervisor > operator` foi proposta
+hoje e refutada pelo próprio catálogo — nenhum par adjacente estava ordenado, e `operator`
+tem `evaluation.contestar` que `supervisor` não tinha **de propósito** (o operador contesta
+a própria avaliação; o supervisor revisa). Papéis são funções, não níveis; o grafo é
+declarado, e o gate confere aresta a aresta.
+
+### 3 · O gate, e os três ramos provados falseáveis
+
+`probe_hiring_pairs_subset.sh` + `_hiring_pairs.py`, **estático** — a propriedade é da
+declaração, e exigir a stack de pé faria o gate depender de um ambiente que a pergunta não
+usa. Quem confere arquivo × deployado é o censo da MOD-01.
+
+| ramo | contraprova | resultado |
+|---|---|---|
+| **A** — aresta perde a contenção | remover `approvals.decide` do preset do supervisor | VERMELHO, nomeando o campo |
+| **B** — `access` fora do domínio do rank | `admin: full_access` num preset | VERMELHO (`viraria rank 0 e o subconjunto passaria por acidente`) |
+| **C** — `hiring_pairs:` ausente | truncar o catálogo | **INCONCLUSIVO**, nunca verde |
+
+O ramo C é o que impede o modo de falha mais barato: um gate sem aresta declarada diria
+*"toda contratação possível"* tendo conferido zero.
+
+⚠️ **Ele não olha grants VIVOS, de propósito.** Compara declaração com declaração. Um
+contratante real pode ter recebido menos que o preset (a tela revoga depois do nascimento) e
+falhar no runtime com este gate verde — esse eixo é do **censo** (`classe C`). Juntar os dois
+faria um gate reprovar por uso normal da tela, que é como se ensina a ignorar um vermelho.
+
+### 4 · O rename `developer` → `devops` saiu do escopo, por SEQUÊNCIA
+
+A E3 o decidiu e eu ia executá-lo aqui. A superfície levantada antes de tocar mostrou que
+não é edição de catálogo: cruza **três pacotes** — `modules.yaml`, `auth-api` (`Role`
+Literal + `_ROLES_VALIDOS`), `seed_auth.py`, **7 listas de `requireJwtRole` no
+`mcp-server-plughub`** e sete arquivos do `platform-ui` (um deles, `AgentFlowDeployPage`,
+gateando por `r === 'developer' || r === 'admin'`), mais locales.
+
+**E as 7 listas de `requireJwtRole` são exatamente as que a AUT-38 vai remover** ao migrar
+aqueles portões de papel para campo ABAC. Renomear antes é editar duas vezes o que vai
+sumir. Virou **MOD-10**, `bloqueado` por AUT-38, com a superfície inteira escrita na ficha.
+
+### 5 · Dois consertos de instrumento, de carona
+
+- **`⊆` derrubava o helper** por `UnicodeEncodeError` em console cp1252. Os dois helpers
+  novos passaram a reconfigurar `stdout` para UTF-8 com `errors="replace"` — instrumento que
+  falha por AMBIENTE é exatamente o que ele existe para não ser.
+- **O `probe_gates_manifest_coverage.sh` me deu um VERMELHO falso** com todos os contadores
+  em zero, por `grep -P` recusando o locale do shell. Com `LC_ALL=C.UTF-8`: verde, **302
+  scripts**, 120 AUTO — já com os dois probes novos declarados. Quase registrei como defeito
+  do manifesto.
+
 ## 2026-09-08 (3) — MOD-01: o censo de `config.permissions` existe, e ele mede o eixo que faltava
 
 Fase **G0** do ADR de granularidade, e a razão dela não é zelo: o defeito que a costura 1 expõe
