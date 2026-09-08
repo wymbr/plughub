@@ -123,7 +123,7 @@ function ItemRow({ item, canExpire, onExpire, busy }: {
 
 export default function WorkItemsPage() {
   const { t } = useTranslation('workItems')
-  const { session, tenantId, perms, currentUser, getAccessToken } = useAuth()
+  const { session, tenantId, perms, getAccessToken } = useAuth()
 
   const [items,     setItems]     = useState<PendingWorkTask[]>([])
   const [meta,      setMeta]      = useState<{ scanned: number; truncated: boolean; at: string } | null>(null)
@@ -141,10 +141,15 @@ export default function WorkItemsPage() {
 
   // MOD-05: a fila de trabalho e onde o agente RECLAMA trabalho — atender, nao observar.
   const canView   = perms.can('agent_assist', 'atender')
-  // A LEITURA é governada pelo ABAC da tela; a AÇÃO é mais estreita (o endpoint
-  // exige supervisor|admin). Esconder o botão de quem não pode usá-lo evita
-  // oferecer uma ação que só falharia no servidor.
-  const canExpire = (currentUser?.roles ?? []).some(r => r === 'supervisor' || r === 'admin')
+  // A LEITURA é governada pelo ABAC da tela; a AÇÃO é mais estreita. Esconder o botão
+  // de quem não pode usá-lo evita oferecer uma ação que só falharia no servidor.
+  //
+  // AUT-38 (2026-09-08): era uma lista de PAPÉIS espelhando a allowlist do endpoint.
+  // O endpoint passou a exigir `agent_assist.supervisionar`, então a tela pergunta o
+  // MESMO fato — duas casas para a mesma decisão só têm um valor: o da que ninguém
+  // confere. E a lista de papéis carregava o defeito do servidor: `roles` é array, e
+  // quem gateia por papel acaba dependendo da ordem dele.
+  const canExpire = perms.can('agent_assist', 'supervisionar', 'read_write')
 
   const load = useCallback(async () => {
     try {

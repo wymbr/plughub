@@ -29,7 +29,7 @@
 #
 # TESTEMUNHAS DE PRESENCA (sem elas, "tudo 403" seria lido como sucesso quando na
 # verdade o endpoint quebrou para todo mundo):
-#   S1  o mesmo principal CRIA usuario quando NAO concede nada
+#   S1  o mesmo principal CRIA usuario quando NAO concede nada (`roles: []`)
 #   S3  o mesmo principal EDITA o nome desse usuario
 #   S7  o admin (que tem `config.permissions`) escreve o module_config normalmente
 #   S9  o mesmo principal adiciona MEMBRO a um grupo (organograma segue funcionando)
@@ -119,10 +119,17 @@ OLD_ID="$(uid_de "$T_ADMIN" "$ALVO_EMAIL")"
 [ -n "$OLD_ID" ] && curl -s -o /dev/null -X DELETE "$AUTH/users/$OLD_ID" \
   -H "Authorization: Bearer $T_ADMIN"
 
+# ⚠️ `roles: []` EXPLICITO, e a correcao e de 2026-09-08 (MOD-05). Este corpo omitia
+# `roles`, sob a ideia de "criar SEM campo de capacidade" — e isso era falso: o modelo
+# tem default `["operator"]` e o preset e aplicado em toda criacao, entao o corpo mais
+# CURTO concedia os 6 campos do papel. O guard de rank passou a julgar o DEFAULT, e com
+# ele esta testemunha virou 403: o `useradmin@` e a fixture MINIMA de proposito (MOD-04)
+# e nao detem o preset do operator. Lista vazia e o unico corpo que nao concede nada —
+# que e o que esta testemunha sempre quis dizer.
 C1="$(st "$T_UA" POST "/users" \
-  "{\"tenant_id\":\"$TENANT\",\"email\":\"$ALVO_EMAIL\",\"name\":\"Probe Target\",\"password\":\"$ALVO_PASS\"}")"
+  "{\"tenant_id\":\"$TENANT\",\"email\":\"$ALVO_EMAIL\",\"name\":\"Probe Target\",\"password\":\"$ALVO_PASS\",\"roles\":[],\"accessible_pools\":[]}")"
 if [ "$C1" = "200" ] || [ "$C1" = "201" ]; then
-  ok "S1 criou usuario SEM campo de capacidade (HTTP $C1) — testemunha de presenca"
+  ok "S1 criou usuario sem CONCEDER nada (HTTP $C1) — testemunha de presenca"
 else
   bad "S1 nao conseguiu criar usuario simples (HTTP $C1)"
   info "Sem esta testemunha os 403 abaixo nao provam nada: seriam indistinguiveis"

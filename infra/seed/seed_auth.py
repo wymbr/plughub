@@ -322,6 +322,9 @@ DEMO_USERS = [
             "agent_assist": {
                 # MOD-05: herdado de `contacts.operacao`, que foi cortado.
                 "atender": {"access": "read_write", "scope": []},
+                # AUT-38: força-completar e encerrar item de fila eram allowlist de
+                # papel (`["supervisor","admin"]`); viraram este campo.
+                "supervisionar": {"access": "read_write", "scope": []},
             },
             "contacts": {
                 "visualizar": {"access": "read_only",  "scope": []},  # listas e agregados

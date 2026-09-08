@@ -914,20 +914,51 @@ function verifyJwtPayload(authHeader: string | undefined): Record<string, unknow
 // falha de autenticação e devolver um papel. Sem chamador hoje, mas à mão para o
 // próximo portão; a família inteira de fail-open sai no mesmo commit.
 
+const ACCESS_RANK: Record<string, number> = { none: 0, read_only: 1, write_only: 1, read_write: 2 }
+
 /**
- * Guard for UI endpoints that require a valid signed JWT with a minimum role.
- * Responds 401 if the token is missing/invalid, 403 if the role is insufficient.
+ * Guard das rotas de UI: JWT assinado + GRANT ABAC do campo que a rota declara.
+ *
+ * ── Ele substitui o `requireJwtRole`, que foi REMOVIDO (AUT-38, 2026-09-08) ───
+ *
+ * Aquele guard lia `payload["role"] ?? roles[0]`. O primeiro é um claim que **não
+ * existe** — a auth-api emite `roles`, array —, então ele decidia sempre pelo
+ * PRIMEIRO papel da lista: **a autorização dependia da ordem em que os papéis foram
+ * digitados**. Medido ao vivo antes da troca, na mesma rota e com o mesmo conjunto
+ * de papéis:
+ *
+ *     roles=["admin","developer"]  -> passa
+ *     roles=["developer","admin"]  -> 403 Insufficient role
+ *
+ * Não é um caso de laboratório: `admin@` tem `{admin,developer}` e passava por sorte
+ * de ordenação. E o modo de falha é o pior — quem perde acesso vê *"Insufficient
+ * role"* nomeando um papel que ele TEM.
+ *
+ * ⚠️ **Foi TROCA, nunca remoção.** Tirar o guard sem pôr campo no lugar deixaria as
+ * 17 rotas apenas com credencial — 401 vira 200 para qualquer autenticado. O alvo já
+ * existia declarado no catálogo (`agent_assist.atender`, que a MOD-05 tirou da
+ * orfandade, e `agent_assist.supervisionar`), e cada rota declara o SEU campo e o seu
+ * mínimo: fato da ROTA, como no `requireAbacWrite` do agent-registry e no `campo` do
+ * `authorize_session_scope`.
+ *
+ * ⚠️ **O `developer` deixou de alcançar 7 destas rotas, e isso é alinhamento, não
+ * perda.** Ele não tem `agent_assist.atender`, logo o Console nunca aparece no menu
+ * dele — a API é que discordava do menu.
  */
-function requireJwtRole(
+function requireJwtGrant(
   authHeader: string | undefined,
-  allowedRoles: string[],
+  modulo: string,
+  campo: string,
+  minAccess: "read_only" | "read_write",
   res: Response,
 ): Record<string, unknown> | null {
   try {
     const payload = verifyJwtPayload(authHeader)
-    const role = (payload["role"] ?? (payload["roles"] as string[])?.[0]) as string | undefined
-    if (!role || !allowedRoles.includes(role)) {
-      res.status(403).json({ error: "Insufficient role", required: allowedRoles })
+    const mc = (payload["module_config"] ?? {}) as Record<string, Record<string, { access?: string }>>
+    const access = mc[modulo]?.[campo]?.access ?? "none"
+    if ((ACCESS_RANK[access] ?? 0) < (ACCESS_RANK[minAccess] ?? 2)) {
+      // A recusa NOMEIA o campo: "Insufficient role" mandava procurar no lugar errado.
+      res.status(403).json({ error: "forbidden", required: `${modulo}.${campo} (${minAccess})` })
       return null
     }
     return payload
@@ -1333,13 +1364,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
       res.status(401).json({ error: "Unauthorized" })
       return
     }
-    const role = (payload["role"] ?? (payload["roles"] as string[] | undefined)?.[0]) as string | undefined
+    // AUT-38: o BYPASS por papel saiu junto com o `requireJwtRole`. Ele lia o mesmo
+    // `roles[0]` inexistente, então tinha o mesmo defeito de ordem — e deixar um
+    // leitor de papel neste arquivo depois de remover 17 seria manter a segunda casa
+    // que a troca existe para fechar. Não estreita ninguém: `approvals.operacao`
+    // nasce para admin, supervisor e operator (preset da MOD-08).
     const mc   = (payload["module_config"] ?? {}) as Record<string, Record<string, { access?: string }>>
     const access = mc["approvals"]?.["operacao"]?.access ?? "none"
-    const ORDER: Record<string, number> = { none: 0, read_only: 1, write_only: 1, read_write: 2 }
-    const canView = role === "admin" || role === "supervisor" || (ORDER[access] ?? 0) >= 1
-    if (!canView) {
-      res.status(403).json({ error: "Missing approvals.operacao" })
+    if ((ACCESS_RANK[access] ?? 0) < 1) {
+      res.status(403).json({ error: "forbidden", required: "approvals.operacao (read_only)" })
       return
     }
 
@@ -1491,7 +1524,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 
   app.get("/api/supervisor_state/:sessionId", async (req: Request, res: Response) => {
-    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)
+    const payload = requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)
     if (!payload) return
 
     const { sessionId } = req.params
@@ -1800,7 +1833,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // Body: { key: string, value: unknown, confidence?: number, source?: string }
   // Writes to Redis hash {tenantId}:ctx:{sessionId} as a ContextEntry JSON blob.
   app.post("/api/inject-context/:sessionId", async (req: Request, res: Response) => {
-    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)
+    const payload = requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)
     if (!payload) return
 
     const { sessionId } = req.params
@@ -1812,10 +1845,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
       return
     }
 
-    // Phase 2 — namespace write permission by role. Resolve role igual ao requireJwtRole
-    // (claim `role` OU primeiro de `roles[]`) — senão um JWT que use `roles[]` (admin/
-    // supervisor) cai no default "operator" e é barrado até de namespaces permitidos.
-    const writeRole = ((payload["role"] ?? (payload["roles"] as string[] | undefined)?.[0]) as string) ?? "operator"
+    // Phase 2 — permissão de ESCRITA por namespace.
+    //
+    // ⚠️ AUT-38 (2026-09-08): isto lia `role ?? roles[0]`, o MESMO defeito de ordem do
+    // `requireJwtRole` — `roles: ["operator","admin"]` caía na política restrita e
+    // `["admin","operator"]` não, com os mesmos papéis. O discriminador passou a ser o
+    // GRANT de intervenção: quem tem `agent_assist.supervisionar` escreve qualquer
+    // namespace; os demais ficam na lista curta abaixo. Não estreita ninguém — `admin`
+    // já o tinha e o `supervisor` passou a tê-lo no preset, na mesma entrega.
+    const mcInject = (payload["module_config"] ?? {}) as Record<string, Record<string, { access?: string }>>
+    const podeIntervir =
+      (ACCESS_RANK[mcInject["agent_assist"]?.["supervisionar"]?.access ?? "none"] ?? 0) >= 2
     const writeNs   = (key as string).split(".")[0] ?? ""
     const OPERATOR_WRITABLE_NS = ["agent", "service"]
     // Exact tags the operator may WRITE beyond the namespaces above — the write-side
@@ -1823,10 +1863,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // AÇÃO DE IDENTIFICAÇÃO/VÍNCULO (Cliente 360 C1a: corrigir/vincular o cliente),
     // um id interno (não PII); o resto de caller.* (cpf/nome/…) segue restrito.
     const OPERATOR_WRITABLE_TAGS = ["caller.customer_id"]
-    if (writeRole === "operator" && !OPERATOR_WRITABLE_NS.includes(writeNs) && !OPERATOR_WRITABLE_TAGS.includes(key as string)) {
+    if (!podeIntervir && !OPERATOR_WRITABLE_NS.includes(writeNs) && !OPERATOR_WRITABLE_TAGS.includes(key as string)) {
       res.status(403).json({
         error:   "forbidden_namespace",
-        message: `Role 'operator' cannot write to '${key}'. Allowed namespaces: ${OPERATOR_WRITABLE_NS.join(", ")}; allowed tags: ${OPERATOR_WRITABLE_TAGS.join(", ")}.`,
+        message: `Sem \`agent_assist.supervisionar\` não se escreve em '${key}'. Namespaces liberados: ${OPERATOR_WRITABLE_NS.join(", ")}; tags liberadas: ${OPERATOR_WRITABLE_TAGS.join(", ")}.`,
       })
       return
     }
@@ -1891,7 +1931,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // caso que MOTIVA este endpoint é justamente o item parado há muito tempo. O
   // 404-por-meta-ausente escondia exatamente a sessão que o supervisor quer matar.
   app.post("/api/force-complete/:sessionId", async (req: Request, res: Response) => {
-    const claims = requireJwtRole(req.headers.authorization, ["supervisor", "admin"], res)
+    const claims = requireJwtGrant(req.headers.authorization, "agent_assist", "supervisionar", "read_write", res)
     if (!claims) return
 
     const sessionId = String(req.params["sessionId"] ?? "")
@@ -2039,7 +2079,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/conversation_history/:sessionId", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)) return
     const { sessionId } = req.params
     try {
       const raw      = await redis.lrange(`session:${sessionId}:messages`, 0, -1)
@@ -2063,7 +2103,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/supervisor_capabilities/:sessionId", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)) return
     const { sessionId } = req.params
     // LEITURA cross-tenant se o tenant for inventado: este handler consulta o
     // agent-registry com `x-tenant-id` e devolve ao Console os destinos de
@@ -2121,7 +2161,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/copilot_state/:sessionId", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)) return
     const { sessionId } = req.params
 
     // O tenant é o PREFIXO da chave do ContextStore lida logo abaixo
@@ -2205,7 +2245,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.get("/api/work_queue/list", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)) return
     try {
       const tenantId = (req.query["tenant_id"] as string) || _wqTenant()
       const poolsRaw = (req.query["pools"] as string) || ""
@@ -2225,7 +2265,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/work_queue/claim/:sessionId", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)) return
     try {
       const sessionId  = String(req.params["sessionId"] ?? "")
       const body       = (req.body ?? {}) as Record<string, unknown>
@@ -2258,7 +2298,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/work_queue/release/:sessionId", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)) return
     try {
       const sessionId  = String(req.params["sessionId"] ?? "")
       const body       = (req.body ?? {}) as Record<string, unknown>
@@ -2301,7 +2341,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // O que sobrevive da frase é a comparação: list e pending seguem no MESMO nível,
   // e o corte fino continua na AÇÃO (/expire, supervisor|admin).
   app.get("/api/work_queue/pending", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)) return
     try {
       const tenantId = (req.query["tenant_id"] as string) || _wqTenant()
       const maxKeys  = req.query["max_keys"]
@@ -2346,7 +2386,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // O Bearer do supervisor é REPASSADO ao channel-gateway de propósito: assim o
   // resume é autorado e auditado como dele (A5), em vez de chegar como "externo".
   app.post("/api/work_queue/expire/:sessionId", async (req: Request, res: Response) => {
-    const claims = requireJwtRole(req.headers.authorization, ["supervisor", "admin"], res)
+    const claims = requireJwtGrant(req.headers.authorization, "agent_assist", "supervisionar", "read_write", res)
     if (!claims) return
     const sessionId = String(req.params["sessionId"] ?? "")
     const body      = (req.body ?? {}) as Record<string, unknown>
@@ -2412,7 +2452,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/agent_done/:sessionId", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)) return
     const { sessionId } = req.params
     try {
       const body    = req.body as Record<string, unknown>
@@ -2652,7 +2692,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // conferia era o servidor. ⚠️ Isto EXIGE credencial e **não recorta linha**:
   // qual sessão este usuário alcança segue dívida declarada (ver o probe).
   app.post("/api/menu_submit/:sessionId", async (req: Request, res: Response) => {
-    if (!requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)) return
+    if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)) return
     const { sessionId } = req.params
     const { menu_id, interaction, result, displayText: rawDisplayText, agent_key } = req.body as Record<string, unknown>
     // G7 (c): instance de origem do menu (ecoado do source_instance do menu.render).
@@ -2835,7 +2875,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // ─────────────────────────────────────────────────────────────────────────
 
   app.put("/api/agent-pause", async (req: Request, res: Response) => {
-    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    const payload = requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)
     if (!payload) return
 
     try {
@@ -2917,7 +2957,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 
   app.put("/api/agent-resume", async (req: Request, res: Response) => {
-    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    const payload = requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)
     if (!payload) return
 
     try {
@@ -2988,7 +3028,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // pause marker. The Agent Assist UI reads this on mount so the Pause button
   // reflects reality after a reconnect (the local React state resets to false).
   app.get("/api/agent-state", async (req: Request, res: Response) => {
-    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    const payload = requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)
     if (!payload) return
     try {
       const tenantId  = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
@@ -3019,7 +3059,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // login starts ready. Navigation/crash do not hit this — only the Logout flow.
   // Idempotent and best-effort; a no-op if the user is not a paused agent.
   app.post("/api/agent-clear-pause", async (req: Request, res: Response) => {
-    const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin"], res)
+    const payload = requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_write", res)
     if (!payload) return
     try {
       const tenantId  = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"

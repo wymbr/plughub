@@ -85,6 +85,7 @@ probe_hiring_pairs_subset.sh
 # `admin` sendo criado. Monta um delegado de verdade e roda 1 POSITIVO (a Costura
 # 1: era 403 antes) + 3 negativos, nas DUAS portas. Limpa o que cria.
 probe_rank_grant_guard.sh
+probe_mcp_agent_assist_grants.sh
 # calendar-api e dialog-api aceitavam escrita ANONIMA ate 2026-08-27 (`POST
 # /v1/calendars` sem credencial -> 201; criar E publicar DialogForm -> 200), enquanto
 # os campos `config.calendars`/`config.dialog_forms` decidiam so o MENU. Fechadas com

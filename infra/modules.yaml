@@ -279,7 +279,13 @@ modules:
         scope_type: pool
         default: none
         role_defaults:
+          # AUT-38 (2026-09-08): `supervisor` ENTROU aqui porque este campo passou a
+          # ser o portao de `force-complete` e `work_queue/expire`, que a allowlist de
+          # papel dava a `["supervisor", "admin"]`. Sem isto a troca de portao viraria
+          # uma REVOGACAO silenciosa: o supervisor perderia o botao de encerrar item
+          # da fila, e o sintoma seria "a tela parou de deixar".
           admin: read_write
+          supervisor: read_write
 
   # ── Faturamento ───────────────────────────────────────────────────────────────
   - module_id: billing

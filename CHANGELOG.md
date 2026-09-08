@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (13) — AUT-38: a autorização dependia da ORDEM em que os papéis foram digitados
+
+### 1 · O defeito, medido antes de tocar em nada
+
+`requireJwtRole` (`mcp-server-plughub/server.ts`) lia `payload["role"] ?? roles[0]`. O
+primeiro é um claim que a auth-api **não emite** — ela emite `roles`, array —, então o
+guard decidia sempre pelo **primeiro papel da lista**. Medido ao vivo, na mesma rota, com
+o mesmo conjunto de papéis e os mesmos grants:
+
+```
+POST /api/force-complete/…   roles=["admin","developer"]  -> 404 (atravessou o portão)
+POST /api/force-complete/…   roles=["developer","admin"]  -> 403 Insufficient role
+```
+
+Não é caso de laboratório: `admin@` tem `{admin,developer}` e passava **por sorte de
+ordenação**. E o modo de falha é o pior de diagnosticar — quem perde acesso lê
+*"Insufficient role"* nomeando um papel que ele **tem**.
+
+### 2 · Foi TROCA, nunca remoção
+
+Tirar o guard sem pôr campo no lugar deixaria as 17 rotas apenas atrás de credencial —
+401 viraria 200 para qualquer autenticado. O alvo já existia declarado, e a MOD-05 já o
+havia tirado da orfandade:
+
+| rotas | campo |
+|---|---|
+| 15 — `work_queue/{list,claim,release,pending}`, `agent_done`, `menu_submit`, `conversation_history`, `copilot_state`, `supervisor_state`, `supervisor_capabilities`, `inject-context`, `agent-{pause,resume,state,clear-pause}` | `agent_assist.atender` |
+| 2 — `force-complete`, `work_queue/expire` | `agent_assist.supervisionar` |
+
+Cada rota declara o **seu** campo e o seu mínimo (`read_only` para GET, `read_write` para
+mutação) — fato da ROTA, a mesma forma do `requireAbacWrite` (MOD-06) e do `campo` do
+`authorize_session_scope` (MOD-07). A recusa **nomeia o campo**.
+
+⚠️ **Três rotas com "supervisor" no nome ficaram em `atender`, e isso foi medido, não
+suposto:** `supervisor_state`, `supervisor_capabilities` e `inject-context` são chamadas
+pelo Console de **todo operador** (`AgentAssistPage`, `ParticipantFilterBar`,
+`CapacidadesTab`, e o `ClienteTab`, que usa `inject-context` para vincular o cliente). O
+nome é legado; a audiência não é supervisão.
+
+⚠️ **O `developer` deixou de alcançar 7 destas rotas, e isso é alinhamento.** Ele não tem
+`agent_assist.atender`, logo o Console nunca apareceu no menu dele — era a **API** que
+discordava do menu.
+
+### 3 · O que a troca obrigou a mexer junto
+
+**`supervisor` entrou em `agent_assist.supervisionar`** (preset era admin-only): sem isso
+a troca seria uma **revogação silenciosa** — a allowlist antiga dava `force-complete` e
+`work_queue/expire` a `["supervisor","admin"]`, e o sintoma seria *"o botão de encerrar
+sumiu"*. Backfill dos 4 supervisores existentes pela **API oficial**
+(`backfill_preset_fields.py`), que é a ferramenta que a MOD-08 criou para exatamente isto.
+
+**A tela parou de espelhar a allowlist.** `WorkItemsPage.canExpire` era uma lista de
+papéis copiada do endpoint; virou `perms.can('agent_assist','supervisionar')`. Duas casas
+para a mesma decisão só têm um valor: o da que ninguém confere.
+
+**Dois leitores de papel a mais, no mesmo arquivo, saíram junto** — deixá-los seria manter
+a segunda casa que a troca existe para fechar: o **bypass** do `approval_audit`
+(`role === "admin" || role === "supervisor" || grant`) e a política de namespace do
+`inject-context`, que decidia por `roles[0]` quais tags o chamador pode escrever e agora
+pergunta por `agent_assist.supervisionar`. Nenhum dos dois estreita ninguém: os grants
+correspondentes já nascem para os mesmos papéis.
+
+### 4 · Depois: o papel não abre porta nenhuma
+
+```
+force-complete   só `atender`               -> 403 (nomeia agent_assist.supervisionar)
+                 `atender`+`supervisionar`  -> 404 (atravessou)
+                 roles=[admin,supervisor], ZERO grants -> 403
+work_queue/list  só `atender`               -> 200
+                 roles=[admin,supervisor], ZERO grants -> 403
+ordem            [admin,developer] e [developer,admin] -> MESMO veredicto
+```
+
+Gate novo: `probe_mcp_agent_assist_grants.sh`, em cinco ramos — **A** estático (nenhum
+`roles[0]` volta ao arquivo; `requireJwtRole` sem chamador; as 17 chamadas declaram campo)
+· **B** o campo abre · **C** o vizinho **não** abre (senão o split é só declaração) · **D**
+papel graúdo sem grant não abre · **E** a ordem não decide. O ramo **B** é o que impede a
+"correção" mais barata e mais errada — sem ele, remover o guard passaria em todos os
+negativos. A é provado falseável por mutante; E tem contraprova **medida** (o 403×404 de
+antes da troca).
+
+### 5 · Dois achados de passagem, registrados
+
+⚠️ **Uma regressão da MOD-05, encontrada aqui:** o `probe_config_permissions_split.sh`
+estava vermelho no **S1** — a testemunha de presença criava usuário *"sem campo de
+capacidade"* omitindo `roles`, e desde a MOD-05 o corpo curto é julgado pelo default
+`["operator"]`. O `useradmin@` é a fixture mínima de propósito e não detém aquele preset.
+Corrigido para `roles: []`, que é o único corpo que de fato não concede nada — a mesma
+correção que o smoke recebeu naquele dia, num probe que eu não rodei então.
+
+⚠️ **`probe_ts_suites.sh` não enxerga suíte que falha ao COLETAR** (`GAT-04`, aberta):
+`vitest` reportou `Test Files 1 failed | 18 passed` e `Tests 259 passed`, e o gate leu
+*"nenhum vermelho"* — arquivo que estoura no import coleta zero testes e não aparece em
+contagem nenhuma. O caso concreto (`navigation.test.ts` lendo uma fixture que não é
+copiada para a imagem) é de outra frente; o buraco do instrumento é geral.
+
 ## 2026-09-08 (12) — MOD-07 (G6, corte #4): o campo não era exigido em backend nenhum
 
 ### 1 · A premissa do corte não se sustentava
