@@ -1,5 +1,68 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (2) — AUT-41: o módulo `audit` passou a existir no catálogo; e a cauda da AUT-03 mordeu no PRODUTOR
+
+### 1 · O item do DPO era invisível E inconcedível
+
+`infra/modules.yaml` e o `auth.module_registry` vivo traziam **11 módulos**, e `audit` em nenhum dos
+dois — enquanto `Sidebar.tsx:170` gateia `nav.audit` por `audit.sessions` e a analytics-api o
+enforça de verdade (`_check_audit_access`, 5 ramos). Sob o portão grant-first isso somava três
+consequências, e a segunda é a que fazia o buraco durar: o item era **oculto para todos** (0
+portadores medidos); a tela de Access **não tinha como concedê-lo**, porque o
+`ModulePermissionForm` renderiza o catálogo; e nem a saída manual funcionava —
+`validate_module_config` recusava com *"Módulo 'audit' não encontrado no registro"*.
+
+Três casas afirmavam que o módulo existia: `arc7-auth.md:473`, o `CLAUDE.md` § Audit LGPD, e o
+próprio `access.json`, com **12** entradas em `moduleNames` incluindo `audit` — o locale sabia de um
+módulo que o catálogo não tinha.
+
+**Declarados 2 campos, não os 5 documentados.** `user_access`, `data_requests` e `config_snapshot`
+são deferred (`AUD-01..04`) e não têm portão vivo; declará-los poria três campos sem consumidor no
+catálogo — a mesma família do `agent_assist.atender` órfão achado horas antes. O `CLAUDE.md` foi
+corrigido junto, para as duas casas pararem de discordar.
+
+**Sem `role_defaults`, por decisão do dono:** auditoria é ortogonal a papel — ninguém NASCE com ela,
+o DPO a recebe por concessão explícita. Não precisou de regra: `build_module_config` pula campo sem
+preset, então ausência é negação por construção. `domain: [none, read_only]` porque o portão é
+`abac_can(..., "read_only")`; `scopable: false` porque `_check_audit_access` **não passa `scope_id`**
+— declarar `true` seria pior que inerte, já que o ramo 3 do `abac_can` (`scope` não-vazio +
+`scope_id is None` → PASSA) faria o escopo *parecer* restringir sem restringir nada.
+
+Provado ponta a ponta, com contraprova e sem deixar rastro: concessão `read_only` a um usuário-cobaia
+→ **200**; a mesma com `read_write`, fora do domínio → **422** nomeando os valores aceitos; estado
+original restaurado e conferido idêntico.
+
+### 2 · E o achado que apareceu no meio: `admin@` vê ZERO linha desde 2026-08-31
+
+Ao conferir a E5 da emenda de hoje, medido com controle positivo:
+`LEGACY_EMPTY_MEANS_UNRESTRICTED = False` (a inversão da AUT-03 **está viva**),
+`admin@plughub.local` tem `accessible_pools = {}`, e `GET /reports/sessions?tenant_id=tenant_demo`
+devolve **200 com 0 linhas** — enquanto o ClickHouse tem **1 196 sessões em 23 pools**.
+
+Não é acidente de wipe. `infra/seed/seed_auth.py:225` declara `"accessible_pools": []` de propósito,
+escrito em `de955178` (2026-08-27), **quando `[]` significava "todos"**. A inversão veio depois, em
+`878e3418` (2026-08-31), e o seed não foi migrado. O comentário ao lado descreve a semântica NOVA
+corretamente — *"quem precisa de alcance total enumera"* — e **nada enumera**: promessa sem
+mecanismo, encostada no valor que a promessa quebra.
+
+⚠️ **A nota da AUT-03 previa a cauda no CONSUMIDOR** — quem lê `[]` como "sem filtro" e converte
+restrição em liberação. A que aconteceu é no **PRODUTOR**: quem escreveu `[]` quando queria "todos" e
+hoje nega tudo. Degrada para o valor mais plausível que existe — um relatório vazio. Ficha
+**AUT-43**, a fechar junto da E5/AUT-29, porque enumerar estaticamente no seed envelhece a cada pool
+novo.
+
+### 3 · Duas correções minhas, no mesmo dia
+
+A emenda escrita horas antes (entrada 1) afirmava que a E5 *"depende da inversão da AUT-03"*. **A
+dependência não existe** — a AUT-03 fechou em 2026-08-31. Eu a li como `bloqueado` numa **nota de
+prosa** do `pending.md` que sobreviveu oito dias ao fechamento da ficha. A conclusão inverte: a
+enumeração da E5 não espera nada, ela ficou **urgente**. Corrigido no ADR e na linha da AUT-29.
+
+⚠️ **O `probe_task_ledger.sh` não podia pegar, e isso é ponto cego declarado agora:** o ramo A lê id
+na **primeira célula de linha de tabela**; aquilo era parágrafo. Status velho em prosa atravessa os
+oito ramos — e foi o que me fez afirmar, com o gate verde, que a inversão ainda não tinha
+acontecido. A nota foi substituída por uma que registra o próprio episódio.
+
 ## 2026-09-08 (1) — ABAC: o guard é de RANK, e a delegação por PACOTE sai (emenda ao ADR)
 
 Sessão de desenho com o dono, sem mudança de código. O

@@ -486,3 +486,50 @@ modules:
         default: none
         role_defaults:
           admin: read_write
+
+  # ── Auditoria LGPD ────────────────────────────────────────────────────────────
+  # AUT-41 (2026-09-08). O módulo EXISTIA em prosa e não no catálogo: o
+  # `Sidebar.tsx` gateia `nav.audit` por `audit.sessions` e a analytics-api o
+  # enforça de verdade (`_check_audit_access`, 5 ramos), mas nem o YAML nem o
+  # `auth.module_registry` vivo o traziam. Sob o portão grant-first isso fazia o
+  # item do DPO ser INVISÍVEL para todos, e — pior — INCONCEDÍVEL pela tela: o
+  # `ModulePermissionForm` renderiza o catálogo, então só um `PUT module-config`
+  # à mão o alcançava. Medido antes: 0 portadores. Terceira testemunha do buraco:
+  # `access.json` já tinha 12 entradas em `moduleNames`, incluindo `audit` — o
+  # locale sabia de um módulo que o catálogo não tinha.
+  #
+  # ⚠️ SEM `role_defaults`, e isso é decisão do dono (2026-09-08): auditoria é
+  # ortogonal a papel — ninguém NASCE com ela, o DPO a recebe por concessão
+  # explícita na tela de Acesso. O mecanismo já garante isso sem regra extra:
+  # `presets.build_module_config` pula campo sem preset para os papéis do
+  # usuário, então ausência é negação por construção.
+  #
+  # ⚠️ `domain: [none, read_only]` porque o portão é `abac_can(claims, "audit",
+  # field, "read_only")` — é gate de LEITURA. Declarar `read_write` ofereceria um
+  # nível que nada consome.
+  #
+  # ⚠️ `scopable: false` porque `_check_audit_access` NÃO passa `scope_id`.
+  # Declarar `true` seria promessa sem mecanismo, e pior que inerte: pelo ramo 3
+  # do `abac_can` (`scope` não-vazio + `scope_id is None` → PASSA), o escopo
+  # pareceria restringir sem restringir nada.
+  #
+  # ⚠️ DOIS campos, não cinco. `user_access`, `data_requests` e `config_snapshot`
+  # estão descritos no `CLAUDE.md` mas são deferred (fichas AUD-01..04) e não têm
+  # portão vivo. Declará-los agora poria três campos sem consumidor no catálogo —
+  # a mesma família do `agent_assist.atender` órfão. Cada um entra com a sua
+  # feature.
+  - module_id: audit
+    label: Auditoria LGPD
+    icon: "🔎"
+    nav_path: /audit
+    permission_schema:
+      sessions:
+        label: Consultar trilha de acesso a sessões
+        domain: [none, read_only]
+        scopable: false
+        default: none
+      mcp_calls:
+        label: Consultar trilha de chamadas MCP
+        domain: [none, read_only]
+        scopable: false
+        default: none

@@ -311,7 +311,9 @@ Ninguém alcança o tenant inteiro por regra; o `admin@` alcança por **seed que
 é a decisão da AUT-15 — a lápide do `unrestricted` diz, textualmente: *"Para dar alcance total,
 envie a lista completa de pools do tenant"*. O que não existe é o cumprimento:
 
-- `admin@` tem `accessible_pools = {}` e depende do sentido legado `[] = todos`;
+- `admin@` tem `accessible_pools = {}` — e, como a inversão da AUT-03 **já está viva**, isso
+  significa **NENHUM pool**: medido no mesmo dia, ele recebe `200` com **0 linhas** de
+  `/reports/sessions` enquanto o ClickHouse tem 1 196 sessões em 23 pools (ficha AUT-43);
 - a lista de pools no Access vem de `GET /v1/pools` (agent-registry), filtrada **só por
   tenant** — e o recorte tem de ser no servidor: filtrar no cliente não é cerca;
 - pool novo nasce invisível. Mitigação derivável: quem **cria** o pool o recebe no escopo; e o
@@ -320,7 +322,15 @@ envie a lista completa de pools do tenant"*. O que não existe é o cumprimento:
   tenant inteiro"*. Sob enumeração sempre, vira computável (`escopo ⊇ universo de pools`) — a
   ficha sai de adiada-por-impossibilidade para aberta-por-trabalho.
 
-Depende da inversão da **AUT-03**; sem ela, enumerar o admin é decorativo.
+> ⚠️ **Correção de algumas horas depois, no mesmo 2026-09-08.** Esta seção dizia *"depende da
+> inversão da AUT-03; sem ela, enumerar o admin é decorativo"*. **A dependência não existe:** a
+> AUT-03 fechou em 2026-08-31 e a inversão está viva. Eu a li como `bloqueado` numa nota de prosa
+> do `pending.md` que sobreviveu ao fechamento da ficha por oito dias — o `probe_task_ledger.sh`
+> não a alcança porque o ramo A lê id em **célula de tabela**, e aquilo era parágrafo. A conclusão
+> inverte: a E5 não espera nada, ela ficou **urgente**. E a cauda que a nota temia existe, na
+> direção oposta à prevista — não no consumidor que lê `[]` como "sem filtro", mas no **produtor**
+> que escreveu `[]` quando queria "todos" (`seed_auth.py:225`, escrito antes da inversão e nunca
+> migrado). Ficha **AUT-43**.
 
 ## Achados medidos que entram como trabalho próprio
 

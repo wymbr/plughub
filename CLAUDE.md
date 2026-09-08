@@ -1485,8 +1485,21 @@ MCP tool `agent_event(category, value, tags?)` para agentes publicarem KPIs de n
 ## Audit LGPD — Compliance Role (Fase 1)
 
 Módulo ABAC `audit` para DPO/compliance, **ortogonal às roles** — quem tem `module_config.audit.*` no
-JWT tem acesso escalonado. Cinco campos: `sessions`, `mcp_calls`, `user_access`, `data_requests`,
-`config_snapshot` — os dois primeiros ativos, em `GET /v1/audit/…` na analytics-api.
+JWT tem acesso escalonado. **DOIS campos no catálogo**: `sessions` e `mcp_calls`, em
+`GET /v1/audit/…` na analytics-api. Os outros três da Fase 1 (`user_access`, `data_requests`,
+`config_snapshot`) são *deferred* (`AUD-01..04`) e **não estão declarados** — campo sem portão vivo é
+promessa sem mecanismo; cada um entra com a sua feature.
+
+> **A declaração no catálogo só passou a existir em 2026-09-08 (AUT-41), e esta seção era uma das
+> três casas que afirmavam o contrário.** Medido: `infra/modules.yaml` e o `auth.module_registry`
+> vivo tinham 11 módulos e `audit` em nenhum dos dois — enquanto o `Sidebar.tsx` gateava `nav.audit`
+> por `audit.sessions` e a analytics-api o enforçava. Sob grant-first, o item do DPO era **invisível
+> para todos** e **inconcedível pela tela** (o formulário renderiza o catálogo), com **0 portadores**.
+> `role_defaults` **ausente por decisão**: ninguém nasce com auditoria — o DPO a recebe por concessão
+> explícita, e o mecanismo já garante isso (`build_module_config` pula campo sem preset).
+> `domain: [none, read_only]` porque o portão é de leitura; `scopable: false` porque
+> `_check_audit_access` não passa `scope_id`, e o ramo 3 do `abac_can` faria um escopo declarado
+> *parecer* restringir sem restringir nada.
 
 - **O gate `_check_audit_access` tem CINCO ramos, cada um com o seu código**, e a postura para
   segredo ausente é **503** — oposta à do `pool_auth`, que degrada aberto: lá é escopo de leitura,
