@@ -139,8 +139,13 @@ modules:
           admin: read_write
           operator: read_write
           supervisor: read_write
+      # MOD-07 / corte #4 da D6 (2026-09-08). O rotulo tinha um "e" e eram dois
+      # fatos com sensibilidade LGPD diferente: as LISTAS e agregados da Analise x o
+      # DIALOGO verbatim de um contato. Medido antes de cortar: o campo nao era
+      # exigido em backend nenhum — um token com `contacts.monitorar` e sem
+      # `visualizar` lia a transcricao inteira (200). Ele so escondia menu.
       visualizar:
-        label: Visualizar contatos e transcrições
+        label: Visualizar contatos (listas, agregados e traços de execução)
         domain: [none, read_only]
         scopable: true
         scope_type: pool
@@ -149,6 +154,21 @@ modules:
           admin: read_only
           business: read_only
           developer: read_only
+          operator: read_only
+          supervisor: read_only
+      transcricao:
+        label: Ler a transcrição de um contato (diálogo verbatim)
+        domain: [none, read_only]
+        scopable: true
+        scope_type: pool
+        default: none
+        role_defaults:
+          # Quem ATENDE e quem SUPERVISIONA leem o dialogo; `business` (analise
+          # agregada) e `developer`/devops (depura execucao) ficam de fora — os dois
+          # continuam com `visualizar`, que e o que a funcao deles pede. Este e o
+          # unico corte da D6 que ESTREITA a populacao de um campo, e por isso o
+          # backfill copia o que cada um JA tinha, em vez de aplicar o preset.
+          admin: read_only
           operator: read_only
           supervisor: read_only
       exportar:

@@ -1138,9 +1138,17 @@ base não deve ir a zero**: se for, alguém migrou o emissor sem decidir isso.
 > o segundo fechou **para o CONTEÚDO** em 2026-08-30 e segue aberto para os AGREGADOS —
 > e a linha divisória não é de esforço, é de natureza da pergunta.
 >
-> **Conteúdo ✅** — as quatro rotas que servem UM contato (`/v1/transcript/sessions/{id}`,
+> **Conteúdo ✅ — e são DOIS eixos, sendo que o segundo só chegou em 2026-09-08 (MOD-07).**
+> As quatro rotas que servem UM contato (`/v1/transcript/sessions/{id}`,
 > `/sessions/{id}/stream`, `/workflow-trace`, `/pipeline-state`) recortam por pool desde
-> 2026-08-30. Ali a pergunta é de **PERTINÊNCIA** (*esta sessão é dos meus pools?*), não de
+> 2026-08-30, e agora também exigem CAPACIDADE: `contacts.transcricao` para o diálogo
+> verbatim, `contacts.visualizar` para os traços de execução — o campo é declarado pela
+> ROTA, como no `requireAbacWrite` e no `_NS_FIELD_OVERRIDES`. Até ali a analytics-api
+> tinha **um eixo só**, e o efeito foi medido ao vivo: token com `contacts.monitorar` e
+> **sem** `contacts.visualizar` lia a transcrição inteira (**200**). *Gate decorativo é
+> pior que gate nenhum — quem concede acredita ter negado.* A capacidade decide ANTES do
+> escopo (recusa não paga Redis + ClickHouse), e `module_config` **ausente** (serviço)
+> difere de **vazio** (usuário sem grants, que NEGA). Ali a pergunta é de **PERTINÊNCIA** (*esta sessão é dos meus pools?*), não de
 > coluna, e por isso é decidível — mesma razão pela qual `/sessions/active` sempre recortou.
 > O decisor é **único**: `pool_auth.authorize_session_scope`, para onde o
 > `_authorize_live_session` do supervisor passou a DELEGAR. **Duas metades, e a segunda era

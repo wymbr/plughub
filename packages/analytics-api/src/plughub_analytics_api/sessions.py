@@ -587,7 +587,7 @@ async def session_stream(
     # conteúdo não é recusa.
     await authorize_session_scope(
         pool_principal, tenant_id, session_id,
-        rota="sessions.stream", redis=redis, store=store,
+        rota="sessions.stream", campo="transcricao", redis=redis, store=store,
     )
 
     stream_key = f"session:{session_id}:stream"
@@ -831,7 +831,7 @@ async def get_workflow_trace(
 
     await authorize_session_scope(
         pool_principal, tenant_id, session_id,
-        rota="sessions.workflow_trace", redis=redis, store=store,
+        rota="sessions.workflow_trace", campo="visualizar", redis=redis, store=store,
     )
 
     # Redis fallback: ClickHouse may have lost origin_session_id for sessions
@@ -1125,7 +1125,7 @@ async def get_pipeline_state(
 
     await authorize_session_scope(
         pool_principal, tenant_id, session_id,
-        rota="sessions.pipeline_state", redis=redis, store=store,
+        rota="sessions.pipeline_state", campo="visualizar", redis=redis, store=store,
     )
 
     try:

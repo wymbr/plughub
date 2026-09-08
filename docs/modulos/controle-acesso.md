@@ -36,7 +36,7 @@ São 9 módulos ABAC registrados em `infra/modules.yaml`:
 
 | Módulo | Campos de permissão | Gate |
 |---|---|---|
-| `contacts` | `monitorar`, `visualizar`, `exportar` | Monitor (observar); Análise — `operacao` foi cortado na MOD-05 |
+| `contacts` | `monitorar`, `visualizar`, `transcricao`, `exportar` | Monitor (observar); Análise (listas e agregados); **diálogo verbatim** de um contato — `operacao` foi cortado na MOD-05 e `transcricao` saiu de `visualizar` na MOD-07 |
 | `workflows` | `operacao`, `visualizar`, `cancelar`, `webhooks`, `journey.read`, `journey.resume` | Editor, Monitor, Calendar; Report; Journey API (Arc 16) |
 | `skill_flows` | `operacao`, `visualizar`, `editar` | Editor, Monitor, Deploy; Report |
 | `evaluation` | `contestar`, `revisar`, `relatorio`, `formularios` | Ações de contestação/revisão; Reports; Forms |

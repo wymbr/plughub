@@ -230,7 +230,7 @@ async def transcript_session_messages(
 
     await authorize_session_scope(
         principal, effective_tenant, session_id,
-        rota="transcript.session", store=store,
+        rota="transcript.session", campo="transcricao", store=store,
     )
     try:
         payload = await asyncio.to_thread(

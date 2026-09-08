@@ -130,10 +130,36 @@ Candidatos medidos, na ordem em que o rótulo denuncia:
 | 1 | `contacts.operacao` | `contacts.monitorar` (observar) × ~~`contacts.atender`~~ **`agent_assist.atender`** — ver as-built |
 | 2 | `workflows.operacao` | ~~`editar` × `monitorar`~~ **corte SEM SUJEITO** — ver as-built |
 | 3 | `config.resources` | ~~`config.pools` × `config.skills`~~ — o corte foi outro: ver as-built |
-| 4 | `contacts.visualizar` | recorte de Analytics por superfície — depende da AUT-01, que ainda não tem filtro de pool nos agregados |
+| 4 | `contacts.visualizar` | ~~recorte de Analytics por superfície~~ → **`visualizar` × `transcricao`**: ver as-built |
 
 Cada corte é uma **migração de dados**, não só de catálogo: todo portador do campo largo precisa
 de backfill para os estreitos, senão o corte **rebaixa em silêncio** quem já trabalhava.
+
+> **As-built do corte #4 (MOD-07, 2026-09-08) — o campo não era exigido em backend nenhum.**
+>
+> A proposta era recortar Analytics **por superfície** (uma tela, um campo). Medido antes
+> de cortar, a premissa não se sustentava: `contacts.visualizar` **não era verificado em
+> lugar algum do servidor**. A analytics-api tinha o eixo de ESCOPO (recorta linhas e
+> sessões por pool) e não tinha o de CAPACIDADE — o campo só escondia entradas de menu.
+> Contraprova ao vivo: token com `contacts.monitorar`, **sem** `visualizar`, escopado ao
+> pool da sessão, lia a transcrição inteira do contato (**200**). Recortar por superfície
+> teria produzido N campos decorativos, e o pior é que eles PARECERIAM proteger o diálogo.
+>
+> O corte foi o que o rótulo já dizia — *"Visualizar contatos **e** transcrições"*, a
+> regra do "e" outra vez: **`visualizar`** (listas, agregados, traços de execução) ×
+> **`contacts.transcricao`** (o diálogo verbatim). E o corte só vale porque veio com o
+> eixo que faltava: `authorize_session_scope` passou a receber o `campo` de quem chama,
+> e as quatro rotas de conteúdo declaram o seu — `transcricao` para transcript e stream,
+> `visualizar` para workflow-trace e pipeline-state.
+>
+> **Este é o único corte da D6 que ESTREITA a população de um campo** (`business` e
+> `developer` não recebem `transcricao` no preset), e por isso o backfill copia o que
+> cada um JÁ TINHA em vez de aplicar o preset — preset é certidão de nascimento, nunca
+> política retroativa. ⚠️ E a migração **precisa do marcador**, ao contrário da do corte
+> #1: lá a chave de origem desaparecia (guarda por presença bastava); aqui `visualizar`
+> sobrevive, então uma guarda por presença reexecutaria a cada boot e uma por ausência do
+> destino RESSUSCITARIA a transcrição de quem a tivesse revogado — o defeito da MOD-04 na
+> forma inversa. Provado: revogar, reiniciar, e a revogação sobrevive.
 
 > **As-built dos cortes #2 e #3 (MOD-06, 2026-09-08) — e nenhum dos dois era o corte previsto.**
 >

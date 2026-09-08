@@ -110,13 +110,23 @@ fi
 echo "  pool alheio (ramo B): ${OUTRO}"
 echo
 
-TOK_A=$(mint "{\"accessible_pools\":[\"${POOL}\"]}")
-TOK_B=$(mint "{\"accessible_pools\":[\"${OUTRO}\"]}")
+# ⚠️ Os tokens carregam CAPACIDADE além de escopo desde a MOD-07 (2026-09-08).
+# Antes eles traziam só `accessible_pools`, e isso bastava porque as rotas de conteúdo
+# decidiam UM eixo. Agora decidem dois — `contacts.transcricao` para o diálogo,
+# `contacts.visualizar` para os traços —, então um token sem `module_config` levaria
+# 403 em TODOS os ramos e este probe pararia de medir escopo: ele ficaria vermelho
+# pelo eixo vizinho, que é o pior modo de falha de um instrumento (mede a proposição
+# errada e parece medir a certa). O ramo E abaixo cobre o outro eixo, de propósito.
+CAP='"module_config":{"contacts":{"visualizar":{"access":"read_only","scope":[]},"transcricao":{"access":"read_only","scope":[]}}}'
+TOK_A=$(mint "{\"accessible_pools\":[\"${POOL}\"],${CAP}}")
+TOK_B=$(mint "{\"accessible_pools\":[\"${OUTRO}\"],${CAP}}")
+# Escopo CERTO, capacidade FALTANDO — o par do ramo A.
+TOK_A2=$(mint "{\"accessible_pools\":[\"${POOL}\"],\"module_config\":{\"contacts\":{\"monitorar\":{\"access\":\"read_write\",\"scope\":[]}}}}")
 # O irrestrito de hoje é o principal de SERVIÇO — lido do próprio container, para o
 # gate não carregar uma cópia do segredo que envelhece em silêncio.
 SVC_TOKEN=$($DC exec -T analytics-api printenv PLUGHUB_ANALYTICS_SERVICE_TOKEN 2>/dev/null | tr -d '\r\n')
 [ -n "$SVC_TOKEN" ] || { echo "INCONCLUSIVO: PLUGHUB_ANALYTICS_SERVICE_TOKEN vazio no container"; exit 2; }
-for t in A B; do
+for t in A B A2; do
   eval "v=\$TOK_$t"
   case "$v" in *.*.*) ;; *) echo "FALHA: token $t não foi cunhado ([$v])"; exit 2;; esac
 done
@@ -140,6 +150,26 @@ case "$DET" in
   *pool_scope_denied*) ok "B nomeia a recusa: pool_scope_denied" ;;
   *) bad "B deveria dizer pool_scope_denied, disse: $(echo "$DET" | head -c 90)" ;;
 esac
+echo
+echo "── RAMO A2 — o PAR do A: mesmo escopo, capacidade faltando ⇒ 403 ─────"
+#
+# MOD-07. Este ramo prova que os dois eixos são INDEPENDENTES: o token dele tem
+# exatamente o mesmo escopo do ramo A (que dá 200), e mesmo assim é recusado — porque
+# `contacts.monitorar` não é `contacts.transcricao`. Antes da MOD-07 a analytics-api
+# tinha um eixo só, e um token assim lia a transcrição inteira: medido ao vivo, 200.
+#
+# E a recusa distingue as DUAS rotas de conteúdo, que não pedem a mesma coisa: o
+# diálogo verbatim exige `transcricao`; o traço de execução, `visualizar`.
+assert "A2 transcript (exige transcricao)" "403" "$(code -H "Authorization: Bearer $TOK_A2" "${AN}${R_TRAN}")"
+assert "A2 stream (exige transcricao)"    "403" "$(code -H "Authorization: Bearer $TOK_A2" "${AN}${R_STREAM}")"
+assert "A2 pipeline-state (exige visualizar)" "403" "$(code -H "Authorization: Bearer $TOK_A2" "${AN}${R_PIPE}")"
+DET_A2=$(body -H "Authorization: Bearer $TOK_A2" "${AN}${R_TRAN}")
+case "$DET_A2" in
+  *capability_denied*contacts.transcricao*) ok "A2 nomeia o campo que falta: contacts.transcricao" ;;
+  *pool_scope_denied*) bad "A2 recusou pelo eixo ERRADO (escopo) — o escopo dele é o do ramo A" ;;
+  *) bad "A2 deveria dizer capability_denied: contacts.transcricao, disse: $(echo "$DET_A2" | head -c 90)" ;;
+esac
+
 echo
 echo "── RAMO C — principal IRRESTRITO (serviço) ⇒ 200 ───────────────────────"
 for r in "$R_TRACE" "$R_PIPE" "$R_TRAN"; do

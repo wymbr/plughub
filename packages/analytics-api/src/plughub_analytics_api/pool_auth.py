@@ -47,7 +47,7 @@ from typing import Any
 import jwt
 from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from plughub_authz import LEGACY_UNRESTRICTED_MARK, resolve_scope
+from plughub_authz import LEGACY_UNRESTRICTED_MARK, abac_can, resolve_scope
 
 from .config import get_settings
 
@@ -99,6 +99,18 @@ class PoolPrincipal:
     supervised_agent_types (Arc 9):
       None       → no restriction (all agent types visible)
       list[str]  → caller may only see sessions/segments involving these agent_type_ids
+
+    module_config (MOD-07, 2026-09-08):
+      None       → principal SEM claims de usuario (servico ou `open_access`), que
+                   ja e irrestrito por identidade — nao ha capacidade a conferir
+      dict       → claims do usuario; `{}` NEGA (grant-first, como todo o resto)
+
+    ⚠️ Ate a MOD-07 este objeto so carregava ESCOPO, e por isso a analytics-api
+    tinha **um eixo so**. O CLAUDE.md ja dizia que sao dois — *"escopo e capacidade
+    sao eixos distintos"* —, e a metade que faltava aqui era a que decide *"voce pode
+    LER isto?"*. Medido ao vivo antes do conserto: token com `contacts.monitorar` e
+    **sem** `contacts.visualizar` lia a transcricao inteira de um contato (200). O
+    campo existia, aparecia na tela de Acesso, e nao era exigido em lugar nenhum.
     """
 
     def __init__(
@@ -107,11 +119,13 @@ class PoolPrincipal:
         tenant_id: str | None,
         sub: str,
         supervised_agent_types: list[str] | None = None,
+        module_config: dict[str, Any] | None = None,
     ) -> None:
         self.accessible_pools       = accessible_pools
         self.supervised_agent_types = supervised_agent_types
         self.tenant_id = tenant_id
         self.sub = sub
+        self.module_config = module_config
 
     @property
     def is_unrestricted(self) -> bool:
@@ -356,6 +370,10 @@ async def optional_pool_principal(
         tenant_id=tenant_id,
         sub=sub,
         supervised_agent_types=supervised_agent_types,
+        # `{}` quando o token nao traz o claim: ausencia de grants NUNCA e
+        # autorizacao (grant-first), e passar `None` aqui equivaleria a dizer
+        # "este e um principal de servico".
+        module_config=payload.get("module_config") or {},
     )
 
 
@@ -737,6 +755,7 @@ async def authorize_session_scope(
     session_id: str,
     *,
     rota: str,
+    campo: str | None = None,
     redis: Any = None,
     store: Any = None,
 ) -> None:
@@ -753,8 +772,45 @@ async def authorize_session_scope(
     ficar joinable por ter pool conhecido.
 
     Decisão do dono (2026-08-26), preservada: **o admin respeita a ABAC como
-    qualquer um; não há bypass por papel.** O único eixo é o escopo.
+    qualquer um; não há bypass por papel.**
+
+    ── `campo`: o SEGUNDO eixo, acrescentado na MOD-07 (2026-09-08) ────────────
+    Esta função decidia só ESCOPO, e o CLAUDE.md já dizia que são dois eixos —
+    escopo responde *"quais linhas eu alcanço"*, capacidade responde *"que funções
+    eu exerço"*. Sem a segunda metade, um token com `contacts.monitorar` e **sem**
+    `contacts.visualizar` lia a transcrição inteira de um contato dos seus pools:
+    medido ao vivo, **200**. O campo existia, era oferecido na tela de Acesso, e não
+    era exigido em backend nenhum — gate decorativo é pior que gate nenhum, porque
+    quem concede acredita ter negado.
+
+    Quem chama DECLARA o campo, porque ele é fato da ROTA e não do verificador — a
+    mesma forma do `requireAbacWrite` do agent-registry (MOD-06) e do
+    `_NS_FIELD_OVERRIDES` do config-api. As quatro rotas de conteúdo não pedem a
+    mesma coisa: `transcricao` para o diálogo verbatim (transcript e stream),
+    `visualizar` para os traços de execução (workflow-trace, pipeline-state).
+
+    ⚠️ **A capacidade é conferida ANTES do escopo**, e isso é decisão: ela é a mais
+    barata (decide com o token na mão) e a mais decisiva. Deixá-la depois faria a
+    recusa de quem não pode ler custar duas consultas — Redis e ClickHouse —, e foi
+    exatamente esse o defeito do guard de rank em 2026-09-08, quando o master pagava
+    o custo do catálogo antes do curto-circuito.
     """
+    # `module_config is None` = principal de SERVIÇO ou `open_access`: os dois já são
+    # irrestritos por identidade e não têm claims de usuário a conferir. `{}` é outra
+    # coisa — é usuário SEM grants, e aí a resposta é NÃO (grant-first).
+    if campo is not None and principal.module_config is not None:
+        claims = {"module_config": principal.module_config}
+        if not abac_can(claims, "contacts", campo, "read_only"):
+            logger.warning(
+                "capability_denied rota=%s sub=%s session=%s — exige contacts.%s e o "
+                "chamador nao o detem. (Eixo de CAPACIDADE, distinto do escopo: nao "
+                "adianta a sessao estar nos pools dele.)",
+                rota, principal.sub, session_id, campo,
+            )
+            raise HTTPException(
+                status_code=403, detail=f"capability_denied: contacts.{campo}",
+            )
+
     if principal.is_unrestricted:
         return
 

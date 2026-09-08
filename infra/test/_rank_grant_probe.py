@@ -60,7 +60,8 @@ PREFIXO = "rankprobe_"
 PACOTE_DELEGADO = {
     "config": {"users": {"access": "read_write", "scope": []}},
     "contacts": {"monitorar": {"access": "read_write", "scope": []},
-                 "visualizar": {"access": "read_only", "scope": []}},
+                 "visualizar": {"access": "read_only", "scope": []},
+                 "transcricao": {"access": "read_only", "scope": []}},
     "agent_assist": {"atender": {"access": "read_write", "scope": []}},
     "approvals": {"decide": {"access": "read_write", "scope": []},
                   "operacao": {"access": "read_write", "scope": []}},

@@ -12,6 +12,7 @@ Usuários criados:
         evaluation.report     = read_only
         evaluation.curar      = read_write  (G-PROBE perna humana, 2026-07-02 — curadoria/calibração)
         contacts.visualizar   = read_only
+        contacts.transcricao  = read_only  (MOD-07: o diálogo verbatim)
         contacts.exportar     = read_write
         contacts.monitorar    = read_write  (Monitor — decisão 3 do dono, 2026-08-27)
         agent_assist.atender  = read_write  (MOD-05: o corte de `contacts.operacao`)
@@ -26,6 +27,7 @@ Usuários criados:
         contacts.monitorar    = read_write
         agent_assist.atender  = read_write  (MOD-05)
         contacts.visualizar   = read_only
+        contacts.transcricao  = read_only  (MOD-07)
 
 Uso:
   AUTH_API_URL=http://auth-api:3200 AUTH_JWT_SECRET=<jwt_secret> python seed_auth.py
@@ -241,6 +243,7 @@ DEMO_USERS = [
             "contacts": {
                 "monitorar": {"access": "read_write", "scope": []},
                 "visualizar": {"access": "read_only",  "scope": []},
+                "transcricao": {"access": "read_only", "scope": []},  # MOD-07
                 "exportar":   {"access": "read_write", "scope": []},
             },
             "workflows": {
@@ -321,7 +324,10 @@ DEMO_USERS = [
                 "atender": {"access": "read_write", "scope": []},
             },
             "contacts": {
-                "visualizar": {"access": "read_only",  "scope": []},  # vê contatos/relatórios
+                "visualizar": {"access": "read_only",  "scope": []},  # listas e agregados
+                # MOD-07: ler o DIÁLOGO é campo próprio desde o corte #4 — `visualizar`
+                # ficou com as listas. Quem supervisiona lê a conversa.
+                "transcricao": {"access": "read_only", "scope": []},
                 "exportar":   {"access": "read_write", "scope": []},  # exporta dados
                 # Monitor (decisão 3 do dono, 2026-08-27: "precisa para operar").
                 # ⚠️ A ressalva que estava aqui — "este campo também abre o Console;
@@ -369,7 +375,10 @@ DEMO_USERS = [
             },
             "contacts": {
                 "monitorar": {"access": "read_write", "scope": []},  # Monitor/Agent Assist
-                "visualizar": {"access": "read_only",  "scope": []},  # vê contatos
+                "visualizar": {"access": "read_only",  "scope": []},  # listas e agregados
+                # MOD-07: sem isto o Console fica SEM MENSAGENS — o SSE de
+                # `/sessions/{id}/stream` passou a exigir o campo do diálogo.
+                "transcricao": {"access": "read_only", "scope": []},
             },
             # Aprovação humana — o operator é o ÚNICO aprovador que exercita a política
             # de masking. Todos os papéis de `masking.supervisor_roles`

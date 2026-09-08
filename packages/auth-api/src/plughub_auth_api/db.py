@@ -348,6 +348,37 @@ SET module_config = jsonb_set(
 WHERE (module_config -> 'contacts') ? 'operacao'
 """
 
+# ── MOD-07 / corte #4 da D6: `contacts.visualizar` -> + `contacts.transcricao` ─
+#
+# O rotulo tinha um "e" — *"Visualizar contatos E transcricoes"* — e eram dois fatos
+# com sensibilidade LGPD diferente: as LISTAS/agregados da Analise x o DIALOGO
+# verbatim de um contato. O corte cria `contacts.transcricao` e deixa `visualizar`
+# com o resto.
+#
+# ⚠️ ESTA MIGRACAO PRECISA DO MARCADOR, e a razao e o que separa este corte do #1.
+# La (`contacts.operacao`) a chave de origem DESAPARECIA, entao a presenca dela era
+# guarda suficiente: migrado uma vez, nada mais casa. Aqui `visualizar` SOBREVIVE ao
+# corte — ele continua significando as listas. Uma guarda por presenca da origem
+# reexecutaria a cada boot, e uma por ausencia do destino
+# (`NOT ... ? 'transcricao'`) RESSUSCITARIA o campo em quem tivesse a transcricao
+# revogada pela tela, em silencio e sem bumpar `updated_at`. E exatamente o defeito
+# que desfez a MOD-04 a cada `up -d`, na forma inversa.
+#
+# O backfill copia o que a pessoa JA TINHA, e nao o preset do papel dela: o preset
+# novo exclui `business` e `developer`, mas quem hoje le a transcricao nao pode
+# perde-la por causa de um rename — preset e certidao de NASCIMENTO, nunca politica
+# retroativa. Quem nasce depois segue o preset.
+DDL_MIGRATE_ABAC_TRANSCRICAO_SPLIT = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config, '{contacts}',
+    (module_config -> 'contacts')
+      || jsonb_build_object('transcricao', module_config -> 'contacts' -> 'visualizar')
+)
+WHERE (module_config -> 'contacts') ? 'visualizar'
+  AND NOT ((module_config -> 'contacts') ? 'transcricao')
+"""
+
 # ── Arc 9 — Agent Groups & Supervisor Scope ───────────────────────────────────
 
 DDL_AGENT_GROUPS = """
@@ -414,6 +445,11 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
                 "SELECT EXISTS(SELECT 1 FROM auth.users "
                 "WHERE module_config -> 'config' ? 'dashboards')")
             await conn.execute(DDL_MIGRATE_ABAC_OPERACAO_SPLIT)
+            await _migracao_uma_vez(
+                conn, "abac_transcricao_split_2026_09_08",
+                DDL_MIGRATE_ABAC_TRANSCRICAO_SPLIT,
+                "SELECT EXISTS(SELECT 1 FROM auth.users "
+                "WHERE module_config -> 'contacts' ? 'transcricao')")
             # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
             # docs/arcos/arc9-agent-groups.md; tables may still exist physically
             # in older DBs, just no longer created/read/written by this service)

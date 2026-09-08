@@ -49,8 +49,16 @@ export function useSessionTranscript(
       `?tenant_id=${encodeURIComponent(TENANT_ID)}&scope=contact`;
 
     apiFetch(url)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      .then(async (res) => {
+        // MOD-07: desde o corte #4 esta rota exige `contacts.transcricao` (o diálogo
+        // é campo próprio; `visualizar` ficou com as listas). O servidor devolve
+        // `capability_denied: contacts.<campo>` — mostrar só "HTTP 403" mandaria o
+        // operador adivinhar qual grant lhe falta.
+        if (!res.ok) {
+          const detalhe = await res.json().then(
+            (b: { detail?: string }) => b?.detail, () => undefined)
+          throw new Error(detalhe ? `HTTP ${res.status} — ${detalhe}` : `HTTP ${res.status}`);
+        }
         return res.json() as Promise<{ messages?: TranscriptMessage[] }>;
       })
       .then((data) => {

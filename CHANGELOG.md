@@ -1,5 +1,96 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (12) — MOD-07 (G6, corte #4): o campo não era exigido em backend nenhum
+
+### 1 · A premissa do corte não se sustentava
+
+A D6 pedia recortar `contacts.visualizar` **por superfície de Analytics** — uma tela, um
+campo. Medido antes de cortar, o campo **não era verificado em lugar algum do servidor**:
+a analytics-api tinha o eixo de ESCOPO (recorta linhas e sessões por pool) e **não tinha
+o de CAPACIDADE**. `contacts.visualizar` só escondia entradas de menu.
+
+Contraprova ao vivo, antes de mexer:
+
+```
+GET /v1/transcript/sessions/{id}   token: contacts.monitorar, SEM visualizar,
+                                   escopado ao pool da sessão      -> 200
+```
+
+Recortar por superfície teria produzido **N campos decorativos** — e o pior: eles
+*pareceriam* proteger o diálogo do cliente. **Gate decorativo é pior que gate nenhum,
+porque quem concede acredita ter negado.**
+
+### 2 · O corte é o que o rótulo já dizia
+
+*"Visualizar contatos **e** transcrições"* — a regra do "e" pela terceira vez neste arco,
+e aqui os dois fatos têm sensibilidade LGPD diferente:
+
+| campo | o que é | rotas |
+|---|---|---|
+| `contacts.visualizar` | listas, agregados, **traços de execução** | `/workflow-trace`, `/pipeline-state` |
+| `contacts.transcricao` | o **diálogo verbatim** de um contato | `/v1/transcript/sessions/{id}`, `/sessions/{id}/stream` |
+
+O corte só vale porque veio com o eixo que faltava: `authorize_session_scope` passou a
+receber o **`campo` de quem chama** — fato da ROTA, não do verificador, a mesma forma do
+`requireAbacWrite` (MOD-06) e do `_NS_FIELD_OVERRIDES` do config-api. Depois:
+
+```
+transcript      monitorar -> 403 capability_denied: contacts.transcricao
+                visualizar -> 403 (mesma recusa: listas não são o diálogo)
+                visualizar+transcricao -> 200
+pipeline-state  monitorar -> 403 capability_denied: contacts.visualizar
+                visualizar -> 200
+```
+
+Três decisões que a implementação carrega: **a capacidade decide ANTES do escopo** (uma
+recusa não paga Redis + ClickHouse — a mesma correção que o guard de rank levou horas
+antes) · **`module_config` ausente ≠ vazio**: ausente é principal de SERVIÇO, irrestrito
+por identidade; vazio é usuário sem grants, e NEGA (grant-first) · a recusa **nomeia o
+campo**, senão o operador adivinha entre dois.
+
+### 3 · O único corte da D6 que ESTREITA uma população
+
+`business` e `developer` não recebem `transcricao` no preset — o analista lê agregados, o
+devops depura execução (e os traços continuam em `visualizar`, que é o que a função dele
+pede). Por isso **o backfill copia o que cada um JÁ TINHA**, e não o preset do papel:
+preset é certidão de nascimento, nunca política retroativa. Medido: **7 portadores
+migrados**; `useradmin@`, que não tinha `visualizar`, continua sem os dois.
+
+⚠️ **E esta migração PRECISA do marcador, ao contrário da do corte #1.** Lá a chave de
+origem desaparecia, então a presença dela bastava como guarda. Aqui `visualizar`
+**sobrevive** ao corte: uma guarda por presença reexecutaria a cada boot, e uma por
+ausência do destino (`NOT ... ? 'transcricao'`) **ressuscitaria** a transcrição de quem a
+tivesse revogado pela tela — o defeito que desfez a MOD-04 a cada `up -d`, na forma
+inversa. Provado por medição: revogar de um portador, reiniciar a auth-api, e a
+revogação **sobrevive**.
+
+### 4 · O que os instrumentos ganharam
+
+`probe_session_content_scope.sh` mintava tokens **só com escopo** — e com o eixo novo eles
+levariam 403 em todos os ramos, deixando o probe vermelho **pelo eixo vizinho**, que é o
+pior modo de falha de um instrumento: ele mede a proposição errada parecendo medir a
+certa. Os tokens ganharam capacidade, e entrou o **ramo A2** — mesmo escopo do ramo A que
+dá 200, capacidade faltando, 403 nomeando o campo. É o par que prova que os eixos são
+independentes.
+
+`test_content_capability_axis.py` (6 casos) guarda o que o probe não afirma barato: a
+**ordem** (contador de consultas prova que a recusa por capacidade não toca no Redis), a
+isenção do principal de serviço, e a testemunha de que rota sem `campo` declarado
+continua decidindo só escopo — sem ela, alguém "endurece" o default e quebra em silêncio
+uma rota ainda não classificada.
+
+E o `PACOTE_DELEGADO` do `probe_rank_grant_guard.sh` ficou para trás outra vez, como o
+comentário dele previa: o preset do `operator` cresceu, então a fixture que **é** aquele
+preset precisa crescer junto.
+
+**Gates**: `probe_session_content_scope.sh` (7 ramos) · `test_content_capability_axis.py` ·
+`probe_rank_grant_guard.sh` · `probe_role_preset_on_create.sh` · `probe_hiring_pairs_subset.sh` ·
+`probe_route_credential_coverage.sh` · 14 suítes Python (2 758 + 6).
+
+⚠️ **Registrado, não consertado:** `probe_report_row_scope.sh` sai INCONCLUSIVO no ramo B
+porque `admin@` tem `accessible_pools = {}` — install não provisionado, fato de domínio já
+documentado no `CLAUDE.md` (pool é dado do TENANT). Precede esta entrega e não é dela.
+
 ## 2026-09-08 (14) — PRM-02: os dois pools de navegação deployados, e o campo de capacidade que veio junto
 
 O arco da parametrização fecha: `demo_ia` e `demo_llm_ia` rodam o snapshot parametrizado, com
