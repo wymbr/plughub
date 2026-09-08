@@ -36,13 +36,13 @@ São 9 módulos ABAC registrados em `infra/modules.yaml`:
 
 | Módulo | Campos de permissão | Gate |
 |---|---|---|
-| `contacts` | `operacao`, `visualizar`, `exportar` | Monitor + AgentAssist; Análise |
+| `contacts` | `monitorar`, `visualizar`, `exportar` | Monitor (observar); Análise — `operacao` foi cortado na MOD-05 |
 | `workflows` | `operacao`, `visualizar`, `cancelar`, `webhooks`, `journey.read`, `journey.resume` | Editor, Monitor, Calendar; Report; Journey API (Arc 16) |
 | `skill_flows` | `operacao`, `visualizar`, `editar` | Editor, Monitor, Deploy; Report |
 | `evaluation` | `contestar`, `revisar`, `relatorio`, `formularios` | Ações de contestação/revisão; Reports; Forms |
 | `billing` | `visualizar`, `gerenciar` | Acesso ao módulo de Faturamento |
 | `config` | `plataforma`, `recursos`, `canais`, `usuarios`, `mascaramento` | Abas de Configuração |
-| `agent_assist` | `atender`, `supervisionar`, `operacao` | Atender contatos; entrar como supervisor; orquestração (Arc 11) |
+| `agent_assist` | `atender`, `supervisionar` | Atender contatos (Console, fila — MOD-05); entrar como supervisor. ⚠️ `operacao` está aqui por engano: nunca existiu no catálogo |
 | `campaigns` | `visualizar`, `gerenciar` | Visualização e gestão de campanhas |
 | `audit` | `sessions`, `mcp_calls`, `user_access`, `data_requests`, `config_snapshot` | Audit LGPD — acesso DPO/compliance (`sessions` e `mcp_calls` ativos) |
 
@@ -87,7 +87,7 @@ Tabela de usuários com filtros. Modal de criação/edição inclui:
 ```typescript
 const perms = makePermissions(session?.moduleConfig)
 
-perms.can('contacts', 'operacao')                          // tem qualquer acesso?
+perms.can('contacts', 'monitorar')                         // tem qualquer acesso?
 perms.can('evaluation', 'revisar', 'read_write')           // tem read_write?
 perms.can('evaluation', 'revisar', 'read_write', 'pool:sac') // tem acesso ao pool?
 perms.access('evaluation', 'contestar')                    // 'none'|'read_only'|...

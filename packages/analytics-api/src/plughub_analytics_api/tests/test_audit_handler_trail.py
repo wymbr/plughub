@@ -131,7 +131,7 @@ def test_token_malformado_401_E_REGISTRADO(app_e_store, url, endpoint, _campo):
 @pytest.mark.parametrize("url,endpoint,_campo", ROTAS)
 def test_grant_ausente_403_e_a_linha_NOMEIA(app_e_store, url, endpoint, _campo):
     client, store = app_e_store
-    tok = _token({"contacts": {"operacao": {"access": "read_write"}}}, sub="fulano")
+    tok = _token({"contacts": {"monitorar": {"access": "read_write"}}}, sub="fulano")
     r = client.get(url, headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 403, "sei quem é, e não pode — nunca 401"
     (linha,) = _linhas(store)

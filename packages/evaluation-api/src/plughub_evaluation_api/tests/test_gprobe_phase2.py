@@ -185,7 +185,7 @@ def test_anyof_one_grant_allowed():
 
 
 def test_anyof_module_config_without_evaluation_denied():
-    jwt = {"sub": "u", "module_config": {"contacts": {"operacao": {"access": "read_write"}}}}
+    jwt = {"sub": "u", "module_config": {"contacts": {"monitorar": {"access": "read_write"}}}}
     assert _has_any_evaluation_access(jwt) is False
 
 

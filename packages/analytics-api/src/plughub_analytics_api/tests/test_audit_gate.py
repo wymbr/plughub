@@ -157,7 +157,7 @@ def test_token_valido_sem_modulo_audit_recusa(settings):
     o módulo `audit`. Antes do conserto isto retornava 200: `optional_pool_principal`
     só produz 401 para token malformado, o que é autenticação, nunca autorização.
     """
-    tok = _token({"contacts": {"operacao": {"access": "read_write"}}})
+    tok = _token({"contacts": {"monitorar": {"access": "read_write"}}})
     with pytest.raises(AuditDenied):
         _check_audit_access(_Req(f"Bearer {tok}"), "sessions")
 
@@ -206,7 +206,7 @@ def test_token_malformado_tambem_e_401(settings):
 
 def test_grant_ausente_e_403_e_NOMEIA_quem_foi_barrado(settings):
     """⚠️ O caso que a trilha perdia. O usuário é conhecido — a linha tem de dizê-lo."""
-    tok = _token({"contacts": {"operacao": {"access": "read_write"}}}, sub="fulano")
+    tok = _token({"contacts": {"monitorar": {"access": "read_write"}}}, sub="fulano")
     with pytest.raises(AuditDenied) as e:
         _check_audit_access(_Req(f"Bearer {tok}"), "sessions")
     assert e.value.status == 403

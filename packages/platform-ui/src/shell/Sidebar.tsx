@@ -55,7 +55,9 @@ const Sidebar: React.FC = () => {
       label: t('nav.console'),
       href:  '/console',
       icon:  Monitor,
-      abac:  { module: 'contacts', field: 'operacao' },
+      // MOD-05 (corte #1): o Console e ATENDER, nao observar. O campo ja existia
+      // orfao (`agent_assist.atender`); o corte lhe deu o consumidor que faltava.
+      abac:  { module: 'agent_assist', field: 'atender' },
     },
 
     // ── Monitor ────────────────────────────────────────────────────
@@ -65,15 +67,15 @@ const Sidebar: React.FC = () => {
       href: '#',
       icon: Radio,
       children: [
-        { label: t('nav.monitor.sessions'),  href: '/flow/monitor',      icon: FileText,  abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: Users,     abac: { module: 'contacts',   field: 'operacao' } },
-        { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: Waves,     abac: { module: 'contacts',   field: 'operacao' } },
+        { label: t('nav.monitor.sessions'),  href: '/flow/monitor',      icon: FileText,  abac: { module: 'contacts',   field: 'monitorar' } },
+        { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: Users,     abac: { module: 'contacts',   field: 'monitorar' } },
+        { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: Waves,     abac: { module: 'contacts',   field: 'monitorar' } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.operacao (D2).
         { label: t('nav.monitor.schedules'), href: '/monitor/schedules', icon: CalendarClock, abac: { module: 'scheduler', field: 'operacao' } },
         // I5 / ADR § D7b — pendências de wrap-up AGORA. Leitura sob o mesmo grant
         // do resto do Monitor; a AÇÃO de encerrar é mais estreita e é o endpoint
         // que a enforça (supervisor|admin).
-        { label: t('nav.monitor.workItems'), href: '/monitor/work-items', icon: Inbox, abac: { module: 'contacts', field: 'operacao' } },
+        { label: t('nav.monitor.workItems'), href: '/monitor/work-items', icon: Inbox, abac: { module: 'agent_assist', field: 'atender' } },
       ]
     },
 

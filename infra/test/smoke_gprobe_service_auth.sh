@@ -79,7 +79,7 @@ assert "lista anônima → 200 (degrada)" 200 "$(code "$EVAL/v1/evaluation/forms
 assert "lista com Bearer admin → 200" 200 "$(code "$EVAL/v1/evaluation/forms?tenant_id=$TENANT" -H "$BH")"
 
 # JWT com module_config SEM nenhum grant evaluation → 403 (mesmo segredo, outro módulo).
-NOEVAL=$(mint '{"contacts":{"operacao":{"access":"read_write","scope":[]}}}')
+NOEVAL=$(mint '{"contacts":{"monitorar":{"access":"read_write","scope":[]}}}')
 if [ -n "$NOEVAL" ]; then
   assert "lista com Bearer SEM grant evaluation → 403" 403 \
     "$(code "$EVAL/v1/evaluation/forms?tenant_id=$TENANT" -H "Authorization: Bearer $NOEVAL")"

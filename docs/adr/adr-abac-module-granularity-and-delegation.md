@@ -127,13 +127,28 @@ Candidatos medidos, na ordem em que o rótulo denuncia:
 
 | # | campo | corte proposto |
 |---|---|---|
-| 1 | `contacts.operacao` | `contacts.monitorar` (observar) × `contacts.atender` (Console/Agent Assist) |
+| 1 | `contacts.operacao` | `contacts.monitorar` (observar) × ~~`contacts.atender`~~ **`agent_assist.atender`** — ver as-built |
 | 2 | `workflows.operacao` | `workflows.editar` × `workflows.monitorar` (calendário já é `config.calendars`) |
 | 3 | `config.resources` | `config.pools` × `config.skills` (Agent Types e Instâncias seguem quem?) |
 | 4 | `contacts.visualizar` | recorte de Analytics por superfície — depende da AUT-01, que ainda não tem filtro de pool nos agregados |
 
 Cada corte é uma **migração de dados**, não só de catálogo: todo portador do campo largo precisa
 de backfill para os estreitos, senão o corte **rebaixa em silêncio** quem já trabalhava.
+
+> **As-built do corte #1 (MOD-05, 2026-09-08) — o campo estreito JÁ EXISTIA, órfão.**
+> A proposta era criar `contacts.atender`. Ao medir os consumidores antes de cortar apareceu
+> `agent_assist.atender` — rótulo *"Receber e atender contatos"*, declarado no catálogo e **sem
+> uma entrada de menu sequer**, como o irmão `agent_assist.supervisionar`. Criar `contacts.atender`
+> teria produzido dois campos para o mesmo fato, com o pior desfecho possível: o novo com
+> consumidor e o velho continuando órfão, indistinguível de campo em uso. O corte então
+> **repontou** os cinco consumidores — Console e fila de trabalho para `agent_assist.atender`,
+> Monitor (sessões/agentes/pools) para `contacts.monitorar` — e deu ao órfão o consumidor que
+> lhe faltava. Consequência de método: **antes de criar campo estreito, procure se ele já
+> existe sem uso**; o catálogo tinha a resposta e o plano não a tinha consultado.
+>
+> A migração de dados é presence-guarded (`WHERE (module_config->'contacts') ? 'operacao'`) e
+> por isso roda incondicionalmente no boot — o oposto das absence-guarded, que desfizeram a
+> MOD-04 em silêncio a cada `up -d`. Medido ao vivo: 6 portadores migrados, 0 restantes.
 
 ### D7 — Todo corte nasce com censo *(fechada)*
 
@@ -365,7 +380,7 @@ conseguiu, porque a senha tinha de ficar com quem administra pessoas.
 | **G1b** | Presets desenhados + gate do par `⊆`; `developer` -> `devops` | **nova** — pré-requisito de o G1 entregar contratação |
 | **G2** | Rota de apply-template (capacidade do template, nunca do corpo) + proveniência carimbada + UI | a D3 sobrevive; a D5 já está fechada pela E1 |
 | **G3** | Revogar `config.permissions` de quem o censo apontar | **destravada** — a ordem G1->G2->G3 continua, mas por coerência, não por risco de tirar a contratação |
-| **G4–G6** | Cortes da D6 (#1 `contacts.operacao`, #2/#3, #4 Analytics) | inalterados. ⚠️ Se o corte #1 produzir `contacts.atender`, ele e a migração da A4 são **a mesma obra** |
+| **G4–G6** | Cortes da D6 (#1 `contacts.operacao` ✅ MOD-05, #2/#3, #4 Analytics) | ⚠️ O corte #1 **não** produziu `contacts.atender`: reusou o órfão `agent_assist.atender` (as-built na D6). A AUT-38 passa a ter um alvo declarado para os 17 portões de papel |
 
 **A ordem G1->G1b é a única inegociável desta emenda:** guard de rank sobre presets não
 desenhados bloqueia a contratação mais ordinária do sistema.

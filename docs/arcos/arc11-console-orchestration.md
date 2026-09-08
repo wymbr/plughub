@@ -87,7 +87,7 @@ GET /v1/supervisor-state → participants[].ai_state {
 - **Linha do tempo de execução**: cada step com timestamp e duração.
 - **Ações de intervenção disponíveis** (se o agente for `specialist` e o operador for `primary` ou `supervisor`):
   - "Injetar contexto antes do próximo step" — escreve uma tag no ContextStore que o step seguinte lerá.
-  - "Pular para step X" — força `pipeline_state.current_step` via endpoint de admin (decisão: habilitar apenas para `supervisor` com ABAC `agent_assist.operacao`).
+  - "Pular para step X" — força `pipeline_state.current_step` via endpoint de admin (decisão: habilitar apenas para `supervisor` com ABAC `agent_assist.atender`).
   - "Encerrar fluxo com outcome" — dispara `complete` step via `POST /v1/sessions/{id}/force-complete`.
 - **Dados de pipeline_state**: expõe campos selecionados (sem dados mascarados) em formato legível.
 
@@ -100,14 +100,20 @@ GET /v1/supervisor-state → participants[].ai_state {
 
 ## Modelo de Permissões
 
+> **Correção de 2026-09-08 (MOD-05).** Esta tabela citava `agent_assist.operacao`, campo
+> que **nunca existiu** no catálogo (`infra/modules.yaml` declara `atender` e
+> `supervisionar`). O campo real é `agent_assist.atender`, e até a MOD-05 ele era órfão —
+> sem um consumidor sequer; quem gateava o Console era `contacts.operacao`, cortado
+> naquela ficha. Um doc que nomeia campo inexistente é promessa sem mecanismo.
+
 | Ação | Role mínima | ABAC |
 |---|---|---|
-| Ver cartões AI (F1) | operator | `agent_assist.operacao` |
-| Adicionar especialista (F2) | operator | `agent_assist.operacao` |
-| Delegar tarefa (F3) | operator | `agent_assist.operacao` |
-| Ver tab Orquestração (F4) | operator | `agent_assist.operacao` |
-| Injetar contexto (F4) | supervisor | `agent_assist.operacao` |
-| Pular step / force-complete (F4) | supervisor | `agent_assist.operacao` + scope |
+| Ver cartões AI (F1) | operator | `agent_assist.atender` |
+| Adicionar especialista (F2) | operator | `agent_assist.atender` |
+| Delegar tarefa (F3) | operator | `agent_assist.atender` |
+| Ver tab Orquestração (F4) | operator | `agent_assist.atender` |
+| Injetar contexto (F4) | supervisor | `agent_assist.atender` |
+| Pular step / force-complete (F4) | supervisor | `agent_assist.atender` + scope |
 
 ---
 

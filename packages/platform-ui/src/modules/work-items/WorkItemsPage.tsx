@@ -139,7 +139,8 @@ export default function WorkItemsPage() {
   /** Resultado da ÚLTIMA tentativa de encerrar — separado do erro de carga. */
   const [actionError, setActionError] = useState<string | null>(null)
 
-  const canView   = perms.can('contacts', 'operacao')
+  // MOD-05: a fila de trabalho e onde o agente RECLAMA trabalho — atender, nao observar.
+  const canView   = perms.can('agent_assist', 'atender')
   // A LEITURA é governada pelo ABAC da tela; a AÇÃO é mais estreita (o endpoint
   // exige supervisor|admin). Esconder o botão de quem não pode usá-lo evita
   // oferecer uma ação que só falharia no servidor.

@@ -52,10 +52,16 @@ BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:3202").rstrip("/
 TENANT = sys.argv[2] if len(sys.argv) > 2 else "tenant_demo"
 PREFIXO = "rankprobe_"
 
+# O delegado precisa COBRIR o preset de `operator` — e essa lista nao e livre: ela
+# e o preset, campo a campo. Toda vez que o preset do contratado cresce, esta
+# fixture fica para tras e o cenario P1 (dentro do alcance) vira 403. Aconteceu na
+# MOD-05, quando `agent_assist.atender` entrou no preset do operator: o vermelho
+# aqui e o MESMO fato que o backfill conserta na populacao viva.
 PACOTE_DELEGADO = {
     "config": {"users": {"access": "read_write", "scope": []}},
-    "contacts": {"operacao": {"access": "read_write", "scope": []},
+    "contacts": {"monitorar": {"access": "read_write", "scope": []},
                  "visualizar": {"access": "read_only", "scope": []}},
+    "agent_assist": {"atender": {"access": "read_write", "scope": []}},
     "approvals": {"decide": {"access": "read_write", "scope": []},
                   "operacao": {"access": "read_write", "scope": []}},
     "evaluation": {"contestar": {"access": "read_write", "scope": []}},
@@ -157,6 +163,54 @@ def main() -> int:
         cenario("pool fora do proprio escopo",
                 {"accessible_pools": ["sac_ia"]}, 403, "accessible_pools")
 
+        # ── N2b/N2c — o corpo CURTO, medido em 2026-09-08 ────────────────────
+        # `CreateUserRequest.roles` tem default `["operator"]`, e o preset e aplicado
+        # em toda criacao. Enquanto o guard rodava sob `model_fields_set`, OMITIR o
+        # campo pulava a verificacao e o usuario nascia com o preset inteiro — um
+        # delegado que so detinha `config.users` criava operator completo. O par
+        # abaixo precisa dos DOIS: sem o positivo, um guard que negasse toda criacao
+        # deste delegado passaria igual.
+        print("\nN2b..N2c — o corpo CURTO (o default de `roles` tambem concede)")
+        st, mini = call("/auth/users", {
+            "tenant_id": TENANT, "email": f"{PREFIXO}minimo@plughub.local",
+            "password": "password123", "roles": [], "accessible_pools": [],
+        }, tok=tok_master)
+        if st != 201:
+            print(f"  INCONCLUSIVO — nao consegui criar o delegado minimo ({st})")
+            falhas += 1
+        else:
+            criados.append(mini["id"])
+            call(f"/auth/users/{mini['id']}/module-config",
+                 {"config": {"users": {"access": "read_write", "scope": []}}},
+                 tok=tok_master, method="PUT")
+            st, d = call("/auth/login", {"email": f"{PREFIXO}minimo@plughub.local",
+                                         "password": "password123"})
+            tok_min = d.get("access_token", "") if st == 200 else ""
+            if not tok_min:
+                print(f"  INCONCLUSIVO — delegado minimo nao loga ({st})")
+                falhas += 1
+            else:
+                def cenario_min(rot, corpo, esperado, deve_citar=None):
+                    nonlocal falhas
+                    body = {"tenant_id": TENANT,
+                            "email": f"{PREFIXO}curto@plughub.local",
+                            "password": "password123"}
+                    body.update(corpo)
+                    st, d = call("/auth/users", body, tok=tok_min)
+                    det = str(d.get("detail", "")) if isinstance(d, dict) else ""
+                    ok = st == esperado and (deve_citar is None or deve_citar in det)
+                    if not ok:
+                        falhas += 1
+                    print(f"  {'verde' if ok else 'VERMELHO'} — {rot}: {st} "
+                          f"(esperado {esperado}){' · ' + det[:100] if det else ''}")
+                    if st == 201:
+                        call(f"/auth/users/{d['id']}", tok=tok_master, method="DELETE")
+
+                cenario_min("corpo SEM `roles` (o default e ['operator'])",
+                            {}, 403, "nao pode conceder")
+                cenario_min("POSITIVO: `roles: []` — nada a conceder",
+                            {"roles": [], "accessible_pools": []}, 201)
+
         print("\nN3 — a SEGUNDA porta (`PUT module-config`)")
         st, alvo = call("/auth/users", {
             "tenant_id": TENANT, "email": f"{PREFIXO}alvo2@plughub.local",
@@ -180,7 +234,7 @@ def main() -> int:
         st, t_ok = call("/auth/templates", {
             "tenant_id": TENANT, "name": PREFIXO + "Operador", "description": "probe",
             "config": {"role": "operator",
-                       "module_config": {"contacts": {"operacao": {"access": "read_write", "scope": []}}},
+                       "module_config": {"contacts": {"monitorar": {"access": "read_write", "scope": []}}},
                        "accessible_pools": ["sac_ia"]}}, tok=tok_master)
         st2, t_mau = call("/auth/templates", {
             "tenant_id": TENANT, "name": PREFIXO + "AdminTotal", "description": "probe",

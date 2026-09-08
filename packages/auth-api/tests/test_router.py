@@ -203,9 +203,10 @@ def _perms_headers(access: str = "read_write") -> dict[str, str]:
 def _ambos_headers(access: str = "read_write") -> dict[str, str]:
     """Os DOIS grants. Necessário quando o CORPO carrega campo de capacidade.
 
-    `_assert_may_grant` recusa alto sobre `model_fields_set`: enviar `roles` num
-    `POST /users` é CONCEDER, ainda que o valor coincida com o default — então a rota é
-    `config.users` e o corpo pede `config.permissions`.
+    Na CRIAÇÃO o guard de rank é INCONDICIONAL (corrigido 2026-09-08): a certidão de
+    nascimento é emitida sempre, porque `roles` tem default `["operator"]` e o preset é
+    aplicado logo depois. O `model_fields_set` continua valendo no PATCH, onde não
+    enviar o campo significa não mexer nele.
     """
     tok = _access_token(
         module_config={
@@ -365,12 +366,15 @@ class TestCreateUser:
         assert r.json()["email"] == "new@test.local"
 
     def test_create_duplicate_email(self, client):
+        # ⚠️ Era `_admin_headers()` e passava porque o corpo curto PULAVA o guard de
+        # rank — com ele incondicional, o delegado é barrado antes de chegar à
+        # duplicata. O 409 é fato da rota, então o sujeito aqui tem de ser o master.
         c, _ = client
         with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=_SAMPLE_USER)):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "user@test.local",
                              "password": "password123"},
-                       headers=_admin_headers())
+                       headers=_ambos_headers())
         assert r.status_code == 409
 
     def test_create_without_bearer_is_401(self, client):
@@ -535,6 +539,16 @@ class TestGuardaDeCorpo:
         }},
     ]
 
+    # No `_CATALOGO` acima o preset do `operator` cabe no que o chamador detem, e por
+    # isso ele nao serve para o corpo curto — passaria pelo motivo errado. Este declara
+    # um campo do operator que o `_admin_headers` NAO tem.
+    _CATALOGO_OPERATOR = [
+        {"module_id": "contacts", "schema": {
+            "monitorar": {"domain": ["none", "read_write"],
+                          "role_defaults": {"operator": "read_write"}},
+        }},
+    ]
+
     def test_role_que_expande_em_campo_que_nao_detenho_e_403(self, client):
         """`{roles: ["admin"], module_config: {}}` — o furo que um guard literal deixa
         passar: o preset concede pela porta de tras."""
@@ -572,8 +586,11 @@ class TestGuardaDeCorpo:
         assert "vazio" in r.json()["detail"]
 
     def test_pool_fora_do_proprio_escopo_e_403(self, client):
+        # O catalogo precisa estar de pe: com o guard incondicional na criacao, o
+        # `roles` default tambem e expandido, e catalogo vazio e 503 por desenho.
         c, _ = client
-        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)):
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
+             patch("plughub_auth_api.router.db_mod.list_modules", new=AsyncMock(return_value=self._CATALOGO)):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "x@test.local",
                              "password": "password123", "accessible_pools": ["cobranca"]},
@@ -581,15 +598,42 @@ class TestGuardaDeCorpo:
         assert r.status_code == 403
         assert "accessible_pools" in r.json()["detail"]
 
-    def test_sem_campo_de_capacidade_no_corpo_passa(self, client):
-        """O discriminador segue sendo o que foi ENVIADO, nao o valor resultante:
-        omitir `roles` aceita o default, e isso nao e conceder."""
+    # ── O CORPO CURTO (premissa TROCADA por medicao, 2026-09-08) ─────────────
+    #
+    # Este teste dizia o contrario: *"omitir `roles` aceita o default, e isso nao e
+    # conceder"*. E falso, e o produto concordava com ele — `roles` tem default
+    # `["operator"]` e o preset e aplicado em TODA criacao, entao o corpo mais CURTO
+    # era o que passava: um delegado com apenas `config.users` criava um operator
+    # completo, sem deter nenhum dos campos. O `model_fields_set` e discriminador do
+    # PATCH (nao enviar = nao mexer); na criacao nao existe "nao conceder".
+    def test_corpo_sem_roles_e_julgado_pelo_DEFAULT(self, client):
         c, _ = client
-        created = _user_copy(email="y@test.local")
-        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)):
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
+             patch("plughub_auth_api.router.db_mod.list_modules",
+                   new=AsyncMock(return_value=self._CATALOGO_OPERATOR)):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "y@test.local",
                              "password": "password123"},
+                       headers=_admin_headers())
+        assert r.status_code == 403
+        assert "contacts.monitorar" in r.json()["detail"]
+
+    def test_corpo_com_roles_VAZIO_passa(self, client):
+        """CONTROLE POSITIVO do caso acima: `roles: []` nao concede nada, logo cria.
+
+        Sem ele, um guard que recusasse toda criacao vinda deste delegado — inclusive
+        a que nao concede coisa alguma — ficaria verde no negativo.
+        """
+        c, _ = client
+        created = _user_copy(email="y@test.local", roles=[])
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
+             patch("plughub_auth_api.router.db_mod.list_modules",
+                   new=AsyncMock(return_value=self._CATALOGO_OPERATOR)), \
+             patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)), \
+             patch("plughub_auth_api.router.presets_mod.apply_role_preset", new=AsyncMock(return_value={})):
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "y@test.local",
+                             "password": "password123", "roles": [], "accessible_pools": []},
                        headers=_admin_headers())
         assert r.status_code == 201
 

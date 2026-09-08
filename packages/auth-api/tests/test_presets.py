@@ -27,7 +27,7 @@ MODULOS = [
     {
         "module_id": "contacts",
         "permission_schema": {
-            "operacao": {
+            "monitorar": {
                 "domain": ["none", "read_only", "read_write"],
                 "role_defaults": {"operator": "read_only", "supervisor": "read_write"},
             },
@@ -58,18 +58,18 @@ def test_sem_papel_nao_nasce_com_nada():
 
 def test_papel_unico_recebe_o_seu_default():
     out = build_module_config(["operator"], MODULOS)
-    assert out == {"contacts": {"operacao": {"access": "read_only", "scope": []}}}
+    assert out == {"contacts": {"monitorar": {"access": "read_only", "scope": []}}}
 
 
 def test_multiplos_papeis_rendem_o_MAIOR_por_campo():
     """⚠️ O invariante do CLAUDE.md, e o que a mutação sobrevivente derrubava.
 
-    `operator` dá `read_only` em `contacts.operacao`; `supervisor` dá `read_write`.
+    `operator` dá `read_only` em `contacts.monitorar`; `supervisor` dá `read_write`.
     A união por campo escolhe o maior — **nunca a interseção**, que daria `read_only` e
     faria um supervisor-também-operator nascer com menos do que um supervisor puro.
     """
     out = build_module_config(["operator", "supervisor"], MODULOS)
-    assert out["contacts"]["operacao"]["access"] == "read_write"
+    assert out["contacts"]["monitorar"]["access"] == "read_write"
     # E o campo que só o supervisor tem continua vindo:
     assert out["contacts"]["visualizar"]["access"] == "read_only"
 
@@ -84,7 +84,7 @@ def test_a_ordem_dos_papeis_nao_muda_o_resultado():
 def test_papeis_de_modulos_diferentes_se_somam():
     out = build_module_config(["admin", "operator"], MODULOS)
     assert out["billing"]["faturas"]["access"] == "read_write"
-    assert out["contacts"]["operacao"]["access"] == "read_only"
+    assert out["contacts"]["monitorar"]["access"] == "read_only"
 
 
 def test_campo_sem_role_defaults_NAO_entra():

@@ -1352,9 +1352,9 @@ Pipeline for tracking human agent pauses. Config API namespace `agent_activity`,
 
 Single-app shell in `packages/platform-ui/`. Design tokens: `primary=#1B4F8A`, `secondary=#2D9CDB`, `accent=#00B4D8`, `green=#059669`, `warning=#D97706`, `red=#DC2626`. Font: Inter. Never use inline hex — Tailwind tokens only.
 
-Roles: `operator` (Monitor+Contacts), `supervisor` (+Evaluation+Reports), `admin` (+Config+Skills), `developer` (+DevTools), `business` (cross-cutting, no operational items). **ABAC gates** on nav items: `operacao` field gates Monitor/Editor/Calendar/Deploy/AgentAssist; `visualizar` gates Reports/Análise tabs.
+Roles: `operator` (Monitor+Contacts), `supervisor` (+Evaluation+Reports), `admin` (+Config+Skills), `developer` (+DevTools), `business` (cross-cutting, no operational items). **ABAC gates** on nav items: `contacts.monitorar` gates Monitor (observar), `agent_assist.atender` gates Console/fila (atender) — eram um campo só até a MOD-05; `skill_flows.operacao` gates Editor/Deploy; `visualizar` gates Reports/Análise tabs.
 
-Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor 📡 (Sessions/Agents/Pools/Events/Processes), Fluxo 🔄 (Editor/Deploy → skill_flows.operacao), Avaliação ✓ (Forms/Campaigns/Knowledge/Evaluations), Analytics 📊 (Sessions/Agents/Events/Processes/Quality → visualizar/report), Configuração ⚙️ (Dashboards/Resources/Platform/Channels/Calendars/Masking/Billing/Access). Legacy redirects: `/workflows` → `/workflow/monitor`, `/skill-flows` → `/agent-flow/editor`, `/reports` → `/contacts?tab=analise`.
+Nav groups (navKey): Home 🏠, Console 🖥️ (agent_assist.atender), Monitor 📡 (Sessions/Agents/Pools/Events/Processes), Fluxo 🔄 (Editor/Deploy → skill_flows.operacao), Avaliação ✓ (Forms/Campaigns/Knowledge/Evaluations), Analytics 📊 (Sessions/Agents/Events/Processes/Quality → visualizar/report), Configuração ⚙️ (Dashboards/Resources/Platform/Channels/Calendars/Masking/Billing/Access). Legacy redirects: `/workflows` → `/workflow/monitor`, `/skill-flows` → `/agent-flow/editor`, `/reports` → `/contacts?tab=analise`.
 
 **Skill Deploy Lifecycle**: `deploy_status` (draft/published) + `skill_deployments` table. `PUT /v1/skills` always sets `deploy_status=draft` on new skills, NEVER modifies it on updates. `POST /v1/skills/:id/deploy` — only action that sets published.
 
@@ -1455,7 +1455,7 @@ caso"* ou *"remover a alternativa"*, a segunda é a que não depende de memória
 
 ## Arc 11 — Console como Superfície de Orquestração
 
-O Console é uma **superfície de orquestração**: o operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe (AI e humanos simétricos no modelo de sessão). Funcionalidades: cartões de participantes AI em tempo real (step/status do Skill-Flow); "Adicionar Especialista" (invoca pools de `mentionable_pools` via A2A `assist`); "Delegar Tarefa" (seleção de mensagens → drawer instrução+visibilidade → card de resultado no `agent_done`); Tab de Orquestração (steps do Skill-Flow + intervenções de supervisor). **Permissões**: operar = `agent_assist.operacao`; intervir = role `supervisor` + scope ABAC.
+O Console é uma **superfície de orquestração**: o operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe (AI e humanos simétricos no modelo de sessão). Funcionalidades: cartões de participantes AI em tempo real (step/status do Skill-Flow); "Adicionar Especialista" (invoca pools de `mentionable_pools` via A2A `assist`); "Delegar Tarefa" (seleção de mensagens → drawer instrução+visibilidade → card de resultado no `agent_done`); Tab de Orquestração (steps do Skill-Flow + intervenções de supervisor). **Permissões**: operar = `agent_assist.atender` (o campo é `atender`; `agent_assist.operacao` nunca existiu no catálogo, e a MOD-05 é que lhe deu consumidor); intervir = role `supervisor` + scope ABAC.
 
 → See [`docs/arcos/arc11-console-orchestration.md`](docs/arcos/arc11-console-orchestration.md)
 

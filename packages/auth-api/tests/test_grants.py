@@ -23,7 +23,7 @@ MASTER = _claims({"config": {"permissions": {"access": "read_write", "scope": []
 DELEGADO = _claims(
     {
         "config": {"users": {"access": "read_write", "scope": []}},
-        "contacts": {"operacao": {"access": "read_write", "scope": []},
+        "contacts": {"monitorar": {"access": "read_write", "scope": []},
                      "visualizar": {"access": "read_only", "scope": []}},
         "evaluation": {"report": {"access": "read_only", "scope": []}},
     },
@@ -52,7 +52,7 @@ def test_concede_o_que_detem_no_mesmo_nivel():
     """A permissao que faz o resto valer: sem ela, um predicado que nega tudo passa."""
     assert grants.violacoes(
         DELEGADO,
-        module_config={"contacts": {"operacao": {"access": "read_write", "scope": []}}},
+        module_config={"contacts": {"monitorar": {"access": "read_write", "scope": []}}},
     ) == []
 
 
@@ -87,12 +87,12 @@ def test_access_desconhecido_recusa_nas_duas_pontas():
     tambem — o oposto do `.get(x, 0)` da divergencia 4, que LIBERAVA."""
     assert grants.violacoes(
         DELEGADO,
-        module_config={"contacts": {"operacao": {"access": "full_access", "scope": []}}},
+        module_config={"contacts": {"monitorar": {"access": "full_access", "scope": []}}},
     ) == []  # rank 0 no pretendido: nao concede nada, logo nada a barrar
-    esquisito = _claims({"contacts": {"operacao": {"access": "full_access", "scope": []}}})
+    esquisito = _claims({"contacts": {"monitorar": {"access": "full_access", "scope": []}}})
     fora = grants.violacoes(
         esquisito,
-        module_config={"contacts": {"operacao": {"access": "read_only", "scope": []}}},
+        module_config={"contacts": {"monitorar": {"access": "read_only", "scope": []}}},
     )
     assert len(fora) == 1  # quem "detem" valor desconhecido nao alcanca nada
 
@@ -120,7 +120,7 @@ def test_propagacao_de_config_users_e_permitida_e_isso_e_decidido():
 
 PRESETS = {
     "admin": {"config": {"permissions": {"access": "read_write", "scope": []}}},
-    "operator": {"contacts": {"operacao": {"access": "read_write", "scope": []}}},
+    "operator": {"contacts": {"monitorar": {"access": "read_write", "scope": []}}},
 }
 
 
@@ -212,7 +212,7 @@ def test_campo_acima_do_proprio_passa_se_ja_estava():
     assert grants.violacoes(
         DELEGADO,
         module_config={"billing": {"gerenciar": {"access": "read_write", "scope": []}},
-                       "contacts": {"operacao": {"access": "read_write", "scope": []}}},
+                       "contacts": {"monitorar": {"access": "read_write", "scope": []}}},
         atual=atual,
     ) == []
 

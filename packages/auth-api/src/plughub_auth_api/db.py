@@ -312,6 +312,42 @@ WHERE (module_config -> 'config') ? 'platform'
   AND NOT ((module_config -> 'config') ? 'dashboards')
 """
 
+
+# ── MOD-05 / corte #1 da D6: `contacts.operacao` -> monitorar + atender ───────
+#
+# O campo largo carregava dois fatos com detentores diferentes (o rotulo os listava:
+# "Monitor em tempo real, Agent Assist"). O corte manda OBSERVAR para
+# `contacts.monitorar` e ATENDER para `agent_assist.atender`, que ja existia orfao.
+#
+# ⚠️ Todo portador do campo largo precisa de BACKFILL, senao o corte REBAIXA em
+# silencio quem ja trabalhava — e o sintoma seria o Console sumindo do menu. E por
+# isso a migracao vem junto do corte, no mesmo commit.
+#
+# ⚠️ ESTA MIGRACAO **NAO** PRECISA DO MARCADOR, e a diferenca e a licao de
+# 2026-09-08: a guarda dela e a PRESENCA DA CHAVE ANTIGA (`? 'operacao'`), nao a
+# ausencia do destino. Uma vez migrada, nenhuma linha volta a casar — e revogar
+# `monitorar` depois nao a ressuscita, porque `operacao` ja nao existe. Era o guard
+# por AUSENCIA (`NOT ... ? 'permissions'`) que desfazia revogacao a cada boot.
+#
+# `atender` so recebe quando o valor era `read_write`: o dominio dele e
+# `[none, read_write]`, e um `read_only` operacional significa observar, nao atender.
+DDL_MIGRATE_ABAC_OPERACAO_SPLIT = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    jsonb_set(
+        module_config, '{contacts}',
+        ((module_config -> 'contacts') - 'operacao')
+          || jsonb_build_object('monitorar', module_config -> 'contacts' -> 'operacao')
+    ),
+    '{agent_assist}',
+    COALESCE(module_config -> 'agent_assist', '{}'::jsonb)
+      || CASE WHEN module_config -> 'contacts' -> 'operacao' ->> 'access' = 'read_write'
+              THEN jsonb_build_object('atender', module_config -> 'contacts' -> 'operacao')
+              ELSE '{}'::jsonb END
+)
+WHERE (module_config -> 'contacts') ? 'operacao'
+"""
+
 # ── Arc 9 — Agent Groups & Supervisor Scope ───────────────────────────────────
 
 DDL_AGENT_GROUPS = """
@@ -377,6 +413,7 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
                 DDL_MIGRATE_ABAC_PLATFORM_SPLIT,
                 "SELECT EXISTS(SELECT 1 FROM auth.users "
                 "WHERE module_config -> 'config' ? 'dashboards')")
+            await conn.execute(DDL_MIGRATE_ABAC_OPERACAO_SPLIT)
             # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
             # docs/arcos/arc9-agent-groups.md; tables may still exist physically
             # in older DBs, just no longer created/read/written by this service)

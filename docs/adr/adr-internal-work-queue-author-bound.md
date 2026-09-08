@@ -207,7 +207,9 @@ Medir antes de construir; o inverso cria uma tabela para responder uma pergunta 
 #### As-built da fatia 1 *(2026-07-30)*
 
 `GET /api/work_queue/pending` (BFF, `lib/work-queue.ts::listPendingWorkTasks`) + **Monitor ›
-Pendências** (`/monitor/work-items`, ABAC `contacts.operacao`; o encerramento segue
+Pendências** (`/monitor/work-items`, ABAC `agent_assist.atender` desde a MOD-05 — a
+fila é onde o agente RECLAMA trabalho, e o campo antigo era `contacts.operacao`; o
+encerramento segue
 `supervisor|admin` no endpoint). Três coisas divergiram do desenho e ficam registradas:
 
 **1. O escopo `-int` é obrigatório, não cosmético.** O ledger é **genérico**: `_write_work_task`

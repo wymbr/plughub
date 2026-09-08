@@ -46,7 +46,7 @@ for i in $(seq 1 30); do $CURL "$REG/v1/health" >/dev/null 2>&1 && break; [ "$i"
 echo "══ mint tokens (resources rw / ro / sem grant) ══"
 TOK_RW=$(mint   '{"config":{"resources":{"access":"read_write","scope":[]}}}')
 TOK_RO=$(mint   '{"config":{"resources":{"access":"read_only","scope":[]}}}')
-TOK_NONE=$(mint '{"contacts":{"operacao":{"access":"read_write","scope":[]}}}')
+TOK_NONE=$(mint '{"contacts":{"monitorar":{"access":"read_write","scope":[]}}}')
 [ -n "$TOK_RW" ] && [ -n "$TOK_RO" ] && [ -n "$TOK_NONE" ] || { echo "  ✗ mint falhou"; exit 1; }
 echo "  ✓ tokens mintados"
 

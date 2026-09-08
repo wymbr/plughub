@@ -13,7 +13,8 @@ Usuários criados:
         evaluation.curar      = read_write  (G-PROBE perna humana, 2026-07-02 — curadoria/calibração)
         contacts.visualizar   = read_only
         contacts.exportar     = read_write
-        contacts.operacao     = read_write  (Monitor — decisão 3 do dono, 2026-08-27)
+        contacts.monitorar    = read_write  (Monitor — decisão 3 do dono, 2026-08-27)
+        agent_assist.atender  = read_write  (MOD-05: o corte de `contacts.operacao`)
         config.users          = read_write  (Access + Groups — decisão 1)
         config.calendars      = read_write  (decisão 1)
         scheduler.configurar  = read_write  (decisão 1)
@@ -22,7 +23,8 @@ Usuários criados:
   operator@plughub.local    / changeme_operator  (roles: operator)
       module_config (campos do catálogo infra/modules.yaml):
         evaluation.contestar  = read_write
-        contacts.operacao     = read_write
+        contacts.monitorar    = read_write
+        agent_assist.atender  = read_write  (MOD-05)
         contacts.visualizar   = read_only
 
 Uso:
@@ -237,7 +239,7 @@ DEMO_USERS = [
                 "gerir_rubrica":      {"access": "read_write", "scope": []},
             },
             "contacts": {
-                "operacao":   {"access": "read_write", "scope": []},
+                "monitorar": {"access": "read_write", "scope": []},
                 "visualizar": {"access": "read_only",  "scope": []},
                 "exportar":   {"access": "read_write", "scope": []},
             },
@@ -314,13 +316,19 @@ DEMO_USERS = [
                 "report":  {"access": "read_only",  "scope": []},  # relatórios de qualidade
                 "curar":   {"access": "read_write", "scope": []},  # G-PROBE 2026-07-02: curadoria/calibração
             },
+            "agent_assist": {
+                # MOD-05: herdado de `contacts.operacao`, que foi cortado.
+                "atender": {"access": "read_write", "scope": []},
+            },
             "contacts": {
                 "visualizar": {"access": "read_only",  "scope": []},  # vê contatos/relatórios
                 "exportar":   {"access": "read_write", "scope": []},  # exporta dados
                 # Monitor (decisão 3 do dono, 2026-08-27: "precisa para operar").
-                # ⚠️ Este campo também abre o Console — os dois compartilham
-                # `contacts.operacao`; separá-los seria modelagem nova, não grant.
-                "operacao":   {"access": "read_write", "scope": []},
+                # ⚠️ A ressalva que estava aqui — "este campo também abre o Console;
+                # separá-los seria modelagem nova" — CAIU com a MOD-05 (2026-09-08):
+                # a modelagem nova foi feita. Observar é `contacts.monitorar`; atender
+                # é `agent_assist.atender`, campo que já existia órfão.
+                "monitorar":  {"access": "read_write", "scope": []},
             },
             # Decisão 1 do dono (2026-08-27): o supervisor administra Access, Groups,
             # Calendars e Schedules. `config.permissions` fica de FORA de propósito —
@@ -355,8 +363,12 @@ DEMO_USERS = [
             "evaluation": {
                 "contestar": {"access": "read_write", "scope": []},  # contesta avaliações
             },
+            "agent_assist": {
+                # MOD-05: herdado de `contacts.operacao`, que foi cortado.
+                "atender": {"access": "read_write", "scope": []},
+            },
             "contacts": {
-                "operacao":   {"access": "read_write", "scope": []},  # Monitor/Agent Assist
+                "monitorar": {"access": "read_write", "scope": []},  # Monitor/Agent Assist
                 "visualizar": {"access": "read_only",  "scope": []},  # vê contatos
             },
             # Aprovação humana — o operator é o ÚNICO aprovador que exercita a política

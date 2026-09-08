@@ -58,7 +58,7 @@ echo "══ mint tokens (platform / masking / channels / sem grant) ══"
 TOK_PLAT=$(mint '{"config":{"platform":{"access":"read_write","scope":[]}}}')
 TOK_MASK=$(mint '{"config":{"masking":{"access":"read_write","scope":[]}}}')
 TOK_CAN=$(mint '{"config":{"channels":{"access":"read_write","scope":[]}}}')
-TOK_NONE=$(mint '{"contacts":{"operacao":{"access":"read_write","scope":[]}}}')
+TOK_NONE=$(mint '{"contacts":{"monitorar":{"access":"read_write","scope":[]}}}')
 [ -n "$TOK_PLAT" ] && [ -n "$TOK_MASK" ] && [ -n "$TOK_CAN" ] && [ -n "$TOK_NONE" ] || { echo "  ✗ mint falhou"; exit 1; }
 echo "  ✓ tokens mintados"
 

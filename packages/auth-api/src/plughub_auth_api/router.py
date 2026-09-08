@@ -164,9 +164,13 @@ async def _assert_pode_conceder(
     capacidade a quem nao fosse master — e por isso o supervisor criava usuario sem
     poder dar-lhe papel nem pool (a Costura 1 do ADR). Aquela funcao foi REMOVIDA em
     vez de ficar sem chamador: codigo de seguranca morto e pior que nenhum, porque
-    parece proteger. O discriminador que ela trouxe fica: `model_fields_set`, ou seja,
-    o que o chamador ENVIOU — omitir `roles` e aceitar o default, envia-lo e conceder,
-    ainda que o valor coincida com o default.
+    parece proteger. O discriminador que ela trouxe fica no PATCH: `model_fields_set`,
+    o que o chamador ENVIOU — nao enviar o campo e nao mexer nele.
+
+    ⚠️ NA CRIACAO ele NAO serve, e isso foi medido (2026-09-08): `CreateUserRequest.roles`
+    tem default `["operator"]` e o preset e aplicado em toda criacao, entao omitir o
+    campo nao e "nao conceder" — e conceder o preset inteiro. O `POST /users` chama este
+    guard incondicionalmente.
 
     O master (`config.permissions: read_write`) passa direto — `grants.violacoes` o
     reconhece e devolve lista vazia sem olhar mais nada.
@@ -430,15 +434,20 @@ async def create_user(
 ) -> UserResponse:
     pool = _get_pool(request)
     # MOD-02/E2: nascer com papel/escopo e CONCEDER. O master passa direto; o
-    # delegado passa pelo guard de RANK. Omitir o campo aceita o default e nao
-    # exige nada — o discriminador segue sendo `model_fields_set`.
-    if set(body.model_fields_set) & _CAPACITY_FIELDS:
-        await _assert_pode_conceder(
-            pool, claims, "criar usuario",
-            roles=body.roles if "roles" in body.model_fields_set else None,
-            accessible_pools=(body.accessible_pools
-                              if "accessible_pools" in body.model_fields_set else None),
-        )
+    # delegado passa pelo guard de RANK.
+    #
+    # ⚠️ AQUI O GUARD E INCONDICIONAL, e o `model_fields_set` do PATCH nao serve —
+    # medido em 2026-09-08 (MOD-05). Ele valia para a EDICAO, onde nao enviar o campo
+    # significa nao mexer nele; na CRIACAO a certidao de nascimento e emitida SEMPRE,
+    # porque `CreateUserRequest.roles` tem default `["operator"]` e o preset e aplicado
+    # logo abaixo. Com a condicao, um delegado que so detinha `config.users` criava um
+    # operator COMPLETO — os 6 campos do preset, nenhum deles seu — bastando OMITIR o
+    # campo. Fail-open pela porta do default, que e o "valor plausivel" da § Postura:
+    # o corpo mais curto era o que passava.
+    await _assert_pode_conceder(
+        pool, claims, "criar usuario",
+        roles=body.roles, accessible_pools=body.accessible_pools,
+    )
     # Verifica se e-mail já existe
     existing = await db_mod.get_user_by_email(pool, body.tenant_id, body.email)
     if existing:

@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (10) — MOD-05 (G4, corte #1): o campo estreito já existia, órfão
+
+`contacts.operacao` carregava **dois fatos com detentores diferentes**, e o próprio rótulo os
+listava: *"Monitor em tempo real, Agent Assist"*. O supervisor **observa**; o operador
+**atende**. O corte separa os dois.
+
+### 1 · O corte NÃO criou `contacts.atender`, e essa é a decisão que importa
+
+O plano da D6 dizia `contacts.monitorar` × `contacts.atender`. Ao medir os consumidores antes
+de cortar, apareceu **`agent_assist.atender`** — rótulo *"Receber e atender contatos"*,
+declarado no catálogo desde sempre e **sem uma entrada de menu sequer**, como o irmão
+`agent_assist.supervisionar`.
+
+Criar `contacts.atender` teria produzido dois campos para o mesmo fato, com o pior desfecho:
+o novo com consumidor e o velho continuando órfão — **indistinguível de campo em uso**. O
+corte então repontou os consumidores e deu ao órfão o que lhe faltava:
+
+| superfície | antes | depois |
+|---|---|---|
+| Console (`/console`) | `contacts.operacao` | `agent_assist.atender` |
+| Fila de trabalho (`/monitor/work-items`) + `WorkItemsPage` | `contacts.operacao` | `agent_assist.atender` |
+| Monitor: sessões, agentes, pools | `contacts.operacao` | `contacts.monitorar` |
+
+**Regra de método que fica:** antes de criar campo estreito, procure se ele já existe sem uso.
+O catálogo tinha a resposta e o plano não a havia consultado.
+
+Efeito colateral bem-vindo: a **AUT-38** (17 portões de papel no `mcp-server-plughub`) mirava
+exatamente esses dois órfãos. Um deles deixou de ser órfão hoje, e pelo mesmo motivo.
+
+### 2 · A migração é PRESENCE-guarded, e o contraste é deliberado
+
+`DDL_MIGRATE_ABAC_OPERACAO_SPLIT` roda incondicionalmente em todo `ensure_schema`, porque a
+guarda é a **presença da origem** (`WHERE (module_config->'contacts') ? 'operacao'`): depois de
+migrar, não há mais o que casar. É o oposto das absence-guarded, que — medido na MOD-04 —
+**desfaziam uma revogação a cada `up -d`**, em silêncio e sem bumpar `updated_at`.
+
+`read_write` vira `monitorar` **e** `atender`; qualquer coisa abaixo vira só `monitorar` — quem
+só observava não ganha o direito de atender por causa de um rename. Medido ao vivo: **6
+portadores migrados, 0 restantes**.
+
+Preset (`infra/modules.yaml`) e seed (`seed_auth.py`) mudaram juntos, e
+`_seed_vs_preset.py` confere que as duas declarações batem.
+
+### 3 · Um buraco na MOD-02, achado pelo gate que eu ia consertar
+
+O `smoke_config_usuarios_auth.sh` estava vermelho. A primeira causa era ele: mintava
+**`config.usuarios`**, campo em português retirado pela regra de linguagem — as quatro
+asserções POSITIVAS viviam vermelhas, e as negativas passavam **pelo motivo errado** (o token
+"com grant" e o "sem grant" não tinham nenhum dos dois). É o controle positivo ao lado do
+negativo fazendo o seu trabalho.
+
+Ao medir a segunda causa, apareceu um **fail-open de verdade** no guard de rank:
+
+```
+POST /auth/users  {..., "roles": ["operator"]}   → 403   (correto)
+POST /auth/users  {...}                          → 201   ⚠️  nasceu operator COMPLETO
+```
+
+`CreateUserRequest.roles` tem default `["operator"]` e o preset é aplicado em **toda** criação,
+mas o guard rodava sob `model_fields_set` — então **o corpo mais CURTO era o que passava**: um
+delegado com apenas `config.users` criava um operator com os 6 campos do preset, nenhum deles
+seu. O discriminador estava certo para o PATCH (não enviar = não mexer) e foi carregado para a
+criação, onde **não existe "não conceder"**: a certidão de nascimento é emitida sempre.
+
+Hoje o `POST /users` chama o guard incondicionalmente. Provas: `test_corpo_sem_roles_e_julgado_pelo_DEFAULT`
+com o positivo `test_corpo_com_roles_VAZIO_passa` ao lado (sem ele, um guard que recusasse toda
+criação vinda do delegado ficaria verde), mais os ramos **N2b/N2c** do `probe_rank_grant_guard.sh`,
+que montam um delegado mínimo — só `config.users` — porque o delegado do probe **cobre** o preset
+do operator e por isso não veria o buraco.
+
+⚠️ Dois testes afirmavam a premissa errada e foram **trocados, não apagados**:
+`test_sem_campo_de_capacidade_no_corpo_passa` dizia em prosa *"omitir `roles` aceita o default, e
+isso não é conceder"* — produto e teste concordando um com o outro, nenhum dos dois com o efeito.
+E `test_create_duplicate_email` passava **pelo mesmo buraco** (corpo curto), então trocou de
+sujeito para o master.
+
+### 4 · O que mais mudou de nome, e por quê
+
+Os cinco `smoke_*` usam um grant qualquer como controle negativo ("tem grant, só não este") —
+apontavam para um campo que deixou de existir, e um controle que nomeia campo inexistente recusa
+pelo motivo errado. Repontados para `contacts.monitorar`. O `PACOTE_DELEGADO` do
+`probe_rank_grant_guard.sh` ganhou `agent_assist.atender`: ele **é** o preset do operator, campo
+a campo, e toda vez que o preset do contratado cresce essa fixture fica para trás — o vermelho
+ali é o mesmo fato que o backfill conserta na população viva.
+
+Docs corrigidos onde afirmavam campo: `CLAUDE.md` (nav do Console e gates de menu),
+`arc11-console-orchestration.md` (citava **sete vezes** `agent_assist.operacao`, campo que nunca
+existiu), `controle-acesso.md`, `adr-internal-work-queue-author-bound.md`, e o as-built na D6 do
+ADR de granularidade.
+
+**Gates**: `probe_rank_grant_guard.sh` (9 cenários) · `probe_role_preset_on_create.sh` ·
+`probe_hiring_pairs_subset.sh` · `probe_config_permissions_census.sh` (2A/0B/0C) ·
+`probe_python_suites.sh` (14 suítes, 2 758 passando, zero falhando) ·
+`probe_gates_manifest_coverage.sh` · os cinco `smoke_*` tocados.
+
+
 ## 2026-09-08 (9) — MOD-09 (G2): criação por template com proveniência; e a migração que desfazia a MOD-04 a cada boot
 
 ### 1 · O achado, que é maior que a entrega

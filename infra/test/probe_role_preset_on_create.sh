@@ -22,7 +22,7 @@
 #       cego" esperando o primeiro usuario daquele papel;
 #   S3  o preset nao respeitar o `domain` do campo (o 422 apareceria so na criacao);
 #   S4  papeis acumulados nao renderem o MAIOR acesso (admin+operator tem de ter
-#       `contacts.operacao`, que so o operator concede... e vice-versa).
+#       `contacts.monitorar`, que so o operator concede... e vice-versa).
 #
 # TESTEMUNHA NEGATIVA:
 #   S5  papel INEXISTENTE nao pode inventar grants — nasce vazio, e isso e o certo.
@@ -167,11 +167,11 @@ if [ -z "$ID" ]; then
   inc "nao consegui criar o usuario multi-papel"
 else
   C="$(cfg_de "$ID")"
-  OPER="$(printf '%s' "$C" | jq -r '.contacts.operacao.access // "none"')"
+  OPER="$(printf '%s' "$C" | jq -r '.contacts.monitorar.access // "none"')"
   if [ "$OPER" = "read_write" ]; then
-    ok "operator+business mantem contacts.operacao=read_write (so o operator concede)"
+    ok "operator+business mantem contacts.monitorar=read_write (so o operator concede)"
   else
-    bad "operator+business perdeu contacts.operacao (veio '$OPER') — parece interseccao"
+    bad "operator+business perdeu contacts.monitorar (veio '$OPER') — parece interseccao"
     info "Acumular papel expressa acumular funcao; a uniao pelo MAIOR e a leitura certa."
   fi
   apaga "$ID"

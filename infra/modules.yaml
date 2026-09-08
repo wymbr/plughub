@@ -121,8 +121,16 @@ modules:
     icon: "📞"
     nav_path: /contacts
     permission_schema:
-      operacao:
-        label: Acesso operacional (Monitor em tempo real, Agent Assist)
+      # MOD-05 / corte #1 da D6 (2026-09-08). `contacts.operacao` carregava DOIS fatos
+      # com detentores diferentes — o proprio rotulo os listava: "Monitor em tempo
+      # real, Agent Assist". O supervisor OBSERVA; o operador ATENDE.
+      #
+      # ⚠️ O corte NAO criou `contacts.atender`: o campo do atendimento JA EXISTIA,
+      # orfao desde sempre — `agent_assist.atender` ("Receber e atender contatos"),
+      # sem uma entrada de menu sequer. Criar um segundo seria a duplicacao que este
+      # repositorio caca; o corte apenas lhe deu o consumidor que faltava.
+      monitorar:
+        label: Observar a operacao (Monitor de sessoes, agentes, pools)
         domain: [none, read_only, read_write]
         scopable: true
         scope_type: pool
@@ -232,13 +240,18 @@ modules:
     nav_path: /agent-assist
     permission_schema:
       atender:
-        label: Receber e atender contatos
+        label: Receber e atender contatos (Console, Agent Assist, fila de trabalho)
         domain: [none, read_write]
         scopable: true
         scope_type: pool
         default: none
         role_defaults:
+          # MOD-05: herdados de `contacts.operacao`, que foi cortado. Sem isto o corte
+          # REBAIXA em silencio quem ja atendia, e o sintoma seria o Console sumindo do
+          # menu de todo operador.
           admin: read_write
+          operator: read_write
+          supervisor: read_write
       supervisionar:
         label: Monitorar e intervir em sessões ativas
         domain: [none, read_only, read_write]
