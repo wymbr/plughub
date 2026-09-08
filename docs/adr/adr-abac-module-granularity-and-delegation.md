@@ -311,13 +311,18 @@ Ninguém alcança o tenant inteiro por regra; o `admin@` alcança por **seed que
 é a decisão da AUT-15 — a lápide do `unrestricted` diz, textualmente: *"Para dar alcance total,
 envie a lista completa de pools do tenant"*. O que não existe é o cumprimento:
 
-- `admin@` tem `accessible_pools = {}` — e, como a inversão da AUT-03 **já está viva**, isso
-  significa **NENHUM pool**: medido no mesmo dia, ele recebe `200` com **0 linhas** de
-  `/reports/sessions` enquanto o ClickHouse tem 1 196 sessões em 23 pools (ficha AUT-43);
+- ⚠️ **O seed NÃO enumera, e está certo assim** *(corrigido pelo dono no mesmo dia)*: pool é
+  criado **dinamicamente** e é dado do TENANT, não da plataforma — um seed de plataforma não pode
+  inventá-lo, e os 22 pools que ele já carregou eram resíduo de teste. Os pools do admin são
+  atribuídos **pós-criação do usuário**, operacionalmente. Logo `admin@` com `accessible_pools =
+  {}` (medido: `200` com **0 linhas** em `/reports/sessions`, contra 1 196 sessões no ClickHouse)
+  é **install não provisionado, não defeito de plataforma**;
 - a lista de pools no Access vem de `GET /v1/pools` (agent-registry), filtrada **só por
   tenant** — e o recorte tem de ser no servidor: filtrar no cliente não é cerca;
-- pool novo nasce invisível. Mitigação derivável: quem **cria** o pool o recebe no escopo; e o
-  aviso `orphansAfter`, já presente na tela, passa de cortesia a peça load-bearing;
+- pool novo nasce invisível até alguém o atribuir. ⚠️ **A mitigação que este ADR propunha —
+  apoiar-se no aviso `orphansAfter` da tela — não se sustenta hoje**: ele só não acusa nada
+  porque `probe@`, uma fixture de gate, carrega os 41 pools; excluindo fixtures, **36 de 41 não
+  têm vigia** (ficha AUT-43);
 - **efeito colateral bom:** a AUT-29 dizia não existir jeito de saber *"este chamador alcança o
   tenant inteiro"*. Sob enumeração sempre, vira computável (`escopo ⊇ universo de pools`) — a
   ficha sai de adiada-por-impossibilidade para aberta-por-trabalho.

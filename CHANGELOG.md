@@ -51,6 +51,37 @@ hoje nega tudo. Degrada para o valor mais plausível que existe — um relatóri
 **AUT-43**, a fechar junto da E5/AUT-29, porque enumerar estaticamente no seed envelhece a cada pool
 novo.
 
+> ⚠️ **CORREÇÃO, poucas horas depois e no mesmo dia — a seção 2 acima estava com o diagnóstico
+> errado, duas vezes, e as duas correções vieram do dono.**
+>
+> **(1) O seed está CERTO.** Escrevi que `seed_auth.py:225` *"não foi migrado"*. Não é isso: pool
+> é criado **dinamicamente** e é dado do TENANT, não da plataforma — um seed de plataforma não
+> pode inventá-lo (os 22 pools que ele já carregou eram resíduo de teste, como o próprio
+> comentário diz). **(2) E não falta "momento de provisionamento"**, que foi a minha segunda
+> tentativa de diagnóstico: os pools do admin são atribuídos **pós-criação do usuário**,
+> operacionalmente. Portanto `admin@` com `{}` é **install não provisionado, não defeito** — a
+> medição (200 com 0 linhas contra 1 196 sessões) continua verdadeira e deixa de ser sintoma de
+> bug.
+>
+> **O que sobrevive são dois INSTRUMENTOS quebrados, e só apareceram porque fui verificar a minha
+> própria hipótese:**
+>
+> **(a) O aviso de escopo vazio da AUT-03 nunca é emitido.** O `done.md` daquela ficha afirma que
+> *"o caminho vazio não ficou mudo: virou `logger.info` que nomeia a origem"*. Medido dentro do
+> `analytics-api`: `logging.getLogger("plughub_authz")` tem nível efetivo **WARNING**, zero
+> handlers, root sem handler, **`isEnabledFor(INFO) = False`**. A linha existe no fonte e é
+> descartada na emissão. E é **assimétrico**: o ramo do regime ANTIGO é `logger.warning` e sairia;
+> o do regime NOVO é `logger.info` e não sai — o aviso emudeceu exatamente quando o ramo que ele
+> descreve virou o vivo. Promessa sem mecanismo, na forma mais barata que existe.
+>
+> **(b) O guarda de pool órfão está anestesiado por uma fixture.** O `orphansAfter` da tela de
+> Access só não acusa nada porque **`probe@`, fixture de gate, carrega os 41 pools** (+2 que já
+> não existem). Excluindo fixtures: **36 de 41 pools sem vigia**, e os únicos escopos reais são
+> `operator@` (3) e `supervisor@` (2). A E5 da emenda se apoiava nesse aviso como peça
+> load-bearing — e foi corrigida junto.
+>
+> A ficha **AUT-43** foi reescrita para esses dois fatos, e o ADR teve a E5 emendada.
+
 ### 3 · Duas correções minhas, no mesmo dia
 
 A emenda escrita horas antes (entrada 1) afirmava que a E5 *"depende da inversão da AUT-03"*. **A
