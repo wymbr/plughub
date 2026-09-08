@@ -511,21 +511,79 @@ class TestDeleteUser:
 
 
 class TestGuardaDeCorpo:
-    """`_assert_may_grant` — o CORPO carrega campo de capacidade."""
+    """O guard de RANK no CORPO (MOD-02 / E2, 2026-09-08).
 
-    def test_roles_no_corpo_sem_config_permissions_e_403(self, client):
+    ⚠️ Esta classe MUDOU DE PREMISSA. Ate aqui ela provava a recusa em BLOCO: campo de
+    capacidade no corpo sem `config.permissions` -> 403, ponto. A emenda substituiu
+    aquilo pelo guard de rank — quem administra pessoas PODE conceder, mas so `<=` o
+    que detem —, porque a recusa em bloco era a Costura 1 do ADR: o supervisor criava
+    usuario e nao podia dar-lhe papel nem pool.
+
+    O negativo abaixo continua vermelho pelo motivo CERTO (o papel pedido expande em
+    campos que o chamador nao tem), e agora tem dois positivos ao lado: sem eles, um
+    predicado que negasse tudo passaria neste arquivo.
+    """
+
+    # Catalogo minimo: `admin` recebe a maquina de conceder; `operator`, um campo que
+    # o `_admin_headers` (so `config.users`) NAO tem.
+    _CATALOGO = [
+        {"module_id": "config", "schema": {
+            "permissions": {"domain": ["none", "read_write"],
+                            "role_defaults": {"admin": "read_write"}},
+            "users": {"domain": ["none", "read_write"],
+                      "role_defaults": {"admin": "read_write", "operator": "read_write"}},
+        }},
+    ]
+
+    def test_role_que_expande_em_campo_que_nao_detenho_e_403(self, client):
+        """`{roles: ["admin"], module_config: {}}` — o furo que um guard literal deixa
+        passar: o preset concede pela porta de tras."""
         c, _ = client
-        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)):
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.list_modules", new=AsyncMock(return_value=self._CATALOGO)):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "x@test.local",
                              "password": "password123", "roles": ["admin"]},
                        headers=_admin_headers())
         assert r.status_code == 403
+        # A recusa NOMEIA o campo — "forbidden" seco manda adivinhar qual dos 44 barrou.
         assert "config.permissions" in r.json()["detail"]
 
+    def test_role_dentro_do_proprio_teto_passa(self, client):
+        """CONTROLE POSITIVO. Sem ele, um guard que negasse tudo ficaria verde."""
+        c, _ = client
+        created = _user_copy(email="ok@test.local")
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.list_modules", new=AsyncMock(return_value=self._CATALOGO)),              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)),              patch("plughub_auth_api.router.presets_mod.apply_role_preset", new=AsyncMock(return_value={})):
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "ok@test.local",
+                             "password": "password123", "roles": ["operator"]},
+                       headers=_admin_headers())
+        assert r.status_code == 201
+
+    def test_catalogo_vazio_recusa_em_vez_de_aprovar_por_ausencia(self, client):
+        """Catalogo vazio NAO e "o papel nao concede nada" — e "nao consegui avaliar".
+        Sem esta guarda o preset expande para `{}` e o guard falha ABERTO."""
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.list_modules", new=AsyncMock(return_value=[])):
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "x@test.local",
+                             "password": "password123", "roles": ["admin"]},
+                       headers=_admin_headers())
+        assert r.status_code == 503
+        assert "vazio" in r.json()["detail"]
+
+    def test_pool_fora_do_proprio_escopo_e_403(self, client):
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)):
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "x@test.local",
+                             "password": "password123", "accessible_pools": ["cobranca"]},
+                       headers=_admin_headers())
+        assert r.status_code == 403
+        assert "accessible_pools" in r.json()["detail"]
+
     def test_sem_campo_de_capacidade_no_corpo_passa(self, client):
-        """O discriminador é o que foi ENVIADO, não o valor resultante: omitir `roles`
-        aceita o default, e isso não é conceder."""
+        """O discriminador segue sendo o que foi ENVIADO, nao o valor resultante:
+        omitir `roles` aceita o default, e isso nao e conceder."""
         c, _ = client
         created = _user_copy(email="y@test.local")
         with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)):

@@ -21,6 +21,7 @@ from jose import JWTError
 from plughub_authz import abac_can
 
 from . import db as db_mod
+from . import grants
 from . import presets as presets_mod
 from . import permissions as perms_mod
 from .config import Settings, get_settings
@@ -145,22 +146,95 @@ def _is_privileged(row: dict[str, Any]) -> bool:
     return acc != "none"
 
 
-def _assert_may_grant(claims: dict[str, Any], sent: set[str], acao: str) -> None:
-    """Recusa alto quando o CORPO carrega campo de capacidade sem `config.permissions`.
+async def _assert_pode_conceder(
+    pool: Any,
+    claims: dict[str, Any],
+    acao: str,
+    *,
+    module_config: dict[str, Any] | None = None,
+    roles: list[str] | None = None,
+    accessible_pools: list[str] | None = None,
+    atual: dict[str, Any] | None = None,
+) -> None:
+    """Guard de RANK (MOD-02 / E2): ninguem concede o que nao detem.
 
-    O discriminador e `model_fields_set` (pydantic v2) — o que o chamador ENVIOU, nao
-    o valor resultante. Omitir `roles` num POST e aceitar o default; envia-lo e
-    conceder, mesmo que por acaso o valor coincida com o default.
+    Substitui o `_assert_may_grant`, que RECUSAVA em bloco qualquer campo de
+    capacidade a quem nao fosse master — e por isso o supervisor criava usuario sem
+    poder dar-lhe papel nem pool (a Costura 1 do ADR). Aquela funcao foi REMOVIDA em
+    vez de ficar sem chamador: codigo de seguranca morto e pior que nenhum, porque
+    parece proteger. O discriminador que ela trouxe fica: `model_fields_set`, ou seja,
+    o que o chamador ENVIOU — omitir `roles` e aceitar o default, envia-lo e conceder,
+    ainda que o valor coincida com o default.
+
+    O master (`config.permissions: read_write`) passa direto — `grants.violacoes` o
+    reconhece e devolve lista vazia sem olhar mais nada.
+
+    ⚠️ `roles` e validado nas DUAS rotas, inclusive no PATCH, e isso e deliberado
+    embora trocar o papel NAO reescreva grants (decisao de 2026-08-27). Enquanto as
+    17 rotas do `mcp-server-plughub` gatearem por `requireJwtRole` — papel literal,
+    julgado por `roles[0]` —, o papel CONFERE acesso por si; validar so na criacao
+    deixaria o PATCH como porta lateral. Quando a AUT-38 migrar aqueles portoes, esta
+    validacao pode ser reavaliada; ate la ela e conservadora de proposito.
     """
-    tocados = sorted(sent & _CAPACITY_FIELDS)
-    if not tocados:
+    # ⚠️ O MASTER CURTO-CIRCUITA ANTES DE TOCAR NO CATALOGO, e isso e correcao, nao
+    # otimizacao: a expansao de `roles` le o `module_registry`, e sem esta saida o
+    # detentor de `config.permissions` passaria a depender do catalogo para uma
+    # decisao que nao o consulta — um banco lento ou vazio derrubaria a criacao de
+    # usuario com 503 para quem tem direito a tudo. Medido por teste vermelho.
+    if grants.e_master(claims):
         return
-    if not abac_can(claims, "config", "permissions", "read_write"):
+
+    presets_por_papel: dict[str, dict[str, dict[str, Any]]] = {}
+    if roles:
+        try:
+            mods = [presets_mod.normalize_module_row(r) for r in
+                    await db_mod.list_modules(pool, tenant_id=None, active_only=True)]
+            # ⚠️ CATALOGO VAZIO NAO E "o papel nao concede nada" — e "nao consegui
+            # avaliar", e as duas se parecem. Sem esta guarda o `roles: ["admin"]`
+            # expande para `{}`, nenhuma violacao e encontrada e o guard FALHA ABERTO
+            # concedendo os 44 campos. Achado por um teste vermelho em 2026-09-08, onde
+            # o `pool` mockado devolvia lista vazia: o valor plausivel escondendo o
+            # buraco, no proprio predicado de seguranca.
+            if not mods:
+                logger.error(
+                    "guard de concessao: catalogo de modulos VAZIO — recusando a "
+                    "concessao de papel(is) %s em vez de aprova-la por ausencia",
+                    ",".join(roles),
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=("catalogo de modulos vazio; concessao de papel recusada — "
+                            "nao da para avaliar o que o papel concede"),
+                )
+            for papel in roles:
+                presets_por_papel[papel] = presets_mod.build_module_config([papel], mods)
+        except HTTPException:
+            # A recusa por catalogo VAZIO ja e a decisao final — deixa-la cair no
+            # `except` generico abaixo trocaria a mensagem que nomeia a causa por um
+            # "indisponivel" que manda depurar a conexao com o banco.
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # Falhar ABERTO aqui seria conceder por indisponibilidade do catalogo.
+            logger.error("guard de concessao: catalogo indisponivel (%s) — recusando", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="catalogo de modulos indisponivel; concessao recusada por seguranca",
+            ) from exc
+
+    fora = grants.violacoes(
+        claims,
+        module_config=module_config,
+        roles=roles,
+        accessible_pools=accessible_pools,
+        presets=presets_por_papel,
+        atual=atual,
+    )
+    if fora:
         raise HTTPException(
             status_code=403,
             detail=(
-                f"forbidden: {acao} com campo de capacidade requer config.permissions "
-                f"(read_write) — no corpo: {', '.join(tocados)}"
+                f"forbidden: {acao} — voce nao pode conceder o que nao detem. "
+                + " · ".join(fora)
             ),
         )
 
@@ -349,10 +423,17 @@ async def create_user(
     request: Request,
     claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
 ) -> UserResponse:
-    # Nascer com papel/escopo/irrestrito e CONCEDER na criacao. Omitir o campo aceita
-    # o default (`operator`, [], False) e nao exige nada a mais.
-    _assert_may_grant(claims, set(body.model_fields_set), "criar usuario")
     pool = _get_pool(request)
+    # MOD-02/E2: nascer com papel/escopo e CONCEDER. O master passa direto; o
+    # delegado passa pelo guard de RANK. Omitir o campo aceita o default e nao
+    # exige nada — o discriminador segue sendo `model_fields_set`.
+    if set(body.model_fields_set) & _CAPACITY_FIELDS:
+        await _assert_pode_conceder(
+            pool, claims, "criar usuario",
+            roles=body.roles if "roles" in body.model_fields_set else None,
+            accessible_pools=(body.accessible_pools
+                              if "accessible_pools" in body.model_fields_set else None),
+        )
     # Verifica se e-mail já existe
     existing = await db_mod.get_user_by_email(pool, body.tenant_id, body.email)
     if existing:
@@ -423,7 +504,13 @@ async def update_user(
     existing = await db_mod.get_user_by_id(pool, user_id)
     if not existing:
         raise HTTPException(status_code=404, detail="User not found")
-    _assert_may_grant(claims, set(body.model_fields_set), "editar usuario")
+    if set(body.model_fields_set) & _CAPACITY_FIELDS:
+        await _assert_pode_conceder(
+            pool, claims, "editar usuario",
+            roles=body.roles if "roles" in body.model_fields_set else None,
+            accessible_pools=(body.accessible_pools
+                              if "accessible_pools" in body.model_fields_set else None),
+        )
     _assert_may_touch(claims, existing, "editar")
 
     ph = hash_password(body.password) if body.password else None
@@ -672,8 +759,11 @@ async def set_module_active(module_id: str, request: Request, active: bool = Tru
 #   }
 
 
+# MOD-02/E2: passou de `_PERMS_READ` para `_USUARIOS_READ`. O delegado precisa LER
+# antes de escrever — o PUT abaixo SUBSTITUI o config inteiro, e um formulario
+# hidratado com o que o chamador nao pode ver salvaria por cima com o vazio.
 @router.get("/users/{user_id}/module-config", response_model=dict,
-            dependencies=[Depends(_PERMS_READ)])
+            dependencies=[Depends(_USUARIOS_READ)])
 async def get_user_module_config(user_id: str, request: Request) -> dict:
     """Retorna o module_config completo do usuário."""
     pool = _get_pool(request)
@@ -686,8 +776,11 @@ async def get_user_module_config(user_id: str, request: Request) -> dict:
 
 
 @router.put("/users/{user_id}/module-config", response_model=dict,
-            dependencies=[Depends(_PERMS_WRITE)])
-async def set_user_module_config(user_id: str, body: dict, request: Request) -> dict:
+            dependencies=[Depends(_USUARIOS_WRITE)])
+async def set_user_module_config(
+    user_id: str, body: dict, request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
+) -> dict:
     """
     Substitui todo o module_config do usuário.
     Valida cada módulo presente contra o schema registrado em auth.module_registry.
@@ -697,6 +790,17 @@ async def set_user_module_config(user_id: str, body: dict, request: Request) -> 
     existing = await db_mod.get_user_by_id(pool, user_id)
     if not existing:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # MOD-02/E2 — a SEGUNDA porta. Ate aqui esta rota exigia `config.permissions` e
+    # NAO comparava nada com o config do chamador: quem a alcancasse concedia
+    # qualquer campo a qualquer um. Guard so na rota de apply-template seria "duas
+    # portas para o mesmo dado, e so uma trancada".
+    _assert_may_touch(claims, existing, "escrever o module_config")
+    await _assert_pode_conceder(
+        pool, claims, "escrever o module_config",
+        module_config=body,
+        atual=await db_mod.get_user_module_config(pool, user_id),
+    )
 
     # Valida cada módulo contra o schema registrado
     all_errors: list[str] = []
@@ -728,18 +832,30 @@ async def set_user_module_config(user_id: str, body: dict, request: Request) -> 
 
 
 @router.patch("/users/{user_id}/module-config/{module_id}", response_model=dict,
-              dependencies=[Depends(_PERMS_WRITE)])
+              dependencies=[Depends(_USUARIOS_WRITE)])
 async def patch_user_module_config(
     user_id: str,
     module_id: str,
     body: dict,
     request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
 ) -> dict:
     """
     Atualiza a config de um módulo específico do usuário sem sobrescrever os outros módulos.
     Valida contra o schema do módulo antes de persistir.
     """
     pool = _get_pool(request)
+    # MOD-02/E2: mesma porta, mesmo predicado. O corpo aqui e o config de UM modulo,
+    # entao ele viaja embrulhado com a chave do modulo — o guard raciocina sobre
+    # `modulo.campo`, e passar o corpo cru faria os campos virarem modulos.
+    alvo = await db_mod.get_user_by_id(pool, user_id)
+    if alvo:
+        _assert_may_touch(claims, alvo, "escrever o module_config")
+        await _assert_pode_conceder(
+            pool, claims, f"escrever o module_config de `{module_id}`",
+            module_config={module_id: body},
+            atual=await db_mod.get_user_module_config(pool, user_id),
+        )
 
     # Verifica existência do usuário
     existing = await db_mod.get_user_by_id(pool, user_id)

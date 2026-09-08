@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (5) — MOD-02 (G1): o guard de RANK, e a Costura 1 fechada
+
+`packages/auth-api/src/plughub_auth_api/grants.py` — predicado ÚNICO para os dois
+caminhos de escrita de capacidade. Dois regimes, sobre os dois campos que já existiam:
+
+| regime | campo | concede |
+|---|---|---|
+| master | `config.permissions: read_write` | qualquer campo, qualquer nível |
+| delegado | `config.users: read_write` | `≤` o que detém, campo a campo, escopo `⊆` |
+
+### 1 · A Costura 1 fechou, e o que ela custava era uma recusa em bloco
+
+`_assert_may_grant` recusava **qualquer** campo de capacidade a quem não fosse master.
+Consequência: o supervisor criava usuário e não podia dar-lhe papel nem pool — o
+contratado nascia enxergando nada e quem o contratou não podia corrigir. A função foi
+**removida**, não deixada sem chamador: código de segurança morto é pior que nenhum,
+porque parece proteger. O discriminador que ela trouxe fica — `model_fields_set`, o que
+o chamador ENVIOU.
+
+Medido na borda, com delegado montado para isso: `roles=[operator]` + pool próprio →
+**201**. Antes desta entrega, **403**.
+
+### 2 · Três decisões que a implementação carrega
+
+- **O guard roda sobre o EFEITO**: `preset(role) ∪ module_config`. Sem a união,
+  `{role: "admin", module_config: {}}` atravessa intacto e concede os 44 campos pela
+  porta do preset.
+- **`scope: []` é GLOBAL; `accessible_pools: []` é NENHUM.** Semânticas opostas, no
+  mesmo formulário. A tabela-verdade está no cabeçalho do módulo, e as duas têm teste.
+- **`atual` faz julgar o AUMENTO, não o reenvio.** O `PUT` substitui o config inteiro,
+  então o formulário reenvia o que ninguém tocou; sem comparar com o atual, o delegado
+  ficaria impedido de editar qualquer pessoa que tenha UM grant acima do dele — mesmo
+  para mexer num campo que ele alcança — e o sintoma seria *"não consigo salvar"*.
+
+### 3 · Dois defeitos achados por teste VERMELHO, ambos falha-ABERTA
+
+O primeiro é o mais instrutivo: a suíte tinha um teste que assertava a recusa em bloco.
+Ele ficou vermelho — e a leitura fácil era *"premissa mudou, atualiza o teste"*. Ao
+olhar **por que** ele passou pelo guard, apareceu que o `pool` mockado devolvia catálogo
+vazio, o papel expandia para `{}`, nenhuma violação era encontrada e **o guard
+aprovava**. Catálogo vazio não é *"o papel não concede nada"*, é *"não consegui
+avaliar"*, e as duas se parecem. Hoje é **503 nomeando a causa**.
+
+O segundo: o master **pagava o custo do catálogo** — a expansão de `roles` roda antes do
+curto-circuito. Um banco lento ou vazio derrubaria com 503 quem tem direito a tudo. O
+`e_master` passou para o topo da função.
+
+### 4 · A prova, em três camadas — e por que a terceira era necessária
+
+**21 testes de unidade** do predicado (cada recusa com uma permissão ao lado: sem o
+positivo, um predicado que negasse tudo passaria) · **90** na suíte do serviço ·
+`probe_rank_grant_guard.sh` na **BORDA**.
+
+⚠️ A terceira camada existe por medição, não por zelo: **com o predicado já verde nos 21,
+a primeira medição ao vivo mostrou um usuário `admin` sendo criado.** Predicado correto e
+rota guardada são dois fatos, e só o segundo protege alguém.
+
+⚠️ **E aquele veredicto ao vivo estava ele próprio contaminado**, o que é a segunda
+lição do dia: a conta usada (`supervisor@`) **detém `config.permissions`** — a MOD-01 a
+tinha listado na classe B horas antes —, logo era MASTER e o 201 estava **correto**. Eu
+quase registrei um defeito inexistente por não conferir de que regime era o sujeito da
+medição. O probe passou a montar o próprio delegado, em vez de tomar emprestada uma
+conta cujo estado outro instrumento já havia mexido.
+
+### 5 · O que isto cria para a MOD-04
+
+A MOD-08 acrescentou três campos ao preset do supervisor, e **preset é de nascimento**:
+quem já existia não os recebeu. Revogar `config.permissions` de um supervisor sem
+backfill o rebaixa de master a delegado **incapaz de contratar operador**, e o sintoma
+seria *"a tela parou de deixar"*. A ficha da MOD-04 passou a declarar isso, e o
+instrumento que confere é a classe C do censo.
+
 ## 2026-09-08 (4) — MOD-08 (G1b): os presets deixaram de ser engenharia reversa, e a aresta de contratação virou dado
 
 Fase **G1b**, criada pela emenda de hoje e declarada pré-requisito da G1. A razão é

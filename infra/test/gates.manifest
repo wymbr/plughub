@@ -79,6 +79,12 @@ probe_config_permissions_census.sh
 # pares sao grafo declarado. Estatico (le o arquivo, nao a stack). Tres ramos
 # provados falseaveis em 2026-09-08.
 probe_hiring_pairs_subset.sh
+# MOD-02 / E2: o guard de RANK medido na BORDA. Existe TENDO 21 testes de unidade
+# do predicado porque predicado correto e rota guardada sao dois fatos — durante a
+# propria entrega, com o predicado ja verde, a medicao ao vivo ainda mostrou um
+# `admin` sendo criado. Monta um delegado de verdade e roda 1 POSITIVO (a Costura
+# 1: era 403 antes) + 3 negativos, nas DUAS portas. Limpa o que cria.
+probe_rank_grant_guard.sh
 # calendar-api e dialog-api aceitavam escrita ANONIMA ate 2026-08-27 (`POST
 # /v1/calendars` sem credencial -> 201; criar E publicar DialogForm -> 200), enquanto
 # os campos `config.calendars`/`config.dialog_forms` decidiam so o MENU. Fechadas com
