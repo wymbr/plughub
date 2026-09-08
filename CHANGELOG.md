@@ -1,5 +1,43 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (7) — backfill das três fixtures supervisor, e o que ele NÃO alcançou
+
+Decisão do dono: completar também `aut01probe@`, `probe_rowscope@` e `useradmin@`. Aplicado
+com o mesmo script, por `--papel supervisor` (o `supervisor@`, já feito, respondeu *"nada a
+fazer"* — a idempotência valendo na prática). Censo dos três campos: **4A/4C → 7A/0B/1C**, e
+o 1 restante é o `navprobe@`, que não é caso de backfill.
+
+### ⚠️ O controle que eu havia proposto NÃO pôde ser executado
+
+Eu tinha avisado que mexer em fixture muda o que os probes dela medem, e propus rodar antes e
+depois. **Os dois probes que consomem essas contas — `probe_report_row_scope.sh` (usa
+`probe_rowscope@`) e `probe_config_permissions_split.sh` (usa `useradmin@`) — saem
+INCONCLUSIVO por `jq` ausente nesta máquina**, e não há `jq` em container nenhum. O risco
+segue **não verificado**, e a reversão é exata: remover `approvals.decide`,
+`approvals.operacao` e `evaluation.contestar` dessas três contas.
+
+### O backfill fechou a lacuna da MOD-08 — não toda lacuna
+
+Medida a distância de cada supervisor até o preset **completo** (13 campos):
+
+```
+aut01probe@      falta 0
+probe_rowscope@  falta 0
+supervisor@      falta 0
+useradmin@       falta 9   config.calendars, contacts.{exportar,operacao,visualizar},
+                           evaluation.{curar,report,revisar}, scheduler.{configurar,operacao}
+```
+
+E a simulação da MOD-04 (sem `config.permissions`) mostra a consequência: três **PODEM**
+contratar operator; **`useradmin@` continua BLOQUEADO**, em `contacts.operacao` e
+`contacts.visualizar`.
+
+Isso não é backfill incompleto — é **causa diferente**. O `useradmin@` nunca teve o preset de
+supervisor: ele é a fixture MÍNIMA do `probe_config_permissions_split`, cujo assunto é
+exatamente *"administra pessoas e não pode conceder"*. Completá-lo mudaria o sujeito daquele
+probe. Fica como está, e a decisão está registrada em vez de resolvida por conta própria.
+
+
 ## 2026-09-08 (6) — o backfill do supervisor, e por que a classe C não é uma fila de trabalho
 
 A MOD-08 acrescentou `approvals.decide`, `approvals.operacao` e `evaluation.contestar` ao
