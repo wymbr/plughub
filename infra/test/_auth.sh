@@ -49,15 +49,42 @@ _PH_EMAIL=${PLUGHUB_TEST_EMAIL:-${ADMIN_EMAIL:-admin@plughub.local}}
 _PH_PASS=${PLUGHUB_TEST_PASS:-${ADMIN_PASS:-changeme_admin}}
 _PH_TOK=""
 
+# Extrai `.access_token` do corpo do login. `jq` quando ha; senao `python3`.
+#
+# ⚠️ O QUE ESTE FALLBACK RESOLVE, E O QUE ELE NAO RESOLVE (2026-09-08). Ate aqui a
+# ausencia de `jq` matava o script aqui, na CREDENCIAL — ou seja, antes de qualquer
+# assercao, e com uma mensagem indistinguivel de "o servico caiu". Isso tirava do ar
+# ate os probes que so precisavam de `jq` para pegar o token.
+#
+# ⚠️ **Ele NAO faz a familia inteira rodar, e a medicao esta aqui para ninguem supor
+# que faz:** 122 dos 301 scripts de `infra/test/` usam `jq` no CORPO das assercoes, e
+# 33 declaram o guard proprio. Para esses, `jq` continua sendo dependencia real — o
+# que muda e que a falha passa a ser a deles, na assercao, e nao um INCONCLUSIVO
+# generico no login. Gate que nunca roda nao e cobertura; este helper so garante que
+# a razao de nao rodar seja a verdadeira.
+#
+# `python3` e escolha, nao acaso: ele ja e dependencia dura de `infra/test/` (os
+# auxiliares `_ledger_stall_audit.py`, `_seed_vs_preset.py`, `_nav_fields.py` e
+# `_route_principal_census.py` sao Python), entao o fallback nao acrescenta
+# requisito nenhum ao ambiente. Sem os dois, continua INCONCLUSIVO.
+_ph_extrai_token() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.access_token // empty'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("access_token") or "")
+except Exception: print("")'
+  else
+    echo "INCONCLUSIVO: nem jq nem python3 — sem eles nao da para extrair o access_token" >&2
+    return 2
+  fi
+}
+
 plughub_token() {
   if [ -n "$_PH_TOK" ]; then printf '%s' "$_PH_TOK"; return 0; fi
-  command -v jq >/dev/null 2>&1 || {
-    echo "INCONCLUSIVO: jq ausente — sem ele nao da para extrair o access_token" >&2
-    exit 2
-  }
   _PH_TOK=$(curl -s -X POST "$AUTH/login" -H 'content-type: application/json' \
     -d "{\"email\":\"$_PH_EMAIL\",\"password\":\"$_PH_PASS\",\"tenant_id\":\"$TENANT\"}" \
-    | jq -r '.access_token // empty')
+    | _ph_extrai_token)
   if [ -z "$_PH_TOK" ]; then
     echo "INCONCLUSIVO: login falhou para $_PH_EMAIL em $AUTH (auth-api no ar?)." >&2
     echo "  Sem token este script nao mede nada — e '0 linhas' seria lido como" >&2

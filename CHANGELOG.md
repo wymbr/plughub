@@ -1,5 +1,79 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (3) — MOD-01: o censo de `config.permissions` existe, e ele mede o eixo que faltava
+
+Fase **G0** do ADR de granularidade, e a razão dela não é zelo: o defeito que a costura 1 expõe
+não é um grant errado, é **não haver mecanismo que confira a população contra a declaração**.
+Medido nesta mesma sessão, e é a prova: em oito dias a população de `config.permissions` mudou
+nos **dois sentidos** sem nada acusar — um portador sumiu (o `pending.md` ainda o citava) e três
+apareceram.
+
+Entregue: `infra/test/probe_config_permissions_census.sh` + `_config_permissions_census.py`.
+
+### 1 · Três classes, e o censo NÃO julga nenhuma
+
+| classe | significa |
+|---|---|
+| **A** | detém E o papel declara — coerente com a certidão de nascimento |
+| **B** | detém E nenhum papel declara — concedido depois pela tela, ou deriva |
+| **C** | não detém E o papel declara — revogado depois, ou preset que não aplicou |
+
+Primeira execução: **2A / 4B / 0C** em 8 usuários.
+
+⚠️ **Não julgar é decisão, não omissão.** Deter um campo que o preset não declara é legítimo — a
+tela concede depois do nascimento, e o papel é *certidão*, não política viva. Reprovar a classe B
+hoje seria inventar um alvo que a **MOD-04** ainda não decidiu, e um gate que reprova uso normal
+ensina a ser ignorado. Quando a MOD-04 fixar o alvo, a classe B vira asserção no helper — o lugar
+está nomeado no cabeçalho.
+
+### 2 · O que ele julga é se o censo CONSEGUE MEDIR
+
+Um censo que não pode reprovar seria exatamente o que este repositório cataloga. Os dois ramos
+vermelhos são sobre o instrumento, não sobre a política:
+
+- **R1** — o campo censado não existe em declaração nenhuma. Contar zero por estar medindo a
+  coisa errada é pior que não contar.
+- **R2** — `infra/modules.yaml` e o catálogo **deployado** (`GET /auth/modules`) discordam sobre
+  quem declara o campo. É o *"existe ≠ está aplicado"* de quem edita o YAML sem reiniciar o
+  auth-api.
+
+**Os dois provados falseáveis na entrega**: `CAMPO=config.nao_existe` derruba o R1; um YAML
+mutante (trocando `admin` por `supervisor` no `role_defaults`) derruba o R2, com a mensagem
+imprimindo as duas listas lado a lado.
+
+Sem credencial ou sem serviço: **INCONCLUSIVO, nunca 0** — *"nenhum portador"* é resposta
+legítima do censo; *"não consegui perguntar"* não é.
+
+### 3 · O que ele deliberadamente NÃO faz
+
+- **Não duplica `_seed_vs_preset.py`.** Aquele compara **seed × catálogo**, arquivo × arquivo.
+  Este compara **banco × catálogo deployado** — eixo vizinho. Repetir a comparação seria segunda
+  casa afirmando o mesmo fato, com a mais nova vencendo em silêncio.
+- **Não tem heurística de fixture nem e-mail fixo.** O ambiente é de demo, com poucas variações;
+  afinar o instrumento à população de hoje o quebraria no primeiro usuário novo. Ele serve
+  qualquer par via `CAMPO=modulo.campo`.
+- **Não usa `jq`** — a comparação é por-usuário e mora em Python.
+
+### 4 · De carona: a credencial dos probes deixou de depender de `jq`
+
+`_auth.sh` extraía o `access_token` só com `jq`, e sem ele **morria na credencial** — antes de
+qualquer asserção, com mensagem indistinguível de *"o serviço caiu"*. Ganhou fallback para
+`python3`, que já é dependência dura de `infra/test/` (quatro auxiliares são Python), então nada
+foi acrescentado ao ambiente.
+
+⚠️ **E isso NÃO faz a família inteira rodar** — medido e escrito no cabeçalho para ninguém supor
+que faz: **122 dos 301** scripts usam `jq` no corpo das asserções e **33** declaram guard
+próprio. Para esses, `jq` segue sendo dependência real; o que muda é que a falha passa a ser a
+deles, na asserção, em vez de um INCONCLUSIVO genérico no login.
+
+### 5 · Um instrumento vizinho lido errado, e vale o registro
+
+O `probe_gates_manifest_coverage.sh` saiu **VERMELHO com todos os contadores em zero** na
+primeira execução — e não era o manifesto: era `grep -P` recusando o locale do meu shell. Com
+`LC_ALL=C.UTF-8`: **VERDE, 119 AUTO / 6 ASSISTIDO / 74 ISENTO / 102 não triados, 301 no total**,
+já incluindo o probe novo. Um gate que erra o veredicto por ambiente e imprime zeros é a mesma
+família do *"valor plausível"* — o vermelho parecia resposta.
+
 ## 2026-09-08 (2) — AUT-41: o módulo `audit` passou a existir no catálogo; e a cauda da AUT-03 mordeu no PRODUTOR
 
 ### 1 · O item do DPO era invisível E inconcedível

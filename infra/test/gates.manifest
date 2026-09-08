@@ -64,6 +64,14 @@ probe_customer_history_authz.sh
 # a senha de quem detem o campo). Testemunhas de presenca nos dois lados: o mesmo
 # principal cria e edita pessoa, e o admin continua concedendo.
 probe_config_permissions_split.sh
+# MOD-01 / fase G0 do ADR de granularidade: censo de quem DETEM um campo de
+# capacidade contra quem o DECLARA (banco x catalogo deployado). Nao julga a
+# populacao — deter um campo que o preset nao declara e legitimo, e inventar um alvo
+# antes da MOD-04 seria decidir por ela. O que ele julga e se o censo CONSEGUE MEDIR:
+# R1 (campo inexistente em declaracao nenhuma, entao o censo conta zero medindo a
+# coisa errada) e R2 (arquivo x deployado discordando, o "existe != esta aplicado" de
+# quem edita o YAML sem reiniciar). Os dois provados falseaveis em 2026-09-08.
+probe_config_permissions_census.sh
 # calendar-api e dialog-api aceitavam escrita ANONIMA ate 2026-08-27 (`POST
 # /v1/calendars` sem credencial -> 201; criar E publicar DialogForm -> 200), enquanto
 # os campos `config.calendars`/`config.dialog_forms` decidiam so o MENU. Fechadas com
