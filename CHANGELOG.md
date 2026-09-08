@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (13) — PRM-03: o irmão LLM entra no mesmo formato, os dois são publicados, e o probe da PRM-01 media a proposição errada
+
+Continuação direta da `PRM-01`. Três coisas, e a terceira é a que vale registrar.
+
+### 1 · O `skill_navegacao_llm_v1` ganhou o mesmo descritor
+
+Quatro literais → `$.config.form_id`, mesmo `config_params`, mesmo rótulo. A decisão do dono
+foi manter **dois skills** — e ela está certa por medição, não por gosto: os dois caminham a
+MESMA árvore com a MESMA tool (`dialog_tree_level`), e diferem só na FRENTE. Medido:
+**13 passos com o mesmo id, 9 idênticos palavra por palavra**; dos 4 que diferem, dois são só
+o texto do `handoff_reason` (que distingue a origem na trilha, e é bom que distinga), um
+diferia por causa da parametrização, e só o `avaliar` diverge de verdade — o LLM precisa do
+ramo `escapar` quando não encontra ou aterrissa numa pasta, caso que não existe quando é o
+cliente quem escolhe. São duas ESTRATÉGIAS DE CONTROLE sobre um conteúdo só.
+
+⚠️ **O interpretador genérico existe e não é o skill: é a tool.** `dialog_tree_level` é quem
+lê a árvore, desce um nível e devolve `path`/`options`/`is_leaf`/`category_path`. O skill é o
+laço de controle em volta dela.
+
+### 2 · Os dois publicados no registry
+
+`PUT /v1/skills/:id` com `x-skill-publish: true`, pela credencial de caller interno
+(`X-Service-Token`, a mesma do RegistrySyncer) — a primeira tentativa saiu **401**, porque o
+portão de escrita está ativo. Medido ANTES de publicar que os dois pools têm slot `current`:
+publicar **não muda o que roda** (o bridge executa o snapshot do slot), só faz o registry
+declarar o parâmetro, que é o que a tela de Deploy lê. Era exatamente isto que faltava para o
+combo aparecer — o `config_params` estava no YAML em disco e o registry seguia com `NULL`
+desde 2026-09-07, porque skill é *seed-if-absent* e editar o arquivo é no-op.
+
+### 3 · ⚠️ O probe da PRM-01 media a proposição errada, e a prova veio em minutos
+
+Publicados os dois, o `probe_slot_required_params.sh` ficou **VERMELHO acusando `demo_ia` e
+`demo_llm_ia`** — e os dois estavam **funcionando**. A mensagem dele afirmava uma
+consequência ("falha no PRIMEIRO contato") que era **falsa** para aqueles pools.
+
+Causa: ele comparava `skills.config_params` (a declaração) com `PoolSkillSlot.config_json` (a
+resposta) e parava aí. Mas **o que roda é o `yaml_snapshot` do slot**, e aqueles dois slots
+ainda carregavam o snapshot anterior à parametrização, com o `form_id` LITERAL — que não
+precisa de config nenhuma. Medido na hora: `snapshot_usa_config = f` nos dois.
+
+*"Publicar um skill"* e *"mudar o que roda"* são fatos diferentes neste repositório — é o
+mesmo princípio que o seed-if-absent e o slot já impõem —, e o probe os confundiu.
+
+**A condição agora tem duas metades:** o skill declara o parâmetro como obrigatório **E** o
+snapshot em execução referencia `$.config.<chave>`. O estado intermediário (declaração nova,
+deploy velho) não sumiu do relatório: virou linha de **INFORMAÇÃO**, nomeando pool, skill e
+chave — é trabalho pendente, não defeito, e quem tentar promover sem preencher é recusado
+pelo portão do `set-next`/`promote`, que continua julgando pela declaração (ali o snapshot em
+jogo é o NOVO, que usa a referência).
+
+É a § *Postura de Engenharia* por inteiro: *um instrumento pode ser falseável, ramificado e
+honesto — e ainda medir a proposição ERRADA.* Falseabilidade refeita, porque a consulta mudou:
+7 casos sobre fixture sintético, e o que carrega peso é o **M3** — snapshot com literal e
+config vazia ⇒ **verde + INFO**, que é exatamente o falso vermelho de hoje virado teste.
+
+Estado: `probe_slot_required_params` verde, com 2 declarações pendentes nomeadas; o
+`demo_ia` e o `demo_llm_ia` seguem rodando o snapshot antigo, que funciona. Falta escolher a
+árvore no Deploy e promover (`PRM-02`).
+
 ## 2026-09-08 (12) — PRM-01: config declarada e não preenchida deixa de ser deployável
 
 Um `config_params` no skill é uma **exigência**; o `PoolSkillSlot.config_json` é a resposta;

@@ -22,6 +22,32 @@
 # contato e escala 100% ao humano. Não é queda: é um pool que parou de fazer o
 # trabalho dele. Nenhum alarme existente cobre isso.
 #
+# ── ⚠️ O QUE DECIDE É O SNAPSHOT, NÃO A DECLARAÇÃO (corrigido em 2026-09-08) ─
+#
+# A v1 deste probe comparava `skills.config_params` com `PoolSkillSlot.config_json`
+# e parava aí. Medido no mesmo dia, minutos depois de entrar em vigor: ele acusou
+# `demo_ia` e `demo_llm_ia` de estarem quebrados, e os dois estavam FUNCIONANDO —
+# o `yaml_snapshot` do slot `current` deles ainda era o anterior à parametrização,
+# com o `form_id` LITERAL. A declaração tinha mudado; o deploy, não.
+#
+# Publicar um skill NÃO muda o que roda (o bridge executa o snapshot do slot), e
+# por isso "o skill exige X" e "o deploy vivo precisa de X" são fatos diferentes.
+# Um probe que os confunde publica um defeito que não existe — e a mensagem dele
+# afirmava uma consequência ("falha no PRIMEIRO contato") que era falsa para
+# aqueles dois pools.
+#
+# Hoje a condição tem DUAS metades: o skill declara o parâmetro como obrigatório
+# **E** o snapshot que está rodando de fato referencia `$.config.<chave>`. A
+# segunda metade é o que amarra o veredicto ao que executa.
+#
+# O estado intermediário (declaração nova, deploy velho) não some do relatório —
+# ele vira uma linha de INFORMAÇÃO, porque é trabalho pendente e não defeito:
+# quem promover daqui em diante é recusado pelo portão do `set-next`/`promote`
+# (`lib/required-config.ts`) até preencher.
+#
+# É a § Postura de Engenharia por inteiro: *um instrumento pode ser falseável,
+# ramificado e honesto — e ainda medir a proposição ERRADA.*
+#
 # ── Testemunha obrigatória ──────────────────────────────────────────────────
 #
 # Zero violações só é VERDE se alguém declarar alguma coisa. Se nenhum skill
@@ -94,6 +120,10 @@ VIOL="$(psqlq "
         WHEN 'array' THEN k.config_params::jsonb ELSE '[]'::jsonb END) AS p(value)
    WHERE s.slot = 'current'
      AND (p.value->>'required')::boolean IS TRUE
+     -- A metade que amarra ao que RODA: o snapshot referencia \$.config.<chave>.
+     -- Sem ela, um slot com snapshot anterior à parametrização (form_id literal,
+     -- funcionando) era acusado de quebrado. Ver o cabeçalho.
+     AND coalesce(s.yaml_snapshot::text, '') LIKE '%\$.config.' || (p.value->>'key') || '%'
      AND (
           NOT (coalesce(s.config_json::jsonb, '{}'::jsonb) ? (p.value->>'key'))
        OR jsonb_typeof(s.config_json::jsonb -> (p.value->>'key')) = 'null'
@@ -115,6 +145,32 @@ esac
 
 N_VIOL="$(printf '%s\n' "$VIOL" | grep -c . || true)"
 
+# Declaração mais nova que o deploy: NÃO é defeito, é trabalho pendente. Contado e
+# nomeado, nunca escondido — e nunca vermelho, porque o pool está rodando o
+# snapshot antigo, que funciona. Quem tentar promover é recusado pelo portão.
+PEND="$(psqlq "
+  SELECT s.pool_id || ' · ' || s.skill_id || ' · ' || (p.value->>'key')
+    FROM pool_skill_slots s
+    JOIN skills k
+      ON k.skill_id = s.skill_id AND k.tenant_id = s.tenant_id
+   CROSS JOIN LATERAL jsonb_array_elements(
+      CASE jsonb_typeof(k.config_params::jsonb)
+        WHEN 'array' THEN k.config_params::jsonb ELSE '[]'::jsonb END) AS p(value)
+   WHERE s.slot = 'current'
+     AND (p.value->>'required')::boolean IS TRUE
+     AND coalesce(s.yaml_snapshot::text, '') NOT LIKE '%\$.config.' || (p.value->>'key') || '%'
+   ORDER BY 1;")"
+case "$PEND" in *ERROR:*|*FATAL:*) PEND="" ;; esac
+N_PEND="$(printf '%s\n' "$PEND" | grep -c . || true)"
+if [ "${N_PEND:-0}" -gt 0 ]; then
+  echo
+  echo "── informação (não é defeito) ──────────────────────────────────────────────"
+  echo "   $N_PEND declaração(ões) mais NOVA(s) que o deploy — o slot roda um snapshot"
+  echo "   anterior à parametrização, que funciona. Vira defeito só se alguém promover"
+  echo "   sem preencher, e aí o portão do promote recusa antes."
+  printf '%s\n' "$PEND" | sed 's/^/      /'
+fi
+
 echo
 echo "── veredicto ───────────────────────────────────────────────────────────────"
 if [ "${N_VIOL:-0}" -eq 0 ]; then
@@ -132,6 +188,5 @@ echo
 echo "   O pool sobe, parece deployado e falha no PRIMEIRO contato: a referência"
 echo "   \`\$.config.<chave>\` não resolve e o step cai no \`on_failure\`. Preencher"
 echo "   em Flow › Deploy e promover — ou, se o parâmetro não devia ser obrigatório,"
-echo "   corrigir o"
-echo "   \`config_params\` do skill, que é onde a exigência foi declarada."
+echo "   corrigir o \`config_params\` do skill, que é onde a exigência foi declarada."
 exit 1

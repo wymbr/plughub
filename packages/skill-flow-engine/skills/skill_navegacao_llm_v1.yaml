@@ -43,6 +43,31 @@ classification:
   type: orchestrator
   domain: customer_service
 
+# -- Parametro de DEPLOY (PoolSkillSlot.config_json -> `$.config.*`) ----------
+#
+# Mesmo descritor do irmao deterministico (`skill_navegacao_v1`), e de proposito:
+# os dois caminham a MESMA arvore com a MESMA tool (`dialog_tree_level`) e so
+# diferem na FRENTE -- o deterministico mostra o nivel como menu, este pede texto
+# livre e classifica com `reason` dentro do vocabulario declarado na forma. Sendo
+# o conteudo o mesmo fato, o ponteiro para ele tem de ser configurado do mesmo
+# jeito nos dois; modelos diferentes para o mesmo parametro e como comeca a
+# divergencia que ninguem lembra de conciliar.
+#
+# A UI de *Flow > Deploy* renderiza este descritor (combo, por `source:
+# dialogforms`), grava em `PoolSkillSlot.config_json` e o bridge injeta como
+# `$.config.*` no launch. Escopo: o DEPLOY DO POOL.
+#
+# /!\ Exige deploy por slot com `config_json.form_id` preenchido. Sem ele o
+# `dialog_tree_level` falha e o `on_failure` manda para `sem_navegacao`. Desde a
+# PRM-01 o promote RECUSA esse estado em vez de deixar passar.
+config_params:
+  - key: form_id
+    type: string
+    label: "Árvore de navegação"
+    description: "DialogForm com a árvore de opções que este pool navega"
+    required: true
+    source: dialogforms
+
 entry: vocabulario
 
 steps:
@@ -56,7 +81,7 @@ steps:
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:    "dialog_navegacao_atendimento_v1"
+      form_id:    "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
       output_key: "destino"
       path:       []
       tenant_id:  "$.tenant_id"
@@ -120,7 +145,7 @@ steps:
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:    "dialog_navegacao_atendimento_v1"
+      form_id:    "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
       output_key: "destino"
       path:       []
       chosen_id:  "$.pipeline_state.classificacao.destino"
@@ -179,7 +204,7 @@ steps:
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:    "dialog_navegacao_atendimento_v1"
+      form_id:    "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
       output_key: "destino"
       path:       []
       chosen_id:  "nao_se_aplica"
@@ -307,7 +332,7 @@ steps:
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:     "dialog_navegacao_atendimento_v1"
+      form_id:     "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
       question_id: "$.pipeline_state.nivel.on_return"
       path:        []
       tenant_id:   "$.tenant_id"
