@@ -47,6 +47,36 @@ classification:
   type: orchestrator
   domain: customer_service
 
+# ── Parâmetro de DEPLOY (PoolSkillSlot.config_json → `$.config.*`) ────────────
+#
+# A árvore é CONTEÚDO do tenant, e este skill é um caminhador genérico — a própria
+# descrição acima já diz *"conteúdo no DialogForm; controle aqui"*. Enquanto o
+# `form_id` ficou cravado nos steps, o ponteiro para o conteúdo morava no controle,
+# e dois pools do mesmo skill não podiam ter árvores diferentes.
+#
+# É o modelo do `skill_survey_multi_v1`: a UI de *Flow › Deploy* renderiza este
+# descritor (combo de DialogForms, por `source: dialogforms`), grava a escolha em
+# `PoolSkillSlot.config_json`, e o bridge injeta o config_json como `$.config.*` no
+# launch. O escopo é o DEPLOY DO POOL, que é onde o fato mora: mesmo skill, N pools,
+# uma árvore cada.
+#
+# ⚠️ NÃO é o modelo do wrap-up (`@ctx.hook.*`): aquele vale para skill despachado
+# COMO HOOK, onde o fato é do pool CHAMADOR. Aqui não há chamador — o pool é
+# endereçado pelo roteamento.
+#
+# ⚠️ Este skill passa a EXIGIR deploy por slot com `config_json.form_id` preenchido
+# (`set-next` + `promote`). Sem ele, o `dialog_tree_level` falha e o `on_failure`
+# manda tudo para `sem_navegacao` — que escala ao humano nomeando a causa, mas o
+# pool não navega. O parâmetro é `required: true` no descritor; a conferência de
+# `required` no promote NÃO foi verificada (ver o aviso na DLG-33).
+config_params:
+  - key: form_id
+    type: string
+    label: "Árvore de navegação"
+    description: "DialogForm com a árvore de opções que este pool navega"
+    required: true
+    source: dialogforms
+
 entry: nivel_raiz
 
 steps:
@@ -58,7 +88,7 @@ steps:
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:    "dialog_navegacao_atendimento_v1"
+      form_id:    "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
       output_key: "destino"
       path:       []
       tenant_id:  "$.tenant_id"
@@ -95,7 +125,7 @@ steps:
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:    "dialog_navegacao_atendimento_v1"
+      form_id:    "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
       # RET-02 — a question ATIVA, nunca a raiz fixa: depois de uma continuação o
       # cursor vive noutra question, e um `output_key` literal aqui levaria a
       # navegação de volta à árvore de entrada sem nada ficar vermelho.
@@ -334,7 +364,7 @@ steps:
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:     "dialog_navegacao_atendimento_v1"
+      form_id:     "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
       question_id: "$.pipeline_state.nivel.on_return"
       path:        []
       tenant_id:   "$.tenant_id"

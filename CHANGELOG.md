@@ -1,5 +1,93 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (12) — PRM-01: config declarada e não preenchida deixa de ser deployável
+
+Um `config_params` no skill é uma **exigência**; o `PoolSkillSlot.config_json` é a resposta;
+o bridge injeta o config_json como `$.config.*` no launch. Até aqui nada conferia que a
+resposta existia — a tela marcava `required` e o servidor aceitava mesmo assim, que é a
+mesma promessa-sem-mecanismo que a `DLG-33` registrou algumas horas antes, num combo de
+hook cujo skill não lê o parâmetro.
+
+### 1 · O modo de falha não é uma queda
+
+Faltando a chave, `$.config.form_id` não resolve, o step falha e o `on_failure` leva tudo
+para a saída de emergência. No `skill_navegacao_v1` isso é **um pool que sobe, aparece
+saudável em toda métrica de capacidade, aceita contato e escala 100% ao humano**. Não é
+outage: é um pool que parou de fazer o trabalho dele, e nenhum alarme existente cobre isso.
+
+### 2 · Duas metades, porque uma não alcança a outra
+
+| mecanismo | pega |
+|---|---|
+| `lib/required-config.ts`, ligado no **set-next** e no **promote** | quem tenta ENTRAR sem o parâmetro |
+| `infra/test/probe_slot_required_params.sh` | quem **virou** não-conforme parado |
+
+A segunda não é redundância: basta acrescentar um `required: true` ao `config_params` de um
+skill **já deployado** para todos os slots daquele skill ficarem não-conformes sem que
+promote nenhum rode para ser recusado. O portão nunca é chamado; só uma auditoria acha.
+
+O portão é irmão de `masked-deploy.ts` e `profile-steps.ts` — mesma pergunta (*"este par
+pode rodar?"*), mesma casa, mesma forma de veredicto, e o **rollback fica isento** como nos
+outros dois: operação de emergência nunca bloqueia. No promote a conferência é contra o
+`config_json` do slot **que está sendo promovido**, nunca o `current`, que descreve o que já
+rodava.
+
+### 3 · O que é VAZIO, e o controle que impede a "simplificação"
+
+Vazio é ausente · `null` · string só de espaço · `[]` · `{}` — este último porque um
+`channel_policy` salvo em branco é tão inútil quanto ausente. **`0` e `false` NÃO são
+vazios**, e há dois testes só para isso: a implementação óbvia (`if (!valor)`) reprovaria um
+`max_attempts: 0` e um `dry_run: false`, que é o defeito de truthiness já catalogado aqui
+(`if not x` × `is None`; `??` × truthiness do `instanceId`). O `default` do descritor **não é
+consultado**, e é decisão: quem escreve o `config_json` é que aplica o default, e é o
+config_json que o runtime lê — consultar o default aprovaria um slot cujo valor ninguém
+gravou. Medido: dos 3 skills que declaram, nenhum tem `required` com `default`.
+
+### 4 · A regra nasce como GUARDA, não como limpeza
+
+Medido antes de ligar: **31 slots `current`, 3 skills declaram, 0 violações**. Ninguém
+precisa consertar nada — o oposto de ligar uma regra que já reprova doze coisas, que é como
+se ensina todo mundo a ignorar um gate.
+
+### 5 · Falseabilidade
+
+Portão: 12 casos unitários, mutação-verificados — trocar `vazio` por `!v` derruba 4
+(incluindo os dois controles de `0`/`false`); ignorar `required: false` derruba 1; desligar o
+portão derruba 6. Suíte do agent-registry inteira: **75 passam**.
+
+Probe: bateria de 7 sobre pool + skill + slot **sintéticos** (`tenant_probe_fixture`, criados
+e apagados no mesmo script) — obrigatório em branco reprova · preenchido passa · string de
+espaço reprova · objeto vazio reprova · `0` passa · `required:false` passa · slot `next` está
+fora do escopo (só `current` roda). ⚠️ As **duas primeiras tentativas da bateria saíram
+verdes por defeito do FIXTURE** (colunas `NOT NULL` que não preenchi — `version`,
+`classification`, depois `sla_target_ms` — e uma FK para `pools`), e o probe respondia sobre
+uma população que não existia. Mesma forma do erro de ontem, no mesmo lugar: **o número era
+plausível e a proposição não tinha sido medida.**
+
+⚠️ **A testemunha do probe é obrigatória e nasceu de um erro real:** ele exige que ALGUÉM
+declare `config_params`, senão sai INCONCLUSIVO. Isso porque a primeira medição deste arco
+disse *"zero declarantes"* por juntar `skills.id` (UUID) com `pool_skill_slots.skill_id`
+(slug) — a tabela tem as duas colunas, a junção errada não dá erro e devolve zero.
+
+### 6 · E o primeiro consumidor: `skill_navegacao_v1`
+
+Os três `form_id` cravados viraram `$.config.form_id`, com o descritor declarado
+(`source: dialogforms`, que é o que faz a UI renderizar o combo). A árvore é conteúdo do
+tenant e o skill é um caminhador genérico — a própria descrição dele já dizia *"conteúdo no
+DialogForm; controle aqui"*, enquanto o ponteiro para o conteúdo morava no controle.
+
+⚠️ **Decisão do dono: só o determinístico.** O irmão `skill_navegacao_llm_v1` fica no modelo
+literal, então os dois pools passam a ter modelos diferentes para o mesmo parâmetro — é
+diferença declarada, não acidente. E o `skill_navegacao_v1` **ainda não vale**: a mudança é
+inerte até `PUT /v1/skills` com `x-skill-publish` + escolher a árvore no deploy + promote
+(ver `PRM-02`). É justamente aí que o portão novo entra em cena: sem escolher a árvore, o
+promote agora **recusa**.
+
+Os outros seis literais ficaram, cada um com motivo: `nps_ia` (o modelo certo ali é o hook,
+`DLG-33`) · `portabilidade_ia` (OTP — trocar o diálogo de posse por deploy é o que não pode)
+· `gate_promocao_ia` (maquinaria da plataforma) · `formfill_demo_ia` (fixture de gate) ·
+`limite_ia` e `limite_processo` (domínio, e o roteiro é identidade do skill — `NIV-11`).
+
 ## 2026-09-08 (11) — MOD-06 (G5): um campo em frente a cinco telas, e um corte sem sujeito
 
 ### 1 · O corte #3 não era `pools × skills`

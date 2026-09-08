@@ -22,6 +22,7 @@ import { publishRegistryChanged } from "../infra/kafka"
 import { deployViolation, slotDeclared } from "../lib/capacity"
 import { judgeMaskedDeploy } from "../lib/masked-deploy"
 import { judgeProfileSteps } from "../lib/profile-steps"
+import { judgeRequiredConfig } from "../lib/required-config"
 
 export const poolSlotsRouter = Router({ mergeParams: true })
 
@@ -191,6 +192,20 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
       return res.status(422).json({ error: perfilNext.error, message: perfilNext.message })
     }
 
+    // Parâmetro de deploy OBRIGATÓRIO que o slot não preencheu. Mesma casa e mesma
+    // forma das três checagens acima, e re-checado no promote pelo mesmo motivo
+    // delas: o `config_params` do skill pode GANHAR um obrigatório entre a
+    // declaração e a promoção — e aí quem estava conforme deixa de estar sem que
+    // ninguém toque no slot.
+    const configNext = judgeRequiredConfig(
+      (skill as unknown as Record<string, unknown>)["config_params"],
+      config_json ?? {},
+      { poolId, skillId: skill_id },
+    )
+    if (configNext.kind === "block") {
+      return res.status(422).json({ error: configNext.error, message: configNext.message })
+    }
+
     const row = await (prisma as any).poolSkillSlot.upsert({
       where:  { pool_id_tenant_id_slot: { pool_id: poolId, tenant_id: tenantId, slot: "next" } },
       update: {
@@ -283,6 +298,25 @@ poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextF
     )
     if (perfilProm.kind === "block") {
       return res.status(422).json({ error: perfilProm.error, message: perfilProm.message })
+    }
+
+    // Parâmetro obrigatório × config_json do slot que está sendo PROMOVIDO — nunca
+    // o `current`, que descreve o que já rodava. É aqui que a declaração vira
+    // efetiva, então é aqui que a ausência tem de doer: no runtime ela vira um
+    // pool saudável que escala todo contato, sem nada vermelho.
+    const skillProm = (nextSlot["skill_id"] as string) || ""
+    if (skillProm) {
+      const skillRow = await prisma.skill.findUnique({
+        where: { skill_id_tenant_id: { skill_id: skillProm, tenant_id: tenantId } },
+      })
+      const configProm = judgeRequiredConfig(
+        (skillRow as unknown as Record<string, unknown> | null)?.["config_params"],
+        nextSlot["config_json"],
+        { poolId, skillId: skillProm },
+      )
+      if (configProm.kind === "block") {
+        return res.status(422).json({ error: configProm.error, message: configProm.message })
+      }
     }
 
     const now = new Date()

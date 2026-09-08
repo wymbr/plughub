@@ -166,6 +166,7 @@ probe_slot_required_config.sh
 # recusaria dois pools em producao. Cinco ramos; o ramo E existe para que um portao
 # que recuse TUDO nao passe.
 probe_skill_profile_steps.sh
+probe_slot_required_params.sh
 # E o irmao de RUNTIME do de cima: o de cima diz que tipos de step o perfil admite;
 # este diz a QUEM se pode delegar. Delegar e SUSPENDER o chamador, e ele so volta se o
 # alvo chamar `workflow_resume` -- medido: 0 de 6 destinos de navegacao sao delegaveis
