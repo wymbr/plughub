@@ -922,10 +922,11 @@
         "resumed": "Retomado",
         "completed": "Concluído",
         "suspendReason": "Motivo da suspensão",
-        "resumeToken": "Token de retomada",
-        "tokenClickHint": "Clique para copiar",
         "expires": "Expira",
-        "originSession": "Sessão de origem"
+        "originSession": "Sessão de origem",
+        "resumeAddress": "Endereço de retomada",
+        "addressable": "Alcançável — pode ser retomado ou encerrado",
+        "orphaned": "Sem endereço — só o mutirão de parques órfãos alcança"
       }
     },
     "actions": {
@@ -940,6 +941,20 @@
       "semPermissao": "Você não tem permissão para encerrar processos.",
       "falhou": "Não foi possível encerrar (HTTP {{status}}).",
       "indisponivel": "Serviço indisponível — nada foi alterado."
+    },
+    "summary": {
+      "loading": "Carregando o consolidado…",
+      "unavailable": "Não foi possível carregar o consolidado — os números NÃO são zero, são desconhecidos.",
+      "running": "Em execução",
+      "suspended": "Suspensos",
+      "noAddress": "Sem endereço",
+      "expiring": "Vencendo em 24h",
+      "pool": "Pool",
+      "oldest": "Mais antigo",
+      "none": "Nenhum processo de pé no momento.",
+      "noPool": "sem pool",
+      "hint": "Estado atual, sem recorte de período — processo suspenso há dias continua de pé. Clique num pool para ver e agir sobre os processos dele.",
+      "backToSummary": "Consolidado"
     }
   },
   "lens": {

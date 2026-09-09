@@ -29,7 +29,7 @@ import { SessionTranscript } from '@/modules/service/components/SessionTranscrip
 import type { PoolView, ContactSegment, Metrics24h } from '@/modules/service/types'
 import { scoreToAccent, formatMs } from '@/modules/service/utils/sentiment'
 import {
-  useWorkflowInstances, useWorkflowInstance,
+  useWorkflowInstances, useProcessosResumo,
 } from '@/modules/workflows/api/hooks'
 import type { WorkflowInstance, WorkflowStatus } from '@/modules/workflows/api/hooks'
 
@@ -625,10 +625,113 @@ const WF_STATUS_COLORS: Record<WorkflowStatus, string> = {
   cancelled: '#6b7280',
 }
 
+/**
+ * O consolidado de processos — a aba Processos responde com NÚMEROS.
+ *
+ * ⚠️ ORQ-10 (2026-09-09): esta aba mostrava uma lista crua, enquanto a aba irmã
+ * (Sessões) abre com mostradores + distribuição por pool e só desce à lista no
+ * drill-down. O Monitor é estado agregado; a lista com período é o Analytics.
+ *
+ * ⚠️ E os mostradores são de ESTADO, não de janela — como os de Sessões
+ * (`busy`/`available`/`queue`). Medido: das 51 suspensas, 49 abriram há mais de
+ * 24 h; um recorte de 24 h mostraria 2 e esconderia 49 na tela que existe para
+ * revelar trabalho parado.
+ *
+ * `SEM ENDEREÇO` é o número que decide ação e que não existia em tela nenhuma:
+ * processo suspenso cujo parque não tem token não é alcançável nem pelo botão de
+ * encerrar — só pelo mutirão de parques órfãos.
+ */
+function ConsolidadoDeProcessos({ tenantId, onDrillDown }: {
+  tenantId:    string
+  onDrillDown: (poolId: string) => void
+}) {
+  const { t, i18n } = useTranslation('contacts')
+  const { resumo, loading, erro } = useProcessosResumo(tenantId, 15_000)
+
+  if (loading && !resumo) {
+    return <div className="p-6 text-sm text-slate-500">{t('processes.summary.loading')}</div>
+  }
+  // Erro NÃO vira zero: um consolidado zerado por falha é indistinguível de
+  // "não há processo", que é a leitura que esta ficha existe para fechar.
+  if (erro && !resumo) {
+    return (
+      <div className="p-6 text-sm text-red-400">
+        {t('processes.summary.unavailable')} <span className="text-slate-600">({erro})</span>
+      </div>
+    )
+  }
+  if (!resumo) return null
+
+  const kpis = [
+    { label: t('processes.summary.running'),   value: resumo.totais.em_execucao,  color: '#3b82f6' },
+    { label: t('processes.summary.suspended'), value: resumo.totais.suspensos,    color: '#eab308' },
+    { label: t('processes.summary.noAddress'), value: resumo.totais.sem_endereco, color: '#f97316' },
+    { label: t('processes.summary.expiring'),  value: resumo.totais.vencendo_24h, color: '#a855f7' },
+  ]
+
+  return (
+    <div className="p-4 space-y-4 overflow-auto">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {kpis.map(k => (
+          <div key={k.label} className="rounded-lg border border-slate-800 bg-[#0d1b2f] px-4 py-3">
+            <div className="text-2xl font-bold" style={{ color: k.color }}>{k.value}</div>
+            <div className="text-xs text-slate-400 mt-0.5">{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-lg border border-slate-800 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-[#0d1b2f] text-xs uppercase tracking-wider text-slate-500">
+            <tr>
+              <th className="text-left  px-4 py-2.5">{t('processes.summary.pool')}</th>
+              <th className="text-right px-4 py-2.5">{t('processes.summary.running')}</th>
+              <th className="text-right px-4 py-2.5">{t('processes.summary.suspended')}</th>
+              <th className="text-right px-4 py-2.5">{t('processes.summary.noAddress')}</th>
+              <th className="text-right px-4 py-2.5">{t('processes.summary.expiring')}</th>
+              <th className="text-left  px-4 py-2.5">{t('processes.summary.oldest')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {resumo.por_pool.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">
+                {t('processes.summary.none')}
+              </td></tr>
+            )}
+            {resumo.por_pool.map(linha => (
+              <tr key={linha.pool_id || '—'}
+                  onClick={() => onDrillDown(linha.pool_id)}
+                  className="border-t border-slate-800 hover:bg-slate-800/40 cursor-pointer">
+                <td className="px-4 py-2.5 font-medium text-slate-200">
+                  {linha.pool_id || <span className="text-slate-500 italic">{t('processes.summary.noPool')}</span>}
+                </td>
+                <td className="px-4 py-2.5 text-right text-blue-400">{linha.em_execucao}</td>
+                <td className="px-4 py-2.5 text-right text-yellow-300">{linha.suspensos}</td>
+                <td className={`px-4 py-2.5 text-right ${linha.sem_endereco ? 'text-orange-400 font-semibold' : 'text-slate-600'}`}>
+                  {linha.sem_endereco}
+                </td>
+                <td className="px-4 py-2.5 text-right text-purple-300">{linha.vencendo_24h}</td>
+                <td className="px-4 py-2.5 text-slate-500 text-xs">
+                  {new Date(linha.mais_antigo).toLocaleString(i18n.language)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-xs text-slate-600">{t('processes.summary.hint')}</div>
+    </div>
+  )
+}
+
+
 function ProcessosView({ tenantId }: { tenantId: string }) {
   const { t, i18n } = useTranslation('contacts')
   const [filterStatus, setFilterStatus] = useState<WorkflowStatus | 'all'>('all')
   const [selectedId,   setSelectedId]   = useState<string | null>(null)
+  // ⚠️ ORQ-10: a aba abre no CONSOLIDADO. `poolDrill` é o pool clicado — enquanto
+  // for null, nenhuma lista é buscada; o Monitor mostra números, como a aba Sessões.
+  const [poolDrill,    setPoolDrill]    = useState<string | null>(null)
 
   const statusParam = filterStatus === 'all' ? undefined : filterStatus
   // `refresh` saiu com o botão Cancelar (2026-08-07): esta aba não tinha outro
@@ -638,15 +741,40 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
   // ela não é a ressurreição do Cancelar: aquele chamava `/instances/{id}/cancel`
   // da workflow-api; esta chama o `force-complete`, que é o dono da ação e o único
   // caminho que ENCERRA de fato (o outro só mudava o que o supervisor via).
-  const { instances, loading }          = useWorkflowInstances(tenantId, statusParam, 10_000)
-  const { instance: detail }            = useWorkflowInstance(selectedId, 10_000)
+  const { instances, loading }          = useWorkflowInstances(
+    poolDrill === null ? '' : tenantId, statusParam, 10_000, poolDrill ?? undefined,
+  )
+  // ⚠️ ORQ-10: o detalhe sai da PRÓPRIA lista. A rota de estado já traz o parque de
+  // cada processo (step, motivo, prazo, se há endereço), então uma segunda chamada
+  // por seleção buscaria o que já está na mão — e a antiga buscava numa tabela vazia.
+  const detail = useMemo(
+    () => instances.find(i => i.id === selectedId) ?? null,
+    [instances, selectedId],
+  )
 
   const sorted = [...instances].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )
 
+  if (poolDrill === null) {
+    return (
+      <div className="h-full overflow-auto bg-[#0a1628] text-slate-200">
+        <ConsolidadoDeProcessos tenantId={tenantId} onDrillDown={setPoolDrill} />
+      </div>
+    )
+  }
+
   return (
-    <div className="flex h-full overflow-hidden bg-[#0a1628] text-slate-200">
+    <div className="flex flex-col h-full overflow-hidden bg-[#0a1628] text-slate-200">
+      <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-2 text-sm">
+        <button onClick={() => { setPoolDrill(null); setSelectedId(null) }}
+                className="text-primary hover:underline">
+          ← {t('processes.summary.backToSummary')}
+        </button>
+        <span className="text-slate-600">/</span>
+        <span className="font-medium">{poolDrill || t('processes.summary.noPool')}</span>
+      </div>
+      <div className="flex flex-1 overflow-hidden">
       {/* Left: list */}
       <div className="w-72 flex-shrink-0 border-r border-slate-800 flex flex-col overflow-hidden">
         {/* Status filter */}
@@ -691,7 +819,7 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <code className="text-xs font-semibold text-blue-300">{inst.id.slice(0, 8)}…</code>
-                    <div className="text-xs text-slate-500 mt-0.5 truncate">{inst.flow_id}</div>
+                    <div className="text-xs text-slate-500 mt-0.5 truncate">{inst.pool_id}</div>
                     {inst.origin_session_id && (
                       <div className="text-xs text-slate-600 mt-0.5 truncate font-mono">
                         {t('processes.instances.sessionLabel')}: …{inst.origin_session_id.slice(-10)}
@@ -724,7 +852,7 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
           <div className="flex justify-between items-start px-5 py-3.5 border-b border-slate-800 flex-shrink-0">
             <div>
               <code className="text-xs text-blue-300">{detail.id}</code>
-              <div className="text-xs text-slate-500 mt-0.5">{detail.flow_id}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{detail.pool_id}</div>
             </div>
             <button onClick={() => setSelectedId(null)}
               className="text-slate-500 hover:text-slate-200" aria-label="Close">
@@ -762,10 +890,12 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
               </div>
               <div className="space-y-1.5">
                 {[
+                  // ⚠️ ORQ-10: `resumed_at`/`completed_at` saíram — esta lista é de
+                  // processos EM ANDAMENTO (`closed_at IS NULL`), então nenhum deles
+                  // completou, e o resume anterior é história, não estado. Quem conta
+                  // a história é Analytics; aqui é o que está de pé.
                   { dot: '#22c55e', label: t('processes.instances.detail.created'),   ts: detail.created_at },
                   detail.suspended_at ? { dot: '#eab308', label: t('processes.instances.detail.suspended'), ts: detail.suspended_at } : null,
-                  detail.resumed_at   ? { dot: '#3b82f6', label: t('processes.instances.detail.resumed'),   ts: detail.resumed_at   } : null,
-                  detail.completed_at ? { dot: '#22c55e', label: t('processes.instances.detail.completed'), ts: detail.completed_at } : null,
                 ].filter(Boolean).map((entry, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs">
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: entry!.dot }} />
@@ -795,27 +925,34 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
               onDone={() => setSelectedId(null)}
             />
 
-            {/* Resume token */}
-            {detail.resume_token && (
-              <div>
-                <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                  {t('processes.instances.detail.resumeToken')}
-                </div>
-                <div
-                  className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-xs font-mono text-slate-400 break-all cursor-pointer hover:border-slate-500"
-                  onClick={() => void navigator.clipboard.writeText(detail.resume_token!)}
-                  title={t('processes.instances.detail.tokenClickHint')}>
-                  {detail.resume_token}
-                </div>
-                {detail.resume_expires_at && (
-                  <div className="mt-1 text-xs text-slate-600">
-                    {t('processes.instances.detail.expires')}: {new Date(detail.resume_expires_at).toLocaleString(i18n.language)}
-                  </div>
-                )}
+            {/* Endereço de retomada — o FATO, nunca a credencial */}
+            {/* ⚠️ ORQ-10: aqui havia o `resume_token` em texto, com um clique que o
+                copiava para a área de transferência. Quem tem o token retoma o
+                processo pela porta externa sem passar por portão nenhum — era uma
+                credencial exposta numa tela de leitura, e ninguém tinha medido isso.
+                O que o operador precisa saber é se o processo AINDA É ALCANÇÁVEL:
+                sem endereço, nem o botão de encerrar funciona (só o mutirão). */}
+            <div>
+              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                {t('processes.instances.detail.resumeAddress')}
               </div>
-            )}
+              {detail.has_resume_token ? (
+                <div className="text-xs text-green-400">
+                  {t('processes.instances.detail.addressable')}
+                  {detail.resume_expires_at && (
+                    <span className="text-slate-500">
+                      {' · '}{t('processes.instances.detail.expires')}:{' '}
+                      {new Date(detail.resume_expires_at).toLocaleString(i18n.language)}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-yellow-300">
+                  {t('processes.instances.detail.orphaned')}
+                </div>
+              )}
+            </div>
 
-            {/* Origin session */}
             {detail.origin_session_id && (
               <div>
                 <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
@@ -835,6 +972,7 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
           <div className="text-sm">{t('processes.instances.selectPrompt')}</div>
         </div>
       )}
+    </div>
     </div>
   )
 }

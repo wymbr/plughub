@@ -111,6 +111,252 @@ async def list_active_sessions(
         return JSONResponse(content=[], status_code=200)
 
 
+@router.get("/processes")
+async def list_processes(
+    request:   Request,
+    tenant_id: str = Query(..., description="Tenant identifier"),
+    status:    str = Query("", description="suspended | active | '' (ambos)"),
+    pool_id:   str = Query("", description="drill-down: só os processos deste pool"),
+    limit:     int = Query(200, ge=1, le=_MAX_LIMIT),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """
+    Os processos que estão DE PÉ agora — pergunta de ESTADO, não de período.
+
+    ⚠️ **Por que ela não tem janela de tempo, e isso é o ponto** (ORQ-10, 2026-09-09).
+    O Monitor é janela viva (24 h) e o Analytics é histórico com período — duas
+    perguntas diferentes, e essa separação é deliberada. Mas *trabalho suspenso* não
+    cabe em nenhuma das duas: um processo parqueado há sete dias **está aberto
+    agora**, e é presente, não passado. Medido no dia: das **51** sessões suspensas,
+    **2** abriram nas últimas 24 h e **49** antes disso. Uma janela de 24 h mostraria
+    2 de 51 — e esconderia justamente as que precisam de ação, na tela que existe
+    para agir. Mesma família do aviso do `CLAUDE.md` sobre cortar por `started_at`
+    quando a pergunta não é sobre o começo.
+
+    Por isso o recorte aqui é `closed_at IS NULL` + `status`, sem data nenhuma. Quem
+    responde "o que aconteceu no período" continua sendo `/reports/sessions`, que
+    tem janela default de 7 dias — e é por causa dela que aquele endpoint devolvia
+    **45** das 51.
+
+    ⚠️ Só `channel = 'webhook'`: processo é sessão de canal webhook (Arc 19). Contato
+    de cliente vivo é a outra aba.
+
+    Cada linha traz o estado do PARQUE quando há um: `step_id`, `suspend_reason`,
+    `resume_expires_at` e `has_resume_token`.
+
+    ⚠️ **`has_resume_token` é booleano, e o token NÃO viaja.** Quem tem o token
+    retoma o processo pela porta externa sem passar por portão nenhum; a tela precisa
+    saber *se existe endereço*, não qual é. (A tela antiga exibia o token com um botão
+    de copiar — vazamento que ninguém tinha medido.) Mesma postura da APR-10: pedir a
+    ação não é receber a credencial.
+
+    Escopo: recorte por pool com o predicado compartilhado, como as demais listas.
+    """
+    store = request.app.state.store
+    if status and status not in ("suspended", "active"):
+        raise HTTPException(status_code=422, detail="status deve ser 'suspended', 'active' ou vazio")
+    try:
+        linhas = await asyncio.to_thread(
+            _fetch_processes,
+            store.new_client(), store._database, tenant_id, status, pool_id, limit,
+            pool_principal.accessible_pools,
+        )
+        return JSONResponse(content=linhas)
+    except Exception as exc:
+        # Nunca lista vazia silenciosa: vazio aqui e' indistinguivel de "nao ha
+        # processo", que e' exatamente a leitura errada que a ORQ-10 fechou.
+        logger.warning("list_processes falhou tenant=%s status=%s: %s", tenant_id, status, exc)
+        raise HTTPException(status_code=503, detail="analytics indisponivel para listar processos")
+
+
+@router.get("/processes/summary")
+async def processes_summary(
+    request:   Request,
+    tenant_id: str = Query(..., description="Tenant identifier"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """
+    Consolidado dos processos DE PÉ — o Monitor mostra números, não lista.
+
+    ⚠️ **Agregado na FONTE, nunca contado no front.** A lista tem teto de 200 linhas;
+    contar o que chegou daria um número que é o menor entre a verdade e o teto — e
+    parecendo certo, porque 200 é um número plausível.
+
+    ⚠️ **Sem janela de tempo, e isso é medição** (ORQ-10, 2026-09-09): das 51 sessões
+    suspensas, **2** abriram nas últimas 24 h e **49** antes. Um consolidado por
+    janela mostraria 2 e esconderia 49 justamente na tela que existe para revelar
+    trabalho parado. Suspenso há sete dias é presente, não passado. É a mesma
+    natureza dos mostradores da aba Sessions (`busy`/`available`/`queue`), que também
+    são estado AGORA e não recorte de período.
+
+    `sem_endereco` é o número que decide ação: processo suspenso cujo parque não tem
+    token de retomada não é alcançável nem pelo botão de encerrar — só pelo mutirão
+    `reap_parques_orfaos.sh`. Ele não existia em tela nenhuma até aqui.
+    """
+    store = request.app.state.store
+    try:
+        dados = await asyncio.to_thread(
+            _fetch_processes_summary,
+            store.new_client(), store._database, tenant_id,
+            pool_principal.accessible_pools,
+        )
+        return JSONResponse(content=dados)
+    except Exception as exc:
+        logger.warning("processes_summary falhou tenant=%s: %s", tenant_id, exc)
+        raise HTTPException(status_code=503, detail="analytics indisponivel para o consolidado")
+
+
+def _fetch_processes_summary(
+    client: Any, db: str, tenant_id: str, accessible_pools: list[str] | None,
+) -> dict:
+    params: dict = {"tenant_id": tenant_id}
+    # Mesmo predicado compartilhado da lista — ver `_fetch_processes`.
+    from .reports_query import _session_scope_clause
+    escopo = _session_scope_clause(db, accessible_pools, alias="s")
+    filtro_pool = f"AND {escopo}" if escopo else ""
+
+    # Uma consulta só, com o parque via LEFT JOIN sobre o agregado das transições:
+    # aqui o JOIN é seguro (e necessário) porque a linha da esquerda é a que conta —
+    # sessão sem transição entra com `tem_token = 0`, que é o significado correto.
+    linhas = client.query(f"""
+        WITH parque AS (
+            SELECT session_id,
+                   argMax(resume_token != '', suspended_at) AS tem_token,
+                   argMax(resume_expires_at,  suspended_at) AS vence_em
+            FROM {db}.session_transitions
+            WHERE tenant_id = {{tenant_id:String}}
+            GROUP BY session_id
+        )
+        SELECT s.pool_id                                             AS pool_id,
+               countIf(s.status = 'active')                          AS em_execucao,
+               countIf(s.status = 'suspended')                       AS suspensos,
+               countIf(s.status = 'suspended' AND coalesce(p.tem_token, 0) = 0) AS sem_endereco,
+               countIf(s.status = 'suspended' AND p.vence_em > now()
+                       AND p.vence_em <= now() + INTERVAL 24 HOUR)   AS vencendo_24h,
+               min(s.opened_at)                                      AS mais_antigo
+        FROM {db}.sessions AS s FINAL
+        LEFT JOIN parque AS p ON p.session_id = s.session_id
+        WHERE s.tenant_id = {{tenant_id:String}}
+          AND s.channel = 'webhook'
+          AND s.closed_at IS NULL
+          AND s.status IN ('active', 'suspended')
+          {filtro_pool}
+        GROUP BY s.pool_id
+        ORDER BY suspensos DESC, em_execucao DESC
+    """, parameters=params).result_rows
+
+    por_pool = [
+        {
+            "pool_id":      r[0] or "",
+            "em_execucao":  int(r[1]),
+            "suspensos":    int(r[2]),
+            "sem_endereco": int(r[3]),
+            "vencendo_24h": int(r[4]),
+            "mais_antigo":  r[5].isoformat() if hasattr(r[5], "isoformat") else str(r[5]),
+        }
+        for r in linhas
+    ]
+    return {
+        "totais": {
+            "em_execucao":  sum(p["em_execucao"]  for p in por_pool),
+            "suspensos":    sum(p["suspensos"]    for p in por_pool),
+            "sem_endereco": sum(p["sem_endereco"] for p in por_pool),
+            "vencendo_24h": sum(p["vencendo_24h"] for p in por_pool),
+        },
+        "por_pool": por_pool,
+    }
+
+
+def _fetch_processes(
+    client: Any, db: str, tenant_id: str, status: str, pool_id: str, limit: int,
+    accessible_pools: list[str] | None,
+) -> list[dict]:
+    """Estado atual + o parque de cada um. Duas consultas, nunca um JOIN.
+
+    Há `session_id` em `session_transitions` sem linha correspondente em `sessions`
+    (e vice-versa), e num `JOIN` a ausência de um lado viraria sumiço do outro — a
+    mesma razão pela qual `resolve_closed_session_pools` faz duas consultas.
+    """
+    filtro_status = "AND sessions.status = {status:String}" if status else                     "AND sessions.status IN ('suspended','active')"
+    params: dict = {"tenant_id": tenant_id, "status": status}
+    # Drill-down do consolidado: o pool vem do CLIQUE, e o escopo continua
+    # valendo por cima — pedir um pool não é ganhar acesso a ele.
+    filtro_pool_pedido = ""
+    if pool_id:
+        filtro_pool_pedido = "AND sessions.pool_id = {pool_pedido:String}"
+        params["pool_pedido"] = pool_id
+    # ⚠️ O predicado de escopo é o COMPARTILHADO (`_session_scope_clause`), nunca um
+    # `pool_id IN (…)` escrito aqui: a F1b fechou justamente as quatro cópias inline
+    # dessa regra, e a minha primeira versão já divergia — perdia a sessão de
+    # `pool_id = ''` (7 ativas na fonte, 6 na resposta) e não tinha o ramo "um pool
+    # meu ATENDEU", que é o que faz o supervisor ver o contato entrado por outro pool.
+    from .reports_query import _session_scope_clause
+    escopo = _session_scope_clause(db, accessible_pools, alias="sessions")
+    filtro_pool = f"AND {escopo}" if escopo else ""
+
+    linhas = client.query(f"""
+        SELECT session_id, status, pool_id, channel, opened_at, origin_session_id,
+               root_session_id, spawn_reason, outcome
+        FROM {db}.sessions AS sessions FINAL
+        WHERE sessions.tenant_id = {{tenant_id:String}}
+          AND sessions.channel = 'webhook'
+          AND sessions.closed_at IS NULL
+          {filtro_status}
+          {filtro_pool_pedido}
+          {filtro_pool}
+        ORDER BY sessions.opened_at DESC
+        LIMIT {limit}
+    """, parameters=params).result_rows
+
+    processos = [
+        {
+            "session_id":        r[0],
+            "status":            r[1],
+            "pool_id":           r[2],
+            "channel":           r[3],
+            "opened_at":         r[4].isoformat() if hasattr(r[4], "isoformat") else str(r[4]),
+            "origin_session_id": r[5] or None,
+            "root_session_id":   r[6] or None,
+            "spawn_reason":      r[7] or None,
+            "outcome":           r[8] or None,
+            "step_id":           None,
+            "suspend_reason":    None,
+            "suspended_at":      None,
+            "resume_expires_at": None,
+            "has_resume_token":  False,
+        }
+        for r in linhas
+    ]
+    if not processos:
+        return []
+
+    # O parque de cada um, do registro de transições (D4/RET-12). A linha mais
+    # RECENTE por sessão: um processo pode ter parqueado várias vezes.
+    ids = [p["session_id"] for p in processos]
+    trans = client.query(f"""
+        SELECT session_id, argMax(step_id, suspended_at) AS step_id,
+               argMax(suspend_reason, suspended_at)      AS motivo,
+               max(suspended_at)                         AS suspenso_em,
+               argMax(resume_expires_at, suspended_at)   AS vence_em,
+               argMax(resume_token != '', suspended_at)  AS tem_token
+        FROM {db}.session_transitions
+        WHERE tenant_id = {{tenant_id:String}} AND session_id IN {{ids:Array(String)}}
+        GROUP BY session_id
+    """, parameters={"tenant_id": tenant_id, "ids": ids}).result_rows
+
+    por_sessao = {t[0]: t for t in trans}
+    for p in processos:
+        t = por_sessao.get(p["session_id"])
+        if not t:
+            continue
+        p["step_id"]           = t[1] or None
+        p["suspend_reason"]    = t[2] or None
+        p["suspended_at"]      = t[3].isoformat() if hasattr(t[3], "isoformat") else (str(t[3]) if t[3] else None)
+        p["resume_expires_at"] = t[4].isoformat() if hasattr(t[4], "isoformat") else (str(t[4]) if t[4] else None)
+        p["has_resume_token"]  = bool(t[5])
+    return processos
+
+
 def _fetch_active_sessions(
     client: Any, db: str, tenant_id: str, pool_id: str, limit: int,
 ) -> list[dict]:

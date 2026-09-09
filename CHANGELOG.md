@@ -1,5 +1,78 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (11) — ORQ-10: a tela perguntava à casa que o Arc 19 esvaziou
+
+### 1 · O achado é do dono, e nenhum gate o teria pego
+
+*"Não consigo listar dados de process no monitor/sessions"* — com **51 processos
+suspensos vivos** no banco. A aba chamava `workflow-api /v1/workflow/instances`;
+aquela tabela tem **0 linhas** desde que o Arc 19 transformou processo em **sessão
+de canal webhook**, e o endpoint responde **`[]` com HTTP 200**.
+
+Vazio bem-formado não acende nada: a tela dizia "No processes found" com toda a
+convicção, e o botão que a APR-10 entregou horas antes estava num painel que nunca
+abria. O gate da APR-10 lê o **código** da tela — ele não vê o que a tela **recebe**.
+
+| quem pergunta | resposta |
+|---|---|
+| `workflow-api /v1/workflow/instances?status=suspended` | `[]` |
+| a fonte real (`sessions`, ClickHouse) | 51 suspensas · 7 ativas |
+
+### 2 · O DONO corrigiu o desenho, e a medição confirmou
+
+Minha primeira versão pôs a lista no Monitor. O dono apontou: *"Monitor mostra
+consolidado; a lista é do Analytics"* — que é a doutrina escrita no próprio
+`WorkItemsPage.tsx` (*"Monitor = estado agregado ao vivo… o histórico vive no
+Analytics"*), e o formato da aba irmã (mostradores + distribuição por pool).
+
+Hoje a aba Processos abre em **consolidado**: `Em execução · Suspensos · Sem
+endereço · Vencendo em 24 h`, por pool, e a lista só no **drill-down** — onde a ação
+da APR-10 vive.
+
+⚠️ **Mas sem janela de tempo, e isso é medição, não gosto:**
+
+```
+das 51 suspensas:   2 abriram nas últimas 24h   ·   49 antes
+```
+
+Uma janela de 24 h mostraria **2** e esconderia 49 — na tela que existe para revelar
+trabalho parado. Suspenso há sete dias é **presente**. E é a mesma natureza dos
+mostradores de Sessões (`busy`/`available`/`queue`), que também são estado AGORA.
+Foi por ter janela (7 dias, default) que `/reports/sessions` devolvia **45** das 51.
+
+### 3 · Três defeitos meus, todos apanhados por medição
+
+⚠️ **Escrevi `pool_id IN (…)` à mão** nas duas rotas novas — exatamente a cópia que
+a F1b fechou. E ela **já divergia**: perdia a sessão de `pool_id = ''` (7 ativas na
+fonte, **6** na resposta) e não tinha o ramo *"um pool meu ATENDEU"*. Hoje as duas
+usam `_session_scope_clause`, a casa única.
+
+⚠️ **O consolidado quebrou duas vezes** por variável removida na edição — e as duas
+vezes **falhou FECHADO** (503 nomeado), nunca com número errado. Num consolidado, o
+número errado seria o defeito grave: ele não se denuncia sozinho.
+
+⚠️ **O ramo C do gate aceitava metade do contrato.** A bateria mostrou: trocar só a
+rota da lista mantinha o gate verde, porque a do consolidado ainda casava o padrão.
+Agora as duas chamadas são cobradas separadamente.
+
+### 4 · O token saiu da tela
+
+A tela exibia o `resume_token` com um clique que o copiava. Quem o tem **retoma o
+processo pela porta externa sem passar por portão nenhum** — credencial exposta numa
+tela de leitura, que ninguém tinha medido. Agora viaja `has_resume_token`, e a tela
+diz o que importa: *alcançável* ou *sem endereço*. O número **sem endereço (25 de
+51)** é o que revela quem nem o botão de encerrar alcança — só o mutirão.
+
+**Gates**: `probe_monitor_suspended_action.sh` agora com **3 ramos** (ação · portão ·
+**fonte**), 2 mutações no ramo novo, ambas vermelhas · consolidado conferido contra o
+ClickHouse nos 4 indicadores (7/51/25/3, e a soma por pool bate com os totais) ·
+drill-down conferido (só o pool pedido) · i18n sem duplicatas com 15 chaves novas em
+EN e pt-BR · bundle servido verificado.
+
+⚠️ **Dois hooks foram REMOVIDOS** (`useWorkflowInstance`, `useWorkflowInstanceSessions`):
+zero consumidores, e ambos falavam com a tabela morta — deixá-los seria manter a
+chamada à mão de quem os importasse.
+
 ## 2026-09-09 (10) — APR-10: listar trabalho suspenso sem poder agir
 
 ### 1 · A ficha via duas lacunas; havia três

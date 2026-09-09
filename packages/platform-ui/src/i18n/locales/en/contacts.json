@@ -922,10 +922,11 @@
         "resumed": "Resumed",
         "completed": "Completed",
         "suspendReason": "Suspend reason",
-        "resumeToken": "Resume token",
-        "tokenClickHint": "Click to copy",
         "expires": "Expires",
-        "originSession": "Origin session"
+        "originSession": "Origin session",
+        "resumeAddress": "Resume address",
+        "addressable": "Addressable — can be resumed or ended",
+        "orphaned": "No address — only the orphaned-park sweep reaches it"
       }
     },
     "actions": {
@@ -940,6 +941,20 @@
       "semPermissao": "You do not have permission to end processes.",
       "falhou": "Could not end the process (HTTP {{status}}).",
       "indisponivel": "Service unavailable — nothing was changed."
+    },
+    "summary": {
+      "loading": "Loading summary…",
+      "unavailable": "Could not load the summary — these numbers are NOT zero, they are unknown.",
+      "running": "Running",
+      "suspended": "Suspended",
+      "noAddress": "No address",
+      "expiring": "Expiring in 24h",
+      "pool": "Pool",
+      "oldest": "Oldest",
+      "none": "No process is standing right now.",
+      "noPool": "no pool",
+      "hint": "Current state, no time window — a process suspended days ago is still standing. Click a pool to see and act on its processes.",
+      "backToSummary": "Summary"
     }
   },
   "lens": {
