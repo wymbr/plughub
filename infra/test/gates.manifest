@@ -311,6 +311,18 @@ gate_user_admin_org_chart.sh
 # verde por fechar demais.
 gate_resume_scope_is_not_optional.sh
 
+# AUT-47 (2026-09-09): o `/api/supervisor_state/{id}` do mcp-server servia QUALQUER
+# sessao a quem tem `agent_assist.atender` — sem eixo de pool. Medido ao vivo, com
+# tarefa de promocao de deploy reivindicada: `supervisor@`, que nao alcanca
+# `aprovacao_deploy`, recebeu 200 **com o `resume_token` da tarefa no corpo**;
+# `operator@` recebeu 200 sem o token, e o que os separava era MASCARAMENTO POR PAPEL,
+# nao escopo. A analytics-api recorta o conteudo do MESMO contato por pool desde
+# 2026-08-30 — duas portas, uma trancada.
+# P1 (quem alcanca continua vendo o token) e P2 (nao-admin le o pool dele) sao o que
+# impede o verde por fechar demais; N3 separa "expirou" (404) de "voce nao pode" (403);
+# N4 e o eixo de TENANT, declarado NAO-EXERCIVEL com um tenant so.
+gate_session_state_pool_scope.sh
+
 # ── PUL-02 (2026-09-09) · triagem dos instrumentos da Camada F ───────────────
 # Os dois estavam como `?` NAO TRIADO, e por isso nenhum runner os colhia. Triados:
 #

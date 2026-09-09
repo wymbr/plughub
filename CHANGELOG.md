@@ -1,5 +1,108 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (19) — AUT-47: o estado da sessão pertence ao pool dela
+
+### 1 · A ficha mandava medir uma coisa, e a medição virou o achado
+
+A AUT-46 registrou que o `operator@` lia o estado de uma sessão de `aprovacao_deploy`
+(**200**) sem alcançar o pool, e que o corpo **não** trouxe o `resume_token` — com o
+motivo NÃO apurado. A ficha dizia: *dessa metade depende se o achado é "o estado da
+sessão vaza" ou "a credencial da tarefa também vaza"*.
+
+Medido, com a tarefa reivindicada (estado real do Console):
+
+| chamador | alcança `aprovacao_deploy`? | HTTP | `resume_token` no corpo |
+|---|---|---|---|
+| `admin@` | sim | 200 | **sim** |
+| `supervisor@` | **não** | 200 | **sim** |
+| `operator@` | **não** | 200 | não |
+
+**O que separava os dois últimos era MASCARAMENTO POR PAPEL**, não escopo — o
+`operator` é o papel mais mascarado, e foi só por isso que a AUT-46 viu "NAO". A
+resposta à pergunta da ficha é a pior das duas: **a credencial da tarefa também vaza**,
+para um supervisor de outro time.
+
+### 2 · O eixo que faltava é o que a analytics-api já usa
+
+A `analytics-api` recorta o conteúdo do MESMO contato por pool desde 2026-08-30
+(`authorize_session_scope`). Este endpoint tinha **um eixo só** — capacidade
+(`agent_assist.atender`). É *"duas portas para o mesmo dado e só uma trancada"* pela
+segunda vez, agora entre serviços diferentes.
+
+Fechado com a **mesma união** (`entrou por pool meu OU um pool meu atendeu`), lida das
+duas casas do Redis que a guardam — e elas discordam **de propósito**:
+
+```
+session:{sid}:meta.pool_id     quem ATENDE   → vira `aprovacao_deploy` depois do claim
+                                               (o bridge o reescreve na alocação)
+{t}:ctx:{sid}.core.pool.id     por onde ENTROU → `gate_promocao_ia`, no mesmo caso
+```
+
+Usar só a primeira negaria a quem acompanha o processo desde a entrada; só a segunda,
+a quem atende. **O domínio do chamador segue a ordem das duas cópias TS que já
+existem** (o filtro `operational` deste mesmo arquivo e o do agent-registry), que
+espelham o `resolve_scope`: lista não-vazia ⇒ escopado; qualquer outra coisa ⇒ domínio
+VAZIO (AUT-03), que nega. Inventar aqui uma terceira leitura de `accessible_pools: []`
+seria a divergência que aquelas duas notas pedem para não acontecer.
+
+### 3 · Duas ausências que não podem ter a mesma cara
+
+Medido: a sessão fechada de 2026-09-05 não tem `session:{sid}:meta` **nem**
+`session:{sid}:ai` — não há o que servir. Um 403 ali diria *"você não pode"* sobre uma
+sessão que apenas expirou, e mandaria o operador procurar permissão onde falta dado.
+
+```
+com estado, sem pool resolvível ... 403  session_scope_undeterminable   (nomeado no log)
+sem meta e sem estado ............ 404  session_expired_or_unknown
+```
+
+### 4 · Resíduo fechado de carona, e declarado não-exercível
+
+`accessible_pools` carrega `pool_id` **cru**, e pool_id não é único entre tenants (as
+chaves do Redis é que são: `{tenant}:pool:{pool}`). Dois tenants com um `sac_ia` cada
+fariam a lista de um autorizar a sessão do outro. O tenant do token é comparado ANTES
+do pool — e o ramo N4 do gate diz, em amarelo, que **não é exercível** com um tenant
+na instalação, em vez de ganhar um verde que não mediu nada.
+
+### 5 · O gate, e o que cada positivo impede
+
+`gate_session_state_pool_scope.sh`:
+
+```
+N1  operator (fora do pool) ......................... 403
+N2  supervisor (fora do pool) ....................... 403   ← era 200 COM o token
+P1  admin (no pool) ................................. 200 + o token AINDA no corpo
+P2  operator na sessão de um pool DELE .............. 200
+N3  sessão inexistente .............................. 404 (não 403)
+N4  tenant ...................... DECLARADO não-exercível
+```
+
+**P1 não é enfeite:** sem ele, um portão que mutilasse o pacote de quem PODE passaria
+como verde — e o sintoma seria *"o botão de aprovar não aparece"*. **P2 tampouco:** sem
+ele, um portão que só deixasse o `admin` entrar ficaria verde com o operador de verdade
+trancado do lado de fora.
+
+### 6 · O que ficou aberto, e por quê
+
+⚠️ **A recusa é MUDA na tela (AUT-48).** O `useSupervisorState` fazia `if (res.ok)`
+**sem `else`**: 401/403 não viravam estado nem mensagem, e o Console mostrava painel
+vazio — dizendo *"não há contexto"* onde o servidor disse *"você não pode"*. Isso já
+valia para o 401; agora vale mais vezes. Nesta entrega a recusa **deixou de ser
+engolida** (viaja no retorno do hook com o `reason` do servidor, e sai em
+`console.warn` nomeada), mas **renderizar** ficou como ficha própria: verificação
+visual em navegador já falhou neste repositório, e UI não conferida é promessa. O
+precedente da tela existe — `EmptyScopeNotice`, da AUT-03.
+
+⚠️ **Consequência de provisionamento, não defeito:** `supervisor@` alcança dois pools
+de IA (`limite_ia`, `limite_retorno`), então ele não abre sessão HUMANA nenhuma no
+Console. É a mesma medição da AUT-43 (36 de 41 pools sem vigia) chegando por outra
+porta — e é exatamente o que a `analytics-api` já responde para o mesmo usuário no
+transcript desde 2026-08-30. Duas portas, agora com a mesma tranca.
+
+Verde medido: **900 testes TS** a partir das imagens (`probe_ts_suites.sh`, com
+mcp-server-plughub em 287) · `tsc --noEmit` limpo na platform-ui e sem erro próprio no
+`server.ts` · o gate novo com os 5 ramos.
+
 ## 2026-09-09 (18) — AUT-46: quem pergunta não escolhe a pergunta
 
 ### 1 · A ficha estava certa no fato e errada no alvo

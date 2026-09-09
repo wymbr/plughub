@@ -945,6 +945,125 @@ const ACCESS_RANK: Record<string, number> = { none: 0, read_only: 1, read_write:
  * perda.** Ele não tem `agent_assist.atender`, logo o Console nunca aparece no menu
  * dele — a API é que discordava do menu.
  */
+/**
+ * AUT-47 (2026-09-09) — os pools de uma sessao VIVA, para a pergunta de PERTINENCIA
+ * (*"esta sessao e dos meus pools?"*).
+ *
+ * Mesma uniao que a `analytics-api` usa no conteudo de contato (`_session_scope_clause`:
+ * **entrou por pool meu OU um pool meu atendeu**), lida das duas casas que a guardam
+ * no Redis — medido, nao suposto:
+ *
+ *   `session:{sid}:meta.pool_id`      quem ATENDE. O bridge o REESCREVE na alocacao:
+ *                                     na tarefa de aprovacao ele vira `aprovacao_deploy`
+ *                                     depois do claim (antes dizia o pool do workflow).
+ *   `{t}:ctx:{sid}.core.pool.id`      por onde ENTROU (`gate_promocao_ia`, no mesmo caso).
+ *
+ * As duas discordam de proposito, e e por isso que sao duas: usar so a primeira negaria
+ * a quem acompanha o processo desde a entrada; so a segunda negaria a quem atende.
+ */
+async function poolsDaSessaoViva(
+  redis: { hget: (chave: string, campo: string) => Promise<string | null> },
+  tenantId: string,
+  sessionId: string,
+  poolQueAtende: string,
+): Promise<string[]> {
+  const pools = new Set<string>()
+  if (poolQueAtende) pools.add(poolQueAtende)
+  if (tenantId) {
+    try {
+      const bruto = await redis.hget(`${tenantId}:ctx:${sessionId}`, "core.pool.id")
+      if (bruto) {
+        const entrada = (JSON.parse(bruto) as { value?: unknown })?.value
+        if (typeof entrada === "string" && entrada) pools.add(entrada)
+      }
+    } catch { /* tag ausente ou ilegivel: a outra metade decide */ }
+  }
+  return [...pools]
+}
+
+/**
+ * AUT-47 — o portao de ESCOPO do estado da sessao. `true` = pode seguir; quando
+ * devolve `false` a resposta JA foi escrita.
+ *
+ * ⚠️ **Por que 403 quando nao da para determinar o pool.** E a mesma escolha que a
+ * `analytics-api` fez para CONTEUDO (e o oposto da que fez para LISTA, onde
+ * `pool_id = ''` aparece para o contato ser visivel desde a chegada): sessao sem pool
+ * nenhum resolvivel e indeterminacao, e servir o estado dela seria decidir a favor de
+ * quem pergunta. A recusa NOMEIA o caso, que e o que transforma 1% numa lista se virar
+ * 10%.
+ *
+ * ⚠️ **Dominio do chamador: a MESMA ordem das duas copias TS ja existentes** (o filtro
+ * de `operational` neste arquivo e o de `agent-registry/routes/operational.ts`), que
+ * espelha o `resolve_scope` do py-authz: lista nao-vazia => escopado; qualquer outra
+ * coisa => dominio VAZIO (AUT-03), que NEGA. Inventar aqui uma terceira leitura de
+ * `accessible_pools: []` seria exatamente a divergencia que aquelas duas notas pedem
+ * para nao acontecer.
+ */
+async function autorizaEscopoDaSessao(
+  redis: { hget: (chave: string, campo: string) => Promise<string | null> },
+  payload: Record<string, unknown>,
+  tenantId: string,
+  sessionId: string,
+  poolQueAtende: string,
+  temEstado: boolean,
+  res: Response,
+): Promise<boolean> {
+  // ⚠️ O TENANT vem antes do pool, e nao e zelo: `accessible_pools` carrega `pool_id`
+  // CRU, e pool_id nao e unico entre tenants (as chaves do Redis e que sao —
+  // `{tenant}:pool:{pool}`). Dois tenants com um `sac_ia` cada fariam a lista de um
+  // autorizar a sessao do outro. Recusa so quando os DOIS lados dizem o tenant e eles
+  // diferem — token sem o claim nao e barrado aqui, para nao inventar recusa onde nao
+  // ha comparacao.
+  //
+  // ⚠️ Este ramo NAO e exercivel nesta instalacao (um tenant so), e por isso ele esta
+  // declarado assim no gate em vez de ter um verde que nao mediu nada.
+  const tenantDoToken = typeof payload["tenant_id"] === "string" ? payload["tenant_id"] : ""
+  if (tenantDoToken && tenantId && tenantDoToken !== tenantId) {
+    console.warn(
+      `[supervisor_state] 403 tenant_mismatch — token de ${tenantDoToken} pedindo ` +
+      `sessao de ${tenantId}. sub=${payload["sub"] ?? ""}`,
+    )
+    res.status(403).json({ error: "forbidden", reason: "tenant_mismatch" })
+    return false
+  }
+
+  const bruto = payload["accessible_pools"]
+  const meus  = Array.isArray(bruto) ? bruto.map(String) : []
+  const daSessao = await poolsDaSessaoViva(redis, tenantId, sessionId, poolQueAtende)
+
+  if (daSessao.length === 0) {
+    // ⚠️ DUAS ausencias de aparencia identica, e so uma e recusa. Medido: a sessao
+    // fechada de 2026-09-05 nao tinha `:meta` **nem** `:ai` — nao ha o que servir, e
+    // responder 403 ali diria *"voce nao pode"* sobre uma sessao que apenas expirou,
+    // mandando o operador procurar permissao onde falta DADO. Com estado e sem pool
+    // resolvivel, ai sim e indeterminacao, e a recusa NOMEIA o caso — que e o que
+    // transforma 1% numa lista se virar 10%.
+    if (!temEstado) {
+      console.info(
+        `[supervisor_state] 404 — sessao ${sessionId} sem meta e sem estado vivo ` +
+        `(expirou?). Nao e recusa de escopo. sub=${payload["sub"] ?? ""}`,
+      )
+      res.status(404).json({ error: "not_found", reason: "session_expired_or_unknown" })
+      return false
+    }
+    console.warn(
+      `[supervisor_state] 403 session_scope_undeterminable — sessao ${sessionId} TEM ` +
+      `estado vivo e nenhum pool resolvivel (meta e ctx calados). sub=${payload["sub"] ?? ""}`,
+    )
+    res.status(403).json({ error: "forbidden", reason: "session_scope_undeterminable" })
+    return false
+  }
+  if (!daSessao.some((p) => meus.includes(p))) {
+    console.warn(
+      `[supervisor_state] 403 pool_scope — sessao ${sessionId} e de [${daSessao.join(",")}] ` +
+      `e o chamador alcanca [${meus.join(",") || "<nenhum>"}]. sub=${payload["sub"] ?? ""}`,
+    )
+    res.status(403).json({ error: "forbidden", reason: "pool_not_accessible" })
+    return false
+  }
+  return true
+}
+
 function requireJwtGrant(
   authHeader: string | undefined,
   modulo: string,
@@ -1575,6 +1694,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
           poolId   = meta["pool_id"]   ?? ""
         }
       } catch { /* non-fatal */ }
+
+      // ⚠️ AUT-47 (2026-09-09): ate aqui o unico portao era CAPACIDADE
+      // (`agent_assist.atender`) — nao havia eixo de POOL. Medido ao vivo, numa tarefa
+      // de promocao de deploy: `supervisor@`, que nao alcanca `aprovacao_deploy`,
+      // recebeu **200** com o `resume_token` da tarefa no corpo; `operator@` recebeu
+      // 200 sem o token, e o que o separou foi MASCARAMENTO POR PAPEL, nao escopo.
+      // A `analytics-api` recorta o conteudo do MESMO contato por pool desde
+      // 2026-08-30 — duas portas para o mesmo dado, e so uma trancada.
+      //
+      // O portao vem DEPOIS da leitura do meta porque e de la que sai o pool que
+      // atende (e o tenant); nada foi servido ate aqui.
+      if (!(await autorizaEscopoDaSessao(
+            redis, payload, tenantId, String(sessionId), poolId, ai !== null, res))) return
 
       if (tenantId) {
         try {

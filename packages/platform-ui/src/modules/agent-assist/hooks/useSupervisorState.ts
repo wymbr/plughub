@@ -7,6 +7,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SupervisorState, WsServerEvent } from "../types";
+
+/**
+ * Recusa do servidor ao servir o estado da sessao (AUT-47). `reason` e o do backend —
+ * `pool_not_accessible` · `session_scope_undeterminable` · `tenant_mismatch` —, e 404
+ * com `session_expired_or_unknown` NAO e recusa: e ausencia, e as duas nao podem
+ * chegar a tela com a mesma cara.
+ */
+export interface RecusaDeEstado {
+  status: number;
+  reason: string;
+}
 import { getAccessToken } from "../../../auth/token-store";
 
 const API_BASE = "/api";
@@ -14,8 +25,9 @@ const API_BASE = "/api";
 export function useSupervisorState(
   sessionId: string | null,
   lastEvent: WsServerEvent | null
-): { state: SupervisorState | null; refresh: () => void } {
+): { state: SupervisorState | null; refresh: () => void; recusa: RecusaDeEstado | null } {
   const [state, setState] = useState<SupervisorState | null>(null);
+  const [recusa, setRecusa] = useState<RecusaDeEstado | null>(null);
   const fetchingRef = useRef(false);
 
   const fetchState = useCallback(async () => {
@@ -33,6 +45,25 @@ export function useSupervisorState(
       if (res.ok) {
         const data = (await res.json()) as SupervisorState;
         setState(data);
+        setRecusa(null);
+      } else {
+        // ⚠️ AUT-47 (2026-09-09): aqui NAO havia `else`. Um 401/403 nao virava estado
+        // nem mensagem, e o Console ficava com o painel vazio para sempre — a tela
+        // dizia "nao ha contexto" quando o servidor tinha dito "voce nao pode". Com o
+        // portao de POOL deste endpoint isso passou a acontecer mais vezes, e uma
+        // recusa muda e pior que a recusa: manda o operador procurar dado onde falta
+        // permissao. O `reason` vem do servidor (`pool_not_accessible`,
+        // `session_scope_undeterminable`, `tenant_mismatch`) e viaja no retorno para
+        // quem for renderizar o aviso.
+        let motivo = "";
+        try {
+          motivo = String(((await res.json()) as { reason?: unknown })?.reason ?? "");
+        } catch { /* corpo vazio/nao-JSON: o status ja diz o bastante */ }
+        setRecusa({ status: res.status, reason: motivo });
+        console.warn(
+          `[supervisor_state] ${res.status}${motivo ? ` ${motivo}` : ""} — o estado ` +
+          `desta sessao nao foi servido. Nao e "sem contexto": e recusa do servidor.`,
+        );
       }
     } catch {
       // ignore transient errors — stale state is acceptable
@@ -70,5 +101,5 @@ export function useSupervisorState(
     }
   }, [lastEvent, fetchState]);
 
-  return { state, refresh: fetchState };
+  return { state, refresh: fetchState, recusa };
 }
