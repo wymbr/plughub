@@ -166,11 +166,11 @@
     "poolsUnwatchedUnknown": "Lista de usuários possivelmente incompleta — o censo de pools sem vigia não pode afirmar nada."
   },
   "roles": {
-    "operator": "Operator",
+    "operator": "Operador",
     "supervisor": "Supervisor",
-    "admin": "Admin",
+    "admin": "Administrador",
     "devops": "DevOps",
-    "business": "Business"
+    "business": "Negócios"
   },
   "modules": {
     "analytics": "Analytics",
