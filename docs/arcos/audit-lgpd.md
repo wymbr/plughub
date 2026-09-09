@@ -24,7 +24,7 @@ Defined in `infra/modules.yaml` under the `audit` module key. Five fields:
 
 The `PermissionChecker` (platform-ui) and `_check_audit_field` (analytics-api) both use the same `_ACCESS_ORDER` map:
 ```python
-{"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+{"none": 0, "read_only": 1, "read_write": 2}   # `write_only` removido na AUT-40
 ```
 
 ---

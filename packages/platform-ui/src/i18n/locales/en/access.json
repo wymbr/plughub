@@ -89,7 +89,6 @@
     "access": {
       "none": "No access",
       "read_only": "View only",
-      "write_only": "Write only",
       "read_write": "View and edit"
     },
     "scopeLabel": "Scope by {{type}}",

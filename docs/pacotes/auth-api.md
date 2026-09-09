@@ -161,10 +161,6 @@ Token HS256, TTL 1 hora (configurável via env).
     "audit": {
       "sessions":  { "access": "read_only", "scope": [] },
       "mcp_calls": { "access": "read_only", "scope": [] }
-    },
-    "workflows": {
-      "journey.read":   { "access": "read_only",  "scope": [] },
-      "journey.resume": { "access": "write_only", "scope": [] }
     }
   },
   "supervised_groups":      ["group_sac_turno_dia"],

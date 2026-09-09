@@ -64,7 +64,7 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+RANK = {"none": 0, "read_only": 1, "read_write": 2}
 
 
 def call(base, path, token, data=None, method=None):

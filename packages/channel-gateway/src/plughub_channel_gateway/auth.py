@@ -25,7 +25,8 @@ Saíram daqui, para `plughub_authz`:
 virava rank 1 e, com ele, qualquer grant `read_only` para cima passava. O canônico
 levanta `ValueError`, porque erro de programação que vira *"passa"* é como um portão
 se paga sozinho. Era **inerte hoje** — o único call site (`main.py`
-`_resolve_approver_principal`) passa o literal `"write_only"` —, e é justamente por
+`_resolve_approver_principal`) passava o literal `"write_only"`, removido na AUT-40 —,
+e é justamente por
 isso que valia fechar antes de alguém escrever o segundo call site.
 
 O QUE FICA AQUI, E POR QUÊ
@@ -44,7 +45,7 @@ analytics-api consome.
 Uso (A5 — resume de aprovação interna):
     from plughub_authz import abac_can, verify_user_jwt
     payload = verify_user_jwt(token, settings.auth_jwt_secret)
-    if payload and abac_can(payload, "approvals", "decide", "write_only"):
+    if payload and abac_can(payload, "approvals", "decide", "read_only"):
         ...  # possessed-grade; `sub` = decided_by
 """
 from __future__ import annotations

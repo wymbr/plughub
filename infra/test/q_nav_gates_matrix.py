@@ -46,8 +46,9 @@ TENANT = os.environ.get("TENANT", "tenant_demo")
 EMAIL = os.environ.get("PLUGHUB_TEST_EMAIL", "admin@plughub.local")
 PASSWD = os.environ.get("PLUGHUB_TEST_PASS", "changeme_admin")
 
-# `read_only`/`write_only` colapsam em 1; `read_write` = 2 (espelha PermissionChecker)
-ACCESS_ORDER = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+# Três degraus desde a AUT-40 (`write_only` saiu do modelo); espelha o
+# `ACCESS_RANK` canônico e o `PermissionChecker` da tela.
+ACCESS_ORDER = {"none": 0, "read_only": 1, "read_write": 2}
 
 
 def sh(*args: str) -> str:

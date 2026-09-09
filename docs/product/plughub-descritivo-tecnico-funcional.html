@@ -399,7 +399,7 @@ Mascaramento nativo, não um add-on:
 Controle de acesso em quatro mecanismos combinados:
 
 - **RBAC:** papéis `operator`, `supervisor`, `admin`, `developer`, `business`.
-- **ABAC:** `module_config` no JWT, 9 módulos (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`); cada campo tem `access` (`none|read_only|write_only|read_write`) + `scope[]`; `PermissionChecker.can(module, field)` valida no frontend **e** no backend. Degradação graciosa para contas legadas sem `module_config`.
+- **ABAC:** `module_config` no JWT, 9 módulos (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`); cada campo tem `access` (`none|read_only|read_write`) + `scope[]`; `PermissionChecker.can(module, field)` valida no frontend **e** no backend. Degradação graciosa para contas legadas sem `module_config`.
 - **Pool:** acesso a dados limitado por `accessible_pools[]` no JWT (filtro row-level na analytics-api).
 - **Grupo:** `AgentGroup` é a entidade de organização de pessoas (org chart, ortogonal a Pool). O escopo do supervisor é resolvido por turno na emissão do JWT e denormalizado (`supervised_groups[]`, `supervised_agent_types[]`, `supervised_user_ids[]`), com sentinela para "sem turno ativo" que evita interpretar lista vazia como acesso irrestrito.
 - **Visibilidade de dados:** controlada pelo masking (§10).

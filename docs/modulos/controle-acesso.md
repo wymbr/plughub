@@ -51,7 +51,7 @@ Os campos `workflows.journey.read` e `workflows.journey.resume` (Arc 16) governa
 ### Hierarquia de acesso por campo
 
 ```
-none < read_only < write_only < read_write
+none < read_only < read_write
 ```
 
 ### Escopo de acesso

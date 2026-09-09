@@ -74,7 +74,8 @@ router = APIRouter(prefix="/v1/audit", tags=["audit"])
 # nas DUAS ordens `write_only` satisfaz `read_only`. As dez linhas da tabela-verdade em
 # `tests/test_audit_gate.py` respondem igual antes e depois — foi assim que se soube
 # que a troca é behavior-preserving, em vez de se supor. Ela ficaria viva no primeiro
-# call site que pedisse `min_access="write_only"`, e é esse que não vai mais existir.
+# call site que pedisse `min_access="write_only"` — e em 2026-09-09 (AUT-40) os dois
+# que existiam migraram e o grau saiu do modelo, então ela não pode mais ficar viva.
 #
 # O QUE **NÃO** FOI USADO, E POR QUÊ: `enforce_write`.
 # ---------------------------------------------------

@@ -306,7 +306,7 @@ Documentação: [`adr/adr-message-masking.md`](adr/adr-message-masking.md), [`gu
 O controle de acesso combina quatro mecanismos:
 
 - **RBAC** — papéis `operator`, `supervisor`, `admin`, `developer`, `business`.
-- **ABAC** — `module_config` no JWT, com 9 módulos (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`); cada campo tem `access` (`none|read_only|write_only|read_write`) e `scope[]`. O `PermissionChecker.can(module, field)` valida no frontend e no backend.
+- **ABAC** — `module_config` no JWT, com 9 módulos (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`); cada campo tem `access` (`none|read_only|read_write`) e `scope[]`. O `PermissionChecker.can(module, field)` valida no frontend e no backend.
 - **Pool** — acesso a dados limitado pelos pools acessíveis (`accessible_pools[]` no JWT; filtro row-level na analytics-api).
 - **Grupo** — `AgentGroup` é a entidade de organização de pessoas (org chart, ortogonal a Pool); o escopo do supervisor é denormalizado no JWT (`supervised_groups[]`, `supervised_agent_types[]`, `supervised_user_ids[]`) na emissão do token.
 

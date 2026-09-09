@@ -197,15 +197,20 @@ def test_grant_de_OUTRO_modulo_nao_serve():
     assert e.value.status_code == 403
 
 
-def test_read_only_satisfaz_write_only_e_isso_e_a_tabela_canonica():
-    """`read_only` e `write_only` COLAPSAM em rank 1 — pinado de propósito.
+def test_o_portao_pede_o_grau_LATERAL_e_nao_read_write():
+    """Um grant `read_only` satisfaz o portão — pinado de propósito.
 
-    O call site pede `write_only`, então um grant `read_only` passaria. Não é defeito
-    vivo: `infra/modules.yaml` declara `approvals.decide` com domínio
-    `[none, read_write]`, e `auth-api/db.py:661` RECUSA gravar access fora do domínio —
-    logo `read_only` neste campo não é cunhável. O que este teste protege é a descoberta
-    dessa dependência: se alguém alargar o domínio do campo, é aqui que se lembra de que
-    o portão pede o grau lateral, e não `read_write`.
+    ⚠️ Este teste chamava-se `..._satisfaz_write_only_...` e a prosa descrevia um call
+    site que pedia `write_only`. O literal saiu do modelo na AUT-40 (2026-09-09), e a
+    troca foi MEDIDA, não presumida: o catálogo vivo não oferecia `write_only` em
+    domínio nenhum, então grant algum podia sê-lo e os dois mínimos selecionavam o
+    mesmo conjunto.
+
+    A PROPOSIÇÃO sobreviveu inteira, e é ela que importa: o portão pede o grau MENOR,
+    **não** `read_write`. Hoje `approvals.decide` tem domínio `[none, read_write]` e
+    `auth-api/db.py:661` recusa gravar access fora dele, então `read_only` neste campo
+    não é cunhável — este teste é onde alguém que ALARGUE o domínio descobre que o
+    portão abre com o grau menor.
     """
     req = _bearer(**_mc("read_only"), unrestricted=True)
     assert cg_main._resolve_approver_principal(req, _body(), APROVACAO) is not None

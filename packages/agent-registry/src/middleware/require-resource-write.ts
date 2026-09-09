@@ -34,7 +34,7 @@ import crypto from "crypto"
 import type { Request, Response, NextFunction } from "express"
 import { config } from "../config"
 
-const RANK: Record<string, number> = { none: 0, read_only: 1, write_only: 1, read_write: 2 }
+const RANK: Record<string, number> = { none: 0, read_only: 1, read_write: 2 }
 
 export function verifyHs256(token: string, secret: string): Record<string, any> {
   const parts = token.split(".")

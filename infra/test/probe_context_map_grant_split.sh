@@ -236,9 +236,9 @@ print('%s|%s' % (acc('masking'), acc('context_map')))
 " 2>/dev/null)"
   echo "     admin: masking=${H_OUT%%|*}  context_map=${H_OUT##*|}"
   case "$H_OUT" in
-    read_write\|read_write|write_only\|write_only|read_write\|write_only|write_only\|read_write)
+    read_write\|read_write)
         ok "H: quem tinha o catalogo NAO perdeu o mapa — o backfill vale" ;;
-    read_write\|*|write_only\|*)
+    read_write\|*)
         bad "H: o admin tem o catalogo e NAO tem o mapa — o split removeu capacidade (falta backfill)" ;;
     "") huh "H: nao consegui ler os claims do admin — SEM AMOSTRA" ;;
     *)  huh "H: admin sem 'config.masking' ($H_OUT) — a implicacao nao e exercivel" ;;

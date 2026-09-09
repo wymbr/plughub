@@ -1,5 +1,93 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (17) — AUT-40: a divergência morreu com o elemento que a produzia
+
+### 1 · O que era, e por que não dava para consertar dos dois lados
+
+`write_only` era o único ponto em que as duas ordens de acesso da casa discordavam:
+
+| casa | forma | `write_only` × `read_only` |
+|---|---|---|
+| `py-authz.ACCESS_RANK` (+ 4 cópias em TS, 2 em `infra/scripts/`, 3 em `infra/test/`) | dict | **iguais** (rank 1) |
+| `platform-ui/lib/permissions.ts` | lista **INDEXADA** | `write_only` **maior** |
+
+O cabeçalho do `py-authz` dava essa divergência por fechada — e ela estava fechada
+**em Python**, viva na UI. Escolher uma das duas ordens seria inventar uma escada onde
+há graus laterais; a saída foi **remover o elemento**, e com três degraus as duas
+leituras coincidem sem ninguém precisar concordar.
+
+### 2 · A ordem dos dois passos é a ficha inteira
+
+`abac_can` levanta `ValueError` para `min_access` desconhecido — decisão canônica, e
+boa: um typo virando rank 0 fazia qualquer grant passar. Consequência: **tirar do rank
+com os call sites ainda pedindo o literal daria 500 no lugar de negação.** Por isso os
+dois migraram primeiro (`channel-gateway/auth.py:47` e `main.py:1694`).
+
+### 3 · A equivalência é ESTRUTURAL, não conjuntural
+
+| pergunta | medida |
+|---|---|
+| algum domínio do catálogo vivo oferece `write_only`? | **0** |
+| então um grant pode sê-lo? | **não** — `validate_module_config` recusa access fora do domínio (422) |
+| quantos grants o usam? | **0** (111 `read_write` + 24 `read_only`) |
+| e no call site **dinâmico**, cujo par vem de `session.resume_abac`? | **0 skills** o declaram (registry, repo, hashes vivos) — só chega o retrocompat `("approvals","decide")` |
+| quem tem `approvals.decide` hoje? | **6 usuários, todos `read_write`** — rank 2, acima dos dois mínimos |
+
+Os dois mínimos selecionavam o mesmo conjunto. Não é "não quebrou": é que não havia
+como quebrar.
+
+### 4 · O censo da ficha estava curto, e uma lista parece completa por ser uma lista
+
+A ficha dizia **7 cópias** da tabela de rank ("a canônica, 4 em TS e 2 em
+`infra/test/`"). Medido: **10** — as duas contadas como `infra/test/` eram
+`infra/scripts/`, e **três** helpers de `infra/test/` (`_seed_vs_preset.py`,
+`_hiring_pairs.py`, `q_nav_gates_matrix.py`) não estavam na lista. Mais **três suítes**
+que pinavam o literal, e um `case` de shell com ramos para um valor que deixou de
+existir.
+
+### 5 · Instrumento: reescrever o teste para a proposição que SOBREVIVEU
+
+Três testes afirmavam `write_only` no nome ou na prosa. Nenhum foi apagado — apagar
+teria deixado a ressurreição do grau passar sem nada ficar vermelho:
+
+- `py-authz`: `test_rank_write_only_iguala_read_only` → `..._tem_tres_degraus_e_a_ordem_e_TOTAL`,
+  e a asserção passou a ser sobre o **dict inteiro**, não sobre chaves avulsas;
+  as duas linhas da tabela-verdade com `write_only` **mudaram de valor** (hoje NEGAM);
+  e o literal entrou na lista de `min_access` que **levanta**;
+- `analytics-api`: `("write_only", True)` → `False` — o grau retirado passou à família
+  de `valor_inventado`;
+- `channel-gateway`: `test_read_only_satisfaz_write_only_…` → `test_o_portao_pede_o_grau_LATERAL_e_nao_read_write`.
+  A **proposição** sobreviveu inteira (o portão pede o grau MENOR, não `read_write`);
+  só o nome e a prosa envelheceram.
+
+E `abac_can` ganhou o que faltava: grant com access fora do rank NEGA — e **loga
+WARNING**. Antes, um valor desconhecido virava rank 0 em silêncio.
+
+### 6 · Verde medido
+
+`py-authz` 62/0 · `channel-gateway` **771/0** · `analytics-api` 766/0 · `auth-api` 91/0
+· `platform-ui` `tsc --noEmit` limpo (o tipo perdeu um membro da união) ·
+`probe_i18n_duplicate_keys` · `probe_context_map_grant_split` ·
+`probe_config_permissions_census` verdes. Ao vivo, com a imagem reconstruída:
+`ACCESS_RANK = {none:0, read_only:1, read_write:2}` e o call site migrado **ACEITANDO
+o admin** — o controle positivo, sem o qual o negativo passa pelo motivo errado.
+
+⚠️ **Falso vermelho que quase virou relatório:** a primeira medição do `channel-gateway`
+deu **191 falhas**. Eram minhas — rodei com `-w /app`, e o WORKDIR do pacote é
+`/app/packages/channel-gateway`. Trocar o rootdir descarta o `[tool.pytest.ini_options]`
+(`asyncio_mode = "auto"`), exatamente o instrumento que o `CLAUDE.md` já registra como
+fabricante de falso vermelho. Quem denunciou foi comparar a MESMA suíte medida de outro
+jeito (771/0 no workdir certo) — um número sozinho não diz de qual proposição é
+evidência.
+
+⚠️ **Achado de passagem, virou ficha (AUT-46):** os **6** portadores de
+`approvals.decide` incluem `supervisor@` e `operator@`, e o supervisor o recebeu **na
+MOD-08/G1b (2026-09-08)** por causa do guard de RANK — `preset(operator) ⊆
+preset(supervisor)` —, não por decisão sobre aprovação. Capacidade de decidir (inclusive
+promoção de deploy) entrando de carona numa regra de CONTRATAÇÃO. Duas casas de prosa
+ainda afirmam o contrário, e o S2 do `probe_resume_approver_authz.sh` ficaria **vermelho
+sem defeito** se alguém o exercesse.
+
 ## 2026-09-09 (16) — AUT-39: a tomada lateral de conta, e o eixo que não existia
 
 ### 1 · Medido antes de consertar, de ponta a ponta

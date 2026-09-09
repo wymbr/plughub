@@ -331,7 +331,7 @@ const isAdmin = session?.roles.includes('admin')
 
 ### ABAC — controle de acesso por módulo (`module_config`)
 
-Além dos papéis, a `platform-ui` aplica **ABAC** (attribute-based access control). O JWT carrega `module_config`: para cada módulo (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`) e cada campo, um nível de acesso (`none | read_only | write_only | read_write`) + lista de `scope[]`.
+Além dos papéis, a `platform-ui` aplica **ABAC** (attribute-based access control). O JWT carrega `module_config`: para cada módulo (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`, `workflows`, `agent_assist`, `campaigns`, `audit`) e cada campo, um nível de acesso (`none | read_only | read_write`) + lista de `scope[]`.
 
 ```typescript
 // PermissionChecker — avaliado localmente a partir do module_config do JWT

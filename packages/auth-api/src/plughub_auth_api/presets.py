@@ -38,7 +38,9 @@ from plughub_authz import ACCESS_RANK as _RANK
 
 logger = logging.getLogger("plughub.auth_api.presets")
 
-# read_only e write_only sao incomparaveis entre si, mas ambos < read_write.
+# `none` < `read_only` < `read_write`, e a ordem e TOTAL desde a AUT-40
+# (2026-09-09): `write_only` — o unico grau que nao se comparava com `read_only` —
+# saiu do modelo, medido em 0 dominios e 0 grants.
 #
 # ⚠️ Ate 2026-08-28 esta era a QUARTA copia da tabela de rank, e o comentario que a
 # acompanhava dizia apontar "as tres casas" — apontar nao e mecanismo, e foi assim que as seis
@@ -47,9 +49,10 @@ logger = logging.getLogger("plughub.auth_api.presets")
 # decodifica JWT nem le `module_config` de claims): a copia estava no eixo VIZINHO,
 # como o resolvedor de escopo estava.
 #
-# `>` sobre esta tabela mantem o PRIMEIRO entre `read_only` e `write_only`, que
-# colapsam em 1. Ambiguidade preexistente e preservada de proposito: escolher um dos
-# dois aqui seria inventar uma ordem que nenhuma das outras casas tem.
+# ⚠️ Havia aqui uma AMBIGUIDADE declarada: `>` sobre a tabela mantinha o PRIMEIRO
+# entre `read_only` e `write_only`, que colapsavam em 1, e escolher um dos dois seria
+# inventar uma ordem que nenhuma outra casa tinha. Ela deixou de existir na AUT-40:
+# com tres degraus distintos, `>` desempata sozinho e nao ha par incomparavel.
 
 
 def build_module_config(

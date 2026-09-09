@@ -71,8 +71,8 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-# `read_only` e `write_only` colapsam em 1 — tabela canonica em `plughub_authz`.
-# Aqui basta "detem ou nao", entao o rank nao entra: qualquer coisa != none conta.
+# Tabela canonica em `plughub_authz` (tres degraus desde a AUT-40). Aqui basta
+# "detem ou nao", entao o rank nao entra: qualquer coisa != none conta.
 NAO_DETEM = ("none", "", None)
 
 

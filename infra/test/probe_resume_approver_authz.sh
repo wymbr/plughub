@@ -26,6 +26,16 @@
 # em vez de sair verde: token inexistente devolve 404 para todo mundo, e ler isso como
 # "recusou o nao-autorizado" seria medir o proprio 404.
 #
+# ⚠️⚠️ A EXPECTATIVA DO S2 ENVELHECEU, e quem a exercer vai ver vermelho sem defeito.
+# Ela diz *"supervisor NAO tem `approvals.decide`"*, o que era verdade quando este
+# probe nasceu (2026-08-27). Medido em 2026-09-09, de dentro da AUT-40: **6 usuarios
+# do tenant tem o grant, todos `read_write`** — admin, supervisor, operator e tres
+# fixtures. O supervisor ganhou o campo na MOD-08/G1b (2026-09-08), e nao por decisao
+# sobre aprovacao: o guard de RANK da MOD-02 exige `preset(operator) ⊆
+# preset(supervisor)`, entao dar o campo ao operator obrigou a da-lo ao supervisor.
+# Capacidade que entra de carona num guard de contencao e coisa a DECIDIR, nao a
+# consertar aqui. Ficha **AUT-46**.
+#
 # SAIDA: 0 = VERDE · 1 = VERMELHO · 2 = INCONCLUSIVO
 # ==============================================================================
 set -uo pipefail

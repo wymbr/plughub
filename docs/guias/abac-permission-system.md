@@ -56,15 +56,24 @@ Cada usuário carrega um campo `module_config` (JSONB no PostgreSQL, embedded no
 ### Hierarquia de acesso
 
 ```
-none < read_only < write_only < read_write
+none < read_only < read_write
 ```
 
 | Nível | Significado |
 |---|---|
 | `none` | Sem acesso — botões ocultados, sidebar item oculto |
 | `read_only` | Leitura apenas — pode ver, não pode agir |
-| `write_only` | Escrita sem leitura (raro — para ingestão cega) |
 | `read_write` | Acesso completo |
+
+> ⚠️ **Havia um quarto valor, `write_only` (*"escrita sem leitura, raro — para ingestão
+> cega"*), e ele saiu do modelo em 2026-09-09 (AUT-40).** Não por gosto: ele era o
+> ÚNICO ponto em que as duas ordens da casa discordavam — o `ACCESS_RANK` do `py-authz`
+> o colapsava com `read_only` em 1, e a lista INDEXADA da `permissions.ts` o punha
+> estritamente acima. Medido antes de tirar: **0** domínios do catálogo vivo o
+> ofereciam (então `validate_module_config`, que recusa `access` fora do domínio com
+> 422, tornava um grant assim **incunhável**) e **0** grants o usavam. Sem ele a ordem
+> é TOTAL e as duas leituras coincidem. Um grant que ainda o carregue é negado
+> (fail-closed) e o `abac_can` loga WARNING — nunca em silêncio.
 
 ### Escopo por pool
 
@@ -362,7 +371,7 @@ checker.can("workflows", "journey.resume", scope_id="pool_sac")
 ```
 
 `PermissionChecker.can(module, field, min_access?, scope_id?)` aplica a mesma
-hierarquia (`none < read_only < write_only < read_write`) e o mesmo escopo por pool
+hierarquia (`none < read_only < read_write`) e o mesmo escopo por pool
 da implementação TypeScript. Exemplos em uso: `journey_list_suspended` /
 `journey_resume` (módulo `workflows`), endpoints `/v1/audit/*` em analytics-api
 (`_require_audit_access()` valida `audit.sessions` / `audit.mcp_calls`), e os

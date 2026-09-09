@@ -50,7 +50,7 @@ except Exception:  # noqa: BLE001
 # estatico (le YAML, nao importa o pacote), e a copia e conferida pelo ramo B abaixo:
 # um valor de `role_defaults` fora deste dominio reprova em vez de virar rank 0 — que
 # era a "divergencia 4" que fazia typo de `min_access` liberar tudo.
-RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+RANK = {"none": 0, "read_only": 1, "read_write": 2}
 
 
 def presets_por_papel(catalogo: dict) -> dict[str, dict[str, str]]:

@@ -10,7 +10,7 @@
 import crypto from "crypto"
 import type { Request, Response, NextFunction, RequestHandler } from "express"
 
-const RANK: Record<string, number> = { none: 0, read_only: 1, write_only: 1, read_write: 2 }
+const RANK: Record<string, number> = { none: 0, read_only: 1, read_write: 2 }
 
 export interface KnowledgeGateOpts {
   serviceToken: string

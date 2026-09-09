@@ -41,9 +41,11 @@ reprova a sétima.
 
 DECISÕES CANÔNICAS (cada uma resolve uma das divergências medidas)
 ==================================================================
-  · UMA tabela de rank, com `read_only` e `write_only` COLAPSADOS em 1 — a maioria
-    medida, e a que a UI (`permissions.ts`) usa. A lista indexada da `analytics-api` é
-    o outlier; ela está registrada, não replicada.
+  · UMA tabela de rank. Até 2026-09-09 ela COLAPSAVA `read_only` e `write_only` em 1
+    (a maioria medida), e a lista indexada da `analytics-api` ficava registrada como
+    outlier. A **AUT-40 fechou a divergência 2 por REMOÇÃO**: `write_only` saiu do
+    modelo — 0 domínios o ofereciam, 0 grants o usavam —, e sem ele as duas ordens
+    coincidem. Ver o bloco sobre `ACCESS_RANK` abaixo.
   · `min_access` DESCONHECIDO levanta `ValueError` na chamada. É erro de programação,
     e erro de programação que vira "passa" é como o defeito 4 se paga.
   · `module_config` vazio ⇒ **nega**. Grant-first, a decisão do arco de ABAC total: a
@@ -76,12 +78,22 @@ __all__ = [
     "verify_user_jwt",
 ]
 
-# `read_only` e `write_only` COLAPSAM em 1 de propósito: são graus laterais do mesmo
-# nível, não uma escada. Quem precisa escrever pede `read_write`.
+# ⚠️ `write_only` foi REMOVIDO em 2026-09-09 (AUT-40), e com ele morreu a
+# **divergência 2** do cabeçalho acima. Ela não foi consertada por patch: as duas
+# ordens da casa discordavam SÓ nele (aqui colapsado com `read_only` em 1; na lista
+# INDEXADA da UI, estritamente maior), então tirar o elemento que a produzia faz as
+# duas leituras coincidirem. Com três degraus a ordem é TOTAL dos dois lados.
+#
+# Medido antes de tirar: **0** domínios do catálogo vivo o ofereciam, **0** grants o
+# usavam (111 `read_write` + 24 `read_only`), e `validate_module_config` recusa com
+# 422 o `access` fora do domínio — logo nenhum grant podia sê-lo.
+#
+# ⚠️ A ORDEM importou: os dois call sites que passavam `min_access="write_only"`
+# migraram ANTES. Remover do rank primeiro faria `abac_can` levantar `ValueError`
+# para eles — **500 em vez de negação**.
 ACCESS_RANK: dict[str, int] = {
     "none": 0,
     "read_only": 1,
-    "write_only": 1,
     "read_write": 2,
 }
 
@@ -165,6 +177,16 @@ def abac_can(
     if not isinstance(fld, dict):
         return False
     access = fld.get("access") or "none"
+    if access not in ACCESS_RANK:
+        # Grau RETIRADO do modelo (`write_only`, AUT-40) ou valor inventado: cai em
+        # rank 0 e NEGA — fail-closed, que é a postura certa. Mas nunca em silêncio:
+        # um grant que deixa de valer sem dizer nada é a degradação muda que esta casa
+        # proíbe. E como `validate_module_config` recusa access fora do domínio, uma
+        # linha destas denuncia store editado à mão, não uso legítimo.
+        logger.warning(
+            "authz: access desconhecido %r em %s.%s — tratado como 'none' (NEGA)",
+            access, module, field,
+        )
     if ACCESS_RANK.get(access, 0) < ACCESS_RANK[min_access]:
         return False
 

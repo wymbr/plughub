@@ -6,7 +6,7 @@
  * (obtido via GET /auth/modules).
  *
  * Cada campo vira um bloco com:
- *  - Select de acesso (none / read_only / write_only / read_write) filtrado pelo domain
+ *  - Select de acesso (none / read_only / read_write) filtrado pelo domain
  *  - Input de escopo (pool IDs ou campaign IDs) quando scopable=true e access != none
  *
  * Props:

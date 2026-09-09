@@ -14,7 +14,7 @@ Saida: 0 = iguais (uma linha de resumo) · 1 = divergem (uma linha por diferenca
 import ast
 import sys
 
-RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+RANK = {"none": 0, "read_only": 1, "read_write": 2}
 
 
 def demo_users(caminho: str) -> list[dict]:

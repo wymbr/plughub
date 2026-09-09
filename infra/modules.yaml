@@ -10,7 +10,9 @@
 #     scope_type: string — "pool" | "campaign" (apenas quando scopable: true)
 #     default:    string — valor padrão para novos usuários
 #
-# Domínio de 'access': [none, read_only, write_only, read_write]
+# Domínio de 'access': [none, read_only, read_write]
+# (`write_only` REMOVIDO na AUT-40, 2026-09-09: 0 domínios o ofereciam e 0 grants
+#  o usavam. Ver `packages/py-authz/src/plughub_authz/__init__.py`.)
 
 modules:
 

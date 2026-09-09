@@ -25,9 +25,10 @@ import jwt
 # O verificador é o CANÔNICO desde o passo 4 (2026-08-28). A tabela-verdade abaixo era
 # de `_has_abac` (lista indexada, `write_only` > `read_only`) e passou a apontar para
 # `abac_can` (dict, `write_only == read_only == 1`) SEM mudar uma linha esperada — é
-# essa invariância que prova que a troca é behavior-preserving neste gate, em vez de
-# supô-lo. A divergência das duas ordens só ficaria viva com `min_access="write_only"`,
-# que este portão nunca pede.
+# essa invariância que provou que a troca era behavior-preserving neste gate, em vez de
+# supô-lo. ⚠️ Em 2026-09-09 (AUT-40) `write_only` saiu do modelo e UMA linha mudou de
+# valor: um grant que o carregue passou a ser negado. As duas ordens deixaram de
+# existir como duas — não por acordo, por remoção do único ponto em que discordavam.
 from plughub_authz import abac_can
 
 from plughub_analytics_api.audit import (
@@ -84,10 +85,14 @@ def settings(monkeypatch):
     [
         ("read_write", True),
         ("read_only", True),
-        # `write_only` está ACIMA de read_only na hierarquia declarada em
-        # permissions.ts. Inventar uma segunda ordem aqui faria o gate da API
-        # discordar do gate da tela, e gate que discorda de gate é gate nenhum.
-        ("write_only", True),
+        # ⚠️ Era `("write_only", True)`, com a nota de que ele estava ACIMA de
+        # `read_only` na hierarquia da `permissions.ts`. O grau saiu do modelo na
+        # AUT-40 (2026-09-09) — 0 domínios o ofereciam, 0 grants o usavam —, e com
+        # ele saiu a última diferença entre a ordem desta casa e a da tela. Hoje um
+        # grant que ainda o carregue é da mesma família de `valor_inventado`: rank 0,
+        # NEGA. A linha continua aqui, com o valor invertido, porque apagá-la deixaria
+        # a ressurreição do grau passar sem nada ficar vermelho.
+        ("write_only", False),
         ("none", False),
         ("valor_inventado", False),
     ],

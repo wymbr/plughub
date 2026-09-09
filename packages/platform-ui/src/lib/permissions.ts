@@ -20,7 +20,16 @@
 import type { ModuleConfig, ModuleFieldConfig, PermissionAccess } from '@/types'
 
 // Hierarquia de acesso: um nível mais alto inclui os anteriores.
-const ACCESS_LEVELS: PermissionAccess[] = ['none', 'read_only', 'write_only', 'read_write']
+//
+// ⚠️ AUT-40 (2026-09-09): esta lista era INDEXADA com `write_only` no meio, e por
+// isso punha `write_only > read_only` enquanto o `ACCESS_RANK` canônico do
+// `py-authz` COLAPSAVA os dois em 1 — a "divergência 2", que o cabeçalho daquele
+// pacote dava por fechada em Python enquanto ela seguia viva aqui. Removido o
+// elemento que a produzia, as duas ordens coincidem.
+//
+// `indexOf` devolve **-1** para valor fora da lista, que é MENOR que `none` — um
+// grant retirado do modelo nega, como nega no Python. Fail-closed dos dois lados.
+const ACCESS_LEVELS: PermissionAccess[] = ['none', 'read_only', 'read_write']
 
 function accessLevel(access: PermissionAccess): number {
   return ACCESS_LEVELS.indexOf(access)

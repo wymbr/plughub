@@ -836,7 +836,7 @@ Quatro mecanismos combinados:
 - **RBAC:** papéis `operator`, `supervisor`, `admin`, `developer`, `business`.
 - **ABAC:** `module_config` no JWT, com módulos (`evaluation`, `contacts`, `billing`, `config`, `skill_flows`,
   `workflows`, `agent_assist`, `campaigns`, `audit`, `scheduler`, `outbound`, `approvals`). Cada campo tem
-  `access` (`none|read_only|write_only|read_write`) + `scope[]`; `PermissionChecker.can(module, field)` valida no
+  `access` (`none|read_only|read_write`) + `scope[]`; `PermissionChecker.can(module, field)` valida no
   frontend **e** no backend. Degradação graciosa para contas legadas sem `module_config`.
 - **Pool:** `accessible_pools[]` no JWT aplica filtro row-level na analytics-api. Vazio = todos os pools.
 - **Grupo:** `AgentGroup` é entidade de organização de pessoas (org chart), **ortogonal a Pool** (que é

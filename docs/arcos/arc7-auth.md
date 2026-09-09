@@ -502,7 +502,7 @@ O access token agora inclui o campo `module_config` extraído de `auth.users`:
 #### Tipos em `src/types/index.ts`
 
 ```typescript
-export type PermissionAccess = 'none' | 'read_only' | 'write_only' | 'read_write'
+export type PermissionAccess = 'none' | 'read_only' | 'read_write'
 
 export interface ModuleFieldConfig {
   access: PermissionAccess
@@ -547,11 +547,11 @@ const perms = makePermissions(session?.moduleConfig)
 perms.can('evaluation', 'revisar')                               // tem qualquer acesso?
 perms.can('evaluation', 'revisar', 'read_write')                 // tem read_write?
 perms.can('evaluation', 'revisar', 'read_write', 'pool:sac')     // tem acesso ao pool sac?
-perms.access('evaluation', 'contestar')                          // 'none'|'read_only'|'write_only'|'read_write'
+perms.access('evaluation', 'contestar')                          // 'none'|'read_only'|'read_write'
 perms.scopeOf('evaluation', 'revisar')                           // [] = global; ['pool:x', 'pool:y']
 ```
 
-**Hierarquia de acesso:** `none < read_only < write_only < read_write`. Quando `scope: []`, acesso é global (qualquer pool/campaign passa na validação de escopo).
+**Hierarquia de acesso:** `none < read_only < read_write` *(`write_only` removido na AUT-40, 2026-09-09 — era o único ponto de divergência entre esta lista indexada e o `ACCESS_RANK` do `py-authz`, que o colapsava com `read_only`)*. Quando `scope: []`, acesso é global (qualquer pool/campaign passa na validação de escopo).
 
 #### Componente: `src/components/ModulePermissionForm.tsx`
 
@@ -1051,7 +1051,7 @@ commit que abre duas portas é raio de ação onde regressão se esconde.
 ### `packages/py-authz` — API e decisões canônicas
 
 ```python
-ACCESS_RANK  = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+ACCESS_RANK  = {"none": 0, "read_only": 1, "read_write": 2}
 bearer_from_header(authorization) -> str | None
 verify_user_jwt(token, secret)    -> dict | None      # None = ausente/inválido/expirado
 abac_can(claims, module, field, min_access="read_only") -> bool
@@ -1063,7 +1063,7 @@ Cada decisão fecha uma divergência medida:
 
 | decisão | divergência que fecha |
 |---|---|
-| uma tabela de rank, `read_only` e `write_only` colapsados em 1 (o que `permissions.ts` usa) | a lista indexada da `analytics-api`, onde `write_only > read_only` — **registrada, não replicada** |
+| uma tabela de rank | a lista indexada da `analytics-api`, onde `write_only > read_only`. Ficou **registrada, não replicada**, até a AUT-40 (2026-09-09) **remover `write_only` do modelo** — as duas ordens discordavam só nele, então a divergência morreu com o elemento |
 | `min_access` desconhecido levanta `ValueError` | o `.get(min_access, 0)` que faz typo virar "passa" |
 | `module_config` vazio ⇒ **nega** | o ramo que libera na `evaluation-api` (grant-first: ausência de grants nunca é autorização) |
 | credencial ausente ⇒ **401**; grant insuficiente ⇒ **403** | 401 × 403 entre config-api e pricing-api. Dois estados diferentes, dois códigos |

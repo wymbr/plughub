@@ -1380,7 +1380,9 @@ de 43 chars com rotação e SHA-256 no store. `accessible_pools[]` no JWT filtra
 **ABAC** (`module_config` no JWT, `auth.module_registry` semeado de `infra/modules.yaml`): **11 módulos**
 *(medido 2026-09-08; dizia `8` e o catálogo tinha 12 — a contagem em prosa não tem mecanismo, então
 envelhece calada. `workflows` saiu na MOD-11)*,
-cada campo com `access: none|read_only|write_only|read_write` + `scope[]`;
+cada campo com `access: none|read_only|read_write` + `scope[]` *(`write_only` saiu
+em 2026-09-09, AUT-40: 0 domínios o ofereciam e 0 grants o usavam, e ele era o único
+ponto em que a ordem do `py-authz` e a lista indexada da UI discordavam)*;
 `PermissionChecker.can(module, field, minAccess?, scopeId?)`. **Roteamento por performance**:
 `performance_score = resolution_rate × (1 − escalation_rate)`, blending por `performance_score_weight`
 (default 0.0), Redis `{tenant}:agent_perf:{agent_type_id}` (TTL 6h), batch a cada 5 min.

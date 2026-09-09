@@ -3,7 +3,7 @@ export type UserRole = 'operator' | 'supervisor' | 'admin' | 'devops' | 'busines
 // ── ABAC module-config types ──────────────────────────────────────────────────
 
 /** Valores possíveis de acesso por campo de permissão. */
-export type PermissionAccess = 'none' | 'read_only' | 'write_only' | 'read_write'
+export type PermissionAccess = 'none' | 'read_only' | 'read_write'
 
 /** Configuração de um campo de permissão de um módulo. */
 export interface ModuleFieldConfig {

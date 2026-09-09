@@ -15,8 +15,9 @@ próxima edição do pacote tenha de dizer, em vermelho, qual delas está revert
 
 O QUE FARIA CADA GRUPO FICAR VERMELHO
 =====================================
-  · rank            — alguém "consertar" `write_only` para ficar acima de `read_only`
-                      (era a ordem da `analytics-api`, o outlier registrado)
+  · rank            — alguém RESSUSCITAR `write_only`, que saiu do modelo na AUT-40
+                      (2026-09-09) e era o único ponto em que as duas ordens da casa
+                      discordavam
   · min_access ruim — voltar a `.get(min_access, 0)`, que faz um typo virar rank 0 e,
                       com isso, QUALQUER grant não-`none` passar
   · config vazio    — reintroduzir a degradação graciosa (ausência de grants = liberado)
@@ -72,15 +73,19 @@ def _mc(access: str, *, module: str = "config", field: str = "platform") -> dict
     return {module: {field: {"access": access, "scope": []}}}
 
 
-# ── rank: read_only e write_only COLAPSAM ────────────────────────────────────
+# ── rank: TRÊS degraus, e a ordem é total ────────────────────────────────────
 
-def test_rank_write_only_iguala_read_only():
-    """A divergência 2: a `analytics-api` usa lista indexada, onde `write_only` é
-    ESTRITAMENTE maior que `read_only`. O canônico colapsa os dois — são graus
-    laterais do mesmo nível, não uma escada. Quem precisa escrever pede `read_write`."""
-    assert ACCESS_RANK["write_only"] == ACCESS_RANK["read_only"] == 1
-    assert ACCESS_RANK["none"] == 0
-    assert ACCESS_RANK["read_write"] == 2
+def test_rank_tem_tres_degraus_e_a_ordem_e_TOTAL():
+    """A divergência 2 morreu por REMOÇÃO do elemento que a produzia (AUT-40).
+
+    Ela era: dict com `write_only == read_only == 1` em quatro serviços × lista
+    INDEXADA na UI e na `analytics-api`, onde `write_only` era estritamente maior — o
+    mesmo grant respondendo diferente em dois serviços. Sem o grau lateral restam três
+    degraus, e as duas leituras coincidem.
+
+    A asserção é sobre o dict INTEIRO, não sobre chaves avulsas: é assim que
+    reintroduzir `write_only` fica vermelho aqui, e não apenas onde alguém lembrar."""
+    assert ACCESS_RANK == {"none": 0, "read_only": 1, "read_write": 2}
 
 
 @pytest.mark.parametrize(
@@ -88,10 +93,13 @@ def test_rank_write_only_iguala_read_only():
     [
         ("none",       "read_only",  False),
         ("read_only",  "read_only",  True),
-        ("write_only", "read_only",  True),
         ("read_write", "read_only",  True),
-        # A consequência do colapso, e a única linha em que ele é observável:
-        # um grant `write_only` NÃO satisfaz um endpoint de escrita.
+        # ⚠️ Estas duas linhas MUDARAM de valor na AUT-40, e é de propósito. Um grant
+        # que ainda carregue `write_only` cai em rank 0 e é NEGADO (antes ele
+        # satisfazia `read_only`). Fail-closed, e barulhento: `abac_can` loga WARNING.
+        # A população é zero — 0 grants medidos —, e é esta linha que denuncia quem
+        # reintroduzir o grau lateral pela porta do STORE em vez da do código.
+        ("write_only", "read_only",  False),
         ("write_only", "read_write", False),
         ("read_only",  "read_write", False),
         ("read_write", "read_write", True),
@@ -103,7 +111,13 @@ def test_abac_can_tabela_verdade(access, min_access, esperado):
 
 # ── min_access desconhecido LEVANTA (divergência 4) ──────────────────────────
 
-@pytest.mark.parametrize("ruim", ["readwrite", "read-write", "write", "", "READ_ONLY"])
+# `write_only` está nesta lista desde a AUT-40: pedi-lo como MÍNIMO passou a ser erro
+# de programação, e por isso levanta em vez de virar rank 0. Foi essa a razão de os
+# dois call sites migrarem ANTES da remoção — depois dela, um `min_access="write_only"`
+# esquecido vira **500**, não negação.
+@pytest.mark.parametrize(
+    "ruim", ["readwrite", "read-write", "write", "", "READ_ONLY", "write_only"]
+)
 def test_abac_can_min_access_desconhecido_levanta(ruim):
     """Era `.get(min_access, 0)` em três serviços: o typo virava rank 0 e então
     qualquer grant não-`none` passava. Fail-open por erro de digitação, mudo."""

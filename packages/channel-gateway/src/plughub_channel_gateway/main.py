@@ -1691,7 +1691,19 @@ def _resolve_approver_principal(
         # Tarefa que EXIGE capacidade (ex.: aprovação → approvals.decide). Form-fill
         # genérico (required_abac=None, ex.: wrap-up) NÃO cai aqui: o binding do claim
         # autoriza o operador comum (senão o agente de wrap-up tomaria 403 indevido).
-        if not abac_can(payload, _mod, _field, "write_only"):
+        # ⚠️ AUT-40 (2026-09-09): era `"write_only"`, e a troca por `"read_only"`
+        # NAO muda comportamento — foi medida, nao presumida. `ACCESS_RANK` COLAPSA
+        # os dois em 1 (sao graus laterais, nao degraus), e o catalogo vivo **nao
+        # oferece `write_only` em dominio nenhum** (0 linhas em `auth.module_registry`),
+        # enquanto `validate_module_config` recusa com 422 o `access` fora do dominio.
+        # Logo nenhum grant pode SER `write_only`, e os dois minimos selecionam o
+        # mesmo conjunto. A equivalencia e ESTRUTURAL, nao conjuntural.
+        #
+        # ⚠️ Este era o call site que a ficha mandava medir antes: o par (_mod,_field)
+        # e DINAMICO, vindo de `session.resume_abac` declarado pelo autor do workflow.
+        # Medido: **0** skills o declaram (registry, repo e sessoes vivas), entao o
+        # unico par que chega aqui e o do retrocompat — ("approvals","decide").
+        if not abac_can(payload, _mod, _field, "read_only"):
             _log.warning("E2 403 abac: roles=%s sem %s.%s", roles, _mod, _field)
             raise HTTPException(status_code=403, detail=f"resume: missing {_mod}.{_field}")
         if body.pool_id and not pool_in_scope(payload, body.pool_id):

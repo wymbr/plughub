@@ -729,7 +729,7 @@ export const ProtectedByRole: React.FC<ProtectedByRoleProps> = ({
 O `roles[]` da `Session` cobre o gate grosseiro de navegação (`operator`, `supervisor`,
 `admin`, `developer`, `business`). A partir do Arc 7, o JWT também carrega `module_config`
 — a base do **sistema ABAC** (Attribute-Based Access Control), que controla acesso por
-**módulo + campo** com níveis `none | read_only | write_only | read_write` e `scope[]`.
+**módulo + campo** com níveis `none | read_only | read_write` e `scope[]`.
 
 Use o `PermissionChecker` para gates finos dentro de um módulo:
 

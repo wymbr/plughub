@@ -914,7 +914,7 @@ function verifyJwtPayload(authHeader: string | undefined): Record<string, unknow
 // falha de autenticação e devolver um papel. Sem chamador hoje, mas à mão para o
 // próximo portão; a família inteira de fail-open sai no mesmo commit.
 
-const ACCESS_RANK: Record<string, number> = { none: 0, read_only: 1, write_only: 1, read_write: 2 }
+const ACCESS_RANK: Record<string, number> = { none: 0, read_only: 1, read_write: 2 }
 
 /**
  * Guard das rotas de UI: JWT assinado + GRANT ABAC do campo que a rota declara.
