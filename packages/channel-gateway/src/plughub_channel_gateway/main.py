@@ -565,7 +565,22 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(RegistryInvalidationConsumer(settings).run()),
     )
     # Arc 19 Fase D: expira suspends/delegates webhook vencidos (resume_tokens)
-    timeout_scan_task = asyncio.create_task(_webhook_adapter.run_timeout_scanner())
+    #
+    # ⚠️ RET-13: era a ÚNICA das sete que não passava por `_supervise`, e a exceção
+    # à regra era justamente a task cujo silêncio custa mais caro — sem ela, nenhum
+    # parque vencido é encerrado e a sessão fica suspensa para sempre (a população
+    # que a RET-14 teve de varrer à mão).
+    #
+    # ⚠️ Medido antes de embrulhar, para não vender conserto que não conserta: o laço
+    # de `run_timeout_scanner` tem `except Exception` POR ITERAÇÃO e re-levanta
+    # `CancelledError`, então ele é praticamente imortal — o alarme aqui não muda o
+    # comportamento de hoje. Ele fecha a CLASSE: a próxima task de boot nasce
+    # supervisionada porque `probe_background_task_supervision.sh` a cobra, e não
+    # porque alguém lembrou.
+    timeout_scan_task = _supervise(
+        "webhook-timeout-scanner",
+        asyncio.create_task(_webhook_adapter.run_timeout_scanner()),
+    )
 
     logger.info("✅ Channel Gateway started (instance=%s)", instance_id)
     yield

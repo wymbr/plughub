@@ -89,18 +89,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.redis = redis
 
     # ── Kafka consumer ────────────────────────────────────────────────────────
-    consumer_task = asyncio.create_task(
+    consumer_task = _supervisionar("analytics-consumer", asyncio.create_task(
         _run_consumer_safe(store, redis),
         name="analytics-consumer",
-    )
+    ))
 
     # ── Performance sync (Arc 7d) ─────────────────────────────────────────────
     # Reads v_agent_performance from ClickHouse every 5 min and writes
     # performance scores to Redis for consumption by the routing-engine.
-    perf_task = asyncio.create_task(
+    perf_task = _supervisionar("performance-sync", asyncio.create_task(
         run_performance_job_loop(store, redis),
         name="performance-sync",
-    )
+    ))
 
     yield
 
@@ -118,6 +118,45 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await redis.aclose()
 
 
+# ── RET-13: a morte de uma task de background tem de APARECER ────────────────
+#
+# Estas tasks rodam sob `asyncio.create_task` e ninguém as aguarda enquanto o
+# serviço vive: se a corrotina levanta, a exceção fica presa no objeto Task e
+# SOME. O serviço segue de pé, `/health` verde, com um consumidor a menos — e no
+# analytics-api isso significa que nenhuma sessão nova entra no ClickHouse,
+# sintoma que aparece longe (relatório vazio, "o dado sumiu").
+#
+# ⚠️ O segundo ramo é o que importa aqui: `_run_consumer_safe` faz `break` quando
+# `run_consumer` retorna limpo, então a task pode TERMINAR sozinha, sem exceção
+# nenhuma, e um alarme que só olhasse `t.exception()` ficaria mudo.
+#
+# ⚠️ Não reinicia de propósito — reiniciar em laço esconde falha permanente atrás
+# de ruído. Isto é o alarme; a política de recuperação é decisão à parte e precisa
+# do alarme para ser tomada. (Mesmo desenho do `_supervise` do channel-gateway,
+# 2026-08-07. É cópia consciente: o que não pode divergir é o COMPORTAMENTO, e
+# quem o cobra é `infra/test/probe_background_task_supervision.sh` — não a
+# memória de quem edita. Alarme não DECIDE nada, então não vale o custo de virar
+# pacote, ao contrário do verificador de JWT.)
+def _supervisionar(nome: str, task: asyncio.Task) -> asyncio.Task:
+    def _fim(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return                      # shutdown normal
+        exc = t.exception()
+        if exc is not None:
+            logger.error(
+                "task de background '%s' MORREU: %s — o servico segue de pe SEM ela. "
+                "Reinicie o analytics-api depois de tratar a causa.",
+                nome, exc, exc_info=exc,
+            )
+        else:
+            logger.warning(
+                "task de background '%s' TERMINOU sozinha (sem excecao) — "
+                "consumidores nao deveriam retornar enquanto o servico vive.", nome,
+            )
+    task.add_done_callback(_fim)
+    return task
+
+
 async def _run_consumer_safe(store: AnalyticsStore, redis: object | None = None) -> None:
     """Wraps run_consumer with restart-on-failure (except on explicit shutdown)."""
     settings = get_settings()
@@ -125,9 +164,28 @@ async def _run_consumer_safe(store: AnalyticsStore, redis: object | None = None)
     while True:
         try:
             await run_consumer(store, redis)
-            break  # clean exit (shutdown signal)
+            # ⚠️ RET-13, medido AO VIVO (e a suíte não pegava): `run_consumer`
+            # instala handlers de SIGTERM/SIGINT que soltam o seu laço, então no
+            # `docker stop` ele RETORNA — não levanta, não é cancelado. Com
+            # `break` aqui a task terminava "com sucesso" e o supervisor a
+            # reportava como morte espontânea em TODO shutdown normal.
+            #
+            # Terminar não é o fim ordenado desta task: o fim ordenado é o
+            # `cancel()` do lifespan. Esperamos por ele, e aí `t.cancelled()` é
+            # verdadeiro e o alarme cala — sem precisar que o supervisor adivinhe
+            # se o processo está encerrando.
+            logger.info(
+                "Consumer returned (shutdown signal) — aguardando o cancel do lifespan"
+            )
+            await asyncio.Event().wait()   # só sai por cancelamento
         except asyncio.CancelledError:
-            break
+            # ⚠️ RET-13: `break` aqui fazia a task terminar COM SUCESSO ao ser
+            # cancelada, e o alarme a reportaria como "TERMINOU sozinha" em todo
+            # shutdown normal — alarme que grita quando nada há ensina a ser
+            # ignorado, que é pior que alarme nenhum. Re-levantar também é o que
+            # o cancelamento cooperativo do asyncio pede; o `lifespan` já espera
+            # por isso (`await consumer_task` dentro de `except CancelledError`).
+            raise
         except Exception as exc:
             logger.error(
                 "Consumer crashed — restarting in %ds: %s", delay, exc, exc_info=True

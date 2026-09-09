@@ -1,5 +1,104 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (6) — RET-13: a ficha apontava uma task, o censo achou onze
+
+### 1 · A medição refez o escopo
+
+A ficha dizia que o scanner de prazo era *"a única task de background do
+channel-gateway sem `_supervise`"*. Verdade — e irrelevante. O censo AST mediu
+**16 tasks de boot em 4 serviços**, e o `_supervise` só existia num deles:
+
+| serviço | tasks de boot | tinham alarme? |
+|---|---|---|
+| channel-gateway | 7 | 6 de 7 |
+| evaluation-api | 6 | **nenhuma** |
+| analytics-api | 2 | **nenhuma** |
+| workflow-api | 1 | **nenhuma** |
+
+Dez tasks em três serviços sem `add_done_callback` em lugar nenhum. É a lição da
+GAT-01 outra vez: *"rodou tudo o que a lista cita"* e *"a lista cita tudo"* são dois
+fatos, e uma lista parece completa por ser uma lista — inclusive quando a lista é
+uma ficha de pendência.
+
+⚠️ **E o caso da ficha era o MENOS grave.** Medido antes de embrulhar, para não
+vender conserto que não conserta: o laço de `run_timeout_scanner` tem
+`except Exception` por iteração e re-levanta `CancelledError` — ele é praticamente
+imortal. O alarme ali não muda o comportamento de hoje; o que ele fecha é a
+**classe**, e quem a mantém fechada é o gate, não a memória de quem edita.
+
+### 2 · Duas armadilhas de alarme que MENTE — e a segunda a suíte não pegou
+
+**(a)** `_run_consumer_safe` e `run_performance_job_loop` faziam `break` no
+`CancelledError`. A task terminava **com sucesso** ao ser cancelada, e um supervisor
+ingênuo a reportaria como morte espontânea em todo shutdown. Corrigido para
+`raise` — que é também o que o cancelamento cooperativo do asyncio pede.
+
+**(b)** Não bastou, e **o teste ao vivo é que mostrou**: subi os quatro, dei
+`docker stop` e o log disse
+
+```
+task de background 'analytics-consumer' TERMINOU sozinha (sem excecao)
+```
+
+`run_consumer` instala handlers de **SIGTERM/SIGINT** e, ao recebê-los, **retorna** —
+não levanta, não é cancelado. Nenhum dos meus testes passava por esse caminho: o
+mock dormia até o cancel, então eu media a proposição adjacente enquanto o caminho
+que acontece de verdade num `docker stop` não era exercido por ninguém. É
+literalmente o *"instrumento honesto que mede a proposição ERRADA"* do CLAUDE.md.
+
+Conserto: quando `run_consumer` retorna por sinal, a task **aguarda o cancel do
+lifespan** em vez de terminar — o fim ordenado dela é o `cancel()`, e aí
+`t.cancelled()` é verdadeiro e o alarme cala **sem precisar adivinhar** se o
+processo está encerrando. Teste novo (`TestORetornoPorSinalNaoEMorte`) exerce
+exatamente esse caminho.
+
+⚠️ **Por que isso importa mais do que parece:** alarme que grita quando nada há
+ensina a ser ignorado — a mesma razão pela qual um runner que produz *"476 falsos
+vermelhos"* é pior que gate nenhum.
+
+### 3 · O gate aceita DUAS formas, de propósito
+
+`infra/test/probe_background_task_supervision.sh` + `_background_task_census.py`
+(AST, porque supervisão é ESTRUTURA e `grep` conta linha — task supervisionada e
+task crua são a mesma linha para ele).
+
+Aceita **envelope** (`_supervise(nome, create_task(...))`) e **callback**
+(`t = create_task(...)` + `t.add_done_callback(...)`): o que não pode divergir é o
+comportamento, não o estilo. Exigir um nome de função faria o gate cobrar estilo e
+ficar cego para quem supervisiona de outro jeito — provado pelo controle **negativo**
+da bateria, em que a forma alternativa mantém o gate verde.
+
+**População declarada: task de BOOT.** Task efêmera de trabalho (uma por mensagem,
+criada dentro de um handler) é outro fenômeno, com outro conserto — medida e
+registrada como **RET-15**, com seis casos nomeados. Contar as duas juntas daria um
+número sem uso.
+
+⚠️ **Quatro cópias do helper, e a decisão é declarada:** a regra de *"um verificador"*
+existe para quem **DECIDE** (o JWT), onde cópias divergentes decidem diferente. Um
+alarme não decide nada; o que não pode divergir é o comportamento, e quem o cobra é
+o gate. Virar pacote custaria 4 Dockerfiles e a primeira dependência interna do
+workflow-api para 25 linhas de log.
+
+### 4 · Controle positivo ao vivo: a cegueira em uma linha
+
+Falha injetada no scanner do workflow-api (`docker cp` + `restart`, nunca `up -d`):
+
+```
+task de background 'workflow-timeout-scanner' MORREU: falha injetada — o servico
+segue de pe SEM ela. Reinicie o workflow-api depois de tratar a causa.
+
+$ docker compose ps    →    workflow-api   running   healthy
+```
+
+O serviço **saudável, sem a task**. Era isso que não aparecia em lugar nenhum.
+
+**Gates**: `probe_background_task_supervision.sh` (novo, 16/16, 3 mutações + 1
+controle negativo) · `test_ret13_background_task_supervision.py` (6 testes, 4
+mutações) · suítes nas IMAGENS: analytics **768**, evaluation **237**, workflow
+**35**, channel-gateway **766**, todas verdes · boot e shutdown dos quatro ao vivo,
+com zero alarme espúrio, e uma morte injetada para provar que o silêncio não é
+alarme morto.
+
 ## 2026-09-09 (5) — RET-12: o parque por `collect` não era outro mecanismo, era outro NOME
 
 ### 1 · A ficha estava errada, e a refutação é o achado
