@@ -300,6 +300,17 @@ gate_camada_f.sh
 # o ramo 1 verde com o produto quebrado.
 gate_user_admin_org_chart.sh
 
+# AUT-46 (2026-09-09): no ingress de resume o CHAMADOR desligava os portoes por
+# OMISSAO. Medido ao vivo, com tarefa real de promocao de deploy: `operator@` (que
+# nao alcanca `aprovacao_deploy`) DECLARANDO `pool_id` -> 403; OMITINDO o campo ->
+# **200**, e a decisao ficou gravada como `verification_class: possessed`. Sem header
+# nenhum -> **200** tambem. Populacao que decidiu a saida: em 30 dias, 85 decisoes de
+# aprovacao vieram com credencial e 1 sem — e essa 1 era a propria sonda; do outro
+# lado, 322 dos 323 resumes anonimos NAO decidem nada, e e para eles que a porta fica.
+# P1 e P2 (o aprovador legitimo passa; o anonimo sem ABAC passa) sao o que impede o
+# verde por fechar demais.
+gate_resume_scope_is_not_optional.sh
+
 # ── PUL-02 (2026-09-09) · triagem dos instrumentos da Camada F ───────────────
 # Os dois estavam como `?` NAO TRIADO, e por isso nenhum runner os colhia. Triados:
 #

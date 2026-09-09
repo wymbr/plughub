@@ -998,6 +998,76 @@ class WebhookAdapter(ChannelAdapter):
         except Exception:
             return None
 
+    async def resume_task_pool(
+        self, tenant_id: str, resume_token: str
+    ) -> str | None:
+        """
+        O POOL do item suspenso, resolvido SERVER-SIDE a partir do token — irmao do
+        `resume_required_abac`, e pela mesma razao: *"NUNCA de valor client-asserted"*.
+
+        POR QUE ELE EXISTE (AUT-46, 2026-09-09)
+        ---------------------------------------
+        O `pool_in_scope` do ingress rodava sobre `body.pool_id`, dentro de um
+        `if body.pool_id` — ou seja, **o chamador desligava o eixo de escopo por
+        OMISSAO**. Medido ao vivo, numa tarefa real de promocao de deploy: com
+        `pool_id` declarado, 403; sem ele, **200**, e a decisao foi gravada como
+        `verification_class: possessed`. Um portao que so enforca quando o chamador
+        pede para ser enforcado nao e portao — e quem concede acredita ter negado.
+
+        ⚠️ **Nao ha tag de contexto que sirva**: `core.pool.id` e `session:{sid}:meta`
+        nomeiam o pool do WORKFLOW (ex.: `gate_promocao_ia`), nao o pool PULL onde a
+        tarefa foi parqueada (`aprovacao_deploy`) — que e a dimensao pela qual se
+        pergunta *"posso agir sobre este trabalho?"*. Medido: os dois campos trazem o
+        primeiro. Por isso a fonte e a POSSE do item, em duas formas:
+
+          1. reivindicado -> a chave do claim NOMEIA o pool: `{t}:pool:{p}:claim_record:{sid}`
+          2. ainda na fila -> o `sid` e membro do ZSET `{t}:pool:{p}:queue`
+
+        Devolve None quando nenhuma das duas responde. **None nao e "liberado"** — quem
+        decide o que fazer com a ausencia e o chamador, e ele recusa (ver
+        `_resolve_approver_principal`).
+        """
+        try:
+            token_value = await self._redis.hget(
+                f"{tenant_id}:resume_tokens", resume_token
+            )
+            if not token_value:
+                return None
+            if isinstance(token_value, bytes):
+                token_value = token_value.decode()
+            session_id = token_value.split(":", 2)[0]
+
+            def _pool_da_chave(chave: Any) -> str | None:
+                k = chave.decode() if isinstance(chave, bytes) else str(chave)
+                partes = k.split(":")
+                # {tenant}:pool:{pool}:...  — pool_id e snake_case, nunca tem ':'
+                return partes[2] if len(partes) > 3 and partes[1] == "pool" else None
+
+            async for chave in self._redis.scan_iter(
+                match=f"{tenant_id}:pool:*:claim_record:{session_id}", count=200
+            ):
+                pool = _pool_da_chave(chave)
+                if pool:
+                    return pool
+
+            async for chave in self._redis.scan_iter(
+                match=f"{tenant_id}:pool:*:queue", count=200
+            ):
+                pool = _pool_da_chave(chave)
+                if not pool:
+                    continue
+                k = chave.decode() if isinstance(chave, bytes) else str(chave)
+                if await self._redis.zscore(k, session_id) is not None:
+                    return pool
+            return None
+        except Exception as exc:  # noqa: BLE001
+            # Degradacao NUNCA e silenciosa: o chamador vai RECUSAR por causa deste
+            # None, e sem esta linha a recusa pareceria decisao de politica.
+            logger.warning(
+                "AUT-46: nao consegui resolver o pool da tarefa do token: %s", exc
+            )
+            return None
+
     async def handle_resume(
         self,
         resume_token:  str,

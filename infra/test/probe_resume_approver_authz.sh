@@ -26,15 +26,19 @@
 # em vez de sair verde: token inexistente devolve 404 para todo mundo, e ler isso como
 # "recusou o nao-autorizado" seria medir o proprio 404.
 #
-# ⚠️⚠️ A EXPECTATIVA DO S2 ENVELHECEU, e quem a exercer vai ver vermelho sem defeito.
-# Ela diz *"supervisor NAO tem `approvals.decide`"*, o que era verdade quando este
-# probe nasceu (2026-08-27). Medido em 2026-09-09, de dentro da AUT-40: **6 usuarios
-# do tenant tem o grant, todos `read_write`** — admin, supervisor, operator e tres
-# fixtures. O supervisor ganhou o campo na MOD-08/G1b (2026-09-08), e nao por decisao
-# sobre aprovacao: o guard de RANK da MOD-02 exige `preset(operator) ⊆
-# preset(supervisor)`, entao dar o campo ao operator obrigou a da-lo ao supervisor.
-# Capacidade que entra de carona num guard de contencao e coisa a DECIDIR, nao a
-# consertar aqui. Ficha **AUT-46**.
+# ⚠️⚠️ O S2 MEDIA A PROPOSICAO ERRADA, e foi corrigido na AUT-46 (2026-09-09).
+# Ele dizia *"supervisor NAO tem `approvals.decide`"* — verdade em 2026-08-27, falsa
+# desde a MOD-08/G1b (2026-09-08): o guard de RANK exige `preset(operator) ⊆
+# preset(supervisor)`, e como o operator tem o campo, o supervisor passou a te-lo.
+# Medido: **6** portadores, todos `read_write`.
+#
+# O que separa a aprovacao de NEGOCIO da promocao de DEPLOY nunca foi o campo — e o
+# ESCOPO DE POOL. E ele era **opcional para o chamador** ate a AUT-46: omitir
+# `pool_id` no corpo pulava o `pool_in_scope`, medido ao vivo com **200** numa
+# promocao real. Hoje o pool vem do SERVIDOR e a tarefa que declara capacidade exige
+# credencial. Quem prova isso comportamentalmente, com controle positivo dos dois
+# lados, e `gate_resume_scope_is_not_optional.sh` — este probe fica com a metade
+# ESTRUTURAL (S1), que e a que ele sabe medir sem tarefa viva.
 #
 # SAIDA: 0 = VERDE · 1 = VERMELHO · 2 = INCONCLUSIVO
 # ==============================================================================
@@ -61,7 +65,14 @@ printf '\033[1mprobe: aprovacao por GRANT, nao por papel\033[0m\n'
 
 # ── S1 — estrutural: o verificador nao decide por papel ─────────────────────
 sec "S1 - o verificador do aprovador nao cita papel"
-CORPO="$(awk '/def _verify_approver|required_abac: tuple/,/^def [a-z_]+\(/' "$MAIN" | head -80)"
+# ⚠️ SEM `head -80`: a janela por CONTAGEM DE LINHAS quebrou na AUT-46
+# (2026-09-09), quando a funcao cresceu — o `abac_can` saiu da janela e a
+# TESTEMUNHA DE PRESENCA reprovou dizendo *"o portao sumiu, nao mudou"*, com o
+# portao inteiro no lugar. Falso vermelho de INSTRUMENTO, e do tipo caro: a
+# leitura obvia era *"a AUT-46 removeu o gate"* — o oposto do que ela fez.
+# O limite REAL da funcao e o proximo `def` de topo, e o range do awk ja o conhece;
+# o `head` era uma segunda opiniao sobre onde a funcao acaba, e as duas divergiram.
+CORPO="$(awk '/def _verify_approver|required_abac: tuple/,/^def [a-z_]+\(/' "$MAIN")"
 if [ -z "$CORPO" ]; then
   inc "nao consegui isolar o verificador — a funcao mudou de forma?"
   info "Verde aqui seria vacuo: o grep nao teria olhado nada."
@@ -114,11 +125,15 @@ else
       -H "Authorization: Bearer $t" -H 'content-type: application/json' \
       -d "{\"tenant_id\":\"$TENANT\",\"payload\":{}}"
   }
+  # ⚠️ O supervisor TEM `approvals.decide` desde a MOD-08/G1b — o 403 que se espera
+  # dele aqui e por ESCOPO (ele nao alcanca o pool da tarefa), nao por capacidade.
+  # A distincao importa: se um dia ele ganhar o pool, este ramo passa a reprovar sem
+  # defeito, e a mensagem abaixo e o que dira isso a quem o encontrar.
   C_SUP="$(tenta supervisor@plughub.local changeme_supervisor)"
   if [ "$C_SUP" = "403" ]; then
-    ok "S2 supervisor (sem approvals.decide) recusado (403)"
+    ok "S2 supervisor recusado (403) — capacidade ele tem; o que falta e o POOL"
   else
-    bad "S2 supervisor aceito sem \`approvals.decide\` (HTTP $C_SUP)"
+    bad "S2 supervisor aceito (HTTP $C_SUP) — confira se ele passou a alcancar o pool desta tarefa"
   fi
   C_ADM="$(tenta admin@plughub.local changeme_admin)"
   case "$C_ADM" in

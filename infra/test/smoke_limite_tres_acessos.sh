@@ -345,7 +345,10 @@ echo "   → HTTP $RCODE · $(head -c 200 /tmp/_limite_resume)"
 case "$RCODE" in
   200|202) ok "decisão submetida (HTTP $RCODE)" ;;
   401|403) die "resume recusado por AUTORIZAÇÃO (HTTP $RCODE). Achado sobre o GATE,
-        não sobre o processo: só admin@plughub.local tem approvals.decide no seed." ;;
+        não sobre o processo. São DOIS eixos desde a AUT-46 (2026-09-09): a capacidade
+        approvals.decide (6 portadores medidos, não só o admin — a frase antiga dizia
+        isso e envelheceu na MOD-08) e o ESCOPO DE POOL, resolvido no SERVIDOR a partir
+        do token. 401 = veio sem credencial numa tarefa que declara capacidade." ;;
   *)       die "resume não completou (HTTP $RCODE) — o passo 8 não tem o que julgar." ;;
 esac
 

@@ -1,5 +1,120 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (18) — AUT-46: quem pergunta não escolhe a pergunta
+
+### 1 · A ficha estava certa no fato e errada no alvo
+
+Ela dizia: *`approvals.decide` chegou ao supervisor de carona no guard de RANK da
+MOD-02*. O fato confere — `git log` no bloco do catálogo mostra que a MOD-08/G1b
+(2026-09-08) acrescentou **só** o `supervisor`, e o comentário diz por quê:
+`preset(operator) ⊆ preset(supervisor)` é exigência de CONTRATAÇÃO, e o `operator`
+já tinha o campo desde antes.
+
+Mas a conclusão que a ficha tirava — *"capacidade de decidir promoção de deploy
+entrando de carona"* — **não sobreviveu à medição**: o campo nunca foi a barreira.
+
+### 2 · Três medições ao vivo, numa tarefa REAL de promoção de deploy
+
+Criada pelo caminho oficial (webhook → fila pull → claim), com o `operator@`, cujos
+pools são `formfill_demo`/`retencao_humano`/`aprovacao_credito`:
+
+| corpo enviado | resultado |
+|---|---|
+| `pool_id: aprovacao_deploy` **declarado** | **403** `pool not accessible` |
+| `pool_id` **omitido** | **200** — *reprovou a promoção* |
+| **sem header `Authorization`** | **200** |
+
+E a linha durável do caso do meio gravou `"principal_type": "human",
+"verification_class": "possessed"` — a decisão ficou atribuída a um aprovador
+**verificado** que o próprio sistema recusaria se o corpo tivesse dito a verdade.
+
+**O defeito era o `if body.pool_id`.** Um portão que só enforça quando o chamador
+pede para ser enforçado não é portão; é a forma mais cara de gate decorativo, porque
+quem concede acredita ter negado.
+
+### 3 · O ramo legado morreu CONTADO, e a contagem quase saiu errada
+
+O caminho sem credencial é postura **declarada** — o CHANGELOG de hoje mesmo diz
+*"header ausente como sistema — postura correta no RESUME (terceiro externo chega com
+o token na mão)"*. Então a pergunta não era *"fechar?"*, era **quem usa**.
+
+Primeira contagem: `245 possessed / 0 claimed` em `session_stream_events` — que eu
+quase publiquei como *"ninguém usa o caminho anônimo"*. **Errada**: o caminho anônimo
+não escreve `claimed`, ele **não escreve nada** — os campos de atribuição ficam
+AUSENTES. Um zero que era artefato do instrumento, não do mundo. A contagem certa
+separa por presença do campo:
+
+| resume | eventos | dos quais DECIDEM (`choice`) |
+|---|---|---|
+| com credencial (`possessed`) | 210 | **85** |
+| sem credencial | 323 | **1** — e essa 1 era a minha própria sonda |
+
+Os 322 restantes são form-fill, wrap-up e sistema: é para eles que a porta existe, e
+é por isso que ela fica.
+
+### 4 · Duas correções, a mesma regra
+
+**(a) credencial por TIPO de tarefa.** Tarefa que declara capacidade (`resume_abac`,
+ou o marcador de aprovação) exige credencial — **401**, não 403: *"não sei quem é"* e
+*"sei e não pode"* são dois estados. Tarefa sem ABAC segue anônima.
+
+**(b) o POOL vem do SERVIDOR.** `resume_task_pool` é irmão do `resume_required_abac`,
+que já dizia no docstring *"NUNCA de valor client-asserted"* — o campo vinha do
+servidor e o pool vinha do corpo, na mesma requisição.
+⚠️ **Nenhuma tag de contexto servia**, e isso é medição: `core.pool.id` e
+`session:{sid}:meta` nomeiam o pool do **workflow** (`gate_promocao_ia`), não o pool
+**pull** onde a tarefa foi parqueada (`aprovacao_deploy`) — que é a dimensão da
+pergunta *"posso agir sobre este trabalho?"*. A fonte é a POSSE do item: a chave do
+`claim_record` nomeia o pool, e antes do claim o `session_id` é membro do ZSET da
+fila. Quando nem uma nem outra responde e o corpo também não diz, a resposta é
+**403 por indeterminação** — nunca omissão aceita.
+
+### 5 · O gate, e por que P1 e P2 não são enfeite
+
+`gate_resume_scope_is_not_optional.sh` — 4 ramos, todos verdes:
+
+```
+N1  sem credencial, tarefa com capacidade ........ 401
+N2  tem a capacidade, não alcança o pool,
+    e OMITE pool_id .............................. 403   (era 200)
+P1  o aprovador LEGÍTIMO do pool ................. 200
+P2  anônimo em tarefa SEM ABAC ................... 200
+```
+
+Sem **P1**, um ingress que negasse tudo deixaria N1 e N2 verdes com o produto
+quebrado. Sem **P2**, fechar demais também passaria — e fechar demais aqui apaga a
+porta que 322 de 323 resumes usam. Falseabilidade não é hipótese: N1 e N2 foram
+medidos **200** antes do conserto.
+
+### 6 · A pergunta da ficha, respondida por consequência
+
+O `operator` **mantém** `approvals.decide`. Ele é o decisor previsto no Console (o
+`ApprovalPanel` gateia `operacao` para ver e `decide` para decidir), e o que separa a
+aprovação de NEGÓCIO da promoção de DEPLOY é o **escopo de pool** — que agora vale.
+Tirar o campo dele não teria fechado nada (o token decidia sozinho) e teria quebrado
+a tela de quem trabalha.
+
+Quatro casas de prosa afirmavam *"o supervisor não tem `approvals.decide`"* — verdade
+em 2026-08-27, falsa desde a MOD-08. Corrigidas: `infra/registry/tenant_demo.yaml`,
+o comentário do ingress, o docstring de `test_grant_de_OUTRO_modulo_nao_serve` e a
+mensagem de `smoke_limite_tres_acessos.sh`.
+
+⚠️ **Falso vermelho de INSTRUMENTO, e do tipo caro:** o
+`probe_resume_approver_authz.sh` isolava o verificador com `awk … | head -80`. A
+função cresceu, o `abac_can` saiu da janela, e a testemunha de presença reprovou
+dizendo *"o portão sumiu, não mudou"* — a leitura óbvia sendo *"a AUT-46 removeu o
+gate"*, o oposto do que ela fez. O `head` era uma segunda opinião sobre onde a função
+acaba; o range do `awk` já sabia. Removido.
+
+⚠️ **Achado de passagem, virou ficha (AUT-47):** `GET /api/supervisor_state/{id}` no
+mcp-server serve **qualquer** sessão a quem tem `agent_assist.atender`, sem recorte de
+pool — medido **200** para o `operator@` numa sessão de `aprovacao_deploy`. É a porta
+que sobrou da família fechada em 2026-08-30 na analytics-api, agora noutro serviço. O
+corpo servido **não** trouxe o `resume_token` — e o MOTIVO não foi apurado, o que
+fica dito em vez de inventado (a ficha diz por que essa metade importa). Então a
+cadeia da AUT-46 não passa por aqui — exposição medida, dano medido, e os dois estão
+na ficha.
+
 ## 2026-09-09 (17) — AUT-40: a divergência morreu com o elemento que a produzia
 
 ### 1 · O que era, e por que não dava para consertar dos dois lados

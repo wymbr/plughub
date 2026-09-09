@@ -1630,6 +1630,9 @@ def _resolve_approver_principal(
     request: Request,
     body: WebhookResumeRequest,
     required_abac: tuple[str, str] | None = None,
+    *,
+    pool_da_tarefa: str | None = None,
+    exigir_credencial: bool = False,
 ) -> dict | None:
     """
     A5 — resolve o principal AUTOR do resume + classe de confiança, a partir do header.
@@ -1649,7 +1652,28 @@ def _resolve_approver_principal(
     """
     token = bearer_from_header(request.headers.get("Authorization"))
     if not token:
-        return None  # external / system path (claimed) — unchanged
+        # ⚠️ AUT-46 (2026-09-09): o caminho externo/sistema CONTINUA aberto — para a
+        # populacao que o usa. O que deixou de valer e ele decidir tarefa que DECLARA
+        # capacidade. Medido em 30 dias de `session_stream_events`: **85** decisoes de
+        # aprovacao vieram com credencial (`possessed`) e **1** sem — e essa 1 foi a
+        # sonda que abriu esta ficha. Do lado de la, **322 de 323** resumes sem
+        # credencial NAO decidem nada (form-fill, wrap-up, sistema): e para eles que a
+        # porta existe, e e por isso que ela fica.
+        #
+        # Ramo legado morre CONTADO, nunca por decreto: a populacao foi medida ANTES.
+        # 401, nao 403 — "nao sei quem e" e "sei e nao pode" sao dois estados
+        # (decisao canonica do `plughub_authz`).
+        if exigir_credencial and required_abac is not None:
+            _mod, _field = required_abac
+            logging.getLogger(__name__).warning(
+                "AUT-46 401: resume de tarefa que exige %s.%s chegou SEM credencial "
+                "— o caminho anonimo nao decide tarefa escopada", _mod, _field,
+            )
+            raise HTTPException(
+                status_code=401,
+                detail=f"resume: credential required for {_mod}.{_field} tasks",
+            )
+        return None  # external / system path (claimed) — inalterado p/ tarefa sem ABAC
 
     settings = get_settings()
     if not settings.auth_jwt_secret:
@@ -1680,10 +1704,13 @@ def _resolve_approver_principal(
     # de remover, porque remover barra gente:
     #   · admin  — tem o grant, e virou `unrestricted` (decisão do dono: os 22 pools eram
     #     resíduo de teste), então `pool_in_scope` o libera pelo claim;
-    #   · supervisor — NÃO tem `approvals.decide`, e é o desejado: a aprovação dele é a de
-    #     QUALITY, que é REST próprio (`contestation_router`, gate `evaluation.revisar`) e
-    #     não passa por aqui. O que ele perde é o `aprovacao_deploy` — promoção de deploy,
-    #     que a decisão 2 já pôs fora do alcance dele.
+    #   · supervisor — ⚠️ **esta linha dizia que ele NÃO tem `approvals.decide`**, e era
+    #     verdade quando foi escrita (2026-08-27). Caiu em 2026-09-08 (MOD-08/G1b): o
+    #     guard de RANK exige `preset(operator) ⊆ preset(supervisor)`, e como o operator
+    #     tem o campo, o supervisor passou a tê-lo — capacidade que entra por uma regra
+    #     de CONTRATAÇÃO. Medido em 2026-09-09 (AUT-46): 6 portadores, todos
+    #     `read_write`. O que ainda o mantém fora do `aprovacao_deploy` é o ESCOPO DE
+    #     POOL — e é por isso que ele deixou de ser opcional para o chamador (abaixo).
     roles = payload.get("roles")
     roles = roles if isinstance(roles, list) else []
     if required_abac is not None:
@@ -1706,8 +1733,38 @@ def _resolve_approver_principal(
         if not abac_can(payload, _mod, _field, "read_only"):
             _log.warning("E2 403 abac: roles=%s sem %s.%s", roles, _mod, _field)
             raise HTTPException(status_code=403, detail=f"resume: missing {_mod}.{_field}")
-        if body.pool_id and not pool_in_scope(payload, body.pool_id):
-            _log.warning("E2 403 pool_scope: pool=%s accessible_pools=%s", body.pool_id, accessible_pools(payload))
+
+        # ⚠️ AUT-46 (2026-09-09): o eixo de ESCOPO era `if body.pool_id`, e por isso o
+        # chamador o desligava por OMISSAO. Medido ao vivo numa promocao de deploy
+        # real: com `pool_id` declarado 403, **sem ele 200** — e a linha durauel
+        # gravou `verification_class: possessed`, atribuindo a decisao a um aprovador
+        # "verificado" que o proprio sistema recusaria se o corpo tivesse dito a
+        # verdade. Agora o pool vem do SERVIDOR (`resume_task_pool`), como o campo ja
+        # vinha; o do corpo so e usado quando a origem autoritativa nao responde, e
+        # dizendo em voz alta que isso aconteceu.
+        alvo_escopo = pool_da_tarefa or body.pool_id
+        if pool_da_tarefa is None and exigir_credencial:
+            if body.pool_id:
+                _log.warning(
+                    "AUT-46: pool da tarefa nao derivavel do token (item fora de fila "
+                    "e sem claim_record); caindo no pool_id do CORPO (%s) — escopo "
+                    "verificado contra valor do chamador", body.pool_id,
+                )
+            else:
+                _log.warning(
+                    "AUT-46 403: tarefa exige %s.%s e o pool nao foi derivavel nem "
+                    "declarado — recusa por indeterminacao, nunca por omissao aceita",
+                    _mod, _field,
+                )
+                raise HTTPException(
+                    status_code=403, detail="resume: task pool undeterminable",
+                )
+        if alvo_escopo and not pool_in_scope(payload, alvo_escopo):
+            _log.warning(
+                "E2 403 pool_scope: pool=%s (origem=%s) accessible_pools=%s",
+                alvo_escopo, "servidor" if pool_da_tarefa else "corpo",
+                accessible_pools(payload),
+            )
             raise HTTPException(status_code=403, detail="resume: pool not accessible")
 
     sub = str(payload.get("sub") or "")
@@ -1750,7 +1807,17 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
     # Camada E2 — descobre SERVER-SIDE qual ABAC a submissão exige (aprovação vs
     # form-fill genérico), do contexto da workflow suspensa. Só então gateia.
     required_abac = await _webhook_adapter.resume_required_abac(body.tenant_id, resume_token)
-    approver = _resolve_approver_principal(request, body, required_abac)
+    # AUT-46: o POOL tambem é do servidor. Só custa a busca quando a tarefa declara
+    # capacidade — resume de form-fill/wrap-up (322 de 323 dos anônimos) não paga.
+    pool_da_tarefa = (
+        await _webhook_adapter.resume_task_pool(body.tenant_id, resume_token)
+        if required_abac is not None else None
+    )
+    approver = _resolve_approver_principal(
+        request, body, required_abac,
+        pool_da_tarefa    = pool_da_tarefa,
+        exigir_credencial = True,
+    )
 
     try:
         session_id = await _webhook_adapter.handle_resume(

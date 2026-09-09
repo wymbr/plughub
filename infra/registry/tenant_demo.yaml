@@ -597,8 +597,14 @@ pools:
     # SEM bloco deploy: o pacote de aprovação (título, resumo, dialog_form_id,
     # decisions[]) vem do delegate.context do N3 e é renderizado pelo
     # DialogFormRenderer genérico do Console. Mesmo padrão do aprovacao_deploy.
-    # ⚠️ Só quem tem ABAC approvals.operacao + approvals.decide enxerga e decide —
-    # no seed, apenas admin@plughub.local. Conceder ao operator na tela de Acesso.
+    # ⚠️ Só quem tem ABAC approvals.operacao + approvals.decide enxerga e decide, E
+    # alcança o pool (`accessible_pools`) — os DOIS eixos, desde a AUT-46 (2026-09-09).
+    # A frase anterior dizia *"no seed, apenas admin@plughub.local; conceder ao
+    # operator na tela de Acesso"*: falsa desde 2026-09-08 (MOD-08/G1b). Medido em
+    # 2026-09-09: **6** portadores, todos `read_write` — admin, supervisor, operator e
+    # 3 fixtures; `operator` recebe por `role_defaults` desde antes disso, e é ele o
+    # decisor previsto no Console. Quem separa a aprovação de NEGÓCIO da promoção de
+    # DEPLOY é o ESCOPO DE POOL, não o campo.
     description: "Pool de aprovadores — análise de aumento de limite"
     channel_types: [webchat]
     sla_target_ms: 172800000  # 48h

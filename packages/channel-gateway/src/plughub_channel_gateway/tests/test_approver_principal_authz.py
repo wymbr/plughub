@@ -190,7 +190,14 @@ def test_aprovacao_com_read_write_passa():
 
 
 def test_grant_de_OUTRO_modulo_nao_serve():
-    """Supervisor tem `evaluation.revisar`, não `approvals.decide`. É o desejado."""
+    """Um grant de outro módulo não abre este portão — é o campo NOMEADO que decide.
+
+    ⚠️ A prosa anterior dizia *"supervisor tem `evaluation.revisar`, não
+    `approvals.decide`"* e usava o supervisor como exemplo do portador. Isso caiu em
+    2026-09-08 (MOD-08/G1b): hoje ele TEM o campo (medido na AUT-46 — 6 portadores).
+    A proposição do teste não dependia de quem era o exemplo: um `module_config` com
+    outro módulo não satisfaz `approvals.decide`, e é só isso que ele afirma.
+    """
     req = _bearer(module_config={"evaluation": {"revisar": {"access": "read_write"}}})
     with pytest.raises(HTTPException) as e:
         cg_main._resolve_approver_principal(req, _body(), APROVACAO)
