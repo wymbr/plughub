@@ -142,7 +142,7 @@ async def run_performance_job_loop(
             logger.info("Performance job loop cancelled — exiting")
             # ⚠️ RET-13: `break` fazia a task terminar COM SUCESSO ao ser
             # cancelada, e o supervisor a reportaria como morte espontânea em
-            # todo shutdown. Ver o comentário de `_supervisionar` no main.
+            # todo shutdown. Ver `plughub_tasks.supervisionar` (RET-17).
             raise
         except Exception as exc:
             logger.error("Performance job error (will retry in %ds): %s", interval_s, exc)

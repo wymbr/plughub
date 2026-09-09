@@ -10,6 +10,12 @@ WORKDIR /app
 COPY packages/py-authz ./packages/py-authz
 RUN pip install --no-cache-dir -e ./packages/py-authz
 
+# RET-16/17: a morte de uma task tem de aparecer (packages/py-tasks). Instalado
+# ANTES do servico pelo mesmo motivo das outras libs internas: o `pip install -e .`
+# dele precisa achar a dependencia satisfeita, senao a procura no PyPI.
+COPY packages/py-tasks ./packages/py-tasks
+RUN pip install --no-cache-dir -e ./packages/py-tasks
+
 COPY packages/analytics-api ./packages/analytics-api
 
 WORKDIR /app/packages/analytics-api

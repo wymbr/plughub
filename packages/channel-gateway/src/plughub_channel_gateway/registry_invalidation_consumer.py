@@ -74,7 +74,7 @@ class RegistryInvalidationConsumer:
         Sem este `except`, a única evidência de que o consumidor morreu é a AUSÊNCIA
         do efeito dele, que é exatamente o tipo de sinal que esta base já provou não
         saber ler. (Os outros consumidores deste arquivo têm a mesma exposição — ver
-        `_supervise` em `main.py`.)
+        `plughub_tasks.supervisionar`, aplicado no `main.py`.)
         """
         # Grupo ÚNICO por processo — ver o comentário do topo. `uuid4` e não hostname:
         # dois processos no mesmo host (ou um container reiniciado com o mesmo nome)

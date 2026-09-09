@@ -14,14 +14,18 @@ build-backend = "setuptools.build_meta"
 # dívida — e o precedente do repositório é exatamente este: `py-authz` nasceu
 # quando havia SEIS implementações de JWT que já divergiam em seis pontos.
 #
-# ⚠️ O supervisor de tasks de BOOT continua copiado nos 4 serviços, e isso é
-# escolha, não esquecimento: mover agora seria refatorar serviços onde nenhum
-# defeito foi medido, e "simetria" não é razão medida. Ficha RET-17.
+# ⚠️ O supervisor de tasks de BOOT entrou aqui na RET-17, e o gatilho foi decisão
+# do dono — não a condição que a ficha declarava (o quinto serviço, ou alguém
+# tocando naqueles `lifespan` por outra razão). Fica registrado assim porque um
+# gatilho que "disparou" sem ter disparado corrói o valor de declarar gatilhos.
+# Medido antes de mover: as 4 cópias eram comportamentalmente IDÊNTICAS — diferiam
+# só em acentuação e no nome da variável interna —, então consolidar foi mudança de
+# ENDEREÇO, não escolha de comportamento.
 
 [project]
 name            = "plughub-tasks"
 version         = "0.1.0"
-description     = "Dono e alarme para tasks efemeras de asyncio: `create_task` solto perde a excecao e pode ser coletado em execucao."
+description     = "A morte de uma task de asyncio tem de aparecer: `supervisionar` para as de boot, `disparar` (dono + alarme) para as efemeras."
 requires-python = ">=3.11"
 # Sem dependencias: o pacote so fala asyncio e logging, ambos da stdlib. Uma
 # dependencia aqui entraria em SEIS imagens de uma vez.

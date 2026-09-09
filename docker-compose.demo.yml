@@ -1524,8 +1524,8 @@ services:
 
   workflow-api:
     build:
-      context: packages/workflow-api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: packages/workflow-api/Dockerfile
     ports:
       - "3800:3800"
     environment:

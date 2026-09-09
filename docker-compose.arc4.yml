@@ -37,8 +37,8 @@ services:
   # ── Workflow API ──────────────────────────────────────────────────────────────
   workflow-api:
     build:
-      context: packages/workflow-api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: packages/workflow-api/Dockerfile
     container_name: workflow-api
     ports:
       - "3800:3800"

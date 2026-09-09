@@ -1,17 +1,12 @@
 """
-test_ret13_background_task_supervision.py — RET-13: a morte tem de aparecer.
+test_ret13_background_task_supervision.py — RET-13/17: o cancel chega ao supervisor.
 
-O gate `infra/test/probe_background_task_supervision.sh` mede ESTRUTURA — que toda
-task de boot passe por um supervisor. Esta suíte mede a outra proposição: que o
-supervisor **fale** quando deve e **cale** quando deve. Um `add_done_callback` que
-não logasse nada passaria no gate e falharia aqui.
+⚠️ Os três ramos do alarme mudaram de casa na RET-17, com o supervisor: agora são
+`packages/py-tasks/tests/test_supervisor.py`. O que sobra aqui é o que só o
+analytics-api pode afirmar — que as corrotinas DELE deixam o cancelamento chegar
+até o supervisor, e que o retorno por sinal não vira morte espontânea.
 
-Três ramos, e o terceiro é o que separa alarme útil de alarme ignorado:
-  1. a corrotina levanta        → ERROR nomeando a task
-  2. a corrotina retorna        → WARNING (não há exceção nenhuma para inspecionar)
-  3. a task é cancelada         → SILÊNCIO (shutdown normal)
-
-⚠️ O ramo 3 tinha um defeito de PRODUTO junto: `_run_consumer_safe` e
+⚠️ O defeito de PRODUTO que motivou estes casos: `_run_consumer_safe` e
 `run_performance_job_loop` faziam `break` no `CancelledError`, então a task
 terminava COM SUCESSO ao ser cancelada e cairia no ramo 2 — o alarme gritaria em
 todo shutdown normal. Alarme que grita quando nada há ensina a ser ignorado, que é
@@ -27,66 +22,12 @@ import pytest
 import plughub_analytics_api.main as main_mod
 from plughub_analytics_api.performance_job import run_performance_job_loop
 
-supervisionar = main_mod._supervisionar
 
 
 async def _assentar() -> None:
     """Deixa o callback do loop rodar. Espera por TASK, não por contagem de yields."""
     for _ in range(3):
         await asyncio.sleep(0)
-
-
-class TestOAlarmeFala:
-    async def test_excecao_vira_error_nomeando_a_task(self, caplog):
-        async def morre():
-            raise RuntimeError("clickhouse fora do ar")
-
-        with caplog.at_level(logging.ERROR):
-            t = supervisionar("analytics-consumer", asyncio.create_task(morre()))
-            with pytest.raises(RuntimeError):
-                await t
-            await _assentar()
-
-        registros = [r for r in caplog.records if r.levelno >= logging.ERROR]
-        assert registros, "task morreu e nada foi logado — é a cegueira que a RET-13 fecha"
-        msg = registros[0].getMessage()
-        assert "analytics-consumer" in msg, "o alarme precisa NOMEAR quem morreu"
-        assert "clickhouse fora do ar" in msg, "e dizer a causa, senão não se trata nada"
-
-    async def test_retorno_espontaneo_vira_warning(self, caplog):
-        """Sem exceção nenhuma para inspecionar — o ramo que `t.exception()` não vê."""
-        async def termina():
-            return None
-
-        with caplog.at_level(logging.WARNING):
-            await supervisionar("performance-sync", asyncio.create_task(termina()))
-            await _assentar()
-
-        avisos = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert avisos, (
-            "consumidor que RETORNA some tão silenciosamente quanto o que levanta; "
-            "um alarme que só olha t.exception() fica mudo exatamente aqui"
-        )
-        assert "performance-sync" in avisos[0].getMessage()
-
-
-class TestOAlarmeCala:
-    async def test_cancelamento_e_silencio(self, caplog):
-        """Shutdown normal não é incidente — e alarme que grita à toa é ignorado."""
-        async def dorme():
-            await asyncio.sleep(3600)
-
-        with caplog.at_level(logging.WARNING):
-            t = supervisionar("analytics-consumer", asyncio.create_task(dorme()))
-            await asyncio.sleep(0)
-            t.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await t
-            await _assentar()
-
-        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], (
-            "o supervisor falou no shutdown — é assim que um alarme deixa de ser lido"
-        )
 
 
 class TestOCancelChegaAoSupervisor:

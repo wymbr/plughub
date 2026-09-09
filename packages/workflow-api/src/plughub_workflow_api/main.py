@@ -25,6 +25,7 @@ from .config import get_settings
 from .db import ensure_schema
 from .router import router as workflow_router
 from .timeout_job import run_timeout_scanner
+from plughub_tasks import supervisionar
 
 logger = logging.getLogger("plughub.workflow.api")
 
@@ -65,47 +66,6 @@ async def _create_kafka_producer(brokers: str):
         return None
 
 
-# ── RET-13: a morte de uma task de background tem de APARECER ────────────────
-#
-# Estas tasks rodam sob `asyncio.create_task` e ninguém as aguarda enquanto o
-# serviço vive: se a corrotina levanta, a exceção fica presa no objeto Task e
-# SOME. O serviço segue de pé, `/health` verde, com um consumidor a menos — e o
-# sintoma aparece longe de onde a falha ocorreu.
-# ⚠️ Aqui com uma ressalva medida (RET-12): este scanner varre `workflow.instances`,
-# tabela com ZERO linhas desde a Fase D do Arc 19. O alarme não o torna útil — ele
-# torna VISÍVEL o dia em que ele morrer, que hoje ninguém notaria por motivo nenhum.
-#
-# ⚠️ São DOIS ramos, e o segundo não tem exceção nenhuma: a task pode TERMINAR
-# sozinha (a corrotina retorna) e um alarme que só olhasse `t.exception()`
-# ficaria mudo exatamente aí.
-#
-# ⚠️ Não reinicia de propósito — reiniciar em laço esconde falha permanente atrás
-# de ruído. Isto é o alarme; a política de recuperação é decisão à parte e precisa
-# do alarme para ser tomada. (Mesmo desenho do `_supervise` do channel-gateway,
-# 2026-08-07. É cópia consciente: o que não pode divergir é o COMPORTAMENTO, e
-# quem o cobra é `infra/test/probe_background_task_supervision.sh` — não a memória
-# de quem edita. Alarme não DECIDE nada, então não vale o custo de virar pacote,
-# ao contrário do verificador de JWT.)
-def _supervisionar(nome: str, task: asyncio.Task) -> asyncio.Task:
-    def _fim(t: asyncio.Task) -> None:
-        if t.cancelled():
-            return                      # shutdown normal
-        exc = t.exception()
-        if exc is not None:
-            logger.error(
-                "task de background '%s' MORREU: %s — o servico segue de pe SEM ela. "
-                "Reinicie o workflow-api depois de tratar a causa.",
-                nome, exc, exc_info=exc,
-            )
-        else:
-            logger.warning(
-                "task de background '%s' TERMINOU sozinha (sem excecao) — "
-                "consumidores nao deveriam retornar enquanto o servico vive.", nome,
-            )
-    task.add_done_callback(_fim)
-    return task
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
@@ -144,7 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.producer = producer
 
     # Background timeout scanner
-    scanner_task = _supervisionar(
+    scanner_task = supervisionar(
         "workflow-timeout-scanner", asyncio.create_task(run_timeout_scanner(app))
     )
 

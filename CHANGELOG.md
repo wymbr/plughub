@@ -1,5 +1,76 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (9) — RET-17: as quatro cópias do supervisor viraram uma
+
+### 1 · O gatilho foi decisão do dono, e isso fica dito
+
+A ficha declarava o gatilho: *"o quinto serviço que precisar de supervisão de boot,
+ou a próxima vez que alguém tocar naqueles quatro `lifespan` por outra razão"*.
+**Nenhum dos dois ocorreu** — o dono pediu a consolidação. Fica registrado assim
+porque um gatilho que *"disparou"* sem ter disparado corrói o valor de declarar
+gatilhos: da próxima vez ninguém acreditaria na condição escrita.
+
+### 2 · Medir antes de mover: as cópias divergiram em 1 dia?
+
+Não. Comparadas por AST **sem docstring e sem comentário** — o que interessa é o
+comportamento —, as 4 diferiam apenas em acentuação (`serviço`/`servico`) e no nome
+da variável interna (`_done`/`_fim`). **Zero divergência de comportamento.**
+
+Isso muda a natureza do trabalho: consolidar foi mudança de **endereço**, não
+escolha de comportamento. Se elas tivessem divergido, a consolidação precisaria
+*escolher* — e a escolha seria a decisão a registrar, não a mudança de casa. É a
+diferença entre esta ficha e o nascimento do `py-authz`, onde as seis cópias
+decidiam **diferente** em seis pontos.
+
+### 3 · Duas funções, uma casa, e elas continuam separadas
+
+```
+plughub_tasks.supervisionar(nome, task)   BOOT     morre → ERROR · retorna → WARNING
+plughub_tasks.disparar(coro, nome=...)    EFÊMERA  morre → ERROR · retorna → silêncio
+                                                   + dono (referência forte)
+```
+
+Moram juntas porque o eixo é o mesmo — *task que ninguém aguarda guarda a exceção
+dentro de si* — e continuam **duas** porque os ciclos de vida são opostos. Trocar
+uma pela outra é defeito nos dois sentidos: um WARNING por mensagem afogaria o log;
+um consumidor de boot que retorna em silêncio é justamente o caso que
+`t.exception()` não vê.
+
+Sete consumidores: channel-gateway, routing-engine, rules-engine, ai-gateway,
+evaluation-api, analytics-api, workflow-api.
+
+### 4 · O workflow-api mudou de build context, e era essa a parede
+
+Ele era o **único** serviço Python sem nenhuma dependência interna, e construía a
+partir do próprio diretório (`context: packages/workflow-api`), o que deixava
+`packages/py-tasks` fora de alcance. Quatro composes ajustados para o padrão dos
+outros 20 (`context: .`).
+
+⚠️ Era exatamente esta parede que a RET-13 citou como custo para não fazer a lib
+— *"a primeira dependência interna do workflow-api"*. O custo era real; o que
+mudou foi o outro lado da conta.
+
+⚠️ **A mensagem perdeu o nome do serviço** (*"Reinicie o analytics-api"* →
+*"Reinicie o servico"*): quem identifica o serviço é o log do container, e um
+parâmetro só para repetir o que o prefixo já diz seria contrato novo sem fato novo.
+
+### 5 · Prova ao vivo, agora pela lib
+
+Boot e shutdown dos quatro: **zero alarme espúrio**. E, como silêncio pode ser
+alarme morto, falha injetada no scanner do workflow-api:
+
+```
+task de background 'workflow-timeout-scanner' MORREU: falha injetada —
+o servico segue de pe SEM ela. Reinicie o servico depois de tratar a causa.
+
+$ docker compose ps   →   workflow-api   running   healthy
+```
+
+**Gates**: `probe_background_task_supervision.sh` (§ B 16/16 · § C dívida zero) ·
+suítes nas IMAGENS: py-tasks **8** (5 efêmeras + 3 supervisor), channel-gateway
+**771**, analytics-api **766** (769 − 3 movidos para a lib), evaluation-api **237**,
+workflow-api **35** · quatro serviços de pé, com boot e shutdown limpos.
+
 ## 2026-09-09 (8) — RET-16: a dívida foi a zero, e o helper virou pacote
 
 ### 1 · A decisão de casa mudou, e o que mudou foi o NÚMERO

@@ -517,56 +517,21 @@ async def lifespan(app: FastAPI):
         finally:
             await consumer.stop()
 
-    def _supervise(name: str, task: asyncio.Task) -> asyncio.Task:
-        """
-        Faz a MORTE de uma task de background aparecer.
-
-        ⚠️ Conserto de uma cegueira medida em 2026-08-07. Estas cinco tasks rodam sob
-        `asyncio.create_task` e **ninguém as aguarda** — se a corrotina levanta, a
-        exceção fica presa no objeto Task e some. O serviço segue de pé, saudável no
-        `/health`, com um consumidor a menos. O sintoma aparece longe: no caso que
-        expôs isto, "revogar token não vale" — três camadas abaixo, num gate.
-        `outbound`, `collect` e `config` têm a MESMA exposição desde sempre; a
-        diferença é que ninguém tinha perguntado.
-
-        Não reinicia a task de propósito: reiniciar em laço esconderia uma falha
-        permanente atrás de ruído. Isto aqui é o alarme; a política de recuperação é
-        decisão à parte, e precisa do alarme para ser tomada.
-        """
-        def _done(t: asyncio.Task) -> None:
-            if t.cancelled():
-                return                      # shutdown normal
-            exc = t.exception()
-            if exc is not None:
-                logger.error(
-                    "task de background '%s' MORREU: %s — o serviço segue de pé SEM "
-                    "ela. Reinicie o channel-gateway depois de tratar a causa.",
-                    name, exc, exc_info=exc,
-                )
-            else:
-                logger.warning(
-                    "task de background '%s' TERMINOU sozinha (sem exceção) — "
-                    "consumidores não deveriam retornar enquanto o serviço vive.",
-                    name,
-                )
-        task.add_done_callback(_done)
-        return task
-
-    pubsub_task     = _supervise("registry-pubsub", asyncio.create_task(_registry.start_pubsub_listener()))
-    outbound_task   = _supervise("outbound",        asyncio.create_task(outbound.run()))
-    collect_task    = _supervise("collect-events",  asyncio.create_task(_collect_events_consumer()))
-    parking_task    = _supervise("session-parking", asyncio.create_task(_session_parking_consumer()))
-    config_task     = _supervise("config-changed",  asyncio.create_task(_config_changed_consumer()))
+    pubsub_task     = supervisionar("registry-pubsub", asyncio.create_task(_registry.start_pubsub_listener()))
+    outbound_task   = supervisionar("outbound",        asyncio.create_task(outbound.run()))
+    collect_task    = supervisionar("collect-events",  asyncio.create_task(_collect_events_consumer()))
+    parking_task    = supervisionar("session-parking", asyncio.create_task(_session_parking_consumer()))
+    config_task     = supervisionar("config-changed",  asyncio.create_task(_config_changed_consumer()))
     # Invalidação do cache de endereço por `registry.changed`. Sem isto, revogar ou
     # rotacionar um token de endpoint só passa a valer depois do TTL do cache
     # (`endpoint_cache_ttl_s`) — o gateway seguiria aceitando a credencial revogada.
-    invalidation_task = _supervise(
+    invalidation_task = supervisionar(
         "registry-invalidation",
         asyncio.create_task(RegistryInvalidationConsumer(settings).run()),
     )
     # Arc 19 Fase D: expira suspends/delegates webhook vencidos (resume_tokens)
     #
-    # ⚠️ RET-13: era a ÚNICA das sete que não passava por `_supervise`, e a exceção
+    # ⚠️ RET-13: era a ÚNICA das sete que não passava pelo supervisor, e a exceção
     # à regra era justamente a task cujo silêncio custa mais caro — sem ela, nenhum
     # parque vencido é encerrado e a sessão fica suspensa para sempre (a população
     # que a RET-14 teve de varrer à mão).
@@ -577,7 +542,7 @@ async def lifespan(app: FastAPI):
     # comportamento de hoje. Ele fecha a CLASSE: a próxima task de boot nasce
     # supervisionada porque `probe_background_task_supervision.sh` a cobra, e não
     # porque alguém lembrou.
-    timeout_scan_task = _supervise(
+    timeout_scan_task = supervisionar(
         "webhook-timeout-scanner",
         asyncio.create_task(_webhook_adapter.run_timeout_scanner()),
     )
@@ -604,6 +569,7 @@ app = FastAPI(title="PlugHub Channel Gateway", lifespan=lifespan)
 # ── Import and mount upload routes ────────────────────────────────────────────
 # Deferred import so the router can reference module-level state set in lifespan.
 from .upload_router import router as upload_router  # noqa: E402  (post-app creation import)
+from plughub_tasks import supervisionar
 app.include_router(upload_router)
 
 

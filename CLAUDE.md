@@ -515,7 +515,7 @@ plughub/
     schemas/                     ← @plughub/schemas — Zod contracts
     py-authz/                    ← plughub-authz — verificador CANÔNICO de JWT+ABAC (Python)
     py-contextstore/             ← plughub-contextstore — gêmeo Python das funções PURAS do ContextStore (carimbo + rota); paridade com `@plughub/schemas` por gate
-    py-tasks/                    ← plughub-tasks — dono e alarme de task efêmera de asyncio: `create_task` solto perde a exceção e pode ser coletado em execução
+    py-tasks/                    ← plughub-tasks — a morte de uma task de asyncio tem de APARECER: `supervisionar` (boot) e `disparar` (efêmera, dá dono); exceção em task que ninguém aguarda some
     sdk/                         ← @plughub/sdk — TypeScript + Python
 
     mcp-server-plughub/          ← Agent Runtime and BPM tools — port 3100
@@ -571,7 +571,7 @@ plughub/
 | schemas | TypeScript | Node 20+ | Zod 3.23+ |
 | py-authz | Python | Python 3.11+ | lib, sem serviço — PyJWT + FastAPI |
 | py-contextstore | Python | Python 3.11+ | lib, sem serviço e **sem dependências** — a ausência é requisito do gate de paridade |
-| py-tasks | Python | Python 3.11+ | lib, sem serviço — só `asyncio`+`logging`; seis consumidores (gateway, routing, rules, ai-gw, evaluation) |
+| py-tasks | Python | Python 3.11+ | lib, sem serviço — só `asyncio`+`logging`; 7 consumidores (gateway, routing, rules, ai-gw, evaluation, analytics, workflow) |
 | sdk | TypeScript + Python | Node 20+ / Python 3.11+ | Two parallel packages |
 | mcp-server-plughub | TypeScript | Node 20+ | Official Anthropic MCP SDK |
 | skill-flow-engine | TypeScript | Node 20+ | State graph interpreter |

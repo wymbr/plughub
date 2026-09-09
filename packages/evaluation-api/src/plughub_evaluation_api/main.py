@@ -27,6 +27,7 @@ from . import db as _db
 from .sampling import should_sample, should_sample_quota, compute_priority, origin_from_source
 from .router import router, _ingest_from_completed_event
 from .contestation_router import contestation_router
+from plughub_tasks import supervisionar
 
 logging.basicConfig(
     level=logging.INFO,
@@ -112,47 +113,6 @@ async def _on_workflow_event(db_pool: _db.asyncpg.Pool, msg_value: bytes) -> Non
             lock_reason="review_timeout",
         )
         logger.info("result %s locked (workflow timeout)", result_id)
-
-
-# ── RET-13: a morte de uma task de background tem de APARECER ────────────────
-#
-# Estas tasks rodam sob `asyncio.create_task` e ninguém as aguarda enquanto o
-# serviço vive: se a corrotina levanta, a exceção fica presa no objeto Task e
-# SOME. O serviço segue de pé, `/health` verde, com um consumidor a menos — e o
-# sintoma aparece longe de onde a falha ocorreu.
-# Aqui isso significa avaliação que nunca é criada, resultado que nunca é
-# persistido ou prazo que nunca vence — tudo com a tela dizendo apenas
-# 'não há nada'.
-#
-# ⚠️ São DOIS ramos, e o segundo não tem exceção nenhuma: a task pode TERMINAR
-# sozinha (a corrotina retorna) e um alarme que só olhasse `t.exception()`
-# ficaria mudo exatamente aí.
-#
-# ⚠️ Não reinicia de propósito — reiniciar em laço esconde falha permanente atrás
-# de ruído. Isto é o alarme; a política de recuperação é decisão à parte e precisa
-# do alarme para ser tomada. (Mesmo desenho do `_supervise` do channel-gateway,
-# 2026-08-07. É cópia consciente: o que não pode divergir é o COMPORTAMENTO, e
-# quem o cobra é `infra/test/probe_background_task_supervision.sh` — não a memória
-# de quem edita. Alarme não DECIDE nada, então não vale o custo de virar pacote,
-# ao contrário do verificador de JWT.)
-def _supervisionar(nome: str, task: asyncio.Task) -> asyncio.Task:
-    def _fim(t: asyncio.Task) -> None:
-        if t.cancelled():
-            return                      # shutdown normal
-        exc = t.exception()
-        if exc is not None:
-            logger.error(
-                "task de background '%s' MORREU: %s — o servico segue de pe SEM ela. "
-                "Reinicie o evaluation-api depois de tratar a causa.",
-                nome, exc, exc_info=exc,
-            )
-        else:
-            logger.warning(
-                "task de background '%s' TERMINOU sozinha (sem excecao) — "
-                "consumidores nao deveriam retornar enquanto o servico vive.", nome,
-            )
-    task.add_done_callback(_fim)
-    return task
 
 
 async def _run_workflow_consumer(app: FastAPI) -> None:
@@ -632,14 +592,14 @@ def create_app() -> FastAPI:
         logger.info("Kafka producer ready")
 
         # Start workflow.events consumer as background task
-        app.state.workflow_consumer_task = _supervisionar("workflow-events-consumer", asyncio.create_task(
+        app.state.workflow_consumer_task = supervisionar("workflow-events-consumer", asyncio.create_task(
             _run_workflow_consumer(app),
             name="workflow-events-consumer",
         ))
         logger.info("workflow.events consumer task scheduled")
 
         # S2.1 — conversations.session_closed sampling consumer (campaign-driven)
-        app.state.sampling_consumer_task = _supervisionar("session-closed-sampling-consumer", asyncio.create_task(
+        app.state.sampling_consumer_task = supervisionar("session-closed-sampling-consumer", asyncio.create_task(
             _run_session_closed_consumer(app),
             name="session-closed-sampling-consumer",
         ))
@@ -647,21 +607,21 @@ def create_app() -> FastAPI:
 
         # Arc 13 real-evaluator link — evaluation.completed → ingest
         # (persists EvaluationResult + advances instance; was missing).
-        app.state.ingest_consumer_task = _supervisionar("evaluation-completed-ingest-consumer", asyncio.create_task(
+        app.state.ingest_consumer_task = supervisionar("evaluation-completed-ingest-consumer", asyncio.create_task(
             _run_evaluation_completed_consumer(app),
             name="evaluation-completed-ingest-consumer",
         ))
         logger.info("evaluation.events ingest consumer task scheduled")
 
         # T4 — deadline scanner (finaliza por timeout)
-        app.state.deadline_scanner_task = _supervisionar("deadline-scanner", asyncio.create_task(
+        app.state.deadline_scanner_task = supervisionar("deadline-scanner", asyncio.create_task(
             _run_deadline_scanner(app),
             name="deadline-scanner",
         ))
         logger.info("deadline scanner task scheduled")
 
         # T2 — participants consumer (acumula segmentos por sessão p/ fan-out)
-        app.state.participants_consumer_task = _supervisionar("participants-consumer", asyncio.create_task(
+        app.state.participants_consumer_task = supervisionar("participants-consumer", asyncio.create_task(
             _run_participants_consumer(app),
             name="participants-consumer",
         ))
@@ -669,7 +629,7 @@ def create_app() -> FastAPI:
 
         # T15 — dispatcher por janela de calendário (§18.4)
         if settings.dispatch_scanner_enabled:
-            app.state.dispatch_scanner_task = _supervisionar("dispatch-scanner", asyncio.create_task(
+            app.state.dispatch_scanner_task = supervisionar("dispatch-scanner", asyncio.create_task(
                 _run_dispatch_scanner(app),
                 name="dispatch-scanner",
             ))
