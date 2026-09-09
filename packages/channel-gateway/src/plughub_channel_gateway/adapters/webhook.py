@@ -72,6 +72,8 @@ from ..dialog_form_pin import resolve_published_version
 from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
 
+from .. import session_parking
+
 logger = logging.getLogger("plughub.channel-gateway.webhook")
 
 
@@ -421,6 +423,9 @@ class WebhookAdapter(ChannelAdapter):
         self._producer = producer
         self._redis    = redis
         self._settings = settings
+        # RET-11: o registro duravel do parque vive no Postgres, e o scanner o le
+        # a cada passada. Ate aqui o pool so era repassado ao IdentityIndex.
+        self._db_pool  = db_pool
 
         # NIV-02 — o collect exige `masked_input` quando o DialogForm que ele
         # renderiza tem campo mascarado. Cache curto: o veredicto é fato do
@@ -3147,7 +3152,73 @@ class WebhookAdapter(ChannelAdapter):
             except Exception as exc:
                 logger.warning("webhook timeout scanner iteration error: %s", exc)
 
+    async def _reidratar_parques_duraveis(self) -> int:
+        """
+        RET-11 — devolve ao Redis o endereço que o Postgres ainda tem.
+
+        Roda ANTES da varredura do cache, a cada passada. Para cada parque vencido
+        e não resolvido no registro durável, reinsere a entrada no hash
+        `{tenant}:resume_tokens` se ela sumiu — e então a varredura seguinte a
+        encontra e segue **o caminho de sempre**. Nenhuma decisão de expiração é
+        duplicada aqui: esta função só restitui o endereço.
+
+        ⚠️ **Ela NÃO ressuscita processo cujo Redis inteiro se perdeu.** O
+        `pipeline_state` do flow é igualmente volátil; se ele se foi, não há a que
+        voltar, e o ramo RET-03 da varredura descarta o token sem retomar (checando
+        `session:{id}:meta`) — que é o desfecho correto e continua valendo. O caso
+        que esta função recupera é o OUTRO, medido e documentado no
+        `_resume_meta_key`: **sessão viva, token perdido**, porque o TTL de
+        `{tenant}:resume_tokens` é do HASH e é compartilhado por todas as sessões do
+        tenant — um `collect` de 1 h escrito depois encurta um suspend de 48 h e os
+        dois somem juntos.
+
+        ⚠️ **Só reinsere o que NÃO está lá.** Sobrescrever a entrada viva trocaria o
+        prazo corrente pelo do registro, e o corrente pode ter sido legitimamente
+        estendido.
+        """
+        if self._db_pool is None:
+            return 0
+        try:
+            vencidos = await session_parking.parques_vencidos(self._db_pool)
+        except Exception as exc:
+            # Degrada BARULHENTO: sem o registro durável a varredura ainda roda
+            # sobre o cache, que é o comportamento antigo — mas o motivo aparece.
+            logger.warning(
+                "timeout scanner: nao li o registro duravel de parque (%s) — a "
+                "passada segue so sobre o Redis, como antes da RET-11", exc,
+            )
+            return 0
+
+        reidratados = 0
+        for linha in vencidos:
+            tenant, token = linha["tenant_id"], linha["token"]
+            chave = f"{tenant}:resume_tokens"
+            try:
+                if await self._redis.hexists(chave, token):
+                    continue
+                exp = linha["expires_at"]
+                await self._redis.hset(
+                    chave, token,
+                    f"{linha['session_id']}:{linha['step_id']}:"
+                    f"{exp.isoformat() if exp else ''}",
+                )
+                reidratados += 1
+                logger.info(
+                    "timeout scanner: endereco REIDRATADO do registro duravel — "
+                    "session=%s step=%s tenant=%s deadline=%s",
+                    linha["session_id"], linha["step_id"], tenant, exp,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "timeout scanner: falhei em reidratar token de session=%s: %s",
+                    linha["session_id"], exc,
+                )
+        return reidratados
+
     async def _scan_expired_resume_tokens(self) -> None:
+        # RET-11: primeiro restitui endereço perdido, depois varre o cache. A ordem
+        # importa — invertida, o token reidratado só seria visto na passada seguinte.
+        await self._reidratar_parques_duraveis()
         now = datetime.now(timezone.utc)
         async for raw_key in self._redis.scan_iter(match="*:resume_tokens", count=100):
             key       = raw_key if isinstance(raw_key, str) else raw_key.decode()

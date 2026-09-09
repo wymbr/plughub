@@ -20,6 +20,9 @@ import httpx
 from plughub_contextstore.loader import set_context_map_fetcher
 
 import asyncpg
+from datetime import datetime, timezone
+
+from . import session_parking
 import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaProducer
@@ -210,6 +213,9 @@ async def lifespan(app: FastAPI):
 
     # PostgreSQL pool for attachment metadata
     db_pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=10)
+    # RET-11: o registro duravel do parque precisa existir antes de o
+    # consumidor tentar escrever nele.
+    await session_parking.ensure_schema(db_pool)
 
     _attachment_store = _create_attachment_store(settings, db_pool)
     await _attachment_store.ensure_schema()
@@ -264,6 +270,85 @@ async def lifespan(app: FastAPI):
     }
 
     outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings)
+
+    async def _session_parking_consumer() -> None:
+        """
+        RET-11 — espelha o PARQUE de uma sessão suspensa para o Postgres.
+
+        Consome `conversations.events` e mantém `parking.session_parks`:
+          · `session_suspended` → grava o parque (token, prazo, motivo)
+          · `session_resumed`   → resolve
+
+        ⚠️ **Por que um consumidor, e não uma escrita no caminho do suspend.** Quem
+        cunha o token é o engine, via callback `persistSuspendWebhook` — que é
+        Redis-only por desenho do Arc 19 e vive no `skill-flow-service`. O evento,
+        porém, já existe e já carrega tudo: é o `orchestrator-bridge` que publica
+        `session_suspended` aqui, e é dele que a analytics deriva `status='suspended'`.
+        Escutar o evento cobre os DOIS mecanismos de parque (`suspend` e `collect`)
+        sem tocar em produtor nenhum.
+
+        ⚠️ **`auto_offset_reset='latest'`, como os irmãos.** Não relemos o histórico:
+        as 212 sessões já encalhadas não têm o que reidratar (o Redis delas se foi
+        inteiro) e reprocessá-las produziria parques que nascem mortos. Fechar
+        aquela população é a varredura, que é trabalho à parte e declarado.
+        """
+        import json as _json
+        from aiokafka import AIOKafkaConsumer
+        consumer = AIOKafkaConsumer(
+            settings.kafka_topic_events,
+            bootstrap_servers = settings.kafka_brokers,
+            group_id          = f"{settings.kafka_group_id}-parking",
+            auto_offset_reset = "latest",
+        )
+        await consumer.start()
+        try:
+            async for msg in consumer:
+                try:
+                    ev = _json.loads(msg.value)
+                    await _aplicar_evento_de_parque(ev)
+                except Exception as exc:
+                    logger.warning("session-parking consumer error: %s", exc)
+        finally:
+            await consumer.stop()
+
+    async def _aplicar_evento_de_parque(ev: dict) -> None:
+        tipo    = ev.get("type") or ev.get("event_type") or ""
+        tenant  = ev.get("tenant_id") or ""
+        sessao  = ev.get("session_id") or ""
+        if not tenant or not sessao:
+            return
+
+        if tipo == "session_resumed":
+            n = await session_parking.resolver_parque(
+                db_pool, tenant, sessao,
+                por   = str(ev.get("resume_origin") or "resume"),
+                token = str(ev.get("resume_token") or ""),
+            )
+            if n:
+                logger.debug("parque resolvido: session=%s (%d)", sessao, n)
+            return
+
+        if tipo != "session_suspended":
+            return
+
+        token = str(ev.get("resume_token") or "")
+        gravou = await session_parking.registrar_parque(
+            db_pool, tenant, sessao,
+            token      = token,
+            step_id    = str(ev.get("step_id") or ""),
+            reason     = str(ev.get("suspend_reason") or ""),
+            expires_at = session_parking._quando(ev, "resume_expires_at", "expires_at"),
+            parked_at  = session_parking._quando(ev, "timestamp", "suspended_at")
+                         or datetime.now(timezone.utc),
+        )
+        if gravou and not token:
+            # RET-12: parque SEM endereço de volta. A linha existe para ser contada;
+            # o aviso existe para que a contagem seja procurada.
+            logger.warning(
+                "parque SEM endereco de volta: session=%s tenant=%s — o evento nao "
+                "trouxe `resume_token` (mecanismo `collect`?). Nada podera retoma-lo; "
+                "ver RET-12.", sessao, tenant,
+            )
 
     async def _collect_events_consumer() -> None:
         """
@@ -470,6 +555,7 @@ async def lifespan(app: FastAPI):
     pubsub_task     = _supervise("registry-pubsub", asyncio.create_task(_registry.start_pubsub_listener()))
     outbound_task   = _supervise("outbound",        asyncio.create_task(outbound.run()))
     collect_task    = _supervise("collect-events",  asyncio.create_task(_collect_events_consumer()))
+    parking_task    = _supervise("session-parking", asyncio.create_task(_session_parking_consumer()))
     config_task     = _supervise("config-changed",  asyncio.create_task(_config_changed_consumer()))
     # Invalidação do cache de endereço por `registry.changed`. Sem isto, revogar ou
     # rotacionar um token de endpoint só passa a valer depois do TTL do cache
@@ -488,6 +574,7 @@ async def lifespan(app: FastAPI):
     pubsub_task.cancel()
     outbound_task.cancel()
     collect_task.cancel()
+    parking_task.cancel()
     config_task.cancel()
     invalidation_task.cancel()
     timeout_scan_task.cancel()

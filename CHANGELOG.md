@@ -1,5 +1,92 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (3) — RET-11: o parque da sessão suspensa ganhou registro durável
+
+### 1 · O defeito, e a prescrição que foi refutada antes de virar código
+
+Uma sessão suspensa é endereçada por um token, e até aqui esse token — com o prazo
+dentro dele — vivia **só no Redis**, que neste deploy roda `--save ""` com
+`appendonly no`. O scanner de prazo varre `*:resume_tokens` **no Redis**; sem
+token, ele não enxerga nada. Resultado medido: **212 sessões `suspended` com
+`closed_at` NULL**, 160 delas com o prazo vencido e ninguém agindo, contra **zero**
+tokens vivos.
+
+⚠️ **A ficha mandava o scanner ler `session_transitions` — e isso estava errado.**
+Aquela tabela é ClickHouse: analytics, `ReplacingMergeTree` alimentado por Kafka.
+Usá-la como fonte de decisão operacional tornaria a analytics *load-bearing* para
+operação, e não há precedente disso aqui (medido em `rules-engine` e
+`routing-engine`). Teria funcionado — o lag do Kafka é irrelevante contra prazos de
+horas — e teria criado o acoplamento errado. O store escolhido pelo dono foi
+**Postgres**.
+
+### 2 · Onde mora, e por que não se reabriu o Arc 19
+
+`parking.session_parks`, no **channel-gateway** — que já abre pool de Postgres e já
+é dono do ingress de resume e do scanner. Um dono para o endereço.
+
+O dono deu a opção de reabrir o que o Arc 19 fechou. Não foi preciso, e não seria
+melhor: ressuscitar `workflow.instances` recriaria a `WorkflowInstance` como
+contêiner paralelo, contra o invariante *"never create a wide container for a fact
+that fits a narrow one"*. **O parque é fato da SESSÃO**, não de uma entidade à parte.
+
+### 3 · O escritor é um CONSUMIDOR, e isso foi escolha
+
+Quem cunha o token é o engine, pelo callback `persistSuspendWebhook` — Redis-only
+por desenho do Arc 19, e implementado no `skill-flow-service`. Escrever ali exigiria
+dar Postgres a mais um serviço e ainda **não cobriria o `collect`**, que usa outro
+callback.
+
+Mas o evento já existe: `session_suspended` é publicado pelo `orchestrator-bridge`
+em `conversations.events`, é dele que a analytics deriva `status='suspended'`, e ele
+carrega token, passo, motivo e prazo. Escutá-lo cobre **os dois mecanismos de
+parque** sem tocar em produtor nenhum.
+
+`auto_offset_reset='latest'`, como os irmãos: não relemos o histórico. As 212 já
+encalhadas não têm o que reidratar — o Redis delas se foi inteiro — e reprocessá-las
+produziria parques que nascem mortos. Encerrá-las é a **RET-14**, e é trabalho à
+parte de propósito: limpeza não se mistura com mecanismo.
+
+### 4 · O alcance é menor do que o nome sugere, e isso está escrito no módulo
+
+⚠️ **O registro NÃO torna retomável um processo cujo Redis se perdeu inteiro.** O
+`pipeline_state` do flow é igualmente volátil: se ele se foi, não há a que voltar.
+Prometer o contrário seria o "valor plausível" que este repositório caça. São dois
+casos, e só o primeiro é recuperável:
+
+1. **Sessão viva, token perdido** — recuperável, e é caso REAL e documentado: o TTL
+   de `{tenant}:resume_tokens` é do **hash**, compartilhado por todas as sessões do
+   tenant, então um `collect` de 1 h escrito depois encurta um suspend de 48 h e os
+   dois somem juntos. Aqui a reidratação devolve o endereço e o caminho de sempre
+   volta a funcionar — **nenhuma decisão de expiração é duplicada**, a função só
+   restitui.
+2. **Redis inteiro perdido** — irrecuperável. O que sobra é CONHECIMENTO: saber que
+   aquilo foi parqueado, com que prazo, e que venceu. Sem isso a linha fica
+   `suspended` para sempre sem ninguém sequer poder contá-la.
+
+E o parque **sem** `resume_token` (o `collect`, 49 das 212) vira **linha contável
+com aviso**, nunca silêncio — invisível é pior que inendereçável, porque nem contar
+dá. Ver RET-12.
+
+### 5 · Três defeitos latentes meus, pegos antes de valerem
+
+- **`datetime` usado e nunca importado** no `main.py`. `ast.parse` passava; o
+  `NameError` só dispararia no ramo de *fallback* — um evento sem timestamp.
+- **`self._db_pool` lido e nunca atribuído**: o adapter recebia `db_pool` e só o
+  repassava ao `IdentityIndex`. Eu teria lido um atributo inexistente.
+- **`AIOKafkaConsumer` sem o import local** que os dois consumidores irmãos têm.
+
+⚠️ **O terceiro só apareceu AO RODAR** — e apareceu porque a task foi ligada com
+`_supervise`, o helper que existe desde 2026-08-07 para *"fazer a MORTE de uma task
+de background aparecer"*. Sem ele o consumidor teria morrido calado e a tabela
+ficaria vazia parecendo saudável. É a demonstração ao vivo do que a **RET-13**
+registra: o scanner de prazo é a única das tasks do gateway que **não** tem esse
+alarme.
+
+**Gates**: 10 testes novos (`test_ret11_session_parking.py`) · 766 na suíte do
+channel-gateway · 2 mutantes conferidos (a reidratação sobrescrevendo entrada viva;
+a falha do banco virando silêncio) · verificação ao vivo: schema criado, consumidor
+no grupo com as 3 partições de `conversations.events`.
+
 ## 2026-09-09 (2) — AUT-37: o menu escondia, a URL não barrava — em 16 telas
 
 ### 1 · A pergunta era outra, e a resposta foi "não falta"
