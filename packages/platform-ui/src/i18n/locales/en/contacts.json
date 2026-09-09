@@ -927,6 +927,19 @@
         "expires": "Expires",
         "originSession": "Origin session"
       }
+    },
+    "actions": {
+      "titulo": "Actions",
+      "encerrar": "End process",
+      "encerrando": "Ending…",
+      "abrirNoConsole": "Open in Console",
+      "encerrado": "Process ended — the flow followed its timeout path.",
+      "semEndereco": "This process has no resume address anywhere: it cannot be ended from this screen. Use the orphaned-park sweep.",
+      "emExecucao": "A step is RUNNING in this session and the platform cannot abort it. Try again once it suspends.",
+      "jaEncerrado": "Another path already ended this process.",
+      "semPermissao": "You do not have permission to end processes.",
+      "falhou": "Could not end the process (HTTP {{status}}).",
+      "indisponivel": "Service unavailable — nothing was changed."
     }
   },
   "lens": {

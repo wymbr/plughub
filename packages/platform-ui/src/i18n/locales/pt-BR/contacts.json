@@ -927,6 +927,19 @@
         "expires": "Expira",
         "originSession": "Sessão de origem"
       }
+    },
+    "actions": {
+      "titulo": "Ações",
+      "encerrar": "Encerrar processo",
+      "encerrando": "Encerrando…",
+      "abrirNoConsole": "Abrir no Console",
+      "encerrado": "Processo encerrado — o fluxo seguiu o caminho de prazo vencido.",
+      "semEndereco": "Este processo não tem endereço de retomada em lugar nenhum: não é encerrável pela tela. Use o mutirão de parques órfãos.",
+      "emExecucao": "Há um passo EM EXECUÇÃO nesta sessão e a plataforma não sabe abortá-lo. Tente de novo quando ele suspender.",
+      "jaEncerrado": "Outro caminho já encerrou este processo.",
+      "semPermissao": "Você não tem permissão para encerrar processos.",
+      "falhou": "Não foi possível encerrar (HTTP {{status}}).",
+      "indisponivel": "Serviço indisponível — nada foi alterado."
     }
   },
   "lens": {

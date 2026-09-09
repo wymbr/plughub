@@ -263,6 +263,13 @@ probe_park_token_key_contract.sh
 # ou add_done_callback) -- o que nao pode divergir e o comportamento, nao o estilo.
 probe_background_task_supervision.sh
 
+# APR-10 (2026-09-09): o Monitor listava 212 sessoes suspensas com ZERO acao por
+# linha — a acao existiu e SUMIU em 2026-08-07 com as chamadas de
+# `/instances/{id}/cancel`, e nada as substituiu. O ramo B existe porque o portao
+# da rota nova foi aberto por engano NESTA ficha: a primeira versao encerrava
+# sessao sem `Authorization` nenhum, medido ao vivo antes do commit.
+probe_monitor_suspended_action.sh
+
 # ── GAT-03 (b) · os seis que a triagem de 2026-09-07 promoveu ────────────────
 # Estavam em NAO TRIADO e saiam nao-verdes. Triados um a um, CINCO eram defeito do
 # INSTRUMENTO e um so precisava de um interprete. Nenhum acusava defeito de produto.

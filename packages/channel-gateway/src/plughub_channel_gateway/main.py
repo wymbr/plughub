@@ -113,6 +113,9 @@ _email_adapter:      EmailAdapter                         | None = None
 _voice_adapter:      VoiceAdapter                         | None = None
 _webrtc_adapter:     WebRTCAdapter                        | None = None
 _webhook_adapter:    WebhookAdapter                       | None = None
+# APR-10: a rota de encerramento por parque durável consulta o Postgres. O pool
+# nascia e morria dentro do `lifespan`; a rota precisa dele por fora.
+_db_pool:            asyncpg.Pool                         | None = None
 _survey_web:         SurveyWebService                     | None = None
 
 
@@ -213,6 +216,8 @@ async def lifespan(app: FastAPI):
 
     # PostgreSQL pool for attachment metadata
     db_pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=10)
+    global _db_pool
+    _db_pool = db_pool
     # RET-11: o registro duravel do parque precisa existir antes de o
     # consumidor tentar escrever nele.
     await session_parking.ensure_schema(db_pool)
@@ -1759,6 +1764,135 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
             detail="Resume token not found or expired",
         )
     return {"session_id": session_id}
+
+
+class EncerrarParqueRequest(BaseModel):
+    """Corpo do encerramento por parque. `tenant_id` é obrigatório: o parque é do
+    tenant, e adivinhá-lo encerraria a sessão de outro."""
+    tenant_id: str
+    motivo:    str | None = None
+
+
+@app.post("/v1/channels/webhook/sessions/{session_id}/encerrar-parque", status_code=200)
+async def encerrar_parque_da_sessao(
+    session_id: str, body: EncerrarParqueRequest, request: Request
+) -> dict:
+    """
+    Encerra uma sessão suspensa a partir do PARQUE DURÁVEL (APR-10).
+
+    ⚠️ **Por que ela existe, e é medição.** O `force-complete` do supervisor
+    (`mcp-server`, `POST /api/force-complete/{sid}`) resolve o endereço da sessão
+    pelo ledger `work_task` do **Redis**, que neste deploy não persiste (`--save ""`
+    + `appendonly no`). Medido em 2026-09-09: **zero** chaves `work_task` para
+    **54** sessões suspensas — a ação do supervisor não alcançava nenhuma delas, e
+    um botão na tela do Monitor responderia 404 em 100% dos casos. O parque
+    (RET-11) é a fonte que sobrevive; esta rota é como se age sobre ela.
+
+    ⚠️ **O gateway executa, e não devolve o token.** Seria mais simples expor
+    *"qual o token desta sessão?"* e deixar o chamador resumir — e seria entregar
+    a credencial de retomada a quem só precisa da AÇÃO. O dono do parque age; o
+    chamador pede.
+
+    ⚠️ **UMA porta para o chamador.** O Console e o Monitor continuam chamando o
+    `force-complete`; é ELE que cai aqui quando o ledger volátil não existe. Duas
+    portas para *"encerrar sessão suspensa"* seria o defeito que este repositório
+    persegue — e a que ninguém confere é a que vale.
+
+    Devolve `{session_id, via}`. **404** quando não há parque com endereço: a
+    sessão órfã (parque sem token, ou parque nenhum) só é alcançável pelo mutirão
+    `infra/scripts/reap_parques_orfaos.sh`, e a mensagem NOMEIA isso em vez de
+    dizer só "não encontrado".
+    """
+    if _webhook_adapter is None or _db_pool is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    # ⚠️ EXIGE credencial, e isto foi medido ao vivo antes de existir: a primeira
+    # versão desta rota devolvia **200 e encerrava a sessão SEM `Authorization`
+    # nenhum**. A herança veio do `_resolve_approver_principal`, que trata header
+    # ausente como *sistema* — postura correta no RESUME (terceiro externo chega com
+    # o token na mão) e errada aqui, onde o token quem descobre somos nós e a ação é
+    # de SUPERVISOR. O único chamador é o `force-complete` do mcp-server, que já
+    # repassa o Bearer.
+    #
+    # Verificador canônico (`plughub_authz`), nunca uma cópia — § Security. E o
+    # campo é o MESMO que o `force-complete` exige (`agent_assist.supervisionar`,
+    # `read_write`): dois portões com campos diferentes sobre a mesma ação fariam o
+    # mais frouxo ser o que vale.
+    from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
+
+    _tok = bearer_from_header(request.headers.get("authorization"))
+    # `get_settings()`, e não um `settings` de módulo: ele não existe aqui — a
+    # primeira versão usou e o portão morreu com NameError. Falhou FECHADO (500),
+    # que é a única coisa aceitável num portão quebrado, mas era defeito igual.
+    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
+    if not _payload:
+        raise HTTPException(
+            status_code=401,
+            detail="encerrar-parque exige credencial de supervisor (Bearer ausente ou invalido)",
+        )
+    if not abac_can(_payload, "agent_assist", "supervisionar", "read_write"):
+        # `logger` (do módulo), NÃO `_log`: aquele é local de outra função, e a
+        # falha apareceria só no caminho de NEGAR — o pior momento possível.
+        logger.warning(
+            "encerrar-parque NEGADO: sub=%s session=%s — sem agent_assist.supervisionar",
+            _payload.get("sub"), session_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="encerrar-parque exige `agent_assist.supervisionar` (read_write)",
+        )
+
+    token = await session_parking.endereco_da_sessao(_db_pool, body.tenant_id, session_id)
+    if not token:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"sessao {session_id} nao tem parque com endereco de retomada: ou nunca "
+                f"foi registrada (parque anterior a RET-11), ou foi parqueada sem token. "
+                f"Sessao assim nao e retomavel nem encerravel pelo fluxo — o caminho e o "
+                f"mutirao `infra/scripts/reap_parques_orfaos.sh`."
+            ),
+        )
+
+    # Mesmo caminho do gatilho de prazo e do supervisor: o flow segue o seu
+    # `on_timeout`, o item é encerrado e o bridge fecha o segmento. Nada aqui
+    # escreve status na mão — inventar um `completed` sem evento é a degradação de
+    # SINAL TROCADO que a reescrita do force-complete (2026-08-05) fechou.
+    aprovador = _resolve_approver_principal(
+        request,
+        WebhookResumeRequest(tenant_id=body.tenant_id),
+        await _webhook_adapter.resume_required_abac(body.tenant_id, token),
+    )
+    try:
+        sid = await _webhook_adapter.handle_resume(
+            resume_token  = token,
+            tenant_id     = body.tenant_id,
+            payload       = {"decision": "timeout",
+                             "source":   body.motivo or "supervisor:encerrar-parque"},
+            resume_origin = "supervisor",
+            approver      = aprovador,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ResumeAlreadyTerminalError as exc:
+        raise HTTPException(status_code=409, detail=exc.as_detail())
+    if sid is None:
+        # O parque diz que há endereço e o Redis não o conhece: o token expirou
+        # entre uma coisa e outra. Resolver o parque aqui evita que a proxima
+        # leitura repita a oferta de uma acao que nao funciona.
+        await session_parking.resolver_parque(
+            _db_pool, body.tenant_id, session_id, por="token_expirado", token=token,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=("o parque tinha endereco mas o token ja nao existe no Redis "
+                    "(expirado ou consumido). O parque foi resolvido como "
+                    "`token_expirado`; use o mutirao para encerrar a sessao."),
+        )
+    await session_parking.resolver_parque(
+        _db_pool, body.tenant_id, session_id, por="supervisor", token=token,
+    )
+    return {"session_id": sid, "via": "parque_duravel"}
 
 
 class ExternalResumeRequest(BaseModel):

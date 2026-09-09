@@ -1,5 +1,97 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (10) — APR-10: listar trabalho suspenso sem poder agir
+
+### 1 · A ficha via duas lacunas; havia três
+
+Ela dizia: *"é lacuna de SUPERFÍCIE, não de autorização — os dois eixos existem e
+já são gateados"*. Verdadeiro e insuficiente. Medido antes de desenhar botão algum:
+
+```
+suspensas no ClickHouse ......... 54
+chaves `work_task` no Redis ......  0   ← o ramo 1 do force-complete
+parques duráveis (RET-11) ........  5
+```
+
+O `force-complete` resolvia o endereço pelo ledger `work_task` do **Redis**, que
+neste deploy não persiste (`--save ""`, `appendonly no`). **Zero** chaves para 54
+sessões: o botão que a ficha pedia responderia **404 em 100% dos casos** — pior que
+botão nenhum, porque ensina o operador que a tela não funciona.
+
+### 2 · Metade A — ALCANCE, no serviço que é dono do dado
+
+`force-complete` ganhou o **ramo 1b**: sem ledger volátil, delega a
+`POST /v1/channels/webhook/sessions/{sid}/encerrar-parque` no channel-gateway, que
+é o dono de `parking.session_parks`.
+
+⚠️ **O gateway executa e NÃO devolve o token.** Expor *"qual o endereço desta
+sessão?"* seria entregar a credencial de retomada a quem só precisa da AÇÃO.
+
+⚠️ **Uma porta para o chamador.** Console e Monitor continuam chamando o
+`force-complete`; é ele que cai no gateway. Duas portas para *"encerrar sessão
+suspensa"* seria o defeito de sempre — e a que ninguém confere é a que vale.
+
+⚠️ **O mcp-server não lê a tabela do gateway**, embora tenha cliente Postgres: ler
+o store de outro serviço quebraria *one source per domain*, e o DSN dele nem aponta
+para lá.
+
+Medido ao vivo: **54 → 53** suspensas, com `close_reason=flow_complete` — o flow
+seguiu o **próprio** `on_timeout`, não um status escrito à mão.
+
+### 3 · Metade B — SUPERFÍCIE, com os quatro desfechos separados
+
+`AcoesDoProcesso`, no painel de detalhe do Monitor: **Encerrar processo** (gateado
+por `agent_assist.supervisionar`) e **Abrir no Console** — o caminho da linha para a
+sessão, que não existia.
+
+Os desfechos do backend não colapsam em "falhou", pela mesma razão que o
+`OrchestrationTab` já os separa: **404** = não há endereço em lugar nenhum (e a
+mensagem NOMEIA o mutirão) · **501** = passo em execução, tente quando suspender ·
+**409** = outro já encerrou.
+
+⚠️ **A tela não adivinha se a ação vai funcionar.** Ela só conhece o `resume_token`
+do Redis; uma sessão sem token à vista pode ter parque durável. Esconder o botão por
+essa heurística erraria nos dois sentidos — quem sabe é o backend, e a tela relata.
+
+⚠️ Não é a ressurreição do botão Cancelar: aquele chamava `/instances/{id}/cancel`
+da workflow-api; este chama o `force-complete`, único caminho que ENCERRA de fato.
+
+### 4 · Eu abri um buraco de autorização, e a medição o pegou antes do commit
+
+A primeira versão da rota nova devolveu **200 e encerrou a sessão sem
+`Authorization` nenhum**. A herança veio do `_resolve_approver_principal`, que trata
+header ausente como *sistema* — postura correta no RESUME (terceiro externo chega
+com o token na mão) e errada numa ação de SUPERVISOR.
+
+Fechado com o verificador canônico (`plughub_authz`, nunca uma cópia) e com o MESMO
+campo que o `force-complete` exige — dois portões com campos diferentes sobre a
+mesma ação fariam o mais frouxo ser o que vale. Provado ao vivo:
+
+```
+sem Bearer ................. 401   (era 200 E ENCERRAVA)
+com credencial, sem o campo . 403   + log NOMEANDO o sub barrado; parque intacto
+supervisor .................. 200   encerrou de fato
+```
+
+⚠️ O portador do 403 foi **criado pela API oficial e removido ao fim** — fixture que
+fica polui medição alheia (o aviso da AUT-43). E o primeiro conserto do portão
+morreu com `NameError: settings` (o módulo usa `get_settings()`): falhou **fechado**,
+que é a única coisa aceitável num portão quebrado, mas era defeito igual.
+
+### 5 · O que NÃO foi verificado
+
+A tela não foi conferida em navegador: o login automatizado não completou (o
+`form_input` não dispara os eventos que o React escuta, e a digitação simulada
+também não submeteu). A evidência da superfície é o **build** do platform-ui e o
+**ramo A do gate**, que lê o código com comentários removidos. Vale uma olhada
+humana em `/contacts?tab=monitor` → um processo suspenso.
+
+**Gates**: `probe_monitor_suspended_action.sh` (novo, 2 ramos, 4 mutações — inclusive
+o controle negativo que prova que **comentário não conta como ação**) ·
+`probe_i18n_duplicate_keys.sh` verde com as 11 chaves novas em EN e pt-BR ·
+`probe_edge_surface.sh` e `probe_route_credential_coverage.sh` verdes · caminho ponta
+a ponta ao vivo, com 401/403/200 e o efeito conferido no ClickHouse.
+
 ## 2026-09-09 (9) — RET-17: as quatro cópias do supervisor viraram uma
 
 ### 1 · O gatilho foi decisão do dono, e isso fica dito

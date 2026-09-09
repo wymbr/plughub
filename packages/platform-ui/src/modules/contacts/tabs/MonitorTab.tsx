@@ -16,6 +16,9 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { getAccessToken } from '@/auth/token-store'
+import { usePermissionsOf } from '@/lib/permissions'
+import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '@/api/apiFetch'
 import { Radio, Settings, ClipboardList, X, Clock, AlertTriangle, BarChart2 } from 'lucide-react'
 import type { ContactFilters } from '../types'
@@ -630,6 +633,11 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
   const statusParam = filterStatus === 'all' ? undefined : filterStatus
   // `refresh` saiu com o botão Cancelar (2026-08-07): esta aba não tinha outro
   // consumidor dele — o polling de 10 s já mantém a lista viva.
+  // ⚠️ APR-10 (2026-09-09): a AÇÃO voltou, e de propósito NÃO trouxe o `refresh` de
+  // volta — `AcoesDoProcesso` fecha o painel ao concluir e o polling recarrega. E
+  // ela não é a ressurreição do Cancelar: aquele chamava `/instances/{id}/cancel`
+  // da workflow-api; esta chama o `force-complete`, que é o dono da ação e o único
+  // caminho que ENCERRA de fato (o outro só mudava o que o supervisor via).
   const { instances, loading }          = useWorkflowInstances(tenantId, statusParam, 10_000)
   const { instance: detail }            = useWorkflowInstance(selectedId, 10_000)
 
@@ -779,6 +787,13 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
                 </span>
               </div>
             )}
+
+            {/* Ações — APR-10: a lista deixou de ser só leitura */}
+            <AcoesDoProcesso
+              sessionId={detail.session_id ?? detail.id}
+              status={detail.status}
+              onDone={() => setSelectedId(null)}
+            />
 
             {/* Resume token */}
             {detail.resume_token && (
@@ -993,6 +1008,109 @@ function EventsView({ tenantId }: { tenantId: string }) {
 // ── Main MonitorTab ────────────────────────────────────────────────────────
 
 type DrillLevel = 'pools' | 'sessions' | 'segments' | 'transcript'
+
+/**
+ * Ações sobre um processo SUSPENSO (APR-10).
+ *
+ * ⚠️ A lacuna que isto fecha não era de autorização — era de SUPERFÍCIE E DE
+ * ALCANCE. O Monitor listava trabalho suspenso e a única coisa que se podia fazer
+ * por linha era **copiar o resume_token para a área de transferência**; agir era
+ * no Console, sessão a sessão, sem caminho entre as duas telas.
+ *
+ * ⚠️ **O botão não adivinha se a ação vai funcionar, e isso é decidido.** A tela
+ * sabe apenas do `resume_token` que veio no detalhe — e ele vem do Redis, que neste
+ * deploy não persiste. Uma sessão pode não ter token à vista e ainda assim ter
+ * PARQUE DURÁVEL (RET-11), caso em que o encerramento funciona. Quem sabe é o
+ * backend; a tela pergunta e RELATA a resposta, em vez de esconder o botão por uma
+ * heurística que erraria nos dois sentidos.
+ *
+ * ⚠️ Os quatro desfechos do `force-complete` têm leituras DIFERENTES para o
+ * supervisor e não podem colapsar em "falhou" — mesma razão pela qual o
+ * `OrchestrationTab` já os separa: 404 = não há endereço em lugar nenhum (só o
+ * mutirão alcança); 501 = há passo EM EXECUÇÃO e a plataforma não sabe abortá-lo
+ * (será possível quando ele suspender); 409 = outro já encerrou.
+ */
+function AcoesDoProcesso({ sessionId, status, onDone }: {
+  sessionId: string
+  status:    string
+  onDone:    () => void
+}) {
+  const { t }      = useTranslation('contacts')
+  const { session } = useAuth()
+  const perms      = usePermissionsOf(session?.moduleConfig)
+  const navigate   = useNavigate()
+  const [busy, setBusy]   = useState(false)
+  const [msg,  setMsg]    = useState<{ tipo: 'ok' | 'erro' | 'nota'; texto: string } | null>(null)
+
+  const podeEncerrar = perms.can('agent_assist', 'supervisionar', 'read_write')
+  const mcpBase = import.meta.env['VITE_MCP_SERVER_URL'] ?? 'http://localhost:3100'
+
+  const encerrar = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const token = getAccessToken()
+      const res = await fetch(`${mcpBase}/api/force-complete/${sessionId}`, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ reason: 'supervisor_force_complete' }),
+      })
+      if (res.ok) {
+        setMsg({ tipo: 'ok', texto: t('processes.actions.encerrado') })
+        setTimeout(onDone, 1200)
+        return
+      }
+      if (res.status === 404) { setMsg({ tipo: 'nota', texto: t('processes.actions.semEndereco') }); return }
+      if (res.status === 501) { setMsg({ tipo: 'nota', texto: t('processes.actions.emExecucao') }); return }
+      if (res.status === 409) { setMsg({ tipo: 'nota', texto: t('processes.actions.jaEncerrado') }); return }
+      if (res.status === 401 || res.status === 403) {
+        setMsg({ tipo: 'erro', texto: t('processes.actions.semPermissao') }); return
+      }
+      setMsg({ tipo: 'erro', texto: t('processes.actions.falhou', { status: res.status }) })
+    } catch {
+      setMsg({ tipo: 'erro', texto: t('processes.actions.indisponivel') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (status !== 'suspended') return null
+
+  return (
+    <div>
+      <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+        {t('processes.actions.titulo')}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {podeEncerrar && (
+          <button
+            onClick={() => void encerrar()}
+            disabled={busy}
+            className="px-3 py-1.5 text-xs rounded border border-red-900/60 bg-red-900/20 text-red-300
+                       hover:bg-red-900/40 disabled:opacity-50">
+            {busy ? t('processes.actions.encerrando') : t('processes.actions.encerrar')}
+          </button>
+        )}
+        <button
+          onClick={() => navigate(`/console?session=${encodeURIComponent(sessionId)}`)}
+          className="px-3 py-1.5 text-xs rounded border border-slate-700 bg-slate-800 text-slate-300
+                     hover:border-slate-500">
+          {t('processes.actions.abrirNoConsole')}
+        </button>
+      </div>
+      {msg && (
+        <div className={`mt-2 text-xs ${
+          msg.tipo === 'ok'   ? 'text-green-400'
+          : msg.tipo === 'nota' ? 'text-yellow-300'
+          : 'text-red-400'}`}>
+          {msg.texto}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function MonitorTab({ tenantId, filters }: Props) {
   const { t } = useTranslation('contacts')

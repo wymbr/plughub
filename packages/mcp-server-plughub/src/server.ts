@@ -1925,7 +1925,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
   //     internos — lock perdido, step falho). Um 501 que NOMEIA a ausência é a
   //     resposta correta; inventar um flag que o engine não consulta seria repetir
   //     o defeito com outro nome.
-  //  3. Nem um nem outro → **404**. Nada a encerrar.
+  //  1b. Não há ledger, mas HÁ parque durável (APR-10) → delega ao channel-gateway,
+  //     que é o dono da tabela `parking.session_parks` e executa o mesmo resume.
+  //     ⚠️ Isto não é refinamento: o ledger do ramo 1 mora no Redis, que neste
+  //     deploy não persiste (`--save ""` + `appendonly no`). Medido em 2026-09-09,
+  //     **zero** chaves `work_task` para **54** sessões suspensas — ou seja, o ramo
+  //     1 não alcançava NENHUMA delas, e o botão que a APR-10 pede responderia 404
+  //     em 100% dos casos. O parque (RET-11) é a fonte que sobrevive ao restart.
+  //     ⚠️ O gateway EXECUTA e não devolve o token: pedir a ação não é o mesmo que
+  //     receber a credencial de retomada.
+  //  3. Nem um, nem outro, nem parque → **404**, NOMEANDO o mutirão como caminho —
+  //     sessão órfã (sem endereço em lugar nenhum) não é encerrável pelo fluxo.
   //
   // `session:{sid}:meta` deixou de ser condição de existência: ele tem TTL, e o
   // caso que MOTIVA este endpoint é justamente o item parado há muito tempo. O
@@ -2012,10 +2022,55 @@ export async function startServer(config: ServerConfig): Promise<void> {
       return
     }
 
+    // ── Ramo 1b: sem ledger volátil, mas talvez haja PARQUE DURÁVEL ────────────
+    // O gateway é o dono de `parking.session_parks` e executa lá dentro; aqui só se
+    // pede. Bearer repassado para a decisão ser auditada como do supervisor.
+    try {
+      const r = await fetch(
+        `${_wqGatewayUrl}/v1/channels/webhook/sessions/${encodeURIComponent(sessionId)}/encerrar-parque`,
+        {
+          method:  "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
+          },
+          body: JSON.stringify({
+            tenant_id: tenantId,
+            motivo:    `supervisor:${String(claims["sub"] ?? "unknown")}`,
+          }),
+        },
+      )
+      const data = await r.json().catch(() => ({}))
+      if (r.ok) {
+        res.json({
+          completed:  true,
+          via:        "parque_duravel",
+          session_id: sessionId,
+          closed_by:  String(claims["sub"] ?? "unknown"),
+          reason:     (body["reason"] as string) ?? "supervisor_force_complete",
+          ...(data as Record<string, unknown>),
+        })
+        return
+      }
+      // 404 do gateway = não há parque com endereço; cai no ramo 3 abaixo, que
+      // explica o caminho. Qualquer outro código é resposta dele, e viaja intacta:
+      // engolir um 409 ("outro já encerrou") e responder 404 diria a coisa errada.
+      if (r.status !== 404) {
+        res.status(r.status).json({ error: "force_complete_failed", detail: data })
+        return
+      }
+    } catch (err) {
+      res.status(502).json({ error: "channel_gateway_unreachable", message: String(err) })
+      return
+    }
+
     // ── Ramo 3: nada a encerrar ────────────────────────────────────────────────
     res.status(404).json({
       error:   "nothing_to_complete",
-      message: `nenhum item parqueado nem pipeline em execução para a sessão ${sessionId}`,
+      message:
+        `nenhum item parqueado, pipeline em execução ou parque durável para a sessão ` +
+        `${sessionId}. Sessão suspensa SEM endereço não é encerrável pelo fluxo — ` +
+        `o caminho é o mutirão infra/scripts/reap_parques_orfaos.sh.`,
       session_id: sessionId,
     })
   })

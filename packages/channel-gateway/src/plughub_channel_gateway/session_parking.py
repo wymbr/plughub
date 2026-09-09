@@ -192,6 +192,38 @@ async def parques_vencidos(
         )
 
 
+async def endereco_da_sessao(pool: asyncpg.Pool, tenant_id: str, session_id: str) -> str:
+    """O token de retomada VIVO de uma sessão, ou string vazia.
+
+    ⚠️ Existe para a APR-10, e a razão é medida: o `force-complete` do supervisor
+    resolve o endereço pelo ledger `work_task` do **Redis**, que não persiste neste
+    deploy (`--save ""`, `appendonly no`). Medido em 2026-09-09: **zero** chaves
+    `work_task` para **54** sessões suspensas — ou seja, a ação do supervisor não
+    alcançava nenhuma delas, e um botão na tela responderia 404 em 100% dos casos.
+
+    O parque (RET-11) é a fonte que sobrevive ao restart, e esta função é como ela
+    responde. Devolve "" quando não há parque aberto COM endereço — e "" é resposta,
+    não erro: a sessão órfã (parque sem token, ou nenhum parque) só é alcançável
+    pelo mutirão `reap_parques_orfaos.sh`, e quem chama precisa poder dizer isso ao
+    operador em vez de oferecer um botão que falha.
+
+    Ordena pelo mais RECENTE: uma sessão pode ter parqueado várias vezes ao longo do
+    processo (suspend → resume → suspend), e o endereço que vale é o do parque atual.
+    """
+    linha = await pool.fetchrow(
+        """
+        SELECT token
+          FROM parking.session_parks
+         WHERE tenant_id = $1 AND session_id = $2
+           AND resolved_at IS NULL AND token <> ''
+         ORDER BY parked_at DESC
+         LIMIT 1
+        """,
+        tenant_id, session_id,
+    )
+    return str(linha["token"]) if linha else ""
+
+
 async def contar_sem_endereco(pool: asyncpg.Pool) -> int:
     """Quantos parques vivos NÃO têm endereço de volta (a população da RET-12)."""
     async with pool.acquire() as conn:
