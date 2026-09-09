@@ -130,7 +130,7 @@ modules:
       # sem uma entrada de menu sequer. Criar um segundo seria a duplicacao que este
       # repositorio caca; o corte apenas lhe deu o consumidor que faltava.
       monitorar:
-        label: Observar a operacao (Monitor de sessoes, agentes, pools)
+        label: "Monitor: observar a operação ao vivo (sessões, agentes, pools)"
         domain: [none, read_only, read_write]
         scopable: true
         scope_type: pool
@@ -145,7 +145,7 @@ modules:
       # exigido em backend nenhum — um token com `contacts.monitorar` e sem
       # `visualizar` lia a transcricao inteira (200). Ele so escondia menu.
       visualizar:
-        label: Visualizar contatos (listas, agregados e traços de execução)
+        label: "Analytics: relatórios e agregados de contatos (listas e traços de execução)"
         domain: [none, read_only]
         scopable: true
         scope_type: pool

@@ -34,8 +34,8 @@
       "gerir_rubrica": "Manage the evaluator rubric/prompt"
     },
     "contacts": {
-      "monitorar": "Watch the operation (session, agent and pool monitor)",
-      "visualizar": "View contacts (lists, aggregates and execution traces)",
+      "monitorar": "Monitor: watch the live operation (sessions, agents, pools)",
+      "visualizar": "Analytics: contact reports and aggregates (lists and execution traces)",
       "transcricao": "Read a contact's transcript (verbatim dialogue)",
       "exportar": "Export contact data"
     },

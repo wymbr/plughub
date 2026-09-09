@@ -34,6 +34,7 @@
 #   D  o formulário volta a renderizar o rótulo CRU do catálogo
 #   E  módulo do catálogo sem nome traduzido, ou nome de módulo órfão
 #   F  papel sem rótulo traduzido, ou mapa hardcoded contornando o locale
+#   G  rótulo do catálogo com `: ` fora de aspas — quebra o YAML no boot
 #
 # ⚠️ O ramo D é o que impede o gate DECORATIVO. Sem ele, os dois locales podiam
 # estar completos e a tela continuar em português — cobertura de tradução não é
@@ -190,6 +191,31 @@ else:
         bad("a AccessPage voltou a ter mapa HARDCODED de rotulo de papel")
     else:
         ok("nenhum mapa hardcoded de rotulo de papel contorna o locale")
+
+print(f"\n\033[1mG. rotulo do catalogo nao quebra o YAML\033[0m")
+# ⚠️ Escrito depois de eu quebrar o boot do auth-api, em 2026-09-09, ao dar aos
+# rotulos a forma "Monitor: observar ...". Em YAML, escalar NAO-CITADO contendo
+# ": " e erro de sintaxe -- `ScannerError`, e o servico morre no startup.
+#
+# ⚠️ E este probe ficou VERDE com o arquivo quebrado, porque le o catalogo por
+# REGEX de propósito (para nao depender de PyYAML). Leitor tolerante e a razao
+# de ele nao ter pego: ele nao le YAML, le linhas que se parecem com YAML.
+# Este ramo cobra a forma que o leitor tolerante ignora, e sem dependencia nova.
+quebrados = []
+for n, linha in enumerate(texto.split("\n"), 1):
+    m = re.match(r"^\s*label:\s*(.+?)\s*$", linha)
+    if not m:
+        continue
+    v = m.group(1)
+    citado = (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'"))
+    if ": " in v and not citado:
+        quebrados.append((n, v[:60]))
+if quebrados:
+    bad(f"{len(quebrados)} rotulo(s) com ': ' NAO-CITADO — isto e ScannerError no boot:")
+    for n, v in quebrados[:6]:
+        print(f"                 modules.yaml:{n}  label: {v}")
+else:
+    ok("nenhum rotulo com ': ' fora de aspas")
 
 print()
 if fail:

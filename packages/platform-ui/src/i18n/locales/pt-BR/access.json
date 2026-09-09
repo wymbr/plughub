@@ -34,8 +34,8 @@
       "gerir_rubrica": "Gerenciar rubrica/prompt do avaliador"
     },
     "contacts": {
-      "monitorar": "Observar a operacao (Monitor de sessoes, agentes, pools)",
-      "visualizar": "Visualizar contatos (listas, agregados e traços de execução)",
+      "monitorar": "Monitor: observar a operação ao vivo (sessões, agentes, pools)",
+      "visualizar": "Analytics: relatórios e agregados de contatos (listas e traços de execução)",
       "transcricao": "Ler a transcrição de um contato (diálogo verbatim)",
       "exportar": "Exportar dados de contatos"
     },

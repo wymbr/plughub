@@ -304,6 +304,10 @@ probe_i18n_duplicate_keys.sh
 # CATALOGO -> locale, que a paridade EN x pt-BR nao alcanca: antes da correcao os
 # dois locales estavam em paridade PERFEITA sobre uma ausencia total.
 probe_abac_field_labels_i18n.sh
+# AUT-37: das 31 entradas de menu com regra ABAC, 14 tinham a rota NUA (o menu
+# escondia, a URL nao barrava) e 1 exigia campo DIFERENTE do menu. Este gate mede
+# NAV -> ROTA; nenhum dos censos de autorizacao existentes olhava esse eixo.
+probe_nav_route_guard_agreement.sh
 
 # -- ContextStore / arco ALLOWLIST -------------------------------------------
 # Nenhum gate deste arco estava no manifesto ate 2026-09-02, embora existissem desde a

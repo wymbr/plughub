@@ -1,5 +1,119 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (2) — AUT-37: o menu escondia, a URL não barrava — em 16 telas
+
+### 1 · A pergunta era outra, e a resposta foi "não falta"
+
+O dono perguntou se havia tarefa aberta para **disponibilizar** a permissão de
+Monitor e Analytics pela interface. Não havia, porque não faltava: os dois são
+campos do módulo `contacts` — `monitorar` e `visualizar` — e estão no card
+*Service & Contacts* do Edit User desde **2026-08-27**, quando o portão de PAPEL
+que ficava a montante da ABAC foi removido por violar *"Every config field is
+UI-editable"*.
+
+O que fazia parecer ausente é **nomeação assimétrica**: o rótulo de `monitorar`
+dizia *"Monitor de sessões, agentes, pools"* — nomeia a tela — e o de `visualizar`
+dizia *"Visualizar contatos (listas, agregados e traços de execução)"*, **sem
+nunca dizer "Analytics"**. Quem procura pelo nome do menu não acha. Os dois
+rótulos passaram a nomear a tela.
+
+### 2 · Mas a pergunta destravou o que de fato faltava: IMPOR
+
+**Conceder** e **impor** são dois fatos, e só o primeiro estava pronto. Censo
+NAV → ROTA das 31 entradas de menu com regra ABAC:
+
+```
+11  gateadas por RequireAbac
+ 6  "gateavam por dentro"
+14  NUAS  — menu esconde, URL não barra
+```
+
+Mesma forma do item (b) da MOD-11, e o eixo mais grosseiro dos três censos de
+autorização: **uma rota sem guarda não tem decisor para censo nenhum contar**.
+
+### 3 · A ficha estava vencida — e nasceu vencida no ledger
+
+`AUT-37` dizia *"guard de rota ABAC em `analise/*`"*. Medido: as 6 rotas
+`analise/*` reais **já tinham** `RequireAbac`, desde **27–29/08/2026**. A ficha foi
+movida do `CLAUDE.md` para o `pending.md` em **05/09**, carregada verbatim, sem
+remedir.
+
+É exatamente o defeito que a § *Pending* do `CLAUDE.md` narra ter custado seis
+semanas em Customer History — e desta vez a casa errada era a que eu teria lido
+para decidir o que fazer. **O buraco estava no vizinho que a ficha não olhou:**
+Monitor e Configuração.
+
+### 4 · `grep` por `perms.can` classificou como protegida uma página aberta
+
+Das 6 que "gateavam por dentro", **duas não gateavam nada**. `AccessPage` e
+`GroupsPage` têm `canGrant = perms.can('config','permissions','read_write')` — o
+portão de CAMPO da MOD-02, que decide se o formulário **concede**, não se a página
+**abre**. As três legítimas (`OutboundPage`, `SchedulesPage`,
+`SchedulesMonitorPage`) têm early-return bloqueando o render; a `WorkItemsPage`
+fica no meio: o `canView` corta o *fetch*, mas a casca renderiza.
+
+**Presença de checagem não é evidência de que ela decide o render.** Eram **16**
+abertas, não 14 — e eu quase publiquei o número menor, medido por `grep`. É a
+regra da D14.1 na direção que dói: contei quem tinha instrumento e chamei de
+protegido.
+
+Todas as 31 passaram a ter `RequireAbac`. As três com early-return ganham uma
+guarda redundante de propósito: **uniformidade dá ao gate uma regra só, sem lista
+de exceção para apodrecer.**
+
+### 5 · Uma divergência viva, achada pelo ramo que existe para isso
+
+`/analise/quality` exigia `contacts.visualizar`; o **menu** exige
+`evaluation.report`. Duas casas, respostas diferentes — e a rota era a **mais
+permissiva**: `operator` e `devops` têm `contacts.visualizar` no preset e **não**
+têm `evaluation.report`, então alcançavam por URL uma tela que o menu lhes
+esconde. Alinhada ao menu, que é o campo semanticamente certo (*"Visualizar
+relatórios de qualidade"*).
+
+Por isso o par (módulo, campo) de cada guarda é **copiado** da regra do menu e
+nunca reescolhido no `routes.tsx`: escolher de novo é criar a segunda casa cuja
+divergência é o próprio defeito.
+
+### 6 · O gate, e o que ele NÃO é
+
+`probe_nav_route_guard_agreement.sh`, dois ramos — **A** rota nua · **B** par
+divergente do menu. O ramo B é o que importa a médio prazo: sem ele, *"tem
+guarda"* bastaria, e trocar o campo do menu sem trocar o da rota reabriria o
+buraco com o gate verde.
+
+⚠️ **Ele conhece DUAS formas de guarda**, porque o repositório tem duas:
+`RequireAbac` (genérica) e `RequireEvalAccess` (do módulo `evaluation`, onde o
+módulo é implícito). A primeira versão do gate reprovou as 5 rotas de avaliação
+por não conhecer a segunda — falso positivo, corrigido antes de valer.
+
+⚠️ **Isto não é a fronteira de autorização.** Ela é o backend; aqui é coerência de
+UX e defesa em profundidade — as duas pontas passaram a chamar a mesma
+`passesAbacRule`.
+
+### 7 · Eu derrubei o boot do auth-api, e o meu proprio gate ficou verde
+
+Ao dar aos rótulos a forma *"Monitor: observar…"*, escrevi no `infra/modules.yaml`
+um escalar **não-citado contendo `: `** — que em YAML é erro de sintaxe. O
+`auth-api` morreu no startup com `ScannerError`, e o `platform-ui` não subiu junto
+porque depende dele estar `healthy`.
+
+⚠️ **O `probe_abac_field_labels_i18n.sh` ficou VERDE com o arquivo quebrado.** Ele
+lê o catálogo por **regex, de propósito** — para não depender de PyYAML. Leitor
+tolerante é justamente a razão de não ter pego: ele não lê YAML, lê linhas que se
+parecem com YAML.
+
+E a checagem que faltou era a que eu tinha feito nas vizinhas: validei
+`json.loads` nos dois locales e **não** validei o YAML do catálogo. A metade que
+pulei foi a que quebrou.
+
+Virou o **ramo G**, que cobra exatamente a forma que o leitor tolerante ignora —
+`label:` com `: ` fora de aspas — e sem dependência nova. Provado pelo mutante que
+reproduz o defeito original, e ele nomeia arquivo e linha.
+
+**Gates**: `probe_nav_route_guard_agreement.sh` (2 ramos, 2 mutantes conferidos) ·
+`probe_abac_field_labels_i18n.sh` (7 ramos) · `probe_task_ledger.sh` ·
+`tsc --noEmit` do platform-ui.
+
 ## 2026-09-09 (1) — AUT-42: metade do cartão de permissões falava outra língua
 
 ### 1 · O defeito, como o dono o viu
