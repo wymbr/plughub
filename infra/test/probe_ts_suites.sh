@@ -71,6 +71,15 @@ for alvo in $ALVOS; do
   # config do vitest junto. Foi assim que o gemeo Python produziu 476 falsos vermelhos.
   OUT="$(docker exec "$c" sh -c "cd /app/packages/$pkg && ./node_modules/.bin/vitest run 2>&1" 2>/dev/null)"
   LINHA="$(printf '%s' "$OUT" | grep -E '^ +Tests +' | tail -1)"
+  # ⚠️ GAT-04 (2026-09-08, consertado em 2026-09-09): ler SO a linha `Tests` deixa
+  # passar a suite que falha ao COLETAR. Um arquivo que estoura no import executa
+  # ZERO testes, entao nao entra em contagem nenhuma — e o vitest reportava
+  # `Test Files 1 failed | 18 passed` com `Tests 259 passed`, do que este probe
+  # concluia "nenhum vermelho". E a familia *"uma lista parece completa por ser uma
+  # lista"* do lado do RUNNER: o que falta nao aparece em contagem nenhuma.
+  # O caso concreto era `navigation.test.ts` lendo uma fixture que o repo tem e a
+  # IMAGEM nao — medido, o gate ficou VERDE com 848 testes e um arquivo inerte.
+  LINHA_ARQ="$(printf '%s' "$OUT" | grep -E '^ +Test Files +' | tail -1)"
   if [ -z "$LINHA" ]; then
     bad "$pkg: vitest nao produziu linha de sumario — execucao abortou"
     printf '%s\n' "$OUT" | tail -5 | sed 's/^/               /'
@@ -78,10 +87,18 @@ for alvo in $ALVOS; do
   fi
   N_FAIL="$(printf '%s' "$LINHA" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' || true)"
   N_PASS="$(printf '%s' "$LINHA" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' || echo 0)"
+  A_FAIL="$(printf '%s' "$LINHA_ARQ" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' || true)"
   TOTAL=$((TOTAL + N_PASS))
   if [ -n "${N_FAIL:-}" ] && [ "$N_FAIL" -gt 0 ]; then
     bad "$pkg: $N_FAIL vermelho(s), $N_PASS verde(s)"
     printf '%s' "$OUT" | grep -E '^ +× ' | head -8 | sed 's/^/               /'
+  elif [ -n "${A_FAIL:-}" ] && [ "$A_FAIL" -gt 0 ]; then
+    # O caso SILENCIOSO, e ele merece frase propria: teste vermelho e arquivo que
+    # nem chegou a ter teste sao diagnosticos diferentes. Dizer "$A_FAIL vermelhos"
+    # mandaria procurar uma asercao que nao existe.
+    bad "$pkg: $A_FAIL arquivo(s) falharam na COLETA — zero testes contados neles"
+    printf '               (os %s testes que passaram nao cobrem esse arquivo)\n' "$N_PASS"
+    printf '%s' "$OUT" | grep -E '^ *FAIL |^Error: |^Serialized Error' | head -6 | sed 's/^/               /'
   else
     ok "$pkg: $N_PASS testes, nenhum vermelho"
   fi

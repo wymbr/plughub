@@ -53,6 +53,19 @@ COPY --from=builder /app/packages/e2e-tests/services/skill-flow-service ./packag
 # Make skill YAMLs available at /app/skills (SKILLS_DIR in docker-compose)
 COPY --from=builder /app/packages/skill-flow-engine/skills /app/skills
 
+# ⚠️ GAT-04 (2026-09-09) — as fixtures COMPARTILHADAS entram na imagem.
+#
+# `packages/schemas` roda a sua suite a partir DESTA imagem (ver o mapa ALVOS de
+# `infra/test/probe_ts_suites.sh`), e `dialog-return.test.ts` le
+# `infra/test/fixtures/category_path_vectors.json` — vetores lidos por DUAS
+# linguagens de proposito, para que um caso novo obrigue as duas casas a
+# concordarem. Por isso o arquivo nao migra para dentro do pacote: duplica-lo
+# recriaria a divergencia que ele existe para pegar.
+#
+# Sem esta copia o teste estoura no import, executa ZERO testes e some de toda
+# contagem — o probe reportava "nenhum vermelho" com o arquivo inerte.
+COPY infra/test/fixtures ./infra/test/fixtures
+
 WORKDIR /app/packages/e2e-tests/services/skill-flow-service
 
 EXPOSE 3400

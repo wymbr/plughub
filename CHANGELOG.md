@@ -1,5 +1,68 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (15) — GAT-04: o runner não contava o que não existia, e havia dois
+
+### 1 · O modo de falha é o do catálogo, do lado do RUNNER
+
+`probe_ts_suites.sh` decidia vermelho lendo **uma** linha do vitest:
+
+```
+ Test Files  1 failed | 18 passed (19)     ← ninguém lia
+ Tests       259 passed (259)              ← o gate lia esta
+```
+
+Um arquivo que estoura no **import** executa zero testes, então não aparece em
+contagem nenhuma — e o gate concluía *"nenhum vermelho"*. É *"uma lista parece
+completa por ser uma lista"* aplicada ao runner: **o que falta não entra na conta**.
+
+### 2 · A ordem dos consertos é a prova
+
+A ficha nomeava dois consertos independentes e avisava que fazer só o (b) deixaria o
+buraco aberto para o próximo arquivo. Fiz **(a) sozinho primeiro** — e ele ficou
+vermelho por conta própria, que é a falsificação que importa:
+
+| pacote | arquivo | fixture ausente |
+|---|---|---|
+| `mcp-server-plughub` | `src/tools/navigation.test.ts` | `verb_vectors.json` |
+| `schemas` | `src/dialog-return.test.ts` | `category_path_vectors.json` |
+
+⚠️ **A ficha só conhecia o primeiro.** O segundo apareceu porque o instrumento passou
+a enxergar — e é exatamente o *"próximo arquivo"* que a própria ficha antecipava,
+só que ele já estava lá.
+
+### 3 · Por que a fixture não migrou para dentro do pacote
+
+O caminho óbvio seria mover o JSON para junto do teste e acabar com a dependência de
+`infra/`. **Seria desfazer o que ele existe para fazer:** os vetores são lidos por
+**duas linguagens** de propósito — o teste TS e `infra/test/_ret02_verb_probe.py` —
+para que um caso novo obrigue as duas casas a concordarem. O comentário do próprio
+teste diz: *"paridade PRESUMIDA entre linguagens é o defeito que o gate existe para
+pegar, então os dois leem o MESMO arquivo"*.
+
+Duplicar o arquivo recriaria a divergência. Então a fixture entra nas **duas** imagens
+que rodam essas suítes (`mcp-server-plughub` e `skill-flow-service`, que é onde a
+suíte de `schemas` roda — ver o mapa `ALVOS` do probe). Há precedente: o
+`auth-api/Dockerfile` já copia `infra/modules.yaml`.
+
+### 4 · O que a conta mostra
+
+```
+antes:  848 testes "verdes"  ·  2 arquivos inertes
+depois: 900 testes verdes    ·  0 inertes
+```
+
+**52 testes que nunca rodavam.** Não eram testes novos: estavam escritos, versionados
+e mudos — o mesmo desfecho do gêmeo Python, que ao instalar pytest nas imagens achou
+15 falhas reais em 3 serviços que ninguém via.
+
+### 5 · Falsificado
+
+Escondida a fixture dentro do container, o probe acende **nomeando a coleta**
+(*"1 arquivo(s) falharam na COLETA — zero testes contados neles"*, e a frase é
+própria: teste vermelho e arquivo que nem chegou a ter teste são diagnósticos
+diferentes — dizer *"1 vermelho"* mandaria procurar uma asserção que não existe).
+Restaurada, volta a verde com 900.
+
 ## 2026-09-09 (14) — PUL-02: a Camada F ganhou gate, e a triagem achou um instrumento vermelho havia semanas
 
 ### 1 · O que o gate NÃO faz
