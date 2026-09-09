@@ -249,6 +249,13 @@ probe_adapter_self_calls.sh
 # a concordancia com o gate e deixaria os 4 produtores verdes contra um leitor que mudou.
 probe_menu_result_contract.sh
 
+# RET-12 (2026-09-09): o IRMAO do de cima, mesmo eixo e outro par de pacotes. O
+# `collect.ts` grava `{step}:__collect_token__` e o orchestrator-bridge so casava
+# `:__resume_token__` -- 49 sessoes publicaram `session_suspended` SEM token e
+# ficaram suspensas sem endereco. O gate DESCOBRE os sufixos que o engine escreve
+# e os cobra do leitor; declarar a lista aqui mediria os produtores contra o gate.
+probe_park_token_key_contract.sh
+
 # ── GAT-03 (b) · os seis que a triagem de 2026-09-07 promoveu ────────────────
 # Estavam em NAO TRIADO e saiam nao-verdes. Triados um a um, CINCO eram defeito do
 # INSTRUMENTO e um so precisava de um interprete. Nenhum acusava defeito de produto.

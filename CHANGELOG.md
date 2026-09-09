@@ -1,5 +1,98 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (5) — RET-12: o parque por `collect` não era outro mecanismo, era outro NOME
+
+### 1 · A ficha estava errada, e a refutação é o achado
+
+A RET-12 foi aberta afirmando que o `collect` é *"um SEGUNDO mecanismo de suspensão,
+e ele não tem prazo durável em lugar nenhum"*. Medido hoje: **falso**. O `collect`
+grava o token no **mesmo** hash `{tenant}:resume_tokens` e chama o **mesmo**
+`_write_resume_meta(..., suspend_reason="input")` que o `suspend`. A prosa já dizia,
+em `adapters/webhook.py:2226`: *"the collect_token DOUBLES AS the resume_token"*.
+
+A máquina sempre foi uma. O que divergia era o **nome pelo qual o leitor procurava**:
+
+| step | grava no `pipeline_state.results` | o bridge via? |
+|---|---|---|
+| `suspend.ts:53` | `{step}:__resume_token__` | sim |
+| `delegate.ts:41` | `{step}:__resume_token__` | sim |
+| `collect.ts:38` | `{step}:__collect_token__` | **não** |
+
+O leitor casava uma string. Consequência medida: **49 sessões parqueadas sem
+endereço de volta**, 41 delas do `limite_entrega` (que suspende por `collect`) — o
+`session_suspended` saía sem token, a analytics não escrevia `session_transitions`
+(ela só o faz `if payload.get("resume_token")`), e o registro durável da RET-11
+nascia vazio.
+
+⚠️ **Um defeito que custou 49 sessões cabia numa string, e nada ficava vermelho** —
+porque um evento sem token é bem-formado. É o *valor plausível* outra vez, na forma
+mais barata: o campo existe, só está vazio.
+
+### 2 · Um contrato ENTRE pacotes, medido no LEITOR
+
+O engine (TypeScript) escreve; o bridge (Python) lê. O contrato não mora em nenhum
+dos dois lados — mesma família do `payload["answers"]` × `payload["result"]` de
+2026-09-07, *"produtor e teste olhando um para o outro, nenhum dos dois para o
+consumidor"*.
+
+Por isso `infra/test/probe_park_token_key_contract.sh` **descobre** por AST-de-regex
+os sufixos que os steps do engine gravam e os cobra da lista do bridge. Declarar a
+lista dentro do gate mediria os produtores **contra o gate**, e trocar a chave no
+bridge deixaria tudo verde contra um leitor que mudou — a lição literal do
+`probe_menu_result_contract.sh`.
+
+Três mutações, três vermelhos: bridge deixa de reconhecer um sufixo · o bloco de
+descoberta muda de forma · **step novo grava um sufixo desconhecido** (o caso futuro
+real, pego com o nome do arquivo).
+
+### 3 · O gate e o teste medem proposições DIFERENTES — e isso foi provado
+
+O gate mede **nomes**. *"O leitor extrai o par certo"* é outro fato. A prova é a
+mutação **M-B**: recortar o `step_id` com um sufixo FIXO em vez do que casou deixa o
+gate **verde** — os dois nomes continuam na lista — e produz `step_id` com resíduo
+(`pergunta_ao_cliente:__collect`).
+
+Por isso o laço saiu de dentro de uma função de 10 mil linhas e virou
+`descobrir_parque()`, função de módulo com 10 testes. Três mutações no produto, todas
+vermelhas: um sufixo só · recorte fixo · `str(valor)` no lugar de `str(valor or "")`
+(que faria um token ausente virar a string `"None"`, e o consumidor testa `if token`).
+
+⚠️ **Um caso é parametrizado pela tupla do PRODUTO** (`SUFIXOS_DE_TOKEN_DE_PARQUE`),
+então a mutação que encolhe a tupla encolhe também a suíte — 10 casos viram 9. Ele
+serve para o que foi escrito (*declarar não é reconhecer*: sufixo acrescentado e não
+consumido reprova), mas **não pode ser a única testemunha** — quem reprovou a M-A foi
+o caso explícito do `collect`, escrito à mão.
+
+### 4 · Controle positivo AO VIVO, lado a lado no mesmo banco
+
+Disparo do pool `limite_entrega` (step `collect`), duas vezes, no mesmo ClickHouse e
+no mesmo Postgres — o leitor antigo montado por `docker cp` + `restart` (nunca
+`up -d`, que voltaria à imagem):
+
+```
+leitor NOVO    token=0434fc6d-e48e…  step=parquear_resultado  reason=input  prazo=+7d
+leitor ANTIGO  token=<VAZIO>         step=                    reason=
+```
+
+E o aviso que a **RET-11 deixou pronto na véspera** disparou sozinho, com a hipótese
+que eu havia escrito confirmada palavra por palavra:
+
+```
+WARNING parque SEM endereco de volta: session=20451ce8-… — o evento nao trouxe
+        `resume_token` (mecanismo `collect`?). Nada podera retoma-lo; ver RET-12.
+```
+
+⚠️ **Duas sessões de teste ficam suspensas de propósito.** A do leitor novo tem token
+vivo e vence em 7 dias pelo caminho normal; a do leitor antigo é órfã de verdade e é
+exatamente o que o mutirão da RET-14 encerra depois do corte de idade. Nenhuma das
+duas foi apagada à mão: apagar o registro de um parque real seria falsificar a
+evidência que ele existe para dar.
+
+**Gates**: `probe_park_token_key_contract.sh` (novo, declarado AUTO no
+`gates.manifest`, 3 mutações) · `test_ret12_park_token_discovery.py` (10 testes, 3
+mutações) · suíte do bridge **140 passed, 5 skipped** na IMAGEM · caminho ponta a
+ponta com controle positivo ao vivo.
+
 ## 2026-09-09 (4) — RET-14: 212 processos presos em `suspended` viraram 49
 
 ### 1 · O mutirão, e por que ele é limpeza e não mecanismo

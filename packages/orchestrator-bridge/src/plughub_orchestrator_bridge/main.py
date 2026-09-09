@@ -267,6 +267,57 @@ _pool_deploy_version_cache: dict[str, str] = {}
 _pool_config_cache: dict[str, dict] = {}
 
 
+# ⚠️ RET-12 (2026-09-09): SÃO DOIS SUFIXOS, e ler só um deixou 49 sessões sem
+# registro durável de parque — 41 delas do `limite_entrega`, que suspende por
+# `collect`.
+#
+# Os três steps que parqueiam a sessão gravam o token no `pipeline_state.results`,
+# e o nome da chave DIVERGE:
+#   suspend.ts:53   → `{step}:__resume_token__`
+#   delegate.ts:41  → `{step}:__resume_token__`
+#   collect.ts:38   → `{step}:__collect_token__`   ← o que este leitor não via
+#
+# O `collect` NUNCA foi um mecanismo à parte: ele grava no MESMO hash
+# `{tenant}:resume_tokens` e chama o mesmo `_write_resume_meta`
+# (`adapters/webhook.py:2226`, *"the collect_token DOUBLES AS the resume_token"*).
+# A máquina sempre foi uma; o que divergia era o NOME pelo qual se procurava.
+#
+# ⚠️ Isto é um CONTRATO ENTRE dois pacotes — o engine (TypeScript) escreve, o
+# bridge (Python) lê — e por isso não mora em nenhum dos dois lados. Mesma família
+# do `payload["answers"]` × `payload["result"]` que o CLAUDE.md registra: *"produtor
+# e teste olhando um para o outro, nenhum dos dois para o consumidor"*.
+#
+# Gate: `infra/test/probe_park_token_key_contract.sh`, que mede os sufixos que o
+# ENGINE escreve contra os que este leitor reconhece — nunca o contrário.
+SUFIXOS_DE_TOKEN_DE_PARQUE = (":__resume_token__", ":__collect_token__")
+_SUFIXO_DE_PRAZO = ":__expires_at__"
+
+
+def descobrir_parque(results: dict | None) -> tuple[str, str, str]:
+    """Do `pipeline_state.results`, extrai `(token, step_id, expires_at)`.
+
+    Função de módulo, e não um laço embutido, porque o gate mede os NOMES das
+    chaves e isso não é a mesma proposição que *"o leitor extrai o par certo"* —
+    um leitor que reconheça os dois sufixos e devolva o step errado passaria no
+    gate. Dois fatos, dois instrumentos.
+
+    Devolve strings vazias para o que não achar: quem chama publica
+    `session_suspended` de qualquer jeito, e é o `resume_token` vazio que a
+    analytics usa hoje para NÃO gravar a transição.
+    """
+    token = step_id = expires = ""
+    for chave, valor in (results or {}).items():
+        if not isinstance(chave, str):
+            continue
+        sufixo = next((x for x in SUFIXOS_DE_TOKEN_DE_PARQUE if chave.endswith(x)), None)
+        if sufixo:
+            token   = str(valor or "")
+            step_id = chave[: -len(sufixo)]
+        elif chave.endswith(_SUFIXO_DE_PRAZO):
+            expires = str(valor or "")
+    return token, step_id, expires
+
+
 def _stl() -> int:
     """Returns the session Redis TTL (seconds) from Config API, with hardcoded fallback."""
     return int(session_config.get("orchestrator_session_ttl_s", 14_400))
@@ -5363,20 +5414,12 @@ async def process_routed(
         # engine guard (Arc 19 step profile enforcement) blocks the suspend step.
         if _ai_outcome == "suspended" and not conference_id:
             try:
-                # Extract resume_token and expires_at from pipeline_state.results.
-                # Keys: {step_id}:__resume_token__ and {step_id}:__expires_at__
-                _ps_results = (
-                    ((agent_result or {}).get("pipeline_state") or {}).get("results") or {}
+                # O leitor mora em `descobrir_parque` (topo deste módulo), onde
+                # pode ser testado: são DOIS sufixos de token, e ler só um foi o
+                # defeito da RET-12. Detalhe e gate no comentário de lá.
+                _susp_token, _susp_step_id, _susp_expires = descobrir_parque(
+                    ((agent_result or {}).get("pipeline_state") or {}).get("results")
                 )
-                _susp_token    = ""
-                _susp_expires  = ""
-                _susp_step_id  = ""
-                for _k, _v in _ps_results.items():
-                    if isinstance(_k, str) and _k.endswith(":__resume_token__"):
-                        _susp_token   = str(_v or "")
-                        _susp_step_id = _k[: -len(":__resume_token__")]
-                    elif isinstance(_k, str) and _k.endswith(":__expires_at__"):
-                        _susp_expires = str(_v or "")
 
                 await redis_client.xadd(
                     f"session:{session_id}:stream",
