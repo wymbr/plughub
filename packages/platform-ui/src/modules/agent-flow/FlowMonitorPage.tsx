@@ -4,7 +4,14 @@
  * Real-time view of pool state: queue lengths, available agents,
  * sentiment scores, and drill-down into active sessions.
  *
- * Renders MonitorTab in sessions-only scope (Processos moved to /flow/processos).
+ * Renders MonitorTab — com os scopes Sessões E Processos.
+ *
+ * ⚠️ Este comentário dizia *"sessions-only scope (Processos moved to
+ * /flow/processos)"* e as DUAS metades eram falsas: o scope de Processos está
+ * aqui (o seletor da tela o mostra) e a rota `/flow/processos` NÃO EXISTE no
+ * `routes.tsx`. Comentário que promete um destino sem mecanismo é a família que
+ * o CLAUDE.md persegue — e este mandava procurar a tela no lugar errado.
+ * Corrigido em 2026-09-09, ao diagnosticar a ORQ-10.
  */
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
