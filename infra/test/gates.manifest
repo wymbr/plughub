@@ -280,6 +280,37 @@ probe_monitor_suspended_action.sh
 # semeava e deixou 22 chaves + 1 sessao + 1 segmento.
 probe_claim_lease_invisibility.sh
 
+# PUL-02 (2026-09-09): a Camada F fechou o arco de detach em 2026-07-30 validada A
+# MAO, com sondas instrumentadas para aquela sessao — "arco completo sem gate
+# versionado e lembranca, nao verificacao". Este gate NAO re-encena a coreografia
+# de julho (ambiente montado, acw_timeout_hours=0.03): afere as proposicoes que
+# sobrevivem no dado duravel e que regridem em SILENCIO. A F2 e a que mais custa
+# perder — `handle_time_ms` e NULL nas sessoes internas, entao a contaminacao nao
+# apareceria na media, e sim na CONTAGEM: media enviesada alguem questiona, volume
+# dobrado parece dia movimentado.
+# Bateria de mutacao: 2 mutacoes, ambas vermelhas (scope trocado; segmento de
+# wrap-up com issue_status), e verde de volta apos restaurar.
+gate_camada_f.sh
+
+# ── PUL-02 (2026-09-09) · triagem dos instrumentos da Camada F ───────────────
+# Os dois estavam como `?` NAO TRIADO, e por isso nenhum runner os colhia. Triados:
+#
+# `smoke_internal_work_queue.sh` — VERDE na primeira execucao. Estava fora por
+#   inercia, nao por decisao: e' cobertura que ja funcionava e ninguem colhia (o
+#   mesmo achado que a GAT-01 mediu em 100 scripts).
+#
+# `smoke_detached_hook.sh` — estava VERMELHO, e o defeito era do INSTRUMENTO. Um
+#   guard posterior (`agent-registry/lib/internal-queue.ts:189`) recusa
+#   `dispatch: detached` + `side: agent` em pool sem `internal_queue_enabled`, e o
+#   hook do smoke omitia `side`, cujo default e' `agent` — PUT 422. Trocar de pool
+#   nao servia: `retencao_humano` e o UNICO com fila interna (1 de 41) e e' pool
+#   humano, cujo hook e' `on_human_end`, outra proposicao. O smoke prova o
+#   DESPACHO, que independe do lado; passou a declarar `side: customer` (o caso
+#   NPS/survey) e voltou a 2/2. **Ficou vermelho por semanas sem ninguem saber
+#   porque nao estava declarado** — que e exatamente a divida que o `?` nomeia.
+smoke_internal_work_queue.sh
+smoke_detached_hook.sh
+
 # ── GAT-03 (b) · os seis que a triagem de 2026-09-07 promoveu ────────────────
 # Estavam em NAO TRIADO e saiam nao-verdes. Triados um a um, CINCO eram defeito do
 # INSTRUMENTO e um so precisava de um interprete. Nenhum acusava defeito de produto.
@@ -596,13 +627,11 @@ smoke_wrapup_slot_handoff.sh
 ?smoke_agent_role_gate.sh
 ?smoke_close_bugs_20260713.sh
 ?smoke_config_usuarios_auth.sh
-?smoke_detached_hook.sh
 ?smoke_directed_delegate.sh
 ?smoke_eval_finalize_timeout.sh
 ?smoke_gprobe_curar_auth.sh
 ?smoke_gprobe_service_auth.sh
 ?smoke_human_instance_identity.sh
-?smoke_internal_work_queue.sh
 ?smoke_journey_context.sh
 ?smoke_journey_root.sh
 ?smoke_knowledge_rest_auth.sh

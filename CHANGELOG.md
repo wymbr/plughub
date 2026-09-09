@@ -1,5 +1,94 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (14) — PUL-02: a Camada F ganhou gate, e a triagem achou um instrumento vermelho havia semanas
+
+### 1 · O que o gate NÃO faz
+
+A Camada F fechou o arco de detach em 2026-07-30 **validada à mão**, com sondas
+instrumentadas para aquela sessão e um ambiente montado (`dispatch: detached`,
+`acw_timeout_hours: 0.03`). A ficha registrava desde então: *"arco completo sem gate
+versionado é lembrança, não verificação"*.
+
+`gate_camada_f.sh` **não re-encena aquela coreografia** — reproduzi-la seria caro e
+frágil. Ele afere as proposições que **sobrevivem no dado durável** e que regridem em
+**silêncio**, que é onde um gate paga.
+
+### 2 · As duas proposições, e por que a F2 é a que mais custa perder
+
+**F1 — a classificação do wrap-up pousa no segmento da ORIGEM.**
+
+```
+194 segmentos de ORIGEM com issue_status   ·   0 nos 85 de -int
+```
+
+O campo que prova é `issue_status`, e a escolha é da validação original: ele recebe a
+classificação **crua** do formulário e não tem outro produtor. `outcome=resolved` não
+serviria — o fechamento do contato também o produz, e seria o valor plausível que
+confirma a hipótese errada.
+
+**F2 — sessão interna não conta como contato**, e o filtro alcança a **lista**:
+
+```
+scope=contacts  total=1118   is_internal na página = 0
+scope=all       total=1200   is_internal na página = 10   (controle positivo)
+```
+
+⚠️ **Por que esta é a cara:** `handle_time_ms` é **NULL** nas sessões internas, então
+a contaminação nunca apareceria na média — apareceria na **contagem**. Média enviesada
+alguém questiona; *volume dobrado parece dia movimentado*.
+
+**F4 fica INFORMATIVO, e isso é decisão.** Hoje há 0 `acw_expired` em 85 itens. A
+ausência aqui é o **estado saudável**, então ela não pode virar asserção: um gate que
+exigisse expiração pediria que algo falhasse para ficar verde. A metade que dava para
+aferir — a lease — vive no `probe_claim_lease_invisibility.sh` (PUL-01, mesmo dia).
+
+**F3 e D não são duplicados.** Cada um já tem smoke próprio; reimplementá-los criaria
+a segunda casa que diverge no primeiro ajuste.
+
+### 3 · A triagem: um instrumento vermelho que ninguém via
+
+Dois dos três instrumentos da Camada F estavam como **`?` NÃO TRIADO** no manifesto —
+ou seja, **nenhum runner os colhia**. Rodados:
+
+| smoke | resultado | leitura |
+|---|---|---|
+| `smoke_internal_work_queue.sh` | VERDE de primeira | cobertura que já funcionava e ninguém colhia — o achado da GAT-01 outra vez |
+| `smoke_detached_hook.sh` | **VERMELHO** | e o defeito era do **instrumento** |
+
+O 422 dizia o motivo inteiro: um guard posterior
+(`agent-registry/lib/internal-queue.ts:189`) recusa `dispatch: detached` +
+`side: agent` em pool sem `internal_queue_enabled`, porque wrap-up é trabalho
+author-bound. O hook do smoke **omitia `side`**, cujo default é `agent`.
+
+**Trocar de pool não servia, e isso foi medido:** `retencao_humano` é o **único** com
+fila interna (1 de 41) e é pool HUMANO, cujo hook de finalização é `on_human_end`, não
+`on_process_end` — outro caminho, outra proposição. O que o smoke prova é o
+**despacho** (webhook fire-and-forget + fecho imediato do contato de origem), e isso
+independe do lado: `side: customer` é o caso NPS/survey, que exercita o mesmo
+mecanismo. Voltou a **2/2**.
+
+⚠️ **Ele ficou vermelho por semanas sem ninguém saber, e a razão é estrutural:** não
+estava declarado. `?` não é isenção — é dívida nomeada, e esta cobrou.
+
+### 4 · O verde foi falseado
+
+Bateria de mutação, uma por ramo, **ambas vermelhas**:
+
+- **F2** — o gate passa a perguntar a `scope=all` no lugar de `contacts`: acende os
+  **dois** sub-ramos (a lista com 10 linhas internas, e o total que deixa de ser menor).
+- **F1** — insiro um segmento de `-int` com `issue_status`: acende.
+
+E verde de volta depois de restaurar os dois. Os quatro instrumentos (gate + três
+smokes) passam pelo **runner oficial**, não só à mão.
+
+### 5 · Erro meu, no caminho
+
+Escrevi o patch de correção do gate por **heredoc do bash** — a armadilha que já estava
+anotada e que eu já tinha violado nesta mesma sessão. A barra invertida foi mutilada e o
+casamento do texto falhou. Refeito com a ferramenta certa. Antes disso, um apóstrofo
+dentro de `printf '…'` (em *"a ausência aqui e' o estado saudável"*) fechou a string e
+quebrou a sintaxe — o `bash -n` pegou antes de qualquer execução.
+
 ## 2026-09-09 (13) — PUL-01: treze meses de "ninguém mediu", e a medição achou uma rede que passa ao lado
 
 ### 1 · O trabalho era MEDIR, e a fonte da afirmação era um docstring

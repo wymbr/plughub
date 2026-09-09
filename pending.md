@@ -118,13 +118,12 @@ v1 **entregue em 2026-07-17**. O que resta é segunda onda, não v1 inacabado.
 
 ## `docs/adr/adr-work-item-requeue-and-agent-affinity.md` — pull direcionado e wrap-up
 
-Arco A–F completo. A **lacuna 2 foi medida** em 2026-09-09 (PUL-01: janela confirmada, dano
-zero, gatilho declarado) e resta uma dívida de **verificação** (PUL-02) — nenhuma de função.
+Arco A–F completo e **verificado por gate** desde 2026-09-09 (PUL-02). A **lacuna 2 foi medida**
+no mesmo dia (PUL-01) e segue aberta por decisão, com gatilho declarado — nada de função em aberto.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
 | PUL-01 | **Lacuna 2 — a janela entre a lease de 180 s e o prazo do item. ✅ MEDIDA em 2026-09-09; segue ABERTA por decisão.** A ficha dizia *"ninguém a mediu e não há reaper"* desde 2026-08-03, e a afirmação vinha de um **docstring** (`registry.py:105`) — a família que já mentiu **duas vezes neste mesmo arquivo** (prometeu auto-release por heartbeat, que nunca existiu; foi "corrigida" para o reap de órfãos, que também não alcança, porque ele só colhe sessão FECHADA e no claim abandonado o delegate está SUSPENSO). Hoje nada é lido: `infra/test/probe_claim_lease_invisibility.sh` **exerce**. **O que a medição achou:** (a) a janela EXISTE — o claim faz ZREM, e com a lease vencida outro agente é recusado, **com controle positivo ao lado** (após `release`, o mesmo agente leva o item); (b) **há uma rede, e ela passa ao lado** — o `CrashDetector` detecta a instância morta e republica a CONVERSA em `conversations.inbound`, não o ITEM pelo `work_task_release`, que é a porta que o próprio bridge declara ser a única válida: medido ao vivo, o item **não volta** à fila 40 s após a queda; (c) **DANO = 0** — 85 wrap-ups no histórico, **80** submetidos, **zero** `acw_expired` e **zero** `acw_supervisor_closed`: nenhum item chegou ao prazo sem ninguém. ⚠️ **Achado fora do enunciado:** a recusa ao segundo agente é `already_claimed`, não `not_in_queue` — o motivo de quem **perde uma corrida**, e aqui não há corrida: o dono sumiu e o item não volta. O sinal mais visível da lacuna se lê como concorrência saudável. **Candidato de conserto, nomeado e não construído:** o `CrashDetector` já detecta a queda — falta o ramo que, para sessão com ledger `work_task`, chame `work_task_release` em vez de republicar (mesmo processo, sem HTTP). **Gatilho para retomar: o probe ficar VERMELHO** — dano > 0 (um `acw_expired` aparece) ou a janela fechar sozinha | `adiado` | `CHANGELOG.md` § 2026-09-09 (13); gate `probe_claim_lease_invisibility.sh` |
-| PUL-02 | Gate re-executável da Camada F — hoje validada por medição manual instrumentada. *Arco completo sem gate versionado é lembrança, não verificação* | `aberto` | `CLAUDE.md` § Detach |
 
 ---
 

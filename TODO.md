@@ -5303,10 +5303,12 @@ já existente em `segments` mas sem UI nenhuma) — gap real, mas separado, aind
 > própria seção ainda lista a **E2e** como escopo, item que morreu com a reversão da Camada C em 07-29.
 > O estado vivo está em **§ "Camada E2 restante"** (~linha 2652) e no `CHANGELOG.md:6542`
 > (*Camada F — validação do arco de detach de hooks ✅ 2026-07-30*).
-> **O que sobra de aberto, medido:** (a) a F4 declara a própria lacuna — a **lease** não foi medida e
-> não há reaper; (b) **não existe gate re-executável da Camada F** (validada por medição manual, com
-> os smokes de B/D/R0/I5 reaproveitados via `DISPATCH`/`ACW_HOURS` em
-> `infra/test/smoke_internal_work_queue.sh:85-89`).
+> **O que sobrava de aberto — ambos fechados em 2026-09-09:** (a) a **lease** da F4 foi MEDIDA
+> (`probe_claim_lease_invisibility.sh`, PUL-01): a janela existe, nenhuma rede a alcança e o dano é
+> zero — segue aberta por decisão, com gatilho; (b) o **gate re-executável** existe
+> (`gate_camada_f.sh`, PUL-02), aferindo F1 e F2 sobre o dado durável, com F3 e D delegados aos
+> smokes próprios — que a mesma ficha tirou de `?` NÃO TRIADO, e um deles estava VERMELHO havia
+> semanas por defeito do instrumento.
 > O texto abaixo fica como **registro do desenho original**, útil para ler a intenção — não o as-built.
 
 Unifica a coleta de finalização (survey/wrap-up) e aposenta a **Forma A (delegate `skill_survey_v1`)**. Hooks de

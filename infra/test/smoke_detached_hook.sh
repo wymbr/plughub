@@ -9,6 +9,21 @@
 #
 # Estratégia: patcha (em runtime, via PUT /v1/pools) o `on_process_end` de um pool
 # webhook que COMPLETA no trigger (outbound_demo) para uma entrada `detached` →
+#
+# ⚠️ **`side: customer` e' EXIGENCIA, e a razao foi medida em 2026-09-09 (PUL-02).**
+# O smoke estava VERMELHO e ninguem sabia — ele era `?` NAO TRIADO no manifesto,
+# entao nenhum runner o colhia. A causa nao era o produto: um guard posterior
+# (`agent-registry/lib/internal-queue.ts:189`) recusa `dispatch: detached` +
+# `side: agent` em pool sem `internal_queue_enabled`, porque wrap-up e trabalho
+# author-bound e precisa da fila interna. O hook aqui omitia `side`, cujo default
+# e' `agent`, e o PUT tomava **422**.
+#
+# Trocar de pool nao serviria: `retencao_humano` e' o UNICO com fila interna
+# (medido: 1 de 41) e e' pool HUMANO, cujo hook de finalizacao e' `on_human_end`,
+# nao `on_process_end` — outro caminho, outra proposicao. O que este smoke prova e'
+# o DESPACHO (webhook fire-and-forget + fecho imediato do contato de origem), e
+# isso independe do lado: `side: customer` e' o caso NPS/survey, que exercita o
+# mesmo mecanismo sem invocar trabalho author-bound.
 # pool-alvo (portabilidade_processo_ia, que suspende → sessão-filha observável).
 # Restaura os hooks originais no fim. O bridge lê a config do pool fresh a cada
 # disparo (get_pool_config não é cacheado), então o patch vale sem restart.
@@ -72,7 +87,7 @@ echo "   hooks originais: $ORIG_HOOKS"
 echo "2) Patcha $PRIMARY.hooks.on_process_end = [{pool: $TARGET, dispatch: detached}] ..."
 PATCH=$(curl -s -o /tmp/_dh_body -w '%{http_code}' -X PUT "$AR/v1/pools/$PRIMARY" "${thw[@]}" \
   -H 'content-type: application/json' \
-  -d "{\"hooks\": {\"on_process_end\": [{\"pool\": \"$TARGET\", \"dispatch\": \"detached\"}]}}")
+  -d "{\"hooks\": {\"on_process_end\": [{\"pool\": \"$TARGET\", \"dispatch\": \"detached\", \"side\": \"customer\"}]}}")
 echo "   HTTP $PATCH"; [ "$PATCH" = "200" ] || { echo "FALHA: PUT hooks (HTTP $PATCH)"; cat /tmp/_dh_body; exit 1; }
 sleep 2
 
