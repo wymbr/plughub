@@ -52,6 +52,16 @@ export const CloseReasonSchema = z.enum([
   "agent_hangup",         // agente encerrou ativamente
   "session_timeout",      // sessão inativa além do TTL
   "system_error",         // erro irrecuperável
+  // RET-14 (2026-09-09). Suspensão cujo ENDEREÇO de retomada se perdeu: o prazo
+  // venceu e não há caminho de volta. O token e o `pipeline_state` vivem no Redis,
+  // que neste deploy não persiste — perdido o Redis, a sessão fica `suspended`
+  // para sempre, porque nem o scanner nem o `force-complete` a alcançam.
+  //
+  // ⚠️ NÃO é `session_timeout`, que já tem dono: o orchestrator-bridge o usa para
+  // timeout de TRANSPORTE (`main.py:3830`). E não é `flow_complete`, porque o flow
+  // NÃO completou — reusá-lo faria a estatística de resolução contar como sucesso
+  // um processo que ninguém terminou.
+  "suspend_orphaned",     // parque órfão: prazo vencido e endereço de retomada perdido
 ])
 export type CloseReason = z.infer<typeof CloseReasonSchema>
 

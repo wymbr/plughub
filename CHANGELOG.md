@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (4) — RET-14: 212 processos presos em `suspended` viraram 49
+
+### 1 · O mutirão, e por que ele é limpeza e não mecanismo
+
+163 sessões estavam `suspended` para sempre — a mais antiga de 10/08. Não tinham a
+que voltar: o token que as endereça e o `pipeline_state` do flow viviam num Redis
+com `--save ""` e `appendonly no`. E nada as alcançava — o scanner varre tokens que
+não existem mais, e o `force-complete` responde **404**, porque o estado 1 dele
+exige o item no ledger.
+
+O mecanismo que impede a população de crescer é a RET-11 (registro durável do
+parque). Este script existe para a dívida que já estava lá quando o registro
+nasceu — o consumidor da RET-11 é `auto_offset_reset=latest` de propósito e não
+enxerga o passado. **Rodar uma vez e nunca mais é o desfecho esperado.**
+
+Resultado: **212 → 49 suspensas**, e as 49 restantes são todas **recentes**
+(< 7 dias), protegidas pelo corte de idade.
+
+### 2 · Um `close_reason` novo, e por que nenhum dos dez servia
+
+`suspend_orphaned` — *parque órfão: prazo vencido e endereço de retomada perdido*.
+
+- **`flow_complete` não serve**: o flow **não** completou. Reusá-lo faria a
+  estatística de resolução contar como sucesso um processo que ninguém terminou.
+- **`session_timeout` não serve**, e isso é medição: ele **já tem dono** — o
+  `orchestrator-bridge` o usa para timeout de **transporte** (`main.py:3830`).
+  Reusá-lo colidiria dois fatos num campo só, o defeito que este repositório já
+  pagou em `agent_role` e em `queue_config`.
+
+### 3 · Pela porta de EVENTO, com a linha COMPLETA
+
+O mutirão emite `contact_closed` em `conversations.events` — nunca escrita direta
+em ClickHouse. O precedente é o `/admin/backfill-events` da workflow-api, que
+também re-emite eventos sintéticos em vez de tocar a tabela.
+
+⚠️ **`source: "parking_reaper"`, e não `channel_gateway`** — medido: o handler da
+analytics **retorna `None`** para eventos com aquela fonte. E a trilha deve dizer
+quem fechou.
+
+⚠️ **A linha vai COMPLETA.** `sessions` é `ReplacingMergeTree` de linha inteira: um
+evento parcial chega com `row_version` mais novo e **apaga**
+`pool_id`/`channel`/`opened_at`. Conferido depois de aplicar: **0 sem pool, 0 sem
+canal, 0 sem abertura** em 162 linhas.
+
+### 4 · Duas guardas, e a primeira foi provada ao vivo
+
+**Token vivo nunca entra.** Antes de emitir, cada candidata é conferida contra
+`{tenant}:resume_tokens`. Para provar que a guarda funciona — e não apenas que o
+código existe — inseri um token apontando para uma candidata real antes de rodar:
+
+```
+163 candidatas → PULADA (token vivo): 1a67e3be-…  →  emitidos=162  pulados=1
+```
+
+**Corte de idade** (default 7 dias): a medição original mostrava 3 sessões ainda
+dentro do prazo. Sem o corte, o mutirão as mataria junto — política contra uma
+população que não foi contada é o erro que a D14.1 registra.
+
+### 5 · Três defeitos meus, todos encontrados RODANDO
+
+⚠️ **O `<<'PY'` ocupava o stdin.** Não dá para canalizar dados e passar o programa
+por heredoc no mesmo descritor: a lista nunca chegava, e o script emitiu **zero**.
+Hoje o programa vai em `python -c`, deixando o stdin livre para os dados.
+
+⚠️ **E ele imprimiu `OK — eventos emitidos` sobre zero emissões.** O veredicto
+olhava só o código de saída. É exatamente a *degradação de SINAL TROCADO* que
+motivou a reescrita do `force-complete` em 2026-08-05 — *"pior que inerte, porque
+afirma sucesso"*. Hoje o Python devolve **1** quando havia candidata e nada foi
+emitido, e o shell distingue OK · INCONCLUSIVO · FALHOU.
+
+⚠️ **A consulta não usava `FINAL`.** Até a fusão, o `ReplacingMergeTree` mostra a
+versão antiga (`status=suspended`) ao lado da nova — então a segunda execução
+repropôs as 163 já fechadas. Com `FINAL`, o dry-run passou a responder a verdade:
+*"nenhuma candidata"*.
+
+**Gates**: `suspend_orphaned` no domínio (`schemas`, 282 testes) · dry-run/apply
+verificados ao vivo · controle positivo do token vivo · integridade da linha
+conferida pós-aplicação. ⚠️ A suíte de `schemas` tem **1 arquivo falhando ao
+COLETAR** (`dialog-return.test.ts`, fixture `category_path_vectors.json` ausente da
+imagem) — pré-existente, irmã do caso que a `GAT-04` registra, e invisível na
+contagem de testes justamente pelo motivo que aquela ficha nomeia.
+
 ## 2026-09-09 (3) — RET-11: o parque da sessão suspensa ganhou registro durável
 
 ### 1 · O defeito, e a prescrição que foi refutada antes de virar código
