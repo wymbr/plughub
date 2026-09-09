@@ -292,6 +292,14 @@ probe_claim_lease_invisibility.sh
 # wrap-up com issue_status), e verde de volta apos restaurar.
 gate_camada_f.sh
 
+# AUT-39 (2026-09-09): `config.users` era irrestrito. Medido ao vivo ANTES do
+# conserto: supervisor com o campo e ZERO pools listou os 9 usuarios do tenant,
+# trocou a senha de um usuario de outro time (200), ENTROU na conta, e a original
+# deixou de valer. Nao e escalacao (o alvo nao esta acima) — e tomada LATERAL.
+# O ramo 3 e o que impede o verde errado: um enforcement que negasse tudo deixaria
+# o ramo 1 verde com o produto quebrado.
+gate_user_admin_org_chart.sh
+
 # ── PUL-02 (2026-09-09) · triagem dos instrumentos da Camada F ───────────────
 # Os dois estavam como `?` NAO TRIADO, e por isso nenhum runner os colhia. Triados:
 #

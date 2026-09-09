@@ -150,6 +150,45 @@ fi
 ALVO_ID="$(uid_de "$T_ADMIN" "$ALVO_EMAIL")"
 [ -z "$ALVO_ID" ] && { inc "o usuario-alvo nao existe — S3..S7 nao tem sobre o que rodar"; exit 2; }
 
+# ── AUT-39 (2026-09-09) — a PRE-CONDICAO nova: o organograma ─────────────────
+#
+# `config.users` deixou de ser irrestrito. Administrar uma pessoa passou a exigir
+# que ela seja MEMBRO de um grupo que o aplicador SUPERVISIONA — porque a versao
+# antiga deixava um supervisor com zero pools listar o tenant inteiro, resetar a
+# senha de um usuario de outro time e ENTRAR na conta dele (medido ao vivo).
+#
+# A proposicao deste probe nao mudou: pessoa passa, capacidade recusa. Mudou o que
+# e preciso ter para ser "quem PODE administrar" — e sem esta costura o S3 mediria
+# a ausencia do grupo e chamaria isso de "o split quebrou".
+#
+# ⚠️ Residuo NOMEADO que esta costura revela: quem CRIA um usuario (S1) nao passa a
+# administra-lo, porque a criacao nao o poe em grupo nenhum. Cria e nao administra e
+# incoerente; a decisao de como fechar (criar DENTRO de um grupo? proveniencia?)
+# esta registrada na AUT-39 e nao foi tomada aqui.
+GRUPO_ID="$(curl -s -X POST "$AUTH/v1/groups" -H "Authorization: Bearer $T_ADMIN" \
+  -H 'content-type: application/json' \
+  -d "{\"tenant_id\":\"$TENANT\",\"name\":\"probe split (AUT-39)\",\"description\":\"pre-condicao do S3\"}" \
+  | jq -r '.group_id // empty' 2>/dev/null)"
+if [ -z "$GRUPO_ID" ]; then
+  inc "nao consegui criar o grupo da pre-condicao — S3 mediria a ausencia dele"
+  exit 2
+fi
+curl -s -o /dev/null -X POST "$AUTH/v1/groups/$GRUPO_ID/users" \
+  -H "Authorization: Bearer $T_ADMIN" -H 'content-type: application/json' \
+  -d "{\"user_id\":\"$ALVO_ID\"}"
+curl -s -o /dev/null -X POST "$AUTH/v1/groups/$GRUPO_ID/supervisors" \
+  -H "Authorization: Bearer $T_ADMIN" -H 'content-type: application/json' \
+  -d "{\"user_id\":\"$UA_ID\"}"
+# O token carrega o escopo do login: sem re-login o supervisor novo nao viaja.
+T_UA="$(login "$UA_EMAIL" "$UA_PASS")"
+[ -z "$T_UA" ] && { inc "re-login de $UA_EMAIL falhou apos o grupo"; exit 2; }
+limpar_grupo() {
+  [ -n "${GRUPO_ID:-}" ] && curl -s -o /dev/null -X DELETE "$AUTH/v1/groups/$GRUPO_ID" \
+    -H "Authorization: Bearer $T_ADMIN"
+}
+trap limpar_grupo EXIT
+ok "pre-condicao: $ALVO_EMAIL e membro de um grupo que $UA_EMAIL supervisiona"
+
 # ── S3/S4/S5 — editar: pessoa passa, capacidade recusa ───────────────────────
 sec "S3/S4/S5 - editar usuario e conceder"
 C3="$(st "$T_UA" PATCH "/users/$ALVO_ID" '{"name":"Probe Target Renomeado"}')"

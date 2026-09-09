@@ -445,6 +445,107 @@ SET roles = array_replace(roles, 'developer', 'devops')
 WHERE 'developer' = ANY(roles)
 """
 
+# ── AUT-39 — trilha de ADMINISTRACAO de usuario ───────────────────────────────
+#
+# Nasceu de uma medicao ao vivo (2026-09-09): um supervisor com `config.users` e
+# ZERO pools trocou a senha de um usuario de outro time (HTTP 200), ENTROU na conta
+# com a senha nova, e a original deixou de valer. Nada disso deixava rastro — o
+# `router.py` inteiro tinha 4 chamadas de logger e nenhuma nesse caminho, e o schema
+# `auth` nao tinha tabela de trilha. A vitima via so a senha parar de funcionar.
+#
+# ⚠️ **`target_id` NAO tem FK para `auth.users`, e isso e decisao.** Com
+# `ON DELETE CASCADE` (como as tabelas de grupo usam), apagar o usuario apagaria
+# junto o registro de QUEM o apagou — a trilha desapareceria exatamente no evento
+# que ela existe para testemunhar. Guardamos tambem o e-mail, que sobrevive a
+# remocao da linha.
+#
+# ⚠️ **Nunca deduplicada**, pela mesma razao que o `audit_access_log` da analytics:
+# o valor da trilha e dizer QUANTAS vezes e por quem — colapsar repeticoes apagaria
+# o padrao que denuncia abuso.
+DDL_USER_ADMIN_LOG = """
+CREATE TABLE IF NOT EXISTS auth.user_admin_log (
+    id           BIGSERIAL   PRIMARY KEY,
+    tenant_id    TEXT        NOT NULL,
+    actor_id     TEXT        NOT NULL,
+    actor_email  TEXT        NOT NULL DEFAULT '',
+    target_id    TEXT        NOT NULL,
+    target_email TEXT        NOT NULL DEFAULT '',
+    acao         TEXT        NOT NULL,
+    campos       TEXT[]      NOT NULL DEFAULT '{}',
+    proprio      BOOLEAN     NOT NULL DEFAULT FALSE,
+    at           TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
+DDL_USER_ADMIN_LOG_IDX = (
+    "CREATE INDEX IF NOT EXISTS idx_user_admin_log_alvo "
+    "ON auth.user_admin_log (tenant_id, target_id, at DESC)"
+)
+
+
+async def registrar_admin_de_usuario(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id:    str,
+    actor_id:     str,
+    actor_email:  str,
+    target_id:    str,
+    target_email: str,
+    acao:         str,
+    campos:       list[str],
+) -> None:
+    """Grava a trilha. NUNCA derruba a requisicao — mas grita se falhar.
+
+    A mutacao ja aconteceu quando esta funcao roda; recusar aqui seria tarde. O que
+    nao pode e falhar CALADA: um `except: pass` aqui reproduziria, com outra roupa,
+    exatamente o silencio que esta tabela existe para acabar.
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO auth.user_admin_log "
+                "(tenant_id, actor_id, actor_email, target_id, target_email, "
+                " acao, campos, proprio) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                tenant_id, actor_id, actor_email, target_id, target_email,
+                acao, campos, actor_id == target_id,
+            )
+    except Exception as exc:
+        logger.error(
+            "TRILHA PERDIDA: %s de %s por %s (campos=%s) NAO foi registrada: %s",
+            acao, target_email or target_id, actor_email or actor_id, campos, exc,
+        )
+
+
+async def supervisiona(pool: asyncpg.Pool, supervisor_id: str, alvo_id: str) -> bool:
+    """AUT-39 — `supervisor_id` administra `alvo_id`? (organograma do Arc 9)
+
+    Verdadeiro quando existe UM grupo em que o primeiro e supervisor e o segundo e
+    membro. Membership EXPLICITA: quem nao esta em grupo nenhum nao e administravel
+    por supervisor nenhum — o que e uma recusa, nao um silencio, e foi por isso que
+    esta saida venceu a alternativa por POOL. Naquela, `pools(alvo) ⊆ pools(ator)`
+    dependia de o admin ENUMERAR o universo de pools, e um pool novo o tirava dessa
+    condicao **sem erro em lugar nenhum** (censo de 2026-09-09; ver AUT-29).
+    """
+    if not supervisor_id or not alvo_id:
+        return False
+    try:
+        return bool(await pool.fetchval(
+            """
+            SELECT EXISTS(
+              SELECT 1
+              FROM auth.agent_group_supervisors AS s
+              JOIN auth.agent_group_users       AS m ON m.group_id = s.group_id
+              WHERE s.user_id::text = $1 AND m.user_id::text = $2)
+            """,
+            supervisor_id, alvo_id))
+    except Exception as exc:
+        # Recusa ALTO: falha de dependencia nao pode virar autorizacao. O oposto
+        # (degradar para permissivo) e o `fail-open` que a § Security persegue.
+        logger.error(
+            "supervisiona(%s, %s) falhou — NEGANDO por seguranca: %s",
+            supervisor_id, alvo_id, exc)
+        return False
+
 # ── Arc 9 — Agent Groups & Supervisor Scope ───────────────────────────────────
 
 DDL_AGENT_GROUPS = """
@@ -526,6 +627,8 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
             # docs/arcos/arc9-agent-groups.md; tables may still exist physically
             # in older DBs, just no longer created/read/written by this service)
+            await conn.execute(DDL_USER_ADMIN_LOG)
+            await conn.execute(DDL_USER_ADMIN_LOG_IDX)
             await conn.execute(DDL_AGENT_GROUPS)
             await conn.execute(DDL_AGENT_GROUP_USERS)
             await conn.execute(DDL_AGENT_GROUP_SUPERVISORS)
@@ -606,7 +709,19 @@ async def list_users(
     tenant_id: str,
     limit: int = 100,
     offset: int = 0,
+    administravel_por: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Lista usuarios do tenant.
+
+    `administravel_por` = id de quem pergunta ⇒ recorta pelo ORGANOGRAMA (AUT-39):
+    ve a si mesmo e quem for MEMBRO de um grupo que ele SUPERVISIONA. `None` ⇒ sem
+    recorte (o caminho do admin, declarado no router).
+
+    ⚠️ **O recorte vai no SQL, e nao em Python depois do fetch.** Filtrar depois do
+    `LIMIT` devolveria paginas curtas e, pior, paginas ERRADAS: o offset contaria
+    linhas que o chamador nao pode ver. E o mesmo motivo pelo qual o escopo de pool
+    da analytics vive no `WHERE`, nunca no laco.
+    """
     rows = await pool.fetch(
         """
         SELECT id, tenant_id, email, name, roles, accessible_pools,
@@ -614,10 +729,20 @@ async def list_users(
                created_from_template_id, created_from_template_hash
         FROM auth.users
         WHERE tenant_id = $1
+          AND (
+            $4::text IS NULL
+            OR id::text = $4
+            OR EXISTS (
+                 SELECT 1
+                 FROM auth.agent_group_supervisors AS s
+                 JOIN auth.agent_group_users       AS m ON m.group_id = s.group_id
+                 WHERE s.user_id::text = $4 AND m.user_id = auth.users.id
+               )
+          )
         ORDER BY created_at DESC
         LIMIT $2 OFFSET $3
         """,
-        tenant_id, limit, offset,
+        tenant_id, limit, offset, administravel_por,
     )
     return [_parse_module_config(dict(r)) for r in rows]
 

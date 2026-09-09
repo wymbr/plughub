@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (16) — AUT-39: a tomada lateral de conta, e o eixo que não existia
+
+### 1 · Medido antes de consertar, de ponta a ponta
+
+Com alvo descartável criado pela API oficial:
+
+| passo | antes |
+|---|---|
+| supervisor com `config.users` e **ZERO pools** → `GET /auth/users` | vê os **9** do tenant |
+| `PATCH /users/{id}` com `password` de outro time | **HTTP 200** |
+| login com a senha nova | **entra na conta** |
+| login com a senha original | **não vale mais** |
+
+Não é escalação — o alvo não está acima —, é **tomada lateral entre times**. E era
+**silenciosa**: o handler não emitia log (o `router.py` inteiro tinha 4 chamadas de
+logger, nenhuma nesse caminho) e o schema `auth` não tinha trilha. A vítima via só a
+senha parar de funcionar.
+
+⚠️ **A decisão declarada sobre `password` não cobria isto, e reconhecer isso é ser
+justo com ela.** O comentário do `router.py:115` fecha o vetor *"resetar a senha do
+admin e entrar como admin"* pela outra ponta (`_assert_may_touch`). Aquilo decidiu
+**escalação**; o caso lateral nunca esteve no escopo dela.
+
+### 2 · O censo recusou a saída por POOL, e a razão é o modo de falha da casa
+
+A ficha oferecia dois eixos. Sob `pools(alvo) ⊆ pools(ator)`, com 41 pools no
+registry e 3 usuários reais:
+
+| usuário | pools | quem o administraria |
+|---|---|---|
+| `admin@` | 41 | **ninguém** |
+| `operator@` | 3 | só `admin@` |
+| `supervisor@` | 2 | só `admin@` |
+
+E o `admin@` só administraria os outros porque **enumera** os 41 pools — *"cobre o
+universo"* é condição que **um pool novo desfaz sem erro em lugar nenhum**. É o
+discriminador que a AUT-29 nomeia, e o modo de falha que este repositório mais paga:
+a permissão continua parecendo certa e deixa de valer.
+
+Venceu o **organograma** (`agent_groups`, Arc 9): greenfield medido em **0/0/0**, e
+membership **explícita** — quem não está em grupo nenhum é recusado com 403 que
+nomeia o motivo. Recusa visível, não silêncio.
+
+### 3 · Duas fatias, e a primeira vale sozinha
+
+**A trilha** (`auth.user_admin_log`) responde *"quem mexeu nesta pessoa, quando e em
+que campos"*. Dois detalhes de desenho que não são estilo:
+
+- **sem FK no alvo.** Com `ON DELETE CASCADE`, apagar o usuário apagaria o registro
+  de **quem o apagou** — a trilha sumiria exatamente no evento que ela testemunha.
+- **dois canais.** A tabela é consultável depois; o log responde agora, e existe
+  porque o canal durável pode ser justamente o que falhou. Reset de senha por
+  terceiro sai em **WARNING** nomeando ator e alvo; o resto em INFO.
+- a gravação **nunca derruba a requisição** (a mutação já aconteceu), mas **grita**
+  se falhar: um `except: pass` ali reproduziria, com outra roupa, o silêncio que a
+  tabela existe para acabar.
+
+**O enforcement** em `list`/`get`/`patch`/`delete`. ⚠️ **O recorte da lista vai no
+SQL**, nunca em Python depois do `fetch`: filtrar depois do `LIMIT` devolveria
+páginas curtas e, pior, **erradas** — o offset contaria linhas que o chamador não
+pode ver.
+
+⚠️ **O caminho do `admin` é DECLARADO, não um bypass mudo.** Com zero grupos, sem ele
+ligar o organograma trancaria o dono do tenant do lado de fora — a tranca que prende
+quem tem a chave.
+
+### 4 · Verde só vale com o caso que deixa passar
+
+`gate_user_admin_org_chart.sh`, 4 ramos:
+
+```
+1  sem grupo: lista só a si (era 9) · PATCH password 403 · a senha imposta não vale
+2  admin continua vendo todos
+3  COM o grupo: vê 2 e edita (200)      ← sem este, o ramo 1 fica verde negando tudo
+4  a trilha registrou
+```
+
+### 5 · O aperto quebrou um gate vizinho, e ele estava certo em quebrar
+
+`probe_config_permissions_split.sh` ficou vermelho no **S3** — a testemunha de
+presença que existe para que *"tudo 403"* não passe por sucesso. A proposição dele
+não mudou (pessoa passa, capacidade recusa); mudou a **pré-condição** de ser *"quem
+pode administrar"*. Costurei o grupo no setup e ele voltou ao verde, com as 10
+asserções intactas.
+
+⚠️ **E isso revelou um resíduo real, agora ficha própria (AUT-44):** quem **cria** um
+usuário não passa a administrá-lo, porque a criação não o põe em grupo nenhum.
+*Criar e não administrar é incoerente.* Três saídas possíveis, nenhuma óbvia — e
+nenhuma tomada aqui.
+
+⚠️ **Achado de passagem, anterior a este trabalho (AUT-45):** o
+`probe_authz_single_verifier` está **vermelho** — o censo acha 2 implementações do
+verificador contra a linha de base de 1, e a nova é `analytics-api/pool_auth.py`
+(último commit `4d2f5f5d`, antes desta sessão). Registrado, não consertado: o
+próprio probe diz que mover a linha de base exige declarar o motivo junto.
+
 ## 2026-09-09 (15) — GAT-04: o runner não contava o que não existia, e havia dois
 
 ### 1 · O modo de falha é o do catálogo, do lado do RUNNER

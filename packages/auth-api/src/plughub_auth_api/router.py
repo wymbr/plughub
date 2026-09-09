@@ -261,6 +261,105 @@ def _assert_may_touch(claims: dict[str, Any], alvo: dict[str, Any], acao: str) -
         )
 
 
+async def _registrar_trilha(
+    pool, claims: dict[str, Any], alvo: dict[str, Any], acao: str, campos: list[str],
+) -> None:
+    """Trilha de ADMINISTRACAO (AUT-39) — dois canais, e eles nao se substituem.
+
+    **A tabela** responde *"quem mexeu nesta pessoa, quando e em que campos"*, que e
+    consultavel depois. **O log** responde AGORA, e existe porque o canal durável
+    pode ser justamente o que falhou.
+
+    ⚠️ A troca de senha por TERCEIRO sai em WARNING, sozinha. Ela e o vetor medido:
+    o alvo perde o acesso e nada no produto lhe diz por que. As demais saem em INFO —
+    editar nome ou desativar tambem e administracao, mas nao tira a conta de ninguem.
+    """
+    ator_id    = str(claims.get("sub") or "")
+    ator_email = str(claims.get("email") or "")
+    alvo_id    = str(alvo.get("id") or "")
+    alvo_email = str(alvo.get("email") or "")
+    proprio    = ator_id == alvo_id
+
+    if "password" in campos and not proprio:
+        logger.warning(
+            "RESET DE SENHA POR TERCEIRO: %s (%s) redefiniu a senha de %s — o alvo "
+            "perde o acesso e nao e avisado por caminho nenhum do produto",
+            ator_email or ator_id, ",".join(claims.get("roles") or []), alvo_email or alvo_id,
+        )
+    else:
+        logger.info(
+            "administracao de usuario: %s -> %s (%s: %s)",
+            ator_email or ator_id, alvo_email or alvo_id, acao, ",".join(campos) or "-",
+        )
+
+    await db_mod.registrar_admin_de_usuario(
+        pool,
+        tenant_id    = str(claims.get("tenant_id") or ""),
+        actor_id     = ator_id,
+        actor_email  = ator_email,
+        target_id    = alvo_id,
+        target_email = alvo_email,
+        acao         = acao,
+        campos       = campos,
+    )
+
+
+def _irrestrito_para_pessoas(claims: dict[str, Any]) -> bool:
+    """O caminho UNIVERSAL, e ele e DECLARADO — nao um bypass silencioso.
+
+    `admin` e o papel dono do tenant: ele administra todo mundo por definicao, e e
+    o unico caminho que sobrevive a um parque com ZERO grupos (medido em
+    2026-09-09: 0 grupos, 0 membros, 0 supervisores). Sem esta linha, ligar o
+    organograma deixaria o tenant sem NINGUEM capaz de administrar ninguem — a
+    tranca que prende o dono do lado de fora.
+    """
+    return "admin" in (claims.get("roles") or [])
+
+
+async def _assert_pode_administrar(
+    pool, claims: dict[str, Any], alvo: dict[str, Any], acao: str,
+) -> None:
+    """AUT-39 — o eixo de ADMINISTRACAO e o organograma (Arc 9), nao o pool.
+
+    Medido ao vivo em 2026-09-09, antes desta regra: um supervisor com `config.users`
+    e **zero pools** listou os 9 usuarios do tenant, trocou a senha de um usuario de
+    outro time (HTTP 200), ENTROU na conta, e a senha original deixou de valer. Nao e
+    escalacao — o alvo nao esta acima —, e sim **tomada lateral entre times**, e para
+    ela nao existia eixo onde declarar *"administro estas pessoas"*.
+
+    ⚠️ A alternativa por POOL (`pools(alvo) ⊆ pools(ator)`) foi RECUSADA por censo, e
+    a razao nao e gosto: o `admin@` so administrava os outros porque ENUMERAVA os 41
+    pools do registry, e **um pool novo o tirava dessa condicao sem erro em lugar
+    nenhum**. Membership de grupo e explicita — quem nao esta em grupo nenhum e
+    recusado, o que e uma NEGACAO visivel, nao um silencio.
+
+    ⚠️ Isto NAO substitui `_assert_may_touch`: aquele protege o alvo PRIVILEGIADO
+    (quem detem `config.permissions`) de quem so administra pessoas. Os dois valem,
+    e valem por razoes diferentes — um e sobre QUEM e o alvo, o outro sobre se ele e
+    MEU.
+    """
+    ator_id = str(claims.get("sub") or "")
+    alvo_id = str(alvo.get("id") or "")
+    if ator_id and ator_id == alvo_id:
+        return
+    if _irrestrito_para_pessoas(claims):
+        return
+    if await db_mod.supervisiona(pool, ator_id, alvo_id):
+        return
+    logger.warning(
+        "administracao NEGADA: %s tentou %s de %s, que nao e membro de grupo algum "
+        "que ele supervisione",
+        claims.get("email") or ator_id, acao, alvo.get("email") or alvo_id,
+    )
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"forbidden: {acao} exige que o alvo seja membro de um grupo que voce "
+            f"supervisione (Configuracao > Grupos)"
+        ),
+    )
+
+
 def _user_to_response(row: dict[str, Any]) -> UserResponse:
     return UserResponse(
         id=str(row["id"]),
@@ -592,19 +691,29 @@ async def list_users(
     tenant_id: str = "tenant_demo",
     limit: int = 100,
     offset: int = 0,
+    claims: dict[str, Any] = Depends(_USUARIOS_READ),
 ) -> list[UserResponse]:
     pool = _get_pool(request)
-    rows = await db_mod.list_users(pool, tenant_id, limit=limit, offset=offset)
+    # `None` = sem recorte (admin). Caso contrario, o organograma decide — e ele
+    # decide no SQL, nunca depois do LIMIT.
+    quem = None if _irrestrito_para_pessoas(claims) else str(claims.get("sub") or "")
+    rows = await db_mod.list_users(
+        pool, tenant_id, limit=limit, offset=offset, administravel_por=quem)
     return [_user_to_response(r) for r in rows]
 
 
 @router.get("/users/{user_id}", response_model=UserResponse,
             dependencies=[Depends(_USUARIOS_READ)])
-async def get_user(user_id: str, request: Request) -> UserResponse:
+async def get_user(
+    user_id: str,
+    request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_READ),
+) -> UserResponse:
     pool = _get_pool(request)
     row = await db_mod.get_user_by_id(pool, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
+    await _assert_pode_administrar(pool, claims, row, "ver")
     return _user_to_response(row)
 
 
@@ -628,6 +737,7 @@ async def update_user(
             accessible_pools=(body.accessible_pools
                               if "accessible_pools" in body.model_fields_set else None),
         )
+    await _assert_pode_administrar(pool, claims, existing, "editar")
     _assert_may_touch(claims, existing, "editar")
 
     ph = hash_password(body.password) if body.password else None
@@ -641,6 +751,10 @@ async def update_user(
         active=body.active,
         max_concurrent_sessions=body.max_concurrent_sessions,
     )
+    # Depois da mutacao, de proposito: registrar antes gravaria uma alteracao que
+    # pode nao ter acontecido. O `campos` sai do `model_fields_set` — o que foi
+    # ENVIADO —, e nao dos valores, pela mesma razao do `_CAPACITY_FIELDS`.
+    await _registrar_trilha(pool, claims, existing, "update", sorted(body.model_fields_set))
     return _user_to_response(row)
 
 
@@ -654,10 +768,15 @@ async def delete_user(
     pool = _get_pool(request)
     alvo = await db_mod.get_user_by_id(pool, user_id)
     if alvo:
+        await _assert_pode_administrar(pool, claims, alvo, "remover")
         _assert_may_touch(claims, alvo, "remover")
     deleted = await db_mod.delete_user(pool, user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
+    # A trilha sobrevive ao alvo: `user_admin_log.target_id` nao tem FK, senao o
+    # CASCADE apagaria o registro de quem apagou.
+    if alvo:
+        await _registrar_trilha(pool, claims, alvo, "delete", [])
 
 
 # ─── Platform permissions — REMOVIDO em 2026-08-30 ───────────────────────────
