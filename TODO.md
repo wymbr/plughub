@@ -8537,3 +8537,58 @@ aposentada e a declaração não reapareceu: `pools` sem coluna, `skills.tools` 
 construído inteiro e vazio; lá o mecanismo funcionava e **não protegia**. Cano sem água ×
 cadeado sem porta.
 
+
+## AUT-39 — a tomada lateral de conta, MEDIDA *(2026-09-09)*
+
+A ficha descrevia o vetor por leitura de código. Exercido ao vivo, com alvo descartável criado pela
+API oficial e desativado no fim:
+
+| passo | resultado |
+|---|---|
+| supervisor com **zero pools** faz `GET /auth/users` | vê os **9** usuários do tenant |
+| `PATCH /users/{id}` com `password` de um usuário de outro time | **HTTP 200** |
+| login com a senha nova | **entra na conta** |
+| login com a senha original | **não vale mais** — o dono perdeu o acesso |
+
+⚠️ **E não há rastro.** O handler do PATCH não emite log nenhum — o `router.py` inteiro tem **4**
+chamadas de logger (2 `error`, 2 `info`) e nenhuma nesse caminho —, e o schema `auth` não tem tabela
+de trilha. A vítima vê só a senha parar de funcionar. **Esta metade não depende da escolha do modelo
+de escopo e vale por si.**
+
+⚠️ **A decisão declarada sobre `password` não cobre este caso, e isso é justiça com ela.** O
+comentário do `router.py:115` diz que resetar senha é trabalho legítimo de quem administra pessoas, e
+que *"o vetor 'resetar a senha do admin e entrar como admin' é fechado pela outra ponta:
+`_assert_may_touch`"*. Aquilo decidiu **escalação**. O que se mede aqui é **lateral** — alvo que não
+está acima —, e para isso não existe eixo onde declarar *"administro estas pessoas"*.
+
+### O censo que a saída (a) exigia — e ele depõe contra ela
+
+Regra hipotética: alvo editável sse `pools(alvo) ⊆ pools(aplicador)`. Universo do registry: **41**
+pools. Usuários REAIS: 3 (as outras 6 linhas são fixtures de probe).
+
+| usuário | pools | quem poderia administrá-lo sob (a) |
+|---|---|---|
+| `admin@` | 41 | **ninguém** |
+| `operator@` | 3 | só `admin@` |
+| `supervisor@` | 2 | só `admin@` |
+
+Três consequências, todas medidas:
+
+1. **O `admin@` fica sem administrador.** Um segundo admin não o alcançaria.
+2. **Ele só administra os outros porque ENUMERA os 41 pools** — e *"cobre o universo"* é condição
+   que **um pool novo desfaz sem erro em lugar nenhum**. É o discriminador que a AUT-29 nomeia, e o
+   modo de falha que este repositório mais paga: a permissão continua parecendo certa e deixa de
+   valer para quem tiver o pool recém-criado.
+3. **O único supervisor real cobre 2 de 41** e passaria a não administrar ninguém.
+
+### A saída (b) segue greenfield
+
+`agent_groups` / `agent_group_users` / `agent_group_supervisors`: **0 / 0 / 0** — reconferido. É
+membership EXPLÍCITA (o organograma do Arc 9), sem o caminho de degradação muda da (a). O custo é
+construir o enforcement; as tabelas e o CRUD já existem.
+
+### Exposição × dano
+
+Exposição: real e completa (medida acima). Dano hoje: **~zero** — 1 supervisor real portador do
+campo, 3 usuários reais. **Isso dá tempo de escolher certo, não de adiar sem decidir** — e a
+população cresce com o primeiro cliente.
