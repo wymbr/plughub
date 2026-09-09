@@ -33,6 +33,7 @@
 #   C  chave `fieldNames` órfã — campo que o catálogo não declara mais
 #   D  o formulário volta a renderizar o rótulo CRU do catálogo
 #   E  módulo do catálogo sem nome traduzido, ou nome de módulo órfão
+#   F  papel sem rótulo traduzido, ou mapa hardcoded contornando o locale
 #
 # ⚠️ O ramo D é o que impede o gate DECORATIVO. Sem ele, os dois locales podiam
 # estar completos e a tela continuar em português — cobertura de tradução não é
@@ -55,18 +56,19 @@ CAT=infra/modules.yaml
 EN=packages/platform-ui/src/i18n/locales/en/access.json
 PT=packages/platform-ui/src/i18n/locales/pt-BR/access.json
 FORM=packages/platform-ui/src/components/ModulePermissionForm.tsx
+PAGE=packages/platform-ui/src/modules/access/AccessPage.tsx
 
-for f in "$CAT" "$EN" "$PT" "$FORM"; do
+for f in "$CAT" "$EN" "$PT" "$FORM" "$PAGE"; do
   [ -f "$f" ] || { echo "INCONCLUSIVO: $f ausente"; exit 2; }
 done
 command -v python3 >/dev/null || { echo "INCONCLUSIVO: python3 ausente"; exit 2; }
 
 printf '\033[1mprobe: os rotulos de campo do ABAC passam por t()\033[0m\n'
 
-python3 - "$CAT" "$EN" "$PT" "$FORM" <<'PY'
+python3 - "$CAT" "$EN" "$PT" "$FORM" "$PAGE" <<'PY'
 import json, re, sys
 
-cat_p, en_p, pt_p, form_p = sys.argv[1:5]
+cat_p, en_p, pt_p, form_p, page_p = sys.argv[1:6]
 fail = 0
 
 def ok(m):  print(f"  \033[32mOK\033[0m           {m}")
@@ -165,6 +167,29 @@ for nome, caminho in (("en", en_p), ("pt-BR", pt_p)):
         bad(f"{nome}: nome(s) de modulo orfao(s): {', '.join(sobra)}")
     else:
         ok(f"{nome}: os {len(mods)} modulos do catalogo tem nome, sem sobra")
+
+print(f"\n\033[1mF. o rotulo de PAPEL, na mesma tela e pelo mesmo motivo\033[0m")
+# A `AccessPage` tinha um `ROLE_LABELS` HARDCODED que os quatro call sites liam
+# em vez do locale — e ele carregava `devops: "Developer"`, o rotulo que a
+# MOD-10 aposentou na vespera. Texto hardcoded nao envelhece: ele mente parado.
+# Este ramo cobra as duas metades — a chave existe, e ninguem a contorna.
+page = open(page_p, encoding="utf-8").read()
+m = re.search(r"const ALL_ROLES = \[([^\]]*)\]", page)
+if not m:
+    bad("nao achei `ALL_ROLES` na AccessPage — leitor quebrado")
+else:
+    papeis = set(re.findall(r"'([a-z_]+)'", m.group(1)))
+    for nome, caminho in (("en", en_p), ("pt-BR", pt_p)):
+        rs = set(json.load(open(caminho, encoding="utf-8")).get("roles", {}))
+        falta = sorted(papeis - rs)
+        if falta:
+            bad(f"{nome}: papel(is) sem rotulo traduzido: {', '.join(falta)}")
+        else:
+            ok(f"{nome}: os {len(papeis)} papeis tem rotulo")
+    if "ROLE_LABELS[" in page or "const ROLE_LABELS" in page:
+        bad("a AccessPage voltou a ter mapa HARDCODED de rotulo de papel")
+    else:
+        ok("nenhum mapa hardcoded de rotulo de papel contorna o locale")
 
 print()
 if fail:

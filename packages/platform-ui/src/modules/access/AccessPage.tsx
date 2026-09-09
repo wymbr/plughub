@@ -24,17 +24,23 @@ const ROLE_COLORS: Record<RoleKey, { bg: string; text: string }> = {
   operator:   { bg: 'bg-green-light',    text: 'text-green-text'  },
   supervisor: { bg: 'bg-primary-light',  text: 'text-primary'     },
   admin:      { bg: 'bg-ai-light',       text: 'text-ai-text'     },
-  devops:  { bg: 'bg-info-light',     text: 'text-info-text'   },
+  devops:     { bg: 'bg-info-light',     text: 'text-info-text'   },
   business:   { bg: 'bg-warning-light',  text: 'text-warning-text'},
 }
 
-const ROLE_LABELS: Record<RoleKey, string> = {
-  operator:   'Operator',
-  supervisor: 'Supervisor',
-  admin:      'Admin',
-  devops:  'Developer',
-  business:   'Business',
-}
+// AUT-42 (2026-09-09): `ROLE_LABELS` foi REMOVIDO. Era um mapa hardcoded de texto
+// visivel, contra a invariante de i18n, e os quatro call sites o liam em vez do
+// locale — que ja tinha `roles.*` nos dois idiomas, certo, e sem leitor.
+//
+// ⚠️ Duas falhas numa linha so, e a segunda so aparecia para quem conhecia o
+// historico: `devops: 'Developer'`. A MOD-10 renomeou o PAPEL de `developer` para
+// `devops` em 2026-09-08 e trocou os locales; este mapa guardava o rotulo antigo,
+// entao a tela seguia dizendo "Developer" sobre um papel que nao se chama mais
+// assim. Texto hardcoded nao envelhece — ele mente parado.
+//
+// Removido em vez de corrigido: quando a escolha e "marcar cada caso" ou "remover
+// a alternativa", a segunda nao depende de ninguem lembrar (§ Arc 7, corolario 2).
+// O rotulo agora e `t('roles.<key>', { defaultValue: key })` nos quatro sites.
 
 // Fase 1 — preset copy-on-create: um template guarda um SNAPSHOT do cadastro de usuário
 // (role + module_config ABAC rico + accessible_pools + max_concurrent_sessions). Ao
@@ -197,9 +203,12 @@ function useModules(adminToken: string) {
 // ── Shared sub-components ─────────────────────────────────────────────────────
 
 function RoleBadge({ role }: { role: string }) {
+  const { t }  = useTranslation('access')
   const key    = role as RoleKey
   const colors = ROLE_COLORS[key] ?? { bg: 'bg-surface-alt', text: 'text-dark' }
-  const label  = ROLE_LABELS[key] ?? role
+  // `defaultValue` = o proprio valor do papel: papel novo aparece pelo id, nunca
+  // como a chave crua `roles.foo`.
+  const label  = t(`roles.${key}`, { defaultValue: role })
   return (
     <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${colors.bg} ${colors.text}`}>
       {label}
@@ -469,7 +478,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
               <select value={roles[0] ?? 'operator'} onChange={e => setRoles([e.target.value])}
                 className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
                 {ALL_ROLES.map(role => (
-                  <option key={role} value={role}>{ROLE_LABELS[role]}</option>
+                  <option key={role} value={role}>{t(`roles.${role}`, { defaultValue: role })}</option>
                 ))}
               </select>
             </div>
@@ -774,7 +783,7 @@ function TemplateEditor({ tenantId, adminToken, availablePools, modules, templat
               <label className="block text-sm font-medium text-dark mb-1">{t('users.role')}</label>
               <select value={role} onChange={e => setRole(e.target.value)}
                 className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
-                {ALL_ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                {ALL_ROLES.map(r => <option key={r} value={r}>{t(`roles.${r}`, { defaultValue: r })}</option>)}
               </select>
             </div>
             <div>
@@ -967,7 +976,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
                       ? colors ? `${colors.bg} ${colors.text} font-semibold` : 'bg-primary text-white'
                       : 'text-muted hover:bg-surface-alt'
                   }`}>
-                  <span>{isAll ? t('users.filterAll') : ROLE_LABELS[role as RoleKey]}</span>
+                  <span>{isAll ? t('users.filterAll') : t(`roles.${role}`, { defaultValue: role })}</span>
                   {!isAll && <span className="text-xs font-mono">{byRole[role] ?? 0}</span>}
                 </button>
               )

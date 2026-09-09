@@ -80,7 +80,36 @@ muta prova exatamente nada** — a mesma família do teste que não pode reprova
 lado do instrumento que o testa. Refeito com `assert` sobre o alvo antes de
 substituir; aí o ramo pegou.
 
-**Gates**: `probe_abac_field_labels_i18n.sh` (5 ramos, 5 mutantes) ·
+### 5 · O vizinho, achado na mesma tela — e ele mentia parado
+
+A captura do dono mostrava a lista **ROLES** dizendo *"Developer"*. A MOD-10
+renomeou aquele papel para `devops` **na véspera**, e trocou os dois locales
+(`roles.devops = "DevOps"`). O locale estava certo; a tela não o lia.
+
+`AccessPage.tsx` tinha um `ROLE_LABELS` **hardcoded** que quatro call sites
+consumiam em vez do `t()` — contra a invariante de i18n, e com o rótulo velho
+congelado dentro. **Texto hardcoded não envelhece: ele mente parado.** É a mesma
+falha da metade de baixo do cartão, um nível acima — lá o rótulo vinha cru da API,
+aqui vinha cru do próprio arquivo.
+
+**Removido, não corrigido.** Consertar o valor deixaria o mapa de pé para a próxima
+renomeação. Quando a escolha é *"marcar cada caso"* ou *"remover a alternativa"*, a
+segunda não depende de ninguém lembrar — corolário 2 do Arc 7. Os quatro sites
+passaram a `t('roles.<key>', { defaultValue: key })`, e o `RoleBadge`, que não tinha
+`t`, ganhou o hook (é componente, então pode).
+
+Virou o **ramo F** do gate, com as duas metades que só juntas fecham: a chave existe
+**e** ninguém a contorna. Sem a segunda, um `ROLE_LABELS` novo passaria com os
+locales completos — cobertura sem leitor é o gate decorativo outra vez.
+
+⚠️ **Pela terceira vez no mesmo dia, um instrumento tropeçou no próprio comentário.**
+O `assert` que garantia a remoção procurava a palavra `ROLE_LABELS` e reprovou no
+texto que *anuncia* a remoção. Passou a procurar **indexação e declaração**
+(`ROLE_LABELS[`, `const ROLE_LABELS`), não a palavra. Três ocorrências em um dia
+sugerem que a regra merece ser dita assim: **ao checar que um símbolo sumiu, procure
+o USO dele — o comentário que explica o sumiço vai citar o nome.**
+
+**Gates**: `probe_abac_field_labels_i18n.sh` (6 ramos, 7 mutantes) ·
 `probe_i18n_duplicate_keys.sh` (52 arquivos) · `probe_gates_manifest_coverage.sh`
 (124 AUTO) · `tsc --noEmit` do platform-ui.
 
