@@ -29,6 +29,7 @@ from aiokafka import AIOKafkaConsumer
 
 from .adapters.base import ChannelAdapter
 from .config import Settings
+from .tarefas import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.outbound")
 
@@ -87,7 +88,13 @@ class OutboundConsumer:
 
         try:
             async for msg in consumer:
-                asyncio.create_task(self._dispatch(json.loads(msg.value.decode())))
+                # RET-15: uma task por MENSAGEM, e ela nao tinha dono nem net —
+                # `_dispatch` tem try em pedacos, e 8 das 9 instrucoes de topo
+                # ficavam de fora. Entrega ao canal que falhasse sumia calada.
+                disparar(
+                    self._dispatch(json.loads(msg.value.decode())),
+                    nome="outbound-dispatch",
+                )
         finally:
             await consumer.stop()
 

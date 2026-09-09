@@ -51,6 +51,7 @@ from ..models import (
 )
 from .base import ChannelAdapter
 from .sms_provider import ISMSProvider, MockSMSProvider, TwilioProvider, split_sms
+from ..tarefas import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.sms")
 
@@ -109,7 +110,8 @@ class SMSAdapter(ChannelAdapter):
             logger.warning("sms inbound rejected — invalid signature")
             return
 
-        asyncio.create_task(self._handle_inbound(params))
+        # RET-15: idem email — o try interno não dá dono a ninguém.
+        disparar(self._handle_inbound(params), nome="sms-inbound")
 
     # ── Inbound processing (background) ──────────────────────────────────────
 

@@ -64,6 +64,7 @@ from .voice_provider import (
     MockSTTProvider,
     MockTTSProvider,
 )
+from ..tarefas import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.voice")
 
@@ -371,15 +372,14 @@ class VoiceAdapter(ChannelAdapter):
             session_id, recording_sid
         )
 
-        asyncio.create_task(
+        disparar(
             self._download_and_store_recording(
                 session_id    = session_id,
                 segment_id    = segment_id,
                 recording_url = recording_url,
                 recording_sid = recording_sid,
                 duration_s    = duration,
-            )
-        )
+            ), nome="voice-recording-store")
 
     async def _find_segment_id_for_recording(
         self, session_id: str, recording_sid: str

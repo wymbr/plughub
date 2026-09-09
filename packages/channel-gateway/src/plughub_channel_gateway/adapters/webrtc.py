@@ -96,6 +96,7 @@ from .webrtc_room_client import (
     mp3_to_pcm,
     resample_pcm_48_to_8,
 )
+from ..tarefas import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc")
 
@@ -244,9 +245,9 @@ class WebRTCAdapter(ChannelAdapter):
             and medium in ("voice", "video")
             and self._settings.webrtc_tts_injection_enabled
         ):
-            asyncio.create_task(
+            disparar(
                 self._tts_inject(session_id, text),
-                name=f"webrtc-tts-{session_id[:8]}",
+                nome=f"webrtc-tts-{session_id[:8]}",
             )
 
     async def deliver_menu(self, payload: dict) -> None:
@@ -679,18 +680,18 @@ class WebRTCAdapter(ChannelAdapter):
 
         # Phase C: start STT pipeline for audio-capable mediums
         if medium in ("voice", "video"):
-            asyncio.create_task(
+            disparar(
                 self._start_stt_pipeline(session_id, room_name),
-                name=f"webrtc-stt-start-{session_id[:8]}",
+                nome=f"webrtc-stt-start-{session_id[:8]}",
             )
 
         # Phase D: start egress recording when pool.webrtc_recording=True
         segment_id    = fields.get("segment_id", "")
         should_record = pool_obj.get("webrtc_recording", False)
         if should_record and segment_id and medium in ("voice", "video"):
-            asyncio.create_task(
+            disparar(
                 self._start_egress(session_id, segment_id, room_name),
-                name=f"webrtc-egress-start-{session_id[:8]}",
+                nome=f"webrtc-egress-start-{session_id[:8]}",
             )
 
     async def _on_routing_renegotiate(
@@ -1279,9 +1280,9 @@ class WebRTCAdapter(ChannelAdapter):
             return
 
         for segment_id, egress_id in active.items():
-            asyncio.create_task(
+            disparar(
                 self._stop_egress_and_store(session_id, segment_id, egress_id),
-                name=f"webrtc-egress-stop-{session_id[:8]}-{segment_id[:8]}",
+                nome=f"webrtc-egress-stop-{session_id[:8]}-{segment_id[:8]}",
             )
 
     async def _stop_egress_and_store(

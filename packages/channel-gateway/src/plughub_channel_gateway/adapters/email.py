@@ -70,6 +70,7 @@ from .email_provider import (
     ParsedEmail,
     _extract_email,
 )
+from ..tarefas import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.email")
 
@@ -155,7 +156,9 @@ class EmailAdapter(ChannelAdapter):
             logger.warning("email inbound rejected — invalid signature")
             return
 
-        asyncio.create_task(self._handle_inbound(headers, body))
+        # RET-15: o corpo já é um try pega-tudo, mas sem referência forte o
+        # loop é o único dono e a task pode ser COLETADA antes de terminar.
+        disparar(self._handle_inbound(headers, body), nome="email-inbound")
 
     # ── Inbound processing (background) ──────────────────────────────────────
 

@@ -27,6 +27,7 @@ import asyncio
 import logging
 import struct
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
+from ..tarefas import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc.room_client")
 
@@ -227,7 +228,7 @@ class LiveKitRoomClient:
         def _on_track(track, publication, participant) -> None:
             # Subscribe to the first audio track (customer's microphone)
             if track.kind == rtc.TrackKind.KIND_AUDIO:
-                asyncio.ensure_future(self._consume_audio_track(track, rtc))
+                disparar(self._consume_audio_track(track, rtc), nome="webrtc-audio-track")
 
         @self._room.on("disconnected")
         def _on_disconnected(*_) -> None:

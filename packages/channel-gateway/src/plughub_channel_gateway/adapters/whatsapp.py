@@ -54,6 +54,7 @@ from ..models import (
 )
 from .base import ChannelAdapter
 from .whatsapp_provider import IWhatsAppProvider, MetaCloudProvider
+from ..tarefas import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.whatsapp")
 
@@ -122,7 +123,10 @@ class WhatsAppAdapter(ChannelAdapter):
         Responds to the caller immediately (HTTP 200 already sent by the route).
         Processing happens in a background task.
         """
-        asyncio.create_task(self._process_inbound(body))
+        # RET-15: com dono e com alarme — o corpo de `_process_inbound` só
+        # protege o `json.loads`, então tudo depois dele escapava para uma
+        # Task que ninguém aguarda. Mensagem de cliente sumindo sem log.
+        disparar(self._process_inbound(body), nome="whatsapp-inbound")
 
     # ── Inbound processing (background) ───────────────────────────────────────
 

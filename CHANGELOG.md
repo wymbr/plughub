@@ -1,5 +1,93 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (7) — RET-15: a tarefa efêmera não tinha dono
+
+### 1 · São DOIS danos, e a ficha só via um
+
+A ficha (escrita na RET-13) classificava por *"o corpo da corrotina tem `try`?"*.
+Isso vê metade:
+
+| dano | quem sofre | conserto |
+|---|---|---|
+| a exceção fica presa na Task e some | quem tem corpo desprotegido (6) | `try` **ou** callback |
+| a task pode ser COLETADA no meio da execução | **todos os 10** | referência forte |
+
+`asyncio.create_task(...)` como statement devolve uma Task que ninguém referencia:
+o loop é o único dono, e o CPython documenta que ela pode desaparecer antes de
+terminar. **Proteger o corpo não dá dono a ninguém** — por isso `email.py`,
+`sms.py` e `webrtc_room_client.py`, que já embrulham tudo num `try`, entraram no
+conserto do mesmo jeito.
+
+⚠️ **Correção da própria ficha:** `voice.py:374` estava listado como exposto e não
+é — tem 2 instruções fora do `try` e **nenhuma que possa levantar**. Entrou só pelo
+dano (b).
+
+### 2 · Uma casa: `tarefas.py::disparar()`
+
+```python
+disparar(self._process_inbound(body), nome="whatsapp-inbound")
+```
+
+Guarda a referência num conjunto de módulo enquanto a task vive, tira ao terminar
+(senão o dono viraria vazamento — uma entrada por mensagem, para sempre) e loga se
+ela morrer. **10 call sites migrados**: whatsapp · email · sms · voice · webrtc (4)
+· webrtc_room_client · outbound_consumer.
+
+⚠️ **Ele NÃO é o supervisor de boot da RET-13, e a diferença é o ponto.** Lá, uma
+task que retorna é incidente — *"consumidores não deveriam retornar enquanto o
+serviço vive"*. Aqui, retornar é o que a tarefa existe para fazer, uma por mensagem;
+um WARNING por mensagem afogaria o log e ensinaria a ignorá-lo. A mutação **M4**
+(copiar o comportamento do supervisor de boot para cá) **reprova** no teste
+`test_termino_normal_e_SILENCIO`. Duas populações com ciclos de vida opostos, dois
+helpers.
+
+### 3 · O gate mediu o repositório, não o pacote — e achou mais 22
+
+Seção **C** do `probe_background_task_supervision.sh` (mesmo eixo da RET-13, outra
+população). Ao rodar pela primeira vez ela acusou **22 disparos soltos em 5
+serviços** que a ficha nem citava — 17 no routing-engine, e **quatro** perdendo
+também a exceção:
+
+```
+routing-engine/evaluation_consumer.py:81   _dispatch
+routing-engine/kafka_listener.py:355       _refresh_pool_snapshots
+routing-engine/kafka_listener.py:362       _drain_queue_for_agent
+routing-engine/main.py:199                 _process_message      ← mensagem
+```
+
+⚠️ **Dívida DECLARADA COM TETO** (`infra/test/task_ownership.debt`), não isenção e
+não silêncio: acima do teto **reprova**; abaixo, avisa para baixar o teto. O pacote
+consertado **não aparece no arquivo** — teto ausente significa zero, e um disparo
+solto novo ali fica vermelho. Um gate cronicamente vermelho ensina a ser ignorado;
+um teto cobra a **regressão** e mantém a dívida na tela. Fila: **RET-16**.
+
+*(Isento e dívida seguem sendo fatos diferentes — a mesma separação que
+`_SCOPE_EXEMPT` × `_SCOPE_DEBT` faz na analytics-api. Aqui não há nenhum isento.)*
+
+### 4 · Controle positivo ao vivo, no caminho mais quente
+
+Mesma mensagem publicada em `conversations.outbound`, duas vezes:
+
+```
+produto são        →  (silêncio)
+_dispatch mutado   →  ERROR tarefa 'outbound-dispatch' MORREU: falha injetada —
+                      o trabalho que ela carregava NAO aconteceu.
+```
+
+A primeira metade importa tanto quanto a segunda: sem ela, o silêncio do produto
+são poderia ser alarme morto.
+
+**Gates**: `probe_background_task_supervision.sh` § C (3 mutações + 1 controle
+negativo — dívida que ENCOLHE avisa, não reprova) · `test_ret15_tarefas_efemeras.py`
+(10 testes, 4 mutações) · suíte do channel-gateway **776 passed** na IMAGEM (era
+766) · caminho ponta a ponta com controle positivo ao vivo.
+
+⚠️ **Duas ferramentas minhas erraram no meio do caminho, e as duas guardas
+pegaram:** um regex de bloco entrou em backtracking no `webrtc.py` (2 mil linhas) e
+foi trocado por AST; e `^(?:from|import)` casou **dentro de uma docstring**, pondo o
+import no meio de um `from … import (` — só não virou defeito porque a migração
+valida com `ast.parse` antes de gravar. Inserir import também passou a ser por AST.
+
 ## 2026-09-09 (6) — RET-13: a ficha apontava uma task, o censo achou onze
 
 ### 1 · A medição refez o escopo

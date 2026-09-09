@@ -7,14 +7,21 @@ Por que AST e não `grep`: a supervisão é ESTRUTURA (a criação da task está
 de outra chamada, ou o seu resultado recebe `add_done_callback`), e `grep` conta
 linha. Um `create_task` supervisionado e um cru são a mesma linha para o `grep`.
 
-Definição da população — task de VIDA LONGA é a criada no BOOT do serviço
-(`lifespan` / `startup`), que é onde nascem os consumidores e scanners que devem
-viver enquanto o processo viver. Task efêmera de trabalho (uma por mensagem,
-criada dentro de um handler) é outro fenômeno, com outro conserto, e está
-declarada como dívida em `pending.md` (RET-15) — misturar as duas daria um número
-sem uso, que é o erro que a D14.1 registra.
+DUAS populações, e elas continuam separadas de propósito (misturá-las daria um
+número sem uso, que é o erro que a D14.1 registra):
 
-Saída: uma linha por task,  `servico<TAB>linha<TAB>corrotina<TAB>SUPERVISIONADA|CRUA`
+  BOOT (default)   criada em `lifespan`/`startup`; vive enquanto o processo vive;
+                   morrer é incidente. Exige supervisão — envelope ou callback.
+  EFÊMERA (`--efemeras`)  criada como STATEMENT dentro de um handler, uma por
+                   mensagem; terminar é o normal. Exige DONO: `create_task` solto
+                   devolve uma Task que ninguém referencia, e (a) a exceção fica
+                   presa nela, (b) o CPython pode coletá-la no meio da execução.
+
+⚠️ O discriminador da efêmera é ser `ast.Expr` — statement cujo valor é descartado.
+`t = create_task(...)`, `await create_task(...)` e `[create_task(...), ...]` têm
+dono por construção e ficam fora: o eixo é a AUSÊNCIA de referência, não a criação.
+
+Saída: uma linha por task,  `servico<TAB>linha<TAB>corrotina<TAB>OK|CRUA`
 """
 from __future__ import annotations
 
@@ -77,6 +84,41 @@ def censo(caminho: str) -> list[tuple[int, str, bool]]:
             vistos[ln] = (ln, nome, sup)
     return sorted(vistos.values())
 
+
+def censo_efemeras(caminho: str) -> list[tuple[int, str, bool]]:
+    """`create_task`/`ensure_future` como STATEMENT — nascidos sem dono.
+
+    Ter dono é o que `disparar()` (channel-gateway `tarefas.py`) dá: ele guarda a
+    referência num conjunto de módulo e loga se a corrotina morrer. Um statement
+    que passe por ele deixa de ser `ast.Expr` de `create_task` e some daqui — o
+    gate mede a AUSÊNCIA do padrão perigoso, não a presença de um nome.
+    """
+    try:
+        arvore = ast.parse(open(caminho, encoding="utf-8").read())
+    except (SyntaxError, UnicodeDecodeError):
+        return []
+    de_boot = {
+        id(x)
+        for no in ast.walk(arvore)
+        if isinstance(no, (ast.AsyncFunctionDef, ast.FunctionDef)) and no.name in NOMES_DE_BOOT
+        for x in ast.walk(no)
+    }
+    achados = []
+    for no in ast.walk(arvore):
+        if (isinstance(no, ast.Expr) and _e_criacao(no.value)
+                and id(no) not in de_boot):     # boot é a outra população
+            achados.append((no.value.lineno, _nome_do_alvo(no.value), False))
+    return sorted(achados)
+
+
+if "--efemeras" in sys.argv:
+    for arq in sorted(glob.glob(os.path.join(RAIZ, "packages/*/src/**/*.py"), recursive=True)):
+        if "/tests/" in arq.replace("\\", "/") or os.sep + "tests" + os.sep in arq:
+            continue
+        servico = arq.replace("\\", "/").split("/packages/")[1].split("/")[0]
+        for ln, nome, _ in censo_efemeras(arq):
+            print(f"{servico}\t{ln}\t{nome}\tCRUA")
+    sys.exit(0)
 
 for main in sorted(glob.glob(os.path.join(RAIZ, "packages/*/src/*/main.py"))):
     servico = main.replace("\\", "/").split("/packages/")[1].split("/")[0]
