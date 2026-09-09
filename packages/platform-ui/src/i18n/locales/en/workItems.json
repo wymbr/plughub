@@ -35,7 +35,12 @@
     "deadline": "Deadline",
     "overdue": "Overdue",
     "overdueHint": "The deadline passed and the item is still recorded — a sign the expiry sweep did not run.",
-    "holder": "Held by"
+    "holder": "Held by",
+    "total": "Total",
+    "agent": "Agent",
+    "pool": "Pool",
+    "oldest": "Oldest",
+    "oldestHint": "Age of the oldest item in the group — what has been waiting longest."
   },
   "group": {
     "count": "{{count}} pending",
@@ -84,5 +89,14 @@
       "avgFill": "Avg time",
       "avgFillHint": "Average of submitted items only — the real after-call work time."
     }
+  },
+  "kpi": {
+    "total": "Pending",
+    "overdue": "Overdue"
+  },
+  "summary": {
+    "back": "Summary",
+    "hint": "Who owes right now. Click a counter or a row to see the items and act on them.",
+    "partial": "PARTIAL counters — the scan limit was reached. The numbers below are a floor, not a total."
   }
 }

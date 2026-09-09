@@ -677,7 +677,8 @@
       "resolving": "Opening the session…",
       "notFound": "Session not found",
       "notFoundHint": "Either it does not exist, or it is outside your pool scope. Those call for different actions, which is why this screen does not hand back the list as if nothing had been asked.",
-      "backToList": "Back to the list"
+      "backToList": "Back to the list",
+      "backToOrigin": "Back to where I came from"
     }
   },
   "quality": {

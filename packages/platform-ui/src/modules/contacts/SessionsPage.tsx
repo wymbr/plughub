@@ -24,7 +24,7 @@
  */
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { apiFetch } from '@/api/apiFetch'
@@ -275,6 +275,38 @@ export default function SessionsPage() {
   const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+
+  /**
+   * De onde o operador VEIO, quando veio de fora (`?from=`).
+   *
+   * ⚠️ Nasceu de um achado do dono (PUL-04, 2026-09-09): esta tela é destino de
+   * deep-link de pelo menos quatro módulos (pendências de wrap-up, entregas de
+   * campanha, monitor de agendas, histórico do Console), e o "voltar" dela
+   * pertencia à Analytics — devolvia a lista DESTA tela, que não é a lista de
+   * onde ninguém saiu. Sem o parâmetro nada muda: quem abriu uma sessão a partir
+   * da lista daqui continua voltando para ela.
+   *
+   * ⚠️ **É um destino de navegação vindo da URL, logo é entrada NÃO CONFIÁVEL.**
+   * Só caminho interno passa. Três recusas, e a terceira não é teórica:
+   *
+   *   · não começa com `/`      → `https://fora` é endereço absoluto;
+   *   · começa com `//`         → o browser lê `//host` como protocol-relative;
+   *   · contém `\`              → **o browser NORMALIZA a barra invertida para
+   *     barra**, então `/ora.com` vira `//fora.com` e passaria pelas duas
+   *     primeiras. A guarda tem de ser sobre o que o browser vai INTERPRETAR,
+   *     não sobre o que a string parece.
+   *
+   * Valor recusado vira `null` — o botão volta a ser o da Analytics, que é o
+   * comportamento correto na ausência de origem: recusa que degrada para o
+   * caminho de sempre, nunca para lugar nenhum.
+   */
+  const origem = React.useMemo(() => {
+    const bruto = searchParams.get('from')
+    if (!bruto) return null
+    if (!bruto.startsWith('/') || bruto.startsWith('//') || bruto.includes('\\')) return null
+    return bruto
+  }, [searchParams])
 
   const [filters,            setFilters]            = useState<SessionFilters>(DEFAULT_SESSION_FILTERS)
   // Escopo da listagem (ADR wrapup-detached-pull §7). Aqui em cima pela mesma razão
@@ -388,13 +420,21 @@ export default function SessionsPage() {
    *  inclusive o clique da lista e o da visão 2. */
   function openSession(sid: string, ch: string | null) {
     setChEntry(ch === null ? null : { id: sid, ch })
-    setSearchParams(urlJourney ? { journey: urlJourney, session_id: sid } : { session_id: sid })
+    // A origem viaja junto: descer mais um nível não pode apagar o caminho de volta
+    // de quem entrou de fora.
+    const proximo: Record<string, string> = { session_id: sid }
+    if (urlJourney) proximo.journey = urlJourney
+    if (origem)     proximo.from    = origem
+    setSearchParams(proximo)
   }
   /** Sai do drill. Volta ao PROCESSO quando foi por ele que se entrou; à lista
    *  quando não. O selo `PRC-…` do breadcrumb é o caminho explícito para o processo
    *  no outro caso (deep-link, clique na lista) — um controle, um significado. */
   function closeSession() {
     setSessionTrail([])
+    // Veio de fora ⇒ volta para fora. A precedência é esta e não a inversa: o
+    // processo (`?journey=`) é contexto DENTRO desta tela; a origem é outra tela.
+    if (origem) { navigate(origem); return }
     setSearchParams(urlJourney ? { journey: urlJourney } : {})
   }
 
@@ -449,9 +489,12 @@ export default function SessionsPage() {
             <span className="text-dark font-medium">{t('sessions.deepLink.notFound')}</span>
             <span className="text-xs text-muted font-mono break-all max-w-lg text-center">{detailSessionId}</span>
             <span className="text-xs text-muted-light max-w-md text-center">{t('sessions.deepLink.notFoundHint')}</span>
+            {/* O rótulo segue o DESTINO. Dizer "a lista" enquanto se devolve a
+                tela de origem seria a mesma família do 410 que apontava para uma
+                rota inexistente: status honesto, ponteiro mentiroso. */}
             <button onClick={closeSession}
               className="text-xs px-3 py-1.5 rounded-lg border border-border-strong text-muted hover:border-primary hover:text-primary transition-colors">
-              {t('sessions.deepLink.backToList')}
+              {origem ? t('sessions.deepLink.backToOrigin') : t('sessions.deepLink.backToList')}
             </button>
           </>
         ) : (

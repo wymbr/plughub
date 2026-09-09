@@ -1,5 +1,152 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (12) — PUL-04: o contador virou o filtro, e o zero passou a afirmar
+
+### 1 · O pedido é do dono, e o argumento não é simetria
+
+Depois da ORQ-10, ele perguntou o que fazer com `monitor/work-items` e propôs duas
+coisas: contadores + tabela por eixo como a aba Processos, e **eliminar os
+filtros** — clicar num contador ou numa linha é que traz a lista.
+
+Eu tinha argumentado o contrário (*"a lista fica; o nome é o produto"*) e estava
+errado por subestimar um fato:
+
+```
+lista vazia  → ambígua entre "nada devendo" e "quebrado"
+zero em contador → uma AFIRMAÇÃO
+```
+
+Medido, esta tela está honestamente vazia — **0** chaves em `{t}:work_task:*`;
+**85** wrap-ups no total, o último em **2026-09-07**, **0** nas últimas 25 h. Mas
+ela dizia isso com o mesmo *"nenhum item"* que a aba Processos exibia com **51
+processos de pé**. E aqui o zero é o valor ESPERADO, logo é justamente ele que
+ninguém consegue distinguir de falha.
+
+### 2 · O filtro era um segundo controle para a mesma partição
+
+Os chips de estado e os contadores expressavam o MESMO recorte — a família do
+`pool_id IN (…)` que a F1b fechou. O contador ainda diz o **tamanho antes do
+clique**, o que o filtro não dizia. Hoje o cartão É a porta da sua lista.
+
+O drill tem **dois eixos que se compõem** (o estado, do cartão; o valor do eixo,
+da linha) e a migalha os nomeia — foi clicando um e depois o outro que o operador
+chegou ali.
+
+⚠️ **`overdue` não virou estado.** É fato transversal (o prazo passou), verdadeiro
+em companhia de qualquer `WorkTaskState`; tratá-lo como estado colapsaria dois
+eixos num só. Ele é um `DrillState` à parte, com predicado próprio.
+
+### 3 · O que NÃO mudou, e por quê
+
+- **O eixo primário é o AGENTE.** A pendência é author-bound — é o que a separa da
+  aprovação, que é pooled e transborda —, e uma tabela só por pool perderia a única
+  pergunta que esta tela responde: *quem* está devendo. O seletor `agente | pool` é
+  **dimensão, não filtro**, e por isso sobreviveu ao corte.
+- **`orphaned` aparece MESMO EM ZERO.** É anomalia de infra (lease vencida sem
+  reaper — a PUL-01), não estado de trabalho: como contador permanente vira
+  vigilância. `not_queued` e `unknown` classificam infra e só ocupam espaço quando
+  existem.
+- **A janela continua sendo janela.** O `windowNote` fica: o ledger vive
+  `timeout_hours*3600 + 3600`. Copiar o *"estado agora, sem janela de tempo"* da aba
+  Processos teria posto na tela uma frase falsa.
+
+### 4 · Agregado no CLIENTE — e isso é decisão medida, não desleixo
+
+A ORQ-10 exigiu agregação no BACKEND porque lá o teto de 200 linhas era **mudo**:
+contar a lista daria o menor entre a verdade e o teto, e pareceria certo. Aqui o
+`fetchPending` **declara** a truncagem (`truncated`/`scanned`), então a mesma regra
+sobrevive por outro mecanismo — com a varredura no teto, os contadores se dizem
+**parciais** (*"um piso, não o total"*) em vez de passar por total. Nenhum endpoint
+novo.
+
+### 5 · Verificação, com o que ela alcança e o que não
+
+- `tsc --noEmit` limpo, **com controle positivo**: um erro proposital no arquivo sai
+  vermelho (`TS2322`), provando que o compilador de fato o compila — verde de arquivo
+  não compilado não é evidência.
+- Gate `probe_i18n_duplicate_keys.sh` VERDE (52 arquivos); paridade EN × pt-BR
+  conferida nas 10 chaves novas. ⚠️ O script de i18n **recusa duplicata antes de
+  gravar** (`object_pairs_hook`): `json.load` fica com a última chave em silêncio, que
+  é exatamente o defeito que o gate existe para pegar — ler-e-regravar teria ESCONDIDO
+  uma duplicata pré-existente.
+- **Bundle SERVIDO** conferido nos dois idiomas (`Quem está devendo agora` /
+  `Who owes right now`, `Contadores PARCIAIS` / `PARTIAL counters`), com controle
+  negativo: `STATE_FILTERS` → **0** ocorrências.
+- **Amostra efêmera** (3 chaves `probe-pul03-*`, TTL declarado) para exercer o
+  drill-down com dado real: o BFF classificou 3 itens (1 vencido, 1 sem dono), e o
+  consolidado esperado foi calculado pela mesma regra da tela.
+  ⚠️ **Minha primeira amostra não mediu nada**: escrevi `HSET` e o ledger é **string
+  JSON** — `scanned: 3, total: 0`. Foi o `scanned` ≠ `total` que denunciou; um
+  `total: 0` sozinho eu teria lido como "não há pendência", que é a leitura que esta
+  ficha inteira existe para fechar.
+
+⚠️ **O que a verificação NÃO alcança: o RENDER.** `platform-ui` não tem suíte de
+componente (AUT-25), e entrar credencial na tela não é caminho disponível. O bundle
+prova o que foi ENTREGUE, não o que é desenhado — a conferência visual é do dono, e
+foi assim que a ORQ-10 fechou também.
+
+### 6 · O dono achou na conferência: eu tinha criado um nível sem endereço
+
+A tela passou nas seis vistas (por agente, por pool, cartão, linha, célula), e ele
+apontou o que faltava: **descendo ao detalhe da sessão não se volta.**
+
+O link da linha vai para `/analise/sessions` — **outra rota**. O drill era
+`useState`, e estado de componente morre na navegação: o voltar do browser
+devolvia a tela no CONSOLIDADO, com o recorte perdido. Não era regressão de algo
+que funcionava — era **defeito NOVO da própria entrega**: antes a tela tinha um
+nível só, e o segundo nível nasceu fora do endereço.
+
+Hoje o recorte mora na URL (`?axis=…&state=…&key=…`): o voltar o reconstrói, e o
+link vira partilhável — o mesmo tratamento que as lentes de `/analise/sessions`
+já recebem.
+
+Duas guardas que vieram junto, porque **endereço é entrada de FORA**:
+
+- `?state=` é conferido contra a lista de recortes válidos. Sem isso, um valor
+  digitado à mão viraria um filtro que não casa nada, e a tela diria *"nenhuma
+  pendência"* — exatamente o valor plausível que esta ficha existe para fechar.
+- **`key` ausente ≠ `key` vazia.** String vazia é o grupo *sem dono*, que é linha
+  legítima; `has('key')` distingue as duas, `get('key') || null` as colapsaria. É o
+  `if not x` × `is None` da § Postura, agora na leitura de um parâmetro que a
+  fonte produz vazio de propósito.
+
+### 7 · A segunda rodada do dono: o "voltar" era de outra tela
+
+Ele testou o caminho inteiro e apontou: da sessão **não se volta para a lista de
+onde se saiu**. Investiguei antes de consertar, e o defeito é maior que esta
+entrega — **quatro** módulos linkam para `/analise/sessions` (pendências de
+wrap-up, entregas de campanha, monitor de agendas, histórico do Console), e o
+botão daquela tela é `closeSession`: limpa o `session_id` e devolve a lista **da
+Analytics**, que não é a lista de onde ninguém saiu.
+
+Duas hipóteses foram REFUTADAS por medição antes de eu mexer em nada:
+
+| hipótese | medição |
+|---|---|
+| o deep-link empurra histórico e come o "voltar" | o `useEffect` da `SessionsPage` só seta estado local — nenhum push |
+| abrir em aba nova (o `↗` já sugere) | **zero** `target="_blank"` em todo o UI; `↗` significa *"vai para outro módulo"* em 6 telas |
+
+Conserto no MECANISMO: o link leva `?from=<origem>`, e a tela de sessão volta para
+quem a chamou quando o parâmetro existe. Sem ele nada muda — quem abriu pela lista
+da Analytics continua voltando para ela. O rótulo segue o destino (*"Voltar de onde
+vim"* × *"Back to the list"*): dizer "a lista" devolvendo outra coisa seria status
+honesto com ponteiro mentiroso.
+
+⚠️ **`?from=` é destino de navegação vindo da URL — entrada NÃO CONFIÁVEL.** Três
+recusas, e a terceira quase escapou: `/\fora.com` começa com `/` e não com `//`,
+mas **o browser normaliza a barra invertida** e o resultado é `//fora.com`. A guarda
+tem de ser sobre o que o browser vai INTERPRETAR, não sobre o que a string parece.
+Recusa degrada para o botão de sempre, nunca para lugar nenhum.
+
+O predicado foi exercido **extraído do próprio arquivo** — reescrevê-lo no teste
+mediria a minha concordância comigo mesmo —, 7 casos, positivos e negativos, todos
+OK. ⚠️ **Não virou gate permanente:** `platform-ui` não tem infraestrutura de teste
+(AUT-25). Fica DECLARADO, não silenciado.
+
+⚠️ **E eu violei uma regra que já estava anotada:** escrevi o patch da guarda por
+heredoc do bash, que mutila barra invertida, e ela saiu como `includes('\')` com uma
+barra só — JS quebrado. Refiz com a ferramenta certa.
+
 ## 2026-09-09 (11) — ORQ-10: a tela perguntava à casa que o Arc 19 esvaziou
 
 ### 1 · O achado é do dono, e nenhum gate o teria pego

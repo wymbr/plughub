@@ -97,6 +97,7 @@ história no `CHANGELOG.md`.)*
 
 | id | tarefa | fechada em | âncora |
 |---|---|---|---|
+| PUL-04 | **A tela de pendências abria em LISTA, e o filtro de estado duplicava um contador que já existia.** Pedido do dono depois da ORQ-10. O argumento não foi simetria, foi AMBIGUIDADE: a tela estava honestamente vazia (0 no ledger; 85 wrap-ups no total, o último em 2026-09-07) e dizia isso com o mesmo *"nenhum item"* que a aba Processos exibia com 51 processos de pé — *um zero em contador afirma, uma lista vazia só sugere*. Hoje abre em consolidado, o cartão É a porta da sua lista, o eixo primário continua sendo o AGENTE (a pendência é author-bound) e `orphaned` aparece mesmo em zero. ⚠️ **Duas rodadas do dono acharam o que eu não vi:** o recorte era `useState` e morria ao navegar para outra rota (foi para a URL); e o "voltar" da tela de sessão é da Analytics — hoje o link leva `?from=`, o que conserta os QUATRO módulos que linkam para lá, com guarda contra destino externo (inclusive `/\` , que o browser normaliza para `//`) | 2026-09-09 | `CHANGELOG.md` § 2026-09-09 (12) |
 | PUL-03 | Arco A–F: posse conferida no submit, devolução por queda, resume terminal-uma-vez, Console lendo o 409 | 2026-08-04 | `CHANGELOG.md` § Fase F (D7) |
 
 ---

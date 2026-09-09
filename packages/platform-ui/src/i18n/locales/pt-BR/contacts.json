@@ -677,7 +677,8 @@
       "resolving": "Abrindo a sessão…",
       "notFound": "Sessão não encontrada",
       "notFoundHint": "Ou ela não existe, ou está fora do seu escopo de pools. As duas coisas pedem ações diferentes, por isso a tela não devolve a lista como se nada tivesse sido pedido.",
-      "backToList": "Voltar à lista"
+      "backToList": "Voltar à lista",
+      "backToOrigin": "Voltar de onde vim"
     }
   },
   "quality": {

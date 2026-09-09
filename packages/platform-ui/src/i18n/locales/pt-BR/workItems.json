@@ -35,7 +35,12 @@
     "deadline": "Prazo",
     "overdue": "Vencido",
     "overdueHint": "O prazo passou e o item continua registrado — sinal de que a varredura de expiração não passou.",
-    "holder": "Reservado por"
+    "holder": "Reservado por",
+    "total": "Total",
+    "agent": "Agente",
+    "pool": "Pool",
+    "oldest": "Mais antiga",
+    "oldestHint": "Idade do item mais antigo do grupo — o que está esperando há mais tempo."
   },
   "group": {
     "count": "{{count}} pendente",
@@ -84,5 +89,14 @@
       "avgFill": "Tempo médio",
       "avgFillHint": "Média apenas dos submetidos — é o tempo de pós-atendimento real."
     }
+  },
+  "kpi": {
+    "total": "Pendentes",
+    "overdue": "Vencidas"
+  },
+  "summary": {
+    "back": "Consolidado",
+    "hint": "Quem está devendo agora. Clique num contador ou numa linha para ver as pendências e agir sobre elas.",
+    "partial": "Contadores PARCIAIS — o limite de varredura foi atingido. Os números abaixo são um piso, não o total."
   }
 }
