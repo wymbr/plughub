@@ -39,7 +39,6 @@ Architecture note:
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import time
@@ -57,24 +56,15 @@ from .db import (
     db_complete_instance,
     db_create_collect,
     db_create_instance,
-    db_create_webhook,
-    db_delete_webhook,
     db_fail_instance,
     db_get_collect_by_token,
     db_get_instance,
     db_get_instance_by_token,
     db_get_instance_sessions,
-    db_get_webhook,
-    db_get_webhook_by_token_hash,
     db_list_collects_by_campaign,
-    db_list_deliveries,
     db_list_instances,
-    db_list_webhooks,
-    db_record_delivery,
     db_resume_instance,
-    db_rotate_webhook_token,
     db_suspend_instance,
-    db_update_webhook,
 )
 from .kafka_emitter import (
     emit_cancelled,
@@ -87,7 +77,6 @@ from .kafka_emitter import (
     emit_started,
     emit_suspended,
 )
-from .webhooks import generate_token, verify_token
 
 logger = logging.getLogger("plughub.workflow.router")
 router = APIRouter()
@@ -576,269 +565,55 @@ async def list_campaign_collects(
 # ── Webhook helpers ────────────────────────────────────────────────────────────
 
 def _require_admin(request: Request, x_admin_token: str = Header(default="")):
-    """Dependency that validates the admin token for webhook management endpoints."""
+    """
+    Portao das operacoes administrativas. Hoje serve `POST /admin/backfill-events`.
+
+    ⚠️ **Ele FALHAVA ABERTO ate 2026-09-08 (MOD-11).** A guarda era
+    `if settings.admin_token and x_admin_token != settings.admin_token`, e o `and`
+    fazia do segredo AUSENTE um no-op: sem `PLUGHUB_WORKFLOW_ADMIN_TOKEN` o portao
+    aprovava todo mundo. Medido no container: **nenhuma env de admin configurada**,
+    logo o portao nunca recusou ninguem desde que existe.
+
+    E a postura oposta a que a § Security fixou em 2026-08-30 para o
+    `X-Service-Token` da analytics-api: credencial **ACRESCENTA** porta e nunca
+    remove exigencia. Aqui o segredo ausente REMOVIA a exigencia -- a mesma forma do
+    `_require_service` da evaluation-api, herdada de demo aberto.
+
+    Segredo ausente agora e **503, nao 200**: e falha de configuracao do servico, nao
+    veredicto sobre o chamador, e um 401 mentiria dizendo que a credencial dele esta
+    errada. Mesma escolha do `_check_audit_access`, e pela mesma razao -- este portao
+    guarda uma MUTACAO administrativa, entao degradar aberto e o que nao se pode.
+    """
     settings = _settings(request)
-    if settings.admin_token and x_admin_token != settings.admin_token:
+    if not settings.admin_token:
+        raise HTTPException(
+            503,
+            "admin_token nao configurado neste servico (PLUGHUB_WORKFLOW_ADMIN_TOKEN); "
+            "a rota administrativa fica indisponivel em vez de aberta",
+        )
+    if x_admin_token != settings.admin_token:
         raise HTTPException(401, "invalid or missing X-Admin-Token")
 
 
-def _hash_payload(body: bytes) -> str:
-    return hashlib.sha256(body).hexdigest()
-
-
-# ── Webhook CRUD (admin-protected) ────────────────────────────────────────────
-
-class WebhookCreateRequest(BaseModel):
-    tenant_id:        str
-    flow_id:          str
-    description:      str                      = ""
-    context_override: dict                     = Field(default_factory=dict)
-
-
-@router.post("/v1/workflow/webhooks", status_code=201)
-async def create_webhook(
-    body:    WebhookCreateRequest,
-    request: Request,
-    pool=Depends(_pool),
-    _admin=Depends(_require_admin),
-) -> dict[str, Any]:
-    """
-    Register a new webhook endpoint that triggers the given flow_id.
-    Returns the webhook record including the plain token (shown once — never stored).
-    """
-    plain_token, token_hash, token_prefix = generate_token()
-
-    webhook = await db_create_webhook(
-        pool,
-        tenant_id=body.tenant_id,
-        flow_id=body.flow_id,
-        description=body.description,
-        token_hash=token_hash,
-        token_prefix=token_prefix,
-        context_override=body.context_override,
-    )
-
-    # Embed the plain token in the response (only opportunity to show it)
-    return {**webhook, "token": plain_token}
-
-
-@router.get("/v1/workflow/webhooks")
-async def list_webhooks(
-    tenant_id: str,
-    active:    bool | None = None,
-    limit:     int = 50,
-    offset:    int = 0,
-    pool=Depends(_pool),
-    _admin=Depends(_require_admin),
-) -> list[dict]:
-    if limit > 200:
-        limit = 200
-    return await db_list_webhooks(pool, tenant_id, active, limit, offset)
-
-
-@router.get("/v1/workflow/webhooks/{webhook_id}")
-async def get_webhook(
-    webhook_id: str,
-    pool=Depends(_pool),
-    _admin=Depends(_require_admin),
-) -> dict[str, Any]:
-    webhook = await db_get_webhook(pool, webhook_id)
-    if not webhook:
-        raise HTTPException(404, "webhook not found")
-    return webhook
-
-
-class WebhookPatchRequest(BaseModel):
-    description:      str  | None = None
-    active:           bool | None = None
-    context_override: dict | None = None
-
-
-@router.patch("/v1/workflow/webhooks/{webhook_id}", status_code=200)
-async def patch_webhook(
-    webhook_id: str,
-    body:       WebhookPatchRequest,
-    pool=Depends(_pool),
-    _admin=Depends(_require_admin),
-) -> dict[str, Any]:
-    """Update description, active status, or context_override."""
-    webhook = await db_get_webhook(pool, webhook_id)
-    if not webhook:
-        raise HTTPException(404, "webhook not found")
-
-    updated = await db_update_webhook(
-        pool, webhook_id,
-        description=body.description,
-        active=body.active,
-        context_override=body.context_override,
-    )
-    return updated  # type: ignore[return-value]
-
-
-@router.post("/v1/workflow/webhooks/{webhook_id}/rotate", status_code=200)
-async def rotate_webhook_token(
-    webhook_id: str,
-    pool=Depends(_pool),
-    _admin=Depends(_require_admin),
-) -> dict[str, Any]:
-    """
-    Rotate the webhook secret.  Returns the new plain token (shown once).
-    The old token is immediately invalidated.
-    """
-    webhook = await db_get_webhook(pool, webhook_id)
-    if not webhook:
-        raise HTTPException(404, "webhook not found")
-
-    plain_token, token_hash, token_prefix = generate_token()
-    updated = await db_rotate_webhook_token(pool, webhook_id, token_hash, token_prefix)
-    return {**updated, "token": plain_token}  # type: ignore[operator]
-
-
-@router.delete("/v1/workflow/webhooks/{webhook_id}", status_code=204)
-async def delete_webhook(
-    webhook_id: str,
-    pool=Depends(_pool),
-    _admin=Depends(_require_admin),
-) -> None:
-    deleted = await db_delete_webhook(pool, webhook_id)
-    if not deleted:
-        raise HTTPException(404, "webhook not found")
-
-
-@router.get("/v1/workflow/webhooks/{webhook_id}/deliveries")
-async def list_webhook_deliveries(
-    webhook_id: str,
-    limit:      int = 50,
-    pool=Depends(_pool),
-    _admin=Depends(_require_admin),
-) -> list[dict]:
-    """Last N delivery records for a webhook (most recent first)."""
-    webhook = await db_get_webhook(pool, webhook_id)
-    if not webhook:
-        raise HTTPException(404, "webhook not found")
-    if limit > 200:
-        limit = 200
-    return await db_list_deliveries(pool, webhook_id, limit)
-
-
-# ── Webhook public trigger ─────────────────────────────────────────────────────
-
-@router.post("/v1/workflow/webhook/{webhook_id}", status_code=202)
-async def trigger_via_webhook(
-    webhook_id:      str,
-    request:         Request,
-    pool=Depends(_pool),
-    x_webhook_token: str = Header(default=""),
-) -> dict[str, Any]:
-    """
-    Public trigger endpoint called by external systems (Salesforce, ERP, etc.).
-
-    Authentication:
-      Header X-Webhook-Token: <plain_token>
-
-    The request body (any JSON) is merged with context_override and passed as
-    pipeline_state.contact_context to the new WorkflowInstance.
-
-    Returns 202 Accepted with { instance_id, flow_id, webhook_id }.
-    Logs a delivery record regardless of outcome.
-    """
-    settings  = _settings(request)
-    producer  = _producer(request)
-    t0        = time.monotonic()
-
-    # Read raw body once (for payload hash)
-    raw_body  = await request.body()
-    payload_hash = _hash_payload(raw_body)
-
-    # ── Authenticate ──────────────────────────────────────────────────────────
-    if not x_webhook_token:
-        raise HTTPException(401, "X-Webhook-Token header is required")
-
-    token_hash = hashlib.sha256(x_webhook_token.encode()).hexdigest()
-    webhook    = await db_get_webhook_by_token_hash(pool, token_hash)
-
-    if not webhook:
-        # Log failed delivery (no webhook_id or tenant_id available — use placeholder)
-        # We can't call db_record_delivery because we don't have a valid webhook_id UUID.
-        # Just raise immediately.
-        raise HTTPException(401, "invalid webhook token")
-
-    if not verify_token(x_webhook_token, token_hash):
-        # Extra constant-time guard (token_hash lookup already confirmed match,
-        # but belt-and-suspenders against hash-lookup collisions).
-        raise HTTPException(401, "invalid webhook token")
-
-    if not webhook["active"]:
-        latency = int((time.monotonic() - t0) * 1000)
-        await db_record_delivery(
-            pool,
-            webhook_id=webhook["id"],
-            tenant_id=webhook["tenant_id"],
-            status_code=403,
-            payload_hash=payload_hash,
-            error="webhook is inactive",
-            latency_ms=latency,
-        )
-        raise HTTPException(403, "webhook is inactive")
-
-    # ── Parse body as JSON context (best-effort — empty dict on failure) ──────
-    import json as _json
-    try:
-        body_json: dict = _json.loads(raw_body) if raw_body else {}
-        if not isinstance(body_json, dict):
-            body_json = {"payload": body_json}
-    except Exception:
-        body_json = {}
-
-    # Merge context_override (webhook-level defaults) with inbound payload
-    context = {**webhook["context_override"], **body_json}
-
-    # ── Create workflow instance ──────────────────────────────────────────────
-    instance = await db_create_instance(pool, {
-        "installation_id":   settings.installation_id,
-        "organization_id":   settings.organization_id,
-        "tenant_id":         webhook["tenant_id"],
-        "flow_id":           webhook["flow_id"],
-        "session_id":        None,
-        "origin_session_id": None,
-        "pool_id":           None,
-        "metadata":          {"webhook_id": webhook["id"], "webhook_trigger": True},
-        "pipeline_state":    {"contact_context": context},
-    })
-
-    await emit_started(
-        producer, settings.kafka_topic,
-        installation_id=settings.installation_id,
-        organization_id=settings.organization_id,
-        tenant_id=webhook["tenant_id"],
-        instance_id=instance["id"],
-        flow_id=webhook["flow_id"],
-        session_id=None,
-        trigger_type="webhook",
-    )
-
-    latency = int((time.monotonic() - t0) * 1000)
-    await db_record_delivery(
-        pool,
-        webhook_id=webhook["id"],
-        tenant_id=webhook["tenant_id"],
-        status_code=202,
-        payload_hash=payload_hash,
-        instance_id=instance["id"],
-        latency_ms=latency,
-    )
-
-    logger.info(
-        "webhook trigger: webhook_id=%s flow_id=%s instance_id=%s latency_ms=%d",
-        webhook["id"], webhook["flow_id"], instance["id"], latency,
-    )
-
-    return {
-        "instance_id": instance["id"],
-        "flow_id":     webhook["flow_id"],
-        "webhook_id":  webhook["id"],
-        "status":      "accepted",
-    }
+# ── Webhooks REMOVIDOS em 2026-09-08 (MOD-11) ────────────────────────────────
+#
+# Eram 8 rotas: o CRUD (`/v1/workflow/webhooks*`, 7) e a porta publica de disparo
+# (`POST /v1/workflow/webhook/{webhook_id}`). Sairam porque este servico deixou de
+# ser o registro de endereco de webhook, e ha ADR dizendo qual e:
+# `adr-webhook-endpoint-single-registry`. O registro unico e o `ChannelEndpoint` do
+# agent-registry (`/v1/channel-endpoints`), editado em `/config/channels` sob
+# `config.channels`, e a D6 daquele ADR ja carimbava as linhas daqui como
+# procedencia `legacy_token`.
+#
+# ⚠️ Nao houve migracao de dado porque nao havia dado: `workflow.webhooks` e
+# `workflow.webhook_deliveries` foram medidas em ZERO linhas na instalacao, contra
+# 13 endpoints webhook ja vivos em `channel_endpoints` (12 `internal` + 1
+# `external`). A tela que administrava esta tabela (`WebhooksTab`) saiu no mesmo
+# commit. As TABELAS ficam de pe -- apagar schema e outra decisao, e vazio nao
+# custa; o que nao pode e continuar existindo uma segunda porta de cadastro.
+#
+# O DDL delas segue em `db.py` e nao foi tocado, de proposito: remover o CREATE
+# TABLE junto tornaria irreversivel por deploy uma remocao que hoje e so de rota.
 
 
 # ── Admin: historical backfill ────────────────────────────────────────────────

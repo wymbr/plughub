@@ -1376,7 +1376,9 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (agent_assist.atender), Monitor 
 
 **auth-api** (porta 3200): users + sessions no schema PG `auth`. JWT HS256 TTL 1h; refresh token opaco
 de 43 chars com rotação e SHA-256 no store. `accessible_pools[]` no JWT filtra LINHAS na analytics-api.
-**ABAC** (`module_config` no JWT, `auth.module_registry` semeado de `infra/modules.yaml`): 8 módulos,
+**ABAC** (`module_config` no JWT, `auth.module_registry` semeado de `infra/modules.yaml`): **11 módulos**
+*(medido 2026-09-08; dizia `8` e o catálogo tinha 12 — a contagem em prosa não tem mecanismo, então
+envelhece calada. `workflows` saiu na MOD-11)*,
 cada campo com `access: none|read_only|write_only|read_write` + `scope[]`;
 `PermissionChecker.can(module, field, minAccess?, scopeId?)`. **Roteamento por performance**:
 `performance_score = resolution_rate × (1 − escalation_rate)`, blending por `performance_score_weight`
@@ -1435,7 +1437,7 @@ caso"* ou *"remover a alternativa"*, a segunda é a que não depende de memória
 
 **Calendar API** (port 3700): pure engine. Functions: `is_open`, `next_open_slot`, `add_business_duration`, `business_duration`. Feriados recorrentes `MM-DD`. Status 3-state: `open/closed/holiday`. Timezone per tenant. 4 MCP tools wrapping calendar engine.
 
-**Webhooks**: `plughub_wh_{43-char}` token, SHA-256 stored. CRUD (X-Admin-Token) + public `POST /v1/workflow/webhook/{id}` (X-Webhook-Token). Delivery log with timing and status. `origin_session_id` in WorkflowInstance links workflow to parent contact session.
+**Webhooks**: ⚠️ **as 8 rotas de webhook deste serviço foram REMOVIDAS em 2026-09-08 (MOD-11)** — as 7 do CRUD (`/v1/workflow/webhooks*`, `X-Admin-Token`) e a porta pública `POST /v1/workflow/webhook/{id}`. O registro único de endereço de webhook é o **`ChannelEndpoint`** do agent-registry (`/v1/channel-endpoints`, tela `/config/channels`, campo `config.channels`), por decisão do `adr-webhook-endpoint-single-registry` — cuja D6 já carimbava as linhas daqui como procedência `legacy_token`. Não houve migração porque não havia dado: `workflow.webhooks` foi medida em **zero linhas** contra 13 endpoints webhook vivos no registro. As tabelas ficam de pé (vazio não custa; apagar schema é outra decisão). `origin_session_id` in WorkflowInstance links workflow to parent contact session.
 
 **Skill Deploy** (Phase 2): `POST /v1/skills/:id/deploy` → `skill_deployments` table → `publishRegistryChanged`. Scheduled deploy via `skill_scheduled_deploy_v1` workflow YAML. `GET /v1/skills/:id/handoff-status` for safe deploys.
 

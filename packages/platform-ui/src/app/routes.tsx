@@ -9,9 +9,6 @@ import ConfigRecursosIndex from '@/modules/config-recursos'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
 import MaskingPage from '@/modules/masking/MaskingPage'
 import ContextMapPage from '@/modules/context-map/ContextMapPage'
-// Workflow / Fluxo
-import WorkflowEditorPage   from '@/modules/workflows/WorkflowEditorPage'
-import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import SchedulesPage from '@/modules/schedules/SchedulesPage'
 import SchedulesMonitorPage from '@/modules/schedules/SchedulesMonitorPage'
@@ -135,8 +132,16 @@ export const routes: RouteObject[] = [
       { path: 'skill-flows',        element: <Navigate to="/agent-flow/editor" replace /> },
 
       // ── Workflow routes (still accessible directly) ─────────────
-      { path: 'workflow/editor',   element: <WorkflowEditorPage /> },
-      { path: 'workflow/calendar', element: <WorkflowCalendarPage /> },
+      // MOD-11 (2026-09-08): as duas telas de workflow foram REMOVIDAS, e o
+      // endereco vira redirect em vez de sumir -- ausencia honesta vira presenca
+      // declarada (D6 do ADR de webhook). O `WorkflowEditorPage` era um
+      // disparador manual que endereçava SKILL (contra o invariante "o POOL e a
+      // unidade enderecavel") e cujo proxy respondia 404 desde a Fase E; o editor
+      // vivo e `/agent-flow/editor`. A `WebhooksTab` administrava
+      // `workflow.webhooks`, medida em ZERO linhas, enquanto o registro que
+      // resolve endereco e o `ChannelEndpoint` de `/config/channels`.
+      { path: 'workflow/editor',   element: <Navigate to="/agent-flow/editor" replace /> },
+      { path: 'workflow/calendar', element: <Navigate to="/config/channels"   replace /> },
       // Redirects
       { path: 'workflow/monitor',  element: <Navigate to="/flow/monitor"     replace /> },
       { path: 'workflow/report',   element: <Navigate to="/analise/sessions" replace /> },
@@ -218,7 +223,7 @@ export const routes: RouteObject[] = [
       { path: 'config/calendars',  element: <CalendarsPage /> },
       { path: 'config/schedules',  element: <SchedulesPage /> },
       { path: 'config/outbound',   element: <OutboundPage /> },
-      { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
+      { path: 'workflow/triggers', element: <Navigate to="/config/channels" replace /> },
 
       { path: 'business',  element: <Navigate to="/" replace /> },
     ]

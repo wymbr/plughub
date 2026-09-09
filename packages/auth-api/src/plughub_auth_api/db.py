@@ -398,6 +398,47 @@ WHERE (module_config -> 'contacts') ? 'visualizar'
 # renomeado de novo no boot seguinte — a mesma familia do guard por ausencia que desfazia
 # a MOD-04. Aqui a origem some, entao a guarda por presenca bastaria; o marcador e o que
 # torna a decisao VISIVEL na tabela, ao lado das outras.
+# -- MOD-11: o modulo `workflows` inteiro sai do module_config -----------------
+#
+# Seis campos com ZERO consumidores, e cada funcao ja com sucessor gateado por
+# outro campo (`skill_flows.operacao`, `contacts.monitorar`, `contacts.visualizar`,
+# `scheduler.operacao`, `config.calendars`, `config.channels`,
+# `agent_assist.supervisionar`, `approvals.operacao`, `approvals.decide`). O motivo
+# de remover o DADO, e nao so o catalogo: grant orfao no JWT e chave que um portao
+# futuro pode passar a ler sem que ninguem tenha decidido conceder.
+#
+# GUARDA POR PRESENCA, e por isso roda INCONDICIONAL: a chave de origem DESAPARECE
+# na primeira passada, entao a segunda nao casa com nada. E a mesma familia do corte
+# #1 (`DDL_MIGRATE_ABAC_OPERACAO_SPLIT`) e o oposto da guarda por AUSENCIA, que
+# desfaria revogacao a cada boot -- aqui nao ha destino a re-criar.
+#
+# Medido antes de escrever: 2 portadores (`admin@`, `probe@`), ambos pelo preset de
+# admin; nenhum usuario recebeu estes campos por concessao deliberada.
+DDL_MIGRATE_ABAC_DROP_WORKFLOWS = """
+UPDATE auth.users
+SET module_config = module_config - 'workflows'
+WHERE module_config ? 'workflows'
+"""
+
+# -- MOD-11: a linha do modulo `workflows` sai do catalogo VIVO ----------------
+#
+# ⚠️ Remover do `infra/modules.yaml` NAO remove do banco. O semeador e
+# `upsert_module`, que e `INSERT ... ON CONFLICT DO UPDATE` — upsert puro, sem
+# poda. Sem esta migracao o `auth.module_registry` continuaria declarando um
+# modulo que o fonte nao declara mais, e a tela de Acesso (que renderiza o
+# CATALOGO, nao o YAML) seguiria oferecendo os seis campos para concessao.
+#
+# E a familia do "ambiente que so sobe porque ja subiu antes": o estado herdado e
+# entrada nao declarada do boot, e enquanto ele existir a remocao esta feita
+# apenas no fonte. Instalacao limpa nao teria a linha; a existente tem.
+#
+# DELETE em vez de `active = false`: marcar depende de todo leitor lembrar de
+# filtrar, remover nao depende de ninguem. Guarda por PRESENCA — a linha some na
+# primeira passada, entao roda incondicional.
+DDL_DROP_MODULE_WORKFLOWS = """
+DELETE FROM auth.module_registry WHERE module_id = 'workflows'
+"""
+
 DDL_MIGRATE_ROLE_DEVOPS = """
 UPDATE auth.users
 SET roles = array_replace(roles, 'developer', 'devops')
@@ -470,6 +511,8 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
                 "SELECT EXISTS(SELECT 1 FROM auth.users "
                 "WHERE module_config -> 'config' ? 'dashboards')")
             await conn.execute(DDL_MIGRATE_ABAC_OPERACAO_SPLIT)
+            await conn.execute(DDL_MIGRATE_ABAC_DROP_WORKFLOWS)
+            await conn.execute(DDL_DROP_MODULE_WORKFLOWS)
             await _migracao_uma_vez(
                 conn, "role_developer_to_devops_2026_09_08",
                 DDL_MIGRATE_ROLE_DEVOPS,

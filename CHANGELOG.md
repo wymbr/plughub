@@ -1,5 +1,128 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-08 (15) — MOD-11: o módulo `workflows` não estava órfão, estava SUPERADO
+
+### 1 · A ficha oferecia duas saídas, e a medição escolheu
+
+`MOD-11` dizia *"ligar os campos às superfícies ou remover o que o Arc 19 aposentou"*.
+A pergunta do dono — *"não parece que as funções foram distribuídas em outros
+módulos?"* — mandou medir antes de escolher, e a medição resolveu campo a campo.
+**Cada uma das seis funções já tem sucessor, e cada sucessor já é gateado:**
+
+| campo | onde a função vive hoje | quem a gateia |
+|---|---|---|
+| `operacao` | os três nomes do rótulo se separaram: editor · monitor · calendário | `skill_flows.operacao` · `contacts.monitorar` · `scheduler.operacao` + `config.calendars` |
+| `visualizar` | Arc 19 Fase E — workflow é sessão `channel=webhook` | `contacts.visualizar` / `contacts.monitorar` |
+| `cancelar` | `POST /api/force-complete/{sid}`, por SESSÃO | `agent_assist.supervisionar` (AUT-38) |
+| `webhooks` | `ChannelEndpoint`, `/v1/channel-endpoints` | `config.channels` (MOD-06) |
+| `journey_read` | fila pull de aprovação no Console | `approvals.operacao` |
+| `journey_resume` | ingress de resume (`webhook.py:991`) | `approvals.decide` |
+
+Não é faxina de órfãos: é o encerramento de uma modularização inteira que outra
+tomou. Dois fatos fecham o argumento — a rota `/instances/{id}/cancel` foi **apagada
+em 2026-08-07** e o comentário que ficou no lugar dela já **nomeia** o sucessor; e o
+`adr-webhook-endpoint-single-registry` já carimbava a tabela daqui como procedência
+`legacy_token` (D6). O trabalho estava decidido; faltava executá-lo.
+
+### 2 · Duas afirmações da PRÓPRIA ficha caíram na medição
+
+⚠️ **(a) *"quem alcança o serviço dispara qualquer flow"* — falso.** O proxy
+`/v1/workflow/trigger` repassa para `/v1/channels/webhook/{flow_id}` **sem header
+nenhum**, e essa rota resolve pelo registro e exige `X-Webhook-Token` quando o
+endpoint declara `auth_required`. O proxy **não consegue** apresentar credencial:
+alcança só endpoints que não pedem nenhuma — exatamente os que o ADR §7.9 declarou
+incredenciáveis por construção, com argumento. É repassador na frente de fechadura,
+não porta aberta. Ele **fica**: 5 cenários e2e dependem dele, e "consertar" o que não
+está quebrado teria quebrado a suíte.
+
+⚠️ **(b) *"o fail-open morre com o CRUD"* — falso, e era premissa minha.**
+`_require_admin` também gateia `POST /admin/backfill-events`, que **sobrevive**.
+Então o portão não morreu: foi **consertado**. Era
+`if settings.admin_token and x_admin_token != …`, e o `and` fazia do segredo AUSENTE
+um no-op. Medido no container: **nenhuma env de admin configurada**, logo ele nunca
+recusou ninguém desde que existe. Agora segredo ausente é **503, não 200** — falha de
+configuração do serviço, não veredicto sobre o chamador (um 401 mentiria dizendo que
+a credencial dele está errada). Mesma escolha do `_check_audit_access`, pela mesma
+razão: o portão guarda uma MUTAÇÃO administrativa.
+
+### 3 · Duas coisas que a remoção óbvia teria quebrado
+
+⚠️ **`api/hooks.ts` não podia ser apagado.** O `MonitorTab` importa dele — e o
+`MonitorTab` **é** o sucessor de `visualizar`. Apagar o diretório inteiro teria
+removido a leitura junto com as telas. Foram podados só os exports que morreram com
+elas (`triggerWorkflow` + os 6 de webhook); ficaram `useWorkflowInstances`,
+`useWorkflowInstance` e os tipos. O mapa export→consumidor foi medido antes de cortar.
+
+⚠️ **Remover do `infra/modules.yaml` NÃO remove do catálogo vivo.** O semeador é
+`upsert_module`, `INSERT … ON CONFLICT DO UPDATE` — upsert puro, **sem poda**. Sem
+mecanismo, o `auth.module_registry` continuaria declarando um módulo que o fonte não
+declara, e a tela de Acesso (que renderiza o CATÁLOGO, não o YAML) seguiria
+oferecendo os seis campos para concessão. É a família do *"ambiente que só sobe
+porque já subiu antes"*: instalação limpa não teria a linha; a existente tem. Entrou
+`DDL_DROP_MODULE_WORKFLOWS` ao lado de `DDL_MIGRATE_ABAC_DROP_WORKFLOWS` (que tira a
+chave do `module_config`). **As duas são guardadas por PRESENÇA** — a chave de origem
+some na primeira passada — e por isso rodam incondicionais, como o corte #1 e ao
+contrário da guarda por ausência, que desfaria revogação a cada boot.
+
+Medido depois do boot: **2 → 0 portadores**; catálogo **12 → 11 módulos**.
+
+### 4 · As rotas viram REDIRECT, não 404
+
+`/workflow/editor` → `/agent-flow/editor` · `/workflow/calendar` e
+`/workflow/triggers` → `/config/channels`. *Ausência honesta vira presença declarada*
+(D6 do mesmo ADR): quem tem o endereço nos favoritos chega no sucessor em vez de
+bater num vazio.
+
+E o que saiu do editor merece registro, porque ele **não era um editor**: o docstring
+diz *"trigger form: select a skill, configure context, run now"* — um disparador
+manual que endereçava **skill**, contra o invariante *"o POOL é a unidade
+endereçável"*. Pôr `RequireAbac` nele teria sido gatear uma superfície que viola
+invariante e já respondia 404.
+
+### 5 · Os testes foram SUBSTITUÍDOS, e os dois ramos provados falseáveis
+
+As 3 classes de webhook (`TestWebhookCRUD`, `TestWebhookTrigger`,
+`TestWebhookDeliveries`) viraram duas: **`TestWebhookRoutesRemoved`** (as 8 rotas
+respondem 404 — mandando o header de admin de propósito, para distinguir *"removida"*
+de *"fechada"*) e **`TestAdminGateFailsClosed`**. Apagar teria deixado a remoção sem
+testemunha, e quem "restaurasse" o CRUD não encontraria nada vermelho.
+
+**Cada uma leva o seu controle positivo**, porque o negativo sozinho passa pelo motivo
+errado: um app que falhasse ao carregar daria 404 em tudo (por isso a rota de leitura
+que sobrevive é asserida ao lado), e um portão que recusasse todo mundo passaria nos
+dois negativos (por isso o token certo tem de ATRAVESSAR).
+
+Bateria de mutação, um mutante por vez: restaurar o fail-open → **1 vermelho**, o do
+portão; re-registrar uma rota do CRUD → **1 vermelho**, o do 404. Precisos, não
+generalizados.
+
+### 6 · Uma sonda que prometia um perigo que o código não sustenta mais
+
+`probe_webhook_endpoint_inventory.sh` declarava a família F3 como *"acionáveis por
+`/v1/workflow/webhook/{id}`"* e a reprovava com ❌. Com a rota removida, linha ali é
+**resíduo inerte** — manter o veredicto seria a sonda prometendo perigo inexistente,
+a mesma família do comentário que promete invariante sem mecanismo. E ela própria
+nomeava a saída: *"aposentar junto com o editor órfão de `/workflow/calendar`"*.
+Rodada depois: `F3=0`, ✅ *"nada acionável fora da tela"*.
+
+### 7 · A dúvida do dono virou ficha, e não virou campo
+
+A revisão perguntou se `cancelar` e `resume` não seriam parte do que o Monitor já
+faz. **Ver** está lá (212 sessões `webhook` suspensas, de 688, com filtro de status
+nas três telas). **Agir** não: o Monitor tem **zero ação por linha** — as 4 chamadas
+de `/cancel` saíram em 2026-08-07 e nada as substituiu; o que restou é um botão que
+copia o `resume_token` para a área de transferência. A lista está numa tela e o botão
+está noutra.
+
+Isso é lacuna de **superfície**, não de autorização — os dois eixos existem e já são
+gateados —, e por isso virou **`APR-10`** em vez de reabrir os campos removidos.
+Reabri-los não daria botão a ninguém: daria um segundo portão para uma ação que já
+tem dono.
+
+**Gates**: `probe_ts_suites.sh` (848) · `probe_webhook_endpoint_inventory.sh` ·
+`probe_route_credential_coverage.sh` · suíte da workflow-api (35, com os 2 mutantes) ·
+suíte da auth-api (91) · `tsc --noEmit` do platform-ui.
+
 ## 2026-09-08 (14) — MOD-10: o papel `developer` virou `devops`
 
 ### 1 · Por que o rename, e por que só agora

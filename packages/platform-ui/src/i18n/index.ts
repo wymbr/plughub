@@ -12,7 +12,6 @@ import accessPtBr from './locales/pt-BR/access.json'
 import maskingPtBr from './locales/pt-BR/masking.json'
 import agentAssistPtBr from './locales/pt-BR/agentAssist.json'
 import agentReportsPtBr from './locales/pt-BR/agentReports.json'
-import workflowsPtBr from './locales/pt-BR/workflows.json'
 import agentFlowPtBr from './locales/pt-BR/agentFlow.json'
 import calendarsPtBr from './locales/pt-BR/calendars.json'
 import servicePtBr from './locales/pt-BR/atendimento.json'
@@ -41,7 +40,6 @@ import accessEn from './locales/en/access.json'
 import maskingEn from './locales/en/masking.json'
 import agentAssistEn from './locales/en/agentAssist.json'
 import agentReportsEn from './locales/en/agentReports.json'
-import workflowsEn from './locales/en/workflows.json'
 import agentFlowEn from './locales/en/agentFlow.json'
 import calendarsEn from './locales/en/calendars.json'
 import serviceEn from './locales/en/atendimento.json'
@@ -72,7 +70,6 @@ i18n.use(initReactI18next).init({
       masking:         maskingPtBr,
       agentAssist:     agentAssistPtBr,
       agentReports:    agentReportsPtBr,
-      workflows:       workflowsPtBr,
       agentFlow:       agentFlowPtBr,
       calendars:       calendarsPtBr,
       service:         servicePtBr,
@@ -101,7 +98,6 @@ i18n.use(initReactI18next).init({
       masking:         maskingEn,
       agentAssist:     agentAssistEn,
       agentReports:    agentReportsEn,
-      workflows:       workflowsEn,
       agentFlow:       agentFlowEn,
       calendars:       calendarsEn,
       service:         serviceEn,
@@ -125,7 +121,7 @@ i18n.use(initReactI18next).init({
   ns: [
     'common', 'shell', 'configRecursos',
     'contacts', 'billing', 'evaluation', 'access', 'masking',
-    'agentAssist', 'agentReports', 'workflows', 'agentFlow',
+    'agentAssist', 'agentReports', 'agentFlow',
     'calendars', 'service', 'campaigns', 'configPlataforma',
     'dashboards', 'home', 'groups', 'audit', 'channels', 'webrtc', 'dialogForms',
     'scheduler', 'outbound', 'customerVoice', 'workItems',

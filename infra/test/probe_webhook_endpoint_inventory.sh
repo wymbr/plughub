@@ -13,7 +13,8 @@
 #                                                        /v1/channels/webhook/{webhook_skill_id}
 #                                                        e /v1/channels/webhook/pool/{pool_id}
 #   F2  ChannelEndpoint(channel=webhook)               → acionáveis por /channel/webhook/{identifier}
-#   F3  workflow.webhooks (token plughub_wh_…)         → acionáveis por /v1/workflow/webhook/{id}
+#   F3  workflow.webhooks (token plughub_wh_…)         → INERTES desde a MOD-11 (2026-09-08):
+#                                                       a rota /v1/workflow/webhook/{id} foi REMOVIDA
 #   F4  cruzamento: quem de F1 tem linha em F2, e — o inverso, que é o achado de
 #       2026-08-07 — quem de F2 aponta para pool que **não declara o canal**.
 #
@@ -225,18 +226,28 @@ echo
 #     (registrá-lo seria a função identidade do pool: um inventário incapaz de
 #     discordar da fonte).
 #
-# Some F1 ∪ F2 e sobra exatamente UMA família acionável fora da tela: o registro
-# LEGADO por token (`workflow.webhooks`, F3), que vive noutra tabela e tem editor
-# numa rota fora do menu. Enquanto ele tiver linhas, a Fase D está incompleta por
-# construção — e o conserto é a Fase F (migrar ou aposentar), não maquiagem aqui.
+# Some F1 ∪ F2 e sobrava exatamente UMA família acionável fora da tela: o registro
+# LEGADO por token (`workflow.webhooks`, F3), que vivia noutra tabela e tinha editor
+# numa rota fora do menu.
+#
+# ✅ **Fechado em 2026-09-08 (MOD-11), pela segunda das duas saídas que esta sonda
+# oferecia: APOSENTAR.** As 8 rotas de webhook da workflow-api foram removidas — as
+# 7 do CRUD e a porta pública `POST /v1/workflow/webhook/{id}` —, e o editor órfão
+# de `/workflow/calendar` saiu com elas. Não houve migração porque não havia dado:
+# a tabela foi medida em ZERO linhas contra 13 endpoints já vivos no registro.
+#
+# ⚠️ Por isso F3 deixou de ser um ❌: linha nesta tabela hoje é RESÍDUO INERTE, não
+# endereço acionável. Deixar o veredicto antigo seria a sonda prometendo um perigo
+# que o código não sustenta — a mesma família do comentário que promete invariante
+# sem mecanismo.
 echo "── F5 · cobertura da tela (Fase D) ───────────────────────────────────────"
 echo "   na tela: ${F2} registrado(s) + ${F1} endereço(s) por pool"
 if [ "${F3:-0}" -gt 0 ]; then
-  echo "   ❌ ${F3} webhook(s) por TOKEN acionáveis e FORA da tela (workflow.webhooks)"
-  echo "      A Fase D não fecha com eles vivos — decidir na Fase F: migrar p/ o"
-  echo "      registro ou aposentar junto com o editor órfão de /workflow/calendar."
+  echo "   ⚠️  ${F3} linha(s) RESÍDUO em workflow.webhooks — INERTES desde a MOD-11"
+  echo "      (a rota /v1/workflow/webhook/{id} foi removida em 2026-09-08). Não são"
+  echo "      acionáveis; é limpeza de tabela, não exposição."
 else
-  echo "   (nenhum acionável fora da tela — F3=0)"
+  echo "   (nenhum resíduo — F3=0; a família acionável fora da tela acabou na MOD-11)"
 fi
 echo
 

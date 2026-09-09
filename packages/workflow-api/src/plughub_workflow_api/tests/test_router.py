@@ -18,6 +18,7 @@ Arc 19 Fase D behaviour summary:
   POST /.../complete                → 410 Gone
   POST /.../fail                    → 410 Gone
   POST /.../cancel                  → 404 (rota REMOVIDA em 2026-08-07, I5 lacuna 4b)
+  /v1/workflow/webhook*             → 404 (8 rotas REMOVIDAS em 2026-09-08, MOD-11)
   POST /.../collect/persist         → 410 Gone
   POST /v1/workflow/collect/respond → 410 Gone
   GET  /v1/workflow/instances       → read-only, kept as-is
@@ -33,9 +34,9 @@ Coverage:
   TestDetail            — GET  /v1/workflow/instances/{id} (unchanged)
   TestHealth            — GET  /v1/health (unchanged)
   TestTimeoutScanner    — timeout_job._scan_once (unchanged)
-  TestWebhookCRUD       — POST/GET/PATCH/rotate/DELETE /v1/workflow/webhooks
-  TestWebhookTrigger    — POST /v1/workflow/webhook/{id} (public endpoint)
-  TestWebhookDeliveries — GET  /v1/workflow/webhooks/{id}/deliveries
+  TestWebhookRoutesRemoved  — MOD-11: as 8 rotas de webhook sairam (404), com
+                              controle positivo de que o app segue servindo
+  TestAdminGateFailsClosed  — MOD-11: `_require_admin` deixou de falhar aberto
 """
 from __future__ import annotations
 
@@ -661,346 +662,87 @@ def admin_client():
 
 
 # ─────────────────────────────────────────────
-# TestWebhookCRUD
+# TestWebhookRoutesRemoved — MOD-11: o registro de webhook mudou de casa
 # ─────────────────────────────────────────────
+#
+# Substituem `TestWebhookCRUD`, `TestWebhookTrigger` e `TestWebhookDeliveries`,
+# que exercitavam as 8 rotas removidas em 2026-09-08. Foram SUBSTITUIDAS e nao
+# apagadas: apagar deixaria a remocao sem testemunha, e a proxima pessoa que
+# "restaurasse" o CRUD nao encontraria nada vermelho.
+#
+# O registro unico de endereco de webhook e o `ChannelEndpoint` do agent-registry
+# (`adr-webhook-endpoint-single-registry`), editado em `/config/channels`.
 
-class TestWebhookCRUD:
-    """Admin-protected CRUD endpoints for webhook registration."""
+class TestWebhookRoutesRemoved:
+    """As 8 rotas de webhook nao existem mais NESTE servico."""
 
-    def test_create_webhook_returns_201_with_token(self, admin_client):
-        """POST /v1/workflow/webhooks → 201; response includes plain token."""
-        app.state.pool = make_pool(fetchrow_result=fake_webhook())
-        resp = admin_client.post(
-            "/v1/workflow/webhooks",
-            json={
-                "tenant_id":        "tenant-test",
-                "flow_id":          "wf_approval_v1",
-                "description":      "Salesforce trigger",
-                "context_override": {"source": "salesforce"},
-            },
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert "token" in data                      # plain token returned once
-        assert data["token"].startswith("plughub_wh_")
-        assert data["flow_id"] == "wf_approval_v1"
+    ROTAS_MORTAS = [
+        ("post",   "/v1/workflow/webhooks"),
+        ("get",    "/v1/workflow/webhooks?tenant_id=tenant-test"),
+        ("get",    "/v1/workflow/webhooks/wh-1"),
+        ("patch",  "/v1/workflow/webhooks/wh-1"),
+        ("post",   "/v1/workflow/webhooks/wh-1/rotate"),
+        ("delete", "/v1/workflow/webhooks/wh-1"),
+        ("get",    "/v1/workflow/webhooks/wh-1/deliveries"),
+        ("post",   "/v1/workflow/webhook/wh-1"),
+    ]
 
-    def test_create_webhook_missing_admin_token_returns_401(self, admin_client):
-        """No X-Admin-Token header → 401."""
-        resp = admin_client.post(
-            "/v1/workflow/webhooks",
-            json={"tenant_id": "t", "flow_id": "wf_test"},
-        )
-        assert resp.status_code == 401
-
-    def test_create_webhook_wrong_token_returns_401(self, admin_client):
-        """Wrong X-Admin-Token → 401."""
-        resp = admin_client.post(
-            "/v1/workflow/webhooks",
-            json={"tenant_id": "t", "flow_id": "wf_test"},
-            headers={"X-Admin-Token": "wrong-token"},
-        )
-        assert resp.status_code == 401
-
-    def test_list_webhooks_returns_records(self, admin_client):
-        """GET /v1/workflow/webhooks → list of webhook objects."""
-        app.state.pool = make_pool(fetch_result=[fake_webhook(), fake_webhook()])
-        resp = admin_client.get(
-            "/v1/workflow/webhooks?tenant_id=tenant-test",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 200
-        assert len(resp.json()) == 2
-
-    def test_list_webhooks_active_filter(self, admin_client):
-        """GET /v1/workflow/webhooks?active=true → filtered list."""
-        app.state.pool = make_pool(fetch_result=[fake_webhook()])
-        resp = admin_client.get(
-            "/v1/workflow/webhooks?tenant_id=tenant-test&active=true",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 200
-        assert len(resp.json()) == 1
-
-    def test_get_webhook_returns_detail(self, admin_client):
-        """GET /v1/workflow/webhooks/{id} → webhook detail."""
-        app.state.pool = make_pool(fetchrow_result=fake_webhook())
-        resp = admin_client.get(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["flow_id"] == "wf_approval_v1"
-
-    def test_get_webhook_not_found_returns_404(self, admin_client):
-        """GET /v1/workflow/webhooks/{id} with unknown id → 404."""
-        app.state.pool = make_pool(fetchrow_result=None)
-        resp = admin_client.get(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 404
-
-    def test_patch_webhook_deactivates(self, admin_client):
-        """PATCH /v1/workflow/webhooks/{id} → active=False in response."""
-        inactive_wh = fake_webhook({"active": False})
-        # fetchrow called twice: db_get_webhook + db_update_webhook
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(side_effect=[fake_webhook(), inactive_wh])
-        pool.fetchval = AsyncMock(return_value=1)
-        app.state.pool = pool
-
-        resp = admin_client.patch(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}",
-            json={"active": False},
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["active"] is False
-
-    def test_rotate_token_returns_new_plain_token(self, admin_client):
-        """POST /v1/workflow/webhooks/{id}/rotate → response includes fresh plain token."""
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(side_effect=[fake_webhook(), fake_webhook()])
-        pool.fetchval = AsyncMock(return_value=1)
-        app.state.pool = pool
-
-        resp = admin_client.post(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}/rotate",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "token" in data
-        assert data["token"].startswith("plughub_wh_")
-
-    def test_delete_webhook_returns_204(self, admin_client):
-        """DELETE /v1/workflow/webhooks/{id} → 204 No Content."""
-        pool = MagicMock()
-        # db_delete_webhook calls pool.execute() and checks result == "DELETE 1"
-        pool.execute  = AsyncMock(return_value="DELETE 1")
-        pool.fetchrow = AsyncMock(return_value=None)
-        pool.fetchval = AsyncMock(return_value=1)
-        app.state.pool = pool
-
-        resp = admin_client.delete(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 204
-
-    def test_delete_webhook_not_found_returns_404(self, admin_client):
-        """DELETE /v1/workflow/webhooks/{id} for unknown id → 404."""
-        pool = MagicMock()
-        # "DELETE 0" means no row was matched → router raises 404
-        pool.execute  = AsyncMock(return_value="DELETE 0")
-        pool.fetchrow = AsyncMock(return_value=None)
-        app.state.pool = pool
-
-        resp = admin_client.delete(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 404
-
-
-# ─────────────────────────────────────────────
-# TestWebhookTrigger
-# ─────────────────────────────────────────────
-
-class TestWebhookTrigger:
-    """Public trigger endpoint: POST /v1/workflow/webhook/{id}."""
-
-    def _pool_for_valid_trigger(self):
+    def test_as_oito_rotas_respondem_404(self, client):
         """
-        Pool that returns a valid active webhook on token-hash lookup, then
-        an instance row on db_create_instance, then None on db_record_delivery.
+        404 = a rota nao esta REGISTRADA. Mandamos o header de admin de proposito:
+        se alguma voltasse apenas GATEADA, ela responderia 401/403/200 e nao 404 —
+        e o teste distingue "removida" de "fechada", que sao fatos diferentes.
         """
-        webhook_row  = fake_webhook()   # active=True
-        instance_row = fake_row()       # new WorkflowInstance
+        for metodo, url in self.ROTAS_MORTAS:
+            r = getattr(client, metodo)(url, headers={"X-Admin-Token": "qualquer"})
+            assert r.status_code == 404, f"{metodo.upper()} {url} respondeu {r.status_code}"
 
-        pool = MagicMock()
-        # Calls in order: db_get_webhook_by_token_hash → db_create_instance → db_record_delivery
-        pool.fetchrow  = AsyncMock(side_effect=[webhook_row, instance_row, fake_delivery()])
-        pool.execute   = AsyncMock(return_value="UPDATE 1")
-        pool.fetchval  = AsyncMock(return_value=1)
-        return pool
-
-    def test_valid_token_returns_202_and_instance(self, client):
-        """Correct X-Webhook-Token → 202 with instance_id."""
-        app.state.pool = self._pool_for_valid_trigger()
-
-        with patch("plughub_workflow_api.webhooks.verify_token", return_value=True):
-            resp = client.post(
-                f"/v1/workflow/webhook/{WEBHOOK_ID}",
-                json={"customer_id": "cust-123"},
-                headers={"X-Webhook-Token": PLAIN_TOKEN},
-            )
-
-        assert resp.status_code == 202
-        data = resp.json()
-        assert data["status"]  == "accepted"
-        assert "instance_id"   in data
-        assert data["flow_id"] == "wf_approval_v1"
-
-    def test_missing_token_returns_401(self, client):
-        """No X-Webhook-Token header → 401."""
-        app.state.pool = make_pool()
-        resp = client.post(f"/v1/workflow/webhook/{WEBHOOK_ID}", json={})
-        assert resp.status_code == 401
-
-    def test_invalid_token_returns_401(self, client):
-        """X-Webhook-Token not found in DB → 401."""
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=None)   # token hash not found
-        app.state.pool = pool
-
-        resp = client.post(
-            f"/v1/workflow/webhook/{WEBHOOK_ID}",
-            json={},
-            headers={"X-Webhook-Token": "plughub_wh_invalid"},
-        )
-        assert resp.status_code == 401
-
-    def test_inactive_webhook_returns_403_and_logs_delivery(self, client):
-        """Active=False webhook → 403; delivery record is written with status_code=403."""
-        inactive_wh = fake_webhook({"active": False})
-        delivery_row = fake_delivery({"status_code": 403})
-
-        pool = MagicMock()
-        # db_get_webhook_by_token_hash → inactive webhook
-        # db_record_delivery (403 log) → delivery row (execute is called for trigger_count update)
-        pool.fetchrow  = AsyncMock(side_effect=[inactive_wh, delivery_row])
-        pool.execute   = AsyncMock(return_value="UPDATE 1")
-        app.state.pool = pool
-
-        with patch("plughub_workflow_api.webhooks.verify_token", return_value=True):
-            resp = client.post(
-                f"/v1/workflow/webhook/{WEBHOOK_ID}",
-                json={},
-                headers={"X-Webhook-Token": PLAIN_TOKEN},
-            )
-
-        assert resp.status_code == 403
-        # The delivery INSERT must have been called
-        pool.fetchrow.assert_awaited()
-
-    def test_body_merged_with_context_override(self, client):
+    def test_controle_POSITIVO_o_app_continua_servindo(self, client):
         """
-        Webhook context_override={'env': 'prod'} + body {'customer_id': 'c1'}
-        → pipeline_state.contact_context should contain both keys.
-        The db_create_instance call receives the merged dict.
+        Sem este controle, um app que falhasse ao carregar daria 404 em TUDO e o
+        teste acima passaria pelo motivo errado — o modo de falha que a § Postura
+        chama de "teste que nao pode reprovar".
         """
-        import json as _json
-
-        wh_with_override = fake_webhook({"context_override": '{"env": "prod"}'})
-        instance_row     = fake_row()
-        delivery_row     = fake_delivery()
-
-        captured_payload: dict = {}
-
-        async def capture_create(pool_arg, payload):
-            captured_payload.update(payload)
-            return {
-                "id":             str(uuid4()),
-                "tenant_id":      "tenant-test",
-                "flow_id":        "wf_approval_v1",
-                "installation_id": "inst-001",
-                "organization_id": "org-001",
-                "session_id":     None,
-                "origin_session_id": None,
-                "pool_id":        None,
-                "status":         "active",
-                "current_step":   None,
-                "pipeline_state": _json.dumps(payload.get("pipeline_state", {})),
-                "suspend_reason": None,
-                "resume_token":   None,
-                "resume_expires_at": None,
-                "suspended_at":   None,
-                "resumed_at":     None,
-                "completed_at":   None,
-                "created_at":     datetime.now(timezone.utc).isoformat(),
-                "metadata":       _json.dumps({}),
-            }
-
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(side_effect=[wh_with_override, delivery_row])
-        pool.execute  = AsyncMock(return_value="UPDATE 1")  # for trigger_count increment (2xx)
-        app.state.pool = pool
-
-        with patch("plughub_workflow_api.webhooks.verify_token", return_value=True), \
-             patch("plughub_workflow_api.router.db_create_instance",
-                   new=AsyncMock(side_effect=capture_create)):
-            resp = client.post(
-                f"/v1/workflow/webhook/{WEBHOOK_ID}",
-                json={"customer_id": "c1"},
-                headers={"X-Webhook-Token": PLAIN_TOKEN},
-            )
-
-        assert resp.status_code == 202
-        ctx = captured_payload["pipeline_state"]["contact_context"]
-        assert ctx.get("env")         == "prod"    # from context_override
-        assert ctx.get("customer_id") == "c1"      # from inbound body
+        r = client.get("/v1/workflow/instances?tenant_id=tenant-test")
+        assert r.status_code == 200, "a rota de leitura que SOBREVIVE parou de responder"
 
 
 # ─────────────────────────────────────────────
-# TestWebhookDeliveries
+# TestAdminGateFailsClosed — MOD-11: o portao administrativo deixou de falhar aberto
 # ─────────────────────────────────────────────
 
-class TestWebhookDeliveries:
-    """Delivery log endpoint: GET /v1/workflow/webhooks/{id}/deliveries."""
+class TestAdminGateFailsClosed:
+    """
+    `_require_admin` era `if settings.admin_token and x_admin_token != ...`, e o
+    `and` fazia do segredo AUSENTE um no-op. Medido no container: nenhuma env de
+    admin configurada, logo o portao nunca recusou ninguem.
+    """
 
-    def test_returns_delivery_records(self, admin_client):
-        """GET /deliveries → list of delivery dicts."""
-        pool = MagicMock()
-        # fetchrow ×1 for db_get_webhook, then fetch for db_list_deliveries
-        pool.fetchrow = AsyncMock(return_value=fake_webhook())
-        pool.fetch    = AsyncMock(return_value=[fake_delivery(), fake_delivery()])
-        app.state.pool = pool
+    def _client(self, admin_token: str):
+        app.state.pool     = make_pool()
+        app.state.settings = make_settings().model_copy(update={"admin_token": admin_token})
+        app.state.producer = None
+        return TestClient(app, raise_server_exceptions=False)
 
-        resp = admin_client.get(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}/deliveries",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
+    def test_sem_segredo_configurado_a_rota_fica_INDISPONIVEL(self):
+        """Era 200 para qualquer um. Agora 503 — falha de config, nao veredicto."""
+        r = self._client("").post("/admin/backfill-events?tenant_id=tenant-test")
+        assert r.status_code == 503, f"o portao voltou a falhar aberto: {r.status_code}"
+
+    def test_com_segredo_configurado_token_errado_e_401(self):
+        r = self._client("segredo-certo").post(
+            "/admin/backfill-events?tenant_id=tenant-test",
+            headers={"X-Admin-Token": "token-errado"},
         )
-        assert resp.status_code == 200
-        records = resp.json()
-        assert len(records) == 2
-        assert "status_code" in records[0]
-        assert "latency_ms"  in records[0]
+        assert r.status_code == 401
 
-    def test_returns_empty_list_when_no_deliveries(self, admin_client):
-        """No deliveries yet → empty list."""
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=fake_webhook())
-        pool.fetch    = AsyncMock(return_value=[])
-        app.state.pool = pool
-
-        resp = admin_client.get(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}/deliveries",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
+    def test_controle_POSITIVO_o_token_certo_ATRAVESSA(self):
+        """
+        Sem este caso, um portao que recusasse TODO MUNDO passaria nos dois acima —
+        o negativo sozinho passa pelo motivo errado (§ Security, 2026-08-27).
+        """
+        r = self._client("segredo-certo").post(
+            "/admin/backfill-events?tenant_id=tenant-test",
+            headers={"X-Admin-Token": "segredo-certo"},
         )
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-    def test_returns_404_for_unknown_webhook(self, admin_client):
-        """Webhook not found → 404 before listing deliveries."""
-        app.state.pool = make_pool(fetchrow_result=None)
-        resp = admin_client.get(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}/deliveries",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 404
-
-    def test_limit_capped_at_200(self, admin_client):
-        """limit=500 → silently capped at 200; request succeeds."""
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=fake_webhook())
-        pool.fetch    = AsyncMock(return_value=[])
-        app.state.pool = pool
-
-        resp = admin_client.get(
-            f"/v1/workflow/webhooks/{WEBHOOK_ID}/deliveries?limit=500",
-            headers={"X-Admin-Token": ADMIN_TOKEN},
-        )
-        assert resp.status_code == 200
+        assert r.status_code not in (401, 503), f"o token correto foi barrado: {r.status_code}"

@@ -1,6 +1,21 @@
 /**
- * hooks.ts — Workflows module
- * Wraps workflow-api (port 3800) via Vite proxy /v1/workflow
+ * hooks.ts — leitura de instâncias de workflow (workflow-api, porta 3800)
+ *
+ * ⚠️ **Este arquivo sobreviveu à MOD-11 de propósito, e o consumidor dele não
+ * mora mais aqui.** O módulo `workflows` foi encerrado em 2026-09-08 — as telas
+ * (`WorkflowEditorPage`, `WebhooksTab`) saíram e o módulo ABAC de mesmo nome saiu
+ * do catálogo, porque cada uma das suas funções já tinha sucessor gateado. O que
+ * ficou é a LEITURA, e quem a consome é o `MonitorTab` (`contacts.monitorar`),
+ * que é o sucessor do antigo `workflows.visualizar`.
+ *
+ * O que saiu junto e por quê:
+ *   · `triggerWorkflow` — único produtor vivo do proxy `/v1/workflow/trigger`, que
+ *     a tabela §7.9.1 do `adr-webhook-endpoint-single-registry` mede como **404
+ *     desde a Fase E**; a tela que o chamava endereçava SKILL, contra o invariante
+ *     *"o POOL é a unidade endereçável"*;
+ *   · o CRUD de webhooks — administrava `workflow.webhooks`, medida em **0 linhas**,
+ *     enquanto o registro que resolve endereço é o `ChannelEndpoint`
+ *     (`/v1/channel-endpoints`, tela `/config/channels`, campo `config.channels`).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { apiFetch } from '@/api/apiFetch'
@@ -101,28 +116,6 @@ export function useWorkflowInstance(
   }, [refresh, instanceId, intervalMs])
 
   return { instance, loading, refresh }
-}
-
-// ─── triggerWorkflow ──────────────────────────────────────────────────────────
-
-export async function triggerWorkflow(payload: {
-  tenant_id:       string
-  installation_id: string
-  organization_id: string
-  flow_id:         string
-  metadata?:       Record<string, unknown>
-  pipeline_state?: Record<string, unknown>
-}): Promise<WorkflowInstance> {
-  const res = await apiFetch('/v1/workflow/trigger', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload),
-  })
-  if (!res.ok) {
-    const body = await safeJson<{ detail?: string }>(res).catch(() => ({}))
-    throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
-  }
-  return safeJson(res)
 }
 
 // ─── useWorkflowInstancesFiltered — Arc 18 B2 analytics drill-down ───────────
@@ -226,145 +219,3 @@ export function useWorkflowInstanceSessions(
 // alguma aqui. Reapontar teria trocado `HTTP 410` por `HTTP 404`.
 //
 // Sonda: `infra/test/probe_workflow_cancel_callers.sh`. Detalhe: TODO § "Lacuna 4b".
-
-// ─── Webhook types ────────────────────────────────────────────────────────────
-
-export interface Webhook {
-  id:                string
-  tenant_id:         string
-  flow_id:           string
-  description:       string
-  token_prefix:      string
-  active:            boolean
-  trigger_count:     number
-  last_triggered_at: string | null
-  context_override:  Record<string, unknown>
-  created_at:        string
-  updated_at:        string
-}
-
-export interface WebhookDelivery {
-  id:           string
-  webhook_id:   string
-  tenant_id:    string
-  triggered_at: string
-  status_code:  number
-  payload_hash: string
-  instance_id:  string | null
-  error:        string | null
-  latency_ms:   number | null
-}
-
-// ─── useWebhooks ──────────────────────────────────────────────────────────────
-
-export function useWebhooks(
-  tenantId:   string,
-  adminToken: string,
-  intervalMs  = 15_000,
-): { webhooks: Webhook[]; loading: boolean; refresh: () => void } {
-  const [webhooks, setWebhooks] = useState<Webhook[]>([])
-  const [loading,  setLoading]  = useState(false)
-
-  const refresh = useCallback(async () => {
-    if (!tenantId || !adminToken) return
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ tenant_id: tenantId, limit: '100' })
-      const res = await apiFetch(`/v1/workflow/webhooks?${params}`, {
-        headers: { 'X-Admin-Token': adminToken },
-      })
-      if (res.ok) setWebhooks(await safeJson<Webhook[]>(res))
-    } catch { /* stale */ }
-    finally { setLoading(false) }
-  }, [tenantId, adminToken])
-
-  useEffect(() => {
-    refresh()
-    const id = setInterval(refresh, intervalMs)
-    return () => clearInterval(id)
-  }, [refresh, intervalMs])
-
-  return { webhooks, loading, refresh }
-}
-
-// ─── useWebhookDeliveries ─────────────────────────────────────────────────────
-
-export function useWebhookDeliveries(
-  webhookId:  string | null,
-  adminToken: string,
-  limit       = 20,
-): { deliveries: WebhookDelivery[]; loading: boolean; refresh: () => void } {
-  const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([])
-  const [loading,    setLoading]    = useState(false)
-
-  const refresh = useCallback(async () => {
-    if (!webhookId || !adminToken) return
-    setLoading(true)
-    try {
-      const res = await apiFetch(
-        `/v1/workflow/webhooks/${encodeURIComponent(webhookId)}/deliveries?limit=${limit}`,
-        { headers: { 'X-Admin-Token': adminToken } },
-      )
-      if (res.ok) setDeliveries(await safeJson<WebhookDelivery[]>(res))
-    } catch { /* stale */ }
-    finally { setLoading(false) }
-  }, [webhookId, adminToken, limit])
-
-  useEffect(() => { refresh() }, [refresh])
-
-  return { deliveries, loading, refresh }
-}
-
-// ─── Webhook mutations ────────────────────────────────────────────────────────
-
-export async function createWebhookApi(
-  tenantId:        string,
-  flowId:          string,
-  description:     string,
-  contextOverride: Record<string, unknown>,
-  adminToken:      string,
-): Promise<{ webhook: Webhook; token: string }> {
-  const res = await apiFetch('/v1/workflow/webhooks', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
-    body: JSON.stringify({ tenant_id: tenantId, flow_id: flowId, description, context_override: contextOverride }),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const data = await safeJson<Webhook & { token: string }>(res)
-  const { token, ...webhook } = data
-  return { webhook: webhook as Webhook, token }
-}
-
-export async function patchWebhookApi(
-  webhookId:  string,
-  updates:    { active?: boolean; description?: string; context_override?: Record<string, unknown> },
-  adminToken: string,
-): Promise<Webhook> {
-  const res = await apiFetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}`, {
-    method:  'PATCH',
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
-    body:    JSON.stringify(updates),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return safeJson<Webhook>(res)
-}
-
-export async function rotateWebhookTokenApi(
-  webhookId:  string,
-  adminToken: string,
-): Promise<{ webhook: Webhook; token: string }> {
-  const res = await apiFetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}/rotate`, {
-    method: 'POST', headers: { 'X-Admin-Token': adminToken },
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const data = await safeJson<Webhook & { token: string }>(res)
-  const { token, ...webhook } = data
-  return { webhook: webhook as Webhook, token }
-}
-
-export async function deleteWebhookApi(webhookId: string, adminToken: string): Promise<void> {
-  const res = await apiFetch(`/v1/workflow/webhooks/${encodeURIComponent(webhookId)}`, {
-    method: 'DELETE', headers: { 'X-Admin-Token': adminToken },
-  })
-  if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
-}

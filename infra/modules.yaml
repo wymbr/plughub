@@ -180,56 +180,41 @@ modules:
           admin: read_write
           supervisor: read_write
 
-  # ── Automação de Fluxos ───────────────────────────────────────────────────────
-  - module_id: workflows
-    label: Automação de Fluxos
-    icon: "⚡"
-    nav_path: /workflows
-    permission_schema:
-      operacao:
-        label: Acesso operacional (Editor, Monitor, Calendário)
-        domain: [none, read_only, read_write]
-        scopable: false
-        default: none
-        role_defaults:
-          admin: read_write
-      visualizar:
-        label: Visualizar instâncias e relatórios de workflow
-        domain: [none, read_only]
-        scopable: false
-        default: none
-        role_defaults:
-          admin: read_only
-          business: read_only
-      cancelar:
-        label: Cancelar instâncias de workflow
-        domain: [none, read_write]
-        scopable: false
-        default: none
-        role_defaults:
-          admin: read_write
-      webhooks:
-        label: Gerenciar webhooks de disparo
-        domain: [none, read_write]
-        scopable: false
-        default: none
-        role_defaults:
-          admin: read_write
-      # Arc 16 Phase C — Tier 1 poller ABAC fields
-      journey_read:
-        label: Visualizar journeys suspensas de um pool (journey_list_suspended)
-        domain: [none, read_only]
-        scopable: false
-        default: none
-        role_defaults:
-          admin: read_only
-      journey_resume:
-        label: Retomar journeys suspensas (journey_resume)
-        domain: [none, read_write]
-        scopable: false
-        default: none
-        role_defaults:
-          admin: read_write
+  # ── `workflows` REMOVIDO em 2026-09-08 (MOD-11) ─────────────────────────────
+  #
+  # Eram seis campos com ZERO consumidores (medido por varredura do repositorio
+  # inteiro): `operacao`, `visualizar`, `cancelar`, `webhooks`, `journey_read` e
+  # `journey_resume`. Nao foi corte de granularidade nem faxina de orfaos: a
+  # modularizacao inteira foi SUPERADA, e cada funcao tem hoje um sucessor que
+  # ja e gateado por outro campo. Removido para que nao exista uma segunda casa
+  # concedendo o que outro campo decide.
+  #
+  #   operacao       -> os tres nomes do rotulo se separaram: editor em
+  #                     `/agent-flow/editor` (`skill_flows.operacao`), monitor em
+  #                     `/flow/monitor` (`contacts.monitorar`) e calendario em
+  #                     `/monitor/schedules` (`scheduler.operacao`) +
+  #                     `/config/schedules` e `/config/calendars` (`config.calendars`)
+  #   visualizar     -> Arc 19 Fase E: workflow e sessao `channel=webhook`, com
+  #                     filtro de status `suspended` em `/analise/sessions`
+  #                     (`contacts.visualizar`) e no Monitor (`contacts.monitorar`)
+  #   cancelar       -> a rota `/instances/{id}/cancel` foi APAGADA em 2026-08-07;
+  #                     encerra-se por SESSAO em `POST /api/force-complete/{sid}`
+  #                     (`agent_assist.supervisionar`, AUT-38)
+  #   webhooks       -> registro unico e o `ChannelEndpoint` do agent-registry
+  #                     (`/v1/channel-endpoints`, tela `/config/channels`,
+  #                     `config.channels`). O ADR `adr-webhook-endpoint-single-registry`
+  #                     ja carimbava a tabela antiga como `legacy_token` (D6), e ela
+  #                     foi medida em ZERO linhas
+  #   journey_read   -> `approvals.operacao` ("ver e reivindicar tarefas de aprovacao")
+  #                     — a fila pull de workflow no Console
+  #   journey_resume -> `approvals.decide` ("aprovar / recusar / encaminhar"), que e
+  #                     o gate VIVO do ingress de resume (`webhook.py:991`)
+  #
+  # Os dois `journey_*` nomeavam tools (`journey_list_suspended`, `journey_resume`)
+  # que nao existem desde a Fase F do Arc 19 (2026-05-28).
+  #
+  # ⚠️ Nao recriar sem consumidor. Campo declarado que nao gateia nada e pior que
+  # campo ausente: quem concede acredita ter negado.
 
   # ── Campanhas ─────────────────────────────────────────────────────────────────
   - module_id: campaigns

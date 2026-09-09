@@ -10,7 +10,6 @@
   "moduleNames": {
     "evaluation": "Quality Evaluation",
     "contacts": "Service & Contacts",
-    "workflows": "Workflows",
     "campaigns": "Collection Campaigns",
     "agent_assist": "Console (Agent Assist)",
     "billing": "Billing",
@@ -115,8 +114,7 @@
     "config": "Configuration",
     "registry": "Resources",
     "skill_flows": "Skill Flows",
-    "campaigns": "Campaigns",
-    "workflows": "Workflows"
+    "campaigns": "Campaigns"
   },
   "actions": {
     "view": "View",
