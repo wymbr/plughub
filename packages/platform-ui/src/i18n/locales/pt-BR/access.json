@@ -20,6 +20,71 @@
     "outbound": "Outbound",
     "audit": "Auditoria LGPD"
   },
+  "fieldNames": {
+    "evaluation": {
+      "contestar": "Contestar avaliações recebidas",
+      "revisar": "Revisar e decidir sobre avaliações",
+      "contestar_replica": "Contestar avaliações (réplica - round 2)",
+      "contestar_treplica": "Contestar avaliações (tréplica - round 3)",
+      "revisar_replica": "Revisar réplica (round 2)",
+      "revisar_treplica": "Revisar tréplica (round 3)",
+      "curar": "Curar e calibrar avaliações",
+      "report": "Visualizar relatórios de qualidade",
+      "formularios": "Gerenciar formulários e campanhas",
+      "gerir_rubrica": "Gerenciar rubrica/prompt do avaliador"
+    },
+    "contacts": {
+      "monitorar": "Observar a operacao (Monitor de sessoes, agentes, pools)",
+      "visualizar": "Visualizar contatos (listas, agregados e traços de execução)",
+      "transcricao": "Ler a transcrição de um contato (diálogo verbatim)",
+      "exportar": "Exportar dados de contatos"
+    },
+    "campaigns": {
+      "visualizar": "Visualizar campanhas e resultados",
+      "gerenciar": "Criar e gerenciar campanhas"
+    },
+    "agent_assist": {
+      "atender": "Receber e atender contatos (Console, Agent Assist, fila de trabalho)",
+      "supervisionar": "Monitorar e intervir em sessões ativas"
+    },
+    "billing": {
+      "visualizar": "Visualizar fatura e recursos",
+      "gerenciar": "Gerenciar recursos e ativar reservas"
+    },
+    "config": {
+      "platform": "Configurações gerais (namespaces, valores)",
+      "dashboards": "Dashboards (templates e catálogo por papel)",
+      "calendars": "Calendários e feriados",
+      "dialog_forms": "Formulários de diálogo (DialogForms)",
+      "resources": "Recursos de roteamento (Pools, competências, contas de LLM)",
+      "channels": "Configuração de canais e credenciais",
+      "users": "Gestão de usuários (criar, editar dados, ativar/desativar)",
+      "permissions": "Conceder permissões (papéis, módulos, escopo de pools)",
+      "masking": "Configuração de mascaramento de dados (catálogo de tipos)",
+      "context_map": "Cadastro de campos do ContextStore (o mapa)"
+    },
+    "skill_flows": {
+      "operacao": "Acesso operacional (Editor, Monitor, Deploy)",
+      "visualizar": "Visualizar relatórios de agent flow",
+      "editar": "Criar e editar skill flows"
+    },
+    "approvals": {
+      "operacao": "Ver e reivindicar tarefas de aprovação",
+      "decide": "Decidir (aprovar / recusar / encaminhar)"
+    },
+    "scheduler": {
+      "configurar": "Criar e editar agendas",
+      "operacao": "Operar agendas no Monitor (disparar, pausar, cancelar)"
+    },
+    "outbound": {
+      "configurar": "Criar e editar mailings e campanhas",
+      "operacao": "Monitorar entregas"
+    },
+    "audit": {
+      "sessions": "Consultar trilha de acesso a sessões",
+      "mcp_calls": "Consultar trilha de chamadas MCP"
+    }
+  },
   "permForm": {
     "access": {
       "none": "Sem acesso",

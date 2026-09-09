@@ -1,5 +1,89 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (1) — AUT-42: metade do cartão de permissões falava outra língua
+
+### 1 · O defeito, como o dono o viu
+
+`/config/access` → Edit User, com a interface em **EN**. O cabeçalho do bloco dizia
+*"Platform Configuration"* — inglês, correto — e os dez campos logo abaixo diziam
+*"Gestão de usuários (criar, editar dados, ativar/desativar)"*, *"Configuração de
+canais e credenciais"*, *"Calendários e feriados"*. **O mesmo cartão, duas línguas.**
+
+A causa é de uma linha. O nome do MÓDULO já passava por i18n desde sempre:
+
+```tsx
+{t(`moduleNames.${mod.module_id}`, { defaultValue: mod.label })}
+```
+
+e o rótulo do CAMPO, oito linhas acima no mesmo arquivo, não passava por nada:
+
+```tsx
+<div className="text-sm font-medium text-dark">{schema.label}</div>
+```
+
+`schema.label` é o rótulo **cru da API**, servido do `infra/modules.yaml`, onde os
+rótulos são escritos em português — o que a Language Rule permite, porque ali eles
+são *display* e documentação de quem edita a política. O erro não é o YAML estar em
+português: é a tela lê-lo como se fosse texto de interface.
+
+### 2 · A chave é (módulo, campo), nunca só o campo
+
+Entraram **41** chaves `fieldNames.<módulo>.<campo>` nos dois locales. O par importa:
+`visualizar` existe em **quatro** módulos (`contacts`, `campaigns`, `billing`,
+`skill_flows`) com sentidos diferentes, e `operacao` em três. Uma chave só pelo nome
+do campo faria um módulo herdar o rótulo do vizinho — pior que o defeito original,
+porque estaria em inglês e errado.
+
+O `defaultValue` **fica**, e é decisão: campo novo no catálogo aparece com o rótulo
+do YAML — degradação honesta — em vez de mostrar a chave crua ao operador.
+
+⚠️ **A ficha dizia 44 campos; são 41.** Ela foi escrita antes de a MOD-11 remover os
+seis de `workflows`, ontem.
+
+### 3 · Por que a paridade EN × pt-BR não pegaria isto
+
+Existe `probe_i18n_contacts_parity.sh`, que compara os dois locales **entre si**.
+Ele não veria nada: antes da correção **nenhum dos dois** tinha `fieldNames`, então
+estavam em paridade perfeita — sobre uma ausência total. E depois da correção
+seguiria verde no dia em que o catálogo ganhasse um campo que faltasse nos dois.
+
+O gate novo mede **CATÁLOGO → locale**, não locale → locale. É a regra de método do
+`CLAUDE.md` outra vez: *um censo desenhado para um eixo não prova nada sobre o eixo
+vizinho*.
+
+### 4 · O gate, e os dois ramos que nasceram errados
+
+`probe_abac_field_labels_i18n.sh`, cinco ramos — **A/B** todo campo do catálogo tem
+rótulo nos dois locales · **C** nenhuma chave órfã · **D** o formulário RESOLVE o
+rótulo · **E** o nome do módulo.
+
+⚠️ **O ramo D é o que impede o gate decorativo.** Sem ele, os dois locales podiam
+estar completos e a tela continuar em português: cobertura de tradução não é
+evidência de que alguém a lê.
+
+⚠️ **O ramo E entrou porque a metade de cima estava completa por ACIDENTE.** Os 11
+nomes de módulo batiam com o catálogo — mas só porque a MOD-11 tinha removido a
+chave órfã de `workflows` na véspera. Nada impunha isso; agora impõe.
+
+**Dois ramos nasceram errados e foram consertados antes de valerem:**
+
+⚠️ **O D reprovou no comentário que documenta esta própria correção.** Ele lia o
+fonte linha a linha procurando `schema.label` fora de um `defaultValue`, e o
+comentário que eu tinha acabado de escrever cita o símbolo. É literalmente o que a
+D14 registra — *"grep contaria o comentário que documenta a migração"*. Hoje ele
+tira comentários antes de julgar.
+
+⚠️ **Um mutante saiu no-op, e por pouco valeu como prova.** A mutação do ramo E
+buscava `"audit": "Audit…` e o valor real é `"LGPD Audit"`: a string não casou, o
+probe seguiu verde, e a leitura óbvia era *"o ramo E está cego"*. **Mutante que não
+muta prova exatamente nada** — a mesma família do teste que não pode reprovar, do
+lado do instrumento que o testa. Refeito com `assert` sobre o alvo antes de
+substituir; aí o ramo pegou.
+
+**Gates**: `probe_abac_field_labels_i18n.sh` (5 ramos, 5 mutantes) ·
+`probe_i18n_duplicate_keys.sh` (52 arquivos) · `probe_gates_manifest_coverage.sh`
+(124 AUTO) · `tsc --noEmit` do platform-ui.
+
 ## 2026-09-08 (15) — MOD-11: o módulo `workflows` não estava órfão, estava SUPERADO
 
 ### 1 · A ficha oferecia duas saídas, e a medição escolheu

@@ -109,12 +109,14 @@ function ScopeInput({
 // ── FieldRow ──────────────────────────────────────────────────────────────────
 
 function FieldRow({
+  moduleId,
   fieldKey,
   schema,
   fieldConfig,
   onChange,
   readOnly,
 }: {
+  moduleId: string
   fieldKey: string
   schema: ModuleFieldSchema
   fieldConfig: ModuleFieldConfig
@@ -128,7 +130,17 @@ function FieldRow({
     <div className="py-3 border-b last:border-0">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-dark">{schema.label}</div>
+          {/* AUT-42: o rotulo vinha CRU da API (`schema.label`), em portugues, vindo do
+              `infra/modules.yaml` — a tela em ingles mostrava os 41 campos em portugues.
+              O nome do MODULO ja resolvia por i18n desde sempre (ver o `moduleNames`
+              abaixo), entao as duas metades do mesmo cartao discordavam de idioma.
+              A chave e (modulo, campo) e nunca so o campo: `visualizar` existe em
+              `contacts`, `campaigns`, `billing` e `skill_flows` com sentidos diferentes.
+              O `defaultValue` mantem o catalogo como FALLBACK — campo novo aparece com o
+              rotulo do YAML, nunca com a chave crua. */}
+          <div className="text-sm font-medium text-dark">
+            {t(`fieldNames.${moduleId}.${fieldKey}`, { defaultValue: schema.label })}
+          </div>
           <div className="text-xs text-muted mt-0.5 font-mono">{fieldKey}</div>
         </div>
         <div className="w-52 shrink-0">
@@ -211,6 +223,7 @@ function ModuleSection({
             return (
               <FieldRow
                 key={fieldKey}
+                moduleId={mod.module_id}
                 fieldKey={fieldKey}
                 schema={fieldSchema}
                 fieldConfig={current}

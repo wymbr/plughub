@@ -20,6 +20,71 @@
     "outbound": "Outbound",
     "audit": "LGPD Audit"
   },
+  "fieldNames": {
+    "evaluation": {
+      "contestar": "Contest received evaluations",
+      "revisar": "Review and decide on evaluations",
+      "contestar_replica": "Contest evaluations (reply — round 2)",
+      "contestar_treplica": "Contest evaluations (rejoinder — round 3)",
+      "revisar_replica": "Review reply (round 2)",
+      "revisar_treplica": "Review rejoinder (round 3)",
+      "curar": "Curate and calibrate evaluations",
+      "report": "View quality reports",
+      "formularios": "Manage forms and campaigns",
+      "gerir_rubrica": "Manage the evaluator rubric/prompt"
+    },
+    "contacts": {
+      "monitorar": "Watch the operation (session, agent and pool monitor)",
+      "visualizar": "View contacts (lists, aggregates and execution traces)",
+      "transcricao": "Read a contact's transcript (verbatim dialogue)",
+      "exportar": "Export contact data"
+    },
+    "campaigns": {
+      "visualizar": "View campaigns and results",
+      "gerenciar": "Create and manage campaigns"
+    },
+    "agent_assist": {
+      "atender": "Receive and handle contacts (Console, Agent Assist, work queue)",
+      "supervisionar": "Monitor and intervene in active sessions"
+    },
+    "billing": {
+      "visualizar": "View invoice and resources",
+      "gerenciar": "Manage resources and activate reserves"
+    },
+    "config": {
+      "platform": "General settings (namespaces, values)",
+      "dashboards": "Dashboards (templates and per-role catalog)",
+      "calendars": "Calendars and holidays",
+      "dialog_forms": "Dialog forms (DialogForms)",
+      "resources": "Routing resources (pools, skills, LLM accounts)",
+      "channels": "Channel configuration and credentials",
+      "users": "User management (create, edit details, activate/deactivate)",
+      "permissions": "Grant permissions (roles, modules, pool scope)",
+      "masking": "Data masking configuration (type catalog)",
+      "context_map": "ContextStore field registry (the map)"
+    },
+    "skill_flows": {
+      "operacao": "Operational access (Editor, Monitor, Deploy)",
+      "visualizar": "View agent flow reports",
+      "editar": "Create and edit skill flows"
+    },
+    "approvals": {
+      "operacao": "View and claim approval tasks",
+      "decide": "Decide (approve / reject / forward)"
+    },
+    "scheduler": {
+      "configurar": "Create and edit schedules",
+      "operacao": "Operate schedules in the Monitor (trigger, pause, cancel)"
+    },
+    "outbound": {
+      "configurar": "Create and edit mailings and campaigns",
+      "operacao": "Monitor deliveries"
+    },
+    "audit": {
+      "sessions": "Query the session access trail",
+      "mcp_calls": "Query the MCP call trail"
+    }
+  },
   "permForm": {
     "access": {
       "none": "No access",
