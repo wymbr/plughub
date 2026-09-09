@@ -1,5 +1,89 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (8) — RET-16: a dívida foi a zero, e o helper virou pacote
+
+### 1 · A decisão de casa mudou, e o que mudou foi o NÚMERO
+
+Na RET-13 a escolha foi **copiar** o supervisor de tasks de boot em 4 serviços,
+com argumento medido: a regra de *"um verificador"* existe para quem **DECIDE** (o
+JWT, em `py-authz`), e um alarme não decide nada — o que não pode divergir é o
+comportamento, e quem o cobra é o gate.
+
+Esse argumento continua de pé. O que a RET-16 mudou foi a aritmética: a RET-15
+achou 10 disparos sem dono no channel-gateway e o censo do repositório achou mais
+22 em outros serviços. **Seis consumidores para as mesmas 30 linhas** — e cópia com
+seis casas não é decisão, é dívida. O precedente é literal: `py-authz` nasceu
+quando havia **seis** implementações de JWT que já divergiam em seis pontos.
+
+Hoje a casa é **`packages/py-tasks`** (`disparar`/`vivas`, sem dependências — só
+`asyncio` e `logging`, porque uma dependência ali entraria em seis imagens de uma
+vez). O `channel-gateway/tarefas.py` criado ontem na RET-15 **foi removido**: manter
+os dois seria justamente o defeito que esta ficha fecha.
+
+⚠️ **O supervisor de BOOT continua copiado, e isso é escolha declarada** (RET-17):
+mover agora seria refatorar quatro serviços onde nenhum defeito foi medido, e
+*simetria* não é razão medida.
+
+### 2 · 21 disparos migrados; o que sobrou é isento, não dívida
+
+| serviço | disparos | observação |
+|---|---|---|
+| routing-engine | 17 | inclui `_process_message` — uma task **por mensagem Kafka** |
+| rules-engine | 2 | |
+| ai-gateway | 1 | |
+| evaluation-api | 1 | |
+| conversation-writer | 1 | **ISENTO** — fóssil em quarentena declarada |
+
+O `task_ownership.debt` passou a distinguir **`!isento`** de dívida, e a dívida foi
+a **zero**. Não é firula: *"decidimos não migrar"* e *"ainda não migramos"* são
+fatos diferentes, e juntá-los faria a dívida herdar a tranquilidade da decisão — a
+mesma separação que `_SCOPE_EXEMPT` × `_SCOPE_DEBT` faz na analytics-api. O fóssil
+não é dívida porque migrá-lo **contraria a quarentena**: o pacote não roda em
+compose nenhum, e o rótulo existe para que o erro fique visível e reversível.
+
+### 3 · Duas regressões minhas, ambas nos TESTES
+
+O routing-engine ficou 2 vermelhos, e os dois eram espiões de
+`asyncio.create_task`:
+
+1. `side_effect=lambda coro: ...` não aceitava o `name=` que `disparar` passa;
+2. corrigido isso, o lambda devolvia `None` (retorno de `list.append`) e o produto
+   registra um done-callback **no retorno**.
+
+Corrigi o **espião**, não o produto: um mock que dita a assinatura do que espia
+mede o **formato da chamada**, não o fato — e adaptar o produto ao mock é deixar o
+mock criar a realidade, que é o corolário VOZ-03 do `CLAUDE.md`.
+
+⚠️ E o diagnóstico começou certo por um detalhe barato: **comparar com a medição do
+mesmo serviço**. Sem isso, "2 failed" num serviço que eu acabara de tocar teria a
+leitura óbvia de defeito de produto.
+
+### 4 · Controle positivo ao vivo, no caminho mais crítico
+
+Falha injetada em `_process_message` — a task que nasce **por mensagem Kafka** no
+roteador:
+
+```
+ERROR plughub.tasks: tarefa 'process-message' MORREU: falha injetada —
+      o trabalho que ela carregava NAO aconteceu.
+
+$ docker compose ps   →   routing-engine   running   healthy
+```
+
+Antes desta ficha, essa exceção não apareceria em lugar nenhum, e a mensagem
+sumiria com o roteador saudável.
+
+**Gates**: `probe_background_task_supervision.sh` (§ B 16/16 · § C dívida **zero**,
+um isento nomeado) · suítes nas IMAGENS: py-tasks **5**, channel-gateway **771**
+(+5 movidos para a lib = os 776 de ontem), routing-engine **150**, rules-engine
+**27**, ai-gateway **182**, evaluation-api **237** · cinco serviços de pé e
+saudáveis, com um contato real atravessando o roteador antes e depois.
+
+⚠️ **A imagem do rules-engine não tem pytest** — a suíte dele só rodou com um
+`pip install` efêmero dentro do container. É a dívida que o
+`probe_python_suites.sh` já nomeia (declaração × imagem × execução), não regressão
+desta ficha; ficou registrada aqui porque é a segunda vez que ela cobra pedágio.
+
 ## 2026-09-09 (7) — RET-15: a tarefa efêmera não tinha dono
 
 ### 1 · São DOIS danos, e a ficha só via um

@@ -29,7 +29,7 @@ from aiokafka import AIOKafkaConsumer
 
 from .adapters.base import ChannelAdapter
 from .config import Settings
-from .tarefas import disparar
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.outbound")
 

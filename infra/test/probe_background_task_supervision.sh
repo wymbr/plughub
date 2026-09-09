@@ -100,7 +100,12 @@ VEREDICTO=$(printf '%s\n' "$SOLTAS" | awk -F'\t' -v debt="$DEBT" '
   BEGIN {
     while ((getline linha < debt) > 0) {
       if (linha ~ /^[[:space:]]*#/ || linha ~ /^[[:space:]]*$/) continue
-      split(linha, c, /[[:space:]]+/); teto[c[1]] = c[2]
+      split(linha, c, /[[:space:]]+/)
+      svc = c[1]
+      # `!servico` = ISENTO por decisao (sem gatilho); sem `!` = DIVIDA (com gatilho).
+      # Junta-los faria a divida herdar a tranquilidade da decisao.
+      if (substr(svc, 1, 1) == "!") { svc = substr(svc, 2); isento[svc] = 1 }
+      teto[svc] = c[2]
     }
   }
   NF { achado[$1]++; onde[$1] = onde[$1] sprintf("                   %s:%s  %s()\n", $1, $2, $3) }
@@ -113,6 +118,8 @@ VEREDICTO=$(printf '%s\n' "$SOLTAS" | awk -F'\t' -v debt="$DEBT" '
         printf "FALHA\t%s\t%d\t%d\n%s", s, achado[s], t, onde[s]
       } else if (achado[s] < t) {
         printf "FOLGA\t%s\t%d\t%d\n", s, achado[s], t
+      } else if (s in isento) {
+        printf "ISENTO\t%s\t%d\t%d\n", s, achado[s], t
       } else {
         printf "DIVIDA\t%s\t%d\t%d\n", s, achado[s], t
       }
@@ -125,6 +132,7 @@ RUIM=$?
 printf '%s\n' "$VEREDICTO" | while IFS=$'\t' read -r tipo svc n t; do
   case "$tipo" in
     DIVIDA) printf '               %-20s %2d solto(s)  \033[33mdivida declarada\033[0m\n' "$svc" "$n" ;;
+    ISENTO) printf '               %-20s %2d solto(s)  isento declarado (fossil, nao deployado)\n' "$svc" "$n" ;;
     FOLGA)  printf '               %-20s %2d solto(s)  teto e %s — \033[33mbaixe o teto\033[0m\n' "$svc" "$n" "$t" ;;
     FALHA)  printf '  \033[31mFALHA\033[0m        %-20s %2d solto(s), teto %s:\n' "$svc" "$n" "$t" ;;
     *)      [ -n "$tipo" ] && printf '%s\n' "$tipo" ;;
@@ -134,7 +142,7 @@ done
 if [ "$RUIM" != 0 ]; then
   printf '                 -> a excecao fica presa na Task, e sem referencia forte o\n'
   printf '                    CPython pode coleta-la no meio da execucao. Use\n'
-  printf '                    `disparar(coro, nome=...)`, em channel-gateway/tarefas.py\n'
+  printf '                    `disparar(coro, nome=...)`, em packages/py-tasks\n'
   printf '\n\033[31mVERMELHO\033[0m - ver secoes acima.\n'
   exit 1
 fi

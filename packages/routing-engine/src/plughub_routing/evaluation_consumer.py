@@ -32,6 +32,7 @@ import yaml
 from aiokafka import AIOKafkaConsumer
 
 from .config import get_settings
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.routing.evaluation_consumer")
 
@@ -78,7 +79,7 @@ class EvaluationConsumer:
 
         try:
             async for msg in consumer:
-                asyncio.create_task(self._dispatch(msg.value))
+                disparar(self._dispatch(msg.value), nome="dispatch")
         finally:
             await consumer.stop()
 

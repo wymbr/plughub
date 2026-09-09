@@ -170,7 +170,15 @@ class TestConfigChangedHandler:
 
             # Need asyncio.create_task to actually run the coroutine in tests
             tasks = []
-            with patch("asyncio.create_task", side_effect=lambda coro: tasks.append(coro)):
+            # RET-16: o produto cria a task por `disparar(coro, nome=...)`, que
+            # passa `name=` e registra um done-callback no RETORNO. O espiao
+            # aceita kwargs e devolve algo com cara de Task — um mock preso a
+            # assinatura mede o FORMATO da chamada, nao o fato.
+            def _espiar(coro, **_kw):
+                tasks.append(coro)
+                return MagicMock()      # o produto registra done-callback no retorno
+
+            with patch("asyncio.create_task", side_effect=_espiar):
                 await handler.handle({
                     "event":      "config.changed",
                     "namespace":  "routing",

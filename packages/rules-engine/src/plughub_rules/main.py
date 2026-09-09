@@ -29,6 +29,7 @@ from .evaluator import RuleEvaluator
 from .escalator import Escalator
 from .rule_store import RuleStore
 from .evaluation_sampler import EvaluationSampler
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.rules")
 
@@ -87,9 +88,8 @@ async def _run_escalation_loop(
         async for message in pubsub.listen():
             if message["type"] not in ("pmessage", "message"):
                 continue
-            asyncio.create_task(
-                _process_update(message, rule_store, evaluator, escalator, redis_main)
-            )
+            disparar(
+                _process_update(message, rule_store, evaluator, escalator, redis_main), nome="process-update")
     finally:
         await pubsub.aclose()
 
@@ -184,7 +184,7 @@ async def _run_kafka_consumer(sampler: EvaluationSampler, settings) -> None:
 
     try:
         async for msg in consumer:
-            asyncio.create_task(_dispatch_kafka(msg.topic, msg.value, sampler, settings))
+            disparar(_dispatch_kafka(msg.topic, msg.value, sampler, settings), nome="dispatch-kafka")
     finally:
         await consumer.stop()
 

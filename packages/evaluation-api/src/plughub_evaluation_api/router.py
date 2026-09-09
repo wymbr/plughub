@@ -86,6 +86,7 @@ from .sampling import (
 from .sampling_engine import run_curation_and_blind_sampling
 from .backfill import run_campaign_backfill
 from .prompt_composer import compose_rubric_prompt, DEFAULT_RUBRIC_BODY, with_bias_controls
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.evaluation.router")
 
@@ -1638,13 +1639,13 @@ async def finalize_evaluation(
 
     if run_curation:
         # R8c — cadeia Stage-1 → Estágio 2 cego (amostragem 2-estratos) num só task.
-        asyncio.create_task(
+        disparar(
             run_curation_and_blind_sampling(
                 pool, instance_id=instance_id, tenant_id=tenant_id,
                 campaign_id=campaign_id,
                 normalized_score=float(normalized_score or final_score or 0),
             ),
-            name=f"curation-sampling-{instance_id}",
+            nome=f"curation-sampling-{instance_id}",
         )
     return row
 

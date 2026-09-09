@@ -503,10 +503,9 @@ Checks per call (< 1ms): permission validation (JWT local decode) → injection 
 ## Repository Structure
 
 > **Medido em 2026-08-31: a tabela listava 21 pacotes e o repositório tem 35.** Seis dos ausentes
-> (`analytics-api`, `config-api`, `orchestrator-bridge`, `dialog-api`, `mailing-api`,
-> `session-replayer`) são citados dezenas de vezes no resto deste arquivo — a estrutura mentia por
-> OMISSÃO, que é o "valor plausível" da § Postura de Engenharia na forma mais barata: uma lista
-> parece completa por ser uma lista.
+> eram citados dezenas de vezes no resto deste arquivo — a estrutura mentia por OMISSÃO, que é o
+> "valor plausível" da § Postura de Engenharia na forma mais barata: uma lista parece completa por
+> ser uma lista.
 
 ```
 plughub/
@@ -516,6 +515,7 @@ plughub/
     schemas/                     ← @plughub/schemas — Zod contracts
     py-authz/                    ← plughub-authz — verificador CANÔNICO de JWT+ABAC (Python)
     py-contextstore/             ← plughub-contextstore — gêmeo Python das funções PURAS do ContextStore (carimbo + rota); paridade com `@plughub/schemas` por gate
+    py-tasks/                    ← plughub-tasks — dono e alarme de task efêmera de asyncio: `create_task` solto perde a exceção e pode ser coletado em execução
     sdk/                         ← @plughub/sdk — TypeScript + Python
 
     mcp-server-plughub/          ← Agent Runtime and BPM tools — port 3100
@@ -571,6 +571,7 @@ plughub/
 | schemas | TypeScript | Node 20+ | Zod 3.23+ |
 | py-authz | Python | Python 3.11+ | lib, sem serviço — PyJWT + FastAPI |
 | py-contextstore | Python | Python 3.11+ | lib, sem serviço e **sem dependências** — a ausência é requisito do gate de paridade |
+| py-tasks | Python | Python 3.11+ | lib, sem serviço — só `asyncio`+`logging`; seis consumidores (gateway, routing, rules, ai-gw, evaluation) |
 | sdk | TypeScript + Python | Node 20+ / Python 3.11+ | Two parallel packages |
 | mcp-server-plughub | TypeScript | Node 20+ | Official Anthropic MCP SDK |
 | skill-flow-engine | TypeScript | Node 20+ | State graph interpreter |

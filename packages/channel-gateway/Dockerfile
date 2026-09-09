@@ -8,6 +8,12 @@ WORKDIR /app
 COPY packages/py-authz ./packages/py-authz
 RUN pip install --no-cache-dir -e ./packages/py-authz
 
+# RET-16: dono e alarme das tasks efemeras (packages/py-tasks). Instalado ANTES
+# do servico pelo mesmo motivo das outras libs internas: o `pip install -e .`
+# dele precisa achar a dependencia satisfeita, senao a procura no PyPI.
+COPY packages/py-tasks ./packages/py-tasks
+RUN pip install --no-cache-dir -e ./packages/py-tasks
+
 # Copy channel-gateway package
 # Gemeo Python das funcoes puras do ContextStore (packages/py-contextstore) — o funil
 # de escrita que CARIMBA o `atributo` (ALW-02/D9.6). Instalado ANTES do servico pelo

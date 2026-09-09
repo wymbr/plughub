@@ -1,0 +1,41 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ── Por que virou pacote, e por que só agora (RET-16, 2026-09-09) ─────────────
+# Na RET-13 a decisão foi COPIAR o supervisor de tasks de boot em 4 serviços, com
+# o argumento medido: a regra de "um verificador" existe para quem DECIDE (o JWT,
+# em `py-authz`), e um alarme não decide nada — o que não pode divergir é o
+# comportamento, e quem o cobra é o gate.
+#
+# O que mudou não foi o argumento, foi o NÚMERO. A RET-15 achou 10 disparos sem
+# dono no channel-gateway e a RET-16 achou mais 22 em 4 serviços vivos: seis
+# consumidores para as mesmas 30 linhas. Cópia com seis casas não é decisão, é
+# dívida — e o precedente do repositório é exatamente este: `py-authz` nasceu
+# quando havia SEIS implementações de JWT que já divergiam em seis pontos.
+#
+# ⚠️ O supervisor de tasks de BOOT continua copiado nos 4 serviços, e isso é
+# escolha, não esquecimento: mover agora seria refatorar serviços onde nenhum
+# defeito foi medido, e "simetria" não é razão medida. Ficha RET-17.
+
+[project]
+name            = "plughub-tasks"
+version         = "0.1.0"
+description     = "Dono e alarme para tasks efemeras de asyncio: `create_task` solto perde a excecao e pode ser coletado em execucao."
+requires-python = ">=3.11"
+# Sem dependencias: o pacote so fala asyncio e logging, ambos da stdlib. Uma
+# dependencia aqui entraria em SEIS imagens de uma vez.
+dependencies    = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["tests"]

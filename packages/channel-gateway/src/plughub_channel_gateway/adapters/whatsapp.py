@@ -54,7 +54,7 @@ from ..models import (
 )
 from .base import ChannelAdapter
 from .whatsapp_provider import IWhatsAppProvider, MetaCloudProvider
-from ..tarefas import disparar
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.whatsapp")
 

@@ -161,7 +161,13 @@ async def test_the_session_branch_reads_the_module_singleton():
         mock_cache.invalidate = MagicMock()
         mock_cache.reload     = AsyncMock()
         tasks = []
-        with patch("asyncio.create_task", side_effect=lambda c: tasks.append(c)):
+        # RET-16: idem — `disparar` passa `name=` e registra done-callback no
+        # retorno, entao o espiao devolve algo com cara de Task.
+        def _espiar(coro, **_kw):
+            tasks.append(coro)
+            return MagicMock()
+
+        with patch("asyncio.create_task", side_effect=_espiar):
             await handler.handle({"namespace": "session",
                                   "key": "pool_config_ttl_s"})
         mock_cache.invalidate.assert_called_once()

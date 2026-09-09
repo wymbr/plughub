@@ -1,42 +1,32 @@
 # ==============================================================================
-# task_ownership.debt — disparos efêmeros SEM DONO que ainda existem, por serviço
+# task_ownership.debt — disparos efemeros SEM DONO, por servico
 # ==============================================================================
 #
-# Lido por `probe_background_task_supervision.sh` § C. Formato: `servico teto`.
+# Lido por `probe_background_task_supervision.sh` § C. Formato: `servico teto`,
+# e uma linha `!servico teto` para ISENTO.
 #
-# POR QUE UM TETO, E NAO UMA ISENCAO
-# ----------------------------------
 # `asyncio.create_task(...)` como statement devolve uma Task que ninguem
 # referencia: (a) se a corrotina levanta, a excecao fica presa no objeto e some;
 # (b) sem referencia forte o loop e o unico dono, e o CPython pode coleta-la no
-# meio da execucao. O conserto e `disparar()` (channel-gateway/tarefas.py), que
-# guarda a referencia e loga a morte.
-#
-# O channel-gateway migrou os 10 disparos dele na RET-15 e por isso NAO aparece
-# aqui: teto ausente significa ZERO, e um disparo solto novo naquele pacote
-# reprova. Os demais servicos foram MEDIDOS na mesma passada e ficaram de fora do
-# conserto por escopo — a ficha era do gateway. Ficam com teto, e teto e divida:
+# meio da execucao. O conserto e `disparar()`, em `packages/py-tasks`.
 #
 #   * numero ACIMA do teto  -> VERMELHO (regressao, ou servico novo sem declaracao)
 #   * numero ABAIXO do teto -> aviso para baixar o teto (nunca reprova)
+#   * servico sem linha     -> teto ZERO
 #
-# ⚠️ Isento e divida sao fatos DIFERENTES, e juntá-los faria a divida herdar a
+# ⚠️ ISENTO e DIVIDA sao fatos diferentes, e junta-los faria a divida herdar a
 # tranquilidade da decisao — a mesma separacao que `_SCOPE_EXEMPT` × `_SCOPE_DEBT`
-# faz na analytics-api. Aqui nao ha nenhum isento: todo disparo solto e divida.
+# faz na analytics-api. Divida tem gatilho; isento nao tem.
 #
-# MEDIDO EM 2026-09-09 (RET-15). Dos 22, QUATRO tambem perdem a excecao — o corpo
-# da corrotina nao tem try pega-tudo — e todos os quatro estao no routing-engine:
-#
-#   routing-engine/evaluation_consumer.py:81   _dispatch
-#   routing-engine/kafka_listener.py:355       _refresh_pool_snapshots
-#   routing-engine/kafka_listener.py:362       _drain_queue_for_agent
-#   routing-engine/main.py:199                 _process_message      <- mensagem
-#
-# Prioridade e fila de trabalho: ficha RET-16 em `pending.md`.
+# ESTADO (RET-16, 2026-09-09): a divida foi a ZERO.
+# A RET-15 mediu 22 disparos soltos fora do channel-gateway; os 21 dos servicos
+# VIVOS foram migrados — routing-engine 17, rules-engine 2, ai-gateway 1,
+# evaluation-api 1 — e o unico que sobra e isento por quarentena.
 # ==============================================================================
 
-ai-gateway           1
-conversation-writer  1
-evaluation-api       1
-routing-engine      17
-rules-engine         2
+# ISENTO — pacote FOSSIL em quarentena declarada (`CLAUDE.md` § Repository
+# Structure): nao esta deployado em compose nenhum e nao deve ser religado. O
+# rotulo existe para que o erro fique visivel e reversivel; migra-lo seria mexer
+# em codigo que a quarentena manda nao tocar, para ganhar um alarme que ninguem
+# vai ler — o processo nao roda.
+!conversation-writer  1

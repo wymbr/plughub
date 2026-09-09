@@ -64,7 +64,7 @@ from .voice_provider import (
     MockSTTProvider,
     MockTTSProvider,
 )
-from ..tarefas import disparar
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.voice")
 

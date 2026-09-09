@@ -96,7 +96,7 @@ from .webrtc_room_client import (
     mp3_to_pcm,
     resample_pcm_48_to_8,
 )
-from ..tarefas import disparar
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc")
 

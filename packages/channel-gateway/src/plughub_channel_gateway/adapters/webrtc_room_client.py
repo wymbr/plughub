@@ -27,7 +27,7 @@ import asyncio
 import logging
 import struct
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
-from ..tarefas import disparar
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc.room_client")
 

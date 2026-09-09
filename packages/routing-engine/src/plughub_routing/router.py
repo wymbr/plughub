@@ -30,6 +30,7 @@ from .scorer import (
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
 from .routing_config import routing_config
+from plughub_tasks import disparar
 
 if TYPE_CHECKING:
     from aiokafka import AIOKafkaProducer
@@ -135,33 +136,29 @@ class Router:
             # F1.3: re-parque limpa qualquer claim lease anterior desta sessão — um
             # contato re-enfileirado (ex.: agente desconectou → bridge re-roteia →
             # aqui) não pode ficar com lease órfã apontando a um claim que acabou.
-            asyncio.create_task(
+            disparar(
                 self._instances.delete_claim_lease(
                     event.tenant_id, event.pool_id, event.session_id
-                )
-            )
+                ), nome="delete-claim-lease")
             # Fase A / D6 — e o REGISTRO durável junto, pela mesma razão e com mais
             # força: este é o caminho do F5 (drop de transporte → bridge re-rota →
             # item volta ao ZSET). Se o registro sobrevivesse ao re-parque, a aba
             # velha do agente continuaria provando posse sobre um item que já está
             # na fila — que é exatamente o cenário que a Fase A existe para recusar.
-            asyncio.create_task(
+            disparar(
                 self._instances.delete_claim_record(
                     event.tenant_id, event.pool_id, event.session_id
-                )
-            )
+                ), nome="delete-claim-record")
             queued_result = self._build_queued_result(event, now)
-            asyncio.create_task(
+            disparar(
                 self._release_session_from_pool(
                     event.tenant_id, event.session_id, event.pool_id
-                )
-            )
+                ), nome="release-session-from-pool")
             _pull_pool = pools[0]
             # queue.position_updated é publicado em main.py APÓS o enqueue
             # (_publish_queue_position) — aqui a fila ainda não contém a sessão.
-            asyncio.create_task(
-                self._write_snapshot(event.tenant_id, _pull_pool.pool_id, _pull_pool)
-            )
+            disparar(
+                self._write_snapshot(event.tenant_id, _pull_pool.pool_id, _pull_pool), nome="write-snapshot")
             return queued_result
 
         # Try local site
@@ -174,9 +171,8 @@ class Router:
                 # Fire-and-forget snapshot update after successful allocation
                 if pools:
                     _matched = next((p for p in pools if p.pool_id == result.pool_id), pools[0])
-                    asyncio.create_task(
-                        self._write_snapshot(event.tenant_id, _matched.pool_id, _matched)
-                    )
+                    disparar(
+                        self._write_snapshot(event.tenant_id, _matched.pool_id, _matched), nome="write-snapshot")
                 return result
         except asyncio.TimeoutError:
             pass
@@ -204,11 +200,10 @@ class Router:
         # pool's queue.  agent_done fires only on full session close, so without
         # this call the origin pool's busy counter would stay elevated until the
         # session eventually closes.
-        asyncio.create_task(
+        disparar(
             self._release_session_from_pool(
                 event.tenant_id, event.session_id, event.pool_id
-            )
-        )
+            ), nome="release-session-from-pool")
 
         # queue.position_updated NÃO é publicado aqui: a posição só é verdadeira
         # DEPOIS do enqueue (`add_queued_contact`), e este ponto roda antes dele.
@@ -217,7 +212,7 @@ class Router:
         # lado do _write_queue_context (mesma conta, uma fonte). Ver CHANGELOG.
         if event.pool_id and pools:
             _pool = next((p for p in pools if p.pool_id == event.pool_id), pools[0])
-            asyncio.create_task(self._write_snapshot(event.tenant_id, _pool.pool_id, _pool))
+            disparar(self._write_snapshot(event.tenant_id, _pool.pool_id, _pool), nome="write-snapshot")
 
         return queued_result
 

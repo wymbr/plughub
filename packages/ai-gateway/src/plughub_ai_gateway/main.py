@@ -55,6 +55,7 @@ from .providers  import AnthropicProvider, OpenAIProvider, ProviderError
 from .rate_limit import RateLimiter, RateLimitExceeded
 from .reason     import ReasonEngine
 from .session    import SessionManager, get_redis
+from plughub_tasks import disparar
 
 try:
     from aiokafka import AIOKafkaProducer  # type: ignore[import-untyped]
@@ -646,7 +647,7 @@ async def copilot_analyze(req: CopilotAnalyzeRequest, request: Request) -> dict:
 
     model_id = settings.model_fast  # haiku — isolated from realtime agents
 
-    asyncio.create_task(
+    disparar(
         analyze_for_copilot(
             redis            = redis,
             provider         = provider,
@@ -656,8 +657,7 @@ async def copilot_analyze(req: CopilotAnalyzeRequest, request: Request) -> dict:
             model_id         = model_id,
             producer         = request.app.state.kafka_producer,
             account_key_id   = _account_key_of(request.app.state, provider),
-        )
-    )
+        ), nome="analyze-for-copilot")
 
     return {"status": "accepted", "session_id": req.session_id}
 

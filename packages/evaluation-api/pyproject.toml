@@ -4,6 +4,7 @@ version         = "1.0.0"
 description     = "PlugHub Platform — Evaluation API (Arc 6 quality evaluation platform)"
 requires-python = ">=3.10"
 dependencies    = [
+    "plughub-tasks",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     # Verificador canonico de JWT de usuario + portao ABAC + escopo de pool.

@@ -39,6 +39,7 @@ from .http_api import start_http_api
 from .kafka_listener import run_listeners
 from .routing_config import routing_config, session_config
 from . import mute_queue
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.routing")
 
@@ -196,10 +197,9 @@ async def run() -> None:
 
     try:
         async for msg in consumer:
-            asyncio.create_task(
+            disparar(
                 _process_message(msg.value, router, producer, settings,
-                                 redis_client, instance_registry, admission)
-            )
+                                 redis_client, instance_registry, admission), nome="process-message")
     finally:
         listener_task.cancel()
         crash_detector_task.cancel()
@@ -340,14 +340,13 @@ async def _process_message(
             # Write core.pool.* to ContextStore so skill-flows can reference
             # @ctx.core.pool.id, @ctx.core.pool.channels, and
             # @ctx.core.pool.mentionable_pools without querying agent-registry.
-            asyncio.create_task(
+            disparar(
                 _write_pool_context(
                     redis_client,
                     event.tenant_id,
                     event.session_id,
                     result.pool_id or "",
-                )
-            )
+                ), nome="write-pool-context")
         else:
             logger.warning(
                 "Queued session=%s channel=%s tenant=%s pool=%s — no agents available",
@@ -686,7 +685,7 @@ async def _emit_queue_timeout(
                         session_id, exc,
                     )
 
-            asyncio.create_task(_delayed_close())
+            disparar(_delayed_close(), nome="delayed-close")
         else:
             close_payload["farewell_text"] = routing_config.get("msg_queue_timeout")
             await producer.send(settings.kafka_topic_outbound, value=close_payload)
@@ -946,23 +945,21 @@ async def _persist_queued_contact(
     # the queue-treatment skill-flow can reference @ctx.core.queue.position /
     # @ctx.core.queue.eta_ms. Runs on EVERY enqueue attempt (not just the
     # first): drain re-attempts re-enter here and refresh the position.
-    asyncio.create_task(
+    disparar(
         _write_queue_context(
             redis_client, event.tenant_id, event.session_id, pool_id,
             instance_registry,
-        )
-    )
+        ), nome="write-queue-context")
 
     # `queue.position_updated` → Kafka (analytics `queue_events`; futuros
     # subscribers de canal). Publicado AQUI, depois do `add_queued_contact`, pela
     # mesma razão do ContextStore acima: antes do enqueue a fila não contém esta
     # sessão e a posição sai 0. (Era o defeito do Router._publish_queue_position,
     # que rodava concorrente ao enqueue — ver CHANGELOG.)
-    asyncio.create_task(
+    disparar(
         _publish_queue_position(
             producer, redis_client, event, pool_id, instance_registry, settings,
-        )
-    )
+        ), nome="publish-queue-position")
 
     # Notify customer via conversations.outbound so channel-gateway delivers
     # a "waiting" message to the customer WebSocket while they're in queue.

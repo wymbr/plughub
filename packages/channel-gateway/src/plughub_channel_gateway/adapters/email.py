@@ -70,7 +70,7 @@ from .email_provider import (
     ParsedEmail,
     _extract_email,
 )
-from ..tarefas import disparar
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.email")
 

@@ -44,6 +44,7 @@ from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
 from .routing_config import routing_config, session_config
 from . import mute_queue
+from plughub_tasks import disparar
 
 if TYPE_CHECKING:
     import httpx
@@ -108,9 +109,8 @@ class ConfigChangedHandler:
         )
         cache.invalidate()
         # Reload in background so we don't block the consumer loop.
-        asyncio.create_task(
-            cache.reload(self._config_api_url, self._http_client)
-        )
+        disparar(
+            cache.reload(self._config_api_url, self._http_client), nome="reload")
 
 
 class SessionClosedEventHandler:
@@ -352,16 +352,14 @@ class LifecycleEventHandler:
             # remove_conversation() already patches the snapshot +1 for immediate
             # UI feedback; this full recount confirms (and matches) that value.
             if self._pools:
-                asyncio.create_task(
-                    self._refresh_pool_snapshots(tenant_id, event.get("pools") or [])
-                )
+                disparar(
+                    self._refresh_pool_snapshots(tenant_id, event.get("pools") or []), nome="refresh-pool-snapshots")
             # Drain queue — if an agent becomes ready and there are contacts
             # waiting in any of its pools, dequeue the highest-priority one
             # and re-publish it to conversations.inbound for re-routing.
             if self._router and self._producer and self._pools:
-                asyncio.create_task(
-                    self._drain_queue_for_agent(tenant_id, instance_id, event)
-                )
+                disparar(
+                    self._drain_queue_for_agent(tenant_id, instance_id, event), nome="drain-queue-for-agent")
         elif event_type in ("agent_busy", "agent_heartbeat"):
             await self._upsert_instance(tenant_id, instance_id, event, event_type)
             if event_type == "agent_busy":
@@ -1115,11 +1113,10 @@ async def run_listeners(
         async for msg in consumer:
             payload = msg.value
             topic   = msg.topic
-            asyncio.create_task(
+            disparar(
                 _dispatch(payload, topic, registry_handler, lifecycle_handler,
                           config_handler, session_closed_handler,
-                          kafka_topic_config_changed, kafka_topic_events)
-            )
+                          kafka_topic_config_changed, kafka_topic_events), nome="dispatch")
     finally:
         await consumer.stop()
 

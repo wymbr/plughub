@@ -51,7 +51,7 @@ from ..models import (
 )
 from .base import ChannelAdapter
 from .sms_provider import ISMSProvider, MockSMSProvider, TwilioProvider, split_sms
-from ..tarefas import disparar
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.sms")
 
