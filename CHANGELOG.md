@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (13) — PUL-01: treze meses de "ninguém mediu", e a medição achou uma rede que passa ao lado
+
+### 1 · O trabalho era MEDIR, e a fonte da afirmação era um docstring
+
+A ficha existia desde 2026-08-03 com a frase *"ninguém a mediu e não há reaper"*.
+E a afirmação central — *item reivindicado e abandonado fica invisível a todos os
+agentes até o prazo* — vivia num **docstring** (`registry.py:105`).
+
+Este arquivo é reincidente, e ele próprio confessa: prometeu *"TTL renovado por
+heartbeat; ao expirar, o auto-release re-enfileira"* (mecanismo que **nunca
+existiu**), foi corrigido para *"até o reap de ocupantes órfãos passar"* (que
+**também** não alcança — `reap_stale_occupants` só colhe sessão FECHADA, e no
+claim abandonado o delegate está SUSPENSO). O comentário registra a lição:
+*"uma correção que troca uma rede inexistente por outra é mais cara que o erro
+original"*, porque a segunda tem data recente e passa por conferida.
+
+Por isso o instrumento **exerce**. Não lê.
+
+### 2 · O que a medição achou
+
+`infra/test/probe_claim_lease_invisibility.sh`, três ramos:
+
+| ramo | o que exerce | resultado |
+|---|---|---|
+| **A — a janela existe?** | A reivindica → ZREM → apago a lease (== TTL vencer) → B tenta | **SIM**, B recusado |
+| **B — alguma rede alcança?** | mato a instância de A, espero 40 s (ciclo = 15 s) | **NÃO**, o item não volta |
+| **C — dano** | censo de `close_reason` em pools `-int` | **ZERO** |
+
+```
+85 wrap-ups  ·  80 submetidos  ·  0 acw_expired  ·  0 acw_supervisor_closed
+```
+
+**Exposição e dano são dois números, e por isso há dois ramos.** A janela é real e
+vale ~480× a lease (180 s contra 24 h). Ninguém sofreu com ela neste parque. Um
+relatório fiel só ao ramo A publicaria um defeito que talvez não machuque; um fiel
+só ao C chamaria de inócua uma janela de um dia. Veredicto: **LATENTE**.
+
+⚠️ **O controle POSITIVO é o que dá sentido ao ramo A.** Sem ele, o "B não leva"
+poderia vir de qualquer coisa — pool errado, instância inválida, capacidade. Depois
+do `release`, o MESMO agente leva o item: o probe consegue ver item livre, logo a
+recusa anterior é a janela.
+
+### 3 · A ficha dizia "não há reaper". A verdade é pior de ler: HÁ, e passa ao lado
+
+O `CrashDetector` detecta a instância morta e **republica a CONVERSA** em
+`conversations.inbound` — não o ITEM pelo `work_task_release`, que é a porta que o
+próprio bridge declara ser a única válida (`main.py:96`: *"nunca por re-publish em
+`conversations.inbound`"*). Medido ao vivo: 40 s após a queda, o item **não voltou**
+à fila.
+
+*"Não existe rede"* e *"a rede existe e não alcança"* levam a consertos diferentes —
+e o segundo é muito mais barato, porque o detector já está de pé.
+
+### 4 · Achado fora do enunciado: o sinal se disfarça de concorrência
+
+A recusa ao segundo agente é **`already_claimed`**, não `not_in_queue` — eu esperava
+o segundo, e o produto devolve o primeiro. O pacote do contato sobrevive ao claim,
+então a recusa vem do **ZREM** do passo 3 (nenhum vencedor), não da leitura do
+passo 2.
+
+Os dois significam *"B não leva"*, e **não** significam a mesma coisa para quem
+diagnostica: `already_claimed` é o motivo de quem **perde uma corrida**, e aqui não
+há corrida nenhuma — o dono sumiu, a lease venceu, o item não volta. **O sinal mais
+visível da lacuna 2 se lê como concorrência saudável.** O probe aceita os dois e
+NOMEIA qual observou, porque trocar de um para o outro é mudança de comportamento.
+
+### 5 · Verde não é "consertado" — é linha de base
+
+Um gate que reprovasse por a lacuna existir nasceria **permanentemente vermelho**, e
+gate assim ensina todo mundo a ignorá-lo (a lição do runner de pytest na raiz do
+monorepo, 476 falsos vermelhos). Aqui vale o padrão do `BASELINE_TOTAL=0`: verde = o
+mundo continua como a ficha descreve; **vermelho = mudou, inclusive para melhor** —
+a janela fechando também pinta o gate, e também exige releitura.
+
+A ficha saiu de `aberto` para **`adiado`**, com gatilho declarado: *o probe ficar
+vermelho*. Candidato de conserto **nomeado e não construído** — ramo no
+`CrashDetector` que chame `work_task_release` para sessão com ledger `work_task`.
+Não construído porque **o dano medido é zero**, e construir rede contra população
+zero é a decisão que este repositório já firmou.
+
+### 6 · O probe sujava o que ele mesmo mede — defeito meu, achado na 1ª execução
+
+A primeira limpeza apagava só o que eu tinha **semeado**. Mas o `claim` publica
+`conversations.routed`, e o downstream escreve muito mais: medido, **22 chaves além
+das minhas, 1 sessão e 1 segmento** em ClickHouse. *Probe que suja a tabela que
+outros probes medem corrompe medição alheia*, e o custo aparece longe, num número que
+ninguém consegue explicar. Hoje limpa o Redis por varredura e o ClickHouse por
+mutação ancorada em **duas** condições (tenant + marca do probe) — uma só seria filtro
+largo demais para um `DELETE`. Conferido depois: resíduo **zero**, e o censo de `-int`
+intacto em 85.
+
+⚠️ **O pool do experimento não termina em `-int`, de propósito** — é o sufixo que o
+ramo C conta. Semear ali contaminaria o número que o próprio probe mede. E a lacuna é
+da família **pull inteira** (a ficha diz: *"aprovação também"*), então medi-la fora do
+wrap-up é mais fiel, não menos.
+
 ## 2026-09-09 (12) — PUL-04: o contador virou o filtro, e o zero passou a afirmar
 
 ### 1 · O pedido é do dono, e o argumento não é simetria

@@ -4802,6 +4802,42 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 | 5 | ~~**A fila pull não é consultável pelo analytics**~~ | ✅ **resolvido para a pergunta operacional (2026-07-30)**: `GET /api/work_queue/pending` varre o ledger `{t}:work_task:*` e cobre as duas formas de pendência com uma linha só (o claim não apaga o ledger). Segue sem evento/tabela espelho — o histórico do **nunca-reivindicado** continua sem fonte (fatia 3, gated) |
 | 6 | ~~**`close_reason` de segmento não tem enum**~~ | ✅ **FECHADA pela Fase E (2026-08-04).** Os mapas foram separados por domínio: `_TRANSPORT_TO_SEGMENT_CLOSE_REASON` (`orchestrator-bridge/main.py:3256`, vocabulário de SEGMENTO) × `_TRANSPORT_TO_CLOSE_REASON` (`:3194`, enum de CONTATO), com `test_segment_close_reason_domain.py` assertando que os conjuntos não se cruzam. O `contact-segment.ts:83` segue `z.string()` livre **de propósito** — o domínio de segmento é aberto (`task_submitted`, `acw_expired`, `agent_release_item`, …); o que estava errado não era a ausência de enum, era o mapa compartilhado escolhendo domínio em silêncio. Registro original abaixo. ⟨histórico⟩ `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. **O `_TRANSPORT_TO_CLOSE_REASON` do bridge serve os DOIS** (`main.py:5755` = contato; `:6401` = segmento), e por isso todo `agent_disconnect` (um F5 no Console) gera segmento SEM `close_reason`, com aviso no log. Conserto = separar os mapas, não estender o compartilhado. Ver § "um F5 no Console devolve à fila um item em trabalho" |
 
+### Lacuna 2 — MEDIDA em 2026-09-09 *(PUL-01; gate `probe_claim_lease_invisibility.sh`)*
+
+Treze meses de ficha dizendo *"ninguém a mediu"*. O instrumento **exerce**, não lê — e a razão é
+que a afirmação central vivia num **docstring**, que aqui é a família que já mentiu duas vezes no
+mesmo arquivo.
+
+| ramo | o que exerce | resultado |
+|---|---|---|
+| **A — a janela existe?** | A reivindica → ZREM → apago a lease (== TTL vencer) → B tenta | **SIM.** B recusado. Controle positivo: após `release`, B leva |
+| **B — alguma rede alcança?** | mato a instância de A e espero 40 s (ciclo = 15 s) | **NÃO.** O item não volta à fila |
+| **C — dano** | censo de `close_reason` em pools `-int` | **ZERO.** 85 itens, 80 submetidos, 0 `acw_expired`, 0 `acw_supervisor_closed` |
+
+**Exposição ≠ dano, e por isso são dois números.** A janela é real e vale ~480× a lease (180 s
+contra 24 h de prazo default). Ninguém sofreu com ela **neste parque**. Um relatório fiel só ao
+ramo A publicaria um defeito que talvez não machuque; um fiel só ao C chamaria de inócua uma janela
+de um dia. O veredicto é **LATENTE**.
+
+⚠️ **A ficha dizia "não há reaper", e a verdade é pior de ler: HÁ um detector, e ele passa ao
+lado.** O `CrashDetector` detecta a instância morta e **republica a CONVERSA** em
+`conversations.inbound` — não o ITEM pelo `work_task_release`, que é a porta que o próprio bridge
+declara ser a única válida (`main.py:96`: *"nunca por re-publish em `conversations.inbound`"*).
+*"Não existe rede"* e *"a rede existe e não alcança"* levam a consertos diferentes: o segundo já
+tem o detector pronto, e falta só o ramo.
+
+⚠️ **Achado fora do enunciado: o sinal se disfarça de concorrência.** A recusa ao segundo agente é
+**`already_claimed`**, não `not_in_queue` — porque o pacote do contato sobrevive ao claim e a recusa
+vem do ZREM (nenhum vencedor), não da leitura. `already_claimed` é o motivo de quem PERDE UMA
+CORRIDA; aqui não há corrida nenhuma. Quem diagnosticar por log lê saúde onde há a lacuna.
+
+**Candidato de conserto — nomeado, não construído:** ramo no `CrashDetector` que, para sessão com
+ledger `work_task`, chame `work_task_release` em vez de republicar. Mesmo processo, sem HTTP, e
+reusa o detector que já existe. **Não construído porque o dano medido é zero** — construir rede
+contra população zero é a decisão que este repositório já firmou noutro lugar.
+
+**Gatilho para retomar:** o probe ficar VERMELHO — dano > 0, ou a janela fechar sozinha.
+
 ### Lacuna 4 — `force-complete` ✅ *(2026-08-05; resta só o `cancel` 410)*
 
 Detalhe em `CHANGELOG.md` § "`force-complete` deixou de mentir". Aqui fica só o que serve ao

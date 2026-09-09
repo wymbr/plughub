@@ -270,6 +270,16 @@ probe_background_task_supervision.sh
 # sessao sem `Authorization` nenhum, medido ao vivo antes do commit.
 probe_monitor_suspended_action.sh
 
+# PUL-01 (2026-09-09): a "lacuna 2" tinha 13 meses de ficha dizendo *"ninguem a
+# mediu e nao ha reaper"*. Este probe MEDE, e o veredicto e' LINHA DE BASE, nao
+# "consertado": verde = o mundo continua como a ficha descreve (janela aberta,
+# dano zero). Vermelho = mudou, inclusive para melhor. Um gate que reprovasse por
+# a lacuna existir nasceria permanentemente vermelho.
+# Custo: ~45 s (espera o ciclo do CrashDetector). Semeia e LIMPA — Redis por
+# varredura e mutacao ancorada no ClickHouse; a primeira versao limpava so o que
+# semeava e deixou 22 chaves + 1 sessao + 1 segmento.
+probe_claim_lease_invisibility.sh
+
 # ── GAT-03 (b) · os seis que a triagem de 2026-09-07 promoveu ────────────────
 # Estavam em NAO TRIADO e saiam nao-verdes. Triados um a um, CINCO eram defeito do
 # INSTRUMENTO e um so precisava de um interprete. Nenhum acusava defeito de produto.
