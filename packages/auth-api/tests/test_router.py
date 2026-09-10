@@ -82,16 +82,59 @@ def _user_copy(**overrides) -> dict[str, Any]:
     return {**_SAMPLE_USER, **overrides}
 
 
+class _CtxAssincrono:
+    """`async with` sobre um valor fixo — `MagicMock` nao implementa `__aenter__`.
+
+    Existe desde a AUT-44 (2026-09-10): a criacao de usuario passou a gravar a linha e o
+    vinculo de grupo na MESMA transacao (`pool.acquire()` -> `conn.transaction()`), e sem
+    isto a suite inteira de criacao morreria no `async with` — um vermelho que parece
+    defeito do produto e e do dublê.
+    """
+
+    def __init__(self, valor):
+        self._valor = valor
+
+    async def __aenter__(self):
+        return self._valor
+
+    async def __aexit__(self, *_):
+        return False
+
+
 @pytest.fixture()
 def mock_pool():
-    """Pool asyncpg mockado."""
+    """Pool asyncpg mockado, com transacao."""
     pool = MagicMock()
     pool.fetchrow = AsyncMock()
     pool.fetch = AsyncMock()
     pool.execute = AsyncMock()
-    pool.acquire = MagicMock()
     pool.close = AsyncMock()
+
+    conn = MagicMock()
+    # `None` explicito, e nao o default do AsyncMock: `db.add_group_user` faz
+    # `dict(row) if row else {...}`, e um MagicMock cru NAO e mapeavel — o teste
+    # estouraria com TypeError no dublê, que e o vermelho mais caro que existe
+    # (parece defeito do produto e e do instrumento).
+    conn.fetchrow = AsyncMock(return_value=None)
+    conn.fetch = AsyncMock()
+    conn.execute = AsyncMock()
+    conn.transaction = MagicMock(return_value=_CtxAssincrono(None))
+    pool.acquire = MagicMock(return_value=_CtxAssincrono(conn))
+    pool.conn = conn          # para o teste que queira asseverar sobre a conexao
     return pool
+
+
+# AUT-44 — o time em que a pessoa nasce. Quem administra por DELEGACAO tem de declarar
+# um grupo que supervisione; `admin` nao precisa. Os testes abaixo usam
+# `_SAMPLE_USER` (papel `operator`), logo sao sempre o caso do delegado.
+_GRUPO_MEU    = "11111111-2222-3333-4444-555555555555"
+_GRUPO_ALHEIO = "99999999-8888-7777-6666-555555555555"
+
+
+def _supervisiona(*grupos: str):
+    """Patch de `resolve_supervisor_scope` — de quais grupos o ATOR e supervisor."""
+    return patch("plughub_auth_api.router.db_mod.resolve_supervisor_scope",
+                 new=AsyncMock(return_value=(list(grupos), [])))
 
 
 @pytest.fixture()
@@ -357,10 +400,12 @@ class TestCreateUser:
         c, _ = client
         created = _user_copy(email="new@test.local", roles=["supervisor"])
         with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
+             _supervisiona(_GRUPO_MEU), \
              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "new@test.local",
-                             "password": "password123", "roles": ["supervisor"]},
+                             "password": "password123", "roles": ["supervisor"],
+                             "group_ids": [_GRUPO_MEU]},
                        headers=_ambos_headers())
         assert r.status_code == 201
         assert r.json()["email"] == "new@test.local"
@@ -370,10 +415,11 @@ class TestCreateUser:
         # rank — com ele incondicional, o delegado é barrado antes de chegar à
         # duplicata. O 409 é fato da rota, então o sujeito aqui tem de ser o master.
         c, _ = client
-        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=_SAMPLE_USER)):
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=_SAMPLE_USER)), \
+             _supervisiona(_GRUPO_MEU):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "user@test.local",
-                             "password": "password123"},
+                             "password": "password123", "group_ids": [_GRUPO_MEU]},
                        headers=_ambos_headers())
         assert r.status_code == 409
 
@@ -566,10 +612,11 @@ class TestGuardaDeCorpo:
         """CONTROLE POSITIVO. Sem ele, um guard que negasse tudo ficaria verde."""
         c, _ = client
         created = _user_copy(email="ok@test.local")
-        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.list_modules", new=AsyncMock(return_value=self._CATALOGO)),              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)),              patch("plughub_auth_api.router.presets_mod.apply_role_preset", new=AsyncMock(return_value={})):
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)),              patch("plughub_auth_api.router.db_mod.list_modules", new=AsyncMock(return_value=self._CATALOGO)),              _supervisiona(_GRUPO_MEU),              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)),              patch("plughub_auth_api.router.presets_mod.apply_role_preset", new=AsyncMock(return_value={})):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "ok@test.local",
-                             "password": "password123", "roles": ["operator"]},
+                             "password": "password123", "roles": ["operator"],
+                             "group_ids": [_GRUPO_MEU]},
                        headers=_admin_headers())
         assert r.status_code == 201
 
@@ -629,13 +676,104 @@ class TestGuardaDeCorpo:
         with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
              patch("plughub_auth_api.router.db_mod.list_modules",
                    new=AsyncMock(return_value=self._CATALOGO_OPERATOR)), \
+             _supervisiona(_GRUPO_MEU), \
              patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=created)), \
              patch("plughub_auth_api.router.presets_mod.apply_role_preset", new=AsyncMock(return_value={})):
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "y@test.local",
-                             "password": "password123", "roles": [], "accessible_pools": []},
+                             "password": "password123", "roles": [], "accessible_pools": [],
+                             "group_ids": [_GRUPO_MEU]},
                        headers=_admin_headers())
         assert r.status_code == 201
+
+
+class TestTimeDeNascimento:
+    """AUT-44 — quem CRIA passa a administrar, porque contrata PARA UM TIME.
+
+    Residuo nomeado da AUT-39, que fez do organograma o eixo de administracao e nao
+    tocou na criacao. Medido ao vivo em 2026-09-10 com `supervisor@`: criou (201), e no
+    instante seguinte **403 para editar**, **403 ate para ver a ficha**, e o criado
+    **ausente da lista dele**. A conta some da vista de quem a emitiu.
+
+    Os tres testes abaixo sao um trio: o negativo por OMISSAO, o negativo por time
+    ALHEIO, e o positivo do caminho universal do `admin` — que nao pode morrer, sob
+    pena de trancar o dono do lado de fora num tenant com zero grupos.
+    """
+
+    def test_delegado_sem_grupo_e_422(self, client):
+        """Deixar o grupo opcional seria o chamador desligando o portao por OMISSAO —
+        a forma exata do `if body.pool_id` da AUT-46."""
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
+             _supervisiona(_GRUPO_MEU), \
+             patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock()) as criou:
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "sem@test.local",
+                             "password": "password123", "roles": [], "accessible_pools": []},
+                       headers=_ambos_headers())
+        assert r.status_code == 422
+        # A recusa NOMEIA o campo e o que o chamador supervisiona: "unprocessable" seco
+        # manda adivinhar o que faltou.
+        assert "group_ids" in r.json()["detail"]
+        # ⚠️ e NADA foi criado: recusar depois do INSERT deixaria de pe justamente o
+        # orfao que esta regra fecha.
+        criou.assert_not_awaited()
+
+    def test_delegado_em_time_alheio_e_403(self, client):
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
+             _supervisiona(_GRUPO_MEU), \
+             patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock()) as criou:
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "alheio@test.local",
+                             "password": "password123", "roles": [], "accessible_pools": [],
+                             "group_ids": [_GRUPO_ALHEIO]},
+                       headers=_ambos_headers())
+        assert r.status_code == 403
+        assert _GRUPO_ALHEIO in r.json()["detail"]
+        criou.assert_not_awaited()
+
+    def test_admin_cria_sem_grupo(self, client):
+        """CONTROLE POSITIVO do caminho universal.
+
+        `admin` administra todo mundo por definicao (`_irrestrito_para_pessoas`), entao
+        nascer sem grupo nao produz orfao — e exigir grupo dele trancaria o dono do lado
+        de fora num tenant com ZERO grupos, que e como todo tenant comeca (medido).
+        """
+        c, _ = client
+        criado = _user_copy(email="pelo.admin@test.local", roles=[])
+        admin_tok = _access_token(
+            user=_user_copy(roles=["admin"]),
+            module_config={"config": {"users":       {"access": "read_write", "scope": []},
+                                      "permissions": {"access": "read_write", "scope": []}}},
+        )
+        with patch("plughub_auth_api.router.db_mod.get_user_by_email", new=AsyncMock(return_value=None)), \
+             patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock(return_value=criado)), \
+             patch("plughub_auth_api.router.presets_mod.apply_role_preset", new=AsyncMock(return_value={})):
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "pelo.admin@test.local",
+                             "password": "password123", "roles": [], "accessible_pools": []},
+                       headers={"Authorization": f"Bearer {admin_tok}"})
+        assert r.status_code == 201
+
+    def test_admin_com_grupo_INEXISTENTE_e_422(self, client):
+        """Vinculo a grupo que nao existe e recusado, nao ignorado — aceitar em silencio
+        faria o chamador crer que vinculou."""
+        c, _ = client
+        admin_tok = _access_token(
+            user=_user_copy(roles=["admin"]),
+            module_config={"config": {"users": {"access": "read_write", "scope": []}}},
+        )
+        with patch("plughub_auth_api.router.db_mod.get_group", new=AsyncMock(return_value=None)), \
+             patch("plughub_auth_api.router.db_mod.create_user", new=AsyncMock()) as criou:
+            r = c.post("/auth/users",
+                       json={"tenant_id": "tenant_test", "email": "z@test.local",
+                             "password": "password123", "roles": [], "accessible_pools": [],
+                             "group_ids": [_GRUPO_ALHEIO]},
+                       headers={"Authorization": f"Bearer {admin_tok}"})
+        assert r.status_code == 422
+        assert "nao existe" in r.json()["detail"]
+        criou.assert_not_awaited()
 
 
 class TestGuardaDeAlvo:

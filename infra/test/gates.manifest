@@ -357,6 +357,19 @@ probe_service_log_info_reaches_stdout.sh
 # o aviso e igualmente inerte, por outra razao), e E prova que B sabe acusar.
 gate_orphan_guard_not_anesthetized.sh
 
+# AUT-44 (2026-09-10): quem CRIAVA um usuario nao passava a administra-lo. Residuo
+# nomeado da AUT-39, que fez do organograma o eixo de administracao e nao tocou na
+# criacao. Medido com `supervisor@`: cria -> 201; e no instante seguinte 403 para
+# editar, 403 ate para VER a ficha, e o criado AUSENTE da lista dele — a conta some
+# da vista de quem a emitiu, sobrando ao criador so a senha que ele digitou.
+# Fechado declarando o TIME na certidao de nascimento (`group_ids`), obrigatorio
+# para quem administra por delegacao e opcional para `admin` (que administra todo
+# mundo por definicao — exigir dele trancaria o dono num tenant com zero grupos).
+# P1 e o ramo que impede o verde errado, e confere QUATRO coisas: criar nao basta,
+# o ponto da ficha e o que vem depois. P3 cobre a SEGUNDA porta (from-template),
+# que e justamente a rota da contratacao delegada.
+gate_hire_into_your_own_team.sh
+
 # ── PUL-02 (2026-09-09) · triagem dos instrumentos da Camada F ───────────────
 # Os dois estavam como `?` NAO TRIADO, e por isso nenhum runner os colhia. Triados:
 #

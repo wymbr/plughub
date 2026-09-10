@@ -257,6 +257,12 @@ interface UserModalProps {
 }
 
 function UserModal({ tenantId, adminToken, user, availablePools, modules, templates, canGrant, allUsers, onClose, onSaved }: UserModalProps) {
+  // AUT-44 — `admin` administra todo mundo por definicao; quem administra por
+  // DELEGACAO so alcanca quem esta num grupo que ele supervisiona, entao a criacao
+  // precisa declarar o time. O veredicto e do servidor (422/403 com o motivo); isto
+  // aqui so evita que a pessoa descubra depois de preencher o formulario inteiro.
+  const { session: sessaoAtual } = useAuth()
+  const souAdmin = (sessaoAtual?.roles ?? []).includes('admin')
   const { t } = useTranslation('access')
   const isEdit = user !== null
   const [templateId, setTemplateId] = useState('')
@@ -408,8 +414,19 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
         }
         await applyGroupChanges(user!.id)
       } else {
-        const body: CreateUserInput = { tenant_id: tenantId, email, name, password, ...capacity, max_concurrent_sessions: maxConcurrentSessions }
+        // AUT-44 — o vinculo viaja NA criacao, nao num POST depois: as duas escritas
+        // sao um fato so ("contratado para o time X"), e o servidor as grava na mesma
+        // transacao. Aplicar depois deixaria a conta orfa se o segundo passo falhasse.
+        const body: CreateUserInput = {
+          tenant_id: tenantId, email, name, password, ...capacity,
+          max_concurrent_sessions: maxConcurrentSessions,
+          group_ids: Array.from(memberGroups),
+        }
         const created = await jsonFetch<{ id: string }>('/auth/users', adminToken, { method: 'POST', body: JSON.stringify(body) })
+        // Membership ja foi gravada pelo servidor — declarar aqui evita que o diff de
+        // `applyGroupChanges` a poste de novo. (O INSERT e idempotente, mas um POST que
+        // o cliente sabe redundante e ruido que o proximo leitor tem de decifrar.)
+        initialGroupsRef.current = { ...initialGroupsRef.current, member: new Set(memberGroups) }
         // Set ABAC module config on the newly created user if anything was configured
         if (canGrant && Object.keys(moduleConfig).length > 0) {
           await jsonFetch(`/auth/users/${created.id}/module-config`, adminToken, {
@@ -622,7 +639,17 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
                 ))}
               </div>
               <p className="text-xs text-muted-light mt-1">{t('users.groupsHint')}</p>
+              {!isEdit && !souAdmin && (
+                <p className="text-xs text-warning mt-1">{t('users.groupRequiredHint')}</p>
+              )}
             </div>
+          )}
+
+          {/* AUT-44 — sem grupo nenhum a secao acima nao renderiza, e o delegado
+              descobriria a exigencia so no 422. O tenant nasce com ZERO grupos
+              (medido), entao este e o caso comum, nao a borda. */}
+          {!isEdit && !souAdmin && allGroups.length === 0 && (
+            <p className="text-xs text-warning">{t('users.groupRequiredNoGroups')}</p>
           )}
 
           {isEdit && (

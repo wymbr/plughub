@@ -113,6 +113,40 @@ if [ "$HAS_PERMS" != "none" ]; then
 fi
 ok "token de $UA_EMAIL: config.users concedido, config.permissions ausente"
 
+# ── AUT-39 + AUT-44 — a PRE-CONDICAO e o organograma, e ela vem ANTES ────────
+#
+# `config.users` deixou de ser irrestrito (AUT-39): administrar uma pessoa exige que
+# ela seja MEMBRO de um grupo que o aplicador SUPERVISIONA — porque a versao antiga
+# deixava um supervisor com zero pools listar o tenant inteiro, resetar a senha de um
+# usuario de outro time e ENTRAR na conta dele (medido ao vivo).
+#
+# ⚠️ Este bloco morava DEPOIS do S1, e subiu na AUT-44 (2026-09-10). O residuo que a
+# versao anterior deixava NOMEADO — *"quem CRIA nao passa a administrar, porque a
+# criacao nao o poe em grupo nenhum"* — foi fechado: o grupo entra na CERTIDAO DE
+# NASCIMENTO (`group_ids`), e para quem administra por delegacao ele e obrigatorio.
+# Logo a pre-condicao passou a ser da propria criacao, e o S1 virou a demonstracao do
+# conserto em vez do lugar onde o defeito aparecia.
+GRUPO_ID="$(curl -s -X POST "$AUTH/v1/groups" -H "Authorization: Bearer $T_ADMIN" \
+  -H 'content-type: application/json' \
+  -d "{\"tenant_id\":\"$TENANT\",\"name\":\"probe split (AUT-39)\",\"description\":\"pre-condicao do S1/S3\"}" \
+  | jq -r '.group_id // empty' 2>/dev/null)"
+if [ -z "$GRUPO_ID" ]; then
+  inc "nao consegui criar o grupo da pre-condicao — S1 mediria a ausencia dele"
+  exit 2
+fi
+curl -s -o /dev/null -X POST "$AUTH/v1/groups/$GRUPO_ID/supervisors" \
+  -H "Authorization: Bearer $T_ADMIN" -H 'content-type: application/json' \
+  -d "{\"user_id\":\"$UA_ID\"}"
+# O token carrega o escopo do login: sem re-login o supervisor novo nao viaja.
+T_UA="$(login "$UA_EMAIL" "$UA_PASS")"
+[ -z "$T_UA" ] && { inc "re-login de $UA_EMAIL falhou apos o grupo"; exit 2; }
+limpar_grupo() {
+  [ -n "${GRUPO_ID:-}" ] && curl -s -o /dev/null -X DELETE "$AUTH/v1/groups/$GRUPO_ID" \
+    -H "Authorization: Bearer $T_ADMIN"
+}
+trap limpar_grupo EXIT
+ok "pre-condicao: $UA_EMAIL supervisiona o grupo em que o alvo vai NASCER"
+
 # ── S1/S2 — criar: sem capacidade passa, com capacidade recusa ───────────────
 sec "S1/S2 - criar usuario"
 OLD_ID="$(uid_de "$T_ADMIN" "$ALVO_EMAIL")"
@@ -126,8 +160,11 @@ OLD_ID="$(uid_de "$T_ADMIN" "$ALVO_EMAIL")"
 # ele esta testemunha virou 403: o `useradmin@` e a fixture MINIMA de proposito (MOD-04)
 # e nao detem o preset do operator. Lista vazia e o unico corpo que nao concede nada —
 # que e o que esta testemunha sempre quis dizer.
+# ⚠️ `group_ids` e da AUT-44: o delegado contrata PARA UM TIME que ele supervisiona, e
+# criar sem grupo passou a ser 422 — antes disso, o criado nascia fora do alcance de
+# quem o criou (403 para editar, 403 ate para ver, e ausente da lista dele).
 C1="$(st "$T_UA" POST "/users" \
-  "{\"tenant_id\":\"$TENANT\",\"email\":\"$ALVO_EMAIL\",\"name\":\"Probe Target\",\"password\":\"$ALVO_PASS\",\"roles\":[],\"accessible_pools\":[]}")"
+  "{\"tenant_id\":\"$TENANT\",\"email\":\"$ALVO_EMAIL\",\"name\":\"Probe Target\",\"password\":\"$ALVO_PASS\",\"roles\":[],\"accessible_pools\":[],\"group_ids\":[\"$GRUPO_ID\"]}")"
 if [ "$C1" = "200" ] || [ "$C1" = "201" ]; then
   ok "S1 criou usuario sem CONCEDER nada (HTTP $C1) — testemunha de presenca"
 else
@@ -136,8 +173,10 @@ else
   info "de 'o endpoint parou de responder para este principal'."
 fi
 
+# O grupo vai junto DE PROPOSITO: sem ele o 403 poderia vir do portao da AUT-44 (falta
+# de time) em vez do guard de RANK, e o ramo estaria verde pela proposicao errada.
 C2="$(st "$T_UA" POST "/users" \
-  "{\"tenant_id\":\"$TENANT\",\"email\":\"probe_escalate@plughub.local\",\"name\":\"X\",\"password\":\"changeme_escalate\",\"roles\":[\"admin\"]}")"
+  "{\"tenant_id\":\"$TENANT\",\"email\":\"probe_escalate@plughub.local\",\"name\":\"X\",\"password\":\"changeme_escalate\",\"roles\":[\"admin\"],\"group_ids\":[\"$GRUPO_ID\"]}")"
 if [ "$C2" = "403" ]; then
   ok "S2 criar JA CONCEDENDO roles=[admin] recusado (403)"
 else
@@ -150,44 +189,6 @@ fi
 ALVO_ID="$(uid_de "$T_ADMIN" "$ALVO_EMAIL")"
 [ -z "$ALVO_ID" ] && { inc "o usuario-alvo nao existe — S3..S7 nao tem sobre o que rodar"; exit 2; }
 
-# ── AUT-39 (2026-09-09) — a PRE-CONDICAO nova: o organograma ─────────────────
-#
-# `config.users` deixou de ser irrestrito. Administrar uma pessoa passou a exigir
-# que ela seja MEMBRO de um grupo que o aplicador SUPERVISIONA — porque a versao
-# antiga deixava um supervisor com zero pools listar o tenant inteiro, resetar a
-# senha de um usuario de outro time e ENTRAR na conta dele (medido ao vivo).
-#
-# A proposicao deste probe nao mudou: pessoa passa, capacidade recusa. Mudou o que
-# e preciso ter para ser "quem PODE administrar" — e sem esta costura o S3 mediria
-# a ausencia do grupo e chamaria isso de "o split quebrou".
-#
-# ⚠️ Residuo NOMEADO que esta costura revela: quem CRIA um usuario (S1) nao passa a
-# administra-lo, porque a criacao nao o poe em grupo nenhum. Cria e nao administra e
-# incoerente; a decisao de como fechar (criar DENTRO de um grupo? proveniencia?)
-# esta registrada na AUT-39 e nao foi tomada aqui.
-GRUPO_ID="$(curl -s -X POST "$AUTH/v1/groups" -H "Authorization: Bearer $T_ADMIN" \
-  -H 'content-type: application/json' \
-  -d "{\"tenant_id\":\"$TENANT\",\"name\":\"probe split (AUT-39)\",\"description\":\"pre-condicao do S3\"}" \
-  | jq -r '.group_id // empty' 2>/dev/null)"
-if [ -z "$GRUPO_ID" ]; then
-  inc "nao consegui criar o grupo da pre-condicao — S3 mediria a ausencia dele"
-  exit 2
-fi
-curl -s -o /dev/null -X POST "$AUTH/v1/groups/$GRUPO_ID/users" \
-  -H "Authorization: Bearer $T_ADMIN" -H 'content-type: application/json' \
-  -d "{\"user_id\":\"$ALVO_ID\"}"
-curl -s -o /dev/null -X POST "$AUTH/v1/groups/$GRUPO_ID/supervisors" \
-  -H "Authorization: Bearer $T_ADMIN" -H 'content-type: application/json' \
-  -d "{\"user_id\":\"$UA_ID\"}"
-# O token carrega o escopo do login: sem re-login o supervisor novo nao viaja.
-T_UA="$(login "$UA_EMAIL" "$UA_PASS")"
-[ -z "$T_UA" ] && { inc "re-login de $UA_EMAIL falhou apos o grupo"; exit 2; }
-limpar_grupo() {
-  [ -n "${GRUPO_ID:-}" ] && curl -s -o /dev/null -X DELETE "$AUTH/v1/groups/$GRUPO_ID" \
-    -H "Authorization: Bearer $T_ADMIN"
-}
-trap limpar_grupo EXIT
-ok "pre-condicao: $ALVO_EMAIL e membro de um grupo que $UA_EMAIL supervisiona"
 
 # ── S3/S4/S5 — editar: pessoa passa, capacidade recusa ───────────────────────
 sec "S3/S4/S5 - editar usuario e conceder"

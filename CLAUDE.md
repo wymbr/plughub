@@ -1391,6 +1391,9 @@ ponto em que a ordem do `py-authz` e a lista indexada da UI discordavam)*;
   pessoa (criar, editar, ativar, grupos); `config.permissions` = capacidade (papéis, módulos, escopo).
   O portão tem **QUATRO portas** — rota, corpo, alvo e escopo — e fechar só a primeira é decorativo.
   O discriminador do corpo é `model_fields_set`, não o valor: enviar o campo é conceder.
+- **Contratar é contratar PARA UM TIME** *(AUT-44)*: a criação declara o grupo em que a
+  pessoa nasce — obrigatório para quem administra por DELEGAÇÃO, que senão emite conta
+  que não vê nem edita; opcional para `admin`, sob pena de trancar o dono do tenant novo.
 - **Papel é PRESET DE NASCIMENTO, nunca portão.** `role_defaults` aplicado UMA vez, na criação; trocar
   o papel depois não reescreve grants, e múltiplos papéis rendem o MAIOR acesso por campo.
 - **O menu tem um portão só, e ele é GRANT-FIRST.** Ausência de grants nunca é autorização — mesma

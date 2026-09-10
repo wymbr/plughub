@@ -418,6 +418,43 @@ envie a lista completa de pools do tenant"*. O que não existe é o cumprimento:
 > que escreveu `[]` quando queria "todos" (`seed_auth.py:225`, escrito antes da inversão e nunca
 > migrado). Ficha **AUT-43**.
 
+## Emenda AUT-44 (2026-09-10) — quem contrata administra quem contratou
+
+A AUT-39 mudou o eixo de administração para o **organograma** e não tocou na criação.
+Consequência medida ao vivo com `supervisor@` (tem `config.users`, supervisiona zero
+grupos):
+
+```
+1 · cria ................. HTTP 201
+2 · aparece na lista dele . NAO  (1 usuário visível: ele mesmo)
+3 · edita ................ HTTP 403
+4 · vê a ficha ........... HTTP 403
+```
+
+A conta some da vista de quem acabou de emiti-la, e o único acesso que sobra ao criador
+é a senha que ele próprio digitou. **Criar e não administrar não é contratar — é produzir
+órfão.**
+
+**Decisão: o grupo entra na CERTIDÃO DE NASCIMENTO** (`group_ids` em `POST /users` e em
+`POST /users/from-template/{id}`), obrigatório para quem administra por delegação,
+opcional para `admin`. As outras duas saídas foram recusadas com razão registrada:
+
+| saída | por que não |
+|---|---|
+| **(b)** proveniência — *"quem criou administra"* | seria um SEGUNDO eixo de administração ao lado do organograma recém-escolhido, e nele o delegado montaria um time que ninguém acima enxerga COMO time |
+| **(c)** delegado não cria | contraria a ordem G1→G2→G3 desta ADR: revogar a contratação antes de existir o veículo tira do supervisor o que ele faz todo dia |
+
+⚠️ **Obrigatório, e não "opcional com aviso":** deixar o grupo de fora quando ele não é
+enviado seria o chamador desligando o portão por OMISSÃO — a mesma forma do
+`if body.pool_id` da AUT-46 e do corpo curto que a MOD-05 fechou.
+
+⚠️ **O delegado NÃO se declara supervisor sozinho** — isso é conceder escopo e exige
+`config.permissions` (medido: 403). Logo o organograma é do admin e a contratação é do
+supervisor, e a recusa nomeia a tela e o pedido a fazer em vez de mandar o delegado
+"criar um grupo". Gate: `infra/test/gate_hire_into_your_own_team.sh` (as duas portas).
+
+---
+
 ## Achados medidos que entram como trabalho próprio
 
 | # | achado | evidência |

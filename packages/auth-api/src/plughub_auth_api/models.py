@@ -76,6 +76,10 @@ class CreateUserRequest(BaseModel):
     accessible_pools: list[str] = []   # NENHUM pool (AUT-03); irrestrito não é declarável
     unrestricted: Annotated[Any, AfterValidator(_recusa_lapide)] = None   # ver LÁPIDE
     max_concurrent_sessions: int = Field(default=3, ge=1, le=50)
+    # AUT-44 — o TIME em que a pessoa nasce. Vazio e legitimo para `admin` (ele
+    # administra todo mundo por definicao); para delegado e RECUSADO, porque criar
+    # alguem que voce nao pode ver nem editar nao e contratar, e produzir orfao.
+    group_ids: list[str] = []
 
 
 class UpdateUserRequest(BaseModel):
@@ -145,6 +149,7 @@ class CreateUserFromTemplateRequest(BaseModel):
     email: str
     password: str = Field(min_length=8)
     name: str = ""
+    group_ids: list[str] = []   # AUT-44 — ver CreateUserRequest
     accessible_pools: list[str] = []
 
 

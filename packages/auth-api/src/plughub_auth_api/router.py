@@ -360,6 +360,117 @@ async def _assert_pode_administrar(
     )
 
 
+async def _cria_com_grupos(pool, grupos: list[str], **campos):
+    """Cria o usuario e o poe nos grupos na MESMA transacao (AUT-44).
+
+    Sao duas escritas e UM fato — *"contratado para o time X"*. Fora de transacao, uma
+    falha entre elas deixa exatamente o orfao que esta regra fecha, e ninguem fica
+    vermelho: a conta existe, ninguem a administra. `asyncpg.Connection` responde a
+    mesma API do pool, entao as funcoes de `db` aceitam a conexao sem mudar assinatura.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await db_mod.create_user(conn, **campos)
+            for gid in grupos:
+                await db_mod.add_group_user(conn, gid, str(row["id"]))
+    return row
+
+
+async def _grupos_de_nascimento(
+    pool, claims: dict[str, Any], group_ids: list[str], acao: str,
+) -> list[str]:
+    """AUT-44 - quem CRIA passa a administrar, e o veiculo e o mesmo organograma.
+
+    Medido ao vivo antes desta regra (2026-09-10), com `supervisor@` (que tem
+    `config.users` e supervisiona ZERO grupos): criou um usuario -> **201**; e no
+    instante seguinte **403 para editar**, **403 ate para VER a ficha**, e o criado
+    **nao aparecia na lista dele** (1 usuario visivel: ele proprio). A conta some da
+    vista de quem acabou de emiti-la - com a senha que ele mesmo escolheu, que e o
+    unico acesso que lhe sobra. Criar e nao administrar nao e contratar: e produzir
+    ORFAO.
+
+    A saida e a coerente com a AUT-39: **contrata-se PARA UM TIME**. O grupo entra na
+    certidao de nascimento, e a regra difere por quem contrata -
+
+      . `admin`: opcional. Ele administra todo mundo por definicao
+        (`_irrestrito_para_pessoas`), entao nascer sem grupo nao produz orfao. Grupo
+        INEXISTENTE, porem, e recusado: aceitar em silencio faria o chamador crer que
+        vinculou.
+      . delegado: **obrigatorio**, e todo grupo tem de ser um que ELE supervisione.
+        Deixar opcional seria o chamador desligando o portao por OMISSAO - a mesma
+        forma do `if body.pool_id` da AUT-46 e do `model_fields_set` na criacao.
+
+    A alternativa por PROVENIENCIA (*"quem criou administra"*) foi recusada: seria um
+    SEGUNDO eixo de administracao ao lado do organograma que a AUT-39 escolheu, e nele
+    o delegado montaria um time proprio fora do organograma - sem ninguem acima poder
+    ve-lo como time.
+
+    A alternativa *"delegado nao cria"* foi recusada porque o ADR de delegacao trata a
+    ordem G1->G2->G3 como inegociavel: revogar a contratacao antes de existir o veiculo
+    tira do supervisor o que ele faz todo dia, e quem paga e a operacao.
+
+    warning: o delegado **nao consegue se declarar supervisor** de grupo nenhum: aquilo
+    e CONCEDER escopo e exige `config.permissions` (medido: 403). Ou seja, o organograma
+    e do admin e a contratacao e do supervisor - e e por isso que a recusa aqui nomeia a
+    tela e o pedido a fazer, em vez de mandar o delegado "criar um grupo".
+
+    Devolve a lista normalizada (sem duplicatas, sem vazios).
+    """
+    ids = [g for g in dict.fromkeys(group_ids or []) if g]
+
+    if _irrestrito_para_pessoas(claims):
+        for gid in ids:
+            try:
+                existe = await db_mod.get_group(pool, gid)
+            except Exception:            # uuid mal formado cai aqui
+                existe = None
+            if not existe:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unprocessable: grupo `{gid}` nao existe neste tenant",
+                )
+        return ids
+
+    ator_id = str(claims.get("sub") or "")
+    supervisiona, _ = await db_mod.resolve_supervisor_scope(pool, ator_id)
+    meus = set(supervisiona or [])
+
+    if not ids:
+        if not meus:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"unprocessable: {acao} exige um grupo, e voce nao supervisiona "
+                    f"nenhum. Peca a quem administra para coloca-lo como supervisor de "
+                    f"um grupo (Configuracao > Grupos) - sem isso a pessoa criada "
+                    f"nasceria fora do seu alcance: voce nao poderia nem ve-la."
+                ),
+            )
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"unprocessable: {acao} exige declarar o grupo (`group_ids`) em que a "
+                f"pessoa nasce. Voce supervisiona: {', '.join(sorted(meus))}. Sem grupo "
+                f"a conta nasceria orfa - criada por voce e invisivel para voce."
+            ),
+        )
+
+    fora = [g for g in ids if g not in meus]
+    if fora:
+        logger.warning(
+            "criacao NEGADA: %s tentou %s em grupo(s) que nao supervisiona: %s",
+            claims.get("email") or ator_id, acao, ", ".join(fora),
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"forbidden: voce nao supervisiona {', '.join(fora)}. Contratar para um "
+                f"time alheio criaria alguem que voce nao administra."
+            ),
+        )
+    return ids
+
+
 def _user_to_response(row: dict[str, Any]) -> UserResponse:
     return UserResponse(
         id=str(row["id"]),
@@ -547,13 +658,17 @@ async def create_user(
         pool, claims, "criar usuario",
         roles=body.roles, accessible_pools=body.accessible_pools,
     )
+    # AUT-44 - o TIME entra na certidao de nascimento, e a validacao vem ANTES do
+    # INSERT: recusar depois de criar deixaria justamente o orfao que esta regra fecha.
+    grupos = await _grupos_de_nascimento(pool, claims, body.group_ids, "criar usuario")
+
     # Verifica se e-mail já existe
     existing = await db_mod.get_user_by_email(pool, body.tenant_id, body.email)
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered in this tenant")
 
-    row = await db_mod.create_user(
-        pool,
+    row = await _cria_com_grupos(
+        pool, grupos,
         tenant_id=body.tenant_id,
         email=body.email,
         password_hash=hash_password(body.password),
@@ -643,13 +758,20 @@ async def create_user_from_template(
         accessible_pools=body.accessible_pools,
     )
 
+    # AUT-44 - vale igual aqui: esta e a porta da contratacao DELEGADA, e deixar o
+    # grupo de fora dela reabriria o orfao pela rota que existe para o delegado.
+    grupos = await _grupos_de_nascimento(
+        pool, claims, body.group_ids,
+        f"aplicar o template `{linha.get('name', template_id)}`",
+    )
+
     existing = await db_mod.get_user_by_email(pool, body.tenant_id, body.email)
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered in this tenant")
 
     aplicado = {"role": papel, "module_config": tpl_mc}
-    row = await db_mod.create_user(
-        pool,
+    row = await _cria_com_grupos(
+        pool, grupos,
         tenant_id=body.tenant_id,
         email=body.email,
         password_hash=hash_password(body.password),

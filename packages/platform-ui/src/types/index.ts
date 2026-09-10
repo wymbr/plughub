@@ -842,6 +842,12 @@ export interface CreateUserInput {
   roles?:                  string[]
   accessible_pools?:       string[]
   max_concurrent_sessions?: number
+  /**
+   * AUT-44 — o TIME em que a pessoa nasce (Arc 9). Vazio so passa para `admin`; para
+   * quem administra por delegacao o servidor RECUSA (422), porque criar alguem fora do
+   * proprio organograma produz uma conta que o autor nao ve nem edita.
+   */
+  group_ids?:              string[]
 }
 
 export interface UpdateUserInput {

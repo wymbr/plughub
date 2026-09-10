@@ -162,7 +162,9 @@
     "poolsUnwatchedHint": "No user has access — yet they keep receiving contacts, invisible in Monitor.",
     "orphanWarning": "This change leaves {{count}} pool with no user access:\n\n{{pools}}\n\nIt will keep receiving contacts, but nobody will see it in Monitor or reports. Continue?",
     "orphanWarning_other": "This change leaves {{count}} pools with no user access:\n\n{{pools}}\n\nThey will keep receiving contacts, but nobody will see them in Monitor or reports. Continue?",
-    "poolsUnwatchedUnknown": "User list possibly incomplete — the unwatched-pools census cannot assert anything."
+    "poolsUnwatchedUnknown": "User list possibly incomplete — the unwatched-pools census cannot assert anything.",
+    "groupRequiredHint": "Pick the team this person joins: you administer whoever belongs to a group you supervise, and an account created outside it is born out of your reach.",
+    "groupRequiredNoGroups": "You do not supervise any group yet, so you cannot create users: the account would be born out of your reach. Ask an administrator to make you a supervisor of a group (Configuration › Groups)."
   },
   "roles": {
     "operator": "Operator",

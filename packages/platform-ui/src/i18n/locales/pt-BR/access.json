@@ -162,7 +162,9 @@
     "poolsUnwatchedHint": "Sem nenhum usuário com acesso — mas continuam recebendo contato, invisíveis no Monitor.",
     "orphanWarning": "Esta mudança deixa {{count}} pool sem nenhum usuário com acesso:\n\n{{pools}}\n\nEles continuarão recebendo contato, mas ninguém os verá no Monitor nem nos relatórios. Confirma?",
     "orphanWarning_other": "Esta mudança deixa {{count}} pools sem nenhum usuário com acesso:\n\n{{pools}}\n\nEles continuarão recebendo contato, mas ninguém os verá no Monitor nem nos relatórios. Confirma?",
-    "poolsUnwatchedUnknown": "Lista de usuários possivelmente incompleta — o censo de pools sem vigia não pode afirmar nada."
+    "poolsUnwatchedUnknown": "Lista de usuários possivelmente incompleta — o censo de pools sem vigia não pode afirmar nada.",
+    "groupRequiredHint": "Marque o time em que a pessoa entra: você administra quem está num grupo que supervisiona, e uma conta criada fora dele nasce fora do seu alcance.",
+    "groupRequiredNoGroups": "Você ainda não supervisiona nenhum grupo, e por isso não pode criar usuários: a conta nasceria fora do seu alcance. Peça a quem administra para colocá-lo como supervisor de um grupo (Configuração › Grupos)."
   },
   "roles": {
     "operator": "Operador",

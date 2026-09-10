@@ -1,5 +1,100 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-10 (2) — AUT-44: quem contrata administra quem contratou
+
+### 1 · O que a medição achou, e era pior que a ficha
+
+A AUT-39 mudou o eixo de administração para o **organograma** (Arc 9) e não tocou na
+criação. Medido ao vivo com `supervisor@` — tem `config.users`, supervisiona zero grupos:
+
+```
+1 · cria .................. HTTP 201
+2 · aparece na lista dele .. NAO  (1 usuario visivel: ele mesmo)
+3 · edita ................. HTTP 403
+4 · ve a ficha ............ HTTP 403
+```
+
+A ficha falava de **editar**. A conta some **inteira** da vista de quem acabou de
+emiti-la — nem lista, nem ficha —, e o único acesso que sobra ao criador é a senha que
+ele próprio digitou. *Criar e não administrar não é contratar: é produzir órfão.*
+
+### 2 · A decisão: o TIME entra na certidão de nascimento
+
+`group_ids` em `POST /users` **e** em `POST /users/from-template/{id}`:
+
+| quem | regra |
+|---|---|
+| **delegado** (`config.users`, sem papel `admin`) | **obrigatório**, e todo grupo tem de ser um que ele supervisione — 422 sem grupo, 403 em time alheio |
+| **`admin`** | opcional: administra todo mundo por definição, então nascer sem grupo não produz órfão. Grupo inexistente é 422 — aceitar em silêncio faria o chamador crer que vinculou |
+
+**As outras duas saídas foram recusadas com razão registrada.** *(b) Proveniência* —
+"quem criou administra" — seria um SEGUNDO eixo ao lado do organograma recém-escolhido, e
+nele o delegado montaria um time que ninguém acima enxerga **como** time. *(c) Delegado
+não cria* contraria a ordem G1→G2→G3 do ADR de delegação: revogar a contratação antes de
+existir o veículo tira do supervisor o que ele faz todo dia.
+
+⚠️ **Obrigatório, e não "opcional com aviso".** Deixar passar quando o campo não vem
+seria o chamador desligando o portão por OMISSÃO — a forma exata do `if body.pool_id` da
+AUT-46 e do corpo curto que a MOD-05 fechou.
+
+⚠️ **Uma transação, não duas escritas.** Linha do usuário e vínculo de grupo são um fato
+só ("contratado para o time X"); fora de transação, uma falha entre elas deixa de pé
+justamente o órfão que a regra fecha, e **nada fica vermelho**.
+
+⚠️ **Exigir o admin também teria sido errado**, e isso é medição: todo tenant começa com
+**zero grupos** (medido hoje: `[]`), e o `admin` é o único caminho que sobrevive a isso —
+é o mesmo `_irrestrito_para_pessoas` que a AUT-39 declarou para não trancar o dono do
+lado de fora.
+
+### 3 · Medido de carona: o delegado não monta o próprio organograma
+
+`supervisor@` **cria** grupo (201) e **adiciona membro** (201), mas **não se declara
+supervisor** — isso é conceder escopo e exige `config.permissions` (**403**). Logo o
+organograma é do admin e a contratação é do supervisor; por isso a recusa nomeia a tela e
+o pedido a fazer, em vez de mandar o delegado "criar um grupo" que não lhe serviria.
+
+### 4 · O que ficou vermelho ao ligar, e por quê
+
+- **`probe_config_permissions_split.sh`** — INCONCLUSIVO no S1. Era o previsto: aquele
+  probe é justamente onde o resíduo tinha aparecido (o `useradmin@` cria no S1 e edita no
+  S3). A pré-condição do organograma **subiu** para antes do S1, e o S1 virou a
+  demonstração do conserto em vez do lugar onde o defeito aparecia. O S2 passou a mandar
+  o grupo **de propósito**: sem ele, o 403 poderia vir do portão novo em vez do guard de
+  RANK, e o ramo ficaria verde pela proposição errada.
+- **4 testes do auth-api** — escritos quando a criação não pedia grupo. Não foram
+  apagados: viraram testemunhas do regime novo, e ao lado delas entrou
+  `TestTimeDeNascimento` com o trio (omissão → 422 · time alheio → 403 · admin sem grupo →
+  201) e o 422 do grupo inexistente. Os três negativos assertam `create_user.assert_not_awaited()`:
+  recusar **depois** do INSERT deixaria o órfão de pé.
+- **O dublê do pool** não sabia abrir transação (`MagicMock` não implementa `__aenter__`)
+  e `add_group_user` fazia `dict(MagicMock())` → `TypeError`. Consertado na fixture, com
+  o porquê escrito: *é o vermelho mais caro que existe, porque parece defeito do produto e
+  é do instrumento.*
+
+### 5 · Provas e números
+
+Gate `infra/test/gate_hire_into_your_own_team.sh` — **P1 confere QUATRO coisas** (criar
+não basta; o ponto da ficha é o que vem depois: ver, editar, aparecer na lista), **P2** é
+o caminho universal do admin, **P3** cobre a segunda porta (from-template — *duas portas
+para a mesma regra e só uma trancada* é padrão que este repositório já pagou), N1/N2/N3 os
+negativos, cada um conferindo que **nenhuma conta ficou para trás**.
+
+`2 781` testes Python verdes nas 14 suítes · `900` TS · manifesto verde com 319 scripts ·
+i18n em EN e pt-BR · ambiente devolvido (0 grupos, 0 templates, 0 contas de sonda).
+
+⚠️ **`CLAUDE.md` está em 1 755 linhas contra o alvo de 1 750** — 1 752 antes desta entrega,
++3 do invariante novo. A dívida é declarada aqui em vez de paga cortando conteúdo alheio
+sem medir.
+
+**Arquivos:** `packages/auth-api/src/plughub_auth_api/{router,models}.py` ·
+`packages/auth-api/tests/test_router.py` ·
+`packages/platform-ui/src/modules/access/AccessPage.tsx` ·
+`packages/platform-ui/src/types/index.ts` ·
+`packages/platform-ui/src/i18n/locales/{en,pt-BR}/access.json` ·
+`infra/test/gate_hire_into_your_own_team.sh` (novo) ·
+`infra/test/probe_config_permissions_split.sh` · `infra/test/gates.manifest` ·
+`docs/adr/adr-abac-module-granularity-and-delegation.md` · `CLAUDE.md`
+
 ## 2026-09-10 (1) — AUT-43: dois instrumentos quebrados, e os dois números errados
 
 ### 1 · O aviso da AUT-03 nunca chegou a log nenhum — e não era só o analytics-api
