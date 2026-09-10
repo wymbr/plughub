@@ -323,6 +323,19 @@ gate_resume_scope_is_not_optional.sh
 # N4 e o eixo de TENANT, declarado NAO-EXERCIVEL com um tenant so.
 gate_session_state_pool_scope.sh
 
+# AUT-50 (2026-09-09): `agent.*` era ESCRIVEL e ILEGIVEL. O `ManualTagForm` o
+# oferecia como PRIMEIRA sugestao, o `/api/inject-context` devolvia 200, o Redis
+# guardava — e o `supervisor_state` descarta o namespace SEMPRE, inclusive para
+# quem escreveu. Medido ao vivo: 200, 14 campos no Redis, 13 servidos, e
+# `context_withheld {total:13, by_rule:[], by_pool_scope:[]}` — a tag nem contava
+# como retida. Populacao: 0 tags vivas, 0 no stream duravel; nao e "pouco usado",
+# nao dava para usar. Fechou-se a AFORDANCIA (422 `namespace_sem_leitor`), nao se
+# construiu a feature: constru-la reabre a superficie que a decisao P7 de
+# `context-masking-rules.md` fechou de proposito.
+# O ramo P (escreve `service.*` e a LEITURA devolve) e o que impede o verde
+# errado: um backend que recusasse tudo deixaria N verde com o formulario inutil.
+gate_context_write_has_reader.sh
+
 # ── PUL-02 (2026-09-09) · triagem dos instrumentos da Camada F ───────────────
 # Os dois estavam como `?` NAO TRIADO, e por isso nenhum runner os colhia. Triados:
 #
@@ -432,6 +445,7 @@ ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_ch
 !gate_queue_segment_not_born_without_flow.sh   exige T0 colhido ANTES do fluxo: T0=$(date -u +%FT%TZ)
 !gate_sentiment_engine_half.sh   exige T0 colhido ANTES de abrir o contato, e um contato que ENFILEIRE
 !probe_release_reclaim_race.sh   exige <pool_id> <instance_id> de uma instancia viva
+!probe_context_withheld.sh   exige <session_id> de uma sessao viva QUE O `operator@` ALCANCE (AUT-47: o supervisor_state recorta por pool; rode sem argumento para ver sessao x pool). Triado em 2026-09-09: estava `?` e, rodado, publicava um defeito que nao existe — 403 de escopo chegava aos ramos A/B/C como "o campo sumiu em silencio". Hoje o 403 sai INCONCLUSIVO nomeando a causa
 
 # ── GAT-01 (2026-09-04): existiam e ninguem rodava ───────────────────────────
 # Os 54 abaixo entraram DEPOIS de rodar, nesta ordem: mediu-se o desfecho dos
@@ -633,7 +647,6 @@ smoke_wrapup_slot_handoff.sh
 ?probe_console_restore_after_reload.sh
 ?probe_context_snapshot_endpoint.sh
 ?probe_context_visibility.sh
-?probe_context_withheld.sh
 ?probe_f3_contact_list_contract.sh
 ?probe_flow_transitions.sh
 ?probe_internal_service_callers.sh

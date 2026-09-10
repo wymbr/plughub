@@ -125,9 +125,27 @@ Tags de infraestrutura e estado da sessão atual. Sem PII — produzidas por com
 
 ---
 
-### `agent.*` — Notas do agente humano *(novo)*
+### `agent.*` — Notas do agente humano ⚠️ **NUNCA FUNCIONOU; escrita FECHADA em 2026-09-09 (AUT-50)**
 
-Tags escritas manualmente pelo agente humano via ManualTagForm. Visíveis apenas ao próprio agente na sessão — não propagadas para outros participantes nem para relatórios.
+> **Medido:** **0** tags `agent.*` nos hashes de contexto vivos e **0** no stream durável
+> do Postgres. Não é "pouco usado" — **não dava para usar**: o `supervisor_state`
+> descarta `agent.*` **sempre** (decisão P7 de
+> [`context-masking-rules.md`](context-masking-rules.md)), inclusive para quem escreveu,
+> e a escrita gravava `visibility: "agents_only"` **fixo** — a
+> `visibility: ["<participant_id>"]` prometida na regra abaixo nunca foi produzida, e
+> resolvedor por participante não existe em caminho nenhum.
+>
+> Ou seja: o operador escrevia a nota, recebia **200**, e ela não voltava para o painel
+> de ninguém. Hoje `POST /api/inject-context` recusa o namespace com **422
+> `namespace_sem_leitor`**, dizendo isso, e o `ManualTagForm` deixou de oferecê-lo.
+> Notas visíveis ao atendimento vão em `service.*`.
+>
+> **A remoção na leitura FICA** — ela é o que impede uma regra de mascaramento
+> (`"agent.* × operator → plain"`) de expor nota privada de outra pessoa. Quem quiser a
+> feature constrói as DUAS metades de propósito, e aí levanta a recusa.
+
+Tags escritas manualmente pelo agente humano via ManualTagForm. *(O parágrafo abaixo
+descreve o DESENHO, não o que existe — ver o aviso acima.)* Visíveis apenas ao próprio agente na sessão — não propagadas para outros participantes nem para relatórios.
 
 | Tag | Tipo | Descrição |
 |---|---|---|
@@ -135,7 +153,12 @@ Tags escritas manualmente pelo agente humano via ManualTagForm. Visíveis apenas
 | `agent.alerta` | string | Flag de alerta para próximo atendimento |
 | `agent.qualidade_percebida` | string | Avaliação subjetiva do agente (uso interno) |
 
-**Regra:** tags `agent.*` têm `visibility: ["<participant_id do agente>"]` — só aparecem para o próprio agente que escreveu. O `supervisor_state` filtra por `participant_id` do JWT antes de entregar.
+**Regra (DESENHO — não implementada, ver o aviso da seção):** tags `agent.*` teriam
+`visibility: ["<participant_id do agente>"]`, e o `supervisor_state` filtraria por
+`participant_id` do JWT antes de entregar. ⚠️ **Nenhuma das duas metades existe**: a
+escrita grava `visibility: "agents_only"` fixo e a leitura descarta o namespace inteiro.
+Esta linha é a promessa-sem-produtor que a AUT-50 mediu — ficou aqui, marcada, porque
+apagá-la esconderia que a feature foi DECLARADA e nunca construída.
 
 ---
 

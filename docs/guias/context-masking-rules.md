@@ -292,6 +292,18 @@ Camada 2: ContextMaskingRule (tenant config, Config API)
 
 **Decisão**: manter o tratamento especial de `agent.*` separado das `ContextMaskingRule`. As regras de mascaramento não se aplicam a `agent.*` — esse namespace é filtrado antes do matching de regras. Isso evita que um admin inadvertidamente crie uma regra `"agent.* × operator → plain"` e exponha notas privadas de outros agentes.
 
+> **Emenda AUT-50 (2026-09-09) — a decisão FICA, e a outra metade caiu.** O texto acima
+> diz *"tags `agent.*` têm visibilidade por `participant_id` (só o próprio agente que
+> escreveu)"*: isso é o desenho, não o produto. Medido — a escrita gravava
+> `visibility: "agents_only"` **fixo**, resolvedor por participante não existe em
+> caminho nenhum, e a leitura descarta o namespace **inclusive para o autor**. População:
+> **0** tags vivas e **0** no stream durável. A nota era gravada com 200 e sumia.
+>
+> A filtragem descrita aqui continua sendo a coisa certa e não muda. O que mudou foi a
+> ESCRITA: `POST /api/inject-context` passou a recusar `agent.*` com **422
+> `namespace_sem_leitor`**, e o `ManualTagForm` parou de oferecê-lo — oferecer um
+> namespace do qual nada volta é promessa-sem-produtor na cara do operador.
+
 ---
 
 ## Plano de Implementação

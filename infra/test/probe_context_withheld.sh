@@ -35,8 +35,20 @@
 #
 # Limpa o que injetou (HDEL) em qualquer saída.
 #
+# ── ⚠️ PRÉ-REQUISITO desde a AUT-47 (2026-09-09) ─────────────────────────────
+#
+# O `/api/supervisor_state/{id}` passou a recortar por POOL, e este probe compara
+# DOIS principais na MESMA sessão: o `operator@` (lado que perde campos) e o
+# `admin@` (testemunha negativa). Se a sessão escolhida não estiver num pool do
+# `accessible_pools` do operator, a resposta é **403 `pool_not_accessible`** — sem
+# corpo, logo sem `context_withheld` — e os ramos A/B/C acusariam *"o campo sumiu
+# em silêncio"*, que é o defeito ERRADO: fiel ao ramo, adjacente à proposição.
+# Por isso o 403 sai **INCONCLUSIVO nomeando a causa**, nunca vermelho — e a
+# listagem sem argumento passou a mostrar o pool de cada sessão, que é o dado com
+# que se escolhe um alvo alcançável.
+#
 # Uso:  bash infra/test/probe_context_withheld.sh <session_id>
-#       (sem argumento, lista as sessões com ContextStore vivo)
+#       (sem argumento, lista as sessões com ContextStore vivo E o pool de cada uma)
 set -u
 
 DC=${DC:-docker compose -f docker-compose.demo.yml}
@@ -56,8 +68,16 @@ SID=${1:-}
 if [ -z "$SID" ]; then
   echo "uso: $0 <session_id>"
   echo
-  echo "sessões com ContextStore vivo (exclui o ctx de PROCESSO, que é outra chave):"
-  redis --raw KEYS "$TENANT:ctx:*" | grep -v ':ctx:journey:' | sed "s/^$TENANT:ctx://" | head -20
+  echo "sessões com ContextStore vivo (exclui o ctx de PROCESSO, que é outra chave)."
+  echo "o POOL vai ao lado porque é ele que decide se o operator alcança a sessão (AUT-47):"
+  # ⚠️ a lista e' lida ANTES do laço e cada `redis` leva `< /dev/null`: o
+  # `docker compose exec -T` de dentro herda o stdin do pipe e COME o resto —
+  # a listagem saía com uma sessão de vinte.
+  SESSOES=$(redis --raw KEYS "$TENANT:ctx:*" < /dev/null | grep -v ':ctx:journey:' | tr -d '\r' | head -20)
+  for k in $SESSOES; do
+    pool=$(redis --raw HGET "$k" core.pool.id < /dev/null | tr -d '\r' | jq -r '.value // "?"' 2>/dev/null)
+    printf '  %s  %s\n' "${k#$TENANT:ctx:}" "${pool:-?}"
+  done
   exit 2
 fi
 
@@ -97,9 +117,32 @@ redis HSET "$CTX" "$TAG_RULE" "$(mkentry 'tok_probe_segredo')" >/dev/null
 echo "injetado em $CTX: $TAG_GATE (portão) + $TAG_RULE (regra)"
 echo
 
-state() { curl -s "$MCP/api/supervisor_state/$SID" -H "Authorization: Bearer $1"; }
-A=$(state "$TOK_ADMIN")
-O=$(state "$TOK_OP")
+# ⚠️ o corpo vai para ARQUIVO porque o código HTTP tem de sobreviver à chamada:
+# `X=$(state …)` roda em subshell e uma variável setada lá dentro não volta — foi
+# assim que um 403 chegou aos ramos como "corpo sem o campo".
+state() {  # $1=token $2=arquivo -> ecoa o código HTTP
+  curl -s -o "$2" -w '%{http_code}' "$MCP/api/supervisor_state/$SID" -H "Authorization: Bearer $1"
+}
+HTTP_ADM=$(state "$TOK_ADMIN" /tmp/ctxw_admin.json)
+HTTP_OP=$(state "$TOK_OP"    /tmp/ctxw_op.json)
+A=$(cat /tmp/ctxw_admin.json 2>/dev/null)
+O=$(cat /tmp/ctxw_op.json    2>/dev/null)
+
+# ── o alvo é ALCANÇÁVEL? (AUT-47) ───────────────────────────────────────────
+# Recusa de escopo não é ausência de produtor. Sem esta porta, os ramos A–C
+# publicariam o defeito que a V1 existe para pegar, com a V1 intacta.
+if [ "$HTTP_OP" != "200" ] || [ "$HTTP_ADM" != "200" ]; then
+  quem=operator; corpo=$O; cod=$HTTP_OP
+  [ "$HTTP_ADM" != "200" ] && { quem=admin; corpo=$A; cod=$HTTP_ADM; }
+  motivo=$(echo "$corpo" | jq -r '.reason // .error // empty' 2>/dev/null)
+  pool_sess=$(redis --raw HGET "$CTX" core.pool.id < /dev/null | tr -d '\r' | jq -r '.value // "?"' 2>/dev/null)
+  echo "INCONCLUSIVO: o $quem recebeu HTTP $cod${motivo:+ ($motivo)} nesta sessão."
+  echo "  pool da sessão: ${pool_sess:-?}"
+  echo "  desde a AUT-47 o supervisor_state recorta por pool: escolha uma sessão de um"
+  echo "  pool que o $OP_EMAIL alcance (rode sem argumento para ver sessão × pool), ou"
+  echo "  aponte OP_EMAIL/OP_PASS para um operador com escopo sobre esta."
+  exit 2
+fi
 
 jqx() { echo "$1" | jq -c "$2" 2>/dev/null; }
 W_OP=$(jqx  "$O" '.customer_context.context_withheld // null')

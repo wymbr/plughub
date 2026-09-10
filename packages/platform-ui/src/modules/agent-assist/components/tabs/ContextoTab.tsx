@@ -199,10 +199,17 @@ type WriteStatus = "idle" | "busy" | "ok" | "error";
 
 /**
  * Namespaces operators can write to (backend enforces this — datalist is UX guidance only).
- * Per context-store-taxonomy.md Phase 2: operator → agent.* and service.* only.
+ *
+ * ⚠️ AUT-50 (2026-09-09): `agent.` saiu das DUAS listas. Ele era o primeiro sugerido, e
+ * era ESCRIVEL e ILEGIVEL — o `supervisor_state` descarta `agent.*` sempre, inclusive
+ * para quem escreveu, e a `visibility: [participant_id]` que a taxonomia promete nunca
+ * foi produzida pela escrita. Medido: 0 tags vivas, 0 no stream duravel — a nota era
+ * gravada com 200 e sumia. O backend agora recusa com 422 `namespace_sem_leitor`; esta
+ * lista deixa de OFERECER o caminho que ele recusa, que e o que evita o 422 chegar como
+ * surpresa. Notas visiveis ao atendimento vao em `service.*`.
  */
-const OPERATOR_WRITE_PREFIXES = ["agent.", "service."];
-const SUPERVISOR_WRITE_PREFIXES = ["agent.", "service.", "caller.", "account.", "journey.", "history."];
+const OPERATOR_WRITE_PREFIXES = ["service."];
+const SUPERVISOR_WRITE_PREFIXES = ["service.", "caller.", "account.", "journey.", "history."];
 
 const ManualTagForm: React.FC<{
   sessionId: string;

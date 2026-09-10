@@ -259,7 +259,10 @@ export { applyMaskingTypeToValue }
  * linha com `value: null` e `category: "hidden"`. Dropar a chave faria o leitor
  * concluir que a chamada nunca escreveu nada — ausência plausível de novo.
  *
- * `agent.*` sai (visibilidade por participante, resolvida noutro lugar) e **não
+ * `agent.*` sai — ⚠️ e a razao escrita aqui era *"visibilidade por participante,
+ * resolvida noutro lugar"*, o que nao e verdade: nenhum caminho a resolve (AUT-50,
+ * 2026-09-09; 0 tags vivas e 0 no stream duravel). A saida FICA, pela decisao P7 de
+ * `context-masking-rules.md`; o que mudou e que a ESCRITA parou de oferece-lo. E **não
  * entra no total**: não é fato do contato, então contá-lo como "oculto" mentiria
  * sobre quantas entradas o operador deixou de ver.
  */

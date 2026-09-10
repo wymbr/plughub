@@ -1226,7 +1226,14 @@ async function applyContextMaskingDynamic(
 
     const ns = tag.split(".")[0] ?? ""
 
-    // agent.* — always removed (per-participant visibility, resolved elsewhere).
+    // agent.* — always removed. ⚠️ Esta linha dizia *"(per-participant visibility,
+    // resolved elsewhere)"* e o "elsewhere" NAO EXISTE: nenhum caminho HTTP resolve
+    // `agent.*` por participante, e a escrita nunca produziu a `visibility:
+    // [participant_id]` que a taxonomia promete. Medido em 2026-09-09 (AUT-50): 0 tags
+    // vivas, 0 no stream duravel — a feature de "notas do agente" nunca funcionou. A
+    // remocao aqui FICA (e a decisao P7 de `context-masking-rules.md`, que impede uma
+    // regra de mascaramento de expor nota de outra pessoa); o que saiu foi a escrita,
+    // que oferecia um namespace do qual nada volta.
     // FORA do total, e de propósito: não é fato do contato para este visualizador,
     // então contá-lo como "oculto por política" mentiria sobre quantas entradas o
     // operador deixou de ver. Mesma decisão de `maskContextForPersistence`.
@@ -1989,7 +1996,38 @@ export async function startServer(config: ServerConfig): Promise<void> {
     const podeIntervir =
       (ACCESS_RANK[mcInject["agent_assist"]?.["supervisionar"]?.access ?? "none"] ?? 0) >= 2
     const writeNs   = (key as string).split(".")[0] ?? ""
-    const OPERATOR_WRITABLE_NS = ["agent", "service"]
+
+    // ⚠️ AUT-50 (2026-09-09): `agent.*` saiu da lista de escrita, e a recusa e NOMEADA.
+    //
+    // Ele era escrivel e ILEGIVEL: a leitura o descarta SEMPRE (ver `if (ns === "agent")
+    // continue`, abaixo neste arquivo) — inclusive para quem escreveu. A taxonomia
+    // promete outra coisa (*"visibility: [participant_id]; o `supervisor_state` filtra
+    // por `participant_id` do JWT antes de entregar"*), mas esta escrita gravava
+    // `visibility: "agents_only"` FIXO e resolvedor nenhum existe. Medido ao vivo: a
+    // nota volta 200, entra no Redis, e nao aparece no painel de ninguem.
+    //
+    // POPULACAO: **0** tags `agent.*` nos hashes vivos e **0** no stream duravel. Nao e
+    // "pouco usado" — nao da para usar. E por isso a saida foi fechar a afordancia em
+    // vez de construir a feature: construir reabre a superficie que a decisao P7 de
+    // `context-masking-rules.md` fechou de proposito (impedir que uma regra de
+    // mascaramento exponha nota privada de outra pessoa), por uma demanda medida em zero.
+    //
+    // Recusa com MOTIVO: um 403 generico mandaria o operador pedir permissao para uma
+    // porta que nao existe. Levantar isto e um `git revert` no dia em que as notas
+    // ganharem leitor.
+    if (writeNs === "agent") {
+      res.status(422).json({
+        error:   "namespace_sem_leitor",
+        message:
+          "`agent.*` não é lido por ninguém hoje — nem por quem escreve: o " +
+          "supervisor_state descarta este namespace sempre. A nota seria gravada e " +
+          "nunca voltaria para a tela. Use `service.*` para notas visíveis ao " +
+          "atendimento. (AUT-50)",
+      })
+      return
+    }
+
+    const OPERATOR_WRITABLE_NS = ["service"]
     // Exact tags the operator may WRITE beyond the namespaces above — the write-side
     // analog of context_visibility.operator_allow_tags (read). caller.customer_id é a
     // AÇÃO DE IDENTIFICAÇÃO/VÍNCULO (Cliente 360 C1a: corrigir/vincular o cliente),

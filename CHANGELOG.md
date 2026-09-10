@@ -1,5 +1,100 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (22) — AUT-50: `agent.*` era escrevível e ilegível, e a feature nunca existiu
+
+### 1 · A ficha perguntava a coisa errada
+
+Ela pedia para **alinhar as duas listas** do `server.ts` — escrita
+`OPERATOR_WRITABLE_NS = ["agent", "service"]` × leitura
+`DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]`. A doc responde que elas **não
+devem ser iguais**: a decisão **P7** de `context-masking-rules.md` manda o read side
+descartar `agent.*` **antes** do matching de regras, justamente para que um admin não
+crie `"agent.* × operator → plain"` e exponha nota privada de outra pessoa. A assimetria
+é deliberada.
+
+O que **não** é deliberado é que a feature nunca funcionou:
+
+- `context-store-taxonomy.md` promete `visibility: ["<participant_id> do agente"]` e diz
+  que *"o `supervisor_state` filtra por `participant_id` do JWT antes de entregar"*;
+- a **escrita** (`POST /api/inject-context`) gravava `visibility: "agents_only"` — fixo;
+- a **leitura** descarta `agent.*` **sempre**, inclusive para o autor;
+- logo a nota não voltava **nem para quem a escreveu**.
+
+Medido ao vivo ao fechar a AUT-49: `agent.aut49_prova` → **HTTP 200**, **14 campos no
+Redis**, **13** servidos, e `context_withheld {total: 13, by_rule: [], by_pool_scope: []}`
+— a tag **nem era contada como retida**, porque estava fora do conjunto de origem. E o
+`ManualTagForm` a oferecia como **primeira sugestão**.
+
+É a assinatura deste repositório: **comentário que promete mecanismo sem produtor.** Duas
+casas diziam *"visibilidade por participante, resolvida noutro lugar"*, e o *elsewhere*
+não existe em caminho nenhum.
+
+### 2 · Fechar a AFORDÂNCIA, não construir a feature
+
+**População: 0 tags `agent.*` nos hashes de contexto vivos e 0 no stream durável do
+Postgres.** Não é "pouco usado" — não dava para usar. Construir a metade que falta
+reabriria exatamente a superfície que a P7 fechou de propósito, por uma demanda medida em
+zero.
+
+- `POST /api/inject-context` recusa `agent.*` com **422 `namespace_sem_leitor`**, e a
+  mensagem diz por quê. **422 e não 403**: um 403 mandaria o operador pedir permissão
+  para uma porta que não existe.
+- O `ManualTagForm` parou de oferecê-lo — nas **duas** listas (`OPERATOR_*` e
+  `SUPERVISOR_WRITE_PREFIXES`). Oferecer um namespace do qual nada volta é a
+  promessa-sem-produtor na cara de quem usa.
+- A remoção **na leitura FICA**: é ela que impede a regra de mascaramento de vazar nota
+  de outra pessoa.
+- Os três comentários mentirosos foram **corrigidos no lugar e marcados**, não apagados —
+  apagar esconderia que a feature foi DECLARADA e nunca construída. Levantar a recusa é
+  um `git revert` no dia em que as notas ganharem leitor.
+
+### 3 · O gate, e o ramo que impede o verde errado
+
+`infra/test/gate_context_write_has_reader.sh` — quatro ramos:
+
+```
+P — POST service.gate50 -> 200 · e o supervisor_state DEVOLVE a tag
+N — POST agent.gate50 -> 422 namespace_sem_leitor · nada de agent.* no snapshot
+C — nenhuma das duas listas do ContextoTab cita `agent.`
+D — o descarte na leitura continua no lugar
+VERDE — escrita e leitura falam do mesmo conjunto.
+```
+
+**P é o ramo que importa.** Um backend que recusasse *tudo* deixaria N verde com o
+formulário inútil — e o defeito original não era "aceita demais", era **aceitar sem
+leitor**. Só o par (aceita+volta) × (recusa+diz) descreve o conserto. **900 testes TS
+verdes a partir das imagens.**
+
+### 4 · Achado de carona: um instrumento publicando um defeito que não existe
+
+Ao rodar os gates vizinhos, o `probe_context_withheld.sh` saiu **VERMELHO** dizendo *"o
+campo sumiu em silêncio, que é exatamente o defeito da V1"* — em três ramos. Medida a
+causa: **403 `pool_not_accessible`**, da AUT-47 (de hoje). O probe compara `operator@` e
+`admin@` na **mesma sessão**, e desde a AUT-47 o `supervisor_state` recorta por pool: o
+`operator@` alcança 3 pools e **nenhuma sessão viva está neles**. Corpo de recusa não tem
+`context_withheld`, e a ausência chegava aos ramos como ausência de produtor.
+
+É a D14.1 na forma mais cara: **vermelho fiel ao ramo, adjacente à proposição** — um
+relatório honesto teria publicado a quebra da V1 com a V1 intacta.
+
+- o código HTTP deixou de ser descartado (o corpo vai a arquivo: `X=$(state …)` roda em
+  subshell e a variável não volta) e **403/404 sai INCONCLUSIVO nomeando a causa**;
+- a listagem sem argumento passou a mostrar **sessão × pool**, que é o dado com que se
+  escolhe um alvo alcançável — e ela vinha truncada em **1 de 20**, porque o
+  `docker compose exec -T` de dentro do `while read` **come o stdin do pipe**;
+- triado de `?` (não triado) para **ASSISTIDO** no manifesto, com o requisito na linha.
+
+**Controle positivo, porque o negativo sozinho passa pelo motivo errado:** concedido o
+pool ao `operator@` pela API oficial (`set_user_pools.sh`), o probe roda os **6 ramos
+verdes** — A/B/C/D/E/F —, e o escopo foi **restaurado e conferido idêntico**.
+
+**Arquivos:** `packages/mcp-server-plughub/src/server.ts` ·
+`packages/mcp-server-plughub/src/lib/context-masking.ts` ·
+`packages/platform-ui/src/modules/agent-assist/components/tabs/ContextoTab.tsx` ·
+`docs/guias/context-store-taxonomy.md` · `docs/guias/context-masking-rules.md` ·
+`infra/test/gate_context_write_has_reader.sh` (novo) ·
+`infra/test/probe_context_withheld.sh` · `infra/test/gates.manifest`
+
 ## 2026-09-09 (21) — AUT-49: o poll de 3 s não existia, e metade já sabia disso
 
 ### 1 · O achado, e a metade que já estava certa
