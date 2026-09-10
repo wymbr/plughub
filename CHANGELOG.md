@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (20) — AUT-48: a recusa passou a ter cara, e a desculpa caiu
+
+### 1 · A premissa da ficha era falsa, e isso vem primeiro
+
+A AUT-47 adiou esta metade dizendo que *"verificação visual em navegador já falhou
+neste repositório (o login automatizado não completa)"* — e a entrega de hoje mais
+cedo (RET-11) registrou o mesmo. **Medido: o login completa.** O que falhava era o
+instrumento:
+
+- `form_input` preenche o campo sem disparar os eventos que o React escuta;
+- clicar no segundo campo depois de digitar no primeiro **não move o foco** — a senha
+  ia parar no campo de e-mail (`admin@plughub.localchangeme_admin`, na primeira
+  tentativa);
+- `Enter` no formulário **não submete** — quem submete é o botão.
+
+A receita que funciona: clique real no e-mail → digitar → **`Tab`** → digitar a senha
+→ **clicar em "Entrar"**. Fica registrada porque a desculpa custou uma ficha adiada.
+
+### 2 · O que foi construído
+
+`SessionStateDeniedNotice`, banner acima da coluna central do Console, com **quatro
+textos distintos** — porque as quatro respostas do servidor não são a mesma coisa:
+
+```
+403 pool_not_accessible ........... recusa, e o caminho é pedir escopo
+403 session_scope_undeterminable .. recusa, mas ninguém tem o que conceder
+403 tenant_mismatch ............... recusa, e não há caminho nenhum
+404 session_expired_or_unknown .... NÃO é recusa: é ausência
+```
+
+Colapsar o 404 nos 403 mandaria o operador **pedir permissão para ver uma sessão que
+não existe mais** — a mesma família de "duas ausências com a mesma cara" que o portão
+do servidor separou na AUT-47. Por isso o 404 tem ícone e tom neutros, e a frase
+termina em *"nada a carregar, nem permissão a pedir"*.
+
+O código cru do servidor (`404 session_expired_or_unknown`) fica **visível de
+propósito**: é o que a pessoa repassa ao suporte, e é o que distingue esta tela de uma
+que simplesmente quebrou.
+
+### 3 · Conferido a olho, nos dois idiomas
+
+Console real, contato de aprovação de deploy reivindicado pela UI:
+
+```
+⊘ This session no longer exists
+  There is no live state for it — it expired or was never here. Nothing to load,
+  and nothing to ask permission for.
+  Server response: 404 session_expired_or_unknown
+
+⊘ Esta sessão não existe mais
+  Não há estado vivo para ela — expirou ou nunca esteve aqui. Não há o que carregar,
+  nem permissão a pedir.
+  Resposta do servidor: 404 session_expired_or_unknown
+```
+
+A recusa foi forçada **apagando `session:{sid}:meta` e `:ai`** — sem tocar em
+provisionamento. E o pacote de aprovação continuou renderizando ao lado, que é o
+desenho: **banner, não substituição** — a conversa vem de outra fonte e continua útil;
+o que falta é o estado.
+
+⚠️ **O eixo de escopo foi exercido à parte, e reversível:** tirar `aprovacao_deploy`
+do `accessible_pools` do admin **pela API oficial** fez o pool sumir do seletor do
+Console (**POOLS (0/7) → (0/6)**) — prova de que a mudança de escopo chega à tela. A
+lista de 41 pools foi guardada ANTES em arquivo, restaurada depois e **conferida
+idêntica**.
+
+### 4 · O que a verificação visual descobriu de quebra (AUT-49)
+
+O banner **só apareceu depois de remontar a página**. Motivo: o `useSupervisorState`
+**não tem `setInterval` nenhum** — busca no mount (+3 retries curtos) e a cada evento
+de WS. Mas três comentários, em dois arquivos, prometem um poll de 3 s
+(`ContextoTab.tsx:663` e `:665`, `ClienteTab.tsx:8`).
+
+⚠️ E não é cosmético: os dois pontos que confiam no poll são **write-backs do próprio
+operador** (vincular cliente, gravar tag manual) — exatamente os casos em que **não há
+evento de WS**, porque ninguém falou na conversa. Ficha **AUT-49**, com as duas saídas
+(criar o intervalo × trocar os comentários por um `refresh()` explícito, que o hook já
+expõe).
+
+Verde: `tsc --noEmit` limpo · build da imagem da UI (2 648 módulos, `tsc -b` + `vite
+build` dentro dela) · `probe_i18n_duplicate_keys` · `probe_abac_field_labels_i18n` ·
+`probe_task_ledger` · `gate_session_state_pool_scope` · ambiente devolvido como estava
+(tarefa encerrada, fila em 0, 41 pools no admin, os 4 tokens de resume pré-existentes
+intactos).
+
 ## 2026-09-09 (19) — AUT-47: o estado da sessão pertence ao pool dela
 
 ### 1 · A ficha mandava medir uma coisa, e a medição virou o achado

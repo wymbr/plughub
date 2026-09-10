@@ -607,5 +607,28 @@
     "searchPlaceholder": "Search phrases or @specialist…",
     "noResults": "No results for \"{{query}}\"",
     "viaAt": "via @mention"
+  },
+  "stateDenied": {
+    "code": "Server response: {{status}} {{reason}}",
+    "poolNotAccessible": {
+      "title": "Session state not loaded — pool out of your scope",
+      "body": "This contact belongs to a pool you do not reach, so its context, sentiment and approval package were not served. Ask an administrator for access to the pool."
+    },
+    "scopeUndeterminable": {
+      "title": "Session state not loaded — pool could not be determined",
+      "body": "The session is live but no pool could be resolved for it, so the state was withheld. This is not about your permissions; report it with the code below."
+    },
+    "tenantMismatch": {
+      "title": "Session state not loaded — another tenant",
+      "body": "This session belongs to a different tenant than your account."
+    },
+    "expired": {
+      "title": "This session no longer exists",
+      "body": "There is no live state for it — it expired or was never here. Nothing to load, and nothing to ask permission for."
+    },
+    "unknown": {
+      "title": "Session state not loaded",
+      "body": "The server did not serve the state of this session. The conversation may still be visible; the context panel will stay empty."
+    }
   }
 }

@@ -46,6 +46,7 @@ import { DialogFormRenderer, isFormFillSnapshot } from "./components/DialogFormR
 import { AgentInput }          from "./components/AgentInput";
 import { PauseReasonModal }    from "./components/PauseReasonModal";
 import { RightPanel }          from "./components/RightPanel";
+import { SessionStateDeniedNotice } from "./components/SessionStateDeniedNotice";
 import { ContactList }         from "./components/ContactList";
 import { PullInboxPanel }      from "./components/PullInboxPanel";
 import { ToastContainer }      from "./components/ToastContainer";
@@ -182,7 +183,8 @@ export const AgentAssistPage: React.FC = () => {
 
   // ── Supervisor/copilot hooks ───────────────────────────────────────────
   const lastWsEvent = lastEvent as import("./types").WsServerEvent | null;
-  const { state: supervisorState, refresh: refreshSupervisorState } = useSupervisorState(selectedSessionId, lastWsEvent);
+  const { state: supervisorState, refresh: refreshSupervisorState, recusa: recusaDeEstado } =
+    useSupervisorState(selectedSessionId, lastWsEvent);
   const capabilities = useSupervisorCapabilities(selectedSessionId, supervisorState);
   const copilotSuggestions = useCopilotState(selectedSessionId, lastCopilotEvent);
 
@@ -836,6 +838,12 @@ export const AgentAssistPage: React.FC = () => {
 
           {/* Center column: ParticipantFilterBar + ChatArea + CopilotBanner + AgentInput */}
           <div className="flex flex-col flex-1 overflow-hidden bg-white">
+            {/* AUT-48: o servidor recusou o ESTADO desta sessao (ou ela sumiu). Sem
+                este aviso o painel fica vazio e a tela diz "nao ha contexto" onde o
+                servidor disse "voce nao pode" — e o operador vai procurar DADO onde
+                falta PERMISSAO. Banner, e nao substituicao: a conversa vem de outra
+                fonte (WS/historico) e continua util; o que falta e o estado. */}
+            {recusaDeEstado && <SessionStateDeniedNotice recusa={recusaDeEstado} />}
             {(!selected && !previewSessionId) ? (
               <div className="flex-1 flex flex-col items-center justify-center text-muted text-sm select-none gap-3">
                 {activePools.length === 0 ? (

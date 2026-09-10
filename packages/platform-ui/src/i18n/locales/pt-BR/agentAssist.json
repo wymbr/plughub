@@ -607,5 +607,28 @@
     "searchPlaceholder": "Buscar frases ou @especialista…",
     "noResults": "Nenhum resultado para \"{{query}}\"",
     "viaAt": "via @menção"
+  },
+  "stateDenied": {
+    "code": "Resposta do servidor: {{status}} {{reason}}",
+    "poolNotAccessible": {
+      "title": "Estado da sessão não carregado — pool fora do seu escopo",
+      "body": "Este contato é de um pool que você não alcança, então o contexto, o sentimento e o pacote de aprovação não foram servidos. Peça acesso ao pool a um administrador."
+    },
+    "scopeUndeterminable": {
+      "title": "Estado da sessão não carregado — pool indeterminado",
+      "body": "A sessão está viva, mas não foi possível resolver o pool dela, e o estado ficou retido. Não é sobre a sua permissão; relate com o código abaixo."
+    },
+    "tenantMismatch": {
+      "title": "Estado da sessão não carregado — outro tenant",
+      "body": "Esta sessão pertence a um tenant diferente do da sua conta."
+    },
+    "expired": {
+      "title": "Esta sessão não existe mais",
+      "body": "Não há estado vivo para ela — expirou ou nunca esteve aqui. Não há o que carregar, nem permissão a pedir."
+    },
+    "unknown": {
+      "title": "Estado da sessão não carregado",
+      "body": "O servidor não serviu o estado desta sessão. A conversa pode continuar visível; o painel de contexto ficará vazio."
+    }
   }
 }
