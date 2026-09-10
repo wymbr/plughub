@@ -78,6 +78,36 @@ _CLAIM_SUB        = "sub"           # contact_id
 _CLAIM_SESSION    = "session_id"    # present on reconnect tokens
 _CLAIM_TENANT     = "tenant_id"
 
+_MASKED_FIELD_PLACEHOLDER = "••••••"
+_EMPTY_FIELD              = ""
+
+
+def masked_field_echo(value: object) -> str:
+    """O que aparece no lugar do valor de um campo mascarado.
+
+    **Remove-se o VALOR, nunca o CAMPO** (decisão do dono, 2026-09-10), e
+    preenchido difere de vazio:
+
+        preenchido → `••••••`   ·   vazio → `""`
+
+    ⚠️ **Gêmea deliberada** de `orchestrator_bridge.main.masked_field_echo`
+    e do ramo equivalente no `AgentAssistPage.tsx`. São três serviços — dois
+    Python que não se importam e um TypeScript —, então a concordância NÃO pode
+    ser por importação, e prometê-la em prosa é o defeito que este repositório
+    cataloga. Quem a impõe é `infra/test/probe_masked_field_echo_parity.sh`, que
+    roda as três contra a MESMA tabela de casos.
+
+    ⚠️ **`0` e `False` NÃO são vazios.** `if not x` marcaria um `0` digitado como
+    *"o cliente não preencheu"* — defeito de truthiness já catalogado.
+    """
+    if value is None:
+        return _EMPTY_FIELD
+    if isinstance(value, str):
+        return _EMPTY_FIELD if value.strip() == "" else _MASKED_FIELD_PLACEHOLDER
+    if isinstance(value, (list, dict, tuple, set)):
+        return _EMPTY_FIELD if len(value) == 0 else _MASKED_FIELD_PLACEHOLDER
+    return _MASKED_FIELD_PLACEHOLDER
+
 
 class AuthError(Exception):
     """Raised during the auth handshake with a structured code."""
@@ -814,6 +844,13 @@ class WebchatAdapter:
         # Masked fields (senha, PIN, OTP, etc.) must NEVER appear in the session stream
         # or conversation history visible to agents — replace with "••••••".
         #
+        # ⚠️ Esta lista é o que a TELA DE HISTÓRICO do Console relê: ela vai para
+        # `session:{sid}:messages`, servida por `GET /api/conversation_history`.
+        # O eco AO VIVO vem de outra casa (o bridge), e até 2026-09-10 as duas
+        # discordavam sobre a MESMA submissão — um F5 mudava o número de campos.
+        # A regra que as reconcilia é `masked_field_echo`: remove-se o VALOR,
+        # nunca o CAMPO, e preenchido difere de vazio.
+        #
         # Primary source: SessionRegistry._menu_masked_fields, populated by
         # OutboundConsumer when the menu.payload arrived from Kafka (correct path).
         # Fallback: self._pending_masked_fields, populated by _stream_delivery_loop
@@ -836,7 +873,7 @@ class WebchatAdapter:
                 result_dict = {}
 
             redacted = {
-                k: ("••••••" if k in masked_set else v)
+                k: (masked_field_echo(v) if k in masked_set else v)
                 for k, v in result_dict.items()
             }
             agent_label   = "Formulário"

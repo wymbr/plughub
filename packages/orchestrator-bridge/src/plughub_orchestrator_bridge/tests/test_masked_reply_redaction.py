@@ -215,8 +215,13 @@ def test_todo_destino_chama_o_redator() -> None:
 #
 #   · sem `echo_policy` nada muda — é a regressão que protege os QUATRO destinos
 #     de armazenamento, que não passam a política e não podem passar a mudar;
-#   · `none` REMOVE o campo, não o substitui — se virar `••••••`, o operador
-#     descobre que o campo existe, que é o que `none` existe para evitar;
+#   · ⚠️ `none` DEIXOU DE REMOVER o campo (decisão do dono, 2026-09-10). O
+#     argumento original — *"se virar `••••••`, o operador descobre que o campo
+#     existe"* — foi MEDIDO e não se sustenta: o `MenuCard` do Console renderiza
+#     o `label` de todo campo do formulário, mascarado incluído, num input
+#     desabilitado. O operador já tinha visto `Senha` e `Código 2FA` antes de o
+#     cliente responder; `none` só fazia o eco contradizer o cartão — e a MESMA
+#     tela, num F5, relia o histórico e via os campos de volta;
 #   · `plain` não desdeclara um campo `masked:` do fluxo — é a regra
 #     "restritivo vence", e sem teste ela é só um comentário.
 
@@ -238,17 +243,80 @@ def test_sem_echo_policy_o_comportamento_e_o_de_antes() -> None:
     assert "cliente@exemplo.com" in out
 
 
-def test_none_remove_o_campo_em_vez_de_substituir() -> None:
+def test_none_mantem_o_campo_e_remove_so_o_valor() -> None:
+    """Substitui `test_none_remove_o_campo_em_vez_de_substituir` (2026-09-10).
+
+    O caso ANTERIOR exigia `"senha" not in out`. Ele guardava uma decisão que foi
+    revista: remove-se o VALOR, nunca o CAMPO. Fica registrado aqui em vez de
+    apagado, porque um teste que desaparece leva a razão junto.
+    """
     out, _ = redact_customer_reply(
         FORM_REPLY, msg_type="menu_result", any_masked=False,
         masked_fields=FORM_MASKED_FIELDS,
         echo_policy={"senha": "none", "codigo_2fa": "masked"},
     )
-    assert "senha" not in out, "`none` tem de REMOVER a chave, não mascarar o valor"
+    assert "senha" in out, "`none` NÃO remove mais a chave — remove só o valor"
     assert "hunter2" not in out
-    assert out.count("••••••") == 1          # só o codigo_2fa
+    assert out.count("••••••") == 2          # os dois campos, ocultos
     assert "codigo_2fa" in out
     assert "cliente@exemplo.com" in out      # campo livre sobrevive
+
+
+def test_none_e_masked_produzem_a_mesma_saida() -> None:
+    """⚠️ A INÉRCIA do `echo_policy`, fixada como FATO e não como prosa.
+
+    Com `none` colapsado em `masked` — e `plain` já rebaixado a `masked` pela
+    regra "o tipo aperta" —, nenhuma escolha de `echo_to_operator` muda o que o
+    operador lê. Isto não é acidente: é a consequência declarada da decisão de
+    2026-09-10, e está aqui para que a próxima sessão a leia como decisão em vez
+    de redescobri-la como bug. Ficha `ALW-16` decide o destino do campo.
+
+    Se algum dia os modos voltarem a divergir, ESTE teste reprova primeiro — que
+    é exatamente o aviso que se quer.
+    """
+    saidas = {
+        modo: redact_customer_reply(
+            FORM_REPLY, msg_type="menu_result", any_masked=False,
+            masked_fields=FORM_MASKED_FIELDS,
+            echo_policy={"senha": modo, "codigo_2fa": modo},
+        )[0]
+        for modo in ("none", "masked", "plain")
+    }
+    assert len(set(saidas.values())) == 1, f"os modos divergiram: {saidas}"
+
+
+def test_campo_mascarado_VAZIO_nao_se_passa_por_preenchido() -> None:
+    """O resumo não pode AFIRMAR um valor que não existe.
+
+    Até 2026-09-10 um campo mascarado em branco virava `••••••` igual a um
+    preenchido — o "valor plausível" do catálogo, na forma mais barata: o
+    operador lia "o cliente digitou a senha" sobre um campo vazio.
+    """
+    reply = json.dumps({"email": "a@b.c", "senha": "", "codigo_2fa": "   "})
+    out, _ = redact_customer_reply(
+        reply, msg_type="menu_result", any_masked=False,
+        masked_fields=FORM_MASKED_FIELDS,
+    )
+    obj = json.loads(out[len("[Formulário: "):-1])
+    assert obj["senha"] == "", "campo mascarado VAZIO não pode virar `••••••`"
+    assert obj["codigo_2fa"] == "", "só espaço em branco também é vazio"
+    assert obj["email"] == "a@b.c"
+
+
+def test_zero_e_false_NAO_sao_vazios() -> None:
+    """Controle do defeito de truthiness que o `CLAUDE.md` cataloga.
+
+    `if not v` marcaria um `0` digitado como *"o cliente não preencheu"*. Sem
+    este caso, a "simplificação" óbvia de `masked_field_echo` passa.
+    """
+    reply = json.dumps({"senha": 0, "codigo_2fa": False})
+    out, _ = redact_customer_reply(
+        reply, msg_type="menu_result", any_masked=False,
+        masked_fields=FORM_MASKED_FIELDS,
+    )
+    obj = json.loads(out[len("[Formulário: "):-1])
+    assert obj["senha"] == "••••••"
+    assert obj["codigo_2fa"] == "••••••"
 
 
 def test_masked_e_o_default_para_campo_sem_politica() -> None:
@@ -259,7 +327,8 @@ def test_masked_e_o_default_para_campo_sem_politica() -> None:
         echo_policy={"senha": "none"},       # codigo_2fa sem entrada
     )
     assert "914455" not in out
-    assert "codigo_2fa" in out and out.count("••••••") == 1
+    # `none` no `senha` nao remove mais: os DOIS campos aparecem ocultos.
+    assert "codigo_2fa" in out and out.count("••••••") == 2
 
 
 def test_echo_policy_nao_alcanca_campo_livre() -> None:

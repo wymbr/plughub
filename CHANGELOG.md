@@ -1,5 +1,115 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-10 (4) — MSK-03: remove-se o VALOR, nunca o CAMPO — e as três casas do eco passam a concordar
+
+O dono perguntou por que a tela de histórico do Console mostrava **um** campo quando
+o cliente preencheu três. A resposta foi medida, e não era perda: era **política
+aplicada por uma casa e ignorada por outra**.
+
+### 1 · Duas casas, discordando na MESMA tela
+
+| o operador | quem produz o texto | resultado |
+|---|---|---|
+| está olhando (WS `message.text`) | `orchestrator-bridge` · `redact_customer_reply(echo_policy=…)` | `[Formulário: {"email": "czxc"}]` — **1 campo** |
+| recarrega (`GET /api/conversation_history`) | `channel-gateway` · lista Redis `session:{id}:messages` | `{"email", "senha": "••••••", "codigo_2fa": "••••••"}` — **3 campos** |
+
+O `1` era a ALW-10 funcionando: o catálogo vivo declara `credential` com
+`echo_to_operator: "none"`, e `none` **apagava a chave**. Confirmado no log da sessão
+exata (`11:21:16 … fields=['codigo_2fa','senha']`). Um F5 mudava o que o operador via
+da mesma submissão.
+
+⚠️ **E eu li a coluna errada antes de acertar:** medi `echo_to_customer` e concluí
+sobre o operador. A conclusão sobreviveu, a evidência não — são **dois campos**
+(`echo_to_operator` é fronteira de confidencialidade e é enforçada; `echo_to_customer`
+é advisory). Fica registrado porque a próxima pessoa que abrir esse catálogo vai ver
+duas colunas quase iguais.
+
+### 2 · O argumento original não se sustentou à medição
+
+A ALW-10 fez `none` apagar a chave com um motivo explícito, e ele está no teste dela:
+*"se virar `••••••`, o operador descobre que o campo existe, que é o que `none` existe
+para evitar"*.
+
+Medido: **o `MenuCard` do Console renderiza o `label` de TODO campo do formulário**,
+mascarado incluído, num input desabilitado. O operador já tinha visto `Senha` e
+`Código 2FA` **antes** de o cliente responder. `none` não escondia a existência do
+campo — fazia o eco contradizer o cartão logo acima dele.
+
+**Decisão do dono: remove-se o VALOR, nunca o CAMPO.**
+
+### 3 · E o campo VAZIO mentia
+
+Um campo mascarado em branco virava `••••••` igual a um preenchido — o resumo
+**afirmava um valor que não existe**. É o *valor plausível* do catálogo na forma mais
+barata: o operador lia *"o cliente digitou a senha"* sobre um campo vazio. Agora:
+
+```
+preenchido → ••••••      vazio → ""
+```
+
+`""` é o que um campo LIVRE em branco já mostra no mesmo objeto — uma segunda
+gramática para o mesmo fato só criaria a próxima divergência.
+
+⚠️ **Duas ausências que a função não separa, e por isso não finge separar:** *"o canal
+não renderizou o campo"* e *"o cliente não digitou"* chegam iguais. `""` afirma só o
+que é verdade nos dois casos.
+
+### 4 · TRÊS casas, e agora um mecanismo
+
+A regra vive em `orchestrator-bridge` (eco ao vivo), `channel-gateway/webchat.py`
+(histórico) e `AgentAssistPage.tsx` (eco OTIMISTA, que aparece antes do round-trip).
+Dois serviços, duas linguagens, e o Console **não importa** `@plughub/schemas` por
+decisão declarada — a concordância não pode ser por importação.
+
+A ALW-10 já **pedia** que as duas pontas do eco concordassem; o que faltava era o
+mecanismo. `infra/test/probe_masked_field_echo_parity.sh` **compila com o `tsc` de
+verdade e executa** as três contra a mesma tabela. Ler o fonte com regex diria que a
+função existe; só a execução diz o que ela devolve, e é a devolução que precisa
+concordar.
+
+⚠️ **Acordo sozinho não basta** — três casas igualmente quebradas concordariam. A
+tabela tem de exercer as DUAS classes (`••••••` e vazio); se não exercer, o veredicto
+é INCONCLUSIVO. Estado: 12 casos, 7 ocultos, 5 vazios. Bateria: console sempre-vazio
+⇒ **1** · gateway com truthiness ⇒ **1** · tabela sem vazio ⇒ **2** · bridge ausente
+⇒ **2** · `tsc` ausente ⇒ **2**.
+
+### 5 · A consequência declarada: `echo_policy` ficou INERTE (`ALW-17`)
+
+Com `none` colapsado em `masked`, e `plain` já rebaixado a `masked` pela regra *"o tipo
+aperta"*, **nenhuma escolha de `echo_to_operator` muda o que o operador lê**. Isso não
+é acidente e não pode ser silêncio: virou o teste
+`test_none_e_masked_produzem_a_mesma_saida`, que fixa a inércia como FATO para que a
+próxima sessão a leia como decisão em vez de redescobri-la como bug.
+
+O encanamento **fica**, e é o menor passo reversível: `echo_to_operator` é config de
+TENANT com tela própria, e arrancá-lo agora deixaria um campo editável sem consumidor
+— a mesma promessa-sem-mecanismo, do outro lado. `ALW-17` decide.
+
+### 6 · Falseabilidade e medição ao vivo
+
+Suítes: bridge **148/148**, channel-gateway **771/771**. O teste que guardava a
+semântica antiga não foi apagado — foi **reescrito com a razão da revisão ao lado**,
+porque teste que some leva o motivo junto.
+
+Ao vivo, contato de webchat em `auth_form_ia` com o `codigo_2fa` deixado em BRANCO:
+
+```
+14:00:20  [Formulário: {"email": "teste", "senha": "••••••", "codigo_2fa": ""}]   ← depois
+11:21:16  [Formulário: {"email": "czxc",  "senha": "••••••", "codigo_2fa": "••••••"}] ← antes
+```
+
+⚠️ **O que a medição ao vivo NÃO cobre, e por quê:** o eco do destino 1 só é publicado
+quando há humano na sessão (`agent:events:{sid}`), e um contato sintético não tem
+operador logado. A metade *"`none` deixou de remover"* está provada por unidade e pela
+paridade, **não** por observação ao vivo. Dizer o contrário seria vender o teste como
+medição.
+
+⚠️ **Achado adjacente, medido e NÃO consertado (`ALW-18`):** a lista
+`session:{sid}:messages` — a fonte da tela de histórico — está **incompleta** para
+sessões só de IA. Sessões de `auth_form_ia` não têm a chave, e um contato de
+`limite_ia` com duas mensagens do agente ficou com **uma** entrada. É anterior a esta
+mudança (medido em sessão criada antes do rebuild).
+
 ## 2026-09-10 (3) — CTX-11: a rede mascarou o ROTEIRO, e o carimbo de proveniência voltou
 
 Um contato real do `limite_ia`. A forma publicada (`dialog_limite_roteiro`, nó

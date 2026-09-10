@@ -179,6 +179,16 @@ probe_slot_required_params.sh
 # alterar a propria linha do defeito, sai INCONCLUSIVO — 'exposicao zero' com a rede
 # morta seria verde por instrumento quebrado.
 probe_declared_script_integrity.sh
+# As TRES casas do eco de campo mascarado concordam. Medido em 2026-09-10: nao
+# concordavam — o bridge aplicava `echo_to_operator: none` (que APAGAVA a chave) e a
+# lista Redis que a MESMA tela rele num F5 nao conhece politica nenhuma. O operador via
+# um campo ao vivo e tres depois de recarregar a pagina. Divergir entre o bridge e o eco
+# OTIMISTA do Console tem sintoma proprio: o campo PISCA. A ALW-10 ja pedia o acordo em
+# prosa; este e o mecanismo. ⚠️ COMPILA a casa TypeScript com o `tsc` de verdade e a
+# EXECUTA — ler o fonte com regex diria que a funcao existe, nao o que ela devolve.
+# ⚠️ Acordo sozinho nao basta (tres casas igualmente quebradas concordariam): a tabela
+# tem de exercer as DUAS classes (oculto e vazio), senao INCONCLUSIVO.
+probe_masked_field_echo_parity.sh
 # E o irmao de RUNTIME do de cima: o de cima diz que tipos de step o perfil admite;
 # este diz a QUEM se pode delegar. Delegar e SUSPENDER o chamador, e ele so volta se o
 # alvo chamar `workflow_resume` -- medido: 0 de 6 destinos de navegacao sao delegaveis

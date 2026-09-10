@@ -59,7 +59,7 @@ import {
 import { CopilotBanner }   from "./components/CopilotBanner";
 import { WebRTCOverlay }   from "./components/WebRTCOverlay";
 import { apiFetch } from '@/api/apiFetch'
-import { useMaskingDisplayRules } from "@/components/MaskedToken";
+import { maskedFieldEcho } from "./maskedFieldEcho";
 import { loadConversationHistory } from "./api";
 
 // Set vazio estável para o preview read-only (ChatArea sem seleção de mensagens).
@@ -68,10 +68,6 @@ const EMPTY_MESSAGE_IDS: Set<string> = new Set<string>();
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
   const { t } = useTranslation("agentAssist");
-  // ALW-10 — catálogo de tipos, que o Console já carrega. É dele que sai o modo
-  // de eco; o payload do menu traz o TIPO, não o modo, para a política seguir
-  // viva: editar o catálogo muda o eco sem reenviar o menu.
-  const maskingRules = useMaskingDisplayRules();
   const { session } = useAuth();
   const agentName   = session?.name ?? t("session.none");
 
@@ -414,16 +410,22 @@ export const AgentAssistPage: React.FC = () => {
         // com o masking padrão, por decisão: eco é coisa de input.
         const maskedFields = menuMsg?.menuData?.masked_fields;
         if (maskedFields && maskedFields.length > 0) {
-          const maskedTypes = menuMsg?.menuData?.masked_types ?? {};
           const redacted: Record<string, unknown> = { ...(result as Record<string, unknown>) };
           for (const fieldId of maskedFields) {
             if (!(fieldId in redacted)) continue;
-            // O tipo APERTA, nunca afrouxa: um campo declarado `masked:` no fluxo
-            // não é desdeclarável pelo catálogo, então `plain` cai em `masked`.
-            // Mesma regra do `masking_types.resolve_echo_operator` no bridge.
-            const modo = maskingRules[maskedTypes[fieldId] ?? ""]?.echo_to_operator;
-            if (modo === "none") delete redacted[fieldId];
-            else                 redacted[fieldId] = "••••••";
+            // ⚠️ `echo_to_operator` NÃO é mais consultado aqui (2026-09-10).
+            //
+            // Ele decidia entre `delete` (modo `none`) e `••••••`. Medido: o
+            // `MenuCard` logo acima renderiza o `label` de TODO campo do
+            // formulário, mascarado incluído — então `none` nunca escondeu a
+            // existência do campo; fazia o eco contradizer o cartão. E a mesma
+            // tela, num F5, relia o histórico (que não conhece política) e via
+            // os campos de volta.
+            //
+            // Regra do dono: remove-se o VALOR, nunca o CAMPO. As três casas
+            // passam a concordar, que é o que este eco otimista sempre exigiu —
+            // divergir do bridge faz o campo PISCAR.
+            redacted[fieldId] = maskedFieldEcho(redacted[fieldId]);
           }
           displayText = JSON.stringify(redacted);
         } else {

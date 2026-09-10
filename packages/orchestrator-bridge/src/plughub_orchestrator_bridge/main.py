@@ -360,6 +360,38 @@ def _stl() -> int:
 _MASKED_SUPPRESSED       = "[entrada mascarada]"
 _MASKED_SUPPRESSED_HUMAN = "[entrada mascarada — conteúdo não disponível]"
 _MASKED_FIELD_PLACEHOLDER = "••••••"
+_EMPTY_FIELD              = ""
+
+
+def masked_field_echo(value: object) -> str:
+    """O que aparece no lugar do valor de um campo mascarado.
+
+    **Remove-se o VALOR, nunca o CAMPO** (decisão do dono, 2026-09-10), e
+    preenchido difere de vazio:
+
+        preenchido → `••••••`   ·   vazio → `""`
+
+    ⚠️ **A regra vive em TRÊS casas e elas têm de concordar** — esta, o
+    `_handle_menu_submit` do adapter de webchat (histórico) e o eco otimista do
+    `AgentAssistPage` (que aparece ANTES do round-trip: se divergir do que o
+    bridge manda depois, o campo pisca). São três serviços/linguagens, então a
+    concordância não pode ser por importação: quem a impõe é
+    `infra/test/probe_masked_field_echo_parity.sh`, que roda as três contra a
+    MESMA tabela. Um contrato que mora ENTRE casas não é alcançável por `grep`
+    numa delas.
+
+    ⚠️ **`0` e `False` NÃO são vazios** — só `None`, string em branco e coleção
+    vazia. O defeito de truthiness (`if not x`) está catalogado no `CLAUDE.md` e
+    aqui ele produziria um `""` afirmando *"o cliente não digitou"* sobre um
+    campo que recebeu `0`.
+    """
+    if value is None:
+        return _EMPTY_FIELD
+    if isinstance(value, str):
+        return _EMPTY_FIELD if value.strip() == "" else _MASKED_FIELD_PLACEHOLDER
+    if isinstance(value, (list, dict, tuple, set)):
+        return _EMPTY_FIELD if len(value) == 0 else _MASKED_FIELD_PLACEHOLDER
+    return _MASKED_FIELD_PLACEHOLDER
 
 
 async def resolve_session_tenant(redis_client, session_id: str) -> str:
@@ -419,13 +451,57 @@ def redact_customer_reply(
     Ausente (o default) ⇒ comportamento idêntico ao anterior à ALW-10. É o que
     mantém os quatro outros destinos intactos sem um ramo por destino.
 
-    Semântica por campo, quando presente:
-      `none`   → o campo SOME do objeto (mesma semântica de `hidden` em
-                 `ContextMaskingType`: remove, não substitui);
-      `masked` → `••••••`, como antes;
+    Semântica por campo — ⚠️ **os TRÊS modos hoje produzem a mesma saída**:
+      `none`   → `••••••` (mudou em 2026-09-10; ver abaixo);
+      `masked` → `••••••`, como sempre;
       `plain`  → `••••••` também. O rebaixamento acontece em
                  `masking_types.resolve_echo_operator`, que o LOGA: um campo
                  declarado `masked` no fluxo não é desdeclarável pelo catálogo.
+
+    ── `none` deixou de REMOVER o campo (decisão do dono, 2026-09-10) ──────────
+
+    A ALW-10 fez `none` apagar a chave, com o argumento de que *"se virar
+    `••••••`, o operador descobre que o campo existe"*. **Medido, o argumento não
+    se sustenta:** o `MenuCard` do Console renderiza o `label` de TODO campo do
+    formulário, mascarado incluído — o operador já viu `Senha` e `Código 2FA` no
+    cartão, em input desabilitado, antes de o cliente responder. `none` não
+    escondia a existência do campo; fazia o ECO contradizer o cartão logo acima.
+
+    E contradizia mais coisa: a MESMA tela relê o histórico por
+    `GET /api/conversation_history` (lista Redis escrita pelo webchat adapter,
+    que não conhece política nenhuma) — três campos ali, um aqui. Um F5 mudava o
+    que o operador via da mesma submissão.
+
+    Regra nova, e ela vale nas TRÊS casas de eco/histórico (aqui, o adapter de
+    webchat, o eco otimista do Console): **remove-se o VALOR, nunca o CAMPO.**
+
+    ⚠️ **Consequência declarada: `echo_policy` ficou INERTE nesta função.** Com
+    `none` colapsado em `masked`, e `plain` já rebaixado a `masked` pela regra
+    "o tipo aperta", os três modos produzem byte a byte a mesma saída — não há
+    escolha de `echo_to_operator` que mude o que o operador lê. O parâmetro e a
+    consulta ao catálogo FICAM, e isso é escolha do menor passo reversível: o
+    campo `echo_to_operator` é config de TENANT, com tela própria, e removê-lo é
+    decisão do dono, não consequência silenciosa desta mudança. A alternativa
+    (arrancar o encanamento agora) deixaria um campo editável na tela sem
+    consumidor nenhum — a mesma promessa-sem-mecanismo, do outro lado. Ficha
+    `ALW-16`; o teste `test_none_e_masked_produzem_a_mesma_saida` fixa a
+    inércia como FATO, para que ela não seja redescoberta como bug.
+
+    ── Campo mascarado VAZIO não é campo preenchido ────────────────────────────
+
+    Até aqui um campo mascarado em branco virava `••••••` igual a um preenchido —
+    o resumo AFIRMAVA um valor que não existe, que é o "valor plausível" do
+    catálogo da § Postura de Engenharia na forma mais barata. Vazio agora sai
+    como `""`, o mesmo que um campo livre em branco já mostra no MESMO objeto:
+    uma segunda gramática para o mesmo fato só criaria a próxima divergência.
+
+    ⚠️ **Duas ausências que esta função NÃO consegue separar**, e por isso não
+    finge separar: *"o canal não renderizou o campo"* e *"o cliente não digitou"*
+    chegam iguais aqui. `""` afirma só o que é verdade nos dois casos — que não
+    há valor. Campo DECLARADO mascarado e AUSENTE do objeto continua sumindo;
+    população medida hoje é **zero** (os dois clientes de webchat enviam todo
+    campo, vazio como `''`), e sintetizá-lo a partir da união de
+    `masked_fields` inventaria campo de outro menu.
     """
     if any_masked:
         return suppressed_text, "agents_only"
@@ -435,14 +511,24 @@ def redact_customer_reply(
             result_obj = json.loads(reply_text) if isinstance(reply_text, str) else reply_text
             if isinstance(result_obj, dict):
                 redacted = {}
+                pediram_sumir: list[str] = []
                 for k, v in result_obj.items():
                     if k not in masked_fields:
                         redacted[k] = v
                         continue
-                    modo = (echo_policy or {}).get(k, "masked")
-                    if modo == "none":
-                        continue          # some do objeto — semântica de `hidden`
-                    redacted[k] = _MASKED_FIELD_PLACEHOLDER
+                    if (echo_policy or {}).get(k, "masked") == "none":
+                        pediram_sumir.append(k)
+                    redacted[k] = masked_field_echo(v)
+                if pediram_sumir:
+                    # A política do tenant pediu supressão e o produto mostra o
+                    # campo (oculto) assim mesmo. Isso é DECISÃO (ver docstring),
+                    # e uma decisão que muda o que o operador vê tem de deixar
+                    # rastro — senão a próxima sessão a lê como regressão.
+                    logger.info(
+                        "echo_to_operator=none NÃO remove mais o campo (2026-09-10): "
+                        "campos=%s seguem no eco como valor oculto",
+                        sorted(pediram_sumir),
+                    )
                 return f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]", "all"
             # Resposta não-dict com campos mascarados declarados: não dá para
             # redigir seletivamente, e devolver o cru seria o vazamento de novo.
