@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -22,6 +24,34 @@ from fastapi.responses import JSONResponse
 from .config import get_settings
 from .db import ensure_schema
 from .router import router as calendar_router
+
+# ── logging: `plughub.*` em INFO chega ao stdout ─────────────────────────────
+# ⚠️ Sem isto o serviço descarta TODO `logger.info` do repositório: o CMD é
+# `uvicorn …:app`, que configura só os loggers `uvicorn*`, e o root fica no default
+# WARNING — `logger.warning` ainda sai (handler de último recurso do Python), o que
+# faz o defeito parecer log normal. Catalogado em `TODO.md` § "Seis serviços rodam SEM
+# logging configurado" (2026-08-07) e medido de novo na AUT-43: são **sete**, e a lista
+# de seis errava dos dois lados — 2 falsos positivos (`scheduler-api`/`mailing-api` já
+# configuravam por este mesmo mecanismo) e 3 ausentes (`workflow-api`, `quality-ingest`,
+# `quality-export`, dados como sadios por serem console-script). Aqui a promessa que
+# estava sendo quebrada era a da AUT-03: *"o caminho vazio não ficou mudo"*
+# (`plughub_authz.resolve_scope`, em INFO).
+#
+# Handler no logger `plughub`, e não `basicConfig`: este ligaria INFO na RAIZ e traria
+# junto asyncpg/aiokafka/httpx/clickhouse. Nível por `PLUGHUB_LOG_LEVEL`.
+# Gate: `infra/test/probe_service_log_info_reaches_stdout.sh`.
+_plughub_logger = logging.getLogger("plughub")
+if not _plughub_logger.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s — %(message)s"))
+    _plughub_logger.addHandler(_h)
+_plughub_logger.setLevel(os.getenv("PLUGHUB_LOG_LEVEL", "INFO").upper())
+_plughub_logger.propagate = False
+_plughub_logger.info(
+    "logging configurado: `plughub.*` em %s (PLUGHUB_LOG_LEVEL). Sem esta linha o "
+    "servico descarta todo INFO do repositorio — ver AUT-43.",
+    logging.getLevelName(_plughub_logger.level),
+)
 
 logger = logging.getLogger("plughub.calendar.api")
 

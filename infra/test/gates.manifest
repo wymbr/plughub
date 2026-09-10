@@ -336,6 +336,27 @@ gate_session_state_pool_scope.sh
 # errado: um backend que recusasse tudo deixaria N verde com o formulario inutil.
 gate_context_write_has_reader.sh
 
+# AUT-43 (2026-09-10): a AUT-03 declarou no `done.md` que "o caminho vazio nao
+# ficou mudo: virou logger.info que nomeia a origem" — e a linha NUNCA chegou a log
+# nenhum. O CMD e `uvicorn ...:app`, que configura so os loggers `uvicorn*`; o root
+# fica em WARNING e todo `logger.info` do repositorio e descartado. Assimetrico e por
+# isso invisivel: `logger.warning` continua saindo pelo handler de ultimo recurso.
+# Eram SETE servicos mudos, nao os seis do `TODO.md` — 2 falsos positivos e 3
+# ausentes; censo por marcador (`grep basicConfig`) erra dos dois lados.
+# O ramo C (o chamador COM escopo NAO produz a linha) e o que impede o verde errado:
+# sem ele, um produtor que logasse sempre passaria em B.
+probe_service_log_info_reaches_stdout.sh
+
+# AUT-43 (2026-09-10): o aviso de pool SEM VIGIA da tela de Access estava anestesiado
+# por uma fixture. `probe@` (criada pelo `mk_unrestricted_principal.sh`, senha no
+# repositorio) carregava 43 pools; com ela ativa, desativar `admin@` — unico vigia de
+# 36 — avisaria sobre ZERO. Sem ela, 36. O conserto nao foi ensinar o produto a
+# reconhecer fixture ("conta de teste" nao e eixo do dominio): o escopo total virou
+# EFEMERO, concedido por quem precisa e revogado no `trap EXIT`.
+# C e o ramo que impede o verde por ausencia de amostra (se todo pool tiver 2+ vigias,
+# o aviso e igualmente inerte, por outra razao), e E prova que B sabe acusar.
+gate_orphan_guard_not_anesthetized.sh
+
 # ── PUL-02 (2026-09-09) · triagem dos instrumentos da Camada F ───────────────
 # Os dois estavam como `?` NAO TRIADO, e por isso nenhum runner os colhia. Triados:
 #

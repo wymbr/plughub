@@ -127,11 +127,20 @@ PY
 }
 
 restaurar_escopo() {
-  [ -z "$ESCOPO_UID" ] && return 0
-  _escopo_gravar "$ESCOPO_UID" "$ESCOPO_ORIG" "$(plughub_token)" >/dev/null 2>&1
-  _PH_TOK=""
+  if [ -n "$ESCOPO_UID" ]; then
+    _escopo_gravar "$ESCOPO_UID" "$ESCOPO_ORIG" "$(plughub_token)" >/dev/null 2>&1
+    _PH_TOK=""
+  fi
+  # AUT-43: o escopo total do principal e EFEMERO — devolver os pools do gate nao basta,
+  # porque o estado de REPOUSO passou a ser `[]`. Sem esta linha a fixture voltaria a
+  # anestesiar o aviso de pool sem vigia da tela de Access.
+  bash "$(dirname "$0")/mk_unrestricted_principal.sh" --revogar >/dev/null 2>&1
 }
 trap restaurar_escopo EXIT
+
+# Garante o escopo ANTES de ler o original (o repouso e `[]`, entao sem isto o gate
+# mediria o relatorio de um chamador que nao alcanca pool nenhum).
+bash "$(dirname "$0")/mk_unrestricted_principal.sh" >/dev/null 2>&1   || note "  (aviso: mk_unrestricted_principal.sh falhou — escopo do principal incerto)"
 
 TOK0="$(plughub_token)"
 LIDO="$(_escopo_ler "$TOK0" 2>/dev/null)"

@@ -68,12 +68,24 @@ command -v jq >/dev/null || { echo "INCONCLUSIVO: jq ausente"; exit 2; }
 # tudo` era o comportamento do analytics. Esse ramo foi fechado (a flag
 # `analytics_open_access` tem default `false`), e a leitura anonima passou a devolver
 # 401 — o probe saia INCONCLUSIVO, honestamente, mas sem medir nada.
-# Agora irrestrito e uma CREDENCIAL DECLARADA (`unrestricted: true` + lista vazia),
-# nao a ausencia de uma. A proposicao e os tres ramos sao os mesmos; so o veiculo
-# mudou. O rotulo mudou junto de proposito: chamar de "anon" uma leitura autenticada
-# daria ao proximo leitor uma ideia errada do que se compara.
+# Agora a referencia e uma CREDENCIAL, nao a ausencia de uma. A proposicao e os tres
+# ramos sao os mesmos; so o veiculo mudou. O rotulo mudou junto de proposito: chamar de
+# "anon" uma leitura autenticada daria ao proximo leitor uma ideia errada do que se
+# compara.
+# ⚠️ CORRIGIDO em 2026-09-10 (AUT-43): dizia `unrestricted: true` + lista vazia, e esse
+# arranjo nao existe mais (AUT-13/AUT-03/AUT-15). O principal ENUMERA os pools, e o
+# escopo e EFEMERO — garantido abaixo, revogado no EXIT.
 REF_EMAIL=${REF_EMAIL:-probe@plughub.local}
 REF_PASS=${REF_PASS:-changeme_probe}
+# ── o escopo total e EFEMERO (AUT-43): garante aqui, devolve no EXIT ──────────
+# Ele nao fica mais gravado em repouso: com a fixture carregando o tenant inteiro, o
+# aviso de pool sem vigia da tela de Access ficava mudo (medido: desativar `admin@`,
+# unico vigia de 36 pools, avisaria sobre 0). Chamar aqui tambem torna este gate
+# AUTOSSUFICIENTE — ate ontem ele saia INCONCLUSIVO pedindo que um humano rodasse o
+# helper.
+bash "$(dirname "$0")/mk_unrestricted_principal.sh" >/dev/null 2>&1   || echo "  (aviso: mk_unrestricted_principal.sh falhou — o principal pode estar sem escopo)"
+trap 'bash "$(dirname "$0")/mk_unrestricted_principal.sh" --revogar >/dev/null 2>&1' EXIT
+
 
 login_tok() {  # $1=email $2=senha
   curl -s -X POST "$AUTH/login" -H 'content-type: application/json' \

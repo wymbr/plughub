@@ -41,14 +41,24 @@ set -uo pipefail
 # (falta `formfill_demo_ia`) e saia INCONCLUSIVO. Ate o passo 2 ele dependia do caminho
 # SEM HEADER, e era por isso que endurecer o demo estava bloqueado aqui.
 #
-# Criar um usuario com `accessible_pools: []` teria resolvido e seria retrabalho por
-# construcao: o passo 3 inverte `[]` para "nenhum pool". O principal usado abaixo declara
-# `unrestricted: true` COM lista vazia — e o unico arranjo que sobrevive ao passo 3, ja
-# que o ramo restritivo vence a lista nao-vazia.
+# ⚠️ CORRIGIDO em 2026-09-10 (AUT-43). Este paragrafo dizia que o principal declara
+# `unrestricted: true` COM lista vazia — arranjo que **nao existe mais**: a AUT-13 parou
+# de cunhar o claim, a AUT-03 inverteu `[]` para NENHUM pool e a AUT-15 removeu o campo
+# do produto. Hoje o principal ENUMERA os pools (registry U ledger), e o escopo e
+# EFEMERO — ver o bloco logo abaixo.
 PLUGHUB_TEST_EMAIL="${PLUGHUB_TEST_EMAIL:-probe@plughub.local}"
 PLUGHUB_TEST_PASS="${PLUGHUB_TEST_PASS:-changeme_probe}"
 export PLUGHUB_TEST_EMAIL PLUGHUB_TEST_PASS
 source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
+# ── o escopo total e EFEMERO (AUT-43): garante aqui, devolve no EXIT ──────────
+# Ele nao fica mais gravado em repouso: com a fixture carregando o tenant inteiro, o
+# aviso de pool sem vigia da tela de Access ficava mudo (medido: desativar `admin@`,
+# unico vigia de 36 pools, avisaria sobre 0). Chamar aqui tambem torna este gate
+# AUTOSSUFICIENTE — ate ontem ele saia INCONCLUSIVO pedindo que um humano rodasse o
+# helper.
+bash "$(dirname "$0")/mk_unrestricted_principal.sh" >/dev/null 2>&1   || echo "  (aviso: mk_unrestricted_principal.sh falhou — o principal pode estar sem escopo)"
+trap 'bash "$(dirname "$0")/mk_unrestricted_principal.sh" --revogar >/dev/null 2>&1' EXIT
+
 # Ver `TODO.md` § "endurecer o DEMO" e `_auth.sh`.
 
 TENANT="${1:-tenant_demo}"

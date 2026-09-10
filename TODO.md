@@ -7765,7 +7765,37 @@ alguém leia", o item vira remoção da chamada — não conserto do token.
 > Chegaram aqui por colagem. Não confundir com o 401 do seed do e2e, que era em `POST /v1/skills` e
 > está resolvido.
 
-## Seis serviços rodam SEM logging configurado — todo `logger.info` invisível *(achado 2026-08-07)*
+## ~~Seis~~ **Sete** serviços rodavam SEM logging configurado — ✅ FECHADO na AUT-43 (2026-09-10)
+
+> **A contagem desta seção estava errada dos DOIS lados, e o conserto ficou um mês
+> parado.** Medido em 2026-09-10, importando o módulo que cada `CMD` nomeia:
+>
+> - **2 falsos positivos** — `scheduler-api` e `mailing-api` **já configuravam**, por
+>   outro mecanismo (handler no logger `plughub`, `propagate=False`). O censo abaixo
+>   procurava `basicConfig` por `grep`, e censo desenhado para um marcador não prova
+>   nada sobre o vizinho;
+> - **3 ausentes** — `workflow-api`, `quality-ingest` e `quality-export`. A seção os
+>   dava como sadios **por regra** (*"nos console-script a função que configura É o
+>   entry point"*), e nesses três **não existe função que configure**: zero
+>   `basicConfig`, zero `addHandler`, zero `setLevel` no pacote inteiro. A regra estava
+>   certa e a premissa dela, falsa.
+>
+> **Sete, então:** `dialog-api` · `analytics-api` · `calendar-api` · `config-api` ·
+> `workflow-api` · `quality-ingest` · `quality-export`. Todos ligados, com handler no
+> logger `plughub` e nível por `PLUGHUB_LOG_LEVEL` (default INFO).
+>
+> ⚠️ **`basicConfig` foi recusado de propósito** — ele liga INFO na **raiz** e traria
+> asyncpg, aiokafka, httpx e clickhouse junto, que é exatamente o "aumento real de
+> volume" que o parágrafo do conserto abaixo temia. Com o handler no namespace, o volume
+> medido em 3 min de regime nos sete serviços foi de **1** linha nova (a da AUT-03,
+> provocada pelo próprio gate). O medo era legítimo e apontava para o outro mecanismo.
+>
+> **O que isto estava quebrando:** a promessa da AUT-03 — *"o caminho vazio não ficou
+> mudo: virou `logger.info` que nomeia a origem"*. Nunca chegou a log nenhum.
+> Gate: `infra/test/probe_service_log_info_reaches_stdout.sh` (censo vivo + fim-a-fim
+> com controle negativo). Ver `CHANGELOG.md` § 2026-09-10.
+
+### Registro original *(2026-08-07)* — "Seis serviços rodam SEM logging configurado, todo `logger.info` invisível"
 
 Descoberto pelo gate da Fase C do webhook, que reprovou por não achar uma linha INFO que o serviço
 **nunca emitiu**. Causa no `channel-gateway` (já corrigida): `logging.basicConfig` morava dentro de

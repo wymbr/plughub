@@ -27,6 +27,29 @@
  * TENANT, não do pool: *"31 pools dependem da MESMA conta"* — cada linha isolada parece
  * normal, porque é normal.
  *
+ * ── O cálculo está certo e mesmo assim ficou MUDO (AUT-43, 2026-09-10) ────────
+ *
+ * O alarme não afirma nada sobre QUEM vigia — só conta contas ativas no escopo. Medido
+ * na instalação: `probe@plughub.local`, fixture de gate criada por
+ * `infra/test/mk_unrestricted_principal.sh` (senha no próprio repositório), carregava
+ * **43** pools. Com ela na população, desativar `admin@` — o único vigia de **36** —
+ * avisaria sobre **ZERO**; sem ela, **36**. O guarda ficava inerte exatamente no
+ * instante que existe para cobrir, e nada aqui ficava vermelho: a conta é ativa e
+ * alcança os pools, então a contagem estava correta o tempo todo.
+ *
+ * ⚠️ **O conserto não foi ensinar este arquivo a reconhecer fixture.** "Conta de teste"
+ * não é eixo do domínio — um campo desses seria a porta larga com outro nome, e o
+ * discriminador não existe (a fixture faz login como qualquer pessoa). O que mudou foi
+ * o ESTADO dela: o escopo total virou efêmero, concedido por quem precisa e revogado no
+ * `trap EXIT`, e em repouso a conta fica com `[]`. Guarda:
+ * `infra/test/gate_orphan_guard_not_anesthetized.sh` — que mede a população da
+ * instalação, não esta função (a lógica daqui tem teste de unidade próprio).
+ *
+ * A limitação sobrevive e é a mesma para qualquer conta de escopo total: enquanto UMA
+ * conta alcançar tudo, nenhuma mudança em OUTRA pessoa orfana pool nenhum. Isso não é
+ * defeito — é o que "vigia" significa —, mas explica por que o alarme pode ficar quieto
+ * numa instalação inteira sem estar quebrado.
+ *
  * ── Regras que o cálculo NÃO pode errar ───────────────────────────────────────
  *
  *  · usuário INATIVO não vigia nada — contá-lo faria um pool órfão parecer coberto;

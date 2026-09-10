@@ -40,16 +40,75 @@
 # login, entao nao serve a gate que precise de um usuario. Sao duas coisas diferentes
 # com o mesmo efeito de leitura, e confundi-las e como este arquivo se perdeu.
 #
+# ── O ESCOPO E EFEMERO, e isso foi medido (AUT-43, 2026-09-10) ────────────────
+#
+# Ate aqui este principal ficava com o tenant inteiro no escopo PARA SEMPRE, e o
+# efeito nao era so dele: com ele na populacao, o aviso de pool sem vigia da tela de
+# Access (`orphansAfter`) ficava mudo. Medido — desativar `admin@`, unico vigia de 36
+# pools, avisaria sobre **0**; sem a fixture, **36**. Guarda que le verde por estado
+# de teste nao e peca load-bearing, e a E5 do ADR de granularidade se apoiava nela.
+#
+# Pior, o fixture estava CONTESTADO: `probe_ts_scope_resolvers.sh` exige `[]` no mesmo
+# `probe@` (e saia INCONCLUSIVO desde que um dos outros o encheu), enquanto tres gates
+# exigem que ele veja tudo. Um fixture, duas exigencias opostas, e quem vencia era a
+# ORDEM de execucao — o pior tipo de acoplamento, porque nao aparece em leitura nenhuma
+# dos dois arquivos.
+#
+# Hoje: quem precisa CHAMA e DEVOLVE.
+#
+#   bash infra/test/mk_unrestricted_principal.sh              # garante (enumera)
+#   bash infra/test/mk_unrestricted_principal.sh --revogar    # devolve para `[]`
+#
+# ⚠️ Em repouso o principal fica com `[]`, que desde a AUT-03 significa NENHUM pool —
+# ele continua existindo e logando, so nao ve linha. E ⚠️ dois gates rodando em
+# PARALELO se atrapalham (um revoga enquanto o outro mede); o modo de falha e
+# INCONCLUSIVO no consumidor, nunca verde falso, porque os tres conferem o escopo
+# antes de comparar.
+#
 # Idempotente: 409 -> PATCH garantindo o estado.
 # ==============================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ⚠️ Este helper PROVISIONA (POST/PATCH em `/users`), entao ele precisa do ADMIN — e
+# `_auth.sh` herda `ADMIN_EMAIL`/`ADMIN_PASS` do processo que o chama. Medido em
+# 2026-09-10: o manifesto roda `probe_process_chip_scoped_marker.sh` com
+# `ADMIN_EMAIL=operator@plughub.local` de proposito (o escopo estreito E a proposicao
+# dele), e sem esta fixacao o helper logava como `operator@`, levava 403 no PATCH e
+# devolvia um principal SEM escopo — o gate consumidor reprovava com "irrestrito=0",
+# numero que parece defeito do produto. Identidade de PROVISIONAMENTO nao se herda de
+# quem mede.
+PLUGHUB_TEST_EMAIL="${UNRESTRICTED_ADMIN_EMAIL:-admin@plughub.local}"
+PLUGHUB_TEST_PASS="${UNRESTRICTED_ADMIN_PASS:-changeme_admin}"
+export PLUGHUB_TEST_EMAIL PLUGHUB_TEST_PASS
 source "$HERE/_auth.sh"
 
 REGISTRY="${REGISTRY_URL:-http://localhost:3300}"
 TOK="$(plughub_token)"
 EMAIL="${UNRESTRICTED_EMAIL:-probe@plughub.local}"
 PASS="${UNRESTRICTED_PASS:-changeme_probe}"
+
+# ── `--revogar`: devolve o principal ao repouso ───────────────────────────────
+# Nao enumera nada (nao precisa do registry nem do ledger) e e idempotente: revogar
+# duas vezes grava `[]` duas vezes. LE DE VOLTA, pela mesma razao da conferencia la
+# embaixo — "foi escrito" nao e "mudou", e um revoke que nao pegou deixaria a conta
+# larga com uma mensagem dizendo o contrario.
+if [ "${1:-}" = "--revogar" ]; then
+  UID_P="$(curl -s "$AUTH/users?tenant_id=$TENANT" -H "Authorization: Bearer $TOK"            | jq -r ".[] | select(.email==\"$EMAIL\") | .id" | head -1)"
+  if [ -z "$UID_P" ]; then
+    echo "--revogar: $EMAIL nao existe no tenant $TENANT — nada a fazer"
+    exit 0
+  fi
+  curl -s -o /dev/null -X PATCH "$AUTH/users/$UID_P" -H 'content-type: application/json'     -H "Authorization: Bearer $TOK" -d '{"accessible_pools":[]}'
+  N_DEPOIS="$(curl -s "$AUTH/users?tenant_id=$TENANT" -H "Authorization: Bearer $TOK"               | jq -r ".[] | select(.email==\"$EMAIL\") | (.accessible_pools|length)" | head -1)"
+  if [ "${N_DEPOIS:-1}" != "0" ]; then
+    echo "FALHA: --revogar nao pegou — $EMAIL segue com ${N_DEPOIS:-?} pools"
+    exit 1
+  fi
+  echo "--revogar: $EMAIL de volta a [] (nenhum pool) — o guarda de orfao volta a enxergar"
+  exit 0
+fi
+
 
 # ── a lista de pools do tenant, lida da fonte ────────────────────────────────
 # ⚠️ O agent-registry filtra tenant pelo HEADER `x-tenant-id`, NAO por query param —

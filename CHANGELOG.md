@@ -1,5 +1,109 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-10 (1) — AUT-43: dois instrumentos quebrados, e os dois números errados
+
+### 1 · O aviso da AUT-03 nunca chegou a log nenhum — e não era só o analytics-api
+
+A AUT-03 declarou no `done.md`: *"o caminho vazio não ficou mudo: virou `logger.info`
+que nomeia a origem"*. Medido ponta a ponta — chamada real de um principal com
+`accessible_pools: []` em `/reports/sessions` → **200 com 0 linhas** e **zero** linhas
+`authz scope` no log.
+
+A causa não é da AUT-03: o `CMD` destes serviços é `uvicorn …:app`, que configura
+**só** os loggers `uvicorn*`. O root fica no default `WARNING`, e **todo `logger.info`
+do repositório é descartado**. O defeito é assimétrico e é por isso que sobrevive:
+`logger.warning` continua saindo pelo handler de último recurso do Python, então o log
+**parece normal** — quem olha não vê buraco, vê silêncio.
+
+**Já estava catalogado, com o conserto prescrito, desde 2026-08-07** (`TODO.md` § *"Seis
+serviços rodam SEM logging configurado"*). Ficou um mês parado — e a lista de seis
+errava **dos dois lados**:
+
+| | |
+|---|---|
+| **2 falsos positivos** | `scheduler-api` e `mailing-api` **já configuravam**, por outro mecanismo (handler no logger `plughub`, `propagate=False`). O censo de lá procurava `basicConfig` por `grep` |
+| **3 ausentes** | `workflow-api`, `quality-ingest`, `quality-export` — dados como sadios **por regra** (*"nos console-script a função que configura É o entry point"*). A regra está certa; a premissa, falsa: nesses três **não existe função que configure** (zero `basicConfig`, zero `addHandler`, zero `setLevel` no pacote inteiro) |
+
+**Sete, então.** Censo por marcador erra nos dois sentidos, e o que ele deixa de fora
+não aparece em contagem nenhuma — a mesma família do C4 do
+`probe_authz_single_verifier.sh` e da GAT-01.
+
+⚠️ **`basicConfig` foi RECUSADO de propósito.** Ele liga INFO na **raiz** e traz
+asyncpg, aiokafka, httpx e clickhouse junto — que é exatamente o *"aumento real de
+volume de log em seis serviços de uma vez"* que o próprio TODO mandava temer. Com o
+handler no namespace `plughub` (o mecanismo dos dois que já estavam sadios), o volume
+medido em **3 min de regime nos sete serviços foi de 1 linha nova** — a da AUT-03,
+provocada pelo próprio gate. O medo era legítimo e apontava para o outro mecanismo.
+
+**Provado ao vivo, com controle negativo:** chamador de escopo vazio produz a linha
+nomeando o `sub`; chamador com 3 pools produz **zero**. Sem o negativo, um produtor que
+logasse sempre passaria — e a linha deixaria de distinguir a população que ela existe
+para nomear. Gate: `infra/test/probe_service_log_info_reaches_stdout.sh` (censo vivo
+sobre **14** serviços + fim-a-fim). ⚠️ O censo **importa o módulo que o `CMD` nomeia** —
+`basicConfig` num módulo que o CMD não importa é o defeito original (channel-gateway,
+2026-08-07): o código está lá, correto, e não roda.
+
+### 2 · O guarda de pool órfão estava anestesiado por uma fixture
+
+`pool-coverage.ts` avisa quando uma mudança deixaria um pool sem **nenhum** vigia — e o
+sintoma do órfão é AUSÊNCIA: ele segue recebendo contato, enfileirando e consumindo
+licença, invisível. Medido:
+
+```
+desativar admin@  ->  orphansAfter avisaria sobre  0 pools   (com probe@ na população)
+desativar admin@  ->  avisaria sobre              36 pools   (sem as fixtures)
+```
+
+`probe@plughub.local` — fixture criada por `mk_unrestricted_principal.sh`, **com a senha
+no próprio repositório** — carregava **43** pools (os 41 do registry mais 2 que já não
+existem). O cálculo estava certo o tempo todo: a conta é ativa e alcança os pools. O que
+estava errado era a **população**.
+
+⚠️ **A premissa da ficha venceu, e isso é registro, não detalhe.** Ela dizia *"36 de 41
+pools não têm vigia"*; o `admin@` foi provisionado desde então e hoje órfãos = **0**
+mesmo excluindo fixtures. O que sobrevive — e é o que importa — é a **anestesia**: o
+aviso ficava mudo no único instante que existe para cobrir.
+
+**O conserto não foi ensinar o produto a reconhecer fixture.** *"Conta de teste"* não é
+eixo do domínio, o discriminador não existe (a fixture faz login como qualquer pessoa),
+e um campo desses seria a porta larga com outro nome. O que mudou foi o **estado**: o
+escopo total virou **EFÊMERO** — `mk_unrestricted_principal.sh` concede, `--revogar`
+devolve, e os três gates que o consomem chamam os dois lados (`trap EXIT`). Em repouso a
+conta fica com `[]`.
+
+**Efeito colateral que a medição achou: o fixture estava CONTESTADO.**
+`probe_ts_scope_resolvers.sh` exige que `probe@` tenha `[]` — e saía **INCONCLUSIVO**
+desde que um dos outros três o encheu. *Um fixture, duas exigências opostas, e quem
+vencia era a **ORDEM de execução*** — acoplamento que não aparece na leitura de nenhum
+dos dois arquivos. Hoje: **VERDE**.
+
+E os três gates ficaram **autossuficientes**: até ontem saíam INCONCLUSIVOS pedindo que
+um humano rodasse o helper. ⚠️ Ao ligá-los, um defeito novo apareceu na hora — o helper
+**PROVISIONA** e `_auth.sh` herda `ADMIN_EMAIL` de quem chama; o manifesto roda
+`probe_process_chip_scoped_marker.sh` com `ADMIN_EMAIL=operator@` de propósito, então o
+helper logava como `operator@`, levava 403 no PATCH e devolvia um principal **sem
+escopo** — e o gate reprovava com *"irrestrito=0"*, número que parece defeito do
+produto. **Identidade de provisionamento não se herda de quem mede.**
+
+Gate: `infra/test/gate_orphan_guard_not_anesthetized.sh` — 5 ramos, com **preflight** (a
+fixture sintética prova que o ramo sabe acusar) e **SEM AMOSTRA** em vez de verde quando
+todo pool tem 2+ vigias. Falseável por mutação: reconcedendo os 43 pools, B fica
+vermelho e C vira SEM AMOSTRA, medidos.
+
+### 3 · Números
+
+`2 777` testes Python verdes nas 14 suítes (a partir das imagens) · `900` TS ·
+`probe_gates_manifest_coverage` verde com 318 scripts · escopo do `probe@` restaurado ao
+repouso e conferido lido de volta.
+
+**Arquivos:** `packages/{dialog-api,analytics-api,calendar-api,config-api,workflow-api,quality-ingest,quality-export}/src/**/main.py` ·
+`packages/platform-ui/src/modules/access/pool-coverage.ts` ·
+`infra/test/mk_unrestricted_principal.sh` ·
+`infra/test/{gate_sla_segment_target,gate_queue_report_per_wait,probe_process_chip_scoped_marker}.sh` ·
+`infra/test/probe_service_log_info_reaches_stdout.sh` (novo) ·
+`infra/test/gate_orphan_guard_not_anesthetized.sh` (novo) · `infra/test/gates.manifest` ·
+`TODO.md`
+
 ## 2026-09-09 (22) — AUT-50: `agent.*` era escrevível e ilegível, e a feature nunca existiu
 
 ### 1 · A ficha perguntava a coisa errada
