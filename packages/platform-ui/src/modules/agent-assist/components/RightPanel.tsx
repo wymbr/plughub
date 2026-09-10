@@ -41,8 +41,15 @@ interface RightPanelProps {
   onAddSpecialist:          (alias: string, instruction: string, visibility: "all" | "agents_only") => void;
   sessionClosed:            boolean;
   onTerminateSegment?:      (instanceId: string) => void;
-  /** Refresh do supervisor_state após vínculo de cliente (ClienteTab) */
-  onCustomerLinked?:        () => void;
+  /** O estado servido ficou DESATUALIZADO por uma escrita do próprio operador —
+   *  pede um refetch ao dono do hook.
+   *
+   *  ⚠️ AUT-49 (2026-09-09): chamava-se `onCustomerLinked` e só chegava ao
+   *  `ClienteTab`. O nome descrevia o primeiro caso que precisou dela, não o fato —
+   *  e a aba Contexto, que faz o MESMO write-back (`/api/inject-context`), ficou de
+   *  fora, com um no-op apoiado num poll de 3 s que não existe. Quem escreve não
+   *  recebe evento de WS: `inject-context` grava no Redis e não publica nada. */
+  onStateStale?:            () => void;
 }
 
 export const RightPanel: React.FC<RightPanelProps> = ({
@@ -60,7 +67,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onAddSpecialist,
   sessionClosed,
   onTerminateSegment,
-  onCustomerLinked,
+  onStateStale,
 }) => {
   const { t } = useTranslation('agentAssist');
   const { currentUser } = useAuth();
@@ -90,7 +97,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
             contactId={contactId ?? null}
             sessionId={sessionId}
             tenantId={tenantId}
-            onLinked={onCustomerLinked}
+            onLinked={onStateStale}
           />
         )}
 
@@ -115,6 +122,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
             sessionId={sessionId}
             supervisorState={supervisorState}
             viewerRole={viewerRole}
+            onContextWritten={onStateStale}
           />
         )}
 

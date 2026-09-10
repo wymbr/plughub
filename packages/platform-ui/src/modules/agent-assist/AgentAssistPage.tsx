@@ -1003,7 +1003,7 @@ export const AgentAssistPage: React.FC = () => {
               mentionableAgents={mentionableAgents}
               onAddSpecialist={handleAddSpecialist}
               sessionClosed={selected?.sessionClosed ?? false}
-              onCustomerLinked={refreshSupervisorState}
+              onStateStale={refreshSupervisorState}
             />
           </div>
 

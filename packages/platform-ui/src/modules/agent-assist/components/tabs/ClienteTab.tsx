@@ -5,8 +5,11 @@
  * identificação automática falhou/errou, deixa o operador BUSCAR um cadastro
  * (nome / customer_id), CRIAR um novo, e VINCULAR à sessão. Vincular grava
  * caller.customer_id no ContextStore da sessão (via /api/inject-context, o mesmo
- * write-back do ManualTagForm) → o próximo poll do supervisor_state re-chaveia
- * Histórico/360. Backend: /v1/channels/webhook/identity/* (Resolvedor de Identidade).
+ * write-back do ManualTagForm) e chama `onLinked`, que REFETCHA o supervisor_state e
+ * re-chaveia Histórico/360. ⚠️ Não é poll: esta linha dizia *"o próximo poll do
+ * supervisor_state"* e não existe poll nenhum (AUT-49) — o hook só busca no mount e em
+ * evento de WS, e `inject-context` não publica evento. É o `onLinked` que fecha o laço,
+ * como a prop dele já dizia. Backend: /v1/channels/webhook/identity/*.
  *
  * v1: busca + criar/vincular. Merge de cadastros e external_refs (CRM) = Fase C.
  */

@@ -1,5 +1,84 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-09 (21) — AUT-49: o poll de 3 s não existia, e metade já sabia disso
+
+### 1 · O achado, e a metade que já estava certa
+
+A AUT-48 tropeçou nisto ao conferir a tela: o aviso só apareceu depois de **remontar a
+página**. Medido:
+
+- `useSupervisorState` **não tem `setInterval` nenhum** — busca no mount (+3 retries em
+  700/1800/3500 ms) e a cada evento de WS;
+- `POST /api/inject-context/:sessionId` — o write-back do `ManualTagForm` **e** do
+  vínculo de cliente — grava no Redis e **não publica evento**. O único produtor de
+  `supervisor_state.updated` no repositório é o `ai-gateway`, **depois de um turno de
+  LLM**;
+- logo, quem escreve não recebe evento: a tag que o operador acabou de gravar não
+  voltava para a tela até alguém falar na conversa.
+
+Três comentários, em dois arquivos, prometiam o poll (`ContextoTab.tsx:663` e `:665`,
+`ClienteTab.tsx:8`), e o `handleTagSaved` era um **no-op** apoiado neles.
+
+⚠️ **E estava metade consertado.** O vínculo de cliente já chamava `onLinked`, e a prop
+dele dizia a razão CERTA — *"o hook só refetcha em evento WS"*. Alguém notou, consertou
+o seu caso, e a prosa dos outros dois lugares continuou contando a história antiga. É a
+forma mais barata de um defeito sobreviver: **ele deixa de doer em quem o encontrou.**
+
+### 2 · A saída, e por que não foi o intervalo
+
+Saída **(b)** da ficha: continua event-driven, e o call site do write-back **avisa**.
+`onCustomerLinked` virou **`onStateStale`** — o nome antigo descrevia o primeiro caso
+que precisou dela, não o fato — e passou a chegar também à aba Contexto.
+
+Criar o intervalo seria uma chamada por sessão aberta por operador **a cada 3 s** para
+cobrir dois cliques; e o mecanismo certo para *"acabei de gravar"* é avisar, não varrer.
+
+### 3 · Provado ao vivo, no Console real
+
+Contato de aprovação reivindicado pela UI, aba Contexto, `ManualTagForm`:
+
+```
+antes ....... CONTEXT STORE  13 fields
+grava ....... service.aut49_prova = "aparece sem remontar"
+depois ...... CONTEXT STORE  14 fields   ← SERVICE ▸ Aut49 Prova ▸ "aparece sem
+                                            remontar" · confirmed · via supervisor_inject
+```
+
+**Sem remontar.** A rede confirma o laço: o `GET /api/supervisor_state` sai **1 ms
+depois** do `POST /api/inject-context`.
+
+### 4 · A mesma prova achou outro defeito (AUT-50)
+
+A primeira tentativa foi com `agent.aut49_prova` — e **não apareceu**, mesmo com o
+refetch funcionando. Não era o refresh:
+
+```
+POST /api/inject-context  →  200
+Redis  {t}:ctx:{sid}      →  14 campos (a tag está lá)
+GET /api/supervisor_state →  13 campos servidos, a tag AUSENTE
+context_withheld          →  {total: 13, by_rule: [], by_pool_scope: []}
+```
+
+A tag **nem é contada como retida** — está fora do conjunto de origem. As duas listas
+vivem no mesmo arquivo e **não são a mesma**:
+
+```
+escrita  OPERATOR_WRITABLE_NS      = ["agent", "service"]     (/api/inject-context)
+leitura  DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]  (server.ts:1107)
+```
+
+`agent` só está na de escrita; `session` só na de leitura. Vale inclusive para o
+`admin` — não é masking por papel. ⚠️ É a **mesma família** que o comentário logo acima
+do `DEFAULT_OPERATOR_NAMESPACES` já descreve para o hint da tela (*"promete MAIS
+visibilidade do que existe... ninguém abre chamado sobre um campo que não apareceu"*):
+lá quem promete é o texto de ajuda; aqui é o **próprio formulário**, ao aceitar o
+namespace. Ficha **AUT-50**, com as três saídas e o aviso de que o gate tem de cobrir as
+duas listas JUNTAS — foi a separação delas que produziu o defeito.
+
+Verde: `tsc --noEmit` limpo · build da imagem da UI · ambiente devolvido (as duas
+tarefas encerradas, fila em 0, tags de sonda apagadas, os 4 tokens de resume
+pré-existentes intactos).
+
 ## 2026-09-09 (20) — AUT-48: a recusa passou a ter cara, e a desculpa caiu
 
 ### 1 · A premissa da ficha era falsa, e isso vem primeiro

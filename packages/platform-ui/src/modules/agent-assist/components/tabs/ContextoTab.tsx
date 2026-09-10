@@ -31,6 +31,10 @@ interface ContextoTabProps {
   supervisorState?: SupervisorState | null;
   /** Logged-in user's role — used to filter ManualTagForm namespace suggestions. */
   viewerRole?:    string;
+  /** O operador gravou uma tag: o estado servido ficou stale e precisa de refetch.
+   *  Sem isto o que ele acabou de escrever nao volta para a tela (AUT-49) — nao ha
+   *  poll, e `inject-context` nao publica evento. */
+  onContextWritten?: () => void;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -655,14 +659,24 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
   sessionId,
   supervisorState,
   viewerRole = "operator",
+  onContextWritten,
 }) => {
   const { t } = useTranslation('agentAssist');
 
-  // Callback passed to ContextSnapshotCard so a supervisor_state refresh
-  // can be triggered after a successful tag write (parent must poll or trigger).
-  // For now we just log — the 3s polling in useSupervisorState will pick it up.
+  // ⚠️ AUT-49 (2026-09-09): isto era um NO-OP, com o comentário dizendo *"the 3s
+  // polling in useSupervisorState will pick it up"*. Não existe poll de 3 s — o hook
+  // busca no mount (+3 retries curtos) e a cada evento de WS, e o
+  // `POST /api/inject-context` grava no Redis sem publicar evento nenhum (o único
+  // produtor de `supervisor_state.updated` é o ai-gateway, depois de um turno de LLM).
+  // Ou seja: a tag que o operador acabou de gravar não voltava para a tela até alguém
+  // falar na conversa. Comentário que promete mecanismo sem produtor — a assinatura
+  // deste repositório, e aqui ela custava o feedback do próprio trabalho da pessoa.
+  //
+  // O irmão já estava certo: o vínculo de cliente (`ClienteTab`) chama `onLinked`, e a
+  // prop dele diz a razão certa — *"o hook só refetcha em evento WS"*. Metade
+  // consertada, metade contando a história antiga.
   const handleTagSaved = () => {
-    /* no-op: useSupervisorState polls every 3s; tag will appear on next fetch */
+    onContextWritten?.();
   };
 
   if (!context) {
