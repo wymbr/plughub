@@ -231,6 +231,21 @@ function redeParaTextoLivre(
 }
 
 /**
+ * raizDePipelineState — a chave de `results` que uma ref `$.pipeline_state.*` toca.
+ *
+ * `$.pipeline_state.dialog.render.prompt` → `dialog`. Também aceita a forma em
+ * colchetes (`$.pipeline_state['dialog'].render`), que o JSONPath resolve igual.
+ *
+ * Devolve `undefined` para qualquer coisa que não seja `$.pipeline_state.<raiz>`
+ * — inclusive `$.session.*` e `$.config.*`, que não têm carimbo e não devem ganhar
+ * isenção por parecerem com um.
+ */
+function raizDePipelineState(ref: string): string | undefined {
+  const m = /^\$\.pipeline_state(?:\.([A-Za-z_$][\w$]*)|\[['"]([^'"]+)['"]\])/.exec(ref)
+  return m?.[1] ?? m?.[2]
+}
+
+/**
  * filtrarTextoLivre — a porta da F5, para o que NÃO tem tag.
  *
  * O `interpolate` a chama para `$.pipeline_state.*`. Não há tipo a consultar, então não
@@ -240,10 +255,33 @@ export function filtrarTextoLivre(
   valor: unknown,
   sitio: SitioInterpolacao,
   ref:   string,
+  /**
+   * Chaves de `pipeline_state` que carregam CONTEÚDO DECLARADO — retorno de uma
+   * `DECLARED_CONTENT_TOOLS`, carimbado por `PipelineStateManager.setResult`.
+   *
+   * Opcional, e a ausência é RESTRITIVA (a rede roda): quem não sabe da proveniência
+   * não pode conceder isenção. É a mesma postura do `resolve_scope` — o restritivo
+   * vence, porque o permissivo degrada mudo.
+   */
+  declaradas?: ReadonlySet<string>,
 ): unknown {
   try {
     if (valor === undefined || valor === null || valor === "") return valor
     const plateia = deriveAudience(sitio.stepType, sitio.visibility)
+
+    const raiz = raizDePipelineState(ref)
+    if (raiz && declaradas?.has(raiz)) {
+      // ⚠️ Isenção CONTADA, nunca silenciosa. Quem lê o log de um contato precisa
+      // distinguir "a rede não achou nada" de "a rede não olhou" — e é a segunda
+      // que pode esconder um erro de carimbo.
+      registra(`declarado|${raiz}|${plateia}`, () => console.info(
+        `[ctx-audit] REDE DISPENSADA (conteúdo declarado): ${ref} plateia=${plateia} — ` +
+        `\`${raiz}\` foi escrita por uma tool de conteúdo declarado (DialogForm publicado). ` +
+        "Palpitar por FORMA sobre roteiro versionado já mascarou o exemplo do próprio " +
+        "script em produção; isto não afeta a máscara por tipo declarado."))
+      return valor
+    }
+
     return redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${ref}`)
   } catch (e) {
     console.warn(

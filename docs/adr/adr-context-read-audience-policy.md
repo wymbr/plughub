@@ -371,6 +371,62 @@ nos quatro tipos detectáveis — o valor cru casa, o já mascarado **não**:
 **já nasce mascarado**, é no-op. **O carimbo de proveniência deixa de ser pré-requisito
 de segurança** — vira otimização de precisão, e a §D11 é rebaixada de bloqueio a dívida.
 
+> ### ⚠️ §D12.1 — o carimbo VOLTOU, e o parágrafo acima respondia à pergunta vizinha *(2026-09-10)*
+>
+> A idempotência é verdadeira e continua valendo. O que ela prova é: **a rede não estraga
+> o que JÁ foi mascarado.** O que ninguém perguntou é a irmã: **a rede estraga o que NUNCA
+> foi dado de cliente?** — e estragava.
+>
+> Medido num contato real do `limite_ia`. A forma publicada (`dialog_limite_roteiro`, nó
+> `coletar_contato`) declara
+>
+> ```
+> Qual é o seu CPF? (só números, ex: 52998224725)
+> ```
+>
+> e o cliente recebeu
+>
+> ```
+> Qual é o seu CPF? (só números, ex: (##) ****-####)
+> ```
+>
+> A rede mascarou **o exemplo do próprio roteiro**, em voo — e ainda **tipou errado**: o
+> `detect_pattern` do `cpf` exige pontuação (`\d{3}\.\d{3}\.\d{3}-\d{2}`), então 11
+> dígitos crus casaram o de **telefone**. O cliente leu um gabarito de telefone onde se
+> pedia um CPF, na PRIMEIRA frase do atendimento. População no ClickHouse: **15 contatos**,
+> todos entre **2026-09-04 20:55** (o dia em que a F5 entrou) e **2026-09-10 11:05** — sem
+> uma única ocorrência anterior, e sem sobreposição com as 102 entregas íntegras que a
+> precederam. O corte é o deploy da F5, não um acaso.
+>
+> **O conserto é de PROVENIÊNCIA, não de política.** `DECLARED_CONTENT_TOOLS`
+> (`@plughub/schemas`) declara as tools cujo retorno é **artefato com autor, versão e
+> publicação** — hoje, só o `form_get`. O `invoke` carimba, e o carimbo é gravado **na
+> mesma chamada** que o valor (`PipelineStateManager.setResult`), num escritor único; a
+> `filtrarTextoLivre` o consulta e **registra a isenção**, porque *"não olhou"* precisa se
+> distinguir de *"não achou"*. A remoção é por construção: reescrever a mesma chave sem
+> afirmar o carimbo o **apaga** — carimbo obsoleto isentando resposta de cliente seria o
+> pior desfecho possível desta linha.
+>
+> **É allowlist de TOOL, nunca de chave.** Isentar por nome (`dialog`, `render`) faria a
+> política depender de o autor do YAML escolher o nome certo, e degradaria mudo no sentido
+> permissivo.
+>
+> **O que NÃO mudou:** a máscara por tipo declarado (`filtrarLeituraCtx`) não passa por
+> aqui — lá existe tipo e a decisão continua valendo. Conferido ao vivo: o
+> `smoke_limite_tres_acessos.sh` seguiu **19 ✅ / 0 ❌**, com o cartão `***1234` no preview
+> e o CPF sem vazar.
+>
+> **Gate:** `infra/test/probe_declared_script_integrity.sh` — julga o **entregue**, não o
+> declarado, e separa **exposição** (linhas de roteiro que a rede alteraria: informação) de
+> **dano** (mensagens entregues mutiladas desde a época: vermelho). Época
+> `DECLARED_CONTENT_EPOCH`, porque mensagem entregue não se corrige por deploy e um gate
+> permanentemente vermelho por dano histórico ensina todo mundo a ignorá-lo (precedentes:
+> `SEGMENT_SLA_EPOCH`, `RSM01_EPOCH`).
+>
+> **A lição de método, e ela já está no catálogo:** *um instrumento pode ser falseável,
+> ramificado e honesto — e ainda medir a proposição ERRADA.* A tabela de idempotência acima
+> tem quatro linhas, é verdadeira nas quatro, e nenhuma delas fala do caso que doeu.
+
 ⚠️ **Correção de premissa que o dono levantou e que vale registrar:** *"quando o tipo
 existe, o valor já está gravado no formato adequado"* vale para **FORMATO**
 (`dd/mm/aaaa`, moldado na coleta pelo catálogo de formatos) e **não** para **MÁSCARA**. O
@@ -565,7 +621,7 @@ quebraria os 10 usos legítimos, e um arco que quebra o produto na primeira fase
 | **F2** | ~~exceção declarada~~ — **sem conteúdo** (D9.1/D9.2). O que a fase exigia virou tipagem por FINALIDADE, feita em 2026-09-04: `valor_informado_ao_cliente` criado e 3 tags retipadas | A população de exceção é zero e o mecanismo é desnecessário. O que restava (o limite mascarado) era declaração errada, não falta de exceção |
 | **F3** ✅ | aplicar em `notify`/`menu` — o caminho de cliente. **Entregue em 2026-09-04**: `filtrarLeituraCtx` SUBSTITUI o valor no `interpolate`, e `auditarLeituraCtx` foi REMOVIDA (duas funções calculando a mesma regra é o defeito deste arco) | Onde estão os defeitos medidos |
 | **F4** ✅ | `invoke` e `reason` — **MEDIDA, não construída** (2026-09-04). O `invoke` segue cru e o gate que a §D2 citava **não existe** (§D10). O `reason` tem população **ZERO**, então decidir a §D5 agora seria política contra zero: o fato virou **gate** (ramo G), que é o gatilho da fase | Confirmar era o trabalho, e confirmar produziu duas correções |
-| **F5** ✅ | `$.pipeline_state.*` — entregue em 2026-09-04 pela **REDE** (§D12), não pelo carimbo. Censo: 228 por regex → **142** estruturais → **35** ao cliente, 30 chaves | A idempotência da rede dispensou o carimbo, que virou dívida de PRECISÃO em vez de bloqueio |
+| **F5** ✅ | `$.pipeline_state.*` — entregue em 2026-09-04 pela **REDE** (§D12), não pelo carimbo. Censo: 228 por regex → **142** estruturais → **35** ao cliente, 30 chaves | A idempotência da rede dispensou o carimbo **como pré-requisito de SEGURANÇA**, e isso segue valendo. ⚠️ Mas ela não respondia pelo conteúdo DECLARADO: em 2026-09-10 o carimbo voltou, por 15 contatos com o roteiro publicado mutilado em voo — ver §D12.1 |
 
 ---
 

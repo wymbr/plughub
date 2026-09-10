@@ -571,8 +571,15 @@ export class SkillFlowEngine {
       journeyId = ctx.journeyId
 
       // Persistir output do step no pipeline_state
+      // ⚠️ `output_declared` viaja junto e é ESCRITO NA MESMA CHAMADA, nunca depois:
+      // é o carimbo de proveniência que isenta conteúdo declarado (o roteiro de um
+      // `DialogForm`) da rede de texto livre. Escrever o valor aqui e o carimbo em
+      // outro lugar abriria a janela em que a chave existe sem ele — e a rede
+      // mascararia o roteiro exatamente como fazia antes.
       if (result.output_as && result.output_value !== undefined) {
-        state = PipelineStateManager.setResult(state, result.output_as, result.output_value)
+        state = PipelineStateManager.setResult(
+          state, result.output_as, result.output_value, result.output_declared === true,
+        )
       }
 
       // ── Marcadores internos de transação ────────────────────────────────

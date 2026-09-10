@@ -911,6 +911,7 @@ export {
   maskOmitsField,
   maskChangesValue,
   flattenContextMap,
+  DECLARED_CONTENT_TOOLS,
 } from "./ctx-audience"
 
 export type { CtxAudience, CtxReadMask, FreeTextMaskResult } from "./ctx-audience"

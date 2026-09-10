@@ -216,12 +216,20 @@ fi
 # ── H — a REDE da F5 (§D12), viva e com os limites AFIRMADOS ─────────────────
 # Tres coisas no mesmo ramo, e a terceira e a que impede a leitura errada:
 #   1. pega PII em texto livre  (senao a fase nao entregou nada)
-#   2. NAO toca valor ja mascarado (idempotencia — e o que dispensou o carimbo)
+#   2. NAO toca valor ja mascarado (idempotencia — segue valendo)
 #   3. NAO pega o que e sensivel por CONTEXTO, e o gate DIZ isso
 #
 # ⚠️ O ramo 3 nao e decorativo. A rede e MITIGACAO, e um gate que so mostrasse ela
 # acertando deixaria a impressao de cobertura — o anestesico que faria alguem relaxar
 # sobre capturar em texto livre. A garantia e declarar o campo num DialogForm.
+#
+# ⚠️ CORRECAO DE 2026-09-10: o ramo 2 ja dizia que a idempotencia "dispensou o
+# carimbo de proveniencia", e isso era RESPOSTA A PERGUNTA ERRADA. Idempotencia
+# responde *"a rede pode estragar o que JA foi mascarado?"* — nao pode, e continua
+# nao podendo. A vizinha e outra: *"a rede pode estragar o que NUNCA foi dado de
+# cliente?"*, e podia — mascarou o exemplo de CPF dentro do roteiro publicado do
+# `limite_ia`, em 15 contatos. O carimbo VOLTOU (`DECLARED_CONTENT_TOOLS`), e quem
+# julga aquele dano e `probe_declared_script_integrity.sh`, nao este ramo.
 if [ -n "$TEM_FILTRO" ]; then
   H=$(docker exec "$ENG_CT" node -e '
     const { filtrarTextoLivre } = require("'"$DIST"'/ctx-audit.js")
@@ -247,7 +255,7 @@ if [ -n "$TEM_FILTRO" ]; then
       *)      ok  "H. rede viva: cartao em texto livre -> $H_PEGA" ;;
     esac
     [ "$H_IDEM" = "cartao ***4444" ] \
-      && ok  "H. idempotente: valor ja mascarado atravessa intacto (dispensa o carimbo)" \
+      && ok  "H. idempotente: valor ja mascarado atravessa intacto" \
       || bad "H. a rede ESTRAGOU valor ja mascarado: $H_IDEM"
     [ "$H_SIS" = "cartao 1111 2222 3333 4444" ] \
       && ok  "H. ao SISTEMA sai inteiro — controle positivo (o CRM precisa do numero)" \

@@ -300,6 +300,15 @@ export interface StepResult {
   /** Chave para persistir output no pipeline_state (steps que produzem resultado) */
   output_as?:        string
   output_value?:     unknown
+  /**
+   * Este `output_value` é CONTEÚDO DECLARADO (artefato com autor, versão e
+   * publicação — hoje, o retorno de `form_get`), e não dado capturado do cliente.
+   *
+   * Ausente ⇒ `false`, e o default é o correto: a isenção da rede de texto livre é
+   * um privilégio que se AFIRMA, nunca algo que se herda por omissão. Ver
+   * `DECLARED_CONTENT_TOOLS` em `@plughub/schemas`.
+   */
+  output_declared?:  boolean
   transition_reason: PipelineState["transitions"][number]["reason"]
   /** Outcome final — apenas steps complete */
   outcome?:          string

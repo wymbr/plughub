@@ -1,5 +1,100 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-10 (3) — CTX-11: a rede mascarou o ROTEIRO, e o carimbo de proveniência voltou
+
+Um contato real do `limite_ia`. A forma publicada (`dialog_limite_roteiro`, nó
+`coletar_contato`) declara
+
+```
+Qual é o seu CPF? (só números, ex: 52998224725)
+```
+
+e o cliente recebeu
+
+```
+Qual é o seu CPF? (só números, ex: (##) ****-####)
+```
+
+A rede de texto livre (§D12, camada 3) mascarou **o exemplo do próprio roteiro**, em voo.
+E tipou errado: o `detect_pattern` do `cpf` exige pontuação, então 11 dígitos crus casaram
+o de **telefone** — o cliente leu um gabarito de telefone onde se pedia um CPF, na
+**primeira frase** do atendimento.
+
+### 1 · A população, e ela tem um corte limpo
+
+```
+íntegro   102 contatos   2026-08-13 11:04 → 2026-09-04 15:56
+mutilado   15 contatos   2026-09-04 20:55 → 2026-09-10 11:05
+```
+
+Zero sobreposição, e o corte é o dia em que a F5 entrou. Não foi preciso hipótese nenhuma:
+a fronteira estava no dado.
+
+### 2 · A premissa que falhou não era falsa — era de outra pergunta
+
+A F5 dispensou o carimbo de proveniência porque a rede é **idempotente** sobre valor já
+mascarado, e isso está medido nos quatro tipos detectáveis. A tabela é verdadeira nas
+quatro linhas. Só que ela responde *"a rede pode estragar o que JÁ foi mascarado?"* — e a
+pergunta que doeu é a vizinha: *"a rede pode estragar o que NUNCA foi dado de cliente?"*
+
+É a § *Postura de Engenharia* literalmente: **um instrumento pode ser falseável, ramificado
+e honesto — e ainda medir a proposição ERRADA.**
+
+### 3 · O conserto é de PROVENIÊNCIA, e é estreito de propósito
+
+`DECLARED_CONTENT_TOOLS` (`@plughub/schemas`) declara as tools cujo retorno é **artefato
+com autor, versão e publicação** — hoje, só o `form_get`. Três propriedades carregam peso:
+
+| decisão | por quê |
+|---|---|
+| allowlist de **TOOL**, nunca de chave | isentar por nome (`dialog`, `render`) faria a política depender de o autor do YAML escolher o nome certo — degrada mudo, e no sentido permissivo |
+| **um escritor só** (`setResult`), carimbo na MESMA chamada do valor | escrever o valor aqui e o carimbo ali abre a janela em que a chave existe sem ele |
+| reescrever a chave **sem** afirmar o carimbo o **apaga** | carimbo obsoleto isentando resposta de cliente é o pior desfecho possível desta linha, e a remoção é por construção, não por lembrança |
+
+A ausência do carimbo é **restritiva**: quem não sabe da proveniência não isenta. E a
+isenção é **registrada** — *"não olhou"* precisa se distinguir de *"não achou"*.
+
+⚠️ **O que NÃO mudou:** a máscara por tipo declarado (`filtrarLeituraCtx`) não passa por
+aqui. Conferido ao vivo pelo `smoke_limite_tres_acessos.sh`: **19 ✅ / 0 ❌**, com o cartão
+`***1234` no preview e o CPF sem vazar.
+
+### 4 · Falseabilidade
+
+**Unidade** — `declared-content.test.ts`, 18 casos, e cada isenção vem com o seu controle:
+o roteiro SEM carimbo continua sendo mascarado; `answers` (o que o cliente digitou)
+continua mascarado com `dialog` carimbado ao lado; `$.session.dialog` não herda nada.
+⚠️ O último bloco é o que decide: um caso de **ponta a ponta** que roda o flow de verdade
+(`invoke` → engine → `interpolate` → rede), porque uma linha esquecida no engine deixaria
+os outros 16 verdes e o cliente continuaria lendo `(##) ****-####`. Cinco mutações, cada
+uma derrubando o caso nomeado: isenção removida (4) · carimbo nunca removido (1) · raiz
+frouxa (1) · engine ignorando o carimbo (1) · allowlist inerte (2).
+
+**Ao vivo** — contato de webchat aberto no `limite_ia` depois do deploy: a frase chegou
+**byte a byte**. Suítes: engine 250/250, schemas 306/306, `probe_ctx_read_audience` verde.
+
+**Gate** — `probe_declared_script_integrity.sh` julga o **entregue**, não o declarado.
+Separa **exposição** (linhas de roteiro publicado que a rede alteraria — informação) de
+**dano** (mensagens entregues mutiladas desde a época — vermelho), porque contá-las num
+número só é o erro da D14.1. Canária obrigatória: se a rede não alterar a própria linha do
+defeito, sai **INCONCLUSIVO** — *exposição zero* com a rede morta seria verde por
+instrumento quebrado. Estado hoje: 13 formas, 391 textos, **1 exposta**, **0 de dano**.
+
+⚠️ A época (`DECLARED_CONTENT_EPOCH`) é o `StartedAt` medido do container, não um valor
+redondo: mensagem entregue não se corrige por deploy, e um gate permanentemente vermelho
+por dano histórico ensina todo mundo a ignorá-lo. Bateria do próprio gate: época anterior
+ao conserto ⇒ **vermelho com exatamente as 15** — o defeito medido, reproduzido pelo
+instrumento; canária morta, dialog-api fora, ClickHouse mudo e container ausente ⇒ **2**.
+
+### 5 · Três casas que afirmavam o contrário foram corrigidas
+
+O ADR ganhou a **§D12.1**; o ramo H do `probe_ctx_read_audience` e o comentário do
+`ctx-free-text.test.ts` diziam *"a idempotência dispensou o carimbo"* — a frase fica, com o
+escopo que ela realmente tem.
+
+⚠️ **Achado adjacente, registrado e NÃO consertado (`CTX-12`):** a rede tipa um CPF cru
+como **telefone**. Não é só cosmético — a categoria vai para o log e escolhe o template da
+máscara.
+
 ## 2026-09-10 (2) — AUT-44: quem contrata administra quem contratou
 
 ### 1 · O que a medição achou, e era pior que a ficha

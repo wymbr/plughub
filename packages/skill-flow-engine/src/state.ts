@@ -290,17 +290,63 @@ export class PipelineStateManager {
     }
   }
 
-  /** Persiste o resultado de um step no pipeline_state. */
+  /**
+   * Chave reservada de `results` com as chaves que carregam CONTEÚDO DECLARADO
+   * (retorno de uma `DECLARED_CONTENT_TOOLS` — hoje, o `form_get`).
+   *
+   * Vive dentro de `results` pelo mesmo motivo das sentinelas: é fato do pipeline,
+   * viaja com ele no Redis e sobrevive a retomada sem um segundo store para manter
+   * em dia. Como toda chave de `results`, é alcançável por `$.pipeline_state.*`; o
+   * prefixo `__` a mantém fora de colisão com `output_as` de step.
+   */
+  static readonly CHAVE_DECLARADO = "__declared_content__"
+
+  /**
+   * Persiste o resultado de um step no pipeline_state.
+   *
+   * ── O carimbo de proveniência, e por que ele mora AQUI ──────────────────────
+   *
+   * `declarado` diz que este valor veio de artefato com autor, versão e publicação
+   * (um `DialogForm`), e não do teclado de um cliente — é o que a rede de texto livre
+   * consulta para não mascarar o roteiro (ver `DECLARED_CONTENT_TOOLS`).
+   *
+   * **Um escritor só, e é este.** Todo `output_as` de todo step passa por aqui, então
+   * gravar o carimbo em qualquer outro lugar criaria a segunda casa que este
+   * repositório já pagou caro para não ter. E a consequência que importa é a
+   * SIMÉTRICA: escrever a mesma chave com `declarado = false` **remove** o carimbo.
+   * Sem isso, um `menu` que reaproveitasse a chave de um `form_get` herdaria a isenção
+   * — carimbo obsoleto isentando resposta de cliente, que é o pior desfecho possível
+   * desta linha. A remoção é por construção, não por lembrança.
+   */
   static setResult(
     state:    PipelineState,
     outputAs: string,
     result:   unknown,
+    declarado = false,
   ): PipelineState {
+    const chaves = new Set(
+      Array.isArray(state.results[PipelineStateManager.CHAVE_DECLARADO])
+        ? (state.results[PipelineStateManager.CHAVE_DECLARADO] as unknown[]).map(String)
+        : [],
+    )
+    if (declarado) chaves.add(outputAs)
+    else           chaves.delete(outputAs)
+
+    const results: Record<string, unknown> = { ...state.results, [outputAs]: result }
+    if (chaves.size > 0) results[PipelineStateManager.CHAVE_DECLARADO] = [...chaves].sort()
+    else                 delete results[PipelineStateManager.CHAVE_DECLARADO]
+
     return {
       ...state,
       updated_at: new Date().toISOString(),
-      results: { ...state.results, [outputAs]: result },
+      results,
     }
+  }
+
+  /** As chaves de `results` que carregam conteúdo declarado. Vazio = nenhuma. */
+  static chavesDeclaradas(state: PipelineState): ReadonlySet<string> {
+    const bruto = state.results?.[PipelineStateManager.CHAVE_DECLARADO]
+    return Array.isArray(bruto) ? new Set(bruto.map(String)) : new Set<string>()
   }
 
   /** Incrementa o contador de retry de um step catch. */

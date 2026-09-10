@@ -24,6 +24,7 @@
  */
 
 import type { InvokeStep } from "@plughub/schemas"
+import { DECLARED_CONTENT_TOOLS } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { resolveInputMap }       from "../interpolate"
 import { extractOutputsToCtx }   from "../context-accumulator-util"
@@ -62,6 +63,19 @@ export async function executeInvoke(
   const outputKey   = step.output_as
   const sentinelKey = `${step.id}:__invoked__`
 
+  // step.target (external MCP) and step.tool (native plughub) are both optional;
+  // at least one must be present — validated at runtime per spec 4.7.
+  const toolName  = step.target?.tool        ?? step.tool  ?? ""
+  const mcpServer = step.target?.mcp_server  ?? "mcp-server-plughub"
+
+  /**
+   * O retorno desta tool é conteúdo DECLARADO (autor, versão, publicação), e não
+   * dado capturado — logo a rede de texto livre não deve palpitar sobre ele. O fato
+   * é do ESCRITOR, então nasce aqui e viaja no `StepResult`; quem o grava (e quem o
+   * REMOVE, ao reescrever a chave sem ele) é `PipelineStateManager.setResult`.
+   */
+  const declarado = DECLARED_CONTENT_TOOLS.has(toolName)
+
   // ── Idempotência: checar se a chamada MCP já completou com sucesso ─────────
   if (ctx.state.results[sentinelKey] === "completed") {
     // Resultado já gravado em uma execução anterior — retornar sem re-chamar MCP
@@ -71,6 +85,7 @@ export async function executeInvoke(
       next_step_id:      step.on_success,
       ...(outputKey !== undefined && { output_as: outputKey }),
       output_value:      storedResult,
+      output_declared:   declarado,
       transition_reason: "on_success",
     }
   }
@@ -94,11 +109,6 @@ export async function executeInvoke(
     )
     throw resolveErr
   }
-
-  // step.target (external MCP) and step.tool (native plughub) are both optional;
-  // at least one must be present — validated at runtime per spec 4.7.
-  const toolName  = step.target?.tool        ?? step.tool  ?? ""
-  const mcpServer = step.target?.mcp_server  ?? "mcp-server-plughub"
 
   // ── Fase 1: gravar sentinel "dispatched" antes da chamada MCP ────────────
   // Permite distinguir "nunca chamado" de "chamado mas sem resultado" na retomada.
@@ -160,6 +170,7 @@ export async function executeInvoke(
       next_step_id:      step.on_success,
       ...(outputKey !== undefined && { output_as: outputKey }),
       output_value:      result,
+      output_declared:   declarado,
       transition_reason: "on_success",
     }
   } catch (error) {

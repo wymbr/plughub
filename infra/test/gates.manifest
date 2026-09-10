@@ -168,6 +168,17 @@ probe_slot_required_config.sh
 # que recuse TUDO nao passe.
 probe_skill_profile_steps.sh
 probe_slot_required_params.sh
+# O ROTEIRO chega ao cliente como foi escrito. Medido em 2026-09-10 num contato real
+# do `limite_ia`: a rede de texto livre mascarou o EXEMPLO de CPF dentro do proprio
+# roteiro publicado, em voo, e ainda o tipou como TELEFONE (o padrao de CPF exige
+# pontuacao; 11 digitos crus casam o de telefone). 15 contatos entre 04/09 e 10/09. O
+# conserto e o carimbo de proveniencia e tem teste de unidade; este probe julga a outra
+# metade — o que o cliente RECEBEU, que e onde o dano aparece. DUAS grandezas separadas:
+# EXPOSICAO (linhas de roteiro que a rede alteraria) e INFORMACAO; DANO (mensagens
+# entregues mutiladas desde a epoca) e VERMELHO. Canaria obrigatoria: se a rede nao
+# alterar a propria linha do defeito, sai INCONCLUSIVO — 'exposicao zero' com a rede
+# morta seria verde por instrumento quebrado.
+probe_declared_script_integrity.sh
 # E o irmao de RUNTIME do de cima: o de cima diz que tipos de step o perfil admite;
 # este diz a QUEM se pode delegar. Delegar e SUSPENDER o chamador, e ele so volta se o
 # alvo chamar `workflow_resume` -- medido: 0 de 6 destinos de navegacao sao delegaveis

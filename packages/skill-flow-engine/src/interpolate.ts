@@ -17,6 +17,7 @@
 import type { IContextStore } from "./context-types"
 import type { StepContext }   from "./executor"
 import { filtrarLeituraCtx, filtrarTextoLivre, type SitioInterpolacao } from "./ctx-audit"
+import { PipelineStateManager } from "./state"
 
 // ── Regex ─────────────────────────────────────────────────────────────────────
 
@@ -60,11 +61,20 @@ export async function resolveRef(
   // O que a F5 acrescenta não é tipo: é a REDE (§D12, camada 3), que reconhece PII
   // por FORMA e só roda para plateia de gente. ⚠️ É MITIGAÇÃO, nunca cobertura — a
   // garantia é declarar o campo num `DialogForm`, e capturar em texto livre continua
-  // sendo o que se deve evitar. Ela é segura sobre valor JÁ mascarado (idempotente),
-  // e é isso que dispensou o carimbo de proveniência.
+  // sendo o que se deve evitar.
+  //
+  // ⚠️ **O carimbo de proveniência VOLTOU (2026-09-10).** A F5 o dispensou porque a
+  // rede é idempotente sobre valor já mascarado — argumento correto para a pergunta
+  // *"a rede pode estragar o que já foi mascarado?"*, e cego para a vizinha: *"a rede
+  // pode estragar o que nunca foi dado de cliente?"*. Podia, e estragou — mascarou o
+  // exemplo de CPF dentro do roteiro publicado do `limite_ia`, em voo, e ainda o tipou
+  // como telefone. `PipelineStateManager.chavesDeclaradas` diz quais chaves vieram de
+  // artefato publicado; ausência delas é restritiva, e a rede roda como antes.
   const bruto = resolveJsonPathRef(ref, ctx)
   if (!sitio) return bruto
-  return filtrarTextoLivre(bruto, sitio, ref)
+  return filtrarTextoLivre(
+    bruto, sitio, ref, PipelineStateManager.chavesDeclaradas(ctx.state),
+  )
 }
 
 // ── interpolate — interpola um template de string ────────────────────────────

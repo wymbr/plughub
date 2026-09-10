@@ -304,6 +304,56 @@ export function maskChangesValue(m: CtxReadMask): m is ContextMaskingType {
 }
 
 // ─────────────────────────────────────────────
+// PROVENIÊNCIA — o que a rede NÃO deve tocar
+// ─────────────────────────────────────────────
+
+/**
+ * DECLARED_CONTENT_TOOLS — tools cujo retorno é CONTEÚDO DECLARADO, não dado capturado.
+ *
+ * ⚠️ **Medido em 2026-09-10, num contato real do `limite_ia`.** O cliente recebeu
+ *
+ *     "Qual é o seu CPF? (só números, ex: (##) ****-####)"
+ *
+ * enquanto a fonte semeada (`infra/dialog/dialog_limite_roteiro.json:25`) diz
+ *
+ *     "Qual é o seu CPF? (só números, ex: 52998224725)"
+ *
+ * A rede mascarou **o exemplo do próprio roteiro**, em voo — e ainda tipou errado: o
+ * padrão de CPF exige pontuação (`\d{3}\.\d{3}\.\d{3}-\d{2}`), então 11 dígitos crus
+ * casaram o de TELEFONE, e o cliente recebeu um gabarito de telefone onde se pedia um
+ * CPF. Não é dano de exibição: é a primeira frase que ele lê, e ela passou a instruir
+ * o formato errado.
+ *
+ * ── O carimbo que a F5 dispensou, e por que ele voltou ──────────────────────
+ *
+ * A F5 dispensou a proveniência porque a rede é IDEMPOTENTE sobre valor já mascarado
+ * (§D12) — o argumento respondia *"a rede pode ESTRAGAR o que já foi mascarado?"*, e a
+ * resposta continua sendo não. Mas há uma segunda pergunta, que aquele argumento não
+ * alcança: *"a rede pode estragar o que NUNCA foi dado de cliente?"* — e a resposta é
+ * sim, com dano medido. É a § Postura de Engenharia por inteiro: um instrumento pode
+ * ser falseável, ramificado e honesto — e ainda medir a proposição ERRADA.
+ *
+ * ── O critério, e ele é estreito de propósito ───────────────────────────────
+ *
+ * Isenta-se o que tem **autor, versão e publicação**: um `DialogForm` é redigido por
+ * alguém do tenant, versionado no `dialog-api` e publicado num ato deliberado — é
+ * exatamente o carimbo de proveniência que falta ao texto livre. Não se isenta nada
+ * que o cliente tenha digitado, nem nada que uma tool de DOMÍNIO devolva (o CRM
+ * devolve dado de pessoa, e ali a rede é justamente o que se quer).
+ *
+ * ⚠️ **É uma allowlist de TOOL, nunca de chave.** Isentar por nome de chave
+ * (`dialog`, `render`) faria a isenção depender de o autor do YAML escolher o nome
+ * certo — política que degrada mudo, e no sentido permissivo. Aqui o fato é do
+ * ESCRITOR: só a resposta daquela tool, naquela execução, carrega o carimbo, e
+ * qualquer outro escritor da mesma chave o REMOVE (ver `PipelineStateManager.setResult`).
+ *
+ * ⚠️ **A isenção é da REDE, não da máscara declarada.** `filtrarLeituraCtx` (tag do
+ * ContextStore, tipo declarado no catálogo) não passa por aqui: lá existe tipo, existe
+ * decisão e ela continua valendo. O que se isenta é a camada 3 — o palpite por FORMA.
+ */
+export const DECLARED_CONTENT_TOOLS: ReadonlySet<string> = new Set(["form_get"])
+
+// ─────────────────────────────────────────────
 // A REDE — detecção de PII em texto livre (§D12)
 // ─────────────────────────────────────────────
 

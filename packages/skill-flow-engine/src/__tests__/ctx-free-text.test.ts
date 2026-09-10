@@ -56,8 +56,11 @@ describe("a rede NÃO é cobertura — os limites são o produto (§D12)", () =>
 
 describe("o que a rede não pode ESTRAGAR", () => {
   it("valor JÁ mascarado atravessa intacto — idempotência (§D12)", () => {
-    // É o que dispensou o carimbo de proveniência. `pendencia.context.*` nasce
-    // mascarado; sem esta propriedade a F5 produziria `*****4444**`.
+    // `pendencia.context.*` nasce mascarado; sem esta propriedade a F5 produziria
+    // `*****4444**`. ⚠️ Esta propriedade foi lida por um tempo como *"logo o carimbo
+    // de proveniência é dispensável"* — e não é: ela responde *"a rede estraga o que
+    // JÁ foi mascarado?"*, nunca *"a rede estraga o que NUNCA foi dado de cliente?"*.
+    // A segunda custou 15 contatos com o roteiro mutilado; ver `declared-content.test.ts`.
     for (const m of ["***4444", "**** **** **** ****", "***.***.***.--",
                      "(##) ****-4321", "m***@exemplo.com"]) {
       expect(filtrarTextoLivre(`Cartão: ${m}`, CLIENTE, "$.x")).toBe(`Cartão: ${m}`)
