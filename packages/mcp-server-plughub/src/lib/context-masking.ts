@@ -320,3 +320,66 @@ export async function maskContextForPersistence(
 
   return { entries, total, hidden_count: hidden }
 }
+
+// ── Tags de PLATAFORMA que a Console precisa, para qualquer visualizador ──────
+
+/**
+ * PLATFORM_CONSOLE_TAGS — o que as superfícies de FORMULÁRIO da Console leem do
+ * snapshot, e que por isso nenhum portão de namespace pode esconder de quem já
+ * passou pelo portão de POOL (AUT-47).
+ *
+ * ── Por que existe (CNS-24, medido em 2026-09-11) ────────────────────────────
+ *
+ * O wrap-up de um `operator` abria como contato VAZIO, com cronômetro correndo. O
+ * `DialogFormRenderer` só renderiza se o snapshot trouxer o `dialog_form_id` e um
+ * token de retomada; até 2026-09-01 eles eram `session.*`, e `session` está em
+ * `DEFAULT_OPERATOR_NAMESPACES`. A CNS-11 (`d4bdf9c0`) os moveu para `core.*` e o
+ * renderer foi junto — o portão de namespace do operador, não. Admin e supervisor
+ * passam por cima do portão, então só o operador ficou trancado.
+ *
+ * Dano medido, como experimento controlado (wrap-ups reivindicados por humano):
+ *
+ *     operator@   5 concluídos antes  →  0 depois (2 hang up, 1 pendurado)
+ *     admin@     24 concluídos antes  → 28 depois
+ *
+ * ── Por que é da PLATAFORMA e não do pool ────────────────────────────────────
+ *
+ * O formulário é mecanismo da plataforma, não dado do tenant. Pendurá-lo no
+ * `DEFAULT_OPERATOR_ALLOW_TAGS` faria ele depender de uma lista que o tenant
+ * SOBRESCREVE por pool (`context_visibility.operator_allow_tags`) — e a
+ * sobrescrita SUBSTITUI o default. Hoje 0 de 41 pools sobrescrevem; o primeiro que
+ * o fizesse trancaria o operador de novo, sem erro. Por isso a lista é SOMADA,
+ * nunca substituída: ver `withPlatformConsoleTags`.
+ *
+ * ── O que ela NÃO é ──────────────────────────────────────────────────────────
+ *
+ * Tags EXATAS, nunca o namespace `core` — abrir `core.*` inteiro entregaria ao
+ * operador fila, ETA, ids de contato e o resto do que a plataforma reserva.
+ *
+ * ⚠️ **Duas delas são CREDENCIAL de retomada**, e voltar a entregá-las ao browser
+ * do operador foi DECISÃO do dono, tomada contra medição: o ingress de resume (A5)
+ * confere a POSSE no árbitro e recusa com 403 quem não detém o item ou o devolveu à
+ * fila, e o portão por pool (AUT-47) já limita quem lê a sessão. É o que o admin
+ * recebe hoje e o que o operador recebia antes da CNS-11. A alternativa mais forte
+ * — a Console não precisar do token, retomando do lado do servidor pela
+ * `work_task` de quem reivindicou — é a CNS-25.
+ *
+ * ⚠️ **Espelha `resumeTokenOf` e `isFormFillSnapshot`** do
+ * `platform-ui/.../DialogFormRenderer.tsx`. A Console não importa este pacote;
+ * quem impõe a concordância é o ramo P2 de `gate_session_state_pool_scope.sh`, que
+ * exige o PACOTE no corpo do operador, e não só o HTTP 200 — foi exatamente o
+ * status sozinho que deixou este defeito verde por dez dias.
+ */
+export const PLATFORM_CONSOLE_TAGS: readonly string[] = Object.freeze([
+  "core.workflow.dialog_form_id",
+  "core.workflow.delegate_resume_token",
+  "core.workflow.resume_token",
+])
+
+/**
+ * As tags exatas que o operador vê, PARA ESTE POOL: as dele somadas às de
+ * plataforma. Somar, nunca substituir — ver `PLATFORM_CONSOLE_TAGS`.
+ */
+export function withPlatformConsoleTags(poolAllowTags: readonly string[]): string[] {
+  return [...new Set([...poolAllowTags, ...PLATFORM_CONSOLE_TAGS])]
+}

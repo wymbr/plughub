@@ -1,5 +1,108 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-11 (1) — CNS-24: o wrap-up do operador abria VAZIO, e a CNS-11 era a causa
+
+O dono relatou: como `operator`, o contato de wrap-up chega depois do desligamento mas
+**não abre** — vira um contato com a tela em branco, cronômetro correndo e tudo.
+
+### 1 · A causa, medida ponta a ponta
+
+O `DialogFormRenderer` só renderiza se o snapshot de contexto que a Console recebe
+trouxer **`core.workflow.dialog_form_id`** e um **token de retomada**. Até 2026-09-01
+eles se chamavam `session.dialog_form_id` e `session.delegate_resume_token`. A CNS-11
+(`d4bdf9c0`) os moveu para `core.*` e o renderer foi atualizado junto — **o portão de
+namespace do operador, não**.
+
+Esse portão (`applyContextMaskingDynamic`) entrega a quem **não é supervisor** só os
+namespaces `DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]`. `session` estava
+lá; `core`, não. As duas tags saíram da visão do operador, `isFormFillSnapshot` deu
+falso, e a tela caiu no modo de conversa — vazia. Admin e supervisor passam por cima
+do portão, por isso só o operador ficou trancado.
+
+### 2 · As medições
+
+Ao vivo, na tarefa do dono (`4841c60d`), na mesma hora:
+
+| | campos entregues | `dialog_form_id` | token |
+|---|---|---|---|
+| operator@ | 3 (18 retidos por escopo de pool) | ausente | ausente |
+| admin@ | 21 | presente | presente |
+
+O dado **existia** — a sessão estava `suspended`, esperando o formulário, com o token
+na `work_task`.
+
+O dano, como experimento controlado (wrap-ups reivindicados por humano):
+
+| | antes de 2026-09-01 | depois |
+|---|---|---|
+| operator@ | 5 concluídos | **0** — 2 encerrados por hang up, 1 pendurado |
+| admin@ | 24 concluídos | 28 concluídos |
+
+Mesmo fluxo, mesmo produto — só o papel muda.
+
+### 3 · Por que nada ficou vermelho, e é a lição que fica
+
+Havia um gate para exatamente isto. O ramo **P2** de `gate_session_state_pool_scope.sh`
+declara no próprio cabeçalho que existe para impedir *"o operador de verdade trancado
+do lado de fora"* — e ficou **verde por dez dias** com o operador trancado, porque
+conferia só o **HTTP 200** numa tarefa de form-fill. O operador recebia 200 com o
+corpo sem o que o formulário precisa.
+
+É a família *"um instrumento pode ser falseável, ramificado e honesto — e ainda medir a
+proposição ERRADA"*: a proposição era *"o operador consegue fazer a tarefa"*, e o
+instrumento media *"o operador não é recusado"*. **O que prova que alguém pode fazer
+uma tarefa é o CORPO, não o código HTTP.** O P1 já conferia o token — só para o admin.
+
+### 4 · O conserto
+
+`PLATFORM_CONSOLE_TAGS` (`lib/context-masking.ts`) — as três tags que as superfícies
+de formulário da Console leem fora de `session.*`: `core.workflow.dialog_form_id`,
+`core.workflow.delegate_resume_token`, `core.workflow.resume_token`. Duas decisões
+carregam peso:
+
+- **Tags EXATAS, nunca o namespace `core`** — abrir `core.*` entregaria ao operador
+  fila, ETA e ids de contato;
+- **SOMADAS às do pool, nunca substituídas por elas** (`withPlatformConsoleTags`). O
+  formulário é mecanismo da plataforma, não dado do tenant, e a sobrescrita por pool
+  (`context_visibility.operator_allow_tags`) SUBSTITUI o default. Hoje 0 de 41 pools
+  sobrescrevem — o primeiro que o fizesse trancaria o operador de novo, sem erro. O
+  teste de unidade tem um caso só para isso.
+
+⚠️ **Duas das três são credencial de retomada, e voltar a entregá-las ao browser do
+operador foi decisão do dono, tomada contra medição:** o ingress de resume (A5)
+confere a posse no árbitro e recusa com 403 quem não detém o item ou o devolveu à
+fila, e o portão por pool (AUT-47) já limita quem lê a sessão. É o que o admin recebe
+hoje e o que o operador recebia antes da CNS-11. A exceção medida: com o árbitro fora
+do ar o A5 libera, com log — comportamento anterior a esta mudança. A alternativa
+mais forte (a Console não precisar do token) é a `CNS-25`.
+
+⚠️ O nome do helper foi escolhido para NÃO colidir: a primeira versão se chamava
+`operatorAllowTags`, igual a uma variável local do handler do `supervisor_state` —
+sombreamento legal em TypeScript e esperando para morder.
+
+### 5 · Falseabilidade
+
+Unidade: `platform-console-tags.test.ts`, 6 casos — o que carrega peso é o da
+**sobrescrita** (pool com lista própria não tira o pacote) e o que proíbe curinga /
+namespace inteiro. Suíte do mcp-server **293/293**, `tsc --noEmit` limpo.
+
+Gate: o P2 passou a exigir, no corpo do operador, o `dialog_form_id` **e** o token —
+com guarda contra verde vácuo (`index("")` casaria qualquer string, então token vazio
+é INCONCLUSIVO). Bateria sobre o **JS compilado** que o container executa (o `src` não
+é o que roda): conserto desfeito ⇒ gate **exit 1**, P2 vermelho exatamente nas duas
+asserções novas, enquanto o 200 continuava passando — o estado anterior reproduzido.
+Imagem restaurada ⇒ **exit 0**.
+
+Ao vivo, depois do deploy, na tarefa do dono: o operador recebe as duas tags (5
+campos: os 3 de antes + as 2 de plataforma), e a tarefa segue `suspended`, recuperável
+até o prazo da `work_task`. O N1/N2 do mesmo gate seguiu barrando o operador em
+`aprovacao_deploy` — as tags de plataforma não alargaram alcance entre pools.
+
+⚠️ **Achado de ferramenta, registrado para não custar de novo:** o gate já tinha
+**U+FFFD literais** no lugar de travessões (corrompido por alguma escrita antiga) — um
+patch por texto com `—` não casava. O trecho novo foi escrito em ASCII e ancorado por
+posição.
+
 ## 2026-09-10 (4) — MSK-03: remove-se o VALOR, nunca o CAMPO — e as três casas do eco passam a concordar
 
 O dono perguntou por que a tela de histórico do Console mostrava **um** campo quando

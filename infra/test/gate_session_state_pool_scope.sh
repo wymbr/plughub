@@ -10,6 +10,7 @@
 #       CREDENCIAL da tarefa (`core.workflow.delegate_resume_token`) ..... 403
 #   P1  quem ALCANCA o pool continua lendo tudo, token incluido ......... 200
 #   P2  um chamador NAO-admin le a sessao de um pool que ele alcanca ..... 200
+#       ... E recebe o PACOTE do formulario (form_id + token) ........... CNS-24
 #   N3  sessao inexistente responde 404, nunca 403 ...................... 404
 #   N4  tenant do token x tenant da sessao — DECLARADO nao-exercivel aqui
 #
@@ -134,9 +135,29 @@ encerra "$SID" aprovacao_deploy
 sec "P2 — um NAO-admin le a sessao de um pool que ele alcanca"
 printf '   (sem este ramo, o portao poderia ser so \"admin ve, o resto nao\")\n'
 SID2="$(cria formfill_demo_ia formfill_demo)" || inc "nao consegui criar a tarefa de form-fill"
+RTOK2="$(redis HGET "${TENANT}:ctx:${SID2}" core.workflow.delegate_resume_token | tr -d '' | jq -r '.value // empty')"
 C="$(estado "$SID2" "$T_OPE")"
-[ "$C" = "200" ] && ok "operator -> 200 em formfill_demo (pool dele)" \
-                 || bad "operator -> $C em pool PROPRIO (esperava 200) — fechei demais"
+if [ "$C" = "200" ]; then
+  ok "operator -> 200 em formfill_demo (pool dele)"
+  # -- CNS-24 (2026-09-11): 200 NAO basta ---------------------------------------
+  # Este ramo existia para impedir "o operador de verdade trancado do lado de
+  # fora" - e ficou VERDE por dez dias com o operador trancado, porque conferia
+  # so o STATUS. A CNS-11 moveu o pacote do formulario para `core.workflow.*`, o
+  # portao de namespace do operador o escondeu, e o 200 continuou vindo: com o
+  # corpo sem o que a Console precisa. O wrap-up do operador abria VAZIO.
+  # O que prova que ele pode fazer a tarefa e o CORPO, nao o codigo HTTP.
+  if jq -e '.customer_context.context_snapshot["core.workflow.dialog_form_id"].value // empty | length > 0'        /tmp/gate47.json >/dev/null 2>&1; then
+    ok "e o corpo traz o dialog_form_id - o formulario tem o que renderizar"
+  else
+    bad "operator 200 mas SEM dialog_form_id: a Console mostra contato VAZIO (CNS-24)"
+  fi
+  # Sem token nao ha o que procurar, e `index("")` casaria qualquer string -
+  # verde vacuo. Ausencia aqui e pre-condicao, nao aprovacao.
+  [ -n "$RTOK2" ] || inc "a tarefa de form-fill nasceu SEM resume token - P2 nao prova o pacote"
+  [ "$(tem_token "$RTOK2")" = "sim" ] && ok "e o corpo traz o resume_token - o operador consegue SUBMETER"                                       || bad "operator 200 mas SEM o token: o formulario nao pode ser enviado (CNS-24)"
+else
+  bad "operator -> $C em pool PROPRIO (esperava 200) - fechei demais"
+fi
 encerra "$SID2" formfill_demo
 
 sec "N4 — tenant: DECLARADO nao-exercivel"

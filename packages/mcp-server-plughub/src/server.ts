@@ -73,6 +73,7 @@ import {
   resolveContextMaskingRule,
   applyMaskingTypeToValue,
   maskContextForPersistence,
+  withPlatformConsoleTags,
 } from "./lib/context-masking"
 
 // ─────────────────────────────────────────────
@@ -1108,6 +1109,9 @@ const DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]
 // Platform default for context_visibility.operator_allow_tags — exact tags an
 // operator sees regardless of namespace. caller.customer_id is an internal id (not
 // PII) the operator needs to identify the customer (C1/H4). Overridable per pool.
+// ⚠️ A sobrescrita por pool SUBSTITUI esta lista — por isso o que a PLATAFORMA precisa
+// (o pacote do formulário) NÃO mora aqui, e sim em `PLATFORM_CONSOLE_TAGS`, somado
+// sempre (CNS-24).
 const DEFAULT_OPERATOR_ALLOW_TAGS = ["caller.customer_id"]
 
 // ── Pattern matching, tipos visuais e snapshot de persistência ────────────────
@@ -1214,6 +1218,12 @@ async function applyContextMaskingDynamic(
   // desta função, e uma falha de contador não pode derrubar a aba Contexto.
   void observeContextTags(rawHash, tenantId).catch(() => { /* já logado na casa */ })
 
+  // CNS-24 — as tags de PLATAFORMA que a Console precisa (formulário de wrap-up,
+  // form-fill, aprovação) são SOMADAS às do pool, nunca substituídas por elas. Sem
+  // isto a CNS-11, ao mover `session.dialog_form_id` para `core.workflow.*`, trancou
+  // o operador fora do próprio formulário: ver `PLATFORM_CONSOLE_TAGS`.
+  const permitidas = withPlatformConsoleTags(allowTags)
+
   const result: Record<string, unknown> = {}
   const byRule:      string[] = []
   const byPoolScope: string[] = []
@@ -1246,7 +1256,7 @@ async function applyContextMaskingDynamic(
     // "caller.customer_id" to identify the customer / load history / 360 (C1/H4).
     // Self-contained (no need to also add a masking rule); PII fields (caller.cpf/…)
     // are NOT listed here and stay gated + masked.
-    if (!isSupervisor && allowTags.includes(tag)) {
+    if (!isSupervisor && permitidas.includes(tag)) {
       result[tag] = entry
       continue
     }
