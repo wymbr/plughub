@@ -98,6 +98,9 @@ construir — o oposto foi o que produziu os nove títulos velhos.
 | IDN-03 | Commerce-cards: checkout mascarado + repasse ao PSP | `aberto` | idem |
 | IDN-04 | Novas `ChannelCapability` | `aberto` | idem |
 | IDN-05 | Rejulgar nível (a), contrato delegate-por-pool e intake-flow — cortados por uma razão que caiu (tarefa **B1**) | `aberto` | `TODO.md` § Reexame dos 9 |
+| IDN-06 | **As rotas de identidade do channel-gateway não têm credencial.** Medido em 2026-09-11: as oito rotas `/v1/channels/webhook/identity/*` e `/pending/by-customer/{id}` não têm `Depends`, `dependencies=[]` nem middleware global, e o `tenant_id` vem do CORPO — o chamador escolhe o tenant. A UI proxia `/v1/channels` em dev (`vite.config.ts:68`) e em produção (`Dockerfile:158`), então quem alcança o host da UI varre a base de clientes, anexa âncoras, grava atributos e dispara OTP de qualquer tenant, sem login. `/v1` é declarado interno na allowlist da borda, mas a separação é de CÓDIGO, e aqui quem publica é a própria UI. ⚠️ O `probe_route_credential_coverage.sh` mede a analytics-api — a cobertura precisa de censo próprio do serviço. `otp/verify` aberto não cunha `possessed` (exige o código); `otp/challenge` aberto é enumeração e custo de SMS assim que a entrega existir | `aberto` | `main.py:1159–1250` · `docs/adr/adr-identity-door-evidence.md` §2 (7) |
+| IDN-07 | **A âncora não tem eixo de PROCEDÊNCIA.** O único eixo é `verification_class` (*como* foi provada); nada diz *de onde veio*. Uma âncora do CRM é indistinguível de uma que um operador digitou, então a regra *"OTP só contra âncora autoritativa"* é inexprimível. Valores: `declared \| channel_origin \| authoritative \| operator`. Pré-requisito da PID-10 | `aberto` | `docs/adr/adr-identity-door-evidence.md` D13 |
+| IDN-08 | **A aba Cliente do Console escreve no cadastro como se fosse fonte autoritativa.** `ClienteTab.tsx:118` cria cliente (`/identity/resolve` com `provision: true`) e grava `attributes` por desenho; operador não é fonte autoritativa. Ou ela carimba procedência `operator`, ou contamina em silêncio a base que o OTP vai confiar | `aberto` | `ClienteTab.tsx:118` · ADR §2 (8) |
 
 ---
 
@@ -296,6 +299,33 @@ intocado. "Três níveis" nomeia dois modelos neste repositório — ver a desam
 > `masked_input`"* construiria a recusa depois do buraco abrir. Erro de ordenação
 > corrigido em 2026-09-03, antes de virar linha de ledger.
 
+---
+
+## `docs/adr/adr-identity-door-evidence.md` — porta de identidade
+
+Proposta em 2026-09-11, depois de fechada com o dono. **A plataforma identifica, prova e registra;
+a régua é da aplicação.** Caminho crítico: **PID-01 → PID-02 → PID-03** — sem identidade assinada
+nas tools e sem evidência que não se forja, a porta não garante nada contra fluxo autorado.
+**PID-07 precede PID-06.** **PID-10 depende de IDN-07.** A migração dos dois intakes (PID-04) vem
+**depois** da chave de retomada. As três lacunas do cadastro existente estão no grupo IDN
+(`IDN-06..08`).
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| PID-01 | **As tools de identidade e retomada não sabem quem chama.** `workflow_resume` recebe só `resume_token` e `decision`; `pending_workflow_get`, âncoras e `tenant_id`; o `withGuard` é só o detector de injeção. Passam a exigir `session_token` assinado — receber a sessão como argumento seria o chamador declarando a própria autorização (defeito da CAP-01). O mecanismo já existe (`agent_login` assina; `verifySessionToken`) | `aberto` | `workflow.ts:248` · `tool-guard.ts:59` · ADR D6 |
+| PID-02 | **A evidência pode ser forjada.** `context_set` não exige `session_token`, aceita qualquer sessão, tenant e tag, e o `source` é o chamador que informa; `writeContextTag` não bloqueia `core.*`. Quem verifica passa a gravar no servidor, na mesma chamada (`otp_verify` escreve as próprias tags), e `context_set` recusa `core.journey.identity.*` e `core.identity.*`. ⚠️ Medido: recusar só esses dois ramos quebra zero fluxos; recusar `core.*` inteiro quebraria `skill_limite_processo_v1:238` e `skill_revisao_treplica_v1:70`, que já escrevem `core.workflow.*` por esse caminho | `aberto` | `session.ts:938` · `journey.ts:230` · ADR D6 |
+| PID-03 | **O `workflow_resume` transporta a evidência para o processo retomado.** O merge de journey não serve: `migrateJourneyContext` só copia a tag que a canônica ainda não tem, e a sobrevivente é a raiz mais antiga — então uma prova nova é descartada sempre que o processo já guardar uma velha (inclusive um `failed` de hoje perde para um `verified` de 20 dias atrás). Depois de PID-01 e PID-02 | `aberto` | `journey.ts:312` · ADR D5, D6 |
+| PID-04 | **`skill_intake_runner_v1` — a porta de plataforma**, com `door_mode`, `require`, `on_new_pool`, `degrade_target`, `dialog_form_id`, `accept_resume_key`; e a migração dos dois intakes vivos, que repetem os mesmos 18 step ids (`skill_limite_entrada_v1` × `agente_portabilidade_intake_v1`). A migração vem depois da chave de retomada | `aberto` | ADR D2, D12 |
+| PID-05 | **`skill_identity_orchestrator_v1`** — dono da composição, um `config_param` por mecanismo (`enable_otp`, `enable_biometrics`), tipo novo `required: false` com default. Pode nascer dentro da porta: a interface é a mesma | `aberto` | ADR D3 |
+| PID-06 | **`resume_requires` e `resume_door` no step do N3**, por `$.config.*` (união objeto \| ref, como `channel_policy`); mínimo declarado no skill; `judgeIdentityFloor` recusa no deploy a config que não contém o mínimo — nunca ajusta em silêncio. Depois de PID-07 | `aberto` | ADR D7 |
+| PID-07 | **As rotas de deploy do agent-registry não têm portão.** `app.ts:49`: *"slots sub-routes (deploy) — não gateado nesta fatia"*, com tenant e usuário vindos de header (`x-tenant-id`/`x-user-id`, default `system`). Enquanto valer, o mínimo da PID-06 protege o valor mas não a escolha do skill: trocar o `skill_id` no slot o contorna | `aberto` | `app.ts:49` · ADR D7 |
+| PID-08 | **O deploy em lote registra sem mudar.** `skill_deploy` (`pool_ids`) → `POST /v1/skills/:id/deploy` grava `skill.flow` e um `SkillDeployment` com os pools, mas não toca slot; o bridge executa o snapshot do slot `current`. Para pool com slot, a linha diz "implantado em X" enquanto X roda o antigo. Aposentar ou corrigir, e dar às portas um promote em lote sobre slots, com rollback por pool | `aberto` | `skills.ts:410` · ADR §4 |
+| PID-09 | **A chegada autenticada não gera âncora.** O `from` do WhatsApp é o E.164 autenticado pela Meta e o adapter só o usa como chave de sessão; o envelope `origin_identity` da spec §4.4 não existe no código. O adapter passa a produzir evidência de chegada: `princ` (login federado) e `(whatsapp, from)` quando bate com o telefone cadastrado. ⚠️ O inbound do WhatsApp chama o telefone de `customer_id`, que não é o `customer_id` nativo — mesmo nome, dois fatos | `aberto` | `whatsapp.py:155` · ADR D9 |
+| PID-10 | **OTP só contra âncora entregável e de procedência autoritativa, com recusa explícita.** Hoje `_deliver` em produção é `TODO(prod)` e `challenge` devolve `sent: true` sem entregar; e `skill_limite_entrada_v1:210` desafia `kind: cpf`, que não tem canal de entrega. Entregáveis: `phone`, `email`; não-entregáveis: `cpf`, `princ`, `dev`. ⚠️ O roteiro de demo perde o passo de OTP até IDN-07 e PID-12 | `aberto` | `otp.py:109` · ADR D8 |
+| PID-11 | **Porta compartilhada: prova para VER, prova para ENTRAR.** A lista de pendências é liberada pela evidência de chegada (forte → direto; fraca → prova mínima antes); a seleção aciona a exigência do item; ordem por `expires_at` — hoje `find_pending_by_customer` achata a primeira em ordem arbitrária. Abrir processo novo nunca exige identificação | `aberto` | ADR D11 |
+| PID-12 | **Quem grava procedência `authoritative`, e com qual credencial.** Nenhum escritor carimba hoje: `resolve` (âncora declarada), `key/attach` (`claimed`), `attributes`, a aba Cliente (operador) e o seed de demo por `INSERT` direto. Opções: MCP de domínio no CRM do tenant (o `identity_verify` da spec), importação com credencial de admin, ou federação de login. Decisão de produto tanto quanto de engenharia | `aberto` | ADR D13, §7 |
+
+---
 
 ## `docs/guias/masked-input.md` — mascaramento de entrada por canal
 

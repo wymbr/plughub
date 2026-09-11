@@ -6,6 +6,12 @@
 > **Status:** especificação (não implementado). Diagrama de sequência cross-canal: `identity-resolver-sequencia.mermaid`.
 > **Data:** Junho 2026.
 
+> ⚠️ **Nota de 2026-09-11 — §6 e §7 absorvidos por [`adr-identity-door-evidence.md`](../adr/adr-identity-door-evidence.md).**
+> O fluxo de resolução no inbound deixa de ser "executado por (b) em todo inbound" — medido, ele
+> sempre foi sequenciado por skill autorado, e os dois intakes vivos repetem os mesmos 18 steps — e
+> vira a PORTA de plataforma. Este documento fica intacto como raciocínio de época; os Lookups 1 e
+> 2 e o `PendingEntry` continuam valendo como estão.
+
 ---
 
 ## 1. Problema e escopo

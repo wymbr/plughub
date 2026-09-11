@@ -5,6 +5,16 @@
 **Componentes:** `packages/channel-gateway` (`identity/`), `packages/mcp-server-plughub`, `packages/skill-flow-engine` (skills de intake)
 **Relacionado:** `docs/product/identity-resolver-nivel-b-spec.md` (§4.4, princípio 7, §5, §11), Thread A (reconexão cross-canal)
 
+> ⚠️ **Emendada em 2026-09-11 por [`adr-identity-door-evidence.md`](adr-identity-door-evidence.md).**
+> O texto abaixo fica intacto como decisão de época. Muda o DONO da decisão #4: o default seguro
+> deixa de ser lido do `verification_class` DURÁVEL da âncora e passa a morar no dispensador de
+> token, contra evidência da SESSÃO que pede. Medido: `possessed` gravado na âncora abria o portão
+> para qualquer um que digitasse aquele valor depois, sem amarração à sessão, ao canal nem à idade
+> da prova — latente só porque a entrega do OTP é `TODO(prod)`. `verification_class` segue
+> existindo como fato de CADASTRO e ganha o eixo irmão de PROCEDÊNCIA (IDN-07). E deixa de valer
+> "`otp_verify` como única via para `possessed`": chegada autenticada pelo canal (`princ`, `from`
+> do WhatsApp) passa a ser evidência (PID-09).
+
 ---
 
 ## Contexto

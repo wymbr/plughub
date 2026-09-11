@@ -6,6 +6,10 @@
 > e materializado em [`limite-credito-3-niveis-design.md`](../product/limite-credito-3-niveis-design.md) §1.
 > Aqueles documentos ficam **intactos como raciocínio de época** — reescrevê-los corromperia a
 > evidência; ambos ganharam nota datada apontando para cá.
+>
+> **Aplicada à porta de inbound em 2026-09-11** por [`adr-identity-door-evidence.md`](adr-identity-door-evidence.md):
+> a sequência identidade → pendência → retomada, que esta ADR mediu como "o fluxo só escolhe a
+> ordem", vira runner de plataforma, pelo mesmo precedente do `skill_dialog_runner_v1`.
 
 > ⚠️ **DESAMBIGUAÇÃO — "três níveis" nomeia DOIS modelos neste repositório, e esta ADR só
 > dissolve um.** O outro, **intocado**, é o modelo de escopo `segment` / `session` / `journey`
