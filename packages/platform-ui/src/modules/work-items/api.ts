@@ -131,7 +131,7 @@ export async function expirePending(sessionId: string, accessToken: string): Pro
  * Diretório de usuários para trocar user_id por nome.
  *
  * DEGRADAÇÃO CONHECIDA, E NÃO SILENCIOSA: `/auth/users` exige ABAC
- * `config.usuarios` (strict, sem bypass de admin) — grant que o supervisor desta
+ * `config.users` (strict, sem bypass de admin) — grant que o supervisor desta
  * tela pode não ter. Devolve `null` nesse caso, e a tela EXIBE o motivo em vez de
  * mostrar UUID sem explicação. A alternativa Redis (`{t}:instance:human-{uid}`)
  * foi descartada: aquela chave é heartbeat de 30 s e some no logout — falharia

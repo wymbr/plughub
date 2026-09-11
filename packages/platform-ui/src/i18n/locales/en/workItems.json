@@ -4,7 +4,7 @@
   "windowNote": "Live window, not a running total: an item disappears once it is closed or once the delegate deadline expires (24h + 1h by default). Period history lives in Analytics.",
   "restricted": "You do not have permission to view this page.",
   "truncated": "PARTIAL list — the scan cap was reached ({{scanned}} keys). Filter by pool or agent to see the rest.",
-  "directoryUnavailable": "Names unavailable: your account lacks the config.usuarios field, so agents are shown by identifier.",
+  "directoryUnavailable": "Names unavailable: your account lacks the config.users field, so agents are shown by identifier.",
   "searchPlaceholder": "Search by agent, pool or session…",
   "filterAll": "All",
   "empty": "No pending items",

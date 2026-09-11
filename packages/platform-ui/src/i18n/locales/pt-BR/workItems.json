@@ -4,7 +4,7 @@
   "windowNote": "Janela viva, não acumulado: o item deixa de aparecer quando é encerrado ou quando o prazo do delegate expira (24 h + 1 h por padrão). O histórico do período fica em Analítico.",
   "restricted": "Você não tem permissão para ver esta página.",
   "truncated": "Lista PARCIAL — o limite de varredura foi atingido ({{scanned}} chaves). Filtre por pool ou agente para ver o resto.",
-  "directoryUnavailable": "Nomes indisponíveis: sua conta não tem o campo config.usuarios, então os agentes aparecem pelo identificador.",
+  "directoryUnavailable": "Nomes indisponíveis: sua conta não tem o campo config.users, então os agentes aparecem pelo identificador.",
   "searchPlaceholder": "Buscar por agente, pool ou sessão…",
   "filterAll": "Todos",
   "empty": "Nenhuma pendência",

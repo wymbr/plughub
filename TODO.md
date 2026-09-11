@@ -7392,8 +7392,9 @@ Arco de relatórios (agentes + pools/infra) e Bancada de comparação 360° por 
   `evaluation_results`; `agente_avaliacao_v1` não roda no demo (test-grade, sem associação
   form/campanha). Pendências test-grade da F2: ReplayContext sem `session_meta` e sem associação
   campanha/form. Consertar o pipeline de avaliação = arco próprio.
-- **`pool:pending_assignment:{poolId}` é UMA chave por pool** (last-write wins) → chave
-  por-instância é melhoria futura (liga à fila pull/inbox).
+- **`pool:pending_assignment:{poolId}` é UMA chave por pool** (last-write wins, TTL 300 s)
+  → **fichado como `PUL-05` em 2026-09-11**: não era melhoria, era item em posse sumindo
+  da tela do dono (medido). Conserto é reidratar do ledger, não chave por-instância.
 - **NPS render (cosmético, diferido)**: a mensagem de `menu`/`notify` aparece no transcript como
   "structured content" em vez de texto puro (o dado do NPS grava normalmente) — revisar emit + render.
 - **Cenários sem teste** (queue-attended-model): "fila muda" e "drop sem `pool_id`".
