@@ -116,14 +116,51 @@ conta() { curl -s -H "Authorization: Bearer $2" "$AN$1" | jq -r "$3 // \"null\""
 # um separador que aparece dentro do campo parte a linha no meio — a primeira versao
 # usou espaco e reprovou seis rotas boas enquanto ABSOLVIA o controle positivo, que e o
 # pior dos dois erros.
+#
+# ⚠️ O jq de cada caso conta LINHA, nunca GRUPO — e isto e a AUT-52, medida em
+# 2026-09-12. QUATRO dos sete casos usavam `(.data|length)`, que conta os grupos que a
+# agregacao devolveu, e dois deles ficaram VERMELHOS com o produto CERTO. Medido no
+# mesmo escopo (`demo_ia`), com o controle positivo movendo 138 -> 27:
+#
+#     evaluations/summary    grupos  13 = 13   ·   linhas  82 -> 54
+#     evaluations/quality    grupos  12 = 12   ·   linhas  38 -> 14
+#
+# O recorte havia descartado um TERCO das linhas e o numero de grupos nao se mexeu,
+# porque um pool sozinho pode conter ao menos uma linha de cada campanha. O ramo era
+# honesto, ramificado e falseavel — e ainda assim evidencia da proposicao ERRADA
+# (`CLAUDE.md`, D14.1). Agravante de desenho: a escolha do pool com MAIS sessoes, que
+# existe para nao cair em `SEM AMOSTRA`, e exatamente a que maximiza a chance de um
+# pool cobrir todos os grupos.
+#
+# E os outros dois casos de grupo (`agent-events/*`) estavam VERDES pelo mesmo acaso,
+# do lado oposto: nada os impedia de virar o mesmo falso vermelho no dia em que a
+# populacao crescesse. Consertar so os dois que doiam deixaria dois armados.
+#
+# Cada rota agregada expoe a contagem de linha DENTRO do grupo, e e ela que se soma:
+# `total_evaluated` (evaluations/summary), `n` (quality), `count` (agent-events/summary)
+# e `event_count` (categories). O `add // 0` nao e enfeite: `add` sobre lista vazia
+# devolve null, e null compararia IGUAL a null dos dois lados — verde por ausencia de
+# amostra, que e o que o cabecalho deste arquivo proibe.
+#
+# ⚠️ Limite conhecido: a soma cobre a PAGINA de grupos (`page_size` 100). Hoje o maior
+# e 22, entao nenhuma rota chega perto; se chegar, os dois lados truncam e a comparacao
+# volta a medir outra coisa. Fica registrado em vez de remendado — o remendo seria
+# paginar dentro do probe, e o dia de fazer isso e quando a contagem se aproximar.
 CASOS="$(printf '%s\n' \
   "/reports/sessions?tenant_id=$TENANT	.meta.total	controle-positivo" \
   "/reports/usage?tenant_id=$TENANT	.meta.total	usage" \
   "/reports/evaluations?tenant_id=$TENANT	.meta.total	evaluations" \
-  "/reports/evaluations/summary?tenant_id=$TENANT	(.data|length)	evaluations/summary" \
-  "/reports/evaluations/quality?tenant_id=$TENANT	(.data|length)	evaluations/quality" \
-  "/reports/agent-events/summary?tenant_id=$TENANT	(.data|length)	agent-events/summary" \
-  "/reports/agent-events/categories?tenant_id=$TENANT	(.data|length)	agent-events/categories")"
+  "/reports/evaluations/summary?tenant_id=$TENANT	([.data[].total_evaluated]|add // 0)	evaluations/summary" \
+  "/reports/evaluations/quality?tenant_id=$TENANT	([.data[].n]|add // 0)	evaluations/quality" \
+  "/reports/agent-events/summary?tenant_id=$TENANT	([.data[].count]|add // 0)	agent-events/summary" \
+  "/reports/agent-events/categories?tenant_id=$TENANT	([.data[].event_count]|add // 0)	agent-events/categories")"
+
+# MECANISMO, nao promessa. Nenhum caso pode voltar a ser julgado por contagem de GRUPO:
+# as quatro entraram copiando a vizinha, e a copia e barata justamente porque
+# `(.data|length)` funciona em qualquer resposta. Esta linha e o que impede a quinta.
+if printf '%s\n' "$CASOS" | cut -f2 | grep -qxF '(.data|length)'; then
+  bad "ha caso julgado por (.data|length) — isso conta GRUPOS, nao LINHAS (AUT-52)"
+fi
 
 CONTROLE_MOVEU=0
 # `while read` alimentado por here-string, NUNCA por pipe: o pipe roda o laco num

@@ -1,5 +1,71 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (3) — AUT-52: o probe contava GRUPOS, e o produto estava certo o tempo todo
+
+Fecho do terceiro vermelho da Onda 0, o que a entrada anterior registrou como ficha. O
+`probe_report_row_scope` reprovava `evaluations/summary` e `evaluations/quality`; o defeito era
+dele.
+
+### 1 · A prova, antes do conserto
+
+A entrada (2) levantou a hipótese a partir do ClickHouse (15 campanhas em 256 avaliações, e
+`sac_ia` sozinho com 13 delas). Hipótese não é medição, então antes de tocar no arquivo montou-se
+o MESMO cenário do probe — usuário-sonda escopado ao pool que ele escolhe — e pediram-se as duas
+grandezas lado a lado:
+
+| medida | admin | escopado |
+|---|---|---|
+| controle `/sessions` (linhas) | 138 | **27** |
+| `evaluations/summary` — GRUPOS | 13 | 13 |
+| `evaluations/summary` — LINHAS | 82 | **54** |
+| `evaluations/quality` — GRUPOS | 12 | 12 |
+| `evaluations/quality` — LINHAS | 38 | **14** |
+
+**O produto recortava um terço das linhas e o número de grupos não se mexia**, porque um pool
+sozinho pode conter ao menos uma linha de cada campanha. O ramo era honesto, ramificado e
+falseável — e ainda assim evidência da proposição ERRADA. É a D14.1 do `CLAUDE.md` outra vez, e
+desta vez com o sinal invertido: lá um ramo fiel publicaria um defeito inexistente por contar
+exposição no lugar de dano; aqui publicava um vazamento inexistente por contar grupos no lugar de
+linhas.
+
+Agravante de desenho, e ele estava escrito no próprio probe: a escolha do pool com MAIS sessões
+existe para não cair em `SEM AMOSTRA` — e é exatamente a que maximiza a chance de um pool cobrir
+todos os grupos. O cuidado com um modo de falha criou o outro.
+
+### 2 · Eram QUATRO casos, não dois — e os outros dois estavam verdes por acaso
+
+Correção do que a entrada (2) disse. `agent-events/summary` e `agent-events/categories` também
+eram julgados por `(.data|length)`; passavam porque a população ainda não os tinha alcançado.
+Consertar só os dois que doíam deixaria dois armados, e o próximo falso vermelho chegaria sem
+ninguém lembrar deste dia.
+
+Cada rota agregada já expõe a contagem de linha DENTRO do grupo, e é ela que se soma:
+`total_evaluated` · `n` · `count` · `event_count`. O `add // 0` não é enfeite — `add` sobre lista
+vazia devolve `null`, e `null` compararia IGUAL a `null` dos dois lados: verde por ausência de
+amostra, que é o que o cabeçalho do arquivo proíbe. Depois da troca, os `agent-events` passaram a
+mover **66 → 41**, onde antes liam 22 dos dois lados.
+
+### 3 · O mecanismo, para a quinta cópia não nascer
+
+As quatro entraram copiando a vizinha, e a cópia é barata justamente porque `(.data|length)`
+funciona em QUALQUER resposta. Comentário não impede isso — *promessa sem mecanismo é a família do
+DDL de `participation_intervals`* —, então o probe agora **reprova o próprio caso**: nenhuma linha
+de `CASOS` pode ser julgada por contagem de grupo.
+
+Bateria de mutação, as duas reprovando:
+
+- **M1** — devolver `evaluations/summary` a `(.data|length)`: o guarda acusa *e* a rota volta a
+  sair `13 = 13`. Os dois vermelhos de uma vez, que é o que se queria ver.
+- **M2** — trocar `quality` por uma métrica cega ao escopo (`(.meta|length)`): sai `5 = 5`, *não
+  recorta*. Prova que o laço reprova métrica que não pode cair, e não só métrica errada.
+
+⚠️ Limite registrado em vez de remendado: a soma cobre a PÁGINA de grupos (`page_size` 100). O
+maior hoje é 22; se algum se aproximar, os dois lados truncam e a comparação volta a medir outra
+coisa. O dia de paginar dentro do probe é esse, não antes.
+
+`probe_report_row_scope`: **VERDE** — 37 rotas escopadas · 2 isentas · 2 dívidas, sete casos ao
+vivo, o 360 e o escopo vazio. Nenhum código de produto muda nesta entrada.
+
 ## 2026-09-12 (2) — AUT-45 · AUT-31: o sétimo verificador era nosso, e o gate vermelho já era verde
 
 Onda 0 do ataque ao ledger: os dois gates vermelhos, antes de qualquer outra coisa. Um era
