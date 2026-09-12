@@ -1,5 +1,73 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-11 (2) — PUL-05: o item em posse volta à tela do dono pelo LEDGER
+
+Três wrap-ups do operator@ estavam pendentes e o Console não mostrava nenhum. A
+reconexão tinha **uma** fonte: `pool:pending_assignment:{pool}`, que o bridge grava na
+ativação com **TTL de 300 s** e que é **uma chave por pool** (last-write wins). Item
+reivindicado que não reabrisse em 5 min continuava EM POSSE (`claim_record`, A5) —
+ninguém mais o pegava, e o dono não o via. A nota do `TODO.md` chamava isto de
+*"melhoria futura"*: a frase descrevia a chave, não o dano.
+
+### 1 · O conserto
+
+A fonte que dura o prazo do item já existia: o ledger `{t}:work_task:*`, o mesmo que
+`/api/work_queue/pending` lê. Na conexão do WS de cada pool, depois da chave por pool
+(no `.finally` dela — é justamente quando ela não entrega que o ledger importa), o
+mcp-server lê o ledger e reentrega o `conversation.assigned` de cada item que é MEU.
+
+A decisão é `decideLedgerRehydration` (`lib/ledger-rehydration.ts`), **pura**, como
+`shouldDropOnPossession`. Decisões que carregam peso:
+
+- **Posse vem da CLASSIFICAÇÃO**, não de um HTTP ao árbitro: `listPendingWorkTasks` lê
+  lease → registro na mesma ordem de `work_task_holder`, que é o que impede os dois de
+  divergirem.
+- **Filtro por `claimed_by`, não por `assigned_to`** — item de fila compartilhada não
+  tem dono declarado e sumia do mesmo jeito.
+- **Os dois descartes da PUL-06 são o que torna a reentrega segura:** sessão com
+  marcador `closed` ou token fora de `resume_tokens` continua no ledger, em posse, por
+  até 25 h, e nenhuma ação na tela o completa (o submit e o Close retomam pelo token).
+  Entregá-lo devolveria ao Console a tela sem saída.
+- **Token não conferido entrega**, com motivo próprio (`token_unverified`) —
+  desconhecido não é morto, mesma postura do `arbiter_unreachable` no D5.
+- O token é conferido no servidor e **não entra** no `PendingWorkTask`, que sai pela
+  rota `/pending`.
+- `assigned_at` = o CLAIM (quando o agente passou a dever); ausente, é OMITIDO e o
+  Console degrada barulhento — nunca se inventa um.
+- Todo descarte loga o motivo, exceto `already_delivered` (a chave por pool entregou).
+
+### 2 · Falseabilidade
+
+Unidade: `ledger-rehydration.test.ts`, 12 casos — o que decide é o de POPULAÇÃO, com os
+três de 2026-09-11 juntos: só o vivo volta. Suíte do mcp-server **305/305**, `tsc
+--noEmit` limpo.
+
+Ao vivo, as duas metades, depois do deploy (só o mcp-server, `--no-deps`: bridge,
+channel-gateway e routing-engine ficaram de pé, porque os logs deles são a evidência
+da conferência agendada da PUL-06):
+
+| metade | item | estado | log |
+|---|---|---|---|
+| descarte | `5120fe90`, `4841c60d` | em posse, sessão fechada, token cancelado | `NÃO reentregue (session_closed:agent_done)` |
+| entrega | `59485f70` | em posse desde 18:52:05, token vivo, **sem** chave por pool | `REENTREGUE pelo ledger (held_by_me)` |
+
+A entrega foi provocada reiniciando o mcp-server com o item aberto — o cenário que
+provavelmente escondeu o `0596f383` (o deploy da CNS-24 recriou o container às 17:12;
+não comprovável, os logs foram junto). O contrafactual é aquele mesmo item: estado
+idêntico, invisível, antes desta mudança.
+
+⚠️ **Um primeiro teste não exercitou nada, e parecia ter exercitado.** O dono esperou
+10 min, deu Ctrl+Shift+R e recuperou o formulário — mas pela **reserva de queda** (Fase
+C): o reload passou da carência de 2,5 s, o bridge publicou `agent_disconnect`, o item
+voltou à fila reservado ao autor e foi reivindicado pela inbox. Na reconexão o ledger já
+dizia `unclaimed`, e a PUL-05 corretamente não fez nada. Resultado certo, mecanismo
+errado — só os logs dos três serviços separaram os dois. A PUL-05 cobre o que a
+reserva de queda não cobre: a conexão que cai **sem** passar pela carência (F5 < 2,5 s,
+reinício do servidor).
+
+⚠️ Custo declarado: a varredura do ledger é SCAN (teto 2 000 chaves) por conexão de pool,
+e o Console abre uma por pool. Truncar loga.
+
 ## 2026-09-11 (1) — CNS-24: o wrap-up do operador abria VAZIO, e a CNS-11 era a causa
 
 O dono relatou: como `operator`, o contato de wrap-up chega depois do desligamento mas

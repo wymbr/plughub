@@ -64,6 +64,7 @@ import { routeMentions }           from "./lib/mention-routing"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
 import { sentimentFromCtxHash }    from "./lib/session-sentiment"
 import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-filter"
+import { decideLedgerRehydration, type LedgerCandidate } from "./lib/ledger-rehydration"
 // Política de máscara do ContextStore — UMA casa, importada pelas duas portas
 // (este endpoint HTTP e o tool MCP `supervisor_state`). Ver o cabeçalho de
 // `lib/context-masking.ts`: viviam aqui, alcançáveis só de dentro deste arquivo,
@@ -3666,6 +3667,85 @@ export async function startServer(config: ServerConfig): Promise<void> {
         if (err) console.error("Redis subscribe error:", err)
       })
 
+      // ── PUL-05 — o item EM POSSE volta pelo LEDGER, não só pela chave de 300 s ──
+      // `pool:pending_assignment:{pool}` (abaixo) é UMA chave por pool com TTL de
+      // 300 s: item reivindicado que não abrisse em 5 min continuava em posse
+      // (`claim_record`, A5) e sumia da tela do próprio dono — medido em
+      // 2026-09-11 no `0596f383`. O ledger `{t}:work_task:*` é a fonte que dura o
+      // prazo do item; a decisão do que reentregar é `decideLedgerRehydration`
+      // (pura, testada), e aqui só se lê o Redis e se encaminha.
+      //
+      // Roda DEPOIS da chave por pool (no `.finally` dela) para não duplicar o que
+      // ela já entregou — `deliveredOnConnect` é o elo entre as duas fontes.
+      const deliveredOnConnect = new Set<string>()
+      const rehydrateFromLedger = async (): Promise<void> => {
+        if (!expectedInstanceId || ws.readyState !== WebSocket.OPEN) return
+        const tenant = process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo"
+        try {
+          // Posse é da INSTÂNCIA, não do `assigned_to` (item de fila compartilhada
+          // não tem dono declarado e também sumia) — por isso o filtro é `claimed_by`.
+          const { items, truncated } = await listPendingWorkTasks(redis, tenant, {
+            poolId, state: "claimed", internalOnly: false,
+          })
+          if (truncated) {
+            console.warn(
+              `[agent-ws] PUL-05: varredura do ledger TRUNCADA — itens em posse podem ` +
+              `não voltar à tela: pool=${poolId} instance=${expectedInstanceId}`,
+            )
+          }
+          const mine = items.filter(i => i.claimed_by === expectedInstanceId)
+          if (mine.length === 0) return
+
+          const readPipe = redis.pipeline()
+          for (const it of mine) {
+            readPipe.get(keys.workTask(tenant, it.session_id))
+            readPipe.get(`session:${it.queue_session_id}:closed`)
+          }
+          const readRes = await readPipe.exec()
+          const tokens: string[] = mine.map((_, i) => {
+            const raw = readRes?.[i * 2]?.[1]
+            if (typeof raw !== "string") return ""
+            try { return String((JSON.parse(raw) as Record<string, unknown>)["resume_token"] ?? "") }
+            catch { return "" }
+          })
+          // O token é conferido AQUI e nunca exposto: ele não entra no
+          // `PendingWorkTask`, que sai pela rota `/api/work_queue/pending`.
+          const tokPipe = redis.pipeline()
+          for (const t of tokens) tokPipe.hexists(`${tenant}:resume_tokens`, t || "-")
+          const tokRes = await tokPipe.exec()
+
+          const candidates: LedgerCandidate[] = mine.map((it, i) => {
+            const closed = readRes?.[i * 2 + 1]?.[1]
+            const hit    = tokRes?.[i]
+            return {
+              item: it,
+              tokenAlive: !tokens[i] || !hit || hit[0] ? null : Number(hit[1]) === 1,
+              closedMarker: typeof closed === "string" && closed ? closed : null,
+            }
+          })
+          for (const d of decideLedgerRehydration(candidates, expectedInstanceId, deliveredOnConnect)) {
+            if (d.deliver && d.event && ws.readyState === WebSocket.OPEN) {
+              deliveredOnConnect.add(d.session_id)
+              console.log(
+                `[agent-ws] PUL-05: item em posse REENTREGUE pelo ledger (${d.reason}) — ` +
+                `pool=${poolId} session=${d.session_id} instance=${expectedInstanceId}`,
+              )
+              forward(`pool:events:${poolId}`, JSON.stringify(d.event))
+            } else if (!d.deliver && d.reason !== "already_delivered") {
+              console.log(
+                `[agent-ws] PUL-05: item do ledger NÃO reentregue (${d.reason}) — ` +
+                `pool=${poolId} session=${d.session_id} instance=${expectedInstanceId}`,
+              )
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[agent-ws] PUL-05: reidratação pelo ledger FALHOU — itens em posse podem ` +
+            `não aparecer: pool=${poolId} instance=${expectedInstanceId}: ${String(err)}`,
+          )
+        }
+      }
+
       // Deliver any pending assignment that was published while this agent was
       // disconnected (e.g. after a server restart / browser refresh).
       // The bridge stores `pool:pending_assignment:{poolId}` with TTL=300s when
@@ -3762,9 +3842,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
           }
 
           console.log(`[agent-ws] Delivering pending assignment to reconnecting agent pool=${poolId}`)
+          try {
+            const sid = String(JSON.parse(pendingRaw)?.session_id ?? "")
+            if (sid) deliveredOnConnect.add(sid)
+          } catch { /* sem id legível: o ledger pode reentregar, e o Console deduplica */ }
           forward(`pool:events:${poolId}`, pendingRaw)
         }
       }).catch((err) => console.error(`[agent-ws] Error checking pending assignment pool=${poolId}:`, err))
+        // PUL-05 — em TODO desfecho da chave por pool (entregue, descartada,
+        // ausente, erro): é justamente quando ela não entrega que o ledger importa.
+        .finally(() => { void rehydrateFromLedger() })
 
       // ── Human agent login — register instance + notify routing engine ───────
       //
