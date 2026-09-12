@@ -44,6 +44,7 @@ import { useMultiPoolWebSocket } from "./hooks/useMultiPoolWebSocket";
 import type { TaggedWsEvent }    from "./hooks/useMultiPoolWebSocket";
 import { INTERNAL_QUEUE_SUFFIX, mirrorOriginOf } from "./poolLabel";
 import { loadConversationHistory } from "./api";
+import { useTranslation } from "react-i18next";
 
 const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
 
@@ -215,6 +216,11 @@ export function useAgentAssist(): AgentAssistContextValue {
 
 // ── Provider ───────────────────────────────────────────────────────────────
 export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // i18n: as mensagens de SISTEMA deste provider sao texto visivel, e por isso
+  // passam por `t()` como qualquer outra (invariante do CLAUDE.md § i18n). Ate
+  // 2026-09-12 a unica que existia aqui estava hardcoded em portugues — a MEN-05
+  // acrescentaria mais duas, e tres violacoes sao pior que uma.
+  const { t } = useTranslation("agentAssist");
   const { session } = useAuth();
   const accessiblePools: string[] = session?.accessiblePools ?? [];
 
@@ -636,14 +642,50 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
 
+    // ── @mention: a menção foi roteada (ou o alias não existe) ────────────
+    // MEN-05/MEN-06 (2026-09-12). Este é o ÚNICO retorno do agente quando ele digita
+    // um alias puro (`@auth_form`), porque desde a MEN-05 o comando não vira
+    // mensagem: ele é evento no stream (`mention_command`) e aviso aqui.
+    //
+    // ⚠️ NÃO se filtra por `recipient_participant_id` no cliente. O campo viaja para
+    // que "só o emissor" seja expressável, mas filtrar aqui exigiria um id próprio
+    // confiável, e errar esse id esconderia o aviso de quem PRECISA dele — a direção
+    // errada de falha para um retorno que substitui o eco da mensagem.
+    if (event.type === "mention.ack") {
+      const { session_id: sid, alias, outcome, target_pool_id } = event;
+      if (!sid || !alias) return;
+      const ackMsg: ChatMessage = {
+        id:         `mention-${alias}-${Date.now()}`,
+        author:     "system",
+        text:       outcome === "routed"
+                      ? (target_pool_id
+                           ? t("mention.routedPool", { alias, pool: target_pool_id })
+                           : t("mention.routed", { alias }))
+                      : t("mention.unknownAlias", { alias }),
+        timestamp:  new Date().toISOString(),
+        visibility: "agents_only",
+      };
+      setContacts(prev => {
+        const c = prev.get(sid);
+        if (!c) return prev;
+        const next = new Map(prev);
+        next.set(sid, { ...c, messages: [...c.messages, ackMsg] });
+        return next;
+      });
+      return;
+    }
+
     // ── @mention command acknowledgement ──────────────────────────────────
+    // Momento DIFERENTE do de cima: aqui o skill mencionado executou o comando.
     if (event.type === "mention_command.ack") {
       const { session_id: sid, command } = event;
       if (!sid || !command) return;
       const ackMsg: ChatMessage = {
         id:         `ack-${command}-${Date.now()}`,
         author:     "system",
-        text:       `✓ @copilot reconheceu o comando "${command}"`,
+        // Não nomeia mais `@copilot`: o texto afirmava um skill específico para
+        // qualquer emissor de `mention_commands`, e a declaração é por skill.
+        text:       t("mention.commandAck", { command }),
         timestamp:  new Date().toISOString(),
         visibility: "agents_only",
       };

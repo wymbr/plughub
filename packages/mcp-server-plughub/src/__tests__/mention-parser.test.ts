@@ -122,6 +122,29 @@ describe("parseMentions", () => {
     expect(r.stripped_text).toContain("analise agora")
   })
 
+  // ⚠️ O contrato mudou em 2026-09-12 (MEN-05): SEM fallback para o texto inteiro.
+  // A versao anterior terminava em `|| text`, entao um alias PURO devolvia o proprio
+  // `@alias` como "texto sem mencoes" — o oposto do que o nome promete, e exatamente
+  // o caso que o `message_send` precisa distinguir (comando sem prosa NAO vira
+  // mensagem, vira evento). O fallback sobreviveu porque este campo nao tinha
+  // consumidor de producao: ninguem o usava, ninguem o via errado.
+  it("alias PURO devolve string vazia — nao o texto inteiro", () => {
+    const r = parseMentions("@auth_form")
+    expect(r.has_mentions).toBe(true)
+    expect(r.stripped_text).toBe("")
+  })
+
+  it("varios alias puros, ainda vazio", () => {
+    const r = parseMentions("@auth_form @copilot")
+    expect(r.has_mentions).toBe(true)
+    expect(r.stripped_text).toBe("")
+  })
+
+  it("so os args estruturados tambem nao sao mensagem", () => {
+    const r = parseMentions("@billing conta=@ctx.caller.account_id")
+    expect(r.stripped_text).toBe("")
+  })
+
   // ── Edge cases ────────────────────────────────────────────────────────────
 
   it("handles underscore in alias", () => {

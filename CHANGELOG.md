@@ -1,5 +1,95 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (7) — MEN-05/MEN-06: o `@alias` virou comando com evento próprio, e o emissor voltou a ter retorno
+
+As duas metades foram juntas por exigência da própria análise: separadas, a primeira trocaria um
+vazamento visível por um silêncio invisível.
+
+### 1 · Comando não é conteúdo
+
+O `@alias` é traduzido em efeitos — convite de pool, `trigger_step`, `set_context` — que nunca
+aparecem como mensagem. Carregá-lo no texto de um `message` misturava as duas coisas, com duas
+consequências medidas: o cliente lia `"@auth_form"` quando quem emitia não era `primary` (o override
+antigo só disparava para ele), e a AUTORIA do convite existia **só** ali.
+
+Hoje, para `@billing conta=@ctx.caller.account_id, pode conferir?`:
+
+| parte | destino |
+|---|---|
+| `@billing` + args | evento `mention_command` no stream, `agents_only`, **emissor como autor** |
+| `pode conferir?` | mensagem `agents_only` — instrução ao especialista convidado |
+| o alias como texto | **não é persistido em lugar nenhum** |
+
+Alias sem prosa (`@auth_form` sozinho) **não gera mensagem**: só evento e aviso. Uma mensagem vazia
+apareceria na conversa sem dizer nada.
+
+### 2 · Dois defeitos latentes caíram junto, e os dois sobreviviam pelo mesmo motivo
+
+**`stripped_text` tinha fallback `|| text`** — um alias puro devolvia o TEXTO INTEIRO como "texto
+sem menções", o oposto do que o nome promete e exatamente o caso que a decisão precisa distinguir.
+
+**A ordem das duas remoções estava invertida**: tirando `@ctx.*` antes de `key=value`,
+`conta=@ctx.caller.account_id` virava `conta=` — e o padrão de key=value exige algo depois do `=`,
+então o resíduo sobrevivia como "prosa livre" e teria sido entregue aos agentes como uma mensagem
+escrita `conta=`.
+
+Os dois sobreviveram porque **o campo não tinha consumidor de produção** (medido: só testes o liam).
+Um valor que ninguém lê é um valor que ninguém vê errado — e só apareceu quando a MEN-05 passou a
+DEPENDER dele para decidir se há mensagem. O segundo foi encontrado por um teste que eu escrevi
+esperando `""` e recebeu `"conta="`.
+
+### 3 · A autoria precisava de casa, e o ack não é uma
+
+Pub/sub é efêmero e best-effort. Remover o texto sem criar um registro durável teria apagado *quem
+convidou quem* — o `participant_joined` do convidado registra quem ENTROU, nunca quem PEDIU —, e
+isso não ficaria vermelho em lugar nenhum.
+
+Por isso o `StreamEventTypeSchema` ganhou **`mention_command`**: escrito por `routeMentions`, com o
+emissor como autor, `agents_only`, alias, pool-alvo e desfecho. ⚠️ **Medido antes de acrescentar o
+valor**: nenhum leitor entrega tipo desconhecido ao cliente — o `stream_subscriber` do
+channel-gateway casa tipo por `if` encadeado, então um tipo novo simplesmente não mapeia.
+
+### 4 · O retorno ao emissor, que passou a ser o ÚNICO
+
+`mention.ack` é publicado por alias, nomeia e endereça o emissor, e existe em dois casos que antes
+não tinham nada:
+
+- **convite de pool** (`@auth_form`, `@humanoxxx`) — o ack antigo do bridge só existe para
+  `mention_commands` declarados, hoje **1 skill em 44**;
+- **alias desconhecido** — antes só ia para o `console.log`: o agente via o próprio texto na tela e
+  nada acontecia, indistinguível de comando aceito.
+
+A Agent Assist consome o evento novo. **Sem isso a entrega estaria errada**: com o alias puro não
+gerando mensagem, o agente digitaria `@auth_form` e não veria absolutamente nada.
+
+⚠️ **O cliente NÃO filtra por `recipient_participant_id`.** O campo viaja para que *"só o emissor"*
+seja expressável, mas filtrar exigiria um id próprio confiável no browser, e errá-lo esconderia o
+aviso de quem precisa dele — direção errada de falha para um retorno que SUBSTITUI o eco.
+
+⚠️ Os dois acks são momentos diferentes e não se substituem: `mention.ack` diz que a menção foi
+**roteada**; `mention_command.ack` diz que o comando **executou** dentro do skill mencionado.
+
+### 5 · De carona, medido e corrigido
+
+O metering lia `visibility` (a PEDIDA) em vez de `effectiveVisibility` (a entregue). Com a MEN-05
+qualquer mensagem com menção vira `agents_only` para qualquer emissor, então medir a pedida cobraria
+uma entrega ao cliente que não houve. Antes o desvio era estreito — só o `primary` tinha o override.
+
+E a mensagem de sistema do ack antigo dizia `✓ @copilot reconheceu o comando "X"` para **qualquer**
+skill que declarasse `mention_commands`. Passou a não nomear skill nenhum. As três mensagens de
+sistema deste provider passaram por `t()` com chaves em `en` e `pt-BR` — o arquivo não usava
+`useTranslation`, e acrescentar duas violações do invariante de i18n ao lado de uma existente seria
+piorar de propósito.
+
+### 6 · Verificação
+
+`tsc --noEmit` limpo em `mcp-server-plughub` **e** em `platform-ui`. Suíte do mcp-server: **350
+testes verdes** (25 arquivos), com **6 novos** em `mention-routing.test.ts` e 3 no parser.
+`probe_i18n_duplicate_keys`: verde, 52 arquivos. Paridade `en` × `pt-BR` conferida no namespace.
+Falseabilidade por mutação: trocado o `author_id` do evento por um literal, reprova exatamente o
+teste *"escreve `mention_command` no stream, com o emissor como autor"* — que é o defeito que o
+evento existe para impedir.
+
 ## 2026-09-12 (8) — AUT-55: quem DETÉM o item passa a enxergar o formulário dele
 
 O dono relatou *"não conseguia pegar de volta, dava erro, e depois de várias

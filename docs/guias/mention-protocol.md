@@ -65,8 +65,52 @@ conhece o agente pela conexão"*) — e conhecer o agente pela conexão prova QU
 POSIÇÃO está nesta sessão. Enquanto valeu numa porta só, não era garantia: era regra de uma porta,
 com a outra aberta ao lado (MEN-02).
 
-A mensagem com `@alias` é sempre entregue como `agents_only`; o que o gate decide é apenas se
-alguém é CONVIDADO. Negado o roteamento, o texto é inerte.
+## Comando não é conteúdo *(MEN-05, decidido pelo dono em 2026-09-12)*
+
+O `@alias` é **comando de plataforma**: ele é traduzido em efeitos — convite de pool,
+`trigger_step`, `set_context` — que nunca aparecem como mensagem. Carregá-lo no texto de um
+`message` misturava as duas coisas, e isso tinha duas consequências medidas: o cliente lia
+`"@auth_form"` quando quem emitia não era `primary`, e a AUTORIA do convite existia **só** ali.
+
+O que acontece hoje com `@billing conta=@ctx.caller.account_id, pode conferir?`:
+
+| parte | destino |
+|---|---|
+| `@billing` + args | **evento** `mention_command` no stream (`agents_only`), com o emissor como autor |
+| `pode conferir?` | mensagem `agents_only` — é instrução ao especialista convidado |
+| o alias, como texto | **não é persistido em lugar nenhum** |
+
+E com `@auth_form` sozinho, sem prosa: **não há mensagem**. Só o evento e o aviso. A mensagem
+vazia seria pior que a ausência dela — ela apareceria na conversa sem dizer nada.
+
+⚠️ **`stripped_text` perdeu o fallback `|| text` na mesma ficha**, e a ordem das duas remoções
+(key=value antes de `@ctx.*`) foi invertida. Os dois eram latentes porque o campo não tinha
+consumidor de produção: o primeiro devolvia o texto INTEIRO quando não sobrava prosa, e o segundo
+deixava um `conta=` órfão que virava "mensagem". Um valor que ninguém lê é um valor que ninguém vê
+errado.
+
+## Os DOIS avisos, e por que são dois
+
+| evento | quem publica | o que afirma |
+|---|---|---|
+| `mention.ack` | mcp-server (`routeMentions`) | a menção foi **roteada**, ou o alias **não existe** |
+| `mention_command.ack` | orchestrator-bridge | o comando **executou** dentro do skill mencionado |
+
+O primeiro vale para qualquer alias, inclusive o convite de pool; o segundo só existe para os
+`mention_commands` declarados — hoje um skill em 44. São momentos diferentes da mesma ação.
+
+**O `mention.ack` nomeia e endereça o emissor** (`from_participant_id`, `recipient_participant_id`).
+⚠️ A Agent Assist **não filtra** por esse campo: filtrar exigiria um id próprio confiável no
+cliente, e errá-lo esconderia o aviso de quem precisa dele — direção errada de falha para um
+retorno que SUBSTITUI o eco da mensagem.
+
+⚠️ **O ack não é a casa da autoria.** Pub/sub é efêmero e best-effort; quem responde *"quem
+convidou este especialista?"* é o `mention_command` no stream. O `participant_joined` do convidado
+registra quem ENTROU, nunca quem PEDIU — e foi por isso que remover o texto sem criar o evento
+teria apagado o elo sem nada ficar vermelho.
+
+A mensagem com `@alias` é sempre `agents_only`; o que o gate decide é apenas se alguém é CONVIDADO.
+Negado o roteamento, o comando não acontece — e o emissor é avisado.
 
 ---
 

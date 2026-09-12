@@ -378,35 +378,105 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const timestamp  = new Date().toISOString()
         const message_id = crypto.randomUUID()
 
-        // ── @mention visibility override ─────────────────────────────────────
-        // Se a mensagem contém @alias e quem a emite CONDUZ a sessão, ela é forçada
-        // para agents_only.
-        // Spec: "a mensagem é sempre entregue agents_only — o roteamento é adicional".
+        // ── @mention: COMANDO não é CONTEÚDO ──────────────────────────────────
+        // Decidido pelo dono em 2026-09-12 (MEN-05). O `@alias` é comando de
+        // plataforma: ele é traduzido em efeitos — convite de pool, `trigger_step`,
+        // `set_context` — que nunca aparecem como mensagem. Carregá-lo no texto de um
+        // `message` conflatava as duas coisas, e tinha duas consequências medidas:
+        // o cliente lia `"@auth_form"` quando quem emitia não era `primary` (o
+        // override antigo só disparava para ele), e a AUTORIA do convite só existia
+        // ali. As duas se resolvem aqui e no `mention_command` do stream.
         //
-        // Aqui o default permissivo de `role` é o lado SEGURO: na dúvida, esconder
-        // do cliente. É o oposto do gate de roteamento abaixo, que na dúvida não
-        // convida ninguém. Os dois erram para o mesmo lado — nada vaza, nada é
-        // convidado sem prova.
+        // Três fatos derivados, nesta ordem:
+        //   temMencao  → a mensagem carrega comando
+        //   prosa      → o que sobra depois de tirar os alias e seus args
+        //   soComando  → não sobrou nada: isto NÃO é mensagem, é só comando
         //
-        // ⚠️ `role === "human"` saiu daqui em 2026-09-12 (MEN-01) por ser valor que o
-        // domínio NÃO produz: o roster escreve `primary`/`specialist`, e a spec
-        // acrescenta `supervisor`/`evaluator`. Nunca houve `human`, então a segunda
-        // metade da condição nunca decidiu nada — e era ela que dava ao código a
-        // aparência de falar sobre ESPÉCIE em vez de posição.
+        // ⚠️ `stripped_text` perdeu o fallback `|| text` na mesma ficha. Ele devolvia
+        // o TEXTO INTEIRO quando não sobrava prosa — exatamente o caso `soComando`, e
+        // exatamente o alias que se quer remover.
+        const mencoes   = content.type === "text" && content.text
+                            ? parseMentions(content.text)
+                            : null
+        const temMencao = mencoes?.has_mentions === true
+        const prosa     = temMencao ? mencoes!.stripped_text : ""
+        const soComando = temMencao && prosa.length === 0
+
+        // Mensagem com comando NUNCA vai ao cliente, venha de quem vier. O override
+        // anterior exigia `role === "primary"`, e era essa condição que deixava o
+        // alias de um `specialist` chegar ao cliente (MEN-05).
+        const effectiveVisibility = temMencao ? "agents_only" : visibility
+
+        // O que se entrega é a prosa, sem os alias. Para `soComando` não há entrega
+        // nenhuma — o bloco abaixo sai pela porta do comando.
+        const conteudoEntregue = temMencao && content.type === "text"
+                            ? { ...content, text: prosa }
+                            : content
+
+        // O despacho do comando é UMA função, usada pelos dois caminhos (mensagem com
+        // prosa, e comando puro). Escrevê-lo duas vezes seria a cópia que a MEN-02
+        // acabou de fechar do outro lado.
         //
-        // ⚠️ Resíduo NOMEADO, não consertado aqui: um `specialist` que escreva
-        // "@auth_form" tem o texto entregue ao CLIENTE (a condição não dispara), e o
-        // roteamento é negado logo abaixo. Inerte e visível é pior que inerte e
-        // escondido, mas alargar esta condição muda o que o cliente vê — decisão de
-        // produto, e a população é zero hoje (MEN-04). Ver MEN-05.
-        let effectiveVisibility = visibility
-        if (
-          role === "primary" &&
-          content.type === "text" &&
-          content.text &&
-          parseMentions(content.text).has_mentions
-        ) {
-          effectiveVisibility = "agents_only"
+        // ⚠️ **A identidade que decide é a ASSINADA, nunca a declarada.** O `role`
+        // resolvido acima vem do `participant_id` do INPUT e responde "o que ESTE
+        // participante vê"; um gate de autorização que o usasse deixaria qualquer
+        // portador de token nomear um participante `primary` e mencionar como ele — o
+        // defeito que derrubou o gate do avaliador (CAP-01).
+        const despacharComando = async (): Promise<void> => {
+          const papelAssinado = await resolveRoleByInstance(
+            redis, session_id, senderInstanceId ?? ""
+          )
+          if (!mayRouteMentions(papelAssinado)) {
+            // Dois DIAGNÓSTICOS diferentes, e por isso não se fundem numa frase só:
+            // um se conserta no roster, o outro é a regra funcionando. Não
+            // re-diagnostica o primeiro — o resolvedor já logou `[role]` com o motivo
+            // específico, e duas explicações fazem a genérica vencer.
+            console.warn(
+              papelAssinado.resolved
+                ? `[message_send] @mention NÃO roteada: role="${papelAssinado.role}" não ` +
+                  `conduz esta sessão (instance=${senderInstanceId}, session=${session_id}). ` +
+                  `Regra: quem conduz menciona, quem foi convidado não convida.`
+                : `[message_send] @mention NÃO roteada: a instância ASSINADA ` +
+                  `${senderInstanceId} não foi resolvida no roster ` +
+                  `session:${session_id}:participants (motivo específico no log [role] ` +
+                  `logo acima). O gate falha FECHADO.`
+            )
+            return
+          }
+          // O pool do remetente é o pool que ESTA instância serve NESTA sessão — lido
+          // do registro por-(sessão, instância). Nunca o `pool_id` global do registro
+          // da instância: um humano logado em N pools tem UM registro, e aquele campo
+          // guarda o último pool escrito, não o desta conversa.
+          // ADR adr-human-agent-pool-scoped-identity § B6.
+          const senderPoolId = await readRoutingRefPool(
+            redis, session_id, resolvedInstanceId, "[message_send]",
+          )
+          await routeMentions({
+            text:              content.text as string,
+            tenantId:          tenant_id,
+            sessionId:         session_id,
+            senderPoolId:      senderPoolId ?? "",
+            fromParticipantId: participant_id,
+            fromRole:          papelAssinado.role,
+            redis,
+            kafka,
+            timestamp,
+            logPrefix:         "[message_send]",
+          })
+        }
+
+        // ── comando puro: sai por aqui, sem virar mensagem ────────────────────
+        // Nada é escrito no stream de mensagens, nada vai ao Kafka de mensagens, nada
+        // é entregue por WS e nada é MEDIDO — porque nada disso aconteceu. O registro
+        // durável é o `mention_command` que o `routeMentions` escreve, e o retorno ao
+        // emissor é o `mention.ack` que ele publica.
+        if (soComando) {
+          void despacharComando()
+          return ok({
+            message_id, event_id, session_id, timestamp,
+            command_only:    true,
+            message_written: false,
+          })
         }
 
         // ── Mascaramento LGPD com tokenização ────────────────────────────────
@@ -417,7 +487,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const vault = new TokenVault({ redis })
         const maskingConfig = await MaskingService.loadConfig(redis, tenant_id)
 
-        let finalContent   = content
+        let finalContent   = conteudoEntregue
         let originalContent: typeof content | undefined
         let masked          = false
         let maskedCategories: string[] = []
@@ -427,7 +497,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         if (role === "customer" || role === "primary") {
           try {
             const maskResult = await MaskingService.applyMasking(
-              content,
+              conteudoEntregue,
               maskingConfig,
               vault,
               tenant_id,
@@ -564,74 +634,11 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           } catch { /* entrega WS é best-effort — não-fatal */ }
         }
 
-        // ── @mention routing ──────────────────────────────────────────────
-        // **Quem CONDUZ menciona; quem foi CONVIDADO não convida.** O eixo é
-        // POSIÇÃO na sessão, nunca espécie do participante — decidido pelo dono em
-        // 2026-09-12 (MEN-01), depois da análise de cenário que a ficha exigia.
-        //
-        // O repositório afirmava em quatro lugares que *"IA nunca emite @mention"*, e
-        // o código nunca impôs isso: a IA que conduz a conversa É a `primary`. Hoje a
-        // regra escrita e a imposta são a mesma, e humano e IA são tratados igual —
-        // como o resto do modelo de sessão já os trata.
-        //
-        // A decisão mora em `lib/participant-role.ts` (`mayRouteMentions`), com o
-        // resolvedor, porque a MESMA regra passou a valer no WebSocket do Console
-        // (`server.ts`) — e foi ter a regra em uma porta só que a fez parecer garantia
-        // sem ser (MEN-02). O roteamento é ADICIONAL: a mensagem já foi entregue acima.
-        //
-        // Falha FECHADA: sem leitura positiva do roster `session:{id}:participants`,
-        // não roteia. Um gate de autorização que falha aberto não é gate.
-        if (content.type === "text" && content.text && parseMentions(content.text).has_mentions) {
-          // ⚠️ **A identidade que decide é a ASSINADA, nunca a declarada.** O `role`
-          // calculado acima vem do `participant_id` do INPUT e serve aos consumidores que
-          // perguntam *"o que ESTE participante vê"* — mas um gate de autorização que o
-          // usasse deixaria qualquer portador de token nomear um participante `primary` e
-          // mencionar como ele. É o defeito que derrubou o gate do avaliador (CAP-01),
-          // registrado na prosa do grupo MEN e consertado aqui junto com a MEN-01, porque
-          // entregar a regra sobre identidade declarada seria entregar a aparência dela.
-          const papelAssinado = await resolveRoleByInstance(
-            redis, session_id, senderInstanceId ?? ""
-          )
-          if (!mayRouteMentions(papelAssinado)) {
-            // Os dois motivos são DIAGNÓSTICOS diferentes e por isso não se fundem
-            // numa frase só: um se conserta no roster, o outro é a regra funcionando.
-            //
-            // NÃO re-diagnostica o primeiro: `resolveParticipantRole` já logou
-            // `[role]` com o motivo ESPECÍFICO (roster ausente × participante fora do
-            // roster), e duas explicações para a mesma falha fazem a genérica vencer.
-            console.warn(
-              papelAssinado.resolved
-                ? `[message_send] @mention NÃO roteada: role="${papelAssinado.role}" não ` +
-                  `conduz esta sessão (instance=${senderInstanceId}, session=${session_id}). ` +
-                  `Regra: quem conduz menciona, quem foi convidado não convida.`
-                : `[message_send] @mention NÃO roteada: a instância ASSINADA ` +
-                  `${senderInstanceId} não foi resolvida no roster ` +
-                  `session:${session_id}:participants (motivo específico no log [role] ` +
-                  `logo acima). O gate falha FECHADO.`
-            )
-          } else {
-            // O pool do remetente é o pool que ESTA instância serve NESTA sessão —
-            // lido do registro por-(sessão, instância). Nunca o `pool_id` global do
-            // registro da instância: um humano logado em N pools tem UM registro, e
-            // aquele campo guarda o último pool escrito, não o desta conversa.
-            // ADR adr-human-agent-pool-scoped-identity § B6.
-            void (async () => {
-              const senderPoolId = await readRoutingRefPool(
-                redis, session_id, resolvedInstanceId, "[message_send]",
-              )
-              await routeMentions({
-                text:              content.text as string,
-                tenantId:          tenant_id,
-                sessionId:         session_id,
-                senderPoolId:      senderPoolId ?? "",
-                fromParticipantId: participant_id,
-                redis,
-                kafka,
-                timestamp,
-                logPrefix:         "[message_send]",
-              })
-            })()
-          }
+        // ── @mention: despacha o comando que acompanhava a prosa ──────────────
+        // Chegou aqui porque havia prosa junto (`@billing conta=X, pode conferir?`):
+        // a mensagem foi entregue acima, sem os alias, e o comando é ADICIONAL.
+        if (temMencao) {
+          void despacharComando()
         }
 
         // Metering: emite messages para mensagens visíveis ao cliente (visibility: "all").
@@ -644,7 +651,14 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
             if (typeof meta["channel"] === "string") sessionChannel = meta["channel"]
           }
         } catch { /* non-fatal */ }
-        void emitMessageSent(kafka, { tenant_id, session_id, channel: sessionChannel, visibility })
+        // ⚠️ `effectiveVisibility`, não `visibility`. Mede-se o que foi ENTREGUE: uma
+        // mensagem com @alias é forçada a `agents_only` e não é mensagem ao cliente.
+        // Antes da MEN-05 o desvio era estreito (só o `primary` tinha o override);
+        // agora vale para qualquer emissor, e medir a visibilidade PEDIDA cobraria uma
+        // entrega ao cliente que não houve.
+        void emitMessageSent(kafka, {
+          tenant_id, session_id, channel: sessionChannel, visibility: effectiveVisibility,
+        })
 
         return ok({ message_id, event_id, session_id, timestamp })
       } catch (e) {

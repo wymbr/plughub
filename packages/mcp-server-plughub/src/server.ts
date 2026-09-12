@@ -4185,8 +4185,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
         if (mentionParsed.has_mentions) {
           const messageId = crypto.randomUUID()
 
-          // 1. Write to session stream as agents_only
-          try {
+          // ── COMANDO não é CONTEÚDO (MEN-05, 2026-09-12) ─────────────────────
+          // O que se persiste e ecoa é a PROSA — o texto sem os `@alias` e sem os
+          // args deles. Quando não sobra prosa (`@auth_form` puro), não há mensagem
+          // nenhuma: o comando existe como evento (`mention_command` no stream, que o
+          // `routeMentions` escreve) e como aviso ao emissor (`mention.ack`).
+          //
+          // A mesma decisão e o mesmo cálculo do `message_send` — e é de propósito que
+          // o cálculo seja o do parser compartilhado, não uma segunda regra aqui.
+          const prosa     = mentionParsed.stripped_text
+          const soComando = prosa.length === 0
+
+          // 1. Write to session stream as agents_only — só quando há mensagem
+          if (!soComando) try {
             await writeStreamEntry(redis as any, {
               stream_key:  `session:${targetSessionId}:stream`,
               type:        "message",
@@ -4195,12 +4206,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
               visibility:  "agents_only",
               event_id:    messageId,
               timestamp:   msgTs,
-              payload:     { message_id: messageId, text: msgText },
+              payload:     { message_id: messageId, text: prosa },
             })
           } catch { /* non-fatal — stream may not exist yet */ }
 
           // 2. Echo to all agents via Redis pub/sub (the Agent Assist UI listens here)
-          try {
+          if (!soComando) try {
             await redis.publish(`agent:events:${targetSessionId}`, JSON.stringify({
               type:       "message.text",
               message_id: messageId,
@@ -4208,7 +4219,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 type: "agent_human",
                 id:   agentInstanceId || poolId,
               },
-              text:       msgText,
+              text:       prosa,
               timestamp:  msgTs,
               visibility: "agents_only",
             }))
@@ -4264,6 +4275,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
             sessionId:         targetSessionId,
             senderPoolId:      poolId,
             fromParticipantId: agentInstanceId || poolId,
+            fromRole:          papel.role,
             redis,
             kafka,
             timestamp:         msgTs,

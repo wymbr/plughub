@@ -27,6 +27,17 @@ export const StreamEventTypeSchema = z.enum([
   "medium_transitioned",
   "channel_transitioned",    // proposta de mudança de canal aceita pelo cliente
   "message",
+  // Arc @mention (MEN-05/MEN-06, 2026-09-12) — o `@alias` é COMANDO de plataforma,
+  // não conteúdo: ele é traduzido em efeitos (convite de pool, `trigger_step`,
+  // `set_context`) que nunca aparecem como mensagem. Carregá-lo dentro de um
+  // `message` conflatava as duas coisas e, de quebra, era a única casa em que a
+  // AUTORIA do convite existia — o `participant_joined` registra quem ENTROU, nunca
+  // quem PEDIU. Este tipo é essa casa, e é durável.
+  //
+  // ⚠️ Nenhum leitor entrega tipo desconhecido ao cliente: o `stream_subscriber` do
+  // channel-gateway casa tipo por `if` encadeado e um tipo novo simplesmente não
+  // mapeia. Isso foi MEDIDO antes de acrescentar o valor, não presumido.
+  "mention_command",
   "interaction_request",
   "interaction_result",
   "flow_step_completed",

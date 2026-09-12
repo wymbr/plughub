@@ -112,17 +112,35 @@ export function parseMentions(text: string): MentionParseResult {
   const strippedParts = prefix ? [prefix] : []
 
   for (const m of mentions) {
+    // ⚠️ A ORDEM importa, e estava invertida ate 2026-09-12 (MEN-05). Tirando os
+    // `@ctx.*` primeiro, `conta=@ctx.caller.account_id` virava `conta=` — e o padrao de
+    // key=value exige algo depois do `=`, entao o residuo NAO casava e sobrevivia como
+    // "prosa livre". Efeito: um comando so de args estruturados entregava aos agentes
+    // uma mensagem escrita `conta=`. Tirando key=value primeiro, o par sai inteiro.
+    //
+    // O defeito so apareceu quando a MEN-05 passou a DEPENDER deste resultado para
+    // decidir se ha mensagem — antes ninguem lia o campo, e por isso ninguem o via
+    // errado. E a mesma familia do fallback `|| text` removido logo abaixo.
     const free = m.args_raw
-      .replace(CTX_REF_RE, "")                  // remove @ctx.* refs
-      .replace(/\b[A-Za-z_]\w*=\S+/g, "")       // remove key=value args
+      .replace(/\b[A-Za-z_]\w*=\S+/g, "")       // remove key=value args (o @ctx vai dentro)
+      .replace(CTX_REF_RE, "")                  // remove @ctx.* que sobrou solto
       .trim()
     if (free) strippedParts.push(free)
   }
 
+  // ⚠️ **Sem fallback para `text`** — removido em 2026-09-12 (MEN-05). A versão
+  // anterior terminava em `|| text`, então um alias PURO (`@auth_form`, sem prosa
+  // nenhuma) devolvia o TEXTO INTEIRO como "texto sem menções" — o oposto do que o
+  // nome promete, e justamente o caso que a MEN-05 precisa tratar: comando sem prosa
+  // não gera mensagem, gera EVENTO. O fallback nunca foi exercitado porque este
+  // campo não tinha consumidor de produção (medido: só testes o liam), e é assim que
+  // um valor plausível sobrevive — ninguém o usa, ninguém o vê errado.
+  //
+  // String vazia é resposta legítima e significa "não sobrou mensagem, só comando".
   return {
     mentions,
     has_mentions: true,
-    stripped_text: strippedParts.join(" ").trim() || text,
+    stripped_text: strippedParts.join(" ").trim(),
   }
 }
 

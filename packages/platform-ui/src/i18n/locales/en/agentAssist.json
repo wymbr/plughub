@@ -632,5 +632,11 @@
       "title": "Session state not loaded",
       "body": "The server did not serve the state of this session. The conversation may still be visible; the context panel will stay empty."
     }
+  },
+  "mention": {
+    "routed": "✓ @{{alias}} triggered",
+    "routedPool": "✓ @{{alias}} triggered ({{pool}})",
+    "unknownAlias": "⚠ @{{alias}} is not available in this pool — nothing was triggered",
+    "commandAck": "✓ command \"{{command}}\" acknowledged"
   }
 }

@@ -122,6 +122,34 @@ export interface WsMentionCommandAck {
   acknowledged_at: string;
 }
 
+/**
+ * Aviso de que o `@alias` do agente foi recebido, e com que desfecho (MEN-05/MEN-06,
+ * 2026-09-12).
+ *
+ * ⚠️ **Não confundir com `mention_command.ack`.** Aquele é do orchestrator-bridge e
+ * diz que o COMANDO EXECUTOU dentro do skill mencionado (`trigger_step`,
+ * `set_context`); só existe para os `mention_commands` declarados — hoje um skill em
+ * 44. Este é do mcp-server e diz que a MENÇÃO foi roteada (ou que o alias não
+ * existe), e vale para qualquer alias, inclusive o convite de pool. São dois
+ * momentos diferentes da mesma ação, e por isso dois eventos.
+ *
+ * Por que ele passou a ser necessário: a MEN-05 tirou o `@alias` do texto da
+ * mensagem, e quando não sobra prosa não há mensagem nenhuma. Sem este aviso, o
+ * agente digitaria `@auth_form` e não veria absolutamente nada — troca de um
+ * vazamento VISÍVEL por um silêncio INVISÍVEL.
+ */
+export interface WsMentionAck {
+  type:                      "mention.ack";
+  session_id:                string;
+  alias:                     string;
+  outcome:                   "routed" | "unknown_alias";
+  target_pool_id?:           string;
+  from_participant_id:       string;
+  /** Quem deve ver. Carregado para que "só o emissor" seja expressável. */
+  recipient_participant_id?: string;
+  at:                        string;
+}
+
 export type WsServerEvent =
   | WsConnectionAccepted
   | WsMessageText
@@ -130,6 +158,7 @@ export type WsServerEvent =
   | WsSessionClosed
   | WsConversationAssigned
   | WsMentionCommandAck
+  | WsMentionAck
   | { type: "session.agent_done"; reason?: string }
   | { type: "supervisor_state.updated" }
   | { type: "copilot.updated"; session_id: string }

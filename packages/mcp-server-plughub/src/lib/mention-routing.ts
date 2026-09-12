@@ -31,6 +31,7 @@
 import type { RedisClient }   from "../infra/redis"
 import type { KafkaProducer } from "../infra/kafka"
 import { parseMentions }      from "./mention-parser"
+import { writeStreamEntry }   from "./write-stream-entry"
 
 export interface RouteMentionsParams {
   /** Texto integral da mensagem do agente (com os tokens @alias). */
@@ -45,6 +46,14 @@ export interface RouteMentionsParams {
   senderPoolId: string
   /** Identidade do emissor para os consumidores (participant_id ou instance_id). */
   fromParticipantId: string
+  /**
+   * Papel do emissor NESTA sessão, já resolvido e provado pelo chamador.
+   *
+   * Não tem default de propósito: os dois chamadores acabaram de resolvê-lo para
+   * decidir se podiam chamar esta função (`mayRouteMentions`), e um default aqui
+   * inventaria um autor para o evento durável que ninguém conferiu.
+   */
+  fromRole: string
   redis:      RedisClient
   kafka:      KafkaProducer
   timestamp:  string
@@ -68,9 +77,41 @@ export interface RouteMentionsParams {
  *
  * @returns quantidade de aliases efetivamente roteados.
  */
+/**
+ * Aviso ao EMISSOR de que o comando dele foi recebido, e com que desfecho.
+ *
+ * Endereçado: `recipient_participant_id` nomeia quem deve ver. O canal
+ * `agent:events:{sid}` é de sessão e chega a todos os agentes — a filtragem é do
+ * consumidor, como em toda entrega por este canal —, mas o campo existe para que
+ * "só o emissor vê" seja EXPRESSÁVEL em vez de presumido.
+ *
+ * ⚠️ Isto NÃO é a casa da autoria. Pub/sub é efêmero e best-effort: quem responde
+ * *"quem convidou este especialista?"* é o evento `mention_command` no stream, que é
+ * durável. Confundir os dois foi o risco que a MEN-06 nomeou — feedback e registro
+ * têm tempos de vida diferentes e por isso não moram juntos.
+ */
+async function avisaEmissor(
+  redis:  RedisClient,
+  sid:    string,
+  dados:  Record<string, unknown>,
+  log:    string,
+): Promise<void> {
+  try {
+    await redis.publish(`agent:events:${sid}`, JSON.stringify({
+      type: "mention.ack",
+      session_id: sid,
+      ...dados,
+    }))
+  } catch (err) {
+    // Não-fatal: o comando já rodou. Mas nunca silencioso — sem este log, o
+    // emissor não recebe nada e ninguém sabe que era o aviso que faltou.
+    console.warn(`${log} @mention ack não publicado (session=${sid}) —`, err)
+  }
+}
+
 export async function routeMentions(p: RouteMentionsParams): Promise<number> {
   const {
-    text, tenantId, sessionId, senderPoolId, fromParticipantId,
+    text, tenantId, sessionId, senderPoolId, fromParticipantId, fromRole,
     redis, kafka, timestamp,
   } = p
   const log = p.logPrefix ?? "[mention]"
@@ -128,6 +169,20 @@ export async function routeMentions(p: RouteMentionsParams): Promise<number> {
           `${log} @mention alias "${mention.alias}" não está em mentionable_pools ` +
           `do pool "${senderPoolId}" — ignorado`
         )
+        // O emissor precisa saber, e antes de 2026-09-12 ele não sabia: o texto dele
+        // aparecia na tela e nada acontecia, indistinguível de comando aceito. Agora
+        // o alias desconhecido tem desfecho NOMEADO.
+        //
+        // Não gera evento no stream de propósito: `mention_command` registra o que
+        // ACONTECEU na sessão, e alias que não resolve não é fato da sessão — é
+        // retorno ao emissor.
+        await avisaEmissor(redis, sessionId, {
+          recipient_participant_id: fromParticipantId,
+          from_participant_id:      fromParticipantId,
+          alias:                    mention.alias,
+          outcome:                  "unknown_alias",
+          at:                       timestamp,
+        }, log)
         continue
       }
 
@@ -177,6 +232,51 @@ export async function routeMentions(p: RouteMentionsParams): Promise<number> {
         started_at:    new Date().toISOString(),
         elapsed_ms:    0,
       })
+
+      // ── o comando, como EVENTO ────────────────────────────────────────
+      // Durável, no stream canônico, e é aqui que vive a AUTORIA do convite: o
+      // `participant_joined` do convidado registra quem ENTROU, nunca quem PEDIU.
+      // Até 2026-09-12 esse elo só existia no texto `agents_only` da mensagem — que
+      // a MEN-05 removeu justamente por misturar comando com conteúdo. Tirar o texto
+      // sem criar esta casa teria apagado a autoria sem nada ficar vermelho.
+      //
+      // `agents_only`: o cliente nunca vê comando de plataforma. E nenhum leitor
+      // entrega tipo desconhecido ao cliente de qualquer forma — o
+      // `stream_subscriber` casa tipo por `if` encadeado (medido).
+      try {
+        await writeStreamEntry(redis, {
+          stream_key:  `session:${sessionId}:stream`,
+          type:        "mention_command",
+          author_id:   fromParticipantId,
+          author_role: fromRole,
+          visibility:  "agents_only",
+          timestamp,
+          payload: {
+            alias:          mention.alias,
+            target_pool_id: targetPoolId,
+            from_pool_id:   senderPoolId,
+            args:           mentionArgs,
+            outcome:        "routed",
+          },
+        })
+      } catch (err) {
+        // Não-fatal para o roteamento — o convite já foi publicado —, mas barulhento:
+        // sem este entry a sessão fica com um especialista que ninguém convidou.
+        console.warn(
+          `${log} @mention: comando roteado mas NÃO registrado no stream ` +
+          `(session=${sessionId}, alias="${mention.alias}") — a autoria do convite ` +
+          `se perdeu neste caso:`, err
+        )
+      }
+
+      await avisaEmissor(redis, sessionId, {
+        recipient_participant_id: fromParticipantId,
+        from_participant_id:      fromParticipantId,
+        alias:                    mention.alias,
+        outcome:                  "routed",
+        target_pool_id:           targetPoolId,
+        at:                       timestamp,
+      }, log)
 
       routed++
     }

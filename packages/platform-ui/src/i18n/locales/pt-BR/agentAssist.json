@@ -632,5 +632,11 @@
       "title": "Estado da sessão não carregado",
       "body": "O servidor não serviu o estado desta sessão. A conversa pode continuar visível; o painel de contexto ficará vazio."
     }
+  },
+  "mention": {
+    "routed": "✓ @{{alias}} acionado",
+    "routedPool": "✓ @{{alias}} acionado ({{pool}})",
+    "unknownAlias": "⚠ @{{alias}} não está disponível neste pool — nada foi acionado",
+    "commandAck": "✓ comando \"{{command}}\" reconhecido"
   }
 }

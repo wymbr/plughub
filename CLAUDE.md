@@ -1261,7 +1261,13 @@ humano ou IA indiferentemente (MEN-01/MEN-02, 2026-09-12). Decisão e resolvedor
 `lib/participant-role.ts`, consumidos pelos **dois** caminhos: a tool `message_send` e o WS do
 Console, que até então não checava papel nenhum — e enquanto a regra valeu numa porta só, ela não
 era garantia da plataforma. Falha FECHADA (sem roster, não roteia). Domain closed by
-`mentionable_pools` pool config. `mention_commands` YAML declares actions: `set_context`, `trigger_step`, `terminate_self`.
+`mentionable_pools` pool config.
+**O `@alias` é COMANDO, não conteúdo (MEN-05/MEN-06)**: ele nunca é persistido como texto — vira o
+evento **`mention_command`** no stream (`agents_only`, com o EMISSOR como autor, e é a única casa
+durável de *quem convidou quem*, porque `participant_joined` registra quem ENTROU) mais um
+**`mention.ack`** ao emissor (`routed` | `unknown_alias`). Sobra a prosa, entregue `agents_only`;
+alias sem prosa **não gera mensagem nenhuma**. ⚠️ `mention.ack` (menção roteada, mcp-server) e
+`mention_command.ack` (comando executou, bridge) são momentos diferentes e não se substituem. `mention_commands` YAML declares actions: `set_context`, `trigger_step`, `terminate_self`.
 
 **Masked Input**: `masked: true` on menu step (field-level or step-level). `begin_transaction`/`end_transaction` wraps collection-validation-action as atomic block. `@masked.*` namespace in-memory only — never written to Redis, pipeline_state, stream, or logs. Retry always recolects; never re-uses masked values.
 
