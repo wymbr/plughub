@@ -44,10 +44,14 @@ import re
 
 from typing import Any
 
-import jwt
 from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from plughub_authz import LEGACY_UNRESTRICTED_MARK, abac_can, resolve_scope
+from plughub_authz import (
+    LEGACY_UNRESTRICTED_MARK,
+    abac_can,
+    resolve_scope,
+    verify_user_jwt,
+)
 
 from .config import get_settings
 
@@ -339,22 +343,12 @@ async def optional_pool_principal(
         )
         return PoolPrincipal(accessible_pools=None, tenant_id=None, sub="open_access")
 
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.auth_jwt_secret,
-            algorithms=["HS256"],
-        )
-    except jwt.ExpiredSignatureError:
+    payload = verify_user_jwt(credentials.credentials, settings.auth_jwt_secret)
+    if payload is None:
+        logger.warning("pool_auth: token invalido ou expirado")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token expired",
-        )
-    except jwt.InvalidTokenError as exc:
-        logger.warning("pool_auth JWT validation failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
+            detail="invalid or expired token",
         )
 
     sub        = payload.get("sub", "")
@@ -419,13 +413,9 @@ def accessible_pools_from_token(token: str | None) -> list[str] | None:
     if not token:
         _deny("sem `?token=`")
         return None
-    try:
-        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
-    except jwt.ExpiredSignatureError:
-        _deny("token EXPIRADO")
-        return None
-    except jwt.InvalidTokenError:
-        _deny("token invalido")
+    payload = verify_user_jwt(token, settings.auth_jwt_secret)
+    if payload is None:
+        _deny("token invalido ou EXPIRADO")
         return None
     # Mesma derivação do `optional_pool_principal` (D2) — os dois pontos de escopo
     # precisam concordar, senão o mesmo relatório mostra pools diferentes conforme
@@ -520,7 +510,9 @@ async def require_pool_principal(
                                sem segredo não há como verificar, e "não sei quem é"
                                não pode virar "pode tudo" numa fronteira de escrita.
       - `auth_required`      — nenhum header `Authorization`.
-      - `Token expired` / `Invalid token` — herdados do decode.
+      - `invalid or expired token` — veredicto do `verify_user_jwt`. As duas
+                               causas compartilham UM motivo na resposta (nunca dizer
+                               a quem nao se autenticou qual delas foi); o log separa.
     """
     # Serviço primeiro: ele não apresenta `Authorization`, e os dois 401 abaixo o
     # barrariam antes de qualquer chance.

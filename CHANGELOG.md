@@ -1,5 +1,111 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (2) — AUT-45 · AUT-31: o sétimo verificador era nosso, e o gate vermelho já era verde
+
+Onda 0 do ataque ao ledger: os dois gates vermelhos, antes de qualquer outra coisa. Um era
+defeito nosso; o outro era uma ficha que sobreviveu ao próprio conserto. A ordem é regra da
+casa — *um gate que fica vermelho ensina todo mundo a ignorá-lo, e isso é pior que gate
+nenhum*.
+
+### 1 · `pool_auth.py` — a cópia convivia com o canônico DENTRO DO MESMO ARQUIVO
+
+O C1 do `probe_authz_single_verifier` acusava **2** implementações independentes do
+verificador contra a linha de base de **1** (o EMISSOR, `auth-api/jwt_utils.py`, que fica por
+decisão). A nova era `analytics-api/pool_auth.py` — e o que importa não é que existisse, é
+ONDE: o arquivo **já importava** `plughub_authz` (`abac_can`, `resolve_scope`,
+`LEGACY_UNRESTRICTED_MARK`) para o eixo de ESCOPO, e mantinha `import jwt` com dois
+`jwt.decode` próprios para o eixo de IDENTIDADE. É o *"um censo desenhado para um eixo não
+prova nada sobre o eixo vizinho"* acontecendo dentro de um arquivo só: quem olhasse o import
+concluiria que a migração já tinha passado por ali.
+
+Os dois sites passaram a usar `verify_user_jwt`:
+
+| site | porta | por que são dois |
+|---|---|---|
+| `optional_pool_principal` | header `Authorization` | rota normal |
+| `accessible_pools_from_token` | `?token=` | é o que o `sse_pool_principal` usa: `EventSource` não manda header |
+
+`import jwt` saiu junto — era o único consumidor no arquivo.
+
+**A postura para segredo ausente NÃO muda, e isso foi conferido antes de trocar.** O
+`verify_user_jwt` devolve `None` para segredo vazio — *"não sei verificar"*, que o chamador
+tem de tratar —, e nos dois sites esse caso já é barrado ANTES, cada um com a sua decisão
+declarada e logada: o do header degrada aberto (é escopo de LEITURA, e o `CLAUDE.md` já
+contrasta isso com o 503 da auditoria); o do SSE recusa. Trocar o decodificador não encosta
+em nenhuma das duas.
+
+**O que muda é a recusa: dois motivos viraram um.** `Token expired` e `Invalid token` eram
+detalhes distintos de 401; hoje é `invalid or expired token`, o mesmo texto da
+`evaluation-api`. Quem não se autenticou não precisa saber QUAL dos dois foi; o log separa.
+Medido antes: **nenhum** consumidor lê essas strings — a busca no repositório acha só
+`auth-api/router.py` e `analytics-api/auth.py`, que são outras portas e não mudaram, e **zero**
+ocorrências no `platform-ui`, que reage ao status.
+
+`probe_authz_single_verifier`: C1 de **2 → 1**, quatro ramos verdes. Suíte da analytics-api
+rodada na IMAGEM, do WORKDIR do pacote: **766 passando**, incluindo
+`test_sse_token_EXPIRADO_recusa_quando_open_access_desligado`, que é o controle do site 2.
+
+⚠️ **Achado de passagem, registrado e NÃO consertado (AUT-51):** `analytics-api/auth.py`
+também decodifica JWT por conta própria, em três sites, e o C1 **não o conta** — o critério do
+censo é *"lê `module_config` E decodifica"*, e aquele arquivo só faz a segunda metade. Não é
+furo do probe: é o recorte declarado dele. Mas é a mesma forma do que o C4 corrigiu do outro
+lado em 2026-08-28, e fica dito em vez de ser descoberto de novo daqui a um mês.
+
+### 2 · AUT-31 — a ficha estava VELHA: o gate foi consertado em 2026-09-07
+
+Rodado hoje com a stack de pé, `gate_sla_segment_target.sh` sai **VERDE** nos três veredictos:
+`pool_a` 1/1 dentro, `pool_b` 0/1 (a violação da SEGUNDA fila aparece), e `pool_c` com
+`sla_unstamped=1` fora do denominador e aderência AUSENTE. O `/reports/pools/queue` devolve
+`series` e `by_pool` cheios para a janela sintética — exatamente o que a ficha dizia vir vazio.
+
+A causa e o conserto estão escritos desde **2026-09-07 (11) § 5**: `pool_a`/`pool_b`/`pool_c`
+são fixtures que só existem no ClickHouse, `mk_unrestricted_principal.sh` enumerava o
+registry, e o recorte por linha da AUT-01 descartava as esperas sintéticas — *o gate acusava o
+RELATÓRIO por um defeito que era do escopo do CHAMADOR*. A ficha nasceu do lado errado dessa
+distinção, e ninguém a moveu quando o conserto entrou.
+
+⚠️ **E o vermelho reapareceu uma vez nesta sessão, por motivo alheio ao produto:** rodado do
+Git Bash (Windows), `jq` não existe, os três veredictos saem de mãos vazias e o script imprime
+🔴. Este gate se roda de dentro do WSL. **Um gate que não conseguiu rodar e um gate que
+reprovou têm a mesma cor** — a mesma armadilha do teste que não pode reprovar, virada do
+avesso, e aqui ela quase fez a AUT-31 ser reaberta minutos depois de fechada.
+
+### 3 · Um TERCEIRO vermelho apareceu na vizinhança, e ele é do INSTRUMENTO (AUT-52)
+
+Rodados os probes que exercem o `pool_auth` para checar regressão: `probe_route_credential_coverage`
+VERDE (72 rotas recusam sem credencial), `probe_session_content_scope` VERDE (6 ramos), e
+`probe_report_row_scope` **VERMELHO** em duas rotas — `evaluations/summary` e `evaluations/quality`,
+com `admin=13` e `escopado=13`.
+
+**Não é regressão desta mudança, e isso é verificável em vez de alegável:** o processo do
+analytics-api subiu em 2026-09-11 10:09 sem `--reload`, e `git log` mostra **zero** commits em
+`packages/analytics-api/` desde então — o que está de pé é o código anterior ao trabalho de hoje. A
+suíte (766) roda contra o arquivo novo porque o pytest importa na hora; os probes ao vivo, não.
+
+**E o vermelho mede a proposição errada.** Essas duas — e só essas — são julgadas por
+`(.data|length)`, que conta **GRUPOS**; as outras cinco do mesmo laço usam `.meta.total`, que conta
+LINHAS, e passam. Medido no ClickHouse:
+
+| população | campanhas (grupos) | avaliações (linhas) |
+|---|---|---|
+| tudo | 15 | 256 |
+| só `sac_ia` | **13** | 141 |
+| só `demo_ia` | 13 | 55 |
+| só `retencao_humano` | 2 | 31 |
+
+Recortar para UM pool pode devolver o mesmo número de grupos tendo descartado 100 das linhas. E o
+probe escolhe de propósito o pool com MAIS sessões — para não sair `SEM AMOSTRA` —, que é
+exatamente a escolha que maximiza a chance de cobrir todos os grupos. As duas rotas não estão em
+`_SCOPE_EXEMPT` nem em `_SCOPE_DEBT`, então o produto realmente deve recortá-las; o que não se pode
+é concluir que não recorta a partir deste número.
+
+Fica como ficha, não como conserto de carona: dar a essas duas um julgamento que possa REPROVAR —
+total de linhas, ou um pool-controle sabidamente sem avaliação, ou um ramo INCONCLUSIVO quando o
+escopo cobre todos os grupos. É a D14.1 outra vez: *pergunte de qual proposição cada ramo é
+evidência*.
+
+Nenhum outro código muda. Ledger: AUT-45 e AUT-31 vão para o `done.md`; AUT-51 e AUT-52 entram.
+
 ## 2026-09-12 (1) — PUL-07: encerrar tarefa de formulário PENDENTE é devolvê-la à fila
 
 `5120fe90` e `4841c60d` (2026-09-11) eram wrap-ups reivindicados cujo formulário abriu
