@@ -200,29 +200,30 @@ Frente fechada (ver `done.md`); resta um item **adiado por decisão**.
 
 ## `docs/guias/mention-protocol.md` — protocolo @mention
 
-⚠️ **O invariante declarado NÃO é imposto pelo gate que existe para impô-lo** (medido
-2026-09-01). O guia diz *"Agentes IA em conferência **não** podem usar `@mention`"* (§42)
-e, duas linhas acima, define a regra como *"apenas `role: primary` ou `role: human`"*
-(§40). As duas frases **não são a mesma coisa**: `primary` é POSIÇÃO na sessão, não
-espécie do participante. Medido em histórico real: **1144 segmentos `native/primary` +
-100 `ai/primary`** contra 333 `human/primary` — o gate deixa passar exatamente a
-população que o comentário dele diz excluir. O discriminador de espécie está na MESMA
-entrada do roster, sem ser lido: `agent_type` (`human` | `native` | `ai`).
+✅ **As duas denúncias deste grupo FECHARAM em 2026-09-12 (MEN-01/MEN-02).** Ficam
+registradas porque explicam o que o grupo mediu e por que ele existiu.
 
-⚠️ **E ele tem o MESMO defeito estrutural do gate do avaliador**: resolve o papel de um
-`participant_id` vindo do **input**, tendo o `instance_id` assinado em mãos
-(`senderInstanceId`, extraído na l.403 e usado para outra coisa na l.426). A tabela dos
-dois gates vive em `docs/adr/adr-remove-agent-role-axis.md` § *Achado estrutural
-compartilhado* — escrita **uma vez**, não repetida aqui.
+**(1) O invariante declarado não era imposto pelo gate que existia para impô-lo** (medido
+2026-09-01). O guia dizia *"Agentes IA em conferência **não** podem usar `@mention`"* e,
+duas linhas acima, definia a regra como *"apenas `role: primary` ou `role: human`"* — duas
+frases que não são a mesma coisa, porque `primary` é POSIÇÃO na sessão e não espécie.
+Medido: **1144 segmentos `native/primary` + 100 `ai/primary`** contra 333 `human/primary`.
+Hoje a regra escrita e a imposta são a mesma — *quem conduz menciona; quem foi convidado
+não convida* —, e `role: human`, que nunca existiu no domínio de papel, saiu do código.
+
+**(2) O gate tinha o MESMO defeito estrutural do gate do avaliador**: resolvia o papel de
+um `participant_id` vindo do **input**, tendo o `instance_id` assinado em mãos. Consertado
+na mesma passada (`resolveRoleByInstance`, sem fallback para a identidade declarada). A
+tabela dos dois gates vive em `docs/adr/adr-remove-agent-role-axis.md` § *Achado estrutural
+compartilhado*, e ganhou lá a nota de fechamento desta metade.
 
 ⚠️ **Eixo DIFERENTE do `agent_role`** (grupo `CAP`): campo, casa, produtor e consumidor
 distintos. O que os une é o defeito de forma, não o assunto.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| MEN-01 | **DESBLOQUEADA em 2026-09-12: a analise de cenario foi feita, e ela mudou a pergunta.** Medido: **(1)** o gate do `message_send` nao fala sobre especie — ele barra `specialist`/`supervisor`/`evaluator`, isto e, *quem foi convidado nao convida*; **(2)** `role === "human"` e **RAMO MORTO** — o dominio vivo e `primary|specialist|queue` (+ supervisor/evaluator na spec) e `human` nao existe em lugar nenhum, entao a segunda metade do gate (`session.ts:448` e `:649`) nunca autorizou ninguem, e e ela que da ao codigo a aparencia de falar de especie; **(3)** o modelo do dono — *`primary` e quem recebeu o contato na entrada ou no escalate, humano ou IA, um so por vez* — CONFIRMA-SE nos dados: 597 sessoes com 1 primary, 456 com 2, 229 com 3, ate 8; dos 222 pares sobrepostos **220 duram ≤100 ms** (costura da passagem de bastao), 1 tem 41 s e 1 tem segmento aberto; as 26 sessoes sem primary sao sessoes internas de fila; **(4)** o join do supervisor **nao e @mention** — e `POST /supervisor/{join,message,leave}` na analytics-api, com token obrigatorio, tenant vindo do TOKEN, escopo de pool conferido e `/message` author-bound; `grep mention` no arquivo = 0. **DECISAO do dono:** o eixo vira POSICAO — *quem conduz menciona* (`primary`, humano ou IA), *quem foi convidado nao convida* — e vale nos DOIS caminhos. **Trabalho:** aplicar a regra tambem no WS do Console, remover o ramo morto `"human"`, e apagar a afirmacao de especie nas 4 copias (`CLAUDE.md` ×2, guia §40/§42/§80, comentario em `session.ts:611`). ⚠️ Desbloqueia a MEN-02 | `aberto` | `CHANGELOG.md` § 2026-09-12 (4) |
-| MEN-02 | **A aplicacao e ASSIMETRICA e so um caminho tem gate** — WS `agent-ws` (`server.ts:4206`, o caminho VIVO do Console) chama `routeMentions` **sem checagem nenhuma**, por desenho declarado (*"o WS conhece o agente pela conexao"*); o MCP `message_send` tem o gate. ⚠️ **DESBLOQUEADA e DECIDIDA em 2026-09-12 junto com a MEN-01: a mesma regra passa a valer nos dois caminhos** — conhecer o agente pela conexao prova QUEM e, nao em que POSICAO ele esta na sessao, e e a posicao que decide. Efeito pratico para quem usa o Console como condutor: nenhum; o que muda e um humano que entrou como `specialist` deixar de convidar mais gente | `aberto` | `TODO.md` § gate de @mention |
-| MEN-04 | **Só há EXPOSIÇÃO medida, não DANO.** O caminho está aberto (LLM recebe a tool porque `permissions: []` = sem filtro; a IA é `primary`; o gate passa). NÃO medido que alguém passou: 0 @mentions na janela de log, anteriores perdidos no rebuild. Fecha com um contato real em pool de IA com `@alias` no texto — os três desfechos do gate já logam diferente. **Publicar exposição como dano é a D14.1 ao contrário**. ⚠️ **Remedido em 2026-09-12**: 0 @mentions em 2 734 mensagens de `tenant_demo` desde 2026-06-10 — o zero desta ficha continua de pe, e continua sendo ausencia de TRAFEGO, nao prova de que o caminho esteja fechado | `aberto` — precisa de tráfego | `TODO.md` § gate de @mention |
+| MEN-04 | **Só há EXPOSIÇÃO medida, não DANO.** O caminho está aberto (LLM recebe a tool porque `permissions: []` = sem filtro; a IA é `primary`; o gate passa). NÃO medido que alguém passou: 0 @mentions na janela de log, anteriores perdidos no rebuild. Fecha com um contato real em pool de IA com `@alias` no texto — os três desfechos do gate já logam diferente. **Publicar exposição como dano é a D14.1 ao contrário**. ⚠️ **Remedido em 2026-09-12**: 0 @mentions em 2 734 mensagens de `tenant_demo` desde 2026-06-10 — o zero desta ficha continua de pe, e continua sendo ausencia de TRAFEGO, nao prova de que o caminho esteja fechado. ⚠️ **Continua de pé depois da MEN-01 (2026-09-12), e por isso mesmo:** o gate mudou de eixo e ganhou binding de identidade assinada, mas nada disso é DANO medido — segue faltando um contato real em pool de IA com `@alias` no texto. Os desfechos do gate continuam logando diferente, e agora são dois caminhos a observar, não um | `aberto` — precisa de tráfego | `TODO.md` § gate de @mention |
+| MEN-05 | **Texto com `@alias` de quem NÃO conduz chega ao cliente — inerte, porém visível.** O override de visibilidade do `message_send` força `agents_only` quando quem emite é `primary`; para `specialist`/`supervisor` a condição não dispara, então a mensagem segue a visibilidade pedida (que pode ser `all`) e o cliente lê *"@auth_form"*. O roteamento é negado pelo gate da MEN-01 — o dano não é convite indevido, é vazamento de sintaxe interna para o cliente. Achado ao implementar a MEN-01, em 2026-09-12, e NÃO consertado de carona: alargar a condição muda o que o cliente vê, e isso é decisão de produto. O próprio comentário do trecho já afirma o princípio oposto (*"na dúvida, esconder do cliente"*), o que torna a incoerência visível a quem ler. População hoje: zero (MEN-04). Decidir: esconder qualquer texto com `@alias`, independente de quem emite, ou aceitar que só o condutor tem a sintaxe escondida | `aberto` | `CHANGELOG.md` § 2026-09-12 (6) |
 ---
 
 ## `docs/adr/adr-remove-agent-role-axis.md` — remoção do terceiro eixo

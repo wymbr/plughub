@@ -38,6 +38,11 @@ import { TokenVault }         from "../lib/token-vault"
 import { emitMessageSent }    from "../lib/usage-emitter"
 import { parseMentions }      from "../lib/mention-parser"
 import { routeMentions }      from "../lib/mention-routing"
+import {
+  resolveParticipantRole,
+  resolveRoleByInstance,
+  mayRouteMentions,
+}                             from "../lib/participant-role"
 import { readRoutingRefPool } from "../lib/routing-ref"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { writeContextTag } from "./journey"
@@ -107,70 +112,6 @@ const MessageSendInputSchema = z.object({
    */
   visibility:     MessageVisibilitySchema.default("all"),
 })
-
-/**
- * Papel de PARTICIPAÇÃO (`primary`/`specialist`/`supervisor`/`evaluator`/`reviewer`)
- * do participante NESTA sessão. Fonte única dos dois consumidores abaixo
- * (`session_context_get` e `message_send`).
- *
- * **Por que o roster e não o hash da instância** (§1055, Fatia B — 2026-08-05):
- * papel de participação é fato de **(participante, sessão)**. A mesma instância
- * atende `max_concurrent_sessions` sessões e pode ser `primary` numa e
- * `specialist` noutra ao mesmo tempo — guardá-lo em `{t}:agent:instance:{id}`
- * colapsaria multi-sessão, e foi por isso que NENHUM produtor jamais escreveu lá.
- * Os dois leitores liam um campo sem escritor e caíam no default desde sempre.
- * O contraste que esta nota usava era o `agent_role` (propósito do agente), que
- * morava legitimamente ali por ser constante na vida da instância. Ele foi
- * REMOVIDO em 2026-09-01 (CAP-03) — some o exemplo, fica a regra: o hash da
- * instância só admite fato da INSTÂNCIA. Ver CLAUDE.md § "Never store a
- * narrower-scope fact in a wider-scope field".
- *
- * `resolved` distingue "li e vale primary" de "não consegui ler" — o gate de
- * @mention exige leitura POSITIVA, porque um gate de autorização que falha aberto
- * não é gate.
- */
-async function resolveParticipantRole(
-  redis:         RedisClient,
-  sessionId:     string,
-  participantId: string,
-): Promise<{ role: string; resolved: boolean }> {
-  try {
-    const raw = await redis.get(`session:${sessionId}:participants`)
-    if (!raw) {
-      // Sem roster: sessão anterior ao produtor (§1055 Fatia B), ou TTL vencido.
-      // Degradação COM log — muda aqui reproduz exatamente o defeito que a fatia
-      // fechou, e o sintoma (tudo `primary`) é plausível demais para ser notado.
-      console.warn(
-        `[role] roster ausente: session=${sessionId} participant=${participantId} ` +
-        `— caindo em 'primary' (não-resolvido)`
-      )
-      return { role: "primary", resolved: false }
-    }
-    const list = JSON.parse(raw) as Array<Record<string, unknown>>
-    const hit  = Array.isArray(list)
-      ? list.find(p => p && p["participant_id"] === participantId)
-      : undefined
-    if (hit && typeof hit["role"] === "string" && hit["role"]) {
-      return { role: hit["role"] as string, resolved: true }
-    }
-    // Roster existe e o participante NÃO está nele. O caso conhecido é o
-    // especialista de conferência via SDK externo, que recebe um `uuid4()` efêmero
-    // nunca persistido (orchestrator-bridge §3338) — o pré-requisito 1 do §1055,
-    // ainda aberto. Nomear no log evita que vire "o roster não funciona".
-    console.warn(
-      `[role] participante fora do roster: session=${sessionId} ` +
-      `participant=${participantId} roster=${list.length} entradas ` +
-      `— caindo em 'primary' (não-resolvido)`
-    )
-    return { role: "primary", resolved: false }
-  } catch (err) {
-    console.warn(
-      `[role] leitura do roster falhou: session=${sessionId} ` +
-      `participant=${participantId} — ${String(err)}`
-    )
-    return { role: "primary", resolved: false }
-  }
-}
 
 const SessionInviteInputSchema = z.object({
   session_token:  z.string().min(1),
@@ -414,12 +355,15 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         //     nunca coube num hash de instância — por isso nenhum produtor existia
         //     para escrevê-lo lá. Agora vem do roster `session:{id}:participants`.
         //
-        // `roleResolved` distingue "li e vale primary" de "não consegui ler". O
-        // default segue "primary" para os consumidores históricos (author do stream,
-        // decisão de mascaramento) — mudar isso é outro assunto, com outro blast
-        // radius. Mas o gate de @mention exige leitura POSITIVA: um gate de
-        // autorização que falha aberto não é gate.
-        const { role, resolved: roleResolved } = await resolveParticipantRole(
+        // O default segue "primary" quando não se consegue ler, para os consumidores
+        // históricos (author do stream, decisão de mascaramento) — mudar isso é outro
+        // assunto, com outro blast radius.
+        //
+        // ⚠️ **Este `role` responde "o que ESTE participante vê", e por isso pode vir do
+        // `participant_id` do input.** O gate de @mention NÃO o usa desde 2026-09-12
+        // (MEN-01): autorização sobre identidade que o chamador escolhe não é
+        // autorização — lá embaixo a decisão é tomada sobre o `instance_id` ASSINADO.
+        const { role } = await resolveParticipantRole(
           redis, session_id, participant_id
         )
 
@@ -435,17 +379,29 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const message_id = crypto.randomUUID()
 
         // ── @mention visibility override ─────────────────────────────────────
-        // Se a mensagem contém @alias tokens e o remetente é um agente humano
-        // (role primary ou human), a mensagem é forçada para agents_only.
+        // Se a mensagem contém @alias e quem a emite CONDUZ a sessão, ela é forçada
+        // para agents_only.
         // Spec: "a mensagem é sempre entregue agents_only — o roteamento é adicional".
         //
         // Aqui o default permissivo de `role` é o lado SEGURO: na dúvida, esconder
         // do cliente. É o oposto do gate de roteamento abaixo, que na dúvida não
         // convida ninguém. Os dois erram para o mesmo lado — nada vaza, nada é
         // convidado sem prova.
+        //
+        // ⚠️ `role === "human"` saiu daqui em 2026-09-12 (MEN-01) por ser valor que o
+        // domínio NÃO produz: o roster escreve `primary`/`specialist`, e a spec
+        // acrescenta `supervisor`/`evaluator`. Nunca houve `human`, então a segunda
+        // metade da condição nunca decidiu nada — e era ela que dava ao código a
+        // aparência de falar sobre ESPÉCIE em vez de posição.
+        //
+        // ⚠️ Resíduo NOMEADO, não consertado aqui: um `specialist` que escreva
+        // "@auth_form" tem o texto entregue ao CLIENTE (a condição não dispara), e o
+        // roteamento é negado logo abaixo. Inerte e visível é pior que inerte e
+        // escondido, mas alargar esta condição muda o que o cliente vê — decisão de
+        // produto, e a população é zero hoje (MEN-04). Ver MEN-05.
         let effectiveVisibility = visibility
         if (
-          (role === "primary" || role === "human") &&
+          role === "primary" &&
           content.type === "text" &&
           content.text &&
           parseMentions(content.text).has_mentions
@@ -609,47 +565,49 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         }
 
         // ── @mention routing ──────────────────────────────────────────────
-        // Apenas agentes humanos com role "primary"/"human" podem emitir @mentions
-        // com efeito de roteamento (invariante: agentes de IA NUNCA emitem @mention
-        // — coordenam pelo task step). O roteamento é adicional — a mensagem já foi
-        // entregue acima.
+        // **Quem CONDUZ menciona; quem foi CONVIDADO não convida.** O eixo é
+        // POSIÇÃO na sessão, nunca espécie do participante — decidido pelo dono em
+        // 2026-09-12 (MEN-01), depois da análise de cenário que a ficha exigia.
         //
-        // F5: o gate exige `roleResolved` — sem role provado, esta superfície não
-        // consegue mostrar que o emissor é humano, e um gate que não prova nada não
-        // deve autorizar. A fonte do role é o ROSTER `session:{id}:participants`
-        // (§1055 Fatia B); o texto anterior apontava para o hash
-        // `agent:instance:{participant_id}`, que nunca teve produtor e hoje não é
-        // nem lido. O Console não passa por aqui (usa o WS, que conhece o agente
-        // pela conexão), então isso não afeta o caminho vivo.
+        // O repositório afirmava em quatro lugares que *"IA nunca emite @mention"*, e
+        // o código nunca impôs isso: a IA que conduz a conversa É a `primary`. Hoje a
+        // regra escrita e a imposta são a mesma, e humano e IA são tratados igual —
+        // como o resto do modelo de sessão já os trata.
         //
-        // ⚠️ O gate testa `role ∈ {primary, human}` e a INVARIANTE que ele diz
-        // aplicar ("IA nunca emite @mention") é OUTRA coisa: `primary` é POSIÇÃO na
-        // sessão, não espécie do participante, e a IA que conduz a conversa É a
-        // `primary`. Medido falso em 2026-09-01 (MEN-01) — nada foi mudado no
-        // comportamento, e este comentário existe para o próximo leitor não deduzir
-        // do código uma garantia que ele não dá.
+        // A decisão mora em `lib/participant-role.ts` (`mayRouteMentions`), com o
+        // resolvedor, porque a MESMA regra passou a valer no WebSocket do Console
+        // (`server.ts`) — e foi ter a regra em uma porta só que a fez parecer garantia
+        // sem ser (MEN-02). O roteamento é ADICIONAL: a mensagem já foi entregue acima.
+        //
+        // Falha FECHADA: sem leitura positiva do roster `session:{id}:participants`,
+        // não roteia. Um gate de autorização que falha aberto não é gate.
         if (content.type === "text" && content.text && parseMentions(content.text).has_mentions) {
-          if (!roleResolved) {
-            // Aponta para o ROSTER, que e de onde `resolveParticipantRole` le desde
-            // a Fatia B do §1055. A versao anterior mandava quem depura para
-            // `{tenant}:agent:instance:{pid}` — hash que nao tem o campo, nao tem
-            // escritor e nao tem leitor (medido: 0 de 5). Mensagem que nomeia a casa
-            // errada custa a mesma investigacao que a ausencia de mensagem, com a
-            // agravante de parecer uma pista.
+          // ⚠️ **A identidade que decide é a ASSINADA, nunca a declarada.** O `role`
+          // calculado acima vem do `participant_id` do INPUT e serve aos consumidores que
+          // perguntam *"o que ESTE participante vê"* — mas um gate de autorização que o
+          // usasse deixaria qualquer portador de token nomear um participante `primary` e
+          // mencionar como ele. É o defeito que derrubou o gate do avaliador (CAP-01),
+          // registrado na prosa do grupo MEN e consertado aqui junto com a MEN-01, porque
+          // entregar a regra sobre identidade declarada seria entregar a aparência dela.
+          const papelAssinado = await resolveRoleByInstance(
+            redis, session_id, senderInstanceId ?? ""
+          )
+          if (!mayRouteMentions(papelAssinado)) {
+            // Os dois motivos são DIAGNÓSTICOS diferentes e por isso não se fundem
+            // numa frase só: um se conserta no roster, o outro é a regra funcionando.
             //
-            // NAO re-diagnostica: `resolveParticipantRole` ja logou `[role]` com o
-            // motivo ESPECIFICO (roster ausente x participante fora do roster), e
-            // duas explicacoes para a mesma falha fazem a mais generica vencer.
+            // NÃO re-diagnostica o primeiro: `resolveParticipantRole` já logou
+            // `[role]` com o motivo ESPECÍFICO (roster ausente × participante fora do
+            // roster), e duas explicações para a mesma falha fazem a genérica vencer.
             console.warn(
-              `[message_send] @mention NÃO roteada: role do participante ${participant_id} ` +
-              `não foi resolvido no roster session:${session_id}:participants ` +
-              `(motivo específico no log [role] logo acima). ` +
-              `Invariante: só role primary/human emite @mention.`
-            )
-          } else if (role !== "primary" && role !== "human") {
-            console.warn(
-              `[message_send] @mention NÃO roteada: role="${role}" não autorizado ` +
-              `(participant=${participant_id}, session=${session_id})`
+              papelAssinado.resolved
+                ? `[message_send] @mention NÃO roteada: role="${papelAssinado.role}" não ` +
+                  `conduz esta sessão (instance=${senderInstanceId}, session=${session_id}). ` +
+                  `Regra: quem conduz menciona, quem foi convidado não convida.`
+                : `[message_send] @mention NÃO roteada: a instância ASSINADA ` +
+                  `${senderInstanceId} não foi resolvida no roster ` +
+                  `session:${session_id}:participants (motivo específico no log [role] ` +
+                  `logo acima). O gate falha FECHADO.`
             )
           } else {
             // O pool do remetente é o pool que ESTA instância serve NESTA sessão —

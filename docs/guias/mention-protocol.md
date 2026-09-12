@@ -37,21 +37,36 @@ A mensagem é enviada com `visibility: "agents_only"`. Todos os participantes a 
 
 ## Permissões — quem pode emitir
 
-> ⚠️ **As duas frases abaixo se contradizem, e a medição de 2026-09-01 diz qual vale.**
-> A regra (§ seguinte) é o que o código faz; a consequência (§ depois dela) **não se segue**
-> dela, porque `primary` é POSIÇÃO na sessão e não espécie do participante — a IA que conduz
-> a conversa É a `primary`. Medido em `tenant_demo`: **1144 segmentos `native/primary` + 100
-> `ai/primary`** contra 333 `human/primary`. O discriminador de espécie existe e está na
-> MESMA entrada do roster, sem ser lido: `agent_type` (`human` | `native` | `ai`).
->
-> Decisão em aberto (**MEN-01**): corrigir o gate para ler `agent_type`, ou remover o gate e
-> retirar a promessa. Nada foi mudado no código.
+**Quem CONDUZ a sessão menciona; quem foi CONVIDADO não convida.** Apenas participantes com
+`role: primary` emitem `@mention` com efeito de roteamento — `specialist`, `supervisor`,
+`evaluator` e `reviewer` não.
 
-Apenas participantes com `role: primary` ou `role: human` podem emitir `@mention`.
+**O eixo é POSIÇÃO, nunca espécie.** Humano e IA são tratados igual, como no resto do modelo de
+sessão: a IA que conduz a conversa É a `primary` e menciona; o humano convidado como especialista
+não menciona. O `agent_type` (`human` | `native` | `ai`) vive na MESMA entrada do roster e **não
+entra nesta decisão**.
 
-Agentes IA em conferência **não** podem usar `@mention`. *(⚠️ INTENÇÃO, não estado — ver o aviso acima: o gate atual não a impõe.)* Para convidar especialistas ou coordenar outros agentes, agentes IA utilizam o `task` step com `mode: assist` — que tem controle de fluxo próprio e auditável.
+> **Como esta seção era, e por que mudou** *(MEN-01, decidida pelo dono em 2026-09-12)*. Ela dizia
+> *"apenas `role: primary` ou `role: human`"* e, logo abaixo, *"agentes IA não podem usar
+> @mention"* — duas frases que não se seguem uma da outra. Medido em 2026-09-01 em `tenant_demo`:
+> **1144 segmentos `native/primary` + 100 `ai/primary`** contra 333 `human/primary`, ou seja, o
+> gate deixava passar exatamente a população que a segunda frase proibia. E `role: human` **nunca
+> existiu** no domínio de papel — o roster escreve `primary`/`specialist` — logo era ramo morto.
+> A análise de cenário que a ficha exigia mostrou que o que o gate contém, e sempre conteve, é
+> *"quem foi convidado não convida"*. A regra passou a dizer isso, e a valer nos dois caminhos.
 
-Esta restrição é aplicada pelo mcp-server-plughub antes do parse do mention. Se um participante IA tentar enviar uma mensagem `agents_only` com prefixo `@`, ela é entregue normalmente sem roteamento especial.
+Para convidar especialistas ou coordenar outros agentes sem conduzir a sessão, o caminho é o `task`
+step com `mode: assist` — que tem controle de fluxo próprio e auditável.
+
+**Onde a regra é aplicada.** Numa casa só, `lib/participant-role.ts::mayRouteMentions`, consumida
+pelos **dois** caminhos que roteiam menção: a tool MCP `message_send` e o WebSocket do Console
+(`server.ts`). Até 2026-09-12 o segundo não checava papel nenhum, por desenho declarado (*"o WS
+conhece o agente pela conexão"*) — e conhecer o agente pela conexão prova QUEM ele é, não em que
+POSIÇÃO está nesta sessão. Enquanto valeu numa porta só, não era garantia: era regra de uma porta,
+com a outra aberta ao lado (MEN-02).
+
+A mensagem com `@alias` é sempre entregue como `agents_only`; o que o gate decide é apenas se
+alguém é CONVIDADO. Negado o roteamento, o texto é inerte.
 
 ---
 
@@ -87,8 +102,8 @@ mcp-server recebe message_send:
   visibility: "agents_only"
   text: "@billing conta=@ctx.caller.account_id"
 
-1. Verifica permissão do remetente (role: primary | human) — ⚠️ *não exclui IA; ver MEN-01*
-   → não autorizado: entrega sem roteamento
+1. Verifica a POSIÇÃO do remetente no roster (role: primary ⇒ conduz a sessão)
+   → não autorizado, ou papel não resolvido: entrega sem roteamento
 
 2. Detecta prefixo "@" → extrai aliases e texto do comando
    aliases detectados: ["billing"]
@@ -301,12 +316,14 @@ O roteamento em si é o mesmo código nas duas (`lib/mention-routing.ts`); o poo
 ## Invariantes
 
 - `@mention` só é roteado em mensagens com `visibility: "agents_only"`
-- Apenas `role: primary` ou `role: human` podem emitir mentions com efeito de roteamento —
-  e o gate **falha fechado**: sem prova positiva do role, não roteia (e loga por quê). Um gate de
-  autorização que falha aberto não é gate.
+- Apenas `role: primary` — quem CONDUZ a sessão — emite mentions com efeito de roteamento, e o
+  gate **falha fechado**: sem prova positiva do role, não roteia (e loga por quê). Um gate de
+  autorização que falha aberto não é gate. A decisão é a MESMA nos dois caminhos que roteiam
+  (`message_send` e WS do Console), porque mora numa função só.
 - O domínio de aliases possíveis é sempre fechado pela configuração `mentionable_pools` do pool
 - A mensagem original é sempre entregue a todos os participantes `agents_only`, independente do roteamento
 - Aliases não resolvidos nunca geram erro — são texto inerte
-- Agentes IA nunca emitem mentions — usam `task` step para coordenação
+- O eixo é POSIÇÃO e nunca ESPÉCIE: a IA que conduz menciona, o humano convidado não. Quem não
+  conduz coordena pelo `task` step com `mode: assist`
 - Menus `standby: true` nunca recebem mensagens comuns — acordam só por
   interrupt do dispatch (chave instance-scoped) ou `session:closed`

@@ -466,7 +466,7 @@ O Console (Arc 11) eleva o atendimento humano de "interface de atendimento" para
 - **"Adicionar Especialista":** lista agentes de `mentionable_pools` e os invoca via A2A `assist`.
 - **"Delegar Tarefa":** menu de contexto sobre mensagens → drawer com instrução + visibilidade → card de resultado quando `agent_done` chega.
 - **Aba de Orquestração (supervisor):** grafo/lista de steps do Skill Flow ativo com intervenção (injetar contexto, pular step, force-complete), sob role `supervisor` com escopo ABAC.
-- **Protocolo @mention:** só `role: primary` ou `role: human` pode emitir menções (agentes de IA nunca emitem `@mention`); domínio fechado por `mentionable_pools`; ações declaradas em `mention_commands` (`set_context`, `trigger_step`, `terminate_self`).
+- **Protocolo @mention:** só quem CONDUZ a sessão (`role: primary`) pode emitir menções com efeito de roteamento — humano ou IA indiferentemente; quem foi CONVIDADO não convida (corrigido em 2026-09-12, MEN-01); domínio fechado por `mentionable_pools`; ações declaradas em `mention_commands` (`set_context`, `trigger_step`, `terminate_self`).
 
 > **Vs. concorrência:** Enlighten Copilot (NICE) e copilotos de agente existem, mas o conceito de **humano orquestrando agentes de IA como participantes simétricos**, com delegação de tarefa e intervenção em fluxo ao vivo, decorre do modelo de conferência unificado — não é replicável por quem trata IA como bot externo.
 
@@ -531,7 +531,7 @@ Estes são contratos garantidos pela arquitetura, não convenções:
 - Agentes nunca acessam sistemas de negócio diretamente.
 - `original_content` mascarado nunca é exposto a roles não autorizados.
 - Valores de input mascarado nunca são escritos em Redis, pipeline_state, stream ou logs.
-- Agentes de IA nunca emitem `@mention`.
+- O eixo do `@mention` é POSIÇÃO, nunca espécie: a IA que conduz a sessão menciona; o humano convidado como especialista não (corrigido em 2026-09-12, MEN-01).
 - `insight.historico.*` persiste via Kafka, nunca por escrita direta no PostgreSQL.
 - Identificadores técnicos sempre em inglês; português só em strings de exibição (i18n) e IDs de entidade de negócio.
 

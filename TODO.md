@@ -8468,6 +8468,14 @@ _roster_entry = { participant_id, session_id, instance_id,
 
 ### O documento contém a contradição dentro de si
 
+> ✅ **FECHADO em 2026-09-12 (MEN-01/MEN-02).** A regra passou a ser *quem conduz menciona;
+> quem foi convidado não convida* (`role === "primary"`, humano ou IA), valendo nos DOIS
+> caminhos, e o gate passou a decidir sobre a instância ASSINADA em vez do `participant_id`
+> do input. ⚠️ **As "quatro cópias" abaixo eram DEZ** — a varredura achou também
+> `mention-routing.ts`, o descritivo de produto (`.md` e `.html`), um spec de journey e um
+> ADR. Ver `CHANGELOG.md` § 2026-09-12 (6). O texto abaixo fica como registro do que se
+> mediu, não como estado.
+
 `docs/guias/mention-protocol.md` §40 define a regra (`primary | human`) e §42 afirma a
 consequência (*"Agentes IA não podem usar @mention"*) — que **não se segue** da §40. O
 código implementa fielmente a §40; o leitor acredita na §42. São **quatro cópias** da

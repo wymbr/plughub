@@ -61,6 +61,10 @@ import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
 import { parseMentions }           from "./lib/mention-parser"
 import { routeMentions }           from "./lib/mention-routing"
+import {
+  resolveParticipantRole,
+  mayRouteMentions,
+}                                  from "./lib/participant-role"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
 import { sentimentFromCtxHash }    from "./lib/session-sentiment"
 import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-filter"
@@ -4237,10 +4241,46 @@ export async function startServer(config: ServerConfig): Promise<void> {
             }))
           } catch { /* non-fatal */ }
 
-          // 3. Route each @alias to the corresponding specialist pool.
-          //    Implementação compartilhada com a tool MCP `message_send` —
-          //    ver lib/mention-routing.ts (F5 do ADR de identidade por-pool).
+          // 3. Route each @alias to the corresponding specialist pool — se e somente
+          //    se quem emitiu CONDUZ esta sessão.
           //
+          //    ⚠️ **Este caminho não checava papel nenhum até 2026-09-12** (MEN-02),
+          //    por desenho declarado: *"o WS conhece o agente pela conexão"*. Conhecer
+          //    o agente pela conexão prova QUEM ele é, não em que POSIÇÃO ele está
+          //    NESTA sessão — e é a posição que decide. Enquanto a regra valeu numa
+          //    porta só, ela não era garantia da plataforma: era regra de uma porta,
+          //    com a outra aberta ao lado, e as duas chamando a MESMA `routeMentions`.
+          //
+          //    A decisão e o resolvedor moram em `lib/participant-role.ts`, junto com o
+          //    caminho MCP — duas cópias da mesma pergunta é como isto começou.
+          //
+          //    ⚠️ **NÃO se usa o `agentRole` desta conexão.** Ele é um `let` de escopo
+          //    de SOCKET, derivado uma vez de `scard(session:{id}:human_agents) > 1`
+          //    dentro de um `.then()`, e sobrescrito a cada nova sessão atribuída ao
+          //    mesmo socket — ou seja, é fato de conexão usado como fato de (sessão,
+          //    participante). Ler dali seria o "valor plausível" clássico: quase sempre
+          //    certo, e errado exatamente no caso multi-sessão. A fonte é o ROSTER.
+          //
+          //    Falha FECHADA: sem leitura positiva, entrega a mensagem (já feita nos
+          //    passos 1 e 2) e NÃO convida ninguém.
+          const quemEmite = agentInstanceId || poolId
+          const papel     = await resolveParticipantRole(redis as any, targetSessionId, quemEmite)
+          if (!mayRouteMentions(papel)) {
+            console.warn(
+              papel.resolved
+                ? `[agent-ws] @mention NÃO roteada: role="${papel.role}" não conduz esta ` +
+                  `sessão (participant=${quemEmite}, session=${targetSessionId}). ` +
+                  `Regra: quem conduz menciona, quem foi convidado não convida.`
+                : `[agent-ws] @mention NÃO roteada: role de ${quemEmite} não foi resolvido ` +
+                  `no roster session:${targetSessionId}:participants (motivo específico no ` +
+                  `log [role] logo acima). O gate falha FECHADO.`
+            )
+            // A mensagem já entrou no stream como `agents_only` e já ecoou aos agentes;
+            // o que não acontece é o convite. Sair aqui mantém o invariante de que
+            // texto com @alias nunca vai ao cliente.
+            return
+          }
+
           //    `poolId` aqui é o pool DESTA conexão WebSocket (query-param), e há
           //    uma conexão por pool selecionado no Console. É a resolução no
           //    escopo certo por construção — o que o outro chamador precisa

@@ -379,7 +379,7 @@ As duas grandezas são legítimas, precisam de nomes diferentes — e, o achado 
 mecanismos distintos:
 
 1. **`@mention` — SEMPRE paralelo.** O agente mencionado entra na conferência ao lado do primary, que
-   segue vivo (é ele quem emite a menção: só `role: primary` ou `role: human` podem). Não há caso em que
+   segue vivo (é ele quem emite a menção: só quem CONDUZ, `role: primary`, pode — MEN-01, 2026-09-12). Não há caso em que
    um segmento de menção seja sequencial ao principal. **É o caso mais perigoso para a soma**, porque é
    frequente, é rotina de operação e não deixa nenhum rastro que distinga o segmento como paralelo —
    nem `parent_segment_id` é garantia de leitura para quem só somou a coluna.

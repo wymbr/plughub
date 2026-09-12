@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (6) — MEN-01/MEN-02: quem conduz menciona, e o gate parou de aceitar identidade declarada
+
+As duas fichas do grupo `MEN` que estavam bloqueadas fecharam juntas, com a decisão do dono tomada
+nesta mesma data. **É a primeira mudança de código desde a Onda 0.**
+
+### 1 · A regra passou a dizer o que o gate faz
+
+O repositório afirmava, em prosa, *"agentes de IA nunca emitem `@mention`"*. O gate implementava
+`role ∈ {primary, human}` — e `primary` é POSIÇÃO na sessão, não espécie: a IA que conduz a conversa
+É a `primary`, e sempre passou. A regra escrita e a imposta eram duas coisas diferentes, e a escrita
+era a que ninguém podia cumprir.
+
+Hoje a regra é: **quem CONDUZ menciona; quem foi CONVIDADO não convida.** `role === "primary"`,
+humano ou IA indiferentemente — como o resto do modelo de sessão já os trata. O que o gate contém, e
+sempre conteve, é o leque de convites: `specialist`, `supervisor` e `evaluator` não convidam.
+
+**`role === "human"` era RAMO MORTO.** O domínio vivo é `primary | specialist | queue` (mais
+`supervisor`/`evaluator` na spec); `human` não existe em produtor nenhum. A segunda metade da
+condição nunca autorizou ninguém em dois sites — e era ela que dava ao código a aparência de falar
+sobre espécie.
+
+### 2 · A mesma regra nos dois caminhos (MEN-02)
+
+O WS do Console chamava `routeMentions` **sem checagem nenhuma**, por desenho declarado (*"o WS
+conhece o agente pela conexão"*). Conhecer o agente pela conexão prova QUEM ele é, não em que
+POSIÇÃO está nesta sessão — e enquanto a regra valeu numa porta só, não era garantia da plataforma:
+era regra de uma porta, com a outra aberta ao lado, as duas chamando a MESMA função.
+
+⚠️ **O `agentRole` daquele socket foi recusado como fonte, e a razão é medida:** é um `let` de escopo
+de CONEXÃO, derivado uma vez de `scard(human_agents) > 1` dentro de um `.then()` e **sobrescrito a
+cada nova sessão atribuída ao mesmo socket**. Ler dali seria o valor plausível clássico: quase
+sempre certo, e errado exatamente no caso multi-sessão. A fonte é o roster, igual ao outro caminho —
+e a decisão mora numa casa só (`lib/participant-role.ts::mayRouteMentions`), porque duas cópias da
+mesma pergunta é como isto começou.
+
+### 3 · O conserto que a ficha não listava, e sem o qual o resto seria decorativo
+
+A prosa do grupo `MEN` registrava um segundo defeito: o gate resolvia o papel de um `participant_id`
+vindo do **input**, tendo o `instance_id` assinado em mãos. Ou seja, **o chamador nomeava quem ele
+era** — qualquer portador de token podia nomear um participante `primary` do roster e mencionar como
+ele. É o mesmo defeito estrutural que derrubou o gate do avaliador (CAP-01), e entregar a regra sobre
+identidade declarada seria entregar a aparência dela.
+
+O gate passou a decidir sobre `resolveRoleByInstance(session_id, senderInstanceId)`, casando pelo
+campo `instance_id` do roster — **sem fallback** para o `participant_id`: um fallback devolveria ao
+chamador a escolha da identidade, que é exatamente o que o conserto tira dele. O `role` lido pelo
+`participant_id` continua existindo no mesmo handler, e só responde *"o que ESTE participante vê"*
+(visibilidade), onde a identidade declarada é legítima.
+
+Com isso a tabela de *"gates de papel que autorizam pela string do input"* do
+`adr-remove-agent-role-axis.md` perde a segunda linha. **Os dois desfechos foram opostos, e a
+diferença é o cenário**: no avaliador o gate inteiro saiu, porque consertá-lo exigia um cenário que o
+justificasse e nenhum fechava; aqui o cenário passou a existir.
+
+### 4 · As "quatro cópias" eram DEZ
+
+A ficha mandava apagar a afirmação de espécie de quatro lugares. A varredura achou **dez**: além do
+`CLAUDE.md` ×2 e do guia ×3, ela vivia no comentário de `mention-routing.ts`, no descritivo de
+produto (`.md` **e** `.html`), num spec de journey e num ADR. Todas as que AFIRMAM estado corrente
+foram reescritas; **`CHANGELOG.md` e `conference-mechanics.md` ficaram como estão**, por serem
+registro histórico — reescrever história para que ela concorde com o presente é o oposto do que este
+arquivo faz.
+
+### 5 · O que ficou, nomeado
+
+**MEN-05 (nova):** texto com `@alias` de quem NÃO conduz chega ao cliente. O override de
+visibilidade força `agents_only` só quando quem emite é `primary`; para um `specialist` a condição
+não dispara e o cliente lê *"@auth_form"*. O roteamento é negado, então o dano não é convite
+indevido — é vazamento de sintaxe interna. Não consertado de carona porque alargar a condição muda o
+que o cliente vê, e isso é decisão de produto. O comentário do trecho já afirma o princípio oposto
+(*"na dúvida, esconder do cliente"*), o que deixa a incoerência visível a quem ler.
+
+**MEN-04 continua aberta, e por isso mesmo:** o gate mudou de eixo e ganhou binding de identidade,
+mas nada disso é DANO medido — segue faltando um contato real em pool de IA com `@alias` no texto.
+Agora são dois caminhos a observar, não um.
+
+### 6 · Verificação
+
+`tsc --noEmit` limpo. Suíte do `mcp-server-plughub`: **332 testes verdes** (23 arquivos), sendo
+**15 novos** em `participant-role.test.ts`. Falseabilidade provada por mutação: retirado o
+`r.resolved` de `mayRouteMentions`, reprova exatamente o teste *"primary NÃO-RESOLVIDO não autoriza
+— o gate falha FECHADO"*, que é o caso pelo qual o arquivo existe; restaurado, verde. O teste da
+identidade assinada cobre o furo diretamente: uma instância forasteira não resolve **mesmo havendo
+um `primary` no roster**.
+
 ## 2026-09-12 (5) — CAP-18: três tools sem classificação, e 47 motivos que já não eram verdade
 
 O quarto vermelho do dia, fechado. `probe_mcp_tool_guard_census` reprovava porque o censo foi de 72

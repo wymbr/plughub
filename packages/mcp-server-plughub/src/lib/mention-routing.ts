@@ -20,8 +20,12 @@
  * ADR `docs/adr/adr-human-agent-pool-scoped-identity.md` § B6.
  * Protocolo: `docs/guias/mention-protocol.md`.
  *
- * Invariante preservado: apenas `role: primary` ou `role: human` emite @mention.
- * O gate é do CHAMADOR — este módulo não sabe quem chamou e não deve adivinhar.
+ * Invariante preservado: **quem CONDUZ menciona** — `role === "primary"`, humano ou
+ * IA indiferentemente. O gate é do CHAMADOR — este módulo não sabe quem chamou e não
+ * deve adivinhar —, mas a DECISÃO é uma só, em `lib/participant-role.ts`
+ * (`mayRouteMentions`), consumida pelos dois chamadores. *(Reescrito em 2026-09-12,
+ * MEN-01: dizia "`role: primary` ou `role: human`", e `human` nunca existiu no domínio
+ * de papel — era o que fazia a regra parecer falar de ESPÉCIE em vez de posição.)*
  */
 
 import type { RedisClient }   from "../infra/redis"

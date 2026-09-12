@@ -157,6 +157,20 @@ Registrado **aqui uma vez** e referenciado pelo grupo `MEN`, porque não é do
 Nos dois casos a identidade real está em mãos e não é usada para a decisão. Quem escrever
 um gate novo de papel deve olhar esta tabela antes.
 
+> ✅ **A segunda linha FECHOU em 2026-09-12 (MEN-01).** O gate de `@mention` passou a decidir
+> sobre `resolveRoleByInstance(session_id, senderInstanceId)` — a instância que viaja ASSINADA
+> no `session_token` —, casando pelo campo `instance_id` do roster e **sem fallback** para o
+> `participant_id` do input: um fallback devolveria ao chamador a escolha da identidade, que é
+> o que o conserto tira dele. O `role` lido pelo `participant_id` continua existindo no mesmo
+> handler, mas só para responder *"o que ESTE participante vê"* (visibilidade), onde a
+> identidade declarada é legítima.
+>
+> **Os dois desfechos foram opostos, e a diferença é o cenário.** Em `evaluation_context_get` o
+> gate inteiro SAIU (CAP-01), porque consertá-lo exigia um cenário que o justificasse e nenhum
+> fechava. No `@mention` o cenário passou a existir — a regra foi decidida pelo dono — e por
+> isso valeu consertar. A tabela fica: o padrão é o que se procura num gate novo, não o
+> veredicto.
+
 ---
 
 ## Fases

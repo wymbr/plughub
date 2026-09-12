@@ -102,7 +102,7 @@ declarar** um campo de contexto; a plataforma injeta. Assim:
 ### 3.3 Merge (tool MCP + evento)
 
 - Tool **`journey_merge(source_root, canonical_root)`** em `mcp-server-plughub` (grupo a definir; auditada pelo
-  `McpInterceptor`). Só `role: primary`/`role: human`/fluxo N3 podem comandar (herda a política de quem pode
+  `McpInterceptor`). Só `role: primary`/fluxo N3 podem comandar (herda a política de quem pode
   emitir side-effects). Determina a sobrevivente = mais antiga (default; fluxo pode nomear).
 - Emite evento canônico **`journey_merged`** no topic **`journey.merges`** (topic novo, **1 tipo só** — não é o
   `journey.events` de 9 tipos removido). Payload: `{tenant_id, source_root, canonical_root, merged_at, actor}`.

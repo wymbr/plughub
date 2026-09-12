@@ -1032,8 +1032,7 @@ monitora agentes de IA como coparticipantes de primeira classe.
 - **Histórico do cliente:** lista de contatos por `customer_id`, transcrição por sessão (mascarada por construção)
   e busca com snippet — sobre ClickHouse, escopada ao cliente.
 
-**Protocolo `@mention`:** só `role: primary` ou `role: human` pode emitir menções — **agentes de IA nunca emitem
-`@mention`** (invariante). O domínio é fechado por `mentionable_pools`; as ações são declaradas em
+**Protocolo `@mention`:** só quem CONDUZ a sessão (`role: primary`) pode emitir menções com efeito de roteamento — humano ou IA indiferentemente; quem foi CONVIDADO (`specialist`/`supervisor`/`evaluator`) não convida. *(Corrigido em 2026-09-12, MEN-01: a v1 dizia que só `role: primary` ou `role: human` emitia, e que "agentes de IA nunca emitem `@mention`" — mas `role: human` nunca existiu no domínio de papel, e a IA que conduz a conversa É a `primary`, logo o gate deixava passar exatamente quem a frase proibia.)* O domínio é fechado por `mentionable_pools`; as ações são declaradas em
 `mention_commands` (`set_context`, `trigger_step`, `terminate_self`).
 
 **Especialistas: atuar ou sugerir.** O mesmo artefato YAML roda em dois modos — **atuante** (participante visível,
@@ -1125,7 +1124,7 @@ trazendo o agente e migrar para nativo via `regenerate`.
 - Agentes nunca acessam sistemas de negócio diretamente.
 - `original_content` mascarado nunca é exposto a role não autorizada.
 - Valores de input mascarado nunca são escritos em Redis, `pipeline_state`, stream ou logs.
-- Agentes de IA nunca emitem `@mention`.
+- O eixo do `@mention` é POSIÇÃO, nunca espécie: a IA que conduz a sessão menciona; o humano convidado como especialista não. *(Corrigido em 2026-09-12, MEN-01 — a linha anterior afirmava "agentes de IA nunca emitem `@mention`", e nenhum mecanismo impunha isso.)*
 
 **Dados e escopo**
 - **Nunca armazenar um fato de escopo estreito num campo de escopo largo** — derive-o onde o escopo é conhecido.

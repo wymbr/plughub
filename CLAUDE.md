@@ -902,12 +902,17 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
   registrado: aquele filtro casa o **nome CRU** da tool, e não o `"{server}:{tool}"` que a borda
   `invoke` e o sidecar usam
 - Never write masked input values to `pipeline_state`, Redis, stream, or logs
-- ⚠️ **MEDIDO FALSO em 2026-09-01, aguardando decisão (MEN-01)** — *"Never allow AI agents to
-  emit `@mention` commands — only `role: primary` or `role: human`"*. As duas metades da frase
-  **não são a mesma coisa**: `primary` é POSIÇÃO na sessão, não espécie do participante, e a IA
-  que conduz a conversa É a `primary` (medido: 1144 segmentos `native/primary` + 100
-  `ai/primary` × 333 `human/primary`). O gate de `message_send` implementa a segunda metade e
-  por isso **deixa passar a população que a primeira nomeia**. Nada foi mudado no código ainda
+- **Never let an INVITED participant emit `@mention` with routing effect — only the one
+  CONDUCTING the session (`role: primary`).** O eixo é **POSIÇÃO**, nunca espécie: humano e IA
+  são simétricos aqui, como no resto do modelo de sessão. *(Reescrita em 2026-09-12, MEN-01. A
+  v1 dizia "Never allow AI agents to emit @mention — only `role: primary` or `role: human`", e
+  foi **medida falsa em 2026-09-01**: a IA que conduz a conversa É a `primary` — 1144 segmentos
+  `native/primary` + 100 `ai/primary` contra 333 `human/primary` —, então o gate deixava passar
+  exatamente a população que a frase nomeava. E `role: human` nunca existiu no domínio de papel;
+  era ramo morto em dois sites.)* A decisão mora em UMA casa
+  (`lib/participant-role.ts::mayRouteMentions`) e vale nos **dois** caminhos — tool MCP
+  `message_send` e WebSocket do Console. **Falha FECHADA**: sem leitura positiva do roster
+  `session:{id}:participants`, não roteia
 - Never call `redis.xadd()` directly in mcp-server-plughub — use `writeStreamEntry()`
 - **Never leave deferred phases undocumented** — every unimplemented phase MUST be registered in `## Pending`
 - Never create a new `packages/my-ui/` standalone frontend app — add a module to platform-ui
@@ -1251,9 +1256,12 @@ Gate: `infra/test/probe_config_service_write_gate.sh`.
 
 Token format in stream: `[{category}:{token_id}:{display_partial}]` (e.g. `[cpf:tk_b7d2:***-00]`). Stream stores `content` (masked) + `original_content` (unmasked). Default `authorized_roles: ["evaluator", "reviewer"]`. Domain MCP tools resolve tokens via `McpInterceptor.resolveToken` callback. Channel Gateway strips to `display_partial` only before WS delivery.
 
-**@mention**: ⚠️ *o gate testa `role ∈ {primary, human}` — e isso **não** exclui agentes de IA,
-que são `primary`; ver MEN-01, medido falso em 2026-09-01. A aplicação é ainda ASSIMÉTRICA: o
-caminho WS do Console (`server.ts:3638`) não checa papel nenhum, por desenho declarado.* Domain closed by `mentionable_pools` pool config. `mention_commands` YAML declares actions: `set_context`, `trigger_step`, `terminate_self`.
+**@mention**: **quem CONDUZ menciona; quem foi CONVIDADO não convida** — `role === "primary"`,
+humano ou IA indiferentemente (MEN-01/MEN-02, 2026-09-12). Decisão e resolvedor em
+`lib/participant-role.ts`, consumidos pelos **dois** caminhos: a tool `message_send` e o WS do
+Console, que até então não checava papel nenhum — e enquanto a regra valeu numa porta só, ela não
+era garantia da plataforma. Falha FECHADA (sem roster, não roteia). Domain closed by
+`mentionable_pools` pool config. `mention_commands` YAML declares actions: `set_context`, `trigger_step`, `terminate_self`.
 
 **Masked Input**: `masked: true` on menu step (field-level or step-level). `begin_transaction`/`end_transaction` wraps collection-validation-action as atomic block. `@masked.*` namespace in-memory only — never written to Redis, pipeline_state, stream, or logs. Retry always recolects; never re-uses masked values.
 
