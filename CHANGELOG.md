@@ -1,5 +1,45 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (12) — AUT-56: o `auth-seed` deixa de apagar o escopo do `admin@` a cada subida
+
+### 1 · O dano, medido
+
+Na primeira rodada VERDE do seed depois da AUT-54, o snapshot antes/depois de
+`auth.users` mostrou `admin@plughub.local` indo de **41 pools para `[]`** — e `[]`
+significa NENHUM pool desde a AUT-03. Restaurado pela API no mesmo minuto
+(`PATCH /auth/users/{id}`), idêntico ao snapshot.
+
+⚠️ **Não era novo.** Os logs das rodadas que morriam na AUT-54 já mostravam
+`escopo de admin@: {'accessible_pools': []}` aplicado ANTES do `die`. O que a
+AUT-54 mudou foi só o seed chegar ao fim.
+
+### 2 · A decisão (opção 2, do dono)
+
+A entrada do admin em `infra/seed/seed_auth.py` **perde a chave
+`accessible_pools`**. O `set_scope` já guardava por PRESENÇA (é o que protege o
+escopo montado à mão do `supervisor@`), então sem a chave ele pula o admin:
+
+- usuário novo nasce com o default da auth-api (`[]`) — coerente com *"pool é dado
+  do tenant e a atribuição é PÓS-CRIAÇÃO"* (§ Arc 7);
+- o existente mantém o escopo que alguém lhe atribuiu.
+
+O comentário no lugar diz por que a chave não volta: **declarar é aplicar, e
+aplicar em toda subida é apagar.** De passagem, corrigido um comentário do mesmo
+arquivo que dizia *"`accessible_pools` vazio = todos"*, falso desde a AUT-03.
+
+**Mantido por decisão:** o `set_module_config` continua gravando o config COMPLETO
+dos três usuários demo em toda subida (a metade (b) da ficha). A opção 1
+(seed-if-absent de verdade) não foi escolhida.
+
+### 3 · Verificação ao vivo
+
+Snapshot → `up --no-deps auth-seed` → diff: **exit 0**; a linha `escopo de admin@`
+sumiu do log; `admin@` 39 campos, `operator@` 7, `supervisor@` 16, **sem mudança
+nenhuma** — e o admin com **41 pools**. `probe_role_preset_on_create.sh` VERDE.
+
+Não medido, e deixou de importar para o conserto: quem repunha os 41 pools depois
+das rodadas antigas.
+
 ## 2026-09-12 (11) — AUT-54: o `auth-seed` morria no admin desde a MOD-11, e o gate lia isso como divergência de política
 
 ### 1 · A ficha subestimava o dano

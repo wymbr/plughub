@@ -219,14 +219,19 @@ DEMO_USERS = [
         "name":     "Demo Admin",
         "password": "changeme_admin",
         "roles":    ["admin", "devops"],
-        # Sem recorte de pool, DECLARADO (decisão do dono, 2026-08-27). O admin do demo
-        # carregava 22 pools de 36 — resíduo de teste, não política ("na prática todos os
-        # pools são criados dinamicamente").
+        # SEM `accessible_pools`, de propósito (AUT-56, decisão do dono 2026-09-12).
         #
-        # `accessible_pools: []` significa NENHUM pool desde a AUT-03 — a inversão
-        # aconteceu. Quem precisa de alcance total enumera: não há mais declaração de
-        # "sem recorte" para usuário (AUT-15).
-        "accessible_pools": [],
+        # A entrada declarava `[]` (decisão de 2026-08-27, contra 22 pools de resíduo de
+        # teste). Mas `[]` significa NENHUM pool desde a AUT-03, e o `set_scope` roda a
+        # cada subida: medido em 2026-09-12, a primeira rodada verde do seed levou o
+        # admin de 41 pools para `[]` — sem ver linha em relatório escopado. Pool é dado
+        # do TENANT e a atribuição é PÓS-CRIAÇÃO (§ Arc 7), então o seed não tem o que
+        # declarar aqui. Sem a chave, a guarda por PRESENÇA do `set_scope` pula o
+        # admin: usuário novo nasce com o default da auth-api (`[]`), e o existente
+        # mantém o escopo que alguém lhe atribuiu.
+        #
+        # ⚠️ Não reintroduzir a chave "para documentar o default": declarar é aplicar,
+        # e aplicar em toda subida é apagar.
         "module_config": {
             "evaluation": {
                 "contestar":          {"access": "read_write", "scope": []},
@@ -391,7 +396,8 @@ DEMO_USERS = [
             # `operacao` = ver e reivindicar na inbox pull; `decide` = o resume que
             # roteia o workflow (domínio [none, read_write] — não existe read_only).
             # Ambos NÃO-scopable de propósito: o recorte de pool vem de
-            # `accessible_pools` (vazio aqui = todos), não de um scope[] por campo.
+            # `accessible_pools` (vazio = NENHUM pool desde a AUT-03), não de um
+            # scope[] por campo.
             "approvals": {
                 "operacao": {"access": "read_write", "scope": []},
                 "decide":   {"access": "read_write", "scope": []},
