@@ -3129,6 +3129,93 @@ class WebhookAdapter(ChannelAdapter):
     # Timeout scanner (Arc 19 Fase D) — expira suspends/delegates vencidos
     # ──────────────────────────────────────────────────────────────────────────
 
+    async def _close_work_task_on_session_close(
+        self, tenant_id: str, session_id: str,
+    ) -> bool:
+        """
+        PUL-06 -- encerra o ITEM DE TRABALHO parqueado quando a sessao FECHA.
+
+        -- O defeito, medido em 2026-09-11 ------------------------------------
+
+        `cancel_pending_resumes` (abaixo) apagava o token e deixava o item: o
+        ledger `{t}:work_task:{sid}`, o registro de posse e o `pipeline_state`
+        suspenso sobreviviam ate ~25 h. Consequencias medidas em `5120fe90` e
+        `4841c60d`:
+
+        - `/monitor/work-items` exibia os dois como **"Being filled in"** --
+          trabalho MORTO afirmado como pendente, na lista de quem cobra pendencia;
+        - o **Close** do supervisor respondia **404**: ele encerra RETOMANDO pelo
+          `resume_token` (`/api/work_queue/expire` no mcp-server), e o token e o
+          que acabara de ser cancelado. A unica acao oficial de limpeza nao
+          alcancava justamente os itens que precisavam dela.
+
+        ⚠️ **O que NAO e mais afirmado aqui.** A ficha supunha que o prazo tambem
+        nunca dispararia, porque o scanner varre `*:resume_tokens`. **Medido em
+        2026-09-12 e REFUTADO:** no prazo dos dois o scanner logou *"endereco
+        REIDRATADO do registro duravel"*, retomou, e o routing gravou
+        `acw_expired`. O scanner reidrata do proprio `work_task` -- ou seja, a
+        rede de seguranca do prazo EXISTE, e e por isso que esta funcao so apaga
+        o ledger quando o arbitro CONFIRMA o encerramento: falhando, o item
+        continua visivel e o prazo o encerra depois, como sempre encerrou.
+
+        -- Ordem, e por que ela e load-bearing -------------------------------
+
+        Arbitro primeiro (ZREM + lease + vaga), ledger depois. Invertida, uma
+        falha de rede deixaria o item fora do relatorio e DENTRO do routing --
+        invisivel para as duas telas e sem prazo que o alcance, porque o scanner
+        precisa do ledger para reidratar o endereco.
+
+        Devolve True quando o item foi encerrado; False quando nao havia item (o
+        caminho normal de toda sessao que nao e tarefa parqueada).
+        """
+        ledger = await self.read_work_task(tenant_id, session_id)
+        if not ledger:
+            return False
+
+        pool_id = str(ledger.get("pool_id") or "")
+        qsid = str(ledger.get("queue_session_id") or session_id)
+        if not pool_id:
+            # Sem pool nao ha a quem pedir o encerramento. Barulhento: o item
+            # fica, e alguem precisa saber por que ele sobreviveu ao fechamento.
+            logger.warning(
+                "PUL-06: ledger sem `pool_id` -- item NAO encerrado no fechamento "
+                "(session=%s tenant=%s); segue ate o prazo", session_id, tenant_id,
+            )
+            return False
+
+        # A causa e PROPRIA: nem `acw_expired` (o prazo nao venceu) nem
+        # `acw_supervisor_closed` (ninguem decidiu encerrar a pendencia) -- o
+        # contato fechou com a tarefa por fazer, e o relatorio tem de poder
+        # contar isso separado das outras duas.
+        resultado = await self._routing_work_task_expire(
+            tenant_id=tenant_id, pool_id=pool_id, session_id=qsid,
+            reason="acw_session_closed",
+        )
+        if not resultado:
+            logger.warning(
+                "PUL-06: arbitro nao confirmou o encerramento -- ledger PRESERVADO "
+                "de proposito (session=%s pool=%s): o item segue visivel e o prazo "
+                "o encerra depois", session_id, pool_id,
+            )
+            return False
+
+        try:
+            await self._redis.delete(self.work_task_key(tenant_id, session_id))
+        except Exception as exc:
+            logger.warning(
+                "PUL-06: item encerrado no arbitro mas o ledger NAO foi apagado "
+                "(session=%s pool=%s): %s -- a tela de pendencias vai mentir ate o "
+                "TTL", session_id, pool_id, exc,
+            )
+            return True
+
+        logger.info(
+            "PUL-06: item de trabalho encerrado no fechamento da sessao "
+            "(session=%s pool=%s step=%s) -- a pendencia nao sobrevive ao contato",
+            session_id, pool_id, ledger.get("step_id") or "?",
+        )
+        return True
+
     async def cancel_pending_resumes(self, tenant_id: str, session_id: str) -> int:
         """
         Invalida os resume_tokens de uma sessao que FECHOU (RET-03 / D7 do ADR
@@ -3155,6 +3242,12 @@ class WebhookAdapter(ChannelAdapter):
         o log nomeia a sessao para que o resto do fechamento nao seja abortado
         por causa de uma limpeza.
         """
+        # -- PUL-06: o ITEM de trabalho morre junto com o token -----------------
+        # Antes de tocar no hash: o fechamento encerra o item exista token ou nao
+        # (token ja consumido, leitura do hash falhando). Ver
+        # `_close_work_task_on_session_close`.
+        await self._close_work_task_on_session_close(tenant_id, session_id)
+
         hash_key = f"{tenant_id}:resume_tokens"
         try:
             entries = await self._redis.hgetall(hash_key)

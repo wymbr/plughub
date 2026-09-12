@@ -1,5 +1,80 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (7) — PUL-06: a pendência não sobrevive ao contato
+
+`cancel_pending_resumes` (RET-03) apagava o `resume_token` no fechamento da sessão e
+**deixava o item**: o ledger `{t}:work_task:{sid}`, o registro de posse e o
+`pipeline_state` suspenso viviam até ~25 h. Medido em `5120fe90` e `4841c60d`
+(2026-09-11): `/monitor/work-items` exibia os dois como **"Being filled in"** — trabalho
+MORTO afirmado como pendente, na lista de quem cobra pendência — e o **Close** do
+supervisor respondia **404**, porque ele encerra RETOMANDO pelo token que acabara de ser
+cancelado. A única ação oficial de limpeza não alcançava justamente os itens que
+precisavam dela.
+
+### 1 · O conserto, e a casa
+
+`_close_work_task_on_session_close` roda DENTRO de `cancel_pending_resumes`, e antes de
+tocar no hash: o fechamento encerra o item exista token ou não (token já consumido,
+leitura do hash falhando). A casa é a mesma pela razão que o próprio RET-03 registra —
+um gancho por adapter seriam N ganchos, e o esquecido reabre o buraco inteiro.
+
+- **Causa PRÓPRIA: `acw_session_closed`.** Nem `acw_expired` (o prazo não venceu) nem
+  `acw_supervisor_closed` (ninguém decidiu encerrar): o contato fechou com a tarefa por
+  fazer, e o relatório tem de poder contar isso separado das outras duas.
+- **Ordem load-bearing:** árbitro primeiro (ZREM + lease + vaga), ledger depois.
+  Invertida, uma falha de rede deixaria o item FORA do relatório e DENTRO do routing —
+  invisível para as duas telas e sem prazo que o alcance.
+- ⚠️ **O ledger só é apagado quando o árbitro CONFIRMA.** Falhando, ele FICA de
+  propósito: é dele que o scanner de prazo reidrata o endereço, e essa rede de segurança
+  não pode ser cortada por uma limpeza que não deu certo.
+
+### 2 · A hipótese que caiu antes do conserto
+
+A ficha afirmava que o prazo **nunca dispararia** para esses itens, porque o scanner
+varre `*:resume_tokens` e o token fora cancelado — o item evaporaria pelo TTL sem
+`acw_expired` nem segmento terminal. A tarefa agendada para os prazos reais dos dois
+mediu o contrário (2026-09-12, 14:20:26 e 14:27:27 UTC): *"timeout scanner: endereco
+REIDRATADO do registro duravel"* → `webhook resume` → `work_task_expire …
+reason=acw_expired` → contato fechado pelo bridge.
+
+**A hipótese nasceu de ler UMA função e não o caminho inteiro** — código lido não é
+comportamento medido, e por isso a ficha dizia *"provavelmente"* e a medição foi deixada
+correr em vez de virar conserto. O dano real, e o que esta entrega fecha, era a JANELA
+de ~25 h: o ledger mentindo e o *Close* do supervisor sem alvo vivo.
+
+⚠️ **Achado lateral, do mesmo fechamento:** *"transição: resume_meta AUSENTE no
+fechamento — a linha fecha sem motivo nem início reais"*. O `cancel_pending_resumes`
+apaga também `_resume_meta_key`, então a linha de transição saía sem causa nem início.
+Com o item encerrado no fechamento, o scanner não tem mais o que reidratar e aquele
+resume tardio deixa de acontecer — a linha some por consequência, não por conserto
+próprio.
+
+### 3 · Falseabilidade
+
+Unidade: `test_pul06_close_work_task.py`, 7 casos. ⚠️ O que decide **não** é "apaga o
+ledger": é o de **FALHA DO ÁRBITRO**, em que o ledger tem de FICAR. Os 7 do RET-03
+continuam verdes (o token segue sendo cancelado), suíte do channel-gateway **778
+passaram**, rodada sobre a IMAGEM, no workdir do pacote.
+
+Ao vivo, sobre uma tarefa de wrap-up reivindicada de verdade, publicando o MESMO
+`session.closed` que o bridge publica (pelo cliente aiokafka do próprio serviço, porque
+o `kafka-console-producer` da imagem recusa por versão de API):
+
+| | antes | depois |
+|---|---|---|
+| ledger `work_task` | presente | **apagado** |
+| posse (`claim_record`) | presente | **liberada** |
+| token | vivo | cancelado |
+| routing | — | `work_task_expire … reason=acw_session_closed was_claimed=True` |
+
+O log do gateway mostra a ORDEM pretendida: `PUL-06: item de trabalho encerrado no
+fechamento` **antes** de `cancel_pending_resumes: … 1 token(s) invalidado(s)`.
+
+⚠️ Alcance depois da PUL-07: o caminho que criava estes órfãos (o operador fechar a
+tarefa pendente) deixou de existir — hoje vira devolução à fila. Esta guarda cobre os
+fechamentos que ninguém comanda: timeout de sessão, encerramento forçado, erro. Por isso
+a validação ao vivo exigiu publicar o evento; não há clique que a produza.
+
 ## 2026-09-12 (6) — MEN-01/MEN-02: quem conduz menciona, e o gate parou de aceitar identidade declarada
 
 As duas fichas do grupo `MEN` que estavam bloqueadas fecharam juntas, com a decisão do dono tomada
