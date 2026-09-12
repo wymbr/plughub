@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (8) — AUT-55: quem DETÉM o item passa a enxergar o formulário dele
+
+O dono relatou *"não conseguia pegar de volta, dava erro, e depois de várias
+tentativas abriu"*. Medido nos logs do mesmo dia: dezenas de
+`[supervisor_state] 403 pool_scope — sessão … é de [formfill_demo_ia] e o chamador
+alcança [formfill_demo,…]`.
+
+### 1 · O defeito, e o absurdo que ele produzia
+
+O escopo da sessão (AUT-47) tinha DUAS fontes: o pool que atende (do `meta`) e
+`core.pool.id` do ctx. Numa tarefa **delegada** as duas apontam o pool do
+WORKFLOW, enquanto o operador alcança o pool HUMANO onde reivindicou o item.
+
+⚠️ **O mesmo operador podia SUBMETER o formulário e não podia LER o estado que o
+renderiza** — o ingress de resume (A5) autoriza pela POSSE, conferida no árbitro;
+o portão de leitura não a consultava. Duas respostas para *"esta sessão é sua?"*
+no mesmo fluxo, e a mais restritiva chegava primeiro.
+
+⚠️ **E o sintoma sumia sozinho:** quando a ativação do humano escrevia o `meta`
+com o pool humano, a primeira fonte passava a bater. É corrida, não rede
+instável — e defeito cujo sintoma desaparece é defeito que sobrevive. Foi
+exatamente o *"depois de várias tentativas"*.
+
+### 2 · O conserto
+
+Terceira fonte: o **ledger do item** (`{tenant}:work_task:{sid}`, campo
+`pool_id`). O pool onde o item está parqueado É um pool daquela sessão.
+
+- **Não alarga `accessible_pools`** — quem não alcança aquele pool continua
+  recusado. O que muda é a sessão deixar de esconder metade da própria
+  identidade. O teste que carrega peso é justamente esse.
+- Mesma direção do D5 (*a tela não é fonte de posse*): o fato mora no servidor,
+  e o portão passa a consultá-lo.
+- A função saiu do `server.ts` para `lib/session-scope.ts` — era local, e por
+  isso **não tinha teste nenhum**; é a razão que já moveu a política de máscara
+  para `lib/context-masking.ts`.
+
+### 3 · Falseabilidade
+
+9 casos em `session-scope.test.ts`, incluindo Redis quebrado (degrada para o que
+sabe, e o chamador recusa — nunca libera) e ledger ilegível (não inventa pool).
+Suíte do mcp-server **341/341**, `tsc --noEmit` limpo.
+
+Gate `gate_session_state_pool_scope.sh` **VERDE** depois do deploy, com os ramos
+que importam: `operator → 200` no pool dele, corpo com `dialog_form_id` **e**
+`resume_token`; sessão inexistente → 404, não 403.
+
 ## 2026-09-12 (7) — PUL-06: a pendência não sobrevive ao contato
 
 `cancel_pending_resumes` (RET-03) apagava o `resume_token` no fechamento da sessão e

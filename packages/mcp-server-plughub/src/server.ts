@@ -70,6 +70,7 @@ import { sentimentFromCtxHash }    from "./lib/session-sentiment"
 import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-filter"
 import { decideLedgerRehydration, type LedgerCandidate } from "./lib/ledger-rehydration"
 import { decideFormTaskClose }  from "./lib/form-task-close"
+import { poolsDaSessao, type ScopeRedis } from "./lib/session-scope"
 // Política de máscara do ContextStore — UMA casa, importada pelas duas portas
 // (este endpoint HTTP e o tool MCP `supervisor_state`). Ver o cabeçalho de
 // `lib/context-masking.ts`: viviam aqui, alcançáveis só de dentro deste arquivo,
@@ -952,41 +953,6 @@ const ACCESS_RANK: Record<string, number> = { none: 0, read_only: 1, read_write:
  * perda.** Ele não tem `agent_assist.atender`, logo o Console nunca aparece no menu
  * dele — a API é que discordava do menu.
  */
-/**
- * AUT-47 (2026-09-09) — os pools de uma sessao VIVA, para a pergunta de PERTINENCIA
- * (*"esta sessao e dos meus pools?"*).
- *
- * Mesma uniao que a `analytics-api` usa no conteudo de contato (`_session_scope_clause`:
- * **entrou por pool meu OU um pool meu atendeu**), lida das duas casas que a guardam
- * no Redis — medido, nao suposto:
- *
- *   `session:{sid}:meta.pool_id`      quem ATENDE. O bridge o REESCREVE na alocacao:
- *                                     na tarefa de aprovacao ele vira `aprovacao_deploy`
- *                                     depois do claim (antes dizia o pool do workflow).
- *   `{t}:ctx:{sid}.core.pool.id`      por onde ENTROU (`gate_promocao_ia`, no mesmo caso).
- *
- * As duas discordam de proposito, e e por isso que sao duas: usar so a primeira negaria
- * a quem acompanha o processo desde a entrada; so a segunda negaria a quem atende.
- */
-async function poolsDaSessaoViva(
-  redis: { hget: (chave: string, campo: string) => Promise<string | null> },
-  tenantId: string,
-  sessionId: string,
-  poolQueAtende: string,
-): Promise<string[]> {
-  const pools = new Set<string>()
-  if (poolQueAtende) pools.add(poolQueAtende)
-  if (tenantId) {
-    try {
-      const bruto = await redis.hget(`${tenantId}:ctx:${sessionId}`, "core.pool.id")
-      if (bruto) {
-        const entrada = (JSON.parse(bruto) as { value?: unknown })?.value
-        if (typeof entrada === "string" && entrada) pools.add(entrada)
-      }
-    } catch { /* tag ausente ou ilegivel: a outra metade decide */ }
-  }
-  return [...pools]
-}
 
 /**
  * AUT-47 — o portao de ESCOPO do estado da sessao. `true` = pode seguir; quando
@@ -1007,7 +973,9 @@ async function poolsDaSessaoViva(
  * para nao acontecer.
  */
 async function autorizaEscopoDaSessao(
-  redis: { hget: (chave: string, campo: string) => Promise<string | null> },
+  // AUT-55: o portao passou a consultar tambem o ledger do item (`get`), alem do
+  // ctx (`hget`) — o tipo acompanha a fonte nova em vez de ser alargado a `any`.
+  redis: ScopeRedis,
   payload: Record<string, unknown>,
   tenantId: string,
   sessionId: string,
@@ -1036,7 +1004,12 @@ async function autorizaEscopoDaSessao(
 
   const bruto = payload["accessible_pools"]
   const meus  = Array.isArray(bruto) ? bruto.map(String) : []
-  const daSessao = await poolsDaSessaoViva(redis, tenantId, sessionId, poolQueAtende)
+  // AUT-55 — TRES fontes agora: pool que atende, `core.pool.id` do ctx e o pool do
+  // ITEM parqueado. A terceira existe porque numa tarefa delegada as duas primeiras
+  // apontam o pool do WORKFLOW, e quem DETEM o item alcanca o pool HUMANO: o mesmo
+  // operador submetia o formulario (A5, pela posse) e era recusado ao LER o estado
+  // que o renderiza. Ver `lib/session-scope.ts`.
+  const daSessao = await poolsDaSessao(redis, tenantId, sessionId, poolQueAtende)
 
   if (daSessao.length === 0) {
     // ⚠️ DUAS ausencias de aparencia identica, e so uma e recusa. Medido: a sessao
