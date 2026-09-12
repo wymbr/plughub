@@ -1,5 +1,43 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (10) — AUT-53: o probe de rank volta a medir rank, e não a regra de antes da AUT-44
+
+A bateria de 2026-09-12 deu `probe_rank_grant_guard.sh` VERMELHO nos três
+cenários POSITIVOS (`P1` cria operator no próprio pool, `N2c` `roles: []`, `T1`
+template no alcance), todos com **422** *"criar usuario exige um grupo, e voce nao
+supervisiona nenhum"* contra o 201 esperado. O produto estava certo: a AUT-44
+passou a exigir o grupo de nascimento de quem contrata por delegação, e a fixture
+não acompanhou.
+
+⚠️ **Um positivo vermelho PARECE proteção** — é a armadilha que a § Security
+registra, e por isso a ficha foi aberta como instrumento velho, não como defeito.
+
+### O conserto, só na fixture
+
+- O probe cria um grupo (`rankprobe_time`) e põe os **dois** delegados como
+  supervisores **antes** do login.
+- **Toda** criação delegada manda `group_ids` — negativos inclusive. Assim cada
+  cenário isola o eixo de RANK: se o guard de rank sumir, o negativo cai no
+  próximo portão e sai com outro código, e fica vermelho do mesmo jeito.
+- O eixo do grupo **não** é medido aqui: tem gate próprio
+  (`gate_hire_into_your_own_team.sh`), e medi-lo duas vezes seria segunda casa
+  para a mesma pergunta.
+- A limpeza apaga usuários, templates e **só então** o grupo.
+
+### Achado de passagem, na primeira rodada
+
+A resposta de `POST /auth/v1/groups` chama o id de **`group_id`**, não de `id`. O
+probe se declarou INCONCLUSIVO (correto), mas o grupo **vazou**, porque só era
+registrado para limpeza depois da checagem. Agora é registrado antes de julgar; o
+grupo vazado foi apagado por id exato (GET → 404).
+
+### Medição
+
+`probe_rank_grant_guard.sh` **VERDE, 10 cenários, 0 reprovados**: `P1` 201 ·
+`N1` 403 · `N2` 403 · `N2b` 403 · `N2c` 201 · `N3` 403 · `T1` 201 com proveniência,
+hash e pools do aplicador · `T2` 403 · `T3` 403. Resíduo `rankprobe_`: 0 usuários,
+0 grupos.
+
 ## 2026-09-12 (9) — ORF-02: o gate de segmentos abertos volta a ZERO, sem exceção
 
 ### 1 · A exclusão de fixtures que NÃO foi feita

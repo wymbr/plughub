@@ -29,6 +29,17 @@ preset de `operator`, e UM pool. Com ele:
   N3  NEGATIVO — escreve `module_config` alheio com campo acima do proprio -> 403
       (a SEGUNDA porta: ate a MOD-02 ela nao comparava nada com o chamador)
 
+O GRUPO DE NASCIMENTO (AUT-44, 2026-09-11) — e por que a fixture carrega um
+----------------------------------------------------------------------------
+Desde a AUT-44, delegado so cria usuario DENTRO de um grupo que supervisiona
+(`group_ids` obrigatorio; sem ele, 422). Este probe ficou para tras dela: os tres
+POSITIVOS (P1, N2c, T1) passaram a sair 422 contra o 201 esperado — e um positivo
+vermelho PARECE protecao, que e a armadilha da § Security (AUT-53). Por isso o
+probe cria um grupo, poe os dois delegados como supervisores ANTES do login, e
+TODA criacao delegada manda `group_ids`: cada cenario passa a medir so o eixo de
+RANK. O eixo do grupo tem gate proprio (`gate_hire_into_your_own_team.sh`) — medi-lo
+aqui de novo seria a segunda casa para a mesma pergunta.
+
 Tudo o que ele cria, ele remove — inclusive em falha.
 
 SAIDA: 0 = VERDE · 1 = VERMELHO · 2 = INCONCLUSIVO
@@ -101,13 +112,23 @@ def main() -> int:
 
     criados: list[str] = []
     templates: list[str] = []
+    grupos: list[str] = []
     falhas = 0
 
     def limpar():
+        # Usuarios ANTES do grupo: e a ordem do `gate_hire_into_your_own_team.sh`,
+        # e grupo apagado com membro dentro nao e o que este probe quer medir.
         for uid in criados:
             call(f"/auth/users/{uid}", tok=tok_master, method="DELETE")
         for tid in templates:
             call(f"/auth/templates/{tid}", tok=tok_master, method="DELETE")
+        for gid in grupos:
+            call(f"/auth/v1/groups/{gid}", tok=tok_master, method="DELETE")
+
+    def supervisiona(gid: str, uid: str) -> bool:
+        st, _ = call(f"/auth/v1/groups/{gid}/supervisors", {"user_id": uid},
+                     tok=tok_master)
+        return st == 201
 
     try:
         # ── o delegado ────────────────────────────────────────────────────────
@@ -128,6 +149,24 @@ def main() -> int:
             print(f"INCONCLUSIVO — nao consegui montar o pacote do delegado ({st})")
             return INCONCLUSIVO
 
+        # AUT-44 — o time em que o delegado contrata. Antes do login: o escopo de
+        # supervisao viaja no JWT, e um token emitido antes nao o carregaria.
+        st, g = call("/auth/v1/groups", {"tenant_id": TENANT, "name": PREFIXO + "time",
+                                         "description": "probe_rank_grant_guard"},
+                     tok=tok_master)
+        # A resposta chama o id de `group_id` (`_serialize_group`), nao de `id`. Registra
+        # para limpeza ANTES de julgar: um grupo criado e recusado aqui vazaria.
+        gid = str(g.get("group_id") or "") if isinstance(g, dict) else ""
+        if gid:
+            grupos.append(gid)
+        if st != 201 or not gid:
+            print(f"INCONCLUSIVO — nao consegui criar o grupo da fixture ({st}): "
+                  f"{str(g)[:160]}")
+            return INCONCLUSIVO
+        if not supervisiona(gid, uid):
+            print("INCONCLUSIVO — nao consegui por o delegado como supervisor do grupo")
+            return INCONCLUSIVO
+
         st, d = call("/auth/login", {"email": f"{PREFIXO}delegado@plughub.local",
                                      "password": "password123"})
         if st != 200:
@@ -139,7 +178,7 @@ def main() -> int:
         def cenario(rot, corpo, esperado, deve_citar=None):
             nonlocal falhas
             body = {"tenant_id": TENANT, "email": f"{PREFIXO}alvo@plughub.local",
-                    "password": "password123"}
+                    "password": "password123", "group_ids": [gid]}
             body.update(corpo)
             st, d = call("/auth/users", body, tok=tok)
             if st == 201:
@@ -184,6 +223,9 @@ def main() -> int:
             call(f"/auth/users/{mini['id']}/module-config",
                  {"config": {"users": {"access": "read_write", "scope": []}}},
                  tok=tok_master, method="PUT")
+            if not supervisiona(gid, mini["id"]):
+                print("  INCONCLUSIVO — delegado minimo nao virou supervisor do grupo")
+                falhas += 1
             st, d = call("/auth/login", {"email": f"{PREFIXO}minimo@plughub.local",
                                          "password": "password123"})
             tok_min = d.get("access_token", "") if st == 200 else ""
@@ -195,7 +237,7 @@ def main() -> int:
                     nonlocal falhas
                     body = {"tenant_id": TENANT,
                             "email": f"{PREFIXO}curto@plughub.local",
-                            "password": "password123"}
+                            "password": "password123", "group_ids": [gid]}
                     body.update(corpo)
                     st, d = call("/auth/users", body, tok=tok_min)
                     det = str(d.get("detail", "")) if isinstance(d, dict) else ""
@@ -248,7 +290,7 @@ def main() -> int:
         def cenario_tpl(rot, tid, corpo, esperado, deve_citar=None, checar=None):
             nonlocal falhas
             body = {"tenant_id": TENANT, "email": PREFIXO + "tpl@plughub.local",
-                    "password": "password123"}
+                    "password": "password123", "group_ids": [gid]}
             body.update(corpo)
             st, d = call("/auth/users/from-template/" + tid, body, tok=tok)
             det = str(d.get("detail", "")) if isinstance(d, dict) else ""
