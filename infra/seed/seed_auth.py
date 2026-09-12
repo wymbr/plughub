@@ -246,14 +246,11 @@ DEMO_USERS = [
                 "transcricao": {"access": "read_only", "scope": []},  # MOD-07
                 "exportar":   {"access": "read_write", "scope": []},
             },
-            "workflows": {
-                "operacao":       {"access": "read_write", "scope": []},
-                "visualizar":     {"access": "read_only",  "scope": []},
-                "cancelar":       {"access": "read_write", "scope": []},
-                "webhooks":       {"access": "read_write", "scope": []},
-                "journey_read":   {"access": "read_only",  "scope": []},
-                "journey_resume": {"access": "read_write", "scope": []},
-            },
+            # `workflows` saiu daqui em 2026-09-12 (AUT-54). O modulo deixou o catalogo
+            # na MOD-11 (2026-09-08) e o bloco ficou: o PUT abaixo recusa o config
+            # INTEIRO com 422 por campo desconhecido, `set_module_config` faz `die`, e o
+            # `auth-seed` saiu com exit 1 no admin em toda subida desde entao — sem
+            # semear nenhum usuario depois dele.
             "campaigns": {
                 "visualizar": {"access": "read_only",  "scope": []},
                 "gerenciar":  {"access": "read_write", "scope": []},

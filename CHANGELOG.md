@@ -1,5 +1,53 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (11) — AUT-54: o `auth-seed` morria no admin desde a MOD-11, e o gate lia isso como divergência de política
+
+### 1 · A ficha subestimava o dano
+
+O S6 do `probe_role_preset_on_create` acusava seis campos `workflows.*` no seed de
+`admin@` como *"concedidos pelo seed e ausentes do preset"* — divergência de
+política. Medido: **é fatal**. O módulo saiu do catálogo na MOD-11 (2026-09-08), o
+`PUT module-config` recusa o config INTEIRO com **422** (*"Módulo 'workflows' não
+encontrado no registro"*, reproduzido num usuário descartável) e o
+`set_module_config` do seed faz `die`.
+
+Prova no container: **`auth-seed` Exited (1)**, várias rodadas, todas parando no
+admin. Como o `die` vem no PRIMEIRO usuário, `supervisor@` e `operator@` não são
+semeados nessas rodadas — hoje existem só porque vieram de antes. Numa instalação
+limpa, não nasceriam.
+
+### 2 · Contar antes, como a ficha pedia
+
+**0 portadores** de `workflows.*` em `auth.users` (20 usuários), 0 linhas no
+`auth.module_registry`, 0 templates. O boot do auth-api já remove o grant a cada
+subida (`DDL_MIGRATE_ABAC_DROP_WORKFLOWS`) — o dado estava limpo; só o arquivo não.
+Nenhuma migração de dado necessária.
+
+### 3 · O conserto
+
+- `infra/seed/seed_auth.py`: o bloco `workflows` sai, com o porquê no lugar.
+- `infra/test/_seed_vs_preset.py`: campo que **não existe no catálogo** passa a ser
+  nomeado À PARTE e com a consequência (*"o PUT volta 422 e o auth-seed morre neste
+  usuário"*). Juntar os dois casos foi o que fez um erro fatal ser lido como
+  política.
+
+### 4 · Verificação
+
+- Comparador contra o seed ANTIGO (`git show HEAD:`): exit 1, as seis linhas
+  `NAO EXISTE`. Contra o NOVO: exit 0, *"os 3 usuários batem com o preset"*.
+- Os 3 `module_config` do seed aplicados a um usuário descartável no catálogo
+  VIVO: **200 · 200 · 200** (descartável removido, 204).
+- `probe_role_preset_on_create.sh` **VERDE**.
+
+⚠️ O `auth-seed` **não foi re-executado**: ele reescreve o `module_config` dos
+usuários demo reais, e isso é decisão do dono, não efeito colateral de conserto.
+
+### 5 · Por que ninguém viu
+
+`infra/scripts/up.sh` confere o estado depois do `up`, mas exclui os one-shots
+(`auth-seed|config-seed|…`) **pelo NOME**, sem olhar o exit code — seed morto lê
+igual a seed concluído. Não consertado aqui: é outra ficha.
+
 ## 2026-09-12 (10) — AUT-53: o probe de rank volta a medir rank, e não a regra de antes da AUT-44
 
 A bateria de 2026-09-12 deu `probe_rank_grant_guard.sh` VERMELHO nos três

@@ -28,6 +28,11 @@ def demo_users(caminho: str) -> list[dict]:
     raise LookupError("DEMO_USERS nao encontrado em %s" % caminho)
 
 
+def catalogo(doc: dict) -> set[str]:
+    return {"%s.%s" % (mod["module_id"], campo)
+            for mod in doc["modules"] for campo in mod["permission_schema"]}
+
+
 def preset(doc: dict, papeis: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for mod in doc["modules"]:
@@ -61,6 +66,7 @@ def main() -> int:
 
     linhas: list[str] = []
     conferidos = 0
+    existentes = catalogo(doc)
     for u in usuarios:
         papeis = u.get("roles") or []
         seed = {"%s.%s" % (m, c): (v or {}).get("access")
@@ -69,7 +75,16 @@ def main() -> int:
         cat = preset(doc, papeis)
         conferidos += 1
         email = u.get("email", "?")
-        for k in sorted(set(seed) - set(cat)):
+        # AUT-54 — campo que o CATALOGO nao tem nao e divergencia de politica, e
+        # FATAL: o PUT module-config recusa o config inteiro com 422 e o seed faz
+        # `die`, sem semear ninguem depois. Lido como "diverge do preset", o
+        # `workflows.*` passou quatro dias matando o `auth-seed` a cada subida.
+        fora = sorted(k for k in set(seed) if k not in existentes)
+        for k in fora:
+            linhas.append("%s: '%s' NAO EXISTE no catalogo — o PUT do seed volta 422 e o "
+                          "auth-seed morre neste usuario (ninguem depois dele nasce)"
+                          % (email, k))
+        for k in sorted(set(seed) - set(cat) - set(fora)):
             linhas.append("%s: seed da '%s' e o preset do papel %s NAO da"
                           % (email, k, papeis))
         for k in sorted(set(cat) - set(seed)):
