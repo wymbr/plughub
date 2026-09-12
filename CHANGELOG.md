@@ -1,5 +1,46 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (9) — ORF-02: o gate de segmentos abertos volta a ZERO, sem exceção
+
+### 1 · A exclusão de fixtures que NÃO foi feita
+
+A ficha mandava *"excluir fixtures do critério do
+`probe_open_segments_closed_sessions`"*. Medido antes de mexer: a premissa vinha de
+uma query AD-HOC (filtrando `agent_type='human'`), não do critério do probe. Com o
+critério dele, as 24 sessões `sess_*` com segmento aberto têm **0** fechadas em
+`sessions` — fixture que nunca fecha nunca entra na conta.
+
+⚠️ **E o filtro seria dano:** `sess_{data}T{hora}_{rand}` é o formato de id de
+PRODUTO (`mcp-server-plughub/src/tools/bpm.ts:31`, `conversation_start`). Excluir
+`sess_%` cegaria o gate para toda sessão aberta por BPM, e traria de volta a
+exceção que o próprio arquivo removeu em 2026-09-07.
+
+### 2 · Conferência das três linhas que o probe contava
+
+Deploy do conserto do mecanismo 1 (bridge): `2026-09-12T19:33:25Z`. **Depois dele,
+8 segmentos humanos abriram e 8 fecharam** — nenhum sucessor.
+
+| sessão | tópico `conversations.participants` | leitura |
+|---|---|---|
+| `59485f70` | humano `joined=1 left=0` | produtor não publicou — mecanismo 1 (TTL), anterior ao conserto |
+| `ee2a3813` | humano `joined=2 left=1` | produtor omitiu o `left` da 1ª janela; re-claim 38 s depois, fixture `probe_console_restore_after_reload.sh`, **anterior ao deploy** |
+| `3971aea6` | 0 mensagens (fora da retenção) | `specialist` de `limite_retorno` aberto desde 11/08; sessão encerrada por `reap_parques_orfaos.sh` (RET-14), que emite `contact_closed` e **não fecha segmento** |
+
+### 3 · Expurgo
+
+`CUTOFF=2026-09-13 purge_orphan_segments.sh --apply`: dry-run nomeou exatamente os
+3 `segment_id`, testemunha *"abertos depois do corte" = 0*, e a verificação
+confirmou `2790 → 2787`. `probe_open_segments_closed_sessions.sh` **VERDE**:
+0 abertos em sessão fechada, com `total` por papel ao lado (2192 · 130 · 242).
+
+### 4 · O que NÃO fechou
+
+O `ee2a3813` é o mecanismo 2 acontecendo UMA vez, com código de produção no
+bridge, e ninguém o explicou — o caso controlado (claim → Return → re-claim →
+submit) fechou as duas janelas. Fechar sem registrar seria esconder: vai para a
+**ORF-03**, `adiado`, com gatilho medível — o próprio gate, agora a zero, fica
+vermelho se ele voltar.
+
 ## 2026-09-12 (8) — ALW-17: `echo_to_operator` saiu, e os dois instrumentos que o cobravam foram junto
 
 Decisão do dono na Onda 1. O campo ficara **inerte**: desde 2026-09-10 `none` deixou de remover o
