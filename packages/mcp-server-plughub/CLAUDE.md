@@ -44,8 +44,9 @@ Default port: 3100.
   **não checa credencial nenhuma**: um cliente conecta anônimo e recebe as **74** tools
   no `tools/list` (remedido em 2026-09-12; eram 72). Os `requireJwtRole`/`verifyJwtPayload`
   do `server.ts` estão na **ponte REST `/api/*`**, que é outra superfície. No handler, o
-  `session_token` é verificado em **23**; **47** não verificam nada, **1** (`agent_login`)
-  é isenta por ser a emissora, e **3** entraram sem classificação (CAP-18, gate vermelho).
+  `session_token` é verificado em **23**; **50** não verificam nada e **1** (`agent_login`)
+  é isenta por ser a emissora. As três que entraram sem classificação foram medidas e
+  declaradas na CAP-18 (2026-09-12) — nenhuma tem camada nenhuma.
   Censo por camada, tabela de classificação e trava contra regressão:
   `infra/test/probe_mcp_tool_guard_census.sh`.
   **A política foi DECIDIDA pelo dono em 2026-09-12 (CAP-10): a resposta é TOPOLOGIA**, não

@@ -1,5 +1,60 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (5) — CAP-18: três tools sem classificação, e 47 motivos que já não eram verdade
+
+O quarto vermelho do dia, fechado. `probe_mcp_tool_guard_census` reprovava porque o censo foi de 72
+para **74** tools e três entraram sem linha na tabela de declaração — *"o censo MUDOU sem a
+declaração acompanhar"*, que é literalmente o ponto do arquivo.
+
+### 1 · As três foram MEDIDAS, não presumidas
+
+`ok` na tabela significa *a postura é a pretendida*, e declarar isso sem medir seria fabricar a
+própria evidência. Rodado o censo AST sobre as três:
+
+| tool | arquivo | token | guard | permission | audit |
+|---|---|---|---|---|---|
+| `agent_event_record` | `agent-events.ts:346` | ✗ | ✗ | ✗ | ✗ |
+| `dialog_tree_level` | `dialog.ts:170` | ✗ | ✗ | ✗ | ✗ |
+| `pool_route_resolve` | `navigation.ts:176` | ✗ | ✗ | ✗ | ✗ |
+
+Nenhuma camada em nenhuma das três. As irmãs mais próximas já classificadas — `form_get`,
+`pool_status_get`, `segment_outcome_record` — são todas `divida`, então `divida` é a classe
+consistente. Mas cada uma levou o seu motivo, porque o que elas expõem é diferente:
+
+- **`agent_event_record`** escreve KPI de negócio do Arc 12 pelo caminho **nativo**, que não tem
+  token *por desenho* (o `orchestrator-bridge` não emite `session_token` — a palavra aparece zero
+  vezes nele). A categoria é composta no servidor, então o isolamento de namespace vale por
+  construção; o que falta é credencial, não isolamento.
+- **`dialog_tree_level`** é projeção pura sobre `(form, path)` — mas lê DialogForm publicado do
+  tenant, e sem credencial quem alcança a porta enumera a árvore de opções de qualquer formulário.
+- **`pool_route_resolve`** não despacha (devolve o pool), porém expõe o `navigation_pools` do tenant
+  a quem souber um `session_id`.
+
+### 2 · De carona: 47 motivos que envelheceram
+
+As outras 47 linhas diziam **"politica pendente (CAP-09)"**. A política deixou de estar pendente
+ontem à tarde — a CAP-10 decidiu que a resposta é topologia. Um motivo que envelhece dentro de um
+instrumento é a mesma mentira tranquila que o instrumento existe para caçar, então as 47 foram
+reescritas para *"dívida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)"*, preservando
+o texto específico de cada uma.
+
+O cabeçalho da tabela passou a registrar duas coisas que só viviam no ledger: que **`divida` mudou
+de significado** (de *"ainda não decidimos"* para *"decidimos que a resposta é topologia"*), e o que
+`divida` **não** cobre — **`agent_login` é auto-serviço**, então as 23 linhas `token|ok` verificam um
+token que qualquer um cunha. Fechar tool a tool não alcança isso; autenticar o transporte alcança.
+
+### 3 · Estado e falseabilidade
+
+`ok=23 · isento=1 · divida=50 · total=74`, cinco ramos verdes. O `divida` subiu de 47 para 50 — são
+as três recém-classificadas, não regressão — e o número foi reconciliado nas **duas** outras casas
+que o afirmam: a ficha CAP-10 e o `CLAUDE.md` do `mcp-server-plughub`.
+
+Falseabilidade: o vermelho de antes já era a prova de que o ramo E reprova, e a mutação inversa
+confirma — removida a linha de `dialog_tree_level` de uma cópia, o gate volta a acusar
+`SEM LINHA na tabela` e sai vermelho.
+
+Nenhum código de produto muda nesta entrada.
+
 ## 2026-09-12 (4) — Onda 1: as dez decisões do dono, e duas fichas que já tinham morrido
 
 Rodada de decisão, não de código. Dez fichas que pediam escolha do dono foram trazidas uma a uma,

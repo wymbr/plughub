@@ -102,78 +102,94 @@ command -v node >/dev/null 2>&1 || { echo "  ❌ node ausente"; exit 3; }
 # mesmo par `_SCOPE_EXEMPT`/`_SCOPE_DEBT` da analytics-api.
 #
 # ⚠️ Tool nova SEM linha aqui reprova. É o ponto do arquivo.
+#
+# ⚠️ **A POLÍTICA FOI DECIDIDA pelo dono em 2026-09-12 (CAP-10), e `divida` mudou de
+# significado.** Ela era *"ainda não decidimos"*; passou a ser *"decidimos que a resposta
+# é TOPOLOGIA"* — a 3100 publica em `127.0.0.1` nos dois composes desde a CAP-13, e o que
+# falta de credencial por tool é defesa-em-profundidade, com gatilho nomeado (a porta sair
+# do loopback, ou o deploy virar distribuído). As 47 linhas que diziam *"politica pendente
+# (CAP-09)"* foram reescritas: um motivo que envelheceu é a mesma mentira tranquila que
+# este arquivo existe para caçar.
+#
+# ⚠️ E o que `divida` NÃO cobre, dito aqui para não se perder na conta: **`agent_login` é
+# auto-serviço**. Quem alcança a porta cunha um `session_token` assinado nomeando qualquer
+# `skill_id`, então as 23 linhas `token|ok` verificam um token que qualquer um emite. Fechar
+# tool a tool não resolve isso; autenticar o TRANSPORTE resolve.
 DECLARADO=$(cat <<'TABELA'
 agent_busy|token|ok|verifica session_token assinado
-agent_delegate|nenhuma|divida|delega subtarefa A2A sem credencial — politica pendente (CAP-09)
-agent_delegate_status|nenhuma|divida|politica pendente (CAP-09)
+agent_delegate|nenhuma|divida|delega subtarefa A2A sem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+agent_delegate_status|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 agent_done|token|ok|verifica session_token assinado
 agent_event|token|ok|verifica session_token assinado
+agent_event_record|nenhuma|divida|IRMAO do agent_event para o caminho NATIVO de skill-flow, que nao tem token (o bridge nao emite `session_token`) — identifica-se pela SESSAO, como o segment_outcome_record. ESCREVE KPI de negocio no Arc 12, e a categoria e COMPOSTA no servidor, entao o isolamento de namespace vale por construcao; o que falta e credencial, nao isolamento
 agent_heartbeat|token|ok|verifica session_token assinado
-agent_join_conference|nenhuma|divida|injeta agente em sessao viva sem credencial — politica pendente (CAP-09)
+agent_join_conference|nenhuma|divida|injeta agente em sessao viva sem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 agent_login|nenhuma|isento|EMISSOR do token: exigir um seria circular. Valida o agent_type_id no registry
 agent_logout|token|ok|verifica session_token assinado
 agent_pause|token|ok|verifica session_token assinado
 agent_ready|token|ok|verifica session_token assinado
-calendar_add_business_duration|nenhuma|divida|politica pendente (CAP-09)
-calendar_business_duration|nenhuma|divida|politica pendente (CAP-09)
-calendar_is_open|nenhuma|divida|politica pendente (CAP-09)
-calendar_next_open_slot|nenhuma|divida|politica pendente (CAP-09)
-campaign_delivery_result|nenhuma|divida|politica pendente (CAP-09)
-campaign_drain|nenhuma|divida|drena audiencia de campanha — politica pendente (CAP-09)
-contact_eligibility_check|nenhuma|divida|politica pendente (CAP-09)
-context_set|nenhuma|divida|ESCREVE no ContextStore da sessao — politica pendente (CAP-09)
-conversation_end|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-conversation_escalate|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-conversation_start|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-conversation_status|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-customer_attach_key|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-customer_resolve|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-customer_update_attributes|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-evaluation_agent_context_next|nenhuma|divida|politica pendente (CAP-09)
+calendar_add_business_duration|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+calendar_business_duration|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+calendar_is_open|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+calendar_next_open_slot|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+campaign_delivery_result|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+campaign_drain|nenhuma|divida|drena audiencia de campanha — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+contact_eligibility_check|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+context_set|nenhuma|divida|ESCREVE no ContextStore da sessao — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+conversation_end|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+conversation_escalate|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+conversation_start|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+conversation_status|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+customer_attach_key|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+customer_resolve|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+customer_update_attributes|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+dialog_tree_level|nenhuma|divida|projecao PURA sobre (form, path) — irma do form_get, que e divida pelo mesmo motivo. Le conteudo publicado de DialogForm do tenant; sem credencial, quem alcanca a porta enumera a arvore de opcoes de qualquer formulario
+evaluation_agent_context_next|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 evaluation_context_get|token|ok|verifica session_token assinado
-evaluation_context_resolve|nenhuma|divida|politica pendente (CAP-09)
-evaluation_lock|nenhuma|divida|politica pendente (CAP-09)
+evaluation_context_resolve|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+evaluation_lock|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 evaluation_pre_review_submit|token|ok|verifica session_token assinado
-evaluation_publish|nenhuma|divida|politica pendente (CAP-09)
+evaluation_publish|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 evaluation_review_submit|token|ok|verifica session_token assinado
 evaluation_submit|token|ok|verifica session_token assinado
 evaluation_threads_get|token|ok|verifica session_token assinado
-form_get|nenhuma|divida|politica pendente (CAP-09)
+form_get|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 insight_register|token|ok|verifica session_token assinado
 invoke|token+permission+audit|ok|UNICA com as quatro camadas: e a borda external-mcp
 journey_merge|token|ok|verifica session_token assinado
-mailing_add|nenhuma|divida|politica pendente (CAP-09)
-mailing_unsubscribe|nenhuma|divida|opt-out de contato sem credencial — politica pendente (CAP-09)
+mailing_add|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+mailing_unsubscribe|nenhuma|divida|opt-out de contato sem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 message_send|token|ok|verifica session_token assinado
-notification_send|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-otp_challenge|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-otp_verify|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-outbound_contact_request|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-pending_workflow_get|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-pool_promote|nenhuma|divida|PROMOVE deploy; o cabecalho do deploy.ts afirma o oposto — politica pendente (CAP-09)
-pool_status_get|nenhuma|divida|politica pendente (CAP-09)
-queue_context_get|nenhuma|divida|politica pendente (CAP-09)
-rule_dry_run|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-segment_outcome_record|nenhuma|divida|politica pendente (CAP-09)
+notification_send|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+otp_challenge|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+otp_verify|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+outbound_contact_request|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+pending_workflow_get|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+pool_promote|nenhuma|divida|PROMOVE deploy; o cabecalho do deploy.ts afirma o oposto — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+pool_route_resolve|nenhuma|divida|le o `navigation_pools` do pool DA SESSAO e resolve destino de roteamento por prefixo mais longo. Nao despacha — devolve o pool —, mas expoe o mapa de navegacao do tenant a quem souber um session_id
+pool_status_get|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+queue_context_get|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+rule_dry_run|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+segment_outcome_record|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 send_message|token|ok|verifica session_token assinado
 session_channel_change|token|ok|verifica session_token assinado
 session_context_get|token|ok|verifica session_token assinado
 session_escalate|token|ok|verifica session_token assinado
 session_invite|token|ok|verifica session_token assinado
-skill_deploy|nenhuma|divida|DEPLOY de skill sem credencial — politica pendente (CAP-09)
-supervisor_capabilities|nenhuma|divida|politica pendente (CAP-09)
-supervisor_state|nenhuma|divida|estado da sessao viva — politica pendente (CAP-09)
-survey_link_create|nenhuma|divida|politica pendente (CAP-09)
-survey_record|nenhuma|divida|grava resposta de pesquisa — politica pendente (CAP-09)
-system_availability_check|nenhuma|divida|politica pendente (CAP-09)
-transcript_get|nenhuma|divida|SERVE TRANSCRICAO de contato; irmao gateado existe (analytics /v1/transcript) — politica pendente (CAP-09)
+skill_deploy|nenhuma|divida|DEPLOY de skill sem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+supervisor_capabilities|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+supervisor_state|nenhuma|divida|estado da sessao viva — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+survey_link_create|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+survey_record|nenhuma|divida|grava resposta de pesquisa — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+system_availability_check|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+transcript_get|nenhuma|divida|SERVE TRANSCRICAO de contato; irmao gateado existe (analytics /v1/transcript) — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 wait_for_assignment|token|ok|verifica session_token assinado
 wait_for_message|token|ok|verifica session_token assinado
-work_queue_list|nenhuma|divida|politica pendente (CAP-09)
-work_task_claim|nenhuma|divida|RECLAMA item de fila humana — politica pendente (CAP-09)
-work_task_release|nenhuma|divida|politica pendente (CAP-09)
-workflow_resume|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
-workflow_trigger|guard|divida|tem injection guard, nao tem credencial — politica pendente (CAP-09)
+work_queue_list|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+work_task_claim|nenhuma|divida|RECLAMA item de fila humana — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+work_task_release|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+workflow_resume|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+workflow_trigger|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 TABELA
 )
 
