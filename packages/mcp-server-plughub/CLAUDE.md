@@ -41,13 +41,21 @@ Default port: 3100.
 - Every tool validates input with Zod before processing
 - ⚠️ **MEDIDO FALSO em 2026-09-01 (CAP-09)** — *"Every tool authenticates via JWT in the
   Authorization header"*. O transporte MCP (`GET /sse`, `POST /messages` em `server.ts`)
-  **não checa credencial nenhuma**: um cliente conecta anônimo e recebe as **72** tools
-  no `tools/list` (medido, não lido). Os `requireJwtRole`/`verifyJwtPayload` do
-  `server.ts` estão na **ponte REST `/api/*`**, que é outra superfície. No handler, o
-  `session_token` é verificado em **23 das 72**; **48** não verificam nada e **1**
-  (`agent_login`) é isenta por ser a emissora. Censo por camada, tabela de classificação
-  e trava contra regressão: `infra/test/probe_mcp_tool_guard_census.sh`. A política —
-  o que passa a exigir credencial — é decisão em aberto (`pending.md`, CAP-10)
+  **não checa credencial nenhuma**: um cliente conecta anônimo e recebe as **74** tools
+  no `tools/list` (remedido em 2026-09-12; eram 72). Os `requireJwtRole`/`verifyJwtPayload`
+  do `server.ts` estão na **ponte REST `/api/*`**, que é outra superfície. No handler, o
+  `session_token` é verificado em **23**; **47** não verificam nada, **1** (`agent_login`)
+  é isenta por ser a emissora, e **3** entraram sem classificação (CAP-18, gate vermelho).
+  Censo por camada, tabela de classificação e trava contra regressão:
+  `infra/test/probe_mcp_tool_guard_census.sh`.
+  **A política foi DECIDIDA pelo dono em 2026-09-12 (CAP-10): a resposta é TOPOLOGIA**, não
+  credencial por tool — a 3100 publica em `127.0.0.1` nos dois composes desde a CAP-13, e as
+  47 ficam como dívida de defesa-em-profundidade, com gatilho declarado (a porta sair do
+  loopback, ou o deploy virar distribuído). ⚠️ E o furo que a topologia ESCONDE, dito por
+  inteiro porque é o que torna "fechar tool a tool" pouco eficaz: **`agent_login` é
+  auto-serviço** — quem alcança a porta cunha um `session_token` assinado nomeando qualquer
+  `skill_id`, então as 23 verificadas aceitam um token que qualquer um emite. A saída do dia
+  do gatilho está nomeada no compose: `MCP_INTERNAL_SERVICE_TOKEN`, falhando FECHADO
 - ✅ **A ponte REST `/api/*` fechou em 2026-09-01 (CAP-12).** Das 25 rotas, **22
   gateiam**, 1 é isenta nomeada (`/health`, liveness do compose) e 2 são o transporte
   MCP, que a borda não publica. Antes disso, **nove rotas publicadas pela borda

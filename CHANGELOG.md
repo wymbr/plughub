@@ -1,5 +1,82 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (4) — Onda 1: as dez decisões do dono, e duas fichas que já tinham morrido
+
+Rodada de decisão, não de código. Dez fichas que pediam escolha do dono foram trazidas uma a uma,
+com a medição de cada uma refeita antes da pergunta. Nenhum comportamento de produto muda aqui; o
+que muda é que dez perguntas viram trabalho definido ou decisão registrada — e duas delas fecharam
+por já não existirem.
+
+### 1 · Duas fichas com a premissa vencida, o mesmo padrão da AUT-31
+
+**CAP-10** pedia uma decisão de topologia: *"ou a porta 3100 deixa de ser publicada, ou continua
+publicada"*. Medido: os dois composes publicam **`127.0.0.1:3100:3100`** desde a **CAP-13**
+(2026-09-01). A decisão que a ficha pedia já tinha sido tomada e aplicada **onze dias antes**, e a
+ficha seguia perguntando.
+
+**IDN-02** eram quatro palavras — *"Gate de identificação"* — herdadas do plano de junho. A fonte
+(`delegate-contrato-por-pool-spec.md` §4-5) define o gate como lógica de fluxo: coletar âncora →
+`identity_verify` por MCP → `choice` → `delegate` com ou sem `customer_resumable`. É o mesmo
+problema que o `adr-identity-door-evidence.md` redecidiu com mecanismo (PID-01..12). Fechada por
+absorção.
+
+### 2 · O que foi decidido
+
+| ficha | decisão |
+|---|---|
+| **ALW-17** | `echo_to_operator` **sai** — catálogo, tela, consulta ao config-api e o teste de inércia. Os três modos já produzem a mesma saída; o operador não sente nada, a tela para de mentir |
+| **VOZ-06** | default de `call_recording` = **30 dias**, que é o que já roda — o entregável vira o mecanismo (classe no namespace `storage`, tela, o número saindo do env). Destrava V-F3 |
+| **PID-12** | **importação com credencial de admin** é a única porta que carimba `authoritative`; a aba Cliente carimba `operator`, o resolver nunca carimba |
+| **MEN-01 / MEN-02** | o eixo vira **posição**: quem conduz menciona (`primary`, humano ou IA), quem foi convidado não convida — e vale nos **dois** caminhos |
+| **CAP-10** | a resposta continua sendo topologia; as 47 viram dívida de defesa-em-profundidade, com gatilho |
+| **IDN-02 · SUR-05** | fechadas por absorção (porta de identidade · Dialog Primitive) |
+| **NIV-09 · AUT-22 · AUT-32** | confirmadas adiadas, cada uma com o seu gatilho |
+
+**NIV-05 saiu da lista**: a redação foi fechada pelo dono em 2026-09-03 — o que resta é trabalho, não
+decisão.
+
+### 3 · A MEN-01 exigia uma análise, e ela derrubou a pergunta original
+
+A ficha dizia: *antes de decidir, responder QUAL cenário isto impede*. Respondido, e o resultado não
+foi nenhuma das três opções que ela listava.
+
+- **O gate não fala sobre espécie.** Ele barra `specialist`/`supervisor`/`evaluator` — *quem foi
+  convidado não convida*. A IA que conduz é `primary` e sempre passou.
+- **`role === "human"` é ramo MORTO.** O domínio vivo é `primary | specialist | queue` (mais
+  `supervisor`/`evaluator` na spec); `human` não existe. A segunda metade do gate
+  (`session.ts:448` e `:649`) nunca autorizou ninguém — e é ela que dá ao código a aparência de
+  falar de espécie.
+- **O modelo do dono se confirma nos dados.** *"`primary` é quem recebeu o contato na entrada ou no
+  escalate, humano ou IA, um só por vez"*: 597 sessões com 1 primary, 456 com 2, 229 com 3, até 8; e
+  dos 222 pares sobrepostos, **220 duram ≤ 100 ms** — costura da passagem de bastão. Sobram **um** de
+  41 s e **um** com segmento aberto. As 26 sessões sem primary são sessões internas de fila.
+- **O join do supervisor não é @mention.** É `POST /supervisor/{join,message,leave}` na
+  analytics-api, com token obrigatório, tenant vindo do token, escopo de pool conferido e `/message`
+  author-bound. `grep mention` no arquivo: **0**. Logo a regra escolhida não o alcança — e o
+  corolário é que o supervisor hoje **não consegue** convidar especialista por menção em caminho
+  nenhum.
+
+⚠️ **Duas coisas que esta análise "descobriu" já estavam escritas.** A assimetria dos dois caminhos
+é a **MEN-02**; o zero de menções é a **MEN-04**, que inclusive já explicava o motivo (*"anteriores
+perdidos no rebuild"*). Foram re-derivadas do zero porque ninguém procurou antes de medir — é
+exatamente o custo que o `CLAUDE.md` manda evitar (*"antes de registrar uma descoberta, `grep` do
+sintoma"*), e desta vez ele foi pago por inteiro.
+
+### 4 · Um quarto vermelho, achado ao levantar os números (CAP-18)
+
+`probe_mcp_tool_guard_census` reprova: o censo foi de 72 para **74** tools e três
+(`agent_event_record`, `dialog_tree_level`, `pool_route_resolve`) entraram **sem linha de
+classificação** — *"o censo MUDOU sem a declaração acompanhar"*, que é o que o gate existe para
+pegar. Os outros quatro ramos saem verdes. Ficha aberta; fechar é classificar as três, e `ok` exige
+medir a guarda, não presumi-la.
+
+De carona, o `CLAUDE.md` do `mcp-server-plughub` teve os números remedidos (23 verificam · 47 não ·
+1 isenta · 3 sem classe) e ganhou a decisão da CAP-10 por escrito, **incluindo o furo que a
+topologia esconde**: `agent_login` é auto-serviço, então as 23 verificadas aceitam um token que
+qualquer um cunha.
+
+Nenhum código de produto muda nesta entrada.
+
 ## 2026-09-12 (3) — AUT-52: o probe contava GRUPOS, e o produto estava certo o tempo todo
 
 Fecho do terceiro vermelho da Onda 0, o que a entrada anterior registrou como ficha. O

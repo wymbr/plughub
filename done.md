@@ -85,6 +85,10 @@ história no `CHANGELOG.md`.)*
 
 *(Fases A e B fecharam antes deste ledger — história no `CHANGELOG.md`.)*
 
+| id | tarefa | fechada em | âncora |
+|---|---|---|---|
+| IDN-02 | **Nao era trabalho aberto: era a mesma decisao, com vocabulario de junho.** A ficha tinha quatro palavras (*"Gate de identificacao"*); a fonte dela (`delegate-contrato-por-pool-spec.md` §4-5) define o gate como LOGICA DE FLUXO — coletar ancora, repassar a retaguarda por MCP (`identity_verify`), e chamar o `delegate` com ou sem `customer_resumable`. O `adr-identity-door-evidence.md` redecidiu isso inteiro com mecanismo: orquestrador de plataforma, evidencia em `core.journey.identity.*`, `resume_requires` na retomada e piso julgado por `judgeIdentityFloor` no emissor do token — as fatias sao PID-01..12. O unico pedaco nao absorvido era o `identity_verify` por MCP, e a PID-12 acabou de eleger outra porta (importacao com credencial de admin). Fechada por ABSORCAO, com o dono confirmando em 2026-09-12 | 2026-09-12 | `CHANGELOG.md` 2026-09-12 (4)  ADR adr-identity-door-evidence |
+
 ---
 
 ## `docs/adr/adr-human-approval-workflow-step.md` — aprovação humana
@@ -109,7 +113,9 @@ história no `CHANGELOG.md`.)*
 
 ## `docs/arcos/customer-surveys.md` — módulo de pesquisas
 
-*(nada fechado ainda)*
+| id | tarefa | fechada em | âncora |
+|---|---|---|---|
+| SUR-05 | **O S2 fica ABSORVIDO: o dono do runner e o Dialog Primitive, e survey e consumidor.** A ficha perguntava se o runner generico voltava a ter dono proprio. No cruzamento do plano contra o codigo (`TODO.md` §item 17) o S2 ja estava classificado como *feito-por-substituicao*: o que o spec pedia como runner dedicado virou `dialog-api` (store canonico) + `DialogForm` (script linear) + `form_get` + `skill_dialog_runner_v1`. Dar dono proprio reconstruiria um runner de pesquisa ao lado do generico — o oposto do que a casa fixou quando o mesmo primitivo passou a servir survey E OTP (*"survey e o 1o consumidor, nao o dono"*), com as quatro costuras separadas (conteudo · controle · canal · segredo). ⚠️ *Absorvido* nao e *completo*: o residuo vivo do plano de survey continua na SUR-02 (nenhum produtor emite CES/PMF/FCR). Confirmado pelo dono em 2026-09-12 | 2026-09-12 | `TODO.md` § item 17 · `CLAUDE.md` § Dialog Primitive |
 
 ---
 
