@@ -9,6 +9,12 @@
     echo_to_customer: false | true   →  "none" | "masked"
     echo_to_operator: false | true   →  "none" | "masked"
 
+⚠️ **`echo_to_operator` foi REMOVIDO do modelo em 2026-09-12 (ALW-17).** Este
+script FICA como está, e isso é escolha: ele é one-shot, já foi aplicado (o ramo C
+do `probe_masking_display_domain.sh` mede 0 mudanças previstas), e reescrevê-lo
+mudaria o que ele faz num store que ninguém vai migrar de novo. A chave que ele
+escreve passou a ser ignorada pelo schema — presente em documento antigo, inerte.
+
 ⚠️ **A migração do booleano segue o COMPORTAMENTO, não o nome do campo.**
 `echo_to_operator: true` lia-se *"ecoa"*, mas o que as casas fazem com ele é
 `••••••` (`_MASKED_FIELD_PLACEHOLDER` no bridge, e o mesmo literal no webchat e no

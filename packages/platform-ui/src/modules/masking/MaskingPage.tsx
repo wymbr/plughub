@@ -567,18 +567,10 @@ export default function MaskingPage() {
                       />
                     </div>
 
-                    {/* echo_to_operator — FRONTEIRA de confidencialidade: o operador nao
-                        conhece o valor, e a plataforma controla as casas que o exibem. */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 150 }}>
-                      <label style={labelStyle}>
-                        {t('section.displayRules.echoOperator', { defaultValue: 'Echo to operator' })}
-                      </label>
-                      <EchoSelect
-                        value={rule.echo_to_operator}
-                        disabled={isSaving}
-                        onChange={v => update({ echo_to_operator: v })}
-                      />
-                    </div>
+                    {/* `echo_to_operator` saiu da tela na ALW-17 (2026-09-12): os tres
+                        modos produziam a mesma saida desde 2026-09-10, entao o seletor
+                        oferecia uma escolha que nao existia. O operador le sempre o
+                        mascarado, e isso nao mudou com a remocao. */}
 
                     {/* ── by_role: o que cada PAPEL enxerga (CNS-07) ──────────── */}
                     {MASK_ROLES.map(role => (

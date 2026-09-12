@@ -1,5 +1,84 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (8) — ALW-17: `echo_to_operator` saiu, e os dois instrumentos que o cobravam foram junto
+
+Decisão do dono na Onda 1. O campo ficara **inerte**: desde 2026-09-10 `none` deixou de remover o
+campo e `plain` já era rebaixado a `masked` pela regra *"o tipo aperta"* — os três modos produziam
+byte a byte a mesma saída, e a `MaskingPage` seguia oferecendo uma escolha que não existia.
+
+**Nada muda para o operador.** Ele já lia sempre o mascarado; o que muda é a tela parar de mentir.
+
+### 1 · O que saiu
+
+| onde | o quê |
+|---|---|
+| `@plughub/schemas` | o campo do `MaskingDisplayRuleSchema` e as 8 entradas do catálogo semeado |
+| `platform-ui` | o seletor da `MaskingPage`, o tipo local do `MaskedToken`, as chaves i18n |
+| `orchestrator-bridge` | o parâmetro `echo_policy`, o ramo que o lia, e a consulta ao config-api |
+| `config-api` | as 8 ocorrências no seed |
+| — | **`masking_types.py` inteiro** |
+
+O módulo foi removido, não deixado para trás: ele existia para responder *"este campo mascarado pode
+voltar para o operador, e em que forma?"*, e a pergunta deixou de existir. Sem o campo, ele ficava
+sem nenhum chamador — um módulo inalcançável mantido "para o futuro" é o *"existe ≠ está pronto"* na
+forma mais barata.
+
+### 2 · Os dois instrumentos que cobravam a forma antiga
+
+Esta é a parte que se esquece, e ela é metade do trabalho.
+
+**O teste da inércia saiu, e foi substituído.** `test_none_e_masked_produzem_a_mesma_saida` fixava
+como FATO que os três modos eram equivalentes, para que a inércia não fosse redescoberta como bug.
+Trabalho que ele fez — e que agora seria vigiar três modos que não existem. No lugar entrou
+`test_o_parametro_echo_policy_nao_existe_mais`, que assere sobre a assinatura: se alguém
+reintroduzir `echo_policy` num merge, reprova. **O mecanismo aponta para o estado novo, não some.**
+
+**O ramo F4 do `probe_masking_display_domain` foi invertido.** Ele exigia que `echo_policy` chegasse
+a *exatamente um* destino — a fronteira *"eco é input, armazenamento não"*. A fronteira continua
+valendo como raciocínio; o que deixou de existir foi o campo que a alimentava. O mesmo ramo agora
+exige **zero** usos.
+
+⚠️ **E a primeira versão desse ramo acusou o próprio comentário que explicava a remoção.** Ele fazia
+`if "echo_policy" in bridge`, e a docstring cita o nome de propósito. O ramo A do mesmo probe já
+tinha resolvido isso — *"proibir a palavra proibiria documentar"* —, e eu repeti o erro no arquivo
+que o registrava. Hoje o F4 remove o que está entre crases antes de procurar: menção em crase é
+documentação, menção nua é código.
+
+### 3 · O irmão que FICOU, e por quê (ALW-19)
+
+`echo_to_customer` também não tem leitor de runtime — medido na mesma passada. Ele fica porque a
+razão é outra: tem consumidor **nomeado**, a perna de voz, onde `plain` verbaliza o dígito, `masked`
+bipa e `none` cala (`channel_capability_registry.py`). **Inerte por falta de canal não é o mesmo que
+inerte por colapso dos próprios modos.**
+
+Isso não é absolvição, e a ficha nova diz o prazo: quanto mais tempo um campo editável fica sem
+leitor, mais ele parece vivo — e o tenant que o configurar hoje não recebe nada. Fecha de uma de
+duas formas: o adapter de voz passa a lê-lo (VOZ-05), ou ele sai da TELA até existir quem o consuma.
+
+### 4 · O que NÃO foi tocado, por decisão
+
+`infra/scripts/migrate_masking_display_rule.py` continua escrevendo a chave. É one-shot, já aplicado
+(o ramo C mede **0 mudanças previstas**), e reescrevê-lo mudaria o que ele faz num store que ninguém
+vai migrar de novo. A chave que ele escreve passou a ser ignorada pelo schema. Ganhou nota de
+cabeçalho em vez de edição.
+
+O store vivo também pode continuar trazendo a chave, e isso não é defeito: o catálogo é DB-owned
+(seed-if-absent) e documento antigo não se reescreve sozinho. Por isso os ramos do gate **pararam de
+conferi-la** em vez de passarem a exigir a ausência — exigir ausência reprovaria toda instalação
+anterior a hoje, sem nenhum ganho.
+
+### 5 · Verificação
+
+`probe_masking_display_domain`: **VERDE nos 6 ramos** (A schema · B store vivo · C migração
+idempotente · D i18n pareada · E política máxima preservada · F fiação).
+`probe_masked_field_echo_parity`: verde, 12 casos com as duas classes exercidas.
+**156 testes** do orchestrator-bridge e **61** do config-api verdes. `tsc --noEmit` limpo em
+`platform-ui` e em `mcp-server-plughub`.
+
+⚠️ Nota de método: o script de typecheck da UI que eu usava lia `rc` do `tail`, não do `tsc` — ele
+reportou `rc=0` com um erro na tela. Corrigido para capturar o código antes do pipe. É o mesmo
+defeito de forma do `set -e` + `VAR=$(curl …)` que o `CLAUDE.md` cataloga.
+
 ## 2026-09-12 (7) — MEN-05/MEN-06: o `@alias` virou comando com evento próprio, e o emissor voltou a ter retorno
 
 As duas metades foram juntas por exigência da própria análise: separadas, a primeira trocaria um

@@ -19,6 +19,23 @@
 #     display_voice   →  (sai; o adapter traduz o token_display)
 #     echo_*: boolean →  EchoMode = plain | none | masked
 #
+# ⚠️ **`echo_to_operator` SAIU do modelo em 2026-09-12 (ALW-17), por decisão do
+# dono**, e este probe foi movido junto — um gate que cobra a forma antiga fica
+# vermelho por ter feito o seu trabalho, que é o pior jeito de ensinar a ignorá-lo.
+# O campo ficara INERTE: `none` deixou de remover o campo em 2026-09-10 e `plain` já
+# era rebaixado a `masked`, então os três modos produziam a mesma saída e a tela
+# oferecia uma escolha que não existia.
+#
+# ⚠️ **O store vivo pode continuar trazendo a chave**, e isso NÃO é defeito: o
+# catálogo é DB-owned (seed-if-absent), documento antigo não se reescreve sozinho, e
+# o schema simplesmente a ignora. Por isso os ramos abaixo pararam de conferi-la em
+# vez de passarem a exigir a ausência dela — exigir ausência reprovaria toda
+# instalação que existia antes de hoje, sem nenhum ganho.
+#
+# `echo_to_customer` FICA: ele não tem leitor de runtime, mas tem consumidor
+# NOMEADO (a perna de voz — `plain` verbaliza, `masked` bipa, `none` cala). Inerte
+# por falta de canal é outro estado que inerte por colapso dos próprios modos.
+#
 # O QUE ESTE PROBE PODE REPROVAR
 # ==============================
 #   A  o schema voltar a ter os nomes/enums antigos                    → VERMELHO
@@ -63,9 +80,14 @@ s = io.open(A, encoding="utf-8").read()
 codigo = "\n".join(l for l in s.split("\n") if not l.lstrip().startswith(("*", "//", "/*")))
 erros = []
 for esperado in ("TokenDisplayModeSchema", "EchoModeSchema",
-                 "token_display:", "echo_to_customer:", "echo_to_operator:"):
+                 "token_display:", "echo_to_customer:"):
     if esperado not in codigo:
         erros.append("faltou %s" % esperado)
+# ALW-17: o campo do OPERADOR saiu do schema, e a ausencia e cobrada aqui — senao
+# ele volta num merge e ninguem percebe. `EchoModeSchema` FICA: e o tipo do campo
+# do cliente, que continua.
+if "echo_to_operator:" in codigo:
+    erros.append("`echo_to_operator:` voltou ao schema — removido na ALW-17 (2026-09-12)")
 for morto in ("DisplayScreenSchema", "DisplayVoiceSchema", "display_screen:", "display_voice:"):
     if morto in codigo:
         erros.append("voltou %s" % morto)
@@ -106,7 +128,7 @@ for esc in escopos:
         if not isinstance(d, dict): continue
         for morto in ("display_screen", "display_voice"):
             if morto in d: erros.append("%s/%s: %s" % (esc, t.get("id"), morto))
-        for campo in ("echo_to_customer", "echo_to_operator"):
+        for campo in ("echo_to_customer",):   # `echo_to_operator` saiu na ALW-17
             if isinstance(d.get(campo), bool):
                 erros.append("%s/%s: %s ainda booleano" % (esc, t.get("id"), campo))
             elif campo in d and d[campo] not in ("plain", "none", "masked"):
@@ -160,7 +182,7 @@ for loc in ("en", "pt-BR"):
     dr = doc.get("section", {}).get("displayRules", {})
     for morto in ("screen", "voice"):
         if morto in dr: erros.append("%s: section.displayRules.%s voltou" % (c, morto))
-    for obrig in ("token", "echoCustomer", "echoOperator"):
+    for obrig in ("token", "echoCustomer"):   # `echoOperator` saiu na ALW-17
         if obrig not in dr: erros.append("%s: section.displayRules.%s ausente" % (c, obrig))
 for novo, por_loc in blocos.items():
     if len(por_loc) == 2 and por_loc["en"] != por_loc["pt-BR"]:
@@ -182,9 +204,9 @@ def get(u):
 # Os três tipos de restrição MÁXIMA do catálogo. Se a renomeação os afrouxar,
 # nada quebra e nada aparece — por isso a asserção é sobre o VALOR, não a forma.
 ESPERADO = {
-    "credential":  {"token_display": "hidden", "echo_to_customer": "none", "echo_to_operator": "none"},
-    "card_cvv":    {"token_display": "hidden", "echo_to_customer": "none", "echo_to_operator": "none"},
-    "opaque":      {"token_display": "hidden", "echo_to_customer": "none", "echo_to_operator": "none"},
+    "credential":  {"token_display": "hidden", "echo_to_customer": "none"},
+    "card_cvv":    {"token_display": "hidden", "echo_to_customer": "none"},
+    "opaque":      {"token_display": "hidden", "echo_to_customer": "none"},
 }
 prov = get(f"{cfg}/config/masking/_provenance?tenant_id={tenant}")["keys"]["types"]
 escopos = (["__global__"] if prov["global_present"] else []) + ([tenant] if prov["tenant_present"] else [])
@@ -211,7 +233,7 @@ case "$E_OUT" in OK*) ok "${E_OUT#OK }" ;; *) bad "${E_OUT#ERRO }" ;; esac
 
 # ── F — a fiação: o tipo viaja, e as duas casas do operador concordam ────────
 echo
-echo "${BLD}F) fiação: \`masked_types\` chega às duas casas de ECO do operador${RST}"
+echo "${BLD}F) fiação: \`masked_types\` chega às casas de eco, e o eixo do operador segue fora${RST}"
 F_OUT="$(cd "$RAIZ" && python3 - <<'PY'
 import io, re
 erros = []
@@ -265,14 +287,27 @@ if "delete redacted[fieldId]" in console:
 if re.search(r"redacted\[fieldId\]\s*=\s*(result|value)", console):
     erros.append("Console: campo mascarado recebendo valor CRU")
 
-# ── F4: a política NÃO alcança armazenamento ─────────────────────────────────
-# `echo_policy` só pode aparecer no destino 1. Se surgir num dos quatro destinos
-# de persistência, a fronteira "eco é input" foi apagada.
-usos = len(re.findall(r"echo_policy\s*=\s*echo_policy", bridge))
-if usos != 1:
-    erros.append("bridge: echo_policy passada a %d destinos (esperado 1 — só o Agent Assist)" % usos)
+# ── F4: a fiação do `echo_to_operator` tem de continuar AUSENTE ──────────────
+#
+# ⚠️ INVERTIDO em 2026-09-12 (ALW-17). Este ramo exigia que `echo_policy` chegasse
+# a EXATAMENTE um destino — a fronteira "eco e input, armazenamento nao". A
+# fronteira continua valendo como raciocinio; o que deixou de existir foi o campo
+# que a alimentava, entao o mesmo ramo agora cobra o oposto: nenhum uso.
+#
+# E o mesmo movimento do `test_none_e_masked_produzem_a_mesma_saida`, que fixava a
+# INERCIA como fato e saiu junto com ela: um gate sobre um parametro removido nao
+# protege nada; apontado para o estado NOVO, ele impede a volta silenciosa.
+# ⚠️ MENCAO EM CRASE e DOCUMENTACAO, nao codigo — mesmo criterio do ramo A
+# (*"proibir a palavra proibiria documentar"*). A docstring do `redact_customer_reply`
+# explica a remocao e cita os dois nomes de proposito; a primeira versao deste ramo
+# acusou o proprio comentario que a acompanhava, no mesmo commit.
+nu = re.sub(r"\x60[^\x60]*\x60", "", bridge)
+for morto in ("echo_policy", "resolve_echo_operator"):
+    if re.search(r"\b%s\b" % morto, nu):
+        erros.append("bridge: `%s` voltou ao CODIGO — o campo saiu na ALW-17 "
+                     "(2026-09-12), e reintroduzi-lo e decisao nova" % morto)
 
-print("OK bpm=%d pares, menu=%d, as 2 casas apertam, 1 só destino recebe a política"
+print("OK bpm=%d pares, menu=%d, as 2 casas apertam, e a fiacao do eco-operador segue ausente"
       % (campos, menu.count("masked_types:")) if not erros else "ERRO " + " ; ".join(erros[:6]))
 PY
 )"

@@ -64,7 +64,6 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from .instance_bootstrap import InstanceBootstrap
 from .registry_syncer import RegistrySyncer
 from .session_config import session_config
-from . import masking_types
 
 logging.basicConfig(
     level=logging.INFO,
@@ -463,7 +462,6 @@ def redact_customer_reply(
     masked_fields: set[str] | None = None,
     suppressed_text: str = _MASKED_SUPPRESSED,
     decorate_non_text: bool = True,
-    echo_policy: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """Decide o que de `reply_text` pode ser publicado, e com que visibilidade.
 
@@ -486,24 +484,14 @@ def redact_customer_reply(
     A visibilidade devolvida é sugestão para os destinos que a usam (1 e 3);
     os destinos 2 e 4 publicam com visibilidade própria e ignoram o segundo item.
 
-    ── `echo_policy` — ECO é INPUT, e só um destino é eco (ALW-10, 2026-09-02) ──
+    ── O eixo que ESTE parâmetro não tem mais (ALW-10 → ALW-17) ────────────────
 
-    `{field_id: "none"|"masked"|"plain"}`, vindo de `masking_types`. **Só o
-    destino 1 (Agent Assist) o passa**, e a assinatura é onde essa fronteira fica
-    visível: eco governa o que o operador VÊ da entrada fresca; os destinos 2, 3 e
-    4 são Kafka→ClickHouse, log e stream de Analytics — armazenamento —, e ali
-    continua valendo o masking padrão. Confundir os dois eixos reabriria por outro
-    lado o vazamento de 2026-08-29.
-
-    Ausente (o default) ⇒ comportamento idêntico ao anterior à ALW-10. É o que
-    mantém os quatro outros destinos intactos sem um ramo por destino.
-
-    Semântica por campo — ⚠️ **os TRÊS modos hoje produzem a mesma saída**:
-      `none`   → `••••••` (mudou em 2026-09-10; ver abaixo);
-      `masked` → `••••••`, como sempre;
-      `plain`  → `••••••` também. O rebaixamento acontece em
-                 `masking_types.resolve_echo_operator`, que o LOGA: um campo
-                 declarado `masked` no fluxo não é desdeclarável pelo catálogo.
+    Houve um `echo_policy` aqui: `{field_id: "none"|"masked"|"plain"}`, vindo do
+    catálogo de tipos do tenant, passado SÓ pelo destino 1 (Agent Assist) porque
+    eco é o que o operador VÊ da entrada fresca, e os destinos 2, 3 e 4
+    (Kafka→ClickHouse, log, stream de Analytics) são armazenamento. A fronteira
+    era boa e continua valendo como raciocínio; o que não se sustentou foi o
+    campo que a alimentava — ver a nota da ALW-17 no fim desta docstring.
 
     ── `none` deixou de REMOVER o campo (decisão do dono, 2026-09-10) ──────────
 
@@ -522,17 +510,15 @@ def redact_customer_reply(
     Regra nova, e ela vale nas TRÊS casas de eco/histórico (aqui, o adapter de
     webchat, o eco otimista do Console): **remove-se o VALOR, nunca o CAMPO.**
 
-    ⚠️ **Consequência declarada: `echo_policy` ficou INERTE nesta função.** Com
-    `none` colapsado em `masked`, e `plain` já rebaixado a `masked` pela regra
-    "o tipo aperta", os três modos produzem byte a byte a mesma saída — não há
-    escolha de `echo_to_operator` que mude o que o operador lê. O parâmetro e a
-    consulta ao catálogo FICAM, e isso é escolha do menor passo reversível: o
-    campo `echo_to_operator` é config de TENANT, com tela própria, e removê-lo é
-    decisão do dono, não consequência silenciosa desta mudança. A alternativa
-    (arrancar o encanamento agora) deixaria um campo editável na tela sem
-    consumidor nenhum — a mesma promessa-sem-mecanismo, do outro lado. Ficha
-    `ALW-16`; o teste `test_none_e_masked_produzem_a_mesma_saida` fixa a
-    inércia como FATO, para que ela não seja redescoberta como bug.
+    ⚠️ **`echo_to_operator` foi REMOVIDO em 2026-09-12 (ALW-17), por decisão do
+    dono.** Desde a regra acima, `none` deixou de remover o campo e `plain` já era
+    rebaixado a `masked` pelo *"o tipo aperta"* — os três modos produziam byte a
+    byte a mesma saída, e a tela seguia oferecendo uma escolha que não existia.
+    Entre *marcar cada caso* e *remover a alternativa*, a segunda não depende da
+    memória de ninguém. **Nada muda para o operador**: ele já lia sempre o
+    mascarado. O que sai é o campo, a tela, o parâmetro `echo_policy`, o
+    `resolve_echo_operator` e uma consulta ao config-api por submissão mascarada
+    cujo resultado era descartado.
 
     ── Campo mascarado VAZIO não é campo preenchido ────────────────────────────
 
@@ -558,24 +544,11 @@ def redact_customer_reply(
             result_obj = json.loads(reply_text) if isinstance(reply_text, str) else reply_text
             if isinstance(result_obj, dict):
                 redacted = {}
-                pediram_sumir: list[str] = []
                 for k, v in result_obj.items():
                     if k not in masked_fields:
                         redacted[k] = v
                         continue
-                    if (echo_policy or {}).get(k, "masked") == "none":
-                        pediram_sumir.append(k)
                     redacted[k] = masked_field_echo(v)
-                if pediram_sumir:
-                    # A política do tenant pediu supressão e o produto mostra o
-                    # campo (oculto) assim mesmo. Isso é DECISÃO (ver docstring),
-                    # e uma decisão que muda o que o operador vê tem de deixar
-                    # rastro — senão a próxima sessão a lê como regressão.
-                    logger.info(
-                        "echo_to_operator=none NÃO remove mais o campo (2026-09-10): "
-                        "campos=%s seguem no eco como valor oculto",
-                        sorted(pediram_sumir),
-                    )
                 return f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]", "all"
             # Resposta não-dict com campos mascarados declarados: não dá para
             # redigir seletivamente, e devolver o cru seria o vazamento de novo.
@@ -9571,44 +9544,12 @@ async def process_inbound(
             # Destino 1 — Agent Assist. Ver `redact_customer_reply`: a decisão é
             # única para as quatro portas; aqui só o placeholder é mais explícito.
             #
-            # ── O ÚNICO destino que passa `echo_policy` (ALW-10) ────────────────
-            # Eco é o que o operador VÊ da entrada fresca. Os destinos 2, 3 e 4
-            # (Kafka→ClickHouse, log, stream de Analytics) são armazenamento e
-            # seguem com o masking padrão — a política de tipo não os alcança, de
-            # propósito. Falha na leitura do catálogo NÃO derruba a mensagem: cai
-            # em `masked`, que é o comportamento anterior, e loga.
-            echo_policy: dict[str, str] = {}
-            if all_masked_fields and msg_type == "menu_result" and http is None:
-                # `http` é opcional em `process_inbound`. Sem ele não há catálogo, e
-                # isso é condição NORMAL — não merece traceback. Mas merece linha:
-                # sem ela, "não apertou porque o tipo não pede" e "não apertou porque
-                # não perguntei" ficam indistinguíveis no log.
-                logger.info(
-                    "echo_policy não consultada session=%s — sem sessão HTTP neste "
-                    "caminho; campos mascarados seguem em %r",
-                    session_id, masking_types.FALLBACK,
-                )
-            elif all_masked_fields and msg_type == "menu_result":
-                try:
-                    _tenant = await resolve_session_tenant(redis_client, session_id)
-                    _tipos = await masking_types.politica_por_tipo(
-                        CONFIG_API_URL, _tenant, http,
-                    )
-                    echo_policy = masking_types.resolve_echo_operator(
-                        _tipos, all_masked_fields, all_masked_types,
-                    )
-                except Exception:
-                    logger.exception(
-                        "echo_policy indisponível session=%s — os campos mascarados "
-                        "seguem com o placeholder padrão", session_id,
-                    )
             display_text, visibility = redact_customer_reply(
                 reply_text,
                 msg_type        = msg_type,
                 any_masked      = any_masked,
                 masked_fields   = all_masked_fields,
                 suppressed_text = _MASKED_SUPPRESSED_HUMAN,
-                echo_policy     = echo_policy,
             )
             if any_masked:
                 logger.info(

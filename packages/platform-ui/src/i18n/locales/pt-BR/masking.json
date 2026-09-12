@@ -47,7 +47,6 @@
     },
     "displayRules": {
       "echoCustomer": "Eco para o cliente",
-      "echoOperator": "Eco para o operador",
       "token": "Token mascarado"
     },
     "contextMap": {

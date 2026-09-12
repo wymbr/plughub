@@ -54,13 +54,11 @@ export type EchoMode = 'plain' | 'none' | 'masked'
 export interface MaskingDisplayRule {
   token_display:     TokenDisplayMode
   echo_to_customer:  EchoMode
-  echo_to_operator:  EchoMode
 }
 
 export const DEFAULT_DISPLAY_RULE: MaskingDisplayRule = {
   token_display:    'display_partial',
   echo_to_customer: 'none',
-  echo_to_operator: 'masked',
 }
 
 export type MaskingRulesMap = Record<string, MaskingDisplayRule>

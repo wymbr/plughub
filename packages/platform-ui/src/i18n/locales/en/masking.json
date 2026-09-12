@@ -47,7 +47,6 @@
     },
     "displayRules": {
       "echoCustomer": "Echo to customer",
-      "echoOperator": "Echo to operator",
       "token": "Masked token"
     },
     "contextMap": {

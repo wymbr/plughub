@@ -112,7 +112,7 @@ context_map:  contexto.session.cartao.numero → credit_card
 masking.types.credit_card.mascara:
               by_role: { operator: "last_4" }        ← o eixo de EXIBIÇÃO (este ADR)
               display.echo_to_customer: "none"       ← outro eixo: eco da ENTRADA mascarada
-              display.echo_to_operator: "masked"
+              (o `echo_to_operator` que ficava aqui saiu na ALW-17, 2026-09-12)
 ```
 
 A tag que o flow interpola **é alias declarado** da canônica tipada. Nada disso é consultado na

@@ -439,7 +439,8 @@ export const AgentAssistPage: React.FC = () => {
           const redacted: Record<string, unknown> = { ...(result as Record<string, unknown>) };
           for (const fieldId of maskedFields) {
             if (!(fieldId in redacted)) continue;
-            // ⚠️ `echo_to_operator` NÃO é mais consultado aqui (2026-09-10).
+            // ⚠️ `echo_to_operator` deixou de ser consultado aqui em 2026-09-10, e
+            // foi REMOVIDO do modelo em 2026-09-12 (ALW-17) — não há mais campo.
             //
             // Ele decidia entre `delete` (modo `none`) e `••••••`. Medido: o
             // `MenuCard` logo acima renderiza o `label` de TODO campo do

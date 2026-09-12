@@ -208,82 +208,23 @@ def test_todo_destino_chama_o_redator() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ALW-10 — `echo_policy`: eco é INPUT, e o tipo só APERTA
+# O que sobrou depois que `echo_to_operator` saiu (ALW-17, 2026-09-12)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# O que estes testes guardam, e por que cada um pode reprovar:
+# A ALW-10 trouxe `echo_policy` — a política de eco POR TIPO, vinda do catálogo do
+# tenant — e os testes dela viviam aqui. O campo foi REMOVIDO por decisão do dono:
+# desde 2026-09-10 `none` não removia mais o campo, `plain` já era rebaixado a
+# `masked` pelo *"o tipo aperta"*, e os três modos produziam byte a byte a mesma
+# saída. A tela seguia oferecendo uma escolha que não existia.
 #
-#   · sem `echo_policy` nada muda — é a regressão que protege os QUATRO destinos
-#     de armazenamento, que não passam a política e não podem passar a mudar;
-#   · ⚠️ `none` DEIXOU DE REMOVER o campo (decisão do dono, 2026-09-10). O
-#     argumento original — *"se virar `••••••`, o operador descobre que o campo
-#     existe"* — foi MEDIDO e não se sustenta: o `MenuCard` do Console renderiza
-#     o `label` de todo campo do formulário, mascarado incluído, num input
-#     desabilitado. O operador já tinha visto `Senha` e `Código 2FA` antes de o
-#     cliente responder; `none` só fazia o eco contradizer o cartão — e a MESMA
-#     tela, num F5, relia o histórico e via os campos de volta;
-#   · `plain` não desdeclara um campo `masked:` do fluxo — é a regra
-#     "restritivo vence", e sem teste ela é só um comentário.
-
-from plughub_orchestrator_bridge import masking_types
-
-
-def test_sem_echo_policy_o_comportamento_e_o_de_antes() -> None:
-    """Regressão dos quatro destinos de ARMAZENAMENTO.
-
-    Eles chamam o redator sem `echo_policy`, e a ALW-10 não pode tê-los mudado:
-    persistência segue com o masking padrão, por decisão.
-    """
-    out, _ = redact_customer_reply(
-        FORM_REPLY, msg_type="menu_result", any_masked=False,
-        masked_fields=FORM_MASKED_FIELDS,
-    )
-    assert "hunter2" not in out and "914455" not in out
-    assert out.count("••••••") == 2
-    assert "cliente@exemplo.com" in out
-
-
-def test_none_mantem_o_campo_e_remove_so_o_valor() -> None:
-    """Substitui `test_none_remove_o_campo_em_vez_de_substituir` (2026-09-10).
-
-    O caso ANTERIOR exigia `"senha" not in out`. Ele guardava uma decisão que foi
-    revista: remove-se o VALOR, nunca o CAMPO. Fica registrado aqui em vez de
-    apagado, porque um teste que desaparece leva a razão junto.
-    """
-    out, _ = redact_customer_reply(
-        FORM_REPLY, msg_type="menu_result", any_masked=False,
-        masked_fields=FORM_MASKED_FIELDS,
-        echo_policy={"senha": "none", "codigo_2fa": "masked"},
-    )
-    assert "senha" in out, "`none` NÃO remove mais a chave — remove só o valor"
-    assert "hunter2" not in out
-    assert out.count("••••••") == 2          # os dois campos, ocultos
-    assert "codigo_2fa" in out
-    assert "cliente@exemplo.com" in out      # campo livre sobrevive
-
-
-def test_none_e_masked_produzem_a_mesma_saida() -> None:
-    """⚠️ A INÉRCIA do `echo_policy`, fixada como FATO e não como prosa.
-
-    Com `none` colapsado em `masked` — e `plain` já rebaixado a `masked` pela
-    regra "o tipo aperta" —, nenhuma escolha de `echo_to_operator` muda o que o
-    operador lê. Isto não é acidente: é a consequência declarada da decisão de
-    2026-09-10, e está aqui para que a próxima sessão a leia como decisão em vez
-    de redescobri-la como bug. Ficha `ALW-16` decide o destino do campo.
-
-    Se algum dia os modos voltarem a divergir, ESTE teste reprova primeiro — que
-    é exatamente o aviso que se quer.
-    """
-    saidas = {
-        modo: redact_customer_reply(
-            FORM_REPLY, msg_type="menu_result", any_masked=False,
-            masked_fields=FORM_MASKED_FIELDS,
-            echo_policy={"senha": modo, "codigo_2fa": modo},
-        )[0]
-        for modo in ("none", "masked", "plain")
-    }
-    assert len(set(saidas.values())) == 1, f"os modos divergiram: {saidas}"
-
+# ⚠️ **O `test_none_e_masked_produzem_a_mesma_saida` saiu junto, e isso é
+# deliberado.** Ele fixava a INÉRCIA como fato, para que ela não fosse
+# redescoberta como bug — trabalho que ele fez, e que agora seria vigiar três
+# modos que não existem mais. Um teste sobre um parâmetro removido não protege
+# nada; ele só faz o leitor procurar o parâmetro.
+#
+# O que FICA abaixo não é sobre eco: é sobre a redação em si — campo vazio não se
+# passa por preenchido, `0`/`False` não são vazios, e `any_masked` vence tudo.
 
 def test_campo_mascarado_VAZIO_nao_se_passa_por_preenchido() -> None:
     """O resumo não pode AFIRMAR um valor que não existe.
@@ -319,71 +260,28 @@ def test_zero_e_false_NAO_sao_vazios() -> None:
     assert obj["codigo_2fa"] == "••••••"
 
 
-def test_masked_e_o_default_para_campo_sem_politica() -> None:
-    """Campo mascarado ausente do mapa não vira `plain` por omissão."""
-    out, _ = redact_customer_reply(
-        FORM_REPLY, msg_type="menu_result", any_masked=False,
-        masked_fields=FORM_MASKED_FIELDS,
-        echo_policy={"senha": "none"},       # codigo_2fa sem entrada
-    )
-    assert "914455" not in out
-    # `none` no `senha` nao remove mais: os DOIS campos aparecem ocultos.
-    assert "codigo_2fa" in out and out.count("••••••") == 2
-
-
-def test_echo_policy_nao_alcanca_campo_livre() -> None:
-    """A política decide sobre o que JÁ é segredo; não cria segredo novo."""
-    out, _ = redact_customer_reply(
-        FORM_REPLY, msg_type="menu_result", any_masked=False,
-        masked_fields=FORM_MASKED_FIELDS,
-        echo_policy={"email": "none"},       # email NÃO está em masked_fields
-    )
-    assert "cliente@exemplo.com" in out
-
-
-def test_any_masked_vence_a_politica() -> None:
-    """Step inteiro mascarado suprime tudo, e nenhum `plain` reabre isso."""
+def test_any_masked_vence_o_field_level() -> None:
+    """Step inteiro mascarado suprime tudo, e o campo a campo não reabre isso."""
     out, vis = redact_customer_reply(
         FORM_REPLY, msg_type="menu_result", any_masked=True,
         masked_fields=FORM_MASKED_FIELDS,
-        echo_policy={"senha": "plain", "codigo_2fa": "plain"},
     )
     assert out == _MASKED_SUPPRESSED and vis == "agents_only"
     assert "hunter2" not in out
 
 
-# ── a resolução do modo, isolada ─────────────────────────────────────────────
+def test_o_parametro_echo_policy_nao_existe_mais() -> None:
+    """A remoção fixada como FATO, não como prosa.
 
-def test_tipo_aperta_e_plain_e_rebaixado(caplog) -> None:
-    tipos = {
-        "credential": {"echo_to_operator": "none"},
-        "cpf":        {"echo_to_operator": "masked"},
-        "phone":      {"echo_to_operator": "plain"},
-    }
-    with caplog.at_level("INFO"):
-        fora = masking_types.resolve_echo_operator(
-            tipos,
-            masked_fields={"senha", "doc", "tel"},
-            masked_types={"senha": "credential", "doc": "cpf", "tel": "phone"},
-        )
-    assert fora == {"senha": "none", "doc": "masked", "tel": "masked"}, (
-        "`plain` não pode desdeclarar um campo `masked:` do fluxo"
+    Se alguém reintroduzir o parâmetro sem decidir isso, reprova aqui — e é o
+    mesmo mecanismo que o teste de inércia fazia antes, apontado para o estado
+    novo. Sem ele, o `echo_policy=` volta num merge e ninguém percebe.
+    """
+    import inspect
+
+    params = inspect.signature(redact_customer_reply).parameters
+    assert "echo_policy" not in params, (
+        "`echo_policy` voltou à assinatura de `redact_customer_reply`. O campo "
+        "`echo_to_operator` foi removido na ALW-17 (2026-09-12) por decisão do "
+        "dono; reintroduzi-lo é decisão nova, não consequência de refactor."
     )
-    assert "rebaixado" in caplog.text, "o rebaixamento tem de ser LOGADO, nunca mudo"
-
-
-def test_tipo_desconhecido_cai_no_fallback_seguro() -> None:
-    """Sem tipo (ou catálogo vazio) NÃO vira `plain`."""
-    fora = masking_types.resolve_echo_operator({}, {"senha"}, {})
-    assert fora == {"senha": masking_types.FALLBACK}
-    assert masking_types.FALLBACK == "masked", (
-        "o fallback é `masked`: não vaza, e não muda o comportamento por outage"
-    )
-
-
-def test_ordem_de_restricao_e_a_unica_casa() -> None:
-    """`none` < `masked` < `plain`, e o mínimo é o mais restritivo."""
-    assert masking_types._min("none", "plain") == "none"
-    assert masking_types._min("plain", "masked") == "masked"
-    assert masking_types._min("masked", "masked") == "masked"
-    assert set(masking_types.ECHO_MODES) == {"none", "masked", "plain"}

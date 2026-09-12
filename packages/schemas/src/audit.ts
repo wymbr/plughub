@@ -336,9 +336,20 @@ export type TokenDisplayMode = z.infer<typeof TokenDisplayModeSchema>
  *   `none`   — não volta
  *   `masked` — volta um substituto NÃO-INFORMATIVO (`••••••`, bipe, silêncio…)
  *
- * ⚠️ **As duas pontas não têm a mesma força, e confundi-las seria caro.**
- * `echo_to_operator` é FRONTEIRA DE CONFIDENCIALIDADE — o operador não conhece
- * o valor, e a plataforma controla as três casas que o exibem.
+ * ⚠️ **`echo_to_operator` foi REMOVIDO em 2026-09-12 (ALW-17).** Ele era a outra
+ * ponta deste eixo — FRONTEIRA DE CONFIDENCIALIDADE, enquanto o do cliente é
+ * advisory —, e caiu por ter ficado INERTE: desde 2026-09-10 `none` não removia
+ * mais o campo e `plain` já era rebaixado a `masked` pelo *"o tipo aperta"*, então
+ * os três modos produziam byte a byte a mesma saída. Um campo editável na tela que
+ * não muda nada é promessa sem mecanismo, e a decisão do dono foi remover a
+ * alternativa em vez de marcar cada caso.
+ *
+ * `echo_to_customer` FICA, e a diferença é de estado, não de importância: ele não
+ * tem leitor de runtime hoje, mas tem consumidor NOMEADO — a perna de voz, onde
+ * `plain` verbaliza o dígito, `masked` bipa e `none` cala
+ * (`channel_capability_registry.py`). Inerte por falta de canal não é o mesmo que
+ * inerte por colapso dos próprios modos.
+ *
  * `echo_to_customer` é ADVISORY: o cliente digitou o valor, já o conhece, e o
  * que a plataforma pode fazer é DECLARAR o modo no evento de interação para o
  * cliente do canal obedecer. É medida contra quem olha por cima do ombro, não
@@ -359,17 +370,16 @@ export type EchoMode = z.infer<typeof EchoModeSchema>
  * compartilhado) e era gravada solta como `masking.rule.{category}` no config-api.
  * Passa a ser propriedade do tipo (§D1: `mascara` opcionalmente carrega canal).
  *
- * ⚠️ **Default de `echo_to_operator` é `masked`, e a migração do booleano segue
- * o COMPORTAMENTO, não o nome do campo.** O antigo `echo_to_operator: true`
- * lia-se "ecoa", mas o que as três casas fazem com ele é `••••••`
- * (`_MASKED_FIELD_PLACEHOLDER`). Mapear `true → plain` transformaria a política
- * vigente num vazamento no instante em que alguém ligasse o fio — ela virou
- * `masked`. Ver `infra/scripts/migrate_masking_display_rule.py`.
+ * ⚠️ **`echo_to_operator` saiu deste objeto na ALW-17 (2026-09-12).** Ele tinha
+ * default `masked`, e a migração do booleano seguia o COMPORTAMENTO e não o nome
+ * do campo — `true` lia-se "ecoa", mas as três casas mostravam `••••••`. Esse
+ * raciocínio fica registrado porque vale para qualquer migração de flag para enum;
+ * o campo, não. Store antigo que ainda traga a chave é ignorado pelo schema, e
+ * nenhum leitor a consulta.
  */
 export const MaskingDisplayRuleSchema = z.object({
   token_display:    TokenDisplayModeSchema.default("display_partial"),
   echo_to_customer: EchoModeSchema.default("none"),
-  echo_to_operator: EchoModeSchema.default("masked"),
 })
 export type MaskingDisplayRule = z.infer<typeof MaskingDisplayRuleSchema>
 
@@ -524,7 +534,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "last_2" },
-        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
+        display: { token_display: "display_partial", echo_to_customer: "none" },
       },
       lgpd: "pessoal",
     },
@@ -540,7 +550,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "last_4" },
-        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
+        display: { token_display: "display_partial", echo_to_customer: "none" },
       },
       lgpd: "financeiro",
     },
@@ -564,7 +574,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "last_4" },
-        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
+        display: { token_display: "display_partial", echo_to_customer: "none" },
       },
       lgpd: "pessoal",
     },
@@ -579,7 +589,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       },
       mascara: {
         by_role: { operator: "email_domain" },
-        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
+        display: { token_display: "display_partial", echo_to_customer: "none" },
       },
       lgpd: "pessoal",
     },
@@ -632,7 +642,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: {},
       mascara: {
         by_role: { operator: "hidden" },
-        display: { token_display: "hidden", echo_to_customer: "none", echo_to_operator: "none" },
+        display: { token_display: "hidden", echo_to_customer: "none" },
       },
       lgpd:          "credencial",
       declared_only: true,
@@ -654,7 +664,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: {},
       mascara: {
         by_role: { operator: "hidden" },
-        display: { token_display: "hidden", echo_to_customer: "none", echo_to_operator: "none" },
+        display: { token_display: "hidden", echo_to_customer: "none" },
       },
       lgpd:          "financeiro",
       declared_only: true,
@@ -673,8 +683,9 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
     //     o que é), daí `declared_only`;
     //   · `by_role.operator: "hidden"` — o operador não vê. `hidden` remove o campo,
     //     e é o mais forte do `ContextMaskingType`;
-    //   · `display`: não aflora em canal nenhum e **não ecoa para ninguém** —
-    //     `echo_to_operator: "none"` é o único do catálogo, e é deliberado;
+    //   · `display`: não aflora em canal nenhum. O que garante que o operador não
+    //     o veja é o `by_role.operator: "hidden"` acima — o eixo de eco deixou de
+    //     ter a ponta do operador na ALW-17 (2026-09-12);
     //   · `lgpd: "nao_classificado"` — ver o comentário do enum. Dizer `none` seria
     //     afirmar que não é dado pessoal; dizer `sensivel`/`credencial` seria uma
     //     afirmação jurídica que ninguém fez.
@@ -685,7 +696,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: {},
       mascara: {
         by_role: { operator: "hidden" },
-        display: { token_display: "hidden", echo_to_customer: "none", echo_to_operator: "none" },
+        display: { token_display: "hidden", echo_to_customer: "none" },
       },
       lgpd:          "nao_classificado",
       declared_only: true,
@@ -721,7 +732,7 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       formato: { display: "##/##" },
       mascara: {
         by_role: { operator: "last_2" },
-        display: { token_display: "display_partial", echo_to_customer: "none", echo_to_operator: "masked" },
+        display: { token_display: "display_partial", echo_to_customer: "none" },
       },
       lgpd:          "financeiro",
       declared_only: true,

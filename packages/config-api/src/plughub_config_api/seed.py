@@ -582,7 +582,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "last_2"},
                         "display": {"token_display": "display_partial",
-                                    "echo_to_customer": "none", "echo_to_operator": "masked"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "pessoal",
                 },
@@ -597,7 +597,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "last_4"},
                         "display": {"token_display": "display_partial",
-                                    "echo_to_customer": "none", "echo_to_operator": "masked"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "financeiro",
                 },
@@ -614,7 +614,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "last_4"},
                         "display": {"token_display": "display_partial",
-                                    "echo_to_customer": "none", "echo_to_operator": "masked"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "pessoal",
                 },
@@ -628,7 +628,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "email_domain"},
                         "display": {"token_display": "display_partial",
-                                    "echo_to_customer": "none", "echo_to_operator": "masked"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "pessoal",
                 },
@@ -661,7 +661,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "hidden"},
                         "display": {"token_display": "hidden",
-                                    "echo_to_customer": "none", "echo_to_operator": "none"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "credencial",
                     "declared_only": True,
@@ -672,7 +672,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "hidden"},
                         "display": {"token_display": "hidden",
-                                    "echo_to_customer": "none", "echo_to_operator": "none"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "financeiro",
                     "declared_only": True,
@@ -688,7 +688,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "hidden"},
                         "display": {"token_display": "hidden",
-                                    "echo_to_customer": "none", "echo_to_operator": "none"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "nao_classificado",
                     "declared_only": True,
@@ -706,7 +706,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "mascara": {
                         "by_role": {"operator": "last_2"},
                         "display": {"token_display": "display_partial",
-                                    "echo_to_customer": "none", "echo_to_operator": "masked"},
+                                    "echo_to_customer": "none"},
                     },
                     "lgpd": "financeiro",
                     "declared_only": True,
