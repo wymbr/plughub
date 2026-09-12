@@ -68,6 +68,25 @@ específico. Registrar aqui para que ninguém releia o corolário antigo como in
 coexistência forte com o plano de discagem existente; o cliente não aceita repontar os DIDs de
 atendimento.
 
+> ⚠️ **Emenda de 2026-09-12 — o CTI tem DOIS níveis, e o caso comum precisa só do primeiro.**
+> O motivo real de integrar CTI, levantado pelo dono, **não é mídia: é ocupação do agente.** Quando
+> a mesma pessoa atende voz na central e chat na plataforma, nenhuma das duas conhece a
+> disponibilidade real, e a plataforma entrega chat a quem já está em chamada.
+>
+> - **Nível 1 — presença.** Ler o estado do ramal (livre / tocando / falando / ACW) e apenas
+>   **evitar** entregar. É CTI **somente leitura**, muito menor que a matriz de drivers
+>   (D3/D4/D10), e degrada seguro: feed caído ⇒ trate como ocupado. Resolve por inteiro o caso
+>   descrito, e o modelo já tem onde pendurá-lo — `busy_elsewhere` no snapshot de pool existe
+>   exatamente para recurso ocupado fora daquele pool.
+> - **Nível 2 — roteamento unificado.** A plataforma decide e **comanda** a central (D12). É o CTI
+>   inteiro, com o modo de falha de um comando que falha e deixa a chamada sem destino.
+>
+> **E há a opção de custo zero, que precede as duas: particionar os AGENTES, não as chamadas.** Se
+> cada pessoa atende por uma plataforma só, não há presença a compartilhar, não há CTI e não há
+> desenvolvimento — e é isso que torna a alternativa preferida (desvio seletivo no SBC, duas
+> plataformas em paralelo) realmente sem custo de engenharia. Vale perguntar ao cliente se o
+> compartilhamento do agente é **requisito** ou **hábito**.
+
 ---
 
 ## 1. Problema

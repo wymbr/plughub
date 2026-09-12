@@ -8,6 +8,11 @@
 - **Relação com o CTI:** é o **modo SIP** de
   [`adr-cti-gateway-multi-driver.md`](adr-cti-gateway-multi-driver.md) §0, extraído para arco
   próprio. Os dois modos são ofertas paralelas, não fases um do outro.
+- **Emendado em 2026-09-12**, por decisão do dono, depois de uma discussão sobre ambiente de teste
+  e sobre integração com IP Office: **V1** passa a comprar **uma** camada em vez de três (só a
+  sala é nossa); **as fases foram reordenadas** — WebRTC primeiro, perna SIP como última milha com
+  gatilho comercial; **§8** foi reagrupado, e quase nada bloqueia o V-F0. O ADR de CTI ganhou, no
+  mesmo dia, a distinção entre **presença** e **roteamento unificado**.
 
 ---
 
@@ -51,21 +56,40 @@ de telecom) e o valor (parece de um cliente, é capacidade de produto).
 
 ## 3. Decisões
 
-### V1 — O plano de mídia **não tem topologia própria**: acompanha o deploy da plataforma
+### V1 — Uma camada é nossa: a SALA. Interconexão e borda são contratáveis
 
-Não existe decisão "on-prem × nuvem para a mídia". O SFU e a borda SIP são **parte da unidade de
-deploy da PlugHub**: onde a plataforma roda, a mídia roda. Consequências, todas de peso:
+> ⚠️ **Reescrito em 2026-09-12, por decisão do dono.** A versão original dizia que *"o SFU e a
+> borda SIP são parte da unidade de deploy da PlugHub"* e que, em nuvem, *"a borda SIP e o SBC são
+> responsabilidade da plataforma, não do cliente"*. Isso comprava **três** camadas quando só uma
+> precisa ser nossa — e era a decisão mais cara do arco, a que transformava a PlugHub em operação
+> de telecom.
 
-- **elimina SFU como serviço de terceiro (SaaS).** O componente tem de ser auto-hospedável nas
-  duas topologias — o que mantém LiveKit self-hosted como candidato e descarta qualquer SFU que
-  só exista como nuvem alheia.
-- **no deploy on-premise não há WAN no caminho da voz e não há SBC**, porque plataforma e central
-  estão na mesma rede. É a configuração de melhor qualidade e menor superfície, e ela cai de
-  graça.
-- **no deploy em nuvem, a borda SIP e o SBC são responsabilidade da plataforma**, não do cliente
-  — parte do produto, não do projeto de implantação.
+Voz tem três camadas, e elas se contratam separadamente:
+
+| Camada | Contratável? | Quem faz |
+|---|---|---|
+| Interconexão com a PSTN (numeração, portabilidade, fraude, regulatório) | **sim** | ITSP, ou o PABX do cliente |
+| Borda / SBC (SIP público, TLS/SRTP, anti-DDoS) | **sim** | SBC gerenciado, appliance, ou o que o cliente já tem |
+| **Plano de mídia — a SALA** | **não** | a plataforma |
+
+A terceira não é contratável porque é onde vivem gravação, STT/TTS, supervisão e avaliação. Mídia
+de terceiro custa exatamente aquilo que justifica a voz estar aqui.
+
+Consequências:
+
+- **continua valendo: nada de SFU como serviço de terceiro (SaaS).** O componente tem de ser
+  auto-hospedável nas duas topologias — o que mantém LiveKit self-hosted como candidato e descarta
+  qualquer SFU que só exista como nuvem alheia.
+- **a borda pública deixa de ser obrigação da plataforma.** No cenário preferido de implantação o
+  cliente **já tem SBC**, e o desvio seletivo do tráfego acontece nele — sem tronco interno do
+  PABX e, portanto, **sem licença de canal** e sem o dobro de canais na central (o corolário do
+  ADR de CTI §0 vale só para a topologia por tronco interno).
+- **no deploy on-premise não há WAN no caminho da voz**, porque plataforma e central estão na
+  mesma rede. Continua sendo a configuração de melhor qualidade e menor superfície.
 - **o dimensionamento de mídia entra no dimensionamento da plataforma** (CPU/banda por chamada
-  concorrente), não num orçamento separado.
+  concorrente) — agora só o da sala e o do conversor, não o da borda.
+- **o que sobra de telecom para nós é o enlace com o SBC**: codec, transporte de DTMF e TLS/SRTP.
+  Deixa de ser decisão de arquitetura e vira **checklist de projeto por cliente** (§8).
 
 ### V2 — Reconstruir o canal `voice`; **não** criar canal novo
 
@@ -241,30 +265,40 @@ SFU em compose e no deploy, credenciais, SDK como dependência real, provider re
 credencial (V6). **É o gate que torna todo o resto mensurável** — enquanto ele não existir,
 qualquer fase seguinte pode ficar verde sem funcionar.
 
-**V-F1 — perna SIP entrante.** Tronco (operadora ou PABX) → sala. Um contato de voz percorre
-admissão, roteamento, fila e alocação; o agente atende no browser. Ainda **sem IA na voz**.
-Fecha A4 (o humano finalmente entra na conferência) e é a primeira vez que o canal `voice`
-publica algo em `conversations.inbound`.
+> ⚠️ **Reordenadas em 2026-09-12.** A ordem original punha a perna SIP como V-F1, antes do bot
+> leg: o valor só aparecia na terceira fase, e a primeira já exigia telecom. **Tudo, menos a
+> última milha, é exercitável por WebRTC — sem operadora, sem SBC, sem PABX.** A perna SIP passou
+> a ser a última fase, com gatilho comercial declarado, e a validação virou V-F6.
+
+**V-F1 — sala e perna do agente no browser.** Contato de voz/vídeo ponta a ponta por WebRTC:
+admissão, roteamento, fila e alocação; o agente atende no browser. Ainda **sem IA na voz**. Fecha
+A4 (o humano finalmente entra na conferência) e é a primeira vez que o canal publica algo em
+`conversations.inbound`. **Sem telecom.**
 
 **V-F2 — bot leg: STT/TTS.** URA e agente IA por voz; `notify` falado; `menu` por voz com DTMF
 **e** STT — o que conserta o `collect` morto de A2. A partir daqui a voz tem transcrição, e
-portanto histórico, contexto e avaliação.
+portanto histórico, contexto e avaliação. **Ainda sem telecom.**
 
 **V-F3 — gravação.** Por segmento, com aviso e opt-out (V7), no AttachmentStore com classe de
 retenção (V5). Requer a decisão de retenção de A5 tomada antes.
 
-**V-F4 — egress e supervisão.** `REFER`/bridge para ramal interno de PABX (é aqui que o modo SIP
-encosta numa central, e é só aqui); supervisor `hidden` com sussurro e take-over.
+**V-F4 — supervisão.** Supervisor `hidden` com sussurro e take-over.
 
-**V-F5 — validação.** E2E com traço gravado + gate de instalação limpa (`--wipe`), porque um
+**V-F5 — perna SIP: a última milha.** Tronco (SBC do cliente ou ITSP) → sala, por **conversor
+pronto**; `REFER`/bridge para ramal interno quando houver central — é aqui que o modo SIP encosta
+numa central, e é só aqui. **É a única fase que exige telecom**, e entra por **gatilho comercial**
+(o primeiro cliente com PABX/SBC, ou a oferta de voz pública), não por ordem de roteiro.
+
+**V-F6 — validação.** E2E com traço gravado + gate de instalação limpa (`--wipe`), porque um
 ambiente que só sobe porque já subiu antes não está sendo verificado.
 
 ---
 
 ## 6. Invariantes
 
-1. **A mídia acompanha o deploy da plataforma.** Não existe topologia de mídia separada, nem SFU
-   de terceiro.
+1. **A SALA acompanha o deploy da plataforma**; interconexão e borda podem ser contratadas (V1,
+   reescrito em 2026-09-12). Continua valendo: nada de SFU de terceiro, e nenhuma topologia de
+   mídia separada por cliente.
 2. **Sem credencial, o provider recusa.** Nenhum token, sala ou egress falso. Modo mock é
    escolhido explicitamente ou não existe.
 3. **O bot leg é o único ponto de conversão áudio↔texto.** Nada acima dele sabe que há áudio.
@@ -298,20 +332,31 @@ ambiente que só sobe porque já subiu antes não está sendo verificado.
 
 ---
 
-## 8. O que decidir antes de V-F0
+## 8. O que decidir, e quando
 
-1. ~~**Retenção de gravação** (A5): 5 anos, 30 dias, ou ambos.~~ **Decidido 2026-08-19:** item de
-   config por classe no namespace `storage` (V5). O que resta é escolher o **default de cada
-   classe**, e isso é decisão de negócio/jurídico, não de arquitetura. Bloqueia V-F3.
-2. **Codec e transcodificação.** G.711 fim-a-fim é o caminho barato e universal; Opus na perna do
-   agente exige transcodificar. Define custo de CPU por chamada e, portanto, o dimensionamento de
-   V1.
-3. **TLS/SRTP obrigatório ou negociável** na borda SIP (V10).
-3b. **`REFER` de saída é suportado pelo gateway SIP?** (V3, custo 3) Define se o handoff para ramal
-   de PABX libera a plataforma do caminho da mídia ou a mantém em bridge — muda a conta de canais
-   consumidos na central e o desenho da transferência de saída.
-4. **Failover.** O que acontece com chamadas em curso quando a plataforma cai — e, no deploy
-   on-premise ao lado de uma central, se existe overflow para ela.
+> ⚠️ **Reagrupado em 2026-09-12.** Com as fases reordenadas, **quase nada precisa ser decidido
+> antes de V-F0** — e esse é o ponto da mudança. As decisões de telecom migraram para V-F5 e, em
+> boa parte, deixaram de ser arquitetura: viram checklist de projeto por cliente.
+
+**Antes de V-F0:** nada. Subir o SFU em compose não depende de nenhuma decisão abaixo.
+
+**Antes de V-F3:** o **default de retenção por classe**. O mecanismo já está decidido (item de
+config por classe no namespace `storage`, V5); o que falta é decisão de negócio/jurídico, e o A5
+registra um conflito doc×doc (5 anos × 30 dias) que nenhum código arbitra.
+
+**Antes de V-F5, e por cliente:**
+
+- **Codec — direção fechada em 2026-09-12: G.711 nas chamadas com perna SIP.** Os navegadores
+  falam PCMU/PCMA além de Opus, então o conversor faz **relay, não transcodificação**, e o custo
+  por chamada fica pequeno; Opus fica para o que é só browser. Transcodificar é o que pesa, e
+  evitá-lo é a decisão.
+- **Transporte de DTMF fora de banda** (RFC 4733) nas duas pernas — é o que a `NIV-07` cobra.
+- **TLS/SRTP obrigatório ou negociável** no enlace com o SBC (V10).
+- **`REFER` de saída suportado pelo gateway?** (V3) Define se o handoff para ramal libera a
+  plataforma do caminho da mídia ou a mantém em bridge.
+
+**Sem fase atrelada:** **failover** — o que acontece com chamadas em curso quando a plataforma
+cai, e se há overflow para a central no deploy on-premise.
 
 ---
 
@@ -320,7 +365,9 @@ ambiente que só sobe porque já subiu antes não está sendo verificado.
 | Risco | Mitigação |
 |---|---|
 | Repetir o Arc 15: infraestrutura ausente com código verde | V6 (recusa alta) + V9 + V-F0 como fase própria e primeira |
-| Assumir responsabilidade de telecom sem sinalizar | V1 explicita que qualidade de áudio passa a ser da plataforma; dimensionamento entra no deploy |
+| Assumir responsabilidade de telecom sem sinalizar | V1 **reescrito em 2026-09-12**: só a sala é nossa, interconexão e borda são contratadas. O que resta (codec, DTMF, TLS/SRTP no enlace) é checklist de projeto, não operação de telecom |
+| Valor tardio — duas fases de infraestrutura antes de qualquer função visível | Reordenação de 2026-09-12: V-F1 e V-F2 entregam contato e IA por voz **antes** de qualquer telecom |
+| Bifurcar em duas pilhas de mídia (WebRTC e SIP separadas) | V3 — uma sala por sessão, a perna SIP é participante. O custo de bifurcar não está na mídia: está em gravação, supervisão, transcrição e avaliação, que ficam ACIMA dela. Reabrir só com número de concorrência medido |
 | Retenção decidida por omissão | A5 é bloqueio declarado de V-F3, não item de backlog |
 | Borda SIP exposta sem classificação | V10 + probe próprio, espelhando o que a allowlist HTTP já faz |
 | Concorrência de eventos na fronteira de mídia | O bridge não garante ordem (A9); o estado de perna deve ser idempotente por `(session, participante, estado)` |
