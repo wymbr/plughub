@@ -323,6 +323,53 @@ def _stl() -> int:
     return int(session_config.get("orchestrator_session_ttl_s", 14_400))
 
 
+async def _participation_ttl_s(
+    redis_client: aioredis.Redis, tenant_id: str, session_id: str,
+) -> int:
+    """ORF-02 — TTL das chaves de PARTICIPACAO, derivado do prazo do ITEM.
+
+    As duas chaves que fecham o segmento do claimante
+    (`participant_joined_at:{inst}` e `segment:{inst}`) nasciam com o TTL da
+    SESSAO (4 h). Um item de wrap-up vive ate 25 h (prazo 24 h + 1 h), entao toda
+    tarefa concluida mais de 4 h depois do claim publicava `participant_joined` e
+    NUNCA o `participant_left`: segmento aberto para sempre no analytics.
+
+    Medido em 2026-09-12 (`59485f70`): claim 18:52, submit 17h30 depois, chaves
+    expiradas, `left` ausente no topico enquanto o stream tinha o par certo.
+
+    A regra: **a janela de participacao dura pelo menos o que dura o trabalho que
+    ela mede**. O prazo vem do proprio ledger do item (`{t}:work_task:{sid}`,
+    campo `deadline`), com uma hora de folga — a mesma que o ledger ja usa. Sem
+    item parqueado (contato normal), nada muda: continua o TTL da sessao.
+    """
+    base = _stl()
+    try:
+        raw = await redis_client.get(f"{tenant_id}:work_task:{session_id}")
+        if not raw:
+            return base
+        dados = json.loads(raw if isinstance(raw, str) else raw.decode())
+        prazo = str(dados.get("deadline") or "")
+        if not prazo:
+            return base
+        restante = int(
+            (datetime.fromisoformat(prazo) - datetime.now(timezone.utc)).total_seconds()
+        ) + 3600
+    except Exception as exc:
+        # Degradacao BARULHENTA: cair no TTL da sessao e voltar ao defeito para
+        # tarefas longas, e o sintoma (segmento aberto) aparece horas depois, longe
+        # daqui. Quem ler o log tem de conseguir ligar as duas pontas.
+        logger.warning(
+            "ORF-02: nao derivei o TTL de participacao do prazo do item "
+            "(session=%s tenant=%s): %s — caindo no TTL da sessao (%ss); se esta "
+            "tarefa passar disso, o segmento do claimante ficara ABERTO",
+            session_id, tenant_id, exc, base,
+        )
+        return base
+    # O teto existe porque o prazo vem de dado gravado: um `deadline` corrompido
+    # nao pode virar chave imortal. 27 h = 25 h de item + folga.
+    return max(base, min(restante, 97_200))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Redação da resposta do cliente — UMA decisão, quatro destinos
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1473,11 +1520,14 @@ async def activate_human_agent(
     # ── Arc 5: generate segment_id for this participation window ─────────────────
     _seg_id = str(uuid.uuid4())
     _seq_idx = 0
+    # ORF-02 — a janela de participacao dura pelo menos o que dura o item que ela
+    # mede (ver `_participation_ttl_s`). Contato sem item parqueado nao muda.
+    _part_ttl = await _participation_ttl_s(redis_client, tenant_id, session_id)
     if instance_id:
         try:
             await redis_client.setex(
                 f"session:{session_id}:participant_joined_at:{instance_id}",
-                14400,
+                _part_ttl,
                 _joined_iso,
             )
         except Exception:
@@ -1490,13 +1540,13 @@ async def activate_human_agent(
             # Store segment_id keyed by instance_id for retrieval on participant_left
             await redis_client.setex(
                 f"session:{session_id}:segment:{instance_id}",
-                14400,
+                _part_ttl,
                 _seg_id,
             )
             # Store as current primary segment for conference specialists
             await redis_client.setex(
                 f"session:{session_id}:primary_segment",
-                14400,
+                _part_ttl,
                 _seg_id,
             )
         except Exception:
@@ -9142,6 +9192,20 @@ async def _handle_webhook_session_resumed(
                 )
         except Exception:
             pass
+        if not (_cl_joined_iso and _cl_seg_id):
+            # ORF-02 — ate 2026-09-12 este caso saia SEM LINHA NENHUMA: faltando
+            # qualquer das duas chaves, o `participant_left` do claimante nunca era
+            # publicado e o segmento ficava aberto no analytics, para sempre. Nao ha
+            # veredicto a dar aqui (o resume segue), mas ha um fato a nomear — sem
+            # ele, o unico sinal era a AUSENCIA da linha de sucesso.
+            logger.warning(
+                "ORF-02: fechamento do segmento do CLAIMANTE NAO aconteceu — "
+                "session=%s claimant=%s joined_at=%s segment_id=%s (chave ausente ou "
+                "expirada). O `participant_left` nao sai e o segmento fica ABERTO no "
+                "analytics; ver `_participation_ttl_s`",
+                session_id, _claimant_instance_id,
+                _cl_joined_iso or "(ausente)", _cl_seg_id or "(ausente)",
+            )
         if _cl_joined_iso and _cl_seg_id:
             _cl_duration_ms: int | None = None
             try:
