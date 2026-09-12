@@ -106,8 +106,11 @@ NL = chr(10)
 alvos = [
     ("coerceMultiAnswer",
      "packages/skill-flow-engine/src/steps/menu.ts", "coerce.ts", ""),
+    # `sanitizeCategoryPath` MUDOU DE CASA em 2026-09-06 (vive em
+    # `@plughub/schemas`); o `segment.ts` so a IMPORTA. O recorte apontava para o
+    # consumidor e saia INCONCLUSIVO "funcao renomeada" — o alvo e a definicao.
     ("sanitizeCategoryPath",
-     "packages/mcp-server-plughub/src/tools/segment.ts", "sanitize.ts", ""),
+     "packages/schemas/src/agent-events.ts", "sanitize.ts", ""),
     ("deriveAgentEvents",
      "packages/mcp-server-plughub/src/tools/segment.ts", "derive.ts",
      "type FormQuestion = any" + NL

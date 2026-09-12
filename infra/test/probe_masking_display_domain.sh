@@ -235,21 +235,32 @@ if menu.count("masked_types:") < 3:      # 2 payloads de canal + 1 waitingMeta
     erros.append("menu.ts: masked_types em %d sítios (esperado >=3)" % menu.count("masked_types:"))
 
 # ── F3: as DUAS casas de eco do operador consomem e apertam ──────────────────
-# bridge (destino 1) e echo do Console. As duas têm de tratar `none` REMOVENDO,
-# e nenhuma pode devolver o valor cru para `plain` — o tipo aperta, nunca afrouxa.
+# bridge (destino 1) e echo do Console. Nenhuma pode devolver o valor cru para
+# `plain` — o tipo aperta, nunca afrouxa.
+#
+# ⚠️ REESCRITO em 2026-09-12. Este ramo exigia que as duas tratassem `none`
+# REMOVENDO o campo, e a MSK-03 (2026-09-10, decisao do dono) inverteu isso:
+# remove-se o VALOR, nunca o CAMPO. O ramo ficou VERMELHO por dois dias afirmando
+# a regra revogada, e ninguem viu porque a bateria nao rodava — gate que cobra
+# regra morta e pior que gate nenhum, porque parece cobertura.
+# O comportamento (as tres casas concordando byte a byte) e medido por
+# `probe_masked_field_echo_parity.sh`, que COMPILA e EXECUTA as tres; aqui fica o
+# que e barato e estrutural: quem usa o helper, e a REGRESSAO de volta a remocao.
 bridge = io.open("packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py",
                  encoding="utf-8").read()
 if "echo_policy" not in bridge:
     erros.append("bridge: destino 1 não passa echo_policy")
-if 'modo == "none"' not in bridge:
-    erros.append("bridge: `none` não remove o campo")
+if "masked_field_echo" not in bridge:
+    erros.append("bridge: o eco não passa por `masked_field_echo` (MSK-03)")
+if 'modo == "none"' in bridge:
+    erros.append("bridge: REGRESSÃO — `none` voltou a REMOVER o campo (MSK-03)")
 
 console = io.open("packages/platform-ui/src/modules/agent-assist/AgentAssistPage.tsx",
                   encoding="utf-8").read()
-if "masked_types" not in console:
-    erros.append("Console: o eco não lê masked_types")
-if 'modo === "none"' not in console or "delete redacted[fieldId]" not in console:
-    erros.append("Console: `none` não remove o campo")
+if "maskedFieldEcho" not in console:
+    erros.append("Console: o eco não passa por `maskedFieldEcho` (MSK-03)")
+if "delete redacted[fieldId]" in console:
+    erros.append("Console: REGRESSÃO — o eco voltou a REMOVER o campo (MSK-03)")
 # A regressão que importa: o Console voltar a exibir o valor cru de campo mascarado.
 if re.search(r"redacted\[fieldId\]\s*=\s*(result|value)", console):
     erros.append("Console: campo mascarado recebendo valor CRU")
