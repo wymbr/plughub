@@ -356,11 +356,37 @@ export const AgentAssistPage: React.FC = () => {
         // prompt inline; limpa a sessão de atendimento na hora (o cleanup completo —
         // unregisterSession/deseleção final — vem no session.closed que o bridge emite
         // ao fim do NPS). Fail-open: sem sinal → inline (não regride).
-        let inlineWrapup = true;
-        try {
-          const j = await resp.json() as { inline_wrapup?: boolean };
-          inlineWrapup = j?.inline_wrapup !== false;
-        } catch { /* fail-open: inline */ }
+        // ── PUL-07 — fechar TAREFA DE FORMULÁRIO pendente NÃO fecha: devolve ──
+        // O backend (guarda em /api/agent_done) decide pelo ledger, não pela tela:
+        // `returned_to_queue` = o item voltou à fila reservado a este agente, com o
+        // formulário intacto; 409 = a tarefa é de outro (ou sem dono) e segue
+        // pendente. Nos dois casos o cartão sai daqui — o que muda é o que se diz.
+        let respJson: { inline_wrapup?: boolean; returned_to_queue?: boolean; reason?: string } = {};
+        try { respJson = await resp.json() as typeof respJson; } catch { /* fail-open: inline */ }
+        if (resp.status === 409 || respJson.returned_to_queue === true) {
+          const devolvida = respJson.returned_to_queue === true;
+          console.warn(
+            `[agent-assist] PUL-07: ${devolvida ? "tarefa DEVOLVIDA à fila" : "fechamento RECUSADO"} ` +
+            `(${respJson.reason ?? "sem motivo"}) — session=${sessionId}`,
+          );
+          setContacts(prev => {
+            if (!prev.has(sessionId)) return prev;
+            const next = new Map(prev);
+            next.delete(sessionId);
+            return next;
+          });
+          if (selectedSessionId === sessionId) setSelectedSessionId(null);
+          // Sai do conjunto de "já tratadas": a tarefa continua existindo, e pode
+          // voltar a esta tela pelo claim (ou pela reidratação do ledger, PUL-05).
+          handledSessions.current.delete(sessionId);
+          setInboxRefreshSignal((n) => n + 1);
+          addToast(
+            t(devolvida ? "message.taskReturnedToQueue" : "message.taskCloseRefused"),
+            devolvida ? "info" : "error",
+          );
+          return;
+        }
+        const inlineWrapup = respJson.inline_wrapup !== false;
         setContacts(prev => {
           const c = prev.get(sessionId);
           if (!c) return prev;
@@ -381,7 +407,7 @@ export const AgentAssistPage: React.FC = () => {
         addToast(t("message.closingError"), "error");
       }
     },
-    [addToast, setContacts, setSelectedSessionId, selectedSessionId, handledSessions, contacts, t]
+    [addToast, setContacts, setSelectedSessionId, selectedSessionId, handledSessions, contacts, t, setInboxRefreshSignal]
   );
 
   const handleMenuSubmit = useCallback(

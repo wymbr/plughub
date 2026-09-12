@@ -160,6 +160,8 @@
     "closingWrapUp": "Aguardando finalização (wrap-up/NPS)…",
     "closedDetached": "Atendimento encerrado. Wrap-up na sua fila.",
     "closingError": "Erro ao encerrar atendimento.",
+    "taskReturnedToQueue": "Tarefa nao enviada: devolvida a sua fila, com o formulario intacto.",
+    "taskCloseRefused": "Nao foi possivel encerrar: a tarefa de formulario segue pendente.",
     "menuSubmitFailed": "Falha ao enviar resposta.",
     "networkError": "Erro de rede ao enviar resposta.",
     "hungUpByAgent": "Desligado pelo agente",

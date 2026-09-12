@@ -160,6 +160,8 @@
     "closingWrapUp": "Waiting for finalization (wrap-up/NPS)…",
     "closedDetached": "Contact closed. Wrap-up queued in your inbox.",
     "closingError": "Error closing session.",
+    "taskReturnedToQueue": "Task not submitted: returned to your queue with the form intact.",
+    "taskCloseRefused": "Could not close it: the form task is still pending.",
     "menuSubmitFailed": "Failed to submit response.",
     "networkError": "Network error sending response.",
     "hungUpByAgent": "Hung up by agent",

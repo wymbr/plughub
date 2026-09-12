@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-12 (1) — PUL-07: encerrar tarefa de formulário PENDENTE é devolvê-la à fila
+
+`5120fe90` e `4841c60d` (2026-09-11) eram wrap-ups reivindicados cujo formulário abriu
+VAZIO (CNS-24). Sem as tags no snapshot, o Console não reconheceu a tarefa, mostrou a
+barra de atendimento **com "Encerrar"**, e o fechamento apagou o `resume_token`
+(`cancel_pending_resumes`, RET-03): a tabulação dos dois contatos se perdeu, e é
+irrecuperável. A CNS-24 removeu a causa daquele dia; não removeu a CLASSE.
+
+### 1 · Por que o guarda NÃO mora na tela
+
+O Console já troca a barra de ações por "Return to queue" quando `isFormFillSnapshot`
+dá verdadeiro — **e foi essa checagem que falhou**, porque ela depende do snapshot
+renderizado, exatamente a coisa que pode faltar. Perguntar ao mesmo dado que falhou é
+repetir o defeito com outro nome. O fato que decide é do SERVIDOR: existe item parqueado
+no ledger (`{t}:work_task:{sid}`) com token vivo? É a regra do D5 (*a tela não é fonte
+de posse*) aplicada ao FECHAMENTO.
+
+O guarda está em `POST /api/agent_done/:sessionId`, decidido por `decideFormTaskClose`
+(`lib/form-task-close.ts`, pura):
+
+| Estado do ledger | Ação |
+|---|---|
+| sem item | `close` — contato normal, nada muda |
+| item, token CANCELADO | `close` — não há o que preservar (item morto da PUL-06) |
+| item vivo, detido por MIM | **`return_to_queue`** — o trabalho segue existindo |
+| item vivo, detido por OUTRO | `refuse` (409) — matar o token alheio é o mesmo defeito |
+| item vivo, sem dono / chamador sem identidade | `refuse` — devolver exige posse |
+
+**Token NÃO conferido conta como VIVO**: desconhecido não é morto, e o custo dos dois
+erros é assimétrico — devolver à fila por engano é reversível (basta reivindicar de
+novo); fechar por engano apaga o token e a tabulação. A posse é lida na ordem
+lease → registro, a MESMA de `work_task_holder` e `listPendingWorkTasks`: três leitores,
+uma ordem só.
+
+A devolução usa o mesmo `releaseTask` do botão "Return to queue" e responde **200** com
+`returned_to_queue` — do ponto de vista do agente a ação terminou; o que mudou foi o
+desfecho, e o Console precisa saber qual para dizê-lo a ele (novas mensagens em en e
+pt-BR). Falha de LEITURA do ledger loga: sem ela o guarda deixa de existir, e é assim
+que o defeito volta.
+
+### 2 · Falseabilidade
+
+Unidade: `form-task-close.test.ts`, 8 casos (um por ramo, mais o que exige motivo em
+todos). Suíte do mcp-server **313/313**, `tsc --noEmit` limpo nos dois pacotes, gate de
+i18n verde.
+
+Ao vivo, com a condição REPRODUZIDA de propósito — a tag `core.workflow.dialog_form_id`
+removida do ctx de uma tarefa viva (`579dde69`), que é o que a CNS-11 provocava:
+
+1. a tela deixou de reconhecer a tarefa e o botão **Close** reapareceu (o estado que
+   matou os dois de ontem);
+2. o clique NÃO fechou: `[agent_done] PUL-07: tarefa de formulário PENDENTE devolvida à
+   fila (form_task_pending)`, `work_task_release … requeued=True`, item de volta à fila
+   **reservado ao autor**, token VIVO, sem marcador `closed`;
+3. tag restaurada, item reivindicado de novo, formulário enviado: `work_task_expire …
+   reason=task_done`, pipeline `completed`.
+
+⚠️ A condição foi provocada, não observada de novo em produção — é o preço de a CNS-24
+já ter fechado a causa daquele dia. O que o teste prova é o GUARDA, não a recorrência.
+
+⚠️ Deploy só de `mcp-server-plughub` e `platform-ui` (`--no-deps`): bridge,
+channel-gateway e routing-engine ficaram de pé porque os logs deles são a evidência da
+conferência agendada da PUL-06.
+
 ## 2026-09-11 (2) — PUL-05: o item em posse volta à tela do dono pelo LEDGER
 
 Três wrap-ups do operator@ estavam pendentes e o Console não mostrava nenhum. A

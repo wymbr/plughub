@@ -65,6 +65,7 @@ import { writeStreamEntry }        from "./lib/write-stream-entry"
 import { sentimentFromCtxHash }    from "./lib/session-sentiment"
 import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-filter"
 import { decideLedgerRehydration, type LedgerCandidate } from "./lib/ledger-rehydration"
+import { decideFormTaskClose }  from "./lib/form-task-close"
 // Política de máscara do ContextStore — UMA casa, importada pelas duas portas
 // (este endpoint HTTP e o tool MCP `supervisor_state`). Ver o cabeçalho de
 // `lib/context-masking.ts`: viviam aqui, alcançáveis só de dentro deste arquivo,
@@ -2693,6 +2694,86 @@ export async function startServer(config: ServerConfig): Promise<void> {
     try {
       const body    = req.body as Record<string, unknown>
       const outcome = (body?.outcome as string) ?? "resolved"
+
+      // ── PUL-07 — encerrar TAREFA DE FORMULÁRIO pendente é DEVOLVÊ-LA à fila ───
+      // Medido em 2026-09-11: `5120fe90` e `4841c60d` eram wrap-ups reivindicados
+      // cujo formulário abriu vazio (CNS-24). Sem as tags no snapshot o Console não
+      // reconheceu a tarefa, mostrou a barra de atendimento COM "Encerrar", e o
+      // fechamento apagou o `resume_token` (`cancel_pending_resumes`, RET-03): a
+      // tabulação dos dois contatos se perdeu, e é irrecuperável.
+      //
+      // ⚠️ O guarda mora AQUI e não na tela: o Console já troca a barra por
+      // "Return to queue" quando `isFormFillSnapshot` dá verdadeiro, e foi essa
+      // checagem que falhou — ela depende do snapshot renderizado, a coisa que pode
+      // faltar. O fato que decide é do servidor (ledger + token), como no D5.
+      const _ftTenant = process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo"
+      // `req.params` é `string | string[] | undefined` neste router; o resto da rota
+      // usa `sessionId` em template literal e não percebe. Aqui vira chave de Redis.
+      const _ftSid    = String(sessionId ?? "")
+      let _ftLedger: Record<string, unknown> | null = null
+      try {
+        const _ftRaw = await redis.get(keys.workTask(_ftTenant, _ftSid))
+        if (_ftRaw) _ftLedger = JSON.parse(_ftRaw) as Record<string, unknown>
+      } catch (err) {
+        // Ausência do ledger é o caminho NORMAL (contato comum). Falha de LEITURA
+        // não é: ela faz o guarda não existir, e é assim que o defeito volta.
+        console.warn(`[agent_done] PUL-07: leitura do ledger FALHOU — fechamento segue sem guarda: session=${sessionId}: ${String(err)}`)
+      }
+      if (_ftLedger) {
+        const _ftPool = String(_ftLedger["pool_id"] ?? "")
+        const _ftQsid = String(_ftLedger["queue_session_id"] ?? _ftSid)
+        const _ftTok  = String(_ftLedger["resume_token"] ?? "")
+        let _ftAlive:  boolean | null = null
+        let _ftHolder: string  | null = null
+        try {
+          if (_ftTok) _ftAlive = (await redis.hexists(`${_ftTenant}:resume_tokens`, _ftTok)) === 1
+          // Lease primeiro, registro depois — a MESMA ordem de `work_task_holder` e
+          // de `listPendingWorkTasks`. Três leitores da posse, uma ordem só.
+          const _ftLease  = await redis.get(keys.claimLease(_ftTenant, _ftPool, _ftQsid))
+          const _ftRecord = _ftLease ? null : await redis.get(keys.claimRecord(_ftTenant, _ftPool, _ftQsid))
+          const _ftRawHolder = _ftLease ?? _ftRecord
+          if (_ftRawHolder) {
+            _ftHolder = String((JSON.parse(_ftRawHolder) as Record<string, unknown>)["instance_id"] ?? "") || null
+          }
+        } catch (err) {
+          console.warn(`[agent_done] PUL-07: posse/token não conferidos — decidindo com o que há: session=${sessionId}: ${String(err)}`)
+        }
+        let _ftCaller = String(body?.["instance_id"] ?? "")
+        if (!_ftCaller) {
+          try {
+            const _ftMetaRaw = await redis.get(`session:${sessionId}:meta`)
+            if (_ftMetaRaw) _ftCaller = String((JSON.parse(_ftMetaRaw) as Record<string, string>)["instance_id"] ?? "")
+          } catch { /* sem meta: o veredicto recusa por `caller_unknown` */ }
+        }
+        const _ftVerdict = decideFormTaskClose(
+          { ledgerPresent: true, tokenAlive: _ftAlive, holderInstance: _ftHolder }, _ftCaller,
+        )
+        if (_ftVerdict.action === "return_to_queue") {
+          console.log(
+            `[agent_done] PUL-07: tarefa de formulário PENDENTE devolvida à fila (${_ftVerdict.reason}) ` +
+            `em vez de fechada — session=${sessionId} pool=${_ftPool} instance=${_ftCaller}`,
+          )
+          await releaseTask(_wqRoutingUrl, _wqAdminToken, {
+            tenant_id: _ftTenant, pool_id: _ftPool, session_id: _ftQsid, instance_id: _ftCaller,
+          }, kafka)
+          // 200, não erro: do ponto de vista do agente a ação TERMINOU — o que mudou
+          // foi o desfecho, e o Console precisa saber qual para dizê-lo a ele.
+          res.json({ returned_to_queue: true, reason: _ftVerdict.reason, session_id: sessionId, pool_id: _ftPool })
+          return
+        }
+        if (_ftVerdict.action === "refuse") {
+          console.warn(
+            `[agent_done] PUL-07: fechamento RECUSADO (${_ftVerdict.reason}) — a tarefa segue ` +
+            `pendente: session=${sessionId} pool=${_ftPool} caller=${_ftCaller || "(sem identidade)"}`,
+          )
+          res.status(409).json({ error: "form_task_pending", reason: _ftVerdict.reason, session_id: sessionId, pool_id: _ftPool })
+          return
+        }
+        console.log(
+          `[agent_done] PUL-07: item no ledger sem token vivo (${_ftVerdict.reason}) — ` +
+          `fechamento SEGUE, não há tabulação a preservar: session=${sessionId} pool=${_ftPool}`,
+        )
+      }
 
       // Look up contact_id, channel and pool_id from session metadata so we can
       // notify the customer's WebSocket via conversations.outbound and resolve the
