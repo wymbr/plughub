@@ -243,6 +243,14 @@
     "creating": "Creating…",
     "createError": "Failed to create the record.",
     "ambiguous": "This identifier matches more than one customer. Search by name, or use a more specific identifier.",
+    "invalidAnchor": "This identifier is not valid (for a phone without country code, check the tenant's default country).",
+    "anchorTaken": "This identifier already belongs to another customer. Search for that record instead.",
+    "existingLinked": "Customer already registered — linked ({{id}}).",
+    "kind": {
+      "phone": "Phone",
+      "email": "E-mail",
+      "cpf": "CPF"
+    },
     "created": "Record created and linked ({{id}}).",
     "cancel": "Cancel",
     "s360": {

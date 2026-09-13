@@ -2840,6 +2840,14 @@ class WebhookAdapter(ChannelAdapter):
         ok = await self._identity.update_attributes(tenant_id, customer_id, attributes)
         return {"updated": ok}
 
+    async def register_customer_by_operator(
+        self, tenant_id: str, anchors: list[dict], name: str, operator: str,
+    ) -> dict:
+        """IDN-08 — cadastro pelo Console, procedência `operator`. O portão é da ROTA."""
+        r = await self._identity.register_by_operator(tenant_id, anchors, name=name, operator=operator)
+        return {"outcome": r.outcome, "customer_id": r.customer_id, "reason": r.reason,
+                "invalid": r.invalid, "conflicts": r.conflicts, "anchors": r.anchors}
+
     async def import_customers(
         self, tenant_id: str, system: str, rows: list[dict], imported_by: str,
     ) -> dict:

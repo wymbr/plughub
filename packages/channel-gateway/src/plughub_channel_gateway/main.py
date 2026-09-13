@@ -27,6 +27,7 @@ import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .adapters.email import EmailAdapter
@@ -1255,6 +1256,63 @@ async def webhook_identity_attributes(body: IdentityAttributesRequest) -> dict:
 
 
 IDENTITY_IMPORT_MAX_ROWS = 1000
+
+
+class OperatorRegisterRequest(BaseModel):
+    # IDN-08: SEM `tenant_id` — ele vem do JWT. A sessão dá o POOL do recorte ABAC.
+    session_id: str
+    anchors:    list[IdentityAnchor]
+    name:       str = ""
+
+
+@app.post("/v1/channels/webhook/identity/operator/register", status_code=200)
+async def webhook_identity_operator_register(body: OperatorRegisterRequest, request: Request) -> JSONResponse:
+    """
+    IDN-08 — o operador cadastra o cliente do contato que atende, com procedência
+    `operator`, no cadastro DURÁVEL.
+
+      * Bearer obrigatório (`plughub_authz`); tenant do JWT, nunca do corpo;
+      * campo ABAC `agent_assist.atender` (read_write) RECORTADO ao pool da sessão —
+        quem cadastra é quem atende aquele contato, e o escopo do grant vale aqui;
+      * a sessão tem de existir e ser do tenant do token.
+
+    ⚠️ As rotas irmãs seguem sem credencial (IDN-06), e é por isso que o carimbo
+    `operator` NÃO passa por elas: um rótulo de origem que qualquer um alcança não
+    diz de onde a âncora veio.
+
+    200 `created|existing` · 422 âncora inválida (nomeada) · 409 ambíguo ou âncora
+    de outro cliente (nomeada).
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Identity resolver not available")
+    from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
+
+    _tok = bearer_from_header(request.headers.get("authorization"))
+    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
+    if not _payload:
+        raise HTTPException(status_code=401, detail="cadastro do operador exige credencial")
+    tenant = str(_payload.get("tenant_id") or "")
+    raw = await _webhook_adapter._redis.get(f"session:{body.session_id}:meta")
+    try:
+        meta = json.loads(raw) if raw else None
+    except Exception:
+        meta = None
+    if not meta or str(meta.get("tenant_id") or "") != tenant:
+        # Sessão de outro tenant responde igual à inexistente: não se confirma o que existe.
+        raise HTTPException(status_code=404, detail="sessao nao encontrada para este tenant")
+    pool = str(meta.get("pool_id") or "")
+    if not pool or not abac_can(_payload, "agent_assist", "atender", "read_write", scope_id=pool):
+        logger.warning("identity operator/register NEGADO: sub=%s pool=%s — sem agent_assist.atender",
+                       _payload.get("sub"), pool or "-")
+        raise HTTPException(status_code=403, detail="cadastro exige `agent_assist.atender` no pool da sessao")
+
+    out = await _webhook_adapter.register_customer_by_operator(
+        tenant, [a.model_dump() for a in body.anchors], body.name, str(_payload.get("sub") or ""),
+    )
+    status = 200
+    if out["outcome"] == "refused":
+        status = 422 if out["reason"] in ("invalid_anchors", "no_anchors") else 409
+    return JSONResponse(status_code=status, content=out)
 
 
 @app.post("/v1/channels/webhook/identity/import", status_code=200)

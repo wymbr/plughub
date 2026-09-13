@@ -275,6 +275,11 @@ probe_otp_gate.sh
 # formas que casam o mesmo cliente (quente, frio e rota viva), recusa sem pais, duas mutacoes
 # e a troca de pais AO VIVO no config-api (override removido num finally).
 probe_phone_region.sh
+# IDN-08. A aba Cliente criava o cadastro so no Redis, sem procedencia, e mandava
+# `kind: "telefone"` — a ancora era descartada calada. Portao da rota nova (Bearer, ABAC
+# `agent_assist.atender` no pool da sessao, tenant do JWT), procedencia `operator` gravada,
+# conflito que nao move a ancora de outro cliente, e duas mutacoes. Fixtures por hash e id.
+probe_identity_operator.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

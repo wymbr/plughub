@@ -84,6 +84,9 @@ sobre o eixo vizinho"*.
 **(8) Não há eixo de procedência.** O único eixo da âncora é `verification_class` — *como* foi
 provada. Nada diz *de onde veio*. A aba Cliente do Console cria cadastro e grava atributos por
 desenho (`ClienteTab.tsx:118`), e seu resultado é indistinguível de uma âncora vinda do CRM.
+*(Fechado em 2026-09-13: o eixo nasceu na PID-12/IDN-07, e o carimbo `operator` ganhou portador
+na IDN-08 — rota com credencial, cadastro durável. Medido ao fechar: a aba nem gravava a âncora de
+telefone, porque mandava `kind: "telefone"` e o resolve a descartava calado.)*
 
 **(9) A chegada autenticada não gera âncora.** O `from` do WhatsApp é o E.164 do remetente
 autenticado pela Meta (`whatsapp.py:155`), e o adapter o usa como chave de sessão e o repassa como
@@ -291,6 +294,12 @@ registradas como fichas.
 > pergunta da PID-10. Não é copiada no índice Redis: `authoritative` só nasce no PG, e duas casas
 > para a mesma confiança foi o defeito da IDN-09. A conferência do cliente existe porque o índice
 > Redis pode apontar a âncora para quem o cadastro não reconhece (IDN-10).
+>
+> **`operator` (IDN-08, mesmo dia):** um escritor, `register_by_operator`, atrás de
+> `POST /identity/operator/register` — Bearer, `agent_assist.atender` recortado ao POOL da sessão,
+> tenant do JWT. O carimbo não passa pelas rotas irmãs sem credencial (IDN-06): um rótulo de
+> origem que qualquer um alcança não diz de onde a âncora veio. O cadastro do operador não move
+> âncora de outro cliente, e a procedência só vale onde a linha é nova.
 
 ## 4. Consequências
 

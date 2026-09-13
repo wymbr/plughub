@@ -243,6 +243,14 @@
     "creating": "Criando…",
     "createError": "Falha ao criar o cadastro.",
     "ambiguous": "Este identificador corresponde a mais de um cliente. Busque pelo nome, ou use um identificador mais específico.",
+    "invalidAnchor": "Identificador inválido (para telefone sem código do país, confira o país padrão do tenant).",
+    "anchorTaken": "Este identificador já pertence a outro cliente. Busque por esse cadastro.",
+    "existingLinked": "Cliente já cadastrado — vinculado ({{id}}).",
+    "kind": {
+      "phone": "Telefone",
+      "email": "E-mail",
+      "cpf": "CPF"
+    },
     "created": "Cadastro criado e vinculado ({{id}}).",
     "cancel": "Cancelar",
     "s360": {

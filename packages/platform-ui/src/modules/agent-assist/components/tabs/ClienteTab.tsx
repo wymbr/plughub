@@ -21,6 +21,10 @@ import { getAccessToken } from "../../../../auth/token-store";
 import { Customer360Card } from "../Customer360Card";
 import { apiFetch } from '@/api/apiFetch'
 
+// Kinds que o operador pode digitar — os nomes do índice de identidade, nunca rótulos.
+const ANCHOR_KINDS = ["phone", "email", "cpf"] as const
+type AnchorKind = typeof ANCHOR_KINDS[number]
+
 interface ClienteTabProps {
   customerId: string | null;
   contactId:  string | null;
@@ -61,7 +65,10 @@ export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, s
 
   const [showCreate, setShowCreate] = useState(false);
   const [cName,   setCName]   = useState("");
-  const [cKind,   setCKind]   = useState("telefone");
+  // IDN-08: o valor é o KIND da âncora (inglês, como o índice espera); o rótulo é i18n.
+  // Era "telefone", que não é kind — a âncora era descartada calada e o cliente nascia
+  // sem ela.
+  const [cKind,   setCKind]   = useState<AnchorKind>("phone");
   const [cValue,  setCValue]  = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -115,35 +122,38 @@ export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, s
   }
 
   async function createAndLink() {
-    if (!cName.trim() && !cValue.trim()) return;
+    if (!cValue.trim() || !sessionId) return;
     setCreating(true); setMsg(null);
     try {
-      // Provision — precisa de ≥1 âncora; sem uma, usa o contato atual como âncora fraca.
-      const anchors = cValue.trim()
-        ? [{ kind: cKind, value: cValue.trim() }]
-        : [{ kind: "contact_identifier", value: contactId ?? sessionId ?? "" }];
-      const rres = await apiFetch(`/v1/channels/webhook/identity/resolve`, {
+      // IDN-08: o cadastro do operador é DURÁVEL e carimba procedência `operator`, numa
+      // rota com credencial (tenant do JWT, `agent_assist.atender` no pool da sessão).
+      // Até aqui: `/identity/resolve` com `provision` (prospect só no Redis, sem
+      // procedência) + `/attributes`, e sem identificador caía num `contact_identifier`
+      // que também não é kind — cliente sem âncora nenhuma. O identificador é obrigatório.
+      const rres = await apiFetch(`/v1/channels/webhook/identity/operator/register`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tenant_id: tenant, anchors, provision: true }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          anchors: [{ kind: cKind, value: cValue.trim() }],
+          name: cName.trim(),
+        }),
       });
-      const rdata = rres.ok ? await rres.json() : {};
-      const cid: string = rdata.customer_id ?? "";
-      // IDN-12: ambíguo chega sem id — a âncora digitada casa com mais de um cliente.
+      const rdata = await rres.json().catch(() => ({}));
+      const cid: string = rres.ok ? (rdata.customer_id ?? "") : "";
       if (!cid) {
-        setMsg({ text: t(rdata.matched_by === 'ambiguous' ? 'cliente.ambiguous' : 'cliente.createError'), ok: false });
+        const key = rres.status === 403 ? 'cliente.noPermission'
+          : rdata.reason === 'ambiguous' ? 'cliente.ambiguous'
+          : rdata.reason === 'anchor_owned_by_other_customer' ? 'cliente.anchorTaken'
+          : rdata.reason === 'invalid_anchors' ? 'cliente.invalidAnchor'
+          : 'cliente.createError';
+        setMsg({ text: t(key), ok: false });
         setCreating(false);
         return;
-      }
-      if (cName.trim()) {
-        await apiFetch(`/v1/channels/webhook/identity/attributes`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tenant_id: tenant, customer_id: cid, attributes: { nome: cName.trim() } }),
-        });
       }
       const r = await injectCustomerId(cid);
       setShowCreate(false); setCName(""); setCValue("");
       setMsg(r.ok
-        ? { text: t('cliente.created', { id: cid }), ok: true }
+        ? { text: t(rdata.outcome === 'existing' ? 'cliente.existingLinked' : 'cliente.created', { id: cid }), ok: true }
         : linkFailMsg(r.forbidden));
       if (r.ok) onLinked?.();
     } catch {
@@ -248,15 +258,15 @@ export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, s
             <input type="text" value={cName} onChange={e => setCName(e.target.value)} placeholder={t('cliente.nameLabel')}
               className="w-full text-xs border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 text-dark bg-white placeholder-muted-light" />
             <div className="flex items-center gap-1.5">
-              <select value={cKind} onChange={e => setCKind(e.target.value)}
+              <select value={cKind} onChange={e => setCKind(e.target.value as AnchorKind)}
                 className="text-2xs border border-border rounded px-1.5 py-1.5 bg-white text-dark focus:outline-none focus:ring-1 focus:ring-primary/40">
-                {["telefone", "email", "cpf"].map(k => <option key={k} value={k}>{k}</option>)}
+                {ANCHOR_KINDS.map(k => <option key={k} value={k}>{t(`cliente.kind.${k}`)}</option>)}
               </select>
               <input type="text" value={cValue} onChange={e => setCValue(e.target.value)} placeholder={t('cliente.anchorLabel')}
                 className="flex-1 text-xs border border-border-strong rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 text-dark bg-white placeholder-muted-light" />
             </div>
             <div className="flex gap-1.5">
-              <button onClick={createAndLink} disabled={creating || (!cName.trim() && !cValue.trim())}
+              <button onClick={createAndLink} disabled={creating || !cValue.trim()}
                 className="flex-1 text-xs py-1.5 rounded bg-primary text-white font-medium disabled:opacity-40 hover:bg-primary-dark transition-colors">
                 {creating ? t('cliente.creating') : t('cliente.createAndLink')}
               </button>

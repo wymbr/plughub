@@ -1,5 +1,72 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (13) — IDN-08: o cadastro do operador é durável e carimba `operator`
+
+A ficha, depois da PID-12, dizia que o que faltava era um **portador** para o carimbo `operator`:
+a aba Cliente do Console gravava prospect e índice só no Redis. Ao abrir a aba para desenhar o
+portador, apareceu o que a ficha não sabia.
+
+### 1 · O que a aba fazia de fato
+
+| passo | o que acontecia |
+|---|---|
+| seletor de tipo | mandava `kind: "telefone"` — **não é kind**; o índice espera `phone` |
+| `/identity/resolve` com `provision` | a âncora inválida era **descartada calada**, e o prospect nascia com `kinds: []` |
+| sem identificador digitado | caía num `kind: "contact_identifier"` — também não é kind |
+| `/identity/attributes` | gravava o nome numa linha `customers` durável, **sem âncora nenhuma** |
+
+Cadastrar pelo telefone, portanto, criava um cliente que ninguém acharia pelo telefone. Nenhuma
+das duas chamadas tinha credencial, e a procedência não existia em lugar nenhum. População no dia:
+5 clientes duráveis sem chave nenhuma (2 com nome).
+
+### 2 · O portador
+
+- **Rota `POST /v1/channels/webhook/identity/operator/register`**: Bearer (`plughub_authz`);
+  tenant do JWT, nunca do corpo; a sessão tem de existir e ser do tenant do token (a de outro
+  tenant responde igual à inexistente); campo **`agent_assist.atender` em `read_write`, recortado
+  ao pool da sessão** — quem cadastra é quem atende aquele contato, e o escopo do grant vale aqui.
+- **`IdentityIndex.register_by_operator`**, único escritor de `operator`:
+  - âncora inválida recusa o cadastro **nomeando o kind** (422) — nunca se cria cliente sem as
+    âncoras digitadas;
+  - âncoras que identificam um cliente → `existing`, e as que faltam são anexadas a ele; nenhuma →
+    `created`; mais de um → `ambiguous` (409);
+  - âncora que o cadastro **ou o índice quente** já atribuem a OUTRO cliente recusa tudo, sem
+    escrever (409, nomeada) — nunca se move a âncora (IDN-10);
+  - grava no cadastro durável com procedência `operator` e `claimed`; onde a linha já existe, a
+    origem que ela tinha fica (`_SQL_UPSERT_KEY`);
+  - o nome só entra se o cliente ainda não tem um.
+- **A aba**: kinds do índice (`phone`/`email`/`cpf`) com rótulo i18n, identificador obrigatório,
+  uma chamada só, e cada recusa com a sua mensagem (sem permissão · ambíguo · de outro cliente ·
+  inválido) — chaves novas nos dois idiomas.
+
+O carimbo **não** passa pelas rotas irmãs sem credencial (IDN-06, que segue aberta): um rótulo de
+origem que qualquer um alcança não diz de onde a âncora veio.
+
+### 3 · Testes, probe e a prova pela tela
+
+- `test_identity_operator_register.py` (8): as recusas (o `"telefone"` real, telefone sem país,
+  sem âncora, âncora de outro cliente, ambíguo) sem escrita; o cadastro novo com `operator`; o
+  existente anexando ao mesmo cliente; o nome que não é sobrescrito.
+- **`probe_identity_operator.sh`** — A: a rota viva com JWTs cunhados pelo segredo do serviço e uma
+  sessão sintética (401 · 403 sem campo · 403 grant de outro pool · 404 sessão de outro tenant · 422
+  `"telefone"` · 200 com as linhas `operator` e o nome · `existing` sem duplicar · o resolve lendo
+  `operator`); B: a regra contra Postgres e Redis; C: procedência trocada e guarda de conflito
+  desligada, cada uma derrubando o seu caso.
+- ⚠️ **Duas correções do instrumento, as duas no vermelho-primeiro:** o caso do 404 de outro
+  tenant passou contra o gateway ANTIGO, porque rota inexistente também responde 404 — hoje confere
+  que o 404 é o da sessão; e o primeiro cenário de conflito não era conflito (âncora sem dono junto
+  da de outro cliente é `existing`, e anexa — a própria regra).
+- **Pela tela**: login real do `operator@`, chamada pela porta do platform-ui (5174), token com
+  `agent_assist.atender` sem escopo → `created`, linha `email | operator | claimed`. Limpo em
+  seguida.
+
+### 4 · Verificação
+
+channel-gateway **891 verdes**; `tsc` do platform-ui limpo. Imagens: channel-gateway, platform-ui.
+Verdes ao vivo: `probe_identity_operator`, `probe_identity_provenance`, `probe_identity_index_owner`,
+`probe_otp_gate`, `probe_phone_region`, `probe_i18n_duplicate_keys`, `probe_edge_surface`,
+`probe_gates_manifest_coverage`. 0 fixtures no cadastro.
+
 ## 2026-09-13 (12) — IDN-14: o mesmo celular com e sem DDI é o mesmo cliente, com o país do tenant
 
 Achado na PID-10: o step-up do limite pede o celular cadastrado, e quem omitisse o `55` tinha o

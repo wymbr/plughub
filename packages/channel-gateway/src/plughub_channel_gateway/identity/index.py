@@ -129,6 +129,7 @@ class PendingEntry:
 
 PROVENANCE_AUTHORITATIVE = "authoritative"
 PROVENANCE_WRITERS = frozenset({"declared", "channel_origin", "operator"})
+# `operator` tem UM escritor: `register_by_operator`, atrás da rota com credencial.
 
 
 def _writer_provenance(p: str | None) -> str | None:
@@ -220,6 +221,28 @@ def _pode_apontar(dono: tuple | None, winner: str) -> bool:
     """A âncora fria pode ser apontada ao vencedor no índice? Só sem dono no cadastro,
     ou com o próprio vencedor como dono (IDN-10)."""
     return dono is None or dono[0] == winner
+
+
+PROVENANCE_OPERATOR = "operator"
+
+
+def _ancora_de_outro(dono: tuple | None, quente: tuple | None, cid: str) -> bool:
+    """A âncora já é de OUTRO cliente — no cadastro ou no índice quente (IDN-08).
+
+    Função de módulo, como `_pode_apontar`: é a regra que o probe muta.
+    """
+    return bool((dono and dono[0] != cid) or (quente and quente[0] != cid))
+
+
+@dataclass
+class OperatorRegisterResult:
+    """Resultado do cadastro feito por um OPERADOR no Console (IDN-08)."""
+    outcome:     str = ""          # created | existing | refused
+    customer_id: str = ""
+    reason:      str = ""          # invalid_anchors | no_anchors | ambiguous | anchor_owned_by_other_customer
+    invalid:     list[str] = field(default_factory=list)    # kinds recusados pela normalização
+    conflicts:   list[str] = field(default_factory=list)    # kinds que já são de OUTRO cliente
+    anchors:     int = 0
 
 
 @dataclass
@@ -778,6 +801,85 @@ class IdentityIndex:
                 )
         logger.info("IdentityIndex: promoted customer=%s to durable (keys=%d, vc=%s)",
                     customer_id, len(rows), verification_class)
+
+    # ── Cadastro pelo OPERADOR — procedência `operator` (IDN-08) ──────────────
+
+    async def register_by_operator(
+        self, tenant_id: str, anchors: list[dict[str, str]], *,
+        name: str = "", operator: str = "",
+    ) -> OperatorRegisterResult:
+        """Cadastro feito por um operador no Console, DURÁVEL e com procedência `operator`.
+
+        ⚠️ IDN-08 (2026-09-13): a aba Cliente criava o cadastro pelo `/identity/resolve`
+        com `provision: true` — prospect e índice só no Redis, sem procedência nenhuma —
+        e mandava `kind: "telefone"`, que não é kind: a âncora era descartada calada e o
+        cliente nascia SEM âncora, só com o nome. O operador não é fonte autoritativa,
+        mas é uma origem que se registra; o carimbo precisava de um portador durável.
+
+        Regras, todas ditas no resultado em vez de degradar:
+          - âncora inválida (kind desconhecido, telefone sem país…) RECUSA o cadastro,
+            nomeando os kinds — nunca se cria cliente sem as âncoras que o operador digitou;
+          - as âncoras identificam um cliente → `existing`, e as que faltam são anexadas A
+            ELE; nenhuma → `created`; mais de um → `ambiguous`;
+          - âncora que o cadastro ou o índice já atribuem a OUTRO cliente RECUSA, sem
+            escrever nada (território de merge, IDN-10) — nunca se move a âncora;
+          - a procedência só vale onde a linha é nova: âncora já registrada do mesmo
+            cliente mantém a origem que tinha (`_SQL_UPSERT_KEY`);
+          - o nome só é gravado se o cliente ainda não tem um — o operador não
+            sobrescreve cadastro existente por um campo de texto livre.
+        """
+        if self._db is None:
+            raise RuntimeError("cadastro pelo operador exige o cadastro duravel (db_pool ausente)")
+        res = OperatorRegisterResult()
+        chaves: list[tuple[str, str, str]] = []
+        for a in anchors or []:
+            kind, value = str(a.get("kind", "")), str(a.get("value", ""))
+            try:
+                chaves.append((kind, value, await self.anchor_hash(tenant_id, kind, value)))
+            except ValueError:
+                res.invalid.append(kind or "?")
+        if res.invalid:
+            res.outcome, res.reason = "refused", "invalid_anchors"
+            return res
+        if not chaves:
+            res.outcome, res.reason = "refused", "no_anchors"
+            return res
+
+        ref = await self.resolve_or_provision(
+            tenant_id, [{"kind": k, "value": v} for (k, v, _h) in chaves], provision=False)
+        if ref.matched_by == "ambiguous":
+            res.outcome, res.reason = "refused", "ambiguous"
+            return res
+        cid = ref.customer_id or _new_customer_id()
+
+        for kind, _v, vh in chaves:
+            dono = await self._pg_key_owner(tenant_id, kind, vh)
+            quente = _decode_index(await self._redis.get(self._identity_key(tenant_id, kind, vh)))
+            if _ancora_de_outro(dono, quente, cid):
+                res.conflicts.append(kind)
+        if res.conflicts:
+            logger.warning(
+                "identity: cadastro do operador RECUSADO — ancora(s) %s ja atribuida(s) a outro "
+                "cliente (operador=%s, IDN-08/IDN-10)", ",".join(res.conflicts), operator or "-",
+            )
+            res.outcome, res.reason = "refused", "anchor_owned_by_other_customer"
+            return res
+
+        for kind, value, _vh in chaves:
+            await self.attach_anchor(tenant_id, cid, kind, value, verification_class="claimed",
+                                     persist_durable=True, provenance=PROVENANCE_OPERATOR)
+        if name.strip():
+            atual = await self.get_customer(tenant_id, cid)
+            attrs = (atual or {}).get("attributes") or {}
+            if not (attrs.get("nome") or attrs.get("name")):
+                await self.update_attributes(tenant_id, cid, {"nome": name.strip()})
+        res.outcome = "existing" if ref.customer_id else "created"
+        res.customer_id, res.anchors = cid, len(chaves)
+        logger.info(
+            "identity: cadastro do operador %s customer=%s kinds=%s operador=%s (IDN-08)",
+            res.outcome, cid, ",".join(k for (k, _v, _h) in chaves), operator or "-",
+        )
+        return res
 
     # ── Importação — a ÚNICA porta de `authoritative` (PID-12) ────────────────
 
