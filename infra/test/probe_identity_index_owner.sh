@@ -22,13 +22,14 @@
 #   B  EXERCICIO NA IMAGEM — os dois caminhos contra Postgres e Redis reais, cada um
 #      com o seu CONTROLE (ancora sem dono segue anexada: a identidade progressiva
 #      nao pode ter morrido junto).
-#   C  MUTACAO DO B — com o cadastro "mudo", os dois casos reprovam e os controles
-#      seguem.
+#   C  MUTACAO DO B — com a regra de escrita liberada, os dois casos reprovam e os
+#      controles seguem; com a regra de empate antiga, o caso do empate reprova.
 #   D  MUTACAO DO A — uma divergencia injetada acende o censo.
 #
-# ⚠️ O que ele NAO cobre: o caminho `durable` escolhe o vencedor entre ancoras de
-#    clientes DIFERENTES pelo score, sem o `ambiguous` que o caminho quente tem
-#    (IDN-11). Aqui se prova so que a perdedora nao e reapontada.
+# IDN-11 (2026-09-13): o caminho frio escolhia o vencedor entre ancoras de
+#    clientes DIFERENTES pela ORDEM na chamada, sem o `ambiguous` do caminho quente.
+#    Hoje e UMA computacao de candidatos; o B exige `ambiguous` sem escrita no
+#    empate a frio, e o C troca a regra de empate para provar que o caso a mede.
 #
 # EXIT: 0 OK · 1 FALHA · 3 SEM AMOSTRA
 
@@ -85,9 +86,9 @@ echo ""
 echo "── B · EXERCICIO NA IMAGEM ────────────────────────────────────────────"
 J=$(roda exercicio)
 echo "   $J"
-V=$(julga "$J" '{"progressiva_respeita": true, "progressiva_controle": true, "reidratacao_respeita": true, "reidratacao_controle": true}')
+V=$(julga "$J" '{"progressiva_respeita": true, "progressiva_controle": true, "reidratacao_respeita": true, "reidratacao_controle": true, "empate_frio_ambiguo": true}')
 case "$V" in
-  OK)   ok "progressiva nao anexa ancora de outro dono · reidratacao nao reaponta a perdedora · ancora sem dono segue anexada nos dois" ;;
+  OK)   ok "progressiva nao anexa ancora de outro dono · reidratacao nao reaponta a perdedora · ancora sem dono segue anexada nos dois · empate a frio e ambiguo e nao escreve (IDN-11)" ;;
   SEM*) incon "exercicio sem veredicto: ${V#SEM}" ;;
   *)    falha "${V#FALHA }" ;;
 esac
@@ -95,11 +96,18 @@ esac
 echo ""
 echo "── C · MUTACAO DO B ───────────────────────────────────────────────────"
 J=$(roda exercicio --mutar)
-V=$(julga "$J" '{"progressiva_respeita": false, "progressiva_controle": true, "reidratacao_respeita": false, "reidratacao_controle": true}')
+V=$(julga "$J" '{"progressiva_respeita": false, "progressiva_controle": true, "reidratacao_respeita": false, "reidratacao_controle": true, "empate_frio_ambiguo": true}')
 case "$V" in
-  OK)   ok "com o cadastro mudo, os dois caminhos reapontam a ancora e reprovam; controles seguem" ;;
+  OK)   ok "com a regra de escrita liberada, os dois caminhos reapontam a ancora e reprovam; controles e empate seguem" ;;
   SEM*) incon "mutacao sem veredicto: ${V#SEM}" ;;
   *)    falha "a mutacao nao produziu o esperado — o exercicio nao mede a regra: ${V#FALHA } — $J" ;;
+esac
+J=$(roda exercicio --mutar-empate)
+V=$(julga "$J" '{"progressiva_respeita": true, "reidratacao_respeita": true, "empate_frio_ambiguo": false}')
+case "$V" in
+  OK)   ok "com a regra de empate antiga, o empate a frio escolhe um vencedor e reprova (IDN-11); os outros seguem" ;;
+  SEM*) incon "mutacao do empate sem veredicto: ${V#SEM}" ;;
+  *)    falha "a mutacao do empate nao produziu o esperado: ${V#FALHA } — $J" ;;
 esac
 
 # ── D ────────────────────────────────────────────────────────────────────────

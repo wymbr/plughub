@@ -186,6 +186,25 @@ _SQL_UPSERT_KEY = """
 """
 
 
+def _vencedores(candidates: dict[str, tuple]) -> list[str]:
+    """Clientes com o maior score. Mais de um = ambíguo.
+
+    Uma regra só, e em função de módulo de propósito: o Lookup 1 teve duas regras de
+    empate (IDN-11), e a mutação do gate troca ESTA função para provar que o caso
+    ambíguo mede a regra e não a fixture.
+    """
+    if not candidates:
+        return []
+    top = max(c[0] for c in candidates.values())
+    return [cid for cid, c in candidates.items() if c[0] == top]
+
+
+def _pode_apontar(dono: tuple | None, winner: str) -> bool:
+    """A âncora fria pode ser apontada ao vencedor no índice? Só sem dono no cadastro,
+    ou com o próprio vencedor como dono (IDN-10)."""
+    return dono is None or dono[0] == winner
+
+
 @dataclass
 class ImportRowResult:
     external_id: str
@@ -245,13 +264,27 @@ class IdentityIndex:
         Desambiguação: cada âncora que casa contribui um candidato com a confiança
         do seu tipo; vence a maior confiança. Empate entre customer_ids diferentes
         na maior confiança → matched_by="ambiguous" (o fluxo decide 'ask').
+
+        ⚠️ **UMA computação de candidatos, qualquer que seja a temperatura do índice**
+        (IDN-11, 2026-09-13). Eram duas: com algum hit no Redis decidia-se só entre os
+        hits, com empate → `ambiguous`; com o Redis frio, `_pg_resolve` pegava o
+        primeiro estritamente maior e seguia. Mesmas âncoras, respostas diferentes —
+        e, com o Redis parcialmente quente, o dono no cadastro das âncoras frias nem
+        entrava na decisão. Hoje cada âncora vira candidato pela fonte que a conhece
+        (Redis quente; senão o cadastro), e vencedor, empate e escrita no índice são
+        decididos UMA vez. `matched_by` diz de onde veio a âncora vencedora
+        (`existing` = índice, `durable` = cadastro).
         """
-        # candidatos: customer_id → (melhor score de ranking, kind_confidence,
-        # verification_class) da âncora que melhor pontuou para esse cliente.
-        candidates: dict[str, tuple[float, float, str, str, str]] = {}  # + (kind, vh) da âncora
+        # candidato por cliente: (score, confidence, vc, kind, vh, fonte)
+        candidates: dict[str, tuple[float, float, str, str, str, str]] = {}
         valid_anchors: list[tuple[str, str, str]] = []   # (kind, value_hash, normalized-not-stored)
-        # âncoras que NÃO estavam indexadas (candidatas à identidade progressiva).
-        miss_anchors: list[tuple[str, str]] = []          # (kind, value_hash)
+        donos: dict[tuple[str, str], tuple[str, str, float] | None] = {}  # âncora fria → dono no cadastro
+        quentes: set[tuple[str, str]] = set()
+
+        def candidato(cid: str, kind: str, vh: str, vc: str, conf: float, fonte: str) -> None:
+            score = anchor_rank_score(kind, vc)
+            if cid not in candidates or score > candidates[cid][0]:
+                candidates[cid] = (score, conf, vc, kind, vh, fonte)
 
         for a in anchors:
             kind  = a.get("kind", "")
@@ -263,84 +296,54 @@ class IdentityIndex:
             valid_anchors.append((kind, vh, ""))
             hit = _decode_index(await self._redis.get(self._identity_key(tenant_id, kind, vh)))
             if hit:
-                cid_s, vc = hit
-                score = anchor_rank_score(kind, vc)
-                if cid_s not in candidates or score > candidates[cid_s][0]:
-                    candidates[cid_s] = (score, kind_confidence(kind), vc, kind, vh)
-            else:
-                miss_anchors.append((kind, vh))
+                quentes.add((kind, vh))
+                candidato(hit[0], kind, vh, hit[1], kind_confidence(kind), "existing")
+                continue
+            dono = await self._pg_key_owner(tenant_id, kind, vh)
+            donos[(kind, vh)] = dono
+            if dono:
+                candidato(dono[0], kind, vh, dono[1], dono[2], "durable")
 
         if candidates:
-            top_score = max(c[0] for c in candidates.values())
-            winners   = [cid for cid, c in candidates.items() if c[0] == top_score]
-            if len(winners) == 1:
-                winner = winners[0]
-                _score, conf, vc, w_kind, w_vh = candidates[winner]
-                # ── Identidade progressiva: anexa as âncoras que eram MISS ao
-                # vencedor, como `claimed` (não-verificada — foi só apresentada
-                # junto). Âncoras que apontam a OUTRO cliente NÃO são tocadas
-                # (território de merge, Fase C). Efeito: reconectar com
-                # phone+email indexa o email → depois o email sozinho resolve.
-                #
-                # ⚠️ IDN-10 (2026-09-13): "miss" era miss NO REDIS, e a promessa
-                # acima só valia para o índice. Uma âncora fria no Redis e com dono
-                # no CADASTRO era anexada ao vencedor mesmo assim — e o resolve
-                # passava a devolver o cliente errado para ela por 30 dias. Agora
-                # o cadastro é perguntado antes.
-                for (kind, vh) in miss_anchors:
-                    dono = await self._pg_key_owner(tenant_id, kind, vh)
-                    if dono and dono[0] != winner:
-                        logger.warning(
-                            "identity: identidade progressiva NAO anexou %s a %s — o cadastro a "
-                            "atribui a %s (IDN-10)", kind, winner, dono[0],
-                        )
-                        continue
-                    await self._redis.set(
-                        self._identity_key(tenant_id, kind, vh),
-                        _encode_index(winner, dono[1] if dono else "claimed"),
-                        ex=self._index_ttl_s,
-                    )
-                return CustomerRef(winner, status="identified",
-                                   matched_by="existing", confidence=conf,
-                                   verification_class=vc,
-                                   provenance=await self._pg_provenance(tenant_id, w_kind, w_vh, winner))
-            # colisão real: mesmo top-score, ids diferentes → ambíguo (fluxo 'ask').
-            # Não anexa misses sob ambiguidade.
-            w = winners[0]
-            _s, conf, vc, _k, _h = candidates[w]
-            return CustomerRef(w, status="identified",
-                               matched_by="ambiguous", confidence=conf,
-                               verification_class=vc)
+            winners = _vencedores(candidates)
+            if len(winners) > 1:
+                # colisão real: mesmo top-score, ids diferentes → ambíguo (fluxo 'ask').
+                # Não escreve NADA no índice sob ambiguidade — nem identidade
+                # progressiva, nem reidratação.
+                w = winners[0]
+                _s, conf, vc, _k, _h, _f = candidates[w]
+                return CustomerRef(w, status="identified",
+                                   matched_by="ambiguous", confidence=conf,
+                                   verification_class=vc)
 
-        # Redis miss → fallback ao cadastro durável (Slice 2): um cliente já
-        # promovido ao PG pode ter saído do índice Redis (TTL/cold). Reidrata o
-        # índice quando acha, para os próximos lookups voltarem a ser O(1) no Redis.
-        pg_hit = await self._pg_resolve(tenant_id, valid_anchors)
-        if pg_hit:
-            customer_id, conf, vc, prov = pg_hit
-            # Reidrata o índice Redis preservando a classe durável de cada âncora
-            # (uma reidratação não deve rebaixar um `possessed` a `claimed`).
-            #
-            # ⚠️ IDN-10 (2026-09-13): reidratava TODAS as âncoras da chamada
-            # apontando para o vencedor — inclusive as que o cadastro atribui a
-            # OUTRO cliente. A âncora sem linha no cadastro segue anexada (é a mesma
-            # identidade progressiva do caminho quente); a de outro dono, não.
+            winner = winners[0]
+            _score, conf, vc, w_kind, w_vh, fonte = candidates[winner]
+            # ── Escrita no índice, para as âncoras FRIAS:
+            #   · sem dono no cadastro → identidade progressiva: anexa como `claimed`
+            #     (reconectar com phone+email indexa o email; depois ele resolve só);
+            #   · dono = vencedor → reidrata com a classe durável (não rebaixa possessed);
+            #   · dono = OUTRO cliente → não toca, e loga (IDN-10: território de merge).
+            # Âncoras quentes não são reescritas: já apontam para alguém, e reapontar
+            # a de outro cliente seria o mesmo defeito pelo outro lado.
             for (kind, vh, _n) in valid_anchors:
-                dono = await self._pg_key_owner(tenant_id, kind, vh)
-                if dono and dono[0] != customer_id:
+                if (kind, vh) in quentes:
+                    continue
+                dono = donos.get((kind, vh))
+                if not _pode_apontar(dono, winner):
                     logger.warning(
-                        "identity: reidratacao NAO apontou %s para %s — o cadastro a "
-                        "atribui a %s (IDN-10)", kind, customer_id, dono[0],
+                        "identity: indice NAO apontou %s para %s — o cadastro a atribui a %s (IDN-10)",
+                        kind, winner, dono[0] if dono else "?",
                     )
                     continue
                 await self._redis.set(
                     self._identity_key(tenant_id, kind, vh),
-                    _encode_index(customer_id, dono[1] if dono else "claimed"),
+                    _encode_index(winner, dono[1] if dono else "claimed"),
                     ex=self._index_ttl_s,
                 )
-            return CustomerRef(customer_id, status="identified",
-                               matched_by="durable", confidence=conf,
-                               verification_class=vc, provenance=prov)
+            return CustomerRef(winner, status="identified",
+                               matched_by=fonte, confidence=conf,
+                               verification_class=vc,
+                               provenance=await self._pg_provenance(tenant_id, w_kind, w_vh, winner))
 
         if not provision:
             return CustomerRef("", status="none", matched_by="none", confidence=0.0)
@@ -422,35 +425,6 @@ class IdentityIndex:
             await conn.execute(_IDENTITY_SCHEMA_DDL)
         logger.info("IdentityIndex: PG schema `identity` ensured")
 
-    async def _pg_resolve(
-        self, tenant_id: str, valid_anchors: list[tuple[str, str, str]],
-    ) -> tuple[str, float, str, str | None] | None:
-        """Lookup 1 no PG durável: âncoras → (customer_id, confidence, verification_class,
-        provenance). Ranqueia por score classe-aware (possessed vence claimed)."""
-        if self._db is None or not valid_anchors:
-            return None
-        best: tuple[str, float, str, str | None] | None = None
-        best_score = -1.0
-        async with self._db.acquire() as conn:
-            for (kind, vh, _n) in valid_anchors:
-                row = await conn.fetchrow(
-                    """
-                    SELECT customer_id, confidence, verification_class, provenance
-                      FROM identity.customer_secondary_keys
-                     WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3
-                     LIMIT 1
-                    """,
-                    tenant_id, kind, vh,
-                )
-                if row:
-                    vc    = row["verification_class"] or "claimed"
-                    conf  = float(row["confidence"] or kind_confidence(kind))
-                    score = anchor_rank_score(kind, vc)
-                    if score > best_score:
-                        best_score = score
-                        best = (row["customer_id"], conf, vc, row.get("provenance"))
-        return best
-
     async def _pg_provenance(
         self, tenant_id: str, kind: str, value_hash: str, customer_id: str,
     ) -> str | None:
@@ -503,23 +477,25 @@ class IdentityIndex:
 
     async def _pg_key_owner(
         self, tenant_id: str, kind: str, value_hash: str,
-    ) -> tuple[str, str] | None:
-        """(customer_id, verification_class) que o CADASTRO atribui à âncora, ou None
-        (sem cadastro durável, ou âncora sem linha). É a pergunta que os dois
-        escritores do índice Redis fazem antes de apontar uma âncora (IDN-10)."""
+    ) -> tuple[str, str, float] | None:
+        """(customer_id, verification_class, confidence) que o CADASTRO atribui à
+        âncora, ou None (sem cadastro durável, ou âncora sem linha). É a fonte da
+        âncora fria no Lookup 1 (IDN-11) e a pergunta que a escrita no índice faz
+        antes de apontar uma âncora (IDN-10)."""
         if self._db is None:
             return None
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT customer_id, verification_class FROM identity.customer_secondary_keys
+                SELECT customer_id, verification_class, confidence FROM identity.customer_secondary_keys
                  WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3 LIMIT 1
                 """,
                 tenant_id, kind, value_hash,
             )
         if not row:
             return None
-        return row["customer_id"], (row["verification_class"] or "claimed")
+        return (row["customer_id"], (row["verification_class"] or "claimed"),
+                float(row["confidence"] or kind_confidence(kind)))
 
     async def _pg_key_class(self, tenant_id: str, kind: str, value_hash: str) -> str | None:
         """Classe de verificação durável de uma chave (para não rebaixar no reidratar)."""

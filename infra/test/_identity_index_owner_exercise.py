@@ -15,8 +15,14 @@ Lido por stdin: `docker exec -i <gw> python - [censo|exercicio] [--mutar]`.
                            apontada para o vencedor
     reidratacao_controle   ancora sem dono, na mesma chamada, e apontada para o vencedor
 
-  `--mutar` faz o cadastro "nao responder" (`_pg_key_owner` -> None): os dois
+    empate_frio_ambiguo    IDN-11: ancoras de DOIS clientes no mesmo score, com o
+                           indice frio -> `ambiguous`, e nada escrito no indice
+                           (antes: vencia a ORDEM das ancoras na chamada)
+
+  `--mutar` troca a regra de escrita (`_pode_apontar` -> sempre True): os dois
   `*_respeita` TEM de reprovar e os dois controles seguem verdes.
+  `--mutar-empate` volta a regra de empate antiga do caminho frio: o
+  `empate_frio_ambiguo` TEM de reprovar.
 
 Limpa sempre o que criou (por hash e por id).
 """
@@ -36,6 +42,7 @@ from plughub_channel_gateway.identity.normalize import hash_anchor
 
 MODO = sys.argv[1] if len(sys.argv) > 1 else "exercicio"
 MUTAR = "--mutar" in sys.argv
+MUTAR_EMPATE = "--mutar-empate" in sys.argv
 
 
 async def censo(s, r, db):
@@ -119,9 +126,35 @@ async def exercicio(s, r, db):
         await r.set(key("p_email"), idx_mod._encode_index(ids["prospect"], "claimed"))
 
         if MUTAR:
-            async def _mudo(self, tenant_id, kind, value_hash):
-                return None
-            IdentityIndex._pg_key_owner = _mudo
+            # A regra de ESCRITA no indice, e so ela. A versao anterior desta
+            # mutacao calava o cadastro (`_pg_key_owner` -> None); desde a IDN-11 o
+            # cadastro tambem DECIDE o vencedor das ancoras frias, e cala-lo matava o
+            # caminho `durable` inteiro — os controles reprovariam por outro motivo.
+            idx_mod._pode_apontar = lambda dono, winner: True
+        if MUTAR_EMPATE:
+            # IDN-11: a regra de empate antiga do caminho frio — o primeiro maior vence.
+            def _primeiro_maior(candidates):
+                if not candidates:
+                    return []
+                top = max(c[0] for c in candidates.values())
+                return [next(cid for cid, c in candidates.items() if c[0] == top)]
+            idx_mod._vencedores = _primeiro_maior
+
+        # ── IDN-11: empate entre clientes, com o indice FRIO ─────────────────
+        a1, a2 = ("phone", "+55110040" + sx[:5]), ("phone", "+55110050" + sx[:5])
+        extra = ("email", "idn11x%s@probe.local" % sx)
+        for n, (k, v) in (("e_a", a1), ("e_b", a2), ("e_x", extra)):
+            anc[n] = (k, v)
+            h[n] = hash_anchor(salt, k, v)
+        await idx.attach_anchor(t, ids["dono"], *a1, persist_durable=True, provenance="declared")
+        await idx.attach_anchor(t, ids["outro"], *a2, persist_durable=True, provenance="declared")
+        for n in ("e_a", "e_b"):
+            await r.delete(key(n))
+        ref = await idx.resolve_or_provision(t, [{"kind": k, "value": v} for (k, v) in (a1, a2, extra)],
+                                             provision=False)
+        escreveu = [n for n in ("e_a", "e_b", "e_x") if await r.get(key(n)) is not None]
+        out["empate_frio"] = {"matched_by": ref.matched_by, "escreveu": escreveu}
+        c["empate_frio_ambiguo"] = ref.matched_by == "ambiguous" and not escreveu
 
         ref = await idx.resolve_or_provision(t, [
             {"kind": anc["p_email"][0], "value": anc["p_email"][1]},

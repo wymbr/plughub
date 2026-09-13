@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (8) — IDN-11: a identificação deixa de depender da temperatura do índice
+
+Achado ao escrever o teste da IDN-10, que precisou aceitar dois vencedores possíveis.
+
+### 1 · O defeito era maior do que a ficha
+
+A ficha dizia: o caminho frio (`_pg_resolve`) escolhe o vencedor entre âncoras de clientes diferentes
+sem declarar ambiguidade. Medido ao desenhar, eram **três** respostas para a mesma pergunta:
+
+| temperatura do índice | o que decidia |
+|---|---|
+| quente (todas as âncoras no Redis) | maior score; empate entre clientes → `ambiguous` |
+| frio (nenhuma no Redis) | primeiro estritamente maior — **a ordem das âncoras na chamada** |
+| parcial | só as âncoras quentes; o dono das frias **nem entrava** (phone quente de A, `claimed`, vencia CPF frio de B) |
+
+Igualar só a regra de empate do `_pg_resolve` fecharia a linha do meio e deixaria a terceira.
+
+### 2 · O conserto: uma computação
+
+Cada âncora vira candidato pela fonte que a conhece — o índice, se quente; o cadastro, se fria — e
+vencedor, empate e escrita no índice são decididos **uma vez**. `matched_by` diz de onde veio a âncora
+vencedora (`existing` = índice, `durable` = cadastro). **Sob ambiguidade nada é escrito no índice**,
+nem identidade progressiva nem reidratação.
+
+`_pg_resolve` foi **removido**, não corrigido: quando a correção pode ser *"consertar a segunda
+implementação"* ou *"não ter segunda implementação"*, a segunda é a que não depende de memória. As
+duas regras viraram funções de módulo — `_vencedores` (empate) e `_pode_apontar` (escrita, da IDN-10)
+— para que o gate mute **uma de cada vez**.
+
+### 3 · Os testes provam os três casos
+
+`test_identity_resolve_temperature.py`: empate a frio e a quente dão `ambiguous`; ambiguidade a frio
+não escreve no índice; Redis parcial considera o dono da âncora fria (e não reaponta a quente de outro
+cliente); controle positivo — vencedor único igual nos dois. **Contra `HEAD`: 3 reprovam, o controle
+passa.**
+
+### 4 · O gate
+
+`probe_identity_index_owner.sh` ganhou o caso `empate_frio_ambiguo` (dois clientes no mesmo score,
+índice frio → `ambiguous` e nada escrito) e a mutação `--mutar-empate`, que devolve a regra antiga e faz
+o caso reprovar. ⚠️ A mutação da IDN-10 **teve de mudar de alvo**: ela calava o cadastro
+(`_pg_key_owner → None`), e desde esta ficha o cadastro também decide o vencedor das âncoras frias —
+calá-lo mataria o caminho frio inteiro e os controles reprovariam por outro motivo. Hoje ela libera só a
+regra de escrita (`_pode_apontar → True`).
+
+⚠️ Uma edição minha colou duas linhas do exercício e o probe saiu **INCONCLUSIVO** em todos os ramos
+(o script não parseava). Nada foi gravado — confirmado: 0 fixtures no cadastro — e o INCONCLUSIVO era a
+resposta honesta: um ramo que não mediu não fica verde.
+
+### 5 · O achado: IDN-12
+
+`ambiguous` passou a aparecer também a frio, então fui ver quem o lê: **ninguém**. O
+`pending_workflow_get` testa só `customer_id` e `verification_class`; se o primeiro candidato de um
+empate for `possessed`, devolve as pendências e o `resume_token` de um cliente escolhido
+arbitrariamente. As três gravações de pendência do webhook gravam sob ele. **Não é regressão**: antes o
+caminho frio escolhia pela ordem das âncoras, igualmente arbitrário, e sem sequer declarar. Ficou
+aberta, porque o conserto é nos consumidores.
+
+### 6 · Verificação
+
+Suíte do channel-gateway **821 verdes** sobre a imagem; imagem rebuildada. `probe_identity_index_owner`
+VERDE nos 4 ramos (as duas mutações do C reprovando cada uma o seu caso; censo final 4/0);
+`probe_identity_provenance` VERDE; cadastro 98 · 93 · 31 com 0 fixtures.
+
 ## 2026-09-13 (7) — IDN-10: o índice de identidade deixa de apontar âncora para o cliente errado
 
 Achado ao escrever a leitura da procedência (IDN-07). O Lookup 1 lê o índice Redis **antes** do
