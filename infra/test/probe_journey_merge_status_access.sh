@@ -20,11 +20,17 @@
 # ramo da política) e **passo 6 = sem aresta** ⇒ exit 1.
 #
 # ── O que é sintético, e é declarado ──────────────────────────────────────────
-# A âncora do CPF é promovida a `possessed` por OTP ANTES do acesso, via os endpoints
-# oficiais (`/identity/otp/challenge` + `/verify`, com o `dev_code` do demo). Sem isso
-# o fluxo cai no step-up de posse (`oferecer_verificacao`) e a conversa dobra de
-# tamanho — mas o step-up NÃO é o que está sob teste, e passar por ele não muda o ramo
-# medido. Se o `dev_code` não vier (flag off), o probe sai INCONCLUSIVO, nunca verde.
+# O cliente nasce IMPORTADO (CPF + celular `authoritative`), pela mesma função da rota
+# `/identity/import` (`_import_customer_fixture.py`). Cada acesso passa pelo step-up de
+# posse DENTRO da conversa: o cliente informa o celular, o fluxo desafia, e o código
+# que o modo dev loga é lido pelo shell e entregue ao cliente WS (`answer_file`).
+#
+# ⚠️ Até a PID-10 (2026-09-13) o probe promovia o CPF a `possessed` por OTP antes do
+# acesso e PULAVA o step-up. Isso deixou de existir por construção — CPF não recebe
+# código (ADR D8), e a posse durável no CPF era exatamente o furo: dali em diante,
+# digitar o CPF entregava as pendências sem prova. O step-up não é o que está sob
+# teste, mas não há mais caminho que o evite.
+# Se o código não aparecer no log (flag dev off), o probe sai INCONCLUSIVO, nunca verde.
 # Todo o resto é caminho de produção: contato webchat real, agente de entrada real.
 #
 # NÃO julga: o step-up de OTP, a tela, nem o acesso 3 (que já funciona e entra aqui
@@ -129,24 +135,25 @@ esac
         mecanismo funciona, a ausência de aresta no passo 6 é ambígua. Rode antes:
         bash infra/test/smoke_limite_tres_acessos.sh"
 
-echo "══ 3) setup — cliente novo, âncora promovida a possessed (parte sintética) ══"
+echo "══ 3) setup — cliente IMPORTADO (cpf + celular autoritativos) ══"
 CPF="529$(date +%s | tail -c 9)"
-CUST=$($CURL -X POST "$CG/v1/channels/webhook/identity/resolve" $JSON \
-  -d "{\"tenant_id\":\"$TENANT\",\"provision\":true,\"anchors\":[{\"kind\":\"cpf\",\"value\":\"$CPF\"}]}" \
-  | jq -r '.customer_id // empty')
-[ -n "$CUST" ] || die "identity/resolve não devolveu customer_id"
-CHAL=$($CURL -X POST "$CG/v1/channels/webhook/identity/otp/challenge" $JSON \
-  -d "{\"tenant_id\":\"$TENANT\",\"kind\":\"cpf\",\"value\":\"$CPF\"}")
-CODE=$(echo "$CHAL" | jq -r '.dev_code // empty')
-[ -n "$CODE" ] \
-  || die "o challenge não devolveu dev_code (PLUGHUB_OTP_DEV_RETURN_CODE off?) — sem
-        promover a âncora, o fluxo cai no step-up e o ramo sob teste não é alcançado.
-        Resposta: ${CHAL:0:200}"
-VER=$($CURL -X POST "$CG/v1/channels/webhook/identity/otp/verify" $JSON \
-  -d "{\"tenant_id\":\"$TENANT\",\"customer_id\":\"$CUST\",\"kind\":\"cpf\",\"value\":\"$CPF\",\"code\":\"$CODE\"}")
-[ "$(echo "$VER" | jq -r '.verified // false')" = "true" ] \
-  || die "otp/verify não confirmou a posse — ${VER:0:200}"
-echo "   ✓ CPF $CPF · customer $CUST · âncora possessed"
+FONE="+5511$(date +%s | tail -c 10)"
+FIX=$($COMPOSE exec -T channel-gateway python - "__probe_journey_2b__" "j2b-$CPF" "$CPF" "$FONE" \
+  < infra/test/_import_customer_fixture.py 2>/dev/null | tail -1)
+CUST=$(echo "$FIX" | jq -r 'select(.outcome == "created") | .customer_id // empty' 2>/dev/null)
+PHASH=$(echo "$FIX" | jq -r '.phone_hash // empty' 2>/dev/null)
+[ -n "$CUST" ] && [ -n "$PHASH" ] || die "a importação da fixture não criou o cliente — ${FIX:0:200}"
+echo "   ✓ CPF $CPF · celular $FONE · customer $CUST (importado)"
+
+# O código do OTP só nasce no meio da conversa. Um vigia lê a linha do modo dev (a
+# DESTE celular, pelo hash) e grava o código no arquivo que o cliente WS espera.
+otp_vigia() {  # $1 = arquivo dentro do container
+  $COMPOSE exec -T channel-gateway rm -f "$1" </dev/null >/dev/null 2>&1
+  ( timeout 150 $COMPOSE logs -f --no-log-prefix --since 1s channel-gateway 2>&1 \
+      | grep -m1 --line-buffered "OTP-DEV.*kind=phone value_hash=$PHASH" \
+      | sed -n 's/.*code=\([0-9]*\).*/\1/p' \
+      | { read -r code; [ -n "$code" ] && $COMPOSE exec -T channel-gateway sh -c "printf %s $code > $1" </dev/null; } ) &
+}
 
 echo "══ 4) o processo existe e está EM ANÁLISE (pendência policy=offer) ══"
 # Pré-condição barulhenta: sem os DialogForms publicados o N3 falha antes de delegar,
@@ -185,19 +192,23 @@ echo "   ✓ processo $PROC_SID · raiz $PROC_ROOT · policy=offer"
 echo "══ 5) ACESSO 2 — contato webchat real, consulta de status ══"
 $COMPOSE cp infra/test/_ws_chat.py channel-gateway:/tmp/_ws_chat.py >/dev/null 2>&1 \
   || die "docker compose cp falhou — sem cliente WS não há acesso 2 a dirigir"
-SCRIPT="[{\"match\":\"CPF\",\"answer\":\"$CPF\"},{\"match\":\"já tem um pedido\",\"answer\":\"consultar\"}]"
+roteiro() {  # $1 = arquivo do código
+  echo "[{\"match\":\"CPF\",\"answer\":\"$CPF\"},{\"match\":\"código de verificação\",\"answer\":\"sim\"},{\"match\":\"celular\",\"answer\":\"$FONE\"},{\"match\":\"Digite o código\",\"answer_file\":\"$1\",\"wait_s\":40},{\"match\":\"já tem um pedido\",\"answer\":\"consultar\"}]"
+}
+otp_vigia /tmp/otp_code_a2
 WSOUT=$($COMPOSE exec -T channel-gateway python3 /tmp/_ws_chat.py \
-  "$TENANT" "limite_ia" "cli_$CPF" "$SCRIPT" 90 2>&1)
+  "$TENANT" "limite_ia" "cli_$CPF" "$(roteiro /tmp/otp_code_a2)" 150 2>&1)
 echo "$WSOUT" | sed 's/^/      │ /'
 A2_SID=$(echo "$WSOUT" | sed -n 's/^AUTHENTICATED session_id=//p' | head -1)
 [ -n "$A2_SID" ] || die "o acesso 2 não autenticou — ${WSOUT:0:200}"
 echo "$WSOUT" | grep -q '^ANSWER .*consultar' \
   || die "o fluxo NÃO chegou ao menu de continuidade (nenhuma resposta 'consultar').
         Isto é falha de PRÉ-CONDIÇÃO, não do merge: sem passar pelo ramo offer o
-        probe não julga nada. Suspeito nº 1: o step-up de posse apareceu mesmo com a
-        âncora possessed; nº 2: pending_workflow_get não achou a pendência;
-        nº 3: o cliente não soube responder a superfície da pergunta (veja os PROMPT/
-        NOTIFY acima — texto livre e menu chegam por caminhos diferentes)."
+        probe não julga nada. Suspeito nº 1: o step-up de posse não fechou (veja
+        ANSWER_FILE_TIMEOUT acima = o vigia não achou o código no log; recusa do
+        desafio = o celular não é autoritativo para o cliente); nº 2:
+        pending_workflow_get não achou a pendência; nº 3: o cliente não soube
+        responder a superfície da pergunta (veja os PROMPT/NOTIFY acima)."
 ok "acesso 2 percorreu o ramo offer (consulta de status), sessão $A2_SID"
 
 echo "══ 6) O VEREDICTO — a consulta virou membro do processo? ══"
@@ -229,8 +240,9 @@ echo "══ 6b) SEGUNDA consulta — a pertença vale para N acessos, não para
 # prova a forma e não o número — e o modo de falha que só a segunda consulta pega é
 # real: pertença chaveada por cliente (em vez de por sessão), ou token de merge
 # consumido no primeiro uso, passariam no passo 6 e falhariam aqui.
+otp_vigia /tmp/otp_code_a2b
 WSOUT2=$($COMPOSE exec -T channel-gateway python3 /tmp/_ws_chat.py \
-  "$TENANT" "limite_ia" "cli_${CPF}_b" "$SCRIPT" 90 2>&1)
+  "$TENANT" "limite_ia" "cli_${CPF}_b" "$(roteiro /tmp/otp_code_a2b)" 150 2>&1)
 A2B_SID=$(echo "$WSOUT2" | sed -n 's/^AUTHENTICATED session_id=//p' | head -1)
 echo "$WSOUT2" | grep -q '^ANSWER .*consultar' \
   && echo "   → segunda consulta na sessão $A2B_SID" \

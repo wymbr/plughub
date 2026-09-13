@@ -583,19 +583,38 @@ export function registerWorkflowTools(
 
   server.tool(
     "otp_challenge",
-    "OTP de posse de canal (step-up OPCIONAL). Emite um código para a âncora " +
-    "(phone/email/…) para provar que o cliente controla aquele canal. Acione quando " +
-    "o negócio exigir maior confiança (ex.: antes de habilitar retomada cross-canal " +
-    "de um processo sensível). Entrega mockada no demo (código no dev_code/log).",
+    "OTP de posse de canal (step-up OPCIONAL). Emite um código para uma âncora " +
+    "ENTREGÁVEL (phone/email) do cliente, para provar que ele controla aquele canal. " +
+    "Só é emitido quando a âncora é de procedência AUTORITATIVA para esse customer_id " +
+    "(veio do cadastro importado) — OTP contra o número que o próprio cliente " +
+    "informou não prova nada. Qualquer recusa volta como erro com `reason` " +
+    "(undeliverable_kind · delivery_unavailable · customer_required · " +
+    "anchor_not_authoritative · rate_limited · invalid_anchor): trate no on_failure, " +
+    "com uma mensagem que NÃO diga ao cliente qual foi o motivo. " +
+    "Entrega mockada no demo (código no dev_code/log).",
     {
-      tenant_id: z.string().min(1).describe("Tenant ID. Em skill-flow use $.tenant_id."),
-      kind:      _kindSchema.describe("Tipo da âncora do canal a verificar."),
-      value:     z.string().min(1).describe("Valor da âncora (telefone/e-mail/…)."),
+      tenant_id:   z.string().min(1).describe("Tenant ID. Em skill-flow use $.tenant_id."),
+      customer_id: z.string().min(1).describe("customer_id nativo (customer_resolve) — o MESMO que irá ao otp_verify."),
+      kind:        _kindSchema.describe("Tipo da âncora a desafiar. Só phone e email admitem OTP."),
+      value:       z.string().min(1).describe("Valor da âncora (telefone/e-mail)."),
     } as any,
     withGuard("otp_challenge", async (input: Record<string, unknown>) => {
-      const p = z.object({ tenant_id: z.string().min(1), kind: _kindSchema, value: z.string().min(1) }).safeParse(input)
+      const p = z.object({
+        tenant_id: z.string().min(1), customer_id: z.string().min(1),
+        kind: _kindSchema, value: z.string().min(1),
+      }).safeParse(input)
       if (!p.success) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "invalid_input", message: p.error.message }) }] }
-      return _postIdentity("/v1/channels/webhook/identity/otp/challenge", p.data, "otp_challenge_failed")
+      const res = await _postIdentity("/v1/channels/webhook/identity/otp/challenge", p.data, "otp_challenge_failed")
+      if ("isError" in res && res.isError) return res
+      // PID-10: `sent: false` é RECUSA, não resposta. Devolvê-la como sucesso levava o
+      // skill ao passo seguinte — pedir ao cliente um código que ninguém mandou.
+      const body = JSON.parse(res.content[0]!.text) as { sent?: boolean; reason?: string }
+      if (body.sent !== true) {
+        return { isError: true as const, content: [{ type: "text" as const, text: JSON.stringify({
+          error: "otp_not_sent", reason: body.reason ?? "unknown",
+        }) }] }
+      }
+      return res
     }),
   )
 

@@ -45,11 +45,13 @@ plataforma (ANI, e-mail de origem)"* — não descrevia um risco futuro. Descrev
 bônus de verificação **não entra** no número exposto (comentário em `:87`). Um CPF que qualquer um
 digitou vale 0,90; um telefone provado por OTP vale 0,70.
 
-**(2) O OTP em produção não entrega nada, e diz que entregou.** `_deliver` só loga sob flag de dev;
+**(2) O OTP em produção não entrega nada, e diz que entregou.** *(Fechado em 2026-09-13, PID-10: sem
+canal, `sent: false, reason: delivery_unavailable`.)* `_deliver` só loga sob flag de dev;
 o ramo de produção é `TODO(prod)` ([otp.py:109](../../packages/channel-gateway/src/plughub_channel_gateway/identity/otp.py)),
 e `challenge` devolve `{"sent": true}` de qualquer jeito.
 
-**(3) O fluxo vivo desafia um CPF.** `skill_limite_entrada_v1` faz `otp_challenge(kind: cpf, value:
+**(3) O fluxo vivo desafia um CPF.** *(Fechado em 2026-09-13, PID-10 — mas o que ele gravou ficou: 25
+CPFs `possessed`, IDN-13.)* `skill_limite_entrada_v1` faz `otp_challenge(kind: cpf, value:
 <o CPF digitado>)` (`:210`). Não existe canal de entrega para um CPF.
 
 **(4) `possessed` é fato DURÁVEL da âncora lido como fato da SESSÃO.** O `resolve_or_provision`
@@ -209,6 +211,22 @@ OTP só é emitido contra âncora entregável **de procedência autoritativa**. 
 si mesmo**, de forma explícita — nunca `sent: true` sem entrega. OTP contra âncora declarada é
 tautológico: prova que o interlocutor tem o número que ele próprio informou.
 
+> **Implementado em 2026-09-13 (PID-10).** Três escolhas que o texto acima não dizia: **(1)** a
+> recusa tem DUAS casas e cada uma é dona de um fato — o `OtpService` recusa o que independe do
+> cliente (`undeliverable_kind`, `delivery_unavailable`; `DELIVERABLE_KINDS` em `normalize.py`) e o
+> adaptador recusa a âncora que `anchor_provenance` não dá como `authoritative` **para o
+> `customer_id` que pede** (`anchor_not_authoritative`); a do mecanismo é consultada primeiro, para
+> um CPF não responder sobre o cliente. **(2)** O modo dev é um **canal**, e diz que é
+> (`delivery: "dev_log"`); o default dele passou a desligado, e desligado o desafio recusa. **(3)**
+> O desafio é **amarrado ao cliente** (`subject`), e o verify só confere para o mesmo — sem isso o
+> portão da procedência seria contornável na conferência, que anexava a posse a qualquer
+> `customer_id` informado.
+>
+> Como não se guarda telefone em claro, **o número do "canal cadastrado" vem do cliente**: o
+> `skill_limite_entrada_v1` pede o celular, e o que prova é casar com o cadastro E receber o código
+> nele. A recusa tem uma frase só, qualquer que seja o motivo — dizer *"este não é o número
+> cadastrado"* faria do passo um oráculo de telefone por CPF.
+
 ### D9 · Chegada autenticada é evidência, produzida pelo adapter
 
 - **`princ`** — o `sub` do login federado do tenant. Para quem chega de uma área logada da loja ou
@@ -288,6 +306,14 @@ participante colidem numa linha (`ORDER BY (tenant, session, participant)`); a t
 real. No dia da entrega, `enable_otp: true` produz recusa explícita, não prova. O cenário de
 contato novo funciona inteiro; a retomada funciona com `require: []` e com evidência de chegada. O
 roteiro de demo perde o passo de OTP — decisão consciente, porque a alternativa é a tautologia.
+
+> **Atualizado em 2026-09-13 (PID-10).** Com a importação autoritativa de pé, o demo **recuperou** o
+> passo de OTP — para cliente importado, ao celular cadastrado, com entrega `dev_log`. Sem entrega
+> real, fora do demo, segue desligado de fato, e agora com recusa explícita. ⚠️ **E isto torna o
+> (4) VIVO para cliente importado:** quem conclui o OTP deixa o telefone `possessed` no cadastro, e
+> a posse durável volta a ser lida como fato da sessão por quem apresentar aquele telefone. O que
+> fecha é D5/D6 (PID-01..03), não esta fatia. Exposição no dia: **zero** clientes importados fora
+> das fixtures de probe.
 
 **Release de skill de plataforma custa N promotes.** Skill é seed-if-absent (`CLAUDE.md` §
 Configuration): corrigir o runner é `PUT` com `x-skill-publish` + `set-next`/`promote` por porta,

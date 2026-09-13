@@ -79,10 +79,15 @@ steps:
     on_success: coletar_contato
     on_failure: coletar_contato
 
-  # O CPF é a âncora estável do cenário: identifica, indexa a pendência e é a
-  # mesma âncora reaproveitada pelo step-up de posse (OTP) mais abaixo — sem
-  # canal de SMS separado. `contato` guarda o CPF (nome da variável ficou
-  # genérico de propósito: é "o valor que identifica", não mais "o telefone").
+  # O CPF é a âncora estável do cenário: identifica e indexa a pendência.
+  # `contato` guarda o CPF (nome da variável ficou genérico de propósito: é "o
+  # valor que identifica", não mais "o telefone").
+  #
+  # ⚠️ O CPF NÃO é a âncora do step-up de posse (PID-10, 2026-09-13). Até ali o OTP
+  # desafiava `kind: cpf` — CPF não tem canal de entrega, e "provar posse" de um CPF
+  # era provar que se sabe o número que se acabou de digitar. Pior: a posse ficava
+  # DURÁVEL no CPF, e a partir dali qualquer um que digitasse aquele CPF recebia as
+  # pendências sem prova nenhuma. O desafio vai ao telefone CADASTRADO (ADR D8/D11).
   - id: coletar_contato
     type: menu
     prompt: "{{$.pipeline_state.roteiro.render.by_node.coletar_contato}}"
@@ -178,7 +183,7 @@ steps:
       - field:    "$.pipeline_state.quer_verificar"
         operator: eq
         value:    "sim"
-        next:     desafiar_posse
+        next:     coletar_telefone_cadastrado
       - field:    "$.pipeline_state.quer_verificar"
         operator: eq
         value:    "atendente"
@@ -207,16 +212,44 @@ steps:
     on_success: finalizar
     on_failure: finalizar
 
+  # ══ Step-up de posse — ao telefone CADASTRADO (PID-10) ═════════════════════
+  # O cliente informa o celular, e o gateway só emite o código se esse número for
+  # AUTORITATIVO para este cliente (veio do cadastro importado) — nunca para um
+  # número que ele acabou de declarar. A plataforma não guarda o telefone em claro
+  # (só o hash), por isso o número vem do cliente: o que prova é casar com o
+  # cadastro E receber o código nele.
+  - id: coletar_telefone_cadastrado
+    type: menu
+    prompt: "{{$.pipeline_state.roteiro.render.by_node.coletar_telefone_cadastrado}}"
+    interaction: text
+    output_as: telefone_cadastrado
+    timeout_s: 180
+    on_success: desafiar_posse
+    on_failure: avisar_encerramento_verificacao
+    on_timeout: avisar_encerramento_verificacao
+    on_disconnect: finalizar_timeout
+
   - id: desafiar_posse
     type: invoke
     tool: otp_challenge
     input:
-      tenant_id: "$.tenant_id"
-      kind:      cpf
-      value:     "$.pipeline_state.contato"
+      tenant_id:   "$.tenant_id"
+      customer_id: "@ctx.caller.customer_id"
+      kind:        phone
+      value:       "$.pipeline_state.telefone_cadastrado"
     output_as: otp_chal
     on_success: coletar_codigo_dialog
-    on_failure: iniciar_solicitacao
+    # Recusa (número não cadastrado, sem entrega, rate-limit) NÃO coleta formulário
+    # novo — há pendência para este CPF, é por isso que a oferta apareceu. Uma frase
+    # só para todos os motivos: dizer "este número não é o cadastrado" faria do
+    # passo um oráculo de telefone por CPF.
+    on_failure: avisar_codigo_nao_enviado
+
+  - id: avisar_codigo_nao_enviado
+    type: notify
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_codigo_nao_enviado}}"
+    on_success: escalar_sac
+    on_failure: escalar_sac
 
   # O código GERADO nunca passa pela mão do runner (costura de segredo): challenge
   # e verify ficam aqui, no OtpService. O runner só carrega o que o CLIENTE digitou.
@@ -237,8 +270,8 @@ steps:
     input:
       tenant_id:   "$.tenant_id"
       customer_id: "@ctx.caller.customer_id"
-      kind:        cpf
-      value:       "$.pipeline_state.contato"
+      kind:        phone
+      value:       "$.pipeline_state.telefone_cadastrado"
       code:        "$.pipeline_state.coletar_codigo_dialog.value"
     output_as: otp_res
     on_success: avaliar_verificacao
@@ -259,6 +292,8 @@ steps:
     on_success: iniciar_solicitacao
     on_failure: iniciar_solicitacao
 
+  # Com o telefone junto: é ele que está `possessed` agora, e o CPF segue `claimed`
+  # (PID-10). Só o CPF voltaria `verification_required` de novo.
   - id: verificar_pendencia_pos_otp
     type: invoke
     tool: pending_workflow_get
@@ -267,6 +302,8 @@ steps:
       anchors:
         - kind: cpf
           value: "$.pipeline_state.contato"
+        - kind: phone
+          value: "$.pipeline_state.telefone_cadastrado"
     output_as: pendencia
     on_success: avaliar_pendencia
     on_failure: iniciar_solicitacao

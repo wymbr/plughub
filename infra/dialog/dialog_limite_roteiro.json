@@ -33,6 +33,20 @@
       }
     },
     {
+      "id": "coletar_telefone_cadastrado",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Para qual celular devo enviar o código? Informe o número cadastrado no seu cartão, com o código do país e o DDD (ex: 55 11 99999-0001)."
+      }
+    },
+    {
+      "id": "avisar_codigo_nao_enviado",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Não consegui enviar o código de verificação. Vou te transferir para um atendente, que pode confirmar sua identidade. Um instante..."
+      }
+    },
+    {
       "id": "avisar_transferencia_sac",
       "kind": "statement",
       "text": {

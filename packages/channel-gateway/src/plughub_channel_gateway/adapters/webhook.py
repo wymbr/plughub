@@ -71,6 +71,7 @@ from ..collect_requirements import (
 from ..config import Settings
 from ..dialog_form_pin import resolve_published_version
 from ..identity import IdentityIndex, OtpService, PendingEntry
+from ..identity.index import PROVENANCE_AUTHORITATIVE
 from .base import ChannelAdapter
 
 from .. import session_parking
@@ -449,7 +450,9 @@ class WebhookAdapter(ChannelAdapter):
 
         # OTP de posse de canal (Fase 2) — step-up componível, acionado pelo fluxo.
         # Entrega mockada no demo: PLUGHUB_OTP_DEV_RETURN_CODE=true loga+retorna o
-        # código (default true no demo, DEVE ser false em produção).
+        # código. ⚠️ Default DESLIGADO desde a PID-10 (2026-09-13): era ligado, e um
+        # deploy que esquecesse a env publicava o código na resposta. O compose do
+        # demo liga explicitamente; sem ela, o desafio recusa `delivery_unavailable`.
         self._otp = OtpService(
             redis=redis,
             salt=salt,
@@ -458,7 +461,7 @@ class WebhookAdapter(ChannelAdapter):
             rl_window_s=int(os.getenv("PLUGHUB_OTP_RL_WINDOW_S", "900")),
             rl_max=int(os.getenv("PLUGHUB_OTP_RL_MAX", "3")),
             code_digits=int(os.getenv("PLUGHUB_OTP_CODE_DIGITS", "6")),
-            dev_return_code=os.getenv("PLUGHUB_OTP_DEV_RETURN_CODE", "true").lower() in ("1", "true", "yes"),
+            dev_return_code=os.getenv("PLUGHUB_OTP_DEV_RETURN_CODE", "false").lower() in ("1", "true", "yes"),
         )
 
     async def ensure_identity_schema(self) -> None:
@@ -2758,9 +2761,33 @@ class WebhookAdapter(ChannelAdapter):
 
     # ── OTP de posse de canal (Fase 2) ─────────────────────────────────────────
 
-    async def otp_challenge(self, tenant_id: str, kind: str, value: str) -> dict:
-        """Emite um desafio de posse para a âncora (kind, value)."""
-        return await self._otp.challenge(tenant_id, kind, value)
+    async def otp_challenge(self, tenant_id: str, customer_id: str, kind: str, value: str) -> dict:
+        """
+        Emite um desafio de posse para a âncora (kind, value) DO cliente `customer_id`.
+
+        ⚠️ PID-10 (2026-09-13, ADR D8): só contra âncora entregável **de procedência
+        autoritativa para este cliente**. OTP contra âncora declarada é tautológico —
+        prova que o interlocutor tem o número que ele próprio informou. A ordem das
+        recusas é deliberada: primeiro o que independe do cliente (o mecanismo recusa
+        sobre si mesmo), depois o cadastro. A procedência vem de
+        `anchor_provenance`, que só responde `authoritative` quando o cadastro durável
+        atribui a âncora a ESTE cliente (IDN-07).
+        """
+        recusa = self._otp.refusal(kind)
+        if recusa is not None:
+            logger.warning("identity: OTP recusado customer=%s kind=%s reason=%s (PID-10)",
+                           customer_id or "-", kind, recusa["reason"])
+            return recusa
+        if not customer_id:
+            return {"sent": False, "reason": "customer_required"}
+        prov = await self._identity.anchor_provenance(tenant_id, customer_id, kind, value)
+        if prov != PROVENANCE_AUTHORITATIVE:
+            logger.warning(
+                "identity: OTP recusado customer=%s kind=%s reason=anchor_not_authoritative "
+                "(procedencia=%s) — PID-10", customer_id, kind, prov,
+            )
+            return {"sent": False, "reason": "anchor_not_authoritative"}
+        return await self._otp.challenge(tenant_id, kind, value, subject=customer_id)
 
     async def otp_verify(
         self, tenant_id: str, customer_id: str, kind: str, value: str, code: str,
@@ -2769,8 +2796,12 @@ class WebhookAdapter(ChannelAdapter):
         Confere o OTP. No sucesso, promove a âncora a `possessed` (única via de
         posse) e a torna durável no cadastro do `customer_id`. É o ponto onde
         "posse provada" vira "identidade confiável".
+
+        ⚠️ PID-10: o código só confere para o MESMO `customer_id` do desafio. Antes, o
+        desafio não sabia para quem era, e o verify anexava a posse a qualquer
+        `customer_id` informado — o portão da procedência seria contornável aqui.
         """
-        res = await self._otp.verify(tenant_id, kind, value, code)
+        res = await self._otp.verify(tenant_id, kind, value, code, subject=customer_id)
         if res.get("verified") and customer_id:
             # A posse não diz de ONDE a âncora veio: `declared` só vale se a linha é
             # nova; a procedência já registrada (inclusive `authoritative`) fica.

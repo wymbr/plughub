@@ -9,7 +9,7 @@ Redis, sem cadastro durável ainda (PG vem no Slice 2).
 Ver docs/product/identity-resolver-fase-a-plano.md e identity-resolver-nivel-b-spec.md.
 """
 from .index import CustomerRef, IdentityIndex, PendingEntry
-from .normalize import ANCHOR_KINDS, hash_anchor, normalize_anchor
+from .normalize import ANCHOR_KINDS, DELIVERABLE_KINDS, hash_anchor, normalize_anchor
 from .otp import OtpService
 
 __all__ = [
@@ -20,4 +20,5 @@ __all__ = [
     "normalize_anchor",
     "hash_anchor",
     "ANCHOR_KINDS",
+    "DELIVERABLE_KINDS",
 ]

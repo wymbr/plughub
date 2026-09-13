@@ -980,9 +980,12 @@ class IdentityResolveRequest(BaseModel):
 # ── OTP + enrichment (Fase 2) ───────────────────────────────────────────────────
 
 class OtpChallengeRequest(BaseModel):
-    tenant_id: str
-    kind:      str   # phone | email | cpf | princ | dev
-    value:     str
+    tenant_id:   str
+    # PID-10: a âncora tem de ser autoritativa PARA este cliente. Ausente → recusa
+    # explícita (`customer_required`), nunca 422 — o chamador lê o motivo.
+    customer_id: str = ""
+    kind:        str   # só phone | email admitem desafio (D8); os demais recusam
+    value:       str
 
 class OtpVerifyRequest(BaseModel):
     tenant_id:   str
@@ -1209,10 +1212,10 @@ async def webhook_pending_by_customer(customer_id: str, tenant_id: str) -> dict:
 
 @app.post("/v1/channels/webhook/identity/otp/challenge", status_code=200)
 async def webhook_otp_challenge(body: OtpChallengeRequest) -> dict:
-    """OTP de posse — emite um desafio para a âncora. Entrega mockada no demo."""
+    """OTP de posse — emite um desafio para âncora entregável e autoritativa (PID-10)."""
     if _webhook_adapter is None:
         return {"sent": False, "reason": "adapter_unavailable"}
-    return await _webhook_adapter.otp_challenge(body.tenant_id, body.kind, body.value)
+    return await _webhook_adapter.otp_challenge(body.tenant_id, body.customer_id, body.kind, body.value)
 
 
 @app.post("/v1/channels/webhook/identity/otp/verify", status_code=200)

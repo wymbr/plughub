@@ -2,10 +2,23 @@
 identity/otp.py — OtpService: prova de POSSE de canal (step-up componível).
 
 Serviço agnóstico de identidade: prova que quem está na sessão controla um canal
-`(kind, value)` (telefone/e-mail/…) recebendo um código enviado a ele. Quem liga
+`(kind, value)` (telefone/e-mail) recebendo um código enviado a ele. Quem liga
 "posse provada → âncora `possessed`" é o WebhookAdapter — o OtpService não conhece
 `customer_id`. Assim o OTP generaliza para qualquer step-up (identidade, pagamento,
 revelar dado mascarado), acionado a critério do fluxo (opcional, nunca implícito).
+
+⚠️ **O mecanismo recusa sobre si mesmo, de forma explícita (PID-10, 2026-09-13 —
+ADR adr-identity-door-evidence D8).** Até aqui ele aceitava qualquer `kind` e
+devolvia `sent: true` sempre: desafiava CPF (que não tem para onde mandar código) e,
+fora do modo dev, respondia `sent: true` com a entrega marcada `TODO(prod)`. Hoje:
+
+  - só âncora ENTREGÁVEL (`DELIVERABLE_KINDS`: phone, email) admite desafio;
+  - sem canal de entrega de verdade, `sent: false, reason: delivery_unavailable` —
+    nunca `sent: true` sem entrega. O modo dev É um canal, e diz que é
+    (`delivery: "dev_log"`);
+  - o desafio é AMARRADO a um `subject` opaco (quem pediu), e o verify só confere
+    contra o mesmo `subject`. Sem isso, a prova emitida para um cliente podia ser
+    anexada a outro na conferência.
 
 Segurança:
   - Nenhuma PII em claro nas chaves (hash_anchor com salt por tenant).
@@ -13,8 +26,9 @@ Segurança:
   - Rate-limit por âncora (anti-enumeração): challenge não revela se a âncora
     pertence a alguém; verify não vaza info de cliente.
   - Entrega mockada no demo: o código só vai para o log (WARNING) e para a
-    resposta (`dev_code`) quando PLUGHUB_OTP_DEV_RETURN_CODE está ligado. Em
-    produção (flag off), entrega real via canal e o código NUNCA é logado.
+    resposta (`dev_code`) quando PLUGHUB_OTP_DEV_RETURN_CODE está ligado — e o
+    default dele é DESLIGADO desde a PID-10 (era ligado, e o esquecimento da env
+    publicava o código na resposta).
 """
 from __future__ import annotations
 
@@ -27,7 +41,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
-from .normalize import hash_anchor
+from .normalize import DELIVERABLE_KINDS, hash_anchor
 
 logger = logging.getLogger("plughub.channel-gateway.identity.otp")
 
@@ -68,13 +82,50 @@ class OtpService:
     def _hash_code(self, code: str) -> str:
         return hashlib.sha256((self._salt + code).encode("utf-8")).hexdigest()
 
+    # ── recusa prévia — UMA casa para "este desafio pode existir?" ──────────────
+
+    def _canal_de_entrega(self, kind: str) -> str | None:
+        """O canal que de fato entrega o código a esta âncora, ou None.
+
+        Não há entrega real no repositório (SMS/e-mail outbound para OTP não foi
+        construído). O modo dev é o único canal, e é declarado como tal.
+        """
+        if kind not in DELIVERABLE_KINDS:
+            return None
+        return "dev_log" if self._dev else None
+
+    def refusal(self, kind: str) -> dict[str, Any] | None:
+        """Recusa que independe da âncora e do cliente — `None` se o desafio é possível.
+
+        Pública porque o adaptador a consulta ANTES de ler o cadastro: sem ela, um CPF
+        voltaria `anchor_not_authoritative` (resposta sobre o cliente) em vez de
+        `undeliverable_kind` (resposta sobre o mecanismo). `challenge` a aplica de novo
+        — mesma função, nunca uma segunda regra.
+        """
+        if kind not in DELIVERABLE_KINDS:
+            return {"sent": False, "reason": "undeliverable_kind"}
+        if self._canal_de_entrega(kind) is None:
+            return {"sent": False, "reason": "delivery_unavailable"}
+        return None
+
     # ── challenge ──────────────────────────────────────────────────────────────
 
-    async def challenge(self, tenant_id: str, kind: str, value: str) -> dict[str, Any]:
+    async def challenge(
+        self, tenant_id: str, kind: str, value: str, *, subject: str,
+    ) -> dict[str, Any]:
         """
-        Emite um código de posse para a âncora. Retorna {sent, ...}. Nunca revela
-        se a âncora pertence a alguém. Sob rate-limit → {sent:false, reason}.
+        Emite um código de posse para a âncora, amarrado a `subject`. Retorna
+        {sent: true, delivery, challenge_ttl_s} só quando há entrega. Nunca revela se
+        a âncora pertence a alguém. Recusas: invalid_anchor · undeliverable_kind ·
+        delivery_unavailable · subject_required · rate_limited.
         """
+        recusa = self.refusal(kind)
+        if recusa is not None:
+            logger.warning("[OTP] desafio RECUSADO tenant=%s kind=%s reason=%s (PID-10)",
+                           tenant_id, kind, recusa["reason"])
+            return recusa
+        if not subject:
+            return {"sent": False, "reason": "subject_required"}
         try:
             vh = hash_anchor(self._salt, kind, value)
         except ValueError:
@@ -93,43 +144,46 @@ class OtpService:
             self._chal_key(tenant_id, kind, vh),
             json.dumps({
                 "code_hash":    self._hash_code(code),
+                "subject":      subject,
                 "attempts":     0,
                 "max_attempts": self._max_attempts,
                 "created_at":   _now_iso(),
             }),
             ex=self._ttl_s,
         )
-        self._deliver(tenant_id, kind, vh, value, code)
+        delivery = self._deliver(tenant_id, kind, vh, code)
 
-        out: dict[str, Any] = {"sent": True, "challenge_ttl_s": self._ttl_s}
+        out: dict[str, Any] = {"sent": True, "delivery": delivery, "challenge_ttl_s": self._ttl_s}
         if self._dev:
             out["dev_code"] = code   # demo only (flag-gated)
         return out
 
-    def _deliver(self, tenant_id: str, kind: str, vh: str, value: str, code: str) -> None:
+    def _deliver(self, tenant_id: str, kind: str, vh: str, code: str) -> str:
         """
-        Entrega do código. Demo = mockada (log WARNING com o código, só sob flag
-        DEV, para o testador digitar no fluxo). Produção = enviar pelo canal da
-        âncora (hook a wirar; NUNCA loga o código).
+        Entrega do código pelo canal de `_canal_de_entrega` — só é chamada depois de
+        `refusal` confirmar que ele existe. Hoje o único é o log do modo dev.
+        Canal real (SMS/e-mail) entra como outro ramo aqui E em `_canal_de_entrega`,
+        e NUNCA loga o código.
         """
-        if self._dev:
-            logger.warning(
-                "[OTP-DEV] tenant=%s kind=%s value_hash=%s code=%s (entrega mockada — "
-                "digite este código no fluxo de destino)",
-                tenant_id, kind, vh, code,
-            )
-        else:
-            # TODO(prod): enviar via channel-gateway outbound para a âncora
-            # (idealmente um canal DIFERENTE do da sessão, para provar posse).
-            logger.info("[OTP] challenge emitido tenant=%s kind=%s (entrega real pendente)", tenant_id, kind)
+        logger.warning(
+            "[OTP-DEV] tenant=%s kind=%s value_hash=%s code=%s (entrega mockada — "
+            "digite este código no fluxo de destino)",
+            tenant_id, kind, vh, code,
+        )
+        return "dev_log"
 
     # ── verify ─────────────────────────────────────────────────────────────────
 
-    async def verify(self, tenant_id: str, kind: str, value: str, code: str) -> dict[str, Any]:
+    async def verify(
+        self, tenant_id: str, kind: str, value: str, code: str, *, subject: str,
+    ) -> dict[str, Any]:
         """
-        Confere o código. Sucesso → apaga o desafio e zera o rate-limit. Falha →
-        conta tentativa; estouro apaga o desafio. Retorna {verified, reason?,
-        attempts_left?}.
+        Confere o código, e só contra o `subject` para quem o desafio foi emitido.
+        Sucesso → apaga o desafio e zera o rate-limit. Falha → conta tentativa;
+        estouro apaga o desafio. Retorna {verified, reason?, attempts_left?}.
+
+        `subject` divergente conta como tentativa e responde `wrong_code`: dizer
+        "subject errado" confirmaria a quem tenta que o código estava certo.
         """
         try:
             vh = hash_anchor(self._salt, kind, value)
@@ -152,12 +206,16 @@ class OtpService:
             await self._redis.delete(chal_key)
             return {"verified": False, "reason": "too_many_attempts"}
 
-        if secrets.compare_digest(self._hash_code(code), str(d.get("code_hash", ""))):
+        mesmo_subject = bool(subject) and secrets.compare_digest(str(d.get("subject", "")), subject)
+        if not mesmo_subject and d.get("subject"):
+            logger.warning("[OTP] verify com subject DIFERENTE do desafio tenant=%s kind=%s (PID-10)",
+                           tenant_id, kind)
+        if mesmo_subject and secrets.compare_digest(self._hash_code(code), str(d.get("code_hash", ""))):
             await self._redis.delete(chal_key)
             await self._redis.delete(self._rl_key(tenant_id, kind, vh))
             return {"verified": True}
 
-        # código errado — persiste a tentativa preservando o TTL do desafio
+        # código errado (ou subject errado) — persiste a tentativa preservando o TTL
         d["attempts"] = attempts
         await self._redis.set(chal_key, json.dumps(d), keepttl=True)
         return {"verified": False, "reason": "wrong_code", "attempts_left": max_attempts - attempts}

@@ -463,8 +463,8 @@ class IdentityIndex:
             return None
         if row["customer_id"] != customer_id:
             logger.warning(
-                "identity: indice Redis atribui a ancora %s a %s e o cadastro a %s — "
-                "procedencia NAO informada (IDN-10)",
+                "identity: pediu-se a procedencia da ancora %s para %s, e o cadastro a "
+                "atribui a %s — procedencia NAO informada (IDN-10)",
                 kind, customer_id, row["customer_id"],
             )
             return None

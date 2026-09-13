@@ -68,6 +68,10 @@ atestar: **posse do canal** (o cliente controla aquele telefone/e-mail agora).
 - **Entrega mockada no demo:** o código só vai a log/`dev_code` sob `PLUGHUB_OTP_DEV_RETURN_CODE`;
   em produção entrega real pelo canal e **nunca** loga o código. O transporte real (adapter
   outbound, idealmente por canal diferente do da sessão) é follow-up.
+  ⚠️ *Corrigido em 2026-09-13 (PID-10):* "em produção entrega real" não existia — o desafio dizia
+  `sent: true` sem entregar, e o default da flag era LIGADO. Hoje o default é desligado e, sem canal,
+  o desafio recusa (`delivery_unavailable`). Só `phone`/`email` admitem desafio, e só contra âncora
+  autoritativa para o cliente (ver `adr-identity-door-evidence` D8).
 
 ## Alternativas descartadas
 

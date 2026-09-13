@@ -26,6 +26,10 @@ Uso:
    {"match": "dados de acesso",  "answer": {"email": "x@y", "senha": "s"}}]
 `answer` escalar responde `text`/`button`/`list`; `answer` DICT responde
 `interaction: form` (um valor por `field.id`) — ver a nota das TRÊS superfícies.
+`answer_file` no lugar de `answer` responde com o CONTEÚDO de um arquivo que ainda
+não existe quando o cliente sobe — espera até `wait_s` (default 30). Existe para o
+OTP (PID-10): o código só nasce no meio da conversa, e quem o lê é o shell.
+Arquivo que não aparece imprime `ANSWER_FILE_TIMEOUT` e nada é enviado.
 `match` é substring case-insensitive do prompt. Regra sem prompt correspondente NÃO
 é usada — e o cliente imprime `UNMATCHED`, para o veredicto do shell distinguir
 "o fluxo não chegou lá" de "o fluxo chegou e a resposta estava errada".
@@ -75,6 +79,24 @@ async def resolve_secret(tenant_id: str) -> str:
     except Exception:
         pass  # fallback é o caminho normal em single-tenant
     return secret
+
+
+async def resolve_answer(rule: dict):
+    """`answer` literal, ou o conteúdo de `answer_file` assim que ele existir."""
+    if "answer_file" not in rule:
+        return rule["answer"]
+    path, fim = rule["answer_file"], time.time() + float(rule.get("wait_s", 30))
+    while time.time() < fim:
+        try:
+            with open(path, encoding="utf-8") as f:
+                conteudo = f.read().strip()
+            if conteudo:
+                return conteudo
+        except FileNotFoundError:
+            pass
+        await asyncio.sleep(0.5)
+    print(f"ANSWER_FILE_TIMEOUT {path}", flush=True)
+    return None
 
 
 async def main() -> int:
@@ -152,7 +174,9 @@ async def main() -> int:
                     # jamais foi exercido por probe — inclusive o de masking POR
                     # CAMPO, que é onde nasceu o vazamento de 2026-08-29.
                     # `answer` dict/list viaja como está; string segue como antes.
-                    _ans = rule["answer"]
+                    _ans = await resolve_answer(rule)
+                    if _ans is None:
+                        continue
                     _shown = _ans if isinstance(_ans, str) else json.dumps(_ans, ensure_ascii=False)
                     print(f"ANSWER {menu_id} | {_shown}", flush=True)
                     await ws.send(json.dumps({
@@ -184,8 +208,11 @@ async def main() -> int:
                     i, rule = hit
                     used[i] = True
                     answered += 1
-                    print(f"ANSWER <free-text> | {rule['answer']}", flush=True)
-                    await ws.send(json.dumps({"type": "msg.text", "text": rule["answer"]}))
+                    _ans = await resolve_answer(rule)
+                    if _ans is None:
+                        continue
+                    print(f"ANSWER <free-text> | {_ans}", flush=True)
+                    await ws.send(json.dumps({"type": "msg.text", "text": _ans}))
                 elif mtype == "conn.session_closed":
                     print("CLOSED_BY_SERVER", flush=True)
                     break

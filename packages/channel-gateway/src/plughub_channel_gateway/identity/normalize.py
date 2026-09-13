@@ -14,6 +14,11 @@ import re
 # Tipos de âncora suportados (Fase A). 'dev' fica para a fase D (device id).
 ANCHOR_KINDS = ("phone", "email", "cpf", "princ", "dev")
 
+# Âncoras ENTREGÁVEIS — existe canal para mandar um código a elas. Só estas admitem
+# OTP (PID-10, ADR adr-identity-door-evidence D8). `cpf`, `princ` e `dev` identificam
+# e nunca recebem código: "provar posse" de um CPF é provar que se sabe um número.
+DELIVERABLE_KINDS = ("phone", "email")
+
 # Peso de confiança por tipo — usado na desambiguação do Lookup 1.
 # Ordem de autoridade (spec §9/§13.7): princ/ext > cpf/email > phone > dev.
 KIND_CONFIDENCE: dict[str, float] = {

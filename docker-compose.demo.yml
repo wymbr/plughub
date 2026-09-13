@@ -1362,6 +1362,10 @@ services:
       # Identity Resolver (Fase A · Slice 1). Salt is a SECRET → env only.
       PLUGHUB_IDENTITY_RESOLVER_ENABLED:  "true"
       PLUGHUB_IDENTITY_SALT:              changeme_identity_salt_demo
+      # PID-10: entrega de OTP MOCKADA (código no log e na resposta). O default do
+      # serviço é desligado — e desligado o desafio RECUSA `delivery_unavailable`,
+      # porque não há entrega real. Nunca ligar fora do demo.
+      PLUGHUB_OTP_DEV_RETURN_CODE:        "true"
       PLUGHUB_DIALOG_API_URL:             http://dialog-api:3760   # survey web vehicle — snapshot do DialogForm
       PLUGHUB_EVALUATION_API_URL:         http://evaluation-api:3400   # survey response store (S8/S9) — persist-first
       PLUGHUB_EVALUATION_SERVICE_TOKEN:   changeme_eval_service_token_demo   # _require_service da evaluation-api

@@ -1,0 +1,249 @@
+# -*- coding: utf-8 -*-
+"""Exercicio da PID-10 DENTRO do container do gateway.
+
+Lido por stdin: `docker exec -i <gw> python - [censo|exercicio] [--mutar-*]`.
+
+  censo      o que o PARQUE declara e o que ja foi gravado:
+               skills_vivos  — o snapshot do slot `current` de TODO pool (o que roda,
+                               nunca o YAML) E o `flow` publicado de todo skill (o
+                               que roda em pool sem slot, e o que o proximo promote
+                               fotografa): cada `otp_challenge` com `kind` literal
+                               entregavel e `customer_id` presente
+               posse_nao_entregavel — ancoras `possessed` de kind que nao recebe codigo
+                               (legado do desafio tautologico; INFORMACAO)
+
+  exercicio  o codigo da IMAGEM contra Postgres e Redis reais. Fixture: um cliente
+             IMPORTADO (phone+cpf `authoritative`), um phone `declared` do mesmo
+             cliente, e um segundo cliente sem nada.
+    cpf_autoritativo_recusa        cpf do cadastro -> undeliverable_kind
+    declarado_recusa               phone declarado -> anchor_not_authoritative
+    autoritativo_de_outro_recusa   phone autoritativo de A pedido para B -> recusa
+    sem_entrega_recusa             OtpService sem canal -> delivery_unavailable
+    autoritativo_emite             CONTROLE: phone autoritativo de A para A -> sent
+    verify_de_outro_nao_anexa      codigo certo, customer B -> nao confere, PG intacto
+    verify_mesmo_cliente_possessed CONTROLE: mesmo cliente -> possessed no cadastro
+    rota_viva_recusa_cpf           a ROTA do processo que esta de pe (8010) recusa cpf
+    rota_viva_emite                CONTROLE da rota: phone autoritativo -> sent + dev_code
+
+  Mutacoes (cada uma TEM de reprovar o seu caso; os controles seguem verdes):
+    --mutar-procedencia  anchor_provenance sempre `authoritative`
+    --mutar-subject      verify confere contra o subject GUARDADO, nao o informado
+    --mutar-entregavel   `cpf` volta a ser entregavel
+
+Limpa sempre o que criou (por hash, por id e pelo `system` da importacao).
+"""
+import asyncio
+import json
+import os
+import sys
+import uuid
+
+import asyncpg
+import httpx
+import redis.asyncio as aioredis
+
+from plughub_channel_gateway.adapters.webhook import WebhookAdapter
+from plughub_channel_gateway.config import get_settings
+from plughub_channel_gateway.identity import otp as otp_mod
+from plughub_channel_gateway.identity.index import IdentityIndex
+from plughub_channel_gateway.identity.normalize import DELIVERABLE_KINDS, hash_anchor
+from plughub_channel_gateway.identity.otp import OtpService
+
+MODO = sys.argv[1] if len(sys.argv) > 1 else "exercicio"
+MUT_PROV = "--mutar-procedencia" in sys.argv
+MUT_SUBJ = "--mutar-subject" in sys.argv
+MUT_ENTR = "--mutar-entregavel" in sys.argv
+INJETAR = "--injetar" in sys.argv   # censo: acrescenta um snapshot sintetico que desafia cpf
+SYSTEM = "__probe_pid10__"
+ROTA = "http://localhost:8010/v1/channels/webhook/identity/otp/challenge"
+AR = os.getenv("PLUGHUB_AGENT_REGISTRY_URL", "http://agent-registry:3300")
+
+
+def _walk(node):
+    if isinstance(node, dict):
+        yield node
+        for v in node.values():
+            yield from _walk(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk(v)
+
+
+async def censo(s, db):
+    import yaml
+    out = {"pools": 0, "pools_sem_snapshot": 0, "desafios": 0, "violacoes": [], "leitura_falhou": None}
+    try:
+        flows = []
+        async with httpx.AsyncClient(timeout=15, headers={"x-tenant-id": s.tenant_id}) as http:
+            r = await http.get(AR + "/v1/pools")
+            r.raise_for_status()
+            pools = r.json()
+            pools = pools.get("pools", pools) if isinstance(pools, dict) else pools
+            out["pools_listados"] = len(pools)
+            for p in pools:
+                pid = p.get("pool_id")
+                sr = await http.get("%s/v1/pools/%s/slots" % (AR, pid))
+                sj = sr.json() if sr.status_code == 200 else {}
+                cur = (sj.get("slots", sj) or {}).get("current") or {}
+                snap = cur.get("yaml_snapshot")
+                if not snap:
+                    out["pools_sem_snapshot"] += 1
+                    continue
+                out["pools"] += 1
+                flows.append((pid, cur.get("skill_id"), yaml.safe_load(snap) if isinstance(snap, str) else snap))
+            # Pool sem snapshot roda o `skill.flow` (fallback do bridge) — e o `flow` de
+            # produção de TODO skill e o que o proximo promote fotografa. Censo so dos
+            # snapshots deixaria esses de fora calado.
+            rs = await http.get(AR + "/v1/skills")
+            rs.raise_for_status()
+            skills = rs.json().get("skills", [])
+            out["skills_flow"] = len(skills)
+            for sk in skills:
+                if sk.get("flow"):
+                    flows.append(("(skill.flow)", sk.get("skill_id"), sk["flow"]))
+        if INJETAR:
+            flows.append(("__injetado__", "__injetado__", {"steps": [
+                {"id": "desafio_cpf", "tool": "otp_challenge", "input": {"kind": "cpf", "value": "x"}}]}))
+        for pid, skill, flow in flows:
+            for st in _walk(flow):
+                if st.get("tool") != "otp_challenge":
+                    continue
+                out["desafios"] += 1
+                inp = st.get("input") or {}
+                kind = inp.get("kind")
+                if kind not in DELIVERABLE_KINDS or not inp.get("customer_id"):
+                    out["violacoes"].append({"pool": pid, "skill": skill, "step": st.get("id"),
+                                             "kind": kind, "customer_id": bool(inp.get("customer_id"))})
+    except Exception as e:  # leitor quebrado nunca vira "zero violacoes"
+        out["leitura_falhou"] = "%s: %s" % (type(e).__name__, e)
+    rows = await db.fetch(
+        "SELECT kind, count(*) n FROM identity.customer_secondary_keys WHERE tenant_id=$1 "
+        "AND verification_class='possessed' AND kind <> ALL($2::text[]) GROUP BY kind",
+        s.tenant_id, list(DELIVERABLE_KINDS))
+    out["posse_nao_entregavel"] = {r["kind"]: r["n"] for r in rows}
+    return out
+
+
+async def exercicio(s, r, db):
+    t = s.tenant_id
+    salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
+    idx = IdentityIndex(redis=r, salt=salt, db_pool=db)
+    sx = "%06d" % (uuid.uuid4().int % 1000000)
+    phone, phone_decl, cpf = "+55110060" + sx[:5], "+55110070" + sx[:5], "100" + sx + "10"
+    outro = "cus_probe_pid10_outro_" + sx
+    hashes = [("phone", hash_anchor(salt, "phone", phone)), ("phone", hash_anchor(salt, "phone", phone_decl)),
+              ("cpf", hash_anchor(salt, "cpf", cpf))]
+    cids = {outro}
+    out = {"mutar": {"procedencia": MUT_PROV, "subject": MUT_SUBJ, "entregavel": MUT_ENTR}, "casos": {}}
+    c = out["casos"]
+
+    def adaptador(dev=True):
+        a = WebhookAdapter.__new__(WebhookAdapter)
+        a._identity = idx
+        a._otp = OtpService(redis=r, salt=salt, dev_return_code=dev)
+        return a
+
+    async def chave(h):
+        async with db.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT customer_id, verification_class, provenance FROM identity.customer_secondary_keys "
+                "WHERE tenant_id=$1 AND kind='phone' AND value_hash=$2", t, h)
+
+    try:
+        res = await idx.import_customers(t, SYSTEM, [{
+            "external_id": "pid10-" + sx,
+            "anchors": [{"kind": "phone", "value": phone}, {"kind": "cpf", "value": cpf}],
+        }], imported_by="probe_pid10")
+        a_cid = res[0].customer_id if res and res[0].outcome == "created" else ""
+        out["fixture"] = {"outcome": res[0].outcome if res else None}
+        if not a_cid:
+            out["sem_fixture"] = True
+            return out
+        cids.add(a_cid)
+        await idx.attach_anchor(t, a_cid, "phone", phone_decl, persist_durable=True, provenance="declared")
+
+        if MUT_PROV:
+            async def _sempre(self, tenant_id, customer_id, kind, value):
+                return "authoritative"
+            IdentityIndex.anchor_provenance = _sempre
+        if MUT_SUBJ:
+            orig = OtpService.verify
+
+            async def _subject_guardado(self, tenant_id, kind, value, code, *, subject):
+                raw = await self._redis.get(self._chal_key(tenant_id, kind, hash_anchor(self._salt, kind, value)))
+                guardado = json.loads(raw).get("subject") if raw else subject
+                return await orig(self, tenant_id, kind, value, code, subject=guardado)
+            OtpService.verify = _subject_guardado
+        if MUT_ENTR:
+            otp_mod.DELIVERABLE_KINDS = ("phone", "email", "cpf")
+
+        a = adaptador()
+        out["cpf"] = await a.otp_challenge(t, a_cid, "cpf", cpf)
+        c["cpf_autoritativo_recusa"] = out["cpf"] == {"sent": False, "reason": "undeliverable_kind"}
+
+        out["declarado"] = await a.otp_challenge(t, a_cid, "phone", phone_decl)
+        c["declarado_recusa"] = out["declarado"] == {"sent": False, "reason": "anchor_not_authoritative"}
+
+        out["de_outro"] = await a.otp_challenge(t, outro, "phone", phone)
+        c["autoritativo_de_outro_recusa"] = out["de_outro"] == {"sent": False, "reason": "anchor_not_authoritative"}
+
+        c["sem_entrega_recusa"] = (await adaptador(dev=False).otp_challenge(t, a_cid, "phone", phone)
+                                   == {"sent": False, "reason": "delivery_unavailable"})
+
+        ch = await a.otp_challenge(t, a_cid, "phone", phone)
+        out["emite"] = {k: v for k, v in ch.items() if k != "dev_code"}
+        c["autoritativo_emite"] = ch.get("sent") is True and ch.get("delivery") == "dev_log" and bool(ch.get("dev_code"))
+        code = ch.get("dev_code", "")
+
+        v_outro = await a.otp_verify(t, outro, "phone", phone, code)
+        k = await chave(hashes[0][1])
+        c["verify_de_outro_nao_anexa"] = (v_outro.get("verified") is False and k is not None
+                                          and k["customer_id"] == a_cid and k["verification_class"] == "claimed")
+        out["verify_outro"] = v_outro
+
+        v_mesmo = await a.otp_verify(t, a_cid, "phone", phone, code)
+        k = await chave(hashes[0][1])
+        # sob --mutar-subject o verify alheio JA consumiu o desafio; o controle nao
+        # tem como passar, e isso e dito em vez de mascarado
+        c["verify_mesmo_cliente_possessed"] = (v_mesmo.get("verified") is True and k is not None
+                                               and k["customer_id"] == a_cid
+                                               and k["verification_class"] == "possessed"
+                                               and k["provenance"] == "authoritative")
+        out["verify_mesmo"] = v_mesmo
+
+        async with httpx.AsyncClient(timeout=15) as http:
+            rc = await http.post(ROTA, json={"tenant_id": t, "customer_id": a_cid, "kind": "cpf", "value": cpf})
+            c["rota_viva_recusa_cpf"] = rc.status_code == 200 and rc.json() == {"sent": False, "reason": "undeliverable_kind"}
+            rp = await http.post(ROTA, json={"tenant_id": t, "customer_id": a_cid, "kind": "phone", "value": phone})
+            j = rp.json() if rp.status_code == 200 else {}
+            out["rota_emite"] = {k2: v2 for k2, v2 in j.items() if k2 != "dev_code"}
+            c["rota_viva_emite"] = j.get("sent") is True and bool(j.get("dev_code"))
+        return out
+    finally:
+        async with db.acquire() as conn:
+            for kind, h in hashes:
+                await conn.execute("DELETE FROM identity.customer_secondary_keys WHERE tenant_id=$1 AND kind=$2 "
+                                   "AND value_hash=$3", t, kind, h)
+            await conn.execute("DELETE FROM identity.customer_external_refs WHERE tenant_id=$1 AND system=$2",
+                               t, SYSTEM)
+            await conn.execute("DELETE FROM identity.customers WHERE customer_id = ANY($1::text[])", list(cids))
+        for kind, h in hashes:
+            await r.delete("%s:identity:%s:%s" % (t, kind, h), "%s:otp:chal:%s:%s" % (t, kind, h),
+                           "%s:otp:rl:%s:%s" % (t, kind, h))
+
+
+async def main():
+    s = get_settings()
+    r = aioredis.from_url(s.redis_url)
+    db = await asyncpg.create_pool(s.database_url, min_size=1, max_size=2)
+    try:
+        if MODO == "censo":
+            return await censo(s, db)
+        return await exercicio(s, r, db)
+    finally:
+        await db.close()
+        await r.aclose()
+
+
+if __name__ == "__main__":
+    print(json.dumps(asyncio.run(main()), default=str))

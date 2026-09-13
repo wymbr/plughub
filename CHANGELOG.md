@@ -1,5 +1,93 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (10) — PID-10: OTP só contra âncora entregável e autoritativa, e a recusa é explícita
+
+O D8 do ADR da porta de identidade dizia o que o OTP não podia fazer. Medido, ele fazia as três
+coisas: desafiava CPF, dizia `sent: true` sem entregar, e aceitava âncora que o próprio cliente
+informou.
+
+### 1 · O que estava
+
+| onde | o quê |
+|---|---|
+| `OtpService.challenge` | aceitava qualquer `kind`; devolvia `sent: true` sempre — fora do modo dev a entrega era `TODO(prod)` |
+| `PLUGHUB_OTP_DEV_RETURN_CODE` | default **ligado** no código: deploy que esquecesse a env publicava o código na resposta |
+| `skill_limite_entrada_v1` | `otp_challenge(kind: cpf)` — e o verify deixava o CPF **`possessed` no cadastro**: dali em diante, digitar o CPF abria as pendências |
+| `otp_verify` | anexava a posse ao `customer_id` INFORMADO, não ao do desafio |
+| tool `otp_challenge` | devolvia `sent: false` como sucesso: o skill seguia pedindo um código que ninguém mandou |
+
+O quarto não estava na ficha. Apareceu ao desenhar o portão: sem ele, a procedência seria conferida
+no desafio e ignorada na conferência — pede-se o código para o cliente A, confere-se para o B.
+
+### 2 · A recusa, e onde ela mora
+
+São dois fatos, e cada um tem uma casa:
+
+- **o mecanismo** (`OtpService.refusal`) recusa o que não depende de cliente — kind fora de
+  `DELIVERABLE_KINDS` (`undeliverable_kind`) e ausência de canal de entrega (`delivery_unavailable`).
+  O modo dev **é** um canal, e diz que é: `delivery: "dev_log"`. O default dele passou a desligado,
+  e o compose do demo o liga com o aviso de nunca ligar fora dali;
+- **o adaptador** recusa a âncora que `anchor_provenance` não dá como `authoritative` **para o
+  `customer_id` que pede** (`anchor_not_authoritative`), e o pedido sem cliente
+  (`customer_required`).
+
+A do mecanismo é consultada primeiro: um CPF responde sobre o mecanismo, não sobre o cliente. O
+desafio guarda o cliente (`subject`), e o verify só confere para o mesmo — com `wrong_code`, que não
+diz a quem tenta que o código estava certo. A tool devolve toda recusa como `isError`.
+
+### 3 · O fluxo do limite
+
+A plataforma só guarda o hash do telefone, então **o número do canal cadastrado vem do cliente**:
+o fluxo pede o celular, e o que prova é casar com o cadastro E receber o código nele. Recusa, de
+qualquer motivo, vira **uma** frase e transferência ao SAC — dizer *"este não é o seu número
+cadastrado"* faria do passo um oráculo de telefone por CPF. A consulta pós-OTP leva o telefone junto,
+porque é ele que está `possessed`; o CPF segue `claimed`. Dois nós novos no roteiro
+(`dialog_limite_roteiro` v2). O intake de portabilidade só ganhou o `customer_id`.
+
+Os dois skills foram publicados e promovidos nos slots (`limite_ia`, `portabilidade_ia`).
+
+### 4 · Consequências que ficam ditas
+
+- **Todo acesso de retorno ao limite passa pelo OTP.** Antes, um OTP ao CPF valia para sempre.
+- **O (4) do ADR fica vivo para cliente importado**: quem conclui o OTP deixa o telefone `possessed`
+  no cadastro, e posse durável é lida como fato da sessão. Fecha em D5/D6 (PID-01..03). Exposição
+  hoje: zero importados fora das fixtures.
+- **IDN-13** — o legado: **25** CPFs `possessed` gravados pelo desafio tautológico, **1** com pendência
+  viva. O produtor fechou; o que ele gravou continua abrindo pendência.
+- **IDN-14** — `normalize_anchor` assume DDI: `11 9…` e `+55 11 9…` são dois hashes. O prompt pede o
+  código do país como paliativo.
+
+### 5 · Testes e probe
+
+- `test_otp.py` (reescrito para `subject`) + `TestOtpRecusaSobreSiMesmo`: não-entregável e sem-canal
+  recusam **sem gravar desafio nem consumir rate-limit**, e o verify alheio não confere nem com o
+  código certo — com o controle do cliente certo logo depois.
+- `test_otp_gate.py`: a ordem das recusas, a procedência lida por (âncora, cliente), o verify amarrado
+  — com `hasattr` sobre os métodos substituídos (VOZ-03) e controle que emite.
+- `otp-challenge-refusal.test.ts`: recusa vira `isError` com o motivo; `sent: true` segue sucesso.
+- **`probe_otp_gate.sh`** — A: censo dos desafios **vivos** (slot `current` de todo pool **e** o
+  `skill.flow` publicado, porque 10 dos 41 pools não têm snapshot); B: o adaptador contra Postgres e
+  Redis reais e a rota do processo de pé, 9 casos; C: três mutações, cada uma derrubando o seu caso
+  com o controle anterior de pé; D: um snapshot sintético que desafia CPF acende o censo.
+  **Vermelho primeiro:** antes do deploy, o censo acusou os dois skills.
+- **`probe_journey_merge_status_access.sh` adaptado**: ele promovia o CPF a `possessed` para pular o
+  step-up, e esse caminho deixou de existir. O cliente nasce importado
+  (`_import_customer_fixture.py`) e cada acesso faz o OTP dentro da conversa — o `_ws_chat.py` ganhou
+  `answer_file`, e um vigia lê o código da linha do modo dev. Resultado: a conversa real percorre
+  CPF → oferta → celular → código → pendência, **duas vezes**, e o probe fica verde (6/0). É também a
+  prova de ponta a ponta do caminho feliz desta ficha.
+
+### 6 · Verificação
+
+channel-gateway **839 verdes** sobre a imagem; mcp-server **363 verdes** e `tsc` limpo. Imagens
+rebuildadas: channel-gateway, mcp-server-plughub. Verdes ao vivo: `probe_otp_gate`,
+`probe_journey_merge_status_access`, `probe_identity_provenance` (que pegou um literal
+`authoritative` fora da constante no adaptador — corrigido), `probe_identity_index_owner`,
+`gate_form_by_node`, `probe_declared_script_integrity`, `probe_mcp_tool_guard_census`,
+`probe_adapter_self_calls`, `probe_gates_manifest_coverage`, `probe_task_ledger`. Cadastro: 98 · 93
+depois do `probe_otp_gate` (0 fixtures); 99 · 95 depois do da journey, que deixa o seu cliente
+importado — como já deixava o cliente que promovia por OTP.
+
 ## 2026-09-13 (9) — IDN-12: resolve ambíguo deixa de devolver um cliente — e de entregar `resume_token` alheio
 
 Achado ao fechar a IDN-11: `ambiguous` passou a aparecer também com o índice frio, e fui ver quem o

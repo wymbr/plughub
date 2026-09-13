@@ -263,6 +263,11 @@ probe_identity_provenance.sh
 # dois caminhos com controle positivo, e mutacao dos dois lados. Fixtures por hash e id; a
 # divergencia injetada e desfeita no MESMO processo (a versao anterior sujou o Redis vivo).
 probe_identity_index_owner.sh
+# PID-10. O OTP desafiava qualquer kind (inclusive CPF, que nao tem para onde mandar codigo) e
+# dizia `sent: true` sem entrega; o verify anexava a posse a qualquer customer_id. Censo dos
+# desafios vivos (slot current + skill.flow) contra kind nao-entregavel, exercicio do adaptador
+# e da rota viva com controle que emite, tres mutacoes e a do censo. Fixtures por hash e id.
+probe_otp_gate.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,
