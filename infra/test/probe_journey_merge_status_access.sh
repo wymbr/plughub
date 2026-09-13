@@ -147,9 +147,14 @@ echo "   ✓ CPF $CPF · celular $FONE · customer $CUST (importado)"
 
 # O código do OTP só nasce no meio da conversa. Um vigia lê a linha do modo dev (a
 # DESTE celular, pelo hash) e grava o código no arquivo que o cliente WS espera.
+# ⚠️ `--since` com o INSTANTE do vigia, em nanossegundos — nunca uma janela relativa.
+# A v1 usava `--since 1s`, e o acesso 2b chegou a começar 0,8 s depois do código do
+# acesso 1: o vigia pegou a linha VELHA, entregou um código já consumido e o verify
+# falhou — o probe acusou a pertença por um defeito do instrumento (medido na IDN-13).
 otp_vigia() {  # $1 = arquivo dentro do container
+  local desde; desde=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
   $COMPOSE exec -T channel-gateway rm -f "$1" </dev/null >/dev/null 2>&1
-  ( timeout 150 $COMPOSE logs -f --no-log-prefix --since 1s channel-gateway 2>&1 \
+  ( timeout 150 $COMPOSE logs -f --no-log-prefix --since "$desde" channel-gateway 2>&1 \
       | grep -m1 --line-buffered "OTP-DEV.*kind=phone value_hash=$PHASH" \
       | sed -n 's/.*code=\([0-9]*\).*/\1/p' \
       | { read -r code; [ -n "$code" ] && $COMPOSE exec -T channel-gateway sh -c "printf %s $code > $1" </dev/null; } ) &

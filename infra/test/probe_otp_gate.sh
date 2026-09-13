@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# probe_otp_gate.sh — 2026-09-13  (PID-10)
+# probe_otp_gate.sh — 2026-09-13  (PID-10 · IDN-13)
 #
 # PERGUNTA: o OTP so e emitido contra ancora ENTREGAVEL e de procedencia
 #           AUTORITATIVA para o cliente que pede — recusando de forma explicita?
@@ -13,16 +13,23 @@
 #   pendencias e o `resume_token` sem prova nenhuma. E o verify anexava a posse a
 #   qualquer `customer_id` informado, nao ao do desafio.
 #
-# QUATRO RAMOS
+# CINCO RAMOS
 #   A  CENSO DO PARQUE — o snapshot do slot `current` de todo pool (o que RODA, nunca
 #      o YAML) e o `skill.flow` publicado (pool sem slot, e o proximo promote): todo
-#      `otp_challenge` com kind entregavel e `customer_id`. Violacao REPROVA; leitor quebrado e INCONCLUSIVO. Informa, sem julgar, as ancoras
-#      `possessed` de kind nao-entregavel ja gravadas (o legado).
+#      `otp_challenge` com kind entregavel e `customer_id`. Violacao REPROVA; leitor
+#      quebrado e INCONCLUSIVO. E, desde a IDN-13, posse gravada em kind
+#      nao-entregavel — no cadastro ou no indice — tambem REPROVA.
 #   B  EXERCICIO NA IMAGEM — o adaptador contra Postgres e Redis reais, e a rota do
 #      processo que esta de pe, cada recusa com o seu CONTROLE que emite.
 #   C  MUTACOES DO B — procedencia sempre autoritativa · verify pelo subject guardado
 #      · cpf entregavel: cada uma derruba o SEU caso, e o controle anterior segue.
 #   D  MUTACAO DO A — um snapshot sintetico que desafia cpf acende o censo.
+#   E  LEGADO (IDN-13) — posse plantada num cpf, como o OTP ao CPF a deixava: a
+#      leitura a ignora (Redis quente e cadastro), a escrita recusa, a migracao do boot
+#      a rebaixa; controle de phone `possessed` intacto; tres mutacoes.
+#
+#   IDN-13: o OTP ao CPF gravou 25 CPFs `possessed`, e um deles tinha pendencia
+#   `auto` viva com `resume_token` — digitar o CPF entregava o resultado.
 #
 # EXIT: 0 OK · 1 FALHA · 2 INCONCLUSIVO
 
@@ -69,7 +76,12 @@ else
   else
     ok "$ND desafio(s) de OTP ($NP snapshots vivos + skill.flow publicados), todos entregaveis e com customer_id"
   fi
-  echo "  INFO    posse ja gravada em kind nao-entregavel (legado, nao julgado aqui): $(expr "$J" "d['posse_nao_entregavel']")"
+  PL=$(expr "$J" "sum(d['posse_nao_entregavel'].values())"); PI=$(expr "$J" "d['posse_nao_entregavel_indice']")
+  if [ "$PL" = "0" ] && [ "$PI" = "0" ]; then
+    ok "nenhuma posse gravada em kind nao-entregavel (cadastro 0 · indice 0)"
+  else
+    falha "posse em kind nao-entregavel: cadastro $(expr "$J" "d['posse_nao_entregavel']") · indice $PI — o legado do OTP ao CPF segue gravado (IDN-13)"
+  fi
 fi
 
 # ── B ────────────────────────────────────────────────────────────────────────
@@ -116,6 +128,36 @@ if [ "$(expr "$J" "any(v['pool'] == '__injetado__' and v['kind'] == 'cpf' for v 
 else
   falha "o censo NAO acusou o desafio a cpf injetado — o ramo A nao pode reprovar"
 fi
+
+# ── E ────────────────────────────────────────────────────────────────────────
+echo ""
+echo "── E · LEGADO DE POSSE EM KIND NAO-ENTREGAVEL (IDN-13) ────────────────"
+CASOS_E="legado_quente_resolve_claimed legado_frio_resolve_claimed escrita_recusa migracao_rebaixa controle_phone_possessed"
+J=$(roda legado)
+echo "   $J" | cut -c1-500
+if [ -z "$J" ] || [ "$(expr "$J" "'casos' in d")" != "True" ]; then
+  incon "o exercicio do legado nao devolveu JSON"
+else
+  for k in $CASOS_E; do
+    [ "$(caso "$J" "$k")" = "True" ] && ok "$k" || falha "$k"
+  done
+fi
+mutaE() {  # $1 flag · $2 casos que TEM de cair · $3 controles que TEM de ficar
+  local J; J=$(roda legado "$1")
+  [ -z "$J" ] && { incon "$1: sem JSON"; return; }
+  for k in $2; do
+    [ "$(caso "$J" "$k")" = "False" ] && ok "$1 derruba $k" || falha "$1 NAO derrubou $k — o caso nao mede a regra"
+  done
+  for k in $3; do
+    [ "$(caso "$J" "$k")" = "True" ] && ok "$1 mantem o controle $k" || falha "$1 derrubou o controle $k"
+  done
+}
+mutaE --mutar-leitura  "legado_quente_resolve_claimed legado_frio_resolve_claimed" "escrita_recusa migracao_rebaixa controle_phone_possessed"
+mutaE --mutar-escrita  "escrita_recusa" "legado_quente_resolve_claimed migracao_rebaixa controle_phone_possessed"
+# a lista de kinds entregaveis e UMA constante para a guarda de escrita e para a
+# migracao (uma casa so, de proposito): mexer nela derruba as duas. A leitura usa a
+# regra do normalize e fica de pe — e o controle de que a mutacao nao e global.
+mutaE --mutar-migracao "migracao_rebaixa escrita_recusa" "legado_quente_resolve_claimed controle_phone_possessed"
 
 # ── veredicto ────────────────────────────────────────────────────────────────
 echo ""

@@ -267,6 +267,8 @@ probe_identity_index_owner.sh
 # dizia `sent: true` sem entrega; o verify anexava a posse a qualquer customer_id. Censo dos
 # desafios vivos (slot current + skill.flow) contra kind nao-entregavel, exercicio do adaptador
 # e da rota viva com controle que emite, tres mutacoes e a do censo. Fixtures por hash e id.
+# IDN-13: o legado (posse gravada em cpf) virou veredicto do censo e ramo proprio — leitura,
+# escrita e migracao do boot, cada uma com a sua mutacao.
 probe_otp_gate.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.

@@ -1,5 +1,81 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (11) — IDN-13: posse só existe em âncora entregável — na leitura, na escrita e no dado
+
+A PID-10 fechou quem produzia posse em CPF. O que ele já tinha gravado continuava valendo.
+
+### 1 · O dano, medido antes de mexer
+
+| onde | quanto |
+|---|---|
+| `identity.customer_secondary_keys`, `cpf` + `possessed` | **25** linhas, de 2026-08-13 a 2026-09-12 |
+| índice Redis, `cpf` com `vc: possessed` | **1** chave quente |
+| clientes desses 25 com pendência viva | **1** — e é o da chave quente |
+
+Esse um tinha duas pendências, uma `policy: auto` com `resume_token` e validade até 2026-09-19. O
+portão do `pending_workflow_get` lê a classe da âncora que resolve, e o CPF resolvia `possessed`:
+**digitar aquele CPF no limite entregava o resultado do processo**, sem prova nenhuma. Exposição 25,
+dano 1 — dois números, não um.
+
+Backup das 25 linhas guardado antes da migração (fora do repositório).
+
+### 2 · Uma regra, três pontas
+
+`effective_verification_class(kind, vc)` em `normalize.py`: `possessed` só vale em
+`DELIVERABLE_KINDS`. Ela é aplicada:
+
+- **na leitura** — em todo ponto que lê a classe guardada: o candidato do resolve (Redis quente e
+  cadastro), o dono no cadastro (que alimenta a reidratação), o reapontamento da importação e a
+  preservação de posse do `attach_anchor`. Consequência que não é só o portão: o CPF legado deixa de
+  ganhar o bônus de posse no **desempate** — antes, um CPF `possessed` (0,90 + 1,0) vencia um
+  telefone `possessed` de outro cliente (0,70 + 1,0), e a posse que não existia decidia **quem** era
+  o cliente;
+- **na escrita** — `attach_anchor` e `promote_to_durable` recusam `possessed` em kind
+  não-entregável (`ValueError`), como a `_writer_provenance` recusa `authoritative`: o único produtor
+  legítimo já não pede isso, e um segundo produtor tem de falhar alto;
+- **no dado** — `migrate_undeliverable_possession`, idempotente, chamada pelo `ensure_schema` no
+  boot: rebaixa a linha a `claimed` com `verified_at` nulo (não houve verificação) e reescreve a
+  chave quente **do mesmo cliente** com o TTL preservado. Loga quantas mudou. No deploy:
+  *"25 ancora(s) … rebaixadas a `claimed` (1 chave(s) quente(s) do indice)"*.
+
+A leitura sozinha bastaria para o portão; a migração existe para o **dado** parar de mentir — uma
+linha dizendo `possessed` que ninguém deve ler é o valor plausível esperando o próximo leitor que
+não conhece a regra.
+
+### 3 · Duas fixtures eram o próprio defeito
+
+`test_identity_index_owner` e `test_identity_resolve_temperature` usavam **CPF `possessed`** como
+âncora possuída genérica. Ficaram vermelhos com a regra, e a correção foi da fixture (telefone), não
+da regra — cada uma com a nota do porquê.
+
+### 4 · Testes e probe
+
+- `test_identity_possession_deliverable.py` (17): a tabela da regra; resolve quente e frio lendo
+  `claimed` e a reidratação gravando `claimed`; o desempate; as duas recusas de escrita; a
+  preservação que não preserva CPF; a migração reescrevendo só a chave do mesmo cliente, com
+  `keepttl`, e calada quando não há legado — cada lado com o seu controle de telefone.
+- **`probe_otp_gate.sh`**: o ramo A passou de INFORMAÇÃO a **veredicto** (cadastro e índice), e o
+  ramo E planta o legado como ele estava e prova leitura, escrita, migração e o controle, com três
+  mutações. A da migração derruba também a recusa de escrita — as duas leem a mesma constante, e o
+  probe diz isso em vez de esconder. **Vermelho primeiro**: antes do deploy o censo dava 25 · 1.
+
+### 5 · Uma corrida no instrumento da PID-10
+
+A primeira rodada do `probe_journey_merge_status_access` depois deste deploy saiu **vermelha** (4 ·
+3): a segunda consulta não chegou ao menu. Não era a regra. O vigia que lê o código do OTP no log
+usava `--since 1s`, e o acesso 2b começou **0,8 s** depois do código do acesso 1 — o vigia pegou a
+linha velha, entregou um código já consumido, e o verify falhou (medido na linha do tempo do
+gateway: resposta 40 ms depois do desafio, rápida demais para ter lido o log novo). Reproduzido
+isolado, o acesso passava inteiro. Na PID-10 o probe passou por sorte de tempo. Hoje o vigia usa o
+**instante** em que começa, em nanossegundos, e a rodada seguinte saiu verde (6 · 0).
+
+### 6 · Verificação
+
+channel-gateway **856 verdes**. Imagem rebuildada. Verdes ao vivo: `probe_otp_gate` (5 ramos),
+`probe_identity_provenance`, `probe_identity_index_owner`, `probe_gates_manifest_coverage`,
+`probe_journey_merge_status_access` (o OTP por telefone, ponta a ponta). Cadastro: cpf 74 `claimed`,
+phone 14 `claimed` · 7 `possessed`; 0 fixtures do probe.
+
 ## 2026-09-13 (10) — PID-10: OTP só contra âncora entregável e autoritativa, e a recusa é explícita
 
 O D8 do ADR da porta de identidade dizia o que o OTP não podia fazer. Medido, ele fazia as três

@@ -51,7 +51,7 @@ o ramo de produção é `TODO(prod)` ([otp.py:109](../../packages/channel-gatewa
 e `challenge` devolve `{"sent": true}` de qualquer jeito.
 
 **(3) O fluxo vivo desafia um CPF.** *(Fechado em 2026-09-13, PID-10 — mas o que ele gravou ficou: 25
-CPFs `possessed`, IDN-13.)* `skill_limite_entrada_v1` faz `otp_challenge(kind: cpf, value:
+CPFs `possessed`, IDN-13 — rebaixados no mesmo dia: leitura, escrita e migração do boot.)* `skill_limite_entrada_v1` faz `otp_challenge(kind: cpf, value:
 <o CPF digitado>)` (`:210`). Não existe canal de entrega para um CPF.
 
 **(4) `possessed` é fato DURÁVEL da âncora lido como fato da SESSÃO.** O `resolve_or_provision`

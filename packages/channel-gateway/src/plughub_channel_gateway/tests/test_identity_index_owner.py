@@ -56,6 +56,7 @@ def _h(kind, value):
 
 
 PHONE, EMAIL, CPF = "+5511999990000", "p@x.com", "12345678909"
+PHONE2 = "+5511999990009"
 
 
 class TestIdentidadeProgressiva:
@@ -73,17 +74,19 @@ class TestIdentidadeProgressiva:
 
     async def test_ancora_sem_dono_segue_anexada_e_com_o_mesmo_dono_preserva_a_classe(self):
         # Controle POSITIVO: a identidade progressiva continua funcionando.
+        # (A âncora `possessed` era um CPF até a IDN-13 — a fixture era o próprio legado
+        # do OTP ao CPF, que hoje é lido como `claimed`. Posse só em kind entregável.)
         redis = _Redis()
         idx = IdentityIndex(redis=redis, salt=SALT,
-                            db_pool=_pg({("cpf", _h("cpf", CPF)): ("cus_prospect", "possessed")}))
+                            db_pool=_pg({("phone", _h("phone", PHONE2)): ("cus_prospect", "possessed")}))
         redis.kv[idx._identity_key(T, "email", _h("email", EMAIL))] = _encode_index("cus_prospect", "claimed")
 
         await idx.resolve_or_provision(T, [{"kind": "email", "value": EMAIL},
                                            {"kind": "phone", "value": PHONE},
-                                           {"kind": "cpf", "value": CPF}])
+                                           {"kind": "phone", "value": PHONE2}])
 
         assert _decode_index(redis.kv[idx._identity_key(T, "phone", _h("phone", PHONE))]) == ("cus_prospect", "claimed")
-        assert _decode_index(redis.kv[idx._identity_key(T, "cpf", _h("cpf", CPF))]) == ("cus_prospect", "possessed")
+        assert _decode_index(redis.kv[idx._identity_key(T, "phone", _h("phone", PHONE2))]) == ("cus_prospect", "possessed")
 
 
 class TestReidratacao:

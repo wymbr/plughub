@@ -109,7 +109,8 @@ class TestMesmaRespostaQualquerTemperatura:
 
     async def test_vencedor_unico_segue_igual_nos_dois(self):
         # Controle POSITIVO: sem empate, a resposta não mudou.
-        donos = {("cpf", _h("cpf", CPF_B)): ("cus_b", "possessed")}
+        # (Era um CPF `possessed` — o legado que a IDN-13 passou a ler como `claimed`.)
+        donos = {("phone", _h("phone", PHONE_B)): ("cus_b", "possessed")}
         frio = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pg(donos))
-        ref = await frio.resolve_or_provision(T, _anc(("cpf", CPF_B)), provision=False)
+        ref = await frio.resolve_or_provision(T, _anc(("phone", PHONE_B)), provision=False)
         assert (ref.customer_id, ref.matched_by, ref.verification_class) == ("cus_b", "durable", "possessed")

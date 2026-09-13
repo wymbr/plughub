@@ -23,7 +23,9 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from .normalize import (
+    DELIVERABLE_KINDS,
     anchor_rank_score,
+    effective_verification_class,
     hash_anchor,
     kind_confidence,
     normalize_anchor,
@@ -142,6 +144,21 @@ def _writer_provenance(p: str | None) -> str | None:
     if p not in PROVENANCE_WRITERS:
         raise ValueError("procedencia desconhecida: %r" % (p,))
     return p
+
+
+def _writer_verification_class(kind: str, vc: str) -> str:
+    """Recusa gravar `possessed` em âncora que não recebe código (IDN-13).
+
+    Quem pede isso é defeito do chamador — o único produtor de posse é o
+    `otp_verify`, e o desafio já recusa kind não-entregável (PID-10). Recusar alto
+    aqui é o que impede um segundo produtor de reabrir o furo em silêncio.
+    """
+    if vc == "possessed" and kind not in DELIVERABLE_KINDS:
+        raise ValueError(
+            "`possessed` em ancora %r: posse so se prova recebendo codigo, e so "
+            "%s recebem (IDN-13, ADR D8)" % (kind, "/".join(DELIVERABLE_KINDS))
+        )
+    return vc
 
 
 # Upsert de chave, ÚNICO para todos os escritores.
@@ -283,6 +300,8 @@ class IdentityIndex:
         quentes: set[tuple[str, str]] = set()
 
         def candidato(cid: str, kind: str, vh: str, vc: str, conf: float, fonte: str) -> None:
+            # IDN-13: a classe guardada no Redis pode ser o legado do OTP ao CPF.
+            vc = effective_verification_class(kind, vc)
             score = anchor_rank_score(kind, vc)
             if cid not in candidates or score > candidates[cid][0]:
                 candidates[cid] = (score, conf, vc, kind, vh, fonte)
@@ -433,6 +452,44 @@ class IdentityIndex:
         async with self._db.acquire() as conn:
             await conn.execute(_IDENTITY_SCHEMA_DDL)
         logger.info("IdentityIndex: PG schema `identity` ensured")
+        await self.migrate_undeliverable_possession()
+
+    async def migrate_undeliverable_possession(self) -> int:
+        """Rebaixa a `claimed` toda posse gravada em âncora não-entregável (IDN-13).
+
+        Idempotente, roda no boot. O legado nasceu do OTP ao CPF (até a PID-10): a
+        classe dizia `possessed` e a prova era saber o número digitado. A leitura já
+        o ignora (`effective_verification_class`); a migração faz o DADO parar de
+        mentir, no cadastro e na chave quente do índice que aponta para o MESMO
+        cliente (com o TTL preservado). `verified_at` vai a NULL: não houve
+        verificação. Devolve quantas linhas mudaram, e LOGA — nunca muda calado.
+        """
+        if self._db is None:
+            return 0
+        async with self._db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE identity.customer_secondary_keys
+                   SET verification_class = 'claimed', verified_at = NULL
+                 WHERE verification_class = 'possessed' AND kind <> ALL($1::text[])
+             RETURNING tenant_id, kind, value_hash, customer_id
+                """,
+                list(DELIVERABLE_KINDS),
+            )
+        indice = 0
+        for r in rows:
+            k = self._identity_key(r["tenant_id"], r["kind"], r["value_hash"])
+            atual = _decode_index(await self._redis.get(k))
+            if atual and atual[0] == r["customer_id"] and atual[1] == "possessed":
+                await self._redis.set(k, _encode_index(r["customer_id"], "claimed"), keepttl=True)
+                indice += 1
+        if rows:
+            logger.warning(
+                "IdentityIndex: %d ancora(s) nao-entregavel(is) com `possessed` rebaixadas a "
+                "`claimed` (%d chave(s) quente(s) do indice) — legado do OTP ao CPF (IDN-13)",
+                len(rows), indice,
+            )
+        return len(rows)
 
     async def _pg_provenance(
         self, tenant_id: str, kind: str, value_hash: str, customer_id: str,
@@ -503,7 +560,8 @@ class IdentityIndex:
             )
         if not row:
             return None
-        return (row["customer_id"], (row["verification_class"] or "claimed"),
+        return (row["customer_id"],
+                effective_verification_class(kind, row["verification_class"] or "claimed"),
                 float(row["confidence"] or kind_confidence(kind)))
 
     async def _pg_key_class(self, tenant_id: str, kind: str, value_hash: str) -> str | None:
@@ -518,7 +576,7 @@ class IdentityIndex:
                 """,
                 tenant_id, kind, value_hash,
             )
-        return (row["verification_class"] if row else None)
+        return (effective_verification_class(kind, row["verification_class"]) if row else None)
 
     async def attach_anchor(
         self, tenant_id: str, customer_id: str, kind: str, value: str,
@@ -535,6 +593,7 @@ class IdentityIndex:
         `provenance` nunca pode ser `authoritative` aqui (ValueError) — PID-12.
         """
         prov = _writer_provenance(provenance)
+        _writer_verification_class(kind, verification_class)
         if not customer_id:
             return False
         try:
@@ -542,10 +601,12 @@ class IdentityIndex:
         except ValueError:
             return False
 
-        # não rebaixa: se o índice já tem possessed e chega claimed, mantém possessed.
+        # não rebaixa: se o índice já tem possessed e chega claimed, mantém possessed —
+        # desde que a posse guardada VALHA (IDN-13: a de um CPF não se preserva).
         existing = _decode_index(await self._redis.get(self._identity_key(tenant_id, kind, vh)))
         eff_vc = verification_class
-        if existing and existing[0] == customer_id and existing[1] == "possessed" and verification_class != "possessed":
+        if (existing and existing[0] == customer_id and verification_class != "possessed"
+                and effective_verification_class(kind, existing[1]) == "possessed"):
             eff_vc = "possessed"
 
         await self._redis.set(
@@ -688,6 +749,7 @@ class IdentityIndex:
             # procedência por âncora, declarada por quem EXTRAIU (o adapter sabe se
             # veio do canal ou do contexto). `authoritative` levanta — PID-12.
             prov = _writer_provenance(a.get("provenance"))
+            _writer_verification_class(kind, verification_class)
             try:
                 vh = hash_anchor(self._salt, kind, value)
             except ValueError:

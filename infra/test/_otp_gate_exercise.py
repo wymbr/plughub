@@ -30,6 +30,16 @@ Lido por stdin: `docker exec -i <gw> python - [censo|exercicio] [--mutar-*]`.
     --mutar-subject      verify confere contra o subject GUARDADO, nao o informado
     --mutar-entregavel   `cpf` volta a ser entregavel
 
+  legado     IDN-13: posse gravada em kind NAO-entregavel (o que o OTP ao CPF deixou).
+             Fixture plantada direto no cadastro e no indice, como o legado estava.
+    legado_quente_resolve_claimed  cpf `possessed` no Redis -> resolve `claimed`
+    legado_frio_resolve_claimed    so no cadastro -> `claimed`, e a reidratacao grava `claimed`
+    escrita_recusa                 attach_anchor(possessed, cpf) levanta
+    migracao_rebaixa               a migracao do boot rebaixa cadastro e chave quente (TTL mantido)
+    controle_phone_possessed       CONTROLE: phone `possessed` segue `possessed`, antes e depois
+  Mutacoes: --mutar-leitura (regra de leitura desligada) · --mutar-escrita (guarda
+  desligada) · --mutar-migracao (cpf entra na lista do que migra como entregavel).
+
 Limpa sempre o que criou (por hash, por id e pelo `system` da importacao).
 """
 import asyncio
@@ -44,6 +54,7 @@ import redis.asyncio as aioredis
 
 from plughub_channel_gateway.adapters.webhook import WebhookAdapter
 from plughub_channel_gateway.config import get_settings
+from plughub_channel_gateway.identity import index as idx_mod
 from plughub_channel_gateway.identity import otp as otp_mod
 from plughub_channel_gateway.identity.index import IdentityIndex
 from plughub_channel_gateway.identity.normalize import DELIVERABLE_KINDS, hash_anchor
@@ -53,6 +64,9 @@ MODO = sys.argv[1] if len(sys.argv) > 1 else "exercicio"
 MUT_PROV = "--mutar-procedencia" in sys.argv
 MUT_SUBJ = "--mutar-subject" in sys.argv
 MUT_ENTR = "--mutar-entregavel" in sys.argv
+MUT_LEIT = "--mutar-leitura" in sys.argv
+MUT_ESCR = "--mutar-escrita" in sys.argv
+MUT_MIGR = "--mutar-migracao" in sys.argv
 INJETAR = "--injetar" in sys.argv   # censo: acrescenta um snapshot sintetico que desafia cpf
 SYSTEM = "__probe_pid10__"
 ROTA = "http://localhost:8010/v1/channels/webhook/identity/otp/challenge"
@@ -69,15 +83,15 @@ def _walk(node):
             yield from _walk(v)
 
 
-async def censo(s, db):
+async def censo(s, db, r):
     import yaml
     out = {"pools": 0, "pools_sem_snapshot": 0, "desafios": 0, "violacoes": [], "leitura_falhou": None}
     try:
         flows = []
         async with httpx.AsyncClient(timeout=15, headers={"x-tenant-id": s.tenant_id}) as http:
-            r = await http.get(AR + "/v1/pools")
-            r.raise_for_status()
-            pools = r.json()
+            rp = await http.get(AR + "/v1/pools")
+            rp.raise_for_status()
+            pools = rp.json()
             pools = pools.get("pools", pools) if isinstance(pools, dict) else pools
             out["pools_listados"] = len(pools)
             for p in pools:
@@ -120,7 +134,16 @@ async def censo(s, db):
         "SELECT kind, count(*) n FROM identity.customer_secondary_keys WHERE tenant_id=$1 "
         "AND verification_class='possessed' AND kind <> ALL($2::text[]) GROUP BY kind",
         s.tenant_id, list(DELIVERABLE_KINDS))
-    out["posse_nao_entregavel"] = {r["kind"]: r["n"] for r in rows}
+    out["posse_nao_entregavel"] = {row["kind"]: row["n"] for row in rows}
+    quentes = 0
+    async for k in r.scan_iter(match="%s:identity:*" % s.tenant_id, count=500):
+        partes = k.decode().split(":")
+        if len(partes) != 4 or partes[2] in DELIVERABLE_KINDS:
+            continue
+        got = idx_mod._decode_index(await r.get(k))
+        if got and got[1] == "possessed":
+            quentes += 1
+    out["posse_nao_entregavel_indice"] = quentes
     return out
 
 
@@ -232,13 +255,93 @@ async def exercicio(s, r, db):
                            "%s:otp:rl:%s:%s" % (t, kind, h))
 
 
+async def legado(s, r, db):
+    t = s.tenant_id
+    salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
+    idx = IdentityIndex(redis=r, salt=salt, db_pool=db)
+    sx = "%06d" % (uuid.uuid4().int % 1000000)
+    cid = "cus_probe_idn13_" + sx
+    cpf, phone = "130" + sx + "13", "+55110130" + sx[:5]
+    hc, hp = hash_anchor(salt, "cpf", cpf), hash_anchor(salt, "phone", phone)
+    kc, kp = idx._identity_key(t, "cpf", hc), idx._identity_key(t, "phone", hp)
+    out = {"mutar": {"leitura": MUT_LEIT, "escrita": MUT_ESCR, "migracao": MUT_MIGR}, "casos": {}}
+    c = out["casos"]
+
+    async def plantar():
+        async with db.acquire() as conn:
+            await conn.execute("INSERT INTO identity.customers (customer_id, tenant_id, status) VALUES ($1,$2,'identified') "
+                               "ON CONFLICT (customer_id) DO NOTHING", cid, t)
+            for kind, h, conf in (("cpf", hc, 0.9), ("phone", hp, 0.7)):
+                await conn.execute(
+                    "INSERT INTO identity.customer_secondary_keys (tenant_id, kind, value_hash, customer_id, confidence, "
+                    "verification_class, verified_at) VALUES ($1,$2,$3,$4,$5,'possessed',NOW()) "
+                    "ON CONFLICT (tenant_id, kind, value_hash) DO UPDATE SET verification_class='possessed', "
+                    "verified_at=NOW(), customer_id=EXCLUDED.customer_id", t, kind, h, cid, conf)
+        await r.set(kc, idx_mod._encode_index(cid, "possessed"), ex=3600)
+        await r.set(kp, idx_mod._encode_index(cid, "possessed"), ex=3600)
+
+    async def linha(kind, h):
+        async with db.acquire() as conn:
+            return await conn.fetchrow("SELECT verification_class, verified_at FROM identity.customer_secondary_keys "
+                                       "WHERE tenant_id=$1 AND kind=$2 AND value_hash=$3", t, kind, h)
+
+    try:
+        if MUT_LEIT:
+            idx_mod.effective_verification_class = lambda kind, vc: vc
+        if MUT_ESCR:
+            idx_mod._writer_verification_class = lambda kind, vc: vc
+        if MUT_MIGR:
+            idx_mod.DELIVERABLE_KINDS = ("phone", "email", "cpf")
+
+        await plantar()
+        ref = await idx.resolve_or_provision(t, [{"kind": "cpf", "value": cpf}], provision=False)
+        c["legado_quente_resolve_claimed"] = (ref.customer_id == cid and ref.matched_by == "existing"
+                                              and ref.verification_class == "claimed")
+        refp = await idx.resolve_or_provision(t, [{"kind": "phone", "value": phone}], provision=False)
+        controle_antes = refp.customer_id == cid and refp.verification_class == "possessed"
+
+        await r.delete(kc)
+        ref = await idx.resolve_or_provision(t, [{"kind": "cpf", "value": cpf}], provision=False)
+        re = idx_mod._decode_index(await r.get(kc))
+        c["legado_frio_resolve_claimed"] = (ref.customer_id == cid and ref.matched_by == "durable"
+                                            and ref.verification_class == "claimed"
+                                            and re is not None and re[1] == "claimed")
+        out["frio"] = {"matched_by": ref.matched_by, "vc": ref.verification_class, "reidratado": re}
+
+        try:
+            await idx.attach_anchor(t, cid, "cpf", cpf, verification_class="possessed")
+            c["escrita_recusa"] = False
+        except ValueError:
+            c["escrita_recusa"] = True
+
+        await plantar()
+        n = await idx.migrate_undeliverable_possession()
+        lc, lp = await linha("cpf", hc), await linha("phone", hp)
+        rc, rp = idx_mod._decode_index(await r.get(kc)), idx_mod._decode_index(await r.get(kp))
+        ttl = await r.ttl(kc)
+        out["migracao"] = {"linhas": n, "cpf": dict(lc) if lc else None, "indice_cpf": rc, "ttl": ttl}
+        c["migracao_rebaixa"] = (n >= 1 and lc is not None and lc["verification_class"] == "claimed"
+                                 and lc["verified_at"] is None and rc == (cid, "claimed") and ttl > 0)
+        c["controle_phone_possessed"] = (controle_antes and lp is not None and lp["verification_class"] == "possessed"
+                                         and rp == (cid, "possessed"))
+        return out
+    finally:
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM identity.customer_secondary_keys WHERE tenant_id=$1 AND "
+                               "((kind='cpf' AND value_hash=$2) OR (kind='phone' AND value_hash=$3))", t, hc, hp)
+            await conn.execute("DELETE FROM identity.customers WHERE customer_id=$1", cid)
+        await r.delete(kc, kp)
+
+
 async def main():
     s = get_settings()
     r = aioredis.from_url(s.redis_url)
     db = await asyncpg.create_pool(s.database_url, min_size=1, max_size=2)
     try:
         if MODO == "censo":
-            return await censo(s, db)
+            return await censo(s, db, r)
+        if MODO == "legado":
+            return await legado(s, r, db)
         return await exercicio(s, r, db)
     finally:
         await db.close()

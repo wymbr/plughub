@@ -93,6 +93,22 @@ VERIFICATION_CLASSES = ("claimed", "possessed")
 POSSESSED_RANK_BONUS = 1.0
 
 
+def effective_verification_class(kind: str, verification_class: str) -> str:
+    """A classe que VALE para esta âncora: `possessed` só existe em kind entregável.
+
+    ⚠️ IDN-13 (2026-09-13): posse de canal só se prova recebendo um código, e só
+    âncora entregável recebe (D8). Até a PID-10 o OTP desafiava CPF e gravava
+    `possessed` nele — prova de que se sabia o número digitado —, e o portão de
+    retomada lê essa classe: digitar o CPF abria as pendências. A PID-10 fechou o
+    produtor; esta função fecha a LEITURA do que ficou gravado (Redis quente, cadastro
+    ainda não migrado, instalação que não bootou), e é a mesma regra que a escrita e a
+    migração aplicam. Uma regra, lida em todo ponto que lê a classe guardada.
+    """
+    if verification_class == "possessed" and kind not in DELIVERABLE_KINDS:
+        return "claimed"
+    return verification_class
+
+
 def anchor_rank_score(kind: str, verification_class: str) -> float:
     """Score interno de desambiguação = kind_confidence + bônus se possessed."""
     base = kind_confidence(kind)
