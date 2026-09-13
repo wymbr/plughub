@@ -14,15 +14,22 @@ CASOS
   reatribui_zera    escritor comum anexa o phone a OUTRO cliente -> procedencia deixa de ser
                     `authoritative` (senao quem nao tem credencial herdaria a confianca)
   escritor_recusa   escritor comum pedindo `authoritative` -> ValueError
+  posse_antes       testemunha: o phone foi provado (`possessed`) para o cliente importado
+  reatribui_posse   a mesma reatribuicao ZERA a prova de posse no PG (`claimed`, sem
+                    `verified_at`) e o indice Redis concorda (IDN-09) — senao o OTP de um
+                    cliente valeria para outro
 
 `--mutar-sql` troca o upsert por um que mantem a procedencia na reatribuicao: o
 caso `reatribui_zera` TEM de reprovar, senao ele mede a fixture e nao a regra.
+`--mutar-posse` devolve a regra antiga do `possessed` (sobrevive a troca de
+cliente): o caso `reatribui_posse` TEM de reprovar.
 
 Imprime uma linha JSON. Limpa sempre o que criou (por hash e por id, nunca por tenant).
 """
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 
@@ -36,6 +43,7 @@ from plughub_channel_gateway.identity.index import IdentityIndex
 from plughub_channel_gateway.identity.normalize import hash_anchor
 
 MUTAR = "--mutar-sql" in sys.argv
+MUTAR_POSSE = "--mutar-posse" in sys.argv
 BASE = "http://localhost:8010/v1/channels/webhook/identity"
 SYSTEM = "__probe_pid12__"
 
@@ -51,7 +59,7 @@ async def main():
     idx = IdentityIndex(redis=rds, salt=salt, db_pool=db)
     hp, hc = hash_anchor(salt, "phone", phone), hash_anchor(salt, "cpf", cpf)
     outro = "cus_probe_pid12_" + sufixo
-    out = {"mutar_sql": MUTAR, "casos": {}}
+    out = {"mutar_sql": MUTAR, "mutar_posse": MUTAR_POSSE, "casos": {}}
     c = out["casos"]
     cids = set([outro])
     adm = {"authorization": "Bearer " + os.environ.get("T_ADM", "")}
@@ -106,6 +114,26 @@ async def main():
             kp = await chave(hp, "phone")
             c["conflito_recusa"] = l3.get("outcome") == "refused" and kp and kp["customer_id"] == cid
 
+        # prova de posse para o cliente importado, pelo caminho do OTP (attach possessed)
+        await idx.attach_anchor(tenant, cid, "phone", phone, verification_class="possessed",
+                                persist_durable=True, provenance="declared")
+        kp = await chave(hp, "phone")
+        c["posse_antes"] = bool(kp and kp["customer_id"] == cid and kp["verification_class"] == "possessed")
+
+        if MUTAR_POSSE:
+            # regex e nao string exata: o que se muta e a REGRA, e a indentacao do SQL
+            # nao pode decidir se a mutacao casou.
+            novo, n1 = re.subn(
+                r"WHEN identity\.customer_secondary_keys\.customer_id = EXCLUDED\.customer_id\s+"
+                r"AND (identity\.customer_secondary_keys\.verification_class = 'possessed')",
+                r"WHEN \1", idx_mod._SQL_UPSERT_KEY, count=1)
+            novo, n2 = re.subn(
+                r"verified_at = CASE\s+WHEN identity\.customer_secondary_keys\.customer_id = EXCLUDED\.customer_id\s+"
+                r"THEN (COALESCE\(identity\.customer_secondary_keys\.verified_at, EXCLUDED\.verified_at\))\s+"
+                r"ELSE EXCLUDED\.verified_at END",
+                r"verified_at = \1", novo, count=1)
+            out["mutacao_posse_aplicada"] = (n1, n2) == (1, 1)
+            idx_mod._SQL_UPSERT_KEY = novo
         if MUTAR:
             idx_mod._SQL_UPSERT_KEY = idx_mod._SQL_UPSERT_KEY.replace(
                 "WHEN identity.customer_secondary_keys.customer_id <> EXCLUDED.customer_id\n"
@@ -114,6 +142,14 @@ async def main():
         await idx.attach_anchor(tenant, outro, "phone", phone, persist_durable=True, provenance="declared")
         kp = await chave(hp, "phone")
         c["reatribui_zera"] = bool(kp and kp["customer_id"] == outro and kp["provenance"] == "declared")
+        async with db.acquire() as conn:
+            vat = await conn.fetchval(
+                "SELECT verified_at FROM identity.customer_secondary_keys "
+                "WHERE tenant_id=$1 AND kind='phone' AND value_hash=$2", tenant, hp)
+        redis_idx = idx_mod._decode_index(await rds.get("%s:identity:phone:%s" % (tenant, hp)))
+        c["reatribui_posse"] = bool(
+            kp and kp["customer_id"] == outro and kp["verification_class"] == "claimed" and vat is None
+            and redis_idx == (outro, "claimed"))
 
         try:
             await idx.attach_anchor(tenant, outro, "cpf", cpf, persist_durable=True, provenance="authoritative")

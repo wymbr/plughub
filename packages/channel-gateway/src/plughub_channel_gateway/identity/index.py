@@ -141,6 +141,14 @@ def _writer_provenance(p: str | None) -> str | None:
 
 # Upsert de chave, ÚNICO para todos os escritores.
 #
+# ⚠️ As DUAS confianças da âncora — a prova de POSSE (`verification_class`,
+# `verified_at`) e a ORIGEM (`provenance`) — são fato do par (âncora, CLIENTE), e
+# só sobrevivem enquanto o cliente é o mesmo. Até 2026-09-13 (IDN-09) o `possessed`
+# sobrevivia a qualquer reatribuição: o OTP provado por um cliente passava a valer
+# para quem a âncora fosse atribuída depois — no Postgres, enquanto o índice Redis
+# (`attach_anchor`) já fazia o certo. As duas casas discordavam, e a errada era a
+# que responde quando o Redis esfria.
+#
 # ⚠️ A procedência é sticky SÓ enquanto a âncora pertence ao mesmo cliente. Se o
 # `customer_id` muda, ela passa a ser a de quem reatribuiu: senão um escritor sem
 # credencial anexaria um telefone importado ao próprio cadastro e HERDARIA o
@@ -156,9 +164,14 @@ _SQL_UPSERT_KEY = """
         DO UPDATE SET customer_id = EXCLUDED.customer_id,
                       confidence  = GREATEST(identity.customer_secondary_keys.confidence, EXCLUDED.confidence),
                       verification_class = CASE
-                          WHEN identity.customer_secondary_keys.verification_class = 'possessed' THEN 'possessed'
+                          WHEN identity.customer_secondary_keys.customer_id = EXCLUDED.customer_id
+                           AND identity.customer_secondary_keys.verification_class = 'possessed'
+                              THEN 'possessed'
                           ELSE EXCLUDED.verification_class END,
-                      verified_at = COALESCE(identity.customer_secondary_keys.verified_at, EXCLUDED.verified_at),
+                      verified_at = CASE
+                          WHEN identity.customer_secondary_keys.customer_id = EXCLUDED.customer_id
+                              THEN COALESCE(identity.customer_secondary_keys.verified_at, EXCLUDED.verified_at)
+                          ELSE EXCLUDED.verified_at END,
                       provenance = CASE
                           WHEN identity.customer_secondary_keys.customer_id <> EXCLUDED.customer_id
                               THEN EXCLUDED.provenance

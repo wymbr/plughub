@@ -74,8 +74,12 @@ class FakeConn:
             # verification_class is arg[5] on the Fase-1 schema; default claimed.
             vc = args[5] if len(args) > 5 else "claimed"
             prev = self.state["secondary_keys"].get((tenant, kind, vh))
-            # mirror the SQL ON CONFLICT: never downgrade possessed → claimed.
-            if prev and prev.get("verification_class") == "possessed":
+            # mirror the SQL ON CONFLICT: never downgrade possessed → claimed FOR THE
+            # SAME CUSTOMER. ⚠️ Até 2026-09-13 esta fake espelhava a regra errada
+            # (possessed sobrevivia à troca de cliente) e por isso concordava com o
+            # defeito — a fake não prova o SQL; quem prova é
+            # `infra/test/probe_identity_provenance.sh` contra o Postgres (IDN-09).
+            if prev and prev.get("customer_id") == cid and prev.get("verification_class") == "possessed":
                 vc = "possessed"
             self.state["secondary_keys"][(tenant, kind, vh)] = {
                 "customer_id": cid, "confidence": conf, "verification_class": vc,

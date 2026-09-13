@@ -1,5 +1,60 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (5) — IDN-09: a prova de posse deixa de passar de um cliente para outro
+
+Achado ao escrever a PID-12, e o mesmo formato que ela fechou para a procedência.
+
+### 1 · O defeito
+
+O upsert único de chave (`_SQL_UPSERT_KEY`) mantinha `verification_class = 'possessed'` e o
+`verified_at` **sempre que a linha já era `possessed`** — inclusive quando o `customer_id` mudava. O
+índice Redis fazia o certo: `attach_anchor` só preserva `possessed` se `existing[0] == customer_id`.
+As duas casas discordavam, e a errada era a durável, **a que responde quando o Redis esfria**
+(`_pg_resolve` e a reidratação do índice leem a classe do Postgres).
+
+Efeito: o OTP que um cliente provou passava a valer para o cliente a quem a âncora fosse atribuída
+depois. Existe caminho vivo que reatribui: `promote_to_durable`, quando o id nativo da sessão e as
+âncoras do contexto apontam para clientes diferentes.
+
+### 2 · O conserto
+
+A posse, como a procedência, é fato do par **(âncora, CLIENTE)**: `possessed` e `verified_at` só
+sobrevivem quando o cliente é o mesmo. Mesmo cliente: nada muda (continua *"nunca rebaixa"*).
+
+### 3 · O que não dá para medir
+
+**Se alguma das 31 posses vivas foi herdada.** Nada guarda o histórico de `customer_id` de uma chave,
+então a exposição passada não tem número — e não vou inventar um. O conserto vale daqui para a
+frente; as 31 linhas ficaram intocadas.
+
+### 4 · A fake concordava com o defeito
+
+`test_identity_index.py` tem uma fake de asyncpg cujo comentário diz *"mirror the SQL ON CONFLICT"* —
+e ela espelhava fielmente a regra errada. Um teste sobre ela provaria a fake, não o SQL. Ela foi
+corrigida para a regra nova, com nota dizendo que quem prova é o probe.
+
+### 5 · O instrumento
+
+`probe_identity_provenance.sh` ganhou dois casos no mesmo exercício da reatribuição:
+
+- **`posse_antes`** (testemunha): a âncora foi provada `possessed` para o cliente importado, pelo
+  caminho do OTP — sem ela, o caso seguinte passaria por não haver posse a herdar;
+- **`reatribui_posse`**: depois da reatribuição, o Postgres diz `claimed` sem `verified_at` **e o
+  índice Redis concorda** — a pergunta é sobre as duas casas, porque foi a divergência que escondeu o
+  defeito;
+- **mutação `--mutar-posse`**: devolve a regra antiga, e o caso reprova.
+
+⚠️ A primeira versão da mutação quebrou antes de rodar: o patch em heredoc do Bash comeu a barra
+invertida e o `\n` virou quebra de linha real dentro das strings — o defeito que a memória da casa
+já registrava. Reescrita com regex sobre a REGRA (e não sobre a indentação do SQL), e a mutação
+declara se casou (`mutacao_posse_aplicada`) em vez de passar em silêncio quando não casa.
+
+### 6 · Verificação
+
+Suíte do channel-gateway **810 verdes** sobre a imagem; imagem rebuildada.
+`probe_identity_provenance` VERDE nos 4 ramos, com as **duas** mutações reprovando cada uma o seu
+caso. Limpeza conferida: 98 clientes · 93 chaves · 0 refs · 31 `possessed`, idênticos a antes.
+
 ## 2026-09-13 (4) — PID-12: `authoritative` ganha uma porta, e ela exige credencial
 
 Decisão do dono na Onda 1 (2026-09-12): **a importação com credencial de admin é a única porta que
