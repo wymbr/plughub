@@ -93,6 +93,46 @@ código de quando ele subiu). `probe_task_ledger` verde.
 linha (`voice.py:410-416`). Citar a linha deu à frase aparência de medição; a linha existia, o
 método que ela chamava não. **Linha citada prova que o texto está lá, não que ele roda.**
 
+## 2026-09-12 (13) — CNS-26: `core.workflow.dialog_form_version` entra no cadastro, na semente e no mapa vivo
+
+### 1 · Resto ou esquecimento — medido antes de escolher
+
+A ficha deixava duas saídas: cadastrar, ou parar de escrever *"se for resto"*. **É
+vivo:** `channel-gateway/adapters/webhook.py` escreve a tag no delegate (a versão
+publicada do form cujo id vai ao lado), e `skill_wrapup_detached_v1` a lê como
+**pin** de versão para `segment.ts` — ausente, cada leitura resolve a última
+publicada. A irmã `dialog_form_id`, escrita no mesmo sítio, estava cadastrada:
+esquecimento, não decisão. Logo: cadastrar.
+
+### 2 · As TRÊS casas, e só a terceira não viaja no commit
+
+- **Semente TS** (`@plughub/schemas/context-map.ts`, a autoridade) e **gêmeo
+  Python** (`py-contextstore/default_map.py`) — mesma folha, mesmo `label`, sem
+  `legado` (nasceu já no nome `core.*`). Paridade TS×Python conferida (ramo G).
+- **Mapa VIVO** (`masking.context_map` no `__global__` do config-api) — o seed é
+  seed-if-absent, então editar a semente **não o alcança**, e dois gates
+  acusaram exatamente isso (`faltando=['core.workflow.dialog_form_version']`).
+
+⚠️ **O `--overwrite` do seed foi recusado:** o vivo tem 20 domínios que a
+semente não declara (`journey.cartao`, `session.cartao`, …) e a reaplicação os
+DESCARTARIA. Escrita aditiva pela API oficial, com as guardas que o incidente da
+GAT-03 (mapa inteiro substituído por uma folha) pede: backup em arquivo, plano
+conferido como **exatamente +1 folha, −0, ~0** antes de gravar, `tenant_id: null`
+no CORPO, e releitura comparada: **99 → 100 folhas, idêntica ao planejado**.
+
+- **Imagem do config-api** rebuildada: ela embute o `py-contextstore`, e sem isso
+  o ramo A do `probe_seed_drift_named` julgaria declaração velha.
+
+### 3 · Verificação
+
+`probe_contextstore_cadastro` · `probe_context_map_seed` · `probe_context_map_audit` ·
+`probe_seed_drift_named` **VERDES**; `py-contextstore` 73 passed; `tsc --noEmit` de
+`@plughub/schemas` limpo.
+
+⚠️ As outras imagens que embutem a semente como FALLBACK (mcp-server,
+agent-registry, e os serviços Python com `py-contextstore`) seguem com a versão
+anterior até o próximo rebuild. O fallback só vale com o config-api fora do ar.
+
 ## 2026-09-12 (12) — AUT-56: o `auth-seed` deixa de apagar o escopo do `admin@` a cada subida
 
 ### 1 · O dano, medido

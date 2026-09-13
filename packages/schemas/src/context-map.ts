@@ -277,6 +277,10 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
         current_round: { tipo: "texto", legado: ["session.workflow.current_round", "session.current_round"] },
         delegate_resume_token: { tipo: "credential", legado: ["session.workflow.delegate_resume_token", "session.delegate_resume_token"] },
         dialog_form_id: { tipo: "texto", legado: ["session.workflow.dialog_form_id", "session.dialog_form_id"] },
+        // CNS-26 — irma do `dialog_form_id`, escrita no MESMO sitio (`webhook.py`,
+        // delegate) e lida pelo wrap-up como PIN de versao (`segment.ts`). Nasceu ja
+        // no nome `core.*`, logo sem `legado`. Estava fora do cadastro por esquecimento.
+        dialog_form_version: { tipo: "texto", label: "Versão PINADA do form — ausente ⇒ última publicada" },
         origin_session_id: { tipo: "texto", legado: ["session.workflow.origin_session_id", "session.origin_session_id"] },
         resume_token: { tipo: "credential", legado: ["session.workflow.resume_token", "session.workflow_resume_token"] },
         review_decision: { tipo: "texto", legado: ["session.workflow.review_decision", "session.review_decision"] },
