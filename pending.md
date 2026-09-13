@@ -101,7 +101,6 @@ construir — o oposto foi o que produziu os nove títulos velhos.
 | IDN-03 | Commerce-cards: checkout mascarado + repasse ao PSP | `aberto` | idem |
 | IDN-04 | Novas `ChannelCapability` | `aberto` | idem |
 | IDN-05 | Rejulgar nível (a), contrato delegate-por-pool e intake-flow — cortados por uma razão que caiu (tarefa **B1**) | `aberto` | `TODO.md` § Reexame dos 9 |
-| IDN-06 | **As rotas de identidade do channel-gateway não têm credencial.** Medido em 2026-09-11: as oito rotas `/v1/channels/webhook/identity/*` e `/pending/by-customer/{id}` não têm `Depends`, `dependencies=[]` nem middleware global, e o `tenant_id` vem do CORPO — o chamador escolhe o tenant. A UI proxia `/v1/channels` em dev (`vite.config.ts:68`) e em produção (`Dockerfile:158`), então quem alcança o host da UI varre a base de clientes, anexa âncoras, grava atributos e dispara OTP de qualquer tenant, sem login. `/v1` é declarado interno na allowlist da borda, mas a separação é de CÓDIGO, e aqui quem publica é a própria UI. ⚠️ O `probe_route_credential_coverage.sh` mede a analytics-api — a cobertura precisa de censo próprio do serviço. `otp/verify` aberto não cunha `possessed` (exige o código); `otp/challenge` aberto é enumeração e custo de SMS assim que a entrega existir | `aberto` | `main.py:1159–1250` · `docs/adr/adr-identity-door-evidence.md` §2 (7) |
 
 ---
 

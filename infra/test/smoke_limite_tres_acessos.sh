@@ -66,6 +66,9 @@ LIMITE="${LIMITE:-12000}"
 LIMITE_OK="${LIMITE_OK:-9000}"            # o aprovador aprova um valor MENOR
 
 CURL="curl -s --max-time 20"
+
+# IDN-06: as rotas /identity/* e /pending/* do gateway exigem X-Service-Token.
+source "$(dirname "$0")/_auth.sh"; plughub_gw_service_shim
 JSON='-H Content-Type:application/json'
 redis() { $COMPOSE exec -T redis redis-cli "$@" < /dev/null; }
 chq()   { $COMPOSE exec -T clickhouse clickhouse-client -d plughub_demo --query "$1" < /dev/null 2>&1; }

@@ -280,6 +280,12 @@ probe_phone_region.sh
 # `agent_assist.atender` no pool da sessao, tenant do JWT), procedencia `operator` gravada,
 # conflito que nao move a ancora de outro cliente, e duas mutacoes. Fixtures por hash e id.
 probe_identity_operator.sh
+# IDN-06. As rotas /identity/* e /pending/* do gateway nao pediam credencial e tomavam o
+# tenant do corpo — pela 5174, sem login, a busca devolvia o cadastro e pending/by-customer o
+# resume_token. Censo AST com mutacao, as nove rotas vivas nas duas portas (servico/usuario),
+# token vazio que fecha, duas mutacoes na imagem, a borda da UI com login real, e os dois
+# chamadores internos alcancando com o token do proprio container (e recusados sem ele).
+probe_identity_route_credential.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

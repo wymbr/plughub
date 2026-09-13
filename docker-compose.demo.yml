@@ -664,6 +664,7 @@ services:
       MAILING_API_URL: http://mailing-api:3660   # outbound Fase 1 — mailing_add/campaign_drain/campaign_delivery_result
       CONFIG_API_URL: http://config-api:3600   # masking context_rules via HTTP (config-http-propagation arc)
       CHANNEL_GATEWAY_URL: http://channel-gateway:8010   # I5 — gatilho de supervisor retoma a workflow pelo ingress do gateway
+      CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo   # IDN-06 — == PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN do gateway
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:
@@ -1381,6 +1382,9 @@ services:
       # que a UI consome. Sem o hash o gateway não tem contra o quê comparar e
       # RECUSA (fail-closed) disparo em endpoint com `auth_required`.
       PLUGHUB_AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo
+      # IDN-06 — credencial INBOUND das rotas /identity/* e /pending/* (mcp-server,
+      # mailing-api). Vazia FECHA a porta de serviço; nunca a abre.
+      PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo
       # auth_timeout_s (F2-TTL) e attachment_expiry_days (F1.2) vêm do config-api via
       # WebchatConfigCache HTTP (config-http-propagation arc): GET /config/webchat +
       # invalidação config.changed. Os envs PLUGHUB_WS_AUTH_TIMEOUT_S /
@@ -1487,6 +1491,7 @@ services:
       PLUGHUB_MAILING_DATABASE_URL:     postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_MAILING_CALENDAR_API_URL: http://calendar-api:3700     # Fase 3a — portão de janela de contato
       PLUGHUB_MAILING_IDENTITY_API_URL: http://channel-gateway:8010  # Fase 3b — opt-out global (do_not_contact)
+      PLUGHUB_MAILING_IDENTITY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo   # IDN-06 — == PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN
     depends_on:
       postgres:
         condition: service_healthy

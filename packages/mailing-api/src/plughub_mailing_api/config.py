@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # channel-gateway Identity Resolver: opt-out global gate (Fase 3b). The customer
     # cadastro is the single source of `do_not_contact`; outbound reads/writes it here.
     identity_api_url: str = "http://channel-gateway:8010"
+    # IDN-06 — `X-Service-Token` dessas rotas (= PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN
+    # no gateway). Vazio ⇒ o gateway recusa, e o opt-out global deixa de ser LIDO.
+    identity_service_token: str = ""
 
     # Fase 4 — file import: cap on data rows per synchronous import (413 above it).
     import_max_rows: int = 5000

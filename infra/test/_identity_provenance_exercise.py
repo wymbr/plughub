@@ -107,7 +107,8 @@ async def main():
                 and kp["verification_class"] == "claimed")
 
             r = await http.post(BASE + "/resolve", json={
-                "tenant_id": tenant, "anchors": [{"kind": "phone", "value": phone}], "provision": False})
+                "tenant_id": tenant, "anchors": [{"kind": "phone", "value": phone}], "provision": False},
+                headers={"x-service-token": s.channel_gateway_service_token})   # IDN-06
             c["resolve_casa"] = r.status_code == 200 and r.json().get("customer_id") == cid and bool(cid)
             c["resolve_expoe"] = r.status_code == 200 and r.json().get("provenance") == "authoritative"
 

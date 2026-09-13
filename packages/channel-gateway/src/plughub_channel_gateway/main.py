@@ -56,6 +56,7 @@ from .config import get_settings, Settings
 from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 
 from .auth import accessible_pools, pool_in_scope
+from .identity_auth import identity_principal, tenant_for
 from .context_reader import ContextReader
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint, resolve_pool
 from .outbound_consumer import OutboundConsumer
@@ -163,6 +164,14 @@ async def lifespan(app: FastAPI):
 
     settings    = get_settings()
     instance_id = str(uuid.uuid4())
+
+    if not settings.channel_gateway_service_token:
+        # IDN-06 — nomeia o que deixa de valer: a porta fica FECHADA, não aberta.
+        logger.warning(
+            "PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN vazio: as rotas de identidade/pendencia "
+            "RECUSAM chamador de servico (401) — mcp-server (pending_workflow_get, "
+            "customer_resolve, otp_*) e mailing-api (opt-out global) deixam de funcionar"
+        )
 
     # ALW-02 — transporte do carregador de config do ContextStore (mapa + catalogo de
     # tipos), registrado UMA vez no boot.
@@ -1187,71 +1196,96 @@ async def webhook_trigger_by_pool(pool_id: str, request: Request) -> dict:
 # ── Identity Resolver (Fase A · Slice 1) ───────────────────────────────────────
 # Declared BEFORE the greedy /{skill_id} and /pending/{contact_identifier} routes.
 # PII travels only on the loopback body; hashing is server-side (never in the URL).
+#
+# IDN-06 (2026-09-13): TODA rota deste bloco chama `_identity_caller` — o censo AST de
+# `probe_identity_route_credential.sh` reprova a que não chamar. Sem grant declarado a
+# rota é INTERNA (só serviço); o cadastro lido pela UI declara os campos que o abrem.
+
+_IDENTITY_CADASTRO_READ = (
+    ("contacts", "visualizar", "read_only"),      # Análise › Clientes
+    ("agent_assist", "atender", "read_write"),    # Console › aba Cliente
+)
+
+
+def _identity_caller(request: Request, requested_tenant: str | None,
+                     grants: tuple[tuple[str, str, str], ...] = ()) -> str:
+    """Portão das rotas de identidade: devolve o tenant que vale, ou levanta 401/403."""
+    s = get_settings()
+    principal = identity_principal(request, service_token=s.channel_gateway_service_token,
+                                   jwt_secret=s.auth_jwt_secret, user_grants=grants)
+    return tenant_for(principal, requested_tenant)
+
 
 @app.post("/v1/channels/webhook/identity/resolve", status_code=200)
-async def webhook_identity_resolve(body: IdentityResolveRequest) -> dict:
+async def webhook_identity_resolve(body: IdentityResolveRequest, request: Request) -> dict:
     """
     Lookup 1 — resolve/provision a native customer_id from identity anchors.
-    Returns { customer_id, status, matched_by, confidence }.
+    Returns { customer_id, status, matched_by, confidence }. Interna (IDN-06).
     """
+    tenant = _identity_caller(request, body.tenant_id)
     if _webhook_adapter is None:
         return {"customer_id": "", "status": "none", "matched_by": "none", "confidence": 0.0}
     return await _webhook_adapter.resolve_customer(
-        tenant_id = body.tenant_id,
+        tenant_id = tenant,
         anchors   = [a.model_dump() for a in body.anchors],
         provision = body.provision,
     )
 
 
 @app.get("/v1/channels/webhook/pending/by-customer/{customer_id}", status_code=200)
-async def webhook_pending_by_customer(customer_id: str, tenant_id: str) -> dict:
+async def webhook_pending_by_customer(customer_id: str, tenant_id: str, request: Request) -> dict:
     """
     Lookup 2 — pending workflows registered under a resolved customer_id.
-    Returns { found, count, pendings[] }.
+    Returns { found, count, pendings[] }. Interna (IDN-06): devolve `resume_token`.
     """
+    tenant = _identity_caller(request, tenant_id)
     if _webhook_adapter is None:
         return {"found": False, "count": 0, "pendings": []}
     return await _webhook_adapter.find_pending_by_customer(
-        tenant_id   = tenant_id,
+        tenant_id   = tenant,
         customer_id = customer_id,
     )
 
 
 @app.post("/v1/channels/webhook/identity/otp/challenge", status_code=200)
-async def webhook_otp_challenge(body: OtpChallengeRequest) -> dict:
-    """OTP de posse — emite um desafio para âncora entregável e autoritativa (PID-10)."""
+async def webhook_otp_challenge(body: OtpChallengeRequest, request: Request) -> dict:
+    """OTP de posse — emite um desafio para âncora entregável e autoritativa (PID-10). Interna."""
+    tenant = _identity_caller(request, body.tenant_id)
     if _webhook_adapter is None:
         return {"sent": False, "reason": "adapter_unavailable"}
-    return await _webhook_adapter.otp_challenge(body.tenant_id, body.customer_id, body.kind, body.value)
+    return await _webhook_adapter.otp_challenge(tenant, body.customer_id, body.kind, body.value)
 
 
 @app.post("/v1/channels/webhook/identity/otp/verify", status_code=200)
-async def webhook_otp_verify(body: OtpVerifyRequest) -> dict:
-    """OTP de posse — confere o código; sucesso promove a âncora a possessed."""
+async def webhook_otp_verify(body: OtpVerifyRequest, request: Request) -> dict:
+    """OTP de posse — confere o código; sucesso promove a âncora a possessed. Interna."""
+    tenant = _identity_caller(request, body.tenant_id)
     if _webhook_adapter is None:
         return {"verified": False, "reason": "adapter_unavailable"}
     return await _webhook_adapter.otp_verify(
-        body.tenant_id, body.customer_id, body.kind, body.value, body.code,
+        tenant, body.customer_id, body.kind, body.value, body.code,
     )
 
 
 @app.post("/v1/channels/webhook/identity/key/attach", status_code=200)
-async def webhook_identity_attach_key(body: IdentityAttachKeyRequest) -> dict:
-    """Enriquecimento — anexa uma âncora como claimed (possessed só via OTP)."""
+async def webhook_identity_attach_key(body: IdentityAttachKeyRequest, request: Request) -> dict:
+    """Enriquecimento — anexa uma âncora como claimed (possessed só via OTP). Interna."""
+    tenant = _identity_caller(request, body.tenant_id)
     if _webhook_adapter is None:
         return {"attached": False}
     return await _webhook_adapter.attach_customer_key(
-        body.tenant_id, body.customer_id, body.kind, body.value,
+        tenant, body.customer_id, body.kind, body.value,
     )
 
 
 @app.post("/v1/channels/webhook/identity/attributes", status_code=200)
-async def webhook_identity_attributes(body: IdentityAttributesRequest) -> dict:
-    """Enriquecimento — merge de atributos mascarados/não-sensíveis no cadastro."""
+async def webhook_identity_attributes(body: IdentityAttributesRequest, request: Request) -> dict:
+    """Enriquecimento — merge de atributos mascarados/não-sensíveis no cadastro. Interna."""
+    tenant = _identity_caller(request, body.tenant_id)
     if _webhook_adapter is None:
         return {"updated": False}
     return await _webhook_adapter.update_customer_attributes(
-        body.tenant_id, body.customer_id, body.attributes,
+        tenant, body.customer_id, body.attributes,
     )
 
 
@@ -1276,9 +1310,8 @@ async def webhook_identity_operator_register(body: OperatorRegisterRequest, requ
         quem cadastra é quem atende aquele contato, e o escopo do grant vale aqui;
       * a sessão tem de existir e ser do tenant do token.
 
-    ⚠️ As rotas irmãs seguem sem credencial (IDN-06), e é por isso que o carimbo
-    `operator` NÃO passa por elas: um rótulo de origem que qualquer um alcança não
-    diz de onde a âncora veio.
+    As rotas irmãs são INTERNAS desde a IDN-06 (credencial de serviço), e mesmo assim o
+    carimbo `operator` não passa por elas: o serviço não tem operador para nomear.
 
     200 `created|existing` · 422 âncora inválida (nomeada) · 409 ambíguo ou âncora
     de outro cliente (nomeada).
@@ -1329,10 +1362,9 @@ async def webhook_identity_import(body: IdentityImportRequest, request: Request)
         portão (§ Arc 7); o preset de `admin` é que concede o campo;
       * o tenant vem do JWT, nunca do corpo.
 
-    ⚠️ As rotas IRMÃS (`/identity/resolve`, `/key/attach`, `/attributes`…) seguem sem
-    credencial (IDN-06). Isto NÃO fecha a IDN-06, e não precisa: nenhuma delas
-    alcança `authoritative`, porque a trava mora no índice (`_writer_provenance`) e
-    não aqui. Fechar só esta porta e deixar a trava na rota seria contornável.
+    As rotas IRMÃS (`/identity/resolve`, `/key/attach`, `/attributes`…) exigem credencial
+    de serviço desde a IDN-06 — e ainda assim nenhuma alcança `authoritative`, porque a
+    trava mora no índice (`_writer_provenance`) e não na rota.
 
     Devolve `{created, updated, refused, results[]}`; linha recusada vem NOMEADA.
     """
@@ -1377,28 +1409,34 @@ async def webhook_identity_import(body: IdentityImportRequest, request: Request)
 
 
 @app.get("/v1/channels/webhook/identity/customers/search", status_code=200)
-async def webhook_identity_customers_search(tenant_id: str, q: str, limit: int = 20) -> dict:
+async def webhook_identity_customers_search(request: Request, q: str, tenant_id: str = "",
+                                            limit: int = 20) -> dict:
     """
     Cadastro manual (C1a — Cliente 360): busca de clientes por `customer_id` exato
     ou nome (`attributes`). NÃO por âncora (telefone/email exata resolve via
     /identity/resolve). Retorna { count, results: [{customer_id, status, attributes}] }.
+
+    IDN-06: serviço, ou usuário com `contacts.visualizar` / `agent_assist.atender`;
+    para usuário o tenant é o do JWT (o `tenant_id` da query só pode repeti-lo).
     """
+    tenant = _identity_caller(request, tenant_id or None, _IDENTITY_CADASTRO_READ)
     if _webhook_adapter is None:
         return {"count": 0, "results": []}
-    return await _webhook_adapter.search_customers(tenant_id=tenant_id, q=q, limit=limit)
+    return await _webhook_adapter.search_customers(tenant_id=tenant, q=q, limit=limit)
 
 
 @app.get("/v1/channels/webhook/identity/customers/{customer_id}", status_code=200)
-async def webhook_identity_customer_get(customer_id: str, tenant_id: str) -> dict:
+async def webhook_identity_customer_get(customer_id: str, request: Request, tenant_id: str = "") -> dict:
     """
     Read puro de um cliente por id (cadastro §11). Usado pelo outbound (Fase 3b) para
     consultar `attributes.do_not_contact` (opt-out global). 404 quando ausente — o
     chamador trata como "sem opt-out". Declarado APÓS /customers/search (literal vence
-    o path-param na resolução do Starlette).
+    o path-param na resolução do Starlette). IDN-06: mesmo portão da busca.
     """
+    tenant = _identity_caller(request, tenant_id or None, _IDENTITY_CADASTRO_READ)
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Identity resolver not available")
-    cust = await _webhook_adapter.get_customer(tenant_id, customer_id)
+    cust = await _webhook_adapter.get_customer(tenant, customer_id)
     if cust is None:
         raise HTTPException(status_code=404, detail="customer not found")
     return cust
@@ -2214,23 +2252,25 @@ async def external_webhook_resume(
 
 
 @app.get("/v1/channels/webhook/pending/{contact_identifier}", status_code=200)
-async def webhook_pending(contact_identifier: str, tenant_id: str) -> dict:
+async def webhook_pending(contact_identifier: str, tenant_id: str, request: Request) -> dict:
     """
     Check whether a customer has an active pending workflow awaiting confirmation.
 
     Called by intake agents (via the pending_workflow_get MCP tool) after
     collecting the customer's contact_identifier.  Returns the resume_token
     needed to continue the workflow without creating a new one.
+    Interna (IDN-06): quem sabe um identificador não leva o `resume_token`.
 
     Returns:
       { found: false }                          — no pending workflow
       { found: true, resume_token, context }    — active pending workflow found
     """
+    tenant = _identity_caller(request, tenant_id)
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
     result = await _webhook_adapter.get_pending_workflow(
-        tenant_id          = tenant_id,
+        tenant_id          = tenant,
         contact_identifier = contact_identifier,
     )
     if result is None:

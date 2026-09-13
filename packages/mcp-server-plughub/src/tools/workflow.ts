@@ -33,6 +33,35 @@ import { withGuard }      from "../infra/tool-guard"
 export interface WorkflowDeps {
   channelGatewayUrl: string   // e.g. http://channel-gateway:8010
   tenantId:          string
+  // IDN-06 — `X-Service-Token` das rotas de identidade/pendência do gateway
+  // (= PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN lá). Vazio ⇒ o gateway recusa (401), e
+  // as tools dizem isso em vez de responder "sem pendência".
+  channelGatewayServiceToken?: string
+}
+
+/** Headers das rotas `/identity/*` e `/pending/*` do gateway (IDN-06). */
+export function identityHeaders(deps: WorkflowDeps, json = false): Record<string, string> {
+  const h: Record<string, string> = {
+    "X-Service-Token": deps.channelGatewayServiceToken ?? "",
+    "X-Service-Name":  "mcp-server-plughub",
+  }
+  if (json) h["Content-Type"] = "application/json"
+  return h
+}
+
+/**
+ * Credencial recusada NÃO é "não achei". Sem isto um token faltando no deploy vira
+ * `found: false` — o cliente com pendência ouve que não tem nenhuma, e nada fica
+ * vermelho. Devolve o resultado de erro, ou null quando o status não é de credencial.
+ */
+function credentialRefused(res: Response, tool: string) {
+  if (res.status !== 401 && res.status !== 403) return null
+  console.error(`[${tool}] channel-gateway RECUSOU a credencial de servico (HTTP ${res.status}) — ` +
+    "confira CHANNEL_GATEWAY_SERVICE_TOKEN aqui e PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN no gateway")
+  return {
+    isError: true as const,
+    content: [{ type: "text" as const, text: JSON.stringify({ error: "identity_credential_refused", status: res.status }) }],
+  }
 }
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -410,9 +439,11 @@ export function registerWorkflowTools(
         try {
           const rRes = await fetch(`${deps.channelGatewayUrl}/v1/channels/webhook/identity/resolve`, {
             method:  "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: identityHeaders(deps, true),
             body:    JSON.stringify({ tenant_id, anchors, provision: false }),
           })
+          const rRef = credentialRefused(rRes, "pending_workflow_get")
+          if (rRef) return rRef
           if (!rRes.ok) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
           }
@@ -444,7 +475,10 @@ export function registerWorkflowTools(
           }
           const pRes = await fetch(
             `${deps.channelGatewayUrl}/v1/channels/webhook/pending/by-customer/${encodeURIComponent(ref.customer_id)}?tenant_id=${encodeURIComponent(tenant_id)}`,
+            { headers: identityHeaders(deps) },
           )
+          const pRef = credentialRefused(pRes, "pending_workflow_get")
+          if (pRef) return pRef
           const pdata = pRes.ok
             ? await pRes.json() as { found: boolean; count: number; pendings: unknown[] }
             : { found: false, count: 0, pendings: [] }
@@ -468,10 +502,12 @@ export function registerWorkflowTools(
       const url = `${deps.channelGatewayUrl}/v1/channels/webhook/pending/${encodeURIComponent(contact_identifier)}?tenant_id=${encodeURIComponent(tenant_id)}`
       let res: Response
       try {
-        res = await fetch(url)
+        res = await fetch(url, { headers: identityHeaders(deps) })
       } catch (err) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
       }
+      const lRef = credentialRefused(res, "pending_workflow_get")
+      if (lRef) return lRef
       if (!res.ok) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
       }
@@ -525,9 +561,11 @@ export function registerWorkflowTools(
       try {
         const res = await fetch(`${deps.channelGatewayUrl}/v1/channels/webhook/identity/resolve`, {
           method:  "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: identityHeaders(deps, true),
           body:    JSON.stringify({ tenant_id, anchors, provision: provision ?? true }),
         })
+        const cRef = credentialRefused(res, "customer_resolve")
+        if (cRef) return cRef
         if (!res.ok) {
           return {
             isError: true,
@@ -569,9 +607,11 @@ export function registerWorkflowTools(
     try {
       const res = await fetch(`${deps.channelGatewayUrl}${path}`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: identityHeaders(deps, true),
         body:    JSON.stringify(body),
       })
+      const iRef = credentialRefused(res, errKey)
+      if (iRef) return iRef
       if (!res.ok) {
         return { isError: true as const, content: [{ type: "text" as const, text: JSON.stringify({ error: `${errKey}_http_${res.status}` }) }] }
       }

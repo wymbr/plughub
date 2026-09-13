@@ -131,7 +131,8 @@ async def rota(s, r, db, salt):
                                   and j.get("customer_id") == cid and attrs2.get("nome") == "Probe IDN-08")
 
             rr = await http.post(BASE + "/resolve", json={"tenant_id": t, "provision": False,
-                                                          "anchors": [{"kind": "phone", "value": phone_nac}]})
+                                                          "anchors": [{"kind": "phone", "value": phone_nac}]},
+                                 headers={"x-service-token": s.channel_gateway_service_token})   # IDN-06
             c["resolve_le_operator"] = rr.status_code == 200 and rr.json().get("provenance") == "operator"
         return out
     finally:

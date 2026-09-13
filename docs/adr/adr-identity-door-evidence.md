@@ -80,6 +80,10 @@ reserva do `core.*` já é furada por dois fluxos autorados (`skill_limite_proce
 dev (`vite.config.ts:68`) e em produção (`Dockerfile:158`). O `probe_route_credential_coverage.sh`
 mede a analytics-api: terceira ocorrência de *"um censo desenhado para um eixo não prova nada
 sobre o eixo vizinho"*.
+*(Fechado em 2026-09-13, IDN-06: um portão com duas portas — credencial de SERVIÇO para os
+chamadores internos, que não têm usuário, e Bearer só onde a rota declara campo ABAC (a busca e o
+get do cadastro). As outras sete são internas. Eram nove rotas, não oito: `pending/{contact_identifier}`,
+a legada, também devolvia `resume_token`. Censo próprio: `probe_identity_route_credential.sh`.)*
 
 **(8) Não há eixo de procedência.** O único eixo da âncora é `verification_class` — *como* foi
 provada. Nada diz *de onde veio*. A aba Cliente do Console cria cadastro e grava atributos por
@@ -300,6 +304,10 @@ registradas como fichas.
 > tenant do JWT. O carimbo não passa pelas rotas irmãs sem credencial (IDN-06): um rótulo de
 > origem que qualquer um alcança não diz de onde a âncora veio. O cadastro do operador não move
 > âncora de outro cliente, e a procedência só vale onde a linha é nova.
+>
+> **As rotas irmãs fecharam no mesmo dia (IDN-06)** — credencial de serviço. A trava de
+> `authoritative` continua no índice, e não por redundância: o principal de serviço é irrestrito,
+> então "tem credencial" não diz "pode carimbar autoritativo".
 
 ## 4. Consequências
 

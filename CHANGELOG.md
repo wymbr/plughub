@@ -1,5 +1,83 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (14) — IDN-06: as rotas de identidade do channel-gateway exigem credencial
+
+### 1 · O que estava aberto, medido antes de mexer
+
+As rotas `/v1/channels/webhook/identity/*` e `/pending/*` não pediam credencial nenhuma e tomavam
+o `tenant_id` do corpo ou da query. A UI proxia `/v1/channels`, então a medição foi feita **pela
+porta da UI** e sem login, contra o gateway ainda antigo:
+
+| chamada anônima | status |
+|---|---|
+| `GET :5174/…/identity/customers/search?q=maria` | **200**, com o cadastro |
+| `GET :8010/…/pending/by-customer/cus_demo_maria` | **200** — a rota que devolve `resume_token` |
+| `GET :8010/…/identity/customers/cus_demo_maria` | **200** |
+| `POST :8010/…/identity/resolve` | **200** |
+
+A ficha falava em oito rotas. **São nove**: a legada `pending/{contact_identifier}` também entrega
+`resume_token` a quem souber um identificador.
+
+### 2 · Um portão, duas portas
+
+`identity_auth.py` decide, e toda rota do bloco o chama antes de tocar o adapter:
+
+- **Serviço**: `X-Service-Token` comparado em tempo constante contra
+  `PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN`. É a porta dos chamadores internos, que não têm usuário.
+  O principal é irrestrito e por isso é uma identidade: `service:<X-Service-Name>` vai ao log. O
+  tenant é o do pedido. ⚠️ **Token vazio no gateway fecha a porta** (401, e o boot avisa nomeando o
+  que para de funcionar), nunca *"sem token configurado ⇒ aberto"*. Token errado é 401 mesmo com
+  Bearer válido junto: não cai calado na outra porta.
+- **Usuário**: Bearer do auth-api (`plughub_authz`), **só onde a rota declara campo**. A busca e o
+  get do cadastro aceitam `contacts.visualizar` (Análise › Clientes) ou `agent_assist.atender`
+  (Console › aba Cliente). O tenant é o do JWT; um `tenant_id` diferente no pedido é 403.
+- **Internas**: resolve, `pending/by-customer`, a pendência legada, `otp/challenge`, `otp/verify`,
+  `key/attach` e `attributes`. Usuário nenhum passa, com qualquer grant (403). Nenhuma tela as chama
+  desde a IDN-08.
+
+As duas rotas que já tinham portão de usuário (`import`, `operator/register`) ficam como estão.
+
+### 3 · Os chamadores migraram junto
+
+- **mcp-server** (`workflow.ts`): as oito chamadas de identidade e pendência mandam o header
+  (`identityHeaders`), com o token de `CHANNEL_GATEWAY_SERVICE_TOKEN`, nas duas montagens do
+  servidor. ⚠️ **Credencial recusada deixou de virar resposta plausível.** Antes, um 401 do gateway
+  virava `found: false` em `pending_workflow_get`, e o cliente com pendência ouviria que não tinha
+  nenhuma. Agora 401/403 é `isError` com `identity_credential_refused` e log; as outras falhas
+  seguem como antes.
+- **mailing-api** (`IdentityClient`): header nas três chamadas, token de
+  `PLUGHUB_MAILING_IDENTITY_SERVICE_TOKEN`, aviso de boot quando vazio (o opt-out global deixaria de
+  ser lido).
+- **Compose** (demo e full) com o mesmo segredo nos três serviços. **Probes** que chamavam as rotas
+  cruas: `_auth.sh` ganhou `plughub_gw_service_shim` (e o shim de Bearer passou a cobrir essas
+  rotas), com o token lido do próprio container do gateway; os exercícios Python usam o settings do
+  serviço.
+
+### 4 · Testes e probe
+
+- `test_identity_route_credential.py` (35): as duas portas, o token vazio que fecha, o tenant de
+  cada porta e, por rota, que o portão roda antes do adapter, com o controle positivo de serviço em
+  cada uma.
+- `identity-service-credential.test.ts` (15): toda chamada leva o header; credencial recusada é
+  erro nomeado; 5xx comum não mudou. No vermelho-primeiro, tirar o header da chamada legada derruba
+  exatamente o caso dela.
+- **`probe_identity_route_credential.sh`**. A: censo AST das 11 rotas, com população mínima e
+  mutação que acusa só a rota mutada. B: as nove anônimas 401, serviço errado 401, serviço 200,
+  usuário em interna 403, busca sem campo 403, busca com campo 200, tenant divergente 403. C: na
+  imagem, token vazio fecha, e as mutações *"vazio abre"* e *"sem portão"* derrubam cada uma o seu
+  caso. D: pela 5174, anônimo 401, login real 200 na busca e 403 no resolve. E: os três tokens
+  iguais, e mcp-server e mailing-api com o token do próprio container recebem 200 (sem ele, 401).
+
+### 5 · Verificação
+
+channel-gateway **926 verdes**; mcp-server **378 verdes**, `tsc` limpo. ⚠️ A imagem da mailing-api
+não tem pytest, e a suíte dela não rodou. Imagens: channel-gateway, mcp-server-plughub,
+mailing-api. Verdes ao vivo: `probe_identity_route_credential`,
+`probe_journey_merge_status_access` (OTP e pendência dentro do chat, pelo mcp-server),
+`probe_identity_operator`, `probe_identity_provenance`, `probe_phone_region`, `probe_otp_gate`,
+`probe_identity_index_owner`, `test_identity_resolver_slice1`, `probe_edge_surface`,
+`probe_authz_single_verifier`, `probe_mcp_tool_guard_census`, `probe_gates_manifest_coverage`.
+
 ## 2026-09-13 (13) — IDN-08: o cadastro do operador é durável e carimba `operator`
 
 A ficha, depois da PID-12, dizia que o que faltava era um **portador** para o carimbo `operator`:

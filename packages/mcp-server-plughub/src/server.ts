@@ -176,6 +176,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   const workflowDeps: WorkflowDeps = {
     channelGatewayUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
     tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    channelGatewayServiceToken: process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"] ?? "",   // IDN-06
   }
 
   const dialogDeps: DialogDeps = {
@@ -1430,9 +1431,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // tool responde ok, e a captura simplesmente não acontece em produção.
       dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://dialog-api:3760",
     })
+    // IDN-06 — as rotas de identidade/pendência do gateway exigem credencial de serviço.
+    // Vazio não "abre": o gateway recusa e as tools devolvem `identity_credential_refused`.
+    if (!process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"]) {
+      console.warn("[mcp-server] CHANNEL_GATEWAY_SERVICE_TOKEN vazio: pending_workflow_get, " +
+        "customer_resolve e otp_* serao RECUSADAS pelo channel-gateway (401)")
+    }
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
       tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+      channelGatewayServiceToken: process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"] ?? "",
     })
     registerDialogTools(mcpServer, {
       dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",

@@ -20,6 +20,9 @@ POOL="loja_checkout_io"
 TOKEN="plughub_wh_slice2_token_000000000000000000000"
 ORIG="orig_sess_slice2"
 CURL="curl -s --max-time 15"
+
+# IDN-06: as rotas /identity/* e /pending/* do gateway exigem X-Service-Token.
+source "$(dirname "$0")/_auth.sh"; plughub_gw_service_shim
 FAIL=0
 assert() { if [ "$2" = "$3" ]; then echo "  ✓ $1 = $3"; else echo "  ✗ $1: esperado [$2], veio [$3]"; FAIL=1; fi; }
 assert_ge() { if [ "$2" -ge "$3" ] 2>/dev/null; then echo "  ✓ $1 = $2 (>= $3)"; else echo "  ✗ $1: esperado >= $3, veio [$2]"; FAIL=1; fi; }

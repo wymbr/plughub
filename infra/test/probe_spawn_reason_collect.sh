@@ -58,6 +58,9 @@ CG="${CG:-http://localhost:8010}"
 AR="${AR:-http://localhost:3300}"
 CURL="curl -s --max-time 20"
 
+# IDN-06: as rotas /identity/* e /pending/* do gateway exigem X-Service-Token.
+source "$(dirname "$0")/_auth.sh"; plughub_gw_service_shim
+
 redis() { $COMPOSE exec -T redis redis-cli "$@" < /dev/null; }
 chq()   { $COMPOSE exec -T clickhouse clickhouse-client -d plughub_demo --query "$1" < /dev/null 2>&1; }
 

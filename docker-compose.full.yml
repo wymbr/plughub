@@ -262,6 +262,7 @@ services:
       # num compose e aceitava token forjado no outro. Tem de ser o MESMO segredo
       # que a auth-api EMITE (`PLUGHUB_AUTH_JWT_SECRET`, linha ~448).
       PLUGHUB_JWT_SECRET: changeme_auth_jwt_secret_full_32chars   # == auth-api
+      CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_full   # IDN-06 — == gateway
       KAFKA_BROKERS:      kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
       CALENDAR_API_URL:   http://calendar-api:3700
@@ -598,6 +599,7 @@ services:
       PLUGHUB_KAFKA_BROKERS:           kafka:29092
       PLUGHUB_REDIS_URL:               redis://redis:6379
       PLUGHUB_JWT_SECRET:              changeme_32chars_webchat_secret!
+      PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_full   # IDN-06 — rotas /identity/* e /pending/*
       PLUGHUB_WS_AUTH_TIMEOUT_S:       "30"
       PLUGHUB_STORAGE_ROOT:            /var/plughub/attachments
       PLUGHUB_ATTACHMENT_EXPIRY_DAYS:  "7"

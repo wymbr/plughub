@@ -237,7 +237,7 @@ async def exercicio(s, r, db):
                                                and k["provenance"] == "authoritative")
         out["verify_mesmo"] = v_mesmo
 
-        async with httpx.AsyncClient(timeout=15) as http:
+        async with httpx.AsyncClient(timeout=15, headers={"x-service-token": s.channel_gateway_service_token}) as http:
             rc = await http.post(ROTA, json={"tenant_id": t, "customer_id": a_cid, "kind": "cpf", "value": cpf})
             c["rota_viva_recusa_cpf"] = rc.status_code == 200 and rc.json() == {"sent": False, "reason": "undeliverable_kind"}
             rp = await http.post(ROTA, json={"tenant_id": t, "customer_id": a_cid, "kind": "phone", "value": phone})

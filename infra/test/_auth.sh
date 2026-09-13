@@ -151,12 +151,53 @@ plughub_scope_line() {
 #
 # O login e LAZY: se o script nao chamar o analytics, nenhum token e pedido.
 
+# IDN-06 (2026-09-13) — as rotas `/v1/channels/webhook/identity/*` e `/pending/*` do
+# channel-gateway exigem `X-Service-Token` (usuario nenhum passa nas internas). O
+# token e o do PROPRIO container do gateway, lido na hora: um valor copiado para ca
+# ficaria verde contra um deploy que trocou o segredo. Vazio ⇒ INCONCLUSIVO, porque
+# um 401 lido como "nao ha cliente" e a medicao vazia que este arquivo recusa.
+plughub_gw_service_token() {
+  local t="${PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN:-}"
+  [ -z "$t" ] && t=$(docker exec "${GW_CONTAINER:-plughub-demo-channel-gateway-1}" \
+                       printenv PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN 2>/dev/null)
+  if [ -z "$t" ]; then
+    echo "INCONCLUSIVO: PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN vazio (gateway no ar?)." >&2
+    exit 2
+  fi
+  printf '%s' "$t"
+}
+
+_ph_gw_identity_url() {
+  case "$1" in */v1/channels/webhook/identity/*|*/v1/channels/webhook/pending/*) return 0 ;; esac
+  return 1
+}
+
+# Shim so para as rotas de identidade/pendencia — para scripts que nao falam com
+# servico nenhum que confira o Bearer (e portanto nao querem login).
+plughub_gw_service_shim() {
+  curl() {
+    local a u=""
+    for a in "$@"; do
+      case "$a" in http://*|https://*) u="$a" ;; esac
+    done
+    if _ph_gw_identity_url "$u"; then
+      command curl -H "X-Service-Token: $(plughub_gw_service_token)" -H "X-Service-Name: probe" "$@"
+    else
+      command curl "$@"
+    fi
+  }
+}
+
 plughub_auth_curl_shim() {
   curl() {
     local a u=""
     for a in "$@"; do
       case "$a" in http://*|https://*) u="$a" ;; esac
     done
+    if _ph_gw_identity_url "$u"; then
+      command curl -H "X-Service-Token: $(plughub_gw_service_token)" -H "X-Service-Name: probe" "$@"
+      return
+    fi
     case "$u" in
       *:3500*|*/reports/*|*/v1/audit*|*/analytics/*|\
       *:3100/api/*|*:5174/api/*|\

@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # Set via PLUGHUB_AGENT_REGISTRY_SERVICE_TOKEN.
     agent_registry_service_token: str = ""
 
+    # IDN-06 — credencial INBOUND dos chamadores internos (mcp-server, mailing-api) nas
+    # rotas `/v1/channels/webhook/identity/*` e `/pending/*`, via `X-Service-Token`.
+    # Vazio NÃO libera: a porta de serviço fica fechada (401) e o boot avisa — nunca
+    # "sem token configurado ⇒ aberto". Ver `identity_auth.py`.
+    # Set via PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN.
+    channel_gateway_service_token: str = ""
+
     # Config API — source of horizontal config (webchat namespace etc.). Read via
     # the HTTP-backed WebchatConfigCache (config-http-propagation arc), NOT the
     # Redis cache directly. Set via PLUGHUB_CONFIG_API_URL. Example: http://config-api:3600

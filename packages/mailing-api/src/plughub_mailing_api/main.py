@@ -66,7 +66,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.pool     = pool
     app.state.settings = settings
     app.state.calendar = CalendarClient(settings.calendar_api_url)
-    app.state.identity = IdentityClient(settings.identity_api_url)
+    if not settings.identity_service_token:
+        logger.warning(
+            "PLUGHUB_MAILING_IDENTITY_SERVICE_TOKEN vazio: o channel-gateway RECUSA as rotas de "
+            "identidade — o opt-out global (do_not_contact) nao sera lido nem gravado"
+        )
+    app.state.identity = IdentityClient(settings.identity_api_url, service_token=settings.identity_service_token)
     yield
     await pool.close()
 

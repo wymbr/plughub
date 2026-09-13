@@ -140,7 +140,7 @@ async def exercicio(s, r, db, salt):
         c["cli_controle"] = (await kinds_indexados(ref) == ["phone"]
                              and await r.get(idx._identity_key(t, "phone", h_ctx)) is not None)
 
-        async with httpx.AsyncClient(timeout=15) as http:
+        async with httpx.AsyncClient(timeout=15, headers={"x-service-token": s.channel_gateway_service_token}) as http:
             resp = await http.post(ROTA, json={"tenant_id": t, "provision": False,
                                                "anchors": [{"kind": "phone", "value": f["nacional"]}]})
             c["rota_viva_nacional"] = resp.status_code == 200 and resp.json().get("customer_id") == f["cid"]
@@ -162,7 +162,7 @@ async def invalidacao(s, r, db, salt):
     idx = IdentityIndex(redis=r, salt=salt, db_pool=db, phone_region=PhoneRegionConfig(s.config_api_url))
     h = await idx.anchor_hash(t, "phone", f["intl"])
     await idx.attach_anchor(t, f["cid"], "phone", f["intl"], persist_durable=True, provenance="declared")
-    async with httpx.AsyncClient(timeout=15) as http:
+    async with httpx.AsyncClient(timeout=15, headers={"x-service-token": s.channel_gateway_service_token}) as http:
         async def acha():
             resp = await http.post(ROTA, json={"tenant_id": t, "provision": False,
                                                "anchors": [{"kind": "phone", "value": f["nacional"]}]})

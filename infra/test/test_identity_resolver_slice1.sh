@@ -18,6 +18,9 @@ TENANT="${TENANT:-tenant_demo}"
 PHONE="11999990000"
 EMAIL="cliente.slice1@example.com"
 CURL="curl -s --max-time 15"
+
+# IDN-06: as rotas /identity/* e /pending/* do gateway exigem X-Service-Token.
+source "$(dirname "$0")/_auth.sh"; plughub_gw_service_shim
 FAIL=0
 assert()     { if [ "$2" = "$3" ]; then echo "  ✓ $1 = $3"; else echo "  ✗ $1: esperado [$2], veio [$3]"; FAIL=1; fi; }
 assert_ne()  { if [ "$2" != "$3" ]; then echo "  ✓ $1 (≠ [$3])"; else echo "  ✗ $1: não deveria ser [$3]"; FAIL=1; fi; }

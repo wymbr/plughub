@@ -22,9 +22,11 @@ logger = logging.getLogger("plughub.mailing.identity")
 
 
 class IdentityClient:
-    def __init__(self, base_url: str, timeout_s: float = 8.0) -> None:
+    def __init__(self, base_url: str, timeout_s: float = 8.0, service_token: str = "") -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        # IDN-06: as rotas de identidade do gateway exigem credencial de serviço.
+        self.headers = {"X-Service-Token": service_token, "X-Service-Name": "mailing-api"}
 
     async def resolve(
         self, tenant_id: str, anchors: list[dict], provision: bool = True,
@@ -40,6 +42,7 @@ class IdentityClient:
                 r = await client.post(
                     f"{self.base_url}/v1/channels/webhook/identity/resolve",
                     json={"tenant_id": tenant_id, "anchors": anchors, "provision": provision},
+                    headers=self.headers,
                 )
             r.raise_for_status()
             body = r.json() or {}
@@ -66,6 +69,7 @@ class IdentityClient:
                 r = await client.get(
                     f"{self.base_url}/v1/channels/webhook/identity/customers/{customer_id}",
                     params={"tenant_id": tenant_id},
+                    headers=self.headers,
                 )
             if r.status_code == 404:
                 return None
@@ -91,6 +95,7 @@ class IdentityClient:
                     f"{self.base_url}/v1/channels/webhook/identity/attributes",
                     json={"tenant_id": tenant_id, "customer_id": customer_id,
                           "attributes": {"do_not_contact": dnc}},
+                    headers=self.headers,
                 )
                 r.raise_for_status()
                 return bool((r.json() or {}).get("updated"))
