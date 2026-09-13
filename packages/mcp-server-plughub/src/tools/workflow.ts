@@ -27,6 +27,41 @@
 import { z }              from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { withGuard }      from "../infra/tool-guard"
+import { verifySessionBoundToken, type SessionBoundPayload } from "../infra/jwt"
+
+/**
+ * PID-01 — as tools de retomada exigem o token LIGADO À SESSÃO (ver `infra/jwt.ts`).
+ * O skill-flow-service o injeta; o autor do YAML não o escreve e não pode trocá-lo.
+ * O tenant passa a vir do token: um `tenant_id` diferente no input é recusa, não escolha.
+ */
+// A lista mora em `@plughub/schemas` (`SESSION_BOUND_TOOLS`), lida também pelo injetor.
+
+type Recusa = { isError: true; content: Array<{ type: "text"; text: string }> }
+
+export function sessionCaller(
+  tool: string, input: Record<string, unknown>,
+): { caller: SessionBoundPayload } | { refused: Recusa } {
+  const recusa = (error: string, message: string): { refused: Recusa } => {
+    console.warn(`[${tool}] RECUSADO: ${error} — ${message}`)
+    return { refused: { isError: true, content: [{ type: "text", text: JSON.stringify({ error, message }) }] } }
+  }
+  const tok = input["session_token"]
+  if (typeof tok !== "string" || !tok) {
+    return recusa("missing_session_token",
+      "esta tool exige o token de sessao que o bridge emite na ativacao (injetado pelo skill-flow-service)")
+  }
+  let caller: SessionBoundPayload
+  try {
+    caller = verifySessionBoundToken(tok)
+  } catch {
+    return recusa("invalid_session_token", "token de sessao invalido, expirado ou de outro tipo")
+  }
+  const pedido = input["tenant_id"]
+  if (typeof pedido === "string" && pedido && pedido !== caller.tenant_id) {
+    return recusa("tenant_mismatch", `tenant do input (${pedido}) diverge do da sessao (${caller.tenant_id})`)
+  }
+  return { caller }
+}
 
 // ─── Dependências injetadas ──────────────────────────────────────────────────
 
@@ -296,8 +331,13 @@ export function registerWorkflowTools(
         "'identity' when resuming a pending discovered via cross-channel identity lookup. In " +
         "skill-flow YAML pass @ctx.session.resume_origin; absent/unresolved/invalid → 'token'."
       ),
+      session_token: z.string().optional().describe(
+        "PID-01 — token LIGADO À SESSÃO, injetado pelo skill-flow-service. Não declare no YAML."
+      ),
     } as any,
     withGuard("workflow_resume", async (input: Record<string, unknown>) => {
+      const quem = sessionCaller("workflow_resume", input)
+      if ("refused" in quem) return quem.refused
       const parsed = z.object({
         resume_token:  z.string().min(1),
         decision:      z.enum(["input", "approved", "rejected", "timeout"]),
@@ -335,7 +375,8 @@ export function registerWorkflowTools(
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({
-            tenant_id: deps.tenantId,
+            // PID-01: o tenant é o da SESSÃO que retoma, não o do env do processo.
+            tenant_id: quem.caller.tenant_id,
             // Fase E.3: source default "agent" (um agente retomou o workflow via
             // delegate). Um source explícito no payload do chamador prevalece
             // (ex.: intake cancelar → "customer_reconnect").
@@ -408,18 +449,22 @@ export function registerWorkflowTools(
       contact_identifier: z.string().optional().describe(
         "LEGACY single lookup key (phone/email). Treated as one inferred phone anchor."
       ),
-      tenant_id: z.string().min(1).describe(
-        "Tenant ID. In skill-flow YAML use $.tenant_id."
+      tenant_id: z.string().optional().describe(
+        "Tenant ID (opcional desde a PID-01: vale o da sessão; se vier, tem de ser o mesmo)."
+      ),
+      session_token: z.string().optional().describe(
+        "PID-01 — token LIGADO À SESSÃO, injetado pelo skill-flow-service. Não declare no YAML."
       ),
     } as any,
     withGuard("pending_workflow_get", async (input: Record<string, unknown>) => {
+      const quem = sessionCaller("pending_workflow_get", input)
+      if ("refused" in quem) return quem.refused
       const parsed = z.object({
         anchors: z.array(z.object({
           kind:  z.enum(["phone", "email", "cpf", "princ", "dev"]),
           value: z.string().min(1),
         })).optional(),
         contact_identifier: z.string().optional(),
-        tenant_id:          z.string().min(1),
       }).safeParse(input)
 
       if (!parsed.success) {
@@ -432,7 +477,8 @@ export function registerWorkflowTools(
         }
       }
 
-      const { anchors, contact_identifier, tenant_id } = parsed.data
+      const { anchors, contact_identifier } = parsed.data
+      const tenant_id = quem.caller.tenant_id
 
       // Preferred path: anchors → Identity Resolver (Lookup 1 → Lookup 2, cross-channel).
       if (anchors && anchors.length > 0) {

@@ -96,6 +96,12 @@ CHANNEL_GATEWAY_URL = os.getenv("CHANNEL_GATEWAY_URL",  "http://localhost:8010")
 # Nunca lê o Redis do routing direto (invariante do árbitro único).
 ROUTING_ENGINE_URL  = os.getenv("ROUTING_ENGINE_URL",   "http://routing-engine:3550")
 ROUTING_ADMIN_TOKEN = os.getenv("ROUTING_ADMIN_TOKEN",  "")
+# PID-01: o token LIGADO À SESSÃO que `pending_workflow_get`/`workflow_resume` exigem é
+# emitido pelo mcp-server (`POST /internal/session-token`) a pedido do bridge, na
+# ATIVAÇÃO. Mesmo segredo dos irmãos `/internal/*`. Vazio ⇒ o mcp-server recusa (503)
+# e as duas tools recusam em todo skill — com log dos dois lados, nunca mudo.
+MCP_SERVER_URL             = os.getenv("MCP_SERVER_URL",             "http://mcp-server-plughub:3100")
+MCP_INTERNAL_SERVICE_TOKEN = os.getenv("MCP_INTERNAL_SERVICE_TOKEN", "")
 
 _default_skills_dir = str(Path(__file__).parent.parent.parent.parent / "skill-flow-engine" / "skills")
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
@@ -1106,6 +1112,45 @@ async def resolve_flow_for_agent(
 
 # ── plughub-native activation: call skill-flow-service ───────────────────────
 
+async def mint_session_token(
+    http: aiohttp.ClientSession,
+    tenant_id: str,
+    session_id: str,
+    instance_id: str,
+    skill_id: str,
+) -> str:
+    """PID-01 — pede ao mcp-server o token ligado a ESTA sessão. "" em falha, com log.
+
+    Falhar não bloqueia a ativação: um skill que não usa as tools de retomada segue
+    igual, e os que usam recebem recusa NOMEADA (`missing_session_token`). Bloquear
+    tiraria do ar todo contato por uma dependência de dois steps.
+    """
+    if not MCP_INTERNAL_SERVICE_TOKEN:
+        logger.error(
+            "PID-01: MCP_INTERNAL_SERVICE_TOKEN vazio no bridge — session=%s ativa SEM token de "
+            "sessao; pending_workflow_get e workflow_resume vao recusar", session_id,
+        )
+        return ""
+    try:
+        async with http.post(
+            f"{MCP_SERVER_URL}/internal/session-token",
+            json={"tenant_id": tenant_id, "session_id": session_id,
+                  "instance_id": instance_id, "skill_id": skill_id},
+            headers={"x-service-token": MCP_INTERNAL_SERVICE_TOKEN},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status == 200:
+                return str((await resp.json()).get("session_token") or "")
+            logger.error(
+                "PID-01: mcp-server recusou o token de sessao (HTTP %d) session=%s — "
+                "pending_workflow_get e workflow_resume vao recusar: %s",
+                resp.status, session_id, (await resp.text())[:200],
+            )
+    except Exception as exc:
+        logger.error("PID-01: falha pedindo token de sessao session=%s — %s", session_id, exc)
+    return ""
+
+
 async def activate_native_agent(
     http: aiohttp.ClientSession,
     redis_client: aioredis.Redis,
@@ -1187,6 +1232,11 @@ async def activate_native_agent(
     pool_config = _pool_config_cache.get(pool_id, {}) if pool_id else {}
     if pool_config:
         payload["config"] = pool_config
+    # PID-01: token ligado à sessão para as tools de retomada. Viaja no corpo, nunca no
+    # `session_context` — lá o YAML o leria (`$.session.*`) e poderia repassá-lo adiante.
+    _session_token = await mint_session_token(http, tenant_id, session_id, instance_id, skill_id)
+    if _session_token:
+        payload["session_token"] = _session_token
     # segment_id for segment-scoped ContextStore writes (scope: segment in YAML).
     # Allows parallel agents (NPS + wrap-up) to isolate their data per participation.
     if segment_id:

@@ -1,5 +1,88 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (15) — PID-01: as tools de retomada só agem para uma sessão que o bridge ativou
+
+### 1 · O que estava aberto, e a premissa que caiu
+
+`pending_workflow_get` e `workflow_resume` não sabiam quem chamava: tenant e âncoras vinham do input,
+e o transporte MCP é anônimo. Medido antes do fix, pelo `/sse` de dentro do container:
+`pending_workflow_get` sem credencial **respondeu** (`found: false`), e `workflow_resume` sem
+credencial **chegou ao gateway** (404 do token inexistente, não recusa).
+
+A ficha dizia *"passam a exigir `session_token` assinado — o mecanismo já existe"*. A medição
+refutou o "já existe" por três fatos:
+
+| fato | onde |
+|---|---|
+| o token do `agent_login` não carrega `session_id` — não diz qual sessão pede (ADR D6) | `infra/jwt.ts` |
+| `agent_login` é auto-serviço: quem alcança a 3100 cunha um | CAP-10 |
+| o caminho conversacional nunca recebeu token: o bridge não chama `agent_login` e o `/execute` não o carrega | `skill_limite_entrada_v1:349`, `skill_navegacao_v1:200` |
+
+Exigir aquele token quebraria **11 skills** que usam `workflow_resume` (inclusive o runner de
+diálogo, que devolve o controle ao chamador) e os dois intakes que usam `pending_workflow_get` — e
+não provaria nada além de "alcançou a porta".
+
+### 2 · O desenho (decisão do dono)
+
+- **Um emissor**: `POST /internal/session-token` no mcp-server, portão `MCP_INTERNAL_SERVICE_TOKEN`
+  (comparação em tempo constante; sem env, 503). Assina `{tenant_id, session_id, instance_id,
+  skill_id}` com `audience: plughub:session` e TTL de 4 h. Se a sessão tem meta de outro tenant,
+  recusa (409).
+- **Quem pede é o bridge**, na ativação (`mint_session_token`), porque é ele quem sabe que esta
+  instância executa este skill para esta sessão. O token viaja no **corpo** do `/execute`, nunca no
+  `session_context`, que o YAML lê. Falhar não bloqueia a ativação: loga, e só as duas tools recusam.
+- **Quem entrega é o skill-flow-service**: o `mcpCall` do engine passa por `injectSessionToken`, que
+  **sobrescreve** o `session_token` do input nas tools de `SESSION_BOUND_TOOLS` e o **remove** quando
+  não houver token. O autor do fluxo não escolhe a sessão. Zero YAML alterado.
+- **Quem confere são as tools** (`sessionCaller`): sem token → `missing_session_token`; assinatura,
+  expiração ou `audience` errados (inclusive o token do `agent_login`) → `invalid_session_token`;
+  `tenant_id` do input diferente → `tenant_mismatch`. O tenant passa a ser o do token — o
+  `workflow_resume` deixou de mandar o tenant do env do processo.
+- **Uma casa para a lista**: `SESSION_BOUND_TOOLS` em `@plughub/schemas`, lida pelo injetor; o probe
+  confere que ela é exatamente o conjunto de handlers que chamam `sessionCaller`.
+
+### 3 · O que esta fatia NÃO faz
+
+- Não confere **evidência** contra o `resume_requires` da pendência (terceiro item da D6): diz quem
+  pede, não se a prova basta. Isso é PID-06/PID-11.
+- O `/delegate` do skill-flow-service (job A2A em background) roda sem token: um skill executado por
+  ali que chame essas tools recebe recusa nomeada, com aviso no log.
+- O `agent_login` continua auto-serviço (CAP-10); as outras 23 tools com token seguem aceitando o
+  token que qualquer um emite.
+
+### 4 · Testes e probe
+
+- `session-bound-tools.test.ts` (schemas, 5): injeta, sobrescreve o do YAML, remove sem token, não
+  toca tool fora da lista nem servidor externo.
+- `session-bound-resume.test.ts` (mcp-server, 12): as quatro recusas nas duas tools sem tocar o
+  gateway, o token de agente recusado pelo `audience`, e o controle positivo no tenant da sessão. Os
+  dois testes de identidade existentes passaram a mandar o token.
+- `test_session_token_mint.py` (bridge, 4): emite e manda no corpo (nunca no `session_context`);
+  falha HTTP, exceção e segredo vazio não bloqueiam e logam.
+- **`probe_session_bound_resume.sh`** — A: censo lista × portão, injeção no skill-flow-service,
+  mutação que tira o portão de `workflow_resume`; B: pelo transporte MCP vivo, anônimo, token de
+  agente e tenant alheio recusam, o emissor exige credencial, e com o token emitido as duas agem; C:
+  bridge e mcp-server com o mesmo segredo; D: a jornada no chat verde, sem recusa de token e sem
+  falha de emissão no intervalo.
+- **Testemunha de que as tools foram mesmo chamadas** (zero recusa também sairia se não fossem): as
+  sessões da jornada, rodadas depois do deploy, têm `verificar_pendencia` concluído com
+  `found: true`, e os runners de diálogo delas têm `retornar:__invoked__ = completed` — o
+  `workflow_resume` passou com o token injetado.
+- Censo de tools: `sessionCaller`/`verifySessionBoundToken` contam como camada de token, e as duas
+  tools saíram de dívida (25 com token, 48 em dívida). Censo REST: a rota nova declarada.
+
+### 5 · Verificação
+
+schemas 5, mcp-server **390 verdes**, orchestrator-bridge **148 verdes**, `tsc` limpo no mcp-server
+e no skill-flow-service. Imagens: mcp-server-plughub, skill-flow-service, orchestrator-bridge.
+Verdes ao vivo: `probe_session_bound_resume`, `probe_journey_merge_status_access`,
+`probe_mcp_tool_guard_census`, `probe_caller_token_chain`, `probe_orchestrator_delegability`,
+`probe_skill_profile_steps`, `probe_otp_gate`, `probe_identity_route_credential`,
+`probe_gates_manifest_coverage`, `probe_task_ledger`.
+⚠️ `probe_mcp_rest_surface` segue vermelho com **18 falhas anteriores a esta ficha** (conferido no
+HEAD): as rotas `/api/*` passaram a usar `requireJwtGrant`, que o censo AST não conhece, e
+`/api/dialog/preview` não tem linha. Os ramos vivos dele passam. Fica como tarefa separada.
+
 ## 2026-09-13 (14) — IDN-06: as rotas de identidade do channel-gateway exigem credencial
 
 ### 1 · O que estava aberto, medido antes de mexer

@@ -47,6 +47,11 @@ Default port: 3100.
   `session_token` é verificado em **23**; **50** não verificam nada e **1** (`agent_login`)
   é isenta por ser a emissora. As três que entraram sem classificação foram medidas e
   declaradas na CAP-18 (2026-09-12) — nenhuma tem camada nenhuma.
+  *(2026-09-13, PID-01: `pending_workflow_get` e `workflow_resume` passaram a exigir o token
+  **ligado à sessão** — outro token, com `audience` próprio e `session_id`, que só o mcp-server
+  emite (`POST /internal/session-token`, a pedido do bridge na ativação) e o skill-flow-service
+  injeta. O de `agent_login` é recusado nelas. Contagem: 25 com token, 48 em dívida. A lista
+  mora em `@plughub/schemas` (`SESSION_BOUND_TOOLS`); gate `probe_session_bound_resume.sh`.)*
   Censo por camada, tabela de classificação e trava contra regressão:
   `infra/test/probe_mcp_tool_guard_census.sh`.
   **A política foi DECIDIDA pelo dono em 2026-09-12 (CAP-10): a resposta é TOPOLOGIA**, não

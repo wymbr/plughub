@@ -768,6 +768,14 @@ export {
 
 export type { SkillProfile } from "./skill-profile"
 
+// ── PID-01 — tools que exigem o token LIGADO À SESSÃO ─────────────────────────
+export {
+  SESSION_BOUND_TOOLS,
+  SESSION_BOUND_SERVER,
+  isSessionBoundTool,
+  injectSessionToken,
+} from "./session-bound-tools"
+
 // ── Session Signals — survey grão session/workflow/journey (F10) ──────────────
 export {
   SignalGrainSchema,

@@ -54,6 +54,8 @@ import type { WorkflowDeps }        from "./tools/workflow"
 import { registerDialogTools }      from "./tools/dialog"
 import type { DialogDeps }          from "./tools/dialog"
 import jwt                         from "jsonwebtoken"
+import crypto                      from "crypto"
+import { signSessionBoundToken, sessionBoundTtlS } from "./infra/jwt"
 import { createRedisClient, keys } from "./infra/redis"
 import { observeContextTags, readContextAudit } from "./lib/context-map"
 import { createKafkaProducer }     from "./infra/kafka"
@@ -1540,6 +1542,58 @@ export async function startServer(config: ServerConfig): Promise<void> {
   //
   // O PII **não viaja no corpo da requisição**: o caller manda `session_id`, e é o
   // mcp-server que lê o hash do Redis e devolve já mascarado.
+  /**
+   * POST /internal/session-token — PID-01 (2026-09-13).
+   *
+   * O ÚNICO emissor do token LIGADO À SESSÃO que `pending_workflow_get` e
+   * `workflow_resume` exigem. Quem pede é o bridge, na ATIVAÇÃO — ele é quem sabe que
+   * esta instância executa este skill para esta sessão. Mesmo portão dos irmãos
+   * `/internal/*`, falhando FECHADO. Não confere participação: o bridge é o árbitro da
+   * ativação, e reimplementar essa decisão aqui seria a segunda casa do mesmo fato.
+   * Confere só o que é BARATO e decisivo: se a sessão tem meta, o tenant tem de bater.
+   */
+  app.post("/internal/session-token", async (req: Request, res: Response) => {
+    const expected = process.env["MCP_INTERNAL_SERVICE_TOKEN"] ?? ""
+    if (!expected) {
+      console.error("[session-token] MCP_INTERNAL_SERVICE_TOKEN não configurado — RECUSANDO. " +
+        "Sem token de sessão, pending_workflow_get e workflow_resume recusam em TODO skill.")
+      res.status(503).json({ error: "internal_token_not_configured" })
+      return
+    }
+    const got = req.header("x-service-token") ?? ""
+    if (got.length !== expected.length ||
+        !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected))) {
+      res.status(401).json({ error: "Unauthorized" })
+      return
+    }
+    const body       = (req.body ?? {}) as Record<string, unknown>
+    const str        = (k: string) => (typeof body[k] === "string" ? body[k] as string : "")
+    const tenantId   = str("tenant_id")
+    const sessionId  = str("session_id")
+    if (!tenantId || !sessionId) {
+      res.status(400).json({ error: "tenant_id + session_id required" })
+      return
+    }
+    try {
+      const rawMeta = await redis.get(`session:${sessionId}:meta`)
+      if (rawMeta) {
+        const metaTenant = String((JSON.parse(rawMeta) as { tenant_id?: unknown }).tenant_id ?? "")
+        if (metaTenant && metaTenant !== tenantId) {
+          console.warn(`[session-token] RECUSADO: session=${sessionId} é de ${metaTenant}, pedido para ${tenantId}`)
+          res.status(409).json({ error: "tenant_mismatch" })
+          return
+        }
+      }
+    } catch (err) {
+      console.warn(`[session-token] meta ilegível para session=${sessionId}: ${String(err)} — emitindo pelo pedido`)
+    }
+    const token = signSessionBoundToken({
+      tenant_id: tenantId, session_id: sessionId,
+      instance_id: str("instance_id"), skill_id: str("skill_id"),
+    })
+    res.json({ session_token: token, expires_in: sessionBoundTtlS() })
+  })
+
   app.post("/internal/context-snapshot", async (req: Request, res: Response) => {
     // Sem credencial, RECUSA — nunca abre. Endpoint que devolve ctx mascarado de
     // qualquer sessão do tenant não pode ficar aberto porque um env não foi setado;

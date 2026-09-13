@@ -164,7 +164,7 @@ notification_send|guard|divida|tem injection guard, nao tem credencial — divid
 otp_challenge|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 otp_verify|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 outbound_contact_request|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
-pending_workflow_get|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+pending_workflow_get|token+guard|ok|verifica o token LIGADO A SESSAO emitido so pelo mcp-server a pedido do bridge (PID-01, 2026-09-13)
 pool_promote|nenhuma|divida|PROMOVE deploy; o cabecalho do deploy.ts afirma o oposto — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 pool_route_resolve|nenhuma|divida|le o `navigation_pools` do pool DA SESSAO e resolve destino de roteamento por prefixo mais longo. Nao despacha — devolve o pool —, mas expoe o mapa de navegacao do tenant a quem souber um session_id
 pool_status_get|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
@@ -188,7 +188,7 @@ wait_for_message|token|ok|verifica session_token assinado
 work_queue_list|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 work_task_claim|nenhuma|divida|RECLAMA item de fila humana — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 work_task_release|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
-workflow_resume|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+workflow_resume|token+guard|ok|verifica o token LIGADO A SESSAO emitido so pelo mcp-server a pedido do bridge (PID-01, 2026-09-13)
 workflow_trigger|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 TABELA
 )

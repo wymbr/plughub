@@ -188,6 +188,12 @@ continuação direta, dentro de uma idade máxima.
   medido: zero fluxos quebram (recusar `core.*` inteiro quebraria os dois de (5)).
 - `pending_workflow_get` e `workflow_resume` passam a exigir **`session_token` assinado**. Receber
   a sessão como argumento seria o chamador declarando a própria autorização (o defeito da CAP-01).
+  *(Implementado em 2026-09-13, PID-01, com uma correção de premissa: o `session_token` do
+  `agent_login` **não serve** — não carrega sessão, é auto-serviço, e o caminho conversacional nunca
+  recebeu nenhum. O token exigido é outro, **ligado à sessão** (`audience` `plughub:session`,
+  `session_id`), emitido só pelo mcp-server a pedido do bridge na ativação e injetado pelo
+  skill-flow-service por cima do input. O terceiro item abaixo — a exigência contra evidência —
+  continua aberto: esta fatia diz QUEM pede, não se a evidência basta.)*
 - O token só é liberado, e a retomada só ocorre, **contra evidência da sessão que pede** satisfazendo o
   `resume_requires` da pendência. A plataforma exige *que haja* evidência; nunca lê *quanta* basta.
 - **Quem transporta a evidência para o processo retomado é o `workflow_resume`**, no servidor — não

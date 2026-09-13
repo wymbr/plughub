@@ -17,6 +17,7 @@ import { SkillFlowEngine } from "@plughub/skill-flow-engine"
 import type { SkillFlowEngineConfig, ResumeContext } from "@plughub/skill-flow-engine"
 import { ContextStore } from "./context-store"
 import type { SkillFlow } from "@plughub/schemas"
+import { injectSessionToken, isSessionBoundTool } from "@plughub/schemas"
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -336,7 +337,14 @@ app.post("/execute", async (req: Request, res: Response) => {
     journey_id,
     webhook_pool,
     resume_context,
+    session_token,
   } = req.body as {
+    /**
+     * PID-01 — token LIGADO À SESSÃO, emitido pelo mcp-server a pedido do bridge na
+     * ativação. Injetado só nas tools de `SESSION_BOUND_TOOLS`, por cima do que o YAML
+     * trouxer. Ausente ⇒ essas tools recusam nomeando; as demais seguem.
+     */
+    session_token?:  string
     tenant_id:       string
     session_id:      string
     customer_id:     string
@@ -651,9 +659,19 @@ app.post("/execute", async (req: Request, res: Response) => {
       return { send_at: data.send_at, expires_at: data.expires_at }
     }
 
+  // PID-01 — o token de sessão desta execução chega às tools de retomada por aqui, e
+  // só por aqui: o YAML não o carrega e não pode trocá-lo.
+  const mcpCallDaSessao: SkillFlowEngineConfig["mcpCall"] = (tool, input, mcpServer) => {
+    if (!session_token && isSessionBoundTool(tool, mcpServer)) {
+      console.warn(`[skill-flow-service] ${tool} sem token de sessão (session=${session_id}) — a tool vai recusar; ` +
+        "o bridge não conseguiu emitir na ativação?")
+    }
+    return mcpCall(tool, injectSessionToken(tool, input, session_token, mcpServer), mcpServer)
+  }
+
   const engine = new SkillFlowEngine({
     redis:        dedicatedRedis,
-    mcpCall,
+    mcpCall:      mcpCallDaSessao,
     // O tenant é fato do REQUEST (`tenant_id` do corpo), não do engine — o
     // `StepContext.aiGatewayCall` não o carrega. Sem esta injeção o `/v1/reason`
     // chegava sem `tenant_id`, `ReasonRequest` caía no default `""` (models.py:98)

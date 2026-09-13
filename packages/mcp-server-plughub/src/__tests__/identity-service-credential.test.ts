@@ -14,6 +14,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { registerWorkflowTools } from "../tools/workflow"
+import { signSessionBoundToken } from "../infra/jwt"
+
+// PID-01: as tools de retomada exigem o token ligado à sessão.
+const SESSAO = signSessionBoundToken({ tenant_id: "t", session_id: "s", instance_id: "i", skill_id: "k" })
 
 type ToolResponse = { isError?: boolean; content: Array<{ type: string; text: string }> }
 
@@ -54,8 +58,8 @@ describe("IDN-06 — tools de identidade apresentam credencial de serviço", () 
   afterEach(() => vi.unstubAllGlobals())
 
   const CHAMADAS: Array<[string, string, Record<string, unknown>]> = [
-    ["pending_workflow_get (âncoras)", "pending_workflow_get", { tenant_id: "t", anchors: ANCORAS }],
-    ["pending_workflow_get (legado)", "pending_workflow_get", { tenant_id: "t", contact_identifier: "5511999990001" }],
+    ["pending_workflow_get (âncoras)", "pending_workflow_get", { tenant_id: "t", anchors: ANCORAS, session_token: SESSAO }],
+    ["pending_workflow_get (legado)", "pending_workflow_get", { tenant_id: "t", contact_identifier: "5511999990001", session_token: SESSAO }],
     ["customer_resolve", "customer_resolve", { tenant_id: "t", anchors: ANCORAS }],
     ["otp_challenge", "otp_challenge", { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001" }],
     ["otp_verify", "otp_verify", { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001", code: "123456" }],
@@ -87,7 +91,7 @@ describe("IDN-06 — tools de identidade apresentam credencial de serviço", () 
   it("controle: 5xx que não é de credencial mantém o comportamento anterior (found=false)", async () => {
     // Sem este, o caso de cima passaria por uma tool que transforma QUALQUER falha em isError.
     gateway(500, () => ({}))
-    const r = await tool(server, "pending_workflow_get")({ tenant_id: "t", anchors: ANCORAS })
+    const r = await tool(server, "pending_workflow_get")({ tenant_id: "t", anchors: ANCORAS, session_token: SESSAO })
     expect(r.isError).toBeFalsy()
     expect(corpo(r)).toEqual({ found: false })
   })

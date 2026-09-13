@@ -70,7 +70,10 @@ const ts = require_("typescript")
 
 /** Identificadores que provam cada camada, procurados DENTRO do handler. */
 const MARCA = {
-  token:      new Set(["verifySessionToken", "verifySessionTokenSafe"]),
+  // PID-01 (2026-09-13): `sessionCaller` confere o token LIGADO À SESSÃO
+  // (`verifySessionBoundToken`) — outra forma de credencial, e sem ela na lista as
+  // duas tools de retomada seguiriam medidas como "só guard" com o portão de pé.
+  token:      new Set(["verifySessionToken", "verifySessionTokenSafe", "sessionCaller", "verifySessionBoundToken"]),
   guard:      new Set(["withGuard", "detectInjection"]),
   permission: new Set(["judgeInvoke"]),
 }

@@ -69,6 +69,50 @@ export function verifySessionTokenSafe(token: string): SessionTokenPayload {
   return p
 }
 
+// ─── Token LIGADO À SESSÃO (PID-01, 2026-09-13) ───────────────────────────────
+//
+// O token acima NÃO serve para as tools de retomada, por três fatos medidos:
+//   1. não carrega `session_id` — não diz qual sessão pede (ADR D6);
+//   2. `agent_login` é auto-serviço: quem alcança a 3100 cunha um (CAP-10);
+//   3. o caminho conversacional (bridge → skill-flow-service) nunca recebeu nenhum.
+//
+// Este é cunhado SÓ pelo mcp-server, a pedido do bridge na ATIVAÇÃO
+// (`POST /internal/session-token`, portão `MCP_INTERNAL_SERVICE_TOKEN`), e o
+// `audience` o separa do token de agente: um `session_token` do `agent_login`
+// assinado com o MESMO segredo é recusado aqui, e vice-versa não importa.
+
+export const SESSION_BOUND_AUDIENCE = "plughub:session"
+
+export interface SessionBoundPayload {
+  tenant_id:   string
+  session_id:  string
+  instance_id: string
+  skill_id:    string
+}
+
+/** TTL = duração máxima de um contato (4 h), senão um menu longo expira o token no meio. */
+export function sessionBoundTtlS(): number {
+  const n = Number(process.env["SESSION_BOUND_TOKEN_TTL_S"] ?? "")
+  return Number.isFinite(n) && n > 0 ? n : 14_400
+}
+
+export function signSessionBoundToken(payload: SessionBoundPayload): string {
+  return jwt.sign(payload, getSecret(), { expiresIn: sessionBoundTtlS(), audience: SESSION_BOUND_AUDIENCE })
+}
+
+export function verifySessionBoundToken(token: string): SessionBoundPayload {
+  try {
+    const p = jwt.verify(token, getSecret(), { audience: SESSION_BOUND_AUDIENCE }) as Partial<SessionBoundPayload>
+    if (!p.tenant_id || !p.session_id) throw new InvalidTokenError("token de sessao sem tenant/sessao")
+    return {
+      tenant_id: p.tenant_id, session_id: p.session_id,
+      instance_id: p.instance_id ?? "", skill_id: p.skill_id ?? "",
+    }
+  } catch (e) {
+    throw e instanceof InvalidTokenError ? e : new InvalidTokenError()
+  }
+}
+
 /** Duração do session_token em milissegundos (para calcular TTL do Redis). */
 export const SESSION_TOKEN_TTL_MS = 3_600_000 // 1h
 export const SESSION_TOKEN_TTL_S  =     3_600 // 1h em segundos

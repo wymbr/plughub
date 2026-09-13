@@ -286,6 +286,12 @@ probe_identity_operator.sh
 # token vazio que fecha, duas mutacoes na imagem, a borda da UI com login real, e os dois
 # chamadores internos alcancando com o token do proprio container (e recusados sem ele).
 probe_identity_route_credential.sh
+# PID-01. `pending_workflow_get` e `workflow_resume` nao sabiam quem chamava — pelo /sse
+# anonimo, a primeira respondia e a segunda chegava ao gateway. Token LIGADO A SESSAO
+# emitido so pelo mcp-server a pedido do bridge. Censo lista x portao com mutacao,
+# transporte MCP vivo (anonimo, token de agente e tenant alheio recusam; controles), envs,
+# e a jornada ponta a ponta sem recusa nem falha de emissao.
+probe_session_bound_resume.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

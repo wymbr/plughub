@@ -1627,6 +1627,11 @@ services:
       REDIS_URL:            redis://redis:6379
       SKILL_FLOW_URL:       http://skill-flow-service:3460
       AGENT_REGISTRY_URL:   http://agent-registry:3300
+      # PID-01 — o bridge pede ao mcp-server, na ATIVAÇÃO, o token ligado à sessão que
+      # `pending_workflow_get`/`workflow_resume` exigem. DEVE casar com o
+      # MCP_INTERNAL_SERVICE_TOKEN do mcp-server; vazio ⇒ as duas tools recusam (com log).
+      MCP_SERVER_URL:       http://mcp-server-plughub:3100
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo
       # Camada D (detach de hooks de finalização): disparo de hooks `detached` como
       # workflow webhook fire-and-forget (Arc 19 POST /v1/channels/webhook/pool/{id}).
       CHANNEL_GATEWAY_URL:  http://channel-gateway:8010

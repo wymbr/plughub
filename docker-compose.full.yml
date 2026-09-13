@@ -263,6 +263,7 @@ services:
       # que a auth-api EMITE (`PLUGHUB_AUTH_JWT_SECRET`, linha ~448).
       PLUGHUB_JWT_SECRET: changeme_auth_jwt_secret_full_32chars   # == auth-api
       CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_full   # IDN-06 — == gateway
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_full   # PID-01 — /internal/session-token (== bridge)
       KAFKA_BROKERS:      kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
       CALENDAR_API_URL:   http://calendar-api:3700
@@ -396,6 +397,8 @@ services:
       KAFKA_BROKERS:        kafka:29092
       REDIS_URL:            redis://redis:6379
       SKILL_FLOW_URL:       http://skill-flow-service:3400
+      MCP_SERVER_URL:       http://mcp-server-plughub:3100   # PID-01 — emissor do token de sessao
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_full   # == mcp-server
       AGENT_REGISTRY_URL:   http://agent-registry:3300
       # Bootstrap agent instances from Agent Registry on startup.
       # Billing is per configured instance → Agent Registry is the source of truth.
