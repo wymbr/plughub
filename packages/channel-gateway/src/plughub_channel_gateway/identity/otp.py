@@ -41,7 +41,8 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
-from .normalize import DELIVERABLE_KINDS, hash_anchor
+from .normalize import DELIVERABLE_KINDS
+from .region import PhoneRegion, anchor_hash
 
 logger = logging.getLogger("plughub.channel-gateway.identity.otp")
 
@@ -61,9 +62,11 @@ class OtpService:
         rl_max:          int = 3,       # máx. de challenges por âncora na janela
         code_digits:     int = 6,
         dev_return_code: bool = False,  # demo: loga+retorna o código
+        phone_region:    PhoneRegion = None,  # IDN-14: o MESMO resolvedor do índice
     ) -> None:
         self._redis = redis
         self._salt  = salt
+        self._phone_region = phone_region
         self._ttl_s = ttl_s
         self._max_attempts = max_attempts
         self._rl_window_s  = rl_window_s
@@ -127,7 +130,7 @@ class OtpService:
         if not subject:
             return {"sent": False, "reason": "subject_required"}
         try:
-            vh = hash_anchor(self._salt, kind, value)
+            vh = await anchor_hash(self._salt, self._phone_region, tenant_id, kind, value)
         except ValueError:
             return {"sent": False, "reason": "invalid_anchor"}
 
@@ -186,7 +189,7 @@ class OtpService:
         "subject errado" confirmaria a quem tenta que o código estava certo.
         """
         try:
-            vh = hash_anchor(self._salt, kind, value)
+            vh = await anchor_hash(self._salt, self._phone_region, tenant_id, kind, value)
         except ValueError:
             return {"verified": False, "reason": "invalid_anchor"}
 

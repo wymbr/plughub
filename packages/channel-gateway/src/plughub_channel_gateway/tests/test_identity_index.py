@@ -116,27 +116,28 @@ SALT = "test_salt"
 
 class TestNormalize:
     def test_phone_e164(self):
-        assert normalize_anchor("phone", "(11) 99999-0000") == "+11999990000"
+        # IDN-14: era "+11999990000" — o DDI presumido. Com o país do tenant, E.164 real.
+        assert normalize_anchor("phone", "(11) 99999-0000", "BR") == "+5511999990000"
 
     def test_email_lower(self):
-        assert normalize_anchor("email", "  Foo@Bar.COM ") == "foo@bar.com"
+        assert normalize_anchor("email", "  Foo@Bar.COM ", "BR") == "foo@bar.com"
 
     def test_cpf_digits(self):
-        assert normalize_anchor("cpf", "123.456.789-00") == "12345678900"
+        assert normalize_anchor("cpf", "123.456.789-00", "BR") == "12345678900"
 
     def test_unknown_kind_raises(self):
         with pytest.raises(ValueError):
-            normalize_anchor("ssn", "x")
+            normalize_anchor("ssn", "x", "BR")
 
     def test_empty_raises(self):
         with pytest.raises(ValueError):
-            normalize_anchor("email", "   ")
+            normalize_anchor("email", "   ", "BR")
 
     def test_hash_deterministic_and_salted(self):
-        h1 = hash_anchor(SALT, "phone", "11999990000")
-        h2 = hash_anchor(SALT, "phone", "(11) 99999-0000")  # same after normalize
+        h1 = hash_anchor(SALT, "phone", "11999990000", "BR")
+        h2 = hash_anchor(SALT, "phone", "(11) 99999-0000", "BR")  # same after normalize
         assert h1 == h2
-        assert hash_anchor("other_salt", "phone", "11999990000") != h1
+        assert hash_anchor("other_salt", "phone", "11999990000", "BR") != h1
         # never the raw value
         assert "11999990000" not in h1
 
@@ -146,7 +147,7 @@ class TestNormalize:
 @pytest.mark.asyncio
 class TestResolveOrProvision:
     async def test_provisions_when_absent(self):
-        idx = IdentityIndex(FakeRedis(), SALT)
+        idx = IdentityIndex(FakeRedis(), SALT, phone_region="BR")
         ref = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "11999990000"}])
         assert ref.matched_by == "provisioned"
         assert ref.customer_id.startswith("cus_")
@@ -154,7 +155,7 @@ class TestResolveOrProvision:
 
     async def test_second_anchor_resolves_same_customer(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         # provision with phone + email together
         ref1 = await idx.resolve_or_provision(
             "t", [{"kind": "phone", "value": "11999990000"},
@@ -166,14 +167,14 @@ class TestResolveOrProvision:
         assert ref2.matched_by == "existing"
 
     async def test_no_provision_returns_none(self):
-        idx = IdentityIndex(FakeRedis(), SALT)
+        idx = IdentityIndex(FakeRedis(), SALT, phone_region="BR")
         ref = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "11111111111"}], provision=False)
         assert ref.matched_by == "none"
         assert ref.customer_id == ""
 
     async def test_tenant_isolation(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         ref_a = await idx.resolve_or_provision("tA", [{"kind": "cpf", "value": "12345678900"}])
         ref_b = await idx.resolve_or_provision("tB", [{"kind": "cpf", "value": "12345678900"}], provision=False)
         # same cpf, different tenant → must NOT resolve
@@ -182,7 +183,7 @@ class TestResolveOrProvision:
 
     async def test_ambiguous_on_conflicting_equal_confidence(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         # two different customers, each indexed by a distinct email (same confidence)
         c1 = await idx.resolve_or_provision("t", [{"kind": "email", "value": "one@x.com"}])
         c2 = await idx.resolve_or_provision("t", [{"kind": "email", "value": "two@x.com"}])
@@ -199,7 +200,7 @@ class TestResolveOrProvision:
 
     async def test_higher_confidence_wins(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         cphone = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "11999990000"}])
         ccpf   = await idx.resolve_or_provision("t", [{"kind": "cpf", "value": "12345678900"}])
         # resolve with both → cpf (0.90) outranks phone (0.70)
@@ -212,7 +213,7 @@ class TestResolveOrProvision:
 
     async def test_index_never_stores_plaintext_pii(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         await idx.resolve_or_provision("t", [{"kind": "phone", "value": "11999990000"}])
         joined = " ".join(r.kv.keys())
         assert "11999990000" not in joined
@@ -227,7 +228,7 @@ class TestPending:
 
     async def test_write_find_consume(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         cid = "cus_1"
         # resume_token must be alive in {t}:resume_tokens for find to return it
         r.hashes["t:resume_tokens"] = {"tok_1": "sess_1:step:exp"}
@@ -240,7 +241,7 @@ class TestPending:
 
     async def test_stale_pending_pruned(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         cid = "cus_2"
         # no resume_tokens entry → the pending is stale and must be pruned
         await idx.write_pending("t", cid, await self._entry(cid, token="dead"), ttl_s=3600)
@@ -248,7 +249,7 @@ class TestPending:
 
     async def test_multiple_pendings_sorted_recent_first(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         cid = "cus_3"
         r.hashes["t:resume_tokens"] = {"tA": "x", "tB": "y"}
         e1 = PendingEntry(session_id="s1", customer_id=cid, resume_token="tA", pool="p", suspended_at="2026-06-01T00:00:00Z")
@@ -266,7 +267,7 @@ class TestDurability:
     async def test_pg_fallback_resolves_after_cold_redis(self):
         r = FakeRedis()
         pg = FakePGPool()
-        idx = IdentityIndex(r, SALT, db_pool=pg)
+        idx = IdentityIndex(r, SALT, db_pool=pg, phone_region="BR")
         anchors = [{"kind": "phone", "value": "11999990000"},
                    {"kind": "email", "value": "dur@x.com"}]
         ref = await idx.resolve_or_provision("t", anchors)
@@ -287,7 +288,7 @@ class TestDurability:
 
     async def test_no_pg_pool_no_fallback(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT, db_pool=None)
+        idx = IdentityIndex(r, SALT, db_pool=None, phone_region="BR")
         # provision then clear redis → without PG there is nothing to fall back to
         ref = await idx.resolve_or_provision("t", [{"kind": "email", "value": "np@x.com"}])
         r.kv = {k: v for k, v in r.kv.items() if ":identity:" not in k}
@@ -296,23 +297,23 @@ class TestDurability:
         assert ref2.customer_id == ""
 
     async def test_promote_noop_without_pool(self):
-        idx = IdentityIndex(FakeRedis(), SALT, db_pool=None)
+        idx = IdentityIndex(FakeRedis(), SALT, db_pool=None, phone_region="BR")
         # must not raise
         await idx.ensure_schema()
         await idx.promote_to_durable("t", "cus_x", [{"kind": "phone", "value": "11999990000"}])
 
     async def test_attach_anchor_persist_durable_writes_class(self):
         r, pg = FakeRedis(), FakePGPool()
-        idx = IdentityIndex(r, SALT, db_pool=pg)
+        idx = IdentityIndex(r, SALT, db_pool=pg, phone_region="BR")
         await idx.attach_anchor("t", "cus_a", "email", "v@x.com",
                                 verification_class="possessed", persist_durable=True)
-        key = ("t", "email", hash_anchor(SALT, "email", "v@x.com"))
+        key = ("t", "email", hash_anchor(SALT, "email", "v@x.com", "BR"))
         assert pg.state["secondary_keys"][key]["verification_class"] == "possessed"
         assert "cus_a" in pg.state["customers"]
 
     async def test_update_attributes_merges_when_pool(self):
         pg = FakePGPool()
-        idx = IdentityIndex(FakeRedis(), SALT, db_pool=pg)
+        idx = IdentityIndex(FakeRedis(), SALT, db_pool=pg, phone_region="BR")
         assert await idx.update_attributes("t", "cus_z", {"nome_mascarado": "J***"}) is True
         assert await idx.update_attributes("t", "cus_z", {"segmento": "premium"}) is True
         assert pg.state["customers"]["cus_z"]["attributes"] == {
@@ -320,10 +321,10 @@ class TestDurability:
         }
 
     async def test_update_attributes_noop_without_pool_or_empty(self):
-        idx = IdentityIndex(FakeRedis(), SALT, db_pool=None)
+        idx = IdentityIndex(FakeRedis(), SALT, db_pool=None, phone_region="BR")
         assert await idx.update_attributes("t", "cus_z", {"a": 1}) is False
         pg = FakePGPool()
-        idx2 = IdentityIndex(FakeRedis(), SALT, db_pool=pg)
+        idx2 = IdentityIndex(FakeRedis(), SALT, db_pool=pg, phone_region="BR")
         assert await idx2.update_attributes("t", "cus_z", {}) is False
 
 
@@ -333,7 +334,7 @@ class TestDurability:
 class TestProgressiveIdentity:
     async def test_hit_attaches_missing_anchor_as_claimed(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         # only the phone is known
         c = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "11999990000"}])
         # reconnect presenting phone (hit) + email (miss) → progressive attach
@@ -352,7 +353,7 @@ class TestProgressiveIdentity:
 
     async def test_ambiguous_does_not_attach(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         c1 = await idx.resolve_or_provision("t", [{"kind": "email", "value": "one@x.com"}])
         c2 = await idx.resolve_or_provision("t", [{"kind": "email", "value": "two@x.com"}])
         # ambiguous resolve with a fresh miss anchor → must NOT bind the miss
@@ -370,15 +371,15 @@ class TestProgressiveIdentity:
 @pytest.mark.asyncio
 class TestVerificationClass:
     async def test_provision_is_claimed(self):
-        idx = IdentityIndex(FakeRedis(), SALT)
+        idx = IdentityIndex(FakeRedis(), SALT, phone_region="BR")
         ref = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "11999990000"}])
         assert ref.verification_class == "claimed"
 
     async def test_legacy_plain_string_index_reads_as_claimed(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         # simulate a Slice 1/2 index value: plain customer_id string (no JSON)
-        key = idx._identity_key("t", "phone", hash_anchor(SALT, "phone", "11999990000"))
+        key = idx._identity_key("t", "phone", hash_anchor(SALT, "phone", "11999990000", "BR"))
         r.kv[key] = "cus_legacy"
         ref = await idx.resolve_or_provision(
             "t", [{"kind": "phone", "value": "11999990000"}], provision=False,
@@ -388,7 +389,7 @@ class TestVerificationClass:
 
     async def test_possessed_outranks_claimed_across_kinds(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         # cus_p owns a POSSESSED phone; cus_c owns a CLAIMED cpf (higher kind conf)
         await idx.attach_anchor("t", "cus_p", "phone", "11999990000", verification_class="possessed")
         await idx.resolve_or_provision("t", [{"kind": "cpf", "value": "12345678900"}])  # cus_c claimed
@@ -404,7 +405,7 @@ class TestVerificationClass:
 
     async def test_attach_anchor_never_downgrades_possessed(self):
         r = FakeRedis()
-        idx = IdentityIndex(r, SALT)
+        idx = IdentityIndex(r, SALT, phone_region="BR")
         await idx.attach_anchor("t", "cus_x", "email", "v@x.com", verification_class="possessed")
         # a later claimed attach for the same anchor+customer must not downgrade
         await idx.attach_anchor("t", "cus_x", "email", "v@x.com", verification_class="claimed")

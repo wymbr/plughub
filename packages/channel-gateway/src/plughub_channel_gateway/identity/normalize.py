@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import re
 
+import phonenumbers
+
 # Tipos de âncora suportados (Fase A). 'dev' fica para a fase D (device id).
 ANCHOR_KINDS = ("phone", "email", "cpf", "princ", "dev")
 
@@ -32,17 +34,65 @@ KIND_CONFIDENCE: dict[str, float] = {
 _NON_DIGITS = re.compile(r"\D+")
 
 
-def normalize_anchor(kind: str, value: str) -> str:
+# Telefone só tem dígitos e separadores. Letra é recusada ANTES do parser: o
+# `phonenumbers` converte letra em dígito (número "vanity"), e o `contact_identifier`
+# do webchat (`cli_52989317358`) virava âncora phone só com os dígitos (IDN-14).
+_PHONE_CHARS = re.compile(r"^\+?[\d\s().\-]+$")
+
+
+def _e164_phone(v: str, region: str | None) -> str:
+    """E.164 do telefone (IDN-14, 2026-09-13).
+
+    Até aqui era `"+" + dígitos`, que assume DDI presente: `11 99999-0001` virava
+    `+11999990001` e não casava com `+55 11 99999-0001` — o mesmo celular, dois
+    hashes. Regras:
+
+      - com `+`: internacional, a região não entra;
+      - sem `+`: nacional do país do tenant (`region`); o parser também reconhece o
+        DDI do próprio país digitado sem `+` (`5511…` com `BR`);
+      - sem `+` e sem região: RECUSA. Adivinhar o país é gravar o hash errado.
+
+    ⚠️ Aceita-se por TAMANHO POSSÍVEL (`is_possible_number`), nunca por validade
+    (`is_valid_number`): a validade depende das faixas de numeração, que mudam entre
+    versões dos metadados — e o que decide o hash não pode mudar com um upgrade. O
+    `phonenumbers` é fixado em versão exata no `pyproject.toml` pelo mesmo motivo.
+    """
+    if not _PHONE_CHARS.match(v):
+        raise ValueError("phone has non-phone characters")
+    digits = _NON_DIGITS.sub("", v)
+    if not digits:
+        raise ValueError("phone has no digits")
+    if v.startswith("+"):
+        candidatos = [("+" + digits, None)]
+    elif region:
+        if region not in phonenumbers.SUPPORTED_REGIONS:
+            raise ValueError("unknown phone region: %s" % region)
+        candidatos = [(digits, region), ("+" + digits, None)]
+    else:
+        raise ValueError("phone without country code and no default region for the tenant")
+    for texto, reg in candidatos:
+        try:
+            n = phonenumbers.parse(texto, reg)
+        except phonenumbers.NumberParseException:
+            continue
+        if phonenumbers.is_possible_number(n):
+            return phonenumbers.format_number(n, phonenumbers.PhoneNumberFormat.E164)
+    raise ValueError("phone is not a possible number")
+
+
+def normalize_anchor(kind: str, value: str, region: str | None) -> str:
     """
     Normaliza o valor de uma âncora conforme o tipo, de forma determinística.
 
-      phone → só dígitos com prefixo '+' (E.164 aproximado; assume DDI presente)
+      phone → E.164; sem código do país usa `region` (o país padrão do tenant)
       email → trim + lowercase
       cpf   → só dígitos
       princ → trim (o `sub` do JWT do tenant, já opaco)
       dev   → trim
 
-    Levanta ValueError para kind desconhecido ou valor vazio após normalizar.
+    `region` é OBRIGATÓRIO na assinatura (pode ser None): esquecê-lo num call site
+    tem de quebrar alto, porque o modo de falha contrário é o mesmo cliente com dois
+    hashes. Levanta ValueError para kind desconhecido ou valor inválido.
     """
     if kind not in ANCHOR_KINDS:
         raise ValueError(f"unknown anchor kind: {kind}")
@@ -51,10 +101,7 @@ def normalize_anchor(kind: str, value: str) -> str:
         raise ValueError("empty anchor value")
 
     if kind == "phone":
-        digits = _NON_DIGITS.sub("", v)
-        if not digits:
-            raise ValueError("phone has no digits")
-        return "+" + digits
+        return _e164_phone(v, region)
     if kind == "email":
         return v.lower()
     if kind == "cpf":
@@ -66,12 +113,13 @@ def normalize_anchor(kind: str, value: str) -> str:
     return v
 
 
-def hash_anchor(salt: str, kind: str, value: str) -> str:
+def hash_anchor(salt: str, kind: str, value: str, region: str | None) -> str:
     """
     value_hash = hex(sha256(salt + normalizado)). O salt (segredo, por tenant)
-    garante que o índice não seja um dicionário reverso de PII.
+    garante que o índice não seja um dicionário reverso de PII. `region` só vale
+    para telefone; quem tem tenant em mãos usa `region.anchor_hash`.
     """
-    normalized = normalize_anchor(kind, value)
+    normalized = normalize_anchor(kind, value, region)
     digest = hashlib.sha256((salt + normalized).encode("utf-8")).hexdigest()
     return digest
 

@@ -46,6 +46,9 @@ import httpx
 import redis.asyncio as aioredis
 
 from plughub_channel_gateway.config import get_settings
+# IDN-14: o mesmo resolvedor de país do gateway; hash à mão leva região None
+# porque toda fixture de telefone aqui tem '+', e aí a região não entra.
+from plughub_channel_gateway.identity.region import PhoneRegionConfig
 from plughub_channel_gateway.identity import index as idx_mod
 from plughub_channel_gateway.identity.index import IdentityIndex
 from plughub_channel_gateway.identity.normalize import hash_anchor
@@ -65,8 +68,8 @@ async def main():
     phone, cpf = "+55110000" + sufixo[:5], "000" + sufixo + "00"
     db = await asyncpg.create_pool(s.database_url, min_size=1, max_size=2)
     rds = aioredis.from_url(s.redis_url)
-    idx = IdentityIndex(redis=rds, salt=salt, db_pool=db)
-    hp, hc = hash_anchor(salt, "phone", phone), hash_anchor(salt, "cpf", cpf)
+    idx = IdentityIndex(redis=rds, salt=salt, db_pool=db, phone_region=PhoneRegionConfig(get_settings().config_api_url))
+    hp, hc = hash_anchor(salt, "phone", phone, None), hash_anchor(salt, "cpf", cpf, None)
     outro = "cus_probe_pid12_" + sufixo
     out = {"mutar_sql": MUTAR, "mutar_posse": MUTAR_POSSE, "casos": {}}
     c = out["casos"]

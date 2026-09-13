@@ -54,6 +54,9 @@ import redis.asyncio as aioredis
 
 from plughub_channel_gateway.adapters.webhook import WebhookAdapter
 from plughub_channel_gateway.config import get_settings
+# IDN-14: o mesmo resolvedor de país do gateway; hash à mão leva região None
+# porque toda fixture de telefone aqui tem '+', e aí a região não entra.
+from plughub_channel_gateway.identity.region import PhoneRegionConfig
 from plughub_channel_gateway.identity import index as idx_mod
 from plughub_channel_gateway.identity import otp as otp_mod
 from plughub_channel_gateway.identity.index import IdentityIndex
@@ -150,12 +153,12 @@ async def censo(s, db, r):
 async def exercicio(s, r, db):
     t = s.tenant_id
     salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
-    idx = IdentityIndex(redis=r, salt=salt, db_pool=db)
+    idx = IdentityIndex(redis=r, salt=salt, db_pool=db, phone_region=PhoneRegionConfig(get_settings().config_api_url))
     sx = "%06d" % (uuid.uuid4().int % 1000000)
     phone, phone_decl, cpf = "+55110060" + sx[:5], "+55110070" + sx[:5], "100" + sx + "10"
     outro = "cus_probe_pid10_outro_" + sx
-    hashes = [("phone", hash_anchor(salt, "phone", phone)), ("phone", hash_anchor(salt, "phone", phone_decl)),
-              ("cpf", hash_anchor(salt, "cpf", cpf))]
+    hashes = [("phone", hash_anchor(salt, "phone", phone, None)), ("phone", hash_anchor(salt, "phone", phone_decl, None)),
+              ("cpf", hash_anchor(salt, "cpf", cpf, None))]
     cids = {outro}
     out = {"mutar": {"procedencia": MUT_PROV, "subject": MUT_SUBJ, "entregavel": MUT_ENTR}, "casos": {}}
     c = out["casos"]
@@ -163,7 +166,7 @@ async def exercicio(s, r, db):
     def adaptador(dev=True):
         a = WebhookAdapter.__new__(WebhookAdapter)
         a._identity = idx
-        a._otp = OtpService(redis=r, salt=salt, dev_return_code=dev)
+        a._otp = OtpService(redis=r, salt=salt, dev_return_code=dev, phone_region=PhoneRegionConfig(get_settings().config_api_url))
         return a
 
     async def chave(h):
@@ -193,7 +196,7 @@ async def exercicio(s, r, db):
             orig = OtpService.verify
 
             async def _subject_guardado(self, tenant_id, kind, value, code, *, subject):
-                raw = await self._redis.get(self._chal_key(tenant_id, kind, hash_anchor(self._salt, kind, value)))
+                raw = await self._redis.get(self._chal_key(tenant_id, kind, hash_anchor(self._salt, kind, value, None)))
                 guardado = json.loads(raw).get("subject") if raw else subject
                 return await orig(self, tenant_id, kind, value, code, subject=guardado)
             OtpService.verify = _subject_guardado
@@ -258,11 +261,11 @@ async def exercicio(s, r, db):
 async def legado(s, r, db):
     t = s.tenant_id
     salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
-    idx = IdentityIndex(redis=r, salt=salt, db_pool=db)
+    idx = IdentityIndex(redis=r, salt=salt, db_pool=db, phone_region=PhoneRegionConfig(get_settings().config_api_url))
     sx = "%06d" % (uuid.uuid4().int % 1000000)
     cid = "cus_probe_idn13_" + sx
     cpf, phone = "130" + sx + "13", "+55110130" + sx[:5]
-    hc, hp = hash_anchor(salt, "cpf", cpf), hash_anchor(salt, "phone", phone)
+    hc, hp = hash_anchor(salt, "cpf", cpf, None), hash_anchor(salt, "phone", phone, None)
     kc, kp = idx._identity_key(t, "cpf", hc), idx._identity_key(t, "phone", hp)
     out = {"mutar": {"leitura": MUT_LEIT, "escrita": MUT_ESCR, "migracao": MUT_MIGR}, "casos": {}}
     c = out["casos"]

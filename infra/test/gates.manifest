@@ -270,6 +270,11 @@ probe_identity_index_owner.sh
 # IDN-13: o legado (posse gravada em cpf) virou veredicto do censo e ramo proprio — leitura,
 # escrita e migracao do boot, cada uma com a sua mutacao.
 probe_otp_gate.sh
+# IDN-14. A normalizacao de telefone fazia `"+" + digitos`: o mesmo celular com e sem DDI
+# eram dois clientes, e o `cli_…` do webchat virava ancora phone. Config do pais do tenant,
+# formas que casam o mesmo cliente (quente, frio e rota viva), recusa sem pais, duas mutacoes
+# e a troca de pais AO VIVO no config-api (override removido num finally).
+probe_phone_region.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

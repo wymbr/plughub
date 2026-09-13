@@ -1,5 +1,79 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (12) — IDN-14: o mesmo celular com e sem DDI é o mesmo cliente, com o país do tenant
+
+Achado na PID-10: o step-up do limite pede o celular cadastrado, e quem omitisse o `55` tinha o
+desafio recusado.
+
+### 1 · O defeito, e o que dava para medir
+
+`normalize_anchor` fazia `"+" + dígitos` — *"E.164 aproximado; assume DDI presente"*, dizia o
+docstring. `11 99999-0001` virava `+11999990001`; `+55 11 99999-0001`, `+5511999990001`. Dois
+hashes, dois clientes, e nada vermelho. O teste da normalização **afirmava** `+11999990000`.
+
+**A exposição passada não é mensurável:** a âncora guarda só o hash, e o hash não diz se o número
+tinha DDI. O que dá para afirmar: 21 âncoras `phone` no cadastro, e os telefones visíveis em
+pipeline_state eram dos probes, todos com `+55`.
+
+Irmão achado na mesma leitura: o `contact_identifier` do webchat (`cli_52989317358`) virava âncora
+`phone` com os dígitos do id de contato.
+
+### 2 · A regra (decisão do dono: país padrão por tenant)
+
+- **E.164 pelo `phonenumbers`**, fixado em **versão exata** (`9.0.39`): com `+`, internacional;
+  sem `+`, nacional do país do tenant — o parser também reconhece o DDI do próprio país digitado
+  sem `+` (`5511…`) e não confunde o DDD 55 com ele;
+- **aceita por tamanho possível, nunca por validade** (`is_possible_number`): a validade depende
+  das faixas de numeração, que mudam entre versões dos metadados, e o que decide o hash não pode
+  mudar com um upgrade;
+- **sem `+` e sem país, RECUSA** — adivinhar o país é gravar o hash errado. A recusa loga;
+- **letra não é telefone**, e é recusada antes do parser — que converte letra em dígito;
+- **hash de quem já tinha DDI não muda** (testado contra a fórmula antiga). Âncora gravada sem DDI
+  fica órfã.
+
+### 3 · De onde vem o país, e como ele não diverge
+
+- **config-api `identity.default_phone_region`** (ISO 3166-1), seed global `BR`, editável em
+  **Configuração → Plataforma → Identidade** (aba nova, i18n nos dois idiomas);
+- **`PhoneRegionConfig`**: cache por tenant, invalidado pelo `config.changed` do namespace. Uma
+  resposta definitiva (valor ou 404) fica em cache; uma falha de leitura é retentada e mantém o
+  último valor bom; valor que não é região conhecida vira `None` com erro no log. Todo aviso diz o
+  que deixa de valer: *"telefone SEM codigo do pais sera RECUSADO"*;
+- ⚠️ **achado ao escrever o consumidor:** o config-api publica a mudança do default global com
+  `tenant_id="__global__"`. Invalidar só essa entrada deixaria cada tenant com o país antigo até o
+  boot — `invalidate("__global__")` limpa tudo, e há teste;
+- **uma função hasheia** (`region.anchor_hash`), e índice e OTP recebem **o mesmo** resolvedor.
+  `region` é parâmetro **obrigatório** de `hash_anchor`: esquecê-lo num call site quebra alto, e o
+  modo de falha contrário é o mesmo cliente com dois hashes. Foram 78 chamadas de teste ajustadas
+  por AST, e as quatro dos exercícios de probe.
+
+### 4 · Testes e probe
+
+- `test_phone_region.py` (27): as sete formas do mesmo celular dão o mesmo E.164; `+` ignora a
+  região; DDD 55; recusas (sem país, letra, impossível, região desconhecida); hash de quem tinha DDI
+  intacto; o cache (leitura, invalidação por tenant e global, 404, valor inválido, falha e retry);
+  e `anchor_hash` só consulta a região para telefone.
+- **`probe_phone_region.sh`** — A: o resolvedor de produção lê o país do tenant; B: nacional, DDI
+  sem `+` e internacional casam o mesmo cliente com o índice quente e frio, sem país recusa, `cli_`
+  não indexa telefone, e a **rota do processo de pé** resolve o número nacional; C: normalização
+  antiga e letras aceitas, cada uma derrubando o seu caso; D: **a troca de país ao vivo** — override
+  `PT` no config-api faz a rota parar de achar o cliente sem boot, e tirá-lo o traz de volta (o
+  override sai num `finally`, conferido pela procedência depois).
+- **Vermelho primeiro:** antes do deploy, sem país e com o gateway antigo, a rota viva não casava o
+  número nacional.
+- ⚠️ **Duas correções do próprio instrumento:** (1) o caso do `cli_` media a ausência só no hash
+  antigo — com letra aceita o parser grava o número num hash que o probe não previa, e a mutação
+  não reprovava; hoje mede os kinds indexados no prospect; (2) o seed do config-api roda num
+  serviço à parte (`config-seed`), com imagem própria — rebuildar o `config-api` não o traz.
+
+### 5 · Verificação
+
+channel-gateway **883 verdes** sobre a imagem (que agora tem o `phonenumbers`); `tsc` do
+platform-ui limpo. Imagens: channel-gateway, config-api, config-seed, platform-ui. Verdes ao vivo:
+`probe_phone_region`, `probe_otp_gate`, `probe_identity_provenance`, `probe_identity_index_owner`,
+`probe_adapter_self_calls`, `probe_seed_drift_named`, `probe_i18n_duplicate_keys`,
+`probe_gates_manifest_coverage`. 0 fixtures do probe no cadastro.
+
 ## 2026-09-13 (11) — IDN-13: posse só existe em âncora entregável — na leitura, na escrita e no dado
 
 A PID-10 fechou quem produzia posse em CPF. O que ele já tinha gravado continuava valendo.

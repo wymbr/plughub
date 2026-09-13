@@ -31,7 +31,7 @@ def _adapter(procedencias: dict[tuple[str, str, str], str | None], *, dev: bool 
     assert hasattr(IdentityIndex, "attach_anchor")
     r = FakeRedis()
     a = WebhookAdapter.__new__(WebhookAdapter)
-    a._otp = OtpService(r, SALT, dev_return_code=dev)
+    a._otp = OtpService(r, SALT, dev_return_code=dev, phone_region="BR")
     ident = AsyncMock()
     ident.anchor_provenance = AsyncMock(
         side_effect=lambda t, cid, kind, value: procedencias.get((cid, kind, value)))

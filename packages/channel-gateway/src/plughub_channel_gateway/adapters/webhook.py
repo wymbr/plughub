@@ -71,6 +71,7 @@ from ..collect_requirements import (
 from ..config import Settings
 from ..dialog_form_pin import resolve_published_version
 from ..identity import IdentityIndex, OtpService, PendingEntry
+from ..identity.region import PhoneRegionConfig
 from ..identity.index import PROVENANCE_AUTHORITATIVE
 from .base import ChannelAdapter
 
@@ -440,12 +441,17 @@ class WebhookAdapter(ChannelAdapter):
         # Salt is a SECRET → env only (PLUGHUB_IDENTITY_SALT); TTLs are tuning.
         self._identity_enabled = os.getenv("PLUGHUB_IDENTITY_RESOLVER_ENABLED", "true").lower() in ("1", "true", "yes")
         salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
+        # IDN-14: o país do telefone sem DDI é config do tenant (config-api
+        # `identity.default_phone_region`). UM resolvedor, entregue ao índice E ao
+        # OTP — dois resolvedores podiam dar dois hashes para a mesma âncora.
+        self.phone_region = PhoneRegionConfig(getattr(settings, "config_api_url", ""))
         self._identity = IdentityIndex(
             redis=redis,
             salt=salt,
             prospect_ttl_s=int(os.getenv("PLUGHUB_IDENTITY_PROSPECT_TTL_S", "2592000")),
             resolution_index_ttl_s=int(os.getenv("PLUGHUB_IDENTITY_INDEX_TTL_S", "2592000")),
             db_pool=db_pool,
+            phone_region=self.phone_region,
         )
 
         # OTP de posse de canal (Fase 2) — step-up componível, acionado pelo fluxo.
@@ -462,6 +468,7 @@ class WebhookAdapter(ChannelAdapter):
             rl_max=int(os.getenv("PLUGHUB_OTP_RL_MAX", "3")),
             code_digits=int(os.getenv("PLUGHUB_OTP_CODE_DIGITS", "6")),
             dev_return_code=os.getenv("PLUGHUB_OTP_DEV_RETURN_CODE", "false").lower() in ("1", "true", "yes"),
+            phone_region=self.phone_region,
         )
 
     async def ensure_identity_schema(self) -> None:

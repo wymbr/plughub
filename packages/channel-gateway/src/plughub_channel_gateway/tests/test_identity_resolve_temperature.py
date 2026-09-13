@@ -50,7 +50,7 @@ def _pg(donos):
 
 
 def _h(kind, value):
-    return hash_anchor(SALT, kind, value)
+    return hash_anchor(SALT, kind, value, "BR")
 
 
 def _anc(*pares):
@@ -64,12 +64,12 @@ class TestMesmaRespostaQualquerTemperatura:
         anc = _anc(("phone", PHONE_A), ("phone", PHONE_B))
 
         # FRIO: só o cadastro sabe. Antes: vencia a ORDEM das âncoras.
-        frio = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pg(donos))
+        frio = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pg(donos), phone_region="BR")
         ref_frio = await frio.resolve_or_provision(T, anc, provision=False)
 
         # QUENTE: o índice sabe tudo.
         quente_redis = _Redis()
-        quente = IdentityIndex(redis=quente_redis, salt=SALT, db_pool=_pg(donos))
+        quente = IdentityIndex(redis=quente_redis, salt=SALT, db_pool=_pg(donos), phone_region="BR")
         quente_redis.kv[quente._identity_key(T, "phone", _h("phone", PHONE_A))] = _encode_index("cus_a", "claimed")
         quente_redis.kv[quente._identity_key(T, "phone", _h("phone", PHONE_B))] = _encode_index("cus_b", "claimed")
         ref_quente = await quente.resolve_or_provision(T, anc, provision=False)
@@ -82,7 +82,7 @@ class TestMesmaRespostaQualquerTemperatura:
         donos = {("phone", _h("phone", PHONE_A)): ("cus_a", "claimed"),
                  ("phone", _h("phone", PHONE_B)): ("cus_b", "claimed")}
         redis = _Redis()
-        idx = IdentityIndex(redis=redis, salt=SALT, db_pool=_pg(donos))
+        idx = IdentityIndex(redis=redis, salt=SALT, db_pool=_pg(donos), phone_region="BR")
         await idx.resolve_or_provision(T, _anc(("phone", PHONE_A), ("phone", PHONE_B), ("email", "x@y.com")),
                                        provision=False)
         assert redis.kv == {}, "sob ambiguidade nada e reidratado nem anexado"
@@ -94,11 +94,11 @@ class TestMesmaRespostaQualquerTemperatura:
                  ("cpf", _h("cpf", CPF_B)): ("cus_b", "claimed")}
         anc = _anc(("phone", PHONE_A), ("cpf", CPF_B))
 
-        frio = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pg(donos))
+        frio = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pg(donos), phone_region="BR")
         ref_frio = await frio.resolve_or_provision(T, anc, provision=False)
 
         parcial_redis = _Redis()
-        parcial = IdentityIndex(redis=parcial_redis, salt=SALT, db_pool=_pg(donos))
+        parcial = IdentityIndex(redis=parcial_redis, salt=SALT, db_pool=_pg(donos), phone_region="BR")
         parcial_redis.kv[parcial._identity_key(T, "phone", _h("phone", PHONE_A))] = _encode_index("cus_a", "claimed")
         ref_parcial = await parcial.resolve_or_provision(T, anc, provision=False)
 
@@ -111,6 +111,6 @@ class TestMesmaRespostaQualquerTemperatura:
         # Controle POSITIVO: sem empate, a resposta não mudou.
         # (Era um CPF `possessed` — o legado que a IDN-13 passou a ler como `claimed`.)
         donos = {("phone", _h("phone", PHONE_B)): ("cus_b", "possessed")}
-        frio = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pg(donos))
+        frio = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pg(donos), phone_region="BR")
         ref = await frio.resolve_or_provision(T, _anc(("phone", PHONE_B)), provision=False)
         assert (ref.customer_id, ref.matched_by, ref.verification_class) == ("cus_b", "durable", "possessed")

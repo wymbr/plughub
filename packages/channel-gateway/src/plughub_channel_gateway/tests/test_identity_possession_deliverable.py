@@ -66,7 +66,7 @@ def _pg(donos):
 
 
 def _h(kind, value):
-    return hash_anchor(SALT, kind, value)
+    return hash_anchor(SALT, kind, value, "BR")
 
 
 class TestRegra:
@@ -82,14 +82,14 @@ class TestRegra:
 class TestLeitura:
     async def test_cpf_possessed_quente_no_redis_resolve_claimed(self):
         r = _Redis()
-        idx = IdentityIndex(redis=r, salt=SALT)
+        idx = IdentityIndex(redis=r, salt=SALT, phone_region="BR")
         r.kv[idx._identity_key(T, "cpf", _h("cpf", CPF))] = _encode_index("cus_a", "possessed")
         ref = await idx.resolve_or_provision(T, [{"kind": "cpf", "value": CPF}], provision=False)
         assert (ref.customer_id, ref.verification_class) == ("cus_a", "claimed")
 
     async def test_cpf_possessed_frio_no_cadastro_resolve_claimed_e_nao_reidrata_posse(self):
         r = _Redis()
-        idx = IdentityIndex(redis=r, salt=SALT, db_pool=_pg({("cpf", _h("cpf", CPF)): ("cus_a", "possessed")}))
+        idx = IdentityIndex(redis=r, salt=SALT, db_pool=_pg({("cpf", _h("cpf", CPF)): ("cus_a", "possessed")}), phone_region="BR")
         ref = await idx.resolve_or_provision(T, [{"kind": "cpf", "value": CPF}], provision=False)
         assert (ref.customer_id, ref.matched_by, ref.verification_class) == ("cus_a", "durable", "claimed")
         assert _decode_index(r.kv[idx._identity_key(T, "cpf", _h("cpf", CPF))]) == ("cus_a", "claimed")
@@ -97,7 +97,7 @@ class TestLeitura:
     async def test_controle_phone_possessed_segue_possessed(self):
         # Sem este, os dois de cima passariam por um resolve que rebaixa tudo.
         r = _Redis()
-        idx = IdentityIndex(redis=r, salt=SALT)
+        idx = IdentityIndex(redis=r, salt=SALT, phone_region="BR")
         r.kv[idx._identity_key(T, "phone", _h("phone", PHONE))] = _encode_index("cus_a", "possessed")
         ref = await idx.resolve_or_provision(T, [{"kind": "phone", "value": PHONE}], provision=False)
         assert ref.verification_class == "possessed"
@@ -106,7 +106,7 @@ class TestLeitura:
         # Antes: cpf possessed (0.90 + 1.0) vencia um phone possessed de outro cliente
         # (0.70 + 1.0). A posse que não existe não pode decidir QUEM é o cliente.
         r = _Redis()
-        idx = IdentityIndex(redis=r, salt=SALT)
+        idx = IdentityIndex(redis=r, salt=SALT, phone_region="BR")
         r.kv[idx._identity_key(T, "cpf", _h("cpf", CPF))] = _encode_index("cus_cpf", "possessed")
         r.kv[idx._identity_key(T, "phone", _h("phone", PHONE))] = _encode_index("cus_phone", "possessed")
         ref = await idx.resolve_or_provision(
@@ -116,18 +116,18 @@ class TestLeitura:
 
 class TestEscrita:
     async def test_attach_possessed_em_cpf_recusa(self):
-        idx = IdentityIndex(redis=_Redis(), salt=SALT)
+        idx = IdentityIndex(redis=_Redis(), salt=SALT, phone_region="BR")
         with pytest.raises(ValueError, match="IDN-13"):
             await idx.attach_anchor(T, "cus_a", "cpf", CPF, verification_class="possessed")
 
     async def test_promote_possessed_em_cpf_recusa(self):
-        idx = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pool(AsyncMock()))
+        idx = IdentityIndex(redis=_Redis(), salt=SALT, db_pool=_pool(AsyncMock()), phone_region="BR")
         with pytest.raises(ValueError, match="IDN-13"):
             await idx.promote_to_durable(T, "cus_a", [{"kind": "cpf", "value": CPF}], verification_class="possessed")
 
     async def test_attach_claimed_sobre_cpf_legado_nao_preserva_a_posse(self):
         r = _Redis()
-        idx = IdentityIndex(redis=r, salt=SALT)
+        idx = IdentityIndex(redis=r, salt=SALT, phone_region="BR")
         k = idx._identity_key(T, "cpf", _h("cpf", CPF))
         r.kv[k] = _encode_index("cus_a", "possessed")
         await idx.attach_anchor(T, "cus_a", "cpf", CPF, verification_class="claimed")
@@ -135,7 +135,7 @@ class TestEscrita:
 
     async def test_controle_attach_claimed_sobre_phone_possessed_preserva(self):
         r = _Redis()
-        idx = IdentityIndex(redis=r, salt=SALT)
+        idx = IdentityIndex(redis=r, salt=SALT, phone_region="BR")
         k = idx._identity_key(T, "phone", _h("phone", PHONE))
         r.kv[k] = _encode_index("cus_a", "possessed")
         await idx.attach_anchor(T, "cus_a", "phone", PHONE, verification_class="claimed")
@@ -151,7 +151,7 @@ class TestMigracao:
             {"tenant_id": T, "kind": "cpf", "value_hash": vh_a, "customer_id": "cus_a"},
             {"tenant_id": T, "kind": "cpf", "value_hash": vh_b, "customer_id": "cus_b"},
         ])
-        idx = IdentityIndex(redis=r, salt=SALT, db_pool=_pool(conn))
+        idx = IdentityIndex(redis=r, salt=SALT, db_pool=_pool(conn), phone_region="BR")
         ka, kb = idx._identity_key(T, "cpf", vh_a), idx._identity_key(T, "cpf", vh_b)
         r.kv[ka] = _encode_index("cus_a", "possessed")
         r.kv[kb] = _encode_index("cus_outro", "possessed")   # o índice aponta para OUTRO cliente
@@ -171,7 +171,7 @@ class TestMigracao:
         r = _Redis()
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        idx = IdentityIndex(redis=r, salt=SALT, db_pool=_pool(conn))
+        idx = IdentityIndex(redis=r, salt=SALT, db_pool=_pool(conn), phone_region="BR")
         with caplog.at_level(logging.WARNING):
             assert await idx.migrate_undeliverable_possession() == 0
         assert r.kv == {} and "IDN-13" not in caplog.text

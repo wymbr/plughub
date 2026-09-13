@@ -26,6 +26,11 @@ dependencies    = [
     "PyJWT>=2.8.0",
     # HTTP client for agent-registry lookup (channel endpoint resolver — Layer 2)
     "httpx>=0.27.0",
+    # IDN-14 — normalização de telefone em E.164 com o país do tenant. Versão EXATA:
+    # a regra de tamanho possível vem dos metadados da biblioteca, e o resultado é
+    # HASHEADO — um upgrade que mude o metadado muda o hash de âncoras já gravadas.
+    # Subir a versão é decisão com migração, não bump.
+    "phonenumbers==9.0.39",
 ]
 
 [project.scripts]

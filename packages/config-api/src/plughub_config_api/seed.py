@@ -1153,6 +1153,19 @@ _SEED: list[tuple[str, str, object, str]] = [
         "user_id | skill_id+deploy_version}). Applied before emitting canonical events. "
         "Empty / unmapped = pass-through. Source: quality-ingest/config_client.py, mapper.py"
     ),
+    # IDN-14 — país padrão do telefone sem código do país (ISO 3166-1 alfa-2). O
+    # channel-gateway normaliza âncora `phone` para E.164 com ele antes de hashear:
+    # `11 99999-0001` e `+55 11 99999-0001` passam a ser o MESMO cliente. Sem valor
+    # (ou valor inválido), telefone sem DDI é RECUSADO — o país nunca é adivinhado.
+    # ⚠️ Trocar o país muda o hash de todo telefone que chegar SEM DDI dali em
+    # diante; âncoras já gravadas não mudam (o hash não reverte).
+    (
+        "identity", "default_phone_region",
+        "BR",
+        "Default country (ISO 3166-1 alpha-2) for phone anchors typed without a "
+        "country code. Changing it changes the identity hash of phones typed without "
+        "country code from then on. Empty/invalid = such phones are refused.",
+    ),
 ]
 
 

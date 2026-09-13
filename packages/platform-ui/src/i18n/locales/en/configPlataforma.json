@@ -14,6 +14,7 @@
     "dataRetention":   "Data Retention",
     "evaluation":      "Evaluation",
     "survey":          "Surveys",
+    "identity":        "Identity",
     "sentimento":      "Sentiment",
     "calendar":        "Calendars",
     "routing":         "Routing Skills"
@@ -23,7 +24,8 @@
     "consumer":        "Kafka consumer settings for analytics-api",
     "dataRetention":   "Retention periods for recordings and attachments",
     "evaluation":      "Evaluation platform: evaluator pool, replay speed, and calibration divergence trigger (threshold + min sample)",
-    "survey":          "Survey instrument catalog (key `instruments`): CSAT/NPS/CES/PMF/FCR with scale and aggregation, read by the dialog-form editor"
+    "survey":          "Survey instrument catalog (key `instruments`): CSAT/NPS/CES/PMF/FCR with scale and aggregation, read by the dialog-form editor",
+    "identity":        "Default country (ISO 3166-1, e.g. BR) for phone numbers typed without a country code. Changing it changes how new phones identify customers; phones already stored are not rewritten"
   },
   "namespace": {
     "title":            "Namespaces",

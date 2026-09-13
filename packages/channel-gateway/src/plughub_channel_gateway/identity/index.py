@@ -26,10 +26,9 @@ from .normalize import (
     DELIVERABLE_KINDS,
     anchor_rank_score,
     effective_verification_class,
-    hash_anchor,
     kind_confidence,
-    normalize_anchor,
 )
+from .region import PhoneRegion, anchor_hash
 
 logger = logging.getLogger("plughub.channel-gateway.identity")
 
@@ -246,14 +245,21 @@ class IdentityIndex:
         prospect_ttl_s:         int = 2_592_000,   # 30d
         resolution_index_ttl_s: int = 2_592_000,   # 30d
         db_pool:                Any = None,        # asyncpg.Pool | None (Slice 2 durability)
+        phone_region:           PhoneRegion = None,  # IDN-14: país do telefone sem DDI, por tenant
     ) -> None:
         self._redis = redis
         self._salt  = salt
+        self._phone_region = phone_region
         self._prospect_ttl_s  = prospect_ttl_s
         self._index_ttl_s     = resolution_index_ttl_s
         self._db    = db_pool               # None → Redis-only (Slice 1 behaviour)
 
     # ── keys ──────────────────────────────────────────────────────────────────
+
+    async def anchor_hash(self, tenant_id: str, kind: str, value: str) -> str:
+        """Hash da âncora para o tenant (ValueError se inválida). Toda âncora do
+        índice passa por aqui — ver `region.anchor_hash`."""
+        return await anchor_hash(self._salt, self._phone_region, tenant_id, kind, value)
 
     def _identity_key(self, tenant_id: str, kind: str, value_hash: str) -> str:
         return f"{tenant_id}:identity:{kind}:{value_hash}"
@@ -310,8 +316,9 @@ class IdentityIndex:
             kind  = a.get("kind", "")
             value = a.get("value", "")
             try:
-                vh = hash_anchor(self._salt, kind, value)
-            except ValueError:
+                vh = await self.anchor_hash(tenant_id, kind, value)
+            except ValueError as exc:
+                logger.info("identity: resolve descartou ancora %s invalida — %s", kind, exc)
                 continue
             valid_anchors.append((kind, vh, ""))
             hit = _decode_index(await self._redis.get(self._identity_key(tenant_id, kind, vh)))
@@ -536,7 +543,7 @@ class IdentityIndex:
         if not customer_id:
             return None
         try:
-            vh = hash_anchor(self._salt, kind, value)
+            vh = await self.anchor_hash(tenant_id, kind, value)
         except ValueError:
             return None
         return await self._pg_provenance(tenant_id, kind, vh, customer_id)
@@ -597,7 +604,7 @@ class IdentityIndex:
         if not customer_id:
             return False
         try:
-            vh = hash_anchor(self._salt, kind, value)
+            vh = await self.anchor_hash(tenant_id, kind, value)
         except ValueError:
             return False
 
@@ -751,7 +758,7 @@ class IdentityIndex:
             prov = _writer_provenance(a.get("provenance"))
             _writer_verification_class(kind, verification_class)
             try:
-                vh = hash_anchor(self._salt, kind, value)
+                vh = await self.anchor_hash(tenant_id, kind, value)
             except ValueError:
                 continue
             rows.append((kind, vh, kind_confidence(kind), prov))
@@ -811,7 +818,7 @@ class IdentityIndex:
             invalidas: list[str] = []
             for a in r.get("anchors") or []:
                 try:
-                    chaves.append((a.get("kind", ""), hash_anchor(self._salt, a.get("kind", ""), a.get("value", ""))))
+                    chaves.append((a.get("kind", ""), await self.anchor_hash(tenant_id, a.get("kind", ""), a.get("value", ""))))
                 except (ValueError, AttributeError):
                     invalidas.append(str(a.get("kind", "?")) if isinstance(a, dict) else "?")
             if invalidas:

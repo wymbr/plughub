@@ -36,6 +36,9 @@ import asyncpg
 import redis.asyncio as aioredis
 
 from plughub_channel_gateway.config import get_settings
+# IDN-14: o mesmo resolvedor de país do gateway; hash à mão leva região None
+# porque toda fixture de telefone aqui tem '+', e aí a região não entra.
+from plughub_channel_gateway.identity.region import PhoneRegionConfig
 from plughub_channel_gateway.identity import index as idx_mod
 from plughub_channel_gateway.identity.index import IdentityIndex
 from plughub_channel_gateway.identity.normalize import hash_anchor
@@ -101,7 +104,7 @@ async def censo_mutado(s, r, db):
 async def exercicio(s, r, db):
     t = s.tenant_id
     salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
-    idx = IdentityIndex(redis=r, salt=salt, db_pool=db)
+    idx = IdentityIndex(redis=r, salt=salt, db_pool=db, phone_region=PhoneRegionConfig(get_settings().config_api_url))
     sx = "%06d" % (uuid.uuid4().int % 1000000)
     ids = {n: "cus_probe_idn10_%s_%s" % (n, sx) for n in ("dono", "prospect", "venc", "outro")}
     anc = {
@@ -112,7 +115,7 @@ async def exercicio(s, r, db):
         "r_email": ("email", "idn10r%s@probe.local" % sx),  # dono = outro
         "r_livre": ("phone", "+55110030" + sx[:5]),
     }
-    h = {n: hash_anchor(salt, k, v) for n, (k, v) in anc.items()}
+    h = {n: hash_anchor(salt, k, v, None) for n, (k, v) in anc.items()}
     key = lambda n: idx._identity_key(t, anc[n][0], h[n])
     out = {"mutar": MUTAR, "casos": {}}
     c = out["casos"]
@@ -145,7 +148,7 @@ async def exercicio(s, r, db):
         extra = ("email", "idn11x%s@probe.local" % sx)
         for n, (k, v) in (("e_a", a1), ("e_b", a2), ("e_x", extra)):
             anc[n] = (k, v)
-            h[n] = hash_anchor(salt, k, v)
+            h[n] = hash_anchor(salt, k, v, None)
         await idx.attach_anchor(t, ids["dono"], *a1, persist_durable=True, provenance="declared")
         await idx.attach_anchor(t, ids["outro"], *a2, persist_durable=True, provenance="declared")
         for n in ("e_a", "e_b"):

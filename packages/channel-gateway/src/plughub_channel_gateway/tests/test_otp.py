@@ -46,20 +46,20 @@ class FakeRedis:
 @pytest.mark.asyncio
 class TestOtpService:
     async def test_challenge_returns_dev_code_when_enabled(self):
-        svc = OtpService(FakeRedis(), SALT, dev_return_code=True)
+        svc = OtpService(FakeRedis(), SALT, dev_return_code=True, phone_region="BR")
         out = await svc.challenge("t", "phone", "11999990000", subject=CUS)
         assert out["sent"] is True
         assert out["delivery"] == "dev_log"
         assert "dev_code" in out and len(out["dev_code"]) == 6
 
     async def test_challenge_invalid_anchor(self):
-        svc = OtpService(FakeRedis(), SALT, dev_return_code=True)
+        svc = OtpService(FakeRedis(), SALT, dev_return_code=True, phone_region="BR")
         out = await svc.challenge("t", "phone", "   ", subject=CUS)   # empty after normalize
         assert out == {"sent": False, "reason": "invalid_anchor"}
 
     async def test_verify_success(self):
         r = FakeRedis()
-        svc = OtpService(r, SALT, dev_return_code=True)
+        svc = OtpService(r, SALT, dev_return_code=True, phone_region="BR")
         code = (await svc.challenge("t", "email", "a@b.com", subject=CUS))["dev_code"]
         res = await svc.verify("t", "email", "a@b.com", code, subject=CUS)
         assert res == {"verified": True}
@@ -67,14 +67,14 @@ class TestOtpService:
         assert await svc.verify("t", "email", "a@b.com", code, subject=CUS) == {"verified": False, "reason": "no_challenge"}
 
     async def test_verify_wrong_code_decrements_attempts(self):
-        svc = OtpService(FakeRedis(), SALT, max_attempts=3, dev_return_code=True)
+        svc = OtpService(FakeRedis(), SALT, max_attempts=3, dev_return_code=True, phone_region="BR")
         await svc.challenge("t", "phone", "11999990000", subject=CUS)
         r1 = await svc.verify("t", "phone", "11999990000", "000000", subject=CUS)
         assert r1["verified"] is False and r1["reason"] == "wrong_code"
         assert r1["attempts_left"] == 2
 
     async def test_verify_too_many_attempts_burns_challenge(self):
-        svc = OtpService(FakeRedis(), SALT, max_attempts=2, dev_return_code=True)
+        svc = OtpService(FakeRedis(), SALT, max_attempts=2, dev_return_code=True, phone_region="BR")
         await svc.challenge("t", "phone", "11999990000", subject=CUS)
         await svc.verify("t", "phone", "11999990000", "bad1", subject=CUS)  # 1
         await svc.verify("t", "phone", "11999990000", "bad2", subject=CUS)  # 2
@@ -82,11 +82,11 @@ class TestOtpService:
         assert r3 == {"verified": False, "reason": "too_many_attempts"}
 
     async def test_verify_no_challenge(self):
-        svc = OtpService(FakeRedis(), SALT, dev_return_code=True)
+        svc = OtpService(FakeRedis(), SALT, dev_return_code=True, phone_region="BR")
         assert await svc.verify("t", "phone", "11999990000", "123456", subject=CUS) == {"verified": False, "reason": "no_challenge"}
 
     async def test_rate_limit_blocks_after_max(self):
-        svc = OtpService(FakeRedis(), SALT, rl_max=2, dev_return_code=True)
+        svc = OtpService(FakeRedis(), SALT, rl_max=2, dev_return_code=True, phone_region="BR")
         assert (await svc.challenge("t", "phone", "11999990000", subject=CUS))["sent"] is True
         assert (await svc.challenge("t", "phone", "11999990000", subject=CUS))["sent"] is True
         blocked = await svc.challenge("t", "phone", "11999990000", subject=CUS)
@@ -94,7 +94,7 @@ class TestOtpService:
 
     async def test_code_never_stored_plaintext(self):
         r = FakeRedis()
-        svc = OtpService(r, SALT, dev_return_code=True)
+        svc = OtpService(r, SALT, dev_return_code=True, phone_region="BR")
         code = (await svc.challenge("t", "phone", "11999990000", subject=CUS))["dev_code"]
         assert all(code not in v for v in r.kv.values())
 
@@ -106,7 +106,7 @@ class TestOtpRecusaSobreSiMesmo:
     @pytest.mark.parametrize("kind,value", [("cpf", "52998224725"), ("princ", "sub-1"), ("dev", "d-1")])
     async def test_ancora_nao_entregavel_recusa_sem_efeito(self, kind, value):
         r = FakeRedis()
-        svc = OtpService(r, SALT, dev_return_code=True)
+        svc = OtpService(r, SALT, dev_return_code=True, phone_region="BR")
         out = await svc.challenge("t", kind, value, subject=CUS)
         assert out == {"sent": False, "reason": "undeliverable_kind"}
         # nem desafio guardado, nem rate-limit consumido
@@ -119,18 +119,18 @@ class TestOtpRecusaSobreSiMesmo:
     async def test_sem_canal_de_entrega_nao_diz_sent_true(self):
         # Antes: `sent: true` com a entrega marcada TODO(prod).
         r = FakeRedis()
-        svc = OtpService(r, SALT, dev_return_code=False)
+        svc = OtpService(r, SALT, dev_return_code=False, phone_region="BR")
         out = await svc.challenge("t", "phone", "11999990000", subject=CUS)
         assert out == {"sent": False, "reason": "delivery_unavailable"}
         assert r.kv == {} and r.counters == {}
 
     async def test_desafio_sem_subject_recusa(self):
-        svc = OtpService(FakeRedis(), SALT, dev_return_code=True)
+        svc = OtpService(FakeRedis(), SALT, dev_return_code=True, phone_region="BR")
         assert await svc.challenge("t", "phone", "11999990000", subject="") == {"sent": False, "reason": "subject_required"}
 
     async def test_verify_de_outro_subject_nao_confere_nem_com_o_codigo_certo(self):
         r = FakeRedis()
-        svc = OtpService(r, SALT, max_attempts=3, dev_return_code=True)
+        svc = OtpService(r, SALT, max_attempts=3, dev_return_code=True, phone_region="BR")
         code = (await svc.challenge("t", "phone", "11999990000", subject=CUS))["dev_code"]
         alheio = await svc.verify("t", "phone", "11999990000", code, subject="cus_b")
         assert alheio == {"verified": False, "reason": "wrong_code", "attempts_left": 2}
@@ -139,7 +139,7 @@ class TestOtpRecusaSobreSiMesmo:
 
     async def test_subject_fica_guardado_no_desafio(self):
         r = FakeRedis()
-        svc = OtpService(r, SALT, dev_return_code=True)
+        svc = OtpService(r, SALT, dev_return_code=True, phone_region="BR")
         await svc.challenge("t", "email", "a@b.com", subject=CUS)
         (raw,) = r.kv.values()
         assert json.loads(raw)["subject"] == CUS
@@ -150,8 +150,8 @@ class TestOtpPromotesToPossessed:
     async def test_verify_then_attach_makes_anchor_possessed(self):
         """Mirrors WebhookAdapter.otp_verify: verify OK → attach_anchor possessed."""
         r = FakeRedis()
-        otp = OtpService(r, SALT, dev_return_code=True)
-        idx = IdentityIndex(r, SALT)
+        otp = OtpService(r, SALT, dev_return_code=True, phone_region="BR")
+        idx = IdentityIndex(r, SALT, phone_region="BR")
 
         # a claimed prospect exists for the phone
         ref0 = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "11999990000"}])

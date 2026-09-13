@@ -47,14 +47,14 @@ class TestTravaDoIndice:
 
     async def test_attach_anchor_recusa_antes_de_escrever(self):
         redis = AsyncMock()
-        idx = IdentityIndex(redis=redis, salt="s", db_pool=MagicMock())
+        idx = IdentityIndex(redis=redis, salt="s", db_pool=MagicMock(), phone_region="BR")
         with pytest.raises(ValueError):
             await idx.attach_anchor("t", "cus_x", "phone", "+5511999990000",
                                     persist_durable=True, provenance="authoritative")
         redis.set.assert_not_called()
 
     async def test_promote_recusa_ancora_que_se_diz_autoritativa(self):
-        idx = IdentityIndex(redis=AsyncMock(), salt="s", db_pool=MagicMock())
+        idx = IdentityIndex(redis=AsyncMock(), salt="s", db_pool=MagicMock(), phone_region="BR")
         with pytest.raises(ValueError):
             await idx.promote_to_durable(
                 "t", "cus_x",
@@ -90,13 +90,13 @@ def _pg_com(linha):
 def _indexado(idx, tenant, kind, value, cid):
     from plughub_channel_gateway.identity.index import _encode_index
     from plughub_channel_gateway.identity.normalize import hash_anchor
-    return {idx._identity_key(tenant, kind, hash_anchor("s", kind, value)): _encode_index(cid, "claimed")}
+    return {idx._identity_key(tenant, kind, hash_anchor("s", kind, value, "BR")): _encode_index(cid, "claimed")}
 
 
 class TestLeitura:
     async def test_mesmo_cliente_devolve_a_procedencia_do_cadastro(self):
         idx = IdentityIndex(redis=None, salt="s",
-                            db_pool=_pg_com({"customer_id": "cus_a", "provenance": "authoritative"}))
+                            db_pool=_pg_com({"customer_id": "cus_a", "provenance": "authoritative"}), phone_region="BR")
         idx._redis = _RedisDict(_indexado(idx, "t", "phone", "+5511999990000", "cus_a"))
         ref = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "+5511999990000"}], provision=False)
         assert (ref.customer_id, ref.provenance) == ("cus_a", "authoritative")
@@ -104,7 +104,7 @@ class TestLeitura:
     async def test_redis_divergente_nao_empresta_e_avisa(self, caplog):
         # O índice diz `cus_b`; o cadastro diz que a âncora é autoritativa de `cus_a`.
         idx = IdentityIndex(redis=None, salt="s",
-                            db_pool=_pg_com({"customer_id": "cus_a", "provenance": "authoritative"}))
+                            db_pool=_pg_com({"customer_id": "cus_a", "provenance": "authoritative"}), phone_region="BR")
         idx._redis = _RedisDict(_indexado(idx, "t", "phone", "+5511999990000", "cus_b"))
         ref = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "+5511999990000"}], provision=False)
         assert ref.customer_id == "cus_b"
@@ -112,13 +112,13 @@ class TestLeitura:
         assert "IDN-10" in caplog.text
 
     async def test_prospect_efemero_nao_tem_procedencia(self):
-        idx = IdentityIndex(redis=_RedisDict(), salt="s", db_pool=_pg_com(None))
+        idx = IdentityIndex(redis=_RedisDict(), salt="s", db_pool=_pg_com(None), phone_region="BR")
         ref = await idx.resolve_or_provision("t", [{"kind": "phone", "value": "+5511999990000"}])
         assert ref.matched_by == "provisioned" and ref.provenance is None
 
     async def test_anchor_provenance_responde_por_cliente(self):
         idx = IdentityIndex(redis=_RedisDict(), salt="s",
-                            db_pool=_pg_com({"customer_id": "cus_a", "provenance": "authoritative"}))
+                            db_pool=_pg_com({"customer_id": "cus_a", "provenance": "authoritative"}), phone_region="BR")
         assert await idx.anchor_provenance("t", "cus_a", "phone", "+5511999990000") == "authoritative"
         assert await idx.anchor_provenance("t", "cus_b", "phone", "+5511999990000") is None
         assert await idx.anchor_provenance("t", "", "phone", "+5511999990000") is None

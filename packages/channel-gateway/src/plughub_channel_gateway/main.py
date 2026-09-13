@@ -514,6 +514,12 @@ async def lifespan(app: FastAPI):
                             "config.changed: webchat namespace reloaded (key=%s)",
                             event.get("key"),
                         )
+                    elif namespace == "identity" and _webhook_adapter is not None:
+                        # IDN-14: país padrão do telefone. Sem invalidar, trocar o país na
+                        # tela só valeria no próximo boot — e até lá o hash usaria o antigo.
+                        _webhook_adapter.phone_region.invalidate(event.get("tenant_id"))
+                        logger.info("config.changed: identity region cache invalidated (tenant=%s key=%s)",
+                                    event.get("tenant_id"), event.get("key"))
                     elif namespace == "survey" and _survey_web is not None:
                         # link_delivery config changed → drop the cached provider config.
                         _survey_web.invalidate_delivery_config()

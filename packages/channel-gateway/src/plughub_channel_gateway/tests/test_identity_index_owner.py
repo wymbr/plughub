@@ -52,7 +52,7 @@ def _pg(donos: dict[tuple[str, str], tuple[str, str]]):
 
 
 def _h(kind, value):
-    return hash_anchor(SALT, kind, value)
+    return hash_anchor(SALT, kind, value, "BR")
 
 
 PHONE, EMAIL, CPF = "+5511999990000", "p@x.com", "12345678909"
@@ -62,7 +62,7 @@ PHONE2 = "+5511999990009"
 class TestIdentidadeProgressiva:
     async def test_ancora_fria_com_outro_dono_no_cadastro_nao_e_anexada(self, caplog):
         redis = _Redis()
-        idx = IdentityIndex(redis=redis, salt=SALT, db_pool=_pg({("phone", _h("phone", PHONE)): ("cus_dono", "claimed")}))
+        idx = IdentityIndex(redis=redis, salt=SALT, db_pool=_pg({("phone", _h("phone", PHONE)): ("cus_dono", "claimed")}), phone_region="BR")
         redis.kv[idx._identity_key(T, "email", _h("email", EMAIL))] = _encode_index("cus_prospect", "claimed")
 
         ref = await idx.resolve_or_provision(T, [{"kind": "email", "value": EMAIL},
@@ -78,7 +78,7 @@ class TestIdentidadeProgressiva:
         # do OTP ao CPF, que hoje é lido como `claimed`. Posse só em kind entregável.)
         redis = _Redis()
         idx = IdentityIndex(redis=redis, salt=SALT,
-                            db_pool=_pg({("phone", _h("phone", PHONE2)): ("cus_prospect", "possessed")}))
+                            db_pool=_pg({("phone", _h("phone", PHONE2)): ("cus_prospect", "possessed")}), phone_region="BR")
         redis.kv[idx._identity_key(T, "email", _h("email", EMAIL))] = _encode_index("cus_prospect", "claimed")
 
         await idx.resolve_or_provision(T, [{"kind": "email", "value": EMAIL},
@@ -95,7 +95,7 @@ class TestReidratacao:
         idx = IdentityIndex(redis=redis, salt=SALT, db_pool=_pg({
             ("cpf", _h("cpf", CPF)):       ("cus_vencedor", "claimed"),
             ("email", _h("email", EMAIL)): ("cus_outro", "claimed"),
-        }))
+        }), phone_region="BR")
 
         ref = await idx.resolve_or_provision(T, [{"kind": "cpf", "value": CPF},
                                                   {"kind": "email", "value": EMAIL},

@@ -110,7 +110,11 @@ Normalização: phone→E.164 (dígitos + `+`); email→trim+lowercase; cpf→s�
 ### 3.2 Módulo `identity/` (channel-gateway)
 
 `packages/channel-gateway/src/plughub_channel_gateway/identity/` — coeso, movível:
-- `normalize.py` — normalização por `kind` + `hash_anchor(tenant_salt, kind, value)`.
+- `normalize.py` — normalização por `kind` + `hash_anchor(tenant_salt, kind, value, region)`.
+  *(IDN-14, 2026-09-13: telefone vira E.164 com o país padrão do tenant —
+  config-api `identity.default_phone_region`; sem `+` e sem país, a âncora é recusada.
+  Quem tem tenant em mãos hasheia por `identity/region.anchor_hash`, a mesma função
+  para índice e OTP.)*
 - `index.py` — `IdentityIndex(redis, config_client)`:
   - `resolve_or_provision(tenant_id, anchors, provision=True) -> CustomerRef{customer_id,status,matched_by,confidence}`
     Lookup 1: hasheia âncoras → GET índice. 0 e `provision` → cria prospect efêmero (uuid `cus_…`) + indexa as âncoras. >1 candidato → desambiguação por confiança (`princ`/`ext` > `cpf`/`email` > `phone`); colisão real (mesma confiança, ids diferentes) → `matched_by="ambiguous"` (o fluxo decide `ask`).
