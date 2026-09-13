@@ -76,6 +76,7 @@ class CustomerRef:
     customer_id: str
     status:      str            # prospect | identified
     matched_by:  str            # existing | provisioned | ambiguous | durable | none
+    #                             ⚠️ `ambiguous` vem SEMPRE com customer_id "" (IDN-12)
     confidence:  float
     # Classe de verificação da âncora vencedora (posse de canal). "none" quando
     # não resolveu. A plataforma respeita isso por padrão no gate de retomada
@@ -310,11 +311,19 @@ class IdentityIndex:
                 # colisão real: mesmo top-score, ids diferentes → ambíguo (fluxo 'ask').
                 # Não escreve NADA no índice sob ambiguidade — nem identidade
                 # progressiva, nem reidratação.
-                w = winners[0]
-                _s, conf, vc, _k, _h, _f = candidates[w]
-                return CustomerRef(w, status="identified",
-                                   matched_by="ambiguous", confidence=conf,
-                                   verification_class=vc)
+                #
+                # ⚠️ IDN-12 (2026-09-13): e NÃO devolve `customer_id`. Devolvia o do
+                # primeiro candidato, e nenhum dos seis consumidores lia o
+                # `matched_by` — o `pending_workflow_get` chegava a entregar o
+                # `resume_token` do cliente escolhido ao acaso, e as gravações de
+                # pendência gravavam sob ele. Um id arbitrário é o valor plausível na
+                # forma mais cara; o vazio faz cada consumidor cair no caminho de
+                # "não resolvido" que ele já tinha.
+                logger.warning(
+                    "identity: resolve AMBIGUO — %d clientes empatam no maior score; "
+                    "nenhum customer_id devolvido (IDN-12)", len(winners),
+                )
+                return CustomerRef("", status="none", matched_by="ambiguous", confidence=0.0)
 
             winner = winners[0]
             _score, conf, vc, w_kind, w_vh, fonte = candidates[winner]

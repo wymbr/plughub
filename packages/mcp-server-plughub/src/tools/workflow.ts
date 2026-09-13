@@ -416,9 +416,17 @@ export function registerWorkflowTools(
           if (!rRes.ok) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
           }
-          const ref = await rRes.json() as { customer_id: string; status: string; verification_class?: string }
+          const ref = await rRes.json() as { customer_id: string; status: string; matched_by?: string; verification_class?: string }
           if (!ref.customer_id) {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ found: false, count: 0 }) }] }
+            // IDN-12: ambíguo chega SEM customer_id desde 2026-09-13 — antes chegava com o
+            // do primeiro candidato, e esta tool entregava as pendências (e o
+            // resume_token) de um cliente escolhido ao acaso. `ambiguous: true` deixa o
+            // fluxo pedir outra âncora em vez de concluir "não há pendência".
+            return { content: [{ type: "text" as const, text: JSON.stringify(
+              ref.matched_by === "ambiguous"
+                ? { found: false, count: 0, ambiguous: true }
+                : { found: false, count: 0 },
+            ) }] }
           }
           // ── Safe-default gate (Identity Resolver nível b, Fase 3) ──────────────
           // Retomada cross-canal (pending_by_customer) só é ACIONÁVEL quando a
@@ -526,7 +534,20 @@ export function registerWorkflowTools(
             content: [{ type: "text" as const, text: JSON.stringify({ error: `resolve_failed_http_${res.status}` }) }],
           }
         }
-        const data = await res.json()
+        const data = await res.json() as { customer_id?: string; matched_by?: string }
+        if (data.matched_by === "ambiguous") {
+          // IDN-12: os skills que chamam esta tool gravam `caller.customer_id` direto do
+          // resultado e desviam para `on_failure` ("segue sem carimbar") quando ela falha.
+          // Ambíguo É esse caso — não há cliente a carimbar —, e devolvê-lo como sucesso
+          // com id vazio gravaria uma tag vazia no ContextStore.
+          return {
+            isError: true,
+            content: [{ type: "text" as const, text: JSON.stringify({
+              error: "ambiguous",
+              message: "as ancoras identificam mais de um cliente no mesmo score — peça outra ancora",
+            }) }],
+          }
+        }
         return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
       } catch (err) {
         return {

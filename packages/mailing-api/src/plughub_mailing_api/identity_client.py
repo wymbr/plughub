@@ -42,7 +42,14 @@ class IdentityClient:
                     json={"tenant_id": tenant_id, "anchors": anchors, "provision": provision},
                 )
             r.raise_for_status()
-            cid = (r.json() or {}).get("customer_id")
+            body = r.json() or {}
+            cid = body.get("customer_id")
+            if not cid and body.get("matched_by") == "ambiguous":
+                # IDN-12: nunca mudo — a entrada entra crua, e o motivo fica dito.
+                logger.warning(
+                    "identity resolve AMBIGUO (anchors=%d) — storing raw (customer_id=null)",
+                    len(anchors),
+                )
             return cid or None
         except Exception as exc:
             logger.warning(

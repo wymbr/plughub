@@ -242,6 +242,7 @@
     "createAndLink": "Create and link",
     "creating": "Creating…",
     "createError": "Failed to create the record.",
+    "ambiguous": "This identifier matches more than one customer. Search by name, or use a more specific identifier.",
     "created": "Record created and linked ({{id}}).",
     "cancel": "Cancel",
     "s360": {

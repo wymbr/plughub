@@ -76,6 +76,7 @@ class TestMesmaRespostaQualquerTemperatura:
 
         assert ref_frio.matched_by == "ambiguous"
         assert ref_quente.matched_by == "ambiguous"
+        assert ref_frio.customer_id == ref_quente.customer_id == ""   # IDN-12
 
     async def test_ambiguo_frio_nao_escreve_nada_no_indice(self):
         donos = {("phone", _h("phone", PHONE_A)): ("cus_a", "claimed"),

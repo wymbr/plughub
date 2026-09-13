@@ -128,7 +128,12 @@ export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, s
       });
       const rdata = rres.ok ? await rres.json() : {};
       const cid: string = rdata.customer_id ?? "";
-      if (!cid) { setMsg({ text: t('cliente.createError'), ok: false }); setCreating(false); return; }
+      // IDN-12: ambíguo chega sem id — a âncora digitada casa com mais de um cliente.
+      if (!cid) {
+        setMsg({ text: t(rdata.matched_by === 'ambiguous' ? 'cliente.ambiguous' : 'cliente.createError'), ok: false });
+        setCreating(false);
+        return;
+      }
       if (cName.trim()) {
         await apiFetch(`/v1/channels/webhook/identity/attributes`, {
           method: "POST", headers: { "Content-Type": "application/json" },

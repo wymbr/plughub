@@ -193,6 +193,9 @@ class TestResolveOrProvision:
                   {"kind": "email", "value": "two@x.com"}], provision=False,
         )
         assert ref.matched_by == "ambiguous"
+        # IDN-12: ambíguo não escolhe cliente — o id do primeiro candidato era o
+        # valor plausível que os consumidores usavam como se fosse resolvido.
+        assert ref.customer_id == ""
 
     async def test_higher_confidence_wins(self):
         r = FakeRedis()

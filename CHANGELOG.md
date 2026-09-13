@@ -1,5 +1,65 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (9) — IDN-12: resolve ambíguo deixa de devolver um cliente — e de entregar `resume_token` alheio
+
+Achado ao fechar a IDN-11: `ambiguous` passou a aparecer também com o índice frio, e fui ver quem o
+lia. Ninguém.
+
+### 1 · Os seis consumidores
+
+O Lookup 1 devolvia `matched_by: "ambiguous"` **com o `customer_id` do primeiro candidato**. O
+contrato dizia *"o fluxo decide 'ask'"*; medido, nenhum fluxo decidia nada:
+
+| consumidor | o que fazia com o id arbitrário |
+|---|---|
+| `pending_workflow_get` (mcp-server) | se o candidato fosse `possessed`, **devolvia as pendências e o `resume_token`** dele |
+| `customer_resolve` → `skill_limite_entrada_v1`, `agente_portabilidade_intake_v1` | carimbava em `caller.customer_id`, que liga o contato ao histórico |
+| `handle_delegate` e conferência (webhook) | gravavam a pendência sob ele |
+| aba Cliente do Console | gravava os atributos digitados pelo operador nele |
+| importador do mailing-api | vinculava a entrada da audiência a ele |
+
+### 2 · O conserto foi na origem
+
+Remendar seis consumidores seria **seis lugares para lembrar**, e o sétimo esqueceria. Todos eles já
+tinham o caminho de *"não resolvido"* — `if customer_id` —, e o que os desviava era um **valor
+plausível**: um id válido, de um cliente real, escolhido ao acaso. Então o ambíguo passou a voltar com
+**`customer_id` vazio** (e loga quantos clientes empataram), e cada consumidor caiu sozinho no caminho
+certo.
+
+Nos consumidores ficou só o que a casa exige de toda degradação — **dizer por quê**:
+
+- `pending_workflow_get` devolve `{found: false, count: 0, ambiguous: true}` — sem isso o fluxo
+  concluiria *"não há pendência"* em vez de pedir outra âncora;
+- `customer_resolve` vira `isError` com `error: "ambiguous"`: os dois skills desviam para o
+  `on_failure` que já existia (*"segue sem carimbar"*), em vez de gravar uma tag vazia no ContextStore;
+- as duas gravações de pendência do webhook logam *"pendência NÃO indexada"* com o motivo;
+- a aba Cliente mostra *"este identificador corresponde a mais de um cliente"* (chave nova nos dois
+  idiomas) em vez de *"falha ao criar"*;
+- o importador do mailing loga a entrada que entrou crua por ambiguidade.
+
+### 3 · Os testes
+
+- `identity-ambiguous.test.ts` (mcp-server, as duas tools não tinham teste): ambíguo não busca
+  pendências nem vaza o token; não-resolvido comum segue sem o sinal; `customer_resolve` ambíguo é
+  `isError`; e **controle positivo nas duas** — cliente `possessed` resolvido ainda busca as
+  pendências, resolvido ainda volta como sucesso. Sem os positivos, os negativos passariam por tools
+  que nunca fazem nada.
+- a asserção `customer_id == ""` no teste de ambiguidade do `test_identity_index`, no de temperatura e
+  no caso do empate do `probe_identity_index_owner`.
+
+### 4 · O que não foi medido
+
+A exposição passada: quantas vezes um resolve ambíguo aconteceu e o que foi entregue. Não há registro
+das chamadas do resolve, e o empate só existe na chamada — o estado não o guarda.
+
+### 5 · Verificação
+
+mcp-server: **355 verdes** (5 novos) e `tsc` limpo; platform-ui: `tsc` limpo; channel-gateway: **821
+verdes** sobre a imagem; mailing-api: módulo compila (a imagem não tem pytest). **Quatro imagens
+rebuildadas** — channel-gateway, mcp-server-plughub, mailing-api, platform-ui — e as quatro subiram
+saudáveis. `probe_identity_index_owner` e `probe_identity_provenance` VERDES ao vivo; cadastro
+98 · 93 com 0 fixtures.
+
 ## 2026-09-13 (8) — IDN-11: a identificação deixa de depender da temperatura do índice
 
 Achado ao escrever o teste da IDN-10, que precisou aceitar dois vencedores possíveis.

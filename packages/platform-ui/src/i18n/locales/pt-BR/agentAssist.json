@@ -242,6 +242,7 @@
     "createAndLink": "Criar e vincular",
     "creating": "Criando…",
     "createError": "Falha ao criar o cadastro.",
+    "ambiguous": "Este identificador corresponde a mais de um cliente. Busque pelo nome, ou use um identificador mais específico.",
     "created": "Cadastro criado e vinculado ({{id}}).",
     "cancel": "Cancelar",
     "s360": {

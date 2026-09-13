@@ -154,7 +154,7 @@ async def exercicio(s, r, db):
                                              provision=False)
         escreveu = [n for n in ("e_a", "e_b", "e_x") if await r.get(key(n)) is not None]
         out["empate_frio"] = {"matched_by": ref.matched_by, "escreveu": escreveu}
-        c["empate_frio_ambiguo"] = ref.matched_by == "ambiguous" and not escreveu
+        c["empate_frio_ambiguo"] = ref.matched_by == "ambiguous" and not escreveu and ref.customer_id == ""
 
         ref = await idx.resolve_or_provision(t, [
             {"kind": anc["p_email"][0], "value": anc["p_email"][1]},

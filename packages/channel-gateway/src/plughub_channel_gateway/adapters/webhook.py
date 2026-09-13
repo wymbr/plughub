@@ -2018,6 +2018,14 @@ class WebhookAdapter(ChannelAdapter):
                             "identity: pending_by_customer written customer=%s session=%s matched_by=%s",
                             ref.customer_id, origin_session_id, ref.matched_by,
                         )
+                    else:
+                        # IDN-12: nunca mudo — sem cliente a pendência não é indexada, e
+                        # a retomada cross-canal deste processo não vai achá-la.
+                        logger.warning(
+                            "identity: delegate customer_resumable=true e resolve %s — pendência "
+                            "NÃO indexada (session=%s âncoras=%d)",
+                            ref.matched_by, origin_session_id, len(anchors),
+                        )
             except Exception as _e:
                 logger.warning("identity: dual-write failed (non-fatal): %s", _e)
 
@@ -3140,6 +3148,12 @@ class WebhookAdapter(ChannelAdapter):
                         logger.info(
                             "identity: pending_by_customer written (conference) customer=%s parent=%s matched_by=%s",
                             ref.customer_id, session_id, ref.matched_by,
+                        )
+                    else:
+                        logger.warning(
+                            "identity: conference customer_resumable=true e resolve %s — pendência "
+                            "NÃO indexada (parent=%s âncoras=%d)",
+                            ref.matched_by, session_id, len(anchors),
                         )
             except Exception as _e:
                 logger.warning("identity: dual-write failed (conference, non-fatal): %s", _e)
