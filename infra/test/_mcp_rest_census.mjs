@@ -31,7 +31,9 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url))
 const require_ = createRequire(join(ROOT, "packages/mcp-server-plughub/package.json"))
 const ts = require_("typescript")
 
-const ARQ = join(ROOT, "packages/mcp-server-plughub/src/server.ts")
+// argv[2] opcional: o probe roda o censo sobre uma CÓPIA mutada (ramo A) para provar que
+// ele reprova — um censo que só roda sobre o arquivo real não mostra que sabe ver ausência.
+const ARQ = process.argv[2] ?? join(ROOT, "packages/mcp-server-plughub/src/server.ts")
 const sf  = ts.createSourceFile(ARQ, readFileSync(ARQ, "utf8"), ts.ScriptTarget.ES2020, true)
 
 /**
@@ -53,7 +55,22 @@ const sf  = ts.createSourceFile(ARQ, readFileSync(ARQ, "utf8"), ts.ScriptTarget.
 const CREDENCIAL = new Set([
   "requireJwtRole", "verifyJwtPayload", "verifyUserJwt", "bearerFromHeader",
   "optionalPoolPrincipal", "requirePoolPrincipal", "abacCan",
+  // ⚠️ SEGUNDO FALSO NEGATIVO, medido em 2026-09-13. As rotas `/api/*` trocaram
+  // `requireJwtRole` (papel) por `requireJwtGrant` (campo ABAC — MOD-05 e seguintes), e o
+  // nome novo não estava aqui: 17 rotas declaradas `gateada` saíram "medida ABERTA" no
+  // ramo E enquanto o ramo D as media recusando anônimo AO VIVO. O HEAD já estava assim
+  // antes da PID-01. Não bastava acrescentar o nome — a lista envelhece a cada
+  // renomeação — então o censo agora também devolve `unknown_guards` (abaixo), e o probe
+  // reprova helper de guarda que não esteja nesta lista.
+  "requireJwtGrant",
 ])
+
+/**
+ * Nome com cara de GUARDA: `require*`/`verify*`/`authorize*` com maiúscula em seguida.
+ * Função DEFINIDA em `server.ts` com esse nome, CHAMADA dentro de rota e ausente de
+ * `CREDENCIAL`, sai em `unknown_guards` — é exatamente a forma do falso negativo acima.
+ */
+const CARA_DE_GUARDA = /^(require|verify|authorize)[A-Z]/
 /** Formas de credencial expressas como STRING (header lido à mão). */
 const CREDENCIAL_LITERAL = new Set(["x-service-token", "authorization"])
 const METODOS = new Set(["get", "post", "put", "delete", "patch"])
@@ -65,7 +82,12 @@ const varrer = (n, ids, strs) => {
   n.forEachChild(c => varrer(c, ids, strs))
 }
 
+const definidas = new Set()
+const chamadasEmRota = new Set()
 const visitar = node => {
+  if (ts.isFunctionDeclaration(node) && node.name && CARA_DE_GUARDA.test(node.name.text)) {
+    definidas.add(node.name.text)
+  }
   if (ts.isCallExpression(node)) {
     const e = node.expression
     if (ts.isPropertyAccessExpression(e) && METODOS.has(e.name.text)
@@ -74,6 +96,7 @@ const visitar = node => {
       if (p && ts.isStringLiteral(p)) {
         const ids = new Set(), strs = new Set()
         for (let i = 1; i < node.arguments.length; i++) varrer(node.arguments[i], ids, strs)
+        for (const id of ids) chamadasEmRota.add(id)
         rotas.push({
           key:    `${e.name.text.toUpperCase()} ${p.text}`,
           method: e.name.text.toUpperCase(),
@@ -95,4 +118,5 @@ const visitar = node => {
 visitar(sf)
 
 rotas.sort((a, b) => a.key.localeCompare(b.key))
-console.log(JSON.stringify({ total: rotas.length, routes: rotas }, null, 2))
+const unknownGuards = [...definidas].filter(f => chamadasEmRota.has(f) && !CREDENCIAL.has(f)).sort()
+console.log(JSON.stringify({ total: rotas.length, unknown_guards: unknownGuards, routes: rotas }, null, 2))

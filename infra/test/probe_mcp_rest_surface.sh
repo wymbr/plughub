@@ -102,31 +102,33 @@ inc() { echo "  ⏭️  $* (INCONCLUSIVO)"; INCONCL=$((INCONCL+1)); }
 #
 # ⚠️ Rota nova SEM linha aqui reprova. É o ponto do arquivo.
 DECLARADO=$(cat <<'TABELA'
-GET /api/agent-state|gateada|requireJwtRole
+GET /api/agent-state|gateada|requireJwtGrant agent_assist.atender read_only
 GET /api/approval_audit/:sessionId|gateada|verifyJwtPayload
-GET /api/conversation_history/:sessionId|gateada|requireJwtRole leitura (CAP-12). EXIGE credencial e NAO recorta linha — ver DIVIDA DE ESCOPO no cabecalho
-GET /api/copilot_state/:sessionId|gateada|requireJwtRole leitura (CAP-12)
+GET /api/conversation_history/:sessionId|gateada|requireJwtGrant agent_assist.atender read_only leitura (CAP-12). EXIGE credencial e NAO recorta linha — ver DIVIDA DE ESCOPO no cabecalho
+GET /api/copilot_state/:sessionId|gateada|requireJwtGrant agent_assist.atender read_only leitura (CAP-12)
 GET /api/instances|gateada|verifyJwtPayload
-GET /api/supervisor_capabilities/:sessionId|gateada|requireJwtRole leitura (CAP-12)
-GET /api/supervisor_state/:sessionId|gateada|requireJwtRole
-GET /api/work_queue/list|gateada|requireJwtRole leitura (CAP-12)
-GET /api/work_queue/pending|gateada|requireJwtRole leitura (CAP-12)
+GET /api/supervisor_capabilities/:sessionId|gateada|requireJwtGrant agent_assist.atender read_only leitura (CAP-12)
+GET /api/supervisor_state/:sessionId|gateada|requireJwtGrant agent_assist.atender read_only
+GET /api/work_queue/list|gateada|requireJwtGrant agent_assist.atender read_only leitura (CAP-12)
+GET /api/work_queue/pending|gateada|requireJwtGrant agent_assist.atender read_only leitura (CAP-12)
 GET /health|aberta-isenta|liveness do compose; exigir credencial acopla o boot da stack ao do emissor de token (mesma isencao do analytics-api)
 GET /internal/context-audit|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
 GET /sse|aberta-divida|transporte MCP, anonimo por construcao; NAO publicado pela borda (CAP-09/CAP-10)
-POST /api/agent_done/:sessionId|gateada|requireJwtRole escrita (CAP-12)
-POST /api/force-complete/:sessionId|gateada|requireJwtRole
-POST /api/inject-context/:sessionId|gateada|requireJwtRole
-POST /api/menu_submit/:sessionId|gateada|requireJwtRole escrita (CAP-12)
+POST /api/dialog/preview|gateada|verifyJwtPayload SEM campo, por decisao escrita no handler: funcao PURA sobre o corpo enviado (nao le store); um campo aqui seria segundo portao, mais grosseiro, sobre config.dialog_forms. Se passar a ler a forma do store, ganha portao de escopo ANTES
+POST /api/agent_done/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write escrita (CAP-12)
+POST /api/force-complete/:sessionId|gateada|requireJwtGrant agent_assist.supervisionar read_write
+POST /api/inject-context/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write
+POST /api/menu_submit/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write escrita (CAP-12)
 POST /api/session_transfer/:sessionId|gateada|verifyJwtPayload
-POST /api/work_queue/claim/:sessionId|gateada|requireJwtRole escrita (CAP-12)
-POST /api/work_queue/expire/:sessionId|gateada|requireJwtRole
-POST /api/work_queue/release/:sessionId|gateada|requireJwtRole escrita (CAP-12)
+POST /api/work_queue/claim/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write escrita (CAP-12)
+POST /api/work_queue/expire/:sessionId|gateada|requireJwtGrant agent_assist.supervisionar read_write
+POST /api/work_queue/release/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write escrita (CAP-12)
 POST /internal/context-snapshot|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
+POST /internal/session-token|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, FALHA FECHADA (503 sem env); unico emissor do token ligado a sessao (PID-01)
 POST /messages|aberta-divida|canal de escrita do transporte MCP; NAO publicado pela borda (CAP-09/CAP-10)
-PUT /api/agent-pause|gateada|requireJwtRole
-PUT /api/agent-resume|gateada|requireJwtRole
-POST /api/agent-clear-pause|gateada|requireJwtRole
+PUT /api/agent-pause|gateada|requireJwtGrant agent_assist.atender read_write
+PUT /api/agent-resume|gateada|requireJwtGrant agent_assist.atender read_write
+POST /api/agent-clear-pause|gateada|requireJwtGrant agent_assist.atender read_write
 TABELA
 )
 
@@ -150,6 +152,45 @@ print(f'  ✓ {len(r)} rotas · {len(pub)} publicadas pela borda (^/api)')
 print(f\"     publicadas SEM credencial: {sum(1 for x in pub if not x['credentials'])}/{len(pub)}\")
 print(f\"     total    SEM credencial: {sum(1 for x in r if not x['credentials'])}/{len(r)}\")
 "
+fi
+
+if [ -n "$AST" ]; then
+  # O falso negativo de 2026-09-13 foi um helper de guarda RENOMEADO que o censo não
+  # conhecia. Helper com cara de guarda, chamado em rota e fora da lista, reprova aqui —
+  # senão a próxima renomeação volta a pintar de ABERTA uma rota fechada, calada.
+  DESC=$(echo "$AST" | python3 -c "import sys,json; print(' '.join(json.load(sys.stdin).get('unknown_guards', ['__campo_ausente__'])))")
+  if [ -z "$DESC" ]; then
+    ok "nenhum helper de guarda chamado em rota fica fora do censo"
+  else
+    bad "helper(s) de guarda que o censo não conhece: $DESC — acrescente a CREDENCIAL em _mcp_rest_census.mjs (ou declare por que não é credencial)"
+  fi
+
+  # Mutações sobre CÓPIAS de server.ts: um censo que só roda sobre o arquivo real nunca
+  # mostra que sabe ver ausência.
+  SRV="$ROOT/packages/mcp-server-plughub/src/server.ts"
+  MUT=$(mktemp --suffix=.ts)
+  #  M1 — tira o portão de UMA rota; ela tem de sair sem credencial e a vizinha ficar.
+  python3 - "$SRV" "$MUT" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+alvo = 'const payload = requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)'
+i = s.find('app.get("/api/agent-state"')
+j = s.find(alvo, i)
+assert i >= 0 and j > i and j - i < 400, "ancora M1"
+open(sys.argv[2], "w", encoding="utf-8").write(s[:j] + "const payload = {} as Record<string, unknown>" + s[j + len(alvo):])
+PY
+  M1=$(node "$CENSO" "$MUT" 2>/dev/null | python3 -c "
+import sys, json
+r = {x['key']: x['credentials'] for x in json.load(sys.stdin)['routes']}
+print(r.get('GET /api/agent-state') == [] and bool(r.get('GET /api/work_queue/list')))" 2>/dev/null)
+  [ "$M1" = "True" ] && ok "M1: portão removido de /api/agent-state → medida SEM credencial, a vizinha segue gateada" \
+                     || bad "M1: o censo não viu o portão removido (resultado: ${M1:-sem saída})"
+  #  M2 — renomeia o helper; o censo tem de ACUSAR o nome novo, não pintar tudo de aberto calado.
+  sed 's/\brequireJwtGrant\b/requireJwtGrantV2/g' "$SRV" > "$MUT"
+  M2=$(node "$CENSO" "$MUT" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['unknown_guards'] == ['requireJwtGrantV2'])" 2>/dev/null)
+  [ "$M2" = "True" ] && ok "M2: helper renomeado → acusado em unknown_guards" \
+                     || bad "M2: renomear o helper não foi acusado (resultado: ${M2:-sem saída})"
+  rm -f "$MUT"
 fi
 
 echo
@@ -297,7 +338,7 @@ PY
   if echo "$SAIDA" | grep -q '^ERRO '; then
     echo "$SAIDA" | grep '^ERRO ' | sed 's/^ERRO //' | while read -r l; do echo "  ❌ $l"; done
     FAIL=$((FAIL + $(echo "$SAIDA" | grep -c '^ERRO ')))
-  else ok "as 25 estão classificadas e nenhuma postura mudou"; fi
+  else ok "as $(echo "$SAIDA" | grep '^CONTAGEM' | sed 's/.*total=//') estão classificadas e nenhuma postura mudou"; fi
 else
   inc "sem o censo AST, não há o que classificar"
 fi
