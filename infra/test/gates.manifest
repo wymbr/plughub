@@ -258,6 +258,11 @@ probe_contact_close_outcomes.sh
 # que a reatribuicao da ancora a outro cliente ZERA a procedencia -- e mutacao do upsert.
 # Mexe no cadastro vivo so com fixtures apagadas por hash e por id.
 probe_identity_provenance.sh
+# IDN-10. O indice Redis de identidade (lido ANTES do cadastro) apontava ancora para um cliente
+# que o cadastro atribui a outro, por dois escritores. Censo Redis x PG ao vivo, exercicio dos
+# dois caminhos com controle positivo, e mutacao dos dois lados. Fixtures por hash e id; a
+# divergencia injetada e desfeita no MESMO processo (a versao anterior sujou o Redis vivo).
+probe_identity_index_owner.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

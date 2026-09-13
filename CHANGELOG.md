@@ -1,5 +1,70 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (7) — IDN-10: o índice de identidade deixa de apontar âncora para o cliente errado
+
+Achado ao escrever a leitura da procedência (IDN-07). O Lookup 1 lê o índice Redis **antes** do
+cadastro, e dois escritores desse índice apontavam âncora sem perguntar ao cadastro.
+
+### 1 · Os dois caminhos
+
+| caminho | o que fazia |
+|---|---|
+| identidade progressiva (Redis quente) | anexava ao vencedor as âncoras que eram *miss* — **no Redis**. O comentário prometia *"âncoras que apontam a OUTRO cliente NÃO são tocadas"*, e só conferia o índice |
+| reidratação (`durable`, Redis frio) | apontava **todas** as âncoras da chamada para o vencedor, inclusive as que o cadastro atribui a outro |
+
+Efeito: o resolve devolvia o cliente errado para aquela âncora até o TTL de 30 dias — e é esse id
+que as pendências e a retomada usam. Desde a IDN-07 a **confiança** já não vazava por ali (a leitura
+confere o cliente); a **identidade** errada, sim.
+
+**Exposição medida antes de mexer:** 4 âncoras no índice, 4 concordando com o cadastro, **0
+divergentes**. O caminho existia; o dano de hoje era zero.
+
+### 2 · O conserto
+
+Os dois escritores perguntam ao cadastro antes (`_pg_key_owner`): âncora com **outro dono** não é
+apontada, e loga nomeando (`IDN-10`); **sem linha** segue anexada — a identidade progressiva continua
+viva, e isso tem controle positivo; com o **mesmo dono**, o índice recebe a classe durável em vez de
+`claimed`, então um `possessed` não é rebaixado no Redis.
+
+### 3 · O contador que a ficha pedia não foi criado
+
+A ficha dizia *"o log de divergência passa a contador"*. Um contador em chave Redis que nenhuma tela
+e nenhum gate lê é o *"existe ≠ está pronto"* na forma mais barata. O número útil já existe e é
+medível sem nada novo: **varrer o índice e comparar com o cadastro** — é o ramo A do gate.
+
+### 4 · O gate, e o estrago que a primeira versão dele fez
+
+`probe_identity_index_owner.sh`: **A** censo Redis × PG ao vivo · **B** exercício dos dois caminhos
+na imagem, cada um com o seu controle · **C** mutação com o cadastro "mudo" (os dois caminhos
+reapontam e reprovam; controles seguem) · **D** divergência injetada acende o censo.
+
+⚠️ **A primeira versão do D sujou o Redis vivo.** Ela injetava a divergência numa chamada e
+restaurava noutra, passando o valor anterior pelo shell. A chave injetada não existia antes; o
+extrator de campo imprime `None` para JSON nulo; e a restauração **gravou a string `"None"`** como
+dono da âncora de CPF de um cliente real. O leitor tolerante do índice aceita string pura como
+`customer_id` legado — então, por cerca de um minuto, aquele CPF resolvia para o cliente `"None"`.
+Foi o **próprio censo**, rodado de novo para conferir a limpeza, que acusou (`divergem: 1`,
+`redis: "None"`). A chave foi removida (censo de volta a 4/0) e o D foi refeito: injeção, censo e
+restauração no **mesmo processo**, com a restauração num `finally` que devolve o valor e o TTL
+originais (ou a ausência), e um passo final que exige o censo de volta a zero.
+
+Lição de método: **conferir a limpeza de um instrumento é parte do instrumento** — foi a segunda
+leitura do censo, não a primeira, que viu o estrago.
+
+### 5 · O achado: IDN-11
+
+O caminho quente declara `ambiguous` quando o maior score empata entre dois clientes; o `_pg_resolve`
+escolhe o primeiro estritamente maior e segue. Com CPF de um cliente e e-mail de outro no mesmo
+score, quem vence é a **ordem** das âncoras na chamada — o próprio teste da IDN-10 precisou aceitar os
+dois vencedores. Duas respostas para a mesma pergunta, decididas pela temperatura do Redis.
+
+### 6 · Verificação
+
+3 testes unitários (âncora de outro dono não anexada; sem dono anexada e mesmo dono com a classe
+durável; reidratação que não reaponta a perdedora). Suíte do channel-gateway **817 verdes** sobre a
+imagem; imagem rebuildada. `probe_identity_index_owner` VERDE nos 4 ramos, censo final 4/0;
+`probe_identity_provenance` segue VERDE; cadastro 98 · 93 · 31 intacto.
+
 ## 2026-09-13 (6) — IDN-07: a procedência passa a ser lida — só do cadastro, e só para o mesmo cliente
 
 A PID-12 entregou a metade ESCRITA do eixo de procedência. Faltava a leitura: `CustomerRef` não a

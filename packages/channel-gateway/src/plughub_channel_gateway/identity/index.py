@@ -281,10 +281,23 @@ class IdentityIndex:
                 # junto). Âncoras que apontam a OUTRO cliente NÃO são tocadas
                 # (território de merge, Fase C). Efeito: reconectar com
                 # phone+email indexa o email → depois o email sozinho resolve.
+                #
+                # ⚠️ IDN-10 (2026-09-13): "miss" era miss NO REDIS, e a promessa
+                # acima só valia para o índice. Uma âncora fria no Redis e com dono
+                # no CADASTRO era anexada ao vencedor mesmo assim — e o resolve
+                # passava a devolver o cliente errado para ela por 30 dias. Agora
+                # o cadastro é perguntado antes.
                 for (kind, vh) in miss_anchors:
+                    dono = await self._pg_key_owner(tenant_id, kind, vh)
+                    if dono and dono[0] != winner:
+                        logger.warning(
+                            "identity: identidade progressiva NAO anexou %s a %s — o cadastro a "
+                            "atribui a %s (IDN-10)", kind, winner, dono[0],
+                        )
+                        continue
                     await self._redis.set(
                         self._identity_key(tenant_id, kind, vh),
-                        _encode_index(winner, "claimed"),
+                        _encode_index(winner, dono[1] if dono else "claimed"),
                         ex=self._index_ttl_s,
                     )
                 return CustomerRef(winner, status="identified",
@@ -307,11 +320,22 @@ class IdentityIndex:
             customer_id, conf, vc, prov = pg_hit
             # Reidrata o índice Redis preservando a classe durável de cada âncora
             # (uma reidratação não deve rebaixar um `possessed` a `claimed`).
+            #
+            # ⚠️ IDN-10 (2026-09-13): reidratava TODAS as âncoras da chamada
+            # apontando para o vencedor — inclusive as que o cadastro atribui a
+            # OUTRO cliente. A âncora sem linha no cadastro segue anexada (é a mesma
+            # identidade progressiva do caminho quente); a de outro dono, não.
             for (kind, vh, _n) in valid_anchors:
-                rows_vc = await self._pg_key_class(tenant_id, kind, vh)
+                dono = await self._pg_key_owner(tenant_id, kind, vh)
+                if dono and dono[0] != customer_id:
+                    logger.warning(
+                        "identity: reidratacao NAO apontou %s para %s — o cadastro a "
+                        "atribui a %s (IDN-10)", kind, customer_id, dono[0],
+                    )
+                    continue
                 await self._redis.set(
                     self._identity_key(tenant_id, kind, vh),
-                    _encode_index(customer_id, rows_vc or "claimed"),
+                    _encode_index(customer_id, dono[1] if dono else "claimed"),
                     ex=self._index_ttl_s,
                 )
             return CustomerRef(customer_id, status="identified",
@@ -476,6 +500,26 @@ class IdentityIndex:
         except ValueError:
             return None
         return await self._pg_provenance(tenant_id, kind, vh, customer_id)
+
+    async def _pg_key_owner(
+        self, tenant_id: str, kind: str, value_hash: str,
+    ) -> tuple[str, str] | None:
+        """(customer_id, verification_class) que o CADASTRO atribui à âncora, ou None
+        (sem cadastro durável, ou âncora sem linha). É a pergunta que os dois
+        escritores do índice Redis fazem antes de apontar uma âncora (IDN-10)."""
+        if self._db is None:
+            return None
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT customer_id, verification_class FROM identity.customer_secondary_keys
+                 WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3 LIMIT 1
+                """,
+                tenant_id, kind, value_hash,
+            )
+        if not row:
+            return None
+        return row["customer_id"], (row["verification_class"] or "claimed")
 
     async def _pg_key_class(self, tenant_id: str, kind: str, value_hash: str) -> str | None:
         """Classe de verificação durável de uma chave (para não rebaixar no reidratar)."""
