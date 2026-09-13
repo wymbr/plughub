@@ -56,17 +56,49 @@ fi
 # exit 0 do `up` não é o veredicto: um serviço pode ter subido e morrido logo
 # depois. Conferir o estado é um segundo teste, com ramo próprio.
 echo "── conferência de estado ──────────────────────────────────────────"
-ONESHOTS='auth-seed|config-seed|dialog-seed|eval-seed|kafka-init|minio-init|pricing-seed|e2e-runner'
-DOWN="$("${COMPOSE[@]}" ps -a --format '{{.Service}} {{.State}}' \
-        | grep -v ' running' | grep -vE "^($ONESHOTS) " || true)"
-
-if [ -n "$DOWN" ]; then
-  echo "⚠️  serviço(s) fora de 'running' — não são one-shots de seed:"
-  echo "$DOWN"
-  echo
-  echo "   docker compose -f docker-compose.demo.yml logs --tail=60 <serviço>"
-  exit 1
+# GAT-05 (2026-09-13). Aqui havia uma lista FIXA de one-shots excluídos PELO NOME,
+# sem olhar o exit code: seed morto lia igual a seed concluído (o `auth-seed` saiu 1
+# por dias e isto dizia "Stack no ar"), e o `context-map-seed`, que nunca entrou na
+# lista, reprovava toda subida CORRETA. A classificação agora é derivada do compose
+# e o julgamento mora em `_up_state_verdict.py`, que tem probe próprio.
+VERDICT="$REPO_ROOT/infra/scripts/_up_state_verdict.py"
+ONESHOT_WAIT_S="${ONESHOT_WAIT_S:-180}"
+command -v python3 >/dev/null || {
+  echo "⚠️  INCONCLUSIVO: python3 ausente — sem ele não há como julgar os one-shots."
+  exit 2
+}
+CFG="$LOG_DIR/up-compose-$(date +%s).json"
+if ! "${COMPOSE[@]}" config --format json > "$CFG" 2>>"$LOG"; then
+  echo "⚠️  INCONCLUSIVO: \`docker compose config\` falhou (ver $LOG)."
+  exit 2
 fi
 
-echo "✅ Stack no ar, todos os serviços em 'running'."
+# One-shot pode ainda estar rodando: `up -d` só espera quem é dependência declarada.
+# Espera limitada; esgotado o prazo, o veredicto é INCONCLUSIVO, nunca verde.
+PS="$LOG_DIR/up-ps-$(date +%s).tsv"
+PS_FMT="{{.Service}}"$'\t'"{{.State}}"$'\t'"{{.ExitCode}}"   # TAB explícito, não colado
+deadline=$(( $(date +%s) + ONESHOT_WAIT_S ))
+while :; do
+  "${COMPOSE[@]}" ps -a --format "$PS_FMT" > "$PS" 2>>"$LOG"
+  OUT="$(python3 "$VERDICT" "$CFG" "$PS")"; V=$?
+  [ "$V" -ne 2 ] && break
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "⚠️  INCONCLUSIVO: $OUT — após ${ONESHOT_WAIT_S}s."
+    echo "   docker compose -f docker-compose.demo.yml logs --tail=60 <serviço>"
+    rm -f "$CFG" "$PS"; exit 2
+  fi
+  sleep 5
+done
+rm -f "$CFG" "$PS"
+
+case "$V" in
+  0) echo "   $OUT" ;;
+  1) echo "❌ $OUT" | sed '2,$s/^/   /'
+     echo
+     echo "   docker compose -f docker-compose.demo.yml logs --tail=60 <serviço>"
+     exit 1 ;;
+  *) echo "⚠️  $OUT"; exit 2 ;;
+esac
+
+echo "✅ Stack no ar: long-running em 'running' e one-shots concluídos com exit 0."
 echo "   UI: http://localhost:5174/login  (admin@plughub.local / changeme_admin)"

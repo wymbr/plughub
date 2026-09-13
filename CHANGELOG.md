@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (2) — GAT-05: o `up.sh` passa a julgar one-shot pelo exit code, e deixa de reprovar toda subida correta
+
+### 1 · A ficha dizia metade
+
+Aberta pela AUT-54: a conferência de estado do `up.sh` excluía os one-shots **pelo
+NOME**, sem olhar o exit code, e o `auth-seed` morreu por dias com o script dizendo
+*"Stack no ar"*. Medido antes de mexer, o mesmo mecanismo errava **no sentido
+oposto também**: o `context-map-seed` (ALW-12, 2026-09-02) nunca entrou na lista, e
+saindo 0 — como deve — era lido como serviço CAÍDO. O cálculo exato do script sobre
+a stack de hoje dava `DOWN=[context-map-seed exited]`: **toda subida correta
+reprovava desde 2026-09-02**. O último log em `.logs/` era de 2026-08-12 — um
+vermelho permanente ensina a não rodar o script.
+
+Uma lista parece completa por ser uma lista, e esta envelheceu nos dois sentidos.
+
+### 2 · O conserto
+
+- **Classificação DERIVADA do compose**, onde o fato já está declarado: one-shot =
+  `restart: "no"` **ou** alvo de `depends_on: {condition:
+  service_completed_successfully}`. O segundo critério é o que cobre o `minio-init`,
+  que não declara restart. Medido: os 8 one-shots conhecidos entram, e nenhum
+  long-running declara `restart: "no"`.
+- **Julgamento em função pura** (`infra/scripts/_up_state_verdict.py`), com quatro
+  desfechos: VERDE · VERMELHO (long-running fora de `running`, **inclusive `exited
+  0`**; one-shot com código ≠ 0 ou em `created`) · PENDENTE (one-shot ainda rodando —
+  o `up.sh` espera até `ONESHOT_WAIT_S`, 180 s, e esgotado o prazo é INCONCLUSIVO,
+  nunca verde) · INCONCLUSIVO (compose ou `ps` ilegível — sem classificação não há
+  veredicto, e cair numa lista fixa reabriria o defeito).
+- Pendente **não mascara** vermelho: um serviço caído reprova mesmo com seed rodando.
+- A mensagem final deixou de afirmar *"todos em running"*, que não é mais o critério.
+
+### 3 · Falseabilidade
+
+`infra/test/probe_up_state_verdict.sh` (AUTO no manifesto): classificação sintética,
+os oito casos de veredicto (seed morto nomeado com o código, seed fora da lista
+antiga, long-running `exited 0`, pendente, `created`, pendente+caído, entradas
+vazias), a lista fixa não voltou ao `up.sh`, e ao vivo o compose REAL classifica os 8
+e julga a stack atual: **42 containers, 8 one-shots com exit 0, VERDE**.
+
+⚠️ Um defeito do próprio probe foi pego antes de rodar: o primeiro rascunho chamava
+o caso dentro de `$(…)`, e um `bad` num subshell **não incrementa o contador** — o
+probe não poderia reprovar. Hoje a saída vai para arquivo.
+
+**Bateria de mutação:** três avaliadores adulterados, os três deixam o probe
+VERMELHO pelo caso certo — aceitar código ≠ 0 (pego no caso auth-seed), aceitar
+long-running `exited` (pego no caso do serviço que saiu) e ignorar a dependência
+concluída (o `init_dep` volta a parecer caído). `probe_gates_manifest_coverage`
+verde (322 scripts).
+
+⚠️ O `up.sh` em si **não foi executado**: ele reconcilia a stack inteira (recria o
+que divergiu e apaga os logs desses containers). O ramo D do probe roda a MESMA
+função sobre o compose e o `ps` reais.
+
 ## 2026-09-13 (1) — VOZ-06: a premissa caiu em três pontos, e três escritores do store nunca armazenaram nada
 
 A VOZ-06 tinha sido destravada em 2026-09-12 com o default de 30 dias do dono, sobre uma premissa

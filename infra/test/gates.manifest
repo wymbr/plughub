@@ -492,6 +492,11 @@ probe_context_tag_extractor_parity.sh
 # Precisa de um principal de escopo ESTREITO — com admin o marcador nasce correto
 # e o defeito nao e exercido (o proprio probe declara isso e sai INCONCLUSIVO).
 ADMIN_EMAIL=operator@plughub.local ADMIN_PASS=changeme_operator probe_process_chip_scoped_marker.sh
+# GAT-05: a conferencia de estado do `up.sh` julgava one-shot por LISTA de nomes, sem
+# exit code — seed morto lia como concluido, e seed fora da lista como servico caido.
+# Ramos A-C sao estaticos (entradas sinteticas); o D le o compose e o `ps` reais e sai
+# INCONCLUSIVO sem docker, nunca verde.
+probe_up_state_verdict.sh
 
 # ══ ASSISTIDOS ═══════════════════════════════════════════════════════════════
 # Nao rodam sozinhos. O requisito vai depois do nome, e e o que o runner imprime.
