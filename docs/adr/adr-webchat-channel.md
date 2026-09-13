@@ -106,6 +106,10 @@ A estratificação por data permite expurgo em massa com `rm -rf 2026/01/` sem c
 O subdiretório de `session_id` permite limpeza atômica de todos os arquivos de uma sessão expirada.
 
 **Cron de dois estágios:**
+
+> ⚠️ **Medido em 2026-09-13: este cron NÃO EXISTE em código** — `soft_expire` não tem chamador e
+> nenhum SQL aplica `expires_at`. Ficha `VOZ-07` em `pending.md`.
+
 - Estágio 1 (horário): `SET deleted_at = NOW() WHERE expires_at < NOW()` → URL retorna 410 Gone imediatamente
 - Estágio 2 (diário, grace 24h): delete físico + `SET file_path = NULL`
 

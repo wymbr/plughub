@@ -414,13 +414,30 @@ class VoiceAdapter(ChannelAdapter):
                 resp.raise_for_status()
                 audio_bytes = resp.content
 
-            file_id, serve_url = await self._store.store(
-                session_id  = session_id,
-                file_bytes  = audio_bytes,
-                mime_type   = "audio/mpeg",
-                filename    = f"{segment_id or recording_sid}.mp3",
-                uploader_id = "system",
+            # ⚠️ VOZ-06 (2026-09-13): esta chamada era `self._store.store(...)`, método
+            # que o `AttachmentStore` NUNCA teve — a gravação de voz não podia ser
+            # armazenada em caso nenhum, e o `AttributeError` caía no `except` abaixo
+            # como "download failed". O contrato é o mesmo dos outros escritores:
+            # `reserve` grava o slot com a expiração do tenant, `commit` grava os bytes.
+            from datetime import datetime, timedelta, timezone
+            from ..attachment_store import resolve_attachment_expiry_days
+            _expiry_days = await resolve_attachment_expiry_days(
+                self._redis, s.tenant_id, s.attachment_expiry_days
             )
+            file_id, _ = await self._store.reserve(
+                tenant_id  = s.tenant_id,
+                session_id = session_id,
+                file_name  = f"{segment_id or recording_sid}.mp3",
+                mime_type  = "audio/mpeg",
+                size_bytes = len(audio_bytes),
+                expires_at = datetime.now(timezone.utc) + timedelta(days=_expiry_days),
+            )
+            meta = await self._store.commit(
+                file_id   = file_id,
+                tenant_id = s.tenant_id,
+                data      = audio_bytes,
+            )
+            serve_url = meta.serving_url
             logger.info(
                 "voice recording stored: session=%s segment=%s rec=%s size=%d",
                 session_id, segment_id, recording_sid, len(audio_bytes),

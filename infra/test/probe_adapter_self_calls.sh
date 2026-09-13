@@ -34,6 +34,17 @@
 #      abre sessao, roteia e fecha -- nao e "definir tres metodos". A tabela nao
 #      envelhece: nome que sai do fonte e continua na divida tambem REPROVA.
 #   B  MUTACAO — injeta uma chamada a metodo inexistente e exige que o censo acuse.
+#   C  CONTRATO DO STORE — AST sobre o pacote inteiro (fora testes): toda chamada
+#      ao `AttachmentStore` bate com o Protocol em NOME e em KWARGS (aceitos e
+#      obrigatorios). Nasceu na VOZ-06 (2026-09-13): o ramo A declarava nao ver
+#      `self.attr.metodo()`, e era ali que tres escritores estavam quebrados --
+#      `voice.py` chamava `self._store.store()` (metodo que nunca existiu) e
+#      `whatsapp.py`/`email.py` chamavam `commit(mime_type=...)` sem `tenant_id`.
+#      `hasattr` nao pegaria os dois ultimos: o metodo existe, a assinatura nao.
+#      Receptor com cara de store que o criterio de ligacao nao reconhece REPROVA
+#      -- senao renomear o atributo tiraria o arquivo da populacao em silencio.
+#   D  MUTACAO DO C — injeta as tres formas do defeito (metodo inexistente, kwarg
+#      inexistente, obrigatorio ausente) e exige as tres acusacoes.
 #
 # ⚠️ Por que AST e nao `hasattr` na imagem: o `hasattr` responde por UMA classe de
 #    cada vez e exige a imagem de pe; o censo responde pela populacao inteira e
@@ -63,11 +74,13 @@ rodar() {
 }
 
 echo "════════════════════════════════════════════════════════════════════"
-echo " adapters — todo \`self.X(...)\` existe no MRO?"
+echo " adapters — todo \`self.X(...)\` existe no MRO, e o store e chamado no contrato?"
 echo "════════════════════════════════════════════════════════════════════"
 
 rodar "A · CENSO    — orfa nova reprova; divida declarada e CONTADA" censo
 rodar "B · MUTACAO  — o censo acusa um metodo inexistente"           censo-mut
+rodar "C · STORE    — chamada ao AttachmentStore bate com o Protocol"  store
+rodar "D · MUTACAO  — o censo do store acusa as tres formas"          store-mut
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════"

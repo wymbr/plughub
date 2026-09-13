@@ -78,7 +78,9 @@ história no `CHANGELOG.md`.)*
 
 ## `docs/adr/adr-voice-media-plane.md` — voz própria / Arc 15 WebRTC
 
-*(nada fechado ainda)*
+| id | tarefa | fechada em | âncora |
+|---|---|---|---|
+| VOZ-08 | **Tres escritores do AttachmentStore chamavam o store fora do contrato, e nenhum arquivo deles foi armazenado.** `voice.py` chamava `self._store.store()` (metodo inexistente) e `whatsapp.py`/`email.py` chamavam `commit(mime_type=...)` sem `tenant_id`; os tres caiam num `except Exception` e viravam uma linha de log. Achado ao medir a premissa da VOZ-06. Conserto: `reserve`+`commit` como o `webrtc.py` ja fazia. ⚠️ **O instrumento que existia declarava nao ver a forma do defeito** (`probe_adapter_self_calls` so contava `self.NOME()`); ganhou os ramos C/D — censo do contrato do store por AST sobre o pacote inteiro (nome E kwargs, com testemunha de receptor nao reconhecido) e mutacao das tres formas. Contraprova contra `HEAD`: 5 defeitos acusados. Testes novos com store LIGADO a assinatura do proprio Protocol: contra os adapters antigos 3 reprovam com os erros exatos. Suite 784 verdes | 2026-09-13 | `CHANGELOG.md` § 2026-09-13 (1) |
 
 ---
 

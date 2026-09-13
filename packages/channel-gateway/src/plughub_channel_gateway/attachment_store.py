@@ -21,6 +21,10 @@ Metadados (PostgreSQL — tabela session_attachments):
 Cron de expurgo (dois estágios):
   Estágio 1 (horário): SET deleted_at = NOW() WHERE expires_at < NOW()
   Estágio 2 (diário, grace=24h): DELETE arquivo, SET file_path = NULL
+
+  ⚠️ DESCRITO, NÃO IMPLEMENTADO (medido 2026-09-13, VOZ-07). Nenhum job roda os
+  dois estágios e `soft_expire` não tem chamador: `expires_at` é carimbado e
+  nunca aplicado, e o serving só recusa por `deleted_at`, que ninguém escreve.
 """
 
 from __future__ import annotations

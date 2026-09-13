@@ -167,6 +167,20 @@ sobre texto e não sabe a diferença.
 
 ### V5 — Gravação vai para o **AttachmentStore**; retenção é política **por classe de artefato**
 
+> ⚠️ **Correção medida em 2026-09-13 (VOZ-06/07/08) — três afirmações desta seção eram falsas, e a
+> decisão sobrevive a elas.** **(1)** A retenção **não** vem do env: `resolve_attachment_expiry_days`
+> lê `webchat.attachment_expiry_days` da config-api, com tela; `config.py:119` é só o fallback. O que
+> continua valendo é *"um número único para todas as classes"*. **(2)** A gravação **não** escrevia
+> no store: `voice.py` chamava `self._store.store()`, método que o `AttachmentStore` nunca teve — o
+> `AttributeError` caía no `except` e nenhuma gravação foi armazenada (consertado na VOZ-08, junto
+> com `whatsapp.py`/`email.py`, que tinham `commit` sem `tenant_id`). **(3)** O store **não** tem
+> ciclo de vida nenhum: o soft-expire horário e o delete diário descritos abaixo não existem em
+> código (`soft_expire` sem chamador) — nada apagaria a gravação aos 30 dias porque **nada apaga
+> anexo algum** (VOZ-07). Logo o *"conflito resolvido de fato, para pior"* do fim da seção não
+> aconteceu: não havia gravação para apagar nem expurgo para apagá-la. A decisão — classe de
+> artefato com política própria, uma entrada de config por classe — fica; ela só ganha objeto
+> quando houver gravação real, e depende do expurgo existir.
+
 Sem storage próprio de mídia. Gravação, anexo de webchat, imagem de WhatsApp e documento vivem no
 mesmo store, com a mesma interface (A7) — e é o que o cliente espera ao ouvir "storage da
 solução".

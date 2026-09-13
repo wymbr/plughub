@@ -330,10 +330,13 @@ class WhatsAppAdapter(ChannelAdapter):
                     size_bytes = len(raw_bytes),
                     expires_at = expires_at,
                 )
+                # ⚠️ VOZ-06 (2026-09-13): passava `mime_type=` (que `commit` não aceita)
+                # e omitia `tenant_id` (que ele exige) — TypeError em TODA mídia, engolido
+                # pelo `except` abaixo. O MIME já está no slot gravado pelo `reserve`.
                 await self._attachment_store.commit(
                     file_id   = file_id,
+                    tenant_id = tenant_id,
                     data      = raw_bytes,
-                    mime_type = mime_type,
                 )
             except Exception as exc:
                 logger.error("whatsapp attachment store failed: %s", exc)

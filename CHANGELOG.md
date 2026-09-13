@@ -1,5 +1,98 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (1) — VOZ-06: a premissa caiu em três pontos, e três escritores do store nunca armazenaram nada
+
+A VOZ-06 tinha sido destravada em 2026-09-12 com o default de 30 dias do dono, sobre uma premissa
+escrita no ADR V5: *"a retenção vem do env, a gravação já escreve no AttachmentStore, e o ciclo
+único a apagaria aos 30"*. Antes de construir o mecanismo por classe, medi as três. **Nenhuma se
+sustentou.** A decisão do dono (classe de artefato, 30 dias de default) continua de pé; o que
+mudou é o que existe embaixo dela.
+
+### 1 · As três medições
+
+| afirmação | medido |
+|---|---|
+| a retenção vem do **env** | **falso** — `resolve_attachment_expiry_days` lê `webchat.attachment_expiry_days` da config-api, com tela (`WebChatConfigPage`); o env é só fallback. Vale só o *"um número para todas as classes"* |
+| a gravação **já escreve** no store | **falso** — `voice.py` chamava `self._store.store(...)`, método que o `AttachmentStore` **nunca teve**. Nenhuma gravação de voz foi armazenada, jamais |
+| o ciclo único a **apagaria aos 30** | **falso** — **não existe ciclo nenhum**: `soft_expire` tem zero chamadores e nenhum SQL aplica `expires_at` |
+
+População do store: **6 linhas, todas `image/jpeg`**. Mecanismo de retenção por classe contra
+população zero é exatamente o erro que a decisão #4 desta semana firmou — por isso a VOZ-06 volta a
+`bloqueado`, até existir gravação real.
+
+### 2 · A mesma forma em mais dois escritores (VOZ-08, fechada)
+
+Consertar o `voice.py` pedia olhar como os outros escritores chamavam o store. Dos cinco, **três
+estavam quebrados**:
+
+| escritor | chamada | efeito |
+|---|---|---|
+| `voice.py` | `self._store.store(session_id=, file_bytes=, …)` | `AttributeError` — gravação nunca armazenada |
+| `whatsapp.py` | `commit(file_id=, data=, mime_type=)` | `TypeError` (sem `tenant_id`, com kwarg inexistente) — mídia inbound nunca armazenada |
+| `email.py` | idem | idem — anexo de e-mail nunca armazenado |
+| `webrtc.py` · `webchat.py` · `upload_router.py` | dentro do contrato | — |
+
+Os três caíam num `except Exception` e viravam **uma linha de log**. O evento de mídia do WhatsApp
+saía normalmente — com `file_id: None` —, e o teste que existia afirmava justamente que o evento
+saía, com o adapter construído **sem store**: o caminho de armazenamento nunca era exercido.
+Estendi o conserto aos dois irmãos porque era o mesmo defeito, na mesma interface, achado na mesma
+medição; os três passaram a usar `reserve` + `commit` como o `webrtc.py` já fazia.
+
+### 3 · O instrumento declarava não ver esta forma
+
+`probe_adapter_self_calls.sh` nasceu na VOZ-03 e diz no próprio docstring que só conta `self.NOME()`
+— *"`self.attr.metodo()` é chamada no atributo e fica de fora"*. Era exatamente ali. E `hasattr` não
+teria pego dois dos três: em `whatsapp`/`email` o método **existe**; o que está errado é a
+assinatura.
+
+Ganhou dois ramos:
+
+- **C · contrato do store** — AST sobre o pacote inteiro (fora testes): toda chamada ao
+  `AttachmentStore` bate com o Protocol em **nome**, **kwargs aceitos** e **kwargs obrigatórios**.
+  O contrato é lido do próprio Protocol, não copiado. Medido: 14 chamadas em 7 arquivos, 0 defeitos.
+- **D · mutação** — injeta as três formas (método inexistente, kwarg inexistente, obrigatório
+  ausente) e exige as três acusações.
+
+⚠️ **O critério de ligação decide quem é cobrado, então ele tem testemunha.** Receptor com cara de
+store (`reserve`/`commit`… com `file_id`/`session_id` nomeado) que o censo não reconhece
+**reprova** — senão renomear o atributo tiraria o arquivo da população em silêncio, o modo de falha
+que a GAT-01 mediu duas vezes.
+
+**Contraprova contra `HEAD`** (pacote extraído com `git archive`, via `PLUGHUB_CG_BASE`): o ramo C
+acusa **os 5 defeitos**, um por linha.
+
+### 4 · Testes que sabem reprovar
+
+`test_attachment_writers_contract.py`: um store falso cujas chamadas são **ligadas por
+`inspect.signature` ao próprio `AttachmentStore`** — se o contrato mudar, o fake muda junto, ao
+contrário do `MockAttachmentStore` do egress, que tem a assinatura escrita à mão. Três testes
+provam que o fake reprova (kwarg inexistente, obrigatório ausente, método inexistente); três
+exercem os escritores. O do WhatsApp asserta o que faltava: o `file_id` **no evento**.
+
+Contra os adapters de `HEAD`, os três de escritor **reprovam com os erros exatos** do produto
+(`missing a required argument: 'tenant_id'` ×2, `no attribute 'store'`).
+
+### 5 · O achado que NÃO foi consertado (VOZ-07, aberta)
+
+O expurgo em dois estágios está descrito em três casas — docstring do store,
+`adr-webchat-channel.md` e `CLAUDE.md` § WebChat — e **não existe**. `expires_at` é carimbado com a
+política do tenant e nunca aplicado; o serving recusa só por `deleted_at`, que ninguém escreve.
+**Anexo nenhum expira.** Exposição hoje: 6 linhas, 0 vencidas; a primeira passa do prazo em
+**2026-09-20**, e daí em diante é minimização LGPD prometida e não cumprida. Ficou fora deste
+commit por escopo — as três casas ganharam a correção, e a ficha pede o job com contador e um gate
+que conte linha vencida sem `deleted_at`.
+
+### 6 · Verificação
+
+`probe_adapter_self_calls.sh` **VERDE nos 4 ramos** (A censo · B mutação · C contrato do store ·
+D mutação do store). Suíte do channel-gateway: **784 verdes**, rodada sobre a **imagem** com o
+fonte atual montado (o container em execução não monta o fonte — `docker exec` teria medido o
+código de quando ele subiu). `probe_task_ledger` verde.
+
+⚠️ Nota de método: o ADR V5 foi escrito com a premissa *"a gravação já escreve no store"* citando
+linha (`voice.py:410-416`). Citar a linha deu à frase aparência de medição; a linha existia, o
+método que ela chamava não. **Linha citada prova que o texto está lá, não que ele roda.**
+
 ## 2026-09-12 (12) — AUT-56: o `auth-seed` deixa de apagar o escopo do `admin@` a cada subida
 
 ### 1 · O dano, medido
