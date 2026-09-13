@@ -38,15 +38,20 @@ app.use(express.json())
 // ── Rotas ──────────────────────────────────
 // G-PROBE platform-wide: gate DUAL (service-token OU Bearer+ABAC) nas MUTAÇÕES dos
 // routers de config que a UI (PoolsPage/registry.ts/editor de fluxo) edita direto.
-// GET aberto (o middleware deixa passar). FORA do gate por ora (runtime/deploy interno,
-// cadeia de callers maior): instances, operational e pool-slots (promote/rollback do
-// Fluxo→Deploy, mediado por mcp-server) — fatia própria.
+// GET aberto (o middleware deixa passar). FORA do gate: instances e operational
+// (runtime interno). Com Bearer, o tenant e o autor saem do TOKEN (PID-07).
 // MOD-06 (corte #3): o campo é POR ROUTER, e cada um é o que a TELA daquele
 // backend já declara no menu. Antes, os quatro exigiam `config.resources` — e a
 // medição ao vivo mostrou o developer sem conseguir salvar um flow que o menu lhe
 // oferece, e `config.channels` recusado pela API da tela de Canais.
+// PID-07: o router de DEPLOY é montado ANTES do de pools, e a ordem é o mecanismo.
+// `/v1/pools` casa por prefixo, então montado primeiro o `requireResourceWrite` julgava
+// também `/v1/pools/:id/slots|promote|rollback` com `config.resources` — o campo errado,
+// e o único portão que essas rotas tinham. Aqui cada rota de deploy traz o seu
+// (`skill_flows.operacao`, no próprio router) e responde; o que não é deploy cai no
+// `next()` e chega ao router de pools com o portão dele.
+app.use("/v1/pools/:pool_id",     poolSlotsRouter)
 app.use("/v1/pools",              requireResourceWrite, poolsRouter)
-app.use("/v1/pools/:pool_id",     poolSlotsRouter)   // slots sub-routes (deploy) — não gateado nesta fatia
 app.use("/v1/skills",             requireAbacWrite("skill_flows", "editar"), skillsRouter)
 app.use("/v1/instances",          instancesRouter)
 app.use("/v1/channels",           requireAbacWrite("config", "channels"), channelsRouter)

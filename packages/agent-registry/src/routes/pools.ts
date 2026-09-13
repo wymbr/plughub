@@ -4,6 +4,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from "express"
+import { authorOf } from "../middleware/require-resource-write"
 import { prisma, Prisma }    from "../db"
 import { CreatePoolSchema, UpdatePoolSchema } from "../validators/pool"
 import { ZodError }          from "zod"
@@ -42,7 +43,7 @@ export const poolsRouter = Router()
 poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId  = _getTenantId(req)
-    const createdBy = _getUserId(req)
+    const createdBy = authorOf(req)
     const body      = CreatePoolSchema.parse(req.body)
 
     // ADR internal-work-queue (D6): o sufixo `-int` só é garantia enquanto NINGUÉM
@@ -311,7 +312,7 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         tenantId,
         { pool_id: up.pool_id, channel_types: up.channel_types, description: up.description },
         resultingIq,
-        _getUserId(req),
+        authorOf(req),
       )
     }
 
@@ -456,9 +457,6 @@ function _getTenantId(req: Request): string {
   return (req.headers["x-tenant-id"] as string) ?? "tenant_default"
 }
 
-function _getUserId(req: Request): string {
-  return (req.headers["x-user-id"] as string) ?? "system"
-}
 
 function _formatPool(pool: Record<string, unknown>): Record<string, unknown> {
   const { id: _id, ...rest } = pool

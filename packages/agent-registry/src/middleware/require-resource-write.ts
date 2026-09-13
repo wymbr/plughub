@@ -52,6 +52,53 @@ export function verifyHs256(token: string, secret: string): Record<string, any> 
 }
 
 /**
+ * ⚠️ TENANT e AUTOR são fatos da CREDENCIAL, não do header (PID-07, 2026-09-13)
+ * ---------------------------------------------------------------------------
+ * O gate conferia o GRANT e deixava o tenant e o autor para os headers
+ * `x-tenant-id` / `x-user-id`, que os routers liam direto. Medido ao vivo: um token
+ * de `tenant_outro` com `x-tenant-id: tenant_demo` GRAVOU o slot `next` de um pool
+ * do tenant_demo (200) — e isso valia para os quatro routers, porque nenhum deles
+ * sabia de onde o tenant vinha. E o autor: a UI nunca mandou `x-user-id`, então os
+ * 34 slots gravados pela tela ficaram como `system`, e quem mandasse o header
+ * escolhia o nome que quisesse.
+ *
+ * Regra: com Bearer, o tenant é o `tenant_id` do token. Header divergente é RECUSADO
+ * (403 `tenant_mismatch`), nunca reescrito calado; header ausente é preenchido com o
+ * do token, para que os routers, que continuam lendo o header, leiam o certo. O autor
+ * é o `email` (ou `sub`) do token, e o `x-user-id` deixa de valer para usuário.
+ * Credencial de SERVIÇO é identidade irrestrita: ela diz em nome de quem age
+ * (`x-user-id`, ex. `registry-syncer`), e o tenant continua vindo do header.
+ */
+export interface WritePrincipal {
+  kind:      "user" | "service" | "unauthenticated"
+  tenant_id: string
+  author:    string
+}
+
+type RequestWithPrincipal = Request & { writePrincipal?: WritePrincipal }
+
+const DEFAULT_TENANT = "tenant_default"
+
+function headerOf(req: Request, name: string): string | undefined {
+  const v = req.headers[name]
+  return typeof v === "string" && v !== "" ? v : undefined
+}
+
+/**
+ * Quem escreveu. UMA casa: os routers liam cada um o seu `x-user-id`, e quatro cópias
+ * da mesma leitura são quatro lugares para esquecer a credencial.
+ * Fora de uma escrita que passou pelo gate (não deveria acontecer), cai no header
+ * como antes — e é o censo do probe que garante que toda escrita passa pelo gate.
+ */
+export function authorOf(req: Request): string {
+  const p = (req as RequestWithPrincipal).writePrincipal
+  if (p) return p.author
+  return headerOf(req, "x-user-id") ?? "system"
+}
+
+let warnedOpen = false
+
+/**
  * Fábrica do gate. O campo é ARGUMENTO porque é fato do ROUTER — a mesma forma do
  * `_NS_FIELD_OVERRIDES` do config-api, que resolve o campo por namespace. Um gate
  * único com o campo fixo dentro obrigaria toda tela a caber no mesmo grant, que é
@@ -62,13 +109,37 @@ export function requireAbacWrite(modulo: string, campo: string) {
     const method = req.method.toUpperCase()
     if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next()
 
+    const r      = req as RequestWithPrincipal
     const svc    = config.service_token
     const secret = config.jwt_secret
-    if (!svc && !secret) return next()  // auth desabilitada (postura atual)
+    if (!svc && !secret) {
+      // auth desabilitada (dev/test). Degradação que não pode ser muda: é o estado
+      // em que qualquer um grava em qualquer tenant.
+      if (!warnedOpen) {
+        warnedOpen = true
+        console.warn(
+          "[agent-registry] escrita SEM portão: nem AGENT_REGISTRY_SERVICE_TOKEN nem " +
+          "PLUGHUB_JWT_SECRET configurados — tenant e autor vêm dos headers, sem verificação",
+        )
+      }
+      r.writePrincipal = {
+        kind:      "unauthenticated",
+        tenant_id: headerOf(req, "x-tenant-id") ?? DEFAULT_TENANT,
+        author:    headerOf(req, "x-user-id") ?? "system",
+      }
+      return next()
+    }
 
     // 1) credencial de serviço (callers internos)
     const provided = req.headers["x-service-token"]
-    if (svc && provided === svc) return next()
+    if (svc && provided === svc) {
+      r.writePrincipal = {
+        kind:      "service",
+        tenant_id: headerOf(req, "x-tenant-id") ?? DEFAULT_TENANT,
+        author:    headerOf(req, "x-user-id") ?? "service",
+      }
+      return next()
+    }
 
     // 2) Bearer + ABAC `{modulo}.{campo}` (read_write)
     const auth = (req.headers["authorization"] as string | undefined) ?? ""
@@ -94,6 +165,28 @@ export function requireAbacWrite(modulo: string, campo: string) {
       res.status(403).json({ error: "forbidden", message: `requires ${modulo}.${campo} (read_write)` })
       return
     }
+
+    const claimTenant = typeof claims["tenant_id"] === "string" ? claims["tenant_id"] : ""
+    if (!claimTenant) {
+      res.status(403).json({ error: "tenant_claim_missing", message: "token sem tenant_id — não há tenant em nome do qual gravar" })
+      return
+    }
+    const headerTenant = headerOf(req, "x-tenant-id")
+    if (headerTenant !== undefined && headerTenant !== claimTenant) {
+      res.status(403).json({
+        error:   "tenant_mismatch",
+        message: `x-tenant-id '${headerTenant}' difere do tenant do token '${claimTenant}'`,
+      })
+      return
+    }
+    req.headers["x-tenant-id"] = claimTenant
+    const author = [claims["email"], claims["sub"]].find((v) => typeof v === "string" && v !== "") as string | undefined
+    if (!author) {
+      // Um autor inventado seria o `system` de antes com outro nome.
+      res.status(403).json({ error: "subject_claim_missing", message: "token sem email nem sub — não há autor a registrar" })
+      return
+    }
+    r.writePrincipal = { kind: "user", tenant_id: claimTenant, author }
     return next()
   }
 }

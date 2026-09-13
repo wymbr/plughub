@@ -17,6 +17,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from "express"
+import { authorOf, requireAbacWrite } from "../middleware/require-resource-write"
 import { prisma, Prisma } from "../db"
 import { publishRegistryChanged } from "../infra/kafka"
 import { deployViolation, slotDeclared } from "../lib/capacity"
@@ -26,13 +27,20 @@ import { judgeRequiredConfig } from "../lib/required-config"
 
 export const poolSlotsRouter = Router({ mergeParams: true })
 
+// PID-07 — o portão do DEPLOY é o campo da TELA de Deploy (`skill_flows.operacao`),
+// declarado ROTA A ROTA. Até aqui estas rotas só tinham portão por ACIDENTE: o
+// `app.use("/v1/pools", requireResourceWrite, …)` casa por prefixo e cobria
+// `/v1/pools/:id/slots|promote|rollback` com `config.resources` (preset admin-only),
+// enquanto o comentário do `app.ts` dizia "não gateado". Consequência medida: o
+// devops via a tela de Deploy e tomava 403 em set-next e promote.
+// Por rota, e não num `router.use`: este router é montado em `/v1/pools/:pool_id`, e
+// um `use` aqui também pegaria o `PUT /v1/pools/:id` do pool — que é da tela Recursos.
+const requireDeployWrite = requireAbacWrite("skill_flows", "operacao")
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function _getTenantId(req: Request): string {
   return (req.headers["x-tenant-id"] as string) ?? "tenant_default"
-}
-function _getUserId(req: Request): string {
-  return (req.headers["x-user-id"] as string) ?? "system"
 }
 
 function _formatSlot(row: Record<string, unknown> | null, slot: string) {
@@ -96,10 +104,10 @@ poolSlotsRouter.get("/slots", async (req: Request, res: Response, next: NextFunc
 // ── PUT /v1/pools/:pool_id/slots/next ─────────────────────────────────────────
 // Only "next" is writable. Returns 403 for previous/current.
 
-poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: NextFunction) => {
+poolSlotsRouter.put("/slots/:slot", requireDeployWrite, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId = _getTenantId(req)
-    const userId   = _getUserId(req)
+    const userId   = authorOf(req)
     const poolId   = req.params["pool_id"]!
     const slot     = req.params["slot"]
 
@@ -241,10 +249,10 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
 // ── POST /v1/pools/:pool_id/promote ───────────────────────────────────────────
 // next → current, current → previous, next cleared.
 
-poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextFunction) => {
+poolSlotsRouter.post("/promote", requireDeployWrite, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId = _getTenantId(req)
-    const userId   = _getUserId(req)
+    const userId   = authorOf(req)
     const poolId   = req.params["pool_id"]!
 
     const pool = await prisma.pool.findUnique({
@@ -425,10 +433,10 @@ poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextF
 // ── POST /v1/pools/:pool_id/rollback ──────────────────────────────────────────
 // previous → current, previous cleared. Does NOT touch "next".
 
-poolSlotsRouter.post("/rollback", async (req: Request, res: Response, next: NextFunction) => {
+poolSlotsRouter.post("/rollback", requireDeployWrite, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId = _getTenantId(req)
-    const userId   = _getUserId(req)
+    const userId   = authorOf(req)
     const poolId   = req.params["pool_id"]!
 
     const pool = await prisma.pool.findUnique({

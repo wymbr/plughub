@@ -12,7 +12,9 @@
 # 403 "requires config.resources" com o preset real dele). Hoje:
 #   /v1/pools -> config.resources · /v1/skills -> skill_flows.editar ·
 #   /v1/channels e /v1/channel-endpoints -> config.channels
-# GET (leituras) seguem abertos. instances/operational/pool-slots NÃO são gateados.
+#   slots/promote/rollback (deploy) -> skill_flows.operacao (PID-07, 2026-09-13)
+# GET (leituras) seguem abertos. instances/operational NÃO são gateados. Com Bearer, o
+# tenant e o autor da escrita saem do TOKEN — ver probe_deploy_write_principal.sh.
 #
 # Sonda: DELETE de um skill inexistente — o middleware roda ANTES do handler, então
 # 401/403 = barrado pelo gate; 404 (não encontrado) = gate passou.

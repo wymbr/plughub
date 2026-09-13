@@ -302,6 +302,11 @@ probe_identity_evidence.sh
 # no merge e no workflow_resume (antes de acordar o processo). Estatico, resume vivo sobre
 # sessoes sinteticas com token vencido (controle incluso), e a jornada de duas consultas.
 probe_evidence_transport.sh
+# PID-07. A escrita no agent-registry agia em nome do HEADER: um token de outro tenant com
+# x-tenant-id do tenant_demo gravou um slot dele (200), e o autor era o x-user-id (a UI nao o
+# manda: slots como `system`). O deploy so tinha portao por prefixo, em config.resources. Censo
+# com mutacoes sobre copia, e ao vivo: devops grava com o autor do token, tenant alheio recusado.
+probe_deploy_write_principal.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

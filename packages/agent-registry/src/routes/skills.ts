@@ -8,6 +8,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from "express"
+import { authorOf } from "../middleware/require-resource-write"
 import { prisma, Prisma }      from "../db"
 import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock, validateMaskedTypeRefs, validateContextTagRegistration, validateSkillPayload } from "../validators/skill"
 import { publishRegistryChanged } from "../infra/kafka"
@@ -47,7 +48,7 @@ export const skillsRouter = Router()
 skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId  = _getTenantId(req)
-    const createdBy = _getUserId(req)
+    const createdBy = authorOf(req)
     const body      = CreateSkillSchema.parse(req.body)
 
     // ── Validação cruzada: mcp_servers das tools estão registrados ──
@@ -309,7 +310,7 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
       skill_id:      skillId,
       tenant_id:     tenantId,
       deploy_status: "published",
-      created_by:    _getUserId(req),
+      created_by:    authorOf(req),
     }
     const skill = await prisma.skill.upsert({
       where:  { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
@@ -363,9 +364,6 @@ skillsRouter.delete("/:skill_id", async (req: Request, res: Response, next: Next
 function _getTenantId(req: Request): string {
   return (req.headers["x-tenant-id"] as string) ?? "tenant_default"
 }
-function _getUserId(req: Request): string {
-  return (req.headers["x-user-id"] as string) ?? "system"
-}
 function _formatSkill(skill: Record<string, unknown>): Record<string, unknown> {
   const { id: _id, interface_schema, ...rest } = skill
   // UMA definição, sem rascunho (2026-07-13). `flow` É a definição; salvar não muda o
@@ -410,7 +408,7 @@ function _computeFlowModel(flow: unknown): "agent" | "workflow" {
 skillsRouter.post("/:skill_id/deploy", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId  = _getTenantId(req)
-    const userId    = _getUserId(req)
+    const userId    = authorOf(req)
     const skillId   = req.params["skill_id"]!
     const { pool_ids, notes } = req.body as { pool_ids?: string[]; notes?: string }
 

@@ -100,6 +100,11 @@ spec §4.4 **não existe em lugar nenhum do código.**
 **(10) As rotas de deploy não têm portão.** `app.ts:49`: *"slots sub-routes (deploy) — não
 gateado nesta fatia"*, com tenant e usuário vindos dos headers `x-tenant-id`/`x-user-id` (default
 `system`). A edição de skill, ao contrário, exige `skill_flows.editar` (`:50`).
+*(Refinado por medição na PID-07, 2026-09-13: o comentário era falso — `/v1/pools` casava por
+prefixo e já cobria as rotas de deploy com `config.resources`, e sem credencial elas davam 401. O
+que o achado tinha de verdadeiro era a outra metade, e ela valia para o registry inteiro: tenant e
+autor do header. Um token de outro tenant gravou um slot do tenant_demo. Fechado: com Bearer, tenant
+e autor saem do token; o deploy tem portão próprio em `skill_flows.operacao`.)*
 
 **(11) O deploy em lote registra sem mudar.** `skill_deploy` (`pool_ids`) → `POST
 /v1/skills/:id/deploy` grava `skill.flow` e um `SkillDeployment` com os pools
@@ -231,6 +236,11 @@ config do slot tem de **conter** o mínimo (config ⊇ mínimo); se não contive
 ajustado em silêncio — um ajuste faria a tela mostrar `[]` enquanto roda `["otp"]`. Config ausente é
 erro; `[]` é válido quando o mínimo permite. ⚠️ Enquanto (10) valer, o mínimo protege o VALOR mas
 não a escolha do skill: trocar o `skill_id` no slot o contorna (PID-07 precede PID-06).
+*(PID-07 fechada em 2026-09-13. Trocar o `skill_id` no slot continua sendo o que o deploy faz — o
+que mudou é QUEM pode: exige `skill_flows.operacao` no próprio tenant do token, e o autor gravado é
+o da credencial. A PID-06 não precisa mais supor um slot anônimo; ela ainda precisa do
+`judgeIdentityFloor`, porque um devops legítimo pode promover um skill cujo mínimo a config não
+contém.)*
 
 ### D8 · Âncoras entregáveis × não-entregáveis; OTP só contra procedência autoritativa
 
@@ -387,7 +397,7 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-04 | `skill_intake_runner_v1` + migração dos dois intakes | D2 |
 | PID-05 | `skill_identity_orchestrator_v1` (composição, um param por mecanismo) | D3 |
 | PID-06 | `resume_requires`/`resume_door` + mínimo no skill + `judgeIdentityFloor` | D7 |
-| PID-07 | portão nas rotas de slot do agent-registry | D7 |
+| PID-07 | tenant e autor da escrita saem da credencial; deploy em `skill_flows.operacao` | D7 |
 | PID-08 | deploy em lote que registra sem mudar + promote em lote sobre slots | §4 |
 | PID-09 | `origin_identity` no adapter: `princ` e `(whatsapp, from)` | D9 |
 | PID-10 | OTP só entregável e autoritativo, recusa explícita; corrige o desafio a CPF | D8 |

@@ -200,8 +200,9 @@ export function registerDeployTools(server: McpServer, deps: DeployDeps): void {
 
       try {
         const url = `${agentRegistryUrl}/v1/pools/${encodeURIComponent(input.target_pool_id)}/promote`
-        // The pool-slots router is not service-token-gated today, but we send the
-        // service credential when present (future-proof, matches skill_deploy).
+        // The promote route is gated (skill_flows.operacao or service token, PID-07):
+        // without the service credential this call is refused with 401. As a service
+        // caller, `x-user-id` is the author recorded in set_by/deployed_by.
         const svcToken = process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? ""
         const res = await fetch(url, {
           method:  "POST",

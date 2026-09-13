@@ -1,5 +1,83 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (18) — PID-07: a escrita no agent-registry age em nome da credencial
+
+### 1 · A premissa da ficha, refutada
+
+A ficha dizia *"as rotas de deploy do agent-registry não têm portão"*, citando o comentário do
+`app.ts:49` (*"não gateado nesta fatia"*). Medido ao vivo: `PUT slots/next`, `promote` e `rollback`
+sem credencial davam **401**, em `:3300` e pela UI. O `app.use("/v1/pools", requireResourceWrite, …)`
+casa por prefixo e cobria `/v1/pools/:id/slots|promote|rollback`. Portão por **acidente**, e no
+campo errado: `config.resources`, preset admin-only, enquanto a tela de Deploy é oferecida a
+`skill_flows.operacao`. O devops via a tela e tomava 403 em set-next e promote — a MOD-06 outra vez,
+um router adiante.
+
+### 2 · O que estava aberto de verdade
+
+| medição (antes) | resultado |
+|---|---|
+| token de `tenant_outro` + `x-tenant-id: tenant_demo`, `PUT slots/next` num pool do tenant_demo | **200 — gravou** |
+| mesmo defeito nos outros routers | o gate conferia o grant e nunca o tenant; os quatro routers liam o header |
+| autor dos slots | `x-user-id`, que a UI não manda: **33 de 51** slots vivos com `system`, e quem manda o header escolhe o nome |
+
+O `CLAUDE.md` do pacote dizia *"tenant_id always inferred from JWT"* — invariante escrito, sem
+mecanismo.
+
+Decisão do dono: **deploy com campo próprio + tenant amarrado em todos os routers**.
+
+### 3 · O conserto
+
+- **`requireAbacWrite` amarra a escrita à credencial.** Com Bearer: o `tenant_id` do token é o
+  tenant; header divergente → **403 `tenant_mismatch`** (nunca reescrito calado); header ausente →
+  preenchido com o do token, e os routers, que continuam lendo o header, leem o certo. Token sem
+  `tenant_id` → `tenant_claim_missing`; sem `email` nem `sub` → `subject_claim_missing` (um autor
+  inventado seria o `system` de antes com outro nome). Credencial de **serviço** é identidade
+  irrestrita: age pelo tenant do header e declara o autor (`x-user-id`, ex. `registry-syncer`).
+- **Uma casa para o autor:** `authorOf(req)`. As quatro cópias de `_getUserId` (pools, skills,
+  channels, pool-slots) saíram; nenhum router lê `x-user-id`.
+- **Deploy em `skill_flows.operacao`**, declarado rota a rota no router de slots (um `router.use`
+  pegaria também o `PUT /v1/pools/:id`, que é da tela Recursos), e o router **montado antes** do de
+  pools. A ordem é o mecanismo: invertida, o `config.resources` volta a julgar o deploy.
+- Com auth desligada (sem token nem segredo) o gate segue no-op, mas agora **avisa uma vez** que
+  tenant e autor vêm dos headers sem verificação.
+- Chamadores: todos os scripts e serviços que mutam slot já usavam o token de serviço, e a UI manda
+  o `x-tenant-id` da própria sessão (`user.tenant_id`) — nenhum precisou mudar. O comentário do
+  `pool_promote` (mcp-server), que dizia o router não gateado, foi corrigido.
+
+### 4 · O que esta fatia NÃO faz
+
+- **Leituras** continuam abertas e escopadas pelo header, por decisão anterior (chamadores de
+  runtime sem credencial). `instances` e `operational` seguem sem portão.
+- Os **33 slots com `system`** ficam: o autor real não é recuperável.
+- A PID-06 continua necessária: um devops legítimo pode promover um skill cujo mínimo de identidade
+  a config não contém.
+
+### 5 · Testes e probe
+
+- `deploy-write-principal.test.ts` (12), com par positivo em cada bloco: o campo de deploy atravessa
+  e o vizinho é recusado nomeando `skill_flows.operacao`; controle de que a edição do pool segue em
+  `config.resources`; tenant divergente recusado em slots, promote, rollback, pools, skills, channels
+  e channel-endpoints, com o mesmo tenant atravessando e o ausente preenchido do token; autor do
+  token apesar de `x-user-id` forjado, `sub` na falta de email, e o serviço com o autor que declara.
+  **Mutações** (cada uma derruba o seu bloco): ordem de montagem invertida (6 falhas), amarração de
+  tenant removida (1), autor de volta ao header (2), campo do deploy de volta a `config.resources` (7).
+- `pools.test.ts` e `abac-field-per-router.test.ts`: os tokens passaram a carregar `tenant_id`.
+- **`probe_deploy_write_principal.sh`** — A: censo (deploy antes de pools, as três rotas de escrita
+  com o portão, 0 de 10 routers lendo `x-user-id`, tenant amarrado) com três mutações sobre CÓPIA.
+  B: ao vivo, dentro do container: anônimo 401, `config.resources` sozinho 403, devops grava com o
+  autor do token apesar do header forjado, tenant alheio recusado em slot, promote e pool sem gravar,
+  serviço grava com o autor declarado. C: população de slots `system` (informativo).
+
+### 6 · Verificação
+
+agent-registry **87 verdes**, `tsc` limpo (build e testes). Imagem: agent-registry. Red-first: as
+duas metades do ramo B foram medidas vermelhas na imagem anterior (200 cross-tenant, 403 do devops).
+Com token real do auth-api, `set-next` pela mesma forma da tela gravou `set_by = admin@plughub.local`.
+Verdes ao vivo: `probe_deploy_write_principal`, `smoke_agent_registry_write_auth`,
+`probe_nav_backend_field_agreement`, `probe_masked_channel_gate`, `probe_skill_profile_steps`,
+`gate_webhook_endpoint_auth`, `probe_evaluator_pool_validation`, `probe_mcp_rest_surface`,
+`probe_gates_manifest_coverage`.
+
 ## 2026-09-13 (17) — PID-03: a prova de quem acabou de provar chega ao processo retomado
 
 ### 1 · O defeito, reproduzido ao vivo

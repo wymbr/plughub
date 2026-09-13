@@ -9,6 +9,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from "express"
+import { authorOf } from "../middleware/require-resource-write"
 import { prisma }                                   from "../db"
 import { publishRegistryChanged }                   from "../infra/kafka"
 import type { GatewayConfigDelegate }               from "../types/gateway-config"
@@ -53,7 +54,7 @@ channelsRouter.get("/", async (req: Request, res: Response, next: NextFunction) 
 channelsRouter.post("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId  = _getTenantId(req)
-    const createdBy = _getUserId(req)
+    const createdBy = authorOf(req)
     const body      = req.body as {
       channel:       string
       display_name:  string
@@ -178,9 +179,6 @@ channelsRouter.delete("/:id", async (req: Request, res: Response, next: NextFunc
 // ─────────────────────────────────────────────
 function _getTenantId(req: Request): string {
   return (req.headers["x-tenant-id"] as string) ?? "tenant_default"
-}
-function _getUserId(req: Request): string {
-  return (req.headers["x-user-id"] as string) ?? "system"
 }
 
 /** Mask sensitive credential values — replaces every value with "••••••" */

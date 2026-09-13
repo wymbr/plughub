@@ -39,6 +39,7 @@ function mintToken(access: string | null = "read_write"): string {
   const head = b64({ alg: "HS256", typ: "JWT" })
   const body = b64({
     sub: "user_001",
+    tenant_id: "tenant_test",   // PID-07: o tenant da escrita é o do token
     exp: Math.floor(Date.now() / 1000) + 3600,
     ...(access ? { module_config: { config: { resources: { access } } } } : {}),
   })
