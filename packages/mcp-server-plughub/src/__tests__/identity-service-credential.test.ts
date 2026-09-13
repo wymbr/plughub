@@ -61,8 +61,8 @@ describe("IDN-06 — tools de identidade apresentam credencial de serviço", () 
     ["pending_workflow_get (âncoras)", "pending_workflow_get", { tenant_id: "t", anchors: ANCORAS, session_token: SESSAO }],
     ["pending_workflow_get (legado)", "pending_workflow_get", { tenant_id: "t", contact_identifier: "5511999990001", session_token: SESSAO }],
     ["customer_resolve", "customer_resolve", { tenant_id: "t", anchors: ANCORAS }],
-    ["otp_challenge", "otp_challenge", { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001" }],
-    ["otp_verify", "otp_verify", { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001", code: "123456" }],
+    ["otp_challenge", "otp_challenge", { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001", session_token: SESSAO }],
+    ["otp_verify", "otp_verify", { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001", code: "123456", session_token: SESSAO }],
     ["customer_attach_key", "customer_attach_key", { tenant_id: "t", customer_id: "cus_a", kind: "email", value: "a@b.c" }],
     ["customer_update_attributes", "customer_update_attributes", { tenant_id: "t", customer_id: "cus_a", attributes: { nome: "x" } }],
   ]

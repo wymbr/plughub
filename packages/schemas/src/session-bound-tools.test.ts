@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest"
 import { injectSessionToken, isSessionBoundTool, SESSION_BOUND_TOOLS } from "./session-bound-tools"
 
 describe("PID-01 — injeção do token de sessão", () => {
-  it("as duas tools de retomada estão na lista", () => {
-    expect([...SESSION_BOUND_TOOLS].sort()).toEqual(["pending_workflow_get", "workflow_resume"])
+  it("as tools de retomada e de prova estão na lista", () => {
+    expect([...SESSION_BOUND_TOOLS].sort()).toEqual(["otp_challenge", "otp_verify", "pending_workflow_get", "workflow_resume"])
   })
 
   it("injeta na tool gateada do mcp-server-plughub", () => {

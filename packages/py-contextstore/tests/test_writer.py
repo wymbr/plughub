@@ -320,3 +320,36 @@ class TestEscopoModoWarn:
                 r, "t1", "s1", {"journey.pedido.id": "x"},
                 fetch_json=_fetch_ok, source="t", updated_at=AGORA,
             ))
+
+
+class TestEvidenciaReservada:
+    """PID-02 — quem verifica grava; nenhum funil genérico grava evidência de identidade."""
+
+    def test_raise_recusa_antes_de_qualquer_hset(self) -> None:
+        from plughub_contextstore.writer import ContextTagReserved
+        r = FakeRedis()
+        with pytest.raises(ContextTagReserved, match="core.journey.identity.otp.status"):
+            _run(write_context_tags(
+                r, "t1", "s1", {"session.cliente.cpf": "1", "core.journey.identity.otp.status": "verified"},
+                fetch_json=_fetch_ok, source="teste", updated_at=AGORA,
+            ))
+        assert r.hashes == {}
+
+    def test_warn_descarta_a_reservada_loga_e_grava_o_resto(self, caplog) -> None:
+        r = FakeRedis()
+        with caplog.at_level(logging.ERROR, logger="plughub_contextstore.writer"):
+            res = _run(write_context_tags(
+                r, "t1", "s1", {"session.cliente.cpf": "1", "core.identity.x": "verified"},
+                fetch_json=_fetch_ok, source="teste", updated_at=AGORA, on_foreign_scope="warn",
+            ))
+        assert res["written"] == ["session.cliente.cpf"]
+        assert "core.identity.x" not in r.hashes["t1:ctx:s1"]
+        assert "DESCARTADAS" in caplog.text and "core.identity.x" in caplog.text
+
+    def test_controle_core_workflow_segue_gravando(self) -> None:
+        r = FakeRedis()
+        res = _run(write_context_tags(
+            r, "t1", "s1", {"core.workflow.dialog_form_id": "f"},
+            fetch_json=_fetch_ok, source="teste", updated_at=AGORA,
+        ))
+        assert res["written"] == ["core.workflow.dialog_form_id"]

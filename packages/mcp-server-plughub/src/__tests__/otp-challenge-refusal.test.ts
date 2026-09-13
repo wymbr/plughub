@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { registerWorkflowTools } from "../tools/workflow"
+import { signSessionBoundToken } from "../infra/jwt"
 
 type ToolResponse = { isError?: boolean; content: Array<{ type: string; text: string }> }
 
@@ -24,7 +25,9 @@ function tool(server: McpServer, name: string) {
 }
 
 const corpo = (r: ToolResponse) => JSON.parse(r.content[0]!.text) as Record<string, unknown>
-const ENTRADA = { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001" }
+// PID-02: otp_* são tools ligadas à sessão — o token é o que o skill-flow-service injeta.
+const SESSAO = signSessionBoundToken({ tenant_id: "t", session_id: "s", instance_id: "i", skill_id: "k" })
+const ENTRADA = { tenant_id: "t", customer_id: "cus_a", kind: "phone", value: "+5511999990001", session_token: SESSAO }
 
 describe("PID-10 — otp_challenge: recusa do gateway é erro, não sucesso", () => {
   let server: McpServer

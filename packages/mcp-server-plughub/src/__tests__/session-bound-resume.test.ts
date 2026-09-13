@@ -50,8 +50,8 @@ describe("PID-01 — tools de retomada exigem o token ligado à sessão", () => 
   })
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
-  it("a lista de @plughub/schemas é a das tools gateadas aqui", () => {
-    expect([...SESSION_BOUND_TOOLS].sort()).toEqual(Object.keys(ENTRADAS).sort())
+  it("as tools de retomada estão na lista de @plughub/schemas (as de prova entraram na PID-02)", () => {
+    for (const t of Object.keys(ENTRADAS)) expect(SESSION_BOUND_TOOLS).toContain(t)
   })
 
   it("o token de agente (agent_login) não passa por token de sessão — audience diferente", () => {

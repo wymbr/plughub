@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (16) — PID-02: a evidência de identidade só é gravada por quem verifica
+
+### 1 · O que estava aberto, medido antes
+
+O ADR (D4) define a evidência como tags escalares na journey,
+`core.journey.identity.<mecanismo>.{status, anchor_kind, verified_at, source, proven_in_session}`.
+Medido: **ninguém** as produzia e **ninguém** as lia — o namespace só existia no ADR. E qualquer
+escritor genérico as forjava. Numa sessão sintética, contra o mcp-server ainda antigo:
+
+| chamada | resultado |
+|---|---|
+| `context_set` com `core.journey.identity.otp.status = verified` | **gravou**, no hash da journey |
+| `/api/inject-context` com a mesma tag (token com `supervisionar`) | **200**, gravou |
+| `otp_verify` sem token de sessão | agiu (respondeu `no_challenge`) |
+
+Dano no dia: zero, porque nenhum consumidor lê a evidência. Fechar agora é o que torna a PID-03
+possível: ela vai passar a ler essas tags.
+
+### 2 · Uma regra, quatro funis
+
+A ficha falava só do `context_set`. Contados os escritores que aceitam tag escolhida pelo autor,
+são quatro funis:
+
+| funil | quem escreve por ele | agora |
+|---|---|---|
+| `writeContextTag` (mcp-server) | `context_set`, `/api/inject-context` | recusa: `reserved_tag` na tool, **403** na rota |
+| `ContextStore.set` (skill-flow-service; gêmeo no SDK) | `context_tags` de saída, `resolve`, `mention_commands` | recusa alto (o step falha nomeado) |
+| `write_context_tags` (Python) | gateway (webhook, `delegate`/`collect`), bridge, routing, ai-gateway | `raise`: recusa; `warn` (corpo externo): **descarta a reservada e loga** |
+
+A regra (`RESERVED_IDENTITY_PREFIXES`) mora em `@plughub/schemas/identity-evidence.ts`, com
+gêmeo em `py-contextstore`. O `core.*` que fluxos já escrevem (`core.workflow.*`) segue livre.
+⚠️ O `set_context` de `mention-commands` engolia a falha com `catch {}`; a recusa sumiria ali, e
+agora loga.
+
+### 3 · O produtor
+
+- **`writeIdentityEvidence`** (mcp-server, `journey.ts`): o único escritor, só no formato do D4,
+  na journey da sessão. `status` sempre; `verified_at`/`source`/`proven_in_session` só quando
+  `verified` — e **removidos** nos outros status, para um `failed` de hoje não conviver com o
+  `verified_at` de uma prova anterior.
+- **`otp_challenge`/`otp_verify` viraram tools ligadas à sessão** (`SESSION_BOUND_TOOLS`, PID-01):
+  a prova precisa saber em qual sessão ocorreu. O challenge grava `pending` (enviado) ou `not_run`
+  (recusado); o verify grava `verified`, `failed` ou `expired` (`no_challenge`, o desafio já
+  venceu). Posse provada sem onde registrar é erro nomeado (`evidence_write_failed`), não sucesso.
+- **Gateway**: o verify bem-sucedido devolve `provenance` da âncora, que vira o `source`.
+- **Mapa**: as tags têm cinco níveis e o mapa declara três (`escopo.domínio.campo`), então
+  `core.journey.identity.` entrou como família dinâmica nas quatro cópias (TS default, TS mapa,
+  constante e mapa Python) e no mapa **vivo** do config-api, atualizado pela API (seed-if-absent:
+  editar o arquivo não muda o que já foi semeado). As 98 folhas ficaram intactas.
+
+### 4 · O que esta fatia NÃO faz
+
+- Ninguém **lê** a evidência ainda: exigir, transportar e comparar com o `resume_requires` é
+  PID-03/PID-06/PID-11.
+- routing-engine, ai-gateway e config-api carregam o `py-contextstore` antigo até o próximo build.
+  Os três escrevem só tags fixas e não reservadas; o mapa vivo já tem o prefixo.
+- `expired` é inferido de `no_challenge`, que também cobre "nunca houve desafio".
+
+### 5 · Testes e probe
+
+- schemas: `identity-evidence.test.ts` (5) e a lista de tools ligadas à sessão; **316 verdes**.
+- mcp-server: `identity-evidence.test.ts` (12) — recusa sem gravar nos dois ramos, controle de
+  `core.workflow.*`, o formato do D4 com a prova removida no `failed`, o mapeamento de status, e
+  as tools de OTP gravando na sessão do token, recusando sem token e falhando nomeado sem Redis.
+  Os testes de OTP existentes passaram a mandar o token. **401 verdes**.
+- py-contextstore: três casos do funil (raise, warn, controle); **76 verdes**. channel-gateway
+  **926 verdes**. `tsc` limpo em mcp-server, skill-flow-engine, skill-flow-service e sdk.
+- **`probe_identity_evidence.sh`** — A: reserva e prefixo idênticos em TS, Python e no mapa vivo,
+  os quatro funis com guard, `writeIdentityEvidence` chamado só pelas tools de OTP; B: pelo `/sse`
+  e pela ponte REST vivos, `context_set` e `inject-context` recusam os dois ramos sem gravar,
+  controles gravam, `otp_verify` sem token recusa; C: o funil Python da imagem, com mutação que
+  derruba os dois casos e mantém o controle; D: a jornada no chat grava `verified` com
+  `proven_in_session` de uma sessão que existe, `verified_at`, `source: authoritative` e o escritor
+  `identity:otp`.
+- Censo de tools: `otp_challenge`/`otp_verify` saíram de dívida (27 com token, 46 em dívida).
+
+### 6 · Verificação
+
+Imagens: mcp-server-plughub, skill-flow-service, channel-gateway, orchestrator-bridge. Verdes ao
+vivo: `probe_identity_evidence`, `probe_mcp_tool_guard_census`, `probe_otp_gate`,
+`probe_context_stamp_parity`, `probe_contextstore_cadastro`, `probe_context_map_audit` (paridade
+vivo × TS), `probe_identity_route_credential`, `probe_identity_operator`,
+`probe_identity_provenance`, `probe_mcp_rest_surface`, `probe_session_bound_resume` (A–C; a
+jornada rodou verde dentro do D acima), `probe_gates_manifest_coverage`.
+
 ## 2026-09-13 (15) — PID-01: as tools de retomada só agem para uma sessão que o bridge ativou
 
 ### 1 · O que estava aberto, e a premissa que caiu

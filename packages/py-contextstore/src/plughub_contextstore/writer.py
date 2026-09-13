@@ -39,7 +39,7 @@ import json
 import logging
 from typing import Any, Awaitable, Callable, Mapping
 
-from . import resolve_context_store, stamp_context_entry
+from . import is_reserved_identity_tag, resolve_context_store, stamp_context_entry
 from .loader import get_context_map
 
 __all__ = ["ContextScopeRefused", "write_context_tags"]
@@ -49,6 +49,14 @@ logger = logging.getLogger(__name__)
 
 class ContextScopeRefused(Exception):
     """Tag de escopo não-sessão oferecida ao funil Python. Ver o cabeçalho do módulo."""
+
+
+class ContextTagReserved(Exception):
+    """PID-02 — tag de evidência de identidade oferecida a um funil genérico.
+
+    "Quem verifica grava" (ADR D6): a evidência só nasce no servidor, na mesma chamada que
+    verifica. Nenhum sítio Python verifica identidade hoje, então nenhum grava aqui.
+    """
 
 
 
@@ -137,6 +145,22 @@ async def write_context_tags(
         chamador externo, e hoje ela É gravada no hash da sessão. Este ramo preserva isso e
         **diz que está errado** em vez de fingir que não. Dívida: ALW-03.
     """
+    # PID-02 — a reserva roda ANTES de tudo, e nas DUAS posturas: `warn` preserva o
+    # comportamento de chamador externo para escopo, mas não existe comportamento legítimo
+    # a preservar em gravar "verificado" pelo corpo de um webhook.
+    reservadas = sorted(t for t in tags if is_reserved_identity_tag(t))
+    if reservadas and on_foreign_scope == "raise":
+        raise ContextTagReserved(
+            f"tags de evidencia de identidade nao se gravam por funil generico: {reservadas} "
+            f"— quem verifica grava (ADR adr-identity-door-evidence D6)"
+        )
+    if reservadas:
+        logger.error(
+            "[ctx-writer] tenant=%s session=%s: tags de evidencia de identidade DESCARTADAS "
+            "(so o escritor que verifica grava — ADR D6; chegaram por corpo externo): %s",
+            tenant_id, session_id, reservadas,
+        )
+        tags = {t: v for t, v in tags.items() if not is_reserved_identity_tag(t)}
     fora = [t for t in tags if resolve_context_store(t) != "session"]
     if fora and on_foreign_scope == "raise":
         raise ContextScopeRefused(

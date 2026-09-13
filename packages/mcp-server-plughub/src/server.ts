@@ -43,7 +43,7 @@ import type { AgentEventDeps }      from "./tools/agent-events"
 // `resolveJourneyRoot` + `journeyCtxKey` entram aqui pelo snapshot de PERSISTÊNCIA
 // (F5): a raiz canônica do processo tem de ser resolvida pela MESMA via do
 // `writeContextTag` e do `journey_merge`, senão o contexto compartilhado se parte.
-import { registerJourneyTools, writeContextTag, resolveJourneyRoot, journeyCtxKey } from "./tools/journey"
+import { registerJourneyTools, writeContextTag, resolveJourneyRoot, journeyCtxKey, ReservedContextTagError } from "./tools/journey"
 import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
 // Dry-run do editor de DialogForm: a MESMA função que o `form_get` roda.
@@ -179,6 +179,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
     channelGatewayUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
     tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     channelGatewayServiceToken: process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"] ?? "",   // IDN-06
+    redis,   // PID-02 — onde otp_* gravam a evidência
   }
 
   const dialogDeps: DialogDeps = {
@@ -1443,6 +1444,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
       tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
       channelGatewayServiceToken: process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"] ?? "",
+      redis,   // PID-02 — onde otp_* gravam a evidência
     })
     registerDialogTools(mcpServer, {
       dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",
@@ -2113,7 +2115,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // faria o contexto do processo evaporar em 4h e não ser visto pelos outros contatos.
       const routed = await writeContextTag(redis, tenantId, sessionId as string, key as string, entry)
       res.json({ ok: true, key, session_id: sessionId, tenant_id: tenantId, scope: routed.scope, journey_root: routed.journeyRoot })
-    } catch {
+    } catch (err) {
+      if (err instanceof ReservedContextTagError) {
+        // PID-02: nem o supervisor grava evidência de identidade — quem verifica grava.
+        console.warn(`[inject-context] RECUSADO: ${err.message}`)
+        res.status(403).json({ error: "reserved_tag", message: err.message })
+        return
+      }
       res.status(500).json({ error: "inject_failed" })
     }
   })

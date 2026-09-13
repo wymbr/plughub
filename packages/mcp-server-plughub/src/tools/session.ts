@@ -45,7 +45,7 @@ import {
 }                             from "../lib/participant-role"
 import { readRoutingRefPool } from "../lib/routing-ref"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
-import { writeContextTag } from "./journey"
+import { writeContextTag, ReservedContextTagError } from "./journey"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -81,6 +81,11 @@ function handleCaughtError(e: unknown): ToolResult {
   }
   if (e instanceof InvalidTokenError) {
     return mcpError("invalid_token", e.message)
+  }
+  if (e instanceof ReservedContextTagError) {
+    // PID-02: nomeado, para o autor do fluxo saber que a recusa é de regra, não de falha.
+    console.warn(`[context_set] RECUSADO: ${e.message}`)
+    return mcpError("reserved_tag", e.message)
   }
   return mcpError("internal_error", e instanceof Error ? e.message : String(e))
 }

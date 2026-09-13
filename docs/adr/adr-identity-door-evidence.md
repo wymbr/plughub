@@ -186,6 +186,13 @@ continuação direta, dentro de uma idade máxima.
 - A evidência é gravada **no servidor, na mesma chamada que verifica** (`otp_verify` escreve as
   próprias tags). `context_set` **recusa** `core.journey.identity.*` e `core.identity.*` —
   medido: zero fluxos quebram (recusar `core.*` inteiro quebraria os dois de (5)).
+  *(Implementado em 2026-09-13, PID-02. Três coisas que o ADR não dizia: **(1)** a recusa não
+  cabe só no `context_set` — medido, são QUATRO funis que aceitam tag escolhida pelo autor
+  (`context_set`/`inject-context`, o `ContextStore` do engine, o `write_context_tags` Python), e os
+  quatro recusam; **(2)** `otp_challenge`/`otp_verify` precisam do token ligado à sessão da
+  PID-01, porque a prova grava `proven_in_session` e a journey da sessão que verificou; **(3)** as
+  tags têm cinco níveis e o mapa só declara três, então entram como família dinâmica
+  (`core.journey.identity.`), como `core.segment.`.)*
 - `pending_workflow_get` e `workflow_resume` passam a exigir **`session_token` assinado**. Receber
   a sessão como argumento seria o chamador declarando a própria autorização (o defeito da CAP-01).
   *(Implementado em 2026-09-13, PID-01, com uma correção de premissa: o `session_token` do

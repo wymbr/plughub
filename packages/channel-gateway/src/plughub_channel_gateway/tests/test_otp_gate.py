@@ -97,6 +97,7 @@ class TestVerifyAmarradoAoCliente:
         a, _r = _adapter({("cus_a", "phone", PHONE): "authoritative"})
         code = (await a.otp_challenge("t", "cus_a", "phone", PHONE))["dev_code"]
         res = await a.otp_verify("t", "cus_a", "phone", PHONE, code)
-        assert res == {"verified": True, "verification_class": "possessed"}
+        # PID-02: `provenance` viaja para a evidência (`core.journey.identity.otp.source`).
+        assert res == {"verified": True, "verification_class": "possessed", "provenance": "authoritative"}
         a._identity.attach_anchor.assert_awaited_once()
         assert a._identity.attach_anchor.await_args.args[:4] == ("t", "cus_a", "phone", PHONE)

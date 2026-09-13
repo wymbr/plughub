@@ -776,6 +776,23 @@ export {
   injectSessionToken,
 } from "./session-bound-tools"
 
+// ── PID-02 — evidência de identidade (reservada; quem verifica grava) ──────────
+export {
+  RESERVED_IDENTITY_PREFIXES,
+  isReservedIdentityTag,
+  IDENTITY_EVIDENCE_STATUSES,
+  IDENTITY_EVIDENCE_FIELDS,
+  IDENTITY_MECHANISMS,
+  identityEvidenceTag,
+  PROOF_FIELDS,
+} from "./identity-evidence"
+export type {
+  IdentityEvidenceStatus,
+  IdentityEvidenceField,
+  IdentityMechanism,
+  IdentityEvidenceRecord,
+} from "./identity-evidence"
+
 // ── Session Signals — survey grão session/workflow/journey (F10) ──────────────
 export {
   SignalGrainSchema,

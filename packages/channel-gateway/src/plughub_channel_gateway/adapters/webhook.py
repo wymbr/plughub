@@ -2818,6 +2818,10 @@ class WebhookAdapter(ChannelAdapter):
                 provenance="declared",
             )
             res["verification_class"] = "possessed"
+            # PID-02: a evidência grava `source` = procedência da âncora (ADR D4). Quem a
+            # conhece é o cadastro, e é aqui que ele responde — lida DEPOIS do attach, que
+            # preserva a procedência já registrada.
+            res["provenance"] = await self._identity.anchor_provenance(tenant_id, customer_id, kind, value)
         return res
 
     async def attach_customer_key(

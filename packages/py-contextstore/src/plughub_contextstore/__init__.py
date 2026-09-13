@@ -55,6 +55,8 @@ from typing import Any, Literal, Mapping, MutableMapping, NamedTuple, Sequence
 __all__ = [
     "CONTEXT_ROUTE_PREFIXES",
     "DEFAULT_DYNAMIC_PREFIXES",
+    "RESERVED_IDENTITY_PREFIXES",
+    "is_reserved_identity_tag",
     "ContextTagIndex",
     "ContextTagResolution",
     "build_context_tag_index",
@@ -69,7 +71,16 @@ ContextTagOrigin = Literal["canonical", "alias", "dynamic", "unknown"]
 #: Espelha o `.default()` de `ContextMapSchema.dynamic_prefixes`. Existe como constante
 #: porque `dynamic_prefixes` ausente é mapa VÁLIDO no Zod, e cair em lista vazia faria
 #: toda tag `segment.*` virar `unknown`.
-DEFAULT_DYNAMIC_PREFIXES: Sequence[str] = ("agent.", "segment.", "core.segment.")
+DEFAULT_DYNAMIC_PREFIXES: Sequence[str] = ("agent.", "segment.", "core.segment.", "core.journey.identity.")
+
+#: PID-02 — evidência de identidade: só o escritor do servidor que VERIFICA grava aqui.
+#: Espelho de `RESERVED_IDENTITY_PREFIXES` em `@plughub/schemas/identity-evidence.ts`.
+RESERVED_IDENTITY_PREFIXES: Sequence[str] = ("core.identity.", "core.journey.identity.")
+
+
+def is_reserved_identity_tag(tag: str) -> bool:
+    """Tag de evidência de identidade — nenhum funil genérico a grava (ADR D6)."""
+    return any(tag.startswith(p) for p in RESERVED_IDENTITY_PREFIXES)
 
 #: Rotas DECLARADAS de retenção. Espelha `CONTEXT_ROUTE_PREFIXES` do schemas — a ordem
 #: importa e é a de lá (o primeiro prefixo que casar vence).

@@ -50,7 +50,11 @@
  */
 import { z }             from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { JourneyMergedEventSchema, stampContextEntry, type ContextEntryStamp } from "@plughub/schemas"
+import {
+  JourneyMergedEventSchema, stampContextEntry, type ContextEntryStamp,
+  isReservedIdentityTag, identityEvidenceTag, IDENTITY_EVIDENCE_FIELDS, PROOF_FIELDS,
+  type IdentityMechanism, type IdentityEvidenceRecord,
+} from "@plughub/schemas"
 import { getContextMap } from "../lib/context-map"
 import type { RedisClient }   from "../infra/redis"
 import type { KafkaProducer } from "../infra/kafka"
@@ -228,6 +232,72 @@ function warnUnregisteredTag(
  * config-api, o que é uma troca pior que carimbar com o mapa do código.
  */
 export async function writeContextTag(
+  redis:     RedisClient,
+  tenantId:  string,
+  sessionId: string,
+  tag:       string,
+  entry:     Record<string, unknown>,
+): Promise<{ scope: "journey" | "session"; journeyRoot?: string; atributo: ContextEntryStamp }> {
+  // PID-02 — quem verifica grava (ADR D6). Este funil é o de TODO chamador genérico
+  // (`context_set`, `/api/inject-context`), e a evidência de identidade não passa por ele:
+  // o único escritor é `writeIdentityEvidence`, chamado por quem acabou de verificar.
+  if (isReservedIdentityTag(tag)) throw new ReservedContextTagError(tag)
+  return writeStampedTag(redis, tenantId, sessionId, tag, entry)
+}
+
+/** PID-02 — tag de evidência de identidade oferecida a um escritor genérico. */
+export class ReservedContextTagError extends Error {
+  constructor(readonly tag: string) {
+    super(`tag reservada à evidência de identidade: ${tag} — quem verifica grava (ADR D6)`)
+    this.name = "ReservedContextTagError"
+  }
+}
+
+/**
+ * PID-02 — o ÚNICO escritor de `core.journey.identity.<mecanismo>.*`, e só no formato do D4.
+ *
+ * Grava na journey da sessão que VERIFICOU (mesmo roteamento do funil). `status` sempre;
+ * os campos da prova só quando `verified` — e REMOVIDOS nos outros status, para que um
+ * `failed` de hoje não conviva com o `verified_at` de uma prova anterior. É o próprio
+ * mecanismo quem chama, na mesma chamada que verifica: nenhum input do fluxo chega aqui.
+ */
+export async function writeIdentityEvidence(
+  redis:     RedisClient,
+  tenantId:  string,
+  sessionId: string,
+  mechanism: IdentityMechanism,
+  record:    IdentityEvidenceRecord,
+): Promise<{ journeyRoot?: string; written: string[]; removed: string[] }> {
+  const agora = new Date().toISOString()
+  const campos: Array<[string, string]> = [["status", record.status]]
+  if (record.anchor_kind) campos.push(["anchor_kind", record.anchor_kind])
+  if (record.status === "verified") {
+    for (const f of PROOF_FIELDS) {
+      const v = record[f as keyof IdentityEvidenceRecord]
+      if (v) campos.push([f, v])
+    }
+  }
+  const written: string[] = []
+  let journeyRoot: string | undefined
+  for (const [campo, valor] of campos) {
+    if (!(IDENTITY_EVIDENCE_FIELDS as readonly string[]).includes(campo)) continue
+    const tag = identityEvidenceTag(mechanism, campo as (typeof IDENTITY_EVIDENCE_FIELDS)[number])
+    const r = await writeStampedTag(redis, tenantId, sessionId, tag, {
+      value: valor, confidence: 1.0, source: `identity:${mechanism}`, visibility: "agents_only", updated_at: agora,
+    })
+    journeyRoot = r.journeyRoot
+    written.push(tag)
+  }
+  const removed: string[] = []
+  if (record.status !== "verified" && journeyRoot) {
+    const tags = PROOF_FIELDS.map(f => identityEvidenceTag(mechanism, f))
+    await redis.hdel(journeyCtxKey(tenantId, journeyRoot), ...tags)
+    removed.push(...tags)
+  }
+  return { ...(journeyRoot ? { journeyRoot } : {}), written, removed }
+}
+
+async function writeStampedTag(
   redis:     RedisClient,
   tenantId:  string,
   sessionId: string,

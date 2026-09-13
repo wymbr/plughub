@@ -42,7 +42,7 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
     # este prefixo ela deixaria de ser FAMÍLIA dinâmica e passaria a contar como
     # `unknown`, inflando justamente o número que autoriza a V4 com um campo que
     # é impossível declarar folha a folha.
-    "dynamic_prefixes": ["agent.", "segment.", "core.segment."],
+    "dynamic_prefixes": ["agent.", "segment.", "core.segment.", "core.journey.identity."],
     "contexto": {
         "core": {
             "contact": {

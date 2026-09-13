@@ -39,6 +39,7 @@ import type {
   ContextGapsReport,
   ContextMergeStrategy,
 } from "@plughub/schemas"
+import { isReservedIdentityTag } from "@plughub/schemas"
 
 // ── namespaces que vivem no hash de longa duração (do CLIENTE) ────────────────
 //
@@ -136,6 +137,12 @@ export class ContextStore {
     merge:      ContextMergeStrategy = "highest_confidence",
     customerId?: string,
   ): Promise<void> {
+    // PID-02 — quem verifica grava (ADR D6). Este é o escritor do ENGINE, e a tag aqui vem
+    // do YAML (`context_tags`, `resolve`, `mention_commands`): evidência de identidade não
+    // passa por ele. Recusa alto — step que tenta vira on_failure com o motivo nomeado.
+    if (isReservedIdentityTag(tag)) {
+      throw new Error(`[context-store] tag reservada à evidência de identidade: ${tag} — quem verifica grava (ADR D6)`)
+    }
     const key      = this.isLongTtl(tag) && customerId
       ? this.customerKey(customerId)
       : this.sessionKey(sessionId)

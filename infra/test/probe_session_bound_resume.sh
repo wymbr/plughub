@@ -93,7 +93,7 @@ assert s.count(alvo) == 1, "ancora da mutacao"
 open(sys.argv[2], "w", encoding="utf-8").write(s.replace(alvo, "const quem = { caller: { tenant_id: '' } } as any", 1))
 EOF
 CM=$(censo "$TMP"); rm -f "$TMP"
-[ "$(jexpr "$CM" "d['gateadas'] == ['pending_workflow_get'] and d['lista'] != d['gateadas']")" = "True" ] \
+[ "$(jexpr "$CM" "'workflow_resume' not in d['gateadas'] and d['lista'] != d['gateadas']")" = "True" ] \
   && ok "mutação (portão removido de workflow_resume) acusada" \
   || falha "mutação do censo não acusou: $CM"
 

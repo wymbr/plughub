@@ -292,6 +292,11 @@ probe_identity_route_credential.sh
 # transporte MCP vivo (anonimo, token de agente e tenant alheio recusam; controles), envs,
 # e a jornada ponta a ponta sem recusa nem falha de emissao.
 probe_session_bound_resume.sh
+# PID-02. A evidencia de identidade era forjavel: context_set e inject-context gravavam
+# `core.journey.identity.otp.status = verified`, e nada a produzia de verdade. Uma regra
+# (TS, Python e mapa vivo), os quatro funis genericos com o guard, recusa viva nos dois
+# escritores TS, funil Python na imagem com mutacao, e o OTP da jornada gravando a prova.
+probe_identity_evidence.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

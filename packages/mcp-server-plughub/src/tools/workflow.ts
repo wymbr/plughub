@@ -28,6 +28,9 @@ import { z }              from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { withGuard }      from "../infra/tool-guard"
 import { verifySessionBoundToken, type SessionBoundPayload } from "../infra/jwt"
+import type { RedisClient } from "../infra/redis"
+import { writeIdentityEvidence } from "./journey"
+import type { IdentityEvidenceRecord } from "@plughub/schemas"
 
 /**
  * PID-01 — as tools de retomada exigem o token LIGADO À SESSÃO (ver `infra/jwt.ts`).
@@ -72,6 +75,20 @@ export interface WorkflowDeps {
   // (= PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN lá). Vazio ⇒ o gateway recusa (401), e
   // as tools dizem isso em vez de responder "sem pendência".
   channelGatewayServiceToken?: string
+  /**
+   * PID-02 — onde `otp_challenge`/`otp_verify` gravam a EVIDÊNCIA (journey da sessão que
+   * verificou). Ausente ⇒ o verify devolve `evidence_write_failed`: posse provada sem
+   * registro é a prova que ninguém consegue consultar, e isso não pode parecer sucesso.
+   */
+  redis?: RedisClient
+}
+
+/** PID-02 — o resultado do verify do gateway, na linguagem da evidência (ADR D4). */
+export function otpEvidenceStatus(body: { verified?: boolean; reason?: string }): IdentityEvidenceRecord["status"] {
+  if (body.verified === true) return "verified"
+  // `no_challenge` = o desafio não existe mais; o caso dominante é o TTL ter vencido.
+  if (body.reason === "no_challenge") return "expired"
+  return "failed"
 }
 
 /** Headers das rotas `/identity/*` e `/pending/*` do gateway (IDN-06). */
@@ -667,6 +684,11 @@ export function registerWorkflowTools(
     }
   }
 
+  async function _gravarEvidencia(caller: SessionBoundPayload, record: IdentityEvidenceRecord) {
+    if (!deps.redis) throw new Error("WorkflowDeps.redis ausente — sem onde gravar a evidência")
+    await writeIdentityEvidence(deps.redis, caller.tenant_id, caller.session_id, "otp", record)
+  }
+
   server.tool(
     "otp_challenge",
     "OTP de posse de canal (step-up OPCIONAL). Emite um código para uma âncora " +
@@ -683,6 +705,9 @@ export function registerWorkflowTools(
       customer_id: z.string().min(1).describe("customer_id nativo (customer_resolve) — o MESMO que irá ao otp_verify."),
       kind:        _kindSchema.describe("Tipo da âncora a desafiar. Só phone e email admitem OTP."),
       value:       z.string().min(1).describe("Valor da âncora (telefone/e-mail)."),
+      session_token: z.string().optional().describe(
+        "PID-02 — token LIGADO À SESSÃO, injetado pelo skill-flow-service. Não declare no YAML."
+      ),
     } as any,
     withGuard("otp_challenge", async (input: Record<string, unknown>) => {
       const p = z.object({
@@ -690,11 +715,19 @@ export function registerWorkflowTools(
         kind: _kindSchema, value: z.string().min(1),
       }).safeParse(input)
       if (!p.success) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "invalid_input", message: p.error.message }) }] }
-      const res = await _postIdentity("/v1/channels/webhook/identity/otp/challenge", p.data, "otp_challenge_failed")
+      const quem = sessionCaller("otp_challenge", input)
+      if ("refused" in quem) return quem.refused
+      const data = { ...p.data, tenant_id: quem.caller.tenant_id }
+      const res = await _postIdentity("/v1/channels/webhook/identity/otp/challenge", data, "otp_challenge_failed")
       if ("isError" in res && res.isError) return res
       // PID-10: `sent: false` é RECUSA, não resposta. Devolvê-la como sucesso levava o
       // skill ao passo seguinte — pedir ao cliente um código que ninguém mandou.
       const body = JSON.parse(res.content[0]!.text) as { sent?: boolean; reason?: string }
+      // PID-02: o mecanismo SEMPRE escreve o status (D4) — `pending` quando o código saiu,
+      // `not_run` quando a prova nem começou. Falhar aqui só loga: o verify escreve de novo.
+      await _gravarEvidencia(quem.caller, {
+        status: body.sent === true ? "pending" : "not_run", anchor_kind: p.data.kind,
+      }).catch(err => console.error(`[otp_challenge] evidência NÃO gravada session=${quem.caller.session_id}: ${String(err)}`))
       if (body.sent !== true) {
         return { isError: true as const, content: [{ type: "text" as const, text: JSON.stringify({
           error: "otp_not_sent", reason: body.reason ?? "unknown",
@@ -715,6 +748,9 @@ export function registerWorkflowTools(
       kind:        _kindSchema,
       value:       z.string().min(1),
       code:        z.string().min(1).describe("Código informado pelo cliente."),
+      session_token: z.string().optional().describe(
+        "PID-02 — token LIGADO À SESSÃO, injetado pelo skill-flow-service. Não declare no YAML."
+      ),
     } as any,
     withGuard("otp_verify", async (input: Record<string, unknown>) => {
       const p = z.object({
@@ -722,7 +758,31 @@ export function registerWorkflowTools(
         kind: _kindSchema, value: z.string().min(1), code: z.string().min(1),
       }).safeParse(input)
       if (!p.success) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "invalid_input", message: p.error.message }) }] }
-      return _postIdentity("/v1/channels/webhook/identity/otp/verify", p.data, "otp_verify_failed")
+      const quem = sessionCaller("otp_verify", input)
+      if ("refused" in quem) return quem.refused
+      const data = { ...p.data, tenant_id: quem.caller.tenant_id }
+      const res = await _postIdentity("/v1/channels/webhook/identity/otp/verify", data, "otp_verify_failed")
+      if ("isError" in res && res.isError) return res
+      const body = JSON.parse(res.content[0]!.text) as { verified?: boolean; reason?: string; provenance?: string | null }
+      const status = otpEvidenceStatus(body)
+      // PID-02 — quem verifica grava (D6), na mesma chamada, no servidor. O fluxo não
+      // escreve nada disto: `context_set` recusa o prefixo.
+      try {
+        await _gravarEvidencia(quem.caller, {
+          status, anchor_kind: p.data.kind,
+          ...(status === "verified" ? {
+            verified_at:       new Date().toISOString(),
+            proven_in_session: quem.caller.session_id,
+            ...(body.provenance ? { source: body.provenance } : {}),
+          } : {}),
+        })
+      } catch (err) {
+        console.error(`[otp_verify] evidência NÃO gravada session=${quem.caller.session_id} status=${status}: ${String(err)}`)
+        return { isError: true as const, content: [{ type: "text" as const, text: JSON.stringify({
+          error: "evidence_write_failed", status,
+        }) }] }
+      }
+      return res
     }),
   )
 

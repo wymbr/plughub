@@ -112,8 +112,10 @@ export async function handleMentionCommand(
             source:     `mention_command:${commandName}`,
             visibility: "agents_only",
           })
-        } catch {
-          // Non-fatal — ContextStore write failure never aborts mention handling
+        } catch (err) {
+          // Non-fatal — ContextStore write failure never aborts mention handling. Mas NUNCA
+          // mudo (PID-02): a recusa de tag reservada chegava aqui e sumia sem rastro.
+          console.error(`[mention-commands] set_context ${tag} NÃO gravado: ${String(err)}`)
         }
       }
     }

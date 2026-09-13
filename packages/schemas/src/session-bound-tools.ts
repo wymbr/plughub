@@ -11,7 +11,9 @@
  * REMOVIDO, e a tool recusa com erro nomeado — nunca com o valor que o YAML pôs.
  */
 
-export const SESSION_BOUND_TOOLS: readonly string[] = ["pending_workflow_get", "workflow_resume"]
+// PID-02: otp_challenge/otp_verify entram porque a prova grava `proven_in_session` e a
+// journey da SESSÃO que verificou — sem o token, a tool não sabe onde gravar.
+export const SESSION_BOUND_TOOLS: readonly string[] = ["pending_workflow_get", "workflow_resume", "otp_challenge", "otp_verify"]
 
 export const SESSION_BOUND_SERVER = "mcp-server-plughub"
 

@@ -161,8 +161,8 @@ mailing_add|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 
 mailing_unsubscribe|nenhuma|divida|opt-out de contato sem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 message_send|token|ok|verifica session_token assinado
 notification_send|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
-otp_challenge|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
-otp_verify|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
+otp_challenge|token+guard|ok|verifica o token LIGADO A SESSAO — a prova grava a evidencia na journey da sessao que verificou (PID-02, 2026-09-13)
+otp_verify|token+guard|ok|verifica o token LIGADO A SESSAO — a prova grava a evidencia na journey da sessao que verificou (PID-02, 2026-09-13)
 outbound_contact_request|guard|divida|tem injection guard, nao tem credencial — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 pending_workflow_get|token+guard|ok|verifica o token LIGADO A SESSAO emitido so pelo mcp-server a pedido do bridge (PID-01, 2026-09-13)
 pool_promote|nenhuma|divida|PROMOVE deploy; o cabecalho do deploy.ts afirma o oposto — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
