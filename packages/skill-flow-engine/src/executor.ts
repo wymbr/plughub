@@ -229,6 +229,8 @@ export interface StepContext {
     customer_resumable?: boolean
     /** How a discovered cross-channel pending is offered on reconnect. */
     resume_policy?:      "offer" | "auto"
+    /** PID-06 — exigência de retomada JÁ RESOLVIDA (lista de mecanismos). Ausente = sem exigência. */
+    resume_requires?:    string[]
   }): Promise<{ send_at: string; expires_at: string }>
 
   /**
@@ -253,6 +255,8 @@ export interface StepContext {
     customer_resumable?: boolean
     /** How a discovered cross-channel pending is offered on reconnect. */
     resume_policy?:      "offer" | "auto"
+    /** PID-06 — exigência de retomada JÁ RESOLVIDA (lista de mecanismos). Ausente = sem exigência. */
+    resume_requires?:    string[]
     /** Camada B (pull direcionado) — reserva do work item ao recurso + transbordo. */
     assigned_to?:              string
     fallback_to_pool_after_s?: number

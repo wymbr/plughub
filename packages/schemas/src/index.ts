@@ -792,6 +792,19 @@ export type {
   IdentityMechanism,
   IdentityEvidenceRecord,
 } from "./identity-evidence"
+export {
+  ResumeRequirementSchema,
+  ResumeRequiresFieldSchema,
+  RESUME_REQUIREMENT_REF,
+  RESUME_EVIDENCE_MAX_AGE_S,
+  judgeResumeEvidence,
+  judgeResumeRequirementSteps,
+} from "./resume-requirement"
+export type {
+  ResumeRequirement,
+  ResumeEvidenceMiss,
+  ResumeRequirementViolation,
+} from "./resume-requirement"
 
 // ── Session Signals — survey grão session/workflow/journey (F10) ──────────────
 export {

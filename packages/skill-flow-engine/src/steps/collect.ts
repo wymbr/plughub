@@ -29,6 +29,7 @@ import { randomUUID }     from "crypto"
 import type { CollectStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { resolveInputMap, resolveInputValue } from "../interpolate"
+import { resolveResumeRequirement } from "./resume-requirement"
 
 export async function executeCollect(
   step: CollectStep,
@@ -104,6 +105,18 @@ export async function executeCollect(
   // ── Already suspended (idempotency check) ────────────────────────────────
   if (ctx.state.results[sentinelKey] === "collected") {
     return { next_step_id: "__suspended__", transition_reason: "suspended" }
+  }
+
+  // ── PID-06 — exigência de retomada, resolvida ANTES do token ────────────────
+  const exigencia = await resolveResumeRequirement(step, ctx)
+  if (exigencia.kind === "error") {
+    console.error(exigencia.message)
+    return {
+      next_step_id:      step.on_timeout.next,
+      output_as:         step.output_as,
+      output_value:      { error: "resume_requires_unresolved" },
+      transition_reason: "on_failure",
+    }
   }
 
   // ── Generate collect token ─────────────────────────────────────────────
@@ -191,6 +204,7 @@ export async function executeCollect(
       // Identity Resolver (nível b) — forward retomada policy.
       customer_resumable: step.customer_resumable,
       resume_policy:      step.resume_policy,
+      ...(exigencia.kind === "ok" ? { resume_requires: exigencia.value } : {}),
     })
     sendAt    = result.send_at
     expiresAt = result.expires_at

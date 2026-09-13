@@ -31,6 +31,7 @@ import { verifySessionBoundToken, type SessionBoundPayload } from "../infra/jwt"
 import type { RedisClient } from "../infra/redis"
 import { writeIdentityEvidence, adoptNewerEvidence, journeyRootOfSession, journeyCtxKey } from "./journey"
 import type { IdentityEvidenceRecord } from "@plughub/schemas"
+import { judgeResumeEvidence, type ResumeEvidenceMiss } from "@plughub/schemas"
 
 /**
  * PID-01 — as tools de retomada exigem o token LIGADO À SESSÃO (ver `infra/jwt.ts`).
@@ -114,6 +115,83 @@ export async function transportEvidenceOnResume(
   const transported = fromRoot === toRoot ? [] :
     await adoptNewerEvidence(redis, journeyCtxKey(tenantId, fromRoot), journeyCtxKey(tenantId, toRoot))
   return { target, from_root: fromRoot, to_root: toRoot, transported }
+}
+
+type PendingView = Record<string, unknown> & { resume_requires?: unknown }
+
+/**
+ * PID-06 — o `resume_token` só sai para quem provou NESTA sessão o que a pendência exige
+ * (ADR D5/D6). Até aqui a liberação tinha um portão só, e fixo: a âncora `possessed`, que é
+ * posse DURÁVEL no cadastro — medido, uma sessão que nunca fez OTP recebia o token de um
+ * cliente cujo celular alguém provou antes (vetor (4)).
+ *
+ * Pendência sem exigência (`resume_requires` ausente ou `[]`) passa como sempre. Com
+ * exigência, a evidência da journey da sessão chamadora é julgada por
+ * `judgeResumeEvidence`; a que não satisfaz é RETIDA. Se nenhuma sobra, a resposta tem a
+ * forma do portão de posse (`verification_required`), que os intakes já sabem tratar —
+ * oferecer OTP e perguntar de novo — e diz quais mecanismos faltam.
+ *
+ * Sem Redis não há como ler a evidência: pendência com exigência é retida (falha fechada).
+ */
+export async function withholdUnprovenResume(
+  redis:     RedisClient | undefined,
+  tenantId:  string,
+  sessionId: string,
+  data:      { pendings?: PendingView[] } & Record<string, unknown>,
+  nowMs = Date.now(),
+): Promise<Record<string, unknown>> {
+  const lista: PendingView[] = Array.isArray(data.pendings)
+    ? data.pendings
+    : (data["resume_token"] ? [data as PendingView] : [])
+  const exige = (p: PendingView) => Array.isArray(p.resume_requires) && p.resume_requires.length > 0
+  if (!lista.some(exige)) return data
+
+  let hash: Record<string, string> = {}
+  if (redis) {
+    const raiz = await journeyRootOfSession(redis, tenantId, sessionId)
+    hash = (await redis.hgetall(journeyCtxKey(tenantId, raiz))) ?? {}
+  } else {
+    console.error(`[pending_workflow_get] PID-06 sem Redis: pendências com exigência RETIDAS session=${sessionId}`)
+  }
+
+  const liberadas: PendingView[] = []
+  const faltas: ResumeEvidenceMiss[] = []
+  for (const p of lista) {
+    if (!exige(p)) { liberadas.push(p); continue }
+    const j = redis
+      ? judgeResumeEvidence(p.resume_requires as string[], hash, { sessionId, nowMs })
+      : { satisfied: false, missing: (p.resume_requires as string[]).map(m => ({ mechanism: m, reason: "not_verified" as const })) }
+    if (j.satisfied) liberadas.push(p)
+    else faltas.push(...j.missing)
+  }
+  const retidas = lista.length - liberadas.length
+  if (retidas === 0) return data
+  console.warn(
+    `[pending_workflow_get] PID-06 token RETIDO session=${sessionId} retidas=${retidas} ` +
+    `faltas=${faltas.map(f => `${f.mechanism}:${f.reason}`).join(",")}`,
+  )
+  const identity_required = [...new Set(faltas.map(f => f.mechanism))]
+  if (liberadas.length === 0) {
+    return {
+      found: false, count: 0,
+      ...(data["customer_id"] ? { customer_id: data["customer_id"] } : {}),
+      verification_required: true,
+      identity_required,
+    }
+  }
+  if (!Array.isArray(data.pendings)) return { ...data, withheld: retidas }
+  const primeira = liberadas[0]!
+  return {
+    ...data,
+    found: true, count: liberadas.length, pendings: liberadas,
+    resume_token:    primeira["resume_token"],
+    pool:            primeira["pool"],
+    policy:          primeira["policy"],
+    context:         primeira["context_preview"],
+    root_session_id: primeira["root_session_id"],
+    resume_requires: primeira["resume_requires"],
+    withheld:        retidas,
+  }
 }
 
 /** PID-02 — o resultado do verify do gateway, na linguagem da evidência (ADR D4). */
@@ -593,10 +671,13 @@ export function registerWorkflowTools(
           const pRef = credentialRefused(pRes, "pending_workflow_get")
           if (pRef) return pRef
           const pdata = pRes.ok
-            ? await pRes.json() as { found: boolean; count: number; pendings: unknown[] }
+            ? await pRes.json() as { found: boolean; count: number; pendings: PendingView[] }
             : { found: false, count: 0, pendings: [] }
+          const liberado = await withholdUnprovenResume(
+            deps.redis, tenant_id, quem.caller.session_id, { customer_id: ref.customer_id, ...pdata },
+          )
           return {
-            content: [{ type: "text" as const, text: JSON.stringify({ customer_id: ref.customer_id, ...pdata }) }],
+            content: [{ type: "text" as const, text: JSON.stringify(liberado) }],
           }
         } catch {
           return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
@@ -624,8 +705,11 @@ export function registerWorkflowTools(
       if (!res.ok) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
       }
-      const data = await res.json() as { found: boolean; resume_token?: string; context?: Record<string, string> }
-      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
+      const data = await res.json() as { found: boolean; resume_token?: string; context?: Record<string, string>; resume_requires?: unknown }
+      // PID-06 — a porta legada entrega o MESMO token; sem o mesmo julgamento ela seria o
+      // caminho em volta da exigência.
+      const liberado = await withholdUnprovenResume(deps.redis, tenant_id, quem.caller.session_id, data)
+      return { content: [{ type: "text" as const, text: JSON.stringify(liberado) }] }
     }),
   )
 

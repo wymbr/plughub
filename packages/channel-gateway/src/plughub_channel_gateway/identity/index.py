@@ -105,6 +105,11 @@ class PendingEntry:
     # O intake que reconecta lê isto (via pending_workflow_get) para comandar o
     # journey_merge (unificar a journey do novo contato com a do processo pendente).
     root_session_id: str = ""
+    # PID-06 — o que a RETOMADA exige de identidade (lista de mecanismos), declarado pelo
+    # step que criou a pendência. `None` = o step não declarou; `[]` = declarou que não
+    # exige. Quem confere é o `pending_workflow_get` (mcp-server), contra a evidência DA
+    # SESSÃO que pede o token — nunca a posse durável do cadastro.
+    resume_requires: list[str] | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

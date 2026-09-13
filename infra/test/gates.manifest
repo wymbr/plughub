@@ -307,6 +307,11 @@ probe_evidence_transport.sh
 # manda: slots como `system`). O deploy so tinha portao por prefixo, em config.resources. Censo
 # com mutacoes sobre copia, e ao vivo: devops grava com o autor do token, tenant alheio recusado.
 probe_deploy_write_principal.sh
+# PID-06. O resume_token saia para qualquer sessao cuja ancora estivesse `possessed` (posse
+# duravel): uma sessao que nunca fez OTP levou o token de um cliente provado por outra. Censo da
+# cadeia inteira com mutacoes sobre copia, piso no set-next ao vivo, liberacao real com OTP (a
+# sessao que provou leva, a outra recebe verification_required) e a jornada do limite.
+probe_resume_requirement.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,
@@ -638,9 +643,10 @@ smoke_wrapup_slot_handoff.sh
 # tranquilidade da decisao (mesma separacao de `_SCOPE_EXEMPT` x `_SCOPE_DEBT`
 # na analytics-api).
 
-# -- ferramenta (2) --
+# -- ferramenta (3) --
 # o proprio runner e o helper de credencial: sao PECA, nao unidade medida
 =_auth.sh                                             ferramenta
+=_resume_requirement_setup.sh                         ferramenta
 =run_gates.sh                                         ferramenta
 
 # -- provisionamento (25) --

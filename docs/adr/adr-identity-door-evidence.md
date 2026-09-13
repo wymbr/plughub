@@ -211,6 +211,13 @@ continuação direta, dentro de uma idade máxima.
   continua aberto: esta fatia diz QUEM pede, não se a evidência basta.)*
 - O token só é liberado, e a retomada só ocorre, **contra evidência da sessão que pede** satisfazendo o
   `resume_requires` da pendência. A plataforma exige *que haja* evidência; nunca lê *quanta* basta.
+  *(Metade implementada em 2026-09-13, PID-06: **a liberação**. O `pending_workflow_get` retém, nas
+  duas portas — âncoras e o caminho legado por `contact_identifier` —, o token de toda pendência cuja
+  exigência a evidência da journey da sessão chamadora não satisfaz: `status = verified`,
+  `proven_in_session` = a sessão que pede, `verified_at` em até 15 min (`RESUME_EVIDENCE_MAX_AGE_S`).
+  Sobrando nenhuma, a resposta tem a forma do portão de posse (`verification_required`, com
+  `identity_required`), que os intakes já tratam oferecendo OTP. **A retomada ainda não confere**: quem já
+  tem o token (link, D10) retoma sem prova — PID-13.)*
 - **Quem transporta a evidência para o processo retomado é o `workflow_resume`**, no servidor — não
   o merge, que por (12) descarta a evidência nova.
   *(Corrigido na implementação, PID-03, por medição e decisão do dono: **o merge também
@@ -241,6 +248,15 @@ que mudou é QUEM pode: exige `skill_flows.operacao` no próprio tenant do token
 o da credencial. A PID-06 não precisa mais supor um slot anônimo; ela ainda precisa do
 `judgeIdentityFloor`, porque um devops legítimo pode promover um skill cujo mínimo a config não
 contém.)*
+*(Implementado em 2026-09-13, PID-06, com três correções por medição. **(1) Não é o step `suspend`**:
+o único `suspend` vivo é aprovação de operador. As pendências que o CLIENTE retoma nascem de `delegate`
+e `collect` com `customer_resumable: true` — três em produção —, e é neles que `resume_requires` mora,
+pelo mesmo caminho do `resume_policy` até a pendência. **(2) O mínimo mora no step, não num campo do
+skill**: `resume_requires_floor`, literal, ao lado do ref — continua atrás de `skill_flows.editar` e fora
+do alcance do slot, e um skill com duas pendências pode ter pisos diferentes. **(3) Só `$.config.<chave>`
+é ref aceito**: um ref de runtime (`@ctx`, `pipeline_state`) não teria valor no deploy, e o piso não
+seria julgável. O engine falha FECHADO quando a exigência declarada não resolve — a pendência não
+nasce. `resume_door` não foi implementado: PID-13.)*
 
 ### D8 · Âncoras entregáveis × não-entregáveis; OTP só contra procedência autoritativa
 
@@ -396,13 +412,14 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-03 | `workflow_resume` transporta a evidência para o processo retomado | D5, D6 |
 | PID-04 | `skill_intake_runner_v1` + migração dos dois intakes | D2 |
 | PID-05 | `skill_identity_orchestrator_v1` (composição, um param por mecanismo) | D3 |
-| PID-06 | `resume_requires`/`resume_door` + mínimo no skill + `judgeIdentityFloor` | D7 |
+| PID-06 | `resume_requires` nos steps `customer_resumable` + piso no step + `judgeIdentityFloor` + liberação do token contra a evidência da sessão | D6, D7 |
 | PID-07 | tenant e autor da escrita saem da credencial; deploy em `skill_flows.operacao` | D7 |
 | PID-08 | deploy em lote que registra sem mudar + promote em lote sobre slots | §4 |
 | PID-09 | `origin_identity` no adapter: `princ` e `(whatsapp, from)` | D9 |
 | PID-10 | OTP só entregável e autoritativo, recusa explícita; corrige o desafio a CPF | D8 |
 | PID-11 | lista na porta compartilhada gated por chegada; ordem por `expires_at` | D11 |
 | PID-12 | quem grava procedência `authoritative`, e com qual credencial | D13 |
+| PID-13 | a mesma exigência no `workflow_resume` (token em mãos, D10) + `resume_door` | D6, D7, D10 |
 | IDN-06 | credencial nas rotas de identidade do channel-gateway | (7) |
 | IDN-07 | eixo de procedência na âncora | D13 |
 | IDN-08 | a aba Cliente carimba `operator` | (8) |

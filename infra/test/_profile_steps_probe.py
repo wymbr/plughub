@@ -163,7 +163,12 @@ def garante_pool(pid, canais):
 
 
 def set_next(pid, skill_id):
-    return req("PUT", "%s/v1/pools/%s/slots/next" % (REG, pid), {"skill_id": skill_id})
+    # PID-06: o skill amostrado para "suspend" (skill_portabilidade_demo_v1) tem pendencia
+    # de cliente com piso de identidade, e o set-next recusa config sem `resume_requires`
+    # (422 resume_requires_ausente_na_config) — outro portao, que tornava o controle
+    # positivo F INCONCLUSIVO. A chave e inocua para skill que nao a declara.
+    return req("PUT", "%s/v1/pools/%s/slots/next" % (REG, pid),
+               {"skill_id": skill_id, "config_json": {"resume_requires": ["otp"]}})
 
 
 def vivo():

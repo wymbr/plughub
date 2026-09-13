@@ -67,6 +67,11 @@ steps:
     pool: aprovacao_credito
     customer_resumable: true
     resume_policy: offer
+    # PID-06 (ADR identity-door D7) — a retomada pelo CLIENTE exige prova de posse feita NA
+    # sessão que pede o token. O valor é do deploy (`config_json.resume_requires`); o piso
+    # é deste skill e o deploy recusa config que não o contenha.
+    resume_requires: "$.config.resume_requires"
+    resume_requires_floor: ["otp"]
     context:
       title:          "Aumento de limite — análise de crédito"
       summary:        "@ctx.approval.summary"

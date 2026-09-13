@@ -1831,6 +1831,7 @@ class WebhookAdapter(ChannelAdapter):
         timeout_hours:      float,
         customer_resumable: bool = False,
         resume_policy:      str  = "offer",
+        resume_requires:    list[str] | None = None,
     ) -> str:
         """
         Create a child session in a specific (non-webhook) pool for delegate I/O.
@@ -1980,6 +1981,7 @@ class WebhookAdapter(ChannelAdapter):
                 "resume_token":     resume_token,
                 "child_session_id": child_session_id,
                 "pool":             pool_id,          # ← pool to delegate to on reconnect
+                "resume_requires":  resume_requires,   # PID-06
                 "context":          dict(context),
             })
             try:
@@ -2016,6 +2018,7 @@ class WebhookAdapter(ChannelAdapter):
                                 skill_id=context.get("skill_id"),
                                 intent=context.get("intent"),
                                 policy=resume_policy,
+                                resume_requires=resume_requires,   # PID-06
                                 context_preview=await self._pending_context_preview(context, tenant_id),
                                 root_session_id=caller_root,   # Journey J3
                             ),
@@ -2166,6 +2169,7 @@ class WebhookAdapter(ChannelAdapter):
         # Identity Resolver (nível b) — gate the pending_by_customer dual-write.
         customer_resumable: bool = False,
         resume_policy:      str  = "offer",
+        resume_requires:    list[str] | None = None,
     ) -> dict[str, Any]:
         """
         N2 handler for a `collect` step (Journey J4c) — LAZY. Delivers the survey
@@ -2365,6 +2369,7 @@ class WebhookAdapter(ChannelAdapter):
                             resume_token=collect_token,     # o collect_token É o token
                             pool=pool_id,                   # pool negociado pelo N2
                             policy=resume_policy,
+                            resume_requires=resume_requires,   # PID-06
                             expires_at=expires_at,
                             root_session_id=caller_root,    # Journey J3
                         ),
@@ -2902,6 +2907,7 @@ class WebhookAdapter(ChannelAdapter):
                     "suspended_at":    p.suspended_at,
                     "context_preview": p.context_preview,
                     "root_session_id": p.root_session_id,   # Journey J3
+                    "resume_requires": p.resume_requires,   # PID-06
                 }
                 for p in pendings
             ],
@@ -2914,6 +2920,7 @@ class WebhookAdapter(ChannelAdapter):
                 "policy":          first.policy,
                 "context":         first.context_preview,
                 "root_session_id": first.root_session_id,   # Journey J3 (merge target)
+                "resume_requires": first.resume_requires,   # PID-06
             })
         return result
 
@@ -2967,6 +2974,7 @@ class WebhookAdapter(ChannelAdapter):
             "child_session_id": data.get("child_session_id", ""),
             "pool":             data.get("pool", ""),
             "context":          data.get("context", {}),
+            "resume_requires":  data.get("resume_requires"),   # PID-06
         }
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -2985,6 +2993,7 @@ class WebhookAdapter(ChannelAdapter):
         timeout_hours:      float = 1.0,
         customer_resumable: bool = False,
         resume_policy:      str  = "offer",
+        resume_requires:    list[str] | None = None,
         assigned_to:              str = "",
         fallback_to_pool_after_s: int | None = None,
         auto_attend:              bool = False,
@@ -3157,6 +3166,7 @@ class WebhookAdapter(ChannelAdapter):
                 "resume_token":     resume_token,
                 "child_session_id": session_id,   # parent session hosts the specialist
                 "pool":             pool_id,
+                "resume_requires":  resume_requires,   # PID-06
                 "context":          dict(context),
             })
             try:
@@ -3189,6 +3199,7 @@ class WebhookAdapter(ChannelAdapter):
                                 skill_id=context.get("skill_id"),
                                 intent=context.get("intent"),
                                 policy=resume_policy,
+                                resume_requires=resume_requires,   # PID-06
                                 context_preview=await self._pending_context_preview(context, tenant_id),
                                 root_session_id=_conf_root,   # Journey J3
                             ),

@@ -12,6 +12,7 @@ import { z } from "zod"
 import { MaskedDeclarationSchema } from "./audit"
 import { ToolContextTagsSchema, ReasonStepContextTagsSchema, SkillRequiredContextSchema, ContextTagScopeSchema } from "./context-store"
 import { SignalGrainSchema } from "./survey"
+import { ResumeRequiresFieldSchema, ResumeRequirementSchema } from "./resume-requirement"
 
 // ─────────────────────────────────────────────
 // Classificação da skill
@@ -812,6 +813,14 @@ export const CollectStepSchema = z.object({
   customer_resumable: z.boolean().default(false),
   /** How a discovered cross-channel pending is offered on reconnect. */
   resume_policy:  z.enum(["offer", "auto"]).default("offer"),
+  /**
+   * PID-06 — o que a RETOMADA exige de identidade (D7). Lista de mecanismos, ou ref
+   * `$.config.<chave>` (o deploy confere). O token só é liberado a quem provou NESTA
+   * sessão. Só faz sentido com `customer_resumable: true`. Ver `resume-requirement.ts`.
+   */
+  resume_requires:       ResumeRequiresFieldSchema.optional(),
+  /** PID-06 — piso do SKILL: a exigência efetiva do slot tem de contê-lo. */
+  resume_requires_floor: ResumeRequirementSchema.optional(),
 
   // ── Output ──
   /** Key under which the response is stored in pipeline_state.results */
@@ -1270,6 +1279,14 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
      * "auto"  = resume without asking. Only meaningful when customer_resumable.
      */
     resume_policy:  z.enum(["offer", "auto"]).default("offer"),
+    /**
+     * PID-06 — o que a RETOMADA exige de identidade (D7). Lista de mecanismos, ou ref
+     * `$.config.<chave>` (o deploy confere). O token só é liberado a quem provou NESTA
+     * sessão. Só faz sentido com `customer_resumable: true`. Ver `resume-requirement.ts`.
+     */
+    resume_requires:       ResumeRequiresFieldSchema.optional(),
+    /** PID-06 — piso do SKILL: a exigência efetiva do slot tem de contê-lo. */
+    resume_requires_floor: ResumeRequirementSchema.optional(),
     /** Next step when agent calls workflow_resume with decision=input|approved. */
     on_resume:      z.object({ next: z.string() }),
     /** Next step when agent calls workflow_resume with decision=rejected. */

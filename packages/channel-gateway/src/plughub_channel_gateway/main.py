@@ -965,6 +965,8 @@ class WebhookDelegateRequest(BaseModel):
     # Identity Resolver (nível b) — gate the pending_by_customer dual-write.
     customer_resumable: bool = False
     resume_policy:      str  = "offer"   # offer | auto
+    # PID-06 — exigência de retomada (mecanismos), já resolvida pelo engine.
+    resume_requires:    list[str] | None = None
 
 class WebhookDelegateConferenceRequest(BaseModel):
     tenant_id:     str
@@ -978,6 +980,8 @@ class WebhookDelegateConferenceRequest(BaseModel):
     # Identity Resolver (nível b) — gate the pending_by_customer dual-write.
     customer_resumable: bool = False
     resume_policy:      str  = "offer"   # offer | auto
+    # PID-06 — exigência de retomada (mecanismos), já resolvida pelo engine.
+    resume_requires:    list[str] | None = None
     # Camada B (pull direcionado / "ramal") — reserva do item ao recurso + transbordo.
     assigned_to:              str | None = None
     fallback_to_pool_after_s: int | None = None
@@ -1060,11 +1064,27 @@ async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) ->
         timeout_hours      = body.timeout_hours,
         customer_resumable = body.customer_resumable,
         resume_policy      = body.resume_policy,
+        resume_requires    = body.resume_requires,
         assigned_to              = body.assigned_to or "",
         fallback_to_pool_after_s = body.fallback_to_pool_after_s,
         auto_attend              = body.auto_attend,
     )
     return {"session_id": session_id}
+
+
+def _resume_requires_of(body: dict) -> list[str] | None:
+    """PID-06 — o corpo do collect é dict cru; campo malformado RECUSA (422), nunca some.
+
+    Foi exatamente assim que `customer_resumable` passou meses descartado neste endpoint:
+    kwargs montados à mão, e o que não é lido não existe. Aqui, ausente é `None` e
+    qualquer coisa que não seja lista de strings é erro do chamador.
+    """
+    if "resume_requires" not in body or body["resume_requires"] is None:
+        return None
+    v = body["resume_requires"]
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise HTTPException(status_code=422, detail="resume_requires deve ser lista de mecanismos")
+    return list(v)
 
 
 @app.post("/v1/channels/webhook/delegate", status_code=201)
@@ -1095,6 +1115,7 @@ async def webhook_delegate(body: WebhookDelegateRequest) -> dict:
         timeout_hours      = body.timeout_hours,
         customer_resumable = body.customer_resumable,
         resume_policy      = body.resume_policy,
+        resume_requires    = body.resume_requires,
     )
     return {"session_id": child_session_id}
 
@@ -1147,6 +1168,7 @@ async def webhook_collect(request: Request) -> dict:
             # partir de um dict cru — o campo não declarado some sem erro nenhum.
             customer_resumable   = bool(body.get("customer_resumable") or False),
             resume_policy        = body.get("resume_policy") or "offer",
+            resume_requires      = _resume_requires_of(body),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))

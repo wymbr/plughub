@@ -21,6 +21,8 @@
 # ARMADILHA DO config_json: `set-next` sem `config_json` grava `{}`, e o promote
 # torna isso `current` — apagando, por exemplo, `max_concurrent_sessions`. O script
 # LÊ o config_json do slot atual e o repassa por padrão.
+# `CONFIG_MERGE='{"chave": valor}'` ACRESCENTA/sobrescreve chaves nessa config (PID-06:
+# o `resume_requires` que o piso do skill exige) — sem ele só dá para preservar.
 #
 # Uso:
 #   bash infra/scripts/deploy_skill_to_slot.sh <skill_yaml> <pool_id> [âncora]
@@ -134,9 +136,20 @@ if [ "$SLOTS_CODE" != "200" ]; then
   exit 1
 fi
 CFG=$(slot_field config_json "$SLOTS_JSON")
-echo "── 2. set-next (config_json preservado: $CFG)"
-curl -s -X PUT "$AR/v1/pools/$POOL/slots/next" "${H[@]}" \
-  -d "{\"skill_id\":\"$SKILL_ID\",\"config_json\":$CFG}" >/dev/null
+if [ -n "${CONFIG_MERGE:-}" ]; then
+  CFG=$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); a.update(json.loads(sys.argv[2])); print(json.dumps(a))' "$CFG" "$CONFIG_MERGE") \
+    || { echo "❌ CONFIG_MERGE não é JSON de objeto: $CONFIG_MERGE"; exit 1; }
+fi
+echo "── 2. set-next (config_json: $CFG)"
+# O corpo do set-next era descartado (`>/dev/null`): uma recusa (422 do piso, do perfil,
+# da capacidade) passava calada, e o promote seguinte promovia o `next` ANTERIOR.
+SN_CODE=$(curl -s -o /tmp/_deploy_set_next.json -w '%{http_code}' -X PUT "$AR/v1/pools/$POOL/slots/next" "${H[@]}" \
+  -d "{\"skill_id\":\"$SKILL_ID\",\"config_json\":$CFG}")
+if [ "$SN_CODE" != "200" ]; then
+  echo "❌ set-next recusado (HTTP $SN_CODE): $(head -c 600 /tmp/_deploy_set_next.json)"
+  echo "   ABORTANDO antes do promote — promover agora levaria o 'next' anterior."
+  exit 1
+fi
 
 echo "── 3. promote"
 curl -s -X POST "$AR/v1/pools/$POOL/promote" "${H[@]}" >/dev/null

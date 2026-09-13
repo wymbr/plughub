@@ -32,6 +32,7 @@ import { randomUUID }    from "crypto"
 import type { DelegateStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { resolveInputMap } from "../interpolate"
+import { resolveResumeRequirement } from "./resume-requirement"
 
 export async function executeDelegate(
   step: DelegateStep,
@@ -222,6 +223,19 @@ export async function executeDelegate(
     }
   }
 
+  // 0c. PID-06 — exigência de retomada, resolvida ANTES de registrar qualquer token:
+  // falhar depois deixaria uma pendência sem a exigência que o flow declarou.
+  const exigencia = await resolveResumeRequirement(step, ctx)
+  if (exigencia.kind === "error") {
+    console.error(exigencia.message)
+    return {
+      next_step_id:      step.on_timeout.next,
+      output_as:         step.id,
+      output_value:      { error: "resume_requires_unresolved" },
+      transition_reason: "on_failure",
+    }
+  }
+
   const resume_token = randomUUID()
 
   // 1. Persist resume_token (extends Redis TTLs + writes to resume_tokens hash)
@@ -303,6 +317,7 @@ export async function executeDelegate(
         // channel-gateway gates the pending_by_customer dual-write.
         customer_resumable: step.customer_resumable,
         resume_policy:      step.resume_policy,
+        ...(exigencia.kind === "ok" ? { resume_requires: exigencia.value } : {}),
         // Camada B (pull direcionado / "ramal") — reserva do work item ao recurso.
         ...(resolvedAssignedTo ? { assigned_to: resolvedAssignedTo } : {}),
         ...(step.fallback_to_pool_after_s !== undefined

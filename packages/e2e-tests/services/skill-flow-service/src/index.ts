@@ -582,6 +582,8 @@ app.post("/execute", async (req: Request, res: Response) => {
             // Identity Resolver (nível b) — gate the pending_by_customer dual-write.
             customer_resumable: params.customer_resumable ?? false,
             resume_policy:      params.resume_policy ?? "offer",
+            // PID-06 — exigência de retomada já resolvida; `[]` viaja (é declaração, não ausência).
+            ...(params.resume_requires !== undefined ? { resume_requires: params.resume_requires } : {}),
             // Camada B (pull direcionado / "ramal") — reserva do item ao recurso.
             ...(params.assigned_to ? { assigned_to: params.assigned_to } : {}),
             ...(params.fallback_to_pool_after_s !== undefined
@@ -643,6 +645,7 @@ app.post("/execute", async (req: Request, res: Response) => {
             ...(params.campaign_id ? { campaign_id: params.campaign_id } : {}),
             ...(params.customer_resumable !== undefined ? { customer_resumable: params.customer_resumable } : {}),
             ...(params.resume_policy ? { resume_policy: params.resume_policy } : {}),
+            ...(params.resume_requires !== undefined ? { resume_requires: params.resume_requires } : {}),
           }),
         },
       )

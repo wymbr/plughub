@@ -24,6 +24,7 @@ import { deployViolation, slotDeclared } from "../lib/capacity"
 import { judgeMaskedDeploy } from "../lib/masked-deploy"
 import { judgeProfileSteps } from "../lib/profile-steps"
 import { judgeRequiredConfig } from "../lib/required-config"
+import { judgeIdentityFloor } from "../lib/identity-floor"
 
 export const poolSlotsRouter = Router({ mergeParams: true })
 
@@ -214,6 +215,14 @@ poolSlotsRouter.put("/slots/:slot", requireDeployWrite, async (req: Request, res
       return res.status(422).json({ error: configNext.error, message: configNext.message })
     }
 
+    // PID-06 (D7) — a exigência de retomada que o slot declara contém o PISO do skill?
+    // Mesma casa e mesmo motivo das anteriores; re-checado no promote porque o piso vem
+    // do snapshot e a exigência da config, e os dois podem mudar entre os momentos.
+    const pisoNext = judgeIdentityFloor(snapshot, config_json ?? {}, { poolId, skillId: skill_id })
+    if (pisoNext.kind === "block") {
+      return res.status(422).json({ error: pisoNext.error, message: pisoNext.message })
+    }
+
     const row = await (prisma as any).poolSkillSlot.upsert({
       where:  { pool_id_tenant_id_slot: { pool_id: poolId, tenant_id: tenantId, slot: "next" } },
       update: {
@@ -306,6 +315,16 @@ poolSlotsRouter.post("/promote", requireDeployWrite, async (req: Request, res: R
     )
     if (perfilProm.kind === "block") {
       return res.status(422).json({ error: perfilProm.error, message: perfilProm.message })
+    }
+
+    // PID-06 (D7) — piso de identidade × config do slot que está sendo PROMOVIDO.
+    const pisoProm = judgeIdentityFloor(
+      nextSlot["yaml_snapshot"],
+      nextSlot["config_json"],
+      { poolId, skillId: (nextSlot["skill_id"] as string) || "(sem skill)" },
+    )
+    if (pisoProm.kind === "block") {
+      return res.status(422).json({ error: pisoProm.error, message: pisoProm.message })
     }
 
     // Parâmetro obrigatório × config_json do slot que está sendo PROMOVIDO — nunca

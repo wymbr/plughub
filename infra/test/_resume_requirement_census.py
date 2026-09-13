@@ -1,0 +1,76 @@
+"""_resume_requirement_census.py — PID-06. Censo estático da cadeia da exigência de retomada.
+
+Uso: python3 _resume_requirement_census.py <raiz do repo>
+Imprime UMA linha JSON com os fatos; o probe julga. A raiz é argumento para as mutações
+rodarem sobre CÓPIA.
+
+A cadeia tem seis elos, e cada um perde o campo calado se esquecer dele:
+  schema (step) → deploy (piso) → engine (resolve e repassa) → skill-flow-service (HTTP)
+  → gateway (PendingEntry / chave legada / leitura) → mcp-server (julga ao liberar).
+"""
+import json
+import os
+import re
+import sys
+
+root = sys.argv[1]
+
+
+def rd(rel):
+    with open(os.path.join(root, rel), encoding="utf-8") as f:
+        return f.read()
+
+
+f = {}
+
+sk = rd("packages/schemas/src/skill.ts")
+f["schema_campo_nos_steps"] = sk.count("resume_requires:       ResumeRequiresFieldSchema.optional()")
+
+ps = rd("packages/agent-registry/src/routes/pool-slots.ts")
+f["deploy_piso_set_next"] = "judgeIdentityFloor(snapshot, config_json" in ps
+f["deploy_piso_promote"] = 'judgeIdentityFloor(\n      nextSlot["yaml_snapshot"]' in ps
+
+eng_d = rd("packages/skill-flow-engine/src/steps/delegate.ts")
+eng_c = rd("packages/skill-flow-engine/src/steps/collect.ts")
+f["engine_repassa"] = [n for n, s in (("delegate", eng_d), ("collect", eng_c))
+                       if "resolveResumeRequirement(step, ctx)" in s and "resume_requires: exigencia.value" in s]
+
+sfs = rd("packages/e2e-tests/services/skill-flow-service/src/index.ts")
+f["sfs_repassa"] = sfs.count("resume_requires: params.resume_requires")
+
+wh = rd("packages/channel-gateway/src/plughub_channel_gateway/adapters/webhook.py")
+f["gw_pending_entry"] = len(re.findall(r"resume_requires=resume_requires", wh))
+f["gw_chave_legada"] = len(re.findall(r'"resume_requires":\s+resume_requires', wh))
+f["gw_leituras"] = int("p.resume_requires" in wh) + int("first.resume_requires" in wh) + int('data.get("resume_requires")' in wh)
+idx = rd("packages/channel-gateway/src/plughub_channel_gateway/identity/index.py")
+f["gw_campo_no_registro"] = "resume_requires: list[str] | None = None" in idx
+
+wf = rd("packages/mcp-server-plughub/src/tools/workflow.ts")
+m = re.search(r'withGuard\("pending_workflow_get".*?\n  \)\n', wf, re.S)
+bloco = m.group(0) if m else ""
+f["mcp_bloco_encontrado"] = bool(bloco)
+f["mcp_saidas_julgadas"] = bloco.count("withholdUnprovenResume(")
+# toda resposta que carrega token tem de sair do julgamento: sobra de retorno cru = porta em volta
+f["mcp_retornos_crus"] = len(re.findall(r"JSON\.stringify\(\s*(data|\{\s*customer_id: ref\.customer_id, \.\.\.pdata\s*\})\s*\)", bloco))
+
+# população: steps de pendência de cliente nos skills do repo, e quem declara exigência
+skills_dir = os.path.join(root, "packages/skill-flow-engine/skills")
+resumiveis, declaram, com_piso = [], [], []
+for nome in sorted(os.listdir(skills_dir)):
+    if not nome.endswith(".yaml"):
+        continue
+    txt = open(os.path.join(skills_dir, nome), encoding="utf-8").read()
+    for bloco_step in re.split(r"\n  - id: ", txt)[1:]:
+        sid = bloco_step.split("\n", 1)[0].strip()
+        corpo = bloco_step.split("\n  - ", 1)[0]
+        if re.search(r"\n\s+customer_resumable: true", corpo):
+            resumiveis.append(f"{nome[:-5]}.{sid}")
+            if "resume_requires:" in corpo:
+                declaram.append(f"{nome[:-5]}.{sid}")
+            if "resume_requires_floor:" in corpo:
+                com_piso.append(f"{nome[:-5]}.{sid}")
+f["resumiveis"] = resumiveis
+f["declaram"] = declaram
+f["com_piso"] = com_piso
+
+print(json.dumps(f, ensure_ascii=False))

@@ -1,5 +1,86 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (19) — PID-06: o token de retomada só sai para quem provou nesta sessão
+
+### 1 · O defeito, medido ao vivo
+
+Cenário com peças reais: cliente importado (CPF + celular autoritativos), processo `limite_processo`
+disparado até a pendência nascer, e duas sessões sintéticas com token de sessão emitido pelo
+mcp-server. S1 fez OTP no celular (`verified`); S2 não fez nada. As duas pediram a pendência pela
+mesma âncora — e **S2 recebeu o `resume_token`**.
+
+A liberação tinha um portão só: a âncora `possessed`, que é posse **durável** no cadastro. Quem provou
+uma vez liberava para sempre, para qualquer sessão — o vetor (4) do ADR identity-door. O OTP da sessão
+só era conferido por um `choice` dentro do próprio intake: exigência autorada, não da plataforma.
+
+### 2 · Três premissas da ficha que a medição corrigiu
+
+| a ficha / o ADR dizia | medido | decisão |
+|---|---|---|
+| `resume_requires` no step que suspende | o único `suspend` vivo é aprovação de operador; o cliente retoma pendências de `delegate`/`collect` com `customer_resumable` (3 em produção) | o campo mora nesses dois steps |
+| mínimo "declarado no skill" | um skill pode ter duas pendências com pisos diferentes, e campo novo no skill pediria migração | `resume_requires_floor` no próprio step, literal, atrás de `skill_flows.editar` como o resto do flow |
+| (implícito) alguém aplica | a PID-06 falava de declaração e piso; a PID-11, de lista e seleção — ninguém liberava o token contra a exigência | decisão do dono: **exigir na liberação**; a retomada por token em mãos e o `resume_door` viram PID-13 |
+
+### 3 · A cadeia
+
+- **`@plughub/schemas` (`resume-requirement.ts`)** — uma casa para as três peças: o campo
+  (`resume_requires`: lista de mecanismos ou `$.config.<chave>`; ref de runtime é recusado, porque o
+  deploy não teria o que julgar), `judgeResumeRequirementSteps` (config ⊇ piso; ausente é erro; `[]` é
+  válido sem piso; exigência fora de step `customer_resumable` é erro) e `judgeResumeEvidence`
+  (`verified` + `proven_in_session` = quem pede + `verified_at` em até 15 min).
+- **Deploy** — `judgeIdentityFloor` no set-next e no promote, irmão de `judgeRequiredConfig` e
+  `judgeProfileSteps`. O rollback fica isento, como nas irmãs.
+- **Engine** — `delegate` e `collect` resolvem a exigência **antes** de registrar qualquer token e
+  falham fechado quando ela não resolve: a pendência não nasce. O skill-flow-service repassa.
+- **Gateway** — `PendingEntry.resume_requires` nos três escritores (delegate, collect, conference), na
+  chave legada `pending_workflow:*` e nas duas leituras. O corpo do collect é dict cru: campo malformado
+  dá 422 em vez de sumir, que foi como o `customer_resumable` passou meses descartado ali.
+- **mcp-server** — `withholdUnprovenResume` nas **duas** saídas do `pending_workflow_get` (âncoras e
+  legado por `contact_identifier` — sem a segunda, o legado seria o caminho em volta). Pendência sem
+  exigência passa intacta; com exigência não satisfeita é retida; sobrando nenhuma, a resposta tem a
+  forma do portão de posse (`verification_required`, `identity_required`), que os intakes já tratam
+  oferecendo OTP e perguntando de novo. Sem Redis, retém.
+- **Os três fluxos vivos** declaram `resume_requires: "$.config.resume_requires"` com piso `["otp"]`, e os
+  slots receberam `["otp"]`. O `deploy_skill_to_slot.sh` ganhou `CONFIG_MERGE` e deixou de descartar o
+  corpo do set-next — uma recusa passava calada e o promote seguinte promovia o `next` anterior.
+
+### 4 · O que esta fatia NÃO faz
+
+- **A retomada não confere** (PID-13): quem já tem o token — link de webchat (D10), ou token vazado —
+  chama `workflow_resume` sem prova. A exigência vale na liberação, não no uso.
+- **`resume_door`** não foi implementado (PID-13).
+- A lista e a seleção na porta compartilhada seguem na PID-11; a idade máxima é política de plataforma
+  (15 min), não config.
+- A jornada da portabilidade tem o mesmo desenho de intake (OTP → nova consulta), mas não há probe de
+  ponta a ponta dela: medida só a do limite.
+
+### 5 · Testes e probe
+
+- schemas `resume-requirement.test.ts` (11) · agent-registry `identity-floor.test.ts` (4) · engine
+  `steps/resume-requirement.test.ts` (5) · mcp-server `resume-requirement-release.test.ts` (8) · gateway
+  `test_resume_requires_pending.py` (4). **Mutações** (cada uma derruba a sua suíte): prova de outra
+  sessão aceita · piso não conferido · liberação sem julgar · delegate seguindo sem a exigência ·
+  gateway perdendo o campo na leitura.
+- **`probe_resume_requirement.sh`** — A: censo da cadeia (6 elos, 2 saídas julgadas e 0 cruas,
+  população de steps resumíveis = os que declaram = os que têm piso) com três mutações sobre cópia. B:
+  set-next sem a chave e com `[]` recusados, controle com `["otp"]` aceito, todo slot com piso com a
+  config certa. C: o cenário do defeito — S1 leva o token, S2 recebe `verification_required`. D: a
+  jornada de consulta do limite.
+
+### 6 · Verificação
+
+schemas **327**, agent-registry **91**, engine **255**, mcp-server **416**, gateway **930** verdes; `tsc`
+limpo em schemas, agent-registry, engine, mcp-server e skill-flow-service. Imagens: agent-registry,
+mcp-server-plughub, skill-flow-service, channel-gateway. Red-first: o ramo C foi medido vermelho antes
+do rebuild (S2 com 2 tokens). Deploy vivo: sem a config, o set-next recusou
+(`resume_requires_ausente_na_config`); com ela, os três promoveram. Verdes ao vivo:
+`probe_resume_requirement`, `probe_journey_merge_status_access` (6/0), `smoke_limite_tres_acessos`
+(19/0), `probe_evidence_transport`, `probe_identity_evidence`, `probe_mcp_tool_guard_census`,
+`probe_deploy_write_principal`, `probe_masked_channel_gate`, `probe_mcp_rest_surface`,
+`probe_skill_profile_steps` (o controle positivo F passou a mandar `resume_requires`: sem ele o piso
+novo o tornava INCONCLUSIVO), `probe_gates_manifest_coverage`, `probe_task_ledger`, e
+`probe_session_bound_resume` A–C.
+
 ## 2026-09-13 (18) — PID-07: a escrita no agent-registry age em nome da credencial
 
 ### 1 · A premissa da ficha, refutada
