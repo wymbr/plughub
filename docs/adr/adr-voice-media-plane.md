@@ -176,7 +176,7 @@ sobre texto e não sabe a diferença.
 > com `whatsapp.py`/`email.py`, que tinham `commit` sem `tenant_id`). **(3)** O store **não** tem
 > ciclo de vida nenhum: o soft-expire horário e o delete diário descritos abaixo não existem em
 > código (`soft_expire` sem chamador) — nada apagaria a gravação aos 30 dias porque **nada apaga
-> anexo algum** (VOZ-07). Logo o *"conflito resolvido de fato, para pior"* do fim da seção não
+> anexo algum** (VOZ-07, implementado no mesmo dia). Logo o *"conflito resolvido de fato, para pior"* do fim da seção não
 > aconteceu: não havia gravação para apagar nem expurgo para apagá-la. A decisão — classe de
 > artefato com política própria, uma entrada de config por classe — fica; ela só ganha objeto
 > quando houver gravação real, e depende do expurgo existir.

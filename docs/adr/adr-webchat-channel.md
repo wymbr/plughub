@@ -107,8 +107,10 @@ O subdiretório de `session_id` permite limpeza atômica de todos os arquivos de
 
 **Cron de dois estágios:**
 
-> ⚠️ **Medido em 2026-09-13: este cron NÃO EXISTE em código** — `soft_expire` não tem chamador e
-> nenhum SQL aplica `expires_at`. Ficha `VOZ-07` em `pending.md`.
+> ⚠️ **Até 2026-09-13 este cron NÃO EXISTIA em código** — `soft_expire` sem chamador e nenhum SQL
+> aplicando `expires_at`: anexo nenhum expirava. Implementado na VOZ-07 como task de boot
+> (`channel-gateway/attachment_expiry.py`, estágios `expire_due`/`purge_deleted` no Protocol, nos
+> dois backends). Gate: `infra/test/probe_attachment_expiry.sh`.
 
 - Estágio 1 (horário): `SET deleted_at = NOW() WHERE expires_at < NOW()` → URL retorna 410 Gone imediatamente
 - Estágio 2 (diário, grace 24h): delete físico + `SET file_path = NULL`

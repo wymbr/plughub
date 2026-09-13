@@ -312,7 +312,8 @@ def _params(fn):
 def _ligacoes(arv, globais_store):
     """Onde, neste arquivo, um nome ou `self.attr` segura o store.
 
-    Tres formas, todas medidas no pacote:
+    Quatro formas, todas medidas no pacote:
+      * parametro de funcao anotado `AttachmentStore` (`attachment_expiry.py`);
       * `self.A = P`, com P parametro anotado `AttachmentStore` OU chamado
         `attachment_store` (o `webrtc.py` anota `Any`, com o tipo em comentario);
       * global de modulo anotado com o tipo (`main._attachment_store`);
@@ -322,6 +323,13 @@ def _ligacoes(arv, globais_store):
     for n in ast.walk(arv):
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
             ps = _params(n)
+            # parametro anotado com o tipo e usado direto (`store.expire_due(...)`),
+            # a forma do job de expurgo — VOZ-07. Sem esta linha as chamadas dele
+            # ficavam fora da populacao, e a testemunha nao as pegaria (nao levam
+            # `file_id`/`session_id`).
+            for p, anot in ps.items():
+                if _eh_tipo_store(anot):
+                    nomes.add(p)
             for m in ast.walk(n):
                 if not isinstance(m, ast.Assign) or not isinstance(m.value, ast.Name):
                     continue

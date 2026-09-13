@@ -22,9 +22,12 @@ Cron de expurgo (dois estágios):
   Estágio 1 (horário): SET deleted_at = NOW() WHERE expires_at < NOW()
   Estágio 2 (diário, grace=24h): DELETE arquivo, SET file_path = NULL
 
-  ⚠️ DESCRITO, NÃO IMPLEMENTADO (medido 2026-09-13, VOZ-07). Nenhum job roda os
-  dois estágios e `soft_expire` não tem chamador: `expires_at` é carimbado e
-  nunca aplicado, e o serving só recusa por `deleted_at`, que ninguém escreve.
+  Os dois estágios são `expire_due` e `purge_deleted` (Protocol abaixo), e quem os
+  roda é `attachment_expiry.run_attachment_expiry`, task de boot do gateway.
+
+  ⚠️ Até 2026-09-13 (VOZ-07) este bloco DESCREVIA o cron e nada o implementava:
+  `expires_at` era carimbado com a política do tenant e nunca aplicado, e o
+  serving só recusa por `deleted_at`, que ninguém escrevia. Anexo nenhum expirava.
 """
 
 from __future__ import annotations
@@ -32,7 +35,8 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator, Protocol, runtime_checkable
 
@@ -171,6 +175,95 @@ class AttachmentMeta:
             setattr(self, k, v)
 
 
+@dataclass
+class PurgeResult:
+    """Desfecho de uma passada do estágio 2.
+
+    `failed` NUNCA é engolido: o blob que não saiu mantém `file_path`, é tentado de
+    novo na passada seguinte, e o id vai para `failed_ids` para o log nomear.
+    """
+    purged:     int = 0
+    failed:     int = 0
+    failed_ids: list[str] = field(default_factory=list)
+
+
+# ── SQL compartilhado pelos dois backends ─────────────────────────────────────
+#
+# O que difere entre filesystem e S3 é só COMO se apaga o blob; qual linha vence e
+# como se registra o desfecho é um fato só, e mora aqui para não haver duas
+# respostas para "este anexo já expirou?".
+
+_SQL_EXPIRE_DUE = """
+    UPDATE session_attachments
+    SET    deleted_at = NOW()
+    WHERE  file_id IN (
+        SELECT file_id
+        FROM   session_attachments
+        WHERE  deleted_at IS NULL
+          AND  expires_at < NOW()
+        ORDER  BY expires_at
+        LIMIT  $1
+        FOR UPDATE SKIP LOCKED
+    )
+"""
+
+_SQL_PURGE_CANDIDATES = """
+    SELECT file_id, file_path
+    FROM   session_attachments
+    WHERE  deleted_at IS NOT NULL
+      AND  deleted_at < NOW() - $1::interval
+      AND  file_path IS NOT NULL
+    ORDER  BY deleted_at
+    LIMIT  $2
+"""
+
+# `AND file_path = $2`: se outra réplica já apagou e zerou, esta não reescreve.
+_SQL_MARK_PURGED = """
+    UPDATE session_attachments
+    SET    file_path = NULL
+    WHERE  file_id = $1 AND file_path = $2
+"""
+
+
+def _rowcount(status: str | None) -> int:
+    """asyncpg devolve o status do comando (`"UPDATE 3"`), não a contagem."""
+    try:
+        return int(str(status).rsplit(" ", 1)[-1])
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _expire_due(db, limit: int) -> int:
+    async with db.acquire() as conn:
+        return _rowcount(await conn.execute(_SQL_EXPIRE_DUE, limit))
+
+
+async def _purge_deleted(db, grace: timedelta, limit: int, apagar) -> PurgeResult:
+    """`apagar(path)` apaga o blob; ausente conta como apagado (idempotente)."""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(_SQL_PURGE_CANDIDATES, grace, limit)
+    out = PurgeResult()
+    for row in rows:
+        file_id, path = str(row["file_id"]), row["file_path"]
+        try:
+            await apagar(path)
+        except FileNotFoundError:
+            pass  # já não existia: o estado final desejado, e não é falha
+        except Exception as exc:
+            out.failed += 1
+            out.failed_ids.append(file_id)
+            logger.warning(
+                "attachment purge: blob NAO apagado file_id=%s path=%s: %s "
+                "(file_path mantido; nova tentativa na proxima passada)",
+                file_id, path, exc,
+            )
+            continue
+        async with db.acquire() as conn:
+            await conn.execute(_SQL_MARK_PURGED, row["file_id"], path)
+        out.purged += 1
+    return out
+
+
 # ─── Interface (Protocol) ─────────────────────────────────────────────────────
 
 @runtime_checkable
@@ -236,6 +329,28 @@ class AttachmentStore(Protocol):
         file_id: str,
     ) -> None:
         """Marca deleted_at = NOW() sem deletar o arquivo do disco."""
+        ...
+
+    async def expire_due(
+        self,
+        *,
+        limit: int,
+    ) -> int:
+        """Estágio 1 do expurgo: marca `deleted_at` em até `limit` linhas vencidas.
+
+        Devolve quantas marcou. A partir daqui o serving responde 410.
+        """
+        ...
+
+    async def purge_deleted(
+        self,
+        *,
+        grace: timedelta,
+        limit: int,
+    ) -> "PurgeResult":
+        """Estágio 2 do expurgo: apaga o blob de até `limit` linhas cujo
+        `deleted_at` passou de `grace`, e zera `file_path` de quem foi apagado.
+        """
         ...
 
 
@@ -478,6 +593,16 @@ class FilesystemAttachmentStore:
                 uuid.UUID(file_id),
             )
         logger.debug("AttachmentStore.soft_expire: file_id=%s", file_id)
+
+    # ── expurgo (VOZ-07) ──────────────────────────────────────────────────────
+
+    async def expire_due(self, *, limit: int) -> int:
+        return await _expire_due(self._db, limit)
+
+    async def purge_deleted(self, *, grace: timedelta, limit: int) -> PurgeResult:
+        async def apagar(path: str) -> None:
+            await aiofiles.os.remove(self._root / path)
+        return await _purge_deleted(self._db, grace, limit, apagar)
 
     # ── Helpers utilitários ───────────────────────────────────────────────────
 
@@ -774,3 +899,15 @@ class S3AttachmentStore:
                 uuid.UUID(file_id),
             )
         logger.debug("S3AttachmentStore.soft_expire: file_id=%s", file_id)
+
+    # ── expurgo (VOZ-07) ──────────────────────────────────────────────────────
+
+    async def expire_due(self, *, limit: int) -> int:
+        return await _expire_due(self._db, limit)
+
+    async def purge_deleted(self, *, grace: timedelta, limit: int) -> PurgeResult:
+        # `delete_object` do S3 é idempotente: chave ausente responde 204, não erro.
+        async def apagar(path: str) -> None:
+            async with self._session.client("s3", endpoint_url=self._endpoint_url) as s3:
+                await s3.delete_object(Bucket=self._bucket, Key=path)
+        return await _purge_deleted(self._db, grace, limit, apagar)

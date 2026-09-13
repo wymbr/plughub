@@ -42,6 +42,7 @@ from .attachment_store import (
     FilesystemAttachmentStore,
     S3AttachmentStore,
 )
+from .attachment_expiry import run_attachment_expiry
 from .channel_capability_registry import (
     select_channel,
 )
@@ -551,6 +552,13 @@ async def lifespan(app: FastAPI):
         "webhook-timeout-scanner",
         asyncio.create_task(_webhook_adapter.run_timeout_scanner()),
     )
+    # VOZ-07: o expurgo de anexos em dois estágios. Até 2026-09-13 ele estava
+    # descrito em três documentos e em nenhuma task — `expires_at` era carimbado e
+    # nunca aplicado.
+    attachment_expiry_task = supervisionar(
+        "attachment-expiry",
+        asyncio.create_task(run_attachment_expiry(_attachment_store)),
+    )
 
     logger.info("✅ Channel Gateway started (instance=%s)", instance_id)
     yield
@@ -563,6 +571,7 @@ async def lifespan(app: FastAPI):
     config_task.cancel()
     invalidation_task.cancel()
     timeout_scan_task.cancel()
+    attachment_expiry_task.cancel()
     await _producer.stop()
     await db_pool.close()
     await _redis.aclose()

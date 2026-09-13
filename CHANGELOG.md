@@ -1,5 +1,79 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (3) — VOZ-07: anexo vencido passa a expirar — o expurgo estava em três documentos e em nenhum código
+
+A VOZ-06 achou, ao medir a própria premissa, que o expurgo em dois estágios descrito no docstring do
+store, no `adr-webchat-channel.md` e no `CLAUDE.md` § WebChat **não existia**: `soft_expire` sem
+chamador, nenhum SQL aplicando `expires_at`, e o serving recusando só por `deleted_at`, que ninguém
+escrevia. O `attachment_expiry_days` editável na tela carimbava uma data que nada lia. **Anexo nenhum
+expirava**, e a ausência de um job não produz erro em lugar nenhum.
+
+Exposição no dia: 6 linhas, 0 vencidas, a primeira vencendo em 2026-09-20.
+
+### 1 · Medido antes de escrever: o demo roda S3, não filesystem
+
+`PLUGHUB_ATTACHMENT_STORE_TYPE: s3` com MinIO no compose. Um expurgo escrito e testado só contra o
+`FilesystemAttachmentStore` teria ficado verde nos testes e inerte na instalação — por isso os dois
+backends ganharam os estágios, e o exercício ao vivo roda no backend que a imagem de fato usa.
+
+### 2 · O que existe agora
+
+| peça | o quê |
+|---|---|
+| Protocol | `expire_due(limit)` e `purge_deleted(grace, limit)`, nos dois backends |
+| SQL | **um só**, compartilhado — o que difere entre filesystem e S3 é só como se apaga o blob |
+| estágio 1 | marca `deleted_at` nas vencidas (`FOR UPDATE SKIP LOCKED`); o serving passa a 410 |
+| estágio 2 | apaga o blob de quem foi marcado há mais de 24 h e zera `file_path` (`AND file_path = $2`, idempotente entre réplicas) |
+| task | `attachment-expiry`, supervisionada, **primeira passada na subida** — reinício não empurra o expurgo uma hora |
+
+Degradação barulhenta: toda passada loga o que marcou e o que apagou, **inclusive zero** — expurgo que
+não loga é indistinguível de expurgo que não roda, que era exatamente o defeito. Blob que não sai
+**mantém `file_path`** (zerar criaria órfão no bucket), é tentado de novo, e é contado **por arquivo**:
+a primeira versão da drenagem somava `r.failed` por lote, e o mesmo blob que volta no lote seguinte
+seria contado duas vezes — um número plausível e errado no log que existe para ser lido.
+
+Os três números da mecânica (1 h, 24 h, 24 h de carência) ficaram **constantes no código**, não
+config: a política é `attachment_expiry_days`, que já mora na config-api com tela. Em env violaria
+*"env só para segredo e topologia"*; na config-api daria ao tenant um botão para adiar a própria
+minimização.
+
+### 3 · O censo do store precisou de uma forma a mais
+
+O ramo C do `probe_adapter_self_calls` (nascido na VOZ-06) liga receptor ao store por
+`self.attr = param`, global anotado ou local derivado dele. O job recebe o store como **parâmetro de
+função anotado** — forma que o censo não conhecia, e cujas chamadas (`expire_due(limit=)`) não têm a
+cara que a testemunha procura (`file_id`/`session_id`). Ou seja: as duas chamadas novas teriam ficado
+fora da população **sem nada reprovar**. Ganhou a quarta forma; o censo lista `attachment_expiry.py
+2 chamada(s)`.
+
+### 4 · O gate novo: `probe_attachment_expiry.sh`
+
+- **A · censo** — os dois estágios no Protocol e nos dois backends; a task nasce sob `supervisionar`.
+- **B · invariante viva** — nenhuma vencida há mais de 2 h sem marca, nenhuma marcada há mais de 50 h
+  com blob. ⚠️ **Hoje é VACUA** (nada venceu ainda), e o ramo diz isso em vez de parecer prova.
+- **C · exercício na imagem** — o código do container contra Postgres e MinIO reais. Quatro fixtures
+  gravadas pelo caminho de produto (`reserve` + `commit`, bytes reais) e envelhecidas por SQL: duas que
+  **têm de mudar** (vencida → marcada e **servida como 410**; carência → blob apagado, medido com
+  `head_object`, nunca inferido do Postgres) e dois **controles** que não podem (vigente → intacta e
+  **200**; marcada há 1 h → blob mantido). Um expurgo que apagasse tudo passaria nos dois primeiros.
+- **D · mutação** — o exercício sem os estágios **reprova** os três casos de mudança com os controles
+  verdes; e uma linha vencida injetada **acende** o contador do B.
+
+⚠️ O *"deixa de ser servido"* do título do probe não era medido na primeira versão — o exercício
+conferia `deleted_at` e deduzia o 410. Pergunta e instrumento não batiam; a rota de serving entrou
+como caso. Como o serving resolve pelo tenant da instalação, as fixtures moram no tenant **real**, numa
+sessão própria, e são apagadas **por id, nunca por tenant**.
+
+### 5 · Verificação
+
+14 testes novos (`test_attachment_expiry.py`: contador do asyncpg, SQL que só toca vencida não
+marcada, apagar/ausente/falha no filesystem, `delete_object` no S3, drenagem, falha por arquivo, task
+que roda na subida e sobrevive a exceção). Suíte do channel-gateway **798 verdes** sobre a imagem.
+Imagem **rebuildada** e container recriado: log `estagio 1 marcou 0` / `estagio 2 apagou 0` na subida.
+`probe_attachment_expiry` VERDE nos 4 ramos, com a limpeza conferida (6 linhas antes e depois, 0 de
+fixture). `probe_adapter_self_calls` e `probe_background_task_supervision` (17 de 17 tasks de boot
+supervisionadas) verdes. Registrado no `gates.manifest` como AUTO.
+
 ## 2026-09-13 (2) — GAT-05: o `up.sh` passa a julgar one-shot pelo exit code, e deixa de reprovar toda subida correta
 
 ### 1 · A ficha dizia metade

@@ -252,6 +252,12 @@ probe_choice_operator_parity.sh
 # dizia "encerrado". Ramo A e AST e nao grep -- o literal "suspended" tambem aparece em
 # comentario, log e numa comparacao legitima de outro assunto.
 probe_contact_close_outcomes.sh
+# VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
+# nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
+# Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,
+# e o probe diz isso) e exercicio do codigo da imagem contra Postgres + blob store reais,
+# com dois controles e mutacao. Mexe no store vivo so com fixtures apagadas por ID.
+probe_attachment_expiry.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta
