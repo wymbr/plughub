@@ -37,7 +37,8 @@
       "monitorar": "Monitor: watch the live operation (sessions, agents, pools)",
       "visualizar": "Analytics: contact reports and aggregates (lists and execution traces)",
       "transcricao": "Read a contact's transcript (verbatim dialogue)",
-      "exportar": "Export contact data"
+      "exportar": "Export contact data",
+      "importar_cadastro": "Import the customer base as the authoritative identity source"
     },
     "campaigns": {
       "visualizar": "View campaigns and results",

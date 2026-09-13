@@ -109,6 +109,75 @@ class PendingEntry:
         return PendingEntry(**d)
 
 
+# ── Procedência (PID-12 / ADR D13) ─────────────────────────────────────────────
+#
+# `verification_class` diz COMO a âncora foi provada; `provenance` diz DE ONDE ela
+# veio. A regra que o eixo existe para sustentar — *"OTP só contra âncora
+# autoritativa"* (PID-10) — só vale se `authoritative` tiver UMA porta, e o dono
+# decidiu qual em 2026-09-12: a importação com credencial (`import_customers`).
+#
+# Por isso a trava mora no ÍNDICE, e não nas rotas: as rotas de identidade ainda
+# não têm credencial (IDN-06), então qualquer garantia escrita lá seria contornável
+# por quem chame o método por outro caminho. Aqui, todo escritor que não é a
+# importação passa por `_writer_provenance`, que RECUSA `authoritative` alto.
+
+PROVENANCE_AUTHORITATIVE = "authoritative"
+PROVENANCE_WRITERS = frozenset({"declared", "channel_origin", "operator"})
+
+
+def _writer_provenance(p: str | None) -> str | None:
+    """Valida a procedência de um escritor que NÃO é a importação."""
+    if p is None:
+        return None
+    if p == PROVENANCE_AUTHORITATIVE:
+        raise ValueError(
+            "procedencia `authoritative` so e carimbada por import_customers "
+            "(PID-12) — este escritor nao e fonte autoritativa"
+        )
+    if p not in PROVENANCE_WRITERS:
+        raise ValueError("procedencia desconhecida: %r" % (p,))
+    return p
+
+
+# Upsert de chave, ÚNICO para todos os escritores.
+#
+# ⚠️ A procedência é sticky SÓ enquanto a âncora pertence ao mesmo cliente. Se o
+# `customer_id` muda, ela passa a ser a de quem reatribuiu: senão um escritor sem
+# credencial anexaria um telefone importado ao próprio cadastro e HERDARIA o
+# `authoritative` — a porta única viraria porta de qualquer um.
+# Mesmo cliente: `authoritative` vence sempre (a importação promove uma âncora
+# declarada); fora isso, a primeira origem registrada fica.
+_SQL_UPSERT_KEY = """
+    INSERT INTO identity.customer_secondary_keys
+        (tenant_id, kind, value_hash, customer_id, confidence, verification_class,
+         verified_at, provenance)
+    VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 = 'possessed' THEN NOW() ELSE NULL END, $7)
+    ON CONFLICT (tenant_id, kind, value_hash)
+        DO UPDATE SET customer_id = EXCLUDED.customer_id,
+                      confidence  = GREATEST(identity.customer_secondary_keys.confidence, EXCLUDED.confidence),
+                      verification_class = CASE
+                          WHEN identity.customer_secondary_keys.verification_class = 'possessed' THEN 'possessed'
+                          ELSE EXCLUDED.verification_class END,
+                      verified_at = COALESCE(identity.customer_secondary_keys.verified_at, EXCLUDED.verified_at),
+                      provenance = CASE
+                          WHEN identity.customer_secondary_keys.customer_id <> EXCLUDED.customer_id
+                              THEN EXCLUDED.provenance
+                          WHEN EXCLUDED.provenance = 'authoritative'
+                              THEN 'authoritative'
+                          ELSE COALESCE(identity.customer_secondary_keys.provenance, EXCLUDED.provenance)
+                      END
+"""
+
+
+@dataclass
+class ImportRowResult:
+    external_id: str
+    customer_id: str = ""
+    outcome:     str = ""          # created | updated | refused
+    anchors:     int = 0
+    reason:      str = ""
+
+
 class IdentityIndex:
     """
     Índice de identidade sobre Redis. Instanciado pelo WebhookAdapter (reusa o
@@ -357,6 +426,7 @@ class IdentityIndex:
     async def attach_anchor(
         self, tenant_id: str, customer_id: str, kind: str, value: str,
         verification_class: str = "claimed", persist_durable: bool = False,
+        provenance: str | None = None,
     ) -> bool:
         """
         Identidade progressiva — anexa/atualiza UMA âncora a um cliente existente.
@@ -364,7 +434,10 @@ class IdentityIndex:
         (ex.: pós-OTP `possessed`, ou cliente já identificado), grava/atualiza a
         chave no PG e garante a linha `customers`. Nunca rebaixa uma classe já
         `possessed` para `claimed`. Retorna False se a âncora for inválida.
+
+        `provenance` nunca pode ser `authoritative` aqui (ValueError) — PID-12.
         """
+        prov = _writer_provenance(provenance)
         if not customer_id:
             return False
         try:
@@ -395,19 +468,8 @@ class IdentityIndex:
                     customer_id, tenant_id,
                 )
                 await conn.execute(
-                    """
-                    INSERT INTO identity.customer_secondary_keys
-                        (tenant_id, kind, value_hash, customer_id, confidence, verification_class, verified_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 = 'possessed' THEN NOW() ELSE NULL END)
-                    ON CONFLICT (tenant_id, kind, value_hash)
-                        DO UPDATE SET customer_id = EXCLUDED.customer_id,
-                                      confidence  = GREATEST(identity.customer_secondary_keys.confidence, EXCLUDED.confidence),
-                                      verification_class = CASE
-                                          WHEN identity.customer_secondary_keys.verification_class = 'possessed' THEN 'possessed'
-                                          ELSE EXCLUDED.verification_class END,
-                                      verified_at = COALESCE(identity.customer_secondary_keys.verified_at, EXCLUDED.verified_at)
-                    """,
-                    tenant_id, kind, vh, customer_id, conf, eff_vc,
+                    _SQL_UPSERT_KEY,
+                    tenant_id, kind, vh, customer_id, conf, eff_vc, prov,
                 )
         return True
 
@@ -523,14 +585,17 @@ class IdentityIndex:
         """
         if self._db is None or not customer_id:
             return
-        rows: list[tuple[str, str, float]] = []
+        rows: list[tuple[str, str, float, str | None]] = []
         for a in anchors:
             kind, value = a.get("kind", ""), a.get("value", "")
+            # procedência por âncora, declarada por quem EXTRAIU (o adapter sabe se
+            # veio do canal ou do contexto). `authoritative` levanta — PID-12.
+            prov = _writer_provenance(a.get("provenance"))
             try:
                 vh = hash_anchor(self._salt, kind, value)
             except ValueError:
                 continue
-            rows.append((kind, vh, kind_confidence(kind)))
+            rows.append((kind, vh, kind_confidence(kind), prov))
         async with self._db.acquire() as conn:
             await conn.execute(
                 """
@@ -540,24 +605,167 @@ class IdentityIndex:
                 """,
                 customer_id, tenant_id, status,
             )
-            for (kind, vh, conf) in rows:
+            for (kind, vh, conf, prov) in rows:
                 await conn.execute(
-                    """
-                    INSERT INTO identity.customer_secondary_keys
-                        (tenant_id, kind, value_hash, customer_id, confidence, verification_class, verified_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 = 'possessed' THEN NOW() ELSE NULL END)
-                    ON CONFLICT (tenant_id, kind, value_hash)
-                        DO UPDATE SET customer_id = EXCLUDED.customer_id,
-                                      confidence  = GREATEST(identity.customer_secondary_keys.confidence, EXCLUDED.confidence),
-                                      verification_class = CASE
-                                          WHEN identity.customer_secondary_keys.verification_class = 'possessed' THEN 'possessed'
-                                          ELSE EXCLUDED.verification_class END,
-                                      verified_at = COALESCE(identity.customer_secondary_keys.verified_at, EXCLUDED.verified_at)
-                    """,
-                    tenant_id, kind, vh, customer_id, conf, verification_class,
+                    _SQL_UPSERT_KEY,
+                    tenant_id, kind, vh, customer_id, conf, verification_class, prov,
                 )
         logger.info("IdentityIndex: promoted customer=%s to durable (keys=%d, vc=%s)",
                     customer_id, len(rows), verification_class)
+
+    # ── Importação — a ÚNICA porta de `authoritative` (PID-12) ────────────────
+
+    async def import_customers(
+        self, tenant_id: str, system: str, rows: list[dict[str, Any]], *, imported_by: str,
+    ) -> list[ImportRowResult]:
+        """
+        Importa a base do tenant como FONTE AUTORITATIVA. Cada linha:
+        `{external_id, anchors: [{kind, value}], attributes?}`.
+
+        Decisão do dono (2026-09-12): a confiança é do PROCESSO de importação, feito
+        com credencial — por isso quem chama esta função é só a rota que confere
+        `contacts.importar_cadastro`, e nenhum outro escritor consegue carimbar
+        `authoritative` (ver `_writer_provenance`).
+
+        Identidade da linha = `(system, external_id)` em `customer_external_refs`:
+        reimportar a mesma base ATUALIZA, não duplica.
+
+        ⚠️ **Conflito RECUSA a linha, nunca funde.** Âncora que o cadastro durável já
+        atribui a OUTRO cliente é território de merge (Fase C); resolvê-la aqui em
+        silêncio seria a importação reescrevendo de quem é um telefone sem que
+        ninguém decidisse. A linha recusada volta NOMEADA no resultado.
+
+        A importação NÃO prova posse: `verification_class` fica `claimed` (um
+        `possessed` já existente do mesmo cliente é preservado pelo upsert).
+        """
+        if self._db is None:
+            raise RuntimeError("importacao exige o cadastro duravel (db_pool ausente)")
+        out: list[ImportRowResult] = []
+        for r in rows:
+            ext = str(r.get("external_id") or "").strip()
+            res = ImportRowResult(external_id=ext)
+            out.append(res)
+            if not ext:
+                res.outcome, res.reason = "refused", "external_id vazio"
+                continue
+            chaves: list[tuple[str, str]] = []
+            invalidas: list[str] = []
+            for a in r.get("anchors") or []:
+                try:
+                    chaves.append((a.get("kind", ""), hash_anchor(self._salt, a.get("kind", ""), a.get("value", ""))))
+                except (ValueError, AttributeError):
+                    invalidas.append(str(a.get("kind", "?")) if isinstance(a, dict) else "?")
+            if invalidas:
+                res.outcome, res.reason = "refused", "ancora invalida: %s" % ",".join(invalidas)
+                continue
+            if not chaves:
+                res.outcome, res.reason = "refused", "nenhuma ancora"
+                continue
+            attrs = r.get("attributes") or {}
+
+            async with self._db.acquire() as conn:
+                async with conn.transaction():
+                    cid = await conn.fetchval(
+                        "SELECT customer_id FROM identity.customer_external_refs "
+                        "WHERE tenant_id = $1 AND system = $2 AND external_id = $3",
+                        tenant_id, system, ext,
+                    )
+                    donos: set[str] = set()
+                    for (kind, vh) in chaves:
+                        dono = await conn.fetchval(
+                            "SELECT customer_id FROM identity.customer_secondary_keys "
+                            "WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3",
+                            tenant_id, kind, vh,
+                        )
+                        if dono:
+                            donos.add(dono)
+                    criado = False
+                    if cid:
+                        alheios = donos - {cid}
+                        if alheios:
+                            res.outcome = "refused"
+                            res.reason = "ancora ja pertence a outro cliente (%d)" % len(alheios)
+                            continue
+                    elif len(donos) > 1:
+                        res.outcome = "refused"
+                        res.reason = "ancoras apontam para %d clientes diferentes" % len(donos)
+                        continue
+                    elif donos:
+                        cid = next(iter(donos))
+                        outro_ext = await conn.fetchval(
+                            "SELECT external_id FROM identity.customer_external_refs "
+                            "WHERE tenant_id = $1 AND system = $2 AND customer_id = $3",
+                            tenant_id, system, cid,
+                        )
+                        if outro_ext and outro_ext != ext:
+                            res.outcome = "refused"
+                            res.reason = "cliente ja importado com outro external_id"
+                            continue
+                    else:
+                        cid, criado = _new_customer_id(), True
+
+                    status = await conn.fetchval(
+                        "SELECT status FROM identity.customers WHERE customer_id = $1", cid,
+                    )
+                    if status == "merged":
+                        res.outcome, res.reason = "refused", "cliente de destino esta merged"
+                        continue
+                    await conn.execute(
+                        """
+                        INSERT INTO identity.customers (customer_id, tenant_id, status, attributes)
+                        VALUES ($1, $2, 'identified', $3::jsonb)
+                        ON CONFLICT (customer_id) DO UPDATE
+                           SET status     = 'identified',
+                               attributes = identity.customers.attributes || EXCLUDED.attributes,
+                               updated_at = NOW()
+                        """,
+                        cid, tenant_id, json.dumps(attrs),
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO identity.customer_external_refs
+                            (tenant_id, system, external_id, customer_id, confidence, resolved_at)
+                        VALUES ($1, $2, $3, $4, 1.0, NOW())
+                        ON CONFLICT (tenant_id, system, external_id)
+                            DO UPDATE SET resolved_at = NOW()
+                        """,
+                        tenant_id, system, ext, cid,
+                    )
+                    for (kind, vh) in chaves:
+                        await conn.execute(
+                            _SQL_UPSERT_KEY,
+                            tenant_id, kind, vh, cid, kind_confidence(kind), "claimed",
+                            PROVENANCE_AUTHORITATIVE,
+                        )
+                    res.customer_id = cid
+                    res.outcome = "created" if criado else "updated"
+                    res.anchors = len(chaves)
+
+            # Índice Redis depois do COMMIT: o Lookup 1 lê o Redis primeiro, e um
+            # prospect efêmero apontado para a mesma âncora faria o resolve devolver
+            # o prospect em vez do cliente importado. A classe vem do PG (não rebaixa).
+            repontadas = 0
+            for (kind, vh) in chaves:
+                atual = _decode_index(await self._redis.get(self._identity_key(tenant_id, kind, vh)))
+                if atual and atual[0] != cid:
+                    repontadas += 1
+                vc = await self._pg_key_class(tenant_id, kind, vh) or "claimed"
+                await self._redis.set(self._identity_key(tenant_id, kind, vh),
+                                      _encode_index(cid, vc), ex=self._index_ttl_s)
+            if repontadas:
+                logger.warning(
+                    "identity import: %d ancora(s) do external_id=%s apontavam para prospect "
+                    "efemero no Redis e passaram ao cliente importado %s",
+                    repontadas, ext, cid,
+                )
+
+        contagem = {k: sum(1 for x in out if x.outcome == k) for k in ("created", "updated", "refused")}
+        logger.info(
+            "identity import: tenant=%s system=%s por=%s linhas=%d criadas=%d atualizadas=%d recusadas=%d",
+            tenant_id, system, imported_by, len(out),
+            contagem["created"], contagem["updated"], contagem["refused"],
+        )
+        return out
 
 
 _IDENTITY_SCHEMA_DDL = """
@@ -589,6 +797,11 @@ CREATE INDEX IF NOT EXISTS idx_identity_seckeys_customer ON identity.customer_se
 -- Migração tolerante p/ DBs do Slice 2 (tabela sem a coluna):
 ALTER TABLE identity.customer_secondary_keys
     ADD COLUMN IF NOT EXISTS verification_class TEXT NOT NULL DEFAULT 'claimed';
+-- PID-12 / ADR D13: procedência, o segundo eixo da âncora (DE ONDE veio).
+-- NULL = "não registrada" — toda linha anterior a 2026-09-13. Nullable de
+-- propósito: carimbar `declared` no legado inventaria uma origem que ninguém mediu.
+ALTER TABLE identity.customer_secondary_keys
+    ADD COLUMN IF NOT EXISTS provenance TEXT;
 
 CREATE TABLE IF NOT EXISTS identity.customer_external_refs (
     tenant_id    TEXT NOT NULL,

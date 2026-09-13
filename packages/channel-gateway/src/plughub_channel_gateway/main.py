@@ -997,6 +997,18 @@ class IdentityAttachKeyRequest(BaseModel):
     kind:        str
     value:       str
 
+class IdentityImportRow(BaseModel):
+    external_id: str
+    anchors:     list[IdentityAnchor]
+    attributes:  dict = {}
+
+class IdentityImportRequest(BaseModel):
+    # SEM `tenant_id`, e isso é o ponto: o tenant da importação vem do JWT de quem
+    # importa. No corpo, seria o chamador escolhendo em qual base carimbar
+    # `authoritative` — o defeito que a IDN-06 mede nas rotas irmãs.
+    system:    str
+    customers: list[IdentityImportRow]
+
 class IdentityAttributesRequest(BaseModel):
     tenant_id:   str
     customer_id: str
@@ -1230,6 +1242,70 @@ async def webhook_identity_attributes(body: IdentityAttributesRequest) -> dict:
         return {"updated": False}
     return await _webhook_adapter.update_customer_attributes(
         body.tenant_id, body.customer_id, body.attributes,
+    )
+
+
+IDENTITY_IMPORT_MAX_ROWS = 1000
+
+
+@app.post("/v1/channels/webhook/identity/import", status_code=200)
+async def webhook_identity_import(body: IdentityImportRequest, request: Request) -> dict:
+    """
+    PID-12 — importação da base do tenant como FONTE AUTORITATIVA.
+
+    Decisão do dono (2026-09-12): *"a importação com credencial de admin é a única
+    porta que carimba `authoritative`"*. A confiança passa a ser do PROCESSO de
+    importação, e esta rota é onde ele é conferido:
+
+      * Bearer obrigatório, verificado pelo `plughub_authz` (nunca uma cópia);
+      * campo ABAC `contacts.importar_cadastro` em `read_write` — papel NÃO é
+        portão (§ Arc 7); o preset de `admin` é que concede o campo;
+      * o tenant vem do JWT, nunca do corpo.
+
+    ⚠️ As rotas IRMÃS (`/identity/resolve`, `/key/attach`, `/attributes`…) seguem sem
+    credencial (IDN-06). Isto NÃO fecha a IDN-06, e não precisa: nenhuma delas
+    alcança `authoritative`, porque a trava mora no índice (`_writer_provenance`) e
+    não aqui. Fechar só esta porta e deixar a trava na rota seria contornável.
+
+    Devolve `{created, updated, refused, results[]}`; linha recusada vem NOMEADA.
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Identity resolver not available")
+
+    from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
+
+    _tok = bearer_from_header(request.headers.get("authorization"))
+    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
+    if not _payload:
+        raise HTTPException(
+            status_code=401,
+            detail="importacao exige credencial (Bearer ausente ou invalido)",
+        )
+    if not abac_can(_payload, "contacts", "importar_cadastro", "read_write"):
+        logger.warning(
+            "identity import NEGADO: sub=%s — sem contacts.importar_cadastro",
+            _payload.get("sub"),
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="importacao exige `contacts.importar_cadastro` (read_write)",
+        )
+    tenant_id = str(_payload.get("tenant_id") or "")
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="credencial sem tenant_id")
+    if not body.system.strip():
+        raise HTTPException(status_code=422, detail="`system` e obrigatorio (origem da base)")
+    if len(body.customers) > IDENTITY_IMPORT_MAX_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail="no maximo %d linhas por chamada; recebidas %d"
+                   % (IDENTITY_IMPORT_MAX_ROWS, len(body.customers)),
+        )
+    return await _webhook_adapter.import_customers(
+        tenant_id   = tenant_id,
+        system      = body.system.strip(),
+        rows        = [c.model_dump() for c in body.customers],
+        imported_by = str(_payload.get("sub") or ""),
     )
 
 

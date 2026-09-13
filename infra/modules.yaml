@@ -181,6 +181,24 @@ modules:
         role_defaults:
           admin: read_write
           supervisor: read_write
+      # PID-12 (2026-09-13). Decisao do dono em 2026-09-12: a IMPORTACAO com
+      # credencial de admin e a unica porta que carimba procedencia `authoritative`
+      # na ancora do cliente — e e contra essa procedencia que o OTP vai poder ser
+      # emitido (PID-10). Quem detem este campo decide em que base a plataforma
+      # CONFIA para provar identidade; por isso ele e so do admin.
+      #
+      # ⚠️ Campo proprio, nao `exportar` nem `config.*`: exportar LE dados, este
+      # ESCREVE confianca. Um rotulo que juntasse os dois seria o "campo com e" do
+      # Arc 7 — e aqui a metade escondida seria a que concede capacidade.
+      # `scopable: false` porque a importacao grava o cadastro do TENANT, que nao
+      # tem pool; um escopo declarado pareceria restringir sem restringir nada.
+      importar_cadastro:
+        label: Importar a base de clientes como fonte autoritativa de identidade
+        domain: [none, read_write]
+        scopable: false
+        default: none
+        role_defaults:
+          admin: read_write
 
   # ── `workflows` REMOVIDO em 2026-09-08 (MOD-11) ─────────────────────────────
   #

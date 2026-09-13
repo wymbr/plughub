@@ -14,6 +14,7 @@ Usuários criados:
         contacts.visualizar   = read_only
         contacts.transcricao  = read_only  (MOD-07: o diálogo verbatim)
         contacts.exportar     = read_write
+        contacts.importar_cadastro = read_write  (PID-12: a unica porta de `authoritative`)
         contacts.monitorar    = read_write  (Monitor — decisão 3 do dono, 2026-08-27)
         agent_assist.atender  = read_write  (MOD-05: o corte de `contacts.operacao`)
         config.users          = read_write  (Access + Groups — decisão 1)
@@ -250,6 +251,8 @@ DEMO_USERS = [
                 "visualizar": {"access": "read_only",  "scope": []},
                 "transcricao": {"access": "read_only", "scope": []},  # MOD-07
                 "exportar":   {"access": "read_write", "scope": []},
+                # PID-12: a importacao autoritativa da base de clientes — so do admin.
+                "importar_cadastro": {"access": "read_write", "scope": []},
             },
             # `workflows` saiu daqui em 2026-09-12 (AUT-54). O modulo deixou o catalogo
             # na MOD-11 (2026-09-08) e o bloco ficou: o PUT abaixo recusa o config

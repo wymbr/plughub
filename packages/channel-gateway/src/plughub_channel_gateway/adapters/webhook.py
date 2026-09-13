@@ -55,6 +55,7 @@ import re
 import secrets
 import time
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
@@ -2709,18 +2710,23 @@ class WebhookAdapter(ChannelAdapter):
         anchors: list[dict[str, str]] = []
         seen: set[tuple[str, str]] = set()
 
-        def add(kind: str, value: Any) -> None:
+        # PID-12 / ADR D13: a procedência é declarada AQUI, por quem sabe de onde a
+        # âncora saiu — o índice só a valida (e recusa `authoritative`). Chave do
+        # contexto = o fluxo coletou/recebeu = `declared`; `contact_identifier` = veio
+        # do CANAL = `channel_origin` (o que NÃO significa autenticado: isso é PID-09).
+        def add(kind: str, value: Any, provenance: str) -> None:
             if not value:
                 return
             key = (kind, str(value))
             if key in seen:
                 return
             seen.add(key)
-            anchors.append({"kind": kind, "value": str(value)})
+            anchors.append({"kind": kind, "value": str(value), "provenance": provenance})
 
         for kind in ("phone", "email", "cpf", "princ"):
-            add(kind, context.get(kind) or context.get(f"session.{kind}"))
-        add("phone", context.get("contact_identifier") or context.get("session.contact_identifier"))
+            add(kind, context.get(kind) or context.get(f"session.{kind}"), "declared")
+        add("phone", context.get("contact_identifier") or context.get("session.contact_identifier"),
+            "channel_origin")
         return anchors
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -2756,9 +2762,12 @@ class WebhookAdapter(ChannelAdapter):
         """
         res = await self._otp.verify(tenant_id, kind, value, code)
         if res.get("verified") and customer_id:
+            # A posse não diz de ONDE a âncora veio: `declared` só vale se a linha é
+            # nova; a procedência já registrada (inclusive `authoritative`) fica.
             await self._identity.attach_anchor(
                 tenant_id, customer_id, kind, value,
                 verification_class="possessed", persist_durable=True,
+                provenance="declared",
             )
             res["verification_class"] = "possessed"
         return res
@@ -2782,6 +2791,20 @@ class WebhookAdapter(ChannelAdapter):
         """Enriquecimento — merge de atributos mascarados/não-sensíveis no cadastro."""
         ok = await self._identity.update_attributes(tenant_id, customer_id, attributes)
         return {"updated": ok}
+
+    async def import_customers(
+        self, tenant_id: str, system: str, rows: list[dict], imported_by: str,
+    ) -> dict:
+        """PID-12 — importação autoritativa. O portão (credencial + ABAC) é da ROTA."""
+        results = await self._identity.import_customers(
+            tenant_id, system, rows, imported_by=imported_by,
+        )
+        return {
+            "created":  sum(1 for r in results if r.outcome == "created"),
+            "updated":  sum(1 for r in results if r.outcome == "updated"),
+            "refused":  sum(1 for r in results if r.outcome == "refused"),
+            "results":  [asdict(r) for r in results],
+        }
 
     async def search_customers(self, tenant_id: str, q: str, limit: int = 20) -> dict:
         """Busca manual de cadastro (C1a) — por customer_id exato ou nome."""

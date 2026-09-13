@@ -252,6 +252,12 @@ probe_choice_operator_parity.sh
 # dizia "encerrado". Ramo A e AST e nao grep -- o literal "suspended" tambem aparece em
 # comentario, log e numa comparacao legitima de outro assunto.
 probe_contact_close_outcomes.sh
+# PID-12. `authoritative` e a procedencia contra a qual o OTP vai poder ser emitido, e o dono
+# decidiu que so a IMPORTACAO com credencial a carimba. Censo AST (a constante so e passada
+# dentro de `import_customers`), portao com controle positivo, semantica no Postgres -- inclusive
+# que a reatribuicao da ancora a outro cliente ZERA a procedencia -- e mutacao do upsert.
+# Mexe no cadastro vivo so com fixtures apagadas por hash e por id.
+probe_identity_provenance.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

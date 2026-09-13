@@ -259,6 +259,16 @@ identidade, encaminhar a humano, ou começar processo novo.
 `identity.customers`, **assumido confiável como premissa de trabalho**, com as lacunas de (7) e (8)
 registradas como fichas.
 
+> **Implementado em 2026-09-13 (PID-12), com a porta escolhida pelo dono em 2026-09-12:** a
+> **importação com credencial** é a única que carimba `authoritative` —
+> `POST /v1/channels/webhook/identity/import`, campo ABAC `contacts.importar_cadastro`, tenant do
+> JWT. A premissa *"`identity.customers` é confiável"* deixa de ser presumida: passa a valer para as
+> âncoras que vieram por essa porta, e só para elas. Três escolhas que a implementação fez e que o
+> ADR não dizia: **(1)** a trava mora no índice, não na rota, porque as rotas irmãs seguem sem
+> credencial (IDN-06); **(2)** a procedência **zera quando a âncora muda de cliente**; **(3)** o
+> legado fica `NULL` (*não registrada*), nunca `declared`. A leitura da procedência pelo OTP é da
+> PID-10 (e a metade que falta do IDN-07).
+
 ## 4. Consequências
 
 **Contabilidade de segmento** — a porta suspende no `delegate`, e suspender libera o agente: porta →
@@ -318,9 +328,9 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 
 ## 7. O que esta ADR NÃO decide
 
-- **Quem grava `authoritative`** — MCP de domínio no CRM do tenant (o `identity_verify` que a spec
-  previu), importação de base com credencial de admin, ou federação de login. É decisão de produto
-  tanto quanto de engenharia, e a única que a plataforma não resolve sozinha (PID-12, IDN-01).
+- ~~**Quem grava `authoritative`**~~ — **decidido pelo dono em 2026-09-12 e implementado em
+  2026-09-13 (PID-12): a importação de base com credencial.** As outras duas (MCP de domínio no CRM
+  do tenant, que é o alvo arquitetural; federação de login) seguem nomeadas e não eleitas.
 - **Biometria** — desenhável, não executável: nenhum canal do parque captura mídia (Arc 15).
 - **Voz** — todo o D10 de voz é papel enquanto VOZ-01/VOZ-03 valerem.
 - **A forma do step-up no meio do processo** (revelar dado mascarado, por exemplo) — usa a mesma

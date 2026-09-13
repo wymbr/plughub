@@ -96,6 +96,14 @@ história no `CHANGELOG.md`.)*
 
 ---
 
+## `docs/adr/adr-identity-door-evidence.md` — porta de identidade
+
+| id | tarefa | fechada em | âncora |
+|---|---|---|---|
+| PID-12 | **`authoritative` tem uma porta, e ela exige credencial.** Decisão do dono (2026-09-12): a importação com credencial de admin é a única que carimba procedência autoritativa. Entregue: rota `POST …/identity/import` com Bearer + `contacts.importar_cadastro` (`read_write`, campo novo, preset só de `admin`; papel não é portão) e o tenant vindo do JWT, nunca do corpo; `import_customers` idempotente por `(system, external_id)`, que **recusa e nomeia** a linha cuja âncora já é de outro cliente em vez de fundir; coluna `provenance` (IDN-07, metade escrita). ⚠️ **A trava mora no ÍNDICE, não na rota:** as rotas irmãs seguem sem credencial (IDN-06), então todo escritor que não é a importação passa por `_writer_provenance`, que recusa `authoritative` alto — e a procedência **zera quando a âncora muda de cliente**, senão quem não tem credencial anexaria um telefone importado ao próprio cadastro e herdaria a confiança. Gate `probe_identity_provenance.sh` (censo AST · portão com controle positivo · semântica no Postgres · mutação do upsert). Backfill do campo em `admin@`/`probe@`. Achado: IDN-09 | 2026-09-13 | `CHANGELOG.md` § 2026-09-13 (4) |
+
+---
+
 ## `docs/adr/adr-human-approval-workflow-step.md` — aprovação humana
 
 | id | tarefa | fechada em | âncora |

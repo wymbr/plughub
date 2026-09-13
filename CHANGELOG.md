@@ -1,5 +1,109 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (4) — PID-12: `authoritative` ganha uma porta, e ela exige credencial
+
+Decisão do dono na Onda 1 (2026-09-12): **a importação com credencial de admin é a única porta que
+carimba procedência `authoritative`** na âncora do cliente. É contra essa procedência que o OTP vai
+poder ser emitido (PID-10) — e uma segunda porta, ou uma porta sem credencial, faria o OTP confiar
+numa base que qualquer um escreve.
+
+### 1 · O que foi medido antes de desenhar
+
+| fato | medido |
+|---|---|
+| eixo de procedência | **não existia** (IDN-07) — só `verification_class` |
+| porta de importação | **nenhuma** |
+| quem grava âncora DURÁVEL | dois caminhos: `promote_to_durable` (3 pontos no webhook) e `attach_anchor` no `otp_verify` |
+| a aba Cliente | **não** grava âncora durável: prospect e índice só no Redis, atributos na linha do cliente |
+| rotas de identidade | sem credencial, tenant no corpo (IDN-06, aberta) |
+| população | 98 clientes, 93 chaves (31 `possessed`), 0 `external_refs` |
+
+### 2 · A trava mora no ÍNDICE, não na rota
+
+Com a IDN-06 aberta, uma garantia escrita na rota seria contornável por qualquer chamador que
+alcançasse o método por outro caminho. Então:
+
+- **`_writer_provenance`** valida a procedência de todo escritor que não é a importação, e **recusa
+  `authoritative` alto** (`ValueError`), antes de qualquer escrita;
+- **um upsert de chave só**, para todos os escritores;
+- **a procedência zera quando a âncora muda de cliente.** Sem isso, bastava um escritor sem credencial
+  anexar um telefone importado ao próprio cadastro para **herdar** a confiança — a porta única viraria
+  porta de qualquer um. Mesmo cliente: `authoritative` vence; fora isso, fica a primeira origem.
+
+Os escritores comuns passaram a declarar de onde a âncora veio, **no ponto que sabe**: o adapter,
+ao extrair do contexto, carimba `declared`; o identificador do canal, `channel_origin` (o que não quer
+dizer autenticado, que é a PID-09); o OTP insere `declared` sem sobrescrever a procedência que já
+existia. **O legado ficou `NULL`** — *não registrada* —, porque carimbar `declared` em 93 chaves
+inventaria uma origem que ninguém mediu.
+
+### 3 · A porta
+
+`POST /v1/channels/webhook/identity/import` com `{system, customers: [{external_id, anchors,
+attributes}]}`:
+
+- **Bearer obrigatório**, pelo verificador canônico (`plughub_authz`);
+- **campo ABAC novo, `contacts.importar_cadastro` (`read_write`)**, com preset **só de `admin`**. Papel
+  não é portão: `roles: [admin]` sem o grant recebe 403, e isso tem teste. Campo próprio, e não
+  `exportar`: exportar LÊ dados, este ESCREVE confiança;
+- **o tenant vem do JWT** — o corpo nem tem `tenant_id`, e o teste assere a ausência do campo;
+- teto de 1 000 linhas por chamada (413).
+
+`import_customers` é **idempotente por `(system, external_id)`** (a tabela `customer_external_refs`
+existia, com zero linhas). **Conflito recusa a linha e a nomeia, nunca funde**: âncora que o cadastro
+já atribui a outro cliente é território de merge, e resolvê-la em silêncio seria a importação
+reescrevendo de quem é um telefone. A importação **não prova posse** (`claimed`; um `possessed` do
+mesmo cliente é preservado). Depois do commit, o índice Redis passa ao cliente importado — o Lookup 1
+lê o Redis primeiro, e um prospect efêmero com a mesma âncora faria o resolve devolver o prospect.
+
+### 4 · Catálogo, e o que o catálogo arrasta
+
+O campo entrou em quatro casas, e três gates cobraram cada uma: `infra/modules.yaml`, os rótulos nos
+dois locales (`probe_abac_field_labels_i18n` reprovou sem eles), o seed do demo
+(`probe_role_preset_on_create` reprovou: preset e seed divergiam) e o **backfill** em quem já existia
+— `backfill_preset_fields.py`, dry-run primeiro: `admin@` e `probe@`, os dois pelo papel `admin`;
+segunda passada sem mudança.
+
+⚠️ **Custo de ambiente, e o registro dele.** Para o auth-api reler o catálogo eu fiz `docker restart`,
+e o container **não voltou**: `infra/modules.yaml` é bind mount de arquivo único, a edição substitui
+o arquivo, e o mount ficou apontando para um que não existe (`Exited (127)`). `up -d` também falhou —
+religava o mesmo container. Resolveu com `--force-recreate`. **O auth-api ficou uns 4 minutos fora do
+ar** na stack compartilhada. Ficou em memória: depois de editar arquivo montado sozinho, é recriar,
+nunca reiniciar.
+
+### 5 · O gate: `probe_identity_provenance.sh`
+
+- **A · censo AST** (channel-gateway inteiro): o literal só existe na constante, e a constante só é
+  passada como argumento **dentro de `import_customers`**.
+- **B · portão ao vivo**: sem Bearer 401 · operador 403 · e o **controle positivo**, admin importa.
+- **C · semântica no Postgres**: cria e carimba · o resolve casa o importado · reimportar atualiza sem
+  duplicar · conflito recusa (e o telefone segue do primeiro) · escritor comum que **reatribui zera** ·
+  escritor comum pedindo `authoritative` levanta.
+- **D · mutação**: com o upsert que mantém a procedência na reatribuição, o caso reprova — a
+  reatribuição **herda** `authoritative`, que é exatamente o furo.
+
+Limpeza conferida: 98 clientes, 93 chaves, 0 refs, 0 procedências — idênticos a antes.
+
+### 6 · O que NÃO fecha, e o achado
+
+- **IDN-07 fica aberta pela metade da LEITURA**: `CustomerRef` não devolve procedência e o índice Redis
+  não a carrega. É o que a PID-10 vai consultar, e onde decidir se lê PG ou Redis.
+- **IDN-08 ganhou a medição** do §1: o risco que ela nomeava fechou pela trava; resta registrar
+  `operator`, e hoje não há portador durável para o carimbo.
+- **IDN-09 (nova)**: o mesmo upsert mantém `possessed` quando a âncora muda de cliente — **prova de
+  posse herdada**, no Postgres. O Redis faz o certo, então as duas casas discordam e a errada é a que
+  responde quando o Redis esfria. É o eixo vizinho do que esta entrega fechou; ficou fora por escopo
+  e porque mexe no que já está gravado para 31 chaves.
+- **Não há tela de importação.** A porta é a API; uma tela é trabalho de UI que a decisão não pediu.
+
+### 7 · Verificação
+
+12 testes novos (`test_identity_provenance.py`: trava do índice, extração que declara procedência,
+401/403/403 só-leitura/413 e o controle positivo com tenant do JWT). Suíte do channel-gateway **810
+verdes** sobre a imagem; imagem rebuildada (a coluna entrou no boot). `probe_identity_provenance`
+VERDE nos 4 ramos. `probe_abac_field_labels_i18n`, `probe_role_preset_on_create`,
+`probe_i18n_duplicate_keys`, `probe_hiring_pairs_subset`, `probe_nav_backend_field_agreement`,
+`probe_config_permissions_census` e `probe_adapter_self_calls` verdes.
+
 ## 2026-09-13 (3) — VOZ-07: anexo vencido passa a expirar — o expurgo estava em três documentos e em nenhum código
 
 A VOZ-06 achou, ao medir a própria premissa, que o expurgo em dois estágios descrito no docstring do
