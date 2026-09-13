@@ -297,6 +297,11 @@ probe_session_bound_resume.sh
 # (TS, Python e mapa vivo), os quatro funis genericos com o guard, recusa viva nos dois
 # escritores TS, funil Python na imagem com mutacao, e o OTP da jornada gravando a prova.
 probe_identity_evidence.sh
+# PID-03. Duas consultas provaram posse e o processo ficou com a prova da PRIMEIRA — o merge
+# fazia "canonica vence" campo a campo. Evidencia viaja como registro e a mais recente vence,
+# no merge e no workflow_resume (antes de acordar o processo). Estatico, resume vivo sobre
+# sessoes sinteticas com token vencido (controle incluso), e a jornada de duas consultas.
+probe_evidence_transport.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

@@ -297,6 +297,83 @@ export async function writeIdentityEvidence(
   return { ...(journeyRoot ? { journeyRoot } : {}), written, removed }
 }
 
+/**
+ * Raiz CANÔNICA da journey de uma sessão: raiz de proveniência (`core.contact.root_session_id`
+ * do ctx, que o gateway semeia e o `delegate` herda do chamador; fallback = a própria sessão)
+ * → `resolveJourneyRoot`. A mesma via do bridge — uma definição de "qual journey é esta".
+ */
+export async function journeyRootOfSession(
+  redis:     RedisClient,
+  tenantId:  string,
+  sessionId: string,
+): Promise<string> {
+  let provenanceRoot = sessionId
+  try {
+    const raw = await redis.hget(`${tenantId}:ctx:${sessionId}`, "core.contact.root_session_id")
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed?.value) provenanceRoot = String(parsed.value)
+    }
+  } catch { /* fallback: raiz de proveniência = a própria sessão */ }
+  return resolveJourneyRoot(redis, tenantId, provenanceRoot)
+}
+
+// ─── PID-03 — a evidência viaja como REGISTRO, e a mais recente vence ─────────────────
+//
+// Medido em 2026-09-13 na jornada do limite: duas consultas provaram posse (OTP verified) e
+// as duas se uniram ao processo por `journey_merge`; o hash do processo ficou com a prova da
+// PRIMEIRA. A regra geral do merge ("a canônica vence", campo a campo) descartava a prova
+// nova sempre que o processo guardasse uma velha — e a D5 recusaria justamente quem acabou
+// de provar. Evidência não é contexto acumulado: é o ÚLTIMO resultado de um mecanismo, e seus
+// campos só fazem sentido juntos (um `status` de hoje com o `verified_at` de ontem é mentira).
+
+const EVIDENCE_ROOT = "core.journey.identity."
+
+function mecanismoDe(tag: string): string | null {
+  if (!tag.startsWith(EVIDENCE_ROOT)) return null
+  const resto = tag.slice(EVIDENCE_ROOT.length)
+  const i = resto.indexOf(".")
+  return i > 0 ? resto.slice(0, i) : null
+}
+
+function carimboDoStatus(hash: Record<string, string>, mec: string): string | null {
+  const raw = hash[`${EVIDENCE_ROOT}${mec}.status`]
+  if (!raw) return null
+  try { return String((JSON.parse(raw) as { updated_at?: unknown }).updated_at ?? "") || null } catch { return null }
+}
+
+/**
+ * Leva de `fromKey` para `toKey` cada registro de evidência que for MAIS RECENTE que o do
+ * destino (pelo `updated_at` do `status`), inteiro: os campos do destino daquele mecanismo
+ * são removidos antes. Registro sem `status` legível não viaja. Devolve os mecanismos levados.
+ */
+export async function adoptNewerEvidence(
+  redis:   RedisClient,
+  fromKey: string,
+  toKey:   string,
+): Promise<string[]> {
+  if (fromKey === toKey) return []
+  const src = (await redis.hgetall(fromKey)) ?? {}
+  const dst = (await redis.hgetall(toKey)) ?? {}
+  const mecs = new Set(Object.keys(src).map(mecanismoDe).filter((m): m is string => m !== null))
+  const levados: string[] = []
+  for (const mec of mecs) {
+    const deOrigem = carimboDoStatus(src, mec)
+    if (!deOrigem) continue
+    const noDestino = carimboDoStatus(dst, mec)
+    if (noDestino && noDestino >= deOrigem) continue
+    const prefixo = `${EVIDENCE_ROOT}${mec}.`
+    const velhos = Object.keys(dst).filter(t => t.startsWith(prefixo))
+    if (velhos.length) await redis.hdel(toKey, ...velhos)
+    const novos: Record<string, string> = {}
+    for (const [t, v] of Object.entries(src)) if (t.startsWith(prefixo)) novos[t] = v
+    await redis.hset(toKey, novos)
+    await redis.expire(toKey, 30 * 24 * 3600)
+    levados.push(mec)
+  }
+  return levados
+}
+
 async function writeStampedTag(
   redis:     RedisClient,
   tenantId:  string,
@@ -313,16 +390,7 @@ async function writeStampedTag(
   // o SEGUNDO segmento. Terceira das três casas que roteiam por prefixo; as outras duas
   // são `sdk/context-store.ts` (TTL + chave) e `skill-flow-engine/interpolate.ts` (leitura).
   if (tag.startsWith("journey.") || tag.startsWith("core.journey.")) {
-    let provenanceRoot = sessionId
-    try {
-      const raw = await redis.hget(`${tenantId}:ctx:${sessionId}`, "core.contact.root_session_id")
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (parsed?.value) provenanceRoot = String(parsed.value)
-      }
-    } catch { /* fallback: raiz de proveniência = a própria sessão */ }
-
-    const canonicalRoot = await resolveJourneyRoot(redis, tenantId, provenanceRoot)
+    const canonicalRoot = await journeyRootOfSession(redis, tenantId, sessionId)
     const key = journeyCtxKey(tenantId, canonicalRoot)
     await redis.hset(key, tag, entryJson)
     // TTL do processo (30d) — igual ao migrateJourneyContext do merge.
@@ -395,6 +463,8 @@ async function migrateJourneyContext(
     const existing = await redis.hgetall(dst)
     const toCopy: Record<string, string> = {}
     for (const [tag, value] of Object.entries(entries)) {
+      // PID-03: evidência de identidade NÃO segue "canônica vence" — viaja como registro.
+      if (mecanismoDe(tag) !== null) continue
       if (existing?.[tag] === undefined) toCopy[tag] = value   // canônica vence
     }
     if (Object.keys(toCopy).length > 0) {
@@ -402,9 +472,13 @@ async function migrateJourneyContext(
       // TTL longo — o contexto do processo vive além da sessão (ver LONG_TTL_PREFIXES).
       await redis.expire(dst, 30 * 24 * 3600)
     }
+    const evid = await adoptNewerEvidence(redis, src, dst)
     await redis.del(src)
-    return Object.keys(toCopy).length
-  } catch {
+    return Object.keys(toCopy).length + evid.length
+  } catch (err) {
+    // PID-03: nunca mudo — aqui dentro agora viaja a evidência de identidade, e perdê-la
+    // em silêncio faria o processo recusar quem acabou de provar.
+    console.error(`[journey_merge] migração de contexto ${fromRoot} → ${toRoot} FALHOU: ${String(err)}`)
     return 0
   }
 }

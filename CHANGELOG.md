@@ -1,5 +1,76 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (17) — PID-03: a prova de quem acabou de provar chega ao processo retomado
+
+### 1 · O defeito, reproduzido ao vivo
+
+Assim que a PID-02 passou a gravar evidência, a jornada do limite o mostrou: **duas** consultas
+fizeram OTP `verified` (a segunda um segundo depois da primeira) e as duas se uniram ao processo
+por `journey_merge`. O hash do processo ficou com `proven_in_session` da **primeira**.
+
+A causa é a que a ficha descrevia: `migrateJourneyContext` copiava da journey absorvida só as tags
+que a canônica ainda não tinha, e depois apagava a origem. Com a regra da D5 (só vale a evidência
+da sessão que retoma), a segunda consulta seria recusada justamente por ter acabado de provar.
+
+### 2 · A premissa da ficha que não fechou
+
+A ficha (e a D6) dizia que quem transporta é o `workflow_resume`, *"não o merge"*. Medido:
+
+| fato | consequência |
+|---|---|
+| no intake do limite a ordem é `otp_verify` → `pending_workflow_get` → `journey_merge` → retomada | a prova já foi destruída quando qualquer retomada roda |
+| a retomada principal dos dois intakes é `delegate` (`retomar_resultado`, `retomar_processo`) | o `workflow_resume` é chamado pelo FILHO (agente de confirmação), não por quem provou |
+| a portabilidade não faz merge | sem transporte no resume, a prova fica na journey do intake |
+
+Decisão do dono: **os dois pontos**, com a mesma regra.
+
+### 3 · A regra: registro inteiro, o mais recente vence
+
+- **`adoptNewerEvidence`** (mcp-server, `journey.ts`): para cada mecanismo, compara o
+  `updated_at` do `status` na origem e no destino; se a origem é mais nova (ou o destino não tem),
+  **remove** os campos do destino daquele mecanismo e grava os da origem. Um `status` de hoje
+  nunca convive com o `verified_at` de ontem. Origem sem `status` legível não viaja.
+- **Merge**: a evidência sai do "canônica vence" e passa pela adoção antes de apagar a origem. O
+  `catch` que devolvia `0` calado agora loga.
+- **`workflow_resume`**: antes de chamar o gateway, lê a sessão que o token retoma (hash
+  `{t}:resume_tokens`, e na falta dele o registro por token), resolve as duas raízes de journey e
+  adota. Mesma raiz ⇒ nada a fazer. Falha não bloqueia a retomada, mas loga, e a resposta da tool
+  diz o que foi transportado (`evidence`).
+- O filho de `delegate` herda a raiz de journey do chamador — então "a journey de quem retoma" já
+  é a do intake que provou, sem precisar seguir `origin_session_id`.
+- **Uma definição de raiz**: `journeyRootOfSession` virou helper exportado, usado pelo funil, pelo
+  merge e pelo resume.
+
+### 4 · O que esta fatia NÃO faz
+
+- Ninguém ainda **exige** a evidência: conferir `proven_in_session`, idade e o `resume_requires`
+  é PID-06/PID-11.
+- A regra compara relógio de parede (`updated_at` do escritor). Os dois escritores são o mesmo
+  processo do mcp-server hoje; com réplicas, relógios discordantes decidiriam o vencedor.
+
+### 5 · Testes e probe
+
+- `evidence-transport.test.ts` (7): o caso medido (a segunda prova substitui a primeira), `failed`
+  mais novo leva a prova velha junto, controle da mais velha que não viaja, origem sem status e
+  mesma chave; a leitura da sessão do token pelas duas fontes; o filho de delegate levando a prova
+  da journey do intake ao processo; e o controle da mesma journey. **Mutação** (voltar a "o
+  destino vence"): cai o caso medido e o do `failed` mais novo; os controles ficam.
+- **`probe_evidence_transport.sh`** — A: o merge pula a evidência no "canônica vence" e a adota
+  antes de apagar a origem; o `workflow_resume` transporta antes de chamar o gateway. B: um
+  `workflow_resume` real pelo `/sse`, sobre sessões sintéticas com token vencido (o gateway
+  responde 404, nada acorda): a prova mais nova viaja; controle, a mais velha não sobrescreve. C: a
+  jornada de duas consultas — o processo guarda a prova da **última** (antes do fix, da primeira).
+
+### 6 · Verificação
+
+mcp-server **408 verdes**, `tsc` limpo. Imagem: mcp-server-plughub. Verdes ao vivo:
+`probe_evidence_transport`, `probe_journey_merge_status_access`, `probe_mcp_tool_guard_census`,
+`probe_caller_token_chain`, `probe_journeys_window_applied`, `probe_segments_journey_window`,
+`smoke_journey_context`, `smoke_journey_root`, `probe_identity_evidence` e
+`probe_session_bound_resume` (A–C; as jornadas deles rodaram verdes hoje),
+`probe_gates_manifest_coverage`. `probe_journey_limite` segue inconclusivo por falta de amostra
+de ponta a ponta pelo Console — não triado, anterior a esta ficha.
+
 ## 2026-09-13 (16) — PID-02: a evidência de identidade só é gravada por quem verifica
 
 ### 1 · O que estava aberto, medido antes

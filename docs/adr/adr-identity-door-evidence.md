@@ -111,6 +111,9 @@ bridge executa o snapshot do slot `current`; `skill.flow` só vale para pool nã
 absorvida para a canônica **só onde a canônica ainda não tem a tag**, e apaga a origem. A
 sobrevivente é a raiz mais ANTIGA — o processo pendente. Como a prova roda antes do merge, uma
 evidência nova é descartada sempre que o processo já guardar uma velha.
+*(Reproduzido ao vivo em 2026-09-13, assim que a PID-02 passou a gravar evidência: duas consultas
+provaram posse, as duas se uniram ao processo, e ele ficou com a prova da primeira. Fechado na
+PID-03 — a evidência deixou o "canônica vence" e viaja como registro, o mais recente vence.)*
 
 **(13) O hash de contexto da sessão morre em 4 h** e o helper de extensão do suspend não o cobre
 (cobre `session:{id}:meta`, `{t}:resume_tokens` e `resume_meta`).
@@ -205,6 +208,13 @@ continuação direta, dentro de uma idade máxima.
   `resume_requires` da pendência. A plataforma exige *que haja* evidência; nunca lê *quanta* basta.
 - **Quem transporta a evidência para o processo retomado é o `workflow_resume`**, no servidor — não
   o merge, que por (12) descarta a evidência nova.
+  *(Corrigido na implementação, PID-03, por medição e decisão do dono: **o merge também
+  transporta**. No intake do limite o merge roda ANTES da retomada, e a prova já estaria perdida
+  quando o `workflow_resume` rodasse; e a retomada principal dos dois intakes é por `delegate`,
+  com o `workflow_resume` chamado pelo filho. A regra é uma só nos dois pontos: a evidência é um
+  REGISTRO — `status` e prova juntos — e vence o de `updated_at` mais recente. O `workflow_resume`
+  transporta antes de acordar o processo, e o filho de delegate herda a raiz de journey do
+  chamador, então "a journey de quem retoma" já é a da prova.)*
 
 ### D7 · A exigência de retomada é do N3, com mínimo no skill
 

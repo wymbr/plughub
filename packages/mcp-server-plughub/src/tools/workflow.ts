@@ -29,7 +29,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { withGuard }      from "../infra/tool-guard"
 import { verifySessionBoundToken, type SessionBoundPayload } from "../infra/jwt"
 import type { RedisClient } from "../infra/redis"
-import { writeIdentityEvidence } from "./journey"
+import { writeIdentityEvidence, adoptNewerEvidence, journeyRootOfSession, journeyCtxKey } from "./journey"
 import type { IdentityEvidenceRecord } from "@plughub/schemas"
 
 /**
@@ -81,6 +81,39 @@ export interface WorkflowDeps {
    * registro é a prova que ninguém consegue consultar, e isso não pode parecer sucesso.
    */
   redis?: RedisClient
+}
+
+/**
+ * PID-03 — a sessão que o `resume_token` retoma, lida ANTES de acordá-la (senão o processo
+ * pode ler a journey antes de a evidência chegar). Mesma fonte do gateway: o hash
+ * `{t}:resume_tokens` (`"<sid>:<step>:<expires>"`) e, na falta dele, o registro por token.
+ */
+export async function resumedSessionOf(redis: RedisClient, tenantId: string, resumeToken: string): Promise<string | null> {
+  const v = await redis.hget(`${tenantId}:resume_tokens`, resumeToken)
+  if (v) return v.split(":")[0] || null
+  const meta = await redis.get(`${tenantId}:resume_meta:${resumeToken}`)
+  if (!meta) return null
+  try { return String((JSON.parse(meta) as { session_id?: unknown }).session_id ?? "") || null } catch { return null }
+}
+
+/**
+ * PID-03 — leva ao processo retomado a evidência da journey de quem retoma. Quem chama o
+ * `workflow_resume` é a sessão que provou OU um filho de `delegate` dela, e o filho herda a
+ * raiz de journey do chamador — então "a journey de quem chama" já é a da prova. Mesma
+ * regra do merge: registro inteiro, o mais recente vence. Mesma raiz ⇒ nada a fazer.
+ */
+export async function transportEvidenceOnResume(
+  redis: RedisClient, tenantId: string, callerSession: string, resumeToken: string,
+): Promise<{ target: string | null; from_root?: string; to_root?: string; transported: string[] }> {
+  const target = await resumedSessionOf(redis, tenantId, resumeToken)
+  if (!target) return { target: null, transported: [] }
+  const [fromRoot, toRoot] = await Promise.all([
+    journeyRootOfSession(redis, tenantId, callerSession),
+    journeyRootOfSession(redis, tenantId, target),
+  ])
+  const transported = fromRoot === toRoot ? [] :
+    await adoptNewerEvidence(redis, journeyCtxKey(tenantId, fromRoot), journeyCtxKey(tenantId, toRoot))
+  return { target, from_root: fromRoot, to_root: toRoot, transported }
 }
 
 /** PID-02 — o resultado do verify do gateway, na linguagem da evidência (ADR D4). */
@@ -384,6 +417,23 @@ export function registerWorkflowTools(
           ? resume_origin
           : undefined
 
+      // PID-03 — a evidência chega ao processo ANTES de ele acordar. Falhar aqui não
+      // bloqueia a retomada (é a ação de negócio), mas diz alto que a prova não viajou.
+      let evidencia: Awaited<ReturnType<typeof transportEvidenceOnResume>> | { erro: string } = { erro: "redis ausente" }
+      if (deps.redis) {
+        try {
+          evidencia = await transportEvidenceOnResume(deps.redis, quem.caller.tenant_id, quem.caller.session_id, resume_token)
+          if (evidencia.target === null) {
+            console.warn(`[workflow_resume] token sem sessão legível — evidência NÃO transportada (session=${quem.caller.session_id})`)
+          }
+        } catch (err) {
+          evidencia = { erro: String(err) }
+        }
+      }
+      if ("erro" in evidencia) {
+        console.error(`[workflow_resume] evidência NÃO transportada session=${quem.caller.session_id}: ${evidencia.erro}`)
+      }
+
       // POST to channel-gateway webhook resume endpoint
       const url = `${deps.channelGatewayUrl}/v1/channels/webhook/resume/${encodeURIComponent(resume_token)}`
       let res: Response
@@ -427,7 +477,7 @@ export function registerWorkflowTools(
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify({ resumed: true, decision }),
+          text: JSON.stringify({ resumed: true, decision, evidence: evidencia }),
         }],
       }
     }),

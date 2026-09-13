@@ -312,7 +312,6 @@ nas tools e sem evidência que não se forja, a porta não garante nada contra f
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| PID-03 | **O `workflow_resume` transporta a evidência para o processo retomado.** O merge de journey não serve: `migrateJourneyContext` só copia a tag que a canônica ainda não tem, e a sobrevivente é a raiz mais antiga — então uma prova nova é descartada sempre que o processo já guardar uma velha (inclusive um `failed` de hoje perde para um `verified` de 20 dias atrás). Depois de PID-01 e PID-02 | `aberto` | `journey.ts:312` · ADR D5, D6 |
 | PID-04 | **`skill_intake_runner_v1` — a porta de plataforma**, com `door_mode`, `require`, `on_new_pool`, `degrade_target`, `dialog_form_id`, `accept_resume_key`; e a migração dos dois intakes vivos, que repetem os mesmos 18 step ids (`skill_limite_entrada_v1` × `agente_portabilidade_intake_v1`). A migração vem depois da chave de retomada | `aberto` | ADR D2, D12 |
 | PID-05 | **`skill_identity_orchestrator_v1`** — dono da composição, um `config_param` por mecanismo (`enable_otp`, `enable_biometrics`), tipo novo `required: false` com default. Pode nascer dentro da porta: a interface é a mesma | `aberto` | ADR D3 |
 | PID-06 | **`resume_requires` e `resume_door` no step do N3**, por `$.config.*` (união objeto \| ref, como `channel_policy`); mínimo declarado no skill; `judgeIdentityFloor` recusa no deploy a config que não contém o mínimo — nunca ajusta em silêncio. Depois de PID-07 | `aberto` | ADR D7 |
