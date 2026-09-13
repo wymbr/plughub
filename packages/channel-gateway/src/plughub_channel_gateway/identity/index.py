@@ -81,6 +81,10 @@ class CustomerRef:
     # não resolveu. A plataforma respeita isso por padrão no gate de retomada
     # sensível (Fase 3): cross-canal de customer_resumable exige 'possessed'.
     verification_class: str = "none"   # claimed | possessed | none
+    # Procedência da âncora vencedora (IDN-07 / ADR D13), lida SÓ do cadastro
+    # durável e só quando ele atribui a âncora ao MESMO cliente. None = não
+    # registrada, não resolveu, prospect efêmero, ambíguo, ou Redis e PG divergem.
+    provenance: str | None = None
 
 
 @dataclass
@@ -244,7 +248,7 @@ class IdentityIndex:
         """
         # candidatos: customer_id → (melhor score de ranking, kind_confidence,
         # verification_class) da âncora que melhor pontuou para esse cliente.
-        candidates: dict[str, tuple[float, float, str]] = {}
+        candidates: dict[str, tuple[float, float, str, str, str]] = {}  # + (kind, vh) da âncora
         valid_anchors: list[tuple[str, str, str]] = []   # (kind, value_hash, normalized-not-stored)
         # âncoras que NÃO estavam indexadas (candidatas à identidade progressiva).
         miss_anchors: list[tuple[str, str]] = []          # (kind, value_hash)
@@ -262,16 +266,16 @@ class IdentityIndex:
                 cid_s, vc = hit
                 score = anchor_rank_score(kind, vc)
                 if cid_s not in candidates or score > candidates[cid_s][0]:
-                    candidates[cid_s] = (score, kind_confidence(kind), vc)
+                    candidates[cid_s] = (score, kind_confidence(kind), vc, kind, vh)
             else:
                 miss_anchors.append((kind, vh))
 
         if candidates:
-            top_score = max(s for (s, _c, _v) in candidates.values())
-            winners   = [cid for cid, (s, _c, _v) in candidates.items() if s == top_score]
+            top_score = max(c[0] for c in candidates.values())
+            winners   = [cid for cid, c in candidates.items() if c[0] == top_score]
             if len(winners) == 1:
                 winner = winners[0]
-                _score, conf, vc = candidates[winner]
+                _score, conf, vc, w_kind, w_vh = candidates[winner]
                 # ── Identidade progressiva: anexa as âncoras que eram MISS ao
                 # vencedor, como `claimed` (não-verificada — foi só apresentada
                 # junto). Âncoras que apontam a OUTRO cliente NÃO são tocadas
@@ -285,11 +289,12 @@ class IdentityIndex:
                     )
                 return CustomerRef(winner, status="identified",
                                    matched_by="existing", confidence=conf,
-                                   verification_class=vc)
+                                   verification_class=vc,
+                                   provenance=await self._pg_provenance(tenant_id, w_kind, w_vh, winner))
             # colisão real: mesmo top-score, ids diferentes → ambíguo (fluxo 'ask').
             # Não anexa misses sob ambiguidade.
             w = winners[0]
-            _s, conf, vc = candidates[w]
+            _s, conf, vc, _k, _h = candidates[w]
             return CustomerRef(w, status="identified",
                                matched_by="ambiguous", confidence=conf,
                                verification_class=vc)
@@ -299,7 +304,7 @@ class IdentityIndex:
         # índice quando acha, para os próximos lookups voltarem a ser O(1) no Redis.
         pg_hit = await self._pg_resolve(tenant_id, valid_anchors)
         if pg_hit:
-            customer_id, conf, vc = pg_hit
+            customer_id, conf, vc, prov = pg_hit
             # Reidrata o índice Redis preservando a classe durável de cada âncora
             # (uma reidratação não deve rebaixar um `possessed` a `claimed`).
             for (kind, vh, _n) in valid_anchors:
@@ -311,7 +316,7 @@ class IdentityIndex:
                 )
             return CustomerRef(customer_id, status="identified",
                                matched_by="durable", confidence=conf,
-                               verification_class=vc)
+                               verification_class=vc, provenance=prov)
 
         if not provision:
             return CustomerRef("", status="none", matched_by="none", confidence=0.0)
@@ -395,18 +400,18 @@ class IdentityIndex:
 
     async def _pg_resolve(
         self, tenant_id: str, valid_anchors: list[tuple[str, str, str]],
-    ) -> tuple[str, float, str] | None:
-        """Lookup 1 no PG durável: âncoras → (customer_id, confidence, verification_class).
-        Ranqueia por score classe-aware (possessed vence claimed)."""
+    ) -> tuple[str, float, str, str | None] | None:
+        """Lookup 1 no PG durável: âncoras → (customer_id, confidence, verification_class,
+        provenance). Ranqueia por score classe-aware (possessed vence claimed)."""
         if self._db is None or not valid_anchors:
             return None
-        best: tuple[str, float, str] | None = None
+        best: tuple[str, float, str, str | None] | None = None
         best_score = -1.0
         async with self._db.acquire() as conn:
             for (kind, vh, _n) in valid_anchors:
                 row = await conn.fetchrow(
                     """
-                    SELECT customer_id, confidence, verification_class
+                    SELECT customer_id, confidence, verification_class, provenance
                       FROM identity.customer_secondary_keys
                      WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3
                      LIMIT 1
@@ -419,8 +424,58 @@ class IdentityIndex:
                     score = anchor_rank_score(kind, vc)
                     if score > best_score:
                         best_score = score
-                        best = (row["customer_id"], conf, vc)
+                        best = (row["customer_id"], conf, vc, row.get("provenance"))
         return best
+
+    async def _pg_provenance(
+        self, tenant_id: str, kind: str, value_hash: str, customer_id: str,
+    ) -> str | None:
+        """Procedência durável da âncora — SÓ se o cadastro a atribui a `customer_id`.
+
+        ⚠️ **Por que o PG e nunca o Redis** (IDN-07, 2026-09-13): `authoritative` só é
+        gravado pela importação, e ela escreve no PG. Copiar a procedência no índice
+        Redis criaria uma segunda casa para a mesma confiança — e a IDN-09 acabou de
+        medir o custo disso: as duas casas discordaram, e ninguém ficou vermelho.
+
+        ⚠️ **Por que confere o cliente:** o índice Redis pode apontar uma âncora para um
+        cliente que o cadastro não reconhece (IDN-10). Devolver a procedência do PG
+        nesse caso emprestaria a confiança de um cliente a outro — o furo que a PID-12
+        fechou na escrita, reaberto na leitura. Divergência LOGA e devolve None.
+        """
+        if self._db is None:
+            return None
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT customer_id, provenance FROM identity.customer_secondary_keys
+                 WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3 LIMIT 1
+                """,
+                tenant_id, kind, value_hash,
+            )
+        if not row:
+            return None
+        if row["customer_id"] != customer_id:
+            logger.warning(
+                "identity: indice Redis atribui a ancora %s a %s e o cadastro a %s — "
+                "procedencia NAO informada (IDN-10)",
+                kind, customer_id, row["customer_id"],
+            )
+            return None
+        return row.get("provenance")
+
+    async def anchor_provenance(
+        self, tenant_id: str, customer_id: str, kind: str, value: str,
+    ) -> str | None:
+        """Procedência de UMA âncora para UM cliente — a pergunta que a PID-10 faz antes
+        de emitir OTP (*"esta âncora é autoritativa PARA ESTE cliente?"*). None quando
+        inválida, ausente do cadastro, de outro cliente, ou não registrada."""
+        if not customer_id:
+            return None
+        try:
+            vh = hash_anchor(self._salt, kind, value)
+        except ValueError:
+            return None
+        return await self._pg_provenance(tenant_id, kind, vh, customer_id)
 
     async def _pg_key_class(self, tenant_id: str, kind: str, value_hash: str) -> str | None:
         """Classe de verificação durável de uma chave (para não rebaixar no reidratar)."""

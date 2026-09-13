@@ -2744,6 +2744,8 @@ class WebhookAdapter(ChannelAdapter):
             "matched_by":         ref.matched_by,
             "confidence":         ref.confidence,
             "verification_class": ref.verification_class,
+            # IDN-07: None = nao registrada / sem cadastro / divergente; nunca inferida.
+            "provenance":         ref.provenance,
         }
 
     # ── OTP de posse de canal (Fase 2) ─────────────────────────────────────────

@@ -25,7 +25,13 @@
 #      escritor comum pedindo `authoritative` levanta.
 #   D  MUTACAO — o mesmo exercicio com o upsert que MANTEM a procedencia na
 #      reatribuicao TEM de reprovar o caso da reatribuicao; e com a regra antiga do
-#      `possessed` (IDN-09), o caso da posse tambem.
+#      `possessed` (IDN-09), o caso da posse tambem; e com a leitura que nao confere
+#      o cliente (IDN-07), o caso da divergencia.
+#
+# ⚠️ IDN-07 (2026-09-13): a LEITURA vem SO do Postgres — `authoritative` so nasce
+#    la, e copiar a procedencia no Redis criaria a segunda casa que a IDN-09 mediu
+#    divergindo. E ela confere o cliente: o indice Redis pode apontar a ancora para
+#    quem o cadastro nao reconhece (IDN-10), e ai a leitura emprestaria confianca.
 #
 # ⚠️ IDN-09 (2026-09-13): a posse provada e a MESMA pergunta com outro campo — a
 #    confianca da ancora e fato do par (ancora, CLIENTE). O upsert mantinha
@@ -153,6 +159,12 @@ else
     SEM*) incon "exercicio sem veredicto: ${V#SEM}" ;;
     *)    falha "${V#FALHA } — $JSON" ;;
   esac
+  V=$(julga "$JSON" "resolve_expoe,le_via_redis,le_via_duravel,divergencia_nao_empresta,anchor_provenance_confere")
+  case "$V" in
+    OK)   ok "LEITURA (IDN-07): resposta HTTP expoe · Redis quente e cadastro frio devolvem a procedencia · Redis divergente NAO empresta · a pergunta da PID-10 responde por (ancora, cliente)" ;;
+    SEM*) incon "exercicio sem veredicto: ${V#SEM}" ;;
+    *)    falha "${V#FALHA } — $JSON" ;;
+  esac
 
   echo ""
   echo "── D · MUTACAO ────────────────────────────────────────────────────────"
@@ -188,6 +200,23 @@ print("OK" if c.get("posse_antes") and c.get("reatribui_posse") is False and c.g
     OK)   ok "com a regra antiga do \`possessed\`, a reatribuicao HERDA a posse e o caso reprova (IDN-09)" ;;
     SEM*) incon "${V#SEM }" ;;
     *)    falha "a mutacao da posse passou — o caso nao mede a regra: ${V#FALHA }" ;;
+  esac
+
+  JSON=$(exercicio --mutar-leitura)
+  V=$(printf '%s' "$JSON" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print("SEM"); sys.exit()
+if not d.get("mutacao_leitura_aplicada"):
+    print("SEM a mutacao da leitura nao foi aplicada"); sys.exit()
+c = d["casos"]
+print("OK" if c.get("le_via_redis") and c.get("divergencia_nao_empresta") is False else "FALHA %s" % c)')
+  case "$V" in
+    OK)   ok "sem conferir o cliente, a leitura EMPRESTA \`authoritative\` ao prospect e o caso reprova (IDN-07)" ;;
+    SEM*) incon "${V#SEM }" ;;
+    *)    falha "a mutacao da leitura passou — o caso nao mede a regra: ${V#FALHA }" ;;
   esac
 fi
 

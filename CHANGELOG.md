@@ -1,5 +1,67 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-13 (6) — IDN-07: a procedência passa a ser lida — só do cadastro, e só para o mesmo cliente
+
+A PID-12 entregou a metade ESCRITA do eixo de procedência. Faltava a leitura: `CustomerRef` não a
+devolvia, o índice Redis não a carregava, e o Lookup 1 lê o Redis primeiro. A ficha deixava em
+aberto **de onde** ler — PG ou Redis — como parte da PID-10.
+
+### 1 · A escolha, e por que ela não era gosto
+
+**Só do Postgres, nunca copiada no Redis.** Dois fatos medidos decidem:
+
+- `authoritative` **só nasce no PG** — a única porta é a importação, e ela escreve lá. Uma âncora que
+  existe só no Redis é prospect efêmero e não tem procedência nenhuma a informar;
+- a **IDN-09**, fechada horas antes, foi exatamente duas casas para a mesma confiança discordando em
+  silêncio. Copiar a procedência no índice criaria a terceira ocorrência do mesmo defeito.
+
+Custo: o resolve com índice quente passa a fazer **uma** leitura de chave no PG.
+
+### 2 · A leitura confere o CLIENTE
+
+Ao escrever a leitura apareceu um fato que a mudava: **o índice Redis pode apontar uma âncora para um
+cliente que o cadastro não reconhece** (IDN-10, abaixo). Se a leitura buscasse a procedência só pela
+âncora, ela devolveria `authoritative` de um cliente para o outro — o furo que a PID-12 fechou na
+escrita (reatribuição herdando a confiança), reaberto na leitura.
+
+Então `_pg_provenance` devolve a procedência **só quando o cadastro atribui a âncora ao mesmo
+cliente** que o resolve escolheu. Divergência **loga nomeando** (`IDN-10` no texto) e devolve `None`.
+
+### 3 · O que existe
+
+| peça | o quê |
+|---|---|
+| `CustomerRef.provenance` | da âncora vencedora; `None` = não registrada, prospect, ambíguo ou divergente |
+| `/identity/resolve` | campo `provenance` na resposta — aditivo, os três consumidores só leem campos existentes |
+| `anchor_provenance(tenant, customer_id, kind, value)` | a pergunta da PID-10: *esta âncora é autoritativa PARA ESTE cliente?* |
+
+### 4 · O achado: IDN-10
+
+Dois caminhos escrevem no índice Redis uma âncora que o cadastro atribui a outro cliente: a
+identidade progressiva do `resolve_or_provision` (anexa ao vencedor as âncoras que eram miss **no
+Redis**, sem perguntar ao PG — o comentário promete *"âncoras que apontam a OUTRO cliente NÃO são
+tocadas"* e só confere o Redis) e a reidratação do caminho `durable` (grava **todas** as âncoras da
+chamada apontando para o vencedor). O resolve devolve o cliente errado para aquela âncora até o TTL
+de 30 dias, e é esse id que as pendências e a retomada usam. A confiança já não vaza por ali (§2); a
+identidade errada, sim. Ficou aberta: é outro defeito, com outro conserto.
+
+### 5 · O instrumento
+
+`probe_identity_provenance.sh` ganhou, no ramo C, a **leitura**: a resposta HTTP expõe o campo; o
+índice quente e o cadastro frio (caminho `durable`) devolvem `authoritative`; com o Redis apontando a
+âncora para um prospect, a procedência é `None`; e `anchor_provenance` responde por cliente. No ramo
+D, a **terceira mutação** tira a conferência do cliente e o caso da divergência reprova — a leitura
+**empresta** `authoritative` ao prospect.
+
+4 testes unitários da leitura (mesmo cliente, divergente com aviso, prospect, pergunta por cliente).
+
+### 6 · Verificação
+
+Suíte do channel-gateway **814 verdes** sobre a imagem; imagem rebuildada.
+`probe_identity_provenance` VERDE nos 4 ramos, com as **três** mutações reprovando cada uma o seu
+caso. Limpeza conferida: 98 · 93 · 0 · 31, idênticos a antes. A PID-10 ficou apontando a leitura que
+vai usar.
+
 ## 2026-09-13 (5) — IDN-09: a prova de posse deixa de passar de um cliente para outro
 
 Achado ao escrever a PID-12, e o mesmo formato que ela fechou para a procedência.

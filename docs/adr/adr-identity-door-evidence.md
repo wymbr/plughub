@@ -266,8 +266,13 @@ registradas como fichas.
 > âncoras que vieram por essa porta, e só para elas. Três escolhas que a implementação fez e que o
 > ADR não dizia: **(1)** a trava mora no índice, não na rota, porque as rotas irmãs seguem sem
 > credencial (IDN-06); **(2)** a procedência **zera quando a âncora muda de cliente**; **(3)** o
-> legado fica `NULL` (*não registrada*), nunca `declared`. A leitura da procedência pelo OTP é da
-> PID-10 (e a metade que falta do IDN-07).
+> legado fica `NULL` (*não registrada*), nunca `declared`.
+>
+> **A leitura (IDN-07, mesmo dia):** a procedência é lida **só do cadastro durável** e **só quando
+> ele atribui a âncora ao mesmo cliente** — `anchor_provenance(tenant, customer_id, kind, value)` é a
+> pergunta da PID-10. Não é copiada no índice Redis: `authoritative` só nasce no PG, e duas casas
+> para a mesma confiança foi o defeito da IDN-09. A conferência do cliente existe porque o índice
+> Redis pode apontar a âncora para quem o cadastro não reconhece (IDN-10).
 
 ## 4. Consequências
 
