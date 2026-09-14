@@ -314,6 +314,10 @@ probe_deploy_write_principal.sh
 # PID-13: a mesma exigencia na RETOMADA, em todas as portas — sessao sem prova e rota externa
 # anonima recusadas, token intacto, e o smoke dos tres acessos como controle positivo.
 probe_resume_requirement.sh
+# PID-15. O cliente com OTP provado escolhia "Cancelar solicitacao" e lia "nao consegui processar":
+# o token de aprovar exige Bearer humano (AUT-46) e o MCP nao tem. Censo das quatro condicoes com
+# mutacao, o mesmo token recusando decidir e aceitando cancelar, e o cancelamento pelo chat.
+probe_customer_cancel.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,
@@ -645,11 +649,12 @@ smoke_wrapup_slot_handoff.sh
 # tranquilidade da decisao (mesma separacao de `_SCOPE_EXEMPT` x `_SCOPE_DEBT`
 # na analytics-api).
 
-# -- ferramenta (4) --
+# -- ferramenta (5) --
 # o proprio runner e o helper de credencial: sao PECA, nao unidade medida
 =_auth.sh                                             ferramenta
 =_resume_requirement_setup.sh                         ferramenta
 =_resume_access3_exercise.sh                          ferramenta
+=_customer_cancel_exercise.sh                         ferramenta
 =run_gates.sh                                         ferramenta
 
 # -- provisionamento (25) --

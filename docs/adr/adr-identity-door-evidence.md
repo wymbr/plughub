@@ -225,6 +225,10 @@ continuação direta, dentro de uma idade máxima.
   cliente retomar, não sobre o operador decidir; e o scanner de prazo. A exigência mora no registro do
   token (`resume_meta`), cuja escrita falha fechado quando a carrega. Consequência declarada: o link de
   retomada (D10) deixa de valer para pendência com exigência — população medida: zero.)*
+  *(2026-09-14, PID-15: numa tarefa de APROVAÇÃO o terceiro ator não bastava — a AUT-46 exige Bearer
+  humano antes deste portão, e o cliente que provou não conseguia cancelar. O cliente provado passou a
+  **encerrar, nunca decidir**: a rota interna dispensa o Bearer só com atestado de evidência, exigência
+  de identidade no token e `decision=rejected`, que o processo trata como "o cliente cancelou".)*
 - **Quem transporta a evidência para o processo retomado é o `workflow_resume`**, no servidor — não
   o merge, que por (12) descarta a evidência nova.
   *(Corrigido na implementação, PID-03, por medição e decisão do dono: **o merge também
@@ -428,7 +432,7 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-12 | quem grava procedência `authoritative`, e com qual credencial | D13 |
 | PID-13 | a mesma exigência na RETOMADA, em todas as portas (`handle_resume`, 3 atores) | D6, D10 |
 | PID-14 | `resume_door` — por qual pool a retomada entra (gatilho: 2º pool de entrada) | D7 |
-| PID-15 | cliente não cancela pendência de aprovação pelo intake (AUT-46 exige Bearer) | D6 |
+| PID-15 | o cliente provado cancela a tarefa de aprovação (`rejected`), nunca a decide | D6 |
 | IDN-06 | credencial nas rotas de identidade do channel-gateway | (7) |
 | IDN-07 | eixo de procedência na âncora | D13 |
 | IDN-08 | a aba Cliente carimba `operator` | (8) |

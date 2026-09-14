@@ -47,7 +47,13 @@ f["gw_portao_no_resume"] = wh.count("await self._enforce_resume_requirement(")
 f["gw_scanner_isento"] = wh.count('identity_clearance="timeout",   # PID-13')
 f["gw_registro_carrega"] = wh.count("resume_requires=resume_requires,   # PID-13")
 gm = rd("packages/channel-gateway/src/plughub_channel_gateway/main.py")
-f["gw_atestado_rota_interna"] = gm.count("identity_clearance = _resume_identity_clearance(request)")
+# o atestado é lido UMA vez na rota interna e é ele que chega ao handle_resume
+_rota = gm.split("async def webhook_resume(", 1)
+_rota = _rota[1].split("\n@app.", 1)[0] if len(_rota) == 2 else ""
+f["gw_atestado_rota_interna"] = int(
+    _rota.count("clearance = _resume_identity_clearance(request)") == 1
+    and "identity_clearance = clearance," in _rota
+)
 # a rota externa NUNCA aceita atestado: nenhum identity_clearance no corpo dela
 ext = gm.split('async def external_webhook_resume(', 1)
 f["gw_externa_sem_atestado"] = len(ext) == 2 and "identity_clearance" not in ext[1].split("\n@app.", 1)[0]

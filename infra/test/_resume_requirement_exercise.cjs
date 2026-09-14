@@ -52,7 +52,9 @@ async function main() {
       // PID-13 — CODE aqui é o resume_token. S2 primeiro (recusa, token intacto), S1 depois.
       const quem = FASE === "retoma-s2" ? SIDS.s2 : SIDS.s1
       const t = await token(redis, quem)
-      const r = await chama("workflow_resume", { resume_token: CODE, decision: "rejected",
+      // PID-15: o 3º argumento escolhe a decisão (`input` = tentar DECIDIR); default `rejected` = cancelar
+      const decision = ["input", "approved", "rejected"].includes(CUST) ? CUST : "rejected"
+      const r = await chama("workflow_resume", { resume_token: CODE, decision,
         payload: { source: "customer_reconnect", probe: "pid13" }, session_token: t })
       console.log(JSON.stringify({ fase: FASE, r }))
       return

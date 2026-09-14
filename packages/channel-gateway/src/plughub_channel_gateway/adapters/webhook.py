@@ -1184,6 +1184,16 @@ class WebhookAdapter(ChannelAdapter):
             except Exception:
                 pass
 
+    async def resume_requirement(self, tenant_id: str, resume_token: str) -> list[str]:
+        """PID-15 — a exigência de identidade do token (`[]` quando não há), lida do registro.
+
+        Pública porque a ROTA precisa dela antes do `handle_resume`: o portão de aprovação
+        (AUT-46) roda lá, e é ele que decide se o cancelamento do cliente dispensa o Bearer.
+        """
+        meta = await self._read_resume_meta(tenant_id, resume_token)
+        exigencia = (meta or {}).get("resume_requires")
+        return [str(m) for m in exigencia] if isinstance(exigencia, list) else []
+
     async def _enforce_resume_requirement(
         self,
         tenant_id:          str,

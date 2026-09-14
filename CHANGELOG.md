@@ -1,5 +1,59 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (2) — PID-15: o cliente provado cancela o próprio pedido, e não o decide
+
+### 1 · O defeito, reproduzido ao vivo
+
+Cliente importado, processo `limite_processo` parado na aprovação, acesso pelo chat do `limite_ia`: CPF →
+OTP no celular → menu *"Você já tem um pedido…"* → **"Cancelar solicitação"**. O cliente leu *"Não
+consegui processar sua solicitação agora"*; o gateway devolveu **401**, o processo seguiu `suspended` e o
+token ficou vivo.
+
+A causa: o `cancelar_solicitacao` chama `workflow_resume` com `decision=rejected` sobre o token de
+`aprovar`, que é tarefa de APROVAÇÃO (declara `approvals.decide`). A AUT-46 (2026-09-09) exige Bearer
+humano para toda retomada de tarefa que declara capacidade — e o MCP não tem Bearer. Anterior à PID-13;
+achado nela.
+
+| medido | valor |
+|---|---|
+| sessões do intake do limite com o menu de continuidade | 78 (188 no total) |
+| escolheram cancelar | **0** — o botão estava vivo, e quebrado |
+| a portabilidade | sem o defeito: a tarefa dela não é de aprovação |
+| o que o processo faz | `input` → `rotear_decisao` (aprovador); `rejected` → `encerrar_cancelado_cliente` |
+
+### 2 · A decisão
+
+Do dono: **o cliente provado encerra, nunca decide.** A rota interna de retomada dispensa o Bearer humano
+só com as quatro condições juntas (`_customer_cancel_allowed`):
+
+1. a tarefa declara capacidade **e** veio o atestado de evidência do mcp-server (PID-13);
+2. nenhum Bearer — quem tem credencial humana segue o caminho dela;
+3. `decision == "rejected"` — `input`/`approved` continuam exigindo o aprovador, e a recusa loga;
+4. exigência de identidade no registro do token — sem ela não há base de identidade do cliente.
+
+A dispensa roda **antes** do portão humano e não existe na rota externa. Depois dela, o `handle_resume`
+aplica o portão da PID-13 normalmente.
+
+### 3 · Testes e probe
+
+- gateway `test_customer_cancel.py` (6): o controle positivo e cinco negativos, cada um tirando uma
+  condição. **Mutações** (cada uma derruba a suíte): cliente podendo decidir · sem exigência passando ·
+  Bearer ignorado · sem atestado passando.
+- **`probe_customer_cancel.sh`** — A: censo das quatro condições, ordem antes do portão humano, ausência na
+  rota externa, com mutação sobre cópia. B: no MESMO token, a sessão que provou tenta `input` (401, token
+  vivo) e depois `rejected` (retoma; o processo termina em `encerrar_cancelado_cliente`). C: o
+  cancelamento pelo chat, com a confirmação ao cliente e o log nomeado da dispensa.
+
+### 4 · Verificação
+
+gateway **943** verdes. Imagem: channel-gateway. Red-first: o ramo C foi medido vermelho antes do
+rebuild (401, *"não consegui processar"*, processo suspenso). Verdes ao vivo: `probe_customer_cancel`,
+`probe_resume_requirement` (ramos B–E, incluindo a decisão do aprovador pelo portão e o acesso 3 com
+atestado), `probe_gates_manifest_coverage`, `probe_task_ledger`. ⚠️ Na regressão, o censo da PID-13
+acusou `gw_atestado_rota_interna = 0`: ele procurava a linha literal que esta ficha reescreveu em duas
+(ler o atestado uma vez, passá-lo adiante). Defeito do instrumento, não do portão; o padrão passou a
+conferir as duas metades dentro do corpo da rota, e o ramo A voltou a verde.
+
 ## 2026-09-14 (1) — PID-13: a exigência de identidade vale na retomada, em todas as portas
 
 ### 1 · O que a PID-06 deixou aberto, medido

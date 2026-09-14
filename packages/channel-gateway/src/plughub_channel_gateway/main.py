@@ -2015,6 +2015,51 @@ def _resume_identity_clearance(request: Request) -> str | None:
     return None
 
 
+async def _customer_cancel_allowed(
+    request:       Request,
+    body:          "WebhookResumeRequest",
+    resume_token:  str,
+    required_abac: tuple[str, str] | None,
+    clearance:     str | None,
+) -> bool:
+    """PID-15 — o cliente que PROVOU identidade pode cancelar uma tarefa de aprovação.
+
+    Medido em 2026-09-14: o intake do limite oferece "Cancelar solicitação" e chama
+    `workflow_resume` com `decision=rejected` sobre o token de `aprovar`; o processo trata
+    `rejected` como *"o cliente cancelou"* (`on_reject`). Mas a AUT-46 exige Bearer humano
+    para toda retomada de tarefa que declara capacidade — o MCP não tem Bearer, o cliente
+    lia *"não consegui processar"* e o processo seguia suspenso.
+
+    Decisão do dono: o cliente provado **encerra, nunca decide**. Quatro condições, todas
+    obrigatórias:
+      1. a tarefa declara capacidade (sem isso o portão de aprovação nem roda);
+      2. nenhum Bearer foi apresentado — quem tem credencial humana segue o caminho dela;
+      3. `decision == "rejected"` — `input`/`approved` continuam exigindo o aprovador;
+      4. atestado de evidência do mcp-server (PID-13) E exigência de identidade no token.
+         O atestado só é emitido contra uma exigência satisfeita; sem exigência declarada
+         não há base de identidade do cliente, e a tarefa segue fechada.
+    """
+    if required_abac is None or clearance != "session_evidence":
+        return False
+    if bearer_from_header(request.headers.get("Authorization")):
+        return False
+    if str((body.payload or {}).get("decision") or "") != "rejected":
+        logger.warning(
+            "PID-15: atestado de cliente sobre tarefa de aprovação com decision=%r RECUSADO — "
+            "o cliente só cancela (rejected); decidir é do aprovador (token=%s)",
+            (body.payload or {}).get("decision"), resume_token,
+        )
+        return False
+    if not await _webhook_adapter.resume_requirement(body.tenant_id, resume_token):
+        logger.warning(
+            "PID-15: cancelamento atestado sobre tarefa SEM exigência de identidade RECUSADO "
+            "(token=%s) — sem exigência não há base de identidade do cliente", resume_token,
+        )
+        return False
+    logger.info("PID-15: cancelamento do cliente provado aceito na tarefa de aprovação token=%s", resume_token)
+    return True
+
+
 @app.post("/v1/channels/webhook/resume/{resume_token}", status_code=200)
 async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request: Request) -> dict:
     """
@@ -2047,11 +2092,16 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
         await _webhook_adapter.resume_task_pool(body.tenant_id, resume_token)
         if required_abac is not None else None
     )
-    approver = _resolve_approver_principal(
-        request, body, required_abac,
-        pool_da_tarefa    = pool_da_tarefa,
-        exigir_credencial = True,
-    )
+    clearance = _resume_identity_clearance(request)
+    if await _customer_cancel_allowed(request, body, resume_token, required_abac, clearance):
+        # PID-15 — o CLIENTE provado encerra a tarefa de aprovação; não a decide.
+        approver = None
+    else:
+        approver = _resolve_approver_principal(
+            request, body, required_abac,
+            pool_da_tarefa    = pool_da_tarefa,
+            exigir_credencial = True,
+        )
 
     try:
         session_id = await _webhook_adapter.handle_resume(
@@ -2062,7 +2112,7 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
             approver          = approver,
             claim_pool_id     = body.pool_id,
             claim_instance_id = body.instance_id,
-            identity_clearance = _resume_identity_clearance(request),
+            identity_clearance = clearance,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
