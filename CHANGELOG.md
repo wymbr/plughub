@@ -1,5 +1,40 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (11) — Voz/vídeo: vídeo no escopo, duas velocidades, e a negociação de mídia medida inerte
+
+Sem mudança de código. Decisões do dono, depois de avaliar um estudo de agente de IA em vídeo
+(avatar) contra o ADR `adr-voice-media-plane.md`, e a medição que as sustenta.
+
+### 1 · A pergunta "cada segmento negocia as mídias?" — medida, e a resposta é não
+
+| fato | evidência |
+|---|---|
+| a capacidade de mídia do agente não tem produtor: nenhuma coluna `media_capabilities` no Postgres; o agente sintetizado do skill leva `[]`, e lista vazia cai em `text` | `orchestrator-bridge/main.py:845` — **a negociação é inerte, todo contato sairia em texto** |
+| `webrtc_media_fallback_order` e `webrtc_recording` são lidos do pool e não existem no agent-registry; o bridge só envia `{"pool_id"}` | `main.py:5124`, `:6090` — a gravação WebRTC **nunca iniciaria** |
+| o meio é UM por sessão (`channel:webrtc:{sid}:medium`) e cada `routing.assigned` o substitui | especialista de IA de texto numa conferência de vídeo rebaixaria o cliente |
+| a permissão de publicar do cliente é fixada na 1ª atribuição; a renegociação não a atualiza | texto → humano de voz: o cliente não publica áudio |
+| `file_upload` declarado para `webrtc`, sem caminho de upload no adapter | V8 violada |
+| sessões `webrtc` já registradas no ClickHouse | **zero** |
+
+### 2 · Decisões
+
+- **V11 — vídeo no escopo**, inclusive agente de IA em vídeo; revoga a linha de §7. A V4 passa de
+  áudio↔texto a **texto↔mídia**, preservando o que importa: o cérebro é texto.
+- **V12 — duas velocidades**: o ciclo conversacional (VAD, STT e LLM em streaming, TTS, barge-in,
+  avatar) mora num worker de mídia na sala; o skill-flow segue dono do negócio e das tools via MCP.
+  Gate: < 1,5 s do fim da fala ao primeiro áudio, medido.
+- **Ainda aberta:** comprar × hospedar a renderização do avatar — decide-se depois de POC.
+- **Modelo de mídia proposto** (VOZ-09): o de videoconferência dentro de um teto — política do pool
+  e do papel diz o que cada participante PODE publicar; capacidade diz o que ele produz; a escolha
+  de microfone e câmera é dele, dentro do teto.
+
+### 3 · Ledger
+
+Novas: `VOZ-09` (mídia por participante) · `VOZ-10` (mídias por pool) · `VOZ-11` (fallback por
+segmento) · `VOZ-12` (`file_upload` declarado sem implementação) · `VOZ-13` (ciclo em tempo real) ·
+`VOZ-14` (avatar) · `DLG-34` (DialogForm multimídia, com pré-renderização de `statement`) ·
+`USG-02` (dimensão de uso da renderização). A `VOZ-04` passou a começar pela `VOZ-09`/`VOZ-10`.
+
 ## 2026-09-14 (10) — VOZ-01: o plano de mídia existe, e sem ele o canal recusa em vez de fingir
 
 ### 1 · Medido antes, vermelho ao vivo

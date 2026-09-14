@@ -13,6 +13,11 @@
   sala é nossa); **as fases foram reordenadas** — WebRTC primeiro, perna SIP como última milha com
   gatilho comercial; **§8** foi reagrupado, e quase nada bloqueia o V-F0. O ADR de CTI ganhou, no
   mesmo dia, a distinção entre **presença** e **roteamento unificado**.
+- **Emendado em 2026-09-14**, por decisão do dono, depois de avaliar um estudo de agente de IA em
+  vídeo (avatar): **vídeo entra no escopo** (V11, revoga a linha de §7) e o arco adota **duas
+  velocidades** (V12) — o ciclo conversacional em tempo real mora num worker de mídia na sala, e
+  o skill-flow segue dono do negócio. A V4 foi emendada no mesmo sentido. **Continua aberta** a
+  decisão de comprar × hospedar a renderização do avatar (`VOZ-14`).
 
 ---
 
@@ -160,6 +165,12 @@ mesma gravação.
 
 ### V4 — O **bot leg** é o único ponto de conversão áudio↔texto
 
+> ⚠️ **Emendada em 2026-09-14 (com V11).** Com vídeo no escopo, a fronteira deixa de ser só
+> áudio↔texto e passa a ser **texto↔mídia**: STT na entrada; TTS e, quando houver avatar, o
+> renderizador de vídeo na saída. O invariante que importa sobrevive intacto — **o cérebro é
+> texto**: AI Gateway, skill-flow, masking, avaliação e histórico continuam sem saber que existe
+> áudio ou vídeo, e a conversão continua sendo UM componente auditável.
+
 Preserva A11 sem exceção: agentes IA continuam sendo **texto**, o AI Gateway continua stateless e
 sem saber que existe áudio, e a fronteira áudio↔texto é um único componente auditável. Toda a
 plataforma acima dele — skill-flow, masking, avaliação, copilot, histórico — continua operando
@@ -255,6 +266,37 @@ exposição não classificada.
 
 Este arco cria essa classificação. Sem ela, repetimos exatamente o problema que a allowlist HTTP
 foi escrita para fechar: *"a segurança da borda era suposição não escrita"*.
+
+### V11 — **Vídeo está no escopo**, inclusive agente de IA em vídeo *(decisão do dono, 2026-09-14)*
+
+A §7 dizia *"Vídeo — o transporte suporta, mas não é requisito deste arco"*. Revogado: a
+infraestrutura WebRTC tem de estar preparada para agentes de IA em vídeo (avatar). O que isso
+obriga, e onde está no ledger:
+
+- **mídia é fato do PARTICIPANTE, não da sessão** (`VOZ-09`) — medido em 2026-09-14, o código
+  guarda UM meio por sessão, e um especialista de texto entrando numa conferência de vídeo
+  rebaixaria o cliente; com avatar a mídia é ainda assimétrica (avatar publica vídeo, cliente
+  pode estar só com áudio);
+- **mídias oferecidas configuradas por POOL** (`VOZ-10`) e **fallback por SEGMENTO** (`VOZ-11`);
+- **o provedor de avatar entra na NOSSA sala** (`VOZ-14`). É V1 aplicada: renderização pode ser
+  contratada, a sala não — senão gravação, supervisão e avaliação escapam;
+- **conteúdo fixo é pré-renderizável** (`DLG-34`): nós `statement` do DialogForm são texto
+  conhecido na publicação.
+
+### V12 — **Duas velocidades**: o ciclo conversacional na sala, o negócio no skill-flow *(decisão do dono, 2026-09-14)*
+
+Agente de voz/vídeo natural pede resposta em menos de ~1,5 s e interrupção pelo cliente
+(barge-in). O caminho de turno atual — Kafka → bridge → skill-flow → `reason` com resposta JSON
+inteira → `notify` → gateway — não tem streaming nem cancelamento, e nunca foi cronometrado.
+
+- **Velocidade rápida — worker de mídia na sala:** VAD, STT em streaming, LLM em streaming para
+  o TTS, cancelamento de fala e, com avatar, o renderizador. É a evolução do bot leg (V4).
+- **Velocidade de negócio — skill-flow:** decisões, `choice`, tools via MCP, `complete`,
+  escalada. Continua a única casa de regra de negócio.
+
+⚠️ **Fica para o desenho da `VOZ-13`, e não pode ser resolvido por omissão:** como o worker
+consulta o flow sem criar um segundo árbitro de roteamento nem um canal de integração fora do
+MCP. O gate da fase é o orçamento de latência **medido**, não estimado.
 
 ---
 
@@ -355,8 +397,9 @@ ambiente que só sobe porque já subiu antes não está sendo verificado.
   enlace interno carrega **todas** as chamadas de atendimento, logo cada chamada ocupa **dois**
   recursos da central. Ver o corolário emendado em
   [`adr-cti-gateway-multi-driver.md`](adr-cti-gateway-multi-driver.md) §0.
-- **Vídeo** — o transporte suporta, mas medium de vídeo tem desenho próprio no Arc 15 e não é
-  requisito deste arco.
+- ~~**Vídeo** — o transporte suporta, mas medium de vídeo tem desenho próprio no Arc 15 e não é
+  requisito deste arco.~~ **Revogado em 2026-09-14 pela V11:** vídeo está no escopo, inclusive
+  agente de IA em vídeo.
 
 ---
 
