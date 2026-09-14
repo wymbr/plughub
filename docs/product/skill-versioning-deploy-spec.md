@@ -105,7 +105,7 @@ e verificado no docker-demo.
 ## 5. Reaproveitamento (o que já existe)
 
 `PoolSkillSlot` (slots `anterior|corrente|próximo` por pool) · `SkillDeployment` (append-log + snapshot
-+ `deployed_at` + `pool_ids`) · scheduled-deploy (`skill_scheduled_deploy_v1`) + calendário ·
++ `deployed_at` + `pool_ids`) · scheduled-deploy (`skill_scheduled_deploy_v1`, removido na PID-08 — hoje Agenda + `pool_promote`) + calendário ·
 `segments.flow_id` + `segments.deploy_version` (R9) · epoch ancorado no pool (R15) · cobertura (1b).
 A espinha de versionamento **já está montada**; o trabalho é (i) cortar o vazamento e (ii) trocar a
 fonte da identidade de versão.

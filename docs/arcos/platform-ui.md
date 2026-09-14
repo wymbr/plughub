@@ -321,7 +321,7 @@ Skills follow a two-stage lifecycle: **draft** (saved YAML not yet in production
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| `POST` | `/v1/skills/:skill_id/deploy` | Deploys skill to `pool_ids[]`; sets `deploy_status=published`, records `SkillDeployment`, triggers `publishRegistryChanged` |
+| `POST` | `/v1/skills/:skill_id/deploy` | **410 — retired in PID-08 (2026-09-14)**: recorded a `SkillDeployment` without touching any slot. Deploy is `slots/next` + `promote` on the pool |
 | `GET` | `/v1/skills/:skill_id/deployments` | Returns deployment history (newest first, `limit` param, max 200) |
 
 ### Invariants
@@ -338,13 +338,12 @@ Skills follow a two-stage lifecycle: **draft** (saved YAML not yet in production
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| `GET` | `/v1/skills/:skill_id/deployments/scheduled` | Lists pending scheduled deploys (proxies to workflow-api, filters by `skill_scheduled_deploy_v1` + skill_id in context) |
+| `GET` | `/v1/skills/:skill_id/deployments/scheduled` | **410 — retired in PID-08** (listed instances of the removed `skill_scheduled_deploy_v1`) |
 | `GET` | `/v1/skills/:skill_id/handoff-status` | Returns `{ deployed, active_sessions, pool_ids, deployed_at, deployed_by, deployment_id }` — queries analytics-api for sessions started before `deployed_at` in affected pools |
 
 ### Phase 2 — new packages
 
-- `packages/skill-flow-engine/skills/skill_scheduled_deploy_v1.yaml` — timer-based workflow; `on_timeout` IS the deploy trigger
-- `packages/mcp-server-plughub/src/tools/deploy.ts` — `skill_deploy` MCP tool (calls agent-registry POST /v1/skills/:id/deploy)
+- ~~`skill_scheduled_deploy_v1.yaml`~~ and the ~~`skill_deploy`~~ MCP tool — **removed in PID-08 (2026-09-14)**; `deploy.ts` keeps only `pool_promote`
 - `workflow-api/router.py` — `PersistSuspendRequest.scheduled_at` (ISO-8601) overrides `timeout_hours` calculation
 
 **Phase 2 — complete.**

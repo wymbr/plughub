@@ -641,8 +641,9 @@ Skill {
 Regras de `deploy_status` (Skill Deploy Lifecycle):
 - `PUT /v1/skills` sempre cria com `deploy_status = "draft"`; **nunca** modifica o
   campo em updates de skill existente
-- `POST /v1/skills/:id/deploy` é a única ação que define `published` — grava em
-  `skill_deployments` e publica `registry.changed`
+- ⚠️ `deploy_status` é vestigial desde 2026-07-13 (sempre `published`). O único escritor de
+  `skill_deployments` é o `POST /v1/pools/:id/promote`; `POST /v1/skills/:id/deploy` responde 410
+  *(PID-08, 2026-09-14)*
 
 ---
 

@@ -294,7 +294,7 @@ O frontend usa `deploy_markers` para desenhar linhas verticais sobre a série te
 
 **Backend:**
 1. `analytics-api`: consumer `registry.changed` com `event_type: "skill_deployed"` → `INSERT INTO analytics.deploy_events`.
-2. `agent-registry`: publica `registry.changed` com `event_type: "skill_deployed"` quando `POST /v1/skills/:id/deploy` é chamado.
+2. `agent-registry`: publica `registry.changed` com `event_type: "skill_deployed"` quando `POST /v1/skills/:id/deploy` é chamado. *(Rota aposentada na PID-08, 2026-09-14; o registro de deploy é o do promote do pool.)*
 3. `GET /reports/deploy-timeline` no analytics-api.
 
 Fase A foi infraestrutura pura, sem mudança de UI.

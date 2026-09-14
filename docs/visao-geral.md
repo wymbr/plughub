@@ -204,7 +204,7 @@ O Skill Flow é a ferramenta única de design tanto de fluxos de atendimento qua
 
 ### Ciclo de vida de deploy
 
-O Skill Flow suporta o ciclo de deploy completo: **controle de versão** (`skill_{name}_v{n}`, campo `deploy_status` draft/published), **agendamento de deploy** (workflow `skill_scheduled_deploy_v1`), **hot deployment** (skill hot-reload de 3 elos — sem reinício), **graceful shutdown** de contatos em andamento e **rollback de versão** (`skill_deployments` table). O `PUT /v1/skills` nunca altera `deploy_status`; apenas `POST /v1/skills/:id/deploy` publica.
+O Skill Flow suporta o ciclo de deploy completo: **controle de versão** (`skill_{name}_v{n}`, campo `deploy_status` draft/published), **agendamento de deploy** (Agenda do scheduler-api + `pool_promote`), **hot deployment** (skill hot-reload de 3 elos — sem reinício), **graceful shutdown** de contatos em andamento e **rollback de versão** (`skill_deployments` table). O `PUT /v1/skills` salva a definição e não muda o que roda; o deploy é `set-next` → `promote` do pool, que registra o `SkillDeployment`.
 
 Documentação: [`pacotes/skill-flow-engine.md`](pacotes/skill-flow-engine.md), [`modulos/agentflow.md`](modulos/agentflow.md), [`arcos/arc4-workflow.md`](arcos/arc4-workflow.md) (Skill Deploy lifecycle), [`arcos/instance-bootstrap.md`](arcos/instance-bootstrap.md) (hot-reload, reconciliação).
 

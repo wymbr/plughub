@@ -4665,7 +4665,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
       console.log(`   Tools Evaluation:    transcript_get, evaluation_context_resolve, evaluation_publish`)
       console.log(`   Tools ExternalAgent: invoke, wait_for_assignment, send_message, wait_for_message`)
       console.log(`   Tools Delegation:    agent_delegate, agent_delegate_status`)
-      console.log(`   Tools Deploy:        skill_deploy, skill_handoff_status`)
+      console.log(`   Tools Deploy:        pool_promote`)
       console.log(`   Tools Calendar:      calendar_is_open, calendar_next_slot, calendar_add_duration, calendar_business_duration`)
       console.log(`   Tools AgentEvents:   agent_event`)
       console.log(`   SKILL_FLOW_URL:      ${process.env["SKILL_FLOW_URL"] ?? "http://localhost:3400 (padrão — configure SKILL_FLOW_URL para Docker)"}`)

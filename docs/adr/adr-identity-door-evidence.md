@@ -110,6 +110,11 @@ e autor saem do token; o deploy tem portão próprio em `skill_flows.operacao`.)
 /v1/skills/:id/deploy` grava `skill.flow` e um `SkillDeployment` com os pools
 ([skills.ts:410](../../packages/agent-registry/src/routes/skills.ts)), e **não toca slot**. O
 bridge executa o snapshot do slot `current`; `skill.flow` só vale para pool não migrado.
+*(Fechado na PID-08, 2026-09-14, por APOSENTADORIA. Medido antes: 115 `SkillDeployment`, 110 de
+promote e 5 de um seed de demonstração no `sac_ia` cujo slot nunca mudou — zero deploys reais pelo
+lote, nenhum chamador de UI. A rota responde 410 apontando o caminho do pool, a tool `skill_deploy`
+e o workflow `skill_scheduled_deploy_v1` saíram, as 5 linhas foram apagadas com aprovação do dono, e
+o promote é o único escritor do registro. O promote em lote sobre slots virou a PID-16.)*
 
 **(12) O merge de journey descarta evidência nova.** `migrateJourneyContext`
 ([journey.ts:312](../../packages/mcp-server-plughub/src/tools/journey.ts)) copia o hash da journey
@@ -395,7 +400,8 @@ roteiro de demo perde o passo de OTP — decisão consciente, porque a alternati
 **Release de skill de plataforma custa N promotes.** Skill é seed-if-absent (`CLAUDE.md` §
 Configuration): corrigir o runner é `PUT` com `x-skill-publish` + `set-next`/`promote` por porta,
 e um bug do runner atinge todas as portas ao mesmo tempo. Precisa de promote em lote sobre slots
-(PID-08).
+(PID-16 — a PID-08 aposentou o deploy em lote que registrava sem mudar, e o lote de verdade ficou
+para quando houver a primeira skill de plataforma com várias portas).
 
 **v1 = clusters idênticos.** O tier Enterprise de cluster dedicado existe só na especificação
 ([14-multi-tenant.md](../sections/14-multi-tenant.md)); não há helm, k8s nem terraform em `infra/`.
@@ -425,7 +431,7 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-05 | `skill_identity_orchestrator_v1` (composição, um param por mecanismo) | D3 |
 | PID-06 | `resume_requires` nos steps `customer_resumable` + piso no step + `judgeIdentityFloor` + liberação do token contra a evidência da sessão | D6, D7 |
 | PID-07 | tenant e autor da escrita saem da credencial; deploy em `skill_flows.operacao` | D7 |
-| PID-08 | deploy em lote que registra sem mudar + promote em lote sobre slots | §4 |
+| PID-08 | deploy em lote que registra sem mudar — aposentado; o promote é o único registro | §4, (11) |
 | PID-09 | `origin_identity` no adapter: `princ` e `(whatsapp, from)` | D9 |
 | PID-10 | OTP só entregável e autoritativo, recusa explícita; corrige o desafio a CPF | D8 |
 | PID-11 | lista na porta compartilhada gated por chegada; ordem por `expires_at` | D11 |
@@ -433,6 +439,7 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-13 | a mesma exigência na RETOMADA, em todas as portas (`handle_resume`, 3 atores) | D6, D10 |
 | PID-14 | `resume_door` — por qual pool a retomada entra (gatilho: 2º pool de entrada) | D7 |
 | PID-15 | o cliente provado cancela a tarefa de aprovação (`rejected`), nunca a decide | D6 |
+| PID-16 | promote em lote sobre slots, com rollback por pool (gatilho: 1ª skill de plataforma com várias portas) | §4 |
 | IDN-06 | credencial nas rotas de identidade do channel-gateway | (7) |
 | IDN-07 | eixo de procedência na âncora | D13 |
 | IDN-08 | a aba Cliente carimba `operator` | (8) |

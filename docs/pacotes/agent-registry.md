@@ -136,8 +136,9 @@ Skill {
 
 `deploy_status` separa a edição de uma skill da sua publicação:
 
-- `PUT /v1/skills/:id` — sempre cria novas skills com `deploy_status: "draft"` e **nunca** modifica o `deploy_status` em atualizações.
-- `POST /v1/skills/:id/deploy` — única ação que define `deploy_status: "published"`; grava um registro na tabela `skill_deployments` e publica `registry.changed`.
+- `PUT /v1/skills/:id` — salva a definição (`flow`); **não muda o que roda**. `deploy_status` é vestigial (sempre `published`) desde a "uma definição, sem rascunho" de 2026-07-13.
+- Deploy é do POOL: `PUT /v1/pools/:id/slots/next` + `POST /v1/pools/:id/promote`. O promote é o **único escritor** de `skill_deployments` e publica `registry.changed`.
+- `POST /v1/skills/:id/deploy` responde **410** *(PID-08, 2026-09-14)*: gravava `skill_deployments` sem tocar slot, com zero usos reais.
 
 A tabela `skill_deployments` mantém o histórico de publicações (deploy events), usada como âncora temporal por relatórios de qualidade (Arc 6 Fase 2).
 
@@ -210,7 +211,7 @@ Cada chamada a `PATCH /v1/agent-types/:id/canary` avança para o próximo peso n
 | `GET` | `/v1/skills` | Listar skills do tenant |
 | `GET` | `/v1/skills/:id` | Consultar skill |
 | `PUT` | `/v1/skills/:id` | Atualizar skill — sempre `deploy_status: "draft"` em novas; nunca altera o `deploy_status` em updates |
-| `POST` | `/v1/skills/:id/deploy` | Publica a skill (`deploy_status: "published"`) + registra em `skill_deployments` + publica `registry.changed` |
+| `POST` | `/v1/skills/:id/deploy` | **410 — aposentada** *(PID-08, 2026-09-14)*. Use `slots/next` + `promote` do pool |
 
 A skill armazena a definição completa (`SkillSchema`) no campo `definition` (JSON). O `skill_id` segue o formato `skill_{name}_v{n}`.
 
@@ -275,7 +276,7 @@ O `agent-registry` publica eventos no tópico `registry.changed` após operaçõ
 |---|---|
 | `POST /v1/pools` | `pool.registered` |
 | `PUT /v1/pools/:pool_id` | `pool.updated` |
-| `POST /v1/skills/:id/deploy` | `registry.changed` (skill publicada) |
+| `POST /v1/pools/:id/promote` · `rollback` | `registry.changed` (pool) — o promote também grava `skill_deployments` |
 
 **Schema:**
 

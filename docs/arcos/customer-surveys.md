@@ -843,7 +843,7 @@ tenant**; o skill gerado é um **artefato compilado DB-owned**, provisionado pel
 4. **Dry-parse** no validador do skill-flow-engine (perfil **`agent`** — `menu`/`notify` permitidos;
    `suspend`/`collect` proibidos). Falha → **bloqueia o publish** (não deploya YAML inválido).
 5. `PUT /v1/skills/:id` (agent-registry) → `deploy_status=draft`.
-6. `POST /v1/skills/:id/deploy` → `published` → `registry.changed` (Kafka) → `_skill_flow_cache`
+6. `PUT /v1/pools/:id/slots/next` + `POST …/promote` → `registry.changed` (Kafka) → `_skill_flow_cache` *(era `POST /v1/skills/:id/deploy`, 410 desde a PID-08)*
    invalida → **ativo sem restart** (hot-reload 3-elo).
 
 ### 16.3 Mapeamento bloco → step

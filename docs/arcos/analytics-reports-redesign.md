@@ -46,7 +46,7 @@ Pool é **filtro** no relatório A; é **dimensão** no relatório B. Agente é 
 ### Identidade do agente (verificado no código — 2026-05-31)
 
 **`agent_type_id` está deprecated.** A associação **pool ↔ skill** é feita no **deploy do
-flow** (`POST /v1/skills/:id/deploy` com `pool_ids` → tabela `skill_deployments`), não pelo
+flow** (`set-next` + `promote` do pool → tabela `skill_deployments`; o `POST /v1/skills/:id/deploy` é 410 desde a PID-08), não pelo
 agent_type. O agent_type sobrevive apenas como **plumbing legado** (registry YAML +
 `instance_bootstrap` que cria instâncias `{agent_type_id}-{n}` + coluna `agent_type_id` no
 `segments`). As identidades **reais** de avaliação são **skill_flow** (IA) e **usuário** (humano).
@@ -154,7 +154,7 @@ Gap de endpoint: nenhum dos acima é exposto analiticamente. Endpoints novos sug
 - **Fase 3 — migrar provisionamento do demo para Config + Deploy** (elimina YAML): hoje o
   ambiente é montado por `infra/registry/*.yaml` + RegistrySyncer (pools + agent_types + skills)
   e PUT de skills. Alvo: criar pools/skills via Config API + UI (`config-recursos/PoolsPage`)
-  e associar skill↔pool via **deploy** (`POST /v1/skills/:id/deploy` com `pool_ids`),
+  e associar skill↔pool via **deploy** (`set-next` + `promote` do pool),
   aposentando os arquivos e o `agent_type` legado (humano/webhook). Refactor de
   provisionamento — separado dos relatórios, mas relacionado à depreciação do agent_type.
 

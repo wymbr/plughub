@@ -2,8 +2,8 @@
  * tools/deploy.ts
  * Skill deploy tools — triggered by deploy workflows.
  *
- *   skill_deploy  — skill-centric legacy path (POST /v1/skills/:id/deploy),
- *                   used by skill_scheduled_deploy_v1.
+ *   (skill_deploy — REMOVIDA na PID-08, 2026-09-14: chamava o deploy em lote do
+ *                   agent-registry, que gravava "implantado" sem tocar o slot que roda.)
  *   pool_promote  — POOL-centric promote (POST /v1/pools/:id/promote), the SINGLE
  *                   promote path (next→current→previous + SkillDeployment). Used by
  *                   skill_deploy_promote_v1, the body of a scheduled-promote agenda
@@ -19,7 +19,7 @@
  * O que foi medido:
  *   · o `McpInterceptor` **nunca é instanciado** — só existe no exemplo do docstring
  *     do próprio `packages/sdk/src/mcp-interceptor.ts` (o `CLAUDE.md` já registrava);
- *   · `pool_promote` e `skill_deploy` **não** passam por `withGuard` (16 das 72 tools
+ *   · `pool_promote` e `skill_deploy` (esta, removida na PID-08) **não** passam por `withGuard` (16 das 72 tools
  *     passam, todas em `bpm.ts` e `workflow.ts`);
  *   · **nada** aqui publica em `mcp.audit` — o tópico tem UM produtor no repositório,
  *     e é a tool `invoke`;
@@ -41,18 +41,6 @@ export interface DeployDeps {
 }
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
-
-// pool_ids is declared as string because the MCP SDK's ZodRawShapeCompat
-// constraint does not accept ZodUnion<[ZodArray, ZodString]> — union of
-// non-scalar types causes refine() return-type incompatibility at the type
-// level. The handler normalises the string to string[] at runtime.
-const SkillDeployInputSchema = z.object({
-  skill_id:    z.string().min(1),
-  pool_ids:    z.string(),   // JSON array or comma-separated list of pool_ids
-  deployed_by: z.string().optional(),
-  notes:       z.string().optional(),
-  tenant_id:   z.string().optional(),
-})
 
 // pool_promote — promote the target pool's staged `next` slot to `current`.
 // The pool is the addressable unit (invariant S4): the caller names the POOL to
@@ -86,89 +74,6 @@ function mcpError(code: string, message: string): ToolResult {
 
 export function registerDeployTools(server: McpServer, deps: DeployDeps): void {
   const { agentRegistryUrl, tenantId: defaultTenantId } = deps
-
-  server.tool(
-    "skill_deploy",
-    "Deploy a skill to one or more pools via agent-registry. " +
-    "Called by the skill_scheduled_deploy_v1 workflow after its timer fires.",
-    SkillDeployInputSchema.shape as any,   // cast required — ZodOptional not assignable to ZodRawShapeCompat in this SDK version
-    async (rawInput: Record<string, unknown>) => {
-      let input: z.infer<typeof SkillDeployInputSchema>
-      try {
-        input = SkillDeployInputSchema.parse(rawInput)
-      } catch (e) {
-        if (e instanceof z.ZodError) {
-          return mcpError(
-            "validation_error",
-            e.errors.map(x => `${x.path.join(".")}: ${x.message}`).join("; ")
-          )
-        }
-        throw e
-      }
-
-      // Normalise pool_ids — may be a JSON array string or comma-separated list
-      let poolIds: string[]
-      try {
-        const parsed = JSON.parse(input.pool_ids)
-        poolIds = Array.isArray(parsed) ? parsed : [input.pool_ids]
-      } catch {
-        // Comma-separated fallback: "sac,retencao" → ["sac", "retencao"]
-        poolIds = input.pool_ids.split(",").map(s => s.trim()).filter(Boolean)
-      }
-
-      if (poolIds.length === 0) {
-        return mcpError("validation_error", "pool_ids must not be empty")
-      }
-
-      const tenantId = input.tenant_id ?? defaultTenantId
-
-      try {
-        const url = `${agentRegistryUrl}/v1/skills/${encodeURIComponent(input.skill_id)}/deploy`
-        const body = {
-          pool_ids:    poolIds,
-          deployed_by: input.deployed_by ?? "workflow:skill_scheduled_deploy_v1",
-          notes:       input.notes ?? "Scheduled deploy via workflow",
-          tenant_id:   tenantId,
-        }
-
-        // G-PROBE platform-wide: o agent-registry gateia POST /v1/skills/:id/deploy;
-        // este caller (workflow) usa a credencial de serviço (env; omitida se vazia).
-        const svcToken = process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? ""
-        const res = await fetch(url, {
-          method:  "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-tenant-id":  tenantId,
-            ...(svcToken ? { "x-service-token": svcToken } : {}),
-          },
-          body: JSON.stringify(body),
-        })
-
-        if (!res.ok) {
-          let detail = ""
-          try { detail = await res.text() } catch { /* ignore */ }
-          return mcpError(
-            "deploy_failed",
-            `agent-registry responded ${res.status}: ${detail}`
-          )
-        }
-
-        const data = await res.json() as unknown
-        return ok({
-          success:   true,
-          skill_id:  input.skill_id,
-          pool_ids:  poolIds,
-          tenant_id: tenantId,
-          deployment: data,
-        })
-      } catch (e) {
-        return mcpError(
-          "network_error",
-          e instanceof Error ? e.message : String(e)
-        )
-      }
-    }
-  )
 
   // ── pool_promote ──────────────────────────────────────────────────────────
   // Wraps the SINGLE promote path (POST /v1/pools/:id/promote). Returns isError

@@ -46,15 +46,17 @@ Monaco YAML editor (`vs-dark` theme) para definições de Skill Flow. Funcionali
 Toda edição salva cria um `draft`. O deploy publica para pools específicos.
 
 ```
-PUT /v1/skills/:id   →  deploy_status = "draft"  (save)
-POST /v1/skills/:id/deploy  →  deploy_status = "published"  (deploy)
+PUT  /v1/skills/:id                 →  salva a definição (não muda o que roda)
+PUT  /v1/pools/:pool_id/slots/next  →  encena o snapshot
+POST /v1/pools/:pool_id/promote     →  deploy (grava SkillDeployment)
+# POST /v1/skills/:id/deploy → 410, aposentado na PID-08 (2026-09-14)
 ```
 
 ### AgentFlowDeployPage
 
 - **Histórico de deploys**: lista de `SkillDeployment` com data, pools, `deployed_by`; badge "rollback" em deploys originados por rollback
 - **Rollback**: botão ↩ no histórico restaura `yaml_snapshot` do deploy anterior + re-deploy nos mesmos pools (dois estágios com confirmação)
-- **Deploy agendado**: seletor `datetime-local` + botão "⏰ Agendar" cria instância de `skill_scheduled_deploy_v1` no workflow-api; listagem de deploys pendentes com botão "✕ Cancelar"
+- ~~**Deploy agendado**~~ por skill: removido *(PID-08, 2026-09-14)* — o workflow `skill_scheduled_deploy_v1` não estava implantado em pool nenhum e a tela não o chamava. Promote agendado é uma Agenda do scheduler-api sobre `deploy_promote_ia`
 - **Monitor de handoff**: KPI card de sessões na versão anterior (verde=0, âmbar>0); barra de convergência animada; polling a cada 10 s via `GET /v1/skills/:id/handoff-status`
 
 ## Monitor (AgentFlowMonitorPage)
@@ -158,7 +160,7 @@ PUT /v1/skills/{id}  →  registry.changed (Kafka)  →  cache invalidado  →  
 
 | Pacote | Responsabilidade |
 |---|---|
-| `agent-registry` | CRUD de skills, pools, agent_types; deploy lifecycle (`/v1/skills/:id/deploy`); hot-reload via `registry.changed` |
+| `agent-registry` | CRUD de skills, pools, agent_types; deploy por pool (`/v1/pools/:id/slots/next` + `promote`); hot-reload via `registry.changed` |
 | `skill-flow-engine` | Interpretador do YAML — executor de steps, ContextStore, interpolação `@ctx.*`, `@segment.*` |
 | `orchestrator-bridge` | Reconciliador de instâncias Redis vs. agent-registry; dispatch de pool hooks; publica `conversations.participants` |
 | `ai-gateway` | Invocado pelos steps `reason` (Anthropic/OpenAI multi-account com fallback) |

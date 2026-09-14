@@ -29,7 +29,7 @@
 | `skill_portabilidade_demo_v1` | Tier 1 — Journey portabilidade | portabilidade_ia | ⚠️ Corrigir | Fix `channel:` → `requires:` |
 | `skill_reembolso_demo_v1` | Tier 1 — Journey reembolso | reembolso_ia | ⚠️ Corrigir | Fix `channel:` → `requires:` |
 | `skill_revisao_treplica_v1` | Tier 1 — motor revisão Arc 13 | — | ✅ Ativo | Fase 4 |
-| `skill_scheduled_deploy_v1` | Tier 1 — deploy agendado | — | ✅ Ativo | Manter |
+| ~~`skill_scheduled_deploy_v1`~~ | Tier 1 — deploy agendado | — | ❌ Removido (PID-08, 2026-09-14) | — |
 | `agente_retencao_v1` | Tier 3 — stub obsoleto | retencao_ia | ❌ Remover | Sprint 0 |
 | `agente_finalizacao_v1` | Tier 3 — NPS antigo | finalizacao_ia | ❌ Remover | Sprint 0 |
 | `agente_reviewer_ia_v1` | Tier 3 — reviewer Arc 6 | avaliacao_ia | ❌ Remover | Sprint 0 |

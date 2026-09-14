@@ -413,8 +413,8 @@ pool** (momento do promote), carimbada em `segments.deploy_version`. O editor es
 (rascunho) e **não vaza para produção**; só o deploy (set-next → promote) preenche o que roda. O bridge executa o
 **snapshot do slot do pool**, com cache invalidado pelo `registry.changed` do promote.
 
-**Lifecycle de deploy:** `PUT /v1/skills/:id` sempre grava `deploy_status=draft`; `POST /v1/skills/:id/deploy`
-publica. **Hot-reload** em três elos (publicação → `registry.changed` → invalidação de cache) sem restart.
+**Lifecycle de deploy:** `PUT /v1/skills/:id` salva a definição; o deploy é do pool (`slots/next` → `promote`),
+e o promote registra o `SkillDeployment` *(PID-08 aposentou o `POST /v1/skills/:id/deploy`)*. **Hot-reload** em três elos (publicação → `registry.changed` → invalidação de cache) sem restart.
 **Graceful shutdown** via `GET /v1/skills/:id/handoff-status` — a versão nova só assume novos contatos, drenando
 os em andamento. **Rollback** restaura o `yaml_snapshot` anterior. **Deploy agendado** via workflow.
 

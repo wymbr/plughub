@@ -1379,7 +1379,7 @@ Roles: `operator` (Monitor+Contacts), `supervisor` (+Evaluation+Reports), `admin
 
 Nav groups (navKey): Home 🏠, Console 🖥️ (agent_assist.atender), Monitor 📡 (Sessions/Agents/Pools/Events/Processes), Fluxo 🔄 (Editor/Deploy → skill_flows.operacao), Avaliação ✓ (Forms/Campaigns/Knowledge/Evaluations), Analytics 📊 (Sessions/Agents/Events/Processes/Quality → visualizar/report), Configuração ⚙️ (Dashboards/Resources/Platform/Channels/Calendars/Masking/Billing/Access). Legacy redirects: `/workflows` → `/workflow/monitor`, `/skill-flows` → `/agent-flow/editor`, `/reports` → `/contacts?tab=analise`.
 
-**Skill Deploy Lifecycle**: `deploy_status` (draft/published) + `skill_deployments` table. `PUT /v1/skills` always sets `deploy_status=draft` on new skills, NEVER modifies it on updates. `POST /v1/skills/:id/deploy` — only action that sets published.
+**Skill Deploy Lifecycle** *(reescrito na PID-08, 2026-09-14)*: deploy é do **POOL** — `PUT /v1/pools/:id/slots/next` → `POST /v1/pools/:id/promote` (ou a tool `pool_promote`), e o promote é o **único escritor** de `skill_deployments`. `PUT /v1/skills/:id` salva a definição e não muda o que roda; `deploy_status` e `x-skill-publish` são vestigiais desde 2026-07-13 (uma definição, sem rascunho). `POST /v1/skills/:id/deploy` responde **410**: gravava "implantado nos pools X" sem tocar slot, com zero usos reais. Gate: `infra/test/probe_batch_deploy_retired.sh`.
 
 **Agent Assist UI** at `/agent-assist`: 4-tab right panel (Estado, Capacidades, Contexto, Histórico). Substitution mode for menu cards. Visibility array routing for NPS/wrap-up agents. Optimistic echo for button selections.
 
@@ -1459,7 +1459,7 @@ caso"* ou *"remover a alternativa"*, a segunda é a que não depende de memória
 
 **Webhooks**: ⚠️ **as 8 rotas de webhook deste serviço foram REMOVIDAS em 2026-09-08 (MOD-11)** — as 7 do CRUD (`/v1/workflow/webhooks*`, `X-Admin-Token`) e a porta pública `POST /v1/workflow/webhook/{id}`. O registro único de endereço de webhook é o **`ChannelEndpoint`** do agent-registry (`/v1/channel-endpoints`, tela `/config/channels`, campo `config.channels`), por decisão do `adr-webhook-endpoint-single-registry` — cuja D6 já carimbava as linhas daqui como procedência `legacy_token`. Não houve migração porque não havia dado: `workflow.webhooks` foi medida em **zero linhas** contra 13 endpoints webhook vivos no registro. As tabelas ficam de pé (vazio não custa; apagar schema é outra decisão). `origin_session_id` in WorkflowInstance links workflow to parent contact session.
 
-**Skill Deploy** (Phase 2): `POST /v1/skills/:id/deploy` → `skill_deployments` table → `publishRegistryChanged`. Scheduled deploy via `skill_scheduled_deploy_v1` workflow YAML. `GET /v1/skills/:id/handoff-status` for safe deploys.
+**Skill Deploy** (Phase 2): deploy = `set-next` → `promote` do POOL, que grava `skill_deployments` e publica `registry.changed`. Promote agendado = Agenda do scheduler-api sobre `deploy_promote_ia` (`skill_deploy_promote_v1` → `pool_promote`). `GET /v1/skills/:id/handoff-status` for safe deploys. ⚠️ O deploy em lote por skill (`POST /v1/skills/:id/deploy`, tool `skill_deploy`, workflow `skill_scheduled_deploy_v1`) foi aposentado na PID-08 — registrava sem mudar; o lote de verdade sobre slots é a PID-16.
 
 → See [`docs/arcos/arc4-workflow.md`](docs/arcos/arc4-workflow.md)
 

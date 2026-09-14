@@ -77,29 +77,49 @@ ch "INSERT INTO $DB.evaluation_finalized
 {\"instance_id\":\"dlz_e2\",\"result_id\":\"dlz_r2\",\"session_id\":\"dlz_s2\",\"tenant_id\":\"$TENANT\",\"campaign_id\":\"dlz_camp\",\"final_score\":0.61,\"finalize_reason\":\"uncontested\",\"contestation_state\":\"uncontested\",\"evaluated_agent_type\":\"ai_agent\",\"segment_id\":\"dlz_seg_2\",\"form_version\":1,\"round\":1,\"process_duration_ms\":1000,\"timestamp\":\"$D2 10:05:00.000\",\"date\":\"$D2\"}
 {\"instance_id\":\"dlz_e3\",\"result_id\":\"dlz_r3\",\"session_id\":\"dlz_s3\",\"tenant_id\":\"$TENANT\",\"campaign_id\":\"dlz_camp\",\"final_score\":0.88,\"finalize_reason\":\"uncontested\",\"contestation_state\":\"uncontested\",\"evaluated_agent_type\":\"ai_agent\",\"segment_id\":\"dlz_seg_3\",\"form_version\":1,\"round\":1,\"process_duration_ms\":1000,\"timestamp\":\"$D3 10:05:00.000\",\"date\":\"$D3\"}" >/dev/null && echo "  ✓ 3 evaluation_finalized"
 
-echo "══ registra deploy da skill (markers) via agent-registry ══"
-# ⚠️ O deploy é carimbado com `now()` pelo registry — não há como backdatá-lo por
-# esta API. Com as datas relativas isso deixou de ser problema: HOJE cai dentro da
-# janela, e o marker aparece à direita da curva. (Com as datas literais de junho o
-# marker caía 2 meses fora e não era desenhado.)
+echo "══ registra o deploy (marker) por PROMOTE do pool ══"
+# PID-08 (2026-09-14): este seed chamava `POST /v1/skills/:id/deploy`, que gravava um
+# `SkillDeployment` sem tocar o slot — o marker afirmava na curva do pool um deploy que
+# não mudava nada que roda (5 linhas assim foram apagadas). O deploy é por POOL: re-promove
+# o que JÁ roda (mesmo skill, mesmo snapshot, mesma config), então o marker é verdadeiro e
+# a produção não muda. Carimbado com `now()` pelo registry, como antes.
 #
-# ⚠️ `x-service-token` é OBRIGATÓRIO desde o G-PROBE (gate dual das mutações de
-# config). Sem ele o registry devolve `unauthorized` — e até 2026-08-12 o script
-# imprimia essa resposta e seguia para o ✅ final, então o seed anunciava sucesso
-# sem nunca ter criado marker nenhum.
+# ⚠️ `x-service-token` é OBRIGATÓRIO (gate de escrita do registry); com ele o autor é o
+# `x-user-id` declarado.
 REG_TOKEN="${AGENT_REGISTRY_SERVICE_TOKEN:-changeme_agent_registry_service_token_demo}"
-DEP=$($CURL -X POST "$REGISTRY/v1/skills/$SKILL/deploy" \
-  -H "Content-Type: application/json" -H "X-Tenant-ID: $TENANT" -H "X-User-Id: seed_demo" \
-  -H "x-service-token: $REG_TOKEN" \
-  -d "{\"pool_ids\":[\"$POOL\"],\"notes\":\"seed deploy-lens demo\"}")
-echo "  resposta: $(echo "$DEP" | head -c 300)"
+RH=(-H "Content-Type: application/json" -H "X-Tenant-ID: $TENANT" -H "X-User-Id: seed_demo" -H "x-service-token: $REG_TOKEN")
+SLOTS=$($CURL "$REGISTRY/v1/pools/$POOL/slots" -H "X-Tenant-ID: $TENANT")
+NEXT_BODY=$(printf '%s' "$SLOTS" | python3 -c 'import json,sys
+d = json.load(sys.stdin); cur = (d.get("slots") or d).get("current") or {}
+if not cur.get("skill_id") or cur.get("yaml_snapshot") is None:
+    print(""); raise SystemExit
+print(json.dumps({"skill_id": cur["skill_id"], "config_json": cur.get("config_json") or {}, "yaml_snapshot": cur["yaml_snapshot"]}))' 2>/dev/null)
+# ⚠️ Re-promover copia o `current` para o `previous`: se o `previous` guarda OUTRA versão,
+# o alvo de rollback do pool é destruído. Medido no demo em 2026-09-14: `sac_ia` tem
+# previous ≠ current. Por isso a guarda recusa por default e só segue com REPROMOTE_OK=1.
+PREV_DIFERE=$(printf '%s' "$SLOTS" | python3 -c 'import json,sys
+d = json.load(sys.stdin); s = d.get("slots") or d
+chave = lambda x: json.dumps([(x or {}).get(k) for k in ("skill_id", "config_json", "yaml_snapshot")], sort_keys=True)
+p = s.get("previous")
+print("1" if p and p.get("skill_id") and chave(p) != chave(s.get("current")) else "0")' 2>/dev/null)
 DEPLOY_OK=1
-case "$DEP" in
-  *unauthorized*) DEPLOY_OK=0
-    echo "  ❌ token recusado. Ajuste AGENT_REGISTRY_SERVICE_TOKEN= (valor em docker-compose.demo.yml)." ;;
-  *"não encontrada"*|*"not found"*) DEPLOY_OK=0
-    echo "  ❌ a skill $SKILL não existe no registry; ajuste SKILL=." ;;
-esac
+if [ -z "$NEXT_BODY" ]; then
+  DEPLOY_OK=0
+  echo "  ❌ o pool $POOL não tem slot current executável — não há o que re-promover (resposta: ${SLOTS:0:200})"
+elif [ "$PREV_DIFERE" != "0" ] && [ "${REPROMOTE_OK:-0}" != "1" ]; then
+  DEPLOY_OK=0
+  echo "  ❌ o slot previous de $POOL guarda outra versão: re-promover apagaria o alvo de rollback."
+  echo "     Nenhum marker registrado. Para aceitar a perda do rollback: REPROMOTE_OK=1 bash $0"
+else
+  SN=$($CURL -X PUT "$REGISTRY/v1/pools/$POOL/slots/next" "${RH[@]}" -d "$NEXT_BODY")
+  PR=$($CURL -X POST "$REGISTRY/v1/pools/$POOL/promote" "${RH[@]}" -d '{}')
+  echo "  set-next: $(echo "$SN" | head -c 160)"
+  echo "  promote : $(echo "$PR" | head -c 160)"
+  case "$PR" in
+    *'"promoted"'*) ;;
+    *) DEPLOY_OK=0; echo "  ❌ o promote não respondeu 'promoted' — marker NÃO registrado." ;;
+  esac
+fi
 
 # ── Verificação — e ela GATEIA ────────────────────────────────────────────────
 # ⚠️ A entidade da lente `deploy` é o **POOL**, não o skill: "a unidade da curva é o

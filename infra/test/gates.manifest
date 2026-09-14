@@ -318,6 +318,11 @@ probe_resume_requirement.sh
 # o token de aprovar exige Bearer humano (AUT-46) e o MCP nao tem. Censo das quatro condicoes com
 # mutacao, o mesmo token recusando decidir e aceitando cancelar, e o cancelamento pelo chat.
 probe_customer_cancel.sh
+# PID-08. POST /v1/skills/:id/deploy gravava um SkillDeployment "implantado nos pools X" sem
+# tocar o slot que roda; 0 usos reais, 5 marcadores de seed falsos na lente. Censo de UM escritor
+# (o promote, e zero tambem e sujo) com mutacoes sobre copia; 410 ao vivo com o portao na frente,
+# tools/list sem skill_deploy e a populacao so de promote.
+probe_batch_deploy_retired.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

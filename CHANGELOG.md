@@ -1,5 +1,70 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (3) — PID-08: o deploy em lote que registrava sem mudar foi aposentado
+
+### 1 · O defeito, medido antes de decidir
+
+`POST /v1/skills/:id/deploy` (e a tool `skill_deploy`, que o chamava) gravava um `SkillDeployment`
+dizendo *"implantado nos pools X"* e **não tocava slot nenhum**. A produção executa só o snapshot do
+slot `current` do pool — então o registro afirmava um deploy que não mudava nada que roda. A outra
+metade da rota (`flow_draft → flow`) já era morta desde a *"uma definição, sem rascunho"* de
+2026-07-13: `flow_draft` é sempre nulo.
+
+| medido | valor |
+|---|---|
+| `SkillDeployment` no registry | 115 |
+| gravados pelo promote do pool | 110 |
+| gravados pelo lote | **5**, todos do `seed_deploy_lens_demo.sh` no `sac_ia` — o slot nunca mudou; eram triângulos de deploy na lente sobre deploys que não houve |
+| deploys reais pelo lote | **0** |
+| chamadores na UI | 0 |
+| `skill_scheduled_deploy_v1` (o workflow que chamava a tool) | implantado em pool nenhum |
+| pools de IA com slot `current` | 31 de 33 (os 2 sem são fixtures inertes de probe) |
+| quem lê `deploy_status` em runtime | ninguém — todos os 46 skills estão `published`, e o `PUT` já grava isso |
+
+### 2 · A decisão
+
+Do dono: **aposentar, e o lote de verdade vira ficha** (PID-16, com gatilho: a porta de plataforma
+da PID-04, ou a primeira skill de plataforma com várias portas). E **apagar as 5 linhas** do seed.
+
+- `POST /v1/skills/:id/deploy` e `GET /v1/skills/:id/deployments/scheduled` respondem **410**
+  nomeando o caminho do pool. O portão de escrita continua na frente (401 sem credencial) —
+  aposentar não pode virar porta anônima que responde. 410, e não 404: quem chama precisa saber que
+  a rota existiu e para onde ir.
+- Saíram a tool `skill_deploy` (73 tools no `tools/list`, 45 em dívida no censo de guarda) e o
+  workflow `skill_scheduled_deploy_v1`. A linha de skill dele no registry fica (seed-if-absent;
+  sem pool, inerte).
+- O **promote é o único escritor** de `SkillDeployment`. A falha dele ao gravar o registro era um
+  `catch {}` mudo; agora loga nomeando pool e skill — com um escritor só, engolir a falha apagaria
+  o marker da lente sem rastro.
+- As 5 linhas `notes = 'seed deploy-lens demo'` foram apagadas (contadas antes: 5).
+- O seed da lente passou a **re-promover o pool** (mesmo skill, snapshot e config do `current`),
+  o que torna o marker verdadeiro. ⚠️ **E recusa quando o `previous` guarda outra versão**:
+  re-promover copia o `current` para o `previous` e apagaria o alvo de rollback. Medido no
+  `sac_ia` hoje — por isso o seed rodou, recusou alto, e não registrou marker nem mexeu nos slots.
+  `REPROMOTE_OK=1` aceita a perda explicitamente.
+
+### 3 · Testes e probe
+
+- agent-registry `batch-deploy-retired.test.ts` (7): 410 sem escrever nada · 410 da listagem
+  agendada · controle, a leitura `GET /deployments` segue 200 · 401 sem credencial · o promote grava
+  o `SkillDeployment` com pool, autor e `notes='promote'` · a falha ao gravar é logada · censo de
+  UM escritor no fonte.
+- **`probe_batch_deploy_retired.sh`** — A: censo (um escritor, e zero também é sujo; lote 410 sem
+  prisma; `skill_deploy` ausente e `pool_promote` presente; workflow ausente; seed por promote), com
+  controle da cópia limpa e quatro mutações sobre cópia — devolver a escrita ao lote, tirar a do
+  promote, re-registrar a tool, voltar o seed ao lote. B: 410 com credencial, 401 sem, 410 na
+  listagem agendada, 200 na leitura, `tools/list` ao vivo sem `skill_deploy`, e a população de
+  `skill_deployments` só de promote (e não vazia).
+
+### 4 · Verificação
+
+agent-registry **98**, mcp-server **420** verdes; `tsc` limpo nos dois. Imagens: agent-registry,
+mcp-server-plughub. Verdes ao vivo: `probe_batch_deploy_retired`, `probe_mcp_tool_guard_census`
+(73 no fonte e no runtime), `probe_deploy_write_principal`, `probe_gates_manifest_coverage`,
+`probe_task_ledger`. Docs que ensinavam o lote corrigidos (`CLAUDE.md` § Frontend e § Arc 4,
+`docs/pacotes/agent-registry.md`, `agentflow.md`, `platform-ui.md`, `modelos-de-dados.md` e mais oito),
+e o achado (11) do ADR da porta de identidade fechado.
+
 ## 2026-09-14 (2) — PID-15: o cliente provado cancela o próprio pedido, e não o decide
 
 ### 1 · O defeito, reproduzido ao vivo

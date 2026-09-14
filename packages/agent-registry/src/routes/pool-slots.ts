@@ -425,7 +425,15 @@ poolSlotsRouter.post("/promote", requireDeployWrite, async (req: Request, res: R
             notes:         "promote",
           },
         })
-      } catch { /* não-fatal: o deploy já foi efetivado pelos slots */ }
+      } catch (err) {
+        // Não-fatal (o deploy já foi efetivado pelos slots), mas NUNCA mudo: desde a
+        // PID-08 este é o ÚNICO escritor de SkillDeployment, então engolir a falha
+        // apagaria o marker da lente e o rótulo do epoch sem rastro nenhum.
+        console.error(
+          `[pool-slots:promote] SkillDeployment NÃO registrado — pool=${poolId} skill=${promotedSkillId}: ` +
+          `${err instanceof Error ? err.message : String(err)}. O slot foi promovido; a lente de deploy fica sem este marker.`,
+        )
+      }
     }
 
     await publishRegistryChanged(tenantId, "pool", poolId, "updated")

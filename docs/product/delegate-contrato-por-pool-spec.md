@@ -21,7 +21,7 @@ No modelo de 3 níveis isso é exatamente a separação: **(a) declara intençã
 
 ```
 PUT  /v1/skills/:id            → deploy_status = draft        (salva, não publica)
-POST /v1/skills/:id/deploy     → deploy_status = published     (publica em pools-alvo)
+POST /v1/pools/:id/promote     → deploy (slot next → current)   (PID-08: o /v1/skills/:id/deploy é 410)
                                → grava skill_deployments + publishRegistryChanged (hot-reload)
 rollback                       → restaura yaml_snapshot anterior + re-deploy nos mesmos pools
 ```

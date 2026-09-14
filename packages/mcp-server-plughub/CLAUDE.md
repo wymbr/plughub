@@ -41,8 +41,8 @@ Default port: 3100.
 - Every tool validates input with Zod before processing
 - ⚠️ **MEDIDO FALSO em 2026-09-01 (CAP-09)** — *"Every tool authenticates via JWT in the
   Authorization header"*. O transporte MCP (`GET /sse`, `POST /messages` em `server.ts`)
-  **não checa credencial nenhuma**: um cliente conecta anônimo e recebe as **74** tools
-  no `tools/list` (remedido em 2026-09-12; eram 72). Os `requireJwtRole`/`verifyJwtPayload`
+  **não checa credencial nenhuma**: um cliente conecta anônimo e recebe as **73** tools
+  no `tools/list` (remedido em 2026-09-14: a PID-08 removeu `skill_deploy`; eram 74 em 09-12 e 72 antes). Os `requireJwtRole`/`verifyJwtPayload`
   do `server.ts` estão na **ponte REST `/api/*`**, que é outra superfície. No handler, o
   `session_token` é verificado em **23**; **50** não verificam nada e **1** (`agent_login`)
   é isenta por ser a emissora. As três que entraram sem classificação foram medidas e
@@ -52,7 +52,7 @@ Default port: 3100.
   emite (`POST /internal/session-token`, a pedido do bridge na ativação) e o skill-flow-service
   injeta. O de `agent_login` é recusado nelas. Contagem: 25 com token, 48 em dívida.
   PID-02 acrescentou `otp_challenge`/`otp_verify`, que gravam a evidência na journey da sessão
-  do token: 27 com token, 46 em dívida. A lista
+  do token: 27 com token, 46 em dívida. PID-08 (2026-09-14) removeu `skill_deploy`, que estava em dívida: 27 com token, 45 em dívida, 73 tools. A lista
   mora em `@plughub/schemas` (`SESSION_BOUND_TOOLS`); gate `probe_session_bound_resume.sh`.)*
   Censo por camada, tabela de classificação e trava contra regressão:
   `infra/test/probe_mcp_tool_guard_census.sh`.

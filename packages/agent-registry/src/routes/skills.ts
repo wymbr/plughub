@@ -400,71 +400,28 @@ function _computeFlowModel(flow: unknown): "agent" | "workflow" {
 }
 
 // ─────────────────────────────────────────────
-// POST /v1/skills/:skill_id/deploy
-// Deploys (publishes) a skill to specified pools.
-// Sets deploy_status → "published", records a SkillDeployment entry,
-// and triggers hot-reload cache invalidation.
+// POST /v1/skills/:skill_id/deploy — APOSENTADA (PID-08, 2026-09-14)
+//
+// Gravava um `SkillDeployment` dizendo "implantado nos pools X" e não tocava slot
+// nenhum — e a produção executa EXCLUSIVAMENTE o snapshot do slot `current`. Desde a
+// "UMA definição, sem rascunho" (2026-07-13) nem a sua outra metade fazia sentido: ela
+// promovia `flow_draft → flow`, e `flow_draft` é sempre nulo. O registro afirmava um
+// deploy que não mudava nada que roda. Medido antes de aposentar: ZERO usos reais (dos
+// 115 registros de deploy, 110 eram de promote e 5 de um seed de demonstração que
+// marcava na curva do `sac_ia` deploys que nunca aconteceram).
+//
+// O caminho de deploy é o do POOL: `PUT /v1/pools/:id/slots/next` + `POST /promote`
+// (ou a tool `pool_promote`). Salvar a definição é o `PUT /v1/skills/:id`, que não muda
+// o que roda. O `SkillDeployment` passou a ter UM escritor: o promote.
+// 410, e não 404: o chamador precisa saber que a rota existiu e para onde ir.
 // ─────────────────────────────────────────────
-skillsRouter.post("/:skill_id/deploy", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const tenantId  = _getTenantId(req)
-    const userId    = authorOf(req)
-    const skillId   = req.params["skill_id"]!
-    const { pool_ids, notes } = req.body as { pool_ids?: string[]; notes?: string }
-
-    if (!Array.isArray(pool_ids) || pool_ids.length === 0) {
-      return res.status(400).json({ error: "pool_ids deve ser um array não-vazio de pool_id" })
-    }
-
-    const skill = await prisma.skill.findUnique({
-      where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
-    })
-    if (!skill) return res.status(404).json({ error: "Skill não encontrada" })
-
-    const now = new Date()
-
-    // Skill Versioning Fase B: o deploy é o ÚNICO a escrever produção. Promove
-    // RASCUNHO → PRODUÇÃO (flow_draft → flow), limpa o draft (sem pendência) e
-    // recomputa flow_model do que foi efetivamente deployado. Snapshot = o flow
-    // deployado. O bridge lê `flow` (produção) → hot-reload pega o conteúdo novo.
-    const skillRec      = skill as unknown as Record<string, unknown>
-    const deployedFlow  = (skillRec["flow_draft"] ?? skillRec["flow"]) ?? null
-
-    const [updatedSkill, deployment] = await prisma.$transaction([
-      prisma.skill.update({
-        where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
-        data: {
-          flow:          (deployedFlow ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue,
-          flow_draft:    Prisma.DbNull,            // draft promovido → sem pendência
-          flow_model:    _computeFlowModel(deployedFlow),
-          deploy_status: "published",
-          published_at:  now,
-        } as any,  // deploy_status/published_at/flow_draft — Prisma client regenerated on build
-      }),
-      (prisma as any).skillDeployment.create({
-        data: {
-          skill_id:      skillId,
-          tenant_id:     tenantId,
-          version:       (skillRec["version"] as string) ?? "",
-          pool_ids,
-          yaml_snapshot: (deployedFlow ?? null) as unknown as Prisma.InputJsonValue,
-          deployed_by:   userId,
-          deployed_at:   now,
-          notes:         notes ?? null,
-        },
-      }),
-    ])
-
-    // Trigger orchestrator-bridge hot-reload
-    await publishRegistryChanged(tenantId, "skill", skillId, "updated")
-
-    return res.status(200).json({
-      skill:      _formatSkill(updatedSkill as unknown as Record<string, unknown>),
-      deployment: _formatDeployment(deployment as unknown as Record<string, unknown>),
-    })
-  } catch (err) {
-    return next(err)
-  }
+skillsRouter.post("/:skill_id/deploy", (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error:   "deploy_route_retired",
+    message: "POST /v1/skills/:id/deploy foi aposentado (PID-08): gravava 'implantado' sem tocar o slot que " +
+             "roda. Deploy é por POOL: PUT /v1/pools/:pool_id/slots/next + POST /v1/pools/:pool_id/promote " +
+             "(ou a tool pool_promote). Salvar a definição: PUT /v1/skills/:id (não muda o que roda).",
+  })
 })
 
 // ─────────────────────────────────────────────
@@ -503,67 +460,17 @@ function _formatDeployment(d: Record<string, unknown>): Record<string, unknown> 
 }
 
 // ─────────────────────────────────────────────
-// GET /v1/skills/:skill_id/deployments/scheduled
-// Returns pending scheduled workflow deploy instances for a skill.
-// Proxies to workflow-api GET /v1/workflow/instances?flow_id=skill_scheduled_deploy_v1&status=suspended
-// filtered to instances whose context.skill_id matches.
+// GET /v1/skills/:skill_id/deployments/scheduled — APOSENTADA (PID-08, 2026-09-14)
+// Listava instâncias do workflow `skill_scheduled_deploy_v1`, que chamava o deploy em
+// lote aposentado acima e não estava implantado em pool nenhum. O promote agendado é
+// uma Agenda do scheduler sobre um pool que roda `skill_deploy_promote_v1`.
 // ─────────────────────────────────────────────
-skillsRouter.get("/:skill_id/deployments/scheduled", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const tenantId = _getTenantId(req)
-    const skillId  = req.params["skill_id"]!
-
-    // Verify skill exists
-    const skill = await prisma.skill.findUnique({
-      where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
-    })
-    if (!skill) return res.status(404).json({ error: "Skill não encontrada" })
-
-    // Proxy to workflow-api
-    const workflowUrl = `${config.workflow_api_url}/v1/workflow/instances?flow_id=skill_scheduled_deploy_v1&status=suspended&tenant_id=${encodeURIComponent(tenantId)}&limit=50`
-    let workflowInstances: Record<string, unknown>[] = []
-    try {
-      const wfRes = await fetch(workflowUrl, {
-        headers: { "x-tenant-id": tenantId },
-      })
-      if (wfRes.ok) {
-        const body = await wfRes.json() as { instances?: Record<string, unknown>[] }
-        workflowInstances = body.instances ?? []
-      }
-    } catch {
-      // Workflow-api unavailable — return empty list gracefully
-    }
-
-    // Filter to instances whose pipeline_state.contact_context.skill_id matches
-    const relevant = workflowInstances.filter((inst) => {
-      try {
-        const ctx = (inst["pipeline_state"] as Record<string, unknown>)?.["contact_context"] as Record<string, unknown> | undefined
-        return ctx?.["skill_id"] === skillId
-      } catch {
-        return false
-      }
-    })
-
-    return res.json({
-      skill_id: skillId,
-      scheduled_deploys: relevant.map((inst) => {
-        const ctx = ((inst["pipeline_state"] as Record<string, unknown>)?.["contact_context"] ?? {}) as Record<string, unknown>
-        return {
-          workflow_instance_id: inst["id"],
-          skill_id:    ctx["skill_id"],
-          pool_ids:    ctx["pool_ids"],
-          scheduled_at: inst["resume_expires_at"],
-          deployed_by:  ctx["deployed_by"],
-          notes:        ctx["deploy_notes"],
-          status:       inst["status"],
-          created_at:   inst["created_at"],
-        }
-      }),
-      total: relevant.length,
-    })
-  } catch (err) {
-    return next(err)
-  }
+skillsRouter.get("/:skill_id/deployments/scheduled", (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error:   "scheduled_deploy_retired",
+    message: "O deploy agendado por skill foi aposentado (PID-08). Promote agendado: Agenda do scheduler-api " +
+             "sobre o pool deploy_promote_ia (tool pool_promote).",
+  })
 })
 
 // ─────────────────────────────────────────────
