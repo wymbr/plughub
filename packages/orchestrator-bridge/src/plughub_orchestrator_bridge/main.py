@@ -880,6 +880,52 @@ async def get_pool_config(
     return None
 
 
+async def _routing_assigned_pool_field(
+    http:         aiohttp.ClientSession,
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    tenant_id:    str,
+    pool_id:      str,
+) -> dict:
+    """
+    O campo `pool` do `routing.assigned` (VOZ-10): o pool que ATENDE e a política de
+    mídia que ele declara no agent-registry.
+
+    Só sessão `webrtc` paga a leitura — os outros canais ignoram o evento, e uma chamada
+    HTTP por ativação em todo webchat/webhook seria custo sem leitor. A leitura é FRESCA
+    (`get_pool_config` não usa cache): a política é config editável na tela, e um snapshot
+    velho aqui seria a segunda casa respondendo "o que o pool oferece?".
+
+    `media_policy_source` separa as três ausências, que o gateway trata diferente:
+      registry             — o pool respondeu; `media_policy` é o que ele declara (pode
+                             ser null, ex.: especialista de pool sem webrtc)
+      registry_unavailable — não se sabe o que o pool oferece: o gateway RECUSA mídia
+                             desse atendente e loga ERROR, em vez de supor
+      not_webrtc           — sessão de outro canal, não se perguntou
+    """
+    field: dict = {"pool_id": pool_id}
+    channel = ""
+    try:
+        raw = await redis_client.get(f"session:{session_id}:meta")
+        channel = str((json.loads(raw) if raw else {}).get("channel") or "")
+    except Exception as exc:
+        logger.warning("routing.assigned: meta ilegivel session=%s — %s", session_id, exc)
+    if channel != "webrtc":
+        field["media_policy_source"] = "not_webrtc"
+        return field
+    cfg = await get_pool_config(http, tenant_id, pool_id) if pool_id else None
+    if cfg is None:
+        field["media_policy_source"] = "registry_unavailable"
+        logger.error(
+            "routing.assigned: politica de midia do pool %s NAO lida do registry "
+            "(session=%s) — o gateway recusara midia deste atendente", pool_id, session_id,
+        )
+        return field
+    field["media_policy"] = cfg.get("media_policy")
+    field["media_policy_source"] = "registry"
+    return field
+
+
 async def _write_routing_assigned_to_stream(
     redis_client: aioredis.Redis,
     session_id:   str,
@@ -5126,7 +5172,9 @@ async def process_routed(
             redis_client=redis_client,
             session_id=session_id,
             framework="native",
-            pool_config={"pool_id": pool_id},
+            pool_config=await _routing_assigned_pool_field(
+                http, redis_client, session_id, tenant_id, pool_id,
+            ),
             segment_id=_part_seg_id,
             instance_id=native_instance_id,
         )
@@ -6092,7 +6140,9 @@ async def process_routed(
             redis_client=redis_client,
             session_id=session_id,
             framework="human",
-            pool_config={"pool_id": pool_id},
+            pool_config=await _routing_assigned_pool_field(
+                http, redis_client, session_id, tenant_id, pool_id,
+            ),
             segment_id="",   # segment_id assigned inside activate_human_agent
             instance_id=result.get("instance_id", ""),
         )
@@ -6123,7 +6173,9 @@ async def process_routed(
             redis_client=redis_client,
             session_id=session_id,
             framework="external-mcp",
-            pool_config={"pool_id": pool_id},
+            pool_config=await _routing_assigned_pool_field(
+                http, redis_client, session_id, tenant_id, pool_id,
+            ),
             segment_id="",
             instance_id=result.get("instance_id", ""),
         )

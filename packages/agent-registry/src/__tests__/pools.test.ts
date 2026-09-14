@@ -171,6 +171,90 @@ describe("POST /v1/pools", () => {
   })
 })
 
+// ── VOZ-10 — pool de contato com webrtc declara as mídias que oferece ────────────
+describe("media_policy (VOZ-10)", () => {
+  const webrtcPool = { pool_id: "video_humano", channel_types: ["webrtc"], sla_target_ms: 60000 }
+  const policy = { customer_publish: ["audio", "video"], agent_publish: ["audio"] }
+
+  it("POST webrtc SEM media_policy recusa 422 nomeando o campo", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    const res = await request(app).post("/v1/pools").set(headers).send(webrtcPool)
+    expect(res.status).toBe(422)
+    expect(res.body.details.field).toBe("media_policy")
+    expect(prisma.pool.create).not.toHaveBeenCalled()
+  })
+
+  it("POST webrtc COM media_policy cria e grava a política (controle positivo)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.pool.create).mockResolvedValue({ ...dbPool, ...webrtcPool, media_policy: policy } as never)
+    const res = await request(app).post("/v1/pools").set(headers).send({ ...webrtcPool, media_policy: policy })
+    expect(res.status).toBe(201)
+    const data = vi.mocked(prisma.pool.create).mock.calls[0]![0]!.data as Record<string, unknown>
+    expect(data["media_policy"]).toEqual(policy)
+  })
+
+  it("listas VAZIAS são política válida (webrtc só texto), não ausência", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.pool.create).mockResolvedValue(dbPool as never)
+    const res = await request(app).post("/v1/pools").set(headers)
+      .send({ ...webrtcPool, media_policy: { customer_publish: [], agent_publish: [] } })
+    expect(res.status).toBe(201)
+  })
+
+  it("tipo de mídia inválido ou repetido recusa 422", async () => {
+    for (const bad of [
+      { customer_publish: ["text"], agent_publish: [] },
+      { customer_publish: ["audio", "audio"], agent_publish: [] },
+      { customer_publish: ["audio"] },
+      { ...policy, recording: true },
+    ]) {
+      const res = await request(app).post("/v1/pools").set(headers).send({ ...webrtcPool, media_policy: bad })
+      expect(res.status, JSON.stringify(bad)).toBe(422)
+    }
+  })
+
+  it("pool sem webrtc não exige política", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.pool.create).mockResolvedValue(dbPool as never)
+    const res = await request(app).post("/v1/pools").set(headers).send(validPool)
+    expect(res.status).toBe(201)
+  })
+
+  it("PUT que ADICIONA webrtc a pool sem política recusa (estado resultante)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue({ ...dbPool, id: "x", purpose: "contact", media_policy: null } as never)
+    const res = await request(app).put("/v1/pools/retencao_humano").set(headers)
+      .send({ channel_types: ["webchat", "webrtc"] })
+    expect(res.status).toBe(422)
+    expect(prisma.pool.update).not.toHaveBeenCalled()
+  })
+
+  it("PUT que LIMPA a política de um pool webrtc recusa", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(
+      { ...dbPool, id: "x", channel_types: ["webrtc"], purpose: "contact", media_policy: policy } as never)
+    const res = await request(app).put("/v1/pools/video_humano").set(headers).send({ media_policy: null })
+    expect(res.status).toBe(422)
+  })
+
+  it("PUT que troca a política de um pool webrtc grava (controle positivo)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(
+      { ...dbPool, id: "x", channel_types: ["webrtc"], purpose: "contact", media_policy: policy } as never)
+    vi.mocked(prisma.pool.update).mockResolvedValue(dbPool as never)
+    const nova = { customer_publish: ["audio"], agent_publish: ["audio"] }
+    const res = await request(app).put("/v1/pools/video_humano").set(headers).send({ media_policy: nova })
+    expect(res.status).toBe(200)
+    const data = vi.mocked(prisma.pool.update).mock.calls[0]![0]!.data as Record<string, unknown>
+    expect(data["media_policy"]).toEqual(nova)
+  })
+
+  it("pool interno (espelho) com webrtc herdado não exige política", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(
+      { ...dbPool, id: "x", channel_types: ["webrtc"], purpose: "internal", media_policy: null } as never)
+    vi.mocked(prisma.pool.update).mockResolvedValue(dbPool as never)
+    const res = await request(app).put("/v1/pools/video_humano").set(headers).send({ description: "x" })
+    expect(res.status).toBe(200)
+  })
+})
+
 describe("GET /v1/pools", () => {
   it("retorna lista de pools do tenant", async () => {
     vi.mocked(prisma.pool.findMany).mockResolvedValue([dbPool] as never)

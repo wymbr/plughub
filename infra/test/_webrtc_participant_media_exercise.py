@@ -64,9 +64,16 @@ def _video(tok: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))).get("video", {})
 
 
+# Desde a VOZ-10 a política vem do POOL no evento; aqui ela é fixa e ampla de propósito —
+# a proposição deste exercício é a UNIÃO por participante e o SFU obedecer, não a política
+# (essa é do `probe_webrtc_pool_media_policy.sh`).
+_POLICY = {"customer_publish": ["audio", "video"], "agent_publish": ["audio", "video"]}
+
+
 def _assigned(framework: str, iid: str) -> dict:
+    pool = {"pool_id": "probe_voz09", "media_policy_source": "registry", "media_policy": _POLICY}
     return {"type": "routing.assigned", "framework": framework, "instance_id": iid,
-            "pool": json.dumps({"pool_id": "probe_voz09"}), "segment_id": ""}
+            "pool": json.dumps(pool), "segment_id": ""}
 
 
 async def _publish(room: rtc.Room, kind: str, timeout: float = 20) -> tuple[bool, str]:
@@ -93,13 +100,13 @@ async def main() -> None:
     s = Settings()
     s.webrtc_stt_enabled = False
     if MODE == "mut_never_falls":
-        media_policy.customer_ceiling = lambda attendants, policy=None: frozenset({"audio", "video"})
+        media_policy.customer_ceiling = lambda attendants: frozenset({"audio", "video"})
     elif MODE == "mut_replace":
         _orig = media_policy.customer_ceiling
 
-        def _replace(attendants, policy=media_policy.PLATFORM_DEFAULT):
+        def _replace(attendants):
             last = dict(list(attendants.items())[-1:])
-            return _orig(last, policy)
+            return _orig(last)
         media_policy.customer_ceiling = _replace
 
     r = aioredis.from_url("redis://redis:6379", decode_responses=True)

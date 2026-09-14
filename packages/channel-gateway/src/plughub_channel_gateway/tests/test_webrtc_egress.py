@@ -5,11 +5,10 @@ Arc 15 Phase D — WebRTC Egress Recording tests.
 Covers:
   TestEgressStart            — _start_egress: notice delivery, Redis guard, start_egress call
   TestEgressDoubleStartGuard — double-start is a no-op (Redis key exists)
-  TestEgressRecordingOptOut  — pool.webrtc_recording=False → egress never started
   TestEgressStopAndStore     — _stop_egress_and_store: stop, wait, read, commit, stream event
   TestEgressStopNoFile       — file missing after wait → graceful skip (no crash)
   TestEgressStopAllIdempotent— _stop_all_egress is idempotent (second call is no-op)
-  TestEgressRoutingAssigned  — _on_routing_assigned wires egress task when flag set
+  TestEgressRoutingAssigned  — _on_routing_assigned NAO dispara egress (gatilho sem produtor, VOZ-10)
   TestEgressProviderImpl     — sem credencial nao ha egress placebo (VOZ-01) + MockProvider
 """
 
@@ -524,32 +523,13 @@ class TestEgressStopAllIdempotent:
 
 
 class TestEgressRoutingAssigned:
-    """_on_routing_assigned: a gravação começa (ou não) conforme pool/teto do cliente/segment.
+    """_on_routing_assigned NÃO dispara gravação (VOZ-10).
 
-    **Reescrita em 2026-08-03.** Os quatro testes desta classe REIMPLEMENTAVAM a condição
-    de `webrtc.py:690` no corpo do próprio teste e afirmavam sobre a cópia — o comentário
-    dizia isso abertamente (*"Replicate the guard condition"*). Consequências:
-
-    · Não tocavam o código de produção. Se a condição real mudasse — ou sumisse — os
-      quatro continuariam verdes. Cobertura aparente de uma decisão (gravar ou não
-      gravar a chamada do cliente) que ninguém verificava.
-    · Três passavam por acidente de tipo: `False and …` devolve `False`, e `is False`
-      dá certo. O quarto usava `segment_id = ""`, e `True and ""` devolve `""` —
-      falsy, mas não `False`. Reprovava por semântica do `and` do Python, não por
-      comportamento do produto.
-
-    Agora chamam `_on_routing_assigned` de verdade e observam se a task de egress foi
-    criada. O `_start_egress` é substituído para não subir gravação real; a asserção é
-    sobre TER SIDO CHAMADO, que é o que a condição decide.
+    O gatilho lia `pool.webrtc_recording`, campo que não existia em schema, tabela, tela
+    nem produtor: leitor sem produtor. Os testes anteriores o exercitavam injetando o campo
+    à mão no evento — provavam a CHAMADA e escondiam a AUSÊNCIA. A gravação volta com a
+    VOZ-06, junto do campo e de quem o escreve; até lá, nem o campo injetado liga nada.
     """
-
-    @staticmethod
-    def _fields(*, recording: bool, framework: str, segment_id: str) -> dict:
-        return {
-            "framework":  framework,
-            "pool":       json.dumps({"webrtc_recording": recording}),
-            "segment_id": segment_id,
-        }
 
     async def _run(self, fields: dict):
         adapter, _, _ = _make_adapter()
@@ -562,33 +542,15 @@ class TestEgressRoutingAssigned:
         return start
 
     @pytest.mark.asyncio
-    async def test_egress_task_created_when_recording_enabled(self):
-        start = await self._run(
-            self._fields(recording=True, framework="human", segment_id=SEGMENT_ID)
-        )
-        start.assert_called_once()
-        assert start.call_args.args[1] == SEGMENT_ID
-
-    @pytest.mark.asyncio
-    async def test_egress_not_started_when_customer_has_no_media(self):
-        start = await self._run(
-            self._fields(recording=True, framework="native", segment_id=SEGMENT_ID)
-        )
-        start.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_egress_not_started_when_flag_missing(self):
-        start = await self._run(
-            self._fields(recording=False, framework="human", segment_id=SEGMENT_ID)
-        )
-        start.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_egress_not_started_when_no_segment_id(self):
-        """Evento de routing sem `segment_id` — a gravação não teria onde ser anexada."""
-        start = await self._run(
-            self._fields(recording=True, framework="human", segment_id="")
-        )
+    async def test_nem_campo_injetado_liga_gravacao(self):
+        start = await self._run({
+            "framework":  "human",
+            "segment_id": SEGMENT_ID,
+            "pool": json.dumps({
+                "pool_id": "p", "media_policy_source": "registry", "webrtc_recording": True,
+                "media_policy": {"customer_publish": ["audio", "video"], "agent_publish": []},
+            }),
+        })
         start.assert_not_called()
 
 

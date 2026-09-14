@@ -18,6 +18,7 @@ import {
   syncInternalQueueMirror,
   detachedHookViolation,
 } from "../lib/internal-queue"
+import { mediaPolicyViolation } from "../lib/media-policy"
 
 export const poolsRouter = Router()
 
@@ -78,6 +79,10 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
       })
     }
 
+    // VOZ-10 — pool de contato com webrtc declara as mídias que oferece.
+    const mediaViolation = mediaPolicyViolation(body.channel_types, body.purpose, body.media_policy)
+    if (mediaViolation) return res.status(422).json(mediaViolation)
+
     // ADR internal-work-queue: hook detached agent-side exige a fila interna ligada.
     const hookViolation = detachedHookViolation(body.hooks, body.internal_queue_enabled === true)
     if (hookViolation) return res.status(422).json(hookViolation)
@@ -103,6 +108,7 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         queue_config:          body.queue_config ?? Prisma.DbNull,
         mentionable_pools:     body.mentionable_pools ?? Prisma.DbNull,
         navigation_pools:      body.navigation_pools ?? Prisma.DbNull,
+        media_policy:          body.media_policy ?? Prisma.DbNull,
         agent_groups:          body.agent_groups ?? [],
         llm_account_ids:       body.llm_account_ids ?? [],
         hooks:                 body.hooks ?? Prisma.DbNull,
@@ -238,6 +244,16 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
       })
     }
 
+    // VOZ-10 — ESTADO RESULTANTE: adicionar `webrtc` a um pool sem política, ou limpar a
+    // política de um pool webrtc, são as duas formas de chegar ao estado proibido.
+    const exMp = existing as { channel_types: string[]; purpose: string | null; media_policy: unknown }
+    const mediaViolation = mediaPolicyViolation(
+      body.channel_types !== undefined ? body.channel_types : exMp.channel_types,
+      body.purpose       !== undefined ? body.purpose       : exMp.purpose,
+      body.media_policy  !== undefined ? body.media_policy  : exMp.media_policy,
+    )
+    if (mediaViolation) return res.status(422).json(mediaViolation)
+
     // ── ADR internal-work-queue — estado RESULTANTE da flag e dos hooks ──────────
     const exIq = existing as { internal_queue_enabled?: boolean; hooks: unknown }
     const resultingIq = body.internal_queue_enabled !== undefined
@@ -290,6 +306,7 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.queue_config          !== undefined && { queue_config:          body.queue_config ?? Prisma.DbNull }),
         ...(body.mentionable_pools     !== undefined && { mentionable_pools:     body.mentionable_pools }),
         ...(body.navigation_pools      !== undefined && { navigation_pools:      body.navigation_pools }),
+        ...(body.media_policy          !== undefined && { media_policy:          body.media_policy ?? Prisma.DbNull }),
         ...(body.agent_groups          !== undefined && { agent_groups:          body.agent_groups }),
         ...(body.llm_account_ids       !== undefined && { llm_account_ids:       body.llm_account_ids }),
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),

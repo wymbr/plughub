@@ -137,6 +137,17 @@
       "hint": "Espelha a fila {{pool}} para trabalho author-bound (wrap-up): só quem atendeu classifica o próprio atendimento. Obrigatória para hooks de encerramento com entrega Destacada no lado Agente.",
       "disableConfirm": "Desligar a fila interna tira o pool da inbox: qualquer item de wrap-up ainda pendente deixa de ser reivindicável, e a plataforma não consegue verificar daqui se há algum. Drene a fila antes. Desligar mesmo assim?"
     },
+    "mediaPolicy": {
+      "label": "Mídias oferecidas no WebRTC",
+      "hint": "O que este pool oferece em chamadas WebRTC, por direção. Texto é sempre possível. O cliente só publica o que o atendente consegue receber: um agente de IA de texto não recebe vídeo mesmo que o pool o ofereça.",
+      "customer_publish": "Cliente pode enviar",
+      "agent_publish": "Atendente pode enviar",
+      "kind": { "audio": "Áudio", "video": "Vídeo" },
+      "undeclared": "Não declarada — um pool de contato com WebRTC não pode ser salvo assim.",
+      "textOnly": "Declarar só texto",
+      "textOnlyDeclared": "Declarada como só texto: nenhum lado publica áudio ou vídeo.",
+      "required": "Declare as mídias oferecidas no WebRTC (ou \"só texto\") antes de salvar."
+    },
     "transfer": {
       "label": "Transferência / Escalonamento",
       "hint": "Pools para onde o agente humano pode transferir (escalar) o contato. Aparece no combo Transfer do Console.",

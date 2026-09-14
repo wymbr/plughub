@@ -137,6 +137,17 @@
       "hint": "Mirrors the {{pool}} queue for author-bound work (wrap-up): only the agent who handled the contact classifies it. Required for end hooks with Detached delivery on the Agent side.",
       "disableConfirm": "Disabling the internal queue removes the pool from the inbox: any pending wrap-up item stops being claimable, and the platform cannot check from here whether one exists. Drain the queue first. Disable anyway?"
     },
+    "mediaPolicy": {
+      "label": "Media offered on WebRTC",
+      "hint": "What this pool offers on WebRTC calls, per direction. Text is always available. The customer only publishes what the attendant can receive: a text AI agent does not receive video even if the pool offers it.",
+      "customer_publish": "Customer may send",
+      "agent_publish": "Attendant may send",
+      "kind": { "audio": "Audio", "video": "Video" },
+      "undeclared": "Not declared — a contact pool with WebRTC cannot be saved like this.",
+      "textOnly": "Declare text only",
+      "textOnlyDeclared": "Declared as text only: neither side publishes audio or video.",
+      "required": "Declare the media offered on WebRTC (or \"text only\") before saving."
+    },
     "transfer": {
       "label": "Transfer / Escalate",
       "hint": "Pools the human agent can transfer (escalate) the contact to. Shown in the Console Transfer combo.",

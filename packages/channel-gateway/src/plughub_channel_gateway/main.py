@@ -926,7 +926,7 @@ async def webrtc_token(
     ⚠️ O pool é o de `session:{id}:meta`, que é o de ENTRADA (dívida conhecida,
     fatia C de `session-meta-ownership`), igual ao precedente de `operator/register`.
 
-    Returns {token, livekit_url, room_name, publish, customer_publish, hidden, policy_source}.
+    Returns {token, livekit_url, room_name, publish, customer_publish, hidden, policy_sources}.
     404 se a sala ainda não existe · 503 se o plano de mídia não está configurado,
     NOMEANDO o que falta.
     """

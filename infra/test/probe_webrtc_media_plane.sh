@@ -157,7 +157,19 @@ IMG=$(docker inspect -f '{{.Image}}' "$GW" 2>/dev/null)
 if [ -z "$IMG" ]; then
   echo ""; echo "INCONCLUSIVO: container $GW fora do ar — B..F nao medidos"; exit 2
 fi
-run_img() { docker run --rm -i --network "$NET" --entrypoint python "$@"; }
+# ⚠️ `timeout` mata o CLI do docker, não o container, e um exercício pendurado que some calado
+# é o teste que não pode reprovar. Medido na VOZ-10: a política por pool deixou o F8 sem teto,
+# o SFU recusou a publicação e o cliente LiveKit pendurou — este probe ficou 10 min parado.
+run_img() {
+  local name="probe_voz01_$$_$RANDOM" rc
+  timeout "${EXERCISE_TIMEOUT_S:-300}" docker run --rm -i --name "$name" --network "$NET" --entrypoint python "$@"
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    docker kill "$name" >/dev/null 2>&1
+    echo "FALHA TIMEOUT exercicio passou de ${EXERCISE_TIMEOUT_S:-300}s e foi morto ($name)"
+  fi
+  return 0
+}
 
 # ── B ────────────────────────────────────────────────────────────────────────
 echo ""

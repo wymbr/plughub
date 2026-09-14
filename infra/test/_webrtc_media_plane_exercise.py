@@ -74,7 +74,9 @@ async def _join(url: str, token: str, relay_only: bool, publish: bool,
         return False, f"{type(exc).__name__}: {str(exc)[:90]}"
     finally:
         try:
-            await room.disconnect()
+            # Sem teto de tempo, uma publicação recusada deixava o exercício pendurado aqui
+            # para sempre (medido na VOZ-09 e de novo na VOZ-10).
+            await asyncio.wait_for(room.disconnect(), 10)
         except Exception:
             pass
 
@@ -143,7 +145,15 @@ async def full() -> None:
         # ── F · ROTA ─────────────────────────────────────────────────────────
         await r.setex(f"session:{sid}:meta", 300, json.dumps({"tenant_id": tenant, "pool_id": pool}))
         await r.setex(f"channel:webrtc:{sid}:room_name", 300, room)
-        await r.setex(f"channel:webrtc:{sid}:medium", 300, "voice")
+        # O agente pede token numa sala onde já foi ATRIBUÍDO: desde a VOZ-10 o teto dele é o
+        # `agent_publish` do pool que o pôs lá. Sem atendente registrado o teto é vazio, o SFU
+        # recusa a publicação do F8 — e o cliente Python do LiveKit pendura no `disconnect`.
+        await r.setex(f"channel:webrtc:{sid}:media", 300, json.dumps({
+            "attendants": {"h-probe": {"framework": "human", "pool_id": pool,
+                                       "customer_publish": ["audio"], "agent_publish": ["audio"],
+                                       "policy_source": f"pool:{pool}"}},
+            "customer": {"publish": ["audio"]},
+        }))
 
         def mint(sub: str, mc: dict, ten: str = tenant, secret: str = auth_sec) -> str:
             now = int(time.time())
@@ -199,7 +209,7 @@ async def full() -> None:
                      f"supervisor 200; oculto e sem publish={oculto}; SFU aceitou: {why}")
     finally:
         await r.delete(f"session:{sid}:meta", f"channel:webrtc:{sid}:room_name",
-                       f"channel:webrtc:{sid}:medium")
+                       f"channel:webrtc:{sid}:media")
         await r.aclose()
         await p.delete_room(room)
         still = await p.get_room(room)

@@ -61,6 +61,7 @@ model Pool {
   queue_config           Json?
   mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
   navigation_pools       Json?   // Record<caminho, pool_id> — F3 do orquestrador por arvore
+  media_policy           Json?   // PoolMediaPolicy — teto de mídia WebRTC por direção (VOZ-10); obrigatório p/ pool de contato com webrtc
   agent_groups              String[] @default([]) // Agent group IDs this pool belongs to (Arc 9)
   // Preferred LLM Account ids (config-api namespace `llm_accounts`), preference order —
   // see PoolRegistrationSchema.llm_account_ids (@plughub/schemas) for full semantics.

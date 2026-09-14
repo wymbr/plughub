@@ -1636,8 +1636,11 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   do JWT. Emitia sem credencial e com identidade da query — *tokens só do gateway* não diz *para quem*.
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
+- **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,
+  obrigatória em pool de contato com `webrtc`, lida fresca pelo bridge e levada no `routing.assigned`
+  com a procedência. **Ausência nunca vira permissão** — pool sem política ou registry fora oferece nada.
 
-Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (`VOZ-02` em `pending.md`, adiado por gatilho comercial).
+Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform pelos tetos). Texto é sempre possível; `media_capabilities` do agente não existe mais (sem produtor desde a aposentadoria do AgentType). *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (`VOZ-02` em `pending.md`, adiado por gatilho comercial).
 
 → See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
 

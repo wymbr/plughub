@@ -202,6 +202,9 @@ export interface Pool {
   mentionable_pools?: Record<string, string> | null
   /** F3 do orquestrador por arvore: caminho de navegacao -> pool (prefixo mais longo). */
   navigation_pools?: Record<string, string> | null
+  /** VOZ-10 — mídias que o pool OFERECE no WebRTC, por direção. Obrigatória em pool
+   *  de contato com `webrtc`; null = não declarada (o atendente não oferece mídia). */
+  media_policy?: PoolMediaPolicy | null
   /** IDs dos Agent Groups (Arc 9) a que o pool pertence. */
   agent_groups?: string[]
   /** LLM Accounts (config-api namespace `llm_accounts`) preferidas por este pool, em ordem. */
@@ -225,6 +228,13 @@ export interface Pool {
   updated_at: string
 }
 
+/** VOZ-10 — gêmeo de `PoolMediaPolicySchema` (@plughub/schemas). Lista vazia = só texto. */
+export type MediaKind = 'audio' | 'video'
+export interface PoolMediaPolicy {
+  customer_publish: MediaKind[]
+  agent_publish:    MediaKind[]
+}
+
 /** Campos do gap compartilhados por Create/Update (todos opcionais). */
 interface PoolGapFields {
   agent_kind?: 'human' | 'ai' | null
@@ -239,6 +249,9 @@ interface PoolGapFields {
   mentionable_pools?: Record<string, string> | null
   /** F3 do orquestrador por arvore: caminho de navegacao -> pool (prefixo mais longo). */
   navigation_pools?: Record<string, string> | null
+  /** VOZ-10 — mídias que o pool OFERECE no WebRTC, por direção. Obrigatória em pool
+   *  de contato com `webrtc`; null = não declarada (o atendente não oferece mídia). */
+  media_policy?: PoolMediaPolicy | null
   agent_groups?: string[]
   llm_account_ids?: string[]
   evaluation?: PoolEvaluationConfig | null

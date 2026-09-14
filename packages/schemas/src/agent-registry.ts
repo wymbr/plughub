@@ -276,6 +276,24 @@ export type PoolHooks = z.infer<typeof PoolHooksSchema>
 
 // ──────────────────────────────────────────────────────────────────────────────
 
+/** Tipos de mídia contínua do WebRTC. Texto é sempre permitido e não entra aqui. */
+export const MediaKindSchema = z.enum(["audio", "video"])
+export type MediaKind = z.infer<typeof MediaKindSchema>
+
+const _mediaKindList = z.array(MediaKindSchema).refine(
+  (l) => new Set(l).size === l.length,
+  { message: "tipo de mídia repetido" },
+)
+
+/** Ver `PoolRegistrationSchema.media_policy`. */
+export const PoolMediaPolicySchema = z.object({
+  /** O que o CLIENTE pode publicar para este pool. */
+  customer_publish: _mediaKindList,
+  /** O que o ATENDENTE deste pool pode publicar para o cliente. */
+  agent_publish:    _mediaKindList,
+}).strict()
+export type PoolMediaPolicy = z.infer<typeof PoolMediaPolicySchema>
+
 export const PoolRegistrationSchema = z.object({
   /**
    * snake_case. O hífen é legal em UMA única posição: o sufixo reservado `-int`,
@@ -551,6 +569,22 @@ export const PoolRegistrationSchema = z.object({
      * continuava com política. É a mesma forma de `calendar_id`, e o mesmo motivo.
      */
   }).nullable().optional(),
+  /**
+   * Mídias que o pool OFERECE no canal WebRTC, por DIREÇÃO (VOZ-10). É o TETO do
+   * modelo por participante (VOZ-09): o gateway calcula o do cliente como
+   * `customer_publish` ∩ o que o atendente consome, unindo os atendentes presentes.
+   *
+   * ⚠️ **Obrigatório para pool `purpose: contact` com `webrtc` em `channel_types`** — a
+   * rota recusa (422) criar ou deixar o pool nesse estado sem ele. Não há default:
+   * ausência virava `text` em silêncio no modelo antigo, e um pool que atende só por
+   * texto no WebRTC declara as duas listas VAZIAS, explicitamente.
+   *
+   * Não há ordem de preferência (o modelo antigo tinha `video,voice,text`): com teto por
+   * participante quem escolhe dentro dele é o cliente, e ordem não decide nada. Não há
+   * `recording` aqui: gravação sobe com o egress na VOZ-06 — campo na tela sem efeito é
+   * o que se quer evitar.
+   */
+  media_policy:           PoolMediaPolicySchema.nullable().optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

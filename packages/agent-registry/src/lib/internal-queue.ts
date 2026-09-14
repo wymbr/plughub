@@ -134,6 +134,7 @@ export async function syncInternalQueueMirror(
       queue_config:       Prisma.DbNull,
       mentionable_pools:  Prisma.DbNull,
       navigation_pools:   Prisma.DbNull,
+      media_policy:       Prisma.DbNull,   // trabalho do operador, sem cliente na sala (VOZ-10)
       hooks:              Prisma.DbNull,
       context_visibility: Prisma.DbNull,
       ...derived,

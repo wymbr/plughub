@@ -279,7 +279,18 @@ obriga, e onde está no ledger:
   os atendentes consomem, aplicado no SFU (`update_participant`) e anunciado ao cliente
   (`webrtc.media`); revogar retira a trilha já publicada. Com avatar a mídia é assimétrica por
   construção, e o modelo já a representa;
-- **mídias oferecidas configuradas por POOL** (`VOZ-10`) e **fallback por SEGMENTO** (`VOZ-11`);
+- **mídias oferecidas configuradas por POOL** (`VOZ-10`, ✅ 2026-09-14) — `pool.media_policy`
+  `{customer_publish, agent_publish}` no agent-registry, editável na tela e **obrigatória** em
+  pool de contato com `webrtc` (o registry recusa o estado proibido no POST e no PUT). O bridge a
+  lê fresca e a carrega no `routing.assigned` com a procedência (`registry` ·
+  `registry_unavailable` · `not_webrtc`); o gateway calcula o teto do cliente como UNIÃO de
+  (política do pool de cada atendente ∩ o que ele consome) e o do atendente humano como UNIÃO do
+  `agent_publish` — e **ausência nunca vira permissão**: pool sem política, registry fora ou
+  evento sem pool contribuem nada, com a procedência dizendo qual. **Sem ordem de preferência**,
+  por decisão: com o teto por participante não há "o meio da sessão" a escolher, e degradar é o
+  fallback por segmento. A capacidade de IA consumir áudio/vídeo virá do DEPLOY do pool quando
+  houver bot leg (`VOZ-05`) ou avatar (`VOZ-14`) de onde derivá-la;
+- **fallback por SEGMENTO** (`VOZ-11`);
 - **o provedor de avatar entra na NOSSA sala** (`VOZ-14`). É V1 aplicada: renderização pode ser
   contratada, a sala não — senão gravação, supervisão e avaliação escapam;
 - **conteúdo fixo é pré-renderizável** (`DLG-34`): nós `statement` do DialogForm são texto

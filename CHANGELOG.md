@@ -1,5 +1,121 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (13) — VOZ-10: as mídias do WebRTC são config do pool, e é ela que chega ao token
+
+### 1 · Medido antes
+
+| pergunta | resposta medida |
+|---|---|
+| de onde vinha o que o pool oferece | `PLATFORM_DEFAULT`, tabela em `media_policy.py` — todo pool de todo tenant oferecia áudio e vídeo ao humano; config de negócio em código, sem tela |
+| pools `webrtc` no registry vivo | **0** (logo 0 políticas a migrar) |
+| `pool.webrtc_recording`, lido pelo adapter para disparar a gravação | não existia em zod, tabela, tela nem produtor — **leitor sem produtor**: a gravação nunca iniciaria |
+| o que o bridge punha no campo `pool` do `routing.assigned` | `{"pool_id"}` e nada mais |
+
+**Vermelho ao vivo** do gate novo contra as imagens anteriores: o registry aceitou pool de contato
+`webrtc` sem política (201), aceitou limpar a política e acrescentar o canal a pool sem ela (200),
+aceitou tipo de mídia desconhecido e chave a mais (200); o bridge não tinha o produtor
+(`AttributeError`); **1 de 1** `routing.assigned` escrito depois do boot saiu sem procedência.
+
+### 2 · O que mudou
+
+- **Contrato** (`@plughub/schemas`): `MediaKindSchema` (`audio`|`video`) e `PoolMediaPolicySchema`
+  `{customer_publish, agent_publish}` `.strict()`, listas sem repetição; lista vazia = só texto, que
+  é política válida e não ausência. `media_policy` no `PoolRegistrationSchema`.
+- **agent-registry**: coluna `media_policy JSONB` por migração versionada
+  (`20260914120000_pool_media_policy`, aplicada pelo `bootstrap-db.js` no boot); regra única em
+  `lib/media-policy.ts` — pool com `webrtc` e `purpose` de contato EXIGE política. O POST valida o
+  corpo e o PUT valida o **estado resultante**, porque há duas portas para o estado proibido:
+  limpar a política de um pool webrtc e acrescentar `webrtc` a um pool sem ela. A recusa é 422 com
+  `details.field = "media_policy"`. O espelho de fila interna nasce sem política (sem cliente na
+  sala).
+- **platform-ui**: seção *Mídias oferecidas no WebRTC* no `PoolsPage`, visível quando o canal está
+  marcado — cliente pode enviar × atendente pode enviar, áudio × vídeo. **A tela não inventa**:
+  pool sem política aparece como *não declarada*, com um botão explícito *declarar só texto*, e o
+  salvar recusa no campo antes de ir ao registry. Desmarcar o canal não apaga a política. i18n nos
+  dois locales.
+- **orchestrator-bridge**: `_routing_assigned_pool_field` — só para sessão `webrtc` (os outros
+  canais ignoram o evento, e uma chamada HTTP por ativação em todo webchat seria custo sem leitor),
+  lê o pool FRESCO do registry e grava `media_policy` + `media_policy_source` (`registry` ·
+  `registry_unavailable` · `not_webrtc`). Registry fora loga `ERROR`, e o campo sai **sem**
+  `media_policy` — `null` seria lido como "o pool não declara". Os três chamadores passam por ele.
+- **channel-gateway**: `media_policy.py` perdeu `PLATFORM_DEFAULT`; o atendente vira um registro
+  `{framework, pool_id, customer_publish, agent_publish, policy_source}`. Teto do cliente = UNIÃO de
+  (`customer_publish` do pool de cada atendente ∩ o que ele consome); teto do atendente humano =
+  UNIÃO do `agent_publish` dos pools humanos; supervisor e bot seguem papéis de PLATAFORMA (oculto e
+  sem publicação é invariante, não escolha de tenant). **Ausência nunca vira permissão**, e a
+  procedência diz qual foi: `evento_sem_pool` · `registry_indisponivel:<p>` · `sem_leitura:<p>` ·
+  `pool_sem_politica:<p>` · `estado_sem_politica` (estado gravado antes desta mudança). Mensagens e
+  token trocaram `policy_source` por `policy_sources`. O gatilho de gravação saiu com lápide: volta
+  na `VOZ-06`, com o campo e quem o produz.
+
+### 3 · Duas decisões
+
+- **Sem ordem de preferência.** A ficha pedia *"as mídias por direção e a ordem de preferência"*.
+  Com o teto por participante (VOZ-09) não existe mais "o meio da sessão" a escolher; ordem só
+  teria leitor num fallback, e fallback é do SEGMENTO (`VOZ-11`). Um campo de ordem hoje seria
+  campo na tela sem efeito.
+- **A capacidade da IA não vem desta ficha.** A IA nativa e externa continuam consumindo nada. A
+  ficha dizia que ela deriva do DEPLOY do pool — e hoje não há deploy com bot leg ou avatar de onde
+  derivar. Declarar aqui seria o campo solto que a própria ficha proibia. Entra com `VOZ-05`/`VOZ-14`.
+
+### 4 · Testes e gate
+
+- **Unitários**: `pools.test.ts` +9 (POST sem política → 422 nomeando o campo; com → grava; listas
+  vazias válidas; tipo inválido, repetido, chave faltando e chave a mais → 422; canal não-webrtc sem
+  exigência; PUT acrescentando webrtc e PUT limpando → 422 sem update; PUT trocando → grava;
+  `purpose: internal` isento) — 21 no arquivo. Gateway: `TestMediaPolicy` reescrita sobre a política
+  do pool (inclusive as cinco ausências, cada uma com a sua procedência, e agente não sendo papel de
+  plataforma), token do atendente recortado pelo `agent_publish`, política ausente em três formas
+  com o nível de log de cada, estado anterior não virando permissão; `TestEgressRoutingAssigned`
+  agora afirma que **nem o campo injetado à mão liga a gravação** — os testes antigos o injetavam e
+  provavam a chamada escondendo a ausência. Bridge: `test_routing_assigned_media_policy.py` (+7,
+  com valor distintivo "só vídeo", que nenhum default produz). Suítes nas imagens novas: gateway
+  **1015**, bridge **158** (5 skipped); typecheck do platform-ui limpo.
+- **Gate `probe_webrtc_pool_media_policy.sh`** (novo, no manifesto):
+  **A** contrato — chaves e tipos iguais no zod e no leitor, coluna e migração, rota validando e
+  gravando nos dois verbos, tipos e envio na tela, i18n igual nos dois locales, os três chamadores
+  do bridge passando o campo, procedências do produtor distinguidas no leitor, sem default de
+  plataforma e sem leitura de `webrtc_recording` fora de comentário · **B** registry ao vivo, com
+  fixtures fixas e um id novo por rodada para o "nunca criado" · **C** produtor→leitor com as
+  imagens reais: o bridge lê o registry e escreve; o gateway consome e assina com o provider real —
+  humano do pool com política "cliente só vídeo, atendente só áudio" dá token de cliente `camera` e
+  de atendente `microphone`; IA do mesmo pool lê a política e não abre mídia; política trocada na
+  API vale no próximo atendente sem reiniciar nada; registry fora recusa e nomeia · **M** produtor
+  com cache derruba C4, leitor que ignora o pool derruba C1 · **D** produtor vivo, INCONCLUSIVO sem
+  amostra.
+- **O instrumento errou três vezes antes de medir, e as três ficaram registradas no próprio probe**:
+  o arquivo de corpo do curl ganhou um nome literal por um `$$` que o `String.replace` do Node
+  transformou em `$` (virou `mktemp`); a verificação de i18n contava `kind.` do template
+  `kind.${kind}` como chave faltando; e a comparação da política lida era textual, enquanto o JSONB
+  do Postgres reordena as chaves — B2 e B3 reprovavam com o registry certo (virou `jq -S`).
+- **Resíduo do vermelho, limpo e nomeado:** o registry antigo criou `probe_voz10_sem_politica`
+  como pool webrtc sem política; depois do deploy ele foi posto em `webchat` pela API (a regra nova
+  permite, porque o estado resultante não tem webrtc). Por isso o B1 usa um id novo a cada rodada.
+- **A mudança quebrou um vizinho, e ele não reprovava — pendurava.** O F8 do
+  `probe_webrtc_media_plane.sh` (VOZ-01) pedia token de agente numa sessão sem atendente
+  registrado. Com a política por pool isso é, corretamente, teto vazio: o SFU recusou a publicação
+  e o cliente Python do LiveKit pendurou no `disconnect` — o mesmo defeito medido na VOZ-09, num
+  probe que ainda não tinha `timeout`. Ficou **10 minutos parado** até eu matar o container (e aí
+  a contagem de veredictos reprovou alto: 12 de 16). Conserto nos dois lados: a fixture passou a
+  ser a sessão realista (atendente humano de pool com política), e o probe ganhou `timeout`,
+  container nomeado, `kill` e `FALHA TIMEOUT` contada; o `disconnect` do exercício tem teto de 10 s.
+  Rodado de novo: **VERDE** (29 verificações).
+- Vizinhos verdes: `probe_webrtc_participant_media` (com o exercício ajustado ao campo `pool`),
+  `probe_webrtc_media_plane`, `probe_gates_manifest_coverage` (348 scripts), `probe_adapter_self_calls`,
+  `probe_edge_surface`, `probe_authz_single_verifier`, `probe_i18n_duplicate_keys`,
+  `probe_task_ledger`, `check_config_invariants`. Vitest de `pools.test.ts` 21/21.
+- **Não verificado:** a seção nova do `PoolsPage` renderizada no navegador — exige login, que não
+  faço. Cobertura dela: typecheck, imagem do platform-ui construída e o ramo A do gate.
+
+### 5 · O que ficou
+
+- **`VOZ-06`** herda o flag de gravação como campo de pool com produtor, tela e gate.
+- **`VOZ-04`**: a fixture de pool do contato ponta a ponta tem de declarar a política.
+- 404 do registry e registry fora chegam ao gateway com a mesma procedência
+  (`registry_unavailable`), porque `get_pool_config` devolve `None` nos dois casos. Para o teto dá
+  no mesmo (nada, com `ERROR` no bridge); para o diagnóstico, só o log do `get_pool_config` separa
+  as duas — e o 404 ali é `debug`.
+
 ## 2026-09-14 (12) — VOZ-09: a mídia do WebRTC é fato do participante, e o SFU obedece
 
 ### 1 · Vermelho ao vivo, antes

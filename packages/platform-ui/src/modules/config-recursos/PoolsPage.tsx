@@ -19,6 +19,8 @@ import {
   PoolHookEntry,
   PoolHookSide,
   PoolHookDispatch,
+  PoolMediaPolicy,
+  MediaKind,
 } from '@/types'
 import { useDialogForms } from '@/api/dialog-hooks'
 import { ContextVisibilitySelect } from './ContextVisibilitySelect'
@@ -551,6 +553,59 @@ function WeightSlider({
 
 // ── PoolsPage ─────────────────────────────────────────────────────────────────
 
+// VOZ-10 — mídias oferecidas pelo pool no WebRTC, por direção. Texto é sempre possível e
+// não aparece aqui. O que o CLIENTE publica ainda é recortado pelo que o atendente consome:
+// um agente de IA de texto não recebe vídeo mesmo que o pool o ofereça.
+const MEDIA_KINDS: MediaKind[] = ['audio', 'video']
+
+function MediaPolicyEditor({
+  value, onChange,
+}: { value: PoolMediaPolicy | null; onChange: (v: PoolMediaPolicy) => void }) {
+  const { t } = useTranslation('configRecursos')
+  const current = value ?? { customer_publish: [], agent_publish: [] }
+  const toggle = (dir: keyof PoolMediaPolicy, kind: MediaKind) => {
+    const list = current[dir]
+    const next = list.includes(kind) ? list.filter(k => k !== kind) : [...list, kind]
+    onChange({ ...current, [dir]: MEDIA_KINDS.filter(k => next.includes(k)) })
+  }
+  return (
+    <div className="mt-3 border border-border rounded p-3" data-testid="media-policy-editor">
+      <p className="text-xs font-semibold text-dark">{t('pools.mediaPolicy.label')}</p>
+      <p className="text-2xs text-muted-light mb-2">{t('pools.mediaPolicy.hint')}</p>
+      {(['customer_publish', 'agent_publish'] as const).map(dir => (
+        <div key={dir} className="flex items-center gap-4 mb-1">
+          <span className="text-xs text-dark w-40">{t(`pools.mediaPolicy.${dir}`)}</span>
+          {MEDIA_KINDS.map(kind => (
+            <label key={kind} className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={current[dir].includes(kind)}
+                onChange={() => toggle(dir, kind)}
+                className="w-4 h-4 rounded accent-primary"
+              />
+              <span className="text-xs text-dark">{t(`pools.mediaPolicy.kind.${kind}`)}</span>
+            </label>
+          ))}
+        </div>
+      ))}
+      {value === null ? (
+        <div className="flex items-center gap-2 mt-1">
+          <p className="text-2xs text-warning">{t('pools.mediaPolicy.undeclared')}</p>
+          <button
+            type="button"
+            onClick={() => onChange({ customer_publish: [], agent_publish: [] })}
+            className="text-2xs text-primary underline"
+          >
+            {t('pools.mediaPolicy.textOnly')}
+          </button>
+        </div>
+      ) : (value.customer_publish.length === 0 && value.agent_publish.length === 0) && (
+        <p className="text-2xs text-muted-light mt-1">{t('pools.mediaPolicy.textOnlyDeclared')}</p>
+      )}
+    </div>
+  )
+}
+
 const CHANNEL_OPTIONS = [
   { value: 'webchat',   label: 'WebChat'   },
   { value: 'whatsapp',  label: 'WhatsApp'  },
@@ -703,6 +758,9 @@ const PoolsPage: React.FC = () => {
     navigation_pools:            [] as MentionEntry[],
     // LLM Accounts preferidas por este pool, em ordem de preferência.
     llm_account_ids:             [] as string[],
+    // VOZ-10 — mídias oferecidas no WebRTC. null = NÃO declarada: a tela não inventa
+    // "áudio e vídeo" nem "só texto"; quem salva escolhe.
+    media_policy:                null as PoolMediaPolicy | null,
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -854,7 +912,7 @@ const PoolsPage: React.FC = () => {
       queue_pool_id: '', queue_skill_id: '', queue_max_wait_s: null,
       hooks: { ...EMPTY_HOOKS },
       escalation_pools: [], mention_pools: [], navigation_pools: [],
-      llm_account_ids: [],
+      llm_account_ids: [], media_policy: null,
     })
     setCalExceptions([])
     setError('')
@@ -896,6 +954,7 @@ const PoolsPage: React.FC = () => {
         ([caminho, p]) => ({ alias: caminho, pool: p }),
       ),
       llm_account_ids: pool.llm_account_ids ?? [],
+      media_policy: pool.media_policy ?? null,
     })
     setCalExceptions([])  // will be loaded async below
     setError('')
@@ -935,6 +994,13 @@ const PoolsPage: React.FC = () => {
   const handleSubmit = async () => {
     if (!session || !formData.pool_id.trim()) {
       setError(t('pools.fields.poolId') + ' ' + tCommon('isRequired'))
+      return
+    }
+    // VOZ-10 — o registry recusa pool de contato com `webrtc` sem política (422); dizer
+    // aqui, no campo, é mais barato que a mensagem genérica do salvar.
+    if (formData.channel_types.includes('webrtc') && formData.purpose === 'contact'
+        && !formData.media_policy) {
+      setError(t('pools.mediaPolicy.required'))
       return
     }
     setIsSaving(true); setError('')
@@ -1068,6 +1134,10 @@ const PoolsPage: React.FC = () => {
         // order. Send when present; send [] to clear when previously set; else omit.
         ...(formData.llm_account_ids.length > 0 ? { llm_account_ids: formData.llm_account_ids }
           : ((editingPool?.llm_account_ids?.length ?? 0) > 0 ? { llm_account_ids: [] } : {})),
+        // VOZ-10 — só viaja com `webrtc` marcado. Desmarcar o canal NÃO apaga a política:
+        // ela fica sem efeito e volta se o canal voltar.
+        ...(formData.channel_types.includes('webrtc') && formData.media_policy
+          ? { media_policy: formData.media_policy } : {}),
       }
       if (editingPool) {
         // Desligar a fila interna órfana qualquer item ainda nela, e o registry não
@@ -1322,6 +1392,12 @@ const PoolsPage: React.FC = () => {
                   className="w-full text-sm border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
                 />
               </div>
+            )}
+            {formData.channel_types.includes('webrtc') && (
+              <MediaPolicyEditor
+                value={formData.media_policy}
+                onChange={mp => setFormData(prev => ({ ...prev, media_policy: mp }))}
+              />
             )}
           </div>
 

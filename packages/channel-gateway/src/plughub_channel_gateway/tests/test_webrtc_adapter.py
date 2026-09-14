@@ -464,24 +464,64 @@ class TestWebRTCAdapterDelivery:
 
 
 class TestMediaPolicy:
-    def test_humano_consome_audio_e_video(self):
-        assert media_policy.customer_ceiling({"h1": "human"}) == {"audio", "video"}
+    """Teto = UNIÃO de (política do POOL ∩ consumo do framework) — VOZ-09/VOZ-10."""
 
-    def test_ia_de_texto_nao_consome_nada(self):
-        assert media_policy.customer_ceiling({"ia1": "native"}) == frozenset()
+    @staticmethod
+    def _rec(framework, customer=("audio", "video"), agent=("audio", "video"), pool_id="p"):
+        rec, aviso = media_policy.attendant_from_pool_field(framework, {
+            "pool_id": pool_id, "media_policy_source": "registry",
+            "media_policy": {"customer_publish": list(customer), "agent_publish": list(agent)},
+        })
+        assert aviso is None
+        return rec
+
+    def test_humano_consome_o_que_o_pool_oferece(self):
+        assert media_policy.customer_ceiling({"h1": self._rec("human")}) == {"audio", "video"}
+
+    def test_pool_so_de_audio_corta_o_video(self):
+        assert media_policy.customer_ceiling({"h1": self._rec("human", customer=("audio",))}) == {"audio"}
+
+    def test_ia_de_texto_nao_consome_mesmo_com_pool_de_video(self):
+        assert media_policy.customer_ceiling({"ia1": self._rec("native")}) == frozenset()
 
     def test_uniao_especialista_de_texto_nao_rebaixa_chamada_de_video(self):
         # O defeito medido ao vivo: o 2º atendente SUBSTITUÍA o meio da sessão.
-        assert media_policy.customer_ceiling({"h1": "human", "ia1": "native"}) == {"audio", "video"}
+        att = {"h1": self._rec("human"), "ia1": self._rec("native", customer=())}
+        assert media_policy.customer_ceiling(att) == {"audio", "video"}
 
     def test_framework_desconhecido_consome_nada(self):
-        assert media_policy.customer_ceiling({"x": ""}) == frozenset()
-        assert media_policy.customer_ceiling({"x": "algo"}) == frozenset()
+        assert media_policy.customer_ceiling({"x": self._rec("")}) == frozenset()
+        assert media_policy.customer_ceiling({"x": self._rec("algo")}) == frozenset()
 
-    def test_politica_do_papel_corta_o_consumo(self):
-        pol = dict(media_policy.PLATFORM_DEFAULT)
-        pol["customer"] = media_policy.RolePolicy(frozenset({"audio"}), True, False)
-        assert media_policy.customer_ceiling({"h1": "human"}, pol) == {"audio"}
+    @pytest.mark.parametrize("campo, fonte", [
+        ({"pool_id": "p", "media_policy_source": "registry", "media_policy": None}, "pool_sem_politica:p"),
+        ({"pool_id": "p", "media_policy_source": "registry_unavailable"},          "registry_indisponivel:p"),
+        ({"pool_id": "p"},                                                          "sem_leitura:p"),
+        ({"pool_id": "p", "media_policy_source": "not_webrtc"},                    "sem_leitura:p"),
+        ({},                                                                        "evento_sem_pool"),
+    ])
+    def test_ausencia_nunca_vira_permissao_e_diz_por_que(self, campo, fonte):
+        rec, aviso = media_policy.attendant_from_pool_field("human", campo)
+        assert aviso
+        assert rec["policy_source"] == fonte
+        assert media_policy.customer_ceiling({"h1": rec}) == frozenset()
+        assert media_policy.agent_ceiling({"h1": rec}) == frozenset()
+
+    def test_tipo_desconhecido_e_ignorado_e_avisado(self):
+        rec, aviso = media_policy.attendant_from_pool_field("human", {
+            "pool_id": "p", "media_policy_source": "registry",
+            "media_policy": {"customer_publish": ["audio", "tela"], "agent_publish": []},
+        })
+        assert "tela" in aviso and rec["customer_publish"] == ["audio"]
+
+    def test_teto_do_atendente_e_uniao_dos_pools_humanos(self):
+        att = {"h1": self._rec("human", agent=("audio",)), "h2": self._rec("human", agent=("video",)),
+               "ia1": self._rec("native", agent=("audio", "video"))}
+        assert media_policy.agent_ceiling(att) == {"audio", "video"}
+        assert media_policy.agent_ceiling({"ia1": self._rec("native")}) == frozenset()
+
+    def test_chaves_lidas_sao_as_do_schema(self):
+        assert media_policy.POLICY_KEYS == ("customer_publish", "agent_publish")
 
     def test_fontes_em_ordem_estavel(self):
         assert media_policy.publish_sources({"video", "audio"}) == ["microphone", "camera"]
@@ -490,6 +530,8 @@ class TestMediaPolicy:
     def test_papel_desconhecido_e_erro(self):
         with pytest.raises(ValueError):
             media_policy.role_policy("root")
+        with pytest.raises(ValueError):
+            media_policy.role_policy("agent")    # agente não é papel de plataforma: vem do pool
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -509,15 +551,24 @@ class TestWebRTCAdapterGetToken:
         )
         self.session_id = str(uuid.uuid4())
 
-    async def _room(self, customer_publish=None):
+    async def _room(self, customer_publish=None, attendants=None):
         await self.redis.setex(
             f"channel:webrtc:{self.session_id}:room_name", 3600, f"plughub-{self.session_id}"
         )
-        if customer_publish is not None:
+        if customer_publish is not None or attendants is not None:
             await self.redis.setex(
                 f"channel:webrtc:{self.session_id}:media", 3600,
-                json.dumps({"attendants": {}, "customer": {"publish": customer_publish}}),
+                json.dumps({"attendants": attendants or {},
+                            "customer": {"publish": customer_publish or []}}),
             )
+
+    @staticmethod
+    def _human(agent_publish, pool_id="video_humano"):
+        rec, _ = media_policy.attendant_from_pool_field("human", {
+            "pool_id": pool_id, "media_policy_source": "registry",
+            "media_policy": {"customer_publish": ["audio", "video"], "agent_publish": agent_publish},
+        })
+        return rec
 
     @pytest.mark.asyncio
     async def test_get_token_returns_none_when_room_not_ready(self):
@@ -526,22 +577,31 @@ class TestWebRTCAdapterGetToken:
 
     @pytest.mark.asyncio
     async def test_resposta_traz_tetos_e_nao_traz_meio_unico(self):
-        await self._room(customer_publish=["audio"])
+        await self._room(customer_publish=["audio"], attendants={"h1": self._human(["audio", "video"])})
         result = await self.adapter.get_token(self.session_id, "agent", "agente_v1")
         assert result["publish"] == ["audio", "video"]
         assert result["customer_publish"] == ["audio"]
         assert result["hidden"] is False
-        assert result["policy_source"] == "platform_default"
+        assert result["policy_sources"] == ["pool:video_humano"]
         assert "negotiated_medium" not in result
         assert result["livekit_url"] == self.settings.webrtc_livekit_url
 
     @pytest.mark.asyncio
-    async def test_agente_recortado_por_fonte(self):
-        await self._room()
-        await self.adapter.get_token(self.session_id, "agent", "agent-1")
+    async def test_agente_recortado_pelo_agent_publish_do_pool(self):
+        await self._room(attendants={"h1": self._human(["audio"])})
+        result = await self.adapter.get_token(self.session_id, "agent", "agent-1")
         grants = self.provider.tokens_generated[-1]["grants"]
-        assert grants.can_publish_sources == ("microphone", "camera")
-        assert grants.hidden is False
+        assert grants.can_publish_sources == ("microphone",)
+        assert grants.hidden is False and result["publish"] == ["audio"]
+
+    @pytest.mark.asyncio
+    async def test_agente_sem_pool_com_politica_entra_so_assistindo_e_avisa(self, caplog):
+        await self._room()
+        with caplog.at_level("WARNING"):
+            result = await self.adapter.get_token(self.session_id, "agent", "agent-1")
+        assert self.provider.tokens_generated[-1]["grants"].can_publish_sources == ()
+        assert result["publish"] == [] and result["policy_sources"] == []
+        assert "sem teto de publicacao" in caplog.text
 
     @pytest.mark.asyncio
     async def test_supervisor_oculto_sem_fonte(self):
@@ -585,9 +645,20 @@ class TestTokenFontesNoSDK:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _assigned(framework: str, instance_id: str, **extra) -> dict:
+_FULL = {"customer_publish": ["audio", "video"], "agent_publish": ["audio", "video"]}
+
+
+def _assigned(framework: str, instance_id: str, *, policy=_FULL, pool_id: str = "p",
+              source: str = "registry", **extra) -> dict:
+    pool = {"pool_id": pool_id, "media_policy_source": source}
+    if source == "registry":
+        pool["media_policy"] = policy
     return {"type": "routing.assigned", "framework": framework,
-            "instance_id": instance_id, "pool": json.dumps({"pool_id": "p"}), **extra}
+            "instance_id": instance_id, "pool": json.dumps(pool), **extra}
+
+
+def _fw(state: dict) -> dict:
+    return {iid: rec["framework"] for iid, rec in state["attendants"].items()}
 
 
 class TestWebRTCAdapterMediaCeiling:
@@ -615,13 +686,13 @@ class TestWebRTCAdapterMediaCeiling:
         msg = self.ws.sent_messages[0]
         assert msg["type"] == "webrtc.ready"
         assert msg["publish"] == ["audio", "video"]
-        assert msg["policy_source"] == "platform_default"
+        assert msg["policy_sources"] == ["pool:p"]
         assert "negotiated_medium" not in msg
         grants = self.provider.tokens_generated[-1]["grants"]
         assert grants.identity == "customer-c1"
         assert grants.can_publish_sources == ("microphone", "camera")
         st = await self._state()
-        assert st["attendants"] == {"h1": "human"}
+        assert _fw(st) == {"h1": "human"}
         assert st["customer"]["reason"] == "attendant_joined:human"
         assert len(self.provider.rooms_created) == 1
 
@@ -639,7 +710,7 @@ class TestWebRTCAdapterMediaCeiling:
         assert [m["type"] for m in self.ws.sent_messages] == ["webrtc.ready"]     # nada mudou
         assert self.provider.permission_updates == []
         st = await self._state()
-        assert st["attendants"] == {"h1": "human", "ia1": "native"}
+        assert _fw(st) == {"h1": "human", "ia1": "native"}
         assert st["customer"]["publish"] == ["audio", "video"]
 
     @pytest.mark.asyncio
@@ -666,7 +737,7 @@ class TestWebRTCAdapterMediaCeiling:
         await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
         with caplog.at_level("WARNING"):
             await self.adapter._on_attendant_left(self.ws, self.session_id, {"author_id": "desconhecido"})
-        assert (await self._state())["attendants"] == {"h1": "human"}
+        assert _fw(await self._state()) == {"h1": "human"}
         assert "desconhecido" in caplog.text
 
     @pytest.mark.asyncio
@@ -677,6 +748,45 @@ class TestWebRTCAdapterMediaCeiling:
             )
         assert self.ws.sent_messages[0]["publish"] == []
         assert "sem framework reconhecido" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_pool_so_de_audio_recorta_o_cliente(self):
+        await self.adapter._on_routing_assigned(
+            self.ws, self.session_id,
+            _assigned("human", "h1", policy={"customer_publish": ["audio"], "agent_publish": []}),
+            self.settings,
+        )
+        assert self.ws.sent_messages[0]["publish"] == ["audio"]
+        assert self.provider.tokens_generated[-1]["grants"].can_publish_sources == ("microphone",)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kw, fonte, nivel", [
+        ({"policy": None},                   "pool_sem_politica:p",     "WARNING"),
+        ({"source": "registry_unavailable"}, "registry_indisponivel:p", "ERROR"),
+        ({"source": "not_webrtc"},           "sem_leitura:p",           "WARNING"),
+    ])
+    async def test_politica_ausente_nao_oferece_nada_e_diz(self, caplog, kw, fonte, nivel):
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_routing_assigned(
+                self.ws, self.session_id, _assigned("human", "h1", **kw), self.settings,
+            )
+        msg = self.ws.sent_messages[0]
+        assert msg["publish"] == [] and msg["policy_sources"] == [fonte]
+        assert self.provider.tokens_generated[-1]["grants"].can_publish_sources == ()
+        assert any(r.levelname == nivel and "webrtc media" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_estado_anterior_a_voz10_nao_vira_permissao(self, caplog):
+        await self.redis.setex(
+            f"channel:webrtc:{self.session_id}:media", 3600,
+            json.dumps({"attendants": {"h0": "human"}, "customer": {"publish": ["audio", "video"]}}),
+        )
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_routing_renegotiate(
+                self.ws, self.session_id, _assigned("native", "ia1"), self.settings,
+            )
+        assert self.ws.sent_messages[-1]["publish"] == []
+        assert "estado anterior a VOZ-10" in caplog.text
 
     @pytest.mark.asyncio
     async def test_falha_no_sfu_ao_aplicar_e_barulhenta(self, caplog):
