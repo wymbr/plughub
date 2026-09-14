@@ -339,6 +339,12 @@ probe_portabilidade_door.sh
 # unica dos portoes, mutacoes sobre a SUITE (vermelho por assercao), e ao vivo nos fixtures
 # probe_batch_{a,b,c}: recusa sem mexer, lote valido, repeticao inalterada, rollback por pool.
 probe_promote_batch.sh
+# PID-09. A evidencia de identidade nao dizia de QUEM era a prova: vermelho ao vivo, a sessao que
+# provou por OTP o telefone de A levou e retomou o token da pendencia de B. A prova ganhou o
+# cliente, e a chegada pelo WhatsApp do telefone autoritativo satisfaz a exigencia de OTP. Censo
+# (todo julgamento com cliente; equivalencia; so assinatura conferida autentica), mutacoes sobre
+# as suites de schemas, mcp e gateway, e ao vivo com webhook da Meta ASSINADO e simulado.
+probe_arrival_evidence.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

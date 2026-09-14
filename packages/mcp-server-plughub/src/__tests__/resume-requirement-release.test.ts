@@ -7,7 +7,7 @@
  * Cada recusa tem o seu controle positivo: um portão que retivesse tudo passaria nelas.
  */
 import { describe, it, expect } from "vitest"
-import { withholdUnprovenResume } from "../tools/workflow"
+import { withholdUnprovenResume, sessionProvesCustomer } from "../tools/workflow"
 import type { RedisClient } from "../infra/redis"
 
 function fakeRedis() {
@@ -26,13 +26,17 @@ function fakeRedis() {
 
 const T = "t"
 const NOW = Date.parse("2026-09-13T12:00:00Z")
-const E = (f: string) => `core.journey.identity.otp.${f}`
+const E = (f: string, mecanismo = "otp") => `core.journey.identity.${mecanismo}.${f}`
 
-function provou(put: ReturnType<typeof fakeRedis>["put"], sessao: string, quando = "2026-09-13T11:58:00.000Z") {
+function provou(
+  put: ReturnType<typeof fakeRedis>["put"], sessao: string, quando = "2026-09-13T11:58:00.000Z",
+  cliente = "cus_1", mecanismo = "otp",
+) {
   const k = `${T}:ctx:journey:${sessao}`   // sem root no ctx, a raiz da journey é a própria sessão
-  put(k, E("status"), "verified")
-  put(k, E("verified_at"), quando)
-  put(k, E("proven_in_session"), sessao)
+  put(k, E("status", mecanismo), "verified")
+  put(k, E("verified_at", mecanismo), quando)
+  put(k, E("proven_in_session", mecanismo), sessao)
+  put(k, E("customer_id", mecanismo), cliente)
 }
 
 const pend = (token: string, resume_requires?: unknown) => ({
@@ -86,12 +90,15 @@ describe("PID-06 — liberação do token contra a evidência DA SESSÃO", () =>
     expect(r).toMatchObject({ found: true, count: 1, resume_token: "tk-livre", root_session_id: "root-tk-livre", withheld: 1 })
   })
 
-  it("porta legada (resposta sem `pendings`) recebe o mesmo julgamento", async () => {
+  it("porta legada (resposta sem `pendings`) recebe o mesmo julgamento — e sem cliente, nada satisfaz (PID-09)", async () => {
     const { redis, put } = fakeRedis()
     provou(put, "S1")
     const legado = { found: true, resume_token: "tk-legado", context: {}, resume_requires: ["otp"] }
     expect(tokensDe(await withholdUnprovenResume(redis, T, "S2", legado, NOW))).toEqual([])
-    expect(tokensDe(await withholdUnprovenResume(redis, T, "S1", legado, NOW))).toEqual(["tk-legado"])
+    // a porta por `contact_identifier` não diz de quem é a pendência: a prova não se amarra
+    expect(tokensDe(await withholdUnprovenResume(redis, T, "S1", legado, NOW))).toEqual([])
+    // controle: a mesma resposta nomeando o cliente provado libera
+    expect(tokensDe(await withholdUnprovenResume(redis, T, "S1", { ...legado, customer_id: "cus_1" }, NOW))).toEqual(["tk-legado"])
   })
 
   it("sem Redis, pendência com exigência é retida (falha fechada); sem exigência, passa", async () => {
@@ -107,7 +114,34 @@ describe("PID-06 — liberação do token contra a evidência DA SESSÃO", () =>
     put(`${T}:ctx:S3`, "core.contact.root_session_id", "R")
     const k = `${T}:ctx:journey:R`
     put(k, E("status"), "verified"); put(k, E("verified_at"), "2026-09-13T11:58:00.000Z"); put(k, E("proven_in_session"), "S3")
+    put(k, E("customer_id"), "cus_1")
     const r = await withholdUnprovenResume(redis, T, "S3", resposta(pend("tk1", ["otp"])), NOW)
     expect(tokensDe(r)).toContain("tk1")
+  })
+})
+
+describe("PID-09 — a prova é do cliente das pendências, e a chegada pelo WhatsApp prova", () => {
+  it("S1 provou o PRÓPRIO número e pede as pendências de outro cliente — não leva token", async () => {
+    const { redis, put } = fakeRedis()
+    provou(put, "S1", undefined, "cus_OUTRO")
+    const r = await withholdUnprovenResume(redis, T, "S1", resposta(pend("tk1", ["otp"])), NOW)
+    expect(tokensDe(r)).toEqual([])
+    expect(r).toMatchObject({ verification_required: true, identity_required: ["otp"] })
+  })
+
+  it("a chegada pelo WhatsApp do cliente, nesta sessão, libera a pendência que exige OTP", async () => {
+    const { redis, put } = fakeRedis()
+    provou(put, "S1", undefined, "cus_1", "whatsapp")
+    expect(tokensDe(await withholdUnprovenResume(redis, T, "S1", resposta(pend("tk1", ["otp"])), NOW))).toContain("tk1")
+  })
+
+  it("portão de posse: a sessão provou este cliente? só com prova DELE, DESTA sessão, recente", async () => {
+    const { redis, put } = fakeRedis()
+    provou(put, "S1", undefined, "cus_1", "whatsapp")
+    expect(await sessionProvesCustomer(redis, T, "S1", "cus_1", NOW)).toBe(true)
+    expect(await sessionProvesCustomer(redis, T, "S1", "cus_2", NOW)).toBe(false)
+    expect(await sessionProvesCustomer(redis, T, "S2", "cus_1", NOW)).toBe(false)
+    expect(await sessionProvesCustomer(redis, T, "S1", "cus_1", NOW + 3_600_000)).toBe(false)
+    expect(await sessionProvesCustomer(undefined, T, "S1", "cus_1", NOW)).toBe(false)
   })
 })

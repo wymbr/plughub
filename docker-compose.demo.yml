@@ -1385,6 +1385,13 @@ services:
       # IDN-06 — credencial INBOUND das rotas /identity/* e /pending/* (mcp-server,
       # mailing-api). Vazia FECHA a porta de serviço; nunca a abre.
       PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo
+      # PID-09 — a chegada pelo WhatsApp do telefone autoritativo vira evidência de posse,
+      # gravada pelo mcp-server. O token DEVE casar com o MCP_INTERNAL_SERVICE_TOKEN de lá.
+      PLUGHUB_MCP_SERVER_URL:             http://mcp-server-plughub:3100
+      PLUGHUB_MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo
+      # PID-09 — sem segredo a assinatura da Meta não é conferida e a chegada NÃO prova
+      # posse. Segredo de DEMO (não há conta Meta aqui): é com ele que o probe assina.
+      PLUGHUB_WHATSAPP_APP_SECRET:        changeme_whatsapp_app_secret_demo
       # auth_timeout_s (F2-TTL) e attachment_expiry_days (F1.2) vêm do config-api via
       # WebchatConfigCache HTTP (config-http-propagation arc): GET /config/webchat +
       # invalidação config.changed. Os envs PLUGHUB_WS_AUTH_TIMEOUT_S /

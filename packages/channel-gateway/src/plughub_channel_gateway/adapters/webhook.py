@@ -471,6 +471,11 @@ class WebhookAdapter(ChannelAdapter):
             phone_region=self.phone_region,
         )
 
+    @property
+    def identity_index(self) -> IdentityIndex:
+        """O índice de identidade deste gateway — compartilhado com a chegada do WhatsApp (PID-09)."""
+        return self._identity
+
     async def ensure_identity_schema(self) -> None:
         """Create the PG `identity` schema/tables (idempotent). Called at startup."""
         if self._identity_enabled:

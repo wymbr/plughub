@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     # Set via PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN.
     channel_gateway_service_token: str = ""
 
+    # PID-09 — a chegada pelo WhatsApp vira evidência de posse, gravada pelo mcp-server
+    # (`POST /internal/identity-evidence`, credencial = MCP_INTERNAL_SERVICE_TOKEN de lá).
+    # Qualquer um vazio DESLIGA a evidência, com aviso no boot — o cliente volta ao OTP.
+    # Set via PLUGHUB_MCP_SERVER_URL / PLUGHUB_MCP_INTERNAL_SERVICE_TOKEN.
+    mcp_server_url:             str = ""
+    mcp_internal_service_token: str = ""
+
     # Config API — source of horizontal config (webchat namespace etc.). Read via
     # the HTTP-backed WebchatConfigCache (config-http-propagation arc), NOT the
     # Redis cache directly. Set via PLUGHUB_CONFIG_API_URL. Example: http://config-api:3600

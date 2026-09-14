@@ -98,11 +98,12 @@ describe("PID-02 — writeIdentityEvidence (formato do D4)", () => {
   it("failed depois de verified REMOVE a prova antiga — um failed de hoje não convive com o verified_at de ontem", async () => {
     const { redis, valor } = fakeRedis()
     const t = tenant()
-    await writeIdentityEvidence(redis, t, "s1", "otp", { status: "verified", anchor_kind: "phone", verified_at: "x", source: "authoritative", proven_in_session: "s1" })
-    await writeIdentityEvidence(redis, t, "s1", "otp", { status: "failed", anchor_kind: "phone", verified_at: "IGNORADO", proven_in_session: "IGNORADO" })
+    await writeIdentityEvidence(redis, t, "s1", "otp", { status: "verified", anchor_kind: "phone", verified_at: "x", source: "authoritative", proven_in_session: "s1", customer_id: "cus_a" })
+    await writeIdentityEvidence(redis, t, "s1", "otp", { status: "failed", anchor_kind: "phone", verified_at: "IGNORADO", proven_in_session: "IGNORADO", customer_id: "IGNORADO" })
     const k = `${t}:ctx:journey:s1`
     expect(valor(k, TAG("status"))).toBe("failed")
-    expect([valor(k, TAG("verified_at")), valor(k, TAG("source")), valor(k, TAG("proven_in_session"))]).toEqual([undefined, undefined, undefined])
+    expect([valor(k, TAG("verified_at")), valor(k, TAG("source")), valor(k, TAG("proven_in_session")), valor(k, TAG("customer_id"))])
+      .toEqual([undefined, undefined, undefined, undefined])
   })
 
   it("o status do gateway vira o da evidência", () => {
@@ -135,6 +136,8 @@ describe("PID-02 — otp_* gravam a evidência na mesma chamada", () => {
     expect(valor(k, TAG("proven_in_session"))).toBe("sess_prova")
     expect(valor(k, TAG("source"))).toBe("authoritative")
     expect(typeof valor(k, TAG("verified_at"))).toBe("string")
+    // PID-09 — a prova diz de QUEM é a posse
+    expect(valor(k, TAG("customer_id"))).toBe("cus_a")
   })
 
   it("verify com código errado → failed, sem prova", async () => {

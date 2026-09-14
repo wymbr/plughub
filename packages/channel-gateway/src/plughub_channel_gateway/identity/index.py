@@ -576,6 +576,36 @@ class IdentityIndex:
             return None
         return await self._pg_provenance(tenant_id, kind, vh, customer_id)
 
+    async def authoritative_owner(
+        self, tenant_id: str, kind: str, value: str,
+    ) -> tuple[str, str] | None:
+        """PID-09 — `(customer_id, procedência)` de quem esta âncora é AUTORITATIVA, ou None.
+
+        A pergunta da chegada pelo WhatsApp: *"este número, que a Meta atesta ter enviado a
+        mensagem, é o telefone do cadastro de quem?"*. Só a procedência `authoritative`
+        responde — número declarado pelo próprio cliente, ou visto num canal, não prova posse
+        (a mesma regra do desafio de OTP, PID-10). Lê o PG e nunca o índice Redis, pelo
+        motivo de `_pg_provenance`. Não provisiona nada. None também para âncora inválida e
+        sem cadastro durável; erro de banco SOBE — quem chama decide não apagar prova por ele.
+        """
+        if self._db is None:
+            return None
+        try:
+            vh = await self.anchor_hash(tenant_id, kind, value)
+        except ValueError:
+            return None
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT customer_id, provenance FROM identity.customer_secondary_keys
+                 WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3 LIMIT 1
+                """,
+                tenant_id, kind, vh,
+            )
+        if not row or row.get("provenance") != PROVENANCE_AUTHORITATIVE:
+            return None
+        return row["customer_id"], row["provenance"]
+
     async def _pg_key_owner(
         self, tenant_id: str, kind: str, value_hash: str,
     ) -> tuple[str, str, float] | None:

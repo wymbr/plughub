@@ -86,8 +86,11 @@ echo "   $A"
 VIVO=$(curl -s "$CFG/config/masking/context_map?tenant_id=$TENANT" | python3 -c "import sys,json; print('core.journey.identity.' in (json.load(sys.stdin).get('value') or {}).get('dynamic_prefixes', []))" 2>/dev/null)
 [ "$VIVO" = "True" ] && ok "o mapa VIVO do config-api tem o prefixo" || falha "mapa vivo sem 'core.journey.identity.' (seed-if-absent: atualizar pela API)"
 [ "$(jexpr "$A" "d['sem_guard'] == []")" = "True" ] && ok "os quatro funis genéricos carregam o guard" || falha "funis sem guard: $(jexpr "$A" "d['sem_guard']")"
-[ "$(jexpr "$A" "d['escritores'] == ['packages/mcp-server-plughub/src/tools/journey.ts', 'packages/mcp-server-plughub/src/tools/workflow.ts']")" = "True" ] \
-  && ok "writeIdentityEvidence: definido em journey.ts, chamado só em workflow.ts (OTP)" || falha "escritores de evidência inesperados: $(jexpr "$A" "d['escritores']")"
+# PID-09 (2026-09-14): server.ts entrou — a rota interna `/internal/identity-evidence`, pela
+# qual o channel-gateway registra a CHEGADA pelo WhatsApp. Continua um escritor só; o que
+# cresceu foi o conjunto de quem verifica (OTP no workflow.ts, chegada no server.ts).
+[ "$(jexpr "$A" "d['escritores'] == ['packages/mcp-server-plughub/src/server.ts', 'packages/mcp-server-plughub/src/tools/journey.ts', 'packages/mcp-server-plughub/src/tools/workflow.ts']")" = "True" ] \
+  && ok "writeIdentityEvidence: definido em journey.ts, chamado só em workflow.ts (OTP) e server.ts (chegada, PID-09)" || falha "escritores de evidência inesperados: $(jexpr "$A" "d['escritores']")"
 
 echo ""
 echo "── B · FUNIL TS VIVO ──────────────────────────────────────────────────"

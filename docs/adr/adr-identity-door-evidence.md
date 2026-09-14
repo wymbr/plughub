@@ -337,6 +337,18 @@ Quem produz é o adapter que recebeu a mensagem ou o JWT autenticado (`origin_id
 fluxo. Limite conhecido de toda prova por posse, que vale igual para SMS: número reciclado pela
 operadora passa a ser do novo dono.
 
+> **Como ficou (PID-09, 2026-09-14) — a metade do WhatsApp.** O adapter não escreve evidência: ele
+> CONTA a chegada ao escritor único, `POST /internal/identity-evidence` do mcp-server, com a
+> credencial interna. `verified` exige as duas coisas que só o gateway sabe — a assinatura da Meta
+> **conferida** (sem `whatsapp_app_secret` a mensagem entra, mas é `not_run`) e o `from` como âncora
+> de procedência **`authoritative`** de um cliente (D13: "cadastrado" é o importado, não o declarado);
+> número sem dono é `failed`. Relógio e sessão da prova são do servidor. A chegada **equivale** ao
+> OTP (`SATISFIED_BY.otp = [otp, whatsapp]`) e não é exigível por nome — os pisos seguem `["otp"]`.
+> ⚠️ **E a prova passou a dizer de QUEM é** (`core.journey.identity.<m>.customer_id`, também no OTP):
+> sem isso, quem chega pelo próprio número — ou prova o próprio por OTP — e informa a âncora de outra
+> pessoa levava as pendências dela. Medido ao vivo antes. A liberação confere o cliente das
+> pendências e a retomada o cliente do token; sem cliente, nada satisfaz. `princ` é a PID-21.
+
 ### D10 · A chave de volta
 
 - **Token longo** (`resume_token`) na marcação, para canais com link (webchat por parâmetro de URL).
@@ -470,7 +482,9 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-06 | `resume_requires` nos steps `customer_resumable` + piso no step + `judgeIdentityFloor` + liberação do token contra a evidência da sessão | D6, D7 |
 | PID-07 | tenant e autor da escrita saem da credencial; deploy em `skill_flows.operacao` | D7 |
 | PID-08 | deploy em lote que registra sem mudar — aposentado; o promote é o único registro | §4, (11) |
-| PID-09 | `origin_identity` no adapter: `princ` e `(whatsapp, from)` | D9 |
+| PID-09 | chegada pelo WhatsApp como evidência de posse; a prova amarrada ao cliente | D9 |
+| PID-21 | `princ` — login federado como evidência (gatilho: primeiro tenant com login federado) | D9 |
+| PID-22 | WhatsApp sem endereço de pool: `phone_number_id` → (tenant, pool) (gatilho: primeira conta Meta) | D9 |
 | PID-10 | OTP só entregável e autoritativo, recusa explícita; corrige o desafio a CPF | D8 |
 | PID-11 | lista na porta compartilhada gated por chegada; ordem por `expires_at` | D11 |
 | PID-12 | quem grava procedência `authoritative`, e com qual credencial | D13 |

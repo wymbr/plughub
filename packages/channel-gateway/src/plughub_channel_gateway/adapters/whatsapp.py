@@ -53,6 +53,7 @@ from ..models import (
     NormalizedInboundEvent,
 )
 from .base import ChannelAdapter
+from ..arrival_evidence import ArrivalEvidenceRecorder
 from .whatsapp_provider import IWhatsAppProvider, MetaCloudProvider
 from plughub_tasks import disparar
 
@@ -100,37 +101,62 @@ class WhatsAppAdapter(ChannelAdapter):
         self._settings         = settings
         self._attachment_store = attachment_store
         self._provider         = provider  # None → resolved lazily per tenant
+        # PID-09 — a chegada vira evidência de posse. Anexado no boot, depois do índice de
+        # identidade existir (`attach_arrival_evidence`); ausente, a chegada não prova nada.
+        self._arrival: ArrivalEvidenceRecorder | None = None
+        self._arrival_ausente_avisado = False
+
+    def attach_arrival_evidence(self, recorder: ArrivalEvidenceRecorder) -> None:
+        falta = recorder.configured()
+        if falta:
+            logger.warning(
+                "whatsapp: evidência de chegada DESLIGADA — %s; cliente que chega pelo próprio "
+                "número volta ao OTP (PID-09)", falta,
+            )
+        self._arrival = recorder
 
     # ── Inbound — called from the FastAPI webhook route ────────────────────────
+
+    def signature_verdict(self, body: bytes, signature_header: str) -> str:
+        """
+        `authenticated` (HMAC conferido) · `unchecked` (sem segredo — dev/teste) · `invalid`.
+
+        PID-09: "passou" e "foi conferido" são dois fatos. Sem `whatsapp_app_secret` a
+        mensagem é aceita, mas nada atesta que veio da Meta — e o `from` dela vira evidência
+        de posse só no primeiro caso.
+        """
+        if not self._settings.whatsapp_app_secret:
+            logger.warning("whatsapp_app_secret not configured — skipping signature check")
+            return "unchecked"
+        secret = self._settings.whatsapp_app_secret.encode()
+        expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
+        return "authenticated" if hmac.compare_digest(expected, signature_header or "") else "invalid"
 
     def verify_signature(self, body: bytes, signature_header: str) -> bool:
         """
         Validate X-Hub-Signature-256 header.
-        Returns True if HMAC matches, False otherwise.
+        Returns True if HMAC matches (or no secret is configured — dev/test), False otherwise.
         signature_header format: "sha256=<hex>"
         """
-        if not self._settings.whatsapp_app_secret:
-            logger.warning("whatsapp_app_secret not configured — skipping signature check")
-            return True  # dev/test mode without secret
+        return self.signature_verdict(body, signature_header) != "invalid"
 
-        secret = self._settings.whatsapp_app_secret.encode()
-        expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, signature_header or "")
-
-    async def handle_inbound(self, body: bytes) -> None:
+    async def handle_inbound(self, body: bytes, *, authenticated: bool = False) -> None:
         """
         Entry point called by the webhook route after verify_signature passes.
         Responds to the caller immediately (HTTP 200 already sent by the route).
         Processing happens in a background task.
+
+        `authenticated` — a assinatura foi CONFERIDA (PID-09). Default falso: quem não diz
+        não afirma que a Meta assinou.
         """
         # RET-15: com dono e com alarme — o corpo de `_process_inbound` só
         # protege o `json.loads`, então tudo depois dele escapava para uma
         # Task que ninguém aguarda. Mensagem de cliente sumindo sem log.
-        disparar(self._process_inbound(body), nome="whatsapp-inbound")
+        disparar(self._process_inbound(body, authenticated=authenticated), nome="whatsapp-inbound")
 
     # ── Inbound processing (background) ───────────────────────────────────────
 
-    async def _process_inbound(self, body: bytes) -> None:
+    async def _process_inbound(self, body: bytes, *, authenticated: bool = False) -> None:
         try:
             data = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -148,9 +174,9 @@ class WhatsAppAdapter(ChannelAdapter):
             return
 
         for msg in messages:
-            await self._handle_message(value, msg)
+            await self._handle_message(value, msg, authenticated=authenticated)
 
-    async def _handle_message(self, value: dict, msg: dict) -> None:
+    async def _handle_message(self, value: dict, msg: dict, *, authenticated: bool = False) -> None:
         """Process a single message object from the Meta webhook payload."""
         contact_id = msg.get("from", "")  # customer E.164 number
         wamid      = msg.get("id", "")
@@ -163,6 +189,10 @@ class WhatsAppAdapter(ChannelAdapter):
         # Resolve or create session
         session_id, tenant_id, pool_id = await self._resolve_session(contact_id)
         started_at = datetime.now(timezone.utc).isoformat()
+
+        # PID-09 — a evidência da chegada ANTES de a mensagem seguir: o fluxo que a lê
+        # (`pending_workflow_get`) já encontra a prova. A cada mensagem, renovando a idade.
+        await self._record_arrival(tenant_id, session_id, contact_id, authenticated)
 
         logger.info(
             "whatsapp inbound type=%s contact_id=%s session_id=%s wamid=%s",
@@ -363,6 +393,22 @@ class WhatsAppAdapter(ChannelAdapter):
             context_snapshot = ContextSnapshot(),
         )
         await self._publish_inbound(event.model_dump())
+
+    async def _record_arrival(
+        self, tenant_id: str, session_id: str, contact_id: str, authenticated: bool,
+    ) -> None:
+        if self._arrival is None:
+            if not self._arrival_ausente_avisado:
+                logger.warning("whatsapp: sem registrador de evidência de chegada — a chegada não prova posse (PID-09)")
+                self._arrival_ausente_avisado = True
+            return
+        try:
+            await self._arrival.record_whatsapp(
+                tenant_id=tenant_id, session_id=session_id,
+                from_field=contact_id, authenticated=authenticated,
+            )
+        except Exception as exc:  # noqa: BLE001 — a mensagem do cliente segue
+            logger.error("whatsapp: evidência de chegada falhou session=%s: %s", session_id, exc)
 
     # ── Session management ─────────────────────────────────────────────────────
 

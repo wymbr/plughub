@@ -38,6 +38,7 @@ from .adapters.webchat_channel import WebchatChannelAdapter
 from .adapters.webhook import ResumeAlreadyTerminalError, WebhookAdapter
 from .adapters.webrtc import WebRTCAdapter
 from .adapters.whatsapp import WhatsAppAdapter
+from .arrival_evidence import ArrivalEvidenceRecorder
 from .attachment_store import (
     AttachmentStore,
     FilesystemAttachmentStore,
@@ -274,6 +275,13 @@ async def lifespan(app: FastAPI):
         db_pool  = db_pool,     # Identity Resolver Slice 2 — durable PG store
     )
     await _webhook_adapter.ensure_identity_schema()
+    # PID-09 — a chegada pelo WhatsApp consulta o MESMO índice de identidade do webhook
+    # adapter (um salt, um resolvedor de região) e grava pelo escritor único do mcp-server.
+    _whatsapp_adapter.attach_arrival_evidence(ArrivalEvidenceRecorder(
+        identity      = _webhook_adapter.identity_index,
+        mcp_url       = settings.mcp_server_url,
+        service_token = settings.mcp_internal_service_token,
+    ))
 
     _channel_adapters = {
         "webchat":  WebchatChannelAdapter(registry=_registry),
@@ -696,11 +704,13 @@ async def whatsapp_inbound(request: Request) -> dict:
         logger.error("whatsapp_adapter not initialised")
         raise HTTPException(status_code=503, detail="Service unavailable")
 
-    if not _whatsapp_adapter.verify_signature(body, signature):
+    veredito = _whatsapp_adapter.signature_verdict(body, signature)
+    if veredito == "invalid":
         logger.warning("whatsapp inbound rejected — invalid HMAC signature")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    await _whatsapp_adapter.handle_inbound(body)
+    # PID-09 — só a assinatura CONFERIDA faz da chegada evidência de posse.
+    await _whatsapp_adapter.handle_inbound(body, authenticated=(veredito == "authenticated"))
     return {"status": "ok"}
 
 

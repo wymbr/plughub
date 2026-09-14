@@ -43,7 +43,7 @@ import type { AgentEventDeps }      from "./tools/agent-events"
 // `resolveJourneyRoot` + `journeyCtxKey` entram aqui pelo snapshot de PERSISTÊNCIA
 // (F5): a raiz canônica do processo tem de ser resolvida pela MESMA via do
 // `writeContextTag` e do `journey_merge`, senão o contexto compartilhado se parte.
-import { registerJourneyTools, writeContextTag, resolveJourneyRoot, journeyCtxKey, ReservedContextTagError } from "./tools/journey"
+import { registerJourneyTools, writeContextTag, writeIdentityEvidence, resolveJourneyRoot, journeyCtxKey, ReservedContextTagError } from "./tools/journey"
 import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
 // Dry-run do editor de DialogForm: a MESMA função que o `form_get` roda.
@@ -56,6 +56,7 @@ import type { DialogDeps }          from "./tools/dialog"
 import jwt                         from "jsonwebtoken"
 import crypto                      from "crypto"
 import { signSessionBoundToken, sessionBoundTtlS } from "./infra/jwt"
+import { judgeArrivalEvidence } from "./lib/arrival-evidence"
 import { createRedisClient, keys } from "./infra/redis"
 import { observeContextTags, readContextAudit } from "./lib/context-map"
 import { createKafkaProducer }     from "./infra/kafka"
@@ -1594,6 +1595,59 @@ export async function startServer(config: ServerConfig): Promise<void> {
       instance_id: str("instance_id"), skill_id: str("skill_id"),
     })
     res.json({ session_token: token, expires_in: sessionBoundTtlS() })
+  })
+
+  /**
+   * POST /internal/identity-evidence — PID-09 (2026-09-14).
+   *
+   * A CHEGADA autenticada por canal vira evidência de posse na journey da sessão (ADR D9). Quem
+   * pede é o channel-gateway, que conferiu a assinatura da Meta e perguntou ao cadastro de quem
+   * é o `from`; quem grava é o escritor único da evidência. O juiz do corpo é
+   * `judgeArrivalEvidence` (só `whatsapp`; `verified` exige cliente e fonte autoritativa;
+   * relógio e sessão da prova são daqui). Mesmo portão dos irmãos `/internal/*`, fechado.
+   */
+  app.post("/internal/identity-evidence", async (req: Request, res: Response) => {
+    const expected = process.env["MCP_INTERNAL_SERVICE_TOKEN"] ?? ""
+    if (!expected) {
+      console.error("[identity-evidence] MCP_INTERNAL_SERVICE_TOKEN não configurado — RECUSANDO. " +
+        "Nenhuma chegada por canal vira evidência de posse; o cliente volta ao OTP.")
+      res.status(503).json({ error: "internal_token_not_configured" })
+      return
+    }
+    const got = req.header("x-service-token") ?? ""
+    if (got.length !== expected.length ||
+        !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected))) {
+      res.status(401).json({ error: "Unauthorized" })
+      return
+    }
+    const j = judgeArrivalEvidence(req.body, new Date().toISOString())
+    if (j.kind === "refuse") {
+      console.warn(`[identity-evidence] RECUSADO ${j.error}: ${j.message}`)
+      res.status(j.status).json({ error: j.error, message: j.message })
+      return
+    }
+    try {
+      const rawMeta = await redis.get(`session:${j.sessionId}:meta`)
+      if (rawMeta) {
+        const metaTenant = String((JSON.parse(rawMeta) as { tenant_id?: unknown }).tenant_id ?? "")
+        if (metaTenant && metaTenant !== j.tenantId) {
+          console.warn(`[identity-evidence] RECUSADO: session=${j.sessionId} é de ${metaTenant}, pedido para ${j.tenantId}`)
+          res.status(409).json({ error: "tenant_mismatch" })
+          return
+        }
+      }
+    } catch (err) {
+      console.warn(`[identity-evidence] meta ilegível para session=${j.sessionId}: ${String(err)} — gravando pelo pedido`)
+    }
+    try {
+      const w = await writeIdentityEvidence(redis, j.tenantId, j.sessionId, j.mechanism, j.record)
+      console.info(`[identity-evidence] ${j.mechanism}=${j.record.status} session=${j.sessionId}` +
+        (j.record.customer_id ? ` customer=${j.record.customer_id}` : ""))
+      res.json({ status: j.record.status, journey_root: w.journeyRoot ?? null, written: w.written, removed: w.removed })
+    } catch (err) {
+      console.error(`[identity-evidence] NÃO gravada session=${j.sessionId}: ${String(err)}`)
+      res.status(500).json({ error: "evidence_write_failed" })
+    }
   })
 
   app.post("/internal/context-snapshot", async (req: Request, res: Response) => {

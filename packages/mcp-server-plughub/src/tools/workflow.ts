@@ -31,7 +31,7 @@ import { verifySessionBoundToken, type SessionBoundPayload } from "../infra/jwt"
 import type { RedisClient } from "../infra/redis"
 import { writeIdentityEvidence, adoptNewerEvidence, journeyRootOfSession, journeyCtxKey } from "./journey"
 import type { IdentityEvidenceRecord } from "@plughub/schemas"
-import { judgeResumeEvidence, type ResumeEvidenceMiss } from "@plughub/schemas"
+import { judgeResumeEvidence, evidenceCustomers, type ResumeEvidenceMiss } from "@plughub/schemas"
 
 /**
  * PID-01 — as tools de retomada exigem o token LIGADO À SESSÃO (ver `infra/jwt.ts`).
@@ -153,13 +153,19 @@ export async function withholdUnprovenResume(
   } else {
     console.error(`[pending_workflow_get] PID-06 sem Redis: pendências com exigência RETIDAS session=${sessionId}`)
   }
+  // PID-09 — a prova vale para o cliente DAS PENDÊNCIAS. A resposta sem `customer_id` (a
+  // porta legada por `contact_identifier`) não diz de quem são, e aí nada satisfaz.
+  const customerId = typeof data["customer_id"] === "string" && data["customer_id"] ? data["customer_id"] as string : undefined
+  if (!customerId) {
+    console.warn(`[pending_workflow_get] PID-09 resposta sem customer_id: pendências com exigência RETIDAS session=${sessionId}`)
+  }
 
   const liberadas: PendingView[] = []
   const faltas: ResumeEvidenceMiss[] = []
   for (const p of lista) {
     if (!exige(p)) { liberadas.push(p); continue }
     const j = redis
-      ? judgeResumeEvidence(p.resume_requires as string[], hash, { sessionId, nowMs })
+      ? judgeResumeEvidence(p.resume_requires as string[], hash, { sessionId, nowMs, customerId })
       : { satisfied: false, missing: (p.resume_requires as string[]).map(m => ({ mechanism: m, reason: "not_verified" as const })) }
     if (j.satisfied) liberadas.push(p)
     else faltas.push(...j.missing)
@@ -195,6 +201,40 @@ export async function withholdUnprovenResume(
 }
 
 /**
+ * PID-09 — de qual cliente é este token, entre os que têm prova nesta journey. O token não
+ * carrega cliente (`resume_meta` não o guarda); quem o amarra é o índice de pendências
+ * `{t}:pending_by_customer:{cid}`, o mesmo de onde a liberação o tirou. Pergunta-se só aos
+ * clientes com prova — o índice não é varrido.
+ */
+export async function tokenCustomer(
+  redis: RedisClient, tenantId: string, candidatos: readonly string[], resumeToken: string,
+): Promise<string | undefined> {
+  for (const cid of candidatos) {
+    const entradas = (await redis.hgetall(`${tenantId}:pending_by_customer:${cid}`)) ?? {}
+    for (const raw of Object.values(entradas)) {
+      try {
+        if ((JSON.parse(raw) as { resume_token?: unknown }).resume_token === resumeToken) return cid
+      } catch { /* entrada ilegível não é deste token */ }
+    }
+  }
+  return undefined
+}
+
+/**
+ * PID-09 — esta sessão provou a posse DESTE cliente (OTP ou chegada pelo WhatsApp)? É a
+ * pergunta do portão de posse do `pending_workflow_get`, que até aqui só aceitava a posse
+ * durável do cadastro (`possessed`). Sem Redis, não.
+ */
+export async function sessionProvesCustomer(
+  redis: RedisClient | undefined, tenantId: string, sessionId: string, customerId: string, nowMs = Date.now(),
+): Promise<boolean> {
+  if (!redis || !customerId) return false
+  const raiz = await journeyRootOfSession(redis, tenantId, sessionId)
+  const hash = (await redis.hgetall(journeyCtxKey(tenantId, raiz))) ?? {}
+  return judgeResumeEvidence(["otp"], hash, { sessionId, nowMs, customerId }).satisfied
+}
+
+/**
  * PID-13 — a exigência de identidade do token, julgada contra a evidência da sessão que
  * RETOMA. Lê `resume_requires` do registro do token (`{t}:resume_meta:{token}`, a mesma
  * casa que o gateway lê). `requires: null` = pendência sem exigência: nada a atestar.
@@ -219,7 +259,10 @@ export async function resumeIdentityClearance(
   if (!Array.isArray(requires) || requires.length === 0) return { requires: null, satisfied: true, missing: [] }
   const raiz = await journeyRootOfSession(redis, tenantId, sessionId)
   const hash = (await redis.hgetall(journeyCtxKey(tenantId, raiz))) ?? {}
-  const j = judgeResumeEvidence(requires as string[], hash, { sessionId, nowMs })
+  // PID-09 — a prova tem de ser do cliente do token: sem isto, quem provou o próprio número
+  // retomaria o processo de outra pessoa com o token dela.
+  const customerId = await tokenCustomer(redis, tenantId, evidenceCustomers(hash), resumeToken)
+  const j = judgeResumeEvidence(requires as string[], hash, { sessionId, nowMs, customerId })
   return { requires: requires as string[], satisfied: j.satisfied, missing: j.missing }
 }
 
@@ -770,7 +813,14 @@ export function registerWorkflowTools(
           // devolvemos verification_required — o fluxo pode oferecer OTP e
           // re-consultar. É garantia de plataforma: o resume_token nunca sai daqui
           // sem posse. Ver docs/adr/adr-identity-channel-possession.md.
-          if (ref.verification_class !== "possessed") {
+          // PID-09: posse PROVADA NESTA SESSÃO para este cliente (OTP, ou a chegada pelo
+          // WhatsApp do telefone autoritativo) também abre — a durável não é a única prova.
+          const provadaAqui = ref.verification_class !== "possessed" &&
+            await sessionProvesCustomer(deps.redis, tenant_id, quem.caller.session_id, ref.customer_id)
+          if (provadaAqui) {
+            console.info(`[pending_workflow_get] PID-09 posse provada na sessão session=${quem.caller.session_id} customer=${ref.customer_id}`)
+          }
+          if (ref.verification_class !== "possessed" && !provadaAqui) {
             return { content: [{ type: "text" as const, text: JSON.stringify({
               found: false, count: 0,
               customer_id: ref.customer_id,
@@ -1020,6 +1070,7 @@ export function registerWorkflowTools(
           ...(status === "verified" ? {
             verified_at:       new Date().toISOString(),
             proven_in_session: quem.caller.session_id,
+            customer_id:       p.data.customer_id,   // PID-09 — de quem é a posse provada
             ...(body.provenance ? { source: body.provenance } : {}),
           } : {}),
         })

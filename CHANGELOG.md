@@ -1,5 +1,116 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (8) — PID-09: a chegada pelo WhatsApp prova a posse, e toda prova diz de quem é
+
+### 1 · O que foi medido antes de decidir
+
+| medido | valor |
+|---|---|
+| contas WhatsApp de teste | **nenhuma** — sem env, sem `ChannelEndpoint`; as 4 sessões `whatsapp` da base são sintéticas |
+| evidência de identidade | `status`, `anchor_kind`, `verified_at`, `source`, `proven_in_session` — **nenhum campo diz de qual cliente** |
+| `resume_meta` do token | sem cliente; quem amarra token a cliente é só `{t}:pending_by_customer:{cid}` |
+| produtor de `princ` | nenhum |
+| `whatsapp_app_secret` no demo | **vazio** — o adapter aceitava webhook sem conferir assinatura nenhuma |
+| chamadores de `pending_workflow_get` por `contact_identifier` | **0** (o runner usa `anchors`) |
+
+A ficha dizia "o adapter passa a produzir evidência de chegada". Medido, faltava antes a metade que dá
+sentido a qualquer evidência: **de quem** é a prova. O juiz conferia status, sessão e idade — então
+provar a posse do PRÓPRIO telefone valia para as pendências de qualquer cliente cuja âncora a sessão
+informasse.
+
+**Vermelho ao vivo, na imagem anterior, pelo transporte MCP** (clientes importados como autoritativos,
+OTP real): a sessão que provou por OTP o telefone do cliente A pediu a pendência do cliente B (posse
+durável, pendência exigindo OTP) e **levou o token**; o `workflow_resume` com esse token **passou o
+atestado** e o gateway retomou. Controle: a sessão que provou B leva o token de B. O vetor é o mesmo
+que a chegada pelo WhatsApp abriria — quem escreve do próprio número e digita o CPF de outra pessoa.
+
+### 2 · As decisões do dono
+
+- **Só a metade de identidade.** WhatsApp agora; `princ` vira ficha própria (PID-21), porque não há
+  login federado chegando à porta.
+- **A chegada equivale ao OTP.** Ela SATISFAZ a exigência `["otp"]` e não é exigível por nome —
+  declarar `["whatsapp"]` num N3 recusaria quem chega por outro canal e prova por OTP.
+- **O cliente entra na prova, também no OTP.**
+
+### 3 · O que mudou
+
+- **`@plughub/schemas`.** `customer_id` é campo da prova (some com ela no `failed`). `whatsapp` entra
+  em `IDENTITY_MECHANISMS`; `REQUIRABLE_MECHANISMS = ["otp"]` é o que um fluxo pode exigir, e
+  `SATISFIED_BY.otp = ["otp", "whatsapp"]` é a equivalência, numa casa só. `judgeResumeEvidence`
+  recebe `customerId` e procura UM registro, de qualquer mecanismo que satisfaça, verificado, desta
+  sessão, recente e **deste cliente** — `no_customer` e `other_customer` são motivos novos, e o
+  relatado é o do registro que chegou mais perto.
+- **mcp-server — liberação.** O `pending_workflow_get` confere o cliente das pendências. Resposta sem
+  `customer_id` (a porta legada) não satisfaz nada, e loga. O portão de posse, que só aceitava a
+  posse durável (`possessed`), aceita também a posse **provada nesta sessão para o cliente resolvido**
+  (`sessionProvesCustomer`) — é por aqui que o cliente do WhatsApp chega às pendências sem OTP.
+- **mcp-server — retomada.** `resumeIdentityClearance` descobre o cliente DO TOKEN entre os que têm
+  prova na journey (`tokenCustomer`, pelo índice de pendências; o índice não é varrido) e julga com
+  ele. Token sem pendência indexada sob cliente algum não retoma.
+- **mcp-server — escritor.** `otp_verify` grava o `customer_id` verificado. Rota nova
+  `POST /internal/identity-evidence` (mesmo portão dos irmãos `/internal/*`, fechado sem env), com o
+  juiz em `lib/arrival-evidence.ts`: só `whatsapp`; `verified` exige cliente e `source=authoritative`;
+  `verified_at` e `proven_in_session` são do servidor; tenant confere com o meta da sessão.
+- **channel-gateway.** `IdentityIndex.authoritative_owner` responde de quem a âncora é autoritativa
+  (PG, nunca o índice Redis; não provisiona). `ArrivalEvidenceRecorder` decide o que a chegada afirma:
+  assinatura não conferida → `not_run`; número sem dono autoritativo → `failed`; dono → `verified`. O
+  adapter registra ANTES de publicar a mensagem, a cada mensagem (renovando a idade da prova), e falha
+  do registro nunca derruba a mensagem. **Erro ao consultar o cadastro não grava nada** — gravar
+  `failed` apagaria uma prova válida por um defeito nosso.
+- **"Passou" e "foi conferido" viraram dois fatos.** `signature_verdict` devolve `authenticated` ·
+  `unchecked` · `invalid`; `verify_signature` mantém a compatibilidade, e a rota passa
+  `authenticated=` só no primeiro. `handle_inbound` sem o argumento não autentica.
+- **Compose do demo.** `PLUGHUB_MCP_SERVER_URL`, `PLUGHUB_MCP_INTERNAL_SERVICE_TOKEN` e um
+  `PLUGHUB_WHATSAPP_APP_SECRET` de demonstração no channel-gateway. ⚠️ Com o segredo, webhook sem
+  assinatura passa a ser **400** — antes qualquer POST em `/webhooks/whatsapp` abria sessão.
+
+### 4 · Dois censos vizinhos, movidos junto
+
+- `probe_identity_evidence`: o escritor único agora tem dois chamadores — OTP (`workflow.ts`) e a
+  chegada (`server.ts`).
+- `probe_mcp_rest_surface`: a rota nova classificada como `gateada`.
+
+### 5 · Testes e probe
+
+- schemas **334** (327 → 334): cliente, equivalência, motivo mais perto, `whatsapp` não exigível,
+  `evidenceCustomers`. mcp-server **437**: juiz da chegada, liberação e retomada por cliente, portão de
+  posse, `otp_verify` com cliente. channel-gateway **960**: dono autoritativo, registrador (cada ramo, e
+  erro sem apagar prova), veredito da assinatura, evidência antes da mensagem.
+- **`probe_arrival_evidence.sh`** — A: todo `judgeResumeEvidence` fora de schemas passa `customerId`;
+  equivalência; só a assinatura conferida autentica; com mutação do censo. M: **13 mutações** sobre
+  cópias (schemas, mcp e dentro da imagem do gateway), cada uma vermelha por asserção. B: ao vivo, com
+  webhook da Meta **assinado e simulado** — OTP cruzado retido e retomada recusada (o red-first);
+  chegada do telefone autoritativo grava `verified` e libera a pendência sem OTP, com controle sem
+  chegada; a mesma sessão não leva nem retoma o token de outro cliente; número sem cadastro grava
+  `failed`; sem assinatura, 400. Fixtures por hash e por id, zero sobra no Redis.
+
+### 6 · Verificação
+
+Imagens `mcp-server-plughub`, `agent-registry` e `channel-gateway` rebuildadas. Verdes ao vivo:
+`probe_arrival_evidence` (duas rodadas), `probe_identity_evidence`, `probe_mcp_rest_surface`,
+`probe_identity_provenance`, `probe_resume_requirement`, `probe_session_bound_resume` (com a jornada),
+`probe_evidence_transport`, `probe_otp_gate`, `probe_journey_merge_status_access`,
+`probe_portabilidade_door`, `probe_intake_runner`, `probe_task_ledger`,
+`probe_gates_manifest_coverage`. As duas portas vivas seguem verdes com a prova amarrada ao cliente —
+o runner resolve, prova e busca pendência sob o MESMO cliente. `probe_python_suites`: channel-gateway
+960; inconclusivo só por três containers parados há 18 h (evaluation-api, workflow-api,
+quality-ingest).
+
+De passagem, o `probe_identity_provenance` acusou o registrador passando a constante `authoritative`
+como argumento — o censo da PID-12 lê isso como carimbar procedência fora da importação. O registrador
+não escreve procedência, só a relata; passou a relatar a que o cadastro DEVOLVEU
+(`authoritative_owner` responde `(cliente, procedência)`), e o censo ficou intacto.
+
+⚠️ **O que ficou de fora, registrado:** `princ` (PID-21). WhatsApp sem endereço de pool (PID-22):
+medido, o adapter publica `pool_id` vazio e a sessão cai em `sac_ia` — cada rodada do probe abre
+duas sessões sintéticas atendidas por instâncias `sac_ia` e fechadas pelo watchdog. O mesmo inbound
+chama o telefone de `customer_id`.
+⚠️ **Resíduo do red-first:** a retomada que o vetor permitia, e o primeiro controle positivo, acordaram
+dois processos fictícios (`probe-pid09-proc-*`). As chaves Redis foram limpas, e as 2 linhas em
+`sessions` e 2 em `session_transitions` no ClickHouse foram apagadas com aprovação do dono. O exercício
+passou a gravar o registro do token já vencido, para que nenhuma retomada acorde processo, nem com o
+portão quebrado.
+
 ## 2026-09-14 (7) — PID-16: um release em várias portas é um lote — todos ou nenhum
 
 ### 1 · O que foi medido antes de decidir

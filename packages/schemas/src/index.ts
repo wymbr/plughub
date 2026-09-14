@@ -783,6 +783,8 @@ export {
   IDENTITY_EVIDENCE_STATUSES,
   IDENTITY_EVIDENCE_FIELDS,
   IDENTITY_MECHANISMS,
+  REQUIRABLE_MECHANISMS,
+  SATISFIED_BY,
   identityEvidenceTag,
   PROOF_FIELDS,
 } from "./identity-evidence"
@@ -790,6 +792,7 @@ export type {
   IdentityEvidenceStatus,
   IdentityEvidenceField,
   IdentityMechanism,
+  RequirableMechanism,
   IdentityEvidenceRecord,
 } from "./identity-evidence"
 export {
@@ -799,6 +802,7 @@ export {
   RESUME_EVIDENCE_MAX_AGE_S,
   judgeResumeEvidence,
   judgeResumeRequirementSteps,
+  evidenceCustomers,
 } from "./resume-requirement"
 export type {
   ResumeRequirement,

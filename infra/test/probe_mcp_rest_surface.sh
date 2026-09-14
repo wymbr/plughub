@@ -124,6 +124,7 @@ POST /api/work_queue/claim/:sessionId|gateada|requireJwtGrant agent_assist.atend
 POST /api/work_queue/expire/:sessionId|gateada|requireJwtGrant agent_assist.supervisionar read_write
 POST /api/work_queue/release/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write escrita (CAP-12)
 POST /internal/context-snapshot|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
+POST /internal/identity-evidence|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, FALHA FECHADA (503 sem env); a chegada autenticada por canal vira evidencia de posse (PID-09)
 POST /internal/session-token|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, FALHA FECHADA (503 sem env); unico emissor do token ligado a sessao (PID-01)
 POST /messages|aberta-divida|canal de escrita do transporte MCP; NAO publicado pela borda (CAP-09/CAP-10)
 PUT /api/agent-pause|gateada|requireJwtGrant agent_assist.atender read_write
