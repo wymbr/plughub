@@ -42,7 +42,7 @@ de telecom) e o valor (parece de um cliente, é capacidade de produto).
 |---|---|---|
 | A1 | **O canal `voice` não roda.** `handle_inbound` chama `_open_session`, `_route_inbound`, `_publish_inbound`, `_normalize_text`, `_normalize_menu_result` — os cinco **não existem**, e estão **mockados** nos testes. Em runtime real levanta `AttributeError` antes de publicar qualquer coisa | `adapters/voice.py:236,247,433,558,565`; `adapters/base.py:44-77`; `tests/test_voice_adapter.py:116-121` |
 | A2 | Correlatos no mesmo adapter: `channel_name` em vez de `channel`; `_collect_loop` prometido e inexistente, `stt_queue` nunca drenada (**collect por voz morto**, só DTMF); `hangup` lê chave nunca escrita; `_get_contact_id` retorna `None` por construção; `deliver_outbound` nunca invocado | `voice.py:90, 11-13, 624-629, 657, 884, 1032-1037, 772`; `outbound_consumer.py:95-106` |
-| A3 | **O SFU nunca foi provisionado.** Zero serviço LiveKit em compose algum, zero env `LIVEKIT_*`, SDK não é dependência; sem credencial o provider liga `_dev_mode` e devolve token, room, participantes e egress **placebo**. O `arc15-webrtc.md` prescreve topologia Kubernetes e **não há manifesto correspondente** em `infra/` | `arc15-webrtc.md:3-17, 95-103`; `webrtc_provider.py:167, 176-178, 213-219, 259-260, 284-285, 331-337`; `channel-gateway/pyproject.toml:6-23` |
+| A3 | *(Fechado na V-F0, 2026-09-14 — ver §5.)* **O SFU nunca foi provisionado.** Zero serviço LiveKit em compose algum, zero env `LIVEKIT_*`, SDK não é dependência; sem credencial o provider liga `_dev_mode` e devolve token, room, participantes e egress **placebo**. O `arc15-webrtc.md` prescreve topologia Kubernetes e **não há manifesto correspondente** em `infra/` | `arc15-webrtc.md:3-17, 95-103`; `webrtc_provider.py:167, 176-178, 213-219, 259-260, 284-285, 331-337`; `channel-gateway/pyproject.toml:6-23` |
 | A4 | **`add_participant(conference_sid, to, from_)`** existe com docstring *"Add a leg (human agent SIP/WebRTC) to the conference"* e **nunca é chamada**. Não há caminho de código que ponha um humano numa conferência de voz | `voice_provider.py:112, 119, 303, 808` |
 | A5 | **Conflito doc×doc sobre retenção de gravação:** 5 anos num lugar, 30 dias (LGPD) noutro. Nenhum código arbitra | `channel-gateway-multi-channel.md:1371-1550` × `docs/layers/07-data-layer.md:101` |
 | A6 | `voice` declara capability **só `audio`**, sem `text` — e o caminho de collect está morto (A2). A declaração não bate com a realidade em nenhuma das duas direções | `channel_capability_registry.py:32`; enum canônico em `schemas/src/skill.ts:567-575` |
@@ -278,6 +278,20 @@ foi escrita para fechar: *"a segurança da borda era suposição não escrita"*.
 SFU em compose e no deploy, credenciais, SDK como dependência real, provider recusando alto sem
 credencial (V6). **É o gate que torna todo o resto mensurável** — enquanto ele não existir,
 qualquer fase seguinte pode ficar verde sem funcionar.
+
+> ✅ **Entregue em 2026-09-14 (VOZ-01)**, no compose **demo**: `livekit` v1.8.4 (`auto_create:
+> false`) + `coturn` 4.6.3, SDK no `pyproject`, `_dev_mode` fora e recusa nomeada
+> (`WebRTCProviderUnavailable`). Gate: `infra/test/probe_webrtc_media_plane.sh`. Três fatos que a
+> fase revelou e que valem para as seguintes:
+> - **A rota de token entrou no escopo.** `GET /webrtc/token/{sid}` emitia token sem credencial,
+>   inclusive de supervisor oculto com identidade escolhida na query; com o placebo era inerte, com a
+>   credencial seria chave real num prefixo publicável. V6 (*"tokens só do gateway"*) não bastava:
+>   *do gateway* não diz *para quem*. Hoje exige Bearer e capacidade por papel no pool da sessão.
+> - **O SFU real achou código que nunca rodou:** `with_ttl(int)` levantava `TypeError` — nenhum
+>   token real podia ser assinado. É V9 confirmado: o placebo não escondia só a ausência do
+>   ambiente, escondia o caminho quebrado.
+> - **Medido só DENTRO da rede do compose.** O SFU anuncia IP de container e o TURN como `coturn`;
+>   browser no host é a V-F1, que tem de decidir endereço externo. Egress não subiu (V-F3).
 
 > ⚠️ **Reordenadas em 2026-09-12.** A ordem original punha a perna SIP como V-F1, antes do bot
 > leg: o valor só aparecia na terceira fase, e a primeira já exigia telecom. **Tudo, menos a

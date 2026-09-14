@@ -11,14 +11,23 @@ Concrete implementations:
   LiveKitProvider  — livekit-api SDK (livekit.api package)
   MockWebRTCProvider — in-memory stub for unit tests (no network I/O)
 
+SEM CREDENCIAL, O PROVIDER RECUSA — NÃO DEGRADA (VOZ-01, ADR voice-media-plane V6)
+  Até 2026-09-14 `LiveKitProvider` ligava `_dev_mode` quando key/secret vinham vazios,
+  e devolvia token `dev-token-…`, sala `RM_dev_…` e egress `EG_dev_…`; com o SDK ausente
+  devolvia `missing-sdk-token-…`. Nada disso ficava vermelho — um token bem-formado e
+  falso é o valor plausível na forma mais cara, e foi assim que o Arc 15 pareceu pronto
+  por meses sem SFU em ambiente algum. Hoje a construção levanta
+  `WebRTCProviderUnavailable`, que NOMEIA o que falta (env e/ou SDK). Modo sem
+  infraestrutura existe só por escolha explícita: injetar `MockWebRTCProvider`.
+
 Token model:
   All LiveKit tokens are signed by Channel Gateway using LIVEKIT_API_SECRET.
   Tokens are NEVER returned to the browser directly — the browser receives a
   short-lived URL+token bundle served by /webrtc/token/{session_id}.
 
 Egress (Phase D):
-  start_egress / stop_egress stubs are present in Phase A so the interface
-  is stable when Phase D wires the recording logic.
+  start_egress / stop_egress falam com o serviço de egress do LiveKit, que NÃO está
+  no compose (gravação é a VOZ-06). Contra o SFU atual a chamada falha alto.
 
 Adding a new SFU provider (mediasoup, Janus):
   1. Implement IWebRTCProvider Protocol
@@ -28,6 +37,8 @@ Adding a new SFU provider (mediasoup, Janus):
 
 from __future__ import annotations
 
+import datetime
+import importlib.util
 import logging
 import time
 import uuid
@@ -140,19 +151,48 @@ class IWebRTCProvider(Protocol):
 # ── LiveKitProvider ───────────────────────────────────────────────────────────
 
 
+class WebRTCProviderUnavailable(RuntimeError):
+    """
+    O plano de mídia não pode ser usado — e a mensagem diz POR QUÊ.
+
+    `missing` lista o que falta, com o nome que o operador procura: a variável de
+    ambiente (`PLUGHUB_WEBRTC_LIVEKIT_API_KEY`, …) ou o pacote do SDK. Quem captura
+    repassa `str(exc)` ao log e à resposta; um *"WebRTC indisponível"* genérico seria
+    a frase que ninguém lê (§ Configuration, corolário de 2026-08-25).
+    """
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = list(missing)
+        super().__init__(
+            "plano de mídia WebRTC indisponível — falta: " + ", ".join(self.missing)
+        )
+
+
+# Nome da env de cada credencial, para a recusa nomear o que falta.
+_ENV_URL    = "PLUGHUB_WEBRTC_LIVEKIT_URL"
+_ENV_KEY    = "PLUGHUB_WEBRTC_LIVEKIT_API_KEY"
+_ENV_SECRET = "PLUGHUB_WEBRTC_LIVEKIT_API_SECRET"
+
+
+def _sdk_present() -> bool:
+    try:
+        return importlib.util.find_spec("livekit.api") is not None
+    except ModuleNotFoundError:     # o pacote-pai `livekit` inteiro ausente
+        return False
+
+
 class LiveKitProvider:
     """
-    LiveKit SFU integration via livekit-api Python SDK.
+    LiveKit SFU integration via livekit-api Python SDK (server API only).
 
-    Required package: pip install livekit-api
-    (lighter than full 'livekit' SDK — no track pub/sub, server API only)
+    Construção RECUSA (`WebRTCProviderUnavailable`) quando falta URL, key, secret ou o
+    SDK — não há mais `_dev_mode` nem retorno *mock* por `ImportError`. Ver o cabeçalho
+    do módulo.
 
-    Phase A: room CRUD + token generation
-    Phase D: egress start/stop — IMPLEMENTADO. Em dev_mode (sem api_key/secret) devolve
-             um egress_id mock (`EG_dev_…`) sem I/O de rede, e `stop_egress` é no-op.
-             (Docstring corrigida em 2026-08-03: ainda anunciava *"stubs raise
-             NotImplementedError until then"*, e havia dois testes cobrando essa
-             promessa — o código andou, a doc ficou, e o teste ficou do lado da doc.)
+    Falha de rede NÃO vira valor plausível: `get_room` e `list_participants` propagam
+    a exceção em vez de responder *"sala não existe"* / *"ninguém na sala"* quando o
+    SFU não respondeu. As duas únicas que engolem são `delete_room` e `stop_egress`,
+    caminhos de LIMPEZA, e logam `warning` nomeando a sala/egress.
     """
 
     def __init__(
@@ -161,36 +201,32 @@ class LiveKitProvider:
         api_key:    str,
         api_secret: str,
     ) -> None:
+        missing = [
+            env for env, value in (
+                (_ENV_URL, url), (_ENV_KEY, api_key), (_ENV_SECRET, api_secret),
+            ) if not value
+        ]
+        if not _sdk_present():
+            missing.append("SDK livekit-api (pacote `livekit-api` no pyproject)")
+        if missing:
+            raise WebRTCProviderUnavailable(missing)
         self._url        = url
         self._api_key    = api_key
         self._api_secret = api_secret
-        self._dev_mode   = not api_key or not api_secret
 
     def generate_token(self, grants: TokenGrants) -> str:
-        """
-        Generate a signed LiveKit JWT token.
-
-        In dev mode (no api_key/secret), returns a placeholder token string
-        so the adapter can be tested without a real LiveKit server.
-        """
-        if self._dev_mode:
-            logger.debug("LiveKit dev mode: returning placeholder token")
-            return f"dev-token-{grants.identity}-{grants.room_name}"
-
-        try:
-            from livekit.api import AccessToken, VideoGrants as LKVideoGrants
-        except ImportError:
-            logger.warning(
-                "livekit-api not installed — pip install livekit-api. "
-                "Returning placeholder token."
-            )
-            return f"missing-sdk-token-{grants.identity}"
+        """Sign a LiveKit JWT token (no network I/O)."""
+        from livekit.api import AccessToken, VideoGrants as LKVideoGrants
 
         at = (
             AccessToken(self._api_key, self._api_secret)
             .with_identity(grants.identity)
             .with_name(grants.display_name or grants.identity)
-            .with_ttl(grants.ttl_seconds)
+            # ⚠️ `timedelta`, não `int`. Passava `grants.ttl_seconds` cru, e o SDK soma o
+            # TTL a um `datetime` → `TypeError` no `to_jwt()`. Esta linha NUNCA tinha
+            # rodado: `_dev_mode` ou o ramo de `ImportError` a pulavam sempre. Foi o
+            # primeiro SFU real (VOZ-01) que a executou.
+            .with_ttl(datetime.timedelta(seconds=grants.ttl_seconds))
             .with_grants(
                 LKVideoGrants(
                     room_join         = True,
@@ -210,19 +246,7 @@ class LiveKitProvider:
         empty_timeout_s:  int = 300,
         max_participants: int = 50,
     ) -> RoomInfo:
-        if self._dev_mode:
-            logger.debug("LiveKit dev mode: mock create_room %s", room_name)
-            return RoomInfo(
-                room_name     = room_name,
-                room_sid      = f"RM_dev_{room_name[:8]}",
-                creation_time = int(time.time()),
-            )
-        try:
-            from livekit.api import LiveKitAPI
-            from livekit.api.room_service import CreateRoomRequest
-        except ImportError:
-            logger.warning("livekit-api not installed — returning mock room")
-            return RoomInfo(room_name=room_name, room_sid=f"RM_mock_{uuid.uuid4().hex[:8]}")
+        from livekit.api import CreateRoomRequest, LiveKitAPI
 
         async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
             room = await lkapi.room.create_room(
@@ -240,14 +264,7 @@ class LiveKitProvider:
             )
 
     async def delete_room(self, room_name: str) -> None:
-        if self._dev_mode:
-            logger.debug("LiveKit dev mode: mock delete_room %s", room_name)
-            return
-        try:
-            from livekit.api import LiveKitAPI
-            from livekit.api.room_service import DeleteRoomRequest
-        except ImportError:
-            return
+        from livekit.api import DeleteRoomRequest, LiveKitAPI
 
         try:
             async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
@@ -256,55 +273,37 @@ class LiveKitProvider:
             logger.warning("delete_room failed (%s): %s", room_name, exc)
 
     async def get_room(self, room_name: str) -> RoomInfo | None:
-        if self._dev_mode:
-            return None
-        try:
-            from livekit.api import LiveKitAPI
-            from livekit.api.room_service import ListRoomsRequest
-        except ImportError:
-            return None
+        """None só quando o SFU RESPONDEU que a sala não existe; erro de rede propaga."""
+        from livekit.api import ListRoomsRequest, LiveKitAPI
 
-        try:
-            async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
-                resp = await lkapi.room.list_rooms(ListRoomsRequest(names=[room_name]))
-                if not resp.rooms:
-                    return None
-                r = resp.rooms[0]
-                return RoomInfo(
-                    room_name    = r.name,
-                    room_sid     = r.sid,
-                    num_participants = r.num_participants,
-                    creation_time = r.creation_time,
-                )
-        except Exception as exc:
-            logger.warning("get_room failed (%s): %s", room_name, exc)
-            return None
+        async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
+            resp = await lkapi.room.list_rooms(ListRoomsRequest(names=[room_name]))
+            if not resp.rooms:
+                return None
+            r = resp.rooms[0]
+            return RoomInfo(
+                room_name    = r.name,
+                room_sid     = r.sid,
+                num_participants = r.num_participants,
+                creation_time = r.creation_time,
+            )
 
     async def list_participants(self, room_name: str) -> list[ParticipantInfo]:
-        if self._dev_mode:
-            return []
-        try:
-            from livekit.api import LiveKitAPI
-            from livekit.api.room_service import ListParticipantsRequest
-        except ImportError:
-            return []
+        """Lista vazia só quando o SFU RESPONDEU; erro de rede propaga."""
+        from livekit.api import ListParticipantsRequest, LiveKitAPI
 
-        try:
-            async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
-                resp = await lkapi.room.list_participants(
-                    ListParticipantsRequest(room=room_name)
+        async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
+            resp = await lkapi.room.list_participants(
+                ListParticipantsRequest(room=room_name)
+            )
+            return [
+                ParticipantInfo(
+                    identity  = p.identity,
+                    sid       = p.sid,
+                    state     = str(p.state),
                 )
-                return [
-                    ParticipantInfo(
-                        identity  = p.identity,
-                        sid       = p.sid,
-                        state     = str(p.state),
-                    )
-                    for p in resp.participants
-                ]
-        except Exception as exc:
-            logger.warning("list_participants failed (%s): %s", room_name, exc)
-            return []
+                for p in resp.participants
+            ]
 
     async def start_egress(
         self,
@@ -316,46 +315,27 @@ class LiveKitProvider:
         """
         Start a composite egress recording for *room_name*.
 
-        output_url can be:
-          - a local filesystem path (shared volume between LiveKit and Gateway):
-              "/var/plughub/webrtc-recordings/session_id/segment_id.mp4"
-          - an S3 URL handled by the caller (Phase D uses local file mode).
+        output_url: local filesystem path on a volume shared between the egress
+        worker and the Gateway, e.g. "/var/plughub/webrtc-recordings/{sid}/{seg}.mp4".
 
-        Returns the LiveKit egress_id string.
+        Returns the LiveKit egress_id. Exceptions propagate so the caller logs and
+        skips recording.
 
-        Fails gracefully:
-          - dev_mode (no api_key/secret) → returns a mock egress_id, no network I/O.
-          - ImportError (livekit-api not installed) → returns mock egress_id + warning.
-          - All other exceptions propagate so the caller can log and skip recording.
+        ⚠️ O serviço de EGRESS não está no compose (VOZ-01 sobe só SFU + TURN; gravação
+        é a VOZ-06). Contra o SFU atual esta chamada falha — e falha ALTO, que é o
+        ponto: antes ela devolvia `EG_dev_…` e o chamador registrava gravação iniciada.
         """
-        if self._dev_mode:
-            eid = f"EG_dev_{uuid.uuid4().hex[:8]}"
-            logger.debug(
-                "LiveKit dev mode: mock start_egress room=%s output=%s → %s",
-                room_name, output_url, eid,
-            )
-            return eid
-
-        try:
-            from livekit.api import LiveKitAPI
-            from livekit.api.egress_service import (  # type: ignore[import]
-                StartRoomCompositeEgressRequest,
-                EncodedFileOutput,
-            )
-        except ImportError:
-            eid = f"EG_missing_sdk_{uuid.uuid4().hex[:8]}"
-            logger.warning(
-                "livekit-api not installed — returning mock egress_id. "
-                "Install with: pip install livekit-api"
-            )
-            return eid
+        from livekit.api import (
+            EncodedFileOutput,
+            LiveKitAPI,
+            RoomCompositeEgressRequest,
+        )
 
         async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
-            file_output = EncodedFileOutput(filepath=output_url)
-            req = StartRoomCompositeEgressRequest(
-                room_name = room_name,
-                layout    = layout,
-                file      = file_output,
+            req = RoomCompositeEgressRequest(
+                room_name   = room_name,
+                layout      = layout,
+                file_outputs = [EncodedFileOutput(filepath=output_url)],
             )
             egress_info = await lkapi.egress.start_room_composite_egress(req)
             egress_id   = egress_info.egress_id
@@ -366,21 +346,8 @@ class LiveKitProvider:
             return egress_id
 
     async def stop_egress(self, egress_id: str) -> None:
-        """
-        Stop a running LiveKit egress and wait for it to flush its output file.
-
-        Gracefully handles dev_mode and missing SDK — both are no-ops (the mock
-        egress_id produced by start_egress in those modes is never sent to LiveKit).
-        """
-        if self._dev_mode:
-            logger.debug("LiveKit dev mode: mock stop_egress egress_id=%s", egress_id)
-            return
-
-        try:
-            from livekit.api import LiveKitAPI
-            from livekit.api.egress_service import StopEgressRequest  # type: ignore[import]
-        except ImportError:
-            return
+        """Stop a running LiveKit egress (cleanup path: failure is logged, not raised)."""
+        from livekit.api import LiveKitAPI, StopEgressRequest
 
         try:
             async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:

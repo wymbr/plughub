@@ -1619,25 +1619,23 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 
 ---
 
-## Arc 15 — Canal WebRTC com SFU (LiveKit) ⚠️ código · SFU NÃO PROVISIONADO
+## Arc 15 — Canal WebRTC com SFU (LiveKit) ⚠️ SFU de pé no demo · contato ponta a ponta NÃO
 
-> **Corrigido 2026-08-20 por medição.** O ✅ desta seção cobria o **canal**, e foi lido por meses como
-> se cobrisse a solução de mídia. Medido: **não há serviço LiveKit em compose nenhum** (`grep livekit
-> **/*.yml` → zero), **nenhuma env `LIVEKIT_*`/`WEBRTC_*`** em `.env*`/compose/scripts, e o SDK **não é
-> dependência** do pacote (`packages/channel-gateway/pyproject.toml:6-23`) — logo a imagem construída
-> não o tem e os imports caem no ramo de degradação (`webrtc_room_client.py:217-220`,
-> `webrtc_provider.py:183-184`). Com `api_key`/`api_secret` vazios (`config.py:228-232`) o provider liga
-> `_dev_mode` (`webrtc_provider.py:167`) e devolve token, room e egress **placebo**. O plano de
-> SINALIZAÇÃO existe e roda (WS `main.py:729`, `GET /webrtc/token/{session_id}` `main.py:754`, cliente
-> real no platform-ui `package.json:16`); o plano de **MÍDIA** não está de pé em ambiente algum do
-> repositório. O `arc15-webrtc.md:81-89` prescreve topologia Kubernetes (livekit-server, egress, redis,
-> coturn) e **não há manifesto correspondente** em `infra/` — ou seja, o doc nunca prometeu o SFU no
-> compose; foi o ✅ do cabeçalho que passou a valer por ele. É a família *"'existe' ≠ 'está pronto'"*,
-> agravada por `_dev_mode` ser exatamente um **valor plausível**: devolve token bem-formado e ninguém
-> fica vermelho. **Antes de qualquer trabalho de WebRTC, provisionar o SFU é pré-requisito, não detalhe
-> de deploy.**
+> **SFU + TURN provisionados em 2026-09-14 (VOZ-01).** Até ali o ✅ desta seção cobria só o **canal**:
+> nenhum compose tinha LiveKit, o SDK não era dependência, e sem credencial o provider ligava
+> `_dev_mode` e devolvia token, sala e egress **placebo** — ninguém ficava vermelho. Hoje o compose
+> demo sobe `livekit` (`auto_create: false`) e `coturn`, e **sem credencial o provider RECUSA
+> nomeando a env** (`WebRTCProviderUnavailable`); o canal fecha a porta antes de autenticar e rotear.
+> O SFU real achou código que nunca tinha rodado (`with_ttl(int)`: nenhum token real podia ser
+> assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. ⚠️ **O que ainda NÃO existe:** contato
+> ponta a ponta com agente no browser (`VOZ-04`), endereço alcançável de fora da rede do compose,
+> egress (`VOZ-06`), bot leg (`VOZ-05`).
 
-Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (`VOZ-02` em `pending.md`, bloqueado por `VOZ-01`).
+- **`GET /webrtc/token/{sid}` exige Bearer + capacidade por papel no pool da sessão**
+  (`agent_assist.atender` publica · `contacts.monitorar` assina oculto), e a identidade na sala vem
+  do JWT. Emitia sem credencial e com identidade da query — *tokens só do gateway* não diz *para quem*.
+
+Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (`VOZ-02` em `pending.md`, adiado por gatilho comercial).
 
 → See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
 

@@ -1,5 +1,100 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (10) — VOZ-01: o plano de mídia existe, e sem ele o canal recusa em vez de fingir
+
+### 1 · Medido antes, vermelho ao vivo
+
+| fato | medição na stack de pé, imagem anterior |
+|---|---|
+| provider sem credencial | `LiveKitProvider('wss://localhost:7880','','')` devolveu token `dev-token-agent-x-plughub-x`, sala `RM_dev_plughub-`, egress `EG_dev_c78a4e75` |
+| SDK | `ModuleNotFoundError: No module named 'livekit'` — nem `livekit.api`, nem `livekit.rtc` |
+| compose | nenhum serviço LiveKit/TURN em **nenhum** dos 5 `docker-compose*.yml`; porta 7880 fechada |
+| `GET /webrtc/token/{sid}` | **200 sem credencial nenhuma**, com `?role=supervisor&identity=qualquer-um` → token de participante **OCULTO** com a identidade escolhida pelo chamador |
+
+O último é o achado que mudou o escopo da ficha. A rota vive sob `/webrtc`, prefixo **publicável** da
+borda, e o placebo a tornava inerte; **provisionar a credencial sem fechá-la transformaria o placebo em
+chave real** de escuta oculta em qualquer contato cujo `session_id` se conhecesse. Por isso o portão
+entrou junto com a credencial, e não depois.
+
+### 2 · O que mudou
+
+- **Compose (`docker-compose.demo.yml`)** — serviços `livekit` (`livekit/livekit-server:v1.8.4`) e
+  `coturn` (`coturn/coturn:4.6.3`). Config do LiveKit inteira por env (`LIVEKIT_CONFIG`), sem arquivo
+  montado — bind mount de arquivo único quebra o `docker restart` neste ambiente. `room.auto_create:
+  false`: a sala nasce pelo gateway, e token assinado para nome qualquer não cria sala. TURN com
+  `lt-cred-mech` e usuário estático, porque o LiveKit repassa `turn_servers` com credencial fixa. O
+  gateway ganhou `PLUGHUB_WEBRTC_LIVEKIT_{URL,PUBLIC_URL,API_KEY,API_SECRET}`.
+- **SDK como dependência real** — `livekit-api` e `livekit` no `pyproject`.
+- **`LiveKitProvider` recusa** (`WebRTCProviderUnavailable`) quando falta URL, key, secret ou SDK, e a
+  mensagem **nomeia a env** que falta. Saíram `_dev_mode` e os quatro retornos *mock* por
+  `ImportError`. `get_room`/`list_participants` passaram a propagar erro de rede em vez de responder
+  *"sala não existe"* / *"ninguém na sala"*.
+- **Adapter** — o boot **não cai** (derrubar o gateway levaria webchat e WhatsApp junto por um canal
+  só): guarda o motivo, loga `ERROR` nomeando-o, e `handle_ws` fecha a porta **antes** de autenticar e
+  rotear (`conn.error media_plane_unavailable`), porque um contato não pode ser admitido para um canal
+  sem mídia. `get_token` deixou de converter falha de assinatura em `None` — que a rota traduzia como
+  404 *"room not ready"*, motivo plausível e falso.
+- **Duas URLs** — a interna (`ws://livekit:7880`, API de servidor e bot leg) e a PÚBLICA, que vai ao
+  cliente. Sem a pública o cliente recebe a interna e isso é dito no log.
+- **Rota de token** — Bearer (`plughub_authz`) → 401; sessão do tenant do token → 404 igual ao
+  inexistente; `role` fora de `{agent, supervisor}` → 422; capacidade por papel **recortada ao pool da
+  sessão** → 403 (`agent_assist.atender` para quem publica, `contacts.monitorar` para quem assina
+  oculto); identidade na sala = `{role}-{sub}` do JWT, **nunca** da query. Precedente e dívida iguais
+  aos de `identity/operator/register`: o pool é o de ENTRADA do `session:{id}:meta`.
+- **`config.py`** — `webrtc_livekit_url` perdeu o default `wss://localhost:7880`, valor plausível que
+  apontava para lugar nenhum.
+
+### 3 · O SFU real achou um defeito que o placebo escondia
+
+A primeira execução do probe contra a imagem nova morreu no **`generate_token`**:
+`AccessToken.with_ttl(grants.ttl_seconds)` passa `int`, o SDK soma a um `datetime`, e o `to_jwt()`
+levanta `TypeError`. **Nenhum token real jamais pôde ser assinado por aquele código** — a linha nunca
+tinha rodado, porque `_dev_mode` ou o ramo de `ImportError` a pulavam sempre. Consertado
+(`timedelta`) e coberto por teste que assina com o SDK de verdade, sem monkeypatch e sem skip.
+
+É o mesmo corolário da VOZ-03 numa forma nova: o mock não verificava que o caminho existia — ele o
+**substituía**, e o caminho substituído estava quebrado.
+
+### 4 · Testes e probe
+
+- Testes: `TestLiveKitProviderDevMode` (que cobrava o placebo como contrato) virou
+  `TestLiveKitProviderRefusal` + `TestAdapterSemPlanoDeMidia` — recusa por env, SDK ausente, tudo
+  ausente, **controle positivo**, assinatura real, boot sem queda, `get_token` recusando, WS fechando
+  antes de rotear sem publicar nada, URL pública. Em `test_webrtc_egress.py` saíram os testes de
+  `EG_dev_` e um que terminava em **`assert True`** — não podia reprovar.
+- Suíte do gateway **na imagem**: **1000 passed**.
+- Gate novo **`infra/test/probe_webrtc_media_plane.sh`** (seis ramos, no manifesto): A compose
+  RESOLVIDO (chave do gateway casa com `keys:` do SFU, credencial TURN casa entre SFU e coturn — a
+  divergência dá 401 em todo join e nada mais fica vermelho) + AST do provider sem placebo · B SDK
+  na IMAGEM · C recusa nomeada com controle positivo · D SFU real: sala criada e lida de volta, join
+  **só por relay** com publicação de trilha e o participante listado pelo SFU, token de segredo
+  errado **401** e sala não criada **404** do próprio SFU · E TURN aloca com a credencial e não aloca
+  com a errada · F rota com **7 negativos** (401·401·403·403·403·404·422) e **2 positivos** cujo token o
+  SFU aceita · M1 mutação embutida (segredo errado no `create_room` tem de falhar) · guarda de
+  exercício que morre no meio (menos de 16 veredictos = FALHA — foi ela que pegou o `TypeError`).
+- Contra a imagem anterior: **VERMELHO** (B1 sem SDK · C1 `dev-token-i-r` · M1 devolveu `RM_mock_…`
+  com segredo ERRADO). Contra a nova: **VERDE**.
+- Bateria de mutação externa, cada uma derrubando o ramo certo: coturn **parado** → D2 `TimeoutError`
+  (prova que o relay-only é mesmo relay) e E inconclusivo · segredo do gateway **divergente** num
+  compose copiado → A3 · literal `dev-token-` reintroduzido no provider → A4 · `AUTH_SECRET` trocado no
+  exercício → **F8 e F10 caem** (os positivos podem reprovar) · gateway sem env → porta fechada nomeando
+  as três envs.
+- Vizinhos verdes: `probe_gates_manifest_coverage`, `probe_authz_single_verifier`,
+  `probe_adapter_self_calls`, `probe_edge_surface`, `check_config_invariants`.
+
+### 5 · Fora do escopo, declarado
+
+- **Browser no host.** Tudo foi medido DENTRO da rede do compose. O candidato ICE que o SFU anuncia é
+  IP de container, e o TURN anunciado é `coturn`, nome que o browser não resolve — é a VOZ-04 que mede
+  um browser de verdade e decide o endereço externo.
+- **Egress.** O serviço de gravação do LiveKit não está no compose; `start_egress` contra o SFU atual
+  **falha alto** (antes devolvia `EG_dev_…` e o chamador registrava gravação iniciada). É a VOZ-06.
+- **O bot leg ainda degrada mudo.** `LiveKitRoomClient` continua com os ramos de `ImportError` que viram
+  no-op; com o SDK agora na imagem eles não rodam, mas o contrato de degradação é da VOZ-05.
+- **`_on_routing_assigned` segue após falha de `create_room` e manda `token=""` se a assinatura falhar**
+  — caminho do contato ponta a ponta, VOZ-04.
+- Só o compose **demo** ganhou SFU; `full`/`infra`/`arc4`/`visual` não.
+
 ## 2026-09-14 (9) — APR-11: a porta externa decide o que é de sistema, e só isso
 
 ### 1 · A decisão do dono

@@ -87,6 +87,7 @@ from .webrtc_provider import (
     LiveKitProvider,
     MockWebRTCProvider,
     TokenGrants,
+    WebRTCProviderUnavailable,
     build_room_name,
     negotiate_medium,
 )
@@ -143,7 +144,20 @@ class WebRTCAdapter(ChannelAdapter):
         self._producer          = producer
         self._redis             = redis
         self._settings          = settings
-        self._provider          = webrtc_provider or self._build_provider()
+        # VOZ-01: sem credencial/SDK o provider RECUSA. O adapter guarda o MOTIVO e fecha
+        # a porta do canal nomeando-o (`handle_ws`, `get_token`) — em vez de derrubar o
+        # boot do gateway inteiro, que levaria webchat/WhatsApp junto por um canal só.
+        self._provider_unavailable: WebRTCProviderUnavailable | None = None
+        self._provider: IWebRTCProvider | None
+        if webrtc_provider is not None:
+            self._provider = webrtc_provider
+        else:
+            try:
+                self._provider = self._build_provider()
+            except WebRTCProviderUnavailable as exc:
+                self._provider = None
+                self._provider_unavailable = exc
+                logger.error("webrtc: canal FECHADO — %s", exc)
         self._stt               = stt_provider or self._build_stt_provider()
         self._tts               = tts_provider or self._build_tts_provider()
         self._attachment_store  = attachment_store
@@ -173,6 +187,31 @@ class WebRTCAdapter(ChannelAdapter):
             api_key    = s.webrtc_livekit_api_key,
             api_secret = s.webrtc_livekit_api_secret,
         )
+
+    @property
+    def provider_unavailable(self) -> WebRTCProviderUnavailable | None:
+        """O motivo pelo qual o canal está fechado, ou None se o provider existe."""
+        return self._provider_unavailable
+
+    def _client_livekit_url(self) -> str:
+        """
+        URL do SFU que vai ao CLIENTE (browser/Console).
+
+        A interna (`webrtc_livekit_url`) é endereço de dentro da rede do deploy — no
+        compose, `ws://livekit:7880`, que browser nenhum resolve. Sem a pública
+        configurada devolve a interna, e isso é DITO no log uma vez por processo.
+        """
+        s = self._settings
+        if s.webrtc_livekit_public_url:
+            return s.webrtc_livekit_public_url
+        if not getattr(self, "_warned_public_url", False):
+            self._warned_public_url = True
+            logger.warning(
+                "webrtc: PLUGHUB_WEBRTC_LIVEKIT_PUBLIC_URL ausente — o cliente recebe a "
+                "URL INTERNA do SFU (%s); só funciona se ela for alcançável de fora",
+                s.webrtc_livekit_url,
+            )
+        return s.webrtc_livekit_url
 
     def _build_stt_provider(self) -> ISTTProvider:
         """
@@ -348,6 +387,13 @@ class WebRTCAdapter(ChannelAdapter):
               _keepalive       — renew Redis TTL every _KEEPALIVE_INTERVAL seconds
         """
         await ws.accept()
+        if self._provider is None:
+            # VOZ-01: a porta fecha ANTES da autenticação e do roteamento — um contato
+            # não pode ser admitido e roteado para um canal cujo plano de mídia não existe.
+            await self._ws_error(
+                ws, "media_plane_unavailable", str(self._provider_unavailable),
+            )
+            return
         await self._ws_send(ws, {"type": "conn.ready"})
 
         # ── Auth handshake ────────────────────────────────────────────────────
@@ -667,7 +713,7 @@ class WebRTCAdapter(ChannelAdapter):
         # Send webrtc.ready to client
         await self._ws_send(ws, {
             "type":              "webrtc.ready",
-            "livekit_url":       s.webrtc_livekit_url,
+            "livekit_url":       self._client_livekit_url(),
             "token":             token,
             "negotiated_medium": medium,
             "room_name":         room_name,
@@ -900,7 +946,10 @@ class WebRTCAdapter(ChannelAdapter):
 
         Returns a dict with: token, livekit_url, room_name, negotiated_medium.
         Returns None if the session has no active LiveKit room yet.
+        Raises WebRTCProviderUnavailable when the media plane is not configured.
         """
+        if self._provider is None:
+            raise self._provider_unavailable or WebRTCProviderUnavailable(["provider"])
         room_name = await self._redis.get(f"channel:webrtc:{session_id}:room_name")
         medium    = await self._redis.get(f"channel:webrtc:{session_id}:medium")
 
@@ -922,18 +971,13 @@ class WebRTCAdapter(ChannelAdapter):
             ttl_seconds      = self._settings.webrtc_token_ttl_s,
         )
 
-        try:
-            token = self._provider.generate_token(grants)
-        except Exception as exc:
-            logger.error(
-                "webrtc get_token: generate_token failed (session=%s role=%s): %s",
-                session_id, role, exc,
-            )
-            return None
+        # Sem try: assinar é local, e uma falha aqui é defeito. Antes ela virava `None`
+        # e a rota respondia 404 *"room not ready"* — motivo plausível e falso.
+        token = self._provider.generate_token(grants)
 
         return {
             "token":              token,
-            "livekit_url":        self._settings.webrtc_livekit_url,
+            "livekit_url":        self._client_livekit_url(),
             "room_name":          room_name,
             "negotiated_medium":  medium or "text",
         }

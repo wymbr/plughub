@@ -357,6 +357,12 @@ probe_external_resume_authority.sh
 # e o probe diz isso) e exercicio do codigo da imagem contra Postgres + blob store reais,
 # com dois controles e mutacao. Mexe no store vivo so com fixtures apagadas por ID.
 probe_attachment_expiry.sh
+# VOZ-01 (V-F0). O Arc 15 foi dado como pronto sem SFU em ambiente algum: sem credencial o
+# provider devolvia token/sala/egress PLACEBO, e a rota de token emitia (inclusive de
+# supervisor oculto) a quem pedisse. Mede compose RESOLVIDO (chaves casando), a IMAGEM
+# (SDK), a recusa nomeada, um SFU real (join so por relay, 401/404 do proprio SFU), o TURN
+# e a rota com 7 negativos e 2 positivos cujo token o SFU aceita. Fixtures por nome.
+probe_webrtc_media_plane.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

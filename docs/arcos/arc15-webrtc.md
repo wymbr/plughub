@@ -1,5 +1,11 @@
 # Arc 15 — Canal WebRTC com SFU Enterprise
 
+> ✅ **Atualização de 2026-09-14 (VOZ-01) — o bloco de 2026-08-20 abaixo descreve o estado ANTERIOR.**
+> O compose demo sobe `livekit` (v1.8.4) + `coturn` (4.6.3); `livekit-api`/`livekit` são dependência;
+> `_dev_mode` saiu e sem credencial o provider levanta `WebRTCProviderUnavailable` nomeando a env; a rota
+> de token exige Bearer + capacidade no pool da sessão. Medido só dentro da rede do compose — browser no
+> host é a VOZ-04. Detalhe: `CHANGELOG.md` § 2026-09-14 (10) e `adr-voice-media-plane.md` §5 V-F0.
+
 > Última atualização: 2026-08-20 · Status: Fases A–F implementadas **no plano de sinalização** —
 > **o plano de MÍDIA não está provisionado em ambiente algum do repositório**.
 

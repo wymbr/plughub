@@ -892,41 +892,82 @@ async def webrtc_ws(ws: WebSocket, pool_id: str) -> None:
     await _webrtc_adapter.handle_ws(ws, pool_id)
 
 
+# Capacidade exigida por papel na sala. O agente PUBLICA (fala, vê) — é atender; o
+# supervisor entra OCULTO e só assina — é observar. Papel fora da tabela é recusado:
+# um default aqui seria o chamador escolhendo o próprio grant.
+_WEBRTC_TOKEN_ROLE_GRANT: dict[str, tuple[str, str, str]] = {
+    "agent":      ("agent_assist", "atender",   "read_write"),
+    "supervisor": ("contacts",     "monitorar", "read_only"),
+}
+
+
 @app.get("/webrtc/token/{session_id}")
 async def webrtc_token(
     session_id: str,
+    request:    Request,
     role:       str = "agent",
-    identity:   str = "",
-    request:    Request = None,
 ) -> dict:
     """
     Issue a LiveKit token for an agent or supervisor joining an active WebRTC session.
 
-    Query params:
-      role      — "agent" (default) | "supervisor"
-      identity  — agent_type_id or user ID (used as LiveKit participant identity)
+    ⚠️ VOZ-01 (2026-09-14): esta rota emitia token para QUALQUER chamador — sem
+    credencial, com o papel e a IDENTIDADE escolhidos na query (`?role=supervisor&
+    identity=…` rendia um participante OCULTO com o nome que se quisesse). Enquanto o
+    provider devolvia placebo isso era inerte; o provisionamento do SFU transformaria
+    o placebo em chave real, numa rota sob `/webrtc`, que é prefixo PUBLICÁVEL da borda.
+    Por isso o portão entrou junto com a credencial, e não depois.
 
-    Authorization:
-      Bearer <agent_JWT>  — validated by the platform before issuing a LiveKit token.
-      (Phase A: authorization header is recorded; full JWT validation in Phase B.)
+      * Bearer obrigatório (`plughub_authz`) → 401;
+      * a sessão tem de existir e ser do tenant do token → 404 igual ao inexistente;
+      * `role` ∈ {agent, supervisor} → 422; capacidade por papel RECORTADA ao pool
+        da sessão (`_WEBRTC_TOKEN_ROLE_GRANT`) → 403;
+      * a identidade na sala é `{role}-{sub}` do JWT — nunca da query.
 
-    Returns:
-      {token, livekit_url, room_name, negotiated_medium}
+    ⚠️ O pool é o de `session:{id}:meta`, que é o de ENTRADA (dívida conhecida,
+    fatia C de `session-meta-ownership`), igual ao precedente de `operator/register`.
 
-    Returns 404 if the session has no LiveKit room yet (routing not yet complete).
-    Returns 503 if the WebRTC adapter is not initialised.
+    Returns {token, livekit_url, room_name, negotiated_medium}.
+    404 se a sala ainda não existe · 503 se o plano de mídia não está configurado,
+    NOMEANDO o que falta.
     """
     if _webrtc_adapter is None:
         raise HTTPException(status_code=503, detail="WebRTC adapter not initialised")
+    if _webrtc_adapter.provider_unavailable is not None:
+        raise HTTPException(status_code=503, detail=str(_webrtc_adapter.provider_unavailable))
 
-    # Phase A: use identity from query param; Phase B will validate agent JWT.
-    if not identity:
-        identity = f"{role}-{session_id[:8]}"
+    _tok = bearer_from_header(request.headers.get("authorization"))
+    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
+    if not _payload or not str(_payload.get("sub") or ""):
+        # Sem `sub` não há de quem ser a identidade na sala — é credencial inválida.
+        raise HTTPException(status_code=401, detail="token de midia exige credencial")
+    grant = _WEBRTC_TOKEN_ROLE_GRANT.get(role)
+    if grant is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"role desconhecido: {role!r} — esperado um de {sorted(_WEBRTC_TOKEN_ROLE_GRANT)}",
+        )
+    tenant = str(_payload.get("tenant_id") or "")
+    raw = await _webrtc_adapter._redis.get(f"session:{session_id}:meta")
+    try:
+        meta = json.loads(raw) if raw else None
+    except Exception:
+        meta = None
+    if not meta or str(meta.get("tenant_id") or "") != tenant:
+        raise HTTPException(status_code=404, detail="sessao nao encontrada para este tenant")
+    pool = str(meta.get("pool_id") or "")
+    module, field, min_access = grant
+    if not pool or not abac_can(_payload, module, field, min_access, scope_id=pool):
+        logger.warning("webrtc token NEGADO: sub=%s role=%s pool=%s — sem %s.%s",
+                       _payload.get("sub"), role, pool or "-", module, field)
+        raise HTTPException(
+            status_code=403,
+            detail=f"token de midia como {role} exige `{module}.{field}` no pool da sessao",
+        )
 
     result = await _webrtc_adapter.get_token(
         session_id = session_id,
         role       = role,
-        identity   = identity,
+        identity   = str(_payload.get("sub") or ""),
     )
     if result is None:
         raise HTTPException(

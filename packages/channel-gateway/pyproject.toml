@@ -31,6 +31,12 @@ dependencies    = [
     # HASHEADO — um upgrade que mude o metadado muda o hash de âncoras já gravadas.
     # Subir a versão é decisão com migração, não bump.
     "phonenumbers==9.0.39",
+    # VOZ-01 — plano de mídia (LiveKit). Até 2026-09-14 o SDK NÃO era dependência: a
+    # imagem não o tinha, e os imports caíam em ramos que devolviam token/sala/egress
+    # FALSOS. `livekit-api` = API de servidor + assinatura de token (provider);
+    # `livekit` = cliente de sala (bot leg STT/TTS, `webrtc_room_client.py`).
+    "livekit-api>=1.2.1,<2",
+    "livekit>=1.1.18,<2",
 ]
 
 [project.scripts]

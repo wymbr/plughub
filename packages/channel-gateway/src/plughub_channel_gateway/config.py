@@ -237,9 +237,14 @@ class Settings(BaseSettings):
     )
 
     # ── WebRTC (LiveKit SFU) ──────────────────────────────────────────────────
-    # LiveKit server URL (WebSocket).
-    # Example: "wss://livekit.empresa.com"
-    webrtc_livekit_url:             str = "wss://localhost:7880"
+    # LiveKit server URL (WebSocket) as seen from INSIDE the deploy network — used by
+    # the server API and by the bot leg. Example: "ws://livekit:7880".
+    # ⚠️ Sem default desde a VOZ-01 (era "wss://localhost:7880", valor plausível que
+    # apontava para lugar nenhum). Vazio = o provider RECUSA nomeando esta env.
+    webrtc_livekit_url:             str = ""
+    # URL the CLIENT (browser / Console) receives. Empty = same as the internal one,
+    # and the adapter logs that once per process.
+    webrtc_livekit_public_url:      str = ""
     # LiveKit API key + secret (from livekit-server config / env LIVEKIT_KEYS).
     # Used exclusively by Channel Gateway — never exposed to browsers.
     webrtc_livekit_api_key:         str = ""

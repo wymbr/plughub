@@ -1343,6 +1343,70 @@ services:
     networks:
       - plughub-demo
 
+  # ── Plano de mídia: SFU + TURN (VOZ-01 · ADR adr-voice-media-plane V-F0) ────────
+  # Até 2026-09-14 não havia SFU em compose nenhum, e o provider do channel-gateway,
+  # sem credencial, ligava `_dev_mode` e devolvia token, sala e egress PLACEBO — o
+  # Arc 15 pareceu pronto por meses assim. Hoje o provider RECUSA sem credencial, e
+  # o SFU é serviço de verdade. Gate: infra/test/probe_webrtc_media_plane.sh.
+  #
+  # ⚠️ A CHAVE mora em DOIS lugares deste arquivo — `keys:` abaixo e
+  #    `PLUGHUB_WEBRTC_LIVEKIT_API_*` no channel-gateway — e têm de ser iguais. Se
+  #    divergirem, o SFU recusa todo token do gateway (401 no join) e nada mais fica
+  #    vermelho; por isso o ramo A do probe as compara na config RESOLVIDA.
+  #
+  # Config inteira por env (`LIVEKIT_CONFIG` = `--config-body`), sem arquivo montado:
+  # bind mount de arquivo único quebra o `docker restart` neste ambiente.
+  #
+  # `room.auto_create: false` — a sala nasce pelo gateway (`create_room`), nunca pelo
+  # join. Um token assinado para nome de sala qualquer não cria sala.
+  #
+  # ⚠️ ENDEREÇOS são de dentro da rede do compose (`coturn`, IPs de container). Browser
+  #    no host precisa de candidato alcançável de fora — decisão da VOZ-04, que é
+  #    quem mede um browser de verdade.
+  livekit:
+    image: livekit/livekit-server:v1.8.4
+    ports:
+      - "7880:7880"           # sinalização HTTP/WS + API de servidor (Twirp)
+      - "7881:7881"           # ICE sobre TCP
+      - "50000-50020:50000-50020/udp"   # ICE/RTP sobre UDP
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          port_range_start: 50000
+          port_range_end: 50020
+          use_external_ip: false
+          turn_servers:
+            - host: coturn
+              port: 3478
+              protocol: udp
+              username: plughub
+              credential: changeme_turn_credential_demo
+        room:
+          auto_create: false
+        keys:
+          plughub_demo_key: changeme_livekit_api_secret_demo_32chars
+    networks:
+      - plughub-demo
+
+  # TURN para atravessar NAT. `lt-cred-mech` com usuário estático: o LiveKit repassa
+  # `turn_servers` aos clientes com usuário/credencial fixos, e não gera credencial
+  # temporária de REST-secret. Credencial de DEMO.
+  coturn:
+    image: coturn/coturn:4.6.3
+    command: >
+      -n --log-file=stdout --no-cli --no-tls --no-dtls --fingerprint
+      --listening-port=3478 --min-port=49160 --max-port=49180
+      --lt-cred-mech --realm=plughub.local --user=plughub:changeme_turn_credential_demo
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49180:49160-49180/udp"
+    networks:
+      - plughub-demo
+
   channel-gateway:
     build:
       context: .
@@ -1410,6 +1474,14 @@ services:
       PLUGHUB_S3_ACCESS_KEY:              plughub
       PLUGHUB_S3_SECRET_KEY:              plughub123
       PLUGHUB_S3_REGION:                  us-east-1
+      # VOZ-01 — plano de mídia. Sem as três, o provider RECUSA e o canal webrtc fecha a
+      # porta nomeando o que falta (não há mais token placebo). A chave/segredo têm de
+      # casar com `keys:` do serviço `livekit`. URL interna = API de servidor e bot leg;
+      # PUBLIC = a que vai ao CLIENTE (o browser não resolve `livekit`).
+      PLUGHUB_WEBRTC_LIVEKIT_URL:         ws://livekit:7880
+      PLUGHUB_WEBRTC_LIVEKIT_PUBLIC_URL:  ws://localhost:7880
+      PLUGHUB_WEBRTC_LIVEKIT_API_KEY:     plughub_demo_key
+      PLUGHUB_WEBRTC_LIVEKIT_API_SECRET:  changeme_livekit_api_secret_demo_32chars
     depends_on:
       redis:
         condition: service_healthy

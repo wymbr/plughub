@@ -8,7 +8,7 @@ Coverage:
   - TokenGrants                — dataclass construction
   - MockWebRTCProvider         — generate_token, create_room, get_room, delete_room,
                                  list_participants, start_egress, stop_egress
-  - LiveKitProvider dev mode   — token generation without real LiveKit
+  - LiveKitProvider refusal    — sem credencial/SDK recusa NOMEANDO o que falta (VOZ-01)
   - WebRTCAdapter              — deliver_text, deliver_menu, deliver_typing,
                                  deliver_session_closed, get_token
   - WebRTC WS lifecycle        — auth handshake, webrtc.ready on routing.assigned,
@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ..adapters import webrtc_provider as webrtc_provider_mod
 from ..adapters.webrtc import WebRTCAdapter, _AuthError
 from ..adapters.webrtc_provider import (
     IWebRTCProvider,
@@ -37,6 +38,7 @@ from ..adapters.webrtc_provider import (
     ParticipantInfo,
     RoomInfo,
     TokenGrants,
+    WebRTCProviderUnavailable,
     build_room_name,
     negotiate_medium,
 )
@@ -48,6 +50,7 @@ def _fake_settings(**kwargs):
     """Build a minimal Settings-like object for tests."""
     s = MagicMock()
     s.webrtc_livekit_url            = kwargs.get("webrtc_livekit_url", "wss://localhost:7880")
+    s.webrtc_livekit_public_url     = kwargs.get("webrtc_livekit_public_url", "")
     s.webrtc_livekit_api_key        = kwargs.get("webrtc_livekit_api_key", "")
     s.webrtc_livekit_api_secret     = kwargs.get("webrtc_livekit_api_secret", "")
     s.webrtc_token_ttl_s            = kwargs.get("webrtc_token_ttl_s", 3600)
@@ -311,61 +314,99 @@ class TestMockWebRTCProvider:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LiveKitProvider dev mode
+# LiveKitProvider — RECUSA sem credencial (VOZ-01)
 # ═══════════════════════════════════════════════════════════════════════════════
+#
+# Esta classe se chamava `TestLiveKitProviderDevMode` e cobrava o PLACEBO: token
+# `dev-token-…`, sala `RM_dev_…`, egress `EG_dev_…`. Os testes eram fiéis ao código e
+# era isso o defeito — fixavam como contrato o valor plausível que deixou o Arc 15
+# parecer pronto sem SFU nenhum. O contrato agora é a recusa NOMEADA.
 
 
-class TestLiveKitProviderDevMode:
-    def setup_method(self):
-        # No api_key/secret → dev mode
-        self.provider = LiveKitProvider(
-            url        = "wss://localhost:7880",
-            api_key    = "",
-            api_secret = "",
+_CREDS = dict(url="ws://livekit:7880", api_key="k", api_secret="s" * 32)
+
+
+class TestLiveKitProviderRefusal:
+    @pytest.mark.parametrize("vazio, env", [
+        ("url",        "PLUGHUB_WEBRTC_LIVEKIT_URL"),
+        ("api_key",    "PLUGHUB_WEBRTC_LIVEKIT_API_KEY"),
+        ("api_secret", "PLUGHUB_WEBRTC_LIVEKIT_API_SECRET"),
+    ])
+    def test_credencial_ausente_recusa_nomeando_a_env(self, monkeypatch, vazio, env):
+        monkeypatch.setattr(webrtc_provider_mod, "_sdk_present", lambda: True)
+        with pytest.raises(WebRTCProviderUnavailable) as exc:
+            LiveKitProvider(**{**_CREDS, vazio: ""})
+        assert exc.value.missing == [env]
+        assert env in str(exc.value)
+
+    def test_sdk_ausente_recusa_mesmo_com_credencial(self, monkeypatch):
+        monkeypatch.setattr(webrtc_provider_mod, "_sdk_present", lambda: False)
+        with pytest.raises(WebRTCProviderUnavailable) as exc:
+            LiveKitProvider(**_CREDS)
+        assert len(exc.value.missing) == 1 and "livekit-api" in exc.value.missing[0]
+
+    def test_tudo_ausente_nomeia_tudo(self, monkeypatch):
+        monkeypatch.setattr(webrtc_provider_mod, "_sdk_present", lambda: False)
+        with pytest.raises(WebRTCProviderUnavailable) as exc:
+            LiveKitProvider(url="", api_key="", api_secret="")
+        assert len(exc.value.missing) == 4
+
+    def test_controle_positivo_com_credencial_e_sdk_constroi(self, monkeypatch):
+        # Sem este, uma recusa INCONDICIONAL passaria nos quatro de cima.
+        monkeypatch.setattr(webrtc_provider_mod, "_sdk_present", lambda: True)
+        p = LiveKitProvider(**_CREDS)
+        assert not hasattr(p, "_dev_mode")
+
+    def test_assina_token_REAL_com_o_sdk(self):
+        # Sem monkeypatch e sem skip: o SDK é dependência declarada. Este caminho nunca
+        # tinha rodado — `with_ttl(int)` levantava `TypeError` no `to_jwt()`, e o
+        # `_dev_mode` o pulava sempre. Achado pelo primeiro SFU real (VOZ-01).
+        import base64
+        tok = LiveKitProvider(**_CREDS).generate_token(
+            TokenGrants(room_name="plughub-s1", identity="agent-u1", ttl_seconds=120, hidden=True)
+        )
+        part = tok.split(".")[1]
+        pl = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        assert pl["sub"] == "agent-u1" and pl["iss"] == "k"
+        assert pl["video"]["room"] == "plughub-s1" and pl["video"]["hidden"] is True
+        assert 110 <= pl["exp"] - pl["nbf"] <= 130
+
+
+class TestAdapterSemPlanoDeMidia:
+    def _adapter(self, monkeypatch):
+        monkeypatch.setattr(webrtc_provider_mod, "_sdk_present", lambda: True)
+        return WebRTCAdapter(
+            producer = _fake_producer(),
+            redis    = _fake_redis(),
+            settings = _fake_settings(webrtc_livekit_api_key="", webrtc_livekit_api_secret=""),
         )
 
-    def test_generate_token_returns_dev_placeholder(self):
-        grants = TokenGrants(room_name="room-1", identity="user-1")
-        token  = self.provider.generate_token(grants)
-        assert token.startswith("dev-token-")
-        assert "user-1" in token
-        assert "room-1" in token
+    def test_boot_nao_cai_e_guarda_o_motivo(self, monkeypatch):
+        a = self._adapter(monkeypatch)
+        assert a._provider is None
+        assert a.provider_unavailable is not None
+        assert "PLUGHUB_WEBRTC_LIVEKIT_API_KEY" in str(a.provider_unavailable)
 
     @pytest.mark.asyncio
-    async def test_create_room_dev_mode(self):
-        info = await self.provider.create_room("dev-room")
-        assert info.room_name == "dev-room"
-        assert "RM_dev_" in info.room_sid
+    async def test_get_token_recusa_em_vez_de_placebo(self, monkeypatch):
+        a = self._adapter(monkeypatch)
+        await a._redis.setex("channel:webrtc:s1:room_name", 60, "plughub-s1")
+        with pytest.raises(WebRTCProviderUnavailable):
+            await a.get_token("s1", "agent", "u1")
 
     @pytest.mark.asyncio
-    async def test_get_room_dev_mode_returns_none(self):
-        info = await self.provider.get_room("any")
-        assert info is None
+    async def test_ws_fecha_antes_de_autenticar_e_rotear(self, monkeypatch):
+        a  = self._adapter(monkeypatch)
+        ws = _fake_ws([json.dumps({"type": "conn.hello", "version": "1"})])
+        await a.handle_ws(ws, "webrtc_pool")
+        assert [m["type"] for m in ws.sent_messages] == ["conn.error"]
+        assert ws.sent_messages[0]["code"] == "media_plane_unavailable"
+        assert "PLUGHUB_WEBRTC_LIVEKIT_API_KEY" in ws.sent_messages[0]["message"]
+        a._producer.send.assert_not_called()      # nada roteado
 
-    @pytest.mark.asyncio
-    async def test_delete_room_dev_mode_no_error(self):
-        # Should not raise
-        await self.provider.delete_room("any-room")
-
-    @pytest.mark.asyncio
-    async def test_list_participants_dev_mode(self):
-        result = await self.provider.list_participants("any")
-        assert result == []
-
-    # A Fase D saiu do stub: em dev_mode o egress devolve um id mock e não faz I/O de
-    # rede (`webrtc_provider.py:327`). Os testes cobravam `NotImplementedError`, que era
-    # o contrato ANTIGO — e o docstring da classe ainda o anunciava, o que fazia o teste
-    # parecer certo por escrito. Trocados por afirmações sobre o contrato vigente, que é
-    # mais forte do que "levanta": id no formato esperado (para o chamador conseguir
-    # distinguir gravação real de mock) e ausência de exceção no stop.
-    @pytest.mark.asyncio
-    async def test_start_egress_dev_mode_returns_mock_id(self):
-        eid = await self.provider.start_egress("room", "s3://bucket/path")
-        assert eid.startswith("EG_dev_")
-
-    @pytest.mark.asyncio
-    async def test_stop_egress_dev_mode_is_noop(self):
-        await self.provider.stop_egress("EG_dev_deadbeef")   # não deve levantar
+    def test_url_publica_vence_a_interna_no_cliente(self):
+        a = _make_adapter(settings=_fake_settings(webrtc_livekit_public_url="ws://localhost:7880"))
+        assert a._client_livekit_url() == "ws://localhost:7880"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -792,6 +833,7 @@ class TestIWebRTCProviderProtocol:
         mock = MockWebRTCProvider()
         assert isinstance(mock, IWebRTCProvider)
 
-    def test_livekit_provider_satisfies_protocol(self):
-        provider = LiveKitProvider(url="wss://x", api_key="", api_secret="")
+    def test_livekit_provider_satisfies_protocol(self, monkeypatch):
+        monkeypatch.setattr(webrtc_provider_mod, "_sdk_present", lambda: True)
+        provider = LiveKitProvider(url="ws://x", api_key="k", api_secret="s" * 32)
         assert isinstance(provider, IWebRTCProvider)

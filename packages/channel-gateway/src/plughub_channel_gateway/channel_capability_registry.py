@@ -66,9 +66,10 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     # a decisão tem TRÊS impedimentos empilhados, e confundi-los foi erro meu na
     # primeira redação (corrigido 2026-09-03, a pedido do dono):
     #
-    #   (a) **o canal não funciona** — sem SFU, sem env `LIVEKIT_*`, provider em
-    #       `_dev_mode` devolvendo token placebo (`CLAUDE.md` § Arc 15). Temporário,
-    #       e resolve-se por DEPLOY (arco V-F0..V-F5).
+    #   (a) **o canal não funciona** — até 2026-09-14 sem SFU, sem env `LIVEKIT_*` e
+    #       com o provider em `_dev_mode` devolvendo token placebo. A VOZ-01 (V-F0)
+    #       subiu SFU + TURN no compose e trocou o placebo por RECUSA; o que falta
+    #       para ESTE canal (`voice`, PSTN) é a perna SIP — VOZ-02/VOZ-03.
     #   (b) **o tratamento não está construído** — medido: `voice.py` tem ZERO
     #       ocorrências de "masked". Não há eco a mascarar porque não há eco: o
     #       adapter não verbaliza, não bipa e não cala por política. É LACUNA, não

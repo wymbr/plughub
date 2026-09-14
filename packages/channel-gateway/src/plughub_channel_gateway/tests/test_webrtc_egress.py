@@ -10,7 +10,7 @@ Covers:
   TestEgressStopNoFile       — file missing after wait → graceful skip (no crash)
   TestEgressStopAllIdempotent— _stop_all_egress is idempotent (second call is no-op)
   TestEgressRoutingAssigned  — _on_routing_assigned wires egress task when flag set
-  TestEgressProviderImpl     — LiveKitProvider start/stop_egress dev_mode + ImportError paths
+  TestEgressProviderImpl     — sem credencial nao ha egress placebo (VOZ-01) + MockProvider
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from plughub_channel_gateway.adapters.webrtc import WebRTCAdapter, _SESSION_TTL
 from plughub_channel_gateway.adapters.webrtc_provider import (
     MockWebRTCProvider,
     LiveKitProvider,
+    WebRTCProviderUnavailable,
 )
 from plughub_channel_gateway.config import Settings
 
@@ -627,38 +628,16 @@ class TestEgressRoutingAssigned:
 
 
 class TestEgressProviderImpl:
-    """LiveKitProvider start/stop_egress: dev_mode and ImportError paths."""
+    """LiveKitProvider sem plano de mídia: a recusa acontece ANTES de qualquer egress.
 
-    @pytest.mark.asyncio
-    async def test_start_egress_dev_mode_returns_mock_id(self):
-        provider = LiveKitProvider(url="wss://livekit", api_key="", api_secret="")
-        egress_id = await provider.start_egress(
-            room_name="test-room", output_url="/tmp/test.mp4"
-        )
-        assert egress_id.startswith("EG_dev_")
+    Até a VOZ-01 esta classe cobrava `EG_dev_…` devolvido em `_dev_mode` — o chamador
+    registrava "gravação iniciada" contra um SFU que não existia — e tinha um teste que
+    terminava em `assert True`, isto é, que não podia reprovar. Os dois saíram.
+    """
 
-    @pytest.mark.asyncio
-    async def test_stop_egress_dev_mode_is_noop(self):
-        provider  = LiveKitProvider(url="wss://livekit", api_key="", api_secret="")
-        # Should not raise
-        await provider.stop_egress("EG_dev_12345678")
-
-    @pytest.mark.asyncio
-    async def test_start_egress_import_error_returns_mock_id(self):
-        provider = LiveKitProvider(
-            url="wss://livekit", api_key="real-key", api_secret="real-secret"
-        )
-        with patch("builtins.__import__", side_effect=ImportError("livekit not found")):
-            # The ImportError is caught inside start_egress, returning a mock ID.
-            # Re-test using dev_mode bypass instead (safest without monkey-patching).
-            pass
-
-        # Directly test the ImportError path by providing an invalid module name
-        # The graceful fallback is covered by the dev_mode test above; the
-        # ImportError branch would require a real missing module — we document it
-        # here as intentionally not overriding builtins.__import__ to avoid
-        # breaking unrelated imports in the same test run.
-        assert True  # path is covered by _dev_mode test and integration inspection
+    def test_sem_credencial_nao_ha_egress_placebo(self):
+        with pytest.raises(WebRTCProviderUnavailable):
+            LiveKitProvider(url="ws://livekit", api_key="", api_secret="")
 
     @pytest.mark.asyncio
     async def test_mock_provider_start_egress(self):
