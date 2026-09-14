@@ -132,12 +132,21 @@ promote  = bloco("promote",  'poolSlotsRouter.post("/promote"',
                  'poolSlotsRouter.post("/rollback"')
 rollback = bloco("rollback", 'poolSlotsRouter.post("/rollback"')
 
+# PID-16: o julgamento saiu das rotas para `lib/slot-candidate.ts`, a casa única dos
+# portões do candidato. O fato medido continua o mesmo — set-next e promote julgam, o
+# rollback não —, mas agora em duas metades: a casa julga masked, e as rotas chamam a casa.
+try:
+    casa_txt = io.open("packages/agent-registry/src/lib/slot-candidate.ts", encoding="utf-8").read()
+except OSError:
+    casa_txt = ""
 faltando = [n for n, b in (("set-next", set_next), ("promote", promote))
-            if b is None or "judgeMaskedDeploy(" not in b]
+            if b is None or "judgeSlotCandidate(" not in b]
+if "judgeMaskedDeploy(" not in casa_txt:
+    faltando.append("lib/slot-candidate.ts")
 if faltando:
     print("ERRO|D|judgeMaskedDeploy ausente em: %s — o momento barato do NIV-03 "
           "deixa de existir" % ", ".join(faltando))
-elif rollback is not None and "judgeMaskedDeploy(" in rollback:
+elif rollback is not None and ("judgeMaskedDeploy(" in rollback or "judgeSlotCandidate(" in rollback):
     print("ERRO|D|judgeMaskedDeploy no ROLLBACK — operacao de emergencia nunca "
           "bloqueia (mesma isencao do deployViolation de capacidade)")
 else:

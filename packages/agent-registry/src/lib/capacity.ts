@@ -40,17 +40,6 @@ export function slotDeclared(configJson: unknown): number {
   return typeof v === "number" && v >= 1 ? Math.floor(v) : 1
 }
 
-/** Σ declarada nos slots `current` dos demais pools do tenant (pools com skill deployada). */
-export async function declaredTotalOthers(tenantId: string, excludePoolId: string): Promise<number> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const slots = await (prisma as any).poolSkillSlot.findMany({
-    where: { tenant_id: tenantId, slot: "current", NOT: { pool_id: excludePoolId } },
-  }) as Array<{ skill_id: string | null; config_json: unknown }>
-  return slots
-    .filter(s => !!s.skill_id)
-    .reduce((sum, s) => sum + slotDeclared(s.config_json), 0)
-}
-
 /** Declarada atual do próprio pool (slot `current`; 0 se não há deploy). */
 export async function currentDeclared(tenantId: string, poolId: string): Promise<number> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -72,22 +61,50 @@ export async function deployViolation(
   poolId:   string,
   newDeclared: number,
 ): Promise<Record<string, unknown> | null> {
-  if (newDeclared <= 0) return null
-  const current = await currentDeclared(tenantId, poolId)
-  if (newDeclared <= current) return null            // redução/igual sempre passa
+  return deployViolationBatch(tenantId, [{ poolId, declared: newDeclared }])
+}
+
+/**
+ * PID-16 — a mesma regra para N pools de UMA vez, e é a única implementação dela.
+ *
+ * Julgar o lote pool a pool com `deployViolation` deixaria passar o que a regra existe
+ * para recusar: cada pool lê os DEMAIS do banco, onde o vizinho do lote ainda tem a
+ * declaração antiga — dois aumentos que cabem sozinhos e estouram juntos passariam os
+ * dois. Aqui os "demais" são os pools FORA do lote, e o lote entra com os valores novos.
+ *
+ * Mesmas regras: sem C → fail-open; lote em que NENHUM pool aumenta sempre passa
+ * (redução/igual, re-sync idempotente); com um aumento, vale a soma.
+ */
+export async function deployViolationBatch(
+  tenantId: string,
+  entries:  Array<{ poolId: string; declared: number }>,
+): Promise<Record<string, unknown> | null> {
+  const vivos = entries.filter(e => e.declared > 0)
+  if (vivos.length === 0) return null
+  const atuais = await Promise.all(vivos.map(e => currentDeclared(tenantId, e.poolId)))
+  if (vivos.every((e, i) => e.declared <= atuais[i]!)) return null   // redução/igual sempre passa
   const contracted = await contractedCapacity(tenantId)
   if (contracted === null) return null
-  const others = await declaredTotalOthers(tenantId, poolId)
-  const total  = others + newDeclared
+  const noLote = new Set(vivos.map(e => e.poolId))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const slots = await (prisma as any).poolSkillSlot.findMany({
+    where: { tenant_id: tenantId, slot: "current" },
+  }) as Array<{ pool_id: string; skill_id: string | null; config_json: unknown }>
+  const others = slots
+    .filter(s => !!s.skill_id && !noLote.has(s.pool_id))
+    .reduce((sum, s) => sum + slotDeclared(s.config_json), 0)
+  const requested = vivos.reduce((sum, e) => sum + e.declared, 0)
+  const total     = others + requested
   if (total <= contracted) return null
   return {
     error: "deploy declara concorrência acima da capacidade contratada",
     details: {
       contracted,
       declared_others:  others,
-      requested:        newDeclared,
+      requested,
       declared_total:   total,
       balance_would_be: contracted - total,
+      ...(vivos.length > 1 ? { pools: vivos.map(e => ({ pool_id: e.poolId, requested: e.declared })) } : {}),
     },
   }
 }

@@ -114,7 +114,7 @@ bridge executa o snapshot do slot `current`; `skill.flow` só vale para pool nã
 promote e 5 de um seed de demonstração no `sac_ia` cujo slot nunca mudou — zero deploys reais pelo
 lote, nenhum chamador de UI. A rota responde 410 apontando o caminho do pool, a tool `skill_deploy`
 e o workflow `skill_scheduled_deploy_v1` saíram, as 5 linhas foram apagadas com aprovação do dono, e
-o promote é o único escritor do registro. O promote em lote sobre slots virou a PID-16.)*
+o promote é o único escritor do registro. O promote em lote sobre slots virou a PID-16, fechada no mesmo dia.)*
 
 **(12) O merge de journey descarta evidência nova.** `migrateJourneyContext`
 ([journey.ts:312](../../packages/mcp-server-plughub/src/tools/journey.ts)) copia o hash da journey
@@ -430,6 +430,17 @@ e um bug do runner atinge todas as portas ao mesmo tempo. Precisa de promote em 
 (PID-16 — a PID-08 aposentou o deploy em lote que registrava sem mudar, e o lote de verdade ficou
 para quando houver a primeira skill de plataforma com várias portas).
 
+> **Implementado em 2026-09-14 (PID-16), com o gatilho atingido pela PID-17.**
+> `POST /v1/pool-slots/promote-batch`: lista EXPLÍCITA de pools (o servidor não deduz "todos que
+> rodam o skill"), UM snapshot congelado para o lote, a config de cada pool, e **tudo ou nada** —
+> todos os portões julgados em todos os pools antes de qualquer slot mudar, e uma transação só.
+> Rollback continua por pool. Vermelho medido antes, nos fixtures: o release pool a pool promoveu
+> um pool e parou no segundo. Duas coisas que o contrato não dizia e a implementação decidiu:
+> **(a)** pool cujo `current` já roda exatamente aquele snapshot com aquela config é `unchanged` e
+> não é tocado — promovê-lo apagaria o alvo de rollback com uma cópia de si mesmo (medido nas
+> portas reais: o `previous` do `portabilidade_ia` é o intake antigo); **(b)** a capacidade é
+> somada sobre o LOTE, porque dois aumentos que cabem sozinhos podem estourar juntos.
+
 **v1 = clusters idênticos.** O tier Enterprise de cluster dedicado existe só na especificação
 ([14-multi-tenant.md](../sections/14-multi-tenant.md)); não há helm, k8s nem terraform em `infra/`.
 A v1 assume um schema, uma versão e um conjunto de skills de plataforma. "Idêntico" precisa de
@@ -466,7 +477,8 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-13 | a mesma exigência na RETOMADA, em todas as portas (`handle_resume`, 3 atores) | D6, D10 |
 | PID-14 | `resume_door` — por qual pool a retomada entra (gatilho: 2º pool de entrada) | D7 |
 | PID-15 | o cliente provado cancela a tarefa de aprovação (`rejected`), nunca a decide | D6 |
-| PID-16 | promote em lote sobre slots, com rollback por pool (gatilho ATINGIDO na PID-17: o runner roda em duas portas) | §4 |
+| PID-16 | promote em lote sobre slots (lista explícita, um snapshot, tudo ou nada), rollback por pool | §4 |
+| PID-20 | o lote na tela de Deploy e como tool MCP (gatilho: primeiro consumidor além do release manual) | §4 |
 | PID-17 | portabilidade na porta de plataforma, âncora na linha; pendência ancorada na âncora, não no formulário; confirmação que cancela com `rejected` e sobrevive à ociosidade | D2, D6 |
 | PID-18 | `door_mode` e `accept_resume_key` (gatilho: porta só-entrada/só-retomada, ou canal com chave) | D2, D10 |
 | PID-19 | a porta exige prova para abrir pedido novo — contra a D11 | D11 |

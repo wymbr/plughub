@@ -32,6 +32,12 @@ sl = rd("routes", "pool-slots.ts")
 m = re.search(r'const (\w+)\s*=\s*requireAbacWrite\("skill_flows",\s*"operacao"\)', sl)
 gate = m.group(1) if m else None
 escritas = re.findall(r'poolSlotsRouter\.(put|post|patch|delete)\(\s*"([^"]+)"\s*,\s*([^\n]*)', sl)
+# PID-16: o promote em lote é rota de deploy noutro router, com o MESMO portão importado.
+try:
+    lote = rd("routes", "pool-slots-batch.ts")
+    escritas += re.findall(r'poolSlotsBatchRouter\.(put|post|patch|delete)\(\s*"([^"]+)"\s*,\s*([^\n]*)', lote)
+except OSError:
+    pass
 fatos["rotas_escrita"] = sorted(f"{v.upper()} {p}" for v, p, _ in escritas)
 fatos["rotas_sem_portao"] = sorted(
     f"{v.upper()} {p}" for v, p, resto in escritas if not gate or not resto.lstrip().startswith(gate)

@@ -7,8 +7,15 @@ cópia mutada do probe) e imprime UM JSON com os fatos:
   escritores_deployment   arquivos de agent-registry/src (fora de testes) que chamam
                           skillDeployment.create/createMany/upsert/update/updateMany —
                           uma entrada por chamada. O esperado é EXATAMENTE
-                          ["routes/pool-slots.ts"]: vazio também é sujo (sem escritor
-                          nenhum, a lente fica sem marker e ninguém percebe).
+                          ["lib/slot-promotion.ts"]: vazio também é sujo (sem escritor
+                          nenhum, a lente fica sem marker e ninguém percebe). PID-16: o
+                          escritor saiu de `routes/pool-slots.ts` para a casa única da
+                          mecânica do promote, e por isso o censo ganhou a linha abaixo —
+                          um escritor único que qualquer rota pudesse chamar não provaria
+                          que só PROMOTE registra deploy.
+  chamadores_registro     arquivos que chamam `recordSkillDeployment(` (fora a definição).
+                          Esperado: o promote de um pool e o promote em lote, e nenhum
+                          outro.
   rota_lote_410           o handler de POST "/:skill_id/deploy" existe, responde 410 e
                           não toca o prisma.
   tool_skill_deploy       a tool `skill_deploy` está registrada no mcp-server.
@@ -48,6 +55,18 @@ for d, subdirs, arquivos in os.walk(src):
             n = len(padrao.findall(f.read()))
         escritores += [os.path.relpath(caminho, src).replace(os.sep, "/")] * n
 
+chamadores = []
+chamada = re.compile(r"(?<!function )recordSkillDeployment\s*\(")
+for d, subdirs, arquivos in os.walk(src):
+    subdirs[:] = sorted(s for s in subdirs if s not in ("__tests__", "node_modules"))
+    for a in sorted(arquivos):
+        if not a.endswith(".ts") or a.endswith(".test.ts"):
+            continue
+        caminho = os.path.join(d, a)
+        with open(caminho, encoding="utf-8") as f:
+            if chamada.search(f.read()):
+                chamadores.append(os.path.relpath(caminho, src).replace(os.sep, "/"))
+
 # ── a rota do lote ────────────────────────────────────────────────────────────
 skills = ler("packages/agent-registry/src/routes/skills.ts") or ""
 m = re.search(r'skillsRouter\.post\(\s*"/:skill_id/deploy"', skills)
@@ -73,6 +92,7 @@ seed_exec = "\n".join(l for l in seed.splitlines() if not l.lstrip().startswith(
 
 print(json.dumps({
     "escritores_deployment": escritores,
+    "chamadores_registro": sorted(chamadores),
     "rota_lote_410": rota_410,
     "tool_skill_deploy": "skill_deploy" in registradas,
     "tool_pool_promote": "pool_promote" in registradas,

@@ -24,8 +24,17 @@
 # `CONFIG_MERGE='{"chave": valor}'` ACRESCENTA/sobrescreve chaves nessa config (PID-06:
 # o `resume_requires` que o piso do skill exige) — sem ele só dá para preservar.
 #
+# PID-16 (2026-09-14) — LOTE. `<pool_id>` aceita uma lista separada por vírgula
+# (`limite_ia,portabilidade_ia`), e aí o script NÃO faz N set-next + promote: publica o
+# skill uma vez e chama `POST /v1/pool-slots/promote-batch`, que congela UM snapshot e
+# promove todos ou nenhum. Cada pool fica com a SUA config: sem `CONFIG_MERGE` o servidor
+# herda a do `current` (e recusa, nomeando, o pool cujo `current` roda outro skill);
+# com `CONFIG_MERGE`, o script manda a do `current` de cada pool com as chaves mescladas.
+# `REPLACE_PENDING_NEXT=1` autoriza substituir um `next` pendente. O rollback segue por
+# pool (`POST /v1/pools/:id/rollback`).
+#
 # Uso:
-#   bash infra/scripts/deploy_skill_to_slot.sh <skill_yaml> <pool_id> [âncora]
+#   bash infra/scripts/deploy_skill_to_slot.sh <skill_yaml> <pool_id>[,<pool_id>…] [âncora]
 # Ex.:
 #   bash infra/scripts/deploy_skill_to_slot.sh \
 #     packages/skill-flow-engine/skills/skill_wrapup_detached_v1.yaml \
@@ -135,6 +144,63 @@ if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
 fi
 echo "   ✓ publicado ($CODE)"
 
+# ── LOTE (PID-16) ─────────────────────────────────────────────────────────────
+case "$POOL" in *,*)
+  BATCH_BODY=$(python3 - "$SKILL_ID" "$POOL" "${CONFIG_MERGE:-}" "${REPLACE_PENDING_NEXT:-0}" "$AR" "$TENANT" <<'PY'
+import json, sys, urllib.request
+skill, pools, merge, replace, ar, tenant = sys.argv[1:7]
+pools = [x.strip() for x in pools.split(",") if x.strip()]
+corpo = {"skill_id": skill, "pools": pools}
+if merge:
+    extra = json.loads(merge)
+    configs = {}
+    for p in pools:
+        with urllib.request.urlopen(urllib.request.Request(
+                "%s/v1/pools/%s/slots" % (ar, p), headers={"x-tenant-id": tenant})) as r:
+            d = json.load(r)
+        cur = (d.get("slots") or d).get("current") or {}
+        cfg = dict(cur.get("config_json") or {})
+        cfg.update(extra)
+        configs[p] = cfg
+    corpo["configs"] = configs
+if replace == "1":
+    corpo["replace_pending_next"] = True
+print(json.dumps(corpo))
+PY
+) || { echo "❌ não consegui montar o corpo do lote (CONFIG_MERGE é JSON? os pools existem?)"; exit 1; }
+  echo "── 2. promote-batch $POOL"
+  BCODE=$(curl -s -o /tmp/_deploy_batch.json -w '%{http_code}' -X POST "$AR/v1/pool-slots/promote-batch" "${H[@]}" -d "$BATCH_BODY")
+  if [ "$BCODE" != "200" ]; then
+    echo "❌ lote recusado (HTTP $BCODE) — NENHUM pool foi alterado:"
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+print("   ", d.get("message") or d.get("error"))
+for x in d.get("pools", []): print("    ·", x.get("pool_id"), "—", x.get("error"), "—", (x.get("message") or "")[:300])' /tmp/_deploy_batch.json 2>/dev/null \
+      || head -c 800 /tmp/_deploy_batch.json
+    exit 1
+  fi
+  python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+print("   ✓ lote", d["batch_id"], "· promovidos", d["promoted"], "· inalterados", d["unchanged"])
+for x in d["pools"]: print("    ·", x["pool_id"], x["action"], ("(antes: %s)" % x.get("previous_skill_id")) if x["action"] == "promoted" else "")' /tmp/_deploy_batch.json
+  echo "── 3. conferindo o snapshot promovido em cada pool"
+  FALHOU=0
+  for P in $(printf '%s' "$POOL" | tr ',' ' '); do
+    SNAP=$(slot_field yaml_snapshot "$(curl -s "$AR/v1/pools/$P/slots" "${H[@]}")")
+    if [ -z "$SNAP" ] || [ "$SNAP" = "{}" ]; then
+      echo "   ❌ $P: não consegui LER o yaml_snapshot do current"; FALHOU=1
+    elif [ -n "$ANCHOR" ] && ! printf '%s' "$SNAP" | grep -q -- "$ANCHOR"; then
+      echo "   ❌ $P: âncora '$ANCHOR' AUSENTE do snapshot"; FALHOU=1
+    elif [ -n "$ANCHOR" ]; then
+      echo "   ✅ $P: âncora '$ANCHOR' presente"
+    else
+      echo "   ⚠️  $P: sem âncora — não dá para afirmar QUAL flow foi promovido"
+    fi
+  done
+  exit $FALHOU
+  ;;
+esac
+
 # ── 2. set-next preservando o config_json ─────────────────────────────────────
 SLOTS_RAW=$(curl -s -w '\n__HTTP__%{http_code}' "$AR/v1/pools/$POOL/slots" "${H[@]}")
 SLOTS_CODE=$(printf '%s' "$SLOTS_RAW" | sed -n 's/.*__HTTP__\([0-9]*\)$/\1/p')
@@ -161,7 +227,14 @@ if [ "$SN_CODE" != "200" ]; then
 fi
 
 echo "── 3. promote"
-curl -s -X POST "$AR/v1/pools/$POOL/promote" "${H[@]}" >/dev/null
+# PID-16: a resposta do promote também era descartada. Uma recusa (422 de portão
+# re-julgado no promote) só aparecia no passo 4, e só se a âncora faltasse — com uma
+# âncora que o flow anterior também tivesse, o script dizia "flow NOVO em produção".
+PR_CODE=$(curl -s -o /tmp/_deploy_promote.json -w '%{http_code}' -X POST "$AR/v1/pools/$POOL/promote" "${H[@]}")
+if [ "$PR_CODE" != "200" ]; then
+  echo "❌ promote recusado (HTTP $PR_CODE): $(head -c 600 /tmp/_deploy_promote.json)"
+  exit 1
+fi
 
 # ── 4. VERIFICA o que ficou em `current` ──────────────────────────────────────
 # Sem este passo o script mente com sucesso — foi o defeito que ele existe para

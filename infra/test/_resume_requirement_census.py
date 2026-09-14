@@ -27,8 +27,22 @@ sk = rd("packages/schemas/src/skill.ts")
 f["schema_campo_nos_steps"] = sk.count("resume_requires:       ResumeRequiresFieldSchema.optional()")
 
 ps = rd("packages/agent-registry/src/routes/pool-slots.ts")
-f["deploy_piso_set_next"] = "judgeIdentityFloor(snapshot, config_json" in ps
-f["deploy_piso_promote"] = 'judgeIdentityFloor(\n      nextSlot["yaml_snapshot"]' in ps
+# PID-16: o piso é julgado na casa única dos portões do candidato (`lib/slot-candidate.ts`),
+# e set-next e promote a chamam. Duas metades: a casa julga o piso, e cada momento chama a casa.
+casa = rd("packages/agent-registry/src/lib/slot-candidate.ts")
+casa_julga_piso = "judgeIdentityFloor(snapshot, configJson" in casa
+
+
+def _bloco(ini, fim):
+    a = ps.find(ini)
+    b = ps.find(fim, a + 1) if a >= 0 else -1
+    return ps[a:b] if a >= 0 and b > a else ""
+
+
+f["deploy_piso_set_next"] = casa_julga_piso and "judgeSlotCandidate(" in _bloco(
+    'poolSlotsRouter.put("/slots/:slot"', 'poolSlotsRouter.post("/promote"')
+f["deploy_piso_promote"] = casa_julga_piso and "judgeSlotCandidate(" in _bloco(
+    'poolSlotsRouter.post("/promote"', 'poolSlotsRouter.post("/rollback"')
 
 eng_d = rd("packages/skill-flow-engine/src/steps/delegate.ts")
 eng_c = rd("packages/skill-flow-engine/src/steps/collect.ts")

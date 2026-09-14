@@ -1,5 +1,106 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (7) — PID-16: um release em várias portas é um lote — todos ou nenhum
+
+### 1 · O que foi medido antes de decidir
+
+| medido | valor |
+|---|---|
+| skills com `current` em mais de um pool | **1**: `skill_intake_runner_v1` em `limite_ia` e `portabilidade_ia` |
+| esses dois slots | **1** snapshot distinto e **2** configs distintas |
+| rota de lote no agent-registry | nenhuma — só `set-next`/`promote`/`rollback` por pool (`skill-slots.ts` é stub aposentado) |
+| `skill_deployments` com mais de um pool | 0 (sempre uma linha por promote) |
+| slots `next` pendentes | 3 (`limite_processo` e dois fixtures de probe) |
+
+A propriedade que define o lote veio da medição: **um snapshot, a config de cada pool**. Um release
+feito pool a pool tem dois defeitos que nenhum cuidado conserta: cada `set-next` congela o
+`skill.flow` do SEU instante (uma edição entre dois deles deixa as portas em snapshots diferentes), e
+uma recusa no meio deixa o release pela metade.
+
+**Vermelho ao vivo, antes de tocar em nada**, em fixtures novos (`probe_batch_a` webchat,
+`probe_batch_b` webhook): `skill_nps_v1` pool a pool — `probe_batch_a` **promovido**, `probe_batch_b`
+recusado pelo perfil (`step_fora_do_perfil`). Nada desfaz o primeiro junto.
+
+### 2 · As decisões do dono
+
+- **Lista explícita de pools.** O servidor não deduz "todos que rodam o skill" — o pool é a unidade
+  endereçável, e um pool novo não entra num lote sem ser nomeado.
+- **Tudo ou nada.** Todos os portões julgados em todos os pools antes de qualquer slot mudar.
+- **Rollback por pool**, a rota atual, isenta de portões.
+- **API + script.** Tela de Deploy e tool MCP ficaram para a PID-20, sem consumidor além do release
+  manual.
+
+### 3 · O que mudou
+
+- **`POST /v1/pool-slots/promote-batch`** (`skill_flows.operacao`, tenant e autor da credencial como
+  nas outras rotas de deploy): `{skill_id, pools[], configs?, replace_pending_next?}`. Congela UM
+  snapshot, julga tudo, e troca os slots de todos os pools numa transação; um `SkillDeployment` por
+  pool (`notes = promote-batch:<batch_id> pools=…`) e um `registry.changed` por pool. Recusa: 422
+  `lote_recusado` nomeando cada pool e motivo, e nada muda.
+- **A config é de cada pool.** Sem `configs[pool]`, herda a do `current` — só se o `current` já roda
+  esse skill. Config de outro skill não serve (`config_indefinida`): adivinhar seria promover um deploy
+  que ninguém declarou.
+- **Dois casos que não são silêncio.** `next` pendente é recusado nomeando o que estava lá, salvo
+  `replace_pending_next: true`. Pool cujo `current` já é o mesmo snapshot com a mesma config fica
+  `unchanged` e não é tocado — promovê-lo apagaria o `previous` com uma cópia de si mesmo.
+- **Capacidade somada sobre o lote** (`deployViolationBatch`, e o `deployViolation` de um pool passou a
+  delegar a ele). Julgar pool a pool lia o vizinho do lote com a declaração antiga: dois aumentos que
+  cabem sozinhos passavam juntos.
+- **Uma casa para os portões, outra para a mecânica.** `lib/slot-candidate.ts` (pool humano, snapshot
+  ausente, masked × canais, perfil × steps, config obrigatória, piso de identidade) e
+  `lib/slot-promotion.ts` (troca de slots, `SkillDeployment`). Set-next, promote e lote usam as mesmas
+  funções — eram duas cópias da lista de portões, e o lote seria a terceira. O promote de um pool passa
+  a recusar pool humano (antes só o set-next recusava).
+- **`deploy_skill_to_slot.sh`** aceita `pool_a,pool_b` e aí chama o lote (`CONFIG_MERGE` mescla na
+  config de cada pool; `REPLACE_PENDING_NEXT=1`). De passagem: **o script descartava a resposta do
+  promote** (`>/dev/null`) — a mesma falha já corrigida no set-next —, e uma recusa só aparecia se a
+  âncora faltasse.
+
+### 4 · Quatro censos que liam o texto antigo, movidos junto
+
+A refatoração deixou quatro probes vizinhos vermelhos, e em nenhum o produto estava errado — eles
+mediam a proposição pelo lugar em que ela morava:
+- `probe_batch_deploy_retired`: o escritor único de `SkillDeployment` agora é `lib/slot-promotion.ts`,
+  e o censo ganhou a segunda metade — **quem chama** o escritor (só os dois promotes), porque um
+  escritor único numa lib não prova que só promote registra deploy. A população aceita
+  `promote-batch:`. Mutação nova: outra rota chamando o registro.
+- `probe_deploy_write_principal`: a rota do lote entrou na população de escritas de deploy, com a
+  mutação M1b (lote sem portão). A montagem do lote ficou FORA do par slots/pools, cuja adjacência é o
+  mecanismo da PID-07 e a âncora da M1.
+- `probe_masked_channel_gate` e `probe_resume_requirement`: masked e piso passaram a ser cobrados em
+  duas metades — a casa julga, e set-next e promote chamam a casa.
+
+### 5 · Testes e probe
+
+- **`promote-batch.test.ts`** (21): portão; forma; um snapshot e a config de cada pool numa transação;
+  tudo ou nada com o controle do mesmo lote sem o pool bloqueado; pool inexistente e humano;
+  config indefinida × declarada; next pendente × `replace_pending_next`; `unchanged` com chaves em
+  outra ordem × snapshot diferente; capacidade somada × cada aumento sozinho. Mais um caso no censo de
+  chamadores do registro.
+- **`probe_promote_batch.sh`** — A: casa única dos portões, com mutação. M: a suíte roda sobre uma
+  CÓPIA do `src/` com seis mutações do produto (tudo-ou-nada, capacidade por pool, idêntico promovido,
+  next atropelado, config herdada de outro skill, portões pulados) e cada uma tem de reprovar **por
+  asserção** — reprovar porque a cópia não compila mediria a sintaxe. B: nos fixtures, lote com o pool
+  webhook recusa nomeando só ele e deixa os slots byte a byte; lote válido promove o mesmo snapshot
+  (igual ao flow do skill) com a config de cada pool e um `SkillDeployment` por pool com o batch_id;
+  repetir é `unchanged` e o `previous` sobrevive; rollback de um pool não toca o outro. Rodado duas
+  vezes seguidas (os skills alternam).
+
+### 6 · Verificação
+
+agent-registry **120** (98 → 120) e `tsc` limpo; imagem rebuildada. Verdes ao vivo: `probe_promote_batch`
+(duas rodadas), `probe_batch_deploy_retired`, `probe_deploy_write_principal`, `probe_masked_channel_gate`,
+`probe_resume_requirement`, `probe_skill_profile_steps`, `probe_slot_required_params`,
+`probe_intake_runner`, `probe_gates_manifest_coverage`. **Nas portas reais:** o release do runner em
+`limite_ia,portabilidade_ia` pelo script novo saiu `unchanged` nos dois, com os slots idênticos antes e
+depois — o `previous` do `portabilidade_ia` é o intake antigo, e um re-promote pool a pool o teria
+apagado.
+
+⚠️ **O que ficou de fora, registrado:** tela de Deploy e tool MCP do lote (PID-20). Os fixtures
+`probe_batch_{a,b,c}` ficam de pé e dois deles **rodam** (o lote positivo precisa de `current`): o
+bridge instancia um agente por pool, sem endpoint, e a capacidade declarada sobe 2 (306 → 308 de 410).
+Pools não se apagam, só se desativam.
+
 ## 2026-09-14 (6) — PID-17: a portabilidade entra pela porta, sob quem provou a linha
 
 ### 1 · O que foi medido antes de decidir

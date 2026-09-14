@@ -13,6 +13,7 @@ import { channelEndpointsRouter } from "./routes/channel-endpoints"
 // Skill Versioning Fase E: per-skill SkillVersionSlot aposentado (duplicação do
 // PoolSkillSlot, autoritativo). Rota desmontada; model removido do schema.
 import { poolSlotsRouter }        from "./routes/pool-slots"
+import { poolSlotsBatchRouter }   from "./routes/pool-slots-batch"
 import { operationalRouter }      from "./routes/operational"
 import { contextMapRouter }       from "./routes/context-map"
 import { requireResourceWrite, requireAbacWrite } from "./middleware/require-resource-write"
@@ -52,6 +53,11 @@ app.use(express.json())
 // `next()` e chega ao router de pools com o portão dele.
 app.use("/v1/pools/:pool_id",     poolSlotsRouter)
 app.use("/v1/pools",              requireResourceWrite, poolsRouter)
+// PID-16: o promote em LOTE não mora sob `/v1/pools/:pool_id` — não é de um pool — e traz
+// o mesmo portão de deploy (`skill_flows.operacao`) no próprio router. Fora do par acima
+// de propósito: a ordem dele é o mecanismo da PID-07, e `/v1/pool-slots` não casa com
+// nenhum dos dois prefixos.
+app.use("/v1/pool-slots",         poolSlotsBatchRouter)
 app.use("/v1/skills",             requireAbacWrite("skill_flows", "editar"), skillsRouter)
 app.use("/v1/instances",          instancesRouter)
 app.use("/v1/channels",           requireAbacWrite("config", "channels"), channelsRouter)

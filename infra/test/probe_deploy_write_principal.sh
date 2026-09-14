@@ -89,6 +89,11 @@ CM=$(python3 "$CENSO" "$D"); rm -rf "$D"
 [ "$(jexpr "$CM" "not d['deploy_antes_de_pools']")" = "True" ] && [ "$(julga_censo "$CM")" != "True" ] \
   && ok "M1 (pools montado antes do deploy) acusada" || falha "M1 não acusada: $CM"
 
+D=$(copia_mutada routes/pool-slots-batch.ts 'poolSlotsBatchRouter.post("/promote-batch", requireDeployWrite, async' 'poolSlotsBatchRouter.post("/promote-batch", async')
+CM=$(python3 "$CENSO" "$D"); rm -rf "$D"
+[ "$(jexpr "$CM" "'POST /promote-batch' in d['rotas_sem_portao']")" = "True" ] && [ "$(julga_censo "$CM")" != "True" ] \
+  && ok "M1b (promote em lote sem portão — PID-16) acusada" || falha "M1b não acusada: $CM"
+
 D=$(copia_mutada routes/pool-slots.ts 'poolSlotsRouter.post("/promote", requireDeployWrite, async' 'poolSlotsRouter.post("/promote", async')
 CM=$(python3 "$CENSO" "$D"); rm -rf "$D"
 [ "$(jexpr "$CM" "d['rotas_sem_portao'] == ['POST /promote']")" = "True" ] \

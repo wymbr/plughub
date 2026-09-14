@@ -57,7 +57,7 @@ CENSO_LIMPO="d['gw_portao_no_resume'] == 1 and d['gw_scanner_isento'] == 1 and d
 muta() {  # $1 arquivo relativo · $2 âncora · $3 troca → imprime o censo da cópia
   local d; d=$(mktemp -d)
   mkdir -p "$d/packages"
-  for p in schemas/src agent-registry/src/routes skill-flow-engine/src/steps skill-flow-engine/skills \
+  for p in schemas/src agent-registry/src/routes agent-registry/src/lib skill-flow-engine/src/steps skill-flow-engine/skills \
            e2e-tests/services/skill-flow-service/src channel-gateway/src/plughub_channel_gateway/adapters \
            channel-gateway/src/plughub_channel_gateway/identity mcp-server-plughub/src/tools; do
     mkdir -p "$d/packages/$p"; cp -r "packages/$p/." "$d/packages/$p/"
@@ -94,8 +94,8 @@ CM=$(muta packages/mcp-server-plughub/src/tools/workflow.ts \
   'return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }')
 [ "$(jexpr "$CM" "d['mcp_retornos_crus'] == 1 and d['mcp_saidas_julgadas'] == 1")" = "True" ] \
   && ok "M1 (porta legada devolvendo sem julgar) acusada" || falha "M1 não acusada: $CM"
-CM=$(muta packages/agent-registry/src/routes/pool-slots.ts \
-  'judgeIdentityFloor(snapshot, config_json' 'judgeRequiredConfig(snapshot, config_json')
+CM=$(muta packages/agent-registry/src/lib/slot-candidate.ts \
+  'judgeIdentityFloor(snapshot, configJson' 'judgeRequiredConfig(snapshot, configJson')
 [ "$(jexpr "$CM" "not d['deploy_piso_set_next']")" = "True" ] \
   && ok "M2 (piso fora do set-next) acusada" || falha "M2 não acusada: $CM"
 CM=$(muta packages/skill-flow-engine/skills/skill_limite_processo_v1.yaml \

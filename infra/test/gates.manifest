@@ -333,6 +333,12 @@ probe_intake_runner.sh
 # rejected, ociosidade preservando a pendencia, aliases do mapa padrao) com mutacoes, e ao vivo
 # os tres acessos: nascer com a linha provada, voltar ocioso, confirmar; e um cancelamento.
 probe_portabilidade_door.sh
+# PID-16. Um skill em varias portas era liberado por set-next + promote por pool: snapshots de
+# instantes diferentes e release pela metade na primeira recusa (vermelho ao vivo). O lote
+# congela UM snapshot, mantem a config de cada pool e promove todos ou nenhum. Censo da casa
+# unica dos portoes, mutacoes sobre a SUITE (vermelho por assercao), e ao vivo nos fixtures
+# probe_batch_{a,b,c}: recusa sem mexer, lote valido, repeticao inalterada, rollback por pool.
+probe_promote_batch.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

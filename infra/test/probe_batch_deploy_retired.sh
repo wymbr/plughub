@@ -47,7 +47,7 @@ try:
 except Exception as e:
     print("__ERRO__ %s" % e)' "$2"; }
 
-LIMPO="d['escritores_deployment'] == ['routes/pool-slots.ts'] and d['rota_lote_410'] is True and not d['tool_skill_deploy'] and d['tool_pool_promote'] and not d['workflow_agendado'] and not d['seed_usa_lote'] and d['seed_usa_promote']"
+LIMPO="d['escritores_deployment'] == ['lib/slot-promotion.ts'] and d['chamadores_registro'] == ['routes/pool-slots-batch.ts', 'routes/pool-slots.ts'] and d['rota_lote_410'] is True and not d['tool_skill_deploy'] and d['tool_pool_promote'] and not d['workflow_agendado'] and not d['seed_usa_lote'] and d['seed_usa_promote']"
 
 echo "════════════════════════════════════════════════════════════════════"
 echo " um registro de deploy ainda pode mentir sobre o slot que roda?"
@@ -99,8 +99,10 @@ else
   ok "controle: a cópia sem mutação é limpa"
   muta "lote volta a gravar deployment" packages/agent-registry/src/routes/skills.ts \
     "s.replace('return res.status(410).json({\n    error:   \"deploy_route_retired\",', 'await (prisma as any).skillDeployment.create({ data: {} })\n  return res.status(410).json({\n    error:   \"deploy_route_retired\",', 1)"
-  muta "promote deixa de gravar (zero escritores)" packages/agent-registry/src/routes/pool-slots.ts \
+  muta "promote deixa de gravar (zero escritores)" packages/agent-registry/src/lib/slot-promotion.ts \
     "s.replace('skillDeployment.create(', 'skillDeploymentOff(', 1)"
+  muta "outra rota passa a registrar deploy" packages/agent-registry/src/routes/skills.ts \
+    "s.replace('return res.status(410).json({\n    error:   \"deploy_route_retired\",', 'await recordSkillDeployment({} as any)\n  return res.status(410).json({\n    error:   \"deploy_route_retired\",', 1)"
   muta "tool skill_deploy re-registrada" packages/mcp-server-plughub/src/tools/deploy.ts \
     "s.replace('  server.tool(\n    \"pool_promote\",', '  server.tool(\n    \"skill_deploy\", \"x\", {} as any, async () => ok({}))\n  server.tool(\n    \"pool_promote\",', 1)"
   muta "seed volta ao lote" infra/test/seed_deploy_lens_demo.sh \
@@ -133,11 +135,11 @@ print(sorted(x["skill_id"] for x in d)[0] if d else "")' 2>/dev/null)
   fi
 
   POP=$(docker exec "$PG" psql -U plughub -d plughub_registry -Atc \
-        "select count(*) filter (where notes is distinct from 'promote'), count(*) from skill_deployments" 2>/dev/null)
+        "select count(*) filter (where notes is distinct from 'promote' and coalesce(notes,'') not like 'promote-batch:%'), count(*) from skill_deployments" 2>/dev/null)
   OUTROS=${POP%%|*}; TOTAL=${POP##*|}
   if ! [[ "$TOTAL" =~ ^[0-9]+$ ]]; then incon "população de skill_deployments ilegível ($POP)"
   elif [ "$TOTAL" -eq 0 ]; then incon "skill_deployments vazia — 'só promote' seria verdade vazia"
-  elif [ "$OUTROS" -eq 0 ]; then ok "população: $TOTAL registro(s), todos de promote"
+  elif [ "$OUTROS" -eq 0 ]; then ok "população: $TOTAL registro(s), todos de promote (um pool ou lote — PID-16)"
   else falha "população: $OUTROS de $TOTAL registro(s) não vieram do promote"; fi
 fi
 

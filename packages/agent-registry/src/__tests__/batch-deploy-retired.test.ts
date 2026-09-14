@@ -147,8 +147,11 @@ describe("3b · o escritor único escreve — e, se falhar, não falha mudo", ()
   })
 })
 
-describe("3 · o SkillDeployment tem UM escritor no fonte: o promote", () => {
-  it("censo sobre src/: só `routes/pool-slots.ts` cria SkillDeployment", () => {
+describe("3 · o SkillDeployment tem UM escritor no fonte, e só o PROMOTE o chama", () => {
+  // PID-16: o escritor mudou de casa (`lib/slot-promotion.ts`) para o promote em lote usar
+  // a MESMA mecânica. Escritor único numa lib não prova nada sobre quem registra deploy,
+  // então o censo passou a ter duas metades: quem ESCREVE e quem CHAMA quem escreve.
+  it("censo sobre src/: só `lib/slot-promotion.ts` cria SkillDeployment", () => {
     const raiz = path.resolve(__dirname, "..")
     const escritores: string[] = []
     const varre = (dir: string) => {
@@ -162,6 +165,23 @@ describe("3 · o SkillDeployment tem UM escritor no fonte: o promote", () => {
       }
     }
     varre(raiz)
-    expect(escritores).toEqual(["routes/pool-slots.ts"])
+    expect(escritores).toEqual(["lib/slot-promotion.ts"])
+  })
+
+  it("censo sobre src/: só o promote de um pool e o promote em lote chamam `recordSkillDeployment`", () => {
+    const raiz = path.resolve(__dirname, "..")
+    const chamadores: string[] = []
+    const varre = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const f = path.join(dir, e.name)
+        if (e.isDirectory()) { if (e.name !== "__tests__") varre(f); continue }
+        if (!f.endsWith(".ts")) continue
+        if (/(?<!function )recordSkillDeployment\s*\(/.test(fs.readFileSync(f, "utf8"))) {
+          chamadores.push(path.relative(raiz, f).split(path.sep).join("/"))
+        }
+      }
+    }
+    varre(raiz)
+    expect(chamadores.sort()).toEqual(["routes/pool-slots-batch.ts", "routes/pool-slots.ts"])
   })
 })

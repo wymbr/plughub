@@ -42,6 +42,14 @@ Cross-validations that Zod schemas do not cover happen here.
   > header tenant and declare the author. READS stay open and header-scoped, by decision.
   > Deploy routes (`slots`/`promote`/`rollback`) are gated by `skill_flows.operacao`, mounted
   > BEFORE `/v1/pools` — mount order is the mechanism. Gate: `probe_deploy_write_principal.sh`.
+  > **Batch promote (PID-16, 2026-09-14):** `POST /v1/pool-slots/promote-batch` — explicit
+  > `pools[]`, ONE snapshot of the skill, each pool keeps its own `config_json` (inherited only
+  > when `current` already runs that skill), all-or-nothing (every gate judged on every pool
+  > before any slot moves; one transaction), `next` pending is refused unless
+  > `replace_pending_next`, identical pools are `unchanged` (their `previous` survives).
+  > Rollback stays per pool. The candidate gates live in ONE house (`lib/slot-candidate.ts`) and
+  > the slot mechanics in another (`lib/slot-promotion.ts`), shared by set-next, promote and
+  > batch. Gate: `probe_promote_batch.sh`.
 - Every mutation is recorded in the audit log (created_at, updated_at, created_by)
 - skill_id and agent_type_id are immutable after creation — create a new version
 - Pools cannot be deleted — only deactivated (status: inactive)
