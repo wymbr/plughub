@@ -17,10 +17,10 @@
 #
 # Espera: TENANT, COMPOSE, CG. Erros em PD_ERRO.
 #
-# ⚠️ `pd_aprova` retoma o `suspend reason: approval` pela rota INTERNA sem credencial —
-# medido em 2026-09-14 que ela aceita (registrado como ficha própria). Se a rota passar a
-# exigir credencial, é AQUI que o exercício tem de apresentá-la; o probe acusa como
-# INCONCLUSIVO (a pendência não nasce), nunca como defeito da porta.
+# `pd_aprova` retoma o `suspend reason: approval` como a OPERADORA retomaria: pela porta
+# EXTERNA, com o token como credencial e `decision: approved` (APR-11, decisão do dono em
+# 2026-09-14). Antes ia pela rota interna sem credencial, porque a externa descartava a
+# decisão — e a recusa da operadora virava aprovação.
 
 pd_fixture() {
   local cpf fix
@@ -122,7 +122,7 @@ pd_aprova() {
     [ -n "$tok" ] && break; sleep 1
   done
   [ -n "$tok" ] || { PD_ERRO="o processo $PD_N3 não suspendeu na aprovação"; return 1; }
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$CG/v1/channels/webhook/resume/$tok" \
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$CG/channel/webhook/resume/$tok" \
     -H 'content-type: application/json' -d "{\"tenant_id\":\"$TENANT\",\"payload\":{\"decision\":\"approved\"}}")
   case "$code" in 200|202) ;; *) PD_ERRO="aprovação recusada (HTTP $code) — ver a nota do cabeçalho"; return 1 ;; esac
   for _ in $(seq 1 30); do

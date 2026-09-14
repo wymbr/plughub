@@ -176,8 +176,14 @@ case "$TK" in
       || falha "workflow_resume de S2 não foi recusado: $R2"
     c=$(command curl -s -o /tmp/_pid13_ext.json -w '%{http_code}' --max-time 20 -X POST "$CG/channel/webhook/resume/$TK" \
         -H 'content-type: application/json' -d "{\"tenant_id\":\"$TENANT\",\"payload\":{\"decision\":\"input\"}}")
+    # APR-11 (2026-09-14): este token é da tarefa de APROVAÇÃO do limite, que declara
+    # capacidade — a porta externa agora a recusa ANTES, por capacidade (401), e a exigência
+    # de identidade (403) nem chega a ser julgada. As duas são recusa anônima; a 403 pela
+    # porta externa em pendência sem capacidade segue coberta em `test_resume_requirement_gate.py`.
     if [ "$c" = "403" ] && grep -q resume_requires_unproven /tmp/_pid13_ext.json; then
       ok "rota externa anônima: 403 resume_requires_unproven"
+    elif [ "$c" = "401" ] && grep -q "credential required for approvals.decide" /tmp/_pid13_ext.json; then
+      ok "rota externa anônima: 401 — tarefa de aprovação não se decide por esta porta (APR-11)"
     else
       falha "rota externa deu $c: $(head -c 200 /tmp/_pid13_ext.json)"
     fi

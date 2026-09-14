@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (9) — APR-11: a porta externa decide o que é de sistema, e só isso
+
+### 1 · A decisão do dono
+
+Num `suspend reason: approval` o aprovador é um **sistema** (a operadora, na portabilidade), e a posse
+do `resume_token` — opaco, de uso único — é a credencial. Recusados: exigir pessoa (nenhuma operadora
+tem login; o processo real ficaria sem aprovador) e exigir identidade de serviço (registro de integração
+novo para uma população de **um** skill de demo). A porta certa para um sistema é a EXTERNA,
+`/channel/webhook/resume/{token}`.
+
+### 2 · O que foi medido ao implementar — três defeitos na mesma porta, vermelhos ao vivo
+
+| medido antes | resultado |
+|---|---|
+| `suspend reason: approval` no repositório | **1** (`solicitar_operadora`); os outros 3 `suspend` são `input` |
+| R1 — a operadora manda `rejected` pela porta externa | **200**, e o processo seguiu **APROVADO** (a pendência de confirmação nasceu) |
+| R2 — tarefa de promoção de deploy, rota interna sem credencial | 401 (AUT-46) |
+| R2 — a mesma tarefa pela porta externa, sem credencial | **200**, terminou em **`efetuar_promocao`** |
+
+- **R1:** a porta externa descartava `decision` (e `source`) do corpo, e o bridge assume `input` →
+  `on_resume`. Pela porta que a decisão chama de certa, um sistema conseguia aprovar e **não
+  conseguia recusar** — e a recusa virava aprovação.
+- **R2:** a AUT-46 fechou a rota interna; a externa chamava `handle_resume` direto, sem
+  `resume_required_abac`. E o fluxo não se defendeu: o carimbo `verification_class` só era escrito
+  com aprovador ou `field_edits`, então o resume anônimo chegou **sem carimbo**, e o portão
+  `$.pipeline_state.aprovar.verification_class == claimed` não disparou.
+- **E o carimbo era `setdefault`:** o chamador podia declarar `verification_class: possessed` no
+  próprio corpo. A tela de Processos já tinha tirado o `resume_token` da vista por *"quem o tem
+  retoma pela porta externa sem portão nenhum"* (ORQ-10) — o portão faltava na porta.
+
+### 3 · O que mudou
+
+- **`resume_authority.py`** — casa única de duas perguntas: `judge_external_decision` (a decisão que
+  a porta externa aceita, pelo motivo do suspend) e `server_trust_stamp` (a confiança do autor).
+- **Porta externa:** tarefa que declara capacidade → **401** antes de tudo (a regra da AUT-46, que
+  valia numa porta só). `approved`/`rejected` só onde o registro do token diz
+  `suspend_reason: approval`, e ali **sem decisão válida é 422** — aprovação nunca é o default, e
+  `timeout` segue sendo de quem tem principal. Nos demais resumes `decision` e `source` seguem
+  descartados, como antes.
+- **`handle_resume`:** o carimbo vem do servidor em TODO resume e sobrescreve — `claimed`/`system`
+  sem principal, o do aprovador com ele. Corpo que declara outra coisa é descartado com log.
+- **`_portabilidade_door_exercise.sh`:** `pd_aprova` aprova como a operadora, pela porta externa com
+  `decision: approved`, em vez da rota interna sem credencial.
+
+### 4 · Testes e probe
+
+- channel-gateway **998** (960 → 998): `test_resume_authority.py` — decisão por motivo, recusa
+  sem decisão, `timeout` de fora, 401 por capacidade, carimbo anônimo, corpo que declara `possessed`,
+  e o controle do aprovador verificado.
+- **`probe_external_resume_authority.sh`** — A: a porta externa julga capacidade e decisão ANTES de
+  retomar, e o carimbo sobrescreve (com mutação). M: 5 mutações dentro da imagem, cada uma vermelha por
+  asserção. B, com peças reais: aprovação sem decisão 422 e token vivo; `timeout` de fora 422; a
+  recusa termina em `encerrar_rejeitado`; a aprovação cria a pendência (controle); a promoção pela
+  porta externa, declarando `possessed`, 401 e a tarefa viva — encerrada pelo aprovador no fim.
+- `probe_resume_requirement`: o token do ramo E é da APROVAÇÃO do limite, que declara capacidade — a
+  porta externa agora a recusa antes (401) de julgar a exigência (403). As duas são recusa anônima; o
+  ramo aceita as duas nomeando qual veio.
+
+### 5 · Verificação
+
+Imagem do channel-gateway rebuildada. Verdes ao vivo: `probe_external_resume_authority`,
+`probe_resume_requirement`, `probe_portabilidade_door` (aprovando pela porta externa),
+`gate_external_resume` (a porta segue aberta a tarefa sem capacidade), `gate_resume_scope_is_not_optional`,
+`gate_family_b_resume_closes`, `probe_resume_approver_authz`, `probe_customer_cancel`,
+`probe_evidence_transport`, `smoke_approval_segment_closes`, `smoke_resume_terminal_once`,
+`smoke_limite_tres_acessos` (19/0, com a decisão do aprovador), `probe_intake_runner`, `probe_edge_surface`.
+
+⚠️ **Resíduo das medições:** processos de portabilidade de fixture (clientes `__probe_pid17__`) — os
+recusados terminaram; os aprovados (inclusive o do vermelho R1, em que a recusa virou aprovação)
+deixaram pendência de confirmação, que vence no prazo: a exigência de OTP recusa o encerramento
+anônimo, e é o comportamento certo. As tarefas de promoção foram encerradas pelo aprovador.
+
 ## 2026-09-14 (8) — PID-09: a chegada pelo WhatsApp prova a posse, e toda prova diz de quem é
 
 ### 1 · O que foi medido antes de decidir

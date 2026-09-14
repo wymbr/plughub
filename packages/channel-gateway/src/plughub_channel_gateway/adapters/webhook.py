@@ -71,6 +71,7 @@ from ..collect_requirements import (
 from ..config import Settings
 from ..dialog_form_pin import resolve_published_version
 from ..identity import IdentityIndex, OtpService, PendingEntry
+from ..resume_authority import server_trust_stamp
 from ..identity.region import PhoneRegionConfig
 from ..identity.index import PROVENANCE_AUTHORITATIVE
 from .base import ChannelAdapter
@@ -1014,6 +1015,12 @@ class WebhookAdapter(ChannelAdapter):
         except Exception:
             return None
 
+    async def resume_suspend_reason(self, tenant_id: str, resume_token: str) -> str | None:
+        """APR-11 — o motivo do suspend deste token, do registro por token (None se ausente)."""
+        meta = await self._read_resume_meta(tenant_id, resume_token)
+        motivo = (meta or {}).get("suspend_reason")
+        return str(motivo) if motivo else None
+
     async def resume_task_pool(
         self, tenant_id: str, resume_token: str
     ) -> str | None:
@@ -1634,18 +1641,22 @@ class WebhookAdapter(ChannelAdapter):
 
         # A5.5 — expõe a classe de confiança do AUTOR no payload do resume, para o
         # `choice` do workflow gatear ($.pipeline_state.<delegate>.verification_class
-        # contra o limiar declarado no passo). Só em resumes de aprovação; sem approver
-        # (externo/sistema) → claimed. O limiar (session.approval_threshold) é convenção
-        # de autoria no context do delegate; o default seguro (possessed) mora no A5.4.
-        if approver is not None or isinstance(payload.get("field_edits"), list):
-            payload.setdefault(
-                "verification_class",
-                approver.get("verification_class", "possessed") if approver else "claimed",
+        # contra o limiar declarado no passo). O limiar (session.approval_threshold) é
+        # convenção de autoria no context do delegate; o default seguro mora no A5.4.
+        #
+        # ⚠️ APR-11 (2026-09-14): o carimbo é do SERVIDOR, em TODO resume, e sobrescreve.
+        # Era `setdefault` e só com aprovador ou `field_edits` — medido ao vivo: resume
+        # anônimo da promoção de deploy chegou SEM carimbo, o portão `== claimed` do fluxo
+        # não disparou e a tarefa terminou em `efetuar_promocao`; e o chamador podia
+        # declarar `possessed` no próprio corpo.
+        carimbo = server_trust_stamp(approver)
+        declarado = {k: payload.get(k) for k in carimbo if k in payload and payload.get(k) != carimbo[k]}
+        if declarado:
+            logger.warning(
+                "APR-11: resume token=%s (session=%s) declarou %s no corpo — descartado; "
+                "a confiança do autor é do servidor (%s)", resume_token, session_id, declarado, carimbo,
             )
-            payload.setdefault(
-                "principal_type",
-                approver.get("principal_type", "human") if approver else "system",
-            )
+        payload.update(carimbo)
 
         now_iso = datetime.now(timezone.utc).isoformat()
 

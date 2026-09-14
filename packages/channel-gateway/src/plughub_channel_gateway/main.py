@@ -39,6 +39,7 @@ from .adapters.webhook import ResumeAlreadyTerminalError, WebhookAdapter
 from .adapters.webrtc import WebRTCAdapter
 from .adapters.whatsapp import WhatsAppAdapter
 from .arrival_evidence import ArrivalEvidenceRecorder
+from .resume_authority import judge_external_decision
 from .attachment_store import (
     AttachmentStore,
     FilesystemAttachmentStore,
@@ -2323,15 +2324,46 @@ async def external_webhook_resume(
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
+    # APR-11 — a regra da AUT-46 vale nas DUAS portas. Tarefa que declara capacidade
+    # (aprovação humana → approvals.decide) não é decidida por esta porta, que não tem
+    # principal: medido ao vivo, a promoção de deploy que a rota interna recusa com 401
+    # foi APROVADA por aqui. Quem tem o Bearer usa a porta interna.
+    required_abac = await _webhook_adapter.resume_required_abac(body.tenant_id, resume_token)
+    if required_abac is not None:
+        _mod, _field = required_abac
+        logger.warning(
+            "APR-11 401: resume EXTERNO de tarefa que exige %s.%s (token=%s tenant=%s) — "
+            "esta porta não tem principal", _mod, _field, resume_token, body.tenant_id,
+        )
+        raise HTTPException(status_code=401, detail=f"resume: credential required for {_mod}.{_field} tasks")
+
     # Saneamento do payload ANTES de qualquer uso. Campos de autoridade são
     # removidos, não validados: recusar com 4xx ensinaria ao chamador que eles
     # existem, e aceitar-os-ignorando é o comportamento que já se espera de um
     # corpo livre.
     safe_payload = dict(body.payload or {})
+    pedida = safe_payload.get("decision")
     _dropped = [k for k in ("source", "decision") if k in safe_payload]
     for k in _dropped:
         safe_payload.pop(k, None)
     safe_payload["source"] = "external"
+
+    # APR-11 — decisão do dono: num `suspend reason: approval` o aprovador é um SISTEMA e
+    # o token é a credencial; a decisão dele (approved | rejected) é o conteúdo do resume.
+    # Medido antes: descartada aqui, o bridge assumia `input` e a RECUSA da operadora
+    # seguia como aprovação. Sem decisão válida, recusa — aprovação nunca é o default.
+    veredito, valor = judge_external_decision(
+        pedida, await _webhook_adapter.resume_suspend_reason(body.tenant_id, resume_token),
+    )
+    if veredito == "refuse":
+        logger.warning(
+            "APR-11 422: resume externo de aprovação sem decisão válida (%r) token=%s tenant=%s",
+            pedida, resume_token, body.tenant_id,
+        )
+        raise HTTPException(status_code=422, detail=valor)
+    if veredito == "accept":
+        safe_payload["decision"] = valor
+        _dropped = [k for k in _dropped if k != "decision"]
     if _dropped:
         logger.info(
             "external resume: campo(s) de autoridade descartado(s) %s do payload "

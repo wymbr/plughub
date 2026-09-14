@@ -345,6 +345,12 @@ probe_promote_batch.sh
 # (todo julgamento com cliente; equivalencia; so assinatura conferida autentica), mutacoes sobre
 # as suites de schemas, mcp e gateway, e ao vivo com webhook da Meta ASSINADO e simulado.
 probe_arrival_evidence.sh
+# APR-11. A porta EXTERNA de resume descartava a decisao (a recusa da operadora seguia aprovada),
+# nao aplicava a regra da AUT-46 (a promocao de deploy foi aprovada sem credencial) e o carimbo
+# de confianca era do chamador. Censo da ordem na porta e do carimbo, mutacoes sobre a suite na
+# imagem, e ao vivo: aprovacao sem decisao 422, recusa encerra rejeitado, aprovacao cria a
+# pendencia (controle), promocao pela porta externa 401 com a tarefa viva.
+probe_external_resume_authority.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,

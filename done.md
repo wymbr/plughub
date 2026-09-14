@@ -130,6 +130,7 @@ história no `CHANGELOG.md`.)*
 
 | id | tarefa | fechada em | âncora |
 |---|---|---|---|
+| APR-11 | **Pela porta externa de resume, um sistema decide o que é dele — aprovar OU recusar — e só isso.** Decisão do dono: num `suspend reason: approval` o aprovador é um SISTEMA (a operadora) e o token de uso único é a credencial. Implementar a decisão mediu três defeitos na MESMA porta, os três **vermelhos ao vivo**: a porta externa descartava `decision` e o bridge assume `input` — a operadora RECUSOU a portabilidade e o processo seguiu APROVADO; a porta externa não aplicava a regra da AUT-46 — a promoção de deploy, 401 na rota interna, foi APROVADA sem credencial (`efetuar_promocao`); e o carimbo `verification_class` só existia com aprovador, por `setdefault` — o resume anônimo passava sem carimbo pelo portão `== claimed` do fluxo, e o chamador podia declarar `possessed`. Agora a porta externa aceita `approved`/`rejected` só onde o registro do token diz `suspend_reason: approval` (e ali sem decisão é 422, nunca aprovação por default), recusa com 401 a tarefa que declara capacidade, e o `handle_resume` carimba a confiança do autor do servidor, em todo resume. Casa única `resume_authority.py`. O exercício da portabilidade passou a aprovar pela porta externa. Gate `probe_external_resume_authority.sh`; o `probe_resume_requirement` aceita a recusa anônima pela capacidade | 2026-09-14 | `CHANGELOG.md` § 2026-09-14 (9) |
 | APR-08 | v1 da aprovação humana — A1–A5, validadas E2E | 2026-07-17 | `CHANGELOG.md:16316` |
 
 ---
