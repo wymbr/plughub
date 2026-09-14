@@ -1,0 +1,99 @@
+{
+  "form_id": "dialog_portabilidade_roteiro",
+  "name": "Portabilidade — roteiro da porta",
+  "description": "O ROTEIRO da porta da portabilidade (PID-17, 2026-09-14): as frases que o cliente lê na porta de plataforma `skill_intake_runner_v1`, configurada pelo pool `portabilidade_ia` (`dialog_form_id`). A âncora é a PRÓPRIA LINHA a portar (`anchor_kind: phone`) e o código vai a um celular do titular (`proof_anchor_kind: phone`) — por isso a porta pergunta o número duas vezes, e o texto diz por quê. Os ids dos nós são os ids dos STEPS do runner, para a correspondência ser auditável.",
+  "default_locale": "pt-BR",
+  "locales": [
+    "pt-BR"
+  ],
+  "tags": [
+    "portabilidade",
+    "roteiro"
+  ],
+  "nodes": [
+    {
+      "id": "saudacao",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Olá! Vou te ajudar com a portabilidade do seu número. O processo leva de 1 a 3 dias úteis."
+      }
+    },
+    {
+      "id": "coletar_contato",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Qual é o número de celular que deseja portar? Informe com o código do país e o DDD (ex: 55 11 99999-0001)."
+      }
+    },
+    {
+      "id": "oferecer_verificacao",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "A portabilidade exige confirmar que a linha é sua. Posso enviar um código de verificação?"
+      }
+    },
+    {
+      "id": "coletar_ancora_prova",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Para qual celular devo enviar o código? Informe um número cadastrado como seu (pode ser a própria linha a portar), com o código do país e o DDD."
+      }
+    },
+    {
+      "id": "avisar_codigo_nao_enviado",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Não consegui enviar o código de verificação. Vou te transferir para um atendente, que pode confirmar a titularidade da linha. Um instante..."
+      }
+    },
+    {
+      "id": "avisar_transferencia",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Sem problemas, vou te transferir para um atendente. Um instante..."
+      }
+    },
+    {
+      "id": "avisar_encerramento_verificacao",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Sem confirmar a titularidade não consigo prosseguir com a portabilidade agora. Você pode tentar de novo quando quiser."
+      }
+    },
+    {
+      "id": "avisar_verificacao_falhou",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Não consegui confirmar o código. Vamos seguir com uma solicitação nova."
+      }
+    },
+    {
+      "id": "confirmar_recebimento",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "📋 Recebido! Vou registrar sua solicitação de portabilidade. Um instante..."
+      }
+    },
+    {
+      "id": "avisar_registro",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "✅ Solicitação de portabilidade registrada! Em até 48 horas úteis a operadora responde.\n\nQuando ela aprovar, volte aqui para confirmar a transferência — eu te reconheço pelo número."
+      }
+    },
+    {
+      "id": "avisar_indisponivel",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Não consegui registrar sua solicitação agora. Pode tentar novamente em alguns minutos?"
+      }
+    },
+    {
+      "id": "avisar_timeout",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Sua sessão expirou por inatividade. É só entrar em contato de novo quando quiser."
+      }
+    }
+  ]
+}

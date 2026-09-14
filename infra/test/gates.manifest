@@ -328,6 +328,11 @@ probe_batch_deploy_retired.sh
 # forma configurada, slot vivo com a config exigida) e o acesso 1 ao vivo com a injecao que o
 # intake antigo aceitava: um campo do formulario trocava a ancora do processo.
 probe_intake_runner.sh
+# PID-17. A portabilidade entrou pela mesma porta, com a ancora na propria LINHA. Censo (numero
+# fora do formulario, pendencia ancorada na linha e nao no campo do formulario, cancelar com
+# rejected, ociosidade preservando a pendencia, aliases do mapa padrao) com mutacoes, e ao vivo
+# os tres acessos: nascer com a linha provada, voltar ocioso, confirmar; e um cancelamento.
+probe_portabilidade_door.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,
@@ -659,13 +664,14 @@ smoke_wrapup_slot_handoff.sh
 # tranquilidade da decisao (mesma separacao de `_SCOPE_EXEMPT` x `_SCOPE_DEBT`
 # na analytics-api).
 
-# -- ferramenta (6) --
+# -- ferramenta (7) --
 # o proprio runner e o helper de credencial: sao PECA, nao unidade medida
 =_auth.sh                                             ferramenta
 =_resume_requirement_setup.sh                         ferramenta
 =_resume_access3_exercise.sh                          ferramenta
 =_customer_cancel_exercise.sh                         ferramenta
 =_intake_runner_exercise.sh                           ferramenta
+=_portabilidade_door_exercise.sh                      ferramenta
 =run_gates.sh                                         ferramenta
 
 # -- provisionamento (24) --

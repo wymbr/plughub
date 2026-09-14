@@ -9,12 +9,16 @@ mutada do probe) e imprime UM JSON de fatos:
                            (`dialog_runner`, `dialog_otp_possession`). Tudo o que é do
                            processo tem de vir de `$.config.*` ou da pendência.
   context_json_no_runner   o runner dispara o processo por template de texto (a injeção)
-  nos_ausentes             `render.by_node.<nó>` referenciado pelo runner ou pela
-                           continuidade que NÃO existe no roteiro configurado para o
-                           `limite_ia` — referência a nó ausente resolve para texto VAZIO
-  config_faltando          `config_params` obrigatórios do runner que o seed do `limite_ia`
-                           não declara
-  intake_antigo            sobra do `skill_limite_entrada_v1` (arquivo ou id)
+  portas                   pools do seed que rodam o runner (PID-17: é POPULAÇÃO, não o
+                           `limite_ia` — a porta da portabilidade entrou no mesmo censo)
+  nos_ausentes             `<pool>:<nó>` — `render.by_node.<nó>` referenciado pelo runner
+                           (e, no `limite_ia`, pela continuidade que lê o mesmo roteiro)
+                           que NÃO existe no roteiro configurado para aquele pool —
+                           referência a nó ausente resolve para texto VAZIO
+  config_faltando          `<pool>:<chave>` — `config_params` obrigatórios do runner que o
+                           seed do pool não declara
+  intake_antigo            sobra dos intakes substituídos (`skill_limite_entrada_v1`,
+                           `skill_portabilidade_intake_v1`: arquivo ou seed)
   retorno_le_sessao        o `limite_retorno` ainda lê o resultado de `@ctx.session.*`
   choice_le_config         o `choice` do engine enxerga `$.config.*`
   choice_le_journey        a condição `@ctx.journey.*` do `choice` lê o hash da journey
@@ -71,26 +75,36 @@ for st in runner.get("steps") or []:
 
 context_json = any("context_json" in (st.get("input") or {}) for st in runner.get("steps") or [])
 
-# o roteiro que o limite_ia usa, lido do SEED do pool
+# o roteiro de CADA porta, lido do SEED do pool
 seed = yml("infra/registry/tenant_demo.yaml") or {}
-pool = next((p for p in seed.get("pools") or [] if p.get("pool_id") == "limite_ia"), {})
-cfg = ((pool.get("deploy") or {}).get("config") or {})
-form_id = cfg.get("dialog_form_id") or ""
-nos = set()
-forma = ler("infra/dialog/%s.json" % form_id) if form_id else None
-if forma:
-    nos = {n.get("id") for n in json.loads(forma).get("nodes", [])}
-refs = set(re.findall(r"render\.by_node\.([a-z0-9_]+)", runner_txt + "\n" + cont_txt))
-nos_ausentes = sorted(refs - nos) if forma else ["<roteiro do limite_ia ilegível: %s>" % form_id]
-
+pools = seed.get("pools") or []
+portas = [p for p in pools if (p.get("deploy") or {}).get("skill_id") == "skill_intake_runner_v1"]
+refs_runner = set(re.findall(r"render\.by_node\.([a-z0-9_]+)", runner_txt))
+refs_cont = set(re.findall(r"render\.by_node\.([a-z0-9_]+)", cont_txt))
+refs = refs_runner | refs_cont
 obrig = [p["key"] for p in runner.get("config_params") or [] if p.get("required")]
-config_faltando = [k for k in obrig if cfg.get(k) in (None, "", [], {})]
+nos_ausentes, config_faltando = [], []
+for pool in portas:
+    pid = pool.get("pool_id")
+    cfg = ((pool.get("deploy") or {}).get("config") or {})
+    config_faltando += ["%s:%s" % (pid, k) for k in obrig if cfg.get(k) in (None, "", [], {})]
+    form_id = cfg.get("dialog_form_id") or ""
+    forma = ler("infra/dialog/%s.json" % form_id) if form_id else None
+    if not forma:
+        nos_ausentes.append("%s:<roteiro ilegível: %s>" % (pid, form_id))
+        continue
+    nos = {n.get("id") for n in json.loads(forma).get("nodes", [])}
+    # a continuidade do limite lê o roteiro do limite; a da portabilidade não usa roteiro
+    esperados = refs if pid == "limite_ia" else refs_runner
+    nos_ausentes += ["%s:%s" % (pid, n) for n in sorted(esperados - nos)]
 
 intake_antigo = []
-if os.path.exists(os.path.join(SK, "skill_limite_entrada_v1.yaml")):
-    intake_antigo.append("arquivo")
-if pool and (pool.get("deploy") or {}).get("skill_id") == "skill_limite_entrada_v1":
-    intake_antigo.append("seed do limite_ia")
+for arq in ("skill_limite_entrada_v1.yaml", "agente_portabilidade_intake_v1.yaml"):
+    if os.path.exists(os.path.join(SK, arq)):
+        intake_antigo.append("arquivo " + arq)
+for pool in pools:
+    if (pool.get("deploy") or {}).get("skill_id") in ("skill_limite_entrada_v1", "skill_portabilidade_intake_v1"):
+        intake_antigo.append("seed do " + str(pool.get("pool_id")))
 
 retorno = ler("packages/skill-flow-engine/skills/skill_limite_retorno_v1.yaml") or ""
 retorno_le_sessao = sorted(set(re.findall(
@@ -109,7 +123,7 @@ print(json.dumps({
     "runner_presente":         runner.get("id") == "skill_intake_runner_v1",
     "literais_de_dominio":     literais,
     "context_json_no_runner":  context_json,
-    "roteiro":                 form_id,
+    "portas":                  sorted(p.get("pool_id") for p in portas),
     "refs_by_node":            len(refs),
     "nos_ausentes":            nos_ausentes,
     "config_faltando":         config_faltando,

@@ -1,0 +1,56 @@
+{
+  "form_id": "dialog_portabilidade_solicitacao",
+  "name": "Solicitação de portabilidade",
+  "description": "Coleta dos dados do pedido de portabilidade na porta de plataforma (PID-17, 2026-09-14). O NÚMERO a portar não é campo deste formulário: é a âncora que a porta identificou, e o processo o lê de `session.phone`, que o gatilho escreve POR ÚLTIMO — um campo daqui não consegue trocá-lo. Cada campo vira `session.<id>` no processo `portabilidade_processo_ia`.",
+  "default_locale": "pt-BR",
+  "locales": [
+    "pt-BR"
+  ],
+  "tags": [
+    "portabilidade"
+  ],
+  "nodes": [
+    {
+      "id": "intro",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Vou registrar sua solicitação de portabilidade. Faltam só dois dados."
+      }
+    },
+    {
+      "id": "dados",
+      "kind": "question",
+      "prompt": {
+        "pt-BR": "Preencha os dados da portabilidade:"
+      },
+      "interaction": "form",
+      "output_key": "dados",
+      "timeout_s": 300,
+      "fields": [
+        {
+          "id": "operadora_destino",
+          "label": {
+            "pt-BR": "Operadora de destino"
+          },
+          "type": "select",
+          "required": true,
+          "options": [
+            { "id": "claro",  "label": { "pt-BR": "Claro" } },
+            { "id": "vivo",   "label": { "pt-BR": "Vivo" } },
+            { "id": "tim",    "label": { "pt-BR": "TIM" } },
+            { "id": "oi",     "label": { "pt-BR": "Oi" } },
+            { "id": "outras", "label": { "pt-BR": "Outra operadora" } }
+          ]
+        },
+        {
+          "id": "contact_identifier",
+          "label": {
+            "pt-BR": "Celular ou e-mail para avisarmos da aprovação"
+          },
+          "type": "text",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

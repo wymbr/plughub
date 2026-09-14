@@ -172,6 +172,16 @@ acumula os dois papéis.
 > processo: repassá-los pelo `delegate.context` foi recusado pelo cadastro do ContextStore (nome de tag
 > decidido em runtime). A D11 (*abrir processo novo nunca exige identificação*) **não é cumprida** pela
 > porta, por paridade com o intake que ela substituiu — PID-19.
+>
+> **A segunda porta entrou em 2026-09-14 (PID-17): `portabilidade_ia`, com a âncora na própria LINHA
+> a portar** (`anchor_kind: phone`, `proof_anchor_kind: phone`). O número provado é o número portado:
+> não é campo do formulário, e o processo o lê de `session.phone`, escrito por último pelo gatilho.
+> Duas lições de contrato que a primeira porta não ensinava, porque identificava por CPF:
+> **(a)** a âncora da PENDÊNCIA é a chave `phone`/`email`/`cpf`/`princ` do `delegate.context` do
+> processo — e `contact_identifier` também é lida como âncora, então um campo com esse nome no
+> formulário decide sob quem a pendência nasce (medido ao vivo: cliente provisionado a partir do texto
+> digitado); **(b)** as `anchors` do gatilho escrevem `session.<kind>`, e só `session.cpf` estava no
+> mapa padrão — `session.phone`/`session.email` entraram como aliases de `session.cliente.*`.
 
 ### D3 · Mecanismos são agentes de plataforma; o orquestrador é dono da composição
 
@@ -456,8 +466,8 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-13 | a mesma exigência na RETOMADA, em todas as portas (`handle_resume`, 3 atores) | D6, D10 |
 | PID-14 | `resume_door` — por qual pool a retomada entra (gatilho: 2º pool de entrada) | D7 |
 | PID-15 | o cliente provado cancela a tarefa de aprovação (`rejected`), nunca a decide | D6 |
-| PID-16 | promote em lote sobre slots, com rollback por pool (gatilho: 1ª skill de plataforma com várias portas) | §4 |
-| PID-17 | intake da portabilidade na porta de plataforma + seus três defeitos | D2 |
+| PID-16 | promote em lote sobre slots, com rollback por pool (gatilho ATINGIDO na PID-17: o runner roda em duas portas) | §4 |
+| PID-17 | portabilidade na porta de plataforma, âncora na linha; pendência ancorada na âncora, não no formulário; confirmação que cancela com `rejected` e sobrevive à ociosidade | D2, D6 |
 | PID-18 | `door_mode` e `accept_resume_key` (gatilho: porta só-entrada/só-retomada, ou canal com chave) | D2, D10 |
 | PID-19 | a porta exige prova para abrir pedido novo — contra a D11 | D11 |
 | IDN-06 | credencial nas rotas de identidade do channel-gateway | (7) |

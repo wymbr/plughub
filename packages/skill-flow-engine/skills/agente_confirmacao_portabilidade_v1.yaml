@@ -2,28 +2,34 @@
 # Agente de I/O para confirmação de portabilidade (Tier 3 — I/O atômico)
 #
 # Pool: portabilidade_confirmacao
-# Acionado por: delegate() step em skill_portabilidade_demo_v1
+# Acionado por DOIS chamadores, e o discriminador é `session.customer_present`:
+#   - `skill_portabilidade_demo_v1` (delegate `notificar_e_confirmar`), sem cliente vivo:
+#     adia em silêncio e a pendência `offer` fica indexada para a volta do cliente;
+#   - a porta de plataforma `skill_intake_runner_v1` (pool `portabilidade_ia`, config
+#     `on_pending_pool`), com o cliente conectado e PROVADO: é a continuidade do domínio.
 #
-# Recebe via ContextStore (escrito pelo delegate step):
-#   core.workflow.resume_token  — token para retomar o workflow pai
-#   session.contact_identifier     — número/email do cliente para contato
-#   session.numero_atual           — número que está sendo portado
-#   session.operadora_destino      — operadora de destino
+# Recebe via ContextStore:
+#   core.workflow.resume_token          — token da pendência (retoma o processo)
+#   core.workflow.delegate_resume_token — token de quem chamou (devolve a conversa)
+#   session.customer_present / session.resume_origin — escritos pelo delegate da porta
+#   journey.numero_atual / journey.operadora_destino — gravados pelo processo ao nascer
+#     (PID-17: a porta não conhece os campos do domínio e não os repassa)
 #
-# Fluxo:
-#   1. notificar_aprovacao — notify: informa ao cliente que a portabilidade foi aprovada
-#   2. coletar_confirmacao — menu: pede confirmação do cliente (sim/não)
-#   3. retornar_confirmado / retornar_cancelado / retornar_timeout
-#      — invoke: chama workflow_resume com o resultado
-#   4. finalizar — complete
+# Três respostas do cliente, três destinos — PID-17 (2026-09-14):
+#   confirmar → `input` no processo (on_resume → encerrar_sucesso)
+#   cancelar  → `rejected` no processo (on_reject → encerrar_cancelado). Até a PID-17 o
+#               cancelamento também ia como `input`, e o processo o registrava como SUCESSO.
+#   outro assunto → devolve `acao: novo` à porta, sem tocar no processo
+# E a ociosidade/desconexão com o cliente presente devolve à porta SEM tocar no processo:
+# até a PID-17 ela retomava com `timeout` e matava uma portabilidade já aprovada.
 
 id: skill_agente_confirmacao_portabilidade_v1
 name: "Portabilidade — Agente de Confirmação v1"
-version: "1.0"
+version: "1.1"
 description: |
   Agente de I/O de confirmação de portabilidade.
-  Notifica o cliente da aprovação e coleta sua confirmação para prosseguir.
-  Usa workflow_resume para retomar o processo webhook após a interação.
+  Mostra a aprovação ao cliente e coleta confirmar / cancelar / outro assunto.
+  Usa workflow_resume para retomar o processo webhook e devolver a conversa à porta.
 classification:
   type: vertical
   domain: portabilidade
@@ -33,52 +39,34 @@ entry: verificar_canal
 steps:
 
   # ── Etapa 0: verificar canal de operação ──────────────────────────────────────
-  # Session B seta session.confirmation_channel antes de delegar.
-  # Prioridade:
-  #   1. delegate_resume_token presente → conference specialist (cliente conectado)
-  #      → prosseguir com notify+menu normalmente
-  #   2. confirmation_channel == "inbound_only" → canal sem outbound (webchat, webrtc)
-  #      → complete silencioso: Session B fica suspenso no delegate step
-  #         pending_workflow key permanece válida
-  #         cliente reconecta → pending_workflow_get detecta → menu → workflow_resume
-  #   3. default → canal outbound (whatsapp, email, sms) → prosseguir
-  # Discriminador: customer_present (passado SÓ pelo reconnect de A-new, onde o
-  # cliente está conectado). NÃO usar delegate_resume_token — ele agora existe nos
-  # dois casos (B→C e A-new→C são ambos conference no modelo v2).
-  # Default = adiar (aguardar_inbound). Só notifica proativamente quando há
-  # cliente conectado (customer_present, passado pelo reconnect) OU um canal
-  # outbound EXPLÍCITO. Isso é robusto a falha de propagação de confirmation_channel:
-  # sem sinal de "pode contatar agora", o seguro é adiar e deixar Session B pendente.
+  # Discriminador: customer_present (passado SÓ pela porta, onde o cliente está
+  # conectado). NÃO usar delegate_resume_token — ele existe nos dois casos.
+  # Default = adiar (aguardar_inbound). Só notifica proativamente quando há cliente
+  # conectado OU um canal outbound EXPLÍCITO; sem sinal de "pode contatar agora", o
+  # seguro é adiar e deixar o processo pendente.
   - id: verificar_canal
     type: choice
     conditions:
       - field:    "@ctx.session.customer_present"
         operator: eq
         value:    "true"
-        next:     notificar_aprovacao    # cliente conectado (reconnect) → fazer I/O
+        next:     notificar_aprovacao    # cliente conectado (porta) → fazer I/O
       - field:    "@ctx.session.confirmation_channel"
         operator: eq
         value:    "email"
         next:     notificar_aprovacao    # canal outbound explícito (proativo) — quando houver adapter
-    default: aguardar_inbound            # sem cliente vivo e sem outbound → adiar (Session B fica pendente)
+    default: aguardar_inbound            # sem cliente vivo e sem outbound → adiar
 
-  # ── Etapa 0b: aguardar inbound ────────────────────────────────────────────────
-  # Canal inbound-only (webchat, webrtc). Não é possível contatar o cliente
-  # proativamente. O agente encerra sem chamar workflow_resume, deixando
-  # Session B suspenso. O cliente reconecta via intake e o mecanismo
-  # pending_workflow_get oferece a continuação.
   - id: aguardar_inbound
     type: complete
     outcome: resolved
 
-  # ── Etapa 1: notificar aprovação ──────────────────────────────────────────────
   - id: notificar_aprovacao
     type: notify
-    message: "✅ Sua solicitação de portabilidade do número {{@ctx.session.numero_atual}} para {{@ctx.session.operadora_destino}} foi aprovada pela operadora!"
+    message: "✅ Sua solicitação de portabilidade do número {{@ctx.journey.numero_atual}} para {{@ctx.journey.operadora_destino}} foi aprovada pela operadora!"
     on_success: coletar_confirmacao
     on_failure: coletar_confirmacao
 
-  # ── Etapa 2: coletar confirmação ──────────────────────────────────────────────
   - id: coletar_confirmacao
     type: menu
     prompt: "Deseja confirmar a portabilidade? A transferência será realizada em até 1 dia útil."
@@ -88,32 +76,117 @@ steps:
         label: "✅ Sim, confirmar portabilidade"
       - id: cancelar
         label: "❌ Cancelar solicitação"
+      - id: novo
+        label: "🔄 Outro assunto"
     output_as: resposta_cliente
-    timeout_s: 600     # 10 min — inbound: fecha sozinho se cliente não conectar
-    on_success: retornar_resultado
-    on_failure: retornar_timeout
-    on_timeout: retornar_timeout
-    on_disconnect: retornar_timeout
+    timeout_s: 600     # 10 min
+    on_success: processar_resposta
+    on_failure: avaliar_ociosidade
+    on_timeout: avaliar_ociosidade
+    on_disconnect: avaliar_ociosidade
 
-  # ── Etapa 3a: retornar resultado ao workflow (Session B) ─────────────────────
-  - id: retornar_resultado
+  - id: processar_resposta
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.resposta_cliente"
+        operator: eq
+        value:    "confirmar"
+        next:     retornar_confirmacao
+      - field:    "$.pipeline_state.resposta_cliente"
+        operator: eq
+        value:    "cancelar"
+        next:     retornar_cancelamento
+    default: avaliar_outro_assunto
+
+  # ── Confirmar: o cliente DECIDE o que é dele decidir ──────────────────────────
+  - id: retornar_confirmacao
     type: invoke
     tool: workflow_resume
     input:
       resume_token: "@ctx.core.workflow.resume_token"
       decision: "input"
-      # Identity Resolver (nível b §11): repassa a procedência da retomada. Só
-      # está presente quando este specialist foi acionado pelo reconnect por
-      # identidade (intake grava session.resume_origin=identity). Ausente no
-      # caminho normal → o tool ignora e cai em "token".
       resume_origin: "@ctx.session.resume_origin"
       payload:
-        resposta: "$.pipeline_state.resposta_cliente"
-        confirmado: "$.pipeline_state.resposta_cliente == 'confirmar'"
+        resposta: "confirmar"
+    on_success: avisar_confirmacao
+    on_failure: avisar_erro_retomada
+
+  - id: avisar_confirmacao
+    type: notify
+    message: "✅ Portabilidade confirmada! A transferência será concluída em até 1 dia útil."
     on_success: retornar_sessao_pai
+    on_failure: retornar_sessao_pai
+
+  # ── Cancelar: `rejected`, como na PID-15 ─────────────────────────────────────
+  - id: retornar_cancelamento
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.resume_token"
+      decision: "rejected"
+      resume_origin: "@ctx.session.resume_origin"
+      payload:
+        source:   "customer_reconnect"
+        resposta: "cancelar"
+    on_success: avisar_cancelamento
+    on_failure: avisar_erro_retomada
+
+  - id: avisar_cancelamento
+    type: notify
+    message: "❌ Portabilidade cancelada conforme sua solicitação. Se quiser iniciar um novo processo, é só pedir por aqui."
+    on_success: retornar_sessao_pai
+    on_failure: retornar_sessao_pai
+
+  - id: avisar_erro_retomada
+    type: notify
+    message: "Não consegui processar sua resposta agora. Sua solicitação continua aprovada — tente de novo em alguns minutos."
+    on_success: retornar_sessao_pai
+    on_failure: retornar_sessao_pai
+
+  # ── Outro assunto e ociosidade: só com o cliente PRESENTE a conversa volta à porta ─
+  # Sem cliente presente (caminho proativo), `delegate_resume_token` é o token do PRÓPRIO
+  # processo — devolver `novo` ali o retomaria como confirmação. Por isso a presença é
+  # conferida de novo, e o caminho proativo segue com o timeout de antes.
+  - id: avaliar_outro_assunto
+    type: choice
+    conditions:
+      - field:    "@ctx.session.customer_present"
+        operator: eq
+        value:    "true"
+        next:     devolver_novo
+    default: retornar_timeout
+
+  - id: avaliar_ociosidade
+    type: choice
+    conditions:
+      - field:    "@ctx.session.customer_present"
+        operator: eq
+        value:    "true"
+        next:     devolver_encerrar     # a pendência fica até o prazo do próprio delegate
+    default: retornar_timeout
+
+  - id: devolver_novo
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision:     "input"
+      payload:
+        acao: "novo"
+    on_success: finalizar
     on_failure: finalizar
 
-  # ── Etapa 3b: timeout sem resposta ───────────────────────────────────────────
+  - id: devolver_encerrar
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision:     "input"
+      payload:
+        acao: "encerrar"
+    on_success: finalizar
+    on_failure: finalizar
+
   - id: retornar_timeout
     type: invoke
     tool: workflow_resume
@@ -123,12 +196,6 @@ steps:
     on_success: retornar_sessao_pai
     on_failure: finalizar
 
-  # ── Etapa 3c: retornar à sessão pai (Session A-new) ───────────────────────────
-  # Quando o agente roda como conference specialist em Session A-new (não como
-  # sessão independente em Session C), o delegate_resume_token está disponível
-  # em @ctx.core.workflow.delegate_resume_token e resume o delegate step do pai.
-  # Quando roda em Session C (independente), este token é null → invoke falha
-  # silenciosamente → on_failure: finalizar. Comportamento correto para ambos.
   - id: retornar_sessao_pai
     type: invoke
     tool: workflow_resume
@@ -136,10 +203,11 @@ steps:
       resume_token: "@ctx.core.workflow.delegate_resume_token"
       decision: "input"
       resume_origin: "@ctx.session.resume_origin"   # nível b §11 (ausente → "token")
+      payload:
+        acao: "encerrar"
     on_success: finalizar
     on_failure: finalizar
 
-  # ── Finalização ───────────────────────────────────────────────────────────────
   - id: finalizar
     type: complete
     outcome: resolved

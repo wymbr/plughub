@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (6) — PID-17: a portabilidade entra pela porta, sob quem provou a linha
+
+### 1 · O que foi medido antes de decidir
+
+| medido | valor |
+|---|---|
+| `agente_portabilidade_intake_v1` | 8 sessões: 5 dispararam pedido, 3 timeouts; **nenhuma** achou pendência |
+| `portabilidade_confirmacao` | **0 segmentos, desde sempre** — o caminho "aprovada, confirme" nunca rodou |
+| `portabilidade_processo_ia` | 17 segmentos; o slot `current` já exigia `resume_requires: [otp]` |
+| pendência `offer` depois da aprovação (disparo direto + aprovação) | nasce, sob o cliente do `contact_identifier` |
+
+Os três defeitos da ficha estavam no intake: `context_json` por template do que o cliente digitou,
+recusar/falhar o OTP abrindo pedido novo, sem `journey_merge`, e disparo por `skill_id`. A leitura do
+agente de confirmação e do processo mostrou mais dois antes de qualquer execução: **cancelar retomava o
+processo com `decision: input`**, e o processo mandava `input` para `encerrar_sucesso` — o cancelamento
+virava SUCESSO; e **ficar ocioso ou desconectar no menu retomava com `timeout`**, matando uma
+portabilidade já aprovada porque o cliente se distraiu dez minutos.
+
+### 2 · As decisões do dono
+
+- **A âncora é a linha a portar** (`anchor_kind: phone`, `proof_anchor_kind: phone`). O número provado
+  é o número portado; o formulário só coleta operadora e contato de retorno. Custo aceito: a porta
+  pergunta o número duas vezes (identificar, mandar o código).
+- **Ociosidade preserva a pendência.** Com o cliente presente, timeout e desconexão só devolvem a
+  conversa à porta; a pendência segue até o prazo do próprio `delegate`.
+- **A porta mantém a D11.** Falha ou timeout do OTP segue para pedido novo; a duplicata é decisão do N3,
+  e confirmar exige OTP pelo piso `resume_requires_floor: [otp]` — um pedido sem prova nunca é
+  confirmado. Recusar o OTP já degradava ao SAC desde a PID-04.
+
+### 3 · O que mudou
+
+- **`portabilidade_ia` roda `skill_intake_runner_v1`** com a config das 8 chaves
+  (`dialog_portabilidade_roteiro`, phone/otp/phone, `dialog_portabilidade_solicitacao`,
+  `portabilidade_processo_ia`, `portabilidade_confirmacao`, `sac_ia`). Formas novas publicadas.
+  O `previous` do slot é o intake antigo — o rollback volta a ele.
+- **O processo grava `journey.numero_atual` (de `@ctx.session.phone`) e `journey.operadora_destino`
+  antes de esperar a operadora.** Tags novas no mapa do tenant: `journey.portabilidade.*`.
+- **O agente de confirmação** lê número e operadora da journey; `confirmar` → `input`; `cancelar` →
+  `rejected` (o processo termina em `encerrar_cancelado`); `outro assunto` → devolve `acao: novo` à
+  porta; timeout/desconexão com o cliente presente → devolve à porta sem tocar no processo. Os dois
+  últimos conferem a presença de novo: sem cliente, o token do chamador é o do PRÓPRIO processo, e
+  devolver `novo` ali o retomaria como confirmação. O `confirmado` do payload, uma expressão que nunca
+  era avaliada, saiu.
+- **Removidos:** `agente_portabilidade_intake_v1.yaml` (a linha no registry fica, inerte). O
+  `repromote_edited_skills.sh` perdeu os pares de `portabilidade_ia` e `limite_ia`, cujos menus saíram
+  das portas (o do limite estava velho desde a PID-04 — descuido meu, corrigido aqui).
+
+### 4 · Um vermelho ao vivo que a leitura não achou
+
+Com a porta no ar, o acesso 1 passou (processo com a linha provada, texto injetado literal, journey
+preenchida) e **a pendência não apareceu depois da aprovação**. Ela existia — sob outro cliente:
+`pending_by_customer written … customer=cus_c67b… matched_by=provisioned`. O `_anchors_from_context`
+do channel-gateway lê como âncora da pendência as chaves `phone`/`email`/`cpf`/`princ` **e também
+`contact_identifier`** do `delegate.context`, e o processo passava `contact_identifier` — que desde a
+porta é campo do FORMULÁRIO. O cliente provou a linha; a pendência nasceu sob um cliente provisionado a
+partir do texto digitado, e o titular nunca a encontraria. É a mesma família da injeção da PID-04, um
+andar abaixo: um campo do formulário decidindo identidade.
+
+O processo passa a mandar `phone: "@ctx.session.phone"` e não manda mais `contact_identifier` (o
+processo o lê da própria sessão, onde o `delegate` roda). O cadastro do ContextStore **recusou** o
+publish: `session.phone` não estava declarada — só `session.cpf`, porque a primeira porta identificava
+por CPF. `session.phone` e `session.email` entraram como aliases de `session.cliente.telefone|email`
+na semente TS e no gêmeo Python, e no mapa VIVO por escrita aditiva (backup, plano **+0 −0 ~2** sobre
+101 folhas, releitura idêntica). Depois disso a pendência nasceu sob o titular.
+
+### 5 · Testes e probe
+
+- **`probe_portabilidade_door.sh`** — A: censo (porta com âncora na linha, formulário sem campo de
+  número, número do processo vindo da âncora, pendência ancorada em `phone` e não no formulário, agente
+  lendo a journey, cancelando com `rejected` e preservando na ociosidade, aliases nas duas sementes),
+  cópia limpa e **oito mutações**. B: slots; acesso 1 com injeção; aprovação com a pendência sob o
+  titular; volta ociosa (pendência viva); volta que confirma (`encerrar_sucesso`); e um segundo pedido
+  cancelado pelo chat (`encerrar_cancelado`).
+- **`probe_intake_runner.sh`**: o censo de nós e config passou a cobrir TODA porta do seed (duas), com
+  duas mutações novas sobre a segunda.
+
+### 6 · Verificação
+
+schemas **327** e `tsc` limpo; py-contextstore **76**. Verdes ao vivo: `probe_portabilidade_door`,
+`probe_intake_runner`, `probe_gates_manifest_coverage`, `probe_context_map_audit`,
+`probe_context_map_seed` (TS × Python: 78 canônicas / 100 aliases), `probe_contextstore_cadastro`,
+`probe_seed_drift_named`, `probe_skill_profile_steps`, `probe_slot_required_params`, `probe_otp_gate`,
+`probe_ctx_read_audience`, `probe_declared_script_integrity`, `probe_orchestrator_delegate_verb`,
+`probe_session_bound_resume`, `probe_caller_token_chain`.
+
+⚠️ **O que ficou de fora, registrado:** o vermelho ao vivo foi o da âncora da pendência; cancelar-como-
+sucesso e ociosidade-que-mata foram lidos no YAML e fechados com mutação, não reproduzidos antes (o
+agente antigo nem mostraria o número pela porta). **Achado lateral, APR-11:** o `suspend reason:
+approval` do processo foi decidido com `200` pela rota interna de resume **sem credencial nenhuma** —
+pode ser o modelo de capability do token (quem aprova é a operadora) ou a espécie errada da APR-09 no
+sentido inverso; decisão do dono. **Gatilho da PID-16 atingido**: o runner roda em duas portas e o
+release custou dois promotes à mão. As imagens que embutem a semente só como FALLBACK (mcp-server,
+agent-registry, serviços Python com `py-contextstore`) não foram rebuildadas — o cadastro lê o mapa
+vivo. Ficaram no demo a pendência órfã sob `cus_c67b…` e dois processos de teste do vermelho, que
+expiram sozinhos.
+
 ## 2026-09-14 (5) — PID-04: a porta do limite é o runner de plataforma
 
 ### 1 · O que foi medido antes de decidir

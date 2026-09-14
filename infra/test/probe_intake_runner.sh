@@ -16,7 +16,8 @@
 #      roteiro referenciado (runner + continuidade) existe na forma que o `limite_ia`
 #      configura; config obrigatória declarada no seed; nada do intake antigo; o
 #      `limite_retorno` lê a journey; o `choice` enxerga `$.config.*` e lê `@ctx.journey.*`
-#      na journey. Controle da cópia limpa e seis mutações sobre CÓPIA.
+#      na journey. Controle da cópia limpa e oito mutações sobre CÓPIA. Desde a PID-17 o
+#      censo de nós e config é sobre TODA porta do seed (limite e portabilidade).
 #   B  AO VIVO — o slot `current` do `limite_ia` roda o runner com a config exigida; a
 #      forma publicada cobre os nós; e o ACESSO 1 pelo chat com a mesma injeção: o
 #      processo nasce com o CPF de quem provou, e o texto injetado chega literal.
@@ -48,7 +49,9 @@ try:
 except Exception as e:
     print("__ERRO__ %s" % e)' "$2"; }
 
-LIMPO="d['runner_presente'] and not d['literais_de_dominio'] and not d['context_json_no_runner'] and d['refs_by_node'] >= 12 and not d['nos_ausentes'] and not d['config_faltando'] and not d['intake_antigo'] and not d['retorno_le_sessao'] and d['choice_le_config'] and d['choice_le_journey'] and d['continuidade_le_journey'] == ['limite_solicitado', 'numero_cartao']"
+# PID-17: as portas são POPULAÇÃO — o censo mede todo pool do seed que roda o runner, e a
+# exigência nomeia as duas vivas para que uma porta que SAIA do censo (seed trocado) apareça.
+LIMPO="d['runner_presente'] and {'limite_ia', 'portabilidade_ia'} <= set(d['portas']) and not d['literais_de_dominio'] and not d['context_json_no_runner'] and d['refs_by_node'] >= 12 and not d['nos_ausentes'] and not d['config_faltando'] and not d['intake_antigo'] and not d['retorno_le_sessao'] and d['choice_le_config'] and d['choice_le_journey'] and d['continuidade_le_journey'] == ['limite_solicitado', 'numero_cartao']"
 
 echo "════════════════════════════════════════════════════════════════════"
 echo " a porta é de plataforma, e o pedido nasce sob quem provou?"
@@ -105,6 +108,10 @@ else
     "s.replace('      context_fields:    \"\$.pipeline_state.dados\"', '      context_json: \\'{\"session.cpf\": \"{{\$.pipeline_state.contato}}\"}\\'', 1)"
   muta "nó do roteiro some da forma" infra/dialog/dialog_limite_roteiro.json \
     "s.replace('\"id\": \"confirmar_recebimento\"', '\"id\": \"confirmar_recebimento_x\"', 1)"
+  muta "nó some do roteiro da SEGUNDA porta" infra/dialog/dialog_portabilidade_roteiro.json \
+    "s.replace('\"id\": \"avisar_registro\"', '\"id\": \"avisar_registro_x\"', 1)"
+  muta "a segunda porta perde um parâmetro no seed" infra/registry/tenant_demo.yaml \
+    "s.replace('        on_pending_pool:   portabilidade_confirmacao\n', '', 1)"
   muta "choice volta a não ler config" packages/skill-flow-engine/src/steps/choice.ts \
     "s.replace('    config:         ctx.config ?? {},\n', '', 1)"
   muta "choice volta a ler journey na sessão" packages/skill-flow-engine/src/steps/choice.ts \

@@ -292,8 +292,13 @@ export const DEFAULT_CONTEXT_MAP: ContextMap = {
       cliente: {
         nome:              { tipo: "texto",      legado: ["caller.nome"] },
         cpf:               { tipo: "cpf",        legado: ["caller.cpf", "session.cpf"] },
-        telefone:          { tipo: "phone",      legado: ["caller.telefone"] },
-        email:             { tipo: "email_addr", legado: ["caller.email"] },
+        // PID-17 — `session.phone`/`session.email` pela mesma razão do `session.cpf`: são
+        // depositados pela plataforma (as `anchors` do `workflow_trigger` escrevem
+        // `session.<kind>`, e a chave `phone`/`email` do `delegate.context` é a âncora da
+        // pendência). O CPF estava cadastrado porque a primeira porta identificava por
+        // CPF; a segunda identifica pela linha, e o cadastro recusou o `delegate`.
+        telefone:          { tipo: "phone",      legado: ["caller.telefone", "session.phone"] },
+        email:             { tipo: "email_addr", legado: ["caller.email", "session.email"] },
         customer_id:       { tipo: "texto",      legado: ["caller.customer_id", "session.customer_id"], label: "ID interno — não-PII, necessário p/ histórico/360" },
         account_id:        { tipo: "texto",      legado: ["caller.account_id"] },
         motivo_contato:    { tipo: "texto",      legado: ["caller.motivo_contato", "session.motivo_contato"] },

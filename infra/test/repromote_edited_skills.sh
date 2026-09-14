@@ -54,21 +54,21 @@ H=(-H "x-tenant-id: $TENANT" -H "x-service-token: $TOKEN" -H "content-type: appl
 
 # pool → uma STRING que só existe na versão NOVA do flow. É a testemunha de que a
 # edição chegou: procurar pelo nome do step provaria só que o slot existe.
-#   limite_ia        — o prompt do menu de continuidade perdeu os `**`
-#   limite_retorno   — as notificações de aprovado/recusado perderam os `**`
-#   portabilidade_ia — o menu de continuidade perdeu os `**` em volta do número
+#   limite_continuidade — o prompt do menu de continuidade perdeu os `**`
+#   limite_retorno      — as notificações de aprovado/recusado perderam os `**`
+# Os menus de continuidade SAÍRAM das portas (PID-04 no limite, PID-17 na portabilidade):
+# a porta é o runner de plataforma e o texto mora na continuidade do domínio. A
+# portabilidade não tem par aqui — o menu dela foi reescrito, não editado.
 declare -A EXPECT=(
-  [limite_ia]="Limite solicitado: R\$ {{"
+  [limite_continuidade]="Limite solicitado: R\$ {{"
   [limite_retorno]="foi aprovado."
-  [portabilidade_ia]="portabilidade do número {{"
 )
 # Marcador do defeito ANTIGO: se ainda aparecer, o snapshot é o velho. Duas
 # testemunhas (presença do novo + ausência do velho) porque uma só confunde
 # "não mudou" com "leitor quebrado".
 declare -A FORBID=(
-  [limite_ia]='Limite solicitado: **R$'
+  [limite_continuidade]='Limite solicitado: **R$'
   [limite_retorno]='foi **aprovado**'
-  [portabilidade_ia]='do número **{{'
 )
 
 PASS=0; FAIL=0; DID=0
@@ -105,7 +105,7 @@ print((cur.get("skill_id") or "") + "\t" + json.dumps(cur.get("config_json") or 
 ' 2>/dev/null
 }
 
-TARGETS="${POOLS:-limite_ia limite_retorno portabilidade_ia}"
+TARGETS="${POOLS:-limite_continuidade limite_retorno}"
 echo "══ repromote — tenant=$TENANT · pools: $TARGETS ══"
 echo
 

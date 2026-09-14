@@ -507,12 +507,23 @@ pools:
 
   - pool_id: portabilidade_ia
     agent_kind: ai
-    deploy: { skill_id: skill_portabilidade_intake_v1, max_concurrent_sessions: 10 }
-    # Pool do agente de intake de portabilidade.
-    # Coleta número atual + operadora destino e persiste no ContextStore.
-    # Phase 1: agente_portabilidade_ia_v1 com skill_portabilidade_intake_v1.
-    # Phase 2: trocar para skill_atendimento_portabilidade_v1 (Tier 2 com task step).
-    description: "Pool do agente de portabilidade — coleta dados do cliente"
+    # PID-17 (2026-09-14): a porta é o runner de PLATAFORMA, como no limite_ia. A âncora é a
+    # própria LINHA a portar (o número provado é o número portado; nenhum campo do
+    # formulário o troca), e a continuidade de uma pendência `offer` — "aprovada, confirme"
+    # — é do agente de confirmação do domínio.
+    deploy:
+      skill_id: skill_intake_runner_v1
+      max_concurrent_sessions: 10
+      config:
+        dialog_form_id:    dialog_portabilidade_roteiro
+        anchor_kind:       phone
+        require:           otp
+        proof_anchor_kind: phone
+        new_form_id:       dialog_portabilidade_solicitacao
+        on_new_pool:       portabilidade_processo_ia
+        on_pending_pool:   portabilidade_confirmacao
+        degrade_target:    sac_ia
+    description: "Portabilidade — porta (identidade + pendência + coleta)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
 
@@ -524,7 +535,7 @@ pools:
       max_concurrent_sessions: 20
       config: { resume_requires: [otp] }
     # Arc 19: pool webhook para o processo assíncrono de portabilidade.
-    # Disparado pelo intake via workflow_trigger MCP tool.
+    # Disparado pela porta (`portabilidade_ia`) via workflow_trigger, endereçado por POOL.
     # Executa skill_portabilidade_demo_v1: suspend 48h → collect → complete.
     # Capacidade real = slots do deploy (Bootstrap) + admissão (Fase B).
     # max_concurrent_sessions pool-level REMOVIDO (2026-06-04): era capacidade
@@ -543,7 +554,8 @@ pools:
     deploy: { skill_id: skill_agente_confirmacao_portabilidade_v1, max_concurrent_sessions: 10 }
     # Arc 19 delegate pattern: pool do agente de I/O de confirmação de portabilidade.
     # Acionado pelo delegate() step em skill_portabilidade_demo_v1 após aprovação
-    # da operadora. O agente notifica o cliente e coleta sua confirmação.
+    # da operadora (sem cliente: adia) e pela porta `portabilidade_ia` quando o cliente
+    # provado volta (PID-17: é a continuidade do domínio). O agente coleta a confirmação.
     # O agente chama workflow_resume ao concluir, retomando o processo webhook.
     description: "Pool de confirmação de portabilidade com o cliente (delegate I/O)"
     channel_types: [webchat, whatsapp]

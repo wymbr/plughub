@@ -56,6 +56,20 @@
           "tipo": "credit_card"
         }
       },
+      "portabilidade": {
+        "numero_atual": {
+          "legado": [
+            "journey.numero_atual"
+          ],
+          "tipo": "linha_em_servico"
+        },
+        "operadora_destino": {
+          "legado": [
+            "journey.operadora_destino"
+          ],
+          "tipo": "texto"
+        }
+      },
       "processo": {
         "numero_pedido": {
           "legado": [

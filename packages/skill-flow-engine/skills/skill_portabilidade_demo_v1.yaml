@@ -8,14 +8,49 @@ description: |
   Etapas:
     1. suspend: aguarda aprovação da operadora (48h)
     2. delegate: agente entrega resultado e coleta confirmação do cliente
-  Lê @ctx.session.numero_atual, @ctx.session.operadora_destino e
-  @ctx.session.contact_identifier escritos pelo intake.
+  Nasce pela porta de plataforma (`skill_intake_runner_v1` no pool `portabilidade_ia`,
+  PID-17): o número a portar é a ÂNCORA provada (`session.phone`, escrita por último pelo
+  gatilho); operadora e contato de retorno vêm do formulário (`session.<campo>`).
+  Número e operadora são gravados na JOURNEY antes da espera, porque quem os mostra ao
+  cliente é o agente de confirmação chamado pela porta, que não os recebe.
 classification:
   type: vertical
 
-entry: solicitar_operadora
+entry: registrar_numero_journey
 
 steps:
+  # ── Etapa 0: os fatos do PEDIDO moram na journey desde o nascimento ──────────
+  # PID-17 (2026-09-14): a porta de plataforma delega a continuidade ao
+  # `portabilidade_confirmacao` sem repassar os campos do domínio (ela não os conhece, e
+  # o cadastro do ContextStore recusa nome de tag decidido em runtime). O número é a
+  # ÂNCORA que a porta identificou — nunca um campo do formulário, que não consegue
+  # trocá-la (o gatilho escreve a âncora por último).
+  - id: registrar_numero_journey
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "journey.numero_atual"
+      value:      "@ctx.session.phone"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: registrar_operadora_journey
+    on_failure: registrar_operadora_journey
+
+  - id: registrar_operadora_journey
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "journey.operadora_destino"
+      value:      "@ctx.session.operadora_destino"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: solicitar_operadora
+    on_failure: solicitar_operadora
+
   # ── Etapa 1: aguardar aprovação da operadora ─────────────────────────────────
   # Suspend puro — o workflow dorme até o sinal externo de aprovação/rejeição.
   # A notificação de início já foi enviada pelo intake antes de acionar o workflow.
@@ -93,15 +128,25 @@ steps:
     resume_requires: "$.config.resume_requires"
     resume_requires_floor: ["otp"]
     context:
-      contact_identifier:   "@ctx.session.contact_identifier"
-      numero_atual:          "@ctx.session.numero_atual"
-      operadora_destino:     "@ctx.session.operadora_destino"
+      # Número e operadora NÃO viajam aqui desde a PID-17: o agente os lê da journey,
+      # que é a mesma casa quando quem o chama é a porta (uma casa por fato).
+      #
+      # Âncora da pendência — chave `phone`, lida como IDENTIDADE por
+      # `_anchors_from_context` (channel-gateway), como a `cpf` do limite_processo.
+      # ⚠️ `contact_identifier` SAIU daqui na PID-17, e não por limpeza: aquela chave
+      # também é lida como âncora (telefone), e desde a porta ela é um campo do
+      # FORMULÁRIO. Medido ao vivo: com ela, a pendência foi indexada sob um cliente
+      # PROVISIONADO a partir do texto digitado (`matched_by=provisioned`), e o titular
+      # que provou a linha nunca a encontraria. O processo continua lendo o contato de
+      # retorno de `session.contact_identifier` — o delegate roda na sessão dele.
+      phone:                 "@ctx.session.phone"
       confirmation_channel:  "@ctx.session.confirmation_channel"
     timeout_hours: 24
     on_resume:
       next: encerrar_sucesso          # decision=input (cliente confirmou)
     on_reject:
-      next: encerrar_cancelado        # decision=rejected (cliente cancelou)
+      next: encerrar_cancelado        # decision=rejected (cliente cancelou — PID-15; até a
+                                      # PID-17 o agente cancelava com `input` e caía em sucesso)
     on_timeout:
       next: encerrar_timeout_cliente  # decision=timeout
 

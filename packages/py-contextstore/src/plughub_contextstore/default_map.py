@@ -101,8 +101,8 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
             "cliente": {
                 "nome": {"tipo": "texto", "legado": ["caller.nome"]},
                 "cpf": {"tipo": "cpf", "legado": ["caller.cpf", "session.cpf"]},
-                "telefone": {"tipo": "phone", "legado": ["caller.telefone"]},
-                "email": {"tipo": "email_addr", "legado": ["caller.email"]},
+                "telefone": {"tipo": "phone", "legado": ["caller.telefone", "session.phone"]},
+                "email": {"tipo": "email_addr", "legado": ["caller.email", "session.email"]},
                 "customer_id": {"tipo": "texto", "legado": ["caller.customer_id", "session.customer_id"], "label": "ID interno — não-PII, necessário p/ histórico/360"},
                 "account_id": {"tipo": "texto", "legado": ["caller.account_id"]},
                 "motivo_contato": {"tipo": "texto", "legado": ["caller.motivo_contato", "session.motivo_contato"]},
