@@ -1993,6 +1993,28 @@ def _resolve_approver_principal(
     }
 
 
+def _resume_identity_clearance(request: Request) -> str | None:
+    """PID-13 — o atestado do mcp-server de que JULGOU a evidência da sessão chamadora.
+
+    Só vale com a credencial de SERVIÇO do gateway (a mesma das rotas de identidade,
+    IDN-06). O header sem a credencial é ignorado e LOGADO: um chamador anônimo que se
+    declara provado é exatamente o que este portão existe para recusar. Sem credencial
+    configurada no gateway, nenhum atestado vale (falha fechada).
+    """
+    declarado = request.headers.get("x-resume-identity-clearance")
+    if not declarado:
+        return None
+    esperado = get_settings().channel_gateway_service_token or ""
+    apresentado = request.headers.get("x-service-token") or ""
+    if esperado and hmac.compare_digest(apresentado, esperado) and declarado == "session_evidence":
+        return "session_evidence"
+    logger.warning(
+        "PID-13: atestado de identidade '%s' IGNORADO — sem credencial de serviço válida",
+        declarado,
+    )
+    return None
+
+
 @app.post("/v1/channels/webhook/resume/{resume_token}", status_code=200)
 async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request: Request) -> dict:
     """
@@ -2040,6 +2062,7 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
             approver          = approver,
             claim_pool_id     = body.pool_id,
             claim_instance_id = body.instance_id,
+            identity_clearance = _resume_identity_clearance(request),
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))

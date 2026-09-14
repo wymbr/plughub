@@ -1,5 +1,93 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (1) — PID-13: a exigência de identidade vale na retomada, em todas as portas
+
+### 1 · O que a PID-06 deixou aberto, medido
+
+A PID-06 fez o `pending_workflow_get` reter o token de quem não provou nesta sessão. A exigência valia na
+**liberação**, não no **uso**: quem já tinha o token retomava sem prova. Medido ao vivo, com cliente
+importado, processo real e OTP: a sessão sem prova teve o `workflow_resume` aceito até o gateway, e a
+rota externa anônima também chegava lá.
+
+A ficha falava só do `workflow_resume`. Medido, **sete caminhos** chegam ao mesmo `handle_resume`:
+
+| porta | credencial |
+|---|---|
+| `workflow_resume` (MCP) | token de sessão no MCP; nenhuma no gateway |
+| Console — aprovação e form-fill | Bearer humano |
+| fechamento pelo supervisor (work queue, encerrar parque) | Bearer humano |
+| evaluation-api · workflow-api | nenhuma |
+| scanner de prazo | em processo |
+| `/channel/webhook/resume/{token}` | **nenhuma — pública; a posse do token é a credencial** |
+
+E a população nos três steps com exigência: `limite_processo.aprovar` retomado pelo **aprovador** (90),
+`limite_entrega.parquear_resultado` pelo caminho de **identidade** (28), retomada anônima por token:
+**zero**.
+
+### 2 · A decisão
+
+Do dono: a regra mora no `handle_resume` (uma casa, todas as portas), e numa pendência com exigência só
+passam **três atores**:
+
+- o **mcp-server**, que julga a evidência da sessão chamadora (o mesmo juiz da liberação) e atesta com a
+  credencial de serviço do gateway (`X-Resume-Identity-Clearance`, só válido com `X-Service-Token`);
+- um **principal humano verificado** — aprovador, supervisor. A exigência é sobre o CLIENTE retomar, não
+  sobre o operador decidir;
+- o **scanner de prazo**, em processo.
+
+Anônimo recusa com 403 `resume_requires_unproven`. Consequência declarada: o link de retomada (D10) deixa
+de valer para pendência com exigência; população zero. `resume_door` virou **PID-14**.
+
+### 3 · O conserto
+
+- **A exigência mora no registro do token** (`{t}:resume_meta:{token}`), gravado pelo collect e pelo
+  delegate-conference. Com exigência, a escrita **falha fechado**: sem o registro a exigência sumiria e o
+  token retomaria sem prova; a falha sobe e o engine segue o `on_timeout`.
+- **`_enforce_resume_requirement`** logo depois de resolver a sessão do token, antes de qualquer efeito.
+  Pendência sem registro, sem o campo ou com `[]` passa em todas as portas como antes (suspend de
+  aprovação, os 12 skills que devolvem ao pai).
+- **O atestado não vem do corpo**: a rota interna repassa o payload cru, então `identity_clearance` é
+  parâmetro, preenchido pela rota a partir do header + credencial; a rota externa nunca o lê.
+- **`workflow_resume`** (`resumeIdentityClearance`): lê a exigência do registro do token, julga a evidência
+  da journey da sessão chamadora e, sem prova, recusa ali mesmo (`resume_requires_unproven`, com o que
+  falta) — o token nem chega ao gateway. Com prova, atesta.
+- **Não há "continuação" a seguir**, e isso foi medido: o especialista de `delegate` roda como
+  participante DENTRO da sessão do intake, então o token de sessão dele já é o da sessão que provou.
+  Aceitar prova de outra sessão da journey reabriria o vetor (4).
+
+### 4 · Achado fora do escopo: PID-15
+
+O `cancelar_solicitacao` do intake do limite chama `workflow_resume` sobre o token de `aprovar`, e a rota
+interna exige Bearer humano para toda tarefa que declara capacidade (AUT-46, 2026-09-09). O MCP não tem
+Bearer: o cliente não consegue cancelar, e o intake cai no `avisar_erro_retomada`. Medido ao vivo nesta
+ficha e **anterior a ela** — o portão do AUT-46 roda antes do da PID-13. Registrado como PID-15.
+
+### 5 · Testes e probe
+
+- gateway `test_resume_requirement_gate.py` (7): anônimo recusado; os três atores passam; atestado
+  desconhecido não libera; sem exigência passa; o registro carrega a exigência e falha fechado ao perdê-la;
+  o atestado só vale com a credencial de serviço (e com ela vazia, nunca). mcp-server
+  `resume-identity-clearance.test.ts` (4).
+- **`probe_resume_requirement.sh`** ganhou o ramo **E** (a sessão sem prova recusada no `workflow_resume`,
+  a rota externa anônima 403, o token intacto) e o controle positivo no **D**: cliente importado → processo
+  → decisão do aprovador pelo portão (`via approver`) → acesso 3 pelo chat com OTP → resultado entregue →
+  o processo retoma `parquear_resultado` com evidência atestada (`via session_evidence`). O censo cobre o
+  portão, o scanner, o registro, o atestado só na rota interna e o julgamento no MCP, com duas mutações
+  novas sobre cópia.
+
+### 6 · Verificação
+
+mcp-server **420**, gateway **937** verdes; `tsc` limpo. Imagens: mcp-server-plughub, channel-gateway.
+**Mutações** (cada uma derruba a sua suíte): anônimo passando · atestado aceito sem credencial · registro
+perdendo a exigência calado · mcp-server atestando sem julgar. Ao vivo: `probe_resume_requirement` (A–E,
+com cinco mutações de censo), `probe_task_ledger`, `probe_gates_manifest_coverage`,
+`probe_mcp_tool_guard_census`, `probe_evidence_transport`, `probe_identity_evidence`,
+`probe_mcp_rest_surface`, `probe_resume_outlives_meta`, e `probe_session_bound_resume` A–C. ⚠️ A stack foi reiniciada no host durante a ficha — Redis vazio e
+sete serviços caídos na ordem de subida (Postgres e Kafka indisponíveis), mais a analytics-api parada às
+00:13 por sinal de desligamento, anterior a esta sessão. Subi de volta só o que tinha caído; os primeiros
+vermelhos do smoke e da jornada eram a analytics-api fora (arestas e linhas de sessão no ClickHouse), não
+a ficha.
+
 ## 2026-09-13 (19) — PID-06: o token de retomada só sai para quem provou nesta sessão
 
 ### 1 · O defeito, medido ao vivo

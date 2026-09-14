@@ -194,6 +194,35 @@ export async function withholdUnprovenResume(
   }
 }
 
+/**
+ * PID-13 — a exigência de identidade do token, julgada contra a evidência da sessão que
+ * RETOMA. Lê `resume_requires` do registro do token (`{t}:resume_meta:{token}`, a mesma
+ * casa que o gateway lê). `requires: null` = pendência sem exigência: nada a atestar.
+ *
+ * Quem chama o `workflow_resume` numa pendência com exigência é a própria sessão que
+ * provou: o especialista de `delegate` roda como participante DENTRO da sessão do intake
+ * (conferência), então o token de sessão dele carrega o `session_id` do intake — não há
+ * "continuação" a seguir, e aceitar prova de outra sessão da journey reabriria o vetor (4).
+ */
+export async function resumeIdentityClearance(
+  redis:     RedisClient,
+  tenantId:  string,
+  sessionId: string,
+  resumeToken: string,
+  nowMs = Date.now(),
+): Promise<{ requires: string[] | null; satisfied: boolean; missing: ResumeEvidenceMiss[] }> {
+  const raw = await redis.get(`${tenantId}:resume_meta:${resumeToken}`)
+  let requires: unknown = undefined
+  if (raw) {
+    try { requires = (JSON.parse(raw) as { resume_requires?: unknown }).resume_requires } catch { requires = undefined }
+  }
+  if (!Array.isArray(requires) || requires.length === 0) return { requires: null, satisfied: true, missing: [] }
+  const raiz = await journeyRootOfSession(redis, tenantId, sessionId)
+  const hash = (await redis.hgetall(journeyCtxKey(tenantId, raiz))) ?? {}
+  const j = judgeResumeEvidence(requires as string[], hash, { sessionId, nowMs })
+  return { requires: requires as string[], satisfied: j.satisfied, missing: j.missing }
+}
+
 /** PID-02 — o resultado do verify do gateway, na linguagem da evidência (ADR D4). */
 export function otpEvidenceStatus(body: { verified?: boolean; reason?: string }): IdentityEvidenceRecord["status"] {
   if (body.verified === true) return "verified"
@@ -495,6 +524,32 @@ export function registerWorkflowTools(
           ? resume_origin
           : undefined
 
+      // PID-13 — pendência com exigência só retoma com prova DESTA sessão. O julgamento é
+      // daqui (a evidência é lida pelo mesmo juiz da liberação, PID-06); o gateway só
+      // aceita a retomada com o atestado, que vai com a credencial de serviço. Sem Redis
+      // não há atestado — e o gateway recusa, se houver exigência (falha fechada).
+      let clearance: Awaited<ReturnType<typeof resumeIdentityClearance>> | null = null
+      if (deps.redis) {
+        clearance = await resumeIdentityClearance(deps.redis, quem.caller.tenant_id, quem.caller.session_id, resume_token)
+        if (clearance.requires && !clearance.satisfied) {
+          console.warn(
+            `[workflow_resume] PID-13 RECUSADO session=${quem.caller.session_id} token=${resume_token} ` +
+            `exige=${clearance.requires.join(",")} faltas=${clearance.missing.map(m => `${m.mechanism}:${m.reason}`).join(",")}`,
+          )
+          return {
+            isError: true,
+            content: [{ type: "text" as const, text: JSON.stringify({
+              error:             "resume_requires_unproven",
+              identity_required: [...new Set(clearance.missing.map(m => m.mechanism))],
+              missing:           clearance.missing,
+            }) }],
+          }
+        }
+      }
+      const atestado: Record<string, string> = clearance?.requires && clearance.satisfied
+        ? { "X-Service-Token": deps.channelGatewayServiceToken ?? "", "X-Resume-Identity-Clearance": "session_evidence" }
+        : {}
+
       // PID-03 — a evidência chega ao processo ANTES de ele acordar. Falhar aqui não
       // bloqueia a retomada (é a ação de negócio), mas diz alto que a prova não viajou.
       let evidencia: Awaited<ReturnType<typeof transportEvidenceOnResume>> | { erro: string } = { erro: "redis ausente" }
@@ -518,7 +573,7 @@ export function registerWorkflowTools(
       try {
         res = await fetch(url, {
           method:  "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...atestado },
           body:    JSON.stringify({
             // PID-01: o tenant é o da SESSÃO que retoma, não o do env do processo.
             tenant_id: quem.caller.tenant_id,

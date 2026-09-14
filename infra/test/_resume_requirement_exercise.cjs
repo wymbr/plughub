@@ -6,7 +6,8 @@
 //            Imprime {s1, s2, desafio}.
 //   mede     verifica o código em S1 e pede a pendência do cliente pelas DUAS sessões,
 //            com a mesma âncora (o celular, agora `possessed` no cadastro).
-//            Imprime {casos, detalhe}.
+//            Imprime {casos, detalhe, token}.
+//   retoma-s2 / retoma-s1  (PID-13) workflow_resume do token pela sessão que NÃO provou / que provou.
 //
 // A pergunta: o `resume_token` sai para quem NÃO provou nesta sessão? Antes da PID-06 saía
 // para qualquer sessão, bastando a posse durável da âncora (vetor (4) do ADR).
@@ -47,6 +48,15 @@ async function main() {
       console.log(JSON.stringify({ ...SIDS, desafio: r }))
       return
     }
+    if (FASE === "retoma-s2" || FASE === "retoma-s1") {
+      // PID-13 — CODE aqui é o resume_token. S2 primeiro (recusa, token intacto), S1 depois.
+      const quem = FASE === "retoma-s2" ? SIDS.s2 : SIDS.s1
+      const t = await token(redis, quem)
+      const r = await chama("workflow_resume", { resume_token: CODE, decision: "rejected",
+        payload: { source: "customer_reconnect", probe: "pid13" }, session_token: t })
+      console.log(JSON.stringify({ fase: FASE, r }))
+      return
+    }
     const out = { casos: {}, detalhe: {} }
     const c = out.casos
     const t1 = await token(redis, SIDS.s1)
@@ -65,6 +75,7 @@ async function main() {
     c.s1_recebe_token = !p1.isError && p1.body.found === true && tokensDe(p1.body).length > 0
     c.s2_nao_recebe_token = !p2.isError && tokensDe(p2.body).length === 0
     c.s2_pede_verificacao = p2.body.verification_required === true
+    out.token = p1.body.resume_token || ""
     console.log(JSON.stringify(out))
   } finally {
     await client.close().catch(() => {})

@@ -39,9 +39,18 @@ sfs = rd("packages/e2e-tests/services/skill-flow-service/src/index.ts")
 f["sfs_repassa"] = sfs.count("resume_requires: params.resume_requires")
 
 wh = rd("packages/channel-gateway/src/plughub_channel_gateway/adapters/webhook.py")
-f["gw_pending_entry"] = len(re.findall(r"resume_requires=resume_requires", wh))
+f["gw_pending_entry"] = wh.count("resume_requires=resume_requires,   # PID-06")
 f["gw_chave_legada"] = len(re.findall(r'"resume_requires":\s+resume_requires', wh))
 f["gw_leituras"] = int("p.resume_requires" in wh) + int("first.resume_requires" in wh) + int('data.get("resume_requires")' in wh)
+# PID-13 — a retomada: o portão mora no handle_resume e todas as portas passam por ele
+f["gw_portao_no_resume"] = wh.count("await self._enforce_resume_requirement(")
+f["gw_scanner_isento"] = wh.count('identity_clearance="timeout",   # PID-13')
+f["gw_registro_carrega"] = wh.count("resume_requires=resume_requires,   # PID-13")
+gm = rd("packages/channel-gateway/src/plughub_channel_gateway/main.py")
+f["gw_atestado_rota_interna"] = gm.count("identity_clearance = _resume_identity_clearance(request)")
+# a rota externa NUNCA aceita atestado: nenhum identity_clearance no corpo dela
+ext = gm.split('async def external_webhook_resume(', 1)
+f["gw_externa_sem_atestado"] = len(ext) == 2 and "identity_clearance" not in ext[1].split("\n@app.", 1)[0]
 idx = rd("packages/channel-gateway/src/plughub_channel_gateway/identity/index.py")
 f["gw_campo_no_registro"] = "resume_requires: list[str] | None = None" in idx
 
@@ -52,6 +61,11 @@ f["mcp_bloco_encontrado"] = bool(bloco)
 f["mcp_saidas_julgadas"] = bloco.count("withholdUnprovenResume(")
 # toda resposta que carrega token tem de sair do julgamento: sobra de retorno cru = porta em volta
 f["mcp_retornos_crus"] = len(re.findall(r"JSON\.stringify\(\s*(data|\{\s*customer_id: ref\.customer_id, \.\.\.pdata\s*\})\s*\)", bloco))
+
+m2 = re.search(r'withGuard\("workflow_resume".*?\n  \)\n', wf, re.S)
+bres = m2.group(0) if m2 else ""
+f["mcp_resume_julga"] = "resumeIdentityClearance(deps.redis" in bres and "resume_requires_unproven" in bres
+f["mcp_atesta_so_satisfeito"] = "clearance?.requires && clearance.satisfied" in bres and "...atestado" in bres
 
 # população: steps de pendência de cliente nos skills do repo, e quem declara exigência
 skills_dir = os.path.join(root, "packages/skill-flow-engine/skills")

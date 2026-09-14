@@ -218,6 +218,13 @@ continuação direta, dentro de uma idade máxima.
   Sobrando nenhuma, a resposta tem a forma do portão de posse (`verification_required`, com
   `identity_required`), que os intakes já tratam oferecendo OTP. **A retomada ainda não confere**: quem já
   tem o token (link, D10) retoma sem prova — PID-13.)*
+  *(A outra metade em 2026-09-14, PID-13: **a retomada**. Medido, o `workflow_resume` não era a única
+  porta — sete caminhos chegam ao `handle_resume`, um deles público e anônimo. A regra mora nele, e numa
+  pendência com exigência só passam: o mcp-server, que julga a evidência da sessão chamadora e atesta com
+  a credencial de serviço; um principal HUMANO verificado (aprovador, supervisor) — a exigência é sobre o
+  cliente retomar, não sobre o operador decidir; e o scanner de prazo. A exigência mora no registro do
+  token (`resume_meta`), cuja escrita falha fechado quando a carrega. Consequência declarada: o link de
+  retomada (D10) deixa de valer para pendência com exigência — população medida: zero.)*
 - **Quem transporta a evidência para o processo retomado é o `workflow_resume`**, no servidor — não
   o merge, que por (12) descarta a evidência nova.
   *(Corrigido na implementação, PID-03, por medição e decisão do dono: **o merge também
@@ -419,7 +426,9 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-10 | OTP só entregável e autoritativo, recusa explícita; corrige o desafio a CPF | D8 |
 | PID-11 | lista na porta compartilhada gated por chegada; ordem por `expires_at` | D11 |
 | PID-12 | quem grava procedência `authoritative`, e com qual credencial | D13 |
-| PID-13 | a mesma exigência no `workflow_resume` (token em mãos, D10) + `resume_door` | D6, D7, D10 |
+| PID-13 | a mesma exigência na RETOMADA, em todas as portas (`handle_resume`, 3 atores) | D6, D10 |
+| PID-14 | `resume_door` — por qual pool a retomada entra (gatilho: 2º pool de entrada) | D7 |
+| PID-15 | cliente não cancela pendência de aprovação pelo intake (AUT-46 exige Bearer) | D6 |
 | IDN-06 | credencial nas rotas de identidade do channel-gateway | (7) |
 | IDN-07 | eixo de procedência na âncora | D13 |
 | IDN-08 | a aba Cliente carimba `operator` | (8) |

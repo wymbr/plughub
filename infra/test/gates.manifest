@@ -311,6 +311,8 @@ probe_deploy_write_principal.sh
 # duravel): uma sessao que nunca fez OTP levou o token de um cliente provado por outra. Censo da
 # cadeia inteira com mutacoes sobre copia, piso no set-next ao vivo, liberacao real com OTP (a
 # sessao que provou leva, a outra recebe verification_required) e a jornada do limite.
+# PID-13: a mesma exigencia na RETOMADA, em todas as portas — sessao sem prova e rota externa
+# anonima recusadas, token intacto, e o smoke dos tres acessos como controle positivo.
 probe_resume_requirement.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
@@ -643,10 +645,11 @@ smoke_wrapup_slot_handoff.sh
 # tranquilidade da decisao (mesma separacao de `_SCOPE_EXEMPT` x `_SCOPE_DEBT`
 # na analytics-api).
 
-# -- ferramenta (3) --
+# -- ferramenta (4) --
 # o proprio runner e o helper de credencial: sao PECA, nao unidade medida
 =_auth.sh                                             ferramenta
 =_resume_requirement_setup.sh                         ferramenta
+=_resume_access3_exercise.sh                          ferramenta
 =run_gates.sh                                         ferramenta
 
 # -- provisionamento (25) --
