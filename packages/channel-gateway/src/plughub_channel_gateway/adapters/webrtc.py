@@ -22,10 +22,16 @@ WebSocket protocol (per-connection state machine):
     {"type": "conn.ready"}
     {"type": "conn.authenticated", "session_id": "...", "participant_id": "..."}
     {"type": "webrtc.ready",
-     "livekit_url": "wss://...", "token": "...",
-     "negotiated_medium": "video|voice|text", "room_name": "plughub-{session_id}"}
-    {"type": "webrtc.renegotiate",
-     "negotiated_medium": "...", "room_name": "..."}
+     "livekit_url": "wss://...", "token": "...", "room_name": "plughub-{session_id}",
+     "publish": ["audio","video"], "policy_source": "platform_default"}
+    {"type": "webrtc.media",                       — o TETO do cliente mudou (VOZ-09)
+     "token": "...", "room_name": "...", "publish": [...], "policy_source": "...",
+     "reason": "attendant_joined:human|attendant_left:human|..."}
+
+  ⚠️ `publish` é TETO, não ordem: o cliente liga microfone e câmera por ESCOLHA, dentro
+     dele, e o SFU recusa o que estiver fora. Até 2026-09-14 o servidor mandava UM meio
+     (`negotiated_medium`) para a sessão inteira e `webrtc.renegotiate` o sobrescrevia a
+     cada atribuição — um especialista de texto rebaixava o cliente de uma chamada de vídeo.
     {"type": "webrtc.message",   "text": "...", "author": "agent", "ts": "..."}
     {"type": "webrtc.interaction","payload": {...}}
     {"type": "webrtc.typing",    "active": true|false}
@@ -34,16 +40,16 @@ WebSocket protocol (per-connection state machine):
     {"type": "conn.error",       "code": "...", "message": "..."}
 
 Token endpoint (agent / supervisor joining LiveKit room):
-  GET /webrtc/token/{session_id}?role=agent&identity=<id>
+  GET /webrtc/token/{session_id}?role=agent|supervisor
   Authorization: Bearer <agent_JWT>
-  Response: {"token": "...", "livekit_url": "...",
-             "room_name": "...", "negotiated_medium": "..."}
+  Response: {"token", "livekit_url", "room_name", "publish", "customer_publish",
+             "hidden", "policy_source"}
 
 Phase C — STT/TTS pipeline (Arc 15):
   - LiveKitRoomClient connects as bot, subscribes to customer audio track
   - resample_pcm_48_to_8() converts 48kHz PCM → 8kHz μ-law for Deepgram
   - STT finals published to conversations.inbound (content_type=audio_transcript)
-  - TTS: MP3 bytes → PCM → LocalAudioTrack injection (when medium=voice/video)
+  - TTS: MP3 bytes → PCM → LocalAudioTrack injection (when the customer ceiling carries audio)
   - DataChannel text (webrtc.message) → Kafka conversations.inbound (medium=text)
   - DataChannel menu reply (webrtc.interaction_reply) → Redis menu:result:{session_id}
 
@@ -51,7 +57,8 @@ Security invariants (from arc15-webrtc.md):
   - LiveKit tokens are signed exclusively by Channel Gateway.
   - LIVEKIT_API_SECRET is never exposed to browsers.
   - Supervisor tokens always have hidden=True, can_publish=False.
-  - medium=text is the universal fallback — always set when routing.assigned.
+  - Text (WS/DataChannel) is always available; audio/video are per-participant ceilings
+    from `media_policy` (VOZ-09).
 """
 
 from __future__ import annotations
@@ -89,8 +96,8 @@ from .webrtc_provider import (
     TokenGrants,
     WebRTCProviderUnavailable,
     build_room_name,
-    negotiate_medium,
 )
+from . import media_policy
 from .webrtc_room_client import (
     IWebRTCRoomClient,
     LiveKitRoomClient,
@@ -120,7 +127,7 @@ class WebRTCAdapter(ChannelAdapter):
     One instance is created at startup and shared across all active WebSocket
     connections.  Per-connection state is tracked internally via:
       - _connections:  session_id → WebSocket  (for outbound delivery)
-      - _mediums:      session_id → negotiated medium
+      - _customer_media: session_id → teto de mídia do cliente (espelho do Redis)
 
     The adapter implements the full ChannelAdapter interface so it is
     dispatched by OutboundConsumer the same way as SMS/WhatsApp/Email.
@@ -166,8 +173,10 @@ class WebRTCAdapter(ChannelAdapter):
         # Populated in handle_ws(); removed on close.
         self._connections: dict[str, WebSocket] = {}
 
-        # Negotiated medium per session (set when routing.assigned received).
-        self._mediums: dict[str, str] = {}
+        # VOZ-09: espelho em memória do TETO do cliente por sessão (fonte: Redis
+        # `channel:webrtc:{sid}:media`). Substitui `_mediums`, que guardava UM meio para a
+        # sessão inteira e era sobrescrito a cada atribuição.
+        self._customer_media: dict[str, frozenset[str]] = {}
 
         # Phase C: server-side LiveKit room clients (session_id → room client)
         # and STT pipeline tasks.
@@ -250,10 +259,9 @@ class WebRTCAdapter(ChannelAdapter):
         Deliver a text message to the WebRTC client.
         Called by OutboundConsumer for msg_type="message.text".
 
-        Behaviour by medium:
-          text:         sends webrtc.message over the WebSocket (DataChannel).
-          voice/video:  also attempts TTS injection into the LiveKit room when
-                        webrtc_tts_injection_enabled=True.
+        Always sends webrtc.message over the WebSocket. When the customer ceiling
+        carries audio, also attempts TTS injection into the LiveKit room when
+        webrtc_tts_injection_enabled=True.
         """
         session_id = payload.get("session_id", "")
         ws = self._connections.get(session_id)
@@ -277,11 +285,10 @@ class WebRTCAdapter(ChannelAdapter):
             "ts":     ts,
         })
 
-        # Phase C: inject TTS into LiveKit room for voice/video sessions
-        medium = self._mediums.get(session_id, "text")
+        # Phase C: inject TTS into LiveKit room when the customer's media carries audio
         if (
             text
-            and medium in ("voice", "video")
+            and media_policy.AUDIO in self._customer_media.get(session_id, frozenset())
             and self._settings.webrtc_tts_injection_enabled
         ):
             disparar(
@@ -364,7 +371,7 @@ class WebRTCAdapter(ChannelAdapter):
                 pass
 
         self._connections.pop(session_id, None)
-        self._mediums.pop(session_id, None)
+        self._customer_media.pop(session_id, None)
         logger.info(
             "webrtc session_closed delivered: session=%s reason=%s",
             session_id, reason,
@@ -455,7 +462,7 @@ class WebRTCAdapter(ChannelAdapter):
 
         # ── Cleanup ───────────────────────────────────────────────────────────
         self._connections.pop(session_id, None)
-        self._mediums.pop(session_id, None)
+        self._customer_media.pop(session_id, None)
         logger.info("webrtc WS session complete: session=%s contact=%s", session_id, contact_id)
 
     # ── Auth handshake ────────────────────────────────────────────────────────
@@ -576,11 +583,10 @@ class WebRTCAdapter(ChannelAdapter):
         Watch session:{id}:stream for routing.assigned events.
 
         On routing.assigned:
-          1. Extract agent media_capabilities and pool webrtc_media_fallback_order
-          2. negotiate_medium() → select video|voice|text
-          3. LiveKit: create_room(plughub-{session_id})
-          4. LiveKit: generate_token(customer grants)
-          5. Send webrtc.ready to client with URL, token, medium, room_name
+          1st → register attendant, compute the customer ceiling (`media_policy`),
+                create_room, token recortado por fonte, webrtc.ready
+          next → attendant SOMA ao conjunto e o teto é refeito (webrtc.media)
+        On participant_left: attendant sai do conjunto e o teto é refeito.
 
         Continues watching after webrtc.ready to detect session.closed events
         (e.g. agent done, max duration exceeded) and stop the keepalive.
@@ -613,11 +619,14 @@ class WebRTCAdapter(ChannelAdapter):
                                 )
                                 ready_sent = True
                             else:
-                                # Subsequent assignment (agent transfer) — re-negotiate
-                                # medium and notify client; room is reused.
+                                # Atendente a mais (transferência, especialista, hook):
+                                # SOMA ao conjunto e refaz o teto do cliente.
                                 await self._on_routing_renegotiate(
                                     ws, session_id, fields, s
                                 )
+
+                        elif event_type == "participant_left" and ready_sent:
+                            await self._on_attendant_left(ws, session_id, fields)
 
                         elif event_type in ("session.closed", "agent_done"):
                             # Session ended from server side — stop watcher
@@ -634,6 +643,71 @@ class WebRTCAdapter(ChannelAdapter):
                 )
                 await asyncio.sleep(_STREAM_WATCHER_SLEEP)
 
+    # ── Mídia por PARTICIPANTE (VOZ-09) ───────────────────────────────────────
+    #
+    # O estado de mídia da sessão é `channel:webrtc:{sid}:media`, um JSON com DOIS fatos
+    # de escopo diferente, e é por isso que são dois campos e não um meio:
+    #   attendants  {instance_id: framework} — quem atende AGORA (entra no
+    #               `routing.assigned`, sai no `participant_left`);
+    #   customer    {publish, policy_source, reason, updated_at} — o TETO do cliente,
+    #               derivado dos atendentes pela `media_policy`.
+    # Um único watcher por sessão processa o stream em ordem, então ler-modificar-gravar
+    # aqui não concorre consigo mesmo.
+
+    def _media_key(self, session_id: str) -> str:
+        return f"channel:webrtc:{session_id}:media"
+
+    async def _load_media_state(self, session_id: str) -> dict:
+        raw = await self._redis.get(self._media_key(session_id))
+        if not raw:
+            return {"attendants": {}, "customer": None}
+        try:
+            state = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            logger.error(
+                "webrtc media: estado ILEGIVEL em %s — recomeçando SEM atendentes (teto vazio)",
+                self._media_key(session_id),
+            )
+            return {"attendants": {}, "customer": None}
+        state.setdefault("attendants", {})
+        state.setdefault("customer", None)
+        return state
+
+    async def _save_media_state(self, session_id: str, state: dict) -> None:
+        await self._redis.setex(
+            self._media_key(session_id), self._settings.session_ttl_seconds, json.dumps(state),
+        )
+
+    async def _customer_identity(self, session_id: str) -> str:
+        contact_id = await self._redis.get(f"session:{session_id}:contact_id") or session_id
+        return f"customer-{contact_id}"
+
+    def _customer_grants(self, room_name: str, identity: str, publish: frozenset[str]) -> TokenGrants:
+        policy = media_policy.role_policy(media_policy.CUSTOMER)
+        return TokenGrants(
+            room_name           = room_name,
+            identity            = identity,
+            display_name        = "Customer",
+            can_publish         = True,
+            can_subscribe       = policy.subscribe,
+            can_publish_data    = True,
+            hidden              = policy.hidden,
+            ttl_seconds         = self._settings.webrtc_token_ttl_s,
+            can_publish_sources = tuple(media_policy.publish_sources(publish)),
+        )
+
+    @staticmethod
+    def _framework_of(fields: dict, instance_id: str) -> str:
+        framework = fields.get("framework", "")
+        if framework not in media_policy.CONSUMES_BY_FRAMEWORK:
+            # Restritivo vence: framework ausente consome NADA. Dito, não suposto.
+            logger.warning(
+                "webrtc media: routing.assigned sem framework reconhecido (%r) para "
+                "instance=%s — tratado como atendente que NAO consome midia",
+                framework, instance_id,
+            )
+        return framework
+
     async def _on_routing_assigned(
         self,
         ws:         WebSocket,
@@ -642,36 +716,22 @@ class WebRTCAdapter(ChannelAdapter):
         s:          Settings,
     ) -> None:
         """
-        Handle a routing.assigned stream event.
-        Negotiates medium, creates LiveKit room, and sends webrtc.ready.
+        PRIMEIRO `routing.assigned` da sessão: registra o atendente, calcula o teto do
+        cliente, cria a sala e envia `webrtc.ready` com o token já recortado por fonte.
         """
-        # Extract agent capabilities and pool config from stream entry
-        agent_type_raw   = fields.get("agent_type", "{}")
-        pool_raw         = fields.get("pool", "{}")
+        instance_id = fields.get("instance_id", "")
+        framework   = self._framework_of(fields, instance_id)
+        state = await self._load_media_state(session_id)
+        state["attendants"][instance_id or "?"] = framework
+        publish = media_policy.customer_ceiling(state["attendants"])
+        state["customer"] = {
+            "publish":       media_policy.kinds_list(publish),
+            "policy_source": media_policy.PLATFORM_DEFAULT_SOURCE,
+            "reason":        f"attendant_joined:{framework or 'unknown'}",
+            "updated_at":    datetime.now(timezone.utc).isoformat(),
+        }
+        self._customer_media[session_id] = publish
 
-        try:
-            agent_type_obj = json.loads(agent_type_raw) if isinstance(agent_type_raw, str) else agent_type_raw
-        except (json.JSONDecodeError, TypeError):
-            agent_type_obj = {}
-
-        try:
-            pool_obj = json.loads(pool_raw) if isinstance(pool_raw, str) else pool_raw
-        except (json.JSONDecodeError, TypeError):
-            pool_obj = {}
-
-        agent_capabilities = agent_type_obj.get("media_capabilities", ["text"])
-
-        # Pool-level medium fallback order (comma-separated string or list)
-        fallback_raw = pool_obj.get("webrtc_media_fallback_order", s.webrtc_default_medium_order)
-        if isinstance(fallback_raw, str):
-            fallback_order = [m.strip() for m in fallback_raw.split(",") if m.strip()]
-        else:
-            fallback_order = list(fallback_raw) if fallback_raw else ["video", "voice", "text"]
-
-        medium = negotiate_medium(agent_capabilities, fallback_order)
-        self._mediums[session_id] = medium
-
-        # Create LiveKit room
         room_name = build_room_name(session_id)
         try:
             await self._provider.create_room(room_name)
@@ -681,60 +741,35 @@ class WebRTCAdapter(ChannelAdapter):
                 session_id, room_name, exc,
             )
 
-        # Generate customer token
-        contact_id = await self._redis.get(f"session:{session_id}:contact_id") or session_id
-        grants = TokenGrants(
-            room_name    = room_name,
-            identity     = f"customer-{contact_id}",
-            display_name = "Customer",
-            can_publish  = medium in ("video", "voice"),
-            can_subscribe = True,
-            can_publish_data = True,
-            hidden       = False,
-            ttl_seconds  = s.webrtc_token_ttl_s,
-        )
-        try:
-            token = self._provider.generate_token(grants)
-        except Exception as exc:
-            logger.error(
-                "webrtc: generate_token failed (session=%s): %s", session_id, exc
-            )
-            token = ""
+        identity = await self._customer_identity(session_id)
+        token = self._provider.generate_token(self._customer_grants(room_name, identity, publish))
 
-        # Persist room_name and medium for token endpoint
         ttl = s.session_ttl_seconds
-        await self._redis.setex(
-            f"channel:webrtc:{session_id}:room_name", ttl, room_name
-        )
-        await self._redis.setex(
-            f"channel:webrtc:{session_id}:medium", ttl, medium
-        )
+        await self._redis.setex(f"channel:webrtc:{session_id}:room_name", ttl, room_name)
+        await self._save_media_state(session_id, state)
 
-        # Send webrtc.ready to client
         await self._ws_send(ws, {
-            "type":              "webrtc.ready",
-            "livekit_url":       self._client_livekit_url(),
-            "token":             token,
-            "negotiated_medium": medium,
-            "room_name":         room_name,
+            "type":          "webrtc.ready",
+            "livekit_url":   self._client_livekit_url(),
+            "token":         token,
+            "room_name":     room_name,
+            "publish":       state["customer"]["publish"],
+            "policy_source": state["customer"]["policy_source"],
         })
-
         logger.info(
-            "webrtc ready: session=%s medium=%s room=%s",
-            session_id, medium, room_name,
+            "webrtc ready: session=%s publish=%s attendants=%s room=%s",
+            session_id, state["customer"]["publish"], state["attendants"], room_name,
         )
 
-        # Phase C: start STT pipeline for audio-capable mediums
-        if medium in ("voice", "video"):
+        if media_policy.AUDIO in publish:
             disparar(
                 self._start_stt_pipeline(session_id, room_name),
                 nome=f"webrtc-stt-start-{session_id[:8]}",
             )
 
-        # Phase D: start egress recording when pool.webrtc_recording=True
-        segment_id    = fields.get("segment_id", "")
-        should_record = pool_obj.get("webrtc_recording", False)
-        if should_record and segment_id and medium in ("voice", "video"):
+        pool_obj   = self._json_field(fields, "pool")
+        segment_id = fields.get("segment_id", "")
+        if pool_obj.get("webrtc_recording", False) and segment_id and publish:
             disparar(
                 self._start_egress(session_id, segment_id, room_name),
                 nome=f"webrtc-egress-start-{session_id[:8]}",
@@ -748,74 +783,101 @@ class WebRTCAdapter(ChannelAdapter):
         s:          Settings,
     ) -> None:
         """
-        Handle a subsequent routing.assigned event after webrtc.ready was sent.
-
-        This occurs when a new agent takes over the session (e.g. transfer or
-        specialist join) with potentially different media_capabilities.
-
-        If the negotiated medium changes, send webrtc.renegotiate to the client
-        so it can adapt its local tracks.  The LiveKit room is reused — no new
-        room creation or token re-issue is needed (the client's existing grant
-        covers the room for the session TTL).
-
-        Arc 15 Phase B.
+        `routing.assigned` SUBSEQUENTE: o atendente SOMA ao conjunto (transferência,
+        especialista, hook) — nunca substitui o anterior. Quem sai sai pelo
+        `participant_left`.
         """
-        # Extract agent capabilities and pool config
-        agent_type_raw = fields.get("agent_type", "{}")
-        pool_raw       = fields.get("pool", "{}")
+        instance_id = fields.get("instance_id", "")
+        framework   = self._framework_of(fields, instance_id)
+        state = await self._load_media_state(session_id)
+        state["attendants"][instance_id or "?"] = framework
+        await self._apply_customer_ceiling(
+            ws, session_id, state, f"attendant_joined:{framework or 'unknown'}",
+        )
 
-        try:
-            agent_type_obj = json.loads(agent_type_raw) if isinstance(agent_type_raw, str) else agent_type_raw
-        except (json.JSONDecodeError, TypeError):
-            agent_type_obj = {}
-
-        try:
-            pool_obj = json.loads(pool_raw) if isinstance(pool_raw, str) else pool_raw
-        except (json.JSONDecodeError, TypeError):
-            pool_obj = {}
-
-        agent_capabilities = agent_type_obj.get("media_capabilities", ["text"])
-        fallback_raw = pool_obj.get("webrtc_media_fallback_order", s.webrtc_default_medium_order)
-        if isinstance(fallback_raw, str):
-            fallback_order = [m.strip() for m in fallback_raw.split(",") if m.strip()]
-        else:
-            fallback_order = list(fallback_raw) if fallback_raw else ["video", "voice", "text"]
-
-        new_medium  = negotiate_medium(agent_capabilities, fallback_order)
-        prev_medium = self._mediums.get(session_id)
-
-        if new_medium == prev_medium:
-            logger.debug(
-                "webrtc renegotiate: medium unchanged (%s) — skipping: session=%s",
-                new_medium, session_id,
+    async def _on_attendant_left(self, ws: WebSocket, session_id: str, fields: dict) -> None:
+        """`participant_left` no stream: o atendente sai do conjunto e o teto é refeito."""
+        who = fields.get("author_id", "") or self._json_field(fields, "payload").get("participant_id", "")
+        state = await self._load_media_state(session_id)
+        if who not in state["attendants"]:
+            # Não se inventa quem saiu. Se ids de entrada e saída divergirem, o teto fica
+            # MAIS PERMISSIVO do que devia — por isso o aviso nomeia os dois lados.
+            logger.warning(
+                "webrtc media: participant_left de %r, que nao e atendente registrado "
+                "(atendentes=%s) — teto do cliente NAO recalculado (session=%s)",
+                who, sorted(state["attendants"]), session_id,
             )
             return
+        framework = state["attendants"].pop(who)
+        await self._apply_customer_ceiling(ws, session_id, state, f"attendant_left:{framework or 'unknown'}")
 
-        # Medium changed — update state and notify client
-        self._mediums[session_id] = new_medium
-        try:
-            await self._redis.setex(
-                f"channel:webrtc:{session_id}:medium",
-                s.session_ttl_seconds,
-                new_medium,
-            )
-        except Exception as exc:
-            logger.warning(
-                "webrtc renegotiate: could not update medium in Redis: "
-                "session=%s — %s", session_id, exc,
-            )
+    async def _apply_customer_ceiling(
+        self, ws: WebSocket, session_id: str, state: dict, reason: str,
+    ) -> None:
+        """
+        Recalcula o teto do cliente e, se mudou, aplica NOS DOIS LADOS: permissão no SFU
+        (se o cliente já está na sala) e `webrtc.media` com token novo ao cliente (se
+        ainda não entrou, entra com o teto certo). Sem mudança, não faz nada.
+        """
+        publish = media_policy.customer_ceiling(state["attendants"])
+        previous = (state.get("customer") or {}).get("publish")
+        new_list = media_policy.kinds_list(publish)
+        if previous == new_list:
+            await self._save_media_state(session_id, state)
+            logger.debug("webrtc media: teto inalterado %s (%s) session=%s", new_list, reason, session_id)
+            return
+
+        state["customer"] = {
+            "publish":       new_list,
+            "policy_source": media_policy.PLATFORM_DEFAULT_SOURCE,
+            "reason":        reason,
+            "updated_at":    datetime.now(timezone.utc).isoformat(),
+        }
+        self._customer_media[session_id] = publish
+        await self._save_media_state(session_id, state)
 
         room_name = build_room_name(session_id)
+        identity  = await self._customer_identity(session_id)
+        try:
+            in_room = await self._provider.update_participant_permission(
+                room_name, identity, tuple(media_policy.publish_sources(publish)),
+            )
+        except Exception as exc:
+            # O watcher engoliria isto em `debug` e o evento já foi consumido: sem esta
+            # linha, o SFU ficaria com a permissão velha e ninguém saberia.
+            in_room = None
+            logger.error(
+                "webrtc media: FALHOU aplicar teto %s no SFU para %s (session=%s): %s — "
+                "o cliente recebe o token novo, mas a permissao na sala segue a ANTERIOR",
+                new_list, identity, session_id, exc,
+            )
+        token = self._provider.generate_token(self._customer_grants(room_name, identity, publish))
         await self._ws_send(ws, {
-            "type":              "webrtc.renegotiate",
-            "negotiated_medium": new_medium,
-            "room_name":         room_name,
+            "type":          "webrtc.media",
+            "token":         token,
+            "room_name":     room_name,
+            "publish":       new_list,
+            "policy_source": state["customer"]["policy_source"],
+            "reason":        reason,
         })
-
         logger.info(
-            "webrtc renegotiate: session=%s %s → %s room=%s",
-            session_id, prev_medium, new_medium, room_name,
+            "webrtc media: teto do cliente %s -> %s (%s; aplicado no SFU=%s) session=%s",
+            previous, new_list, reason, in_room, session_id,
         )
+        if media_policy.AUDIO in publish and session_id not in self._room_clients:
+            disparar(
+                self._start_stt_pipeline(session_id, room_name),
+                nome=f"webrtc-stt-start-{session_id[:8]}",
+            )
+
+    @staticmethod
+    def _json_field(fields: dict, name: str) -> dict:
+        raw = fields.get(name, "{}")
+        try:
+            value = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return value if isinstance(value, dict) else {}
 
     # ── Receive loop ─────────────────────────────────────────────────────────
 
@@ -922,9 +984,7 @@ class WebRTCAdapter(ChannelAdapter):
                 await self._redis.expire(
                     f"channel:webrtc:{session_id}:room_name", ttl
                 )
-                await self._redis.expire(
-                    f"channel:webrtc:{session_id}:medium", ttl
-                )
+                await self._redis.expire(self._media_key(session_id), ttl)
             except Exception as exc:
                 logger.debug(
                     "webrtc keepalive error (session=%s): %s", session_id, exc
@@ -944,14 +1004,16 @@ class WebRTCAdapter(ChannelAdapter):
         Called by the GET /webrtc/token/{session_id} HTTP endpoint after the
         agent's JWT is validated by the FastAPI route (Authorization: Bearer).
 
-        Returns a dict with: token, livekit_url, room_name, negotiated_medium.
+        Returns {token, livekit_url, room_name, publish, customer_publish, hidden,
+        policy_source} — `publish` é o teto DESTE participante; `customer_publish` é o do
+        cliente, para a tela decidir o que mostrar. Não há mais `negotiated_medium`: um meio
+        único para a sessão era o defeito (VOZ-09).
         Returns None if the session has no active LiveKit room yet.
         Raises WebRTCProviderUnavailable when the media plane is not configured.
         """
         if self._provider is None:
             raise self._provider_unavailable or WebRTCProviderUnavailable(["provider"])
         room_name = await self._redis.get(f"channel:webrtc:{session_id}:room_name")
-        medium    = await self._redis.get(f"channel:webrtc:{session_id}:medium")
 
         if not room_name:
             logger.debug(
@@ -959,27 +1021,34 @@ class WebRTCAdapter(ChannelAdapter):
             )
             return None
 
-        is_supervisor = (role == "supervisor")
+        policy = media_policy.role_policy(
+            media_policy.SUPERVISOR if role == "supervisor" else media_policy.AGENT
+        )
         grants = TokenGrants(
-            room_name        = room_name,
-            identity         = f"{role}-{identity}",
-            display_name     = identity,
-            can_publish      = not is_supervisor,
-            can_subscribe    = True,
-            can_publish_data = not is_supervisor,
-            hidden           = is_supervisor,
-            ttl_seconds      = self._settings.webrtc_token_ttl_s,
+            room_name           = room_name,
+            identity            = f"{role}-{identity}",
+            display_name        = identity,
+            can_publish         = True,
+            can_subscribe       = policy.subscribe,
+            can_publish_data    = not policy.hidden,
+            hidden              = policy.hidden,
+            ttl_seconds         = self._settings.webrtc_token_ttl_s,
+            can_publish_sources = tuple(media_policy.publish_sources(policy.publish)),
         )
 
         # Sem try: assinar é local, e uma falha aqui é defeito. Antes ela virava `None`
         # e a rota respondia 404 *"room not ready"* — motivo plausível e falso.
         token = self._provider.generate_token(grants)
+        state = await self._load_media_state(session_id)
 
         return {
-            "token":              token,
-            "livekit_url":        self._client_livekit_url(),
-            "room_name":          room_name,
-            "negotiated_medium":  medium or "text",
+            "token":            token,
+            "livekit_url":      self._client_livekit_url(),
+            "room_name":        room_name,
+            "publish":          media_policy.kinds_list(policy.publish),
+            "customer_publish": (state.get("customer") or {}).get("publish", []),
+            "hidden":           policy.hidden,
+            "policy_source":    media_policy.PLATFORM_DEFAULT_SOURCE,
         }
 
     # ── Session close ─────────────────────────────────────────────────────────
@@ -1034,7 +1103,7 @@ class WebRTCAdapter(ChannelAdapter):
         """
         Connect a server-side LiveKit room client and start the STT pipeline.
 
-        Called from _on_routing_assigned() when medium=voice or medium=video
+        Called when the customer ceiling carries audio (VOZ-09)
         and webrtc_stt_enabled=True.
         """
         s = self._settings
@@ -1180,7 +1249,7 @@ class WebRTCAdapter(ChannelAdapter):
         Synthesize text → MP3 → PCM and inject into the LiveKit room.
 
         Called as a fire-and-forget task from deliver_text() when:
-          - medium is voice or video
+          - the customer ceiling carries audio (VOZ-09)
           - webrtc_tts_injection_enabled=True
           - a room client is active for this session
         """
@@ -1242,7 +1311,7 @@ class WebRTCAdapter(ChannelAdapter):
         restart (best-effort — restart gap leaves egress running, not crashed).
 
         Called as a fire-and-forget task from _on_routing_assigned() when
-        pool.webrtc_recording=True and medium is voice or video.
+        pool.webrtc_recording=True and the customer ceiling is not empty.
         """
         s = self._settings
 
@@ -1261,9 +1330,8 @@ class WebRTCAdapter(ChannelAdapter):
         # LGPD recording notice — prefer TTS injection when the room client is
         # active; fall back to a text message over WebSocket.
         notice = s.webrtc_recording_notice
-        medium = self._mediums.get(session_id, "text")
         if (
-            medium in ("voice", "video")
+            media_policy.AUDIO in self._customer_media.get(session_id, frozenset())
             and s.webrtc_tts_injection_enabled
             and session_id in self._room_clients
         ):

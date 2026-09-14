@@ -273,10 +273,12 @@ A §7 dizia *"Vídeo — o transporte suporta, mas não é requisito deste arco"
 infraestrutura WebRTC tem de estar preparada para agentes de IA em vídeo (avatar). O que isso
 obriga, e onde está no ledger:
 
-- **mídia é fato do PARTICIPANTE, não da sessão** (`VOZ-09`) — medido em 2026-09-14, o código
-  guarda UM meio por sessão, e um especialista de texto entrando numa conferência de vídeo
-  rebaixaria o cliente; com avatar a mídia é ainda assimétrica (avatar publica vídeo, cliente
-  pode estar só com áudio);
+- **mídia é fato do PARTICIPANTE, não da sessão** (`VOZ-09`, ✅ 2026-09-14) — o código guardava
+  UM meio por sessão, e um especialista de texto entrando numa conferência de vídeo rebaixava o
+  cliente enquanto o SFU seguia permitindo tudo. Hoje o teto do cliente é política ∩ UNIÃO do que
+  os atendentes consomem, aplicado no SFU (`update_participant`) e anunciado ao cliente
+  (`webrtc.media`); revogar retira a trilha já publicada. Com avatar a mídia é assimétrica por
+  construção, e o modelo já a representa;
 - **mídias oferecidas configuradas por POOL** (`VOZ-10`) e **fallback por SEGMENTO** (`VOZ-11`);
 - **o provedor de avatar entra na NOSSA sala** (`VOZ-14`). É V1 aplicada: renderização pode ser
   contratada, a sala não — senão gravação, supervisão e avaliação escapam;

@@ -1,5 +1,94 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (12) — VOZ-09: a mídia do WebRTC é fato do participante, e o SFU obedece
+
+### 1 · Vermelho ao vivo, antes
+
+Com a imagem anterior, Redis e SFU reais: humano de vídeo atende, o cliente entra e publica
+microfone, um especialista de IA de texto entra.
+
+| pergunta | resposta medida |
+|---|---|
+| o que o cliente recebe | `webrtc.renegotiate` com `negotiated_medium: text` — mandado sair do vídeo |
+| estado da sessão | `channel:webrtc:{sid}:medium = text` |
+| o que o SFU permite ao cliente | `can_publish=True`, `can_publish_sources=[]` — no LiveKit, **todas** as fontes |
+| `routing.assigned` vivos com algo que dissesse o que o atendente consome | **0 de 204** (o `media_capabilities` não tinha produtor) |
+
+Duas respostas para a mesma pergunta — o cliente ouvia "texto", o SFU dizia "tudo" — e nenhuma
+certa. É a regra de escopo outra vez: um fato do PARTICIPANTE guardado num campo da SESSÃO, e
+sobrescrito por quem chegasse por último.
+
+### 2 · O que mudou
+
+- **`adapters/media_policy.py`** (puro): três camadas. POLÍTICA por papel da sala (`customer`,
+  `agent`, `supervisor`, `bot`), tabela de plataforma com procedência `platform_default` até a
+  `VOZ-10` trazê-la do pool · CONSUMO do atendente derivado do `framework` (humano consome áudio e
+  vídeo; IA nativa e externa, nada — até bot leg e avatar) · ESCOLHA fica no cliente. **Teto do
+  cliente = política ∩ UNIÃO do consumo dos atendentes presentes.** Framework desconhecido consome
+  nada, e o adapter avisa.
+- **Bridge**: `routing.assigned` passou a carregar `framework` (`native|human|external-mcp`) no
+  lugar do `agent_type.media_capabilities`.
+- **Adapter**: estado `channel:webrtc:{sid}:media` com `attendants` e `customer` (dois fatos, dois
+  campos); primeira atribuição → sala + token recortado por fonte + `webrtc.ready {publish}`;
+  atribuição seguinte SOMA; `participant_left` retira; mudança de teto aplica **nos dois lados**
+  (`update_participant` no SFU e `webrtc.media` com token novo). Falha ao aplicar no SFU loga
+  `ERROR` nomeando o teto que ficou para trás — o watcher engoliria em `debug`. Saíram
+  `negotiate_medium`, `_mediums`, a chave `:medium` e o setting `webrtc_default_medium_order`.
+- **Provider**: `TokenGrants.can_publish_sources`; teto vazio vira `can_publish=False` (lista vazia
+  no LiveKit é "tudo"); `update_participant_permission`.
+- **Token de agente/supervisor**: `publish`, `customer_publish`, `hidden`, `policy_source` — sem
+  `negotiated_medium`.
+- **Console**: o hook recebe o PAPEL e publica só o próprio teto; a tela deriva a visão dos tetos.
+  **A visão de supervisor pedia `role=agent`** e entraria na sala publicando. **Widget de demo**:
+  lê `token` (lia `livekit_token`, que o servidor nunca enviou) e `publish`, e trata `webrtc.media`.
+
+### 3 · Três medições no SFU real que mudaram o código
+
+1. **`update_participant` sobre participante ausente responde `unavailable`/503** ("no response
+   from servers") — a mesma cara de SFU fora do ar. `get_participant` responde `not_found`/404
+   limpo, então o provider pergunta antes de atualizar.
+2. **`ParticipantPermission.can_publish_sources` exige o ENUM** (`MICROPHONE`), enquanto o token JWT
+   aceita a string minúscula. A primeira versão levantaria `ValueError` em toda troca de teto.
+3. **Revogar a permissão RETIRA a trilha já publicada**, e publicar sem permissão é recusado — o
+   teto é aplicado pelo SFU, não só anunciado ao cliente.
+
+E uma do instrumento: **o cliente Python do LiveKit pendura no `disconnect` depois de uma
+publicação recusada.** A primeira versão do probe morreu por `timeout` sem reportar nada — o teste
+que não pode reprovar. Hoje o exercício pergunta a permissão ao SFU em vez de tentar publicar com o
+supervisor, e o probe mata o container e reprova com nome quando o exercício estoura o tempo.
+
+### 4 · Testes e probe
+
+- Testes: saíram os 7 de `negotiate_medium`, os de token e atribuição que cobravam o meio único, e
+  a classe `TestEgressRecordingOptOut`, que REIMPLEMENTAVA a condição de gravação no corpo do teste.
+  Entraram `TestMediaPolicy`, `TestTokenFontesNoSDK` (assina de verdade: teto vazio →
+  `canPublish=False`) e `TestWebRTCAdapterMediaCeiling` — inclusive o cenário exato do vermelho.
+  Suíte do gateway na imagem **1004**, bridge **151** (5 skipped), typecheck do platform-ui limpo.
+- Gate **`probe_webrtc_participant_media.sh`**: **A** contrato medido no LEITOR (bridge grava e
+  gateway lê `framework`; política conhece exatamente os frameworks do produtor; Console e widget
+  leem só chaves que o servidor emite; supervisor pede `role=supervisor`) · **B** imagem · **C**
+  cenário ao vivo com a permissão perguntada AO SFU — humano atende e o cliente publica;
+  especialista de texto entra e nada muda; humano sai e a trilha SAI; outro humano atende e o
+  cliente republica sem reconectar; fora da sala o token novo traz o teto novo; supervisor oculto
+  sem publicação · **M** teto que nunca cai derruba C3, último-substitui derruba C2 · **D** produtor
+  vivo, INCONCLUSIVO sem `routing.assigned` posterior ao boot do bridge.
+- Contra as imagens anteriores: **VERMELHO** (D1: 204 de 204 sem `framework`). Contra as novas,
+  primeiro INCONCLUSIVO (nenhum contato desde o restart) e, com uma sessão descartável em
+  `gate_promocao_ia`, **VERDE**. Vizinhos verdes: `probe_webrtc_media_plane`,
+  `probe_gates_manifest_coverage`, `probe_adapter_self_calls`, `probe_edge_surface`,
+  `probe_authz_single_verifier`, `probe_task_ledger`, `probe_i18n_duplicate_keys`,
+  `check_config_invariants`.
+
+### 5 · O que ficou, registrado
+
+- **`participant_left` só existe para humano** — segmento de IA não escreve saída. Inócuo enquanto
+  IA não consome mídia; deixa de ser com o bot leg (`VOZ-11`).
+- **Paridade de identidade entrada × saída** coberta por teste e aviso nomeado, não medida com
+  contato humano real (`VOZ-04`).
+- **Contrato do widget ainda quebrado** no handshake e no `webrtc.message`, e o `_stream_watcher`
+  para em `agent_done`/`session.closed` — tipos a conferir contra o stream real (`VOZ-04`).
+- A política ainda é tabela de plataforma: a `VOZ-10` a leva ao pool.
+
 ## 2026-09-14 (11) — Voz/vídeo: vídeo no escopo, duas velocidades, e a negociação de mídia medida inerte
 
 Sem mudança de código. Decisões do dono, depois de avaliar um estudo de agente de IA em vídeo

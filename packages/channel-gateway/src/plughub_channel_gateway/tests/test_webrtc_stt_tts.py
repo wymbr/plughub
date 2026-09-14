@@ -65,7 +65,6 @@ def _settings(**overrides) -> Settings:
         webrtc_token_ttl_s         = 3600,
         webrtc_stt_enabled         = True,
         webrtc_tts_injection_enabled = False,
-        webrtc_default_medium_order  = "video,voice,text",
         voice_deepgram_api_key     = "",
         voice_stt_language         = "pt-BR",
         voice_elevenlabs_api_key   = "",
@@ -425,8 +424,8 @@ class TestTtsInjection:
         assert room_client.published_chunks == []
 
     @pytest.mark.asyncio
-    async def test_deliver_text_triggers_tts_when_voice_medium_enabled(self):
-        """deliver_text must fire _tts_inject task when medium=voice and tts_injection_enabled."""
+    async def test_deliver_text_triggers_tts_when_customer_has_audio(self):
+        """deliver_text must fire _tts_inject when the customer ceiling carries audio and tts_injection_enabled."""
         s = _settings(webrtc_tts_injection_enabled=True)
         tts = MockTTSProvider(synthesize_returns_none=False)
         room_client = MockRoomClient()
@@ -434,7 +433,7 @@ class TestTtsInjection:
 
         adapter, redis, producer = _make_adapter(settings=s, tts=tts, room_client=room_client)
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID]     = "voice"
+        adapter._customer_media[SESSION_ID]     = frozenset({"audio"})
         adapter._room_clients[SESSION_ID] = room_client
 
         injected_calls: list[str] = []
@@ -454,15 +453,15 @@ class TestTtsInjection:
         assert "Olá, como posso ajudar?" in injected_calls
 
     @pytest.mark.asyncio
-    async def test_deliver_text_no_tts_when_text_medium(self):
-        """deliver_text must NOT inject TTS when medium=text."""
+    async def test_deliver_text_no_tts_when_customer_has_no_audio(self):
+        """deliver_text must NOT inject TTS when the customer ceiling has no audio."""
         s = _settings(webrtc_tts_injection_enabled=True)
         tts = MockTTSProvider(synthesize_returns_none=False)
         room_client = MockRoomClient()
 
         adapter, redis, producer = _make_adapter(settings=s, tts=tts, room_client=room_client)
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID]     = "text"  # ← text medium
+        adapter._customer_media[SESSION_ID]     = frozenset()  # ← teto sem áudio
         adapter._room_clients[SESSION_ID] = room_client
 
         injected: list[str] = []
@@ -484,7 +483,7 @@ class TestTtsInjection:
 
         adapter, redis, producer = _make_adapter(settings=s, tts=tts, room_client=room_client)
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID]     = "voice"
+        adapter._customer_media[SESSION_ID]     = frozenset({"audio"})
         adapter._room_clients[SESSION_ID] = room_client
 
         injected: list[str] = []
@@ -683,7 +682,7 @@ class TestTeardown:
 
         adapter, redis, producer = _make_adapter(room_client=room_client)
         adapter._connections[SESSION_ID]  = ws
-        adapter._mediums[SESSION_ID]      = "voice"
+        adapter._customer_media[SESSION_ID]      = frozenset({"audio"})
         adapter._room_clients[SESSION_ID] = room_client
 
         await adapter.deliver_session_closed({

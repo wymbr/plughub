@@ -528,6 +528,13 @@ function applyMedium(medium) {
   }
 }
 
+// ── Teto do cliente → visão local (VOZ-09) ───────────────────────────────────
+let lastLivekitUrl = '';
+function mediumFromPublish(publish) {
+  const p = Array.isArray(publish) ? publish : [];
+  return p.includes('video') ? 'video' : p.includes('audio') ? 'voice' : 'text';
+}
+
 // ── getUserMedia with graceful fallback ───────────────────────────────────────
 async function requestMedia(medium) {
   if (medium === 'text') return null;
@@ -840,10 +847,16 @@ async function connectWebRTC() {
     }
 
     // ── WebRTC ready — agent assigned, room created ─────────────────────────
+    // VOZ-09 (2026-09-14): o servidor não manda mais UM meio (`negotiated_medium`) — manda o
+    // TETO do cliente (`publish: ["audio","video"]`), e o token vem em `token` (este widget lia
+    // `livekit_token`, chave que o servidor nunca enviou). O "meio" abaixo é só a VISÃO local
+    // derivada do teto. ⚠️ O resto do contrato deste widget (handshake `conn.hello` esperado do
+    // servidor, `webrtc.message` com `content.text`) continua fora do servidor: é a VOZ-04.
     if (msg.type === 'webrtc.ready') {
-      const medium      = msg.negotiated_medium || 'text';
+      const medium      = mediumFromPublish(msg.publish);
       const livekitUrl  = msg.livekit_url;
-      const livekitToken = msg.livekit_token;
+      const livekitToken = msg.token;
+      lastLivekitUrl = livekitUrl;
 
       connected = true;
       setStatus('Conectado', 'ok');
@@ -866,9 +879,15 @@ async function connectWebRTC() {
       return;
     }
 
-    // ── Renegotiate (agent changed medium) ─────────────────────────────────
-    if (msg.type === 'webrtc.renegotiate') {
-      await handleRenegotiate(msg.medium || 'text');
+    // ── Teto de mídia mudou (atendente entrou/saiu) ─────────────────────────
+    if (msg.type === 'webrtc.media') {
+      const medium = mediumFromPublish(msg.publish);
+      if (!room && medium !== 'text' && lastLivekitUrl && msg.token) {
+        // ainda fora da sala: entra com o token NOVO, que já traz o teto certo
+        await connectLiveKit(lastLivekitUrl, msg.token, medium);
+      } else {
+        await handleRenegotiate(medium);
+      }
       return;
     }
 

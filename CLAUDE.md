@@ -1634,6 +1634,8 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 - **`GET /webrtc/token/{sid}` exige Bearer + capacidade por papel no pool da sessão**
   (`agent_assist.atender` publica · `contacts.monitorar` assina oculto), e a identidade na sala vem
   do JWT. Emitia sem credencial e com identidade da query — *tokens só do gateway* não diz *para quem*.
+- **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
+  que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
 
 Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (`VOZ-02` em `pending.md`, adiado por gatilho comercial).
 

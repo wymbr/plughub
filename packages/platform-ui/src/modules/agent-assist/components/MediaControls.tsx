@@ -3,7 +3,7 @@
  *
  * Bottom control bar for the WebRTC overlay.
  * Renders mic / camera toggles and a disconnect button.
- * Camera toggle is hidden when medium is "voice".
+ * Camera toggle is shown only when the operator's own ceiling includes video (VOZ-09).
  */
 
 import React from "react";
@@ -15,10 +15,9 @@ import {
   VideoOff,
   PhoneOff,
 } from "lucide-react";
-import type { NegotiatedMedium } from "../hooks/useWebRTCSession";
-
 interface MediaControlsProps {
-  medium:       NegotiatedMedium;
+  /** Meu teto inclui vídeo — só então há câmera a ligar/desligar (VOZ-09) */
+  canVideo:     boolean;
   micMuted:     boolean;
   cameraOff:    boolean;
   onToggleMic:  () => void;
@@ -51,7 +50,7 @@ const ControlButton: React.FC<{
 );
 
 export const MediaControls: React.FC<MediaControlsProps> = ({
-  medium,
+  canVideo,
   micMuted,
   cameraOff,
   onToggleMic,
@@ -66,7 +65,7 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
 
       {/* Medium badge */}
       <span className="text-xs text-gray-400 font-medium uppercase tracking-widest mr-2 select-none">
-        {t(`medium.${medium}`)}
+        {t(canVideo ? "medium.video" : "medium.voice")}
       </span>
 
       {/* Mic toggle */}
@@ -78,8 +77,8 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
         {micMuted ? <MicOff size={18} /> : <Mic size={18} />}
       </ControlButton>
 
-      {/* Camera toggle (video only) */}
-      {medium === "video" && (
+      {/* Camera toggle (only when my ceiling includes video) */}
+      {canVideo && (
         <ControlButton
           label={cameraOff ? t("controls.cameraOn") : t("controls.cameraOff")}
           active={!cameraOff}

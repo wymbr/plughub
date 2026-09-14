@@ -90,6 +90,11 @@ class TokenGrants:
     can_publish_data:   bool      = True    # DataChannel (text fallback)
     hidden:             bool      = False   # supervisor mode
     ttl_seconds:        int       = 3600
+    # VOZ-09 — fontes que o participante PODE publicar (`microphone`, `camera`).
+    # None = sem recorte por fonte (caminho legado). ⚠️ No LiveKit uma lista VAZIA em
+    # `can_publish_sources` significa TODAS as fontes; por isso lista vazia aqui vira
+    # `can_publish=False` no provider — "nada" nunca pode virar "tudo".
+    can_publish_sources: tuple[str, ...] | None = None
 
 
 # ── Protocol interface ────────────────────────────────────────────────────────
@@ -145,6 +150,23 @@ class IWebRTCProvider(Protocol):
 
     async def stop_egress(self, egress_id: str) -> None:
         """Stop a running egress. Phase D implementation."""
+        ...
+
+    async def update_participant_permission(
+        self,
+        room_name:           str,
+        identity:            str,
+        can_publish_sources: tuple[str, ...],
+        can_subscribe:       bool = True,
+        can_publish_data:    bool = True,
+    ) -> bool:
+        """
+        Troca a permissão de um participante JÁ na sala (VOZ-09).
+
+        True = aplicada. False = o participante não está na sala (ainda não entrou, ou
+        saiu) — nada a aplicar, e quem chama entrega um token novo ao cliente. Qualquer
+        outro erro PROPAGA: permissão que não se sabe se foi aplicada não é "False".
+        """
         ...
 
 
@@ -218,6 +240,9 @@ class LiveKitProvider:
         """Sign a LiveKit JWT token (no network I/O)."""
         from livekit.api import AccessToken, VideoGrants as LKVideoGrants
 
+        sources = grants.can_publish_sources
+        can_publish = grants.can_publish if sources is None else (grants.can_publish and bool(sources))
+        extra = {} if sources is None else {"can_publish_sources": list(sources)}
         at = (
             AccessToken(self._api_key, self._api_secret)
             .with_identity(grants.identity)
@@ -231,10 +256,11 @@ class LiveKitProvider:
                 LKVideoGrants(
                     room_join         = True,
                     room              = grants.room_name,
-                    can_publish       = grants.can_publish,
+                    can_publish       = can_publish,
                     can_subscribe     = grants.can_subscribe,
                     can_publish_data  = grants.can_publish_data,
                     hidden            = grants.hidden,
+                    **extra,
                 )
             )
         )
@@ -356,6 +382,47 @@ class LiveKitProvider:
         except Exception as exc:
             logger.warning("stop_egress failed (egress_id=%s): %s", egress_id, exc)
 
+    async def update_participant_permission(
+        self,
+        room_name:           str,
+        identity:            str,
+        can_publish_sources: tuple[str, ...],
+        can_subscribe:       bool = True,
+        can_publish_data:    bool = True,
+    ) -> bool:
+        from livekit.api import (
+            LiveKitAPI, ParticipantPermission, RoomParticipantIdentity, UpdateParticipantRequest,
+        )
+        from livekit.api.twirp_client import TwirpError
+        from livekit.protocol.models import TrackSource
+
+        perm = ParticipantPermission(
+            can_subscribe       = can_subscribe,
+            # lista vazia no LiveKit = TODAS as fontes: teto vazio desliga o publish
+            can_publish         = bool(can_publish_sources),
+            can_publish_data    = can_publish_data,
+            # ⚠️ Medido: aqui o protobuf exige o ENUM (`MICROPHONE`), enquanto o token JWT
+            # aceita a string minúscula (`microphone`). Passar a string levanta
+            # `ValueError: unknown enum label "microphone"`.
+            can_publish_sources = [TrackSource.Value(s.upper()) for s in can_publish_sources],
+        )
+        async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
+            # ⚠️ Pergunta-se ANTES, e isso é medição: `update_participant` sobre participante
+            # ausente responde `unavailable`/503 ("no response from servers") — a mesma cara
+            # de SFU fora do ar. `get_participant` responde `not_found`/404, limpo.
+            try:
+                await lkapi.room.get_participant(
+                    RoomParticipantIdentity(room=room_name, identity=identity)
+                )
+            except TwirpError as exc:
+                if exc.code == "not_found":
+                    return False
+                raise
+            await lkapi.room.update_participant(UpdateParticipantRequest(
+                room=room_name, identity=identity, permission=perm,
+            ))
+            return True
+
 
 # ── MockWebRTCProvider ────────────────────────────────────────────────────────
 
@@ -377,6 +444,8 @@ class MockWebRTCProvider:
         self.egresses_stopped: list[str]   = []
         self._rooms:           dict[str, RoomInfo] = {}
         self._egress_counter:  int = 0
+        self.permission_updates: list[dict] = []
+        self.joined:           set[str] = set()   # identidades "na sala", para o teste
 
     def generate_token(self, grants: TokenGrants) -> str:
         token = (
@@ -440,6 +509,21 @@ class MockWebRTCProvider:
     async def stop_egress(self, egress_id: str) -> None:
         self.egresses_stopped.append(egress_id)
 
+    async def update_participant_permission(
+        self,
+        room_name:           str,
+        identity:            str,
+        can_publish_sources: tuple[str, ...],
+        can_subscribe:       bool = True,
+        can_publish_data:    bool = True,
+    ) -> bool:
+        """Registra a troca; `joined` controla se o participante 'está na sala'."""
+        self.permission_updates.append({
+            "room_name": room_name, "identity": identity,
+            "can_publish_sources": tuple(can_publish_sources),
+        })
+        return identity in self.joined
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -449,25 +533,7 @@ def build_room_name(session_id: str) -> str:
     return f"plughub-{session_id}"
 
 
-MEDIUM_PRIORITY: list[str] = ["video", "voice", "text"]
-
-
-def negotiate_medium(
-    agent_capabilities:  list[str],
-    fallback_order:      list[str] | None = None,
-) -> str:
-    """
-    Return the highest-tier medium the agent supports.
-
-    Args:
-        agent_capabilities: e.g. ["voice", "text"] from agent type config
-        fallback_order: pool-level override, e.g. ["voice", "text"] for no-video pools
-
-    Returns:
-        "video" | "voice" | "text"  — always returns at least "text"
-    """
-    order = fallback_order or MEDIUM_PRIORITY
-    for medium in order:
-        if medium in agent_capabilities:
-            return medium
-    return "text"
+# LÁPIDE — `negotiate_medium` e `MEDIUM_PRIORITY` saíram em 2026-09-14 (VOZ-09). Escolhiam
+# UM meio (`video|voice|text`) para a sessão inteira a partir do `media_capabilities` do
+# agente, campo sem produtor (sempre `[]` → sempre `text`). O substituto é o teto POR
+# PARTICIPANTE de `media_policy.py`.

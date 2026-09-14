@@ -253,9 +253,6 @@ class Settings(BaseSettings):
     webrtc_token_ttl_s:             int = 3600
     # Default pool_id for WebRTC sessions when no ChannelEndpoint matches.
     webrtc_default_pool_id:         str = ""
-    # Medium fallback order when pool does not configure webrtc_media_fallback_order.
-    # Comma-separated, descending priority: "video,voice,text"
-    webrtc_default_medium_order:    str = "video,voice,text"
     # Enable STT transcription of the customer audio track (Deepgram streaming).
     webrtc_stt_enabled:             bool = True
     # Enable TTS injection via LiveKit LocalAudioTrack (AI agents).

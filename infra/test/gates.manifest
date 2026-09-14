@@ -363,6 +363,13 @@ probe_attachment_expiry.sh
 # (SDK), a recusa nomeada, um SFU real (join so por relay, 401/404 do proprio SFU), o TURN
 # e a rota com 7 negativos e 2 positivos cujo token o SFU aceita. Fixtures por nome.
 probe_webrtc_media_plane.sh
+# VOZ-09. O WebRTC escolhia UM meio para a sessao e cada atribuicao o sobrescrevia: um
+# especialista de texto rebaixava o cliente de uma chamada de video, enquanto o SFU seguia
+# permitindo tudo. Mede o contrato no LEITOR (bridge x gateway x Console x widget), a imagem,
+# o cenario ao vivo no SFU com a permissao perguntada AO SFU (a trilha sai quando o humano
+# sai e volta sem reconectar), duas mutacoes que TEM de reprovar, e o produtor vivo — sem
+# amostra nova, INCONCLUSIVO.
+probe_webrtc_participant_media.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

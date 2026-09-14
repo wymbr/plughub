@@ -164,7 +164,7 @@ class TestEgressStart:
         ws = AsyncMock()
         ws.send_json = AsyncMock()
         adapter._connections[SESSION_ID] = ws
-        adapter._mediums[SESSION_ID] = "voice"
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
 
         await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
 
@@ -182,7 +182,7 @@ class TestEgressStart:
     async def test_provider_start_egress_called(self):
         adapter, redis, _ = _make_adapter()
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID] = "voice"
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
 
         await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
 
@@ -196,7 +196,7 @@ class TestEgressStart:
     async def test_egress_id_stored_in_memory(self):
         adapter, redis, _ = _make_adapter()
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID] = "voice"
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
 
         await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
 
@@ -207,7 +207,7 @@ class TestEgressStart:
     async def test_egress_id_stored_in_redis(self):
         adapter, redis, _ = _make_adapter()
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID] = "voice"
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
 
         await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
 
@@ -234,7 +234,7 @@ class TestEgressStart:
     async def test_output_path_contains_session_and_segment(self):
         adapter, _, _ = _make_adapter()
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID] = "voice"
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
 
         await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
 
@@ -255,7 +255,7 @@ class TestEgressDoubleStartGuard:
     async def test_double_start_is_noop(self):
         adapter, redis, _ = _make_adapter()
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._mediums[SESSION_ID] = "voice"
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
 
         # Simulate Redis already holding the egress key
         redis.exists = AsyncMock(return_value=1)
@@ -270,7 +270,7 @@ class TestEgressDoubleStartGuard:
         adapter, redis, _ = _make_adapter()
         ws = AsyncMock()
         adapter._connections[SESSION_ID] = ws
-        adapter._mediums[SESSION_ID] = "voice"
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
         redis.exists = AsyncMock(return_value=1)
 
         await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
@@ -279,44 +279,12 @@ class TestEgressDoubleStartGuard:
         ws.send_json.assert_not_called()
 
 
-# ── TestEgressRecordingOptOut ─────────────────────────────────────────────────
-
-
-class TestEgressRecordingOptOut:
-    """pool.webrtc_recording=False → no egress task is created."""
-
-    @pytest.mark.asyncio
-    async def test_no_egress_when_flag_false(self):
-        adapter, redis, _ = _make_adapter()
-        adapter._connections[SESSION_ID] = AsyncMock()
-
-        # Simulate _on_routing_assigned with webrtc_recording=False
-        # (test the guard in the caller rather than _start_egress itself)
-        pool_obj        = {"webrtc_recording": False}
-        should_record   = pool_obj.get("webrtc_recording", False)
-        segment_id      = SEGMENT_ID
-        medium          = "voice"
-
-        tasks_created = []
-        if should_record and segment_id and medium in ("voice", "video"):
-            tasks_created.append("started")
-
-        assert tasks_created == [], "No egress task should be created when flag is False"
-
-    @pytest.mark.asyncio
-    async def test_no_egress_for_text_medium(self):
-        """Text-only sessions should never trigger egress even when flag=True."""
-        adapter, redis, _ = _make_adapter()
-        adapter._connections[SESSION_ID] = AsyncMock()
-
-        pool_obj = {"webrtc_recording": True}
-        medium   = "text"
-
-        tasks_created = []
-        if pool_obj.get("webrtc_recording") and SEGMENT_ID and medium in ("voice", "video"):
-            tasks_created.append("started")
-
-        assert tasks_created == []
+# ── TestEgressRecordingOptOut — REMOVIDA em 2026-09-14 (VOZ-09) ──────────────────
+# Os dois testes desta classe REIMPLEMENTAVAM a condição de gravação no próprio corpo
+# (`if should_record and segment_id and medium in ...`) e afirmavam sobre a cópia — não
+# tocavam o produto, logo não podiam reprovar. É o mesmo defeito que a reescrita de
+# 2026-08-03 fechou em `TestEgressRoutingAssigned`, que já cobre os dois casos chamando
+# `_on_routing_assigned` de verdade.
 
 
 # ── TestEgressStopAndStore ────────────────────────────────────────────────────
@@ -556,7 +524,7 @@ class TestEgressStopAllIdempotent:
 
 
 class TestEgressRoutingAssigned:
-    """_on_routing_assigned: a gravação começa (ou não) conforme pool/medium/segment.
+    """_on_routing_assigned: a gravação começa (ou não) conforme pool/teto do cliente/segment.
 
     **Reescrita em 2026-08-03.** Os quatro testes desta classe REIMPLEMENTAVAM a condição
     de `webrtc.py:690` no corpo do próprio teste e afirmavam sobre a cópia — o comentário
@@ -576,9 +544,9 @@ class TestEgressRoutingAssigned:
     """
 
     @staticmethod
-    def _fields(*, recording: bool, capabilities: list[str], segment_id: str) -> dict:
+    def _fields(*, recording: bool, framework: str, segment_id: str) -> dict:
         return {
-            "agent_type": json.dumps({"media_capabilities": capabilities}),
+            "framework":  framework,
             "pool":       json.dumps({"webrtc_recording": recording}),
             "segment_id": segment_id,
         }
@@ -596,22 +564,22 @@ class TestEgressRoutingAssigned:
     @pytest.mark.asyncio
     async def test_egress_task_created_when_recording_enabled(self):
         start = await self._run(
-            self._fields(recording=True, capabilities=["voice"], segment_id=SEGMENT_ID)
+            self._fields(recording=True, framework="human", segment_id=SEGMENT_ID)
         )
         start.assert_called_once()
         assert start.call_args.args[1] == SEGMENT_ID
 
     @pytest.mark.asyncio
-    async def test_egress_not_started_for_text_medium(self):
+    async def test_egress_not_started_when_customer_has_no_media(self):
         start = await self._run(
-            self._fields(recording=True, capabilities=["text"], segment_id=SEGMENT_ID)
+            self._fields(recording=True, framework="native", segment_id=SEGMENT_ID)
         )
         start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_egress_not_started_when_flag_missing(self):
         start = await self._run(
-            self._fields(recording=False, capabilities=["voice"], segment_id=SEGMENT_ID)
+            self._fields(recording=False, framework="human", segment_id=SEGMENT_ID)
         )
         start.assert_not_called()
 
@@ -619,7 +587,7 @@ class TestEgressRoutingAssigned:
     async def test_egress_not_started_when_no_segment_id(self):
         """Evento de routing sem `segment_id` — a gravação não teria onde ser anexada."""
         start = await self._run(
-            self._fields(recording=True, capabilities=["voice"], segment_id="")
+            self._fields(recording=True, framework="human", segment_id="")
         )
         start.assert_not_called()
 

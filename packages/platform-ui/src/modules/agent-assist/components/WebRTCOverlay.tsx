@@ -70,7 +70,8 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
 
   const {
     room,
-    medium,
+    view,
+    publish,
     remoteTracks,
     localTracks,
     connecting,
@@ -102,8 +103,8 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
     return `${m}:${s}`;
   };
 
-  // Nothing to show for text medium or non-webrtc channel
-  if (channel !== "webrtc" || medium === "text") return null;
+  // Nada a mostrar quando nenhum teto (meu ou do cliente) inclui mídia
+  if (channel !== "webrtc" || view === "none") return null;
 
   // ── Loading ──────────────────────────────────────────────────────────────
   if (connecting) {
@@ -152,7 +153,7 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
       </div>
 
       {/* Media area */}
-      {medium === "video" ? (
+      {view === "video" ? (
         <VideoGrid remoteTracks={remoteTracks} localTracks={localTracks} />
       ) : (
         /* voice medium — animated waveform */
@@ -166,7 +167,7 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
 
       {/* Controls */}
       <MediaControls
-        medium={medium}
+        canVideo={publish.includes("video")}
         micMuted={micMuted}
         cameraOff={cameraOff}
         onToggleMic={toggleMic}

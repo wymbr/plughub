@@ -3,7 +3,7 @@ tests/test_webrtc_adapter.py
 Unit tests for Arc 15 Phase A WebRTC components.
 
 Coverage:
-  - negotiate_medium()         — medium negotiation cascade
+  - media_policy               — teto de mídia por participante (VOZ-09)
   - build_room_name()          — room name helper
   - TokenGrants                — dataclass construction
   - MockWebRTCProvider         — generate_token, create_room, get_room, delete_room,
@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ..adapters import media_policy
 from ..adapters import webrtc_provider as webrtc_provider_mod
 from ..adapters.webrtc import WebRTCAdapter, _AuthError
 from ..adapters.webrtc_provider import (
@@ -40,7 +41,6 @@ from ..adapters.webrtc_provider import (
     TokenGrants,
     WebRTCProviderUnavailable,
     build_room_name,
-    negotiate_medium,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -55,7 +55,6 @@ def _fake_settings(**kwargs):
     s.webrtc_livekit_api_secret     = kwargs.get("webrtc_livekit_api_secret", "")
     s.webrtc_token_ttl_s            = kwargs.get("webrtc_token_ttl_s", 3600)
     s.webrtc_default_pool_id        = kwargs.get("webrtc_default_pool_id", "webrtc_pool")
-    s.webrtc_default_medium_order   = kwargs.get("webrtc_default_medium_order", "video,voice,text")
     s.webrtc_stt_enabled            = kwargs.get("webrtc_stt_enabled", True)
     s.webrtc_tts_injection_enabled  = kwargs.get("webrtc_tts_injection_enabled", False)
     s.jwt_secret                    = kwargs.get("jwt_secret", "changeme_32chars_webchat_secret!")
@@ -144,46 +143,6 @@ def _make_adapter(
         settings       = settings or _fake_settings(),
         webrtc_provider = provider or MockWebRTCProvider(),
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# negotiate_medium
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestNegotiateMedium:
-    def test_video_preferred_when_agent_supports_video(self):
-        assert negotiate_medium(["video", "voice", "text"]) == "video"
-
-    def test_voice_when_no_video(self):
-        assert negotiate_medium(["voice", "text"]) == "voice"
-
-    def test_text_fallback_when_only_text(self):
-        assert negotiate_medium(["text"]) == "text"
-
-    def test_text_fallback_when_empty(self):
-        assert negotiate_medium([]) == "text"
-
-    def test_pool_fallback_order_overrides_default(self):
-        # Pool says no video allowed
-        assert negotiate_medium(
-            ["video", "voice", "text"],
-            fallback_order=["voice", "text"],
-        ) == "voice"
-
-    def test_text_fallback_when_no_intersection(self):
-        # Agent has video, pool only allows text
-        assert negotiate_medium(
-            ["video"],
-            fallback_order=["voice", "text"],
-        ) == "text"
-
-    def test_pool_order_respected_order(self):
-        # Pool: text-first (unusual)
-        assert negotiate_medium(
-            ["video", "voice", "text"],
-            fallback_order=["text", "voice", "video"],
-        ) == "text"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -490,13 +449,47 @@ class TestWebRTCAdapterDelivery:
         assert self.session_id not in self.adapter._connections
 
     @pytest.mark.asyncio
-    async def test_deliver_session_closed_removes_medium(self):
+    async def test_deliver_session_closed_removes_customer_media(self):
         self._register_ws()
-        self.adapter._mediums[self.session_id] = "voice"
+        self.adapter._customer_media[self.session_id] = frozenset({"audio"})
         await self.adapter.deliver_session_closed({
             "session_id": self.session_id,
         })
-        assert self.session_id not in self.adapter._mediums
+        assert self.session_id not in self.adapter._customer_media
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# media_policy — teto por participante (VOZ-09)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestMediaPolicy:
+    def test_humano_consome_audio_e_video(self):
+        assert media_policy.customer_ceiling({"h1": "human"}) == {"audio", "video"}
+
+    def test_ia_de_texto_nao_consome_nada(self):
+        assert media_policy.customer_ceiling({"ia1": "native"}) == frozenset()
+
+    def test_uniao_especialista_de_texto_nao_rebaixa_chamada_de_video(self):
+        # O defeito medido ao vivo: o 2º atendente SUBSTITUÍA o meio da sessão.
+        assert media_policy.customer_ceiling({"h1": "human", "ia1": "native"}) == {"audio", "video"}
+
+    def test_framework_desconhecido_consome_nada(self):
+        assert media_policy.customer_ceiling({"x": ""}) == frozenset()
+        assert media_policy.customer_ceiling({"x": "algo"}) == frozenset()
+
+    def test_politica_do_papel_corta_o_consumo(self):
+        pol = dict(media_policy.PLATFORM_DEFAULT)
+        pol["customer"] = media_policy.RolePolicy(frozenset({"audio"}), True, False)
+        assert media_policy.customer_ceiling({"h1": "human"}, pol) == {"audio"}
+
+    def test_fontes_em_ordem_estavel(self):
+        assert media_policy.publish_sources({"video", "audio"}) == ["microphone", "camera"]
+        assert media_policy.publish_sources(frozenset()) == []
+
+    def test_papel_desconhecido_e_erro(self):
+        with pytest.raises(ValueError):
+            media_policy.role_policy("root")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -516,92 +509,93 @@ class TestWebRTCAdapterGetToken:
         )
         self.session_id = str(uuid.uuid4())
 
+    async def _room(self, customer_publish=None):
+        await self.redis.setex(
+            f"channel:webrtc:{self.session_id}:room_name", 3600, f"plughub-{self.session_id}"
+        )
+        if customer_publish is not None:
+            await self.redis.setex(
+                f"channel:webrtc:{self.session_id}:media", 3600,
+                json.dumps({"attendants": {}, "customer": {"publish": customer_publish}}),
+            )
+
     @pytest.mark.asyncio
     async def test_get_token_returns_none_when_room_not_ready(self):
         result = await self.adapter.get_token(self.session_id, "agent", "agent-x")
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_token_returns_token_after_room_created(self):
-        room_name = f"plughub-{self.session_id}"
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:room_name",
-            3600,
-            room_name,
-        )
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:medium",
-            3600,
-            "voice",
-        )
-
+    async def test_resposta_traz_tetos_e_nao_traz_meio_unico(self):
+        await self._room(customer_publish=["audio"])
         result = await self.adapter.get_token(self.session_id, "agent", "agente_v1")
-        assert result is not None
-        assert "token" in result
+        assert result["publish"] == ["audio", "video"]
+        assert result["customer_publish"] == ["audio"]
+        assert result["hidden"] is False
+        assert result["policy_source"] == "platform_default"
+        assert "negotiated_medium" not in result
         assert result["livekit_url"] == self.settings.webrtc_livekit_url
-        assert result["room_name"]   == room_name
-        assert result["negotiated_medium"] == "voice"
 
     @pytest.mark.asyncio
-    async def test_agent_token_can_publish(self):
-        room_name = f"plughub-{self.session_id}"
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:room_name", 3600, room_name
-        )
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:medium", 3600, "video"
-        )
-
+    async def test_agente_recortado_por_fonte(self):
+        await self._room()
         await self.adapter.get_token(self.session_id, "agent", "agent-1")
         grants = self.provider.tokens_generated[-1]["grants"]
-        assert grants.can_publish is True
+        assert grants.can_publish_sources == ("microphone", "camera")
         assert grants.hidden is False
 
     @pytest.mark.asyncio
-    async def test_supervisor_token_hidden_cannot_publish(self):
-        room_name = f"plughub-{self.session_id}"
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:room_name", 3600, room_name
-        )
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:medium", 3600, "video"
-        )
-
-        await self.adapter.get_token(self.session_id, "supervisor", "sup-1")
+    async def test_supervisor_oculto_sem_fonte(self):
+        await self._room()
+        result = await self.adapter.get_token(self.session_id, "supervisor", "sup-1")
         grants = self.provider.tokens_generated[-1]["grants"]
-        assert grants.can_publish is False
-        assert grants.hidden is True
+        assert grants.can_publish_sources == ()
+        assert grants.hidden is True and result["hidden"] is True
+        assert result["publish"] == []
 
     @pytest.mark.asyncio
     async def test_identity_in_grants(self):
-        room_name = f"plughub-{self.session_id}"
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:room_name", 3600, room_name
-        )
-        await self.redis.setex(
-            f"channel:webrtc:{self.session_id}:medium", 3600, "text"
-        )
-
+        await self._room()
         await self.adapter.get_token(self.session_id, "agent", "my-agent")
         grants = self.provider.tokens_generated[-1]["grants"]
         assert "my-agent" in grants.identity
 
 
+class TestTokenFontesNoSDK:
+    """A regra "lista vazia no LiveKit = TODAS as fontes" tem de virar can_publish=False."""
+
+    def _payload(self, sources):
+        import base64
+        tok = LiveKitProvider(url="ws://x", api_key="k", api_secret="s" * 32).generate_token(
+            TokenGrants(room_name="r", identity="i", can_publish_sources=sources)
+        )
+        part = tok.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["video"]
+
+    def test_teto_vazio_desliga_publish(self):
+        v = self._payload(())
+        assert v.get("canPublish") is False
+
+    def test_teto_com_microfone(self):
+        v = self._payload(("microphone",))
+        assert v.get("canPublish") is True and v.get("canPublishSources") == ["microphone"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# WebRTCAdapter — routing.assigned → webrtc.ready
+# WebRTCAdapter — atendentes → teto do cliente (VOZ-09)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-class TestWebRTCAdapterRoutingAssigned:
+def _assigned(framework: str, instance_id: str, **extra) -> dict:
+    return {"type": "routing.assigned", "framework": framework,
+            "instance_id": instance_id, "pool": json.dumps({"pool_id": "p"}), **extra}
+
+
+class TestWebRTCAdapterMediaCeiling:
     def setup_method(self):
         self.provider   = MockWebRTCProvider()
         self.redis      = _fake_redis()
-        self.settings   = _fake_settings()
-        self.adapter    = _make_adapter(
-            provider  = self.provider,
-            redis     = self.redis,
-            settings  = self.settings,
-        )
+        self.settings   = _fake_settings(webrtc_stt_enabled=False)
+        self.adapter    = _make_adapter(provider=self.provider, redis=self.redis, settings=self.settings)
         self.session_id = str(uuid.uuid4())
         self.ws         = AsyncMock()
         self.ws.sent_messages = []
@@ -610,79 +604,97 @@ class TestWebRTCAdapterRoutingAssigned:
             self.ws.sent_messages.append(msg)
 
         self.ws.send_json = AsyncMock(side_effect=_send)
-        self.ws.close     = AsyncMock()
+
+    async def _state(self):
+        return json.loads(await self.redis.get(f"channel:webrtc:{self.session_id}:media"))
 
     @pytest.mark.asyncio
-    async def test_on_routing_assigned_sends_webrtc_ready(self):
-        fields = {
-            "type":       "routing.assigned",
-            "agent_type": json.dumps({"media_capabilities": ["video", "voice", "text"]}),
-            "pool":       json.dumps({"webrtc_media_fallback_order": "video,voice,text"}),
-        }
-        # Store contact_id in redis
-        await self.redis.setex(
-            f"session:{self.session_id}:contact_id", 3600, "customer-1"
-        )
-
-        await self.adapter._on_routing_assigned(
-            self.ws, self.session_id, fields, self.settings
-        )
-
-        assert len(self.ws.sent_messages) == 1
+    async def test_humano_atende_cliente_pode_audio_e_video(self):
+        await self.redis.setex(f"session:{self.session_id}:contact_id", 3600, "c1")
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
         msg = self.ws.sent_messages[0]
         assert msg["type"] == "webrtc.ready"
-        assert msg["negotiated_medium"] == "video"
-        assert msg["room_name"] == f"plughub-{self.session_id}"
-        assert "token" in msg
-        assert msg["livekit_url"] == self.settings.webrtc_livekit_url
-
-    @pytest.mark.asyncio
-    async def test_on_routing_assigned_negotiates_voice_when_no_video(self):
-        fields = {
-            "type":       "routing.assigned",
-            "agent_type": json.dumps({"media_capabilities": ["voice", "text"]}),
-            "pool":       json.dumps({}),
-        }
-        await self.redis.setex(
-            f"session:{self.session_id}:contact_id", 3600, "customer-2"
-        )
-        await self.adapter._on_routing_assigned(
-            self.ws, self.session_id, fields, self.settings
-        )
-        msg = self.ws.sent_messages[0]
-        assert msg["negotiated_medium"] == "voice"
-
-    @pytest.mark.asyncio
-    async def test_on_routing_assigned_persists_room_and_medium_in_redis(self):
-        fields = {
-            "agent_type": json.dumps({"media_capabilities": ["text"]}),
-            "pool":       json.dumps({}),
-        }
-        await self.redis.setex(
-            f"session:{self.session_id}:contact_id", 3600, "customer-3"
-        )
-        await self.adapter._on_routing_assigned(
-            self.ws, self.session_id, fields, self.settings
-        )
-        room_name = await self.redis.get(f"channel:webrtc:{self.session_id}:room_name")
-        medium    = await self.redis.get(f"channel:webrtc:{self.session_id}:medium")
-        assert room_name == f"plughub-{self.session_id}"
-        assert medium == "text"
-
-    @pytest.mark.asyncio
-    async def test_on_routing_assigned_creates_livekit_room(self):
-        fields = {
-            "agent_type": json.dumps({"media_capabilities": ["video"]}),
-            "pool":       json.dumps({}),
-        }
-        await self.redis.setex(
-            f"session:{self.session_id}:contact_id", 3600, "customer-4"
-        )
-        await self.adapter._on_routing_assigned(
-            self.ws, self.session_id, fields, self.settings
-        )
+        assert msg["publish"] == ["audio", "video"]
+        assert msg["policy_source"] == "platform_default"
+        assert "negotiated_medium" not in msg
+        grants = self.provider.tokens_generated[-1]["grants"]
+        assert grants.identity == "customer-c1"
+        assert grants.can_publish_sources == ("microphone", "camera")
+        st = await self._state()
+        assert st["attendants"] == {"h1": "human"}
+        assert st["customer"]["reason"] == "attendant_joined:human"
         assert len(self.provider.rooms_created) == 1
-        assert self.provider.rooms_created[0]["room_name"] == f"plughub-{self.session_id}"
+
+    @pytest.mark.asyncio
+    async def test_ia_de_texto_atende_cliente_sem_midia(self):
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("native", "ia1"), self.settings)
+        assert self.ws.sent_messages[0]["publish"] == []
+        assert self.provider.tokens_generated[-1]["grants"].can_publish_sources == ()
+
+    @pytest.mark.asyncio
+    async def test_especialista_de_texto_NAO_rebaixa_o_cliente(self):
+        # O cenário do vermelho ao vivo de 2026-09-14.
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        await self.adapter._on_routing_renegotiate(self.ws, self.session_id, _assigned("native", "ia1"), self.settings)
+        assert [m["type"] for m in self.ws.sent_messages] == ["webrtc.ready"]     # nada mudou
+        assert self.provider.permission_updates == []
+        st = await self._state()
+        assert st["attendants"] == {"h1": "human", "ia1": "native"}
+        assert st["customer"]["publish"] == ["audio", "video"]
+
+    @pytest.mark.asyncio
+    async def test_humano_sai_teto_cai_no_sfu_e_no_cliente(self):
+        await self.redis.setex(f"session:{self.session_id}:contact_id", 3600, "c1")
+        self.provider.joined.add("customer-c1")
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("native", "ia1"), self.settings)
+        await self.adapter._on_routing_renegotiate(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        await self.adapter._on_attendant_left(self.ws, self.session_id, {"type": "participant_left", "author_id": "h1"})
+        tipos = [m["type"] for m in self.ws.sent_messages]
+        assert tipos == ["webrtc.ready", "webrtc.media", "webrtc.media"]
+        subiu, caiu = self.ws.sent_messages[1], self.ws.sent_messages[2]
+        assert subiu["publish"] == ["audio", "video"] and subiu["reason"] == "attendant_joined:human"
+        assert caiu["publish"] == [] and caiu["reason"] == "attendant_left:human"
+        assert caiu["token"]      # token novo para quem ainda vai entrar
+        assert [u["can_publish_sources"] for u in self.provider.permission_updates] == [
+            ("microphone", "camera"), (),
+        ]
+        assert self.provider.permission_updates[-1]["identity"] == "customer-c1"
+        assert self.adapter._customer_media[self.session_id] == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_saida_de_quem_nao_e_atendente_nao_mexe_e_avisa(self, caplog):
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_attendant_left(self.ws, self.session_id, {"author_id": "desconhecido"})
+        assert (await self._state())["attendants"] == {"h1": "human"}
+        assert "desconhecido" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_framework_ausente_consome_nada_e_avisa(self, caplog):
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_routing_assigned(
+                self.ws, self.session_id, {"type": "routing.assigned", "instance_id": "x"}, self.settings,
+            )
+        assert self.ws.sent_messages[0]["publish"] == []
+        assert "sem framework reconhecido" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_falha_no_sfu_ao_aplicar_e_barulhenta(self, caplog):
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("native", "ia1"), self.settings)
+
+        async def _boom(*a, **k):
+            raise RuntimeError("sfu fora")
+        self.provider.update_participant_permission = _boom
+        with caplog.at_level("ERROR"):
+            await self.adapter._on_routing_renegotiate(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        assert "FALHOU aplicar teto" in caplog.text
+        assert self.ws.sent_messages[-1]["type"] == "webrtc.media"
+
+    @pytest.mark.asyncio
+    async def test_persiste_room_e_estado_de_midia(self):
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        assert await self.redis.get(f"channel:webrtc:{self.session_id}:room_name") == f"plughub-{self.session_id}"
+        assert await self.redis.get(f"channel:webrtc:{self.session_id}:medium") is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

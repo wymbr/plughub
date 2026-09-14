@@ -36,14 +36,16 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
 
   const {
     room,
-    medium,
+    view,
     remoteTracks,
     connecting,
     error,
-  } = useWebRTCSession(sessionId, SUPERVISOR_IDENTITY, channel);
+  } = useWebRTCSession(sessionId, SUPERVISOR_IDENTITY, channel, "supervisor");
+  // ⚠️ O papel "supervisor" é o que dá token OCULTO e sem publicação. Até a VOZ-09 esta
+  // visão pedia `role=agent` (o hook não recebia papel) e entraria na sala publicando.
 
   if (channel !== "webrtc") return null;
-  if (medium === "text")     return null;
+  if (view === "none")       return null;
 
   if (connecting) {
     return (
@@ -63,7 +65,7 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
     );
   }
 
-  if (medium === "video") {
+  if (view === "video") {
     return (
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-1.5 px-2 pt-2">

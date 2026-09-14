@@ -883,7 +883,7 @@ async def get_pool_config(
 async def _write_routing_assigned_to_stream(
     redis_client: aioredis.Redis,
     session_id:   str,
-    agent_type:   dict,
+    framework:    str,
     pool_config:  dict,
     segment_id:   str,
     instance_id:  str,
@@ -891,9 +891,15 @@ async def _write_routing_assigned_to_stream(
     """
     Write a routing.assigned entry to the session stream.
 
-    The WebRTC adapter (_stream_watcher) watches for this event to negotiate
-    the media medium (video / voice / text), create the LiveKit room, and send
-    webrtc.ready to the customer browser.  Non-WebRTC sessions ignore the event.
+    The WebRTC adapter (_stream_watcher) watches for this event to register the
+    ATTENDANT, recompute the customer's media ceiling, create the LiveKit room and
+    send webrtc.ready.  Non-WebRTC sessions ignore the event.
+
+    VOZ-09 (2026-09-14): o evento carregava `agent_type.media_capabilities`, campo sem
+    produtor — o AgentType foi aposentado e o sintetizado leva `[]`, logo todo contato
+    WebRTC sairia em texto. Agora carrega o `framework` do atendente
+    (`native|human|external-mcp`), que é FATO de quem ativou, e o gateway deriva dele o
+    que o atendente consome. A capacidade do agente de IA vem do deploy do pool (VOZ-10).
 
     Written on every agent activation (native, human, external-mcp) so that
     the WebRTC adapter can react regardless of framework.  Fire-and-forget safe
@@ -906,9 +912,7 @@ async def _write_routing_assigned_to_stream(
             f"session:{session_id}:stream",
             {
                 "type":        "routing.assigned",
-                "agent_type":  json.dumps({
-                    "media_capabilities": agent_type.get("media_capabilities", []),
-                }),
+                "framework":   framework,
                 "pool":        json.dumps(pool_config),
                 "segment_id":  segment_id,
                 "instance_id": instance_id,
@@ -916,8 +920,8 @@ async def _write_routing_assigned_to_stream(
             maxlen=500,
         )
         logger.debug(
-            "routing.assigned written: session=%s instance=%s caps=%s",
-            session_id, instance_id, agent_type.get("media_capabilities", []),
+            "routing.assigned written: session=%s instance=%s framework=%s",
+            session_id, instance_id, framework,
         )
     except Exception as exc:
         logger.warning(
@@ -5121,7 +5125,7 @@ async def process_routed(
         await _write_routing_assigned_to_stream(
             redis_client=redis_client,
             session_id=session_id,
-            agent_type=agent_type,
+            framework="native",
             pool_config={"pool_id": pool_id},
             segment_id=_part_seg_id,
             instance_id=native_instance_id,
@@ -6087,7 +6091,7 @@ async def process_routed(
         await _write_routing_assigned_to_stream(
             redis_client=redis_client,
             session_id=session_id,
-            agent_type=agent_type,
+            framework="human",
             pool_config={"pool_id": pool_id},
             segment_id="",   # segment_id assigned inside activate_human_agent
             instance_id=result.get("instance_id", ""),
@@ -6118,7 +6122,7 @@ async def process_routed(
         await _write_routing_assigned_to_stream(
             redis_client=redis_client,
             session_id=session_id,
-            agent_type=agent_type,
+            framework="external-mcp",
             pool_config={"pool_id": pool_id},
             segment_id="",
             instance_id=result.get("instance_id", ""),
