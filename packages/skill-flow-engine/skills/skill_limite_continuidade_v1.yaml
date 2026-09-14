@@ -1,0 +1,151 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aumento de limite — CONTINUIDADE do pedido em análise (PID-04, 2026-09-14)
+#
+# Especialista chamado pela porta de plataforma (`skill_intake_runner_v1`) quando o
+# cliente identificado tem uma pendência `offer` — o pedido ainda em análise. Roda como
+# especialista de conferência DENTRO da sessão do cliente (sem troca de canal).
+#
+# Por que isto é do domínio e não da porta: o menu mostra dados da pendência (cartão,
+# valor, situação), e o que "continuar" significa é regra do processo — aqui, só
+# consultar ou cancelar; na portabilidade, confirmar a aprovação. Os dados vêm da
+# JOURNEY, onde o `skill_limite_processo_v1` grava cartão e valor ao nascer; a porta a
+# une antes de delegar. A máscara é da leitura: `journey.numero_cartao` é `credit_card`.
+#
+# Três saídas, e nenhuma retoma o processo para decidir:
+#   consultar → só lê: o token está à mão e é deliberadamente não usado
+#   cancelar  → `workflow_resume` com `rejected` (PID-15: o cliente provado cancela,
+#               nunca decide; o processo trata `rejected` como `encerrar_cancelado_cliente`)
+#   novo      → devolve `acao: novo` e a porta coleta um pedido novo
+#
+# Toda saída devolve o controle à porta ANTES de fechar o próprio segmento.
+# ─────────────────────────────────────────────────────────────────────────────
+
+id: skill_limite_continuidade_v1
+name: "Aumento de limite — continuidade do pedido em análise"
+version: "1.0"
+description: |
+  Especialista de continuidade do aumento de limite: mostra o pedido em análise e
+  oferece consultar, cancelar ou tratar de outro assunto. Chamado pela porta de
+  plataforma; nunca decide o pedido.
+classification:
+  type: vertical
+  domain: credito
+
+entry: carregar_roteiro
+
+steps:
+  - id: carregar_roteiro
+    type: invoke
+    tool: form_get
+    input:
+      form_id:   "dialog_limite_roteiro"
+      tenant_id: "$.tenant_id"
+    output_as: roteiro
+    on_success: menu_continuidade
+    on_failure: falha_roteiro
+
+  # Caminho de quem não carregou o roteiro: não pode depender dele.
+  - id: falha_roteiro
+    type: notify
+    message: "Estamos com uma instabilidade e não consigo te atender agora. Tente de novo em alguns minutos."
+    on_success: devolver_encerrar
+    on_failure: devolver_encerrar
+
+  # ⚠️ SEM markdown: o webchat usa `textContent` (`**` sairia literal), e máscara e
+  # ênfase disputam o mesmo caractere — o cartão chega mascarado.
+  # A frase fica aqui, e não no roteiro, porque interpola dados do processo. A situação
+  # é fixa: este especialista só é chamado com a pendência `offer`, que no limite é a
+  # análise de crédito em curso.
+  - id: menu_continuidade
+    type: menu
+    prompt: "📋 Você já tem um pedido de aumento de limite em andamento.\n\n• Cartão: {{@ctx.journey.numero_cartao}}\n• Limite solicitado: R$ {{@ctx.journey.limite_solicitado}}\n• Situação: Em análise pelo time de crédito\n\nO que deseja fazer?"
+    interaction: button
+    options:
+      - id: consultar
+        label: "📋 Só consultar, obrigado"
+      - id: cancelar_pendente
+        label: "❌ Cancelar solicitação"
+      - id: novo
+        label: "🔄 Outro assunto"
+    output_as: decisao_continuidade
+    timeout_s: 300
+    on_success: processar_decisao
+    on_failure: devolver_encerrar
+    on_timeout: devolver_encerrar
+    on_disconnect: devolver_encerrar
+
+  - id: processar_decisao
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.decisao_continuidade"
+        operator: eq
+        value:    "consultar"
+        next:     confirmar_consulta
+      - field:    "$.pipeline_state.decisao_continuidade"
+        operator: eq
+        value:    "cancelar_pendente"
+        next:     cancelar_solicitacao
+    default: devolver_novo
+
+  - id: confirmar_consulta
+    type: notify
+    message: "{{$.pipeline_state.roteiro.render.by_node.confirmar_consulta}}"
+    on_success: devolver_encerrar
+    on_failure: devolver_encerrar
+
+  # O token do PROCESSO veio no delegate.context da porta (`workflow_resume_token` →
+  # `core.workflow.resume_token`). Este especialista roda na sessão do cliente, então
+  # o atestado de evidência da PID-13 é o da sessão que provou.
+  - id: cancelar_solicitacao
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token:  "@ctx.core.workflow.resume_token"
+      decision:      "rejected"
+      resume_origin: "identity"
+      payload:
+        source:   "customer_reconnect"
+        resposta: "cancelar"
+    on_success: avisar_cancelamento
+    on_failure: avisar_erro_retomada
+
+  - id: avisar_cancelamento
+    type: notify
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_cancelamento}}"
+    on_success: devolver_encerrar
+    on_failure: devolver_encerrar
+
+  - id: avisar_erro_retomada
+    type: notify
+    message: "{{$.pipeline_state.roteiro.render.by_node.avisar_erro_retomada}}"
+    on_success: devolver_encerrar
+    on_failure: devolver_encerrar
+
+  # ══ Devolver à porta ═══════════════════════════════════════════════════════
+  # `on_failure` vai ao mesmo `complete`: se o token da porta venceu, o segmento fecha
+  # do mesmo jeito, e a falha fica no log do invoke.
+  - id: devolver_encerrar
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision:     "input"
+      payload:
+        acao: "encerrar"
+    on_success: finalizar
+    on_failure: finalizar
+
+  - id: devolver_novo
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.core.workflow.delegate_resume_token"
+      decision:     "input"
+      payload:
+        acao: "novo"
+    on_success: finalizar
+    on_failure: finalizar
+
+  - id: finalizar
+    type: complete
+    outcome: resolved

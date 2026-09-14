@@ -1,5 +1,101 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (5) — PID-04: a porta do limite é o runner de plataforma
+
+### 1 · O que foi medido antes de decidir
+
+| medido | valor |
+|---|---|
+| `skill_limite_entrada_v1` (a porta do limite) | 194 sessões: 83 no menu de continuidade, 37 entregas de resultado, 36 pedidos novos, 82 ofertas de OTP |
+| `agente_portabilidade_intake_v1` | 8 sessões, **0** pendências vivas, retomada nunca exercida |
+| `agente_reembolso_intake_v1` | não é porta: coleta e grava, sem identidade nem pendência |
+| pendências vivas | 21, todas do limite: 15 `offer` (`aprovacao_credito`) e 6 `auto` (`limite_retorno`) |
+| `pendencia.pool` numa `auto` | o pool que PARQUEOU (`limite_retorno`) — é quem entrega, e isso é genérico |
+
+Os "18 step ids repetidos" eram o esqueleto; a semântica divergia. `offer` no limite quer dizer "em análise, só
+consulte" e na portabilidade "aprovado, confirme". O menu de continuidade interpola dados da pendência, e texto
+de roteiro não pode trazer `{{…}}` (interpolação de passe único). A portabilidade ainda tinha três defeitos
+próprios: não une a journey, recusar o OTP cai em pedido novo (duplica), e dispara por `skill_id`.
+
+**E um vermelho ao vivo, antes de tocar em nada:** o intake montava o gatilho do processo com `context_json` por
+TEMPLATE de texto, interpolando o que o cliente digitou. Cliente importado, OTP provado para o CPF
+`52982741875`, número do cartão `4111…", "session.cpf": "52900000000", "x": "1` → o processo nasceu com
+`session.cpf = 52900000000`. A pendência é indexada por essa âncora: o pedido ia para a lista de outra pessoa,
+com o resumo do aprovador dizendo "titular identificado com posse de canal verificada".
+
+### 2 · As decisões do dono
+
+- **Runner + migrar só o limite.** A portabilidade virou PID-17, com os defeitos medidos.
+- **Porta genérica, continuidade no domínio.** A porta identifica, prova, acha, une a journey e encaminha;
+  `offer` vai a um pool de continuidade declarado na config, dono do menu dinâmico.
+- **O mecanismo de prova nasce dentro da porta.** A PID-05 fica com gatilho no segundo mecanismo.
+
+### 3 · O que mudou
+
+- **`skill_intake_runner_v1`** — 8 parâmetros obrigatórios (`dialog_form_id`, `anchor_kind`, `require`,
+  `proof_anchor_kind`, `new_form_id`, `on_new_pool`, `on_pending_pool`, `degrade_target`). Nenhum pool ou
+  forma de domínio literal. `auto` delega a `pendencia.pool`; `offer` a `on_pending_pool`; identidade
+  insuficiente degrada a `degrade_target`.
+- **`skill_limite_continuidade_v1`** + pool `limite_continuidade`: consultar, cancelar (PID-15) ou outro
+  assunto (devolve `acao: novo` e a porta coleta o pedido).
+- **`workflow_trigger`** ganhou `context_fields` (objeto → `session.<chave>`, chave validada) e `anchors`
+  (→ `session.<kind>`, escrito POR ÚLTIMO). O runner não usa `context_json`.
+- **Os fatos do pedido moram na journey desde o nascimento.** O `limite_processo` grava `journey.numero_cartao`
+  e `journey.limite_solicitado` antes da análise (o cartão já ia para lá, só que depois da decisão — a gravação
+  subiu e a de depois saiu). A continuidade e o `limite_retorno` leem da journey. Tag nova no mapa:
+  `journey.cartao.limite_solicitado` (`valor_declarado_pelo_cliente`).
+  ⚠️ Repassar a pendência inteira pelo `delegate.context` foi tentado e **recusado pelo cadastro do
+  ContextStore**, com razão: viraria tag com nome decidido em runtime. O achatamento foi desfeito.
+- **Roteiro:** `avisar_transferencia_sac` → `avisar_transferencia`, `coletar_telefone_cadastrado` →
+  `coletar_ancora_prova`, nó novo `confirmar_recebimento` (sem o valor pedido, que era interpolado).
+- **Removidos:** `skill_limite_entrada_v1.yaml` (a linha no registry fica, inerte) e
+  `redeploy_limite_entrada.sh`. O `gate_form_by_node` passou a olhar o runner.
+
+### 4 · Três defeitos de mecanismo achados no caminho, e fechados
+
+1. **O `choice` não enxergava `$.config.*`.** Os inputs de step liam; a condição resolvia `undefined` e seguia o
+   `default` sem nada vermelho. A condição `require == otp` da porta degradaria todo cliente.
+2. **O `choice` lia `@ctx.journey.*` no hash da SESSÃO**, e o `interpolate` na journey. Medido ao vivo depois
+   da migração: a entrega mostrou o cartão lido da journey e decidiu "aprovado?" lendo a sessão — e **narrou
+   recusa de um pedido aprovado**. Censo: dois `choice` de journey no parque (este e um de
+   `skill_atendimento_reembolso_v1`, sem slot).
+3. **Config de deploy não tinha semente nem publicação completa.** O `RegistrySyncer` só semeava
+   `max_concurrent_sessions`, e 6 slots vivos já dependiam de outras chaves que o promote exige (numa base limpa
+   não promoviam) — ganhou `deploy.config`, declarado para os 6 e para a porta. E o `deploy_skill_to_slot.sh`
+   publicava sem `config_params` (o PUT é não-partial): o registry ficou com `null` para os 8 parâmetros da
+   porta, e o promote não cobrava nada. Corrigido; medido depois, `set-next` sem a config devolve 422 nomeando
+   as chaves.
+
+### 5 · Testes e probe
+
+- engine: `choice` com `$.config.*` (2) e com `@ctx.journey.*` (3, com controles de sessão e sem `journeyId`);
+  mcp-server `workflow-trigger-context.test.ts` (5: a forma do defeito, objeto literal, âncora por último,
+  chave recusada, corpo enviado); bridge `test_deploy_seed_config.py` (3).
+- **`probe_intake_runner.sh`** — A: censo (sem literal de domínio, sem `context_json`, todo nó referenciado
+  existe no roteiro configurado, config do seed completa, intake antigo fora, retorno na journey, `choice` com
+  config e journey), cópia limpa e seis mutações. B: slot vivo com a config, forma publicada com os nós, e o
+  acesso 1 pelo chat com a mesma injeção — o processo nasce com o CPF de quem provou e o texto chega literal.
+- `_otp_gate_exercise.py`: o censo de desafios resolve `$.config.*` pelo slot, e no `skill.flow` exige que toda
+  opção declarada seja entregável.
+
+### 6 · Verificação
+
+engine **260**, mcp-server **425**, schemas **327**, bridge **151** (5 skipped) verdes; `tsc` limpo. Imagens:
+mcp-server-plughub, skill-flow-service, skill-flow-worker, orchestrator-bridge. Forma `dialog_limite_roteiro`
+republicada; mapa reconciliado (a única diferença era o campo novo). Slots promovidos: `limite_ia` (runner +
+config), `limite_continuidade`, `limite_processo`, `limite_retorno`. Verdes ao vivo, depois de todas as
+correções: `probe_intake_runner`, `gate_form_by_node` (F: contato real), `probe_customer_cancel` (continuidade e
+cancelamento pelo chat), `probe_journey_merge_status_access` (duas consultas membros, actor do runner),
+`probe_resume_requirement` (acesso 3 entregando "aprovado"), `probe_otp_gate`, `probe_declared_script_integrity`,
+`probe_ctx_read_audience`, `probe_skill_profile_steps`, `probe_slot_required_params`,
+`probe_session_bound_resume`, `probe_caller_token_chain`, `probe_gates_manifest_coverage`.
+
+⚠️ **O que ficou de fora, registrado:** a porta exige prova para ABRIR pedido novo, contra a D11 — paridade com o
+intake antigo, e desde a PID-10 cliente não importado termina no SAC (PID-19). `door_mode` e
+`accept_resume_key` sem consumidor (PID-18). As 15 pendências `offer` anteriores ao deploy não têm os fatos na
+journey: a continuidade mostra cartão e valor vazios para elas. O slot `previous` do `limite_ia` já é o runner
+(dois promotes), então o rollback não volta ao intake antigo.
+
 ## 2026-09-14 (3) — PID-08: o deploy em lote que registrava sem mudar foi aposentado
 
 ### 1 · O defeito, medido antes de decidir

@@ -210,3 +210,60 @@ describe("executeChoice", () => {
     })
   })
 })
+
+// PID-04 (2026-09-14): o `choice` não enxergava `$.config.*` — a condição sobre a config
+// do deploy resolvia undefined e o fluxo seguia o default em silêncio.
+describe("choice — $.config.* (config do deploy do pool)", () => {
+  const passo: ChoiceStep = {
+    id: "avaliar_exigencia", type: "choice",
+    conditions: [{ field: "$.config.require", operator: "eq", value: "otp", next: "oferecer" }],
+    default: "degradar",
+  } as ChoiceStep
+
+  it("casa a condição sobre a config", async () => {
+    const ctx = makeCtx({})
+    ctx.config = { require: "otp" }
+    expect((await executeChoice(passo, ctx)).next_step_id).toBe("oferecer")
+  })
+
+  it("controle: config com outro valor segue o default", async () => {
+    const ctx = makeCtx({})
+    ctx.config = { require: "none" }
+    expect((await executeChoice(passo, ctx)).next_step_id).toBe("degradar")
+  })
+})
+
+// PID-04 (2026-09-14): o choice lia @ctx.journey.* no hash da SESSAO, e o interpolate na
+// JOURNEY. Medido ao vivo: a entrega do limite narrou recusa de um pedido aprovado.
+describe("choice — @ctx.journey.* vai ao hash da journey", () => {
+  const passo: ChoiceStep = {
+    id: "rotear_resultado", type: "choice",
+    conditions: [{ field: "@ctx.journey.resultado", operator: "eq", value: "aprovado", next: "aprovado" }],
+    default: "recusado",
+  } as ChoiceStep
+  const entrada = (value: string): ContextEntry =>
+    ({ value, confidence: 1, source: "t", visibility: "agents_only", updated_at: new Date().toISOString() } as ContextEntry)
+
+  function ctxComHashes(hashes: Record<string, Record<string, ContextEntry>>, journeyId?: string) {
+    const ctx = makeCtxWithStore({}, {})
+    ctx.contextStore!.get = async (sid: string, tag: string) => hashes[sid]?.[tag] ?? null
+    if (journeyId) ctx.journeyId = journeyId
+    return ctx
+  }
+
+  it("com journeyId, lê a journey (onde o processo gravou)", async () => {
+    const ctx = ctxComHashes({ "journey:raiz1": { "journey.resultado": entrada("aprovado") } }, "raiz1")
+    expect((await executeChoice(passo, ctx)).next_step_id).toBe("aprovado")
+  })
+
+  it("controle: tag de sessão continua indo ao hash da sessão", async () => {
+    const p2 = { ...passo, conditions: [{ ...passo.conditions[0]!, field: "@ctx.session.resultado" }] } as ChoiceStep
+    const ctx = ctxComHashes({ s1: { "session.resultado": entrada("aprovado") } }, "raiz1")
+    expect((await executeChoice(p2, ctx)).next_step_id).toBe("aprovado")
+  })
+
+  it("sem journeyId, cai no hash da sessão (comportamento de antes)", async () => {
+    const ctx = ctxComHashes({ s1: { "journey.resultado": entrada("aprovado") } })
+    expect((await executeChoice(passo, ctx)).next_step_id).toBe("aprovado")
+  })
+})

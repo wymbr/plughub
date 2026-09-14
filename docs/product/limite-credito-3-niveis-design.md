@@ -1,5 +1,9 @@
 # Aumento de limite de crédito — cenário de referência do modelo de 3 níveis
 
+> **Estado em 2026-09-14 (PID-04):** o `skill_limite_entrada_v1` citado abaixo foi REMOVIDO. A porta do
+> `limite_ia` é o runner de plataforma `skill_intake_runner_v1` (config do pool), a continuidade do pedido
+> em análise é o `skill_limite_continuidade_v1`, e o que o processo mostra ao cliente mora na journey.
+
 > ⚠️ **SUPERSEDIDO COMO MODELO DE TRABALHO em 2026-09-03** — ver
 > [`adr-agent-flow-single-authored-level.md`](../adr/adr-agent-flow-single-authored-level.md).
 > O tenant autora **um** nível (o processo); o que este documento chama de N1 e N2 se

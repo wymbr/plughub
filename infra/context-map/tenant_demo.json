@@ -43,6 +43,12 @@
           ],
           "tipo": "valor_informado_ao_cliente"
         },
+        "limite_solicitado": {
+          "legado": [
+            "journey.limite_solicitado"
+          ],
+          "tipo": "valor_declarado_pelo_cliente"
+        },
         "numero": {
           "legado": [
             "journey.numero_cartao"

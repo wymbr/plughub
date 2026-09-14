@@ -7,8 +7,8 @@
 # pode saber, por onde o cliente falou. Usa apenas invoke/delegate/choice/complete;
 # menu e notify são proibidos neste perfil (Arc 19).
 #
-# Recebe os dados já coletados pelo N2 (via context_json do workflow_trigger).
-# NÃO coleta — ver o invariante de coleta em skill_limite_entrada_v1.
+# Recebe os dados já coletados pela porta (`skill_intake_runner_v1`, via `context_fields`
+# + `anchors` do workflow_trigger). NÃO coleta — ver o invariante de coleta na porta.
 #
 # Dois delegates, e a diferença entre eles é o roteiro inteiro da demo:
 #   aprovar            → pool HUMANO em fila pull, resume_policy: offer
@@ -48,6 +48,38 @@ steps:
       tenant_id:  "$.tenant_id"
       tag:        "approval.summary"
       value:      "Pedido de aumento de limite para R$ {{@ctx.session.limite_solicitado}}. Titular identificado com posse de canal verificada. Dados do cartão na aba Contexto."
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: registrar_cartao_journey
+    on_failure: registrar_cartao_journey
+
+  # ══ Etapa 1b — os fatos do PEDIDO moram na journey desde o nascimento ══════
+  # PID-04 (2026-09-14): cartão e valor pedido são fato do PROCESSO desde o acesso 1, e
+  # quem os mostra ao cliente enquanto a análise corre é a continuidade do domínio,
+  # chamada pela porta de plataforma — que não conhece os campos do limite e por isso não
+  # os repassa. A gravação do cartão existia, mas só DEPOIS da decisão; subiu para cá, e
+  # a de depois saiu (uma casa por fato).
+  - id: registrar_cartao_journey
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "journey.numero_cartao"
+      value:      "@ctx.session.numero_cartao"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: registrar_limite_solicitado
+    on_failure: registrar_limite_solicitado
+
+  - id: registrar_limite_solicitado
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "journey.limite_solicitado"
+      value:      "@ctx.session.limite_solicitado"
       confidence: 1.0
       visibility: "agents_only"
     on_success: aprovar
@@ -202,20 +234,6 @@ steps:
       tenant_id:  "$.tenant_id"
       tag:        "journey.parecer"
       value:      "$.pipeline_state.aprovar.edits.parecer"
-      confidence: 1.0
-      visibility: "agents_only"
-    on_success: registrar_cartao_journey
-    on_failure: registrar_cartao_journey
-
-  # O cartão já é fato do processo desde o acesso 1; só não tinha onde morar.
-  - id: registrar_cartao_journey
-    type: invoke
-    tool: context_set
-    input:
-      session_id: "$.session_id"
-      tenant_id:  "$.tenant_id"
-      tag:        "journey.numero_cartao"
-      value:      "@ctx.session.numero_cartao"
       confidence: 1.0
       visibility: "agents_only"
     on_success: limpar_form_do_pacote

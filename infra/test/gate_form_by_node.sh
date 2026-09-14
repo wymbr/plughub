@@ -18,7 +18,7 @@
 # ──────────────────────────────
 #   A  `by_node` sumir, ou não cobrir todos os nós da forma          → VERMELHO
 #   B  o texto do nó divergir do que a forma publicada declara       → VERMELHO
-#   C  o piloto (`skill_limite_entrada_v1`) voltar a ter roteiro
+#   C  o piloto (a porta `skill_intake_runner_v1`, PID-04) voltar a ter roteiro
 #      estático cravado, OU perder a referência ao nó                → VERMELHO
 #   D  a frase de DEGRADAÇÃO (`falha_roteiro`) sair do YAML          → VERMELHO
 #      — ela é a única que TEM de continuar cravada: é o caminho de quem
@@ -38,7 +38,10 @@ RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP="${MCP:-http://localhost:3100}"
 TENANT="${TENANT:-tenant_demo}"
 FORM="${FORM:-dialog_limite_roteiro}"
-SKILL="$RAIZ/packages/skill-flow-engine/skills/skill_limite_entrada_v1.yaml"
+# PID-04 (2026-09-14): o piloto `skill_limite_entrada_v1` foi substituído pela porta de
+# plataforma, que carrega o MESMO roteiro pela config do pool `limite_ia`.
+SKILL_REL="packages/skill-flow-engine/skills/skill_intake_runner_v1.yaml"
+SKILL="$RAIZ/$SKILL_REL"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 FAIL=0
@@ -117,9 +120,9 @@ fi
 # ── C — o piloto referencia os nós e não voltou a cravar roteiro ─────────────
 [ -f "$SKILL" ] || inc "skill do piloto não encontrada: $SKILL"
 N_REF="$(grep -c 'render\.by_node\.' "$SKILL" | head -1 | tr -dc '0-9')"
-CRAVADO="$(cd "$RAIZ" && python3 - <<'PY'
-import io, re
-p = "packages/skill-flow-engine/skills/skill_limite_entrada_v1.yaml"
+CRAVADO="$(cd "$RAIZ" && SKILL_REL="$SKILL_REL" python3 - <<'PY'
+import io, os, re
+p = os.environ["SKILL_REL"]
 cur, sobra = None, []
 for l in io.open(p, encoding="utf-8"):
     m = re.match(r"^\s*- id:\s*(\S+)", l)

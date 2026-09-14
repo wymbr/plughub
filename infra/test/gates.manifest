@@ -323,6 +323,11 @@ probe_customer_cancel.sh
 # (o promote, e zero tambem e sujo) com mutacoes sobre copia; 410 ao vivo com o portao na frente,
 # tools/list sem skill_deploy e a populacao so de promote.
 probe_batch_deploy_retired.sh
+# PID-04. A porta do limite virou o runner de plataforma skill_intake_runner_v1, parametrizado
+# pela config do pool. Censo (sem literal de dominio no runner, todo no do roteiro existe na
+# forma configurada, slot vivo com a config exigida) e o acesso 1 ao vivo com a injecao que o
+# intake antigo aceitava: um campo do formulario trocava a ancora do processo.
+probe_intake_runner.sh
 # VOZ-07. O expurgo de anexos em dois estagios estava descrito em tres documentos e em
 # nenhum codigo: `expires_at` era carimbado e nunca aplicado, e anexo nenhum expirava.
 # Mede nos DOIS lados -- invariante sobre a populacao viva (vacuo enquanto nada venceu,
@@ -654,22 +659,22 @@ smoke_wrapup_slot_handoff.sh
 # tranquilidade da decisao (mesma separacao de `_SCOPE_EXEMPT` x `_SCOPE_DEBT`
 # na analytics-api).
 
-# -- ferramenta (5) --
+# -- ferramenta (6) --
 # o proprio runner e o helper de credencial: sao PECA, nao unidade medida
 =_auth.sh                                             ferramenta
 =_resume_requirement_setup.sh                         ferramenta
 =_resume_access3_exercise.sh                          ferramenta
 =_customer_cancel_exercise.sh                         ferramenta
+=_intake_runner_exercise.sh                           ferramenta
 =run_gates.sh                                         ferramenta
 
-# -- provisionamento (25) --
+# -- provisionamento (24) --
 # mudam estado de proposito (semeiam, promovem, expurgam). Roda-los a cada
 # execucao do runner reprovisionaria a stack, e um seed nao julga nada — o
 # veredicto dele e 'consegui escrever'
 =apply_masking_suffix_rules.sh                        provisionamento
 =mk_unrestricted_principal.sh                         provisionamento
 =purge_orphan_segments.sh                             provisionamento
-=redeploy_limite_entrada.sh                           provisionamento
 =repromote_edited_skills.sh                           provisionamento
 =seed_ai_eval_form.sh                                 provisionamento
 =seed_customer_history_demo.sh                        provisionamento

@@ -102,15 +102,24 @@ echo "── 1. PUT /v1/skills/$SKILL_ID"
 # que está no banco".
 BODY=$(python3 - "$YAML" <<'PY'
 import json, sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
-print(json.dumps({
+d = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+corpo = {
     "skill_id":       d["id"],
     "name":           d.get("name", d["id"]),
     "version":        str(d.get("version", "1.0")),
     "description":    d.get("description", "") or d["id"],
     "classification": d.get("classification", {"type": "vertical"}),
     "flow":           {"entry": d["entry"], "steps": d["steps"]},
-}))
+}
+# PID-04 (2026-09-14): o PUT é NÃO-partial, e este corpo não levava `config_params` —
+# publicar por aqui APAGAVA a declaração dos parâmetros de deploy. Sem ela o promote
+# não cobra config obrigatória e a tela de Deploy não os oferece. Medido na porta de
+# plataforma: 8 parâmetros obrigatórios no YAML, `null` no registry. Mesma lista do
+# `_publish_skill.py`, que já os levava.
+for opt in ("delegation_input", "config_params"):
+    if d.get(opt):
+        corpo[opt] = d[opt]
+print(json.dumps(corpo))
 PY
 ) || { echo "❌ falha ao montar o corpo"; exit 2; }
 

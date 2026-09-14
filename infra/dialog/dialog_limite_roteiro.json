@@ -1,7 +1,7 @@
 {
   "form_id": "dialog_limite_roteiro",
   "name": "Aumento de limite — roteiro do fluxo de entrada",
-  "description": "O ROTEIRO do skill_limite_entrada_v1: as frases que o cliente lê, fora do YAML. Consumido por `render.by_node` — UMA carga (`form_get`) no início do fluxo e cada notify/menu referencia o seu nó. Não é um diálogo linear: os nós vivem em ramos diferentes do processo, e é por isso que o consumo é por NÓ, não pelo render single-turn. Os ids dos nós são os ids dos STEPS, para a correspondência ser auditável. Piloto da NIV-04 (ADR adr-agent-flow-single-authored-level § F4).",
+  "description": "O ROTEIRO da porta do aumento de limite: as frases que o cliente lê, fora do YAML. Consumido por `render.by_node` — UMA carga (`form_get`) e cada notify/menu referencia o seu nó. Desde a PID-04 (2026-09-14) servem dois skills: a porta de plataforma `skill_intake_runner_v1` (config `dialog_form_id` do pool `limite_ia`) e a continuidade `skill_limite_continuidade_v1` (confirmar_consulta, avisar_cancelamento, avisar_erro_retomada). Os ids dos nós são os ids dos STEPS, para a correspondência ser auditável. Piloto da NIV-04 (ADR adr-agent-flow-single-authored-level § F4).",
   "default_locale": "pt-BR",
   "locales": [
     "pt-BR"
@@ -33,7 +33,7 @@
       }
     },
     {
-      "id": "coletar_telefone_cadastrado",
+      "id": "coletar_ancora_prova",
       "kind": "statement",
       "text": {
         "pt-BR": "Para qual celular devo enviar o código? Informe o número cadastrado no seu cartão, com o código do país e o DDD (ex: 55 11 99999-0001)."
@@ -47,7 +47,7 @@
       }
     },
     {
-      "id": "avisar_transferencia_sac",
+      "id": "avisar_transferencia",
       "kind": "statement",
       "text": {
         "pt-BR": "Sem problemas, vou te transferir para um atendente. Um instante..."
@@ -86,6 +86,13 @@
       "kind": "statement",
       "text": {
         "pt-BR": "Não consegui processar sua solicitação agora. Pode tentar novamente em alguns minutos?"
+      }
+    },
+    {
+      "id": "confirmar_recebimento",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "📋 Recebido! Vou registrar seu pedido de aumento de limite. Um instante..."
       }
     },
     {

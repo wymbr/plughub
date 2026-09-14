@@ -329,10 +329,71 @@ const WorkflowTriggerInputSchema = z.object({
     "Example: '{\"session.numero_atual\": \"11999999999\"}'"
   ),
 
+  /**
+   * PID-04 (2026-09-14) — contexto por OBJETO, não por texto.
+   *
+   * O `context_json` é um template de string: o skill escreve
+   * `'{"session.cpf": "{{…}}", "session.numero_cartao": "{{…}}"}'` e o engine
+   * interpola o que o CLIENTE digitou dentro de um JSON. Medido ao vivo no intake do
+   * limite: um número de cartão com `", "session.cpf": "<outro>"` fez o processo
+   * nascer com o CPF de outra pessoa — a pendência foi indexada sob a âncora
+   * injetada, depois de o cliente ter provado a PRÓPRIA identidade por OTP.
+   *
+   * Os dois campos abaixo não passam por texto: o valor é valor, e a chave é
+   * validada. `context_fields` vira `session.<chave>`; `anchors` vira `session.<kind>`
+   * (a mesma convenção que `_anchors_from_context` lê no gateway) e é aplicado POR
+   * ÚLTIMO, então nenhum campo de formulário sobrescreve a identidade.
+   */
+  context_fields: z.record(
+    z.string().regex(/^[a-z][a-z0-9_]*$/, "chave de context_fields: [a-z][a-z0-9_]*"),
+    z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  ).optional().describe(
+    "Form values for the new session, as an OBJECT: each key becomes `session.<key>`. " +
+    "Prefer over context_json for anything a customer typed — values are never parsed as JSON."
+  ),
+
+  anchors: z.array(z.object({
+    kind:  z.enum(["phone", "email", "cpf", "princ"]),
+    value: z.string().min(1),
+  })).optional().describe(
+    "Identity anchors for the new session: each becomes `session.<kind>`, written LAST " +
+    "so no form field can override the identity the process is indexed under."
+  ),
+
   customer_id: z.string().optional().describe(
     "Customer identifier for the new webhook session."
   ),
 })
+
+/**
+ * Monta o contexto semeado do trigger. Ordem = precedência: `context_json` (legado),
+ * depois `context_fields`, depois `anchors` — a identidade é a última a escrever.
+ * Exportada para teste: é a regra que fecha a injeção medida na PID-04.
+ */
+export function buildTriggerContext(
+  input: Pick<z.infer<typeof WorkflowTriggerInputSchema>, "context_json" | "context_fields" | "anchors">,
+): { context: Record<string, string> } | { error: string } {
+  let context: Record<string, string> = {}
+  if (input.context_json) {
+    try {
+      const parsed = JSON.parse(input.context_json) as unknown
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { error: "Invalid context_json: must be a valid JSON object string" }
+      }
+      context = parsed as Record<string, string>
+    } catch {
+      return { error: "Invalid context_json: must be a valid JSON object string" }
+    }
+  }
+  for (const [k, v] of Object.entries(input.context_fields ?? {})) {
+    if (v === null || v === undefined) continue
+    context[`session.${k}`] = String(v)
+  }
+  for (const a of input.anchors ?? []) {
+    context[`session.${a.kind}`] = a.value
+  }
+  return { context }
+}
 
 // ─── Registration ─────────────────────────────────────────────────────────────
 
@@ -360,7 +421,7 @@ export function registerWorkflowTools(
         }
       }
       const {
-        tenant_id, pool_id, skill_id, origin_session_id, context_json, customer_id, journey,
+        tenant_id, pool_id, skill_id, origin_session_id, customer_id, journey,
       } = parsed.data
       console.log(
         "[workflow_trigger] parsed ok tenant=%s pool=%s skill=%s origin=%s journey=%s",
@@ -376,18 +437,15 @@ export function registerWorkflowTools(
         }
       }
 
-      // ── Parse context_json ────────────────────────────────────────────────
-      let context: Record<string, string> = {}
-      if (context_json) {
-        try {
-          context = JSON.parse(context_json) as Record<string, string>
-        } catch {
-          return {
-            content: [{ type: "text" as const, text: `Invalid context_json: must be a valid JSON object string` }],
-            isError: true,
-          }
+      // ── Contexto semeado (context_json → context_fields → anchors) ─────────
+      const montado = buildTriggerContext(parsed.data)
+      if ("error" in montado) {
+        return {
+          content: [{ type: "text" as const, text: montado.error }],
+          isError: true,
         }
       }
+      const context = montado.context
 
       // ── POST to channel-gateway trigger endpoint ───────────────────────────
       // S4: pool vence sobre skill. A rota /pool/{id} roteia DIRETO ao pool, que roda o

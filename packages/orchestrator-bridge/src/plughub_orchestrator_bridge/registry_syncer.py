@@ -497,8 +497,20 @@ class RegistrySyncer:
             except (TypeError, ValueError):
                 max_concurrent = 1
             max_concurrent = max(1, max_concurrent)
+            # PID-04 (2026-09-14): `deploy.config` semeia o resto do config_json. Até
+            # aqui o YAML só sabia `max_concurrent_sessions`, e 6 slots vivos já
+            # dependiam de outras chaves (`form_id`, `resume_requires`) que o promote
+            # EXIGE — numa base limpa, esses pools não promoviam, e o único rastro era
+            # um warning de HTTP 422. A porta de plataforma declara 8 chaves obrigatórias.
+            seed_config = deploy.get("config") or {}
+            if not isinstance(seed_config, dict):
+                logger.warning(
+                    "RegistrySyncer: deploy.config de pool=%s não é mapa (%s) — ignorado",
+                    pool_id, type(seed_config).__name__,
+                )
+                seed_config = {}
             await self._ensure_deploy_slot(
-                http, headers, pool_id, skill_id, max_concurrent, report
+                http, headers, pool_id, skill_id, max_concurrent, report, seed_config,
             )
 
     async def _ensure_deploy_slot(
@@ -509,6 +521,7 @@ class RegistrySyncer:
         skill_id:       str,
         max_concurrent: int,
         report:         SyncReport,
+        seed_config:    dict | None = None,
     ) -> None:
         slots_url = f"{self._registry_url}/v1/pools/{pool_id}/slots"
         # Config do slot que já está em produção. O YAML declara APENAS
@@ -561,17 +574,28 @@ class RegistrySyncer:
             payload = {
                 "skill_id":    skill_id,
                 # Preserva a config DB-owned (channel_policy & cia) e só (re)afirma o
-                # que o YAML de fato declara.
-                "config_json": {**existing_cfg, "max_concurrent_sessions": max_concurrent},
+                # que o YAML de fato declara. Precedência: `deploy.config` do YAML
+                # SEMEIA; o que já está no slot (DB-owned) vence; a capacidade é o que
+                # o YAML afirma.
+                "config_json": {
+                    **(seed_config or {}), **existing_cfg,
+                    "max_concurrent_sessions": max_concurrent,
+                },
             }
             async with http.put(
                 next_url, headers=headers, json=payload,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status not in (200, 201):
+                    # O corpo diz QUAL portão recusou (config obrigatória, piso de
+                    # identidade, perfil) — só o código fazia todos parecerem iguais.
+                    try:
+                        _detail = (await resp.text())[:300]
+                    except Exception:  # noqa: BLE001
+                        _detail = "<sem corpo>"
                     logger.warning(
-                        "RegistrySyncer: deploy slot PUT failed pool=%s skill=%s HTTP %d",
-                        pool_id, skill_id, resp.status,
+                        "RegistrySyncer: deploy slot PUT failed pool=%s skill=%s HTTP %d — %s",
+                        pool_id, skill_id, resp.status, _detail,
                     )
                     report.deploy_slots_errors += 1
                     return

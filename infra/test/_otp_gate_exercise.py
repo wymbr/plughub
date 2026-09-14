@@ -107,7 +107,8 @@ async def censo(s, db, r):
                     out["pools_sem_snapshot"] += 1
                     continue
                 out["pools"] += 1
-                flows.append((pid, cur.get("skill_id"), yaml.safe_load(snap) if isinstance(snap, str) else snap))
+                flows.append((pid, cur.get("skill_id"), yaml.safe_load(snap) if isinstance(snap, str) else snap,
+                              {"config": cur.get("config_json") or {}}))
             # Pool sem snapshot roda o `skill.flow` (fallback do bridge) — e o `flow` de
             # produção de TODO skill e o que o proximo promote fotografa. Censo so dos
             # snapshots deixaria esses de fora calado.
@@ -117,18 +118,40 @@ async def censo(s, db, r):
             out["skills_flow"] = len(skills)
             for sk in skills:
                 if sk.get("flow"):
-                    flows.append(("(skill.flow)", sk.get("skill_id"), sk["flow"]))
+                    params = sk.get("config_params")
+                    # a listagem não traz `config_params`; o detalhe traz — só é pedido
+                    # quando o fluxo desafia por config, que é quando ele importa
+                    if params is None and "$.config." in json.dumps(sk["flow"]):
+                        rd = await http.get("%s/v1/skills/%s" % (AR, sk.get("skill_id")))
+                        params = (rd.json() or {}).get("config_params") if rd.status_code == 200 else None
+                    flows.append(("(skill.flow)", sk.get("skill_id"), sk["flow"],
+                                  {"params": params or []}))
         if INJETAR:
             flows.append(("__injetado__", "__injetado__", {"steps": [
-                {"id": "desafio_cpf", "tool": "otp_challenge", "input": {"kind": "cpf", "value": "x"}}]}))
-        for pid, skill, flow in flows:
+                {"id": "desafio_cpf", "tool": "otp_challenge", "input": {"kind": "cpf", "value": "x"}}]}, {}))
+
+        # PID-04 (2026-09-14): a porta de plataforma declara o canal da prova como config
+        # (`kind: "$.config.proof_anchor_kind"`). No slot, resolve pelo config_json dele; no
+        # `skill.flow` (sem pool), só é entregável se TODA opção declarada do parâmetro for —
+        # um parâmetro sem opções fechadas aceitaria `cpf`, e isso é a violação.
+        def kinds_de(kind, meta):
+            if not (isinstance(kind, str) and kind.startswith("$.config.")):
+                return [kind]
+            chave = kind[len("$.config."):]
+            if "config" in meta:
+                return [meta["config"].get(chave)]
+            par = next((p for p in meta.get("params", []) if p.get("key") == chave), None)
+            opcoes = [o.get("value") for o in (par or {}).get("options") or []]
+            return opcoes or [None]
+
+        for pid, skill, flow, meta in flows:
             for st in _walk(flow):
                 if st.get("tool") != "otp_challenge":
                     continue
                 out["desafios"] += 1
                 inp = st.get("input") or {}
                 kind = inp.get("kind")
-                if kind not in DELIVERABLE_KINDS or not inp.get("customer_id"):
+                if any(k not in DELIVERABLE_KINDS for k in kinds_de(kind, meta)) or not inp.get("customer_id"):
                     out["violacoes"].append({"pool": pid, "skill": skill, "step": st.get("id"),
                                              "kind": kind, "customer_id": bool(inp.get("customer_id"))})
     except Exception as e:  # leitor quebrado nunca vira "zero violacoes"

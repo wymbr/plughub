@@ -158,6 +158,21 @@ Quando é possível ter identificador distinto, **entrada e retomada são portas
 não é — o WhatsApp responde na mesma thread; a voz cai no número principal —, a porta `both`
 acumula os dois papéis.
 
+> **Implementado em 2026-09-14 (PID-04), com três diferenças do contrato acima, cada uma medida.**
+> **(1)** A porta viva é só o limite (`limite_ia`); a portabilidade ficou para a PID-17 por decisão do
+> dono. **(2)** Entraram parâmetros que o contrato não previa, porque a porta não podia adivinhá-los:
+> `anchor_kind` (o que identifica), `proof_anchor_kind` (para onde vai o código), `new_form_id` (o
+> formulário do processo novo — a coleta é da porta, o processo não coleta) e **`on_pending_pool`**:
+> com pendência `offer` a porta delega a um pool de CONTINUIDADE do domínio, porque `offer` significa
+> coisas diferentes por processo e o menu mostra dados que não podem morar em roteiro (interpolação de
+> passe único). Com `auto`, delega ao pool que parqueou a pendência (`pendencia.pool`). `require` é
+> enum `otp | none` e não lista: com um mecanismo só, o cadastro de config trataria `[]` como ausente.
+> **(3)** `door_mode` e `accept_resume_key` **não** entraram — zero consumidores; viraram a PID-18.
+> Os fatos do processo que a continuidade e a entrega mostram moram na JOURNEY, gravados pelo próprio
+> processo: repassá-los pelo `delegate.context` foi recusado pelo cadastro do ContextStore (nome de tag
+> decidido em runtime). A D11 (*abrir processo novo nunca exige identificação*) **não é cumprida** pela
+> porta, por paridade com o intake que ela substituiu — PID-19.
+
 ### D3 · Mecanismos são agentes de plataforma; o orquestrador é dono da composição
 
 Cada mecanismo (OTP, biometria) é único e de plataforma. `skill_identity_orchestrator_v1` os executa
@@ -165,6 +180,8 @@ seletivamente, com **um `config_param` por mecanismo** (`enable_otp`, `enable_bi
 nasce `required: false` **com default** — senão o `required-config` reprova o deploy de todos os
 pools existentes. O orquestrador só se justifica sendo dono da COMPOSIÇÃO; enquanto não for, nasce
 dentro da porta, e a interface (`delegate` + retorno padrão) é a mesma nos dois casos.
+*(PID-04, 2026-09-14: nasceu dentro da porta — `require` + `proof_anchor_kind`. A PID-05 fica com gatilho no
+segundo mecanismo.)*
 
 ### D4 · Evidência sem score; exigência é CONJUNTO de mecanismos
 
@@ -427,7 +444,7 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-01 | `session_token` assinado nas tools de identidade e retomada | D6 |
 | PID-02 | quem verifica grava; `context_set` recusa `core.journey.identity.*` / `core.identity.*` | D6 |
 | PID-03 | `workflow_resume` transporta a evidência para o processo retomado | D5, D6 |
-| PID-04 | `skill_intake_runner_v1` + migração dos dois intakes | D2 |
+| PID-04 | `skill_intake_runner_v1` + migração do intake do limite (a portabilidade virou PID-17) | D2 |
 | PID-05 | `skill_identity_orchestrator_v1` (composição, um param por mecanismo) | D3 |
 | PID-06 | `resume_requires` nos steps `customer_resumable` + piso no step + `judgeIdentityFloor` + liberação do token contra a evidência da sessão | D6, D7 |
 | PID-07 | tenant e autor da escrita saem da credencial; deploy em `skill_flows.operacao` | D7 |
@@ -440,6 +457,9 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-14 | `resume_door` — por qual pool a retomada entra (gatilho: 2º pool de entrada) | D7 |
 | PID-15 | o cliente provado cancela a tarefa de aprovação (`rejected`), nunca a decide | D6 |
 | PID-16 | promote em lote sobre slots, com rollback por pool (gatilho: 1ª skill de plataforma com várias portas) | §4 |
+| PID-17 | intake da portabilidade na porta de plataforma + seus três defeitos | D2 |
+| PID-18 | `door_mode` e `accept_resume_key` (gatilho: porta só-entrada/só-retomada, ou canal com chave) | D2, D10 |
+| PID-19 | a porta exige prova para abrir pedido novo — contra a D11 | D11 |
 | IDN-06 | credencial nas rotas de identidade do channel-gateway | (7) |
 | IDN-07 | eixo de procedência na âncora | D13 |
 | IDN-08 | a aba Cliente carimba `operator` | (8) |

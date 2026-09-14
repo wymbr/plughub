@@ -21,9 +21,14 @@ export async function executeChoice(
   ctx:  StepContext
 ): Promise<StepResult> {
   // Contexto de avaliação para referências $.
+  // PID-04 (2026-09-14): `config` entrou aqui. Os inputs de step já liam `$.config.*`
+  // (interpolate.ts), e o `choice` não — uma condição sobre a config do deploy resolvia
+  // `undefined`, não casava, e o fluxo seguia o `default` sem nada vermelho. Duas
+  // respostas para a mesma referência dentro do mesmo engine.
   const evalContext = {
     pipeline_state: ctx.state.results,
     session:        ctx.sessionContext,
+    config:         ctx.config ?? {},
   }
 
   for (const condition of step.conditions) {
@@ -42,9 +47,17 @@ export async function executeChoice(
         tag = condition.field.replace(/^@ctx\./, "")
       }
 
-      // Lê a ContextEntry completa para poder avaliar exists e confidence_gte
+      // Lê a ContextEntry completa para poder avaliar exists e confidence_gte.
+      //
+      // PID-04 (2026-09-14): `journey.*`/`core.journey.*` vão ao hash da JOURNEY, pela
+      // mesma regra do `resolveCtxRef` (interpolate.ts). O `choice` lia sempre o hash da
+      // sessão: medido ao vivo, o agente de entrega do limite mostrava ao cliente o
+      // cartão lido da journey e decidia "aprovado?" lendo a sessão, onde o valor não
+      // existe — e narrava uma RECUSA de um pedido aprovado. A frase e a decisão sobre a
+      // mesma referência respondiam de casas diferentes.
+      const naJourney = (tag.startsWith("journey.") || tag.startsWith("core.journey.")) && ctx.journeyId
       const entry = ctx.contextStore
-        ? await ctx.contextStore.get(ctx.sessionId, tag, ctx.customerId)
+        ? await ctx.contextStore.get(naJourney ? `journey:${ctx.journeyId}` : ctx.sessionId, tag, ctx.customerId)
         : null
 
       matched = evaluateCtxCondition(entry, condition.operator, condition.value)

@@ -157,7 +157,11 @@ pools:
 
   - pool_id: demo_ia
     agent_kind: ai
-    deploy: { skill_id: skill_navegacao_v1, max_concurrent_sessions: 10 }
+    # PID-04 (2026-09-14): `config` semeia o config_json do slot (a semente acompanha a config VIVA).
+    deploy:
+      skill_id: skill_navegacao_v1
+      max_concurrent_sessions: 10
+      config: { form_id: dialog_navegacao_atendimento_v1 }
     description: "Pool IA — orquestrador de navegação dirigido por DialogForm"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
@@ -191,7 +195,11 @@ pools:
   # métrica própria destruiria a comparação que a F5 existe para permitir.
   - pool_id: demo_llm_ia
     agent_kind: ai
-    deploy: { skill_id: skill_navegacao_llm_v1, max_concurrent_sessions: 10 }
+    # PID-04 (2026-09-14): `config` semeia o config_json do slot (a semente acompanha a config VIVA).
+    deploy:
+      skill_id: skill_navegacao_llm_v1
+      max_concurrent_sessions: 10
+      config: { form_id: dialog_navegacao_atendimento_v1 }
     description: "Pool IA — orquestrador com LLM, aterrissagem em folha declarada"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
@@ -510,7 +518,11 @@ pools:
 
   - pool_id: portabilidade_processo_ia
     agent_kind: ai
-    deploy: { skill_id: skill_portabilidade_demo_v1, max_concurrent_sessions: 20 }
+    # PID-04 (2026-09-14): `config` semeia o config_json do slot (a semente acompanha a config VIVA).
+    deploy:
+      skill_id: skill_portabilidade_demo_v1
+      max_concurrent_sessions: 20
+      config: { resume_requires: [otp] }
     # Arc 19: pool webhook para o processo assíncrono de portabilidade.
     # Disparado pelo intake via workflow_trigger MCP tool.
     # Executa skill_portabilidade_demo_v1: suspend 48h → collect → complete.
@@ -541,7 +553,9 @@ pools:
   # Aumento de limite de crédito — cenário de referência do modelo de 3 níveis
   # Design: docs/product/limite-credito-3-niveis-design.md
   #
-  #   limite_ia         → N2+N1 (b+c): identidade, pendência e I/O com o cliente
+  #   limite_ia         → a PORTA: runner de plataforma `skill_intake_runner_v1` (PID-04),
+  #                       parametrizado pela config abaixo
+  #   limite_continuidade → o pedido em análise: consultar / cancelar / outro assunto
   #   limite_processo   → N3 (a): a regra de negócio, channel-abstract
   #   limite_retorno    → N1 (c): entrega o resultado; parqueia quando não há cliente
   #   aprovacao_credito → aprovador HUMANO em fila pull (sem skill: o pacote vem
@@ -552,14 +566,39 @@ pools:
   # estourar a validação de capacidade derrubaria o promote de outros pools.
   - pool_id: limite_ia
     agent_kind: ai
-    deploy: { skill_id: skill_limite_entrada_v1, max_concurrent_sessions: 5 }
-    description: "Aumento de limite — entrada (identidade + pendência + coleta)"
+    # PID-04 (2026-09-14): a porta é o runner de PLATAFORMA; tudo o que é do limite é config.
+    deploy:
+      skill_id: skill_intake_runner_v1
+      max_concurrent_sessions: 5
+      config:
+        dialog_form_id:    dialog_limite_roteiro
+        anchor_kind:       cpf
+        require:           otp
+        proof_anchor_kind: phone
+        new_form_id:       dialog_limite_solicitacao
+        on_new_pool:       limite_processo
+        on_pending_pool:   limite_continuidade
+        degrade_target:    sac_ia
+    description: "Aumento de limite — porta (identidade + pendência + coleta)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 300000
+
+  # PID-04 — continuidade do pedido em análise, chamada pela porta com a pendência
+  # `offer`. Especialista de conferência na sessão do cliente; nunca decide o pedido.
+  - pool_id: limite_continuidade
+    agent_kind: ai
+    deploy: { skill_id: skill_limite_continuidade_v1, max_concurrent_sessions: 5 }
+    description: "Aumento de limite — continuidade do pedido em análise (delegate I/O)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
 
   - pool_id: limite_processo
     agent_kind: ai
-    deploy: { skill_id: skill_limite_processo_v1, max_concurrent_sessions: 10 }
+    # PID-04 (2026-09-14): `config` semeia o config_json do slot (a semente acompanha a config VIVA).
+    deploy:
+      skill_id: skill_limite_processo_v1
+      max_concurrent_sessions: 10
+      config: { resume_requires: [otp] }
     # Disparado pelo limite_ia via workflow_trigger (endereçado por POOL).
     # Suspende duas vezes: na análise humana e no parking do resultado.
     description: "Pool webhook — processo de aumento de limite (N3)"
@@ -575,7 +614,11 @@ pools:
   # pull. Ver o cabeçalho de skill_limite_entrega_v1.
   - pool_id: limite_entrega
     agent_kind: ai
-    deploy: { skill_id: skill_limite_entrega_v1, max_concurrent_sessions: 10 }
+    # PID-04 (2026-09-14): `config` semeia o config_json do slot (a semente acompanha a config VIVA).
+    deploy:
+      skill_id: skill_limite_entrega_v1
+      max_concurrent_sessions: 10
+      config: { resume_requires: [otp] }
     description: "Pool webhook — espera o cliente voltar para entregar o resultado"
     channel_types: [webhook]
     skill_id: skill_limite_entrega_v1
@@ -632,7 +675,11 @@ pools:
 
   - pool_id: survey_multi_ia
     agent_kind: ai
-    deploy: { skill_id: skill_survey_multi_v1, max_concurrent_sessions: 5 }
+    # PID-04 (2026-09-14): `config` semeia o config_json do slot (a semente acompanha a config VIVA).
+    deploy:
+      skill_id: skill_survey_multi_v1
+      max_concurrent_sessions: 5
+      config: { form_id: dialog_survey_multi_v1 }
     # Dialog primitive (loop): survey de N perguntas SEQUENCIAIS. Consumidor real do
     # step `loop` — caminha render.questions uma por turno (canal pobre), acumula
     # {metric,value} e grava num survey_record. Conecte o webchat de teste direto.

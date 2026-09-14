@@ -13,9 +13,17 @@
 #       permanece indexada sob a identidade. É assim que "webchat não tem outbound"
 #       vira "o retorno espera o próximo inbound".
 #
-#   (2) N2 · retomar_resultado — o cliente está do outro lado, agora. O agente roda
+#   (2) Porta · retomar_resultado — o cliente está do outro lado, agora. O agente roda
 #       como conference specialist DENTRO da sessão dele (sem troca de canal),
-#       entrega o resultado e resume os DOIS: o processo (N3) e o delegate do N2.
+#       entrega o resultado e resume os DOIS: o processo (N3) e o delegate da porta.
+#
+# O resultado é lido da JOURNEY (`@ctx.journey.*`), e não de `session.*` (PID-04,
+# 2026-09-14). Quem chama é a porta de PLATAFORMA (`skill_intake_runner_v1`), que não
+# conhece os campos do limite e por isso não os repassa. Eles já moravam na journey —
+# o intake antigo só os copiava de lá para o delegate.context. A porta une a journey
+# ANTES de delegar, então a raiz canônica resolve daqui. No contexto (1) nada disto é
+# lido: o agente encerra antes. A máscara é a mesma: `journey.numero_cartao` é alias de
+# `journey.cartao.numero`, tipo `credit_card`, como `session.numero_cartao` era.
 #
 # `customer_present` é o sinal certo porque falha para o lado seguro: sem ele, adia.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,7 +64,7 @@ steps:
   - id: rotear_resultado
     type: choice
     conditions:
-      - field:    "@ctx.session.resultado"
+      - field:    "@ctx.journey.resultado"
         operator: eq
         value:    "aprovado"
         next:     notificar_aprovado
@@ -77,13 +85,13 @@ steps:
   # NÃO mascare à mão aqui: seriam duas casas, e a segunda produziria `*****4444**`.
   - id: notificar_aprovado
     type: notify
-    message: "🎉 Boa notícia! Seu aumento de limite foi aprovado.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Novo limite: R$ {{@ctx.session.limite_aprovado}}\n\nO limite já está disponível para uso."
+    message: "🎉 Boa notícia! Seu aumento de limite foi aprovado.\n\n• Cartão: {{@ctx.journey.numero_cartao}}\n• Novo limite: R$ {{@ctx.journey.limite_aprovado}}\n\nO limite já está disponível para uso."
     on_success: confirmar_ciencia
     on_failure: confirmar_ciencia
 
   - id: notificar_recusado
     type: notify
-    message: "Sua solicitação de aumento de limite foi analisada e não pôde ser aprovada neste momento.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Parecer: {{@ctx.session.parecer}}\n\nVocê pode solicitar de novo em 30 dias."
+    message: "Sua solicitação de aumento de limite foi analisada e não pôde ser aprovada neste momento.\n\n• Cartão: {{@ctx.journey.numero_cartao}}\n• Parecer: {{@ctx.journey.parecer}}\n\nVocê pode solicitar de novo em 30 dias."
     on_success: confirmar_ciencia
     on_failure: confirmar_ciencia
 
@@ -104,7 +112,7 @@ steps:
     on_disconnect: retornar_processo
 
   # ══ Retomar o PROCESSO (N3) ════════════════════════════════════════════════
-  # O token veio no delegate.context do N2, que o leu da pendência.
+  # O token veio no delegate.context da porta, que o leu da pendência.
   - id: retornar_processo
     type: invoke
     tool: workflow_resume
