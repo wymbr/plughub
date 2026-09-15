@@ -21,7 +21,14 @@
 #      Console o usa; o hook pede a rota do gateway pelo proxy que existe (vite e nginx) e só
 #      repete no código que o gateway emite; a sobreposição mostra conectando/erro antes do teto.
 #   B  AO VIVO — cliente (widget) + agente humano (protocolo do Console no `/agent/ws`) + token
-#      pelo nginx do platform-ui + os dois na MESMA sala do SFU (G1..G5, com o controle G4).
+#      pelo nginx do platform-ui + os dois na MESMA sala do SFU (G1..G5, com o controle G4) +
+#      texto nos dois sentidos (G6 com o controle da nota `agents_only`, G7).
+#
+# FATIA 3 (2026-09-15) — a ficha dizia que o texto do agente não chegava ao cliente, lendo o
+#   `_stream_watcher`. Medido ao vivo: chegava (ele vai por `conversations.outbound`, não pelo
+#   stream), nos dois sentidos, em milissegundos. O que estava errado era a HORA — o leitor pedia
+#   `ts`, que nenhum produtor escreve, e o cliente recebia a hora da entrega (A6, G6) — e o widget
+#   rotulava o aviso de fila do sistema como fala do "Agente" (A7).
 #
 # ⚠️ O `/agent/ws` não pede credencial (registra instância para qualquer `user_id`); é isso que
 #    permite o agente headless, e é defeito registrado à parte (`CAP-19` em `pending.md`). Quando
@@ -104,6 +111,24 @@ r('"room_not_ready"' in gw and re.search(r'code === "room_not_ready"', hook) is 
 ov = nocomment_ts(src("packages/platform-ui/src/modules/agent-assist/components/WebRTCOverlay.tsx"))
 i_con, i_err, i_none = ov.find("if (connecting)"), ov.find("if (error)"), ov.find('view === "none"')
 r(0 <= i_con < i_none and 0 <= i_err < i_none, "A5 sobreposicao mostra conectando/erro antes de esconder por teto vazio")
+
+# A6 — a hora da mensagem: a chave que o LEITOR pede tem de ser a que os produtores escrevem.
+def outbound_text_blocks(s):
+    return [b for b in re.findall(r'publish\("conversations\.outbound",\s*\{(.*?)\n\s*\}\)', s, re.S)
+            if 'type:       "message.text"' in b or re.search(r'type:\s*"message\.text"', b)]
+prod = outbound_text_blocks(src("packages/mcp-server-plughub/src/server.ts")) + \
+       outbound_text_blocks(src("packages/mcp-server-plughub/src/tools/bpm.ts"))
+chaves = sorted({k for b in prod for k in re.findall(r"^\s*(timestamp|ts)\s*[:,]", b, re.M)})
+wr = ast.parse(src("packages/channel-gateway/src/plughub_channel_gateway/adapters/webrtc.py"))
+dt = next(n for n in ast.walk(wr) if isinstance(n, ast.AsyncFunctionDef) and n.name == "deliver_text")
+lidas = [c.args[0].value for c in ast.walk(dt) if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "get"
+         and isinstance(getattr(c.func, "value", None), ast.Name) and c.func.value.id == "payload"
+         and c.args and isinstance(c.args[0], ast.Constant)]
+r(len(prod) >= 2 and chaves == ["timestamp"] and "timestamp" in lidas and ("ts" not in lidas or lidas.index("timestamp") < lidas.index("ts")),
+  "A6 deliver_text le `timestamp`, a chave dos %d produtor(es) de message.text (produtores escrevem %s; leitor pede %s)"
+  % (len(prod), chaves, lidas))
+wid = src("infra/demo/web/webrtc-widget.html")
+r(re.search(r"msg\.author === 'system'", wid) is not None, "A7 widget nao rotula aviso do sistema como fala de agente")
 PYEOF
 )
 tally "$A_OUT"
@@ -132,8 +157,8 @@ else
   [ $? -eq 124 ] && { docker kill "$name" >/dev/null 2>&1; B_OUT="$B_OUT
 FALHA TIMEOUT exercicio morto apos ${EXERCISE_TIMEOUT_S:-240}s"; }
   tally "$(printf '%s\n' "$B_OUT" | grep -E '^(OK|FALHA|INCONCL|SID|INFO) ')"
-  N=$(printf '%s\n' "$B_OUT" | grep -cE '^(OK|FALHA) (G[1-5]|LIMPEZA) ')
-  [ "$N" -ge 6 ] || falha "exercicio emitiu $N de 6 veredictos: $(printf '%s' "$B_OUT" | tail -3 | tr '\n' ' ' | cut -c1-260)"
+  N=$(printf '%s\n' "$B_OUT" | grep -cE '^(OK|FALHA) (G[1-7]|LIMPEZA) ')
+  [ "$N" -ge 8 ] || falha "exercicio emitiu $N de 8 veredictos: $(printf '%s' "$B_OUT" | tail -3 | tr '\n' ' ' | cut -c1-260)"
 fi
 
 echo ""

@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (16) — VOZ-04, fatia 3: o texto já chegava; a hora é que não
+
+### 1 · A premissa, refutada antes de escrever código
+
+A fatia estava registrada como *"o texto do agente não chega ao cliente WebRTC"*, deduzida da
+leitura do `_stream_watcher` (que só trata `routing.assigned`/`participant_left`). Medido ao vivo,
+com cliente real e agente headless no protocolo do Console: **chegava**, nos dois sentidos —
+agente→cliente em ~2 ms, cliente→agente em ~5 ms. O texto não passa pelo stream: o socket do
+agente e o `notification_send` publicam `message.text` em `conversations.outbound` com o `channel`
+do meta, e o `OutboundConsumer` entrega ao `deliver_text` do adapter. Ler um arquivo e concluir
+que o fato não acontece é o erro que "medir no LEITOR" existe para evitar — e aqui o leitor
+certo era outro arquivo.
+
+A mesma medição achou o que estava de fato errado:
+
+| o quê | medido |
+|---|---|
+| hora da mensagem | o Console carimba `timestamp`; os **dois** produtores de `message.text` escrevem `timestamp`; o `deliver_text` pedia `ts`, que ninguém escreve, e caía na hora da ENTREGA. Mensagem com `timestamp` fixo chegava ao cliente com a hora do relógio |
+| rótulo no widget | o aviso de fila (`author: system`, *"Aguardando agente disponível…"*) aparecia rotulado **"Agente"** |
+
+### 2 · O que mudou
+
+- `deliver_text` lê `timestamp` (aceita `ts` por compatibilidade); sem nenhum dos dois, entrega com
+  a hora atual **e avisa** — é contrato de produtor quebrado, não detalhe.
+- Widget de demo: `author === 'system'` vira mensagem de sistema.
+- Não mudou, e não é defeito: o ramo do `_stream_watcher` que espera `session.closed`/`agent_done`
+  no stream nunca dispara (o fim chega pelo outbound), mas o watcher é cancelado no fim do socket.
+
+### 3 · Gate
+
+No `probe_webrtc_agent_console.sh`:
+- **A6** censo no LEITOR: a chave que o `deliver_text` pede é a que os blocos `message.text` para
+  `conversations.outbound` do mcp-server escrevem. **A7** o widget separa o aviso de sistema. Contra
+  o fonte do `HEAD`: **A6 e A7 reprovam**, A1–A5 seguem verdes.
+- **G6** agente→cliente com autor `agent_human` e a hora que o agente carimbou; antes vai uma nota
+  com @menção, cuja prosa é `agents_only` e **não pode** chegar. **G7** cliente→agente com autor
+  `customer`. Ao vivo contra a imagem sem o conserto: **G6 reprova** (`ts` do relógio). Mutação do
+  controle — a nota sem @menção — **reprova o G6** (`nota_agents_only_vazou=True`): o observador
+  distingue, não só ecoa.
+
+**Suíte** do gateway na imagem: **1022** (+2: a hora do produtor chega; sem ela, o log diz).
+Vizinhos verdes: `probe_webrtc_contact_entry`, `probe_webrtc_media_plane`,
+`probe_gates_manifest_coverage`, `probe_adapter_self_calls`, `probe_edge_surface`,
+`probe_task_ledger`, `check_config_invariants`. `probe_webrtc_participant_media` e
+`probe_webrtc_pool_media_policy` seguem INCONCLUSIVO no ramo D pelo mesmo motivo da entrada (15):
+sem sessão aberta, não sobra `routing.assigned` para amostrar.
+
+### 4 · O que falta na VOZ-04
+
+1. **Mídia alcançável do browser do host** — SFU sem endereço externo, TURN com nome interno.
+2. **Validação com agente humano no browser** — gate assistido.
+
 ## 2026-09-15 (15) — VOZ-04, fatia 2: o Console abre a sala do contato WebRTC
 
 ### 1 · Vermelho ao vivo, antes

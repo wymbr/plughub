@@ -370,7 +370,12 @@ A4 (o humano finalmente entra na conferência) e é a primeira vez que o canal p
 > token era pedido ao mcp-server e a sobreposição escondia conectando/erro. Hoje o agente e o cliente
 > aparecem na mesma sala do SFU. Gate: `probe_webrtc_agent_console.sh`. Achados à parte: `CAP-19`
 > (`/agent/ws` sem credencial, publicado pela 5174) e `VOZ-15` (token sem conferir quem atende).
-> Faltam: texto do agente ao cliente, mídia alcançável do host, validação com agente no browser.
+>
+> **Fatia 3 — TEXTO ✅ 2026-09-15 (`VOZ-04`).** A lacuna registrada (*"o texto do agente não chega
+> ao cliente"*) foi refutada ao vivo: o texto viaja por `conversations.outbound` e chegava nos dois
+> sentidos. Consertou-se a fidelidade — a hora da mensagem (o leitor pedia uma chave que nenhum
+> produtor escreve) e o rótulo do aviso de sistema no widget.
+> Faltam: mídia alcançável do host, validação com agente no browser.
 
 **V-F2 — bot leg: STT/TTS.** URA e agente IA por voz; `notify` falado; `menu` por voz com DTMF
 **e** STT — o que conserta o `collect` morto de A2. A partir daqui a voz tem transcrição, e

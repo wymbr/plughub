@@ -297,7 +297,18 @@ class WebRTCAdapter(ChannelAdapter):
             or payload.get("text", "")
         )
         author = payload.get("author", {}).get("type", "agent")
-        ts     = payload.get("ts", datetime.now(timezone.utc).isoformat())
+        # VOZ-04 (fatia 3): os dois produtores de `message.text` em `conversations.outbound`
+        # (o socket do agente humano e o `notification_send`) escrevem `timestamp`. Este
+        # leitor pedia `ts`, que ninguém escreve, e caía sempre na hora da ENTREGA — medido
+        # ao vivo: a mensagem do Console chegava ao cliente com outra hora. Ausência vira
+        # hora da entrega, mas dita: é contrato de produtor quebrado, não detalhe.
+        ts = payload.get("timestamp") or payload.get("ts")
+        if not ts:
+            logger.warning(
+                "webrtc deliver_text: payload sem `timestamp` session=%s — cliente recebe a "
+                "hora da entrega no lugar da hora da mensagem", session_id,
+            )
+            ts = datetime.now(timezone.utc).isoformat()
 
         await self._ws_send(ws, {
             "type":   "webrtc.message",

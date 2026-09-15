@@ -15,6 +15,9 @@ stream carrega, o que o SFU lista.
   G4 sessão desconhecida pelo mesmo caminho é 404 SEM `room_not_ready` — o Console desiste em
      vez de repetir às cegas (o controle do código que ele usa para repetir)
   G5 agente e cliente entram na MESMA sala e o SFU lista os dois
+  G6 o texto do agente chega ao cliente, com autor e a hora que o Console carimbou — e uma
+     nota com @menção (prosa `agents_only`) NÃO chega (controle)
+  G7 o texto do cliente chega ao socket do agente
 """
 from __future__ import annotations
 
@@ -168,6 +171,50 @@ async def main() -> None:
                     emit("OK" if ok else "FALHA", "G5", f"SFU lista na sala {room_name}: {ids}")
                 else:
                     emit("FALHA", "G5", f"sem token de agente ({bool(tok)}) ou do cliente ({bool(ready)})")
+
+                # G6 — texto do agente ao cliente, com a hora que o Console carimbou. Antes vai
+                # uma nota com @menção: a prosa dela é `agents_only` e NÃO pode chegar — é o
+                # controle de que o observador distingue, e não só ecoa tudo o que passa.
+                nota = "voz04-nota-" + uuid.uuid4().hex[:8]
+                fala = "voz04-fala-" + uuid.uuid4().hex[:8]
+                carimbo = "2026-01-02T03:04:05.000Z"
+                await aws.send(json.dumps({"type": "message.text", "session_id": sid,
+                                           "text": f"{nota} @alias_inexistente_voz04"}))
+                await aws.send(json.dumps({"type": "message.text", "session_id": sid,
+                                           "text": fala, "timestamp": carimbo}))
+                got, vazou = None, False
+                fim = time.monotonic() + 15
+                while time.monotonic() < fim and got is None:
+                    try:
+                        m = await recv_json(cws, 2)
+                    except asyncio.TimeoutError:
+                        continue
+                    vazou = vazou or nota in json.dumps(m)
+                    if fala in json.dumps(m):
+                        got = m
+                g = got or {}
+                ok6 = (g.get("type") == "webrtc.message" and g.get("author") == "agent_human"
+                       and g.get("ts") == carimbo and not vazou)
+                emit("OK" if ok6 else "FALHA", "G6",
+                     f"agente->cliente recebido={got is not None} autor={g.get('author')!r} "
+                     f"ts={g.get('ts')!r} (esperado {carimbo}) nota_agents_only_vazou={vazou}")
+
+                # G7 — texto do cliente ao agente, pelo mesmo socket do Console
+                dito = "voz04-cliente-" + uuid.uuid4().hex[:8]
+                await cws.send(json.dumps({"type": "webrtc.message", "text": dito}))
+                got7 = None
+                fim = time.monotonic() + 15
+                while time.monotonic() < fim and got7 is None:
+                    try:
+                        m = await recv_json(aws, 2)
+                    except asyncio.TimeoutError:
+                        await aws.send(json.dumps({"type": "pong"}))
+                        continue
+                    if m.get("type") == "message.text" and dito in json.dumps(m):
+                        got7 = m
+                a7 = ((got7 or {}).get("author") or {}).get("type")
+                emit("OK" if a7 == "customer" else "FALHA", "G7",
+                     f"cliente->agente recebido={got7 is not None} autor={a7!r}")
 
                 for room in rooms:
                     try:

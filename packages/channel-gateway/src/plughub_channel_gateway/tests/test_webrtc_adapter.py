@@ -425,6 +425,32 @@ class TestWebRTCAdapterDelivery:
         assert msg["text"] == "Hello from agent"
 
     @pytest.mark.asyncio
+    async def test_deliver_text_keeps_the_producer_timestamp(self):
+        # Os produtores reais escrevem `timestamp` (socket do agente e notification_send).
+        ws = self._register_ws()
+        await self.adapter.deliver_text({
+            "session_id": self.session_id,
+            "author":     {"type": "agent_human"},
+            "content":    {"type": "text", "text": "oi"},
+            "timestamp":  "2026-01-02T03:04:05.000Z",
+        })
+        msg = ws.sent_messages[0]
+        assert msg["ts"] == "2026-01-02T03:04:05.000Z"
+        assert msg["author"] == "agent_human"
+
+    @pytest.mark.asyncio
+    async def test_deliver_text_without_timestamp_says_so(self, caplog):
+        # Controle do anterior: sem `timestamp` o cliente recebe ALGUMA hora, e o log diz por quê.
+        ws = self._register_ws()
+        with caplog.at_level("WARNING"):
+            await self.adapter.deliver_text({
+                "session_id": self.session_id,
+                "content":    {"text": "oi"},
+            })
+        assert ws.sent_messages[0]["ts"]
+        assert "sem `timestamp`" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_deliver_text_no_connection_silent(self):
         # No connection registered — should not raise
         await self.adapter.deliver_text({

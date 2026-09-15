@@ -905,7 +905,10 @@ async function connectWebRTC() {
     // ── Text message from agent ────────────────────────────────────────────
     if (msg.type === 'webrtc.message') {
       const text = msg.content?.text ?? msg.text ?? '';
-      if (text) addMsg(text, 'in', 'Agente');
+      // O servidor manda `author` (agent_human · agent_ai · system). Aviso de fila é do
+      // sistema, não fala de agente — antes aparecia rotulado "Agente".
+      if (text && msg.author === 'system') addMsg(text, 'sys');
+      else if (text) addMsg(text, 'in', 'Agente');
       return;
     }
 
