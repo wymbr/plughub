@@ -115,6 +115,8 @@ def _make_adapter(
         redis            = redis,
         settings         = settings,
         webrtc_provider  = webrtc_provider,
+        registry         = AsyncMock(),
+        context_reader   = AsyncMock(),
         attachment_store = attachment_store,
     )
     return adapter, redis, producer

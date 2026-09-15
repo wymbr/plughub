@@ -828,8 +828,17 @@ async function connectWebRTC() {
     console.log('[webrtc-widget] ←', msg);
 
     // ── Handshake ──────────────────────────────────────────────────────────
-    if (msg.type === 'conn.hello') {
+    // O servidor manda `conn.ready` e ESPERA o hello do cliente (webrtc.py). Até a VOZ-04 este
+    // widget esperava um `conn.hello` que o servidor nunca manda, e toda conexão acabava em
+    // `auth_timeout` — medido ao vivo em 2026-09-14.
+    if (msg.type === 'conn.ready') {
+      wsSend({ type: 'conn.hello', version: '1' });
       wsSend({ type: 'conn.authenticate', token });
+      return;
+    }
+    if (msg.type === 'conn.error') {
+      addMsg(`Erro: ${msg.code || ''} ${msg.message || ''}`, 'sys');
+      setStatus('Erro', 'err');
       return;
     }
     if (msg.type === 'conn.authenticated') {
@@ -850,8 +859,10 @@ async function connectWebRTC() {
     // VOZ-09 (2026-09-14): o servidor não manda mais UM meio (`negotiated_medium`) — manda o
     // TETO do cliente (`publish: ["audio","video"]`), e o token vem em `token` (este widget lia
     // `livekit_token`, chave que o servidor nunca enviou). O "meio" abaixo é só a VISÃO local
-    // derivada do teto. ⚠️ O resto do contrato deste widget (handshake `conn.hello` esperado do
-    // servidor, `webrtc.message` com `content.text`) continua fora do servidor: é a VOZ-04.
+    // derivada do teto. Handshake, texto do cliente e motivo de fechamento seguem o servidor desde
+    // a VOZ-04. ⚠️ Menu (`webrtc.interaction`/`interaction_reply`) ainda NÃO: o servidor manda
+    // `payload` e espera `reply`/`interaction_id`, este widget lê e manda outras chaves — e o
+    // formato que o motor espera em `menu:result` não foi conferido. Fica com o menu por voz (VOZ-05).
     if (msg.type === 'webrtc.ready') {
       const medium      = mediumFromPublish(msg.publish);
       const livekitUrl  = msg.livekit_url;
@@ -906,7 +917,7 @@ async function connectWebRTC() {
 
     // ── Session closed ─────────────────────────────────────────────────────
     if (msg.type === 'webrtc.session_closed') {
-      const reason = msg.close_reason || 'session_ended';
+      const reason = msg.reason || 'session_ended';   // o servidor envia `reason`
       addMsg(`Atendimento encerrado (${reason}).`, 'sys');
       setStatus('Encerrado', '');
       teardown();
@@ -925,7 +936,7 @@ function sendText() {
   const input = document.getElementById('msg-input');
   const text  = input.value.trim();
   if (!text || !connected) return;
-  wsSend({ type: 'webrtc.message', content: { text } });
+  wsSend({ type: 'webrtc.message', text });   // formato do servidor (e do webchat): `text` plano
   addMsg(text, 'out');
   input.value = '';
 }

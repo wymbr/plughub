@@ -78,6 +78,16 @@ from aiokafka import AIOKafkaProducer
 from fastapi import WebSocket, WebSocketDisconnect
 
 from ..config import Settings
+from ..context_reader import ContextReader
+from ..models import (
+    ContactClosedEvent,
+    ContactOpenEvent,
+    MessageAuthor,
+    MessageContent,
+    NormalizedInboundEvent,
+)
+from ..session_registry import SessionRegistry
+from . import contact_lifecycle
 from .base import ChannelAdapter
 from .voice_provider import (
     FallbackSTTProvider,
@@ -143,6 +153,8 @@ class WebRTCAdapter(ChannelAdapter):
         producer:          AIOKafkaProducer,
         redis:             aioredis.Redis,
         settings:          Settings,
+        registry:          SessionRegistry,
+        context_reader:    ContextReader,
         webrtc_provider:   IWebRTCProvider | None = None,
         stt_provider:      ISTTProvider    | None = None,
         tts_provider:      ITTSProvider    | None = None,
@@ -151,6 +163,15 @@ class WebRTCAdapter(ChannelAdapter):
         self._producer          = producer
         self._redis             = redis
         self._settings          = settings
+        # VOZ-04: histórico da conversa e snapshot de contexto são os MESMOS do webchat — uma
+        # mensagem de cliente é a mesma coisa para o bridge, venha do canal que vier.
+        self._registry          = registry
+        self._context_reader    = context_reader
+        # VOZ-04: fatos de ciclo de vida por sessão, que o fechamento precisa e o socket não
+        # carrega: {contact_id, pool_id, started_at}. E o conjunto de sessões cujo fechamento
+        # já foi publicado — hangup seguido de disconnect publicaria DOIS contact_closed.
+        self._sessions:     dict[str, dict[str, str]] = {}
+        self._close_fired:  set[str] = set()
         # VOZ-01: sem credencial/SDK o provider RECUSA. O adapter guarda o MOTIVO e fecha
         # a porta do canal nomeando-o (`handle_ws`, `get_token`) — em vez de derrubar o
         # boot do gateway inteiro, que levaria webchat/WhatsApp junto por um canal só.
@@ -347,6 +368,9 @@ class WebRTCAdapter(ChannelAdapter):
             return
 
         reason = payload.get("close_reason", "session_timeout")
+        # A plataforma fechou: publica-se `agent_done` ANTES de derrubar o socket, senão o
+        # disconnect que vem a seguir seria publicado como queda do cliente.
+        await self._close_session(session_id, "agent_done")
         await self._ws_send(ws, {
             "type":   "webrtc.session_closed",
             "reason": reason,
@@ -461,6 +485,10 @@ class WebRTCAdapter(ChannelAdapter):
             task.cancel()
 
         # ── Cleanup ───────────────────────────────────────────────────────────
+        # Qualquer saída do laço é o fim do socket do cliente. Sem este fechamento, uma task
+        # que terminasse antes do `receive_loop` deixaria a sessão aberta até o watchdog. É
+        # idempotente: hangup e disconnect já publicados não publicam de novo.
+        await self._close_session(session_id, "customer_disconnect")
         self._connections.pop(session_id, None)
         self._customer_media.pop(session_id, None)
         logger.info("webrtc WS session complete: session=%s contact=%s", session_id, contact_id)
@@ -475,7 +503,7 @@ class WebRTCAdapter(ChannelAdapter):
 
         Returns (session_id, contact_id, participant_id).
         Raises _AuthError on invalid token.
-        Publishes contact_open + routing request to conversations.inbound Kafka.
+        Publishes contact_open (conversations.events) + routing request (conversations.inbound).
         """
         s = self._settings
 
@@ -518,6 +546,7 @@ class WebRTCAdapter(ChannelAdapter):
         # Assign session ID and participant ID
         session_id     = str(uuid.uuid4())
         participant_id = str(uuid.uuid4())
+        started_at     = datetime.now(timezone.utc).isoformat()
 
         # Store session meta in Redis
         ttl = s.session_ttl_seconds
@@ -534,32 +563,42 @@ class WebRTCAdapter(ChannelAdapter):
                 "contact_id":             contact_id,
                 "session_id":             session_id,
                 "tenant_id":              s.tenant_id,
+                "customer_id":            contact_id,
                 "channel":                "webrtc",
                 "pool_id":                resolved_pool,
+                "started_at":             started_at,
                 "customer_participant_id": participant_id,
             }),
         )
+        await self._redis.setex(
+            f"session:{session_id}:customer_participant_id", ttl, participant_id,
+        )
+        # Sem esta chave o watchdog do bridge lê a sessão (que tem `meta`) como ÓRFÃ e a fecha
+        # no ciclo seguinte. Renovada no keepalive: numa chamada de voz o cliente pode não
+        # mandar frame nenhum pelo WebSocket durante minutos.
+        await self._touch_ws_alive(session_id)
+        self._sessions[session_id] = {
+            "contact_id": contact_id, "pool_id": resolved_pool, "started_at": started_at,
+        }
 
-        # Publish contact_open event to start session in platform
-        await self._publish_inbound({
-            "type":                   "contact_open",
-            "session_id":             session_id,
-            "tenant_id":              s.tenant_id,
-            "customer_id":            contact_id,
-            "channel":                "webrtc",
-            "pool_id":                resolved_pool,
-            "customer_participant_id": participant_id,
-        })
-
-        # Route inbound to the pool
-        await self._publish_inbound({
-            "type":        "routing.request",
-            "session_id":  session_id,
-            "tenant_id":   s.tenant_id,
-            "customer_id": contact_id,
-            "channel":     "webrtc",
-            "pool_id":     resolved_pool,
-        })
+        # O contrato é o do webchat (`contact_lifecycle`): abertura em `conversations.events`,
+        # pedido de roteamento no formato que o routing-engine reconhece.
+        await self._publish_event(ContactOpenEvent(
+            contact_id = contact_id,
+            session_id = session_id,
+            tenant_id  = s.tenant_id,
+            channel    = "webrtc",
+            started_at = started_at,
+        ).model_dump())
+        await self._publish_inbound(contact_lifecycle.routing_request(
+            session_id              = session_id,
+            tenant_id               = s.tenant_id,
+            customer_id             = contact_id,
+            channel                 = "webrtc",
+            pool_id                 = resolved_pool,
+            started_at              = started_at,
+            customer_participant_id = participant_id,
+        ))
 
         # Confirm authentication to client
         await self._ws_send(ws, {
@@ -904,7 +943,7 @@ class WebRTCAdapter(ChannelAdapter):
         Receive messages from the WebRTC client until disconnect or hangup.
 
         Handled message types:
-          webrtc.hangup             → publish contact_close, stop tasks
+          webrtc.hangup             → contact_closed em conversations.events, stop tasks
           webrtc.message            → DataChannel text → Kafka conversations.inbound
                                       (medium=text path — customer typing in text mode)
           webrtc.interaction_reply  → DataChannel menu reply → Redis menu:result:{id}
@@ -922,6 +961,8 @@ class WebRTCAdapter(ChannelAdapter):
                     continue
 
                 msg_type = msg.get("type", "")
+                # Todo frame prova que o socket está vivo (mesma regra do webchat).
+                await self._touch_ws_alive(session_id)
 
                 if msg_type == "webrtc.hangup":
                     logger.info("webrtc hangup received: session=%s", session_id)
@@ -929,23 +970,21 @@ class WebRTCAdapter(ChannelAdapter):
                     return
 
                 elif msg_type == "webrtc.message":
-                    # DataChannel text input from the customer (medium=text).
-                    # Normalize to conversations.inbound the same way webchat does.
-                    text = msg.get("text", "").strip()
-                    if text:
-                        await self._publish_inbound({
-                            "type":        "message",
-                            "session_id":  session_id,
-                            "tenant_id":   self._settings.tenant_id,
-                            "channel":     "webrtc",
-                            "content_type": "text",
-                            "content":     {"text": text},
-                            "author":      {"type": "customer"},
-                        })
-                        logger.debug(
-                            "webrtc: DataChannel text → Kafka session=%s len=%d",
-                            session_id, len(text),
+                    # Texto do cliente. O formato é o do webchat: `text` plano.
+                    text = msg.get("text", "")
+                    if not isinstance(text, str) or not text.strip():
+                        # Até 2026-09-14 o widget mandava `content.text` e isto virava "" —
+                        # a mensagem sumia sem rastro. Formato errado é recusado DITO.
+                        logger.warning(
+                            "webrtc: webrtc.message sem `text` (chaves=%s) — descartada "
+                            "(session=%s)", sorted(msg), session_id,
                         )
+                        await self._ws_send(ws, {
+                            "type": "conn.error", "code": "bad_message",
+                            "message": "webrtc.message requires a non-empty 'text'",
+                        })
+                    else:
+                        await self._publish_customer_text(session_id, text.strip(), msg.get("id"))
 
                 elif msg_type == "webrtc.interaction_reply":
                     # DataChannel menu/form reply — mirror webchat interaction_reply.
@@ -1003,6 +1042,7 @@ class WebRTCAdapter(ChannelAdapter):
                     f"channel:webrtc:{session_id}:room_name", ttl
                 )
                 await self._redis.expire(self._media_key(session_id), ttl)
+                await self._touch_ws_alive(session_id)
             except Exception as exc:
                 logger.debug(
                     "webrtc keepalive error (session=%s): %s", session_id, exc
@@ -1084,7 +1124,7 @@ class WebRTCAdapter(ChannelAdapter):
 
     async def _close_session(self, session_id: str, reason: str) -> None:
         """
-        Publish a contact_close event to conversations.inbound and tear down
+        Publish contact_closed (conversations.events, VOZ-04) and tear down
         Phase C resources (STT task + room client).
 
         The platform (Core) handles session bookkeeping and publishes
@@ -1108,21 +1148,47 @@ class WebRTCAdapter(ChannelAdapter):
                     session_id, exc,
                 )
 
+        if session_id in self._close_fired:
+            logger.debug("webrtc: fechamento ja publicado session=%s (%s ignorado)", session_id, reason)
+            return
+        self._close_fired.add(session_id)
+        info = self._sessions.pop(session_id, {})
         try:
-            await self._publish_inbound({
-                "type":         "contact_close",
-                "session_id":   session_id,
-                "tenant_id":    self._settings.tenant_id,
-                "channel":      "webrtc",
-                "close_reason": reason,
-            })
-            logger.info(
-                "webrtc: published contact_close session=%s reason=%s",
-                session_id, reason,
+            await self._redis.delete(f"session:{session_id}:ws_alive")
+        except Exception as exc:
+            logger.debug("webrtc: delete ws_alive falhou (session=%s): %s", session_id, exc)
+        if not info:
+            # Sem os fatos da abertura não há ContactClosedEvent válido — e inventar
+            # started_at/contact_id seria o valor plausível. Diz e sai.
+            logger.error(
+                "webrtc: fechamento de sessao sem registro de abertura (session=%s reason=%s) — "
+                "contact_closed NAO publicado", session_id, reason,
             )
+            return
+        # `reason` do evento é o de TRANSPORTE que o bridge lê para `customer_side`; o cliente
+        # desligar e a conexão cair são o mesmo fato para ele. O que o canal sabe a mais — que
+        # foi um DESLIGAR — vai no `close_reason` de negócio. `agent_done` é a plataforma que
+        # fechou (o bridge publica o evento enriquecido, que vence no ClickHouse).
+        transport = "agent_done" if reason == "agent_done" else "client_disconnect"
+        try:
+            await self._publish_event(ContactClosedEvent(
+                contact_id   = info["contact_id"],
+                session_id   = session_id,
+                tenant_id    = self._settings.tenant_id,
+                channel      = "webrtc",
+                reason       = transport,  # type: ignore[arg-type]
+                started_at   = info["started_at"],
+                pool_id      = info["pool_id"],
+                customer_id  = info["contact_id"],
+                close_reason = contact_lifecycle.business_close_reason(
+                    transport,
+                    customer_action = reason if reason == "customer_hangup" else None,
+                ),
+            ).model_dump())
+            logger.info("webrtc: contact_closed publicado session=%s reason=%s", session_id, reason)
         except Exception as exc:
             logger.error(
-                "webrtc: contact_close publish failed (session=%s): %s",
+                "webrtc: contact_closed publish failed (session=%s): %s",
                 session_id, exc,
             )
 
@@ -1245,23 +1311,11 @@ class WebRTCAdapter(ChannelAdapter):
         content_type="audio_transcript" distinguishes voice input from text input.
         """
         try:
-            await self._publish_inbound({
-                "type":        "message",
-                "session_id":  session_id,
-                "tenant_id":   self._settings.tenant_id,
-                "channel":     "webrtc",
-                "content_type": "audio_transcript",
-                "content": {
-                    "text":       transcript,
-                    "confidence": confidence,
-                    "start_ms":   start_ms,
-                    "end_ms":     end_ms,
-                },
-                "author": {"type": "customer"},
-            })
-            logger.debug(
-                "webrtc: transcript published session=%s len=%d",
-                session_id, len(transcript),
+            # O mesmo evento da mensagem digitada (VOZ-04): o formato solto de antes era
+            # descartado pelo bridge. Confiança e janela vão no `payload` do conteúdo.
+            await self._publish_customer_text(
+                session_id, transcript, content_type="audio_transcript",
+                payload={"confidence": confidence, "start_ms": start_ms, "end_ms": end_ms},
             )
         except Exception as exc:
             logger.warning(
@@ -1610,6 +1664,57 @@ class WebRTCAdapter(ChannelAdapter):
             self._settings.kafka_topic_inbound,
             json.dumps(payload).encode(),
         )
+
+    async def _publish_event(self, payload: dict) -> None:
+        """Publish to conversations.events — abertura e fechamento de contato (VOZ-04)."""
+        await self._producer.send(
+            self._settings.kafka_topic_events,
+            json.dumps(payload).encode(),
+        )
+
+    async def _touch_ws_alive(self, session_id: str) -> None:
+        await self._redis.setex(
+            f"session:{session_id}:ws_alive",
+            contact_lifecycle.ws_alive_ttl_s(self._settings.ws_connection_timeout_s),
+            "1",
+        )
+
+    async def _publish_customer_text(
+        self, session_id: str, text: str, message_id: str | None = None,
+        *, content_type: str = "text", payload: dict | None = None,
+    ) -> None:
+        """
+        Mensagem do cliente (digitada, ou transcrita pelo STT) como `NormalizedInboundEvent` —
+        o evento que o bridge reconhece. O formato solto de antes (`content` sem `type`) era
+        descartado lá como "Unknown content type".
+        """
+        info = self._sessions.get(session_id)
+        if not info:
+            logger.error(
+                "webrtc: mensagem de sessao sem registro de abertura (session=%s) — descartada",
+                session_id,
+            )
+            return
+        snapshot = await self._context_reader.get_snapshot(session_id)
+        event = NormalizedInboundEvent(
+            message_id       = message_id or str(uuid.uuid4()),
+            contact_id       = info["contact_id"],
+            session_id       = session_id,
+            channel          = "webrtc",
+            content_type     = content_type,  # type: ignore[arg-type]
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(type="text", text=text, payload=payload),
+            context_snapshot = snapshot,
+        )
+        await self._registry.append_message(
+            session_id = session_id,
+            message_id = event.message_id,
+            author     = "customer",
+            text       = text,
+            timestamp  = event.timestamp,
+        )
+        await self._publish_inbound(event.model_dump())
+        logger.debug("webrtc: texto do cliente publicado session=%s len=%d", session_id, len(text))
 
     @staticmethod
     async def _ws_send(ws: WebSocket, message: dict) -> None:

@@ -61,6 +61,8 @@ def _fake_settings(**kwargs):
     s.tenant_id                     = kwargs.get("tenant_id", "default")
     s.session_ttl_seconds           = kwargs.get("session_ttl_seconds", 14400)
     s.kafka_topic_inbound           = kwargs.get("kafka_topic_inbound", "conversations.inbound")
+    s.kafka_topic_events            = kwargs.get("kafka_topic_events", "conversations.events")
+    s.ws_connection_timeout_s       = kwargs.get("ws_connection_timeout_s", 300)
     s.agent_registry_url            = kwargs.get("agent_registry_url", "")
     s.endpoint_cache_ttl_s          = kwargs.get("endpoint_cache_ttl_s", 30)
     return s
@@ -90,6 +92,20 @@ def _fake_redis():
     r.delete = AsyncMock(side_effect=_delete)
     r.xread  = AsyncMock(return_value=[])
     return r
+
+
+def _fake_registry():
+    """SessionRegistry dublê — só `append_message` é usado pelo webrtc (VOZ-04)."""
+    reg = AsyncMock()
+    reg.append_message = AsyncMock()
+    return reg
+
+
+def _fake_context():
+    from ..models import ContextSnapshot
+    ctx = AsyncMock()
+    ctx.get_snapshot = AsyncMock(return_value=ContextSnapshot())
+    return ctx
 
 
 def _fake_producer():
@@ -141,6 +157,8 @@ def _make_adapter(
         producer       = producer or _fake_producer(),
         redis          = redis or _fake_redis(),
         settings       = settings or _fake_settings(),
+        registry       = _fake_registry(),
+        context_reader = _fake_context(),
         webrtc_provider = provider or MockWebRTCProvider(),
     )
 
@@ -338,6 +356,8 @@ class TestAdapterSemPlanoDeMidia:
             producer = _fake_producer(),
             redis    = _fake_redis(),
             settings = _fake_settings(webrtc_livekit_api_key="", webrtc_livekit_api_secret=""),
+            registry = _fake_registry(),
+            context_reader = _fake_context(),
         )
 
     def test_boot_nao_cai_e_guarda_o_motivo(self, monkeypatch):
@@ -896,24 +916,44 @@ class TestWebRTCAdapterAuthHandshake:
             await self.adapter._auth_handshake(ws, "pool-1")
         assert exc_info.value.code == "invalid_token"
 
-    @pytest.mark.asyncio
-    async def test_auth_handshake_publishes_contact_open(self):
-        ws = self._ws_with_auth_messages()
-        await self.adapter._auth_handshake(ws, "pool-1")
-        # Producer.send should have been called (at least once for contact_open)
-        calls = self.adapter._producer.send.call_args_list
-        payloads = [json.loads(c[0][1]) for c in calls]
-        types = {p["type"] for p in payloads}
-        assert "contact_open" in types
+    def _published(self) -> list[tuple[str, dict]]:
+        return [(c[0][0], json.loads(c[0][1])) for c in self.adapter._producer.send.call_args_list]
 
     @pytest.mark.asyncio
-    async def test_auth_handshake_publishes_routing_request(self):
+    async def test_abertura_vai_para_conversations_events_como_contact_open(self):
+        # VOZ-04: ia para conversations.inbound com `type`, onde ninguém a reconhece.
         ws = self._ws_with_auth_messages()
-        await self.adapter._auth_handshake(ws, "pool-1")
-        calls = self.adapter._producer.send.call_args_list
-        payloads = [json.loads(c[0][1]) for c in calls]
-        types = {p["type"] for p in payloads}
-        assert "routing.request" in types
+        sid, contact, _ = await self.adapter._auth_handshake(ws, "pool-1")
+        abertura = [p for topic, p in self._published() if topic == "conversations.events"]
+        assert len(abertura) == 1
+        assert abertura[0]["event_type"] == "contact_open"
+        assert abertura[0]["channel"] == "webrtc"
+        assert abertura[0]["session_id"] == sid and abertura[0]["contact_id"] == contact
+        assert abertura[0]["started_at"]
+
+    @pytest.mark.asyncio
+    async def test_pedido_de_roteamento_tem_o_formato_do_routing_engine(self):
+        # O ConversationInboundEvent do routing-engine EXIGE started_at; sem ele o pedido era
+        # "Unrecognised inbound event" e o contato nunca era roteado (medido ao vivo).
+        ws = self._ws_with_auth_messages()
+        sid, contact, participant = await self.adapter._auth_handshake(ws, "pool-1")
+        pedidos = [p for topic, p in self._published() if topic == "conversations.inbound"]
+        assert len(pedidos) == 1
+        p = pedidos[0]
+        assert "type" not in p
+        assert {k: p[k] for k in ("session_id", "customer_id", "channel", "pool_id",
+                                  "customer_participant_id")} == {
+            "session_id": sid, "customer_id": contact, "channel": "webrtc",
+            "pool_id": "pool-1", "customer_participant_id": participant}
+        assert p["started_at"] and p["elapsed_ms"] == 0
+
+    @pytest.mark.asyncio
+    async def test_handshake_grava_ws_alive_senao_o_watchdog_fecha(self):
+        ws = self._ws_with_auth_messages()
+        sid, _, participant = await self.adapter._auth_handshake(ws, "pool-1")
+        assert await self.redis.get(f"session:{sid}:ws_alive") == "1"
+        assert await self.redis.get(f"session:{sid}:customer_participant_id") == participant
+        assert json.loads(await self.redis.get(f"session:{sid}:meta"))["started_at"]
 
     @pytest.mark.asyncio
     async def test_auth_handshake_stores_session_in_redis(self):
@@ -933,16 +973,56 @@ class TestWebRTCAdapterCloseSession:
         self.adapter    = _make_adapter()
         self.session_id = str(uuid.uuid4())
 
+    def _abre(self):
+        self.adapter._sessions[self.session_id] = {
+            "contact_id": "c1", "pool_id": "p1", "started_at": "2026-09-14T00:00:00+00:00"}
+
+    def _published(self):
+        return [(c[0][0], json.loads(c[0][1])) for c in self.adapter._producer.send.call_args_list]
+
     @pytest.mark.asyncio
-    async def test_close_session_publishes_contact_close(self):
+    async def test_desligar_publica_contact_closed_em_events(self):
+        self._abre()
         await self.adapter._close_session(self.session_id, "customer_hangup")
-        calls = self.adapter._producer.send.call_args_list
-        assert len(calls) == 1
-        payload = json.loads(calls[0][0][1])
-        assert payload["type"]         == "contact_close"
-        assert payload["session_id"]   == self.session_id
-        assert payload["close_reason"] == "customer_hangup"
-        assert payload["channel"]      == "webrtc"
+        [(topic, p)] = self._published()
+        assert topic == "conversations.events"
+        assert p["event_type"] == "contact_closed"
+        # o bridge decide customer_side pelo motivo de TRANSPORTE; o desligar vai no de negócio
+        assert p["reason"] == "client_disconnect" and p["close_reason"] == "customer_hangup"
+        assert (p["session_id"], p["contact_id"], p["pool_id"], p["channel"]) == (
+            self.session_id, "c1", "p1", "webrtc")
+
+    @pytest.mark.asyncio
+    async def test_queda_do_cliente(self):
+        self._abre()
+        await self.adapter._close_session(self.session_id, "customer_disconnect")
+        [(_, p)] = self._published()
+        assert p["reason"] == "client_disconnect" and p["close_reason"] == "customer_disconnect"
+
+    @pytest.mark.asyncio
+    async def test_fechamento_e_idempotente(self):
+        # desligar e, logo depois, o socket cair: UM contact_closed, não dois
+        self._abre()
+        await self.adapter._close_session(self.session_id, "customer_hangup")
+        await self.adapter._close_session(self.session_id, "customer_disconnect")
+        assert len(self._published()) == 1
+
+    @pytest.mark.asyncio
+    async def test_plataforma_fecha_publica_agent_done_antes_do_socket(self):
+        self._abre()
+        ws = AsyncMock()
+        self.adapter._connections[self.session_id] = ws
+        await self.adapter.deliver_session_closed({"session_id": self.session_id, "close_reason": "flow_complete"})
+        await self.adapter._close_session(self.session_id, "customer_disconnect")
+        [(_, p)] = self._published()
+        assert p["reason"] == "agent_done" and p["close_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_fechamento_sem_abertura_nao_inventa_evento_e_diz(self, caplog):
+        with caplog.at_level("ERROR"):
+            await self.adapter._close_session(self.session_id, "customer_hangup")
+        assert self._published() == []
+        assert "sem registro de abertura" in caplog.text
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

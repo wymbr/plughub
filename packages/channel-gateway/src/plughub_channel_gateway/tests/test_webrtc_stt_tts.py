@@ -84,6 +84,19 @@ def _make_redis() -> AsyncMock:
     return redis
 
 
+def _make_context() -> AsyncMock:
+    from ..models import ContextSnapshot
+    ctx = AsyncMock()
+    ctx.get_snapshot = AsyncMock(return_value=ContextSnapshot())
+    return ctx
+
+
+def _abre(adapter) -> None:
+    """A sessão aberta pelo handshake — o que o fechamento e a mensagem precisam (VOZ-04)."""
+    adapter._sessions[SESSION_ID] = {
+        "contact_id": "c-stt", "pool_id": "p-stt", "started_at": "2026-09-14T00:00:00+00:00"}
+
+
 def _make_producer() -> AsyncMock:
     producer = AsyncMock()
     producer.send = AsyncMock()
@@ -105,6 +118,8 @@ def _make_adapter(
         producer        = p,
         redis           = r,
         settings        = s,
+        registry        = AsyncMock(),
+        context_reader  = _make_context(),
         webrtc_provider = MockWebRTCProvider(),
         stt_provider    = stt,
         tts_provider    = tts,
@@ -252,6 +267,7 @@ class TestSttpipeline:
         room_client.end_audio()
 
         adapter, redis, producer = _make_adapter(stt=stt, room_client=room_client)
+        _abre(adapter)
 
         await adapter._stt_pipeline(SESSION_ID, room_client)
 
@@ -266,7 +282,11 @@ class TestSttpipeline:
         assert len(inbound_calls) == 1
         payload = json.loads(inbound_calls[0].args[1].decode())
         assert payload["content_type"] == "audio_transcript"
+        # o bridge descarta `content` sem `type` (VOZ-04)
+        assert payload["content"]["type"] == "text"
         assert payload["content"]["text"] == "Olá mundo"
+        assert payload["content"]["payload"]["confidence"] == 0.95
+        assert payload["contact_id"] == "c-stt"
         assert payload["session_id"] == SESSION_ID
         assert payload["channel"] == "webrtc"
 
@@ -536,6 +556,7 @@ class TestDataChannel:
     async def test_datachannel_text_published_to_kafka(self):
         """webrtc.message from browser DataChannel must be published as Kafka inbound."""
         adapter, redis, producer = _make_adapter()
+        _abre(adapter)
 
         ws = _ws_streaming([
             json.dumps({"type": "webrtc.message", "text": "Preciso de ajuda"}),
@@ -550,7 +571,9 @@ class TestDataChannel:
         assert len(inbound_calls) == 1
         payload = json.loads(inbound_calls[0].args[1].decode())
         assert payload["content_type"] == "text"
-        assert payload["content"]["text"] == "Preciso de ajuda"
+        assert payload["content"] == {"type": "text", "text": "Preciso de ajuda", "payload": None}
+        assert payload["author"]["type"] == "customer" and payload["contact_id"] == "c-stt"
+        assert payload["message_id"]
         assert payload["channel"] == "webrtc"
 
     @pytest.mark.asyncio
@@ -697,9 +720,11 @@ class TestTeardown:
     async def test_close_session_no_room_client_is_noop(self):
         """_close_session must not fail when no room client exists."""
         adapter, redis, producer = _make_adapter()
+        _abre(adapter)
         # No room client — must not raise
         await adapter._close_session(SESSION_ID, "session_timeout")
-        producer.send.assert_called_once()  # contact_close published
+        producer.send.assert_called_once()  # contact_closed published
+        assert producer.send.call_args.args[0] == "conversations.events"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

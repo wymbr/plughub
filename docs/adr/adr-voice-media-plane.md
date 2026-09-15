@@ -358,6 +358,14 @@ admissão, roteamento, fila e alocação; o agente atende no browser. Ainda **se
 A4 (o humano finalmente entra na conferência) e é a primeira vez que o canal publica algo em
 `conversations.inbound`. **Sem telecom.**
 
+> **Fatia 1 — ENTRADA ✅ 2026-09-14 (`VOZ-04`).** Nenhum contato WebRTC chegava a uma fila: o
+> widget esperava um hello que o servidor não manda, o pedido de roteamento ia sem `started_at`, a
+> mensagem ia sem `content.type` e a sessão não gravava `ws_alive` (o watchdog a fecharia). Hoje o
+> contrato de ciclo de vida mora em `adapters/contact_lifecycle.py`, compartilhado com o webchat, e o
+> contato entra na fila, fala com o bridge e sai dela. Gate: `probe_webrtc_contact_entry.sh`.
+> Faltam: Console montar a sala, texto do agente ao cliente, mídia alcançável do host, validação com
+> agente no browser.
+
 **V-F2 — bot leg: STT/TTS.** URA e agente IA por voz; `notify` falado; `menu` por voz com DTMF
 **e** STT — o que conserta o `collect` morto de A2. A partir daqui a voz tem transcrição, e
 portanto histórico, contexto e avaliação. **Ainda sem telecom.**

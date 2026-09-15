@@ -110,7 +110,8 @@ async def main() -> None:
         media_policy.customer_ceiling = _replace
 
     r = aioredis.from_url("redis://redis:6379", decode_responses=True)
-    a = WebRTCAdapter(producer=MagicMock(), redis=r, settings=s)
+    a = WebRTCAdapter(producer=MagicMock(), redis=r, settings=s,
+                      registry=MagicMock(), context_reader=MagicMock())
     sid = "probe_voz09_" + uuid.uuid4().hex[:8]
     room_name = f"plughub-{sid}"
     contact = "c" + uuid.uuid4().hex[:6]

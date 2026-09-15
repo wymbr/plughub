@@ -376,6 +376,12 @@ probe_webrtc_participant_media.sh
 # o bridge lendo a politica FRESCA e o gateway assinando o token com ela (imagens reais), duas
 # mutacoes que TEM de reprovar (cache no produtor, leitor que ignora o pool) e o produtor vivo.
 probe_webrtc_pool_media_policy.sh
+# VOZ-04 (entrada). Nenhum contato WebRTC chegava a uma fila: o widget esperava um hello que
+# o servidor nao manda, o pedido de roteamento ia sem started_at (o routing o descartava), a
+# mensagem ia sem content.type (o bridge a descartava) e a sessao nao gravava ws_alive (o
+# watchdog a fecharia). Mede o contrato no LEITOR, o contato ao vivo ate a fila e de volta, e o
+# controle K: o routing enfileira o formato novo e recusa o antigo.
+probe_webrtc_contact_entry.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

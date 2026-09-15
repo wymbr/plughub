@@ -73,7 +73,8 @@ async def main() -> None:
     s = Settings()
     s.webrtc_stt_enabled = False
     r = aioredis.from_url("redis://redis:6379", decode_responses=True)
-    a = WebRTCAdapter(producer=MagicMock(), redis=r, settings=s)
+    a = WebRTCAdapter(producer=MagicMock(), redis=r, settings=s,
+                      registry=MagicMock(), context_reader=MagicMock())
     ws = FakeWS()
     state_key = f"channel:webrtc:{SID}:media"
     try:

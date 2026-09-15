@@ -1,5 +1,90 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-14 (14) — VOZ-04, fatia 1: um contato WebRTC entra na plataforma
+
+### 1 · Vermelho ao vivo, antes
+
+Com gateway, routing-engine e bridge reais, e um cliente WebSocket de verdade:
+
+| tentativa | o que aconteceu |
+|---|---|
+| protocolo exato do widget de demo | `conn.ready` → `conn.error auth_timeout`: o widget esperava um `conn.hello` que o servidor nunca manda |
+| handshake correto | autentica — e o routing-engine descarta os DOIS eventos: *"Unrecognised inbound event"* (o pedido ia sem `started_at`, obrigatório no `ConversationInboundEvent`) |
+| mensagem do cliente | o bridge a descarta: *"Unknown content type … type=None"* (`content` sem `type`) |
+| stream da sessão | vazio — nunca houve `routing.assigned` |
+| fechamento | `contact_close` em `conversations.inbound`, onde nem bridge nem routing o reconhecem |
+
+E um quinto defeito, achado lendo o leitor: a sessão gravava `session:{id}:meta` e nunca
+`ws_alive` — exatamente o que o watchdog do bridge lê como sessão **órfã** e fecha a cada 120 s.
+Mesmo com o roteamento consertado, o contato morreria no ciclo seguinte.
+
+### 2 · O que mudou
+
+- **`adapters/contact_lifecycle.py`** (novo): o pedido de roteamento, o motivo de fechamento de
+  negócio e o TTL do `ws_alive` numa casa só. O webchat, que já dizia certo, passou a montar por
+  ali; o webrtc também. Contrato de payload com dois produtores é o que diverge calado — a segunda
+  cópia era a quebrada.
+- **Adapter webrtc**: abertura como `ContactOpenEvent` e fechamento como `ContactClosedEvent` em
+  `conversations.events`; pedido de roteamento com `started_at`; mensagem digitada **e** transcrição
+  do STT como `NormalizedInboundEvent`, com histórico e snapshot de contexto pelos mesmos
+  `SessionRegistry`/`ContextReader` do webchat (agora dependências obrigatórias do adapter);
+  `ws_alive` gravado no handshake e renovado a cada frame e no keepalive — numa chamada de voz o
+  cliente pode passar minutos sem mandar frame. Fechamento **idempotente** (desligar e o socket cair
+  publicam UM evento); desligar vai como transporte `client_disconnect` + negócio `customer_hangup`;
+  a plataforma fechando publica `agent_done` **antes** de derrubar o socket; qualquer saída do laço
+  fecha o contato. `webrtc.message` sem `text` é recusado com `conn.error bad_message` — antes virava
+  string vazia e sumia.
+- **Widget de demo**: responde `conn.ready` com hello + authenticate, manda `text` plano (o formato
+  do servidor e do webchat), lê `reason` no fechamento e mostra `conn.error`.
+
+### 3 · Decisões
+
+- **Fica o protocolo do servidor**, que é o documentado; o widget é que se corrige. O texto do
+  cliente é `text` plano, como no webchat.
+- **Menu por DataChannel não entrou.** Está quebrado nos dois lados (o servidor manda `payload` e
+  espera `reply`/`interaction_id`; o widget lê e manda outras chaves), e o formato que o `menu` step
+  espera em `menu:result` não foi conferido. Registrado na `VOZ-05`, que é quem traz menu por voz.
+
+### 4 · Gate
+
+**`probe_webrtc_contact_entry.sh`** (novo, no manifesto):
+- **A** contrato medido no LEITOR: os campos obrigatórios do `ConversationInboundEvent` estão no
+  pedido; os dois adapters montam o pedido pela casa única; o webrtc não publica dict solto; a chave
+  que o watchdog do bridge lê é a que o adapter grava; widget e servidor concordam no handshake, no
+  texto e no fechamento. Rodado contra o fonte do commit anterior: **7 de 8 reprovam** (o A1 passa
+  lá também, porque mede o módulo novo).
+- **B** ao vivo: handshake do widget → a sessão entra no **ZSET da fila** do pool → `ws_alive` com
+  TTL acima do watchdog → formato antigo recusado dito → desligar fecha e **tira da fila**. Controle
+  **K** medido no próprio routing-engine: pedido novo publicado direto no Kafka é enfileirado, o
+  mesmo sem `started_at` não é.
+- **C** o bridge registrou a mensagem da sessão como texto (lido no log dele, filtrado pela sessão —
+  sem agente na fila o veredicto não deixa estado; ausência de linha é INCONCLUSIVO).
+
+⚠️ **O instrumento errou uma vez antes de medir:** a primeira versão perguntava "está na fila?" pela
+chave `{tenant}:session:pool:{sid}`, e a limpeza da fila não a apaga — o E6 reprovava com o produto
+certo. Hoje pergunta ao ZSET `{tenant}:pool:{pool}:queue` e a `{tenant}:queue_contact:{sid}`.
+
+**Suíte** do gateway na imagem: **1020** (os testes que cobravam `contact_open`/`routing.request` em
+`conversations.inbound` foram reescritos contra o contrato novo, inclusive "o fechamento sem
+abertura não inventa evento"). Vizinhos verdes: `probe_webrtc_participant_media`,
+`probe_webrtc_pool_media_policy`, `probe_webrtc_media_plane`, `probe_gates_manifest_coverage`,
+`probe_adapter_self_calls`, `probe_edge_surface`, `probe_authz_single_verifier`, `probe_task_ledger`,
+`check_config_invariants`.
+
+⚠️ **Ambiente, registrado para não ser confundido com regressão:** a primeira rodada dos vizinhos
+reprovou em massa com *"No such image: sha256:791a…"* — o container do gateway seguia apontando para
+uma imagem que tinha sumido do daemon, e o `up -d` não o recriou. Com `--force-recreate`, tudo verde.
+Pergunte à IMAGEM, e confira que o container usa a que a tag aponta.
+
+### 5 · O que falta na VOZ-04, em ordem
+
+1. **Console** — o `conversation.assigned` não carrega canal e o Console cria todo contato como
+   `webchat`, então a sobreposição WebRTC nunca monta; o token é buscado em `/api/webrtc/…`, que o
+   proxy manda ao mcp-server (404).
+2. **Texto do agente ao cliente** — o `_stream_watcher` ignora mensagens do stream.
+3. **Mídia alcançável do browser do host** — SFU sem endereço externo, TURN com nome interno.
+4. **Validação com agente humano no browser** — exige login: gate assistido.
+
 ## 2026-09-14 (13) — VOZ-10: as mídias do WebRTC são config do pool, e é ela que chega ao token
 
 ### 1 · Medido antes

@@ -265,9 +265,11 @@ async def lifespan(app: FastAPI):
         attachment_store = _attachment_store,
     )
     _webrtc_adapter = WebRTCAdapter(
-        producer = _producer,
-        redis    = _redis,
-        settings = settings,
+        producer       = _producer,
+        redis          = _redis,
+        settings       = settings,
+        registry       = _registry,
+        context_reader = _context,
     )
     _webhook_adapter = WebhookAdapter(
         producer = _producer,

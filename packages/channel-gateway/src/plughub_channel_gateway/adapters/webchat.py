@@ -70,6 +70,7 @@ from ..models import (
 )
 from ..session_registry import SessionRegistry
 from ..stream_subscriber import StreamSubscriber, StreamExpiredError
+from . import contact_lifecycle
 
 logger = logging.getLogger("plughub.channel-gateway.webchat")
 
@@ -256,7 +257,7 @@ class WebchatAdapter:
         # the absence of this key to detect orphaned sessions whose WebSocket
         # died without publishing a clean ContactClosedEvent.
         # TTL = idle timeout + ping window + safety buffer.
-        _alive_ttl = int(float(self._settings.ws_connection_timeout_s) + 120)
+        _alive_ttl = contact_lifecycle.ws_alive_ttl_s(self._settings.ws_connection_timeout_s)
         await self._redis.setex(
             f"session:{self._session_id}:ws_alive",
             _alive_ttl,
@@ -331,16 +332,15 @@ class WebchatAdapter:
                     self._session_id, self._pool_id, _stale,
                 )
             else:
-                await self._publish_inbound({
-                    "session_id":              self._session_id,
-                    "tenant_id":               tenant_id,
-                    "customer_id":             self._contact_id,
-                    "channel":                 "webchat",
-                    "pool_id":                 self._pool_id,
-                    "started_at":              self._started_at,
-                    "elapsed_ms":              0,
-                    "customer_participant_id":  self._customer_participant_id,
-                })
+                await self._publish_inbound(contact_lifecycle.routing_request(
+                    session_id              = self._session_id,
+                    tenant_id               = tenant_id,
+                    customer_id             = self._contact_id,
+                    channel                 = "webchat",
+                    pool_id                 = self._pool_id,
+                    started_at              = self._started_at,
+                    customer_participant_id = self._customer_participant_id,
+                ))
 
         # ── Concurrent tasks ───────────────────────────────────────────────────
         receive_task  = asyncio.create_task(self._receive_loop(),         name="webchat_recv")
@@ -934,10 +934,7 @@ class WebchatAdapter:
         # close_reason domain for the analytics event. "agent_done" is left
         # unmapped — the bridge derives flow_complete/agent_hangup with full
         # context and its later event wins in ClickHouse.
-        _biz_close_reason = {
-            "client_disconnect": "customer_disconnect",
-            "timeout":           "session_timeout",
-        }.get(reason)
+        _biz_close_reason = contact_lifecycle.business_close_reason(reason)
         await self._publish_event(
             ContactClosedEvent(
                 contact_id   = self._contact_id,
