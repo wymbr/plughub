@@ -1475,6 +1475,32 @@ intake antigo, e desde a PID-10 cliente não importado termina no SAC (PID-19). 
 journey: a continuidade mostra cartão e valor vazios para elas. O slot `previous` do `limite_ia` já é o runner
 (dois promotes), então o rollback não volta ao intake antigo.
 
+## 2026-09-14 (4) — CLAUDE.md: três passagens ainda descreviam o rascunho do Skill Versioning
+
+Sem mudança de código. A PID-08 corrigiu o *Skill Deploy Lifecycle* e o *Arc 4*, mas outras três
+passagens seguiam descrevendo o modelo `flow`/`flow_draft` da Fase B, que o código abandonou em
+2026-07-13. Medido antes de reescrever:
+
+| afirmação no CLAUDE.md | o que o código diz |
+|---|---|
+| o editor (`PUT /v1/skills`) escreve `flow_draft` | `skills.ts` (PUT): grava `flow`; `flow_draft: Prisma.DbNull` sempre; `deploy_status: "published"` sempre |
+| o deploy **ou `x-skill-publish`** preenche o que roda | o header não é lido em lugar nenhum do agent-registry — só comentários o citam, como no-op |
+| fallback para `skill.flow` em pools não migrados | `main.py::resolve_flow_for_agent`: sem slot `current` o agente **não roda** e loga o motivo; a definição viva (`skill.flow` ou YAML) só com `ALLOW_LIVE_FLOW_FALLBACK=true`, declarado **vazio** no `docker-compose.demo.yml` |
+| para o YAML valer, `PUT` com `x-skill-publish:true`; *"se o pool usa slot"* | basta o `PUT` (ou `REGISTRY_SYNC_RECONCILE=true`), e nenhum dos dois muda o que roda — todo pool roda o slot |
+| o RegistrySyncer *"upserts pools+agent_types; prunes stale"* e *"publica produção"* | skills, pools e slots são seed-if-absent; `_sync_agent_type` e `_prune_agent_types` existem **sem chamador** (AgentType aposentado, `registry_syncer.py:329`); o syncer ainda ENVIA o header, que é no-op |
+
+Correção aplicada com nota datada em § *Configuration — Seed-if-absent* e nos dois parágrafos de
+§ *Instance Bootstrap*. O histórico (*o upsert antigo apagava o rascunho*) ficou, porque é verdade do
+passado e é o motivo do seed-if-absent. CLAUDE.md fica em 1 769 linhas — não cresceu, mas segue acima do alvo de 1 750.
+
+**Fora do escopo, e ainda afirmando o modelo morto no CÓDIGO** (comentários e um ramo, não
+comportamento): o docstring de `get_pool_current_flow` (`main.py:978`, *"o editor escreve
+`flow_draft`"*); o comentário e o header de `registry_syncer.py:798-800`, e o docstring de prune
+(`:55-62`, que descreve um prune que não roda); `schema.prisma:169` (*"PUT escreve aqui; deploy copia
+draft→flow"*); e `pool-slots.ts:68`, que ainda cai em `flow_draft` quando `flow` é nulo — ramo sem
+população possível enquanto o PUT gravar nulo. O drop das colunas `flow_draft`/`deploy_status` segue
+como cleanup de schema anunciado no próprio `skills.ts`.
+
 ## 2026-09-14 (3) — PID-08: o deploy em lote que registrava sem mudar foi aposentado
 
 ### 1 · O defeito, medido antes de decidir

@@ -408,11 +408,11 @@ system_error         — unrecoverable error
   `RegistrySyncer` **não sobrescreve** no restart (edições de UI sobrevivem a rebuild — pools, deploy/capacity,
   hooks, escalation/mentionable). `REGISTRY_SYNC_RECONCILE=true` restaura o reconcile (YAML vence) p/ dev/
   GitOps. **Skills TAMBÉM são seed-if-absent** (mudou 2026-07-13, `registry_syncer.py` §46-53): o upsert
-  incondicional levava `x-skill-publish:true`, que grava `{flow, flow_draft:DbNull}` — todo boot sobrescrevia
-  produção **e apagava o rascunho do editor**. Consequência operacional que morde: **editar o YAML de um skill
-  já semeado é no-op** — reiniciar o bridge não publica nada (ele só loga o DRIFT). Para o arquivo valer:
-  `PUT /v1/skills/:id` com `x-skill-publish:true`, ou `REGISTRY_SYNC_RECONCILE=true`. E, se o pool usa slot,
-  publicar ainda **não basta** — o bridge executa o snapshot do slot `current` (`set-next`→`promote`).
+  de antes sobrescrevia a definição a cada boot e apagava o rascunho do editor. **Editar o YAML de um skill
+  já semeado é no-op** (só loga o DRIFT). Para o arquivo valer: `PUT /v1/skills/:id` com o conteúdo, ou
+  `REGISTRY_SYNC_RECONCILE=true` — e nenhum dos dois **muda o que roda**: todo pool executa o snapshot do
+  slot `current` (`set-next`→`promote`). *Correção 2026-09-14:* mandava usar `x-skill-publish:true` e
+  ressalvava *"se o pool usa slot"* — o header é no-op (UMA definição, `flow`) e pool sem slot não roda.
   Alvo Fase 2: YAML→migração versionada if-absent, store por store.
 
   > ⚠️ **Corolário: para `hooks`, `deploy`, `capacity` e afins, pergunte ao agent-registry, NUNCA ao
@@ -626,9 +626,9 @@ Never create circular dependencies. `schemas` never depends on any other package
 
 Kubernetes-style reconciliation controller in `orchestrator-bridge/instance_bootstrap.py`. Compares desired state (Agent Registry) vs actual state (Redis) and applies minimum diff. Triggers: startup, heartbeat 15s, periodic 5min, `registry.changed`/`config.changed` Kafka. ReconciliationReport: `created/deleted/drained/updated/renewed/unchanged/errors/duration_ms/dry_run`.
 
-**RegistrySyncer** runs before Bootstrap: upserts pools+agent_types from `infra/registry/*.yaml`; prunes stale (`REGISTRY_SYNC_PRUNE=true`). Skill sync: PUTs `skill-flow-engine/skills/*.yaml` before pools (slug `^skill_[a-z0-9_]+$`, **publica produção via `x-skill-publish:true`** — Skill Versioning Fase B). Instance IDs: `{agent_type_id}-{n+1:03d}`. Human agents NOT managed by Bootstrap. Seed no longer writes Redis keys.
+**RegistrySyncer** runs before Bootstrap: lê `skill-flow-engine/skills/*.yaml` (slug `^skill_[a-z0-9_]+$`) e `infra/registry/*.yaml`, na ordem skills → journey types → pools → channel endpoints → deploy slots; skills, pools e slots são **seed-if-absent** (§ Configuration). *Correção 2026-09-14:* dizia *"upserts pools+agent_types; prunes stale"* e *"publica produção via `x-skill-publish:true`"* — AgentType está aposentado (`_sync_agent_type`/`_prune_agent_types` sem chamador) e o header, que o syncer ainda envia, é no-op no registry desde 2026-07-13. Instance IDs: `{agent_type_id}-{n+1:03d}`. Human agents NOT managed by Bootstrap. Seed no longer writes Redis keys.
 
-**Execução = produção, não a edição (Skill Versioning Fase B/P1):** o bridge executa o **snapshot do slot `current` do POOL** (`get_pool_current_flow`, cache por pool, invalidado no `registry.changed(pool)` do promote/rollback), com **fallback** para `skill.flow` (pools não migrados). O editor (`PUT /v1/skills`) escreve **`skill.flow_draft`** (rascunho) — **não vaza para produção**; só o deploy (set-next→promote, ou `x-skill-publish`) preenche o que roda.
+**Execução = produção, não a edição:** o bridge executa **só** o **snapshot do slot `current` do POOL** (`get_pool_current_flow`, cache por pool, invalidado no `registry.changed(pool)` do promote/rollback). Pool sem `current` **não roda** e o log diz o que fazer; a definição viva (`skill.flow` ou YAML em disco) só executa com `ALLOW_LIVE_FLOW_FALLBACK=true`, vazio no compose. `PUT /v1/skills` grava a **única definição** (`flow`; `flow_draft` sempre nulo, `x-skill-publish` no-op, `deploy_status` vestigial) — salvar não muda o que roda; só `set-next`→`promote`. *Correção 2026-09-14:* aqui estava o modelo de rascunho da Fase B (editor → `flow_draft`, fallback para pools "não migrados"), abandonado em 2026-07-13 (`skills.ts` PUT; `main.py::resolve_flow_for_agent`).
 
 **Versão = deploy do pool (Skill Versioning Fase C):** identidade de versão = **`set_at` do slot `current`** (momento do promote), carimbada em `segments.deploy_version` pelo bridge (cache `_pool_deploy_version_cache`, fallback `skill.version`). O **promote grava um `SkillDeployment`** (`deployed_at=set_at`, `version`=rótulo `skill.version`) — append-log que o epoch usa p/ rótulo+markers; o analytics casa por `deployed_at`. `skill.version` deixou de ser identidade (vira rótulo). Ver `docs/product/skill-versioning-deploy-spec.md`.
 
