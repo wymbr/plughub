@@ -82,7 +82,8 @@ async def main() -> None:
 
             url = (f"ws://mcp-server-plughub:3100/agent/ws?pool={POOL}&user_id={user}"
                    f"&user_login={user}@probe.local&max_concurrent=1")
-            async with websockets.connect(url) as aws:
+            # CAP-19: o agente headless apresenta a MESMA credencial do Console (subprotocolo).
+            async with websockets.connect(url, subprotocols=["plughub.bearer", atoken(user)]) as aws:
                 assigned = None
                 fim = time.monotonic() + 40
                 while time.monotonic() < fim and assigned is None:

@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WsServerEvent, WsStatus } from "../types";
+import { agentWsProtocols, AGENT_WS_FORBIDDEN } from "./useMultiPoolWebSocket";
 
 const WS_BASE = import.meta.env.VITE_MCP_WS_URL ?? "/agent-ws";
 const RECONNECT_DELAY_MS = 3_000;
@@ -56,7 +57,7 @@ export function useAgentWebSocket(
     if (userId) params.set("user_id", userId);
     params.set("max_concurrent", String(maxConcurrent ?? 3));
     const url = `${WS_BASE}?${params.toString()}`;
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(url, agentWsProtocols());   // CAP-19: credencial no subprotocolo
     wsRef.current = ws;
     // Show "connecting" immediately only if we weren't already connected
     // (avoids flicker when a quick reconnect happens in < 2 s).
@@ -83,7 +84,13 @@ export function useAgentWebSocket(
       // Don't immediately set disconnected — let onclose handle it with debounce
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
+      if (ev.code === AGENT_WS_FORBIDDEN) {
+        // Sem permissão para o pool: repetir não muda nada, e o motivo vem do servidor.
+        console.warn(`[agent-ws] pool=${poolId} recusado (${ev.code}): ${ev.reason}`);
+        setStatus("disconnected");
+        return;
+      }
       if (!intentionalClose.current) {
         // Debounce the "disconnected" status: only show it if the reconnect
         // takes longer than 2 s. Quick proxy resets stay invisible.

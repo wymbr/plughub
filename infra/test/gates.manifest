@@ -390,6 +390,16 @@ probe_webrtc_contact_entry.sh
 # texto nos dois sentidos, com a hora do produtor (o leitor pedia `ts`, que ninguem escreve)
 # e o controle da nota agents_only que nao pode chegar ao cliente.
 probe_webrtc_agent_console.sh
+# AGH-01. O timer de desregistro do agente humano era chaveado so pelo pool: o login de
+# QUALQUER agente cancelava o logout de outro, e quem saiu ficava pronto sem socket, recebendo
+# contato. Mede A-sai/B-entra na janela, com os controles "sair sozinho desregistra" e "F5 do
+# proprio agente mantem".
+probe_agent_ws_ghost_instance.sh
+# CAP-19. O /agent/ws (e /agent-ws pela 5174) nao pedia credencial: user_id inventado virava
+# instancia que recebia contato, session_id alheio lia e escrevia no stream como atendente.
+# Mede as 7 recusas com codigo e motivo, os controles W6 (token do Console) e W9 (borda COM
+# credencial abre) e o W7b (sessao propria escreve).
+probe_agent_ws_credential.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

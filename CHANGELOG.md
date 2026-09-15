@@ -1,5 +1,67 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (20) — AGH-01 e CAP-19: o WebSocket do agente humano, quem entra e quando sai
+
+### 1 · AGH-01 — o login de um agente cancelava o logout de outro
+
+**Vermelho ao vivo antes** (`probe_agent_ws_ghost_instance.sh`, pool de fixture `probe_agh01`): A
+conecta e fecha, B conecta 0,3 s depois no mesmo pool — passada a janela, **A continuava instância**
+(G1). Controles verdes na mesma rodada: A sozinho sai do pool (C1) e o F5 do próprio A o mantém (G2).
+
+Causa: o timer de desregistro (2,5 s de graça para a recarga do React) morava num mapa chaveado **só
+por `poolId`**, e a abertura de QUALQUER conexão ao pool fazia `clearTimeout` nele. A recarga é fato
+do próprio agente; a chave passou a ser (usuário, pool), e o timer só apaga a própria entrada (um
+fechamento mais novo do mesmo agente pode tê-la trocado). Verde depois, com os dois controles.
+
+### 2 · CAP-19 — o `/agent/ws` não pedia credencial
+
+**Vermelho ao vivo antes** (`probe_agent_ws_credential.sh`): **7 de 7 recusas faltando** — sem
+credencial, assinatura errada, sem `agent_assist.atender`, `atender` em outro pool, `sub` ≠
+`user_id`, sessão alheia (lia os eventos e escrevia no stream) e pela borda da 5174. Controles W6
+(token do Console) e W7b (sessão própria escreve) já verdes.
+
+**O que mudou:**
+- **Onde viaja a credencial:** no subprotocolo, `Sec-WebSocket-Protocol: plughub.bearer, <jwt>`. O
+  browser não deixa pôr `Authorization` num WebSocket, e JWT em URL é proibido na casa (vai para
+  access log). O servidor ecoa só `plughub.bearer`.
+- **Uma casa para a decisão** (`lib/agent-ws-auth.ts`), chamada NO UPGRADE, antes de qualquer
+  registro: identidade = `sub` assinado; `user_id` da query divergente **recusa** (nunca é trocado
+  calado); `agent_assist.atender` read_write com escopo que cubra o pool (vazio = global, como no
+  `abac_can`). Recusa fecha o socket com **4401** (credencial) ou **4403** (permissão) e o motivo —
+  um 401 cru no handshake chegaria ao browser como 1006 sem texto, igual a queda de rede.
+- **`session_id` de reconexão** só é assinado se `human-{sub}` está em `session:{id}:human_agents`;
+  senão é ignorado com aviso, e o socket do pool segue.
+- **Console:** `useMultiPoolWebSocket` e `useAgentWebSocket` mandam o token (lido a cada abertura,
+  para a reconexão usar o renovado) e não entram em laço de reconexão em 4403.
+- **Probes com agente headless** (`probe_webrtc_agent_console`, `probe_agent_ws_ghost_instance`)
+  apresentam a mesma credencial do Console.
+
+**Gate:** `probe_agent_ws_credential.sh` verde — W1–W8 recusam nomeando o motivo, W6/W7b abrem, e
+**W9**: pela borda COM credencial abre. O W9 entrou depois da primeira rodada verde, porque sem ele um
+nginx que descartasse o subprotocolo deixaria o W8 verde e o Console inteiro fora do ar.
+**Unitário** (`agent-ws-auth.test.ts`, 9 testes) com bateria de mutação: sem conferir `user_id`,
+escopo sempre cobrindo, `read_only` bastando e token sem marcador — todas reprovam. Uma quinta
+(falha de assinatura vira payload vazio) **passou**, mas o desfecho seguia sendo recusa, pelo `sub`
+vazio: a mutação era fraca. Trocada pela perigosa de verdade — decodificar o JWT sem conferir — e o
+teste apertado para nomear o motivo: reprova. Suíte do mcp-server **446**; `tsc` limpo nos dois pacotes.
+
+**Browser real, pelo dono:** com o bundle novo (Ctrl+F5 e novo login), `admin@` e um `operator`
+atenderam contato do widget (`?pool=probe_voz04_webrtc`) sem problema — o Console apresenta a
+credencial e a borda a repassa. É o que o W9 afirmava com cliente Python, agora com o cliente de verdade.
+
+### 3 · Achado ao fechar: AGH-02
+
+Recriar o mcp-server para aplicar os consertos derrubou todos os sockets **sem `close`**: nenhum
+desregistro rodou, e a instância do admin ficou `ready` em **12 pools**, sem TTL. Ela pegou os
+contatos de `probe_webrtc_agent_console` e `probe_webrtc_contact_entry`, que reprovaram por isso
+(o Console do admin, com bundle antigo, era recusado com 4401 — não havia socket nenhum). Removida
+conectando e fechando pool a pool; os dois voltaram a verde. Mesmo sintoma da AGH-01, outra causa,
+e o conserto não é o mesmo (o contador de conexões é por processo): registrado como `AGH-02`.
+
+**Vizinhos:** `probe_webrtc_agent_console`, `probe_webrtc_contact_entry`, `probe_mcp_rest_surface`,
+`probe_edge_surface`, `probe_mcp_tool_guard_census`, `probe_gates_manifest_coverage` (353),
+`probe_task_ledger` — verdes. Imagens de mcp-server e platform-ui reconstruídas (container = tag).
+
 ## 2026-09-15 (19) — VOZ-04: vídeo nos dois sentidos, e ninguém ouvia ninguém
 
 ### 1 · O que a 2ª execução do roteiro mostrou, e o que foi medido

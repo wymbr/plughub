@@ -87,6 +87,19 @@ Default port: 3100.
   ⚠️ Ao mexer em `ports:` ou ao mapear rotas novas no nginx do platform-ui, **não
   exponha `/sse` nem `/messages`** — mapeá-los move a exposição para a 5174 e desfaz
   o fechamento. Gate: ramo F do `infra/test/probe_mcp_rest_surface.sh`
+- ✅ **O WebSocket do agente humano (`/agent/ws`) exige credencial desde 2026-09-15 (CAP-19).**
+  Antes, sem token e pela borda da 5174, `user_id` inventado virava instância que recebia contato
+  e `?session_id=` alheio lia e escrevia no stream como atendente. A credencial viaja no
+  **subprotocolo** (`Sec-WebSocket-Protocol: plughub.bearer, <jwt>`) — o browser não põe
+  `Authorization` em WebSocket e JWT na URL vai para log — e é decidida NO UPGRADE, numa casa só
+  (`lib/agent-ws-auth.ts`): identidade = `sub` assinado (`user_id` divergente recusa, nunca é
+  corrigido calado), `agent_assist.atender` read_write cobrindo o pool, recusa com 4401/4403 e o
+  motivo. `session_id` de reconexão só é assinado se o agente está em `session:{id}:human_agents`.
+  Gate: `infra/test/probe_agent_ws_credential.sh` (inclui o controle pela borda COM credencial —
+  sem ele, um proxy que descartasse o subprotocolo passaria no teste e derrubaria o Console).
+- ⚠️ **O desregistro do agente humano só roda no `close` do socket** — o timer de 2,5 s é por
+  (usuário, pool) desde a AGH-01, mas processo recriado derruba sockets sem `close` e deixa as
+  instâncias `ready` sem TTL (`AGH-02`, aberta).
 - session_id is mandatory in all Agent Runtime tools
 - tenant_id is inferred from the JWT — never from the request body
 

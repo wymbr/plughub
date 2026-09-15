@@ -32,9 +32,10 @@ Console (`packages/platform-ui/package-lock.json`) e o do widget (versão exata 
 v1.8.4 e clientes 2.20/2.22 o vídeo não publicava e a chamada reconectava a cada 15 s — texto e
 entrada na sala funcionavam, então **só este roteiro pega isso**. Mudou uma das três, repita-o.
 
-⚠️ **Não alterne usuários no mesmo pool em menos de 3 segundos** (`AGH-01`): sair com um agente e
-entrar com outro dentro dessa janela deixa uma instância fantasma que recebe o contato no lugar do
-agente real. Neste roteiro há um só agente — basta não reabrir o Console às pressas com outro login.
+⚠️ **Se o mcp-server foi recriado com o Console aberto, recarregue o Console (Ctrl+F5) antes de
+começar** (`AGH-02`): o reinício derruba o socket sem desregistrar o agente, e a instância antiga
+fica pronta nos pools recebendo contato no lugar do agente real. *(A troca rápida de usuário no
+mesmo pool, que causava o mesmo sintoma, foi corrigida na `AGH-01`.)*
 
 ---
 
@@ -132,11 +133,12 @@ Com isso eu confronto com os logs de gateway, bridge, mcp-server e SFU do mesmo 
 
 - O pool `webrtc_atendimento` pode ficar: é dado do tenant de demo, e reutilizá-lo numa rodada
   futura pula o passo 1.
-- Saia do Console **antes** de trocar de usuário (ver o aviso do passo 0).
+- Recriou o mcp-server com o Console aberto? Recarregue o Console (ver o aviso do passo 0).
 
 ## O que este roteiro NÃO cobre
 
 - **Browser em outra máquina** da rede: exige o IP do host nos candidatos do SFU e no TURN.
-- **`CAP-19`** (o `/agent/ws` aceita conexão sem credencial) e **`VOZ-15`** (o token de agente não
-  confere quem atende): defeitos registrados, fora do escopo desta validação.
+- **`VOZ-15`** (o token de mídia do agente não confere quem atende): defeito registrado, fora do
+  escopo desta validação. *(O `/agent/ws` sem credencial — `CAP-19` — foi fechado; o gate é o
+  `probe_agent_ws_credential.sh`.)*
 - Gravação (`VOZ-06`), STT/TTS e menu por voz (`VOZ-05`).

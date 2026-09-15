@@ -30,9 +30,8 @@
 #   `ts`, que nenhum produtor escreve, e o cliente recebia a hora da entrega (A6, G6) — e o widget
 #   rotulava o aviso de fila do sistema como fala do "Agente" (A7).
 #
-# ⚠️ O `/agent/ws` não pede credencial (registra instância para qualquer `user_id`); é isso que
-#    permite o agente headless, e é defeito registrado à parte (`CAP-19` em `pending.md`). Quando
-#    ele fechar, este exercício passa a apresentar a credencial do agente — não a contornar.
+# O agente headless apresenta a MESMA credencial do Console no subprotocolo do `/agent/ws`
+#    (`plughub.bearer`, JWT com `agent_assist.atender` no pool) — exigida desde a CAP-19.
 #
 # EXIT: 0 OK · 1 FALHA · 2 INCONCLUSIVO
 

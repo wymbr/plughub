@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WsServerEvent } from "../types";
+import { getAccessToken } from "@/auth/token-store";
 
 const WS_BASE = import.meta.env.VITE_MCP_WS_URL ?? "/agent-ws";
 const RECONNECT_DELAY_MS = 3_000;
@@ -65,6 +66,19 @@ interface UseMultiPoolWebSocketReturn {
   unregisterSession: (sessionId: string) => void;
 }
 
+/**
+ * CAP-19: o `/agent/ws` exige credencial, e ela viaja no SUBPROTOCOLO — o browser não deixa pôr
+ * `Authorization` num WebSocket, e JWT na URL vai parar em log de proxy. O token é lido a cada
+ * abertura (e reabertura), para a reconexão usar o token já renovado.
+ */
+export function agentWsProtocols(): string[] {
+  const token = getAccessToken();
+  return token ? ["plughub.bearer", token] : ["plughub.bearer"];
+}
+
+/** 4403 = sem permissão para o pool: repetir não muda nada. 4401 (credencial) pode ter sido token vencido. */
+export const AGENT_WS_FORBIDDEN = 4403;
+
 function openConnection(
   poolId:       string,
   userId:       string,
@@ -83,7 +97,7 @@ function openConnection(
   params.set("max_concurrent", String(maxConcurrent));
   const url = `${WS_BASE}?${params.toString()}`;
 
-  const ws = new WebSocket(url);
+  const ws = new WebSocket(url, agentWsProtocols());
 
   const state: PoolState = {
     ws,
@@ -129,13 +143,19 @@ function openConnection(
     // handled by onclose
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     const s = poolStateRef.current.get(poolId);
     if (!s) return;
 
     if (s.heartbeatTimer) {
       clearInterval(s.heartbeatTimer);
       s.heartbeatTimer = undefined;
+    }
+
+    if (ev.code === AGENT_WS_FORBIDDEN || ev.code === 4401) {
+      // A recusa do servidor NOMEIA o motivo; sem este log ela parecia queda de rede.
+      console.warn(`[agent-ws] pool=${poolId} recusado (${ev.code}): ${ev.reason}`);
+      if (ev.code === AGENT_WS_FORBIDDEN) s.loginDenied = true;
     }
 
     if (s.loginDenied) {

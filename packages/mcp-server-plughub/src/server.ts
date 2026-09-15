@@ -54,6 +54,7 @@ import type { WorkflowDeps }        from "./tools/workflow"
 import { registerDialogTools }      from "./tools/dialog"
 import type { DialogDeps }          from "./tools/dialog"
 import jwt                         from "jsonwebtoken"
+import { authorizeAgentWs, AGENT_WS_PROTOCOL } from "./lib/agent-ws-auth"
 import crypto                      from "crypto"
 import { signSessionBoundToken, sessionBoundTtlS } from "./infra/jwt"
 import { judgeArrivalEvidence } from "./lib/arrival-evidence"
@@ -3606,7 +3607,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
   // WebSocket server for Agent Assist UI — handles /agent/ws?session_id=...
   // The UI connects via Vite proxy /agent-ws → ws://localhost:3100/agent/ws
-  const wss = new WebSocketServer({ noServer: true })
+  // CAP-19: o subprotocolo carrega a credencial; o servidor ecoa SÓ o marcador (o browser exige
+  // eco de um dos protocolos oferecidos, e o token não pode voltar na resposta).
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => (protocols.has(AGENT_WS_PROTOCOL) ? AGENT_WS_PROTOCOL : false),
+  })
+  const agentWsAuth = new WeakMap<http.IncomingMessage, { sub: string; tenantId: string }>()
 
   // Grace-period timers for human agent unregister.
   // React 18 StrictMode causes a rapid unmount/remount cycle in development:
@@ -3662,7 +3669,26 @@ export async function startServer(config: ServerConfig): Promise<void> {
     const url = new URL(request.url ?? "", `http://${request.headers.host}`)
     console.log(`[upgrade] method=${request.method} pathname=${url.pathname} host=${request.headers.host} upgrade=${request.headers.upgrade}`)
     if (url.pathname === "/agent/ws") {
-      console.log(`[upgrade] Handling WebSocket upgrade for pool=${url.searchParams.get("pool")}`)
+      const poolParam = url.searchParams.get("pool") ?? ""
+      const decision = authorizeAgentWs({
+        protocolHeader: request.headers["sec-websocket-protocol"],
+        poolId:         poolParam,
+        queryUserId:    url.searchParams.get("user_id") ?? "",
+        verify:         (t) => verifyJwtPayload(`Bearer ${t}`),
+        isUnavailable:  (err) => err instanceof AuthNaoDisponivel,
+      })
+      if (!decision.ok) {
+        // Aceita o upgrade SÓ para fechar com código e motivo: um 401 cru no handshake chega ao
+        // browser como 1006 sem texto, e a recusa ficaria indistinguível de queda de rede.
+        console.warn(
+          `[agent-ws] RECUSADO code=${decision.code} pool=${poolParam || "-"} ` +
+          `user_id=${url.searchParams.get("user_id") || "-"} from=${request.socket.remoteAddress} — ${decision.reason}`,
+        )
+        wss.handleUpgrade(request, socket, head, (ws) => { ws.close(decision.code, decision.reason) })
+        return
+      }
+      console.log(`[upgrade] Handling WebSocket upgrade for pool=${poolParam} sub=${decision.sub}`)
+      agentWsAuth.set(request, { sub: decision.sub, tenantId: decision.tenantId })
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit("connection", ws, request)
       })
@@ -3675,9 +3701,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
   wss.on("connection", (ws: WebSocket, request: http.IncomingMessage) => {
     const url    = new URL(request.url ?? "", `http://${request.headers.host}`)
     const poolId = url.searchParams.get("pool") ?? ""
-    // Per-user identity — sent by platform-ui from the JWT sub claim.
-    // Falls back to poolId-based key for old clients that do not send user_id.
-    const userId              = url.searchParams.get("user_id") ?? ""
+    // Per-user identity — o `sub` ASSINADO (CAP-19). Vinha da query, e qualquer um escolhia
+    // quem era. O upgrade só emite `connection` depois de `authorizeAgentWs` aprovar, então a
+    // ausência aqui é defeito de fiação — e fecha, em vez de cair no ramo legado sem usuário.
+    const verified            = agentWsAuth.get(request)
+    if (!verified) {
+      console.error(`[agent-ws] conexao sem autorizacao registrada — fechando pool=${poolId}`)
+      ws.close(1011, "autorizacao ausente")
+      return
+    }
+    const userId              = verified.sub
     // Expected instance for THIS connection — matches registerHumanAgent's
     // instanceId format ("human-{userId}"). conversation.assigned is published to
     // the pool-wide channel pool:events:{poolId}, so without this filter EVERY
@@ -3835,10 +3868,24 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     if (initialSessionId) {
       // Direct session connection — agent reconnecting with a known session (e.g. browser refresh).
-      subscribedSessions.add(initialSessionId)
-      subscriber.subscribe(`agent:events:${initialSessionId}`, (err) => {
-        if (err) console.error("Redis subscribe error:", err)
-      })
+      // CAP-19: só se o agente ESTÁ anexado à sessão. O id vinha da query e bastava conhecê-lo
+      // para ler os eventos de agente e escrever no stream como atendente. Recarga de um contato
+      // já encerrado cai aqui e só perde a assinatura — o socket do pool segue vivo.
+      void redis.sismember(`session:${initialSessionId}:human_agents`, expectedInstanceId)
+        .then((attached) => {
+          if (!attached) {
+            console.warn(
+              `[agent-ws] session_id de reconexao IGNORADO: ${expectedInstanceId} nao esta anexado ` +
+              `a session=${initialSessionId}`,
+            )
+            return
+          }
+          subscribedSessions.add(initialSessionId)
+          subscriber.subscribe(`agent:events:${initialSessionId}`, (err) => {
+            if (err) console.error("Redis subscribe error:", err)
+          })
+        })
+        .catch((err) => console.error(`[agent-ws] pertencimento de session=${initialSessionId} nao conferido:`, err))
     }
     if (poolId) {
       // Pool-lobby connection — agent is waiting for an assignment.
@@ -4047,15 +4094,21 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // This is the correct production behaviour: the act of opening the Agent
       // Assist UI is sufficient to become available for routing.
       //
-      // Cancel any pending unregister for this pool — StrictMode in React 18
+      // Cancel any pending unregister OF THIS AGENT in this pool — StrictMode in React 18
       // causes a rapid close→open cycle. Without this, the close fires
       // unregisterHumanAgent which drains the queue before the second open can
       // receive the contact.
-      const existingUnregTimer = pendingUnregister.get(poolId)
+      //
+      // AGH-01 (2026-09-15): o timer era chaveado SÓ pelo pool, e o login de QUALQUER agente
+      // no pool cancelava o logout de outro — o que saiu ficava `ready`, sem socket e sem TTL,
+      // recebendo contato (medido: contato do widget atribuído a uma instância assim). A
+      // recarga é fato do PRÓPRIO agente; a chave é (usuário, pool).
+      const unregKey = connKey(userId, poolId)
+      const existingUnregTimer = pendingUnregister.get(unregKey)
       if (existingUnregTimer !== undefined) {
         clearTimeout(existingUnregTimer)
-        pendingUnregister.delete(poolId)
-        console.log(`[agent-ws] Cancelled pending unregister (StrictMode reconnect) pool=${poolId}`)
+        pendingUnregister.delete(unregKey)
+        console.log(`[agent-ws] Cancelled pending unregister (reconnect) pool=${poolId} user=${userId}`)
       }
       // Conexão viva registrada ANTES do register: se um timer agendado por um
       // fechamento anterior disparar durante o await abaixo, ele vê o contador e
@@ -4656,9 +4709,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // does NOT unregister the agent — the new connection will cancel this timer.
       if (poolId) {
         console.log(`[agent-ws] Scheduling unregister in ${UNREGISTER_GRACE_MS}ms: pool=${poolId} user=${userId}`)
+        const unregKey = connKey(userId, poolId)
         const timer = setTimeout(async () => {
           console.log(`[agent-ws] Grace period elapsed — calling unregisterHumanAgent pool=${poolId} user=${userId}`)
-          pendingUnregister.delete(poolId)
+          // Só apaga a própria entrada: um fechamento mais novo do mesmo agente pode tê-la trocado.
+          if (pendingUnregister.get(unregKey) === timer) pendingUnregister.delete(unregKey)
           // G7 heartbeat Slice 1 — queda involuntária: drop genuíno confirmado (sem reconnect
           // dentro do grace). Para cada sessão ativa onde ESTE humano AINDA está anexado
           // (em human_agents → não saiu por agent_done), publica contact_closed(agent_disconnect)
@@ -4696,7 +4751,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
             console.error(`[agent-ws] unregisterHumanAgent pool=${poolId} user=${userId}:`, err)
           )
         }, UNREGISTER_GRACE_MS)
-        pendingUnregister.set(poolId, timer)
+        pendingUnregister.set(unregKey, timer)
       } else {
         console.log(`[agent-ws] WS close — no poolId, skipping unregister`)
       }

@@ -90,6 +90,14 @@ história no `CHANGELOG.md`.)*
 
 ---
 
+## `docs/adr/adr-human-agent-pool-scoped-identity.md` — instância do agente humano por pool
+
+| id | tarefa | fechada em | âncora |
+|---|---|---|---|
+| AGH-01 | **O login de um agente não cancela mais o logout de OUTRO.** O timer de desregistro (2,5 s) era chaveado só pelo pool, e qualquer conexão nova ao mesmo pool fazia `clearTimeout` nele — o agente que saiu ficava `ready`, sem socket, recebendo contato (medido: contato do widget atribuído a uma instância assim). Hoje a chave é (usuário, pool), e o timer só apaga a própria entrada. Vermelho ao vivo antes (G1: A continuava instância com B entrando em 0,3 s), com os controles C1 (sair sozinho desregistra) e G2 (F5 do próprio agente mantém). Gate `probe_agent_ws_ghost_instance.sh`. A segunda causa do mesmo sintoma (reinício do processo) ficou na `AGH-02` | 2026-09-15 | `CHANGELOG.md` § 2026-09-15 (20) |
+
+---
+
 ## `docs/product/identity-resolver-fase-a-plano.md` — identidade e comércio conversacional
 
 *(Fases A e B fecharam antes deste ledger — história no `CHANGELOG.md`.)*
@@ -269,6 +277,7 @@ história no `CHANGELOG.md`.)*
 | CAP-12 | As 9 rotas `/api/*` publicadas pela borda passaram a exigir credencial; o decode-sem-verificar do `verifyJwtPayload` saiu junto (era um portão que não podia reprovar onde o segredo faltava) | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-13 | A 3100 passou a publicar em loopback nos dois composes — o transporte MCP anônimo estava aceitando conexão no IP de LAN, medido | 2026-09-01 | `CHANGELOG.md:3` |
 | CAP-16 | Os três chamadores de `/api/conversation_history` pararam de converter falha de leitura em histórico vazio: carregador único, motivo na tela e releitura que falha não apaga mensagem boa | 2026-09-01 | `CHANGELOG.md:3` |
+| CAP-19 | **O `/agent/ws` só atende agente com credencial do pool — e só lhe dá as sessões dele.** Antes, sem token e pela borda da 5174: `user_id` inventado virava instância que recebia contato, e `?session_id=` alheio lia os eventos de agente e escrevia no stream como atendente. Hoje a credencial viaja no subprotocolo (`plughub.bearer`, porque o browser não põe `Authorization` em WebSocket e JWT na URL vai para log), é conferida NO UPGRADE por `lib/agent-ws-auth.ts` (identidade = `sub` assinado; `user_id` divergente recusa; `agent_assist.atender` read_write cobrindo o pool), a recusa fecha com 4401/4403 e o motivo, e o `session_id` de reconexão só é assinado se o agente está em `session:{id}:human_agents`. Console (os dois hooks) manda o token e não reconecta em 4403. Vermelho ao vivo antes: 7 de 7 recusas faltando. Gate `probe_agent_ws_credential.sh` (W1–W8 + controles W6/W7b/W9); unitário com mutação (5 mutações, todas reprovam) | 2026-09-15 | `CHANGELOG.md` § 2026-09-15 (20) |
 
 ---
 
