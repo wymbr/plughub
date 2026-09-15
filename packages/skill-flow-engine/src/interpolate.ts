@@ -199,12 +199,26 @@ export async function resolveInputMap(
   ctx:           StepContext,
   contextStore?: IContextStore,
 ): Promise<Record<string, unknown>> {
-  const resolved: Record<string, unknown> = {}
-  await Promise.all(
-    Object.entries(input).map(async ([key, value]) => {
-      resolved[key] = await resolveInputValue(value, ctx, contextStore)
-    })
+  const entradas = Object.entries(input)
+  const valores  = await Promise.all(
+    entradas.map(([, value]) => resolveInputValue(value, ctx, contextStore)),
   )
+  const resolved: Record<string, unknown> = {}
+  entradas.forEach(([key, declarado], i) => {
+    const valor = valores[i]
+    // Referência PURA que não resolveu é argumento AUSENTE, nunca `null` (2026-09-15).
+    // `@ctx.*` ausente chegava como `null` (o ContextStore faz `?? null`) e `$.*` ausente como
+    // `undefined`, que o JSON omite: a MESMA ausência atravessava o MCP em dois formatos,
+    // conforme o tipo de referência. O `null` batia em `z.string().optional()` — 164 campos
+    // das tools são assim — e o `invoke` caía em `on_failure`: o `validate_pin` do
+    // `skill_auth_form_v1` recusava todo cliente sem identidade resolvida, com a senha certa.
+    // Campo OBRIGATÓRIO continua recusado alto pela tool ("Required"), agora com a causa certa.
+    // ⚠️ Só referência pura: `null` LITERAL no YAML é declaração do autor e viaja. Valor
+    // falsy resolvido (0, false, "") não é ausência. Elemento de ARRAY não sai (mudaria a
+    // posição dos seguintes) — lá a ausência continua `null`.
+    if (valor == null && typeof declarado === "string" && SINGLE_REF_REGEX.test(declarado)) return
+    resolved[key] = valor
+  })
   return resolved
 }
 

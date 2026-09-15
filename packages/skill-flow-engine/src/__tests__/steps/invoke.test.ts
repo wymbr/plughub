@@ -330,3 +330,78 @@ describe("executeInvoke — resolução de inputs com JSONPath (segment)", () =>
     )
   })
 })
+
+// ─────────────────────────────────────────────
+// Referência que não resolve é argumento AUSENTE, não `null` (2026-09-15)
+//
+// Medido ao vivo: `skill_auth_form_v1` manda `customer_id: "@ctx.caller.customer_id"` ao
+// `validate_pin`; sem identidade resolvida o ContextStore devolve `null` (`getValue` faz
+// `?? null`), o argumento viajava como `null`, e o schema da tool — `z.string().optional()`,
+// como 164 campos das tools — recusava com -32602. O cliente preenchia o form certo e o fluxo ia
+// para a falha. `$.` ausente já virava `undefined` e sumia do JSON: a MESMA ausência chegava à
+// tool em dois formatos, conforme o tipo de referência.
+//
+// ⚠️ `toHaveBeenCalledWith({...})` NÃO serve de testemunha aqui: a igualdade do vitest trata
+// chave com `undefined` e chave ausente como iguais, e nenhuma das duas como `null`. Por isso os
+// testes inspecionam o objeto enviado — e o JSON dele, que é o que atravessa o MCP.
+// ─────────────────────────────────────────────
+
+describe("executeInvoke — referência que não resolve não vira null", () => {
+  function ctxCom(valores: Record<string, unknown>) {
+    const mcpCall = vi.fn().mockResolvedValue({ valid: true })
+    const ctx = makeCtx({
+      mcpCall,
+      contextStore: {
+        getValue: vi.fn().mockImplementation(async (_sid: string, tag: string) =>
+          tag in valores ? valores[tag] : null),
+      } as never,
+      saveState: vi.fn().mockImplementation(async (s: PipelineState) => { ctx.state = s }),
+    })
+    return { ctx, mcpCall }
+  }
+  const validar: InvokeStep = {
+    id:         "validar_senha",
+    type:       "invoke",
+    target:     { mcp_server: "mcp-server-auth", tool: "validate_pin" },
+    input:      { customer_id: "@ctx.caller.customer_id", pin: "@ctx.teste.pin" },
+    on_success: "ok",
+    on_failure: "fail",
+  }
+
+  it("@ctx ausente: a chave NÃO vai à tool", async () => {
+    const { ctx, mcpCall } = ctxCom({ "teste.pin": "123456" })
+    const r = await executeInvoke(validar, ctx)
+    const args = mcpCall.mock.calls[0]![1] as Record<string, unknown>
+    expect("customer_id" in args).toBe(false)
+    expect(JSON.stringify(args)).toBe('{"pin":"123456"}')
+    expect(r.next_step_id).toBe("ok")
+  })
+
+  it("CONTROLE: @ctx presente passa o valor", async () => {
+    const { ctx, mcpCall } = ctxCom({ "caller.customer_id": "cust-9", "teste.pin": "123456" })
+    await executeInvoke(validar, ctx)
+    expect(JSON.stringify(mcpCall.mock.calls[0]![1])).toBe('{"customer_id":"cust-9","pin":"123456"}')
+  })
+
+  it("CONTROLE: null LITERAL no YAML continua null — é declaração do autor, não ausência", async () => {
+    const { ctx, mcpCall } = ctxCom({})
+    await executeInvoke({ ...validar, input: { customer_id: null, pin: "123456" } } as never, ctx)
+    expect(JSON.stringify(mcpCall.mock.calls[0]![1])).toBe('{"customer_id":null,"pin":"123456"}')
+  })
+
+  it("valores FALSY resolvidos não são ausência: 0, false e string vazia viajam", async () => {
+    const { ctx, mcpCall } = ctxCom({ "a.zero": 0, "a.falso": false, "a.vazio": "" })
+    await executeInvoke({ ...validar, input: { z: "@ctx.a.zero", f: "@ctx.a.falso", v: "@ctx.a.vazio" } }, ctx)
+    expect(JSON.stringify(mcpCall.mock.calls[0]![1])).toBe('{"z":0,"f":false,"v":""}')
+  })
+
+  it("referência ausente ANINHADA some do objeto, e no array vira elemento ausente sem mudar posições", async () => {
+    const { ctx, mcpCall } = ctxCom({ "a.b": "x" })
+    await executeInvoke({ ...validar, input: {
+      ctx: { "session.um": "@ctx.a.b", "session.dois": "@ctx.nao.existe" },
+      lista: ["@ctx.a.b", "@ctx.nao.existe"],
+    } }, ctx)
+    // comparado pelo JSON RE-LIDO (a ordem das chaves não é contrato; `null` × ausente é)
+    expect(JSON.parse(JSON.stringify(mcpCall.mock.calls[0]![1]))).toStrictEqual({ ctx: { "session.um": "x" }, lista: ["x", null] })
+  })
+})

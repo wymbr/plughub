@@ -430,6 +430,12 @@ probe_webrtc_masked_keypad.sh
 # ao vivo), controle da fala inteira, barge-in cortando em <=1,5 s com o fim do aviso nao ouvido,
 # e a fala voltando depois. Fixture propria (skill_probe_tts_v1).
 probe_webrtc_tts_spoken.sh
+# CTR-09. Referencia pura de `invoke` que nao resolveu (`@ctx.*` ausente) viajava como `null` e a
+# tool com campo `.optional()` recusava (-32602): o `validate_pin` do skill_auth_form_v1 reprovava
+# a senha CERTA de todo cliente sem identidade. Mede a suite do invoke contra a IMAGEM e, ao vivo no
+# webchat, a pre-condicao (sessao sem customer_id), o controle (senha invalida recusada) e a senha
+# valida verificada, sem -32602 no log.
+probe_invoke_absent_ref.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

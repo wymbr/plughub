@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (27) — CTR-09: referência que não resolveu é argumento ausente, e a senha certa volta a passar
+
+**Medido ao vivo antes, pelo webchat, no pool `auth_form_ia`.** Cliente sem identidade resolvida
+preenche o formulário com a senha válida (`123456`) e lê *"Não foi possível verificar sua identidade
+no momento"*. O `skill-flow-service` loga `validate_pin … MCP error -32602 … Expected string, received
+null at customer_id`. O skill passa `customer_id: "@ctx.caller.customer_id"` (usado só para log na
+tool); o ContextStore devolve `null` para tag ausente (`getValue` faz `?? null`); o schema da tool é
+`z.string().optional()`, que aceita ausente e recusa `null`. Falha plausível — "especialista vai
+atender" — escondendo um contrato quebrado, e em nenhum canal específico.
+
+**Onde consertar, decidido pela população.** No skill, conserta um fluxo e deixa as outras entradas
+expostas: **275** entradas de `invoke` nos skills são referência pura, para **30** tools. Na tool,
+conserta um schema de **164** campos `.optional()` sem `.nullable()`. A causa é do MOTOR, e é uma
+inconsistência dele: `$.` ausente virava `undefined`, que o JSON omite, e `@ctx.` ausente virava
+`null` — a mesma ausência chegava à tool em dois formatos, conforme o tipo de referência.
+
+**Conserto** em `resolveInputMap` (casa única dos mapas de entrada; o `delegate`, o outro consumidor,
+já tratava `null` e `undefined` igual): referência PURA que não resolveu não gera chave. `null`
+literal no YAML viaja (é declaração do autor); valor falsy resolvido (`0`, `false`, `""`) viaja;
+elemento de array não sai (mudaria as posições). Campo obrigatório continua recusado alto pela tool,
+agora como "Required". De quebra, a ordem das chaves passou a ser a declarada, não a de resolução.
+Como o skill não mudou, não houve `PUT`/`set-next`/`promote`: basta reconstruir `skill-flow-service`
+e `skill-flow-worker`.
+
+**Testemunhas.** 5 casos no `invoke.test.ts` (ausente some · controle presente · `null` literal ·
+falsy · aninhado e array), vermelhos antes do conserto nos dois que importam; a igualdade do vitest
+trata chave `undefined` e ausente como iguais, então os testes olham o JSON enviado. 4 mutações da
+regra, 4 mortas; suíte do motor 265/265. Gate **`probe_invoke_absent_ref.sh`**: suíte contra a IMAGEM,
+e ao vivo pelo webchat a pré-condição (a sessão não tem `customer_id` — senão INCONCLUSIVO), o
+controle (senha inválida → "Credenciais inválidas", a validação roda), a senha válida verificada e
+nenhum -32602 no log. Mutação ao vivo (condição trocada no `dist` do container) → L1, L2 e L3
+vermelhos; restaurado pela imagem, verde. ⚠️ A 1ª versão do probe errou por instrumento: a regra do
+cliente casava `"novamente"` com o AVISO *"Tente novamente"* e respondia antes de o form reabrir.
+
 ## 2026-09-15 (26) — VOZ-05 fatia 3: o agente de IA fala na chamada, e o cliente pode interrompê-lo
 
 **O que havia, medido antes.** O caminho de TTS existia e nunca tinha rodado, por DOIS motivos
