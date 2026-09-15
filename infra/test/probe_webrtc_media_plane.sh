@@ -41,8 +41,11 @@
 #   divergente derruba A; literal placebo reintroduzido derruba A4) foi rodada na
 #   entrega — `CHANGELOG.md` § 2026-09-14 VOZ-01.
 #
-# ⚠️ ESCOPO: plano de mídia DENTRO da rede do compose. Browser no host (candidato ICE
-#    alcançavel de fora, TURN com endereço externo) e a VOZ-04, que mede um browser.
+# ⚠️ ESCOPO: plano de mídia DENTRO da rede do compose, mais a DECLARACAO do alcance do
+#    browser no host (A5, VOZ-04 item 4). A conexao do browser em si so se mede com um
+#    browser — foi medida na entrega (CHANGELOG § 2026-09-15 (17)) e volta no roteiro
+#    assistido `docs/guias/roteiro-validacao-webrtc-console.md`. Browser em OUTRA maquina da
+#    LAN nao esta coberto: o loopback e o `localhost` do TURN so servem o proprio host.
 # ⚠️ Egress (gravação) NAO esta no compose — e a VOZ-06; este probe nao o cobra.
 #
 # EXIT: 0 OK · 1 FALHA · 2 INCONCLUSIVO (stack fora do ar)
@@ -110,6 +113,37 @@ m = re.search(r"--user=([^:\s]+):(\S+)", cmd)
 r(bool(turn_cred and turn_user and m) and (turn_user.group(1), turn_cred.group(1)) == (m.group(1), m.group(2)),
   "A3 credencial TURN do SFU CASA com o `--user` do coturn")
 r("auto_create: false" in lkcfg, "A3 `room.auto_create: false` (sala nasce pelo gateway, nao pelo join)")
+
+# A5 — ALCANCE DO BROWSER NO HOST (VOZ-04, item 4). Medido num browser de verdade no Windows
+# em 2026-09-15: sem isto o SFU so anunciava o IP do container e o IP publico do STUN, e o
+# join falhava em `could not establish pc connection`. Os tres fatos abaixo sao o que o fez
+# conectar; cada um sozinho e insuficiente, e nenhum deles fica vermelho em probe de dentro da
+# rede — por isso sao cobrados aqui, na config RESOLVIDA.
+def publicado(svc, porta, proto):
+    return any(str(p.get("published")) == str(porta) and int(p.get("target", 0)) == int(porta)
+               and p.get("protocol", "tcp") == proto for p in ((sv.get(svc) or {}).get("ports") or []))
+r(re.search(r"^\s*enable_loopback_candidate:\s*true\s*$", lkcfg, re.M) is not None,
+  "A5 SFU anuncia candidato de loopback (o IP do container nao e alcancavel do host)")
+udp = re.search(r"^\s*udp_port:\s*(\d+)\s*$", lkcfg, re.M)
+tcp = re.search(r"^\s*tcp_port:\s*(\d+)\s*$", lkcfg, re.M)
+r(bool(udp and tcp) and publicado("livekit", udp.group(1), "udp") and publicado("livekit", tcp.group(1), "tcp"),
+  "A5 porta UDP unica (%s) e TCP (%s) publicadas 1:1 — o candidato anuncia o numero de DENTRO"
+  % (udp.group(1) if udp else "AUSENTE", tcp.group(1) if tcp else "AUSENTE"))
+hosts = re.findall(r"^\s*-\s*host:\s*(\S+)\s*$", lkcfg, re.M)
+r(any(h in sv for h in hosts) and any(h not in sv for h in hosts) and publicado("coturn", 3478, "udp"),
+  "A5 TURN anunciado para as DUAS populacoes: nome do compose (dentro) e endereco do host (fora) — %s" % hosts)
+# A6 — VERSÕES dos clientes de browser são FIXAS (VOZ-04, 2026-09-15). O widget carregava
+# `livekit-client@2` do CDN: o cliente andou até 2.22 enquanto o SFU ficou na v1.8.4, e o vídeo
+# parou de publicar sem nada vermelho (o SDK Python dos probes negocia com o servidor antigo).
+# Versão flutuante não pode ser conferida contra o SFU; fixa, ao menos muda por commit.
+wid = io.open("infra/demo/web/webrtc-widget.html", encoding="utf-8").read()
+cdn = re.findall(r"livekit-client@([^/\"']+)/", wid)
+r(bool(cdn) and all(re.fullmatch(r"\d+\.\d+\.\d+", v) for v in cdn),
+  "A6 widget carrega livekit-client com versao EXATA do CDN (%s)" % (cdn or "AUSENTE"))
+# (O Console já trava a versão no package-lock; um ramo que só conferisse isso nunca reprovaria.)
+m_pub = re.match(r"wss?://([^:/]+):(\d+)", pub or "")
+r(bool(m_pub) and m_pub.group(1) not in sv and publicado("livekit", m_pub.group(2), "tcp"),
+  "A5 URL publica do SFU (%s) nao e nome do compose e sua porta esta publicada" % (pub or "AUSENTE"))
 
 py = io.open("packages/channel-gateway/pyproject.toml", encoding="utf-8").read()
 r(re.search(r'"livekit-api[>=<]', py) is not None and re.search(r'"livekit[>=<]', py) is not None,

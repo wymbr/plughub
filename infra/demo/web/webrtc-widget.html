@@ -23,7 +23,10 @@
 -->
 
 <!-- LiveKit JS client SDK from CDN -->
-<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+<!-- Versão EXATA: `@2` flutuava para o último 2.x e o cliente andou à frente do SFU sem ninguém
+     ver (VOZ-04, 2026-09-15: com o SFU v1.8.4 o vídeo não publicava). Subir aqui = subir o SFU
+     junto e repetir o roteiro de validação. -->
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.3/dist/livekit-client.umd.min.js"></script>
 
 <style>
   /* ── Reset ──────────────────────────────────────────────────────────────── */
@@ -208,7 +211,7 @@
     outline: none;
     background: #fff;
   }
-  .config-row select { flex: 1; }
+  .config-row select, .config-row input { flex: 1; }
   .config-row button {
     padding: 6px 14px;
     font-size: 12px;
@@ -392,11 +395,11 @@
 
   <!-- ── Config / connect row ─────────────────────────────────────────── -->
   <div class="config-row">
-    <select id="pool-select">
-      <option value="webrtc_ia">webrtc_ia (vídeo)</option>
-      <option value="webrtc_voice">webrtc_voice (voz)</option>
-      <option value="webrtc_text">webrtc_text (texto)</option>
-    </select>
+    <!-- O pool é dado do TENANT: os três que este seletor oferecia (`webrtc_ia`, `webrtc_voice`,
+         `webrtc_text`) não existiam no registry, e escolher qualquer um terminava sem roteamento.
+         O padrão é o pool do roteiro `docs/guias/roteiro-validacao-webrtc-console.md`;
+         `?pool=<id>` troca. -->
+    <input id="pool-select" value="webrtc_atendimento" title="pool_id (WebRTC)">
     <button onclick="connectWebRTC().catch(showErr)">Conectar</button>
   </div>
   <div class="err-detail" id="err-detail"></div>
@@ -422,6 +425,10 @@
 const WS_BASE    = 'ws://localhost:8010/ws/webrtc';  // + /{pool_id}
 const JWT_SECRET = 'changeme_32chars_webchat_secret!';
 const TENANT_ID  = 'tenant_demo';
+{
+  const p = new URLSearchParams(location.search).get('pool');
+  if (p) document.getElementById('pool-select').value = p;
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws              = null;
@@ -567,6 +574,19 @@ async function connectLiveKit(livekitUrl, livekitToken, medium) {
   room = new LK.Room({
     adaptiveStream: true,
     dynacast:       true,
+  });
+
+  // O browser pode recusar tocar o áudio remoto sem gesto (autoplay). Sem esta escuta a recusa
+  // era muda: vídeo passando e ninguém ouvindo (VOZ-04, 2026-09-15).
+  room.on(LK.RoomEvent.AudioPlaybackStatusChanged, () => {
+    if (room && !room.canPlaybackAudio && !document.getElementById('enable-audio')) {
+      const b = document.createElement('button');
+      b.id = 'enable-audio';
+      b.className = 'msg sys';
+      b.textContent = '🔇 O navegador bloqueou o som da chamada — clique para ativar';
+      b.onclick = async () => { await room?.startAudio(); b.remove(); };
+      document.getElementById('messages').appendChild(b);
+    }
   });
 
   room.on(LK.RoomEvent.TrackSubscribed, (track, _pub, participant) => {

@@ -20,6 +20,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 
 import { useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
+import { RemoteAudio }      from "./RemoteAudio";
 import { MediaControls }    from "./MediaControls";
 
 // ── Animated waveform (voice medium) ───────────────────────────────────────
@@ -81,6 +82,8 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
     toggleMic,
     toggleCamera,
     disconnect,
+    audioBlocked,
+    startAudio,
   } = useWebRTCSession(sessionId, agentIdentity, channel);
 
   // Duration timer
@@ -156,6 +159,18 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
           </span>
         )}
       </div>
+
+      {/* Áudio remoto — sem isto o agente vê o cliente e não o ouve */}
+      <RemoteAudio remoteTracks={remoteTracks} />
+      {audioBlocked && (
+        <button
+          type="button"
+          onClick={() => { void startAudio(); }}
+          className="mx-3 mt-2 py-1.5 rounded-md bg-warning text-white text-xs font-medium"
+        >
+          {t("overlay.enableAudio")}
+        </button>
+      )}
 
       {/* Media area */}
       {view === "video" ? (

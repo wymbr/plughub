@@ -129,6 +129,26 @@ r(len(prod) >= 2 and chaves == ["timestamp"] and "timestamp" in lidas and ("ts" 
   % (len(prod), chaves, lidas))
 wid = src("infra/demo/web/webrtc-widget.html")
 r(re.search(r"msg\.author === 'system'", wid) is not None, "A7 widget nao rotula aviso do sistema como fala de agente")
+
+# A8 — o Console TOCA o áudio remoto (1ª chamada de gente, 2026-09-15: vídeo nos dois sentidos,
+# som de verdade nas duas trilhas do SFU, e o agente sem ouvir nada — nada anexava trilha de
+# áudio). Censo em quem CONSOME: a sobreposição do agente e a do supervisor renderizam um
+# componente que anexa trilhas de `Track.Kind.Audio`; e a recusa de autoplay vira aviso nos
+# dois lados (Console e widget), em vez de silêncio.
+import glob, os
+comp_dir = "packages/platform-ui/src/modules/agent-assist/components"
+tocadores = []
+for f in glob.glob(comp_dir + "/*.tsx"):
+    s = nocomment_ts(src(f))
+    if "Track.Kind.Audio" in s and re.search(r"\.attach\(", s):
+        tocadores.append(os.path.basename(f)[:-4])
+usam = {}
+for view in ("WebRTCOverlay", "WebRTCSupervisorView"):
+    s = nocomment_ts(src(f"{comp_dir}/{view}.tsx"))
+    usam[view] = [c for c in tocadores if re.search(r"<%s\b" % c, s)]
+r(bool(tocadores) and all(usam.values()), "A8 agente e supervisor renderizam quem toca o audio remoto (%s)" % usam)
+r("AudioPlaybackStatusChanged" in hook and "startAudio" in hook and "AudioPlaybackStatusChanged" in wid,
+  "A8 recusa de autoplay vira aviso (hook do Console e widget)")
 PYEOF
 )
 tally "$A_OUT"

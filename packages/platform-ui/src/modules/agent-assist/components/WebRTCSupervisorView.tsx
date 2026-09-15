@@ -17,6 +17,7 @@ import { Loader2, EyeOff } from "lucide-react";
 
 import { useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
+import { RemoteAudio }      from "./RemoteAudio";
 
 const SUPERVISOR_IDENTITY = "supervisor_view";
 
@@ -40,6 +41,8 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
     remoteTracks,
     connecting,
     error,
+    audioBlocked,
+    startAudio,
   } = useWebRTCSession(sessionId, SUPERVISOR_IDENTITY, channel, "supervisor");
   // ⚠️ O papel "supervisor" é o que dá token OCULTO e sem publicação. Até a VOZ-09 esta
   // visão pedia `role=agent` (o hook não recebia papel) e entraria na sala publicando.
@@ -65,9 +68,26 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
     );
   }
 
+  // Supervisão é ESCUTA: o áudio remoto toca nos dois modos (vídeo e voz).
+  const audio = (
+    <>
+      <RemoteAudio remoteTracks={remoteTracks} />
+      {audioBlocked && (
+        <button
+          type="button"
+          onClick={() => { void startAudio(); }}
+          className="mx-2 mt-1 py-1 rounded bg-warning text-white text-xs font-medium"
+        >
+          {t("overlay.enableAudio")}
+        </button>
+      )}
+    </>
+  );
+
   if (view === "video") {
     return (
       <div className="flex flex-col gap-1">
+        {audio}
         <div className="flex items-center gap-1.5 px-2 pt-2">
           <span
             className={`w-1.5 h-1.5 rounded-full ${
@@ -86,6 +106,7 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
   // voice — simpler waveform indicator for supervisor
   return (
     <div className="flex items-center gap-2 px-3 py-2">
+      {audio}
       <span
         className={`w-2 h-2 rounded-full flex-shrink-0 ${
           room ? "bg-green-400 animate-pulse" : "bg-gray-400"

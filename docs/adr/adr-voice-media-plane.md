@@ -375,7 +375,17 @@ A4 (o humano finalmente entra na conferência) e é a primeira vez que o canal p
 > ao cliente"*) foi refutada ao vivo: o texto viaja por `conversations.outbound` e chegava nos dois
 > sentidos. Consertou-se a fidelidade — a hora da mensagem (o leitor pedia uma chave que nenhum
 > produtor escreve) e o rótulo do aviso de sistema no widget.
-> Faltam: mídia alcançável do host, validação com agente no browser.
+>
+> **Mídia do host ✅ 2026-09-15 (`VOZ-04`).** Decisão para o demo: o browser do **próprio host**.
+> O SFU acrescenta candidato de loopback, usa uma porta UDP única publicada 1:1 e anuncia o TURN
+> com dois nomes (o do compose para os clientes de dentro, `localhost` para o host) — medido num
+> browser real, direto e só por relay. Outra máquina da rede fica fora: pede o IP do host nos
+> candidatos e no TURN, que é decisão de topologia de deploy, não de demo.
+>
+> **V-F1 ✅ VALIDADA COM GENTE em 2026-09-15 (`VOZ-04` fechada).** Três rodadas do roteiro
+> `docs/guias/roteiro-validacao-webrtc-console.md`, cada uma achando o que nenhum probe alcançava: o
+> SFU v1.8.4 não negociava vídeo com os clientes de browser atuais (→ v1.13.6, versões andando
+> juntas), e o Console nunca tocava áudio remoto. Na terceira: vídeo, áudio e texto nos dois sentidos.
 
 **V-F2 — bot leg: STT/TTS.** URA e agente IA por voz; `notify` falado; `menu` por voz com DTMF
 **e** STT — o que conserta o `collect` morto de A2. A partir daqui a voz tem transcrição, e

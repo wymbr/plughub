@@ -63,6 +63,10 @@ export interface WebRTCSessionState {
   cameraOff: boolean;
   /** Hang up — disconnect from the room without ending the session */
   disconnect: () => void;
+  /** True quando o browser BLOQUEOU tocar o áudio remoto (autoplay) — a tela pede um clique */
+  audioBlocked: boolean;
+  /** Libera o áudio remoto; tem de ser chamado dentro de um gesto do usuário */
+  startAudio: () => Promise<void>;
 }
 
 interface TokenResponse {
@@ -102,6 +106,7 @@ export function useWebRTCSession(
   const [error,        setError]        = useState<string | null>(null);
   const [micMuted,     setMicMuted]     = useState(false);
   const [cameraOff,    setCameraOff]    = useState(false);
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   // ── Remote track bookkeeping ────────────────────────────────────────────
   const rebuildRemoteTracks = useCallback((r: Room) => {
@@ -169,6 +174,10 @@ export function useWebRTCSession(
         setLocalTracks([]);
         setRemoteTracks(new Map());
       });
+      // O browser pode recusar tocar som que a página não iniciou por gesto (autoplay). O
+      // LiveKit detecta ao anexar a trilha; sem esta escuta a recusa é MUDA — a chamada
+      // parece conectada e ninguém ouve ninguém.
+      r.on(RoomEvent.AudioPlaybackStatusChanged, () => setAudioBlocked(!r.canPlaybackAudio));
 
       await r.connect(body.livekit_url, body.token);
 
@@ -211,6 +220,14 @@ export function useWebRTCSession(
     setError(null);
     setMicMuted(false);
     setCameraOff(false);
+    setAudioBlocked(false);
+  }, []);
+
+  const startAudio = useCallback(async () => {
+    const r = roomRef.current;
+    if (!r) return;
+    await r.startAudio();
+    setAudioBlocked(!r.canPlaybackAudio);
   }, []);
 
   // Connect when sessionId appears and channel is webrtc; tear down when gone
@@ -267,5 +284,7 @@ export function useWebRTCSession(
     micMuted,
     cameraOff,
     disconnect: disconnectRoom,
+    audioBlocked,
+    startAudio,
   };
 }

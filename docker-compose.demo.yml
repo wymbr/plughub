@@ -1360,26 +1360,46 @@ services:
   # `room.auto_create: false` — a sala nasce pelo gateway (`create_room`), nunca pelo
   # join. Um token assinado para nome de sala qualquer não cria sala.
   #
-  # ⚠️ ENDEREÇOS são de dentro da rede do compose (`coturn`, IPs de container). Browser
-  #    no host precisa de candidato alcançável de fora — decisão da VOZ-04, que é
-  #    quem mede um browser de verdade.
+  # ENDEREÇOS — duas populações de cliente, e o SFU atende as duas (VOZ-04, 2026-09-15).
+  #   · de DENTRO da rede (bot de STT do gateway, probes): IP do container e `coturn`;
+  #   · o BROWSER no host: nenhum dos dois é alcançável. Medido num browser real no Windows
+  #     (Docker Desktop publica as portas no host): o SFU anunciava só o IP do container e o IP
+  #     público do STUN, e o join falhava em `could not establish pc connection`.
+  #   O que o fez conectar, e cada item é necessário:
+  #     `enable_loopback_candidate` — ACRESCENTA 127.0.0.1 aos candidatos (não troca: `node_ip`
+  #        trocaria e derrubaria os clientes de dentro);
+  #     `udp_port` ÚNICO publicado 1:1 — com faixa de portas o UDP pelo loopback não respondeu
+  #        (22 pedidos, 0 respostas) e só o TCP 7881 conectava; multiplexado, UDP em ~1 s;
+  #     TURN com os DOIS nomes — `coturn` para dentro, `localhost` para o host (só relay: ~2,5 s).
+  #   ⚠️ Serve o PRÓPRIO host. Browser em outra máquina da LAN precisa do IP do host nos
+  #      candidatos e no TURN — não coberto. Gate: ramo A5 de `probe_webrtc_media_plane.sh`.
   livekit:
-    image: livekit/livekit-server:v1.8.4
+    # VERSÃO do SFU anda junto com a dos clientes de browser (VOZ-04, 2026-09-15). Com a v1.8.4,
+    # medido no browser do host: `livekit-client` 2.20 (Console, npm) e 2.22 (widget, CDN)
+    # publicavam áudio, mas a oferta de VÍDEO nunca era respondida (`NegotiationError:
+    # negotiation timed out`) e o cliente reconectava a cada ~15 s; o cliente 2.9.1 publicava o
+    # mesmo vídeo em 47 ms. Os probes não viam: o SDK Python fala um protocolo que a v1.8.4 aceita.
+    image: livekit/livekit-server:v1.13.6
     ports:
       - "7880:7880"           # sinalização HTTP/WS + API de servidor (Twirp)
       - "7881:7881"           # ICE sobre TCP
-      - "50000-50020:50000-50020/udp"   # ICE/RTP sobre UDP
+      - "7882:7882/udp"       # ICE/RTP sobre UDP, porta unica multiplexada
     environment:
       LIVEKIT_CONFIG: |
         port: 7880
         log_level: info
         rtc:
           tcp_port: 7881
-          port_range_start: 50000
-          port_range_end: 50020
+          udp_port: 7882
           use_external_ip: false
+          enable_loopback_candidate: true
           turn_servers:
             - host: coturn
+              port: 3478
+              protocol: udp
+              username: plughub
+              credential: changeme_turn_credential_demo
+            - host: localhost
               port: 3478
               protocol: udp
               username: plughub

@@ -1627,9 +1627,15 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 > demo sobe `livekit` (`auto_create: false`) e `coturn`, e **sem credencial o provider RECUSA
 > nomeando a env** (`WebRTCProviderUnavailable`); o canal fecha a porta antes de autenticar e rotear.
 > O SFU real achou código que nunca tinha rodado (`with_ttl(int)`: nenhum token real podia ser
-> assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. ⚠️ **O que ainda NÃO existe:** contato
-> ponta a ponta com agente no browser (`VOZ-04`), endereço alcançável de fora da rede do compose,
-> egress (`VOZ-06`), bot leg (`VOZ-05`).
+> assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. **Contato ponta a ponta validado com
+> gente no browser em 2026-09-15** (`VOZ-04`; roteiro `docs/guias/roteiro-validacao-webrtc-console.md`).
+> ⚠️ **O que ainda NÃO existe:** mídia para browser em OUTRA máquina da rede (o demo serve o próprio
+> host — loopback, UDP único e TURN com dois nomes), egress (`VOZ-06`), bot leg (`VOZ-05`).
+
+- **Versões do LiveKit andam JUNTAS** — SFU no compose, `livekit-client` do Console (lockfile) e do
+  widget (versão exata no CDN). SFU v1.8.4 com clientes 2.20/2.22 publicava áudio e não vídeo, sem
+  nada vermelho: os probes usam o SDK Python, que negocia com o servidor antigo. Mudou uma, repita o
+  roteiro; o `gate_webrtc_console_live.sh` (L3 trilhas · L5 sinal de áudio) é o instrumento.
 
 - **`GET /webrtc/token/{sid}` exige Bearer + capacidade por papel no pool da sessão**
   (`agent_assist.atender` publica · `contacts.monitorar` assina oculto), e a identidade na sala vem

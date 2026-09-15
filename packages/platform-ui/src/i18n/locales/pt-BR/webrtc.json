@@ -10,7 +10,8 @@
     "waitingRoom": "Aguardando sala",
     "error":       "Erro de conexão: {{message}}",
     "micMuted":    "Microfone silenciado",
-    "listening":   "Ouvindo"
+    "listening":   "Ouvindo",
+    "enableAudio": "O navegador bloqueou o áudio da chamada — clique para ativar"
   },
   "controls": {
     "mute":        "Silenciar microfone",

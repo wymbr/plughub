@@ -1,5 +1,157 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (19) — VOZ-04: vídeo nos dois sentidos, e ninguém ouvia ninguém
+
+### 1 · O que a 2ª execução do roteiro mostrou, e o que foi medido
+
+Com o SFU v1.13.6 o vídeo passou nos dois sentidos; o áudio não, dos dois lados.
+
+- `gate_webrtc_console_live.sh`: **VERDE** — as duas trilhas de áudio publicadas e não mudas.
+- Ouvinte oculto na sala da chamada real, medindo o sinal: agente RMS 149 / pico 4029, cliente RMS 36
+  / pico 1513. **Som de verdade chegava ao SFU.** O defeito era de reprodução.
+- **Console:** nada anexava trilha de áudio. O `VideoGrid` só anexa a de vídeo, e nenhum outro
+  componente (agente ou supervisor) tocava as de áudio — elas chegavam ao browser e iam para lugar
+  nenhum. Achado por leitura e confirmado pela ausência: `grep` de `Track.Kind.Audio` + `attach` no
+  módulo inteiro dava só o toggle de microfone.
+- **Widget:** o código anexa um `<audio>`. Reproduzido num browser controlado com um tom de 440 Hz
+  numa sala isolada: o elemento toca (`paused=false`, `currentTime` andando) e a trilha recebida tem
+  energia. O que ficou sem medida é o **Chrome do dono** — a hipótese é autoplay bloqueado, e o
+  widget não dizia nada quando isso acontecia.
+
+### 2 · O que mudou
+
+- **`RemoteAudio`** (novo): um `<audio>` fora da tela para cada trilha de áudio remota. Renderizado na
+  sobreposição do agente **e** na visão do supervisor (supervisão é escuta; chamada só de voz não
+  tem grade de vídeo nenhuma, por isso não mora no `VideoGrid`).
+- **Autoplay deixa de ser mudo:** o hook escuta `AudioPlaybackStatusChanged` e expõe
+  `audioBlocked`/`startAudio`; a sobreposição e o supervisor mostram *"O navegador bloqueou o áudio
+  da chamada — clique para ativar"* (i18n en/pt-BR); o widget mostra o mesmo aviso clicável.
+
+### 3 · Gate
+
+- `probe_webrtc_agent_console.sh` **A8**: a sobreposição e o supervisor renderizam um componente que
+  anexa trilhas de `Track.Kind.Audio`; hook e widget tratam a recusa de autoplay. Contra o `HEAD`:
+  **os dois reprovam**.
+- `gate_webrtc_console_live.sh` **L5**: ouvinte oculto mede o sinal das trilhas de agente e cliente
+  (pico > 50; silêncio digital reprova). Conferido em pool de fixture (`probe_voz04_audio`, criado
+  porque o Console do dono estava no `probe_voz04_webrtc`): tom → **VERDE** (RMS ~4200); silêncio →
+  **VERMELHO no L5 com o L3 verde**, que é exatamente o caso que o L3 não distingue. Que o browser
+  TOQUE o som continua sendo o V4 do roteiro — nenhum instrumento de servidor alcança o alto-falante.
+- `tsc` limpo; imagem do platform-ui reconstruída (container = tag).
+
+### 4 · 3ª execução do roteiro — e a VOZ-04 fecha
+
+O dono refez a chamada: **vídeo, áudio e texto nos dois sentidos**. A `VOZ-04` foi para o `done.md`.
+Fechá-la destravou duas fichas que a citavam como bloqueio (o ramo G do `probe_task_ledger` reprovou
+até ajustá-las): a `VOZ-06` passa a `aberto` (o egress tem sobre o que gravar) e a `NIV-07` fica
+bloqueada só pela `VOZ-02`, na metade SIP. ⚠️ Da tabela V1–V9, a rodada reportou mídia e texto; o
+encerrar pelo widget (V9) é o que os probes automáticos já cobrem.
+
+## 2026-09-15 (18) — VOZ-04: na chamada de gente, o vídeo não publicava — SFU atrás dos clientes
+
+### 1 · O que a execução do roteiro mostrou
+
+Primeira rodada do dono (agente no Console, cliente no widget, mesma máquina, câmeras reais): texto
+nos dois sentidos, mas nada de vídeo; o Console preso em *"Connecting to room…"*. Medido:
+
+- ICE **funcionando**: os dois entraram pelo `127.0.0.1:7882` (o item 4 de (17) estava certo), e o
+  `gate_webrtc_console_live.sh` saiu L1/L2/L4 verdes e **L3 vermelho** — agente sem trilha, cliente
+  só com áudio. O gate assistido fez o que devia: separou "entrou na sala" de "a mídia atravessa".
+- No SFU: os dois lados **saíam e reentravam a cada ~15 s** (`CLIENT_REQUEST_LEAVE`), republicando só
+  o áudio.
+
+### 2 · Causa, reproduzida sem câmera e sem a plataforma
+
+Sala LiveKit isolada, vídeo sintético de canvas publicado pelo browser do host:
+
+| cliente no browser | SFU | publicar vídeo |
+|---|---|---|
+| `livekit-client` 2.22.3 (widget, CDN `@2` flutuante) | v1.8.4 | oferta nunca respondida: `NegotiationError: negotiation timed out` em 15 s → reconecta → repete. O cliente avisava *"Consider upgrading your LiveKit server version"* |
+| 2.9.1 (da época do servidor) | v1.8.4 | publica em **47 ms**, estável |
+| 2.22.3 | **v1.13.6** | áudio em 43 ms, vídeo em 52 ms (simulcast `q`/`h` enviando), estável |
+
+O Console usa 2.20.0 (npm) — o mesmo lado da falha. **Por que nenhum gate viu:** os probes publicam
+vídeo com o SDK **Python**, que negocia com o servidor antigo; só um browser atual reprovava.
+
+### 3 · O que mudou
+
+- `livekit/livekit-server` **v1.8.4 → v1.13.6** no compose demo (versão estável com semanas de uso;
+  a v1.13.7 saíra no dia anterior). A config inteira foi aceita sem mudança.
+- Widget: `livekit-client@2` → **`@2.22.3`**. Versão flutuante é como o cliente andou à frente do SFU
+  sem commit nenhum.
+
+### 4 · Gate
+
+- `probe_webrtc_media_plane.sh` **ramo A6**: o widget carrega versão EXATA do CDN. Contra o widget do
+  `HEAD`: reprova (`['2']`). *(Um ramo que conferisse o lockfile do Console foi escrito e retirado:
+  o lockfile sempre trava, e ele nunca reprovaria.)*
+- Com o SFU novo: `probe_webrtc_media_plane` (inteiro, clientes Python com vídeo e relay),
+  `probe_webrtc_participant_media` e `probe_webrtc_pool_media_policy` **verdes** (os dois últimos
+  saíram do INCONCLUSIVO: havia contato aberto para amostrar).
+- ⚠️ `probe_webrtc_agent_console` e `probe_webrtc_contact_entry` saíram **vermelhos, e não por
+  regressão**: o Console do dono estava logado em `probe_voz04_webrtc`, pegou os contatos dos probes
+  (bridge: `human_members=['human-c30b50d9…']`) e a fila ficou vazia porque havia agente pronto.
+  Precisam ser repetidos com o Console fora desse pool.
+
+## 2026-09-15 (17) — VOZ-04: a mídia chega ao browser do host, e o roteiro com gente está pronto
+
+### 1 · Vermelho ao vivo, num browser de verdade
+
+Browser do próprio host (Chromium no Windows; o Docker Desktop publica as portas do SFU no host),
+contato real aberto por script e o token do cliente usado no `livekit-client` da página do widget:
+
+| config | resultado |
+|---|---|
+| a de antes | sinalização em `ws://localhost:7880` passa; mídia **falha** em ~17 s (`could not establish pc connection`). Candidatos anunciados: `172.18.0.30` (container) e o IP **público** vindo do STUN — nenhum alcançável do host |
+| + `enable_loopback_candidate` | conecta em ~1,5 s, mas **só por TCP** `127.0.0.1:7881`. Com a faixa `50000-50020/udp`, o UDP pelo loopback: 22 pedidos, **0 respostas** |
+| + `udp_port: 7882` única, publicada 1:1 | conecta em ~1,1 s por **UDP** `127.0.0.1:7882` |
+| TURN só com `localhost` | o browser conecta só por relay (~2,6 s), mas o ramo D2 do `probe_webrtc_media_plane` — relay de DENTRO da rede — perderia o TURN |
+| TURN com `coturn` **e** `localhost` | browser: direto ~1,1 s e só relay ~2,5 s; por dentro: probe inteiro **verde**, D2 incluído |
+
+### 2 · Decisão para o demo
+
+**O browser do próprio host.** Duas populações de cliente usam o mesmo SFU, e cada mudança
+**acrescenta** endereço sem tirar o da outra: `node_ip` trocaria os candidatos e derrubaria o bot
+de STT e os probes, que falam de dentro da rede. Browser em outra máquina da LAN precisa do IP do
+host nos candidatos e no TURN — decisão de topologia de deploy, fora do demo, e dita no compose.
+
+### 3 · Gate
+
+**`probe_webrtc_media_plane.sh`, ramo A5** (config RESOLVIDA): loopback ligado; porta UDP única e
+TCP publicadas 1:1; TURN anunciado com um nome do compose **e** um que não é; URL pública fora do
+compose e com a porta publicada. Contra o compose do `HEAD`: **3 de 4 reprovam** (a URL pública já
+estava certa desde a VOZ-01). A conexão do browser só se mede com browser: foi medida nesta entrega
+e volta no roteiro abaixo.
+
+Vizinhos com o SFU novo: `probe_webrtc_media_plane` (inteiro, D2 por relay incluído),
+`probe_webrtc_agent_console`, `probe_webrtc_contact_entry`, `probe_gates_manifest_coverage`
+(351 scripts), `probe_edge_surface`, `probe_task_ledger`, `check_config_invariants` — verdes;
+`participant_media` e `pool_media_policy` seguem INCONCLUSIVO no ramo D, sem amostra, como em (15).
+
+### 4 · Item 5 — roteiro para gente
+
+- **`docs/guias/roteiro-validacao-webrtc-console.md`**: criar o pool `webrtc_atendimento` pela tela
+  (com a política de mídia), agente no Console, cliente no widget, V1–V9 a marcar.
+- **`gate_webrtc_console_live.sh`** (assistido, `!` no manifesto): rodado DURANTE a chamada, lê o
+  stream e o SFU — L1 atribuído a humano · L2 agente e cliente na sala · L3 os dois publicando áudio
+  e vídeo não mudos · L4 identidade na sala = instância atribuída. Conferido sem gente: sem chamada
+  → **INCONCLUSIVO**; chamada sintética com áudio e vídeo dos dois lados → **VERDE**; agente só com
+  áudio → **VERMELHO** no L3.
+- **Widget:** o seletor oferecia `webrtc_ia`, `webrtc_voice` e `webrtc_text`, pools que **não existem**
+  no registry; virou campo com o pool do roteiro como padrão e `?pool=` para trocar. Medido pelo
+  widget no browser do host: `room.state = connected` (câmera bloqueada no navegador de teste, então
+  seguiu em texto — a mídia com câmera é o roteiro).
+
+### 5 · Achado à parte — `AGH-01`
+
+Ao validar o widget, o contato foi atribuído a uma instância de agente que **não tinha mais
+socket**. Causa, lida no código e confirmada no log: o mcp-server guarda o timer de desregistro do
+agente (2,5 s) **só por pool**, e qualquer login no mesmo pool dentro da janela o cancela — inclusive
+de outro usuário. Minhas conexões headless em sequência deixaram três fantasmas; removidas
+reconectando e fechando cada uma com 5 s de intervalo (que é também o controle). O contador de
+conexões vivas por (usuário, pool), da mesma função, já cobre a reconexão legítima; o cancelamento
+por pool sobrou. Registrado, não consertado aqui.
+
 ## 2026-09-15 (16) — VOZ-04, fatia 3: o texto já chegava; a hora é que não
 
 ### 1 · A premissa, refutada antes de escrever código

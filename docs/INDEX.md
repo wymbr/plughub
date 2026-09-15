@@ -310,6 +310,7 @@ Padrões e workflows que cruzam múltiplos pacotes.
 | [guias/orchestrator-working-memory.md](guias/orchestrator-working-memory.md) | Working memory para orquestradores em loop |
 | [guias/abac-permission-system.md](guias/abac-permission-system.md) | Sistema ABAC — `makePermissions()`, `modules.yaml`, scope por pool |
 | [guias/gitagent.md](guias/gitagent.md) | GitAgent — artefatos, certificação, regeneração, deploy |
+| [guias/roteiro-validacao-webrtc-console.md](guias/roteiro-validacao-webrtc-console.md) | Roteiro assistido — contato WebRTC com agente humano no browser (VOZ-04): passos, V1–V9, gate ao vivo |
 | [guias/webhook-patterns.md](guias/webhook-patterns.md) | Webhooks — padrões trigger e resume; comportamento do step `collect` |
 | [guias/timeouts-e-deteccao-de-falhas.md](guias/timeouts-e-deteccao-de-falhas.md) | Timeouts, CrashDetector, heartbeat, TTLs por componente |
 | [guias/conferencia-agente-ia-mapeamento.md](guias/conferencia-agente-ia-mapeamento.md) | **Obsoleto** — mapeamento de gaps já implementados |

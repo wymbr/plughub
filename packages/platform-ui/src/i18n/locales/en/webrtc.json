@@ -10,7 +10,8 @@
     "waitingRoom": "Waiting for room",
     "error":       "Connection error: {{message}}",
     "micMuted":    "Microphone muted",
-    "listening":   "Listening"
+    "listening":   "Listening",
+    "enableAudio": "The browser blocked the call audio — click to enable"
   },
   "controls": {
     "mute":        "Mute microphone",
