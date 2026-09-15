@@ -74,12 +74,10 @@ PLATFORM_ROLES: dict[str, RolePolicy] = {
     BOT:        RolePolicy(publish=frozenset({AUDIO}), subscribe=True, hidden=True),
 }
 
-# O que cada tipo de atendente CONSOME da mídia do cliente.
+# O que cada tipo de atendente CONSOME da mídia do cliente, SOZINHO.
 #   human        — está num browser: recebe áudio e vídeo (receber não exige câmera).
-#   native       — agente de IA do skill-flow: lê TEXTO. Passa a consumir áudio quando o
-#   external-mcp   bot leg existir (VOZ-05) e vídeo quando houver avatar (VOZ-14) — e
-#                  essa capacidade vem do DEPLOY do pool, não desta tabela. Hoje não há
-#                  deploy com bot leg de onde derivá-la.
+#   native       — agente de IA do skill-flow: lê TEXTO. Consome ÁUDIO só por meio do bot
+#   external-mcp   leg (VOZ-05, ver `AI_FRAMEWORKS`), e vídeo quando houver avatar (VOZ-14).
 # Framework ausente ou desconhecido consome NADA: o restritivo vence, e o adapter loga.
 CONSUMES_BY_FRAMEWORK: dict[str, frozenset[str]] = {
     "human":        frozenset({AUDIO, VIDEO}),
@@ -87,10 +85,39 @@ CONSUMES_BY_FRAMEWORK: dict[str, frozenset[str]] = {
     "external-mcp": frozenset(),
 }
 
+# O bot leg tem DOIS usos, e cada um pede um provedor diferente (modelo do dono, 2026-09-15):
+#   TRANSCREVER — toda chamada com áudio é transcrita, cliente e humano, cada um no seu canal:
+#                 o módulo de qualidade avalia sobre a transcrição. Pede STT.
+#   CONVERTER   — o agente de IA lê TEXTO (ADR V4): ouve o cliente pelo que o STT transcreve e
+#                 fala pelo TTS. Pede STT **e** TTS.
+AI_FRAMEWORKS:     frozenset[str] = frozenset({"native", "external-mcp"})
+AUDIO_FRAMEWORKS:  frozenset[str] = frozenset({"human"}) | AI_FRAMEWORKS
 
-def attendant_consumes(framework: str) -> frozenset[str]:
-    """O que um atendente deste framework consome. Desconhecido → nada."""
-    return CONSUMES_BY_FRAMEWORK.get(framework, frozenset())
+
+def attendant_consumes(framework: str, bot_leg_audio: bool = False) -> frozenset[str]:
+    """
+    O que um atendente deste framework consome. Desconhecido → nada.
+
+    `bot_leg_audio` é fato do GATEWAY (há STT e TTS de verdade para converter): com ele, o
+    agente de IA passa a consumir áudio. Sem ele, nunca — ausência não vira permissão.
+    """
+    base = CONSUMES_BY_FRAMEWORK.get(framework, frozenset())
+    if bot_leg_audio and framework in AI_FRAMEWORKS:
+        return base | {AUDIO}
+    return base
+
+
+def bot_leg_needs(attendants: dict[str, dict]) -> dict[str, bool]:
+    """
+    O que a chamada PEDE ao bot leg, pelo pool de quem atende — independe de o bot leg existir:
+      transcribe  algum atendente de áudio (humano ou IA) cujo pool oferece áudio ao cliente;
+      convert     algum agente de IA nessa condição (precisa ouvir por STT e falar por TTS).
+    """
+    com_audio = [a for a in attendants.values() if AUDIO in (a.get("customer_publish") or [])]
+    return {
+        "transcribe": any(a.get("framework") in AUDIO_FRAMEWORKS for a in com_audio),
+        "convert":    any(a.get("framework") in AI_FRAMEWORKS for a in com_audio),
+    }
 
 
 def _kinds(value: object) -> tuple[frozenset[str], list[str]]:
@@ -138,15 +165,17 @@ def attendant_from_pool_field(framework: str, pool_field: dict) -> tuple[dict, s
     return record, None
 
 
-def customer_ceiling(attendants: dict[str, dict]) -> frozenset[str]:
+def customer_ceiling(attendants: dict[str, dict], bot_leg_audio: bool = False) -> frozenset[str]:
     """
     Teto do cliente: UNIÃO, sobre os atendentes, de (`customer_publish` ∩ consumo).
 
     `attendants` é `{instance_id: registro}`, com o registro de `attendant_from_pool_field`.
+    `bot_leg_audio`: ver `attendant_consumes`.
     """
     out: set[str] = set()
     for a in attendants.values():
-        out |= frozenset(a.get("customer_publish") or []) & attendant_consumes(a.get("framework", ""))
+        out |= frozenset(a.get("customer_publish") or []) & attendant_consumes(
+            a.get("framework", ""), bot_leg_audio)
     return frozenset(k for k in out if k in KINDS)
 
 

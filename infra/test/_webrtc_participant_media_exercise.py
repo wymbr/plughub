@@ -99,14 +99,16 @@ async def _sfu_perm(lk: api.LiveKitAPI, room_name: str, identity: str) -> tuple[
 async def main() -> None:
     s = Settings()
     s.webrtc_stt_enabled = False
+    # `**kw`: desde a VOZ-05 o teto recebe `bot_leg_audio` — sem ele a mutação levantava
+    # TypeError, o exercício morria antes do C2 e o probe acusava "mutação não reprovou".
     if MODE == "mut_never_falls":
-        media_policy.customer_ceiling = lambda attendants: frozenset({"audio", "video"})
+        media_policy.customer_ceiling = lambda attendants, **kw: frozenset({"audio", "video"})
     elif MODE == "mut_replace":
         _orig = media_policy.customer_ceiling
 
-        def _replace(attendants):
+        def _replace(attendants, **kw):
             last = dict(list(attendants.items())[-1:])
-            return _orig(last)
+            return _orig(last, **kw)
         media_policy.customer_ceiling = _replace
 
     r = aioredis.from_url("redis://redis:6379", decode_responses=True)

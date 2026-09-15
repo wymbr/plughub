@@ -626,13 +626,15 @@ export const ChannelCapabilitySchema = z.enum([
   "audio",        // voice / audio recording (voice, webrtc)
   "video",        // video stream (webrtc)
   "file_upload",  // file / document upload (whatsapp, email, webchat)
-  // ⚠️ Definida pelo MECANISMO, e nomeando o canal. Lida ao pé da letra, nenhum
-  // outro canal jamais qualifica — voz com DTMF+bipe+supressão dá a MESMA garantia
-  // por outro meio e ficaria de fora para sempre. Capacidade deveria descrever a
-  // GARANTIA ("coleta sem que o valor apareça em superfície de leitura"), não a
-  // implementação. Reescrita é a **NIV-05**; aqui fica só o aviso, porque mudar a
-  // definição muda quem pode reivindicá-la — é decisão, não ajuste de comentário.
-  "masked_input", // password-overlay masked field (webchat)
+  // Definida pela GARANTIA, não pelo mecanismo (NIV-05, redação fechada com o dono em
+  // 2026-09-03, aplicada em 2026-09-15 quando o segundo canal a reivindicou): o canal
+  // coleta entrada sem que o valor apareça em nenhuma superfície de leitura CONTROLADA
+  // PELA PLATAFORMA — transcript, histórico durável, e gravação quando a plataforma
+  // grava. Cada canal a cumpre por um meio: webchat por campo de senha; webrtc por campo
+  // protegido no widget, com a fala e o texto livre DESCARTADOS durante a coleta (VOZ-05).
+  // Até aqui dizia `password-overlay masked field (webchat)` — nomeava o mecanismo e o
+  // canal, e por isso nenhum outro jamais qualificaria.
+  "masked_input", // coleta sem o valor em superfície de leitura da plataforma
   "rich_menu",    // buttons / list menus (whatsapp, webchat)
 ])
 export type ChannelCapability = z.infer<typeof ChannelCapabilitySchema>

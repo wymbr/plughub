@@ -503,6 +503,9 @@ async def _emit_outage(
             "session_id": session_id,
             "channel":    event.channel,
             "reason":     "agent_done",   # gateway transport Literal — analytics skips it
+            # Motivo de NEGÓCIO ao cliente (VOZ-16): o mesmo do contact_closed acima. Sem
+            # ele o adapter WebRTC só tinha o `reason` de transporte para mostrar.
+            "close_reason": "no_resource",
             # Fila de sistema: causa queue_full tem mensagem própria (fila cheia
             # ≠ sem atendentes — orienta o cliente a re-tentar mais tarde).
             "farewell_text": routing_config.get(
@@ -670,6 +673,7 @@ async def _emit_queue_timeout(
             "session_id": session_id,
             "channel":    channel,
             "reason":     "agent_done",   # gateway transport Literal — analytics skips it
+            "close_reason": "max_wait_exceeded",   # negócio, ao cliente (VOZ-16)
         }
 
         if queue_agent_active:
@@ -777,6 +781,7 @@ async def _emit_no_resource_drop(
             "session_id": session_id,
             "channel":    event.channel,
             "reason":     "agent_done",
+            "close_reason": "no_resource",         # negócio, ao cliente (VOZ-16)
             "farewell_text": routing_config.get("msg_no_resource"),
         })
     except Exception as exc:

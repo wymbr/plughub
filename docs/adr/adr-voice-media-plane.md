@@ -391,6 +391,45 @@ A4 (o humano finalmente entra na conferência) e é a primeira vez que o canal p
 **e** STT — o que conserta o `collect` morto de A2. A partir daqui a voz tem transcrição, e
 portanto histórico, contexto e avaliação. **Ainda sem telecom.**
 
+> **Decidido em 2026-09-15 (`VOZ-05`).** Provedores **self-hosted** — faster-whisper (STT) e
+> Piper (TTS) em containers do compose, pela mesma razão do V1: a conversão acompanha o deploy, e
+> sem chave de terceiro o probe mede de verdade em vez de sair INCONCLUSIVO.
+>
+> **O bot leg tem dois usos, e cada um pede um provedor** (modelo do dono): **TRANSCREVER** —
+> toda chamada com áudio, lado cliente e lado humano, cada um no seu canal, porque a qualidade
+> avalia sobre a transcrição (pede STT); **CONVERTER** — o agente de IA ouve o que o STT transcreve
+> do cliente e fala por TTS (pede os dois). A transcrição de qualidade é evento por FALANTE, não
+> mensagem de chat: com humano atendendo, a fala transcrita não pode entrar na conversa como se
+> tivesse sido digitada.
+>
+> **Fatia 1 medida antes:** sem chave, o STT era um `MockSTTProvider` que entrava oculto na sala,
+> consumia o áudio e não produzia nada, sem log — a degradação muda que o invariante 2 proíbe. E o
+> gatilho *"o teto do cliente tem áudio"* nunca dava áudio à IA, que consome texto, também sem
+> dizer. Hoje o bot entra quando há atendente de áudio e há STT; a IA consome áudio só com STT e
+> TTS; o que falta vira `customer.bot_leg` no estado de mídia. Gate `probe_webrtc_bot_leg_gate.sh`.
+>
+> **Fatia 2 (2026-09-15):** serviço `speaches` (faster-whisper + Piper) no compose, fixado por
+> digest, modelos provisionados pela API do próprio serviço; STT medido com fala real sintetizada
+> pelo mesmo serviço — a frase do cliente chega ao bridge ~1,5 s depois do fim da fala, em CPU
+> (int8, 8 threads: 2,4 s → 1,1 s por fala de 2 s). O bot assina **só** a trilha do cliente. ⚠️ Com
+> STT real, o bot **não entra em chamada só de humano** enquanto a transcrição de qualidade não tiver
+> destino próprio: o único que existe é a mensagem de chat, e a fala do cliente apareceria no Console
+> como digitada. Gate `probe_webrtc_stt_speaches.sh`.
+>
+> **Dado sensível em chamada — decidido em 2026-09-15.** Coleta mascarada **nunca é falada**. No
+> WebRTC o valor entra por **campo protegido no widget** (fatia A, feita): o `menu` chega ao cliente
+> com os campos protegidos e volta como `menu_result`, e **enquanto a coleta espera** a fala
+> transcrita e o texto livre são **descartados** — o bridge entrega ao menu que espera qualquer
+> resposta do cliente, e só redige campo a campo o `menu_result`; uma fala durante a espera viraria o
+> valor, em claro no histórico e no log dele. Na voz o valor entra **só por DTMF**, com eco
+> configurável (beep · nada · tecla digitada — NIV-06/NIV-08). A captura falada protegida (trilha
+> cortada, gravação pausada, turno só para o fluxo) foi considerada e **descartada pelo dono**. É com
+> esta garantia que o webrtc declara `masked_input` (NIV-05). ⚠️ Condição que a gravação herda: em
+> V-F3 a gravação **pausa** no bloco mascarado, ou a declaração deixa de ser verdade. Menu e
+> formulário em canal que não é webchat viram coleta unitária sequencial; em voz, orientação e
+> opções verbalizadas, uma tecla por opção, com barge-in (NIV-13). Gate
+> `probe_webrtc_masked_keypad.sh`.
+
 **V-F3 — gravação.** Por segmento, com aviso e opt-out (V7), no AttachmentStore com classe de
 retenção (V5). Requer a decisão de retenção de A5 tomada antes.
 

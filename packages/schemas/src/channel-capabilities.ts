@@ -67,7 +67,9 @@ export const CHANNEL_CAPABILITIES: Readonly<Record<Channel, readonly ChannelCapa
   // discussão nasceu — repetir aqui criaria duas versões do mesmo raciocínio.
   voice:     ["audio"],
   webchat:   ["text", "file_upload", "rich_menu", "masked_input"],
-  webrtc:    ["text", "audio", "video", "file_upload"],
+  // `masked_input` desde a VOZ-05 (fatia A): campo protegido no widget e, durante a
+  // coleta, fala transcrita e texto livre descartados. O detalhe mora no gêmeo Python.
+  webrtc:    ["text", "audio", "video", "file_upload", "masked_input"],
   instagram: ["text", "file_upload"],
   telegram:  ["text", "file_upload", "rich_menu"],
   // `webhook` é o canal de WORKFLOW (Arc 19): não há cliente do outro lado, logo
@@ -95,7 +97,7 @@ export function channelSatisfies(
 /** Capacidade exigida por qualquer coleta de valor mascarado. */
 export const MASKED_INPUT: ChannelCapability = "masked_input"
 
-/** Canais que sabem coletar valor mascarado — hoje, só o webchat. */
+/** Canais que sabem coletar valor mascarado — lidos da tabela, nunca listados à mão. */
 export function maskingChannels(): Channel[] {
   return (Object.keys(CHANNEL_CAPABILITIES) as Channel[])
     .filter((c) => CHANNEL_CAPABILITIES[c].includes(MASKED_INPUT))

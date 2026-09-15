@@ -1,0 +1,32 @@
+{
+  "skill_id": "skill_probe_masked_keypad_v1",
+  "name": "Probe — coleta mascarada por canal (VOZ-05 fatia A)",
+  "version": "1.0",
+  "description": "Fixture do probe_webrtc_masked_keypad: form com email claro e senha/codigo_2fa mascarados; o desfecho da validacao vira um aviso DISTINTO ao cliente, para o probe saber que o valor chegou ao fluxo. Nao depende de identidade do cliente (o skill_auth_form_v1 depende: @ctx.caller.customer_id nulo quebra o validate_pin).",
+  "classification": {"type": "orchestrator", "domain": "security"},
+  "flow": {
+    "entry": "tx",
+    "steps": [
+      {"id": "tx", "type": "begin_transaction", "on_failure": "falhou"},
+      {"id": "coletar", "type": "menu", "interaction": "form", "prompt": "Probe: preencha os dados de acesso", "timeout_s": 120,
+       "output_as": "dados",
+       "fields": [
+         {"id": "email", "label": "E-mail", "type": "text"},
+         {"id": "senha", "label": "Senha", "type": "text", "masked": "credential"},
+         {"id": "codigo_2fa", "label": "Codigo 2FA", "type": "text", "masked": "credential"}
+       ],
+       "on_success": "validar", "on_failure": "falhou", "on_timeout": "falhou"},
+      {"id": "validar", "type": "invoke", "target": {"mcp_server": "mcp-server-auth", "tool": "validate_pin"},
+       "input": {"pin": "@masked.senha"}, "output_as": "validacao", "on_success": "decidir", "on_failure": "falhou"},
+      {"id": "decidir", "type": "choice",
+       "conditions": [{"field": "$.pipeline_state.validacao.valid", "operator": "eq", "value": true, "next": "tx_fim"}],
+       "default": "invalido"},
+      {"id": "invalido", "type": "notify", "message": "PROBE_PIN_INVALIDO", "on_success": "tx", "on_failure": "falhou"},
+      {"id": "tx_fim", "type": "end_transaction", "result_as": "auth", "on_success": "valido"},
+      {"id": "valido", "type": "notify", "message": "PROBE_PIN_VALIDO", "on_success": "fim", "on_failure": "fim"},
+      {"id": "falhou", "type": "notify", "message": "PROBE_FALHOU", "on_success": "fim_falha", "on_failure": "fim_falha"},
+      {"id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "probe: pin valido recebido"},
+      {"id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "probe: fluxo falhou"}
+    ]
+  }
+}

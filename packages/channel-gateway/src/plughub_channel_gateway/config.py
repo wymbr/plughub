@@ -255,6 +255,15 @@ class Settings(BaseSettings):
     webrtc_default_pool_id:         str = ""
     # Enable STT transcription of the customer audio track (Deepgram streaming).
     webrtc_stt_enabled:             bool = True
+    # VOZ-05 — conversão de voz do bot leg. `speaches` = serviço AUTO-HOSPEDADO do compose
+    # (faster-whisper + Piper, decisão do dono). Vazio = cai no par legado Deepgram/ElevenLabs,
+    # que exige chave; sem nenhum, o bot leg fica INDISPONÍVEL e diz o que falta.
+    # ⚠️ Os modelos têm de ser os que o serviço `speaches-models` provisiona.
+    webrtc_speech_provider:         str = ""
+    webrtc_speaches_url:            str = ""
+    webrtc_stt_model:               str = "Systran/faster-whisper-small"
+    webrtc_tts_model:               str = "speaches-ai/piper-pt_BR-faber-medium"
+    webrtc_tts_voice:               str = "faber"
     # Enable TTS injection via LiveKit LocalAudioTrack (AI agents).
     # Requires livekit full SDK (pip install livekit), not just livekit-api.
     webrtc_tts_injection_enabled:   bool = False

@@ -86,10 +86,10 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     #       CTI a gravação é do PABX: **não é superfície da plataforma**. O que
     #       sobrevive do argumento é só a NIV-07 — out-of-band é NEGOCIADO no SDP, e
     #       garantia sem mecanismo que a imponha é promessa.
-    #   (c) **a definição da capacidade exclui voz por construção** — o enum diz
-    #       `masked_input // password-overlay masked field (webchat)`, ou seja,
-    #       descreve o MECANISMO e nomeia o canal. Enquanto for assim, nenhum avanço
-    #       em (a) ou (b) torna voz elegível: o gatilho não fecha → **NIV-05**.
+    #   (c) ~~**a definição da capacidade exclui voz por construção**~~ — o enum dizia
+    #       `password-overlay masked field (webchat)`. **Resolvido em 2026-09-15**
+    #       (NIV-05): a definição passou a ser a GARANTIA, aplicada quando o webrtc a
+    #       reivindicou. Para `voice` sobram (a) e (b).
     #
     # ⚠️ Nada disto restringe o TRATAMENTO de eco em voz, que é outro eixo e está
     # intacto: `EchoMode` (`plain` verbaliza o dígito · `masked` bipa · `none` cala)
@@ -98,7 +98,18 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     # mascarado —, não a capacidade de tratar o eco.
     "voice":     frozenset({"audio"}),
     "webchat":   frozenset({"text", "file_upload", "rich_menu", "masked_input"}),
-    "webrtc":    frozenset({"text", "audio", "video", "file_upload"}),
+    # `masked_input` desde 2026-09-15 (VOZ-05, fatia A), pela GARANTIA da NIV-05 — o valor
+    # não aparece em superfície de leitura controlada pela plataforma:
+    #   · o valor entra por campo protegido do widget (`webrtc.menu_submit`), e o histórico
+    #     recebe a linha REDIGIDA pela mesma casa do webchat (`menu_result_history_text`);
+    #   · durante a coleta, a fala transcrita e o texto livre NÃO são publicados — o bridge
+    #     os entregaria ao menu como o valor, em claro (`WebRTCAdapter._masked_capture_active`);
+    #   · gravação: a plataforma ainda não grava WebRTC (egress é a VOZ-06). O dia em que
+    #     gravar, a gravação PAUSA no bloco mascarado, ou esta linha deixa de ser verdade.
+    # ⚠️ O que a garantia NÃO cobre, por não ser superfície de leitura da plataforma: o
+    # áudio ao vivo que um humano em conferência ouve se o cliente DISSER o valor. Isolar a
+    # perna no bloco mascarado é o controle (2) da NIV-07, e chega com a coleta falada.
+    "webrtc":    frozenset({"text", "audio", "video", "file_upload", "masked_input"}),
     # Entraram na NIV-01 para que a ausência deixasse de ser silenciosa. As duas são
     # canais de mensagem com mídia; nenhuma tem superfície de entrada mascarada.
     "instagram": frozenset({"text", "file_upload"}),

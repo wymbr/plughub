@@ -42,9 +42,9 @@
 #          (c) a negociação out-of-band do DTMF não é asserida (NIV-07);
 #          (d) `masked` + `input_mode: voice` não é recusado — aí o cliente FALA
 #              o valor e o STT o transcreve, e nenhum RFC ajuda (NIV-08);
-#          (e) a definição da capacidade é por MECANISMO
-#              (`password-overlay … (webchat)`), o que exclui voz por
-#              construção — enquanto for assim, nada acima basta (NIV-05).
+#          (e) ~~a definição da capacidade é por MECANISMO~~ — resolvida em
+#              2026-09-15 (NIV-05): definida pela GARANTIA quando o webrtc a
+#              reivindicou.
 #        ⚠️ **NÃO** está na lista "DTMF decodificável da gravação": era o
 #        impedimento que eu citava e ele está ERRADO para SIP/WebRTC (o dígito
 #        viaja fora do áudio) e inaplicável em CTI (a gravação é do PABX).
@@ -123,8 +123,8 @@ if "masked_input" in tabela.get("voice", set()):
     print("ERRO|E|`voice` declara masked_input — seguem de pe: canal nao provisionado "
           "(Arc 15), tratamento de eco INEXISTENTE no adapter (NIV-06, zero ocorrencias "
           "de masked em voice.py), negociacao out-of-band nao asserida (NIV-07), "
-          "`input_mode: voice` nao recusado (NIV-08) e a definicao da capacidade por "
-          "MECANISMO, que exclui voz por construcao (NIV-05)")
+          "`input_mode: voice` nao recusado (NIV-08). A definicao por MECANISMO (NIV-05) "
+          "ja caiu em 2026-09-15 — ela nao e mais impedimento")
 else:
     quem = sorted(ch for ch, cs in tabela.items() if "masked_input" in cs)
     print("OK|E|masked_input so em %s; voice permanece fora (gatilho no registry)" % quem)

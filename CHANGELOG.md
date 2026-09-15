@@ -1,5 +1,242 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (25) — VOZ-05 fatia mascarada A: o cliente WebRTC entrega um valor protegido, e nada mais sai
+
+**O que havia, medido antes.** `set-next` de skill mascarado em pool só-WebRTC: **422
+`masked_sem_canal_capaz`** — seguro por RECUSA. Mas o motivo de a recusa ser necessária ia além da
+tabela: **o menu do WebRTC não funcionava nem sem máscara** (o adapter mandava o menu aninhado em
+`payload` e gravava a resposta como envelope JSON em `menu:result:{sid}`, chave e formato que o motor
+não lê; o widget lia e mandava outras chaves). E havia um buraco esperando a declaração: o bridge
+entrega ao menu que espera **qualquer** resposta do cliente, e só redige campo a campo o
+`menu_result` — uma fala transcrita (`text`) durante a coleta viraria o valor do formulário, em claro.
+Com a capacidade declarada e o gateway ainda antigo, o probe ao vivo ficou vermelho em K1 (formulário
+não chega) — o vermelho do CANAL, não só o do deploy.
+
+**Decisões do dono (2026-09-15).** A (padrão): campo protegido no widget. B era captura falada
+protegida — **substituída** na mesma data: dado mascarado em voz é **só DTMF**, com eco beep · nada ·
+tecla digitada; a NIV-08 fica de pé. E menu/form em canal que não é webchat vira **coleta unitária
+sequencial**; em voz, verbalizada, uma tecla por opção, com barge-in (nova `NIV-13`).
+
+**Feito.**
+- **NIV-05 fechada:** `masked_input` passa a ser definida pela GARANTIA (a redação de 2026-09-03) e o
+  webrtc a declara, no canônico TS e no gêmeo Python. O comentário do gêmeo diz o que a garantia NÃO
+  cobre (áudio ao vivo a um humano em conferência, se o cliente disser o valor) e a condição que a
+  gravação herda (pausar no bloco, quando existir).
+- **Gateway:** `deliver_menu` manda o menu PLANO com `masked_fields`; `webrtc.menu_submit` publica o
+  `menu_result` com o valor real e grava no histórico a linha REDIGIDA — por
+  `menu_result_history_text`, extraída do `_handle_menu_submit` do webchat (uma casa para os dois;
+  sem ela o segundo canal copiaria o cálculo). Menu desconhecido depois de restart: usa a declaração
+  do motor em `menu:waiting`; sem nenhuma, redige a resposta inteira e diz. `interaction_reply`
+  recusado com `conn.error`.
+- **Durante a coleta** (`menu:waiting` com máscara, mais uma folga de 5 s nas duas bordas que a chave
+  não vê — fala em curso quando o menu chega, fala terminando depois da submissão): fala transcrita
+  **descartada** (log só com a contagem de caracteres; o cliente é avisado) e texto livre
+  **recusado** (`masked_capture_active`). Leitura do Redis que falha conta como ATIVA.
+- **Widget:** form com `type=password` nos campos protegidos, checklist, botões, texto; eco local
+  nunca mostra o valor.
+
+**Gate `probe_webrtc_masked_keypad.sh`** (fixture própria `skill_probe_masked_keypad_v1`, publicada e
+promovida a cada rodada): A declaração · M0 deploy aceito · K1 form plano com campos protegidos · K2
+texto livre recusado · V1 a fala da coleta, emitida depois da folga local, foi **transcrita e
+descartada** (o log prova que o bot ouviu — sem ele, fala ausente do histórico seria só bot surdo) ·
+V2 cliente avisado · K3 senha inválida → `PROBE_PIN_INVALIDO` e form reaberto · K4 válida →
+`PROBE_PIN_VALIDO` (os dois desfechos provam que o fluxo LEU o valor) · H1 histórico com as duas
+submissões redigidas e nenhuma outra linha do cliente · H2 histórico + stream sem valor, texto livre
+ou fala · H3 logs de gateway, bridge, mcp-server, skill-flow e mcp-server-auth sem os valores.
+**Mutações ao vivo:** coleta nunca ativa → 6 ramos vermelhos, e o **H3 acusou o bridge logando em
+claro** o texto do cliente entregue ao menu; histórico sem redação → H1/H2 vermelhos. Restaurado pela
+imagem, verde. **Unitárias:** 17 testes novos (a casa do histórico, submissão, fallback de restart,
+recusa, fala e texto durante a espera com controles, folga nas duas bordas), 12/12 mutações mortas;
+suíte do gateway 1060 verdes. Os 3 testes que afirmavam o formato antigo foram trocados — o de
+`deliver_menu` aninhava o menu num `content` que produtor nenhum escreve.
+
+**Achado fora do canal (tarefa separada):** o `skill_auth_form_v1` falha sempre que o contato chega
+sem identidade — `customer_id: "@ctx.caller.customer_id"` resolve para `null` e o `validate_pin`
+aceita string opcional, não nulo (`MCP error -32602`). O cliente preenche certo e o fluxo vai para a
+falha, mudo. Por isso a fixture do probe é própria.
+
+## 2026-09-15 (24) — VOZ-05: a conversão de voz vai para a GPU, com a CPU como alternativa
+
+**Medido antes de decidir** (a GPU já era visível ao Docker — runtime `nvidia` do Docker Desktop,
+RTX 4070 Laptop 8 GB —, sem configuração nenhuma): seis frases de atendimento sem número × três vozes
+sintéticas, limpas e com ruído de 15 dB, mais um teste só de dígitos. STT, em segundos de
+processamento por segundo de fala e WER limpo/ruído: `small@cpu` 0,46 s, 4,7%/4,7% · `small@gpu`
+0,10 s, 3,3%/5,6% · **`large-v3-turbo@gpu` 0,17 s, 2,3%/2,3%** · `turbo@cpu` 1,8 s (inviável). TTS,
+síntese ÷ duração: Piper CPU 0,046 · Kokoro CPU 0,25 · Kokoro GPU 0,31 — a GPU não acelera o Kokoro.
+⚠️ A 1ª rodada mediu mal: frases com número deram WER de ~21% em todos os motores, dominado por
+FORMATAÇÃO ("R$123,40" × "cento e vinte e três"), e um dígito "errado" era o extrator descartando
+`A123`. Refeita com as frases numéricas num teste só de dígitos. As vozes são sintéticas: o que a medida
+sustenta é a ORDEM entre motores, não o WER absoluto de microfone real.
+
+**Decisões do dono:** STT `deepdml/faster-whisper-large-v3-turbo-ct2` na GPU; TTS Kokoro voz
+`pf_dora` (escolhida ouvindo as três amostras). Downloads autorizados: imagem `latest-cuda` (2,9 GB
+comprimida, 8,6 GB no disco), turbo (1,6 GB), Kokoro (354 MB).
+
+**Compose:** `speaches` e `speaches-models` na imagem CUDA fixada por digest, com reserva de GPU e
+`float16`; o gateway pede turbo/Kokoro/`pf_dora` por env. **`docker-compose.voice-cpu.yml`** troca,
+nos três serviços que precisam concordar, imagem, dispositivo e modelos (`small` na CPU) — conferido
+com `docker compose config` nas duas composições.
+
+**Gate:** `probe_webrtc_stt_speaches.sh` ganhou **A2** — os modelos que o GATEWAY pede estão
+instalados no serviço (a troca feita num lado só vira 404 a cada fala) —, com mutação (gateway pedindo
+`faster-whisper-medium`, não instalado → A2 reprova) e A3 informativo do dispositivo; a fixture passa a
+usar os modelos e a voz que o gateway usa. Verde na GPU com fala real: **latência fim-da-fala → texto
+1,01 s** (era 1,5 s). Vizinhos verdes: `probe_webrtc_bot_leg_gate`, `probe_webrtc_participant_media`,
+`probe_webrtc_agent_console`, `probe_webrtc_media_plane`, `probe_gates_manifest_coverage`,
+`check_config_invariants`.
+
+## 2026-09-15 (23) — VOZ-05 fatia 2: o agente de IA ouve o cliente, por STT auto-hospedado
+
+**Autorizações do dono:** download da imagem `ghcr.io/speaches-ai/speaches:latest-cpu` (852 MB
+comprimidos, 3,0 GB no disco) e dos modelos `Systran/faster-whisper-small` (486 MB, MIT) e
+`speaches-ai/piper-pt_BR-faber-medium` (63 MB; o card não declara licença). Tamanhos medidos no
+registry e na API do Hugging Face ANTES de baixar.
+
+**Infra:** serviços `speaches` (imagem fixada por digest, sem porta publicada, healthcheck,
+volume `speaches-models`) e `speaches-models` (provisiona pela API do serviço — `POST
+/v1/models/{id}`, 200 baixou / 201 existia; seed-if-absent). Medido antes de fixar: a ida e volta
+TTS→STT direto no serviço devolveu a frase exata; a transcrição de 2,2 s de fala levava **2,4 s**
+morna e caiu para **1,1 s** com `WHISPER__COMPUTE_TYPE=int8` e 8 threads.
+
+**Vermelho ao vivo antes** (`probe_webrtc_stt_speaches.sh`, com o serviço já no ar e o controle S1
+verde): o gateway sem provedor — IA de áudio atende, cliente sem áudio e sem bot, estado *"chamada
+NAO transcrita … agente de IA sem voz"*.
+
+**Conserto:**
+- `adapters/speaches_provider.py`: `SpeachesSTTProvider` junta os quadros de uma fala (fecha em
+  silêncio sustentado, em LACUNA sem quadro — microfone mudo manda nada, não silêncio — ou no teto),
+  transcreve por `POST /v1/audio/transcriptions` a 16 kHz; `SpeachesTTSProvider` pede PCM cru (a
+  imagem do gateway não decodifica MP3). Falha do serviço perde a fala **dizendo** — modelo, http,
+  *"fala PERDIDA"*;
+- o pipeline pede ao provedor a taxa que ele quer (16 kHz PCM para o auto-hospedado, μ-law 8 kHz para
+  o Deepgram legado); o TTS usa PCM direto quando o provedor o declara;
+- **o bot assina só a trilha do CLIENTE** (`customer-…`): antes, "a primeira trilha de áudio" de quem
+  fosse. Medido pela mutação: sem o filtro, a fala do cliente com outro participante falando junto
+  saiu *"Por favor, falar selo e a minha batutura de energia calabresa"*;
+- compose do gateway: `PLUGHUB_WEBRTC_SPEECH_PROVIDER=speaches`, `PLUGHUB_WEBRTC_SPEACHES_URL`.
+
+⚠️ **Achado ao ligar o STT real, e consertado antes de fechar:** com provedor presente, a regra da
+fatia 1 fazia o bot entrar também em chamada **só de humano** — e o único destino que o pipeline
+conhece é publicar a fala como MENSAGEM do cliente. No próximo teste no browser, a fala do cliente
+apareceria no Console como digitada. Até a fatia 4 (transcrição de qualidade por falante) o bot entra
+só quando há agente de IA, e o estado diz *"transcricao de chamada com humano ainda sem destino
+(VOZ-05 fatia 4)"*. O ramo V4 do `probe_webrtc_bot_leg_gate` virou essa afirmação.
+
+**Verde depois:** S1 controle (o serviço transcreve a fixture) · S2 IA de áudio atende, bot na sala
+(SFU) · S3 o cliente FALA (voz sintetizada pelo próprio serviço, publicada como participante real) e
+*"Eu quero falar sobre a minha fatura de energia."* chega ao bridge como `audio_transcript` do
+cliente · S4 a frase de outro participante, simultânea, não vaza · latência fim-da-fala→texto
+**1,4–1,6 s**. Mutações ao vivo: sem filtro de identidade → S3 e S4 reprovam; μ-law 8 kHz ao provedor
+de 16 kHz → S3 reprova. ⚠️ **A 1ª versão do S4 não reprovou** a mutação sem filtro: a lista de
+palavras do outro tinha só três, e a mistura vazou *"favor"*. A lista passou a ter todas as palavras
+do outro que não estão na do cliente, e a mutação passou a reprovar.
+
+**Unitários:** `test_speaches_provider.py` (10: duas falas → dois pedidos a 16 kHz com língua,
+silêncio puro e estalo sem pedido, lacuna fecha a fala, teto corta, 404 e serviço fora dizem,
+TTS pede PCM na taxa, reamostragem mantém duração e energia) e o gatilho revisto; bateria de **12
+mutações, todas reprovando**. ⚠️ No container a suíte deu 5 vermelhos que fora dele não davam: os
+testes de "sem provedor" liam o env do container, que agora exporta `speaches`; o `_settings` dos
+testes passou a zerar o provedor explicitamente. Suíte **1044** no container. Vizinhos verdes: os oito
+probes WebRTC, `probe_adapter_self_calls`, `probe_edge_surface`, `probe_gates_manifest_coverage`
+(356), `probe_task_ledger`, `check_config_invariants`.
+
+**Registrado:** `VOZ-17` — modelo e voz do bot leg em env (voz e língua são config do tenant).
+
+## 2026-09-15 (22) — VOZ-05 fatia 1: o bot leg não finge, e diz o que falta
+
+**Decisões do dono:** STT/TTS **self-hosted** (faster-whisper e Piper em containers do compose).
+E o **modelo de transcrição**, que ele corrigiu no meio da fatia depois de eu perguntar se o bot
+leg deveria atender "só IA": **toda** chamada com áudio é transcrita, lado cliente e lado humano,
+cada um no seu canal, porque a qualidade avalia sobre a transcrição; a IA só fala texto (TTS) e
+escuta o que o STT transcreveu do cliente. A primeira versão desta fatia, construída sobre a opção
+"só IA", foi refeita antes de fechar — o probe dela saiu vermelho contra o modelo certo (V1/V2/V4),
+que é o que devia acontecer.
+
+**Medido antes:**
+- o demo não tem STT nem TTS: chaves de Deepgram e ElevenLabs vazias, a imagem sem decodificador
+  de MP3 (`av`) que o TTS usa, e nenhum pool WebRTC de IA;
+- sem chave, a fábrica devolvia `MockSTTProvider`: um participante oculto entrava na sala, consumia
+  o áudio do cliente e não produzia transcrição nenhuma, sem uma linha de log. No log do gateway, o
+  contato de humano do `probe_webrtc_agent_console` ganhou `bot-19dcc959`. Os testes das fábricas
+  **afirmavam** esse mock, e o `probe_webrtc_participant_media` desligava o STT de propósito — por
+  isso nunca viu;
+- o gatilho era *"o teto do cliente tem áudio"*, e a IA consome só texto: numa chamada de IA o bot
+  nunca entrava e o cliente nunca ganhava áudio, sem dizer por quê;
+- o pipeline só assina a trilha do CLIENTE e publica a transcrição como MENSAGEM do cliente — certo
+  para a IA ouvir; errado para chamada de humano (registrado na VOZ-05, fatia 4).
+
+**Vermelho ao vivo antes** (`probe_webrtc_bot_leg_gate.sh`, adapter da imagem contra Redis e SFU
+reais, presença do bot perguntada AO SFU): humano atende sem STT → **bot na sala=True**, sem motivo;
+IA sem STT/TTS → sem áudio, **nenhum motivo** no estado.
+
+**Conserto:**
+- `media_policy`: `AI_FRAMEWORKS`/`AUDIO_FRAMEWORKS`; `attendant_consumes(framework,
+  bot_leg_audio)` — IA consome áudio só se houver STT e TTS; `bot_leg_needs(attendants)` →
+  `{transcribe, convert}` pelo pool de quem atende;
+- adapter: fábricas devolvem `None` sem provedor (mock só por injeção de teste);
+  `_stt_unavailable`/`_tts_unavailable` nomeiam o que falta e são logados no boot; o bot entra
+  quando há o que transcrever **e** há STT, segue os ATENDENTES e não o teto (sai quando não resta
+  atendente de áudio); o estado de mídia ganha `customer.bot_leg {transcribe, convert, available,
+  reason}` — *"chamada NAO transcrita: …"*, *"agente de IA sem voz: …"* —, com erro no log.
+
+**Verde depois:** V1 humano sem STT (sem bot, não transcrita), V2 IA sem provedores (sem áudio,
+motivo), controles V3 IA com STT/TTS e V4 humano com STT (bot na sala nos dois), e as duas mutações
+do probe (bot sem STT → V1 reprova; IA com áudio sem provedor → V2 reprova). Unitários: 8 novos e
+bateria de 8 mutações — gatilho antigo, bot sem STT, humano fora da transcrição, IA sem áudio, IA
+com áudio sem TTS, bot que não sai, estado sem motivo, fábrica com mock — **todas reprovando**.
+Suíte do gateway **1033**.
+Vizinhos verdes: `probe_webrtc_pool_media_policy`, `probe_webrtc_agent_console`,
+`probe_webrtc_contact_entry`, `probe_webrtc_close_farewell`, `probe_webrtc_media_plane`,
+`probe_adapter_self_calls`. ⚠️ O `probe_webrtc_participant_media` saiu vermelho nas **mutações**: as
+lambdas dele tinham a assinatura antiga do teto e morriam em `TypeError` antes do C2 — o instrumento
+acusou certo que não media mais nada; ganharam `**kw` e voltaram a derrubar C2/C3.
+
+**No boot do gateway, hoje:** `bot leg INCOMPLETO — sem provedor de STT …; sem provedor de TTS …
+— chamada com audio NAO e transcrita; agente de IA atende por texto`. É o estado honesto até as
+fatias seguintes trazerem os serviços.
+
+## 2026-09-15 (21) — VOZ-16: o cliente WebRTC ouve por que a plataforma o dispensou
+
+**Achado com o dono, ao vivo:** o contato de cliente dele esperou num pool sem agente, o teto de
+300 s do WebRTC venceu, o routing encerrou certo (`max_wait_exceeded`, e o ClickHouse gravou isso)
+— e o widget mostrou só *"Atendimento encerrado (session_timeout)."*, sem o aviso.
+
+**Vermelho ao vivo antes** (`probe_webrtc_close_farewell.sh`, pool `probe_voz16_fila` sem agente e
+`queue_config.max_wait_s = 10`): **7 falhas**. O contrato nos três produtores (`_emit_outage`,
+`_emit_queue_timeout`, `_emit_no_resource_drop`) sem `close_reason`, o leitor sem `farewell_text`,
+e ao vivo o cliente recebendo antes do fechamento apenas o *"Aguardando agente…"* da entrada e o
+motivo `session_timeout`. Controles verdes na mesma rodada: o routing enfileirou e tirou o contato
+da fila (F1/F2).
+
+**Causa, em duas metades:**
+- o `WebRTCAdapter.deliver_session_closed` descartava o `farewell_text` que o adapter de webchat
+  já renderizava (render v2);
+- e lia `close_reason` com default `session_timeout` — chave que **nenhum** produtor de
+  `session.closed` escrevia (routing manda `reason: agent_done`, marcador de TRANSPORTE; bridge e
+  `conversation_end` mandam o motivo em `reason`). Todo fechamento pela plataforma chegava ao
+  cliente WebRTC como `session_timeout`. **O teste unitário passava porque ele mesmo escrevia
+  `close_reason`** — produtor e teste olhando um para o outro, a família do `answers` do SMS.
+
+**Conserto:** os três fechamentos do routing carregam `close_reason` de negócio (o mesmo do
+`contact_closed` ao lado); o adapter manda o aviso como `webrtc.message` de autor `system` ANTES do
+`webrtc.session_closed`, lê `close_reason` ou o `reason` de negócio, recusa `agent_done` como motivo
+e, sem motivo, fecha **sem** a chave e loga; o widget deixou de fabricar `session_ended`.
+
+**Gate verde depois:** A (censo AST dos `session.closed` do routing × chaves do leitor) e B ao vivo
+— aviso `msg_queue_timeout` lido VIVO na config-api antes do fechamento, motivo `max_wait_exceeded`
+e F5 (o log do routing registra o QUEUE TIMEOUT daquela sessão). ⚠️ O F5 nasceu vermelho FALSO: o
+routing loga a linha DEPOIS de publicar o fechamento, e o probe a procurava no instante em que o
+cliente recebia o close. Espera curta, com o comentário do porquê.
+
+**Testes** com as formas REAIS dos produtores (routing, bridge, marcador de transporte sem motivo) e
+bateria de 5 mutações — aviso descartado, leitor antigo, `agent_done` como motivo, motivo inventado,
+aviso depois do fechamento — **todas reprovam**, controle verde. Suítes: gateway **1025**, routing
+**296**. Vizinhos verdes: `probe_webrtc_contact_entry` (inclui o A4, widget só lê chaves emitidas),
+`probe_webrtc_agent_console`, `probe_webrtc_media_plane`. Imagens de gateway e routing reconstruídas.
+
+**Fora:** falar o aviso por TTS quando o cliente está em áudio — o socket fecha logo depois; é da
+`VOZ-05`.
+
 ## 2026-09-15 (20) — AGH-01 e CAP-19: o WebSocket do agente humano, quem entra e quando sai
 
 ### 1 · AGH-01 — o login de um agente cancelava o logout de outro

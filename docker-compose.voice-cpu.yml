@@ -1,0 +1,30 @@
+# docker-compose.voice-cpu.yml — bot leg (STT/TTS) SEM GPU  (VOZ-05, 2026-09-15)
+#
+# O demo roda a conversão de voz na GPU por padrão (`docker-compose.demo.yml`, serviço
+# `speaches`). Em máquina sem GPU NVIDIA o serviço não sobe com a reserva de dispositivo — use:
+#
+#   docker compose -p plughub-demo -f docker-compose.demo.yml -f docker-compose.voice-cpu.yml up -d
+#
+# Troca, nos TRÊS serviços que precisam concordar: imagem (CPU), dispositivo, modelos que o
+# `speaches-models` baixa, e os modelos que o gateway PEDE. Medido em 2026-09-15 (22 CPUs):
+# `small` a 0,46 s por segundo de fala, WER 4,7%; `large-v3-turbo` na CPU levou 1,8 s por
+# segundo — inviável para conversa. O Kokoro não depende de GPU (0,25 na CPU).
+# `probe_webrtc_stt_speaches.sh` (ramo A2) confere que o gateway pede o que o serviço tem.
+
+services:
+  speaches:
+    image: ghcr.io/speaches-ai/speaches@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8   # latest-cpu em 2026-09-15
+    environment:
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE:     int8
+      WHISPER__CPU_THREADS:      "8"
+    deploy: !reset {}
+
+  speaches-models:
+    image: ghcr.io/speaches-ai/speaches@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
+    environment:
+      SPEACHES_MODELS: "Systran/faster-whisper-small speaches-ai/Kokoro-82M-v1.0-ONNX"
+
+  channel-gateway:
+    environment:
+      PLUGHUB_WEBRTC_STT_MODEL: Systran/faster-whisper-small

@@ -400,6 +400,30 @@ probe_agent_ws_ghost_instance.sh
 # Mede as 7 recusas com codigo e motivo, os controles W6 (token do Console) e W9 (borda COM
 # credencial abre) e o W7b (sessao propria escreve).
 probe_agent_ws_credential.sh
+# VOZ-16. Quando a plataforma fechava um contato WebRTC (teto de fila, sem recurso, outage), o
+# adapter descartava o farewell_text e lia close_reason, que nenhum produtor escrevia: o cliente
+# via "session_timeout" e nenhum aviso. Mede o contrato nos TRES produtores do routing e no
+# leitor, e ao vivo o teto curto de um pool sem agente (aviso antes do close, motivo de negocio),
+# com o controle F2/F5 (foi o routing que tirou o contato da fila).
+probe_webrtc_close_farewell.sh
+# VOZ-05 fatia 1. Sem chave, o STT do bot leg era um mock que entrava oculto na sala, consumia o
+# audio e nao transcrevia nada, mudo; e a IA nunca ganhava audio, tambem sem dizer. Mede ao vivo
+# contra o SFU: humano sem STT (sem bot, "nao transcrita" no estado), IA sem STT/TTS (sem audio,
+# motivo nomeado), controles com provedores (bot na sala para IA e para humano) e duas mutacoes
+# que TEM de reprovar.
+probe_webrtc_bot_leg_gate.sh
+# VOZ-05 fatia 2. STT auto-hospedado (servico `speaches`, faster-whisper): o cliente FALA numa
+# chamada de IA (voz sintetizada pelo proprio servico a partir de frase conhecida) e a fala chega
+# ao bridge como texto do cliente. Controle S1 (o servico transcreve sozinho, senao INCONCLUSIVO),
+# e S4: a voz de outro participante, simultanea, nao vaza — o bot assinava "a primeira trilha de
+# audio" de quem fosse.
+probe_webrtc_stt_speaches.sh
+# VOZ-05 fatia A (coleta mascarada). webrtc passou a declarar `masked_input`, definido pela
+# GARANTIA (NIV-05). Mede o deploy de skill mascarado em pool so-WebRTC (antes: 422), o form
+# chegando ao widget com os campos protegidos, o texto livre recusado, a fala da coleta
+# transcrita e DESCARTADA (log prova que o bot ouviu), valor invalido e valido lidos pelo fluxo
+# (fixture propria), e historico + stream + logs de cinco servicos sem os valores.
+probe_webrtc_masked_keypad.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

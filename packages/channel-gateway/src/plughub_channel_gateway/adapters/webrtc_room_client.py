@@ -31,6 +31,9 @@ from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc.room_client")
 
+# Identidade do cliente na sala: `customer-{contact_id}` (`WebRTCAdapter._customer_identity`).
+CUSTOMER_IDENTITY_PREFIX = "customer-"
+
 
 # ── Audio helpers ──────────────────────────────────────────────────────────────
 
@@ -226,9 +229,16 @@ class LiveKitRoomClient:
 
         @self._room.on("track_subscribed")
         def _on_track(track, publication, participant) -> None:
-            # Subscribe to the first audio track (customer's microphone)
-            if track.kind == rtc.TrackKind.KIND_AUDIO:
-                disparar(self._consume_audio_track(track, rtc), nome="webrtc-audio-track")
+            # VOZ-05: só a trilha do CLIENTE. Antes era "a primeira trilha de áudio" de quem
+            # fosse — numa sala com agente humano as duas vozes iriam para a mesma fila de
+            # quadros e a transcrição do cliente sairia misturada.
+            if track.kind != rtc.TrackKind.KIND_AUDIO:
+                return
+            ident = getattr(participant, "identity", "") or ""
+            if not ident.startswith(CUSTOMER_IDENTITY_PREFIX):
+                logger.info("webrtc room_client: trilha de audio de %r ignorada (nao e o cliente)", ident)
+                return
+            disparar(self._consume_audio_track(track, rtc), nome="webrtc-audio-track")
 
         @self._room.on("disconnected")
         def _on_disconnected(*_) -> None:

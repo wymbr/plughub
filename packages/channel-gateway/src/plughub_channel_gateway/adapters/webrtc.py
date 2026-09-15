@@ -14,8 +14,9 @@ WebSocket protocol (per-connection state machine):
     {"type": "conn.authenticate", "token": "<customer_JWT>"}
     {"type": "webrtc.hangup"}                    — customer ends call
     {"type": "webrtc.message",    "text": "..."}  — DataChannel text (medium=text)
-    {"type": "webrtc.interaction_reply",
-     "reply": "...", "interaction_id": "..."}     — DataChannel menu reply
+    {"type": "webrtc.menu_submit",
+     "menu_id": "...", "interaction": "form|text|button|list|checklist",
+     "result": "..."|[...]|{...}}                 — resposta de menu (VOZ-05)
     {"type": "conn.ping"}                         — keepalive probe
 
   Server → Client:
@@ -33,7 +34,8 @@ WebSocket protocol (per-connection state machine):
      (`negotiated_medium`) para a sessão inteira e `webrtc.renegotiate` o sobrescrevia a
      cada atribuição — um especialista de texto rebaixava o cliente de uma chamada de vídeo.
     {"type": "webrtc.message",   "text": "...", "author": "agent", "ts": "..."}
-    {"type": "webrtc.interaction","payload": {...}}
+    {"type": "webrtc.interaction", "menu_id": "...", "interaction": "...", "prompt": "...",
+     "options": [...], "fields": [...], "masked_fields": [...]}
     {"type": "webrtc.typing",    "active": true|false}
     {"type": "webrtc.session_closed", "reason": "..."}
     {"type": "conn.pong"}
@@ -51,7 +53,8 @@ Phase C — STT/TTS pipeline (Arc 15):
   - STT finals published to conversations.inbound (content_type=audio_transcript)
   - TTS: MP3 bytes → PCM → LocalAudioTrack injection (when the customer ceiling carries audio)
   - DataChannel text (webrtc.message) → Kafka conversations.inbound (medium=text)
-  - DataChannel menu reply (webrtc.interaction_reply) → Redis menu:result:{session_id}
+  - Menu reply (webrtc.menu_submit) → conversations.inbound `menu_result`, como o webchat;
+    durante coleta mascarada, fala transcrita e texto livre NÃO são publicados (VOZ-05)
 
 Security invariants (from arc15-webrtc.md):
   - LiveKit tokens are signed exclusively by Channel Gateway.
@@ -67,6 +70,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -89,15 +93,12 @@ from ..models import (
 from ..session_registry import SessionRegistry
 from . import contact_lifecycle
 from .base import ChannelAdapter
+from .speaches_provider import SpeachesSTTProvider, SpeachesTTSProvider, pcm16_48k_to_16k
 from .voice_provider import (
-    FallbackSTTProvider,
-    FallbackTTSProvider,
     ISTTProvider,
     ITTSProvider,
     DeepgramSTTProvider,
     ElevenLabsTTSProvider,
-    MockSTTProvider,
-    MockTTSProvider,
 )
 from .webrtc_provider import (
     IWebRTCProvider,
@@ -108,7 +109,9 @@ from .webrtc_provider import (
     build_room_name,
 )
 from . import media_policy
+from .webchat import menu_result_history_text
 from .webrtc_room_client import (
+    CUSTOMER_IDENTITY_PREFIX,
     IWebRTCRoomClient,
     LiveKitRoomClient,
     mp3_to_pcm,
@@ -125,6 +128,24 @@ _AUTH_TIMEOUT_S     = 30       # seconds to receive conn.authenticate after hell
 _KEEPALIVE_INTERVAL = 20       # seconds between server-side ping probes
 _STREAM_BLOCK_MS    = 5_000    # ms to wait on XREAD before looping
 _STREAM_WATCHER_SLEEP = 1.0    # seconds to sleep on stream watcher error
+
+# ── Coleta mascarada (VOZ-05, fatia A) ────────────────────────────────────────
+#
+# O valor protegido entra por UM caminho: o campo protegido do widget (`webrtc.menu_submit`).
+# Enquanto um menu mascarado espera, a fala transcrita e o texto livre do cliente NÃO são
+# publicados: o bridge entrega ao menu que espera qualquer resposta do cliente, e um
+# `text` durante a espera viraria o valor do formulário — em claro no histórico, porque
+# a redação por campo só reconhece `menu_result`.
+#
+# A espera é fato do MOTOR (`menu:waiting:{sid}`); o adapter só cobre as duas bordas que
+# aquela chave não vê: a fala em curso quando o menu chega (antes do HSET) e a que
+# termina de ser transcrita logo depois da submissão (depois do HDEL). A folga cobre o
+# fim de fala (700 ms de silêncio) mais a transcrição, com margem para CPU.
+_MASKED_SPEECH_GRACE_S = 5.0
+MASKED_CAPTURE_NOTICE = (
+    "Por segurança, durante o preenchimento protegido a sua fala e o texto livre não são "
+    "registrados. Use o campo protegido."
+)
 
 
 # ── WebRTCAdapter ──────────────────────────────────────────────────────────────
@@ -188,6 +209,22 @@ class WebRTCAdapter(ChannelAdapter):
                 logger.error("webrtc: canal FECHADO — %s", exc)
         self._stt               = stt_provider or self._build_stt_provider()
         self._tts               = tts_provider or self._build_tts_provider()
+        # VOZ-05: o bot leg TRANSCREVE toda chamada com áudio (pede STT) e CONVERTE para o
+        # agente de IA, que lê texto (pede STT e TTS). O que falta fica aqui, para o estado de
+        # mídia e o log o NOMEAREM. Antes, sem chave, o STT virava um mock que entrava na sala,
+        # consumia o áudio e não transcrevia nada, sem uma linha de log.
+        self._stt_unavailable: str | None = self._stt_reason()
+        self._tts_unavailable: str | None = (
+            None if self._tts is not None else
+            "sem provedor de TTS (PLUGHUB_WEBRTC_SPEECH_PROVIDER=speaches com "
+            "PLUGHUB_WEBRTC_SPEACHES_URL, ou PLUGHUB_VOICE_ELEVENLABS_API_KEY)")
+        if self._stt_unavailable or self._tts_unavailable:
+            logger.warning(
+                "webrtc: bot leg INCOMPLETO — %s — chamada com audio %s; agente de IA %s",
+                "; ".join(x for x in (self._stt_unavailable, self._tts_unavailable) if x),
+                "NAO e transcrita" if self._stt_unavailable else "e transcrita",
+                "atende por texto" if (self._stt_unavailable or self._tts_unavailable) else "fala por voz",
+            )
         self._attachment_store  = attachment_store
 
         # Active WebSocket connections keyed by session_id.
@@ -207,6 +244,12 @@ class WebRTCAdapter(ChannelAdapter):
         # Phase D: active egress recordings.
         # _session_egress: session_id → { segment_id → egress_id }
         self._session_egress: dict[str, dict[str, str]] = {}
+
+        # VOZ-05 (fatia A): campos mascarados de cada menu entregue, por sessão
+        # (session_id → menu_id → field_ids), e o fim da folga da coleta mascarada
+        # (session_id → time.monotonic()).
+        self._menu_masked:         dict[str, dict[str, list[str]]] = {}
+        self._masked_grace_until:  dict[str, float] = {}
 
     # ── Provider factories ────────────────────────────────────────────────────
 
@@ -243,35 +286,84 @@ class WebRTCAdapter(ChannelAdapter):
             )
         return s.webrtc_livekit_url
 
-    def _build_stt_provider(self) -> ISTTProvider:
+    def _build_stt_provider(self) -> ISTTProvider | None:
         """
-        Build STT chain for WebRTC.
-        Reuses voice channel's Deepgram credentials when available.
-        Wraps in FallbackSTTProvider so Deepgram outages degrade silently.
+        STT do bot leg, ou None — nunca um mock em produção (VOZ-05). Mock é injetado por
+        teste; aqui ele fingia um provedor que não transcreve nada.
         """
         s = self._settings
-        if not s.webrtc_stt_enabled or not s.voice_deepgram_api_key:
-            return MockSTTProvider()
-        primary  = DeepgramSTTProvider(api_key=s.voice_deepgram_api_key)
-        fallback = MockSTTProvider()
-        return FallbackSTTProvider([primary, fallback])
+        if not s.webrtc_stt_enabled:
+            return None
+        if s.webrtc_speech_provider == "speaches" and s.webrtc_speaches_url:
+            return SpeachesSTTProvider(s.webrtc_speaches_url, s.webrtc_stt_model)
+        if not s.voice_deepgram_api_key:
+            return None
+        return DeepgramSTTProvider(api_key=s.voice_deepgram_api_key)
 
-    def _build_tts_provider(self) -> ITTSProvider:
-        """
-        Build TTS chain for WebRTC injection.
-        ElevenLabs (when api_key set) → MockTTSProvider (no-op stub).
-        MockTTSProvider returns b"\\x00"*16 when synthesize_returns_none=False,
-        meaning TTS injection will be silently skipped when no TTS provider is
-        configured (webrtc_tts_injection_enabled=False is the default guard).
-        """
+    def _build_tts_provider(self) -> ITTSProvider | None:
+        """TTS do bot leg, ou None — nunca um mock em produção (VOZ-05)."""
         s = self._settings
-        if s.voice_elevenlabs_api_key:
-            primary = ElevenLabsTTSProvider(
-                api_key  = s.voice_elevenlabs_api_key,
-                voice_id = s.voice_elevenlabs_voice_id,
-            )
-            return FallbackTTSProvider([primary, MockTTSProvider(synthesize_returns_none=True)])
-        return MockTTSProvider(synthesize_returns_none=True)
+        if s.webrtc_speech_provider == "speaches" and s.webrtc_speaches_url:
+            return SpeachesTTSProvider(s.webrtc_speaches_url, s.webrtc_tts_model, s.webrtc_tts_voice)
+        if not s.voice_elevenlabs_api_key:
+            return None
+        return ElevenLabsTTSProvider(
+            api_key  = s.voice_elevenlabs_api_key,
+            voice_id = s.voice_elevenlabs_voice_id,
+        )
+
+    def _stt_reason(self) -> str | None:
+        """Por que não há STT neste gateway; None quando há."""
+        if not self._settings.webrtc_stt_enabled:
+            return "STT desligado (PLUGHUB_WEBRTC_STT_ENABLED=false)"
+        if self._stt is None:
+            return ("sem provedor de STT (PLUGHUB_WEBRTC_SPEECH_PROVIDER=speaches com "
+                    "PLUGHUB_WEBRTC_SPEACHES_URL, ou PLUGHUB_VOICE_DEEPGRAM_API_KEY)")
+        return None
+
+    def _convert_available(self) -> bool:
+        return self._stt_unavailable is None and self._tts_unavailable is None
+
+    # A transcrição de chamada com HUMANO ainda não tem destino (VOZ-05, fatia 4). O único que
+    # o pipeline conhece é publicar a fala como MENSAGEM do cliente — certo para a IA ouvir,
+    # errado para o humano: a fala apareceria no Console como se digitada. Até a fatia 4 o bot
+    # entra só quando há agente de IA, e o estado diz por que a chamada de humano não é transcrita.
+    HUMAN_TRANSCRIPT_PENDING = ("transcricao de chamada com humano ainda sem destino (VOZ-05 fatia 4): "
+                                "o bot so publicaria a fala como mensagem de chat")
+
+    def _bot_leg_should_run(self, state: dict, publish: frozenset[str]) -> bool:
+        """O bot entra quando há agente de IA de áudio para ouvir E há STT. Segue os
+        ATENDENTES, não o teto. `publish` fica na assinatura porque é o que o gatilho antigo
+        lia (e a mutação do probe usa)."""
+        return self._stt_unavailable is None and media_policy.bot_leg_needs(state["attendants"])["convert"]
+
+    def _bot_leg_state(self, state: dict, session_id: str) -> dict:
+        needs = media_policy.bot_leg_needs(state["attendants"])
+        faltas = []
+        if needs["transcribe"] and self._stt_unavailable:
+            faltas.append(f"chamada NAO transcrita: {self._stt_unavailable}")
+        elif needs["transcribe"] and not needs["convert"]:
+            faltas.append(f"chamada NAO transcrita: {self.HUMAN_TRANSCRIPT_PENDING}")
+        if needs["convert"] and self._tts_unavailable:
+            faltas.append(f"agente de IA sem voz: {self._tts_unavailable}")
+        bot = {"transcribe": needs["transcribe"], "convert": needs["convert"],
+               "available": not faltas}
+        if faltas:
+            bot["reason"] = "; ".join(faltas)
+            logger.error("webrtc bot leg: %s (session=%s)", bot["reason"], session_id)
+        return bot
+
+    async def _stop_bot_leg(self, session_id: str) -> None:
+        task = self._stt_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+        room_client = self._room_clients.pop(session_id, None)
+        if room_client is not None:
+            try:
+                await room_client.disconnect()
+            except Exception as exc:
+                logger.warning("webrtc bot leg: disconnect falhou (session=%s): %s", session_id, exc)
+            logger.info("webrtc bot leg: saiu da sala (session=%s)", session_id)
 
     # ── ChannelAdapter interface — outbound delivery ──────────────────────────
 
@@ -332,19 +424,35 @@ class WebRTCAdapter(ChannelAdapter):
         """
         Deliver an interactive menu or form to the WebRTC client.
         Called by OutboundConsumer for msg_type="menu.payload".
-        Sends {"type": "webrtc.interaction", "payload": {...}} over WS.
+
+        VOZ-05 (fatia A): o frame é PLANO, com as chaves do `menu.payload`. Até aqui ia
+        aninhado em `payload` e o widget lia `menu_id`/`prompt`/`options` na raiz — nenhum
+        menu chegava a ser respondido. `masked_fields` diz ao widget quais campos são
+        protegidos; o adapter guarda a lista para redigir o histórico na submissão.
         """
         session_id = payload.get("session_id", "")
+        menu_id    = payload.get("menu_id", "")
+        masked     = [f for f in (payload.get("masked_fields") or []) if isinstance(f, str)]
+        if masked and menu_id:
+            self._menu_masked.setdefault(session_id, {})[menu_id] = masked
+            # a fala em curso quando o menu chega ainda não tem `menu:waiting` no Redis
+            self._masked_grace_until[session_id] = time.monotonic() + _MASKED_SPEECH_GRACE_S
         ws = self._connections.get(session_id)
         if not ws:
-            logger.debug(
-                "webrtc deliver_menu: no active connection session=%s", session_id
+            logger.warning(
+                "webrtc deliver_menu: sessao sem conexao — menu NAO entregue session=%s menu=%s",
+                session_id, menu_id,
             )
             return
 
         await self._ws_send(ws, {
-            "type":    "webrtc.interaction",
-            "payload": payload.get("content", payload),
+            "type":          "webrtc.interaction",
+            "menu_id":       menu_id,
+            "interaction":   payload.get("interaction", ""),
+            "prompt":        payload.get("prompt", ""),
+            "options":       payload.get("options") or [],
+            "fields":        payload.get("fields") or [],
+            "masked_fields": masked,
         })
 
     async def deliver_typing(self, payload: dict) -> None:
@@ -378,14 +486,36 @@ class WebRTCAdapter(ChannelAdapter):
             )
             return
 
-        reason = payload.get("close_reason", "session_timeout")
+        # VOZ-16: este leitor pedia `close_reason` com default `session_timeout`, e nenhum
+        # produtor de `session.closed` escrevia a chave — todo fechamento chegava ao cliente
+        # como `session_timeout`, e o teste passava porque ELE a escrevia. Hoje o routing a
+        # escreve; bridge e `conversation_end` mandam o motivo de negócio em `reason`. O
+        # `agent_done` de `reason` é marcador de TRANSPORTE e não é motivo para o cliente.
+        reason = payload.get("close_reason") or payload.get("reason") or ""
+        if reason == "agent_done":
+            reason = ""
+        if not reason:
+            logger.warning(
+                "webrtc deliver_session_closed: payload sem motivo de negocio session=%s — "
+                "cliente recebe o fechamento sem motivo", session_id,
+            )
+        # Render v2: o aviso da plataforma (teto de fila, sem recurso, outage) vai ANTES do
+        # fechamento, pelo mesmo socket — o adapter de webchat já fazia; este o descartava.
+        farewell = payload.get("farewell_text") or ""
+        if farewell:
+            await self._ws_send(ws, {
+                "type":   "webrtc.message",
+                "text":   farewell,
+                "author": "system",
+                "ts":     datetime.now(timezone.utc).isoformat(),
+            })
         # A plataforma fechou: publica-se `agent_done` ANTES de derrubar o socket, senão o
         # disconnect que vem a seguir seria publicado como queda do cliente.
         await self._close_session(session_id, "agent_done")
-        await self._ws_send(ws, {
-            "type":   "webrtc.session_closed",
-            "reason": reason,
-        })
+        closed = {"type": "webrtc.session_closed", "reason": reason}
+        if not reason:
+            del closed["reason"]          # ausente, nunca string vazia com cara de motivo
+        await self._ws_send(ws, closed)
         try:
             await ws.close(code=1000)
         except Exception:
@@ -744,7 +874,7 @@ class WebRTCAdapter(ChannelAdapter):
 
     async def _customer_identity(self, session_id: str) -> str:
         contact_id = await self._redis.get(f"session:{session_id}:contact_id") or session_id
-        return f"customer-{contact_id}"
+        return f"{CUSTOMER_IDENTITY_PREFIX}{contact_id}"   # o bot leg assina SÓ esta identidade
 
     def _customer_grants(self, room_name: str, identity: str, publish: frozenset[str]) -> TokenGrants:
         return TokenGrants(
@@ -779,13 +909,19 @@ class WebRTCAdapter(ChannelAdapter):
             log("webrtc media: %s (instance=%s session=%s)", aviso, instance_id, session_id)
         return instance_id, record
 
-    def _customer_state(self, state: dict, publish: frozenset[str], reason: str) -> dict:
+    def _customer_state(self, state: dict, publish: frozenset[str], reason: str,
+                        session_id: str = "") -> dict:
         return {
             "publish":        media_policy.kinds_list(publish),
             "policy_sources": media_policy.policy_sources(state["attendants"]),
             "reason":         reason,
+            "bot_leg":        self._bot_leg_state(state, session_id),
             "updated_at":     datetime.now(timezone.utc).isoformat(),
         }
+
+    def _ceiling(self, state: dict) -> frozenset[str]:
+        return media_policy.customer_ceiling(
+            state["attendants"], bot_leg_audio=self._convert_available())
 
     async def _on_routing_assigned(
         self,
@@ -801,9 +937,9 @@ class WebRTCAdapter(ChannelAdapter):
         instance_id, record = self._attendant_record(fields, session_id)
         state = await self._load_media_state(session_id)
         state["attendants"][instance_id] = record
-        publish = media_policy.customer_ceiling(state["attendants"])
+        publish = self._ceiling(state)
         state["customer"] = self._customer_state(
-            state, publish, f"attendant_joined:{record['framework'] or 'unknown'}",
+            state, publish, f"attendant_joined:{record['framework'] or 'unknown'}", session_id,
         )
         self._customer_media[session_id] = publish
 
@@ -836,7 +972,7 @@ class WebRTCAdapter(ChannelAdapter):
             session_id, state["customer"]["publish"], state["customer"]["policy_sources"], room_name,
         )
 
-        if media_policy.AUDIO in publish:
+        if self._bot_leg_should_run(state, publish):
             disparar(
                 self._start_stt_pipeline(session_id, room_name),
                 nome=f"webrtc-stt-start-{session_id[:8]}",
@@ -890,17 +1026,28 @@ class WebRTCAdapter(ChannelAdapter):
         (se o cliente já está na sala) e `webrtc.media` com token novo ao cliente (se
         ainda não entrou, entra com o teto certo). Sem mudança, não faz nada.
         """
-        publish = media_policy.customer_ceiling(state["attendants"])
+        publish = self._ceiling(state)
         previous = (state.get("customer") or {}).get("publish")
         new_list = media_policy.kinds_list(publish)
+        # O bot leg segue os ATENDENTES, não o teto: entra com o primeiro atendente de áudio e
+        # sai quando não resta nenhum.
+        run_bot = self._bot_leg_should_run(state, publish)
+        if run_bot and session_id not in self._room_clients:
+            disparar(
+                self._start_stt_pipeline(session_id, build_room_name(session_id)),
+                nome=f"webrtc-stt-start-{session_id[:8]}",
+            )
+        elif not run_bot and session_id in self._room_clients:
+            await self._stop_bot_leg(session_id)
         if previous == new_list:
             state["customer"] = {**(state.get("customer") or {}),
-                                 "policy_sources": media_policy.policy_sources(state["attendants"])}
+                                 "policy_sources": media_policy.policy_sources(state["attendants"]),
+                                 "bot_leg": self._bot_leg_state(state, session_id)}
             await self._save_media_state(session_id, state)
             logger.debug("webrtc media: teto inalterado %s (%s) session=%s", new_list, reason, session_id)
             return
 
-        state["customer"] = self._customer_state(state, publish, reason)
+        state["customer"] = self._customer_state(state, publish, reason, session_id)
         self._customer_media[session_id] = publish
         await self._save_media_state(session_id, state)
 
@@ -932,11 +1079,6 @@ class WebRTCAdapter(ChannelAdapter):
             "webrtc media: teto do cliente %s -> %s (%s; aplicado no SFU=%s) session=%s",
             previous, new_list, reason, in_room, session_id,
         )
-        if media_policy.AUDIO in publish and session_id not in self._room_clients:
-            disparar(
-                self._start_stt_pipeline(session_id, room_name),
-                nome=f"webrtc-stt-start-{session_id[:8]}",
-            )
 
     @staticmethod
     def _json_field(fields: dict, name: str) -> dict:
@@ -957,7 +1099,9 @@ class WebRTCAdapter(ChannelAdapter):
           webrtc.hangup             → contact_closed em conversations.events, stop tasks
           webrtc.message            → DataChannel text → Kafka conversations.inbound
                                       (medium=text path — customer typing in text mode)
-          webrtc.interaction_reply  → DataChannel menu reply → Redis menu:result:{id}
+          webrtc.menu_submit        → resposta de menu/form → conversations.inbound
+                                      (`menu_result`, valor real) + histórico redigido
+          webrtc.interaction_reply  → aposentado (VOZ-05) → conn.error
           conn.ping                 → reply conn.pong
           (others)                  → logged and ignored
         """
@@ -994,28 +1138,36 @@ class WebRTCAdapter(ChannelAdapter):
                             "type": "conn.error", "code": "bad_message",
                             "message": "webrtc.message requires a non-empty 'text'",
                         })
+                    elif await self._masked_capture_active(session_id):
+                        # Texto livre durante coleta mascarada: seria entregue ao menu que
+                        # espera como se fosse o valor, e ficaria em claro no histórico.
+                        logger.info(
+                            "webrtc: texto livre RECUSADO durante coleta mascarada session=%s "
+                            "(o valor protegido entra pelo campo protegido)", session_id,
+                        )
+                        await self._ws_send(ws, {
+                            "type": "conn.error", "code": "masked_capture_active",
+                            "message": MASKED_CAPTURE_NOTICE,
+                        })
                     else:
                         await self._publish_customer_text(session_id, text.strip(), msg.get("id"))
 
+                elif msg_type == "webrtc.menu_submit":
+                    await self._handle_menu_submit(ws, session_id, msg)
+
                 elif msg_type == "webrtc.interaction_reply":
-                    # DataChannel menu/form reply — mirror webchat interaction_reply.
-                    # Write to Redis so the menu step's BLPOP resolves.
-                    reply          = msg.get("reply", "")
-                    interaction_id = msg.get("interaction_id", "")
-                    if reply:
-                        redis_key = f"menu:result:{session_id}"
-                        await self._redis.lpush(
-                            redis_key,
-                            json.dumps({
-                                "reply":          reply,
-                                "interaction_id": interaction_id,
-                            }),
-                        )
-                        await self._redis.expire(redis_key, _SESSION_TTL)
-                        logger.debug(
-                            "webrtc: DataChannel interaction_reply → Redis session=%s",
-                            session_id,
-                        )
+                    # Formato aposentado na VOZ-05: gravava um envelope JSON em
+                    # `menu:result:{sid}` — chave e formato que o motor não lê (ele espera o
+                    # valor cru na chave da instância, que o BRIDGE resolve). Recusado DITO.
+                    logger.warning(
+                        "webrtc: webrtc.interaction_reply RECUSADO (formato aposentado; use "
+                        "webrtc.menu_submit) session=%s", session_id,
+                    )
+                    await self._ws_send(ws, {
+                        "type": "conn.error", "code": "unsupported_message",
+                        "message": "webrtc.interaction_reply was retired; send webrtc.menu_submit "
+                                   "{menu_id, interaction, result}",
+                    })
 
                 elif msg_type == "conn.ping":
                     await self._ws_send(ws, {"type": "conn.pong"})
@@ -1164,6 +1316,8 @@ class WebRTCAdapter(ChannelAdapter):
             return
         self._close_fired.add(session_id)
         info = self._sessions.pop(session_id, {})
+        self._menu_masked.pop(session_id, None)
+        self._masked_grace_until.pop(session_id, None)
         try:
             await self._redis.delete(f"session:{session_id}:ws_alive")
         except Exception as exc:
@@ -1280,20 +1434,24 @@ class WebRTCAdapter(ChannelAdapter):
         """
         s = self._settings
 
+        # O provedor diz em que taxa quer o áudio (VOZ-05): o auto-hospedado transcreve PCM a
+        # 16 kHz; o Deepgram legado recebe μ-law a 8 kHz, que é o que este laço sempre mandou.
+        stt_rate = getattr(self._stt, "input_sample_rate", None)
+
         async def _audio_chunks():
             async for chunk in room_client.subscribe_customer_audio():
-                # Resample 48kHz PCM to 8kHz μ-law in-line
                 try:
-                    yield resample_pcm_48_to_8(chunk)
+                    yield pcm16_48k_to_16k(chunk) if stt_rate == 16000 else resample_pcm_48_to_8(chunk)
                 except Exception as exc:
-                    logger.debug(
+                    logger.warning(
                         "webrtc stt_pipeline: resample error (session=%s): %s",
                         session_id, exc,
                     )
 
         try:
             language = s.voice_stt_language  # reuse voice channel language setting
-            async for result in self._stt.stream(_audio_chunks(), language=language):
+            kw = {"sample_rate": stt_rate} if stt_rate else {}
+            async for result in self._stt.stream(_audio_chunks(), language=language, **kw):
                 if result.is_final and result.transcript.strip():
                     await self._publish_transcript(
                         session_id  = session_id,
@@ -1321,6 +1479,21 @@ class WebRTCAdapter(ChannelAdapter):
         Publish a final STT transcript to Kafka conversations.inbound.
         content_type="audio_transcript" distinguishes voice input from text input.
         """
+        if await self._masked_capture_active(session_id):
+            # VOZ-05 (fatia A): a fala durante coleta mascarada é, por presunção, o valor
+            # protegido dito em voz alta. Não vai ao bridge (que a entregaria ao menu como
+            # resposta), nem ao histórico, nem ao log — só a contagem sai.
+            logger.info(
+                "webrtc: fala transcrita DESCARTADA durante coleta mascarada session=%s "
+                "(%d caracteres, texto nao registrado)", session_id, len(transcript),
+            )
+            ws = self._connections.get(session_id)
+            if ws:
+                await self._ws_send(ws, {
+                    "type": "webrtc.message", "text": MASKED_CAPTURE_NOTICE,
+                    "author": "system", "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            return
         try:
             # O mesmo evento da mensagem digitada (VOZ-04): o formato solto de antes era
             # descartado pelo bridge. Confiança e janela vão no `payload` do conteúdo.
@@ -1371,12 +1544,18 @@ class WebRTCAdapter(ChannelAdapter):
             )
             return
 
-        pcm_bytes = mp3_to_pcm(mp3_bytes, target_sample_rate=24000)
+        # O auto-hospedado já devolve PCM (VOZ-05); só o legado devolve MP3 — e a imagem não
+        # tem decodificador de MP3, então esse caminho loga e não fala.
+        out_rate = getattr(self._tts, "output_sample_rate", None)
+        if out_rate:
+            pcm_bytes, rate = mp3_bytes, out_rate
+        else:
+            pcm_bytes, rate = mp3_to_pcm(mp3_bytes, target_sample_rate=24000), 24000
         if not pcm_bytes:
             return  # mp3_to_pcm already logged the warning
 
         try:
-            await room_client.publish_audio(pcm_bytes, sample_rate=24000)
+            await room_client.publish_audio(pcm_bytes, sample_rate=rate)
             logger.debug(
                 "webrtc tts_inject: injected %d bytes (session=%s)",
                 len(pcm_bytes), session_id,
@@ -1688,6 +1867,136 @@ class WebRTCAdapter(ChannelAdapter):
             f"session:{session_id}:ws_alive",
             contact_lifecycle.ws_alive_ttl_s(self._settings.ws_connection_timeout_s),
             "1",
+        )
+
+    # ── Coleta mascarada (VOZ-05, fatia A) ────────────────────────────────────
+
+    async def _masked_capture_active(self, session_id: str) -> bool:
+        """
+        `True` enquanto o valor protegido está sendo coletado: um menu mascarado espera no
+        motor (`menu:waiting:{sid}`, entrada com `masked` ou `masked_fields`), ou a folga das
+        bordas não venceu. Leitura que FALHA conta como ativa — o restritivo vence, porque o
+        permissivo aqui degrada para o valor em claro no histórico.
+        """
+        if time.monotonic() < self._masked_grace_until.get(session_id, 0.0):
+            return True
+        try:
+            waiting = await self._redis.hgetall(f"menu:waiting:{session_id}")
+        except Exception as exc:
+            logger.warning(
+                "webrtc: menu:waiting ilegivel (session=%s): %s — coleta mascarada tratada "
+                "como ATIVA", session_id, exc,
+            )
+            return True
+        for raw in (waiting or {}).values():
+            try:
+                meta = json.loads(raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "webrtc: entrada de menu:waiting nao e JSON (session=%s) — coleta "
+                    "mascarada tratada como ATIVA", session_id,
+                )
+                return True
+            if isinstance(meta, dict) and (meta.get("masked") or meta.get("masked_fields")):
+                return True
+        return False
+
+    async def _masked_fields_for(self, session_id: str, menu_id: str) -> set[str] | None:
+        """
+        Campos mascarados do menu submetido. Primeiro o que o `deliver_menu` guardou; sem
+        isso (gateway reiniciou entre a entrega e a resposta), a UNIÃO do que o motor
+        declara em `menu:waiting`, como o bridge faz. `None` = não se sabe.
+        """
+        known = self._menu_masked.get(session_id, {}).pop(menu_id, None)
+        if known is not None:
+            return set(known)
+        try:
+            waiting = await self._redis.hgetall(f"menu:waiting:{session_id}")
+        except Exception:
+            return None
+        if not waiting:
+            return None
+        fields: set[str] = set()
+        for raw in waiting.values():
+            try:
+                meta = json.loads(raw)
+            except (TypeError, ValueError):
+                return None
+            if isinstance(meta, dict):
+                if meta.get("masked") and not meta.get("masked_fields"):
+                    return None
+                fields.update(f for f in (meta.get("masked_fields") or []) if isinstance(f, str))
+        return fields
+
+    async def _handle_menu_submit(self, ws: WebSocket, session_id: str, msg: dict) -> None:
+        """
+        Resposta de menu/formulário do cliente — o mesmo evento do webchat: `menu_result` com
+        o valor REAL em `conversations.inbound` (o bridge o entrega ao menu que espera e o
+        redige para stream e analytics), e a linha de histórico REDIGIDA pela
+        `menu_result_history_text`, a mesma casa do webchat.
+        """
+        menu_id     = msg.get("menu_id")
+        interaction = msg.get("interaction")
+        result      = msg.get("result")
+        if (not isinstance(menu_id, str) or not menu_id
+                or interaction not in ("text", "button", "list", "checklist", "form")
+                or not isinstance(result, (str, list, dict))):
+            logger.warning(
+                "webrtc: webrtc.menu_submit malformado (chaves=%s) — descartado session=%s",
+                sorted(msg), session_id,
+            )
+            await self._ws_send(ws, {
+                "type": "conn.error", "code": "bad_message",
+                "message": "webrtc.menu_submit requires menu_id, interaction and result",
+            })
+            return
+        info = self._sessions.get(session_id)
+        if not info:
+            logger.error(
+                "webrtc: menu_submit de sessao sem registro de abertura (session=%s) — descartado",
+                session_id,
+            )
+            return
+
+        masked = await self._masked_fields_for(session_id, menu_id)
+        if masked is None:
+            # Nem o adapter nem o motor dizem o que é protegido: o histórico recebe só a
+            # existência da resposta. Restritivo, e dito.
+            logger.warning(
+                "webrtc: campos mascarados do menu %s desconhecidos (session=%s) — resposta "
+                "inteira redigida no historico", menu_id, session_id,
+            )
+            history = menu_result_history_text("text", result, {"resposta"})
+        else:
+            history = menu_result_history_text(interaction, result, masked)
+        # a fala que ainda está sendo transcrita não pode chegar depois do HDEL do motor
+        if masked is None or masked:
+            self._masked_grace_until[session_id] = time.monotonic() + _MASKED_SPEECH_GRACE_S
+
+        snapshot = await self._context_reader.get_snapshot(session_id)
+        event = NormalizedInboundEvent(
+            contact_id       = info["contact_id"],
+            session_id       = session_id,
+            channel          = "webrtc",
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(
+                type    = "menu_result",
+                payload = {"menu_id": menu_id, "interaction": interaction, "result": result},
+            ),
+            context_snapshot = snapshot,
+        )
+        await self._registry.append_message(
+            session_id = session_id,
+            message_id = event.message_id,
+            author     = "customer",
+            text       = history,
+            timestamp  = event.timestamp,
+        )
+        await self._publish_inbound(event.model_dump())
+        logger.info(
+            "webrtc: menu_submit publicado session=%s menu=%s interaction=%s mascarados=%s",
+            session_id, menu_id, interaction,
+            "desconhecidos" if masked is None else sorted(masked),
         )
 
     async def _publish_customer_text(

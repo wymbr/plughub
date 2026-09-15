@@ -242,6 +242,7 @@ volumes:
   clickhouse-data:
   attachment-data:
   minio-data:
+  speaches-models:     # modelos de STT/TTS do bot leg (VOZ-05) — ~550 MB, baixados uma vez
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Testes manuais — roteiro de validação
@@ -1427,6 +1428,76 @@ services:
     networks:
       - plughub-demo
 
+  # ── Bot leg: STT e TTS self-hosted (VOZ-05 · ADR adr-voice-media-plane V-F2) ─────────
+  # Decisão do dono (2026-09-15): conversão de voz AUTO-HOSPEDADA, pela mesma razão do SFU —
+  # acompanha o deploy, e sem chave de terceiro o probe mede de verdade. Um serviço só serve
+  # os dois lados numa API compatível com a da OpenAI: faster-whisper (STT, POST
+  # /v1/audio/transcriptions) e Piper (TTS, POST /v1/audio/speech, que devolve PCM cru —
+  # sem MP3 para decodificar, que a imagem do gateway nem sabe fazer).
+  #
+  # Até aqui, sem chave, o STT do gateway era um MOCK que entrava oculto na sala, consumia o
+  # áudio e não transcrevia nada. Gates: probe_webrtc_bot_leg_gate.sh · probe_webrtc_stt_speaches.sh.
+  #
+  # Imagem FIXADA por digest: a tag muda sem avisar, e os modelos são escolha do dono medida
+  # contra ESTA versão. Sem porta publicada — só o gateway fala com ele.
+  #
+  # GPU por padrão (decisão do dono, 2026-09-15, medida numa RTX 4070 Laptop 8 GB): STT
+  # `large-v3-turbo` a 0,17 s de processamento por segundo de fala e WER 2,3% limpo e com ruído,
+  # contra `small` na CPU a 0,46 s e 4,7%. TTS Kokoro voz `pf_dora` — a GPU NÃO o acelera
+  # (0,31 × 0,25 na CPU), foi escolhido pela voz. Máquina sem GPU:
+  #   docker compose -f docker-compose.demo.yml -f docker-compose.voice-cpu.yml up -d
+  # que troca imagem, dispositivo e modelos NOS TRÊS serviços (speaches, speaches-models,
+  # channel-gateway). `probe_webrtc_stt_speaches.sh` confere que o gateway pede o que o serviço tem.
+  speaches:
+    image: ghcr.io/speaches-ai/speaches@sha256:6ec12ebf890a17e0d4b242a8ba9e0eb1fb836e60e8a3c857aea9838d541579ac   # latest-cuda (CUDA 12.6.3) em 2026-09-15
+    environment:
+      ENABLE_UI:     "false"
+      LOG_LEVEL:     info
+      WHISPER__TTL:  "-1"      # modelo fica carregado: descarregar custa segundos na 1ª fala depois de ocioso
+      WHISPER__INFERENCE_DEVICE: cuda
+      WHISPER__COMPUTE_TYPE:     float16
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - speaches-models:/home/ubuntu/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - plughub-demo
+
+  # Provisiona os modelos PELA API do serviço (POST /v1/models/{id}: 200 baixou, 201 já
+  # existia) — seed-if-absent, e o volume os mantém entre recriações. Escolhas do dono
+  # (2026-09-15): STT `deepdml/faster-whisper-large-v3-turbo-ct2` (1,6 GB, MIT) e TTS
+  # `speaches-ai/Kokoro-82M-v1.0-ONNX` (354 MB). ⚠️ O gateway pede os MESMOS ids
+  # (PLUGHUB_WEBRTC_STT_MODEL / _TTS_MODEL): trocar aqui sem trocar lá dá 404 do serviço a cada
+  # fala — o probe acusa a divergência antes (ramo A2).
+  speaches-models:
+    image: ghcr.io/speaches-ai/speaches@sha256:6ec12ebf890a17e0d4b242a8ba9e0eb1fb836e60e8a3c857aea9838d541579ac
+    environment:
+      SPEACHES_MODELS: "deepdml/faster-whisper-large-v3-turbo-ct2 speaches-ai/Kokoro-82M-v1.0-ONNX"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        for m in $$SPEACHES_MODELS; do
+          code=$$(curl -s -o /tmp/r -w '%{http_code}' -X POST "http://speaches:8000/v1/models/$$m")
+          echo "modelo $$m -> http $$code: $$(cat /tmp/r)"
+          case "$$code" in 200|201) ;; *) exit 1 ;; esac
+        done
+    depends_on:
+      speaches:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+
   channel-gateway:
     build:
       context: .
@@ -1502,6 +1573,14 @@ services:
       PLUGHUB_WEBRTC_LIVEKIT_PUBLIC_URL:  ws://localhost:7880
       PLUGHUB_WEBRTC_LIVEKIT_API_KEY:     plughub_demo_key
       PLUGHUB_WEBRTC_LIVEKIT_API_SECRET:  changeme_livekit_api_secret_demo_32chars
+      # VOZ-05 — bot leg (STT/TTS) pelo serviço auto-hospedado `speaches`. Sem as duas, o bot
+      # leg fica INDISPONÍVEL e diz o que falta: chamada com áudio não é transcrita e a IA
+      # atende por texto. Os modelos (defaults do Settings) são os que `speaches-models` baixa.
+      PLUGHUB_WEBRTC_SPEECH_PROVIDER:     speaches
+      PLUGHUB_WEBRTC_SPEACHES_URL:        http://speaches:8000
+      PLUGHUB_WEBRTC_STT_MODEL:           deepdml/faster-whisper-large-v3-turbo-ct2
+      PLUGHUB_WEBRTC_TTS_MODEL:           speaches-ai/Kokoro-82M-v1.0-ONNX
+      PLUGHUB_WEBRTC_TTS_VOICE:           pf_dora
     depends_on:
       redis:
         condition: service_healthy

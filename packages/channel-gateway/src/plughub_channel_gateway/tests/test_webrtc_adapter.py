@@ -87,6 +87,7 @@ def _fake_redis():
             r._store.pop(k, None)
 
     r.setex = AsyncMock(side_effect=_setex)
+    r.hgetall = AsyncMock(return_value={})   # sem menu esperando (VOZ-05)
     r.get   = AsyncMock(side_effect=_get)
     r.expire = AsyncMock(side_effect=_expire)
     r.delete = AsyncMock(side_effect=_delete)
@@ -459,15 +460,25 @@ class TestWebRTCAdapterDelivery:
         })
 
     @pytest.mark.asyncio
-    async def test_deliver_menu_sends_webrtc_interaction(self):
+    async def test_deliver_menu_sends_flat_interaction_with_masked_fields(self):
+        # O `menu.payload` REAL do `notification_send` (bpm.ts), não um `content` inventado:
+        # até a VOZ-05 este teste aninhava o menu em `content` e afirmava `payload` — o formato
+        # que o widget não lia. Produtor e teste um para o outro, nenhum para o consumidor.
         ws = self._register_ws()
-        menu = {"menu_id": "m1", "fields": []}
         await self.adapter.deliver_menu({
-            "session_id": self.session_id,
-            "content":    menu,
+            "type": "menu.payload", "contact_id": "c1", "session_id": self.session_id,
+            "menu_id": "m1", "channel": "webrtc", "interaction": "form",
+            "prompt": "Preencha:", "options": [],
+            "fields": [{"id": "email", "label": "E-mail"}, {"id": "senha", "label": "Senha"}],
+            "masked_fields": ["senha"], "masked_types": {"senha": "credential"},
         })
-        assert ws.sent_messages[0]["type"] == "webrtc.interaction"
-        assert ws.sent_messages[0]["payload"] == menu
+        msg = ws.sent_messages[0]
+        assert msg["type"] == "webrtc.interaction"
+        assert (msg["menu_id"], msg["interaction"], msg["prompt"]) == ("m1", "form", "Preencha:")
+        assert [f["id"] for f in msg["fields"]] == ["email", "senha"]
+        assert msg["masked_fields"] == ["senha"]
+        assert "payload" not in msg
+        assert self.adapter._menu_masked[self.session_id] == {"m1": ["senha"]}
 
     @pytest.mark.asyncio
     async def test_deliver_typing_sends_webrtc_typing(self):
@@ -493,6 +504,45 @@ class TestWebRTCAdapterDelivery:
         ws.close.assert_called_once()
         # Connection should be removed
         assert self.session_id not in self.adapter._connections
+
+    # ── VOZ-16: os PRODUTORES reais de `session.closed`, não um payload do teste ──────
+    # O teste acima escreve `close_reason`, que até a VOZ-16 nenhum produtor escrevia — e
+    # passava enquanto todo fechamento chegava ao cliente como `session_timeout`.
+
+    @pytest.mark.asyncio
+    async def test_timeout_de_fila_do_routing_mostra_aviso_antes_e_motivo_de_negocio(self):
+        ws = self._register_ws()
+        await self.adapter.deliver_session_closed({   # forma de routing-engine `_emit_queue_timeout`
+            "type": "session.closed", "contact_id": "c-1", "session_id": self.session_id,
+            "channel": "webrtc", "reason": "agent_done", "close_reason": "max_wait_exceeded",
+            "farewell_text": "Tempo máximo de espera atingido.",
+        })
+        tipos = [m["type"] for m in ws.sent_messages]
+        assert tipos == ["webrtc.message", "webrtc.session_closed"]
+        aviso, fecho = ws.sent_messages
+        assert aviso["author"] == "system" and aviso["text"] == "Tempo máximo de espera atingido."
+        assert fecho["reason"] == "max_wait_exceeded"
+
+    @pytest.mark.asyncio
+    async def test_fechamento_do_bridge_usa_reason_de_negocio(self):
+        ws = self._register_ws()
+        await self.adapter.deliver_session_closed({   # forma do bridge (`flow_complete`)
+            "type": "session.closed", "contact_id": "c-1", "session_id": self.session_id,
+            "channel": "webrtc", "reason": "flow_complete",
+        })
+        [fecho] = ws.sent_messages
+        assert fecho == {"type": "webrtc.session_closed", "reason": "flow_complete"}
+
+    @pytest.mark.asyncio
+    async def test_marcador_de_transporte_nao_vira_motivo_nem_se_inventa_um(self, caplog):
+        ws = self._register_ws()
+        with caplog.at_level("WARNING"):
+            await self.adapter.deliver_session_closed({
+                "session_id": self.session_id, "reason": "agent_done",
+            })
+        [fecho] = ws.sent_messages
+        assert fecho == {"type": "webrtc.session_closed"}
+        assert "sem motivo de negocio" in caplog.text
 
     @pytest.mark.asyncio
     async def test_deliver_session_closed_removes_customer_media(self):

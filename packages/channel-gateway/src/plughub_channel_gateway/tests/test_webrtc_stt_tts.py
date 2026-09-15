@@ -9,7 +9,8 @@ Coverage:
   - WebRTCAdapter._stt_pipeline() → _publish_transcript() → Kafka
   - WebRTCAdapter._tts_inject() → room_client.publish_audio()
   - DataChannel text (webrtc.message) → Kafka conversations.inbound
-  - DataChannel menu reply (webrtc.interaction_reply) → Redis menu:result
+  - Menu reply (webrtc.menu_submit) → `menu_result` + histórico redigido; coleta mascarada
+    descarta fala e texto livre (VOZ-05, fatia A)
   - STT disabled (webrtc_stt_enabled=False) — no room client created
   - TTS disabled (webrtc_tts_injection_enabled=False) — no inject on deliver_text
   - deliver_session_closed tears down room client and STT task
@@ -69,6 +70,10 @@ def _settings(**overrides) -> Settings:
         voice_stt_language         = "pt-BR",
         voice_elevenlabs_api_key   = "",
         voice_elevenlabs_voice_id  = "pNInz6obpgDQGcFmaJgB",
+        # Explícitos (VOZ-05): o container do demo exporta PLUGHUB_WEBRTC_SPEECH_PROVIDER=speaches,
+        # e sem isto os testes de "sem provedor" passavam fora do container e reprovavam dentro.
+        webrtc_speech_provider     = "",
+        webrtc_speaches_url        = "",
     )
     base.update(overrides)
     return Settings(**base)
@@ -81,6 +86,9 @@ def _make_redis() -> AsyncMock:
     redis.lpush  = AsyncMock(return_value=1)
     redis.expire = AsyncMock(return_value=True)
     redis.delete = AsyncMock(return_value=1)
+    # explícito: um AsyncMock devolveria MagicMock, e a coleta mascarada seria decidida
+    # pelo acaso de um MagicMock iterar vazio
+    redis.hgetall = AsyncMock(return_value={})
     return redis
 
 
@@ -592,37 +600,221 @@ class TestDataChannel:
         assert inbound_calls == []
 
     @pytest.mark.asyncio
-    async def test_datachannel_interaction_reply_written_to_redis(self):
-        """webrtc.interaction_reply must write reply to Redis menu:result:{session_id}."""
+    async def test_interaction_reply_is_refused_and_writes_nothing(self):
+        """O formato aposentado (envelope JSON em `menu:result:{sid}`, que o motor não lê)
+        é recusado DITO — nem Redis, nem Kafka."""
         adapter, redis, producer = _make_adapter()
+        _abre(adapter)
 
-        ws = _ws_streaming([
-            json.dumps({
-                "type":           "webrtc.interaction_reply",
-                "reply":          "option_a",
-                "interaction_id": "int-001",
-            }),
-        ])
-
-        await adapter._receive_loop(ws, SESSION_ID)
-
-        redis.lpush.assert_called_once()
-        key = redis.lpush.call_args[0][0]
-        assert key == f"menu:result:{SESSION_ID}"
-        raw = redis.lpush.call_args[0][1]
-        data = json.loads(raw)
-        assert data["reply"] == "option_a"
-        assert data["interaction_id"] == "int-001"
-
-    @pytest.mark.asyncio
-    async def test_datachannel_interaction_reply_empty_not_written(self):
-        """interaction_reply with empty reply must not write to Redis."""
-        adapter, redis, producer = _make_adapter()
-
-        ws = _ws_streaming([json.dumps({"type": "webrtc.interaction_reply", "reply": ""})])
+        ws = _ws_streaming([json.dumps({
+            "type": "webrtc.interaction_reply", "reply": "option_a", "interaction_id": "int-001"})])
         await adapter._receive_loop(ws, SESSION_ID)
 
         redis.lpush.assert_not_called()
+        assert producer.send.call_args_list == []
+        erros = [c.args[0] for c in ws.send_json.call_args_list if c.args[0].get("type") == "conn.error"]
+        assert [e["code"] for e in erros] == ["unsupported_message"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5b. Coleta mascarada (VOZ-05, fatia A)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FORM_RESULT = {"email": "a@b.c", "senha": "135791", "codigo_2fa": "246802"}
+
+
+def _inbound(producer) -> list[dict]:
+    return [json.loads(c.args[1].decode()) for c in producer.send.call_args_list
+            if c.args[0] == "conversations.inbound"]
+
+
+def _historico(adapter) -> list[str]:
+    return [c.kwargs["text"] for c in adapter._registry.append_message.call_args_list]
+
+
+def _waiting(masked_fields=None, masked=False) -> dict:
+    return {"inst-1": json.dumps({"visibility": "all", "masked": masked,
+                                  "masked_fields": masked_fields or [], "standby": False})}
+
+
+class TestMenuResultHistoryText:
+    """A casa única da linha de histórico — webchat e webrtc a consomem."""
+
+    def test_form_redacts_only_masked_fields(self):
+        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
+        t = menu_result_history_text("form", _FORM_RESULT, {"senha", "codigo_2fa"})
+        assert t == '[Formulário: {"email": "a@b.c", "senha": "••••••", "codigo_2fa": "••••••"}]'
+
+    def test_form_as_json_string_and_empty_masked_field(self):
+        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
+        t = menu_result_history_text("form", json.dumps({"email": "x", "senha": ""}), {"senha"})
+        assert t == '[Formulário: {"email": "x", "senha": ""}]'
+
+    def test_undecodable_form_never_falls_back_to_raw(self):
+        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
+        t = menu_result_history_text("form", "senha=135791", {"senha"})
+        assert "135791" not in t and t == "[Formulário: {}]"
+
+    def test_non_form_masked_redacts_everything(self):
+        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
+        assert menu_result_history_text("text", "135791", {"pin"}) == "[Entrada mascarada (pin): ••••••]"
+
+    def test_unmasked_passes(self):
+        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
+        assert menu_result_history_text("button", "sim", set()) == "[Resposta: sim]"
+        assert menu_result_history_text("checklist", ["a", "b"], set()) == '[Resposta: ["a", "b"]]'
+
+
+class TestMaskedCapture:
+    @pytest.mark.asyncio
+    async def test_menu_submit_publishes_real_value_and_redacted_history(self):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        adapter._menu_masked[SESSION_ID] = {"m1": ["senha", "codigo_2fa"]}
+
+        ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m1",
+                                        "interaction": "form", "result": _FORM_RESULT})])
+        await adapter._receive_loop(ws, SESSION_ID)
+
+        ev = _inbound(producer)
+        assert len(ev) == 1
+        # o valor REAL vai ao bridge: é ele que o entrega ao menu que espera
+        assert ev[0]["content"]["type"] == "menu_result"
+        assert ev[0]["content"]["payload"] == {"menu_id": "m1", "interaction": "form", "result": _FORM_RESULT}
+        assert ev[0]["author"]["type"] == "customer" and ev[0]["channel"] == "webrtc"
+        hist = _historico(adapter)
+        assert hist == ['[Formulário: {"email": "a@b.c", "senha": "••••••", "codigo_2fa": "••••••"}]']
+        assert "m1" not in adapter._menu_masked[SESSION_ID]
+
+    @pytest.mark.asyncio
+    async def test_menu_submit_after_restart_uses_engine_declaration(self):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        redis.hgetall = AsyncMock(return_value=_waiting(["senha", "codigo_2fa"]))
+
+        ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m-perdido",
+                                        "interaction": "form", "result": _FORM_RESULT})])
+        await adapter._receive_loop(ws, SESSION_ID)
+
+        assert "135791" not in _historico(adapter)[0] and "246802" not in _historico(adapter)[0]
+        assert '"email": "a@b.c"' in _historico(adapter)[0]
+
+    @pytest.mark.asyncio
+    async def test_menu_submit_with_nothing_known_redacts_whole_answer(self, caplog):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        with caplog.at_level("WARNING"):
+            ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m-x",
+                                            "interaction": "form", "result": _FORM_RESULT})])
+            await adapter._receive_loop(ws, SESSION_ID)
+        assert "135791" not in _historico(adapter)[0] and "a@b.c" not in _historico(adapter)[0]
+        assert "desconhecidos" in caplog.text
+        assert len(_inbound(producer)) == 1
+
+    @pytest.mark.asyncio
+    async def test_unmasked_menu_submit_keeps_answer_and_opens_no_grace(self):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        adapter._menu_masked[SESSION_ID] = {}
+        redis.hgetall = AsyncMock(side_effect=[{"inst-1": json.dumps({"masked": False, "masked_fields": []})}, {}])
+        ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m2",
+                                        "interaction": "button", "result": "sim"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        assert _historico(adapter) == ["[Resposta: sim]"]
+        assert SESSION_ID not in adapter._masked_grace_until
+
+    @pytest.mark.asyncio
+    async def test_malformed_menu_submit_is_refused(self):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m1", "result": "x"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        assert _inbound(producer) == [] and _historico(adapter) == []
+        erros = [c.args[0]["code"] for c in ws.send_json.call_args_list if c.args[0].get("type") == "conn.error"]
+        assert erros == ["bad_message"]
+
+    @pytest.mark.asyncio
+    async def test_free_text_during_masked_wait_is_refused(self):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        redis.hgetall = AsyncMock(return_value=_waiting(["senha"]))
+        ws = _ws_streaming([json.dumps({"type": "webrtc.message", "text": "minha senha e 135791"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        assert _inbound(producer) == [] and _historico(adapter) == []
+        erros = [c.args[0]["code"] for c in ws.send_json.call_args_list if c.args[0].get("type") == "conn.error"]
+        assert erros == ["masked_capture_active"]
+
+    @pytest.mark.asyncio
+    async def test_free_text_during_unmasked_wait_is_published(self):
+        # CONTROLE do anterior: menu esperando SEM máscara não recusa texto
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        redis.hgetall = AsyncMock(return_value=_waiting([]))
+        ws = _ws_streaming([json.dumps({"type": "webrtc.message", "text": "oi"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        assert len(_inbound(producer)) == 1
+
+    @pytest.mark.asyncio
+    async def test_step_level_masked_wait_also_counts(self):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        redis.hgetall = AsyncMock(return_value=_waiting([], masked=True))
+        assert await adapter._masked_capture_active(SESSION_ID) is True
+
+    @pytest.mark.asyncio
+    async def test_unreadable_wait_counts_as_active(self):
+        adapter, redis, producer = _make_adapter()
+        redis.hgetall = AsyncMock(side_effect=ConnectionError("redis fora"))
+        assert await adapter._masked_capture_active(SESSION_ID) is True
+        redis.hgetall = AsyncMock(return_value={"inst-1": "nao-json"})
+        assert await adapter._masked_capture_active(SESSION_ID) is True
+
+    @pytest.mark.asyncio
+    async def test_transcript_during_masked_wait_is_dropped_and_customer_told(self, caplog):
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        ws = AsyncMock()
+        adapter._connections[SESSION_ID] = ws
+        redis.hgetall = AsyncMock(return_value=_waiting(["senha"]))
+        with caplog.at_level("INFO"):
+            await adapter._publish_transcript(SESSION_ID, "a senha e um tres cinco", 0.9, 0, 900)
+        assert _inbound(producer) == [] and _historico(adapter) == []
+        assert "tres cinco" not in caplog.text and "DESCARTADA" in caplog.text
+        avisos = [c.args[0] for c in ws.send_json.call_args_list]
+        assert avisos and avisos[0]["author"] == "system" and "protegido" in avisos[0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_transcript_outside_masked_wait_is_published(self):
+        # CONTROLE: sem espera mascarada e sem folga, a fala segue para o bridge
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        await adapter._publish_transcript(SESSION_ID, "quero a fatura", 0.9, 0, 900)
+        assert len(_inbound(producer)) == 1
+
+    @pytest.mark.asyncio
+    async def test_grace_covers_both_edges_and_expires(self, monkeypatch):
+        from plughub_channel_gateway.adapters import webrtc as mod
+        agora = [1000.0]
+        monkeypatch.setattr(mod.time, "monotonic", lambda: agora[0])
+        adapter, redis, producer = _make_adapter()
+        _abre(adapter)
+        # borda 1: o menu mascarado chegou ao adapter, o motor ainda não gravou menu:waiting
+        await adapter.deliver_menu({"session_id": SESSION_ID, "menu_id": "m1", "interaction": "text",
+                                    "masked_fields": ["pin"]})
+        await adapter._publish_transcript(SESSION_ID, "um tres cinco", 0.9, 0, 900)
+        assert _inbound(producer) == []
+        # folga vencida e motor sem espera: a fala volta a ser publicada
+        agora[0] += mod._MASKED_SPEECH_GRACE_S + 0.1
+        await adapter._publish_transcript(SESSION_ID, "quero a fatura", 0.9, 0, 900)
+        assert len(_inbound(producer)) == 1
+        # borda 2: a submissão mascarada reabre a folga (a fala em curso chega depois do HDEL)
+        adapter._menu_masked[SESSION_ID] = {"m2": ["pin"]}
+        ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m2",
+                                        "interaction": "text", "result": "135"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        await adapter._publish_transcript(SESSION_ID, "um tres cinco", 0.9, 0, 900)
+        textos = [e["content"].get("text") for e in _inbound(producer)]
+        assert "um tres cinco" not in textos
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -732,21 +924,117 @@ class TestTeardown:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestProviderFactories:
-    def test_build_stt_provider_no_api_key_returns_mock(self):
+    # VOZ-05: estes testes afirmavam que, sem chave, a fábrica devolvia um MOCK — o placebo
+    # que entrava na sala e não transcrevia nada. Sem provedor, a fábrica devolve None e o
+    # bot leg fica INDISPONÍVEL com o motivo nomeado.
+
+    def test_build_stt_provider_no_api_key_returns_none(self):
         s = _settings(webrtc_stt_enabled=True, voice_deepgram_api_key="")
         adapter, _, _ = _make_adapter(settings=s)
-        # Must not raise; _build_stt_provider() returns MockSTTProvider
-        stt = adapter._build_stt_provider()
-        assert isinstance(stt, MockSTTProvider)
+        assert adapter._build_stt_provider() is None
 
-    def test_build_stt_provider_disabled_returns_mock(self):
+    def test_build_stt_provider_disabled_returns_none(self):
         s = _settings(webrtc_stt_enabled=False)
         adapter, _, _ = _make_adapter(settings=s)
-        stt = adapter._build_stt_provider()
-        assert isinstance(stt, MockSTTProvider)
+        assert adapter._build_stt_provider() is None
 
-    def test_build_tts_provider_no_api_key_returns_mock(self):
+    def test_build_tts_provider_no_api_key_returns_none(self):
         s = _settings(voice_elevenlabs_api_key="")
         adapter, _, _ = _make_adapter(settings=s)
-        tts = adapter._build_tts_provider()
-        assert isinstance(tts, MockTTSProvider)
+        assert adapter._build_tts_provider() is None
+
+    def test_sem_provedores_o_adapter_nomeia_o_que_falta(self):
+        s = _settings(webrtc_stt_enabled=True, voice_deepgram_api_key="", voice_elevenlabs_api_key="")
+        adapter = WebRTCAdapter(producer=MagicMock(), redis=MagicMock(), settings=s,
+                                registry=MagicMock(), context_reader=MagicMock(),
+                                webrtc_provider=MockWebRTCProvider())
+        assert "STT" in (adapter._stt_unavailable or "")
+        assert "TTS" in (adapter._tts_unavailable or "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Gatilho do bot leg (VOZ-05) — TRANSCREVE toda chamada com áudio (STT);
+#    CONVERTE para o agente de IA (STT + TTS). Nunca por mock.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _registro(framework: str, audio: bool = True) -> dict:
+    return {"framework": framework, "pool_id": "p", "policy_source": "pool:p",
+            "customer_publish": ["audio"] if audio else [], "agent_publish": ["audio"]}
+
+
+class TestBotLegGatilho:
+    def _adapter(self, stt: bool, tts: bool):
+        s = _settings(webrtc_stt_enabled=True, voice_deepgram_api_key="", voice_elevenlabs_api_key="")
+        kw = {}
+        if stt:
+            kw["stt_provider"] = MockSTTProvider()
+        if tts:
+            kw["tts_provider"] = MockTTSProvider(False)
+        return WebRTCAdapter(producer=MagicMock(), redis=MagicMock(), settings=s, registry=MagicMock(),
+                             context_reader=MagicMock(), webrtc_provider=MockWebRTCProvider(), **kw)
+
+    def test_humano_com_audio_e_stt_ainda_sem_bot_ate_a_fatia_4_e_o_estado_diz(self):
+        # Com STT presente, o bot numa chamada de humano publicaria a fala como MENSAGEM do
+        # cliente — apareceria no Console como digitada. Até a fatia 4 dar destino de
+        # transcrição, não entra, e o estado nomeia por quê.
+        a = self._adapter(stt=True, tts=True)
+        state = {"attendants": {"h1": _registro("human")}}
+        assert a._ceiling(state) == frozenset({"audio"})
+        assert a._bot_leg_should_run(state, a._ceiling(state)) is False
+        bot = a._bot_leg_state(state, SESSION_ID)
+        assert bot["available"] is False and "fatia 4" in bot["reason"]
+
+    def test_ia_e_humano_juntos_com_provedores_chamam_o_bot(self):
+        a = self._adapter(stt=True, tts=True)
+        state = {"attendants": {"h1": _registro("human"), "ia1": _registro("native")}}
+        assert a._bot_leg_should_run(state, a._ceiling(state)) is True
+
+    def test_humano_com_audio_sem_stt_nao_ha_bot_e_o_estado_diz_que_nao_transcreve(self):
+        a = self._adapter(stt=False, tts=False)
+        state = {"attendants": {"h1": _registro("human")}}
+        assert a._ceiling(state) == frozenset({"audio"})       # o humano ouve pela sala
+        assert a._bot_leg_should_run(state, a._ceiling(state)) is False
+        bot = a._bot_leg_state(state, SESSION_ID)
+        assert bot["available"] is False and "NAO transcrita" in bot["reason"]
+
+    def test_ia_com_stt_e_tts_ganha_audio_e_chama_o_bot(self):
+        a = self._adapter(stt=True, tts=True)
+        state = {"attendants": {"ia1": _registro("native")}}
+        assert a._ceiling(state) == frozenset({"audio"})
+        assert a._bot_leg_should_run(state, a._ceiling(state)) is True
+
+    def test_ia_com_stt_sem_tts_fica_sem_audio_e_o_estado_diz_que_ela_nao_fala(self):
+        a = self._adapter(stt=True, tts=False)
+        state = {"attendants": {"ia1": _registro("native")}}
+        assert a._ceiling(state) == frozenset()
+        bot = a._bot_leg_state(state, SESSION_ID)
+        assert bot["convert"] is True and bot["available"] is False and "sem voz" in bot["reason"]
+
+    def test_ia_sem_provedores_fica_sem_audio_e_o_estado_diz(self):
+        a = self._adapter(stt=False, tts=False)
+        state = {"attendants": {"ia1": _registro("native")}}
+        assert a._ceiling(state) == frozenset()
+        assert a._bot_leg_should_run(state, a._ceiling(state)) is False
+        bot = a._bot_leg_state(state, SESSION_ID)
+        assert bot["available"] is False and "STT" in bot["reason"] and "TTS" in bot["reason"]
+
+    @pytest.mark.asyncio
+    async def test_ultimo_atendente_de_audio_sai_e_o_bot_sai_da_sala(self):
+        a = self._adapter(stt=True, tts=True)
+        a._redis = AsyncMock()
+        a._redis.get = AsyncMock(return_value="c-1")
+        rc = MockRoomClient()
+        rc.connected = True
+        a._room_clients[SESSION_ID] = rc
+        # sobra só um especialista de texto sem áudio no pool: nada a transcrever
+        state = {"attendants": {"ia1": _registro("native", audio=False)},
+                 "customer": {"publish": ["audio"]}}
+        await a._apply_customer_ceiling(AsyncMock(), SESSION_ID, state, "attendant_left:human")
+        assert rc.disconnected is True
+        assert SESSION_ID not in a._room_clients
+
+    def test_pool_sem_audio_nao_precisa_do_bot(self):
+        a = self._adapter(stt=True, tts=True)
+        state = {"attendants": {"ia1": _registro("native", audio=False)}}
+        assert a._bot_leg_should_run(state, a._ceiling(state)) is False
+        assert a._bot_leg_state(state, SESSION_ID) == {"transcribe": False, "convert": False, "available": True}

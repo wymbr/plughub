@@ -755,49 +755,98 @@ function teardown() {
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────────
+// VOZ-05 (fatia A): o servidor manda o menu PLANO (`menu_id`, `interaction`, `prompt`,
+// `options`, `fields`, `masked_fields`) e espera `webrtc.menu_submit {menu_id, interaction,
+// result}` — o mesmo contrato do webchat. Campo em `masked_fields` é `type=password`, e o eco
+// local nunca mostra o valor dele.
+const MASKED_ECHO = '••••••';
+
 function renderInteraction(msg) {
   const card = document.createElement('div');
   card.className = 'ia-card';
   card.dataset.menuId = msg.menu_id || '';
+  const masked = new Set(msg.masked_fields || []);
+  const interaction = msg.interaction || 'text';
 
   const prompt = document.createElement('div');
   prompt.className = 'ia-prompt';
-  prompt.textContent = msg.prompt || msg.text || '';
+  prompt.textContent = msg.prompt || '';
   card.appendChild(prompt);
 
+  const submit = (result, echo) => {
+    wsSend({ type: 'webrtc.menu_submit', menu_id: msg.menu_id, interaction, result });
+    card.classList.add('done');
+    addMsg(echo, 'out');
+  };
+  const input = (id, label, isMasked) => {
+    const row = document.createElement('div');
+    row.className = 'ia-text-row';
+    const inp = document.createElement('input');
+    inp.type = isMasked ? 'password' : 'text';
+    inp.autocomplete = isMasked ? 'off' : 'on';
+    inp.placeholder = label || '';
+    inp.dataset.fieldId = id;
+    row.appendChild(inp);
+    card.appendChild(row);
+    return inp;
+  };
+  const okButton = (onclick) => {
+    const btn = document.createElement('button');
+    btn.className = 'ia-send-btn';
+    btn.textContent = 'OK';
+    btn.onclick = onclick;
+    card.appendChild(btn);
+    return btn;
+  };
+
   const opts = msg.options || [];
-  if (opts.length > 0) {
+  if (interaction === 'form') {
+    const inputs = (msg.fields || []).map(f => input(f.id, f.label || f.id, masked.has(f.id)));
+    okButton(() => {
+      const result = {}, echo = {};
+      for (const inp of inputs) {
+        const id = inp.dataset.fieldId;
+        result[id] = inp.value;
+        echo[id] = masked.has(id) ? (inp.value ? MASKED_ECHO : '') : inp.value;
+      }
+      submit(result, `[Formulário: ${JSON.stringify(echo)}]`);
+    });
+    if (inputs[0]) inputs[0].focus();
+  } else if (interaction === 'checklist') {
+    const boxes = opts.map(opt => {
+      const lbl = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = opt.id;
+      lbl.appendChild(box);
+      lbl.appendChild(document.createTextNode(' ' + (opt.label || opt.id)));
+      card.appendChild(lbl);
+      card.appendChild(document.createElement('br'));
+      return box;
+    });
+    okButton(() => {
+      const chosen = boxes.filter(b => b.checked).map(b => b.value);
+      submit(chosen, masked.size ? MASKED_ECHO : chosen.join(', '));
+    });
+  } else if (opts.length > 0) {
     for (const opt of opts) {
       const btn = document.createElement('button');
       btn.className = 'ia-opt-btn';
       btn.textContent = opt.label || opt.id;
-      btn.onclick = () => {
-        wsSend({ type: 'webrtc.interaction_reply', menu_id: msg.menu_id, value: opt.id });
-        card.classList.add('done');
-        addMsg(opt.label || opt.id, 'out');
-      };
+      btn.onclick = () => submit(opt.id, masked.size ? MASKED_ECHO : (opt.label || opt.id));
       card.appendChild(btn);
     }
   } else {
-    // Text input fallback
-    const row = document.createElement('div');
-    row.className = 'ia-text-row';
-    const inp = document.createElement('input');
-    inp.type = 'text';
-    const sendBtn = document.createElement('button');
-    sendBtn.className = 'ia-send-btn';
-    sendBtn.textContent = 'OK';
-    sendBtn.onclick = () => {
+    const isMasked = masked.size > 0;
+    const inp = input(isMasked ? [...masked][0] : 'resposta', '', isMasked);
+    const send = () => {
       const val = inp.value.trim();
       if (!val) return;
-      wsSend({ type: 'webrtc.interaction_reply', menu_id: msg.menu_id, value: val });
-      card.classList.add('done');
-      addMsg(val, 'out');
+      submit(val, isMasked ? MASKED_ECHO : val);
     };
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.click(); });
-    row.appendChild(inp);
-    row.appendChild(sendBtn);
-    card.appendChild(row);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+    okButton(send);
+    inp.focus();
   }
 
   document.getElementById('messages').appendChild(card);
@@ -856,6 +905,11 @@ async function connectWebRTC() {
       wsSend({ type: 'conn.authenticate', token });
       return;
     }
+    if (msg.type === 'conn.error' && msg.code === 'masked_capture_active') {
+      // VOZ-05: texto livre recusado durante o preenchimento protegido — aviso, não queda.
+      addMsg(msg.message || 'Use o campo protegido.', 'sys');
+      return;
+    }
     if (msg.type === 'conn.error') {
       addMsg(`Erro: ${msg.code || ''} ${msg.message || ''}`, 'sys');
       setStatus('Erro', 'err');
@@ -880,9 +934,7 @@ async function connectWebRTC() {
     // TETO do cliente (`publish: ["audio","video"]`), e o token vem em `token` (este widget lia
     // `livekit_token`, chave que o servidor nunca enviou). O "meio" abaixo é só a VISÃO local
     // derivada do teto. Handshake, texto do cliente e motivo de fechamento seguem o servidor desde
-    // a VOZ-04. ⚠️ Menu (`webrtc.interaction`/`interaction_reply`) ainda NÃO: o servidor manda
-    // `payload` e espera `reply`/`interaction_id`, este widget lê e manda outras chaves — e o
-    // formato que o motor espera em `menu:result` não foi conferido. Fica com o menu por voz (VOZ-05).
+    // a VOZ-04; menu e formulário (com campo protegido) desde a VOZ-05 — `renderInteraction`.
     if (msg.type === 'webrtc.ready') {
       const medium      = mediumFromPublish(msg.publish);
       const livekitUrl  = msg.livekit_url;
@@ -940,8 +992,9 @@ async function connectWebRTC() {
 
     // ── Session closed ─────────────────────────────────────────────────────
     if (msg.type === 'webrtc.session_closed') {
-      const reason = msg.reason || 'session_ended';   // o servidor envia `reason`
-      addMsg(`Atendimento encerrado (${reason}).`, 'sys');
+      // `reason` é o motivo de negócio e pode faltar — ausência não vira motivo inventado.
+      // O aviso da plataforma (fila, sem recurso) já chegou antes, como mensagem de sistema.
+      addMsg(msg.reason ? `Atendimento encerrado (${msg.reason}).` : 'Atendimento encerrado.', 'sys');
       setStatus('Encerrado', '');
       teardown();
       return;

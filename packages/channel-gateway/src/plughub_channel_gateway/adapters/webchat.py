@@ -110,6 +110,41 @@ def masked_field_echo(value: object) -> str:
     return _MASKED_FIELD_PLACEHOLDER
 
 
+def menu_result_history_text(
+    interaction: str, result: object, masked_fields: set[str] | frozenset[str],
+) -> str:
+    """A linha de HISTÓRICO (`session:{sid}:messages`) de uma submissão de menu.
+
+    Uma casa para os canais que coletam por campo protegido — webchat e, desde a
+    VOZ-05, webrtc. Até ali o cálculo vivia dentro do `_handle_menu_submit` do webchat,
+    e um segundo canal teria de copiá-lo: duas redações da mesma submissão é como o
+    histórico passa a discordar do eco (o defeito que a `masked_field_echo` fechou).
+
+    Form com campo mascarado redige campo a campo; interação não-form com máscara
+    redige o resultado INTEIRO; sem máscara passa adiante. Resultado de form que não
+    se decodifica vira objeto vazio — nunca o texto cru, que é onde estaria o valor.
+    """
+    if interaction == "form" and masked_fields:
+        try:
+            result_dict: dict = (
+                json.loads(result)
+                if isinstance(result, str)
+                else dict(result) if isinstance(result, dict) else {}
+            )
+        except (json.JSONDecodeError, TypeError):
+            result_dict = {}
+        redacted = {
+            k: (masked_field_echo(v) if k in masked_fields else v)
+            for k, v in result_dict.items()
+        }
+        return f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]"
+    if masked_fields:
+        field_hint = sorted(masked_fields)[0]
+        return f"[Entrada mascarada ({field_hint}): {_MASKED_FIELD_PLACEHOLDER}]"
+    summary = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    return f"[Resposta: {summary}]"
+
+
 class AuthError(Exception):
     """Raised during the auth handshake with a structured code."""
     def __init__(self, code: str, message: str) -> None:
@@ -861,45 +896,11 @@ class WebchatAdapter:
         )
         masked_set    = set(masked_fields)
 
-        if msg.interaction == "form" and masked_set:
-            # Form interaction: redact individual masked fields, keep the rest visible.
-            try:
-                result_dict: dict = (
-                    json.loads(msg.result)
-                    if isinstance(msg.result, str)
-                    else dict(msg.result) if isinstance(msg.result, dict) else {}
-                )
-            except (json.JSONDecodeError, TypeError):
-                result_dict = {}
-
-            redacted = {
-                k: (masked_field_echo(v) if k in masked_set else v)
-                for k, v in result_dict.items()
-            }
-            agent_label   = "Formulário"
-            agent_summary = json.dumps(redacted, ensure_ascii=False)
-
-        elif masked_set:
-            # Non-form masked interaction (text, button, list with masked:true).
-            # The entire result is sensitive — replace with placeholder.
-            # Uses the implicit field id (output_as or step.id) as label hint.
-            field_hint    = next(iter(masked_set), "entrada")
-            agent_label   = f"Entrada mascarada ({field_hint})"
-            agent_summary = "••••••"
-
-        else:
-            agent_label   = "Resposta"
-            agent_summary = (
-                msg.result
-                if isinstance(msg.result, str)
-                else json.dumps(msg.result, ensure_ascii=False)
-            )
-
         await self._registry.append_message(
             session_id = self._session_id,
             message_id = event.message_id,
             author     = "customer",
-            text       = f"[{agent_label}: {agent_summary}]",
+            text       = menu_result_history_text(msg.interaction, msg.result, masked_set),
             timestamp  = event.timestamp,
         )
         await self._publish_inbound(event.model_dump())
