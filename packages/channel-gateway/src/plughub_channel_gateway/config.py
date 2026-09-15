@@ -264,9 +264,6 @@ class Settings(BaseSettings):
     webrtc_stt_model:               str = "Systran/faster-whisper-small"
     webrtc_tts_model:               str = "speaches-ai/piper-pt_BR-faber-medium"
     webrtc_tts_voice:               str = "faber"
-    # Enable TTS injection via LiveKit LocalAudioTrack (AI agents).
-    # Requires livekit full SDK (pip install livekit), not just livekit-api.
-    webrtc_tts_injection_enabled:   bool = False
     # LGPD notice played (TTS) or sent as text before egress recording starts.
     # Override per-tenant via Config API namespace "webrtc", key "recording_notice".
     webrtc_recording_notice:        str = (

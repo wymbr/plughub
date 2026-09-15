@@ -429,6 +429,15 @@ portanto histórico, contexto e avaliação. **Ainda sem telecom.**
 > formulário em canal que não é webchat viram coleta unitária sequencial; em voz, orientação e
 > opções verbalizadas, uma tecla por opção, com barge-in (NIV-13). Gate
 > `probe_webrtc_masked_keypad.sh`.
+>
+> **Fatia 3 — o agente de IA fala (2026-09-15).** Quem fala é quem CONVERTE: sem flag, o agente
+> de IA fala sempre que STT e TTS estão disponíveis; humano digitando e aviso de sistema ficam
+> texto. O bot da conversão entra **visível** — oculto, o SFU não entrega a trilha dele a ninguém,
+> medido. Fala é fila por sessão, frase a frase, esperando bot e cliente na sala (a primeira
+> mensagem da IA chega antes do `routing.assigned`), e na ordem de chegada. **Barge-in**: voz do
+> cliente por 200 ms enquanto o agente fala corta a reprodução e descarta a fila; o texto já está no
+> widget. ⚠️ Na fatia 4 o bot de TRANSCRIÇÃO de chamada humana volta a ser oculto e mudo. Gate
+> `probe_webrtc_tts_spoken.sh`.
 
 **V-F3 — gravação.** Por segmento, com aviso e opt-out (V7), no AttachmentStore com classe de
 retenção (V5). Requer a decisão de retenção de A5 tomada antes.

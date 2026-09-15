@@ -174,7 +174,20 @@ class IWebRTCRoomClient(Protocol):
         sample_rate: Hz of pcm_bytes (default 24000 — ElevenLabs output rate).
 
         Creates the LocalAudioTrack on first call if not already published.
+        Returns early (without error) when `interrupt_audio()` is called mid-utterance.
         """
+        ...
+
+    def interrupt_audio(self) -> None:
+        """Barge-in (VOZ-05 fatia 3): para a fala em curso e descarta o áudio já enfileirado."""
+        ...
+
+    def customer_present(self) -> bool:
+        """O cliente está na sala — sem ele, falar é falar para ninguém (VOZ-05 fatia 3)."""
+        ...
+
+    async def wait_audio_playout(self) -> None:
+        """Espera o áudio já entregue ao SFU terminar de tocar (ou ser interrompido)."""
         ...
 
     async def disconnect(self) -> None:
@@ -208,6 +221,7 @@ class LiveKitRoomClient:
         self._audio_queue:  asyncio.Queue[bytes | None]  = asyncio.Queue(maxsize=500)
         self._connected:    bool                         = False
         self._tts_sr:       int                          = 24000  # published sample rate
+        self._interrupted:  bool                         = False
 
     async def connect(
         self,
@@ -307,14 +321,45 @@ class LiveKitRoomClient:
             )
             logger.debug("webrtc room_client: TTS LocalAudioTrack published")
 
-        samples_per_channel = len(pcm_bytes) // 2  # 16-bit = 2 bytes/sample
-        frame = rtc.AudioFrame(
-            data                = pcm_bytes,
-            sample_rate         = self._tts_sr,
-            num_channels        = 1,
-            samples_per_channel = samples_per_channel,
-        )
-        await self._audio_source.capture_frame(frame)
+        # Quadros de 20 ms, não a fala num quadro só (VOZ-05 fatia 3): o SFU entregava o quadro
+        # único, mas assim não havia ONDE parar — o barge-in precisa de uma fronteira a cada
+        # poucos milissegundos. `capture_frame` bloqueia quando a fila do AudioSource (1 s)
+        # enche, o que dá a cadência de tempo real sem relógio próprio.
+        self._interrupted = False
+        passo = self._tts_sr // 50 * 2
+        for off in range(0, len(pcm_bytes), passo):
+            if self._interrupted or not self._connected:
+                return
+            chunk = pcm_bytes[off:off + passo]
+            if len(chunk) % 2:
+                chunk = chunk[:-1]
+            if not chunk:
+                break
+            frame = rtc.AudioFrame(
+                data                = chunk,
+                sample_rate         = self._tts_sr,
+                num_channels        = 1,
+                samples_per_channel = len(chunk) // 2,
+            )
+            await self._audio_source.capture_frame(frame)
+
+    def customer_present(self) -> bool:
+        if self._room is None or not self._connected:
+            return False
+        return any((getattr(p, "identity", "") or "").startswith(CUSTOMER_IDENTITY_PREFIX)
+                   for p in self._room.remote_participants.values())
+
+    def interrupt_audio(self) -> None:
+        self._interrupted = True
+        if self._audio_source is not None:
+            try:
+                self._audio_source.clear_queue()
+            except Exception as exc:
+                logger.warning("webrtc room_client: clear_queue falhou no barge-in: %s", exc)
+
+    async def wait_audio_playout(self) -> None:
+        if self._audio_source is not None and not self._interrupted:
+            await self._audio_source.wait_for_playout()
 
     async def disconnect(self) -> None:
         """Disconnect from the LiveKit room."""
@@ -355,6 +400,8 @@ class MockRoomClient:
         self.connected:        bool             = False
         self.published_chunks: list[bytes]      = []
         self.disconnected:     bool             = False
+        self.interrupts:       int              = 0
+        self.customer_in_room: bool             = True
         self._audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
     # ── Test helpers ──────────────────────────────────────────────────────────
@@ -388,6 +435,15 @@ class MockRoomClient:
 
     async def publish_audio(self, pcm_bytes: bytes, sample_rate: int = 24000) -> None:
         self.published_chunks.append(pcm_bytes)
+
+    def interrupt_audio(self) -> None:
+        self.interrupts += 1
+
+    def customer_present(self) -> bool:
+        return self.customer_in_room
+
+    async def wait_audio_playout(self) -> None:
+        return None
 
     async def disconnect(self) -> None:
         self.disconnected = True

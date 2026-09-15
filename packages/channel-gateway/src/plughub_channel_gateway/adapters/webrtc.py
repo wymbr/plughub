@@ -70,7 +70,9 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -93,7 +95,7 @@ from ..models import (
 from ..session_registry import SessionRegistry
 from . import contact_lifecycle
 from .base import ChannelAdapter
-from .speaches_provider import SpeachesSTTProvider, SpeachesTTSProvider, pcm16_48k_to_16k
+from .speaches_provider import SpeachesSTTProvider, SpeachesTTSProvider, pcm16_48k_to_16k, rms
 from .voice_provider import (
     ISTTProvider,
     ITTSProvider,
@@ -142,6 +144,50 @@ _STREAM_WATCHER_SLEEP = 1.0    # seconds to sleep on stream watcher error
 # termina de ser transcrita logo depois da submissão (depois do HDEL). A folga cobre o
 # fim de fala (700 ms de silêncio) mais a transcrição, com margem para CPU.
 _MASKED_SPEECH_GRACE_S = 5.0
+
+# ── Fala do agente (VOZ-05, fatia 3) ──────────────────────────────────────────
+#
+# Barge-in: voz do cliente contínua por este tempo, enquanto o agente fala, corta a fala e
+# descarta o que estava na fila. Curto o bastante para responder rápido, longo o bastante
+# para um estalo ou uma tosse não interromper.
+_BARGE_IN_MIN_MS = 200
+# A primeira fala da IA chega ao gateway ANTES do `routing.assigned` que traz o bot (medido ao
+# vivo: `message.text` e `menu.payload` 4 ms antes do `webrtc ready`) — e, no browser, antes de o
+# cliente autorizar o microfone e entrar. Sem espera, o aviso inicial e o prompt do primeiro menu
+# eram descartados. Cada mensagem espera bot e cliente na sala por este tempo, contado da
+# CHEGADA dela; depois é descartada DITA (o texto já está no widget).
+_SPEECH_WAIT_ROOM_S = 15.0
+_SENTENCE_MIN_CHARS = 25
+
+
+def speech_sentences(text: str) -> list[str]:
+    """
+    O texto que o agente escreveu, como FRASES faláveis. Tira o que o TTS leria errado (emoji,
+    marcação) e parte em frases: a primeira começa a tocar sem esperar a síntese da mensagem
+    inteira, e o barge-in descarta as seguintes sem sintetizá-las. Pedaço curto demais junta
+    com o próximo — frase de três palavras sozinha soa picotada.
+    """
+    limpo = "".join(
+        " " if unicodedata.category(ch) in ("So", "Sk", "Cs", "Co") or ch in "*_`#~>|" else ch
+        for ch in text
+    )
+    limpo = re.sub(r"\s+", " ", limpo).strip()
+    if not limpo:
+        return []
+    partes = [p for p in re.split(r"(?<=[.!?…;:])\s+", limpo) if p.strip()]
+    frases: list[str] = []
+    acumulado = ""
+    for parte in partes:
+        acumulado = f"{acumulado} {parte}".strip()
+        if len(acumulado) >= _SENTENCE_MIN_CHARS:
+            frases.append(acumulado)
+            acumulado = ""
+    if acumulado:
+        if frases:
+            frases[-1] = f"{frases[-1]} {acumulado}"
+        else:
+            frases.append(acumulado)
+    return frases
 MASKED_CAPTURE_NOTICE = (
     "Por segurança, durante o preenchimento protegido a sua fala e o texto livre não são "
     "registrados. Use o campo protegido."
@@ -251,6 +297,14 @@ class WebRTCAdapter(ChannelAdapter):
         self._menu_masked:         dict[str, dict[str, list[str]]] = {}
         self._masked_grace_until:  dict[str, float] = {}
 
+        # VOZ-05 (fatia 3): fala do agente por sessão — UMA fila e UM tocador, para duas
+        # mensagens seguidas não se sobreporem; `_speaking` é o que o barge-in consulta, e
+        # `_speech_cancel` diz ao tocador para largar as frases que faltam da mensagem atual.
+        self._speech_queues:  dict[str, asyncio.Queue[tuple[str, float]]] = {}
+        self._speech_tasks:   dict[str, asyncio.Task]       = {}
+        self._speaking:       set[str] = set()
+        self._speech_cancel:  set[str] = set()
+
     # ── Provider factories ────────────────────────────────────────────────────
 
     def _build_provider(self) -> IWebRTCProvider:
@@ -354,6 +408,7 @@ class WebRTCAdapter(ChannelAdapter):
         return bot
 
     async def _stop_bot_leg(self, session_id: str) -> None:
+        self._stop_speech(session_id)
         task = self._stt_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
@@ -372,9 +427,8 @@ class WebRTCAdapter(ChannelAdapter):
         Deliver a text message to the WebRTC client.
         Called by OutboundConsumer for msg_type="message.text".
 
-        Always sends webrtc.message over the WebSocket. When the customer ceiling
-        carries audio, also attempts TTS injection into the LiveKit room when
-        webrtc_tts_injection_enabled=True.
+        Always sends webrtc.message over the WebSocket. Mensagem do agente de IA também é
+        FALADA na sala quando o bot leg converte (VOZ-05 fatia 3) — ver `_speak`.
         """
         session_id = payload.get("session_id", "")
         ws = self._connections.get(session_id)
@@ -402,6 +456,16 @@ class WebRTCAdapter(ChannelAdapter):
             )
             ts = datetime.now(timezone.utc).isoformat()
 
+        # VOZ-05 (fatia 3): só o agente de IA fala pela sala. O humano tem voz própria na
+        # chamada, e o que ele DIGITA fica texto; aviso de sistema também. Até aqui qualquer
+        # texto era candidato — e nenhum era falado, porque o flag nascia desligado.
+        # ⚠️ ANTES de qualquer `await`: o consumidor de saída abre UMA task por mensagem, e a
+        # ordem entre elas só é a do Kafka até a primeira suspensão. Medido ao vivo: com a fala
+        # enfileirada depois do envio pelo WebSocket, o prompt do menu seguinte era falado
+        # antes do aviso que o precede.
+        if text and author == "agent_ai":
+            self._speak(session_id, text)
+
         await self._ws_send(ws, {
             "type":   "webrtc.message",
             "text":   text,
@@ -409,16 +473,7 @@ class WebRTCAdapter(ChannelAdapter):
             "ts":     ts,
         })
 
-        # Phase C: inject TTS into LiveKit room when the customer's media carries audio
-        if (
-            text
-            and media_policy.AUDIO in self._customer_media.get(session_id, frozenset())
-            and self._settings.webrtc_tts_injection_enabled
-        ):
-            disparar(
-                self._tts_inject(session_id, text),
-                nome=f"webrtc-tts-{session_id[:8]}",
-            )
+
 
     async def deliver_menu(self, payload: dict) -> None:
         """
@@ -445,6 +500,10 @@ class WebRTCAdapter(ChannelAdapter):
             )
             return
 
+        # o prompt do menu é fala do agente como qualquer aviso (VOZ-05 fatia 3); as opções
+        # verbalizadas com tecla são a NIV-13
+        if payload.get("prompt"):
+            self._speak(session_id, payload["prompt"])
         await self._ws_send(ws, {
             "type":          "webrtc.interaction",
             "menu_id":       menu_id,
@@ -525,6 +584,7 @@ class WebRTCAdapter(ChannelAdapter):
         await self._stop_all_egress(session_id)
 
         # Phase C: cancel STT task and disconnect room client
+        self._stop_speech(session_id)
         stt_task = self._stt_tasks.pop(session_id, None)
         if stt_task and not stt_task.done():
             stt_task.cancel()
@@ -1297,6 +1357,7 @@ class WebRTCAdapter(ChannelAdapter):
         await self._stop_all_egress(session_id)
 
         # Phase C: stop STT pipeline and disconnect room client
+        self._stop_speech(session_id)
         stt_task = self._stt_tasks.pop(session_id, None)
         if stt_task and not stt_task.done():
             stt_task.cancel()
@@ -1376,11 +1437,16 @@ class WebRTCAdapter(ChannelAdapter):
             grants       = TokenGrants(
                 room_name        = room_name,
                 identity         = bot_identity,
-                display_name     = "STT Bot",
-                can_publish      = s.webrtc_tts_injection_enabled,
+                display_name     = "Assistente virtual",
+                # VOZ-05 (fatia 3): o bot só entra para CONVERTER para um agente de IA, e o
+                # agente fala por ele. Oculto, ninguém o ouve — medido contra o SFU: o cliente
+                # recebe 0 s de áudio de participante `hidden` ("received track from an unknown
+                # participant"). ⚠️ Quando a fatia 4 puser o bot em chamada só de humano, para
+                # TRANSCREVER, ali ele volta a ser oculto e mudo.
+                can_publish      = True,
                 can_subscribe    = True,
                 can_publish_data = False,
-                hidden           = True,
+                hidden           = False,
                 ttl_seconds      = s.webrtc_token_ttl_s,
             )
             bot_token = self._provider.generate_token(grants)
@@ -1438,10 +1504,27 @@ class WebRTCAdapter(ChannelAdapter):
         # 16 kHz; o Deepgram legado recebe μ-law a 8 kHz, que é o que este laço sempre mandou.
         stt_rate = getattr(self._stt, "input_sample_rate", None)
 
+        # Barge-in (VOZ-05 fatia 3): o mesmo limiar de energia que o STT usa para achar fala.
+        # Só no caminho a 16 kHz PCM — no legado (μ-law a 8 kHz) a energia não é medida aqui,
+        # e não há barge-in.
+        limiar = float(getattr(self._stt, "_thr", 400.0))
+        voz_ms = 0.0
+
         async def _audio_chunks():
+            nonlocal voz_ms
             async for chunk in room_client.subscribe_customer_audio():
                 try:
-                    yield pcm16_48k_to_16k(chunk) if stt_rate == 16000 else resample_pcm_48_to_8(chunk)
+                    if stt_rate == 16000:
+                        pcm = pcm16_48k_to_16k(chunk)
+                        if rms(pcm) >= limiar:
+                            voz_ms += len(pcm) / 32.0     # 16 kHz × 2 bytes = 32 bytes/ms
+                            if voz_ms >= _BARGE_IN_MIN_MS and session_id in self._speaking:
+                                self._barge_in(session_id)
+                        else:
+                            voz_ms = 0.0
+                        yield pcm
+                    else:
+                        yield resample_pcm_48_to_8(chunk)
                 except Exception as exc:
                     logger.warning(
                         "webrtc stt_pipeline: resample error (session=%s): %s",
@@ -1506,65 +1589,112 @@ class WebRTCAdapter(ChannelAdapter):
                 "webrtc: transcript publish failed (session=%s): %s", session_id, exc
             )
 
-    async def _tts_inject(
-        self,
-        session_id: str,
-        text:       str,
-        voice_id:   str | None = None,
-    ) -> None:
-        """
-        Synthesize text → MP3 → PCM and inject into the LiveKit room.
+    # ── Fala do agente (VOZ-05, fatia 3) ──────────────────────────────────────
 
-        Called as a fire-and-forget task from deliver_text() when:
-          - the customer ceiling carries audio (VOZ-09)
-          - webrtc_tts_injection_enabled=True
-          - a room client is active for this session
-        """
-        room_client = self._room_clients.get(session_id)
-        if room_client is None:
-            logger.debug(
-                "webrtc tts_inject: no room client for session=%s — skipping",
-                session_id,
-            )
+    def _can_speak(self, session_id: str) -> bool:
+        """Há TTS e a sessão é deste gateway. Se o bot leg vai estar na sala é a espera de cada
+        mensagem que descobre (`_wait_room_for_speech`) — a fala chega antes da atribuição."""
+        return self._tts is not None and (
+            session_id in self._room_clients or session_id in self._sessions)
+
+    def _speak(self, session_id: str, text: str) -> None:
+        """Enfileira `text` para ser falado na sala. Sem TTS não fala — e isso já está NOMEADO
+        no estado de mídia (`customer.bot_leg.reason`), então aqui é só debug."""
+        if not self._can_speak(session_id):
+            logger.debug("webrtc fala: sem TTS ou sessao desconhecida (%s) — texto nao falado", session_id)
             return
+        fila = self._speech_queues.get(session_id)
+        if fila is None:
+            fila = asyncio.Queue()
+            self._speech_queues[session_id] = fila
+            self._speech_tasks[session_id] = disparar(
+                self._speech_worker(session_id, fila), nome=f"webrtc-fala-{session_id[:8]}",
+            )
+        fila.put_nowait((text, time.monotonic()))
 
+    async def _speech_worker(self, session_id: str, fila: asyncio.Queue[tuple[str, float]]) -> None:
+        """UM tocador por sessão: mensagem a mensagem, frase a frase, esperando cada uma tocar."""
+        while True:
+            text, chegou = await fila.get()
+            self._speech_cancel.discard(session_id)
+            room_client = await self._wait_room_for_speech(session_id, chegou)
+            if room_client is None or self._tts is None:
+                continue
+            self._speaking.add(session_id)
+            try:
+                for frase in speech_sentences(text):
+                    if session_id in self._speech_cancel:
+                        break
+                    pcm, rate = await self._synthesize_pcm(session_id, frase)
+                    if not pcm or session_id in self._speech_cancel:
+                        continue
+                    await room_client.publish_audio(pcm, sample_rate=rate)
+                if session_id not in self._speech_cancel:
+                    await room_client.wait_audio_playout()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("webrtc fala: tocador falhou (session=%s): %s", session_id, exc)
+            finally:
+                self._speaking.discard(session_id)
+
+    async def _wait_room_for_speech(self, session_id: str, chegou: float) -> IWebRTCRoomClient | None:
+        """O bot na sala E o cliente na sala, até `_SPEECH_WAIT_ROOM_S` depois de a mensagem chegar."""
+        prazo = chegou + _SPEECH_WAIT_ROOM_S
+        while True:
+            room_client = self._room_clients.get(session_id)
+            if room_client is not None and room_client.customer_present():
+                return room_client
+            if time.monotonic() >= prazo:
+                logger.info(
+                    "webrtc fala: mensagem NAO falada (session=%s) — %s; o texto ja chegou ao widget",
+                    session_id,
+                    f"o bot leg nao entrou na sala em {_SPEECH_WAIT_ROOM_S:.0f} s" if room_client is None
+                    else f"o cliente nao entrou na sala em {_SPEECH_WAIT_ROOM_S:.0f} s",
+                )
+                return None
+            await asyncio.sleep(0.05)
+
+    async def _synthesize_pcm(self, session_id: str, text: str) -> tuple[bytes, int]:
         try:
-            mp3_bytes = await self._tts.synthesize(text, voice_id)
+            audio = await self._tts.synthesize(text, None)
         except Exception as exc:
-            logger.warning(
-                "webrtc tts_inject: TTS synthesis failed (session=%s): %s",
-                session_id, exc,
-            )
-            return
-
-        if not mp3_bytes:
-            logger.debug(
-                "webrtc tts_inject: TTS returned None (session=%s) — skipping",
-                session_id,
-            )
-            return
-
+            logger.warning("webrtc fala: sintese falhou (session=%s): %s — frase NAO falada", session_id, exc)
+            return b"", 0
+        if not audio:
+            return b"", 0
         # O auto-hospedado já devolve PCM (VOZ-05); só o legado devolve MP3 — e a imagem não
         # tem decodificador de MP3, então esse caminho loga e não fala.
         out_rate = getattr(self._tts, "output_sample_rate", None)
         if out_rate:
-            pcm_bytes, rate = mp3_bytes, out_rate
-        else:
-            pcm_bytes, rate = mp3_to_pcm(mp3_bytes, target_sample_rate=24000), 24000
-        if not pcm_bytes:
-            return  # mp3_to_pcm already logged the warning
+            return audio, out_rate
+        return mp3_to_pcm(audio, target_sample_rate=24000), 24000
 
-        try:
-            await room_client.publish_audio(pcm_bytes, sample_rate=rate)
-            logger.debug(
-                "webrtc tts_inject: injected %d bytes (session=%s)",
-                len(pcm_bytes), session_id,
-            )
-        except Exception as exc:
-            logger.warning(
-                "webrtc tts_inject: publish_audio failed (session=%s): %s",
-                session_id, exc,
-            )
+    def _barge_in(self, session_id: str) -> None:
+        """O cliente falou por cima do agente: a fala para e o que estava na fila é descartado.
+        O TEXTO dessas mensagens já chegou ao widget — perde-se a leitura, não o conteúdo."""
+        fila = self._speech_queues.get(session_id)
+        descartadas = 0
+        while fila is not None and not fila.empty():
+            fila.get_nowait()
+            descartadas += 1
+        self._speech_cancel.add(session_id)
+        self._speaking.discard(session_id)
+        room_client = self._room_clients.get(session_id)
+        if room_client is not None:
+            room_client.interrupt_audio()
+        logger.info(
+            "webrtc: fala INTERROMPIDA pelo cliente session=%s (%d mensagem(ns) pendente(s) descartada(s))",
+            session_id, descartadas,
+        )
+
+    def _stop_speech(self, session_id: str) -> None:
+        task = self._speech_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+        self._speech_queues.pop(session_id, None)
+        self._speaking.discard(session_id)
+        self._speech_cancel.discard(session_id)
 
     # ── Phase D: Egress Recording ─────────────────────────────────────────────
 
@@ -1604,12 +1734,8 @@ class WebRTCAdapter(ChannelAdapter):
         # LGPD recording notice — prefer TTS injection when the room client is
         # active; fall back to a text message over WebSocket.
         notice = s.webrtc_recording_notice
-        if (
-            media_policy.AUDIO in self._customer_media.get(session_id, frozenset())
-            and s.webrtc_tts_injection_enabled
-            and session_id in self._room_clients
-        ):
-            await self._tts_inject(session_id, notice)
+        if self._can_speak(session_id):
+            self._speak(session_id, notice)
         else:
             ws = self._connections.get(session_id)
             if ws:

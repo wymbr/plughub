@@ -56,7 +56,6 @@ def _fake_settings(**kwargs):
     s.webrtc_token_ttl_s            = kwargs.get("webrtc_token_ttl_s", 3600)
     s.webrtc_default_pool_id        = kwargs.get("webrtc_default_pool_id", "webrtc_pool")
     s.webrtc_stt_enabled            = kwargs.get("webrtc_stt_enabled", True)
-    s.webrtc_tts_injection_enabled  = kwargs.get("webrtc_tts_injection_enabled", False)
     s.jwt_secret                    = kwargs.get("jwt_secret", "changeme_32chars_webchat_secret!")
     s.tenant_id                     = kwargs.get("tenant_id", "default")
     s.session_ttl_seconds           = kwargs.get("session_ttl_seconds", 14400)

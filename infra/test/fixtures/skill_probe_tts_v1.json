@@ -1,0 +1,96 @@
+{
+  "skill_id": "skill_probe_tts_v1",
+  "name": "Probe — o agente de IA fala na chamada (VOZ-05 fatia 3)",
+  "version": "1.0",
+  "description": "Fixture do probe_webrtc_tts_spoken: aviso curto e prompt de menu (ouvidos inteiros, o controle), aviso longo que o cliente interrompe falando (barge-in) — a fala dele responde o menu de TEXTO livre seguinte, que aceita qualquer texto —, e um aviso depois da interrupcao (a fala volta). O ultimo menu segura o fluxo para a sala continuar de pe enquanto o probe mede. O aviso longo e UMA frase so: interrupcao entre frases nao prova o corte no meio de uma (medido — com frases curtas, a sala sem corte quadro a quadro passava).",
+  "classification": {
+    "type": "orchestrator"
+  },
+  "flow": {
+    "entry": "n1",
+    "steps": [
+      {
+        "id": "n1",
+        "type": "notify",
+        "message": "Bem-vindo à central de energia. Vou confirmar os seus dados agora.",
+        "on_success": "m1",
+        "on_failure": "fim_falha"
+      },
+      {
+        "id": "m1",
+        "type": "menu",
+        "interaction": "button",
+        "prompt": "Você prefere receber a fatura por email ou pelo correio?",
+        "timeout_s": 120,
+        "options": [
+          {
+            "id": "email",
+            "label": "Email"
+          },
+          {
+            "id": "correio",
+            "label": "Correio"
+          }
+        ],
+        "output_as": "escolha",
+        "on_success": "n2",
+        "on_failure": "fim_falha",
+        "on_timeout": "fim_falha"
+      },
+      {
+        "id": "n2",
+        "type": "notify",
+        "message": "Agora vou ler as condições do seu contrato de fornecimento de energia elétrica, que incluem o reajuste anual da tarifa, o prazo de pagamento de dez dias depois da emissão, a multa e os juros em caso de atraso, e o direito de pedir o cancelamento a qualquer momento sem nenhum custo adicional.",
+        "on_success": "m2",
+        "on_failure": "fim_falha"
+      },
+      {
+        "id": "m2",
+        "type": "menu",
+        "interaction": "text",
+        "prompt": "Ficou alguma dúvida sobre as condições?",
+        "timeout_s": 120,
+        "output_as": "duvida",
+        "on_success": "n3",
+        "on_failure": "fim_falha",
+        "on_timeout": "fim_falha"
+      },
+      {
+        "id": "n3",
+        "type": "notify",
+        "message": "Certo, obrigado por aguardar na linha.",
+        "on_success": "m3",
+        "on_failure": "fim_falha"
+      },
+      {
+        "id": "m3",
+        "type": "menu",
+        "interaction": "button",
+        "prompt": "Posso encerrar o atendimento?",
+        "timeout_s": 120,
+        "options": [
+          {
+            "id": "sim",
+            "label": "Sim"
+          }
+        ],
+        "output_as": "encerrar",
+        "on_success": "fim",
+        "on_failure": "fim_falha",
+        "on_timeout": "fim_falha"
+      },
+      {
+        "id": "fim",
+        "type": "complete",
+        "outcome": "resolved",
+        "issue_status": "probe: fala medida"
+      },
+      {
+        "id": "fim_falha",
+        "type": "complete",
+        "outcome": "failed",
+        "issue_status": "probe: fluxo falhou"
+      }
+    ]
+  }
+}

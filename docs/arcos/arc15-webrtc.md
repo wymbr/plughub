@@ -548,9 +548,13 @@ webrtc_default_pool_id:     str = ""
 webrtc_default_medium_order: str = "video,voice,text"
 # Habilitar STT no audio track do cliente
 webrtc_stt_enabled:         bool = True
-# Habilitar TTS injection via LiveKit track (agentes AI)
-webrtc_tts_injection_enabled: bool = True
 ```
+
+> **`webrtc_tts_injection_enabled` saiu em 2026-09-15 (VOZ-05 fatia 3).** O default real era
+> `False` (este bloco dizia `True`), e com ele o agente de IA ganhava teto de áudio e ficava MUDO.
+> Ligado, continuaria mudo: o bot entrava `hidden`, e participante oculto não entrega trilha a
+> ninguém (medido contra o SFU). Hoje o agente de IA fala sempre que o bot leg converte (STT e
+> TTS disponíveis) — ver `CHANGELOG.md` 2026-09-15 (26).
 
 ---
 

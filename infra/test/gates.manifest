@@ -424,6 +424,12 @@ probe_webrtc_stt_speaches.sh
 # transcrita e DESCARTADA (log prova que o bot ouviu), valor invalido e valido lidos pelo fluxo
 # (fixture propria), e historico + stream + logs de cinco servicos sem os valores.
 probe_webrtc_masked_keypad.sh
+# VOZ-05 fatia 3. O agente de IA ficava mudo por DOIS motivos empilhados (flag desligado, e o bot
+# entrando oculto, que o SFU nao entrega a ninguem). O cliente, participante LiveKit real, GRAVA o
+# que ouve e o speaches transcreve: aviso e prompt de menu ouvidos, na ordem (a inversao foi medida
+# ao vivo), controle da fala inteira, barge-in cortando em <=1,5 s com o fim do aviso nao ouvido,
+# e a fala voltando depois. Fixture propria (skill_probe_tts_v1).
+probe_webrtc_tts_spoken.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

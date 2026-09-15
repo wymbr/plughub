@@ -69,7 +69,6 @@ def _make_settings(**overrides) -> Settings:
         webchat_upload_base_url   = "http://localhost:8010/webchat/v1/upload",
         tenant_id                 = TENANT_ID,
         webrtc_stt_enabled        = False,
-        webrtc_tts_injection_enabled = False,
         webrtc_recording_notice   = "Gravação ativa para qualidade.",
         webrtc_egress_output_dir  = "/tmp/plughub_test_egress",
         webrtc_egress_wait_s      = 0.0,  # no wait in tests

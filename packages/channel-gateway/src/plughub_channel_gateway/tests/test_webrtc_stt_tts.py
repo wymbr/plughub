@@ -7,12 +7,11 @@ Coverage:
   - mp3_to_pcm() helper (graceful degradation)
   - MockRoomClient interface compliance
   - WebRTCAdapter._stt_pipeline() → _publish_transcript() → Kafka
-  - WebRTCAdapter._tts_inject() → room_client.publish_audio()
+  - Fala do agente: quem fala, frases em ordem, prompt de menu, barge-in (VOZ-05 fatia 3)
   - DataChannel text (webrtc.message) → Kafka conversations.inbound
   - Menu reply (webrtc.menu_submit) → `menu_result` + histórico redigido; coleta mascarada
     descarta fala e texto livre (VOZ-05, fatia A)
   - STT disabled (webrtc_stt_enabled=False) — no room client created
-  - TTS disabled (webrtc_tts_injection_enabled=False) — no inject on deliver_text
   - deliver_session_closed tears down room client and STT task
 """
 
@@ -65,7 +64,6 @@ def _settings(**overrides) -> Settings:
         webrtc_livekit_api_secret  = "api_secret_test",
         webrtc_token_ttl_s         = 3600,
         webrtc_stt_enabled         = True,
-        webrtc_tts_injection_enabled = False,
         voice_deepgram_api_key     = "",
         voice_stt_language         = "pt-BR",
         voice_elevenlabs_api_key   = "",
@@ -392,137 +390,286 @@ class TestSttpipeline:
 # 4. TTS injection
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestTtsInjection:
+class _PcmTTS:
+    """TTS que devolve PCM (como o auto-hospedado) e registra a ordem do que sintetizou."""
+    output_sample_rate = 24000
+
+    def __init__(self, atraso: float = 0.0) -> None:
+        self.textos: list[str] = []
+        self._atraso = atraso
+
+    async def synthesize(self, text, voice_id=None):
+        self.textos.append(text)
+        if self._atraso:
+            await asyncio.sleep(self._atraso)
+        return b"\x01\x00" * 480
+
+
+class _RoomLenta(MockRoomClient):
+    """Sala cuja reprodução só termina quando o teste solta — para haver fala EM CURSO."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.soltar = asyncio.Event()
+
+    async def publish_audio(self, pcm_bytes, sample_rate=24000):
+        self.published_chunks.append(pcm_bytes)
+        await self.soltar.wait()
+
+
+class _SttQueConsome:
+    """STT que CONSOME o áudio (o MockSTTProvider não itera a entrada, e o barge-in mora no
+    laço que a itera) e não transcreve nada."""
+    input_sample_rate = 16000
+    _thr = 400.0
+
+    async def stream(self, chunks, language=None, sample_rate=None):
+        async for _ in chunks:
+            pass
+        if False:
+            yield None
+
+
+async def _drena(adapter, sid=SESSION_ID, voltas=50):
+    for _ in range(voltas):
+        await asyncio.sleep(0)
+    t = adapter._speech_tasks.get(sid)
+    return t
+
+
+def _pcm48(amplitude: int, ms: int) -> bytes:
+    n = 48 * ms
+    return struct.pack(f"<{n}h", *([amplitude] * n))
+
+
+class TestSpeechSentences:
+    def test_strips_emoji_and_markup_and_splits(self):
+        from plughub_channel_gateway.adapters.webrtc import speech_sentences
+        frases = speech_sentences("✅ Identidade **verificada** com sucesso. Transferindo para um especialista — aguarde.")
+        assert frases == ["Identidade verificada com sucesso.", "Transferindo para um especialista — aguarde."]
+
+    def test_short_piece_joins_the_next(self):
+        from plughub_channel_gateway.adapters.webrtc import speech_sentences
+        assert speech_sentences("Ok. Vou verificar os seus dados agora mesmo.") == ["Ok. Vou verificar os seus dados agora mesmo."]
+        assert speech_sentences("Primeira frase bem comprida aqui. Fim.") == ["Primeira frase bem comprida aqui. Fim."]
+
+    def test_nothing_speakable(self):
+        from plughub_channel_gateway.adapters.webrtc import speech_sentences
+        assert speech_sentences("  ✅ 🎉  ") == []
+
+
+class TestAgentSpeech:
+    """VOZ-05 fatia 3 — quem fala, em que ordem, e o barge-in."""
+
+    def _adapter(self, tts=None, room=None):
+        adapter, redis, producer = _make_adapter(tts=tts or _PcmTTS(), room_client=room or MockRoomClient())
+        adapter._connections[SESSION_ID] = AsyncMock()
+        _abre(adapter)
+        return adapter
+
     @pytest.mark.asyncio
-    async def test_tts_inject_calls_publish_audio(self):
-        """_tts_inject must decode MP3 and call room_client.publish_audio."""
-        fake_pcm = b"\x80" * 48000  # 24000 samples × 2 bytes
-        tts = MockTTSProvider(synthesize_returns_none=False)  # returns stub bytes
-
-        room_client = MockRoomClient()
-        room_client.connected = True
-
-        adapter, _, _ = _make_adapter(tts=tts, room_client=room_client)
-        adapter._room_clients[SESSION_ID] = room_client
-
-        # Patch mp3_to_pcm so we don't need pydub in CI
-        with patch(
-            "plughub_channel_gateway.adapters.webrtc.mp3_to_pcm",
-            return_value=fake_pcm,
-        ):
-            await adapter._tts_inject(SESSION_ID, "Olá, tudo bem?")
-
-        assert len(room_client.published_chunks) == 1
-        assert room_client.published_chunks[0] == fake_pcm
+    async def test_ai_message_is_spoken_sentence_by_sentence(self):
+        tts, room = _PcmTTS(), MockRoomClient()
+        adapter = self._adapter(tts, room)
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Bem-vindo à central de energia. Vou confirmar os seus dados."},
+                                    "timestamp": "2026-09-15T00:00:00Z"})
+        await _drena(adapter)
+        assert tts.textos == ["Bem-vindo à central de energia.", "Vou confirmar os seus dados."]
+        assert len(room.published_chunks) == 2
 
     @pytest.mark.asyncio
-    async def test_tts_inject_skipped_when_no_room_client(self):
-        """When no room client exists for the session, _tts_inject must no-op."""
-        tts = MockTTSProvider(synthesize_returns_none=False)
+    async def test_human_and_system_text_are_not_spoken(self):
+        tts = _PcmTTS()
+        adapter = self._adapter(tts)
+        for autor in ("agent_human", "system"):
+            await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": autor},
+                                        "content": {"text": "Texto que nao se fala."}, "timestamp": "x"})
+        await _drena(adapter)
+        assert tts.textos == [] and SESSION_ID not in adapter._speech_tasks
+
+    @pytest.mark.asyncio
+    async def test_without_bot_leg_nothing_is_spoken_and_it_is_said(self, monkeypatch, caplog):
+        # CONTROLE do primeiro: a mesma mensagem de IA, sem bot na sala, não vira fala — e diz
+        from plughub_channel_gateway.adapters import webrtc as mod
+        monkeypatch.setattr(mod, "_SPEECH_WAIT_ROOM_S", 0.2)
+        tts = _PcmTTS()
         adapter, _, _ = _make_adapter(tts=tts)
-        # No room_client added — _room_clients is empty
-        await adapter._tts_inject(SESSION_ID, "some text")
-        # No error raised; nothing published
-
-    @pytest.mark.asyncio
-    async def test_tts_inject_skipped_when_tts_returns_none(self):
-        """When TTS synthesize returns None, no audio should be injected."""
-        tts = MockTTSProvider(synthesize_returns_none=True)
-        room_client = MockRoomClient()
-        adapter, _, _ = _make_adapter(tts=tts, room_client=room_client)
-        adapter._room_clients[SESSION_ID] = room_client
-
-        await adapter._tts_inject(SESSION_ID, "texto")
-        assert room_client.published_chunks == []
-
-    @pytest.mark.asyncio
-    async def test_tts_inject_skipped_when_mp3_decode_fails(self):
-        """When mp3_to_pcm returns empty bytes, publish_audio must not be called."""
-        tts = MockTTSProvider(synthesize_returns_none=False)
-        room_client = MockRoomClient()
-        adapter, _, _ = _make_adapter(tts=tts, room_client=room_client)
-        adapter._room_clients[SESSION_ID] = room_client
-
-        with patch(
-            "plughub_channel_gateway.adapters.webrtc.mp3_to_pcm",
-            return_value=b"",  # decode failure
-        ):
-            await adapter._tts_inject(SESSION_ID, "texto")
-
-        assert room_client.published_chunks == []
-
-    @pytest.mark.asyncio
-    async def test_deliver_text_triggers_tts_when_customer_has_audio(self):
-        """deliver_text must fire _tts_inject when the customer ceiling carries audio and tts_injection_enabled."""
-        s = _settings(webrtc_tts_injection_enabled=True)
-        tts = MockTTSProvider(synthesize_returns_none=False)
-        room_client = MockRoomClient()
-        room_client.connected = True
-
-        adapter, redis, producer = _make_adapter(settings=s, tts=tts, room_client=room_client)
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID]     = frozenset({"audio"})
-        adapter._room_clients[SESSION_ID] = room_client
-
-        injected_calls: list[str] = []
-
-        async def _fake_inject(session_id, text, voice_id=None):
-            injected_calls.append(text)
-
-        adapter._tts_inject = _fake_inject
-
-        await adapter.deliver_text({
-            "session_id": SESSION_ID,
-            "text":       "Olá, como posso ajudar?",
-        })
-
-        # Allow the task to run
-        await asyncio.sleep(0.05)
-        assert "Olá, como posso ajudar?" in injected_calls
+        _abre(adapter)
+        with caplog.at_level("INFO"):
+            await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                        "content": {"text": "Bem-vindo à central de energia."}, "timestamp": "x"})
+            await asyncio.sleep(0.4)
+        assert tts.textos == [] and "bot leg nao entrou na sala" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_deliver_text_no_tts_when_customer_has_no_audio(self):
-        """deliver_text must NOT inject TTS when the customer ceiling has no audio."""
-        s = _settings(webrtc_tts_injection_enabled=True)
-        tts = MockTTSProvider(synthesize_returns_none=False)
-        room_client = MockRoomClient()
-
-        adapter, redis, producer = _make_adapter(settings=s, tts=tts, room_client=room_client)
-        adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID]     = frozenset()  # ← teto sem áudio
-        adapter._room_clients[SESSION_ID] = room_client
-
-        injected: list[str] = []
-        adapter._tts_inject = lambda *a, **kw: injected.append(a[1]) or asyncio.sleep(0)  # type: ignore
-
-        await adapter.deliver_text({
-            "session_id": SESSION_ID,
-            "text":       "Hello",
-        })
-        await asyncio.sleep(0.05)
-        assert injected == []
+    async def test_menu_prompt_is_spoken(self):
+        tts = _PcmTTS()
+        adapter = self._adapter(tts)
+        await adapter.deliver_menu({"session_id": SESSION_ID, "menu_id": "m1", "interaction": "button",
+                                    "prompt": "Você prefere fatura por email ou correio?",
+                                    "options": [{"id": "e", "label": "Email"}]})
+        await _drena(adapter)
+        assert tts.textos == ["Você prefere fatura por email ou correio?"]
 
     @pytest.mark.asyncio
-    async def test_deliver_text_no_tts_when_disabled(self):
-        """deliver_text must NOT inject TTS when webrtc_tts_injection_enabled=False."""
-        s = _settings(webrtc_tts_injection_enabled=False)  # default
-        tts = MockTTSProvider(synthesize_returns_none=False)
-        room_client = MockRoomClient()
+    async def test_two_messages_never_interleave(self):
+        tts = _PcmTTS(atraso=0.01)
+        adapter = self._adapter(tts)
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Primeira mensagem, frase um. Primeira mensagem, frase dois."}, "timestamp": "x"})
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Segunda mensagem, frase um. Segunda mensagem, frase dois."}, "timestamp": "x"})
+        await asyncio.sleep(0.2)
+        assert tts.textos == ["Primeira mensagem, frase um.", "Primeira mensagem, frase dois.",
+                              "Segunda mensagem, frase um.", "Segunda mensagem, frase dois."]
 
-        adapter, redis, producer = _make_adapter(settings=s, tts=tts, room_client=room_client)
+    @pytest.mark.asyncio
+    async def test_order_follows_arrival_even_with_one_task_per_message(self):
+        # o OutboundConsumer despacha cada mensagem numa task; aviso e menu chegam colados
+        tts = _PcmTTS()
+        adapter = self._adapter(tts)
+        aviso = asyncio.ensure_future(adapter.deliver_text({
+            "session_id": SESSION_ID, "author": {"type": "agent_ai"},
+            "content": {"text": "Bem-vindo à central de energia."}, "timestamp": "x"}))
+        menu = asyncio.ensure_future(adapter.deliver_menu({
+            "session_id": SESSION_ID, "menu_id": "m1", "interaction": "button",
+            "prompt": "Você prefere a fatura por email?", "options": []}))
+        await asyncio.gather(aviso, menu)
+        await asyncio.sleep(0.1)
+        assert tts.textos == ["Bem-vindo à central de energia.", "Você prefere a fatura por email?"]
+
+    @pytest.mark.asyncio
+    async def test_agent_counts_as_speaking_until_the_audio_finishes_playing(self):
+        # `capture_frame` devolve com até 1 s de áudio ainda na fila do SFU: o agente só se
+        # cala quando a REPRODUÇÃO termina — senão um barge-in no último segundo seria ignorado
+        class _RoomTocando(MockRoomClient):
+            def __init__(self):
+                super().__init__()
+                self.tocou = asyncio.Event()
+
+            async def wait_audio_playout(self):
+                await self.tocou.wait()
+
+        tts, room = _PcmTTS(), _RoomTocando()
+        adapter = self._adapter(tts, room)
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Uma frase que ainda toca na sala."}, "timestamp": "x"})
+        await _drena(adapter)
+        assert room.published_chunks and SESSION_ID in adapter._speaking
+        room.tocou.set()
+        await _drena(adapter)
+        assert SESSION_ID not in adapter._speaking
+
+    @pytest.mark.asyncio
+    async def test_barge_in_stops_current_drops_pending_and_speech_comes_back(self):
+        tts, room = _PcmTTS(), _RoomLenta()
+        adapter = self._adapter(tts, room)
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Aviso longo, primeira frase. Aviso longo, segunda frase."}, "timestamp": "x"})
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Mensagem que estava na fila."}, "timestamp": "x"})
+        await _drena(adapter)
+        assert SESSION_ID in adapter._speaking and tts.textos == ["Aviso longo, primeira frase."]
+
+        adapter._barge_in(SESSION_ID)
+        room.soltar.set()
+        await _drena(adapter)
+        assert room.interrupts == 1
+        assert tts.textos == ["Aviso longo, primeira frase."]     # a 2ª frase e a fila caíram
+        assert SESSION_ID not in adapter._speaking
+
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Certo, obrigado por aguardar na linha."}, "timestamp": "x"})
+        await _drena(adapter)
+        assert tts.textos[-1] == "Certo, obrigado por aguardar na linha."
+
+    @pytest.mark.asyncio
+    async def test_customer_voice_while_agent_speaks_triggers_barge_in(self):
+        room = MockRoomClient()
+        adapter, _, _ = _make_adapter(tts=_PcmTTS(), room_client=room)
+        adapter._stt = _SttQueConsome()
+        adapter._speaking.add(SESSION_ID)
+        chamadas = []
+        adapter._barge_in = lambda sid: chamadas.append(sid)
+        for _ in range(30):                       # 300 ms de voz, em quadros de 10 ms
+            room.inject_audio(_pcm48(3000, 10))
+        room.end_audio()
+        await adapter._stt_pipeline(SESSION_ID, room)
+        assert chamadas and chamadas[0] == SESSION_ID
+
+    @pytest.mark.asyncio
+    async def test_no_barge_in_for_short_noise_silence_or_when_agent_is_quiet(self):
+        # CONTROLES do anterior: estalo curto, silêncio, e voz com o agente calado
+        for amplitude, ms, falando in ((3000, 100, True), (0, 500, True), (3000, 500, False)):
+            room = MockRoomClient()
+            adapter, _, _ = _make_adapter(tts=_PcmTTS(), room_client=room)
+            adapter._stt = _SttQueConsome()
+            if falando:
+                adapter._speaking.add(SESSION_ID)
+            chamadas = []
+            adapter._barge_in = lambda sid: chamadas.append(sid)
+            for _ in range(ms // 10):
+                room.inject_audio(_pcm48(amplitude, 10))
+            room.end_audio()
+            await adapter._stt_pipeline(SESSION_ID, room)
+            assert chamadas == [], (amplitude, ms, falando)
+
+    @pytest.mark.asyncio
+    async def test_bot_joins_visible_and_allowed_to_publish(self, monkeypatch):
+        from plughub_channel_gateway.adapters import webrtc as mod
+        adapter, _, _ = _make_adapter(tts=_PcmTTS())
+        vistos = []
+        orig = adapter._provider.generate_token
+        adapter._provider.generate_token = lambda g: vistos.append(g) or orig(g)
+        monkeypatch.setattr(mod, "LiveKitRoomClient", MockRoomClient)
+        await adapter._start_stt_pipeline(SESSION_ID, ROOM_NAME)
+        bot = vistos[-1]
+        # oculto, o SFU não entrega a trilha dele a ninguém (medido): o agente ficaria mudo
+        assert bot.hidden is False and bot.can_publish is True
+        await adapter._stop_bot_leg(SESSION_ID)
+
+    @pytest.mark.asyncio
+    async def test_first_message_waits_for_the_bot_to_enter(self):
+        # medido ao vivo: o aviso inicial chega ANTES do routing.assigned, e era descartado
+        tts, room = _PcmTTS(), MockRoomClient()
+        adapter, _, _ = _make_adapter(tts=tts)
         adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID]     = frozenset({"audio"})
-        adapter._room_clients[SESSION_ID] = room_client
+        _abre(adapter)
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Bem-vindo à central de energia."}, "timestamp": "x"})
+        await asyncio.sleep(0.15)
+        assert tts.textos == []                      # ainda sem bot: espera, não descarta
+        adapter._room_clients[SESSION_ID] = room
+        await asyncio.sleep(0.15)
+        assert tts.textos == ["Bem-vindo à central de energia."]
 
-        injected: list[str] = []
-        adapter._tts_inject = lambda *a, **kw: injected.append(a[1]) or asyncio.sleep(0)  # type: ignore
+    @pytest.mark.asyncio
+    async def test_speech_waits_customer_and_gives_up_saying_so(self, monkeypatch, caplog):
+        from plughub_channel_gateway.adapters import webrtc as mod
+        monkeypatch.setattr(mod, "_SPEECH_WAIT_ROOM_S", 0.2)
+        tts, room = _PcmTTS(), MockRoomClient()
+        room.customer_in_room = False
+        adapter = self._adapter(tts, room)
+        with caplog.at_level("INFO"):
+            await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                        "content": {"text": "Ninguem vai ouvir esta frase."}, "timestamp": "x"})
+            await asyncio.sleep(0.4)
+        assert tts.textos == [] and "cliente nao entrou na sala" in caplog.text
 
-        await adapter.deliver_text({
-            "session_id": SESSION_ID,
-            "text":       "Hello",
-        })
-        await asyncio.sleep(0.05)
-        assert injected == []
+    @pytest.mark.asyncio
+    async def test_stopping_bot_leg_stops_the_speech_worker(self):
+        tts, room = _PcmTTS(), _RoomLenta()
+        adapter = self._adapter(tts, room)
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Uma fala que nao termina nunca."}, "timestamp": "x"})
+        await _drena(adapter)
+        tarefa = adapter._speech_tasks[SESSION_ID]
+        await adapter._stop_bot_leg(SESSION_ID)
+        await _drena(adapter)
+        assert tarefa.cancelled() or tarefa.done()
+        assert SESSION_ID not in adapter._speech_queues and SESSION_ID not in adapter._speaking
 
 
 # ─────────────────────────────────────────────────────────────────────────────

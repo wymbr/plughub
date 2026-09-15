@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (26) — VOZ-05 fatia 3: o agente de IA fala na chamada, e o cliente pode interrompê-lo
+
+**O que havia, medido antes.** O caminho de TTS existia e nunca tinha rodado, por DOIS motivos
+empilhados — consertar o primeiro não moveria nada:
+1. `webrtc_tts_injection_enabled` nascia `False`. A fatia 1 dá áudio à IA só com STT e TTS, então o
+   cliente ganhava teto de áudio e o agente ficava **mudo**, sem uma linha de log.
+2. Ligado o flag, continuaria mudo: o bot entrava na sala **oculto**, e o SFU não entrega trilha de
+   participante `hidden` a ninguém. Medido com o SDK contra o LiveKit: oculto, **0,00 s** de áudio
+   recebido (o cliente loga *"received track from an unknown participant"*); visível, o áudio chega.
+Além disso a fala ia num quadro só, sem fila (duas mensagens se sobreporiam, e não havia onde parar),
+só `deliver_text` falava (prompt de menu nunca) e qualquer autor era candidato. Probe ao vivo
+vermelho antes de mexer: o cliente não ouve ninguém (0,0 s de 5,8 s de voz).
+
+**Feito.**
+- **O flag saiu.** Fala quem CONVERTE: mensagem `agent_ai` e prompt de menu, sempre que o bot leg
+  está na sala com STT e TTS. Texto digitado por humano e aviso de sistema ficam texto.
+- **Bot visível** (`hidden=False`, `can_publish=True`, "Assistente virtual"). Na fatia 4, o bot de
+  TRANSCRIÇÃO de chamada humana volta a ser oculto e mudo — está escrito no token.
+- **Fila por sessão**: um tocador, mensagem a mensagem, frase a frase (a primeira toca sem esperar a
+  síntese da mensagem inteira; emoji e marcação saem), quadros de 20 ms, e só se cala quando a
+  REPRODUÇÃO termina.
+- **Barge-in**: voz do cliente por 200 ms (limiar de energia do STT) enquanto o agente fala corta a
+  reprodução (`clear_queue` e parada quadro a quadro) e descarta a fila; o texto já está no widget.
+- **Dois defeitos que só o ao vivo mostrou**, os dois com teste:
+  - a primeira fala da IA chega ao gateway **antes** do `routing.assigned` que traz o bot (4 ms
+    antes, medido) e era descartada — cada mensagem espera bot e cliente na sala por até 15 s desde a
+    chegada, e desiste DITO;
+  - o prompt do menu era falado **antes** do aviso que o precede: o consumidor de saída abre uma task
+    por mensagem, e a fala era enfileirada depois do primeiro `await`. Enfileira antes de qualquer
+    suspensão.
+
+**Gate `probe_webrtc_tts_spoken.sh`** (fixture `skill_probe_tts_v1`): o cliente é participante
+LiveKit real que GRAVA o que ouve, e o `speaches` transcreve. T1 ouve o agente · T2 prompt de menu
+falado · T3 ordem · C controle (fala inteira sem interrupção: 6,1 s de 5,8 s) · T4 barge-in (parou
+0,56 s depois de o cliente falar; N2 com 2,5 s de 12,5 s; fim não ouvido) · T5 a fala volta · V o
+gateway registrou a interrupção. Latência texto → primeiro áudio: **1,3 s**. ⚠️ Duas palavras-chave
+trocadas depois de medir: na voz `pf_dora`, pelo Opus, o STT do probe ouviu "email" como "Emaio" e
+"correio" como "coqueio" — o prompt chegava inteiro e na ordem; o ramo passou a usar palavras nativas
+da mesma frase.
+
+**Mutações.** Unitárias 13/13 mortas — a 12ª (tocador sem esperar a reprodução) sobreviveu na 1ª
+rodada e ganhou teste: o agente só se cala quando o áudio termina de TOCAR, senão um barge-in no
+último segundo seria ignorado. Ao vivo 3/3: bot oculto (todos os ramos de fala vermelhos, com o mesmo
+*"unknown participant"* do experimento), barge-in desligado (T4/T5/V) e sala sem corte quadro a
+quadro. ⚠️ **Esta última passou VERDE na 1ª versão do probe, e o probe estava errado duas vezes:** o
+aviso longo era de frases curtas (a interrupção caía ENTRE frases e o `clear_queue` sozinho bastava),
+e o corte aceitava 0,4 s de silêncio (a pausa de vírgula da voz passa disso). Hoje o aviso é UMA frase
+(o exercício o assere), o corte exige 1 s, e um ramo mede a voz do agente entre +1,5 s e o aviso
+seguinte (0,0 s com o conserto; 1,3 s com a mutação). Suíte do gateway 1070 verdes; vizinhos WebRTC,
+`probe_masked_channel_gate`, `probe_adapter_self_calls`, manifesto, ledger e invariantes verdes.
+
 ## 2026-09-15 (25) — VOZ-05 fatia mascarada A: o cliente WebRTC entrega um valor protegido, e nada mais sai
 
 **O que havia, medido antes.** `set-next` de skill mascarado em pool só-WebRTC: **422
