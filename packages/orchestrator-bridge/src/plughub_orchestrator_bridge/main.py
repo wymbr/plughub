@@ -1448,6 +1448,7 @@ async def _is_human_instance(
 
 
 async def activate_human_agent(
+    http: aiohttp.ClientSession,
     redis_client: aioredis.Redis,
     session_id: str,
     pool_id: str,
@@ -1456,6 +1457,13 @@ async def activate_human_agent(
 ) -> None:
     """
     Notify the human agent's Agent Assist UI that a conversation was assigned.
+
+    VOZ-04 (fatia 2): é também AQUI que o atendente humano é anunciado ao plano de mídia
+    (`routing.assigned` no stream) e que o `conversation.assigned` passa a levar o `channel`.
+    Havia três chamadores e só um escrevia o `routing.assigned` — justamente o legado
+    `framework == "human"`; o caminho real (humano pela identidade da instância) não
+    escrevia, e medido ao vivo em 2026-09-15 a sala WebRTC nunca era criada para humano: o
+    token do agente respondia sempre 404 "room not ready". Uma casa para os três.
 
     Publishes conversation.assigned to pool:events:{pool_id} — the Agent Assist UI
     subscribes to this channel before knowing the session_id (it connects with only
@@ -1470,6 +1478,35 @@ async def activate_human_agent(
     when contact_closed arrives (routing engine TTL is 30s; no heartbeat in demo).
     """
     instance_id = routing_result.get("instance_id", "")
+
+    # ── Plano de mídia: o atendente entra no conjunto e a sala nasce ──────────
+    # Sessões de outros canais ignoram o evento; o campo `pool` só consulta o registry
+    # para `webrtc`.
+    await _write_routing_assigned_to_stream(
+        redis_client=redis_client,
+        session_id=session_id,
+        framework="human",
+        pool_config=await _routing_assigned_pool_field(
+            http, redis_client, session_id, tenant_id, pool_id,
+        ),
+        segment_id="",   # o segmento humano é aberto adiante, nesta função
+        instance_id=instance_id,
+    )
+
+    # ── Canal da sessão, para o Console decidir a superfície ─────────────────
+    # Fato do `session:{sid}:meta` que o gateway grava na abertura. Sem ele o Console
+    # criava TODO contato como `webchat`, e a sobreposição WebRTC nunca montava.
+    session_channel = ""
+    try:
+        _raw_meta_ch = await redis_client.get(f"session:{session_id}:meta")
+        session_channel = str((json.loads(_raw_meta_ch) if _raw_meta_ch else {}).get("channel") or "")
+    except Exception as exc:
+        logger.warning("activate_human_agent: meta ilegivel session=%s — %s", session_id, exc)
+    if not session_channel:
+        logger.warning(
+            "activate_human_agent: sessao %s sem `channel` no meta — conversation.assigned "
+            "sai SEM canal e o Console nao sabe qual superficie abrir", session_id,
+        )
 
     try:
         # ── Mark session as having at least one human agent (fast-lookup flag) ──
@@ -1566,6 +1603,10 @@ async def activate_human_agent(
         "agent_type_id": routing_result.get("agent_type_id"),
         "assigned_at":   datetime.now(timezone.utc).isoformat(),
     }
+    if session_channel:
+        # Omitido quando desconhecido: `"channel": ""` seria o valor plausível que o Console
+        # trataria como "algum canal". O aviso acima diz por que faltou.
+        event["channel"] = session_channel
     event_json = json.dumps(event)
     try:
         await redis_client.publish(f"pool:events:{pool_id}", event_json)
@@ -4625,6 +4666,7 @@ async def process_routed(
             _routed_instance_id, pool_id, agent_type_id,
         )
         await activate_human_agent(
+            http=http,
             redis_client=redis_client,
             session_id=session_id, pool_id=pool_id,
             tenant_id=tenant_id,
@@ -4797,6 +4839,7 @@ async def process_routed(
                 agent_type_id,
             )
             await activate_human_agent(
+                http=http,
                 redis_client=redis_client,
                 session_id=session_id, pool_id=pool_id,
                 tenant_id=tenant_id,
@@ -6135,18 +6178,10 @@ async def process_routed(
                     )
 
     elif framework == "human":
-        # ── Arc 15 Phase B: signal WebRTC adapter before activating human agent ──
-        await _write_routing_assigned_to_stream(
-            redis_client=redis_client,
-            session_id=session_id,
-            framework="human",
-            pool_config=await _routing_assigned_pool_field(
-                http, redis_client, session_id, tenant_id, pool_id,
-            ),
-            segment_id="",   # segment_id assigned inside activate_human_agent
-            instance_id=result.get("instance_id", ""),
-        )
+        # O `routing.assigned` para o plano de mídia é escrito DENTRO de activate_human_agent
+        # (VOZ-04): este era o único dos três caminhos humanos que o escrevia.
         await activate_human_agent(
+            http=http,
             redis_client=redis_client,
             session_id=session_id, pool_id=pool_id,
             tenant_id=tenant_id,

@@ -103,10 +103,12 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
     return `${m}:${s}`;
   };
 
-  // Nada a mostrar quando nenhum teto (meu ou do cliente) inclui mídia
-  if (channel !== "webrtc" || view === "none") return null;
+  if (channel !== "webrtc") return null;
 
   // ── Loading ──────────────────────────────────────────────────────────────
+  // VOZ-04: "conectando" e "erro" vêm ANTES do teto. Enquanto o token não chega os tetos
+  // são vazios, e o `view === "none"` escondia justamente estes dois estados — a falha do
+  // token nunca aparecia na tela.
   if (connecting) {
     return (
       <div className="flex items-center justify-center gap-2 py-4
@@ -127,6 +129,9 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
       </div>
     );
   }
+
+  // Nada a mostrar quando nenhum teto (meu ou do cliente) inclui mídia
+  if (view === "none") return null;
 
   // ── Connected ────────────────────────────────────────────────────────────
   return (

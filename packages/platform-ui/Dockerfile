@@ -264,6 +264,14 @@ RUN printf 'server {\n\
         proxy_read_timeout 300s;\n\
     }\n\
 \n\
+    # channel-gateway - token de midia do Console (VOZ-04). SO a rota de token.\n\
+    location ~ ^/webrtc/token/ {\n\
+        set $up_channel_rtc http://channel-gateway:8010;\n\
+        proxy_pass         $up_channel_rtc;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+    }\n\
+\n\
     # SPA fallback\n\
     location / {\n\
         try_files $uri $uri/ /index.html;\n\

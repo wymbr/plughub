@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# probe_webrtc_agent_console.sh — 2026-09-15  (VOZ-04, fatia 2 · ADR adr-voice-media-plane V-F1)
+#
+# PERGUNTA: quando um contato WebRTC é atribuído a um agente HUMANO, o Console consegue abrir a
+# sala — o agente sabe que o contato é WebRTC, a sala existe, e o token chega pelo caminho do
+# browser?
+#
+# O DEFEITO QUE O ORIGINOU (vermelho ao vivo, antes do conserto, com agente humano headless)
+#   · `conversation.assigned` chegava ao agente SEM `channel`, e o Console cria o contato como
+#     `webchat` por default — a sobreposição WebRTC nunca montava;
+#   · o stream da sessão só tinha `participant_joined`: o caminho REAL de ativação humana (pela
+#     identidade da instância) não escrevia `routing.assigned` — só o ramo legado escrevia —,
+#     então a sala nunca era criada e o token respondia sempre 404 "room not ready";
+#   · o hook pedia `/api/webrtc/token/…`, que o proxy manda ao mcp-server: 404 em HTML;
+#   · e mesmo com tudo certo o erro não aparecia: a sobreposição se escondia enquanto os tetos
+#     estavam vazios, que é exatamente o estado de "conectando" e de "falhou".
+#
+# DOIS RAMOS
+#   A  CONTRATO — o bridge anuncia o humano ao plano de mídia DENTRO de `activate_human_agent`
+#      (e os três chamadores passam `http`); o `conversation.assigned` leva `channel` e o
+#      Console o usa; o hook pede a rota do gateway pelo proxy que existe (vite e nginx) e só
+#      repete no código que o gateway emite; a sobreposição mostra conectando/erro antes do teto.
+#   B  AO VIVO — cliente (widget) + agente humano (protocolo do Console no `/agent/ws`) + token
+#      pelo nginx do platform-ui + os dois na MESMA sala do SFU (G1..G5, com o controle G4).
+#
+# ⚠️ O `/agent/ws` não pede credencial (registra instância para qualquer `user_id`); é isso que
+#    permite o agente headless, e é defeito registrado à parte (`CAP-19` em `pending.md`). Quando
+#    ele fechar, este exercício passa a apresentar a credencial do agente — não a contornar.
+#
+# EXIT: 0 OK · 1 FALHA · 2 INCONCLUSIVO
+
+set -uo pipefail
+cd "$(dirname "$0")/../.."
+
+GW="${GW_CONTAINER:-plughub-demo-channel-gateway-1}"
+NET="${DEMO_NETWORK:-plughub-demo_plughub-demo}"
+REG="${REGISTRY:-http://localhost:3300}"
+AUTH="${AUTH:-http://localhost:3202}"
+TENANT="${TENANT:-tenant_demo}"
+POOL="probe_voz04_webrtc"
+AGENT_PUBLISH='["audio","video"]'
+FALHA=0
+INCONCL=0
+
+ok()    { echo "  OK      $*"; }
+falha() { echo "  FALHA   $*"; FALHA=$((FALHA + 1)); }
+incon() { echo "  INCONCL $*"; INCONCL=$((INCONCL + 1)); }
+tally() {
+  while IFS= read -r l; do
+    case "$l" in OK\ *) ok "${l#OK }";; FALHA\ *) falha "${l#FALHA }";; INCONCL\ *) incon "${l#INCONCL }";;
+      SID\ *) ;; INFO\ *) echo "  INFO    ${l#INFO }";; *) [ -n "$l" ] && incon "saida inesperada: $l";; esac
+  done <<< "$1"
+}
+
+echo "════════════════════════════════════════════════════════════════════"
+echo " o Console abre a sala de um contato WebRTC atribuido a um humano?"
+echo "════════════════════════════════════════════════════════════════════"
+
+# ── A ────────────────────────────────────────────────────────────────────────
+echo ""
+echo "── A · CONTRATO ───────────────────────────────────────────────────────"
+A_OUT=$(python3 - <<'PYEOF'
+import ast, io, re
+def r(ok, txt): print(("OK " if ok else "FALHA ") + txt)
+def src(p): return io.open(p, encoding="utf-8").read()
+def nocomment_ts(s): return re.sub(r"(//[^\n]*|/\*.*?\*/)", "", s, flags=re.S)
+
+BR = src("packages/orchestrator-bridge/src/plughub_orchestrator_bridge/main.py")
+bt = ast.parse(BR)
+fn = next(n for n in bt.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "activate_human_agent")
+def calls_in(node, name):
+    return [c for c in ast.walk(node) if isinstance(c, ast.Call) and getattr(c.func, "id", "") == name]
+w = calls_in(fn, "_write_routing_assigned_to_stream")
+fw = [next((k.value.value for k in c.keywords if k.arg == "framework" and isinstance(k.value, ast.Constant)), None) for c in w]
+r(len(w) == 1 and fw == ["human"], "A1 activate_human_agent anuncia o humano ao plano de midia (%d escrita(s), framework=%s)" % (len(w), fw))
+fora = [c.lineno for c in calls_in(bt, "_write_routing_assigned_to_stream")
+        if any(isinstance(k.value, ast.Constant) and k.value.value == "human" for k in c.keywords if k.arg == "framework")
+        and not (fn.lineno <= c.lineno <= fn.end_lineno)]
+r(not fora, "A1 nenhum routing.assigned humano escrito FORA dela (linhas %s)" % fora)
+chamadas = calls_in(bt, "activate_human_agent")
+sem_http = [c.lineno for c in chamadas if not any(k.arg == "http" for k in c.keywords)]
+r(len(chamadas) >= 3 and not sem_http, "A1 %d chamador(es) passam http (sem: %s)" % (len(chamadas), sem_http))
+canal = any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Subscript) and getattr(t.slice, "value", None) == "channel" for t in n.targets)
+            for n in ast.walk(fn))
+r(canal, "A2 conversation.assigned recebe `channel` no bridge")
+
+ctx = nocomment_ts(src("packages/platform-ui/src/modules/agent-assist/AgentAssistContext.tsx"))
+types = nocomment_ts(src("packages/platform-ui/src/modules/agent-assist/types.ts"))
+m = re.search(r"interface WsConversationAssigned \{(.*?)\}", types, re.S)
+r(m is not None and re.search(r"\bchannel\?:\s*string", m.group(1)), "A2 tipo WsConversationAssigned declara channel")
+r(re.search(r"makeContact\(session_id,\s*resolvedPool,\s*channel", ctx) is not None, "A2 Console cria o contato com o canal da atribuicao")
+
+hook = nocomment_ts(src("packages/platform-ui/src/modules/agent-assist/hooks/useWebRTCSession.ts"))
+r("/webrtc/token/" in hook and "/api/webrtc" not in hook, "A3 hook pede /webrtc/token/ (nao /api/webrtc)")
+vite = src("packages/platform-ui/vite.config.ts")   # sem filtro de comentario: ele comeria o `//` da URL do target
+vm = re.search(r"'\^/webrtc/token/':\s*\{\s*target:\s*'http://localhost:8010'", vite)
+nginx = src("packages/platform-ui/Dockerfile")
+nm = re.search(r"location ~ \^/webrtc/token/ \{.*?proxy_pass\s+\$(\w+)", nginx, re.S)
+up = re.search(r"set \$%s http://channel-gateway:8010" % nm.group(1), nginx) if nm else None
+r(vm is not None and up is not None, "A3 proxy /webrtc/token/ -> gateway no vite e no nginx")
+gw = src("packages/channel-gateway/src/plughub_channel_gateway/main.py")
+r('"room_not_ready"' in gw and re.search(r'code === "room_not_ready"', hook) is not None,
+  "A4 hook repete so no codigo que o gateway emite (room_not_ready)")
+ov = nocomment_ts(src("packages/platform-ui/src/modules/agent-assist/components/WebRTCOverlay.tsx"))
+i_con, i_err, i_none = ov.find("if (connecting)"), ov.find("if (error)"), ov.find('view === "none"')
+r(0 <= i_con < i_none and 0 <= i_err < i_none, "A5 sobreposicao mostra conectando/erro antes de esconder por teto vazio")
+PYEOF
+)
+tally "$A_OUT"
+
+# ── B ────────────────────────────────────────────────────────────────────────
+echo ""
+echo "── B · AO VIVO (cliente + agente humano + nginx do platform-ui + SFU) ──"
+IMG=$(docker inspect -f '{{.Image}}' "$GW" 2>/dev/null)
+TOKEN=$(curl -s --max-time 20 -X POST "$AUTH/auth/login" -H 'Content-Type: application/json' \
+  -d "{\"email\":\"admin@plughub.local\",\"password\":\"changeme_admin\",\"tenant_id\":\"$TENANT\"}" | jq -r '.access_token // empty')
+if [ -z "$IMG" ] || [ -z "$TOKEN" ]; then
+  incon "B: gateway fora do ar ou login do admin falhou — nao medido"
+else
+  H=(-H "Authorization: Bearer $TOKEN" -H "x-tenant-id: $TENANT" -H 'Content-Type: application/json')
+  st=$(curl -s -o /dev/null -w '%{http_code}' "${H[@]}" "$REG/v1/pools/$POOL")
+  if [ "$st" = 404 ]; then
+    curl -s -o /dev/null -X POST "${H[@]}" "$REG/v1/pools" -d "{\"pool_id\":\"$POOL\",\"channel_types\":[\"webrtc\"],\"sla_target_ms\":60000,\"agent_kind\":\"human\",\"description\":\"fixture VOZ-04\",\"media_policy\":{\"customer_publish\":[\"audio\",\"video\"],\"agent_publish\":$AGENT_PUBLISH}}"
+    sleep 5
+  fi
+  # a política da fixture é afirmada, não suposta
+  curl -s -o /dev/null -X PUT "${H[@]}" "$REG/v1/pools/$POOL" -d "{\"media_policy\":{\"customer_publish\":[\"audio\",\"video\"],\"agent_publish\":$AGENT_PUBLISH}}"
+  ENV=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$GW" | grep -E '^PLUGHUB_(JWT_SECRET|AUTH_JWT_SECRET|TENANT_ID|WEBRTC_LIVEKIT_URL|WEBRTC_LIVEKIT_API_KEY|WEBRTC_LIVEKIT_API_SECRET)=' | sed 's/^/-e /' | tr '\n' ' ')
+  name="probe_voz04c_$$_$RANDOM"
+  B_OUT=$(timeout "${EXERCISE_TIMEOUT_S:-240}" docker run --rm -i --name "$name" --network "$NET" --entrypoint python \
+          $ENV -e POOL="$POOL" -e AGENT_PUBLISH="$AGENT_PUBLISH" "$IMG" - < infra/test/_webrtc_agent_console_exercise.py 2>&1)
+  [ $? -eq 124 ] && { docker kill "$name" >/dev/null 2>&1; B_OUT="$B_OUT
+FALHA TIMEOUT exercicio morto apos ${EXERCISE_TIMEOUT_S:-240}s"; }
+  tally "$(printf '%s\n' "$B_OUT" | grep -E '^(OK|FALHA|INCONCL|SID|INFO) ')"
+  N=$(printf '%s\n' "$B_OUT" | grep -cE '^(OK|FALHA) (G[1-5]|LIMPEZA) ')
+  [ "$N" -ge 6 ] || falha "exercicio emitiu $N de 6 veredictos: $(printf '%s' "$B_OUT" | tail -3 | tr '\n' ' ' | cut -c1-260)"
+fi
+
+echo ""
+echo "════════════════════════════════════════════════════════════════════"
+if [ "$FALHA" -gt 0 ]; then echo " VERMELHO — $FALHA falha(s), $INCONCL inconclusivo(s)"; exit 1; fi
+if [ "$INCONCL" -gt 0 ]; then echo " INCONCLUSIVO — $INCONCL ramo(s) sem medida"; exit 2; fi
+echo " VERDE"; exit 0

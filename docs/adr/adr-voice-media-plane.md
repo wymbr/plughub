@@ -363,8 +363,14 @@ A4 (o humano finalmente entra na conferência) e é a primeira vez que o canal p
 > mensagem ia sem `content.type` e a sessão não gravava `ws_alive` (o watchdog a fecharia). Hoje o
 > contrato de ciclo de vida mora em `adapters/contact_lifecycle.py`, compartilhado com o webchat, e o
 > contato entra na fila, fala com o bridge e sai dela. Gate: `probe_webrtc_contact_entry.sh`.
-> Faltam: Console montar a sala, texto do agente ao cliente, mídia alcançável do host, validação com
-> agente no browser.
+>
+> **Fatia 2 — CONSOLE ✅ 2026-09-15 (`VOZ-04`).** Atribuído a um humano, o contato WebRTC não abria
+> sala: o `conversation.assigned` ia sem canal (o Console o criava como webchat), o caminho real de
+> ativação humana não escrevia `routing.assigned` (só o ramo legado o fazia, e a sala nasce dele), o
+> token era pedido ao mcp-server e a sobreposição escondia conectando/erro. Hoje o agente e o cliente
+> aparecem na mesma sala do SFU. Gate: `probe_webrtc_agent_console.sh`. Achados à parte: `CAP-19`
+> (`/agent/ws` sem credencial, publicado pela 5174) e `VOZ-15` (token sem conferir quem atende).
+> Faltam: texto do agente ao cliente, mídia alcançável do host, validação com agente no browser.
 
 **V-F2 — bot leg: STT/TTS.** URA e agente IA por voz; `notify` falado; `menu` por voz com DTMF
 **e** STT — o que conserta o `collect` morto de A2. A partir daqui a voz tem transcrição, e

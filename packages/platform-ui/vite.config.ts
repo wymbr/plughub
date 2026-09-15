@@ -124,6 +124,12 @@ export default defineConfig({
       '^/webchat': {
         target: 'http://localhost:8010',
         changeOrigin: true
+      },
+      // VOZ-04: token de mídia do Console. SÓ a rota de token — o resto do prefixo /webrtc
+      // é do cliente final e não passa pela UI de operação.
+      '^/webrtc/token/': {
+        target: 'http://localhost:8010',
+        changeOrigin: true
       }
     }
   }

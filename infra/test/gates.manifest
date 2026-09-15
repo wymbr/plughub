@@ -382,6 +382,12 @@ probe_webrtc_pool_media_policy.sh
 # watchdog a fecharia). Mede o contrato no LEITOR, o contato ao vivo ate a fila e de volta, e o
 # controle K: o routing enfileira o formato novo e recusa o antigo.
 probe_webrtc_contact_entry.sh
+# VOZ-04 (Console). Contato WebRTC atribuido a humano: o conversation.assigned ia sem canal (o
+# Console o criava como webchat e a sobreposicao nunca montava), o caminho real de ativacao
+# humana nao escrevia routing.assigned (a sala nunca nascia), o hook pedia o token ao
+# mcp-server e a sobreposicao escondia conectando/erro. Mede o contrato e, ao vivo, cliente +
+# agente headless + token pelo nginx do platform-ui + os dois na MESMA sala do SFU.
+probe_webrtc_agent_console.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

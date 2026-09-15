@@ -133,6 +133,10 @@ export default defineConfig({
             '^/webchat': {
                 target: 'http://localhost:8010',
                 changeOrigin: true
+            },
+            '^/webrtc/token/': {
+                target: 'http://localhost:8010',
+                changeOrigin: true
             }
         }
     }

@@ -79,6 +79,10 @@ const ROOM_OPTIONS: RoomOptions = {
   dynacast:       true,
 };
 
+// Esperas entre tentativas enquanto a sala ainda não existe (~15 s no total). Passou
+// disso, a tela mostra `room_not_ready` em vez de ficar tentando calada.
+const TOKEN_RETRY_DELAYS_MS = [500, 1000, 1500, 2000, 3000, 3000, 4000];
+
 export function useWebRTCSession(
   sessionId: string | null,
   agentIdentity: string,
@@ -86,6 +90,9 @@ export function useWebRTCSession(
   role: RoomRole = "agent"
 ): WebRTCSessionState {
   const roomRef = useRef<Room | null>(null);
+  // Cada `connect` leva uma geração; trocar de sessão ou desmontar a invalida, e a
+  // tentativa em curso para em vez de abrir a sala da sessão errada.
+  const generationRef = useRef(0);
   const [room,         setRoom]         = useState<Room | null>(null);
   const [publish,      setPublish]      = useState<MediaKind[]>([]);
   const [customerPublish, setCustomerPublish] = useState<MediaKind[]>([]);
@@ -111,19 +118,35 @@ export function useWebRTCSession(
 
   // ── Connect / disconnect lifecycle ──────────────────────────────────────
   const connect = useCallback(async (sid: string) => {
+    const generation = ++generationRef.current;
     setConnecting(true);
     setError(null);
 
     try {
-      const res = await fetch(
-        `/api/webrtc/token/${sid}?role=${role}`,
-        // Token em MEMORIA (`auth/token-store`). A leitura do localStorage aqui mandava
-        // `Bearer ` vazio — chave que ninguem escreve.
-        { headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` } }
-      );
-      if (!res.ok) throw new Error(`token_fetch_failed:${res.status}`);
-
-      const body: TokenResponse = await res.json();
+      // VOZ-04: a rota é do channel-gateway (`/webrtc`, proxy próprio). Era `/api/webrtc/…`,
+      // que o proxy manda ao mcp-server — 404 sempre, e a sala nunca era aberta.
+      let body: TokenResponse | null = null;
+      for (let attempt = 0; attempt < TOKEN_RETRY_DELAYS_MS.length + 1; attempt++) {
+        const res = await fetch(
+          `/webrtc/token/${sid}?role=${role}`,
+          // Token em MEMORIA (`auth/token-store`). A leitura do localStorage aqui mandava
+          // `Bearer ` vazio — chave que ninguem escreve.
+          { headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` } }
+        );
+        if (generation !== generationRef.current) return;   // sessão trocada no meio
+        if (res.ok) { body = await res.json(); break; }
+        // A atribuição chega ao Console e a sala nasce do `routing.assigned` da MESMA
+        // ativação: "ainda não" é corrida normal e se repete; qualquer outro 404 é
+        // desistência, e o motivo aparece na tela.
+        const detail = await res.json().catch(() => null) as { detail?: { code?: string } } | null;
+        const notReady = res.status === 404 && detail?.detail?.code === "room_not_ready";
+        if (!notReady || attempt === TOKEN_RETRY_DELAYS_MS.length) {
+          throw new Error(notReady ? "room_not_ready" : `token_fetch_failed:${res.status}`);
+        }
+        await new Promise(resolve => setTimeout(resolve, TOKEN_RETRY_DELAYS_MS[attempt]));
+        if (generation !== generationRef.current) return;
+      }
+      if (!body) throw new Error("token_fetch_failed");
       setPublish(body.publish);
       setCustomerPublish(body.customer_publish);
 
@@ -164,14 +187,17 @@ export function useWebRTCSession(
       setRoom(r);
       rebuildRemoteTracks(r);
     } catch (err) {
+      if (generation !== generationRef.current) return;
       const msg = err instanceof Error ? err.message : "webrtc_connect_failed";
       setError(msg);
     } finally {
-      setConnecting(false);
+      // Uma tentativa obsoleta não apaga o "conectando" da sessão que a substituiu.
+      if (generation === generationRef.current) setConnecting(false);
     }
   }, [rebuildRemoteTracks, role]);
 
   const disconnectRoom = useCallback(() => {
+    generationRef.current++;
     const r = roomRef.current;
     if (r) {
       r.disconnect();

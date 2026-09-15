@@ -381,8 +381,13 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // ── New contact assigned ──────────────────────────────────────────────
     if (event.type === "conversation.assigned") {
-      const { session_id, contact_id, pool_id, instance_id, assigned_at } = event;
+      const { session_id, contact_id, pool_id, instance_id, assigned_at, channel, source } = event;
       const resolvedPool = pool_id ?? sourcePoolId;
+      // VOZ-04: o canal vem da atribuição. Até aqui todo contato nascia `webchat` e a
+      // sobreposição WebRTC nunca montava. Ausência fora da reentrega do ledger é dita.
+      if (!channel && source !== "work_ledger") {
+        console.warn(`[agent-assist] conversation.assigned sem channel (session=${session_id}) — tratado como webchat`);
+      }
 
       // Register session→pool mapping so send() targets the correct WS connection
       registerSession(session_id, resolvedPool);
@@ -402,7 +407,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const alreadyClosed = pendingClosedSessions.current.has(session_id);
         pendingClosedSessions.current.delete(session_id);
         next.set(session_id, {
-          ...makeContact(session_id, resolvedPool),
+          ...makeContact(session_id, resolvedPool, channel || undefined),
           contactId:         contact_id ?? null,
           instanceId:        instance_id ?? null,
           // Âncora do SERVIDOR — sobrevive ao F5 (ver parseAssignedAt).

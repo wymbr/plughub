@@ -113,6 +113,10 @@ export interface WsConversationAssigned {
   instance_id?: string;
   agent_type_id?: string;
   assigned_at: string;
+  /** Canal da sessão, do `session:{sid}:meta` (bridge, VOZ-04). Ausente na reentrega pelo
+   *  ledger de trabalho e quando o meta não o tem — o bridge loga o segundo caso. */
+  channel?: string;
+  source?: string;
 }
 
 export interface WsMentionCommandAck {

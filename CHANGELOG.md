@@ -1,5 +1,81 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (15) — VOZ-04, fatia 2: o Console abre a sala do contato WebRTC
+
+### 1 · Vermelho ao vivo, antes
+
+Cliente real no gateway e um agente humano **headless** falando o protocolo do Console no
+`/agent/ws` do mcp-server, com routing-engine e bridge reais:
+
+| pergunta | o que aconteceu |
+|---|---|
+| o agente sabe que é WebRTC? | `conversation.assigned` chegava **sem `channel`**, e o Console cria o contato como `webchat` por default — `WebRTCOverlay`/`useWebRTCSession` nunca montavam |
+| a sala existe? | o stream só tinha `participant_joined`. Dos **três** caminhos que ativam humano no bridge, só o legado `framework == "human"` escrevia `routing.assigned` — e é dele que a sala nasce. O caminho REAL (humano reconhecido pela identidade da instância) não escrevia, e o token respondia sempre 404 *"room not ready"* |
+| o token chega pelo browser? | o hook pedia `/api/webrtc/token/…`; o proxy manda `/api` ao mcp-server, que não tem a rota: 404 em HTML |
+| e o erro, aparecia? | não: a sobreposição se escondia enquanto os tetos de mídia estavam vazios — que é exatamente o estado de *conectando* e de *falhou* |
+
+### 2 · O que mudou
+
+- **Bridge — uma casa para os três caminhos.** `activate_human_agent` (agora recebe `http`) escreve
+  o `routing.assigned` humano antes de abrir o segmento, com o campo `pool` da VOZ-10; o ramo legado
+  deixou de escrevê-lo. O `conversation.assigned` leva `channel`, lido do `session:{sid}:meta`;
+  sem canal no meta, o campo é **omitido** e o bridge avisa — `"channel": ""` seria o valor plausível.
+  Efeito nos outros canais, conferido no leitor: o voice só reage a `routing.assigned` com
+  `segment_id` (que aqui vai vazio, como no legado) e o webchat não lê o tipo.
+- **Gateway:** sala ainda não criada responde 404 com `detail.code = "room_not_ready"`; sessão
+  desconhecida continua 404 sem código. Os dois eram 404 e só o texto os separava.
+- **Console:** o tipo e o contexto usam o `channel` da atribuição (e avisam quando falta fora da
+  reidratação do work ledger); o hook pede `/webrtc/token/{sid}`, repete com espera crescente **só**
+  em `room_not_ready` e descarta resposta de uma conexão já abandonada; a sobreposição não monta fora
+  de `webrtc` e mostra conectando/erro antes de se esconder por teto vazio.
+- **Proxy:** `^/webrtc/token/` → gateway no `vite.config.ts`/`.js` e no nginx do `Dockerfile`. **Só a
+  rota de token** — o resto de `/webrtc` é do cliente final, não da UI de operação.
+
+### 3 · Gate
+
+**`probe_webrtc_agent_console.sh`** (novo, no manifesto):
+- **A** contrato: `activate_human_agent` faz a única escrita humana de `routing.assigned` e os três
+  chamadores passam `http`; o `channel` entra no evento, no tipo e no `makeContact`; hook na rota do
+  gateway com proxy no vite **e** no nginx; repetição só no código que o gateway emite; ordem da
+  sobreposição. Contra o fonte de `HEAD`: **10 de 10 reprovam**.
+- **B** ao vivo: **G1** `channel='webrtc'` no socket do agente · **G2** `routing.assigned` humano com a
+  instância do agente e a sala existindo no SFU · **G3** token pelo nginx do platform-ui, 200, publicando
+  o `agent_publish` do pool · **G4** controle: sessão desconhecida é 404 **sem** `room_not_ready` ·
+  **G5** agente e cliente na MESMA sala (`agent-…`, `customer-…`, e o `bot-…` do STT) · **LIMPEZA**
+  sessão fechada e instância humana removida (resíduo faria o probe de entrada reprovar).
+
+⚠️ A corrida que motivou a repetição **não apareceu** nas rodadas ao vivo: a primeira tentativa do
+token já saiu 200 (o probe imprime). O caminho de repetição está coberto só pelo ramo A.
+⚠️ Não há teste unitário de `activate_human_agent` na suíte do bridge — nem antes; a cobertura é o
+gate.
+
+**Suítes** nas imagens (container conferido igual à tag): gateway **1020**, bridge **158** (+5
+skipped). Vizinhos verdes: `probe_webrtc_contact_entry`, `probe_webrtc_media_plane`,
+`probe_gates_manifest_coverage` (350 scripts), `probe_adapter_self_calls`, `probe_edge_surface`,
+`probe_mcp_rest_surface`, `probe_authz_single_verifier`, `probe_task_ledger`,
+`check_config_invariants`. ⚠️ `probe_webrtc_participant_media` e `probe_webrtc_pool_media_policy`
+saem **INCONCLUSIVO** no ramo D (*"nenhum routing.assigned depois que o bridge subiu — sem
+amostra"*): o stream some quando a sessão fecha e o bridge acabou de ser recriado, então não sobra
+amostra entre rodadas. A mesma varredura, repetida com o contato do probe novo ainda aberto, achou o
+`routing.assigned` humano com `framework=human` — o que o D1 aceita.
+
+### 4 · Achados à parte, medidos e registrados
+
+- **`CAP-19` — o `/agent/ws` não pede credencial, e a 5174 o publica.** Medido pela borda do
+  platform-ui, sem token: um socket com `?session_id=` de outro contato **recebe** os eventos de agente
+  da sessão (controle injetado chegou) e **escreve** no stream canônico uma `message` como
+  `human_agent`/`primary`/`all`. O `127.0.0.1:3100` da CAP-13 não cobre essa porta. Não é deste arco,
+  e não foi consertado aqui.
+- **`VOZ-15` — o token de agente confere a capacidade no pool, não que o chamador atende.** Outro
+  usuário com o mesmo grant recebe 200 para a sala do cliente; o probe mede isso a cada rodada como
+  INFO, para a ficha não envelhecer.
+
+### 5 · O que falta na VOZ-04, em ordem
+
+1. **Texto do agente ao cliente** — o `_stream_watcher` ignora mensagens do stream.
+2. **Mídia alcançável do browser do host** — SFU sem endereço externo, TURN com nome interno.
+3. **Validação com agente humano no browser** — gate assistido.
+
 ## 2026-09-14 (14) — VOZ-04, fatia 1: um contato WebRTC entra na plataforma
 
 ### 1 · Vermelho ao vivo, antes

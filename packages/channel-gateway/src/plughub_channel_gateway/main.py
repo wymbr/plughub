@@ -972,9 +972,16 @@ async def webrtc_token(
         identity   = str(_payload.get("sub") or ""),
     )
     if result is None:
+        # VOZ-04: o Console abre o contato quando recebe a atribuição, e a sala nasce do
+        # `routing.assigned` que o bridge escreve na MESMA ativação — a corrida é normal. O
+        # cliente precisa distinguir "ainda não" (repete) de "sessão desconhecida" (desiste),
+        # e os dois são 404: por isso um `code`, nunca o texto.
         raise HTTPException(
             status_code=404,
-            detail="WebRTC room not ready for session — routing may still be in progress",
+            detail={
+                "code":    "room_not_ready",
+                "message": "WebRTC room not ready for session — routing may still be in progress",
+            },
         )
     return result
 
