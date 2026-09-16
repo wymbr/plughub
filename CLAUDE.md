@@ -221,45 +221,25 @@ system_error         — unrecoverable error
   `yaml_snapshot` nulo. Compare **conteúdo** (canonicalizado, por contenção quando há defaults), não a
   existência da linha nem o timestamp de escrita.
 
-- **`ReplacingMergeTree` substitui a LINHA INTEIRA — não faz merge por coluna.** Todo writer de
-  `sessions` ou manda a linha completa, ou é reidratado antes da escrita (cache de identidade no
-  consumer + carimbo no close, que é a linha sobrevivente). Três bugs de `sessions` num dia só vieram
-  disto. Vale para qualquer tabela RMT nova. **Regra derivada (2026-08-18): versão de RMT é fato do
-  EVENTO, nunca da inserção, e precisa da RESOLUÇÃO do fenômeno.** `segments` e
-  `participation_intervals` foram migradas para `ReplacingMergeTree(row_version)` com
-  `coalesce(<fim>, <início>)` em `DateTime64(3)`, como `sessions` e `session_transitions` — as duas
-  versões anteriores (`ingested_at` em segundo; e nenhuma coluna) perdiam o fechamento de segmento.
-  **Resíduo que a migração NÃO cobre:** `participation_intervals` continua
-  `ORDER BY (tenant, session, participant)`, então dois segmentos do mesmo participante na mesma sessão
-  (caso do resume) colidem numa linha só — ela **não** serve de testemunha por-segmento, e agora vence
-  o de evento mais recente em vez do último inserido. Use `segments`.
+> **Método de DADOS (ClickHouse, Kafka, id derivado) mora na skill `data-engineering`**, com os
+> casos medidos das três regras abaixo e da regra do alias movidos integralmente.
 
-- **Ordem no Kafka é por PARTIÇÃO — logo publish sem `key` não tem ordem nenhuma.** Qualquer par de
-  eventos que descreva o MESMO objeto (abre/fecha, cria/atualiza) tem de viajar com chave que os
-  coloque na mesma partição; sem ela o particionador espalha e o segundo evento pode ser consumido
-  antes do primeiro. Custou o defeito mais caro deste repositório até hoje: `conversations.participants`
-  publicava sem chave em tópico de 3 partições, o `participant_joined` vencia o `participant_left` na
-  dedup, e o segmento ficava aberto **para sempre, sem erro em lugar nenhum** — cinco rodadas de
-  investigação em três hipóteses erradas (transporte, controle, GC de task). Pior: o DDL de
-  `participation_intervals` **afirmava em prosa** a garantia que ninguém impunha (*"the 'left' event is
-  always inserted after 'joined' (Kafka ordering)"*). Comentário que promete invariante sem produtor é
-  a mesma família de "valor plausível". Ver `CHANGELOG.md` 2026-08-18 e
-  `docs/guias/conference-mechanics.md` § Problema 34.
+- **`ReplacingMergeTree` substitui a LINHA INTEIRA — não faz merge por coluna.** Todo writer manda a
+  linha completa ou é reidratado antes. A versão é fato do EVENTO, na resolução do fenômeno
+  (`ReplacingMergeTree(row_version)`, `coalesce(<fim>, <início>)` em `DateTime64(3)`), nunca da
+  inserção. `participation_intervals` colide segmentos do mesmo participante: testemunha
+  por-segmento é `segments`.
 
-- **Identidade DERIVADA tem de conter o discriminador do FENÔMENO, não o do contêiner dele.** Id
-  determinístico (`uuid5`) é a forma correta de tornar emissão repetida inócua — mas só se a chave
-  descrever a coisa que se quer contar. `queue_wait_segment_id` era `uuid5(tenant, session_id)`:
-  identificava a SESSÃO, enquanto o fato registrado é a PASSAGEM pela fila. Medido em 2026-08-24 num
-  contato real — espera de 24 118 ms num pool, transferência, espera de 85 009 ms noutro, **duas
-  emissões, uma linha**, e a primeira espera **deixou de existir** (o `ReplacingMergeTree` não funde,
-  substitui). Não é defeito de exibição: o carimbo da passagem perdida é apagado na saída, logo
-  nenhuma migração a alcança depois. **Escolha do discriminador é escolha de escopo**: o
-  `first_queued_ms` serviu porque seu ciclo de vida (NX na entrada, DELETE na saída) *já significa* uma
-  passagem; o `pool_id` foi recusado porque é fato do CALL SITE (o emissor passa `event.pool_id or ""`)
-  e daria dois ids para uma passagem. **Agravante que é a lição de método:** a premissa falsa
-  (*"uma sessão tem UMA passagem pela fila"*) vivia no **docstring da própria função** — comentário que
-  promete invariante sem mecanismo que a imponha, exatamente como o DDL de `participation_intervals`.
-  Ver `CHANGELOG.md` 2026-08-24 e `conference-mechanics.md` § Mudança 38.
+- **Ordem no Kafka é por PARTIÇÃO — logo publish sem `key` não tem ordem nenhuma.** Eventos do MESMO
+  objeto (abre/fecha) viajam com a chave dele. Sem ela, o defeito mais caro do repositório: segmento
+  aberto para sempre, sem erro em lugar nenhum (`conference-mechanics.md` § Problema 34).
+
+- **Identidade DERIVADA (`uuid5`) contém o discriminador do FENÔMENO, não o do contêiner dele** —
+  escolhido pelo ciclo de vida do fato, nunca por um valor do call site. `uuid5(tenant, session_id)`
+  para a passagem pela fila apagou a primeira espera (§ Mudança 38).
+
+- **Comentário ou docstring que promete invariante sem mecanismo é defeito**, não documentação — as
+  duas regras acima nasceram de uma garantia afirmada em prosa que ninguém impunha.
 
 - **Um instrumento pode ser falseável, ramificado e honesto — e ainda medir a proposição ERRADA.**
   Ao desenhar o veredicto, pergunte de qual PROPOSIÇÃO cada ramo é evidência; *"isto machuca?"*
@@ -299,12 +279,8 @@ system_error         — unrecoverable error
   e ele precisa da testemunha de presença ao lado, senão um produtor que nunca emite passa.
 
 - **Em ClickHouse, alias de agregado NUNCA repete nome de coluna real da tabela.** `any(pool_id) AS
-  pool_id` faz o alias sombrear a coluna que o `WHERE` usa, e a query inteira falha
-  (`ILLEGAL_AGGREGATION`, code 184) — não a coluna, a query. Já aconteceu duas vezes: `any(attr.agent_type)`
-  na lente `deploy` e `any(pool_id)`/`any(user_id)` no `wrapup-summary`. Sufixe o alias (`_ref`) e renomeie
-  na camada Python, onde o contrato da API é definido. O modo de falha agrava a regra: o wrapper devolve
-  `data_unavailable` com `data: []`, indistinguível de "não há dado" para quem só olha a tela — só se
-  diagnostica se o `except` logar o texto da exceção.
+  pool_id` derruba a query inteira (code 184) e o wrapper devolve `data: []`, igual a "não há dado".
+  Sufixe `_ref` e renomeie na camada Python.
 
 - **`docker cp` sobrevive a `restart`, não a `up -d`.** `up -d` recria o container a partir da imagem.
   Mudança em código de serviço = `build`, nunca `cp` (que é só atalho de iteração efêmera). Um `up -d`
