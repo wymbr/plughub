@@ -562,6 +562,26 @@ Grupo aberto em 2026-09-16 pelo scanner da skill `plughub-review`.
 
 ---
 
+## `docs/arcos/ai-gateway.md` — AI Gateway
+
+Grupo aberto em 2026-09-16 ao escrever a skill `skill-flow-authoring`.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| AIG-01 | **O `prompt_id` do step `reason` é obrigatório em todo lugar e não vira prompt em lugar nenhum.** Medido em 2026-09-16: o schema o exige (`skill.ts`, step `reason`; e `question_prompt_id`/`extract_prompt_id` no `resolve`), **7** YAMLs o declaram (`contexto_extracao_v2`, `copilot_sac_analysis_v1`, `queue_agent_response_v1`…), o motor o repassa, o worker e o `skill-flow-service` o enviam e o LOGAM (`index.ts:247`) — e o ai-gateway o recebe em `ReasonRequest.prompt_id` (*"Ref ao Prompt Registry"*, `models.py:108`) sem usá-lo: `reason.py` monta `_SYSTEM_REASON` fixo + schema + `input` (`:28-32`, `:158-164`), e o único `prompt_id` do arquivo é o docstring (`:6`). **Não existe Prompt Registry** no repositório. ⚠️ **Não é defeito de comportamento hoje, e é por isso que é perigoso:** os flows que funcionam carregam a instrução DENTRO do `input` (`agente_contexto_ia_v1.yaml:215`, `instrucoes: |`), então o modelo recebe o que precisa. O dano é para quem escreve um flow novo acreditando no nome do campo — declara `prompt_id` com um id significativo, não escreve instrução no `input`, e o modelo decide só pelo schema, **sem erro nem log**. É o *"comentário que promete invariante sem mecanismo"* na forma de CAMPO OBRIGATÓRIO. **Decidir:** (a) o campo vira opcional e rótulo declarado como tal (descrição + doc), ou (b) passa a existir resolução de prompt, com recusa alta de id desconhecido. Qualquer das duas remove a promessa; manter as duas coisas como estão não | `aberto` | medido 2026-09-16; `ai-gateway/.../reason.py:6,28-32,158-164`; `models.py:108` |
+
+---
+
+## `docs/pacotes/skill-flow-engine.md` — interpretador de Skill Flow
+
+Grupo aberto em 2026-09-16 ao escrever a skill `skill-flow-authoring`.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| SFE-01 | **`complete.outcome_from` com valor inválido cai no `outcome` literal SEM log.** `steps/complete.ts:27-33`: se `results[outcome_from]` não é string ou não passa em `SegmentOutcomeSchema`, o passo mantém o literal, e o comentário chama isso de *"fallback explícito"* — explícito no código, mudo em runtime. O efeito é o do catálogo de *valor plausível*: um flow que calcula `escalated_human` e o grava com grafia errada (ou sob outro `output_as`) fecha como `resolved`, e o relatório de resolução conta um contato que não foi resolvido. Conserto: logar o `outcome_from`, o valor encontrado e o literal usado quando o fallback dispara; e um teste que exige o log no ramo inválido **com** a testemunha de que o ramo válido não loga. Antes: contar nos segmentos quantos fechamentos de flow com `outcome_from` declarado caíram no literal (hoje invisível — só o log passará a dizer) | `aberto` | medido 2026-09-16; `packages/skill-flow-engine/src/steps/complete.ts:27-33` |
+
+---
+
 ## `docs/arcos/g7-segment-contact-decoupling.md` — fim de segmento sem fim de contato
 
 Grupo aberto em 2026-09-16: o teste de acionamento da skill `data-engineering` levantou duas
