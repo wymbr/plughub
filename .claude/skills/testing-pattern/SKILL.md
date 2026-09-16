@@ -95,6 +95,12 @@ Gate que decide cobertura, autorização ou contrato ganha um **`mut_<gate>.sh`*
   docker exec plughub-demo-<svc>-1 sh -c 'cd /app/packages/<svc> && python -m pytest -q'
   ```
 
+  ⚠️ **Isso testa o código da IMAGEM, não da árvore** — nenhum serviço monta `packages/` por
+  bind-mount. Sem `build` + `up -d` antes, o verde é sobre o arquivo antigo (medido
+  2026-09-16: 766 verdes e `grep` do texto novo no container = 0). Confirme com
+  `docker exec … grep -c '<âncora nova>' <arquivo>` antes de ler o resultado. Ver skill
+  `deployment` § 1.
+
 - **O serviço não recarrega** (uvicorn sem `--reload`): probe AO VIVO mede o código de
   quando o container subiu. Confira `docker inspect --format '{{.State.StartedAt}}'` antes de
   culpar ou absolver um edit.
