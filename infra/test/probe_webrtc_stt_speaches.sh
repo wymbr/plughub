@@ -69,8 +69,8 @@ FALHA TIMEOUT exercicio morto"; }
       INFO\ *) echo "  INFO    ${l#INFO }";; "") ;; *) incon "saida inesperada: $l";; esac
   done <<< "$OUT"
   if ! printf '%s\n' "$OUT" | grep -qE '^INCONCL S1 '; then
-    N=$(printf '%s\n' "$OUT" | grep -cE '^(OK|FALHA) (S[1-4]|LIMPEZA) ')
-    [ "$N" -ge 5 ] || falha "exercicio emitiu $N de 5 veredictos"
+    N=$(printf '%s\n' "$OUT" | grep -cE '^(OK|FALHA) (S[1-5]|LIMPEZA) ')
+    [ "$N" -ge 6 ] || falha "exercicio emitiu $N de 6 veredictos"
   fi
 fi
 

@@ -115,6 +115,8 @@ export interface StreamEntry {
   payload:     unknown
   /** segment_id of the agent that emitted this entry (present since Arc 5) */
   segment_id?: string
+  /** `payload.content.type` of the entry; `audio_transcript` = speech transcribed from the call (VOZ-05) */
+  content_type?: string
 }
 
 // ─── Contact segment (per-agent participation window within a session) ────────

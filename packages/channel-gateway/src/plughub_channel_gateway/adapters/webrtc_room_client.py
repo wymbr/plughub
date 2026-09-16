@@ -5,7 +5,7 @@ Server-side LiveKit room participation for Arc 15 WebRTC STT/TTS pipeline.
 Architecture: docs/arcos/arc15-webrtc.md § Phase C
 
 The room client connects to a LiveKit room as a server-side bot participant:
-  - subscribe_customer_audio() → yields 48kHz PCM frames for resample + STT
+  - speakers()                 → (identidade, quadros 48kHz PCM) por trilha transcrita — cliente e humanos
   - publish_audio()            → TTS injection via LocalAudioTrack
 
 Audio format contract
@@ -33,6 +33,12 @@ logger = logging.getLogger("plughub.channel-gateway.webrtc.room_client")
 
 # Identidade do cliente na sala: `customer-{contact_id}` (`WebRTCAdapter._customer_identity`).
 CUSTOMER_IDENTITY_PREFIX = "customer-"
+# Identidade do atendente HUMANO na sala: `agent-{sub}` (`WebRTCAdapter.get_token`, role=agent).
+AGENT_IDENTITY_PREFIX = "agent-"
+# Quem o OUVINTE transcreve (VOZ-05 fatia 4): o cliente e os atendentes humanos — cada um no seu
+# canal. Fica de fora a VOZ do agente de IA (`voz-…`: o texto já é a mensagem) e o supervisor
+# (`supervisor-…`: escuta, não participa da conversa com o cliente).
+TRANSCRIBED_PREFIXES = (CUSTOMER_IDENTITY_PREFIX, AGENT_IDENTITY_PREFIX)
 
 
 # ── Audio helpers ──────────────────────────────────────────────────────────────
@@ -124,6 +130,23 @@ def mp3_to_pcm(mp3_bytes: bytes, target_sample_rate: int = 24000) -> bytes:
         return b""
 
 
+def _fim(fila: asyncio.Queue) -> None:
+    """Sinal de fim na fila; se ela está cheia, abre espaço (o fim vale mais que um quadro)."""
+    try:
+        fila.put_nowait(None)
+    except asyncio.QueueFull:
+        fila.get_nowait()
+        fila.put_nowait(None)
+
+
+async def _drena(fila: asyncio.Queue) -> AsyncIterator[bytes]:
+    while True:
+        chunk = await fila.get()
+        if chunk is None:
+            return
+        yield chunk
+
+
 # ── Protocol ───────────────────────────────────────────────────────────────────
 
 
@@ -132,13 +155,13 @@ class IWebRTCRoomClient(Protocol):
     """
     Server-side LiveKit room participant (bot leg) for the STT/TTS pipeline.
 
-    One instance per active WebRTC session with medium=voice or medium=video.
+    Uma instância por PAPEL do bot leg na sala (VOZ-05 fatia 4): o ouvinte usa `speakers()`,
+    a voz usa `publish_audio()`.
     Lifecycle:
         await client.connect(room_name, identity, token, url)
-        async for chunk in client.subscribe_customer_audio():
-            ulaw = resample_pcm_48_to_8(chunk)
-            # feed ulaw to STT
-        await client.publish_audio(pcm_24k_bytes)  # TTS injection
+        async for identity, chunks in client.speakers():   # ouvinte: um fluxo por falante
+            ...                                             # STT do falante
+        await client.publish_audio(pcm_24k_bytes)          # voz: TTS
         await client.disconnect()
     """
 
@@ -152,15 +175,13 @@ class IWebRTCRoomClient(Protocol):
         """Connect to the LiveKit room as a server-side bot participant."""
         ...
 
-    def subscribe_customer_audio(self) -> AsyncIterator[bytes]:
+    def speakers(self) -> AsyncIterator[tuple[str, AsyncIterator[bytes]]]:
         """
-        Yield raw 48kHz 16-bit PCM frames from the customer audio track.
+        Um par (identidade, quadros) por TRILHA de áudio transcrita que aparece na sala — o
+        cliente e cada atendente humano (`TRANSCRIBED_PREFIXES`), cada um no seu fluxo.
 
-        Each yielded bytes value is one LiveKit AudioFrame's raw data
-        (flattened to bytes, original channel count preserved).
-        Caller must pass through resample_pcm_48_to_8() before STT.
-
-        Terminates on track end or disconnect().
+        Os quadros são PCM 16 bits a 48 kHz, crus. O fluxo de um falante termina quando a trilha
+        dele termina; `speakers()` termina no `disconnect()`.
         """
         ...
 
@@ -207,7 +228,7 @@ class LiveKitRoomClient:
 
     Graceful degradation when 'livekit' is not installed:
       - connect()                  → logs warning, no-op
-      - subscribe_customer_audio() → yields nothing (empty async iterator)
+      - speakers()                 → yields nothing (empty async iterator)
       - publish_audio()            → no-op
 
     This lets Channel Gateway start without the full LiveKit SDK for
@@ -218,7 +239,9 @@ class LiveKitRoomClient:
         self._room:         Any | None                   = None  # rtc.Room
         self._audio_source: Any | None                   = None  # rtc.AudioSource
         self._audio_track:  Any | None                   = None  # rtc.LocalAudioTrack
-        self._audio_queue:  asyncio.Queue[bytes | None]  = asyncio.Queue(maxsize=500)
+        # (identidade, fila de quadros) por trilha transcrita; None = a sala acabou
+        self._speakers_q:   asyncio.Queue[tuple[str, asyncio.Queue[bytes | None]] | None] = asyncio.Queue()
+        self._track_queues: list[asyncio.Queue[bytes | None]] = []
         self._connected:    bool                         = False
         self._tts_sr:       int                          = 24000  # published sample rate
         self._interrupted:  bool                         = False
@@ -243,21 +266,24 @@ class LiveKitRoomClient:
 
         @self._room.on("track_subscribed")
         def _on_track(track, publication, participant) -> None:
-            # VOZ-05: só a trilha do CLIENTE. Antes era "a primeira trilha de áudio" de quem
-            # fosse — numa sala com agente humano as duas vozes iriam para a mesma fila de
-            # quadros e a transcrição do cliente sairia misturada.
+            # VOZ-05: uma fila POR TRILHA. Antes da fatia 2 era "a primeira trilha de áudio" de
+            # quem fosse, e cliente e humano iriam para a mesma fila — transcrição misturada.
+            # Na fatia 2 ficou só o cliente; na 4, cliente e humanos, cada um no seu canal.
             if track.kind != rtc.TrackKind.KIND_AUDIO:
                 return
             ident = getattr(participant, "identity", "") or ""
-            if not ident.startswith(CUSTOMER_IDENTITY_PREFIX):
-                logger.info("webrtc room_client: trilha de audio de %r ignorada (nao e o cliente)", ident)
+            if not ident.startswith(TRANSCRIBED_PREFIXES):
+                logger.info("webrtc room_client: trilha de audio de %r nao transcrita (nem cliente nem humano)", ident)
                 return
-            disparar(self._consume_audio_track(track, rtc), nome="webrtc-audio-track")
+            fila: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=500)
+            self._track_queues.append(fila)
+            self._speakers_q.put_nowait((ident, fila))
+            disparar(self._consume_audio_track(track, rtc, fila, ident), nome="webrtc-audio-track")
 
         @self._room.on("disconnected")
         def _on_disconnected(*_) -> None:
             self._connected = False
-            self._audio_queue.put_nowait(None)  # drain
+            self._end_all()
 
         await self._room.connect(livekit_url, token)
         self._connected = True
@@ -266,33 +292,37 @@ class LiveKitRoomClient:
             room_name, identity, livekit_url,
         )
 
-    async def _consume_audio_track(self, track: Any, rtc: Any) -> None:
-        """Push LiveKit AudioFrame bytes into the queue for subscribe_customer_audio."""
+    async def _consume_audio_track(self, track: Any, rtc: Any, fila: asyncio.Queue, ident: str) -> None:
+        """Quadros da trilha de `ident` para a fila dele."""
+        descartados = 0
         try:
             audio_stream = rtc.AudioStream(track)
             async for frame_event in audio_stream:
-                frame = frame_event.frame
-                chunk = bytes(frame.data)
                 try:
-                    self._audio_queue.put_nowait(chunk)
+                    fila.put_nowait(bytes(frame_event.frame.data))
                 except asyncio.QueueFull:
-                    # Drop rather than block — STT tolerates small gaps
-                    logger.debug("webrtc room_client: audio queue full — dropping frame")
+                    # o STT tolera lacuna curta; bloquear atrasaria a sala inteira
+                    descartados += 1
         except Exception as exc:
-            logger.debug("webrtc room_client: customer audio track ended: %s", exc)
+            logger.debug("webrtc room_client: trilha de %s terminou: %s", ident, exc)
         finally:
-            try:
-                self._audio_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            if descartados:
+                logger.warning("webrtc room_client: %d quadro(s) de %s descartados (fila cheia — STT atrasado)",
+                               descartados, ident)
+            _fim(fila)
 
-    async def subscribe_customer_audio(self) -> AsyncIterator[bytes]:  # type: ignore[override]
-        """Yield raw PCM frames from the customer audio track."""
+    async def speakers(self) -> AsyncIterator[tuple[str, AsyncIterator[bytes]]]:  # type: ignore[override]
         while True:
-            chunk = await self._audio_queue.get()
-            if chunk is None:
+            item = await self._speakers_q.get()
+            if item is None:
                 return
-            yield chunk
+            ident, fila = item
+            yield ident, _drena(fila)
+
+    def _end_all(self) -> None:
+        for fila in self._track_queues:
+            _fim(fila)
+        self._speakers_q.put_nowait(None)
 
     async def publish_audio(self, pcm_bytes: bytes, sample_rate: int = 24000) -> None:
         """Inject PCM audio into the room via a LocalAudioTrack."""
@@ -364,10 +394,7 @@ class LiveKitRoomClient:
     async def disconnect(self) -> None:
         """Disconnect from the LiveKit room."""
         self._connected = False
-        try:
-            self._audio_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
+        self._end_all()
         if self._room is not None:
             try:
                 await self._room.disconnect()
@@ -402,17 +429,28 @@ class MockRoomClient:
         self.disconnected:     bool             = False
         self.interrupts:       int              = 0
         self.customer_in_room: bool             = True
-        self._audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._speakers_q: asyncio.Queue[tuple[str, asyncio.Queue] | None] = asyncio.Queue()
+        self._filas: dict[str, asyncio.Queue[bytes | None]] = {}
 
     # ── Test helpers ──────────────────────────────────────────────────────────
 
-    def inject_audio(self, chunk: bytes) -> None:
-        """Push a fake audio frame to be yielded by subscribe_customer_audio."""
-        self._audio_queue.put_nowait(chunk)
+    CUSTOMER = f"{CUSTOMER_IDENTITY_PREFIX}c-mock"
+
+    def _fila(self, identity: str) -> asyncio.Queue:
+        if identity not in self._filas:
+            self._filas[identity] = asyncio.Queue()
+            self._speakers_q.put_nowait((identity, self._filas[identity]))
+        return self._filas[identity]
+
+    def inject_audio(self, chunk: bytes, identity: str | None = None) -> None:
+        """Quadro falso de `identity` (default: o cliente); a trilha aparece no primeiro quadro."""
+        self._fila(identity or self.CUSTOMER).put_nowait(chunk)
 
     def end_audio(self) -> None:
-        """Signal end of audio stream (EOS sentinel)."""
-        self._audio_queue.put_nowait(None)
+        """Fim de todas as trilhas e da sala."""
+        for fila in self._filas.values():
+            fila.put_nowait(None)
+        self._speakers_q.put_nowait(None)
 
     # ── IWebRTCRoomClient interface ───────────────────────────────────────────
 
@@ -426,12 +464,12 @@ class MockRoomClient:
         self.connected_to = room_name
         self.connected    = True
 
-    async def subscribe_customer_audio(self) -> AsyncIterator[bytes]:  # type: ignore[override]
+    async def speakers(self) -> AsyncIterator[tuple[str, AsyncIterator[bytes]]]:  # type: ignore[override]
         while True:
-            chunk = await self._audio_queue.get()
-            if chunk is None:
+            item = await self._speakers_q.get()
+            if item is None:
                 return
-            yield chunk
+            yield item[0], _drena(item[1])
 
     async def publish_audio(self, pcm_bytes: bytes, sample_rate: int = 24000) -> None:
         self.published_chunks.append(pcm_bytes)
@@ -448,7 +486,4 @@ class MockRoomClient:
     async def disconnect(self) -> None:
         self.disconnected = True
         self.connected    = False
-        try:
-            self._audio_queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
+        self.end_audio()

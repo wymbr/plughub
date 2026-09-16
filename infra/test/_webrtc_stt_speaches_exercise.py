@@ -13,6 +13,8 @@ frase conhecida, e a pergunta é se o texto que o gateway publica para o agente 
      (`content_type=audio_transcript`, autor `customer`) contendo as palavras da frase.
   S4 outro participante fala AO MESMO TEMPO outra frase → as palavras dele NÃO aparecem na
      transcrição do cliente (o bot assina a trilha do cliente, não "a primeira trilha de áudio").
+  S5 (fatia 4) o outro participante é `agent-probe-outro` — um atendente humano — e a fala dele
+     sai com o autor DELE (`agent_human`, `human-probe-outro`), sem as palavras do cliente.
   INFO latência: fim da fala → texto publicado.
 """
 from __future__ import annotations
@@ -187,16 +189,26 @@ async def main() -> None:
             if transcritos and PALAVRAS_CLIENTE <= _norm(" ".join(e["content"]["text"] for e, _ in transcritos)):
                 break
             await asyncio.sleep(0.5)
-        texto = " ".join(e["content"]["text"] for e, _ in transcritos)
+        # Desde a fatia 4 o ouvinte transcreve também o atendente humano (`agent-…`), e o outro
+        # participante deste exercício tem essa identidade: a fala dele sai com o autor DELE. O
+        # S3/S4 medem a transcrição DO CLIENTE; juntar todos os autores confundia as duas.
+        do_cliente = [(e, t) for e, t in transcritos if (e.get("author") or {}).get("type") == "customer"]
+        do_outro = [e for e, _ in transcritos if (e.get("author") or {}).get("type") == "agent_human"]
+        texto = " ".join(e["content"]["text"] for e, _ in do_cliente)
         autores = {e.get("author", {}).get("type") for e, _ in transcritos}
-        emit("OK" if (PALAVRAS_CLIENTE <= _norm(texto) and autores == {"customer"}) else "FALHA", "S3",
+        emit("OK" if (PALAVRAS_CLIENTE <= _norm(texto) and "customer" in autores) else "FALHA", "S3",
              f"fala do cliente publicada ao bridge: {texto!r} autores={sorted(a for a in autores if a)} "
              f"eventos={len(transcritos)}")
-        if transcritos:
-            emit("INFO", "LAT", f"fim da fala → primeiro texto publicado: {transcritos[0][1] - fim_fala:.2f} s")
+        if do_cliente:
+            emit("INFO", "LAT", f"fim da fala → primeiro texto publicado: {do_cliente[0][1] - fim_fala:.2f} s")
         vazou = PALAVRAS_OUTRO & _norm(texto)
-        emit("OK" if (transcritos and not vazou) else "FALHA", "S4",
+        emit("OK" if (do_cliente and not vazou) else "FALHA", "S4",
              f"fala do OUTRO participante fora da transcricao do cliente (vazou={sorted(vazou)})")
+        texto_outro = " ".join(e["content"]["text"] for e in do_outro)
+        ids_outro = sorted({(e.get("author") or {}).get("id") for e in do_outro})
+        emit("OK" if (PALAVRAS_OUTRO <= _norm(texto_outro) and ids_outro == ["human-probe-outro"]
+                      and not (PALAVRAS_CLIENTE & _norm(texto_outro))) else "FALHA", "S5",
+             f"fala do outro participante (agent-probe-outro) com o autor DELE: {texto_outro!r} ids={ids_outro}")
     finally:
         for room in rooms:
             try:

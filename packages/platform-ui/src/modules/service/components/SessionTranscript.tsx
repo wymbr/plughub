@@ -475,6 +475,12 @@ function EntryRow({ e, showEvents, maskingRules }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
           {isInternal && <span style={{ fontSize: 9, fontWeight: 700, color: '#d97706', textTransform: 'uppercase' }}>{t('transcript.internal')}</span>}
           <RoleBadge role={e.author_role} />
+          {e.content_type === 'audio_transcript' && (
+            <span className="text-secondary" title={t('transcript.spokenHint')}
+                  style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' }}>
+              🎙 {t('transcript.spoken')}
+            </span>
+          )}
           <span style={{ fontSize: 10, color: '#64748b' }}>{e.timestamp ? fmtTs(e.timestamp) : ''}</span>
         </div>
         <ContentRenderer normalized={normalized} maskingRules={maskingRules} />

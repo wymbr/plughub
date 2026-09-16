@@ -467,8 +467,16 @@ def customer_message_stream_fields(
     author_id:  str,
     text:       str,
     visibility: str | list[str],
+    content_type: str = "text",
+    speech: dict | None = None,
+    author_role: str = "customer",
 ) -> dict[str, str]:
     """Entrada de stream da mensagem do CLIENTE no layout CANÔNICO (RPL-01).
+
+    `content_type="audio_transcript"` marca FALA transcrita (VOZ-05 fatia 4): o tipo vai em
+    `payload.content.type`, que é o que o replayer e o transcript do supervisor carregam, e
+    `speech` leva confiança e janela. `author_role` diferente de `customer` só para a fala do
+    ATENDENTE humano, que usa o mesmo layout (ver `process_agent_transcript`).
 
     O mesmo layout do `writeStreamEntry` do mcp-server: campos flat de autor, `author` JSON,
     `visibility` JSON, `segment_id` e `payload` JSON com `content.text`. O bridge gravava só os
@@ -479,20 +487,103 @@ def customer_message_stream_fields(
 
     `text` já chega REDIGIDO (`redact_customer_reply`); esta função não decide mascaramento.
     """
+    content = {"type": content_type, "text": text}
+    if speech:
+        content["speech"] = speech
     return {
         "event_id":    event_id,
         "type":        "message",
         "timestamp":   timestamp,
         "author_id":   author_id,
-        "author_role": "customer",
+        "author_role": author_role,
         "author":      json.dumps({"participant_id": author_id, "instance_id": author_id,
-                                   "role": "customer"}),
+                                   "role": author_role}),
         "visibility":  json.dumps(visibility),
         "segment_id":  "",
         "payload":     json.dumps({"message_id": event_id,
-                                   "content": {"type": "text", "text": text},
+                                   "content": content,
                                    "text": text}, ensure_ascii=False),
     }
+
+
+def speech_meta(msg: dict) -> tuple[str, dict | None]:
+    """(`content_type`, `speech`) de um inbound: fala transcrita pelo canal (VOZ-05 fatia 4)
+    ou texto. O gateway põe a marca no topo do evento (`content_type`) e confiança/janela em
+    `content.payload`; `content.type` continua `text` porque é o que o fluxo consome."""
+    if msg.get("content_type") != "audio_transcript":
+        return "text", None
+    p = (msg.get("content") or {}).get("payload") or {}
+    return "audio_transcript", {k: p[k] for k in ("confidence", "start_ms", "end_ms") if k in p}
+
+
+async def roster_role(redis_client, session_id: str, participant_id: str) -> str:
+    """Papel do participante no roster `session:{id}:participants` — a mesma leitura do
+    `participant-role.ts` do mcp-server. Sem leitura positiva cai em `primary`, DITO."""
+    try:
+        raw = await redis_client.get(f"session:{session_id}:participants")
+        lista = json.loads(raw) if raw else None
+        if isinstance(lista, list):
+            for p in lista:
+                if isinstance(p, dict) and p.get("participant_id") == participant_id and p.get("role"):
+                    return str(p["role"])
+        logger.warning("roster sem %s (session=%s, roster=%s) — papel 'primary' nao resolvido",
+                       participant_id, session_id, "ausente" if lista is None else f"{len(lista)} entradas")
+    except Exception as exc:
+        logger.warning("roster ilegivel (session=%s): %s — papel 'primary' nao resolvido", session_id, exc)
+    return "primary"
+
+
+async def process_agent_transcript(msg: dict, redis_client) -> None:
+    """Fala do ATENDENTE HUMANO transcrita pelo canal (VOZ-05 fatia 4) — mensagem DELE na sessão.
+
+    Decisões do dono (2026-09-16): visibilidade `all` com a marca de fala (é o que foi dito na
+    chamada); vai ao stream (avaliador, transcript do supervisor) e ao `conversations.events`
+    (ClickHouse e os steps `receive` que escutam a sessão — o mesmo caminho da mensagem que o
+    humano DIGITA). Não vai ao cliente (`conversations.outbound`: ele ouviu) nem ao Console do
+    próprio humano (`agent:events`)."""
+    session_id = msg["session_id"]
+    author_id  = (msg.get("author") or {}).get("id") or ""
+    text       = ((msg.get("content") or {}).get("text") or "").strip()
+    if not author_id.startswith("human-") or not text:
+        logger.warning("Fala de atendente descartada: session=%s autor=%r texto_vazio=%s",
+                       session_id, author_id, not text)
+        return
+    _, speech = speech_meta(msg)
+    role      = await roster_role(redis_client, session_id, author_id)
+    event_id  = msg.get("message_id") or str(uuid.uuid4())
+    timestamp = msg.get("timestamp") or datetime.now(timezone.utc).isoformat()
+    stream_key = f"session:{session_id}:stream"
+    try:
+        await redis_client.xadd(stream_key, customer_message_stream_fields(
+            event_id=event_id, timestamp=timestamp, author_id=author_id, text=text,
+            visibility="all", content_type="audio_transcript", speech=speech, author_role=role,
+        ))
+        await redis_client.expire(stream_key, _stl())
+    except Exception as exc:
+        logger.warning("Fala do atendente NAO gravada no stream: session=%s — %s", session_id, exc)
+    if _kafka_producer is None:
+        logger.warning("Fala do atendente sem produtor Kafka: session=%s — fora do analytics", session_id)
+        return
+    try:
+        await _kafka_producer.send_and_wait(
+            "conversations.events",
+            json.dumps({
+                "event_type":   "message_sent",
+                "message_id":   event_id,
+                "session_id":   session_id,
+                "tenant_id":    await resolve_session_tenant(redis_client, session_id),
+                "author_id":    author_id,
+                "author_role":  role,
+                "content_type": "audio_transcript",
+                "content":      text,
+                "visibility":   "all",
+                "timestamp":    timestamp,
+            }).encode("utf-8"),
+            key=session_id.encode("utf-8"),
+        )
+        logger.info("Fala do atendente registrada: session=%s autor=%s papel=%s", session_id, author_id, role)
+    except Exception as exc:
+        logger.warning("Fala do atendente NAO publicada no analytics: session=%s — %s", session_id, exc)
 
 
 # Carência do stream depois do fechamento do contato (RPL-01). O `DEL` imediato corria contra o
@@ -9580,8 +9671,15 @@ async def process_inbound(
     content    = msg.get("content", {})
     author     = msg.get("author", {})
 
+    if session_id and author.get("type") == "agent_human" and msg.get("content_type") == "audio_transcript":
+        await process_agent_transcript(msg, redis_client)
+        return
+
     if not session_id or author.get("type") != "customer":
         return
+    # VOZ-05 fatia 4: fala do cliente transcrita pelo canal — a marca segue para stream e
+    # analytics, e NÃO vai ao Console do humano, que a ouviu.
+    spoken_type, speech = speech_meta(msg)
 
     logger.info(
         "Inbound customer message: session=%s content_type=%s",
@@ -9759,9 +9857,15 @@ async def process_inbound(
                 "contact_id": contact_id,
                 "visibility": visibility,
             }
-            await redis_client.publish(f"agent:events:{session_id}", json.dumps(event))
-            logger.info("Forwarded %s to human agent: session=%s masked=%s",
-                        msg_type, session_id, bool(any_masked))
+            if speech is None:
+                await redis_client.publish(f"agent:events:{session_id}", json.dumps(event))
+                logger.info("Forwarded %s to human agent: session=%s masked=%s",
+                            msg_type, session_id, bool(any_masked))
+            else:
+                # Decisão do dono (VOZ-05 fatia 4): o humano OUVIU o cliente; a transcrição não
+                # aparece no chat dele como se digitada. Fica na sessão (stream, analytics).
+                logger.info("Fala transcrita do cliente NAO encaminhada ao Console (o humano a ouviu): "
+                            "session=%s", session_id)
 
             # Write to canonical stream so supervision SSE and analytics can see the message
             try:
@@ -9774,6 +9878,8 @@ async def process_inbound(
                         author_id  = author.get("id") or contact_id or "customer",
                         text       = display_text,
                         visibility = visibility,
+                        content_type = spoken_type,
+                        speech       = speech,
                     ),
                 )
                 await redis_client.expire(stream_key_human, _stl())  # 4h TTL
@@ -9798,7 +9904,8 @@ async def process_inbound(
                 "tenant_id":    _tenant_for_analytics,
                 "author_id":    author.get("id") or contact_id or "customer",
                 "author_role":  "customer",
-                "content_type": "text",
+                # `audio_transcript` quando o canal transcreveu a fala (VOZ-05 fatia 4)
+                "content_type": spoken_type,
                 # Destino 2 — DURÁVEL (ClickHouse). Era aqui que `senha` e
                 # `codigo_2fa` de `skill_auth_form_v1` saíam em claro: o teste
                 # era só `any_masked` (step-level) e o masking daquele skill é
@@ -9917,6 +10024,8 @@ async def process_inbound(
                             author_id  = author.get("id") or contact_id or "customer",
                             text       = _ai_stream_display,
                             visibility = _ai_stream_vis,
+                            content_type = spoken_type,
+                            speech       = speech,
                         ),
                     )
                     await redis_client.expire(stream_key, _stl())

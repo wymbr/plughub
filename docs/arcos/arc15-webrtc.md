@@ -561,7 +561,7 @@ webrtc_stt_enabled:         bool = True
 >
 > | papel | identidade | na sala | existe quando |
 > |---|---|---|---|
-> | ouvinte | `bot-{sid[:8]}` | `hidden`, só assina — única entrada de STT | há atendente de áudio e STT (hoje: só com agente de IA; humano na parte 2) |
+> | ouvinte | `bot-{sid[:8]}` | `hidden`, só assina — única entrada de STT | há atendente de áudio (humano ou IA) e STT |
 > | voz | `voz-{sid[:8]}` | visível, só publica — TTS | há agente de IA de áudio, STT e TTS |
 >
 > Oculto assina normalmente; o que oculto não faz é ser ouvido. O barge-in é local: o ouvinte
@@ -569,6 +569,26 @@ webrtc_stt_enabled:         bool = True
 > `await` — a primeira fala da IA chega junto da atribuição. Só a frase final sai do gateway;
 > áudio para o STT vem do assinante, não do egress (medido: `TODO.md` § *VOZ-05 — áudio para o
 > STT*). Ver `CHANGELOG.md` 2026-09-16 (2).
+
+> **Transcrição da chamada — a conversa falada é MENSAGEM do falante (fatia 4, parte 2).** O
+> ouvinte assina uma trilha por falante: o cliente (`customer-…`) e cada atendente humano
+> (`agent-{sub}`, que na sessão é `human-{sub}`); a voz da IA e o supervisor não são transcritos.
+> Só a frase final sai do gateway, como `NormalizedInboundEvent` com `content_type:
+> "audio_transcript"` e confiança/janela em `content.payload`. O bridge a grava no stream no
+> layout canônico com `payload.content.type = "audio_transcript"` (e `speech`), visibilidade `all`,
+> e publica `message_sent` com o mesmo `content_type` — ClickHouse `messages` guarda a marca, e o
+> transcript do supervisor a mostra como "voz". Decisões do dono:
+>
+> | destino | fala do cliente | fala do humano |
+> |---|---|---|
+> | stream da sessão (avaliador, supervisor) | sim, marcada | sim, marcada, papel do roster |
+> | ClickHouse `messages` | `content_type=audio_transcript` | idem |
+> | Console do humano (`agent:events`) | **não** — ele ouviu | **não** |
+> | cliente (`conversations.outbound`) | — | **não** — ele ouviu |
+> | steps `receive` (copiloto) | como hoje | **sim**, pelo mesmo `message_sent` do texto digitado |
+> | histórico de chat (`session:{id}:messages`) | **não** | **não** |
+>
+> Gate ao vivo: `infra/test/probe_webrtc_human_transcript.sh`. Ver `CHANGELOG.md` 2026-09-16 (3).
 
 ---
 

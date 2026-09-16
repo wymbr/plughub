@@ -76,7 +76,7 @@ import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import jwt as pyjwt
 import redis.asyncio as aioredis
@@ -113,6 +113,7 @@ from .webrtc_provider import (
 from . import media_policy
 from .webchat import menu_result_history_text
 from .webrtc_room_client import (
+    AGENT_IDENTITY_PREFIX,
     CUSTOMER_IDENTITY_PREFIX,
     IWebRTCRoomClient,
     LiveKitRoomClient,
@@ -391,18 +392,13 @@ class WebRTCAdapter(ChannelAdapter):
     def _convert_available(self) -> bool:
         return self._stt_unavailable is None and self._tts_unavailable is None
 
-    # A transcrição de chamada com HUMANO ainda não tem destino (VOZ-05, fatia 4). O único que
-    # o pipeline conhece é publicar a fala como MENSAGEM do cliente — certo para a IA ouvir,
-    # errado para o humano: a fala apareceria no Console como se digitada. Até a fatia 4 o bot
-    # entra só quando há agente de IA, e o estado diz por que a chamada de humano não é transcrita.
-    HUMAN_TRANSCRIPT_PENDING = ("transcricao de chamada com humano ainda sem destino (VOZ-05 fatia 4): "
-                                "o bot so publicaria a fala como mensagem de chat")
-
     def _bot_leg_should_run(self, state: dict, publish: frozenset[str]) -> bool:
-        """O bot entra quando há agente de IA de áudio para ouvir E há STT. Segue os
+        """O OUVINTE entra quando há atendente de áudio — humano ou IA — E há STT: toda chamada
+        com áudio é transcrita, cada falante no seu canal (VOZ-05 fatia 4; até ali só entrava
+        com agente de IA, porque a fala de chamada com humano não tinha destino). Segue os
         ATENDENTES, não o teto. `publish` fica na assinatura porque é o que o gatilho antigo
         lia (e a mutação do probe usa)."""
-        return self._stt_unavailable is None and media_policy.bot_leg_needs(state["attendants"])["convert"]
+        return self._stt_unavailable is None and media_policy.bot_leg_needs(state["attendants"])["transcribe"]
 
     def _voice_should_run(self, state: dict) -> bool:
         """A VOZ entra quando há agente de IA de áudio e o bot converte (STT e TTS)."""
@@ -434,8 +430,6 @@ class WebRTCAdapter(ChannelAdapter):
         faltas = []
         if needs["transcribe"] and self._stt_unavailable:
             faltas.append(f"chamada NAO transcrita: {self._stt_unavailable}")
-        elif needs["transcribe"] and not needs["convert"]:
-            faltas.append(f"chamada NAO transcrita: {self.HUMAN_TRANSCRIPT_PENDING}")
         if needs["convert"] and self._tts_unavailable:
             faltas.append(f"agente de IA sem voz: {self._tts_unavailable}")
         bot = {"transcribe": needs["transcribe"], "convert": needs["convert"],
@@ -1555,15 +1549,39 @@ class WebRTCAdapter(ChannelAdapter):
         self, session_id: str, room_client: IWebRTCRoomClient
     ) -> None:
         """
-        STT pipeline coroutine (runs as background task).
-
-        Loop:
-          1. Read 48kHz PCM frames from room_client.subscribe_customer_audio()
-          2. Resample → 8kHz μ-law via resample_pcm_48_to_8()
-          3. Feed resampled chunks to FallbackSTTProvider.stream()
-          4. Publish is_final=True transcripts to Kafka conversations.inbound
-             with content_type="audio_transcript"
+        O OUVINTE da chamada (VOZ-05 fatia 4): um fluxo de STT POR FALANTE — o cliente e cada
+        atendente humano, cada um no seu canal. Só a frase FINAL sai do gateway, como mensagem
+        de texto do falante com `content_type="audio_transcript"`; detecção de voz, transcrição
+        parcial e barge-in ficam aqui.
         """
+        falas: set[asyncio.Task] = set()
+        try:
+            async for identity, chunks in room_client.speakers():
+                if identity.startswith(CUSTOMER_IDENTITY_PREFIX):
+                    autor = None                                   # o cliente
+                elif identity.startswith(AGENT_IDENTITY_PREFIX):
+                    autor = "human-" + identity[len(AGENT_IDENTITY_PREFIX):]
+                else:
+                    logger.info("webrtc stt: trilha de %r nao transcrita (session=%s)", identity, session_id)
+                    continue
+                logger.info("webrtc stt: transcrevendo %s (session=%s)", identity, session_id)
+                t = asyncio.create_task(self._stt_speaker(session_id, identity, autor, chunks),
+                                        name=f"webrtc-stt-{identity[:16]}")
+                falas.add(t)
+                t.add_done_callback(falas.discard)
+            if falas:
+                await asyncio.gather(*falas, return_exceptions=True)
+        except asyncio.CancelledError:
+            logger.debug("webrtc stt_pipeline cancelled: session=%s", session_id)
+        finally:
+            for t in falas:
+                t.cancel()
+
+    async def _stt_speaker(
+        self, session_id: str, identity: str, autor: str | None, chunks: AsyncIterator[bytes],
+    ) -> None:
+        """Um falante: quadros → STT → frase final publicada. `autor` None = o cliente (o único
+        que interrompe a fala da IA); senão, o `participant_id` do humano (`human-{sub}`)."""
         s = self._settings
 
         # O provedor diz em que taxa quer o áudio (VOZ-05): o auto-hospedado transcreve PCM a
@@ -1572,17 +1590,18 @@ class WebRTCAdapter(ChannelAdapter):
 
         # Barge-in (VOZ-05 fatia 3): o mesmo limiar de energia que o STT usa para achar fala.
         # Só no caminho a 16 kHz PCM — no legado (μ-law a 8 kHz) a energia não é medida aqui,
-        # e não há barge-in.
+        # e não há barge-in. Só a voz do CLIENTE interrompe o agente de IA.
         limiar = float(getattr(self._stt, "_thr", 400.0))
+        interrompe = autor is None
         voz_ms = 0.0
 
         async def _audio_chunks():
             nonlocal voz_ms
-            async for chunk in room_client.subscribe_customer_audio():
+            async for chunk in chunks:
                 try:
                     if stt_rate == 16000:
                         pcm = pcm16_48k_to_16k(chunk)
-                        if rms(pcm) >= limiar:
+                        if interrompe and rms(pcm) >= limiar:
                             voz_ms += len(pcm) / 32.0     # 16 kHz × 2 bytes = 32 bytes/ms
                             if voz_ms >= _BARGE_IN_MIN_MS and session_id in self._speaking:
                                 self._barge_in(session_id)
@@ -1601,7 +1620,9 @@ class WebRTCAdapter(ChannelAdapter):
             language = s.voice_stt_language  # reuse voice channel language setting
             kw = {"sample_rate": stt_rate} if stt_rate else {}
             async for result in self._stt.stream(_audio_chunks(), language=language, **kw):
-                if result.is_final and result.transcript.strip():
+                if not (result.is_final and result.transcript.strip()):
+                    continue
+                if autor is None:
                     await self._publish_transcript(
                         session_id  = session_id,
                         transcript  = result.transcript,
@@ -1609,11 +1630,16 @@ class WebRTCAdapter(ChannelAdapter):
                         start_ms    = result.start_ms,
                         end_ms      = result.end_ms,
                     )
+                else:
+                    await self._publish_agent_transcript(
+                        session_id, autor, result.transcript, result.confidence,
+                        result.start_ms, result.end_ms,
+                    )
         except asyncio.CancelledError:
-            logger.debug("webrtc stt_pipeline cancelled: session=%s", session_id)
+            raise
         except Exception as exc:
             logger.warning(
-                "webrtc stt_pipeline error (session=%s): %s", session_id, exc
+                "webrtc stt: transcricao de %s PAROU (session=%s): %s", identity, session_id, exc
             )
 
     async def _publish_transcript(
@@ -1654,6 +1680,34 @@ class WebRTCAdapter(ChannelAdapter):
             logger.warning(
                 "webrtc: transcript publish failed (session=%s): %s", session_id, exc
             )
+
+    async def _publish_agent_transcript(
+        self, session_id: str, participant_id: str, transcript: str,
+        confidence: float, start_ms: int, end_ms: int,
+    ) -> None:
+        """A frase final do ATENDENTE HUMANO como mensagem dele, marcada como fala (VOZ-05 fatia
+        4). Vai para o bridge, que a grava na sessão sem entregá-la ao cliente — ele a ouviu —
+        nem ao Console do próprio humano. Não entra no histórico de chat (`append_message`):
+        é o histórico que o Console recarrega."""
+        info = self._sessions.get(session_id)
+        if not info:
+            logger.error("webrtc stt: fala do atendente em sessao sem registro de abertura "
+                         "(session=%s) — descartada", session_id)
+            return
+        event = NormalizedInboundEvent(
+            contact_id   = info["contact_id"],
+            session_id   = session_id,
+            channel      = "webrtc",
+            content_type = "audio_transcript",
+            author       = MessageAuthor(type="agent_human", id=participant_id),
+            content      = MessageContent(type="text", text=transcript, payload={
+                "confidence": confidence, "start_ms": start_ms, "end_ms": end_ms}),
+        )
+        try:
+            await self._publish_inbound(event.model_dump())
+        except Exception as exc:
+            logger.warning("webrtc stt: fala do atendente %s NAO publicada (session=%s): %s",
+                           participant_id, session_id, exc)
 
     # ── Fala do agente (VOZ-05, fatia 3) ──────────────────────────────────────
 
@@ -2255,13 +2309,17 @@ class WebRTCAdapter(ChannelAdapter):
             content          = MessageContent(type="text", text=text, payload=payload),
             context_snapshot = snapshot,
         )
-        await self._registry.append_message(
-            session_id = session_id,
-            message_id = event.message_id,
-            author     = "customer",
-            text       = text,
-            timestamp  = event.timestamp,
-        )
+        if content_type != "audio_transcript":
+            # A fala transcrita NÃO entra no histórico de chat (VOZ-05 fatia 4): é a lista que o
+            # Console recarrega, e o humano não deve ver como digitado o que acabou de ouvir. A
+            # fala vai à sessão pelo bridge, com a marca de origem.
+            await self._registry.append_message(
+                session_id = session_id,
+                message_id = event.message_id,
+                author     = "customer",
+                text       = text,
+                timestamp  = event.timestamp,
+            )
         await self._publish_inbound(event.model_dump())
         logger.debug("webrtc: texto do cliente publicado session=%s len=%d", session_id, len(text))
 

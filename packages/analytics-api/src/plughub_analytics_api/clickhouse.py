@@ -1657,6 +1657,9 @@ class AnalyticsStore:
                 "visibility":  visibility or "all",
                 "content":     content_parsed,
                 "payload":     None,
+                # `audio_transcript` = fala transcrita da chamada (VOZ-05 fatia 4); o transcript
+                # a marca como fala. Mesmo campo que `_parse_entry` extrai do stream vivo.
+                "content_type": content_type or "",
             })
         return rows
 

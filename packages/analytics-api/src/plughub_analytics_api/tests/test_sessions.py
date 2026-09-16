@@ -150,6 +150,22 @@ class TestParseEntry:
         entry = _parse_entry("1-0", {"type": "message", "content": "plain text"})
         assert entry["content"] == "plain text"
 
+    def test_spoken_message_keeps_its_content_type(self):
+        # VOZ-05 fatia 4: o layout do bridge/`writeStreamEntry` não tem `content` flat; o
+        # fallback reduz a `{"text"}` e a marca de fala sumia do transcript do supervisor
+        payload = {"message_id": "m1", "text": "quero cancelar",
+                   "content": {"type": "audio_transcript", "text": "quero cancelar",
+                               "speech": {"confidence": 0.9}}}
+        entry = _parse_entry("1-0", {"type": "message", "author_role": "customer",
+                                     "payload": json.dumps(payload)})
+        assert entry["content"] == {"text": "quero cancelar"}
+        assert entry["content_type"] == "audio_transcript"
+
+    def test_typed_message_content_type_is_text_and_legacy_is_empty(self):
+        typed = {"text": "oi", "content": {"type": "text", "text": "oi"}}
+        assert _parse_entry("1-0", {"type": "message", "payload": json.dumps(typed)})["content_type"] == "text"
+        assert _parse_entry("1-0", self._make_entry())["content_type"] == ""
+
 
 # ─── TestFetchActiveSessions ──────────────────────────────────────────────────
 

@@ -1,5 +1,60 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-16 (3) — VOZ-05 fatia 4 (parte 2): a chamada com humano é transcrita, cada falante no seu canal
+
+**O que havia.** O ouvinte só entrava com agente de IA: numa chamada de humano nada era
+transcrito, e o estado de mídia dizia *"transcricao de chamada com humano ainda sem destino"*. Três
+paredes, medidas antes de codar:
+- o único destino da fala era a mensagem de chat do CLIENTE, e o cliente de sala assinava só a
+  trilha dele;
+- o bridge descartava inbound de qualquer autor que não fosse o cliente, e gravava
+  `content_type: "text"` fixo — a marca `audio_transcript` que o gateway já mandava se perdia;
+- nem o Console nem o transcript do supervisor olhavam tipo de conteúdo, e a analytics-api reduzia
+  o conteúdo do stream a `{"text"}`.
+
+**Decisões do dono.** A transcrição é mensagem de texto do falante real, com marca de origem; só a
+frase final sai do gateway; a fala do cliente não vai ao Console do humano (ele a ouviu); visibilidade
+`all`, nunca reenviada ao cliente; a fala do humano acorda os steps `receive` pelo mesmo caminho da
+mensagem digitada.
+
+**Feito.**
+- **Gateway.** O ouvinte entra com qualquer atendente de áudio e STT. O cliente de sala entrega uma
+  fila POR TRILHA (`speakers()`): cliente (`customer-…`) e humanos (`agent-{sub}`); voz da IA e
+  supervisor ficam de fora. Um fluxo de STT por falante, e só o cliente interrompe a IA. A frase do
+  humano sai como `NormalizedInboundEvent` com autor `agent_human`/`human-{sub}` — o `sub` é o que
+  liga a identidade da sala à da sessão. Fala transcrita não entra no histórico de chat
+  (`session:{id}:messages`), que é o que o Console recarrega.
+- **Bridge.** `process_agent_transcript`: grava no stream no layout canônico com
+  `payload.content.type = "audio_transcript"` e `speech` (confiança, janela), papel lido do roster
+  (sem leitura positiva, `primary` DITO), e publica `message_sent` com a chave da sessão. Nunca
+  `agent:events` nem `conversations.outbound`. A fala do cliente ganha a mesma marca no stream e no
+  analytics, e deixa de ser publicada no Console.
+- **analytics-api.** `_parse_entry` e o fallback do ClickHouse expõem `content_type`.
+- **platform-ui.** O transcript do supervisor marca a fala com "🎙 voz" (`contacts.transcript.spoken`,
+  EN e pt-BR).
+
+**Testemunhas.**
+- Unitários: gateway 1 082 verdes (falantes separados por autor, voz e supervisor fora, só o
+  cliente interrompe, fora do histórico); bridge 179 (com os controles do texto digitado: o que
+  vai ao Console, `text` no stream e no analytics); analytics-api `test_sessions` 80.
+- Ao vivo, `probe_webrtc_human_transcript.sh` (novo, no manifesto): cliente e humano falam de verdade
+  na sala; H1 ouvinte oculto e mudo sem voz · H2/H3 as duas falas no stream, marcadas, com o autor
+  certo · H4 canais separados · H5/H6 Console e cliente sem a fala e com o digitado (controles) · H7
+  digitado fica `text` · H8 ClickHouse com as duas marcas.
+- Mutações AO VIVO 4/4 mortas, cada uma no ramo esperado: bridge entregando a fala ao Console (H5),
+  gatilho antigo do ouvinte (H1–H4, H8), bridge ignorando a fala do humano (H3, H4, H8),
+  `content_type` fixo no analytics (H8). Restaurado pela imagem.
+- Vizinhos ao vivo verdes: `probe_webrtc_bot_leg_gate` (V4 virou controle: ouvinte na chamada de
+  humano), `probe_webrtc_tts_spoken`, `probe_webrtc_agent_console`, `probe_replay_customer_text`.
+
+⚠️ **Um vermelho que era do instrumento.** O `probe_webrtc_stt_speaches` reprovou S3/S4 depois do
+deploy: o "outro participante" dele se chama `agent-probe-outro`, passou a ser transcrito como
+humano (certo), e o exercício juntava os eventos de TODOS os autores como "fala do cliente". As
+duas falas tinham saído separadas. O exercício passou a filtrar por autor, e ganhou o S5: a fala do
+outro sai com o autor dele (`human-probe-outro`) e sem as palavras do cliente. Verde.
+
+**Fica para a fatia 5:** `menu` por voz (`NIV-13`) e o DTMF da coleta mascarada com eco (`NIV-06`).
+
 ## 2026-09-16 (2) — VOZ-05 fatia 4 (parte 1): o bot leg vira dois participantes, ouvinte e voz
 
 **Decisões do dono antes de codar.** A transcrição de chamada é MENSAGEM de texto dos participantes

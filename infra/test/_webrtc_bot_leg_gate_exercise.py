@@ -15,10 +15,10 @@ avalia sobre a transcrição (pede STT); o agente de IA ouve pelo STT e fala pel
      áudio, e o estado nomeia o que falta. Ausência nunca vira permissão.
   V3 CONTROLE POSITIVO: IA com STT e TTS PRESENTES → o cliente ganha áudio e o bot ENTRA na sala
      (o SFU o vê).
-  V4 humano com STT presente → o bot AINDA NÃO entra: a transcrição de chamada com humano não
-     tem destino antes da fatia 4, e o único caminho publicaria a fala como mensagem de chat do
-     cliente no Console. O estado diz isso. (Ao entregar a fatia 4, este ramo vira controle
-     positivo de novo.)
+  V4 CONTROLE humano com STT presente → o OUVINTE entra (fatia 4, 2026-09-16) e o estado não
+     acusa falta. Até ali este ramo afirmava o contrário: sem destino para a fala de chamada com
+     humano, o bot não entrava e o estado dizia por quê. O destino (mensagem do falante, marcada)
+     é medido ponta a ponta no `probe_webrtc_human_transcript`.
 
 MODE=mut_bot_sem_stt       : o bot entra sem STT (o placebo)            → V1 TEM de reprovar.
 MODE=mut_available_always  : IA ganha áudio sem provedor                → V2 TEM de reprovar.
@@ -150,10 +150,10 @@ async def main() -> None:
             ready, state, bot, a, sid = await _cenario(r, lk, s, "human", providers=True)
             feitos.append((a, sid))
             bl = bl_of(state)
-            emit("OK" if (ready.get("publish") == ["audio"] and not bot and bl.get("available") is False
-                          and "fatia 4" in (bl.get("reason") or "")) else "FALHA", "V4",
-                 f"humano com STT presente, antes da fatia 4: cliente publish={ready.get('publish')}; "
-                 f"bot na sala={bot} (a fala viraria mensagem de chat); bot_leg={bl}")
+            emit("OK" if (ready.get("publish") == ["audio"] and bot and bl.get("available") is True
+                          and bl.get("convert") is False) else "FALHA", "V4",
+                 f"CONTROLE humano com STT presente: cliente publish={ready.get('publish')}; "
+                 f"ouvinte na sala={bot}; bot_leg={bl}")
     finally:
         for a, sid in feitos:
             await _limpa(r, a, sid)

@@ -216,19 +216,19 @@ class TestMockRoomClient:
         assert client.connected_to == ROOM_NAME
 
     @pytest.mark.asyncio
-    async def test_subscribe_yields_injected_chunks(self):
+    async def test_speakers_yield_each_track_separately(self):
         client = MockRoomClient()
-        chunk1 = b"\x00" * 100
-        chunk2 = b"\xff" * 200
+        chunk1, chunk2, chunk3 = b"\x00" * 100, b"\xff" * 200, b"\x01" * 50
         client.inject_audio(chunk1)
+        client.inject_audio(chunk3, identity="agent-sub-1")
         client.inject_audio(chunk2)
         client.end_audio()
 
-        collected = []
-        async for chunk in client.subscribe_customer_audio():
-            collected.append(chunk)
+        collected: dict[str, list[bytes]] = {}
+        async for ident, chunks in client.speakers():
+            collected[ident] = [c async for c in chunks]
 
-        assert collected == [chunk1, chunk2]
+        assert collected == {MockRoomClient.CUSTOMER: [chunk1, chunk2], "agent-sub-1": [chunk3]}
 
     @pytest.mark.asyncio
     async def test_publish_audio_records_chunks(self):
@@ -250,10 +250,8 @@ class TestMockRoomClient:
         client = MockRoomClient()
         # No chunks + end_audio → should terminate immediately
         client.end_audio()
-        chunks = []
-        async for c in client.subscribe_customer_audio():
-            chunks.append(c)
-        assert chunks == []
+        falantes = [ident async for ident, _ in client.speakers()]
+        assert falantes == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,6 +364,55 @@ class TestSttpipeline:
         await asyncio.gather(task, return_exceptions=True)
 
     @pytest.mark.asyncio
+    async def test_each_speaker_is_transcribed_in_its_own_channel_and_author(self):
+        # VOZ-05 fatia 4: cliente e atendente humano, cada um no seu fluxo de STT; a frase do
+        # humano sai como mensagem DELE (`agent_human`, `human-{sub}`), marcada como fala.
+        stt = _SttPorTamanho()
+        room = MockRoomClient()
+        room.inject_audio(b"\x00" * 960)                              # cliente:  80 bytes μ-law
+        room.inject_audio(b"\x00" * 4800, identity="agent-sub-hum")   # humano:  400 bytes
+        room.end_audio()
+        adapter, _, producer = _make_adapter(stt=stt, room_client=room)
+        _abre(adapter)
+        await adapter._stt_pipeline(SESSION_ID, room)
+
+        por_texto = {e["content"]["text"]: e for e in _inbound(producer)}
+        assert set(por_texto) == {"tamanho 80", "tamanho 400"}, list(por_texto)
+        cliente, humano = por_texto["tamanho 80"], por_texto["tamanho 400"]
+        assert cliente["author"]["type"] == "customer"
+        assert humano["author"] == {"type": "agent_human", "id": "human-sub-hum", "display_name": None}
+        assert humano["content_type"] == cliente["content_type"] == "audio_transcript"
+        assert humano["content"]["payload"]["confidence"] == 0.9
+        # nenhuma das duas falas entra no histórico de chat que o Console recarrega
+        adapter._registry.append_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_voice_and_supervisor_tracks_are_not_transcribed(self):
+        stt = _SttPorTamanho()
+        room = MockRoomClient()
+        room.inject_audio(b"\x00" * 960, identity="voz-sess-c3")
+        room.inject_audio(b"\x00" * 960, identity="supervisor-sup-1")
+        room.end_audio()
+        adapter, _, producer = _make_adapter(stt=stt, room_client=room)
+        _abre(adapter)
+        await adapter._stt_pipeline(SESSION_ID, room)
+        assert _inbound(producer) == [] and stt.chamadas == 0
+
+    @pytest.mark.asyncio
+    async def test_only_the_customer_voice_interrupts_the_ai(self):
+        room = MockRoomClient()
+        adapter, _, _ = _make_adapter(tts=_PcmTTS(), room_client=room)
+        adapter._stt = _SttQueConsome()
+        adapter._speaking.add(SESSION_ID)
+        chamadas = []
+        adapter._barge_in = lambda sid: chamadas.append(sid)
+        for _ in range(30):
+            room.inject_audio(_pcm48(3000, 10), identity="agent-sub-hum")
+        room.end_audio()
+        await adapter._stt_pipeline(SESSION_ID, room)
+        assert chamadas == []
+
+    @pytest.mark.asyncio
     async def test_audio_resampled_before_stt(self):
         """Audio chunks passed to STT must be resampled (8kHz μ-law, shorter than input)."""
         stt = MockSTTProvider()
@@ -431,6 +478,20 @@ class _SttQueConsome:
             pass
         if False:
             yield None
+
+
+class _SttPorTamanho:
+    """STT que transcreve o TAMANHO do que recebeu (μ-law a 8 kHz): distingue falantes sem
+    depender da ordem em que os fluxos rodam."""
+    def __init__(self) -> None:
+        self.chamadas = 0
+
+    async def stream(self, chunks, language=None, **kw):
+        self.chamadas += 1
+        total = 0
+        async for c in chunks:
+            total += len(c)
+        yield STTResult(transcript=f"tamanho {total}", is_final=True, confidence=0.9)
 
 
 async def _drena(adapter, sid=SESSION_ID, voltas=50):
@@ -1240,16 +1301,15 @@ class TestBotLegGatilho:
         return WebRTCAdapter(producer=MagicMock(), redis=MagicMock(), settings=s, registry=MagicMock(),
                              context_reader=MagicMock(), webrtc_provider=MockWebRTCProvider(), **kw)
 
-    def test_humano_com_audio_e_stt_ainda_sem_bot_ate_a_fatia_4_e_o_estado_diz(self):
-        # Com STT presente, o bot numa chamada de humano publicaria a fala como MENSAGEM do
-        # cliente — apareceria no Console como digitada. Até a fatia 4 dar destino de
-        # transcrição, não entra, e o estado nomeia por quê.
+    def test_humano_com_audio_e_stt_chama_o_ouvinte_e_nao_a_voz(self):
+        # Fatia 4: a chamada de humano é transcrita (cliente e humano, cada um no seu canal).
+        # Até ali o ouvinte não entrava, porque a fala só teria destino como mensagem de chat.
         a = self._adapter(stt=True, tts=True)
         state = {"attendants": {"h1": _registro("human")}}
         assert a._ceiling(state) == frozenset({"audio"})
-        assert a._bot_leg_should_run(state, a._ceiling(state)) is False
-        bot = a._bot_leg_state(state, SESSION_ID)
-        assert bot["available"] is False and "fatia 4" in bot["reason"]
+        assert a._bot_leg_should_run(state, a._ceiling(state)) is True
+        assert a._voice_should_run(state) is False
+        assert a._bot_leg_state(state, SESSION_ID) == {"transcribe": True, "convert": False, "available": True}
 
     def test_ia_e_humano_juntos_com_provedores_chamam_o_bot(self):
         a = self._adapter(stt=True, tts=True)

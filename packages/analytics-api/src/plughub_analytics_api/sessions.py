@@ -971,6 +971,12 @@ def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
     # field patterns (passwords, PINs, 2FA codes, etc.).
     content, payload_parsed = _mask_interaction_result(content, payload_parsed)
 
+    # Tipo do conteúdo gravado (`payload.content.type`): `audio_transcript` marca FALA transcrita
+    # da chamada (VOZ-05 fatia 4). O fallback acima reduz `content` a `{"text"}` e perdia a marca.
+    content_type = ""
+    if isinstance(payload_parsed, dict) and isinstance(payload_parsed.get("content"), dict):
+        content_type = str(payload_parsed["content"].get("type") or "")
+
     result: dict[str, Any] = {
         "entry_id":    entry_id,
         "type":        entry_type,
@@ -980,6 +986,7 @@ def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
         "visibility":  visibility,
         "content":     content,
         "payload":     payload_parsed,
+        "content_type": content_type,
     }
     # Include segment_id when present (written by notification_send)
     seg_id = clean.get("segment_id")

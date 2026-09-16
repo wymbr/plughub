@@ -279,6 +279,8 @@
     "hideEvents": "Ocultar eventos",
     "showEvents": "Mostrar eventos",
     "internal": "Interno",
+    "spoken": "voz",
+    "spokenHint": "Transcrito do áudio da chamada",
     "menuNoOptions": "menu sem opções",
     "structuredContent": "Conteúdo estruturado ▸",
     "supervisorActive": "Supervisor ativo",
