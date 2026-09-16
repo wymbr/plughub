@@ -15,7 +15,7 @@ import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { resolveAgentTypeForSession } from "../lib/routing-ref"
-import { channelSatisfies, MASKED_INPUT, maskingChannels } from "@plughub/schemas"
+import { channelSatisfies, MASKED_INPUT, maskingChannels, MenuCollectSchema } from "@plughub/schemas"
 
 /**
  * Generates a session ID that satisfies SessionIdSchema:
@@ -155,6 +155,11 @@ const NotificationSendInputSchema = z.object({
      * anterior (todo campo mascarado vira input de senha).
      */
     masked_types: z.record(z.string()).optional(),
+    /**
+     * VOZ-05 fatia 5 — parâmetros da coleta por voz/teclado (`MenuCollectSchema`), repassados
+     * ao canal no `menu.payload`. Sem ele no schema, o Zod os DESCARTARIA calado aqui.
+     */
+    collect: MenuCollectSchema.optional(),
   }).optional(),
 })
 
@@ -612,6 +617,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                   fields:        parsed.menu!.fields         ?? null,
                   masked_fields: parsed.menu!.masked_fields  ?? null,
                   masked_types: parsed.menu!.masked_types   ?? null,
+                  collect:      parsed.menu!.collect        ?? null,
                 },
                 timestamp,
               })
@@ -688,6 +694,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               fields:        parsed.menu!.fields         ?? null,
               masked_fields: parsed.menu!.masked_fields  ?? null,
                   masked_types: parsed.menu!.masked_types   ?? null,
+                  collect:      parsed.menu!.collect        ?? null,
               visibility:    parsed.visibility,
               timestamp,
             })
@@ -733,6 +740,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                 fields:       parsed.menu!.fields        ?? [],
                 masked_fields: parsed.menu!.masked_fields ?? undefined,
                 masked_types: parsed.menu!.masked_types ?? undefined,
+                collect:      parsed.menu!.collect ?? undefined,
                 timestamp,
                 visibility:   parsed.visibility,
               }))
@@ -763,6 +771,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                   fields:        parsed.menu!.fields         ?? null,
                   masked_fields: parsed.menu!.masked_fields  ?? null,
                   masked_types: parsed.menu!.masked_types   ?? null,
+                  collect:      parsed.menu!.collect        ?? null,
                 },
                 timestamp,
               })
@@ -825,6 +834,7 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                 fields:        parsed.menu!.fields         ?? null,
                 masked_fields: parsed.menu!.masked_fields  ?? null,
                   masked_types: parsed.menu!.masked_types   ?? null,
+                  collect:      parsed.menu!.collect        ?? null,
                 timestamp,
               })
             } else {

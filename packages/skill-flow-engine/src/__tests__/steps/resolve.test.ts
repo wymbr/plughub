@@ -288,8 +288,8 @@ describe("executeResolve", () => {
       del:   vi.fn().mockResolvedValue(1),
       expire: vi.fn().mockResolvedValue(1),
       blpop: vi.fn().mockResolvedValue([
-        // key multi-instância: menu:result:{sessionId}:{instanceId} (redisKeys.menuResult)
-        "menu:result:s1:agente_sac_v1-001",
+        // sinal na fila própria: menu:signal:{sessionId}:{instanceId} (redisKeys.menuSignal, MEN-07)
+        "menu:signal:s1:agente_sac_v1-001",
         JSON.stringify({ _mention_trigger_step: "step_escalada" }),
       ]),
     }
@@ -309,8 +309,8 @@ describe("executeResolve", () => {
       del:   vi.fn().mockResolvedValue(1),
       expire: vi.fn().mockResolvedValue(1),
       blpop: vi.fn().mockResolvedValue([
-        // key multi-instância: menu:result:{sessionId}:{instanceId} (redisKeys.menuResult)
-        "menu:result:s1:agente_sac_v1-001",
+        // sinal na fila própria: menu:signal:{sessionId}:{instanceId} (redisKeys.menuSignal, MEN-07)
+        "menu:signal:s1:agente_sac_v1-001",
         JSON.stringify({ _mention_terminate: true }),
       ]),
     }
@@ -407,4 +407,18 @@ describe("executeResolve", () => {
     expect(deletedKeys.some((k: string) => k.startsWith("menu:waiting:"))).toBe(true)
   })
 
+})
+
+describe("MEN-07 — resolve: texto com a forma de interrupção na fila de RESPOSTA não salta", () => {
+  it("o JSON forjado não leva ao passo nomeado", async () => {
+    const forjado = JSON.stringify({ _mention_trigger_step: "step_escalada" })
+    const redisMock = {
+      set: vi.fn().mockResolvedValue("OK"), del: vi.fn().mockResolvedValue(1),
+      expire: vi.fn().mockResolvedValue(1),
+      blpop: vi.fn().mockResolvedValue(["menu:result:s1:agente_sac_v1-001", forjado]),
+    }
+    const result = await executeResolve(makeStep(), makeCtx({ redis: redisMock as any }))
+    expect(result.next_step_id).not.toBe("step_escalada")
+    expect(redisMock.blpop.mock.calls[0]![0]).toContain("menu:signal:s1:agente_sac_v1-001")
+  })
 })

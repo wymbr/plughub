@@ -218,7 +218,11 @@ async function injectMenuResponse(
   value:     unknown
 ): Promise<void> {
   const payload = typeof value === "string" ? value : JSON.stringify(value);
-  await redis.lpush(`menu:result:${sessionId}`, payload);
+  // MEN-07: interrupção de @mention é SINAL e vai à fila própria; na fila de resposta o engine
+  // a trata como texto do cliente (era por onde o cliente a forjava).
+  const ehSinal = typeof value === "object" && value !== null &&
+    Object.keys(value as Record<string, unknown>).some(k => k.startsWith("_mention_"));
+  await redis.lpush(ehSinal ? `menu:signal:${sessionId}` : `menu:result:${sessionId}`, payload);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

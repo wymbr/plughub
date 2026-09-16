@@ -1,0 +1,23 @@
+{
+  "skill_id": "skill_probe_collect_v1",
+  "name": "Probe - contrato da coleta e fila de sinais (VOZ-05 fatia 5a, MEN-07)",
+  "version": "1.0",
+  "description": "Fixture do probe_menu_signal_contract: um menu de texto com coleta declarada e quatro saidas nomeadas (resposta, timeout do canal, invalido do canal, salto). O passo 'salto' so e alcancavel por interrupcao de @mention: se o cliente chegar a ele digitando o JSON da interrupcao, a fila de resposta esta sendo interpretada como sinal.",
+  "classification": { "type": "orchestrator" },
+  "flow": {
+    "entry": "n1",
+    "steps": [
+      { "id": "n1", "type": "notify", "message": "voz05a-inicio", "on_success": "m1", "on_failure": "fim_falha" },
+      { "id": "m1", "type": "menu", "interaction": "text", "prompt": "voz05a-pergunta", "timeout_s": 90,
+        "output_as": "resposta",
+        "collect": { "input": ["text"], "max_invalid": 2 },
+        "on_success": "n_ok", "on_failure": "fim_falha", "on_timeout": "n_timeout", "on_invalid": "n_invalid" },
+      { "id": "n_ok", "type": "notify", "message": "voz05a-resposta", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "n_timeout", "type": "notify", "message": "voz05a-timeout", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "n_invalid", "type": "notify", "message": "voz05a-invalido", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "salto", "type": "notify", "message": "voz05a-salto", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "probe: contrato medido" },
+      { "id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "probe: fluxo falhou" }
+    ]
+  }
+}

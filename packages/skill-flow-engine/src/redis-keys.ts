@@ -66,6 +66,21 @@ export const redisKeys = {
   sessionClosed: (sessionId: string) => `session:closed:${sessionId}`,
 
   /**
+   * BLPOP key de SINAIS da plataforma para um step bloqueado (menu, resolve): interrupções de
+   * @mention (`_mention_trigger_step`, `_mention_terminate`) e o desfecho da coleta por voz/
+   * teclado (`_collect_outcome`). Só o orchestrator-bridge escreve aqui.
+   *
+   * MEN-07 (2026-09-16): estes sinais viajavam em `menu:result`, a MESMA fila da resposta do
+   * cliente, e o step os reconhecia por `JSON.parse` do texto — um cliente que digitasse
+   * `{"_mention_trigger_step":"<passo>"}` saltava o fluxo. Com a fila própria, nada em
+   * `menu:result` é interpretado: é sempre resposta. Mesma regra de escopo da `menuResult`.
+   */
+  menuSignal: (sessionId: string, instanceId?: string) =>
+    instanceId
+      ? `menu:signal:${sessionId}:${instanceId}`
+      : `menu:signal:${sessionId}`,
+
+  /**
    * Activity flag: sinaliza ao CrashDetector que o agente está vivo e bloqueado
    * num BLPOP — evita re-enfileiramento falso por expiração do heartbeat (30s).
    * Renovado a cada 15s pelo menu step e pelo receive step.

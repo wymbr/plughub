@@ -88,6 +88,7 @@ exact Redis key semantics is essential for both single-agent and conference scen
 |---|---|---|---|
 | `menu:result:{session_id}` | Orchestrator Bridge | menu step (BLPOP) | Delivers the customer's reply |
 | `session:closed:{session_id}` | Orchestrator Bridge | menu step (BLPOP) | Signals customer disconnect |
+| `menu:signal:{session_id}[:{instance_id}]` | Orchestrator Bridge (only) | menu and resolve steps (BLPOP) | Platform signals: @mention interrupts (`trigger_step`, `terminate`) and channel collect outcome (`timeout` → `on_timeout`, `invalid` → `on_invalid`, both falling back to `on_failure`). Parsed by `steps/signals.ts`. **Nothing in `menu:result` is interpreted** — until 2026-09-16 interrupts rode that queue and a customer typing the JSON jumped the flow (MEN-07) |
 | `menu:waiting:{session_id}` | menu step (before BLPOP) | Orchestrator Bridge | Flag: an AI agent is waiting for input |
 
 ### Execution flow
@@ -95,7 +96,7 @@ exact Redis key semantics is essential for both single-agent and conference scen
 ```
 1. Send prompt via notification_send (→ Notification Agent → Channel Gateway → customer)
 2. SET menu:waiting:{session_id} EX (timeout_sec + 10)
-3. BLPOP [menu:result:{session_id}, session:closed:{session_id}] timeout_sec
+3. BLPOP [menu:result:{session_id}, session:closed:{session_id}, menu:signal:{session_id}] timeout_sec
 4. DEL menu:waiting:{session_id}   ← always, in finally block
 ```
 
@@ -109,6 +110,7 @@ so it is always removed regardless of how the BLPOP resolves (success, timeout, 
 | `menu:result` key fired (customer replied) | `on_success` |
 | `session:closed` key fired (customer disconnected) | `on_disconnect` (falls back to `on_failure`) |
 | `nil` (BLPOP timed out) | `on_timeout` (falls back to `on_failure`) |
+| `menu:signal` key fired | per signal: `trigger_step` → that step · `terminate` → `on_failure` · collect `timeout` → `on_timeout` · collect `invalid` → `on_invalid` (both fall back to `on_failure`) · unreadable → warn + `on_failure` |
 
 ### Why multi-key BLPOP on both result and closed
 

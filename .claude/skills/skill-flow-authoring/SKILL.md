@@ -80,7 +80,9 @@ Fatos com `arquivo:linha` em [`references/fatos-do-codigo.md`](references/fatos-
   `mcp-server-plughub`. ⚠️ O `invoke` de flow **não passa** pelo `judgeInvoke`, e `tools[]` do YAML
   **não é sincronizado** ao registry: não conte com permissão de tool como barreira aqui.
 - **`menu`** — `timeout_s`: `0` não espera · `-1` espera indefinida · padrão `300`.
-  `standby: true` só acorda por `@mention`. Dado sensível: `masked: true` dentro de
+  `standby: true` só acorda por `@mention`. `collect` declara a coleta (`input` text/dtmf/voice, timeouts de
+  canal, dígitos, `echo`, `max_invalid`) e o registry recusa dtmf/voz sem `first_input_timeout_s`;
+  desfechos do canal saem por `on_timeout`/`on_invalid` (`on_invalid` exige `max_invalid`). Dado sensível: `masked: true` dentro de
   `begin_transaction`/`end_transaction`; `@masked.*` nunca vai a estado, stream ou log.
 - **`delegate`** — `pool` não resolvido é falha dura (`on_timeout` com `pool_ref_unresolved`);
   `timeout_hours` não resolvido cai para 24 h com warn.

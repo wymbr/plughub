@@ -1,6 +1,45 @@
 # TODO — PlugHub Itens Pendentes
 
 
+## VOZ-05 fatia 5 — coleta por voz e teclado: casa única, parâmetros e desfechos *(decidido 2026-09-16)*
+
+**Medido antes.** Não há conversor único de menu: SMS, e-mail e voz PSTN leem formatos aninhados
+que o `menu.payload` real (plano) não tem — não renderizam nada ou montam menu vazio —, e o WhatsApp
+lê certo mas não valida e devolve rótulo no lugar do id (NIV-14..17). No WebRTC, qualquer fala do
+cliente responde o menu: o bridge a entrega crua e nem ele nem o motor conferem as opções. DTMF pelo
+SFU (`publish_dtmf` → `sip_dtmf_received`) chega ao ouvinte oculto em ~3 ms — e ao atendente humano
+e ao supervisor também, sem parâmetro de destinatário. `EchoMode` existe no schema e não tem leitor.
+Achado de segurança no caminho: interrupções de @mention viajam na fila da resposta do cliente e são
+reconhecidas por `JSON.parse` do texto (MEN-07).
+
+**Decisões do dono.**
+1. **Casa única da SEMÂNTICA da coleta** (gateway): decompõe o menu em passos unitários, casa tecla,
+   dígitos, fala e clique, valida domínio/tamanho/pertinência, roda os timers e emite UM desfecho
+   (`value | invalid | timeout`). **Renderizador por canal** para apresentação e captura (botões ≤3,
+   lista ≤10, texto numerado, TTS+DTMF+STT). A peculiaridade do canal é de apresentação; o defeito
+   medido era de semântica.
+2. **"Outros" ≠ inválido ≠ timeout.** "Outros" é opção visível, incluída pelo autor. `on_invalid` e
+   `on_timeout` são tratamentos do menu, com mensagem opcional e destino. Default de inválido:
+   **ignorar sem eco**. Como o inválido ignorado não encerra nada, **menu de voz sem timeout finito é
+   recusado**.
+3. **Parâmetros de coleta**: modos de entrada (`dtmf`/`voice`/`text`), timeout da 1ª entrada,
+   timeout entre dígitos, mín/máx de dígitos, tecla terminadora, domínio (`digits`,
+   `digits_star_hash`, `text` — alfanumérico por teclado é ambíguo e não existe), eco (`EchoMode`:
+   nada, tecla, beep), barge-in, mensagem e máximo de inválidos, e na fala: silêncio de fim, duração
+   máxima, confiança mínima. Tempo real (entre dígitos) é do gateway; o fluxo recebe o DESFECHO e o
+   motor mantém a guarda absoluta; no timeout o gateway libera o estado.
+4. **"Tem tela" é capacidade da PERNA, não do canal.** WebRTC no browser declara tela: campo
+   mascarado vai à tela (fatia A). Sem tela (SIP, cliente só de voz), mascarado é DTMF com eco (NIV-06).
+5. **O modo da coleta decide o que é resposta.** Fora do modo `voice`, a fala NÃO responde o menu —
+   mas continua transcrita como REGISTRO da chamada (fatia 4), exceto em coleta mascarada, em que
+   nada do áudio do cliente é transcrito.
+6. **Teclado na widget segue o domínio.** Menu comum: DTMF pelo SFU (o mesmo evento da futura perna
+   SIP). Campo mascarado: dígitos pelo canal de dados do gateway, NUNCA pelo SFU, que os entregaria
+   a humano e supervisor.
+
+**Fatiamento.** 5a contrato (schema, motor, desfechos, recusa de voz sem timeout, MEN-07) · 5b núcleo
++ renderizador WebRTC por voz · 5c teclado da widget. Migração dos outros canais: NIV-14..17.
+
 ## VOZ-05 — áudio para o STT: egress por trilha × assinante na sala *(medido 2026-09-16, antes da fatia 4)*
 
 **Pergunta do dono:** o bot na sala dá a sensação de trazer o stream para dentro da plataforma;

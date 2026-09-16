@@ -37,6 +37,7 @@ runs a continuous event loop consuming from `conversations.events` and `conversa
 | `session:{session_id}:routing:{instance_id}` | String (JSON) | Per-instance routing snapshot — restored to Routing Engine on agent exit |
 | `session:{session_id}:human_agent` | String | Legacy binary flag — still written for backward compat; use `human_agents` SET for conference logic |
 | `menu:result:{session_id}` | List | LPUSH here to unblock a menu step BLPOP waiting for customer input |
+| `menu:signal:{session_id}[:{instance_id}]` | List | Platform signals ONLY (the bridge is the sole writer): @mention interrupts from `dispatch_mention_command`, and channel collect outcomes (`menu_result` with `payload.outcome` → `deliver_collect_outcome`, customer-facing non-standby menus only). Never push customer text here, never interrupts to `menu:result` (MEN-07) |
 | `menu:waiting:{session_id}` | String | Flag set by menu step before BLPOP; bridge checks this in conference to route messages |
 | `session:closed:{session_id}` | List | LPUSH here to unblock a menu step BLPOP on customer disconnect |
 | `agent:events:{session_id}` | Pub/Sub channel | Events forwarded to agent WebSocket (human agent UI) |

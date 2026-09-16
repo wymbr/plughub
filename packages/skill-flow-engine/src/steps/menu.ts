@@ -18,9 +18,11 @@
  *   LPUSH em menu:result quando a sessão também tem um agente humano ativo
  *   (cenário de conferência — múltiplos agentes no mesmo contact).
  *
- * Três saídas possíveis:
+ * Saídas possíveis:
  *   on_success    — cliente respondeu
- *   on_timeout    — nenhuma resposta dentro de timeout_s (defaults to on_failure; never fires when timeout_s = 0)
+ *   on_timeout    — nenhuma resposta dentro de timeout_s (defaults to on_failure; never fires when timeout_s = 0),
+ *                   OU o canal entregou o desfecho de coleta `timeout` (VOZ-05 fatia 5)
+ *   on_invalid    — o canal esgotou `collect.max_invalid` (defaults to on_failure)
  *   on_disconnect — cliente desconectou durante a espera (defaults to on_failure)
  */
 
@@ -30,6 +32,7 @@ import type { StepContext, StepResult } from "../executor"
 import { interpolate, resolveVisibility, resolveInputValue } from "../interpolate"
 import { resolveMaskedFields, isFieldMasked, isStepMasked } from "../masking-policy"
 import { redisKeys } from "../redis-keys"
+import { parseSignal } from "./signals"
 
 // ── Dialog primitive §17.3-2 — dynamic options/fields ─────────────────────────
 // options/fields may be a static array OR a string reference (e.g.
@@ -293,6 +296,8 @@ export async function executeMenu(
         masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
         // ALW-10 — o TIPO viaja junto, para o canal decidir o eco ao cliente.
         masked_types:  Object.keys(masked.types ?? {}).length > 0 ? masked.types : undefined,
+        // VOZ-05 fatia 5 — parâmetros da coleta por voz/teclado; o canal executa.
+        ...(step.collect ? { collect: step.collect } : {}),
       },
     })
   } catch {
@@ -313,6 +318,7 @@ export async function executeMenu(
   const isInfinite  = resolvedTimeoutS === 0 || resolvedTimeoutS === -1
   const timeoutSec  = isInfinite ? 14400 : resolvedTimeoutS
   const resultKey   = redisKeys.menuResult(ctx.sessionId, ctx.instanceId)
+  const signalKey   = redisKeys.menuSignal(ctx.sessionId, ctx.instanceId)
   const closedKey   = redisKeys.sessionClosed(ctx.sessionId)
   const waitingKey  = redisKeys.menuWaiting(ctx.sessionId)
   const maskedKey   = redisKeys.menuMasked(ctx.sessionId)
@@ -452,7 +458,7 @@ export async function executeMenu(
         }
       }
 
-      const result = await ctx.redis.blpop([resultKey, closedKey], blpopTimeout)
+      const result = await ctx.redis.blpop([resultKey, closedKey, signalKey], blpopTimeout)
 
       if (result === null) {
         // Timeout — nenhuma resposta e nenhuma desconexão dentro de timeout_s
@@ -473,32 +479,24 @@ export async function executeMenu(
         }
       }
 
-      // ── @mention command interrupts ───────────────────────────────────────
-      // O bridge (`dispatch_mention_command`) pode LPUSH um payload JSON especial
-      // em menu:result:{sessionId} para interromper um menu step bloqueado:
-      //   { "_mention_trigger_step": "step_id" }  — jump to a specific step
-      //   { "_mention_terminate": true }           — agent should exit the conference
-      //
-      // These interrupts are injected only by the orchestrator bridge, never by clients.
-      if (key === resultKey) {
-        try {
-          const parsed = JSON.parse(raw) as Record<string, unknown>
-          if (typeof parsed["_mention_trigger_step"] === "string") {
-            // trigger_step: jump to the declared step
-            return {
-              next_step_id:      parsed["_mention_trigger_step"],
-              transition_reason: "on_success",
-            }
-          }
-          if (parsed["_mention_terminate"] === true) {
-            // terminate_self: return on_failure so the engine cleans up
-            return {
-              next_step_id:      step.on_failure,
-              transition_reason: "on_failure",
-            }
-          }
-        } catch {
-          // Not a JSON object — normal string response from the client; fall through
+      // ── Sinais da plataforma (fila própria — MEN-07) ──────────────────────
+      // @mention (`dispatch_mention_command` no bridge) e o desfecho da coleta por voz/teclado
+      // (VOZ-05 fatia 5: o CANAL rodou os timers e contou os inválidos). O que chega em
+      // `resultKey` é SEMPRE resposta — inclusive um texto com a forma de um destes sinais.
+      if (key === signalKey) {
+        const sinal = parseSignal(raw)
+        switch (sinal.kind) {
+          case "trigger_step":
+            return { next_step_id: sinal.step, transition_reason: "on_success" }
+          case "terminate":
+            return { next_step_id: step.on_failure, transition_reason: "on_failure" }
+          case "collect":
+            return sinal.outcome === "timeout"
+              ? { next_step_id: step.on_timeout ?? step.on_failure, transition_reason: "on_failure" }
+              : { next_step_id: step.on_invalid ?? step.on_failure, transition_reason: "on_failure" }
+          default:
+            console.warn(`[menu] sinal ilegível em ${step.id}: ${raw.slice(0, 120)} — on_failure`)
+            return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
       }
 
@@ -533,6 +531,7 @@ export async function executeMenu(
               masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
               // ALW-10 — o TIPO viaja junto, para o canal decidir o eco ao cliente.
               masked_types:  Object.keys(masked.types ?? {}).length > 0 ? masked.types : undefined,
+              ...(step.collect ? { collect: step.collect } : {}),
             },
           })
         } catch {

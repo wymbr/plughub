@@ -1,5 +1,53 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-16 (4) — VOZ-05 fatia 5a + MEN-07: sinal da plataforma ganha fila própria, e a coleta ganha contrato e desfechos
+
+**O que havia.** Duas coisas no mesmo transporte:
+- **MEN-07 — texto do cliente virava interrupção do fluxo.** As interrupções de @mention
+  (`{"_mention_trigger_step": …}`, `{"_mention_terminate": true}`) viajavam em `menu:result`, a
+  fila da RESPOSTA do cliente, e o motor as reconhecia por `JSON.parse` do texto (`menu.ts`,
+  `resolve.ts`). O bridge empurra a resposta crua. **Reproduzido ao vivo antes do conserto:** o
+  cliente digitou `{"_mention_trigger_step":"salto"}` e o fluxo mandou `voz05a-salto` — saltou
+  para um passo que só interrupção alcança. No mesmo run, o desfecho `invalid` vindo do canal foi
+  tomado como resposta.
+- **A coleta não tinha contrato.** O menu não declarava modo de entrada, timeouts de canal, limites
+  de dígitos, eco nem o que fazer com inválido; a fatia 5 (decisões do dono em `TODO.md` § *VOZ-05
+  fatia 5*) precisa disso antes de qualquer renderizador.
+
+**Feito.**
+- **Schemas.** `MenuStepSchema` ganha `collect` (`input[]` text/dtmf/voice, `first_input_timeout_s`,
+  `inter_digit_timeout_s`, `min/max_digits`, `terminator`, `domain`, `echo`, `barge_in`, `voice`
+  {silêncio final, fala máxima, confiança mínima}, `invalid_message`, `max_invalid`) e `on_invalid`.
+  As regras cruzadas moram em `menuCollectViolations`, aplicado no `superRefine` do `SkillFlowSchema`
+  (membro de `discriminatedUnion` não aceita refine): dtmf/voz exige timeout de canal e recusa espera
+  infinita; parâmetro de dígito só com dtmf; `on_invalid` exige `max_invalid`; `masked` + voz é
+  recusado (NIV-08).
+- **Motor.** Fila `menu:signal:{sid}[:{iid}]` no BLPOP do `menu` e do `resolve`; `signals.ts`
+  interpreta SÓ o que vem dela (`trigger_step` · `terminate` · `collect` timeout/invalid → `on_timeout`
+  / `on_invalid`, caindo em `on_failure` · ilegível → avisa e `on_failure`). **Nada em `menu:result`
+  é interpretado.** O `collect` viaja no menu publicado.
+- **mcp-server.** `notification_send` aceita e valida `collect` e o leva nos cinco sites de publish.
+- **Bridge.** `dispatch_mention_command` escreve em `menu:signal`; `menu_result` com `outcome` vira
+  `deliver_collect_outcome`, que entrega o sinal só a menu voltado ao cliente e fora de standby, sem
+  publicar nada e sem virar mensagem. `e2e-tests` cenário 19 passa a injetar interrupção na fila de
+  sinal.
+
+**Testes.** schemas 350 · engine 278 (tsc limpo) · mcp-server 460 · bridge 187 — cada lado com o
+controle (resposta comum segue `on_success`; sinal legítimo ainda salta).
+
+**Gate.** `probe_menu_signal_contract.sh` (AUTO): R1 registry vivo recusa menu dtmf sem timeout de
+canal (422, nomeando `first_input_timeout_s`); S1 interrupção digitada → resposta; S2 CONTROLE mesma
+interrupção na fila de sinal → salto; S3 timeout → `on_timeout`; S4 invalid → `on_invalid`; S5
+CONTROLE resposta comum. Pré-deploy: S1 VERMELHO (a reprodução acima). Pós-deploy de agent-registry,
+skill-flow-service, mcp-server-plughub e orchestrator-bridge (âncoras conferidas nos containers):
+todos verdes. Vizinhos verdes: `probe_menu_result_contract`, `probe_masked_channel_gate`,
+`probe_skill_profile_steps`, `probe_webrtc_masked_keypad`, `probe_webrtc_tts_spoken`.
+
+**Fora desta fatia.** Nenhum canal PRODUZ ainda `outcome` nem honra `collect`: é a 5b (núcleo único
+de coleta no gateway + renderizador de voz WebRTC) e a 5c (teclado do widget). SMS, e-mail, voz PSTN
+e WhatsApp ficaram em fichas próprias (`NIV-14..17`), e a lista de verificação falsa do CLAUDE.md do
+channel-gateway em `NIV-18`.
+
 ## 2026-09-16 (3) — VOZ-05 fatia 4 (parte 2): a chamada com humano é transcrita, cada falante no seu canal
 
 **O que havia.** O ouvinte só entrava com agente de IA: numa chamada de humano nada era

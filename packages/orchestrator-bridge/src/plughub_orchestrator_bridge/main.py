@@ -460,6 +460,49 @@ async def resolve_session_tenant(redis_client, session_id: str) -> str:
     return valor or os.environ.get("PLUGHUB_TENANT_ID", "tenant_demo")
 
 
+def menu_signal_key(session_id: str, instance_id: str = "") -> str:
+    """Fila de SINAIS da plataforma para um step bloqueado — gêmeo de `redisKeys.menuSignal`
+    (skill-flow-engine). Só o bridge escreve: interrupção de @mention e desfecho de coleta."""
+    return f"menu:signal:{session_id}:{instance_id}" if instance_id else f"menu:signal:{session_id}"
+
+
+COLLECT_OUTCOMES = ("timeout", "invalid")
+
+
+async def deliver_collect_outcome(redis_client, session_id: str, contact_id: str | None, outcome: str) -> int:
+    """Desfecho da coleta por voz/teclado (VOZ-05 fatia 5): o CANAL rodou os timers e contou os
+    inválidos, e o menu que espera a resposta do CLIENTE recebe o sinal — nunca um texto, que o
+    fluxo guardaria como a escolha. Devolve quantos menus o receberam; zero é DITO."""
+    if outcome not in COLLECT_OUTCOMES:
+        logger.warning("Desfecho de coleta desconhecido descartado: session=%s outcome=%r", session_id, outcome)
+        return 0
+    waiting = await redis_client.hgetall(f"menu:waiting:{session_id}") or {}
+    customer_pid = contact_id or "customer"
+    raw_pid = await redis_client.get(f"session:{session_id}:customer_participant_id")
+    if raw_pid:
+        customer_pid = raw_pid.decode() if isinstance(raw_pid, bytes) else raw_pid
+    entregues = 0
+    for k, v in waiting.items():
+        agent_key = k.decode() if isinstance(k, bytes) else k
+        try:
+            meta = json.loads(v.decode() if isinstance(v, bytes) else v)
+        except Exception:
+            meta = {"visibility": "all"}
+        if meta.get("standby") is True:
+            continue
+        vis = meta.get("visibility", "all")
+        if not (vis == "all" or (isinstance(vis, list) and customer_pid in vis)):
+            continue
+        key = menu_signal_key(session_id, "" if agent_key == "_default_" else agent_key)
+        await redis_client.lpush(key, json.dumps({"_collect_outcome": outcome}))
+        entregues += 1
+    if entregues:
+        logger.info("Desfecho de coleta %s entregue a %d menu(s): session=%s", outcome, entregues, session_id)
+    else:
+        logger.warning("Desfecho de coleta %s SEM menu do cliente esperando: session=%s", outcome, session_id)
+    return entregues
+
+
 def customer_message_stream_fields(
     *,
     event_id:   str,
@@ -8911,10 +8954,9 @@ async def dispatch_mention_command(
     terminate    = action.get("terminate_self", False)
     set_ctx      = action.get("set_context", {})
 
-    result_key = (
-        f"menu:result:{session_id}:{instance_id}" if instance_id
-        else f"menu:result:{session_id}"
-    )
+    # MEN-07 (2026-09-16): interrupções vão para a fila de SINAL, nunca para `menu:result`,
+    # onde o engine as reconhecia por JSON.parse do texto — e o cliente as forjava digitando.
+    result_key = menu_signal_key(session_id, instance_id)
 
     if trigger_step:
         payload = json.dumps({"_mention_trigger_step": trigger_step})
@@ -9693,6 +9735,12 @@ async def process_inbound(
         if msg_type == "text":
             reply_text = content.get("text", "")
         elif msg_type == "menu_result":
+            outcome = (content.get("payload") or {}).get("outcome")
+            if outcome:
+                # Desfecho da coleta (timeout/inválido): vai ao menu como SINAL e a nenhum outro
+                # destino — não é mensagem do cliente, e não há valor a registrar.
+                await deliver_collect_outcome(redis_client, session_id, contact_id, outcome)
+                return
             result_value = content.get("payload", {}).get("result", "")
             # For button/list results (plain string) use the raw value — json.dumps
             # would wrap it in extra quotes ("especialista" → '"especialista"'),

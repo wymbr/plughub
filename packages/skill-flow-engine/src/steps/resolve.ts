@@ -46,6 +46,7 @@ import type { StepContext, StepResult }  from "../executor"
 import { resolveInputMap }               from "../interpolate"
 import { extractOutputsToCtx }           from "../context-accumulator-util"
 import { redisKeys }                     from "../redis-keys"
+import { parseSignal }                   from "./signals"
 
 // ── Tipo de saída do resolve step ──────────────────────────────────────────────
 
@@ -185,6 +186,7 @@ export async function executeResolve(
   const isInfinite  = step.timeout_s === 0 || step.timeout_s === -1
   const timeoutSec  = isInfinite ? 14400 : (step.timeout_s ?? 300)
   const resultKey   = redisKeys.menuResult(ctx.sessionId, ctx.instanceId)
+  const signalKey   = redisKeys.menuSignal(ctx.sessionId, ctx.instanceId)
   const closedKey   = redisKeys.sessionClosed(ctx.sessionId)
   const waitingKey  = redisKeys.menuWaiting(ctx.sessionId)
 
@@ -237,7 +239,7 @@ export async function executeResolve(
 
   try {
     const blpopTimeout = isInfinite ? 0 : timeoutSec
-    const result = await ctx.redis.blpop([resultKey, closedKey], blpopTimeout)
+    const result = await ctx.redis.blpop([resultKey, closedKey, signalKey], blpopTimeout)
 
     if (result === null) {
       // Timeout
@@ -253,25 +255,17 @@ export async function executeResolve(
       return _success(step, { resolved: false, method: "disconnected", remaining_gaps: remainingGaps })
     }
 
-    // Verificar @mention interrupts (mesma lógica do menu step)
-    if (key === resultKey) {
-      try {
-        const parsed = JSON.parse(value) as Record<string, unknown>
-        if (typeof parsed["_mention_trigger_step"] === "string") {
-          return {
-            next_step_id:      parsed["_mention_trigger_step"],
-            transition_reason: "on_success",
-          }
-        }
-        if (parsed["_mention_terminate"] === true) {
-          return {
-            next_step_id:      step.on_failure,
-            transition_reason: "on_failure",
-          }
-        }
-      } catch {
-        // Não é JSON — resposta normal do cliente
+    // Sinais da plataforma — fila própria (MEN-07); o que chega em `resultKey` é sempre resposta
+    if (key === signalKey) {
+      const sinal = parseSignal(value)
+      if (sinal.kind === "trigger_step") {
+        return { next_step_id: sinal.step, transition_reason: "on_success" }
       }
+      if (sinal.kind !== "terminate") {
+        // o resolve não coleta por voz/teclado: um desfecho de coleta aqui é sinal fora de lugar
+        console.warn(`[resolve] sinal ${sinal.kind} inesperado em ${step.id} — on_failure`)
+      }
+      return { next_step_id: step.on_failure, transition_reason: "on_failure" }
     }
 
     customerResponse = value

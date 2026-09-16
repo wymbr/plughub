@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod"
-import { MaskedDeclarationSchema } from "./audit"
+import { EchoModeSchema, MaskedDeclarationSchema } from "./audit"
 import { ToolContextTagsSchema, ReasonStepContextTagsSchema, SkillRequiredContextSchema, ContextTagScopeSchema } from "./context-store"
 import { SignalGrainSchema } from "./survey"
 import { ResumeRequiresFieldSchema, ResumeRequirementSchema } from "./resume-requirement"
@@ -463,6 +463,103 @@ const MenuValidationSchema = z.union([
 ])
 
 /**
+ * Coleta em canal de VOZ e TECLADO (VOZ-05 fatia 5, decidido 2026-09-16 — `TODO.md` § *VOZ-05
+ * fatia 5*). O canal executa a coleta em tempo real (timers, dígitos, eco, barge-in) e entrega ao
+ * fluxo UM desfecho: o valor, `invalid` (esgotou `max_invalid`) ou `timeout`. Ausente = o canal
+ * coleta como sempre (texto/botão/lista), e nada muda.
+ *
+ * ⚠️ Três tratamentos distintos, nunca fundidos: uma opção "outros" é OPÇÃO visível, incluída pelo
+ * autor; `invalid` é o que não casou com nada; `timeout` é nenhuma entrada.
+ */
+export const CollectInputModeSchema = z.enum(["dtmf", "voice", "text"])
+export const CollectDomainSchema = z.enum([
+  "digits",            // 0-9
+  "digits_star_hash",  // 0-9, * e #
+  "text",              // só por fala ou texto — alfanumérico por TECLADO é ambíguo (2 = A, B, C, 2)
+])
+export const MenuCollectSchema = z.object({
+  /** O que o canal aceita como RESPOSTA. Fora do modo `voice`, a fala não responde (é só registro). */
+  input:                 z.array(CollectInputModeSchema).min(1),
+  /** Sem nenhuma entrada por este tempo → desfecho `timeout`. Obrigatório com `dtmf`/`voice`. */
+  first_input_timeout_s: z.number().positive().optional(),
+  /** Entre dígitos de uma entrada com mais de um. */
+  inter_digit_timeout_s: z.number().positive().optional(),
+  min_digits:            z.number().int().min(1).optional(),
+  max_digits:            z.number().int().min(1).optional(),
+  /** Encerra a digitação antes do `max_digits`. */
+  terminator:            z.enum(["#", "*"]).optional(),
+  domain:                CollectDomainSchema.optional(),
+  /** Eco da tecla ao cliente: `plain` fala a tecla, `masked` bipa, `none` cala. Default `none`. */
+  echo:                  EchoModeSchema.optional(),
+  /** Entrada do cliente interrompe a fala do prompt. Tecla interrompe sempre que `true`; fala, só no modo `voice`. */
+  barge_in:              z.boolean().default(true),
+  voice: z.object({
+    end_silence_ms: z.number().int().positive().optional(),
+    max_speech_s:   z.number().positive().optional(),
+    /** Abaixo disto a fala conta como inválida. */
+    min_confidence: z.number().min(0).max(1).optional(),
+  }).optional(),
+  /** Dito ao cliente a cada inválido. Ausente = inválido ignorado, sem eco (default do dono). */
+  invalid_message:       z.string().min(1).optional(),
+  /** Inválidos até o desfecho `invalid` (→ `on_invalid`). Ausente = ignora até o timeout. */
+  max_invalid:           z.number().int().min(1).optional(),
+})
+export type MenuCollect = z.infer<typeof MenuCollectSchema>
+
+/**
+ * As regras da coleta que atravessam campos do step — recusadas no parse do FLOW, porque o
+ * `MenuStepSchema` vive numa `discriminatedUnion`, que não aceita refinamento por membro.
+ * Devolve as violações nomeadas; lista vazia = válido.
+ */
+export function menuCollectViolations(step: {
+  collect?: MenuCollect; timeout_s?: number | string; on_invalid?: string
+  masked?: unknown; fields?: unknown
+}): string[] {
+  const out: string[] = []
+  const c = step.collect
+  if (!c) {
+    if (step.on_invalid) out.push("on_invalid exige `collect` com `max_invalid` — sem coleta, o desfecho invalid nunca ocorre")
+    return out
+  }
+  const tempoReal = c.input.includes("dtmf") || c.input.includes("voice")
+  const dtmf = c.input.includes("dtmf")
+  if (tempoReal) {
+    if (c.first_input_timeout_s === undefined) {
+      out.push("coleta por dtmf/voice exige first_input_timeout_s — inválido ignorado sem timeout nunca termina")
+    }
+    if (typeof step.timeout_s === "number") {
+      if (step.timeout_s <= 0) {
+        out.push("coleta por dtmf/voice não aceita timeout_s 0 ou -1 (espera infinita)")
+      } else if (c.first_input_timeout_s !== undefined && step.timeout_s < c.first_input_timeout_s) {
+        out.push("timeout_s (guarda do fluxo) menor que first_input_timeout_s (timeout do canal)")
+      }
+    }
+  }
+  if (!dtmf) {
+    for (const k of ["inter_digit_timeout_s", "min_digits", "max_digits", "terminator"] as const) {
+      if (c[k] !== undefined) out.push(`${k} só vale com input dtmf`)
+    }
+  }
+  if (c.min_digits !== undefined && c.max_digits !== undefined && c.min_digits > c.max_digits) {
+    out.push("min_digits maior que max_digits")
+  }
+  if (c.domain === "text" && c.input.every(m => m === "dtmf")) {
+    out.push("domain text não é coletável só por teclado")
+  }
+  if (c.voice && !c.input.includes("voice")) out.push("bloco voice só vale com input voice")
+  if (step.on_invalid && c.max_invalid === undefined) {
+    out.push("on_invalid exige max_invalid — inválido ignorado nunca esgota")
+  }
+  // NIV-08: dado protegido nunca é FALADO — a porta de áudio o transcreveria.
+  const campoMascarado = Array.isArray(step.fields)
+    && step.fields.some(f => f && typeof f === "object" && (f as { masked?: unknown }).masked)
+  if ((step.masked || campoMascarado) && c.input.includes("voice")) {
+    out.push("menu mascarado não aceita input voice (NIV-08) — use dtmf ou text")
+  }
+  return out
+}
+
+/**
  * MenuStep — envia um prompt ao cliente e suspende a execução até receber resposta.
  * Spec: plughub_spec_v1.docx seção 9 — step type "menu"
  *
@@ -605,10 +702,14 @@ export const MenuStepSchema = z.object({
     z.number().int().min(-1),
     z.string().regex(/^(\$\.|@ctx\.)/, "timeout_s deve ser número ou um ref $./@ctx."),
   ]).default(300),
+  /** Coleta por voz/teclado — ver `MenuCollectSchema`. Regras cruzadas: `menuCollectViolations`. */
+  collect:       MenuCollectSchema.optional(),
   on_success:    z.string(),
   on_failure:    z.string(),
   /** Step para timeout — usa on_failure se não especificado */
   on_timeout:    z.string().optional(),
+  /** Step quando a coleta esgota `collect.max_invalid` — usa on_failure se não especificado */
+  on_invalid:    z.string().optional(),
   /** Step para desconexão do cliente — usa on_failure se não especificado */
   on_disconnect: z.string().optional(),
 })
@@ -1414,7 +1515,15 @@ export const SkillFlowSchema = z.object({
 ).refine(
   (flow: { steps: Array<{ type: string }> }) => flow.steps.some((s) => s.type === "complete" || s.type === "escalate"),
   { message: "Flow deve ter pelo menos um step do tipo complete ou escalate" }
-)
+).superRefine((flow, ctx) => {
+  // VOZ-05 fatia 5: regras cruzadas da coleta por voz/teclado, recusadas no parse do flow.
+  flow.steps.forEach((s, i) => {
+    if (s.type !== "menu") return
+    for (const v of menuCollectViolations(s as Parameters<typeof menuCollectViolations>[0])) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", i, "collect"], message: `${(s as { id: string }).id}: ${v}` })
+    }
+  })
+})
 export type SkillFlow = z.infer<typeof SkillFlowSchema>
 
 // ─────────────────────────────────────────────

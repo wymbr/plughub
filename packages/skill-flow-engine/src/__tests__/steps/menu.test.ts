@@ -550,3 +550,84 @@ describe("D6 — o campo de um form valida sozinho", () => {
     expect(r.transition_reason).toBe("on_failure")
   })
 })
+
+describe("VOZ-05 fatia 5a — coleta por voz/teclado: parâmetros ao canal e desfecho do canal", () => {
+  const COLLECT = { input: ["dtmf", "voice"] as ("dtmf" | "voice" | "text")[], first_input_timeout_s: 8,
+                    max_invalid: 3, echo: "plain" as const, barge_in: true }
+  const step = (over: Partial<MenuStep> = {}): MenuStep => ({
+    id: "menu_voz", type: "menu", prompt: "Para fatura tecle 1", interaction: "button",
+    options: [{ id: "fatura", label: "Fatura" }], timeout_s: 60,
+    on_success: "ok", on_failure: "falhou", on_timeout: "sem_resposta", on_invalid: "nao_entendi",
+    collect: COLLECT, ...over,
+  })
+
+  it("os parâmetros de coleta viajam ao canal no notification_send", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "fatura"])
+    await executeMenu(step(), ctx)
+    const menu = (ctx.mcpCall as ReturnType<typeof vi.fn>).mock.calls[0]![1].menu
+    expect(menu.collect).toEqual(COLLECT)
+  })
+
+  it("CONTROLE: menu sem collect não manda a chave", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "fatura"])
+    await executeMenu(step({ collect: undefined, on_invalid: undefined }), ctx)
+    expect("collect" in (ctx.mcpCall as ReturnType<typeof vi.fn>).mock.calls[0]![1].menu).toBe(false)
+  })
+
+  it("desfecho timeout do canal segue on_timeout", async () => {
+    const r = await executeMenu(step(), makeCtx([`menu:signal:s1`, JSON.stringify({ _collect_outcome: "timeout" })]))
+    expect(r.next_step_id).toBe("sem_resposta")
+    expect(r.output_value).toBeUndefined()
+  })
+
+  it("desfecho invalid do canal segue on_invalid, e cai em on_failure sem ele", async () => {
+    const sinal = JSON.stringify({ _collect_outcome: "invalid" })
+    expect((await executeMenu(step(), makeCtx([`menu:signal:s1`, sinal]))).next_step_id).toBe("nao_entendi")
+    expect((await executeMenu(step({ on_invalid: undefined }), makeCtx([`menu:signal:s1`, sinal]))).next_step_id)
+      .toBe("falhou")
+  })
+
+  it("desfecho desconhecido não vira sucesso", async () => {
+    const r = await executeMenu(step(), makeCtx([`menu:signal:s1`, JSON.stringify({ _collect_outcome: "talvez" })]))
+    expect(r.next_step_id).toBe("falhou")
+  })
+
+  it("CONTROLE: a resposta comum continua on_success com o valor", async () => {
+    const r = await executeMenu(step({ output_as: "escolha" }), makeCtx([`menu:result:s1`, "fatura"]))
+    expect(r.next_step_id).toBe("ok")
+    expect(r.output_value).toBe("fatura")
+  })
+})
+
+describe("MEN-07 — texto do cliente com a forma de um sinal é RESPOSTA, nunca interrupção", () => {
+  const step: MenuStep = {
+    id: "senha", type: "menu", prompt: "Informe", interaction: "text", timeout_s: 30,
+    output_as: "resposta", on_success: "validar", on_failure: "falhou", on_timeout: "sem_resposta",
+  }
+  it.each([
+    JSON.stringify({ _mention_trigger_step: "liberar_acesso" }),
+    JSON.stringify({ _mention_terminate: true }),
+    JSON.stringify({ _collect_outcome: "timeout" }),
+  ])("na fila de RESPOSTA, %s segue on_success com o texto como valor", async (forjado) => {
+    const r = await executeMenu(step, makeCtx([`menu:result:s1`, forjado]))
+    expect(r.next_step_id).toBe("validar")
+    expect(r.output_value).toBe(forjado)
+  })
+
+  it("CONTROLE: o mesmo sinal na fila de SINAL interrompe", async () => {
+    const r = await executeMenu(step, makeCtx([`menu:signal:s1`, JSON.stringify({ _mention_trigger_step: "liberar_acesso" })]))
+    expect(r.next_step_id).toBe("liberar_acesso")
+  })
+
+  it("a espera escuta as três filas: resposta, desconexão e sinal", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "oi"])
+    await executeMenu(step, ctx)
+    expect((ctx.redis.blpop as ReturnType<typeof vi.fn>).mock.calls[0]![0])
+      .toEqual(["menu:result:s1", "session:closed:s1", "menu:signal:s1"])
+  })
+
+  it("sinal ilegível na fila de sinal não vira sucesso", async () => {
+    const r = await executeMenu(step, makeCtx([`menu:signal:s1`, "lixo"]))
+    expect(r.next_step_id).toBe("falhou")
+  })
+})

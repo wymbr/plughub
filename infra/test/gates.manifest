@@ -465,6 +465,15 @@ probe_adapter_self_calls.sh
 # a concordancia com o gate e deixaria os 4 produtores verdes contra um leitor que mudou.
 probe_menu_result_contract.sh
 
+# MEN-07 + VOZ-05 fatia 5a (2026-09-16): as interrupcoes de @mention viajavam na MESMA fila
+# da resposta do cliente (`menu:result`) e o motor as reconhecia por JSON.parse do texto --
+# REPRODUZIDO ao vivo antes do conserto: o cliente digitou `{"_mention_trigger_step":"salto"}`
+# e o fluxo saltou. Hoje sinal mora em `menu:signal`, que so o bridge escreve, e o desfecho
+# de coleta do canal (timeout/invalid) chega pela saida declarada. Controles em par: o sinal
+# legitimo ainda salta (S2) e a resposta comum ainda segue (S5), senao um motor que ignorasse
+# todo sinal passaria. R1: o registry vivo recusa coleta dtmf sem timeout de canal.
+probe_menu_signal_contract.sh
+
 # RET-12 (2026-09-09): o IRMAO do de cima, mesmo eixo e outro par de pacotes. O
 # `collect.ts` grava `{step}:__collect_token__` e o orchestrator-bridge so casava
 # `:__resume_token__` -- 49 sessoes publicaram `session_suspended` SEM token e

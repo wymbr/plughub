@@ -260,6 +260,15 @@ Comandos não reconhecidos são ignorados silenciosamente. O texto do comando po
 | `trigger_step: <step_id>` | Salta para o step declarado no skill flow |
 | `terminate_self: true` | Agente sai da conferência via `agent_done` |
 
+**Transporte — fila de SINAL, nunca a da resposta** *(MEN-07, 2026-09-16)*. `trigger_step` e
+`terminate_self` chegam ao step bloqueado (`menu`, `resolve`) pela lista
+`menu:signal:{sid}[:{iid}]`, que **só o bridge escreve** (`dispatch_mention_command`). Até esta
+data viajavam em `menu:result` — a fila da resposta do cliente — e o motor as reconhecia por
+`JSON.parse` do texto: um cliente que digitasse `{"_mention_trigger_step":"<passo>"}` saltava o
+fluxo, e isso foi reproduzido ao vivo. Hoje nada em `menu:result` é interpretado; a mesma fila de
+sinal leva o desfecho de coleta do canal (`timeout`/`invalid`). Gate:
+`infra/test/probe_menu_signal_contract.sh`.
+
 ### Standby do especialista — `standby: true` no menu (fix 2026-06-04)
 
 O step de espera do especialista (`menu` `agents_only`, `timeout_s: -1`) deve
@@ -276,7 +285,7 @@ Mecânica do fix (duas pontas):
    standby ao rotear mensagens comuns. O standby acorda exclusivamente por
    interrupts do dispatch e por `session:closed` (disconnect).
 2. **Dispatch instance-scoped**: o specialist roda com `instance_id` → seu
-   BLPOP é em `menu:result:{sid}:{iid}`. O `dispatch_mention_command` (bridge)
+   BLPOP é em `menu:result:{sid}:{iid}` (e o interrupt, desde a MEN-07, em `menu:signal:{sid}:{iid}`). O `dispatch_mention_command` (bridge)
    mira a chave instance-scoped (lendo `instance_id` do `specialist_key`); antes
    empurrava para a session-scoped e o interrupt nunca chegava.
    ⚠️ **Casa ÚNICA desde 2026-09-02 (ALW-07).** Havia uma segunda, a tool MCP
@@ -371,3 +380,5 @@ O roteamento em si é o mesmo código nas duas (`lib/mention-routing.ts`); o poo
   conduz coordena pelo `task` step com `mode: assist`
 - Menus `standby: true` nunca recebem mensagens comuns — acordam só por
   interrupt do dispatch (chave instance-scoped) ou `session:closed`
+- Interrupt é SINAL, nunca conteúdo: mora em `menu:signal`, escrito só pelo bridge; texto do
+  cliente em `menu:result` nunca é interpretado como comando (MEN-07)
