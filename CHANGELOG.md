@@ -1,5 +1,67 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-16 (1) — RPL-01: o avaliador de qualidade passa a ver o que o cliente escreveu
+
+**Achado ao preparar a VOZ-05 fatia 4.** A transcrição de chamada só serve à qualidade se chegar ao
+`ReplayContext.events`, que o `agente_avaliacao_v1` recebe inteiro. Para escolher onde a fala
+aterrissaria, mediu-se o caminho da mensagem DIGITADA, e ela não chegava.
+
+**Medido antes.**
+- Postgres (`session_stream_events`): 1 276 mensagens com autor nulo e payload `{}`; o mesmo texto
+  existia no ClickHouse.
+- Das 252 sessões fechadas em 7 dias com mensagem no ClickHouse, **4** íntegras no que o avaliador
+  lê: **70** sem nada persistido e **178** persistidas sem nenhum texto do cliente.
+- Ao vivo, `probe_replay_customer_text.sh`: A1 vermelho (resposta de formulário ausente), com o
+  controle A0 verde (mensagens do agente persistidas com texto).
+
+**Duas causas empilhadas, as duas no bridge.**
+1. **Formato.** As duas casas que gravam a mensagem do cliente no stream (caminho humano e resposta
+   a menu de IA) usavam só os campos flat (`author_role`, `content`). O Stream Persister e o
+   replayer leem `author` e `payload`. O SSE do supervisor aceitava os dois formatos, e por isso o
+   Monitor mostrava o cliente e ninguém desconfiou.
+2. **Fechamento.** No `contact_closed` do lado do cliente, o bridge fazia `DEL` do stream; o
+   persister só roda no `conversations.session_closed`, publicado depois. Sessão humana saiu com
+   `0 events persisted`; na de IA sobreviveu só o que o fluxo escreveu DEPOIS do `DEL` — a resposta
+   do cliente, anterior, sumiu. Trocar só o formato não moveria o número dessas sessões.
+
+**Conserto.**
+- `customer_message_stream_fields` (casa única) grava o layout do `writeStreamEntry`, com o texto já
+  redigido por `redact_customer_reply`.
+- `retire_session_stream`: o fechamento dá ao stream `EXPIRE` de 1 h em vez de `DEL`. Um prazo, não
+  a ausência dele: medido, o único stream vivo no Redis estava SEM TTL, porque vários escritores não
+  põem.
+- **A segunda metade tinha um efeito no gateway.** A reconexão com cursor a uma sessão encerrada
+  descobria o fim pelo SUMIÇO do stream (`StreamExpiredError` → `conn.session_ended`). Com a
+  carência, ficaria pendurada numa sessão morta. O `StreamSubscriber` passou a decidir pelo marcador
+  `session:{id}:closed`, o mesmo que o webchat já usa para não rerotear.
+
+**Testemunhas.**
+- 12 unitários no bridge (layout igual ao do `writeStreamEntry`, leitura como o persister faz, todo
+  campo string e visibilidade em JSON, fechamento sem `DEL`) e 2 no gateway.
+- 8 mutações, 8 mortas. A visibilidade crua sobreviveu na primeira bateria — a emulação do leitor
+  aceitava string e lista Python — e ganhou o caso próprio.
+- Suítes: bridge 168 verdes, gateway 1 072.
+- Ao vivo: A0–A3 e H0–H2 verdes. Mutação no bridge vivo, as duas metades: formato antigo → **A1, A2,
+  H1, H2** vermelhos (linhas vazias de novo); `DEL` de volta → **A1** vermelho e **H0** *"o persister
+  rodou e achou o stream VAZIO"*. Restaurado pela imagem, verde.
+
+⚠️ **Dois erros de instrumento, os dois pegos antes de virar resposta.**
+- O primeiro teste do marcador ficou em laço: a guarda lia `self._session_id`, que a classe não tem,
+  e o `except Exception` largo a desligava muda. No produto seria a reconexão pendurada que ela
+  existia para evitar. Hoje a chave nasce no `__init__` e a falha de leitura loga o que deixa de valer.
+- O H0 tratava *"sessão não persistida"* como INCONCLUSIVO, e era exatamente o defeito. Passou a ler
+  o log do persister: rodou e achou vazio é FALHA. A testemunha de caminho humano, lida em
+  `human_agents` depois do fechamento, não provava nada; agora é a linha do bridge que encaminhou o
+  texto ao humano.
+
+**Ambiente.** Depois do reboot da máquina, `agent-registry` (perdeu a corrida com o Postgres),
+`mcp-server-plughub` e `platform-ui` estavam parados e havia zero instâncias; o probe saiu
+INCONCLUSIVO nos dois ramos, e não verde por ausência. Subidos, e o bridge reiniciado para
+reconciliar (310 instâncias).
+
+**Fora desta entrega.** O histórico já persistido continua sem o cliente — `RPL-02`, adiada com
+gatilho (backfill a partir do ClickHouse reescreveria evidência de avaliação já emitida).
+
 ## 2026-09-15 (28) — AGH-02: o reinício do mcp-server não deixa agente humano fantasma no pool
 
 **Medido ao vivo antes** (`probe_agent_ws_restart_ghost.sh`, pool fixture `probe_agh02`). Dois agentes

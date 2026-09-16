@@ -436,6 +436,12 @@ probe_webrtc_tts_spoken.sh
 # webchat, a pre-condicao (sessao sem customer_id), o controle (senha invalida recusada) e a senha
 # valida verificada, sem -32602 no log.
 probe_invoke_absent_ref.sh
+# RPL-01. O avaliador de qualidade nao via o que o CLIENTE escreveu: o bridge gravava a mensagem
+# dele no stream so com campos flat (persister e replayer leem author/payload) e apagava o stream
+# no fechamento antes de o persister copia-lo. Mede, num contato de IA (formulario) e num humano
+# (texto livre), a linha persistida com autor customer e texto, nenhuma linha vazia e a senha fora;
+# persister que roda e acha o stream vazio e FALHA, nao inconclusivo.
+probe_replay_customer_text.sh
 # VOZ-03. `voice.py` chamava SEIS metodos que nao existiam em lugar nenhum do MRO --
 # medido contra a IMAGEM, nao contra o fonte. O caminho de ENTRADA inteiro do canal de
 # voz nunca publicou nada: transcricao de STT, evento de gravacao e resultado de coleta

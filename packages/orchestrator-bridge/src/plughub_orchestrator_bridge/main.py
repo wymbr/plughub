@@ -460,6 +460,54 @@ async def resolve_session_tenant(redis_client, session_id: str) -> str:
     return valor or os.environ.get("PLUGHUB_TENANT_ID", "tenant_demo")
 
 
+def customer_message_stream_fields(
+    *,
+    event_id:   str,
+    timestamp:  str,
+    author_id:  str,
+    text:       str,
+    visibility: str | list[str],
+) -> dict[str, str]:
+    """Entrada de stream da mensagem do CLIENTE no layout CANÔNICO (RPL-01).
+
+    O mesmo layout do `writeStreamEntry` do mcp-server: campos flat de autor, `author` JSON,
+    `visibility` JSON, `segment_id` e `payload` JSON com `content.text`. O bridge gravava só os
+    flat (`author_role`, `content`), e os dois leitores que alimentam o avaliador de qualidade —
+    Stream Persister e replayer — leem `author` e `payload`: a linha saía com autor nulo e
+    payload `{}`. Medido em 2026-09-16: 1 276 mensagens assim, e o avaliador nunca via o cliente.
+    O SSE do supervisor lê os dois formatos, então nada o perde.
+
+    `text` já chega REDIGIDO (`redact_customer_reply`); esta função não decide mascaramento.
+    """
+    return {
+        "event_id":    event_id,
+        "type":        "message",
+        "timestamp":   timestamp,
+        "author_id":   author_id,
+        "author_role": "customer",
+        "author":      json.dumps({"participant_id": author_id, "instance_id": author_id,
+                                   "role": "customer"}),
+        "visibility":  json.dumps(visibility),
+        "segment_id":  "",
+        "payload":     json.dumps({"message_id": event_id,
+                                   "content": {"type": "text", "text": text},
+                                   "text": text}, ensure_ascii=False),
+    }
+
+
+# Carência do stream depois do fechamento do contato (RPL-01). O `DEL` imediato corria contra o
+# Stream Persister, que só roda no `conversations.session_closed` publicado DEPOIS: medido em
+# 2026-09-16, sessão humana com `0 events persisted` e sessão de IA sem a resposta do cliente
+# (apagada antes, e só o que o fluxo escreveu depois sobreviveu). Uma hora cobre o persister e o
+# replay da avaliação imediata; a chave continua tendo fim — vários escritores não põem TTL.
+STREAM_CLOSE_GRACE_S = 3_600
+
+
+async def retire_session_stream(redis_client, session_id: str) -> None:
+    """Aposenta o stream de um contato encerrado: EXPIRE com carência, nunca DEL."""
+    await redis_client.expire(f"session:{session_id}:stream", STREAM_CLOSE_GRACE_S)
+
+
 def redact_customer_reply(
     reply_text: str,
     *,
@@ -7670,10 +7718,10 @@ async def process_contact_event(
             # naturally by TTL (4h) or by the re-entry after hooks complete.
             if not _hooks_pending:
                 try:
-                    await redis_client.delete(
-                        f"session:{session_id}:messages",
-                        f"session:{session_id}:stream",
-                    )
+                    await redis_client.delete(f"session:{session_id}:messages")
+                    # O stream NÃO é apagado: o persister e o replay da avaliação o leem
+                    # depois deste ponto (RPL-01). Ver `retire_session_stream`.
+                    await retire_session_stream(redis_client, session_id)
                     logger.debug("Message data cleared: session=%s", session_id)
                 except Exception as exc:
                     logger.warning(
@@ -9720,15 +9768,13 @@ async def process_inbound(
                 stream_key_human = f"session:{session_id}:stream"
                 await redis_client.xadd(
                     stream_key_human,
-                    {
-                        "event_id":    event.get("message_id", str(uuid.uuid4())),
-                        "type":        "message",
-                        "timestamp":   event.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                        "author_id":   author.get("id") or contact_id or "customer",
-                        "author_role": "customer",
-                        "visibility":  visibility,
-                        "content":     json.dumps({"text": display_text}),
-                    },
+                    customer_message_stream_fields(
+                        event_id   = event.get("message_id", str(uuid.uuid4())),
+                        timestamp  = event.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                        author_id  = author.get("id") or contact_id or "customer",
+                        text       = display_text,
+                        visibility = visibility,
+                    ),
                 )
                 await redis_client.expire(stream_key_human, _stl())  # 4h TTL
             except Exception as _xadd_exc:
@@ -9865,15 +9911,13 @@ async def process_inbound(
                 try:
                     await redis_client.xadd(
                         stream_key,
-                        {
-                            "event_id":    msg.get("message_id", str(uuid.uuid4())),
-                            "type":        "message",
-                            "timestamp":   msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                            "author_id":   author.get("id") or contact_id or "customer",
-                            "author_role": "customer",
-                            "visibility":  _ai_stream_vis,
-                            "content":     json.dumps({"text": _ai_stream_display}),
-                        },
+                        customer_message_stream_fields(
+                            event_id   = msg.get("message_id", str(uuid.uuid4())),
+                            timestamp  = msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                            author_id  = author.get("id") or contact_id or "customer",
+                            text       = _ai_stream_display,
+                            visibility = _ai_stream_vis,
+                        ),
                     )
                     await redis_client.expire(stream_key, _stl())
                     logger.debug(

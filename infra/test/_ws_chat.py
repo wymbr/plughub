@@ -105,6 +105,11 @@ async def main() -> int:
     contact_id = sys.argv[3]
     rules      = json.loads(sys.argv[4])
     hold_s     = float(sys.argv[5]) if len(sys.argv) > 5 else 60.0
+    # Fala ESPONTÂNEA do cliente, sem prompt que a provoque (atendimento humano não pergunta
+    # por `interaction.request`): `[{"after_s": 8, "text": "..."}]`, contado da autenticação.
+    # Imprime `SAID | <texto>`. Opcional — sem o 6º argumento o cliente só responde.
+    falas      = sorted(json.loads(sys.argv[6]), key=lambda f: f["after_s"]) if len(sys.argv) > 6 else []
+    authed_at: float | None = None
 
     secret = await resolve_secret(tenant)
     token = pyjwt.encode(
@@ -125,12 +130,24 @@ async def main() -> int:
         async with websockets.connect(url, open_timeout=15) as ws:
             deadline = asyncio.get_event_loop().time() + hold_s
             while True:
-                remaining = deadline - asyncio.get_event_loop().time()
+                agora     = asyncio.get_event_loop().time()
+                remaining = deadline - agora
                 if remaining <= 0:
                     break
+                espera = remaining
+                if falas and authed_at is not None:
+                    quando = authed_at + float(falas[0]["after_s"])
+                    if quando <= agora:
+                        fala = falas.pop(0)
+                        await ws.send(json.dumps({"type": "msg.text", "text": fala["text"]}))
+                        print(f"SAID | {fala['text']}", flush=True)
+                        continue
+                    espera = min(espera, quando - agora)
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=espera)
                 except asyncio.TimeoutError:
+                    if espera < remaining:
+                        continue          # acordou para falar, não para encerrar
                     break
                 except websockets.exceptions.ConnectionClosed:
                     print("CLOSED_BY_SERVER", flush=True)
@@ -145,6 +162,7 @@ async def main() -> int:
                     await ws.send(json.dumps({"type": "conn.authenticate", "token": token}))
                 elif mtype == "conn.authenticated":
                     authed = True
+                    authed_at = asyncio.get_event_loop().time()
                     print(f"AUTHENTICATED session_id={msg.get('session_id', '')}", flush=True)
                 elif mtype == "conn.ping":
                     await ws.send(json.dumps({"type": "conn.pong"}))

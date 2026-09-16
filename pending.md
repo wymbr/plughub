@@ -529,6 +529,17 @@ lia. É o defeito que este ledger existe para não repetir.
 
 ---
 
+## `docs/arcos/session-replayer.md` — o que o avaliador de qualidade lê
+
+Grupo aberto em 2026-09-16 ao preparar a VOZ-05 fatia 4: a transcrição de chamada só vale para a
+qualidade se chegar ao `ReplayContext.events`, e medir esse caminho achou o texto do cliente fora dele.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| RPL-02 | **O histórico já persistido continua sem o cliente.** A `RPL-01` conserta daqui para a frente; as linhas antigas de `session_stream_events` ficaram com autor nulo e payload `{}` (1 276 medidas em 2026-09-16) ou nem existem (sessões cujo stream foi apagado antes do persister: 70 das 252 com mensagem em 7 dias), e o stream de Redis delas já expirou. O texto sobrevive no ClickHouse (`messages`, autor e hora por mensagem), então um backfill é POSSÍVEL, mas reescreve evidência de avaliação já emitida e mistura duas fontes num mesmo `ReplayContext` — é decisão, não manutenção. **Gatilho:** reavaliação de sessão anterior a 2026-09-16 pedida pelo módulo de qualidade (quality-export) ou contestação que dependa do que o cliente escreveu | `adiado` | `CHANGELOG.md` § 2026-09-16 (1) |
+
+---
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 4.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho

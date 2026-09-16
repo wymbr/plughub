@@ -68,7 +68,8 @@ async def collect(subscriber: StreamSubscriber, n: int) -> list[dict]:
     return results
 
 
-def make_subscriber(xread_fn, cursor: str = "0", stream_exists: bool = True) -> StreamSubscriber:
+def make_subscriber(xread_fn, cursor: str = "0", stream_exists: bool = True,
+                    session_closed: bool = False) -> StreamSubscriber:
     from unittest.mock import AsyncMock
     import redis.asyncio as aioredis
 
@@ -77,6 +78,9 @@ def make_subscriber(xread_fn, cursor: str = "0", stream_exists: bool = True) -> 
     # XRANGE returns a non-empty list when the stream exists, empty list when it doesn't.
     # count=1 probe used in messages() to detect expired streams atomically.
     redis.xrange = AsyncMock(return_value=[("fake-entry",)] if stream_exists else [])
+    # ⚠️ Explícito: o `exists` de um AsyncMock devolve MagicMock, que é TRUTHY — toda sessão
+    # pareceria encerrada e a reconexão válida quebraria pelo motivo errado.
+    redis.exists = AsyncMock(return_value=1 if session_closed else 0)
     return StreamSubscriber(redis=redis, session_id=SESSION_ID, cursor=cursor)
 
 
@@ -493,6 +497,33 @@ class TestStreamExpired:
         with pytest.raises(StreamExpiredError):
             async for _ in s.messages():
                 pass  # não deve chegar aqui
+
+    async def test_raises_when_session_closed_even_if_stream_still_exists(self):
+        """
+        RPL-01: o stream sobrevive 1 h ao fechamento (para o persister e a avaliação). A
+        reconexão a uma sessão ENCERRADA tem de terminar do mesmo jeito que terminava quando
+        o stream era apagado — pelo marcador `session:{id}:closed`.
+        """
+        from plughub_channel_gateway.stream_subscriber import StreamExpiredError
+
+        s = make_subscriber(make_xread(), cursor="1234-0", stream_exists=True, session_closed=True)
+
+        with pytest.raises(StreamExpiredError):
+            async for _ in s.messages():
+                pass
+        s._redis.exists.assert_awaited_once_with(f"session:{SESSION_ID}:closed")
+
+    async def test_closed_marker_not_checked_on_new_connection(self):
+        """Cursor "0" (conexão nova) não consulta o marcador — igual à sonda do stream."""
+        s = make_subscriber(make_xread(), cursor="0", stream_exists=True, session_closed=True)
+        task = asyncio.create_task(collect(s, 1))
+        await asyncio.sleep(0.02)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        s._redis.exists.assert_not_awaited()
 
     async def test_cursor_zero_does_not_check_exists(self):
         """

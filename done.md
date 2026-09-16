@@ -348,6 +348,14 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 |---|---|---|---|
 | MEN-03 | **O aviso do gate de @mention apontava para a casa ABANDONADA do campo.** Dizia 'hash `{t}:agent:instance:{id}` sem campo `role`', mas `resolveParticipantRole` le o ROSTER `session:{id}:participants` desde a Fatia B do §1055 — o hash citado tem 0 de 5 com o campo, nenhum escritor e nenhum leitor. Mensagem que nomeia a casa errada custa a mesma investigacao que a ausencia de mensagem, com a agravante de parecer pista. O aviso tambem deixou de re-diagnosticar: o resolvedor ja loga `[role]` com o motivo especifico (roster ausente x participante fora do roster), e duas explicacoes para a mesma falha fazem a generica vencer. O comentario do gate, que prometia a mesma casa errada, foi corrigido junto e passou a registrar o achado MEN-01 (o gate testa `primary`, que e POSICAO e nao especie) | 2026-09-04 | `CHANGELOG.md` § 2026-09-04 CNS-20/MEN-03 |
 
+## `docs/arcos/session-replayer.md` — o que o avaliador de qualidade lê
+
+| id | tarefa | fechada em | âncora |
+|---|---|---|---|
+| RPL-01 | **O avaliador de qualidade passa a ver o que o CLIENTE escreveu.** Medido: das 252 sessões fechadas em 7 dias com mensagem, 4 íntegras no que o avaliador lê — 70 sem nada persistido e 178 persistidas sem o cliente. Duas causas empilhadas no bridge: a mensagem do cliente ia ao stream só com campos flat, que o Stream Persister e o replayer não leem (linha com autor nulo e payload `{}`), e o `DEL` do stream no fechamento vencia a corrida contra o persister (`0 events persisted`). Hoje: layout canônico do `writeStreamEntry` numa casa só (`customer_message_stream_fields`) e o stream fica 1 h depois do fechamento; o gateway decide *sessão encerrada* pelo marcador `session:{id}:closed`, não pelo sumiço do stream. Gate `probe_replay_customer_text.sh` (ramos IA e humano), mutação ao vivo nas duas metades; 14 unitários, 8 mutações mortas. Histórico: `RPL-02` | 2026-09-16 | `CHANGELOG.md` § 2026-09-16 (1) |
+
+---
+
 ## `sem-demanda`
 
 | id | tarefa | data | âncora no `CHANGELOG.md` |

@@ -89,6 +89,7 @@ class StreamSubscriber:
     ) -> None:
         self._redis      = redis
         self._stream_key = f"session:{session_id}:stream"
+        self._closed_key = f"session:{session_id}:closed"
         self._cursor     = cursor
         self._customer_participant_id = customer_participant_id
 
@@ -127,6 +128,26 @@ class StreamSubscriber:
             if not probe:
                 raise StreamExpiredError(
                     f"stream {self._stream_key} not found — session may have ended"
+                )
+            # RPL-01: o stream deixou de ser apagado no fechamento (fica 1 h para o persister e a
+            # avaliação lerem), então "o stream existe" não diz mais "a sessão está viva". O fato
+            # de encerramento é o marcador que o fechamento grava — a mesma guarda que o webchat
+            # já usa para não rerotear na reconexão.
+            try:
+                encerrada = await self._redis.exists(self._closed_key)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                # Nunca mudo: sem esta leitura, reconexão a sessão encerrada fica pendurada
+                # até a carência do stream vencer, em vez de receber session_ended.
+                logger.warning(
+                    "stream_subscriber: marcador %s ilegivel (%s) — reconexao a sessao "
+                    "encerrada NAO sera detectada ate o stream expirar", self._closed_key, exc,
+                )
+                encerrada = 0
+            if encerrada:
+                raise StreamExpiredError(
+                    f"{self._closed_key} presente — stream mantido so para persistencia"
                 )
 
         while True:
