@@ -75,6 +75,10 @@ import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-f
 import { decideLedgerRehydration, type LedgerCandidate } from "./lib/ledger-rehydration"
 import { decideFormTaskClose }  from "./lib/form-task-close"
 import { poolsDaSessao, type ScopeRedis } from "./lib/session-scope"
+import {
+  HUMAN_LIVENESS_TTL_S, HUMAN_SWEEP_INTERVAL_MS, livenessKey, sweepAllowed, sweepHumanGhosts,
+  type LeaveStatus, type SweepRedis,
+} from "./lib/human-liveness"
 // Política de máscara do ContextStore — UMA casa, importada pelas duas portas
 // (este endpoint HTTP e o tool MCP `supervisor_state`). Ver o cabeçalho de
 // `lib/context-masking.ts`: viviam aqui, alcançáveis só de dentro deste arquivo,
@@ -572,6 +576,13 @@ async function registerHumanAgent(
 
   let mergedPools: string[] = [poolId]
   let existingCurrentSessions = 0
+  // AGH-02 — a conexão viva é afirmada ANTES da entrada no pool: um varredor que rodasse entre
+  // as duas escritas acharia instância sem liveness e a tiraria do pool recém-entrado.
+  try {
+    await redis.set(livenessKey(tenantId, instanceId, poolId), "1", "EX", HUMAN_LIVENESS_TTL_S)
+  } catch (e) {
+    console.warn(`[agent-ws] liveness nao gravada no login instance=${instanceId} pool=${poolId} — o varredor reafirma pela conexao local:`, e)
+  }
   try {
     const raw = await redis.eval(
       LUA_JOIN_POOL, 1, `${tenantId}:instance:${instanceId}`,
@@ -665,7 +676,11 @@ async function unregisterHumanAgent(
   userId: string,
   redis:  import("ioredis").default,
   kafka:  { publish: (topic: string, payload: Record<string, unknown>) => Promise<void> },
-): Promise<void> {
+  // AGH-02 — o varredor passa a chave de liveness do par (instância, pool): se ela existir no
+  // instante do script, a conexão voltou e a saída NÃO acontece (`alive`). O `close` não passa:
+  // ali a conexão acabou de fechar e a chave ainda vale até o TTL.
+  guardKey?: string,
+): Promise<LeaveStatus> {
   const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
   const instanceId = userId ? `human-${userId}` : `human-${poolId}`
   const now        = new Date().toISOString()
@@ -716,6 +731,9 @@ async function unregisterHumanAgent(
   // atômico no Redis, então a decisão "sobrou alguém?" passa a ser tomada sobre o
   // estado real no instante da escrita, não sobre o que este chamador viu antes.
   const LUA_LEAVE_POOL = `
+    if KEYS[2] and redis.call('EXISTS', KEYS[2]) == 1 then
+      return cjson.encode({status='alive'})
+    end
     local raw = redis.call('GET', KEYS[1])
     if not raw then return cjson.encode({status='absent'}) end
     local ok, inst = pcall(cjson.decode, raw)
@@ -740,7 +758,7 @@ async function unregisterHumanAgent(
   `
 
   type LeaveResult = {
-    status:    "absent" | "corrupt" | "no_membership" | "full_logout" | "partial"
+    status:    LeaveStatus
     all?:      string[]
     remaining?: string[]
     sessions?: number
@@ -748,13 +766,18 @@ async function unregisterHumanAgent(
 
   let result: LeaveResult = { status: "corrupt" }
   try {
-    const raw = await redis.eval(
-      LUA_LEAVE_POOL, 1, `${tenantId}:instance:${instanceId}`, poolId,
+    const raw = (guardKey
+      ? await redis.eval(LUA_LEAVE_POOL, 2, `${tenantId}:instance:${instanceId}`, guardKey, poolId)
+      : await redis.eval(LUA_LEAVE_POOL, 1, `${tenantId}:instance:${instanceId}`, poolId)
     ) as string
     result = JSON.parse(raw) as LeaveResult
   } catch (e) {
     console.error(`[unregister] EVAL falhou — nenhuma alteração no registro:`, e)
-    return
+    return "corrupt"
+  }
+  if (result.status === "alive") {
+    console.log(`[unregister] ABORTADO pool=${poolId} instance=${instanceId} — a conexao voltou (liveness presente no instante da saida)`)
+    return "alive"
   }
 
   const allPools       = result.all ?? []
@@ -784,7 +807,7 @@ async function unregisterHumanAgent(
       `[unregister] membership NÃO utilizável (${result.status}) para instance=${instanceId} ` +
       `(pool=${poolId}) — NÃO trato como full logout e NÃO deleto o registro.`
     )
-    return
+    return result.status
   }
 
   if (result.status === "full_logout") {
@@ -850,6 +873,7 @@ async function unregisterHumanAgent(
       `remaining pools=${remainingPools.join(",")} instance=${instanceId}`
     )
   }
+  return result.status
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3665,6 +3689,30 @@ export async function startServer(config: ServerConfig): Promise<void> {
   const hasLiveConnection = (user: string, pool: string) =>
     (liveConnections.get(connKey(user, pool)) ?? 0) > 0
 
+  // ── AGH-02 — varredor de agente humano sem conexão viva ───────────────────
+  //
+  // O `close` acima só existe quando o socket FECHA neste processo. Reinício do mcp-server
+  // derruba todos sem `close`, e a instância ficava `ready` para sempre. O varredor sai pelo
+  // mesmo `unregisterHumanAgent`, com a liveness como guarda dentro do script. Detalhe e
+  // decisões em `lib/human-liveness.ts`.
+  const humanSweepBootAt = Date.now()
+  let humanSweepRunning = false
+  const humanSweepTimer = setInterval(() => {
+    if (humanSweepRunning || !sweepAllowed(humanSweepBootAt, Date.now())) return
+    humanSweepRunning = true
+    sweepHumanGhosts({
+      redis:    redis as unknown as SweepRedis,
+      kafka,
+      tenantId: process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo",
+      hasLiveConnection,
+      leave:    (pool, user, guard) => unregisterHumanAgent(pool, user, redis, kafka, guard),
+      log:      (line) => console.warn(line),
+    })
+      .catch((e) => console.error(`[human-sweep] varredura falhou — fantasmas seguem no pool ate a proxima:`, e))
+      .finally(() => { humanSweepRunning = false })
+  }, HUMAN_SWEEP_INTERVAL_MS)
+  humanSweepTimer.unref()
+
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "", `http://${request.headers.host}`)
     console.log(`[upgrade] method=${request.method} pathname=${url.pathname} host=${request.headers.host} upgrade=${request.headers.upgrade}`)
@@ -3722,6 +3770,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // C1 — human login (email) for analytics identity, denormalized onto the segment.
     const userLogin           = url.searchParams.get("user_login") ?? ""
     const maxConcurrentSessions = Math.max(1, parseInt(url.searchParams.get("max_concurrent") ?? "3", 10))
+    // AGH-02 — cada pong (de aplicação OU de protocolo) reafirma que ESTA conexão está viva
+    // neste pool. É o que o varredor lê; o `close` deixou de ser a única prova de saída.
+    const renewLiveness = () => {
+      if (!poolId) return
+      redis.set(
+        livenessKey(process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo", `human-${userId || poolId}`, poolId),
+        "1", "EX", HUMAN_LIVENESS_TTL_S,
+      ).catch((e) => console.warn(`[agent-ws] liveness nao renovada pool=${poolId} user=${userId}:`, e))
+    }
     console.log(`[agent-ws] New WebSocket connection: pool=${poolId} user=${userId || "(legacy)"} max_concurrent=${maxConcurrentSessions} from=${request.socket.remoteAddress}`)
 
     // All sessions currently subscribed on this WebSocket connection.
@@ -4253,6 +4310,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         if (msg["type"] === "pong" && poolId) {
           const tenantId   = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
           const instanceId = userId ? `human-${userId}` : `human-${poolId}`
+          renewLiveness()
           // Carry the real status so a paused agent stays paused in routing across
           // heartbeats (otherwise the default "ready" silently resumes them).
           let hbStatus = "ready"
@@ -4681,7 +4739,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // conexão morta → ws.terminate() dispara ws.on('close') → grace → agent_disconnect
     // (heartbeat Slice 1) → re-rota. O {type:"ping"} app-level é mantido (o Console pode usá-lo).
     let isAlive = true
-    ws.on("pong", () => { isAlive = true })
+    ws.on("pong", () => { isAlive = true; renewLiveness() })
     const pingInterval = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) return
       if (!isAlive) {
@@ -4747,6 +4805,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
             )
             return
           }
+          // A conexão acabou: a afirmação de que ela existe sai junto, senão sobrevive até o TTL.
+          redis.del(livenessKey(process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo", `human-${userId || poolId}`, poolId))
+            .catch(() => {/* o TTL a leva de qualquer jeito */})
           unregisterHumanAgent(poolId, userId, redis, kafka).catch((err) =>
             console.error(`[agent-ws] unregisterHumanAgent pool=${poolId} user=${userId}:`, err)
           )

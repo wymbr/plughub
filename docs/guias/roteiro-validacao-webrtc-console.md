@@ -32,10 +32,10 @@ Console (`packages/platform-ui/package-lock.json`) e o do widget (versão exata 
 v1.8.4 e clientes 2.20/2.22 o vídeo não publicava e a chamada reconectava a cada 15 s — texto e
 entrada na sala funcionavam, então **só este roteiro pega isso**. Mudou uma das três, repita-o.
 
-⚠️ **Se o mcp-server foi recriado com o Console aberto, recarregue o Console (Ctrl+F5) antes de
-começar** (`AGH-02`): o reinício derruba o socket sem desregistrar o agente, e a instância antiga
-fica pronta nos pools recebendo contato no lugar do agente real. *(A troca rápida de usuário no
-mesmo pool, que causava o mesmo sintoma, foi corrigida na `AGH-01`.)*
+⚠️ **Se o mcp-server acabou de ser recriado, espere ~2 min antes de começar** (`AGH-02`): o
+reinício derruba o socket sem `close`, e a instância de quem não voltou só sai dos pools quando a
+prova de vida vence (90 s) e o varredor passa. O Console aberto reconecta sozinho e não é afetado.
+*(A troca rápida de usuário no mesmo pool, que causava o mesmo sintoma, foi corrigida na `AGH-01`.)*
 
 ---
 

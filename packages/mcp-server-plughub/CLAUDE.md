@@ -97,9 +97,13 @@ Default port: 3100.
   motivo. `session_id` de reconexão só é assinado se o agente está em `session:{id}:human_agents`.
   Gate: `infra/test/probe_agent_ws_credential.sh` (inclui o controle pela borda COM credencial —
   sem ele, um proxy que descartasse o subprotocolo passaria no teste e derrubaria o Console).
-- ⚠️ **O desregistro do agente humano só roda no `close` do socket** — o timer de 2,5 s é por
-  (usuário, pool) desde a AGH-01, mas processo recriado derruba sockets sem `close` e deixa as
-  instâncias `ready` sem TTL (`AGH-02`, aberta).
+- **O agente humano sai do pool por DOIS caminhos, e só um é o `close`** (AGH-02, 2026-09-15). O
+  timer de 2,5 s do `close` é por (usuário, pool) desde a AGH-01; o segundo é o varredor
+  (`lib/human-liveness.ts`), porque processo recriado derruba sockets sem `close`. A prova de vida é
+  `{t}:human_liveness:{iid}:{pool}` (TTL 90 s), escrita no login e nos pongs de aplicação e de
+  protocolo; sem ela, o varredor sai pelo mesmo `unregisterHumanAgent`, com a chave relida dentro
+  do Lua. ⚠️ **Não pôr TTL na chave da instância** — já sumiu agente conectado assim (2026-07-28).
+  Gate assistido: `infra/test/probe_agent_ws_restart_ghost.sh`.
 - session_id is mandatory in all Agent Runtime tools
 - tenant_id is inferred from the JWT — never from the request body
 

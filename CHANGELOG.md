@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-15 (28) — AGH-02: o reinício do mcp-server não deixa agente humano fantasma no pool
+
+**Medido ao vivo antes** (`probe_agent_ws_restart_ghost.sh`, pool fixture `probe_agh02`). Dois agentes
+headless com a credencial do Console; G atende um cliente webchat; o mcp-server é reiniciado; L
+reconecta e segura o socket 150 s. Depois da janela: **G1** G seguia com a chave da instância e
+`TTL -1`; **C1** o contato seguia em `session:{sid}:human_agents` do fantasma, sem ninguém do outro
+lado. Os controles (L continua instância, o socket de L não caiu) verdes na mesma rodada.
+
+**Por que não TTL na chave da instância.** Já foi feito e desfeito: sem renovação confiável, o
+agente CONECTADO sumia do roteamento sem DEL nenhum (2026-07-28, comentário do `LUA_JOIN_POOL`). A
+permanência continua afirmada pelo login. O que ganha TTL é um fato separado e menor, *há conexão
+viva desta instância neste pool*: `{t}:human_liveness:{iid}:{pool}`, 90 s (três ciclos do ping de
+30 s), escrito no login (antes da entrada no pool) e nos pongs de aplicação e de protocolo, e
+apagado no `close`.
+
+**O varredor** (`lib/human-liveness.ts`, a cada 15 s, com carência de boot de um TTL para os
+Consoles derrubados pelo reinício voltarem). Por par (instância, pool) sem liveness:
+- **se há conexão viva NESTE processo**, reafirma a chave e loga (a renovação falhou, não é fantasma);
+- **senão sai pelo MESMO `unregisterHumanAgent` do `close`**, que ganhou uma guarda: o `LUA_LEAVE_POOL`
+  relê a liveness DENTRO do script e devolve `alive` se a conexão voltou entre a leitura e a escrita;
+- **só depois de sair** publica `contact_closed(agent_disconnect)` para as sessões do semáforo
+  servidas NAQUELE pool (3º campo do membro) em que o humano ainda está, pelo mesmo critério do
+  `close`. A vaga de wrap-up não é contato.
+
+**Ficou no mcp-server, não no reconcile do routing que a ficha sugeria**: ele é o dono do ciclo de
+vida do registro humano e da prova de vida (o pong mora nele), e o `crash_detector` do routing pula
+`human-*` de propósito. A liveness em Redis vale entre réplicas; o contador `liveConnections`, que é
+por processo, virou só o cinto de segurança.
+
+**Testemunhas.** 11 unitários (`human-liveness.test.ts`: fantasma sai com a guarda, contato do pool
+desconectado, só a sessão do pool varrido e só se o humano está nela, liveness presente fica,
+conexão local reafirma, `alive` não publica, semáforo e IA não são instância, carência de boot,
+wrap-up) e 9 mutações, 9 mortas — a M8 (wrap-up vira contato) sobreviveu na primeira bateria, porque
+o `sismember` a filtrava depois, e ganhou o caso na função pura. Suíte do pacote 457/457, `tsc`
+limpo. Ao vivo, com a imagem: G1 · C1 · L1 · L2 · L3 verdes. Mutação no `dist` do container,
+duas direções: varredor desligado → **G1 e C1 vermelhos**, controles verdes; renovação desligada →
+**L3 vermelho** (o varredor reafirmou a liveness de L uma vez), o resto verde. Restaurado pela
+imagem, verde de novo.
+
+⚠️ **A primeira mutação da renovação sobreviveu a TODOS os ramos, e estava certa em sobreviver.** Com os pongs sem
+renovar nada, a chave de L venceu e o varredor a reafirmou pelo cinto local: L seguiu instância e
+L1 ficou verde. Numa réplica só o cinto mascara a renovação quebrada, e o L1 media *"L continua"*,
+não *"os pongs sustentam L"*. Daí o **L3**: o log do varredor não pode ter reafirmado L. ⚠️ E o C0
+saiu INCONCLUSIVO numa rodada por corrida do próprio probe: o cliente chegou com L0 ainda na graça
+de 2,5 s, foi para L e só voltou a G depois da espera; o probe agora espera L0 sair do pool.
+
+**Achado à parte, registrado como `AGH-03`.** `remove_conversation` só solta a vaga do semáforo se o
+registro da instância existe, e os dois caminhos de desregistro o apagam antes do `agent_released`
+chegar. Medido: 3 semáforos órfãos em 3 — um deles de L, que saiu pelo `close` normal, então é
+anterior a esta entrega. Dano limitado, porque o `reap_stale_occupants` recupera a vaga quando a
+sessão fecha.
+
 ## 2026-09-15 (27) — CTR-09: referência que não resolveu é argumento ausente, e a senha certa volta a passar
 
 **Medido ao vivo antes, pelo webchat, no pool `auth_form_ia`.** Cliente sem identidade resolvida
