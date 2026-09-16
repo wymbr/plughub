@@ -1,7 +1,8 @@
 # pending.md — trabalho ABERTO, agrupado por demanda
 
 > **Este arquivo é a lista de trabalho. `done.md` é o índice do que fechou.**
-> As regras vivem em `CLAUDE.md` § *Ledger de tarefas*; quem as impõe é
+> As regras vivem na skill `.claude/skills/task-ledger/` *(a § do `CLAUDE.md` que este ponteiro
+> citava foi apagada pela DOC-02 sem destino; restaurada lá em 2026-09-16)*; quem as impõe é
 > `infra/test/probe_task_ledger.sh`, não a boa vontade de quem edita.
 >
 > **Nasceu em 2026-08-31**, das frentes vivas validadas uma a uma contra o `CHANGELOG.md`.

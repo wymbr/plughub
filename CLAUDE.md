@@ -81,8 +81,16 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 O **índice anotado** de todo o acervo (arcos, guias, ADRs, specs — com uma linha dizendo o que cada
 um decide) vive em **[`docs/INDEX.md`](docs/INDEX.md) § *Índice anotado da arquitetura***. Ele saiu
 daqui em 2026-09-06 (DOC-02): eram 95 linhas de índice cobradas de **toda** sessão no boot, e já
-havia um portal de documentação — duas casas indexando o mesmo acervo. A convenção de qual pasta
-recebe o quê continua abaixo, porque é regra de onde ESCREVER, não catálogo do que existe.
+havia um portal de documentação — duas casas indexando o mesmo acervo.
+
+> ⚠️ **A mesma DOC-02 apagou, sem destino, as regras de onde ESCREVER** — ledger de tarefas,
+> onde registrar cada decisão, convenção de pastas e atualização de docs —, e este parágrafo dizia
+> que elas *"continuavam abaixo"*. Restauradas em 2026-09-16 na skill **`task-ledger`**
+> (`references/regras-originais.md` traz o texto exato de `76b272b0^`). O essencial, sempre carregado:
+> **título nunca afirma status** · **id `AAA-NN` único através de `pending.md` + `done.md`** ·
+> **fechar é MOVER** (`CHANGELOG.md` + `done.md` + doc, no mesmo commit) · **mudança no mecanismo de
+> conferência atualiza `docs/guias/conference-mechanics.md` § Histórico** · commit por caminho
+> explícito, nunca `git add -A` (há sessões paralelas na mesma árvore).
 
 Os quatro arquivos da raiz: **`CLAUDE.md`** (arquitetura viva, regras, invariantes, resumos) ·
 **`pending.md`** (trabalho ABERTO, por demanda) · **`done.md`** (índice do que fechou) ·
@@ -1643,7 +1651,7 @@ endereça **POOL** — invariante S4) + `campaign_delivery` (estado por-campanha
 > tempo todo — e a casa errada era a que o índice lia.
 >
 > **A lista de trabalho aberto é [`pending.md`](pending.md); o índice do que fechou é
-> [`done.md`](done.md).** As regras vivem em § *Ledger de tarefas* acima; quem as impõe é
+> [`done.md`](done.md).** As regras vivem na skill `task-ledger` (e em resumo na § *Onde a documentação mora*); quem as impõe é
 > `infra/test/probe_task_ledger.sh`, não a boa vontade de quem edita. Raciocínio e medição por assunto
 > ficam no `TODO.md`; o porquê de cada entrega, no `CHANGELOG.md`.
 >
