@@ -76,9 +76,9 @@ ele já mora em outro lugar, aponte para lá em vez de copiar.
   wsl.exe -d ubuntu -- bash -lc 'cd /home/a1/projects/plughub && python3 .claude/skills/claude-md-maintenance/scripts/check_claude_md.py'
   ```
 
-  - **ERRO**, que reprova: `orcamento` · `link-quebrado`.
+  - **ERRO**, que reprova: `orcamento` · `link-quebrado` (e as regras de skill do § 6).
   - **ATENÇÃO:** `arco-longo` · `status-check` · `historico` · `contagem`.
-  - `--selftest` prova que cada regra dispara e que os 5 casos limpos não disparam.
+  - `--selftest` prova que cada regra dispara e que os casos limpos não disparam.
   - Na primeira rodada (2026-09-16), a raiz deu 0 ERRO e 14 ATENÇÃO, incluindo Arc 7 com 47
     linhas, Arc 15 com 32 e ✅ nas seções D14 e Arc 19. **Não conserte o que não é seu no mesmo
     commit**: registre.
