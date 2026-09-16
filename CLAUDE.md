@@ -95,7 +95,9 @@ Os quatro arquivos da raiz: **`CLAUDE.md`** (arquitetura viva, regras, invariant
 continuam aqui. `testing-pattern` · `data-engineering` · `deployment` · `task-ledger` ·
 `security-boundaries` · `plughub-review` (com `scripts/scan_diff.py`, que varre só as linhas
 ADICIONADAS) · `skill-flow-authoring` · `platform-ui-change` · `claude-md-maintenance`. Critério da divisão: regra que tem de valer mesmo quando ninguém pede fica aqui;
-procedimento e caso medido vão para a skill.
+procedimento e caso medido vão para a skill. **Criar ou mudar uma skill** segue a
+`claude-md-maintenance` § 6: `name` igual à pasta, nome no índice acima e teste em sessão NOVA
+(canário e controle negativo) antes de dar como pronta.
 
 ---
 

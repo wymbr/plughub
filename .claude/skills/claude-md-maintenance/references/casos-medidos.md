@@ -24,6 +24,38 @@ Movido **na íntegra** em 2026-09-16. Lá ficou o alvo e um ponteiro para cá.
 casos medidos foram para as skills (1 778 → ~1 505). **O alvo não foi baixado**: isso é decisão do
 dono, e o § 5 da skill manda não subir nem descer o número por conta própria.
 
+## Como as 9 skills foram feitas — a base do § 6 (2026-09-16)
+
+- **Medição que corrigiu a skill antes do commit:**
+  - `deployment`: a afirmação *"arquivo novo precisa de `--no-cache`"* veio copiada de um comentário
+    do `rebuild-all.sh`. Medida de três formas, foi refutada, e o comentário também foi corrigido;
+  - `skill-flow-authoring`: o `curl` do validate mandava o YAML plano, mas o corpo é metadados +
+    `flow: {entry, steps}`;
+  - `platform-ui-change`: `npx tsc` saía `0` sem compilar o projeto. Trocado pelo `tsc` local com
+    contagem de arquivos.
+- **Testes em sessão nova:** canário e controle negativo nas 9 skills, mais sobreposição
+  (`platform-ui-change` + `security-boundaries`). Todos passaram. Três achados vieram das
+  próprias sessões de teste:
+  - a sessão de sobreposição achou a AUD-05;
+  - a de `claude-md-maintenance` refutou a premissa da pergunta (12 → 11 módulos);
+  - a de `plughub-review` achou 6 pontos no commit revisado.
+- **Defeitos registrados como ficha, não consertados:** TRF-01, ALW-20, PUI-01, SES-01, AIG-01,
+  SFE-01, AUT-57, AUD-05.
+- **Checagem de skills do `check_claude_md.py`:** a primeira rodada contra as skills reais deu 2
+  ERRO/ATENÇÃO, os dois **falsos positivos do verificador**:
+  - `deployment` "fora do índice", porque a regex exigia hífen no nome;
+  - `infra/tool-guard.ts` "sumiu", mas era atalho relativo a pacote e colidia com `infra/` da raiz.
+
+  Os dois viraram casos do `--selftest`. Um terceiro apareceu quando esta própria skill acrescentou
+  uma frase ao parágrafo do índice: com a regex afrouxada, o `` `name` `` da frase passou a contar
+  como skill. Agora só conta a lista separada por `·`, e o caso também está no selftest.
+- **Resultado:** 9 skills, 9 no índice, 93 caminhos conferidos (19 com `:linha`), 0 sumidos.
+  Mutação no CLAUDE.md real (tirar `task-ledger`, `plughub-review` e `claude-md-maintenance` do
+  índice) deixou o verificador VERMELHO nas três.
+- **Lição:** o selftest sintético passava antes de o verificador rodar contra o repositório real,
+  e só as rodadas reais acharam os três erros. Em uma delas, o `rc=0` que parecia verde era o shell
+  de fora comendo o `$?` (skill `deployment` § 5). Com script em arquivo, o código real era `1`.
+
 ## Afirmações que o CLAUDE.md fez e o código não sustentava
 
 Todos estes casos têm a correção registrada no próprio CLAUDE.md ou no ledger. O padrão se repete:

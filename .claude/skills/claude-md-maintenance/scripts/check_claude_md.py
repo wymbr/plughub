@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Confere o CLAUDE.md raiz e os CLAUDE.md de pacote contra as regras de manutenção.
+Confere o CLAUDE.md raiz, os CLAUDE.md de pacote e as skills de .claude/skills/ contra as
+regras de manutenção (as regras das skills estão no bloco "skills", mais abaixo).
 
 Uso (de dentro do WSL, na raiz do repositório):
     python3 .claude/skills/claude-md-maintenance/scripts/check_claude_md.py
@@ -79,6 +80,112 @@ def check_text(text: str, path: Path, repo: Path, is_root: bool) -> list[tuple[s
     return [(sev, rule, ln, f"{rel}: {msg}") for sev, rule, ln, msg in out]
 
 
+# ── skills ────────────────────────────────────────────────────────────────────
+#
+# ERRO     skill-nome      frontmatter sem `name`, ou `name` diferente da pasta
+# ERRO     skill-descricao frontmatter sem `description` (é ela que faz a skill carregar)
+# ERRO     skill-indice    skill que não está no índice do CLAUDE.md, ou índice citando skill inexistente
+# ATENÇÃO  caminho-sumiu   caminho citado (`packages/…`, `infra/…`, …) que não existe mais
+# ATENÇÃO  linha-alem      `arquivo:N` com N maior que o arquivo tem
+#
+# Caminho só é conferido se começa numa raiz conhecida; atalho declarado no próprio
+# arquivo (linha com "`pui/` = `packages/platform-ui/`") é expandido. Placeholder
+# (`<id>`, `*`, `{`, `…`) é ignorado. Nome sem diretório (`routes.tsx:12`) não é
+# conferido: ambíguo, e adivinhar o arquivo seria medir outra coisa.
+
+ROOTS = ("packages/", "infra/", "docs/", "scripts/", ".claude/")
+RE_ALIAS = re.compile(r"`([\w.-]+/)`\s*=\s*`([\w./-]+/)`")
+RE_PATH = re.compile(r"`([\w.][\w./@-]*?)(?::(\d+)(?:-\d+)?)?`")
+CHECKED = {"caminhos": 0, "linhas": 0}
+RE_INDEX_NAME = re.compile(r"`([a-z0-9]+(?:-[a-z0-9]+)*)`")   # `deployment` não tem hífen
+
+
+def _frontmatter(text: str) -> dict[str, str]:
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    fm: dict[str, str] = {}
+    for line in text[3:end].splitlines():
+        if ":" in line and not line.startswith(" "):
+            k, v = line.split(":", 1)
+            fm[k.strip()] = v.strip()
+    return fm
+
+
+def skill_index(claude_md: str) -> set[str]:
+    """Nomes do parágrafo **Skills do projeto** do CLAUDE.md raiz."""
+    start = claude_md.find("**Skills do projeto**")
+    if start < 0:
+        return set()
+    end = claude_md.find("\n\n", start)
+    para = claude_md[start:end if end > 0 else None]
+    # Só a LISTA `a` · `b` · `c` conta. Qualquer outro `termo` do parágrafo (ex.: `name`)
+    # não é nome de skill; parêntese dentro da lista (`(com scripts/…)`) é descartado antes.
+    flat = re.sub(r"\([^()]*\)", "", para.replace("\n", " "))
+    name = r"`[a-z0-9]+(?:-[a-z0-9]+)*`"
+    names: set[str] = set()
+    for chain in re.finditer(rf"{name}(?:\s*·\s*{name})+", flat):
+        names |= {m.group(1) for m in RE_INDEX_NAME.finditer(chain.group(0))}
+    return names
+
+
+def check_skill_paths(text: str, rel: str, repo: Path) -> list[tuple[str, str, int, str]]:
+    out = []
+    aliases = {a: b for a, b in RE_ALIAS.findall(text)}
+    in_code = False
+    for i, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or RE_ALIAS.search(line):
+            continue
+        for m in RE_PATH.finditer(line):
+            path, ln = m.group(1), m.group(2)
+            for a, b in aliases.items():
+                if path.startswith(a):
+                    path = b + path[len(a):]
+            if not path.startswith(ROOTS) or any(c in path for c in "<>*{}…"):
+                continue
+            CHECKED["caminhos"] += 1
+            f = repo / path.rstrip("/")
+            if not f.exists() and any(repo.glob(f"packages/*/src/{path}")) or \
+               not f.exists() and any(repo.glob(f"packages/*/{path}")):
+                continue   # atalho relativo a pacote (`infra/tool-guard.ts`), não caminho da raiz
+            if not f.exists():
+                out.append(("ATENÇÃO", "caminho-sumiu", i, f"{rel}: {path}"))
+            elif ln and f.is_file():
+                CHECKED["linhas"] += 1
+                n = len(f.read_text(encoding="utf-8", errors="replace").splitlines())
+                if int(ln) > n:
+                    out.append(("ATENÇÃO", "linha-alem", i, f"{rel}: {path}:{ln} (arquivo tem {n})"))
+    return out
+
+
+def check_skills(repo: Path, claude_md: str) -> tuple[list, int]:
+    base = repo / ".claude" / "skills"
+    dirs = sorted(d for d in base.iterdir() if d.is_dir()) if base.exists() else []
+    index = skill_index(claude_md)
+    out = []
+    for d in dirs:
+        sk = d / "SKILL.md"
+        rel = str(sk.relative_to(repo))
+        if not sk.exists():
+            out.append(("ERRO", "skill-nome", 0, f"{d.name}: pasta sem SKILL.md"))
+            continue
+        fm = _frontmatter(sk.read_text(encoding="utf-8"))
+        if fm.get("name") != d.name:
+            out.append(("ERRO", "skill-nome", 1, f"{rel}: name={fm.get('name')!r} ≠ pasta {d.name!r}"))
+        if not fm.get("description"):
+            out.append(("ERRO", "skill-descricao", 1, f"{rel}: sem description"))
+        if d.name not in index:
+            out.append(("ERRO", "skill-indice", 0, f"{d.name}: fora do índice **Skills do projeto** do CLAUDE.md"))
+        for md in sorted(d.rglob("*.md")):
+            out += check_skill_paths(md.read_text(encoding="utf-8"), str(md.relative_to(repo)), repo)
+    for name in sorted(index - {d.name for d in dirs}):
+        out.append(("ERRO", "skill-indice", 0, f"CLAUDE.md: índice cita `{name}`, que não existe em .claude/skills/"))
+    return out, len(dirs)
+
+
 def run(repo: Path) -> int:
     root = repo / "CLAUDE.md"
     if not root.exists():
@@ -88,10 +195,18 @@ def run(repo: Path) -> int:
     findings = []
     for f in files:
         findings += check_text(f.read_text(encoding="utf-8"), f, repo, f == root)
-    n_lines = len(root.read_text(encoding="utf-8").splitlines())
+    root_text = root.read_text(encoding="utf-8")
+    n_lines = len(root_text.splitlines())
     print(f"arquivos: {len(files)} (raiz + {len(files) - 1} de pacote) · raiz: {n_lines}/{TARGET_LINES} linhas")
+    skill_findings, n_skills = check_skills(repo, root_text)
+    print(f"skills: {n_skills} · índice do CLAUDE.md: {len(skill_index(root_text))} · "
+          f"caminhos conferidos: {CHECKED['caminhos']} (com :linha: {CHECKED['linhas']})")
+    if n_skills == 0 or CHECKED["caminhos"] == 0:
+        print("INCONCLUSIVO: nenhuma skill, ou nenhum caminho citado foi conferido")
+        return 2
+    findings += skill_findings
     for sev, rule, ln, msg in findings:
-        print(f"  {sev:8s} {rule:14s} :{ln:<5d} {msg}")
+        print(f"  {sev:8s} {rule:15s} :{ln:<5d} {msg}")
     erros = sum(1 for f in findings if f[0] == "ERRO")
     print(f"ERRO={erros} ATENÇÃO={len(findings) - erros}")
     return 1 if erros else 0
@@ -134,6 +249,49 @@ def selftest() -> int:
         ok = any(f[1] == "orcamento" for f in check_text(big, p, repo, True))
         fails += not ok
         print(f"  {'ok ' if ok else 'FALHOU'} dispara orcamento")
+
+        # skills: um repositório sintético com uma skill boa e casos ruins
+        (repo / "infra").mkdir()
+        (repo / "infra" / "tres.txt").write_text("a\nb\nc\n")
+        (repo / "packages" / "p" / "src" / "infra").mkdir(parents=True)
+        (repo / "packages" / "p" / "src" / "infra" / "guard.ts").write_text("x")
+        sk = repo / ".claude" / "skills"
+
+        def mk(name: str, fm_name: str, desc: str, body: str) -> None:
+            (sk / name).mkdir(parents=True)
+            (sk / name / "SKILL.md").write_text(
+                f"---\nname: {fm_name}\ndescription: {desc}\n---\n{body}\n", encoding="utf-8")
+
+        mk("simples", "simples", "nome sem hífen, como `deployment`", "")
+        mk("boa-skill", "boa-skill", "faz x",
+           "`infra/tres.txt:3` · `ab/tres.txt` com `ab/` = `infra/` · `packages/<id>/x` · `routes.tsx:99`\n"
+           "`infra/guard.ts` (atalho relativo a pacote)\n"
+           "```\n`infra/sumiu-no-bloco.txt`\n```")
+        mk("nome-errado", "outro-nome", "faz y", "")
+        mk("sem-descricao", "sem-descricao", "", "")
+        mk("caminho-velho", "caminho-velho", "faz z", "`infra/sumiu.txt` · `infra/tres.txt:9`")
+        idx = ("**Skills do projeto** (`.claude/skills/`) — o MÉTODO. `simples` · `boa-skill` (com "
+               "`scripts/x.py`) · `nome-errado` · `sem-descricao` ·\n`caminho-velho` · `fantasma-skill`. "
+               "Critério: `name` igual à pasta.\n\nfim")
+        got, _ = check_skills(repo, idx)
+        esperado = {
+            "skill-nome (name ≠ pasta)": any(f[1] == "skill-nome" and "nome-errado" in f[3] for f in got),
+            "skill-descricao": any(f[1] == "skill-descricao" and "sem-descricao" in f[3] for f in got),
+            "skill-indice (índice cita inexistente)": any(f[1] == "skill-indice" and "fantasma-skill" in f[3] for f in got),
+            "caminho-sumiu": any(f[1] == "caminho-sumiu" and "infra/sumiu.txt" in f[3] for f in got),
+            "linha-alem": any(f[1] == "linha-alem" and "tres.txt:9" in f[3] for f in got),
+            "limpo: skill boa (atalho declarado, atalho de pacote, placeholder, nome solto, bloco)":
+                not any("boa-skill" in f[3] for f in got),
+            "limpo: nome sem hífen no índice": not any("simples" in f[3] for f in got),
+            "limpo: `termo` fora da lista (`name`) e parêntese na lista":
+                not any("`name`" in f[3] or "scripts" in f[3] for f in got),
+        }
+        got2, _ = check_skills(repo, "**Skills do projeto** — `boa-skill`.\n")
+        esperado["skill-indice (skill fora do índice)"] = any(
+            f[1] == "skill-indice" and "caminho-velho" in f[3] for f in got2)
+        for nome, ok in esperado.items():
+            fails += not ok
+            print(f"  {'ok ' if ok else 'FALHOU'} {nome}")
         print("SELFTEST", "VERDE" if not fails else f"VERMELHO ({fails})")
         return 1 if fails else 0
 
