@@ -239,11 +239,16 @@ LEGACY_UNRESTRICTED_MARK = "LEGADO_POOLS_VAZIO"
 
 # ⚠️ ESTE É O INTERRUPTOR DO PASSO 3, e ele existe para ser UM.
 #
-# True  (hoje)  — `accessible_pools == []` e sem claim `unrestricted` ⇒ irrestrito,
-#                 com WARNING contado. É a convenção legada, e ela tem de sobreviver
-#                 enquanto tokens antigos circulam (TTL de 1h) e enquanto houver
-#                 emissor que não conheça o claim.
-# False (passo 3) — a mesma entrada passa a significar **nenhum pool**.
+# True  (legado, até 2026-08-31) — `accessible_pools == []` ⇒ irrestrito, com WARNING
+#                 contado. Era a convenção enquanto tokens antigos circulavam.
+# False (VIGENTE desde a AUT-03, 2026-08-31) — a mesma entrada significa **nenhum pool**.
+#                 Provado ao vivo: `admin@` (36 pools) → 100 linhas; `probe@` (`[]`) → 0.
+#
+# ⚠️ Corrigido em 2026-09-16: esta tabela dizia "True (hoje)" com o valor já em False
+# havia duas semanas — comentário que descreve o estado errado do interruptor que ele
+# documenta. O bloco "O QUE O PASSO 3 AINDA TERÁ DE OLHAR", acima, é o raciocínio de
+# ANTES da virada: a auditoria de `if not pools: <sem filtro>` foi coberta pela prova ao
+# vivo da AUT-03 e, nas cópias TypeScript, pela AUT-23 (`probe_ts_scope_resolvers.sh`).
 #
 # Virar isto é ato deliberado: os testes de `test_scope.py` cobrem os DOIS estados, de
 # modo que a inversão já tem tabela-verdade escrita e não precisa ser descoberta no dia.
