@@ -96,6 +96,12 @@ Os quatro arquivos da raiz: **`CLAUDE.md`** (arquitetura viva, regras, invariant
 **`pending.md`** (trabalho ABERTO, por demanda) · **`done.md`** (índice do que fechou) ·
 **`TODO.md`** (raciocínio e medição por assunto) · **`CHANGELOG.md`** (o porquê de cada entrega).
 
+**Skills do projeto** (`.claude/skills/`, 2026-09-16) — carregam sob demanda o MÉTODO; os invariantes
+continuam aqui. `testing-pattern` · `data-engineering` · `deployment` · `task-ledger` ·
+`security-boundaries` · `plughub-review` (com `scripts/scan_diff.py`, que varre só as linhas
+ADICIONADAS). Critério da divisão: regra que tem de valer mesmo quando ninguém pede fica aqui;
+procedimento e caso medido vão para a skill.
+
 ---
 
 ## Unified Session Model
