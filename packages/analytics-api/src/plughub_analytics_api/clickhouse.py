@@ -27,10 +27,13 @@ Readable views (regular SQL views over the MVs — always up-to-date):
 
 Design decisions:
   - ReplacingMergeTree on every table for idempotent re-inserts (Kafka at-least-once).
-  - No explicit version column (ClickHouse rejects Nullable and String as version).
-    Deduplication keeps the LAST inserted row per ORDER BY key. Kafka ordering
-    guarantees that close/leave events arrive after open/join events, so last-write-wins
-    is correct for sessions, participation_intervals, and collect_events.
+  - Tables whose rows describe a lifecycle (sessions, segments, participation_intervals,
+    session_transitions) use ReplacingMergeTree(row_version), with row_version =
+    coalesce(<end>, <start>) as DateTime64(3): the EVENT time wins, not the insert order.
+    ⚠️ This docstring used to say "no version column; Kafka ordering guarantees close
+    arrives after open". That was refuted on 2026-08-18: Kafka orders per PARTITION only,
+    and an unkeyed publish left segments open forever. Tables still on plain
+    ReplacingMergeTree() keep last-INSERT-wins and must not rely on event order.
   - All DateTime columns store UTC (ClickHouse DateTime64 with timezone 'UTC').
   - date column (Date) is the partition key for efficient time-range pruning.
   - ORDER BY always starts with (tenant_id, ...) so tenant-scoped queries are fast.
