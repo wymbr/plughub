@@ -19,6 +19,13 @@ POR QUE O LEITOR E MEDIDO, NUNCA ESCRITO AQUI
   fonte do bridge, e mais de um leitor com chaves diferentes tambem REPROVA --
   seria o defeito do lado do consumidor, com a mesma forma.
 
+DOIS FORMATOS DESDE A VOZ-05 FATIA 5a (2026-09-16)
+  O desfecho da coleta sem valor (`timeout`/`invalid`) e `{"menu_id", "outcome"}` e o
+  bridge o le ANTES do valor, como `(content.get("payload") or {}).get("outcome")`. O
+  leitor do sinal e MEDIDO do mesmo jeito (a forma `or {}`); um produtor vale se carrega
+  a chave do valor OU uma chave de sinal que algum leitor le. Sem isso, o desfecho
+  aparecia como produtor fora do contrato.
+
 RAMOS
   contrato      todo produtor carrega a chave que o leitor le
   contrato-mut  renomeia a chave num produtor e exige acusacao
@@ -71,6 +78,31 @@ def produtores(fontes):
                     chaves.add(v)
             achados.append((os.path.basename(arq), n.lineno, chaves))
     return achados
+
+
+def leitores_sinal(src):
+    """Chaves lidas como `(<algo>.get("payload") or {}).get(K)` no bridge."""
+    fora = []
+    try:
+        arv = ast.parse(src)
+    except SyntaxError:
+        return fora
+    for n in ast.walk(arv):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "get" and n.args):
+            continue
+        base = n.func.value
+        if not (isinstance(base, ast.BoolOp) and isinstance(base.op, ast.Or) and base.values):
+            continue
+        interno = base.values[0]
+        if not (isinstance(interno, ast.Call) and isinstance(interno.func, ast.Attribute)
+                and interno.func.attr == "get" and interno.args
+                and _const(interno.args[0]) == "payload"):
+            continue
+        chave = _const(n.args[0])
+        if isinstance(chave, str):
+            fora.append((chave, n.lineno))
+    return fora
 
 
 def leitores(src):
@@ -132,6 +164,9 @@ def contrato(mutar=False):
         return 1
     chave = chaves_lidas[0]
     print("   chave do contrato (medida no leitor): %r" % chave)
+    sinais = sorted(set(k for k, _ln in leitores_sinal(bridge)))
+    for k, ln in leitores_sinal(bridge):
+        print("   sinal    main.py linha %-6d payload[%r]" % (ln, k))
 
     if mutar:
         alvo = [p for p in fontes if p.endswith("sms.py")] or [sorted(fontes)[0]]
@@ -151,6 +186,8 @@ def contrato(mutar=False):
             continue
         if chave in chaves:
             print("   ok       %-14s linha %-6d %s" % (arq, ln, sorted(chaves)))
+        elif chaves & set(sinais):
+            print("   ok sinal %-14s linha %-6d %s" % (arq, ln, sorted(chaves)))
         else:
             print("   QUEBRA   %-14s linha %-6d %s" % (arq, ln, sorted(chaves)))
             ruins.append((arq, ln, sorted(chaves)))

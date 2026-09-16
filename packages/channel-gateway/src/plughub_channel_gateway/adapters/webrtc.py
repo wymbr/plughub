@@ -69,11 +69,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
+import struct
 import time
 import unicodedata
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -83,6 +86,15 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 from fastapi import WebSocket, WebSocketDisconnect
 
+from ..collect_core import (
+    DIGIT_WORDS,
+    CollectNotApplicable,
+    CollectPlan,
+    CollectSession,
+    Done,
+    Echo,
+    Retry,
+)
 from ..config import Settings
 from ..context_reader import ContextReader
 from ..models import (
@@ -161,6 +173,34 @@ _SPEECH_WAIT_ROOM_S = 15.0
 # Causa de "sem voz" que NÃO é degradação: a chamada não tem agente de IA de áudio.
 _NO_AI_AUDIO_ATTENDANT = "nenhum agente de IA de audio atende a chamada"
 _SENTENCE_MIN_CHARS = 25
+
+# ── Coleta por teclado e fala (VOZ-05, fatia 5b) ──────────────────────────────
+#
+# A semântica mora em `collect_core` (casa única); aqui fica a APRESENTAÇÃO (prompt falado com as
+# teclas, eco, bipe) e a CAPTURA (DTMF do ouvinte, fala final do STT). O laço de cada coleta roda
+# em passos de `_COLLECT_TICK_S` e confere a espera do motor a cada `_COLLECT_WAITING_CHECK_S`:
+# menu respondido por outro caminho ou vencido pela guarda do motor libera a coleta.
+_COLLECT_TICK_S          = 0.1
+_COLLECT_WAITING_CHECK_S = 1.0
+_BEEP_RATE, _BEEP_HZ, _BEEP_S = 24_000, 1_000, 0.12
+
+
+def _beep_pcm(rate: int = _BEEP_RATE) -> bytes:
+    n = int(rate * _BEEP_S)
+    return b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * _BEEP_HZ * i / rate)))
+                    for i in range(n))
+
+
+@dataclass
+class _ActiveCollect:
+    """Uma coleta em curso numa sessão: o plano, o estado, o laço e o fim do prompt falado."""
+    plan:          CollectPlan
+    session:       CollectSession
+    played:        asyncio.Event
+    task:          asyncio.Task | None = None
+    seen_waiting:  bool = False
+    next_check:    float = 0.0
+    outcomes:      list[Done] = field(default_factory=list)
 
 
 def speech_sentences(text: str) -> list[str]:
@@ -319,6 +359,11 @@ class WebRTCAdapter(ChannelAdapter):
         self._speaking:       set[str] = set()
         self._speech_cancel:  set[str] = set()
 
+        # VOZ-05 (fatia 5b): a coleta por teclado/fala em curso por sessão (no máximo uma: o menu
+        # novo substitui o anterior) e o leitor de DTMF do ouvinte.
+        self._collects:   dict[str, _ActiveCollect] = {}
+        self._dtmf_tasks: dict[str, asyncio.Task]   = {}
+
     # ── Provider factories ────────────────────────────────────────────────────
 
     def _build_provider(self) -> IWebRTCProvider:
@@ -447,9 +492,9 @@ class WebRTCAdapter(ChannelAdapter):
         await self._stop_listener(session_id)
 
     async def _stop_listener(self, session_id: str) -> None:
-        task = self._stt_tasks.pop(session_id, None)
-        if task and not task.done():
-            task.cancel()
+        for task in (self._stt_tasks.pop(session_id, None), self._dtmf_tasks.pop(session_id, None)):
+            if task and not task.done():
+                task.cancel()
         room_client = self._room_clients.pop(session_id, None)
         if room_client is not None:
             try:
@@ -548,9 +593,12 @@ class WebRTCAdapter(ChannelAdapter):
             )
             return
 
-        # o prompt do menu é fala do agente como qualquer aviso (VOZ-05 fatia 3); as opções
-        # verbalizadas com tecla são a NIV-13
-        if payload.get("prompt"):
+        # VOZ-05 (fatia 5b): menu com coleta por teclado/fala ganha o prompt com as teclas e um
+        # laço que produz UM desfecho. Sem `collect`, o prompt é fala do agente como qualquer aviso.
+        plan = self._plan_collect(session_id, payload, masked)
+        if plan is not None:
+            self._start_collect(session_id, plan)
+        elif payload.get("prompt"):
             self._speak(session_id, payload["prompt"])
         await self._ws_send(ws, {
             "type":          "webrtc.interaction",
@@ -634,6 +682,7 @@ class WebRTCAdapter(ChannelAdapter):
         # Phase C: ouvinte e voz saem da sala
         await self._stop_bot_leg(session_id)
 
+        self._end_collect(session_id, "sessao encerrada")
         self._connections.pop(session_id, None)
         self._customer_media.pop(session_id, None)
         logger.info(
@@ -1267,6 +1316,18 @@ class WebRTCAdapter(ChannelAdapter):
                             "type": "conn.error", "code": "masked_capture_active",
                             "message": MASKED_CAPTURE_NOTICE,
                         })
+                    elif self._collect_refuses_text(session_id):
+                        # D5 (fatia 5b): o modo da coleta decide o que é resposta. O bridge
+                        # entregaria o texto ao menu que espera como se fosse o valor.
+                        plano = self._collects[session_id].plan
+                        logger.info(
+                            "webrtc: texto livre RECUSADO — o menu %s coleta por %s (session=%s)",
+                            plano.menu_id, sorted(plano.inputs), session_id,
+                        )
+                        await self._ws_send(ws, {
+                            "type": "conn.error", "code": "collect_input_not_accepted",
+                            "message": "this menu is answered by keypad or voice",
+                        })
                     else:
                         await self._publish_customer_text(session_id, text.strip(), msg.get("id"))
 
@@ -1421,6 +1482,7 @@ class WebRTCAdapter(ChannelAdapter):
             logger.debug("webrtc: fechamento ja publicado session=%s (%s ignorado)", session_id, reason)
             return
         self._close_fired.add(session_id)
+        self._end_collect(session_id, "sessao encerrada")
         info = self._sessions.pop(session_id, {})
         self._menu_masked.pop(session_id, None)
         self._masked_grace_until.pop(session_id, None)
@@ -1493,6 +1555,9 @@ class WebRTCAdapter(ChannelAdapter):
             name=f"webrtc-stt-{session_id[:8]}",
         )
         self._stt_tasks[session_id] = task
+        self._dtmf_tasks[session_id] = asyncio.create_task(
+            self._dtmf_reader(session_id, room_client), name=f"webrtc-dtmf-{session_id[:8]}",
+        )
         logger.info(
             "webrtc: STT pipeline started: session=%s room=%s", session_id, room_name
         )
@@ -1603,7 +1668,8 @@ class WebRTCAdapter(ChannelAdapter):
                         pcm = pcm16_48k_to_16k(chunk)
                         if interrompe and rms(pcm) >= limiar:
                             voz_ms += len(pcm) / 32.0     # 16 kHz × 2 bytes = 32 bytes/ms
-                            if voz_ms >= _BARGE_IN_MIN_MS and session_id in self._speaking:
+                            if (voz_ms >= _BARGE_IN_MIN_MS and session_id in self._speaking
+                                    and self._voice_barge_allowed(session_id)):
                                 self._barge_in(session_id)
                         else:
                             voz_ms = 0.0
@@ -1672,6 +1738,7 @@ class WebRTCAdapter(ChannelAdapter):
         try:
             # O mesmo evento da mensagem digitada (VOZ-04): o formato solto de antes era
             # descartado pelo bridge. Confiança e janela vão no `payload` do conteúdo.
+            # A fala é REGISTRO da chamada; responder menu é só pela coleta abaixo (fatia 5b).
             await self._publish_customer_text(
                 session_id, transcript, content_type="audio_transcript",
                 payload={"confidence": confidence, "start_ms": start_ms, "end_ms": end_ms},
@@ -1680,6 +1747,7 @@ class WebRTCAdapter(ChannelAdapter):
             logger.warning(
                 "webrtc: transcript publish failed (session=%s): %s", session_id, exc
             )
+        await self._collect_speech(session_id, transcript, confidence)
 
     async def _publish_agent_transcript(
         self, session_id: str, participant_id: str, transcript: str,
@@ -1724,10 +1792,14 @@ class WebRTCAdapter(ChannelAdapter):
                 and (session_id in self._voice_clients or session_id in self._sessions)
                 and not self._voice_decided_absent(session_id))
 
-    def _speak(self, session_id: str, text: str) -> None:
+    def _speak(self, session_id: str, text: str, played: asyncio.Event | None = None) -> None:
         """Enfileira `text` para ser falado na sala. Sem voz não fala; a causa já está NOMEADA
-        no estado de mídia (`customer.bot_leg.reason`), então aqui é debug com a causa."""
+        no estado de mídia (`customer.bot_leg.reason`), então aqui é debug com a causa.
+        `played` é marcado quando a mensagem termina — tocada, interrompida ou não falada: a
+        coleta arma nele o prazo da primeira entrada (VOZ-05 fatia 5b)."""
         if not self._can_speak(session_id):
+            if played is not None:
+                played.set()
             # IA SEM agente de áudio (chamada de texto) é o normal e fica em debug; IA de áudio
             # sem voz é DEGRADAÇÃO e aparece — foi um descarte em debug que escondeu a corrida
             # da atribuição na fatia 4.
@@ -1744,15 +1816,19 @@ class WebRTCAdapter(ChannelAdapter):
             self._speech_tasks[session_id] = disparar(
                 self._speech_worker(session_id, fila), nome=f"webrtc-fala-{session_id[:8]}",
             )
-        fila.put_nowait((text, time.monotonic()))
+        fila.put_nowait((text, time.monotonic(), played))
 
-    async def _speech_worker(self, session_id: str, fila: asyncio.Queue[tuple[str, float]]) -> None:
+    async def _speech_worker(
+        self, session_id: str, fila: asyncio.Queue[tuple[str, float, asyncio.Event | None]],
+    ) -> None:
         """UM tocador por sessão: mensagem a mensagem, frase a frase, esperando cada uma tocar."""
         while True:
-            text, chegou = await fila.get()
+            text, chegou, played = await fila.get()
             self._speech_cancel.discard(session_id)
             room_client = await self._wait_room_for_speech(session_id, chegou)
             if room_client is None or self._tts is None:
+                if played is not None:
+                    played.set()
                 continue
             self._speaking.add(session_id)
             try:
@@ -1771,6 +1847,8 @@ class WebRTCAdapter(ChannelAdapter):
                 logger.warning("webrtc fala: tocador falhou (session=%s): %s", session_id, exc)
             finally:
                 self._speaking.discard(session_id)
+                if played is not None:
+                    played.set()
 
     def _speech_absent_cause(self, session_id: str) -> str:
         if self._tts is None:
@@ -1825,7 +1903,9 @@ class WebRTCAdapter(ChannelAdapter):
         fila = self._speech_queues.get(session_id)
         descartadas = 0
         while fila is not None and not fila.empty():
-            fila.get_nowait()
+            _, _, played = fila.get_nowait()
+            if played is not None:
+                played.set()
             descartadas += 1
         self._speech_cancel.add(session_id)
         self._speaking.discard(session_id)
@@ -1842,9 +1922,257 @@ class WebRTCAdapter(ChannelAdapter):
         task = self._speech_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
-        self._speech_queues.pop(session_id, None)
+        fila = self._speech_queues.pop(session_id, None)
+        while fila is not None and not fila.empty():
+            _, _, played = fila.get_nowait()
+            if played is not None:
+                played.set()
         self._speaking.discard(session_id)
         self._speech_cancel.discard(session_id)
+
+    # ── Coleta por teclado e fala (VOZ-05, fatia 5b) ──────────────────────────
+
+    def _plan_collect(self, session_id: str, payload: dict, masked: list[str]) -> CollectPlan | None:
+        """O plano da coleta, ou `None` quando o menu não é coletado por teclado/fala neste canal —
+        com o motivo dito sempre que o menu PEDIU e não vai ter."""
+        menu_id = payload.get("menu_id", "")
+        try:
+            plan = CollectPlan.from_menu(payload)
+        except CollectNotApplicable as exc:
+            logger.warning(
+                "webrtc coleta: menu %s pede teclado/fala e NAO sera coletado assim — %s; "
+                "responde pela tela (session=%s)", menu_id, exc, session_id,
+            )
+            return None
+        if plan is None:
+            return None
+        if masked or payload.get("masked"):
+            # decisão 4: WebRTC no browser TEM tela — o dado protegido vai ao campo protegido
+            logger.info(
+                "webrtc coleta: menu %s e mascarado e vai ao campo protegido da tela (fatia A); "
+                "teclado e fala nao o coletam (session=%s)", menu_id, session_id,
+            )
+            return None
+        if session_id not in self._room_clients:
+            logger.info(
+                "webrtc coleta: menu %s coleta por %s e o ouvinte ainda nao esta na sala (%s) — "
+                "responde o que chegar depois dele, e o prazo corre (session=%s)",
+                menu_id, sorted(plan.inputs & {"dtmf", "voice"}),
+                self._stt_unavailable or "entra com a atribuicao de um atendente de audio", session_id,
+            )
+        if ("voice" in plan.inputs and plan.min_confidence is not None
+                and not getattr(self._stt, "measures_confidence", True)):
+            logger.warning(
+                "webrtc coleta: menu %s declara min_confidence=%s e o STT nao mede confianca — "
+                "o limite NAO e aplicado (session=%s)", menu_id, plan.min_confidence, session_id,
+            )
+        if plan.ignored_params:
+            logger.warning(
+                "webrtc coleta: menu %s declara %s, que o STT ainda NAO aplica por menu (VOZ-18) "
+                "(session=%s)", menu_id, ", ".join(plan.ignored_params), session_id,
+            )
+        return plan
+
+    def _start_collect(self, session_id: str, plan: CollectPlan) -> None:
+        """Fala o prompt com as teclas e começa o laço. ANTES de qualquer `await`, como a fala
+        de `deliver_text`: a ordem das falas é a do Kafka só até a primeira suspensão."""
+        self._end_collect(session_id, f"substituida pelo menu {plan.menu_id}")
+        ac = _ActiveCollect(plan=plan, session=CollectSession(plan), played=asyncio.Event())
+        self._collects[session_id] = ac
+        texto = plan.spoken_prompt()
+        if texto:
+            self._speak(session_id, texto, ac.played)
+        else:
+            ac.played.set()
+        ac.task = disparar(self._run_collect(session_id, ac), nome=f"webrtc-coleta-{session_id[:8]}")
+        logger.info(
+            "webrtc coleta: menu %s por %s (%s, prazo %.0f s, eco %s, barge-in %s) session=%s",
+            plan.menu_id, sorted(plan.inputs), plan.interaction, plan.first_timeout_s,
+            plan.echo, plan.barge_in, session_id,
+        )
+
+    def _end_collect(self, session_id: str, why: str) -> None:
+        ac = self._collects.pop(session_id, None)
+        if ac is None:
+            return
+        if ac.session.done is None:
+            logger.info("webrtc coleta: menu %s liberado sem desfecho — %s (session=%s)",
+                        ac.plan.menu_id, why, session_id)
+        if ac.task is not None and ac.task is not asyncio.current_task() and not ac.task.done():
+            ac.task.cancel()
+
+    async def _run_collect(self, session_id: str, ac: _ActiveCollect) -> None:
+        """O relógio da coleta. O prazo da primeira entrada só arma quando o prompt termina."""
+        try:
+            while ac.session.done is None:
+                now = time.monotonic()
+                if ac.played.is_set():
+                    ac.session.arm(now)
+                await self._apply_collect(session_id, ac, ac.session.tick(now))
+                if ac.session.done is not None:
+                    break
+                if now >= ac.next_check:
+                    ac.next_check = now + _COLLECT_WAITING_CHECK_S
+                    esperando = await self._menu_waiting_now(session_id)
+                    if esperando:
+                        ac.seen_waiting = True
+                    elif esperando is False and ac.seen_waiting:
+                        # respondido por outro caminho, ou a guarda absoluta do motor venceu
+                        logger.info(
+                            "webrtc coleta: o motor nao espera mais o menu %s — coleta liberada "
+                            "(session=%s)", ac.plan.menu_id, session_id,
+                        )
+                        break
+                await asyncio.sleep(_COLLECT_TICK_S)
+        finally:
+            if self._collects.get(session_id) is ac:
+                self._collects.pop(session_id, None)
+
+    async def _menu_waiting_now(self, session_id: str) -> bool | None:
+        """Há menu esperando no motor? `None` = não se sabe (a coleta segue: o prazo dela termina)."""
+        try:
+            return bool(await self._redis.hgetall(f"menu:waiting:{session_id}"))
+        except Exception as exc:
+            logger.debug("webrtc coleta: menu:waiting ilegivel (session=%s): %s", session_id, exc)
+            return None
+
+    async def _apply_collect(self, session_id: str, ac: _ActiveCollect, actions: list) -> None:
+        for a in actions:
+            if isinstance(a, Echo):
+                if ac.plan.echo == "plain":
+                    self._speak(session_id, DIGIT_WORDS[a.key])
+                elif ac.plan.echo == "masked":
+                    self._beep(session_id)
+            elif isinstance(a, Retry):
+                limite = f" de {ac.plan.max_invalid}" if ac.plan.max_invalid else " (sem limite: ate o prazo)"
+                logger.info(
+                    "webrtc coleta: entrada invalida %d%s no menu %s — %s (session=%s)",
+                    a.count, limite, ac.plan.menu_id,
+                    "mensagem ao cliente" if a.message else "ignorada sem eco", session_id,
+                )
+                if a.message:
+                    self._speak(session_id, a.message)
+                    ws = self._connections.get(session_id)
+                    if ws:
+                        await self._ws_send(ws, {
+                            "type": "webrtc.message", "text": a.message, "author": "system",
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        })
+            elif isinstance(a, Done):
+                ac.outcomes.append(a)
+                await self._publish_collect_done(session_id, ac, a)
+
+    async def _publish_collect_done(self, session_id: str, ac: _ActiveCollect, done: Done) -> None:
+        """O desfecho vira `menu_result` — com o valor, como a resposta pela tela, ou com
+        `outcome`, que o bridge entrega ao menu como SINAL (fatia 5a)."""
+        info = self._sessions.get(session_id)
+        p = ac.plan
+        if not info:
+            logger.error("webrtc coleta: desfecho %s do menu %s em sessao sem registro de abertura "
+                         "(session=%s) — NAO publicado", done.outcome, p.menu_id, session_id)
+            return
+        # Payloads LITERAIS e só com chaves que o bridge lê: `probe_menu_result_contract` mede cada
+        # produtor pelo literal e reprova chave sem leitor. Por onde veio (tecla/fala) fica no log.
+        if done.outcome == "value":
+            content = MessageContent(type="menu_result", payload={
+                "menu_id": p.menu_id, "interaction": p.interaction, "result": done.value})
+        else:
+            content = MessageContent(type="menu_result", payload={
+                "menu_id": p.menu_id, "outcome": done.outcome})
+        event = NormalizedInboundEvent(
+            contact_id       = info["contact_id"],
+            session_id       = session_id,
+            channel          = "webrtc",
+            author           = MessageAuthor(type="customer"),
+            content          = content,
+            context_snapshot = await self._context_reader.get_snapshot(session_id),
+        )
+        if done.outcome == "value" and done.via == "dtmf":
+            # a tecla não deixa rastro de texto como a fala (que é registro) ou o clique (que o
+            # widget mostra): a linha de histórico é a da resposta pela tela
+            await self._registry.append_message(
+                session_id = session_id,
+                message_id = event.message_id,
+                author     = "customer",
+                text       = menu_result_history_text(p.interaction, done.value, set()),
+                timestamp  = event.timestamp,
+            )
+        try:
+            await self._publish_inbound(event.model_dump())
+        except Exception as exc:
+            logger.error("webrtc coleta: desfecho %s do menu %s NAO publicado (session=%s): %s — "
+                         "o menu fica ate o prazo do motor", done.outcome, p.menu_id, session_id, exc)
+            return
+        logger.info("webrtc coleta: menu %s -> %s%s (session=%s)", p.menu_id, done.outcome,
+                    f" por {done.via}" if done.via else "", session_id)
+
+    async def _dtmf_reader(self, session_id: str, room_client: IWebRTCRoomClient) -> None:
+        """Teclas que o OUVINTE recebe. O SFU as entrega a todos na sala: só o cliente responde."""
+        try:
+            async for identity, digit in room_client.dtmf():
+                if not identity.startswith(CUSTOMER_IDENTITY_PREFIX):
+                    logger.info("webrtc dtmf: tecla de %r ignorada — so o cliente responde menu "
+                                "(session=%s)", identity, session_id)
+                    continue
+                await self._collect_digit(session_id, digit)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("webrtc dtmf: leitor de teclas PAROU (session=%s): %s", session_id, exc)
+
+    async def _collect_digit(self, session_id: str, digit: str) -> None:
+        ac = self._collects.get(session_id)
+        if ac is None or "dtmf" not in ac.plan.inputs:
+            # o valor da tecla não vai ao log: pode ser dado do cliente
+            logger.info("webrtc dtmf: tecla ignorada — %s (session=%s)",
+                        "nenhuma coleta em curso" if ac is None else f"o menu {ac.plan.menu_id} nao coleta por teclado",
+                        session_id)
+            return
+        if not ac.played.is_set():
+            if not ac.plan.barge_in:
+                logger.info("webrtc dtmf: tecla durante o prompt do menu %s ignorada (barge_in "
+                            "desligado) session=%s", ac.plan.menu_id, session_id)
+                return
+            self._barge_in(session_id)
+        await self._apply_collect(session_id, ac, ac.session.digit(digit, time.monotonic()))
+
+    async def _collect_speech(self, session_id: str, transcript: str, confidence: float) -> None:
+        """Fala final do cliente, já publicada como registro. Responde o menu só no modo `voice`."""
+        ac = self._collects.get(session_id)
+        if ac is None:
+            return
+        if "voice" not in ac.plan.inputs:
+            logger.info("webrtc coleta: fala do cliente NAO responde o menu %s (coleta por %s) — fica "
+                        "como registro (session=%s)", ac.plan.menu_id, sorted(ac.plan.inputs), session_id)
+            return
+        if not ac.played.is_set() and not ac.plan.barge_in:
+            logger.info("webrtc coleta: fala durante o prompt do menu %s ignorada (barge_in desligado) "
+                        "session=%s", ac.plan.menu_id, session_id)
+            return
+        await self._apply_collect(session_id, ac, ac.session.speech(transcript, confidence, time.monotonic()))
+
+    def _voice_barge_allowed(self, session_id: str) -> bool:
+        """A voz do cliente interrompe a fala? Sempre, fora do prompt de uma coleta; durante ele, só
+        se a coleta aceita fala e barge-in (tossir num menu de teclado não corta as opções)."""
+        ac = self._collects.get(session_id)
+        if ac is None or ac.played.is_set():
+            return True
+        return ac.plan.barge_in and "voice" in ac.plan.inputs
+
+    def _collect_refuses_text(self, session_id: str) -> bool:
+        ac = self._collects.get(session_id)
+        return ac is not None and "text" not in ac.plan.inputs
+
+    def _beep(self, session_id: str) -> None:
+        """Eco `masked`: um bipe por tecla, pela VOZ."""
+        voice = self._voice_clients.get(session_id)
+        if voice is None:
+            logger.info("webrtc coleta: eco por bipe sem voz na sala — tecla aceita sem eco (session=%s)",
+                        session_id)
+            return
+        # na taxa da fala: a trilha da voz nasce com a taxa do primeiro áudio e não a troca
+        rate = getattr(self._tts, "output_sample_rate", None) or _BEEP_RATE
+        disparar(voice.publish_audio(_beep_pcm(rate), sample_rate=rate), nome=f"webrtc-bipe-{session_id[:8]}")
 
     # ── Phase D: Egress Recording ─────────────────────────────────────────────
 
@@ -2240,6 +2568,11 @@ class WebRTCAdapter(ChannelAdapter):
                 session_id,
             )
             return
+
+        ativa = self._collects.get(session_id)
+        if ativa is not None and ativa.plan.menu_id == menu_id:
+            # a tela respondeu: a coleta por teclado/fala do mesmo menu termina sem desfecho próprio
+            self._end_collect(session_id, "respondido pela tela")
 
         masked = await self._masked_fields_for(session_id, menu_id)
         if masked is None:

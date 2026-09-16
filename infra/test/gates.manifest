@@ -435,6 +435,15 @@ probe_webrtc_tts_spoken.sh
 # (stream e ClickHouse), com o ouvinte oculto e mudo; a fala nao aparece como digitada no Console
 # nem volta ao cliente, com os controles digitados nos dois sentidos. Fixture propria de pool.
 probe_webrtc_human_transcript.sh
+
+# VOZ-05 fatia 5b (2026-09-16): menu com `collect` numa chamada WebRTC de IA, com cliente LiveKit
+# real teclando (publish_dtmf) e falando (speaches). Prompt falado com as teclas; tecla de OUTRO
+# participante nao responde (o SFU entrega DTMF a todos), com prova de que ela CHEGOU (A0) e o
+# controle do cliente; codigo de varios digitos com terminador; fala em campo so de teclado nao
+# responde, com prova de que a fala CHEGOU (R0) e o controle pelo teclado; "opcao dois" dita
+# responde; dois invalidos e prazo com desfecho proprio. Mutacoes ao vivo LM1..LM4 todas pegas
+# (CHANGELOG 2026-09-16 (5)); sem A0 e R0, duas delas passavam por ausencia.
+probe_webrtc_voice_collect.sh
 # CTR-09. Referencia pura de `invoke` que nao resolveu (`@ctx.*` ausente) viajava como `null` e a
 # tool com campo `.optional()` recusava (-32602): o `validate_pin` do skill_auth_form_v1 reprovava
 # a senha CERTA de todo cliente sem identidade. Mede a suite do invoke contra a IMAGEM e, ao vivo no

@@ -57,6 +57,21 @@ describe("VOZ-05 5a — collect viaja no menu.payload", () => {
     expect(p?.["collect"]).toBeNull()
   })
 
+  it("5b: campo de TEXTO coletado por teclado sai como menu, com o collect", async () => {
+    const c = { input: ["dtmf"], first_input_timeout_s: 20, min_digits: 3, terminator: "#" }
+    await call({ session_id: SID, message: "Digite o código", menu: { interaction: "text", collect: c } })
+    const [p] = payloads()
+    expect(p?.["interaction"]).toBe("text")
+    expect(p?.["collect"]).toEqual({ ...c, barge_in: true })   // default do schema viaja explícito
+  })
+
+  it("5b CONTROLE: campo de texto sem coleta por teclado/fala continua message.text", async () => {
+    await call({ session_id: SID, message: "Qual o seu nome?",
+      menu: { interaction: "text", collect: { input: ["text"] } } })
+    expect(payloads()).toEqual([])
+    expect(kafka.events.some(e => e.topic === "conversations.outbound" && e.message["type"] === "message.text")).toBe(true)
+  })
+
   it("collect inválido é recusado pela tool, e nada sai ao canal", async () => {
     const r = await call({ session_id: SID, message: "Escolha",
       menu: { interaction: "button", options: [], collect: { input: [] } } })

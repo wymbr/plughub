@@ -590,6 +590,31 @@ webrtc_stt_enabled:         bool = True
 >
 > Gate ao vivo: `infra/test/probe_webrtc_human_transcript.sh`. Ver `CHANGELOG.md` 2026-09-16 (3).
 
+> **Coleta por teclado e fala — menu com `collect` (fatia 5b).** A semântica mora numa casa só,
+> `collect_core.py` (sem I/O, testável sem relógio): casa tecla, dígitos e fala com o menu, valida
+> domínio/tamanho/pertinência, roda os prazos e emite UM desfecho — `value`, `invalid` (esgotou
+> `max_invalid`) ou `timeout`. O adapter WebRTC é o primeiro renderizador:
+>
+> | o quê | como |
+> |---|---|
+> | prompt | falado com as teclas ("Para Email, tecle um ou diga Email."); a tela mostra as opções como sempre |
+> | tecla | `sip_dtmf_received` no OUVINTE; o SFU a entrega a todos na sala, e **só a do `customer-…` responde** |
+> | fala | a frase final é publicada como REGISTRO (`audio_transcript`) e só responde o menu se `collect.input` tem `voice` |
+> | texto digitado | recusado (`collect_input_not_accepted`) quando `collect.input` não tem `text` |
+> | eco | `plain` fala a tecla · `masked` bipa pela voz · `none` cala |
+> | barge-in | tecla corta o prompt; fala corta só se a coleta aceita fala |
+> | prazo da 1ª entrada | arma quando o prompt termina de tocar (ou quando não há o que tocar) |
+> | inválido | ignorado sem eco, ou `invalid_message` falada e no widget; o prazo recomeça |
+> | desfecho | `menu_result` — `{menu_id, interaction, result}` ou `{menu_id, outcome}`, que o bridge entrega como SINAL (fatia 5a) |
+> | fim sem desfecho | resposta pela tela, menu novo, sessão fechada, ou o motor não espera mais (`menu:waiting` sumiu) |
+>
+> ⚠️ **No bridge, fala transcrita nunca responde menu** — até aqui ele a entregava crua, e "espera um
+> pouco" virava escolha de botão. Menu de voz sem `collect` com `voice` não ouve o cliente.
+> Menu mascarado continua no campo protegido da tela (fatia A); `checklist`/`form` com coleta
+> por teclado/fala são respondidos pela tela, ditos no log. Não aplicados ainda, e ditos no log:
+> `voice.end_silence_ms`/`max_speech_s` e, com o `speaches`, `min_confidence` (VOZ-18). Gate ao
+> vivo: `infra/test/probe_webrtc_voice_collect.sh`. Ver `CHANGELOG.md` 2026-09-16 (5).
+
 ---
 
 ## 16. Fases de Implementação

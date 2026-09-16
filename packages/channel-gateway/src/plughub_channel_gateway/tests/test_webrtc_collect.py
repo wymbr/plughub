@@ -1,0 +1,225 @@
+"""
+tests/test_webrtc_collect.py — a coleta por teclado e fala no canal WebRTC (VOZ-05 fatia 5b).
+
+O que o renderizador faz com o núcleo (`collect_core`): fala o prompt com as teclas, lê a tecla
+do CLIENTE no ouvinte, entrega a fala ao menu só no modo `voice`, recusa texto que a coleta não
+aceita e publica UM desfecho como `menu_result`. Cada caso com o seu controle.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from unittest.mock import AsyncMock
+
+import pytest
+
+from plughub_channel_gateway.adapters.webrtc_room_client import MockRoomClient
+from plughub_channel_gateway.tests.test_webrtc_stt_tts import (
+    SESSION_ID,
+    _abre,
+    _make_adapter,
+    _ws_streaming,
+)
+
+pytestmark = pytest.mark.asyncio
+
+
+def _menu(interaction="button", masked_fields=None, **collect) -> dict:
+    c = {"input": ["dtmf", "voice"], "first_input_timeout_s": 30}
+    c.update(collect)
+    m = {"session_id": SESSION_ID, "menu_id": "m1", "interaction": interaction,
+         "prompt": "Como prefere a fatura?", "collect": c,
+         "options": [{"id": "email", "label": "Email"}, {"id": "correio", "label": "Correio"}]}
+    if masked_fields:
+        m["masked_fields"] = masked_fields
+    return m
+
+
+def _adapter(room: MockRoomClient | None = None):
+    adapter, redis, producer = _make_adapter(room_client=room)
+    adapter._connections[SESSION_ID] = AsyncMock()
+    _abre(adapter)
+    falas: list[str] = []
+
+    def _speak(session_id, text, played=None):
+        falas.append(text)
+        if played is not None:
+            played.set()
+    adapter._speak = _speak          # a fala real tem teste próprio; aqui importa o que é dito
+    return adapter, redis, producer, falas
+
+
+def _eventos(producer) -> list[dict]:
+    return [json.loads(c.args[1]) for c in producer.send.call_args_list]
+
+
+def _resultados(producer) -> list[dict]:
+    return [e["content"]["payload"] for e in _eventos(producer) if e["content"]["type"] == "menu_result"]
+
+
+async def _ate(cond, secs=2.0):
+    fim = asyncio.get_running_loop().time() + secs
+    while not cond():
+        if asyncio.get_running_loop().time() > fim:
+            return False
+        await asyncio.sleep(0.02)
+    return True
+
+
+async def _encerra(adapter):
+    adapter._end_collect(SESSION_ID, "fim do teste")
+    await asyncio.sleep(0)
+
+
+class TestTeclado:
+    async def test_prompt_com_teclas_e_tecla_do_cliente_vira_o_valor(self):
+        room = MockRoomClient()
+        adapter, _, producer, falas = _adapter(room)
+        await adapter.deliver_menu(_menu())
+        assert falas == ["Como prefere a fatura? Para Email, tecle um ou diga Email. "
+                         "Para Correio, tecle dois ou diga Correio."]
+        leitor = asyncio.create_task(adapter._dtmf_reader(SESSION_ID, room))
+        room.inject_dtmf("2")
+        assert await _ate(lambda: _resultados(producer))
+        assert _resultados(producer) == [{"menu_id": "m1", "interaction": "button", "result": "correio"}]
+        adapter._registry.append_message.assert_awaited()
+        assert await _ate(lambda: SESSION_ID not in adapter._collects)
+        leitor.cancel()
+
+    async def test_tecla_de_quem_nao_e_o_cliente_nao_responde(self):
+        room = MockRoomClient()
+        adapter, _, producer, _ = _adapter(room)
+        await adapter.deliver_menu(_menu())
+        leitor = asyncio.create_task(adapter._dtmf_reader(SESSION_ID, room))
+        room.inject_dtmf("2", identity="agent-humano")
+        await asyncio.sleep(0.2)
+        assert _resultados(producer) == []
+        room.inject_dtmf("1")                                      # controle: o cliente responde
+        assert await _ate(lambda: _resultados(producer))
+        assert _resultados(producer)[0]["result"] == "email"
+        leitor.cancel()
+
+    async def test_eco_da_tecla_falado_quando_plain(self):
+        room = MockRoomClient()
+        adapter, _, producer, falas = _adapter(room)
+        await adapter.deliver_menu(_menu(echo="plain"))
+        await adapter._collect_digit(SESSION_ID, "2")
+        assert falas[-1] == "dois"
+        await _encerra(adapter)
+
+
+class TestPrazoEInvalido:
+    async def test_sem_entrada_publica_timeout_e_libera(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu(first_input_timeout_s=0.3))
+        assert await _ate(lambda: _resultados(producer))
+        assert _resultados(producer) == [{"menu_id": "m1", "outcome": "timeout"}]
+        assert await _ate(lambda: SESSION_ID not in adapter._collects)
+
+    async def test_invalidos_ate_o_limite_publicam_invalid_com_mensagem(self):
+        adapter, _, producer, falas = _adapter()
+        await adapter.deliver_menu(_menu(invalid_message="Opção inválida.", max_invalid=2))
+        await adapter._collect_digit(SESSION_ID, "9")
+        assert falas[-1] == "Opção inválida." and _resultados(producer) == []
+        await adapter._collect_digit(SESSION_ID, "9")
+        assert _resultados(producer) == [{"menu_id": "m1", "outcome": "invalid"}]
+
+    async def test_menu_que_o_motor_nao_espera_mais_libera_sem_desfecho(self, caplog):
+        adapter, redis, producer, _ = _adapter()
+        estados = [{"i1": "{}"}, {}]
+        redis.hgetall = AsyncMock(side_effect=lambda k: estados.pop(0) if estados else {})
+        with caplog.at_level(logging.INFO):
+            await adapter.deliver_menu(_menu())
+            assert await _ate(lambda: SESSION_ID not in adapter._collects, 3.0)
+        assert _resultados(producer) == []
+        assert "nao espera mais o menu m1" in caplog.text
+
+
+class TestFala:
+    async def test_no_modo_voz_a_fala_e_registro_e_responde_o_menu(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu())
+        await adapter._publish_transcript(SESSION_ID, "pode ser por email", 0.9, 0, 900)
+        tipos = [(e["content"]["type"], e.get("content_type")) for e in _eventos(producer)]
+        assert tipos == [("text", "audio_transcript"), ("menu_result", "text")]
+        assert _resultados(producer)[0]["result"] == "email"
+
+    async def test_fora_do_modo_voz_a_fala_fica_so_como_registro(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu(input=["dtmf"]))
+        await adapter._publish_transcript(SESSION_ID, "pode ser por email", 0.9, 0, 900)
+        assert [e["content"]["type"] for e in _eventos(producer)] == ["text"]
+        await _encerra(adapter)
+
+    async def test_voz_do_cliente_nao_corta_prompt_de_menu_so_de_teclado(self):
+        adapter, _, _, _ = _adapter()
+        adapter._speak = lambda *a, **k: None                      # prompt ainda tocando
+        await adapter.deliver_menu(_menu(input=["dtmf"]))
+        assert adapter._voice_barge_allowed(SESSION_ID) is False
+        await _encerra(adapter)
+        assert adapter._voice_barge_allowed(SESSION_ID) is True   # controle: sem coleta, corta
+
+
+class TestTextoETela:
+    async def test_texto_digitado_recusado_quando_a_coleta_nao_aceita_texto(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu())
+        ws = _ws_streaming([json.dumps({"type": "webrtc.message", "text": "correio"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        assert producer.send.call_count == 0
+        assert ws.send_json.call_args.args[0]["code"] == "collect_input_not_accepted"
+        await _encerra(adapter)
+
+    async def test_controle_coleta_que_aceita_texto_publica(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu(input=["dtmf", "text"]))
+        ws = _ws_streaming([json.dumps({"type": "webrtc.message", "text": "correio"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        assert producer.send.call_count == 1
+        await _encerra(adapter)
+
+    async def test_resposta_pela_tela_encerra_a_coleta(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu())
+        ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m1",
+                                        "interaction": "button", "result": "email"})])
+        await adapter._receive_loop(ws, SESSION_ID)
+        assert SESSION_ID not in adapter._collects
+        assert _resultados(producer) == [{"menu_id": "m1", "interaction": "button", "result": "email"}]
+
+
+class TestSemColeta:
+    async def test_menu_mascarado_vai_a_tela(self, caplog):
+        adapter, _, _, falas = _adapter()
+        with caplog.at_level(logging.INFO):
+            await adapter.deliver_menu(_menu(masked_fields=["senha"]))
+        assert SESSION_ID not in adapter._collects and falas == ["Como prefere a fatura?"]
+        assert "campo protegido da tela" in caplog.text
+
+    async def test_formulario_com_coleta_e_dito_e_responde_pela_tela(self, caplog):
+        adapter, _, _, _ = _adapter()
+        with caplog.at_level(logging.WARNING):
+            await adapter.deliver_menu(_menu("form"))
+        assert SESSION_ID not in adapter._collects
+        assert "NAO sera coletado assim" in caplog.text
+
+    async def test_menu_sem_collect_so_fala_o_prompt(self):
+        adapter, _, _, falas = _adapter()
+        m = _menu()
+        m.pop("collect")
+        await adapter.deliver_menu(m)
+        assert SESSION_ID not in adapter._collects and falas == ["Como prefere a fatura?"]
+
+
+class TestFalaReal:
+    async def test_prazo_arma_quando_a_fala_nao_acontece(self):
+        # sem `_speak` substituído: sem voz decidida na chamada, `played` marca na hora
+        adapter, _, producer = _make_adapter()
+        adapter._connections[SESSION_ID] = AsyncMock()
+        _abre(adapter)
+        adapter._customer_media[SESSION_ID] = frozenset()
+        await adapter.deliver_menu(_menu(first_input_timeout_s=0.2))
+        assert adapter._collects[SESSION_ID].played.is_set()
+        assert await _ate(lambda: _resultados(producer))
+        assert _resultados(producer) == [{"menu_id": "m1", "outcome": "timeout"}]

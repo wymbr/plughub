@@ -160,3 +160,37 @@ class TestFalaDoAtendente:
         await bridge_mod.process_inbound(
             _inbound({"type": "agent_human", "id": "human-sub-1"}, "oi", falado=False), r)
         assert r.xadds == [] and producer.sent == []
+
+
+class _RedisMenu(_Redis):
+    """Um menu de IA voltado ao cliente esperando na sessão."""
+    async def hgetall(self, key):
+        if key.startswith("menu:waiting:"):
+            return {"inst-1": json.dumps({"visibility": "all"})}
+        return {}
+
+
+class TestFalaNaoRespondeMenu:
+    """VOZ-05 fatia 5b (decisão 5): a fala transcrita é registro; quem responde menu por voz é a
+    coleta do canal, com `menu_result`."""
+
+    async def test_fala_nao_vai_ao_menu_mas_fica_no_stream(self, producer):
+        r = _RedisMenu()
+        await bridge_mod.process_inbound(_inbound({"type": "customer"}, "espera um pouco"), r)
+        assert [k for k, _ in r.lpushes if k.startswith("menu:result:")] == []
+        assert any(f.get("content_type") == "audio_transcript" or "audio_transcript" in json.dumps(f)
+                   for _, f in r.xadds), r.xadds
+
+    async def test_controle_texto_digitado_responde_o_menu(self, producer):
+        r = _RedisMenu()
+        await bridge_mod.process_inbound(_inbound({"type": "customer"}, "segunda via", falado=False), r)
+        assert (f"menu:result:{SID}:inst-1", "segunda via") in r.lpushes
+
+    async def test_controle_valor_da_coleta_responde_o_menu(self, producer):
+        r = _RedisMenu()
+        msg = {"session_id": SID, "contact_id": "c-1", "message_id": "m-2", "channel": "webrtc",
+               "author": {"type": "customer"},
+               "content": {"type": "menu_result",
+                           "payload": {"menu_id": "m1", "interaction": "button", "result": "email"}}}
+        await bridge_mod.process_inbound(msg, r)
+        assert (f"menu:result:{SID}:inst-1", "email") in r.lpushes

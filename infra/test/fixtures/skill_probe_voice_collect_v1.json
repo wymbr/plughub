@@ -1,0 +1,30 @@
+{
+  "skill_id": "skill_probe_voice_collect_v1",
+  "name": "Probe - coleta por teclado e fala no WebRTC (VOZ-05 fatia 5b)",
+  "version": "1.0",
+  "description": "Fixture do probe_webrtc_voice_collect: um menu de botoes coletado por teclado E fala (eco da tecla, mensagem de invalido, dois invalidos encerram) e um campo de codigo so por teclado (3 a 6 digitos, termina com #, eco por bipe). Cada saida manda um marcador proprio; o valor coletado volta no texto do marcador.",
+  "classification": { "type": "orchestrator" },
+  "flow": {
+    "entry": "n1",
+    "steps": [
+      { "id": "n1", "type": "notify", "message": "voz05b-inicio", "on_success": "m1", "on_failure": "fim_falha" },
+      { "id": "m1", "type": "menu", "interaction": "button", "prompt": "Como prefere receber a fatura?",
+        "options": [ { "id": "email", "label": "Email" }, { "id": "correio", "label": "Correio" } ],
+        "timeout_s": 120, "output_as": "escolha",
+        "collect": { "input": ["dtmf", "voice"], "first_input_timeout_s": 12, "echo": "plain",
+                     "invalid_message": "Opção inválida.", "max_invalid": 2 },
+        "on_success": "n_val", "on_failure": "fim_falha", "on_timeout": "n_to", "on_invalid": "n_inv" },
+      { "id": "n_val", "type": "notify", "message": "voz05b-valor={{$.pipeline_state.escolha}}", "on_success": "m2", "on_failure": "fim_falha" },
+      { "id": "m2", "type": "menu", "interaction": "text", "prompt": "Digite o código.",
+        "timeout_s": 120, "output_as": "codigo",
+        "collect": { "input": ["dtmf"], "first_input_timeout_s": 30, "inter_digit_timeout_s": 4,
+                     "min_digits": 3, "max_digits": 6, "terminator": "#", "echo": "masked", "max_invalid": 3 },
+        "on_success": "n_cod", "on_failure": "fim_falha", "on_timeout": "n_to", "on_invalid": "n_inv" },
+      { "id": "n_cod", "type": "notify", "message": "voz05b-codigo={{$.pipeline_state.codigo}}", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "n_to", "type": "notify", "message": "voz05b-timeout", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "n_inv", "type": "notify", "message": "voz05b-invalido", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "probe: coleta medida" },
+      { "id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "probe: fluxo falhou" }
+    ]
+  }
+}

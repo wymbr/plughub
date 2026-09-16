@@ -490,7 +490,12 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       // Text sem masked_fields continua como message.text (preserva compatibilidade).
       const hasMaskedText = parsed.menu?.interaction === "text" &&
                             (parsed.menu?.masked_fields?.length ?? 0) > 0
-      const hasMenu    = parsed.menu && (parsed.menu.interaction !== "text" || hasMaskedText)
+      // VOZ-05 fatia 5b: campo de texto coletado por TECLADO ou FALA também é menu — como
+      // message.text o `collect` não chegava ao canal, e o menu esperava até a guarda do motor
+      // (medido ao vivo: o código por DTMF nunca era lido).
+      const hasCollectText = parsed.menu?.interaction === "text" &&
+                             (parsed.menu?.collect?.input ?? []).some((i) => i !== "text")
+      const hasMenu    = parsed.menu && (parsed.menu.interaction !== "text" || hasMaskedText || hasCollectText)
       const agentsOnly    = parsed.visibility === "agents_only"
       const isArrayVis    = Array.isArray(parsed.visibility)
 

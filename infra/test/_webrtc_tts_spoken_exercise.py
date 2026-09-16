@@ -14,7 +14,7 @@ ouve na sala. O que ele ouve é transcrito pelo `speaches` — o mesmo serviço,
   T4 barge-in: o cliente fala 2 s depois de N2 começar → a voz do agente para em ≤ 1,5 s, N2
      chega a < 60% da duração, e o fim de N2 não é ouvido
   T5 depois da interrupção a fala volta: N3 é ouvido (a fala do barge-in responde o menu de TEXTO
-     livre M2 — o menu de botão tomaria a frase como escolha, e isso é da NIV-13)
+     livre M2, que declara coleta por VOZ — desde a fatia 5b, fala só responde menu nesse modo)
   LAT texto do N1 no WebSocket → primeiro áudio do agente
   P1 (fatia 4) o OUVINTE `bot-…` no SFU: oculto, não publica, assina
   P2 (fatia 4) a VOZ `voz-…` no SFU: visível, publica, não assina

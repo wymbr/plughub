@@ -63,6 +63,9 @@ class SpeachesSTTProvider:
     """`ISTTProvider` sobre o `speaches`. Recebe PCM16 mono a `input_sample_rate`."""
 
     input_sample_rate = STT_SAMPLE_RATE
+    # O `json` do speaches devolve só o texto: a confiança do `STTResult` fica no default 1.0, que
+    # PARECE medida. Quem aplica `min_confidence` pergunta isto antes (VOZ-05 fatia 5b).
+    measures_confidence = False
 
     def __init__(
         self,

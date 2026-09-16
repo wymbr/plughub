@@ -1,5 +1,84 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-16 (5) — VOZ-05 fatia 5b: menu por teclado e fala na chamada WebRTC, com a semântica numa casa só
+
+**O que havia.** Numa chamada WebRTC atendida por IA, qualquer fala do cliente respondia qualquer
+menu: o bridge entregava a transcrição crua ao menu que esperava ("espera um pouco" virou escolha de
+botão na fatia 3). Não havia DTMF no canal — e o SFU entrega a tecla a TODOS na sala, atendente
+incluído (medido, ~3 ms). O prompt falado não dizia como responder. A 5a deixou o contrato
+(`collect`, `on_invalid`, fila de sinal); faltava quem o executasse.
+
+**Feito.**
+- **Casa única da semântica — `channel-gateway/collect_core.py`.** Sem I/O e sem relógio próprio:
+  recebe tecla, fala e `now`, devolve ações (eco, nova tentativa, desfecho). Menu de opções (tecla
+  por posição, com espera entre dígitos quando `1` e `10` coexistem), campo de dígitos (mínimo,
+  máximo, terminador, domínio com `*`/`#`), fala (rótulo contíguo, tecla dita sozinha — "quero um
+  boleto" não é a opção 1 —, ambiguidade é inválido, dígitos ditos em campo numérico). Três
+  desfechos nunca fundidos: `value`, `invalid` (só ao esgotar `max_invalid`; antes, cada um é
+  tentativa e o prazo recomeça), `timeout`. `checklist`/`form` são recusados DITOS.
+- **Renderizador WebRTC.** Prompt falado com as teclas; o prazo da 1ª entrada arma quando o prompt
+  termina de tocar (a fila de fala ganhou o aviso de "tocou"); DTMF lido pelo OUVINTE, e só a tecla
+  do `customer-…` responde; a fala é publicada como registro e só responde no modo `voice`; texto
+  digitado recusado quando a coleta não aceita `text`; eco `plain` falado, `masked` bipado pela voz;
+  tecla corta o prompt, fala só corta prompt de coleta que aceita fala; desfecho como `menu_result`
+  (valor, ou `outcome` que o bridge entrega como sinal). A coleta termina sem desfecho quando a tela
+  responde, chega menu novo, a sessão fecha ou o motor para de esperar. Menu mascarado segue no
+  campo protegido da tela (fatia A).
+- **Bridge.** Fala transcrita do cliente nunca é entregue a `menu:result` — continua no stream e no
+  analytics como registro.
+- **mcp-server — achado do probe ao vivo.** Campo `text` coletado por teclado saía do
+  `notification_send` como `message.text` (só `button`/`list`/mascarado viravam `menu.payload`), e
+  o `collect` nunca chegava ao canal: o código por DTMF esperava até a guarda do motor (120 s) e
+  saía por `on_timeout`. Hoje `text` com `collect.input` contendo `dtmf`/`voice` é menu.
+- **Fixture do `probe_webrtc_tts_spoken`.** O menu de texto que a fala do barge-in responde passou a
+  declarar `collect.input: [voice, text]` — é a migração que a decisão pede.
+
+**Testes.** channel-gateway 1126 (núcleo 28, renderizador 16) · bridge 190 · mcp-server 462 (tsc
+limpo) — cada regra com o vizinho que não deve disparar.
+
+**Gate.** `probe_webrtc_voice_collect.sh` (AUTO), cliente LiveKit real teclando e falando. Pré-deploy:
+H (prompt sem as teclas) e K1 (tecla ignorada) vermelhos; os outros ramos vermelhos daquela rodada
+não valem — o instrumento tinha um defeito (o marcador de ENTRADA do fluxo casava com o de saída),
+corrigido antes do pós-deploy. Primeira rodada pós-deploy: K2 vermelho (o achado do mcp-server) e R
+inconclusivo (a chamada K presa ocupava a única instância do pool).
+Depois: H prompt com as teclas · A0 a tecla do outro participante CHEGOU ao ouvinte e foi recusada ·
+A1 ela não respondeu · K1 CONTROLE tecla do cliente · K2 código `427#` · R0 a fala CHEGOU e virou
+registro · R1 fala em campo só de teclado não responde · R2 CONTROLE teclado responde o mesmo campo ·
+V1 "opção dois" dita · I1 dois inválidos com a mensagem antes · T1 prazo 12,2 s depois do fim do
+prompt — verde.
+
+**Mutações ao vivo** (arquivo trocado no container, probe inteiro, restauração pela imagem): LM1 bridge
+entrega a fala ao menu → R1, R2, V1 · LM2 gateway aceita tecla de qualquer participante → A0, A1, K1 ·
+LM3 prompt sem as teclas → H · LM4 núcleo nunca vence o prazo → T1. Todas pegas — mas só na segunda
+rodada, e o que a primeira ensinou fica registrado:
+- **LM2 sobreviveu na primeira**: o A1 dizia "a tecla do intruso não respondeu" sem provar que ela
+  CHEGOU. Medido depois, isolado no SFU: **DTMF de quem entrou na sala há ≤ 3 s não chega ao
+  ouvinte; com 4 s, chega** (o controle do cliente chega sempre). O intruso teclava 1 s depois de
+  entrar — o ramo passava por ausência. Hoje o A0 exige a linha de recusa no log do gateway, e o
+  intruso entra quando o menu chega (o atendente real está na sala desde a atribuição).
+- **LM1 foi pega só pelo V1 na primeira**: com a fala entregue crua, o fluxo terminava, o socket
+  fechava e o cliente do probe levantava exceção em vez de reprovar o R1. O cliente passou a tratar
+  socket fechado como fim de leitura.
+- **A0 e R0 reprovavam intermitentes com a linha NO log**: o probe roda com `pipefail`, e
+  `docker logs | grep -q` sai no primeiro match — o `docker logs` morre de SIGPIPE e o pipeline
+  reprova tendo achado. Quanto maior o log, mais provável. Trocado por `grep -c`.
+- **`probe_menu_result_contract` reprovou a primeira versão, duas vezes com razão e uma sem**: o
+  valor levava uma chave `input` (tecla ou fala) que nenhum leitor lê — saiu, fica no log; o payload
+  era montado numa variável (OPACO) — virou literal; e o desfecho `{menu_id, outcome}` aparecia como
+  fora do contrato porque o censo só media o leitor do VALOR. O censo passou a medir também o leitor
+  do sinal da 5a (`(….get("payload") or {}).get("outcome")`), e o produtor vale se carrega a chave
+  do valor ou uma chave de sinal lida; a mutação do SMS continua acusada.
+
+**Vizinhos pós-deploy:** `probe_webrtc_tts_spoken` (com a fixture migrada), `probe_webrtc_human_transcript`,
+`probe_webrtc_stt_speaches`, `probe_webrtc_masked_keypad`, `probe_menu_signal_contract`,
+`probe_webrtc_bot_leg_gate` e `probe_menu_result_contract` — verdes.
+
+**Fora desta fatia.** Teclado do widget (5c). `voice.end_silence_ms`/`max_speech_s` e, com o
+`speaches`, `min_confidence` não são aplicados — ditos no log; deixou ficha `VOZ-18`. Texto
+DIGITADO em menu de botão ainda vai cru ao menu (caminho de texto fora do núcleo — `NIV-13`). O STT
+do lado do cliente ouviu "Emaio"/"Coqueio" para Email/Correio na voz `pf_dora`: a pronúncia de
+rótulo já registrada na `NIV-13` continua de pé.
+
 ## 2026-09-16 (4) — VOZ-05 fatia 5a + MEN-07: sinal da plataforma ganha fila própria, e a coleta ganha contrato e desfechos
 
 **O que havia.** Duas coisas no mesmo transporte:

@@ -2,7 +2,7 @@
   "skill_id": "skill_probe_tts_v1",
   "name": "Probe — o agente de IA fala na chamada (VOZ-05 fatia 3)",
   "version": "1.0",
-  "description": "Fixture do probe_webrtc_tts_spoken: aviso curto e prompt de menu (ouvidos inteiros, o controle), aviso longo que o cliente interrompe falando (barge-in) — a fala dele responde o menu de TEXTO livre seguinte, que aceita qualquer texto —, e um aviso depois da interrupcao (a fala volta). O ultimo menu segura o fluxo para a sala continuar de pe enquanto o probe mede. O aviso longo e UMA frase so: interrupcao entre frases nao prova o corte no meio de uma (medido — com frases curtas, a sala sem corte quadro a quadro passava).",
+  "description": "Fixture do probe_webrtc_tts_spoken: aviso curto e prompt de menu (ouvidos inteiros, o controle), aviso longo que o cliente interrompe falando (barge-in) — a fala dele responde o menu de TEXTO livre seguinte, que declara coleta por VOZ (desde a VOZ-05 fatia 5b a fala transcrita e registro, e so responde menu com `collect.input` contendo `voice`) —, e um aviso depois da interrupcao (a fala volta). O ultimo menu segura o fluxo para a sala continuar de pe enquanto o probe mede. O aviso longo e UMA frase so: interrupcao entre frases nao prova o corte no meio de uma (medido — com frases curtas, a sala sem corte quadro a quadro passava).",
   "classification": {
     "type": "orchestrator"
   },
@@ -53,7 +53,14 @@
         "output_as": "duvida",
         "on_success": "n3",
         "on_failure": "fim_falha",
-        "on_timeout": "fim_falha"
+        "on_timeout": "fim_falha",
+        "collect": {
+          "input": [
+            "voice",
+            "text"
+          ],
+          "first_input_timeout_s": 60
+        }
       },
       {
         "id": "n3",

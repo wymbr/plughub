@@ -10024,7 +10024,16 @@ async def process_inbound(
                     is_customer_facing = customer_pid in vis
                 # "agents_only" → skip — customer messages are not for this agent
 
-                if is_customer_facing:
+                if is_customer_facing and spoken_type == "audio_transcript":
+                    # VOZ-05 fatia 5b (decisão 5 do dono): a fala transcrita é REGISTRO da
+                    # chamada, nunca resposta de menu. Quem responde por voz é a coleta do canal,
+                    # que casa a fala com o que o menu aceita e manda `menu_result`. Entregue crua,
+                    # "espera um pouco" virava a escolha de um menu de botões (medido na fatia 3).
+                    logger.info(
+                        "Fala transcrita NAO entregue ao menu (registro; resposta por voz vem da "
+                        "coleta do canal): session=%s agent=%s", session_id, agent_key,
+                    )
+                elif is_customer_facing:
                     result_key = (
                         f"menu:result:{session_id}:{agent_key}"
                         if agent_key != "_default_"

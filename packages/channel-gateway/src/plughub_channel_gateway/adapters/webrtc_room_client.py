@@ -185,6 +185,14 @@ class IWebRTCRoomClient(Protocol):
         """
         ...
 
+    def dtmf(self) -> AsyncIterator[tuple[str, str]]:
+        """
+        Um par (identidade, tecla) por DTMF recebido na sala (VOZ-05 fatia 5b). O SFU entrega o
+        `sip_dtmf_received` a TODOS os participantes (medido 2026-09-16, ~3 ms) — quem filtra pelo
+        remetente é o chamador. Termina no `disconnect()`.
+        """
+        ...
+
     async def publish_audio(
         self, pcm_bytes: bytes, sample_rate: int = 24000
     ) -> None:
@@ -245,6 +253,7 @@ class LiveKitRoomClient:
         self._connected:    bool                         = False
         self._tts_sr:       int                          = 24000  # published sample rate
         self._interrupted:  bool                         = False
+        self._dtmf_q:       asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
 
     async def connect(
         self,
@@ -279,6 +288,13 @@ class LiveKitRoomClient:
             self._track_queues.append(fila)
             self._speakers_q.put_nowait((ident, fila))
             disparar(self._consume_audio_track(track, rtc, fila, ident), nome="webrtc-audio-track")
+
+        @self._room.on("sip_dtmf_received")
+        def _on_dtmf(ev) -> None:
+            digit = getattr(ev, "digit", "") or ""
+            ident = getattr(getattr(ev, "participant", None), "identity", "") or ""
+            if digit:
+                self._dtmf_q.put_nowait((ident, digit))
 
         @self._room.on("disconnected")
         def _on_disconnected(*_) -> None:
@@ -319,10 +335,18 @@ class LiveKitRoomClient:
             ident, fila = item
             yield ident, _drena(fila)
 
+    async def dtmf(self) -> AsyncIterator[tuple[str, str]]:  # type: ignore[override]
+        while True:
+            item = await self._dtmf_q.get()
+            if item is None:
+                return
+            yield item
+
     def _end_all(self) -> None:
         for fila in self._track_queues:
             _fim(fila)
         self._speakers_q.put_nowait(None)
+        self._dtmf_q.put_nowait(None)
 
     async def publish_audio(self, pcm_bytes: bytes, sample_rate: int = 24000) -> None:
         """Inject PCM audio into the room via a LocalAudioTrack."""
@@ -431,6 +455,7 @@ class MockRoomClient:
         self.customer_in_room: bool             = True
         self._speakers_q: asyncio.Queue[tuple[str, asyncio.Queue] | None] = asyncio.Queue()
         self._filas: dict[str, asyncio.Queue[bytes | None]] = {}
+        self._dtmf_q: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
 
     # ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -446,11 +471,16 @@ class MockRoomClient:
         """Quadro falso de `identity` (default: o cliente); a trilha aparece no primeiro quadro."""
         self._fila(identity or self.CUSTOMER).put_nowait(chunk)
 
+    def inject_dtmf(self, digit: str, identity: str | None = None) -> None:
+        """Tecla falsa de `identity` (default: o cliente)."""
+        self._dtmf_q.put_nowait((identity or self.CUSTOMER, digit))
+
     def end_audio(self) -> None:
         """Fim de todas as trilhas e da sala."""
         for fila in self._filas.values():
             fila.put_nowait(None)
         self._speakers_q.put_nowait(None)
+        self._dtmf_q.put_nowait(None)
 
     # ── IWebRTCRoomClient interface ───────────────────────────────────────────
 
@@ -470,6 +500,13 @@ class MockRoomClient:
             if item is None:
                 return
             yield item[0], _drena(item[1])
+
+    async def dtmf(self) -> AsyncIterator[tuple[str, str]]:  # type: ignore[override]
+        while True:
+            item = await self._dtmf_q.get()
+            if item is None:
+                return
+            yield item
 
     async def publish_audio(self, pcm_bytes: bytes, sample_rate: int = 24000) -> None:
         self.published_chunks.append(pcm_bytes)
