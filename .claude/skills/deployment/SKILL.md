@@ -20,8 +20,17 @@ docker compose -f docker-compose.demo.yml build <svc>
 docker compose -f docker-compose.demo.yml up -d <svc>
 ```
 
-- **Arquivo NOVO no pacote → `build --no-cache`** (nota do `rebuild-all.sh`: o cache de layer
-  não invalida por arquivo novo).
+- **Arquivo ou diretório NOVO entra no `build` normal — `--no-cache` NÃO é o padrão.** Medido em
+  2026-09-16 nos três caminhos (`docker build` no WSL, `docker.exe` do Windows por
+  `\\wsl.localhost`, `docker compose build`): a camada `COPY` do diretório é invalidada e o
+  arquivo chega à imagem (§4). A crença contrária veio de dois incidentes reais de 2026-07-29 cuja
+  causa **nunca foi achada** e que não se reproduzem hoje. Por isso a regra é a do § *Provar que
+  está rodando*: **confira a âncora dentro do container**; se faltar, aí sim `--no-cache`, e
+  registre o caso no `TODO.md`, porque é a primeira reprodução.
+- **O que de fato deixa arquivo novo de fora** (lido dos arquivos, não medido): o `.dockerignore`
+  exclui QUALQUER pasta chamada `build`, `dist`, `coverage` ou `.cache`, em qualquer nível; e
+  Dockerfile que copia SUBPASTAS em vez do pacote (`session-replayer`: `src` e `tests`;
+  `e2e-tests`: lista explícita) não leva pasta irmã nova. Nenhum `--no-cache` resolve esses dois.
 - **`@plughub/schemas` mudou → rebuild de TODO consumidor que valida aquele schema.** Caso
   medido: mexer no `MenuStepSchema` obriga `agent-registry`, `skill-flow-service` e
   `mcp-server-plughub` juntos, senão o registry rejeita o ref com 422.

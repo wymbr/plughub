@@ -1,7 +1,7 @@
 # Casos medidos — o porquê de cada regra da skill `deployment`
 
-> §1 e §2 movidos **integralmente** do `CLAUDE.md` em 2026-09-16. §3 é medição do mesmo dia.
-> §4 consolida armadilhas de shell que viviam só em memória local de sessão. Não resuma.
+> §1 e §2 movidos **integralmente** do `CLAUDE.md` em 2026-09-16. §3 e §4 são medições do mesmo
+> dia. §5 consolida armadilhas de shell que viviam só em memória local de sessão. Não resuma.
 
 ---
 
@@ -76,7 +76,38 @@ O auth-api ficou ~4 min fora numa stack compartilhada.
 
 ---
 
-## 4. Armadilhas de shell Windows → WSL
+## 4. "Arquivo novo exige `build --no-cache`" — não reproduz (medido 2026-09-16)
+
+A crença estava em `rebuild-all.sh`, em oito documentos de passagem e na primeira versão desta
+skill, e moldou trabalho: houve teste **anexado a arquivo existente** só para não exigir
+`--no-cache`. Ela nasceu de dois incidentes reais registrados no `TODO.md` (2026-07-29, *"causa não
+investigada"*): uma migração nova do Prisma que o boot do agent-registry não via, e um
+`pools_client.py` novo que o pytest da analytics-api não achava — nos dois, `--no-cache` resolveu.
+Uma passagem de 2026-08-24 já tinha refinado para *"só quando o Dockerfile lista arquivos"*, mas os
+dois Dockerfiles dos incidentes copiam o DIRETÓRIO, então o refinamento também não os explicava.
+
+Medição, com o contexto do routing-engine copiado para `/tmp` e tag descartável (nada da árvore nem
+da stack tocado). Veredito lido pela linha `COPY packages/routing-engine` do log e pela presença do
+arquivo dentro da imagem:
+
+| Caminho | Sem mudança | Arquivo novo | Diretório novo | Edita existente |
+|---|---|---|---|---|
+| `docker build`, dentro do WSL | CACHED | **refeito, presente** | — | refeito, presente |
+| `docker.exe` do Windows, contexto `\\wsl.localhost\…` | CACHED | **refeito, presente** | — | refeito, presente |
+| `docker compose build`, dentro do WSL | CACHED | **refeito, presente** | **refeito, presente** | — |
+
+Versões: Docker Compose v5.5.1, buildx v0.37.0, contexto `desktop-linux`. O controle (sem mudança →
+CACHED) e o controle positivo (edição → refeito) se comportaram como esperado, então o instrumento
+enxerga as duas cores.
+
+**Conclusão honesta:** a causa de julho segue desconhecida — pode ter sido versão do Docker da época,
+ou build disparado de outro diretório. O que mudou é a regra: `--no-cache` deixou de ser padrão e
+virou resposta a uma âncora ausente, e essa ausência, se voltar, é a primeira reprodução e merece
+registro.
+
+---
+
+## 5. Armadilhas de shell Windows → WSL
 
 - **`wsl.exe -- bash -c` atravessa DUAS camadas de shell** e a de fora processa a string
   primeiro. `$?` e variáveis somem — **aspas simples NÃO salvam**: em 2026-09-07 dois gates

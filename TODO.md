@@ -7892,6 +7892,18 @@ camada de build.
 **Primeiro passo:** comparar `.dockerignore` com o `COPY` do Dockerfile do agent-registry e
 do analytics-api; conferir se o build usa BuildKit com cache montado.
 
+> **Medido em 2026-09-16 — NÃO reproduz hoje.** Os dois Dockerfiles copiam o DIRETÓRIO do pacote, e
+> o `.dockerignore` não exclui `prisma/migrations` nem `pools_client.py`. Com o contexto do
+> routing-engine em `/tmp` e tag descartável, o arquivo novo **e** o diretório novo invalidaram a
+> camada `COPY` e chegaram à imagem pelos três caminhos: `docker build` no WSL, `docker.exe` do
+> Windows lendo `\\wsl.localhost`, e `docker compose build` (Compose v5.5.1, buildx v0.37.0). Os
+> controles (sem mudança → CACHED; edição → refeito) passaram. **A causa de julho continua sem
+> explicação** — versão do Docker da época ou build disparado de outro diretório são as hipóteses que
+> sobram, nenhuma testável hoje. Consequência aplicada: a crença saiu do `rebuild-all.sh` e da skill
+> `deployment`; a regra passou a ser *conferir a âncora dentro do container, e `--no-cache` só se
+> faltar*. **Se faltar, é a primeira reprodução — registrar aqui com versão do Docker e o comando
+> exato.** Tabela da medição: `.claude/skills/deployment/references/casos-medidos.md` § 4.
+
 ---
 
 ## Arc 19 — cleanup residual de infra *(arco concluído 2026-05-28; histórico no CHANGELOG)*

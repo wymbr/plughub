@@ -12,8 +12,12 @@
 #   ./infra/scripts/rebuild-all.sh --wipe --no-cache
 #
 # Notas:
-#   • --no-cache é necessário quando um ARQUIVO NOVO entrou no pacote: o cache
-#     de layer não invalida por arquivo novo (só por edição de existente).
+#   • --no-cache NÃO é necessário para arquivo novo. Esta nota dizia que era;
+#     medido em 2026-09-16 (docker build no WSL, docker.exe do Windows e
+#     docker compose build; arquivo e diretório novos) a camada COPY é refeita
+#     e o arquivo chega à imagem. Os dois incidentes de 2026-07-29 que deram
+#     origem à nota são reais e de causa desconhecida (TODO.md). Regra: confira
+#     o arquivo DENTRO do container; se faltar, use --no-cache e registre.
 #   • --wipe apaga postgres-data / clickhouse-data / kafka-data / redis-data /
 #     minio-data / attachment-data. No próximo boot: initdb do postgres roda de
 #     novo, agent-registry re-semeia de infra/registry/*.yaml (seed-if-absent),
