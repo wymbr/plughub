@@ -541,6 +541,17 @@ qualidade se chegar ao `ReplayContext.events`, e medir esse caminho achou o text
 
 ---
 
+## `docs/arcos/g7-segment-contact-decoupling.md` — fim de segmento sem fim de contato
+
+Grupo aberto em 2026-09-16: o teste de acionamento da skill `data-engineering` levantou duas
+marcações de transferência que não coincidem, e a medição confirmou.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| TRF-01 | **A transferência do Console é gravada como `resolved`, e a `transfer_rate` conta outra coisa.** Medido em 2026-09-16 no ClickHouse (`segments FINAL`, `plughub_demo`): **4** segmentos `human/primary` de `retencao_humano` com `close_reason = 'agent_transfer'` e `outcome = 'resolved'`, todos seguidos de segmento no pool de destino (`especialista_onboarding`), ou seja, transferências REAIS; e **2** segmentos `native/specialist` com `outcome = 'transferred'`, `pool_id` vazio e duração zero (2026-08-21, id no formato do harness e2e, origem não identificada — não é o cenário 23, que usa `primary` e `e2e_seq_pool_*`). Nenhum segmento tem as duas marcações. **Mecanismo, lido no código e DEDUZIDO, não observado** (as versões da linha já foram fundidas e os logs do bridge são de hoje): o `POST /api/session_transfer` publica `outcome: "transferred"` (`mcp-server-plughub/src/server.ts:3102`), o bridge semeia esse valor como placeholder no acumulador do segmento (`main.py:8006`), e o wrap-up de segmento do G7 Slice B o **sobrescreve** com a disposição — cujo mapa só tem `resolvido`/`pendente`/`escalado`/`cancelado` (`_WRAPUP_OUTCOME_MAP`, `main.py:4164`; `WRAPUP_OUTCOME_MAP`, `tools/segment.ts:179`). Os 4 têm wrap-up gravado. Logo, **segmento transferido com wrap-up preenchido nunca mantém `transferred`**. **Dano:** `transfer_rate` (`reports_query.py:5709`) e a MV de performance (`clickhouse.py:979`) contam `outcome = 'transferred'` — hoje só as 2 linhas espúrias, **0 das 4 reais** —, e as transferências reais inflam a taxa de resolução. `_ESCALATE_FAMILY_SQL` (`reports_query.py:3913`) também inclui `transferred`. **Decisão antes do conserto:** qual das duas é a marcação de transferência. `close_reason` é fato do TRANSPORTE e não depende do atendente; `outcome` é disposição que o wrap-up reescreve. Caminhos: (a) leitores contam `close_reason = 'agent_transfer'`; (b) o wrap-up não sobrescreve outcome de segmento já `transferred`; (c) as duas coisas, com a disposição do wrap-up em campo próprio. ⚠️ População pequena (4) — confirmar com uma transferência nova pelo Console, observando o `participant_left` no tópico ANTES do wrap-up, e contar as 2 linhas espúrias como parte do conserto. **Gatilho:** o próximo relatório que use `transfer_rate`, ou a próxima mudança no wrap-up de segmento | `aberto` | medido 2026-09-16; `reports_query.py:5709`, `orchestrator-bridge/main.py:4164` e `:8006` |
+
+---
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 4.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho
