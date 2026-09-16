@@ -36,20 +36,15 @@ PlugHub is an enterprise orchestration platform that connects agents — human a
 ## Saúde do CLAUDE.md — Regras de Manutenção
 
 > **Target: ≤ 1 750 linhas** *(revisado de 800 para 1 750 em 2026-09-06, pelo dono)*.
-> Quando ultrapassar, aplicar as regras abaixo.
+> Quando ultrapassar, aplicar as regras abaixo; subir ou baixar o alvo é decisão do dono.
 >
-> **Por que 800 caiu, e é aritmética, não gosto.** O arquivo estava em 1 883; as três maiores seções
-> somam 567 linhas (*Saúde* · *Security* · *Postura*), então **apagar as três inteiras daria 1 316** —
-> ainda 116 acima de 800. Um alvo abaixo do piso que as próprias regras protegem é promessa que o
-> arquivo não pode cumprir, e a próxima sessão que o lesse tentaria cortar o catálogo para alcançá-lo.
-> As outras 51 seções somavam 1 175 linhas, média de **23** — já no formato de resumo que a tabela
-> abaixo pede. O 800 foi fixado antes de *Postura* e *Security* crescerem para carregar o catálogo
-> medido; ele descrevia um arquivo que não existe mais.
->
-> **1 750 nasce cumprido, com folga estreita de propósito:** os dois movimentos que o alcançaram
-> (índice de docs → `docs/INDEX.md`; cinco seções de arco apertadas ao formato) esgotaram o que havia
-> a mover. A folga é o orçamento de crescimento — seção de arco nova que passe de 20 linhas o estoura,
-> que é exatamente o que ele deve cobrar.
+> **Como editar este arquivo mora na skill `claude-md-maintenance`** (2026-09-16): onde cada fato
+> mora, como corrigir frase medida falsa, como mover sem perder regra, e o verificador
+> `scripts/check_claude_md.py`. O porquê do 1 750 foi movido **integralmente** para
+> `references/casos-medidos.md` da skill. Aqui ficam as regras:
+> - **uma casa por fato** — o que já mora noutro lugar ganha ponteiro, nunca cópia;
+> - **afirmação se mede no código ou no estado vivo**, nunca na fonte declarativa, inclusive ao corrigir;
+> - **nunca apagar sem destino conferido item a item**; cabeçalho é endereço (`CLAUDE.md § X` é citado).
 
 ### O que FICA no CLAUDE.md
 
@@ -99,7 +94,7 @@ Os quatro arquivos da raiz: **`CLAUDE.md`** (arquitetura viva, regras, invariant
 **Skills do projeto** (`.claude/skills/`, 2026-09-16) — carregam sob demanda o MÉTODO; os invariantes
 continuam aqui. `testing-pattern` · `data-engineering` · `deployment` · `task-ledger` ·
 `security-boundaries` · `plughub-review` (com `scripts/scan_diff.py`, que varre só as linhas
-ADICIONADAS) · `skill-flow-authoring` · `platform-ui-change`. Critério da divisão: regra que tem de valer mesmo quando ninguém pede fica aqui;
+ADICIONADAS) · `skill-flow-authoring` · `platform-ui-change` · `claude-md-maintenance`. Critério da divisão: regra que tem de valer mesmo quando ninguém pede fica aqui;
 procedimento e caso medido vão para a skill.
 
 ---
