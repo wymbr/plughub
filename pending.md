@@ -595,6 +595,26 @@ marcações de transferência que não coincidem, e a medição confirmou.
 
 ---
 
+## `.claude/skills/claude-md-maintenance/SKILL.md` — forma do CLAUDE.md
+
+Achados da primeira rodada do `check_claude_md.py` (2026-09-16). Regra comum: seção de arco tem
+**15–20 linhas + link** para `docs/arcos/`, e status mora no ledger, nunca em título ou parágrafo.
+⚠️ **Apertar não é apagar**: várias destas seções carregam INVARIANTES além do detalhe, e cada regra
+precisa de destino conferido item a item antes de sair (skill § 4, precedente DOC-01). Os números de
+linha são de 2026-09-16; confira de novo antes de mexer.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| DOC-03 | **§ Arc 7 tem 47 linhas contra o formato de 15–20.** A seção mistura três coisas: resumo do arco; **invariantes** (administrar pessoa ≠ conceder capacidade, com as quatro portas; papel é preset de nascimento; menu grant-first; escopo × capacidade; pool é dado do tenant e `accessible_pools = []` no nascimento); e dois corolários de método. Os invariantes ficam no CLAUDE.md, mas talvez numa lista mais curta ou na § Security, que já os referencia em parte. O detalhe vai para `docs/arcos/arc7-auth.md`, que precisa ser conferido antes para evitar segunda casa. Também tem contagem sem mecanismo (`11 módulos`, lida duas vezes errada) | `aberto` | `CLAUDE.md` § Arc 7 (`:1114`); `check_claude_md.py` `arco-longo` |
+| DOC-04 | **§ Arc 15 tem 32 linhas.** Metade é o blockquote do VOZ-01 (o que o SFU real achou, o que ainda não existe) e três invariantes: versões do LiveKit andam juntas; token exige Bearer + capacidade por papel; mídia é fato do participante e a política é do pool. O histórico de provisionamento vai para `docs/arcos/arc15-webrtc.md`/`CHANGELOG.md`, e os invariantes ficam. O título afirma status (`⚠️ SFU de pé no demo · contato ponta a ponta NÃO`); a lista do que falta tem de apontar as fichas `VOZ-*`. ⚠️ O ✅ da `:1348` **não** é status: é a correção que menciona o ✅ antigo, e o verificador acusa como falso positivo | `aberto` | `CLAUDE.md` § Arc 15 (`:1346`, `:1348`) |
+| DOC-05 | **§ Arc 6 Fase 2 tem 24 linhas e o título afirma status (`*(completo)*`).** Tire o status do título e leve a "limitação registrada" e o detalhe do modo diário/epoch ao doc do arco. Ficam a âncora = POOL e a regra de leitura honesta (sem zero nem interpolação em dia sem amostra) | `aberto` | `CLAUDE.md` § Arc 6 Fase 2 (`:1218`) |
+| DOC-06 | **§ Arc 19 tem 21 linhas e carrega status em três lugares.** São `Journey ✅ (Fase F concluída 2026-05-28)` (`:1391`), `**6 fases**: A ✅ … F ✅ … **Arc 19 completo.**` (`:1395`) e o histórico das fases, que é do `CHANGELOG.md`. A linha das fases pode sair, depois de conferir que o `docs/arcos/arc19-unified-session-model.md` já a tem. Ficam: status `suspended`, a segregação de perfil com a correção CTR-01 e os dois nomes de duração (D9), que é invariante e o maior bloco da seção | `aberto` | `CLAUDE.md` § Arc 19 (`:1379`, `:1391`, `:1395`) |
+| DOC-07 | **✅ de status dentro de invariante:** *"✅ ARCO D14 COMPLETO (i→ii→iii) em 2026-08-25"* na emenda D10.1 + D14 do § What Never To Do. A frase de status sai. O conteúdo (alvo copiado no fechamento, `sessions.sla_target_ms` é projeção, `SEGMENT_SLA_EPOCH`, forward-only) é regra e fica. A linha de "never" com as emendas tem 43 linhas (só a emenda D10.1 + D14 tem 28, medido 2026-09-16) e também passa do formato: o detalhe vai para `conference-mechanics.md` § Mudança 41, que já é citado | `aberto` | `CLAUDE.md` § What Never To Do (`:848`) |
+| DOC-08 | **Status em título que o verificador não vê**, porque ele só procura ✅: `## Quality Ingest … *(arco completo)*` e `## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/…/R16 PENDENTE`. O segundo lista em título quais itens estão abertos, e isso é o ledger dentro do índice. Conserto em duas metades: (1) tirar o status dos dois títulos, apontando as fichas; (2) a regra `status-check` do `check_claude_md.py` passar a reprovar também `completo`/`concluído`/`PENDENTE` em cabeçalho `##`, com caso no `--selftest` | `aberto` | `CLAUDE.md` títulos das §§ Quality Ingest e Métricas de Avaliação; `check_claude_md.py` |
+| DOC-09 | **✅ de status no `packages/mcp-server-plughub/CLAUDE.md`**: *"✅ A ponte REST `/api/*` fechou em 2026-09-01 (CAP-12)"* (`:67`) e *"✅ O WebSocket do agente humano exige credencial desde 2026-09-15 (CAP-19)"* (`:90`). O fato vigente fica, sem ✅ e dito como regra (ex.: *"`/agent/ws` exige credencial"*, com o gate). A narrativa de quando fechou vai para `CHANGELOG.md`. Tem ainda contagens datadas de tools (`73`, `72`) no mesmo arquivo; ver skill § 2.3 | `aberto` | `packages/mcp-server-plughub/CLAUDE.md:67`, `:90` |
+
+---
+
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 4.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho
