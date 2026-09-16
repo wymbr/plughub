@@ -556,6 +556,20 @@ webrtc_stt_enabled:         bool = True
 > ninguém (medido contra o SFU). Hoje o agente de IA fala sempre que o bot leg converte (STT e
 > TTS disponíveis) — ver `CHANGELOG.md` 2026-09-15 (26).
 
+> **O bot leg são DOIS participantes da sala desde 2026-09-16 (VOZ-05 fatia 4, parte 1)** — e
+> nenhum dos dois é participante da SESSÃO (sem segmento, fora do roster):
+>
+> | papel | identidade | na sala | existe quando |
+> |---|---|---|---|
+> | ouvinte | `bot-{sid[:8]}` | `hidden`, só assina — única entrada de STT | há atendente de áudio e STT (hoje: só com agente de IA; humano na parte 2) |
+> | voz | `voz-{sid[:8]}` | visível, só publica — TTS | há agente de IA de áudio, STT e TTS |
+>
+> Oculto assina normalmente; o que oculto não faz é ser ouvido. O barge-in é local: o ouvinte
+> percebe o cliente e a voz para. A decisão da voz é tomada no `routing.assigned` ANTES de qualquer
+> `await` — a primeira fala da IA chega junto da atribuição. Só a frase final sai do gateway;
+> áudio para o STT vem do assinante, não do egress (medido: `TODO.md` § *VOZ-05 — áudio para o
+> STT*). Ver `CHANGELOG.md` 2026-09-16 (2).
+
 ---
 
 ## 16. Fases de Implementação

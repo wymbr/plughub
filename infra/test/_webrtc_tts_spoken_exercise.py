@@ -16,6 +16,8 @@ ouve na sala. O que ele ouve é transcrito pelo `speaches` — o mesmo serviço,
   T5 depois da interrupção a fala volta: N3 é ouvido (a fala do barge-in responde o menu de TEXTO
      livre M2 — o menu de botão tomaria a frase como escolha, e isso é da NIV-13)
   LAT texto do N1 no WebSocket → primeiro áudio do agente
+  P1 (fatia 4) o OUVINTE `bot-…` no SFU: oculto, não publica, assina
+  P2 (fatia 4) a VOZ `voz-…` no SFU: visível, publica, não assina
 
 Imprime `SID <id>` para o .sh.
 """
@@ -168,6 +170,28 @@ def _menu(trecho):
     return lambda m: m.get("type") == "webrtc.interaction" and trecho in (m.get("prompt") or "")
 
 
+async def papeis(room_name: str, sid: str) -> None:
+    """P1/P2 (fatia 4): o bot leg são DOIS participantes, e a permissão é perguntada ao SFU.
+    Oculto, a voz não seria ouvida (fatia 3); visível ou publicando, o ouvinte apareceria para o
+    cliente e para o Console numa chamada de humano."""
+    from livekit import api
+    lk = api.LiveKitAPI(LK_URL.replace("ws", "http", 1), os.environ["PLUGHUB_WEBRTC_LIVEKIT_API_KEY"],
+                        os.environ["PLUGHUB_WEBRTC_LIVEKIT_API_SECRET"])
+    try:
+        for ramo, ident, quer in (("P1", f"bot-{sid[:8]}", (True, False, True)),
+                                  ("P2", f"voz-{sid[:8]}", (False, True, False))):
+            try:
+                p = await lk.room.get_participant(api.RoomParticipantIdentity(room=room_name, identity=ident))
+                tem = (bool(p.permission.hidden), bool(p.permission.can_publish), bool(p.permission.can_subscribe))
+            except Exception as exc:
+                emit("FALHA", ramo, f"{ident} nao esta na sala: {exc}")
+                continue
+            emit("OK" if tem == quer else "FALHA", ramo,
+                 f"{ident} (hidden, publica, assina) = {tem}; esperado {quer}")
+    finally:
+        await lk.aclose()
+
+
 async def main() -> None:
     sub = "c-voz05t-" + uuid.uuid4().hex[:6]
     now = int(time.time())
@@ -257,6 +281,7 @@ async def main() -> None:
                  f"CONTROLE sem interrupcao: ouvido {ouvido1:.1f} s de {ref1:.1f} s de voz sintetizada")
             if primeiro:
                 emit("INFO", "LAT", f"texto do N1 no WebSocket → primeiro audio do agente: {primeiro - t_n1:.2f} s")
+            await papeis(ready.get("room_name") or "", sid)
 
             # ── T4 barge-in ──────────────────────────────────────────────────
             await c.manda({"type": "webrtc.menu_submit", "menu_id": m1["menu_id"], "interaction": "button", "result": "email"})

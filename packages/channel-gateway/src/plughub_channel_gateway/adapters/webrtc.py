@@ -157,6 +157,8 @@ _BARGE_IN_MIN_MS = 200
 # eram descartados. Cada mensagem espera bot e cliente na sala por este tempo, contado da
 # CHEGADA dela; depois é descartada DITA (o texto já está no widget).
 _SPEECH_WAIT_ROOM_S = 15.0
+# Causa de "sem voz" que NÃO é degradação: a chamada não tem agente de IA de áudio.
+_NO_AI_AUDIO_ATTENDANT = "nenhum agente de IA de audio atende a chamada"
 _SENTENCE_MIN_CHARS = 25
 
 
@@ -282,10 +284,21 @@ class WebRTCAdapter(ChannelAdapter):
         # sessão inteira e era sobrescrito a cada atribuição.
         self._customer_media: dict[str, frozenset[str]] = {}
 
-        # Phase C: server-side LiveKit room clients (session_id → room client)
-        # and STT pipeline tasks.
-        self._room_clients: dict[str, IWebRTCRoomClient] = {}
-        self._stt_tasks:    dict[str, asyncio.Task]       = {}
+        # O bot leg são DOIS papéis na sala, nenhum deles participante da SESSÃO (VOZ-05 fatia 4):
+        #   _room_clients   OUVINTE — oculto, só assina; é a única entrada de STT da chamada.
+        #   _voice_clients  VOZ     — visível, só publica; existe só com agente de IA de áudio.
+        # Oculto assina normalmente (medido contra o SFU em 2026-09-16); o que oculto não faz é
+        # ser OUVIDO (fatia 3). Separar os papéis evita reconectar oculto↔visível quando uma IA
+        # entra ou sai de uma chamada de humano, com buraco na transcrição.
+        self._room_clients:  dict[str, IWebRTCRoomClient] = {}
+        self._stt_tasks:     dict[str, asyncio.Task]       = {}
+        self._voice_clients: dict[str, IWebRTCRoomClient] = {}
+        # Decisão sobre a VOZ por sessão, tomada no `routing.assigned`: presente = a voz entra
+        # (ou já entrou). Ausente com a atribuição já conhecida = ninguém vai falar, e a fala da
+        # IA é descartada NA HORA, com o motivo — não depois de esperar 15 s por uma voz que
+        # não vem, culpando a sala.
+        self._voice_wanted:  set[str] = set()
+        self._voice_absent_why: dict[str, str] = {}
 
         # Phase D: active egress recordings.
         # _session_egress: session_id → { segment_id → egress_id }
@@ -391,6 +404,31 @@ class WebRTCAdapter(ChannelAdapter):
         lia (e a mutação do probe usa)."""
         return self._stt_unavailable is None and media_policy.bot_leg_needs(state["attendants"])["convert"]
 
+    def _voice_should_run(self, state: dict) -> bool:
+        """A VOZ entra quando há agente de IA de áudio e o bot converte (STT e TTS)."""
+        return self._convert_available() and media_policy.bot_leg_needs(state["attendants"])["convert"]
+
+    def _voice_absent_reason(self, state: dict) -> str:
+        """Por que ninguém fala nesta chamada — a mesma causa que o estado de mídia nomeia."""
+        if not media_policy.bot_leg_needs(state["attendants"])["convert"]:
+            return _NO_AI_AUDIO_ATTENDANT
+        return "; ".join(x for x in (self._stt_unavailable, self._tts_unavailable) if x) or "voz indisponivel"
+
+    def _decide_voice(self, session_id: str, state: dict) -> bool:
+        """Grava a decisão sobre a VOZ (`_voice_wanted`) e devolve se ela deve estar na sala."""
+        wanted = self._voice_should_run(state)
+        if wanted:
+            self._voice_wanted.add(session_id)
+            self._voice_absent_why.pop(session_id, None)
+        else:
+            # a causa fica guardada: `_speak` roda ANTES de qualquer `await` e não pode ir ao Redis
+            self._voice_absent_why[session_id] = self._voice_absent_reason(state)
+            if session_id in self._voice_wanted:
+                logger.info("webrtc voz: sai da chamada (session=%s) — %s",
+                            session_id, self._voice_absent_why[session_id])
+            self._voice_wanted.discard(session_id)
+        return wanted
+
     def _bot_leg_state(self, state: dict, session_id: str) -> dict:
         needs = media_policy.bot_leg_needs(state["attendants"])
         faltas = []
@@ -408,7 +446,13 @@ class WebRTCAdapter(ChannelAdapter):
         return bot
 
     async def _stop_bot_leg(self, session_id: str) -> None:
-        self._stop_speech(session_id)
+        """Os dois papéis saem da sala: o ouvinte e a voz."""
+        self._voice_wanted.discard(session_id)
+        self._voice_absent_why.pop(session_id, None)
+        await self._stop_voice(session_id)
+        await self._stop_listener(session_id)
+
+    async def _stop_listener(self, session_id: str) -> None:
         task = self._stt_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
@@ -418,7 +462,17 @@ class WebRTCAdapter(ChannelAdapter):
                 await room_client.disconnect()
             except Exception as exc:
                 logger.warning("webrtc bot leg: disconnect falhou (session=%s): %s", session_id, exc)
-            logger.info("webrtc bot leg: saiu da sala (session=%s)", session_id)
+            logger.info("webrtc bot leg: ouvinte saiu da sala (session=%s)", session_id)
+
+    async def _stop_voice(self, session_id: str) -> None:
+        self._stop_speech(session_id)
+        voice = self._voice_clients.pop(session_id, None)
+        if voice is not None:
+            try:
+                await voice.disconnect()
+            except Exception as exc:
+                logger.warning("webrtc voz: disconnect falhou (session=%s): %s", session_id, exc)
+            logger.info("webrtc voz: saiu da sala (session=%s)", session_id)
 
     # ── ChannelAdapter interface — outbound delivery ──────────────────────────
 
@@ -583,17 +637,8 @@ class WebRTCAdapter(ChannelAdapter):
         # Phase D: stop egress recordings
         await self._stop_all_egress(session_id)
 
-        # Phase C: cancel STT task and disconnect room client
-        self._stop_speech(session_id)
-        stt_task = self._stt_tasks.pop(session_id, None)
-        if stt_task and not stt_task.done():
-            stt_task.cancel()
-        room_client = self._room_clients.pop(session_id, None)
-        if room_client is not None:
-            try:
-                await room_client.disconnect()
-            except Exception:
-                pass
+        # Phase C: ouvinte e voz saem da sala
+        await self._stop_bot_leg(session_id)
 
         self._connections.pop(session_id, None)
         self._customer_media.pop(session_id, None)
@@ -1001,6 +1046,11 @@ class WebRTCAdapter(ChannelAdapter):
         state["customer"] = self._customer_state(
             state, publish, f"attendant_joined:{record['framework'] or 'unknown'}", session_id,
         )
+        # A decisão da VOZ vem ANTES de `_customer_media`, sem `await` entre as duas: a primeira
+        # fala da IA chega junto desta atribuição (fatia 3), e ao ver `_customer_media` sem a
+        # decisão ela a lia como "sem voz" e era descartada. Medido ao vivo na fatia 4: aviso e
+        # prompt do menu inicial mudos, as falas seguintes normais.
+        run_voice = self._decide_voice(session_id, state)
         self._customer_media[session_id] = publish
 
         room_name = build_room_name(session_id)
@@ -1036,6 +1086,11 @@ class WebRTCAdapter(ChannelAdapter):
             disparar(
                 self._start_stt_pipeline(session_id, room_name),
                 nome=f"webrtc-stt-start-{session_id[:8]}",
+            )
+        if run_voice:
+            disparar(
+                self._start_voice(session_id, room_name),
+                nome=f"webrtc-voz-start-{session_id[:8]}",
             )
         # LÁPIDE (VOZ-10, 2026-09-14) — aqui a gravação disparava se o pool trouxesse
         # `webrtc_recording`, campo que NÃO existia em lugar nenhum: leitor sem produtor,
@@ -1091,6 +1146,8 @@ class WebRTCAdapter(ChannelAdapter):
         new_list = media_policy.kinds_list(publish)
         # O bot leg segue os ATENDENTES, não o teto: entra com o primeiro atendente de áudio e
         # sai quando não resta nenhum.
+        # Ouvinte e voz decidem cada um por si; a decisão da voz antes de qualquer `await`.
+        run_voice = self._decide_voice(session_id, state)
         run_bot = self._bot_leg_should_run(state, publish)
         if run_bot and session_id not in self._room_clients:
             disparar(
@@ -1098,7 +1155,14 @@ class WebRTCAdapter(ChannelAdapter):
                 nome=f"webrtc-stt-start-{session_id[:8]}",
             )
         elif not run_bot and session_id in self._room_clients:
-            await self._stop_bot_leg(session_id)
+            await self._stop_listener(session_id)
+        if run_voice and session_id not in self._voice_clients:
+            disparar(
+                self._start_voice(session_id, build_room_name(session_id)),
+                nome=f"webrtc-voz-start-{session_id[:8]}",
+            )
+        elif not run_voice and session_id in self._voice_clients:
+            await self._stop_voice(session_id)
         if previous == new_list:
             state["customer"] = {**(state.get("customer") or {}),
                                  "policy_sources": media_policy.policy_sources(state["attendants"]),
@@ -1356,21 +1420,8 @@ class WebRTCAdapter(ChannelAdapter):
         # Phase D: stop egress recordings before Phase C cleanup
         await self._stop_all_egress(session_id)
 
-        # Phase C: stop STT pipeline and disconnect room client
-        self._stop_speech(session_id)
-        stt_task = self._stt_tasks.pop(session_id, None)
-        if stt_task and not stt_task.done():
-            stt_task.cancel()
-
-        room_client = self._room_clients.pop(session_id, None)
-        if room_client is not None:
-            try:
-                await room_client.disconnect()
-            except Exception as exc:
-                logger.debug(
-                    "webrtc: room_client disconnect error (session=%s): %s",
-                    session_id, exc,
-                )
+        # Phase C: ouvinte e voz saem da sala
+        await self._stop_bot_leg(session_id)
 
         if session_id in self._close_fired:
             logger.debug("webrtc: fechamento ja publicado session=%s (%s ignorado)", session_id, reason)
@@ -1431,46 +1482,13 @@ class WebRTCAdapter(ChannelAdapter):
         if not s.webrtc_stt_enabled:
             return
 
-        # Generate a bot token for the server-side room participant
-        try:
-            bot_identity = f"bot-{session_id[:8]}"
-            grants       = TokenGrants(
-                room_name        = room_name,
-                identity         = bot_identity,
-                display_name     = "Assistente virtual",
-                # VOZ-05 (fatia 3): o bot só entra para CONVERTER para um agente de IA, e o
-                # agente fala por ele. Oculto, ninguém o ouve — medido contra o SFU: o cliente
-                # recebe 0 s de áudio de participante `hidden` ("received track from an unknown
-                # participant"). ⚠️ Quando a fatia 4 puser o bot em chamada só de humano, para
-                # TRANSCREVER, ali ele volta a ser oculto e mudo.
-                can_publish      = True,
-                can_subscribe    = True,
-                can_publish_data = False,
-                hidden           = False,
-                ttl_seconds      = s.webrtc_token_ttl_s,
-            )
-            bot_token = self._provider.generate_token(grants)
-        except Exception as exc:
-            logger.warning(
-                "webrtc: bot token generation failed (session=%s): %s — STT disabled",
-                session_id, exc,
-            )
-            return
-
-        # Create and connect room client
-        room_client = LiveKitRoomClient()
-        try:
-            await room_client.connect(
-                room_name   = room_name,
-                identity    = bot_identity,
-                token       = bot_token,
-                livekit_url = s.webrtc_livekit_url,
-            )
-        except Exception as exc:
-            logger.warning(
-                "webrtc: room_client connect failed (session=%s): %s — STT disabled",
-                session_id, exc,
-            )
+        # OUVINTE (VOZ-05 fatia 4): oculto e sem publicar — ninguém na sala o vê, e ele não tem
+        # o que dizer. A voz da IA é outro participante (`_start_voice`).
+        room_client = await self._join_room(
+            session_id, room_name, identity=f"bot-{session_id[:8]}", display_name="Transcricao",
+            publish=False, subscribe=True, hidden=True, papel="ouvinte",
+        )
+        if room_client is None:
             return
 
         self._room_clients[session_id] = room_client
@@ -1484,6 +1502,54 @@ class WebRTCAdapter(ChannelAdapter):
         logger.info(
             "webrtc: STT pipeline started: session=%s room=%s", session_id, room_name
         )
+
+    async def _join_room(
+        self, session_id: str, room_name: str, *, identity: str, display_name: str,
+        publish: bool, subscribe: bool, hidden: bool, papel: str,
+    ) -> IWebRTCRoomClient | None:
+        """Um papel do bot leg entra na sala. Falha fica DITA: sem ouvinte, a chamada não é
+        transcrita; sem voz, o agente de IA não fala."""
+        s = self._settings
+        try:
+            token = self._provider.generate_token(TokenGrants(
+                room_name        = room_name,
+                identity         = identity,
+                display_name     = display_name,
+                can_publish      = publish,
+                can_subscribe    = subscribe,
+                can_publish_data = False,
+                hidden           = hidden,
+                ttl_seconds      = s.webrtc_token_ttl_s,
+            ))
+        except Exception as exc:
+            logger.warning("webrtc %s: token falhou (session=%s): %s — %s NAO entra na sala",
+                           papel, session_id, exc, papel)
+            return None
+        client = LiveKitRoomClient()
+        try:
+            await client.connect(room_name=room_name, identity=identity, token=token,
+                                 livekit_url=s.webrtc_livekit_url)
+        except Exception as exc:
+            logger.warning("webrtc %s: conexao falhou (session=%s): %s — %s NAO entra na sala",
+                           papel, session_id, exc, papel)
+            return None
+        return client
+
+    async def _start_voice(self, session_id: str, room_name: str) -> None:
+        """VOZ (VOZ-05 fatia 4): visível, só publica. Oculta, ninguém a ouviria — medido na fatia
+        3 contra o SFU: 0 s de áudio de participante `hidden` chega ao cliente."""
+        voice = await self._join_room(
+            session_id, room_name, identity=f"voz-{session_id[:8]}", display_name="Assistente virtual",
+            publish=True, subscribe=False, hidden=False, papel="voz",
+        )
+        if voice is None:
+            return
+        if session_id not in self._voice_wanted or session_id in self._voice_clients:
+            # a decisão mudou (ou outra entrada venceu) enquanto conectava
+            await voice.disconnect()
+            return
+        self._voice_clients[session_id] = voice
+        logger.info("webrtc voz: entrou na sala session=%s room=%s", session_id, room_name)
 
     async def _stt_pipeline(
         self, session_id: str, room_client: IWebRTCRoomClient
@@ -1591,17 +1657,31 @@ class WebRTCAdapter(ChannelAdapter):
 
     # ── Fala do agente (VOZ-05, fatia 3) ──────────────────────────────────────
 
+    def _voice_decided_absent(self, session_id: str) -> bool:
+        """A atribuição já chegou (`_customer_media`) e decidiu que NÃO há voz nesta chamada."""
+        return session_id in self._customer_media and session_id not in self._voice_wanted
+
     def _can_speak(self, session_id: str) -> bool:
-        """Há TTS e a sessão é deste gateway. Se o bot leg vai estar na sala é a espera de cada
-        mensagem que descobre (`_wait_room_for_speech`) — a fala chega antes da atribuição."""
-        return self._tts is not None and (
-            session_id in self._room_clients or session_id in self._sessions)
+        """Há TTS, a sessão é deste gateway e a VOZ vai estar na sala. Antes do `routing.assigned`
+        não se sabe — a fala da IA chega antes dele (fatia 3) —, e a espera de cada mensagem
+        (`_wait_room_for_speech`) é que descobre. Depois dele, a decisão é conhecida: sem voz,
+        não há por que enfileirar (VOZ-05 fatia 4 — antes esperava 15 s e culpava a sala)."""
+        return (self._tts is not None
+                and (session_id in self._voice_clients or session_id in self._sessions)
+                and not self._voice_decided_absent(session_id))
 
     def _speak(self, session_id: str, text: str) -> None:
-        """Enfileira `text` para ser falado na sala. Sem TTS não fala — e isso já está NOMEADO
-        no estado de mídia (`customer.bot_leg.reason`), então aqui é só debug."""
+        """Enfileira `text` para ser falado na sala. Sem voz não fala; a causa já está NOMEADA
+        no estado de mídia (`customer.bot_leg.reason`), então aqui é debug com a causa."""
         if not self._can_speak(session_id):
-            logger.debug("webrtc fala: sem TTS ou sessao desconhecida (%s) — texto nao falado", session_id)
+            # IA SEM agente de áudio (chamada de texto) é o normal e fica em debug; IA de áudio
+            # sem voz é DEGRADAÇÃO e aparece — foi um descarte em debug que escondeu a corrida
+            # da atribuição na fatia 4.
+            degradou = (self._voice_decided_absent(session_id)
+                        and self._voice_absent_why.get(session_id) != _NO_AI_AUDIO_ATTENDANT)
+            logger.log(logging.INFO if degradou else logging.DEBUG,
+                       "webrtc fala: texto nao falado (session=%s) — %s", session_id,
+                       self._speech_absent_cause(session_id))
             return
         fila = self._speech_queues.get(session_id)
         if fila is None:
@@ -1638,19 +1718,34 @@ class WebRTCAdapter(ChannelAdapter):
             finally:
                 self._speaking.discard(session_id)
 
+    def _speech_absent_cause(self, session_id: str) -> str:
+        if self._tts is None:
+            return self._tts_unavailable or "sem TTS"
+        if self._voice_decided_absent(session_id):
+            return "sem voz nesta chamada: " + self._voice_absent_why.get(session_id, "motivo nao registrado")
+        return "sessao desconhecida neste gateway"
+
     async def _wait_room_for_speech(self, session_id: str, chegou: float) -> IWebRTCRoomClient | None:
-        """O bot na sala E o cliente na sala, até `_SPEECH_WAIT_ROOM_S` depois de a mensagem chegar."""
+        """A VOZ na sala E o cliente na sala, até `_SPEECH_WAIT_ROOM_S` depois de a mensagem
+        chegar — ou até a atribuição decidir que não haverá voz, e então desiste na hora."""
         prazo = chegou + _SPEECH_WAIT_ROOM_S
         while True:
-            room_client = self._room_clients.get(session_id)
-            if room_client is not None and room_client.customer_present():
-                return room_client
+            voice = self._voice_clients.get(session_id)
+            if voice is not None and voice.customer_present():
+                return voice
+            if self._voice_decided_absent(session_id):
+                logger.info(
+                    "webrtc fala: mensagem NAO falada (session=%s) — %s; o texto ja chegou ao widget",
+                    session_id, self._speech_absent_cause(session_id),
+                )
+                return None
             if time.monotonic() >= prazo:
                 logger.info(
                     "webrtc fala: mensagem NAO falada (session=%s) — %s; o texto ja chegou ao widget",
                     session_id,
-                    f"o bot leg nao entrou na sala em {_SPEECH_WAIT_ROOM_S:.0f} s" if room_client is None
-                    else f"o cliente nao entrou na sala em {_SPEECH_WAIT_ROOM_S:.0f} s",
+                    (f"o cliente nao entrou na sala em {_SPEECH_WAIT_ROOM_S:.0f} s" if voice is not None
+                     else f"a atribuicao nao chegou em {_SPEECH_WAIT_ROOM_S:.0f} s" if session_id not in self._customer_media
+                     else f"a voz nao entrou na sala em {_SPEECH_WAIT_ROOM_S:.0f} s"),
                 )
                 return None
             await asyncio.sleep(0.05)
@@ -1680,9 +1775,10 @@ class WebRTCAdapter(ChannelAdapter):
             descartadas += 1
         self._speech_cancel.add(session_id)
         self._speaking.discard(session_id)
-        room_client = self._room_clients.get(session_id)
-        if room_client is not None:
-            room_client.interrupt_audio()
+        # o OUVINTE percebeu o cliente; quem para é a VOZ — sinal local, no mesmo processo
+        voice = self._voice_clients.get(session_id)
+        if voice is not None:
+            voice.interrupt_audio()
         logger.info(
             "webrtc: fala INTERROMPIDA pelo cliente session=%s (%d mensagem(ns) pendente(s) descartada(s))",
             session_id, descartadas,
@@ -1731,20 +1827,27 @@ class WebRTCAdapter(ChannelAdapter):
         # Claim the recording slot before any async work to prevent races
         await self._redis.set(rec_key, "starting", ex=_SESSION_TTL)
 
-        # LGPD recording notice — prefer TTS injection when the room client is
-        # active; fall back to a text message over WebSocket.
+        # Aviso LGPD de gravação: SEMPRE por texto, e também falado quando há voz na chamada.
+        # Só na fila de fala (como era) ele podia não chegar a ninguém — descartado depois da
+        # espera, cortado pelo barge-in, ou entregue a um participante que ninguém ouve — e o log
+        # diria "o texto ja chegou ao widget", falso para ele (VOZ-05 fatia 4). A gravação não
+        # depende de o aviso ter sido FALADO; se deve esperar o fim da fala é decisão da VOZ-06.
         notice = s.webrtc_recording_notice
-        if self._can_speak(session_id):
-            self._speak(session_id, notice)
+        self._speak(session_id, notice)
+        ws = self._connections.get(session_id)
+        if ws:
+            await self._ws_send(ws, {
+                "type": "webrtc.message",
+                "text": notice,
+                "author": "system",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
         else:
-            ws = self._connections.get(session_id)
-            if ws:
-                await self._ws_send(ws, {
-                    "type": "webrtc.message",
-                    "text": notice,
-                    "author": "system",
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                })
+            logger.warning(
+                "webrtc egress: aviso de gravacao sem WebSocket do cliente session=%s — "
+                "o texto NAO foi entregue (%s)", session_id,
+                "so falado" if self._can_speak(session_id) else "nem falado",
+            )
 
         # Natural pause after notice (mirrors voice channel behaviour)
         await asyncio.sleep(1.5)

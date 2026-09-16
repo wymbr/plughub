@@ -1,5 +1,50 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-16 (2) — VOZ-05 fatia 4 (parte 1): o bot leg vira dois participantes, ouvinte e voz
+
+**Decisões do dono antes de codar.** A transcrição de chamada é MENSAGEM de texto dos participantes
+reais, com marca de origem, e só a frase final sai do gateway. O áudio para o STT continua vindo de
+um assinante na sala, não do egress: medido numa pilha isolada, o Track Egress por WebSocket
+entrega ~830 ms atrás do assinante (~60 ms), pede Redis no SFU e uma imagem de 4,76 GB, e não tira
+a mídia do gateway (`TODO.md` § *VOZ-05 — áudio para o STT*). Registrada também a emenda da
+`DLG-34`: mídia pré-gravada para o fixo, com a frase como chave.
+
+**O que mudou no gateway.** O bot leg era UM participante visível que ouvia e falava. Agora são
+dois, e nenhum é participante da sessão:
+- **ouvinte** `bot-…`: oculto, só assina — a única entrada de STT da chamada;
+- **voz** `voz-…`: visível, só publica — existe só com agente de IA de áudio.
+Oculto assina normalmente (medido); o que oculto não faz é ser OUVIDO. Com os papéis separados, a
+parte 2 põe o ouvinte em chamada de humano sem reconectar nada quando uma IA entra ou sai. O
+barge-in continua local: o ouvinte percebe o cliente, a voz para.
+
+**Os dois achados da revisão da fatia 3, consertados com teste.**
+1. `_start_egress` punha o aviso LGPD SÓ na fila de fala, onde a espera, o barge-in ou um
+   participante oculto o faziam sumir — e o log diria *"o texto ja chegou ao widget"*, falso para
+   ele. Hoje vai sempre por texto, e também falado quando há voz. Sem chamador até a `VOZ-06`.
+2. `_can_speak` não conferia se haveria voz: IA com TTS e sem STT esperava 15 s por mensagem e o log
+   culpava a sala. A decisão da voz é gravada no `routing.assigned`; conhecida, a fala da IA é
+   descartada na hora com a causa real, em INFO quando é degradação.
+
+**Um defeito meu que só o ao vivo mostrou.** Primeira rodada do `probe_webrtc_tts_spoken`: T1, T2,
+T3 e C vermelhos (0,0 s de 5,9 s de voz), com T4/T5 verdes. O `routing.assigned` gravava
+`_customer_media` antes da decisão da voz, com `await`s no meio; a primeira fala da IA chega
+exatamente nesse intervalo, lia "sem voz" e caía em `debug` — mudo e sem rastro. A decisão passou
+para antes de qualquer `await`, e o descarte por degradação saiu do `debug`. Teste que segura a
+atribuição no `create_room` e entrega a fala ali.
+
+**Testemunhas.** Suíte do gateway 1 079 verdes. Mutações unitárias 8/8 mortas (espera ignorando a
+decisão, tocador pelo ouvinte, aviso só falado, voz oculta, ouvinte publicando, barge-in no
+ouvinte, `_can_speak` sem a decisão, decisão depois dos `await`s). Ao vivo, com a imagem nova:
+`probe_webrtc_tts_spoken` verde com dois ramos novos perguntados ao SFU (P1 ouvinte
+`hidden/não publica/assina`; P2 voz `visível/publica/não assina`), `probe_webrtc_bot_leg_gate` e
+`probe_webrtc_stt_speaches` verdes.
+
+⚠️ **Não entregue aqui (parte 2):** o ouvinte em chamada de humano, a trilha do atendente humano e o
+destino da transcrição. Medido para desenhá-la: no SFU o humano é `agent-{sub}` e no stream é
+`human-{sub}` (nada liga os dois além do `sub`); o bridge descarta inbound cujo autor não é o
+cliente e grava `content_type: "text"` fixo, então a marca `audio_transcript` que o gateway já
+manda se perde; nem o Console nem o transcript do supervisor olham tipo de conteúdo.
+
 ## 2026-09-16 (1) — RPL-01: o avaliador de qualidade passa a ver o que o cliente escreveu
 
 **Achado ao preparar a VOZ-05 fatia 4.** A transcrição de chamada só serve à qualidade se chegar ao

@@ -1,6 +1,54 @@
 # TODO — PlugHub Itens Pendentes
 
 
+## VOZ-05 — áudio para o STT: egress por trilha × assinante na sala *(medido 2026-09-16, antes da fatia 4)*
+
+**Pergunta do dono:** o bot na sala dá a sensação de trazer o stream para dentro da plataforma;
+o egress do LiveKit tiraria a trilha da sala sem participante. Medido antes de decidir a fatia 4.
+
+**Como.** Pilha ISOLADA (fora do demo): `livekit-server:v1.13.6` + Redis + `livekit/egress`
+1.14.1 (`sha256:bf2b648b…`). Dois participantes publicando áudio com rajadas de 200 ms marcadas no
+tempo (1 kHz e 600 Hz); `start_track_egress` com `websocket_url` para um servidor WS no mesmo
+processo; controle no MESMO processo e sinal: participante `hidden` que assina a trilha do cliente
+(o caminho das fatias 2 e 3). Duas rodadas, números iguais.
+
+| | Track Egress → WebSocket | Assinante na sala (controle) |
+|---|---|---|
+| Formato | PCM s16le **48 kHz ESTÉREO**, `content-type: audio/x-raw`, 20 ms por mensagem | o que se pedir ao `AudioStream` (48 kHz mono aqui) |
+| Da requisição ao 1º áudio | **3,1 s** (API 525 ms a frio, 27 ms a quente; WS abre em ~0,3 s) | 0,2 s |
+| Atraso rajada → chegada | **~830 ms, constante** (18 rajadas: 832–833) | **~60 ms** (58–70) |
+| Mute | silêncio contínuo (nenhum buraco > 100 ms) + texto `{"muted":true}` **1,5 s** depois | — |
+| Stop pela API | 5 ms; WS fecha 2,8 s depois; `EGRESS_COMPLETE` | — |
+| Participante sai | WS fecha 3,2 s depois; `EGRESS_COMPLETE` (*"Source closed"*) | — |
+| Custo | imagem **4,76 GB** (traz Chrome); ~0,05 core e ~25 MB por trilha; 35 MB ocioso | uma conexão no processo do gateway |
+| Pré-requisito | **Redis no config do SFU** (o do demo não tem) | nenhum |
+
+Não medido: quanto áudio se perde antes do 1º byte; `AutoTrackEgress` para WebSocket; egress por
+trilha em escala. Achado lateral: URL de WS inalcançável não falha na hora — o egress enche o buffer
+(*"buffer full, dropping sample"*) e só então vai a `EGRESS_FAILED`.
+
+**Leitura.**
+1. **Para a IA, egress está fora.** 830 ms antes do limiar de 200 ms põe o barge-in (fatia 3, corte
+   em ~0,56 s) acima de 1 s, e a VOZ-13 mira 1,5 s do fim da fala ao primeiro áudio. E a IA precisa
+   PUBLICAR, o que só participante faz. O caminho da IA continua participante.
+2. **Para a transcrição de humano, egress funciona** (a latência não importa para a qualidade), mas
+   não tira mídia da plataforma: ele INVERTE a conexão — o SFU liga para um WebSocket do gateway, que
+   continua recebendo PCM e rodando o STT. Custa uma rota interna nova no gateway (fora da allowlist
+   da borda: `/ws` é prefixo PÚBLICO), Redis no SFU, 4,76 GB de imagem, e o gateway ainda precisa
+   saber QUANDO cada trilha aparece para pedir o egress (webhook do LiveKit ou participante).
+3. **Dois mecanismos de entrada de áudio** (egress para humano, assinante para IA) numa chamada mista
+   é o custo que decide: duas falhas, dois ciclos de vida, para a mesma frase transcrita.
+4. **Participante OCULTO assina normalmente** (controle desta medição). O que a fatia 3 mediu é que
+   oculto não é OUVIDO. Logo o bot pode ser dois papéis sem reconexão: **ouvinte** oculto, sem
+   publicar, sempre que há atendente de áudio; **voz** visível, só publicando, só com agente de IA.
+   Isso substitui a reconexão oculto↔visível que eu tinha proposto para chamada mista.
+
+**Recomendação (a decidir pelo dono):** fatia 4 com o ouvinte oculto — mesmo mecanismo das fatias 2 e
+3, ~60 ms, zero infra nova. O egress entra com a `VOZ-06`, para GRAVAR, que é onde ele é
+insubstituível. A preocupação legítima por trás da pergunta (o gateway como servidor de mídia) se
+resolve separando um worker de mídia da camada de canal, não trocando assinante por egress: o STT em
+streaming fica no mesmo lugar nos dois casos.
+
 ## DOC-01 — higiene do `CLAUDE.md`: onde estão as 2 204 linhas, e o que NÃO deve sair *(medido 2026-09-05)*
 
 > ✅ **EXECUTADO no mesmo dia — `2 203 → 1 883`. Ver `CHANGELOG.md` § 2026-09-05 (28) e `done.md`

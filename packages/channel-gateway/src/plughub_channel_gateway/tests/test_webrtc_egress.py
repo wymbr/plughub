@@ -179,6 +179,38 @@ class TestEgressStart:
         assert notice_sent, f"LGPD notice not sent via WS. calls={calls_args}"
 
     @pytest.mark.asyncio
+    async def test_notice_goes_as_text_even_when_the_voice_speaks_it(self):
+        # Achado da revisão da fatia 3 (VOZ-05 fatia 4): com voz na chamada o aviso ia SÓ para
+        # a fila de fala, onde pode ser descartado (espera, barge-in) sem chegar ao cliente.
+        from plughub_channel_gateway.adapters.webrtc_room_client import MockRoomClient
+
+        class _TTS:
+            output_sample_rate = 24000
+            textos: list[str] = []
+
+            async def synthesize(self, text, voice_id=None):
+                self.textos.append(text)
+                return b"\x01\x00" * 480
+
+        adapter, redis, _ = _make_adapter()
+        adapter._tts, adapter._tts_unavailable = _TTS(), None
+        adapter._sessions[SESSION_ID] = {"contact_id": "c", "pool_id": "p", "started_at": "x"}
+        adapter._voice_clients[SESSION_ID] = MockRoomClient()
+        adapter._voice_wanted.add(SESSION_ID)
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
+        ws = AsyncMock()
+        adapter._connections[SESSION_ID] = ws
+        assert adapter._can_speak(SESSION_ID)       # testemunha: o ramo antigo só falaria
+
+        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
+
+        textos = [c.args[0].get("text", "") for c in ws.send_json.call_args_list
+                  if c.args[0].get("type") == "webrtc.message"]
+        assert any("Gravação" in t for t in textos), textos
+        assert SESSION_ID in adapter._speech_queues  # e também foi para a fala
+        await adapter._stop_bot_leg(SESSION_ID)
+
+    @pytest.mark.asyncio
     async def test_provider_start_egress_called(self):
         adapter, redis, _ = _make_adapter()
         adapter._connections[SESSION_ID] = AsyncMock()

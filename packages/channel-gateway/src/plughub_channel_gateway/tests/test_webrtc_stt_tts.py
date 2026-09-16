@@ -114,6 +114,7 @@ def _make_adapter(
     stt: MockSTTProvider | None = None,
     tts: MockTTSProvider | None = None,
     room_client: MockRoomClient | None = None,
+    voice_client: MockRoomClient | None = None,
 ) -> tuple[WebRTCAdapter, AsyncMock, AsyncMock]:
     s   = settings or _settings()
     r   = _make_redis()
@@ -131,8 +132,10 @@ def _make_adapter(
         tts_provider    = tts,
     )
     # Inject pre-built room client if provided
-    if room_client is not None:
+    if room_client is not None:          # OUVINTE (VOZ-05 fatia 4)
         adapter._room_clients[SESSION_ID] = room_client
+    if voice_client is not None:         # VOZ
+        adapter._voice_clients[SESSION_ID] = voice_client
     return adapter, r, p
 
 
@@ -462,7 +465,7 @@ class TestAgentSpeech:
     """VOZ-05 fatia 3 — quem fala, em que ordem, e o barge-in."""
 
     def _adapter(self, tts=None, room=None):
-        adapter, redis, producer = _make_adapter(tts=tts or _PcmTTS(), room_client=room or MockRoomClient())
+        adapter, redis, producer = _make_adapter(tts=tts or _PcmTTS(), voice_client=room or MockRoomClient())
         adapter._connections[SESSION_ID] = AsyncMock()
         _abre(adapter)
         return adapter
@@ -490,7 +493,8 @@ class TestAgentSpeech:
 
     @pytest.mark.asyncio
     async def test_without_bot_leg_nothing_is_spoken_and_it_is_said(self, monkeypatch, caplog):
-        # CONTROLE do primeiro: a mesma mensagem de IA, sem bot na sala, não vira fala — e diz
+        # CONTROLE do primeiro: a mesma mensagem de IA, sem voz na sala e sem atribuição, não
+        # vira fala — e diz que foi a atribuição que não chegou
         from plughub_channel_gateway.adapters import webrtc as mod
         monkeypatch.setattr(mod, "_SPEECH_WAIT_ROOM_S", 0.2)
         tts = _PcmTTS()
@@ -501,7 +505,80 @@ class TestAgentSpeech:
             await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
                                         "content": {"text": "Bem-vindo à central de energia."}, "timestamp": "x"})
             await asyncio.sleep(0.4)
-        assert tts.textos == [] and "bot leg nao entrou na sala" in caplog.text
+        assert tts.textos == [] and "atribuicao nao chegou" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_voice_decided_absent_drops_now_naming_the_cause(self, monkeypatch, caplog):
+        # Achado da revisão da fatia 3: IA com TTS e SEM STT não tem voz, e cada mensagem
+        # esperava os 15 s culpando a sala. Com a atribuição conhecida, desiste na hora e diz
+        # a causa real. Prazo longo DE PROPÓSITO: se esperar, o teste não termina a tempo.
+        from plughub_channel_gateway.adapters import webrtc as mod
+        monkeypatch.setattr(mod, "_SPEECH_WAIT_ROOM_S", 30.0)
+        tts = _PcmTTS()
+        adapter, _, _ = _make_adapter(tts=tts)
+        adapter._stt, adapter._stt_unavailable = None, "sem provedor de STT (teste)"
+        adapter._connections[SESSION_ID] = AsyncMock()
+        _abre(adapter)
+        with caplog.at_level("DEBUG"):
+            # a primeira fala chega ANTES da atribuição (medido na fatia 3) e espera...
+            await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                        "content": {"text": "Bem-vindo à central de energia."}, "timestamp": "x"})
+            await _drena(adapter)
+            # ...a atribuição chega e decide: IA de áudio, mas sem STT não há voz
+            adapter._customer_media[SESSION_ID] = frozenset()
+            assert adapter._decide_voice(SESSION_ID, {"attendants": {"ia1": _registro("native")}}) is False
+            await asyncio.sleep(0.2)
+            # a seguinte nem entra na fila
+            await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                        "content": {"text": "Segunda mensagem da IA."}, "timestamp": "x"})
+        assert tts.textos == []
+        assert caplog.text.count("sem provedor de STT (teste)") >= 2
+        assert "atribuicao nao chegou" not in caplog.text and "nao entrou na sala" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_speech_arriving_during_routing_assigned_is_not_dropped(self, monkeypatch):
+        # Medido AO VIVO na fatia 4 (probe_webrtc_tts_spoken T1/T2/C): `_customer_media` era
+        # gravado antes da decisão da voz, com `await`s entre os dois; a primeira fala da IA,
+        # que chega nesse intervalo, lia "sem voz" e caía em debug. O `create_room` aqui SEGURA
+        # a atribuição no meio, e a fala chega exatamente ali.
+        from plughub_channel_gateway.adapters import webrtc as mod
+        from .test_webrtc_adapter import _assigned
+        monkeypatch.setattr(mod, "LiveKitRoomClient", MockRoomClient)
+        tts = _PcmTTS()
+        adapter, _, _ = _make_adapter(tts=tts)
+        adapter._connections[SESSION_ID] = AsyncMock()
+        _abre(adapter)
+        segura, chegou = asyncio.Event(), asyncio.Event()
+
+        async def _create_room(name):
+            chegou.set()
+            await segura.wait()
+        adapter._provider.create_room = _create_room
+        atrib = asyncio.ensure_future(adapter._on_routing_assigned(
+            AsyncMock(), SESSION_ID, _assigned("native", "ia1"), adapter._settings))
+        await chegou.wait()
+        assert SESSION_ID in adapter._customer_media          # testemunha: estamos NO intervalo
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Bem-vindo à central de energia."}, "timestamp": "x"})
+        assert SESSION_ID in adapter._speech_queues            # enfileirada, não descartada
+        segura.set()
+        await atrib
+        await adapter._stop_bot_leg(SESSION_ID)
+
+    @pytest.mark.asyncio
+    async def test_human_call_with_listener_only_ai_hook_message_is_not_spoken(self):
+        # Fatia 4: o OUVINTE está na sala numa chamada de humano; uma mensagem de IA (hook)
+        # não pode ir para ele — oculto, ninguém o ouve. Sem voz decidida, não fala.
+        tts, ouvinte = _PcmTTS(), MockRoomClient()
+        adapter, _, _ = _make_adapter(tts=tts, room_client=ouvinte)
+        adapter._connections[SESSION_ID] = AsyncMock()
+        _abre(adapter)
+        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
+        adapter._decide_voice(SESSION_ID, {"attendants": {"h1": _registro("human")}})
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Avalie o atendimento de zero a dez."}, "timestamp": "x"})
+        await _drena(adapter)
+        assert tts.textos == [] and ouvinte.published_chunks == []
 
     @pytest.mark.asyncio
     async def test_menu_prompt_is_spoken(self):
@@ -586,6 +663,14 @@ class TestAgentSpeech:
         assert tts.textos[-1] == "Certo, obrigado por aguardar na linha."
 
     @pytest.mark.asyncio
+    async def test_barge_in_stops_the_voice_not_the_listener(self):
+        ouvinte, voz = MockRoomClient(), MockRoomClient()
+        adapter, _, _ = _make_adapter(tts=_PcmTTS(), room_client=ouvinte, voice_client=voz)
+        adapter._speaking.add(SESSION_ID)
+        adapter._barge_in(SESSION_ID)
+        assert voz.interrupts == 1 and ouvinte.interrupts == 0
+
+    @pytest.mark.asyncio
     async def test_customer_voice_while_agent_speaks_triggers_barge_in(self):
         room = MockRoomClient()
         adapter, _, _ = _make_adapter(tts=_PcmTTS(), room_client=room)
@@ -617,7 +702,7 @@ class TestAgentSpeech:
             assert chamadas == [], (amplitude, ms, falando)
 
     @pytest.mark.asyncio
-    async def test_bot_joins_visible_and_allowed_to_publish(self, monkeypatch):
+    async def test_listener_joins_hidden_and_mute_voice_joins_visible_and_deaf(self, monkeypatch):
         from plughub_channel_gateway.adapters import webrtc as mod
         adapter, _, _ = _make_adapter(tts=_PcmTTS())
         vistos = []
@@ -625,10 +710,45 @@ class TestAgentSpeech:
         adapter._provider.generate_token = lambda g: vistos.append(g) or orig(g)
         monkeypatch.setattr(mod, "LiveKitRoomClient", MockRoomClient)
         await adapter._start_stt_pipeline(SESSION_ID, ROOM_NAME)
-        bot = vistos[-1]
-        # oculto, o SFU não entrega a trilha dele a ninguém (medido): o agente ficaria mudo
-        assert bot.hidden is False and bot.can_publish is True
+        ouvinte = vistos[-1]
+        assert ouvinte.hidden is True and ouvinte.can_publish is False and ouvinte.can_subscribe is True
+        adapter._voice_wanted.add(SESSION_ID)
+        await adapter._start_voice(SESSION_ID, ROOM_NAME)
+        voz = vistos[-1]
+        # oculta, o SFU não entrega a trilha dela a ninguém (medido na fatia 3): a IA ficaria muda
+        assert voz.hidden is False and voz.can_publish is True and voz.can_subscribe is False
+        assert voz.identity != ouvinte.identity
+        assert SESSION_ID in adapter._room_clients and SESSION_ID in adapter._voice_clients
         await adapter._stop_bot_leg(SESSION_ID)
+        assert SESSION_ID not in adapter._room_clients and SESSION_ID not in adapter._voice_clients
+
+    @pytest.mark.asyncio
+    async def test_voice_that_lost_its_decision_while_connecting_leaves(self, monkeypatch):
+        from plughub_channel_gateway.adapters import webrtc as mod
+        monkeypatch.setattr(mod, "LiveKitRoomClient", MockRoomClient)
+        adapter, _, _ = _make_adapter(tts=_PcmTTS())
+        await adapter._start_voice(SESSION_ID, ROOM_NAME)       # sem `_voice_wanted`
+        assert SESSION_ID not in adapter._voice_clients
+
+    @pytest.mark.asyncio
+    async def test_routing_decides_listener_and_voice_separately(self, monkeypatch):
+        # IA de áudio com STT e TTS: os dois entram. Sai a IA e fica só um especialista de
+        # texto: os dois saem.
+        from plughub_channel_gateway.adapters import webrtc as mod
+        monkeypatch.setattr(mod, "LiveKitRoomClient", MockRoomClient)
+        adapter, _, _ = _make_adapter(tts=_PcmTTS())
+        adapter._redis.get = AsyncMock(return_value="c-1")
+        ws = AsyncMock()
+        state = {"attendants": {"ia1": _registro("native")}, "customer": {"publish": []}}
+        await adapter._apply_customer_ceiling(ws, SESSION_ID, state, "attendant_joined:native")
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert SESSION_ID in adapter._room_clients and SESSION_ID in adapter._voice_clients
+        voz = adapter._voice_clients[SESSION_ID]
+        state = {"attendants": {"ia2": _registro("native", audio=False)}, "customer": {"publish": ["audio"]}}
+        await adapter._apply_customer_ceiling(ws, SESSION_ID, state, "attendant_left:native")
+        assert voz.disconnected is True
+        assert SESSION_ID not in adapter._voice_clients and SESSION_ID not in adapter._room_clients
 
     @pytest.mark.asyncio
     async def test_first_message_waits_for_the_bot_to_enter(self):
@@ -640,8 +760,8 @@ class TestAgentSpeech:
         await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
                                     "content": {"text": "Bem-vindo à central de energia."}, "timestamp": "x"})
         await asyncio.sleep(0.15)
-        assert tts.textos == []                      # ainda sem bot: espera, não descarta
-        adapter._room_clients[SESSION_ID] = room
+        assert tts.textos == []                      # ainda sem voz: espera, não descarta
+        adapter._voice_clients[SESSION_ID] = room
         await asyncio.sleep(0.15)
         assert tts.textos == ["Bem-vindo à central de energia."]
 
