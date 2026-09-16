@@ -69,8 +69,11 @@ volumes/
 # existe para fechar. O git já é o backup versionado; o .bak é só a rede da execução.
 TODO.md.bak
 
-# Cowork local settings
-.claude/
+# Cowork local settings — mas as SKILLS do projeto sao versionadas: o CLAUDE.md aponta para
+# elas, e o conteudo movido para la (casos medidos) nao pode existir so numa maquina.
+# `.claude/*` e nao `.claude/`: diretorio ignorado inteiro nao deixa reincluir filho.
+.claude/*
+!.claude/skills/
 plughub-descritivo-tecnico.pptx
 por-que-plughub-existe.pptx
 plughub-descritivo-tecnico.pptx
