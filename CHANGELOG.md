@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (1) — VOZ-18: a coleta por voz aplica confiança MEDIDA e silêncio de fim por menu
+
+**O que havia.** A VOZ-05 fatia 5b executava a coleta por fala, mas três parâmetros de `collect.voice`
+eram só ditos no log: o speaches era chamado com `response_format=json`, que traz o texto e nada mais —
+o `STTResult.confidence` ficava no default **1,0**, e `min_confidence` nunca reprovava fala nenhuma;
+`end_silence_ms` e `max_speech_s` não chegavam ao STT, cujo fluxo por falante é contínuo e usava os
+700 ms / 15 s do provedor.
+
+**Medição antes de escolher** (`TODO.md` § VOZ-18). 102 casos de fala sintetizada, limpa, com ruído e
+muito baixa, mais ruído puro e quase-silêncio, em `verbose_json`. `no_speech_prob` veio **0,0 em todos**,
+ruído incluído. A exp da média de `avg_logprob` ponderada pela duração separa: certas mediana 0,81,
+erradas 0,45. E o Whisper **alucina** "Obrigado." em não-fala com 0,49–0,61 — ruído de RMS 1 500 passa
+o limiar de energia do gateway. Pela chamada o número muda por palavra ("Fatura." 0,59 limpa → "Batura!"
+0,45 pelo LiveKit).
+
+**Feito.**
+- **Confiança medida** (`speaches_provider.py`). A transcrição pede `verbose_json`; confiança =
+  `confianca_dos_segmentos` (exp da média ponderada; segmento sem `avg_logprob` não entra). Resposta sem
+  segmento legível = **`None`**, nunca 1,0, com WARNING. `STTResult.confidence` passa a `float | None`.
+  `measures_confidence = True`.
+- **`None` não reprova nem aprova pelo limite** (`collect_core`), e o renderizador diz no log quando o
+  menu declarou `min_confidence`. Fala abaixo do limite é tentativa inválida **com a medida no log**
+  (`0.780 < 0.99`), sem o texto — antes a recusa era muda.
+- **Silêncio de fim e fala máxima por coleta** (`voice_provider.SpeechTuning`, `supports_tuning = True`).
+  Um ajuste mutável, lido a CADA QUADRO do `stream()` — reabrir o fluxo por menu perderia a fala em curso.
+  O gateway guarda um por sessão e o entrega só ao fluxo do CLIENTE (a única fala que responde menu);
+  `_start_collect` o liga quando a coleta aceita voz e declara os parâmetros, e ele desliga no desfecho,
+  no fim sem desfecho e na sessão fechada. O plano ganhou `end_silence_ms`/`max_speech_ms` (ms) no lugar
+  de `ignored_params`; provedor sem `supports_tuning`/`measures_confidence` segue dito no log.
+- **Sem default de `min_confidence`.** A amostra é de voz sintetizada — deixou ficha `VOZ-19` (limiar
+  contra fala humana, e filtro de não-fala que não dependa do `no_speech_prob`).
+
+**Testes.** channel-gateway 1135 → **1151**: confiança ponderada, ausência que não vira 1,0, ajuste que
+junta falas e corta a longa, ajuste mudado no meio do fluxo (com controle sem limpar), tuning só no fluxo
+do cliente, liga/desliga pela coleta, recusa por confiança com a medida no log e o controle acima do limite.
+
+**Gate.** `probe_webrtc_speech_tuning.sh` (AUTO), uma chamada com participante LiveKit real e quatro menus
+só por fala: C1 "Atendente." com `min_confidence` 0.99 → inválido · C2 CONTROLE a mesma fala com 0.3 →
+valor · L1 a recusa foi por confiança medida (número no log) · L2 só uma recusa na sessão · M1 a confiança
+registrada no stream é medida em (0,1) · W1 com `end_silence_ms` 2500, "Atendente." + 1,2 s +
+"Cancelar." é UMA fala (janela 5 520 ms) · W2/S2 CONTROLE no menu seguinte, sem ajuste, a mesma pausa
+separa (1 370 ms) e a primeira palavra responde sozinha. **A junção se julga pela JANELA, não pelo texto**:
+na primeira rodada o Whisper descartou uma das palavras da fala juntada. Mutações ao vivo, todas pegas:
+LM1 confiança volta a 1,0 → C1, L1, M1 · LM2 o provedor ignora o ajuste → W1 · LM3 o fim da coleta não
+desliga → W2, S2 · LM4 o fluxo do cliente não recebe o ajuste → W1.
+
+**Primeira rodada vermelha, e por quê.** O controle C2 reprovava com "Fatura.": pela chamada virou
+"Batura!" (0,45) — o controle media reconhecimento, não confiança. As palavras do probe foram escolhidas
+por medição pelo caminho da chamada. E o `menu_id` no log do gateway é o do motor (uuid), não o id do passo.
+
+**Fora desta ficha.** `max_speech_s` ao vivo (coberto em unidade; o probe mede o silêncio de fim);
+o Deepgram continua com a confiança dele e sem ajuste por coleta (dito no log se o menu declarar).
+
 ## 2026-09-16 (6) — VOZ-05 fatia 5c: o widget ganha teclado pelo domínio da coleta, e o PIN mascarado nunca passa pelo SFU — VOZ-05 fechada
 
 **O que havia.** Depois da 5b, o gateway sabia coletar por tecla, mas o cliente no browser não

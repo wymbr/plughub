@@ -1,0 +1,52 @@
+{
+  "skill_id": "skill_probe_speech_tuning_v1",
+  "name": "Probe - parametros de fala da coleta por voz no WebRTC (VOZ-18)",
+  "version": "1.0",
+  "description": "Fixture do probe_webrtc_speech_tuning: quatro menus so por fala (Atendente ou Cancelar), cada um com UMA tentativa. m1 exige confianca 0.99 e m2 0.3 (a mesma fala); m3 declara end_silence_ms 2500 e m4 usa o default (duas palavras com pausa). Cada saida manda um marcador proprio, e o fluxo segue para o menu seguinte com valor ou invalido.",
+  "classification": { "type": "orchestrator" },
+  "flow": {
+    "entry": "n0",
+    "steps": [
+      { "id": "n0", "type": "notify", "message": "voz18-inicio", "on_success": "m1", "on_failure": "fim_falha" },
+
+      { "id": "m1", "type": "menu", "interaction": "button", "prompt": "Pergunta um.",
+        "options": [ { "id": "cancelar", "label": "Cancelar" }, { "id": "atendente", "label": "Atendente" } ],
+        "timeout_s": 120, "output_as": "r1",
+        "collect": { "input": ["voice"], "first_input_timeout_s": 25, "max_invalid": 1,
+                     "voice": { "min_confidence": 0.99 } },
+        "on_success": "v1", "on_failure": "fim_falha", "on_timeout": "n_to", "on_invalid": "i1" },
+      { "id": "v1", "type": "notify", "message": "voz18-m1={{$.pipeline_state.r1}}", "on_success": "m2", "on_failure": "fim_falha" },
+      { "id": "i1", "type": "notify", "message": "voz18-m1-invalido", "on_success": "m2", "on_failure": "fim_falha" },
+
+      { "id": "m2", "type": "menu", "interaction": "button", "prompt": "Pergunta dois.",
+        "options": [ { "id": "cancelar", "label": "Cancelar" }, { "id": "atendente", "label": "Atendente" } ],
+        "timeout_s": 120, "output_as": "r2",
+        "collect": { "input": ["voice"], "first_input_timeout_s": 25, "max_invalid": 1,
+                     "voice": { "min_confidence": 0.3 } },
+        "on_success": "v2", "on_failure": "fim_falha", "on_timeout": "n_to", "on_invalid": "i2" },
+      { "id": "v2", "type": "notify", "message": "voz18-m2={{$.pipeline_state.r2}}", "on_success": "m3", "on_failure": "fim_falha" },
+      { "id": "i2", "type": "notify", "message": "voz18-m2-invalido", "on_success": "m3", "on_failure": "fim_falha" },
+
+      { "id": "m3", "type": "menu", "interaction": "button", "prompt": "Pergunta três.",
+        "options": [ { "id": "cancelar", "label": "Cancelar" }, { "id": "atendente", "label": "Atendente" } ],
+        "timeout_s": 120, "output_as": "r3",
+        "collect": { "input": ["voice"], "first_input_timeout_s": 25, "max_invalid": 1,
+                     "voice": { "end_silence_ms": 2500 } },
+        "on_success": "v3", "on_failure": "fim_falha", "on_timeout": "n_to", "on_invalid": "i3" },
+      { "id": "v3", "type": "notify", "message": "voz18-m3={{$.pipeline_state.r3}}", "on_success": "m4", "on_failure": "fim_falha" },
+      { "id": "i3", "type": "notify", "message": "voz18-m3-invalido", "on_success": "m4", "on_failure": "fim_falha" },
+
+      { "id": "m4", "type": "menu", "interaction": "button", "prompt": "Pergunta quatro.",
+        "options": [ { "id": "cancelar", "label": "Cancelar" }, { "id": "atendente", "label": "Atendente" } ],
+        "timeout_s": 120, "output_as": "r4",
+        "collect": { "input": ["voice"], "first_input_timeout_s": 25, "max_invalid": 1 },
+        "on_success": "v4", "on_failure": "fim_falha", "on_timeout": "n_to", "on_invalid": "i4" },
+      { "id": "v4", "type": "notify", "message": "voz18-m4={{$.pipeline_state.r4}}", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "i4", "type": "notify", "message": "voz18-m4-invalido", "on_success": "fim", "on_failure": "fim_falha" },
+
+      { "id": "n_to", "type": "notify", "message": "voz18-timeout", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "probe: parametros de fala medidos" },
+      { "id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "probe: fluxo falhou" }
+    ]
+  }
+}

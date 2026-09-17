@@ -452,6 +452,12 @@ probe_webrtc_voice_collect.sh
 # sobreviveu enquanto a tentativa invalida tinha 2 digitos. O teclado no NAVEGADOR (DTMF so no
 # menu comum) e roteiro assistido em arc15-webrtc.md.
 probe_webrtc_keypad.sh
+# VOZ-18 (2026-09-17): a coleta por voz aplica os parametros de FALA do menu. Uma chamada, quatro
+# menus so por fala: min_confidence 0.99 recusa e 0.3 aceita a MESMA fala (L1: a recusa foi por
+# confianca medida, com o numero no log); end_silence_ms 2500 junta duas palavras com pausa de 1,2 s
+# numa fala (W1, pela janela no stream) e o menu seguinte, sem ajuste, as separa (W2: desligou). M1 a
+# confianca registrada e medida em (0,1), nunca o 1,0 de antes. Mutacoes ao vivo LM1-LM4.
+probe_webrtc_speech_tuning.sh
 # CTR-09. Referencia pura de `invoke` que nao resolveu (`@ctx.*` ausente) viajava como `null` e a
 # tool com campo `.optional()` recusava (-32602): o `validate_pin` do skill_auth_form_v1 reprovava
 # a senha CERTA de todo cliente sem identidade. Mede a suite do invoke contra a IMAGEM e, ao vivo no

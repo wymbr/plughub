@@ -68,7 +68,8 @@ class CollectPlan:
     min_confidence:   float | None
     invalid_message:  str | None
     max_invalid:      int | None
-    ignored_params:   tuple[str, ...] = ()
+    end_silence_ms:   int | None = None
+    max_speech_ms:    int | None = None
 
     @classmethod
     def from_menu(cls, payload: dict) -> "CollectPlan | None":
@@ -98,7 +99,6 @@ class CollectPlan:
         if interaction in ("button", "list") and not options:
             raise CollectNotApplicable(f"menu {interaction!r} sem opcoes")
         voice = c.get("voice") if isinstance(c.get("voice"), dict) else {}
-        ignored = tuple(k for k in ("end_silence_ms", "max_speech_s") if voice.get(k) is not None)
         return cls(
             menu_id         = str(payload.get("menu_id") or ""),
             interaction     = interaction,
@@ -116,8 +116,15 @@ class CollectPlan:
             min_confidence  = voice.get("min_confidence"),
             invalid_message = c.get("invalid_message") or None,
             max_invalid     = int(c["max_invalid"]) if c.get("max_invalid") else None,
-            ignored_params  = ignored,
+            end_silence_ms  = int(voice["end_silence_ms"]) if voice.get("end_silence_ms") else None,
+            max_speech_ms   = int(float(voice["max_speech_s"]) * 1000) if voice.get("max_speech_s") else None,
         )
+
+    @property
+    def speech_params(self) -> tuple[str, ...]:
+        """Os parâmetros de segmentação de fala que o menu declarou."""
+        return tuple(n for n, v in (("end_silence_ms", self.end_silence_ms),
+                                    ("max_speech_s", self.max_speech_ms)) if v)
 
     @property
     def is_option_menu(self) -> bool:
@@ -237,13 +244,14 @@ class CollectSession:
             return [Echo(key), *self._close_digits(now)]
         return [Echo(key)]
 
-    def speech(self, transcript: str, confidence: float, now: float) -> list[Action]:
-        """Fala final do cliente. Fora do modo `voice` não é resposta — o chamador nem chama."""
+    def speech(self, transcript: str, confidence: float | None, now: float) -> list[Action]:
+        """Fala final do cliente. Fora do modo `voice` não é resposta — o chamador nem chama.
+        `confidence` None = não medida: o limite não se aplica (o renderizador diz no log)."""
         if self.done is not None or "voice" not in self.plan.inputs:
             return []
         self.arm(now)
         p = self.plan
-        if p.min_confidence is not None and confidence < p.min_confidence:
+        if p.min_confidence is not None and confidence is not None and confidence < p.min_confidence:
             return self._invalid(now)
         tokens = _norm(transcript)
         if not tokens:

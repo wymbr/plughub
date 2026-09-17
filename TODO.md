@@ -1,5 +1,48 @@
 # TODO — PlugHub Itens Pendentes
 
+## VOZ-18 — confiança da fala e parâmetros por coleta *(medido 2026-09-16/17)*
+
+**Pergunta.** O `speaches` dá uma confiança que sirva a `collect.voice.min_confidence`? E dá para o menu
+mudar onde a fala termina sem reabrir o fluxo do falante?
+
+**Instrumento.** Fala sintetizada pelo próprio speaches (`pf_dora`, `pm_alex`, `pm_santa`), seis frases
+("opção dois", "quero a segunda via da fatura", "um dois três quatro", "correio", "não entendi a
+pergunta", "meu cpf é zero um dois três"), cada uma limpa, com ruído branco a 15/5/0 dB e muito baixa
+(×0,03); mais 6 de ruído puro (RMS 1 500) e 6 de quase-silêncio (RMS 60). Transcrição com
+`response_format=verbose_json`. 102 casos; acerto por WER da frase.
+
+**O que o `verbose_json` traz por segmento:** `avg_logprob, compression_ratio, end, id, no_speech_prob,
+seek, start, temperature, text, tokens, words`.
+
+- **`no_speech_prob` = 0,0 em 102 de 102**, ruído incluído. Não serve de sinal com este modelo.
+- **O Whisper alucina em não-fala:** "Obrigado." em ruído puro e em quase-silêncio, com exp(avg_logprob)
+  0,49–0,61. Ruído de RMS 1 500 passa o limiar de energia do gateway (400): chega como fala do cliente.
+- **exp(média de `avg_logprob` ponderada pela duração)** separa bem: certas mediana **0,81** (quartis
+  0,531 / 0,786 / 0,813 / 0,853 / 0,924), erradas mediana **0,45** (0,311 / 0,405 / 0,452 / 0,494 / 0,751).
+  "correio" virou "Coqueio"/"Kokeyu"; "opção" virou "O Pseu".
+
+| corte | certas rejeitadas | erradas aceitas | não-fala aceita |
+|---|---|---|---|
+| 0,5 | 0/63 | 7/27 | 7/12 |
+| 0,55 | 1/63 | 4/27 | 6/12 |
+| 0,6 | 2/63 | 2/27 | 1/12 |
+| 0,65 | 4/63 | 2/27 | 0/12 |
+| 0,7 | 8/63 | 1/27 | 0/12 |
+
+**Pela chamada (2026-09-17, probe ao vivo):** o caminho LiveKit (Opus, 48→16 kHz) muda o número —
+"Fatura." limpa 0,59 virou "Batura!" 0,45; "Atendente." limpa 0,69, pela chamada 0,76–0,78.
+
+**Decisões.**
+1. **Confiança = exp(média de `avg_logprob` ponderada pela duração)**; `no_speech_prob` fora. Sem segmento
+   legível, `None` — **nunca 1,0**, que era o default que fazia `min_confidence` parecer aplicado.
+   `None` não reprova nem aprova pelo limite, e o renderizador diz no log.
+2. **Nenhum default de `min_confidence`.** A separação é boa, mas a amostra é de voz sintetizada, e a
+   chamada move o número por palavra. O limite continua sendo o que o autor declara → `VOZ-19`.
+3. **Silêncio de fim e fala máxima por coleta = ajuste MUTÁVEL (`SpeechTuning`) lido a cada quadro** do
+   fluxo do cliente — não reabrir o fluxo por menu, que perderia a fala em curso. Liga quando começa
+   uma coleta que aceita voz e declara os parâmetros; desliga no desfecho, no fim sem desfecho e na
+   sessão fechada. Só a fala do CLIENTE segue o ajuste (é a única que responde menu).
+
 
 ## VOZ-05 fatia 5 — coleta por voz e teclado: casa única, parâmetros e desfechos *(decidido 2026-09-16)*
 

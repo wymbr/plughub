@@ -63,12 +63,30 @@ class CallInfo:
 
 @dataclass
 class STTResult:
-    """Single STT result emitted by ISTTProvider.stream()."""
+    """Single STT result emitted by ISTTProvider.stream().
+
+    `confidence` None = o provedor não MEDIU esta fala (VOZ-18). Nunca preencher com 1.0: era o
+    default que fazia `min_confidence` parecer aplicado sem nada ter sido medido."""
     transcript:  str
     is_final:    bool
-    confidence:  float = 1.0
+    confidence:  float | None = 1.0
     start_ms:    int   = 0
     end_ms:      int   = 0
+
+
+@dataclass
+class SpeechTuning:
+    """Ajuste da segmentação de fala de UM falante, mutável e lido a cada quadro (VOZ-18).
+
+    A coleta por voz (`collect.voice.end_silence_ms`/`max_speech_s`) o liga enquanto o menu espera
+    e o desliga ao terminar; `None` = o default do provedor. Só vale no provedor que declara
+    `supports_tuning = True` — os outros ignoram, e quem declarou é avisado no log."""
+    silence_ms:       int | None = None
+    max_utterance_ms: int | None = None
+
+    def clear(self) -> None:
+        self.silence_ms = None
+        self.max_utterance_ms = None
 
 
 # ── Protocol interfaces ───────────────────────────────────────────────────────

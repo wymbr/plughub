@@ -22,13 +22,14 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import math
 import wave
 from typing import AsyncIterator
 
 import httpx
 import numpy as np
 
-from .voice_provider import STTResult
+from .voice_provider import SpeechTuning, STTResult
 
 logger = logging.getLogger("plughub.channel-gateway.speaches")
 
@@ -63,9 +64,13 @@ class SpeachesSTTProvider:
     """`ISTTProvider` sobre o `speaches`. Recebe PCM16 mono a `input_sample_rate`."""
 
     input_sample_rate = STT_SAMPLE_RATE
-    # O `json` do speaches devolve só o texto: a confiança do `STTResult` fica no default 1.0, que
-    # PARECE medida. Quem aplica `min_confidence` pergunta isto antes (VOZ-05 fatia 5b).
-    measures_confidence = False
+    # VOZ-18: a transcrição pede `verbose_json` e a confiança é MEDIDA — exp da média de
+    # `avg_logprob` dos segmentos, ponderada pela duração (a probabilidade média por token).
+    # `no_speech_prob` não entra: medido em 2026-09-16, veio 0,0 em 102 de 102 casos, inclusive
+    # ruído puro. Resposta sem segmentos = confiança None (não medida), nunca 1,0.
+    measures_confidence = True
+    # silêncio que fecha a fala e fala máxima ajustáveis por coleta, lidos a cada quadro
+    supports_tuning = True
 
     def __init__(
         self,
@@ -93,6 +98,7 @@ class SpeachesSTTProvider:
         audio_chunks: AsyncIterator[bytes],
         sample_rate:  int = STT_SAMPLE_RATE,
         language:     str = "pt-BR",
+        tuning:       SpeechTuning | None = None,
     ) -> AsyncIterator[STTResult]:
         it = audio_chunks.__aiter__()
         buf = bytearray()
@@ -105,10 +111,11 @@ class SpeachesSTTProvider:
             buf, speech_ms, silence_ms = bytearray(), 0.0, 0.0
             if falou < self._min_speech_ms:
                 return None
-            texto = await self._transcribe(pcm, sample_rate, lang)
+            texto, confianca = await self._transcribe(pcm, sample_rate, lang)
             if not texto:
                 return None
-            return STTResult(transcript=texto, is_final=True, start_ms=int(start_ms), end_ms=int(pos_ms))
+            return STTResult(transcript=texto, is_final=True, confidence=confianca,
+                             start_ms=int(start_ms), end_ms=int(pos_ms))
 
         while True:
             try:
@@ -132,7 +139,9 @@ class SpeachesSTTProvider:
             elif buf:
                 buf += chunk
                 silence_ms += dur
-            if buf and (silence_ms >= self._silence_ms or len(buf) / 2 / sample_rate * 1000 >= self._max_ms):
+            limite_silencio = (tuning.silence_ms if tuning and tuning.silence_ms else self._silence_ms)
+            limite_fala = (tuning.max_utterance_ms if tuning and tuning.max_utterance_ms else self._max_ms)
+            if buf and (silence_ms >= limite_silencio or len(buf) / 2 / sample_rate * 1000 >= limite_fala):
                 res = await _fecha()
                 if res:
                     yield res
@@ -141,8 +150,8 @@ class SpeachesSTTProvider:
             if res:
                 yield res
 
-    async def _transcribe(self, pcm: bytes, sample_rate: int, language: str | None) -> str:
-        data = {"model": self._model, "response_format": "json"}
+    async def _transcribe(self, pcm: bytes, sample_rate: int, language: str | None) -> tuple[str, float | None]:
+        data = {"model": self._model, "response_format": "verbose_json"}
         if language:
             data["language"] = language
         try:
@@ -157,16 +166,39 @@ class SpeachesSTTProvider:
         except Exception as exc:
             logger.error("speaches STT: servico inalcancavel (%s, modelo %s): %s — fala PERDIDA",
                          self._url, self._model, exc)
-            return ""
+            return "", None
         if r.status_code != 200:
             logger.error("speaches STT: http %s (modelo %s): %s — fala PERDIDA",
                          r.status_code, self._model, r.text[:200])
-            return ""
+            return "", None
         try:
-            return str(r.json().get("text", "")).strip()
+            corpo = r.json()
         except ValueError:
             logger.error("speaches STT: resposta nao-JSON (modelo %s) — fala PERDIDA", self._model)
-            return ""
+            return "", None
+        texto = str(corpo.get("text", "")).strip()
+        confianca = confianca_dos_segmentos(corpo.get("segments"))
+        if texto and confianca is None:
+            logger.warning("speaches STT: resposta sem segmentos com avg_logprob (modelo %s) — "
+                           "confianca da fala NAO medida", self._model)
+        return texto, confianca
+
+
+def confianca_dos_segmentos(segments: object) -> float | None:
+    """exp da média de `avg_logprob`, ponderada pela duração de cada segmento. `None` sem segmento
+    legível. Medido em 2026-09-16 (fala sintetizada, 3 vozes, limpa e com ruído): certas mediana
+    0,81, erradas 0,45, alucinação em ruído 0,49–0,61 — separação boa, mas o LIMIAR não é
+    default: é `collect.voice.min_confidence`, declarado por quem escreve o fluxo."""
+    if not isinstance(segments, list):
+        return None
+    soma = peso = 0.0
+    for s in segments:
+        if not isinstance(s, dict) or not isinstance(s.get("avg_logprob"), (int, float)):
+            continue
+        dur = max(0.01, float(s.get("end", 0) or 0) - float(s.get("start", 0) or 0))
+        soma += float(s["avg_logprob"]) * dur
+        peso += dur
+    return round(math.exp(soma / peso), 4) if peso else None
 
 
 class SpeachesTTSProvider:

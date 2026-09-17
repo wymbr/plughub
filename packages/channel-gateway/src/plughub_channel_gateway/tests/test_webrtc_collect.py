@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from plughub_channel_gateway.adapters.voice_provider import STTResult
 from plughub_channel_gateway.adapters.webrtc_room_client import MockRoomClient
 from plughub_channel_gateway.tests.test_webrtc_stt_tts import (
     SESSION_ID,
@@ -159,6 +160,104 @@ class TestFala:
         assert adapter._voice_barge_allowed(SESSION_ID) is False
         await _encerra(adapter)
         assert adapter._voice_barge_allowed(SESSION_ID) is True   # controle: sem coleta, corta
+
+
+class _SttAjustavel:
+    """STT que declara ajuste por coleta e anota, por fluxo, o ajuste que recebeu."""
+    supports_tuning = True
+    measures_confidence = True
+
+    def __init__(self) -> None:
+        self.ajustes: list = []
+
+    async def stream(self, chunks, language=None, **kw):
+        self.ajustes.append(kw.get("tuning"))
+        async for _ in chunks:
+            pass
+        yield STTResult(transcript="ok", is_final=True, confidence=0.9)
+
+
+class TestAjusteDeFala:
+    """VOZ-18: `end_silence_ms`/`max_speech_s` da coleta por voz valem enquanto o menu espera, só
+    na fala do cliente, e voltam ao default quando a coleta termina."""
+
+    async def test_coleta_por_voz_liga_o_ajuste_e_o_fim_desliga(self):
+        adapter, _, _, _ = _adapter()
+        adapter._stt = _SttAjustavel()
+        await adapter.deliver_menu(_menu(voice={"end_silence_ms": 1200, "max_speech_s": 4}))
+        t = adapter._speech_tuning[SESSION_ID]
+        assert (t.silence_ms, t.max_utterance_ms) == (1200, 4000)
+        await _encerra(adapter)
+        assert (t.silence_ms, t.max_utterance_ms) == (None, None)
+
+    async def test_coleta_so_de_teclado_nao_mexe_na_fala(self):
+        adapter, _, _, _ = _adapter()
+        adapter._stt = _SttAjustavel()
+        await adapter.deliver_menu(_menu(input=["dtmf"], voice={"end_silence_ms": 1200}))
+        t = adapter._speech_tuning.get(SESSION_ID)
+        assert t is None or (t.silence_ms, t.max_utterance_ms) == (None, None)
+        await _encerra(adapter)
+
+    async def test_desfecho_da_coleta_tambem_desliga(self):
+        adapter, _, producer, _ = _adapter()
+        adapter._stt = _SttAjustavel()
+        await adapter.deliver_menu(_menu(voice={"end_silence_ms": 1200}))
+        await adapter._publish_transcript(SESSION_ID, "email", 0.9, 0, 900)
+        assert await _ate(lambda: _resultados(producer))
+        assert await _ate(lambda: adapter._speech_tuning[SESSION_ID].silence_ms is None)
+
+    async def test_so_o_fluxo_do_cliente_recebe_o_ajuste(self):
+        stt = _SttAjustavel()
+        room = MockRoomClient()
+        room.inject_audio(b"\x00" * 960)
+        room.inject_audio(b"\x00" * 960, identity="agent-sub-hum")
+        room.end_audio()
+        adapter, _, _ = _make_adapter(stt=stt, room_client=room)
+        _abre(adapter)
+        await adapter._stt_pipeline(SESSION_ID, room)
+        recebidos = [a for a in stt.ajustes if a is not None]
+        assert len(stt.ajustes) == 2 and len(recebidos) == 1
+        assert recebidos[0] is adapter._speech_tuning[SESSION_ID]
+
+    async def test_stt_sem_ajuste_avisa_que_nao_aplica_e_controle_com_ajuste_nao_avisa(self, caplog):
+        adapter, _, _, _ = _adapter()
+        with caplog.at_level(logging.WARNING):
+            await adapter.deliver_menu(_menu(voice={"end_silence_ms": 1200}))
+        assert "nao ajusta a segmentacao" in caplog.text
+        await _encerra(adapter)
+        caplog.clear()
+        adapter._stt = _SttAjustavel()
+        with caplog.at_level(logging.WARNING):
+            await adapter.deliver_menu(_menu(voice={"end_silence_ms": 1200}))
+        assert "nao ajusta a segmentacao" not in caplog.text
+        await _encerra(adapter)
+
+    async def test_fala_abaixo_do_minimo_e_tentativa_invalida_com_a_medida_no_log(self, caplog):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu(voice={"min_confidence": 0.7}, max_invalid=1))
+        with caplog.at_level(logging.INFO):
+            await adapter._publish_transcript(SESSION_ID, "email", 0.42, 0, 900)
+        assert await _ate(lambda: _resultados(producer))
+        assert _resultados(producer)[0]["outcome"] == "invalid"
+        assert "abaixo da confianca minima no menu m1 (0.420 < 0.7)" in caplog.text
+        assert "email" not in [r.getMessage() for r in caplog.records if "confianca minima" in r.getMessage()][0]
+
+    async def test_controle_fala_acima_do_minimo_responde(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_menu(voice={"min_confidence": 0.7}, max_invalid=1))
+        await adapter._publish_transcript(SESSION_ID, "email", 0.81, 0, 900)
+        assert await _ate(lambda: _resultados(producer))
+        assert _resultados(producer)[0]["result"] == "email"
+
+    async def test_fala_sem_confianca_medida_responde_e_o_log_diz(self, caplog):
+        adapter, _, producer, _ = _adapter()
+        adapter._stt = _SttAjustavel()
+        await adapter.deliver_menu(_menu(voice={"min_confidence": 0.7}))
+        with caplog.at_level(logging.WARNING):
+            await adapter._publish_transcript(SESSION_ID, "email", None, 0, 900)
+        assert await _ate(lambda: _resultados(producer))
+        assert _resultados(producer)[0]["result"] == "email"
+        assert "NAO medida" in caplog.text
 
 
 class TestTextoETela:

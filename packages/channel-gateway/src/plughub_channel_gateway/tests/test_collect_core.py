@@ -63,9 +63,12 @@ class TestPlano:
         texto = CollectPlan.from_menu(_menu(input=["dtmf"])).spoken_prompt()
         assert "tecle dois" in texto and "diga" not in texto
 
-    def test_parametros_de_fala_que_o_stt_nao_aplica_sao_listados(self):
-        plan = CollectPlan.from_menu(_menu(voice={"end_silence_ms": 500, "min_confidence": 0.5}))
-        assert plan.ignored_params == ("end_silence_ms",)
+    def test_parametros_de_fala_viram_campos_do_plano_em_ms(self):
+        plan = CollectPlan.from_menu(_menu(voice={"end_silence_ms": 500, "max_speech_s": 4.5, "min_confidence": 0.5}))
+        assert (plan.end_silence_ms, plan.max_speech_ms) == (500, 4500)
+        assert plan.speech_params == ("end_silence_ms", "max_speech_s")
+        controle = CollectPlan.from_menu(_menu(voice={"min_confidence": 0.5}))
+        assert (controle.end_silence_ms, controle.max_speech_ms, controle.speech_params) == (None, None, ())
 
 
 class TestTeclaEmMenu:
@@ -169,6 +172,11 @@ class TestFala:
         s = _sess(_menu(voice={"min_confidence": 0.8}))
         assert _done(s.speech("email", 0.5, 1.0)) is None
         assert _done(s.speech("email", 0.9, 2.0)) == Done("value", "email", "voice")
+
+    def test_confianca_nao_medida_nao_reprova_nem_aprova_pelo_limite(self):
+        # VOZ-18: None é "o provedor não mediu" — o limite não se aplica (o renderizador diz no log)
+        s = _sess(_menu(voice={"min_confidence": 0.8}))
+        assert _done(s.speech("email", None, 1.0)) == Done("value", "email", "voice")
 
     def test_modo_sem_fala_ignora(self):
         assert _sess(_menu(input=["dtmf"])).speech("email", 1.0, 1.0) == []

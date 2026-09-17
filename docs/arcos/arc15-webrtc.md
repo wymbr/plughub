@@ -611,9 +611,20 @@ webrtc_stt_enabled:         bool = True
 > ⚠️ **No bridge, fala transcrita nunca responde menu** — até aqui ele a entregava crua, e "espera um
 > pouco" virava escolha de botão. Menu de voz sem `collect` com `voice` não ouve o cliente.
 > Menu mascarado continua no campo protegido da tela (fatia A); `checklist`/`form` com coleta
-> por teclado/fala são respondidos pela tela, ditos no log. Não aplicados ainda, e ditos no log:
-> `voice.end_silence_ms`/`max_speech_s` e, com o `speaches`, `min_confidence` (VOZ-18). Gate ao
-> vivo: `infra/test/probe_webrtc_voice_collect.sh`. Ver `CHANGELOG.md` 2026-09-16 (5).
+> por teclado/fala são respondidos pela tela, ditos no log. Gate ao vivo:
+> `infra/test/probe_webrtc_voice_collect.sh`. Ver `CHANGELOG.md` 2026-09-16 (5).
+>
+> **Parâmetros de fala (VOZ-18).** `collect.voice` vale por menu:
+>
+> | parâmetro | como vale |
+> |---|---|
+> | `min_confidence` | contra a confiança MEDIDA do speaches — `exp` da média de `avg_logprob` dos segmentos do `verbose_json`, ponderada pela duração. Abaixo do limite = tentativa inválida, com a medida no log (o texto não). Sem segmento, a confiança é `None` (não medida): o limite não se aplica e o log diz |
+> | `end_silence_ms` / `max_speech_s` | num ajuste (`SpeechTuning`) lido a CADA QUADRO do fluxo de STT do cliente: liga quando a coleta com voz começa, desliga no desfecho ou no fim sem desfecho. Default do provedor: 700 ms e 15 s |
+>
+> ⚠️ **Sem default de `min_confidence`**: a medição foi com voz sintetizada, e o Whisper transcreve
+> ruído como "Obrigado." com confiança 0,49–0,61 (`VOZ-19`, `TODO.md` § VOZ-18). Provedor que não mede
+> ou não ajusta (`measures_confidence` / `supports_tuning` falsos) é dito no log ao armar a coleta.
+> Gate ao vivo: `infra/test/probe_webrtc_speech_tuning.sh`. Ver `CHANGELOG.md` 2026-09-17 (1).
 >
 > **Teclado do widget (fatia 5c).** O `webrtc.interaction` leva `collect` — só o que a TELA precisa
 > (`input`, `domain`, `min_digits`, `max_digits`, `terminator`; nunca mensagem nem prazo) — e o

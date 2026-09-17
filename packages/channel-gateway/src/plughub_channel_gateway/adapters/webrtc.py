@@ -112,6 +112,7 @@ from . import contact_lifecycle
 from .base import ChannelAdapter
 from .speaches_provider import SpeachesSTTProvider, SpeachesTTSProvider, pcm16_48k_to_16k, rms
 from .voice_provider import (
+    SpeechTuning,
     ISTTProvider,
     ITTSProvider,
     DeepgramSTTProvider,
@@ -370,6 +371,9 @@ class WebRTCAdapter(ChannelAdapter):
         # para validar a resposta que chega pela TELA — inclusive a de campo mascarado, que teclado
         # e fala não coletam — e as tentativas inválidas por essa via.
         self._menu_plans:      dict[str, dict[str, CollectPlan]] = {}
+        # VOZ-18: ajuste da segmentação da fala do CLIENTE por sessão — lido a cada quadro pelo STT,
+        # ligado pela coleta por voz que declara `end_silence_ms`/`max_speech_s`.
+        self._speech_tuning:   dict[str, SpeechTuning] = {}
         self._screen_invalids: dict[str, dict[str, int]]         = {}
 
     # ── Provider factories ────────────────────────────────────────────────────
@@ -1505,6 +1509,7 @@ class WebRTCAdapter(ChannelAdapter):
         self._menu_masked.pop(session_id, None)
         self._menu_plans.pop(session_id, None)
         self._screen_invalids.pop(session_id, None)
+        self._speech_tuning.pop(session_id, None)
         self._masked_grace_until.pop(session_id, None)
         try:
             await self._redis.delete(f"session:{session_id}:ws_alive")
@@ -1705,6 +1710,9 @@ class WebRTCAdapter(ChannelAdapter):
         try:
             language = s.voice_stt_language  # reuse voice channel language setting
             kw = {"sample_rate": stt_rate} if stt_rate else {}
+            if interrompe and getattr(self._stt, "supports_tuning", False):
+                # só a fala do CLIENTE responde menu, logo só ela segue o ajuste da coleta
+                kw["tuning"] = self._speech_tuning.setdefault(session_id, SpeechTuning())
             async for result in self._stt.stream(_audio_chunks(), language=language, **kw):
                 if not (result.is_final and result.transcript.strip()):
                     continue
@@ -1986,10 +1994,10 @@ class WebRTCAdapter(ChannelAdapter):
                 "webrtc coleta: menu %s declara min_confidence=%s e o STT nao mede confianca — "
                 "o limite NAO e aplicado (session=%s)", menu_id, plan.min_confidence, session_id,
             )
-        if plan.ignored_params:
+        if "voice" in plan.inputs and plan.speech_params and not getattr(self._stt, "supports_tuning", False):
             logger.warning(
-                "webrtc coleta: menu %s declara %s, que o STT ainda NAO aplica por menu (VOZ-18) "
-                "(session=%s)", menu_id, ", ".join(plan.ignored_params), session_id,
+                "webrtc coleta: menu %s declara %s e o STT nao ajusta a segmentacao por coleta — "
+                "NAO aplicado (session=%s)", menu_id, ", ".join(plan.speech_params), session_id,
             )
         return plan
 
@@ -1999,6 +2007,7 @@ class WebRTCAdapter(ChannelAdapter):
         self._end_collect(session_id, f"substituida pelo menu {plan.menu_id}")
         ac = _ActiveCollect(plan=plan, session=CollectSession(plan), played=asyncio.Event())
         self._collects[session_id] = ac
+        self._tune_speech(session_id, plan)
         texto = plan.spoken_prompt()
         if texto:
             self._speak(session_id, texto, ac.played)
@@ -2011,10 +2020,20 @@ class WebRTCAdapter(ChannelAdapter):
             plan.echo, plan.barge_in, session_id,
         )
 
+    def _tune_speech(self, session_id: str, plan: CollectPlan | None) -> None:
+        """Liga (plano com voz e parâmetros) ou desliga (None) o ajuste da fala do cliente."""
+        tuning = self._speech_tuning.setdefault(session_id, SpeechTuning())
+        if plan is not None and "voice" in plan.inputs and plan.speech_params:
+            tuning.silence_ms = plan.end_silence_ms
+            tuning.max_utterance_ms = plan.max_speech_ms
+        else:
+            tuning.clear()
+
     def _end_collect(self, session_id: str, why: str) -> None:
         ac = self._collects.pop(session_id, None)
         if ac is None:
             return
+        self._tune_speech(session_id, None)
         if ac.session.done is None:
             logger.info("webrtc coleta: menu %s liberado sem desfecho — %s (session=%s)",
                         ac.plan.menu_id, why, session_id)
@@ -2047,6 +2066,7 @@ class WebRTCAdapter(ChannelAdapter):
         finally:
             if self._collects.get(session_id) is ac:
                 self._collects.pop(session_id, None)
+                self._tune_speech(session_id, None)
 
     async def _menu_waiting_now(self, session_id: str) -> bool | None:
         """Há menu esperando no motor? `None` = não se sabe (a coleta segue: o prazo dela termina)."""
@@ -2174,7 +2194,7 @@ class WebRTCAdapter(ChannelAdapter):
             self._barge_in(session_id)
         await self._apply_collect(session_id, ac, ac.session.digit(digit, time.monotonic()))
 
-    async def _collect_speech(self, session_id: str, transcript: str, confidence: float) -> None:
+    async def _collect_speech(self, session_id: str, transcript: str, confidence: float | None) -> None:
         """Fala final do cliente, já publicada como registro. Responde o menu só no modo `voice`."""
         ac = self._collects.get(session_id)
         if ac is None:
@@ -2187,6 +2207,14 @@ class WebRTCAdapter(ChannelAdapter):
             logger.info("webrtc coleta: fala durante o prompt do menu %s ignorada (barge_in desligado) "
                         "session=%s", ac.plan.menu_id, session_id)
             return
+        if ac.plan.min_confidence is not None and confidence is None:
+            logger.warning("webrtc coleta: confianca desta fala NAO medida — min_confidence=%s do menu %s "
+                           "nao aplicado a ela (session=%s)", ac.plan.min_confidence, ac.plan.menu_id, session_id)
+        elif ac.plan.min_confidence is not None and confidence < ac.plan.min_confidence:
+            # o núcleo conta como tentativa inválida; o texto não vai ao log, a medida sim
+            logger.info("webrtc coleta: fala abaixo da confianca minima no menu %s (%.3f < %s) — "
+                        "tentativa invalida (session=%s)", ac.plan.menu_id, confidence,
+                        ac.plan.min_confidence, session_id)
         await self._apply_collect(session_id, ac, ac.session.speech(transcript, confidence, time.monotonic()))
 
     def _voice_barge_allowed(self, session_id: str) -> bool:
