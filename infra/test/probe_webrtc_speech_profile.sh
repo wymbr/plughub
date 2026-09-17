@@ -26,6 +26,10 @@
 #   FASE 3 — o modelo do perfil chega ao SERVIÇO
 #     M1 perfil trocado para stt_model inexistente: o erro do speaches no log do gateway nomeia ESSE
 #        modelo (só o pedido HTTP carrega o nome até lá)
+#   FASE 4 — o DEFAULT do tenant, sem perfil nenhum (VOZ-17)
+#     T1 com `webrtc.stt_model` do tenant, a chamada pelo POOL abre com esse modelo e procedência
+#        `tenant` — antes da VOZ-17 os quatro campos de voz só podiam dizer `env`
+#     T2 e a chamada transcreve com ele: o modelo escolhido pelo tenant é o que o serviço recebeu
 #
 # EXIT: 0 OK · 1 FALHA · 2 INCONCLUSIVO
 
@@ -51,6 +55,7 @@ FALHA=0
 INCONCL=0
 EP_ID=""
 MEXEU=0
+MEXEU_NS=0
 
 ok()    { echo "  OK      $*"; }
 falha() { echo "  FALHA   $*"; FALHA=$((FALHA + 1)); }
@@ -83,13 +88,17 @@ fi
 if [ "$(printf '%s' "$PERFIS" | jq --arg p "$PERFIL" '(.entries // {}) | has($p)')" = true ]; then
   incon "K0 ja existe um perfil $PERFIL no tenant — o probe nao sobrescreve config real"; fim
 fi
-ok "K0 sem override de stt_end_silence_ms e sem perfil $PERFIL no tenant"
+if [ "$(printf '%s' "$PROV" | jq -r '.keys.stt_model.tenant_present // false')" = true ]; then
+  incon "K0 $TENANT ja escolhe stt_model proprio — a FASE 4 sobrescreveria config real; nada mexido"; fim
+fi
+ok "K0 sem override de stt_end_silence_ms nem de stt_model, e sem perfil $PERFIL no tenant"
 
 limpa() {
   [ -n "$EP_ID" ] && curl -s -o /dev/null -X DELETE "${H[@]}" "$REG/v1/channel-endpoints/$EP_ID"
   EP_ID=""
   [ "$MEXEU" = 1 ] && curl -s -o /dev/null -X DELETE "${H[@]}" "$CFG/config/speech_profiles/$PERFIL?tenant_id=$TENANT"
-  MEXEU=0
+  [ "$MEXEU_NS" = 1 ] && curl -s -o /dev/null -X DELETE "${H[@]}" "$CFG/config/webrtc/stt_model?tenant_id=$TENANT"
+  MEXEU=0; MEXEU_NS=0
 }
 trap limpa EXIT INT TERM
 
@@ -205,6 +214,51 @@ else
   if [ -z "$SID3" ]; then incon "M1 a chamada nao abriu sessao"
   elif [ "${E3:-0}" -ge 1 ]; then ok "M1 o speaches recebeu o modelo do perfil: $E3 erro(s) nomeando $MODELO_FALSO"
   else falha "M1 nenhum pedido ao speaches com o modelo do perfil ($MODELO_FALSO) — o modelo nao chegou ao servico"; fi
+fi
+
+# ── FASE 4 — o default do TENANT, sem perfil (VOZ-17) ──
+# Até aqui modelo/língua/voz sem perfil só podiam vir do env do gateway: um tenant não tinha onde
+# escolher, e a chamada pelo pool direto (C1) imprimia `(env)` nos quatro campos. A prova não é a
+# chave no config-api — é a CHAMADA abrir com o modelo do tenant e transcrever com ele.
+STT_ENV=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$GW" | sed -n 's/^PLUGHUB_WEBRTC_STT_MODEL=//p')
+STT_ALT=$(docker exec "$GW" python3 -c "
+import json, urllib.request, os
+url = os.environ.get('PLUGHUB_WEBRTC_SPEACHES_URL', '')
+d = json.load(urllib.request.urlopen(url + '/v1/models', timeout=20))['data']
+outros = [m['id'] for m in d if m.get('task') == 'automatic-speech-recognition'
+          and m['id'] != os.environ.get('PLUGHUB_WEBRTC_STT_MODEL')]
+print(outros[0] if outros else '')" 2>/dev/null | tr -d '\r')
+if [ -z "$STT_ALT" ]; then
+  incon "T1 o servico so tem um modelo de STT instalado — sem alternativa, a camada do tenant nao e discriminavel"
+else
+  T4=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  MEXEU_NS=1
+  st=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${H[@]}" "$CFG/config/webrtc/stt_model" \
+        -d "{\"value\":\"$STT_ALT\",\"tenant_id\":\"$TENANT\"}")
+  n=0; for _ in $(seq 1 15); do
+    n=$(docker logs --since "$T4" "$GW" 2>&1 | grep -c "segmentacao da fala invalidada")
+    [ "${n:-0}" -ge 1 ] && break; sleep 1
+  done
+  if [ "$st" != 200 ] || [ "${n:-0}" -lt 1 ]; then
+    incon "T1 o default do tenant nao chegou ao gateway (http $st, invalidacoes $n)"
+  else
+    sleep 3
+    SID4=$(chamada "$POOL")
+    VOZ4=$(linha "voz da chamada" "$SID4")
+    if [ -z "$SID4" ]; then
+      incon "T1 a chamada nao abriu sessao"
+    else
+      case "$VOZ4" in
+        *"perfil=- "*"stt_model=$STT_ALT (tenant)"*)
+          ok "T1 sem perfil, a chamada usou o modelo do TENANT: $STT_ALT (env era $STT_ENV)" ;;
+        *) falha "T1 a chamada sem perfil nao pegou o default do tenant ($STT_ALT): voz=[${VOZ4:-<sem linha>}]" ;;
+      esac
+      W4=$(janela5 "$SID4")
+      [ -n "$W4" ] && [ "$W4" -gt 0 ] \
+        && ok "T2 e transcreveu com ele: 5a janela de fala ${W4} ms" \
+        || falha "T2 nenhuma janela de fala na chamada com o modelo do tenant — escolheu e nao falou"
+    fi
+  fi
 fi
 
 limpa

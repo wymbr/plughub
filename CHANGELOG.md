@@ -1,5 +1,81 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (13) — VOZ-17: a fala deixa de ser configurada em env, e o serviço passa a ser consultado ANTES de gravar
+
+**O estado, medido antes de mexer.** `PLUGHUB_WEBRTC_STT_MODEL`, `_TTS_MODEL`, `_TTS_VOICE` e a
+língua (`PLUGHUB_VOICE_STT_LANGUAGE`) eram a ÚNICA fonte do que a chamada sem perfil usa — config de
+negócio em env, sem tela, contra a regra da casa. E a escolha, viesse do perfil ou do env, era
+conferida só contra o PADRÃO do nome (`VOICE_PARAMS`), que diz a forma e nada sobre existir: gravei
+`stt_model: "Systran/faster-whisper-medium"` pela porta do config-api e ela aceitou — o serviço tem
+**4** modelos instalados e esse não é um deles. O preço aparecia na CHAMADA: 404 do speaches a cada
+frase, `fala PERDIDA` no log do gateway, e nada vermelho em lugar nenhum.
+
+**(a) A camada do tenant.** As quatro chaves passam a viver no namespace `webrtc` — os MESMOS nomes
+do perfil —, entre o perfil e o env: **perfil → tenant → env**. Sai da mesma ida ao config-api que já
+trazia a segmentação (`SpeechSegmentationConfig.voice`): um namespace, uma leitura, um cache, porque
+duas leituras do mesmo namespace podem discordar DENTRO da mesma chamada. **Chave ausente não é
+valor** — devolver os quatro campos faria o env virar "config do tenant" no rótulo, e é a procedência
+(`env` · `tenant`/`global` · `profile:<id>`) que responde *"este modelo veio de onde?"*. O env fica
+como última camada: é o que faz a imagem subir falando sem config-api.
+
+**(b) A conferência na gravação, e onde ela mora.** Decisão do dono: **rota dona no gateway**. O
+config-api é store genérico de namespace; ensiná-lo a falar com o serviço de fala de um canal
+acoplaria o store a uma topologia que não é dele. Quem sabe o que a chamada vai usar — as três
+camadas, a tarefa de cada modelo, as vozes que ele oferece — é o dono do canal. Quatro rotas, todas
+com Bearer + `config.channels` (leitura para ver, escrita para gravar) e o tenant vindo do TOKEN:
+`GET /v1/speech-models` · `PUT`/`DELETE /v1/speech-profiles/{id}` · `GET`/`PUT /v1/speech-defaults`.
+**A credencial não muda de mão**: o Bearer de quem pediu é repassado ao config-api, que aplica o
+mesmo `config.channels` de sempre — o gateway confere, não empresta poder.
+
+**O que se confere é o EFETIVO, não o corpo.** `env ⊕ tenant ⊕ perfil`: um perfil que troca só a voz
+é conferido contra o modelo que VAI valer. Conferir o corpo isolado deixaria passar o par (modelo de
+uma camada, voz de outra), que é exatamente o que quebra na chamada — está no caso
+`test_voz_do_perfil_contra_modelo_do_TENANT`. Recusas: modelo não instalado · tarefa trocada (modelo
+de TTS no campo de STT, que padrão nenhum pega) · voz que não é daquele modelo · língua que o modelo
+não declara (comparação pela subtag: `pt-BR` casa `pt`, e `multilingual` aceita tudo) · campo
+desconhecido e faixa fora, estes sem sequer consultar o serviço.
+
+**Catálogo é `/v1/models`, nunca `/v1/registry`.** O primeiro tem o que está INSTALADO (4 no demo); o
+segundo, o que o serviço sabe baixar (**726**). Modelo do registro que não está instalado falha igual
+na chamada — conferir contra ele seria trocar uma recusa por um verde que não sustenta a fala.
+
+**Serviço fora ⇒ 503, e não grava** (decisão do dono). Config gravada sem conferência é
+indistinguível da conferida na leitura seguinte, e é a leitura que não tem como saber. Com o serviço
+de fala fora não há fala acontecendo: a janela em que a recusa incomoda é a janela em que o canal já
+está parado. A mesma postura do preview de diálogo (*verificador fora ⇒ "não verificado", nunca
+verde*).
+
+**Tela.** Aba WebRTC → Configurações ganhou *Padrão sem perfil* (as quatro chaves, com o valor em
+vigor e de que camada ele vem, e o branco que devolve o campo ao env). Nos perfis, modelo, língua e
+voz deixaram de ser texto livre: são seleção do catálogo, com as vozes recortadas pelo modelo em
+vigor. Com o serviço fora, a tela diz e **não deixa gravar** — cair em texto livre seria oferecer
+justamente o que ninguém pode conferir. Valor já gravado que sumiu do serviço continua visível,
+marcado como não instalado.
+
+**Verificação.** `probe_speech_model_conference.sh` **VERDE** em 12 ramos, com o controle positivo ao
+lado de cada recusa: catálogo lido · 401 anônimo e 403 sem `config.channels` em escrita, sem gravar ·
+config boa gravada · modelo ausente, tarefa trocada, voz de outro modelo e campo desconhecido em 422
+com o perfil anterior INTACTO · as três camadas separadas na leitura · o vazio removendo o override ·
+a rota apagando. A FASE 4 nova de `probe_webrtc_speech_profile.sh` é a prova de comportamento: com
+`webrtc.stt_model` do tenant, a chamada SEM perfil abriu com `Systran/faster-whisper-small (tenant)`
+— o env pedia `deepdml/faster-whisper-large-v3-turbo-ct2` — e transcreveu com ele. channel-gateway
+**1306** testes (1255 antes), platform-ui typecheck 279 arquivos rc=0. As rotas foram medidas pela
+borda da UI (nginx da imagem), que é o caminho do browser: `/v1/speech-models` e `/v1/speech-defaults`
+respondem 401, e `/v1/pools` continua indo ao agent-registry.
+
+**Achado de instrumento, consertado aqui.** `probe_speech_metrics.sh` ficou VERMELHO por motivo
+alheio: `/reports/speech/quality` agrupa por `(pool_id, speech_profile_id)` e, desde a `VOZ-25`
+(hoje), o pool-fixture recebe também chamadas COM perfil — o `jq` do probe trazia DUAS linhas e toda
+comparação virava vermelho por juntar amostras diferentes (18 sem perfil + 5 com). O probe passou a
+recortar o grupo SEM perfil, que é o que a chamada dele produz. VERDE de novo.
+
+**O que NÃO mudou, de propósito.** A porta crua do config-api continua aceitando escrita de quem tem
+`config.channels` — esta entrega fecha o caminho da TELA, e a diferença é medida pelo ramo C1 do gate
+(ficha `VOZ-29`). E o canal `voice` (`voice_stt_language`, `voice_elevenlabs_voice_id`) segue em env:
+sem credencial de provedor no demo, a entrega iria sem prova ao vivo (ficha `VOZ-30`).
+
+**Deixou fichas:** `VOZ-29` (a porta crua do config-api) · `VOZ-30` (as irmãs do canal `voice`).
+
 ## 2026-09-17 (12) — VOZ-12: o WebRTC deixa de prometer `file_upload`
 
 **A promessa sem mecanismo.** `CHANNEL_CAPABILITIES["webrtc"]` e o gêmeo TS declaravam

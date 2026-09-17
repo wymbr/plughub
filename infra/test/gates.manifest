@@ -406,6 +406,14 @@ probe_speech_check.sh
 # agregados nulos; G2 a verificacao da agenda termina completed e mediu; C1 controle: ociosa, a mesma
 # rota aceita 202. ~2 chamadas sinteticas.
 probe_speech_check_surface.sh
+# VOZ-17 (2026-09-17): config de fala que o servico NAO serve nao chega a ser gravada. A1 o catalogo
+# (`GET /v1/speech-models`) lista o INSTALADO por tarefa com as vozes; A2 portao anonimo 401 e sem
+# config.channels em escrita 403, sem gravar; B1 CONTROLE POSITIVO, config boa e gravada; B2 modelo
+# ausente, B3 tarefa trocada, B4 voz de outro modelo e B5 campo desconhecido viram 422 com o motivo,
+# e o perfil de B1 fica intacto; C1 a porta CRUA do config-api ainda aceita (decisao, VOZ-29); D1-D3
+# o default do tenant recusa invalido, grava com escopo tenant e o vazio REMOVE (volta ao env); E1 a
+# rota apaga. Cria e apaga um perfil e um usuario-sonda; nao faz chamada.
+probe_speech_model_conference.sh
 # VOZ-04 (Console). Contato WebRTC atribuido a humano: o conversation.assigned ia sem canal (o
 # Console o criava como webchat e a sobreposicao nunca montava), o caminho real de ativacao
 # humana nao escrevia routing.assigned (a sala nunca nascia), o hook pedia o token ao

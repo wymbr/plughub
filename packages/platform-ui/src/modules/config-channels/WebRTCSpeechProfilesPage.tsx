@@ -10,11 +10,21 @@
  * ⚠️ Ranges and name patterns repeat `channel-gateway/speech_config.py` (`PARAMS`, `VOICE_PARAMS`,
  * `PROFILE_ID_RE`), which is what VALIDATES at call time (config-api does not validate values). The
  * screen refuses earlier only so it never offers what the gateway would ignore.
+ *
+ * VOZ-17: model, language and voice are no longer free text, and the write no longer goes straight
+ * to config-api. Both changes are the same fact — a name that matches the pattern says nothing about
+ * the model EXISTING, and the call was what found out (404 per utterance, speech lost). The screen
+ * now offers what `GET /v1/speech-models` reports as installed, and saves through the gateway route
+ * that re-checks it. With the speech service unreachable the catalogue is empty and saving is
+ * disabled, saying so: falling back to free text would be offering exactly what nobody can verify.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
-import { useNamespace, putConfig, deleteConfig } from '../config-plataforma/api/config-hooks'
+import { useNamespace } from '../config-plataforma/api/config-hooks'
+import { deleteSpeechProfile, fetchSpeechDefaults, fetchSpeechModels, putSpeechProfile } from './api/speech'
+import type { SpeechDefaults, SpeechModels } from './api/speech'
+import { languagesOf, voicesOf } from './WebRTCSpeechDefaultsPage'
 import { listChannelEndpoints } from '@/api/registry'
 import type { ChannelEndpoint } from '@/types'
 import Spinner from '@/components/ui/Spinner'
@@ -69,11 +79,24 @@ function fromDraft(d: Draft): { value: Record<string, unknown> } | { invalid: st
   return { value: out }
 }
 
+/** O que a tela pode OFERECER em cada campo: o catálogo do serviço, recortado pelo modelo em vigor
+ *  naquele momento (o do rascunho, ou o herdado do default do tenant). */
+function opcoesDe(key: string, models: SpeechModels | null, sttEmVigor: string, ttsEmVigor: string): string[] {
+  if (key === 'stt_model') return (models?.stt ?? []).map(m => m.id)
+  if (key === 'tts_model') return (models?.tts ?? []).map(m => m.id)
+  if (key === 'tts_voice') return voicesOf(models, ttsEmVigor)
+  return languagesOf(models, sttEmVigor)
+}
+
 const WebRTCSpeechProfilesPage: React.FC = () => {
   const { t } = useTranslation('channels')
   const { tenantId, session } = useAuth()
   const token = session?.accessToken ?? ''
   const ns = useNamespace(tenantId, SPEECH_PROFILES_NS)
+
+  const [models,  setModels]  = useState<SpeechModels | null>(null)
+  const [padrao,  setPadrao]  = useState<SpeechDefaults | null>(null)
+  const [catErro, setCatErro] = useState<string | null>(null)
 
   const [endpoints, setEndpoints] = useState<ChannelEndpoint[]>([])
   const [editing,   setEditing]   = useState<string | null>(null)   // profile id, or '' for new
@@ -88,6 +111,20 @@ const WebRTCSpeechProfilesPage: React.FC = () => {
     try { setEndpoints(await listChannelEndpoints(tenantId, 'webrtc')) } catch (e) { setErro(String(e)) }
   }, [tenantId])
   useEffect(() => { loadEndpoints() }, [loadEndpoints])
+
+  // O catálogo é o que a tela pode OFERECER; o default é o que um campo em branco herda — os dois
+  // vêm do gateway, que é quem sabe o que o serviço tem instalado (VOZ-17).
+  useEffect(() => {
+    if (!tenantId) return
+    let vivo = true
+    ;(async () => {
+      try {
+        const [m, d] = await Promise.all([fetchSpeechModels(tenantId), fetchSpeechDefaults(tenantId)])
+        if (vivo) { setModels(m); setPadrao(d); setCatErro(null) }
+      } catch (e) { if (vivo) setCatErro(String(e)) }
+    })()
+    return () => { vivo = false }
+  }, [tenantId])
 
   const profiles = useMemo(() => Object.entries(ns.entries).sort(([a], [b]) => a.localeCompare(b)), [ns.entries])
   const usedBy = (id: string) => endpoints.filter(ep => ep.settings?.speech_profile_id === id)
@@ -107,7 +144,7 @@ const WebRTCSpeechProfilesPage: React.FC = () => {
     if ('invalid' in r) { setErro(t('speechProfiles.invalidField', { key: r.invalid })); return }
     setBusy(true); setErro(null); setAviso(null)
     try {
-      await putConfig(SPEECH_PROFILES_NS, id, r.value, tenantId, '', token)
+      await putSpeechProfile(tenantId, id, r.value)
       setAviso(t('speechProfiles.saved', { id }))
       setEditing(null)
       ns.reload()
@@ -119,7 +156,7 @@ const WebRTCSpeechProfilesPage: React.FC = () => {
     if (!confirm(n ? t('speechProfiles.deleteConfirmUsed', { id, count: n }) : t('speechProfiles.deleteConfirm', { id }))) return
     setBusy(true); setErro(null); setAviso(null)
     try {
-      await deleteConfig(SPEECH_PROFILES_NS, id, tenantId, '', token)
+      await deleteSpeechProfile(tenantId, id)
       setAviso(t('speechProfiles.deleted', { id }))
       ns.reload()
     } catch (e) { setErro(String(e)) } finally { setBusy(false) }
@@ -146,6 +183,11 @@ const WebRTCSpeechProfilesPage: React.FC = () => {
         </div>
       </div>
       {ns.error && <p className="text-xs text-red-text">⚠ {ns.error}</p>}
+      {catErro && (
+        <p className="text-xs text-warning-text">
+          ⚠ {t('speechProfiles.catalogDown')} <span className="font-mono text-2xs">{catErro}</span>
+        </p>
+      )}
 
       {editing !== null && (
         <div className="bg-surface-muted border border-border rounded-lg p-4 space-y-3">
@@ -166,15 +208,28 @@ const WebRTCSpeechProfilesPage: React.FC = () => {
               <input className={inp} value={draft.description}
                      onChange={e => setDraft(d => ({ ...d, description: e.target.value }))} />
             </div>
-            {TEXT_FIELDS.map(f => (
-              <div key={f.key}>
-                <label className="text-xs font-medium text-dark block mb-1">
-                  {t(`speechProfiles.fields.${f.key}`)} <code className="text-2xs text-muted-light">{f.key}</code>
-                </label>
-                <input className={inp} value={draft[f.key]} placeholder={t('speechProfiles.inherit')}
-                       onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))} />
-              </div>
-            ))}
+            {TEXT_FIELDS.map(f => {
+              const herdado = padrao?.effective[f.key] ?? ''
+              const lista = opcoesDe(f.key, models, draft.stt_model || padrao?.effective.stt_model || '',
+                                     draft.tts_model || padrao?.effective.tts_model || '')
+              return (
+                <div key={f.key}>
+                  <label className="text-xs font-medium text-dark block mb-1">
+                    {t(`speechProfiles.fields.${f.key}`)} <code className="text-2xs text-muted-light">{f.key}</code>
+                  </label>
+                  <select className={inp} disabled={!models}
+                          value={draft[f.key]}
+                          onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))}>
+                    <option value="">{t('speechProfiles.inheritValue', { value: herdado || '—' })}</option>
+                    {lista.map(o => <option key={o} value={o}>{o}</option>)}
+                    {/* valor já gravado que o serviço não oferece mais: visível, e dito */}
+                    {draft[f.key] && !lista.includes(draft[f.key]) && (
+                      <option value={draft[f.key]}>{draft[f.key]} — {t('speechDefaults.notInstalled')}</option>
+                    )}
+                  </select>
+                </div>
+              )
+            })}
             {NUM_FIELDS.map(f => (
               <div key={f.key}>
                 <label className="text-xs font-medium text-dark block mb-1">
@@ -197,7 +252,7 @@ const WebRTCSpeechProfilesPage: React.FC = () => {
           </div>
           <p className="text-2xs text-muted">{t('speechProfiles.inheritNote')}</p>
           <div className="flex gap-2">
-            <button onClick={save} disabled={busy || !token}
+            <button onClick={save} disabled={busy || !token || !models}
                     className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors">
               {busy ? t('webrtcSpeech.saving') : t('actions.save')}
             </button>

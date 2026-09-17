@@ -121,6 +121,7 @@
     "identifierHintFallback":"Identificador do canal"
   },
   "actions": {
+    "reload":      "Recarregar",
     "save":        "Salvar",
     "saving":      "Salvando…",
     "cancel":      "Cancelar",
@@ -183,9 +184,25 @@
       }
     }
   },
+  "speechDefaults": {
+    "title": "Padrão sem perfil",
+    "intro": "O que vale na chamada cujo ponto de entrada não aponta perfil de fala. Até 2026-09-17 isto só existia no env do gateway; agora é do tenant, e só se escolhe modelo que o serviço tem instalado.",
+    "useEnv": "Padrão do gateway ({{value}})",
+    "inForce": "Em vigor: {{value}}",
+    "fromEnv": "vem do env do gateway",
+    "fromTenant": "escolhido por este tenant",
+    "fromPlatform": "padrão da plataforma (config-api, escopo global)",
+    "notInstalled": "não instalado no serviço",
+    "note": "Campo em branco volta ao env do gateway. Perfil continua vencendo tudo isto, e o menu continua vencendo o perfil.",
+    "saved": "Padrão gravado — a próxima chamada sem perfil já usa.",
+    "noChange": "Nada mudou.",
+    "catalogDown": "O serviço de fala não respondeu o catálogo, então não há o que escolher nem gravar aqui agora."
+  },
   "speechProfiles": {
+    "catalogDown": "O serviço de fala não respondeu o catálogo, então esta tela não pode oferecer modelos nem gravar perfil — com ele fora, nada é conferível.",
+    "inheritValue": "Herdar ({{value}})",
     "title": "Perfis de fala",
-    "intro": "Um perfil adapta o reconhecimento de fala a um tipo de entrada — navegador, tronco SIP, outra língua. Aponte-o num endpoint WebRTC. Campo vazio herda a config do tenant acima (modelo, língua e voz: o padrão da instalação).",
+    "intro": "Um perfil adapta o reconhecimento de fala a um tipo de entrada — navegador, tronco SIP, outra língua. Aponte-o num endpoint WebRTC. Campo vazio herda a config do tenant acima — inclusive o padrão sem perfil, logo acima.",
     "add": "+ Novo perfil",
     "id": "Id do perfil",
     "idHint": "letras minúsculas, dígitos, - e _ (até 64)",

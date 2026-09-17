@@ -14,7 +14,8 @@ import pytest
 
 from .. import speech_config
 from ..adapters.voice_provider import SpeechSegmentation
-from ..speech_config import PARAMS, SpeechSegmentationConfig, resolve
+from ..speech_config import (PARAMS, SpeechSegmentationConfig, conferir_forma, resolve,
+                             resolve_voice)
 
 TENANT = "tenant_t"
 CHEIO = {"stt_energy_threshold": 900, "stt_end_silence_ms": 1200, "stt_gap_ms": 800,
@@ -119,7 +120,7 @@ class TestCache:
             seg = await cfg(TENANT)
         assert seg == SpeechSegmentation()
         assert seg.provenance["energy_threshold"] == "default: config-api indisponivel"
-        assert "configurada para o tenant NAO vale" in caplog.text
+        assert "configuradas para o tenant NAO valem" in caplog.text
 
     @pytest.mark.asyncio
     async def test_falha_depois_de_uma_leitura_boa_mantem_o_ultimo_valor(self, servico):
@@ -140,3 +141,73 @@ class TestCache:
         assert (await cfg(TENANT)).end_silence_ms == 700
         servico.status = 200
         assert (await cfg(TENANT)).end_silence_ms == 1200
+
+
+class TestVozDoTenant:
+    """VOZ-17 — modelo, língua e voz no MESMO namespace, lidos na MESMA ida ao config-api."""
+
+    VOZ = {"stt_model": "deepdml/faster-whisper-large-v3-turbo-ct2", "tts_voice": "pf_dora"}
+
+    def test_so_o_que_foi_declarado_volta(self):
+        """Chave ausente NÃO é valor: devolver os quatro campos aqui faria o env virar "config do
+        tenant" no rótulo, e a procedência deixaria de responder de onde veio o modelo."""
+        valores, proc = resolve_voice(self.VOZ, {"tts_voice": "tenant"}, TENANT)
+        assert valores == self.VOZ
+        assert proc == {"stt_model": "config", "tts_voice": "tenant"}
+
+    def test_valor_fora_do_padrao_nao_vale_e_o_log_nomeia(self, caplog):
+        with caplog.at_level(logging.ERROR):
+            valores, _ = resolve_voice({**self.VOZ, "stt_language": "portugues do brasil"}, {}, TENANT)
+        assert "stt_language" not in valores and "portugues do brasil" in caplog.text
+        assert valores["tts_voice"] == "pf_dora"          # controle: o resto vale
+
+    @pytest.mark.asyncio
+    async def test_sai_da_mesma_leitura_da_segmentacao(self, servico):
+        """Uma ida, um cache: duas leituras do mesmo namespace poderiam discordar entre si dentro
+        da mesma chamada."""
+        servico.entries.update(self.VOZ)
+        cfg = SpeechSegmentationConfig("http://config-api:3600")
+        assert (await cfg(TENANT)).end_silence_ms == 1200
+        valores, proc = await cfg.voice(TENANT)
+        assert valores == self.VOZ and proc["tts_voice"] == "global"
+        assert servico.leituras == 1
+
+    @pytest.mark.asyncio
+    async def test_config_api_fora_devolve_vazio_e_a_chamada_fica_no_env(self, servico):
+        servico.cai = True
+        cfg = SpeechSegmentationConfig("http://config-api:3600")
+        assert await cfg.voice(TENANT) == ({}, {})
+
+    @pytest.mark.asyncio
+    async def test_falha_depois_de_leitura_boa_mantem_a_voz_lida(self, servico):
+        servico.entries.update(self.VOZ)
+        cfg = SpeechSegmentationConfig("http://config-api:3600")
+        await cfg(TENANT)
+        servico.cai = True
+        cfg.invalidate(TENANT)
+        assert (await cfg.voice(TENANT))[0] == self.VOZ
+
+
+class TestConferirForma:
+    """A forma do perfil, na mesma casa que a aplica na leitura — é o que a porta de escrita chama
+    antes de perguntar ao serviço (VOZ-17)."""
+
+    def test_perfil_bom_nao_tem_recusa(self):
+        assert conferir_forma({"description": "tronco", "stt_end_silence_ms": 1500,
+                               "stt_model": "a/b", "tts_voice": "dora"}) == []
+
+    def test_campo_desconhecido(self):
+        r = conferir_forma({"stt_modelo": "a/b"})
+        assert len(r) == 1 and "stt_modelo" in r[0]
+
+    def test_faixa_e_tipo(self):
+        assert len(conferir_forma({"stt_end_silence_ms": 99000})) == 1
+        assert len(conferir_forma({"stt_vad_filter": "true"})) == 1
+
+    def test_padrao_de_nome(self):
+        assert len(conferir_forma({"tts_voice": "voz com espaco"})) == 1
+        assert len(conferir_forma({"stt_language": "portugues"})) == 1
+
+    def test_campo_em_branco_herda_e_nao_e_recusa(self):
+        """Vazio = a camada de baixo responde. Recusar aqui impediria de LIMPAR um campo."""
+        assert conferir_forma({"tts_voice": "", "stt_model": None}) == []

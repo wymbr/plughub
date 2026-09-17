@@ -98,6 +98,12 @@ class _SttComStats:
         yield STTResult(transcript="segredo dito pelo cliente", is_final=True, confidence=0.7)
 
 
+
+async def _sem_voz_do_tenant(tenant):
+    """O tenant não declara modelo/língua/voz (VOZ-17): a resolução cai no env do gateway."""
+    return {}, {}
+
+
 class TestRenderizadorPublica:
     async def test_resumo_do_fluxo_do_cliente_sem_texto_e_so_do_cliente(self):
         room = MockRoomClient()
@@ -109,6 +115,7 @@ class TestRenderizadorPublica:
 
         async def _seg(t):
             return SpeechSegmentation(end_silence_ms=900, provenance={"end_silence_ms": "tenant"})
+        _seg.voice = _sem_voz_do_tenant              # VOZ-17: o tenant não declara voz
         adapter.speech_config = _seg
         await adapter._stt_pipeline(SESSION_ID, room)
         assert await _ate(lambda: _metricas(producer))

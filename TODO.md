@@ -39,6 +39,7 @@ variam de instalação para instalação e ao longo do tempo.
 `SCH-01` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (10)): as 9 rotas de Agenda passam a pedir credencial e capacidade; o tenant vem do token. Escopo por pool ficou para a `SCH-02`; o censo do eixo, para a `AUT-58`.
 `VOZ-15` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (11)): capacidade no pool deixou de bastar para o token de mídia — o agente tem de estar entre os atendentes do contato. Supervisor segue fora da regra, de propósito.
 `VOZ-12` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (12)): `file_upload` saiu da tabela do WebRTC — declarado sem implementação. Implementar virou `VOZ-28`, com gatilho de demanda.
+`VOZ-17` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (13)): modelo, língua e voz deixaram o env — camada do tenant no namespace `webrtc`, e a gravação passou a perguntar ao serviço o que ele TEM (`/v1/models`, nunca `/v1/registry`). Serviço fora recusa, por decisão: config não conferida é indistinguível da conferida na leitura seguinte. Ficaram `VOZ-29` (porta crua do config-api) e `VOZ-30` (canal `voice`).
 
 ## VOZ-19 — ruído que vira fala, e o limiar de confiança *(medido 2026-09-17)*
 

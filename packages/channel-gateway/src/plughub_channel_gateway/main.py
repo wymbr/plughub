@@ -49,6 +49,7 @@ from .attachment_expiry import run_attachment_expiry
 from .channel_capability_registry import (
     select_channel,
 )
+from . import speech_catalog
 from .config import get_settings, Settings
 # Verificador canônico (passo 3 da consolidação, 2026-08-28). O import vem DIRETO do
 # pacote, não re-exportado por `.auth`: um re-export deixaria `auth.py` parecendo dono
@@ -58,6 +59,7 @@ from .config import get_settings, Settings
 from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 
 from .auth import accessible_pools, pool_in_scope
+from .speech_config import PROFILE_ID_RE, VOICE_PARAMS, conferir_forma
 from .identity_auth import identity_principal, tenant_for
 from .context_reader import ContextReader
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint, resolve_pool
@@ -1063,14 +1065,8 @@ async def speech_check_run(request: Request, body: SpeechCheckRunRequest) -> JSO
     `profile_not_found` (perfil inexistente ou malformado). Sem `PLUGHUB_SPEECH_CHECK_URL` ou sem
     token de serviço, RECUSA 503 nomeando a env — nunca finge que pediu.
     """
-    _tok = bearer_from_header(request.headers.get("authorization"))
-    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
-    if not _payload or not str(_payload.get("sub") or ""):
-        raise HTTPException(status_code=401, detail="pedir verificacao de fala exige credencial")
-    if not abac_can(_payload, "config", "channels", "read_write"):
-        logger.warning("speech-check NEGADO: sub=%s — sem config.channels em escrita",
-                       _payload.get("sub"))
-        raise HTTPException(status_code=403, detail="pedir verificacao de fala exige `config.channels` em escrita")
+    # VOZ-17: o mesmo portão da escrita de perfil e do catálogo — uma casa, não três cópias.
+    _payload = _quem_configura_canal(request, "read_write", "pedir verificacao de fala")
 
     s = get_settings()
     if not s.speech_check_url or not s.speech_check_service_token:
@@ -1105,6 +1101,254 @@ async def speech_check_run(request: Request, body: SpeechCheckRunRequest) -> JSO
         # reações diferentes de quem clicou, e um 500 genérico apagaria a diferença.
         raise HTTPException(status_code=r.status_code, detail=dados.get("detail", dados))
     return JSONResponse(dados, status_code=r.status_code)
+
+
+# ── Modelo, língua e voz da fala: catálogo e porta de escrita (VOZ-17) ───────
+#
+# O estado que originou: perfil e default eram gravados DIRETO no config-api pela tela, e a única
+# conferência era o PADRÃO do nome (`speech_config.VOICE_PARAMS`), que não diz nada sobre existir.
+# Modelo plausível e não instalado era aceito na gravação e falhava na CHAMADA — 404 do serviço a
+# cada frase, `fala PERDIDA` no log, e nada vermelho. Aqui a config passa a ser conferida contra o
+# que o serviço TEM (`speech_catalog`), no momento em que alguém a grava.
+#
+# Por que a porta é o GATEWAY e não o config-api: o config-api é store genérico de namespace, e
+# ensiná-lo a falar com o serviço de fala de um canal acoplaria o store a uma topologia que não é
+# dele. Quem sabe o que a chamada vai usar — as três camadas, o serviço, a tarefa de cada modelo —
+# é o dono do canal. A credencial não muda de mão: o Bearer de QUEM PEDIU é repassado ao config-api,
+# que aplica o mesmo `config.channels` de sempre — o gateway confere, não empresta poder.
+#
+# ⚠️ O config-api continua aceitando escrita direta de quem tem o grant (é a porta do resto da
+# config, e os probes a usam de propósito para plantar perfil inválido). Esta rota fecha o caminho
+# da TELA, não o da chave-mestra; a diferença está nomeada em `VOZ-29`.
+
+
+def _quem_configura_canal(request: Request, minimo: str, what: str) -> dict:
+    """Bearer + `config.channels` na capacidade pedida, ou levanta 401/403.
+
+    Uma casa só: pedir verificação de fala (VOZ-27), ler o catálogo e gravar perfil/default são o
+    MESMO portão — e duas cópias da mesma decisão é como elas passam a discordar (o caso medido
+    está no `CLAUDE.md` § MCP Interception: a mesma lista com três semânticas)."""
+    tok = bearer_from_header(request.headers.get("authorization"))
+    payload = verify_user_jwt(tok, get_settings().auth_jwt_secret) if tok else None
+    if not payload or not str(payload.get("sub") or ""):
+        raise HTTPException(status_code=401, detail=f"{what} exige credencial")
+    rotulo = {"read_write": "escrita", "read_only": "leitura"}.get(minimo, minimo)
+    if not abac_can(payload, "config", "channels", minimo):
+        logger.warning("%s NEGADO: sub=%s — sem config.channels em %s",
+                       what, payload.get("sub"), rotulo)
+        raise HTTPException(status_code=403, detail=f"{what} exige `config.channels` em {rotulo}")
+    return payload
+
+
+def _canal_de_fala() -> WebRTCAdapter:
+    if _webrtc_adapter is None:
+        raise HTTPException(status_code=503, detail="canal webrtc nao habilitado neste gateway")
+    return _webrtc_adapter
+
+
+async def _voz_efetiva(tenant_id: str, *, tenant: dict | None = None,
+                       perfil: dict | None = None) -> dict:
+    """A voz que a chamada REALMENTE usaria: env ⊕ tenant ⊕ perfil.
+
+    `tenant=None` usa o que está gravado; quem escreve o DEFAULT passa a camada já com a mudança
+    aplicada. Conferir só o corpo enviado deixaria passar o par (modelo de uma camada, voz de
+    outra) — que é exatamente o que quebra na chamada."""
+    ad = _canal_de_fala()
+    if tenant is None:
+        tenant, _ = await ad.speech_config.voice(tenant_id)
+    efetivo = {**ad.voice_defaults(), **tenant}
+    for k in VOICE_PARAMS:
+        v = (perfil or {}).get(k)
+        if isinstance(v, str) and v.strip():
+            efetivo[k] = v.strip()
+    return efetivo
+
+
+async def _catalogo_ou_503() -> list:
+    """Os modelos instalados, ou 503 nomeando a causa. **Serviço fora não vira "grava assim
+    mesmo"** (decisão do dono, 2026-09-17): um perfil gravado sem conferência é indistinguível dos
+    conferidos na leitura seguinte, e é a leitura que não tem como saber. Com o serviço fora não há
+    fala acontecendo — a janela em que a recusa incomoda é a janela em que o canal já está parado."""
+    try:
+        return await speech_catalog.catalogo(get_settings().webrtc_speaches_url)
+    except speech_catalog.CatalogoIndisponivel as exc:
+        raise HTTPException(status_code=503, detail=f"config de fala NAO conferida e NAO gravada: {exc}")
+
+
+def _recusa_422(recusas: list) -> None:
+    if recusas:
+        raise HTTPException(status_code=422, detail={"code": "speech_config_rejected", "reasons": recusas})
+
+
+async def _config_api(metodo: str, caminho: str, request: Request, tenant_id: str,
+                      **kw) -> httpx.Response:
+    """Fala com o config-api COM A CREDENCIAL DE QUEM PEDIU — o gateway confere, não empresta
+    poder: quem não passa no `config.channels` do config-api continua sem gravar."""
+    url = f"{get_settings().config_api_url.rstrip('/')}{caminho}"
+    cabecalhos = {"authorization": request.headers.get("authorization") or "",
+                  "x-tenant-id": tenant_id}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            return await cli.request(metodo, url, headers=cabecalhos, **kw)
+    except Exception as exc:
+        logger.warning("config-api inalcancavel em %s %s: %s", metodo, caminho, exc)
+        raise HTTPException(status_code=502, detail=f"config-api inalcancavel: {exc}")
+
+
+def _relata(r: httpx.Response, o_que: str) -> None:
+    if r.status_code >= 400:
+        try:
+            det = r.json().get("detail")
+        except Exception:  # noqa: BLE001
+            det = r.text[:300]
+        raise HTTPException(status_code=r.status_code, detail={"code": "config_api_refused",
+                                                               "what": o_que, "detail": det})
+
+
+@app.get("/v1/speech-models")
+async def speech_models(request: Request) -> dict:
+    """O que o serviço de fala TEM instalado, por tarefa, com as vozes de cada modelo de TTS.
+
+    É o que a tela oferece: campo de texto livre é como um modelo inexistente entra. **Instalados,
+    nunca o registro de downloads** — modelo baixável e não baixado falha igual na chamada (o
+    porquê está em `speech_catalog`)."""
+    _quem_configura_canal(request, "read_only", "ver os modelos de fala")
+    modelos = await _catalogo_ou_503()
+    return {
+        "stt": [{"id": m["id"], "languages": m.get("language") or []}
+                for m in speech_catalog.por_tarefa(modelos, speech_catalog.STT)],
+        "tts": [{"id": m["id"], "voices": m.get("voices") or []}
+                for m in speech_catalog.por_tarefa(modelos, speech_catalog.TTS)],
+    }
+
+
+@app.put("/v1/speech-profiles/{profile_id}")
+async def speech_profile_put(profile_id: str, request: Request, body: dict) -> JSONResponse:
+    """Grava um perfil de fala depois de conferir FORMA e SERVIÇO (VOZ-17).
+
+    Três recusas, todas com o motivo nomeado: id fora do padrão · campo desconhecido ou fora da
+    faixa (`speech_config.conferir_forma`, a mesma casa que aplica na leitura) · modelo/voz/língua
+    que o serviço não serve (`speech_catalog.conferir`, sobre a resolução COMPLETA).
+
+    O corpo é o perfil inteiro, como ele fica no namespace — gravação é substituição, igual ao
+    `PUT` do config-api que ela embrulha, e um merge parcial aqui faria a tela e a chave-mestra
+    escreverem coisas diferentes na mesma chave."""
+    quem = _quem_configura_canal(request, "read_write", "gravar perfil de fala")
+    tenant_id = str(quem.get("tenant_id") or "")
+    if not PROFILE_ID_RE.fullmatch(profile_id):
+        _recusa_422([f"`{profile_id}` nao e um id de perfil — esperado {PROFILE_ID_RE.pattern}"])
+    if not isinstance(body, dict):
+        _recusa_422(["o corpo tem de ser o objeto do perfil"])
+    _recusa_422(conferir_forma(body))
+
+    modelos = await _catalogo_ou_503()
+    efetivo = await _voz_efetiva(tenant_id, perfil=body)
+    _recusa_422(speech_catalog.conferir(modelos, efetivo))
+
+    r = await _config_api("PUT", f"/config/speech_profiles/{profile_id}", request, tenant_id,
+                          json={"value": body, "tenant_id": tenant_id})
+    _relata(r, f"gravar speech_profiles.{profile_id}")
+    logger.info("speech: perfil %r gravado por sub=%s (tenant=%s) — a chamada com ele usa %s",
+                profile_id, quem.get("sub"), tenant_id,
+                " ".join(f"{k}={efetivo.get(k) or '-'}" for k in sorted(VOICE_PARAMS)))
+    return JSONResponse({"profile_id": profile_id, "effective_voice": efetivo}, status_code=200)
+
+
+@app.delete("/v1/speech-profiles/{profile_id}", status_code=204)
+async def speech_profile_delete(profile_id: str, request: Request):
+    """Apaga o perfil. Passa por aqui para a tela ter UMA porta de perfil — e porque quem apaga um
+    perfil referenciado por um endpoint precisa que isso apareça: a chamada por aquele endpoint
+    volta à config do tenant e o gateway DIZ no log (`perfil referenciado ... nao existe`). Não há
+    conferência de serviço: apagar nunca cria config que a chamada não sustente."""
+    quem = _quem_configura_canal(request, "read_write", "apagar perfil de fala")
+    tenant_id = str(quem.get("tenant_id") or "")
+    if not PROFILE_ID_RE.fullmatch(profile_id):
+        _recusa_422([f"`{profile_id}` nao e um id de perfil — esperado {PROFILE_ID_RE.pattern}"])
+    r = await _config_api("DELETE", f"/config/speech_profiles/{profile_id}", request, tenant_id,
+                          params={"tenant_id": tenant_id})
+    if r.status_code not in (200, 204, 404):
+        _relata(r, f"apagar speech_profiles.{profile_id}")
+    logger.info("speech: perfil %r apagado por sub=%s (tenant=%s)", profile_id, quem.get("sub"), tenant_id)
+    return JSONResponse(None, status_code=204)
+
+
+@app.get("/v1/speech-defaults")
+async def speech_defaults_get(request: Request) -> dict:
+    """O que vale HOJE quando a chamada não aponta perfil, e de que camada veio cada campo.
+
+    A tela precisa das três respostas ao mesmo tempo: o que o env do gateway oferece, o que o tenant
+    escolheu e o que resulta. Mostrar só o resultado esconderia a pergunta que a VOZ-17 abriu — *este
+    modelo veio de onde?* —, e é ela que decide se o botão "voltar ao padrão" muda alguma coisa."""
+    quem = _quem_configura_canal(request, "read_only", "ver o default de fala")
+    ad = _canal_de_fala()
+    tenant_id = str(quem.get("tenant_id") or "")
+    tenant, proc = await ad.speech_config.voice(tenant_id)
+    env = ad.voice_defaults()
+    return {"env": env, "tenant": tenant, "effective": {**env, **tenant},
+            "provenance": {k: proc.get(k, "tenant") if k in tenant else "env" for k in VOICE_PARAMS}}
+
+
+class SpeechDefaultsBody(BaseModel):
+    """O default de fala do TENANT (namespace `webrtc`), campo a campo.
+
+    Campo AUSENTE não é mexido; campo enviado vazio ou nulo REMOVE o override e devolve aquele
+    campo ao env do gateway. O discriminador é `model_fields_set`, nunca o valor — "não mandou" e
+    "mandou vazio" pedem coisas opostas, e lê-los pelo valor colapsaria as duas."""
+    stt_model:    str | None = None
+    stt_language: str | None = None
+    tts_model:    str | None = None
+    tts_voice:    str | None = None
+
+
+@app.put("/v1/speech-defaults")
+async def speech_defaults_put(request: Request, body: SpeechDefaultsBody) -> JSONResponse:
+    """O que vale quando a chamada NÃO aponta perfil (VOZ-17).
+
+    Até aqui isso era env do gateway — `PLUGHUB_WEBRTC_STT_MODEL` e irmãs —, contra a regra da casa
+    (*env só para segredo e topologia; todo campo de config tem tela*). Passa a viver no namespace
+    `webrtc`, nas MESMAS chaves do perfil, conferido contra o serviço igual a ele. O env não some:
+    é a última camada, a que faz a imagem subir falando sem config-api."""
+    quem = _quem_configura_canal(request, "read_write", "gravar o default de fala")
+    tenant_id = str(quem.get("tenant_id") or "")
+    ad = _canal_de_fala()
+    enviados = {k: getattr(body, k) for k in body.model_fields_set}
+    if not enviados:
+        _recusa_422(["nenhum campo enviado — mande ao menos um de "
+                     + ", ".join(sorted(SpeechDefaultsBody.model_fields))])
+
+    atual, _ = await ad.speech_config.voice(tenant_id)
+    nova = dict(atual)
+    remover = []
+    for k, v in enviados.items():
+        if v is None or not str(v).strip():
+            nova.pop(k, None)
+            remover.append(k)
+        else:
+            nova[k] = str(v).strip()
+    _recusa_422(conferir_forma(nova))
+
+    modelos = await _catalogo_ou_503()
+    efetivo = await _voz_efetiva(tenant_id, tenant=nova)
+    _recusa_422(speech_catalog.conferir(modelos, efetivo))
+
+    escritos = []
+    for k in enviados:
+        if k in remover:
+            r = await _config_api("DELETE", f"/config/webrtc/{k}", request, tenant_id,
+                                  params={"tenant_id": tenant_id})
+            if r.status_code not in (200, 204, 404):
+                _relata(r, f"remover webrtc.{k} (ja aplicados: {escritos or 'nenhum'})")
+        else:
+            r = await _config_api("PUT", f"/config/webrtc/{k}", request, tenant_id,
+                                  json={"value": nova[k], "tenant_id": tenant_id})
+            _relata(r, f"gravar webrtc.{k} (ja aplicados: {escritos or 'nenhum'})")
+        escritos.append(k)
+    logger.info("speech: default de fala do tenant=%s alterado por sub=%s (%s) — a chamada sem "
+                "perfil passa a usar %s", tenant_id, quem.get("sub"),
+                ", ".join(f"{k}={'(removido)' if k in remover else nova[k]}" for k in escritos),
+                " ".join(f"{k}={efetivo.get(k) or '-'}" for k in sorted(VOICE_PARAMS)))
+    return JSONResponse({"applied": escritos, "removed": remover, "effective_voice": efetivo},
+                        status_code=200)
 
 
 # ── Webhook channel endpoints (Arc 19) ───────────────────────────────────────

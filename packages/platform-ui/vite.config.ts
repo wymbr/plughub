@@ -70,9 +70,11 @@ export default defineConfig({
         target: 'http://localhost:8010',
         changeOrigin: true
       },
-      '^/v1/speech-checks': {
-        // channel-gateway — VOZ-27: "Executar agora" da verificação de fala (Bearer + ABAC no
-        // gateway, que repassa ao executor interno). Before generic /v1 (→ agent-registry).
+      '^/v1/speech-': {
+        // channel-gateway — as rotas de FALA: `speech-checks` (VOZ-27, "Executar agora") e
+        // `speech-models` / `speech-profiles` / `speech-defaults` (VOZ-17, catálogo do serviço e a
+        // porta que confere antes de gravar). Todas pedem Bearer + `config.channels` no gateway.
+        // Before generic /v1 (→ agent-registry).
         target: 'http://localhost:8010',
         changeOrigin: true
       },

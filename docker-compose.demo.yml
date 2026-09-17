@@ -1620,6 +1620,10 @@ services:
       # VOZ-05 — bot leg (STT/TTS) pelo serviço auto-hospedado `speaches`. Sem as duas, o bot
       # leg fica INDISPONÍVEL e diz o que falta: chamada com áudio não é transcrita e a IA
       # atende por texto. Os modelos (defaults do Settings) são os que `speaches-models` baixa.
+      # ⚠️ VOZ-17: MODEL/VOICE aqui são a ÚLTIMA camada, não a única — o tenant escolhe no
+      # namespace `webrtc` do config-api (tela: aba WebRTC → *Padrão sem perfil*) e o perfil da
+      # chamada vence os dois. Trocar o modelo aqui continua exigindo que `speaches-models` o
+      # baixe; a porta de escrita da tela recusa o que o serviço não tem instalado.
       PLUGHUB_WEBRTC_SPEECH_PROVIDER:     speaches
       PLUGHUB_WEBRTC_SPEACHES_URL:        http://speaches:8000
       PLUGHUB_WEBRTC_STT_MODEL:           deepdml/faster-whisper-large-v3-turbo-ct2

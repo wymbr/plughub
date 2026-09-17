@@ -60,6 +60,12 @@ def _resultados(producer) -> list[dict]:
     return [e["content"]["payload"] for e in _eventos(producer) if e["content"]["type"] == "menu_result"]
 
 
+
+async def _sem_voz_do_tenant(tenant):
+    """O tenant não declara modelo/língua/voz (VOZ-17): a resolução cai no env do gateway."""
+    return {}, {}
+
+
 async def _ate(cond, secs=2.0):
     fim = asyncio.get_running_loop().time() + secs
     while not cond():
@@ -208,6 +214,7 @@ class TestSegmentacaoDoTenant:
         async def _resolve(tenant):
             chamadas.append(tenant)
             return seg
+        _resolve.voice = _sem_voz_do_tenant          # VOZ-17: o tenant não declara voz
         adapter.speech_config = _resolve
         with caplog.at_level(logging.INFO):
             await adapter._stt_pipeline(SESSION_ID, room)
@@ -225,6 +232,7 @@ class TestSegmentacaoDoTenant:
 
         async def _resolve(tenant):
             chamadas.append(tenant)
+        _resolve.voice = _sem_voz_do_tenant          # VOZ-17: o tenant não declara voz
         adapter.speech_config = _resolve
         with caplog.at_level(logging.INFO):
             await adapter._stt_pipeline(SESSION_ID, room)

@@ -687,7 +687,7 @@ webrtc_stt_enabled:         bool = True
 > perfil, valor = objeto com qualquer `stt_*` da segmentação e `stt_model`, `stt_language`, `tts_model`,
 > `tts_voice`). Resolução por chamada, UMA vez e compartilhada entre STT e TTS
 > (`WebRTCAdapter._speech_settings` → `speech_config.resolve_session`): **menu → perfil → tenant →
-> global → default**; modelo, língua e voz sem perfil vêm do env do gateway (`VOZ-17`). O modelo é
+> global → default**; modelo, língua e voz sem perfil vêm do tenant e, na ausência, do env (`VOZ-17`). O modelo é
 > escolhido **dentro do mesmo serviço** speaches (a URL continua topologia). Perfil ausente, campo
 > inválido, chave desconhecida e config-api fora são ditos no log e não valem; `config.changed` de
 > `speech_profiles` invalida o cache e vale na próxima chamada. O log da chamada traz `voz da chamada
@@ -695,6 +695,39 @@ webrtc_stt_enabled:         bool = True
 > `speech_profile_id` em vigor (e o `stt_model` no resumo), e `/reports/speech/quality` agrupa por
 > pool × perfil. Tela: aba WebRTC → Configurações → *Perfis de fala*, e o seletor no endpoint. Gate ao
 > vivo: `infra/test/probe_webrtc_speech_profile.sh`. Ver `CHANGELOG.md` 2026-09-17 (7).
+>
+> **O default sem perfil, e a conferência contra o serviço (VOZ-17).** Duas metades da mesma frase
+> — *"o que a chamada usa quando ninguém escolheu"* e *"o que é escolhível"*.
+>
+> **(a) A camada do TENANT.** `stt_model`, `stt_language`, `tts_model` e `tts_voice` passam a viver no
+> namespace `webrtc`, com os MESMOS nomes do perfil, entre o perfil e o env: **perfil → tenant →
+> env**. O env não some — é o que faz a imagem subir falando sem config-api —, mas deixou de ser o
+> único lugar: config de negócio em env, sem tela, é a dívida que a `VOZ-05` abriu. A leitura sai da
+> MESMA ida ao config-api que já trazia a segmentação (`SpeechSegmentationConfig.voice`), porque duas
+> leituras do mesmo namespace podem discordar dentro da mesma chamada; chave ausente **não é valor**
+> (quem não declara segue no env, e a procedência diz isso: `env` · `tenant`/`global` · `profile:<id>`).
+>
+> **(b) A conferência na GRAVAÇÃO.** Antes, a única checagem era o PADRÃO do nome, que não diz nada
+> sobre existir: um `stt_model` plausível e não instalado era aceito e só falhava na chamada — 404 do
+> serviço a cada frase, `fala PERDIDA` no log, nada vermelho. Agora o channel-gateway é a porta:
+> `GET /v1/speech-models` (o que o serviço tem INSTALADO, por tarefa, com as vozes de cada modelo de
+> TTS), `PUT`/`DELETE /v1/speech-profiles/{id}` e `GET`/`PUT /v1/speech-defaults` — todas com Bearer +
+> `config.channels` (leitura para ver, escrita para gravar), o tenant vindo do TOKEN. A conferência é
+> sobre a resolução COMPLETA (env ⊕ tenant ⊕ perfil), nunca sobre o corpo isolado: um perfil que troca
+> só a voz é conferido contra o modelo que VAI valer. Recusa por modelo ausente, tarefa trocada
+> (modelo de TTS no campo de STT), voz que não é daquele modelo, língua não declarada, campo
+> desconhecido e faixa fora. **Serviço de fala inalcançável ⇒ 503 e NÃO grava** (decisão do dono):
+> config gravada sem conferência é indistinguível da conferida na leitura seguinte, e com o serviço
+> fora não há fala acontecendo.
+>
+> ⚠️ **O catálogo é `/v1/models` (instalados), nunca `/v1/registry`** (726 no demo): modelo baixável e
+> não baixado falha igual na chamada. ⚠️ **A porta CRUA do config-api continua aceitando** quem tem
+> `config.channels` — esta entrega fecha o caminho da TELA, e a diferença é decisão, medida pelo ramo
+> C1 do gate e nomeada em `VOZ-29`. Tela: aba WebRTC → Configurações → *Padrão sem perfil*, e os
+> campos de modelo/voz dos perfis viraram seleção do catálogo (com o serviço fora, a tela diz e não
+> deixa gravar). Gates: `infra/test/probe_speech_model_conference.sh` e a FASE 4 de
+> `probe_webrtc_speech_profile.sh` (a chamada SEM perfil abrindo com o modelo do tenant e
+> transcrevendo com ele). Ver `CHANGELOG.md` 2026-09-17 (13).
 >
 > **Verificação ativa do caminho de fala (VOZ-23).** Camada B da recalibragem: um processo próprio
 > (`speech-check`, a imagem do gateway com outro comando) é um CLIENTE do gateway — cria um endpoint

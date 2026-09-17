@@ -1372,6 +1372,13 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   até aqui outro portador do mesmo grant recebia **200** para a chamada de um cliente alheio.
   Falha FECHADA; sem atendente conhecido responde `room_not_ready` (404, que o Console repete), nunca
   403. **Supervisor fica fora da regra**: assinar oculto sem atender é a função dele.
+- **Modelo, língua e voz da fala são CONFIG do tenant, e o que se pode escolher é o que o serviço
+  TEM** (VOZ-17): camadas **perfil → tenant (namespace `webrtc`) → env do gateway**, com a
+  procedência de cada campo no log da chamada. A escrita passa pelo channel-gateway
+  (`/v1/speech-profiles`, `/v1/speech-defaults`, catálogo em `/v1/speech-models`), que confere a
+  resolução COMPLETA contra `GET /v1/models` do serviço antes de gravar — modelo ausente, tarefa
+  trocada ou voz de outro modelo eram aceitos e viravam 404 por frase, com a fala perdida. **Serviço
+  de fala fora ⇒ 503, sem gravar**; o env permanece como última camada, nunca como a única.
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,

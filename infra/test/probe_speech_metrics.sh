@@ -159,10 +159,15 @@ if [ -z "$T_IN" ] || [ -z "$T_OUT" ]; then incon "R1/R2/R3 usuarios-sonda nao cr
 REP=$(curl -s --max-time 20 -H "Authorization: Bearer $T_IN" "$AN/reports/speech/quality?tenant_id=$TENANT&pool_id=$POOL")
 REP1=$(curl -s --max-time 20 -H "Authorization: Bearer $T_IN" "$AN/reports/speech/quality?tenant_id=$TENANT&pool_id=$POOL&min_sample=1")
 REPX=$(curl -s --max-time 20 -H "Authorization: Bearer $T_OUT" "$AN/reports/speech/quality?tenant_id=$TENANT&pool_id=$POOL")
-C=$(printf '%s' "$REP" | jq -r --arg p "$POOL" '.data[] | select(.pool_id==$p) | .calls // empty')
-S=$(printf '%s' "$REP" | jq -r --arg p "$POOL" '.data[] | select(.pool_id==$p) | .sample_sufficient')
-CO=$(printf '%s' "$REP" | jq -r --arg p "$POOL" '.data[] | select(.pool_id==$p) | .collects // empty')
-S1=$(printf '%s' "$REP1" | jq -r --arg p "$POOL" '.data[] | select(.pool_id==$p) | .sample_sufficient')
+# ⚠️ O relatorio agrupa por (pool_id, speech_profile_id) — e desde a VOZ-25 (2026-09-17) este pool
+# recebe TAMBEM chamadas com perfil, do probe_webrtc_speech_profile. Sem recortar o grupo SEM perfil,
+# o `jq` devolve DUAS linhas e toda comparacao abaixo vira vermelho por juntar amostras diferentes
+# (medido 2026-09-17, VOZ-17: 18 sem perfil + 5 com). A chamada que este probe faz nao tem perfil.
+SEM_PERFIL='.data[] | select(.pool_id==$p and (.speech_profile_id // null) == null)'
+C=$(printf '%s' "$REP" | jq -r --arg p "$POOL" "$SEM_PERFIL | .calls // empty")
+S=$(printf '%s' "$REP" | jq -r --arg p "$POOL" "$SEM_PERFIL | .sample_sufficient")
+CO=$(printf '%s' "$REP" | jq -r --arg p "$POOL" "$SEM_PERFIL | .collects // empty")
+S1=$(printf '%s' "$REP1" | jq -r --arg p "$POOL" "$SEM_PERFIL | .sample_sufficient")
 if [ -z "$C" ]; then
   falha "R1 o relatorio nao traz o pool $POOL: $(printf '%s' "$REP" | head -c 200)"
 else

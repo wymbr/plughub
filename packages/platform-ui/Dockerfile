@@ -164,9 +164,10 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # channel-gateway — VOZ-27: "Executar agora" da verificação de fala. O gateway exige\n\
-    # Bearer + `config.channels` em escrita e repassa ao executor interno. Before generic /v1.\n\
-    location ~ ^/v1/speech-checks(/|$) {\n\
+    # channel-gateway — rotas de FALA: `speech-checks` (VOZ-27) e `speech-models` /\n\
+    # `speech-profiles` / `speech-defaults` (VOZ-17: catálogo do serviço e a porta que confere\n\
+    # o modelo ANTES de gravar). Todas exigem Bearer + `config.channels`. Before generic /v1.\n\
+    location ~ ^/v1/speech-(checks|models|profiles|defaults)(/|$) {\n\
         set $up_speech_check http://channel-gateway:8010;\n\
         proxy_pass         $up_speech_check;\n\
         proxy_http_version 1.1;\n\

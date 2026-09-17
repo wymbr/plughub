@@ -121,6 +121,7 @@
     "identifierHintFallback":"Channel identifier"
   },
   "actions": {
+    "reload":      "Reload",
     "save":        "Save",
     "saving":      "Saving…",
     "cancel":      "Cancel",
@@ -183,9 +184,25 @@
       }
     }
   },
+  "speechDefaults": {
+    "title": "Default without a profile",
+    "intro": "What a call uses when its entry point points to no speech profile. Until 2026-09-17 this lived only in the gateway's env; it now belongs to the tenant, and only models the service has installed can be chosen.",
+    "useEnv": "Gateway default ({{value}})",
+    "inForce": "In force: {{value}}",
+    "fromEnv": "from the gateway env",
+    "fromTenant": "chosen by this tenant",
+    "fromPlatform": "platform default (config-api, global scope)",
+    "notInstalled": "not installed in the service",
+    "note": "An empty field goes back to the gateway env. A profile still wins over everything here, and a menu still wins over the profile.",
+    "saved": "Default saved — calls without a profile use it from the next one on.",
+    "noChange": "Nothing changed.",
+    "catalogDown": "The speech service did not answer with its catalogue, so nothing can be chosen or saved here right now."
+  },
   "speechProfiles": {
+    "catalogDown": "The speech service did not answer with its catalogue, so this screen cannot offer models nor save a profile — nothing is verifiable while it is down.",
+    "inheritValue": "Inherit ({{value}})",
     "title": "Speech profiles",
-    "intro": "A profile adapts speech recognition to one kind of entry path — a browser, a SIP trunk, another language. Point a WebRTC endpoint to it. Empty fields inherit the tenant settings above (model, language and voice: the deployment default).",
+    "intro": "A profile adapts speech recognition to one kind of entry path — a browser, a SIP trunk, another language. Point a WebRTC endpoint to it. Empty fields inherit the tenant settings above — including the default without a profile, right above.",
     "add": "+ New profile",
     "id": "Profile id",
     "idHint": "lowercase letters, digits, - and _ (up to 64)",

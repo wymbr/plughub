@@ -1976,8 +1976,11 @@ class WebRTCAdapter(ChannelAdapter):
                 return None
             await asyncio.sleep(0.05)
 
-    def _voice_defaults(self) -> dict[str, str]:
-        """Modelo, língua e voz quando a chamada não tem perfil: o env do gateway (VOZ-17)."""
+    def voice_defaults(self) -> dict[str, str]:
+        """A ÚLTIMA camada de modelo, língua e voz: o env do gateway (VOZ-17). Acima dela vêm o
+        namespace `webrtc` do tenant e o perfil da chamada — ver `speech_config.apply_profile`.
+        Público porque a porta de escrita (`PUT /v1/speech-profiles/...`) confere contra o que a
+        chamada REALMENTE usaria, e isso inclui esta camada."""
         s = self._settings
         return {"stt_model": s.webrtc_stt_model, "stt_language": s.voice_stt_language,
                 "tts_model": s.webrtc_tts_model, "tts_voice": s.webrtc_tts_voice}
@@ -1993,7 +1996,7 @@ class WebRTCAdapter(ChannelAdapter):
             info = self._sessions.get(session_id) or {}
             t = asyncio.ensure_future(resolve_session(
                 self.speech_config, self.speech_profiles, self._settings.tenant_id,
-                info.get("speech_profile_id"), self._voice_defaults()))
+                info.get("speech_profile_id"), self.voice_defaults()))
             if session_id in self._sessions:
                 self._speech_resolved[session_id] = t
         return await asyncio.shield(t)

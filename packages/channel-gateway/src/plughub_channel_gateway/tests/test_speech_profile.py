@@ -3,7 +3,8 @@ tests/test_speech_profile.py — perfil de fala por ponto de entrada (VOZ-25).
 
 O endpoint WebRTC aponta um perfil (`settings.speech_profile_id`); o perfil, no namespace
 `speech_profiles` do config-api, sobrepõe a segmentação do tenant e escolhe modelo, língua e voz dentro
-do mesmo serviço de fala. Ordem: menu → perfil → tenant → global → default (modelo/língua/voz: env).
+do mesmo serviço de fala. Ordem: menu → perfil → tenant → global → default; modelo/língua/voz vêm do perfil, do namespace
+`webrtc` do tenant e, por último, do env (VOZ-17).
 
 As proposições que importam: o perfil VALE (chega ao pedido do serviço, não só ao log); o que não pode
 valer é DITO (perfil ausente, campo inválido, chave desconhecida, config-api fora); pool direto e
@@ -102,6 +103,12 @@ def servico(monkeypatch):
 
 async def _seg(tenant):
     return SEG_TENANT
+
+async def _sem_voz_do_tenant(tenant):
+    """O tenant não declara modelo/língua/voz (VOZ-17): a resolução cai no env do gateway."""
+    return {}, {}
+
+_seg.voice = _sem_voz_do_tenant
 
 
 class TestResolveSession:
@@ -291,3 +298,50 @@ class TestChamadaUsaOPerfil:
         assert SESSION_ID in adapter._speech_resolved
         await adapter._close_session(SESSION_ID, "agent_done")
         assert SESSION_ID not in adapter._speech_resolved
+
+
+class TestCamadaDoTenant:
+    """VOZ-17 — modelo, língua e voz do TENANT, entre o env e o perfil.
+
+    A proposição: quem não declara continua no env (e o rótulo diz `env`), quem declara vence o env
+    (rótulo `tenant`), e o perfil vence os dois (`profile:<id>`). Sem o rótulo, "de onde veio este
+    modelo?" só se responde relendo config — que é a pergunta que a ficha abriu."""
+
+    TENANT_VOZ = {"tts_voice": "dora", "stt_model": "tenant/stt"}
+    PROC = {"tts_voice": "tenant", "stt_model": "global"}
+
+    def test_o_tenant_vence_o_env_so_no_que_declara(self):
+        v = apply_profile(SEG_TENANT, ENV, None, None, TENANT, self.TENANT_VOZ, self.PROC)
+        assert (v.stt_model, v.tts_voice) == ("tenant/stt", "dora")
+        assert (v.tts_model, v.stt_language) == ("env/tts", "pt-BR")          # controle: o resto é env
+        assert v.provenance == {"stt_model": "global", "stt_language": "env",
+                                "tts_model": "env", "tts_voice": "tenant"}
+
+    def test_o_perfil_vence_o_tenant(self):
+        v = apply_profile(SEG_TENANT, ENV, "sip", {"tts_voice": "amy"}, TENANT,
+                          self.TENANT_VOZ, self.PROC)
+        assert v.tts_voice == "amy" and v.provenance["tts_voice"] == "profile:sip"
+        assert v.stt_model == "tenant/stt" and v.provenance["stt_model"] == "global"
+
+    def test_perfil_que_nao_pode_valer_cai_no_TENANT_nao_no_env(self):
+        """Perfil ausente devolve a config do tenant — inclusive a voz dele, que antes da VOZ-17
+        não existia e por isso caía direto no env."""
+        v = apply_profile(SEG_TENANT, ENV, "fantasma", speech_config._AUSENTE, TENANT,
+                          self.TENANT_VOZ, self.PROC)
+        assert v.profile_id is None and v.stt_model == "tenant/stt"
+
+    def test_sem_camada_do_tenant_nada_muda(self):
+        """CONTROLE: a chamada de quem não configurou nada é idêntica à de antes da VOZ-17."""
+        assert apply_profile(SEG_TENANT, ENV, None, None, TENANT, {}, {}) == \
+               apply_profile(SEG_TENANT, ENV, None, None, TENANT)
+
+    async def test_resolve_session_le_a_voz_do_tenant_do_mesmo_config(self, servico):
+        async def _seg_com_voz(tenant):
+            return SEG_TENANT
+
+        async def _voz(tenant):
+            return self.TENANT_VOZ, self.PROC
+        _seg_com_voz.voice = _voz
+        v = await resolve_session(_seg_com_voz, SpeechProfiles("http://c:3600"), TENANT, "p1", ENV)
+        assert v.profile_id == "p1" and v.stt_model == "tenant/stt"
+        assert v.provenance["stt_model"] == "global"

@@ -23,8 +23,16 @@ língua, não pelo tenant: um perfil nomeado no namespace `speech_profiles` (uma
 valor = objeto) pode sobrepor qualquer `stt_*` acima e escolher `stt_model`, `stt_language`,
 `tts_model` e `tts_voice` DENTRO do mesmo serviço de fala (a URL é topologia, env). O endpoint da
 chamada aponta o perfil em `settings.speech_profile_id`. Ordem: menu → perfil → tenant → global →
-default; modelo/língua/voz sem perfil vêm do env do gateway (`VOZ-17`). Perfil referenciado que não
-existe, campo inválido ou chave desconhecida são DITOS no log — nunca aplicados em silêncio.
+default. Perfil referenciado que não existe, campo inválido ou chave desconhecida são DITOS no log
+— nunca aplicados em silêncio.
+
+**Modelo, língua e voz SEM perfil vêm do tenant, e só então do env (VOZ-17).** As quatro chaves de
+voz vivem no MESMO namespace `webrtc` e com os MESMOS nomes do perfil — quem não declara segue no
+env, e a procedência (`profile:<id>` · `tenant`/`global` · `env`) diz qual camada respondeu. O env
+não some: ele é o que faz a imagem subir falando sem config-api, e é a última camada, nunca a
+primeira. A conferência contra o que o serviço TEM instalado mora em `speech_catalog.py` e acontece
+na ESCRITA (`PUT /v1/speech-profiles/{id}`, `PUT /v1/speech-defaults`); aqui, na leitura, um modelo
+que o serviço não tem continua sendo 404 por frase — a porta de escrita é que deixou de aceitá-lo.
 """
 from __future__ import annotations
 
@@ -110,8 +118,9 @@ class SpeechSegmentationConfig:
     def __init__(self, config_api_url: str, retry_s: float = 30.0) -> None:
         self._url = config_api_url.rstrip("/")
         self._retry_s = retry_s
-        # tenant → (segmentação, definitiva, instante, veio de uma leitura BOA)
-        self._cache: dict[str, tuple[SpeechSegmentation, bool, float, bool]] = {}
+        # tenant → (segmentação, voz do tenant, procedência da voz, definitiva, instante,
+        #           veio de uma leitura BOA)
+        self._cache: dict[str, tuple[SpeechSegmentation, dict, dict, bool, float, bool]] = {}
 
     def invalidate(self, tenant_id: str | None = None) -> None:
         """Vence a entrada sem apagá-la: se a releitura falhar, o último valor BOM continua valendo
@@ -121,8 +130,8 @@ class SpeechSegmentationConfig:
         vencidas = 0
         for t in alvos:
             if t in self._cache:
-                seg, _, _, bom = self._cache[t]
-                self._cache[t] = (seg, False, float("-inf"), bom)
+                seg, voz, proc, _, _, bom = self._cache[t]
+                self._cache[t] = (seg, voz, proc, False, float("-inf"), bom)
                 vencidas += 1
         # o log mora AQUI, não no chamador: um log no consumidor do evento afirmaria a invalidação
         # mesmo sem ela (medido 2026-09-17, mutação LM8)
@@ -130,10 +139,20 @@ class SpeechSegmentationConfig:
                     tenant_id or "__global__", vencidas)
 
     async def __call__(self, tenant_id: str) -> SpeechSegmentation:
+        return (await self._entrada(tenant_id))[0]
+
+    async def voice(self, tenant_id: str) -> tuple[dict[str, str], dict[str, str]]:
+        """Modelo, língua e voz DECLARADOS pelo tenant, e a procedência de cada um (VOZ-17). Sai da
+        MESMA leitura da segmentação — um namespace, uma ida ao config-api, um cache: duas leituras
+        do mesmo namespace poderiam discordar entre si dentro da mesma chamada."""
+        ent = await self._entrada(tenant_id)
+        return ent[1], ent[2]
+
+    async def _entrada(self, tenant_id: str):
         ent = self._cache.get(tenant_id)
         agora = time.monotonic()
-        if ent and (ent[1] or agora - ent[2] < self._retry_s):
-            return ent[0]
+        if ent and (ent[3] or agora - ent[4] < self._retry_s):
+            return ent
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(f"{self._url}/config/{NAMESPACE}", params={"tenant_id": tenant_id})
@@ -151,19 +170,24 @@ class SpeechSegmentationConfig:
                     logger.info("speech_config: procedencia de %s indisponivel (%s) — valores valem, "
                                 "rotulados 'config'", NAMESPACE, exc)
         except Exception as exc:  # noqa: BLE001 — degradação dita abaixo
-            anterior = ent[0] if ent and ent[3] else None
+            anterior = ent if ent and ent[5] else None
             logger.warning(
                 "speech_config: nao consegui ler %s do config-api (%s) — %s", NAMESPACE, exc,
                 "segue o ultimo valor lido" if anterior
-                else "a segmentacao da fala configurada para o tenant NAO vale; default de codigo",
+                else "a segmentacao E a voz configuradas para o tenant NAO valem; vale o default de "
+                     "codigo e o env do gateway",
             )
-            seg = anterior or SpeechSegmentation(
+            seg = anterior[0] if anterior else SpeechSegmentation(
                 provenance={p.field: "default: config-api indisponivel" for p in PARAMS})
-            self._cache[tenant_id] = (seg, False, agora, anterior is not None)
-            return seg
+            voz, proc = (anterior[1], anterior[2]) if anterior else ({}, {})
+            nova = (seg, voz, proc, False, agora, anterior is not None)
+            self._cache[tenant_id] = nova
+            return nova
         seg = resolve(entries, scopes, tenant_id)
-        self._cache[tenant_id] = (seg, True, agora, True)
-        return seg
+        voz, proc = resolve_voice(entries, scopes, tenant_id)
+        nova = (seg, voz, proc, True, agora, True)
+        self._cache[tenant_id] = nova
+        return nova
 
 
 # ─── Perfil de fala (VOZ-25) ─────────────────────────────────────────────────────
@@ -180,6 +204,56 @@ VOICE_PARAMS: dict[str, re.Pattern[str]] = {
     "tts_voice":    re.compile(r"^[A-Za-z0-9._-]{1,100}$"),
 }
 PROFILE_KEYS = frozenset({p.key for p in PARAMS} | set(VOICE_PARAMS) | {"description"})
+
+
+def resolve_voice(entries: dict, scopes: dict[str, str] | None,
+                  tenant_id: str) -> tuple[dict[str, str], dict[str, str]]:
+    """O que o TENANT diz sobre modelo, língua e voz (namespace `webrtc`, VOZ-17), e a procedência
+    de cada campo. **Chave ausente não é valor**: quem não declara segue no env, e é por isso que o
+    retorno é o que foi DECLARADO, nunca o conjunto completo — devolver os quatro campos aqui faria
+    o env virar "config do tenant" no rótulo. Valor fora do padrão é ERRO no log e NÃO vale."""
+    valores: dict[str, str] = {}
+    proc: dict[str, str] = {}
+    for k, padrao in VOICE_PARAMS.items():
+        if k not in entries:
+            continue
+        v = entries[k]
+        if not isinstance(v, str) or not padrao.fullmatch(v):
+            logger.error("speech_config: %s.%s=%r invalido para tenant=%s — vale o do env",
+                         NAMESPACE, k, v, tenant_id)
+            continue
+        valores[k] = v
+        proc[k] = (scopes or {}).get(k, "config")
+    return valores, proc
+
+
+def conferir_forma(perfil: dict) -> list[str]:
+    """Recusas de FORMA de um perfil de fala — campo desconhecido, faixa dos `stt_*` e padrão de
+    modelo/língua/voz —, na MESMA casa que os aplica na leitura (VOZ-17).
+
+    A porta de escrita chama isto antes de perguntar ao serviço de fala: valor fora da faixa é
+    recusa que não precisa de rede, e repetir as faixas na rota seria a segunda casa do fato que
+    esta já guarda. Lista vazia = a forma serve; o que o SERVIÇO tem é outra pergunta
+    (`speech_catalog.conferir`)."""
+    recusas: list[str] = []
+    for k in sorted(set(perfil) - PROFILE_KEYS):
+        recusas.append(f"`{k}` nao e campo de perfil de fala — campos: "
+                       f"{', '.join(sorted(PROFILE_KEYS))}")
+    for p in PARAMS:
+        if p.key in perfil and _valida(p, perfil[p.key]) is None:
+            esperado = "booleano" if p.field == "vad_filter" else f"numero entre {p.lo:g} e {p.hi:g}"
+            recusas.append(f"`{p.key}`={perfil[p.key]!r} invalido — esperado {esperado}")
+    for k, padrao in VOICE_PARAMS.items():
+        if k not in perfil:
+            continue
+        v = perfil[k]
+        if v in (None, ""):          # campo em branco = herda a camada de baixo, não é recusa
+            continue
+        if not isinstance(v, str) or not padrao.fullmatch(v):
+            recusas.append(f"`{k}`={v!r} nao casa o padrao {padrao.pattern}")
+    if not isinstance(perfil.get("description", ""), str):
+        recusas.append("`description` tem de ser texto")
+    return recusas
 
 _AUSENTE = object()       # perfil referenciado que não existe
 _INDISPONIVEL = object()  # config-api fora e nenhum valor lido antes
@@ -204,11 +278,20 @@ class SpeechSettings:
 
 
 def apply_profile(seg: SpeechSegmentation, voice_defaults: dict[str, str], profile_id: str | None,
-                  profile: object, tenant_id: str) -> SpeechSettings:
-    """Sobrepõe o perfil à segmentação do tenant e aos defaults de voz (do env). `profile` é o
-    valor do namespace, ou os sentinelas de ausente/indisponível."""
+                  profile: object, tenant_id: str, tenant_voice: dict[str, str] | None = None,
+                  tenant_proc: dict[str, str] | None = None) -> SpeechSettings:
+    """Sobrepõe o perfil à segmentação e à voz do tenant, que por sua vez sobrepõem o env (VOZ-17).
+    `profile` é o valor do namespace, ou os sentinelas de ausente/indisponível.
+
+    As três camadas ficam VISÍVEIS no resultado: a procedência de cada campo de voz é `env`,
+    `tenant`/`global`/`config` ou `profile:<id>`, e é ela que o log da chamada imprime. Sem isso,
+    "o modelo veio de onde?" só se responde relendo config — que é a pergunta que a VOZ-17 abriu."""
     voz = {k: voice_defaults.get(k, "") for k in VOICE_PARAMS}
     proc_voz = {k: "env" for k in VOICE_PARAMS}
+    for k, v in (tenant_voice or {}).items():
+        if k in voz:
+            voz[k] = v
+            proc_voz[k] = (tenant_proc or {}).get(k, "config")
     if not profile_id:
         return SpeechSettings(seg, **voz, profile_id=None, provenance=proc_voz)
     if profile is _INDISPONIVEL:
@@ -306,13 +389,16 @@ async def resolve_session(seg_config: SpeechSegmentationConfig, profiles: Speech
                           profile_id: str | None, voice_defaults: dict[str, str]) -> SpeechSettings:
     """Menu → perfil → tenant → global → default, para uma chamada."""
     seg = await seg_config(tenant_id)
+    voz_tenant, proc_tenant = await seg_config.voice(tenant_id)
     if profile_id and not PROFILE_ID_RE.fullmatch(profile_id):
         logger.error("speech_config: speech_profile_id=%r do endpoint nao e um id de perfil valido "
                      "(tenant=%s) — ignorado; vale a config do tenant", profile_id, tenant_id)
         profile_id = None
     if not profile_id:
-        return apply_profile(seg, voice_defaults, None, None, tenant_id)
+        return apply_profile(seg, voice_defaults, None, None, tenant_id, voz_tenant, proc_tenant)
     perfis = await profiles(tenant_id)
     if perfis is None:
-        return apply_profile(seg, voice_defaults, profile_id, _INDISPONIVEL, tenant_id)
-    return apply_profile(seg, voice_defaults, profile_id, perfis.get(profile_id, _AUSENTE), tenant_id)
+        return apply_profile(seg, voice_defaults, profile_id, _INDISPONIVEL, tenant_id,
+                             voz_tenant, proc_tenant)
+    return apply_profile(seg, voice_defaults, profile_id, perfis.get(profile_id, _AUSENTE), tenant_id,
+                         voz_tenant, proc_tenant)

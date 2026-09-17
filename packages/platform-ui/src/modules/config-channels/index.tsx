@@ -32,6 +32,7 @@ import { useTranslation } from 'react-i18next'
 import ChannelAccountCard from './ChannelAccountCard'
 import WebChatConfigPage  from './WebChatConfigPage'
 import WebRTCSpeechConfigPage from './WebRTCSpeechConfigPage'
+import WebRTCSpeechDefaultsPage from './WebRTCSpeechDefaultsPage'
 import WebRTCSpeechProfilesPage from './WebRTCSpeechProfilesPage'
 import WebRTCSpeechChecksPage from './WebRTCSpeechChecksPage'
 import { ChannelEndpointList } from './ChannelEndpointList'
@@ -445,6 +446,7 @@ const ConfigChannelsIndex: React.FC = () => {
         {activeSubTab === 'settings' && activeChannel === 'webrtc' && (
           <div className="space-y-6">
             <WebRTCSpeechConfigPage />
+            <WebRTCSpeechDefaultsPage />
             <WebRTCSpeechProfilesPage />
             <WebRTCSpeechChecksPage />
           </div>
