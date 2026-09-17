@@ -6,7 +6,8 @@
     "voice":    "Voz",
     "email":    "E-mail",
     "sms":      "SMS",
-    "webhook":  "Webhook"
+    "webhook":  "Webhook",
+    "webrtc":   "WebRTC"
   },
   "subTabs": {
     "accounts": "Integrações & Endpoints",
@@ -127,5 +128,51 @@
     "poolRequired":                 "Pool é obrigatório",
     "endpointPoolRequired":         "Pool do endpoint é obrigatório",
     "endpointDisplayNameRequired":  "Nome de exibição do endpoint é obrigatório"
+  },
+  "webrtcSpeech": {
+    "title": "Segmentação da fala (bot de voz)",
+    "intro": "Como a fala do cliente numa chamada WebRTC é cortada em falas antes da transcrição. Salvar grava um valor para ESTE tenant; a plataforma mantém o padrão.",
+    "scope": {
+      "tenant": "deste tenant",
+      "global": "padrão da plataforma"
+    },
+    "missing": "não configurado — o gateway usa o default de código",
+    "save": "Salvar para o tenant",
+    "saving": "Salvando…",
+    "restore": "Voltar ao padrão da plataforma",
+    "saved": "Salvo. Vale a partir da próxima chamada.",
+    "restored": "Valor do tenant removido; o padrão da plataforma vale a partir da próxima chamada.",
+    "invalid": "{{key}}: valor fora da faixa ({{min}}–{{max}}) ou de tipo errado.",
+    "provenanceError": "não foi possível saber qual escopo vale ({{error}})",
+    "reload": "Recarregar",
+    "noteNextCall": "Os valores são lidos quando a chamada abre a transcrição: chamadas em andamento seguem com os valores com que começaram.",
+    "noteMenu": "Um menu que declara collect.voice.end_silence_ms ou max_speech_s vence o silêncio de fim e a fala máxima enquanto espera a resposta.",
+    "noteVad": "A detecção de voz foi medida com fala sintetizada: sem ela, todo trecho de ruído virava texto; com ela, nenhuma fala se perdeu. Desligue só com medição dos seus próprios clientes.",
+    "fields": {
+      "stt_energy_threshold": {
+        "label": "Limiar de energia",
+        "help": "Volume do quadro (RMS, 16 bits) que conta como voz — vale também para interromper a fala do agente. Ruído de linha acima dele vai para a transcrição. 50–5000."
+      },
+      "stt_end_silence_ms": {
+        "label": "Silêncio de fim de fala (ms)",
+        "help": "Silêncio que fecha uma fala. 100–5000."
+      },
+      "stt_gap_ms": {
+        "label": "Lacuna sem áudio (ms)",
+        "help": "Tempo sem nenhum quadro de áudio que também fecha a fala (microfone mudo não manda nada). 100–5000."
+      },
+      "stt_min_speech_ms": {
+        "label": "Fala mínima (ms)",
+        "help": "Voz mais curta que isto é estalo ou tosse e não é transcrita. 50–2000."
+      },
+      "stt_max_speech_ms": {
+        "label": "Fala máxima (ms)",
+        "help": "Fala mais longa que isto é cortada e transcrita. 1000–60000."
+      },
+      "stt_vad_filter": {
+        "label": "Detecção de voz",
+        "help": "O serviço de transcrição descarta trechos sem fala em vez de inventar texto."
+      }
+    }
   }
 }

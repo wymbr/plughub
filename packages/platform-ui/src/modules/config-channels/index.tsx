@@ -18,13 +18,18 @@
  * Special case — Webhook channel: no GatewayConfig needed, shows
  * ChannelEndpoints directly (standalone, no parent account).
  *
- * Runtime Settings (Config API): sub-tab only for webchat.
+ * Webhook has no runtime Settings page: its credential is per ENDPOINT (`auth_required` + token in the
+ * agent-registry). A `WebhookConfigPage` editing HMAC/IP allowlist in config-api namespace `webhook`
+ * existed, unreachable and read by no backend — removed 2026-09-17 (PUI-02).
+ *
+ * Runtime Settings (Config API): sub-tab for webchat; WebRTC is settings-only (speech
+ * segmentation of the voice bot, VOZ-21) — it has no integration account nor endpoints.
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import ChannelAccountCard from './ChannelAccountCard'
 import WebChatConfigPage  from './WebChatConfigPage'
-import WebhookConfigPage  from './WebhookConfigPage'
+import WebRTCSpeechConfigPage from './WebRTCSpeechConfigPage'
 import { ChannelEndpointList } from './ChannelEndpointList'
 import { CHANNEL_META } from './channel-meta'
 import type { GatewayConfig, Pool } from '@/types'
@@ -34,7 +39,8 @@ import * as registryApi from '@/api/registry'
 
 // ── Channel tabs ───────────────────────────────────────────────────────────────
 
-type ChannelTab = ChannelEndpointChannel
+// `webrtc` não é canal de ENDPOINT (não tem conta nem número): entra só como aba de configuração
+type ChannelTab = ChannelEndpointChannel | 'webrtc'
 
 const CHANNEL_TABS: { id: ChannelTab; icon: string }[] = [
   { id: 'webchat',  icon: '💻' },
@@ -43,6 +49,7 @@ const CHANNEL_TABS: { id: ChannelTab; icon: string }[] = [
   { id: 'email',    icon: '✉️'  },
   { id: 'sms',      icon: '📱' },
   { id: 'webhook',  icon: '🔗' },
+  { id: 'webrtc',   icon: '🎥' },
 ]
 
 // Channels rendered without GatewayConfig parent (no API account needed)
@@ -50,6 +57,10 @@ const STANDALONE_CHANNELS = new Set<ChannelTab>(['webhook'])
 
 // Channels with runtime Settings page (Config API)
 const HAS_SETTINGS = new Set<ChannelTab>(['webchat'])
+
+// Channels whose only content is the runtime Settings page
+const SETTINGS_ONLY = new Set<ChannelTab>(['webrtc'])
+const isEndpointChannel = (ch: ChannelTab): ch is ChannelEndpointChannel => !SETTINGS_ONLY.has(ch)
 
 type SubTab = 'accounts' | 'settings'
 
@@ -277,7 +288,7 @@ const NewIntegrationForm: React.FC<NewIntegrationFormProps> = ({ channel, tenant
 // ── ChannelPanel — main content for one channel tab ───────────────────────────
 
 interface ChannelPanelProps {
-  channel: ChannelTab
+  channel: ChannelEndpointChannel
 }
 
 const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
@@ -382,7 +393,7 @@ const ConfigChannelsIndex: React.FC = () => {
 
   function handleChannelChange(ch: ChannelTab) {
     setActiveChannel(ch)
-    setActiveSubTab('accounts')
+    setActiveSubTab(SETTINGS_ONLY.has(ch) ? 'settings' : 'accounts')
   }
 
   return (
@@ -426,14 +437,12 @@ const ConfigChannelsIndex: React.FC = () => {
 
       {/* ── Content ── */}
       <div className={HAS_SETTINGS.has(activeChannel) ? '' : 'mt-6'}>
-        {activeSubTab === 'accounts' && (
+        {SETTINGS_ONLY.has(activeChannel) && <WebRTCSpeechConfigPage />}
+        {isEndpointChannel(activeChannel) && activeSubTab === 'accounts' && (
           <ChannelPanel channel={activeChannel} />
         )}
         {activeSubTab === 'settings' && activeChannel === 'webchat' && (
           <WebChatConfigPage />
-        )}
-        {activeSubTab === 'settings' && activeChannel === 'webhook' && (
-          <WebhookConfigPage />
         )}
       </div>
     </div>

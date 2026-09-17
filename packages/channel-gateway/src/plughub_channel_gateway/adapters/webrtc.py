@@ -112,6 +112,7 @@ from . import contact_lifecycle
 from .base import ChannelAdapter
 from .speaches_provider import SpeachesSTTProvider, SpeachesTTSProvider, pcm16_48k_to_16k, rms
 from .voice_provider import (
+    SpeechSegmentation,
     SpeechTuning,
     ISTTProvider,
     ITTSProvider,
@@ -374,6 +375,10 @@ class WebRTCAdapter(ChannelAdapter):
         # VOZ-18: ajuste da segmentação da fala do CLIENTE por sessão — lido a cada quadro pelo STT,
         # ligado pela coleta por voz que declara `end_silence_ms`/`max_speech_s`.
         self._speech_tuning:   dict[str, SpeechTuning] = {}
+        # VOZ-21: segmentação da fala por tenant (config-api, namespace `webrtc`), resolvida quando
+        # a chamada abre o STT; `main.py` invalida no `config.changed`
+        from ..speech_config import SpeechSegmentationConfig
+        self.speech_config = SpeechSegmentationConfig(settings.config_api_url)
         self._screen_invalids: dict[str, dict[str, int]]         = {}
 
     # ── Provider factories ────────────────────────────────────────────────────
@@ -1645,6 +1650,13 @@ class WebRTCAdapter(ChannelAdapter):
         parcial e barge-in ficam aqui.
         """
         falas: set[asyncio.Task] = set()
+        seg: SpeechSegmentation | None = None
+        if getattr(self._stt, "supports_tuning", False):
+            seg = await self.speech_config(self._settings.tenant_id)
+            logger.info("webrtc stt: segmentacao da fala session=%s %s", session_id, seg.describe())
+        elif self._stt is not None:
+            logger.info("webrtc stt: o provedor %s nao aceita segmentacao configurada — webrtc.stt_* do "
+                        "config-api NAO se aplica a esta chamada (session=%s)", type(self._stt).__name__, session_id)
         try:
             async for identity, chunks in room_client.speakers():
                 if identity.startswith(CUSTOMER_IDENTITY_PREFIX):
@@ -1655,7 +1667,7 @@ class WebRTCAdapter(ChannelAdapter):
                     logger.info("webrtc stt: trilha de %r nao transcrita (session=%s)", identity, session_id)
                     continue
                 logger.info("webrtc stt: transcrevendo %s (session=%s)", identity, session_id)
-                t = asyncio.create_task(self._stt_speaker(session_id, identity, autor, chunks),
+                t = asyncio.create_task(self._stt_speaker(session_id, identity, autor, chunks, seg),
                                         name=f"webrtc-stt-{identity[:16]}")
                 falas.add(t)
                 t.add_done_callback(falas.discard)
@@ -1669,6 +1681,7 @@ class WebRTCAdapter(ChannelAdapter):
 
     async def _stt_speaker(
         self, session_id: str, identity: str, autor: str | None, chunks: AsyncIterator[bytes],
+        segmentation: SpeechSegmentation | None = None,
     ) -> None:
         """Um falante: quadros → STT → frase final publicada. `autor` None = o cliente (o único
         que interrompe a fala da IA); senão, o `participant_id` do humano (`human-{sub}`)."""
@@ -1681,7 +1694,8 @@ class WebRTCAdapter(ChannelAdapter):
         # Barge-in (VOZ-05 fatia 3): o mesmo limiar de energia que o STT usa para achar fala.
         # Só no caminho a 16 kHz PCM — no legado (μ-law a 8 kHz) a energia não é medida aqui,
         # e não há barge-in. Só a voz do CLIENTE interrompe o agente de IA.
-        limiar = float(getattr(self._stt, "_thr", 400.0))
+        limiar = (segmentation.energy_threshold if segmentation is not None
+                  else float(getattr(self._stt, "_thr", 400.0)))
         interrompe = autor is None
         voz_ms = 0.0
 
@@ -1710,6 +1724,8 @@ class WebRTCAdapter(ChannelAdapter):
         try:
             language = s.voice_stt_language  # reuse voice channel language setting
             kw = {"sample_rate": stt_rate} if stt_rate else {}
+            if segmentation is not None:
+                kw["segmentation"] = segmentation
             if interrompe and getattr(self._stt, "supports_tuning", False):
                 # só a fala do CLIENTE responde menu, logo só ela segue o ajuste da coleta
                 kw["tuning"] = self._speech_tuning.setdefault(session_id, SpeechTuning())

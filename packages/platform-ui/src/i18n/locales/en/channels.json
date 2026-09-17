@@ -6,7 +6,8 @@
     "voice":    "Voice",
     "email":    "E-mail",
     "sms":      "SMS",
-    "webhook":  "Webhook"
+    "webhook":  "Webhook",
+    "webrtc":   "WebRTC"
   },
   "subTabs": {
     "accounts": "Integrations & Endpoints",
@@ -127,5 +128,51 @@
     "poolRequired":                 "Pool is required",
     "endpointPoolRequired":         "Endpoint pool is required",
     "endpointDisplayNameRequired":  "Endpoint display name is required"
+  },
+  "webrtcSpeech": {
+    "title": "Speech segmentation (voice bot)",
+    "intro": "How the customer's speech in a WebRTC call is cut into utterances before transcription. Saving writes a value for THIS tenant; the platform keeps the default.",
+    "scope": {
+      "tenant": "this tenant",
+      "global": "platform default"
+    },
+    "missing": "not configured — the gateway uses its code default",
+    "save": "Save for tenant",
+    "saving": "Saving…",
+    "restore": "Back to platform default",
+    "saved": "Saved. It applies to the next call.",
+    "restored": "Tenant value removed; the platform default applies to the next call.",
+    "invalid": "{{key}}: value out of range ({{min}}–{{max}}) or wrong type.",
+    "provenanceError": "could not tell which scope applies ({{error}})",
+    "reload": "Reload",
+    "noteNextCall": "Values are read when a call opens transcription: calls in progress keep the values they started with.",
+    "noteMenu": "A menu that declares collect.voice.end_silence_ms or max_speech_s overrides silence and maximum speech while it waits for the answer.",
+    "noteVad": "Voice activity detection was measured with synthetic speech: without it every noise sample became text; with it, no speech was lost. Turn it off only with a measurement of your own callers.",
+    "fields": {
+      "stt_energy_threshold": {
+        "label": "Energy threshold",
+        "help": "Frame loudness (RMS, 16-bit) counted as voice — also used for barge-in. Line noise above it is sent to transcription. 50–5000."
+      },
+      "stt_end_silence_ms": {
+        "label": "End-of-speech silence (ms)",
+        "help": "Silence that closes an utterance. 100–5000."
+      },
+      "stt_gap_ms": {
+        "label": "No-audio gap (ms)",
+        "help": "Time with no audio frames at all that also closes an utterance (a muted microphone sends nothing). 100–5000."
+      },
+      "stt_min_speech_ms": {
+        "label": "Minimum speech (ms)",
+        "help": "Voice shorter than this is a click or cough and is not transcribed. 50–2000."
+      },
+      "stt_max_speech_ms": {
+        "label": "Maximum speech (ms)",
+        "help": "An utterance longer than this is cut and transcribed. 1000–60000."
+      },
+      "stt_vad_filter": {
+        "label": "Voice activity detection",
+        "help": "The transcription service discards stretches with no speech instead of inventing text."
+      }
+    }
   }
 }

@@ -1,5 +1,81 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (4) — PUI-02: a tela de configuração do webhook, que nenhum backend lia, é removida
+
+**O que havia.** Em Configuração → Canais, `WebhookConfigPage` editava seis chaves no namespace
+`webhook` do config-api: verificação de assinatura HMAC (liga/desliga, algoritmo, cabeçalho), lista de
+IPs/CIDR permitidos, timeout de requisição e janela de resposta. Achada de passagem na `VOZ-21`: o
+componente era renderizado só com `activeSubTab === 'settings' && activeChannel === 'webhook'`, mas a
+barra de sub-abas existe apenas para `webchat` e trocar de canal volta a `accounts` — a página nunca
+aparecia.
+
+**Medido antes de decidir** entre ligar e remover:
+- **Leitores:** nenhum. As seis chaves só aparecem no próprio `WebhookConfigPage.tsx`; nenhum código lê o
+  namespace `webhook` (`config/webhook`, `namespace == "webhook"`). O HMAC que existe no gateway é de
+  outros canais (WhatsApp, Twilio, Mailgun) e vem de env.
+- **Estado vivo:** `GET /config/webhook?tenant_id=tenant_demo` → `entries: {}` — nunca gravado nem semeado.
+- **A credencial real do canal webhook** é por ENDPOINT, no registro único (`ChannelEndpoint.auth_required`
+  + hash de token, verificado em `channel-gateway/main.py` antes do disparo de `/channel/webhook/{slug}`).
+
+**Decisão: remover.** Ligar a sub-aba entregaria ao operador um "verificar assinatura HMAC" e uma lista de
+IPs que não fazem nada — controle de segurança que parece em vigor e não existe, o valor plausível na forma
+mais cara. Removidos o componente, o import e o ramo de renderização; o comentário do módulo diz onde mora a
+credencial do webhook. O mapeamento `webhook → config.channels` do config-api fica (é o portão de escrita
+genérico, exercitado pelo `smoke_config_write_auth.sh`).
+
+**Verificação.** Typecheck do platform-ui limpo (`tsc` rc 0, 0 `error TS`); imagem rebuildada. A tela não
+foi vista logada no navegador — o login pede senha, que não digito.
+
+## 2026-09-17 (3) — VOZ-21: a segmentação da fala do bot leg vira config do tenant, com procedência — primeiro passo da recalibragem de STT
+
+**O que havia.** Limiar de energia (400), silêncio de fim (700 ms), lacuna sem quadro (700 ms), fala
+mínima (250 ms), fala máxima (15 s) e o VAD do serviço eram constantes no construtor do
+`SpeachesSTTProvider`. A recalibragem por instalação (decisão do dono, ADR `adr-voice-media-plane.md`
+V13) não tinha o que recalibrar, e config de tuning em código é o que a casa proíbe. O barge-in lia o
+limiar direto do provedor.
+
+**Feito.**
+- **config-api**: namespace `webrtc`, 6 chaves `stt_*` semeadas no `__global__` com faixa e porquê na
+  descrição (o namespace já era mapeado ao campo ABAC `config.channels`, sem chave nenhuma).
+- **Gateway, `speech_config.py`**: resolvedor por tenant com cache. Valida tipo e faixa — o config-api
+  não valida —, e cada chave ruim ou ausente cai no default de código com ERRO/AVISO nomeando a chave.
+  `config.changed` do namespace **vence** a entrada sem apagá-la, então com o config-api fora vale o
+  último valor BOM, não o default. A procedência (`tenant`, `global`, `default: <motivo>`) vem do
+  `_provenance` do config-api.
+- **Contrato**: `SpeechSegmentation` (voice_provider) com os defaults numa casa só; o provedor recebe
+  `stream(segmentation=…)`, e o construtor passou a guardar só o default. A chamada resolve UMA vez ao
+  abrir o STT e loga, por campo, valor e procedência; a mesma segmentação vai a todos os fluxos da sala,
+  e o barge-in usa o limiar dela. `collect.voice` do menu continua vencendo. Provedor sem
+  `supports_tuning` (Deepgram) é dito no log.
+- **Tela**: aba **WebRTC** em Configuração → Canais (só configuração: WebRTC não tem conta nem endpoint),
+  por chave o valor, o escopo em vigor, "Salvar para o tenant" e "Voltar ao padrão da plataforma";
+  faixas espelhadas do gateway, textos nos dois locales.
+
+**Achados no caminho.** (1) Um teste do resolvedor provou que o "segue o último valor lido" era ramo
+morto: a invalidação APAGAVA a entrada, e uma mudança na tela com o config-api fora derrubava a chamada
+para o default de código. Hoje vence sem apagar. (2) A mutação LM8 (o `config.changed` não invalida)
+deixou o probe vermelho pelo ramo errado: o P1 procurava um log do CONSUMIDOR do evento, que continuava
+dizendo "invalidated" com a invalidação removida, e o T1 passava porque o `docker restart` zera o cache.
+O log mudou para dentro do próprio `invalidate()`, e o probe diz que a prova da invalidação é o C1.
+
+**Testes.** channel-gateway 1154 → **1176** (resolvedor: faixa, tipo, ausência, procedência, cache,
+invalidação por tenant e global, config-api fora, último valor bom; provedor: limiar, silêncio de fim,
+fala mínima e VAD vindos do tenant, e o menu vencendo; renderizador: uma resolução por chamada entregue
+aos dois fluxos, e STT sem ajuste não consulta e diz). config-api 61. platform-ui: typecheck limpo
+(`tsc` rc 0); **a tela não foi vista no navegador** — o login pede senha, que não digito por ninguém.
+
+**Gate.** `probe_webrtc_stt_config.sh` (AUTO): K0 as 6 chaves existem · K1 o tenant não tem override real
+(senão INCONCLUSIVO, não mexe) · fase 1, override `stt_end_silence_ms=2500` e `stt_gap_ms="abc"`: P1 o
+cache foi invalidado · T1 a chamada abre com `end_silence_ms=2500 (tenant)` · T2 `gap_ms=700 (default:
+valor invalido)` com o ERRO da chave · T3 a fala do menu SEM ajuste junta (5 490 ms) · fase 2, override
+removido: C1 a chamada seguinte abre com `700 (global)` · C2 a mesma fala separa (1 370 ms). Overrides
+removidos na saída (conferido: `tenant_present` falso). Mutações ao vivo, todas pegas: LM7 a
+segmentação não chega ao STT → T3 · LM8 sem invalidação → P1, C1, C2 · LM9 valor do tenant descartado →
+T1, T3 · LM10 sem validação → T2, T3.
+
+**Fora desta ficha.** A camada A (`VOZ-22`). Modelo, voz e língua do bot leg seguem em env (`VOZ-17`,
+agora com o namespace pronto). As faixas existem em duas casas (gateway e tela) sem gate de paridade.
+
 ## 2026-09-17 (2) — VOZ-19: ruído não vira mais fala do cliente — o STT vai com o VAD do serviço
 
 **O que havia.** A medição da VOZ-18 achou o Whisper transcrevendo ruído como "Obrigado." com confiança

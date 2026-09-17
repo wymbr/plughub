@@ -311,6 +311,23 @@ inteira → `notify` → gateway — não tem streaming nem cancelamento, e nunc
 consulta o flow sem criar um segundo árbitro de roteamento nem um canal de integração fora do
 MCP. O gate da fase é o orçamento de latência **medido**, não estimado.
 
+### V13 — **O STT é recalibrável por instalação, e a recalibragem propõe — nunca aplica** *(decisão do dono, 2026-09-17)*
+
+As condições do canal de voz variam por instalação e com o tempo. As VOZ-18/19 mediram que isso são
+**duas perguntas**: *o caminho de áudio está saudável?* (voz sintetizada pelo caminho real responde) e
+*que limites servem aos clientes desta instalação?* (voz sintetizada **não** responde — as falas certas
+vão de 0,35 a 0,92).
+
+- Os parâmetros de segmentação da fala são **config por tenant × canal/perna**, nunca constante de
+  código nem calibração única por tenant (a perna SIP tem outros números) — `VOZ-21`.
+- Três camadas, em ordem de custo: **A** telemetria passiva só de números (`VOZ-22`), **B** verificação
+  ativa a pedido contra a linha de base (`VOZ-23`), **C** amostra rotulada por pessoa (`VOZ-24`, a única
+  que retém áudio, logo finalidade nova de tratamento).
+- **Nada se aplica sozinho**: a recalibragem propõe, uma pessoa aprova, a gravação é auditada e
+  reversível. Amostra pequena diz *insuficiente*, nunca sugere número.
+
+Desenho e medição: `TODO.md` § *Recalibragem de STT por instalação*.
+
 ---
 
 ## 4. O que este arco entrega

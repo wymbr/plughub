@@ -461,6 +461,12 @@ probe_webrtc_keypad.sh
 # descartou o ruido nesta chamada; N2 nenhuma fala registrada antes da resposta. LM5 (VAD
 # desligado) e LM6 (descarte mudo) pegas.
 probe_webrtc_speech_tuning.sh
+# VOZ-21 (2026-09-17): a segmentacao da fala vem da config do TENANT (webrtc.stt_*). Override
+# stt_end_silence_ms=2500 + stt_gap_ms invalido: P1 o cache foi invalidado (log do proprio invalidate),
+# T1 a chamada abre com o valor e a procedencia, T2 o invalido cai no default nomeado, T3 a fala do
+# menu sem ajuste junta; removido o override, C1/C2 a chamada seguinte volta ao global. Recusa mexer
+# se o tenant ja tem override real (K1). Mutacoes ao vivo LM7-LM10 pegas.
+probe_webrtc_stt_config.sh
 # CTR-09. Referencia pura de `invoke` que nao resolveu (`@ctx.*` ausente) viajava como `null` e a
 # tool com campo `.optional()` recusava (-32602): o `validate_pin` do skill_auth_form_v1 reprovava
 # a senha CERTA de todo cliente sem identidade. Mede a suite do invoke contra a IMAGEM e, ao vivo no

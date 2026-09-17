@@ -24,7 +24,7 @@ from ..adapters.speaches_provider import (
     pcm16_48k_to_16k,
     rms,
 )
-from ..adapters.voice_provider import SpeechTuning
+from ..adapters.voice_provider import SpeechSegmentation, SpeechTuning
 
 SR = 16_000
 QUADRO_MS = 20
@@ -201,6 +201,50 @@ class TestVad:
             res = await _colhe(_stt(svc), _gera(_quadros(_voz(600) + _silencio(900))))
         assert res == [] and len(svc.pedidos) == 1
         assert "sem fala pelo VAD" in caplog.text
+
+
+class TestSegmentacaoDoTenant:
+    """VOZ-21: a chamada traz a segmentação do tenant, que vence o default do provedor."""
+
+    @pytest.mark.asyncio
+    async def test_limiar_de_energia_do_tenant_acima_da_voz_nao_gera_pedido(self):
+        pcm = _voz(600, amp=3000) + _silencio(900)          # RMS ~2 100
+        controle = Servico()
+        assert len(await _colhe(_stt(controle), _gera(_quadros(pcm)))) == 1
+        svc = Servico()
+        assert await _colhe(_stt(svc), _gera(_quadros(pcm)),
+                            segmentation=SpeechSegmentation(energy_threshold=4000)) == []
+        assert svc.pedidos == []
+
+    @pytest.mark.asyncio
+    async def test_silencio_de_fim_do_tenant_junta_falas(self):
+        pcm = _voz(600) + _silencio(900) + _voz(500) + _silencio(1800)
+        svc = Servico(textos=["a b"])
+        res = await _colhe(_stt(svc), _gera(_quadros(pcm)), segmentation=SpeechSegmentation(end_silence_ms=1500))
+        assert len(res) == 1 and len(svc.pedidos) == 1
+
+    @pytest.mark.asyncio
+    async def test_ajuste_do_menu_vence_a_segmentacao_do_tenant(self):
+        pcm = _voz(600) + _silencio(900) + _voz(500) + _silencio(1800)
+        svc = Servico(textos=["a", "b"])
+        res = await _colhe(_stt(svc), _gera(_quadros(pcm)), segmentation=SpeechSegmentation(end_silence_ms=1500),
+                           tuning=SpeechTuning(silence_ms=700))
+        assert len(res) == 2
+
+    @pytest.mark.asyncio
+    async def test_vad_desligado_pelo_tenant_vai_no_pedido(self):
+        svc = Servico(textos=["ola"])
+        await _colhe(_stt(svc), _gera(_quadros(_voz(600) + _silencio(900))),
+                     segmentation=SpeechSegmentation(vad_filter=False))
+        assert b"\r\n\r\nfalse\r\n" in svc.pedidos[0].content
+
+    @pytest.mark.asyncio
+    async def test_fala_minima_e_lacuna_do_tenant(self):
+        svc = Servico()
+        seg = SpeechSegmentation(min_speech_ms=800)
+        assert await _colhe(_stt(svc), _gera(_quadros(_voz(600) + _silencio(900))), segmentation=seg) == []
+        controle = Servico()
+        assert len(await _colhe(_stt(controle), _gera(_quadros(_voz(900) + _silencio(900))), segmentation=seg)) == 1
 
 
 class TestAjustePorColeta:

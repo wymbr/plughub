@@ -1,5 +1,38 @@
 # TODO — PlugHub Itens Pendentes
 
+## Recalibragem de STT por instalação *(proposta do dono, desenho de 2026-09-17)*
+
+**Ideia (dono).** Um procedimento, exercitável a pedido, que recalibre o STT: as condições do canal de voz
+variam de instalação para instalação e ao longo do tempo.
+
+**O que as VOZ-18/19 mediram e que governa o desenho: são DUAS perguntas.**
+1. *O caminho de áudio desta instalação está saudável?* — cadeia SFU, codec, reamostragem, modelo, versão do
+   speaches. Voz sintetizada responde bem, e a cadeia MOVE os números sem nada vermelho ("Fatura." 0,59 limpa →
+   "Batura!" 0,45 pela chamada).
+2. *Que limites servem aos clientes desta instalação?* — voz sintetizada NÃO responde: as falas certas vão de
+   0,35 a 0,92, e sotaque, celular e ruído de rua são o que varia por instalação. Calibrar limite com voz
+   sintética é produzir um número calibrado para a voz errada.
+
+**Desenho — pré-requisito e três camadas, em ordem de custo:**
+
+| ficha | camada | mede | dado de cliente | responde |
+|---|---|---|---|---|
+| `VOZ-21` | pré-requisito | — (parâmetros de segmentação viram config por tenant × canal) | — | torna recalibrável |
+| `VOZ-22` | A · telemetria passiva | só números por sessão e por menu: confiança, descartes do VAD, chão de ruído, desfechos, fala→tecla | nenhum áudio nem texto | pergunta 2, indireta e contínua |
+| `VOZ-23` | B · verificação ativa a pedido | chamada sintética pelo caminho real, contra a linha de base | nenhum | pergunta 1 |
+| `VOZ-24` | C · amostra rotulada | trechos reais revisados por pessoa → proposta de limites | áudio retido, com consentimento | pergunta 2, direta |
+
+**Regras que o desenho fixa.**
+- **Nada se aplica sozinho.** Recalibragem PROPÕE; pessoa aprova; gravação no config-api auditada, com rollback.
+- **Calibração é por CANAL/perna, nunca só por tenant** — a perna SIP (G.711, 8 kHz) tem outros números.
+- **Amostra pequena diz "insuficiente"**, nunca sugere número.
+- **Disparo reusa a plataforma:** pool webhook (manual) e Agenda do scheduler-api (periódico). O executor da
+  chamada sintética é um participante LiveKit atrás de uma tool MCP, não um step de skill flow.
+- **Camadas A e B não retêm áudio**; só a C trata dado de voz para uma finalidade nova (LGPD).
+
+**Ordem decidida pelo dono (2026-09-17):** pré-requisito (`VOZ-21`) e camada A (`VOZ-22`) primeiro.
+`VOZ-21` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (3)): namespace `webrtc`, chaves `stt_*`.
+
 ## VOZ-19 — ruído que vira fala, e o limiar de confiança *(medido 2026-09-17)*
 
 **Pergunta.** O que impede ruído de responder um menu por voz — o `no_speech_prob` (0,0 sempre, VOZ-18),

@@ -89,6 +89,26 @@ class SpeechTuning:
         self.max_utterance_ms = None
 
 
+@dataclass(frozen=True)
+class SpeechSegmentation:
+    """Como a fala de uma CHAMADA é segmentada (VOZ-21): config do tenant por canal, lida uma vez
+    quando a chamada abre o STT (`speech_config.py`). Os defaults são os de código — os mesmos do
+    seed do config-api — e `provenance` diz, por campo, de onde veio cada valor."""
+    energy_threshold: float = 400.0     # RMS int16 que conta como voz
+    end_silence_ms:   int   = 700       # silêncio que fecha a fala
+    gap_ms:           int   = 700       # sem quadro nenhum por tanto tempo também fecha
+    min_speech_ms:    int   = 250       # abaixo disto é ruído, não fala
+    max_speech_ms:    int   = 15_000    # teto de uma fala
+    vad_filter:       bool  = True      # VAD do serviço de transcrição (VOZ-19)
+    provenance:       dict  = field(default_factory=dict, compare=False)
+
+    def describe(self) -> str:
+        def rot(campo: str, valor: object) -> str:
+            return f"{campo}={valor} ({self.provenance.get(campo, 'default')})"
+        return " ".join(rot(c, getattr(self, c)) for c in (
+            "energy_threshold", "end_silence_ms", "gap_ms", "min_speech_ms", "max_speech_ms", "vad_filter"))
+
+
 # ── Protocol interfaces ───────────────────────────────────────────────────────
 
 

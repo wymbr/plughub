@@ -29,7 +29,7 @@ from typing import AsyncIterator
 import httpx
 import numpy as np
 
-from .voice_provider import SpeechTuning, STTResult
+from .voice_provider import SpeechSegmentation, SpeechTuning, STTResult
 
 logger = logging.getLogger("plughub.channel-gateway.speaches")
 
@@ -77,27 +77,28 @@ class SpeachesSTTProvider:
         base_url: str,
         model:    str,
         *,
-        energy_threshold: float = 400.0,   # RMS em escala int16 — fala próxima ao microfone passa de ~1000
-        silence_ms:       int   = 700,     # silêncio que fecha a fala
-        gap_ms:           int   = 700,     # sem quadro nenhum por tanto tempo também fecha
-        min_speech_ms:    int   = 250,     # abaixo disto é ruído, não fala
-        max_utterance_ms: int   = 15_000,
-        vad_filter:       bool  = True,
+        energy_threshold: float | None = None,
+        silence_ms:       int   | None = None,
+        gap_ms:           int   | None = None,
+        min_speech_ms:    int   | None = None,
+        max_utterance_ms: int   | None = None,
+        vad_filter:       bool  | None = None,
         http:             httpx.AsyncClient | None = None,
     ) -> None:
+        """Os parâmetros de segmentação são o DEFAULT do provedor (os de `SpeechSegmentation`);
+        a chamada traz os do tenant em `stream(segmentation=…)` (VOZ-21)."""
         self._url = base_url.rstrip("/")
         self._model = model
-        self._thr = energy_threshold
-        self._silence_ms = silence_ms
-        self._gap_s = gap_ms / 1000
-        self._min_speech_ms = min_speech_ms
-        self._max_ms = max_utterance_ms
+        pedidos = dict(energy_threshold=energy_threshold, end_silence_ms=silence_ms, gap_ms=gap_ms,
+                       min_speech_ms=min_speech_ms, max_speech_ms=max_utterance_ms, vad_filter=vad_filter)
+        self._seg = SpeechSegmentation(**{k: v for k, v in pedidos.items() if v is not None})
+        self._thr = self._seg.energy_threshold
         # VOZ-19: o limiar de energia acima não distingue fala de ruído, e o Whisper transcreve o que
         # recebe — medido 2026-09-17, sem VAD 44 de 44 trechos de não-fala (ruído branco e rosa,
         # tom, zumbido, cliques, acordes) viraram texto ("Obrigado.", "Tchau.", "E aí"), com
         # confiança 0,46–0,67, dentro da faixa das falas CERTAS (0,35–0,92). Com o VAD do serviço:
         # 1 de 44, e nenhuma das 84 falas (limpa, ruído 10/0 dB, baixa) perdida ou piorada.
-        self._vad = vad_filter
+        # (default em `SpeechSegmentation.vad_filter`; o tenant pode desligar — VOZ-21)
         self._http = http
 
     async def stream(
@@ -106,7 +107,10 @@ class SpeachesSTTProvider:
         sample_rate:  int = STT_SAMPLE_RATE,
         language:     str = "pt-BR",
         tuning:       SpeechTuning | None = None,
+        segmentation: SpeechSegmentation | None = None,
     ) -> AsyncIterator[STTResult]:
+        seg = segmentation or self._seg
+        gap_s = seg.gap_ms / 1000
         it = audio_chunks.__aiter__()
         buf = bytearray()
         speech_ms = silence_ms = pos_ms = start_ms = 0.0
@@ -116,11 +120,11 @@ class SpeachesSTTProvider:
             nonlocal buf, speech_ms, silence_ms
             pcm, falou = bytes(buf), speech_ms
             buf, speech_ms, silence_ms = bytearray(), 0.0, 0.0
-            if falou < self._min_speech_ms:
+            if falou < seg.min_speech_ms:
                 return None
-            texto, confianca = await self._transcribe(pcm, sample_rate, lang)
+            texto, confianca = await self._transcribe(pcm, sample_rate, lang, seg.vad_filter)
             if not texto:
-                if self._vad:
+                if seg.vad_filter:
                     # não é perda: o trecho passou o limiar de energia e o VAD não achou fala nele
                     logger.info("speaches STT: trecho de %d ms sem fala pelo VAD — descartado (modelo %s)",
                                 int(falou), self._model)
@@ -130,7 +134,7 @@ class SpeachesSTTProvider:
 
         while True:
             try:
-                chunk = await asyncio.wait_for(it.__anext__(), timeout=self._gap_s if buf else None)
+                chunk = await asyncio.wait_for(it.__anext__(), timeout=gap_s if buf else None)
             except asyncio.TimeoutError:
                 res = await _fecha()           # lacuna sem quadro: microfone mudo fecha a fala
                 if res:
@@ -140,7 +144,7 @@ class SpeachesSTTProvider:
                 break
             dur = len(chunk) / 2 / sample_rate * 1000
             pos_ms += dur
-            voz = rms(chunk) >= self._thr
+            voz = rms(chunk) >= seg.energy_threshold
             if voz:
                 if not buf:
                     start_ms = pos_ms - dur
@@ -150,8 +154,8 @@ class SpeachesSTTProvider:
             elif buf:
                 buf += chunk
                 silence_ms += dur
-            limite_silencio = (tuning.silence_ms if tuning and tuning.silence_ms else self._silence_ms)
-            limite_fala = (tuning.max_utterance_ms if tuning and tuning.max_utterance_ms else self._max_ms)
+            limite_silencio = (tuning.silence_ms if tuning and tuning.silence_ms else seg.end_silence_ms)
+            limite_fala = (tuning.max_utterance_ms if tuning and tuning.max_utterance_ms else seg.max_speech_ms)
             if buf and (silence_ms >= limite_silencio or len(buf) / 2 / sample_rate * 1000 >= limite_fala):
                 res = await _fecha()
                 if res:
@@ -161,9 +165,10 @@ class SpeachesSTTProvider:
             if res:
                 yield res
 
-    async def _transcribe(self, pcm: bytes, sample_rate: int, language: str | None) -> tuple[str, float | None]:
+    async def _transcribe(self, pcm: bytes, sample_rate: int, language: str | None,
+                          vad_filter: bool = True) -> tuple[str, float | None]:
         data = {"model": self._model, "response_format": "verbose_json",
-                "vad_filter": "true" if self._vad else "false"}
+                "vad_filter": "true" if vad_filter else "false"}
         if language:
             data["language"] = language
         try:

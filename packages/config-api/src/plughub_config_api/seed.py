@@ -433,6 +433,46 @@ _SEED: list[tuple[str, str, object, str]] = [
         "application/pdf, video/mp4, video/webm."
     ),
 
+    # ── webrtc — segmentação da fala do bot leg (VOZ-21) ───────────────────────
+    # Source: channel-gateway/speech_config.py (faixas) e adapters/voice_provider.py
+    # (SpeechSegmentation, os mesmos defaults). Por CANAL: a perna SIP terá os dela.
+    (
+        "webrtc", "stt_energy_threshold",
+        400,
+        "RMS (int16) a partir do qual um quadro de 20 ms conta como voz, na segmentacao da fala "
+        "e no barge-in. Faixa 50-5000. Ruido de linha acima dele vira trecho enviado ao STT. "
+        "Source: channel-gateway/speech_config.py"
+    ),
+    (
+        "webrtc", "stt_end_silence_ms",
+        700,
+        "Silencio (ms) que fecha uma fala. Faixa 100-5000. Um menu com collect.voice.end_silence_ms "
+        "vence este valor enquanto espera a resposta."
+    ),
+    (
+        "webrtc", "stt_gap_ms",
+        700,
+        "Tempo (ms) sem quadro nenhum que tambem fecha a fala (microfone mudo nao manda silencio). "
+        "Faixa 100-5000."
+    ),
+    (
+        "webrtc", "stt_min_speech_ms",
+        250,
+        "Voz minima (ms) para um trecho ser transcrito; abaixo disso e estalo ou tosse. Faixa 50-2000."
+    ),
+    (
+        "webrtc", "stt_max_speech_ms",
+        15_000,
+        "Teto (ms) de uma fala; acima disso o trecho e cortado e transcrito. Faixa 1000-60000. "
+        "Um menu com collect.voice.max_speech_s vence este valor enquanto espera a resposta."
+    ),
+    (
+        "webrtc", "stt_vad_filter",
+        True,
+        "VAD do servico de transcricao. Medido 2026-09-17 (voz sintetizada): sem ele 44 de 44 trechos "
+        "de nao-fala viravam texto; com ele 1 de 44, sem perder fala. Desligar so com medicao (VOZ-20)."
+    ),
+
     # ── audit_policy ──────────────────────────────────────────────────────────
     # Source: schemas/audit.ts (DEFAULT_MASKING_RULES, MaskingAccessPolicy)
     # Renamed from 'masking' → 'audit_policy' to reflect broader scope (LGPD audit,

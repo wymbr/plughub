@@ -631,6 +631,27 @@ webrtc_stt_enabled:         bool = True
 > ou não ajusta (`measures_confidence` / `supports_tuning` falsos) é dito no log ao armar a coleta.
 > Gate ao vivo: `infra/test/probe_webrtc_speech_tuning.sh`. Ver `CHANGELOG.md` 2026-09-17 (1).
 >
+> **Segmentação da fala por tenant (VOZ-21).** Os defaults do provedor são config do config-api,
+> namespace `webrtc` (o canal é o recorte — a perna SIP terá os dela), editáveis em Configuração →
+> Canais → WebRTC:
+>
+> | chave | default | faixa |
+> |---|---|---|
+> | `stt_energy_threshold` | 400 | 50–5000 (vale também para o barge-in) |
+> | `stt_end_silence_ms` | 700 | 100–5000 |
+> | `stt_gap_ms` | 700 | 100–5000 |
+> | `stt_min_speech_ms` | 250 | 50–2000 |
+> | `stt_max_speech_ms` | 15000 | 1000–60000 |
+> | `stt_vad_filter` | true | booleano |
+>
+> O config-api não valida valor: o gateway valida (`speech_config.py`) e cai no default nomeando a
+> chave. A chamada resolve os valores UMA vez, ao abrir o STT, e o log diz a procedência de cada um
+> (`end_silence_ms=2500 (tenant)`, `gap_ms=700 (default: valor invalido)`); o `config.changed` do
+> namespace invalida o cache, e com o config-api fora vale o último valor bom. O `collect.voice` de um
+> menu continua vencendo enquanto espera. Provedor sem `supports_tuning` (Deepgram legado) é dito no
+> log: a config não se aplica a ele. Gate ao vivo: `infra/test/probe_webrtc_stt_config.sh`. Ver
+> `CHANGELOG.md` 2026-09-17 (3).
+>
 > **Teclado do widget (fatia 5c).** O `webrtc.interaction` leva `collect` — só o que a TELA precisa
 > (`input`, `domain`, `min_digits`, `max_digits`, `terminator`; nunca mensagem nem prazo) — e o
 > widget desenha o teclado pelo domínio (`*`/`#` só quando o domínio ou o terminador os pedem):

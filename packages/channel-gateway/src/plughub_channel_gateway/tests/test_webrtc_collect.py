@@ -177,6 +177,60 @@ class _SttAjustavel:
         yield STTResult(transcript="ok", is_final=True, confidence=0.9)
 
 
+class TestSegmentacaoDoTenant:
+    """VOZ-21: a chamada resolve a segmentação do tenant UMA vez, diz a procedência no log e a
+    entrega a todo fluxo de STT — o ajuste do menu continua só no do cliente."""
+
+    async def test_segmentacao_resolvida_vai_a_todos_os_fluxos_e_ao_log(self, caplog):
+        from plughub_channel_gateway.adapters.voice_provider import SpeechSegmentation
+
+        class _SttSeg(_SttAjustavel):
+            def __init__(self):
+                super().__init__()
+                self.segs = []
+
+            async def stream(self, chunks, language=None, **kw):
+                self.segs.append(kw.get("segmentation"))
+                async for r in super().stream(chunks, language=language, **kw):
+                    yield r
+
+        stt = _SttSeg()
+        room = MockRoomClient()
+        room.inject_audio(b"\x00" * 960)
+        room.inject_audio(b"\x00" * 960, identity="agent-sub-hum")
+        room.end_audio()
+        adapter, _, _ = _make_adapter(stt=stt, room_client=room)
+        _abre(adapter)
+        seg = SpeechSegmentation(end_silence_ms=1300, provenance={"end_silence_ms": "tenant"})
+        chamadas = []
+
+        async def _resolve(tenant):
+            chamadas.append(tenant)
+            return seg
+        adapter.speech_config = _resolve
+        with caplog.at_level(logging.INFO):
+            await adapter._stt_pipeline(SESSION_ID, room)
+        assert len(chamadas) == 1 and stt.segs == [seg, seg]
+        assert "end_silence_ms=1300 (tenant)" in caplog.text
+
+    async def test_stt_sem_ajuste_nao_consulta_a_config_e_diz(self, caplog):
+        from plughub_channel_gateway.tests.test_webrtc_stt_tts import _SttPorTamanho
+        room = MockRoomClient()
+        room.inject_audio(b"\x00" * 960)
+        room.end_audio()
+        adapter, _, _ = _make_adapter(stt=_SttPorTamanho(), room_client=room)
+        _abre(adapter)
+        chamadas = []
+
+        async def _resolve(tenant):
+            chamadas.append(tenant)
+        adapter.speech_config = _resolve
+        with caplog.at_level(logging.INFO):
+            await adapter._stt_pipeline(SESSION_ID, room)
+        assert chamadas == []
+        assert "_SttPorTamanho nao aceita segmentacao configurada" in caplog.text
+
+
 class TestAjusteDeFala:
     """VOZ-18: `end_silence_ms`/`max_speech_s` da coleta por voz valem enquanto o menu espera, só
     na fala do cliente, e voltam ao default quando a coleta termina."""
