@@ -467,6 +467,12 @@ probe_webrtc_speech_tuning.sh
 # menu sem ajuste junta; removido o override, C1/C2 a chamada seguinte volta ao global. Recusa mexer
 # se o tenant ja tem override real (K1). Mutacoes ao vivo LM7-LM10 pegas.
 probe_webrtc_stt_config.sh
+# VOZ-22 (2026-09-17): uma chamada com coleta por voz deixa a telemetria passiva da fala no ClickHouse
+# e no relatorio, certa e sem texto. S1/S2 o resumo do fluxo do cliente (quadros, falas, VAD, confianca,
+# ruido, segmentacao); C1-C3 cinco desfechos na ordem, so o m1 recusado por confianca; T1 nenhum texto
+# nas linhas; R1-R3 o relatorio por pool com amostra pequena dita, e recortado pelo escopo (usuarios-
+# sonda criados e apagados). Mutacoes ao vivo LM11-LM14.
+probe_speech_metrics.sh
 # CTR-09. Referencia pura de `invoke` que nao resolveu (`@ctx.*` ausente) viajava como `null` e a
 # tool com campo `.optional()` recusava (-32602): o `validate_pin` do skill_auth_form_v1 reprovava
 # a senha CERTA de todo cliente sem identidade. Mede a suite do invoke contra a IMAGEM e, ao vivo no

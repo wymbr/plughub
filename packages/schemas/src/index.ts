@@ -768,6 +768,22 @@ export type {
   AgentEventInput,
 } from "./agent-events"
 
+// ── Telemetria passiva da fala (VOZ-22) ──────────────────────────────────────
+export {
+  SPEECH_SEGMENTATION_FIELDS,
+  SpeechSegmentationSnapshotSchema,
+  SpeechSegmentationScopeSchema,
+  SttStreamSummaryEventSchema,
+  CollectOutcomeEventSchema,
+  SpeechMetricsEventSchema,
+} from "./speech-metrics"
+
+export type {
+  SttStreamSummaryEvent,
+  CollectOutcomeEvent,
+  SpeechMetricsEvent,
+} from "./speech-metrics"
+
 // ── Perfil de execução × tipos de step admitidos (CTR-01 / Arc 19) ───────────
 export {
   SKILL_PROFILE_FORBIDDEN_STEPS,

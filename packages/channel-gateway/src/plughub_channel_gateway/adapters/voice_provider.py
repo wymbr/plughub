@@ -109,6 +109,51 @@ class SpeechSegmentation:
             "energy_threshold", "end_silence_ms", "gap_ms", "min_speech_ms", "max_speech_ms", "vad_filter"))
 
 
+class SpeechStats:
+    """O que o provedor viu num fluxo de fala — só números (VOZ-22). Mutável: o provedor conta,
+    quem abriu o fluxo publica no fim (`speech_metrics.stream_summary`).
+
+    O chão de ruído é o RMS dos quadros ABAIXO do limiar de voz; guarda os valores até
+    `NOISE_CAP` (uma hora de quadros de 20 ms) — depois só conta."""
+    NOISE_CAP = 180_000
+
+    def __init__(self) -> None:
+        self.audio_ms = 0.0
+        self.frames = 0
+        self.voiced_frames = 0
+        self.noise_rms: list[float] = []
+        self.utterances_sent = 0          # trechos enviados à transcrição
+        self.utterances_transcribed = 0   # com texto
+        self.discarded_vad = 0            # enviados e esvaziados pelo VAD do serviço
+        self.discarded_short = 0          # voz abaixo da fala mínima — nem enviados
+        self.cut_max_speech = 0           # fechados pelo teto de fala, não por silêncio
+        self.stt_errors = 0               # serviço fora, http != 200, resposta ilegível
+        self.confidences: list[float] = []
+
+    def frame(self, ms: float, level: float, voiced: bool) -> None:
+        self.audio_ms += ms
+        self.frames += 1
+        if voiced:
+            self.voiced_frames += 1
+        elif len(self.noise_rms) < self.NOISE_CAP:
+            self.noise_rms.append(level)
+
+    @staticmethod
+    def _pct(valores: list[float], nd: int) -> tuple[float | None, float | None, float | None]:
+        if not valores:
+            return (None, None, None)
+        v = sorted(valores)
+        def q(p: float) -> float:
+            return round(v[min(len(v) - 1, int(p * (len(v) - 1) + 0.5))], nd)
+        return (q(0.10), q(0.50), q(0.90))
+
+    def noise_percentiles(self) -> tuple[float | None, float | None, float | None]:
+        return self._pct(self.noise_rms, 1)
+
+    def confidence_percentiles(self) -> tuple[float | None, float | None, float | None]:
+        return self._pct(self.confidences, 4)
+
+
 # ── Protocol interfaces ───────────────────────────────────────────────────────
 
 

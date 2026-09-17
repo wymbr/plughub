@@ -652,6 +652,16 @@ webrtc_stt_enabled:         bool = True
 > log: a config não se aplica a ele. Gate ao vivo: `infra/test/probe_webrtc_stt_config.sh`. Ver
 > `CHANGELOG.md` 2026-09-17 (3).
 >
+> **Telemetria passiva da fala (VOZ-22).** Cada chamada publica em `speech.metrics` (chave =
+> sessão), só números: no fim do fluxo do CLIENTE, um `stt_stream_summary` (chão de ruído, falas,
+> descartes pelo VAD e por curtas, cortes pela fala máxima, erros, confiança, segmentação em vigor com
+> escopo); no fim de cada coleta por voz, um `collect_outcome` (desfecho, tentativas, recusas por
+> confiança, tecla depois de fala). O provedor conta o que só ele vê (`SpeechStats`), o núcleo conta
+> tentativas (`CollectSession.counters`), o renderizador publica numa task própria — o fluxo costuma
+> acabar cancelado. A fala do atendente não entra: a recalibragem é do ambiente do cliente. Leitura:
+> `GET /reports/speech/quality` por pool, com `sample_sufficient` abaixo de 30 chamadas. Gate ao vivo:
+> `infra/test/probe_speech_metrics.sh`. Ver `CHANGELOG.md` 2026-09-17 (5).
+>
 > **Teclado do widget (fatia 5c).** O `webrtc.interaction` leva `collect` — só o que a TELA precisa
 > (`input`, `domain`, `min_digits`, `max_digits`, `terminator`; nunca mensagem nem prazo) — e o
 > widget desenha o teclado pelo domínio (`*`/`#` só quando o domínio ou o terminador os pedem):

@@ -52,7 +52,8 @@ def _adapter(room: MockRoomClient | None = None):
 
 
 def _eventos(producer) -> list[dict]:
-    return [json.loads(c.args[1]) for c in producer.send.call_args_list]
+    # só os eventos de conversa; `speech.metrics` (VOZ-22) sai com key/value nomeados e tem teste próprio
+    return [json.loads(c.args[1]) for c in producer.send.call_args_list if len(c.args) > 1]
 
 
 def _resultados(producer) -> list[dict]:

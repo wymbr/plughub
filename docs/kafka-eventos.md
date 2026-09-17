@@ -705,6 +705,31 @@ O `category` é hierárquico em dot notation (`pool_id.skill_id.metric_key`); o 
 
 ---
 
+## `speech.metrics`
+
+> Status: **Implementado** (VOZ-22, 2026-09-17) — camada A da recalibragem de STT por instalação.
+
+**Propósito**: telemetria passiva da fala das chamadas WebRTC, **só números** — nenhuma transcrição,
+valor coletado ou opção escolhida (é o que dispensa consentimento de tratamento de voz, ADR
+`adr-voice-media-plane.md` V13).
+
+**Produtor**: `channel-gateway` (`speech_metrics.py`), chave de partição = `session_id`.
+
+**Consumidor**: `analytics-api` → tabelas ClickHouse `speech_stream_summaries` e
+`speech_collect_outcomes`; leitura em `GET /reports/speech/quality` (por pool, recortado pelo escopo).
+
+**Schema**: `SpeechMetricsEventSchema` (`@plughub/schemas/speech-metrics.ts`), união por `event_type`,
+objetos `.strict()` — campo de texto novo reprova a validação.
+
+| `event_type` | quando | carrega |
+|---|---|---|
+| `stt_stream_summary` | fim do fluxo de fala do CLIENTE | quadros, chão de ruído (p10/p50/p90 do RMS abaixo do limiar), falas enviadas/transcritas, descartes (VAD, curtas), cortes pela fala máxima, erros do STT, confiança p10/p50/p90, segmentação em vigor e o escopo de cada parâmetro |
+| `collect_outcome` | fim de cada menu com coleta por VOZ | desfecho (`value`/`invalid`/`timeout`/`released`), via, motivo da liberação, falas e teclas, tentativas inválidas e quantas por confiança, tecla depois de fala, parâmetros declarados, duração |
+
+Percentil sem amostra é `null`, nunca 0 (0 é chão de ruído legítimo).
+
+---
+
 ## ~~`usage.cycle_reset`~~ — removido (2026-07-27)
 
 > **Não existe mais.** O `usage-aggregator` assinava este tópico, mas **nada nunca o publicou**; o consumo foi

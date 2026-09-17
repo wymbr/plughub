@@ -1,5 +1,65 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (5) — VOZ-22: cada chamada WebRTC deixa a telemetria da fala, só números — camada A da recalibragem de STT
+
+**O que havia.** Para recalibrar o STT por instalação (ADR `adr-voice-media-plane.md` V13) é preciso saber
+como a fala dos clientes DESTA instalação se comporta — ruído de linha, confiança, o que o VAD descarta,
+como as coletas por voz terminam. Nada disso existia fora do log do gateway.
+
+**Feito.**
+- **Contrato** `@plughub/schemas/speech-metrics.ts`: `SpeechMetricsEventSchema`, união de
+  `stt_stream_summary` e `collect_outcome`, objetos **`.strict()`** — um campo de texto novo REPROVA a
+  validação em vez de passar calado. Percentil sem amostra é `null`, nunca 0.
+- **Gateway, três casas contam e uma publica.** O provedor conta o que só ele vê (`SpeechStats`:
+  quadros, RMS dos quadros abaixo do limiar = chão de ruído, falas enviadas/transcritas, descartes pelo VAD
+  e por curtas, cortes pela fala máxima, erros do serviço, confiança). O núcleo da coleta conta tentativas
+  (`CollectSession.counters`: falas, teclas, inválidas, recusas por confiança, tecla depois de fala). O
+  renderizador publica em `speech.metrics` com chave = sessão: o resumo no fim do fluxo do CLIENTE (a fala
+  do atendente não entra) e um desfecho por coleta com voz — inclusive a liberada sem desfecho, com o
+  motivo (`session_closed`, `replaced`, `engine_released`) ou a respondida pela tela. A publicação sai
+  numa task própria: o fluxo de STT costuma acabar CANCELADO, e um `await` no `finally` não sobreviveria.
+- **analytics-api**: consumidor do tópico, tabelas `speech_stream_summaries` e `speech_collect_outcomes`
+  (ReplacingMergeTree por evento), e `GET /reports/speech/quality` por pool — pool-nativo, recortado pelo
+  escopo do chamador, com `sample_sufficient=false` abaixo de `min_sample` (30) chamadas. Mede, não
+  recomenda.
+- **Tópico** no `kafka-init` do compose demo; tabelas de tópicos e de Zod do `CLAUDE.md`;
+  `docs/kafka-eventos.md` § `speech.metrics`.
+
+**Dois achados no caminho.**
+- **Estado compartilhado entre fluxos.** A primeira versão guardava "o último pedido deu erro" no
+  PROVEDOR; o mesmo provedor atende em paralelo o cliente e o atendente, e o erro de um seria contado no
+  outro. Virou retorno local.
+- **A regra do alias do `CLAUDE.md`, violada e medida.** O relatório nasceu com `sum(utterances_sent) AS
+  utterances_sent` e o ClickHouse recusou a query inteira (code 184 → `data_unavailable`). O teste unitário
+  não pegava porque o cliente falso não executa SQL. Aliases viraram `*_total`, e um teste novo lê as
+  colunas do próprio DDL e reprova alias que repita coluna — conferido contra o SQL antigo, que colide em
+  duas. Com a query certa o relatório voltou VAZIO para o admin: o admin do demo nasce sem pools
+  (`accessible_pools=[]` = nenhum), e o probe passou a usar usuários-sonda com e sem o pool.
+
+**Testes.** channel-gateway 1176 → **1186** (provedor conta quadros, ruído, falas, VAD, curtas, teto,
+erro sem confundir com VAD; núcleo conta tentativas e tecla depois de fala; renderizador publica só do
+cliente, com a chave da sessão, sem texto; desfecho sem o valor; liberação uma vez; coleta só de teclado
+sem evento). analytics-api 768 → **778** (parser preserva ausência e não deixa texto atravessar; o
+consumidor escreve nas duas tabelas e o store real tem os inserts; SQL executado recorta pelo escopo, lê
+FINAL, escopo vazio não consulta, nenhum alias repete coluna). schemas: 4 testes do contrato (inclusive a
+recusa de texto).
+
+**Gate.** `probe_speech_metrics.sh` (AUTO), uma chamada real com o roteiro conhecido do
+`probe_webrtc_speech_tuning`: S1 uma linha de resumo com quadros, 5 falas, o ruído do m0 descartado pelo VAD
+e confiança em (0,1) · S2 chão de ruído e segmentação em vigor gravados · C1 cinco desfechos na ordem
+(value, invalid, value, invalid, value) · C2 só o m1 recusado por confiança · C3 o m3 com o
+`end_silence_ms` que declarou · T1 nenhum texto da chamada nas linhas · R1 o relatório traz o pool com
+amostra pequena dita · R2 controle `min_sample=1` · R3 quem alcança outro pool não o vê. Mutações ao vivo,
+todas pegas: LM11 resumo não publicado → S1 · LM12 recusa por confiança não contada → C2 · LM13 parser
+ignora desfechos → C1-C3 · LM14 relatório sem recorte de pool → R3.
+
+**Limite do que foi medido.** O chão de ruído do probe sai **0**: o microfone sintético manda silêncio
+digital entre as falas. O ramo prova que o número é medido e gravado; o valor útil vem de chamada real — é
+exatamente o que esta camada existe para colher (e o que a `VOZ-20` precisa). O tópico entrou só no
+`kafka-init` do compose **demo**: `full` e `visual` já não têm nem `agent.events` nem `pool.occupancy`.
+
+**Deixou.** `VOZ-23` (camada B) passa a `aberto` — o gatilho era esta ficha.
+
 ## 2026-09-17 (4) — PUI-02: a tela de configuração do webhook, que nenhum backend lia, é removida
 
 **O que havia.** Em Configuração → Canais, `WebhookConfigPage` editava seis chaves no namespace

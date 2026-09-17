@@ -22,6 +22,8 @@ Topics consumed:
 """
 from __future__ import annotations
 
+import json
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -715,6 +717,54 @@ def parse_sentiment_event(
         "segment_id": segment_id or None,
         "timestamp":  payload.get("timestamp") or _now(),
     }
+
+
+# ─── speech.metrics (VOZ-22) ──────────────────────────────────────────────────
+
+_SPEECH_SEG = ("energy_threshold", "end_silence_ms", "gap_ms", "min_speech_ms", "max_speech_ms", "vad_filter")
+
+
+def parse_speech_metrics_event(payload: dict[str, Any]) -> dict | None:
+    """speech.metrics → `speech_stream_summaries` | `speech_collect_outcomes`.
+
+    Só números atravessam: o parser copia CAMPOS NOMEADOS, e um campo de texto que o produtor
+    passasse a mandar não chegaria à tabela (o schema Zod `.strict()` já o recusa na origem)."""
+    event_id, tenant_id, session_id = payload.get("event_id"), payload.get("tenant_id"), payload.get("session_id")
+    if not event_id or not tenant_id or not session_id:
+        return None
+    base = {
+        "event_id": event_id, "tenant_id": tenant_id, "session_id": session_id,
+        "pool_id": payload.get("pool_id") or "", "channel": payload.get("channel") or "",
+        "timestamp": payload.get("timestamp") or _now(),
+    }
+    tipo = payload.get("event_type")
+    if tipo == "stt_stream_summary":
+        seg = payload.get("segmentation") or {}
+        row = {"table": "speech_stream_summaries", **base,
+               "speaker": payload.get("speaker") or "", "stt_provider": payload.get("stt_provider") or "",
+               "segmentation_scope": json.dumps(payload.get("segmentation_scope") or {}, sort_keys=True)}
+        for k in ("audio_ms", "frames", "voiced_frames", "utterances_sent", "utterances_transcribed",
+                  "discarded_vad", "discarded_short", "cut_max_speech", "stt_errors", "confidence_count"):
+            row[k] = int(payload.get(k) or 0)
+        for k in ("noise_rms_p10", "noise_rms_p50", "noise_rms_p90",
+                  "confidence_p10", "confidence_p50", "confidence_p90"):
+            v = payload.get(k)
+            row[k] = None if v is None else float(v)      # ausente fica ausente — nunca 0
+        for k in _SPEECH_SEG:
+            row[f"seg_{k}"] = seg.get(k)
+        return row
+    if tipo == "collect_outcome":
+        row = {"table": "speech_collect_outcomes", **base,
+               "menu_id": payload.get("menu_id") or "", "interaction": payload.get("interaction") or "",
+               "inputs": list(payload.get("inputs") or []), "outcome": payload.get("outcome") or "",
+               "via": payload.get("via") or None, "release_reason": payload.get("release_reason") or None,
+               "digit_after_speech": bool(payload.get("digit_after_speech")),
+               "min_confidence": payload.get("min_confidence"),
+               "end_silence_ms": payload.get("end_silence_ms"), "max_speech_ms": payload.get("max_speech_ms")}
+        for k in ("speech_inputs", "digit_inputs", "invalid_attempts", "invalid_low_confidence", "duration_ms"):
+            row[k] = int(payload.get(k) or 0)
+        return row
+    return None
 
 
 # ─── mcp.audit ────────────────────────────────────────────────────────────────

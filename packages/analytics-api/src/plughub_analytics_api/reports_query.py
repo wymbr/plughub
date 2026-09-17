@@ -8127,3 +8127,108 @@ def _fetch_evaluator_calibration(
             "min_sample_n":         min_sample_n,
         },
     }
+
+
+# ─── speech quality (VOZ-22) ─────────────────────────────────────────────────
+
+SPEECH_MIN_SAMPLE_DEFAULT = 30
+
+
+async def query_speech_quality(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:   str | None = None,
+    min_sample: int = SPEECH_MIN_SAMPLE_DEFAULT,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """Telemetria passiva da fala por POOL (camada A da recalibragem de STT).
+
+    Mede — não recomenda. `sample_sufficient` é falso abaixo de `min_sample` chamadas, e quem lê
+    não deve tirar limite de amostra pequena (ADR `adr-voice-media-plane.md` V13). Pool-nativo
+    (F-A): a linha carrega `pool_id` próprio, e o recorte é direto."""
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    meta = {"from_dt": since, "to_dt": until, "min_sample": min_sample}
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": meta}
+    try:
+        data = await asyncio.to_thread(
+            _fetch_speech_quality, client, database, tenant_id, since, until, pool_id, min_sample, accessible_pools)
+        return {"data": data, "meta": meta}
+    except Exception as exc:
+        logger.warning("query_speech_quality failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": meta, "error": "data_unavailable"}
+
+
+def _fetch_speech_quality(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None, min_sample: int, accessible_pools: "list[str] | None",
+) -> list[dict]:
+    conditions = ["tenant_id = {tenant_id:String}", f"timestamp >= '{since}'", f"timestamp <= '{until}'"]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    # o que o operador ALCANÇA, independente do `?pool_id=` que ele PEDIU
+    _apply_pool_scope(conditions, accessible_pools)
+    where = " AND ".join(conditions)
+
+    # ⚠️ alias de agregado NUNCA repete nome de coluna da tabela (CLAUDE.md § Postura): `sum(x) AS x`
+    # derruba a query inteira (code 184) — medido nesta mesma rota em 2026-09-17. Daí os `_total`.
+    streams = _rows_to_dicts(client.query(f"""
+        SELECT
+            pool_id,
+            count()                                  AS calls,
+            sum(audio_ms)                            AS audio_ms_total,
+            quantile(0.5)(noise_rms_p50)             AS noise_rms_p50_median,
+            quantile(0.5)(noise_rms_p90)             AS noise_rms_p90_median,
+            quantile(0.5)(confidence_p50)            AS confidence_p50_median,
+            quantile(0.1)(confidence_p10)            AS confidence_p10_p10,
+            sum(utterances_sent)                     AS utterances_sent_total,
+            sum(utterances_transcribed)              AS utterances_transcribed_total,
+            sum(discarded_vad)                       AS discarded_vad_total,
+            sum(discarded_short)                     AS discarded_short_total,
+            sum(cut_max_speech)                      AS cut_max_speech_total,
+            sum(stt_errors)                          AS stt_errors_total,
+            if(sum(utterances_sent) = 0, NULL, sum(discarded_vad) / sum(utterances_sent)) AS vad_discard_rate
+        FROM {db}.speech_stream_summaries FINAL
+        WHERE {where}
+        GROUP BY pool_id
+    """, parameters=params))
+
+    collects = _rows_to_dicts(client.query(f"""
+        SELECT
+            pool_id,
+            count()                                  AS collects,
+            countIf(outcome = 'value')               AS value,
+            countIf(outcome = 'invalid')             AS invalid,
+            countIf(outcome = 'timeout')             AS timeout,
+            countIf(outcome = 'released')            AS released,
+            countIf(outcome = 'value' AND via = 'voice') AS value_by_voice,
+            sum(invalid_attempts)                    AS invalid_attempts_total,
+            sum(invalid_low_confidence)              AS invalid_low_confidence_total,
+            countIf(digit_after_speech = 1)          AS digit_after_speech_count
+        FROM {db}.speech_collect_outcomes FINAL
+        WHERE {where}
+        GROUP BY pool_id
+    """, parameters=params))
+
+    por_pool: dict[str, dict] = {}
+    for r in streams:
+        por_pool.setdefault(r["pool_id"], {"pool_id": r["pool_id"]}).update(r)
+    for r in collects:
+        por_pool.setdefault(r["pool_id"], {"pool_id": r["pool_id"]}).update(r)
+    saida = []
+    for linha in por_pool.values():
+        linha.setdefault("calls", 0)
+        linha.setdefault("collects", 0)
+        linha["sample_sufficient"] = linha["calls"] >= min_sample
+        for k, v in list(linha.items()):
+            if isinstance(v, float) and v != v:        # quantile sem amostra devolve NaN → ausente
+                linha[k] = None
+        saida.append(linha)
+    return sorted(saida, key=lambda r: -r["calls"])

@@ -29,7 +29,7 @@ from typing import AsyncIterator
 import httpx
 import numpy as np
 
-from .voice_provider import SpeechSegmentation, SpeechTuning, STTResult
+from .voice_provider import SpeechSegmentation, SpeechStats, SpeechTuning, STTResult
 
 logger = logging.getLogger("plughub.channel-gateway.speaches")
 
@@ -108,6 +108,7 @@ class SpeachesSTTProvider:
         language:     str = "pt-BR",
         tuning:       SpeechTuning | None = None,
         segmentation: SpeechSegmentation | None = None,
+        stats:        SpeechStats | None = None,
     ) -> AsyncIterator[STTResult]:
         seg = segmentation or self._seg
         gap_s = seg.gap_ms / 1000
@@ -121,14 +122,26 @@ class SpeachesSTTProvider:
             pcm, falou = bytes(buf), speech_ms
             buf, speech_ms, silence_ms = bytearray(), 0.0, 0.0
             if falou < seg.min_speech_ms:
+                if stats is not None and falou > 0:
+                    stats.discarded_short += 1
                 return None
-            texto, confianca = await self._transcribe(pcm, sample_rate, lang, seg.vad_filter)
+            if stats is not None:
+                stats.utterances_sent += 1
+            texto, confianca, erro = await self._transcribe_raw(pcm, sample_rate, lang, seg.vad_filter)
+            if erro and stats is not None:
+                stats.stt_errors += 1
             if not texto:
-                if seg.vad_filter:
+                if stats is not None and seg.vad_filter and not erro:
+                    stats.discarded_vad += 1
+                if seg.vad_filter and not erro:
                     # não é perda: o trecho passou o limiar de energia e o VAD não achou fala nele
                     logger.info("speaches STT: trecho de %d ms sem fala pelo VAD — descartado (modelo %s)",
                                 int(falou), self._model)
                 return None
+            if stats is not None:
+                stats.utterances_transcribed += 1
+                if confianca is not None:
+                    stats.confidences.append(confianca)
             return STTResult(transcript=texto, is_final=True, confidence=confianca,
                              start_ms=int(start_ms), end_ms=int(pos_ms))
 
@@ -144,7 +157,10 @@ class SpeachesSTTProvider:
                 break
             dur = len(chunk) / 2 / sample_rate * 1000
             pos_ms += dur
-            voz = rms(chunk) >= seg.energy_threshold
+            nivel = rms(chunk)
+            voz = nivel >= seg.energy_threshold
+            if stats is not None:
+                stats.frame(dur, nivel, voz)
             if voz:
                 if not buf:
                     start_ms = pos_ms - dur
@@ -157,6 +173,8 @@ class SpeachesSTTProvider:
             limite_silencio = (tuning.silence_ms if tuning and tuning.silence_ms else seg.end_silence_ms)
             limite_fala = (tuning.max_utterance_ms if tuning and tuning.max_utterance_ms else seg.max_speech_ms)
             if buf and (silence_ms >= limite_silencio or len(buf) / 2 / sample_rate * 1000 >= limite_fala):
+                if stats is not None and silence_ms < limite_silencio:
+                    stats.cut_max_speech += 1
                 res = await _fecha()
                 if res:
                     yield res
@@ -167,6 +185,11 @@ class SpeachesSTTProvider:
 
     async def _transcribe(self, pcm: bytes, sample_rate: int, language: str | None,
                           vad_filter: bool = True) -> tuple[str, float | None]:
+        texto, confianca, _ = await self._transcribe_raw(pcm, sample_rate, language, vad_filter)
+        return texto, confianca
+
+    async def _transcribe_raw(self, pcm: bytes, sample_rate: int, language: str | None,
+                              vad_filter: bool) -> tuple[str, float | None, bool]:
         data = {"model": self._model, "response_format": "verbose_json",
                 "vad_filter": "true" if vad_filter else "false"}
         if language:
@@ -183,22 +206,22 @@ class SpeachesSTTProvider:
         except Exception as exc:
             logger.error("speaches STT: servico inalcancavel (%s, modelo %s): %s — fala PERDIDA",
                          self._url, self._model, exc)
-            return "", None
+            return "", None, True
         if r.status_code != 200:
             logger.error("speaches STT: http %s (modelo %s): %s — fala PERDIDA",
                          r.status_code, self._model, r.text[:200])
-            return "", None
+            return "", None, True
         try:
             corpo = r.json()
         except ValueError:
             logger.error("speaches STT: resposta nao-JSON (modelo %s) — fala PERDIDA", self._model)
-            return "", None
+            return "", None, True
         texto = str(corpo.get("text", "")).strip()
         confianca = confianca_dos_segmentos(corpo.get("segments"))
         if texto and confianca is None:
             logger.warning("speaches STT: resposta sem segmentos com avg_logprob (modelo %s) — "
                            "confianca da fala NAO medida", self._model)
-        return texto, confianca
+        return texto, confianca, False
 
 
 def confianca_dos_segmentos(segments: object) -> float | None:

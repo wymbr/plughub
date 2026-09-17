@@ -688,6 +688,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `collect.events` | workflow-api | analytics-api |
 | `session.signals` | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse |
 | `journey.merges` | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` (Journey J3) |
+| `speech.metrics` | Channel Gateway (bot leg WebRTC) | analytics-api → ClickHouse `speech_stream_summaries` / `speech_collect_outcomes` — só números, nunca texto (VOZ-22) |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
 | `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
 
@@ -712,6 +713,7 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `evaluation.events` | `EvaluationEventSchema` | `evaluation.ts` |
 | `session.signals` | `SessionSignalEventSchema` | `survey.ts` |
 | `journey.merges` | `JourneyMergedEventSchema` | `journey-merges.ts` |
+| `speech.metrics` | `SpeechMetricsEventSchema` | `speech-metrics.ts` |
 
 ---
 

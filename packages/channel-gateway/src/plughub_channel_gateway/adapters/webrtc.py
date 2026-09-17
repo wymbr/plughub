@@ -113,6 +113,7 @@ from .base import ChannelAdapter
 from .speaches_provider import SpeachesSTTProvider, SpeachesTTSProvider, pcm16_48k_to_16k, rms
 from .voice_provider import (
     SpeechSegmentation,
+    SpeechStats,
     SpeechTuning,
     ISTTProvider,
     ITTSProvider,
@@ -138,6 +139,7 @@ from .webrtc_room_client import (
     resample_pcm_48_to_8,
 )
 from plughub_tasks import disparar
+from .. import speech_metrics
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc")
 
@@ -206,6 +208,8 @@ class _ActiveCollect:
     seen_waiting:  bool = False
     next_check:    float = 0.0
     outcomes:      list[Done] = field(default_factory=list)
+    started_at:    float = field(default_factory=time.monotonic)
+    metrics_sent:  bool = False          # VOZ-22: um evento por coleta, venha o fim por onde vier
 
 
 def speech_sentences(text: str) -> list[str]:
@@ -709,7 +713,7 @@ class WebRTCAdapter(ChannelAdapter):
         # Phase C: ouvinte e voz saem da sala
         await self._stop_bot_leg(session_id)
 
-        self._end_collect(session_id, "sessao encerrada")
+        self._end_collect(session_id, "sessao encerrada", "session_closed")
         self._connections.pop(session_id, None)
         self._customer_media.pop(session_id, None)
         logger.info(
@@ -1509,7 +1513,7 @@ class WebRTCAdapter(ChannelAdapter):
             logger.debug("webrtc: fechamento ja publicado session=%s (%s ignorado)", session_id, reason)
             return
         self._close_fired.add(session_id)
-        self._end_collect(session_id, "sessao encerrada")
+        self._end_collect(session_id, "sessao encerrada", "session_closed")
         info = self._sessions.pop(session_id, {})
         self._menu_masked.pop(session_id, None)
         self._menu_plans.pop(session_id, None)
@@ -1686,6 +1690,8 @@ class WebRTCAdapter(ChannelAdapter):
         """Um falante: quadros → STT → frase final publicada. `autor` None = o cliente (o único
         que interrompe a fala da IA); senão, o `participant_id` do humano (`human-{sub}`)."""
         s = self._settings
+        stats: SpeechStats | None = None
+        pool_id = (self._sessions.get(session_id) or {}).get("pool_id")
 
         # O provedor diz em que taxa quer o áudio (VOZ-05): o auto-hospedado transcreve PCM a
         # 16 kHz; o Deepgram legado recebe μ-law a 8 kHz, que é o que este laço sempre mandou.
@@ -1729,6 +1735,9 @@ class WebRTCAdapter(ChannelAdapter):
             if interrompe and getattr(self._stt, "supports_tuning", False):
                 # só a fala do CLIENTE responde menu, logo só ela segue o ajuste da coleta
                 kw["tuning"] = self._speech_tuning.setdefault(session_id, SpeechTuning())
+                # VOZ-22: e só ela alimenta a telemetria da recalibragem (o ambiente do CLIENTE)
+                stats = SpeechStats()
+                kw["stats"] = stats
             async for result in self._stt.stream(_audio_chunks(), language=language, **kw):
                 if not (result.is_final and result.transcript.strip()):
                     continue
@@ -1751,6 +1760,14 @@ class WebRTCAdapter(ChannelAdapter):
             logger.warning(
                 "webrtc stt: transcricao de %s PAROU (session=%s): %s", identity, session_id, exc
             )
+        finally:
+            if stats is not None and stats.frames:
+                # task própria: o fluxo costuma acabar CANCELADO (a chamada fechou), e um await
+                # aqui dentro não sobreviveria ao cancelamento
+                evento = speech_metrics.stream_summary(
+                    tenant_id=s.tenant_id, session_id=session_id, pool_id=pool_id,
+                    stt_provider=type(self._stt).__name__, stats=stats, segmentation=segmentation)
+                disparar(speech_metrics.publish(self._producer, evento), nome=f"speech-metrics-{session_id[:8]}")
 
     async def _publish_transcript(
         self,
@@ -2020,7 +2037,7 @@ class WebRTCAdapter(ChannelAdapter):
     def _start_collect(self, session_id: str, plan: CollectPlan) -> None:
         """Fala o prompt com as teclas e começa o laço. ANTES de qualquer `await`, como a fala
         de `deliver_text`: a ordem das falas é a do Kafka só até a primeira suspensão."""
-        self._end_collect(session_id, f"substituida pelo menu {plan.menu_id}")
+        self._end_collect(session_id, f"substituida pelo menu {plan.menu_id}", "replaced")
         ac = _ActiveCollect(plan=plan, session=CollectSession(plan), played=asyncio.Event())
         self._collects[session_id] = ac
         self._tune_speech(session_id, plan)
@@ -2045,7 +2062,9 @@ class WebRTCAdapter(ChannelAdapter):
         else:
             tuning.clear()
 
-    def _end_collect(self, session_id: str, why: str) -> None:
+    def _end_collect(self, session_id: str, why: str, reason: str = "released") -> None:
+        """`reason` é o código do fim para a telemetria: `session_closed`, `replaced`, `screen`
+        (respondido pela tela), `screen_invalid` (inválidos esgotados pela tela)."""
         ac = self._collects.pop(session_id, None)
         if ac is None:
             return
@@ -2053,6 +2072,12 @@ class WebRTCAdapter(ChannelAdapter):
         if ac.session.done is None:
             logger.info("webrtc coleta: menu %s liberado sem desfecho — %s (session=%s)",
                         ac.plan.menu_id, why, session_id)
+            if reason == "screen":
+                self._emit_collect_metrics(session_id, ac, "value", "screen", None)
+            elif reason == "screen_invalid":
+                self._emit_collect_metrics(session_id, ac, "invalid", "screen", None)
+            else:
+                self._emit_collect_metrics(session_id, ac, "released", "", reason)
         if ac.task is not None and ac.task is not asyncio.current_task() and not ac.task.done():
             ac.task.cancel()
 
@@ -2083,6 +2108,8 @@ class WebRTCAdapter(ChannelAdapter):
             if self._collects.get(session_id) is ac:
                 self._collects.pop(session_id, None)
                 self._tune_speech(session_id, None)
+                if ac.session.done is None:
+                    self._emit_collect_metrics(session_id, ac, "released", "", "engine_released")
 
     async def _menu_waiting_now(self, session_id: str) -> bool | None:
         """Há menu esperando no motor? `None` = não se sabe (a coleta segue: o prazo dela termina)."""
@@ -2117,6 +2144,23 @@ class WebRTCAdapter(ChannelAdapter):
             elif isinstance(a, Done):
                 ac.outcomes.append(a)
                 await self._publish_collect_done(session_id, ac.plan, a)
+                self._emit_collect_metrics(session_id, ac, a.outcome, a.via, None)
+
+    def _emit_collect_metrics(self, session_id: str, ac: "_ActiveCollect", outcome: str, via: str,
+                              release_reason: str | None) -> None:
+        """VOZ-22: um `collect_outcome` por coleta que aceita VOZ — só contagens, nunca o valor."""
+        if ac.metrics_sent or "voice" not in ac.plan.inputs:
+            return
+        ac.metrics_sent = True
+        p = ac.plan
+        evento = speech_metrics.collect_outcome(
+            tenant_id=self._settings.tenant_id, session_id=session_id,
+            pool_id=(self._sessions.get(session_id) or {}).get("pool_id"),
+            menu_id=p.menu_id, interaction=p.interaction, inputs=list(p.inputs), outcome=outcome,
+            via=via, release_reason=release_reason, counters=ac.session.counters(),
+            min_confidence=p.min_confidence, end_silence_ms=p.end_silence_ms, max_speech_ms=p.max_speech_ms,
+            duration_ms=(time.monotonic() - ac.started_at) * 1000)
+        disparar(speech_metrics.publish(self._producer, evento), nome=f"speech-metrics-{session_id[:8]}")
 
     async def _publish_collect_done(self, session_id: str, p: CollectPlan, done: Done) -> None:
         """O desfecho vira `menu_result` — com o valor, como a resposta pela tela, ou com
@@ -2171,7 +2215,7 @@ class WebRTCAdapter(ChannelAdapter):
             n, f" de {plano.max_invalid}" if plano.max_invalid else "", plano.menu_id, session_id,
         )
         if plano.max_invalid is not None and n >= plano.max_invalid:
-            self._end_collect(session_id, "invalidos esgotados pela tela")
+            self._end_collect(session_id, "invalidos esgotados pela tela", "screen_invalid")
             self._menu_plans.get(session_id, {}).pop(plano.menu_id, None)
             await self._publish_collect_done(session_id, plano, Done("invalid"))
             return
@@ -2663,7 +2707,7 @@ class WebRTCAdapter(ChannelAdapter):
         ativa = self._collects.get(session_id)
         if ativa is not None and ativa.plan.menu_id == menu_id:
             # a tela respondeu: a coleta por teclado/fala do mesmo menu termina sem desfecho próprio
-            self._end_collect(session_id, "respondido pela tela")
+            self._end_collect(session_id, "respondido pela tela", "screen")
 
         masked = await self._masked_fields_for(session_id, menu_id)
         if masked is None:

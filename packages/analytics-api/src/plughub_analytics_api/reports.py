@@ -72,6 +72,7 @@ from .reports_query import (
     query_workflows_report,
     query_agent_events_series,
     query_agent_events_summary,
+    query_speech_quality,
     query_agent_events_categories,
     query_agent_events_tree,
     query_agent_events_epochs,
@@ -1876,6 +1877,35 @@ async def get_agent_events_summary(
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"agent_events_summary_{_today_label()}.csv")
+
+
+# ─── GET /reports/speech/quality (VOZ-22) ────────────────────────────────────
+
+@router.get("/speech/quality")
+async def get_speech_quality(
+    request:    Request,
+    tenant_id:  str           = Query(...,  description="Tenant identifier"),
+    from_dt:    Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
+    to_dt:      Optional[str] = Query(None, description="ISO8601 end (default: now)"),
+    pool_id:    Optional[str] = Query(None, description="Filter by pool_id"),
+    min_sample: int           = Query(30,   ge=1, description="Calls below this mark sample_sufficient=false"),
+    format:     str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """Telemetria passiva da fala por pool (camada A da recalibragem de STT): chão de ruído,
+    confiança, descartes do VAD, desfechos da coleta por voz. Mede, não recomenda — amostra
+    abaixo de `min_sample` chamadas sai com `sample_sufficient=false`."""
+    data = await query_speech_quality(
+        client     = request.app.state.store.new_client(),
+        database   = request.app.state.store._database,
+        tenant_id  = tenant_id,
+        from_dt    = from_dt,
+        to_dt      = to_dt,
+        pool_id    = pool_id,
+        min_sample = min_sample,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, format, f"speech_quality_{_today_label()}.csv")
 
 
 # ─── GET /reports/agent-events/epochs ────────────────────────────────────────

@@ -211,6 +211,16 @@ class CollectSession:
     last_key:   float = 0.0
     invalids:   int = 0
     done:       Done | None = field(default=None)
+    # VOZ-22 — só contagens, para a telemetria; nada do que foi dito ou teclado
+    speech_inputs:          int = 0
+    digit_inputs:           int = 0
+    invalid_low_confidence: int = 0
+    digit_after_speech:     bool = False
+
+    def counters(self) -> dict:
+        return {"speech_inputs": self.speech_inputs, "digit_inputs": self.digit_inputs,
+                "invalid_attempts": self.invalids, "invalid_low_confidence": self.invalid_low_confidence,
+                "digit_after_speech": self.digit_after_speech}
 
     def arm(self, now: float) -> None:
         if self.armed_at is None and self.done is None:
@@ -221,6 +231,9 @@ class CollectSession:
     def digit(self, key: str, now: float) -> list[Action]:
         if self.done is not None or "dtmf" not in self.plan.inputs or key not in DIGIT_WORDS:
             return []
+        self.digit_inputs += 1
+        if self.speech_inputs:
+            self.digit_after_speech = True
         self.arm(now)
         p = self.plan
         if p.is_option_menu:
@@ -249,9 +262,11 @@ class CollectSession:
         `confidence` None = não medida: o limite não se aplica (o renderizador diz no log)."""
         if self.done is not None or "voice" not in self.plan.inputs:
             return []
+        self.speech_inputs += 1
         self.arm(now)
         p = self.plan
         if p.min_confidence is not None and confidence is not None and confidence < p.min_confidence:
+            self.invalid_low_confidence += 1
             return self._invalid(now)
         tokens = _norm(transcript)
         if not tokens:

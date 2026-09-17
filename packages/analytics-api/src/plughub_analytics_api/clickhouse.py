@@ -1146,6 +1146,80 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, accessed_at, actor_sub)
 """
 
+# VOZ-22 — telemetria passiva da fala (camada A da recalibragem de STT). Só números; percentil
+# sem amostra é NULL, nunca 0. `segmentation_scope` guarda o JSON {parâmetro: tenant|global|config|default}.
+_DDL_SPEECH_STREAM_SUMMARIES = """
+CREATE TABLE IF NOT EXISTS {db}.speech_stream_summaries
+(
+    event_id               String,
+    tenant_id              String,
+    session_id             String,
+    pool_id                String,
+    channel                LowCardinality(String),
+    speaker                LowCardinality(String),
+    stt_provider           LowCardinality(String),
+    audio_ms               UInt32,
+    frames                 UInt32,
+    voiced_frames          UInt32,
+    noise_rms_p10          Nullable(Float32),
+    noise_rms_p50          Nullable(Float32),
+    noise_rms_p90          Nullable(Float32),
+    utterances_sent        UInt32,
+    utterances_transcribed UInt32,
+    discarded_vad          UInt32,
+    discarded_short        UInt32,
+    cut_max_speech         UInt32,
+    stt_errors             UInt32,
+    confidence_count       UInt32,
+    confidence_p10         Nullable(Float32),
+    confidence_p50         Nullable(Float32),
+    confidence_p90         Nullable(Float32),
+    seg_energy_threshold   Nullable(Float32),
+    seg_end_silence_ms     Nullable(UInt32),
+    seg_gap_ms             Nullable(UInt32),
+    seg_min_speech_ms      Nullable(UInt32),
+    seg_max_speech_ms      Nullable(UInt32),
+    seg_vad_filter         Nullable(UInt8),
+    segmentation_scope     String,
+    timestamp              DateTime64(3, 'UTC'),
+    date                   Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, event_id)
+"""
+
+_DDL_SPEECH_COLLECT_OUTCOMES = """
+CREATE TABLE IF NOT EXISTS {db}.speech_collect_outcomes
+(
+    event_id               String,
+    tenant_id              String,
+    session_id             String,
+    pool_id                String,
+    channel                LowCardinality(String),
+    menu_id                String,
+    interaction            LowCardinality(String),
+    inputs                 Array(String),
+    outcome                LowCardinality(String),
+    via                    Nullable(String),
+    release_reason         Nullable(String),
+    speech_inputs          UInt16,
+    digit_inputs           UInt16,
+    invalid_attempts       UInt16,
+    invalid_low_confidence UInt16,
+    digit_after_speech     UInt8,
+    min_confidence         Nullable(Float32),
+    end_silence_ms         Nullable(UInt32),
+    max_speech_ms          Nullable(UInt32),
+    duration_ms            UInt32,
+    timestamp              DateTime64(3, 'UTC'),
+    date                   Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, event_id)
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
     _DDL_AUDIT_ACCESS_LOG,
@@ -1174,6 +1248,8 @@ _ALL_DDL = [
     _DDL_AGENT_BUSINESS_EVENTS,
     _DDL_SESSION_SIGNAL,
     _DDL_CALIBRATION_EVENTS,
+    _DDL_SPEECH_STREAM_SUMMARIES,
+    _DDL_SPEECH_COLLECT_OUTCOMES,
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
     _DDL_MV_AGENT_PERFORMANCE,
@@ -1684,6 +1760,39 @@ class AnalyticsStore:
         "event_id", "tenant_id", "session_id", "pool_id",
         "score", "category", "segment_id", "timestamp", "date",
     ]
+
+    # speech.metrics (VOZ-22)
+
+    _SPEECH_STREAM_COLS = [
+        "event_id", "tenant_id", "session_id", "pool_id", "channel", "speaker", "stt_provider",
+        "audio_ms", "frames", "voiced_frames", "noise_rms_p10", "noise_rms_p50", "noise_rms_p90",
+        "utterances_sent", "utterances_transcribed", "discarded_vad", "discarded_short",
+        "cut_max_speech", "stt_errors", "confidence_count",
+        "confidence_p10", "confidence_p50", "confidence_p90",
+        "seg_energy_threshold", "seg_end_silence_ms", "seg_gap_ms", "seg_min_speech_ms",
+        "seg_max_speech_ms", "seg_vad_filter", "segmentation_scope", "timestamp", "date",
+    ]
+    _SPEECH_COLLECT_COLS = [
+        "event_id", "tenant_id", "session_id", "pool_id", "channel", "menu_id", "interaction",
+        "inputs", "outcome", "via", "release_reason", "speech_inputs", "digit_inputs",
+        "invalid_attempts", "invalid_low_confidence", "digit_after_speech", "min_confidence",
+        "end_silence_ms", "max_speech_ms", "duration_ms", "timestamp", "date",
+    ]
+
+    async def insert_speech_stream_summary(self, row: dict) -> None:
+        ts = row.get("timestamp")
+        vals = [row.get(c) for c in self._SPEECH_STREAM_COLS[:-2]]
+        vad = vals[self._SPEECH_STREAM_COLS.index("seg_vad_filter")]
+        vals[self._SPEECH_STREAM_COLS.index("seg_vad_filter")] = None if vad is None else int(bool(vad))
+        vals += [_parse_dt(ts) or datetime.utcnow(), _today_utc(ts)]
+        await asyncio.to_thread(self._insert, "speech_stream_summaries", [vals], self._SPEECH_STREAM_COLS)
+
+    async def insert_speech_collect_outcome(self, row: dict) -> None:
+        ts = row.get("timestamp")
+        vals = [row.get(c) for c in self._SPEECH_COLLECT_COLS[:-2]]
+        vals[self._SPEECH_COLLECT_COLS.index("digit_after_speech")] = int(bool(row.get("digit_after_speech")))
+        vals += [_parse_dt(ts) or datetime.utcnow(), _today_utc(ts)]
+        await asyncio.to_thread(self._insert, "speech_collect_outcomes", [vals], self._SPEECH_COLLECT_COLS)
 
     async def insert_sentiment_event(self, row: dict) -> None:
         await asyncio.to_thread(
