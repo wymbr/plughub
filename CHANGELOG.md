@@ -1,5 +1,50 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (11) — VOZ-15: o token de mídia do agente exige ATENDER o contato, não só o pool
+
+**O buraco.** `GET /webrtc/token/{sid}?role=agent` exigia Bearer e `agent_assist.atender` recortado
+ao pool da sessão (VOZ-01) — e parava aí. Perguntava *"você pode atender contatos deste pool?"* e
+nunca *"você atende ESTE contato?"*. Medido ao vivo em 2026-09-15, com o agente atribuído e na sala:
+**outro** usuário com o mesmo grant, que não atende nada, recebia **200** — um token de agente para a
+chamada de um cliente real, com áudio e vídeo ao vivo. Exposição: todo portador do grant no pool.
+Dano: pedia o `session_id` em mãos, e é por isso que passou despercebido — o Console só pede token do
+contato que lhe foi atribuído, então nada ficava vermelho.
+
+**O discriminador já existia, e não foi preciso inventar estado.** Os ATENDENTES do plano de mídia
+(`channel:webrtc:{sid}:media`, VOZ-10) são escritos do `routing.assigned` e apagados no
+`participant_left`; a instância humana é `human-{sub}`, o mesmo `sub` que vira a identidade na sala.
+A rota passou a perguntar isso — via `attendant_ids()`, leitura pública nova no adapter — **depois**
+da capacidade, para que recusa não pague Redis e o 403 nomeie o que falta.
+
+**Três decisões que o caso pedia, e as três estão nos testes:**
+- **Supervisor fica FORA da regra.** `contacts.monitorar` assina oculto *sem atender* — é a função.
+  Se a regra o pegasse, a supervisão morreria em silêncio, e o teste é a testemunha disso.
+- **Falha FECHADA, mas na cor certa.** Sem atendente conhecido a resposta é `room_not_ready` (404),
+  que o Console **sabe repetir**, e não 403, que o faria desistir de uma chamada que ia funcionar meio
+  segundo depois — a corrida do `routing.assigned` é normal (o bridge escreve na MESMA ativação).
+- **Atendente que SAIU perde o token** junto com o `participant_left`, sem TTL próprio: o direito
+  acompanha o estado de quem atende, não um relógio paralelo.
+
+**Testes.** channel-gateway 1248 → **1255** (`test_webrtc_token_attendant.py`): quem atende recebe
+(controle positivo, sem o qual uma rota que recusasse tudo pareceria proteção) · mesmo grant sem
+atender → 403 **e o `get_token` nunca é chamado** · sem atendentes → `room_not_ready` · atendente que
+saiu → 403 · supervisor passa e **nem consulta** a lista · capacidade decide antes do atendimento.
+O mock de `attendant_ids` é precedido de `hasattr` no adapter real: mock CRIA o alvo, e sem essa linha
+o teste seguiria verde se alguém renomeasse o método.
+
+**Gates ao vivo, os dois VERDES.** `probe_webrtc_media_plane.sh` ganhou **F11** (grant certo, não
+atende → 403), com F8/F10 intactos — agente que atende recebe 200 e o SFU aceita; supervisor recebe
+200 oculto **sem** atender, que é a testemunha de que a regra recorta por atendimento e não fechou a
+supervisão junto. A fixture teve de mudar junto: o atendente passou a ser `human-{sub}` do próprio
+controle positivo, e não um `h-probe` qualquer — ele bastava enquanto a rota só olhava o pool, que
+era o defeito. `probe_webrtc_agent_console.sh` ganhou **G8** no caminho REAL (humano atribuído, sala
+viva, pedido pelo nginx do platform-ui): **403**, com o agente legítimo em 200 e na sala do SFU.
+A linha INFO que media a dívida a cada rodada deixou de existir — virou veredicto.
+
+**Limite.** O pool conferido continua sendo o de `session:{id}:meta`, que é o de ENTRADA (dívida
+conhecida, fatia C de `session-meta-ownership`): num contato transferido, a capacidade é medida no
+pool de entrada. A regra nova não depende disso — a lista de atendentes é do contato, não do pool.
+
 ## 2026-09-17 (10) — SCH-01: a porta das Agendas passa a pedir credencial
 
 **O que estava aberto.** As **9 rotas** de `/v1/agendas` decidiam com o header `X-Tenant-ID` e nada

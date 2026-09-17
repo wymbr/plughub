@@ -134,12 +134,16 @@ async def main() -> None:
                          f"{'200' if tok else resp.status_code} publish={(tok or {}).get('publish')} "
                          f"(esperado {AGENT_PUBLISH})")
 
-                    # VOZ-15 — dívida registrada, NÃO veredicto: a rota confere a capacidade no
-                    # pool, não que o chamador é quem atende. Medido a cada rodada para a ficha
-                    # não envelhecer; quando fechar, isto vira ramo com 403 esperado.
+                    # VOZ-15 — FECHADA em 2026-09-17, e por isso deixou de ser INFO. Até aqui
+                    # este mesmo pedido devolvia 200: um token de agente, na chamada de um cliente
+                    # de verdade, para quem só tinha o grant no pool. A contraprova fica AQUI (e
+                    # não só no plano de mídia) porque este é o caminho REAL — humano atribuído,
+                    # sala viva, pedido pelo nginx do platform-ui.
                     outro = await h.get(f"{UI}/webrtc/token/{sid}?role=agent",
                                         headers={"Authorization": f"Bearer {atoken('u-outro-' + uuid.uuid4().hex[:6])}"})
-                    print(f"INFO VOZ-15 outro usuario com o mesmo grant, que nao atende: {outro.status_code}", flush=True)
+                    emit("OK" if outro.status_code == 403 else "FALHA", "G8",
+                         f"outro usuario com o mesmo grant, que NAO atende: {outro.status_code} "
+                         f"(esperado 403) {outro.text[:70]}")
 
                     fake = await h.get(f"{UI}/webrtc/token/{uuid.uuid4()}?role=agent",
                                        headers={"Authorization": f"Bearer {atoken(user)}"})

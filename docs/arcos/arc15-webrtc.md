@@ -311,6 +311,16 @@ O Channel Gateway expõe `WS /ws/webrtc/{pool_id}` para o browser do cliente. O 
 
 O platform-ui nunca acessa a LiveKit API diretamente. Tokens são emitidos pelo Channel Gateway:
 
+> **Quem pode pedir (VOZ-01 + VOZ-15).** Bearer obrigatório · capacidade por papel recortada ao pool
+> da sessão (`agent_assist.atender` publica; `contacts.monitorar` assina oculto) · identidade na sala
+> vinda do JWT, nunca da query · e, para `role=agent`, **estar entre os ATENDENTES do contato**
+> (`channel:webrtc:{sid}:media`, onde a instância humana é `human-{sub}`). Capacidade no pool
+> responde *"você pode atender contatos daqui?"*; a chamada de um cliente pede a outra pergunta, e
+> até 2026-09-17 ninguém a fazia — outro portador do mesmo grant recebia 200. Estado de mídia sem
+> atendentes é a corrida normal do `routing.assigned`: responde `room_not_ready` (404), que o Console
+> repete, e não 403, que o faria desistir. **Supervisor é exceção declarada** — assinar sem atender é
+> a função. Ramos ao vivo: `probe_webrtc_media_plane.sh` F11 · `probe_webrtc_agent_console.sh` G8.
+
 ```
 GET /webrtc/token/{session_id}
 Authorization: Bearer <agent_jwt>

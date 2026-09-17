@@ -973,6 +973,47 @@ async def webrtc_token(
             detail=f"token de midia como {role} exige `{module}.{field}` no pool da sessao",
         )
 
+    # ── VOZ-15: capacidade no pool NÃO é "sou eu quem atende este contato" ────
+    #
+    # O portão acima pergunta *"você pode atender contatos deste pool?"* e para aí. Medido em
+    # 2026-09-15 (`probe_webrtc_agent_console.sh`, linha INFO): com o agente atribuído e na sala,
+    # OUTRO usuário com o mesmo grant, que não atende nada, recebia **200** — um token de agente
+    # para a chamada de um cliente alheio, com áudio e vídeo ao vivo. A exposição era todo
+    # portador do grant no pool; o dano pedia o `session_id` em mãos, e é por isso que ficou
+    # tanto tempo invisível.
+    #
+    # O discriminador já existia: os ATENDENTES do estado de mídia (`channel:webrtc:{sid}:media`,
+    # VOZ-10), escritos do `routing.assigned` e apagados no `participant_left`. A instância humana
+    # é `human-{sub}` (mesmo `sub` que vira a identidade na sala), então a pergunta é direta.
+    #
+    # Vale só para `agent`. **Supervisor fica fora por definição**: `contacts.monitorar` assina
+    # oculto justamente sem atender — exigir presença dele na lista de atendentes seria proibir a
+    # supervisão, que é a função.
+    #
+    # Falha FECHADA, como no roster de `@mention`: sem leitura positiva de que sou atendente, não
+    # há token. Estado ausente ou sem atendentes é a corrida normal do `routing.assigned` (o
+    # Console pede o token ao receber a atribuição, e o bridge escreve na MESMA ativação), então
+    # devolve o mesmo `room_not_ready` que o cliente já sabe repetir — nunca um 403 que o faria
+    # desistir de uma chamada que ia funcionar meio segundo depois.
+    if role == "agent":
+        atendentes = await _webrtc_adapter.attendant_ids(session_id)
+        minha = f"human-{_payload.get('sub')}"
+        if not atendentes:
+            logger.info("webrtc token: sessao %s ainda sem atendentes no estado de midia — "
+                        "room_not_ready para %s", session_id, minha)
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "room_not_ready",
+                        "message": "assignment not yet visible in the media state"},
+            )
+        if minha not in atendentes:
+            logger.warning("webrtc token NEGADO: %s nao atende a sessao %s (atendentes: %s)",
+                           minha, session_id, ",".join(sorted(atendentes)) or "-")
+            raise HTTPException(
+                status_code=403,
+                detail="token de midia como agente exige ATENDER este contato, nao so o pool dele",
+            )
+
     result = await _webrtc_adapter.get_token(
         session_id = session_id,
         role       = role,

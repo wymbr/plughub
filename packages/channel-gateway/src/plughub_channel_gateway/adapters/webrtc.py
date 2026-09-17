@@ -1052,6 +1052,16 @@ class WebRTCAdapter(ChannelAdapter):
                 }
         return state
 
+    async def attendant_ids(self, session_id: str) -> set[str]:
+        """Quem ATENDE esta sessão agora, por `instance_id` (VOZ-15).
+
+        Leitura pública do estado de mídia, para quem precisa decidir *"este chamador é um dos
+        atendentes?"* — hoje a rota do token de mídia. Devolve conjunto VAZIO quando não há
+        estado, estado ilegível ou nenhum atendente: quem pergunta trata ausência como "ainda
+        não sei", e a decisão de falhar fechado é de lá, não daqui.
+        """
+        return set((await self._load_media_state(session_id)).get("attendants") or {})
+
     async def _save_media_state(self, session_id: str, state: dict) -> None:
         await self._redis.setex(
             self._media_key(session_id), self._settings.session_ttl_seconds, json.dumps(state),

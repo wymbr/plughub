@@ -22,7 +22,9 @@
 #      repete no código que o gateway emite; a sobreposição mostra conectando/erro antes do teto.
 #   B  AO VIVO — cliente (widget) + agente humano (protocolo do Console no `/agent/ws`) + token
 #      pelo nginx do platform-ui + os dois na MESMA sala do SFU (G1..G5, com o controle G4) +
-#      texto nos dois sentidos (G6 com o controle da nota `agents_only`, G7).
+#      texto nos dois sentidos (G6 com o controle da nota `agents_only`, G7) + G8, a VOZ-15:
+#      outro usuario com o MESMO grant no pool, que nao atende, leva 403. Era uma linha INFO
+#      (200 medido em 2026-09-15) enquanto a ficha esteve aberta; fechou, virou veredicto.
 #
 # FATIA 3 (2026-09-15) — a ficha dizia que o texto do agente não chegava ao cliente, lendo o
 #   `_stream_watcher`. Medido ao vivo: chegava (ele vai por `conversations.outbound`, não pelo

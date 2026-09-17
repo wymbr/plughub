@@ -1367,6 +1367,11 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 - **`GET /webrtc/token/{sid}` exige Bearer + capacidade por papel no pool da sessão**
   (`agent_assist.atender` publica · `contacts.monitorar` assina oculto), e a identidade na sala vem
   do JWT. Emitia sem credencial e com identidade da query — *tokens só do gateway* não diz *para quem*.
+  **E capacidade no pool não é atendimento** (VOZ-15, 2026-09-17): como `agent`, o chamador tem de
+  estar entre os ATENDENTES do contato (`channel:webrtc:{sid}:media`, instância `human-{sub}`) —
+  até aqui outro portador do mesmo grant recebia **200** para a chamada de um cliente alheio.
+  Falha FECHADA; sem atendente conhecido responde `room_not_ready` (404, que o Console repete), nunca
+  403. **Supervisor fica fora da regra**: assinar oculto sem atender é a função dele.
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,

@@ -10,9 +10,12 @@ Ramos:
      (TURN) e publica trilha; o SFU lista esse participante. Duas contraprovas de que o
      SFU VERIFICA: token com segredo errado → recusado; sala não criada → recusada
      (`auto_create: false`).
-  F  ROTA `/webrtc/token/{sid}` ao vivo — 401/401/403/403/404/422 e dois controles
+  F  ROTA `/webrtc/token/{sid}` ao vivo — 401/401/403/403/404/422/403 e dois controles
      POSITIVOS (agente e supervisor) cujo token o SFU ACEITA. Sem o positivo, uma rota
-     que recusasse tudo passaria nos seis negativos.
+     que recusasse tudo passaria nos sete negativos.
+     ⚠️ F11 é a VOZ-15: quem tem o grant no pool e NÃO está entre os atendentes leva 403.
+     O supervisor (F10) segue em 200 sem atender — é a exceção, e ela é a testemunha de que
+     a regra nova recorta por ATENDIMENTO e não fechou a supervisão junto.
 
 MODE=wrong_secret: só o `create_room` com o segredo trocado, que TEM de falhar — é a
 mutação embutida que impede o D de ficar verde por não medir nada.
@@ -148,10 +151,15 @@ async def full() -> None:
         # O agente pede token numa sala onde já foi ATRIBUÍDO: desde a VOZ-10 o teto dele é o
         # `agent_publish` do pool que o pôs lá. Sem atendente registrado o teto é vazio, o SFU
         # recusa a publicação do F8 — e o cliente Python do LiveKit pendura no `disconnect`.
+        #
+        # VOZ-15: o atendente da fixture é o MESMO usuário do controle positivo (`human-{sub}`,
+        # a forma que o `routing.assigned` grava). Antes era um `h-probe` qualquer, e isso bastava
+        # porque a rota só olhava a capacidade no pool — o que era exatamente o defeito.
+        sub = "user-probe-" + uuid.uuid4().hex[:6]
         await r.setex(f"channel:webrtc:{sid}:media", 300, json.dumps({
-            "attendants": {"h-probe": {"framework": "human", "pool_id": pool,
-                                       "customer_publish": ["audio"], "agent_publish": ["audio"],
-                                       "policy_source": f"pool:{pool}"}},
+            "attendants": {f"human-{sub}": {"framework": "human", "pool_id": pool,
+                                            "customer_publish": ["audio"], "agent_publish": ["audio"],
+                                            "policy_source": f"pool:{pool}"}},
             "customer": {"publish": ["audio"]},
         }))
 
@@ -177,13 +185,15 @@ async def full() -> None:
                 ("F5", "supervisor so com atender",      await get("supervisor", mint("u1", atender)),                     403),
                 ("F6", "tenant de outro",                await get("agent", mint("u1", atender, ten="tenant_outro")),      404),
                 ("F7", "role fora da tabela",            await get("root", mint("u1", atender)),                           422),
+                # VOZ-15 — era 200 até 2026-09-17: capacidade no pool não é "sou eu quem atende".
+                # Mesmo grant, mesmo pool, mesma sessão; o que muda é não estar entre os atendentes.
+                ("F11", "grant certo, mas NAO atende",   await get("agent", mint("u-nao-atende", atender)),                403),
             ]
             for rid, nome, resp, esperado in casos:
                 emit("OK" if resp.status_code == esperado else "FALHA", rid,
                      f"{nome}: http={resp.status_code} esperado={esperado}")
 
             # Controles POSITIVOS — e o token precisa entrar na sala de verdade.
-            sub = "user-probe-" + uuid.uuid4().hex[:6]
             resp = await get("agent", mint(sub, atender), extra="&identity=forjado")
             if resp.status_code != 200:
                 emit("FALHA", "F8", f"agente com atender no pool: http={resp.status_code} {resp.text[:80]}")
