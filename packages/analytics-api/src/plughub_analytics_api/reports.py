@@ -73,6 +73,9 @@ from .reports_query import (
     query_agent_events_series,
     query_agent_events_summary,
     query_speech_quality,
+    SPEECH_CHECK_NO_PROFILE_KEY,
+    build_speech_check_comparison,
+    fetch_speech_checks,
     query_agent_events_categories,
     query_agent_events_tree,
     query_agent_events_epochs,
@@ -1906,6 +1909,74 @@ async def get_speech_quality(
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, format, f"speech_quality_{_today_label()}.csv")
+
+
+# ─── GET /reports/speech/checks[/compare] (VOZ-23) ───────────────────────────
+
+async def _speech_check_baseline(tenant_id: str, key: str) -> "tuple[dict | None, str | None]":
+    """A linha de base marcada por PESSOA no config-api (`speech_check_baselines.<perfil>`).
+
+    ⚠️ Não usa `config_client`: ele devolve `{}` quando o config-api cai, e "não há linha de base" e
+    "não consegui ler" teriam a mesma cara — a primeira é um estado, a segunda uma falha. Sem cache,
+    também: marcar a base e não vê-la por 60 s parece que não gravou."""
+    import httpx
+    url = get_settings().config_api_url
+    if not url:
+        return None, "config-api nao configurado na analytics-api"
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{url.rstrip('/')}/config/speech_check_baselines", params={"tenant_id": tenant_id})
+            r.raise_for_status()
+            entries = r.json().get("entries") or {}
+    except Exception as exc:  # noqa: BLE001 — vira status `baseline_unavailable`, dito na resposta
+        logger.warning("speech_check baseline ilegivel tenant=%s: %s", tenant_id, exc)
+        return None, f"config-api: {exc}"
+    return entries.get(key), None
+
+
+@router.get("/speech/checks")
+async def get_speech_checks(
+    request:           Request,
+    tenant_id:         str           = Query(..., description="Tenant identifier"),
+    speech_profile_id: Optional[str] = Query(None, description="Perfil; vazio = verificacoes SEM perfil; ausente = todas"),
+    limit:             int           = Query(50, ge=1, le=500),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """Verificações ativas do caminho de fala (camada B da recalibragem), mais recentes primeiro."""
+    if pool_principal.accessible_pools is not None and not pool_principal.accessible_pools:
+        return JSONResponse({"data": [], "meta": {"limit": limit}})
+    try:
+        data = fetch_speech_checks(request.app.state.store.new_client(), request.app.state.store._database,
+                                   tenant_id, speech_profile_id, accessible_pools=pool_principal.accessible_pools,
+                                   limit=limit)
+    except Exception as exc:  # noqa: BLE001 — dito, nunca lista vazia plausível
+        logger.warning("speech checks failed tenant=%s: %s", tenant_id, exc)
+        return JSONResponse({"data": [], "meta": {"limit": limit}, "error": "data_unavailable"})
+    return JSONResponse({"data": data, "meta": {"limit": limit}})
+
+
+@router.get("/speech/checks/compare")
+async def get_speech_checks_compare(
+    request:           Request,
+    tenant_id:         str = Query(..., description="Tenant identifier"),
+    speech_profile_id: str = Query("", description="Perfil; vazio = verificacoes sem perfil (config do tenant)"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """A verificação mais recente do perfil contra a linha de base que uma pessoa marcou. Mede a diferença
+    — não aplica nem propõe nada. Sem base, base inválida ou base ilegível: `status` diz qual."""
+    if pool_principal.accessible_pools is not None and not pool_principal.accessible_pools:
+        return JSONResponse({"status": "out_of_scope", "baseline": None, "latest": None, "comparison": None})
+    chave = speech_profile_id or SPEECH_CHECK_NO_PROFILE_KEY
+    base_ref, base_erro = await _speech_check_baseline(tenant_id, chave)
+    try:
+        checks = fetch_speech_checks(request.app.state.store.new_client(), request.app.state.store._database,
+                                     tenant_id, speech_profile_id, accessible_pools=pool_principal.accessible_pools,
+                                     limit=500)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("speech checks compare failed tenant=%s: %s", tenant_id, exc)
+        return JSONResponse({"status": "data_unavailable", "baseline": None, "latest": None, "comparison": None})
+    out = build_speech_check_comparison(base_ref, base_erro, checks)
+    return JSONResponse({**out, "speech_profile_id": speech_profile_id or None, "baseline_key": chave})
 
 
 # ─── GET /reports/agent-events/epochs ────────────────────────────────────────

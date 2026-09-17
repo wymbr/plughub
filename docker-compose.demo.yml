@@ -654,6 +654,10 @@ services:
       EVALUATION_API_URL: http://evaluation-api:3400   # G-PROBE fase 2 — base p/ pre-review
       PLUGHUB_EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo   # G-PROBE fase 2 — credencial de serviço
       AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo   # G-PROBE — skill_deploy (deploy.ts)
+      # VOZ-23 — a tool `speech_check_run` pede a verificação ativa da fala ao processo
+      # `speech-check`. Sem o token a tool RECUSA (`not_configured`) em vez de chamar sem credencial.
+      SPEECH_CHECK_URL:                 http://speech-check:3870
+      SPEECH_CHECK_SERVICE_TOKEN:       changeme_speech_check_service_token_demo
       # F5 — credencial do `POST /internal/context-snapshot`, que devolve o ctx
       # MASCARADO de uma sessão ao ContextStorePersister. Ausente ⇒ o endpoint
       # RECUSA (503) e loga; nunca fica aberto por env não setado. DEVE casar com o
@@ -1602,6 +1606,49 @@ services:
     networks:
       - plughub-demo
     restart: on-failure   # sem política, perder a corrida de arranque some sem erro
+
+  # VOZ-23 — verificação ativa do caminho de fala (camada B da recalibragem de STT).
+  #
+  # Usa a IMAGEM do channel-gateway (SDK LiveKit, protocolo do widget, cliente do speaches já
+  # instalados) com outro comando: o executor é um CLIENTE do gateway, não parte dele — uma
+  # verificação longa não pode ocupar o processo que atende chamada de verdade.
+  #
+  # Porta interna; nada aqui vai à borda. Sem `PLUGHUB_SPEECH_CHECK_SERVICE_TOKEN` o serviço
+  # RECUSA todo pedido (503) — token vazio nunca libera.
+  speech-check:
+    build:
+      context: .
+      dockerfile: packages/channel-gateway/Dockerfile
+    command: ["python", "-m", "plughub_channel_gateway.speech_check.server"]
+    environment:
+      PLUGHUB_TENANT_ID:                  tenant_demo
+      PLUGHUB_KAFKA_BROKERS:              kafka:29092
+      PLUGHUB_JWT_SECRET:                 changeme_32chars_webchat_secret!   # == channel-gateway (cliente sintético)
+      PLUGHUB_CONFIG_API_URL:             http://config-api:3600
+      PLUGHUB_AGENT_REGISTRY_URL:         http://agent-registry:3300
+      PLUGHUB_AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo
+      PLUGHUB_SPEECH_CHECK_SERVICE_TOKEN: changeme_speech_check_service_token_demo   # == mcp-server
+      PLUGHUB_SPEECH_CHECK_POOL_ID:       speech_check
+      PLUGHUB_SPEECH_CHECK_GATEWAY_WS_URL: ws://channel-gateway:8010
+      PLUGHUB_WEBRTC_LIVEKIT_URL:         ws://livekit:7880
+      PLUGHUB_WEBRTC_SPEACHES_URL:        http://speaches:8000
+      PLUGHUB_WEBRTC_TTS_MODEL:           speaches-ai/Kokoro-82M-v1.0-ONNX
+      PLUGHUB_WEBRTC_TTS_VOICE:           pf_dora
+      PLUGHUB_VOICE_STT_LANGUAGE:         pt-BR
+    depends_on:
+      kafka:
+        condition: service_healthy
+      channel-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3870/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - plughub-demo
+    restart: on-failure
 
   calendar-api:
     build:

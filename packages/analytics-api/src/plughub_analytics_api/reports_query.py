@@ -12,6 +12,8 @@ SQL injection; only strings read from user input are parameterised.
 """
 from __future__ import annotations
 
+import json
+
 import asyncio
 import csv
 import io
@@ -8238,3 +8240,121 @@ def _fetch_speech_quality(
                 linha[k] = None
         saida.append(linha)
     return sorted(saida, key=lambda r: -r["calls"])
+
+
+# ─── Verificação ativa do caminho de fala (VOZ-23) ─────────────────────────────
+
+SPEECH_CHECK_NO_PROFILE_KEY = "_tenant"
+_CHECK_NUM = ("phrases_total", "phrases_correct", "phrases_transcribed", "accuracy", "wer_mean",
+              "confidence_p10", "confidence_p50", "confidence_p90", "noise_total", "hallucinations")
+
+
+def _check_row(r: dict) -> dict:
+    """Linha do ClickHouse → forma da API: JSON desfeito, NaN/None preservado, booleano de volta."""
+    out = dict(r)
+    for k in ("items", "segmentation"):
+        try:
+            out[k] = json.loads(r[k]) if r.get(k) else None
+        except (ValueError, TypeError):
+            out[k] = None
+    if out.get("bot_voice_heard") is not None:
+        out["bot_voice_heard"] = bool(out["bot_voice_heard"])
+    for k, v in list(out.items()):
+        if isinstance(v, float) and v != v:
+            out[k] = None
+        elif isinstance(v, datetime):
+            out[k] = v.isoformat()
+    return out
+
+
+def fetch_speech_checks(client: Any, db: str, tenant_id: str, speech_profile_id: str | None,
+                        accessible_pools: "list[str] | None", limit: int = 50, check_id: str | None = None) -> list[dict]:
+    conditions = ["tenant_id = {tenant_id:String}"]
+    params: dict = {"tenant_id": tenant_id, "limit": int(limit)}
+    if speech_profile_id is not None:
+        if speech_profile_id == "":
+            conditions.append("speech_profile_id IS NULL")
+        else:
+            conditions.append("speech_profile_id = {profile:String}")
+            params["profile"] = speech_profile_id
+    if check_id:
+        conditions.append("check_id = {check_id:String}")
+        params["check_id"] = check_id
+    _apply_pool_scope(conditions, accessible_pools)
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT *
+        FROM {db}.speech_checks FINAL
+        WHERE {" AND ".join(conditions)}
+        ORDER BY started_at DESC
+        LIMIT {{limit:UInt32}}
+    """, parameters=params))
+    return [_check_row(r) for r in rows]
+
+
+def compare_speech_checks(baseline: dict, latest: dict) -> dict:
+    """A verificação mais recente contra a linha de base. MEDE a diferença — não declara regressão por
+    limiar: item certo na base e errado agora é `items_regressed`, e o número decide quem lê."""
+    def delta(k):
+        a, b = baseline.get(k), latest.get(k)
+        return None if a is None or b is None else round(b - a, 4)
+
+    base_itens = {i["id"]: i for i in (baseline.get("items") or [])}
+    regrediu, melhorou = [], []
+    for i in latest.get("items") or []:
+        b = base_itens.get(i["id"])
+        if b is None:
+            continue
+        if i["kind"] == "phrase":
+            if b.get("correct") and not i.get("correct"):
+                regrediu.append(i["id"])
+            elif not b.get("correct") and i.get("correct"):
+                melhorou.append(i["id"])
+        else:
+            if not b.get("hallucinated") and i.get("hallucinated"):
+                regrediu.append(i["id"])
+            elif b.get("hallucinated") and not i.get("hallucinated"):
+                melhorou.append(i["id"])
+    mudancas = {}
+    if baseline.get("stt_model") != latest.get("stt_model"):
+        mudancas["stt_model"] = {"baseline": baseline.get("stt_model"), "latest": latest.get("stt_model")}
+    bs, ls = baseline.get("segmentation") or {}, latest.get("segmentation") or {}
+    for k in sorted(set(bs) | set(ls)):
+        if bs.get(k) != ls.get(k):
+            mudancas[f"segmentation.{k}"] = {"baseline": bs.get(k), "latest": ls.get(k)}
+    return {
+        "accuracy_delta":        delta("accuracy"),
+        "wer_mean_delta":        delta("wer_mean"),
+        "confidence_p50_delta":  delta("confidence_p50"),
+        "hallucinations_delta":  latest["hallucinations"] - baseline["hallucinations"],
+        "items_regressed":       regrediu,
+        "items_improved":        melhorou,
+        "config_changes":        mudancas,
+    }
+
+
+def build_speech_check_comparison(baseline_ref: "dict | None", baseline_error: "str | None",
+                                  checks: list[dict]) -> dict:
+    """`checks` = verificações do perfil, mais recente primeiro. Cada desfecho tem o seu `status` — a
+    ausência de comparação é DITA, nunca um delta zero."""
+    completas = [c for c in checks if c.get("status") == "completed"]
+    latest = completas[0] if completas else None
+    out: dict = {"baseline_ref": baseline_ref, "baseline": None, "latest": latest, "comparison": None}
+    if baseline_error:
+        return {**out, "status": "baseline_unavailable", "detail": baseline_error}
+    if not baseline_ref:
+        return {**out, "status": "no_baseline"}
+    cid = baseline_ref.get("check_id") if isinstance(baseline_ref, dict) else None
+    base = next((c for c in checks if c.get("check_id") == cid), None)
+    if base is None:
+        return {**out, "status": "baseline_invalid", "detail": f"a linha de base aponta a verificacao {cid!r}, que nao existe neste perfil"}
+    out["baseline"] = base
+    if base.get("status") != "completed":
+        return {**out, "status": "baseline_invalid", "detail": f"a verificacao {cid} da linha de base terminou {base.get('status')}"}
+    if latest is None:
+        return {**out, "status": "no_completed_check"}
+    if latest["check_id"] == base["check_id"]:
+        return {**out, "status": "latest_is_baseline"}
+    if latest.get("reference_version") != base.get("reference_version"):
+        return {**out, "status": "reference_changed",
+                "detail": f"frases de referencia {base.get('reference_version')} x {latest.get('reference_version')} — nao comparaveis"}
+    return {**out, "status": "compared", "comparison": compare_speech_checks(base, latest)}

@@ -32,6 +32,7 @@ import type { WorkTaskState } from "./lib/work-queue"
 import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
 import { registerDeployTools }      from "./tools/deploy"
+import { registerSpeechCheckTools } from "./tools/speech-check"
 import type { DeployDeps }          from "./tools/deploy"
 import { registerOutboundTools }    from "./tools/outbound"
 import type { OutboundDeps }        from "./tools/outbound"
@@ -204,6 +205,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerWorkQueueTools(server, workQueueDeps)
   registerDelegationTools(server, delegationDeps)
   registerDeployTools(server, deployDeps)
+  // VOZ-23: verificacao ativa do caminho de fala (processo `speech-check`)
+  registerSpeechCheckTools(server, {
+    speechCheckUrl: process.env["SPEECH_CHECK_URL"]  ?? "http://localhost:3870",
+    tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  })
   registerOutboundTools(server, outboundDeps)
   registerCalendarTools(server, calendarDeps)
   registerAgentEventTools(server, agentEventDeps)
@@ -1425,6 +1431,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerDeployTools(mcpServer, {
       agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
       tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
+    registerSpeechCheckTools(mcpServer, {
+      speechCheckUrl: process.env["SPEECH_CHECK_URL"]  ?? "http://speech-check:3870",
+      tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerOutboundTools(mcpServer, {
       mailingApiUrl: process.env["MAILING_API_URL"]  ?? "http://mailing-api:3660",
@@ -4836,6 +4846,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
       console.log(`   Tools ExternalAgent: invoke, wait_for_assignment, send_message, wait_for_message`)
       console.log(`   Tools Delegation:    agent_delegate, agent_delegate_status`)
       console.log(`   Tools Deploy:        pool_promote`)
+      console.log(`   Tools Speech check:  speech_check_run`)
       console.log(`   Tools Calendar:      calendar_is_open, calendar_next_slot, calendar_add_duration, calendar_business_duration`)
       console.log(`   Tools AgentEvents:   agent_event`)
       console.log(`   SKILL_FLOW_URL:      ${process.env["SKILL_FLOW_URL"] ?? "http://localhost:3400 (padrão — configure SKILL_FLOW_URL para Docker)"}`)

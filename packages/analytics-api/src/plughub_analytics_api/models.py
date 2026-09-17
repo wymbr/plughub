@@ -730,7 +730,8 @@ def parse_speech_metrics_event(payload: dict[str, Any]) -> dict | None:
     Só números atravessam: o parser copia CAMPOS NOMEADOS, e um campo de texto que o produtor
     passasse a mandar não chegaria à tabela (o schema Zod `.strict()` já o recusa na origem)."""
     event_id, tenant_id, session_id = payload.get("event_id"), payload.get("tenant_id"), payload.get("session_id")
-    if not event_id or not tenant_id or not session_id:
+    # o resultado de verificação (VOZ-23) pode não ter sessão: falhou antes de abrir a chamada
+    if not event_id or not tenant_id or (not session_id and payload.get("event_type") != "speech_check_result"):
         return None
     base = {
         "event_id": event_id, "tenant_id": tenant_id, "session_id": session_id,
@@ -756,6 +757,29 @@ def parse_speech_metrics_event(payload: dict[str, Any]) -> dict | None:
         for k in _SPEECH_SEG:
             row[f"seg_{k}"] = seg.get(k)
         return row
+    if tipo == "speech_check_result":
+        # VOZ-23: por item só números/booleanos atravessam — os campos do item são copiados NOMEADOS
+        itens = [{k: i.get(k) for k in ("id", "kind", "transcripts", "confidence", "correct", "wer", "hallucinated")}
+                 for i in (payload.get("items") or []) if isinstance(i, dict)]
+        seg = payload.get("segmentation")
+        row = {"table": "speech_checks", **base, "session_id": session_id or None,
+               "check_id": payload.get("check_id"), "requested_by": payload.get("requested_by") or "",
+               "reference_version": payload.get("reference_version") or "",
+               "language": payload.get("language") or None, "status": payload.get("status") or "",
+               "failure_reason": payload.get("failure_reason") or None,
+               "started_at": payload.get("started_at") or base["timestamp"],
+               "bot_voice_heard": payload.get("bot_voice_heard"),
+               "profile_in_effect": payload.get("profile_in_effect") or None,
+               "stt_model": payload.get("stt_model") or None,
+               "discarded_vad": payload.get("discarded_vad"), "utterances_sent": payload.get("utterances_sent"),
+               "segmentation": json.dumps({k: seg.get(k) for k in _SPEECH_SEG}, sort_keys=True) if isinstance(seg, dict) else "",
+               "items": json.dumps(itens, sort_keys=True)}
+        for k in ("phrases_total", "phrases_correct", "phrases_transcribed", "noise_total", "hallucinations"):
+            row[k] = int(payload.get(k) or 0)
+        for k in ("accuracy", "wer_mean", "confidence_p10", "confidence_p50", "confidence_p90"):
+            v = payload.get(k)
+            row[k] = None if v is None else float(v)
+        return row if row["check_id"] else None
     if tipo == "collect_outcome":
         row = {"table": "speech_collect_outcomes", **base,
                "menu_id": payload.get("menu_id") or "", "interaction": payload.get("interaction") or "",

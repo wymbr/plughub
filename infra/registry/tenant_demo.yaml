@@ -108,6 +108,12 @@ channel_endpoints:
     origin: internal
 
   - channel: webhook
+    identifier: skill_speech_check_trigger_v1
+    pool_id: speech_check_trigger
+    display_name: "Verificacao de fala — disparo (interno)"
+    origin: internal
+
+  - channel: webhook
     identifier: skill_outbound_dispatch_v1
     pool_id: outbound_dispatch
     display_name: "Outbound dispatcher (interno)"
@@ -321,6 +327,37 @@ pools:
     skill_id: skill_deploy_promote_v1
     webhook_skill_id: skill_deploy_promote_v1
     sla_target_ms: 86400000
+
+  # VOZ-23 — camada B da recalibragem de STT. DOIS pools:
+  #
+  # `speech_check` é o pool de CALIBRAÇÃO: o destino do endpoint WebRTC TEMPORÁRIO que o executor
+  # cria por verificação. Não atende cliente nenhum; existe para que a chamada sintética tenha um
+  # agente de IA com mídia, que é o que liga o bot leg (ouvinte + voz) e faz o STT rodar pelo
+  # caminho real. `media_policy` só de áudio — vídeo não muda o que se mede e custa banda.
+  #
+  # `speech_check_trigger` é a porta de DISPARO (webhook): POST /v1/channels/webhook/pool/
+  # speech_check_trigger com { speech_profile_id?, requested_by } → tool `speech_check_run`.
+  - pool_id: speech_check
+    agent_kind: ai
+    # DUAS sessões, não uma: o fluxo ouvinte só solta a instância ao terminar, e uma verificação
+    # logo depois da outra caía em `call_not_answered` esperando a anterior soltar (medido 2026-09-17).
+    deploy: { skill_id: skill_speech_check_listen_v1, max_concurrent_sessions: 2 }
+    description: "Pool de calibracao — ouvinte da chamada sintetica da verificacao de fala (VOZ-23)"
+    channel_types: [webrtc]
+    skill_id: skill_speech_check_listen_v1
+    sla_target_ms: 60000
+    media_policy:
+      customer_publish: [audio]
+      agent_publish: [audio]
+
+  - pool_id: speech_check_trigger
+    agent_kind: ai
+    deploy: { skill_id: skill_speech_check_trigger_v1, max_concurrent_sessions: 1 }
+    description: "Pool webhook — pede uma verificacao ativa do caminho de fala (VOZ-23)"
+    channel_types: [webhook]
+    skill_id: skill_speech_check_trigger_v1
+    webhook_skill_id: skill_speech_check_trigger_v1
+    sla_target_ms: 3600000
 
   # Pool webhook do DEMO de outbound (Fase 1 do módulo Outbound). Disparado por uma
   # Agenda (POST /v1/channels/webhook/pool/outbound_demo) com payload { campaign_id };

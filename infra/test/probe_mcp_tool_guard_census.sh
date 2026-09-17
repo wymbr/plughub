@@ -176,6 +176,7 @@ session_channel_change|token|ok|verifica session_token assinado
 session_context_get|token|ok|verifica session_token assinado
 session_escalate|token|ok|verifica session_token assinado
 session_invite|token|ok|verifica session_token assinado
+speech_check_run|nenhuma|divida|DISPARA chamada sintetica e cria endpoint temporario (VOZ-23); o servico exige x-service-token, que o mcp-server porta — quem alcanca a porta do mcp-server dispara. Mesma divida da CAP-10 (pool_promote, campaign_drain)
 supervisor_capabilities|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 supervisor_state|nenhuma|divida|estado da sessao viva — divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 survey_link_create|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)

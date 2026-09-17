@@ -2456,5 +2456,32 @@ Sites: `orchestrator-bridge/main.py` (`_publish_segment_release` + chamada no ra
 
 ---
 
+### Mudança 43 — quem espera num `receive` também é desbloqueado quando o cliente desliga (VOZ-23, 2026-09-17)
+
+**O defeito, medido.** No fechamento do contato (`customer_side=True`), o bridge empurra
+`session:closed:{sid}` uma vez **por agente esperando** — e contava só o HASH `menu:waiting:{sid}`.
+Quem espera num step **`receive`** se registra noutro HASH (`receive:waiting:{sid}`), e ninguém o
+contava: o cliente desligava, o contato fechava, e o agente seguia no BLPOP até o `timeout_s` do step
+(300 s no fluxo medido), **com a instância presa**. A chamada seguinte ao mesmo pool não era atendida.
+
+**Como apareceu.** No pool de calibração da verificação ativa de fala (`VOZ-23`): capacidade pequena e
+chamadas em sequência. A segunda verificação falhou com `call_not_answered` enquanto o log do bridge
+dizia, do fechamento anterior, `restored=0 skipped_completing=1`. Não é defeito da verificação — vale
+para **qualquer** fluxo com `receive` (o `agente_evaluador_echo_v1` é o outro que usa o step).
+
+**O modo de falha é mudo:** nada fica vermelho. A instância só parece ocupada, e a fila do pool espera
+em silêncio (`Sem agente de fila para pool=…`).
+
+**Correção.** `receive_waiters(redis, session_id)` (helper próprio, `main.py`) conta o
+`receive:waiting:{sid}` e soma ao `n_waiting` que decide quantos `session:closed` empurrar. Falha de
+leitura devolve **0 e diz** — contar a MAIS empurraria um sinal que outro agente consumiria por
+engano; contar a menos mantém o comportamento antigo, que é o conhecido.
+
+Sites: `orchestrator-bridge/main.py` (`receive_waiters` + a soma no fechamento);
+`tests/test_receive_waiters.py` (3 testes: conta, zero, e a falha de leitura dita). Testemunha ao
+vivo: `infra/test/probe_speech_check.sh` ramo **C1** — três verificações em sequência no mesmo pool.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

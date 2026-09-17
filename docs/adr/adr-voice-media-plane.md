@@ -328,6 +328,11 @@ vão de 0,35 a 0,92).
 - Três camadas, em ordem de custo: **A** telemetria passiva só de números (`VOZ-22`), **B** verificação
   ativa a pedido contra a linha de base (`VOZ-23`), **C** amostra rotulada por pessoa (`VOZ-24`, a única
   que retém áudio, logo finalidade nova de tratamento).
+- **A camada B mede pelo CAMINHO REAL, não por atalho** *(2026-09-17)*: executor em processo próprio,
+  endpoint WebRTC temporário para o pool de calibração com o perfil, e a medição lida na SAÍDA do
+  gateway (transcrições publicadas e o resumo que diz o perfil aplicado). Linha de base é execução
+  marcada por PESSOA; a comparação mede a diferença e nomeia os itens que regrediram — não declara
+  regressão por limiar, nem altera config.
 - **Nada se aplica sozinho**: a recalibragem propõe, uma pessoa aprova, a gravação é auditada e
   reversível. Amostra pequena diz *insuficiente*, nunca sugere número.
 

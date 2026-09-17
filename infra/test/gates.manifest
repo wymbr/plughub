@@ -392,6 +392,12 @@ probe_webrtc_channel_endpoint.sh
 # comportamento (m4 junta); F3 a telemetria grava o perfil; C1-C3 controle pelo pool direto (tenant,
 # separa, NULL); M1 o modelo do perfil chega ao speaches. Perfil e endpoint criados e apagados.
 probe_webrtc_speech_profile.sh
+# VOZ-23 (2026-09-17): a verificacao ativa do caminho de fala roda pelo caminho real e acusa regressao.
+# K0 fixtures e tenant limpo; A1 rota sem credencial 401 e perfil inexistente 422; D1 disparo pelo pool
+# webhook (tool MCP) termina completed; R1/R2 linha no ClickHouse com perfil aplicado e nenhum endpoint
+# temporario orfao; B1/B2 sem base diz no_baseline, marcada diz latest_is_baseline; M1 modelo inexistente
+# no perfil vira items_regressed; C1 controle com o perfil restaurado nao regride. ~4 chamadas sinteticas.
+probe_speech_check.sh
 # VOZ-04 (Console). Contato WebRTC atribuido a humano: o conversation.assigned ia sem canal (o
 # Console o criava como webchat e a sobreposicao nunca montava), o caminho real de ativacao
 # humana nao escrevia routing.assigned (a sala nunca nascia), o hook pedia o token ao

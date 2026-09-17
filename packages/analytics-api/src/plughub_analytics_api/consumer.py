@@ -1028,6 +1028,8 @@ async def _write_row(
             await store.insert_speech_stream_summary(row)
         elif table == "speech_collect_outcomes":
             await store.insert_speech_collect_outcome(row)
+        elif table == "speech_checks":
+            await store.insert_speech_check(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

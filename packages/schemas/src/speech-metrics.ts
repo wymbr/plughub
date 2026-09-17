@@ -104,8 +104,64 @@ export const CollectOutcomeEventSchema = z.object({
 }).strict()
 export type CollectOutcomeEvent = z.infer<typeof CollectOutcomeEventSchema>
 
+/**
+ * VOZ-23 — resultado de UMA verificação ativa do caminho de fala (camada B da recalibragem): uma chamada
+ * com voz SINTETIZADA pelo endpoint temporário do perfil. Por item, só números e booleanos — o texto
+ * transcrito não sai (as frases são fixas e conhecidas por `reference_version`). `profile_in_effect` e
+ * `stt_model` vêm do resumo que o GATEWAY publicou para a sessão, não do pedido.
+ *
+ * `session_id` é nulo quando a verificação falhou antes de abrir a chamada. Falha é `status: failed` com
+ * `failure_reason` nomeado e agregados nulos — nunca `completed` com zeros.
+ */
+export const SpeechCheckItemSchema = z.object({
+  id:           z.string().min(1),
+  kind:         z.enum(["phrase", "noise"]),
+  transcripts:  z.number().int().nonnegative(),
+  confidence:   z.number().nullable(),
+  correct:      z.boolean().nullable(),
+  wer:          z.number().nonnegative().nullable(),
+  hallucinated: z.boolean().nullable(),
+}).strict()
+
+export const SPEECH_CHECK_FAILURE_REASONS = [
+  "profile_not_found", "unsupported_language", "config_unavailable", "endpoint_create_failed",
+  "tts_unavailable", "listener_unavailable", "call_not_answered", "call_failed", "summary_missing",
+] as const
+
+export const SpeechCheckResultEventSchema = z.object({
+  ...Common,
+  session_id:          z.string().min(1).nullable(),
+  event_type:          z.literal("speech_check_result"),
+  check_id:            z.string().uuid(),
+  requested_by:        z.string().min(1),
+  reference_version:   z.string().min(1),
+  language:            z.string().nullable(),
+  status:              z.enum(["completed", "failed"]),
+  failure_reason:      z.enum(SPEECH_CHECK_FAILURE_REASONS).nullable(),
+  started_at:          z.string().datetime({ offset: true }),
+  bot_voice_heard:     z.boolean().nullable(),
+  profile_in_effect:   z.string().nullable(),
+  stt_model:           z.string().nullable(),
+  discarded_vad:       z.number().int().nonnegative().nullable(),
+  utterances_sent:     z.number().int().nonnegative().nullable(),
+  segmentation:        SpeechSegmentationSnapshotSchema.nullable(),
+  phrases_total:       z.number().int().nonnegative(),
+  phrases_correct:     z.number().int().nonnegative(),
+  phrases_transcribed: z.number().int().nonnegative(),
+  accuracy:            pct,
+  wer_mean:            pct,
+  confidence_p10:      pct,
+  confidence_p50:      pct,
+  confidence_p90:      pct,
+  noise_total:         z.number().int().nonnegative(),
+  hallucinations:      z.number().int().nonnegative(),
+  items:               z.array(SpeechCheckItemSchema),
+}).strict()
+export type SpeechCheckResultEvent = z.infer<typeof SpeechCheckResultEventSchema>
+
 export const SpeechMetricsEventSchema = z.discriminatedUnion("event_type", [
   SttStreamSummaryEventSchema,
   CollectOutcomeEventSchema,
+  SpeechCheckResultEventSchema,
 ])
 export type SpeechMetricsEvent = z.infer<typeof SpeechMetricsEventSchema>

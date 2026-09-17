@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (8) — VOZ-23: a verificação ativa do caminho de fala, a pedido, comparada à linha de base
+
+**A pergunta que ela responde.** *O caminho de fala desta instalação regrediu?* — modelo, versão do SFU,
+codec, reamostragem, perfil. A cadeia move os números sem nada ficar vermelho ("Fatura." 0,59 limpa →
+"Batura!" 0,45 pela chamada, VOZ-18), e a telemetria passiva (`VOZ-22`) não separa "o caminho piorou" de
+"os clientes de hoje falam diferente". Camada B da recalibragem (ADR V13). **Não** propõe limite de
+cliente: voz sintetizada não os decide.
+
+**Decisões do dono (2026-09-17).** Executor em **processo próprio** (`speech-check`, a imagem do gateway
+com outro comando — é um CLIENTE do gateway, e uma verificação longa não ocupa quem atende chamada de
+verdade) · a chamada entra por um **endpoint temporário** apontando o pool de calibração com o perfil,
+exercendo a resolução REAL, sem caminho especial · **linha de base marcada por PESSOA** · esta entrega é
+backend + disparo manual; Agenda periódica e tela ficaram para a `VOZ-27`.
+
+**Como mede.** Frases de referência fixas e versionadas (`speech_check/reference.py`,
+`REFERENCE_VERSION`), sintetizadas pelo speaches e faladas por um participante LiveKit; a leitura é na
+SAÍDA do caminho real — as transcrições que o gateway publica em `conversations.inbound` e o resumo em
+`speech.metrics`, que diz qual perfil e modelo o gateway **aplicou** (o pedido não prova a aplicação).
+Por item: certo/errado por WER sobre texto normalizado, confiança, e alucinação nos trechos de ruído.
+Falha vira `status: failed` com `failure_reason` nomeado (nove) e agregados **nulos** — nunca
+`completed` com zeros; o endpoint temporário é apagado SEMPRE.
+
+**O que entrou.** Contrato `speech_check_result` em `@plughub/schemas` (só números; `session_id` nulo
+quando não houve chamada) · tabela ClickHouse `speech_checks` · `GET /reports/speech/checks` e
+`/reports/speech/checks/compare`, que mede deltas e nomeia `items_regressed`/`items_improved` e as
+mudanças de config — **cada ausência de comparação tem status próprio** (`no_baseline`,
+`baseline_invalid`, `reference_changed`, `baseline_unavailable`), nunca um delta zero · tool MCP
+`speech_check_run` + pool webhook `speech_check_trigger` (disparo manual) + pool de calibração
+`speech_check` com o skill ouvinte · namespace `speech_check_baselines` no config-api.
+
+**Dois achados no caminho, os dois de plataforma.**
+- **Quem espera num `receive` não era desbloqueado quando o cliente desligava.** O empurrão de
+  `session:closed` contava só o HASH `menu:waiting`; quem espera num `receive` mora noutro HASH e ficava
+  no BLPOP até o `timeout_s` do step (300 s), **com a instância presa** — a chamada seguinte ao mesmo
+  pool não era atendida, e nada ficava vermelho. Corrigido com `receive_waiters()` no bridge (falha de
+  leitura conta 0 e diz). Vale para qualquer fluxo com `receive`. Registrado em
+  `conference-mechanics.md` § Mudança 43.
+- **O payload do webhook só vira contexto dentro de `context`.** Chave no topo é ignorada em silêncio: o
+  disparo saía SEM perfil e media a config do tenant achando que media o perfil. Está dito no skill.
+
+**Testes.** channel-gateway 1212 → **1237** (`test_speech_check.py`: julgamento por item sem texto,
+percentil sem amostra nulo, ruído determinístico; a orquestração nunca deixa endpoint para trás, nunca
+entrega completed sem o resumo, cada falha nomeada; transcrição vai ao item da sua janela; a rota exige
+credencial e recusa antes de abrir chamada; uma verificação por vez). orchestrator-bridge 190 → **193**
+(contagem do `receive:waiting`, com a falha de leitura dita). analytics-api 781 → **790**. schemas 355 →
+**356**. config-api 61.
+
+**Gate.** `probe_speech_check.sh` (AUTO) — **verde ao vivo, 9 ramos**: K0 serviço ocioso e fixtures ·
+A1 401 sem credencial e 422 para perfil inexistente, antes de abrir chamada · D1 disparo pelo pool
+webhook termina `completed` · R1 7/7 frases certas com o perfil aplicado · R2 quem alcança o pool vê a
+verificação e quem não alcança não vê, sem endpoint órfão · B1 `no_baseline` · B2 `latest_is_baseline` ·
+**M1 perfil com modelo inexistente → 7 itens regredidos, `accuracy_delta=-1.0`** · C1 controle com o
+perfil restaurado não regride. Três vermelhos legítimos no caminho (disparo sem `context`, relatório
+medido com o admin sem pools, e o `receive` segurando a instância) — todos viraram correção.
+
+**Limites.** O censo de guardas do MCP (`probe_mcp_tool_guard_census.sh`) fica INCONCLUSIVO no WSL por
+falta de `node`; conferi à mão que o censo AST enxerga `speech_check_run` e que ele está na tabela
+declarada como `nenhuma|divida`, a mesma classe do `pool_promote`. A tool dispara chamada sintética sem
+credencial própria além do token de serviço do mcp-server. Marcar a linha de base é PUT de config cru
+até a tela da `VOZ-27`. O pool de calibração subiu com capacidade 2 (uma chamada não pode esperar o
+fluxo anterior soltar a instância).
+
+**Deixou ficha:** `VOZ-27` (Agenda periódica e tela da verificação).
+
 ## 2026-09-17 (7) — VOZ-25: a calibragem da fala passa a ser por PERFIL, apontado pelo endpoint da chamada
 
 **O que havia.** A segmentação da fala era por TENANT (`VOZ-21`), e modelo, língua e voz eram por

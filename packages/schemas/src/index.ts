@@ -775,12 +775,16 @@ export {
   SpeechSegmentationScopeSchema,
   SttStreamSummaryEventSchema,
   CollectOutcomeEventSchema,
+  SpeechCheckItemSchema,
+  SPEECH_CHECK_FAILURE_REASONS,
+  SpeechCheckResultEventSchema,
   SpeechMetricsEventSchema,
 } from "./speech-metrics"
 
 export type {
   SttStreamSummaryEvent,
   CollectOutcomeEvent,
+  SpeechCheckResultEvent,
   SpeechMetricsEvent,
 } from "./speech-metrics"
 

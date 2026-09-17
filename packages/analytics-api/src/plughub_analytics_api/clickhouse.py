@@ -1223,6 +1223,49 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, event_id)
 """
 
+# VOZ-23 — uma linha por verificação ativa do caminho de fala. `items` é o JSON por item (só números e
+# booleanos); `segmentation` o JSON da segmentação que o gateway aplicou ('' quando não houve chamada).
+_DDL_SPEECH_CHECKS = """
+CREATE TABLE IF NOT EXISTS {db}.speech_checks
+(
+    event_id               String,
+    check_id               String,
+    tenant_id              String,
+    session_id             Nullable(String),
+    pool_id                String,
+    channel                LowCardinality(String),
+    speech_profile_id      Nullable(String),
+    requested_by           String,
+    reference_version      LowCardinality(String),
+    language               Nullable(String),
+    status                 LowCardinality(String),
+    failure_reason         Nullable(String),
+    started_at             DateTime64(3, 'UTC'),
+    bot_voice_heard        Nullable(UInt8),
+    profile_in_effect      Nullable(String),
+    stt_model              Nullable(String),
+    discarded_vad          Nullable(UInt32),
+    utterances_sent        Nullable(UInt32),
+    segmentation           String,
+    phrases_total          UInt16,
+    phrases_correct        UInt16,
+    phrases_transcribed    UInt16,
+    accuracy               Nullable(Float32),
+    wer_mean               Nullable(Float32),
+    confidence_p10         Nullable(Float32),
+    confidence_p50         Nullable(Float32),
+    confidence_p90         Nullable(Float32),
+    noise_total            UInt16,
+    hallucinations         UInt16,
+    items                  String,
+    timestamp              DateTime64(3, 'UTC'),
+    date                   Date
+)
+ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, check_id)
+"""
+
 # VOZ-25 — o perfil de fala em vigor (e o modelo usado) nas tabelas que a VOZ-22 criou sem eles.
 _DDL_SPEECH_STREAM_MIGRATE_PROFILE = (
     "ALTER TABLE {db}.speech_stream_summaries"
@@ -1264,6 +1307,7 @@ _ALL_DDL = [
     _DDL_CALIBRATION_EVENTS,
     _DDL_SPEECH_STREAM_SUMMARIES,
     _DDL_SPEECH_COLLECT_OUTCOMES,
+    _DDL_SPEECH_CHECKS,
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
     _DDL_MV_AGENT_PERFORMANCE,
@@ -1803,6 +1847,25 @@ class AnalyticsStore:
         vals[self._SPEECH_STREAM_COLS.index("seg_vad_filter")] = None if vad is None else int(bool(vad))
         vals += [_parse_dt(ts) or datetime.utcnow(), _today_utc(ts)]
         await asyncio.to_thread(self._insert, "speech_stream_summaries", [vals], self._SPEECH_STREAM_COLS)
+
+    _SPEECH_CHECK_COLS = [
+        "event_id", "check_id", "tenant_id", "session_id", "pool_id", "channel", "speech_profile_id",
+        "requested_by", "reference_version", "language", "status", "failure_reason", "started_at",
+        "bot_voice_heard", "profile_in_effect", "stt_model", "discarded_vad", "utterances_sent", "segmentation",
+        "phrases_total", "phrases_correct", "phrases_transcribed", "accuracy", "wer_mean",
+        "confidence_p10", "confidence_p50", "confidence_p90", "noise_total", "hallucinations", "items",
+        "timestamp", "date",
+    ]
+
+    async def insert_speech_check(self, row: dict) -> None:
+        ts = row.get("timestamp")
+        vals = [row.get(c) for c in self._SPEECH_CHECK_COLS[:-2]]
+        i = self._SPEECH_CHECK_COLS.index("started_at")
+        vals[i] = _parse_dt(vals[i]) or _parse_dt(ts) or datetime.utcnow()
+        i = self._SPEECH_CHECK_COLS.index("bot_voice_heard")
+        vals[i] = None if vals[i] is None else int(bool(vals[i]))
+        vals += [_parse_dt(ts) or datetime.utcnow(), _today_utc(ts)]
+        await asyncio.to_thread(self._insert, "speech_checks", [vals], self._SPEECH_CHECK_COLS)
 
     async def insert_speech_collect_outcome(self, row: dict) -> None:
         ts = row.get("timestamp")

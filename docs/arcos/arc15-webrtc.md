@@ -686,6 +686,21 @@ webrtc_stt_enabled:         bool = True
 > pool × perfil. Tela: aba WebRTC → Configurações → *Perfis de fala*, e o seletor no endpoint. Gate ao
 > vivo: `infra/test/probe_webrtc_speech_profile.sh`. Ver `CHANGELOG.md` 2026-09-17 (7).
 >
+> **Verificação ativa do caminho de fala (VOZ-23).** Camada B da recalibragem: um processo próprio
+> (`speech-check`, a imagem do gateway com outro comando) é um CLIENTE do gateway — cria um endpoint
+> WebRTC **temporário** apontando o pool de calibração `speech_check` com o perfil a verificar, entra na
+> chamada como participante LiveKit, fala as frases de referência (`speech_check/reference.py`,
+> versionadas) e mede na saída do caminho real: as transcrições em `conversations.inbound` e o resumo em
+> `speech.metrics` — que diz qual perfil e modelo o gateway APLICOU, porque o pedido não prova a
+> aplicação. O resultado (`speech_check_result`, só números) vai ao ClickHouse `speech_checks`; o
+> endpoint temporário é apagado sempre. Disparo: pool webhook `speech_check_trigger` → tool MCP
+> `speech_check_run`. A **linha de base** é uma execução que uma PESSOA marca em
+> `speech_check_baselines` (config-api); `GET /reports/speech/checks/compare` mostra deltas e os itens
+> que regrediram, e cada ausência de comparação tem status próprio (`no_baseline`, `baseline_invalid`,
+> `reference_changed`, `baseline_unavailable`) — nunca um delta zero. Mede o caminho; **não** propõe
+> limite de cliente (voz sintetizada não os decide, VOZ-18/19) e não aplica nada. Gate ao vivo:
+> `infra/test/probe_speech_check.sh`. Ver `CHANGELOG.md` 2026-09-17 (8).
+>
 > **Teclado do widget (fatia 5c).** O `webrtc.interaction` leva `collect` — só o que a TELA precisa
 > (`input`, `domain`, `min_digits`, `max_digits`, `terminator`; nunca mensagem nem prazo) — e o
 > widget desenha o teclado pelo domínio (`*`/`#` só quando o domínio ou o terminador os pedem):

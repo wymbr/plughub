@@ -56,6 +56,29 @@ describe("speech.metrics (VOZ-22)", () => {
     }).success).toBe(false)
   })
 
+  it("VOZ-23: resultado de verificação — completo, falho antes da chamada, e texto recusado", () => {
+    const item = { id: "p01", kind: "phrase", transcripts: 1, confidence: 0.8, correct: true, wer: 0, hallucinated: null }
+    const completo = {
+      event_id: "1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", event_type: "speech_check_result", tenant_id: "tenant_demo",
+      session_id: "s-9", pool_id: "speech_check", channel: "webrtc", speech_profile_id: "sip",
+      timestamp: "2026-09-17T12:00:00+00:00", check_id: "2c3d4e5f-6071-4829-9bac-1d2e3f4a5b6c", requested_by: "ana@x",
+      reference_version: "pt-1", language: "pt-BR", status: "completed", failure_reason: null,
+      started_at: "2026-09-17T11:59:00+00:00", bot_voice_heard: true, profile_in_effect: "sip", stt_model: "m",
+      discarded_vad: 1, utterances_sent: 8, segmentation: resumo.segmentation,
+      phrases_total: 7, phrases_correct: 6, phrases_transcribed: 7, accuracy: 0.8571, wer_mean: 0.03,
+      confidence_p10: 0.5, confidence_p50: 0.7, confidence_p90: 0.9, noise_total: 1, hallucinations: 0,
+      items: [item],
+    }
+    expect(SpeechMetricsEventSchema.safeParse(completo).success).toBe(true)
+    const falho = { ...completo, session_id: null, status: "failed", failure_reason: "profile_not_found",
+      profile_in_effect: null, stt_model: null, discarded_vad: null, utterances_sent: null, segmentation: null,
+      phrases_total: 0, phrases_correct: 0, phrases_transcribed: 0, accuracy: null, wer_mean: null,
+      confidence_p10: null, confidence_p50: null, confidence_p90: null, noise_total: 0, items: [] }
+    expect(SpeechMetricsEventSchema.safeParse(falho).success).toBe(true)
+    expect(SpeechMetricsEventSchema.safeParse({ ...completo, items: [{ ...item, text: "cancelar" }] }).success).toBe(false)
+    expect(SpeechMetricsEventSchema.safeParse({ ...falho, failure_reason: "deu ruim" }).success).toBe(false)
+  })
+
   it("desfecho fora do domínio é recusado", () => {
     expect(SpeechMetricsEventSchema.safeParse({ ...desfecho, outcome: "ok" }).success).toBe(false)
   })

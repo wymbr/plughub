@@ -1,0 +1,50 @@
+id: skill_speech_check_listen_v1
+name: Verificação de fala — ouvinte da chamada sintética
+version: "1.0"
+description: |
+  Corpo do pool de CALIBRAÇÃO (VOZ-23, camada B da recalibragem de STT). A chamada é do executor
+  `speech-check`, que entra por um endpoint WebRTC temporário e fala as frases de referência.
+
+  Este fluxo não avalia nada: ele existe para que a chamada TENHA um agente de IA com mídia — é isso
+  que liga o bot leg (ouvinte + voz) no gateway e faz o STT rodar pelo caminho real. A medição é do
+  executor, que lê as transcrições em `conversations.inbound` e o resumo em `speech.metrics`.
+
+  - o `notify` de abertura é FALADO (TTS): o executor espera essa voz terminar antes da primeira frase,
+    que é como ele sabe que a sala está de pé;
+  - o `receive` fica escutando e volta para si mesmo (ciclo guardado por `max_iterations`). Sem ele o
+    fluxo completaria e a sessão fecharia no meio da verificação;
+  - o executor desliga ao fim; `on_disconnect` encerra. O `timeout_s` é a rede de proteção para
+    executor que morreu no meio — a sessão não fica pendurada.
+
+  ⚠️ Nenhum menu: menu por voz VALIDA a fala contra opções, e aqui o que importa é o que o STT
+  entendeu, não se bate com uma opção.
+classification:
+  type: vertical
+
+entry: anunciar
+
+steps:
+  - id: anunciar
+    type: notify
+    message: "Verificação de fala iniciada. Aguardando as frases de referência."
+    on_success: escutar
+    on_failure: encerrar
+
+  - id: escutar
+    type: receive
+    filter:
+      author_role: [customer]
+      event_types: [message_sent]
+    timeout_s: 300
+    max_iterations: 60
+    output_as: fala_recebida
+    on_message:        escutar
+    on_timeout:        encerrar
+    on_disconnect:     encerrar
+    on_max_iterations: encerrar
+    on_failure:        encerrar
+
+  - id: encerrar
+    type: complete
+    outcome: resolved
+    issue_status: "verificacao de fala: chamada encerrada"

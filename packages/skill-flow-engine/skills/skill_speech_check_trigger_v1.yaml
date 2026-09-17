@@ -1,0 +1,47 @@
+id: skill_speech_check_trigger_v1
+name: Verificação de fala — disparo
+version: "1.0"
+description: |
+  Corpo do pool webhook que PEDE uma verificação ativa do caminho de fala (VOZ-23).
+
+  Disparo manual: POST /v1/channels/webhook/pool/speech_check_trigger com
+  `{ "context": { "speech_profile_id": "<perfil>", "requested_by": "<quem pediu>" } }` — sem
+  `speech_profile_id`, a verificação usa a config do tenant.
+
+  ⚠️ As chaves vão dentro de `context`, e não no topo do corpo: é `body.context` que o webhook grava
+  no ContextStore (`webhook.py`, `ctx_writes`), e é de lá que o `@ctx.` lê. Chave no topo é ignorada
+  em silêncio — o pedido sai SEM perfil e mede a config do tenant achando que mediu o perfil. A mesma porta serve uma Agenda do scheduler-api quando a periodicidade
+  entrar (ficha própria).
+
+  A tool `speech_check_run` devolve `isError` quando o serviço recusa — perfil inexistente (422),
+  verificação já em curso (409), credencial ausente (503) —, e o `invoke` roteia `on_failure`:
+  pedido recusado NUNCA parece aceito. O resultado não vem por aqui: sai em `speech.metrics` e é lido
+  em `/reports/speech/checks`.
+
+  Perfil workflow (webhook, Arc 19): só invoke/complete.
+classification:
+  type: vertical
+
+entry: pedir_verificacao
+
+steps:
+  - id: pedir_verificacao
+    type: invoke
+    tool: speech_check_run
+    input:
+      speech_profile_id: "@ctx.speech_profile_id"
+      requested_by:      "@ctx.requested_by"
+      tenant_id:         "$.tenant_id"
+    output_as: pedido
+    on_success: encerrar_ok
+    on_failure: encerrar_falha
+
+  - id: encerrar_ok
+    type: complete
+    outcome: resolved
+    issue_status: "verificacao de fala pedida"
+
+  - id: encerrar_falha
+    type: complete
+    outcome: failed
+    issue_status: "verificacao de fala RECUSADA pelo servico"

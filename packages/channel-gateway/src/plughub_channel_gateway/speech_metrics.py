@@ -36,10 +36,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def publish(producer: Any, event: dict) -> bool:
-    """Publica com a chave da sessão. Nunca levanta; `False` = não publicado, e o log diz."""
+async def publish(producer: Any, event: dict, key: str | None = None) -> bool:
+    """Publica com a chave da sessão (ou `key`, para evento que não é de uma sessão — o resultado de
+    uma verificação ativa, VOZ-23, chaveado pela verificação). Nunca levanta; `False` = não publicado,
+    e o log diz."""
     try:
-        await producer.send(TOPIC, key=event["session_id"].encode("utf-8"),
+        await producer.send(TOPIC, key=(key or event["session_id"]).encode("utf-8"),
                             value=json.dumps(event).encode("utf-8"))
         return True
     except Exception as exc:  # noqa: BLE001 — telemetria não derruba chamada, mas não some calada

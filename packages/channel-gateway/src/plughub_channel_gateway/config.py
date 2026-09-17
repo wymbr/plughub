@@ -277,6 +277,15 @@ class Settings(BaseSettings):
     # LiveKit needs time to finalize and flush the file.
     webrtc_egress_wait_s:           float = 5.0
 
+    # ── Verificação ativa da fala (VOZ-23) — processo `speech-check`, não o gateway ──
+    # Pool de calibração para onde o endpoint TEMPORÁRIO da verificação aponta (fixture seedada).
+    speech_check_pool_id:           str = "speech_check"
+    # Onde o executor liga, como um cliente: o gateway pela rede do compose.
+    speech_check_gateway_ws_url:    str = "ws://channel-gateway:8010"
+    # Credencial de quem pede a verificação (mcp-server). VAZIO = a rota RECUSA tudo (503).
+    speech_check_service_token:     str = ""
+    speech_check_port:              int = 3870
+
     # ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────
     # System User token from Meta Business Manager (WABA).
     # Can be overridden per-tenant via Redis: {tenant_id}:config:whatsapp:access_token

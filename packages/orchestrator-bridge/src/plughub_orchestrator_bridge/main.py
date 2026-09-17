@@ -3345,6 +3345,23 @@ async def _resolve_journey_root(
         return root
 
 
+async def receive_waiters(redis_client, session_id: str) -> int:
+    """Quantos agentes esperam num step `receive` desta sessao (HASH `receive:waiting:{sid}`).
+
+    VOZ-23 (medido 2026-09-17): o desligamento do cliente empurrava `session:closed` contando SO o
+    `menu:waiting`. Quem esperava num `receive` seguia no BLPOP ate o `timeout_s` do step — ate 5 min
+    com a INSTANCIA presa, e a chamada seguinte ao mesmo pool sem quem atenda.
+
+    Falha de leitura devolve 0 e DIZ: contar a mais empurraria um `session:closed` que outro agente
+    consumiria por engano; contar a menos so mantem o comportamento antigo, que e o conhecido.
+    """
+    try:
+        return int(await redis_client.hlen(f"receive:waiting:{session_id}") or 0)
+    except Exception as exc:  # noqa: BLE001 — degradacao dita, nunca silenciosa
+        logger.warning("Could not count receive:waiting: session=%s — %s", session_id, exc)
+        return 0
+
+
 async def _close_contact_layer(
     redis_client: aioredis.Redis,
     session_id:   str,
@@ -7321,6 +7338,19 @@ async def process_contact_event(
                 # counting above always skips it and its BLPOP would hang forever
                 # on customer disconnect (queue segment never closed). If the
                 # queue-agent marker is present, add one push for it.
+                # VOZ-23 (medido 2026-09-17): a contagem acima só olha `menu:waiting`, e quem espera
+                # num step `receive` se registra em `receive:waiting:{sid}` — ninguém empurrava
+                # `session:closed` para ele. Efeito: o cliente desliga e o agente segue no BLPOP até o
+                # `timeout_s` do step (até 5 min), com a INSTÂNCIA presa; a chamada seguinte ao mesmo
+                # pool não é atendida. Apareceu no pool de calibração da verificação de fala (capacidade
+                # pequena, chamadas em sequência), mas vale para qualquer fluxo com `receive`.
+                esperando_receive = await receive_waiters(redis_client, session_id)
+                if esperando_receive:
+                    n_waiting += esperando_receive
+                    logger.info(
+                        "receive:waiting abort signal queued on disconnect: session=%s agents=%d",
+                        session_id, esperando_receive,
+                    )
                 try:
                     if await redis_client.exists(f"queue:agent_active:{session_id}"):
                         n_waiting += 1
