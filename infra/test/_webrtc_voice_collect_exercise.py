@@ -289,10 +289,13 @@ async def ramo_fala_fora_do_modo(http) -> None:
         if not await c.abre("R"):
             return
         print(f"SIDR {c.sid}", flush=True)       # o .sh confere que a fala CHEGOU e foi classificada
-        _, m1 = await c.menu("fatura")
+        t_m1, m1 = await c.menu("fatura")
         if not m1:
             emit("INCONCL", "R1", f"o fluxo nao mandou o menu m1 (session={c.sid})")
             return
+        # DTMF de quem entrou na sala ha <= 3 s nao chega ao ouvinte (medido 2026-09-16); teclar no
+        # instante em que o menu chega perdia a tecla e o ramo expirava (visto 2026-09-17)
+        await c.fim_da_fala(t_m1 - 0.5)
         await c.tecla("1")
         _, val = await c.marca(20)
         t_m2, m2 = await c.menu("código")
@@ -335,10 +338,11 @@ async def ramo_invalido(http) -> None:
     try:
         if not await c.abre("I"):
             return
-        _, m1 = await c.menu("fatura")
+        t_m1, m1 = await c.menu("fatura")
         if not m1:
             emit("INCONCL", "I1", f"o fluxo nao mandou o menu m1 (session={c.sid})")
             return
+        await c.fim_da_fala(t_m1 - 0.5)          # a mesma corrida do ramo R: tecla logo apos entrar se perde
         await c.tecla("9")
         _, aviso = await c.texto("Opção inválida", 10)
         await c.tecla("9")

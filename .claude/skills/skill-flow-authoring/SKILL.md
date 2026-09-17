@@ -84,7 +84,10 @@ Fatos com `arquivo:linha` em [`references/fatos-do-codigo.md`](references/fatos-
   canal, dígitos, `echo`, `max_invalid`) e o registry recusa dtmf/voz sem `first_input_timeout_s`;
   desfechos do canal saem por `on_timeout`/`on_invalid` (`on_invalid` exige `max_invalid`).
   ⚠️ Numa chamada, a FALA do cliente só responde menu cujo `collect.input` tem `voice` — sem isso
-  ela é só registro (VOZ-05 fatia 5b); menu que precisa ouvir o cliente declara a coleta por voz. Dado sensível: `masked: true` dentro de
+  ela é só registro (VOZ-05 fatia 5b); menu que precisa ouvir o cliente declara a coleta por voz.
+  `collect.voice.end_silence_ms`/`max_speech_s` valem por menu. `min_confidence` compara com confiança
+  MEDIDA e **reprova fala certa** (medido: certas de 0,35 a 0,92) — não use para filtrar ruído, que o
+  VAD do STT já descarta; declare só com medição no seu público (VOZ-18/19). Dado sensível: `masked: true` dentro de
   `begin_transaction`/`end_transaction`; `@masked.*` nunca vai a estado, stream ou log.
 - **`delegate`** — `pool` não resolvido é falha dura (`on_timeout` com `pool_ref_unresolved`);
   `timeout_hours` não resolvido cai para 24 h com warn.

@@ -179,6 +179,30 @@ class TestConfianca:
         assert SpeachesSTTProvider.supports_tuning is True
 
 
+class TestVad:
+    """VOZ-19: o VAD do serviço vai ligado em todo pedido, e o trecho que ele esvazia é dito no log."""
+
+    @pytest.mark.asyncio
+    async def test_todo_pedido_leva_vad_ligado(self):
+        svc = Servico(textos=["ola"])
+        await _colhe(_stt(svc), _gera(_quadros(_voz(600) + _silencio(900))))
+        assert b'name="vad_filter"' in svc.pedidos[0].content and b"\r\n\r\ntrue\r\n" in svc.pedidos[0].content
+
+    @pytest.mark.asyncio
+    async def test_controle_vad_desligado_manda_false(self):
+        svc = Servico(textos=["ola"])
+        await _colhe(_stt(svc, vad_filter=False), _gera(_quadros(_voz(600) + _silencio(900))))
+        assert b"\r\n\r\nfalse\r\n" in svc.pedidos[0].content
+
+    @pytest.mark.asyncio
+    async def test_trecho_sem_fala_pelo_vad_nao_vira_resultado_e_o_log_diz(self, caplog):
+        svc = Servico(textos=[""], segmentos=[])
+        with caplog.at_level("INFO"):
+            res = await _colhe(_stt(svc), _gera(_quadros(_voz(600) + _silencio(900))))
+        assert res == [] and len(svc.pedidos) == 1
+        assert "sem fala pelo VAD" in caplog.text
+
+
 class TestAjustePorColeta:
     """VOZ-18: silêncio de fim e fala máxima mudam NO MEIO do fluxo, lidos a cada quadro."""
 

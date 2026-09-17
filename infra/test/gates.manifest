@@ -457,6 +457,9 @@ probe_webrtc_keypad.sh
 # confianca medida, com o numero no log); end_silence_ms 2500 junta duas palavras com pausa de 1,2 s
 # numa fala (W1, pela janela no stream) e o menu seguinte, sem ajuste, as separa (W2: desligou). M1 a
 # confianca registrada e medida em (0,1), nunca o 1,0 de antes. Mutacoes ao vivo LM1-LM4.
+# VOZ-19: m0 recebe 2 s de ruido antes do "Cancelar." num menu de UMA tentativa (N1); N0 o VAD
+# descartou o ruido nesta chamada; N2 nenhuma fala registrada antes da resposta. LM5 (VAD
+# desligado) e LM6 (descarte mudo) pegas.
 probe_webrtc_speech_tuning.sh
 # CTR-09. Referencia pura de `invoke` que nao resolveu (`@ctx.*` ausente) viajava como `null` e a
 # tool com campo `.optional()` recusava (-32602): o `validate_pin` do skill_auth_form_v1 reprovava

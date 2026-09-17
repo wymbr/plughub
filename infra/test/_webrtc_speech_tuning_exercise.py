@@ -6,6 +6,9 @@ do widget e um participante LiveKit de verdade (`customer-…`) que publica micr
 `skill_probe_speech_tuning_v1` faz quatro menus só por fala, cada um com uma tentativa, e manda um
 marcador por saída. A fala do cliente é sintetizada pelo próprio speaches.
 
+  N1 VOZ-19: 2 s de ruído branco (RMS 1 500, passa o limiar de energia) e só depois "Cancelar." num menu
+     de UMA tentativa → valor cancelar. Sem o VAD do speaches o ruído vira "Obrigado." e gasta a
+     tentativa (medido 2026-09-17: 44 de 44 trechos de não-fala viravam texto)
   C1 min_confidence 0.99: "Atendente." (reconhecida certo pela chamada, confiança ~0,7) → inválido
   C2 CONTROLE min_confidence 0.3: a MESMA fala → valor atendente
   S1 end_silence_ms 2500: "Atendente." + 1,2 s + "Cancelar." — o desfecho só é INFORMADO: que foi UMA
@@ -202,8 +205,25 @@ async def main() -> None:
             cancelar = await c.sintetiza("Cancelar.")
             atendente = await c.sintetiza("Atendente.")
             pausa = b"\x00\x00" * int(SR * PAUSA_S)
+            ruido = np.clip(np.random.default_rng(19).normal(0, 1500, SR * 2), -32768, 32767).astype(np.int16).tobytes()
             _ = (await c.espera(lambda m: m.get("type") == "webrtc.message"
                                 and m.get("text") == "voz18-inicio", 30))
+            t_m0, m0 = await c.menu("Pergunta zero")
+            if not m0:
+                emit("INCONCL", "N1", f"o fluxo nao mandou o menu m0 (session={c.sid})")
+                return
+            await c.fim_da_fala(t_m0 - 0.5)
+            c.fala.put_nowait(ruido)
+            _, cedo = await c.marca("m0", 8)          # o ruido teria virado fala e gastado a tentativa
+            if cedo:
+                emit("FALHA", "N1", f"2 s de ruido responderam o menu: o fluxo mandou {cedo.get('text')!r}")
+                return
+            c.fala.put_nowait(cancelar)
+            _, val = await c.marca("m0", 30)
+            emit("OK" if val and val["text"] == "voz18-m0=cancelar" else "FALHA", "N1",
+                 f"2 s de ruido e depois 'Cancelar.' num menu de uma tentativa: o fluxo mandou {val and val.get('text')!r}")
+            if not val:
+                return
             if not await responde(c, "m1", "Pergunta um", atendente, "C1", "voz18-m1-invalido",
                                   "'Atendente.' com min_confidence 0.99"):
                 return

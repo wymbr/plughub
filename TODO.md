@@ -1,5 +1,35 @@
 # TODO — PlugHub Itens Pendentes
 
+## VOZ-19 — ruído que vira fala, e o limiar de confiança *(medido 2026-09-17)*
+
+**Pergunta.** O que impede ruído de responder um menu por voz — o `no_speech_prob` (0,0 sempre, VOZ-18),
+um corte de confiança, ou o VAD do próprio serviço (`vad_filter`, parâmetro da transcrição do speaches,
+desligado por padrão)? E o VAD custa fala?
+
+**Instrumento.** 84 falas sintetizadas (3 vozes × 7 frases × limpa / ruído branco 10 dB / 0 dB / baixa
+×0,15) e 44 trechos de 2 s de não-fala (4 de cada: ruído branco e rosa a RMS 500, 1 500, 4 000; quase-silêncio;
+tom 440 Hz; zumbido 60+180 Hz; cliques; acordes). Cada caso transcrito com `vad_filter` falso e verdadeiro.
+Todos, menos o quase-silêncio, passam o limiar de energia do gateway (400).
+
+| | sem VAD | com VAD |
+|---|---|---|
+| não-fala que vira texto | **44/44** ("Obrigado.", "Tchau.", "E aí", "Legenda Adriana Zanotto") | **1/44** (branco RMS 4 000) |
+| confiança dessas alucinações | 0,46–0,67 | 0,76 |
+| falas certas (84) | 59 | 59 — as mesmas |
+| falas vazias | 0 | 0 |
+
+Com VAD, confiança das falas certas: **0,35 a 0,92** (mediana ~0,71); das erradas, 0,35 a 0,85 — e boa
+parte das "erradas" é forma, não erro ("Opção 2", "1, 2, 3, 4").
+
+**Decisões.**
+1. **VAD do serviço ligado em todo pedido** (`SpeachesSTTProvider(vad_filter=True)`), constante do
+   provedor como o limiar de energia — não é política de negócio, é o STT não inventar fala. Trecho que o
+   VAD esvazia é dito no log (`sem fala pelo VAD`), não é perda.
+2. **Nenhum default de `min_confidence`, e ele não é filtro de ruído.** Qualquer corte que pegasse as
+   alucinações sem VAD (≥ 0,68) reprovaria 21 das 59 falas certas (36%). O limite fica como decisão do autor,
+   medida no público dele.
+3. **O resto é fala humana** → `VOZ-20`.
+
 ## VOZ-18 — confiança da fala e parâmetros por coleta *(medido 2026-09-16/17)*
 
 **Pergunta.** O `speaches` dá uma confiança que sirva a `collect.voice.min_confidence`? E dá para o menu

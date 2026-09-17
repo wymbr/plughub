@@ -9,11 +9,17 @@
 # que só traz o texto — a confiança ficava no default 1,0, e `min_confidence` nunca reprovava nada;
 # `end_silence_ms`/`max_speech_s` eram lidos e ignorados (o log dizia "NAO aplica").
 #
+# E (VOZ-19) RUÍDO NÃO É FALA? Sem o VAD do speaches, o Whisper transcrevia ruído como "Obrigado." (44 de 44
+# trechos de não-fala medidos), e a transcrição gastava a tentativa do menu.
+#
 # RAMOS (exercício: UMA chamada, participante LiveKit real, fala sintetizada pelo speaches):
+#   N1 2 s de ruído branco (RMS 1 500) e depois "Cancelar." num menu de UMA tentativa → valor ·
 #   C1 "Atendente." com min_confidence 0.99 → inválido · C2 CONTROLE a mesma fala com 0.3 → valor ·
 #   S2 "Cancelar." + 1,2 s + "Atendente." sem ajuste, logo depois do m3 → a primeira responde sozinha
 #   (o S1, a mesma pausa com end_silence_ms 2500, só informa o desfecho — ver W1)
 # RAMOS (aqui, sobre log e stream da sessão):
+#   N0 o ruído chegou ao STT e o VAD o descartou (linha do gateway desde o início da chamada) ·
+#   N2 nenhuma fala registrada antes do "Cancelar." do m0 ·
 #   L1 o inválido do C1 foi por CONFIANÇA (linha do gateway com a medida) · L2 CONTROLE só UMA recusa
 #   por confiança na sessão (o m2 não recusou) · M1 a confiança chega ao registro da fala MEDIDA
 #   (0 < c < 1), nunca o 1,0 de antes · W1 a fala do m3 é UMA, com janela >= 3 s (as duas palavras e a
@@ -81,6 +87,7 @@ else
       sleep 3
       ENV=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$GW" | grep -E '^PLUGHUB_' | sed 's/^/-e /' | tr '\n' ' ')
       name="probe_voz18_$$_$RANDOM"
+      INICIO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
       OUT=$(timeout "${EXERCISE_TIMEOUT_S:-400}" docker run --rm -i --name "$name" --network "$NET" --entrypoint python \
             $ENV -e POOL="$POOL" "$IMG" - < infra/test/_webrtc_speech_tuning_exercise.py 2>&1)
       [ $? -eq 124 ] && { docker kill "$name" >/dev/null 2>&1; OUT="$OUT
@@ -89,8 +96,8 @@ FALHA TIMEOUT exercicio morto"; }
         case "$l" in OK\ *) ok "${l#OK }";; FALHA\ *) falha "${l#FALHA }";; INCONCL\ *) incon "${l#INCONCL }";; esac
       done <<< "$(printf '%s\n' "$OUT" | grep -E '^(OK|FALHA|INCONCL) ')"
       printf '%s\n' "$OUT" | grep -E '^INFO ' | sed 's/^INFO /  INFO    /'
-      N=$(printf '%s\n' "$OUT" | grep -cE '^(OK|FALHA|INCONCL) (C1|C2|S2) ')
-      [ "$N" -ge 3 ] || falha "exercicio emitiu $N de 3 veredictos: $(printf '%s' "$OUT" | grep -vE '^(OK|FALHA|INCONCL) ' | tail -3 | tr '\n' ' ' | cut -c1-300)"
+      N=$(printf '%s\n' "$OUT" | grep -cE '^(OK|FALHA|INCONCL) (N1|C1|C2|S2) ')
+      [ "$N" -ge 4 ] || falha "exercicio emitiu $N de 4 veredictos: $(printf '%s' "$OUT" | grep -vE '^(OK|FALHA|INCONCL) ' | tail -3 | tr '\n' ' ' | cut -c1-300)"
 
       SID=$(printf '%s\n' "$OUT" | sed -n 's/^SID //p' | head -1)
       if [ -z "$SID" ]; then
@@ -107,19 +114,30 @@ FALHA TIMEOUT exercicio morto"; }
         [ "${n1:-0}" -le 1 ] && ok "L2 CONTROLE so uma recusa por confianca na sessao (o m2, min 0.3, nao recusou)" \
                              || falha "L2 $n1 recusas por confianca na sessao — o m2 (min 0.3) tambem recusou"
 
-        # as falas do cliente no stream, na ordem: confiança e janela (ms) de cada uma
+        # N0 — o N1 passaria com um ruído que nunca chegou ao STT: o VAD tem de tê-lo descartado nesta chamada
+        # (o provedor não conhece a sessão; a janela é o tempo da chamada, num pool só do probe)
+        nv=$(docker logs --since "$INICIO" "$GW" 2>&1 | grep -c "sem fala pelo VAD")
+        [ "${nv:-0}" -ge 1 ] && ok "N0 o ruido chegou ao STT e o VAD o descartou ($nv trecho(s) desde $INICIO)" \
+                             || falha "N0 nenhum trecho descartado pelo VAD desde $INICIO — o N1 nao prova que o ruido chegou"
+
+        # as falas do cliente no stream, na ordem: confiança, janela (ms) e texto de cada uma
         FALAS=$(docker exec "$REDIS" redis-cli --raw XRANGE "session:$SID:stream" - + 2>/dev/null \
-                | grep '"speech"' | jq -r '"\(.content.speech.confidence // "ausente") \((.content.speech.end_ms // 0) - (.content.speech.start_ms // 0))"' 2>/dev/null)
+                | grep '"speech"' | jq -r '"\(.content.speech.confidence // "ausente") \((.content.speech.end_ms // 0) - (.content.speech.start_ms // 0)) \(.text // "")"' 2>/dev/null)
         NF=$(printf '%s\n' "$FALAS" | grep -c .)
-        echo "  INFO    falas do cliente (confianca janela_ms): $(printf '%s\n' "$FALAS" | paste -sd '|' -)"
-        if [ "$NF" -lt 4 ]; then
-          incon "M1/W1/W2 $NF falas do cliente no stream session:$SID:stream, esperadas >= 4 (m1 m2 m3 m4)"
+        echo "  INFO    falas do cliente (confianca janela_ms texto): $(printf '%s\n' "$FALAS" | paste -sd '|' -)"
+        prim=$(printf '%s\n' "$FALAS" | sed -n 1p | cut -d' ' -f3-)
+        case "$prim" in
+          *ancel*) ok "N2 a primeira fala registrada e o 'Cancelar.' do m0 ($prim) — o ruido nao deixou registro" ;;
+          *) falha "N2 a primeira fala registrada e '$prim', nao o 'Cancelar.' do m0 — o ruido virou fala" ;;
+        esac
+        if [ "$NF" -lt 5 ]; then
+          incon "M1/W1/W2 $NF falas do cliente no stream session:$SID:stream, esperadas >= 5 (m0 m1 m2 m3 m4)"
         else
           fora=$(printf '%s\n' "$FALAS" | awk '!($1 ~ /^[0-9.]+$/ && $1 > 0 && $1 < 1)' | grep -c .)
           [ "$fora" -eq 0 ] && ok "M1 as $NF falas registradas trazem confianca medida em (0,1)" \
                             || falha "M1 $fora de $NF falas sem confianca medida em (0,1)"
-          w3=$(printf '%s\n' "$FALAS" | sed -n 3p | awk '{print $2}')
-          w4=$(printf '%s\n' "$FALAS" | sed -n 4p | awk '{print $2}')
+          w3=$(printf '%s\n' "$FALAS" | sed -n 4p | awk '{print $2}')
+          w4=$(printf '%s\n' "$FALAS" | sed -n 5p | awk '{print $2}')
           [ "${w3:-0}" -ge 3000 ] && ok "W1 a fala do m3 (end_silence_ms 2500) juntou as duas palavras: janela ${w3} ms" \
                                   || falha "W1 a fala do m3 fechou em ${w3} ms — a pausa de 1,2 s a cortou, o ajuste nao valeu"
           [ "${w4:-99999}" -lt 2500 ] && ok "W2 CONTROLE a primeira fala do m4 (sem ajuste) fechou em ${w4} ms" \

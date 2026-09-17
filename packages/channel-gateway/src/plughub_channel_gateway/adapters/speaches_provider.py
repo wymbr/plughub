@@ -82,6 +82,7 @@ class SpeachesSTTProvider:
         gap_ms:           int   = 700,     # sem quadro nenhum por tanto tempo também fecha
         min_speech_ms:    int   = 250,     # abaixo disto é ruído, não fala
         max_utterance_ms: int   = 15_000,
+        vad_filter:       bool  = True,
         http:             httpx.AsyncClient | None = None,
     ) -> None:
         self._url = base_url.rstrip("/")
@@ -91,6 +92,12 @@ class SpeachesSTTProvider:
         self._gap_s = gap_ms / 1000
         self._min_speech_ms = min_speech_ms
         self._max_ms = max_utterance_ms
+        # VOZ-19: o limiar de energia acima não distingue fala de ruído, e o Whisper transcreve o que
+        # recebe — medido 2026-09-17, sem VAD 44 de 44 trechos de não-fala (ruído branco e rosa,
+        # tom, zumbido, cliques, acordes) viraram texto ("Obrigado.", "Tchau.", "E aí"), com
+        # confiança 0,46–0,67, dentro da faixa das falas CERTAS (0,35–0,92). Com o VAD do serviço:
+        # 1 de 44, e nenhuma das 84 falas (limpa, ruído 10/0 dB, baixa) perdida ou piorada.
+        self._vad = vad_filter
         self._http = http
 
     async def stream(
@@ -113,6 +120,10 @@ class SpeachesSTTProvider:
                 return None
             texto, confianca = await self._transcribe(pcm, sample_rate, lang)
             if not texto:
+                if self._vad:
+                    # não é perda: o trecho passou o limiar de energia e o VAD não achou fala nele
+                    logger.info("speaches STT: trecho de %d ms sem fala pelo VAD — descartado (modelo %s)",
+                                int(falou), self._model)
                 return None
             return STTResult(transcript=texto, is_final=True, confidence=confianca,
                              start_ms=int(start_ms), end_ms=int(pos_ms))
@@ -151,7 +162,8 @@ class SpeachesSTTProvider:
                 yield res
 
     async def _transcribe(self, pcm: bytes, sample_rate: int, language: str | None) -> tuple[str, float | None]:
-        data = {"model": self._model, "response_format": "verbose_json"}
+        data = {"model": self._model, "response_format": "verbose_json",
+                "vad_filter": "true" if self._vad else "false"}
         if language:
             data["language"] = language
         try:

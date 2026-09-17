@@ -1,5 +1,53 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (2) — VOZ-19: ruído não vira mais fala do cliente — o STT vai com o VAD do serviço
+
+**O que havia.** A medição da VOZ-18 achou o Whisper transcrevendo ruído como "Obrigado." com confiança
+0,49–0,61, e ruído passa o limiar de energia do gateway (400 RMS): numa chamada, barulho no microfone do
+cliente virava uma fala que respondia menu ou gastava a tentativa dele. O `no_speech_prob` (0,0 em todos
+os casos) não servia de sinal, e um corte de confiança era a única saída que se via.
+
+**Medição** (`TODO.md` § VOZ-19). O speaches aceita `vad_filter` na transcrição, desligado por padrão.
+84 falas sintetizadas (limpa, ruído 10/0 dB, baixa) e 44 trechos de não-fala (ruído branco e rosa em três
+níveis, tom, zumbido, cliques, acordes), cada um com e sem VAD:
+
+| | sem VAD | com VAD |
+|---|---|---|
+| não-fala que vira texto | 44/44 | 1/44 (ruído branco RMS 4 000) |
+| falas certas | 59/84 | as mesmas 59 |
+| falas esvaziadas | 0 | 0 |
+
+E o corte de confiança não resolve: as falas CERTAS vão de 0,35 a 0,92; um corte que pegasse as
+alucinações (≥ 0,68) reprovaria 21 das 59.
+
+**Feito.**
+- `SpeachesSTTProvider` manda `vad_filter=true` em todo pedido (constante do provedor, como o limiar de
+  energia; `vad_filter=False` no construtor para teste). Trecho que passou a energia e o VAD esvaziou é
+  dito no log — `trecho de N ms sem fala pelo VAD — descartado` —, que não é perda.
+- **Sem default de `min_confidence`**, agora com o porquê medido; a skill de autoria diz que ele reprova
+  fala certa e não filtra ruído.
+
+**Testes.** channel-gateway 1151 → **1154** (VAD ligado em todo pedido, controle desligado, trecho
+esvaziado sem resultado e com log).
+
+**Gate.** `probe_webrtc_speech_tuning.sh` ganhou o m0: 2 s de ruído branco (RMS 1 500) e só depois
+"Cancelar.", num menu de UMA tentativa. N1 o valor chega · N0 o ruído chegou ao STT e o VAD o descartou
+nesta chamada (log desde o início dela — o provedor não conhece a sessão, e o pool é só do probe) · N2 a
+primeira fala registrada no stream é o "Cancelar.". Mutações ao vivo, todas pegas: LM5 VAD desligado →
+N1, N0, N2 (pela chamada o ruído virou **"O que é isso?"**, 0,42, e gastou a tentativa) · LM6 descarte
+mudo → N0 · LM3 (reexecutada, os índices das falas mudaram) → W2, S2. Vizinhos verdes contra a imagem
+restaurada (voice_collect, keypad, stt_speaches, tts_spoken, human_transcript, menu_result_contract).
+
+**Achado no vizinho, corrigido no instrumento.** Uma rodada do `probe_webrtc_voice_collect.sh` saiu
+vermelha no ramo R: a tecla \"1\" não chegou ao ouvinte (nenhuma linha de tecla na sessão) e o menu
+expirou. O ramo teclava no instante em que o menu chegava, junto com a entrada do cliente e do ouvinte
+na sala — a condição medida na fatia 5b (DTMF de quem entrou há ≤ 3 s não é entregue). Não envolve fala.
+Os ramos R e I passaram a esperar o prompt terminar, como o K já fazia; a rodada seguinte, verde.
+
+**Fora desta ficha.** Tudo foi medido com voz sintetizada — sotaque, fala hesitante, resposta de uma
+sílaba, microfone de celular e ruído de ambiente real ficam para a `VOZ-20`, que também decide se o VAD
+segue ligado por padrão diante de fala humana baixa ou curta. Deepgram não muda (tem VAD próprio).
+
 ## 2026-09-17 (1) — VOZ-18: a coleta por voz aplica confiança MEDIDA e silêncio de fim por menu
 
 **O que havia.** A VOZ-05 fatia 5b executava a coleta por fala, mas três parâmetros de `collect.voice`

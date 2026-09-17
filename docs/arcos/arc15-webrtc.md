@@ -621,8 +621,13 @@ webrtc_stt_enabled:         bool = True
 > | `min_confidence` | contra a confiança MEDIDA do speaches — `exp` da média de `avg_logprob` dos segmentos do `verbose_json`, ponderada pela duração. Abaixo do limite = tentativa inválida, com a medida no log (o texto não). Sem segmento, a confiança é `None` (não medida): o limite não se aplica e o log diz |
 > | `end_silence_ms` / `max_speech_s` | num ajuste (`SpeechTuning`) lido a CADA QUADRO do fluxo de STT do cliente: liga quando a coleta com voz começa, desliga no desfecho ou no fim sem desfecho. Default do provedor: 700 ms e 15 s |
 >
-> ⚠️ **Sem default de `min_confidence`**: a medição foi com voz sintetizada, e o Whisper transcreve
-> ruído como "Obrigado." com confiança 0,49–0,61 (`VOZ-19`, `TODO.md` § VOZ-18). Provedor que não mede
+> **Ruído não é fala (VOZ-19).** O speaches é chamado com o VAD do serviço ligado: sem ele, o Whisper
+> transcrevia ruído, tom e cliques como "Obrigado."/"Tchau." (44 de 44 trechos medidos) e a transcrição
+> gastava a tentativa do menu; com ele, 1 de 44, sem perder fala. Trecho esvaziado pelo VAD aparece no log
+> do gateway como `sem fala pelo VAD`.
+>
+> ⚠️ **Sem default de `min_confidence`, e ele não filtra ruído**: as falas CERTAS vão de 0,35 a 0,92
+> (`TODO.md` § VOZ-19). Tudo medido com voz sintetizada — fala humana é a `VOZ-20`. Provedor que não mede
 > ou não ajusta (`measures_confidence` / `supports_tuning` falsos) é dito no log ao armar a coleta.
 > Gate ao vivo: `infra/test/probe_webrtc_speech_tuning.sh`. Ver `CHANGELOG.md` 2026-09-17 (1).
 >
