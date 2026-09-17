@@ -320,6 +320,11 @@ vão de 0,35 a 0,92).
 
 - Os parâmetros de segmentação da fala são **config por tenant × canal/perna**, nunca constante de
   código nem calibração única por tenant (a perna SIP tem outros números) — `VOZ-21`.
+- **A unidade de calibragem é o PERFIL DE FALA, não o número** *(2026-09-17, `VOZ-25`)*: a acústica
+  varia pelo caminho da mídia e pela língua, e N números no mesmo tronco têm a mesma. O perfil
+  (config-api `speech_profiles`) sobrepõe a segmentação e escolhe modelo, língua e voz **dentro do
+  mesmo serviço de fala**; o endpoint aponta o perfil. Ordem: menu → perfil → tenant → global →
+  default. A telemetria e a linha de base são por perfil.
 - Três camadas, em ordem de custo: **A** telemetria passiva só de números (`VOZ-22`), **B** verificação
   ativa a pedido contra a linha de base (`VOZ-23`), **C** amostra rotulada por pessoa (`VOZ-24`, a única
   que retém áudio, logo finalidade nova de tratamento).

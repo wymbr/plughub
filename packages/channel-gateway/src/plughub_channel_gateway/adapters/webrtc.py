@@ -381,8 +381,12 @@ class WebRTCAdapter(ChannelAdapter):
         self._speech_tuning:   dict[str, SpeechTuning] = {}
         # VOZ-21: segmentação da fala por tenant (config-api, namespace `webrtc`), resolvida quando
         # a chamada abre o STT; `main.py` invalida no `config.changed`
-        from ..speech_config import SpeechSegmentationConfig
+        from ..speech_config import SpeechProfiles, SpeechSegmentationConfig
         self.speech_config = SpeechSegmentationConfig(settings.config_api_url)
+        # VOZ-25: perfis de fala do tenant (namespace `speech_profiles`), apontados pelo endpoint da
+        # chamada; a resolução de cada sessão é feita UMA vez e compartilhada entre STT e TTS
+        self.speech_profiles = SpeechProfiles(settings.config_api_url)
+        self._speech_resolved: dict[str, asyncio.Task] = {}
         self._screen_invalids: dict[str, dict[str, int]]         = {}
 
     # ── Provider factories ────────────────────────────────────────────────────
@@ -860,8 +864,9 @@ class WebRTCAdapter(ChannelAdapter):
         if not contact_id:
             raise _AuthError("missing_sub", "Token must contain 'sub' claim (contact_id)")
 
-        # Resolve pool_id via Layer 2 (ChannelEndpoint lookup in agent-registry)
-        resolved_pool = await self._resolve_pool(pool_id, contact_id)
+        # Resolve pool_id via Layer 2 (ChannelEndpoint lookup in agent-registry) — e o perfil de
+        # fala que o endpoint aponta (VOZ-25)
+        resolved_pool, speech_profile_id = await self._resolve_pool(pool_id, contact_id)
 
         # Assign session ID and participant ID
         session_id     = str(uuid.uuid4())
@@ -899,6 +904,7 @@ class WebRTCAdapter(ChannelAdapter):
         await self._touch_ws_alive(session_id)
         self._sessions[session_id] = {
             "contact_id": contact_id, "pool_id": resolved_pool, "started_at": started_at,
+            "speech_profile_id": speech_profile_id,
         }
 
         # O contrato é o do webchat (`contact_lifecycle`): abertura em `conversations.events`,
@@ -1519,6 +1525,7 @@ class WebRTCAdapter(ChannelAdapter):
         self._menu_plans.pop(session_id, None)
         self._screen_invalids.pop(session_id, None)
         self._speech_tuning.pop(session_id, None)
+        self._speech_resolved.pop(session_id, None)
         self._masked_grace_until.pop(session_id, None)
         try:
             await self._redis.delete(f"session:{session_id}:ws_alive")
@@ -1655,12 +1662,20 @@ class WebRTCAdapter(ChannelAdapter):
         """
         falas: set[asyncio.Task] = set()
         seg: SpeechSegmentation | None = None
+        voz = None
         if getattr(self._stt, "supports_tuning", False):
-            seg = await self.speech_config(self._settings.tenant_id)
+            voz = await self._speech_settings(session_id)
+            seg = voz.segmentation
             logger.info("webrtc stt: segmentacao da fala session=%s %s", session_id, seg.describe())
+            logger.info("webrtc stt: voz da chamada session=%s perfil=%s %s", session_id,
+                        voz.profile_id or "-", voz.describe_voice())
+            if not getattr(self._stt, "supports_model_choice", False) and voz.provenance.get("stt_model", "env") != "env":
+                logger.warning("webrtc stt: o provedor %s nao escolhe modelo por chamada — stt_model do perfil %s "
+                               "NAO se aplica (session=%s)", type(self._stt).__name__, voz.profile_id, session_id)
         elif self._stt is not None:
             logger.info("webrtc stt: o provedor %s nao aceita segmentacao configurada — webrtc.stt_* do "
-                        "config-api NAO se aplica a esta chamada (session=%s)", type(self._stt).__name__, session_id)
+                        "config-api e o perfil de fala NAO se aplicam a esta chamada (session=%s)",
+                        type(self._stt).__name__, session_id)
         try:
             async for identity, chunks in room_client.speakers():
                 if identity.startswith(CUSTOMER_IDENTITY_PREFIX):
@@ -1671,7 +1686,7 @@ class WebRTCAdapter(ChannelAdapter):
                     logger.info("webrtc stt: trilha de %r nao transcrita (session=%s)", identity, session_id)
                     continue
                 logger.info("webrtc stt: transcrevendo %s (session=%s)", identity, session_id)
-                t = asyncio.create_task(self._stt_speaker(session_id, identity, autor, chunks, seg),
+                t = asyncio.create_task(self._stt_speaker(session_id, identity, autor, chunks, seg, voz),
                                         name=f"webrtc-stt-{identity[:16]}")
                 falas.add(t)
                 t.add_done_callback(falas.discard)
@@ -1686,9 +1701,11 @@ class WebRTCAdapter(ChannelAdapter):
     async def _stt_speaker(
         self, session_id: str, identity: str, autor: str | None, chunks: AsyncIterator[bytes],
         segmentation: SpeechSegmentation | None = None,
+        voice: "SpeechSettings | None" = None,
     ) -> None:
         """Um falante: quadros → STT → frase final publicada. `autor` None = o cliente (o único
-        que interrompe a fala da IA); senão, o `participant_id` do humano (`human-{sub}`)."""
+        que interrompe a fala da IA); senão, o `participant_id` do humano (`human-{sub}`).
+        `voice` traz modelo e língua do perfil da chamada (VOZ-25)."""
         s = self._settings
         stats: SpeechStats | None = None
         pool_id = (self._sessions.get(session_id) or {}).get("pool_id")
@@ -1728,8 +1745,10 @@ class WebRTCAdapter(ChannelAdapter):
                     )
 
         try:
-            language = s.voice_stt_language  # reuse voice channel language setting
+            language = voice.stt_language if voice is not None else s.voice_stt_language
             kw = {"sample_rate": stt_rate} if stt_rate else {}
+            if voice is not None and getattr(self._stt, "supports_model_choice", False):
+                kw["model"] = voice.stt_model
             if segmentation is not None:
                 kw["segmentation"] = segmentation
             if interrompe and getattr(self._stt, "supports_tuning", False):
@@ -1766,7 +1785,11 @@ class WebRTCAdapter(ChannelAdapter):
                 # aqui dentro não sobreviveria ao cancelamento
                 evento = speech_metrics.stream_summary(
                     tenant_id=s.tenant_id, session_id=session_id, pool_id=pool_id,
-                    stt_provider=type(self._stt).__name__, stats=stats, segmentation=segmentation)
+                    stt_provider=type(self._stt).__name__, stats=stats, segmentation=segmentation,
+                    speech_profile_id=voice.profile_id if voice is not None else None,
+                    stt_model=(voice.stt_model if voice is not None
+                               and getattr(self._stt, "supports_model_choice", False)
+                               else getattr(self._stt, "_model", None)))
                 disparar(speech_metrics.publish(self._producer, evento), nome=f"speech-metrics-{session_id[:8]}")
 
     async def _publish_transcript(
@@ -1943,9 +1966,35 @@ class WebRTCAdapter(ChannelAdapter):
                 return None
             await asyncio.sleep(0.05)
 
+    def _voice_defaults(self) -> dict[str, str]:
+        """Modelo, língua e voz quando a chamada não tem perfil: o env do gateway (VOZ-17)."""
+        s = self._settings
+        return {"stt_model": s.webrtc_stt_model, "stt_language": s.voice_stt_language,
+                "tts_model": s.webrtc_tts_model, "tts_voice": s.webrtc_tts_voice}
+
+    async def _speech_settings(self, session_id: str) -> "SpeechSettings":
+        """A fala da chamada (VOZ-25): segmentação do tenant sobreposta pelo perfil do endpoint, com
+        modelo/língua/voz. Resolvida UMA vez por sessão e compartilhada entre STT e TTS — os dois
+        têm de concordar sobre o perfil; `shield` porque cancelar quem espera não pode cancelar a
+        resolução do outro."""
+        from ..speech_config import resolve_session
+        t = self._speech_resolved.get(session_id)
+        if t is None:
+            info = self._sessions.get(session_id) or {}
+            t = asyncio.ensure_future(resolve_session(
+                self.speech_config, self.speech_profiles, self._settings.tenant_id,
+                info.get("speech_profile_id"), self._voice_defaults()))
+            if session_id in self._sessions:
+                self._speech_resolved[session_id] = t
+        return await asyncio.shield(t)
+
     async def _synthesize_pcm(self, session_id: str, text: str) -> tuple[bytes, int]:
         try:
-            audio = await self._tts.synthesize(text, None)
+            if getattr(self._tts, "supports_model_choice", False):
+                voz = await self._speech_settings(session_id)
+                audio = await self._tts.synthesize(text, voz.tts_voice or None, model=voz.tts_model or None)
+            else:
+                audio = await self._tts.synthesize(text, None)
         except Exception as exc:
             logger.warning("webrtc fala: sintese falhou (session=%s): %s — frase NAO falada", session_id, exc)
             return b"", 0
@@ -2153,13 +2202,19 @@ class WebRTCAdapter(ChannelAdapter):
             return
         ac.metrics_sent = True
         p = ac.plan
+        # VOZ-25: o perfil EM VIGOR, se a fala da chamada já foi resolvida (coleta por voz implica o
+        # fluxo de STT aberto); sem resolução, None — nunca o id declarado, que pode não ter valido
+        resolvida = self._speech_resolved.get(session_id)
+        perfil = (resolvida.result().profile_id
+                  if resolvida is not None and resolvida.done() and not resolvida.cancelled()
+                  and resolvida.exception() is None else None)
         evento = speech_metrics.collect_outcome(
             tenant_id=self._settings.tenant_id, session_id=session_id,
             pool_id=(self._sessions.get(session_id) or {}).get("pool_id"),
             menu_id=p.menu_id, interaction=p.interaction, inputs=list(p.inputs), outcome=outcome,
             via=via, release_reason=release_reason, counters=ac.session.counters(),
             min_confidence=p.min_confidence, end_silence_ms=p.end_silence_ms, max_speech_ms=p.max_speech_ms,
-            duration_ms=(time.monotonic() - ac.started_at) * 1000)
+            duration_ms=(time.monotonic() - ac.started_at) * 1000, speech_profile_id=perfil)
         disparar(speech_metrics.publish(self._producer, evento), nome=f"speech-metrics-{session_id[:8]}")
 
     async def _publish_collect_done(self, session_id: str, p: CollectPlan, done: Done) -> None:
@@ -2548,27 +2603,35 @@ class WebRTCAdapter(ChannelAdapter):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    async def _resolve_pool(self, pool_id: str, contact_id: str) -> str:
+    async def _resolve_pool(self, pool_id: str, contact_id: str) -> tuple[str, str | None]:
         """
         Resolve pool_id via Layer 2 agent-registry lookup (ChannelEndpoint).
         Falls back to webrtc_default_pool_id when no endpoint record matches.
+
+        Devolve também o `speech_profile_id` que o endpoint aponta em `settings` (VOZ-25) — só
+        existe quando o endereço é um endpoint cadastrado; pool direto não tem perfil.
         """
         s = self._settings
         if pool_id and s.agent_registry_url:
             try:
-                from ..endpoint_resolver import resolve_pool as _resolve
-                resolved = await _resolve(
+                from ..endpoint_resolver import resolve_endpoint as _resolve
+                ep = await _resolve(
                     channel            = "webrtc",
                     identifier         = pool_id,
                     tenant_id          = s.tenant_id,
                     agent_registry_url = s.agent_registry_url,
                     cache_ttl_s        = s.endpoint_cache_ttl_s,
                 )
-                if resolved:
-                    return resolved
+                if ep.pool_id:
+                    perfil = ep.settings.get("speech_profile_id")
+                    if perfil is not None and not isinstance(perfil, str):
+                        logger.error("webrtc: endpoint %s tem speech_profile_id nao-texto (%r) — ignorado",
+                                     pool_id, perfil)
+                        perfil = None
+                    return ep.pool_id, (perfil or None)
             except Exception as exc:
                 logger.warning("webrtc pool resolve failed: %s", exc)
-        return pool_id or s.webrtc_default_pool_id
+        return pool_id or s.webrtc_default_pool_id, None
 
     async def _resolve_jwt_secret(self, tenant_id: str) -> str:
         """

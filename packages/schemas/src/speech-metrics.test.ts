@@ -5,6 +5,7 @@ import { SpeechMetricsEventSchema } from "./speech-metrics"
 const resumo = {
   event_id: "4f1b1b2e-8f55-4c61-9a37-7d3c2a6f0b11", event_type: "stt_stream_summary",
   tenant_id: "tenant_demo", session_id: "s-1", pool_id: "p", channel: "webrtc", speaker: "customer",
+  speech_profile_id: null, stt_model: "Systran/faster-whisper-small",
   stt_provider: "SpeachesSTTProvider", timestamp: "2026-09-17T12:00:00.000000+00:00",
   audio_ms: 60000, frames: 3000, voiced_frames: 400,
   noise_rms_p10: 0.0, noise_rms_p50: 12.5, noise_rms_p90: 80.1,
@@ -19,7 +20,7 @@ const resumo = {
 
 const desfecho = {
   event_id: "9d0e6a57-2b0a-4a7e-8f4e-0b8e3d5b6c21", event_type: "collect_outcome",
-  tenant_id: "tenant_demo", session_id: "s-1", pool_id: null, channel: "webrtc",
+  tenant_id: "tenant_demo", session_id: "s-1", pool_id: null, channel: "webrtc", speech_profile_id: null,
   timestamp: "2026-09-17T12:00:01+00:00", menu_id: "m", interaction: "button", inputs: ["dtmf", "voice"],
   outcome: "invalid", via: null, release_reason: null, speech_inputs: 1, digit_inputs: 0,
   invalid_attempts: 1, invalid_low_confidence: 1, digit_after_speech: false,
@@ -39,6 +40,20 @@ describe("speech.metrics (VOZ-22)", () => {
   it("RECUSA texto: um campo de transcrição ou de valor não passa calado", () => {
     expect(SpeechMetricsEventSchema.safeParse({ ...resumo, transcript: "meu cpf" }).success).toBe(false)
     expect(SpeechMetricsEventSchema.safeParse({ ...desfecho, value: "correio" }).success).toBe(false)
+  })
+
+  it("VOZ-25: o perfil em vigor e o escopo `profile` são aceitos; sem o campo, recusado", () => {
+    const comPerfil = {
+      ...resumo, speech_profile_id: "sip-g711",
+      segmentation_scope: { ...resumo.segmentation_scope, end_silence_ms: "profile" },
+    }
+    expect(SpeechMetricsEventSchema.safeParse(comPerfil).success).toBe(true)
+    expect(SpeechMetricsEventSchema.safeParse({ ...desfecho, speech_profile_id: "sip-g711" }).success).toBe(true)
+    const { speech_profile_id: _omitido, ...semCampo } = desfecho
+    expect(SpeechMetricsEventSchema.safeParse(semCampo).success).toBe(false)
+    expect(SpeechMetricsEventSchema.safeParse({
+      ...resumo, segmentation_scope: { end_silence_ms: "perfil" },
+    }).success).toBe(false)
   })
 
   it("desfecho fora do domínio é recusado", () => {

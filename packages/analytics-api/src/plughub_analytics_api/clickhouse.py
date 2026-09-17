@@ -1181,6 +1181,8 @@ CREATE TABLE IF NOT EXISTS {db}.speech_stream_summaries
     seg_max_speech_ms      Nullable(UInt32),
     seg_vad_filter         Nullable(UInt8),
     segmentation_scope     String,
+    speech_profile_id      Nullable(String),
+    stt_model              Nullable(String),
     timestamp              DateTime64(3, 'UTC'),
     date                   Date
 )
@@ -1212,6 +1214,7 @@ CREATE TABLE IF NOT EXISTS {db}.speech_collect_outcomes
     end_silence_ms         Nullable(UInt32),
     max_speech_ms          Nullable(UInt32),
     duration_ms            UInt32,
+    speech_profile_id      Nullable(String),
     timestamp              DateTime64(3, 'UTC'),
     date                   Date
 )
@@ -1219,6 +1222,17 @@ ENGINE = ReplacingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, event_id)
 """
+
+# VOZ-25 — o perfil de fala em vigor (e o modelo usado) nas tabelas que a VOZ-22 criou sem eles.
+_DDL_SPEECH_STREAM_MIGRATE_PROFILE = (
+    "ALTER TABLE {db}.speech_stream_summaries"
+    " ADD COLUMN IF NOT EXISTS speech_profile_id Nullable(String) AFTER segmentation_scope,"
+    " ADD COLUMN IF NOT EXISTS stt_model Nullable(String) AFTER speech_profile_id"
+)
+_DDL_SPEECH_COLLECT_MIGRATE_PROFILE = (
+    "ALTER TABLE {db}.speech_collect_outcomes"
+    " ADD COLUMN IF NOT EXISTS speech_profile_id Nullable(String) AFTER duration_ms"
+)
 
 _ALL_DDL = [
     _DDL_DATABASE,
@@ -1290,6 +1304,8 @@ _MIGRATIONS = [
     _DDL_AGENT_EVENTS_DROP,               # fatia 2: DROP agent_events (substrato derivado → segments)
     # Arc 12 fatia 2: quem emitiu o KPI (participante), não só em qual sessão.
     _DDL_AGENT_BUSINESS_EVENTS_MIGRATE_SEGMENT,
+    _DDL_SPEECH_STREAM_MIGRATE_PROFILE,   # VOZ-25: perfil de fala em vigor + modelo usado
+    _DDL_SPEECH_COLLECT_MIGRATE_PROFILE,
 ]
 
 
@@ -1770,13 +1786,14 @@ class AnalyticsStore:
         "cut_max_speech", "stt_errors", "confidence_count",
         "confidence_p10", "confidence_p50", "confidence_p90",
         "seg_energy_threshold", "seg_end_silence_ms", "seg_gap_ms", "seg_min_speech_ms",
-        "seg_max_speech_ms", "seg_vad_filter", "segmentation_scope", "timestamp", "date",
+        "seg_max_speech_ms", "seg_vad_filter", "segmentation_scope", "speech_profile_id", "stt_model",
+        "timestamp", "date",
     ]
     _SPEECH_COLLECT_COLS = [
         "event_id", "tenant_id", "session_id", "pool_id", "channel", "menu_id", "interaction",
         "inputs", "outcome", "via", "release_reason", "speech_inputs", "digit_inputs",
         "invalid_attempts", "invalid_low_confidence", "digit_after_speech", "min_confidence",
-        "end_silence_ms", "max_speech_ms", "duration_ms", "timestamp", "date",
+        "end_silence_ms", "max_speech_ms", "duration_ms", "speech_profile_id", "timestamp", "date",
     ]
 
     async def insert_speech_stream_summary(self, row: dict) -> None:

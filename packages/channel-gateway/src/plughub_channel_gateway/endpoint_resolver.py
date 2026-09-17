@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 import httpx
@@ -88,6 +88,8 @@ class ResolvedEndpoint:
     auth_required: bool
     token_hash:    Optional[str]
     outcome:       ResolveOutcome
+    # `settings` da linha (JSON livre por canal). VOZ-25: o WebRTC lê `speech_profile_id` daqui.
+    settings:      dict = field(default_factory=dict, compare=False)
 
 
 _CacheKey   = tuple[str, str, str]
@@ -247,7 +249,7 @@ def _apply_origin_filter(
     # de uma resolução recusada tem o que fazer com material de credencial.
     return ResolvedEndpoint(
         pool_id=None, origin=resolved.origin, auth_required=resolved.auth_required,
-        token_hash=None, outcome="origin_refused",
+        token_hash=None, outcome="origin_refused", settings={},
     )
 
 
@@ -353,11 +355,12 @@ async def _fetch_pool(
     # credencial de serviço. Os dois casos chegam aqui como None; quem distingue é
     # o chamador, comparando com `auth_required` (ver o fail-closed em main.py).
     tok_hash = row.get("token_hash") or None
+    settings = row.get("settings") if isinstance(row.get("settings"), dict) else {}
     logger.info(
         "endpoint-resolver: %s/%s → pool=%s (origin=%s, auth=%s, tenant=%s)",
         channel, identifier, pool_id, origin, auth_req, tenant_id,
     )
-    return ResolvedEndpoint(pool_id, origin, auth_req, tok_hash, "found")
+    return ResolvedEndpoint(pool_id, origin, auth_req, tok_hash, "found", settings)
 
 
 def _unavailable() -> ResolvedEndpoint:

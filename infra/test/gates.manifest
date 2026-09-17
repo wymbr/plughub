@@ -382,6 +382,16 @@ probe_webrtc_pool_media_policy.sh
 # watchdog a fecharia). Mede o contrato no LEITOR, o contato ao vivo ate a fila e de volta, e o
 # controle K: o routing enfileira o formato novo e recusa o antigo.
 probe_webrtc_contact_entry.sh
+# VOZ-26 (2026-09-17): endpoint WebRTC cadastrado enderessa a chamada. O gateway resolvia
+# /ws/webrtc/{identificador} pelo ChannelEndpoint, mas o registro recusava channel=webrtc (400) e a
+# URL carregava o pool cru. A1 paridade tela x registro; R1 cadastro aceito; E1 o alias cai no pool
+# do endpoint; E2 controle do pool direto; E3 trocar o pool vale antes do TTL do cache.
+probe_webrtc_channel_endpoint.sh
+# VOZ-25 (2026-09-17): o perfil de fala apontado pelo endpoint WebRTC vale na chamada. P1 config.changed
+# invalida; F1 segmentacao e lingua do perfil no log com procedencia; F2 o silencio do perfil muda o
+# comportamento (m4 junta); F3 a telemetria grava o perfil; C1-C3 controle pelo pool direto (tenant,
+# separa, NULL); M1 o modelo do perfil chega ao speaches. Perfil e endpoint criados e apagados.
+probe_webrtc_speech_profile.sh
 # VOZ-04 (Console). Contato WebRTC atribuido a humano: o conversation.assigned ia sem canal (o
 # Console o criava como webchat e a sobreposicao nunca montava), o caminho real de ativacao
 # humana nao escrevia routing.assigned (a sala nunca nascia), o hook pedia o token ao

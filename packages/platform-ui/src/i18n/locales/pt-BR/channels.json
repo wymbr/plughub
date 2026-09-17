@@ -24,7 +24,8 @@
     "voice":    "DID / E.164, ex: +5511000000",
     "sms":      "Short code ou long code, ex: 55119",
     "email":    "Endereço, ex: suporte@empresa.com",
-    "webhook":  "Slug de URL, ex: \"salesforce\" → /channel/webhook/salesforce"
+    "webhook":  "Slug de URL, ex: \"salesforce\" → /channel/webhook/salesforce",
+    "webrtc":   "Nome da sala, ex: \"support-video\" → /ws/webrtc/support-video"
   },
   "integration": {
     "new":                   "Nova Integração {{channel}}",
@@ -50,6 +51,11 @@
     "title":               "Endpoints",
     "identifierHintFallback": "identificadores de roteamento para pools",
     "webhookNote":         "Endpoints de webhook não precisam de conta de provedor — só de um slug de URL e um pool de destino. Cada endpoint pode, opcionalmente, exigir um token em todo disparo; sem token, ele aceita chamada anônima de qualquer um que o alcance.",
+    "colSpeechProfile": "Perfil de fala",
+    "speechProfileNone": "nenhum — config do tenant",
+    "speechProfileMissing": "{{id}} (não existe)",
+    "speechProfileMissingHint": "Este endpoint aponta um perfil de fala que não existe: as chamadas usam a config do tenant, e o gateway registra um aviso.",
+    "webrtcNote":          "Endpoints WebRTC não precisam de conta de provedor — o servidor de mídia faz parte da instalação. Cada endpoint é o endereço ao qual o widget de chamada se conecta (/ws/webrtc/{identificador}) e o pool em que a chamada cai; o pool pode mudar por trás de um endereço já publicado. Endereço sem endpoint continua sendo lido como id de pool.",
     "add":                 "+ Adicionar endpoint",
     "addBtn":              "Adicionar endpoint",
     "noEndpoints":         "Nenhum endpoint ainda. Clique em \"+ Adicionar endpoint\" para adicionar um número ou endereço {{channel}}.",
@@ -98,6 +104,8 @@
     "poolAddressNote":     "Além dos identificadores acima, todo pool webhook também pode ser acionado direto pelo id do pool. Esses endereços não têm linha no registro porque já apontam para o próprio pool — não há o que uma linha acrescentaria."
   },
   "form": {
+    "speechProfile": "Perfil de fala",
+    "speechProfileHint": "As chamadas que entram por este endereço usam a fala deste perfil (aba Configurações). Sem perfil, vale a config do tenant.",
     "displayName":           "Nome de exibição",
     "active":                "Ativo",
     "identifier":            "Identificador",
@@ -174,5 +182,35 @@
         "help": "O serviço de transcrição descarta trechos sem fala em vez de inventar texto."
       }
     }
+  },
+  "speechProfiles": {
+    "title": "Perfis de fala",
+    "intro": "Um perfil adapta o reconhecimento de fala a um tipo de entrada — navegador, tronco SIP, outra língua. Aponte-o num endpoint WebRTC. Campo vazio herda a config do tenant acima (modelo, língua e voz: o padrão da instalação).",
+    "add": "+ Novo perfil",
+    "id": "Id do perfil",
+    "idHint": "letras minúsculas, dígitos, - e _ (até 64)",
+    "description": "Descrição",
+    "inherit": "herda",
+    "on": "ligado",
+    "off": "desligado",
+    "inheritNote": "Ordem na chamada: menu → perfil → tenant → padrão da plataforma. O modelo precisa existir no serviço de fala; modelo desconhecido faz toda fala falhar, com o erro no log do gateway.",
+    "fields": {
+      "stt_model": "Modelo de transcrição",
+      "stt_language": "Língua (ex.: pt-BR)",
+      "tts_model": "Modelo de síntese",
+      "tts_voice": "Voz de síntese"
+    },
+    "empty": "Nenhum perfil de fala. As chamadas usam a config do tenant.",
+    "usedBy_one": "usado por {{count}} endpoint",
+    "usedBy_other": "usado por {{count}} endpoints",
+    "unused": "nenhum endpoint o usa",
+    "inheritsAll": "herda tudo",
+    "invalidId": "Id de perfil inválido: letras minúsculas, dígitos, - e _ (até 64), começando por letra ou dígito.",
+    "exists": "Já existe um perfil chamado {{id}}.",
+    "invalidField": "{{key}}: valor fora da faixa ou em formato inválido.",
+    "saved": "Perfil {{id}} salvo. Vale a partir da próxima chamada.",
+    "deleted": "Perfil {{id}} apagado.",
+    "deleteConfirm": "Apagar o perfil de fala {{id}}?",
+    "deleteConfirmUsed": "O perfil {{id}} é usado por {{count}} endpoint(s). As chamadas deles voltarão à config do tenant. Apagar mesmo assim?"
   }
 }

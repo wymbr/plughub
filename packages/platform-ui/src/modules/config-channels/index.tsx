@@ -22,14 +22,17 @@
  * agent-registry). A `WebhookConfigPage` editing HMAC/IP allowlist in config-api namespace `webhook`
  * existed, unreachable and read by no backend — removed 2026-09-17 (PUI-02).
  *
- * Runtime Settings (Config API): sub-tab for webchat; WebRTC is settings-only (speech
- * segmentation of the voice bot, VOZ-21) — it has no integration account nor endpoints.
+ * Runtime Settings (Config API): sub-tab for webchat and WebRTC (speech segmentation of the voice
+ * bot, VOZ-21). WebRTC endpoints are standalone like webhook — LiveKit credentials are deployment
+ * wiring, not a per-account integration (VOZ-26: until 2026-09-17 the tab was settings-only and the
+ * registry refused `channel=webrtc`, so the widget URL carried the raw pool_id).
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import ChannelAccountCard from './ChannelAccountCard'
 import WebChatConfigPage  from './WebChatConfigPage'
 import WebRTCSpeechConfigPage from './WebRTCSpeechConfigPage'
+import WebRTCSpeechProfilesPage from './WebRTCSpeechProfilesPage'
 import { ChannelEndpointList } from './ChannelEndpointList'
 import { CHANNEL_META } from './channel-meta'
 import type { GatewayConfig, Pool } from '@/types'
@@ -39,8 +42,7 @@ import * as registryApi from '@/api/registry'
 
 // ── Channel tabs ───────────────────────────────────────────────────────────────
 
-// `webrtc` não é canal de ENDPOINT (não tem conta nem número): entra só como aba de configuração
-type ChannelTab = ChannelEndpointChannel | 'webrtc'
+type ChannelTab = ChannelEndpointChannel
 
 const CHANNEL_TABS: { id: ChannelTab; icon: string }[] = [
   { id: 'webchat',  icon: '💻' },
@@ -53,14 +55,10 @@ const CHANNEL_TABS: { id: ChannelTab; icon: string }[] = [
 ]
 
 // Channels rendered without GatewayConfig parent (no API account needed)
-const STANDALONE_CHANNELS = new Set<ChannelTab>(['webhook'])
+const STANDALONE_CHANNELS = new Set<ChannelTab>(['webhook', 'webrtc'])
 
 // Channels with runtime Settings page (Config API)
-const HAS_SETTINGS = new Set<ChannelTab>(['webchat'])
-
-// Channels whose only content is the runtime Settings page
-const SETTINGS_ONLY = new Set<ChannelTab>(['webrtc'])
-const isEndpointChannel = (ch: ChannelTab): ch is ChannelEndpointChannel => !SETTINGS_ONLY.has(ch)
+const HAS_SETTINGS = new Set<ChannelTab>(['webchat', 'webrtc'])
 
 type SubTab = 'accounts' | 'settings'
 
@@ -326,7 +324,7 @@ const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
   if (STANDALONE_CHANNELS.has(channel)) {
     return (
       <div>
-        <p className="text-xs text-muted mb-4">{t('endpoint.webhookNote')}</p>
+        <p className="text-xs text-muted mb-4">{t(channel === 'webrtc' ? 'endpoint.webrtcNote' : 'endpoint.webhookNote')}</p>
         <ChannelEndpointList channel={channel} />
       </div>
     )
@@ -393,7 +391,7 @@ const ConfigChannelsIndex: React.FC = () => {
 
   function handleChannelChange(ch: ChannelTab) {
     setActiveChannel(ch)
-    setActiveSubTab(SETTINGS_ONLY.has(ch) ? 'settings' : 'accounts')
+    setActiveSubTab('accounts')
   }
 
   return (
@@ -416,7 +414,7 @@ const ConfigChannelsIndex: React.FC = () => {
         ))}
       </div>
 
-      {/* ── Sub-tab (Settings only shown for webchat) ── */}
+      {/* ── Sub-tab (Settings shown for webchat and webrtc) ── */}
       {HAS_SETTINGS.has(activeChannel) && (
         <div className="mt-4 mb-6 flex gap-4 border-b border-border">
           {(['accounts', 'settings'] as SubTab[]).map(sub => (
@@ -437,12 +435,17 @@ const ConfigChannelsIndex: React.FC = () => {
 
       {/* ── Content ── */}
       <div className={HAS_SETTINGS.has(activeChannel) ? '' : 'mt-6'}>
-        {SETTINGS_ONLY.has(activeChannel) && <WebRTCSpeechConfigPage />}
-        {isEndpointChannel(activeChannel) && activeSubTab === 'accounts' && (
+        {activeSubTab === 'accounts' && (
           <ChannelPanel channel={activeChannel} />
         )}
         {activeSubTab === 'settings' && activeChannel === 'webchat' && (
           <WebChatConfigPage />
+        )}
+        {activeSubTab === 'settings' && activeChannel === 'webrtc' && (
+          <div className="space-y-6">
+            <WebRTCSpeechConfigPage />
+            <WebRTCSpeechProfilesPage />
+          </div>
         )}
       </div>
     </div>

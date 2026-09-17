@@ -539,6 +539,9 @@ async def lifespan(app: FastAPI):
                         # VOZ-21: segmentação da fala do tenant; sem invalidar, a mudança na tela
                         # só valeria no próximo boot
                         _webrtc_adapter.speech_config.invalidate(event.get("tenant_id"))  # loga
+                    elif namespace == "speech_profiles" and _webrtc_adapter is not None:
+                        # VOZ-25: perfis de fala por ponto de entrada; valem na PRÓXIMA chamada
+                        _webrtc_adapter.speech_profiles.invalidate(event.get("tenant_id"))  # loga
                     elif namespace == "identity" and _webhook_adapter is not None:
                         # IDN-14: país padrão do telefone. Sem invalidar, trocar o país na
                         # tela só valeria no próximo boot — e até lá o hash usaria o antigo.

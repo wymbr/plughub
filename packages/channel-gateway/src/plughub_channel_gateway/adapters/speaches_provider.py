@@ -71,6 +71,9 @@ class SpeachesSTTProvider:
     measures_confidence = True
     # silêncio que fecha a fala e fala máxima ajustáveis por coleta, lidos a cada quadro
     supports_tuning = True
+    # VOZ-25: o MESMO serviço serve vários modelos pela mesma URL — o perfil de fala da chamada
+    # escolhe o modelo (`stream(model=…)`); a URL do serviço continua sendo topologia (env)
+    supports_model_choice = True
 
     def __init__(
         self,
@@ -109,8 +112,10 @@ class SpeachesSTTProvider:
         tuning:       SpeechTuning | None = None,
         segmentation: SpeechSegmentation | None = None,
         stats:        SpeechStats | None = None,
+        model:        str | None = None,
     ) -> AsyncIterator[STTResult]:
         seg = segmentation or self._seg
+        modelo = model or self._model
         gap_s = seg.gap_ms / 1000
         it = audio_chunks.__aiter__()
         buf = bytearray()
@@ -127,7 +132,7 @@ class SpeachesSTTProvider:
                 return None
             if stats is not None:
                 stats.utterances_sent += 1
-            texto, confianca, erro = await self._transcribe_raw(pcm, sample_rate, lang, seg.vad_filter)
+            texto, confianca, erro = await self._transcribe_raw(pcm, sample_rate, lang, seg.vad_filter, modelo)
             if erro and stats is not None:
                 stats.stt_errors += 1
             if not texto:
@@ -136,7 +141,7 @@ class SpeachesSTTProvider:
                 if seg.vad_filter and not erro:
                     # não é perda: o trecho passou o limiar de energia e o VAD não achou fala nele
                     logger.info("speaches STT: trecho de %d ms sem fala pelo VAD — descartado (modelo %s)",
-                                int(falou), self._model)
+                                int(falou), modelo)
                 return None
             if stats is not None:
                 stats.utterances_transcribed += 1
@@ -189,8 +194,9 @@ class SpeachesSTTProvider:
         return texto, confianca
 
     async def _transcribe_raw(self, pcm: bytes, sample_rate: int, language: str | None,
-                              vad_filter: bool) -> tuple[str, float | None, bool]:
-        data = {"model": self._model, "response_format": "verbose_json",
+                              vad_filter: bool, model: str | None = None) -> tuple[str, float | None, bool]:
+        modelo = model or self._model
+        data = {"model": modelo, "response_format": "verbose_json",
                 "vad_filter": "true" if vad_filter else "false"}
         if language:
             data["language"] = language
@@ -205,22 +211,22 @@ class SpeachesSTTProvider:
                     await client.aclose()
         except Exception as exc:
             logger.error("speaches STT: servico inalcancavel (%s, modelo %s): %s — fala PERDIDA",
-                         self._url, self._model, exc)
+                         self._url, modelo, exc)
             return "", None, True
         if r.status_code != 200:
             logger.error("speaches STT: http %s (modelo %s): %s — fala PERDIDA",
-                         r.status_code, self._model, r.text[:200])
+                         r.status_code, modelo, r.text[:200])
             return "", None, True
         try:
             corpo = r.json()
         except ValueError:
-            logger.error("speaches STT: resposta nao-JSON (modelo %s) — fala PERDIDA", self._model)
+            logger.error("speaches STT: resposta nao-JSON (modelo %s) — fala PERDIDA", modelo)
             return "", None, True
         texto = str(corpo.get("text", "")).strip()
         confianca = confianca_dos_segmentos(corpo.get("segments"))
         if texto and confianca is None:
             logger.warning("speaches STT: resposta sem segmentos com avg_logprob (modelo %s) — "
-                           "confianca da fala NAO medida", self._model)
+                           "confianca da fala NAO medida", modelo)
         return texto, confianca, False
 
 
@@ -253,8 +259,12 @@ class SpeachesTTSProvider:
         self._voice = voice or "default"
         self._http = http
 
-    async def synthesize(self, text: str, voice_id: str | None = None) -> bytes | None:
-        body = {"model": self._model, "input": text, "voice": voice_id or self._voice,
+    # VOZ-25: modelo e voz podem vir do perfil de fala da chamada
+    supports_model_choice = True
+
+    async def synthesize(self, text: str, voice_id: str | None = None, model: str | None = None) -> bytes | None:
+        modelo = model or self._model
+        body = {"model": modelo, "input": text, "voice": voice_id or self._voice,
                 "response_format": "pcm", "sample_rate": self.output_sample_rate}
         try:
             client = self._http or httpx.AsyncClient(timeout=60)
@@ -265,10 +275,10 @@ class SpeachesTTSProvider:
                     await client.aclose()
         except Exception as exc:
             logger.error("speaches TTS: servico inalcancavel (%s, modelo %s): %s — fala NAO sintetizada",
-                         self._url, self._model, exc)
+                         self._url, modelo, exc)
             return None
         if r.status_code != 200 or not r.content:
             logger.error("speaches TTS: http %s (modelo %s): %s — fala NAO sintetizada",
-                         r.status_code, self._model, r.text[:200])
+                         r.status_code, modelo, r.text[:200])
             return None
         return r.content

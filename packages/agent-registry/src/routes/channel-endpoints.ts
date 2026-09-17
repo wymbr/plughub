@@ -21,7 +21,11 @@ const channelEndpoint = (prisma as unknown as { channelEndpoint: ChannelEndpoint
 
 export const channelEndpointsRouter = Router()
 
-const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email", "webhook"])
+// `webrtc` entrou em 2026-09-17 (VOZ-26): o gateway já resolvia `/ws/webrtc/{identificador}`
+// por esta tabela, mas o cadastro recusava o canal — a resolução era ramo morto e a URL do
+// widget carregava o `pool_id` cru. A lista da tela (`ChannelEndpointChannel`) é conferida
+// contra esta por `probe_webrtc_channel_endpoint.sh`.
+const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email", "webhook", "webrtc"])
 
 /**
  * Procedência (ADR adr-webhook-endpoint-single-registry, D6). Não participa da

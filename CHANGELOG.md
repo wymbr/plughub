@@ -1,5 +1,98 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (7) — VOZ-25: a calibragem da fala passa a ser por PERFIL, apontado pelo endpoint da chamada
+
+**O que havia.** A segmentação da fala era por TENANT (`VOZ-21`), e modelo, língua e voz eram por
+INSTALAÇÃO do gateway (env). Mas a acústica varia pelo caminho da mídia (navegador com Opus a 48 kHz ×
+tronco SIP com G.711 a 8 kHz, operadora, SBC) e pela língua — não pelo número comercial. Dois pontos de
+entrada do mesmo tenant não podiam ter calibragem nem modelo próprios. Calibrar por DNIS, a pergunta que
+originou a ficha, copiaria a mesma config em todo número do mesmo tronco.
+
+**Decidido com o dono.** O perfil mora no **config-api** (namespace `speech_profiles`, uma chave por perfil,
+valor = objeto), e escolhe **modelo e língua dentro do mesmo serviço** speaches — a URL do serviço continua
+topologia. Escolher o serviço por perfil ficou de fora.
+
+**Feito.**
+- **Gateway.** `speech_config.py` ganha `SpeechProfiles` (mesmo cache da segmentação: leitura boa até o
+  `config.changed`, falha mantém a última boa), `apply_profile` e `resolve_session`: **menu → perfil →
+  tenant → global → default**, e modelo/língua/voz sem perfil vêm do env. Perfil referenciado que não
+  existe, campo inválido, chave desconhecida, id malformado e config-api fora são DITOS no log e não valem.
+  O resolvedor de endpoint passa a devolver o `settings` da linha; o WebRTC lê `speech_profile_id` dali (pool
+  direto não tem perfil). A resolução é feita UMA vez por sessão e compartilhada entre STT e TTS
+  (`_speech_settings`, com `shield`). O speaches aceita `model` por chamada no STT e no TTS
+  (`supports_model_choice`). Log novo: `voz da chamada session=… perfil=…` com a procedência de cada campo
+  (`profile:<id>`). `config.changed` de `speech_profiles` invalida o cache.
+- **Telemetria.** `speech.metrics` leva `speech_profile_id` nos dois eventos (e `stt_model` no resumo), com o
+  escopo `profile` na segmentação; colunas novas nas duas tabelas (DDL + migração `ADD COLUMN`); o relatório
+  `/reports/speech/quality` agrupa por **pool × perfil** — somar perfis esconderia a diferença que a
+  recalibragem procura.
+- **config-api.** `speech_profiles` escrito sob o campo `channels`, como os demais namespaces da tela de
+  canais.
+- **Tela.** Aba WebRTC → Configurações → *Perfis de fala* (criar, editar com campo vazio = herda, apagar
+  dizendo quantos endpoints o usam), seletor de perfil no endpoint WebRTC, e perfil ausente marcado na lista.
+  Faixas e formatos repetem os do gateway, que é quem valida na chamada.
+
+**Testes.** channel-gateway 1186 → **1212** (`test_speech_profile.py`: sobreposição com procedência, cada
+forma de não valer dita, cache e invalidação, modelo no pedido HTTP do STT e do TTS, o endpoint leva o
+perfil e o pool direto não, STT + TTS + telemetria seguindo o perfil com UMA resolução, controle sem perfil).
+**Mutações unitárias U1–U8, todas pegas** (modelo fora do STT, perfil sem sobrepor, TTS ignorando o perfil,
+resolução não compartilhada, resolvedor sem `settings`, perfil ausente calado, adapter sem ler o perfil,
+telemetria sem o perfil). analytics-api 778 → **781** (parser com perfil e vazio → NULL; colunas do insert =
+DDL e migração registrada; relatório por pool × perfil sem somar). schemas 354 → **355**. config-api 61.
+platform-ui `tsc` sem erro (276 arquivos); chaves iguais nos dois locales; `probe_i18n_duplicate_keys` verde.
+
+**Gate.** `probe_webrtc_speech_profile.sh` (AUTO), **verde ao vivo** sobre as imagens novas: K0 não mexe em
+config real · P1 o `config.changed` invalidou · F1 a chamada pelo endpoint abriu com `end_silence_ms=2500` e
+`stt_language=pt` do perfil · F2 a fala do m4 juntou as duas palavras (5490 ms) — o perfil muda o
+comportamento, não só o log · F3 a telemetria grava o perfil (resumo com escopo `profile`, 5 de 5
+desfechos) · C1–C3 controle pelo pool direto (700 global, separou em 1370 ms, perfil NULL) · M1 o speaches
+recebeu o modelo do perfil (erros nomeando o modelo falso). ⚠️ **As mutações AO VIVO deste gate (LM1
+`config.changed` sem invalidar → P1; LM2 parser do analytics descartando o perfil → F3) estavam rodando no
+momento do commit, sem resultado** — o que as sustenta até aqui são as mutações unitárias acima.
+
+**Limite.** A tela não foi vista no navegador. Perfil com modelo que o serviço não tem é gravado sem
+recusa e faz toda fala falhar — dito no log do gateway (é o M1), conferência contra `GET /v1/models` fica
+na `VOZ-17`, que perdeu a parte de modelo/língua/voz por perfil e guarda o default sem perfil. A `VOZ-23`
+passa a comparar a linha de base por perfil.
+
+## 2026-09-17 (6) — VOZ-26: endpoint WebRTC passa a ser cadastrável e a endereçar a chamada
+
+**O que havia.** O gateway resolve `/ws/webrtc/{identificador}` pela tabela `ChannelEndpoint` do
+agent-registry (`channel=webrtc`) antes de tratá-lo como `pool_id` — o mesmo mecanismo do webchat e do DID
+da voz. Mas o registro **recusava** `channel=webrtc` no cadastro (`VALID_CHANNELS` sem ele → 400), o tipo
+`ChannelEndpointChannel` da tela também não o tinha, e a aba WebRTC da tela de canais era só de
+configurações. A resolução era ramo morto, e nada ficava vermelho: o lookup não achava e o fallback usava o
+identificador como pool. Na prática a URL do widget carregava o pool cru — sem nome estável, sem trocar o
+pool por trás de um endereço publicado, e sem onde pendurar o perfil de fala da `VOZ-25`. Achado ao
+responder se o WebRTC suporta vários "DNIS".
+
+**Feito.**
+- **agent-registry**: `webrtc` em `VALID_CHANNELS` de `routes/channel-endpoints.ts`. As outras regras do
+  cadastro valem igual (pool tem de existir; `auth_required` só em webhook).
+- **platform-ui**: `ChannelEndpointChannel` ganha `webrtc`; a aba WebRTC passa a ter as duas sub-abas —
+  **Endpoints** sem conta de integração (como o webhook: o SFU é fiação da instalação, não conta por tenant)
+  e **Configurações** com a segmentação da fala da `VOZ-21`. Dica de identificador e nota da aba nos dois
+  locales.
+- Nada mudou no gateway: a invalidação do cache por `registry.changed(channel_endpoint)` já existia, e o
+  gate mede que ela vale para o WebRTC.
+- **A lista de endpoints não oferece autenticação fora de webhook.** Achado ao pôr o WebRTC nela: a coluna
+  "anônimo" e os botões de token apareciam em toda linha, e o registro RECUSA token em canal que não é
+  webhook (422). Coluna e botões ficaram só no webhook; no WebRTC a coluna é o perfil de fala (`VOZ-25`).
+
+**Gate.** `probe_webrtc_channel_endpoint.sh` (AUTO): A1 paridade entre os canais que a tela oferece e os
+que o registro aceita · R1 o registro aceita `channel=webrtc` · E1 o endereço cadastrado cai no pool do
+endpoint (identificador ≠ pool, então só a resolução explica o acerto; lido em `session:{sid}:meta`) · E2
+controle: o id do pool direto continua valendo · E3 trocar o pool do endpoint vale na chamada seguinte, 7 s
+depois — antes do TTL de 30 s do cache, logo por invalidação. **Controle negativo medido antes do build:**
+R1 vermelho com o 400 do registro. **Mutações ao vivo, todas pegas:** LM1 registro volta a recusar → R1 ·
+LM2 gateway ignora o endpoint → E1 · LM3 `registry.changed` não invalida → E3 · LM4 tela sem `webrtc` → A1.
+Regressão: `probe_webrtc_contact_entry` verde. platform-ui `tsc` sem erro (275 arquivos lidos).
+
+**Limite.** A tela não foi vista no navegador (não digito senha em formulário de login): o que sustenta a
+aba é o typecheck e a âncora na imagem servida. Os filtros de canal das telas de análise
+(`AnalisePoolsPage`, `ResourcesPage`, `HistoricoTab`) também não listam `webrtc` — são filtros de leitura,
+fora desta ficha.
+
 ## 2026-09-17 (5) — VOZ-22: cada chamada WebRTC deixa a telemetria da fala, só números — camada A da recalibragem de STT
 
 **O que havia.** Para recalibrar o STT por instalação (ADR `adr-voice-media-plane.md` V13) é preciso saber

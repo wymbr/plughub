@@ -24,7 +24,8 @@
     "voice":    "DID / E.164, e.g. +5511000000",
     "sms":      "Short code or long code, e.g. 55119",
     "email":    "Address, e.g. support@company.com",
-    "webhook":  "URL slug, e.g. \"salesforce\" → /channel/webhook/salesforce"
+    "webhook":  "URL slug, e.g. \"salesforce\" → /channel/webhook/salesforce",
+    "webrtc":   "Room name, e.g. \"support-video\" → /ws/webrtc/support-video"
   },
   "integration": {
     "new":                   "New {{channel}} Integration",
@@ -50,6 +51,11 @@
     "title":               "Endpoints",
     "identifierHintFallback": "identifiers routing to pools",
     "webhookNote":         "Webhook endpoints need no provider account — just a URL slug and a target pool. Each endpoint can optionally require a token on every trigger; without one it accepts anonymous calls from anyone who can reach it.",
+    "colSpeechProfile": "Speech profile",
+    "speechProfileNone": "none — tenant settings",
+    "speechProfileMissing": "{{id}} (missing)",
+    "speechProfileMissingHint": "This endpoint points to a speech profile that does not exist: calls use the tenant settings, and the gateway logs a warning.",
+    "webrtcNote":          "WebRTC endpoints need no provider account — the media server is part of the deployment. Each endpoint is the address the call widget connects to (/ws/webrtc/{identifier}) and the pool it lands in; the pool can change behind a published address. An address with no endpoint is still read as a pool id.",
     "add":                 "+ Add endpoint",
     "addBtn":              "Add endpoint",
     "noEndpoints":         "No endpoints yet. Click \"+ Add endpoint\" to add a {{channel}} number or address.",
@@ -98,6 +104,8 @@
     "poolAddressNote":     "Besides the identifiers above, each webhook pool can also be triggered directly by its pool id. These addresses have no registry row because they already point at the pool itself — there is nothing a row could add."
   },
   "form": {
+    "speechProfile": "Speech profile",
+    "speechProfileHint": "Calls that enter through this address use this profile's speech settings (Settings tab). Without one, the tenant settings apply.",
     "displayName":           "Display name",
     "active":                "Active",
     "identifier":            "Identifier",
@@ -174,5 +182,35 @@
         "help": "The transcription service discards stretches with no speech instead of inventing text."
       }
     }
+  },
+  "speechProfiles": {
+    "title": "Speech profiles",
+    "intro": "A profile adapts speech recognition to one kind of entry path — a browser, a SIP trunk, another language. Point a WebRTC endpoint to it. Empty fields inherit the tenant settings above (model, language and voice: the deployment default).",
+    "add": "+ New profile",
+    "id": "Profile id",
+    "idHint": "lowercase letters, digits, - and _ (up to 64)",
+    "description": "Description",
+    "inherit": "inherit",
+    "on": "on",
+    "off": "off",
+    "inheritNote": "Order at call time: menu → profile → tenant → platform default. The model must be one the speech service has; an unknown model makes every utterance fail, logged by the gateway.",
+    "fields": {
+      "stt_model": "Transcription model",
+      "stt_language": "Language (e.g. pt-BR)",
+      "tts_model": "Synthesis model",
+      "tts_voice": "Synthesis voice"
+    },
+    "empty": "No speech profile. Calls use the tenant settings.",
+    "usedBy_one": "used by {{count}} endpoint",
+    "usedBy_other": "used by {{count}} endpoints",
+    "unused": "not used by any endpoint",
+    "inheritsAll": "inherits everything",
+    "invalidId": "Invalid profile id: lowercase letters, digits, - and _ (up to 64), starting with a letter or digit.",
+    "exists": "A profile named {{id}} already exists.",
+    "invalidField": "{{key}}: value out of range or in the wrong format.",
+    "saved": "Profile {{id}} saved. It applies to the next call.",
+    "deleted": "Profile {{id}} deleted.",
+    "deleteConfirm": "Delete speech profile {{id}}?",
+    "deleteConfirmUsed": "Profile {{id}} is used by {{count}} endpoint(s). Their calls will fall back to the tenant settings. Delete anyway?"
   }
 }

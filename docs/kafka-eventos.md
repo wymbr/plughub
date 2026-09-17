@@ -723,10 +723,11 @@ objetos `.strict()` — campo de texto novo reprova a validação.
 
 | `event_type` | quando | carrega |
 |---|---|---|
-| `stt_stream_summary` | fim do fluxo de fala do CLIENTE | quadros, chão de ruído (p10/p50/p90 do RMS abaixo do limiar), falas enviadas/transcritas, descartes (VAD, curtas), cortes pela fala máxima, erros do STT, confiança p10/p50/p90, segmentação em vigor e o escopo de cada parâmetro |
+| `stt_stream_summary` | fim do fluxo de fala do CLIENTE | quadros, chão de ruído (p10/p50/p90 do RMS abaixo do limiar), falas enviadas/transcritas, descartes (VAD, curtas), cortes pela fala máxima, erros do STT, confiança p10/p50/p90, segmentação em vigor e o escopo de cada parâmetro (`profile`/`tenant`/`global`/`config`/`default`), `stt_model` usado |
 | `collect_outcome` | fim de cada menu com coleta por VOZ | desfecho (`value`/`invalid`/`timeout`/`released`), via, motivo da liberação, falas e teclas, tentativas inválidas e quantas por confiança, tecla depois de fala, parâmetros declarados, duração |
 
-Percentil sem amostra é `null`, nunca 0 (0 é chão de ruído legítimo).
+Percentil sem amostra é `null`, nunca 0 (0 é chão de ruído legítimo). Os dois eventos levam o
+`speech_profile_id` em vigor na chamada (`null` = sem perfil, ou perfil que não pôde valer — VOZ-25).
 
 ---
 

@@ -735,6 +735,8 @@ def parse_speech_metrics_event(payload: dict[str, Any]) -> dict | None:
     base = {
         "event_id": event_id, "tenant_id": tenant_id, "session_id": session_id,
         "pool_id": payload.get("pool_id") or "", "channel": payload.get("channel") or "",
+        # VOZ-25: ausente fica NULL (sem perfil) — nunca string vazia, que viraria um "perfil" no GROUP BY
+        "speech_profile_id": payload.get("speech_profile_id") or None,
         "timestamp": payload.get("timestamp") or _now(),
     }
     tipo = payload.get("event_type")
@@ -742,6 +744,7 @@ def parse_speech_metrics_event(payload: dict[str, Any]) -> dict | None:
         seg = payload.get("segmentation") or {}
         row = {"table": "speech_stream_summaries", **base,
                "speaker": payload.get("speaker") or "", "stt_provider": payload.get("stt_provider") or "",
+               "stt_model": payload.get("stt_model") or None,
                "segmentation_scope": json.dumps(payload.get("segmentation_scope") or {}, sort_keys=True)}
         for k in ("audio_ms", "frames", "voiced_frames", "utterances_sent", "utterances_transcribed",
                   "discarded_vad", "discarded_short", "cut_max_speech", "stt_errors", "confidence_count"):

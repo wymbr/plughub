@@ -8145,7 +8145,11 @@ async def query_speech_quality(
     min_sample: int = SPEECH_MIN_SAMPLE_DEFAULT,
     accessible_pools: list[str] | None = None,
 ) -> dict:
-    """Telemetria passiva da fala por POOL (camada A da recalibragem de STT).
+    """Telemetria passiva da fala por POOL × PERFIL DE FALA (camada A da recalibragem de STT).
+
+    VOZ-25: o mesmo pool pode receber chamadas por endereços com perfis diferentes (browser × tronco
+    SIP), e somá-los esconderia exatamente a diferença que a recalibragem procura — a linha é
+    `(pool_id, speech_profile_id)`, com `speech_profile_id` nulo para chamada sem perfil.
 
     Mede — não recomenda. `sample_sufficient` é falso abaixo de `min_sample` chamadas, e quem lê
     não deve tirar limite de amostra pequena (ADR `adr-voice-media-plane.md` V13). Pool-nativo
@@ -8182,7 +8186,9 @@ def _fetch_speech_quality(
     streams = _rows_to_dicts(client.query(f"""
         SELECT
             pool_id,
+            speech_profile_id,
             count()                                  AS calls,
+            groupUniqArray(stt_model)                AS stt_models,
             sum(audio_ms)                            AS audio_ms_total,
             quantile(0.5)(noise_rms_p50)             AS noise_rms_p50_median,
             quantile(0.5)(noise_rms_p90)             AS noise_rms_p90_median,
@@ -8197,12 +8203,13 @@ def _fetch_speech_quality(
             if(sum(utterances_sent) = 0, NULL, sum(discarded_vad) / sum(utterances_sent)) AS vad_discard_rate
         FROM {db}.speech_stream_summaries FINAL
         WHERE {where}
-        GROUP BY pool_id
+        GROUP BY pool_id, speech_profile_id
     """, parameters=params))
 
     collects = _rows_to_dicts(client.query(f"""
         SELECT
             pool_id,
+            speech_profile_id,
             count()                                  AS collects,
             countIf(outcome = 'value')               AS value,
             countIf(outcome = 'invalid')             AS invalid,
@@ -8214,14 +8221,13 @@ def _fetch_speech_quality(
             countIf(digit_after_speech = 1)          AS digit_after_speech_count
         FROM {db}.speech_collect_outcomes FINAL
         WHERE {where}
-        GROUP BY pool_id
+        GROUP BY pool_id, speech_profile_id
     """, parameters=params))
 
-    por_pool: dict[str, dict] = {}
-    for r in streams:
-        por_pool.setdefault(r["pool_id"], {"pool_id": r["pool_id"]}).update(r)
-    for r in collects:
-        por_pool.setdefault(r["pool_id"], {"pool_id": r["pool_id"]}).update(r)
+    por_pool: dict[tuple, dict] = {}
+    for r in streams + collects:
+        chave = (r["pool_id"], r.get("speech_profile_id"))
+        por_pool.setdefault(chave, {"pool_id": chave[0], "speech_profile_id": chave[1]}).update(r)
     saida = []
     for linha in por_pool.values():
         linha.setdefault("calls", 0)

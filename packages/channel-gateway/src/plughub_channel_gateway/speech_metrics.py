@@ -51,6 +51,7 @@ async def publish(producer: Any, event: dict) -> bool:
 def stream_summary(
     *, tenant_id: str, session_id: str, pool_id: str | None, stt_provider: str,
     stats: SpeechStats, segmentation: SpeechSegmentation | None,
+    speech_profile_id: str | None = None, stt_model: str | None = None,
 ) -> dict:
     ruido = stats.noise_percentiles()
     conf = stats.confidence_percentiles()
@@ -64,6 +65,10 @@ def stream_summary(
         "channel":         "webrtc",
         "speaker":         "customer",
         "stt_provider":    stt_provider,
+        # VOZ-25: o perfil de fala EM VIGOR (None = sem perfil) e o modelo usado — é por eles que a
+        # recalibragem compara, não só por pool
+        "speech_profile_id": speech_profile_id or None,
+        "stt_model":       stt_model or None,
         "timestamp":       _now_iso(),
         "audio_ms":        int(stats.audio_ms),
         "frames":          stats.frames,
@@ -82,7 +87,7 @@ def stream_summary(
         "confidence_p50":  conf[1],
         "confidence_p90":  conf[2],
         "segmentation":    {f: getattr(seg, f) for f in _SEG_FIELDS},
-        # só o ESCOPO (tenant/global/config/default), sem o motivo do default — a tabela agrega por ele
+        # só o ESCOPO (tenant/global/config/default/profile), sem o motivo nem o id — a tabela agrega por ele
         "segmentation_scope": {f: (seg.provenance.get(f) or "default").split(":")[0] for f in _SEG_FIELDS},
     }
 
@@ -91,7 +96,7 @@ def collect_outcome(
     *, tenant_id: str, session_id: str, pool_id: str | None, menu_id: str, interaction: str,
     inputs: list[str], outcome: str, via: str, release_reason: str | None, counters: dict,
     min_confidence: float | None, end_silence_ms: int | None, max_speech_ms: int | None,
-    duration_ms: int,
+    duration_ms: int, speech_profile_id: str | None = None,
 ) -> dict:
     return {
         "event_id":        str(uuid.uuid4()),
@@ -100,6 +105,7 @@ def collect_outcome(
         "session_id":      session_id,
         "pool_id":         pool_id or None,
         "channel":         "webrtc",
+        "speech_profile_id": speech_profile_id or None,
         "timestamp":       _now_iso(),
         "menu_id":         menu_id,
         "interaction":     interaction,

@@ -398,7 +398,7 @@ export interface UpdateGatewayConfigInput {
 
 // ── ChannelEndpoint — external address → pool mapping ────────────────────────
 
-export type ChannelEndpointChannel = 'webchat' | 'whatsapp' | 'voice' | 'sms' | 'email' | 'webhook'
+export type ChannelEndpointChannel = 'webchat' | 'whatsapp' | 'voice' | 'sms' | 'email' | 'webhook' | 'webrtc'
 
 /**
  * Procedência da linha (ADR adr-webhook-endpoint-single-registry, D6).

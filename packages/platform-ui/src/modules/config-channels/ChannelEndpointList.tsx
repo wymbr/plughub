@@ -7,6 +7,8 @@
  */
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNamespace } from '../config-plataforma/api/config-hooks'
+import { SPEECH_PROFILES_NS } from './WebRTCSpeechProfilesPage'
 import { useAuth } from '@/auth/useAuth'
 import {
   listChannelEndpoints,
@@ -71,6 +73,7 @@ const IDENTIFIER_PLACEHOLDER: Record<ChannelEndpointChannel, string> = {
   sms:      '55119',
   email:    'support@company.com',
   webhook:  'salesforce',
+  webrtc:   'support-video',
 }
 
 // ── Form state type ────────────────────────────────────────────────────────────
@@ -90,6 +93,13 @@ interface FormState {
    * de gerar o token depois) é a proteção que ninguém liga.
    */
   auth_required: boolean
+  /**
+   * VOZ-25 — só em `webrtc`: o perfil de fala (`speech_profiles` no config-api) que a chamada que
+   * entra por este endereço usa. '' = nenhum (vale a config do tenant). Viaja em `settings`, e o
+   * resto de `settings` da linha é preservado na edição.
+   */
+  speech_profile_id: string
+  settings:          Record<string, unknown>
 }
 
 const emptyForm = (): FormState => ({
@@ -98,7 +108,15 @@ const emptyForm = (): FormState => ({
   display_name:  '',
   active:        true,
   auth_required: true,
+  speech_profile_id: '',
+  settings:      {},
 })
+
+/** `settings` com o perfil escolhido — sem a chave quando nenhum (nunca string vazia gravada). */
+function settingsWithProfile(settings: Record<string, unknown>, profileId: string): Record<string, unknown> {
+  const { speech_profile_id: _old, ...rest } = settings
+  return profileId ? { ...rest, speech_profile_id: profileId } : rest
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -125,6 +143,9 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
   // Nada de localStorage/sessionStorage: persistir no navegador anularia a decisão
   // de não persistir no servidor, e num terminal compartilhado é pior ainda.
   const [freshToken, setFreshToken] = useState<{ identifier: string; token: string } | null>(null)
+  // VOZ-25: perfis de fala do tenant, só lidos na aba WebRTC
+  const speechProfiles = useNamespace(channel === 'webrtc' ? (tenantId ?? '') : '', SPEECH_PROFILES_NS)
+  const profileIds = Object.keys(speechProfiles.entries).sort()
   const [tokenBusy,  setTokenBusy]  = useState<string | null>(null)
   const [copied,     setCopied]     = useState(false)
 
@@ -165,6 +186,8 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
       // numa linha existente é pelos botões de token (gerar/rotacionar/revogar), que
       // são os únicos caminhos que entregam ou destroem o segredo.
       auth_required: ep.auth_required ?? false,
+      speech_profile_id: typeof ep.settings?.speech_profile_id === 'string' ? ep.settings.speech_profile_id : '',
+      settings:      ep.settings ?? {},
     })
     setFormErr(null)
     setFormMode(ep.id)
@@ -189,9 +212,11 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
         // uma decisão a tomar. Em webhook ela é OBRIGATÓRIA — o route não tem default,
         // porque não distingue quem consegue receber o token (esta tela) de quem não
         // consegue (o RegistrySyncer, que descarta o corpo). Ver ADR §7.10.
-        const { auth_required, ...rest } = form
+        const { auth_required, speech_profile_id, settings, ...rest } = form
+        const extra = channel === 'webrtc' && speech_profile_id
+          ? { settings: settingsWithProfile(settings, speech_profile_id) } : {}
         const created = await createChannelEndpoint(
-          channel === 'webhook' ? { ...rest, channel, auth_required } : { ...rest, channel },
+          channel === 'webhook' ? { ...rest, channel, auth_required } : { ...rest, ...extra, channel },
           tenantId,
         )
         // A janela ÚNICA do segredo. Sem isto, marcar a caixa criaria um endpoint
@@ -206,6 +231,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
           pool_id:      form.pool_id,
           display_name: form.display_name,
           active:       form.active,
+          ...(channel === 'webrtc' ? { settings: settingsWithProfile(form.settings, form.speech_profile_id) } : {}),
         }, tenantId)
       }
       closeForm()
@@ -371,6 +397,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
           setForm={setForm}
           pools={pools}
           channel={channel}
+          profileIds={profileIds}
           placeholder={IDENTIFIER_PLACEHOLDER[channel]}
           identifierReadonly={false}
           isNew={true}
@@ -392,7 +419,11 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
               <th className="py-2 pr-4 font-medium">{t('endpoint.colPool')}</th>
               <th className="py-2 pr-4 font-medium">{t('endpoint.colDisplayName')}</th>
               <th className="py-2 pr-4 font-medium">{t('endpoint.colOrigin')}</th>
-              <th className="py-2 pr-4 font-medium">{t('endpoint.colAuth')}</th>
+              {/* Autenticação só existe em webhook (o registro recusa token nos demais canais, 422);
+                  no WebRTC a coluna é o perfil de fala (VOZ-25) */}
+              <th className="py-2 pr-4 font-medium">
+                {channel === 'webrtc' ? t('endpoint.colSpeechProfile') : channel === 'webhook' ? t('endpoint.colAuth') : ''}
+              </th>
               <th className="py-2 pr-4 font-medium">{t('endpoint.colStatus')}</th>
               <th className="py-2 font-medium"></th>
             </tr>
@@ -418,6 +449,24 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                       antídoto escolhido não é o default agressivo: é esta coluna
                       (e a contagem no probe). Endpoint anônimo fica DITO, não
                       subentendido — mesmo movimento da Fase A do ADR. */}
+                  {channel === 'webrtc' ? (
+                  <td className="py-2.5 pr-4">
+                    {typeof ep.settings?.speech_profile_id === 'string' && ep.settings.speech_profile_id ? (
+                      profileIds.includes(ep.settings.speech_profile_id) || speechProfiles.loading ? (
+                        <code className="text-xs font-mono text-dark">{ep.settings.speech_profile_id}</code>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-light text-red-text"
+                              title={t('endpoint.speechProfileMissingHint')}>
+                          {t('endpoint.speechProfileMissing', { id: ep.settings.speech_profile_id })}
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-xs text-muted-light">{t('endpoint.speechProfileNone')}</span>
+                    )}
+                  </td>
+                  ) : channel !== 'webhook' ? (
+                  <td className="py-2.5 pr-4" />
+                  ) : (
                   <td className="py-2.5 pr-4">
                     {ep.auth_required ? (
                       <span
@@ -435,6 +484,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                       </span>
                     )}
                   </td>
+                  )}
                   <td className="py-2.5 pr-4">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                       ep.active
@@ -465,6 +515,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                             (fatia 3). Oferecer o botão ali seria um gatilho para um
                             defeito que a tela não explica; o ramo read-only acima diz
                             por que a linha não se edita. */}
+                        {channel === 'webhook' && (<>
                         <button
                           onClick={() => handleRotateToken(ep)}
                           disabled={formMode !== null || tokenBusy === ep.id || tokenPending}
@@ -487,6 +538,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                             {t('endpoint.token.revoke')}
                           </button>
                         )}
+                        </>)}
                         <button
                           onClick={() => openEdit(ep)}
                           disabled={formMode !== null || tokenPending}
@@ -517,6 +569,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                         setForm={setForm}
                         pools={pools}
                         channel={channel}
+                        profileIds={profileIds}
                         placeholder={IDENTIFIER_PLACEHOLDER[channel]}
                         identifierReadonly={true}
                         isNew={false}
@@ -582,6 +635,8 @@ interface FormProps {
   setForm:            React.Dispatch<React.SetStateAction<FormState>>
   pools:              Pool[]
   channel:            ChannelEndpointChannel
+  /** VOZ-25: ids dos perfis de fala do tenant (só usados em webrtc) */
+  profileIds:         string[]
   placeholder:        string
   identifierReadonly: boolean
   /**
@@ -598,7 +653,7 @@ interface FormProps {
 }
 
 function EndpointForm({
-  form, setForm, pools, channel, placeholder, identifierReadonly, isNew,
+  form, setForm, pools, channel, profileIds, placeholder, identifierReadonly, isNew,
   saving, error, onSave, onCancel,
 }: FormProps) {
   const { t } = useTranslation('channels')
@@ -650,6 +705,26 @@ function EndpointForm({
           </label>
         </div>
       </div>
+
+      {channel === 'webrtc' && (
+        <div className="border-t border-border pt-3">
+          <label className="text-xs font-medium text-dark block mb-1">{t('form.speechProfile')}</label>
+          <select
+            className={inp}
+            value={form.speech_profile_id}
+            onChange={e => setForm(p => ({ ...p, speech_profile_id: e.target.value }))}
+          >
+            <option value="">{t('endpoint.speechProfileNone')}</option>
+            {form.speech_profile_id && !profileIds.includes(form.speech_profile_id) && (
+              <option value={form.speech_profile_id}>
+                {t('endpoint.speechProfileMissing', { id: form.speech_profile_id })}
+              </option>
+            )}
+            {profileIds.map(id => <option key={id} value={id}>{id}</option>)}
+          </select>
+          <p className="text-xs text-muted mt-1">{t('form.speechProfileHint')}</p>
+        </div>
+      )}
 
       {/*
         Decisão de autenticação — só em webhook (é o único canal em que o gateway

@@ -52,6 +52,25 @@ class TestParser:
         r = parse_speech_metrics_event({**DESFECHO, "value": "correio", "transcript": "meu cpf"})
         assert "value" not in r and "transcript" not in r and "correio" not in repr(r)
 
+    def test_perfil_e_modelo_atravessam_e_vazio_fica_nulo(self):
+        # VOZ-25: string vazia viraria um "perfil" próprio no GROUP BY do relatório
+        r = parse_speech_metrics_event({**RESUMO, "speech_profile_id": "sip", "stt_model": "m-sip"})
+        assert (r["speech_profile_id"], r["stt_model"]) == ("sip", "m-sip")
+        assert parse_speech_metrics_event({**RESUMO, "speech_profile_id": ""})["speech_profile_id"] is None
+        assert parse_speech_metrics_event(RESUMO)["stt_model"] is None
+        assert parse_speech_metrics_event({**DESFECHO, "speech_profile_id": "sip"})["speech_profile_id"] == "sip"
+
+    def test_colunas_do_insert_existem_no_ddl_e_na_migracao(self):
+        import re
+        from plughub_analytics_api import clickhouse as ch
+        for ddl, cols, mig in ((ch._DDL_SPEECH_STREAM_SUMMARIES, ch.AnalyticsStore._SPEECH_STREAM_COLS,
+                                ch._DDL_SPEECH_STREAM_MIGRATE_PROFILE),
+                               (ch._DDL_SPEECH_COLLECT_OUTCOMES, ch.AnalyticsStore._SPEECH_COLLECT_COLS,
+                                ch._DDL_SPEECH_COLLECT_MIGRATE_PROFILE)):
+            colunas = re.findall(r"^\s{4}(\w+)\s+\S", ddl, flags=re.M)
+            assert cols == colunas, set(cols) ^ set(colunas)
+            assert "speech_profile_id" in mig and mig in ch._MIGRATIONS
+
     def test_sem_ids_ou_tipo_desconhecido_e_ignorado(self):
         assert parse_speech_metrics_event({**RESUMO, "session_id": ""}) is None
         assert parse_speech_metrics_event({**RESUMO, "event_type": "outro"}) is None
@@ -112,6 +131,27 @@ class TestRelatorio:
         asyncio.run(query_speech_quality(cli, "db", "t"))
         aliases = {a for s in cli.sqls for a in re.findall(r"\bAS\s+(\w+)", s)} - {"pool_id"}
         assert aliases and not (aliases & colunas), aliases & colunas
+
+    def test_linha_e_pool_por_perfil_e_nao_soma_perfis(self):
+        class _PorPerfil(_Cliente):
+            def query(self, sql, parameters=None):
+                self.sqls.append(sql)
+                r = MagicMock()
+                if "speech_stream_summaries" in sql:
+                    r.column_names = ["pool_id", "speech_profile_id", "calls"]
+                    r.result_rows = [("p", None, 40), ("p", "sip", 2)]
+                else:
+                    r.column_names = ["pool_id", "speech_profile_id", "collects"]
+                    r.result_rows = [("p", "sip", 7)]
+                return r
+        cli = _PorPerfil()
+        out = asyncio.run(query_speech_quality(cli, "db", "t", min_sample=30))
+        assert all("GROUP BY pool_id, speech_profile_id" in s for s in cli.sqls)
+        linhas = {(r["pool_id"], r["speech_profile_id"]): r for r in out["data"]}
+        assert set(linhas) == {("p", None), ("p", "sip")}
+        assert (linhas[("p", None)]["calls"], linhas[("p", None)]["collects"]) == (40, 0)
+        assert (linhas[("p", "sip")]["calls"], linhas[("p", "sip")]["collects"]) == (2, 7)
+        assert linhas[("p", "sip")]["sample_sufficient"] is False and linhas[("p", None)]["sample_sufficient"] is True
 
     def test_escopo_vazio_nao_consulta(self):
         cli = _Cliente()

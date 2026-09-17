@@ -201,6 +201,16 @@ Re-negociação para medium superior (upgrade) também possível quando um agent
 
 O Channel Gateway expõe `WS /ws/webrtc/{pool_id}` para o browser do cliente. O protocolo é análogo ao webchat (`conn.hello` / `conn.authenticate`) com extensão para negociação de mídia.
 
+> **Endereço da chamada (VOZ-26, 2026-09-17).** O segmento do caminho é um **identificador**, não
+> necessariamente um pool: o gateway o resolve pela tabela `ChannelEndpoint` do agent-registry
+> (`channel=webrtc`) e, sem linha, o trata como `pool_id` (e, vazio, usa `webrtc_default_pool_id`).
+> Como no webchat, o endpoint dá à URL publicada um nome estável e permite trocar o pool por trás
+> dela — a troca vale na próxima chamada, porque o `registry.changed` invalida o cache do resolvedor.
+> Até esta data a resolução era ramo morto: o registro recusava `channel=webrtc` (400) e a tela de
+> canais não oferecia o canal. Hoje a aba WebRTC tem **Endpoints** (sem conta de integração — o SFU é
+> fiação da instalação) e **Configurações** (segmentação da fala). Gate:
+> `infra/test/probe_webrtc_channel_endpoint.sh`.
+
 ### 5.1 Mensagens Server → Client
 
 ```jsonc
@@ -661,6 +671,20 @@ webrtc_stt_enabled:         bool = True
 > acabar cancelado. A fala do atendente não entra: a recalibragem é do ambiente do cliente. Leitura:
 > `GET /reports/speech/quality` por pool, com `sample_sufficient` abaixo de 30 chamadas. Gate ao vivo:
 > `infra/test/probe_speech_metrics.sh`. Ver `CHANGELOG.md` 2026-09-17 (5).
+>
+> **Perfil de fala por ponto de entrada (VOZ-25).** O endpoint WebRTC aponta um perfil em
+> `settings.speech_profile_id`; o perfil mora no config-api, namespace `speech_profiles` (uma chave por
+> perfil, valor = objeto com qualquer `stt_*` da segmentação e `stt_model`, `stt_language`, `tts_model`,
+> `tts_voice`). Resolução por chamada, UMA vez e compartilhada entre STT e TTS
+> (`WebRTCAdapter._speech_settings` → `speech_config.resolve_session`): **menu → perfil → tenant →
+> global → default**; modelo, língua e voz sem perfil vêm do env do gateway (`VOZ-17`). O modelo é
+> escolhido **dentro do mesmo serviço** speaches (a URL continua topologia). Perfil ausente, campo
+> inválido, chave desconhecida e config-api fora são ditos no log e não valem; `config.changed` de
+> `speech_profiles` invalida o cache e vale na próxima chamada. O log da chamada traz `voz da chamada
+> session=… perfil=…` com a procedência de cada campo (`profile:<id>`), a telemetria grava o
+> `speech_profile_id` em vigor (e o `stt_model` no resumo), e `/reports/speech/quality` agrupa por
+> pool × perfil. Tela: aba WebRTC → Configurações → *Perfis de fala*, e o seletor no endpoint. Gate ao
+> vivo: `infra/test/probe_webrtc_speech_profile.sh`. Ver `CHANGELOG.md` 2026-09-17 (7).
 >
 > **Teclado do widget (fatia 5c).** O `webrtc.interaction` leva `collect` — só o que a TELA precisa
 > (`input`, `domain`, `min_digits`, `max_digits`, `terminator`; nunca mensagem nem prazo) — e o

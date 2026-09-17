@@ -15,6 +15,10 @@
  * `.strict()`: um campo de texto novo REPROVA a validação em vez de passar calado.
  *
  * Percentil ausente é `null` (sem amostra), nunca 0 — 0 é chão de ruído legítimo (microfone digital).
+ *
+ * VOZ-25: os dois eventos levam o `speech_profile_id` EM VIGOR na chamada (null = sem perfil, ou
+ * perfil que não pôde valer) — a recalibragem compara por perfil, não só por pool. O resumo leva
+ * também o `stt_model` usado. Nome de modelo e id de perfil são config, não fala do cliente.
  */
 
 import { z } from "zod"
@@ -27,6 +31,7 @@ const Common = {
   session_id: z.string().min(1),
   pool_id:    z.string().nullable(),
   channel:    z.literal("webrtc"),
+  speech_profile_id: z.string().nullable(),
   timestamp:  z.string().datetime({ offset: true }),
 }
 
@@ -43,10 +48,11 @@ export const SpeechSegmentationSnapshotSchema = z.object({
   vad_filter:       z.boolean(),
 }).strict()
 
-/** De onde veio cada parâmetro: override do tenant, default da plataforma, ou default de código. */
+/** De onde veio cada parâmetro: perfil de fala da chamada, override do tenant, default da
+ * plataforma, ou default de código. */
 export const SpeechSegmentationScopeSchema = z.record(
   z.enum(SPEECH_SEGMENTATION_FIELDS),
-  z.enum(["tenant", "global", "config", "default"]),
+  z.enum(["profile", "tenant", "global", "config", "default"]),
 )
 
 export const SttStreamSummaryEventSchema = z.object({
@@ -54,6 +60,7 @@ export const SttStreamSummaryEventSchema = z.object({
   event_type:             z.literal("stt_stream_summary"),
   speaker:                z.literal("customer"),
   stt_provider:           z.string(),
+  stt_model:              z.string().nullable(),
   audio_ms:               z.number().int().nonnegative(),
   frames:                 z.number().int().nonnegative(),
   voiced_frames:          z.number().int().nonnegative(),
