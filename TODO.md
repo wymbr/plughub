@@ -38,6 +38,7 @@ variam de instalação para instalação e ao longo do tempo.
 `VOZ-27` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (9)): a verificação passa a rodar sozinha (agenda semeada de arquivo) e a ser operável na tela; a que NÃO rodou deixa linha. Achou o `issue_status` inerte (`SFE-02`) e o scheduler sem credencial (`SCH-01`).
 `SCH-01` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (10)): as 9 rotas de Agenda passam a pedir credencial e capacidade; o tenant vem do token. Escopo por pool ficou para a `SCH-02`; o censo do eixo, para a `AUT-58`.
 `VOZ-15` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (11)): capacidade no pool deixou de bastar para o token de mídia — o agente tem de estar entre os atendentes do contato. Supervisor segue fora da regra, de propósito.
+`VOZ-12` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (12)): `file_upload` saiu da tabela do WebRTC — declarado sem implementação. Implementar virou `VOZ-28`, com gatilho de demanda.
 
 ## VOZ-19 — ruído que vira fala, e o limiar de confiança *(medido 2026-09-17)*
 

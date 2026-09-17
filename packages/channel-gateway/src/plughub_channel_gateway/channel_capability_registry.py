@@ -109,7 +109,13 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     # ⚠️ O que a garantia NÃO cobre, por não ser superfície de leitura da plataforma: o
     # áudio ao vivo que um humano em conferência ouve se o cliente DISSER o valor. Isolar a
     # perna no bloco mascarado é o controle (2) da NIV-07, e chega com a coleta falada.
-    "webrtc":    frozenset({"text", "audio", "video", "file_upload", "masked_input"}),
+    # ⚠️ `file_upload` SAIU em 2026-09-17 (VOZ-12): estava declarado e o adapter não tem
+    # caminho de upload nenhum (zero ocorrências de `upload` em `adapters/webrtc.py`) — um
+    # `collect` com `requires: ["file_upload"]` podia ELEGER o webrtc e não entregar, que é a
+    # V8 (capacidade declarada é capacidade verificada) pelo avesso. Sair custou ZERO eleição:
+    # nenhum skill vivo declara esse requisito hoje. Volta quando existir o fluxo de dois
+    # estágios do webchat aqui — ficha `VOZ-28`, com o `AttachmentStore` inteiro a reusar.
+    "webrtc":    frozenset({"text", "audio", "video", "masked_input"}),
     # Entraram na NIV-01 para que a ausência deixasse de ser silenciosa. As duas são
     # canais de mensagem com mídia; nenhuma tem superfície de entrada mascarada.
     "instagram": frozenset({"text", "file_upload"}),

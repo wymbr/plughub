@@ -334,6 +334,13 @@ Valores aceitos em `requires`: `text`, `audio`, `video`, `file_upload`,
 `masked_input`, `rich_menu`. Usar `channel` explícito continua válido para forçar
 um canal específico.
 
+> ⚠️ **Quem serve `file_upload` hoje:** `webchat`, `whatsapp`, `email`, `instagram`,
+> `telegram`. **`webrtc` saiu da lista em 2026-09-17** (VOZ-12) — ele a declarava sem ter
+> caminho de upload no adapter, e um `collect` com esse requisito podia elegê-lo e não
+> entregar. A capacidade volta quando o fluxo existir (ficha `VOZ-28`); a casa única da
+> tabela é `@plughub/schemas/channel-capabilities.ts`, com gêmeo Python conferido por
+> `probe_channel_capability_single_house.sh`.
+
 ### Nota: `notify` como step type está depreciado (Arc 16)
 
 O step type `notify` foi **depreciado** no Arc 16 — use `invoke: notification_send`

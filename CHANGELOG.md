@@ -1,5 +1,35 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (12) — VOZ-12: o WebRTC deixa de prometer `file_upload`
+
+**A promessa sem mecanismo.** `CHANNEL_CAPABILITIES["webrtc"]` e o gêmeo TS declaravam
+`file_upload`, e o adapter não tem caminho de upload nenhum — **zero** ocorrências de `upload` em
+`adapters/webrtc.py`. Um `collect` com `requires: ["file_upload"]` podia ELEGER o WebRTC e não
+entregar: a V8 (*capacidade declarada é capacidade verificada*) pelo avesso, e num eixo que decide
+por onde falar com o cliente.
+
+**Decisão do dono (2026-09-17): sai da tabela até existir.** Não é adiar por preguiça — é a tabela
+parar de afirmar o que não se sustenta. Implementar tem casa pronta (o fluxo de dois estágios do
+webchat e o `AttachmentStore` inteiro, com allowlist de MIME, expiração e purga), mas é entrega com
+protocolo no widget, rota de binário, testes e gate ao vivo; e a demanda não existe hoje.
+
+**O que MUDOU de comportamento: nada — e isso foi medido antes.** Nenhum skill vivo declara
+`requires: ["file_upload"]` (as ocorrências de `requires` nos 42 skills são `resume_requires`, outro
+campo), então a eleição de canal não muda para ninguém. O que muda é que a próxima que declarar não
+vai cair num canal que não entrega.
+
+**Onde a linha estava, ficou o motivo**, nos dois gêmeos: por que saiu, o que custaria voltar, e a
+ficha (`VOZ-28`). A `docs/guias/webhook-patterns.md`, que ensina `requires` com um exemplo de
+`file_upload`, passou a dizer quem serve a capacidade hoje — sem isso, o guia continuaria ensinando
+o que a tabela deixou de prometer.
+
+**Verificação.** `probe_channel_capability_single_house.sh` **VERDE** nos seis ramos, incluindo o F
+(gêmeo Python idêntico ao canônico TS, 9 canais) — a remoção foi nos dois lados, e é o gate que
+prova. channel-gateway **1255** testes, schemas **356**. A imagem no ar foi consultada diretamente:
+`webrtc: ['audio', 'masked_input', 'text', 'video']`.
+
+**Deixou ficha:** `VOZ-28` (implementar o upload no WebRTC quando houver demanda).
+
 ## 2026-09-17 (11) — VOZ-15: o token de mídia do agente exige ATENDER o contato, não só o pool
 
 **O buraco.** `GET /webrtc/token/{sid}?role=agent` exigia Bearer e `agent_assist.atender` recortado

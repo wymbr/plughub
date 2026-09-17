@@ -69,7 +69,10 @@ export const CHANNEL_CAPABILITIES: Readonly<Record<Channel, readonly ChannelCapa
   webchat:   ["text", "file_upload", "rich_menu", "masked_input"],
   // `masked_input` desde a VOZ-05 (fatia A): campo protegido no widget e, durante a
   // coleta, fala transcrita e texto livre descartados. O detalhe mora no gêmeo Python.
-  webrtc:    ["text", "audio", "video", "file_upload", "masked_input"],
+  // ⚠️ `file_upload` saiu em 2026-09-17 (VOZ-12): declarado sem implementação no adapter.
+  // O detalhe mora no gêmeo Python, que é onde a medição está — repetir aqui criaria duas
+  // versões do mesmo raciocínio. Volta com a `VOZ-28`.
+  webrtc:    ["text", "audio", "video", "masked_input"],
   instagram: ["text", "file_upload"],
   telegram:  ["text", "file_upload", "rich_menu"],
   // `webhook` é o canal de WORKFLOW (Arc 19): não há cliente do outro lado, logo
