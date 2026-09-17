@@ -279,6 +279,15 @@
     padding: 6px 12px; font-size: 13px; border-radius: 6px;
     background: #1B4F8A; color: #fff; border: none; cursor: pointer;
   }
+  /* Teclado da coleta (VOZ-05 fatia 5c) */
+  .ia-keypad { display: grid; grid-template-columns: repeat(3, 44px); gap: 4px; margin-top: 8px; }
+  .ia-key {
+    height: 36px; font-size: 15px; border-radius: 6px; cursor: pointer;
+    background: #fff; color: #1e293b; border: 1px solid #cbd5e1;
+  }
+  .ia-key:hover { background: #e0e7ff; border-color: #1B4F8A; }
+  .ia-key:disabled { visibility: hidden; }
+  .ia-keys-readout { margin-top: 6px; font-size: 12px; color: #475569; min-height: 16px; }
 
   /* ── Input row ──────────────────────────────────────────────────────────── */
   .input-row {
@@ -761,7 +770,45 @@ function teardown() {
 // local nunca mostra o valor dele.
 const MASKED_ECHO = '••••••';
 
+// VOZ-05 (fatia 5c): teclado pelo DOMÍNIO da coleta (`msg.collect`, decidido 2026-09-16).
+//   menu comum  → cada tecla é DTMF pelo SFU (`publishDtmf`), o mesmo evento da perna SIP; a
+//                 semântica (opção, dígitos, prazo) é do gateway, que ouve o ouvinte da sala
+//   mascarado   → o teclado só PREENCHE o campo protegido; o valor vai pelo WebSocket do gateway
+//                 no `webrtc.menu_submit`, NUNCA pelo SFU, que o entregaria a atendente e supervisor
+const DTMF_CODE = { '*': 10, '#': 11 };
+for (let i = 0; i <= 9; i++) DTMF_CODE[String(i)] = i;
+
+function keypad(card, collect, onKey) {
+  const grid = document.createElement('div');
+  grid.className = 'ia-keypad';
+  const extras = collect.domain === 'digits_star_hash' || collect.terminator;
+  for (const k of ['1','2','3','4','5','6','7','8','9', '*','0','#']) {
+    const b = document.createElement('button');
+    b.className = 'ia-key';
+    b.textContent = k;
+    b.type = 'button';
+    const permitida = /[0-9]/.test(k) || collect.domain === 'digits_star_hash' || k === collect.terminator;
+    if (!permitida || (!extras && !/[0-9]/.test(k))) b.disabled = true;
+    b.onclick = () => onKey(k);
+    grid.appendChild(b);
+  }
+  card.appendChild(grid);
+  return grid;
+}
+
+async function sendDtmf(digit) {
+  if (!room || !room.localParticipant) {
+    addMsg('A chamada de voz ainda não conectou — use as opções da tela.', 'sys');
+    return false;
+  }
+  await room.localParticipant.publishDtmf(DTMF_CODE[digit], digit);
+  return true;
+}
+
 function renderInteraction(msg) {
+  // Menu novo: o anterior não responde mais. A resposta por TECLA não passa pelo `submit`, então sem
+  // isto o teclado de um menu já respondido seguia clicável (visto no navegador, fatia 5c).
+  document.querySelectorAll('.ia-card:not(.done)').forEach(c => c.classList.add('done'));
   const card = document.createElement('div');
   card.className = 'ia-card';
   card.dataset.menuId = msg.menu_id || '';
@@ -800,6 +847,14 @@ function renderInteraction(msg) {
   };
 
   const opts = msg.options || [];
+  const collect = msg.collect || null;
+  const temTeclado = !!collect && (collect.input || []).includes('dtmf');
+  const readout = () => {
+    const r = document.createElement('div');
+    r.className = 'ia-keys-readout';
+    card.appendChild(r);
+    return r;
+  };
   if (interaction === 'form') {
     const inputs = (msg.fields || []).map(f => input(f.id, f.label || f.id, masked.has(f.id)));
     okButton(() => {
@@ -836,16 +891,44 @@ function renderInteraction(msg) {
       btn.onclick = () => submit(opt.id, masked.size ? MASKED_ECHO : (opt.label || opt.id));
       card.appendChild(btn);
     }
+    if (temTeclado && !masked.size) {
+      const lido = readout();
+      keypad(card, collect, async (k) => { if (await sendDtmf(k)) lido.textContent = 'Tecla ' + k; });
+    }
+  } else if (temTeclado && masked.size === 0 && !(collect.input || []).includes('text')) {
+    // campo só de teclado: as teclas vão ao gateway como DTMF, e a tela mostra o que foi teclado
+    const lido = readout();
+    let teclado = '';
+    keypad(card, collect, async (k) => {
+      if (await sendDtmf(k)) { teclado = k === collect.terminator ? '' : teclado + k; lido.textContent = teclado ? 'Teclado: ' + teclado : 'Enviado.'; }
+    });
   } else {
     const isMasked = masked.size > 0;
     const inp = input(isMasked ? [...masked][0] : 'resposta', '', isMasked);
+    const digitos = temTeclado && ['digits', 'digits_star_hash'].includes(collect.domain);
+    if (digitos) {
+      inp.inputMode = 'numeric';
+      if (collect.max_digits) inp.maxLength = collect.max_digits;
+    }
     const send = () => {
       const val = inp.value.trim();
       if (!val) return;
+      if (digitos && val.length < (collect.min_digits || 1)) {
+        addMsg(`Digite ao menos ${collect.min_digits} dígitos.`, 'sys');   // conferência de UX; quem decide é o gateway
+        return;
+      }
       submit(val, isMasked ? MASKED_ECHO : val);
     };
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
     okButton(send);
+    if (digitos) {
+      // o teclado da tela PREENCHE o campo — mascarado ou não, nada disto vai ao SFU
+      keypad(card, collect, (k) => {
+        if (k === collect.terminator) { send(); return; }
+        if (!collect.max_digits || inp.value.length < collect.max_digits) inp.value += k;
+        inp.focus();
+      });
+    }
     inp.focus();
   }
 
@@ -903,6 +986,21 @@ async function connectWebRTC() {
     if (msg.type === 'conn.ready') {
       wsSend({ type: 'conn.hello', version: '1' });
       wsSend({ type: 'conn.authenticate', token });
+      return;
+    }
+    if (msg.type === 'conn.error' && msg.code === 'collect_invalid') {
+      // VOZ-05 (5c): o gateway recusou a resposta pela tela (domínio/tamanho). O cartão volta a
+      // aceitar entrada; a mensagem é a do fluxo, e sem ela o default do dono é não ecoar nada.
+      const card = document.querySelector(`.ia-card[data-menu-id="${CSS.escape(msg.menu_id || '')}"]`);
+      if (card) {
+        card.classList.remove('done');
+        card.querySelectorAll('input').forEach(i => { i.value = ''; });
+      }
+      if (msg.message) addMsg(msg.message, 'sys');
+      return;
+    }
+    if (msg.type === 'conn.error' && msg.code === 'collect_input_not_accepted') {
+      addMsg('Este menu é respondido pelo teclado ou por voz.', 'sys');
       return;
     }
     if (msg.type === 'conn.error' && msg.code === 'masked_capture_active') {

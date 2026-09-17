@@ -1,5 +1,61 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-16 (6) — VOZ-05 fatia 5c: o widget ganha teclado pelo domínio da coleta, e o PIN mascarado nunca passa pelo SFU — VOZ-05 fechada
+
+**O que havia.** Depois da 5b, o gateway sabia coletar por tecla, mas o cliente no browser não
+tinha tecla nenhuma: o `webrtc.interaction` não dizia ao widget qual era a coleta, e o widget não
+tinha teclado. E a resposta de campo numérico que chegava pela TELA ia ao menu sem conferência —
+o domínio e o tamanho valiam para a tecla, não para o clique.
+
+**Decisões aplicadas** (`TODO.md` § *VOZ-05 fatia 5*, 4 e 6): WebRTC no browser TEM tela, então
+campo mascarado vai ao campo protegido; o teclado segue o domínio; menu comum tecla DTMF pelo SFU
+(o mesmo evento da perna SIP); campo mascarado vai pelo canal de dados do GATEWAY, nunca pelo SFU,
+que entrega a tecla a todos na sala — atendente e supervisor incluídos.
+
+**Feito.**
+- **Gateway.** O frame `webrtc.interaction` leva `collect` com só o que a tela precisa (`input`,
+  `domain`, `min_digits`, `max_digits`, `terminator` — `CollectPlan.screen_view`, sem mensagem nem
+  prazo). O plano de cada menu fica guardado, inclusive o do menu mascarado, que teclado e fala não
+  coletam. Resposta de campo de dígitos pela tela passa por `CollectPlan.accepts_digits` — a mesma
+  regra da tecla, com o terminador fora do valor: fora do domínio/tamanho não vai ao menu, o widget
+  recebe `conn.error collect_invalid` (com a `invalid_message` do fluxo), e esgotado `max_invalid` o
+  menu recebe o desfecho `invalid`. O valor recusado nunca vai ao log.
+- **Widget** (`infra/demo/web/webrtc-widget.html`). Teclado por domínio (`*`/`#` só quando pedidos).
+  Menu de botões ou campo só de teclado: a tecla é `publishDtmf` na sala (sem sala, avisa e manda
+  usar a tela). Campo de dígitos — mascarado ou não —: o teclado só preenche o campo, que vai no
+  `webrtc.menu_submit`; o terminador envia. `collect_invalid` reabre o cartão. Menu novo encerra os
+  cartões anteriores (o teclado de um menu já respondido seguia clicável — visto no navegador).
+
+**Testes.** channel-gateway 1135 (tela: 9 novos entre núcleo e renderizador) — com o controle do
+campo de texto livre, que não é validado como dígitos.
+
+**Gate.** `probe_webrtc_keypad.sh` (AUTO): F1 o menu de botões leva a coleta · F2 o PIN leva
+domínio, tamanhos e máscara · S2 PIN longo demais recusado pela tela e fora do menu · S3 CONTROLE
+PIN válido com `#` chega · L0 a recusa foi registrada na sessão · L1 nem o PIN aceito nem o
+recusado aparecem no log. Mutações ao vivo: LM5 tela sem a regra → S2 · LM6 recusa loga o valor →
+L1. **A LM6 sobreviveu na primeira rodada**: a tentativa inválida tinha 2 dígitos e o L1 só
+procurava o PIN aceito; hoje a tentativa é um valor distintivo de 7 dígitos, e o L1 procura os dois.
+
+**Navegador (roteiro assistido, medido).** Widget no painel do navegador, pool `probe_voz05c_keypad`,
+microfone bloqueado (a sala conecta mesmo assim): tecla 2 no teclado do menu → o gateway registra
+`value por dtmf` e o fluxo manda `voz05c-valor=correio`; PIN `4821#` pelo teclado do campo
+protegido → `voz05c-pin-recebido`, eco `••••••`. **Teclas que chegaram ao ouvinte naquela sessão:
+1** (a do menu) — as 5 do PIN, nenhuma. PIN no log do gateway 0, do bridge 0, no stream 0.
+Roteiro em `docs/arcos/arc15-webrtc.md`.
+
+**VOZ-05 fechada.** Escopo da ficha cumprido nas cinco fatias (bot leg só com STT real, speaches,
+agente que fala com barge-in, ouvinte + voz com transcrição de cada falante, coleta por teclado e
+fala com fila de sinal e teclado do widget). Bloqueios que ela segurava: `VOZ-13` (worker de mídia)
+**desbloqueada**; `NIV-06` (eco do DTMF mascarado), `ALW-19` (`echo_to_customer` sem leitor) e
+`OUT-04` (discador) passam a `bloqueado` por `VOZ-02` — só existem em perna SEM tela, que é a SIP.
+A ALW-19 era `adiado` com gatilho "a perna de voz ganhar bot leg": disparou, e a medição é que o
+bot leg do WebRTC não consome o campo (mascarado vai à tela; o eco da 5b vem do `collect.echo`).
+O `CLAUDE.md` § Arc 15 listava "bot leg (`VOZ-05`)" entre o que não existe — corrigido. Fica aberta a `VOZ-18`.
+
+**Fora desta fatia.** Formulário com vários campos mascarados não é validado pela regra da coleta
+(o `collect` é do menu, não do campo); dialpad para chamada só de texto (sem sala não há DTMF — a
+tela responde); o eco `plain`/`masked` do DTMF do widget é falado/bipado pela voz, como na 5b.
+
 ## 2026-09-16 (5) — VOZ-05 fatia 5b: menu por teclado e fala na chamada WebRTC, com a semântica numa casa só
 
 **O que havia.** Numa chamada WebRTC atendida por IA, qualquer fala do cliente respondia qualquer

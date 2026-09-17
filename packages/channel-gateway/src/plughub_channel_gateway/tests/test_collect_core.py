@@ -182,3 +182,29 @@ class TestFala:
     def test_campo_de_texto_por_fala_devolve_a_frase(self):
         s = _sess(_menu("text", input=["voice"]))
         assert _done(s.speech(" Rua das Flores, 10 ", 1.0, 1.0)) == Done("value", "Rua das Flores, 10", "voice")
+
+
+class TestTela:
+    """VOZ-05 fatia 5c: o valor que chega inteiro pela tela passa pela mesma regra da tecla."""
+
+    def _plano(self, **c):
+        return CollectPlan.from_menu(_menu("text", input=["dtmf"], **c))
+
+    def test_digitos_no_tamanho_e_dominio(self):
+        p = self._plano(min_digits=4, max_digits=6)
+        assert p.is_digit_field
+        assert p.accepts_digits("1234") and p.accepts_digits("123456")
+        assert not p.accepts_digits("123") and not p.accepts_digits("1234567")
+        assert not p.accepts_digits("12a4") and not p.accepts_digits("") and not p.accepts_digits("12*4")
+
+    def test_terminador_no_fim_nao_conta_e_asterisco_so_no_dominio_proprio(self):
+        assert self._plano(min_digits=3, terminator="#").accepts_digits("123#")
+        assert self._plano(max_digits=3, domain="digits_star_hash").accepts_digits("*12")
+
+    def test_campo_de_fala_ou_menu_de_opcoes_nao_e_campo_de_digitos(self):
+        assert not CollectPlan.from_menu(_menu("text", input=["voice"])).is_digit_field
+        assert not CollectPlan.from_menu(_menu()).is_digit_field
+
+    def test_visao_da_tela_nao_leva_mensagem_nem_prazo(self):
+        v = self._plano(min_digits=3, max_digits=6, terminator="#", invalid_message="x", max_invalid=2).screen_view()
+        assert v == {"input": ["dtmf"], "domain": "digits", "min_digits": 3, "max_digits": 6, "terminator": "#"}

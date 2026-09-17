@@ -444,6 +444,14 @@ probe_webrtc_human_transcript.sh
 # responde; dois invalidos e prazo com desfecho proprio. Mutacoes ao vivo LM1..LM4 todas pegas
 # (CHANGELOG 2026-09-16 (5)); sem A0 e R0, duas delas passavam por ausencia.
 probe_webrtc_voice_collect.sh
+
+# VOZ-05 fatia 5c (2026-09-16): o frame do menu leva ao widget o dominio da coleta (e dele sai o
+# teclado), e a resposta de campo de digitos pela TELA -- inclusive o PIN mascarado -- passa pela
+# regra da tecla: fora do dominio/tamanho nao chega ao menu. L0 prova que a recusa foi registrada e
+# L1 que nem o PIN aceito nem o recusado aparecem no log. Mutacoes ao vivo LM5/LM6 pegas; a LM6
+# sobreviveu enquanto a tentativa invalida tinha 2 digitos. O teclado no NAVEGADOR (DTMF so no
+# menu comum) e roteiro assistido em arc15-webrtc.md.
+probe_webrtc_keypad.sh
 # CTR-09. Referencia pura de `invoke` que nao resolveu (`@ctx.*` ausente) viajava como `null` e a
 # tool com campo `.optional()` recusava (-32602): o `validate_pin` do skill_auth_form_v1 reprovava
 # a senha CERTA de todo cliente sem identidade. Mede a suite do invoke contra a IMAGEM e, ao vivo no

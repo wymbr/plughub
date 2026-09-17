@@ -614,6 +614,25 @@ webrtc_stt_enabled:         bool = True
 > por teclado/fala são respondidos pela tela, ditos no log. Não aplicados ainda, e ditos no log:
 > `voice.end_silence_ms`/`max_speech_s` e, com o `speaches`, `min_confidence` (VOZ-18). Gate ao
 > vivo: `infra/test/probe_webrtc_voice_collect.sh`. Ver `CHANGELOG.md` 2026-09-16 (5).
+>
+> **Teclado do widget (fatia 5c).** O `webrtc.interaction` leva `collect` — só o que a TELA precisa
+> (`input`, `domain`, `min_digits`, `max_digits`, `terminator`; nunca mensagem nem prazo) — e o
+> widget desenha o teclado pelo domínio (`*`/`#` só quando o domínio ou o terminador os pedem):
+>
+> | menu | a tecla do widget vira | por onde |
+> |---|---|---|
+> | comum (botões, ou campo só de teclado) | DTMF (`publishDtmf`) — o mesmo evento da perna SIP | SFU → ouvinte |
+> | campo de dígitos mascarado | caractere no campo protegido, enviado no `webrtc.menu_submit` | WebSocket do gateway — **nunca** o SFU, que entregaria o dígito a atendente e supervisor |
+>
+> A resposta de campo de dígitos que chega pela TELA passa pela mesma regra da tecla
+> (`CollectPlan.accepts_digits`): fora do domínio ou do tamanho não vai ao menu, o widget recebe
+> `conn.error collect_invalid` (com a `invalid_message` do fluxo, se houver) e, esgotado
+> `max_invalid`, o menu recebe o desfecho `invalid`. O valor recusado nunca vai ao log.
+> Gate: `infra/test/probe_webrtc_keypad.sh`. Roteiro assistido do navegador (medido em 2026-09-16):
+> `http://localhost:5173/webrtc-widget.html?pool=probe_voz05c_keypad` → tecla do menu de botões →
+> o gateway registra `value por dtmf`; PIN pelo teclado → `voz05c-pin-recebido`, e **nenhuma**
+> tecla a mais chega ao ouvinte naquela sessão (`grep -cE 'por dtmf|webrtc dtmf: tecla'` = 1), com
+> o PIN ausente do log do gateway, do bridge e do stream. Ver `CHANGELOG.md` 2026-09-16 (6).
 
 ---
 

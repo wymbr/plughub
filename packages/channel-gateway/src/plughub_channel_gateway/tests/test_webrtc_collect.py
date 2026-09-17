@@ -223,3 +223,64 @@ class TestFalaReal:
         assert adapter._collects[SESSION_ID].played.is_set()
         assert await _ate(lambda: _resultados(producer))
         assert _resultados(producer) == [{"menu_id": "m1", "outcome": "timeout"}]
+
+
+def _campo(masked=True, **collect) -> dict:
+    c = {"input": ["dtmf"], "first_input_timeout_s": 30, "min_digits": 4, "max_digits": 6, "terminator": "#"}
+    c.update(collect)
+    m = {"session_id": SESSION_ID, "menu_id": "pin", "interaction": "text", "prompt": "Digite o PIN", "collect": c}
+    if masked:
+        m["masked_fields"] = ["pin"]
+    return m
+
+
+def _submit(valor) -> str:
+    return json.dumps({"type": "webrtc.menu_submit", "menu_id": "pin", "interaction": "text", "result": valor})
+
+
+class TestTela:
+    """VOZ-05 fatia 5c: o widget ganha o domínio para o teclado, e a resposta pela tela passa pela
+    mesma regra da tecla — inclusive a do campo mascarado, cujo valor nunca vai ao log."""
+
+    async def test_frame_leva_a_visao_da_coleta_e_controle_sem_collect(self):
+        adapter, _, _, _ = _adapter()
+        ws = adapter._connections[SESSION_ID]
+        await adapter.deliver_menu(_campo())
+        frame = ws.send_json.call_args.args[0]
+        assert frame["collect"] == {"input": ["dtmf"], "domain": "digits", "min_digits": 4,
+                                    "max_digits": 6, "terminator": "#"}
+        m = _campo()
+        m.pop("collect")
+        await adapter.deliver_menu(m)
+        assert ws.send_json.call_args.args[0]["collect"] is None
+
+    async def test_campo_mascarado_invalido_nao_vai_ao_menu_e_o_valor_nao_vai_ao_log(self, caplog):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_campo())
+        ws = _ws_streaming([_submit("12x9")])
+        with caplog.at_level(logging.DEBUG):
+            await adapter._receive_loop(ws, SESSION_ID)
+        assert _resultados(producer) == []
+        assert ws.send_json.call_args.args[0]["code"] == "collect_invalid"
+        assert "12x9" not in caplog.text
+
+    async def test_controle_valido_vai_ao_menu_sem_o_terminador(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_campo())
+        await adapter._receive_loop(_ws_streaming([_submit("4821#")]), SESSION_ID)
+        assert _resultados(producer) == [{"menu_id": "pin", "interaction": "text", "result": "4821"}]
+
+    async def test_invalidos_esgotados_pela_tela_viram_desfecho_invalid(self):
+        adapter, _, producer, _ = _adapter()
+        await adapter.deliver_menu(_campo(max_invalid=2))
+        await adapter._receive_loop(_ws_streaming([_submit("1"), _submit("22")]), SESSION_ID)
+        assert _resultados(producer) == [{"menu_id": "pin", "outcome": "invalid"}]
+
+    async def test_campo_de_texto_livre_nao_e_validado_como_digitos(self):
+        adapter, _, producer, _ = _adapter()
+        m = {"session_id": SESSION_ID, "menu_id": "pin", "interaction": "text", "prompt": "Nome?",
+             "collect": {"input": ["voice", "text"], "first_input_timeout_s": 30}}
+        await adapter.deliver_menu(m)
+        await adapter._receive_loop(_ws_streaming([_submit("Maria")]), SESSION_ID)
+        assert _resultados(producer) == [{"menu_id": "pin", "interaction": "text", "result": "Maria"}]
+        await _encerra(adapter)

@@ -1354,7 +1354,8 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 > assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. **Contato ponta a ponta validado com
 > gente no browser em 2026-09-15** (`VOZ-04`; roteiro `docs/guias/roteiro-validacao-webrtc-console.md`).
 > ⚠️ **O que ainda NÃO existe:** mídia para browser em OUTRA máquina da rede (o demo serve o próprio
-> host — loopback, UDP único e TURN com dois nomes), egress (`VOZ-06`), bot leg (`VOZ-05`).
+> host — loopback, UDP único e TURN com dois nomes), egress (`VOZ-06`), perna SIP (`VOZ-02`). O bot leg
+> (ouvinte + voz, transcrição e coleta por teclado/fala) existe desde 2026-09-16 — `arc15-webrtc.md` § 15.
 
 - **Versões do LiveKit andam JUNTAS** — SFU no compose, `livekit-client` do Console (lockfile) e do
   widget (versão exata no CDN). SFU v1.8.4 com clientes 2.20/2.22 publicava áudio e não vídeo, sem

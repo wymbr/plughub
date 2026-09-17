@@ -35,7 +35,10 @@ WebSocket protocol (per-connection state machine):
      cada atribuição — um especialista de texto rebaixava o cliente de uma chamada de vídeo.
     {"type": "webrtc.message",   "text": "...", "author": "agent", "ts": "..."}
     {"type": "webrtc.interaction", "menu_id": "...", "interaction": "...", "prompt": "...",
-     "options": [...], "fields": [...], "masked_fields": [...]}
+     "options": [...], "fields": [...], "masked_fields": [...],
+     "collect": {"input", "domain", "min_digits", "max_digits", "terminator"} | null}   — teclado (5c)
+    {"type": "conn.error", "code": "collect_invalid", "menu_id": "...", "message": "..."}  — tela fora
+                                                  do domínio/tamanho da coleta (VOZ-05 5c)
     {"type": "webrtc.typing",    "active": true|false}
     {"type": "webrtc.session_closed", "reason": "..."}
     {"type": "conn.pong"}
@@ -363,6 +366,11 @@ class WebRTCAdapter(ChannelAdapter):
         # novo substitui o anterior) e o leitor de DTMF do ouvinte.
         self._collects:   dict[str, _ActiveCollect] = {}
         self._dtmf_tasks: dict[str, asyncio.Task]   = {}
+        # VOZ-05 (fatia 5c): o plano de coleta de cada menu entregue (session_id → menu_id → plano),
+        # para validar a resposta que chega pela TELA — inclusive a de campo mascarado, que teclado
+        # e fala não coletam — e as tentativas inválidas por essa via.
+        self._menu_plans:      dict[str, dict[str, CollectPlan]] = {}
+        self._screen_invalids: dict[str, dict[str, int]]         = {}
 
     # ── Provider factories ────────────────────────────────────────────────────
 
@@ -593,6 +601,14 @@ class WebRTCAdapter(ChannelAdapter):
             )
             return
 
+        # A TELA também precisa do plano (fatia 5c): valida o campo de dígitos e desenha o teclado —
+        # inclusive no menu mascarado, que teclado e fala não coletam.
+        try:
+            tela = CollectPlan.from_menu(payload)
+        except CollectNotApplicable:
+            tela = None
+        if tela is not None and menu_id:
+            self._menu_plans.setdefault(session_id, {})[menu_id] = tela
         # VOZ-05 (fatia 5b): menu com coleta por teclado/fala ganha o prompt com as teclas e um
         # laço que produz UM desfecho. Sem `collect`, o prompt é fala do agente como qualquer aviso.
         plan = self._plan_collect(session_id, payload, masked)
@@ -608,6 +624,8 @@ class WebRTCAdapter(ChannelAdapter):
             "options":       payload.get("options") or [],
             "fields":        payload.get("fields") or [],
             "masked_fields": masked,
+            # o que o widget precisa para o teclado (domínio, tamanhos, terminador); ausente = sem coleta
+            "collect":       tela.screen_view() if tela is not None else None,
         })
 
     async def deliver_typing(self, payload: dict) -> None:
@@ -1485,6 +1503,8 @@ class WebRTCAdapter(ChannelAdapter):
         self._end_collect(session_id, "sessao encerrada")
         info = self._sessions.pop(session_id, {})
         self._menu_masked.pop(session_id, None)
+        self._menu_plans.pop(session_id, None)
+        self._screen_invalids.pop(session_id, None)
         self._masked_grace_until.pop(session_id, None)
         try:
             await self._redis.delete(f"session:{session_id}:ws_alive")
@@ -2060,13 +2080,12 @@ class WebRTCAdapter(ChannelAdapter):
                         })
             elif isinstance(a, Done):
                 ac.outcomes.append(a)
-                await self._publish_collect_done(session_id, ac, a)
+                await self._publish_collect_done(session_id, ac.plan, a)
 
-    async def _publish_collect_done(self, session_id: str, ac: _ActiveCollect, done: Done) -> None:
+    async def _publish_collect_done(self, session_id: str, p: CollectPlan, done: Done) -> None:
         """O desfecho vira `menu_result` — com o valor, como a resposta pela tela, ou com
         `outcome`, que o bridge entrega ao menu como SINAL (fatia 5a)."""
         info = self._sessions.get(session_id)
-        p = ac.plan
         if not info:
             logger.error("webrtc coleta: desfecho %s do menu %s em sessao sem registro de abertura "
                          "(session=%s) — NAO publicado", done.outcome, p.menu_id, session_id)
@@ -2105,6 +2124,25 @@ class WebRTCAdapter(ChannelAdapter):
             return
         logger.info("webrtc coleta: menu %s -> %s%s (session=%s)", p.menu_id, done.outcome,
                     f" por {done.via}" if done.via else "", session_id)
+
+    async def _screen_invalid(self, ws: WebSocket, session_id: str, plano: CollectPlan) -> None:
+        """Resposta pela tela fora do domínio ou do tamanho: não vai ao menu. Esgotado
+        `max_invalid`, o menu recebe o desfecho `invalid` — como pela tecla."""
+        contagem = self._screen_invalids.setdefault(session_id, {})
+        n = contagem[plano.menu_id] = contagem.get(plano.menu_id, 0) + 1
+        logger.info(
+            "webrtc coleta: resposta pela tela INVALIDA %d%s no menu %s (valor nao registrado) session=%s",
+            n, f" de {plano.max_invalid}" if plano.max_invalid else "", plano.menu_id, session_id,
+        )
+        if plano.max_invalid is not None and n >= plano.max_invalid:
+            self._end_collect(session_id, "invalidos esgotados pela tela")
+            self._menu_plans.get(session_id, {}).pop(plano.menu_id, None)
+            await self._publish_collect_done(session_id, plano, Done("invalid"))
+            return
+        await self._ws_send(ws, {
+            "type": "conn.error", "code": "collect_invalid", "menu_id": plano.menu_id,
+            "message": plano.invalid_message or "",
+        })
 
     async def _dtmf_reader(self, session_id: str, room_client: IWebRTCRoomClient) -> None:
         """Teclas que o OUVINTE recebe. O SFU as entrega a todos na sala: só o cliente responde."""
@@ -2568,6 +2606,15 @@ class WebRTCAdapter(ChannelAdapter):
                 session_id,
             )
             return
+
+        plano = self._menu_plans.get(session_id, {}).get(menu_id)
+        if plano is not None and plano.is_digit_field and interaction == "text":
+            # 5c: a resposta pela tela passa pela MESMA regra da tecla. O valor nunca vai ao log.
+            if not (isinstance(result, str) and plano.accepts_digits(result.strip())):
+                await self._screen_invalid(ws, session_id, plano)
+                return
+            if isinstance(result, str) and plano.terminator and result.strip().endswith(plano.terminator):
+                result = result.strip()[:-1]
 
         ativa = self._collects.get(session_id)
         if ativa is not None and ativa.plan.menu_id == menu_id:

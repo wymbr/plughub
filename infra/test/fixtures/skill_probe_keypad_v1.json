@@ -1,0 +1,31 @@
+{
+  "skill_id": "skill_probe_keypad_v1",
+  "name": "Probe - teclado do widget pelo dominio da coleta (VOZ-05 fatia 5c)",
+  "version": "1.0",
+  "description": "Fixture do probe_webrtc_keypad e do roteiro do widget: um menu de botoes coletado por teclado (no widget, cada tecla vira DTMF pelo SFU) e um PIN MASCARADO de 4 a 6 digitos terminado em # (no widget, o teclado so preenche o campo protegido, que vai pelo WebSocket do gateway). O PIN nunca volta ao cliente: o marcador diz so que chegou.",
+  "classification": { "type": "orchestrator", "domain": "security" },
+  "flow": {
+    "entry": "n1",
+    "steps": [
+      { "id": "n1", "type": "notify", "message": "voz05c-inicio", "on_success": "m1", "on_failure": "fim_falha" },
+      { "id": "m1", "type": "menu", "interaction": "button", "prompt": "Como prefere receber a fatura?",
+        "options": [ { "id": "email", "label": "Email" }, { "id": "correio", "label": "Correio" } ],
+        "timeout_s": 300, "output_as": "escolha",
+        "collect": { "input": ["dtmf"], "first_input_timeout_s": 240 },
+        "on_success": "n_val", "on_failure": "fim_falha", "on_timeout": "n_to" },
+      { "id": "n_val", "type": "notify", "message": "voz05c-valor={{$.pipeline_state.escolha}}", "on_success": "tx", "on_failure": "fim_falha" },
+      { "id": "tx", "type": "begin_transaction", "on_failure": "fim_falha" },
+      { "id": "m2", "type": "menu", "interaction": "text", "prompt": "Digite o PIN e termine com jogo da velha.",
+        "masked": "credential", "timeout_s": 300, "output_as": "pin",
+        "collect": { "input": ["dtmf"], "first_input_timeout_s": 240, "min_digits": 4, "max_digits": 6,
+                     "terminator": "#", "invalid_message": "PIN inválido.", "max_invalid": 3 },
+        "on_success": "n_pin", "on_failure": "fim_falha", "on_timeout": "n_to", "on_invalid": "n_inv" },
+      { "id": "n_pin", "type": "notify", "message": "voz05c-pin-recebido", "on_success": "tx_fim", "on_failure": "fim_falha" },
+      { "id": "tx_fim", "type": "end_transaction", "result_as": "auth", "on_success": "fim" },
+      { "id": "n_to", "type": "notify", "message": "voz05c-timeout", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "n_inv", "type": "notify", "message": "voz05c-invalido", "on_success": "fim", "on_failure": "fim_falha" },
+      { "id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "probe: teclado medido" },
+      { "id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "probe: fluxo falhou" }
+    ]
+  }
+}

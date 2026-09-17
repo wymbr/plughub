@@ -123,6 +123,30 @@ class CollectPlan:
     def is_option_menu(self) -> bool:
         return bool(self.options) and self.interaction in ("button", "list")
 
+    @property
+    def is_digit_field(self) -> bool:
+        """Campo aberto de dígitos — o que a TELA também precisa validar (VOZ-05 fatia 5c)."""
+        return self.interaction == "text" and self.domain in ("digits", "digits_star_hash")
+
+    def accepts_digits(self, value: str) -> bool:
+        """A mesma regra da coleta por tecla, para um valor inteiro que chegou de uma vez (campo na
+        tela). O terminador, se veio no fim, não faz parte do valor."""
+        if self.terminator and value.endswith(self.terminator):
+            value = value[:-1]
+        permitidos = "0123456789" + ("*#" if self.domain == "digits_star_hash" else "")
+        return (bool(value) and all(ch in permitidos for ch in value)
+                and len(value) >= self.min_digits
+                and (self.max_digits is None or len(value) <= self.max_digits))
+
+    def screen_view(self) -> dict:
+        """O que a TELA precisa para desenhar o teclado e o campo — nunca mensagens nem prazos."""
+        view: dict = {"input": sorted(self.inputs), "domain": self.domain, "min_digits": self.min_digits}
+        if self.max_digits is not None:
+            view["max_digits"] = self.max_digits
+        if self.terminator:
+            view["terminator"] = self.terminator
+        return view
+
     def spoken_prompt(self) -> str:
         """O prompt como o autor o escreveu, mais como responder — cada opção com a sua tecla
         e/ou o que dizer. A tela continua mostrando as opções; isto é o que se OUVE."""

@@ -40,7 +40,7 @@ reconhecidas por `JSON.parse` do texto (MEN-07).
 **Fatiamento.** 5a contrato (schema, motor, desfechos, recusa de voz sem timeout, MEN-07) · 5b núcleo
 + renderizador WebRTC por voz · 5c teclado da widget. Migração dos outros canais: NIV-14..17.
 
-**Estado (2026-09-16).** 5a ✅ `CHANGELOG.md` § (4) · 5b ✅ § (5) — com um achado do probe ao vivo: campo `text` coletado por teclado saía do `notification_send` como `message.text` (só `button`/`list`/mascarado viravam `menu.payload`), e o `collect` nunca chegava ao canal · 5c aberta.
+**Estado (2026-09-16).** 5a ✅ `CHANGELOG.md` § (4) · 5b ✅ § (5) — com um achado do probe ao vivo: campo `text` coletado por teclado saía do `notification_send` como `message.text` (só `button`/`list`/mascarado viravam `menu.payload`), e o `collect` nunca chegava ao canal · 5c ✅ § (6) — e com ela a VOZ-05 fechou.
 
 ## VOZ-05 — áudio para o STT: egress por trilha × assinante na sala *(medido 2026-09-16, antes da fatia 4)*
 
