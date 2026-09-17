@@ -46,9 +46,7 @@ config real · P1 o `config.changed` invalidou · F1 a chamada pelo endpoint abr
 `stt_language=pt` do perfil · F2 a fala do m4 juntou as duas palavras (5490 ms) — o perfil muda o
 comportamento, não só o log · F3 a telemetria grava o perfil (resumo com escopo `profile`, 5 de 5
 desfechos) · C1–C3 controle pelo pool direto (700 global, separou em 1370 ms, perfil NULL) · M1 o speaches
-recebeu o modelo do perfil (erros nomeando o modelo falso). ⚠️ **As mutações AO VIVO deste gate (LM1
-`config.changed` sem invalidar → P1; LM2 parser do analytics descartando o perfil → F3) estavam rodando no
-momento do commit, sem resultado** — o que as sustenta até aqui são as mutações unitárias acima.
+recebeu o modelo do perfil (erros nomeando o modelo falso). **Mutações AO VIVO, as duas pegas** (concluídas logo depois do commit `5044cd1a`): LM1 `config.changed` de `speech_profiles` sem invalidar → P1 vermelho (e M1 inconclusivo: o perfil novo não chegou) · LM2 parser do analytics descartando o perfil → F3 vermelho (resumo com perfil nulo, 0 de 5 desfechos). Containers restaurados pela imagem.
 
 **Limite.** A tela não foi vista no navegador. Perfil com modelo que o serviço não tem é gravado sem
 recusa e faz toda fala falhar — dito no log do gateway (é o M1), conferência contra `GET /v1/models` fica
