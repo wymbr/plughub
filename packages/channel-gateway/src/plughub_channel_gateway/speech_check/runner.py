@@ -34,6 +34,8 @@ logger = logging.getLogger("plughub.speech-check.runner")
 FAILURE_REASONS = (
     "profile_not_found", "unsupported_language", "config_unavailable", "endpoint_create_failed",
     "tts_unavailable", "listener_unavailable", "call_not_answered", "call_failed", "summary_missing",
+    # VOZ-27 — recusa do SERVIDOR (o pedido nunca vira `run_check`): já havia uma em curso.
+    "check_running",
 )
 
 
@@ -121,6 +123,21 @@ def result_event(req: CheckRequest, *, pool_id: str, started_at: str, status: st
         **agg,
         "items":             judged if status == "completed" else [],
     }
+
+
+def refusal_event(req: CheckRequest, *, pool_id: str, reason: str) -> dict:
+    """A verificação que NÃO aconteceu, com a mesma forma da que aconteceu (VOZ-27).
+
+    Um pedido recusado antes de abrir chamada não tem sessão, nem áudio, nem item julgado — e é
+    justamente por isso que ele precisa de linha: quem pede é a Agenda, de madrugada, e o 409 morre
+    na resposta HTTP que ninguém lê. Sem este evento, a noite em que a verificação não rodou fica
+    idêntica à noite em que rodou e foi bem, que é a forma mais barata de comprar tranquilidade sem
+    medição. Agregados NULOS e `items` vazio, como em qualquer falha: é o contrato de `status:
+    failed`, e nunca um zero que se possa ler como medida.
+    """
+    return result_event(req, pool_id=pool_id, started_at=_now(), status="failed",
+                        failure_reason=reason, session_id=None, language=None,
+                        judged=[], summary=None, bot_voice_heard=None)
 
 
 async def run_check(req: CheckRequest, deps: Deps, *, pool_id: str, default_language: str,

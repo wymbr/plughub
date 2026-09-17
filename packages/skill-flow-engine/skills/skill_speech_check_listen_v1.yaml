@@ -47,4 +47,3 @@ steps:
   - id: encerrar
     type: complete
     outcome: resolved
-    issue_status: "verificacao de fala: chamada encerrada"

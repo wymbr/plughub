@@ -164,6 +164,17 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # channel-gateway — VOZ-27: "Executar agora" da verificação de fala. O gateway exige\n\
+    # Bearer + `config.channels` em escrita e repassa ao executor interno. Before generic /v1.\n\
+    location ~ ^/v1/speech-checks(/|$) {\n\
+        set $up_speech_check http://channel-gateway:8010;\n\
+        proxy_pass         $up_speech_check;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # scheduler-api — Agendas (Scheduler Fase 3). Before generic /v1.\n\
     location ~ ^/v1/agendas(/|$) {\n\
         set $up_scheduler http://scheduler-api:3650;\n\

@@ -70,6 +70,12 @@ export default defineConfig({
         target: 'http://localhost:8010',
         changeOrigin: true
       },
+      '^/v1/speech-checks': {
+        // channel-gateway — VOZ-27: "Executar agora" da verificação de fala (Bearer + ABAC no
+        // gateway, que repassa ao executor interno). Before generic /v1 (→ agent-registry).
+        target: 'http://localhost:8010',
+        changeOrigin: true
+      },
       '^/v1/agendas': {
         // scheduler-api — Agendas (Scheduler Fase 3). Before generic /v1 (→ agent-registry).
         target: 'http://localhost:3650',

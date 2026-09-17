@@ -1,5 +1,76 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (9) — VOZ-27: a verificação de fala deixa de depender de alguém lembrar
+
+**O que faltava.** A `VOZ-23` sabia medir o caminho de fala, guardar o resultado e compará-lo com uma
+linha de base — tudo atrás de `curl` com token de serviço. Medição que só roda quando alguém lembra
+não é vigilância, e o silêncio dela é indistinguível de "está tudo bem". Esta entrega fecha as três
+pontas: **periodicidade**, **tela** e uma **porta com portão** para a tela usar.
+
+**(a) A agenda nasce de arquivo.** `infra/scheduler/*.json` + o job `agenda-seed` (compose), no molde
+do `dialog-seed`: escreve pela API oficial, **seed-if-absent**, identidade pelo `seed_id` gravado no
+`payload` — nunca pelo `name`, que é editável na tela e cuja primeira renomeação duplicaria a agenda.
+Até aqui **nenhuma** agenda do repositório nascia declarativamente: instalação nova subia sem
+periodicidade nenhuma, e a ausência não aparecia em lugar algum. O demo passa a ter
+`speech_check_default` (diária, 03:30, pool `speech_check_trigger`). Pausar e cancelar são respeitados
+(contam como presença); **apagar** faz o seed recriar no boot seguinte, e isso está dito no
+`infra/scheduler/README.md` — "apagada de propósito" e "nunca semeada" são indistinguíveis de fora.
+
+**(b) A tela** (aba WebRTC → Configurações): histórico por perfil com o desfecho de cada execução,
+*Executar agora*, *Marcar como base* e a comparação com os itens que regrediram. Ela **não** declara
+regressão (não há limiar nenhum no arquivo), **não** marca base sozinha, e **diz quando não há
+agenda** — "só é verificado quando alguém clica" —, porque cobertura deduzida do silêncio é o defeito
+que este arco existe para acabar. Falha e recusa aparecem com agregados vazios de propósito: "não
+mediu" nunca vira zero, que se leria como medida ruim.
+
+**(c) `POST /v1/speech-checks` no channel-gateway**, Bearer + `config.channels` em ESCRITA, repassando
+ao executor interno com o token de serviço. As duas portas que já existiam não serviam à tela: o token
+de serviço não pode viajar ao browser, e a porta do pool webhook é **anônima por construção**
+(ADR §7.6.1) — o botão dispararia chamada sem portão. **`requested_by` sai do TOKEN** (`user:{sub}`),
+nunca do corpo: campo de autoria que o chamador preenche não é autoria. Pedir medição é ATO, não
+leitura, então leitura em canais não basta (403).
+
+**A verificação RECUSADA passou a deixar linha.** 409 "já há uma em curso" vira `speech_check_result`
+com `failure_reason: check_running` e agregados nulos, no mesmo histórico que a tela lê. Sem isso, a
+noite em que a verificação não rodou fica **idêntica** à noite em que rodou e foi bem — e quem recebe
+o 409 é a Agenda, de madrugada, cuja resposta HTTP ninguém lê. É a única das quatro recusas do serviço
+que vira evento: as outras três são pedido malformado, cujo autor recebe o erro na hora e o corrige.
+
+**Achado de plataforma no caminho: `issue_status` no `complete` não existe.** Medido em ClickHouse:
+`native` 3 042 segmentos / **0** com `issue_status`, `ai` 100 / **0**, `ai_agent` 1 / **0** — contra
+`human` 683 / **209**, que vêm do wrap-up por outro caminho. `CompleteStepSchema` tem `id`, `type`,
+`outcome` e `outcome_from`; o objeto Zod não é `.strict()`, então a chave é descartada no parse. **22
+dos 42 skills** a declaram acreditando estar registrando o porquê do fechamento. Era com ela que eu
+ia nomear a recusa — e é por isso que quem nomeia passou a ser o serviço. Ficha `SFE-02`; os dois
+skills da verificação deixaram de declará-la, com o motivo escrito no YAML.
+
+**Segundo achado, registrado e não consertado: o scheduler-api não exige credencial nenhuma** — as 9
+rotas de `/v1/agendas` decidem com o header `X-Tenant-ID` e nada mais, o portão existe só na UI, e o
+proxy da UI repassa o prefixo sem credencial. Quem alcança a porta cria agenda, muda alvo e dispara
+com `POST /fire` — e agenda aciona POOL, inclusive os que promovem deploy e contatam cliente. Ficha
+`SCH-01`, com o que medir antes (os chamadores internos, incluindo este novo job de seed).
+
+**Testes.** channel-gateway 1237 → **1248** (`test_speech_check_route.py`: o portão recusa ANTES de
+chamar o executor, leitura não basta, o controle positivo passa, autoria e tenant vêm do token, corpo
+não declara autoria, 409/422 chegam com o motivo, executor fora vira 502, env faltando vira 503
+nomeando-a; mais a recusa publicando evento em `test_speech_check.py`). schemas 356 (novo motivo no
+domínio). Typecheck da UI verde sobre 277 arquivos.
+
+**Gate.** `probe_speech_check_surface.sh` (AUTO) — **verde ao vivo**: K0 serviço ocioso, pool com
+instância e agenda semeada apontando o pool certo · G1 o `/fire` aciona o pool (ledger `dispatched`
+com sessão) **sem consumir a recorrência** · A1 401 sem Bearer e 403 sem a capacidade · A2 409 com
+`recorded_as` enquanto a da agenda corre · A3 a recusa aparece no RELATÓRIO que a tela lê, com
+agregados nulos e autoria `user:…` · G2 a verificação da agenda mediu de verdade (7/7 frases certas,
+autoria `agenda:speech_check_default`) · C1 controle: ociosa, a mesma rota aceita 202.
+
+**Limites.** A tela **não foi verificada visualmente** — não digito senha em formulário de login; o
+que está medido é o typecheck, o bundle servido pelo nginx (contém a rota e as chaves) e as rotas que
+ela consome, exercitadas ao vivo. `requested_by` guarda o **id** do usuário, não o e-mail (dado
+pessoal não entra no ClickHouse por conveniência de leitura). A tela lista agendas pelo scheduler sem
+credencial, como todo o resto da plataforma hoje — some com a `SCH-01`.
+
+**Deixou fichas:** `SFE-02` (o `issue_status` inerte) e `SCH-01` (scheduler sem credencial).
+
 ## 2026-09-17 (8) — VOZ-23: a verificação ativa do caminho de fala, a pedido, comparada à linha de base
 
 **A pergunta que ela responde.** *O caminho de fala desta instalação regrediu?* — modelo, versão do SFU,

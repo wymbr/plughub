@@ -127,6 +127,27 @@ AgendaDispatch {
 - **Correlação de status:** o `AgendaDispatch.session_id` é o link; o Monitor lê a sessão pela máquina existente.
   (Não assina `session_closed` para espelhar — drill-through.)
 
+### 4a. Agenda declarativa — `infra/scheduler/*.json` *(VOZ-27, 2026-09-17)*
+
+Até aqui **toda** agenda nascia de uma chamada REST (tela ou `curl`), e instalação nova subia sem
+periodicidade nenhuma — sem que a ausência aparecesse em lugar algum. O job **`agenda-seed`** do
+compose lê `infra/scheduler/*.json` e cria o que falta **pela API oficial** (`POST /v1/agendas`),
+no molde do `dialog-seed`:
+
+| | |
+|---|---|
+| identidade | `seed_id`, gravado em `payload.seed_id` — **nunca o `name`**, que é texto editável na tela e cuja primeira renomeação duplicaria a agenda |
+| precedência | **seed-if-absent**: existindo agenda com aquele `seed_id`, o DB vence — inclusive `paused`/`cancelled`, que são decisões do operador e contam como presença |
+| reconcile | `AGENDA_SEED_RECONCILE=true` faz o arquivo vencer (`PATCH`) |
+| recusa alta | não conseguir LISTAR aborta o job; criar às cegas semearia uma agenda nova a cada boot |
+
+⚠️ **Para desligar uma agenda semeada, pause ou cancele — não apague.** Apagada, ela volta no próximo
+boot, porque "apagada de propósito" e "nunca semeada" são indistinguíveis de fora. É o análogo do
+`deleted_at` que o `dialog-seed` lê no form arquivado.
+
+⚠️ **`next_fire_at` nulo numa recorrente é avisado na criação**: a agenda existe e nunca dispara
+(validade vencida, regra impossível). Criar em silêncio seria semear uma agenda decorativa.
+
 ### Novos artefatos de plataforma
 - Topic/evento (opcional se tudo síncrono no v1): manter disparo síncrono via HTTP ao webhook; `timer.fired`
   interno ao serviço. (Reavaliar evento Kafka quando a migração dos timers legados entrar — follow-up do ADR.)

@@ -12,6 +12,11 @@ tudo (503) — nunca libera. O estado em memória some num restart; o fato durá
 Recusas síncronas (antes de abrir chamada): tenant que não é o desta instalação (422), id de perfil
 malformado (422), perfil que não existe (422, o mesmo `profile_not_found` do runner), verificação já em
 curso no tenant (409).
+
+⚠️ Das quatro, só a de 409 vira EVENTO (VOZ-27), e a assimetria é deliberada: as três primeiras são
+pedido malformado, cujo autor recebe o erro na hora e o corrige; a de 409 é pedido CORRETO que a
+plataforma escolheu não executar, e quem a recebe pode ser uma Agenda de madrugada. Registrar as
+outras seria arquivar erro de digitação; não registrar esta é deixar a verificação pulada invisível.
 """
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ from plughub_tasks import disparar
 from ..config import Settings
 from .. import speech_metrics
 from .live import LiveDeps
-from .runner import CheckRequest, run_check
+from .runner import CheckRequest, refusal_event, run_check
 
 logger = logging.getLogger("plughub.speech-check")
 
@@ -115,7 +120,21 @@ def build_app(settings: Settings | None = None, *, deps_factory=None, producer=N
             if not isinstance(perfis.get(perfil), dict):
                 raise HTTPException(422, {"reason": "profile_not_found", "speech_profile_id": perfil})
         if tenant in st.running:
-            raise HTTPException(409, {"reason": "check_running", "check_id": st.running[tenant]})
+            # VOZ-27 — a recusa VIRA LINHA no histórico, além do 409. Quem pede periodicamente é a
+            # Agenda, e o corpo da resposta dela não é lido por ninguém: sem este registro, a
+            # verificação pulada some, e "não mediu" fica com a cara de "mediu e está bom".
+            em_curso = st.running[tenant]
+            recusado = CheckRequest(tenant_id=tenant, speech_profile_id=perfil,
+                                    requested_by=body.requested_by)
+            ev = refusal_event(recusado, pool_id=s.speech_check_pool_id, reason="check_running")
+            st.checks[recusado.check_id] = {"check_id": recusado.check_id, "status": "failed",
+                                            "failure_reason": "check_running", "result": ev}
+            if not await speech_metrics.publish(st.producer, ev, key=recusado.check_id):
+                st.checks[recusado.check_id]["publish_failed"] = True
+            logger.info("speech-check RECUSADA a %s: %s ja corre (registrada como %s)",
+                        body.requested_by, em_curso, recusado.check_id)
+            raise HTTPException(409, {"reason": "check_running", "check_id": em_curso,
+                                      "recorded_as": recusado.check_id})
         req = CheckRequest(tenant_id=tenant, speech_profile_id=perfil, requested_by=body.requested_by)
         st.running[tenant] = req.check_id
         st.checks[req.check_id] = {"check_id": req.check_id, "status": "running"}

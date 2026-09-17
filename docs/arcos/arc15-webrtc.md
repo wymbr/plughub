@@ -701,6 +701,27 @@ webrtc_stt_enabled:         bool = True
 > limite de cliente (voz sintetizada não os decide, VOZ-18/19) e não aplica nada. Gate ao vivo:
 > `infra/test/probe_speech_check.sh`. Ver `CHANGELOG.md` 2026-09-17 (8).
 >
+> **A superfície da verificação (VOZ-27).** A `VOZ-23` deixou tudo isso atrás de `curl` com token de
+> serviço, e medição que só roda quando alguém lembra não é vigilância. Três peças fecham o arco:
+> **(a) periodicidade** — a Agenda `speech_check_default` (diária, 03:30) aciona o MESMO pool webhook,
+> e ela nasce de arquivo: `infra/scheduler/*.json` semeado pelo job `agenda-seed` (seed-if-absent,
+> `docs/product/scheduler-agenda-spec.md` § 4a). O grão é uma agenda por perfil, e **perfil novo não
+> ganha agenda sozinho** — a tela diz isso em vez de deixar o silêncio parecer cobertura.
+> **(b) a tela** (aba WebRTC → Configurações → *Verificação do caminho de fala*): histórico por perfil,
+> executar agora, marcar a linha de base e a comparação com os itens que regrediram. Ela nunca declara
+> regressão nem marca base sozinha.
+> **(c) a porta com portão** — `POST /v1/speech-checks` no channel-gateway, Bearer + `config.channels`
+> em ESCRITA, que repassa ao executor interno com o token de serviço. Existe porque as duas portas
+> anteriores não serviam à tela: o token de serviço não pode viajar ao browser, e a porta do pool
+> webhook é anônima por construção. **`requested_by` sai do TOKEN** (`user:{sub}`), nunca do corpo —
+> autoria preenchida pelo chamador não é autoria; a Agenda carimba `agenda:{seed_id}`.
+>
+> ⚠️ **A verificação RECUSADA vira linha** (`failure_reason: check_running`, agregados nulos): o 409
+> de "já há uma em curso" morre numa resposta HTTP que a Agenda não lê, e sem o registro a noite em
+> que a verificação não rodou fica idêntica à noite em que rodou e foi bem. É a única das quatro
+> recusas do serviço que vira evento — as outras três são pedido malformado, cujo autor recebe o erro
+> na hora. Gate ao vivo: `infra/test/probe_speech_check_surface.sh`. Ver `CHANGELOG.md` 2026-09-17 (9).
+>
 > **Teclado do widget (fatia 5c).** O `webrtc.interaction` leva `collect` — só o que a TELA precisa
 > (`input`, `domain`, `min_digits`, `max_digits`, `terminator`; nunca mensagem nem prazo) — e o
 > widget desenha o teclado pelo domínio (`*`/`#` só quando o domínio ou o terminador os pedem):

@@ -262,6 +262,7 @@ class TestServer:
             cid = r.json()["check_id"]
             r2 = c.post("/v1/speech-checks", json={"requested_by": "ana"}, headers={"x-service-token": "seg"})
             assert r2.status_code == 409 and r2.json()["detail"]["check_id"] == cid
+            recusa = r2.json()["detail"]["recorded_as"]      # VOZ-27: a recusa vira linha
             c.portal.call(liberar.set)
             for _ in range(100):
                 if c.get(f"/v1/speech-checks/{cid}", headers={"x-service-token": "seg"}).json()["status"] != "running":
@@ -269,8 +270,17 @@ class TestServer:
                 time.sleep(0.05)
             st = c.get(f"/v1/speech-checks/{cid}", headers={"x-service-token": "seg"}).json()
             assert st["status"] == "completed"
-            (chamada,) = producer.send.call_args_list
-            assert chamada.args[0] == "speech.metrics" and chamada.kwargs["key"] == cid.encode()
-            assert json.loads(chamada.kwargs["value"])["event_type"] == "speech_check_result"
+            # Dois eventos: a verificacao que rodou e a que foi RECUSADA por ela estar rodando.
+            por_chave = {ch.kwargs["key"]: json.loads(ch.kwargs["value"]) for ch in producer.send.call_args_list}
+            assert {ch.args[0] for ch in producer.send.call_args_list} == {"speech.metrics"}
+            assert set(por_chave) == {cid.encode(), recusa.encode()}
+            assert por_chave[cid.encode()]["event_type"] == "speech_check_result"
+            assert por_chave[cid.encode()]["status"] == "completed"
+            ev_recusa = por_chave[recusa.encode()]
+            assert (ev_recusa["status"], ev_recusa["failure_reason"]) == ("failed", "check_running")
+            # Recusa NAO e medicao: agregado alto (nunca zero, que se leria como "mediu mal"),
+            # sem sessao e sem item julgado.
+            assert ev_recusa["accuracy"] is None and ev_recusa["session_id"] is None and ev_recusa["items"] == []
+            assert ev_recusa["requested_by"] == "ana"
             assert c.post("/v1/speech-checks", json={"requested_by": "ana"},
                           headers={"x-service-token": "seg"}).status_code == 202       # liberou o tenant

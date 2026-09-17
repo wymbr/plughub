@@ -1,0 +1,21 @@
+{
+  "seed_id": "speech_check_default",
+  "name": "Verificação de fala — caminho padrão do tenant",
+  "target_pool_id": "speech_check_trigger",
+  "timezone": "America/Sao_Paulo",
+  "schedule": {
+    "mode": "recurring",
+    "rule": {
+      "frequency": "daily",
+      "interval": 1,
+      "times": ["03:30"],
+      "business_day_policy": "ignore"
+    }
+  },
+  "validity": {
+    "starts_at": "2026-09-17T00:00:00+00:00"
+  },
+  "payload": {
+    "requested_by": "agenda:speech_check_default"
+  }
+}

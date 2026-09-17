@@ -993,6 +993,79 @@ async def webrtc_token(
     return result
 
 
+# ── Verificação ativa da fala: a porta da TELA (VOZ-27) ──────────────────────
+
+class SpeechCheckRunRequest(BaseModel):
+    """Só o perfil. Quem pede sai do TOKEN, nunca do corpo — ver abaixo."""
+    speech_profile_id: str | None = None
+
+
+@app.post("/v1/speech-checks", status_code=202)
+async def speech_check_run(request: Request, body: SpeechCheckRunRequest) -> JSONResponse:
+    """Pede uma verificação ativa do caminho de fala em nome de uma PESSOA (VOZ-27).
+
+    O executor (`speech-check`) é interno e sua credencial é um token de SERVIÇO: quem o chama são
+    o mcp-server (tool `speech_check_run`) e a Agenda, nenhum dos dois com gente do outro lado. A
+    tela precisava de um caminho que o browser alcance e que saiba QUEM clicou — e as duas portas
+    que já existiam não serviam: o token de serviço não pode viajar ao browser, e a porta do pool
+    webhook é anônima por construção (ADR §7.6.1), o que faria o botão disparar chamada sem portão.
+
+    Esta rota é o intermediário com portão, no molde do `/webrtc/token/{sid}`:
+      * Bearer obrigatório (`plughub_authz`) → 401;
+      * capacidade `config.channels` em ESCRITA → 403, o mesmo portão da tela que cadastra perfil
+        (marcar base e pedir medição são atos de quem configura o canal, não de quem só olha);
+      * o tenant é o do TOKEN, nunca do corpo;
+      * `requested_by` é o `sub` do token, nunca do corpo — ele vai para o ClickHouse e é o que
+        responde "quem mandou medir": campo de autoria que o chamador preenche não é autoria.
+
+    Repassa o veredicto do serviço SEM traduzir: 202 aceito · 409 `check_running` · 422
+    `profile_not_found` (perfil inexistente ou malformado). Sem `PLUGHUB_SPEECH_CHECK_URL` ou sem
+    token de serviço, RECUSA 503 nomeando a env — nunca finge que pediu.
+    """
+    _tok = bearer_from_header(request.headers.get("authorization"))
+    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
+    if not _payload or not str(_payload.get("sub") or ""):
+        raise HTTPException(status_code=401, detail="pedir verificacao de fala exige credencial")
+    if not abac_can(_payload, "config", "channels", "read_write"):
+        logger.warning("speech-check NEGADO: sub=%s — sem config.channels em escrita",
+                       _payload.get("sub"))
+        raise HTTPException(status_code=403, detail="pedir verificacao de fala exige `config.channels` em escrita")
+
+    s = get_settings()
+    if not s.speech_check_url or not s.speech_check_service_token:
+        raise HTTPException(
+            status_code=503,
+            detail="verificacao de fala nao configurada neste gateway — "
+                   "faltam PLUGHUB_SPEECH_CHECK_URL e/ou PLUGHUB_SPEECH_CHECK_SERVICE_TOKEN",
+        )
+
+    corpo = {
+        "tenant_id":         str(_payload.get("tenant_id") or ""),
+        "speech_profile_id": body.speech_profile_id or None,
+        "requested_by":      f"user:{_payload.get('sub')}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                f"{s.speech_check_url.rstrip('/')}/v1/speech-checks",
+                json=corpo,
+                headers={"x-service-token": s.speech_check_service_token},
+            )
+    except Exception as exc:
+        logger.warning("speech-check inalcancavel: %s", exc)
+        raise HTTPException(status_code=502, detail=f"executor da verificacao inalcancavel: {exc}")
+
+    try:
+        dados = r.json()
+    except Exception:
+        dados = {"detail": r.text[:400]}
+    if r.status_code >= 400:
+        # O motivo do serviço chega inteiro à tela: "ocupado" e "perfil não existe" pedem
+        # reações diferentes de quem clicou, e um 500 genérico apagaria a diferença.
+        raise HTTPException(status_code=r.status_code, detail=dados.get("detail", dados))
+    return JSONResponse(dados, status_code=r.status_code)
+
+
 # ── Webhook channel endpoints (Arc 19) ───────────────────────────────────────
 
 class WebhookTriggerRequest(BaseModel):

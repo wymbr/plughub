@@ -285,6 +285,9 @@ class Settings(BaseSettings):
     # Credencial de quem pede a verificação (mcp-server). VAZIO = a rota RECUSA tudo (503).
     speech_check_service_token:     str = ""
     speech_check_port:              int = 3870
+    # VOZ-27: onde o GATEWAY alcança o executor, para servir o botão "Executar agora" da tela.
+    # Vazio ⇒ `POST /v1/speech-checks` recusa 503 nomeando a env; nunca finge ter pedido.
+    speech_check_url:               str = ""
 
     # ── WhatsApp (Meta Cloud API) ─────────────────────────────────────────────
     # System User token from Meta Business Manager (WABA).

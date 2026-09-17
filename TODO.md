@@ -35,6 +35,7 @@ variam de instalação para instalação e ao longo do tempo.
 `VOZ-22` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (5)): tópico `speech.metrics`, relatório `/reports/speech/quality`.
 `VOZ-25` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (7)): a calibragem passa a ser por PERFIL de fala apontado pelo endpoint (`speech_profiles`), não por DNIS — N números no mesmo tronco compartilham um perfil.
 `VOZ-23` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (8)): camada B — verificação ativa a pedido, comparada à linha de base marcada por pessoa. Periodicidade e tela: `VOZ-27`.
+`VOZ-27` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (9)): a verificação passa a rodar sozinha (agenda semeada de arquivo) e a ser operável na tela; a que NÃO rodou deixa linha. Achou o `issue_status` inerte (`SFE-02`) e o scheduler sem credencial (`SCH-01`).
 
 ## VOZ-19 — ruído que vira fala, e o limiar de confiança *(medido 2026-09-17)*
 

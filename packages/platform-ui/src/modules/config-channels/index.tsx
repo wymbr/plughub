@@ -33,6 +33,7 @@ import ChannelAccountCard from './ChannelAccountCard'
 import WebChatConfigPage  from './WebChatConfigPage'
 import WebRTCSpeechConfigPage from './WebRTCSpeechConfigPage'
 import WebRTCSpeechProfilesPage from './WebRTCSpeechProfilesPage'
+import WebRTCSpeechChecksPage from './WebRTCSpeechChecksPage'
 import { ChannelEndpointList } from './ChannelEndpointList'
 import { CHANNEL_META } from './channel-meta'
 import type { GatewayConfig, Pool } from '@/types'
@@ -445,6 +446,7 @@ const ConfigChannelsIndex: React.FC = () => {
           <div className="space-y-6">
             <WebRTCSpeechConfigPage />
             <WebRTCSpeechProfilesPage />
+            <WebRTCSpeechChecksPage />
           </div>
         )}
       </div>

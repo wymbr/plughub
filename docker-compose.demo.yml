@@ -1284,6 +1284,37 @@ services:
       - plughub-demo
     restart: "no"
 
+  # VOZ-27: provisiona as Agendas declarativas de ./infra/scheduler/*.json no scheduler-api,
+  # via API oficial e SEED-IF-ABSENT (agenda que já existe não é tocada — pausar/cancelar pela
+  # tela sobrevive a rebuild).
+  #
+  # Sem este job, instalação NOVA sobe sem periodicidade nenhuma: hoje isso significa que a
+  # verificação ativa do caminho de fala (VOZ-23) só roda quando alguém clica ou lembra do
+  # curl — e "ninguém mediu" tem exatamente a mesma cara de "mediu e está bom".
+  #
+  # Para o ARQUIVO vencer o DB (dev/GitOps): AGENDA_SEED_RECONCILE=true.
+  agenda-seed:
+    image: python:3.11-slim
+    volumes:
+      - ./infra/seed:/seed:ro
+      - ./infra/scheduler:/agendas:ro
+    environment:
+      SCHEDULER_API_URL: http://scheduler-api:3650
+      AGENDAS_DIR:       /agendas
+      TENANT_ID:         tenant_demo
+      SEED_MAX_WAIT:     "120"
+      # O scheduler-api não exige credencial (só X-Tenant-ID) — por isso não há token aqui.
+      # Não é decisão deste job: está medido em `probe_config_service_write_gate.sh` e tem
+      # ficha própria (SCH-01).
+      AGENDA_SEED_RECONCILE: ${AGENDA_SEED_RECONCILE:-}
+    command: ["python", "/seed/seed_agendas.py"]
+    depends_on:
+      scheduler-api:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: "no"
+
   pricing-api:
     build:
       context: .
@@ -1542,6 +1573,12 @@ services:
       # que a UI consome. Sem o hash o gateway não tem contra o quê comparar e
       # RECUSA (fail-closed) disparo em endpoint com `auth_required`.
       PLUGHUB_AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo
+      # VOZ-27 — o botão "Executar agora" da tela entra por `POST /v1/speech-checks` AQUI
+      # (Bearer + `config.channels` em escrita) e o gateway repassa ao executor interno com o
+      # token de serviço. As duas envs juntas: faltando qualquer uma, a rota recusa 503
+      # nomeando-a. O token DEVE casar com o PLUGHUB_SPEECH_CHECK_SERVICE_TOKEN do speech-check.
+      PLUGHUB_SPEECH_CHECK_URL:             http://speech-check:3870
+      PLUGHUB_SPEECH_CHECK_SERVICE_TOKEN:   changeme_speech_check_service_token_demo
       # IDN-06 — credencial INBOUND das rotas /identity/* e /pending/* (mcp-server,
       # mailing-api). Vazia FECHA a porta de serviço; nunca a abre.
       PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo

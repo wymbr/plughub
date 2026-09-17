@@ -398,6 +398,14 @@ probe_webrtc_speech_profile.sh
 # temporario orfao; B1/B2 sem base diz no_baseline, marcada diz latest_is_baseline; M1 modelo inexistente
 # no perfil vira items_regressed; C1 controle com o perfil restaurado nao regride. ~4 chamadas sinteticas.
 probe_speech_check.sh
+# VOZ-27 (2026-09-17): a superficie da verificacao — pedivel com portao, periodica, e a recusa visivel.
+# K0 servico ocioso, pool com instancia e agenda SEMEADA apontando o pool de disparo; G1 o /fire aciona
+# o pool (ledger dispatched com sessao) SEM consumir a recorrencia; A1 a rota do gateway recusa sem
+# Bearer (401) e sem config.channels em escrita (403); A2 com a da agenda em curso o pedido de gente e
+# 409 com recorded_as; A3 essa recusa aparece no RELATORIO que a tela le, failed/check_running com
+# agregados nulos; G2 a verificacao da agenda termina completed e mediu; C1 controle: ociosa, a mesma
+# rota aceita 202. ~2 chamadas sinteticas.
+probe_speech_check_surface.sh
 # VOZ-04 (Console). Contato WebRTC atribuido a humano: o conversation.assigned ia sem canal (o
 # Console o criava como webchat e a sobreposicao nunca montava), o caminho real de ativacao
 # humana nao escrevia routing.assigned (a sala nunca nascia), o hook pedia o token ao

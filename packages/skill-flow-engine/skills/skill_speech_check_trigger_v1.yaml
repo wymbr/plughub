@@ -18,6 +18,13 @@ description: |
   pedido recusado NUNCA parece aceito. O resultado não vem por aqui: sai em `speech.metrics` e é lido
   em `/reports/speech/checks`.
 
+  ⚠️ O MOTIVO da recusa não é dito aqui, e isso é decisão medida (VOZ-27): `issue_status` no step
+  `complete` NÃO EXISTE no contrato — `CompleteStepSchema` tem só `id/type/outcome/outcome_from`, a
+  chave é descartada no parse, e 0 de 3 143 segmentos de agente de IA a têm preenchida (ficha
+  `SFE-02`). Quem nomeia a recusa é o SERVIÇO: um 409 vira `speech_check_result` com
+  `failure_reason: check_running`, no mesmo histórico que a tela lê. Escrever o motivo num campo
+  inerte daria a impressão de registro sem registro nenhum.
+
   Perfil workflow (webhook, Arc 19): só invoke/complete.
 classification:
   type: vertical
@@ -39,9 +46,7 @@ steps:
   - id: encerrar_ok
     type: complete
     outcome: resolved
-    issue_status: "verificacao de fala pedida"
 
   - id: encerrar_falha
     type: complete
     outcome: failed
-    issue_status: "verificacao de fala RECUSADA pelo servico"

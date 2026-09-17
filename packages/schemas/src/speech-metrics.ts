@@ -126,6 +126,10 @@ export const SpeechCheckItemSchema = z.object({
 export const SPEECH_CHECK_FAILURE_REASONS = [
   "profile_not_found", "unsupported_language", "config_unavailable", "endpoint_create_failed",
   "tts_unavailable", "listener_unavailable", "call_not_answered", "call_failed", "summary_missing",
+  // VOZ-27: pedido VÁLIDO que a plataforma escolheu não executar (já havia uma verificação em
+  // curso no tenant). Vira linha no histórico porque quem pede periodicamente não está olhando:
+  // sem ela, a noite em que a verificação não rodou é indistinguível da noite em que rodou bem.
+  "check_running",
 ] as const
 
 export const SpeechCheckResultEventSchema = z.object({

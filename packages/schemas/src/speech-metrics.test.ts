@@ -77,6 +77,9 @@ describe("speech.metrics (VOZ-22)", () => {
     expect(SpeechMetricsEventSchema.safeParse(falho).success).toBe(true)
     expect(SpeechMetricsEventSchema.safeParse({ ...completo, items: [{ ...item, text: "cancelar" }] }).success).toBe(false)
     expect(SpeechMetricsEventSchema.safeParse({ ...falho, failure_reason: "deu ruim" }).success).toBe(false)
+    // VOZ-27 — a verificação RECUSADA (já havia uma em curso) tem a mesma forma da que falhou:
+    // motivo nomeado e agregados nulos. É ela que faz a verificação pulada aparecer no histórico.
+    expect(SpeechMetricsEventSchema.safeParse({ ...falho, failure_reason: "check_running" }).success).toBe(true)
   })
 
   it("desfecho fora do domínio é recusado", () => {
