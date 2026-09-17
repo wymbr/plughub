@@ -51,7 +51,15 @@ BODY_POOL="deploy_promote_ia"   # pool webhook cujo skill efetiva o promote
 SVC="${AGENT_REGISTRY_SERVICE_TOKEN:-changeme_agent_registry_service_token_demo}"
 th=(-H "x-tenant-id: $TENANT")                                 # leitura (GET aberto)
 thw=(-H "x-tenant-id: $TENANT" -H "x-service-token: $SVC")     # escrita (set-next)
-ts=(-H "X-Tenant-ID: $TENANT")                                 # scheduler-api usa X-Tenant-ID
+# SCH-01 (2026-09-17): as rotas de Agenda exigem credencial (`scheduler.configurar` para
+# criar/editar, `scheduler.operacao` para disparar/pausar/cancelar e ler). Este smoke passa
+# a entrar como gente, que e o caminho real de quem usa a tela — sem isto ele mediria 401.
+AUTH_API="${AUTH_API:-http://localhost:3202}"
+SCHED_TOKEN=$(curl -s --max-time 20 -X POST "$AUTH_API/auth/login" -H 'Content-Type: application/json' \
+  -d "{\"email\":\"admin@plughub.local\",\"password\":\"changeme_admin\",\"tenant_id\":\"$TENANT\"}" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+[ -n "$SCHED_TOKEN" ] || { echo "AVISO: login de admin falhou — as chamadas ao scheduler vao levar 401"; }
+ts=(-H "X-Tenant-ID: $TENANT" -H "Authorization: Bearer $SCHED_TOKEN")   # scheduler-api usa X-Tenant-ID
 
 jqget() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" | head -1; }
 

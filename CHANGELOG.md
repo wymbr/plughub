@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-17 (10) — SCH-01: a porta das Agendas passa a pedir credencial
+
+**O que estava aberto.** As **9 rotas** de `/v1/agendas` decidiam com o header `X-Tenant-ID` e nada
+mais: sem Bearer, sem token de serviço, sem ABAC — o pacote nem dependia de `plughub-authz`. O portão
+existia **só na UI** (`RequireAbac scheduler.configurar` / `operacao`), e o proxy dela repassa o
+prefixo **sem credencial**. Quem alcançasse a porta 3650 — ou o proxy — criava agenda, trocava o
+`target_pool_id` e disparava com `POST /fire`. E **Agenda aciona POOL**: o `deploy_promote_ia`
+promove deploy, os pools de outbound contatam cliente. Disparar é EFEITO, não leitura.
+
+**O mapa não foi inventado pela rota — é o do catálogo.** `infra/modules.yaml` já dizia
+`configurar` = *"Criar e editar agendas"* e `operacao` = *"Operar agendas no Monitor (disparar,
+pausar, cancelar)"*. Então: criar/editar/apagar pede `configurar` em ESCRITA · disparar/pausar/
+retomar/cancelar pede `operacao` em ESCRITA · listar e ler o ledger pedem `operacao` em LEITURA.
+Verificador canônico (`plughub_authz`), nunca uma cópia.
+
+**O tenant passou a vir do TOKEN.** Era o header, e header é entrada do chamador: deixar quem chama
+escolher o tenant transforma o portão num filtro preenchido por quem é filtrado. O header só decide
+na porta de SERVIÇO (`X-Service-Token`, ADITIVA, hoje só o job `agenda-seed`), que não tem token de
+onde tirá-lo; token não configurado FECHA essa porta, e o principal é identidade no log
+(`service:agenda-seed`), nunca anonimato. Sem `PLUGHUB_SCHEDULER_JWT_SECRET`, o serviço RECUSA 503
+nomeando a env — não conseguir verificar não é o mesmo que não precisar verificar.
+
+**Os chamadores internos migraram no MESMO trabalho**, que é o que separa fechar credencial de
+quebrar o produto: o job de seed passou à porta de serviço (e AVISA quando o token falta, em vez de
+levar 401 mudo), e os **6 smokes** que criavam agenda anônima (`smoke_scheduled_promote`,
+`smoke_scheduler_fire_now`, `smoke_outbound_fase1/2b/5a/5b`) passaram a fazer login de admin — assim
+eles exercem o caminho REAL de quem usa a tela. A UI não precisou de mudança: o cliente dela já
+delegava ao `apiFetch` compartilhado, que anexa o Bearer.
+
+**Correção medida no `CLAUDE.md`.** A linha do Scheduler afirmava *"grant-first, **sem role default**
+nem bypass de admin"*. Medido no estado vivo: o token do admin **e** o de um supervisor recém-criado
+carregam `scheduler.configurar` e `scheduler.operacao` em `read_write` — `role_defaults` existe para
+os dois papéis (`infra/modules.yaml:506-525`). A metade sobre bypass continua verdadeira; a do role
+default era falsa e caiu.
+
+**Testes.** scheduler-api 20 → **31** (`test_route_credential.py`): censo **AST** de que toda função
+de rota chama o portão — é o único que pega a rota que alguém acrescentar amanhã — mais o controle do
+próprio censo (se o padrão do decorador mudar, ele denuncia em vez de virar `assert [] == []`); e o
+comportamento das duas portas, com os dois controles positivos (serviço passa, usuário com grant
+passa), `operacao` em leitura que NÃO dispara, `configurar` que não dá `operacao`, tenant do token
+vencendo o header, e 503 nomeando a env.
+
+**Gate.** `probe_route_credential_coverage.sh` ganhou a **seção C**: o censo do terceiro eixo era
+fixo na analytics-api (`ESCOPO` hardcoded) — por isso nenhum instrumento do repositório olhava para o
+scheduler. O escopo virou parâmetro (`ROUTE_CENSUS_SCOPE`), e C mede as 10 rotas do scheduler (só
+`/v1/health` isenta, NOMEADA) mais o 401 ao vivo. **VERDE** nas três seções.
+
+**Mutação ao vivo**, porque portão que só nega desconhecido é *"tem token"* com outro nome: um usuário
+`operator` LOGADO, sem grants de scheduler, levou **403** em `GET /v1/agendas` e em `POST /fire`, com
+o admin respondendo 200 no mesmo instante.
+
+**Limites.** **Escopo por pool fica FORA**: os dois campos são `scopable: false`, então quem opera
+agendas opera todas — inclusive as que apontam pools fora do seu `accessible_pools` (ficha `SCH-02`,
+com a decisão do dono registrada). O censo do terceiro eixo agora cobre dois serviços dos treze que
+servem rota (ficha `AUT-58`).
+
+**Deixou fichas:** `SCH-02` (escopo por pool nas agendas) e `AUT-58` (estender o censo de credencial
+por rota aos demais serviços).
+
 ## 2026-09-17 (9) — VOZ-27: a verificação de fala deixa de depender de alguém lembrar
 
 **O que faltava.** A `VOZ-23` sabia medir o caminho de fala, guardar o resultado e compará-lo com uma

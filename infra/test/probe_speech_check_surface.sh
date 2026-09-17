@@ -86,6 +86,9 @@ command -v jq >/dev/null || { echo "  INCONCL jq ausente — rode de dentro do W
 TOKEN=$(curl -s --max-time 20 -X POST "$AUTH/auth/login" -H 'Content-Type: application/json' \
   -d "{\"email\":\"admin@plughub.local\",\"password\":\"changeme_admin\",\"tenant_id\":\"$TENANT\"}" | jq -r '.access_token // empty')
 [ -n "$TOKEN" ] || { incon "login do admin falhou — nada medido"; fim; }
+# SCH-01: as rotas de Agenda passaram a exigir credencial. O gate entra como gente.
+HS=(-H "X-Tenant-ID: $TENANT" -H "Authorization: Bearer $TOKEN")
+SEM_CRED=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant-ID: $TENANT" "$SCHED/v1/agendas")
 
 # Sonda SEM `config.channels`: é o controle de que o portão recorta por CAPACIDADE, e não só por
 # "tem token". Papel `supervisor` não nasce com escrita em canais.
@@ -110,22 +113,26 @@ for _ in $(seq 1 30); do [ "$(corrente)" = "null" ] && break; sleep 10; done
 docker exec "$REDIS" redis-cli scard "$TENANT:pool:$POOL:instances" | grep -qE '^[1-9]' \
   || { incon "K0 pool de calibracao sem instancia"; fim; }
 
-AG=$(curl -s -H "X-Tenant-ID: $TENANT" "$SCHED/v1/agendas" | jq -c --arg s "$SEED_ID" '.agendas[] | select(.payload.seed_id == $s)')
+AG=$(curl -s "${HS[@]}" "$SCHED/v1/agendas" | jq -c --arg s "$SEED_ID" '.agendas[] | select(.payload.seed_id == $s)')
 [ -n "$AG" ] || { falha "K0 agenda semeada '$SEED_ID' ausente — rode o job agenda-seed (docker compose up agenda-seed)"; fim; }
 AG_ID=$(echo "$AG" | jq -r '.id')
 AG_POOL=$(echo "$AG" | jq -r '.target_pool_id')
 [ "$AG_POOL" = "$TRIGGER" ] || { falha "K0 a agenda semeada aponta '$AG_POOL', nao o pool de disparo '$TRIGGER'"; fim; }
-ok "K0 servico ocioso, pool com instancia, agenda '$SEED_ID' ativa apontando $TRIGGER"
+if [ "$SEM_CRED" = "401" ]; then
+  ok "K0 servico ocioso, pool com instancia, agenda '$SEED_ID' ativa apontando $TRIGGER; e a porta do scheduler recusa sem credencial (401)"
+else
+  falha "K0 o scheduler respondeu $SEM_CRED sem credencial — a porta de Agenda esta ABERTA (SCH-01)"
+fi
 
 # ── G1 ──
 NEXT_ANTES=$(echo "$AG" | jq -r '.next_fire_at')
-curl -s -o /dev/null -X POST -H "X-Tenant-ID: $TENANT" "$SCHED/v1/agendas/$AG_ID/fire"
+curl -s -o /dev/null -X POST "${HS[@]}" "$SCHED/v1/agendas/$AG_ID/fire"
 sleep 8
-DISP=$(curl -s -H "X-Tenant-ID: $TENANT" "$SCHED/v1/agendas/$AG_ID/dispatches" \
+DISP=$(curl -s "${HS[@]}" "$SCHED/v1/agendas/$AG_ID/dispatches" \
         | jq -c '(.dispatches // .) | if type=="array" then .[0] else . end')
 D_RES=$(echo "$DISP" | jq -r '.result // empty')
 D_SID=$(echo "$DISP" | jq -r '.session_id // empty')
-NEXT_DEPOIS=$(curl -s -H "X-Tenant-ID: $TENANT" "$SCHED/v1/agendas/$AG_ID" | jq -r '.next_fire_at')
+NEXT_DEPOIS=$(curl -s "${HS[@]}" "$SCHED/v1/agendas/$AG_ID" | jq -r '.next_fire_at')
 if [ "$D_RES" = "dispatched" ] && [ -n "$D_SID" ]; then
   if [ "$NEXT_ANTES" = "$NEXT_DEPOIS" ]; then
     ok "G1 a agenda acionou o pool (sessao $D_SID) e a recorrencia seguiu em $NEXT_DEPOIS"

@@ -46,6 +46,21 @@ class Settings(BaseSettings):
     # Admin token for write operations (optional — omit to allow all)
     admin_token: str = ""
 
+    # ── Credencial das rotas de Agenda (SCH-01, 2026-09-17) ───────────────────
+    # Até aqui as 9 rotas de `/v1/agendas` decidiam com o header `X-Tenant-ID` e nada
+    # mais: o portão existia só na UI, e o proxy dela repassa o prefixo sem credencial.
+    # Agenda aciona POOL — inclusive os que promovem deploy e contatam cliente —, então
+    # disparar é EFEITO, não leitura.
+    #
+    # Segredo do auth-api, para verificar o Bearer de quem usa a tela. VAZIO = o serviço
+    # não consegue verificar ninguém e RECUSA (503) nomeando a env; nunca fica aberto por
+    # env não setada, que é como um portão vira decorativo sem ninguém perceber.
+    jwt_secret:    str = ""
+    # Porta ADITIVA para chamador sem usuário (o job `agenda-seed` do compose). Token
+    # vazio NÃO libera nada — só desliga esta porta; o principal de serviço é IDENTIDADE
+    # (`service:agenda-seed` no log), nunca anonimato.
+    service_token: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

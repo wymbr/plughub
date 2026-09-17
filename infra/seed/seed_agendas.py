@@ -45,6 +45,10 @@ from pathlib import Path
 SCHEDULER_URL = os.environ.get("SCHEDULER_API_URL", "http://scheduler-api:3650")
 TENANT_ID     = os.environ.get("TENANT_ID", "tenant_demo")
 AGENDAS_DIR   = Path(os.environ.get("AGENDAS_DIR", "/agendas"))
+# SCH-01: as rotas de Agenda exigem credencial. Este job não tem gente atrás, então entra
+# pela porta de SERVIÇO — que é ADITIVA e é IDENTIDADE (`service:agenda-seed` no log do
+# scheduler), nunca anonimato. Sem o token, o seed leva 401 e DIZ; não semeia às cegas.
+SERVICE_TOKEN = os.environ.get("SCHEDULER_SERVICE_TOKEN", "")
 MAX_WAIT_S    = int(os.environ.get("SEED_MAX_WAIT", "120"))
 RECONCILE     = os.environ.get("AGENDA_SEED_RECONCILE", "").lower() in ("1", "true", "yes")
 
@@ -68,6 +72,8 @@ def _req(method: str, path: str, body: dict | None = None) -> tuple[int, dict | 
     url  = SCHEDULER_URL.rstrip("/") + path
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json", "X-Tenant-ID": TENANT_ID}
+    if SERVICE_TOKEN:
+        headers["X-Service-Token"] = SERVICE_TOKEN
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -189,6 +195,12 @@ def semear(doc: dict) -> bool:
 
 def main() -> None:
     wait_for_scheduler()
+    if not SERVICE_TOKEN:
+        # Não é fatal por si só (um deploy pode ter a porta de serviço desligada de
+        # propósito), mas é a causa NOMEADA do 401 que viria a seguir — e um seed que
+        # falha sem dizer por quê é o que faz alguém culpar o arquivo.
+        warn("SCHEDULER_SERVICE_TOKEN vazio — o scheduler-api vai RECUSAR (401) se o "
+             "portão dele estiver ligado; nenhuma agenda sera criada")
     agendas = carregar()
     log(f"{len(agendas)} agenda(s) em {AGENDAS_DIR} → {SCHEDULER_URL} "
         f"(tenant={TENANT_ID}, reconcile={RECONCILE})")

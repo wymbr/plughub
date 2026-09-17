@@ -3,6 +3,13 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+
+# Verificador canonico de JWT+ABAC (packages/py-authz). Instalado ANTES do servico para
+# que o `pip install -e .` dele encontre a dependencia ja satisfeita em vez de procura-la
+# no PyPI, onde ela nao existe. SCH-01: as rotas de Agenda passaram a exigir credencial.
+COPY packages/py-authz ./packages/py-authz
+RUN pip install --no-cache-dir -e ./packages/py-authz
+
 COPY packages/scheduler-api ./packages/scheduler-api
 
 WORKDIR /app/packages/scheduler-api

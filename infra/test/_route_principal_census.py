@@ -52,11 +52,17 @@ quem julga e o shell.
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
 import sys
 
 RAIZ = pathlib.Path(__file__).resolve().parents[2]
-ESCOPO = "packages/analytics-api/src"
+# O eixo nao e da analytics-api — e de QUALQUER servico que sirva rota. O default segue
+# sendo ela (e o que o probe mede por padrao, e o que a isencao declarada cobre), mas o
+# escopo e parametrizavel desde a SCH-01 (2026-09-17): o scheduler-api tinha 9 rotas
+# decidindo com um header de tenant e nada mais, e nenhum censo do repositorio olhava
+# para la. Estender servico a servico e divida NOMEADA (ficha `AUT-58`).
+ESCOPO = os.environ.get("ROUTE_CENSUS_SCOPE", "packages/analytics-api/src")
 
 # Dependencias que EXIGEM identidade verificavel. Cada uma recusa quando nao ha como
 # autorizar; a diferenca entre elas e o segredo que aceitam e o que fazem no ramo
@@ -78,7 +84,13 @@ PRINCIPAIS = {
 # *"por que isto nao pode ser um `Depends`?"*. O SSE parecia exigir uma entrada (o
 # `?token=` do `EventSource`), e nao exigia: virou `sse_pool_principal`, uma dependencia
 # como as outras.
-GUARDS_NO_CORPO = {"_check_audit_access"}
+GUARDS_NO_CORPO = {
+    "_check_audit_access",
+    # scheduler-api (SCH-01): decide no corpo porque devolve o TENANT que vale para a
+    # chamada — um `Depends` que so recusasse deixaria o handler lendo o tenant do
+    # header, que e exatamente o que estava errado antes.
+    "_principal",
+}
 
 METODOS = {"get", "post", "put", "delete", "patch"}
 

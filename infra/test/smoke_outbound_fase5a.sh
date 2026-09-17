@@ -34,7 +34,15 @@ set -euo pipefail
 TENANT="tenant_demo"
 MA="http://localhost:3660"
 SC="http://localhost:3650"
-ts=(-H "X-Tenant-ID: $TENANT")
+# SCH-01 (2026-09-17): as rotas de Agenda exigem credencial (`scheduler.configurar` para
+# criar/editar, `scheduler.operacao` para disparar/pausar/cancelar e ler). Este smoke passa
+# a entrar como gente, que e o caminho real de quem usa a tela — sem isto ele mediria 401.
+AUTH_API="${AUTH_API:-http://localhost:3202}"
+SCHED_TOKEN=$(curl -s --max-time 20 -X POST "$AUTH_API/auth/login" -H 'Content-Type: application/json' \
+  -d "{\"email\":\"admin@plughub.local\",\"password\":\"changeme_admin\",\"tenant_id\":\"$TENANT\"}" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+[ -n "$SCHED_TOKEN" ] || { echo "AVISO: login de admin falhou — as chamadas ao scheduler vao levar 401"; }
+ts=(-H "X-Tenant-ID: $TENANT" -H "Authorization: Bearer $SCHED_TOKEN")
 jqid() { sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
 STAMP=$(date +%s)
 N=3

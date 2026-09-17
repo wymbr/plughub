@@ -148,6 +148,38 @@ boot, porque "apagada de propósito" e "nunca semeada" são indistinguíveis de 
 ⚠️ **`next_fire_at` nulo numa recorrente é avisado na criação**: a agenda existe e nunca dispara
 (validade vencida, regra impossível). Criar em silêncio seria semear uma agenda decorativa.
 
+### 4b. Credencial das rotas *(SCH-01, 2026-09-17)*
+
+As 9 rotas de `/v1/agendas` decidiam com o header `X-Tenant-ID` e **nada mais**: sem Bearer,
+sem token de serviço, sem ABAC. O portão existia só na UI (`RequireAbac`), e o proxy dela
+repassa o prefixo **sem credencial** — quem alcançasse a porta criava agenda, trocava o
+`target_pool_id` e disparava com `POST /fire`. Agenda aciona POOL, e há pools que promovem
+deploy e que contatam cliente: **disparar é efeito, não leitura**.
+
+| rota | capacidade exigida |
+|---|---|
+| `POST/PATCH/DELETE /v1/agendas[/{id}]` | `scheduler.configurar`, **escrita** |
+| `POST /v1/agendas/{id}/{pause,resume,cancel,fire}` | `scheduler.operacao`, **escrita** |
+| `GET /v1/agendas[/{id}][/dispatches]` | `scheduler.operacao`, **leitura** |
+| `GET /v1/health` | isenta, NOMEADA (liveness do compose) |
+
+O mapa é o que o catálogo já dizia (`configurar` = "Criar e editar agendas"; `operacao` =
+"Operar agendas no Monitor (disparar, pausar, cancelar)") — a rota não inventou semântica.
+
+- **O tenant vem do TOKEN.** O header só decide na porta de SERVIÇO, que não tem token de onde
+  tirá-lo. Deixar o chamador escolher o tenant faria o portão virar um filtro preenchido por
+  quem é filtrado.
+- **`X-Service-Token` é ADITIVO** (job `agenda-seed`): token não configurado FECHA a porta, e o
+  principal é identidade (`service:agenda-seed` no log), nunca anonimato.
+- **Sem `PLUGHUB_SCHEDULER_JWT_SECRET` o serviço RECUSA (503) nomeando a env** — não conseguir
+  verificar não é o mesmo que não precisar verificar.
+- ⚠️ **Escopo por pool está FORA**: os dois campos são `scopable: false`, logo quem opera agendas
+  opera todas, inclusive as que apontam pools fora do seu `accessible_pools`. Dívida nomeada:
+  ficha `SCH-02`.
+
+Verificação: `probe_route_credential_coverage.sh` § C (censo AST + 401 ao vivo) e a suíte do
+pacote (`test_route_credential.py`, com censo próprio que pega rota nova sem portão).
+
 ### Novos artefatos de plataforma
 - Topic/evento (opcional se tudo síncrono no v1): manter disparo síncrono via HTTP ao webhook; `timer.fired`
   interno ao serviço. (Reavaliar evento Kafka quando a migração dos timers legados entrar — follow-up do ADR.)

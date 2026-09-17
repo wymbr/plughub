@@ -1449,7 +1449,22 @@ recorrente daily/weekly/monthly, `times[]` no dia), **aciona um POOL via webhook
 - **Promote agendado** é um pool webhook que faz `invoke pool_promote`, wrapper auditado do ÚNICO
   caminho de promote. Não-2xx (409 `next` vazio, 422 capacidade) vira `isError` → `on_failure`:
   **promoção nenhuma acontece em silêncio.** Endereça pool, nunca skill/versão, e **sem pin**.
-- **ABAC `scheduler.{configurar,operacao}` é grant-first**, sem role default nem bypass de admin.
+- **ABAC `scheduler.{configurar,operacao}` é grant-first e agora tem CONSUMIDOR NO BACKEND**
+  (SCH-01, 2026-09-17). Até aqui as 9 rotas de `/v1/agendas` decidiam com o header `X-Tenant-ID`
+  e **mais nada** — o portão existia só na UI, e o proxy dela repassa o prefixo sem credencial:
+  quem alcançasse a porta criava agenda, trocava o alvo e disparava com `POST /fire`. Como
+  **Agenda aciona POOL** (inclusive os que promovem deploy e contatam cliente), disparar é EFEITO,
+  não leitura. Hoje: criar/editar/apagar pede `configurar` em escrita · disparar/pausar/retomar/
+  cancelar pede `operacao` em escrita · listar e ler o ledger pedem `operacao` em leitura. **O
+  tenant é o do TOKEN**; o header só decide na porta de SERVIÇO (`X-Service-Token`, aditiva, para
+  o job `agenda-seed`). Gate: `probe_route_credential_coverage.sh` § C.
+  > ⚠️ **A frase anterior — *"sem role default nem bypass de admin"* — era FALSA na metade do
+  > role default**, e caiu na mesma medição: `infra/modules.yaml` declara `role_defaults` de
+  > `read_write` para **admin e supervisor** nos dois campos, e o estado vivo confirma (o token do
+  > admin e o de um supervisor recém-criado carregam os dois grants). Não havia bypass de admin
+  > — isso continua verdade —, mas *"ninguém nasce com"* nunca foi verdade aqui. **Escopo por
+  > pool continua fora**: os dois campos são `scopable: false`, então quem opera agendas opera
+  > todas; dívida NOMEADA em `SCH-02`.
 
 → See [`docs/product/scheduler-agenda-spec.md`](docs/product/scheduler-agenda-spec.md),
 [`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md)

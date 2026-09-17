@@ -42,6 +42,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 AN="${AN:-http://localhost:3500}"
+SCHED="${SCHED:-http://localhost:3650}"
 TENANT="${TENANT:-tenant_demo}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
@@ -192,8 +193,49 @@ if [ "$n_vivo_bad" -eq 0 ]; then
 fi
 
 printf "\n"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# C — scheduler-api (SCH-01, 2026-09-17)
+# ══════════════════════════════════════════════════════════════════════════════
+# O eixo nunca foi da analytics-api: e de qualquer servico que sirva rota. O scheduler
+# passou anos com 9 rotas decidindo por um header de tenant — e nenhum censo olhava para
+# la, porque o ESCOPO estava fixo. Uma Agenda aciona POOL (promote de deploy, contato
+# com cliente): disparar e EFEITO, nao leitura. Estender aos demais servicos e divida
+# NOMEADA (`AUT-58`); aqui entra o que esta consertado.
+printf "${BLD}C. scheduler-api — censo e deploy${RST}\n"
+
+SAIDA_S="$(ROUTE_CENSUS_SCOPE=packages/scheduler-api/src "$PY" "$CENSO")" || SAIDA_S=""
+if [ -z "$SAIDA_S" ]; then
+  inc "o censo nao devolveu rota do scheduler — instrumento morto para este escopo"
+else
+  n_s_desc=0
+  while IFS='|' read -r estado m p loc _; do
+    [ "$estado" = "DESCOBERTA" ] || continue
+    [ "$m $p" = "GET /v1/health" ] && continue     # mesma isencao NOMEADA do cabecalho
+    n_s_desc=$((n_s_desc + 1))
+    bad "DESCOBERTA  $m $p  ($loc)"
+  done <<< "$SAIDA_S"
+  n_s_cob=$(printf '%s\n' "$SAIDA_S" | grep -c '^COBERTA|' || true)
+  [ "$n_s_desc" -eq 0 ] && ok "as $n_s_cob rotas do scheduler declaram portao (so /v1/health isenta)"
+fi
+
+PING_S="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$SCHED/v1/health" 2>/dev/null)"
+if [ "$PING_S" != "200" ]; then
+  inc "scheduler-api nao respondeu /v1/health (HTTP $PING_S) — a metade viva de C NAO rodou"
+else
+  C_LIST="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "X-Tenant-ID: $TENANT" "$SCHED/v1/agendas")"
+  C_HEALTH="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$SCHED/v1/health")"
+  if [ "$C_LIST" = "401" ] && [ "$C_HEALTH" = "200" ]; then
+    ok "ao vivo: /v1/agendas -> 401 sem credencial   /v1/health -> 200"
+  else
+    bad "ao vivo: /v1/agendas devolveu $C_LIST (esperado 401) e /v1/health $C_HEALTH (esperado 200)"
+    info "O header X-Tenant-ID sozinho voltou a ser credencial — e o buraco da SCH-01."
+  fi
+fi
+
+printf "\n"
 if [ "$FAIL" -eq 0 ]; then
-  printf "${GRN}VERDE${RST} — toda rota da analytics-api exige credencial, exceto as isentas NOMEADAS.\n"
+  printf "${GRN}VERDE${RST} — analytics-api e scheduler-api exigem credencial, exceto as isentas NOMEADAS.\n"
 else
   printf "${RED}VERMELHO${RST} — ha rota servindo dado de tenant sem pedir credencial.\n"
 fi

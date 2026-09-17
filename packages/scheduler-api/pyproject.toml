@@ -13,6 +13,10 @@ dependencies    = [
     "python-dateutil>=2.9.0",
     "pytz>=2024.1",
     "httpx>=0.27.0",
+    # Verificador CANÔNICO de JWT+ABAC (packages/py-authz). Nunca uma cópia local:
+    # duas respostas para "quem é este e o que pode" é como nasceram as seis cópias
+    # que o arco de segurança apagou. SCH-01.
+    "plughub-authz",
 ]
 
 [project.scripts]

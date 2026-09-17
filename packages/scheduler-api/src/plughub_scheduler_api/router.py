@@ -2,10 +2,15 @@
 router.py
 FastAPI routes for the Scheduler / Agenda API.
 
-Endpoints (all tenant-scoped via the X-Tenant-ID header):
-  Agendas    — CRUD under /v1/agendas
-  Lifecycle  — pause / resume / cancel
-  Ledger     — GET /v1/agendas/{id}/dispatches
+Endpoints (todos com portão — SCH-01, 2026-09-17):
+  Agendas    — CRUD under /v1/agendas          (`scheduler.configurar`, escrita)
+  Lifecycle  — pause / resume / cancel / fire  (`scheduler.operacao`, escrita)
+  Ledger     — GET /v1/agendas[/{id}][/dispatches]  (`scheduler.operacao`, leitura)
+
+O tenant vem do TOKEN de quem chama; o header `X-Tenant-ID` só decide na porta de
+SERVIÇO (`X-Service-Token`), que não tem token de onde tirá-lo. Antes disto, o header
+sozinho era a credencial inteira: quem alcançasse a porta criava agenda e disparava
+pool — inclusive os que promovem deploy e contatam cliente.
 
 Pydantic models mirror the Zod contract in @plughub/schemas/scheduler.ts.
 next_fire_at for `once` mode is set here (= fire_at); for `recurring` it is computed
@@ -13,13 +18,16 @@ by the rule evaluator (Fase 1, task 4) and left null on create until then.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Union
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 from pydantic import BaseModel, Field
 
+from .config import get_settings
 from .evaluator import compute_next_fire
 from .db import (
     db_create_agenda,
@@ -60,6 +68,65 @@ def _tenant(x_tenant_id: str | None) -> str:
     if not x_tenant_id:
         raise HTTPException(status_code=400, detail="X-Tenant-ID header is required")
     return x_tenant_id
+
+
+# ── Credencial e capacidade (SCH-01, 2026-09-17) ──────────────────────────────
+#
+# O catálogo (`infra/modules.yaml`) já dizia o que cada campo significa, e é ele que
+# decide o mapa abaixo — não a intuição de quem escreve a rota:
+#   `configurar` → "Criar e editar agendas"
+#   `operacao`   → "Operar agendas no Monitor (disparar, pausar, cancelar)"
+# Ler a lista e o ledger é `operacao` em LEITURA; agir é `read_write`. Os dois campos são
+# `scopable: false`: quem opera agendas, opera todas — o recorte por `accessible_pools`
+# sobre o `target_pool_id` é dívida NOMEADA (ficha `SCH-02`), não esquecimento.
+
+CONFIGURAR = ("configurar", "read_write")
+OPERAR     = ("operacao",   "read_write")
+VER        = ("operacao",   "read_only")
+
+
+def _principal(request: Request, grant: tuple[str, str], what: str, x_tenant_id: str | None) -> str:
+    """Decide QUEM está chamando e se ele pode — e devolve o tenant que vale para a chamada.
+
+    Duas portas, nesta ordem:
+      1. `X-Service-Token` (ADITIVO): chamador sem gente atrás — hoje o job `agenda-seed`.
+         Token não configurado no serviço FECHA esta porta; nunca a abre. O tenant vem do
+         header, porque não há token de onde tirá-lo.
+      2. `Bearer` do auth-api + `scheduler.{campo}` no nível pedido. **O tenant é o do
+         TOKEN**, nunca do header: header é entrada do chamador, e deixar o chamador
+         escolher o tenant transformaria o portão num filtro que ele mesmo preenche.
+
+    Sem nenhuma das duas: 401. Sem `PLUGHUB_SCHEDULER_JWT_SECRET`: 503 nomeando a env —
+    não conseguir verificar não é o mesmo que não precisar verificar.
+    """
+    s = get_settings()
+    campo, minimo = grant
+
+    svc = request.headers.get("x-service-token")
+    if svc and s.service_token and hmac.compare_digest(svc, s.service_token):
+        tenant = _tenant(x_tenant_id)
+        logger.info("scheduler: %s por service:agenda-seed (tenant=%s)", what, tenant)
+        return tenant
+
+    token = bearer_from_header(request.headers.get("authorization"))
+    if not token:
+        raise HTTPException(status_code=401, detail=f"{what} exige credencial")
+    if not s.jwt_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="scheduler-api sem PLUGHUB_SCHEDULER_JWT_SECRET — nao consigo verificar credencial",
+        )
+    claims = verify_user_jwt(token, s.jwt_secret)
+    if not claims:
+        raise HTTPException(status_code=401, detail="credencial invalida ou expirada")
+    if not abac_can(claims, "scheduler", campo, minimo):
+        logger.warning("scheduler NEGADO: sub=%s %s — sem scheduler.%s (%s)",
+                       claims.get("sub"), what, campo, minimo)
+        raise HTTPException(status_code=403, detail=f"{what} exige `scheduler.{campo}` ({minimo})")
+    tenant = str(claims.get("tenant_id") or "")
+    if not tenant:
+        raise HTTPException(status_code=401, detail="credencial sem tenant")
+    return tenant
 
 
 # ── Contract models (mirror @plughub/schemas/scheduler.ts) ────────────────────
@@ -179,7 +246,7 @@ async def create_agenda(
     request: Request,
     x_tenant_id: str | None = Header(default=None),
 ) -> dict:
-    tenant = _tenant(x_tenant_id)
+    tenant = _principal(request, CONFIGURAR, "criar agenda", x_tenant_id)
     # NOTE: server-side webhook-capability validation of target_pool_id (channel_types
     # ∋ "webhook") is deferred — the Fase 3 UI filters the pool selector. Add an
     # agent-registry check here when needed.
@@ -200,7 +267,7 @@ async def list_agendas(
     x_tenant_id: str | None = Header(default=None),
     status: str | None = None,
 ) -> dict:
-    tenant = _tenant(x_tenant_id)
+    tenant = _principal(request, VER, "listar agendas", x_tenant_id)
     items = await db_list_agendas(_pool(request), tenant, status)
     return {"agendas": items, "total": len(items)}
 
@@ -211,7 +278,7 @@ async def get_agenda(
     request: Request,
     x_tenant_id: str | None = Header(default=None),
 ) -> dict:
-    tenant = _tenant(x_tenant_id)
+    tenant = _principal(request, VER, "ler agenda", x_tenant_id)
     agenda = await db_get_agenda(_pool(request), tenant, agenda_id)
     if not agenda:
         raise HTTPException(status_code=404, detail="Agenda not found")
@@ -225,7 +292,7 @@ async def update_agenda(
     request: Request,
     x_tenant_id: str | None = Header(default=None),
 ) -> dict:
-    tenant = _tenant(x_tenant_id)
+    tenant = _principal(request, CONFIGURAR, "editar agenda", x_tenant_id)
     data = body.model_dump(mode="json", exclude_none=True)
     if not data:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -251,7 +318,7 @@ async def delete_agenda(
     request: Request,
     x_tenant_id: str | None = Header(default=None),
 ) -> None:
-    tenant = _tenant(x_tenant_id)
+    tenant = _principal(request, CONFIGURAR, "apagar agenda", x_tenant_id)
     ok = await db_delete_agenda(_pool(request), tenant, agenda_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Agenda not found")
@@ -274,21 +341,21 @@ async def _set_status(request: Request, tenant: str, agenda_id: str, status: str
 async def pause_agenda(
     agenda_id: str, request: Request, x_tenant_id: str | None = Header(default=None),
 ) -> dict:
-    return await _set_status(request, _tenant(x_tenant_id), agenda_id, "paused")
+    return await _set_status(request, _principal(request, OPERAR, "pausar agenda", x_tenant_id), agenda_id, "paused")
 
 
 @router.post("/v1/agendas/{agenda_id}/resume")
 async def resume_agenda(
     agenda_id: str, request: Request, x_tenant_id: str | None = Header(default=None),
 ) -> dict:
-    return await _set_status(request, _tenant(x_tenant_id), agenda_id, "active")
+    return await _set_status(request, _principal(request, OPERAR, "retomar agenda", x_tenant_id), agenda_id, "active")
 
 
 @router.post("/v1/agendas/{agenda_id}/cancel")
 async def cancel_agenda(
     agenda_id: str, request: Request, x_tenant_id: str | None = Header(default=None),
 ) -> dict:
-    return await _set_status(request, _tenant(x_tenant_id), agenda_id, "cancelled")
+    return await _set_status(request, _principal(request, OPERAR, "cancelar agenda", x_tenant_id), agenda_id, "cancelled")
 
 
 @router.post("/v1/agendas/{agenda_id}/fire")
@@ -303,7 +370,7 @@ async def fire_agenda(
     agenda terminal (completed/expired/cancelled) ressuscitaria algo concluído e ainda
     produziria dispatch numa agenda 'completed' — incoerente. 'disparar agora' é override
     de execução de instância viva, não reabertura de agenda encerrada."""
-    tenant = _tenant(x_tenant_id)
+    tenant = _principal(request, OPERAR, "disparar agenda agora", x_tenant_id)
     agenda = await db_get_agenda(_pool(request), tenant, agenda_id)
     if not agenda:
         raise HTTPException(status_code=404, detail="Agenda not found")
@@ -328,6 +395,6 @@ async def list_dispatches(
     x_tenant_id: str | None = Header(default=None),
     limit: int = 100,
 ) -> dict:
-    tenant = _tenant(x_tenant_id)
+    tenant = _principal(request, VER, "ler o ledger da agenda", x_tenant_id)
     items = await db_list_dispatches(_pool(request), tenant, agenda_id, limit)
     return {"dispatches": items, "total": len(items)}
