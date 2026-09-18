@@ -16,7 +16,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, Lock } from "lucide-react";
 
 import { hasMediaRoom, useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
@@ -84,6 +84,7 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
     disconnect,
     audioBlocked,
     startAudio,
+    mediaHold,
   } = useWebRTCSession(sessionId, agentIdentity, channel);
 
   // Duration timer
@@ -112,6 +113,18 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
   // VOZ-04: "conectando" e "erro" vêm ANTES do teto. Enquanto o token não chega os tetos
   // são vazios, e o `view === "none"` escondia justamente estes dois estados — a falha do
   // token nunca aparecia na tela.
+  // NIV-07: pausa de mídia — o cliente está teclando um dado protegido no telefone. Vem
+  // antes do "conectando", que também é verdade durante a pausa mas não diz por quê.
+  if (mediaHold) {
+    return (
+      <div className="flex items-center gap-2 py-3 px-4 mx-2 mt-2
+                      bg-warning-light border border-warning/30 rounded-lg text-warning-text text-sm">
+        <Lock size={16} className="flex-shrink-0" />
+        <span>{t("overlay.mediaHold")}</span>
+      </div>
+    );
+  }
+
   if (connecting) {
     return (
       <div className="flex items-center justify-center gap-2 py-4

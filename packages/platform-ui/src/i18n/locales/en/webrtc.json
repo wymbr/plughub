@@ -11,7 +11,8 @@
     "error":       "Connection error: {{message}}",
     "micMuted":    "Microphone muted",
     "listening":   "Listening",
-    "enableAudio": "The browser blocked the call audio — click to enable"
+    "enableAudio": "The browser blocked the call audio — click to enable",
+    "mediaHold":   "Audio paused: the customer is entering protected data on the phone. It resumes when they finish."
   },
   "controls": {
     "mute":        "Mute microphone",
@@ -25,6 +26,7 @@
     "watching":    "Watching",
     "waitingRoom": "Waiting for participants",
     "voiceActive": "Voice call in progress",
-    "error":       "Unable to connect to room"
+    "error":       "Unable to connect to room",
+    "mediaHold":   "Audio paused during protected data entry"
   }
 }

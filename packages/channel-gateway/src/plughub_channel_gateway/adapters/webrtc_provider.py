@@ -169,6 +169,16 @@ class IWebRTCProvider(Protocol):
         """
         ...
 
+    async def remove_participant(self, room_name: str, identity: str) -> bool:
+        """
+        Tira um participante da SALA de mídia — não da sessão (NIV-07: pausa de mídia do
+        humano durante a coleta mascarada no telefone).
+
+        True = removido. False = não estava na sala. Qualquer outro erro PROPAGA: quem pediu a
+        remoção precisa saber que ela não aconteceu, porque é ela que impede o PIN de chegar lá.
+        """
+        ...
+
 
 # ── LiveKitProvider ───────────────────────────────────────────────────────────
 
@@ -423,6 +433,21 @@ class LiveKitProvider:
             ))
             return True
 
+    async def remove_participant(self, room_name: str, identity: str) -> bool:
+        from livekit.api import LiveKitAPI, RoomParticipantIdentity
+        from livekit.api.twirp_client import TwirpError
+
+        async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
+            try:
+                await lkapi.room.remove_participant(
+                    RoomParticipantIdentity(room=room_name, identity=identity)
+                )
+            except TwirpError as exc:
+                if exc.code == "not_found":
+                    return False
+                raise
+            return True
+
 
 # ── MockWebRTCProvider ────────────────────────────────────────────────────────
 
@@ -446,6 +471,7 @@ class MockWebRTCProvider:
         self._egress_counter:  int = 0
         self.permission_updates: list[dict] = []
         self.joined:           set[str] = set()   # identidades "na sala", para o teste
+        self.participants_removed: list[tuple[str, str]] = []
 
     def generate_token(self, grants: TokenGrants) -> str:
         token = (
@@ -486,7 +512,8 @@ class MockWebRTCProvider:
         return self._rooms.get(room_name)
 
     async def list_participants(self, room_name: str) -> list[ParticipantInfo]:
-        return []
+        # quem o teste pôs em `joined` está na sala (vazio por padrão, como antes)
+        return [ParticipantInfo(identity=i, sid=f"PA_{i}", state="ACTIVE") for i in sorted(self.joined)]
 
     async def start_egress(
         self,
@@ -523,6 +550,13 @@ class MockWebRTCProvider:
             "can_publish_sources": tuple(can_publish_sources),
         })
         return identity in self.joined
+
+    async def remove_participant(self, room_name: str, identity: str) -> bool:
+        """Registra a remoção; `joined` controla se o participante 'está na sala'."""
+        self.participants_removed.append((room_name, identity))
+        presente = identity in self.joined
+        self.joined.discard(identity)
+        return presente
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -59,13 +59,11 @@ export const CHANNEL_CAPABILITIES: Readonly<Record<Channel, readonly ChannelCapa
   whatsapp:  ["text", "file_upload", "rich_menu"],
   sms:       ["text"],
   email:     ["text", "file_upload"],
-  // ⚠️ `voice` NÃO declara `masked_input`, e é decisão com impedimentos EMPILHADOS
-  // (canal não provisionado · tratamento de eco inexistente no adapter · negociação
-  // out-of-band não asserida · `input_mode: voice` não recusado · a própria
-  // definição da capacidade, que descreve o MECANISMO e nomeia o webchat).
-  // O detalhe e os ids das fatias (NIV-05..08) estão no gêmeo Python, que é onde a
-  // discussão nasceu — repetir aqui criaria duas versões do mesmo raciocínio.
-  voice:     ["audio"],
+  // `voice` declara `masked_input` desde 2026-09-18 (NIV-07): tecla fora de banda na perna SIP,
+  // sob PAUSA DE MÍDIA (a sala fica só com o cliente e os bots durante o bloco); a perna Twilio
+  // recusa. O porquê, o que foi medido e o histórico de quando NÃO declarava estão no gêmeo
+  // Python — repetir aqui criaria duas versões do mesmo raciocínio.
+  voice:     ["audio", "masked_input"],
   webchat:   ["text", "file_upload", "rich_menu", "masked_input"],
   // `masked_input` desde a VOZ-05 (fatia A): campo protegido no widget e, durante a
   // coleta, fala transcrita e texto livre descartados. O detalhe mora no gêmeo Python.

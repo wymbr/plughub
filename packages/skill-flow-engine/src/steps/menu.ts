@@ -491,9 +491,15 @@ export async function executeMenu(
           case "terminate":
             return { next_step_id: step.on_failure, transition_reason: "on_failure" }
           case "collect":
-            return sinal.outcome === "timeout"
-              ? { next_step_id: step.on_timeout ?? step.on_failure, transition_reason: "on_failure" }
-              : { next_step_id: step.on_invalid ?? step.on_failure, transition_reason: "on_failure" }
+            if (sinal.outcome === "timeout") {
+              return { next_step_id: step.on_timeout ?? step.on_failure, transition_reason: "on_failure" }
+            }
+            // NIV-07: coleta DESFEITA pelo canal (não pôde protegê-la) não é entrada inválida do
+            // cliente — `on_invalid` pediria de novo o que o canal acabou de dizer que não garante
+            if (sinal.outcome === "aborted") {
+              return { next_step_id: step.on_failure, transition_reason: "on_failure" }
+            }
+            return { next_step_id: step.on_invalid ?? step.on_failure, transition_reason: "on_failure" }
           default:
             console.warn(`[menu] sinal ilegível em ${step.id}: ${raw.slice(0, 120)} — on_failure`)
             return { next_step_id: step.on_failure, transition_reason: "on_failure" }

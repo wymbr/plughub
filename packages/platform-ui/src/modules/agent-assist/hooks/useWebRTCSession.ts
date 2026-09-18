@@ -28,6 +28,7 @@ import {
   RemoteTrack,
   Track,
   createLocalTracks,
+  DisconnectReason,
   type RoomOptions,
 } from "livekit-client";
 
@@ -62,6 +63,11 @@ export interface WebRTCSessionState {
   connecting: boolean;
   /** Non-null when a connection error has occurred */
   error: string | null;
+  /**
+   * NIV-07: a plataforma PAUSOU a mídia deste participante — o cliente está teclando um dado
+   * protegido no telefone, e a tecla chegaria a todos na sala. Volta sozinho no fim do bloco.
+   */
+  mediaHold: boolean;
   /** Toggle local microphone mute */
   toggleMic: () => Promise<void>;
   /** Toggle local camera (only when my ceiling includes video) */
@@ -95,6 +101,9 @@ const ROOM_OPTIONS: RoomOptions = {
 // Esperas entre tentativas enquanto a sala ainda não existe (~15 s no total). Passou
 // disso, a tela mostra `room_not_ready` em vez de ficar tentando calada.
 const TOKEN_RETRY_DELAYS_MS = [500, 1000, 1500, 2000, 3000, 3000, 4000];
+// NIV-07: durante a coleta de dado protegido no telefone a rota responde 409 — sem teto de
+// tentativas, porque o fim é do BLOCO (o cliente teclando), não de uma corrida de roteamento.
+const MEDIA_HOLD_RETRY_MS = 2000;
 
 export function useWebRTCSession(
   sessionId: string | null,
@@ -116,6 +125,9 @@ export function useWebRTCSession(
   const [micMuted,     setMicMuted]     = useState(false);
   const [cameraOff,    setCameraOff]    = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [mediaHold,    setMediaHold]    = useState(false);
+  // o `connect` se chama de volta quando o servidor tira este participante da sala (NIV-07)
+  const connectRef = useRef<((sid: string) => Promise<void>) | null>(null);
 
   // ── Remote track bookkeeping ────────────────────────────────────────────
   const rebuildRemoteTracks = useCallback((r: Room) => {
@@ -140,7 +152,8 @@ export function useWebRTCSession(
       // VOZ-04: a rota é do channel-gateway (`/webrtc`, proxy próprio). Era `/api/webrtc/…`,
       // que o proxy manda ao mcp-server — 404 sempre, e a sala nunca era aberta.
       let body: TokenResponse | null = null;
-      for (let attempt = 0; attempt < TOKEN_RETRY_DELAYS_MS.length + 1; attempt++) {
+      let attempt = 0;
+      for (;;) {
         const res = await fetch(
           `/webrtc/token/${sid}?role=${role}`,
           // Token em MEMORIA (`auth/token-store`). A leitura do localStorage aqui mandava
@@ -149,17 +162,27 @@ export function useWebRTCSession(
         );
         if (generation !== generationRef.current) return;   // sessão trocada no meio
         if (res.ok) { body = await res.json(); break; }
+        const detail = await res.json().catch(() => null) as { detail?: { code?: string } } | null;
+        // NIV-07: coleta de dado protegido no telefone — a porta fica fechada até o bloco
+        // acabar. É pausa, não erro: a tela diz por quê e a tentativa segue sem teto.
+        if (res.status === 409 && detail?.detail?.code === "masked_collect_in_progress") {
+          setMediaHold(true);
+          await new Promise(resolve => setTimeout(resolve, MEDIA_HOLD_RETRY_MS));
+          if (generation !== generationRef.current) return;
+          continue;
+        }
         // A atribuição chega ao Console e a sala nasce do `routing.assigned` da MESMA
         // ativação: "ainda não" é corrida normal e se repete; qualquer outro 404 é
         // desistência, e o motivo aparece na tela.
-        const detail = await res.json().catch(() => null) as { detail?: { code?: string } } | null;
         const notReady = res.status === 404 && detail?.detail?.code === "room_not_ready";
         if (!notReady || attempt === TOKEN_RETRY_DELAYS_MS.length) {
           throw new Error(notReady ? "room_not_ready" : `token_fetch_failed:${res.status}`);
         }
         await new Promise(resolve => setTimeout(resolve, TOKEN_RETRY_DELAYS_MS[attempt]));
+        attempt++;
         if (generation !== generationRef.current) return;
       }
+      setMediaHold(false);
       if (!body) throw new Error("token_fetch_failed");
       setPublish(body.publish);
       setCustomerPublish(body.customer_publish);
@@ -178,10 +201,18 @@ export function useWebRTCSession(
       r.on(RoomEvent.TrackUnsubscribed, () => rebuildRemoteTracks(r));
       r.on(RoomEvent.ParticipantConnected, () => rebuildRemoteTracks(r));
       r.on(RoomEvent.ParticipantDisconnected, () => rebuildRemoteTracks(r));
-      r.on(RoomEvent.Disconnected, () => {
+      r.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
         setRoom(null);
         setLocalTracks([]);
         setRemoteTracks(new Map());
+        // NIV-07: o servidor tirou este participante da sala para uma coleta de dado protegido
+        // no telefone. A sessão continua; a tela volta a pedir token e mostra a pausa até o fim.
+        if (reason === DisconnectReason.PARTICIPANT_REMOVED && generation === generationRef.current
+            && roomRef.current === r) {
+          roomRef.current = null;
+          setMediaHold(true);
+          void connectRef.current?.(sid);
+        }
       });
       // O browser pode recusar tocar som que a página não iniciou por gesto (autoplay). O
       // LiveKit detecta ao anexar a trilha; sem esta escuta a recusa é MUDA — a chamada
@@ -213,6 +244,7 @@ export function useWebRTCSession(
       if (generation === generationRef.current) setConnecting(false);
     }
   }, [rebuildRemoteTracks, role]);
+  connectRef.current = connect;
 
   const disconnectRoom = useCallback(() => {
     generationRef.current++;
@@ -230,6 +262,7 @@ export function useWebRTCSession(
     setMicMuted(false);
     setCameraOff(false);
     setAudioBlocked(false);
+    setMediaHold(false);
   }, []);
 
   const startAudio = useCallback(async () => {
@@ -288,6 +321,7 @@ export function useWebRTCSession(
     localTracks,
     connecting,
     error,
+    mediaHold,
     toggleMic,
     toggleCamera,
     micMuted,

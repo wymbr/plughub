@@ -11,7 +11,8 @@
     "error":       "Erro de conexão: {{message}}",
     "micMuted":    "Microfone silenciado",
     "listening":   "Ouvindo",
-    "enableAudio": "O navegador bloqueou o áudio da chamada — clique para ativar"
+    "enableAudio": "O navegador bloqueou o áudio da chamada — clique para ativar",
+    "mediaHold":   "Áudio pausado: o cliente está digitando um dado protegido no telefone. Volta quando ele terminar."
   },
   "controls": {
     "mute":        "Silenciar microfone",
@@ -25,6 +26,7 @@
     "watching":    "Observando",
     "waitingRoom": "Aguardando participantes",
     "voiceActive": "Chamada de voz em andamento",
-    "error":       "Não foi possível conectar à sala"
+    "error":       "Não foi possível conectar à sala",
+    "mediaHold":   "Áudio pausado durante a digitação de dado protegido"
   }
 }

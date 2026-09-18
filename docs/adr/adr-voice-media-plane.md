@@ -510,6 +510,17 @@ numa central, e é só aqui. **É a única fase que exige telecom**, e entra por
 > `telephone-event` a tecla não chega** — o tom dentro do áudio é ignorado, e o conversor atende assim
 > mesmo. Exigir a negociação (§8, DTMF fora de banda) fica sendo decisão da plataforma (NIV-07).
 >
+> **Dado protegido pelo telefone (NIV-07, 2026-09-18) — PAUSA DE MÍDIA.** Medido: a tecla SIP chega a
+> **todos** os participantes da sala (nem `can_subscribe=False` a barra), o SFU não move participante
+> entre salas, e o unmute pelo servidor exige `room.enable_remote_unmute`, chave global — não adotada.
+> Decisão do dono: durante o bloco mascarado, humano e supervisor **saem da sala de mídia** (não da
+> sessão); a chave `channel:webrtc:{sid}:media_hold` é gravada antes de tirá-los, a rota de token
+> responde 409 até o fim, o prompt só é falado com a sala esvaziada, e quem entra no meio **desfaz** a
+> coleta (`aborted` → `on_failure`). Com isso `voice` declara `masked_input`; a perna Twilio recusa.
+> Exigir `telephone-event` deixou de ser condição da garantia — a plataforma não o sabe pela API, e
+> sem ele o tom vai só ao ouvinte, cuja transcrição é descartada no bloco: a coleta expira, nada vaza.
+> ⚠️ A gravação (V-F3/VOZ-06) herda a pausa: o egress para enquanto a chave existir.
+>
 > **Fora da fatia 1** (fichas no `pending.md`): exposição pública do SIP com classificação da borda
 > (V10) e TLS/SRTP; `REFER`/chamada sainte; teclas validadas com operadora real; tela para
 > tronco e regra de despacho; toque durante a fila. E **registro**: provedor que só entrega a
@@ -581,7 +592,8 @@ registra um conflito doc×doc (5 anos × 30 dias) que nenhum código arbitra.
   que o navegador fala não entra na conta: quem converte é o serviço SIP, antes da sala.
   Consequência: a CPU por chamada do `livekit-sip` é item de **dimensionamento por cliente**, não
   um custo evitado.
-- **Transporte de DTMF fora de banda** (RFC 4733) nas duas pernas — é o que a `NIV-07` cobra.
+- **Transporte de DTMF fora de banda** (RFC 4733) nas duas pernas — sem ele a coleta por tecla
+  expira (a garantia de sigilo não depende disso desde a NIV-07; a usabilidade, sim).
 - **TLS/SRTP obrigatório ou negociável** no enlace com o SBC (V10).
 - **`REFER` de saída suportado pelo gateway?** (V3) Define se o handoff para ramal libera a
   plataforma do caminho da mídia ou a mantém em bridge.

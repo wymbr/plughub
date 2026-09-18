@@ -22,10 +22,11 @@
 #   S4 a fala do chamador chega ao fluxo: o menu por voz registra `sip-m0=atendente`
 #   K1 (VOZ-31) o serviço SIP aceita `telephone-event` na negociação
 #   K2 (VOZ-31) teclas FORA de banda (RFC 4733) respondem o menu de teclado (`sip-m1=<código>`)
-#   K3 (VOZ-31) PIN MASCARADO no telefone não é coletado (NIV-07): nem valor no fluxo nem PIN no
-#      stream; K3r o menu é RECUSADO nomeado no envio (mcp-server, `voice` sem `masked_input`) —
-#      com `voice` sozinho o registry já recusaria no DEPLOY, por isso o pool é misto; K3g o PIN
-#      teclado não aparece no log do gateway
+#   K3 (NIV-07) PIN MASCARADO pelo telefone É coletado por tecla e chega ao fluxo, sem valor no
+#      stream; K3p o gateway diz que pausou a mídia e quem tirou da sala; K3g o PIN não aparece
+#      nos logs do gateway, do bridge, do motor nem do mcp-server
+#   K4 (NIV-07) um "humano" na sala antes do bloco é tirado dela e não vê o PIN (a tecla SIP chega
+#      a TODOS na sala — medido —, e é por isso que ele sai)
 #   S5 o fluxo encerra e a PLATAFORMA derruba a chamada (BYE no telefone)
 #   S6 o contato da chamada 1 fechou pela plataforma (log do gateway)
 #   H1 2ª chamada, o CHAMADOR desliga: o contato fecha como `customer_hangup`
@@ -46,10 +47,10 @@ REG="${REGISTRY:-http://localhost:3300}"
 AUTH="${AUTH:-http://localhost:3202}"
 TENANT="${TENANT:-tenant_demo}"
 REDIS="${REDIS_CONTAINER:-plughub-demo-redis-1}"
-# Pool MISTO (browser e telefone) desde a VOZ-31: com `voice` sozinho o registry recusa no deploy o
-# menu mascarado do K3 (`masked_sem_canal_capaz` — correto, e medido). O caso que sobra para o
-# RUNTIME é exatamente o misto: o deploy passa pelo `webrtc`, e a chamada chega pelo telefone.
-POOL="probe_voz31_sip_misto"
+# Pool SÓ `voice`: desde a NIV-07 `voice` declara `masked_input`, e o deploy do menu mascarado
+# neste pool é a prova de que o registry passou a aceitar (na VOZ-31 ele recusava, medido:
+# `masked_sem_canal_capaz`). O pool misto da VOZ-31 fica no banco, sem uso.
+POOL="probe_voz02_sip"
 SKILL="skill_probe_sip_inbound_v1"
 FIXTURE="infra/test/fixtures/skill_probe_sip_inbound_v1.json"
 DNIS="${SIP_DNIS:-+551140000000}"
@@ -143,17 +144,23 @@ if [ "$(printf '%s\n' "$OUT" | grep -c '^\(OK\|FALHA\|INCONCL\) ')" = 0 ]; then
 fi
 SID1=$(printf '%s\n' "$OUT" | sed -n 's/^SID1 //p' | head -1)
 PIN=$(printf '%s\n' "$OUT" | sed -n 's/^PIN //p' | head -1)
-MCP="${MCP_CONTAINER:-plughub-demo-mcp-server-plughub-1}"
 if [ -n "$SID1" ]; then
-  REC=$(docker logs --since "$T0" "$MCP" 2>&1 | grep "menu mascarado em canal sem 'masked_input'" | grep -c "session=$SID1 channel=voice")
-  [ "${REC:-0}" -ge 1 ] && ok "K3r o menu mascarado foi RECUSADO no envio, nomeado (mcp-server: canal voice sem masked_input)" \
-                        || falha "K3r nenhuma recusa nomeada do menu mascarado para $SID1 no mcp-server — o que o impediu?"
+  PAUSA=$(docker logs --since "$T0" "$GW" 2>&1 | grep "pausa de midia no menu" | grep "session=$SID1" | tail -1)
+  case "$PAUSA" in
+    *agent-probe-humano*) ok "K3p o gateway pausou a midia e nomeou quem tirou da sala: ${PAUSA##*— }" ;;
+    "") falha "K3p nenhuma linha de pausa de midia para $SID1 no gateway" ;;
+    *) falha "K3p a pausa nao tirou o 'humano' de teste: ${PAUSA##*— }" ;;
+  esac
 fi
 if [ -n "$PIN" ]; then
   # fronteira de dígito: o ANI do chamador, que o log cita, pode conter a mesma sequência
-  VAZ=$(docker logs --since "$T0" "$GW" 2>&1 | grep -cE "(^|[^0-9])$PIN([^0-9]|$)")
-  [ "${VAZ:-0}" = 0 ] && ok "K3g o PIN mascarado teclado nao aparece no log do gateway" \
-                      || falha "K3g o PIN mascarado aparece $VAZ vez(es) no log do gateway — VAZOU"
+  VAZ=""
+  for c in "$GW" plughub-demo-orchestrator-bridge-1 plughub-demo-skill-flow-service-1 plughub-demo-mcp-server-plughub-1; do
+    n=$(docker logs --since "$T0" "$c" 2>&1 | grep -cE "(^|[^0-9])$PIN([^0-9]|$)")
+    [ "${n:-0}" != 0 ] && VAZ="$VAZ ${c#plughub-demo-}=$n"
+  done
+  [ -z "$VAZ" ] && ok "K3g o PIN nao aparece nos logs do gateway, bridge, motor e mcp-server" \
+                || falha "K3g o PIN aparece em log:$VAZ — VAZOU"
 fi
 SID2=$(printf '%s\n' "$OUT" | sed -n 's/^SID2 //p' | head -1)
 

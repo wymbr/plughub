@@ -187,7 +187,9 @@ class Retry:
 
 @dataclass(frozen=True)
 class Done:
-    outcome: Literal["value", "invalid", "timeout"]
+    # `aborted` (NIV-07) não nasce do núcleo: é o ADAPTER desfazendo uma coleta que não conseguiu
+    # proteger (a pausa de mídia falhou, ou alguém entrou na sala durante o bloco mascarado)
+    outcome: Literal["value", "invalid", "timeout", "aborted"]
     value:   str | None = None
     via:     Literal["dtmf", "voice", ""] = ""
 

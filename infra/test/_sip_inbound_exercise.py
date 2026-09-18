@@ -15,10 +15,10 @@ MODE=atende (endpoint cadastrado):
   S4 a fala do chamador chega ao fluxo: o menu por voz registra `sip-m0=atendente`.
   K1 (VOZ-31) `telephone-event` negociado na resposta do serviço SIP.
   K2 (VOZ-31) teclas FORA de banda (RFC 4733) respondem o menu de teclado: `sip-m1=<código>`.
-  K3 (VOZ-31) PIN MASCARADO no telefone NÃO é coletado (NIV-07), e isso não é mudo: o menu é
-     RECUSADO no envio (`notification_send`, canal `voice` sem `masked_input` — o probe lê a
-     linha no mcp-server), o fluxo sai pelo `on_failure` sem nunca receber o PIN, e o PIN teclado
-     assim mesmo não aparece no stream — o probe confere também o log do gateway.
+  K3 (NIV-07) PIN MASCARADO pelo telefone É coletado — por tecla, sob PAUSA DE MÍDIA — e chega
+     ao fluxo (`sip-m2-recebido`) sem aparecer no stream; o probe confere os logs.
+  K4 (NIV-07) um participante "humano" na sala antes do bloco é TIRADO dela antes do prompt e
+     não vê o PIN — a tecla SIP chega a todos na sala, e é por isso que ele sai.
   S5 o fluxo encerra e a PLATAFORMA derruba a chamada (BYE chega ao telefone).
   depois, uma 2ª chamada em que o CHAMADOR desliga — o probe confere o fechamento no log.
   B1 (VOZ-31, caracterização) 3ª chamada SEM `telephone-event`, tecla como TOM no áudio: o que o
@@ -42,7 +42,7 @@ import time
 
 import httpx
 import redis.asyncio as aioredis
-from livekit import api
+from livekit import api, rtc
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _sip_ua import SipUA, tons_dtmf_pcm8k  # noqa: E402
@@ -125,6 +125,37 @@ async def menu_no_ar(rd, ua, sid: str, prompt: str, limite_s: float = 40) -> boo
     return False
 
 
+async def humano_na_sala(rd, sid: str) -> dict | None:
+    """Um participante com identidade de ATENDENTE na sala da chamada — o que o Console abre. Guarda
+    as teclas SIP que ele recebe e se o servidor o tirou da sala."""
+    room_name = None
+    async for k in rd.scan_iter("channel:sip:room:*"):
+        if await rd.get(k) == sid:
+            room_name = k.split("channel:sip:room:", 1)[1]
+    if not room_name or not LK_KEY:
+        return None
+    tok = api.AccessToken(LK_KEY, LK_SEC).with_identity("agent-probe-humano").with_grants(
+        api.VideoGrants(room_join=True, room=room_name, can_publish=False)).to_jwt()
+    estado: dict = {"teclas": [], "removido": False, "motivo": "-"}
+    sala = rtc.Room()
+
+    @sala.on("sip_dtmf_received")
+    def _tecla(ev):
+        estado["teclas"].append(getattr(ev, "digit", "?"))
+
+    @sala.on("disconnected")
+    def _saiu(motivo=None):
+        estado["removido"] = True
+        estado["motivo"] = str(motivo)
+    try:
+        await asyncio.wait_for(sala.connect(LK_URL.replace("http://", "ws://"), tok), 15)
+    except Exception as exc:
+        emit("INFO", "K4", f"'humano' de teste nao conectou: {type(exc).__name__}: {exc}")
+        return None
+    estado["sala"] = sala
+    return estado
+
+
 async def codec_do_chamador(ani: str) -> str:
     if not LK_KEY:
         return "sem credencial do SFU no env"
@@ -188,6 +219,12 @@ async def atende() -> None:
          f"telephone-event negociado na resposta do servico SIP: PT {ch.te_pt}" if ch.te_pt is not None
          else "a resposta do servico SIP NAO aceitou telephone-event — tecla fora de banda impossivel")
     if ch.te_pt is not None and m == "sip-m0=atendente":
+        # K4: um "humano" entra na sala ANTES do bloco mascarado — como o atendente que acionou o
+        # especialista de coleta sensível — e JÁ antes do m1: as teclas do m1 (sem máscara) são o
+        # controle de que ele OUVE tecla SIP; sem isso, "não viu o PIN" podia ser só surdez. Entrar
+        # depois do m1 corre com o bloco: a 1ª medição (2026-09-18) entrou 0,6 s depois da pausa e
+        # o gateway, corretamente, desfez a coleta como INTRUSÃO.
+        humano = await humano_na_sala(rd, sid)
         if await menu_no_ar(rd, ua, sid, "Digite o codigo"):
             ua.teclar(CODIGO + "#")
             k2 = await marcador(rd, sid, 30, (f"sip-m1={CODIGO}", "sip-m1=", "sip-m1-invalido", "sip-m1-timeout"))
@@ -196,19 +233,34 @@ async def atende() -> None:
                  f"{k2 or 'nenhum marcador em 30 s'} (esperado sip-m1={CODIGO})")
         else:
             emit("FALHA", "K2", "o menu de teclado (m1) nao chegou ao stream em 40 s")
-        # O chamador tecla o PIN como teclaria diante de um pedido — com ou sem menu no ar.
-        await asyncio.sleep(2.0)
-        ua.teclar(PIN + "#")
         print(f"PIN {PIN}", flush=True)
-        caiu_cedo = await ua.esperar_bye(40)
-        txt = await _stream_txt(rd, sid)
-        recebido = "sip-m2-recebido" in txt
-        # fronteira de dígito: o ANI do chamador, que o stream carrega, pode conter a sequência
-        vazou = re.search(rf"(?<![0-9]){PIN}(?![0-9])", txt) is not None
-        emit("OK" if not recebido and not vazou else "FALHA", "K3",
-             f"PIN mascarado no telefone: coletado={'SIM' if recebido else 'nao'} · PIN no stream="
-             f"{'SIM — VAZOU' if vazou else 'nao'} · a chamada {'caiu' if caiu_cedo else 'NAO caiu em 40 s'} "
-             f"(esperado: nao coletado, sem valor, fluxo saindo — a coleta mascarada na perna SIP e a NIV-07)")
+        if await menu_no_ar(rd, ua, sid, "Digite o PIN"):
+            ua.teclar(PIN + "#")
+            k3 = await marcador(rd, sid, 30, ("sip-m2-recebido", "sip-m2-timeout"))
+            txt = await _stream_txt(rd, sid)
+            # fronteira de dígito: o ANI do chamador, que o stream carrega, pode conter a sequência
+            vazou = re.search(rf"(?<![0-9]){PIN}(?![0-9])", txt) is not None
+            emit("OK" if k3 == "sip-m2-recebido" and not vazou else "FALHA", "K3",
+                 f"PIN mascarado pelo telefone -> {k3 or 'nenhum marcador em 30 s'} (esperado "
+                 f"sip-m2-recebido); PIN no stream: {'SIM — VAZOU' if vazou else 'nao'}")
+        else:
+            emit("FALHA", "K3", "o menu mascarado (m2) nao chegou ao stream em 40 s")
+        if humano is None:
+            emit("INCONCL", "K4", "o participante 'humano' de teste nao entrou na sala — nada medido")
+        else:
+            ouviu = "".join(humano["teclas"])
+            viu = PIN in ouviu
+            if CODIGO not in ouviu:
+                emit("INCONCL", "K4", f"o 'humano' de teste nao ouviu nem as teclas do m1 ({ouviu or '-'}) "
+                     f"— 'nao viu o PIN' nao distingue pausa de surdez")
+            else:
+                # 4 = PARTICIPANT_REMOVED; o fim da chamada tambem o tiraria, mas como ROOM_DELETED (5)
+                tirado = humano["removido"] and humano["motivo"] in ("4", "DisconnectReason.PARTICIPANT_REMOVED")
+                emit("OK" if tirado and not viu else "FALHA", "K4",
+                     f"'humano' na sala antes do bloco: tirado pela pausa={'sim' if tirado else 'NAO'} "
+                     f"(motivo {humano['motivo']}) · viu o PIN={'SIM — VAZOU' if viu else 'nao'} "
+                     f"(teclas que viu: {ouviu or '-'}; as do m1 sao o controle)")
+            await humano["sala"].disconnect()
     else:
         emit("INCONCL", "K2", "sem telephone-event ou sem o m0 respondido — as teclas nao foram medidas")
 

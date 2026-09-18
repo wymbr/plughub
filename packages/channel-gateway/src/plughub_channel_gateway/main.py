@@ -36,7 +36,7 @@ from .adapters.voice import VoiceAdapter
 from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
 from .adapters.webhook import ResumeAlreadyTerminalError, WebhookAdapter
-from .adapters.webrtc import WebRTCAdapter
+from .adapters.webrtc import MaskedCollectInProgress, WebRTCAdapter
 from .adapters.voice_router import VoiceChannelRouter
 from .adapters.whatsapp import WhatsAppAdapter
 from .arrival_evidence import ArrivalEvidenceRecorder
@@ -1019,11 +1019,23 @@ async def webrtc_token(
                 detail="token de midia como agente exige ATENDER este contato, nao so o pool dele",
             )
 
-    result = await _webrtc_adapter.get_token(
-        session_id = session_id,
-        role       = role,
-        identity   = str(_payload.get("sub") or ""),
-    )
+    try:
+        result = await _webrtc_adapter.get_token(
+            session_id = session_id,
+            role       = role,
+            identity   = str(_payload.get("sub") or ""),
+        )
+    except MaskedCollectInProgress:
+        # NIV-07: o cliente está teclando um dado protegido no telefone, e a tecla SIP chega a
+        # todos na sala — ninguém além dele entra até o bloco acabar. "Ainda não", como o 404
+        # abaixo: o Console repete, e mostra por quê.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code":    "masked_collect_in_progress",
+                "message": "coleta de dado protegido em curso — o audio volta ao fim dela",
+            },
+        )
     if result is None:
         # VOZ-04: o Console abre o contato quando recebe a atribuição, e a sala nasce do
         # `routing.assigned` que o bridge escreve na MESMA ativação — a corrida é normal. O

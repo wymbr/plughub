@@ -27,15 +27,22 @@
 #   B  capacidade fora do vocabulário do `ChannelCapabilitySchema`            → VERMELHO
 #   C  uma SEGUNDA casa de capacidade reaparecer                              → VERMELHO
 #   D  canal elegível fora de `_CHANNEL_PRIORITY` (desempate por acidente)    → VERMELHO
-#   E  **`voice` ganhar `masked_input`**                                      → VERMELHO
+#   E  **`voice` declarar `masked_input` SEM os mecanismos que o tornam verdade** → VERMELHO
+#      (até 2026-09-18 era "voice ganhar masked_input" → VERMELHO; a NIV-07 construiu os
+#      mecanismos e o dono decidiu declarar. A testemunha mudou de proposição, não sumiu:
+#      declaração sem mecanismo é a promessa que este ramo existe para pegar.)
 #   F  o gêmeo Python DIVERGIR do canônico em `@plughub/schemas`             → VERMELHO
 #      — desde a NIV-03 o canônico é `schemas/src/channel-capabilities.ts`, porque
 #        dois decisores de capacidade são TypeScript (`notification_send` e o
 #        `set-next`/`promote`). O gêmeo fica porque o gateway é Python. Duas cópias
 #        com gate é o arranjo do `py-contextstore`; duas cópias SEM gate foi o
 #        defeito que a NIV-01 removeu.
-#      — é a testemunha de segurança. São impedimentos EMPILHADOS, e as duas
-#        primeiras redações deste probe erraram a lista:
+#      — é a testemunha de segurança. A lista abaixo é o HISTÓRICO de impedimentos que a
+#        NIV-07 (2026-09-18) fechou; o ramo agora exige, no código, a pausa de mídia, a rota
+#        de token fechada durante ela, a coleta desfeita quando alguém entra, a recusa da
+#        perna Twilio e a recusa de `masked` + fala (NIV-08). O comportamento é provado ao
+#        vivo pelo `probe_voz02_sip_inbound.sh` (K3/K4). As duas primeiras redações deste
+#        probe erraram a lista:
 #          (a) o canal não está provisionado (Arc 15) — resolve-se por DEPLOY;
 #          (b) o TRATAMENTO de eco não existe no adapter (zero ocorrências de
 #              "masked" em `voice.py`) — é lacuna, não vazamento (NIV-06);
@@ -70,6 +77,8 @@ import ast, io, re, sys
 REG = "packages/channel-gateway/src/plughub_channel_gateway/channel_capability_registry.py"
 COMMON = "packages/schemas/src/common.ts"
 SKILL = "packages/schemas/src/skill.ts"
+GW_WEBRTC = "packages/channel-gateway/src/plughub_channel_gateway/adapters/webrtc.py"
+GW_ROUTER = "packages/channel-gateway/src/plughub_channel_gateway/adapters/voice_router.py"
 
 fonte = io.open(REG, encoding="utf-8").read()
 
@@ -119,15 +128,43 @@ print("ERRO|D|canal elegivel fora de _CHANNEL_PRIORITY (desempate por acidente):
       if sem_prio else "OK|D|todos os %d canais elegiveis tem prioridade" % len(elegiveis))
 
 # ── E — testemunha de seguranca ─────────────────────────────────────────────
+def _funcoes(caminho):
+    """Nomes de funções e métodos DEFINIDOS (AST: comentário não conta)."""
+    arv = ast.parse(io.open(caminho, encoding="utf-8").read())
+    return {n.name for n in ast.walk(arv) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+def _levanta(caminho, funcao, excecao):
+    """`funcao` tem um `raise excecao(...)` de verdade?"""
+    arv = ast.parse(io.open(caminho, encoding="utf-8").read())
+    for n in ast.walk(arv):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == funcao:
+            for r in ast.walk(n):
+                if (isinstance(r, ast.Raise) and isinstance(r.exc, ast.Call)
+                        and getattr(r.exc.func, "id", "") == excecao):
+                    return True
+    return False
+
 if "masked_input" in tabela.get("voice", set()):
-    print("ERRO|E|`voice` declara masked_input — seguem de pe: canal nao provisionado "
-          "(Arc 15), tratamento de eco INEXISTENTE no adapter (NIV-06, zero ocorrencias "
-          "de masked em voice.py), negociacao out-of-band nao asserida (NIV-07), "
-          "`input_mode: voice` nao recusado (NIV-08). A definicao por MECANISMO (NIV-05) "
-          "ja caiu em 2026-09-15 — ela nao e mais impedimento")
+    gw = _funcoes(GW_WEBRTC)
+    falta = [nome for nome, ok in (
+        ("pausa de midia (_media_hold_start)", "_media_hold_start" in gw),
+        ("liberacao da pausa (_media_hold_release)", "_media_hold_release" in gw),
+        ("coleta desfeita quando alguem entra (_media_hold_intrusion)", "_media_hold_intrusion" in gw),
+        ("rota de token fechada na pausa (get_token levanta MaskedCollectInProgress)",
+         _levanta(GW_WEBRTC, "get_token", "MaskedCollectInProgress")),
+        ("recusa da perna Twilio (VoiceChannelRouter.deliver_menu)",
+         "RECUSADO na perna Twilio" in io.open(GW_ROUTER, encoding="utf-8").read()),
+        ("NIV-08 no schema (masked + input voice recusado)",
+         "menu mascarado não aceita input voice" in io.open(SKILL, encoding="utf-8").read()),
+    ) if not ok]
+    if falta:
+        print("ERRO|E|`voice` declara masked_input SEM: %s — declaracao sem mecanismo" % "; ".join(falta))
+    else:
+        print("OK|E|voice declara masked_input COM os 6 mecanismos (pausa, liberacao, intrusao, "
+              "token fechado, recusa Twilio, NIV-08) — comportamento: probe_voz02_sip_inbound K3/K4")
 else:
     quem = sorted(ch for ch, cs in tabela.items() if "masked_input" in cs)
-    print("OK|E|masked_input so em %s; voice permanece fora (gatilho no registry)" % quem)
+    print("OK|E|masked_input so em %s; voice fora" % quem)
 PY
 )"
 
@@ -197,4 +234,4 @@ echo
 if [ "$FAIL" -gt 0 ]; then
   echo "${RED}${BLD}REPROVADO${RST} — $FAIL falha(s)"; exit 1
 fi
-echo "${GRN}${BLD}VERDE${RST} — uma casa, tabela exaustiva, e voice sem masked_input por decisão"
+echo "${GRN}${BLD}VERDE${RST} — uma casa, tabela exaustiva, e voice so declara masked_input com os mecanismos"

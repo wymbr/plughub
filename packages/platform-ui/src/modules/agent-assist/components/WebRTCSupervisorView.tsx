@@ -13,7 +13,7 @@
 
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, EyeOff } from "lucide-react";
+import { Loader2, EyeOff, Lock } from "lucide-react";
 
 import { hasMediaRoom, useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
@@ -43,11 +43,21 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
     error,
     audioBlocked,
     startAudio,
+    mediaHold,
   } = useWebRTCSession(sessionId, SUPERVISOR_IDENTITY, channel, "supervisor");
   // ⚠️ O papel "supervisor" é o que dá token OCULTO e sem publicação. Até a VOZ-09 esta
   // visão pedia `role=agent` (o hook não recebia papel) e entraria na sala publicando.
 
   if (!hasMediaRoom(channel)) return null;
+  // NIV-07: vem antes do `view`, que fica "none" enquanto não há token
+  if (mediaHold) {
+    return (
+      <div className="flex items-center gap-1.5 p-2 text-warning-text text-xs">
+        <Lock size={14} />
+        {t("supervisor.mediaHold")}
+      </div>
+    );
+  }
   if (view === "none")       return null;
 
   if (connecting) {

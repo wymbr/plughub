@@ -2,7 +2,7 @@
   "skill_id": "skill_probe_sip_inbound_v1",
   "name": "Probe - chamada telefonica entrante pela perna SIP (VOZ-02, VOZ-31)",
   "version": "1.1",
-  "description": "Fixture do probe_voz02_sip_inbound: cumprimenta (e e a fala que ATENDE a chamada — o servico SIP so atende quando ha audio na sala), pergunta por voz ou tecla com duas opcoes (m0), pede um codigo pelo TECLADO terminado em # (m1, VOZ-31) e um PIN MASCARADO (m2, que no telefone ainda nao tem coleta — NIV-07: o envio o RECUSA, canal voice sem masked_input, e o fluxo sai pelo on_failure). Cada desfecho vira um marcador; o PIN nunca volta ao cliente. Depois encerra: e o encerramento que derruba a chamada pelo lado da plataforma.",
+  "description": "Fixture do probe_voz02_sip_inbound: cumprimenta (e e a fala que ATENDE a chamada — o servico SIP so atende quando ha audio na sala), pergunta por voz ou tecla com duas opcoes (m0), pede um codigo pelo TECLADO terminado em # (m1, VOZ-31) e um PIN MASCARADO (m2, NIV-07: coletado por tecla sob pausa de midia — a sala fica so com o cliente e os bots). Cada desfecho vira um marcador; o PIN nunca volta ao cliente. Depois encerra: e o encerramento que derruba a chamada pelo lado da plataforma.",
   "classification": {"type": "orchestrator"},
   "flow": {
     "entry": "n0",

@@ -91,6 +91,9 @@ def _fake_redis():
     r.expire = AsyncMock(side_effect=_expire)
     r.delete = AsyncMock(side_effect=_delete)
     r.xread  = AsyncMock(return_value=[])
+    # NIV-07: `get_token` pergunta `exists` pela pausa de mídia — sem isto o AsyncMock responde um
+    # mock TRUTHY e todo token viraria "pausa em curso"
+    r.exists = AsyncMock(side_effect=lambda *keys: sum(1 for k in keys if k in r._store))
     return r
 
 

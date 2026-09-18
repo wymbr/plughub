@@ -38,7 +38,18 @@ class VoiceChannelRouter:
         await self._alvo(payload).deliver_text(payload)
 
     async def deliver_menu(self, payload: dict) -> None:
-        await self._alvo(payload).deliver_menu(payload)
+        alvo = self._alvo(payload)
+        if alvo is self._legacy and (payload.get("masked") or payload.get("masked_fields")):
+            # NIV-07: `voice` declara `masked_input` pela perna SIP (pausa de mídia, tecla fora de
+            # banda). O legado Twilio não tem controle nenhum disso — e nem renderiza menu (NIV-16):
+            # entregar seria prometer uma coleta protegida que ele não faz. O menu sai pelo prazo.
+            logger.error(
+                "voice: menu MASCARADO %s RECUSADO na perna Twilio (sem pausa de midia nem garantia de "
+                "tecla fora de banda — so a perna SIP coleta dado protegido) session=%s",
+                payload.get("menu_id"), payload.get("session_id"),
+            )
+            return
+        await alvo.deliver_menu(payload)
 
     async def deliver_typing(self, payload: dict) -> None:
         await self._alvo(payload).deliver_typing(payload)

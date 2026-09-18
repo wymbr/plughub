@@ -62,15 +62,36 @@ Field-level tem precedência sobre step-level. Se `masked: true` no step e `mask
 
 ## Comportamento por canal
 
-Cada canal declara `supports_masked_input` em `ChannelCapabilities`. O Channel Gateway verifica antes de enviar a interação ao cliente.
+A capacidade é `masked_input`, com UMA casa: `@plughub/schemas/src/channel-capabilities.ts` e o
+gêmeo Python `channel_capability_registry.py` (gate `probe_channel_capability_single_house.sh`). Ela é
+definida pela GARANTIA (NIV-05): *o valor não aparece em superfície de leitura controlada pela
+plataforma*. Canal sem ela é **recusado** no deploy (`masked_sem_canal_capaz`) e no envio
+(`notification_send`) — o `masked_fallback` abaixo não tem implementação (NIV-10).
 
-| Canal | `supports_masked_input` | Comportamento |
+| Canal | `masked_input` | Comportamento |
 |---|---|---|
-| `webchat` | `true` | Overlay fora da lista de mensagens; `<input type="password">`; valor nunca no DOM |
-| `whatsapp` | `false` | Executa `masked_fallback` configurado no canal |
-| `voice` | `true` | Captura DTMF — mascarado por natureza; `masked: true` é semântico |
-| `sms` | `false` | Executa `masked_fallback` |
-| `email` | `false` | Executa `masked_fallback` |
+| `webchat` | sim | Overlay fora da lista de mensagens; `<input type="password">`; valor nunca no DOM |
+| `webrtc` | sim (2026-09-15) | Campo protegido no widget; fala e texto livre descartados enquanto a coleta espera |
+| `voice` | sim (2026-09-18, NIV-07) | Perna SIP: **só por tecla** fora de banda, sob **pausa de mídia** — ver abaixo. Perna Twilio (legado): **recusa** |
+| `whatsapp` · `sms` · `email` · `instagram` · `telegram` | não | Recusado |
+
+### Voz — tecla sob pausa de mídia (NIV-07)
+
+A tecla SIP chega a **todos** os participantes da sala (medido). Por isso, no menu mascarado de uma
+chamada telefônica, o gateway:
+
+1. grava `channel:webrtc:{sid}:media_hold` (quem pedir token a partir daí recebe **409
+   `masked_collect_in_progress`**);
+2. tira da sala de mídia quem não é o cliente nem bot da plataforma. Humano e supervisor **continuam
+   na sessão**, e o Console mostra *"Áudio pausado"*;
+3. só então fala o prompt;
+4. se alguém entra durante o bloco, ou se a remoção falha, **desfaz** a coleta: desfecho `aborted`,
+   que o fluxo trata no `on_failure`;
+5. libera a pausa ao fim, por qualquer desfecho, e o Console reconecta sozinho.
+
+`masked` com entrada por **fala** é recusado (NIV-08). A transcrição é descartada durante o bloco, e o
+histórico recebe a linha redigida. O eco `plain` vira bipe até a NIV-06. Sem `telephone-event`
+negociado, a tecla não chega e a coleta expira — nada vaza.
 
 ### Fallback para canais sem suporte
 

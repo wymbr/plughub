@@ -921,20 +921,26 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
 - **Teclas do telefone (VOZ-31).** Fora de banda (RFC 4733) o serviço SIP entrega a tecla como
   `sip_dtmf_received` com a identidade `sip_…`, e ela responde o menu de teclado como a do widget.
   **Sem `telephone-event` negociado a tecla NÃO chega**: a chamada é atendida assim mesmo e o tom
-  dentro do áudio é ignorado (medido) — exigir a negociação é decisão nossa, não do conversor (NIV-07).
-- **Dado mascarado não tem coleta no telefone.** O menu mascarado é RECUSADO no envio
-  (`notification_send`: `voice` não declara `masked_input`), nomeado, e o fluxo sai pelo
-  `on_failure`; pool só com `voice` nem chega lá — o registry recusa o deploy
-  (`masked_sem_canal_capaz`). O gateway tem a mesma recusa, dita, como segunda linha.
+  dentro do áudio é ignorado (medido).
+- **Dado protegido pelo telefone é coletado por TECLA, sob PAUSA DE MÍDIA (NIV-07, 2026-09-18).**
+  A tecla SIP chega a todos na sala (medido), então, no menu mascarado, o gateway grava
+  `channel:webrtc:{sid}:media_hold`, tira da sala quem não é o cliente nem bot
+  (`listener_identity`/`voice_identity`) e só então fala o prompt. A rota de token responde **409
+  `masked_collect_in_progress`**, e o Console mostra *"Áudio pausado"* e reconecta ao fim. Quem entra
+  no meio desfaz a coleta (`aborted` → `on_failure`), e pausa que falha desfaz sem prompt.
+  `masked` + fala é recusado (NIV-08), a transcrição é descartada no bloco, o histórico recebe a linha
+  redigida, e eco `plain` vira bipe até a NIV-06. Sem `telephone-event` a coleta expira, e nada vaza.
+  A perna Twilio **recusa** menu mascarado. Risco residual: tecla adiantada antes do menu, com o
+  humano ainda na sala, chega a ele.
 - **O evento é do CANAL DA SESSÃO**: transcrição, fala do atendente e desfecho de coleta de uma
   chamada SIP saem com `channel: voice` (até a VOZ-31 saíam `webrtc`, o nome do adapter).
 
 **Gates:** `infra/test/probe_voz02_sip_inbound.sh` (chamada real, com um cliente SIP de teste em
 G.711 + digest — `_sip_ua.py`) e `probe_webrtc_media_plane.sh` A3/D4/D4g/D5 (o controle
-compensatório, com controle positivo). O mesmo probe mede as teclas (K1–K3, B1). Testes:
+compensatório, com controle positivo). O mesmo probe mede as teclas (K1–K4, B1). Testes:
 `tests/test_sip_leg.py`.
 
 **Fora da fatia:** porta SIP publicada e classificação da borda (V10), TLS/SRTP, `REFER` e chamada
 sainte, teclas validadas com operadora de verdade (VOZ-32), tela para tronco e regra de despacho, e
-provedor por **registro** (o conversor recebe por tronco, não se registra). Fichas `VOZ-32..35` e
-`NIV-07` no `pending.md`.
+provedor por **registro** (o conversor recebe por tronco, não se registra), e o eco `plain` de
+segredo (`NIV-06`). Fichas `VOZ-32..35` e `NIV-06` no `pending.md`.

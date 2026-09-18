@@ -62,6 +62,17 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     "whatsapp":  frozenset({"text", "file_upload", "rich_menu"}),
     "sms":       frozenset({"text"}),
     "email":     frozenset({"text", "file_upload"}),
+    # `voice` DECLARA `masked_input` desde 2026-09-18 (NIV-07, decisão do dono), pela GARANTIA da
+    # NIV-05, na perna SIP (a única viva): o valor entra só por TECLA fora de banda (RFC 4733 —
+    # fala nunca coleta dado protegido, NIV-08); a fala transcrita é descartada no bloco; o
+    # histórico recebe a linha REDIGIDA; e a sala fica só com o cliente e os bots durante o
+    # bloco (PAUSA DE MÍDIA), porque a tecla SIP chega a TODOS os participantes (medido). Quem
+    # não sai da sala desfaz a coleta (`aborted` → `on_failure`). A perna Twilio (legado) NÃO
+    # tem nada disso e RECUSA menu mascarado no `VoiceChannelRouter`, dito.
+    # ⚠️ Sem `telephone-event` negociado a tecla não chega (medido, VOZ-31): a coleta expira,
+    # nada vaza — e o tom dentro do áudio não passa porque ninguém além dos bots está na sala.
+    #
+    # Histórico — por que `voice` NÃO declarava, com os impedimentos como estavam:
     # ⚠️ `voice` NÃO declara `masked_input`, e isto é decisão, não esquecimento — mas
     # a decisão tem TRÊS impedimentos empilhados, e confundi-los foi erro meu na
     # primeira redação (corrigido 2026-09-03, a pedido do dono):
@@ -96,7 +107,7 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     # é traduzido pelo adapter, e o eco existe justamente para dar feedback de tecla.
     # O que a linha abaixo nega é ELEIÇÃO — voz não é escolhida para COLETAR um campo
     # mascarado —, não a capacidade de tratar o eco.
-    "voice":     frozenset({"audio"}),
+    "voice":     frozenset({"audio", "masked_input"}),
     "webchat":   frozenset({"text", "file_upload", "rich_menu", "masked_input"}),
     # `masked_input` desde 2026-09-15 (VOZ-05, fatia A), pela GARANTIA da NIV-05 — o valor
     # não aparece em superfície de leitura controlada pela plataforma:

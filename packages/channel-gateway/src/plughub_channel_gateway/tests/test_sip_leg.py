@@ -298,8 +298,7 @@ class TestControleCompensatorio:
 class TestTeclas:
     """VOZ-31 — a tecla do TELEFONE. O serviço SIP converte o RFC 4733 em `sip_dtmf_received` com a
     identidade `sip_…`; ela responde o menu, e o desfecho sai com o canal da SESSÃO (`voice`), não com
-    o do adapter. Dado mascarado não tem coleta por teclado no telefone (NIV-07): o gateway o DIZ, e a
-    tecla não deixa o valor em lugar nenhum."""
+    o do adapter."""
 
     CHAMADOR = PARTICIPANTE["identity"]
 
@@ -378,22 +377,145 @@ class TestTeclas:
         falas = [e for e in _eventos(producer, "inbound") if e.get("content", {}).get("text")]
         assert falas and falas[-1]["channel"] == "voice"
 
-    async def test_menu_mascarado_no_telefone_e_dito_e_a_tecla_nao_deixa_valor(self, monkeypatch, caplog):
+
+class TestColetaMascaradaNoTelefone:
+    """NIV-07 — dado protegido pelo TELEFONE. A tecla SIP chega a TODOS os participantes da sala
+    (medido: nem `can_subscribe=False` barra), então a coleta mascarada corre sob PAUSA DE MÍDIA:
+    quem não é o cliente nem bot da plataforma sai da sala ANTES do prompt, a rota de token os
+    recusa até o fim, e quem entra no meio DESFAZ a coleta (`aborted` → `on_failure`). O valor não
+    vai ao log nem ao histórico em claro. Cada caso com o controle ao lado."""
+
+    CHAMADOR = PARTICIPANTE["identity"]
+
+    async def _sessao(self, monkeypatch, humanos=("agent-u1", "supervisor-u2")):
+        from ..adapters.webrtc import listener_identity, voice_identity
+        _endpoint(monkeypatch)
+        ad, producer = _adapter()
+        await ad.on_livekit_event("participant_joined", SALA, PARTICIPANTE)
+        sid = next(iter(ad._sip))
+        # na sala: o chamador, os dois bots da plataforma e quem mais o teste pedir
+        ad._provider.joined.update({self.CHAMADOR, listener_identity(sid), voice_identity(sid), *humanos})
+        assert hasattr(WebRTCAdapter, "_speak")
+        falas: list[tuple[str, int]] = []
+
+        def _speak(session_id, text, played=None):
+            # quantos já tinham saído da sala quando o prompt foi falado
+            falas.append((text, len(ad._provider.participants_removed)))
+            if played is not None:
+                played.set()
+        ad._speak = _speak
+        return ad, producer, sid, falas
+
+    @staticmethod
+    def _menu(sid, **extra):
+        return {"session_id": sid, "menu_id": "m2", "interaction": "text", "prompt": "Digite o PIN.",
+                "masked": True, "masked_fields": ["pin"],
+                "collect": {"input": ["dtmf"], "first_input_timeout_s": 20, "max_digits": 6,
+                            "terminator": "#"}, **extra}
+
+    @staticmethod
+    def _resultados(producer):
+        return [e for e in _eventos(producer, "inbound") if e.get("content", {}).get("type") == "menu_result"]
+
+    async def _espera(self, cond, secs=2.0):
+        fim = asyncio.get_running_loop().time() + secs
+        while not cond():
+            if asyncio.get_running_loop().time() > fim:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
+    async def test_pin_por_tecla_com_a_sala_esvaziada_antes_do_prompt(self, monkeypatch, caplog):
         from ..adapters.webrtc_room_client import MockRoomClient
-        ad, producer, sid, _ = await self._sessao(monkeypatch)
+        ad, producer, sid, falas = await self._sessao(monkeypatch)
         room = MockRoomClient()
-        with caplog.at_level(logging.INFO):
-            await ad.deliver_menu(self._menu(sid, masked=True))
-            assert "MASCARADO numa chamada telefonica" in caplog.text
-            assert "campo protegido" not in caplog.text   # o telefone não tem tela
-            assert sid not in ad._collects
+        with caplog.at_level(logging.DEBUG):
+            await ad.deliver_menu(self._menu(sid))
+            assert await self._espera(lambda: bool(falas))
+            removidos = {i for _, i in ad._provider.participants_removed}
+            assert removidos == {"agent-u1", "supervisor-u2"}       # bots e chamador ficam
+            assert falas[0][1] == 2                                  # o prompt só DEPOIS de esvaziar
+            assert await ad._redis.exists(f"channel:webrtc:{sid}:media_hold")
             leitor = asyncio.create_task(ad._dtmf_reader(sid, room))
             try:
-                for d in "9876#":
+                for d in "5566#":
                     room.inject_dtmf(d, identity=self.CHAMADOR)
-                await asyncio.sleep(0.2)
+                assert await self._espera(lambda: self._resultados(producer))
+                # a pausa sai com a coleta: humano e supervisor podem voltar
+                assert await self._espera(lambda: sid not in ad._media_hold)
             finally:
                 leitor.cancel()
-        assert self._resultados(producer) == []
-        assert "9876" not in caplog.text
-        assert "tecla ignorada" in caplog.text           # a tecla chegou e foi descartada SEM valor
+        r = self._resultados(producer)
+        assert r[0]["content"]["payload"]["result"] == "5566"      # o valor vai ao motor (maskedScope)
+        assert not await ad._redis.exists(f"channel:webrtc:{sid}:media_hold")
+        historico = ad._registry.append_message.await_args.kwargs["text"]
+        assert "5566" not in historico and "mascarada" in historico
+        assert "5566" not in caplog.text
+
+    async def test_token_de_humano_e_recusado_durante_a_pausa(self, monkeypatch):
+        from ..adapters.webrtc import MaskedCollectInProgress
+        ad, _, sid, _ = await self._sessao(monkeypatch)
+        await ad._redis.setex(f"channel:webrtc:{sid}:media_hold", 60, "m2")
+        with pytest.raises(MaskedCollectInProgress):
+            await ad.get_token(sid, "agent", "u1")
+        with pytest.raises(MaskedCollectInProgress):
+            await ad.get_token(sid, "supervisor", "u2")
+        await ad._redis.delete(f"channel:webrtc:{sid}:media_hold")
+        # controle: sem a pausa a rota segue o caminho de sempre (aqui, "sala ainda não pronta")
+        assert await ad.get_token(sid, "agent", "u1") is None
+
+    async def test_quem_entra_durante_o_bloco_sai_e_desfaz_a_coleta(self, monkeypatch, caplog):
+        ad, producer, sid, falas = await self._sessao(monkeypatch, humanos=())
+        with caplog.at_level(logging.ERROR):
+            await ad.deliver_menu(self._menu(sid))
+            assert await self._espera(lambda: bool(falas))
+            ad._provider.joined.add("agent-atrasado")
+            await ad.on_livekit_event("participant_joined", SALA, {"identity": "agent-atrasado", "kind": "STANDARD"})
+            assert await self._espera(lambda: self._resultados(producer))
+        assert ("" + SALA, "agent-atrasado") in ad._provider.participants_removed
+        assert self._resultados(producer)[0]["content"]["payload"] == {"menu_id": "m2", "outcome": "aborted"}
+        assert "DESFEITO" in caplog.text
+        assert await self._espera(lambda: sid not in ad._media_hold)
+
+    async def test_bot_da_plataforma_entrando_nao_desfaz(self, monkeypatch):
+        from ..adapters.webrtc import voice_identity
+        ad, producer, sid, falas = await self._sessao(monkeypatch, humanos=())
+        await ad.deliver_menu(self._menu(sid))
+        assert await self._espera(lambda: bool(falas))
+        await ad.on_livekit_event("participant_joined", SALA, {"identity": voice_identity(sid), "kind": "STANDARD"})
+        await asyncio.sleep(0.1)
+        assert self._resultados(producer) == [] and sid in ad._collects
+        ad._end_collect(sid, "fim do teste")
+
+    async def test_pausa_que_nao_se_completa_desfaz_sem_falar_o_prompt(self, monkeypatch, caplog):
+        ad, producer, sid, falas = await self._sessao(monkeypatch)
+
+        async def _recusa(room_name, identity):
+            raise RuntimeError("SFU fora")
+        ad._provider.remove_participant = _recusa
+        with caplog.at_level(logging.ERROR):
+            await ad.deliver_menu(self._menu(sid))
+            assert await self._espera(lambda: self._resultados(producer))
+        assert self._resultados(producer)[0]["content"]["payload"]["outcome"] == "aborted"
+        assert falas == []                                        # o cliente nunca foi convidado a teclar
+        assert "NAO saiu da sala" in caplog.text
+
+    async def test_mascarado_que_pede_fala_e_recusado(self, monkeypatch, caplog):
+        ad, _, sid, _ = await self._sessao(monkeypatch)
+        m = self._menu(sid)
+        m["collect"]["input"] = ["voice", "dtmf"]
+        with caplog.at_level(logging.ERROR):
+            await ad.deliver_menu(m)
+        assert sid not in ad._collects and "NIV-08" in caplog.text
+        assert ad._provider.participants_removed == []           # nada de pausa para o que não coleta
+
+    async def test_perna_twilio_recusa_menu_mascarado(self, caplog):
+        legado = AsyncMock()
+        sip = AsyncMock()
+        sip.is_sip_session = lambda sid: False
+        r = VoiceChannelRouter(sip, legado)
+        with caplog.at_level(logging.ERROR):
+            await r.deliver_menu({"session_id": "tw1", "menu_id": "m", "masked": True, "masked_fields": ["pin"]})
+        assert legado.deliver_menu.await_count == 0 and "RECUSADO na perna Twilio" in caplog.text
+        await r.deliver_menu({"session_id": "tw1", "menu_id": "m"})   # controle: menu comum segue
+        assert legado.deliver_menu.await_count == 1

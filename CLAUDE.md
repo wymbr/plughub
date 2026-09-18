@@ -1392,13 +1392,18 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   resolução COMPLETA contra `GET /v1/models` do serviço antes de gravar — modelo ausente, tarefa
   trocada ou voz de outro modelo eram aceitos e viravam 404 por frase, com a fala perdida. **Serviço
   de fala fora ⇒ 503, sem gravar**; o env permanece como última camada, nunca como a única.
+- **Dado protegido pelo telefone corre sob PAUSA DE MÍDIA** (NIV-07, 2026-09-18): a tecla SIP
+  chega a **todos** na sala (medido), então, no bloco mascarado, humano e supervisor saem da sala de
+  mídia (não da sessão), a rota de token responde 409, e quem entra no meio **desfaz** a coleta
+  (`aborted` → `on_failure`) — nunca a completa com plateia. Só tecla, nunca fala (NIV-08); a
+  perna Twilio recusa. A gravação, quando existir, pausa na mesma chave (`VOZ-06`).
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,
   obrigatória em pool de contato com `webrtc` **ou `voice`** (VOZ-02), lida fresca pelo bridge e levada no `routing.assigned`
   com a procedência. **Ausência nunca vira permissão** — pool sem política ou registry fora oferece nada.
 
-Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (cliente no telefone: tronco SIP → a mesma sala desde a VOZ-02; Twilio/TwiML é legado); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform pelos tetos). Texto é sempre possível; `media_capabilities` do agente não existe mais (sem produtor desde a aposentadoria do AgentType). A ponte PSTN→sala existe desde a VOZ-02 (fatia 1, entrante); a tecla do telefone (RFC 4733), desde a VOZ-31; o que falta está em `VOZ-32..35` e `NIV-07` no `pending.md`.
+Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (cliente no telefone: tronco SIP → a mesma sala desde a VOZ-02; Twilio/TwiML é legado); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform pelos tetos). Texto é sempre possível; `media_capabilities` do agente não existe mais (sem produtor desde a aposentadoria do AgentType). A ponte PSTN→sala existe desde a VOZ-02 (fatia 1, entrante); a tecla do telefone (RFC 4733), desde a VOZ-31; o que falta está em `VOZ-32..35` e `NIV-06` no `pending.md`.
 
 → See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
 

@@ -466,7 +466,9 @@ def menu_signal_key(session_id: str, instance_id: str = "") -> str:
     return f"menu:signal:{session_id}:{instance_id}" if instance_id else f"menu:signal:{session_id}"
 
 
-COLLECT_OUTCOMES = ("timeout", "invalid")
+# `aborted` (NIV-07): o canal desfez a coleta por não conseguir protegê-la — o motor a leva ao
+# `on_failure`, nunca ao `on_invalid` (não foi o cliente que errou)
+COLLECT_OUTCOMES = ("timeout", "invalid", "aborted")
 
 
 async def deliver_collect_outcome(redis_client, session_id: str, contact_id: str | None, outcome: str) -> int:

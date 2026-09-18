@@ -1,5 +1,105 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-18 (3) — NIV-07: o PIN pelo telefone é coletado por tecla, com a sala só com o cliente e os bots
+
+**A pergunta que decidiu o desenho** veio do dono antes de qualquer código: *o agente humano aciona
+um especialista de coleta sensível — como fica?* O humano está na sala da chamada. Então a questão
+não era só a gravação: era quem mais ouve e recebe a tecla enquanto o cliente digita o segredo.
+
+**Medido antes de escolher** (SFU e serviço SIP do demo, tronco simulado):
+1. **A tecla SIP chega a TODOS na sala.** `sip_dtmf_received` foi entregue a um participante
+   com `can_subscribe=False` concedido pelo servidor. Nenhuma permissão de assinatura isola a tecla.
+2. **Silenciar a trilha no servidor funciona, mas devolver o som não.** `mute_published_track`
+   cala a trilha do chamador e a tecla continua passando. O unmute pelo servidor responde **412**
+   sem `room.enable_remote_unmute`, que é chave GLOBAL do SFU. Não foi adotada: ligar o unmute
+   remoto para todas as salas para servir um bloco é trocar um risco local por um global.
+3. **Não há como mover participante** entre salas no SFU OSS (`MoveParticipant` não implementado).
+4. **O SFU não expõe se a chamada negociou `telephone-event`** — isso só aparece no log do
+   serviço SIP. A plataforma não sabe, pela API, se a tecla vai chegar.
+
+**Decisão do dono: PAUSA DE MÍDIA do humano.** Durante o bloco mascarado, humano e supervisor
+**saem da SALA de mídia** e continuam na SESSÃO (Console, texto, histórico):
+- a chave `channel:webrtc:{sid}:media_hold` é gravada **ANTES** de tirar alguém — quem pedir
+  token nesse intervalo já é recusado;
+- sai da sala todo participante que não é o cliente nem bot da plataforma (`listener_identity`,
+  `voice_identity`);
+- o prompt só é falado **depois** que a sala esvaziou;
+- a rota de token responde **409 `masked_collect_in_progress`** até o fim do bloco;
+- o Console mostra *"Áudio pausado"* e reconecta sozinho;
+- **quem entrar durante o bloco DESFAZ a coleta**: o desfecho novo `aborted` percorre
+  gateway → bridge → motor e sai pelo `on_failure`;
+- pausa que não se completa (SFU recusou a remoção) também desfaz, **sem falar o prompt**;
+- a pausa é liberada no `finally` da coleta, por qualquer desfecho.
+
+**Os quatro controles da ficha, e o que cada um virou:**
+- **(2) isolar a perna** é a pausa de mídia.
+- **(1) exigir `telephone-event`** não tem onde morar: a plataforma não sabe pela API (fato 4).
+  Com a pausa, ele também deixou de ser necessário para a garantia: sem negociação o tom vai só
+  ao ouvinte, cuja transcrição é descartada no bloco. A coleta expira, e o timeout sem tecla
+  nenhuma loga a causa provável. **O dano de não exigir é de USABILIDADE, não de sigilo.**
+- **(3) clamping no caminho de mídia** passa a importar só para a GRAVAÇÃO, que não existe.
+  Quando o egress existir, ele respeita a mesma chave de pausa — escrito na `VOZ-06`.
+- **(4)** já estava descartado.
+
+**`voice` declara `masked_input`**, no TS canônico e no gêmeo Python (decisão do dono), pela
+garantia da NIV-05, com o mecanismo inteiro na perna SIP:
+- valor só por tecla fora de banda;
+- `masked` + fala recusado (NIV-08), dito;
+- transcrição descartada no bloco;
+- histórico com a linha REDIGIDA;
+- eco `plain` rebaixado a bipe, com aviso, até a NIV-06 decidir.
+
+A **perna Twilio (legado) recusa** menu mascarado no `VoiceChannelRouter`, dito. As guardas não
+mudaram (leem a tabela): o registry passou a aceitar o deploy num pool só `voice` e o
+`notification_send` passou a publicar. O gate da casa única (ramo E) agora **reprova se `voice`
+declarar sem os seis mecanismos**, medidos por AST.
+
+**O probe ao vivo pegou o próprio probe.** A primeira execução do `probe_voz02_sip_inbound.sh`
+ficou VERMELHA: o "humano" de teste entrou na sala 0,6 s DEPOIS de a pausa começar, e o gateway —
+corretamente — desfez a coleta como intrusão (`aborted` chegou ao motor). O defeito era de ordem no
+instrumento. Ficou de graça a testemunha AO VIVO do ramo de intrusão, que o gate permanente só cobre
+em teste unitário. Agora o humano entra antes do m1, e as teclas do m1 (sem máscara), que ele
+**ouve**, são o controle de que "não viu o PIN" não é surdez. **VERDE:**
+- K3: `sip-m2-recebido`, e o PIN não está no stream;
+- K3p: o gateway nomeia `agent-probe-humano` na pausa;
+- K3g: o PIN não aparece nos logs do gateway, do bridge, do motor nem do mcp-server;
+- K4: o humano foi tirado com `PARTICIPANT_REMOVED`, ouviu `4821#` do m1 e não ouviu o PIN.
+
+**Risco residual, registrado e não resolvido:** tecla digitada ANTES do menu mascarado — o cliente
+adiantando o PIN enquanto o humano ainda está na sala — chega ao humano. É o mesmo que acontece
+quando o cliente FALA o número antes de ser pedido, e nenhum bloqueio de coleta cobre entrada que
+chega fora da coleta.
+
+**Não validado:** o Console no navegador durante a pausa (faixa, 409, reconexão). O servidor está
+medido ao vivo; a tela foi pelo typecheck. Entrou no roteiro assistido da `VOZ-32`, junto da
+validação de teclas com a operadora.
+
+Testes:
+- `test_sip_leg.py`: 37 testes. `TestColetaMascaradaNoTelefone` traz 7, cada um com controle:
+  - PIN com a sala esvaziada antes do prompt;
+  - token recusado durante a pausa;
+  - intrusão desfaz;
+  - bot entrando não desfaz;
+  - pausa falha, sem prompt;
+  - mascarado com fala recusado;
+  - Twilio recusa.
+- Suítes: gateway 1343 · bridge 199 · motor 278 · schemas 356 · platform-ui tsc limpo (279
+  arquivos).
+- Gates vizinhos VERDES: `probe_channel_capability_single_house`, `probe_webrtc_keypad`,
+  `probe_webrtc_masked_keypad`, `probe_menu_result_contract`, `probe_webrtc_media_plane`,
+  `probe_webrtc_channel_endpoint`, `probe_i18n_duplicate_keys`, `probe_gates_manifest_coverage`,
+  `probe_adapter_self_calls`, `probe_ui_credential_coverage`.
+- `probe_apifetch_reauth` saiu INCONCLUSIVO (sem `node` no WSL; `apiFetch` não mudou).
+
+**Achado de ledger: a `NIV-08` estava feita e aberta.** A recusa de `masked` + fala existe no
+schema desde 2026-09-16 (4) — `menuCollectViolations`, no deploy, com teste e controle —, e a ficha
+seguia `aberto` apontando para `voice.py:858`. Fechada agora, com as duas âncoras; a perna SIP ganhou
+a mesma recusa como segunda linha.
+
+**Religado.** A `NIV-06` sai de bloqueada e fica `aberto`: a coleta mascarada no telefone existe, e
+falta decidir o eco `plain` (falar a tecla de um segredo). A `ALW-19` continua bloqueada pela
+`NIV-06`.
+
 ## 2026-09-18 (2) — VOZ-31: a tecla do telefone responde o menu, e o que ela não pode fazer ficou medido
 
 **O estado, medido antes de mexer.** A perna SIP (VOZ-02) já existia e o caminho de tecla parecia

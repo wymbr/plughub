@@ -166,6 +166,19 @@ _STREAM_WATCHER_SLEEP = 1.0    # seconds to sleep on stream watcher error
 # termina de ser transcrita logo depois da submissão (depois do HDEL). A folga cobre o
 # fim de fala (700 ms de silêncio) mais a transcrição, com margem para CPU.
 _MASKED_SPEECH_GRACE_S = 5.0
+# NIV-07: teto de segurança da PAUSA DE MÍDIA. A pausa é liberada no fim da coleta; o TTL só vale
+# se o gateway morrer no meio — sem ele, humano e supervisor ficariam fora da sala até a sessão acabar.
+_MEDIA_HOLD_TTL_S = 900
+
+
+def listener_identity(session_id: str) -> str:
+    """O ouvinte (STT + teclas) na sala. Uma casa: a pausa de mídia (NIV-07) o reconhece por ela."""
+    return f"bot-{session_id[:8]}"
+
+
+def voice_identity(session_id: str) -> str:
+    """A voz da plataforma na sala (TTS). Mesma razão da `listener_identity`."""
+    return f"voz-{session_id[:8]}"
 
 # ── Fala do agente (VOZ-05, fatia 3) ──────────────────────────────────────────
 #
@@ -214,6 +227,13 @@ class _ActiveCollect:
     outcomes:      list[Done] = field(default_factory=list)
     started_at:    float = field(default_factory=time.monotonic)
     metrics_sent:  bool = False          # VOZ-22: um evento por coleta, venha o fim por onde vier
+    masked_sip:    bool = False          # NIV-07: coleta MASCARADA no telefone — corre sob pausa de mídia
+    prompt:        str = ""              # NIV-07: o prompt da mascarada só sai DEPOIS da pausa
+
+
+class MaskedCollectInProgress(Exception):
+    """NIV-07: a sala está em PAUSA DE MÍDIA — coleta de dado protegido no telefone em curso. A
+    rota de token responde 409 e o Console tenta de novo até a pausa acabar."""
 
 
 def speech_sentences(text: str) -> list[str]:
@@ -399,6 +419,8 @@ class WebRTCAdapter(ChannelAdapter):
         self._sip:         dict[str, SipCall]           = {}
         self._sip_by_room: dict[str, str]               = {}
         self._sip_tasks:   dict[str, list[asyncio.Task]] = {}
+        self._masked_sip_menu: dict[str, str] = {}   # NIV-07: menu mascarado aceito na perna SIP
+        self._media_hold:  dict[str, str] = {}       # NIV-07: sessão → menu da pausa de mídia em curso
 
     # ── Provider factories ────────────────────────────────────────────────────
 
@@ -1537,6 +1559,9 @@ class WebRTCAdapter(ChannelAdapter):
         """
         if self._provider is None:
             raise self._provider_unavailable or WebRTCProviderUnavailable(["provider"])
+        if await self._redis.exists(f"channel:webrtc:{session_id}:media_hold"):
+            # NIV-07: coleta de dado protegido no telefone em curso — ninguém além do cliente entra
+            raise MaskedCollectInProgress(session_id)
         room_name = await self._redis.get(f"channel:webrtc:{session_id}:room_name")
 
         if not room_name:
@@ -1609,6 +1634,11 @@ class WebRTCAdapter(ChannelAdapter):
             call = parse_sip_participant(room, participant)
             if call is not None:
                 await self._sip_arrived(call)
+            else:
+                sid = self._sip_by_room.get(room)
+                ident = str(participant.get("identity") or "")
+                if sid and sid in self._media_hold and not self._may_stay_in_hold(sid, ident):
+                    await self._media_hold_intrusion(sid, ident)
         elif event == "participant_left" and participant:
             sid = self._sip_by_room.get(room)
             if sid and self._sip[sid].identity == participant.get("identity"):
@@ -1787,11 +1817,14 @@ class WebRTCAdapter(ChannelAdapter):
         self._speech_tuning.pop(session_id, None)
         self._speech_resolved.pop(session_id, None)
         self._masked_grace_until.pop(session_id, None)
+        self._masked_sip_menu.pop(session_id, None)
+        self._media_hold.pop(session_id, None)
         try:
             # a chave da sala sai junto (VOZ-02): sem ela, a sala recriada por um token de sessão
             # encerrada é apagada ao nascer (`police_room`) — é o que substitui o `auto_create: false`
             await self._redis.delete(f"session:{session_id}:ws_alive",
-                                     f"channel:webrtc:{session_id}:room_name")
+                                     f"channel:webrtc:{session_id}:room_name",
+                                     f"channel:webrtc:{session_id}:media_hold")
         except Exception as exc:
             logger.debug("webrtc: delete ws_alive falhou (session=%s): %s", session_id, exc)
         if not info:
@@ -1845,7 +1878,7 @@ class WebRTCAdapter(ChannelAdapter):
         # OUVINTE (VOZ-05 fatia 4): oculto e sem publicar — ninguém na sala o vê, e ele não tem
         # o que dizer. A voz da IA é outro participante (`_start_voice`).
         room_client = await self._join_room(
-            session_id, room_name, identity=f"bot-{session_id[:8]}", display_name="Transcricao",
+            session_id, room_name, identity=listener_identity(session_id), display_name="Transcricao",
             publish=False, subscribe=True, hidden=True, papel="ouvinte",
         )
         if room_client is None:
@@ -1902,7 +1935,7 @@ class WebRTCAdapter(ChannelAdapter):
         """VOZ (VOZ-05 fatia 4): visível, só publica. Oculta, ninguém a ouviria — medido na fatia
         3 contra o SFU: 0 s de áudio de participante `hidden` chega ao cliente."""
         voice = await self._join_room(
-            session_id, room_name, identity=f"voz-{session_id[:8]}", display_name="Assistente virtual",
+            session_id, room_name, identity=voice_identity(session_id), display_name="Assistente virtual",
             publish=True, subscribe=False, hidden=False, papel="voz",
         )
         if voice is None:
@@ -2323,16 +2356,19 @@ class WebRTCAdapter(ChannelAdapter):
         if plan is None:
             return None
         if (masked or payload.get("masked")) and self.is_sip_session(session_id):
-            # O telefone NÃO tem tela: a decisão 4 (campo protegido) não se aplica, e a coleta por
-            # teclado de dado mascarado ainda não existe na perna SIP — exige `telephone-event`
-            # negociado e a perna isolada durante o bloco (NIV-07). Dizer "vai ao campo protegido"
-            # aqui seria a frase plausível e falsa; o menu fica sem coleta e sai pelo prazo dele.
-            logger.error(
-                "webrtc coleta: menu %s e MASCARADO numa chamada telefonica — coleta mascarada "
-                "por teclado na perna SIP NAO existe (NIV-07); as teclas sao ignoradas sem valor no "
-                "log e o menu sai pelo prazo (session=%s)", menu_id, session_id,
-            )
-            return None
+            # NIV-07: o telefone NÃO tem tela, então a decisão 4 (campo protegido) não se aplica —
+            # a coleta é por TECLA, e corre sob PAUSA DE MÍDIA: a tecla SIP chega a TODOS os
+            # participantes da sala (medido, nem `can_subscribe=False` barra), logo quem não é o
+            # cliente nem o bot sai da sala durante o bloco. Fala nunca coleta dado mascarado
+            # (NIV-08): o schema recusa na publicação, e isto é a segunda linha.
+            if "voice" in plan.inputs:
+                logger.error(
+                    "webrtc coleta: menu %s MASCARADO pede fala — recusado (NIV-08: dado protegido "
+                    "so por tecla); o menu sai pelo prazo (session=%s)", menu_id, session_id,
+                )
+                return None
+            self._masked_sip_menu[session_id] = menu_id
+            return plan
         if masked or payload.get("masked"):
             # decisão 4: WebRTC no browser TEM tela — o dado protegido vai ao campo protegido
             logger.info(
@@ -2364,11 +2400,17 @@ class WebRTCAdapter(ChannelAdapter):
         """Fala o prompt com as teclas e começa o laço. ANTES de qualquer `await`, como a fala
         de `deliver_text`: a ordem das falas é a do Kafka só até a primeira suspensão."""
         self._end_collect(session_id, f"substituida pelo menu {plan.menu_id}", "replaced")
-        ac = _ActiveCollect(plan=plan, session=CollectSession(plan), played=asyncio.Event())
+        masked_sip = self._masked_sip_menu.pop(session_id, None) == plan.menu_id
+        ac = _ActiveCollect(plan=plan, session=CollectSession(plan), played=asyncio.Event(),
+                            masked_sip=masked_sip)
         self._collects[session_id] = ac
         self._tune_speech(session_id, plan)
         texto = plan.spoken_prompt()
-        if texto:
+        if masked_sip:
+            # NIV-07: o prompt só sai DEPOIS da pausa de mídia (no laço) — é ele que faz o cliente
+            # teclar, e a tecla com um humano ainda na sala chega ao navegador dele
+            ac.prompt = texto
+        elif texto:
             self._speak(session_id, texto, ac.played)
         else:
             ac.played.set()
@@ -2410,6 +2452,14 @@ class WebRTCAdapter(ChannelAdapter):
     async def _run_collect(self, session_id: str, ac: _ActiveCollect) -> None:
         """O relógio da coleta. O prazo da primeira entrada só arma quando o prompt termina."""
         try:
+            if ac.masked_sip:
+                if not await self._media_hold_start(session_id, ac):
+                    await self._abort_collect(session_id, ac, "a pausa de midia nao se completou")
+                    return
+                if ac.prompt:
+                    self._speak(session_id, ac.prompt, ac.played)
+                else:
+                    ac.played.set()
             while ac.session.done is None:
                 now = time.monotonic()
                 if ac.played.is_set():
@@ -2436,6 +2486,95 @@ class WebRTCAdapter(ChannelAdapter):
                 self._tune_speech(session_id, None)
                 if ac.session.done is None:
                     self._emit_collect_metrics(session_id, ac, "released", "", "engine_released")
+            if ac.masked_sip:
+                await self._media_hold_release(
+                    session_id, f"coleta {ac.session.done.outcome}" if ac.session.done else "coleta liberada")
+
+    # ── Pausa de mídia (NIV-07) ───────────────────────────────────────────────
+    #
+    # A coleta MASCARADA no telefone corre com a sala contendo só o cliente e os bots da plataforma.
+    # Motivo MEDIDO: o serviço SIP entrega a tecla como `sip_dtmf_received` a TODOS os participantes
+    # — inclusive a um com `can_subscribe=False` —, e mover o chamador para outra sala não existe
+    # no SFU OSS. Humano e supervisor continuam na SESSÃO (roster, segmento); só a presença de
+    # mídia pausa, e a rota de token os recusa (409) até o fim do bloco.
+
+    def _may_stay_in_hold(self, session_id: str, identity: str) -> bool:
+        return (identity.startswith(CUSTOMER_PREFIXES)
+                or identity in (listener_identity(session_id), voice_identity(session_id)))
+
+    async def _media_hold_start(self, session_id: str, ac: "_ActiveCollect") -> bool:
+        """Registra a pausa (a rota de token passa a recusar) e tira da sala quem não pode ficar.
+        False = não se completou — e a coleta protegida não pode seguir."""
+        menu = ac.plan.menu_id
+        room = self._room_of(session_id)
+        try:
+            # ANTES de tirar alguém: quem for tirado e pedir token de novo já encontra a porta fechada
+            await self._redis.setex(f"channel:webrtc:{session_id}:media_hold", _MEDIA_HOLD_TTL_S, menu)
+        except Exception as exc:
+            logger.error("webrtc coleta mascarada: pausa de midia NAO registrada no menu %s (%s) — "
+                         "coleta desfeita (session=%s)", menu, exc, session_id)
+            return False
+        self._media_hold[session_id] = menu
+        if self._provider is None:
+            logger.error("webrtc coleta mascarada: sem plano de midia para esvaziar a sala do menu %s — "
+                         "%s; coleta desfeita (session=%s)", menu, self._provider_unavailable, session_id)
+            return False
+        try:
+            presentes = await self._provider.list_participants(room)
+        except Exception as exc:
+            logger.error("webrtc coleta mascarada: participantes da sala %s ILEGIVEIS (%s) — coleta do "
+                         "menu %s desfeita (session=%s)", room, exc, menu, session_id)
+            return False
+        fora = [p.identity for p in presentes if not self._may_stay_in_hold(session_id, p.identity)]
+        for ident in fora:
+            try:
+                await self._provider.remove_participant(room, ident)
+            except Exception as exc:
+                logger.error("webrtc coleta mascarada: %s NAO saiu da sala %s (%s) — ouviria a tecla "
+                             "protegida; coleta do menu %s desfeita (session=%s)", ident, room, exc, menu,
+                             session_id)
+                return False
+        logger.info("webrtc coleta mascarada: pausa de midia no menu %s — %d participante(s) fora da "
+                    "sala%s (session=%s)", menu, len(fora), f" ({', '.join(fora)})" if fora else "",
+                    session_id)
+        return True
+
+    async def _media_hold_release(self, session_id: str, why: str) -> None:
+        menu = self._media_hold.pop(session_id, None)
+        if menu is None:
+            return
+        try:
+            await self._redis.delete(f"channel:webrtc:{session_id}:media_hold")
+        except Exception as exc:
+            logger.error("webrtc coleta mascarada: chave da pausa do menu %s NAO apagada (%s) — humano e "
+                         "supervisor so voltam a sala no TTL (%d s) (session=%s)", menu, exc,
+                         _MEDIA_HOLD_TTL_S, session_id)
+            return
+        logger.info("webrtc coleta mascarada: pausa de midia do menu %s liberada — %s (session=%s)",
+                    menu, why, session_id)
+
+    async def _media_hold_intrusion(self, session_id: str, identity: str) -> None:
+        """Alguém entrou na sala DURANTE o bloco (token emitido antes da pausa, ou caminho que
+        escapou da rota): sai, e a coleta é desfeita — a tecla dele não pode ter sido vista."""
+        room = self._room_of(session_id)
+        if self._provider is not None:
+            try:
+                await self._provider.remove_participant(room, identity)
+            except Exception as exc:
+                logger.error("webrtc coleta mascarada: %s entrou na sala %s durante o bloco e NAO saiu "
+                             "(%s) (session=%s)", identity, room, exc, session_id)
+        ac = self._collects.get(session_id)
+        if ac is not None and ac.masked_sip:
+            await self._abort_collect(session_id, ac, f"{identity} entrou na sala durante o bloco mascarado")
+
+    async def _abort_collect(self, session_id: str, ac: "_ActiveCollect", why: str) -> None:
+        """A coleta protegida não pode seguir: o menu recebe `aborted` e o fluxo vai ao `on_failure`."""
+        if ac.session.done is not None:
+            return
+        logger.error("webrtc coleta mascarada: menu %s DESFEITO — %s (session=%s)", ac.plan.menu_id, why,
+                     session_id)
+        ac.session.done = Done("aborted")
+        await self._apply_collect(session_id, ac, [ac.session.done])
 
     async def _menu_waiting_now(self, session_id: str) -> bool | None:
         """Há menu esperando no motor? `None` = não se sabe (a coleta segue: o prazo dela termina)."""
@@ -2448,7 +2587,15 @@ class WebRTCAdapter(ChannelAdapter):
     async def _apply_collect(self, session_id: str, ac: _ActiveCollect, actions: list) -> None:
         for a in actions:
             if isinstance(a, Echo):
-                if ac.plan.echo == "plain":
+                if ac.plan.echo == "plain" and ac.masked_sip:
+                    # NIV-07: falar a tecla de um dado protegido é mandar o valor ao sintetizador e à
+                    # sala. O modo de eco do mascarado é a NIV-06; até lá, bipe — e dito
+                    if not ac.outcomes:
+                        logger.warning("webrtc coleta mascarada: eco `plain` no menu %s NAO fala a tecla "
+                                       "de dado protegido — bipe no lugar (NIV-06 decide) session=%s",
+                                       ac.plan.menu_id, session_id)
+                    self._beep(session_id)
+                elif ac.plan.echo == "plain":
                     self._speak(session_id, DIGIT_WORDS[a.key])
                 elif ac.plan.echo == "masked":
                     self._beep(session_id)
@@ -2520,14 +2667,26 @@ class WebRTCAdapter(ChannelAdapter):
         )
         if done.outcome == "value" and done.via == "dtmf":
             # a tecla não deixa rastro de texto como a fala (que é registro) ou o clique (que o
-            # widget mostra): a linha de histórico é a da resposta pela tela
+            # widget mostra): a linha de histórico é a da resposta pela tela — REDIGIDA pelos
+            # mesmos campos mascarados que ela usa (NIV-07: até aqui ia `set()`, e a tecla de um
+            # menu mascarado entraria no histórico em claro). `None` = não se sabe: redige tudo.
+            masked = await self._masked_fields_for(session_id, p.menu_id)
             await self._registry.append_message(
                 session_id = session_id,
                 message_id = event.message_id,
                 author     = "customer",
-                text       = menu_result_history_text(p.interaction, done.value, set()),
+                text       = (menu_result_history_text("text", done.value, {"resposta"}) if masked is None
+                              else menu_result_history_text(p.interaction, done.value, masked)),
                 timestamp  = event.timestamp,
             )
+        if done.outcome == "timeout" and self.is_sip_session(session_id):
+            ac = self._collects.get(session_id)
+            if ac is not None and "dtmf" in p.inputs and not ac.session.counters().get("digit_inputs"):
+                # medido (VOZ-31): sem `telephone-event` negociado a tecla NÃO chega, e o conversor
+                # atende a chamada assim mesmo — prazo sem tecla nenhuma pode ser isso, não o cliente
+                logger.warning("webrtc coleta: menu %s de teclado expirou SEM tecla nenhuma — se o "
+                               "telefone nao negociou telephone-event, as teclas nao chegam (session=%s)",
+                               p.menu_id, session_id)
         try:
             await self._publish_inbound(event.model_dump())
         except Exception as exc:
