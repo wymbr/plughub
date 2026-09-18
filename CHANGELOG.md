@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-18 (2) — VOZ-31: a tecla do telefone responde o menu, e o que ela não pode fazer ficou medido
+
+**O estado, medido antes de mexer.** A perna SIP (VOZ-02) já existia e o caminho de tecla parecia
+pronto: o SFU entrega a tecla SIP como `sip_dtmf_received` e o leitor do gateway já aceitava a
+identidade `sip_…`. Mas nunca tinha rodado: o telefone de teste (`_sip_ua.py`) só mandava áudio.
+**Decisão do dono: fazer simulado agora e validar com a operadora quando o tronco existir.** O que a
+ficha precisava provar mora do nosso lado e no conversor, não na operadora.
+
+**O instrumento.** O telefone de teste passou a teclar FORA de banda — RFC 4733 no payload type que o
+outro lado aceitou: um evento por tecla, timestamp fixo, duração crescente e o fim três vezes com o bit
+E. Ganhou também o modo *telefone velho*, sem `telephone-event` no SDP e com a tecla como tom dentro do
+áudio, que é o controle negativo.
+
+**O que o `probe_voz02_sip_inbound.sh` mede agora, VERDE:**
+- K1: `telephone-event` negociado na resposta do serviço SIP (PT 101);
+- K2: `4821#` teclado vira `sip-m1=4821` no fluxo;
+- K3/K3r/K3g: o PIN mascarado não é coletado, a recusa é NOMEADA, e o PIN teclado não aparece no
+  stream nem no log do gateway;
+- B1 (INFO, caracterização): sem `telephone-event` a chamada é atendida assim mesmo e o tom é
+  ignorado — o menu saiu pelo prazo.
+
+**Três achados.**
+1. **O conversor não recusa telefone sem `telephone-event` nem detecta tom no áudio.** Então a
+   tecla simplesmente não chega, sem erro. Exigir a negociação — o controle (1) da NIV-07 — é
+   decisão da plataforma, não configuração do conversor. A NIV-07 (metade SIP) sai de bloqueada
+   com esse fato como entrada.
+2. **O menu mascarado no telefone já era recusado — em duas camadas, e nenhuma é o gateway.**
+   Pool só com `voice` nem implanta: o registry recusa `masked_sem_canal_capaz`, com a frase
+   *"em runtime TODO menu mascarado seria recusado"*. Pool MISTO implanta pelo `webrtc`, e a
+   chamada telefônica esbarra no `notification_send` do mcp-server, que recusa o menu nomeando
+   sessão, canal e campos; o fluxo sai pelo `on_failure`. O primeiro desenho do K3 esperava a
+   recusa no gateway e ficou vermelho: o menu nunca chega lá. **O probe passou a medir a recusa
+   onde ela mora**, com pool misto, que é o único caso que alcança o runtime. O gateway ganhou a
+   mesma recusa, dita, como segunda linha. A frase dele para menu mascarado, *"vai ao campo
+   protegido da tela"*, era falsa no telefone, que não tem tela.
+3. **Eventos da chamada SIP saíam com `channel: webrtc`** — o nome do adapter, não o da sessão.
+   Afetava a transcrição do cliente, a fala do atendente e o desfecho de coleta. Hoje é o canal
+   da sessão (`voice`), e o browser continua `webrtc`.
+
+Testes: `test_sip_leg.py` 31 (4 novos: tecla do chamador responde com canal `voice`; tecla de outro
+participante não responde, com o chamador como controle; transcrição sai `voice`; menu mascarado no
+telefone é dito e a tecla não deixa valor). Gateway: 1337 verdes. Vizinhos VERDES:
+`probe_menu_result_contract`, `probe_webrtc_keypad`, `probe_webrtc_channel_endpoint`,
+`probe_adapter_self_calls`, `probe_gates_manifest_coverage`.
+
+**Religado.** `NIV-07` passa a `aberto`. `NIV-06` passa a bloqueada pela `NIV-07`: o eco do DTMF
+mascarado só existe quando houver coleta mascarada no telefone. `ALW-19` passa a bloqueada pela
+`NIV-06`. A validação com a operadora de verdade — PT, SIP INFO, fim repetido, tecla longa — foi
+para a `VOZ-32` como roteiro assistido: **se a operadora não negociar `telephone-event`, a tecla não
+chega**.
+
 ## 2026-09-18 (1) — VOZ-02: a chamada telefônica pelo tronco SIP vira contato `voice`, na mesma sala
 
 **O estado, medido antes de mexer.** O canal `voice` só existia como TwiML (Twilio), e três métodos do

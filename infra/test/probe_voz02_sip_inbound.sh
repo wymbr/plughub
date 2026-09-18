@@ -20,9 +20,17 @@
 #   S2 nasce um contato `voice` do chamador (ANI), no pool do número (DNIS)
 #   S3 o chamador OUVE a IA: energia no áudio G.711 que volta
 #   S4 a fala do chamador chega ao fluxo: o menu por voz registra `sip-m0=atendente`
+#   K1 (VOZ-31) o serviço SIP aceita `telephone-event` na negociação
+#   K2 (VOZ-31) teclas FORA de banda (RFC 4733) respondem o menu de teclado (`sip-m1=<código>`)
+#   K3 (VOZ-31) PIN MASCARADO no telefone não é coletado (NIV-07): nem valor no fluxo nem PIN no
+#      stream; K3r o menu é RECUSADO nomeado no envio (mcp-server, `voice` sem `masked_input`) —
+#      com `voice` sozinho o registry já recusaria no DEPLOY, por isso o pool é misto; K3g o PIN
+#      teclado não aparece no log do gateway
 #   S5 o fluxo encerra e a PLATAFORMA derruba a chamada (BYE no telefone)
 #   S6 o contato da chamada 1 fechou pela plataforma (log do gateway)
 #   H1 2ª chamada, o CHAMADOR desliga: o contato fecha como `customer_hangup`
+#   B1 (VOZ-31, INFO) 3ª chamada SEM `telephone-event`, tecla como TOM no áudio — caracterização do
+#      conversor, entrada do controle (1) da NIV-07; não é veredicto
 #   R1 endpoint apagado: a chamada NÃO é atendida e nenhum contato nasce
 #   INFO codec da trilha do chamador na sala
 #
@@ -38,7 +46,10 @@ REG="${REGISTRY:-http://localhost:3300}"
 AUTH="${AUTH:-http://localhost:3202}"
 TENANT="${TENANT:-tenant_demo}"
 REDIS="${REDIS_CONTAINER:-plughub-demo-redis-1}"
-POOL="probe_voz02_sip"
+# Pool MISTO (browser e telefone) desde a VOZ-31: com `voice` sozinho o registry recusa no deploy o
+# menu mascarado do K3 (`masked_sem_canal_capaz` — correto, e medido). O caso que sobra para o
+# RUNTIME é exatamente o misto: o deploy passa pelo `webrtc`, e a chamada chega pelo telefone.
+POOL="probe_voz31_sip_misto"
 SKILL="skill_probe_sip_inbound_v1"
 FIXTURE="infra/test/fixtures/skill_probe_sip_inbound_v1.json"
 DNIS="${SIP_DNIS:-+551140000000}"
@@ -90,7 +101,7 @@ trap limpa EXIT INT TERM
 
 # ── fixture ──
 if [ "$(curl -s -o /dev/null -w '%{http_code}' "${H[@]}" "$REG/v1/pools/$POOL")" = 404 ]; then
-  st=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${H[@]}" "$REG/v1/pools" -d "{\"pool_id\":\"$POOL\",\"agent_kind\":\"ai\",\"channel_types\":[\"voice\"],\"sla_target_ms\":60000,\"max_concurrent_sessions\":2,\"description\":\"fixture do probe_voz02_sip_inbound (VOZ-02)\",\"media_policy\":{\"customer_publish\":[\"audio\"],\"agent_publish\":[\"audio\"]}}")
+  st=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${H[@]}" "$REG/v1/pools" -d "{\"pool_id\":\"$POOL\",\"agent_kind\":\"ai\",\"channel_types\":[\"voice\",\"webrtc\"],\"sla_target_ms\":60000,\"max_concurrent_sessions\":2,\"description\":\"fixture do probe_voz02_sip_inbound (VOZ-02/VOZ-31): pool misto browser+telefone\",\"media_policy\":{\"customer_publish\":[\"audio\"],\"agent_publish\":[\"audio\"]}}")
   [ "$st" = 201 ] || { incon "pool de fixture nao criado (http $st)"; fim; }
 fi
 PUB=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${H[@]}" "$REG/v1/skills/$SKILL" --data-binary "@$FIXTURE")
@@ -111,7 +122,7 @@ sleep 3
 ENV=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$GW" | grep -E '^PLUGHUB_' | sed 's/^/-e /' | tr '\n' ' ')
 
 exercicio() {  # $1 = MODE, $2 = ANI → saida crua do exercicio
-  timeout 420 docker run --rm -i --name "probe_voz02_$$_$RANDOM" --network "$NET" --entrypoint python \
+  timeout 720 docker run --rm -i --name "probe_voz02_$$_$RANDOM" --network "$NET" --entrypoint python \
     -v "$PWD/infra/test:/t:ro" -w /t $ENV -e MODE="$1" -e DNIS="$DNIS" -e ANI="$2" -e POOL="$POOL" \
     -e SIP_PASS="$SIP_PASS" "$IMG" /t/_sip_inbound_exercise.py 2>&1
 }
@@ -131,6 +142,19 @@ if [ "$(printf '%s\n' "$OUT" | grep -c '^\(OK\|FALHA\|INCONCL\) ')" = 0 ]; then
   incon "o exercicio nao produziu veredicto: $(printf '%s\n' "$OUT" | tail -5 | tr '\n' ' ' | cut -c1-400)"
 fi
 SID1=$(printf '%s\n' "$OUT" | sed -n 's/^SID1 //p' | head -1)
+PIN=$(printf '%s\n' "$OUT" | sed -n 's/^PIN //p' | head -1)
+MCP="${MCP_CONTAINER:-plughub-demo-mcp-server-plughub-1}"
+if [ -n "$SID1" ]; then
+  REC=$(docker logs --since "$T0" "$MCP" 2>&1 | grep "menu mascarado em canal sem 'masked_input'" | grep -c "session=$SID1 channel=voice")
+  [ "${REC:-0}" -ge 1 ] && ok "K3r o menu mascarado foi RECUSADO no envio, nomeado (mcp-server: canal voice sem masked_input)" \
+                        || falha "K3r nenhuma recusa nomeada do menu mascarado para $SID1 no mcp-server — o que o impediu?"
+fi
+if [ -n "$PIN" ]; then
+  # fronteira de dígito: o ANI do chamador, que o log cita, pode conter a mesma sequência
+  VAZ=$(docker logs --since "$T0" "$GW" 2>&1 | grep -cE "(^|[^0-9])$PIN([^0-9]|$)")
+  [ "${VAZ:-0}" = 0 ] && ok "K3g o PIN mascarado teclado nao aparece no log do gateway" \
+                      || falha "K3g o PIN mascarado aparece $VAZ vez(es) no log do gateway — VAZOU"
+fi
 SID2=$(printf '%s\n' "$OUT" | sed -n 's/^SID2 //p' | head -1)
 
 fechou() {  # $1 = SID, $2 = reason → espera a linha de fechamento no log do gateway

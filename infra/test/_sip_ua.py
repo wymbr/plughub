@@ -9,6 +9,10 @@ só acrescentaria variáveis.
 
 Escopo deliberadamente curto: UDP, um diálogo por instância, sem re-INVITE com mudança de mídia,
 sem SRTP. O que não entende, loga — nunca finge que entendeu.
+
+Teclas (VOZ-31): por padrão oferece `telephone-event` e tecla FORA de banda (RFC 4733, `teclar`).
+Com `dtmf_fora_de_banda=False` NÃO oferece — é o telefone velho, que só sabe mandar o tom dentro do
+áudio (`tons_dtmf_pcm8k` + `falar_pcm8k`): o controle negativo do que o conversor faz sem negociação.
 """
 from __future__ import annotations
 
@@ -116,11 +120,13 @@ class Chamada:
     payload_types: set[int] = field(default_factory=set)
     sdp_remoto: str = ""
     motivo: str = ""
+    te_pt: int | None = None          # payload type de `telephone-event` que o outro lado ACEITOU
+    teclas_enviadas: int = 0          # eventos RFC 4733 completos (com os três pacotes de fim)
 
 
 class SipUA:
     def __init__(self, host: str, port: int = 5060, *, user: str, senha: str, ani: str,
-                 log=print) -> None:
+                 log=print, dtmf_fora_de_banda: bool = True) -> None:
         self.host, self.port = socket.gethostbyname(host), port
         self.user, self.senha, self.ani = user, senha, ani
         self.log = log
@@ -136,7 +142,9 @@ class SipUA:
         self._rtp_dest: tuple[str, int] | None = None
         self._tasks: list[asyncio.Task] = []
         self._falando: asyncio.Queue[bytes] = asyncio.Queue()
+        self._teclas: asyncio.Queue[str] = asyncio.Queue()
         self._encerrada = asyncio.Event()
+        self.dtmf_fora_de_banda = dtmf_fora_de_banda
 
     def _ip_local(self) -> str:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -162,11 +170,14 @@ class SipUA:
         self._sip_t.sendto(texto.encode(), (self.host, self.port))
 
     def _sdp(self) -> str:
+        if self.dtmf_fora_de_banda:
+            midia = [f"m=audio {self.rtp_port} RTP/AVP 0 101", "a=rtpmap:0 PCMU/8000",
+                     "a=rtpmap:101 telephone-event/8000", "a=fmtp:101 0-16"]
+        else:
+            midia = [f"m=audio {self.rtp_port} RTP/AVP 0", "a=rtpmap:0 PCMU/8000"]
         return CRLF.join([
             "v=0", f"o=probe {random.randint(1, 10**9)} 1 IN IP4 {self.ip}", "s=probe-voz02",
-            f"c=IN IP4 {self.ip}", "t=0 0", f"m=audio {self.rtp_port} RTP/AVP 0 101",
-            "a=rtpmap:0 PCMU/8000", "a=rtpmap:101 telephone-event/8000", "a=fmtp:101 0-16",
-            "a=ptime:20", "a=sendrecv", ""])
+            f"c=IN IP4 {self.ip}", "t=0 0", *midia, "a=ptime:20", "a=sendrecv", ""])
 
     def _invite(self, dnis: str, auth: str = "", auth_header: str = "Authorization") -> tuple[str, str]:
         self._cseq += 1
@@ -248,6 +259,8 @@ class SipUA:
             mp = re.search(r"m=audio (\d+)", msg.body)
             if c and mp:
                 self._rtp_dest = (c.group(1), int(mp.group(1)))
+            te = re.search(r"a=rtpmap:(\d+) telephone-event/8000", msg.body)
+            self.chamada.te_pt = int(te.group(1)) if te else None
             self._envia(self._ack(self._remote_contact, uuid.uuid4().hex[:12], self._to, self._cseq))
             self._tasks = [asyncio.create_task(self._laco_sip()),
                            asyncio.create_task(self._laco_rtp_envio()),
@@ -287,7 +300,23 @@ class SipUA:
         pendente = b""
         prox = time.monotonic()
         silencio = b"\xff" * 160
+        evento: list = []        # pacotes RFC 4733 da tecla em curso (o áudio cala enquanto ela sai)
         while not self._encerrada.is_set():
+            if not evento and not self._teclas.empty():
+                evento = self._pacotes_tecla(self._teclas.get_nowait(), ts)
+            item = evento.pop(0) if evento else None
+            if item is not None:
+                marcador, carga_ev, fim = item
+                cab = struct.pack("!BBHII", 0x80, (0x80 if marcador else 0) | self.chamada.te_pt,
+                                  seq & 0xFFFF, carga_ev[0] & 0xFFFFFFFF, ssrc)
+                self._rtp_t.sendto(cab + carga_ev[1], self._rtp_dest)
+                if fim:
+                    self.chamada.teclas_enviadas += 1
+                seq, ts = seq + 1, ts + 160
+                prox += 0.02
+                await asyncio.sleep(max(0.0, prox - time.monotonic()))
+                continue
+            # `None` na lista = pausa entre teclas: este tick sai como áudio
             if len(pendente) < 160 and not self._falando.empty():
                 pendente += await self._falando.get()
             if len(pendente) >= 160:
@@ -311,6 +340,29 @@ class SipUA:
             if pt == 0:
                 pcm = audioop.ulaw2lin(data[12:], 2)
                 self.chamada.energia.append((time.monotonic(), float(audioop.rms(pcm, 2))))
+
+    # RFC 4733: a tecla é UM evento com timestamp fixo (o do início); a duração cresce a cada 20 ms;
+    # o fim vai três vezes com o bit E, que é o que o receptor usa para não contar a tecla em dobro.
+    _EVENTO = {**{str(d): d for d in range(10)}, "*": 10, "#": 11}
+
+    def _pacotes_tecla(self, tecla: str, ts0: int, duracao_ms: int = 120, pausa_ms: int = 100) -> list:
+        ev = self._EVENTO[tecla]
+        n = max(1, duracao_ms // 20)
+        pac = [(i == 0, (ts0, struct.pack("!BBH", ev, 10, (i + 1) * 160)), False) for i in range(n)]
+        fim = struct.pack("!BBH", ev, 0x80 | 10, n * 160)
+        pac += [(False, (ts0, fim), k == 2) for k in range(3)]
+        # pausa entre teclas: ticks sem evento, em que o laço manda áudio (silêncio)
+        return pac + [None] * max(0, pausa_ms // 20)
+
+    def teclar(self, digitos: str) -> float:
+        """Teclas FORA de banda (RFC 4733), no payload type que o outro lado aceitou. Devolve a
+        duração aproximada. Sem `telephone-event` negociado RECUSA — mandar mesmo assim seria testar
+        um telefone que não existe."""
+        if self.chamada.te_pt is None:
+            raise RuntimeError("telephone-event NAO negociado nesta chamada — use tons_dtmf_pcm8k")
+        for d in digitos:
+            self._teclas.put_nowait(d)
+        return len(digitos) * 0.24
 
     def falar_pcm8k(self, pcm16: bytes) -> float:
         """Enfileira PCM 16-bit mono a 8 kHz para sair como PCMU; devolve a duração em s."""
@@ -362,6 +414,24 @@ class SipUA:
         for t in (getattr(self, "_sip_t", None), getattr(self, "_rtp_t", None)):
             if t is not None:
                 t.close()
+
+
+_DTMF_HZ = {"1": (697, 1209), "2": (697, 1336), "3": (697, 1477), "4": (770, 1209), "5": (770, 1336),
+            "6": (770, 1477), "7": (852, 1209), "8": (852, 1336), "9": (852, 1477), "*": (941, 1209),
+            "0": (941, 1336), "#": (941, 1477)}
+
+
+def tons_dtmf_pcm8k(digitos: str, tom_s: float = 0.15, pausa_s: float = 0.1, amp: int = 6000) -> bytes:
+    """As teclas DENTRO do áudio (dois senos por tecla) — o que um telefone sem `telephone-event`
+    manda, e o que o PCMU carrega sem distorção relevante."""
+    out = []
+    for d in digitos:
+        f1, f2 = _DTMF_HZ[d]
+        out += [struct.pack("<h", int(amp * (math.sin(2 * math.pi * f1 * i / 8000)
+                                             + math.sin(2 * math.pi * f2 * i / 8000)) / 2))
+                for i in range(int(8000 * tom_s))]
+        out.append(b"\x00\x00" * int(8000 * pausa_s))
+    return b"".join(out)
 
 
 def tom_pcm8k(segundos: float = 1.0, hz: float = 440.0, amp: int = 8000) -> bytes:

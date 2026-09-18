@@ -506,8 +506,12 @@ numa central, e é só aqui. **É a única fase que exige telecom**, e entra por
 >   chamador ouve chamando. Com agente de IA é imediato (o bot leg entra e fala); com pool HUMANO, o
 >   telefone toca até o atendente publicar microfone, inclusive durante a fila.
 >
+> **Teclas (VOZ-31, no mesmo dia):** RFC 4733 negociado e validado no tronco simulado; **sem
+> `telephone-event` a tecla não chega** — o tom dentro do áudio é ignorado, e o conversor atende assim
+> mesmo. Exigir a negociação (§8, DTMF fora de banda) fica sendo decisão da plataforma (NIV-07).
+>
 > **Fora da fatia 1** (fichas no `pending.md`): exposição pública do SIP com classificação da borda
-> (V10) e TLS/SRTP; `REFER`/chamada sainte; DTMF RFC 4733 validado de ponta a ponta; tela para
+> (V10) e TLS/SRTP; `REFER`/chamada sainte; teclas validadas com operadora real; tela para
 > tronco e regra de despacho; toque durante a fila. E **registro**: provedor que só entrega a
 > chamada a um ramal registrado (planos "controle" de VoIP) não serve — o conversor recebe por
 > tronco (IP ou digest), não se registra.

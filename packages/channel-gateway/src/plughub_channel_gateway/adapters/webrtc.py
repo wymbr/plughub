@@ -2112,7 +2112,7 @@ class WebRTCAdapter(ChannelAdapter):
         event = NormalizedInboundEvent(
             contact_id   = info["contact_id"],
             session_id   = session_id,
-            channel      = "webrtc",
+            channel      = info.get("channel") or "webrtc",
             content_type = "audio_transcript",
             author       = MessageAuthor(type="agent_human", id=participant_id),
             content      = MessageContent(type="text", text=transcript, payload={
@@ -2322,6 +2322,17 @@ class WebRTCAdapter(ChannelAdapter):
             return None
         if plan is None:
             return None
+        if (masked or payload.get("masked")) and self.is_sip_session(session_id):
+            # O telefone NÃO tem tela: a decisão 4 (campo protegido) não se aplica, e a coleta por
+            # teclado de dado mascarado ainda não existe na perna SIP — exige `telephone-event`
+            # negociado e a perna isolada durante o bloco (NIV-07). Dizer "vai ao campo protegido"
+            # aqui seria a frase plausível e falsa; o menu fica sem coleta e sai pelo prazo dele.
+            logger.error(
+                "webrtc coleta: menu %s e MASCARADO numa chamada telefonica — coleta mascarada "
+                "por teclado na perna SIP NAO existe (NIV-07); as teclas sao ignoradas sem valor no "
+                "log e o menu sai pelo prazo (session=%s)", menu_id, session_id,
+            )
+            return None
         if masked or payload.get("masked"):
             # decisão 4: WebRTC no browser TEM tela — o dado protegido vai ao campo protegido
             logger.info(
@@ -2502,7 +2513,7 @@ class WebRTCAdapter(ChannelAdapter):
         event = NormalizedInboundEvent(
             contact_id       = info["contact_id"],
             session_id       = session_id,
-            channel          = "webrtc",
+            channel          = info.get("channel") or "webrtc",
             author           = MessageAuthor(type="customer"),
             content          = content,
             context_snapshot = await self._context_reader.get_snapshot(session_id),
@@ -3100,7 +3111,7 @@ class WebRTCAdapter(ChannelAdapter):
             message_id       = message_id or str(uuid.uuid4()),
             contact_id       = info["contact_id"],
             session_id       = session_id,
-            channel          = "webrtc",
+            channel          = info.get("channel") or "webrtc",
             content_type     = content_type,  # type: ignore[arg-type]
             author           = MessageAuthor(type="customer"),
             content          = MessageContent(type="text", text=text, payload=payload),

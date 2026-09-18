@@ -13,8 +13,16 @@ MODE=atende (endpoint cadastrado):
   S2 nasceu um contato `voice` do chamador, no pool do número discado.
   S3 o chamador OUVE a IA: energia no RTP que volta, em G.711.
   S4 a fala do chamador chega ao fluxo: o menu por voz registra `sip-m0=atendente`.
+  K1 (VOZ-31) `telephone-event` negociado na resposta do serviço SIP.
+  K2 (VOZ-31) teclas FORA de banda (RFC 4733) respondem o menu de teclado: `sip-m1=<código>`.
+  K3 (VOZ-31) PIN MASCARADO no telefone NÃO é coletado (NIV-07), e isso não é mudo: o menu é
+     RECUSADO no envio (`notification_send`, canal `voice` sem `masked_input` — o probe lê a
+     linha no mcp-server), o fluxo sai pelo `on_failure` sem nunca receber o PIN, e o PIN teclado
+     assim mesmo não aparece no stream — o probe confere também o log do gateway.
   S5 o fluxo encerra e a PLATAFORMA derruba a chamada (BYE chega ao telefone).
   depois, uma 2ª chamada em que o CHAMADOR desliga — o probe confere o fechamento no log.
+  B1 (VOZ-31, caracterização) 3ª chamada SEM `telephone-event`, tecla como TOM no áudio: o que o
+     conversor faz. É fato medido, não veredicto — é a entrada do controle (1) da NIV-07.
   INFO codec da trilha do chamador na sala (a §8 do ADR supunha relay, sem transcodificar).
 
 MODE=recusa (endpoint REMOVIDO pelo probe antes):
@@ -28,6 +36,7 @@ import asyncio
 import audioop  # noqa: DEP — Python 3.11 da imagem
 import json
 import os
+import re
 import sys
 import time
 
@@ -36,7 +45,7 @@ import redis.asyncio as aioredis
 from livekit import api
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _sip_ua import SipUA  # noqa: E402
+from _sip_ua import SipUA, tons_dtmf_pcm8k  # noqa: E402
 
 MODE = os.environ.get("MODE", "atende")
 DNIS = os.environ["DNIS"]
@@ -53,6 +62,8 @@ LK_URL = os.environ.get("PLUGHUB_WEBRTC_LIVEKIT_URL", "ws://livekit:7880").repla
 LK_KEY = os.environ.get("PLUGHUB_WEBRTC_LIVEKIT_API_KEY", "")
 LK_SEC = os.environ.get("PLUGHUB_WEBRTC_LIVEKIT_API_SECRET", "")
 FRASE = "Atendente."
+CODIGO = "4821"          # teclado claro (m1)
+PIN = "5566"             # teclado MASCARADO (m2) — não pode aparecer em lugar nenhum
 
 
 def emit(st: str, ramo: str, txt: str) -> None:
@@ -85,16 +96,33 @@ async def sessao_do_chamador(rd, ani: str, desde: float, limite_s: float = 20.0)
     return ""
 
 
-async def marcador(rd, sid: str, limite_s: float) -> str:
+async def _stream_txt(rd, sid: str) -> str:
+    return "\n".join(json.dumps(c, ensure_ascii=False) for _, c in await rd.xrange(f"session:{sid}:stream", "-", "+"))
+
+
+async def marcador(rd, sid: str, limite_s: float, opcoes=("sip-m0=atendente", "sip-m0=cancelar",
+                                                         "sip-m0-invalido", "sip-timeout")) -> str:
     prazo = time.monotonic() + limite_s
     while time.monotonic() < prazo:
-        for _, campos in await rd.xrange(f"session:{sid}:stream", "-", "+"):
-            txt = json.dumps(campos, ensure_ascii=False)
-            for m in ("sip-m0=atendente", "sip-m0=cancelar", "sip-m0-invalido", "sip-timeout"):
-                if m in txt:
-                    return m
+        txt = await _stream_txt(rd, sid)
+        for m in opcoes:
+            if m in txt:
+                return m
         await asyncio.sleep(0.5)
     return ""
+
+
+async def menu_no_ar(rd, ua, sid: str, prompt: str, limite_s: float = 40) -> bool:
+    """Espera o menu chegar ao stream (a coleta nasce junto) e o prompt ser FALADO até o fim —
+    tecla antes disso cairia em `nenhuma coleta em curso` e o ramo mediria a pressa do teste."""
+    prazo = time.monotonic() + limite_s
+    while time.monotonic() < prazo:
+        if prompt in await _stream_txt(rd, sid):
+            t = time.monotonic()
+            await ua.silencio_do_outro_lado(depois_de=t - 1.0, calmo_s=1.2, limite_s=max(1.0, prazo - t))
+            return True
+        await asyncio.sleep(0.3)
+    return False
 
 
 async def codec_do_chamador(ani: str) -> str:
@@ -155,7 +183,36 @@ async def atende() -> None:
     emit("OK" if m == "sip-m0=atendente" else "FALHA", "S4",
          f"a fala do chamador chegou ao fluxo: {m or 'nenhum marcador em 40 s'}")
 
-    caiu = await ua.esperar_bye(40)
+    # ── VOZ-31: teclas ──
+    emit("OK" if ch.te_pt is not None else "FALHA", "K1",
+         f"telephone-event negociado na resposta do servico SIP: PT {ch.te_pt}" if ch.te_pt is not None
+         else "a resposta do servico SIP NAO aceitou telephone-event — tecla fora de banda impossivel")
+    if ch.te_pt is not None and m == "sip-m0=atendente":
+        if await menu_no_ar(rd, ua, sid, "Digite o codigo"):
+            ua.teclar(CODIGO + "#")
+            k2 = await marcador(rd, sid, 30, (f"sip-m1={CODIGO}", "sip-m1=", "sip-m1-invalido", "sip-m1-timeout"))
+            emit("OK" if k2 == f"sip-m1={CODIGO}" else "FALHA", "K2",
+                 f"{len(CODIGO) + 1} teclas RFC 4733 ({ua.chamada.teclas_enviadas} eventos completos) -> "
+                 f"{k2 or 'nenhum marcador em 30 s'} (esperado sip-m1={CODIGO})")
+        else:
+            emit("FALHA", "K2", "o menu de teclado (m1) nao chegou ao stream em 40 s")
+        # O chamador tecla o PIN como teclaria diante de um pedido — com ou sem menu no ar.
+        await asyncio.sleep(2.0)
+        ua.teclar(PIN + "#")
+        print(f"PIN {PIN}", flush=True)
+        caiu_cedo = await ua.esperar_bye(40)
+        txt = await _stream_txt(rd, sid)
+        recebido = "sip-m2-recebido" in txt
+        # fronteira de dígito: o ANI do chamador, que o stream carrega, pode conter a sequência
+        vazou = re.search(rf"(?<![0-9]){PIN}(?![0-9])", txt) is not None
+        emit("OK" if not recebido and not vazou else "FALHA", "K3",
+             f"PIN mascarado no telefone: coletado={'SIM' if recebido else 'nao'} · PIN no stream="
+             f"{'SIM — VAZOU' if vazou else 'nao'} · a chamada {'caiu' if caiu_cedo else 'NAO caiu em 40 s'} "
+             f"(esperado: nao coletado, sem valor, fluxo saindo — a coleta mascarada na perna SIP e a NIV-07)")
+    else:
+        emit("INCONCL", "K2", "sem telephone-event ou sem o m0 respondido — as teclas nao foram medidas")
+
+    caiu = ua.chamada.bye_recebido_em is not None or await ua.esperar_bye(40)
     emit("OK" if caiu else "FALHA", "S5",
          "a plataforma encerrou e o telefone recebeu BYE" if caiu else "o fluxo acabou e a chamada NAO caiu em 40 s")
     await ua.desligar()
@@ -174,6 +231,29 @@ async def atende() -> None:
     await asyncio.sleep(2.0)
     await ua2.desligar()
     emit("INFO", "H1", f"2a chamada atendida e desligada PELO CHAMADOR (session={sid2 or '?'})")
+
+    # 3ª chamada: telefone SEM telephone-event, a tecla vai como TOM dentro do áudio
+    ani3 = ANI[:-1] + ("3" if ANI[-1] != "3" else "4")
+    ua3 = SipUA(SIP_HOST, user=SIP_USER, senha=SIP_PASS, ani=ani3, dtmf_fora_de_banda=False)
+    t3 = time.monotonic()
+    ch3 = await ua3.ligar(DNIS, espera_atender_s=45)
+    if ch3.status_final != 200:
+        emit("INFO", "B1", f"sem telephone-event a chamada NAO foi atendida: {ch3.respostas} ({ch3.motivo})")
+        await ua3.desligar()
+        await rd.aclose()
+        return
+    sid3 = await sessao_do_chamador(rd, ani3, t3)
+    if sid3 and await menu_no_ar(rd, ua3, sid3, "Diga atendente"):
+        ua3.falar_pcm8k(tons_dtmf_pcm8k("1"))            # 1 = cancelar
+        b1 = await marcador(rd, sid3, 45)
+        leitura = {"sip-m0=cancelar": "o tom VIROU tecla (deteccao dentro do audio existe)",
+                   "sip-timeout": "o tom foi IGNORADO (sem deteccao dentro do audio; menu saiu pelo prazo)",
+                   "sip-m0-invalido": "o tom virou fala INVALIDA (chegou ao STT, nao ao teclado)"}.get(b1, "?")
+        emit("INFO", "B1", f"telefone sem telephone-event (resposta com PT {ch3.te_pt}), tecla 1 como TOM -> "
+             f"{b1 or 'nenhum marcador em 45 s'}: {leitura}")
+    else:
+        emit("INFO", "B1", f"3a chamada atendida, mas o m0 nao apareceu (session={sid3 or '?'}) — nada medido")
+    await ua3.desligar()
     await rd.aclose()
 
 

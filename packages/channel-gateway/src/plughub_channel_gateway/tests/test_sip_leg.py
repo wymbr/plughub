@@ -293,3 +293,107 @@ class TestControleCompensatorio:
                                                                                      "agent_publish": ["audio"]}})},
                                       ad._settings)
         assert ordem[:2] == ["chave", "sala"]
+
+
+class TestTeclas:
+    """VOZ-31 — a tecla do TELEFONE. O serviço SIP converte o RFC 4733 em `sip_dtmf_received` com a
+    identidade `sip_…`; ela responde o menu, e o desfecho sai com o canal da SESSÃO (`voice`), não com
+    o do adapter. Dado mascarado não tem coleta por teclado no telefone (NIV-07): o gateway o DIZ, e a
+    tecla não deixa o valor em lugar nenhum."""
+
+    CHAMADOR = PARTICIPANTE["identity"]
+
+    async def _sessao(self, monkeypatch):
+        _endpoint(monkeypatch)
+        ad, producer = _adapter()
+        await ad.on_livekit_event("participant_joined", SALA, PARTICIPANTE)
+        assert hasattr(WebRTCAdapter, "_speak")
+        falas: list[str] = []
+
+        def _speak(session_id, text, played=None):
+            falas.append(text)
+            if played is not None:
+                played.set()
+        ad._speak = _speak
+        return ad, producer, next(iter(ad._sip)), falas
+
+    @staticmethod
+    def _menu(sid, **extra):
+        return {"session_id": sid, "menu_id": "m1", "interaction": "text", "prompt": "Digite o codigo.",
+                "collect": {"input": ["dtmf"], "first_input_timeout_s": 20, "max_digits": 6,
+                            "terminator": "#"}, **extra}
+
+    @staticmethod
+    def _resultados(producer):
+        return [e for e in _eventos(producer, "inbound") if e.get("content", {}).get("type") == "menu_result"]
+
+    async def _espera(self, cond, secs=2.0):
+        fim = asyncio.get_running_loop().time() + secs
+        while not cond():
+            if asyncio.get_running_loop().time() > fim:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
+    async def test_tecla_do_chamador_responde_o_menu_com_o_canal_da_sessao(self, monkeypatch):
+        from ..adapters.webrtc_room_client import MockRoomClient
+        ad, producer, sid, falas = await self._sessao(monkeypatch)
+        room = MockRoomClient()
+        await ad.deliver_menu(self._menu(sid))
+        assert falas and falas[0].startswith("Digite o codigo.")
+        leitor = asyncio.create_task(ad._dtmf_reader(sid, room))
+        try:
+            for d in "1234#":
+                room.inject_dtmf(d, identity=self.CHAMADOR)
+            assert await self._espera(lambda: self._resultados(producer))
+        finally:
+            leitor.cancel()
+        r = self._resultados(producer)
+        assert len(r) == 1
+        assert r[0]["content"]["payload"]["result"] == "1234"
+        assert r[0]["channel"] == "voice"            # a sessão é telefone, não browser
+
+    async def test_tecla_de_outro_participante_nao_responde(self, monkeypatch):
+        from ..adapters.webrtc_room_client import MockRoomClient
+        ad, producer, sid, _ = await self._sessao(monkeypatch)
+        room = MockRoomClient()
+        await ad.deliver_menu(self._menu(sid))
+        leitor = asyncio.create_task(ad._dtmf_reader(sid, room))
+        try:
+            for d in "99#":
+                room.inject_dtmf(d, identity="agent-humano")
+            await asyncio.sleep(0.2)
+            assert self._resultados(producer) == []
+            for d in "7#":                               # controle: o chamador responde
+                room.inject_dtmf(d, identity=self.CHAMADOR)
+            assert await self._espera(lambda: self._resultados(producer))
+        finally:
+            leitor.cancel()
+        assert self._resultados(producer)[0]["content"]["payload"]["result"] == "7"
+
+    async def test_fala_transcrita_do_chamador_sai_como_voice(self, monkeypatch):
+        ad, producer, sid, _ = await self._sessao(monkeypatch)
+        assert hasattr(WebRTCAdapter, "_publish_customer_text")
+        await ad._publish_customer_text(sid, "quero falar com atendente", content_type="audio_transcript")
+        falas = [e for e in _eventos(producer, "inbound") if e.get("content", {}).get("text")]
+        assert falas and falas[-1]["channel"] == "voice"
+
+    async def test_menu_mascarado_no_telefone_e_dito_e_a_tecla_nao_deixa_valor(self, monkeypatch, caplog):
+        from ..adapters.webrtc_room_client import MockRoomClient
+        ad, producer, sid, _ = await self._sessao(monkeypatch)
+        room = MockRoomClient()
+        with caplog.at_level(logging.INFO):
+            await ad.deliver_menu(self._menu(sid, masked=True))
+            assert "MASCARADO numa chamada telefonica" in caplog.text
+            assert "campo protegido" not in caplog.text   # o telefone não tem tela
+            assert sid not in ad._collects
+            leitor = asyncio.create_task(ad._dtmf_reader(sid, room))
+            try:
+                for d in "9876#":
+                    room.inject_dtmf(d, identity=self.CHAMADOR)
+                await asyncio.sleep(0.2)
+            finally:
+                leitor.cancel()
+        assert self._resultados(producer) == []
+        assert "9876" not in caplog.text
+        assert "tecla ignorada" in caplog.text           # a tecla chegou e foi descartada SEM valor

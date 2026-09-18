@@ -62,6 +62,11 @@ sem ponte de mídia nossa. Canal: **`voice`** (ADR V2). Fatia 1: entrante, com f
 **Endereço = número DISCADO**, por `ChannelEndpoint` `voice`. Número sem endpoint é recusado, e o motivo vai
 ao log — nunca há pool default (a mesma regra do *fallback de endereço recusa alto*).
 
+**Teclas (VOZ-31, medido no tronco simulado).** Com `telephone-event` negociado (PT 101) a tecla
+chega e responde o menu. **Sem ele, a chamada é atendida e o tom no áudio é ignorado** — o conversor não
+detecta tom nem recusa. Consequência de desenho: *exigir* a negociação é decisão da plataforma (NIV-07),
+e a pergunta aberta é onde ela sabe o que foi negociado.
+
 **Provedor por REGISTRO não serve.** O conversor recebe por tronco (IP ou digest do INVITE); planos que
 entregam a chamada a um ramal registrado (ex.: "controle" de VoIP) precisam de um PBX no meio. Tronco é o
 que contratar quando a VOZ-32 disparar.

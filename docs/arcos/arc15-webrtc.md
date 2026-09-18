@@ -918,11 +918,23 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
   toca até o atendente publicar microfone (fila inclusa). Ficha própria no `pending.md`.
 - **O conversor transcodifica** G.711 ↔ Opus (medido: trilha `audio/opus`, PCMU no SIP). O ADR §8
   foi corrigido.
+- **Teclas do telefone (VOZ-31).** Fora de banda (RFC 4733) o serviço SIP entrega a tecla como
+  `sip_dtmf_received` com a identidade `sip_…`, e ela responde o menu de teclado como a do widget.
+  **Sem `telephone-event` negociado a tecla NÃO chega**: a chamada é atendida assim mesmo e o tom
+  dentro do áudio é ignorado (medido) — exigir a negociação é decisão nossa, não do conversor (NIV-07).
+- **Dado mascarado não tem coleta no telefone.** O menu mascarado é RECUSADO no envio
+  (`notification_send`: `voice` não declara `masked_input`), nomeado, e o fluxo sai pelo
+  `on_failure`; pool só com `voice` nem chega lá — o registry recusa o deploy
+  (`masked_sem_canal_capaz`). O gateway tem a mesma recusa, dita, como segunda linha.
+- **O evento é do CANAL DA SESSÃO**: transcrição, fala do atendente e desfecho de coleta de uma
+  chamada SIP saem com `channel: voice` (até a VOZ-31 saíam `webrtc`, o nome do adapter).
 
 **Gates:** `infra/test/probe_voz02_sip_inbound.sh` (chamada real, com um cliente SIP de teste em
 G.711 + digest — `_sip_ua.py`) e `probe_webrtc_media_plane.sh` A3/D4/D4g/D5 (o controle
-compensatório, com controle positivo). Testes: `tests/test_sip_leg.py`.
+compensatório, com controle positivo). O mesmo probe mede as teclas (K1–K3, B1). Testes:
+`tests/test_sip_leg.py`.
 
 **Fora da fatia:** porta SIP publicada e classificação da borda (V10), TLS/SRTP, `REFER` e chamada
-sainte, DTMF RFC 4733 validado de ponta a ponta, tela para tronco e regra de despacho, e provedor
-por **registro** (o conversor recebe por tronco, não se registra). Fichas `VOZ-31..` no `pending.md`.
+sainte, teclas validadas com operadora de verdade (VOZ-32), tela para tronco e regra de despacho, e
+provedor por **registro** (o conversor recebe por tronco, não se registra). Fichas `VOZ-32..35` e
+`NIV-07` no `pending.md`.

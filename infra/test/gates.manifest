@@ -396,7 +396,10 @@ probe_webrtc_speech_profile.sh
 # O telefone e um cliente SIP de teste (G.711 + digest), sem provedor. S1 atendida; S2 contato voice
 # do ANI no pool do DNIS; S3 o chamador ouve a IA; S4 a fala dele chega ao menu (sip-m0=atendente);
 # S5/S6 a plataforma encerra e o telefone recebe BYE; H1 o chamador desliga = customer_hangup;
-# R1 numero sem endpoint e RECUSADO e nomeado. ~3 chamadas; endpoint criado e apagado.
+# R1 numero sem endpoint e RECUSADO e nomeado. VOZ-31: K1 telephone-event negociado; K2 teclas
+# RFC 4733 respondem o menu de teclado; K3/K3r/K3g PIN mascarado recusado no envio, nomeado, sem
+# valor no stream nem no log; B1 (INFO) sem telephone-event o tom no audio e ignorado. Pool MISTO
+# (voice+webrtc). ~4 chamadas; endpoint criado e apagado.
 probe_voz02_sip_inbound.sh
 # VOZ-23 (2026-09-17): a verificacao ativa do caminho de fala roda pelo caminho real e acusa regressao.
 # K0 fixtures e tenant limpo; A1 rota sem credencial 401 e perfil inexistente 422; D1 disparo pelo pool
