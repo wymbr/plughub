@@ -1350,14 +1350,27 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 > **SFU + TURN provisionados em 2026-09-14 (VOZ-01).** Até ali o ✅ desta seção cobria só o **canal**:
 > nenhum compose tinha LiveKit, o SDK não era dependência, e sem credencial o provider ligava
 > `_dev_mode` e devolvia token, sala e egress **placebo** — ninguém ficava vermelho. Hoje o compose
-> demo sobe `livekit` (`auto_create: false`) e `coturn`, e **sem credencial o provider RECUSA
+> demo sobe `livekit` e `coturn` (e, desde a VOZ-02, `livekit-sip`), e **sem credencial o provider RECUSA
 > nomeando a env** (`WebRTCProviderUnavailable`); o canal fecha a porta antes de autenticar e rotear.
 > O SFU real achou código que nunca tinha rodado (`with_ttl(int)`: nenhum token real podia ser
 > assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. **Contato ponta a ponta validado com
 > gente no browser em 2026-09-15** (`VOZ-04`; roteiro `docs/guias/roteiro-validacao-webrtc-console.md`).
 > ⚠️ **O que ainda NÃO existe:** mídia para browser em OUTRA máquina da rede (o demo serve o próprio
-> host — loopback, UDP único e TURN com dois nomes), egress (`VOZ-06`), perna SIP (`VOZ-02`). O bot leg
-> (ouvinte + voz, transcrição e coleta por teclado/fala) existe desde 2026-09-16 — `arc15-webrtc.md` § 15.
+> host — loopback, UDP único e TURN com dois nomes), egress (`VOZ-06`), porta SIP publicada e chamada
+> SAINTE (`VOZ-32`/`VOZ-33`). O bot leg (ouvinte + voz, transcrição e coleta por teclado/fala) existe
+> desde 2026-09-16 — `arc15-webrtc.md` § 15; a chamada telefônica ENTRANTE, desde 2026-09-18 — § 19.
+
+- **A chamada pelo tronco SIP é canal `voice` e entra na MESMA sala** (VOZ-02): o serviço SIP do SFU
+  (`livekit-sip`) põe o chamador numa sala, o SFU avisa o gateway por webhook assinado
+  (`/v1/livekit/webhook`) e o gateway a **adota** como a da sessão. **O endereço é o número DISCADO**
+  (`ChannelEndpoint` `voice`); **sem endpoint, a chamada é RECUSADA** e o motivo vai ao log — nunca
+  pool default. Gate: `infra/test/probe_voz02_sip_inbound.sh`.
+- **`room.auto_create` está LIGADO, e isso tem contrapartida obrigatória** (VOZ-02, decisão do dono):
+  o serviço SIP entra por join e, com `false`, recebia 486 em toda chamada. A garantia da VOZ-01
+  (token para nome qualquer não cria sala) virou REAÇÃO: no `room_started`, o gateway apaga sala
+  `plughub-{uuid}` sem `channel:webrtc:{sid}:room_name` — chave que por isso é gravada **ANTES** do
+  `create_room` e apagada no fechamento. Desligar o webhook desliga o controle; o
+  `probe_webrtc_media_plane.sh` julga os dois juntos (A3) e mede o efeito com controle positivo (D4/D5).
 
 - **Versões do LiveKit andam JUNTAS** — SFU no compose, `livekit-client` do Console (lockfile) e do
   widget (versão exata no CDN). SFU v1.8.4 com clientes 2.20/2.22 publicava áudio e não vídeo, sem
@@ -1382,10 +1395,10 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,
-  obrigatória em pool de contato com `webrtc`, lida fresca pelo bridge e levada no `routing.assigned`
+  obrigatória em pool de contato com `webrtc` **ou `voice`** (VOZ-02), lida fresca pelo bridge e levada no `routing.assigned`
   com a procedência. **Ausência nunca vira permissão** — pool sem política ou registry fora oferece nada.
 
-Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform pelos tetos). Texto é sempre possível; `media_capabilities` do agente não existe mais (sem produtor desde a aposentadoria do AgentType). *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (`VOZ-02` em `pending.md`, adiado por gatilho comercial).
+Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (cliente no telefone: tronco SIP → a mesma sala desde a VOZ-02; Twilio/TwiML é legado); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform pelos tetos). Texto é sempre possível; `media_capabilities` do agente não existe mais (sem produtor desde a aposentadoria do AgentType). A ponte PSTN→sala existe desde a VOZ-02 (fatia 1, entrante); o que falta dela está em `VOZ-31..35` no `pending.md`.
 
 → See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
 

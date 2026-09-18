@@ -1062,6 +1062,10 @@ async def get_pool_config(
     return None
 
 
+# Canais cujo contato tem SALA de mídia e por isso precisam da política do pool que atende.
+_CHANNELS_WITH_ROOM = frozenset({"webrtc", "voice"})
+
+
 async def _routing_assigned_pool_field(
     http:         aiohttp.ClientSession,
     redis_client: aioredis.Redis,
@@ -1073,8 +1077,9 @@ async def _routing_assigned_pool_field(
     O campo `pool` do `routing.assigned` (VOZ-10): o pool que ATENDE e a política de
     mídia que ele declara no agent-registry.
 
-    Só sessão `webrtc` paga a leitura — os outros canais ignoram o evento, e uma chamada
-    HTTP por ativação em todo webchat/webhook seria custo sem leitor. A leitura é FRESCA
+    Só sessão com SALA paga a leitura — `webrtc` e, desde a VOZ-02, `voice` (a chamada de
+    telefone entra pela perna SIP numa sala, com a mesma mídia); os outros canais ignoram o
+    evento, e uma chamada HTTP por ativação em todo webchat/webhook seria custo sem leitor. A leitura é FRESCA
     (`get_pool_config` não usa cache): a política é config editável na tela, e um snapshot
     velho aqui seria a segunda casa respondendo "o que o pool oferece?".
 
@@ -1092,7 +1097,7 @@ async def _routing_assigned_pool_field(
         channel = str((json.loads(raw) if raw else {}).get("channel") or "")
     except Exception as exc:
         logger.warning("routing.assigned: meta ilegivel session=%s — %s", session_id, exc)
-    if channel != "webrtc":
+    if channel not in _CHANNELS_WITH_ROOM:
         field["media_policy_source"] = "not_webrtc"
         return field
     cfg = await get_pool_config(http, tenant_id, pool_id) if pool_id else None

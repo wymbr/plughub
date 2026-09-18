@@ -37,6 +37,7 @@ from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
 from .adapters.webhook import ResumeAlreadyTerminalError, WebhookAdapter
 from .adapters.webrtc import WebRTCAdapter
+from .adapters.voice_router import VoiceChannelRouter
 from .adapters.whatsapp import WhatsAppAdapter
 from .arrival_evidence import ArrivalEvidenceRecorder
 from .resume_authority import judge_external_decision
@@ -293,7 +294,9 @@ async def lifespan(app: FastAPI):
         "whatsapp": _whatsapp_adapter,
         "sms":      _sms_adapter,
         "email":    _email_adapter,
-        "voice":    _voice_adapter,
+        # VOZ-02: `voice` tem duas pernas — a SIP (sessão do adapter WebRTC, a sala) e o legado
+        # Twilio. A saída vai para quem ABRIU a sessão; ver `adapters/voice_router.py`.
+        "voice":    VoiceChannelRouter(_webrtc_adapter, _voice_adapter),
         "webrtc":   _webrtc_adapter,
         "webhook":  _webhook_adapter,
     }
@@ -619,7 +622,7 @@ app = FastAPI(title="PlugHub Channel Gateway", lifespan=lifespan)
 # ── Import and mount upload routes ────────────────────────────────────────────
 # Deferred import so the router can reference module-level state set in lifespan.
 from .upload_router import router as upload_router  # noqa: E402  (post-app creation import)
-from plughub_tasks import supervisionar
+from plughub_tasks import disparar, supervisionar
 app.include_router(upload_router)
 
 
@@ -1034,6 +1037,46 @@ async def webrtc_token(
             },
         )
     return result
+
+
+# ── Eventos do SFU (VOZ-02) ───────────────────────────────────────────────────
+
+@app.post("/v1/livekit/webhook")
+async def livekit_webhook(request: Request) -> JSONResponse:
+    """Eventos da sala, vindos do SFU. É por aqui que uma chamada de TELEFONE vira contato: o serviço
+    SIP põe o chamador numa sala antes de existir sessão, e o gateway só sabe dela pelo
+    `participant_joined` (e só desliga quando o `participant_left` chega). O `room_started` alimenta
+    o controle compensatório do `auto_create` (`WebRTCAdapter.police_room`).
+
+    A credencial é a ASSINATURA do SFU (JWT com a chave de API, e o hash do corpo dentro dele) —
+    sem ela, 401: um evento forjado abriria contato em nome de um chamador que não existe. A rota
+    mora em `/v1` (interno); o SFU chega pela rede do compose.
+
+    Responde já e processa numa task: o SFU reenvia evento sem resposta rápida, e a abertura do
+    contato (registry, Redis, Kafka) não cabe no prazo dele."""
+    s = get_settings()
+    if not s.webrtc_livekit_api_key or not s.webrtc_livekit_api_secret:
+        raise HTTPException(status_code=503, detail="webhook do SFU sem chave para conferir — faltam "
+                                                    "PLUGHUB_WEBRTC_LIVEKIT_API_KEY/_SECRET")
+    corpo = (await request.body()).decode(errors="replace")
+    try:
+        from livekit import api as _lk
+        ev = _lk.WebhookReceiver(_lk.TokenVerifier(s.webrtc_livekit_api_key, s.webrtc_livekit_api_secret))             .receive(corpo, request.headers.get("authorization") or "")
+    except Exception as exc:
+        logger.warning("livekit webhook RECUSADO — assinatura ou corpo invalido: %s", exc)
+        raise HTTPException(status_code=401, detail="webhook do SFU exige assinatura valida")
+    if _webrtc_adapter is None:
+        logger.info("livekit webhook %s ignorado — canal webrtc desligado neste gateway", ev.event)
+        return JSONResponse({"ignored": "webrtc_disabled"})
+    sala = ev.room.name if ev.HasField("room") else ""
+    participante = None
+    if ev.HasField("participant"):
+        from livekit.protocol import models as _lkm
+        p = ev.participant
+        participante = {"identity": p.identity, "kind": _lkm.ParticipantInfo.Kind.Name(p.kind),
+                        "attributes": dict(p.attributes)}
+    disparar(_webrtc_adapter.on_livekit_event(ev.event, sala, participante), nome=f"livekit-{ev.event}")
+    return JSONResponse({"ok": True})
 
 
 # ── Verificação ativa da fala: a porta da TELA (VOZ-27) ──────────────────────

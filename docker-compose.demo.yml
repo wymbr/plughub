@@ -1396,8 +1396,12 @@ services:
   # Config inteira por env (`LIVEKIT_CONFIG` = `--config-body`), sem arquivo montado:
   # bind mount de arquivo único quebra o `docker restart` neste ambiente.
   #
-  # `room.auto_create: false` — a sala nasce pelo gateway (`create_room`), nunca pelo
-  # join. Um token assinado para nome de sala qualquer não cria sala.
+  # `room.auto_create: true` DESDE a VOZ-02 (2026-09-18, decisão do dono). Era `false` (VOZ-01):
+  # a sala nascia só pelo gateway, e um token assinado para nome qualquer não criava sala. O
+  # serviço SIP entra na sala por JOIN e não a cria — com `false`, 100% das chamadas levavam 486
+  # (medido), e o `MoveParticipant` que salvaria a regra responde "not implemented" no SFU aberto.
+  # A garantia virou REAÇÃO: o gateway apaga, no `room_started`, a sala `plughub-{sid}` que nasce
+  # sem sessão viva (`WebRTCAdapter.police_room`). Gate: `probe_webrtc_media_plane.sh` A3.
   #
   # ENDEREÇOS — duas populações de cliente, e o SFU atende as duas (VOZ-04, 2026-09-15).
   #   · de DENTRO da rede (bot de STT do gateway, probes): IP do container e `coturn`;
@@ -1444,11 +1448,93 @@ services:
               username: plughub
               credential: changeme_turn_credential_demo
         room:
-          auto_create: false
+          auto_create: true      # VOZ-02 — ver o comentário acima e `police_room`
         keys:
           plughub_demo_key: changeme_livekit_api_secret_demo_32chars
+        # VOZ-02 — o serviço SIP (`livekit-sip`) fala com o SFU por RPC sobre Redis: sem este bloco
+        # o SFU roda em nó único e a chamada SIP nunca chega a uma sala. Redis PRÓPRIO, não o da
+        # plataforma — o que o SFU grava ali é estado dele, e misturar os dois espaços de chave é
+        # o tipo de acoplamento que só aparece quando alguém dá FLUSHDB no errado.
+        redis:
+          address: livekit-redis:6379
+        # VOZ-02 — eventos da sala para o gateway. É assim que uma chamada SIP vira contato: a sala
+        # nasce do serviço SIP ANTES de existir sessão, e o gateway só sabe dela pelo
+        # `participant_joined`. Assinado com a chave abaixo; o gateway recusa corpo sem assinatura.
+        webhook:
+          api_key: plughub_demo_key
+          urls:
+            - http://channel-gateway:8010/v1/livekit/webhook
+    depends_on:
+      livekit-redis:
+        condition: service_healthy
     networks:
       - plughub-demo
+
+  livekit-redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - plughub-demo
+
+  # VOZ-02 (fatia 1) — a perna SIP: tronco → sala, pelo serviço SIP do próprio SFU. A chamada vira
+  # PARTICIPANTE (`kind=SIP`) de uma sala nova, com o prefixo da dispatch rule; o gateway adota a
+  # sala quando o webhook chega (`adapters/sip_leg.py`).
+  # ⚠️ NENHUMA porta publicada no host, DE PROPÓSITO: sinalização SIP não é HTTP e está fora da
+  # allowlist de borda (ADR adr-voice-media-plane V10). Até a borda SIP ser classificada e ter probe,
+  # só se liga para cá de DENTRO da rede do compose — é onde o cliente SIP do gate mora.
+  # Versão: anda independente do SFU (numeração própria); a do seed dos troncos é a da imagem do
+  # gateway (SDK `livekit-api`). Fixada por digest, como o `speaches`.
+  livekit-sip:
+    image: livekit/sip@sha256:9f24501954c1949f3888c32f56981d763b07c7ffc62ea5e15970ec649fd0b1b5   # v1.15.0 em 2026-09-18
+    environment:
+      SIP_CONFIG_BODY: |
+        api_key: plughub_demo_key
+        api_secret: changeme_livekit_api_secret_demo_32chars
+        ws_url: ws://livekit:7880
+        redis:
+          address: livekit-redis:6379
+        sip_port: 5060
+        rtp_port: 10000-10100
+        use_external_ip: false
+        logging:
+          level: info
+    depends_on:
+      livekit:
+        condition: service_started
+      livekit-redis:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: on-failure
+
+  # VOZ-02 — troncos de ENTRADA e dispatch rules, semeados de `infra/sip/*.json` pela API do SFU
+  # (seed-if-absent). A senha do tronco vem do env, nunca do arquivo.
+  sip-seed:
+    build:
+      context: .
+      dockerfile: packages/channel-gateway/Dockerfile
+    command: ["python", "/seed/seed_sip.py"]
+    volumes:
+      - ./infra/seed:/seed:ro
+      - ./infra/sip:/sip:ro
+    environment:
+      LIVEKIT_URL:             http://livekit:7880
+      LIVEKIT_API_KEY:         plughub_demo_key
+      LIVEKIT_API_SECRET:      changeme_livekit_api_secret_demo_32chars
+      SIP_DIR:                 /sip
+      SIP_TRUNK_PASSWORD_DEMO: changeme_sip_trunk_demo
+      SIP_SEED_RECONCILE:      ${SIP_SEED_RECONCILE:-}
+    depends_on:
+      livekit-sip:
+        condition: service_started
+    networks:
+      - plughub-demo
+    restart: "no"
 
   # TURN para atravessar NAT. `lt-cred-mech` com usuário estático: o LiveKit repassa
   # `turn_servers` aos clientes com usuário/credencial fixos, e não gera credencial
@@ -1535,6 +1621,9 @@ services:
         condition: service_healthy
     networks:
       - plughub-demo
+    # One-shot: sem isto o `up.sh` o classificava como long-running e lia o `exited (0)` de uma
+    # subida CORRETA como falha (medido em 2026-09-18, VOZ-02) — a classificação é derivada daqui.
+    restart: "no"
 
   channel-gateway:
     build:

@@ -26,8 +26,9 @@
 #      credencial (controle positivo) constroi. Sem o positivo, uma recusa incondicional
 #      passaria.
 #   D  SFU REAL — o provider da imagem cria sala e a le de volta; um participante entra
-#      SO POR RELAY e publica trilha, e o SFU o lista; token de segredo errado e sala nao
-#      criada sao RECUSADOS (o SFU verifica, nao e decoracao).
+#      SO POR RELAY e publica trilha, e o SFU o lista; token de segredo errado e RECUSADO
+#      (o SFU verifica, nao e decoracao); sala `plughub-{uuid}` sem sessao viva, criada no
+#      join, e APAGADA pelo gateway, e a sala com sessao fica (D4/D5, VOZ-02).
 #   E  TURN — alocacao com a credencial declarada funciona; com credencial errada, falha.
 #   F  ROTA — `/webrtc/token/{sid}` ao vivo: 401 sem Bearer e com assinatura invalida,
 #      403 sem capacidade / fora do pool / supervisor sem `monitorar`, 404 outro tenant,
@@ -112,7 +113,14 @@ cmd = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
 m = re.search(r"--user=([^:\s]+):(\S+)", cmd)
 r(bool(turn_cred and turn_user and m) and (turn_user.group(1), turn_cred.group(1)) == (m.group(1), m.group(2)),
   "A3 credencial TURN do SFU CASA com o `--user` do coturn")
-r("auto_create: false" in lkcfg, "A3 `room.auto_create: false` (sala nasce pelo gateway, nao pelo join)")
+# VOZ-02 (decisao do dono, 2026-09-18): o servico SIP do SFU entra na sala por JOIN, e com
+# `auto_create: false` 100% das chamadas levavam 486. A criacao no join foi LIGADA, e a garantia
+# que a VOZ-01 tinha por prevencao virou REACAO: o SFU avisa o gateway (`room_started`) e o gateway
+# apaga sala `plughub-{uuid}` sem sessao viva. Sem o webhook apontando para o gateway, `true` seria
+# sala aberta por qualquer token — por isso os dois fatos sao julgados JUNTOS; D4/D5 medem o efeito.
+r(re.search(r"^\s*auto_create:\s*true\s*(#.*)?$", lkcfg, re.M) is not None
+  and re.search(r"^\s*-\s*http://channel-gateway:\d+/v1/livekit/webhook\s*$", lkcfg, re.M) is not None,
+  "A3 `room.auto_create: true` COM o webhook do SFU apontando para o gateway (controle compensatorio)")
 
 # A5 — ALCANCE DO BROWSER NO HOST (VOZ-04, item 4). Medido num browser de verdade no Windows
 # em 2026-09-15: sem isto o SFU so anunciava o IP do container e o IP publico do STUN, e o
@@ -260,8 +268,18 @@ else
     esac
   done <<< "$EX_OUT
 $MUT_OUT"
-  # 4 (D) + 10 (F) + LIMPEZA + M1 = 16 linhas; menos que isso e exercicio que morreu no meio.
-  [ "$N" -ge 16 ] || falha "exercicio emitiu $N de 16 veredictos — morreu no meio (rode $EX a mao)"
+  # D4 no LADO DO GATEWAY: a sala sumir pode ser `auto_create` desligado ou o SFU recusando por
+  # outro motivo — so a linha do proprio `police_room`, nomeando A sala, prova que foi a reacao.
+  GHOST=$(printf '%s\n' "$EX_OUT" | sed -n 's/^GHOST //p' | head -1)
+  if [ -z "$GHOST" ]; then
+    falha "D4g o exercicio nao nomeou a sala sem sessao — o D4 nao rodou"
+  elif [ "$(docker logs --since 10m "$GW" 2>&1 | grep -c "sala $GHOST nasceu SEM sessao viva")" -ge 1 ]; then
+    ok "D4g o gateway apagou $GHOST e disse por que (police_room)"
+  else
+    falha "D4g nenhuma linha do police_room para $GHOST no gateway — a sala sumiu por outro motivo"
+  fi
+  # 5 (D) + 10 (F) + LIMPEZA + M1 = 17 linhas; menos que isso e exercicio que morreu no meio.
+  [ "$N" -ge 17 ] || falha "exercicio emitiu $N de 17 veredictos — morreu no meio (rode $EX a mao)"
 fi
 
 # ── E ────────────────────────────────────────────────────────────────────────

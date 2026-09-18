@@ -18,7 +18,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Loader2 } from "lucide-react";
 
-import { useWebRTCSession } from "../hooks/useWebRTCSession";
+import { hasMediaRoom, useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
 import { RemoteAudio }      from "./RemoteAudio";
 import { MediaControls }    from "./MediaControls";
@@ -106,7 +106,7 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
     return `${m}:${s}`;
   };
 
-  if (channel !== "webrtc") return null;
+  if (!hasMediaRoom(channel)) return null;
 
   // ── Loading ──────────────────────────────────────────────────────────────
   // VOZ-04: "conectando" e "erro" vêm ANTES do teto. Enquanto o token não chega os tetos

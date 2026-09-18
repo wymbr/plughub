@@ -1,0 +1,16 @@
+{
+  "seed_id": "demo_inbound",
+  "description": "Tronco de ENTRADA do demo (VOZ-02, fatia 1). Aceita INVITE para o numero abaixo, com autenticacao digest — a senha vem do env do job (`SIP_TRUNK_PASSWORD_DEMO`), nunca deste arquivo. A porta SIP NAO e publicada no host: o chamador e o cliente SIP de teste dentro da rede do compose, ate a borda SIP ser classificada (V10).",
+  "trunk": {
+    "name": "plughub-demo-inbound",
+    "numbers": ["+551140000000"],
+    "auth_username": "plughub_demo",
+    "auth_password_env": "SIP_TRUNK_PASSWORD_DEMO",
+    "ringing_timeout_s": 60,
+    "max_call_duration_s": 3600
+  },
+  "dispatch_rule": {
+    "name": "plughub-demo-dispatch",
+    "kind": "individual"
+  }
+}

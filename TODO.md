@@ -41,6 +41,31 @@ variam de instalação para instalação e ao longo do tempo.
 `VOZ-12` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (12)): `file_upload` saiu da tabela do WebRTC — declarado sem implementação. Implementar virou `VOZ-28`, com gatilho de demanda.
 `VOZ-17` ✅ 2026-09-17 (`CHANGELOG.md` § 2026-09-17 (13)): modelo, língua e voz deixaram o env — camada do tenant no namespace `webrtc`, e a gravação passou a perguntar ao serviço o que ele TEM (`/v1/models`, nunca `/v1/registry`). Serviço fora recusa, por decisão: config não conferida é indistinguível da conferida na leitura seguinte. Ficaram `VOZ-29` (porta crua do config-api) e `VOZ-30` (canal `voice`).
 
+## VOZ-02 — perna SIP: o conversor, a criação de sala e o codec *(medido e decidido 2026-09-18)*
+
+**Conversor (dono): o serviço SIP do próprio SFU** (`livekit/sip`), não Asterisk/FreeSWITCH. Motivo: o
+chamador vira PARTICIPANTE da sala que o resto do arco já usa (ADR V3), sem segundo modelo de conferência e
+sem ponte de mídia nossa. Canal: **`voice`** (ADR V2). Fatia 1: entrante, com fala.
+
+**Três medições que mudaram o desenho.**
+1. **`auto_create: false` → 486 em 100% das chamadas.** O conversor entra por JOIN (`/rtc/validate`); não
+   cria sala. Tentado e descartado: `room_config` na regra de despacho (não cria), `MoveParticipant` para uma
+   sala criada pelo gateway (*not implemented* no SFU OSS). **Decisão do dono: ligar `auto_create` +
+   controle compensatório** (`police_room`: no `room_started`, sala `plughub-{uuid}` sem
+   `channel:webrtc:{sid}:room_name` é apagada). A chave passou a ser gravada ANTES do `create_room` — senão
+   o próprio gateway teria a sala apagada na corrida. Alternativa recusada: um segundo SFU só para SIP (duas
+   topologias de mídia, contra a V1).
+2. **Atender = alguém assinar áudio.** O 200 OK só sai quando o participante SIP assina trilha remota; até
+   lá o telefone chama. Com IA é imediato; com humano, é a VOZ-35.
+3. **Transcodifica.** Trilha do chamador `audio/opus` na sala, PCMU no SIP. A §8 do ADR supunha relay.
+
+**Endereço = número DISCADO**, por `ChannelEndpoint` `voice`. Número sem endpoint é recusado, e o motivo vai
+ao log — nunca há pool default (a mesma regra do *fallback de endereço recusa alto*).
+
+**Provedor por REGISTRO não serve.** O conversor recebe por tronco (IP ou digest do INVITE); planos que
+entregam a chamada a um ramal registrado (ex.: "controle" de VoIP) precisam de um PBX no meio. Tronco é o
+que contratar quando a VOZ-32 disparar.
+
 ## VOZ-19 — ruído que vira fala, e o limiar de confiança *(medido 2026-09-17)*
 
 **Pergunta.** O que impede ruído de responder um menu por voz — o `no_speech_prob` (0,0 sempre, VOZ-18),

@@ -35,7 +35,7 @@ O canal WebRTC eleva o PlugHub de uma plataforma de mensageria para uma **plataf
 
 | Canal | Transporte | Uso típico | Infraestrutura de mídia |
 |---|---|---|---|
-| `voice` | PSTN via Twilio trunk | Clientes externos, URA, discagem ativa | Twilio conference bridge |
+| `voice` | Tronco SIP → serviço SIP do SFU (VOZ-02, §19) · legado: Twilio TwiML | Clientes no telefone, URA | **a mesma sala LiveKit** (SIP) · Twilio conference bridge (legado) |
 | `webrtc` | Browser-to-SFU | Clientes na webapp/widget, atendimento enriquecido | LiveKit SFU |
 
 Agentes podem ter ambos em `channel_types` e atender os dois em paralelo. Pools podem ser configurados com qualquer combinação.
@@ -522,7 +522,13 @@ channel:webrtc:{session_id}:customer_psid    → LiveKit participant SID (custom
 channel:webrtc:{session_id}:agent_psid       → LiveKit participant SID (agent)
 channel:webrtc:{session_id}:egress:{seg_id}  → LiveKit egress ID (TTL 24h)
 channel:webrtc:{call_sid}:session            → session_id (para correlação)
+channel:sip:room:{room}                      → session_id ("abrindo" enquanto nasce) — idempotência do
+                                               webhook `participant_joined` da chamada SIP (VOZ-02)
 ```
+
+⚠️ **`channel:webrtc:{sid}:room_name` é gravada ANTES do `create_room` e apagada no fechamento**
+(VOZ-02): é a testemunha que o controle compensatório do `auto_create` lê — sala `plughub-{uuid}`
+que nasce sem ela é apagada (§19).
 
 TTL padrão: session_ttl_seconds (24h).
 
@@ -856,9 +862,67 @@ webrtc_stt_enabled:         bool = True
 ## 18. Invariantes
 
 - **Channel Gateway é o único emissor de tokens LiveKit** — nunca emitir no browser, nunca expor `LIVEKIT_API_SECRET`.
-- **Uma room LiveKit por sessão PlugHub** — nome sempre `plughub-{session_id}`.
+- **Uma room LiveKit por sessão PlugHub** — `plughub-{session_id}` quando a sessão cria a sala; a da chamada SIP nasce no serviço SIP (`plughub-sip-…`) e é **adotada** como a da sessão (`_room_of`). Um nome por sessão, nunca duas salas.
+- **Sala `plughub-{uuid}` sem sessão viva não sobrevive** — `auto_create` está ligado desde a VOZ-02, e o gateway a apaga no `room_started` (§19).
 - **Egress apenas quando pool.webrtc_recording=true** — nunca gravar sem configuração explícita.
 - **LGPD notice obrigatório antes de iniciar egress** — mesmo guard do canal voice.
 - **Supervisor sempre hidden=true** — nunca revelar presença ao cliente.
 - **medium=text é o fallback universal** — toda sessão WebRTC deve funcionar sem media tracks.
 - **Re-negociação nunca reinicia a sessão** — a LiveKit room persiste, apenas tracks são ajustados.
+
+---
+
+## 19. Perna SIP — chamada telefônica entrante (VOZ-02, 2026-09-18)
+
+Primeira fatia da V-F5 do [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md): o cliente
+no **telefone** chega à mesma sala, ao mesmo bot leg e ao mesmo agente que o cliente no browser.
+O canal é **`voice`** (ADR V2), não `webrtc` — o canal diz onde o cliente está.
+
+```
+tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala plughub-sip-_<ani>_<rand>
+                                                         │ webhook assinado (room_started,
+                                                         │ participant_joined/left, room_finished)
+                                                         ▼
+                              channel-gateway  POST /v1/livekit/webhook
+                                 └─ _sip_arrived: DNIS → ChannelEndpoint `voice` → pool
+                                    _open_session(canal=voice) → routing → bot leg na sala
+```
+
+| Peça | Onde |
+|---|---|
+| Conversor SIP ↔ sala | serviço `livekit-sip` (imagem por digest) + `livekit-redis` (psrpc) no compose demo |
+| Tronco e regra de despacho | `infra/sip/*.json`, semeados pelo job `sip-seed` (`infra/seed/seed_sip.py`, seed-if-absent; `SIP_SEED_RECONCILE=true` recria); senha só por env |
+| Leitura do participante SIP | `adapters/sip_leg.py` (`parse_sip_participant`: kind SIP, `sip.trunkPhoneNumber` = DNIS, `sip.phoneNumber` = ANI) |
+| Nascimento, desligar, recusa | `adapters/webrtc.py`: `on_livekit_event` · `_sip_arrived` · `_sip_hangup` · `_sip_platform_close` · `_sip_refuse` |
+| Saída de fala | `adapters/voice_router.py` — o canal `voice` tem dois donos; a sessão SIP vai ao adapter WebRTC, o resto ao Twilio |
+| Política de mídia | `voice` passa a EXIGIR `media_policy` no pool (registry) e o bridge a leva no `routing.assigned` |
+
+**Regras que a fatia fixou:**
+
+- **O número DISCADO é o endereço** — `ChannelEndpoint` `voice` com o DNIS em E.164. **Sem
+  endpoint, a chamada é RECUSADA** (sala apagada → 486) e o motivo vai ao log nomeando o número;
+  nunca há pool default. Registro inalcançável também recusa.
+- **Idempotência do nascimento** por `SET NX channel:sip:room:{room}` — o webhook pode repetir.
+- **Número oculto** vira contato `sip:{callID}`; nunca um ANI inventado.
+- **Desligar pelos dois lados.** O chamador sai (`participant_left` da identidade SIP ou
+  `room_finished`) → `customer_hangup`. A plataforma encerra → a despedida é falada (teto 10 s),
+  depois `agent_done` e a sala é apagada — o que manda BYE ao telefone. Um `contact_closed` só.
+- **Texto no telefone:** fala de `agent_ai` é sintetizada; texto de outra origem é logado como
+  *NÃO entregue* (não há tela). Menu sem coleta tem o prompt falado; com coleta, segue a coleta por
+  voz/DTMF do bot leg (§ Fase C e VOZ-08/VOZ-19).
+- **Controle compensatório do `auto_create`.** O serviço SIP entra por JOIN e não cria sala; com
+  `auto_create: false` toda chamada levava 486. Ligado por decisão do dono, com a garantia movida
+  para REAÇÃO: `police_room` apaga, no `room_started`, sala `plughub-{uuid}` sem
+  `channel:webrtc:{sid}:room_name`. Salas com prefixo SIP e salas fora do prefixo não são policiadas.
+- **A chamada só é atendida quando o participante SIP assina áudio** — com pool humano, o telefone
+  toca até o atendente publicar microfone (fila inclusa). Ficha própria no `pending.md`.
+- **O conversor transcodifica** G.711 ↔ Opus (medido: trilha `audio/opus`, PCMU no SIP). O ADR §8
+  foi corrigido.
+
+**Gates:** `infra/test/probe_voz02_sip_inbound.sh` (chamada real, com um cliente SIP de teste em
+G.711 + digest — `_sip_ua.py`) e `probe_webrtc_media_plane.sh` A3/D4/D4g/D5 (o controle
+compensatório, com controle positivo). Testes: `tests/test_sip_leg.py`.
+
+**Fora da fatia:** porta SIP publicada e classificação da borda (V10), TLS/SRTP, `REFER` e chamada
+sainte, DTMF RFC 4733 validado de ponta a ponta, tela para tronco e regra de despacho, e provedor
+por **registro** (o conversor recebe por tronco, não se registra). Fichas `VOZ-31..` no `pending.md`.

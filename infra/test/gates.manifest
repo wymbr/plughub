@@ -392,6 +392,12 @@ probe_webrtc_channel_endpoint.sh
 # comportamento (m4 junta); F3 a telemetria grava o perfil; C1-C3 controle pelo pool direto (tenant,
 # separa, NULL); M1 o modelo do perfil chega ao speaches. Perfil e endpoint criados e apagados.
 probe_webrtc_speech_profile.sh
+# VOZ-02 (2026-09-18): chamada TELEFONICA pelo tronco SIP (servico SIP do SFU) vira contato `voice`.
+# O telefone e um cliente SIP de teste (G.711 + digest), sem provedor. S1 atendida; S2 contato voice
+# do ANI no pool do DNIS; S3 o chamador ouve a IA; S4 a fala dele chega ao menu (sip-m0=atendente);
+# S5/S6 a plataforma encerra e o telefone recebe BYE; H1 o chamador desliga = customer_hangup;
+# R1 numero sem endpoint e RECUSADO e nomeado. ~3 chamadas; endpoint criado e apagado.
+probe_voz02_sip_inbound.sh
 # VOZ-23 (2026-09-17): a verificacao ativa do caminho de fala roda pelo caminho real e acusa regressao.
 # K0 fixtures e tenant limpo; A1 rota sem credencial 401 e perfil inexistente 422; D1 disparo pelo pool
 # webhook (tool MCP) termina completed; R1/R2 linha no ClickHouse com perfil aplicado e nenhum endpoint

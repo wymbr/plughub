@@ -35,10 +35,15 @@ logger = logging.getLogger("plughub.channel-gateway.webrtc.room_client")
 CUSTOMER_IDENTITY_PREFIX = "customer-"
 # Identidade do atendente HUMANO na sala: `agent-{sub}` (`WebRTCAdapter.get_token`, role=agent).
 AGENT_IDENTITY_PREFIX = "agent-"
+# Identidade do chamador de TELEFONE na sala: `sip_{número}`, dada pelo serviço SIP do SFU, que
+# não pergunta ao gateway como nomear (VOZ-02). É o CLIENTE tanto quanto o `customer-` do browser —
+# só chegou por outro caminho —, e por isso as perguntas "é o cliente?" usam os DOIS prefixos.
+SIP_IDENTITY_PREFIX = "sip_"
+CUSTOMER_PREFIXES = (CUSTOMER_IDENTITY_PREFIX, SIP_IDENTITY_PREFIX)
 # Quem o OUVINTE transcreve (VOZ-05 fatia 4): o cliente e os atendentes humanos — cada um no seu
 # canal. Fica de fora a VOZ do agente de IA (`voz-…`: o texto já é a mensagem) e o supervisor
 # (`supervisor-…`: escuta, não participa da conversa com o cliente).
-TRANSCRIBED_PREFIXES = (CUSTOMER_IDENTITY_PREFIX, AGENT_IDENTITY_PREFIX)
+TRANSCRIBED_PREFIXES = (*CUSTOMER_PREFIXES, AGENT_IDENTITY_PREFIX)
 
 
 # ── Audio helpers ──────────────────────────────────────────────────────────────
@@ -400,7 +405,7 @@ class LiveKitRoomClient:
     def customer_present(self) -> bool:
         if self._room is None or not self._connected:
             return False
-        return any((getattr(p, "identity", "") or "").startswith(CUSTOMER_IDENTITY_PREFIX)
+        return any((getattr(p, "identity", "") or "").startswith(CUSTOMER_PREFIXES)
                    for p in self._room.remote_participants.values())
 
     def interrupt_audio(self) -> None:

@@ -15,7 +15,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, EyeOff } from "lucide-react";
 
-import { useWebRTCSession } from "../hooks/useWebRTCSession";
+import { hasMediaRoom, useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
 import { RemoteAudio }      from "./RemoteAudio";
 
@@ -47,7 +47,7 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
   // ⚠️ O papel "supervisor" é o que dá token OCULTO e sem publicação. Até a VOZ-09 esta
   // visão pedia `role=agent` (o hook não recebia papel) e entraria na sala publicando.
 
-  if (channel !== "webrtc") return null;
+  if (!hasMediaRoom(channel)) return null;
   if (view === "none")       return null;
 
   if (connecting) {

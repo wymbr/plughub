@@ -130,9 +130,11 @@ from .webrtc_provider import (
 )
 from . import media_policy
 from .webchat import menu_result_history_text
+from .sip_leg import SipCall, is_sip_room, parse_sip_participant
 from .webrtc_room_client import (
     AGENT_IDENTITY_PREFIX,
     CUSTOMER_IDENTITY_PREFIX,
+    CUSTOMER_PREFIXES,
     IWebRTCRoomClient,
     LiveKitRoomClient,
     mp3_to_pcm,
@@ -180,6 +182,8 @@ _SPEECH_WAIT_ROOM_S = 15.0
 # Causa de "sem voz" que NÃO é degradação: a chamada não tem agente de IA de áudio.
 _NO_AI_AUDIO_ATTENDANT = "nenhum agente de IA de audio atende a chamada"
 _SENTENCE_MIN_CHARS = 25
+# VOZ-02: quanto a despedida da plataforma pode tocar antes de a chamada telefônica ser derrubada.
+_SIP_FAREWELL_MAX_S = 10.0
 
 # ── Coleta por teclado e fala (VOZ-05, fatia 5b) ──────────────────────────────
 #
@@ -389,6 +393,13 @@ class WebRTCAdapter(ChannelAdapter):
         self._speech_resolved: dict[str, asyncio.Task] = {}
         self._screen_invalids: dict[str, dict[str, int]]         = {}
 
+        # VOZ-02: sessões cuja chamada entrou por TELEFONE (perna SIP). Não têm WebSocket: a sala
+        # nasceu do serviço SIP ANTES da sessão e foi ADOTADA; o que o socket fazia por sessão
+        # (vigiar o stream, manter a sessão viva, desligar) roda em tasks próprias.
+        self._sip:         dict[str, SipCall]           = {}
+        self._sip_by_room: dict[str, str]               = {}
+        self._sip_tasks:   dict[str, list[asyncio.Task]] = {}
+
     # ── Provider factories ────────────────────────────────────────────────────
 
     def _build_provider(self) -> IWebRTCProvider:
@@ -549,6 +560,21 @@ class WebRTCAdapter(ChannelAdapter):
         FALADA na sala quando o bot leg converte (VOZ-05 fatia 3) — ver `_speak`.
         """
         session_id = payload.get("session_id", "")
+        if session_id in self._sip:
+            # VOZ-02: telefone não tem tela. O que o agente de IA escreve é FALADO; o resto (texto
+            # digitado pelo humano, aviso de sistema) não tem como chegar — e é dito, porque um
+            # atendente digitando para um chamador que não lê é exatamente o silêncio que ninguém
+            # veria.
+            texto = payload.get("content", {}).get("text", "") or payload.get("text", "")
+            autor = payload.get("author", {}).get("type", "agent")
+            if texto and autor == "agent_ai":
+                self._speak(session_id, texto)
+            elif texto:
+                logger.warning(
+                    "webrtc sip: texto de %s NAO entregue — a chamada e telefonica e so ouve a fala "
+                    "do agente de IA (session=%s)", autor, session_id,
+                )
+            return
         ws = self._connections.get(session_id)
         if not ws:
             logger.debug(
@@ -610,6 +636,15 @@ class WebRTCAdapter(ChannelAdapter):
             self._menu_masked.setdefault(session_id, {})[menu_id] = masked
             # a fala em curso quando o menu chega ainda não tem `menu:waiting` no Redis
             self._masked_grace_until[session_id] = time.monotonic() + _MASKED_SPEECH_GRACE_S
+        if session_id in self._sip:
+            # VOZ-02: sem tela, o menu é o que se OUVE — coleta por fala/teclado quando o menu a
+            # declara, senão o prompt falado (a resposta chega como fala transcrita do cliente).
+            plan = self._plan_collect(session_id, payload, masked)
+            if plan is not None:
+                self._start_collect(session_id, plan)
+            elif payload.get("prompt"):
+                self._speak(session_id, payload["prompt"])
+            return
         ws = self._connections.get(session_id)
         if not ws:
             logger.warning(
@@ -668,6 +703,9 @@ class WebRTCAdapter(ChannelAdapter):
         Called by OutboundConsumer for msg_type="session.closed".
         """
         session_id = payload.get("session_id", "")
+        if session_id in self._sip:
+            await self._sip_platform_close(session_id, payload)
+            return
         ws = self._connections.get(session_id)
         if not ws:
             logger.debug(
@@ -868,6 +906,31 @@ class WebRTCAdapter(ChannelAdapter):
         # fala que o endpoint aponta (VOZ-25)
         resolved_pool, speech_profile_id = await self._resolve_pool(pool_id, contact_id)
 
+        session_id, participant_id = await self._open_session(
+            contact_id, "webrtc", resolved_pool, speech_profile_id,
+        )
+
+        # Confirm authentication to client
+        await self._ws_send(ws, {
+            "type":           "conn.authenticated",
+            "session_id":     session_id,
+            "participant_id": participant_id,
+        })
+
+        logger.info(
+            "webrtc auth ok: contact=%s session=%s pool=%s",
+            contact_id, session_id, resolved_pool,
+        )
+        return session_id, contact_id, participant_id
+
+    async def _open_session(
+        self, contact_id: str, channel: str, resolved_pool: str, speech_profile_id: str | None,
+    ) -> tuple[str, str]:
+        """Abre o contato: chaves da sessão no Redis, abertura em `conversations.events` e pedido
+        de roteamento. UMA casa para as duas portas de entrada — o widget (`webrtc`) e o telefone
+        (`voice`, VOZ-02) —, porque para o bridge um contato é o mesmo fato venha de onde vier.
+        Devolve `(session_id, participant_id)`."""
+        s = self._settings
         # Assign session ID and participant ID
         session_id     = str(uuid.uuid4())
         participant_id = str(uuid.uuid4())
@@ -889,7 +952,7 @@ class WebRTCAdapter(ChannelAdapter):
                 "session_id":             session_id,
                 "tenant_id":              s.tenant_id,
                 "customer_id":            contact_id,
-                "channel":                "webrtc",
+                "channel":                channel,
                 "pool_id":                resolved_pool,
                 "started_at":             started_at,
                 "customer_participant_id": participant_id,
@@ -904,7 +967,7 @@ class WebRTCAdapter(ChannelAdapter):
         await self._touch_ws_alive(session_id)
         self._sessions[session_id] = {
             "contact_id": contact_id, "pool_id": resolved_pool, "started_at": started_at,
-            "speech_profile_id": speech_profile_id,
+            "speech_profile_id": speech_profile_id, "channel": channel,
         }
 
         # O contrato é o do webchat (`contact_lifecycle`): abertura em `conversations.events`,
@@ -913,31 +976,19 @@ class WebRTCAdapter(ChannelAdapter):
             contact_id = contact_id,
             session_id = session_id,
             tenant_id  = s.tenant_id,
-            channel    = "webrtc",
+            channel    = channel,
             started_at = started_at,
         ).model_dump())
         await self._publish_inbound(contact_lifecycle.routing_request(
             session_id              = session_id,
             tenant_id               = s.tenant_id,
             customer_id             = contact_id,
-            channel                 = "webrtc",
+            channel                 = channel,
             pool_id                 = resolved_pool,
             started_at              = started_at,
             customer_participant_id = participant_id,
         ))
-
-        # Confirm authentication to client
-        await self._ws_send(ws, {
-            "type":           "conn.authenticated",
-            "session_id":     session_id,
-            "participant_id": participant_id,
-        })
-
-        logger.info(
-            "webrtc auth ok: contact=%s session=%s pool=%s",
-            contact_id, session_id, resolved_pool,
-        )
-        return session_id, contact_id, participant_id
+        return session_id, participant_id
 
     # ── Stream watcher — routing.assigned → webrtc.ready ─────────────────────
 
@@ -1068,6 +1119,9 @@ class WebRTCAdapter(ChannelAdapter):
         )
 
     async def _customer_identity(self, session_id: str) -> str:
+        call = self._sip.get(session_id)
+        if call is not None:
+            return call.identity   # VOZ-02: quem o serviço SIP nomeou, não o que o gateway escolheria
         contact_id = await self._redis.get(f"session:{session_id}:contact_id") or session_id
         return f"{CUSTOMER_IDENTITY_PREFIX}{contact_id}"   # o bot leg assina SÓ esta identidade
 
@@ -1143,7 +1197,25 @@ class WebRTCAdapter(ChannelAdapter):
         run_voice = self._decide_voice(session_id, state)
         self._customer_media[session_id] = publish
 
-        room_name = build_room_name(session_id)
+        room_name = self._room_of(session_id)
+        # A chave da sala ANTES de criá-la (VOZ-02). Com `auto_create` ligado, o gateway apaga a
+        # sala `plughub-{sid}` que nasce SEM esta chave (`police_room`); gravar depois abriria a
+        # corrida em que a sala legítima é apagada pelo próprio controle.
+        ttl = s.session_ttl_seconds
+        await self._redis.setex(f"channel:webrtc:{session_id}:room_name", ttl, room_name)
+        if session_id in self._sip:
+            # A sala da chamada telefônica JÁ existe (nasceu do serviço SIP) e o chamador já está
+            # nela: não há sala a criar nem token a mandar — só o bot leg a pôr para dentro.
+            await self._save_media_state(session_id, state)
+            logger.info("webrtc sip: atendimento na sala da chamada session=%s room=%s atendente=%s",
+                        session_id, room_name, instance_id)
+            if self._bot_leg_should_run(state, publish):
+                disparar(self._start_stt_pipeline(session_id, room_name),
+                         nome=f"webrtc-stt-start-{session_id[:8]}")
+            if run_voice:
+                disparar(self._start_voice(session_id, room_name),
+                         nome=f"webrtc-voz-start-{session_id[:8]}")
+            return
         try:
             await self._provider.create_room(room_name)
         except Exception as exc:
@@ -1155,8 +1227,6 @@ class WebRTCAdapter(ChannelAdapter):
         identity = await self._customer_identity(session_id)
         token = self._provider.generate_token(self._customer_grants(room_name, identity, publish))
 
-        ttl = s.session_ttl_seconds
-        await self._redis.setex(f"channel:webrtc:{session_id}:room_name", ttl, room_name)
         await self._save_media_state(session_id, state)
 
         await self._ws_send(ws, {
@@ -1241,14 +1311,14 @@ class WebRTCAdapter(ChannelAdapter):
         run_bot = self._bot_leg_should_run(state, publish)
         if run_bot and session_id not in self._room_clients:
             disparar(
-                self._start_stt_pipeline(session_id, build_room_name(session_id)),
+                self._start_stt_pipeline(session_id, self._room_of(session_id)),
                 nome=f"webrtc-stt-start-{session_id[:8]}",
             )
         elif not run_bot and session_id in self._room_clients:
             await self._stop_listener(session_id)
         if run_voice and session_id not in self._voice_clients:
             disparar(
-                self._start_voice(session_id, build_room_name(session_id)),
+                self._start_voice(session_id, self._room_of(session_id)),
                 nome=f"webrtc-voz-start-{session_id[:8]}",
             )
         elif not run_voice and session_id in self._voice_clients:
@@ -1265,7 +1335,14 @@ class WebRTCAdapter(ChannelAdapter):
         self._customer_media[session_id] = publish
         await self._save_media_state(session_id, state)
 
-        room_name = build_room_name(session_id)
+        if session_id in self._sip:
+            # O chamador de telefone publica ÁUDIO porque o canal é esse; não há permissão de fonte
+            # a recortar no SFU nem token a reemitir (VOZ-02). O teto vale para o bot leg, acima.
+            logger.info("webrtc media: teto %s -> %s (%s) session=%s — chamada telefonica, nada a "
+                        "aplicar no SFU", previous, new_list, reason, session_id)
+            return
+
+        room_name = self._room_of(session_id)
         identity  = await self._customer_identity(session_id)
         try:
             in_room = await self._provider.update_participant_permission(
@@ -1509,6 +1586,179 @@ class WebRTCAdapter(ChannelAdapter):
             "policy_sources":   media_policy.policy_sources(state["attendants"]),
         }
 
+    # ── Perna SIP (VOZ-02) ────────────────────────────────────────────────────
+    #
+    # A chamada de telefone entra pelo serviço SIP do SFU, que põe o chamador numa sala NOVA antes
+    # de existir sessão. O SFU avisa por webhook (`/v1/livekit/webhook`, assinado); daqui em diante
+    # a sessão ADOTA a sala e a mídia é a mesma da chamada de browser.
+
+    def is_sip_session(self, session_id: str) -> bool:
+        """A sessão é uma chamada telefônica deste gateway (e a saída do canal `voice` é daqui)."""
+        return session_id in self._sip
+
+    def _room_of(self, session_id: str) -> str:
+        """A sala da sessão: a que o serviço SIP criou, ou `plughub-{sid}` para o browser."""
+        call = self._sip.get(session_id)
+        return call.room if call is not None else build_room_name(session_id)
+
+    async def on_livekit_event(self, event: str, room: str, participant: dict | None) -> None:
+        """Um evento da sala, já com a assinatura conferida pela rota."""
+        if event == "room_started":
+            await self.police_room(room)
+        elif event == "participant_joined" and participant:
+            call = parse_sip_participant(room, participant)
+            if call is not None:
+                await self._sip_arrived(call)
+        elif event == "participant_left" and participant:
+            sid = self._sip_by_room.get(room)
+            if sid and self._sip[sid].identity == participant.get("identity"):
+                await self._sip_hangup(sid, "o chamador desligou")
+        elif event == "room_finished":
+            sid = self._sip_by_room.get(room)
+            if sid:
+                await self._sip_hangup(sid, "a sala da chamada terminou")
+
+    async def police_room(self, room: str) -> bool:
+        """CONTROLE COMPENSATÓRIO do `auto_create` (VOZ-02, decisão do dono em 2026-09-18).
+
+        A VOZ-01 fixou `room.auto_create: false` para que um token assinado para um nome qualquer não
+        criasse sala. O serviço SIP do SFU entra na sala por JOIN e não a cria — com `false`, 100% das
+        chamadas levavam 486 (medido) —, então a criação no join foi ligada, e a garantia passou de
+        prevenção para REAÇÃO: sala `plughub-{uuid}` que nasce sem a chave da sessão viva
+        (`channel:webrtc:{sid}:room_name`, gravada ANTES do `create_room` e apagada no fechamento) é
+        apagada na hora. O recorte é o espaço de nomes que os tokens do gateway alcançam: a sala do
+        telefone (prefixo SIP) nasce legitimamente sem sessão, e sala fora do prefixo não é deste
+        gateway. Devolve True quando apagou."""
+        prefixo = build_room_name("")
+        if not room.startswith(prefixo) or is_sip_room(room):
+            return False
+        sid = room[len(prefixo):]
+        try:
+            uuid.UUID(sid)
+        except ValueError:
+            return False
+        if await self._redis.exists(f"channel:webrtc:{sid}:room_name"):
+            return False
+        if self._provider is None:
+            logger.error("webrtc: sala %s nasceu SEM sessao viva e NAO pode ser apagada — %s",
+                         room, self._provider_unavailable)
+            return False
+        try:
+            await self._provider.delete_room(room)
+        except Exception as exc:
+            logger.error("webrtc: sala %s nasceu SEM sessao viva e a remocao FALHOU: %s", room, exc)
+            return False
+        logger.error(
+            "webrtc: sala %s nasceu SEM sessao viva (criada no join, `auto_create`) — APAGADA. Um token "
+            "de sessao encerrada ou forjado tentou abri-la", room,
+        )
+        return True
+
+    async def _sip_arrived(self, call: SipCall) -> None:
+        """O chamador entrou na sala: nasce o contato `voice`, endereçado pelo número DISCADO."""
+        s = self._settings
+        ttl = s.session_ttl_seconds
+        # O webhook pode chegar repetido; a SALA é a identidade da chamada.
+        if not await self._redis.set(f"channel:sip:room:{call.room}", "abrindo", nx=True, ex=ttl):
+            logger.info("webrtc sip: participant_joined repetido para %s — ignorado", call.room)
+            return
+        if not call.dnis:
+            await self._sip_refuse(call, "a chamada nao traz o numero discado (sip.trunkPhoneNumber)")
+            return
+        pool, perfil, motivo = await self._resolve_voice_endpoint(call.dnis)
+        if not pool:
+            await self._sip_refuse(call, motivo)
+            return
+        # Número escondido pela dispatch rule não vira um número inventado: o contato fica com o
+        # id da chamada, que diz o que é.
+        contact_id = call.ani or f"sip:{call.call_id or call.room}"
+        session_id, _ = await self._open_session(contact_id, "voice", pool, perfil)
+        self._sip[session_id] = call
+        self._sip_by_room[call.room] = session_id
+        await self._redis.set(f"channel:sip:room:{call.room}", session_id, ex=ttl)
+        self._sip_tasks[session_id] = [
+            disparar(self._stream_watcher(None, session_id, pool), nome=f"sip-stream-{session_id[:8]}"),
+            disparar(self._keepalive(session_id), nome=f"sip-keepalive-{session_id[:8]}"),
+        ]
+        logger.info(
+            "webrtc sip: chamada %s de %s para %s virou contato session=%s pool=%s perfil=%s room=%s",
+            call.call_id, call.ani or "(numero oculto)", call.dnis, session_id, pool, perfil or "-", call.room,
+        )
+
+    async def _resolve_voice_endpoint(self, dnis: str) -> tuple[str, str | None, str]:
+        """(pool, perfil de fala, motivo da recusa). Sem endpoint `voice` para o número, NÃO há
+        pool: nem default nem adivinhação — telefone que toca num pool que ninguém escolheu é o
+        fallback de endereço que a casa proíbe."""
+        s = self._settings
+        if not s.agent_registry_url:
+            return "", None, "gateway sem PLUGHUB_AGENT_REGISTRY_URL — nao ha como resolver o numero"
+        from ..endpoint_resolver import resolve_endpoint as _resolve
+        ep = await _resolve(channel="voice", identifier=dnis, tenant_id=s.tenant_id,
+                            agent_registry_url=s.agent_registry_url, cache_ttl_s=s.endpoint_cache_ttl_s)
+        if ep.outcome == "unavailable":
+            return "", None, f"registro de endpoints INALCANCAVEL ao resolver {dnis}"
+        if not ep.pool_id:
+            return "", None, (f"nenhum endpoint `voice` cadastrado para {dnis} ({ep.outcome}) — "
+                              f"cadastre em Configuracao > Canais > Voz")
+        perfil = ep.settings.get("speech_profile_id") if isinstance(ep.settings, dict) else None
+        if perfil is not None and not isinstance(perfil, str):
+            logger.error("webrtc sip: endpoint %s tem speech_profile_id nao-texto (%r) — ignorado", dnis, perfil)
+            perfil = None
+        return ep.pool_id, (perfil or None), ""
+
+    async def _sip_refuse(self, call: SipCall, motivo: str) -> None:
+        logger.error("webrtc sip: chamada %s de %s para %s RECUSADA — %s", call.call_id,
+                     call.ani or "(numero oculto)", call.dnis or "(sem numero)", motivo)
+        if self._provider is None:
+            logger.error("webrtc sip: e a sala %s NAO pode ser encerrada — %s", call.room, self._provider_unavailable)
+            return
+        try:
+            await self._provider.delete_room(call.room)     # derruba a chamada
+        except Exception as exc:
+            logger.error("webrtc sip: encerrar a sala %s FALHOU: %s — o chamador fica chamando ate o "
+                         "tempo de toque do tronco", call.room, exc)
+
+    async def _sip_hangup(self, session_id: str, porque: str) -> None:
+        """O chamador saiu: o contato fecha como DESLIGAR do cliente."""
+        if session_id not in self._sip:
+            return
+        logger.info("webrtc sip: %s (session=%s)", porque, session_id)
+        await self._close_session(session_id, "customer_hangup")
+        await self._sip_teardown(session_id)
+
+    async def _sip_platform_close(self, session_id: str, payload: dict) -> None:
+        """A plataforma encerrou: a despedida é FALADA (telefone não lê) e a chamada é derrubada."""
+        farewell = payload.get("farewell_text") or ""
+        if farewell:
+            tocada = asyncio.Event()
+            self._speak(session_id, farewell, tocada)
+            try:
+                await asyncio.wait_for(tocada.wait(), timeout=_SIP_FAREWELL_MAX_S)
+            except asyncio.TimeoutError:
+                logger.warning("webrtc sip: despedida nao terminou em %.0f s — desligando assim mesmo "
+                               "(session=%s)", _SIP_FAREWELL_MAX_S, session_id)
+        await self._close_session(session_id, "agent_done")
+        await self._sip_teardown(session_id)
+        logger.info("webrtc sip: chamada encerrada pela plataforma session=%s", session_id)
+
+    async def _sip_teardown(self, session_id: str) -> None:
+        call = self._sip.pop(session_id, None)
+        if call is None:
+            return
+        self._sip_by_room.pop(call.room, None)
+        atual = asyncio.current_task()
+        for t in self._sip_tasks.pop(session_id, []):
+            if t is not atual:
+                t.cancel()
+        await self._stop_bot_leg(session_id)
+        self._end_collect(session_id, "chamada encerrada", "session_closed")
+        self._customer_media.pop(session_id, None)
+        if self._provider is not None:
+            try:
+                await self._provider.delete_room(call.room)     # derruba a perna SIP, se ainda estiver
+            except Exception as exc:
+                logger.debug("webrtc sip: delete_room %s: %s", call.room, exc)
+
     # ── Session close ─────────────────────────────────────────────────────────
 
     async def _close_session(self, session_id: str, reason: str) -> None:
@@ -1538,7 +1788,10 @@ class WebRTCAdapter(ChannelAdapter):
         self._speech_resolved.pop(session_id, None)
         self._masked_grace_until.pop(session_id, None)
         try:
-            await self._redis.delete(f"session:{session_id}:ws_alive")
+            # a chave da sala sai junto (VOZ-02): sem ela, a sala recriada por um token de sessão
+            # encerrada é apagada ao nascer (`police_room`) — é o que substitui o `auto_create: false`
+            await self._redis.delete(f"session:{session_id}:ws_alive",
+                                     f"channel:webrtc:{session_id}:room_name")
         except Exception as exc:
             logger.debug("webrtc: delete ws_alive falhou (session=%s): %s", session_id, exc)
         if not info:
@@ -1559,7 +1812,7 @@ class WebRTCAdapter(ChannelAdapter):
                 contact_id   = info["contact_id"],
                 session_id   = session_id,
                 tenant_id    = self._settings.tenant_id,
-                channel      = "webrtc",
+                channel      = info.get("channel") or "webrtc",
                 reason       = transport,  # type: ignore[arg-type]
                 started_at   = info["started_at"],
                 pool_id      = info["pool_id"],
@@ -1688,8 +1941,8 @@ class WebRTCAdapter(ChannelAdapter):
                         type(self._stt).__name__, session_id)
         try:
             async for identity, chunks in room_client.speakers():
-                if identity.startswith(CUSTOMER_IDENTITY_PREFIX):
-                    autor = None                                   # o cliente
+                if identity.startswith(CUSTOMER_PREFIXES):
+                    autor = None                                   # o cliente (browser ou telefone)
                 elif identity.startswith(AGENT_IDENTITY_PREFIX):
                     autor = "human-" + identity[len(AGENT_IDENTITY_PREFIX):]
                 else:
@@ -2296,7 +2549,7 @@ class WebRTCAdapter(ChannelAdapter):
         """Teclas que o OUVINTE recebe. O SFU as entrega a todos na sala: só o cliente responde."""
         try:
             async for identity, digit in room_client.dtmf():
-                if not identity.startswith(CUSTOMER_IDENTITY_PREFIX):
+                if not identity.startswith(CUSTOMER_PREFIXES):
                     logger.info("webrtc dtmf: tecla de %r ignorada — so o cliente responde menu "
                                 "(session=%s)", identity, session_id)
                     continue

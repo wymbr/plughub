@@ -8,8 +8,9 @@ Imprime uma linha por verificação, `OK|FALHA|INCONCL <ramo> <texto>`, e o shel
 Ramos:
   D  SFU REAL — o provider da imagem cria sala; um participante entra SÓ POR RELAY
      (TURN) e publica trilha; o SFU lista esse participante. Duas contraprovas de que o
-     SFU VERIFICA: token com segredo errado → recusado; sala não criada → recusada
-     (`auto_create: false`).
+     SFU VERIFICA: token com segredo errado → recusado. D4/D5 (VOZ-02): com `auto_create:
+     true`, sala `plughub-{uuid}` sem sessão viva é APAGADA pelo gateway (webhook do SFU), e a
+     sala COM a chave da sessão fica — o controle positivo.
   F  ROTA `/webrtc/token/{sid}` ao vivo — 401/401/403/403/404/422/403 e dois controles
      POSITIVOS (agente e supervisor) cujo token o SFU ACEITA. Sem o positivo, uma rota
      que recusasse tudo passaria nos sete negativos.
@@ -141,9 +142,45 @@ async def full() -> None:
         ok, why = await _join(LK_URL, bad, relay_only=False, publish=False)
         emit("FALHA" if ok else "OK", "D3", f"token com segredo errado: {why}")
 
-        ghost = p.generate_token(TokenGrants(room_name=room + "-nao-criada", identity="g"))
-        ok, why = await _join(LK_URL, ghost, relay_only=False, publish=False)
-        emit("FALHA" if ok else "OK", "D4", f"sala nao criada (auto_create:false): {why}")
+        # D4/D5 — o CONTROLE COMPENSATÓRIO do `auto_create: true` (VOZ-02). O join de um token
+        # assinado para `plughub-{uuid}` CRIA a sala; o que a VOZ-01 garantia por prevenção agora
+        # tem de acontecer por reação: o gateway, avisado pelo `room_started`, a apaga. D5 é o
+        # controle positivo — a sala COM a chave da sessão viva fica —, sem o qual um gateway que
+        # apagasse toda sala passaria no D4.
+        ghost_room = build_room_name(str(uuid.uuid4()))
+        print(f"GHOST {ghost_room}", flush=True)
+        ghost = p.generate_token(TokenGrants(room_name=ghost_room, identity="g"))
+        # O join CRIA a sala e o gateway a apaga no meio do handshake — por isso o próprio join
+        # costuma morrer em timeout. O veredicto não é o join: é a sala não existir depois, e o
+        # shell confere a linha do `police_room` nomeando ESTA sala (D4g).
+        _, why = await _join(LK_URL, ghost, relay_only=False, publish=False)
+        existe = True
+        for _ in range(30):
+            existe = await p.get_room(ghost_room) is not None
+            if not existe:
+                break
+            await asyncio.sleep(0.3)
+        emit("FALHA" if existe else "OK", "D4",
+             f"sala `plughub-<uuid>` SEM sessao viva {'CONTINUA de pe' if existe else 'nao existe'} "
+             f"apos o join (join: {why})")
+        if existe:
+            await p.delete_room(ghost_room)
+
+        live_sid = str(uuid.uuid4())
+        live_room = build_room_name(live_sid)
+        await r.setex(f"channel:webrtc:{live_sid}:room_name", 60, live_room)
+        try:
+            async def fica() -> tuple[bool, str]:
+                await asyncio.sleep(4)
+                return (await p.get_room(live_room)) is not None, "sala COM a chave da sessao"
+            tok_live = p.generate_token(TokenGrants(room_name=live_room, identity="v"))
+            ok, why = await _join(LK_URL, tok_live, relay_only=False, publish=False, check=fica)
+            emit("OK" if ok else "FALHA", "D5",
+                 f"CONTROLE: {why} {'continua de pe' if ok else 'foi apagada'} apos 4 s")
+        finally:
+            await r.delete(f"channel:webrtc:{live_sid}:room_name")
+            if await p.get_room(live_room) is not None:
+                await p.delete_room(live_room)
 
         # ── F · ROTA ─────────────────────────────────────────────────────────
         await r.setex(f"session:{sid}:meta", 300, json.dumps({"tenant_id": tenant, "pool_id": pool}))

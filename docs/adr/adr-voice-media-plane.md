@@ -362,7 +362,7 @@ credencial (V6). **É o gate que torna todo o resto mensurável** — enquanto e
 qualquer fase seguinte pode ficar verde sem funcionar.
 
 > ✅ **Entregue em 2026-09-14 (VOZ-01)**, no compose **demo**: `livekit` v1.8.4 (`auto_create:
-> false`) + `coturn` 4.6.3, SDK no `pyproject`, `_dev_mode` fora e recusa nomeada
+> false` — **ligado em 2026-09-18 pela VOZ-02**, com controle compensatório; ver V-F5) + `coturn` 4.6.3, SDK no `pyproject`, `_dev_mode` fora e recusa nomeada
 > (`WebRTCProviderUnavailable`). Gate: `infra/test/probe_webrtc_media_plane.sh`. Três fatos que a
 > fase revelou e que valem para as seguintes:
 > - **A rota de token entrou no escopo.** `GET /webrtc/token/{sid}` emitia token sem credencial,
@@ -476,6 +476,42 @@ pronto**; `REFER`/bridge para ramal interno quando houver central — é aqui qu
 numa central, e é só aqui. **É a única fase que exige telecom**, e entra por **gatilho comercial**
 (o primeiro cliente com PABX/SBC, ou a oferta de voz pública), não por ordem de roteiro.
 
+> **V-F5 fatia 1 entregue em 2026-09-18 (`VOZ-02`), no compose demo, sem telecom nenhum.** O
+> conversor pronto é o **serviço SIP do próprio SFU** (`livekit/sip` v1.15.0, `livekit-sip` no
+> compose, com Redis próprio — o psrpc dele exige Redis compartilhado com o SFU). Chamada entrante
+> no tronco → sala `plughub-sip-_<ani>_<aleatório>` (regra de despacho individual, semeada pelo job
+> `sip-seed` a partir de `infra/sip/*.json`) → o SFU avisa o gateway por webhook assinado
+> (`POST /v1/livekit/webhook`) → o gateway **adota a sala** como a da sessão e abre um contato
+> **`voice`** (V2) endereçado pelo **número DISCADO** via `ChannelEndpoint` `voice`. Número sem
+> endpoint é **recusado** (sala apagada → 486), nunca mandado a pool default. Desligar vale pelos
+> dois lados: o chamador sai → `customer_hangup`; a plataforma encerra → despedida falada (≤ 10 s),
+> sala apagada, BYE no telefone. A saída de fala roteia pelo DONO da sessão (`VoiceChannelRouter`):
+> o legado Twilio continua recebendo o que é dele. Gate: `infra/test/probe_voz02_sip_inbound.sh`,
+> com um cliente SIP de teste (G.711 + digest) no lugar da operadora.
+>
+> **Três fatos que a fatia mediu e que corrigem este ADR:**
+> - **O conversor TRANSCODIFICA** (G.711 ↔ Opus): a trilha do chamador aparece na sala como
+>   `audio/opus`, com PCMU negociado no SIP. A §8 dizia *relay, sem transcodificar* — raciocínio
+>   sobre o que o browser fala, que não se aplica: quem converte é o `livekit/sip`, antes da sala, e
+>   ele não oferece relay. A CPU por chamada volta a ser item de dimensionamento (§8 corrigida).
+> - **Com `room.auto_create: false` o serviço SIP recebe 486 em 100% das chamadas** — ele entra
+>   por JOIN e não cria sala; `room_config` na regra de despacho não muda isso, e `MoveParticipant`
+>   responde *not implemented* no SFU OSS. **Decisão do dono (2026-09-18): ligar `auto_create` com
+>   CONTROLE COMPENSATÓRIO no gateway** — no `room_started`, sala `plughub-{uuid}` sem a chave da
+>   sessão viva (`channel:webrtc:{sid}:room_name`, agora gravada ANTES do `create_room` e apagada no
+>   fechamento) é apagada, e o motivo vai ao log. A garantia da VOZ-01 passou de prevenção a
+>   reação; é medida pelos ramos A3/D4/D4g/D5 do `probe_webrtc_media_plane.sh`, com controle
+>   positivo.
+> - **A chamada só é ATENDIDA (200 OK) quando o participante SIP assina áudio remoto** — até lá o
+>   chamador ouve chamando. Com agente de IA é imediato (o bot leg entra e fala); com pool HUMANO, o
+>   telefone toca até o atendente publicar microfone, inclusive durante a fila.
+>
+> **Fora da fatia 1** (fichas no `pending.md`): exposição pública do SIP com classificação da borda
+> (V10) e TLS/SRTP; `REFER`/chamada sainte; DTMF RFC 4733 validado de ponta a ponta; tela para
+> tronco e regra de despacho; toque durante a fila. E **registro**: provedor que só entrega a
+> chamada a um ramal registrado (planos "controle" de VoIP) não serve — o conversor recebe por
+> tronco (IP ou digest), não se registra.
+
 **V-F6 — validação.** E2E com traço gravado + gate de instalação limpa (`--wipe`), porque um
 ambiente que só sobe porque já subiu antes não está sendo verificado.
 
@@ -534,10 +570,13 @@ registra um conflito doc×doc (5 anos × 30 dias) que nenhum código arbitra.
 
 **Antes de V-F5, e por cliente:**
 
-- **Codec — direção fechada em 2026-09-12: G.711 nas chamadas com perna SIP.** Os navegadores
-  falam PCMU/PCMA além de Opus, então o conversor faz **relay, não transcodificação**, e o custo
-  por chamada fica pequeno; Opus fica para o que é só browser. Transcodificar é o que pesa, e
-  evitá-lo é a decisão.
+- **Codec — G.711 na perna SIP, e o conversor TRANSCODIFICA.** ⚠️ *Corrigido em 2026-09-18 por
+  medição (VOZ-02).* Este item dizia que, como os navegadores falam PCMU/PCMA, o conversor faria
+  **relay, não transcodificação**. Medido: o conversor escolhido (`livekit/sip`) publica a trilha do
+  chamador na sala como `audio/opus`, com PCMU no SIP — transcodifica sempre e não expõe relay. O
+  que o navegador fala não entra na conta: quem converte é o serviço SIP, antes da sala.
+  Consequência: a CPU por chamada do `livekit-sip` é item de **dimensionamento por cliente**, não
+  um custo evitado.
 - **Transporte de DTMF fora de banda** (RFC 4733) nas duas pernas — é o que a `NIV-07` cobra.
 - **TLS/SRTP obrigatório ou negociável** no enlace com o SBC (V10).
 - **`REFER` de saída suportado pelo gateway?** (V3) Define se o handoff para ramal libera a

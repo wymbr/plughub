@@ -1,5 +1,109 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-18 (1) — VOZ-02: a chamada telefônica pelo tronco SIP vira contato `voice`, na mesma sala
+
+**O estado, medido antes de mexer.** O canal `voice` só existia como TwiML (Twilio), e três métodos do
+ciclo de vida de sessão do `voice.py` nem existiam (VOZ-03). Tronco SIP — o que operadora e PABX
+entregam — não tinha por onde entrar, e toda a fala construída nas VOZ-05..27 (bot leg, STT, TTS,
+coleta por voz e teclado, perfis) só servia à chamada de browser. **Três escolhas do dono:** o
+conversor é o **serviço SIP do próprio SFU** (`livekit/sip`), o canal é **`voice`** (ADR V2) e a fatia 1
+é **entrante, com fala**.
+
+**O caminho.** `livekit-sip` (imagem por digest, com um Redis próprio: o psrpc dele precisa de Redis
+compartilhado com o SFU) recebe o INVITE com digest e põe o chamador numa sala `plughub-sip-_<ani>_<…>`
+pela regra de despacho individual. O SFU avisa o gateway por **webhook assinado** —
+`POST /v1/livekit/webhook`, conferido com a chave do SFU (401 sem assinatura válida, 503 sem
+credencial) e processado numa task com dono. No `participant_joined` de um participante de tipo SIP, o
+gateway (`_sip_arrived`):
+- garante idempotência com `SET NX channel:sip:room:{room}` (o webhook repete);
+- resolve o **número DISCADO** (`sip.trunkPhoneNumber`) por `ChannelEndpoint` `voice` → pool (e perfil
+  de fala, se o endpoint apontar um);
+- abre a sessão pelo MESMO `_open_session` do browser — extraído do handshake do WS e agora com o
+  canal como parâmetro, que vai à meta, ao `ContactOpenEvent` e ao pedido de roteamento;
+- **adota a sala** (`_room_of`): no `routing.assigned` não cria sala nem manda token; liga ouvinte e voz.
+
+Número oculto vira contato `sip:{callID}`, nunca um ANI inventado. **Número sem endpoint é RECUSADO** —
+sala apagada, o telefone recebe 486, e o log nomeia o número e onde cadastrá-lo. Registro de endpoints
+inalcançável também recusa. Não existe pool default: telefone tocando num pool que ninguém escolheu é o
+*fallback de endereço* que a casa proíbe.
+
+**Desligar vale pelos dois lados, com um `contact_closed` só.** O chamador sai (`participant_left` da
+identidade SIP, ou `room_finished`) → `customer_hangup`. A plataforma encerra (`deliver_session_closed`)
+→ a despedida é falada (teto de 10 s, com aviso se estourar), `agent_done`, e a sala é apagada — que é
+o que manda BYE ao telefone.
+
+**A saída do canal `voice` tem dois donos.** O `OutboundConsumer` escolhe adapter pelo canal, e as duas
+pernas são `voice`: sem o `VoiceChannelRouter`, a fala da IA numa chamada SIP iria ao adapter Twilio,
+que não conhece a sessão — e ninguém ouviria nada, sem erro. O discriminador é a SESSÃO
+(`is_sip_session`), nunca palpite; o resto segue para o legado (inclusive por `__getattr__`, que mantém
+o `handle_collect_event` procurado por `hasattr`). No telefone não há tela: fala de `agent_ai` é
+sintetizada, texto de outra origem é logado como NÃO entregue, e menu sem coleta tem o prompt falado.
+
+**Três fatos medidos que corrigem o desenho.**
+1. **Com `room.auto_create: false`, 100% das chamadas SIP levavam 486.** O conversor entra por JOIN e
+   não cria sala; `room_config` na regra de despacho não muda isso, e `MoveParticipant` para uma sala
+   criada pelo gateway responde *not implemented* no SFU OSS. **Decisão do dono: ligar `auto_create`
+   com CONTROLE COMPENSATÓRIO.** No `room_started`, `police_room` apaga sala `plughub-{uuid}` sem a
+   chave `channel:webrtc:{sid}:room_name` e loga por quê. Para o próprio gateway não perder a corrida, a
+   chave passou a ser gravada ANTES do `create_room`, e é apagada no fechamento. Sala com prefixo SIP
+   (nasce legitimamente sem sessão) e sala fora do prefixo não são policiadas.
+2. **A chamada só é ATENDIDA quando alguém assina áudio na sala.** Com IA é imediato — o bot leg entra e
+   fala (medido: 0,7 s). Com pool humano, o telefone chama até o atendente publicar microfone, inclusive
+   na fila → `VOZ-35`.
+3. **O conversor TRANSCODIFICA** — a trilha do chamador aparece na sala como `audio/opus`, PCMU no SIP.
+   A §8 do ADR dizia *relay, sem transcodificar*; corrigida.
+
+**O resto que mudou junto.** `voice` passa a exigir `media_policy` no pool (registry) e o bridge a leva
+no `routing.assigned` (`_CHANNELS_WITH_ROOM`). O STT e o DTMF aceitam a identidade `sip_` como cliente
+(`CUSTOMER_PREFIXES`). O Console abre sala para `voice` como para `webrtc` (`hasMediaRoom`). Tronco e
+regra de despacho são semeados pelo job `sip-seed` (`infra/sip/*.json`, seed-if-absent pela API do SFU;
+recusa tronco com usuário e sem senha, e acusa regra com prefixo divergente do `SIP_ROOM_PREFIX`, que é
+importado — uma casa). **Achado de passagem, corrigido:** o `speaches-models` não declarava
+`restart: "no"`, e o `up.sh`, que deriva a classe do compose, lia o `exited (0)` dele como falha numa
+subida correta.
+
+**A rota do webhook é INTERNA** (`/v1`, allowlist da borda inalterada): quem a chama é o SFU, na rede do
+compose.
+
+**Instrumento — o telefone é um cliente SIP de teste** (`infra/test/_sip_ua.py`: UDP, digest 401/407,
+RTP PCMU de ida e volta com energia, BYE), e isso torna o gate repetível sem operadora.
+`probe_voz02_sip_inbound.sh`, **VERDE**:
+- S0: controle do instrumento;
+- S1: atendida em 0,7 s;
+- S2: contato `voice` do ANI no pool do DNIS;
+- S3: o chamador OUVE a IA (5 s de energia em G.711);
+- S4: a fala sintetizada "Atendente." chega ao menu por voz (`sip-m0=atendente`);
+- S5/S6: a plataforma encerra, BYE no telefone, `agent_done`;
+- H1: o chamador desliga → `customer_hangup`;
+- R1: endpoint apagado → 486 e linha RECUSADA.
+
+O controle compensatório é medido no `probe_webrtc_media_plane.sh`, **VERDE**:
+- A3 julga `auto_create: true` e o webhook JUNTOS;
+- D4: sala `plughub-<uuid>` sem sessão não existe após o join;
+- D4g: a linha do `police_room` nomeia AQUELA sala — sem ela, a sala poderia ter sumido por outro motivo;
+- D5, controle positivo: a sala com a chave continua de pé.
+
+Testes: `test_sip_leg.py` (27; gateway 1333 verdes), bridge `test_routing_assigned_media_policy.py`
+(8), registry `pools.test.ts` (23), typecheck do platform-ui (279 arquivos). Vizinhos VERDES:
+`probe_webrtc_speech_profile`, `probe_webrtc_bot_leg_gate`, `probe_webrtc_channel_endpoint`,
+`probe_edge_surface`, `probe_internal_service_callers`, `probe_route_credential_coverage`,
+`probe_gates_manifest_coverage`, `probe_task_ledger`.
+
+**Fora da fatia — fichas.**
+- `VOZ-31`: DTMF RFC 4733 pela perna SIP, validado ponta a ponta. O caminho provavelmente já funciona;
+  nunca foi exercido.
+- `VOZ-32` (adiada): porta SIP publicada, NAT, TLS/SRTP e a classificação V10 da borda SIP.
+- `VOZ-33` (adiada): chamada SAINTE e `REFER`.
+- `VOZ-34`: tronco e regra de despacho na tela.
+- `VOZ-35`: toque durante a fila com pool humano.
+
+Bloqueios religados: `ALW-19`/`NIV-06`/`NIV-07` → `VOZ-31` · `OUT-04` → `VOZ-33` · `NIV-16` →
+`VOZ-03`, que volta a `aberto` com a pergunta trocada: o ciclo de vida da chamada de operadora já
+existe (pelo tronco); resta decidir se o Twilio o reusa ou se aposenta.
+
+**Provedor por REGISTRO não serve.** O conversor recebe por tronco (IP ou digest do INVITE). Plano que
+entrega a chamada a um ramal registrado precisa de um PBX no meio.
+
 ## 2026-09-17 (13) — VOZ-17: a fala deixa de ser configurada em env, e o serviço passa a ser consultado ANTES de gravar
 
 **O estado, medido antes de mexer.** `PLUGHUB_WEBRTC_STT_MODEL`, `_TTS_MODEL`, `_TTS_VOICE` e a

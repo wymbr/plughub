@@ -31,6 +31,15 @@ import {
   type RoomOptions,
 } from "livekit-client";
 
+/**
+ * Canais cujo contato tem SALA de mídia. `voice` entrou na VOZ-02: a chamada de telefone chega pela
+ * perna SIP numa sala do SFU, com a mesma mídia do browser — o atendente humano entra nela igual.
+ * Uma casa só para a pergunta, que o Console fazia em quatro lugares com `=== "webrtc"`.
+ */
+export function hasMediaRoom(channel: string | null | undefined): boolean {
+  return channel === "webrtc" || channel === "voice";
+}
+
 export type MediaKind = "audio" | "video";
 /** O que a tela mostra, derivado dos tetos — não é mais escolha do servidor. */
 export type MediaView = "none" | "audio" | "video";
@@ -232,7 +241,7 @@ export function useWebRTCSession(
 
   // Connect when sessionId appears and channel is webrtc; tear down when gone
   useEffect(() => {
-    if (!sessionId || channel !== "webrtc") {
+    if (!sessionId || !hasMediaRoom(channel)) {
       disconnectRoom();
       return;
     }

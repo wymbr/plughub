@@ -42,6 +42,16 @@ async def test_webrtc_leva_a_politica_do_registry():
 
 
 @pytest.mark.asyncio
+async def test_voice_tambem_leva_a_politica():
+    """VOZ-02: a chamada de TELEFONE entra numa sala pela perna SIP — sem a política do pool, o
+    gateway ofereceria nada (sem bot leg, sem fala) e o chamador ficaria chamando."""
+    with patch.object(main, "get_pool_config", new=AsyncMock(return_value={"media_policy": DISTINCTIVE})) as g:
+        field = await main._routing_assigned_pool_field(None, _redis("voice"), SID, "t", "telefone")
+    g.assert_awaited_once()
+    assert field == {"pool_id": "telefone", "media_policy": DISTINCTIVE, "media_policy_source": "registry"}
+
+
+@pytest.mark.asyncio
 async def test_pool_sem_politica_e_null_declarado_nao_ausencia():
     with patch.object(main, "get_pool_config", new=AsyncMock(return_value={"pool_id": "p"})):
         field = await main._routing_assigned_pool_field(None, _redis("webrtc"), SID, "t", "p")

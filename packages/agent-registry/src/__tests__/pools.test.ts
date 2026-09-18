@@ -193,6 +193,27 @@ describe("media_policy (VOZ-10)", () => {
     expect(data["media_policy"]).toEqual(policy)
   })
 
+  // VOZ-02: a chamada de telefone entra numa SALA pela perna SIP — pool `voice` tem a mesma obrigação
+  it("POST voice SEM media_policy recusa 422 nomeando o campo e o canal", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    const res = await request(app).post("/v1/pools").set(headers)
+      .send({ pool_id: "telefone_ia", channel_types: ["voice"], sla_target_ms: 60000 })
+    expect(res.status).toBe(422)
+    expect(res.body.details.field).toBe("media_policy")
+    expect(res.body.error).toContain("`voice`")
+    expect(prisma.pool.create).not.toHaveBeenCalled()
+  })
+
+  it("POST voice COM media_policy cria (controle positivo)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.pool.create).mockResolvedValue(dbPool as never)
+    const res = await request(app).post("/v1/pools").set(headers).send({
+      pool_id: "telefone_ia", channel_types: ["voice"], sla_target_ms: 60000,
+      media_policy: { customer_publish: ["audio"], agent_publish: ["audio"] },
+    })
+    expect(res.status).toBe(201)
+  })
+
   it("listas VAZIAS são política válida (webrtc só texto), não ausência", async () => {
     vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
     vi.mocked(prisma.pool.create).mockResolvedValue(dbPool as never)

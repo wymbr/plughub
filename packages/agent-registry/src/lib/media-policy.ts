@@ -19,12 +19,14 @@ export function mediaPolicyViolation(
   purpose:      string | null | undefined,
   mediaPolicy:  unknown,
 ): { error: string; details: Record<string, unknown> } | null {
-  const isWebrtc  = (channelTypes ?? []).includes("webrtc")
+  // VOZ-02: `voice` também tem SALA — a chamada de telefone entra pela perna SIP e a mídia é a
+  // mesma do browser. Pool de voz sem política faria o gateway oferecer NADA (sem bot leg, sem fala).
+  const comSala   = (channelTypes ?? []).filter(c => c === "webrtc" || c === "voice")
   const isContact = (purpose ?? "contact") === "contact"
-  if (!isWebrtc || !isContact || mediaPolicy != null) return null
+  if (comSala.length === 0 || !isContact || mediaPolicy != null) return null
   return {
     error:
-      "pool de contato com `webrtc` em channel_types exige `media_policy` — declare o que o " +
+      `pool de contato com \`${comSala.join("`/`")}\` em channel_types exige \`media_policy\` — declare o que o ` +
       "cliente (`customer_publish`) e o atendente (`agent_publish`) podem publicar; listas " +
       "VAZIAS significam só texto. Não há default: a ausência virava `text` em silêncio.",
     details: { field: "media_policy", channel_types: channelTypes, purpose: purpose ?? "contact" },
