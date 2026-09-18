@@ -233,6 +233,8 @@ export type MediaKind = 'audio' | 'video'
 export interface PoolMediaPolicy {
   customer_publish: MediaKind[]
   agent_publish:    MediaKind[]
+  /** VOZ-06 — grava as chamadas atendidas por este pool. Ausente = não grava. */
+  recording?:       boolean
 }
 
 /** Campos do gap compartilhados por Create/Update (todos opcionais). */

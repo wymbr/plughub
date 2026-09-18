@@ -227,11 +227,23 @@ describe("media_policy (VOZ-10)", () => {
       { customer_publish: ["text"], agent_publish: [] },
       { customer_publish: ["audio", "audio"], agent_publish: [] },
       { customer_publish: ["audio"] },
-      { ...policy, recording: true },
+      // VOZ-06: `recording` existe, e só como BOOLEANO — "sim" não liga gravação nenhuma
+      { ...policy, recording: "sim" },
+      { ...policy, gravar: true },
     ]) {
       const res = await request(app).post("/v1/pools").set(headers).send({ ...webrtcPool, media_policy: bad })
       expect(res.status, JSON.stringify(bad)).toBe(422)
     }
+  })
+
+  it("VOZ-06: `recording: true` é aceito e GRAVADO na política (o bridge o leva ao gateway)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.pool.create).mockResolvedValue(dbPool as never)
+    const comGravacao = { ...policy, recording: true }
+    const res = await request(app).post("/v1/pools").set(headers).send({ ...webrtcPool, media_policy: comGravacao })
+    expect(res.status).toBe(201)
+    const data = vi.mocked(prisma.pool.create).mock.calls.at(-1)![0].data as Record<string, unknown>
+    expect(data["media_policy"]).toEqual(comGravacao)
   })
 
   it("pool sem webrtc não exige política", async () => {

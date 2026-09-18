@@ -131,6 +131,14 @@ async def serve_attachment(file_id: str) -> StreamingResponse:
     meta = await store.resolve(file_id=file_id, tenant_id=settings.tenant_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="not found")
+    # VOZ-06: gravação de chamada NÃO sai por aqui. Esta porta toma o file_id como credencial,
+    # que serve para o anexo que o próprio cliente mandou — não para a voz dele e do atendente.
+    # 404 (e não 403) para não confirmar que o id existe; o motivo vai ao log.
+    klass = getattr(meta, "artifact_class", None) or "webchat_attachment"
+    if klass != "webchat_attachment":
+        logger.warning("attachment %s de classe %s RECUSADO na porta publica de anexos",
+                       file_id, klass)
+        raise HTTPException(status_code=404, detail="not found")
     if meta.deleted_at is not None:
         raise HTTPException(status_code=410, detail="attachment expired")
     if meta.file_path is None:

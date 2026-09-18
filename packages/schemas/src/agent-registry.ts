@@ -291,6 +291,14 @@ export const PoolMediaPolicySchema = z.object({
   customer_publish: _mediaKindList,
   /** O que o ATENDENTE deste pool pode publicar para o cliente. */
   agent_publish:    _mediaKindList,
+  /**
+   * VOZ-06 — grava a chamada enquanto um atendente DESTE pool está nela: só áudio, a sala
+   * misturada (cliente, atendente e a voz do bot), guardada como `call_recording`. Ausente =
+   * NÃO grava — gravar é o que precisa ser pedido, nunca o que se supõe. O cliente é avisado
+   * antes (sem aviso entregue, não se grava) e recusa pela tag `core.contact.recording_opt_out`,
+   * que o FLUXO escreve e a plataforma honra. O bloco mascarado (NIV-07) nunca é gravado.
+   */
+  recording:        z.boolean().optional(),
 }).strict()
 export type PoolMediaPolicy = z.infer<typeof PoolMediaPolicySchema>
 

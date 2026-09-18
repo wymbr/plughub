@@ -103,6 +103,9 @@ MIME_TO_EXT: dict[str, str] = {
     "application/pdf":  "pdf",
     "video/mp4":        "mp4",
     "video/webm":       "webm",
+    # VOZ-06 — gravação de chamada (egress, só áudio). NÃO entra em MIME_TO_CONTENT_TYPE: aquela
+    # tabela é a do que o CLIENTE do webchat manda, e gravação não é upload.
+    "audio/ogg":        "ogg",
 }
 
 MIME_TO_CONTENT_TYPE: dict[str, str] = {
@@ -133,6 +136,7 @@ _MAGIC_SIGS: dict[str, list[list[tuple[int, bytes]]]] = {
     "application/pdf": [[(0, b"%PDF")]],
     "video/mp4":       [[(4, b"ftyp")]],
     "video/webm":      [[(0, b"\x1a\x45\xdf\xa3")]],
+    "audio/ogg":       [[(0, b"OggS")]],
 }
 
 
@@ -167,7 +171,7 @@ class AttachmentMeta:
     __slots__ = (
         "file_id", "tenant_id", "session_id", "original_name",
         "mime_type", "size_bytes", "file_path", "serving_url",
-        "expires_at", "deleted_at",
+        "expires_at", "deleted_at", "artifact_class",
     )
 
     def __init__(self, **kwargs):
@@ -282,6 +286,7 @@ class AttachmentStore(Protocol):
         mime_type:   str,
         size_bytes:  int,
         expires_at:  datetime,
+        artifact_class: str = "webchat_attachment",
     ) -> tuple[str, str]:
         """
         Reserva um slot de upload.
@@ -387,6 +392,10 @@ class FilesystemAttachmentStore:
     CREATE INDEX IF NOT EXISTS idx_attach_expires
         ON session_attachments (expires_at)
         WHERE deleted_at IS NULL;
+    -- VOZ-06 (ADR voice-media-plane V5): a CLASSE do artefato — retenção é política por classe, e
+    -- a porta pública de anexos serve só `webchat_attachment`. Linha antiga é anexo de webchat.
+    ALTER TABLE session_attachments
+        ADD COLUMN IF NOT EXISTS artifact_class TEXT NOT NULL DEFAULT 'webchat_attachment';
     """
 
     def __init__(
@@ -418,6 +427,7 @@ class FilesystemAttachmentStore:
         mime_type:   str,
         size_bytes:  int,
         expires_at:  datetime,
+        artifact_class: str = "webchat_attachment",
     ) -> tuple[str, str]:
         file_id = str(uuid.uuid4())
 
@@ -426,8 +436,8 @@ class FilesystemAttachmentStore:
                 """
                 INSERT INTO session_attachments
                     (file_id, tenant_id, session_id, original_name,
-                     mime_type, size_bytes, status, expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
+                     mime_type, size_bytes, status, expires_at, artifact_class)
+                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)
                 """,
                 uuid.UUID(file_id),
                 tenant_id,
@@ -436,6 +446,7 @@ class FilesystemAttachmentStore:
                 mime_type,
                 size_bytes,
                 expires_at,
+                artifact_class,
             )
 
         upload_url = f"{self._upload_url}/{file_id}"
@@ -534,7 +545,7 @@ class FilesystemAttachmentStore:
             row = await conn.fetchrow(
                 """
                 SELECT session_id, original_name, mime_type, size_bytes,
-                       file_path, expires_at, deleted_at
+                       file_path, expires_at, deleted_at, artifact_class
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
@@ -555,6 +566,7 @@ class FilesystemAttachmentStore:
             serving_url   = f"{self._serving_url}/{file_id}",
             expires_at    = row["expires_at"],
             deleted_at    = row["deleted_at"],
+            artifact_class = row["artifact_class"],
         )
 
     # ── stream_bytes ──────────────────────────────────────────────────────────
@@ -716,6 +728,7 @@ class S3AttachmentStore:
         mime_type:   str,
         size_bytes:  int,
         expires_at:  datetime,
+        artifact_class: str = "webchat_attachment",
     ) -> tuple[str, str]:
         file_id = str(uuid.uuid4())
 
@@ -724,8 +737,8 @@ class S3AttachmentStore:
                 """
                 INSERT INTO session_attachments
                     (file_id, tenant_id, session_id, original_name,
-                     mime_type, size_bytes, status, expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
+                     mime_type, size_bytes, status, expires_at, artifact_class)
+                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)
                 """,
                 uuid.UUID(file_id),
                 tenant_id,
@@ -734,6 +747,7 @@ class S3AttachmentStore:
                 mime_type,
                 size_bytes,
                 expires_at,
+                artifact_class,
             )
 
         upload_url = f"{self._upload_url}/{file_id}"
@@ -832,7 +846,7 @@ class S3AttachmentStore:
             row = await conn.fetchrow(
                 """
                 SELECT session_id, original_name, mime_type, size_bytes,
-                       file_path, expires_at, deleted_at
+                       file_path, expires_at, deleted_at, artifact_class
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
@@ -853,6 +867,7 @@ class S3AttachmentStore:
             serving_url   = f"{self._serving_url}/{file_id}",
             expires_at    = row["expires_at"],
             deleted_at    = row["deleted_at"],
+            artifact_class = row["artifact_class"],
         )
 
     # ── stream_bytes ──────────────────────────────────────────────────────────

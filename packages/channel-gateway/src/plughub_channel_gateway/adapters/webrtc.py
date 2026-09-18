@@ -129,6 +129,7 @@ from .webrtc_provider import (
     build_room_name,
 )
 from . import media_policy
+from .webrtc_recording import CallRecorder
 from .webchat import menu_result_history_text
 from .sip_leg import SipCall, is_sip_room, parse_sip_participant
 from .webrtc_room_client import (
@@ -374,9 +375,20 @@ class WebRTCAdapter(ChannelAdapter):
         self._voice_wanted:  set[str] = set()
         self._voice_absent_why: dict[str, str] = {}
 
-        # Phase D: active egress recordings.
-        # _session_egress: session_id → { segment_id → egress_id }
-        self._session_egress: dict[str, dict[str, str]] = {}
+        # VOZ-06 — gravação da chamada, por partes (ver `webrtc_recording.py`). Liga pelo POOL de
+        # quem atende (`media_policy.recording`), com aviso antes e recusa honrada.
+        self._recorder = CallRecorder(
+            redis          = redis,
+            tenant_id      = settings.tenant_id,
+            output_dir     = settings.webrtc_egress_output_dir,
+            config_api_url = settings.config_api_url,
+            default_notice = settings.webrtc_recording_notice,
+            provider       = lambda: self._provider,
+            store          = lambda: self._attachment_store,
+            speak          = self._speak,
+            can_speak      = self._can_speak,
+            send_text      = self._send_recording_notice_text,
+        )
 
         # VOZ-05 (fatia A): campos mascarados de cada menu entregue, por sessão
         # (session_id → menu_id → field_ids), e o fim da folga da coleta mascarada
@@ -771,8 +783,8 @@ class WebRTCAdapter(ChannelAdapter):
         except Exception:
             pass
 
-        # Phase D: stop egress recordings
-        await self._stop_all_egress(session_id)
+        # VOZ-06: a parte em curso fecha e é guardada
+        await self._recorder.close(session_id)
 
         # Phase C: ouvinte e voz saem da sala
         await self._stop_bot_leg(session_id)
@@ -1237,6 +1249,7 @@ class WebRTCAdapter(ChannelAdapter):
             if run_voice:
                 disparar(self._start_voice(session_id, room_name),
                          nome=f"webrtc-voz-start-{session_id[:8]}")
+            self._recording_follow(session_id, state)
             return
         try:
             await self._provider.create_room(room_name)
@@ -1274,10 +1287,10 @@ class WebRTCAdapter(ChannelAdapter):
                 self._start_voice(session_id, room_name),
                 nome=f"webrtc-voz-start-{session_id[:8]}",
             )
-        # LÁPIDE (VOZ-10, 2026-09-14) — aqui a gravação disparava se o pool trouxesse
-        # `webrtc_recording`, campo que NÃO existia em lugar nenhum: leitor sem produtor,
-        # logo a gravação nunca iniciava. O gatilho volta com a VOZ-06, junto do egress e
-        # do campo que o controla — campo na tela sem efeito é o que se evita.
+        # VOZ-06 — a gravação segue os atendentes cujo POOL grava (`media_policy.recording`).
+        # O `webrtc_recording` que se lia aqui até a VOZ-10 não tinha produtor; este tem (o
+        # registry, pela política do pool, lida fresca pelo bridge).
+        self._recording_follow(session_id, state)
 
     async def _on_routing_renegotiate(
         self,
@@ -1326,6 +1339,7 @@ class WebRTCAdapter(ChannelAdapter):
         publish = self._ceiling(state)
         previous = (state.get("customer") or {}).get("publish")
         new_list = media_policy.kinds_list(publish)
+        self._recording_follow(session_id, state)
         # O bot leg segue os ATENDENTES, não o teto: entra com o primeiro atendente de áudio e
         # sai quando não resta nenhum.
         # Ouvinte e voz decidem cada um por si; a decisão da voz antes de qualquer `await`.
@@ -1638,7 +1652,12 @@ class WebRTCAdapter(ChannelAdapter):
                 sid = self._sip_by_room.get(room)
                 ident = str(participant.get("identity") or "")
                 if sid and sid in self._media_hold and not self._may_stay_in_hold(sid, ident):
-                    await self._media_hold_intrusion(sid, ident)
+                    if str(participant.get("kind") or "").upper() in ("EGRESS", "3"):
+                        # VOZ-06: o gravador de uma parte pedida para parar pode chegar à sala depois
+                        # do pedido. Sai, e não desfaz a coleta — ele não é gente que ouviu a tecla.
+                        await self._media_hold_evict_recorder(sid, ident)
+                    else:
+                        await self._media_hold_intrusion(sid, ident)
         elif event == "participant_left" and participant:
             sid = self._sip_by_room.get(room)
             if sid and self._sip[sid].identity == participant.get("identity"):
@@ -1799,8 +1818,8 @@ class WebRTCAdapter(ChannelAdapter):
         The platform (Core) handles session bookkeeping and publishes
         session.closed to the stream, which eventually reaches deliver_session_closed.
         """
-        # Phase D: stop egress recordings before Phase C cleanup
-        await self._stop_all_egress(session_id)
+        # VOZ-06: a parte em curso fecha e é guardada — antes de o bot leg sair
+        await self._recorder.close(session_id)
 
         # Phase C: ouvinte e voz saem da sala
         await self._stop_bot_leg(session_id)
@@ -2163,6 +2182,24 @@ class WebRTCAdapter(ChannelAdapter):
         """A atribuição já chegou (`_customer_media`) e decidiu que NÃO há voz nesta chamada."""
         return session_id in self._customer_media and session_id not in self._voice_wanted
 
+    # ── Gravação (VOZ-06) ─────────────────────────────────────────────────────
+
+    def _recording_follow(self, session_id: str, state: dict) -> asyncio.Task:
+        """Entrega ao gravador os pools que GRAVAM entre os atendentes de agora. Em segundo plano:
+        o aviso de gravação pode levar segundos para tocar, e nada do roteamento espera por ele."""
+        pools = {rec.get("pool_id", "") for rec in (state.get("attendants") or {}).values()
+                 if isinstance(rec, dict) and rec.get("recording") is True}
+        return disparar(self._recorder.update(session_id, self._room_of(session_id), pools),
+                        nome=f"webrtc-gravacao-{session_id[:8]}")
+
+    async def _send_recording_notice_text(self, session_id: str, text: str) -> bool:
+        ws = self._connections.get(session_id)
+        if ws is None:
+            return False
+        await self._ws_send(ws, {"type": "webrtc.message", "text": text, "author": "system",
+                                 "ts": datetime.now(timezone.utc).isoformat()})
+        return True
+
     def _can_speak(self, session_id: str) -> bool:
         """Há TTS, a sessão é deste gateway e a VOZ vai estar na sala. Antes do `routing.assigned`
         não se sabe — a fala da IA chega antes dele (fatia 3) —, e a espera de cada mensagem
@@ -2515,6 +2552,8 @@ class WebRTCAdapter(ChannelAdapter):
                          "coleta desfeita (session=%s)", menu, exc, session_id)
             return False
         self._media_hold[session_id] = menu
+        # VOZ-06: o bloco mascarado nunca é gravado — a parte em curso para AQUI, antes do prompt
+        await self._recorder.hold(session_id)
         if self._provider is None:
             logger.error("webrtc coleta mascarada: sem plano de midia para esvaziar a sala do menu %s — "
                          "%s; coleta desfeita (session=%s)", menu, self._provider_unavailable, session_id)
@@ -2552,6 +2591,21 @@ class WebRTCAdapter(ChannelAdapter):
             return
         logger.info("webrtc coleta mascarada: pausa de midia do menu %s liberada — %s (session=%s)",
                     menu, why, session_id)
+        disparar(self._recorder.release(session_id), nome=f"webrtc-gravacao-volta-{session_id[:8]}")
+
+    async def _media_hold_evict_recorder(self, session_id: str, identity: str) -> None:
+        room = self._room_of(session_id)
+        logger.warning("webrtc coleta mascarada: gravador %s entrou na sala %s durante o bloco — tirado "
+                       "(session=%s)", identity, room, session_id)
+        if self._provider is not None:
+            try:
+                await self._provider.remove_participant(room, identity)
+            except Exception as exc:
+                logger.error("webrtc coleta mascarada: gravador %s NAO saiu da sala %s (%s) — coleta "
+                             "desfeita (session=%s)", identity, room, exc, session_id)
+                ac = self._collects.get(session_id)
+                if ac is not None and ac.masked_sip:
+                    await self._abort_collect(session_id, ac, f"gravador {identity} nao saiu da sala")
 
     async def _media_hold_intrusion(self, session_id: str, identity: str) -> None:
         """Alguém entrou na sala DURANTE o bloco (token emitido antes da pausa, ou caminho que
@@ -2790,252 +2844,6 @@ class WebRTCAdapter(ChannelAdapter):
         # na taxa da fala: a trilha da voz nasce com a taxa do primeiro áudio e não a troca
         rate = getattr(self._tts, "output_sample_rate", None) or _BEEP_RATE
         disparar(voice.publish_audio(_beep_pcm(rate), sample_rate=rate), nome=f"webrtc-bipe-{session_id[:8]}")
-
-    # ── Phase D: Egress Recording ─────────────────────────────────────────────
-
-    async def _start_egress(
-        self,
-        session_id: str,
-        segment_id: str,
-        room_name:  str,
-    ) -> None:
-        """
-        Announce LGPD notice then start a LiveKit composite egress for this
-        session/segment.
-
-        Guard against double-start: if the Redis key already exists (e.g. rapid
-        re-trigger), the call is a no-op.  The egress_id is stored both in the
-        in-process dict and in Redis so teardown works even after a Gateway
-        restart (best-effort — restart gap leaves egress running, not crashed).
-
-        Called as a fire-and-forget task from _on_routing_assigned() when
-        a recording trigger. ⚠️ Sem chamador desde a VOZ-10: o gatilho lia um
-        `pool.webrtc_recording` que ninguem produzia, e volta com a VOZ-06.
-        """
-        s = self._settings
-
-        # Double-start guard
-        rec_key = f"channel:webrtc:{session_id}:egress:{segment_id}"
-        if await self._redis.exists(rec_key):
-            logger.info(
-                "webrtc egress: already recording session=%s segment=%s — skip",
-                session_id, segment_id,
-            )
-            return
-
-        # Claim the recording slot before any async work to prevent races
-        await self._redis.set(rec_key, "starting", ex=_SESSION_TTL)
-
-        # Aviso LGPD de gravação: SEMPRE por texto, e também falado quando há voz na chamada.
-        # Só na fila de fala (como era) ele podia não chegar a ninguém — descartado depois da
-        # espera, cortado pelo barge-in, ou entregue a um participante que ninguém ouve — e o log
-        # diria "o texto ja chegou ao widget", falso para ele (VOZ-05 fatia 4). A gravação não
-        # depende de o aviso ter sido FALADO; se deve esperar o fim da fala é decisão da VOZ-06.
-        notice = s.webrtc_recording_notice
-        self._speak(session_id, notice)
-        ws = self._connections.get(session_id)
-        if ws:
-            await self._ws_send(ws, {
-                "type": "webrtc.message",
-                "text": notice,
-                "author": "system",
-                "ts": datetime.now(timezone.utc).isoformat(),
-            })
-        else:
-            logger.warning(
-                "webrtc egress: aviso de gravacao sem WebSocket do cliente session=%s — "
-                "o texto NAO foi entregue (%s)", session_id,
-                "so falado" if self._can_speak(session_id) else "nem falado",
-            )
-
-        # Natural pause after notice (mirrors voice channel behaviour)
-        await asyncio.sleep(1.5)
-
-        # Build output file path (shared volume between LiveKit and Gateway)
-        output_dir = Path(s.webrtc_egress_output_dir) / session_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = str(output_dir / f"{segment_id}.mp4")
-
-        try:
-            egress_id = await self._provider.start_egress(
-                room_name    = room_name,
-                output_url   = output_path,
-                layout       = "speaker",
-                dual_channel = True,
-            )
-        except Exception as exc:
-            logger.error(
-                "webrtc egress: start_egress failed session=%s segment=%s: %s",
-                session_id, segment_id, exc,
-            )
-            # Release the claim so a retry is possible
-            await self._redis.delete(rec_key)
-            return
-
-        # Persist egress_id
-        await self._redis.set(rec_key, egress_id, ex=_SESSION_TTL)
-        if session_id not in self._session_egress:
-            self._session_egress[session_id] = {}
-        self._session_egress[session_id][segment_id] = egress_id
-
-        logger.info(
-            "webrtc egress started: session=%s segment=%s egress_id=%s output=%s",
-            session_id, segment_id, egress_id, output_path,
-        )
-
-    async def _stop_all_egress(self, session_id: str) -> None:
-        """
-        Stop all active egress recordings for a session and commit them to the
-        AttachmentStore.  Called from both _close_session() and
-        deliver_session_closed() — idempotent (cleared from dict on first call).
-        """
-        active = self._session_egress.pop(session_id, {})
-        if not active:
-            return
-
-        for segment_id, egress_id in active.items():
-            disparar(
-                self._stop_egress_and_store(session_id, segment_id, egress_id),
-                nome=f"webrtc-egress-stop-{session_id[:8]}-{segment_id[:8]}",
-            )
-
-    async def _stop_egress_and_store(
-        self,
-        session_id: str,
-        segment_id: str,
-        egress_id:  str,
-    ) -> None:
-        """
-        Stop the LiveKit egress, wait for file finalization, commit bytes to
-        AttachmentStore, and write a recording.completed event to the session
-        stream.
-
-        Steps:
-          1. stop_egress(egress_id)
-          2. sleep(webrtc_egress_wait_s) — LiveKit flushes the MP4 container
-          3. Read file from shared output path
-          4. Commit to AttachmentStore (if configured) → file_id, serving_url
-          5. XADD recording.completed to session stream
-          6. Delete local temp file
-        """
-        s          = self._settings
-        output_dir = Path(s.webrtc_egress_output_dir) / session_id
-        output_path = output_dir / f"{segment_id}.mp4"
-
-        # Step 1 — stop egress
-        try:
-            await self._provider.stop_egress(egress_id)
-        except Exception as exc:
-            logger.warning(
-                "webrtc egress: stop_egress error session=%s egress=%s: %s",
-                session_id, egress_id, exc,
-            )
-
-        # Step 2 — wait for LiveKit to flush the output file
-        await asyncio.sleep(s.webrtc_egress_wait_s)
-
-        # Step 3 — read recording bytes
-        file_bytes: bytes = b""
-        file_size  = 0
-        try:
-            file_bytes = output_path.read_bytes()
-            file_size  = len(file_bytes)
-        except FileNotFoundError:
-            logger.warning(
-                "webrtc egress: recording file not found session=%s path=%s",
-                session_id, output_path,
-            )
-        except Exception as exc:
-            logger.warning(
-                "webrtc egress: could not read recording session=%s: %s",
-                session_id, exc,
-            )
-
-        # Step 4 — commit to AttachmentStore
-        file_id     = str(uuid.uuid4())
-        serving_url = str(output_path)  # fallback: local path
-
-        if file_bytes and self._attachment_store is not None:
-            try:
-                from ..attachment_store import resolve_attachment_expiry_days
-                _expiry_days = await resolve_attachment_expiry_days(
-                    self._redis, s.tenant_id, s.attachment_expiry_days
-                )
-                expires_at = datetime.now(timezone.utc) + timedelta(days=_expiry_days)
-                file_id_reserved, _ = await self._attachment_store.reserve(
-                    tenant_id  = s.tenant_id,
-                    session_id = session_id,
-                    file_name  = f"recording-{session_id[:8]}-{segment_id[:8]}.mp4",
-                    mime_type  = "video/mp4",
-                    size_bytes = file_size,
-                    expires_at = expires_at,
-                )
-                meta = await self._attachment_store.commit(
-                    file_id   = file_id_reserved,
-                    tenant_id = s.tenant_id,
-                    data      = file_bytes,
-                )
-                file_id     = meta.file_id
-                serving_url = getattr(meta, "serving_url", serving_url)
-                logger.info(
-                    "webrtc egress: recording committed file_id=%s url=%s "
-                    "session=%s segment=%s size=%d",
-                    file_id, serving_url, session_id, segment_id, file_size,
-                )
-            except Exception as exc:
-                logger.error(
-                    "webrtc egress: AttachmentStore commit failed session=%s: %s",
-                    session_id, exc,
-                )
-
-        # Step 5 — write recording.completed to session stream
-        try:
-            stream_key = f"session:{session_id}:stream"
-            await self._redis.xadd(
-                stream_key,
-                {
-                    "type":       "recording.completed",
-                    "session_id": session_id,
-                    "segment_id": segment_id,
-                    "egress_id":  egress_id,
-                    "file_id":    file_id,
-                    "serving_url": serving_url,
-                    "size_bytes": str(file_size),
-                    "channel":    "webrtc",
-                },
-            )
-            logger.info(
-                "webrtc egress: recording.completed event written to stream "
-                "session=%s segment=%s file_id=%s",
-                session_id, segment_id, file_id,
-            )
-        except Exception as exc:
-            logger.error(
-                "webrtc egress: stream XADD failed session=%s: %s", session_id, exc
-            )
-
-        # Step 6 — clean up local temp file
-        if file_bytes:
-            try:
-                output_path.unlink(missing_ok=True)
-                # Remove dir if empty
-                try:
-                    output_dir.rmdir()
-                except OSError:
-                    pass
-            except Exception as exc:
-                logger.debug(
-                    "webrtc egress: cleanup error session=%s path=%s: %s",
-                    session_id, output_path, exc,
-                )
-
-        # Clear Redis egress key
-        try:
-            await self._redis.delete(
-                f"channel:webrtc:{session_id}:egress:{segment_id}"
-            )
-        except Exception:
-            pass
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

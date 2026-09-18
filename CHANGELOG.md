@@ -1,5 +1,114 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-18 (4) — VOZ-06: a chamada é gravada quando o pool pede, em partes, sem o dado protegido
+
+**O estado de partida.** Havia código de gravação (a "Fase D" do Arc 15), e ele nunca rodou:
+- nenhum serviço de egress em compose algum;
+- o gatilho lia `pool.webrtc_recording`, campo sem produtor;
+- gravava VÍDEO MP4 e esperava `sleep(5)` para adivinhar o fim do arquivo;
+- guardava com a retenção do anexo de webchat;
+- servia pela porta pública de anexos, que toma o file_id como credencial.
+
+Nada ficava vermelho, porque nada executava. Foi substituído, não consertado.
+
+**Decisões do dono (2026-09-18):**
+- **só áudio misturado** da sala;
+- **campo no pool**, `media_policy.recording`, na mesma tela da política de mídia;
+- **o fluxo pergunta e a plataforma honra** a recusa, pela tag `core.contact.recording_opt_out`.
+
+A retenção é a já registrada na ficha: 30 dias, como classe própria.
+
+**Medido antes de construir** (egress v1.10 no demo):
+- `audio_only` **não dispensa o Chrome** (`sourceType WEB`): misturar a sala é composição, e
+  composição é o navegador. O egress fica ativo em ~2-3 s e a imagem tem 4,1 GB.
+- O egress roda como uid 1001/gid 0 e não conseguia escrever no diretório que o gateway criava
+  (`Local upload failed: permission denied`, dito pelo próprio egress). O diretório da sessão agora
+  nasce com modo `0770`.
+- 6,5 s de tom viraram um OGG de 106 KB, lido pelo gateway no volume compartilhado.
+
+**Como ficou** (`adapters/webrtc_recording.py`, `CallRecorder`):
+- **Uma gravação por vez** por sessão, em **partes**. Há uma parte nova quando o conjunto de pools
+  que gravam muda, em volta do bloco mascarado (NIV-07: a parte fecha **antes** do prompt do PIN e a
+  próxima só começa quando o bloco termina) e no fim da chamada.
+- **Aviso**: sai por texto e/ou voz, uma vez por sessão, e a gravação só começa depois de ele
+  **tocar**. **Sem aviso entregue, não se grava**, e isso vira `recording.skipped`.
+- **Recusa**: conferida antes de cada parte e a cada 2 s durante ela.
+  - Recusa no meio **descarta** a parte em curso, e nenhuma parte nova começa.
+  - Ilegível antes de começar, não começa.
+  - Valor que não é "falso" vale como recusa, com aviso no log.
+- **Fim do egress**: `wait_egress` lê o fim **real**, não um `sleep`. Parte parada antes de o
+  egress gravar volta `EGRESS_ABORTED` sem arquivo: é parte **vazia**, não falha.
+- **Nunca finge gravar**: egress que não começa, que termina falho, arquivo fora do rascunho ou store
+  ausente viram `recording.failed` com o motivo.
+- **AttachmentStore**: ganha a coluna `artifact_class` (`ALTER … ADD COLUMN IF NOT EXISTS`, default
+  `webchat_attachment`). A gravação entra como `call_recording`, `audio/ogg`, expirando pela
+  retenção **da classe** (`storage.call_recording_retention_days`).
+- **Porta pública de anexos** responde **404** para qualquer classe que não seja
+  `webchat_attachment`.
+- **Config**, lida a cada parte, sem cache:
+  - aviso em `webrtc.recording_notice`, na aba WebRTC;
+  - retenção em Plataforma → Retenção de dados, novo namespace `storage`.
+- **Tela do pool**:
+  - ganhou "Gravar as chamadas atendidas por este pool";
+  - passou a pedir a política de mídia também para pool **só `voice`**. Desde a VOZ-02 o registry a
+    exige, e a tela só a pedia com `webrtc` — pool só de telefone não salvava.
+- **Tag de recusa** `core.contact.recording_opt_out`:
+  - entrou na semente (TS e gêmeo Python);
+  - entrou no mapa **vivo** por escrita aditiva, com backup e plano conferido (101 → 102 folhas,
+    +1/−0/~0, releitura idêntica). O `config-seed` a acusava como a única divergência do declarado.
+
+**O gate pegou dois defeitos, um da plataforma e um dele.**
+1. **O `main` construía o adapter WebRTC SEM o AttachmentStore.** A primeira rodada ao vivo gravou a
+   parte 1, parou antes do PIN e terminou em `recording.failed` "sem AttachmentStore" — alto, como o
+   desenho pede. A Phase D tinha o mesmo buraco e ninguém viu, porque ela nunca rodou. Consertado,
+   com teste de censo por AST (`TestMainEntregaOStore`).
+2. **O pedido do PIN não se distinguia na transcrição.** O Whisper **alucina** a última frase no
+   silêncio do fim do arquivo — as duas partes terminavam em *"Digite e termine com o jogo da
+   velha"*, inclusive a parte 2, depois da qual não havia pedido nenhum. E perdia a palavra "PIN".
+   O ramo G4 ("o pedido do PIN não está na gravação") estava medindo surdez. Agora o pedido tem uma
+   palavra só dele ("confidencial"), e o ramo tem **controle**: o mesmo pedido, sintetizado pela
+   mesma voz e transcrito pelo mesmo serviço, tem a palavra.
+
+**`probe_voz06_recording.sh` VERDE** (três chamadas pelo tronco simulado):
+- G1: o cliente aceita e há **duas partes guardadas**;
+- G2: cada parte é `call_recording`, `audio/ogg`, expira em 30,0 d, e diz de que pool é (10-20 s,
+  160-330 KB cada);
+- G3: há **fala dentro** de cada parte, transcrita;
+- G4: o pedido do PIN não está em parte nenhuma, com o controle reconhecendo a palavra;
+- G5: 404 na porta pública;
+- L1: a parte 1 para antes da pausa de mídia e a parte 2 começa depois de ela sair;
+- L2: o aviso é entregue antes da parte 1;
+- Lg: o PIN não aparece no log;
+- R1: a recusa gravada **pelo fluxo** descarta a parte e nada é guardado;
+- N1: pool sem `recording` não gera evento nenhum.
+
+**E o censo do store pegou o gravador por fora do contrato.** O `probe_adapter_self_calls` ficou
+VERMELHO: o gravador chamava `reserve`/`commit` por um nome LOCAL (`store = self._store()`), forma que
+o censo não ligava — as duas chamadas estavam fora da conferência contra o Protocol, e um kwarg
+errado nelas não reprovaria nada. O local passou a ser anotado com o tipo, e o censo ganhou essa
+quinta forma de ligação, documentada junto das outras quatro. Verde, com as 18 chamadas ligadas.
+
+**Testes:**
+- `test_webrtc_egress.py` reescrito: 29 testes, cada caso com o controle ao lado;
+- gateway 1347, agent-registry 132, schemas 356, platform-ui `tsc` limpo.
+- Vizinhos VERDES: `probe_task_ledger`, `probe_gates_manifest_coverage`,
+  `probe_i18n_duplicate_keys`, `probe_context_map_seed`, `probe_contextstore_cadastro`,
+  `probe_context_tag_extractor_parity`, `probe_seed_drift_named`, `probe_attachment_expiry`,
+  `probe_channel_capability_single_house`, `probe_adapter_self_calls`,
+  `probe_ui_credential_coverage`, `probe_nav_route_guard_agreement`,
+  `probe_config_route_collision`, `probe_webrtc_media_plane`, `probe_webrtc_masked_keypad`,
+  `probe_voz02_sip_inbound`.
+- `probe_context_map_audit` saiu INCONCLUSIVO pela bancada: ele compila os schemas com `node`, e o
+  WSL não tem `node` Linux. O mesmo `tsc` passou no container.
+
+**Fora desta ficha, registrado:**
+- `VOZ-36`: ouvir a gravação por porta autenticada e auditada. Hoje ela é guardada e ninguém a ouve
+  — a porta pública a recusa, de propósito.
+- `VOZ-37`: validação assistida no browser: aviso por texto no widget, gravação com humano
+  atendendo, a faixa de pausa do Console (NIV-07).
+- A `VOZ-24` perde o bloqueio pela classe de retenção (o mecanismo existe) e fica bloqueada só pela
+  decisão de consentimento.
+
 ## 2026-09-18 (3) — NIV-07: o PIN pelo telefone é coletado por tecla, com a sala só com o cliente e os bots
 
 **A pergunta que decidiu o desenho** veio do dono antes de qualquer código: *o agente humano aciona

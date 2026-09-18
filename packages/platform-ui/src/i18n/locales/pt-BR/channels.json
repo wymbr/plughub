@@ -181,6 +181,10 @@
       "stt_vad_filter": {
         "label": "Detecção de voz",
         "help": "O serviço de transcrição descarta trechos sem fala em vez de inventar texto."
+      },
+      "recording_notice": {
+        "label": "Aviso de gravação",
+        "help": "Dito (e escrito, se houver tela) ao cliente antes de gravar. Só vale para pools que gravam; sem aviso entregue, a chamada não é gravada. Até 1000 caracteres."
       }
     }
   },

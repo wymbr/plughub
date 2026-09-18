@@ -146,7 +146,9 @@
       "undeclared": "Not declared — a contact pool with WebRTC cannot be saved like this.",
       "textOnly": "Declare text only",
       "textOnlyDeclared": "Declared as text only: neither side publishes audio or video.",
-      "required": "Declare the media offered on WebRTC (or \"text only\") before saving."
+      "required": "Declare the media offered on WebRTC (or \"text only\") before saving.",
+      "recording": "Record the calls handled by this pool (audio only)",
+      "recordingHint": "The customer is told first (no notice delivered, no recording) and can refuse: the flow writes core.contact.recording_opt_out and the platform honours it. Protected-data entry is never recorded. Retention lives in Platform → Data retention."
     },
     "transfer": {
       "label": "Transfer / Escalate",

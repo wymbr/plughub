@@ -27,6 +27,10 @@
     "survey":          "Catálogo de instrumentos de pesquisa (chave `instruments`): CSAT/NPS/CES/PMF/FCR com escala e agregação, lido pelo editor de formulários de diálogo",
     "identity":        "País padrão (ISO 3166-1, ex.: BR) para telefones digitados sem código do país. Trocar muda como telefones novos identificam o cliente; os já gravados não são reescritos"
   },
+  "nsSection": {
+    "expurgo": "Dados de analytics (expurgo)",
+    "storage": "Armazenamento de artefatos (gravação de chamada)"
+  },
   "namespace": {
     "title":            "Namespaces",
     "adminToken":       "Admin token",

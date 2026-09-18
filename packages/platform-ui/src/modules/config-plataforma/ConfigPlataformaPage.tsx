@@ -34,7 +34,8 @@ const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> 
     ],
   },
   consumer: { namespaces: [{ ns: 'consumer' }] },
-  expurgo:  { namespaces: [{ ns: 'expurgo'  }] },
+  // VOZ-06 — `storage`: retenção por CLASSE de artefato (gravação de chamada)
+  expurgo:  { namespaces: [{ ns: 'expurgo' }, { ns: 'storage' }] },
   // R8e — namespace `evaluation` editável na UI (limiar de divergência, N mínimo, etc.).
   evaluation: { namespaces: [{ ns: 'evaluation' }] },
   // Survey — catálogo de instrumentos (chave `instruments`: CSAT/NPS/CES/PMF/FCR +
@@ -138,7 +139,7 @@ export default function ConfigPlataformaPage() {
                   <NamespacePanel
                     key={ns}
                     nsId={ns}
-                    sectionLabel={cfg.namespaces.length > 1 ? label : undefined}
+                    sectionLabel={cfg.namespaces.length > 1 ? (label ?? t(`nsSection.${ns}`)) : undefined}
                     tenantId={tenantId}
                     accessToken={accessToken}
                     editingKey={editingKey}

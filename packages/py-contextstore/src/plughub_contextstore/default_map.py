@@ -52,7 +52,8 @@ DEFAULT_CONTEXT_MAP: dict[str, Any] = {
                 "last_primary_agent_key": {"tipo": "texto", "legado": ["session.contato.last_primary_agent_key", "session.last_primary_agent_key"]},
                 "last_primary_segment_id": {"tipo": "texto", "legado": ["session.contato.last_primary_segment_id", "session.last_primary_segment_id"]},
                 "root_session_id": {"tipo": "texto", "legado": ["session.contato.root_session_id", "session.root_session_id"]},
-                "spawn_reason": {"tipo": "texto", "legado": ["session.contato.spawn_reason", "session.spawn_reason"]}
+                "spawn_reason": {"tipo": "texto", "legado": ["session.contato.spawn_reason", "session.spawn_reason"]},
+                "recording_opt_out": {"tipo": "texto", "label": "O cliente recusou a gravação — o FLUXO escreve, a plataforma honra (VOZ-06)"}
             },
             "copilot": {
                 "last_analysis": {"tipo": "texto", "legado": ["session.copilot.ultima_analise"]},

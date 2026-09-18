@@ -17,7 +17,7 @@ import Spinner from '@/components/ui/Spinner'
 
 const NS = 'webrtc'
 
-interface ParamDef { key: string; min?: number; max?: number; step?: number; bool?: boolean }
+interface ParamDef { key: string; min?: number; max?: number; step?: number; bool?: boolean; text?: boolean }
 
 const PARAMS: ParamDef[] = [
   { key: 'stt_energy_threshold', min: 50,   max: 5000,  step: 50 },
@@ -26,10 +26,13 @@ const PARAMS: ParamDef[] = [
   { key: 'stt_min_speech_ms',    min: 50,   max: 2000,  step: 50 },
   { key: 'stt_max_speech_ms',    min: 1000, max: 60000, step: 500 },
   { key: 'stt_vad_filter',       bool: true },
+  // VOZ-06 — aviso dito ao cliente antes de gravar; valida em `channel-gateway/recording_config.py`
+  { key: 'recording_notice',     text: true, max: 1000 },
 ]
 
 function valid(p: ParamDef, v: unknown): boolean {
   if (p.bool) return typeof v === 'boolean'
+  if (p.text) return typeof v === 'string' && v.trim().length > 0 && v.length <= (p.max ?? Infinity)
   return typeof v === 'number' && Number.isFinite(v) && v >= (p.min ?? -Infinity) && v <= (p.max ?? Infinity)
 }
 
@@ -108,7 +111,15 @@ const WebRTCSpeechConfigPage: React.FC = () => {
                   <p className="text-2xs text-muted mt-0.5">{t(`webrtcSpeech.fields.${p.key}.help`)}</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {p.bool ? (
+                  {p.text ? (
+                    <textarea
+                      value={typeof draft[p.key] === 'string' ? (draft[p.key] as string) : ''}
+                      onChange={e => setDraft(d => ({ ...d, [p.key]: e.target.value }))}
+                      rows={3} maxLength={p.max}
+                      className="w-72 text-xs px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
+                      aria-label={t(`webrtcSpeech.fields.${p.key}.label`)}
+                    />
+                  ) : p.bool ? (
                     <input
                       type="checkbox"
                       checked={draft[p.key] === true}

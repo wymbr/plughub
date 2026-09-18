@@ -243,6 +243,7 @@ volumes:
   attachment-data:
   minio-data:
   speaches-models:     # modelos de STT/TTS do bot leg (VOZ-05) — ~550 MB, baixados uma vez
+  webrtc-recordings:   # VOZ-06 — rascunho do egress; o gateway lê, guarda no AttachmentStore e apaga
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Testes manuais — roteiro de validação
@@ -1512,6 +1513,33 @@ services:
       - plughub-demo
     restart: on-failure
 
+  # VOZ-06 — gravação. O serviço de egress do SFU grava a sala (só ÁUDIO misturado, decisão do
+  # dono) num arquivo no volume compartilhado; o gateway o lê quando o egress termina, guarda no
+  # AttachmentStore como `call_recording` e apaga o rascunho. Fala com o SFU pelo mesmo Redis
+  # próprio do `livekit-sip`. Sem este serviço o `start_egress` falha ALTO e o gateway diz que a
+  # gravação não começou — nunca finge gravar.
+  livekit-egress:
+    image: livekit/egress@sha256:f7828a5b67bba95fa89e8d466c72781972259c1cba05a510e834b4ac2bb35c34   # v1.10.0 em 2026-09-18
+    environment:
+      EGRESS_CONFIG_BODY: |
+        api_key: plughub_demo_key
+        api_secret: changeme_livekit_api_secret_demo_32chars
+        ws_url: ws://livekit:7880
+        redis:
+          address: livekit-redis:6379
+        health_port: 8080
+        log_level: info
+    volumes:
+      - webrtc-recordings:/var/plughub/webrtc-recordings   # o MESMO caminho do gateway: o `filepath` do pedido vale nos dois
+    depends_on:
+      livekit:
+        condition: service_started
+      livekit-redis:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: on-failure
+
   # VOZ-02 — troncos de ENTRADA e dispatch rules, semeados de `infra/sip/*.json` pela API do SFU
   # (seed-if-absent). A senha do tronco vem do env, nunca do arquivo.
   sip-seed:
@@ -1718,6 +1746,9 @@ services:
       PLUGHUB_WEBRTC_STT_MODEL:           deepdml/faster-whisper-large-v3-turbo-ct2
       PLUGHUB_WEBRTC_TTS_MODEL:           speaches-ai/Kokoro-82M-v1.0-ONNX
       PLUGHUB_WEBRTC_TTS_VOICE:           pf_dora
+    volumes:
+      # VOZ-06 — rascunho da gravação que o `livekit-egress` escreve (mesmo caminho lá)
+      - webrtc-recordings:/var/plughub/webrtc-recordings
     depends_on:
       redis:
         condition: service_healthy

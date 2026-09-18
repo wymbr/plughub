@@ -20,6 +20,7 @@ Namespaces:
   evaluation         — Evaluation platform defaults
   dashboards         — Dashboard template management
   quality_ingest     — Per-source identity/pool/version map (R13c)
+  storage            — Retenção por CLASSE de artefato do AttachmentStore (VOZ-06: call_recording)
 
 Note: 'quota' namespace removed. Per-tenant limits ({tenant}:quota:*) are written
   directly by the pricing integration when a plan is activated — not seeded here.
@@ -471,6 +472,23 @@ _SEED: list[tuple[str, str, object, str]] = [
         True,
         "VAD do servico de transcricao. Medido 2026-09-17 (voz sintetizada): sem ele 44 de 44 trechos "
         "de nao-fala viravam texto; com ele 1 de 44, sem perder fala. Desligar so com medicao (VOZ-20)."
+    ),
+    # ── gravação de chamada (VOZ-06) ─────────────────────────────────────────────
+    # Source: channel-gateway/recording_config.py (quem valida). A gravação liga pelo POOL
+    # (`media_policy.recording`); aqui só o aviso e a retenção da classe.
+    (
+        "webrtc", "recording_notice",
+        "Esta chamada poderá ser gravada para fins de qualidade e treinamento.",
+        "Aviso dito (e escrito, se houver tela) ao cliente ANTES de a gravacao comecar. Sem aviso "
+        "entregue, a chamada NAO e gravada. Texto de ate 1000 caracteres. A recusa do cliente e do "
+        "fluxo: ele grava core.contact.recording_opt_out e a plataforma honra."
+    ),
+    (
+        "storage", "call_recording_retention_days",
+        30,
+        "Dias que a GRAVACAO de chamada fica guardada (classe call_recording do AttachmentStore), "
+        "depois expira pelo mesmo ciclo dos anexos. Inteiro de 1 a 3650. Vale para gravacoes NOVAS: "
+        "a data de expiracao e carimbada quando a gravacao e guardada (ADR voice-media-plane V5)."
     ),
 
     # ── audit_policy ──────────────────────────────────────────────────────────

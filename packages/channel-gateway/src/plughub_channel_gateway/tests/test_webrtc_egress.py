@@ -1,664 +1,393 @@
 """
-tests/test_webrtc_egress.py
-Arc 15 Phase D — WebRTC Egress Recording tests.
+tests/test_webrtc_egress.py — gravação da chamada por PARTES (VOZ-06).
 
-Covers:
-  TestEgressStart            — _start_egress: notice delivery, Redis guard, start_egress call
-  TestEgressDoubleStartGuard — double-start is a no-op (Redis key exists)
-  TestEgressStopAndStore     — _stop_egress_and_store: stop, wait, read, commit, stream event
-  TestEgressStopNoFile       — file missing after wait → graceful skip (no crash)
-  TestEgressStopAllIdempotent— _stop_all_egress is idempotent (second call is no-op)
-  TestEgressRoutingAssigned  — _on_routing_assigned NAO dispara egress (gatilho sem produtor, VOZ-10)
-  TestEgressProviderImpl     — sem credencial nao ha egress placebo (VOZ-01) + MockProvider
+Substitui os testes da "Phase D", que exercitavam um caminho que nunca rodou (sem egress no
+compose, gatilho sem produtor, gravação em vídeo MP4 com `sleep(5)` adivinhando o fim do arquivo).
+Cada caso traz o CONTROLE ao lado: o que grava tem de gravar, o que não grava não pode gravar.
+
+O store é o `ProtocolBoundStore` do contrato dos escritores de anexo — ligado à assinatura do
+Protocol, então `artifact_class` que o Protocol não aceitasse reprovaria aqui.
 """
-
 from __future__ import annotations
 
 import asyncio
 import json
-import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from plughub_channel_gateway.adapters.webrtc import WebRTCAdapter, _SESSION_TTL
+from plughub_channel_gateway.adapters import media_policy, webrtc_recording
 from plughub_channel_gateway.adapters.webrtc_provider import (
-    MockWebRTCProvider,
     LiveKitProvider,
+    MockWebRTCProvider,
     WebRTCProviderUnavailable,
 )
-from plughub_channel_gateway.config import Settings
-
-from .conftest import (
-    CONTACT_ID,
-    SESSION_ID,
-    TENANT_ID,
-    mock_redis,
-    mock_producer,
-)
-
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-SEGMENT_ID = "seg-test-001"
-ROOM_NAME  = f"plughub-{SESSION_ID}"
-EGRESS_ID  = "EG_mock_0001"
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _make_settings(**overrides) -> Settings:
-    base = dict(
-        kafka_brokers             = "localhost:9092",
-        kafka_group_id            = "test-group",
-        kafka_topic_inbound       = "conversations.inbound",
-        kafka_topic_outbound      = "conversations.outbound",
-        kafka_topic_events        = "conversations.events",
-        redis_url                 = "redis://localhost:6379/0",
-        ws_connection_timeout_s   = 30,
-        ws_heartbeat_interval_s   = 10,
-        ws_contact_max_duration_s = 3600,
-        session_ttl_seconds       = 3600,
-        jwt_secret                = "test_secret_32chars_webchat_ok!!",
-        ws_auth_timeout_s         = 10,
-        storage_root              = "/tmp/plughub_test",
-        attachment_expiry_days    = 1,
-        database_url              = "postgresql://plughub:plughub@localhost:5432/plughub",
-        webchat_serving_base_url  = "http://localhost:8010/webchat/v1/attachments",
-        webchat_upload_base_url   = "http://localhost:8010/webchat/v1/upload",
-        tenant_id                 = TENANT_ID,
-        webrtc_stt_enabled        = False,
-        webrtc_recording_notice   = "Gravação ativa para qualidade.",
-        webrtc_egress_output_dir  = "/tmp/plughub_test_egress",
-        webrtc_egress_wait_s      = 0.0,  # no wait in tests
-    )
-    base.update(overrides)
-    return Settings(**base)
-
-
-def _make_adapter(
-    redis=None,
-    producer=None,
-    settings=None,
-    attachment_store=None,
-    webrtc_provider=None,
-):
-    """Return a (WebRTCAdapter, mock_redis, mock_producer) triple."""
-    if redis is None:
-        redis = AsyncMock()
-        redis.setex   = AsyncMock(return_value=True)
-        redis.get     = AsyncMock(return_value=None)
-        redis.delete  = AsyncMock(return_value=1)
-        redis.publish = AsyncMock(return_value=1)
-        redis.exists  = AsyncMock(return_value=0)
-        redis.set     = AsyncMock(return_value=True)
-        redis.xadd    = AsyncMock(return_value=b"1-0")
-        redis.lpush   = AsyncMock(return_value=1)
-        redis.expire  = AsyncMock(return_value=1)
-
-    if producer is None:
-        producer = AsyncMock()
-        producer.send  = AsyncMock()
-        producer.start = AsyncMock()
-        producer.stop  = AsyncMock()
-
-    if settings is None:
-        settings = _make_settings()
-
-    if webrtc_provider is None:
-        webrtc_provider = MockWebRTCProvider()
-
-    adapter = WebRTCAdapter(
-        producer         = producer,
-        redis            = redis,
-        settings         = settings,
-        webrtc_provider  = webrtc_provider,
-        registry         = AsyncMock(),
-        context_reader   = AsyncMock(),
-        attachment_store = attachment_store,
-    )
-    return adapter, redis, producer
-
-
-# ── MockAttachmentStore ───────────────────────────────────────────────────────
-
-
-class MockAttachmentMeta:
-    def __init__(self, file_id: str, serving_url: str):
-        self.file_id     = file_id
-        self.serving_url = serving_url
-        self.size_bytes  = 0
-
-
-class MockAttachmentStore:
-    def __init__(self, serving_url: str = "http://test/recording.mp4"):
-        self._serving_url = serving_url
-        self.reserved:  list[dict] = []
-        self.committed: list[dict] = []
-
-    async def reserve(self, *, tenant_id, session_id, file_name, mime_type,
-                       size_bytes, expires_at) -> tuple[str, str]:
-        file_id = str(uuid.uuid4())
-        self.reserved.append({
-            "file_id": file_id, "file_name": file_name, "mime_type": mime_type,
-        })
-        return file_id, f"http://upload/{file_id}"
-
-    async def commit(self, *, file_id, tenant_id, data) -> MockAttachmentMeta:
-        self.committed.append({"file_id": file_id, "size": len(data)})
-        return MockAttachmentMeta(file_id=file_id, serving_url=self._serving_url)
-
-
-# ── TestEgressStart ───────────────────────────────────────────────────────────
-
-
-class TestEgressStart:
-    """_start_egress: successful path — notice sent, egress started, Redis updated."""
-
-    @pytest.mark.asyncio
-    async def test_notice_sent_as_text_when_tts_disabled(self):
-        adapter, redis, _ = _make_adapter()
-
-        # Pre-register a mock WS connection
-        ws = AsyncMock()
-        ws.send_json = AsyncMock()
-        adapter._connections[SESSION_ID] = ws
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        # WS should have received the LGPD notice as a text message
-        ws.send_json.assert_called()
-        calls_args = [c.args[0] for c in ws.send_json.call_args_list]
-        notice_sent = any(
-            m.get("type") == "webrtc.message"
-            and "Gravação" in m.get("text", "")
-            for m in calls_args
-        )
-        assert notice_sent, f"LGPD notice not sent via WS. calls={calls_args}"
-
-    @pytest.mark.asyncio
-    async def test_notice_goes_as_text_even_when_the_voice_speaks_it(self):
-        # Achado da revisão da fatia 3 (VOZ-05 fatia 4): com voz na chamada o aviso ia SÓ para
-        # a fila de fala, onde pode ser descartado (espera, barge-in) sem chegar ao cliente.
-        from plughub_channel_gateway.adapters.webrtc_room_client import MockRoomClient
-
-        class _TTS:
-            output_sample_rate = 24000
-            textos: list[str] = []
-
-            async def synthesize(self, text, voice_id=None):
-                self.textos.append(text)
-                return b"\x01\x00" * 480
-
-        adapter, redis, _ = _make_adapter()
-        adapter._tts, adapter._tts_unavailable = _TTS(), None
-        adapter._sessions[SESSION_ID] = {"contact_id": "c", "pool_id": "p", "started_at": "x"}
-        adapter._voice_clients[SESSION_ID] = MockRoomClient()
-        adapter._voice_wanted.add(SESSION_ID)
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-        ws = AsyncMock()
-        adapter._connections[SESSION_ID] = ws
-        assert adapter._can_speak(SESSION_ID)       # testemunha: o ramo antigo só falaria
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        textos = [c.args[0].get("text", "") for c in ws.send_json.call_args_list
-                  if c.args[0].get("type") == "webrtc.message"]
-        assert any("Gravação" in t for t in textos), textos
-        assert SESSION_ID in adapter._speech_queues  # e também foi para a fala
-        await adapter._stop_bot_leg(SESSION_ID)
-
-    @pytest.mark.asyncio
-    async def test_provider_start_egress_called(self):
-        adapter, redis, _ = _make_adapter()
-        adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        provider: MockWebRTCProvider = adapter._provider
-        assert len(provider.egresses_started) == 1
-        started = provider.egresses_started[0]
-        assert started["room_name"] == ROOM_NAME
-        assert SEGMENT_ID in started["output_url"]
-
-    @pytest.mark.asyncio
-    async def test_egress_id_stored_in_memory(self):
-        adapter, redis, _ = _make_adapter()
-        adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        assert SESSION_ID in adapter._session_egress
-        assert SEGMENT_ID in adapter._session_egress[SESSION_ID]
-
-    @pytest.mark.asyncio
-    async def test_egress_id_stored_in_redis(self):
-        adapter, redis, _ = _make_adapter()
-        adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        # `pytest.approx(str, rel=0)` comparava o valor gravado com a CLASSE `str` —
-        # "aproximadamente igual a <class 'str'>" não casa com nada, então este teste
-        # nunca pôde passar (corrigido 2026-08-03). O autor queria "um str qualquer";
-        # o instrumento para isso é `mock.ANY`, e aqui dá para afirmar mais: o valor é
-        # o egress_id, e é ele que o teardown usa para parar a gravação. Um valor vazio
-        # gravado aqui deixaria a sessão sem como encerrar o egress — falha silenciosa,
-        # que é exatamente o que este teste existe para pegar.
-        # O TTL é `_SESSION_TTL` (4 h), não 3600 — o literal antigo congelava um valor
-        # que mudou. Afirmar contra a constante mantém o contrato que importa: a chave
-        # de gravação vive tanto quanto a sessão, senão o teardown perde o egress_id e
-        # a gravação fica órfã no LiveKit.
-        rec_key = f"channel:webrtc:{SESSION_ID}:egress:{SEGMENT_ID}"
-        redis.set.assert_any_call(rec_key, ANY, ex=_SESSION_TTL)
-
-        stored = next(
-            c.args[1] for c in redis.set.call_args_list if c.args[0] == rec_key
-        )
-        assert isinstance(stored, str) and stored, "egress_id gravado vazio"
-
-    @pytest.mark.asyncio
-    async def test_output_path_contains_session_and_segment(self):
-        adapter, _, _ = _make_adapter()
-        adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        provider: MockWebRTCProvider = adapter._provider
-        output_url = provider.egresses_started[0]["output_url"]
-        assert SESSION_ID in output_url
-        assert SEGMENT_ID in output_url
-        assert output_url.endswith(".mp4")
-
-
-# ── TestEgressDoubleStartGuard ────────────────────────────────────────────────
-
-
-class TestEgressDoubleStartGuard:
-    """Redis key already set → _start_egress returns without starting again."""
-
-    @pytest.mark.asyncio
-    async def test_double_start_is_noop(self):
-        adapter, redis, _ = _make_adapter()
-        adapter._connections[SESSION_ID] = AsyncMock()
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-
-        # Simulate Redis already holding the egress key
-        redis.exists = AsyncMock(return_value=1)
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        provider: MockWebRTCProvider = adapter._provider
-        assert provider.egresses_started == [], "start_egress must not be called when guard fires"
-
-    @pytest.mark.asyncio
-    async def test_notice_not_sent_when_guard_fires(self):
-        adapter, redis, _ = _make_adapter()
-        ws = AsyncMock()
-        adapter._connections[SESSION_ID] = ws
-        adapter._customer_media[SESSION_ID] = frozenset({"audio"})
-        redis.exists = AsyncMock(return_value=1)
-
-        await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
-
-        # No WS message should have been sent
-        ws.send_json.assert_not_called()
-
-
-# ── TestEgressRecordingOptOut — REMOVIDA em 2026-09-14 (VOZ-09) ──────────────────
-# Os dois testes desta classe REIMPLEMENTAVAM a condição de gravação no próprio corpo
-# (`if should_record and segment_id and medium in ...`) e afirmavam sobre a cópia — não
-# tocavam o produto, logo não podiam reprovar. É o mesmo defeito que a reescrita de
-# 2026-08-03 fechou em `TestEgressRoutingAssigned`, que já cobre os dois casos chamando
-# `_on_routing_assigned` de verdade.
-
-
-# ── TestEgressStopAndStore ────────────────────────────────────────────────────
-
-
-class TestEgressStopAndStore:
-    """_stop_egress_and_store: stop egress, read file, commit, write stream event."""
-
-    @pytest.fixture
-    def tmp_recording(self, tmp_path) -> Path:
-        """Create a fake MP4 recording file in tmp_path."""
-        session_dir = tmp_path / SESSION_ID
-        session_dir.mkdir()
-        recording   = session_dir / f"{SEGMENT_ID}.mp4"
-        recording.write_bytes(b"\x00\x01\x02\x03" * 256)  # 1024 bytes
-        return tmp_path
-
-    @pytest.mark.asyncio
-    async def test_stop_egress_called(self, tmp_recording):
-        attachment_store = MockAttachmentStore()
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_recording),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
+from plughub_channel_gateway.adapters.webrtc_recording import OPT_OUT_TAG, CallRecorder
+from plughub_channel_gateway.recording_config import RecordingPolicy
+from plughub_channel_gateway.tests.test_attachment_writers_contract import ProtocolBoundStore
+
+TENANT = "tenant_test"
+SID = "sid-voz06-rec-0001"
+ROOM = "plughub-sip-x"
+AVISO = "Esta chamada sera gravada."
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.ctx: dict[str, str] = {}
+        self.stream: list[dict] = []
+        self.kv: dict[str, str] = {}
+        self.hget_error: Exception | None = None
+
+    async def hget(self, key, field):
+        if self.hget_error is not None:
+            raise self.hget_error
+        assert key == f"{TENANT}:ctx:{SID}"
+        return self.ctx.get(field)
+
+    async def xadd(self, key, fields):
+        assert key == f"session:{SID}:stream"
+        self.stream.append(dict(fields))
+
+    async def setex(self, key, ttl, value):
+        self.kv[key] = value
+
+    async def delete(self, *keys):
+        for k in keys:
+            self.kv.pop(k, None)
+
+    def tipos(self) -> list[str]:
+        return [e["type"] for e in self.stream]
+
+
+class Rig:
+    """O gravador com tudo que ele toca, e o registro da ORDEM das coisas."""
+
+    def __init__(self, tmp_path: Path, *, texto=True, voz=False, store=True, retention=7) -> None:
+        self.redis = FakeRedis()
+        self.provider = MockWebRTCProvider()
+        self.store = ProtocolBoundStore() if store else None
+        self.ordem: list[str] = []
+        self.dir = tmp_path / "rec"
+        self._texto, self._voz = texto, voz
+        orig_start = self.provider.start_egress
+
+        async def start(room_name, filepath):
+            self.ordem.append("egress")
+            return await orig_start(room_name, filepath)
+        self.provider.start_egress = start
+
+        async def policy(_t):
+            return RecordingPolicy(AVISO, retention, {"notice": "config", "retention_days": "config"})
+
+        async def send_text(_sid, text):
+            if self._texto:
+                self.ordem.append(f"texto:{text}")
+            return self._texto
+
+        def speak(_sid, text, played=None):
+            self.ordem.append(f"voz:{text}")
+            if played is not None:
+                played.set()
+
+        self.rec = CallRecorder(
+            redis=self.redis, tenant_id=TENANT, output_dir=str(self.dir), config_api_url="http://x",
+            default_notice="padrao", provider=lambda: self.provider, store=lambda: self.store,
+            speak=speak, can_speak=lambda _s: self._voz, send_text=send_text, policy=policy,
         )
 
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        provider: MockWebRTCProvider = adapter._provider
-        assert EGRESS_ID in provider.egresses_stopped
-
-    @pytest.mark.asyncio
-    async def test_attachment_store_reserve_called(self, tmp_recording):
-        attachment_store = MockAttachmentStore()
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_recording),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
-        )
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        assert len(attachment_store.reserved) == 1
-        reserved = attachment_store.reserved[0]
-        assert reserved["mime_type"] == "video/mp4"
-        assert ".mp4" in reserved["file_name"]
-
-    @pytest.mark.asyncio
-    async def test_attachment_store_commit_called_with_bytes(self, tmp_recording):
-        attachment_store = MockAttachmentStore()
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_recording),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
-        )
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        assert len(attachment_store.committed) == 1
-        assert attachment_store.committed[0]["size"] == 1024
-
-    @pytest.mark.asyncio
-    async def test_recording_completed_event_written_to_stream(self, tmp_recording):
-        attachment_store = MockAttachmentStore(
-            serving_url = "http://test-serving/recording.mp4"
-        )
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_recording),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
-        )
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        stream_key = f"session:{SESSION_ID}:stream"
-        redis.xadd.assert_called_once()
-        call_args = redis.xadd.call_args
-        assert call_args.args[0] == stream_key or call_args[0][0] == stream_key
-        event_data = call_args.args[1] if call_args.args else call_args[0][1]
-        assert event_data["type"] == "recording.completed"
-        assert event_data["session_id"] == SESSION_ID
-        assert event_data["segment_id"] == SEGMENT_ID
-        assert event_data["egress_id"]  == EGRESS_ID
-
-    @pytest.mark.asyncio
-    async def test_serving_url_in_stream_event(self, tmp_recording):
-        attachment_store = MockAttachmentStore(
-            serving_url = "http://test-serving/recording.mp4"
-        )
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_recording),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
-        )
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        call_args  = redis.xadd.call_args
-        event_data = call_args.args[1] if call_args.args else call_args[0][1]
-        assert event_data["serving_url"] == "http://test-serving/recording.mp4"
-
-    @pytest.mark.asyncio
-    async def test_redis_egress_key_deleted_after_stop(self, tmp_recording):
-        attachment_store = MockAttachmentStore()
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_recording),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
-        )
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        expected_key = f"channel:webrtc:{SESSION_ID}:egress:{SEGMENT_ID}"
-        redis.delete.assert_any_call(expected_key)
-
-    @pytest.mark.asyncio
-    async def test_temp_file_deleted_after_store(self, tmp_recording):
-        attachment_store = MockAttachmentStore()
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_recording),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
-        )
-        recording_path = tmp_recording / SESSION_ID / f"{SEGMENT_ID}.mp4"
-        assert recording_path.exists(), "Pre-condition: file must exist"
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        assert not recording_path.exists(), "Recording file should be deleted after commit"
+    def reserves(self) -> list[dict]:
+        return [kw for m, kw in (self.store.chamadas if self.store else []) if m == "reserve"]
 
 
-# ── TestEgressStopNoFile ──────────────────────────────────────────────────────
+@pytest.fixture
+def rig(tmp_path):
+    return Rig(tmp_path)
 
 
-class TestEgressStopNoFile:
-    """Recording file missing after egress stop → graceful degradation."""
-
-    @pytest.mark.asyncio
-    async def test_no_crash_when_file_missing(self, tmp_path):
-        """File is gone (or never written) — no exception should propagate."""
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_path),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(settings=settings)
-
-        # Should not raise even though the file doesn't exist
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-    @pytest.mark.asyncio
-    async def test_stream_event_still_written_when_file_missing(self, tmp_path):
-        """Even without a file, recording.completed must be written to stream."""
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_path),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(settings=settings)
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        redis.xadd.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_no_attachment_store_call_when_no_bytes(self, tmp_path):
-        attachment_store = MockAttachmentStore()
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_path),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = attachment_store,
-        )
-
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        # No bytes available → store.reserve/commit should NOT be called
-        assert attachment_store.reserved == []
-        assert attachment_store.committed == []
+def _optout(valor) -> str:
+    return json.dumps({"value": valor, "confidence": 1.0, "source": "skill"})
 
 
-# ── TestEgressStopAllIdempotent ───────────────────────────────────────────────
+# ── Grava o que deve, e nada mais ────────────────────────────────────────────
+
+class TestGravaPeloPool:
+    async def test_pool_que_grava_vira_arquivo_guardado_como_call_recording(self, rig):
+        await rig.rec.update(SID, ROOM, {"pool_grava"})
+        assert rig.rec.active(SID)
+        filepath = rig.provider.egresses_started[0]["filepath"]
+        assert filepath.startswith(str(rig.dir / SID)) and filepath.endswith(".ogg")
+        await rig.rec.close(SID)
+        await rig.rec.drain()
+        assert rig.provider.egresses_stopped == ["EG_mock_0001"]
+        [kw] = rig.reserves()
+        assert kw["artifact_class"] == "call_recording" and kw["mime_type"] == "audio/ogg"
+        # retenção da CLASSE, não a do anexo de webchat
+        assert abs((kw["expires_at"] - datetime.now(timezone.utc)) - timedelta(days=7)) < timedelta(minutes=1)
+        [done] = [e for e in rig.redis.stream if e["type"] == "recording.completed"]
+        assert done["pools"] == "pool_grava" and done["part"] == "1" and done["artifact_class"] == "call_recording"
+        assert done["visibility"] == "agents_only"
+        assert not Path(filepath).exists(), "o rascunho tem de ser apagado depois de guardado"
+
+    async def test_controle_sem_pool_que_grava_nao_grava(self, rig):
+        await rig.rec.update(SID, ROOM, set())
+        await rig.rec.update(SID, ROOM, {""})
+        assert rig.provider.egresses_started == [] and rig.redis.stream == []
+
+    async def test_aviso_vem_ANTES_do_egress(self, rig):
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert rig.ordem == [f"texto:{AVISO}", "egress"]
+
+    async def test_aviso_falado_so_libera_depois_de_tocar(self, tmp_path):
+        r = Rig(tmp_path, texto=False, voz=True)
+        await r.rec.update(SID, ROOM, {"p"})
+        assert r.ordem == [f"voz:{AVISO}", "egress"]
+
+    async def test_sem_aviso_entregue_nao_grava(self, tmp_path):
+        r = Rig(tmp_path, texto=False, voz=False)
+        await r.rec.update(SID, ROOM, {"p"})
+        assert r.provider.egresses_started == []
+        assert r.redis.stream[0]["type"] == "recording.skipped"
+        assert r.redis.stream[0]["reason"] == "notice_undeliverable"
 
 
-class TestEgressStopAllIdempotent:
-    """_stop_all_egress is idempotent — second call does nothing."""
+class TestPartes:
+    async def test_troca_de_pools_que_gravam_corta_em_partes_sem_repetir_o_aviso(self, rig):
+        await rig.rec.update(SID, ROOM, {"a"})
+        await rig.rec.update(SID, ROOM, {"a", "b"})
+        await rig.rec.close(SID)
+        await rig.rec.drain()
+        assert len(rig.provider.egresses_started) == 2
+        assert [k for k in rig.ordem if k.startswith("texto")] == [f"texto:{AVISO}"]
+        pools = sorted(e["pools"] for e in rig.redis.stream if e["type"] == "recording.completed")
+        assert pools == ["a", "a,b"]
 
-    @pytest.mark.asyncio
-    async def test_second_stop_all_is_noop(self, tmp_path):
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_path),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(settings=settings)
+    async def test_ultimo_atendente_que_grava_saiu_a_parte_fecha(self, rig):
+        await rig.rec.update(SID, ROOM, {"a"})
+        await rig.rec.update(SID, ROOM, set())
+        await rig.rec.drain()
+        assert not rig.rec.active(SID) and len(rig.reserves()) == 1
 
-        # Seed one active egress
-        adapter._session_egress[SESSION_ID] = {SEGMENT_ID: EGRESS_ID}
-
-        # First call — fires stop task
-        await adapter._stop_all_egress(SESSION_ID)
-        assert SESSION_ID not in adapter._session_egress, "Session egress should be cleared"
-
-        # Second call — should do nothing (no more active egresses)
-        provider: MockWebRTCProvider = adapter._provider
-        initial_stops = len(provider.egresses_stopped)
-
-        await adapter._stop_all_egress(SESSION_ID)
-        # No new tasks created (we can't easily await created tasks here, but
-        # the fact that _session_egress is empty means no new stop is triggered)
-        assert len(provider.egresses_stopped) == initial_stops, (
-            "Second _stop_all_egress should not call stop_egress again"
-        )
-
-
-# ── TestEgressRoutingAssigned ─────────────────────────────────────────────────
-
-
-class TestEgressRoutingAssigned:
-    """_on_routing_assigned NÃO dispara gravação (VOZ-10).
-
-    O gatilho lia `pool.webrtc_recording`, campo que não existia em schema, tabela, tela
-    nem produtor: leitor sem produtor. Os testes anteriores o exercitavam injetando o campo
-    à mão no evento — provavam a CHAMADA e escondiam a AUSÊNCIA. A gravação volta com a
-    VOZ-06, junto do campo e de quem o escreve; até lá, nem o campo injetado liga nada.
-    """
-
-    async def _run(self, fields: dict):
-        adapter, _, _ = _make_adapter()
-        with patch.object(adapter, "_start_egress", new=AsyncMock()) as start, \
-             patch.object(adapter, "_start_stt_pipeline", new=AsyncMock()):
-            await adapter._on_routing_assigned(
-                AsyncMock(), SESSION_ID, fields, adapter._settings,
-            )
-            await asyncio.sleep(0)      # deixa as tasks criadas iniciarem
-        return start
-
-    @pytest.mark.asyncio
-    async def test_nem_campo_injetado_liga_gravacao(self):
-        start = await self._run({
-            "framework":  "human",
-            "segment_id": SEGMENT_ID,
-            "pool": json.dumps({
-                "pool_id": "p", "media_policy_source": "registry", "webrtc_recording": True,
-                "media_policy": {"customer_publish": ["audio", "video"], "agent_publish": []},
-            }),
-        })
-        start.assert_not_called()
+    async def test_bloco_mascarado_nao_e_gravado(self, rig):
+        """NIV-07: a parte fecha no `hold` (antes do prompt) e a próxima só começa no `release`."""
+        await rig.rec.update(SID, ROOM, {"p"})
+        await rig.rec.hold(SID)
+        assert not rig.rec.active(SID) and rig.provider.egresses_stopped == ["EG_mock_0001"]
+        await rig.rec.update(SID, ROOM, {"p"})           # atendente "renegociado" durante o bloco
+        assert len(rig.provider.egresses_started) == 1   # nada começa durante o bloco
+        await rig.rec.release(SID)
+        assert rig.rec.active(SID) and len(rig.provider.egresses_started) == 2
+        await rig.rec.close(SID)
+        await rig.rec.drain()
+        assert len(rig.reserves()) == 2
+        assert [k for k in rig.ordem if k.startswith("texto")] == [f"texto:{AVISO}"]
 
 
-# ── TestEgressProviderImpl ────────────────────────────────────────────────────
+class TestRecusa:
+    async def test_recusa_antes_nao_grava(self, rig):
+        rig.redis.ctx[OPT_OUT_TAG] = _optout(True)
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert rig.provider.egresses_started == []
+        assert [(e["type"], e["reason"]) for e in rig.redis.stream] == [("recording.skipped", "opt_out")]
+
+    async def test_controle_false_grava(self, rig):
+        rig.redis.ctx[OPT_OUT_TAG] = _optout("false")
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert len(rig.provider.egresses_started) == 1
+
+    async def test_valor_estranho_vale_como_recusa(self, rig):
+        rig.redis.ctx[OPT_OUT_TAG] = _optout("talvez")
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert rig.provider.egresses_started == []
+
+    async def test_recusa_ilegivel_nao_grava(self, rig):
+        rig.redis.hget_error = ConnectionError("redis fora")
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert rig.provider.egresses_started == []
+        assert rig.redis.stream[0]["reason"] == "opt_out_unreadable"
+
+    async def test_recusa_durante_a_parte_descarta_e_nao_volta(self, rig, monkeypatch):
+        monkeypatch.setattr(webrtc_recording, "OPT_OUT_POLL_S", 0.01)
+        await rig.rec.update(SID, ROOM, {"p"})
+        filepath = rig.provider.egresses_started[0]["filepath"]
+        rig.redis.ctx[OPT_OUT_TAG] = _optout(True)
+        for _ in range(200):
+            if not rig.rec.active(SID):
+                break
+            await asyncio.sleep(0.01)
+        await rig.rec.drain()
+        assert not rig.rec.active(SID)
+        assert rig.reserves() == [], "parte recusada NAO pode ser guardada"
+        assert "recording.discarded" in rig.redis.tipos()
+        assert not Path(filepath).exists()
+        await rig.rec.update(SID, ROOM, {"p", "q"})      # troca de atendente depois da recusa
+        assert len(rig.provider.egresses_started) == 1
 
 
-class TestEgressProviderImpl:
-    """LiveKitProvider sem plano de mídia: a recusa acontece ANTES de qualquer egress.
+class TestNuncaFingeGravar:
+    async def test_egress_que_nao_comeca_e_dito(self, rig):
+        rig.provider.egress_start_error = RuntimeError("sem servico de egress")
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert not rig.rec.active(SID)
+        [f] = rig.redis.stream
+        assert f["type"] == "recording.failed" and "sem servico de egress" in f["reason"]
 
-    Até a VOZ-01 esta classe cobrava `EG_dev_…` devolvido em `_dev_mode` — o chamador
-    registrava "gravação iniciada" contra um SFU que não existia — e tinha um teste que
-    terminava em `assert True`, isto é, que não podia reprovar. Os dois saíram.
-    """
+    async def test_egress_que_termina_falho_e_dito_e_nada_se_guarda(self, rig):
+        rig.provider.egress_end_error = "Local upload failed: permission denied"
+        await rig.rec.update(SID, ROOM, {"p"})
+        await rig.rec.close(SID)
+        await rig.rec.drain()
+        assert rig.reserves() == []
+        assert any(e["type"] == "recording.failed" and "permission denied" in e["reason"]
+                   for e in rig.redis.stream)
 
+    async def test_parte_parada_antes_de_gravar_e_vazia_nao_falha(self, rig):
+        from plughub_channel_gateway.adapters.webrtc_provider import EgressResult
+
+        async def wait(egress_id, timeout_s):
+            return EgressResult(egress_id, "EGRESS_ABORTED", error="Stopped before started")
+        rig.provider.wait_egress = wait
+        await rig.rec.update(SID, ROOM, {"p"})
+        await rig.rec.hold(SID)
+        await rig.rec.drain()
+        assert [(e["type"], e.get("reason")) for e in rig.redis.stream] == [("recording.discarded", "empty")]
+        # controle: ABORTED COM arquivo não é "vazia" — cai no caminho de falha dita
+        async def wait2(egress_id, timeout_s):
+            return EgressResult(egress_id, "EGRESS_ABORTED", filename=str(rig.dir / "x.ogg"))
+        rig.provider.wait_egress = wait2
+        await rig.rec.release(SID)
+        await rig.rec.close(SID)
+        await rig.rec.drain()
+        assert rig.redis.stream[-1]["type"] == "recording.failed"
+
+    async def test_sem_store_e_dito_e_o_rascunho_sai(self, tmp_path):
+        r = Rig(tmp_path, store=False)
+        await r.rec.update(SID, ROOM, {"p"})
+        filepath = r.provider.egresses_started[0]["filepath"]
+        await r.rec.close(SID)
+        await r.rec.drain()
+        assert any(e["type"] == "recording.failed" and e["stage"] == "store" for e in r.redis.stream)
+        assert not Path(filepath).exists()
+
+    async def test_arquivo_fora_do_rascunho_nao_e_lido(self, rig, tmp_path):
+        fora = tmp_path / "fora.ogg"
+        fora.write_bytes(b"OggS")
+
+        async def wait(egress_id, timeout_s):
+            from plughub_channel_gateway.adapters.webrtc_provider import EgressResult
+            return EgressResult(egress_id, "EGRESS_COMPLETE", filename=str(fora), size_bytes=4)
+        rig.provider.wait_egress = wait
+        await rig.rec.update(SID, ROOM, {"p"})
+        await rig.rec.close(SID)
+        await rig.rec.drain()
+        assert rig.reserves() == [] and fora.exists()
+        assert any("FORA do rascunho" in e.get("reason", "") for e in rig.redis.stream)
+
+    async def test_sem_plano_de_midia_e_dito(self, tmp_path):
+        r = Rig(tmp_path)
+        r.rec._provider = lambda: None
+        await r.rec.update(SID, ROOM, {"p"})
+        assert r.redis.stream[0]["type"] == "recording.failed"
+
+
+# ── O gatilho: a política do pool ────────────────────────────────────────────
+
+class TestGatilhoDoPool:
+    def _campo(self, **politica):
+        return {"pool_id": "p", "media_policy_source": "registry",
+                "media_policy": {"customer_publish": ["audio"], "agent_publish": ["audio"], **politica}}
+
+    def test_recording_true_liga(self):
+        rec, aviso = media_policy.attendant_from_pool_field("human", self._campo(recording=True))
+        assert rec["recording"] is True and aviso is None
+
+    def test_ausente_nao_liga(self):
+        rec, _ = media_policy.attendant_from_pool_field("human", self._campo())
+        assert rec["recording"] is False
+
+    def test_valor_que_nao_e_true_nao_liga(self):
+        rec, _ = media_policy.attendant_from_pool_field("human", self._campo(recording="true"))
+        assert rec["recording"] is False
+
+    def test_politica_nao_lida_nao_grava(self):
+        rec, aviso = media_policy.attendant_from_pool_field(
+            "human", {"pool_id": "p", "media_policy_source": "registry_unavailable"})
+        assert rec["recording"] is False and aviso
+
+    async def test_adapter_entrega_ao_gravador_so_os_pools_que_gravam(self):
+        from plughub_channel_gateway.adapters.webrtc import WebRTCAdapter
+        assert hasattr(WebRTCAdapter, "_recording_follow")
+        ad = WebRTCAdapter.__new__(WebRTCAdapter)
+        ad._sip = {}
+        ad._recorder = MagicMock()
+        ad._recorder.update = AsyncMock()
+        await ad._recording_follow(SID, {"attendants": {
+            "i1": {"pool_id": "grava", "recording": True},
+            "i2": {"pool_id": "nao_grava", "recording": False},
+            "i3": "estado-antigo",
+        }})
+        ad._recorder.update.assert_awaited_once()
+        assert ad._recorder.update.await_args.args[2] == {"grava"}
+
+
+# ── A porta pública de anexos não serve gravação ─────────────────────────────
+
+class TestPortaPublica:
+    async def _serve(self, monkeypatch, klass):
+        from fastapi import HTTPException
+        from plughub_channel_gateway import main as _main  # noqa: F401 — main antes: o router o importa
+        from plughub_channel_gateway import upload_router
+        from plughub_channel_gateway.attachment_store import AttachmentMeta
+        store = MagicMock()
+        store.resolve = AsyncMock(return_value=AttachmentMeta(
+            file_id="f", tenant_id=TENANT, session_id=SID, original_name="x.ogg", mime_type="audio/ogg",
+            size_bytes=4, file_path="p", serving_url="u", expires_at=None, deleted_at=None,
+            artifact_class=klass))
+
+        async def _gen():
+            yield b"OggS"
+        store.stream_bytes = AsyncMock(return_value=_gen())
+        monkeypatch.setattr(upload_router._main_module, "_attachment_store", store, raising=False)
+        try:
+            return await upload_router.serve_attachment("f")
+        except HTTPException as exc:
+            return exc
+
+    async def test_gravacao_nao_sai_pela_porta_publica(self, monkeypatch):
+        r = await self._serve(monkeypatch, "call_recording")
+        assert getattr(r, "status_code", None) == 404
+
+    async def test_controle_anexo_de_webchat_sai(self, monkeypatch):
+        r = await self._serve(monkeypatch, "webchat_attachment")
+        assert getattr(r, "status_code", 200) == 200 and r.media_type == "audio/ogg"
+
+
+class TestProvider:
     def test_sem_credencial_nao_ha_egress_placebo(self):
         with pytest.raises(WebRTCProviderUnavailable):
             LiveKitProvider(url="ws://livekit", api_key="", api_secret="")
 
-    @pytest.mark.asyncio
-    async def test_mock_provider_start_egress(self):
-        provider = MockWebRTCProvider()
-        eid1 = await provider.start_egress("room-1", "/tmp/r1.mp4")
-        eid2 = await provider.start_egress("room-2", "/tmp/r2.mp4")
-        assert eid1 != eid2
-        assert len(provider.egresses_started) == 2
-
-    @pytest.mark.asyncio
-    async def test_mock_provider_stop_egress(self):
-        provider = MockWebRTCProvider()
-        eid = await provider.start_egress("room-1", "/tmp/r1.mp4")
-        await provider.stop_egress(eid)
-        assert eid in provider.egresses_stopped
-
-    @pytest.mark.asyncio
-    async def test_mock_provider_records_layout_and_dual_channel(self):
-        provider = MockWebRTCProvider()
-        await provider.start_egress(
-            room_name    = "room-x",
-            output_url   = "/tmp/rx.mp4",
-            layout       = "grid",
-            dual_channel = False,
-        )
-        started = provider.egresses_started[0]
-        assert started["layout"]       == "grid"
-        assert started["dual_channel"] == False
+    async def test_mock_escreve_o_arquivo_pedido(self, tmp_path):
+        p = MockWebRTCProvider()
+        eid = await p.start_egress("r", str(tmp_path / "a" / "x.ogg"))
+        res = await p.wait_egress(eid, 1)
+        assert res.complete and Path(res.filename).read_bytes()[:4] == b"OggS"
 
 
-# ── TestEgressNoAttachmentStore ───────────────────────────────────────────────
+class TestMainEntregaOStore:
+    """O `main` constrói o adapter WebRTC COM o AttachmentStore. Medido ao vivo (probe_voz06): sem
+    ele a gravação terminava em `recording.failed` "sem AttachmentStore". Censo por AST, não grep."""
 
+    def test_webrtc_adapter_recebe_attachment_store(self):
+        import ast
+        import inspect
+        from plughub_channel_gateway import main
+        arvore = ast.parse(inspect.getsource(main))
+        chamadas = [n for n in ast.walk(arvore) if isinstance(n, ast.Call)
+                    and getattr(n.func, "id", None) == "WebRTCAdapter"]
+        assert chamadas, "o main nao constroi o WebRTCAdapter — o censo nao mediu nada"
+        for c in chamadas:
+            assert "attachment_store" in {k.arg for k in c.keywords}, "WebRTCAdapter sem attachment_store"
 
-class TestEgressNoAttachmentStore:
-    """When no AttachmentStore is configured, egress still completes gracefully."""
-
-    @pytest.mark.asyncio
-    async def test_stop_and_store_without_attachment_store(self, tmp_path):
-        session_dir = tmp_path / SESSION_ID
-        session_dir.mkdir()
-        recording   = session_dir / f"{SEGMENT_ID}.mp4"
-        recording.write_bytes(b"\xFF" * 512)
-
-        settings = _make_settings(
-            webrtc_egress_output_dir = str(tmp_path),
-            webrtc_egress_wait_s     = 0.0,
-        )
-        adapter, redis, _ = _make_adapter(
-            settings         = settings,
-            attachment_store = None,   # no store
-        )
-
-        # Should not raise
-        await adapter._stop_egress_and_store(SESSION_ID, SEGMENT_ID, EGRESS_ID)
-
-        # Stream event must still be written with local path as serving_url
-        redis.xadd.assert_called_once()
-        call_args  = redis.xadd.call_args
-        event_data = call_args.args[1] if call_args.args else call_args[0][1]
-        assert event_data["type"]      == "recording.completed"
-        assert event_data["serving_url"] != ""   # local path or empty string

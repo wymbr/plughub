@@ -27,6 +27,10 @@
     "survey":          "Survey instrument catalog (key `instruments`): CSAT/NPS/CES/PMF/FCR with scale and aggregation, read by the dialog-form editor",
     "identity":        "Default country (ISO 3166-1, e.g. BR) for phone numbers typed without a country code. Changing it changes how new phones identify customers; phones already stored are not rewritten"
   },
+  "nsSection": {
+    "expurgo": "Analytics data (purge)",
+    "storage": "Artifact storage (call recording)"
+  },
   "namespace": {
     "title":            "Namespaces",
     "adminToken":       "Admin token",

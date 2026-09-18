@@ -138,8 +138,10 @@ def attendant_from_pool_field(framework: str, pool_field: dict) -> tuple[dict, s
     """
     pool_id = str(pool_field.get("pool_id") or "")
     source = pool_field.get("media_policy_source", "")
+    # `recording` (VOZ-06): só `true` explícito grava — política ausente, ilegível ou não lida
+    # nunca vira gravação.
     record = {"framework": framework, "pool_id": pool_id,
-              "customer_publish": [], "agent_publish": [], "policy_source": ""}
+              "customer_publish": [], "agent_publish": [], "policy_source": "", "recording": False}
 
     if not pool_id:
         record["policy_source"] = "evento_sem_pool"
@@ -159,7 +161,7 @@ def attendant_from_pool_field(framework: str, pool_field: dict) -> tuple[dict, s
     cust, bad_c = _kinds(policy.get("customer_publish"))
     agent, bad_a = _kinds(policy.get("agent_publish"))
     record.update(customer_publish=kinds_list(cust), agent_publish=kinds_list(agent),
-                  policy_source=f"pool:{pool_id}")
+                  policy_source=f"pool:{pool_id}", recording=policy.get("recording") is True)
     if bad_c or bad_a:
         return record, f"pool {pool_id} declara tipo de midia desconhecido {bad_c + bad_a} — ignorado"
     return record, None

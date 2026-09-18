@@ -237,6 +237,19 @@ Invariante herdado e preservado: guard por segmento, aviso antes do início da c
 ContextStore com evento próprio quando a gravação é pulada. Vale igual para SIP e WebRTC — é
 política de contato, não de transporte.
 
+> **Como ficou (VOZ-06, 2026-09-18) — V5 e V7 juntas, com as decisões do dono.** Grava-se só
+> ÁUDIO, a sala misturada, em OGG, pelo serviço de egress do SFU; liga pelo POOL
+> (`media_policy.recording`), e o FLUXO pergunta enquanto a plataforma honra
+> `core.contact.recording_opt_out`. "Por segmento" virou **por parte**: uma gravação por vez por
+> sessão (o egress grava a sala inteira — duas seriam o mesmo áudio em dobro), cortada quando o
+> conjunto de pools que gravam muda, em volta do bloco mascarado (NIV-07) e no fim; cada parte diz
+> de quais pools ela é. O aviso é entregue uma vez por sessão, antes da primeira parte, e **sem
+> aviso entregue não se grava**. A classe `call_recording` existe no store, com a retenção em
+> `storage.call_recording_retention_days` (30 d, a decisão já registrada) — **só essa classe tem
+> entrada própria por ora**; o anexo de webchat segue em `webchat.attachment_expiry_days`. ⚠️ Medido:
+> `audio_only` não dispensa o Chrome do egress (composição de sala é navegador). Detalhe:
+> `docs/arcos/arc15-webrtc.md` § 9; gate `probe_voz06_recording.sh`.
+
 ### V8 — A matriz de capability é **verificada**, não declarada à mão
 
 Hoje `voice` declara `{audio}` e tem o caminho de collect morto: a declaração não bate com a
@@ -467,7 +480,9 @@ portanto histórico, contexto e avaliação. **Ainda sem telecom.**
 > `probe_webrtc_tts_spoken.sh`.
 
 **V-F3 — gravação.** Por segmento, com aviso e opt-out (V7), no AttachmentStore com classe de
-retenção (V5). Requer a decisão de retenção de A5 tomada antes.
+retenção (V5). Requer a decisão de retenção de A5 tomada antes. ✅ **Feita em 2026-09-18 (VOZ-06)** — ver a nota
+em V7. A retenção de fábrica é 30 d, por classe e editável; o conflito doc×doc de A5 fica resolvido
+pela CONFIG, não por um dos dois documentos.
 
 **V-F4 — supervisão.** Supervisor `hidden` com sussurro e take-over.
 

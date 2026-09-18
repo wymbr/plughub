@@ -277,7 +277,7 @@ class TestMockWebRTCProvider:
         assert egress_id.startswith("EG_mock_")
         assert len(self.mock.egresses_started) == 1
         assert self.mock.egresses_started[0]["room_name"] == "room-e"
-        assert self.mock.egresses_started[0]["output_url"] == "s3://bucket/key"
+        assert self.mock.egresses_started[0]["filepath"] == "s3://bucket/key"
 
     @pytest.mark.asyncio
     async def test_stop_egress(self):

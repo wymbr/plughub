@@ -317,7 +317,9 @@ def _ligacoes(arv, globais_store):
       * `self.A = P`, com P parametro anotado `AttachmentStore` OU chamado
         `attachment_store` (o `webrtc.py` anota `Any`, com o tipo em comentario);
       * global de modulo anotado com o tipo (`main._attachment_store`);
-      * nome local atribuido a partir desse global (`store = _main._attachment_store`).
+      * nome local atribuido a partir desse global (`store = _main._attachment_store`);
+      * nome LOCAL anotado com o tipo (`store: AttachmentStore | None = self._store()`) — a forma
+        do gravador da VOZ-06, que recebe o store por uma funcao (o adapter o cria depois).
     """
     attrs, nomes = set(), set()
     for n in ast.walk(arv):
@@ -330,6 +332,10 @@ def _ligacoes(arv, globais_store):
             for p, anot in ps.items():
                 if _eh_tipo_store(anot):
                     nomes.add(p)
+            for m in ast.walk(n):
+                if (isinstance(m, ast.AnnAssign) and isinstance(m.target, ast.Name)
+                        and _eh_tipo_store(m.annotation)):
+                    nomes.add(m.target.id)
             for m in ast.walk(n):
                 if not isinstance(m, ast.Assign) or not isinstance(m.value, ast.Name):
                     continue

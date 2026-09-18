@@ -388,37 +388,49 @@ ElevenLabsTTSProvider → MP3 bytes
 
 ---
 
-## 9. Gravação por Segmento — Egress
+## 9. Gravação da chamada — egress, por PARTES (VOZ-06, 2026-09-18)
 
-Análogo ao canal voice (§13 do doc de voz), mas usando **LiveKit Egress** em vez de Twilio Recording.
+> ⚠️ O que esta seção descrevia até 2026-09-18 (a "Fase D": vídeo MP4 em layout `speaker`,
+> `pool.webrtc_recording`, `sleep(5)` antes de ler o arquivo) **nunca rodou**: não havia serviço de
+> egress em compose nenhum e o campo não tinha produtor. Foi substituído, não consertado.
+
+**Decisões do dono:** só ÁUDIO, a sala MISTURADA (cliente, atendente, voz do bot) em OGG; liga pelo
+**POOL** (`media_policy.recording`); o **fluxo pergunta** e a plataforma honra a recusa
+(`core.contact.recording_opt_out`).
 
 ```
-pool.webrtc_recording: true  →  egress ativo por segmento
-
-Ao routing.assigned:
-  1. TTS notice (LGPD): "Esta chamada poderá ser gravada..."
-  2. LiveKit Egress API: StartRoomCompositeEgress ou StartTrackCompositeEgress
-     - Output: S3 ou filesystem
-     - Layout: "speaker" (vídeo dominante) ou "grid" (multi-câmera)
-  3. egress_id armazenado em Redis: channel:webrtc:{session_id}:egress:{segment_id}
-
-Ao agent_done / session_closed:
-  1. LiveKit Egress API: StopEgress
-  2. Download do arquivo → AttachmentStore
-  3. Evento recording.completed no stream
+atendente de pool com recording=true entra      → aviso (texto e/ou voz; espera TOCAR) → parte N
+conjunto de pools que gravam muda                → a parte fecha, a próxima abre (sem novo aviso)
+bloco mascarado (NIV-07) começa                  → a parte fecha ANTES do prompt; nada é gravado
+bloco termina                                    → parte nova
+recusa lida (antes ou a cada 2 s durante)        → a parte em curso é DESCARTADA; nenhuma nova
+chamada termina                                  → a parte fecha
+parte fechada → wait_egress (fim REAL, sem sleep) → AttachmentStore `call_recording`, audio/ogg,
+                expira pela retenção DA CLASSE → `recording.completed` no stream → rascunho apagado
 ```
 
-**Egress types disponíveis:**
-
-| Tipo | Uso |
-|---|---|
-| `RoomCompositeEgress` | Grava todos os participantes (layout configurável) |
-| `TrackCompositeEgress` | Grava pares de tracks (ex: customer audio + agent audio) |
-| `TrackEgress` | Grava track individual (ex: só customer) |
-
-Para compliance dual-channel (equivalente ao `dual_channel` da voz), usar `TrackCompositeEgress` com customer audio track + agent audio track separados.
-
----
+- **Serviço:** `livekit-egress` no compose, mesmo Redis próprio do SFU; o arquivo é escrito num volume
+  que ele e o gateway montam no MESMO caminho (`webrtc_egress_output_dir`). O egress roda como uid
+  1001/gid 0: o gateway cria o diretório da sessão com modo `0770`.
+- ⚠️ **Medido: `audio_only` NÃO dispensa o Chrome** (`sourceType WEB`) — misturar a sala é composição,
+  e composição é o navegador. Ativo em ~2-3 s; imagem de 4,1 GB. Parte parada antes disso volta
+  `EGRESS_ABORTED` sem arquivo: é **parte vazia** (`recording.discarded`, `reason=empty`), não falha.
+- **Sem aviso entregue, não se grava** (`recording.skipped`, `notice_undeliverable`). Recusa ilegível
+  antes de começar também não grava (`opt_out_unreadable`). Valor da tag que não é "falso" vale como
+  recusa, com aviso no log.
+- **Nunca finge gravar:** egress que não começa, que termina falho, arquivo fora do rascunho ou store
+  ausente viram `recording.failed` com o motivo.
+- **A gravação NÃO sai pela porta pública de anexos** (`/webchat/v1/attachments/{id}`, que toma o
+  file_id como credencial): classe diferente de `webchat_attachment` responde 404. Ouvir a gravação
+  por porta autenticada é a `VOZ-36`.
+- **Config:** aviso em `webrtc.recording_notice` (aba WebRTC); retenção em
+  `storage.call_recording_retention_days` (Plataforma → Retenção de dados), carimbada na hora de
+  guardar — mudar o número vale para gravações NOVAS. Lidos a cada parte que começa, sem cache.
+- Código: `adapters/webrtc_recording.py` (`CallRecorder`), `recording_config.py`. Eventos no stream
+  (`agents_only`): `recording.completed` · `recording.skipped` · `recording.discarded` ·
+  `recording.failed`. Estado vivo: `channel:webrtc:{sid}:recording`.
+- Gate: `infra/test/probe_voz06_recording.sh` (três chamadas pelo tronco simulado; o conteúdo de cada
+  parte é TRANSCRITO para provar que tem fala e que o pedido do PIN não está em nenhuma).
 
 ## 10. Supervisão em Tempo Real
 
@@ -520,7 +532,7 @@ channel:webrtc:{session_id}:room_sid         → LiveKit room SID
 channel:webrtc:{session_id}:medium           → "video" | "voice" | "text"
 channel:webrtc:{session_id}:customer_psid    → LiveKit participant SID (customer)
 channel:webrtc:{session_id}:agent_psid       → LiveKit participant SID (agent)
-channel:webrtc:{session_id}:egress:{seg_id}  → LiveKit egress ID (TTL 24h)
+channel:webrtc:{session_id}:recording       → parte gravando AGORA {part, egress_id, pools} (VOZ-06)
 channel:webrtc:{call_sid}:session            → session_id (para correlação)
 channel:sip:room:{room}                      → session_id ("abrindo" enquanto nasce) — idempotência do
                                                webhook `participant_joined` da chamada SIP (VOZ-02)
@@ -812,7 +824,7 @@ webrtc_stt_enabled:         bool = True
 - `adapters/webrtc.py`: `_start_stt_pipeline()` — bot token + `LiveKitRoomClient.connect()` + task `_stt_pipeline()`; `_stt_pipeline()` — `subscribe_customer_audio()` → `resample_pcm_48_to_8()` → `FallbackSTTProvider.stream()` → `_publish_transcript()` para Kafka `conversations.inbound` (`content_type=audio_transcript`); `_tts_inject()` — `FallbackTTSProvider.synthesize()` → `mp3_to_pcm()` → `room_client.publish_audio()`; `deliver_text()` dispara `_tts_inject()` quando `medium in (voice, video)` e `webrtc_tts_injection_enabled=True`; `_receive_loop()` trata `webrtc.message` → Kafka e `webrtc.interaction_reply` → Redis `menu:result:{session_id}`; `_close_session()` e `deliver_session_closed()` cancelam STT task e desconectam room client
 - `tests/test_webrtc_stt_tts.py`: 30+ testes cobrindo resampler, MockRoomClient, STT pipeline → Kafka, TTS injection, DataChannel text/reply, STT disabled, teardown
 
-### Fase D — Egress Recording ✅ (2026-05-20)
+### Fase D — Egress Recording ⚠️ nunca rodou — substituída pela VOZ-06 (§9) em 2026-09-18
 - `adapters/webrtc_provider.py`: `LiveKitProvider.start_egress()` implementado com `livekit-api` (`StartRoomCompositeEgressRequest` + `EncodedFileOutput(filepath=...)`); `stop_egress()` implementado (`StopEgressRequest`); dev_mode e ImportError tratados com graceful fallback (retorna mock egress_id); `MockWebRTCProvider.start_egress/stop_egress` sempre presentes
 - `config.py`: 3 novas variáveis — `webrtc_recording_notice` (texto LGPD padrão), `webrtc_egress_output_dir` (diretório compartilhado LiveKit↔Gateway), `webrtc_egress_wait_s` (5s para LiveKit flushar o arquivo)
 - `adapters/webrtc.py`: `__init__` recebe `attachment_store: Any | None` + `_session_egress: dict[str, dict[str, str]]` (session_id → {segment_id: egress_id}); `_start_egress(session_id, segment_id, room_name)` — guard Redis (`channel:webrtc:{sid}:egress:{seg}`), notice via TTS injection ou webrtc.message, `asyncio.sleep(1.5)`, `provider.start_egress()`, persiste egress_id Redis + dict; `_stop_all_egress(session_id)` — pop dict, dispara `_stop_egress_and_store` como task por segmento (idempotente); `_stop_egress_and_store(session_id, segment_id, egress_id)` — `stop_egress()` → sleep → `Path.read_bytes()` → `attachment_store.reserve/commit` → `redis.xadd(stream_key, {type: recording.completed, ...})` → `unlink` local file → `redis.delete(rec_key)`; `_on_routing_assigned()` dispara `_start_egress` quando `pool.webrtc_recording=True and medium in (voice, video)`; `_close_session()` e `deliver_session_closed()` chamam `_stop_all_egress()` antes do Phase C teardown
@@ -852,7 +864,6 @@ webrtc_stt_enabled:         bool = True
 |---|---|
 | Bridge PSTN → WebRTC (caller externo entra na sala LiveKit via SIP trunk) | ~~Deferido~~ **DECIDIDO 2026-08-20** — [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) **V3**: um único plano de mídia, a SALA; entrada por SIP ou por navegador, internamente sempre a sala. Custos nomeados lá: transcodificação G.711↔Opus, SFU como ponto único de falha, e `REFER` de saída no gateway SIP (risco novo). Esta linha ficou "deferido, precisa avaliação" por meses e a ideia foi repetida em 4 documentos sem nunca ser estudada — ver a emenda da V3 |
 | Máximo de participantes por room (multi-party) | Definir por pool config: `webrtc_max_participants` |
-| Layout de gravação por pool (speaker/grid) | `webrtc_egress_layout: "speaker" \| "grid"` |
 | Whisper do supervisor via DataChannel (formato e visibilidade) | Usar `agents_only` visibility no stream — igual a nota interna |
 | Qualidade de vídeo adaptativa (simulcast) | LiveKit suporta nativamente; habilitar por pool |
 | End-to-end encryption (E2EE) | LiveKit suporta; ponderar vs gravação (E2EE inviabiliza egress do servidor) |
@@ -864,8 +875,8 @@ webrtc_stt_enabled:         bool = True
 - **Channel Gateway é o único emissor de tokens LiveKit** — nunca emitir no browser, nunca expor `LIVEKIT_API_SECRET`.
 - **Uma room LiveKit por sessão PlugHub** — `plughub-{session_id}` quando a sessão cria a sala; a da chamada SIP nasce no serviço SIP (`plughub-sip-…`) e é **adotada** como a da sessão (`_room_of`). Um nome por sessão, nunca duas salas.
 - **Sala `plughub-{uuid}` sem sessão viva não sobrevive** — `auto_create` está ligado desde a VOZ-02, e o gateway a apaga no `room_started` (§19).
-- **Egress apenas quando pool.webrtc_recording=true** — nunca gravar sem configuração explícita.
-- **LGPD notice obrigatório antes de iniciar egress** — mesmo guard do canal voice.
+- **Grava só quando o POOL de quem atende pede** (`media_policy.recording: true`) — ausente = não grava (VOZ-06).
+- **Sem aviso entregue, não se grava; recusa honrada até o fim; o bloco mascarado nunca é gravado** (§9).
 - **Supervisor sempre hidden=true** — nunca revelar presença ao cliente.
 - **medium=text é o fallback universal** — toda sessão WebRTC deve funcionar sem media tracks.
 - **Re-negociação nunca reinicia a sessão** — a LiveKit room persiste, apenas tracks são ajustados.

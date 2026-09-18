@@ -146,7 +146,9 @@
       "undeclared": "Não declarada — um pool de contato com WebRTC não pode ser salvo assim.",
       "textOnly": "Declarar só texto",
       "textOnlyDeclared": "Declarada como só texto: nenhum lado publica áudio ou vídeo.",
-      "required": "Declare as mídias oferecidas no WebRTC (ou \"só texto\") antes de salvar."
+      "required": "Declare as mídias oferecidas no WebRTC (ou \"só texto\") antes de salvar.",
+      "recording": "Gravar as chamadas atendidas por este pool (só áudio)",
+      "recordingHint": "O cliente é avisado antes (sem aviso entregue, não se grava) e pode recusar: o fluxo grava core.contact.recording_opt_out e a plataforma honra. O trecho de dado protegido nunca é gravado. A retenção fica em Plataforma → Retenção de dados."
     },
     "transfer": {
       "label": "Transferência / Escalonamento",

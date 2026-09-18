@@ -181,6 +181,10 @@
       "stt_vad_filter": {
         "label": "Voice activity detection",
         "help": "The transcription service discards stretches with no speech instead of inventing text."
+      },
+      "recording_notice": {
+        "label": "Recording notice",
+        "help": "Spoken (and written, when there is a screen) to the customer before recording. Only applies to pools that record; with no notice delivered, the call is not recorded. Up to 1000 characters."
       }
     }
   },

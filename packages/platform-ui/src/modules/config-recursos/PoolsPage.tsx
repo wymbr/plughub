@@ -557,13 +557,16 @@ function WeightSlider({
 // não aparece aqui. O que o CLIENTE publica ainda é recortado pelo que o atendente consome:
 // um agente de IA de texto não recebe vídeo mesmo que o pool o ofereça.
 const MEDIA_KINDS: MediaKind[] = ['audio', 'video']
+// VOZ-02: `voice` também tem sala (a chamada telefônica entra pela perna SIP), e o registry exige a
+// política nos dois. A tela só pedia com `webrtc` — um pool só de telefone não salvava.
+const hasMediaRoom = (channels: string[]) => channels.includes('webrtc') || channels.includes('voice')
 
 function MediaPolicyEditor({
   value, onChange,
 }: { value: PoolMediaPolicy | null; onChange: (v: PoolMediaPolicy) => void }) {
   const { t } = useTranslation('configRecursos')
   const current = value ?? { customer_publish: [], agent_publish: [] }
-  const toggle = (dir: keyof PoolMediaPolicy, kind: MediaKind) => {
+  const toggle = (dir: 'customer_publish' | 'agent_publish', kind: MediaKind) => {
     const list = current[dir]
     const next = list.includes(kind) ? list.filter(k => k !== kind) : [...list, kind]
     onChange({ ...current, [dir]: MEDIA_KINDS.filter(k => next.includes(k)) })
@@ -601,6 +604,21 @@ function MediaPolicyEditor({
         </div>
       ) : (value.customer_publish.length === 0 && value.agent_publish.length === 0) && (
         <p className="text-2xs text-muted-light mt-1">{t('pools.mediaPolicy.textOnlyDeclared')}</p>
+      )}
+      {value !== null && (
+        // VOZ-06 — gravar é o que precisa ser pedido: ausente = não grava
+        <label className="flex items-start gap-2 mt-3 cursor-pointer" data-testid="media-policy-recording">
+          <input
+            type="checkbox"
+            checked={value.recording === true}
+            onChange={e => onChange({ ...value, recording: e.target.checked })}
+            className="w-4 h-4 mt-0.5 rounded accent-primary"
+          />
+          <span>
+            <span className="text-xs text-dark">{t('pools.mediaPolicy.recording')}</span>
+            <span className="block text-2xs text-muted-light">{t('pools.mediaPolicy.recordingHint')}</span>
+          </span>
+        </label>
       )}
     </div>
   )
@@ -998,7 +1016,7 @@ const PoolsPage: React.FC = () => {
     }
     // VOZ-10 — o registry recusa pool de contato com `webrtc` sem política (422); dizer
     // aqui, no campo, é mais barato que a mensagem genérica do salvar.
-    if (formData.channel_types.includes('webrtc') && formData.purpose === 'contact'
+    if (hasMediaRoom(formData.channel_types) && formData.purpose === 'contact'
         && !formData.media_policy) {
       setError(t('pools.mediaPolicy.required'))
       return
@@ -1136,7 +1154,7 @@ const PoolsPage: React.FC = () => {
           : ((editingPool?.llm_account_ids?.length ?? 0) > 0 ? { llm_account_ids: [] } : {})),
         // VOZ-10 — só viaja com `webrtc` marcado. Desmarcar o canal NÃO apaga a política:
         // ela fica sem efeito e volta se o canal voltar.
-        ...(formData.channel_types.includes('webrtc') && formData.media_policy
+        ...(hasMediaRoom(formData.channel_types) && formData.media_policy
           ? { media_policy: formData.media_policy } : {}),
       }
       if (editingPool) {
@@ -1393,7 +1411,7 @@ const PoolsPage: React.FC = () => {
                 />
               </div>
             )}
-            {formData.channel_types.includes('webrtc') && (
+            {hasMediaRoom(formData.channel_types) && (
               <MediaPolicyEditor
                 value={formData.media_policy}
                 onChange={mp => setFormData(prev => ({ ...prev, media_policy: mp }))}

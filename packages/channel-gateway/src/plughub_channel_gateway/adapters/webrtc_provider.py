@@ -25,9 +25,13 @@ Token model:
   Tokens are NEVER returned to the browser directly — the browser receives a
   short-lived URL+token bundle served by /webrtc/token/{session_id}.
 
-Egress (Phase D):
-  start_egress / stop_egress falam com o serviço de egress do LiveKit, que NÃO está
-  no compose (gravação é a VOZ-06). Contra o SFU atual a chamada falha alto.
+Egress (VOZ-06):
+  start_egress grava a sala só em ÁUDIO misturado (decisão do dono), em OGG, num caminho do
+  volume que o `livekit-egress` e o gateway montam no MESMO lugar. `wait_egress` espera o
+  egress TERMINAR e devolve o arquivo — medido em 2026-09-18: o `stop_egress` responde com o
+  egress ainda em ENDING, e o arquivo só existe depois; o `sleep(5)` de antes adivinhava.
+  ⚠️ Medido: `audio_only` NÃO dispensa o Chrome do egress (`sourceType WEB`) — misturar a sala
+  é composição, e composição é o navegador; ativo em ~2-3 s.
 
 Adding a new SFU provider (mediasoup, Janus):
   1. Implement IWebRTCProvider Protocol
@@ -97,6 +101,22 @@ class TokenGrants:
     can_publish_sources: tuple[str, ...] | None = None
 
 
+@dataclass
+class EgressResult:
+    """Como um egress TERMINOU. `status` é o nome do estado do SFU (`EGRESS_COMPLETE`, …);
+    `filename` vazio = não há arquivo, e `error` diz por quê."""
+    egress_id:   str
+    status:      str
+    error:       str   = ""
+    filename:    str   = ""
+    duration_ms: int   = 0
+    size_bytes:  int   = 0
+
+    @property
+    def complete(self) -> bool:
+        return self.status == "EGRESS_COMPLETE" and bool(self.filename)
+
+
 # ── Protocol interface ────────────────────────────────────────────────────────
 
 
@@ -135,21 +155,18 @@ class IWebRTCProvider(Protocol):
         """Return current participants in a room."""
         ...
 
-    async def start_egress(
-        self,
-        room_name:    str,
-        output_url:   str,           # s3://bucket/path or file:///path
-        layout:       str = "speaker",   # "speaker" | "grid"
-        dual_channel: bool = True,
-    ) -> str:
-        """
-        Start a composite recording egress.
-        Returns egress_id.  Phase D implementation.
-        """
+    async def start_egress(self, room_name: str, filepath: str) -> str:
+        """Grava a sala só em ÁUDIO misturado (OGG) em `filepath`. Devolve o egress_id; falha
+        levanta — quem chama diz que a gravação NÃO começou."""
         ...
 
     async def stop_egress(self, egress_id: str) -> None:
-        """Stop a running egress. Phase D implementation."""
+        """Pede o fim do egress. Não espera o arquivo — isso é `wait_egress`."""
+        ...
+
+    async def wait_egress(self, egress_id: str, timeout_s: float) -> EgressResult:
+        """Espera o egress TERMINAR (completo, falho ou abortado) e devolve como terminou.
+        Estourado o prazo, devolve o último estado visto com `error` dizendo que não terminou."""
         ...
 
     async def update_participant_permission(
@@ -341,45 +358,58 @@ class LiveKitProvider:
                 for p in resp.participants
             ]
 
-    async def start_egress(
-        self,
-        room_name:    str,
-        output_url:   str,
-        layout:       str  = "speaker",
-        dual_channel: bool = True,
-    ) -> str:
-        """
-        Start a composite egress recording for *room_name*.
-
-        output_url: local filesystem path on a volume shared between the egress
-        worker and the Gateway, e.g. "/var/plughub/webrtc-recordings/{sid}/{seg}.mp4".
-
-        Returns the LiveKit egress_id. Exceptions propagate so the caller logs and
-        skips recording.
-
-        ⚠️ O serviço de EGRESS não está no compose (VOZ-01 sobe só SFU + TURN; gravação
-        é a VOZ-06). Contra o SFU atual esta chamada falha — e falha ALTO, que é o
-        ponto: antes ela devolvia `EG_dev_…` e o chamador registrava gravação iniciada.
-        """
+    async def start_egress(self, room_name: str, filepath: str) -> str:
+        """Grava a sala em ÁUDIO misturado, OGG, em `filepath` — caminho que o egress e o
+        gateway montam no mesmo lugar. Exceção propaga: sem serviço de egress, falha ALTO
+        (antes do VOZ-01 devolvia `EG_dev_…` e o chamador registrava gravação iniciada)."""
         from livekit.api import (
             EncodedFileOutput,
+            EncodedFileType,
             LiveKitAPI,
             RoomCompositeEgressRequest,
         )
 
         async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
             req = RoomCompositeEgressRequest(
-                room_name   = room_name,
-                layout      = layout,
-                file_outputs = [EncodedFileOutput(filepath=output_url)],
+                room_name    = room_name,
+                audio_only   = True,
+                file_outputs = [EncodedFileOutput(file_type=EncodedFileType.OGG, filepath=filepath)],
             )
             egress_info = await lkapi.egress.start_room_composite_egress(req)
-            egress_id   = egress_info.egress_id
-            logger.info(
-                "LiveKit egress started: room=%s egress_id=%s output=%s",
-                room_name, egress_id, output_url,
-            )
-            return egress_id
+            logger.info("LiveKit egress started: room=%s egress_id=%s output=%s",
+                        room_name, egress_info.egress_id, filepath)
+            return egress_info.egress_id
+
+    async def wait_egress(self, egress_id: str, timeout_s: float) -> EgressResult:
+        import asyncio as _asyncio
+        from livekit.api import EgressStatus, LiveKitAPI, ListEgressRequest
+
+        finais = {EgressStatus.EGRESS_COMPLETE, EgressStatus.EGRESS_FAILED,
+                  EgressStatus.EGRESS_ABORTED, EgressStatus.EGRESS_LIMIT_REACHED}
+        visto = None
+        fim = time.monotonic() + timeout_s
+        async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
+            while True:
+                resp = await lkapi.egress.list_egress(ListEgressRequest(egress_id=egress_id))
+                visto = resp.items[0] if resp.items else None
+                if visto is not None and visto.status in finais:
+                    break
+                if time.monotonic() >= fim:
+                    break
+                await _asyncio.sleep(0.5)
+        if visto is None:
+            return EgressResult(egress_id, "DESCONHECIDO", error="o SFU nao conhece este egress")
+        status = EgressStatus.Name(visto.status)
+        arq = visto.file_results[0] if visto.file_results else None
+        erro = visto.error or ("" if visto.status in finais else f"nao terminou em {timeout_s:.0f} s")
+        return EgressResult(
+            egress_id   = egress_id,
+            status      = status,
+            error       = erro,
+            filename    = arq.filename if arq else "",
+            duration_ms = int((arq.duration if arq else 0) / 1_000_000),
+            size_bytes  = int(arq.size if arq else 0),
+        )
 
     async def stop_egress(self, egress_id: str) -> None:
         """Stop a running LiveKit egress (cleanup path: failure is logged, not raised)."""
@@ -469,6 +499,10 @@ class MockWebRTCProvider:
         self.egresses_stopped: list[str]   = []
         self._rooms:           dict[str, RoomInfo] = {}
         self._egress_counter:  int = 0
+        # VOZ-06 — o que o egress "grava" no mock, e as duas falhas que o teste pode plantar
+        self.egress_bytes:       bytes = b"OggS" + b"\x00" * 60
+        self.egress_start_error: Exception | None = None
+        self.egress_end_error:   str = ""
         self.permission_updates: list[dict] = []
         self.joined:           set[str] = set()   # identidades "na sala", para o teste
         self.participants_removed: list[tuple[str, str]] = []
@@ -515,26 +549,33 @@ class MockWebRTCProvider:
         # quem o teste pôs em `joined` está na sala (vazio por padrão, como antes)
         return [ParticipantInfo(identity=i, sid=f"PA_{i}", state="ACTIVE") for i in sorted(self.joined)]
 
-    async def start_egress(
-        self,
-        room_name:    str,
-        output_url:   str,
-        layout:       str  = "speaker",
-        dual_channel: bool = True,
-    ) -> str:
+    async def start_egress(self, room_name: str, filepath: str) -> str:
+        if self.egress_start_error is not None:
+            raise self.egress_start_error
         self._egress_counter += 1
         egress_id = f"EG_mock_{self._egress_counter:04d}"
         self.egresses_started.append({
-            "room_name":    room_name,
-            "output_url":   output_url,
-            "layout":       layout,
-            "dual_channel": dual_channel,
-            "egress_id":    egress_id,
+            "room_name": room_name, "filepath": filepath, "egress_id": egress_id,
         })
         return egress_id
 
     async def stop_egress(self, egress_id: str) -> None:
         self.egresses_stopped.append(egress_id)
+
+    async def wait_egress(self, egress_id: str, timeout_s: float) -> EgressResult:
+        """O mock "grava" o que o teste pôs em `egress_bytes` (padrão: cabeçalho OGG) no
+        caminho pedido — o resto do caminho (ler, guardar, apagar) roda de verdade."""
+        inicio = next((e for e in self.egresses_started if e["egress_id"] == egress_id), None)
+        if inicio is None:
+            return EgressResult(egress_id, "DESCONHECIDO", error="egress nunca iniciado")
+        if self.egress_end_error:
+            return EgressResult(egress_id, "EGRESS_FAILED", error=self.egress_end_error)
+        import pathlib
+        p = pathlib.Path(inicio["filepath"])
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(self.egress_bytes)
+        return EgressResult(egress_id, "EGRESS_COMPLETE", filename=str(p), duration_ms=1000,
+                            size_bytes=len(self.egress_bytes))
 
     async def update_participant_permission(
         self,

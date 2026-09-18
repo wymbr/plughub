@@ -1356,8 +1356,8 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 > assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. **Contato ponta a ponta validado com
 > gente no browser em 2026-09-15** (`VOZ-04`; roteiro `docs/guias/roteiro-validacao-webrtc-console.md`).
 > ⚠️ **O que ainda NÃO existe:** mídia para browser em OUTRA máquina da rede (o demo serve o próprio
-> host — loopback, UDP único e TURN com dois nomes), egress (`VOZ-06`), porta SIP publicada e chamada
-> SAINTE (`VOZ-32`/`VOZ-33`). O bot leg (ouvinte + voz, transcrição e coleta por teclado/fala) existe
+> host — loopback, UDP único e TURN com dois nomes), ouvir a gravação por porta autenticada
+> (`VOZ-36`), porta SIP publicada e chamada SAINTE (`VOZ-32`/`VOZ-33`). O bot leg (ouvinte + voz, transcrição e coleta por teclado/fala) existe
 > desde 2026-09-16 — `arc15-webrtc.md` § 15; a chamada telefônica ENTRANTE, desde 2026-09-18 — § 19.
 
 - **A chamada pelo tronco SIP é canal `voice` e entra na MESMA sala** (VOZ-02): o serviço SIP do SFU
@@ -1396,7 +1396,12 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   chega a **todos** na sala (medido), então, no bloco mascarado, humano e supervisor saem da sala de
   mídia (não da sessão), a rota de token responde 409, e quem entra no meio **desfaz** a coleta
   (`aborted` → `on_failure`) — nunca a completa com plateia. Só tecla, nunca fala (NIV-08); a
-  perna Twilio recusa. A gravação, quando existir, pausa na mesma chave (`VOZ-06`).
+  perna Twilio recusa. A gravação para ANTES do prompt e volta depois do bloco.
+- **Gravação liga pelo POOL e nunca é suposta** (VOZ-06): `media_policy.recording: true` do pool de
+  quem atende; ausente = não grava. **Sem aviso entregue, não se grava**; a recusa
+  (`core.contact.recording_opt_out`, escrita pelo FLUXO) descarta a parte em curso. Só áudio da
+  sala, em PARTES, guardado como `call_recording` com retenção da classe — e **fora** da porta
+  pública de anexos, que toma o file_id como credencial. Gate: `probe_voz06_recording.sh`.
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,

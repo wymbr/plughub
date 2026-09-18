@@ -1,0 +1,40 @@
+{
+  "skill_id": "skill_probe_recording_v1",
+  "name": "Probe - gravacao da chamada (VOZ-06)",
+  "version": "1.0",
+  "description": "Fixture do probe_voz06_recording: cumprimenta, pergunta se o cliente ACEITA ser gravado (tecla 1 aceita, 2 recusa) e grava a resposta em core.contact.recording_opt_out - e o FLUXO que pergunta, a plataforma honra. Depois espera uma tecla (a parte 1 da gravacao ganha audio), pede um PIN MASCARADO (o bloco nunca e gravado: a parte fecha antes do prompt) e pede uma ultima tecla (a parte 2 ganha audio: o fluxo que termina logo depois do PIN fecha a chamada antes de a parte 2 existir — medido). Cada desfecho vira um marcador rec-*.",
+  "classification": {"type": "orchestrator"},
+  "flow": {
+    "entry": "n0",
+    "steps": [
+      {"id": "n0", "type": "notify", "message": "Ola. Este e o teste de gravacao da plataforma.", "on_success": "m_rec", "on_failure": "fim_falha"},
+      {"id": "m_rec", "type": "menu", "interaction": "button", "prompt": "Tecle 1 para aceitar a gravacao ou 2 para recusar.",
+       "options": [{"id": "false", "label": "Aceitar"}, {"id": "true", "label": "Recusar"}],
+       "timeout_s": 90, "output_as": "rec_optout",
+       "collect": {"input": ["dtmf"], "first_input_timeout_s": 30, "max_invalid": 1},
+       "on_success": "v_rec", "on_failure": "fim_falha", "on_timeout": "fim_falha", "on_invalid": "fim_falha"},
+      {"id": "v_rec", "type": "notify", "message": "rec-optout={{$.pipeline_state.rec_optout}}",
+       "context_tags": {"outputs": {"rec_optout": {"tag": "core.contact.recording_opt_out"}}},
+       "on_success": "m_espera", "on_failure": "fim_falha"},
+      {"id": "m_espera", "type": "menu", "interaction": "text", "prompt": "Digite cinco e termine com jogo da velha.",
+       "timeout_s": 90, "output_as": "r_espera",
+       "collect": {"input": ["dtmf"], "first_input_timeout_s": 30, "max_digits": 3, "terminator": "#", "max_invalid": 1},
+       "on_success": "v_espera", "on_failure": "fim_falha", "on_timeout": "fim_falha", "on_invalid": "fim_falha"},
+      {"id": "v_espera", "type": "notify", "message": "rec-espera={{$.pipeline_state.r_espera}}", "on_success": "tx", "on_failure": "fim_falha"},
+      {"id": "tx", "type": "begin_transaction", "on_failure": "fim_falha"},
+      {"id": "m_pin", "type": "menu", "interaction": "text", "prompt": "Senha confidencial. Digite o PIN e termine com jogo da velha.", "masked": "credential",
+       "timeout_s": 30, "output_as": "pin",
+       "collect": {"input": ["dtmf"], "first_input_timeout_s": 20, "min_digits": 4, "max_digits": 6, "terminator": "#"},
+       "on_success": "v_pin", "on_failure": "fim_falha", "on_timeout": "fim_falha"},
+      {"id": "v_pin", "type": "notify", "message": "rec-pin-recebido", "on_success": "tx_fim", "on_failure": "fim_falha"},
+      {"id": "tx_fim", "type": "end_transaction", "result_as": "auth", "on_success": "m_fim"},
+      {"id": "m_fim", "type": "menu", "interaction": "text", "prompt": "Obrigado. Para terminar o teste, digite oito e jogo da velha.",
+       "timeout_s": 90, "output_as": "r_fim",
+       "collect": {"input": ["dtmf"], "first_input_timeout_s": 30, "max_digits": 3, "terminator": "#", "max_invalid": 1},
+       "on_success": "v_fim", "on_failure": "fim_falha", "on_timeout": "fim_falha", "on_invalid": "fim_falha"},
+      {"id": "v_fim", "type": "notify", "message": "rec-fim", "on_success": "fim", "on_failure": "fim_falha"},
+      {"id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "probe: gravacao exercitada"},
+      {"id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "probe: fluxo falhou"}
+    ]
+  }
+}

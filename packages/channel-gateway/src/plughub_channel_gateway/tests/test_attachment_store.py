@@ -348,7 +348,7 @@ class TestResolve:
             "size_bytes":    512,
             "file_path":     f"{TENANT}/2024/01/15/{SESSION}/{file_id}.jpg",
             "expires_at":    EXPIRES,
-            "deleted_at":    None,
+            "deleted_at":    None, "artifact_class": "webchat_attachment",
         }
         store, _ = make_store(tmp_path, fetchrow=db_row)
         meta = await store.resolve(file_id=file_id, tenant_id=TENANT)
@@ -370,7 +370,7 @@ class TestResolve:
         db_row = {
             "session_id": SESSION, "original_name": "x.jpg",
             "mime_type": "image/jpeg", "size_bytes": 10,
-            "file_path": "path/x.jpg", "expires_at": EXPIRES, "deleted_at": None,
+            "file_path": "path/x.jpg", "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
         }
         store, _ = make_store(tmp_path, fetchrow=db_row)
         meta = await store.resolve(file_id=file_id, tenant_id=TENANT)
@@ -417,7 +417,7 @@ class TestStreamBytes:
         db_row = {
             "session_id": SESSION, "original_name": "photo.jpg",
             "mime_type": "image/jpeg", "size_bytes": len(content),
-            "file_path": rel, "expires_at": EXPIRES, "deleted_at": None,
+            "file_path": rel, "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
         }
         store, _ = make_store(tmp_path, fetchrow=db_row)
         return store, file_id, db_row
@@ -444,7 +444,7 @@ class TestStreamBytes:
             "session_id": SESSION, "original_name": "x.jpg",
             "mime_type": "image/jpeg", "size_bytes": 10,
             "file_path": "x.jpg", "expires_at": EXPIRES,
-            "deleted_at": datetime.now(timezone.utc),  # soft-deleted
+            "deleted_at": datetime.now(timezone.utc), "artifact_class": "webchat_attachment",  # soft-deleted
         }
         store, _ = make_store(tmp_path, fetchrow=deleted_row)
         with pytest.raises(FileNotFoundError, match="expirado"):
@@ -610,7 +610,7 @@ class TestS3AttachmentStore:
             "session_id": SESSION, "original_name": "p.jpg",
             "mime_type": "image/jpeg", "size_bytes": 512,
             "file_path": f"{TENANT}/2026/04/15/{SESSION}/{file_id}.jpg",
-            "expires_at": EXPIRES, "deleted_at": None,
+            "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
         }
         store, _, _ = make_s3_store(fetchrow=db_row)
         meta = await store.resolve(file_id=file_id, tenant_id=TENANT)
@@ -631,7 +631,7 @@ class TestS3AttachmentStore:
             "session_id": SESSION, "original_name": "p.jpg",
             "mime_type": "image/jpeg", "size_bytes": len(content),
             "file_path": f"key/{file_id}.jpg",
-            "expires_at": EXPIRES, "deleted_at": None,
+            "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
         }
         store, _, s3_client = make_s3_store(fetchrow=db_row, s3_content=content)
         stream = await store.stream_bytes(file_id=file_id, tenant_id=TENANT)
@@ -652,7 +652,7 @@ class TestS3AttachmentStore:
             "session_id": SESSION, "original_name": "p.jpg",
             "mime_type": "image/jpeg", "size_bytes": 10,
             "file_path": "k.jpg", "expires_at": EXPIRES,
-            "deleted_at": datetime.now(timezone.utc),
+            "deleted_at": datetime.now(timezone.utc), "artifact_class": "webchat_attachment",
         }
         store, _, _ = make_s3_store(fetchrow=db_row)
         with pytest.raises(FileNotFoundError, match="expirado"):

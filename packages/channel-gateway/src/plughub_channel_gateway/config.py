@@ -264,18 +264,16 @@ class Settings(BaseSettings):
     webrtc_stt_model:               str = "Systran/faster-whisper-small"
     webrtc_tts_model:               str = "speaches-ai/piper-pt_BR-faber-medium"
     webrtc_tts_voice:               str = "faber"
-    # LGPD notice played (TTS) or sent as text before egress recording starts.
-    # Override per-tenant via Config API namespace "webrtc", key "recording_notice".
+    # VOZ-06 — aviso de gravação de FÁBRICA. O texto do tenant mora no config-api
+    # (`webrtc.recording_notice`, aba WebRTC) e vence este; este só vale com o config-api fora ou
+    # a chave ausente/inválida, e o log diz qual respondeu (`recording_config.py`).
     webrtc_recording_notice:        str = (
         "Esta chamada poderá ser gravada para fins de qualidade e treinamento."
     )
-    # Directory where LiveKit egress writes recording files.
-    # For production: mount a shared volume between the LiveKit container and
-    # the Channel Gateway container at this path.
+    # Rascunho do egress: o `livekit-egress` e o gateway montam o MESMO volume NESTE caminho
+    # (topologia, por isso env). O gateway lê o arquivo quando o egress termina, guarda no
+    # AttachmentStore e apaga.
     webrtc_egress_output_dir:       str = "/var/plughub/webrtc-recordings"
-    # Seconds to wait after stop_egress before reading the output file.
-    # LiveKit needs time to finalize and flush the file.
-    webrtc_egress_wait_s:           float = 5.0
 
     # ── Verificação ativa da fala (VOZ-23) — processo `speech-check`, não o gateway ──
     # Pool de calibração para onde o endpoint TEMPORÁRIO da verificação aponta (fixture seedada).

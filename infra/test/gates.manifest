@@ -403,6 +403,13 @@ probe_webrtc_speech_profile.sh
 # sala antes do m1 ouve as teclas do m1 (controle) e e tirado antes do PIN. Pool SO voice (o
 # deploy mascarado passar ja e prova). ~4 chamadas; endpoint criado e apagado.
 probe_voz02_sip_inbound.sh
+# VOZ-06 (2026-09-18): a chamada e GRAVADA quando o pool pede (`media_policy.recording`), so audio
+# misturado, em PARTES: G1 duas partes (antes e depois do PIN mascarado) · G2 classe call_recording,
+# audio/ogg, retencao da CLASSE · G3 fala dentro de cada parte (transcrita) · G4 o PIN e o pedido dele
+# em parte nenhuma · G5 porta publica de anexos 404 · L1 a parte para ANTES da pausa de midia e volta
+# DEPOIS · L2 aviso antes da gravacao · R1 recusa gravada pelo FLUXO descarta · N1 controle sem
+# recording. ~3 chamadas pelo MESMO numero do probe_voz02 (nao rodar os dois em paralelo).
+probe_voz06_recording.sh
 # VOZ-23 (2026-09-17): a verificacao ativa do caminho de fala roda pelo caminho real e acusa regressao.
 # K0 fixtures e tenant limpo; A1 rota sem credencial 401 e perfil inexistente 422; D1 disparo pelo pool
 # webhook (tool MCP) termina completed; R1/R2 linha no ClickHouse com perfil aplicado e nenhum endpoint

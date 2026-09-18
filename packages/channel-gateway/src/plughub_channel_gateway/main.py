@@ -268,11 +268,15 @@ async def lifespan(app: FastAPI):
         attachment_store = _attachment_store,
     )
     _webrtc_adapter = WebRTCAdapter(
-        producer       = _producer,
-        redis          = _redis,
-        settings       = settings,
-        registry       = _registry,
-        context_reader = _context,
+        producer         = _producer,
+        redis            = _redis,
+        settings         = settings,
+        registry         = _registry,
+        context_reader   = _context,
+        # VOZ-06 — sem isto a gravação é feita e NÃO guardada (medido pelo probe_voz06: a parte 1
+        # gravou, parou antes do PIN e morreu em "sem AttachmentStore"). A Phase D tinha o mesmo
+        # buraco e ninguém viu, porque ela nunca rodou.
+        attachment_store = _attachment_store,
     )
     _webhook_adapter = WebhookAdapter(
         producer = _producer,
