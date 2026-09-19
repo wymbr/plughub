@@ -173,6 +173,26 @@ modules:
           admin: read_only
           operator: read_only
           supervisor: read_only
+      # VOZ-36 (2026-09-18, decisao do dono). A gravacao da chamada (VOZ-06) e o gemeo em
+      # AUDIO da transcricao, com sensibilidade maior: e a voz do cliente e do atendente.
+      #   read_only  = OUVIR, dentro da plataforma (streaming; cada escuta vai a trilha)
+      #   read_write = EXPORTAR uma copia (download) — sai do controle da plataforma: nao
+      #                expira, nao e mais auditada e a recusa do cliente nao a alcanca.
+      # UM campo com dois niveis, e nao dois campos: o nivel e ORDENADO, entao exportar
+      # IMPLICA ouvir por construcao — dois campos permitiriam baixar sem poder ouvir. O
+      # read_write como "agir sobre o que se ve" ja e o de `monitorar` (observar x intervir).
+      # Nome em INGLES (Language Rule); os vizinhos em portugues sao anteriores a regra.
+      # Escopo: os pools que ATENDERAM a parte gravada (`pools` da parte), nao o de entrada.
+      # Preset: admin e supervisor OUVEM; EXPORTAR nao nasce com ninguem — so por concessao.
+      recording:
+        label: "Gravações de chamada — ouvir (leitura) · exportar cópia (leitura e escrita)"
+        domain: [none, read_only, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+        role_defaults:
+          admin: read_only
+          supervisor: read_only
       exportar:
         label: Exportar dados de contatos
         domain: [none, read_write]

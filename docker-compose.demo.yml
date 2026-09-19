@@ -530,6 +530,7 @@ services:
           calibration.events
           pool.occupancy
           speech.metrics
+          audit.access
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \

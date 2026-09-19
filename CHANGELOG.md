@@ -1,5 +1,80 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-18 (5) — VOZ-36: a gravação se ouve e se exporta por capacidade, pelo pool que atendeu, e cada acesso vai à trilha
+
+**O estado de partida.** Desde a VOZ-06 a chamada é gravada e guardada como `call_recording`, e
+**ninguém a ouvia**: a porta pública de anexos a recusa com 404, de propósito, porque toma o file_id
+como credencial e o file_id viaja no stream. Faltava a porta de quem TEM direito.
+
+**Decisão do dono (2026-09-18).** Um campo ABAC novo em *Serviço e Contatos*, **`contacts.recording`**,
+com dois níveis ORDENADOS: `read_only` = **ouvir** (streaming, na plataforma) · `read_write` =
+**exportar** uma cópia. Exportar implica ouvir por construção. É um campo e não dois porque a escala
+do `abac_can` já é ordenada, e dois campos permitiriam "exporta sem ouvir", que não significa nada.
+- **Nome em inglês** (regra de idioma); o rótulo traduzido é que diz "gravações".
+- **Nasce com:** `admin` e `supervisor` ouvem; **exportar não nasce com ninguém**. A cópia sai do
+  controle da plataforma (retenção, trilha), então é concessão explícita.
+- **Escopo = o pool que ATENDEU a parte**, nunca o de entrada da sessão. O `CallRecorder` grava na
+  parte os `pools` que a atenderam (coluna nova `attrs` JSONB no AttachmentStore), e é isso que o
+  portão lê. Parte sem `pools` é recusada: sem saber de quem é, não se entrega.
+- **Cada escuta, exportação e recusa vai ao `audit_access_log`**, inclusive a chamada sem credencial.
+- **Fora:** justificativa escrita para exportar e o caminho do DPO (módulo `audit`). Se vierem, entram
+  com a sua própria decisão.
+
+**O que mudou.**
+- `infra/modules.yaml`: `contacts.recording` (`[none, read_only, read_write]`, escopável por pool)
+  e o rótulo nos dois locales de `access`.
+- channel-gateway, `recording_router.py`, três rotas:
+  - `GET /v1/recordings/sessions/{sid}` lista as partes que o chamador pode ouvir, com `can_export`
+    por parte e `omitted` = quantas existem fora do escopo ("não há gravação" e "há, mas não é sua"
+    são respostas diferentes);
+  - `GET /v1/recordings/{file_id}/audio` (ouvir, `inline`);
+  - `GET /v1/recordings/{file_id}/export` (`attachment`).
+  - Os eixos, todos por parte: Bearer (`plughub_authz`) → `contacts.recording` ≥ nível → o pool
+    que atendeu tem de passar no escopo do grant (`abac_can(scope_id=)`) **e** no domínio de
+    linhas (`pool_in_scope`; `accessible_pools: []` = nenhum pool).
+  - A capacidade é conferida **antes** de resolver o id: quem não tem o campo recebe 403 exista o
+    id ou não, senão 404 × 403 viraria oráculo de existência.
+  - Outras respostas: classe ≠ `call_recording` → 404; expirada → 410; segredo JWT ausente → 503
+    (a postura do `_check_audit_access`: dado pessoal não degrada aberto); `Cache-Control: no-store`.
+- **Trilha com UMA escritora.** O `audit_access_log` é da analytics-api. O gateway manda o fato por
+  um tópico novo, **`audit.access`** (`AuditAccessEventSchema`, `.strict()`), e a analytics-api o
+  grava pelo consumer (`parse_audit_access_event`, que recusa com log um evento incompleto em vez
+  de inventar linha).
+  - Publicar não bloqueia a resposta, igual ao `_record_access` de lá. A falha nunca é muda: vira
+    ERROR nomeando o acesso que não chegou à trilha.
+  - A LISTA de metadados não é escuta e não vai à trilha.
+- platform-ui:
+  - proxy `/v1/recordings` → gateway no vite e no nginx, antes do `/v1` genérico;
+  - `RecordingsPanel` na transcrição do contato: some com 401/403, mostra `omitted`, exportar só
+    quando o servidor disse `can_export`.
+  - ⚠️ O áudio **não** é buscado ao abrir a transcrição: cada busca é uma escuta na trilha, então
+    só acontece no clique em "Ouvir".
+
+**O que a medição achou pelo caminho.**
+- Inserir as funções auxiliares do store entre `@runtime_checkable` e a classe `AttachmentStore`
+  pôs o decorador numa FUNÇÃO. O gateway entrou em loop de restart no import (`issubclass() arg 1
+  must be a class`). O typecheck não pega isso; foi o `up -d` que pegou.
+- Nesta versão do FastAPI, o router incluído aparece em `app.routes` como UMA entrada de path vazio.
+  O teste que contava paths ali para provar a montagem mediria a versão da lib, não a montagem.
+  Agora ele pergunta ao app real por HTTP: sem o router, daria 404; montado, dá 401.
+
+**Gate:** `infra/test/probe_voz36_recording_access.sh`, **VERDE**. Duas partes sintéticas pelo mesmo
+`reserve(attrs=)` do gravador, tokens cunhados:
+- C0: campo no catálogo VIVO (`auth.module_registry`), não no YAML;
+- A1–A5: 401 · 403 sem o campo (id existente e inexistente) · domínio de outro pool 403 com a lista
+  omitindo · controle positivo `OggS` inline · grant escopado exporta só a parte do seu pool;
+- A6: classe nas duas direções, com controle;
+- P1: o proxy do platform-ui chega ao gateway;
+- T1: escuta, exportação e recusas, inclusive a anônima, lidas de volta no ClickHouse.
+
+Contra um serviço sem a rota o mesmo gate dá 19 ✗, VERMELHO.
+
+Testes: gateway 1363 (16 do router, com controle positivo ao lado de cada recusa) · analytics-api
+800 · schemas `audit-access.test.ts` 3 · platform-ui tsc limpo (280 arquivos).
+
+**Ficou de fora:** tocar a gravação no Console **durante** a chamada (não é o caso de uso) e a
+validação no browser, que entra no roteiro da `VOZ-37`.
+
 ## 2026-09-18 (4) — VOZ-06: a chamada é gravada quando o pool pede, em partes, sem o dado protegido
 
 **O estado de partida.** Havia código de gravação (a "Fase D" do Arc 15), e ele nunca rodou:

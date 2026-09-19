@@ -626,8 +626,10 @@ app = FastAPI(title="PlugHub Channel Gateway", lifespan=lifespan)
 # ── Import and mount upload routes ────────────────────────────────────────────
 # Deferred import so the router can reference module-level state set in lifespan.
 from .upload_router import router as upload_router  # noqa: E402  (post-app creation import)
+from .recording_router import router as recording_router  # noqa: E402 — VOZ-36
 from plughub_tasks import disparar, supervisionar
 app.include_router(upload_router)
+app.include_router(recording_router)
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────

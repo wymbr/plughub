@@ -176,6 +176,17 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # channel-gateway — gravação da chamada (VOZ-36): ouvir e exportar, com Bearer +\n\
+    # `contacts.recording` e trilha LGPD. Áudio em streaming: sem buffer. Before generic /v1.\n\
+    location ~ ^/v1/recordings(/|$) {\n\
+        set $up_recordings http://channel-gateway:8010;\n\
+        proxy_pass         $up_recordings;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 120s;\n\
+    }\n\
+\n\
     # scheduler-api — Agendas (Scheduler Fase 3). Before generic /v1.\n\
     location ~ ^/v1/agendas(/|$) {\n\
         set $up_scheduler http://scheduler-api:3650;\n\

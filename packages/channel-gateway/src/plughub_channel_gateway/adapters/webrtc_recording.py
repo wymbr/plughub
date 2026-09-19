@@ -346,6 +346,9 @@ class CallRecorder:
                 tenant_id=self._tenant, session_id=session_id,
                 file_name=f"recording-{session_id[:8]}-p{part.index:03d}.ogg", mime_type=MIME,
                 size_bytes=len(dados), expires_at=expira, artifact_class=ARTIFACT_CLASS,
+                # VOZ-36: quem pode OUVIR é decidido pelos pools que atenderam ESTA parte
+                attrs={"part": part.index, "pools": list(part.pools), "duration_ms": res.duration_ms,
+                       "started_at": part.started_at.isoformat(), "ended_at": ended.isoformat()},
             )
             meta = await store.commit(file_id=fid, tenant_id=self._tenant, data=dados)
         except Exception as exc:  # noqa: BLE001

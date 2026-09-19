@@ -421,8 +421,16 @@ parte fechada → wait_egress (fim REAL, sem sleep) → AttachmentStore `call_re
 - **Nunca finge gravar:** egress que não começa, que termina falho, arquivo fora do rascunho ou store
   ausente viram `recording.failed` com o motivo.
 - **A gravação NÃO sai pela porta pública de anexos** (`/webchat/v1/attachments/{id}`, que toma o
-  file_id como credencial): classe diferente de `webchat_attachment` responde 404. Ouvir a gravação
-  por porta autenticada é a `VOZ-36`.
+  file_id como credencial): classe diferente de `webchat_attachment` responde 404.
+- **Ouvir e exportar** (VOZ-36): `GET /v1/recordings/sessions/{sid}` · `/{file_id}/audio` ·
+  `/{file_id}/export` no gateway, com Bearer + **`contacts.recording`** (`read_only` ouve,
+  `read_write` exporta; só `admin`/`supervisor` nascem ouvindo, ninguém exportando). O escopo é o
+  pool que **atendeu a parte** (`attrs.pools`, gravado pelo `CallRecorder`), no grant **e** no
+  domínio de linhas; parte sem `pools` é recusada. Capacidade antes de resolver o id (sem oráculo
+  de existência). Cada escuta, exportação e recusa (inclusive sem credencial) vai ao
+  `audit_access_log` pelo tópico `audit.access` — a trilha tem uma escritora, a analytics-api. Na
+  tela: `RecordingsPanel` na transcrição, que só busca o áudio no clique (buscar é escutar). Gate:
+  `probe_voz36_recording_access.sh`.
 - **Config:** aviso em `webrtc.recording_notice` (aba WebRTC); retenção em
   `storage.call_recording_retention_days` (Plataforma → Retenção de dados), carimbada na hora de
   guardar — mudar o número vale para gravações NOVAS. Lidos a cada parte que começa, sem cache.

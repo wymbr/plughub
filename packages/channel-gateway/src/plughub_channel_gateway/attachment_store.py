@@ -32,6 +32,7 @@ Cron de expurgo (dois estágios):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
@@ -171,7 +172,7 @@ class AttachmentMeta:
     __slots__ = (
         "file_id", "tenant_id", "session_id", "original_name",
         "mime_type", "size_bytes", "file_path", "serving_url",
-        "expires_at", "deleted_at", "artifact_class",
+        "expires_at", "deleted_at", "artifact_class", "attrs",
     )
 
     def __init__(self, **kwargs):
@@ -270,6 +271,46 @@ async def _purge_deleted(db, grace: timedelta, limit: int, apagar) -> PurgeResul
 
 # ─── Interface (Protocol) ─────────────────────────────────────────────────────
 
+def _attrs(row) -> dict:
+    """`attrs` como dict — o asyncpg devolve JSONB como TEXTO sem codec registrado."""
+    try:
+        v = row["attrs"]
+    except (KeyError, IndexError):
+        return {}
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except ValueError:
+            return {}
+    return v if isinstance(v, dict) else {}
+
+
+async def _list_session(db, serving_url: str, *, tenant_id: str, session_id: str,
+                        artifact_class: str) -> list["AttachmentMeta"]:
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT file_id, session_id, original_name, mime_type, size_bytes,
+                   file_path, expires_at, deleted_at, artifact_class, attrs
+            FROM   session_attachments
+            WHERE  tenant_id = $1 AND session_id = $2 AND artifact_class = $3
+              AND  status = 'committed' AND deleted_at IS NULL
+            ORDER  BY created_at
+            """,
+            tenant_id, session_id, artifact_class,
+        )
+    return [
+        AttachmentMeta(
+            file_id=str(r["file_id"]), tenant_id=tenant_id, session_id=r["session_id"],
+            original_name=r["original_name"], mime_type=r["mime_type"], size_bytes=r["size_bytes"],
+            file_path=r["file_path"], serving_url=f"{serving_url}/{r['file_id']}",
+            expires_at=r["expires_at"], deleted_at=r["deleted_at"],
+            artifact_class=r["artifact_class"], attrs=_attrs(r),
+        )
+        for r in rows
+    ]
+
+
 @runtime_checkable
 class AttachmentStore(Protocol):
     """
@@ -287,6 +328,7 @@ class AttachmentStore(Protocol):
         size_bytes:  int,
         expires_at:  datetime,
         artifact_class: str = "webchat_attachment",
+        attrs:       dict | None = None,
     ) -> tuple[str, str]:
         """
         Reserva um slot de upload.
@@ -326,6 +368,16 @@ class AttachmentStore(Protocol):
         tenant_id: str,
     ) -> AsyncIterator[bytes]:
         """Stream dos bytes do arquivo para serving HTTP."""
+        ...
+
+    async def list_session(
+        self,
+        *,
+        tenant_id:      str,
+        session_id:     str,
+        artifact_class: str,
+    ) -> list[AttachmentMeta]:
+        """Artefatos GUARDADOS e vivos de uma sessão numa classe, na ordem de criação (VOZ-36)."""
         ...
 
     async def soft_expire(
@@ -396,6 +448,12 @@ class FilesystemAttachmentStore:
     -- a porta pública de anexos serve só `webchat_attachment`. Linha antiga é anexo de webchat.
     ALTER TABLE session_attachments
         ADD COLUMN IF NOT EXISTS artifact_class TEXT NOT NULL DEFAULT 'webchat_attachment';
+    -- VOZ-36: fatos do ARTEFATO que a autorização lê (ex.: `pools` da parte gravada — o escopo de
+    -- quem pode ouvir é o pool que ATENDEU, não o de entrada da sessão).
+    ALTER TABLE session_attachments
+        ADD COLUMN IF NOT EXISTS attrs JSONB NOT NULL DEFAULT '{}'::jsonb;
+    CREATE INDEX IF NOT EXISTS idx_attach_session_class
+        ON session_attachments (tenant_id, session_id, artifact_class);
     """
 
     def __init__(
@@ -428,6 +486,7 @@ class FilesystemAttachmentStore:
         size_bytes:  int,
         expires_at:  datetime,
         artifact_class: str = "webchat_attachment",
+        attrs:       dict | None = None,
     ) -> tuple[str, str]:
         file_id = str(uuid.uuid4())
 
@@ -436,8 +495,8 @@ class FilesystemAttachmentStore:
                 """
                 INSERT INTO session_attachments
                     (file_id, tenant_id, session_id, original_name,
-                     mime_type, size_bytes, status, expires_at, artifact_class)
-                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)
+                     mime_type, size_bytes, status, expires_at, artifact_class, attrs)
+                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9::jsonb)
                 """,
                 uuid.UUID(file_id),
                 tenant_id,
@@ -447,6 +506,7 @@ class FilesystemAttachmentStore:
                 size_bytes,
                 expires_at,
                 artifact_class,
+                json.dumps(attrs or {}),
             )
 
         upload_url = f"{self._upload_url}/{file_id}"
@@ -545,7 +605,7 @@ class FilesystemAttachmentStore:
             row = await conn.fetchrow(
                 """
                 SELECT session_id, original_name, mime_type, size_bytes,
-                       file_path, expires_at, deleted_at, artifact_class
+                       file_path, expires_at, deleted_at, artifact_class, attrs
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
@@ -567,6 +627,7 @@ class FilesystemAttachmentStore:
             expires_at    = row["expires_at"],
             deleted_at    = row["deleted_at"],
             artifact_class = row["artifact_class"],
+            attrs         = _attrs(row),
         )
 
     # ── stream_bytes ──────────────────────────────────────────────────────────
@@ -593,6 +654,11 @@ class FilesystemAttachmentStore:
         return _gen()
 
     # ── soft_expire ───────────────────────────────────────────────────────────
+
+    async def list_session(self, *, tenant_id: str, session_id: str,
+                           artifact_class: str) -> list[AttachmentMeta]:
+        return await _list_session(self._db, self._serving_url, tenant_id=tenant_id,
+                                   session_id=session_id, artifact_class=artifact_class)
 
     async def soft_expire(self, *, file_id: str) -> None:
         async with self._db.acquire() as conn:
@@ -729,6 +795,7 @@ class S3AttachmentStore:
         size_bytes:  int,
         expires_at:  datetime,
         artifact_class: str = "webchat_attachment",
+        attrs:       dict | None = None,
     ) -> tuple[str, str]:
         file_id = str(uuid.uuid4())
 
@@ -737,8 +804,8 @@ class S3AttachmentStore:
                 """
                 INSERT INTO session_attachments
                     (file_id, tenant_id, session_id, original_name,
-                     mime_type, size_bytes, status, expires_at, artifact_class)
-                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)
+                     mime_type, size_bytes, status, expires_at, artifact_class, attrs)
+                VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9::jsonb)
                 """,
                 uuid.UUID(file_id),
                 tenant_id,
@@ -748,6 +815,7 @@ class S3AttachmentStore:
                 size_bytes,
                 expires_at,
                 artifact_class,
+                json.dumps(attrs or {}),
             )
 
         upload_url = f"{self._upload_url}/{file_id}"
@@ -846,7 +914,7 @@ class S3AttachmentStore:
             row = await conn.fetchrow(
                 """
                 SELECT session_id, original_name, mime_type, size_bytes,
-                       file_path, expires_at, deleted_at, artifact_class
+                       file_path, expires_at, deleted_at, artifact_class, attrs
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
@@ -868,6 +936,7 @@ class S3AttachmentStore:
             expires_at    = row["expires_at"],
             deleted_at    = row["deleted_at"],
             artifact_class = row["artifact_class"],
+            attrs         = _attrs(row),
         )
 
     # ── stream_bytes ──────────────────────────────────────────────────────────
@@ -902,6 +971,11 @@ class S3AttachmentStore:
         return _gen()
 
     # ── soft_expire ───────────────────────────────────────────────────────────
+
+    async def list_session(self, *, tenant_id: str, session_id: str,
+                           artifact_class: str) -> list[AttachmentMeta]:
+        return await _list_session(self._db, self._serving_url, tenant_id=tenant_id,
+                                   session_id=session_id, artifact_class=artifact_class)
 
     async def soft_expire(self, *, file_id: str) -> None:
         async with self._db.acquire() as conn:

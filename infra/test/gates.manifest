@@ -410,6 +410,14 @@ probe_voz02_sip_inbound.sh
 # DEPOIS · L2 aviso antes da gravacao · R1 recusa gravada pelo FLUXO descarta · N1 controle sem
 # recording. ~3 chamadas pelo MESMO numero do probe_voz02 (nao rodar os dois em paralelo).
 probe_voz06_recording.sh
+# VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
+# read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
+# A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro
+# pool 403 e a lista omite · A4 controle positivo (OggS, inline) e exportar 403 · A5 grant escopado
+# exporta so a parte do seu pool · A6 classe: webchat pela porta de gravacao 404 e vice-versa (com
+# controle) · P1 proxy do platform-ui chega ao gateway · T1 escuta, exportacao e recusas (inclusive a
+# anonima) em audit_access_log via topico audit.access. Partes sinteticas, expiradas no fim.
+probe_voz36_recording_access.sh
 # VOZ-23 (2026-09-17): a verificacao ativa do caminho de fala roda pelo caminho real e acusa regressao.
 # K0 fixtures e tenant limpo; A1 rota sem credencial 401 e perfil inexistente 422; D1 disparo pelo pool
 # webhook (tool MCP) termina completed; R1/R2 linha no ClickHouse com perfil aplicado e nenhum endpoint

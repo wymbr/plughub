@@ -124,6 +124,8 @@ class TestGravaPeloPool:
         assert rig.provider.egresses_stopped == ["EG_mock_0001"]
         [kw] = rig.reserves()
         assert kw["artifact_class"] == "call_recording" and kw["mime_type"] == "audio/ogg"
+        # VOZ-36: a parte leva os pools que a atenderam — é o escopo de quem pode ouvir
+        assert kw["attrs"]["pools"] == ["pool_grava"] and kw["attrs"]["part"] == 1
         # retenção da CLASSE, não a do anexo de webchat
         assert abs((kw["expires_at"] - datetime.now(timezone.utc)) - timedelta(days=7)) < timedelta(minutes=1)
         [done] = [e for e in rig.redis.stream if e["type"] == "recording.completed"]

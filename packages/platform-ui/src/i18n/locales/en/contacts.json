@@ -1052,5 +1052,20 @@
       "unknownVocab": "Vocabulary unknown for this stretch",
       "unknownVocabHint": "These events predate the form stamp, so the form describing them was never recorded. They may all speak one vocabulary or several — this surface cannot tell, and does not guess. From the stamp onwards each stretch speaks a single vocabulary."
     }
+  },
+  "recording": {
+    "title_one": "Call recording — {{count}} part",
+    "title_other": "Call recording — {{count}} parts",
+    "auditNotice": "Every listen and export is recorded in the LGPD access log.",
+    "part": "Part {{n}}",
+    "listen": "Listen",
+    "export": "Export copy",
+    "loading": "Loading…",
+    "omitted_one": "{{count}} part was handled by a pool outside your scope and is not shown.",
+    "omitted_other": "{{count}} parts were handled by pools outside your scope and are not shown.",
+    "denied": "You are not allowed to access this part.",
+    "expired": "This recording has expired.",
+    "loadError": "Could not load the recording (status {{status}}).",
+    "listError": "Could not check whether this contact was recorded."
   }
 }

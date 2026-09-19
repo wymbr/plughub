@@ -719,6 +719,46 @@ def parse_sentiment_event(
     }
 
 
+# ─── audit.access (VOZ-36) ────────────────────────────────────────────────────
+
+_AUDIT_RESULTS = frozenset({"ok", "denied"})
+
+
+def parse_audit_access_event(payload: dict[str, Any]) -> dict | None:
+    """audit.access → `audit_access_log`: acesso a dado pessoal feito FORA da analytics-api.
+
+    A trilha tem UMA escritora (esta casa); outro serviço que serve dado pessoal — hoje o
+    channel-gateway, com a gravação da chamada — manda o fato por aqui. `access_id` = `event_id`
+    do produtor. Evento sem tenant, sem alvo ou com `result` fora do domínio é RECUSADO com log:
+    uma linha de auditoria inventada é pior que uma ausente e nomeada."""
+    event_id, tenant_id = payload.get("event_id"), payload.get("tenant_id")
+    endpoint, target_id = payload.get("endpoint"), payload.get("target_id")
+    result = payload.get("result")
+    if not event_id or not tenant_id or not endpoint or not target_id or result not in _AUDIT_RESULTS:
+        logger.error("[audit.access] evento RECUSADO — incompleto: event_id=%s tenant=%s endpoint=%s "
+                     "target=%s result=%r", event_id, tenant_id, endpoint, target_id, result)
+        return None
+    raw = payload.get("accessed_at")
+    try:
+        accessed = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        logger.error("[audit.access] evento RECUSADO — accessed_at ilegivel %r (event_id=%s)", raw, event_id)
+        return None
+    return {
+        "table":       "audit_access_log",
+        "access_id":   event_id,
+        "tenant_id":   tenant_id,
+        "actor_sub":   payload.get("actor_sub") or "",
+        "actor_kind":  payload.get("actor_kind") or "user",
+        "endpoint":    endpoint,
+        "target_kind": payload.get("target_kind") or "",
+        "target_id":   target_id,
+        "result":      result,
+        "row_count":   int(payload.get("row_count") or 0),
+        "accessed_at": accessed,
+    }
+
+
 # ─── speech.metrics (VOZ-22) ──────────────────────────────────────────────────
 
 _SPEECH_SEG = ("energy_threshold", "end_silence_ms", "gap_ms", "min_speech_ms", "max_speech_ms", "vad_filter")

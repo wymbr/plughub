@@ -78,6 +78,13 @@ export default defineConfig({
         target: 'http://localhost:8010',
         changeOrigin: true
       },
+      '^/v1/recordings': {
+        // channel-gateway — gravação da chamada (VOZ-36): listar as partes de uma sessão, ouvir
+        // (`contacts.recording` read_only) e exportar (read_write), cada acesso na trilha LGPD.
+        // Before generic /v1 (→ agent-registry).
+        target: 'http://localhost:8010',
+        changeOrigin: true
+      },
       '^/v1/agendas': {
         // scheduler-api — Agendas (Scheduler Fase 3). Before generic /v1 (→ agent-registry).
         target: 'http://localhost:3650',

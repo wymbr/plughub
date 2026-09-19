@@ -788,6 +788,15 @@ export type {
   SpeechMetricsEvent,
 } from "./speech-metrics"
 
+// ── audit.access — acesso a dado pessoal servido fora da analytics-api (VOZ-36) ──
+export {
+  AUDIT_ACCESS_RESULTS,
+  AUDIT_ACCESS_ACTOR_KINDS,
+  AuditAccessEventSchema,
+} from "./audit-access"
+
+export type { AuditAccessEvent } from "./audit-access"
+
 // ── Perfil de execução × tipos de step admitidos (CTR-01 / Arc 19) ───────────
 export {
   SKILL_PROFILE_FORBIDDEN_STEPS,

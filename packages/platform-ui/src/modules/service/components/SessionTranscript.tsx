@@ -4,6 +4,7 @@ import { Play } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
+import { RecordingsPanel } from './RecordingsPanel'
 import { renderWithTokens, useMaskingDisplayRules } from '@/components/MaskedToken'
 import { apiFetch } from '@/api/apiFetch'
 import type { ContactSegment, StreamEntry } from '../types'
@@ -334,6 +335,8 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
           </span>
         )}
       </div>
+
+      <RecordingsPanel sessionId={sessionId} />
 
       <div ref={streamRef} style={s.stream}>
         {/* ── Before segment ── */}

@@ -690,6 +690,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `journey.merges` | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` (Journey J3) |
 | `speech.metrics` | Channel Gateway (bot leg WebRTC) · `speech-check` (verificação ativa, VOZ-23) | analytics-api → ClickHouse `speech_stream_summaries` / `speech_collect_outcomes` / `speech_checks` — só números, nunca texto (VOZ-22) |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
+| `audit.access` | Channel Gateway (ouvir/exportar gravação, VOZ-36) | analytics-api → ClickHouse `audit_access_log` — a trilha LGPD tem UMA escritora |
 | `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
 
 ## Kafka Event Schemas — Zod Coverage
@@ -714,6 +715,7 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `session.signals` | `SessionSignalEventSchema` | `survey.ts` |
 | `journey.merges` | `JourneyMergedEventSchema` | `journey-merges.ts` |
 | `speech.metrics` | `SpeechMetricsEventSchema` | `speech-metrics.ts` |
+| `audit.access` | `AuditAccessEventSchema` | `audit-access.ts` |
 
 ---
 
@@ -1278,6 +1280,9 @@ promessa sem mecanismo; cada um entra com a sua feature.
   subia antes do corpo, e `_record_access` nunca rodava.
 - **`audit_access_log` NUNCA é deduplicado**, por design LGPD — o valor da trilha é dizer **quantas
   vezes** um dado foi acessado e por quem.
+- **A trilha tem UMA escritora (a analytics-api) e duas entradas**: o `_record_access` das rotas
+  `/v1/audit/*` e o tópico **`audit.access`**, por onde outro serviço que sirva dado pessoal manda
+  o fato (hoje o gateway: ouvir/exportar gravação, VOZ-36). Nunca escrita direta no ClickHouse.
 - **`mcp_audit_log` não existe, e isso é decisão** — zero tráfego medido na borda `invoke`, e criar
   tabela que ninguém preenche é o *"existe ≠ está pronto"*. `/v1/audit/mcp-calls` lê de
   `session_timeline`.
@@ -1356,8 +1361,8 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 > assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. **Contato ponta a ponta validado com
 > gente no browser em 2026-09-15** (`VOZ-04`; roteiro `docs/guias/roteiro-validacao-webrtc-console.md`).
 > ⚠️ **O que ainda NÃO existe:** mídia para browser em OUTRA máquina da rede (o demo serve o próprio
-> host — loopback, UDP único e TURN com dois nomes), ouvir a gravação por porta autenticada
-> (`VOZ-36`), porta SIP publicada e chamada SAINTE (`VOZ-32`/`VOZ-33`). O bot leg (ouvinte + voz, transcrição e coleta por teclado/fala) existe
+> host — loopback, UDP único e TURN com dois nomes), porta SIP publicada e chamada SAINTE
+> (`VOZ-32`/`VOZ-33`). O bot leg (ouvinte + voz, transcrição e coleta por teclado/fala) existe
 > desde 2026-09-16 — `arc15-webrtc.md` § 15; a chamada telefônica ENTRANTE, desde 2026-09-18 — § 19.
 
 - **A chamada pelo tronco SIP é canal `voice` e entra na MESMA sala** (VOZ-02): o serviço SIP do SFU
@@ -1402,6 +1407,12 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   (`core.contact.recording_opt_out`, escrita pelo FLUXO) descarta a parte em curso. Só áudio da
   sala, em PARTES, guardado como `call_recording` com retenção da classe — e **fora** da porta
   pública de anexos, que toma o file_id como credencial. Gate: `probe_voz06_recording.sh`.
+- **Ouvir a gravação é capacidade, e escutar é fato de auditoria** (VOZ-36): `contacts.recording`
+  (`read_only` ouve · `read_write` exporta — exportar não nasce com ninguém), decidida pelo pool
+  que **ATENDEU a parte**, nunca o de entrada. Cada escuta, exportação e recusa vai ao
+  `audit_access_log` pelo tópico `audit.access`: a trilha tem UMA escritora (analytics-api), e
+  outro serviço que sirva dado pessoal manda o fato por ali, nunca escreve no ClickHouse. Gate:
+  `probe_voz36_recording_access.sh`.
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,

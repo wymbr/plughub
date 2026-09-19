@@ -1052,5 +1052,20 @@
       "unknownVocab": "Vocabulário desconhecido neste trecho",
       "unknownVocabHint": "Estes eventos são anteriores ao carimbo de formulário, então a forma que os descreve nunca foi gravada. Eles podem falar um vocabulário só ou vários — esta superfície não tem como saber, e não adivinha. Do carimbo em diante cada trecho fala um vocabulário único."
     }
+  },
+  "recording": {
+    "title_one": "Gravação da chamada — {{count}} parte",
+    "title_other": "Gravação da chamada — {{count}} partes",
+    "auditNotice": "Cada escuta e cada exportação ficam registradas na trilha de acesso LGPD.",
+    "part": "Parte {{n}}",
+    "listen": "Ouvir",
+    "export": "Exportar cópia",
+    "loading": "Carregando…",
+    "omitted_one": "{{count}} parte foi atendida por pool fora do seu escopo e não aparece.",
+    "omitted_other": "{{count}} partes foram atendidas por pools fora do seu escopo e não aparecem.",
+    "denied": "Você não tem permissão para acessar esta parte.",
+    "expired": "Esta gravação expirou.",
+    "loadError": "Não foi possível carregar a gravação (status {{status}}).",
+    "listError": "Não foi possível verificar se este contato foi gravado."
   }
 }

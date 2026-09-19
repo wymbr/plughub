@@ -37,6 +37,7 @@
       "monitorar": "Monitor: observar a operação ao vivo (sessões, agentes, pools)",
       "visualizar": "Analytics: relatórios e agregados de contatos (listas e traços de execução)",
       "transcricao": "Ler a transcrição de um contato (diálogo verbatim)",
+      "recording": "Gravações de chamada — ouvir (leitura) · exportar cópia (leitura e escrita)",
       "exportar": "Exportar dados de contatos",
       "importar_cadastro": "Importar a base de clientes como fonte autoritativa de identidade"
     },

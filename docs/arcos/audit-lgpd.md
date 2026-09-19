@@ -189,6 +189,19 @@ do tenant lia dado pessoal —, nenhum `INSERT`, e nenhuma das duas tabelas em `
 (`probe_audit_surface.sh`: 0 de 2, com `session_timeline` de testemunha). O `401` que o token
 malformado devolve é o que fazia o buraco parecer coberto.
 
+### Acesso servido FORA da analytics-api — o tópico `audit.access` *(VOZ-36, 2026-09-18)*
+
+A gravação da chamada é servida pelo channel-gateway (onde o arquivo está), e cada escuta,
+exportação e recusa tem de estar nesta trilha. Em vez de uma segunda escritora no ClickHouse, o
+gateway publica **`audit.access`** (`AuditAccessEventSchema`, `.strict()`: quem acessou o quê, nunca
+o conteúdo) e o consumer da analytics-api grava a linha (`parse_audit_access_event`; evento
+incompleto é recusado com log, nunca completado com valor inventado). `access_id` = `event_id` do
+produtor; `endpoint` = `channel-gateway:recording.listen|export`; `target_kind` = `recording`;
+`target_id` = `{session_id}/{file_id}`. O ator sem credencial fica `anonymous`, como aqui.
+
+⚠️ Kafka é *at-least-once*, e a tabela não deduplica por design: uma reentrega duplica a linha.
+Para contar escutas, a chave é `access_id`, não a linha.
+
 ### ClickHouse — uma tabela existe, a outra não, e isso é decisão
 
 `audit_access_log` é `MergeTree` e **nunca** deduplicado, por design LGPD: o valor da trilha é dizer
