@@ -341,6 +341,16 @@ class LiveKitProvider:
                 creation_time = r.creation_time,
             )
 
+    async def list_inbound_trunks(self) -> list[tuple[str, list[str]]]:
+        """(nome, números) de cada tronco SIP de entrada no SFU (VOZ-41). Lista vazia só quando o
+        SFU RESPONDEU; erro de rede propaga — "não sei" e "não há tronco" não podem ter a mesma cara."""
+        from livekit.api import LiveKitAPI
+        from livekit.protocol import sip as lsip
+
+        async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
+            resp = await lkapi.sip.list_inbound_trunk(lsip.ListSIPInboundTrunkRequest())
+            return [(t.name, list(t.numbers)) for t in resp.items]
+
     async def list_participants(self, room_name: str) -> list[ParticipantInfo]:
         """Lista vazia só quando o SFU RESPONDEU; erro de rede propaga."""
         from livekit.api import ListParticipantsRequest, LiveKitAPI
@@ -506,6 +516,14 @@ class MockWebRTCProvider:
         self.permission_updates: list[dict] = []
         self.joined:           set[str] = set()   # identidades "na sala", para o teste
         self.participants_removed: list[tuple[str, str]] = []
+        # VOZ-41 — troncos SIP de entrada "no SFU"; `inbound_trunks_error` planta a falha de rede
+        self.inbound_trunks:       list[tuple[str, list[str]]] = []
+        self.inbound_trunks_error: Exception | None = None
+
+    async def list_inbound_trunks(self) -> list[tuple[str, list[str]]]:
+        if self.inbound_trunks_error is not None:
+            raise self.inbound_trunks_error
+        return list(self.inbound_trunks)
 
     def generate_token(self, grants: TokenGrants) -> str:
         token = (

@@ -1370,6 +1370,12 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   (`/v1/livekit/webhook`) e o gateway a **adota** como a da sessão. **O endereço é o número DISCADO**
   (`ChannelEndpoint` `voice`); **sem endpoint, a chamada é RECUSADA** e o motivo vai ao log — nunca
   pool default. Gate: `infra/test/probe_voz02_sip_inbound.sh`.
+- **O tronco SIP é estado VOLÁTIL do SFU, e a ausência dele é dita** (VOZ-41): o Redis do SFU não
+  persiste, então tronco e regra de despacho só existem porque o `sip-seed` os recria a cada subida —
+  e sem eles o serviço SIP descarta a chamada como `flood`, sem 4xx e sem linha no gateway. Por isso
+  o seed **recusa diretório vazio** (sai 3; `SIP_SEED_ALLOW_EMPTY=true` é a escolha explícita) e o
+  gateway confere a cada 5 min que todo número `voice` cadastrado tem tronco (`sip_trunk_watch.py`):
+  descoberto é ERROR com os números; *"não consegui perguntar"* é WARNING, nunca *"coberto"*.
 - **`room.auto_create` está LIGADO, e isso tem contrapartida obrigatória** (VOZ-02, decisão do dono):
   o serviço SIP entra por join e, com `false`, recebia 486 em toda chamada. A garantia da VOZ-01
   (token para nome qualquer não cria sala) virou REAÇÃO: no `room_started`, o gateway apaga sala

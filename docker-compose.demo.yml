@@ -1558,12 +1558,14 @@ services:
       SIP_DIR:                 /sip
       SIP_TRUNK_PASSWORD_DEMO: changeme_sip_trunk_demo
       SIP_SEED_RECONCILE:      ${SIP_SEED_RECONCILE:-}
+      SIP_SEED_ALLOW_EMPTY:    ${SIP_SEED_ALLOW_EMPTY:-}
     depends_on:
       livekit-sip:
         condition: service_started
     networks:
       - plughub-demo
-    restart: "no"
+    # VOZ-41: diretório vazio (mount atrasado) e SFU fora saem != 0 — tenta de novo, não desiste calado
+    restart: "on-failure:5"
 
   # TURN para atravessar NAT. `lt-cred-mech` com usuário estático: o LiveKit repassa
   # `turn_servers` aos clientes com usuário/credencial fixos, e não gera credencial

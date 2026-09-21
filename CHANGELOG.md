@@ -1,5 +1,38 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (4) — VOZ-41: o tronco SIP que some é dito, e o seed não aceita diretório vazio
+
+**O que foi medido.** O Redis do SFU não persiste (`livekit-redis` com `--save ""`): tronco e regra de
+despacho só existem porque o job `sip-seed` os recria a cada subida. Às 10:09 a stack subiu, o seed viu
+`/sip` VAZIO no container, disse *"nada a semear"* e saiu **0** — e daí em diante o `livekit-sip`
+descartou toda chamada como `flood`, sem 4xx ao chamador e sem uma linha no gateway. Quem achou foi o
+`probe_voz02_sip_inbound`, horas depois. Três camadas deixavam isso calado; cada uma mudou:
+
+- **o seed** trata diretório sem tronco como o que ele é — o mount que não montou — e sai **3** com
+  ERRO; `SIP_SEED_ALLOW_EMPTY=true` é a escolha explícita de instalação sem SIP (sai 0 dizendo que foi
+  de propósito). Docstring de saídas atualizada;
+- **o compose**: `sip-seed` com `restart: on-failure:5` — mount atrasado e SFU fora (saída 2) tentam
+  de novo em vez de desistir;
+- **o gateway confere** (`sip_trunk_watch.py`, task de boot supervisionada, 5 min): todo `identifier`
+  de endpoint `voice` ativo tem de estar nos `numbers` de algum tronco de entrada (tronco sem números
+  aceita todos). Descoberto → **ERROR nomeando os números** e o comando que recria, repetido de hora em
+  hora; SFU ou registro inalcançável → **WARNING "NÃO conferida"**, nunca "coberto"; volta → INFO
+  *restaurado*. Sem número `voice` cadastrado não há o que cobrir e o SFU nem é consultado. O provider
+  ganhou `list_inbound_trunks()` (LiveKit, pelo método NÃO deprecado do SDK, e Mock).
+
+**Medido ao vivo** (endpoint `voice` temporário para `+551140000000`): com tronco → INFO coberto;
+tronco e regra apagados no SFU (simulando a perda do Redis) → **ERROR com o número**; `sip-seed`
+recriado → *"1 de 1 tronco(s) ok"* e INFO coberto. Seed contra diretório vazio: saída **3**; com
+`SIP_SEED_ALLOW_EMPTY=true`: 0. `probe_voz02_sip_inbound` VERDE depois. Gateway **1374** testes (11
+novos em `test_sip_trunk_watch.py`: ERROR com controle coberto sem ERROR, repetição sem inundar,
+restauração dita, SFU/registro/provider fora como WARNING, SFU não consultado sem número, `hasattr` no
+provider real, censo por AST da task ligada e cancelada).
+
+**O que ficou de fora.** A causa do mount vazio às 10:09 não foi reproduzida (o mount de arquivo único
+do auth-api, 9 s antes, estava íntegro). O Redis do SFU segue volátil — persistir seria a outra saída,
+mas faria o estado do SIP sobreviver ao arquivo que o declara, e a tela de tronco (`VOZ-34`) é que deve
+decidir onde ele mora.
+
 ## 2026-09-21 (3) — VOZ-40: o fim do contato vai ao stream em todo canal, uma vez, antes do anúncio
 
 **O que foi medido.** Em 30 dias, 637 sessões com mensagem em `session_stream_events` e **zero** com

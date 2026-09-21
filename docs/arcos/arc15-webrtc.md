@@ -914,7 +914,8 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
 | Peça | Onde |
 |---|---|
 | Conversor SIP ↔ sala | serviço `livekit-sip` (imagem por digest) + `livekit-redis` (psrpc) no compose demo |
-| Tronco e regra de despacho | `infra/sip/*.json`, semeados pelo job `sip-seed` (`infra/seed/seed_sip.py`, seed-if-absent; `SIP_SEED_RECONCILE=true` recria); senha só por env |
+| Tronco e regra de despacho | `infra/sip/*.json`, semeados pelo job `sip-seed` (`infra/seed/seed_sip.py`, seed-if-absent; `SIP_SEED_RECONCILE=true` recria); senha só por env. **Diretório vazio sai 3** (mount que não montou, nunca "nada a fazer"; `SIP_SEED_ALLOW_EMPTY=true` para instalação sem SIP) e o job tem `restart: on-failure:5` (VOZ-41) |
+| Conferência de cobertura | `sip_trunk_watch.py` (task de boot `sip-trunk-watch`, 5 min): todo `identifier` de endpoint `voice` ATIVO tem de estar em `numbers` de algum tronco de entrada no SFU (tronco sem `numbers` aceita todos). DESCOBERTO → ERROR nomeando os números, repetido de hora em hora; SFU ou registro fora → WARNING *"NÃO conferida"*; volta → INFO *restaurado*. Existe porque o Redis do SFU não persiste (`--save ""`) e, sem tronco, o `livekit-sip` descarta a chamada como `flood` sem 4xx e sem linha no gateway (VOZ-41) |
 | Leitura do participante SIP | `adapters/sip_leg.py` (`parse_sip_participant`: kind SIP, `sip.trunkPhoneNumber` = DNIS, `sip.phoneNumber` = ANI) |
 | Nascimento, desligar, recusa | `adapters/webrtc.py`: `on_livekit_event` · `_sip_arrived` · `_sip_hangup` · `_sip_platform_close` · `_sip_refuse` |
 | Saída de fala | `adapters/voice_router.py` — o canal `voice` tem dois donos; a sessão SIP vai ao adapter WebRTC, o resto ao Twilio |

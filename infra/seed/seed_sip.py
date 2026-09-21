@@ -11,7 +11,8 @@ A dispatch rule é SEMPRE `individual` com o prefixo de `sip_leg.SIP_ROOM_PREFIX
 gateway, nunca repetido aqui: o gateway só adota como contato a sala que tem esse prefixo, e dois
 lugares escrevendo o mesmo prefixo são como ele passa a divergir sem erro.
 
-Saída: 0 tudo semeado ou já presente · 1 algum tronco falhou · 2 SFU inalcançável no prazo.
+Saída: 0 tudo semeado ou já presente · 1 algum tronco falhou · 2 SFU inalcançável no prazo
+· 3 diretório SEM tronco (VOZ-41 — `SIP_SEED_ALLOW_EMPTY=true` quando a instalação não tem SIP).
 """
 from __future__ import annotations
 
@@ -129,8 +130,14 @@ async def main() -> int:
         return 1
     arquivos = sorted(glob.glob(os.path.join(SIP_DIR, "*.json")))
     if not arquivos:
-        log(f"nenhum tronco em {SIP_DIR} — nada a semear")
-        return 0
+        # VOZ-41: diretório vazio é o bind mount que não montou, nunca "nada a fazer". O Redis do
+        # SFU não persiste; sair 0 aqui deixou o SIP descartando TODA chamada em silêncio (2026-09-21).
+        if os.environ.get("SIP_SEED_ALLOW_EMPTY", "").lower() == "true":
+            log(f"nenhum tronco em {SIP_DIR} — SIP_SEED_ALLOW_EMPTY=true, nada semeado de propósito")
+            return 0
+        log(f"ERRO: nenhum tronco em {SIP_DIR} — o diretório não montou? Sem tronco, o serviço SIP "
+            f"descarta toda chamada. Instalação sem SIP: SIP_SEED_ALLOW_EMPTY=true")
+        return 3
     lk = api.LiveKitAPI(URL, KEY, SECRET)
     try:
         if not await _espera_sfu(lk):

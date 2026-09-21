@@ -47,6 +47,7 @@ from .attachment_store import (
     S3AttachmentStore,
 )
 from .attachment_expiry import run_attachment_expiry
+from .sip_trunk_watch import run_sip_trunk_watch
 from .channel_capability_registry import (
     select_channel,
 )
@@ -602,6 +603,15 @@ async def lifespan(app: FastAPI):
         "attachment-expiry",
         asyncio.create_task(run_attachment_expiry(_attachment_store)),
     )
+    # VOZ-41: todo número `voice` cadastrado tem tronco SIP no SFU. O Redis do SFU não persiste, e
+    # sem tronco o serviço SIP descarta a chamada sem 4xx e sem linha aqui — esta task é quem diz.
+    sip_trunk_watch_task = supervisionar(
+        "sip-trunk-watch",
+        asyncio.create_task(run_sip_trunk_watch(
+            lambda: _webrtc_adapter.provider if _webrtc_adapter is not None else None,
+            settings.agent_registry_url, settings.tenant_id, settings.agent_registry_service_token,
+        )),
+    )
 
     logger.info("✅ Channel Gateway started (instance=%s)", instance_id)
     yield
@@ -615,6 +625,7 @@ async def lifespan(app: FastAPI):
     invalidation_task.cancel()
     timeout_scan_task.cancel()
     attachment_expiry_task.cancel()
+    sip_trunk_watch_task.cancel()
     await _producer.stop()
     await db_pool.close()
     await _redis.aclose()

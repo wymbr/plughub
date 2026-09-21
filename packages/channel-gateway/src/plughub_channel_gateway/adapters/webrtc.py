@@ -445,6 +445,11 @@ class WebRTCAdapter(ChannelAdapter):
         )
 
     @property
+    def provider(self):
+        """O provider do SFU, ou None quando o canal está fechado (`provider_unavailable` diz por quê)."""
+        return self._provider
+
+    @property
     def provider_unavailable(self) -> WebRTCProviderUnavailable | None:
         """O motivo pelo qual o canal está fechado, ou None se o provider existe."""
         return self._provider_unavailable
