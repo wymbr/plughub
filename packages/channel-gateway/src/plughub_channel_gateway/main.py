@@ -923,6 +923,22 @@ async def webrtc_ws(ws: WebSocket, pool_id: str) -> None:
     await _webrtc_adapter.handle_ws(ws, pool_id)
 
 
+@app.websocket("/ws/call")
+async def webrtc_call_ws(ws: WebSocket) -> None:
+    """
+    Chamada PRESA a um contato de chat (WCH-01, `docs/adr/adr-chat-call-as-medium.md`).
+
+    O cliente já conversa pelo `/ws/chat/{pool}`; esta conexão, aberta na mesma página, leva só a
+    chamada: `conn.hello` → `conn.authenticate {token, session_id}` com o token do CHAT. Não abre
+    contato nem roteia; a sala nasce quando os atendentes de agora oferecem mídia
+    (`webrtc.ready`), e a queda desta conexão encerra a chamada — o contato de chat segue.
+    """
+    if _webrtc_adapter is None:
+        await ws.close(code=1011)
+        return
+    await _webrtc_adapter.handle_call_ws(ws)
+
+
 # Capacidade exigida por papel na sala. O agente PUBLICA (fala, vê) — é atender; o
 # supervisor entra OCULTO e só assina — é observar. Papel fora da tabela é recusado:
 # um default aqui seria o chamador escolhendo o próprio grant.

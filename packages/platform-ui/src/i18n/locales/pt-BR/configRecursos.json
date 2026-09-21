@@ -144,6 +144,8 @@
       "agent_publish": "Atendente pode enviar",
       "kind": { "audio": "Áudio", "video": "Vídeo" },
       "undeclared": "Não declarada — um pool de contato com WebRTC não pode ser salvo assim.",
+      "chatHint": "Num pool de chat, esta política decide se o cliente pode transformar a conversa em chamada. É opcional: sem ela, o chat segue só em texto.",
+      "undeclaredChat": "Não declarada — o cliente do chat não pode ligar.",
       "textOnly": "Declarar só texto",
       "textOnlyDeclared": "Declarada como só texto: nenhum lado publica áudio ou vídeo.",
       "required": "Declare as mídias oferecidas no WebRTC (ou \"só texto\") antes de salvar.",

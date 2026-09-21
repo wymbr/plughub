@@ -154,8 +154,21 @@ export interface WsMentionAck {
   at:                        string;
 }
 
+/**
+ * WCH-01 — o cliente de um contato de CHAT abriu (ou encerrou) uma chamada. O gateway publica em
+ * `agent:events:{sid}`; é o que faz o Console montar a mídia num contato cujo canal não é de sala.
+ */
+export interface WsMediaCall {
+  type:       "media.call";
+  session_id: string;
+  state:      "started" | "ended";
+  reason?:    string;
+  timestamp?: string;
+}
+
 export type WsServerEvent =
   | WsConnectionAccepted
+  | WsMediaCall
   | WsMessageText
   | WsMenuRender
   | WsAgentTyping
@@ -397,6 +410,11 @@ export interface ContactSession {
   /** Display name resolved from contact metadata, or null if not yet known. */
   customerName:     string | null;
   channel:          string;           // "webchat" | "whatsapp" | "voice" | …
+  /**
+   * WCH-01 — há chamada presa a este contato de chat AGORA (evento `media.call`). Ausente = não.
+   * ⚠️ Vive só na memória da tela: recarregar o Console no meio da chamada não a reencontra.
+   */
+  callActive?:      boolean;
   /** Pool this contact was assigned through — from conversation.assigned.pool_id */
   poolId:           string;
   /**

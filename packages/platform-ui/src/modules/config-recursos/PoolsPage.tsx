@@ -560,10 +560,13 @@ const MEDIA_KINDS: MediaKind[] = ['audio', 'video']
 // VOZ-02: `voice` também tem sala (a chamada telefônica entra pela perna SIP), e o registry exige a
 // política nos dois. A tela só pedia com `webrtc` — um pool só de telefone não salvava.
 const hasMediaRoom = (channels: string[]) => channels.includes('webrtc') || channels.includes('voice')
+// WCH-01 — o contato de CHAT pode ganhar chamada (adr-chat-call-as-medium): a política também vale
+// para `webchat`, mas OPCIONAL — sem ela o cliente do chat não liga, e isso não impede salvar.
+const canHaveCall = (channels: string[]) => hasMediaRoom(channels) || channels.includes('webchat')
 
 function MediaPolicyEditor({
-  value, onChange,
-}: { value: PoolMediaPolicy | null; onChange: (v: PoolMediaPolicy) => void }) {
+  value, onChange, optional = false,
+}: { value: PoolMediaPolicy | null; onChange: (v: PoolMediaPolicy) => void; optional?: boolean }) {
   const { t } = useTranslation('configRecursos')
   const current = value ?? { customer_publish: [], agent_publish: [] }
   const toggle = (dir: 'customer_publish' | 'agent_publish', kind: MediaKind) => {
@@ -575,6 +578,7 @@ function MediaPolicyEditor({
     <div className="mt-3 border border-border rounded p-3" data-testid="media-policy-editor">
       <p className="text-xs font-semibold text-dark">{t('pools.mediaPolicy.label')}</p>
       <p className="text-2xs text-muted-light mb-2">{t('pools.mediaPolicy.hint')}</p>
+      {optional && <p className="text-2xs text-muted-light mb-2">{t('pools.mediaPolicy.chatHint')}</p>}
       {(['customer_publish', 'agent_publish'] as const).map(dir => (
         <div key={dir} className="flex items-center gap-4 mb-1">
           <span className="text-xs text-dark w-40">{t(`pools.mediaPolicy.${dir}`)}</span>
@@ -593,7 +597,9 @@ function MediaPolicyEditor({
       ))}
       {value === null ? (
         <div className="flex items-center gap-2 mt-1">
-          <p className="text-2xs text-warning">{t('pools.mediaPolicy.undeclared')}</p>
+          <p className={`text-2xs ${optional ? 'text-muted-light' : 'text-warning'}`}>
+            {t(optional ? 'pools.mediaPolicy.undeclaredChat' : 'pools.mediaPolicy.undeclared')}
+          </p>
           <button
             type="button"
             onClick={() => onChange({ customer_publish: [], agent_publish: [] })}
@@ -1154,7 +1160,7 @@ const PoolsPage: React.FC = () => {
           : ((editingPool?.llm_account_ids?.length ?? 0) > 0 ? { llm_account_ids: [] } : {})),
         // VOZ-10 — só viaja com `webrtc` marcado. Desmarcar o canal NÃO apaga a política:
         // ela fica sem efeito e volta se o canal voltar.
-        ...(hasMediaRoom(formData.channel_types) && formData.media_policy
+        ...(canHaveCall(formData.channel_types) && formData.media_policy
           ? { media_policy: formData.media_policy } : {}),
       }
       if (editingPool) {
@@ -1411,10 +1417,11 @@ const PoolsPage: React.FC = () => {
                 />
               </div>
             )}
-            {hasMediaRoom(formData.channel_types) && (
+            {canHaveCall(formData.channel_types) && (
               <MediaPolicyEditor
                 value={formData.media_policy}
                 onChange={mp => setFormData(prev => ({ ...prev, media_policy: mp }))}
+                optional={!hasMediaRoom(formData.channel_types)}
               />
             )}
           </div>

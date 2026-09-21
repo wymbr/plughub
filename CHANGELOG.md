@@ -1,5 +1,51 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (5) — WCH-01: o cliente do chat liga sem sair do chat, e a queda da chamada não encerra o contato
+
+**O que foi decidido antes de codar.** A ficha dizia "o webrtc entrega mensagem pelo caminho do
+webchat". A leitura do adapter mostrou que, no alvo do ADR (`adr-chat-call-as-medium`), a conexão da
+chamada não carrega texto nenhum — o texto já vai pelo chat —, e convergir o texto do `webrtc` avulso
+seria trabalho num caminho que a `WCH-04` pode aposentar. Redefinida com o dono: a chamada se PRENDE a
+um contato de chat que já existe.
+
+**O que mudou.**
+- **gateway** — `WS /ws/call` (`adapters/webrtc_call.py`, mixin do `WebRTCAdapter`): token do chat +
+  `session_id`; só o dono de um contato `webchat` aberto e sem outra chamada (alheia e inexistente
+  recebem a mesma recusa). Não abre contato nem roteia; lê os atendentes de AGORA do stream (replay) e
+  monta a sala quando eles oferecem mídia, com a política do pool lida do registry **só quando há
+  chamada**; sem oferta, `webrtc.call_pending` dito e nenhuma sala. Desligar ou cair encerra só a
+  chamada, sem `contact_closed` e sem tocar o `ws_alive` do chat; o fim do contato encerra a chamada.
+  Texto recusado nessa conexão. `media.call {started|ended}` no stream e em `agent:events`. Sem bot leg
+  nesta fatia (a IA não consome áudio na chamada de chat), e o estado de mídia diz por quê.
+- **Console** — `media.call` monta e desmonta a sobreposição num contato de chat (`callActive`).
+- **Tela de pools** — o editor de mídias aparece para `webchat`, opcional; segue obrigatório em
+  `webrtc`/`voice`. Sem isso a chamada de chat não seria configurável pela tela.
+- **Widget de demo** — 📞 Ligar no `webchat-test.html`.
+
+**Medido.** Gateway 1399 testes (25 novos em `test_webrtc_call.py`: porta com oito recusas e o
+controle, replay em que o primeiro atendente já saiu, espera e montagem, fim do contato, política do
+registry com as duas ausências, fim só da chamada, texto recusado, IA sem áudio com controle no canal,
+rota ligada, bloqueio do XREAD). Gate novo `probe_wch01_chat_call.sh` — 10 OK. **Validado pelo dono
+no browser**: duas chamadas no mesmo contato, áudio nos dois sentidos, o contato seguiu depois de
+cada uma, formulário mascarado de especialista, NPS no cliente e wrap-up no agente, e o fim do contato
+encerrou a chamada (`media.call ended contact_closed`).
+
+**Achado de passagem, corrigido.** O XREAD dos observadores bloqueava 5 000 ms, igual ao
+`socket_timeout` padrão do redis-py 8: toda leitura ociosa estourava e dormia 1 s — 28 WARNING numa
+chamada de 3 min no observador novo, e o mesmo defeito **calado** (`debug`) no observador do canal
+`webrtc`, custando até 1 s de atraso a cada ociosidade. Bloqueio 3 000 ms, com teste contra o timeout
+do cliente; medido depois: 0 em 12 s ociosos.
+
+**Achado da validação, que virou ficha (`MEN-08`).** O especialista `@auth_form`, convidado pelo
+humano, terminou chamando `conversation_escalate`: o cliente leu *"Transferindo para um especialista"*
+com o especialista humano já na conversa, e o routing-engine **roteou o contato de novo** para o mesmo
+humano (`priority_score=0 mode=autonomous`) — só não houve efeito porque o bridge descartou como
+*duplicate routing for already-served session*. De quebra, o `participant_left` que essa tool escreve
+leva o autor inventado `ai-agent`, e o estado de mídia não reconhece a saída.
+
+**Fora da fatia.** `WCH-02`: supervisor, Console recarregado, IA e transcrição na chamada de chat,
+atendente sem áudio, relatórios.
+
 ## 2026-09-21 (4) — VOZ-41: o tronco SIP que some é dito, e o seed não aceita diretório vazio
 
 **O que foi medido.** O Redis do SFU não persiste (`livekit-redis` com `--save ""`): tronco e regra de

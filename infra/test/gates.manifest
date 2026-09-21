@@ -418,6 +418,7 @@ probe_voz06_recording.sh
 # controle) · P1 proxy do platform-ui chega ao gateway · T1 escuta, exportacao e recusas (inclusive a
 # anonima) em audit_access_log via topico audit.access. Partes sinteticas, expiradas no fim.
 probe_voz36_recording_access.sh
+probe_wch01_chat_call.sh
 # VOZ-23 (2026-09-17): a verificacao ativa do caminho de fala roda pelo caminho real e acusa regressao.
 # K0 fixtures e tenant limpo; A1 rota sem credencial 401 e perfil inexistente 422; D1 disparo pelo pool
 # webhook (tool MCP) termina completed; R1/R2 linha no ClickHouse com perfil aplicado e nenhum endpoint

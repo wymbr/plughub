@@ -73,6 +73,14 @@ bot leg e SFU são recurso caro, e devem existir só enquanto há chamada.
 - **Não fazer antes:** anexos e árvore no webrtc-texto **isolados** — seriam a terceira correção em
   duplicata de um caminho que esta decisão elimina.
 
+## Implementação
+
+**WCH-01 (2026-09-21) — a chamada se PRENDE ao contato de chat.** A primeira versão da ficha era
+fazer o canal `webrtc` falar o protocolo de mensagens do webchat; a leitura do adapter mostrou que,
+no alvo desta decisão, a conexão da chamada não carrega texto nenhum — convergir o texto do `webrtc`
+avulso seria trabalho num caminho que a `WCH-04` pode aposentar. Redefinida com o dono: uma segunda
+conexão, só de chamada, presa à sessão do chat (`/ws/call`). Detalhe em `arc15-webrtc.md` § 20.
+
 ## Fichas
 
-`WCH-01..04` em `pending.md`, sob este documento.
+`WCH-01` fechada (`done.md`); `WCH-02..04` em `pending.md`, sob este documento.

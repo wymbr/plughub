@@ -968,3 +968,39 @@ compensatório, com controle positivo). O mesmo probe mede as teclas (K1–K4, B
 sainte, teclas validadas com operadora de verdade (VOZ-32), tela para tronco e regra de despacho, e
 provedor por **registro** (o conversor recebe por tronco, não se registra), e o eco `plain` de
 segredo (`NIV-06`). Fichas `VOZ-32..35` e `NIV-06` no `pending.md`.
+
+
+## 20. Chamada presa a um contato de chat (WCH-01, 2026-09-21)
+
+Decisão em [`adr-chat-call-as-medium.md`](../adr/adr-chat-call-as-medium.md): o contato do site é
+`webchat`, e a chamada é MEIO que ele ganha. O texto segue pela conexão do chat (stream canônico,
+cursor, anexos, árvore); a chamada é uma **segunda conexão, só de chamada**, na mesma página.
+
+| Peça | Onde |
+|---|---|
+| Porta | `WS /ws/call` (`main.py`) → `WebRTCAdapter.handle_call_ws` (`adapters/webrtc_call.py`) |
+| Credencial | o token do CHAT (mesmo segredo por tenant) + `session_id`; a sessão tem de ser `webchat`, do mesmo `sub`, aberta (`closed_recorded` ausente) e sem outra chamada. Alheia e inexistente recebem a MESMA recusa (`session_not_found`) |
+| Atendentes | `_call_stream_watcher`: lê o stream desde o início e mantém o conjunto de AGORA (`routing.assigned` / `participant_left`). A sala nasce quando esse conjunto oferece mídia — nunca pelo primeiro atendente, que pode ser um agente de fila que já saiu |
+| Política do pool | lida pelo gateway, FRESCA do registry, só quando há chamada — o bridge manda `not_webrtc` para chat (uma leitura HTTP por ativação de todo chat seria custo sem leitor). Registry fora → `registry_unavailable`, que não oferece nada |
+| Sem oferta | `webrtc.call_pending {reason, policy_sources}` ao widget e INFO no log; nenhuma sala. A chamada monta quando a oferta aparece |
+| Fim | desligar/cair encerra SÓ a chamada (sala apagada, gravação fechada, chaves `room_name`/`media`/`media_hold` apagadas) e **nunca** publica `contact_closed`; o `ws_alive` do contato é do chat e não é tocado. `session_closed` no stream encerra a chamada (`webrtc.call_ended {reason: contact_closed}`) |
+| Texto | recusado nesta conexão (`text_goes_through_chat`) |
+| Anúncio | `media.call {state: started|ended, reason}` no stream (`agents_only`, registro do trecho) e em `agent:events:{sid}` — o Console monta a sobreposição num contato de chat por ele (`ContactSession.callActive`, `hasMedia`) |
+| Tela de pools | o editor de `media_policy` aparece para `webchat`, OPCIONAL (sem ela o cliente do chat não liga); continua obrigatório para `webrtc`/`voice` |
+| Widget de demo | botão 📞 Ligar no `infra/demo/web/webchat-test.html` (`livekit-client` na mesma versão do widget webrtc) |
+
+**Sem bot leg nesta fatia:** nem transcrição nem voz de IA. O agente de IA não consome áudio numa
+chamada de chat (`_ceiling(state, sid)` passa `bot_leg_audio=False`), e o estado de mídia diz
+`NO_BOT_LEG_REASON` em vez do ERROR de "não transcrita".
+
+**Achado de passagem, corrigido:** o XREAD dos dois observadores bloqueava 5 000 ms, igual ao
+`socket_timeout` padrão do redis-py 8 — toda leitura ociosa estourava o socket, caía no `except` e
+dormia 1 s (no observador do canal isso era `debug`, calado). `_STREAM_BLOCK_MS = 3 000`, com teste
+que compara com o timeout do cliente.
+
+**Fora da fatia (`WCH-02`):** supervisor não vê chamada de contato de chat; Console recarregado no
+meio da chamada não a reencontra; IA não fala nem ouve; a chamada não é transcrita; regra para
+atendente sem áudio além da espera dita; o trecho de chamada nos relatórios.
+
+Gate: `infra/test/probe_wch01_chat_call.sh` (porta, espera dita, independência chamada × contato).
+O caminho com humano e áudio foi validado pelo dono no browser.

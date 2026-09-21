@@ -514,6 +514,20 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
 
+    // ── Chamada presa a um contato de chat (WCH-01) ───────────────────────
+    if (event.type === "media.call") {
+      const sid = event.session_id;
+      if (!sid) return;
+      setContacts(prev => {
+        const c = prev.get(sid);
+        if (!c) return prev;
+        const next = new Map(prev);
+        next.set(sid, { ...c, callActive: event.state === "started" });
+        return next;
+      });
+      return;
+    }
+
     // ── AI typing indicator ───────────────────────────────────────────────
     if (event.type === "agent.typing" && event.author_type === "agent_ai") {
       const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;

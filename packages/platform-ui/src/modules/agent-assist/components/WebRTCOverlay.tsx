@@ -18,7 +18,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Loader2, Lock } from "lucide-react";
 
-import { hasMediaRoom, useWebRTCSession } from "../hooks/useWebRTCSession";
+import { hasMedia, useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
 import { RemoteAudio }      from "./RemoteAudio";
 import { MediaControls }    from "./MediaControls";
@@ -60,12 +60,15 @@ interface WebRTCOverlayProps {
   channel:      string;
   /** JWT identity used for LiveKit participant label */
   agentIdentity: string;
+  /** WCH-01 — chamada presa a um contato de chat (evento `media.call`) */
+  callActive?:  boolean;
 }
 
 export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
   sessionId,
   channel,
   agentIdentity,
+  callActive = false,
 }) => {
   const { t } = useTranslation("webrtc");
 
@@ -85,7 +88,7 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
     audioBlocked,
     startAudio,
     mediaHold,
-  } = useWebRTCSession(sessionId, agentIdentity, channel);
+  } = useWebRTCSession(sessionId, agentIdentity, channel, "agent", callActive);
 
   // Duration timer
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -107,7 +110,7 @@ export const WebRTCOverlay: React.FC<WebRTCOverlayProps> = ({
     return `${m}:${s}`;
   };
 
-  if (!hasMediaRoom(channel)) return null;
+  if (!hasMedia(channel, callActive)) return null;
 
   // ── Loading ──────────────────────────────────────────────────────────────
   // VOZ-04: "conectando" e "erro" vêm ANTES do teto. Enquanto o token não chega os tetos

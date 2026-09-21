@@ -58,7 +58,7 @@ import {
 } from "./components/ParticipantFilterBar";
 import { CopilotBanner }   from "./components/CopilotBanner";
 import { WebRTCOverlay }   from "./components/WebRTCOverlay";
-import { hasMediaRoom } from "./hooks/useWebRTCSession";
+import { hasMedia } from "./hooks/useWebRTCSession";
 import { apiFetch } from '@/api/apiFetch'
 import { maskedFieldEcho } from "./maskedFieldEcho";
 import { loadConversationHistory } from "./api";
@@ -926,11 +926,12 @@ export const AgentAssistPage: React.FC = () => {
             ) : selected ? (
               <>
                 {/* WebRTC overlay — contato com sala de mídia (webrtc, e voice desde a VOZ-02) */}
-                {hasMediaRoom(selected.channel) && (
+                {hasMedia(selected.channel, selected.callActive) && (
                   <WebRTCOverlay
                     sessionId={selected.sessionId}
                     channel={selected.channel}
                     agentIdentity={session?.userId ?? agentName}
+                    callActive={selected.callActive}
                   />
                 )}
 

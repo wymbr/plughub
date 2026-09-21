@@ -102,7 +102,15 @@
   .ia-check { display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
               cursor: pointer; font-size: 13px; color: #1e293b; }
   .ia-check input[type=checkbox] { width: 14px; height: 14px; accent-color: #4f46e5; cursor: pointer; }
+  /* WCH-01 — chamada presa ao chat */
+  .call-btn { background: #059669; color: #fff; border: none; border-radius: 6px; padding: 6px 10px;
+              font-size: 12px; cursor: pointer; }
+  .call-btn:disabled { opacity: .45; cursor: default; }
+  .call-btn.on { background: #dc2626; }
+  #call-video { display: none; width: 100%; max-height: 180px; background: #000; }
 </style>
+<!-- WCH-01: a mesma versão do webrtc-widget.html — as versões do LiveKit andam juntas (Arc 15) -->
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.3/dist/livekit-client.umd.min.js"></script>
 </head>
 <body>
 <div class="chat">
@@ -111,8 +119,12 @@
       <h1>PlugHub WebChat</h1>
       <div class="status"><span class="dot" id="dot"></span><span id="status-text">Desconectado</span></div>
     </div>
-    <div style="font-size:11px;opacity:.7" id="session-label"></div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="font-size:11px;opacity:.7" id="session-label"></div>
+      <button id="call-btn" class="call-btn" onclick="toggleCall()" disabled>📞 Ligar</button>
+    </div>
   </div>
+  <video id="call-video" autoplay playsinline></video>
 
   <!-- Pool + connect row -->
   <div class="config-row">
@@ -160,6 +172,10 @@
 <script>
   // ── Config ─────────────────────────────────────────────────────────────────
   const WS_BASE    = 'ws://localhost:8010/ws/chat';   // + /{pool_id}
+  // WCH-01 — a chamada é MEIO do contato de chat: uma segunda conexão, só de chamada, presa a
+  // esta sessão. O texto continua por aqui; a queda da chamada não encerra o chat.
+  const CALL_URL   = 'ws://localhost:8010/ws/call';
+  let chatToken = null, callWs = null, callRoom = null, callTracks = [];
   const JWT_SECRET = 'changeme_32chars_webchat_secret!';
   const TENANT_ID  = 'tenant_demo';
 
@@ -229,8 +245,85 @@
     showErr(String(e));
   }
 
+  // ── Chamada (WCH-01) ────────────────────────────────────────────────────────
+  function setCallBtn(on) {
+    const b = document.getElementById('call-btn');
+    b.textContent = on ? '⏹ Desligar' : '📞 Ligar';
+    b.classList.toggle('on', on);
+  }
+
+  function toggleCall() {
+    if (callWs) { hangupCall(); return; }
+    if (!sessionId || !chatToken) return;
+    setCallBtn(true);
+    callWs = new WebSocket(CALL_URL);
+    callWs.onmessage = async (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      console.log('[call] ←', m);
+      if (m.type === 'conn.ready') {
+        callWs.send(JSON.stringify({ type: 'conn.hello', version: '1' }));
+        callWs.send(JSON.stringify({ type: 'conn.authenticate', token: chatToken, session_id: sessionId }));
+      } else if (m.type === 'conn.authenticated') {
+        addMsg('📞 Chamando…', 'sys');
+      } else if (m.type === 'webrtc.call_pending') {
+        addMsg('📞 Nenhum atendente com áudio agora — a chamada começa quando houver.', 'sys');
+      } else if (m.type === 'webrtc.ready') {
+        await joinCall(m);
+      } else if (m.type === 'webrtc.message') {
+        addMsg(m.text || '', 'sys');                // aviso de gravação e afins
+      } else if (m.type === 'webrtc.call_ended') {
+        addMsg('📞 Chamada encerrada (' + (m.reason || '') + ')', 'sys');
+      } else if (m.type === 'conn.error') {
+        addMsg('📞 Chamada recusada: ' + (m.message || m.code), 'sys');
+      } else if (m.type === 'conn.ping') {
+        callWs.send(JSON.stringify({ type: 'conn.pong' }));
+      }
+    };
+    callWs.onclose = () => { endCallLocal(); };
+  }
+
+  async function joinCall(m) {
+    const LK = window.LivekitClient;
+    if (!LK) { addMsg('📞 livekit-client não carregou', 'sys'); return; }
+    callRoom = new LK.Room({ adaptiveStream: true, dynacast: true });
+    callRoom.on(LK.RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === LK.Track.Kind.Video) {
+        const v = document.getElementById('call-video');
+        track.attach(v); v.style.display = 'block';
+      } else if (track.kind === LK.Track.Kind.Audio) {
+        document.body.appendChild(track.attach());
+      }
+    });
+    callRoom.on(LK.RoomEvent.TrackUnsubscribed, (track) => {
+      track.detach();
+      if (track.kind === LK.Track.Kind.Video) document.getElementById('call-video').style.display = 'none';
+    });
+    await callRoom.connect(m.livekit_url, m.token);
+    const pub = m.publish || [];
+    if (pub.length) {
+      callTracks = await LK.createLocalTracks({ audio: pub.includes('audio'), video: pub.includes('video') });
+      for (const t of callTracks) await callRoom.localParticipant.publishTrack(t);
+    }
+    addMsg('📞 Em chamada (' + (pub.join('+') || 'só ouvindo') + ')', 'sys');
+  }
+
+  function hangupCall() {
+    try { callWs && callWs.send(JSON.stringify({ type: 'webrtc.hangup' })); } catch {}
+    endCallLocal();
+  }
+
+  function endCallLocal() {
+    for (const t of callTracks) { try { t.stop(); } catch {} }
+    callTracks = [];
+    if (callRoom) { try { callRoom.disconnect(); } catch {} callRoom = null; }
+    const v = document.getElementById('call-video'); v.style.display = 'none';
+    if (callWs) { const w = callWs; callWs = null; try { w.close(); } catch {} }
+    setCallBtn(false);
+  }
+
   // ── Connect ─────────────────────────────────────────────────────────────────
   async function connect() {
+    endCallLocal();
     if (ws) { ws.close(); ws = null; connected = false; }
     // Clear token so a new contact_id is generated for each new session
     document.getElementById('token-input').value = '';
@@ -255,6 +348,7 @@
       document.getElementById('token-input').value = token;
     }
 
+    chatToken = token;
     const url = `${WS_BASE}/${poolId}`;
     console.log('[webchat] connecting to', url);
     ws = new WebSocket(url);
@@ -280,6 +374,7 @@
         document.getElementById('session-label').textContent =
           sessionId ? sessionId.slice(0,8)+'…' : '';
         document.getElementById('send-btn').disabled = false;
+        document.getElementById('call-btn').disabled = false;
         addMsg('Conectado ao suporte. Aguardando agente…', 'sys');
         return;
       }
@@ -306,6 +401,8 @@
         return;
       }
       if (msg.type === 'conn.session_ended') {
+        endCallLocal();
+        document.getElementById('call-btn').disabled = true;
         setStatus('Sessão encerrada', 'err');
         addMsg('Atendimento encerrado.', 'sys');
         document.getElementById('send-btn').disabled = true;

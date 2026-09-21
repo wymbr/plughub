@@ -41,6 +41,14 @@ export function hasMediaRoom(channel: string | null | undefined): boolean {
   return channel === "webrtc" || channel === "voice";
 }
 
+/**
+ * WCH-01 — o contato tem mídia AGORA: o canal é de sala, ou o cliente de um chat abriu uma
+ * chamada (`media.call`). A chamada é MEIO do contato, não canal (adr-chat-call-as-medium).
+ */
+export function hasMedia(channel: string | null | undefined, callActive?: boolean): boolean {
+  return hasMediaRoom(channel) || callActive === true;
+}
+
 export type MediaKind = "audio" | "video";
 /** O que a tela mostra, derivado dos tetos — não é mais escolha do servidor. */
 export type MediaView = "none" | "audio" | "video";
@@ -117,7 +125,8 @@ export function useWebRTCSession(
   sessionId: string | null,
   agentIdentity: string,
   channel: string | undefined,
-  role: RoomRole = "agent"
+  role: RoomRole = "agent",
+  callActive = false,
 ): WebRTCSessionState {
   const roomRef = useRef<Room | null>(null);
   // Cada `connect` leva uma geração; trocar de sessão ou desmontar a invalida, e a
@@ -301,7 +310,7 @@ export function useWebRTCSession(
 
   // Connect when sessionId appears and channel is webrtc; tear down when gone
   useEffect(() => {
-    if (!sessionId || !hasMediaRoom(channel)) {
+    if (!sessionId || !hasMedia(channel, callActive)) {
       disconnectRoom();
       return;
     }

@@ -131,6 +131,7 @@ from .webrtc_provider import (
 from . import media_policy
 from .webrtc_recording import CallRecorder
 from .webchat import menu_result_history_text
+from .webrtc_call import NO_BOT_LEG_REASON, CallAttachMixin
 from .sip_leg import SipCall, is_sip_room, parse_sip_participant
 from .webrtc_room_client import (
     AGENT_IDENTITY_PREFIX,
@@ -151,7 +152,10 @@ logger = logging.getLogger("plughub.channel-gateway.webrtc")
 _SESSION_TTL        = 14_400   # 4h — matches ws_contact_max_duration_s default
 _AUTH_TIMEOUT_S     = 30       # seconds to receive conn.authenticate after hello
 _KEEPALIVE_INTERVAL = 20       # seconds between server-side ping probes
-_STREAM_BLOCK_MS    = 5_000    # ms to wait on XREAD before looping
+# ms de bloqueio do XREAD. ABAIXO do `socket_timeout` do cliente Redis (redis-py 8: 5 s por padrão):
+# com 5 000 cada leitura ociosa estourava o socket, caía no `except` e dormia 1 s — medido na WCH-01
+# (2026-09-21), 28 timeouts numa chamada de 3 min. No observador do canal isso era `debug`, calado.
+_STREAM_BLOCK_MS    = 3_000
 _STREAM_WATCHER_SLEEP = 1.0    # seconds to sleep on stream watcher error
 
 # ── Coleta mascarada (VOZ-05, fatia A) ────────────────────────────────────────
@@ -274,7 +278,7 @@ MASKED_CAPTURE_NOTICE = (
 # ── WebRTCAdapter ──────────────────────────────────────────────────────────────
 
 
-class WebRTCAdapter(ChannelAdapter):
+class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
     """
     WebRTC channel adapter singleton.
 
@@ -353,6 +357,12 @@ class WebRTCAdapter(ChannelAdapter):
         # Active WebSocket connections keyed by session_id.
         # Populated in handle_ws(); removed on close.
         self._connections: dict[str, WebSocket] = {}
+
+        # WCH-01: chamadas PRESAS a um contato de chat (`webrtc_call.py`). A conexão é só de
+        # chamada — texto segue pelo chat —, e a queda dela encerra a chamada, nunca o contato.
+        self._attached:        set[str]       = set()
+        self._call_started:    set[str]       = set()
+        self._call_end_reason: dict[str, str] = {}
 
         # VOZ-09: espelho em memória do TETO do cliente por sessão (fonte: Redis
         # `channel:webrtc:{sid}:media`). Substitui `_mediums`, que guardava UM meio para a
@@ -512,12 +522,14 @@ class WebRTCAdapter(ChannelAdapter):
     def _convert_available(self) -> bool:
         return self._stt_unavailable is None and self._tts_unavailable is None
 
-    def _bot_leg_should_run(self, state: dict, publish: frozenset[str]) -> bool:
+    def _bot_leg_should_run(self, state: dict, publish: frozenset[str], session_id: str = "") -> bool:
         """O OUVINTE entra quando há atendente de áudio — humano ou IA — E há STT: toda chamada
         com áudio é transcrita, cada falante no seu canal (VOZ-05 fatia 4; até ali só entrava
         com agente de IA, porque a fala de chamada com humano não tinha destino). Segue os
         ATENDENTES, não o teto. `publish` fica na assinatura porque é o que o gatilho antigo
         lia (e a mutação do probe usa)."""
+        if session_id in self._attached:
+            return False            # WCH-01: chamada de contato de chat, sem bot leg nesta fatia
         return self._stt_unavailable is None and media_policy.bot_leg_needs(state["attendants"])["transcribe"]
 
     def _voice_should_run(self, state: dict) -> bool:
@@ -532,13 +544,14 @@ class WebRTCAdapter(ChannelAdapter):
 
     def _decide_voice(self, session_id: str, state: dict) -> bool:
         """Grava a decisão sobre a VOZ (`_voice_wanted`) e devolve se ela deve estar na sala."""
-        wanted = self._voice_should_run(state)
+        wanted = self._voice_should_run(state) and session_id not in self._attached
         if wanted:
             self._voice_wanted.add(session_id)
             self._voice_absent_why.pop(session_id, None)
         else:
             # a causa fica guardada: `_speak` roda ANTES de qualquer `await` e não pode ir ao Redis
-            self._voice_absent_why[session_id] = self._voice_absent_reason(state)
+            self._voice_absent_why[session_id] = (NO_BOT_LEG_REASON if session_id in self._attached
+                                                  else self._voice_absent_reason(state))
             if session_id in self._voice_wanted:
                 logger.info("webrtc voz: sai da chamada (session=%s) — %s",
                             session_id, self._voice_absent_why[session_id])
@@ -547,6 +560,10 @@ class WebRTCAdapter(ChannelAdapter):
 
     def _bot_leg_state(self, state: dict, session_id: str) -> dict:
         needs = media_policy.bot_leg_needs(state["attendants"])
+        if session_id in self._attached:
+            # WCH-01: ausência DECIDIDA, não falta de provedor — sem o ERROR de "não transcrita"
+            return {"transcribe": False, "convert": False, "available": False,
+                    "reason": NO_BOT_LEG_REASON}
         faltas = []
         if needs["transcribe"] and self._stt_unavailable:
             faltas.append(f"chamada NAO transcrita: {self._stt_unavailable}")
@@ -1207,9 +1224,12 @@ class WebRTCAdapter(ChannelAdapter):
             "updated_at":     datetime.now(timezone.utc).isoformat(),
         }
 
-    def _ceiling(self, state: dict) -> frozenset[str]:
+    def _ceiling(self, state: dict, session_id: str = "") -> frozenset[str]:
+        # WCH-01: numa chamada de contato de chat não há bot leg, logo o agente de IA não consome
+        # áudio — o teto vem só de quem ouve de verdade.
         return media_policy.customer_ceiling(
-            state["attendants"], bot_leg_audio=self._convert_available())
+            state["attendants"],
+            bot_leg_audio=self._convert_available() and session_id not in self._attached)
 
     async def _on_routing_assigned(
         self,
@@ -1341,7 +1361,7 @@ class WebRTCAdapter(ChannelAdapter):
         (se o cliente já está na sala) e `webrtc.media` com token novo ao cliente (se
         ainda não entrou, entra com o teto certo). Sem mudança, não faz nada.
         """
-        publish = self._ceiling(state)
+        publish = self._ceiling(state, session_id)
         previous = (state.get("customer") or {}).get("publish")
         new_list = media_policy.kinds_list(publish)
         self._recording_follow(session_id, state)
@@ -1349,7 +1369,7 @@ class WebRTCAdapter(ChannelAdapter):
         # sai quando não resta nenhum.
         # Ouvinte e voz decidem cada um por si; a decisão da voz antes de qualquer `await`.
         run_voice = self._decide_voice(session_id, state)
-        run_bot = self._bot_leg_should_run(state, publish)
+        run_bot = self._bot_leg_should_run(state, publish, session_id)
         if run_bot and session_id not in self._room_clients:
             disparar(
                 self._start_stt_pipeline(session_id, self._room_of(session_id)),

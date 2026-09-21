@@ -144,6 +144,8 @@
       "agent_publish": "Attendant may send",
       "kind": { "audio": "Audio", "video": "Video" },
       "undeclared": "Not declared — a contact pool with WebRTC cannot be saved like this.",
+      "chatHint": "In a chat pool, this policy decides whether the customer can turn the conversation into a call. It is optional: without it, the chat stays text-only.",
+      "undeclaredChat": "Not declared — the chat customer cannot call.",
       "textOnly": "Declare text only",
       "textOnlyDeclared": "Declared as text only: neither side publishes audio or video.",
       "required": "Declare the media offered on WebRTC (or \"text only\") before saving.",

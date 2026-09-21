@@ -77,6 +77,12 @@ história no `CHANGELOG.md`.)*
 
 ---
 
+## `docs/adr/adr-chat-call-as-medium.md` — chamada como meio do contato de chat
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| WCH-01 | **O cliente do chat liga sem sair do chat.** `/ws/call` prende a chamada ao contato `webchat` (token do chat, só o dono, sem outra chamada); a sala nasce dos atendentes de AGORA com a política do pool lida só quando há chamada; cair encerra a chamada, nunca o contato. Console monta a mídia por `media.call`; tela de pools oferece a política em `webchat`. Gate `probe_wch01_chat_call.sh`; validado no browser | 2026-09-21 | `CHANGELOG.md` § 2026-09-21 (5) |
+
 ## `docs/adr/adr-voice-media-plane.md` — voz própria / Arc 15 WebRTC
 
 | id | tarefa | fechada em | âncora |
