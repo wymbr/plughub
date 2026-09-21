@@ -104,6 +104,18 @@ construir — o oposto foi o que produziu os nove títulos velhos.
 
 ---
 
+## `docs/adr/adr-chat-call-as-medium.md` — chamada como meio do contato de chat
+
+*(Decisão do dono em 2026-09-21: o canal `webchat` fica — custo e escala decidem —, e o tratamento de
+mensagens é UM só. Medição da divergência no próprio ADR § Contexto.)*
+
+| id | tarefa | status | referencia |
+|---|---|---|---|
+| WCH-01 | **O webrtc entrega mensagem pelo MESMO caminho do webchat.** Hoje texto, menu, digitando e aviso chegam ao cliente webrtc empurrados pelo Kafka (`OutboundConsumer`), sem cursor: o que chega com o socket caído se perde, anexo não passa (nem do agente nem do cliente), opção em árvore responde o id da pasta e não há presença do agente. Fazer o adapter webrtc ler o stream canônico (`StreamSubscriber`, cursor, visibilidade do participante) e falar o protocolo do webchat (`msg.*`, `interaction.request`, `menu.submit`, `upload.*`), deixando `webrtc.*` só para o que é de chamada. Medir antes e depois: a **ordem da fala da IA** (hoje decidida na entrega por Kafka, antes de qualquer `await`) e a **perna SIP**, que usa o mesmo adapter sem tela | `aberto` | ADR § Decisão 3 · `adapters/webrtc.py` `deliver_text`/`deliver_menu` · `stream_subscriber.py` |
+| WCH-02 | **Chamada como meio de um contato `webchat`.** O cliente pede a chamada; a sala nasce ali (não na atribuição) e fecha no fim da chamada, e a conversa segue em texto — queda da chamada não encerra o contato. Decidir e implementar a regra para atendente SEM áudio (a `media_policy` diz o que se oferece; ausência nunca vira permissão), o trecho de chamada nos relatórios (contato de chat com mídia, não contato novo) e a gravação por parte dentro do contato | `bloqueado` por WCH-01 | ADR § Decisão 2 e § Consequências |
+| WCH-03 | **Um widget só: o chat do webchat com botão de chamada.** Substitui `webchat-test.html` + `webrtc-widget.html` em `infra/demo/web/`. Decidir onde mora o widget de PRODUTO (embed para o site do cliente, servido pelo gateway) — não no `platform-ui` | `bloqueado` por WCH-02 | ADR § Decisão 4 · `infra/demo/web/README.md` |
+| WCH-04 | **Destino do canal `webrtc`.** Depois da WCH-02, decidir se existe entrada que já nasce chamada (*click-to-call*) — então `webrtc` fica como canal de chamada, com texto acessório — ou se ele se aposenta em favor de `webchat` + meio. Até lá, contato `webrtc` só-texto continua encerrando na queda da conexão | `adiado` — gatilho: WCH-02 fechada | ADR § Decisão 5 |
+
 ## `docs/product/identity-resolver-fase-a-plano.md` — identidade e comércio conversacional
 
 | id | tarefa | estado | evidência |

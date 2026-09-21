@@ -1043,6 +1043,11 @@ Upload (2-stage): WS `upload.request` → `upload.ready` (file_id, upload_url) �
 
 Masked fields delivery chain: `step.masked` → `notification_send` args → `conversations.outbound` Kafka → `WsMenuRender.masked_fields` → `interaction.request` WS event → `<input type="password">` overlay in webchat.
 
+**Chamada é MEIO de um contato de chat, não outro canal de texto** (decisão do dono, 2026-09-21): o
+`webchat` fica — texto é longo, retomável e não depende do SFU; sala e bot leg custam e só existem
+enquanto há chamada. O caminho de mensagens é UM só (o do webchat); o que é de chamada é camada sobre
+ele. Hoje o webrtc ainda tem o seu (Kafka, sem cursor, sem anexo): `WCH-01..04`.
+
 → See [`docs/adr/adr-webchat-channel.md`](docs/adr/adr-webchat-channel.md)
 
 ---
