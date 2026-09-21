@@ -130,7 +130,12 @@ export function RecordingsPanel({ sessionId }: { sessionId: string }) {
           <span>{fmtTime(part.started_at)} · {fmtDuration(part.duration_ms)}</span>
           <span className="text-slate-500">{part.pools.join(', ')}</span>
           {audio[part.file_id] ? (
-            <audio controls autoPlay src={audio[part.file_id]} className="h-8" />
+            // Sem "Baixar" no player (VOZ-37): o menu nativo do <audio> oferecia a cópia a quem só
+            // pode OUVIR, contornando o `read_write` do exportar. Não é trava — o áudio tocado no
+            // navegador sempre pode ser capturado —, é a tela não OFERECER o que o grant não dá.
+            <audio controls autoPlay src={audio[part.file_id]} className="h-8"
+                   controlsList="nodownload noremoteplayback"
+                   onContextMenu={e => e.preventDefault()} />
           ) : (
             <button
               className="flex items-center gap-1 rounded border border-slate-600 px-2 py-0.5 hover:bg-slate-700 disabled:opacity-50"

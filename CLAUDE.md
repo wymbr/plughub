@@ -1403,7 +1403,8 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   (`aborted` → `on_failure`) — nunca a completa com plateia. Só tecla, nunca fala (NIV-08); a
   perna Twilio recusa. A gravação para ANTES do prompt e volta depois do bloco.
 - **Gravação liga pelo POOL e nunca é suposta** (VOZ-06): `media_policy.recording: true` do pool de
-  quem atende; ausente = não grava. **Sem aviso entregue, não se grava**; a recusa
+  quem atende; ausente = não grava. **Sem aviso entregue, não se grava** — onde há tela (widget)
+  o texto basta; na chamada telefônica, só a fala (decisão do dono, 2026-09-21); a recusa
   (`core.contact.recording_opt_out`, escrita pelo FLUXO) descarta a parte em curso. Só áudio da
   sala, em PARTES, guardado como `call_recording` com retenção da classe — e **fora** da porta
   pública de anexos, que toma o file_id como credencial. Gate: `probe_voz06_recording.sh`.

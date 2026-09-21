@@ -431,6 +431,10 @@ parte fechada → wait_egress (fim REAL, sem sleep) → AttachmentStore `call_re
   `audit_access_log` pelo tópico `audit.access` — a trilha tem uma escritora, a analytics-api. Na
   tela: `RecordingsPanel` na transcrição, que só busca o áudio no clique (buscar é escutar). Gate:
   `probe_voz36_recording_access.sh`.
+- **Por onde o aviso vale** (decisão do dono, 2026-09-21): onde há TELA — o widget WebRTC —, o texto
+  basta, como nas salas de conferência. Onde não há — a chamada telefônica —, só a fala entrega, e isso
+  sai por construção: o aviso conta se chegou por texto OU voz, a chamada SIP não tem WebSocket de
+  cliente, e sem aviso entregue a parte é pulada. Um indicador fixo de gravação no widget é a `VOZ-39`.
 - **Config:** aviso em `webrtc.recording_notice` (aba WebRTC); retenção em
   `storage.call_recording_retention_days` (Plataforma → Retenção de dados), carimbada na hora de
   guardar — mudar o número vale para gravações NOVAS. Lidos a cada parte que começa, sem cache.

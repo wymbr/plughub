@@ -1,5 +1,42 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (1) — VOZ-37, primeira rodada com gente: gravar, ouvir e exportar pelo browser
+
+**O que foi validado, com o dono no browser** (contato WebRTC real, câmera e microfone do host, atendente
+humano no Console, pool `webrtc_grava` criado pela tela com *"Gravar as chamadas"*):
+- (1) o aviso chegou **por texto** no widget antes de a parte começar (log: *"aviso entregue por
+  texto"*), e a gravação começou no atendimento (`pools que gravam ['webrtc_grava']`), não na fila;
+- (2) a parte guardada diz o pool certo, com 71 s e retenção de 30 dias (`config`);
+- (3) sem o campo, a transcrição não mostra seção de gravação. O campo foi concedido **pela tela
+  de Acesso**: com Leitura, *Ouvir* sem *Exportar*; com Leitura e escrita, *Exportar* aparece. As
+  duas escutas estão no `audit_access_log`.
+
+**Defeito achado e corrigido: o player oferecia "Baixar".** O menu nativo do `<audio>` dava a cópia
+a quem só pode OUVIR, contornando o `read_write` do exportar. O player saiu com
+`controlsList="nodownload noremoteplayback"` e sem menu de contexto; o dono conferiu que o menu ficou
+só com a velocidade. Não é trava (áudio tocado no navegador sempre pode ser capturado) — é a tela
+não OFERECER o que o grant não dá.
+
+**Decisão do dono: no WebRTC, o aviso por TEXTO basta.** O cliente está numa página; é o padrão
+das salas de conferência (Teams, Meet), que avisam só na tela. Onde NÃO há tela — a chamada
+telefônica — só a fala entrega o aviso, e isso já está garantido por construção: o aviso vale se
+chegou por texto OU por voz, a chamada SIP não tem WebSocket de cliente, e sem aviso entregue a
+parte é pulada (`recording.skipped notice_undeliverable`). Nenhuma regra nova foi escrita.
+
+**Achados que viraram ficha:**
+- `VOZ-38` — `WebRTCSupervisorView.tsx`, a tela do supervisor com a faixa *"Áudio pausado"*,
+  **nunca foi montada** desde que nasceu (`fab54f56`), e três documentos dizem que o supervisor
+  observa a chamada por ela;
+- `VOZ-39` — o aviso é mensagem de chat, que rola; o padrão de conferência é um indicador FIXO
+  enquanto grava;
+- `VOZ-20` ganhou a primeira evidência com fala humana: o Whisper produziu *"oi oi oi…"* e
+  *"Um dia, um dia…"* em laço no começo da chamada.
+
+**Ficou para a segunda rodada (a VOZ-37 segue aberta):** a faixa *"Áudio pausado"* do Console no
+bloco mascarado. O cenário para que ela foi feita — o humano ATENDE uma chamada de telefone e aciona
+um especialista de IA que coleta o PIN — não tem montagem no demo (nenhum pool humano de voz,
+nenhum especialista de voz com PIN mascarado), e montá-lo mede de quebra a `VOZ-35`.
+
 ## 2026-09-18 (5) — VOZ-36: a gravação se ouve e se exporta por capacidade, pelo pool que atendeu, e cada acesso vai à trilha
 
 **O estado de partida.** Desde a VOZ-06 a chamada é gravada e guardada como `call_recording`, e
