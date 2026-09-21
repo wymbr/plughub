@@ -225,7 +225,7 @@ interface Props {
   segment?:  ContactSegment
 }
 
-export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true, segment }: Props) {
+export function SessionTranscript({ tenantId, sessionId, onBack, canJoin: canJoinProp = true, segment }: Props) {
   const { t }                                      = useTranslation('contacts')
   const { entries, status }                        = useSessionStream(tenantId, sessionId)
   const { state: supState, join, message, leave }  = useSupervisor(tenantId, sessionId)
@@ -253,6 +253,18 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
   }, [entries.length])
 
   const isSupActive  = supState.status === 'active'
+
+  // VOZ-40: o `canJoin` do chamador vem do SEGMENTO capturado no clique, e nada o renova — um contato
+  // que fechou com a tela aberta seguia oferecendo "Join as supervisor". O fim chega pelo stream
+  // (`session_closed`, escrito pelo bridge em todo canal desde a VOZ-40) e vence o snapshot.
+  const contactClosed = entries.some(e => e.type === 'session_closed')
+  const canJoin       = canJoinProp && !contactClosed
+
+  // Supervisionar um contato encerrado não tem objeto: sai sozinho, e o `participant_left` que o
+  // leave escreve fecha também a janela do supervisor no registro.
+  useEffect(() => {
+    if (contactClosed && isSupActive) void leave()
+  }, [contactClosed, isSupActive, leave])
   const isSupJoining = supState.status === 'joining'
 
   const handleSend = useCallback((text: string) => {
@@ -342,7 +354,7 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
       {/* VOZ-38: supervisionar a chamada é OUVIR (e ver) a sala, oculto — só depois de entrar como
           supervisor, e só quando o contato tem sala de mídia (a visão decide pelo canal, do meta da
           sessão devolvido no join). Aqui também aparece a pausa do bloco mascarado (NIV-07). */}
-      {isSupActive && supState.channel && (
+      {isSupActive && !contactClosed && supState.channel && (
         <WebRTCSupervisorView sessionId={sessionId} channel={supState.channel} compact />
       )}
 

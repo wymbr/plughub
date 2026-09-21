@@ -2481,6 +2481,41 @@ Sites: `orchestrator-bridge/main.py` (`receive_waiters` + a soma no fechamento);
 `tests/test_receive_waiters.py` (3 testes: conta, zero, e a falha de leitura dita). Testemunha ao
 vivo: `infra/test/probe_speech_check.sh` ramo **C1** — três verificações em sequência no mesmo pool.
 
+### Mudança 44 — o fim do contato vai ao stream canônico, em todo canal, uma vez, antes do anúncio (VOZ-40, 2026-09-21)
+
+**O defeito, medido.** Em 30 dias, 637 sessões com mensagem em `session_stream_events` e **zero** com
+`session_closed`, em canal nenhum. O único XADD do fim estava no `process_contact_event`, condicionado a
+`xinfo_groups` não vazio: nasceu (abr/2026) como DESPERTADOR de agentes external-mcp em XREADGROUP e
+virou, sem ninguém notar, a única casa do fim. O "Core `server.ts`" que o `CLAUDE.md` nomeava como
+escritor de `session_opened`/`session_closed` não escreve nenhum dos dois.
+
+**Como apareceu.** Na validação da `VOZ-38`: com a transcrição aberta, um contato WebRTC fechou e a tela
+seguiu oferecendo *"Join as supervisor"* e mostrando *"Supervisor active"* — o `canJoin` vem do segmento
+capturado no clique, e o stream não trazia o fim.
+
+**Correção.** `write_session_closed(redis, sid, reason)` (`main.py`):
+- escreve sempre que o stream EXISTE (stream ausente não é criado — seria chave sem TTL);
+- forma canônica (`event_id`, `timestamp`, `author` sistema, `payload.close_reason`), `agents_only` — o
+  lado do cliente tem o fecho próprio em cada canal, e com `all` o subscriber do webchat passaria a
+  entregar `conn.session_ended` a quem antes não recebia; o campo plano `reason` fica para os leitores
+  antigos;
+- **uma vez por sessão** (`session:{sid}:closed_recorded`, SET NX, 24 h): o bridge recebe mais de um
+  `contact_closed` por contato (cliente desliga → `client_disconnect`; plataforma fecha →
+  `agent_done`), e a primeira medição ao vivo gravou DOIS no registro durável. O primeiro vence; o guarda
+  sai se o XADD falhar, para o eco seguinte poder escrever;
+- chamado em **dois** lugares: no `_close_contact_layer`, **antes** do `conversations.session_closed`
+  (que dispara o Persister — medido: com o XADD depois do anúncio, 1 de 3 contatos ficou sem o fim no
+  registro durável), com a causa de NEGÓCIO; e no `process_contact_event` (`customer_side`), como rede
+  para fecho que não passe pela camada.
+
+A transcrição passa a tratar `session_closed` como fim: esconde *"Join as supervisor"* e a visão de mídia,
+e sai da supervisão sozinha.
+
+**Medido depois.** `probe_voz02_sip_inbound` verde; 3 de 3 contatos com exatamente UM `session_closed` no
+`session_stream_events`. Testes: `test_session_closed_stream.py` (escreve sem grupo; controle com grupo;
+stream ausente não é criado; falha dita e o guarda liberado; um fim por sessão; censo por AST das duas
+chamadas e da ordem antes do anúncio).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

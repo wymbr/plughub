@@ -3586,6 +3586,12 @@ async def _close_contact_layer(
                 "agent_hangup" if _last_agent_kind == "human" else "flow_complete"
             )
 
+        # VOZ-40: o fim vai ao STREAM antes de qualquer anúncio no Kafka. O `conversations.session_closed`
+        # abaixo dispara o Persister, que copia o stream para o registro durável — medido em
+        # 2026-09-21: com o XADD depois do publish (só no `process_contact_event`), 1 de 3 contatos
+        # ficou sem `session_closed` no `session_stream_events`. Aqui a causa é a de NEGÓCIO.
+        await write_session_closed(redis_client, session_id, _close_reason_biz)
+
         await _kafka_producer.send_and_wait(
             TOPIC_EVENTS,
             json.dumps({
@@ -6858,6 +6864,69 @@ async def _has_continuation(
 
 # ── Process conversations.events — notify human agent on contact_closed ───────
 
+# o guarda só precisa sobreviver aos ecos do fechamento (segundos), com folga ampla
+_CLOSED_RECORDED_TTL_S = 86_400
+
+
+async def write_session_closed(redis_client, session_id: str, reason: str) -> bool:
+    """O FIM do contato no stream canônico — para TODO canal, sempre que o stream existe (VOZ-40).
+
+    Até 2026-09-21 este XADD só acontecia com `xinfo_groups` não vazio: nasceu (abr/2026) como
+    DESPERTADOR de agentes external-mcp em XREADGROUP, e ninguém mais escrevia o fim. Medido: em 30
+    dias, 637 sessões com mensagem em `session_stream_events` e **zero** com `session_closed`, em
+    canal nenhum. Quem lê o stream para saber que acabou ficava cego — a transcrição seguia
+    oferecendo "Join as supervisor" num contato fechado.
+
+    `agents_only`: o fim é registro e sinal para quem ATENDE e observa. O lado do cliente tem o
+    próprio fecho em cada canal, e com visibilidade `all` o subscriber do webchat passaria a
+    entregar `conn.session_ended` a um cliente que antes não recebia — mudança que não é desta
+    ficha. Os consumidores por grupo (external-mcp) leem o tipo, não a visibilidade.
+
+    Stream AUSENTE não é criado: o XADD faria uma chave nova SEM TTL. Devolve se escreveu.
+    """
+    stream_key = f"session:{session_id}:stream"
+    try:
+        if not await redis_client.exists(stream_key):
+            logger.info("session_closed NAO registrado no stream: session=%s — stream inexistente "
+                        "(contato sem nenhuma entrada; nada a fechar ali)", session_id)
+            return False
+        # UM fim por sessão. Medido na primeira medição ao vivo (2026-09-21): o bridge recebe mais de
+        # um `contact_closed` por contato (o cliente desliga → `client_disconnect`; a plataforma
+        # fecha → `agent_done`), e o registro durável ganhava DOIS `session_closed`. O primeiro vence
+        # — é a causa; o seguinte é o eco do fechamento.
+        if not await redis_client.set(f"session:{session_id}:closed_recorded", reason,
+                                      nx=True, ex=_CLOSED_RECORDED_TTL_S):
+            primeiro = await redis_client.get(f"session:{session_id}:closed_recorded")
+            logger.info("session_closed ja registrado no stream: session=%s (causa=%s; este=%s ignorado)",
+                        session_id, primeiro, reason)
+            return False
+        try:
+            await _xadd_session_closed(redis_client, stream_key, reason)
+        except Exception:
+            # o guarda não pode sobreviver a uma escrita que falhou — senão o próximo eco do
+            # fechamento, que conseguiria escrever, é recusado e o fim some de vez
+            await redis_client.delete(f"session:{session_id}:closed_recorded")
+            raise
+        logger.info("XADD session_closed to stream: session=%s reason=%s", session_id, reason)
+        return True
+    except Exception as exc:  # noqa: BLE001 — dito, nunca calado
+        logger.warning("Could not XADD session_closed to stream: session=%s — %s", session_id, exc)
+        return False
+
+
+async def _xadd_session_closed(redis_client, stream_key: str, reason: str) -> None:
+    await redis_client.xadd(stream_key, {
+        "type":       "session_closed",
+        "event_id":   str(uuid.uuid4()),
+        "timestamp":  datetime.now(timezone.utc).isoformat(),
+        "visibility": "agents_only",
+        "author":     json.dumps({"role": "system", "participant_id": "orchestrator-bridge"}),
+        "payload":    json.dumps({"close_reason": reason}),
+        # plano, para os leitores antigos (`stream_subscriber` lê `reason`)
+        "reason":     reason,
+    })
+
+
 async def process_contact_event(
     msg: dict,
     redis_client: aioredis.Redis,
@@ -7375,22 +7444,7 @@ async def process_contact_event(
             except Exception as exc:
                 logger.warning("Could not push session:closed: session=%s — %s", session_id, exc)
 
-            stream_key = f"session:{session_id}:stream"
-            try:
-                groups = await redis_client.xinfo_groups(stream_key)
-                if groups:
-                    await redis_client.xadd(
-                        stream_key,
-                        {"type": "session_closed", "reason": reason},
-                    )
-                    logger.info(
-                        "XADD session_closed to stream: session=%s reason=%s groups=%d",
-                        session_id, reason, len(groups),
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Could not XADD session_closed to stream: session=%s — %s", session_id, exc
-                )
+            await write_session_closed(redis_client, session_id, reason)
 
             # ── Clear pending pool assignment unconditionally ─────────────────
             # Must run regardless of whether a human agent was ever assigned.

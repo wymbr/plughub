@@ -1,5 +1,33 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (3) — VOZ-40: o fim do contato vai ao stream em todo canal, uma vez, antes do anúncio
+
+**O que foi medido.** Em 30 dias, 637 sessões com mensagem em `session_stream_events` e **zero** com
+`session_closed`. O único XADD do fim estava condicionado a haver consumer group no stream (despertador
+de agentes external-mcp, de abr/2026). O `CLAUDE.md` atribuía o fim a um "Core `server.ts`" que não o
+escreve — corrigido. Apareceu na VOZ-38: a transcrição seguia oferecendo *"Join as supervisor"* num
+contato fechado.
+
+**O que mudou.** `write_session_closed` no bridge: escreve sempre que o stream existe (ausente não é
+criado), forma canônica, `agents_only`, **uma vez por sessão** (guarda com SET NX, liberado se o XADD
+falha), chamado no `_close_contact_layer` **antes** do `conversations.session_closed` e no
+`process_contact_event` como rede. A transcrição trata `session_closed` como fim: some o *"Join as
+supervisor"*, a visão de mídia, e a supervisão sai sozinha.
+
+**O que a medição ao vivo achou no caminho**, e cada um virou correção antes de fechar:
+- **dois `session_closed` por contato** no registro durável — o bridge recebe um `contact_closed` do
+  cliente e outro da plataforma. Virou o guarda de uma escrita por sessão;
+- **1 de 3 contatos sem o fim no registro durável** — o XADD vinha depois do `conversations.session_closed`,
+  que dispara o Persister. Virou a escrita na camada, antes do anúncio.
+
+Depois: `probe_voz02_sip_inbound` verde e 3 de 3 contatos com exatamente um `session_closed`. Bridge
+205 testes (6 novos); platform-ui tsc limpo. `conference-mechanics.md` § Mudança 44.
+
+**Achado fora do escopo, que virou ficha:** o tronco SIP some quando a stack reinicia fora do `up.sh`
+(`VOZ-41`). Hoje às 10:09 o `sip-seed` rodou com `infra/sip` vazio no container, disse *"nenhum tronco
+em /sip — nada a semear"* e saiu 0; o Redis do SFU não persiste (`--save ""`). Toda chamada passou a
+ser descartada em silêncio pelo serviço SIP (motivo `flood`). Restaurado recriando o `sip-seed`.
+
 ## 2026-09-21 (2) — VOZ-38: o supervisor passa a ver e ouvir a chamada, oculto, e a visão fecha no fim
 
 **O estado de partida.** `WebRTCSupervisorView` existia desde a Fase E do Arc 15 (`fab54f56`) — com
