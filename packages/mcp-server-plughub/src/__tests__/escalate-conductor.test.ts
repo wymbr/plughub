@@ -11,7 +11,7 @@
  *   - sem token / papel não resolvido: segue como antes (não deixa o contato sem destino);
  *   - token de OUTRA sessão é recusado.
  */
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import RedisMock from "ioredis-mock"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { registerBpmTools } from "../tools/bpm"
@@ -92,5 +92,26 @@ describe("MEN-08 — conversation_escalate só para quem conduz", () => {
                           session_token: tok(HUMANO, "550e8400-e29b-41d4-a716-000000000000") })
     expect(corpo(r)["error"]).toBe("session_mismatch")
     expect(publicou()).toBe(false)
+  })
+
+  // ── MEN-09 — a saída da FILA é reconhecida pelo nome, não pela ausência ─────
+  it("o agente de fila (queue-{sid}) escala CONFERIDO, e a saída leva a identidade dele", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const r = await call({ session_id: SID, target_pool: "retencao_humano", session_token: tok(`queue-${SID}`) })
+      expect(corpo(r)["escalated"]).toBe(true)
+      expect(warn.mock.calls.flat().join(" ")).not.toContain("NAO conferido")
+      const [saida] = await saidas()
+      expect(saida!["author_id"]).toBe(`queue-${SID}`)
+    } finally { warn.mockRestore() }
+  })
+
+  it("controle: fila de OUTRA sessão não vira fila desta — cai no não-conferido", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await call({ session_id: SID, target_pool: "retencao_humano",
+                   session_token: tok("queue-550e8400-e29b-41d4-a716-000000000000") })
+      expect(warn.mock.calls.flat().join(" ")).toContain("NAO conferido")
+    } finally { warn.mockRestore() }
   })
 })

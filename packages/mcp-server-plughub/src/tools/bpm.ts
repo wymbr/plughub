@@ -15,7 +15,7 @@ import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { resolveAgentTypeForSession } from "../lib/routing-ref"
-import { resolveRoleByInstance }      from "../lib/participant-role"
+import { resolveRoleByInstance, isQueueAgentInstance } from "../lib/participant-role"
 import { verifySessionBoundToken }    from "../infra/jwt"
 import { channelSatisfies, MASKED_INPUT, maskingChannels, MenuCollectSchema } from "@plughub/schemas"
 
@@ -228,6 +228,10 @@ async function escalationCaller(
   } catch {
     return { verdict: "unverified", instanceId: "", why: "session_token invalido" }
   }
+  // MEN-09: a saída da FILA, reconhecida pelo NOME assinado — nunca pela ausência de leitura.
+  // Antes, o agente de fila chegava com instância vazia e passava como "nao conferido" em
+  // TODA saída de fila; um aviso que dispara sempre ensina a ignorá-lo.
+  if (isQueueAgentInstance(instanceId, sessionId)) return { verdict: "proceed", instanceId }
   if (!redis) return { verdict: "unverified", instanceId, why: "sem redis para ler o roster" }
   const r = await resolveRoleByInstance(redis, sessionId, instanceId)
   if (!r.resolved) return { verdict: "unverified", instanceId, why: `papel de ${instanceId || "?"} nao resolvido no roster` }

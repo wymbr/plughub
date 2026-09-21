@@ -393,3 +393,10 @@ O roteamento em si é o mesmo código nas duas (`lib/mention-routing.ts`); o poo
   `$.session.is_conference` e devolve o veredito a quem o chamou, ANTES de qualquer mensagem de
   transferência ao cliente (`agente_auth_form_v1`, `agente_auth_ia_v1`). A saída que a tool escreve
   no stream leva a instância real, não o rótulo `ai-agent`
+- **A saída da FILA é reconhecida pelo NOME, nunca pela ausência** (MEN-09, 2026-09-21) — o agente
+  de fila não é participante do roster nem segura vaga, mas é quem entrega o contato ao atendente.
+  O bridge assina no token a identidade sintética `queue-{session_id}` (`queue_agent_participant_id`),
+  a mesma dos segmentos dele no analytics, e o mcp-server a reconhece por
+  `isQueueAgentInstance(instance, sessão)` — casando a sessão inteira, então token de outra sessão
+  não vira fila desta. Antes chegava com instância vazia e passava como *"nao conferido"* em TODA
+  saída de fila

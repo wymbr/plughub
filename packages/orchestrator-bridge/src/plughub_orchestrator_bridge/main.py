@@ -1351,6 +1351,19 @@ async def resolve_flow_for_agent(
 
 # ── plughub-native activation: call skill-flow-service ───────────────────────
 
+def queue_agent_participant_id(session_id: str) -> str:
+    """MEN-09 — a identidade SINTÉTICA do agente de fila desta sessão.
+
+    O agente de fila não ocupa vaga de roteamento (`instance_id=""` no engine) e não entra no
+    roster; é a plataforma segurando o contato até um atendente liberar. Esta string é o
+    `participant_id` dos segmentos dele (analytics) e, desde a MEN-09, a instância ASSINADA no
+    token de sessão — é por ela que o `conversation_escalate` o reconhece pelo NOME, em vez de
+    deixá-lo passar por falta de leitura. Par em TypeScript:
+    `mcp-server-plughub/src/lib/participant-role.ts::isQueueAgentInstance` — mudar um exige o outro.
+    """
+    return f"queue-{session_id}"
+
+
 async def mint_session_token(
     http: aiohttp.ClientSession,
     tenant_id: str,
@@ -1405,9 +1418,14 @@ async def activate_native_agent(
     webhook_pool: bool = False,
     resume_context: dict | None = None,
     pool_id: str = "",
+    token_instance_id: str = "",
 ) -> dict:
     """
     Activate a plughub-native orchestrator agent by calling skill-flow-service.
+
+    token_instance_id (MEN-09): a identidade assinada no token de sessão, quando ela NÃO é a
+    instância do lock — hoje só o agente de fila, que não segura vaga (`instance_id=""`) mas
+    precisa ser reconhecível por quem confere o chamador.
     Returns the skill-flow-service response body (or {} on error).
 
     instance_id is passed to the engine so it is stored in the execution lock
@@ -1473,7 +1491,9 @@ async def activate_native_agent(
         payload["config"] = pool_config
     # PID-01: token ligado à sessão para as tools de retomada. Viaja no corpo, nunca no
     # `session_context` — lá o YAML o leria (`$.session.*`) e poderia repassá-lo adiante.
-    _session_token = await mint_session_token(http, tenant_id, session_id, instance_id, skill_id)
+    _session_token = await mint_session_token(
+        http, tenant_id, session_id, token_instance_id or instance_id, skill_id,
+    )
     if _session_token:
         payload["session_token"] = _session_token
     # segment_id for segment-scoped ContextStore writes (scope: segment in YAML).
@@ -6723,7 +6743,7 @@ async def process_queued(
     ))
     _q_joined_at   = datetime.now(timezone.utc)
     _q_joined_iso  = _q_joined_at.isoformat()
-    _q_participant = f"queue-{session_id}"   # instance_id="" — synthetic identity
+    _q_participant = queue_agent_participant_id(session_id)   # instance_id="" — synthetic identity
     _spawn(_publish_participant_event(
         session_id=session_id,
         tenant_id=tenant_id,
@@ -6749,6 +6769,9 @@ async def process_queued(
         agent_type_id=agent_type_id, tenant_id=tenant_id,
         skills=skills,
         instance_id="",   # queue agents don't hold a routing slot
+        # MEN-09: mas o token diz QUEM é — sem isto o `conversation_escalate` da saída de fila
+        # passava por "papel nao conferido" em TODA saída, e escrevia a saída como `ai-agent`.
+        token_instance_id=_q_participant,
         # `extra_context.pool_id` é o pool de DESTINO de propósito: o YAML da fila
         # o usa no `conversation_escalate` para saber para onde mandar o contato
         # quando um humano libera. Trocá-lo pelo pool de fila faria o agente

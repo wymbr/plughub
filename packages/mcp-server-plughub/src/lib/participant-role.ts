@@ -158,6 +158,20 @@ export async function resolveRoleByInstance(
  *
  * Falha FECHADA: sem leitura positiva do roster, não roteia.
  */
+/**
+ * MEN-09 — a instância ASSINADA é o agente de FILA desta sessão?
+ *
+ * O agente de fila não é participante do roster nem ocupa vaga: é a plataforma segurando o
+ * contato até um atendente liberar, e a saída dele (`conversation_escalate`) é o próprio
+ * mecanismo de entrega da fila. O bridge assina no token de sessão a identidade sintética
+ * `queue-{session_id}` (`queue_agent_participant_id`, orchestrator-bridge `main.py` — mudar um
+ * exige o outro), e só o bridge emite esse token (`/internal/session-token`, credencial de
+ * serviço). Casa a sessão INTEIRA: token de outra sessão não vira agente de fila desta.
+ */
+export function isQueueAgentInstance(instanceId: string, sessionId: string): boolean {
+  return !!instanceId && !!sessionId && instanceId === `queue-${sessionId}`
+}
+
 export function mayRouteMentions(r: ParticipantRole): boolean {
   return r.resolved && r.role === "primary"
 }

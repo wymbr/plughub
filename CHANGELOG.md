@@ -1,5 +1,37 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (8) — MEN-09: a saída da fila é conferida pelo nome, não aprovada por falta de leitura
+
+**O que foi medido.** Na varredura de logs da WCH-05 (sessão `5be8cf81`), o `conversation_escalate`
+do agente de fila logou *"papel do chamador NAO conferido (papel de ? nao resolvido no roster)"*.
+O desfecho era o certo — sair da fila para o atendente é o trabalho dele —, mas por AUSÊNCIA: o bridge
+ativa o agente de fila com `instance_id=""` (não segura vaga), o token de sessão saía com a instância
+vazia, e a saída no stream ficava com o rótulo `ai-agent`. Toda saída de fila gerava o aviso, e um
+aviso que dispara sempre ensina a ignorar o dia em que ele é real.
+
+**A regra.** O caminho da fila é isento **pelo NOME**, nunca pela falta de leitura.
+- **orchestrator-bridge** — `queue_agent_participant_id(sid)` = `queue-{sid}`, a identidade que os
+  segmentos dele já usavam no analytics, agora uma casa só. `activate_native_agent` ganhou
+  `token_instance_id`: vai ao TOKEN, não ao lock do engine (que continua sem instância — o agente de
+  fila não segura vaga). `process_queued` o passa.
+- **mcp-server** — `isQueueAgentInstance(instance, sessão)` em `lib/participant-role.ts`, par do
+  helper Python. O `escalationCaller` o confere ANTES do roster: a fila desta sessão passa conferida,
+  e a saída no stream leva `queue-{sid}`, a mesma identidade do segmento. Casa a sessão inteira: a
+  fila de OUTRA sessão continua caindo no "não conferido".
+
+**Por que não pôr a fila no roster como `primary`.** Descartado pela mesma razão que tirou o
+segmento dela de `primary` (D12): o invariante analítico *"atendido = 1º segmento primary"* faria o
+contato parecer atendido no instante em que entrou na fila — e `primary` no roster também lhe daria o
+poder de `@mention`.
+
+**Medido.** mcp-server 469 (2 novos: a fila escala conferida e sai com a identidade dela; controle
+com a fila de outra sessão, que cai no aviso); bridge 207 (2 novos: `token_instance_id` vai ao token e
+não ao lock; AST sobre `process_queued`, o único site do agente de fila). Os dois só ficam verdes com
+o conserto: sem ele, `queue-{sid}` não está no roster e o aviso volta.
+
+**Fora.** Se o contato estiver numa chamada quando a fila sai, o observador de mídia do gateway recebe
+um `participant_left` de quem nunca foi atendente — como já recebia com `ai-agent`.
+
 ## 2026-09-21 (7) — WCH-05: o supervisor vê a chamada de um contato de chat, e a nota dele chega ao atendente
 
 **O que faltava.** A visão oculta do supervisor decidia pelo CANAL (`hasMediaRoom(channel)`): contato

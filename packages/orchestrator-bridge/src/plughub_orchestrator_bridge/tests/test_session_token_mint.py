@@ -97,3 +97,45 @@ async def test_sem_segredo_nem_tenta_e_loga(monkeypatch, caplog):
     assert [c["url"] for c in chamadas if c["url"].endswith("/internal/session-token")] == []
     assert "session_token" not in _execute(chamadas)
     assert any("MCP_INTERNAL_SERVICE_TOKEN vazio" in r.message for r in caplog.records)
+
+
+# ── MEN-09 — o agente de fila assina uma identidade, sem segurar vaga ─────────
+
+@pytest.mark.asyncio
+async def test_token_instance_id_vai_ao_token_e_nao_ao_lock(monkeypatch):
+    monkeypatch.setattr(bridge_mod, "MCP_INTERNAL_SERVICE_TOKEN", "svc")
+    http, chamadas = _http(mint_body={"session_token": "TOK"})
+    redis = AsyncMock()
+    redis.get = AsyncMock(return_value=None)
+    with patch.object(bridge_mod, "resolve_flow_for_agent", new_callable=AsyncMock, return_value=(SKILL, _FLOW)), \
+         patch.object(bridge_mod, "_resolve_journey_root", new_callable=AsyncMock, return_value=""):
+        await bridge_mod.activate_native_agent(
+            http=http, redis_client=redis, session_id=SID, customer_id="cus",
+            agent_type_id=SKILL, tenant_id=TENANT, skills=[], instance_id="",
+            token_instance_id=bridge_mod.queue_agent_participant_id(SID),
+        )
+    assert chamadas[0]["json"]["instance_id"] == f"queue-{SID}"
+    assert _execute(chamadas)["instance_id"] == ""      # o lock do engine segue sem instância
+
+
+def test_saida_de_fila_passa_a_identidade_da_fila():
+    """A chamada de `process_queued` a `activate_native_agent` — o único site do agente de fila —
+    assina `queue_agent_participant_id(session_id)` e continua sem vaga. AST, não grep: o
+    comentário que documenta a mudança não conta."""
+    import ast
+    import inspect
+
+    fn = ast.parse(inspect.getsource(bridge_mod.process_queued).lstrip())
+    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", "") == "activate_native_agent"]
+    assert len(calls) == 1
+    kw = {k.arg: k.value for k in calls[0].keywords}
+    assert isinstance(kw["instance_id"], ast.Constant) and kw["instance_id"].value == ""
+    assert isinstance(kw["token_instance_id"], ast.Name)
+    alvo = kw["token_instance_id"].id
+    atrib = [n for n in ast.walk(fn) if isinstance(n, ast.Assign)
+             and any(getattr(t, "id", "") == alvo for t in n.targets)]
+    assert len(atrib) == 1
+    v = atrib[0].value
+    assert isinstance(v, ast.Call) and v.func.id == "queue_agent_participant_id"
+    assert bridge_mod.queue_agent_participant_id("abc") == "queue-abc"
