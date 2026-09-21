@@ -809,6 +809,7 @@ export type { SkillProfile } from "./skill-profile"
 // ── PID-01 — tools que exigem o token LIGADO À SESSÃO ─────────────────────────
 export {
   SESSION_BOUND_TOOLS,
+  SESSION_IDENTIFIED_TOOLS,
   SESSION_BOUND_SERVER,
   isSessionBoundTool,
   injectSessionToken,

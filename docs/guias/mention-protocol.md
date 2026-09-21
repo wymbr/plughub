@@ -382,3 +382,14 @@ O roteamento em si é o mesmo código nas duas (`lib/mention-routing.ts`); o poo
   interrupt do dispatch (chave instance-scoped) ou `session:closed`
 - Interrupt é SINAL, nunca conteúdo: mora em `menu:signal`, escrito só pelo bridge; texto do
   cliente em `menu:result` nunca é interpretado como comando (MEN-07)
+- **O convidado não decide o destino do contato** (MEN-08, 2026-09-21) — é o mesmo eixo, do lado
+  da saída: quem CONDUZ convida e quem CONDUZ escala. `conversation_escalate` recebe o token
+  LIGADO À SESSÃO (injetado pelo skill-flow-service, lista `SESSION_IDENTIFIED_TOOLS` de
+  `@plughub/schemas`), lê o papel da instância ASSINADA no roster e **recusa**
+  (`escalate_not_conductor`) quando a leitura é positiva e não é `primary`; a recusa vira
+  `on_failure` no step. Sem token ou papel não resolvido, **segue como antes**, com WARN — ao
+  contrário do gate de @mention, que falha fechado: recusar escalação por falha de leitura
+  deixaria o contato de quem conduz sem destino. O skill convidado ramifica por
+  `$.session.is_conference` e devolve o veredito a quem o chamou, ANTES de qualquer mensagem de
+  transferência ao cliente (`agente_auth_form_v1`, `agente_auth_ia_v1`). A saída que a tool escreve
+  no stream leva a instância real, não o rótulo `ai-agent`

@@ -996,6 +996,10 @@ durável de *quem convidou quem*, porque `participant_joined` registra quem ENTR
 **`mention.ack`** ao emissor (`routed` | `unknown_alias`). Sobra a prosa, entregue `agents_only`;
 alias sem prosa **não gera mensagem nenhuma**. ⚠️ `mention.ack` (menção roteada, mcp-server) e
 `mention_command.ack` (comando executou, bridge) são momentos diferentes e não se substituem. `mention_commands` YAML declares actions: `set_context`, `trigger_step`, `terminate_self`.
+**Quem conduz também é quem ESCALA (MEN-08)**: `conversation_escalate` recusa o convidado
+(`escalate_not_conductor`), lendo o papel pela instância ASSINADA no token de sessão; sem leitura,
+segue com WARN, porque recusar deixaria sem destino o contato de quem conduz. O skill convidado
+devolve o veredito (`$.session.is_conference`) antes de prometer transferência ao cliente.
 
 **Masked Input**: `masked: true` on menu step (field-level or step-level). `begin_transaction`/`end_transaction` wraps collection-validation-action as atomic block. `@masked.*` namespace in-memory only — never written to Redis, pipeline_state, stream, or logs. Retry always recolects; never re-uses masked values.
 

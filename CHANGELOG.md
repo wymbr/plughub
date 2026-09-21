@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (6) — MEN-08: o especialista convidado não escala o contato de quem o convidou
+
+**O que foi medido.** Na validação da WCH-01 (sessão `e681ff62`), o humano convidou `@auth_form`; o
+fluxo terminou em `conversation_escalate`, o cliente leu *"Transferindo para um especialista"* com o
+especialista humano já na conversa, e o routing-engine **roteou o contato de novo** para o mesmo
+humano (`priority_score=0 mode=autonomous`). Só não houve efeito porque o bridge descartou o pedido
+(*duplicate routing for already-served session*). A saída que a tool escreve no stream levava o autor
+inventado `ai-agent`, e o estado de mídia do gateway não reconhecia a saída.
+
+**A regra.** É o eixo do @mention (MEN-01, POSIÇÃO e nunca espécie) do lado da saída: **quem conduz
+convida, e quem conduz decide o destino do contato.**
+- **mcp-server** — `conversation_escalate` recebe o token LIGADO À SESSÃO (PID-01), lê o papel da
+  instância assinada no roster e **recusa** (`escalate_not_conductor`, `isError` → `on_failure` do
+  step) quando a leitura é positiva e não é `primary`. Token de outra sessão → `session_mismatch`.
+  **Sem token ou papel não resolvido, segue como antes, com WARN** — o oposto do gate de @mention, de
+  propósito: recusar escalação por falha de leitura deixaria sem destino o contato de quem conduz. A
+  saída no stream passa a levar a instância real.
+- **schemas** — `SESSION_IDENTIFIED_TOOLS`: a tool recebe o token sem virar tool GATEADA (exigi-lo
+  faria uma falha de emissão tirar a escalação de todo contato).
+- **skills** — `agente_auth_form_v1` e `agente_auth_ia_v1` (os dois convidáveis que escalavam)
+  ramificam por `$.session.is_conference`: devolvem o veredito ao atendente e saem, ANTES das
+  mensagens de transferência. No `auth_ia`, sem o ramo a recusa cairia em `encerrar_fallback`, cujo
+  `issue_status` diz *"MCP indisponível"* — falso. Publicados nos pools `auth_form_ia` e `auth_ia`
+  (âncora conferida no snapshot promovido).
+
+**Medido.** mcp-server 467 testes (5 novos em `escalate-conductor.test.ts`: convidado recusado sem
+roteamento nem saída, controle de quem conduz com a instância real no stream, sem token segue, fora do
+roster segue, token de outra sessão recusado); schemas 7 (2 novos). O teste novo achou de passagem que
+o `ioredis-mock` compartilha dados entre instâncias — o `beforeEach` limpa.
+
+**Fora.** Skill de terceiro convidado que escale não reescrito cai no `on_failure` dele — o contato fica
+seguro, a mensagem ao cliente é a que o autor escreveu. O `author_role` da saída continua fixo em
+`specialist`.
+
 ## 2026-09-21 (5) — WCH-01: o cliente do chat liga sem sair do chat, e a queda da chamada não encerra o contato
 
 **O que foi decidido antes de codar.** A ficha dizia "o webrtc entrega mensagem pelo caminho do

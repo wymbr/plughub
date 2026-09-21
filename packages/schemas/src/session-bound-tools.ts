@@ -15,10 +15,22 @@
 // journey da SESSÃO que verificou — sem o token, a tool não sabe onde gravar.
 export const SESSION_BOUND_TOOLS: readonly string[] = ["pending_workflow_get", "workflow_resume", "otp_challenge", "otp_verify"]
 
+// MEN-08 (2026-09-21): tools que recebem o MESMO token para saber QUEM chama, sem exigi-lo.
+// `conversation_escalate` decide o destino do contato — prerrogativa de quem CONDUZ —, e só
+// o `instance_id` assinado diz se o chamador é o condutor ou um convidado. Não entra na
+// lista de cima porque exigir o token ali faria uma falha de emissão (bridge × mcp-server)
+// deixar TODO contato sem escalação; sem token, a tool segue como antes e diz que não conferiu.
+export const SESSION_IDENTIFIED_TOOLS: readonly string[] = ["conversation_escalate"]
+
 export const SESSION_BOUND_SERVER = "mcp-server-plughub"
 
 export function isSessionBoundTool(tool: string, mcpServer?: string): boolean {
   return (!mcpServer || mcpServer === SESSION_BOUND_SERVER) && SESSION_BOUND_TOOLS.includes(tool)
+}
+
+function receivesSessionToken(tool: string, mcpServer?: string): boolean {
+  return (!mcpServer || mcpServer === SESSION_BOUND_SERVER)
+    && (SESSION_BOUND_TOOLS.includes(tool) || SESSION_IDENTIFIED_TOOLS.includes(tool))
 }
 
 export function injectSessionToken(
@@ -27,7 +39,7 @@ export function injectSessionToken(
   sessionToken: string | undefined,
   mcpServer?: string,
 ): unknown {
-  if (!isSessionBoundTool(tool, mcpServer)) return input
+  if (!receivesSessionToken(tool, mcpServer)) return input
   const base = (input && typeof input === "object" ? { ...(input as Record<string, unknown>) } : {})
   delete base["session_token"]
   return sessionToken ? { ...base, session_token: sessionToken } : base

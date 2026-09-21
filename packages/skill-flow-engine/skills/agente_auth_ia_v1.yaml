@@ -135,12 +135,43 @@ steps:
     # on_failure do begin_transaction aponta aqui.
     # Todos os valores mascarados já foram descartados pelo rewind.
     - id: falha_autenticacao
+      type: choice
+      conditions:
+        # MEN-08: convidado por quem conduz (@mention/conferência) — quem decide o destino do
+        # contato é ele. Devolve o veredito e sai, ANTES das mensagens de transferência: o
+        # cliente não pode ler "Transferindo" com o atendente já na conversa.
+        - field: "$.session.is_conference"
+          operator: eq
+          value: true
+          next: conferencia_falha
+      default: falha_cliente
+
+    - id: falha_cliente
       type: notify
       message: >
         Não foi possível verificar sua identidade no momento.
         Um de nossos especialistas irá atendê-lo em seguida.
       on_success: aviso_falha_agente
       on_failure: aviso_falha_agente
+
+    # ── Saída do CONVIDADO (MEN-08) — o veredito volta a quem conduz ───────────
+    - id: conferencia_falha
+      type: notify
+      message: "Não foi possível verificar sua identidade."
+      on_success: conferencia_falha_agente
+      on_failure: conferencia_falha_agente
+
+    - id: conferencia_falha_agente
+      type: notify
+      message: "⚠️ Verificação por PIN falhou — identidade NÃO verificada."
+      visibility: agents_only
+      on_success: concluir_falha
+      on_failure: concluir_falha
+
+    - id: concluir_falha
+      type: complete
+      outcome: failed
+      issue_status: "Identidade não verificada — devolvido a quem convidou"
 
     # ── Aviso interno de falha ao agente humano (agents_only) ─────────────────
     - id: aviso_falha_agente

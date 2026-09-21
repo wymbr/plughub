@@ -254,6 +254,13 @@ steps:
         - field: "@ctx.core.workflow.delegate_resume_token"
           operator: exists
           next: devolver_autenticado
+        # MEN-08: convidado por quem conduz (@mention/conferência) — quem decide o destino do
+        # contato é ele. Devolve o veredito e sai, ANTES das mensagens de transferência: o
+        # cliente não pode ler "Transferindo" com o atendente já na conversa.
+        - field: "$.session.is_conference"
+          operator: eq
+          value: true
+          next: conferencia_ok
       default: aviso_sucesso_agente
 
     - id: devolver_autenticado
@@ -274,6 +281,13 @@ steps:
         - field: "@ctx.core.workflow.delegate_resume_token"
           operator: exists
           next: devolver_falha
+        # MEN-08: convidado por quem conduz (@mention/conferência) — quem decide o destino do
+        # contato é ele. Devolve o veredito e sai, ANTES das mensagens de transferência: o
+        # cliente não pode ler "Transferindo" com o atendente já na conversa.
+        - field: "$.session.is_conference"
+          operator: eq
+          value: true
+          next: conferencia_falha
       default: falha_autenticacao
 
     # `rejected`, não `timeout`: a autenticação TERMINOU com veredicto negativo.
@@ -289,6 +303,33 @@ steps:
           motivo:      "identidade_nao_verificada"
       on_success: finalizar_falha
       on_failure: falha_autenticacao
+
+    # ── Saída do CONVIDADO (MEN-08) — o veredito volta a quem conduz ───────────
+    - id: conferencia_ok
+      type: notify
+      message: "Identidade verificada com sucesso. ✅"
+      on_success: conferencia_ok_agente
+      on_failure: conferencia_ok_agente
+
+    - id: conferencia_ok_agente
+      type: notify
+      message: "✅ Autenticação concluída. Verifique dados_coletados.email no painel — senha e codigo_2fa não aparecem (mascarados)."
+      visibility: agents_only
+      on_success: finalizar
+      on_failure: finalizar
+
+    - id: conferencia_falha
+      type: notify
+      message: "Não foi possível verificar sua identidade."
+      on_success: conferencia_falha_agente
+      on_failure: conferencia_falha_agente
+
+    - id: conferencia_falha_agente
+      type: notify
+      message: "⚠️ Autenticação via formulário falhou — identidade NÃO verificada."
+      visibility: agents_only
+      on_success: finalizar_falha
+      on_failure: finalizar_falha
 
     # ── Terminais (fecham o SEGMENTO deste executor, nunca o contato) ─────────
     - id: finalizar

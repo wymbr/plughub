@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { injectSessionToken, isSessionBoundTool, SESSION_BOUND_TOOLS } from "./session-bound-tools"
+import { injectSessionToken, isSessionBoundTool, SESSION_BOUND_TOOLS, SESSION_IDENTIFIED_TOOLS } from "./session-bound-tools"
 
 describe("PID-01 — injeção do token de sessão", () => {
   it("as tools de retomada e de prova estão na lista", () => {
@@ -26,5 +26,18 @@ describe("PID-01 — injeção do token de sessão", () => {
     expect(injectSessionToken("journey_merge", input, "TOK")).toBe(input)
     expect(injectSessionToken("workflow_resume", input, "TOK", "mcp-server-crm")).toBe(input)
     expect(isSessionBoundTool("evaluation_submit")).toBe(false)
+  })
+})
+
+describe("MEN-08 — token que IDENTIFICA quem chama, sem ser exigido", () => {
+  it("conversation_escalate recebe o token, e o do YAML é sobrescrito", () => {
+    expect([...SESSION_IDENTIFIED_TOOLS]).toEqual(["conversation_escalate"])
+    expect(injectSessionToken("conversation_escalate", { session_id: "s", session_token: "DO_YAML" }, "TOK"))
+      .toEqual({ session_id: "s", session_token: "TOK" })
+  })
+
+  it("mas não vira tool GATEADA: sem token ela segue (e diz que não conferiu)", () => {
+    expect(isSessionBoundTool("conversation_escalate")).toBe(false)
+    expect(injectSessionToken("conversation_escalate", { session_id: "s" }, undefined)).toEqual({ session_id: "s" })
   })
 })

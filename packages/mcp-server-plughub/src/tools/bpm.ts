@@ -15,6 +15,8 @@ import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { resolveAgentTypeForSession } from "../lib/routing-ref"
+import { resolveRoleByInstance }      from "../lib/participant-role"
+import { verifySessionBoundToken }    from "../infra/jwt"
 import { channelSatisfies, MASKED_INPUT, maskingChannels, MenuCollectSchema } from "@plughub/schemas"
 
 /**
@@ -174,7 +176,70 @@ const ConversationEscalateInputSchema = z.object({
   error_reason:   z.string().optional(),
   /** F7: motivo de escalação normalizado (id do config escalation_reasons). */
   escalation_reason: z.string().optional(),
+  /**
+   * MEN-08: token LIGADO À SESSÃO, injetado pelo skill-flow-service (nunca escrito no YAML —
+   * a injeção sobrescreve). Diz QUEM chama; ver `escalationCaller`.
+   */
+  session_token: z.string().optional(),
 })
+
+/**
+ * MEN-08 — quem pede a escalação CONDUZ o contato?
+ *
+ * Escalar decide o destino do contato, e isso é de quem conduz (`primary`), pelo mesmo eixo
+ * do @mention (MEN-01: POSIÇÃO, nunca espécie). Medido em 2026-09-21 (sessão `e681ff62`):
+ * o `@auth_form`, convidado pelo humano, terminou em escalação — o cliente leu
+ * *"Transferindo para um especialista"* com o especialista humano já na conversa, e o
+ * routing-engine roteou o contato DE NOVO para o mesmo humano. Só não houve efeito porque o
+ * bridge descartou o pedido como duplicado.
+ *
+ * O papel vem do ROSTER pela instância ASSINADA no token (`resolveRoleByInstance`) — nunca de
+ * identidade declarada no input. Desfechos:
+ *   refuse    — leitura POSITIVA de papel que não conduz (specialist, supervisor, evaluator);
+ *   proceed   — `primary` resolvido;
+ *   unverified — sem token, token inválido ou papel não resolvido: segue como antes, com WARN.
+ *
+ * ⚠️ Por que "não conferido" SEGUE e não recusa (ao contrário do gate de @mention): recusar
+ * escalação por falha de leitura deixa o contato de quem conduz sem destino — o cliente
+ * espera um humano que nunca vem. O gate existe para barrar o CONVIDADO, e ele é barrado pela
+ * leitura positiva do roster, que o bridge escreve em toda ativação.
+ */
+type EscalationCaller =
+  | { verdict: "refuse";     error: string; detail: string; instanceId: string }
+  | { verdict: "proceed";    instanceId: string }
+  | { verdict: "unverified"; instanceId: string; why: string }
+
+async function escalationCaller(
+  redis: RedisClient | undefined,
+  sessionId: string,
+  sessionToken: string | undefined,
+): Promise<EscalationCaller> {
+  if (!sessionToken) return { verdict: "unverified", instanceId: "", why: "sem session_token" }
+  let instanceId = ""
+  try {
+    const p = verifySessionBoundToken(sessionToken)
+    if (p.session_id !== sessionId) {
+      return {
+        verdict: "refuse", instanceId: "", error: "session_mismatch",
+        detail: `o token e da sessao ${p.session_id}, a escalacao e da ${sessionId}`,
+      }
+    }
+    instanceId = p.instance_id
+  } catch {
+    return { verdict: "unverified", instanceId: "", why: "session_token invalido" }
+  }
+  if (!redis) return { verdict: "unverified", instanceId, why: "sem redis para ler o roster" }
+  const r = await resolveRoleByInstance(redis, sessionId, instanceId)
+  if (!r.resolved) return { verdict: "unverified", instanceId, why: `papel de ${instanceId || "?"} nao resolvido no roster` }
+  if (r.role !== "primary") {
+    return {
+      verdict: "refuse", instanceId, error: "escalate_not_conductor",
+      detail: `${instanceId} e ${r.role} nesta sessao — escalar decide o destino do contato, ` +
+              `e isso e de quem CONDUZ (primary). Devolva o resultado a quem convidou.`,
+    }
+  }
+  return { verdict: "proceed", instanceId }
+}
 
 
 // ─────────────────────────────────────────────
@@ -974,6 +1039,31 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     withGuard("conversation_escalate", async (input: Record<string, unknown>) => {
       const parsed = ConversationEscalateInputSchema.parse(input)
 
+      // ── MEN-08: só quem CONDUZ decide o destino do contato ────────────────
+      const caller = await escalationCaller(deps?.redis, parsed.session_id, parsed.session_token)
+      if (caller.verdict === "refuse") {
+        console.warn(
+          `[conversation_escalate] RECUSADA (${caller.error}): session=${parsed.session_id} ` +
+          `target_pool=${parsed.target_pool} — ${caller.detail}`,
+        )
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              escalated: false, error: caller.error, session_id: parsed.session_id,
+              target_pool: parsed.target_pool, detail: caller.detail,
+            }),
+          }],
+          isError: true,
+        }
+      }
+      if (caller.verdict === "unverified") {
+        console.warn(
+          `[conversation_escalate] papel do chamador NAO conferido (${caller.why}): ` +
+          `session=${parsed.session_id} target_pool=${parsed.target_pool} — seguindo como antes`,
+        )
+      }
+
       // ── TENANT NÃO TEM DEFAULT (2026-08-18) ───────────────────────────────
       //
       // O DEFEITO QUE ISTO FECHA, medido ao vivo. `tenantId` nascia `"default"` e
@@ -1058,18 +1148,20 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
 
       // Write participant_left to the session stream so the webchat client sees the
       // AI agent leaving before the human agent joins.
-      // participant_id is not available in this context (no session JWT) — use "ai-agent"
-      // as a stable label. role "ai" lets the webchat render a transfer notification
-      // instead of a generic leave message.
+      // MEN-08: o autor é a instância ASSINADA quando o token veio. O rótulo fixo "ai-agent"
+      // não é participante de ninguém — medido em 2026-09-21, o estado de mídia do gateway
+      // não reconhecia a saída e o agente seguia no conjunto de atendentes. Sem token, o
+      // rótulo antigo fica (é o que existia), e o WARN acima já disse por quê.
+      const leaverId = caller.instanceId || "ai-agent"
       if (deps?.redis) {
         try {
           await writeStreamEntry(deps.redis, {
             stream_key:  `session:${parsed.session_id}:stream`,
             type:        "participant_left",
-            author_id:   "ai-agent",
+            author_id:   leaverId,
             author_role: "specialist",
             visibility:  "all",
-            payload:     { participant_id: "ai-agent", reason: "escalated" },
+            payload:     { participant_id: leaverId, reason: "escalated" },
           })
         } catch { /* non-fatal */ }
       }
