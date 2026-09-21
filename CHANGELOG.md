@@ -1,5 +1,41 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (2) — VOZ-38: o supervisor passa a ver e ouvir a chamada, oculto, e a visão fecha no fim
+
+**O estado de partida.** `WebRTCSupervisorView` existia desde a Fase E do Arc 15 (`fab54f56`) — com
+token de papel `supervisor` (oculto, sem publicar) desde a VOZ-01 e a faixa *"Áudio pausado"* desde a
+NIV-07 — e **nunca foi montada**: nenhum importador. Três documentos (`arc15-webrtc.md`,
+`platform-ui.md`, `modulos/agent-assist.md`) diziam que o supervisor observa a chamada por ela. Achado
+na VOZ-37, ao procurar onde a faixa da pausa aparecia para o supervisor.
+
+**O que faltava para montá-la era o CANAL.** A transcrição não sabe o canal do contato. O
+`POST /supervisor/join` (analytics-api) já lia `session:{id}:meta` para decidir o tenant; agora devolve
+`channel` desse MESMO meta (ausente → `null`, nunca adivinhado). A visão é montada na transcrição
+depois que o supervisor ENTRA, quando o canal tem sala de mídia (`hasMediaRoom`: webrtc/voice).
+
+**Validado com o dono no browser.** Contato WebRTC real, admin atendendo no Console e supervisionando
+em outra janela: vídeo e áudio do contato na visão; o widget do cliente não mostrou participante a mais.
+A dúvida *"consegui falar como supervisor"* foi medida no log do SFU: o participante `supervisor-…`
+**não publicou nada** (só `customer` e `agent` têm trilha) — a voz era o Console, com o mesmo microfone.
+
+**Defeito achado na validação e corrigido: a visão não fechava no fim.** Ficava em *"Aguardando vídeo"*
+numa sala vazia. Duas causas medidas: o gateway **não apaga a sala** do SFU no fim de um contato de
+browser (só a perna SIP e a sala órfã), e o stream da sessão **não recebe `session_closed`** no WebRTC
+(0 de 6 streams vivos; o ClickHouse fecha a sessão certo, com `customer_disconnect`). O sinal que chega
+ao supervisor é a sala: todos os outros saíram depois de terem estado nela, ou o SFU a fechou
+(`ROOM_DELETED`/`ROOM_CLOSED`). Só no papel supervisor — o atendente tem ciclo próprio. A visão mostra
+*"Chamada encerrada — não há mais o que observar"*; o dono conferiu.
+
+Testes: analytics-api 797 (2 novos: canal devolvido; meta sem canal → `null`). platform-ui: tsc limpo,
+`probe_i18n_duplicate_keys` verde; sem suíte de UI no pacote — a validação da tela foi a do dono.
+
+**Correção de medição:** a entrada da VOZ-36 dizia *"analytics-api 800"* — soma feita à mão; o medido
+era 795, e o número foi corrigido lá.
+
+**Deixou ficha:** `VOZ-40` — o fim do contato WebRTC não chega ao stream da sessão, e a transcrição
+segue oferecendo *"Join as supervisor"* e mostrando *"Supervisor active"* depois do fim (o `canJoin`
+vem do segmento capturado no clique, e nada o renova).
+
 ## 2026-09-21 (1) — VOZ-37, primeira rodada com gente: gravar, ouvir e exportar pelo browser
 
 **O que foi validado, com o dono no browser** (contato WebRTC real, câmera e microfone do host, atendente
@@ -107,7 +143,7 @@ do `abac_can` já é ordenada, e dois campos permitiriam "exporta sem ouvir", qu
 Contra um serviço sem a rota o mesmo gate dá 19 ✗, VERMELHO.
 
 Testes: gateway 1363 (16 do router, com controle positivo ao lado de cada recusa) · analytics-api
-800 · schemas `audit-access.test.ts` 3 · platform-ui tsc limpo (280 arquivos).
+795 *(corrigido em 2026-09-21: estava "800", uma SOMA feita à mão — os 5 testes novos já estavam nos 795 medidos)* · schemas `audit-access.test.ts` 3 · platform-ui tsc limpo (280 arquivos).
 
 **Ficou de fora:** tocar a gravação no Console **durante** a chamada (não é o caso de uso) e a
 validação no browser, que entra no roteiro da `VOZ-37`.

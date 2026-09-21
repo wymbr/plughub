@@ -27,6 +27,7 @@
     "waitingRoom": "Aguardando participantes",
     "voiceActive": "Chamada de voz em andamento",
     "error":       "Não foi possível conectar à sala",
-    "mediaHold":   "Áudio pausado durante a digitação de dado protegido"
+    "mediaHold":   "Áudio pausado durante a digitação de dado protegido",
+    "ended":       "Chamada encerrada — não há mais o que observar."
   }
 }

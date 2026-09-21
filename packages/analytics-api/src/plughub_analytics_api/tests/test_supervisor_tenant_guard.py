@@ -222,3 +222,19 @@ def test_identidade_gravada_e_o_SUB_do_token_nao_o_corpo():
               if e.get("type") == "participant_joined"]
     assert len(joined) == 1
     assert json.loads(joined[0]["payload"])["operator_id"] == "sup1"
+
+
+# ── VOZ-38: o canal volta no join ─────────────────────────────────────────────
+# É o que a tela usa para decidir se monta a visão de mídia do supervisor (sala em webrtc/voice).
+# Sem ele a `WebRTCSupervisorView` não tinha de onde saber o canal — e nunca foi montada.
+
+def test_join_devolve_o_canal_do_meta():
+    r = _join(_client(json.dumps({"tenant_id": TENANT, "channel": "webrtc"})))
+    assert r.status_code == 200, r.text
+    assert r.json()["channel"] == "webrtc"
+
+
+def test_join_sem_canal_no_meta_devolve_null_nunca_adivinha():
+    r = _join(_client(json.dumps({"tenant_id": TENANT})))
+    assert r.status_code == 200, r.text
+    assert r.json()["channel"] is None

@@ -115,7 +115,7 @@ O ActionBar inclui o botão "Iniciar Processo": um dropdown filtrado por `pool.m
 
 > ⚠️ 2026-08-19 — o componente de UI **existe**; o que não existe é o SFU do outro lado (plano de mídia nunca provisionado — ver [`../arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md):3-17 e [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md)).
 
-Para sessões com `channel === "webrtc"`, o `WebRTCOverlay` é renderizado antes do `ParticipantFilterBar`: grid de vídeo 2-up, waveform animado ou nenhum overlay conforme o medium negociado (`video`/`voice`/`text`). Hook `useWebRTCSession()` faz a conexão LiveKit (publish de tracks locais, controles de mic/câmera). Supervisores entram como observadores via `WebRTCSupervisorView` (sem publicar tracks).
+Para sessões com `channel === "webrtc"`, o `WebRTCOverlay` é renderizado antes do `ParticipantFilterBar`: grid de vídeo 2-up, waveform animado ou nenhum overlay conforme o medium negociado (`video`/`voice`/`text`). Hook `useWebRTCSession()` faz a conexão LiveKit (publish de tracks locais, controles de mic/câmera). Supervisores entram como observadores via `WebRTCSupervisorView` (sem publicar tracks), montada na transcrição do contato (`SessionTranscript`) depois que o supervisor ENTRA na sessão, quando o canal (devolvido pelo `POST /supervisor/join`, do meta da sessão) tem sala de mídia; token de papel `supervisor` (oculto, sem publicar). *Até 2026-09-21 (VOZ-38) não era montada em lugar nenhum.*
 
 ## Gate ABAC
 

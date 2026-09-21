@@ -167,4 +167,6 @@ export interface SupervisorState {
   participantId: string | null
   joinedAt:      string | null
   error:         string | null
+  /** VOZ-38: canal do contato, do meta da sessão — decide se há sala de mídia a assinar */
+  channel:       string | null
 }

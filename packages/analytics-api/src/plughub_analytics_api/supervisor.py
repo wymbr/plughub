@@ -208,6 +208,11 @@ async def join_session(
     # Escopo de pool — depois do tenant (nao adianta conferir pool de outro tenant).
     await _authorize_live_session(redis, principal, token_tenant, body.session_id)
 
+    # VOZ-38: o canal vem do MESMO meta que acabou de decidir o tenant. É o que a tela usa para
+    # saber se há sala de mídia a assinar (webrtc/voice) — sem ele, a visão de mídia do supervisor
+    # não tinha como ser montada, e nunca foi. Ausente fica `null`, nunca um canal adivinhado.
+    channel = meta.get("channel") or None
+
     # Reject double-join for the same session (idempotency guard)
     existing = await _get_state(redis, body.session_id)
     if existing:
@@ -217,6 +222,7 @@ async def join_session(
             "session_id":     body.session_id,
             "joined_at":      existing["joined_at"],
             "already_active": True,
+            "channel":        channel,
         })
 
     participant_id = str(uuid.uuid4())
@@ -263,6 +269,7 @@ async def join_session(
         "participant_id": participant_id,
         "session_id":     body.session_id,
         "joined_at":      joined_at,
+        "channel":        channel,
     })
 
 

@@ -68,6 +68,14 @@ export interface WebRTCSessionState {
    * protegido no telefone, e a tecla chegaria a todos na sala. Volta sozinho no fim do bloco.
    */
   mediaHold: boolean;
+  /**
+   * VOZ-38: a CHAMADA acabou para quem observa — só no papel `supervisor`. O gateway não apaga a
+   * sala do SFU no fim de um contato de browser (só a perna SIP e a sala órfã), e o stream da
+   * sessão não recebe `session_closed` no WebRTC: medido em 2026-09-21, a visão ficava em
+   * "Aguardando vídeo" numa sala vazia. O sinal que chega é a sala: todos os outros saíram depois
+   * de terem estado nela, ou o SFU a fechou.
+   */
+  ended: boolean;
   /** Toggle local microphone mute */
   toggleMic: () => Promise<void>;
   /** Toggle local camera (only when my ceiling includes video) */
@@ -126,6 +134,7 @@ export function useWebRTCSession(
   const [cameraOff,    setCameraOff]    = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [mediaHold,    setMediaHold]    = useState(false);
+  const [ended,        setEnded]        = useState(false);
   // o `connect` se chama de volta quando o servidor tira este participante da sala (NIV-07)
   const connectRef = useRef<((sid: string) => Promise<void>) | null>(null);
 
@@ -147,6 +156,7 @@ export function useWebRTCSession(
     const generation = ++generationRef.current;
     setConnecting(true);
     setError(null);
+    setEnded(false);
 
     try {
       // VOZ-04: a rota é do channel-gateway (`/webrtc`, proxy próprio). Era `/api/webrtc/…`,
@@ -199,12 +209,28 @@ export function useWebRTCSession(
       // ── Room event listeners ──────────────────────────────────────────
       r.on(RoomEvent.TrackSubscribed, () => rebuildRemoteTracks(r));
       r.on(RoomEvent.TrackUnsubscribed, () => rebuildRemoteTracks(r));
-      r.on(RoomEvent.ParticipantConnected, () => rebuildRemoteTracks(r));
-      r.on(RoomEvent.ParticipantDisconnected, () => rebuildRemoteTracks(r));
+      // VOZ-38: "já houve alguém" — sala vazia ANTES de o cliente entrar não é fim de chamada
+      let othersSeen = false;
+      r.on(RoomEvent.ParticipantConnected, () => { othersSeen = true; rebuildRemoteTracks(r); });
+      r.on(RoomEvent.ParticipantDisconnected, () => {
+        rebuildRemoteTracks(r);
+        // Só o supervisor: o atendente tem ciclo próprio (o Console fecha o contato), e derrubar a
+        // sala dele aqui mudaria a reconexão do cliente, que não é deste item.
+        if (role === "supervisor" && othersSeen && r.remoteParticipants.size === 0
+            && generation === generationRef.current && roomRef.current === r) {
+          setEnded(true);
+          roomRef.current = null;
+          void r.disconnect();
+        }
+      });
       r.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
         setRoom(null);
         setLocalTracks([]);
         setRemoteTracks(new Map());
+        if (role === "supervisor" && generation === generationRef.current
+            && (reason === DisconnectReason.ROOM_DELETED || reason === DisconnectReason.ROOM_CLOSED)) {
+          setEnded(true);
+        }
         // NIV-07: o servidor tirou este participante da sala para uma coleta de dado protegido
         // no telefone. A sessão continua; a tela volta a pedir token e mostra a pausa até o fim.
         if (reason === DisconnectReason.PARTICIPANT_REMOVED && generation === generationRef.current
@@ -220,6 +246,7 @@ export function useWebRTCSession(
       r.on(RoomEvent.AudioPlaybackStatusChanged, () => setAudioBlocked(!r.canPlaybackAudio));
 
       await r.connect(body.livekit_url, body.token);
+      if (r.remoteParticipants.size > 0) othersSeen = true;
 
       // Publica só o que o PRÓPRIO teto permite; o SFU recusaria o resto.
       const trackOptions = {
@@ -322,6 +349,7 @@ export function useWebRTCSession(
     connecting,
     error,
     mediaHold,
+    ended,
     toggleMic,
     toggleCamera,
     micMuted,

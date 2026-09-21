@@ -467,11 +467,11 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
   leave:   () => Promise<void>
 } {
   const [state, setState] = useState<SupervisorState>({
-    status: 'idle', participantId: null, joinedAt: null, error: null,
+    status: 'idle', participantId: null, joinedAt: null, error: null, channel: null,
   })
 
   useEffect(() => {
-    setState({ status: 'idle', participantId: null, joinedAt: null, error: null })
+    setState({ status: 'idle', participantId: null, joinedAt: null, error: null, channel: null })
   }, [sessionId])
 
   const join = useCallback(async (operatorId = 'operator') => {
@@ -483,8 +483,9 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, operator_id: operatorId }),
       })
       if (!res.ok) { const e = await safeJson<{detail?:string}>(res).catch(() => ({})); throw new Error((e as {detail?:string}).detail ?? `HTTP ${res.status}`) }
-      const data = await safeJson<{ participant_id: string; joined_at: string }>(res)
-      setState({ status: 'active', participantId: data.participant_id, joinedAt: data.joined_at, error: null })
+      const data = await safeJson<{ participant_id: string; joined_at: string; channel?: string | null }>(res)
+      setState({ status: 'active', participantId: data.participant_id, joinedAt: data.joined_at, error: null,
+                 channel: data.channel ?? null })
     } catch (err) {
       setState(s => ({ ...s, status: 'error', error: String(err) }))
     }
@@ -505,7 +506,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
 
   const leave = useCallback(async () => {
     if (!sessionId || !tenantId || !state.participantId) {
-      setState({ status: 'idle', participantId: null, joinedAt: null, error: null })
+      setState({ status: 'idle', participantId: null, joinedAt: null, error: null, channel: null })
       return
     }
     setState(s => ({ ...s, status: 'leaving', error: null }))
@@ -516,7 +517,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
       })
     } catch { /* leave is best-effort */ }
     finally {
-      setState({ status: 'idle', participantId: null, joinedAt: null, error: null })
+      setState({ status: 'idle', participantId: null, joinedAt: null, error: null, channel: null })
     }
   }, [tenantId, sessionId, state.participantId])
 

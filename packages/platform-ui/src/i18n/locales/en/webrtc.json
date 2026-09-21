@@ -27,6 +27,7 @@
     "waitingRoom": "Waiting for participants",
     "voiceActive": "Voice call in progress",
     "error":       "Unable to connect to room",
-    "mediaHold":   "Audio paused during protected data entry"
+    "mediaHold":   "Audio paused during protected data entry",
+    "ended":       "Call ended — nothing left to observe."
   }
 }

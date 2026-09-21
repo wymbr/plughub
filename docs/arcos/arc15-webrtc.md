@@ -500,7 +500,7 @@ Console layout com WebRTC ativo:
 - `VideoGrid.tsx` — grid de vídeo (LiveKit React components)
 - `MediaControls.tsx` — toggle mic/cam/hangup, indicador de medium negociado
 - `useWebRTCSession(sessionId)` — hook: busca token, conecta ao LiveKit, expõe tracks
-- `WebRTCSupervisorView.tsx` — view read-only para supervisores no Monitor
+- `WebRTCSupervisorView.tsx` — view read-only para supervisores: montada na transcrição do contato (`SessionTranscript`) depois que o supervisor ENTRA na sessão, quando o canal (devolvido pelo `POST /supervisor/join`, do meta da sessão) tem sala de mídia; token de papel `supervisor` (oculto, sem publicar). *Até 2026-09-21 (VOZ-38) não era montada em lugar nenhum.*
 
 **Dependência:** `@livekit/components-react` + `livekit-client`.
 

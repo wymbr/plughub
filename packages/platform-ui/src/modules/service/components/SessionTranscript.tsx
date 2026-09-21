@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
 import { RecordingsPanel } from './RecordingsPanel'
+import { WebRTCSupervisorView } from '@/modules/agent-assist/components/WebRTCSupervisorView'
 import { renderWithTokens, useMaskingDisplayRules } from '@/components/MaskedToken'
 import { apiFetch } from '@/api/apiFetch'
 import type { ContactSegment, StreamEntry } from '../types'
@@ -337,6 +338,13 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin = true,
       </div>
 
       <RecordingsPanel sessionId={sessionId} />
+
+      {/* VOZ-38: supervisionar a chamada é OUVIR (e ver) a sala, oculto — só depois de entrar como
+          supervisor, e só quando o contato tem sala de mídia (a visão decide pelo canal, do meta da
+          sessão devolvido no join). Aqui também aparece a pausa do bloco mascarado (NIV-07). */}
+      {isSupActive && supState.channel && (
+        <WebRTCSupervisorView sessionId={sessionId} channel={supState.channel} compact />
+      )}
 
       <div ref={streamRef} style={s.stream}>
         {/* ── Before segment ── */}

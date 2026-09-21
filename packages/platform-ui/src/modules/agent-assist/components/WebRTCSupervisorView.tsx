@@ -44,11 +44,21 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
     audioBlocked,
     startAudio,
     mediaHold,
+    ended,
   } = useWebRTCSession(sessionId, SUPERVISOR_IDENTITY, channel, "supervisor");
   // ⚠️ O papel "supervisor" é o que dá token OCULTO e sem publicação. Até a VOZ-09 esta
   // visão pedia `role=agent` (o hook não recebia papel) e entraria na sala publicando.
 
   if (!hasMediaRoom(channel)) return null;
+  // VOZ-38: sem isto a visão ficava em "Aguardando vídeo" numa sala vazia depois do fim
+  if (ended) {
+    return (
+      <div className="flex items-center gap-1.5 p-2 text-muted text-xs">
+        <EyeOff size={14} />
+        {t("supervisor.ended")}
+      </div>
+    );
+  }
   // NIV-07: vem antes do `view`, que fica "none" enquanto não há token
   if (mediaHold) {
     return (
