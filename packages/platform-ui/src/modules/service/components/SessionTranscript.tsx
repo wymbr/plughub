@@ -6,6 +6,7 @@ import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
 import { RecordingsPanel } from './RecordingsPanel'
 import { WebRTCSupervisorView } from '@/modules/agent-assist/components/WebRTCSupervisorView'
+import { hasMedia } from '@/modules/agent-assist/hooks/useWebRTCSession'
 import { renderWithTokens, useMaskingDisplayRules } from '@/components/MaskedToken'
 import { apiFetch } from '@/api/apiFetch'
 import type { ContactSegment, StreamEntry } from '../types'
@@ -58,7 +59,25 @@ function useSessionInsights(tenantId: string, sessionId: string | null): {
 const SYSTEM_TYPES_SET = new Set([
   'session_opened','session_closed','participant_joined','participant_left',
   'flow_step_completed','customer_identified','medium_transitioned',
+  'media.call',   // WCH-01: a chamada de um contato de chat começou/terminou
 ])
+
+/** Evento da plataforma, não fala de ninguém. `recording.*` (VOZ-06) caía como mensagem de autor
+ *  desconhecido ("INTERNAL UNKNOWN") — é o mesmo tipo de fato que `participant_left`. */
+function isSystemEvent(type: string): boolean {
+  return SYSTEM_TYPES_SET.has(type) || type.startsWith('recording.')
+}
+
+/** WCH-02 — há chamada presa a este contato de chat AGORA? Derivado do stream (o último
+ *  `media.call`), então sobrevive a recarregar a tela — o evento do Console não sobrevive. */
+function lastCallEntry(entries: StreamEntry[]): StreamEntry | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) if (entries[i]!.type === 'media.call') return entries[i]
+  return undefined
+}
+
+function callState(e: StreamEntry | undefined): string {
+  return String(((e?.payload ?? {}) as Record<string, unknown>)['state'] ?? '')
+}
 
 // ─── Specialist visibility filter ────────────────────────────────────────────
 
@@ -138,7 +157,7 @@ function entryBelongsToSpecialist(
   segment: ContactSegment,
   allEntries?: StreamEntry[],
 ): boolean {
-  if (SYSTEM_TYPES_SET.has(e.type)) return true
+  if (isSystemEvent(e.type)) return true
 
   // ── 1. segment_id UUID match (definitive) ──
   if (e.segment_id && segment.segment_id) {
@@ -258,6 +277,8 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin: canJoi
   // que fechou com a tela aberta seguia oferecendo "Join as supervisor". O fim chega pelo stream
   // (`session_closed`, escrito pelo bridge em todo canal desde a VOZ-40) e vence o snapshot.
   const contactClosed = entries.some(e => e.type === 'session_closed')
+  const callEntry     = lastCallEntry(entries)
+  const callActive    = callState(callEntry) === 'started'
   const canJoin       = canJoinProp && !contactClosed
 
   // Supervisionar um contato encerrado não tem objeto: sai sozinho, e o `participant_left` que o
@@ -354,8 +375,11 @@ export function SessionTranscript({ tenantId, sessionId, onBack, canJoin: canJoi
       {/* VOZ-38: supervisionar a chamada é OUVIR (e ver) a sala, oculto — só depois de entrar como
           supervisor, e só quando o contato tem sala de mídia (a visão decide pelo canal, do meta da
           sessão devolvido no join). Aqui também aparece a pausa do bloco mascarado (NIV-07). */}
-      {isSupActive && !contactClosed && supState.channel && (
-        <WebRTCSupervisorView sessionId={sessionId} channel={supState.channel} compact />
+      {isSupActive && !contactClosed && supState.channel && hasMedia(supState.channel, callActive) && (
+        // `key` pela chamada: uma segunda chamada no mesmo contato monta a visão do zero, em vez
+        // de herdar o "encerrada" da primeira
+        <WebRTCSupervisorView key={callActive ? callEntry!.entry_id : 'room'}
+                              sessionId={sessionId} channel={supState.channel} callActive={callActive} compact />
       )}
 
       <div ref={streamRef} style={s.stream}>
@@ -474,7 +498,7 @@ function EntryRow({ e, showEvents, maskingRules }: {
   maskingRules?: import('@/components/MaskedToken').MaskingRulesMap
 }) {
   const { t } = useTranslation('contacts')
-  const isEvent = SYSTEM_TYPES_SET.has(e.type)
+  const isEvent = isSystemEvent(e.type)
   if (isEvent) return showEvents ? <EventRow e={e} /> : null
 
   const isAgent    = e.author_role !== 'customer'
@@ -513,11 +537,15 @@ function EntryRow({ e, showEvents, maskingRules }: {
 }
 
 function EventRow({ e }: { e: StreamEntry }) {
+  const { t } = useTranslation('contacts')
+  const label = e.type === 'media.call'
+    ? t(`transcript.call.${callState(e) === 'started' ? 'started' : 'ended'}`)
+    : e.type.replace(/_/g, ' ')
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0', color: '#475569' }}>
       <span style={{ flex: 1, height: 1, backgroundColor: '#1e293b', display: 'block' }} />
       <span style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
-        {e.type.replace(/_/g, ' ')}{e.timestamp ? ` · ${fmtTs(e.timestamp)}` : ''}
+        {label}{e.timestamp ? ` · ${fmtTs(e.timestamp)}` : ''}
       </span>
       <span style={{ flex: 1, height: 1, backgroundColor: '#1e293b', display: 'block' }} />
     </div>
@@ -602,8 +630,9 @@ function normalizeContent(content: unknown): NormalizedContent {
   if (typeof content === 'object' && content !== null) {
     let obj = content as Record<string, unknown>
 
-    // Unwrap specialist wrapper: { message_id, content: { type, text, ... } }
-    if (obj.message_id && obj.content && typeof obj.content === 'object') {
+    // Unwrap agent wrapper: { message_id?, content: { type, text, ... } }. O `message_id`
+    // não é o discriminador: a nota de supervisor gravada antes de 2026-09-21 não o tem.
+    if (!obj.type && obj.content && typeof obj.content === 'object') {
       obj = obj.content as Record<string, unknown>
     }
 

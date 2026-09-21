@@ -1338,7 +1338,17 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
 
     async def _on_attendant_left(self, ws: WebSocket, session_id: str, fields: dict) -> None:
         """`participant_left` no stream: o atendente sai do conjunto e o teto é refeito."""
-        who = fields.get("author_id", "") or self._json_field(fields, "payload").get("participant_id", "")
+        author = self._json_field(fields, "author")
+        who = (fields.get("author_id", "")
+               or self._json_field(fields, "payload").get("participant_id", "")
+               or author.get("participant_id", ""))
+        # Supervisor nunca entra no conjunto de atendentes (entra por `routing.assigned`, e
+        # ele não é roteado): a saída dele não é divergência de id, é outra população. Sem
+        # este filtro, cada "Sair" da supervisão virava WARNING de atendente desconhecido
+        # (medido em 2026-09-21, sessão 5be8cf81) — alarme que ensina a ignorar o alarme.
+        if (fields.get("author_role", "") or author.get("role", "")) == "supervisor":
+            logger.debug("webrtc media: supervisor %r saiu (session=%s) — nao e atendente", who, session_id)
+            return
         state = await self._load_media_state(session_id)
         if who not in state["attendants"]:
             # Não se inventa quem saiu. Se ids de entrada e saída divergirem, o teto fica

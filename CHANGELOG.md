@@ -1,5 +1,45 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (7) — WCH-05: o supervisor vê a chamada de um contato de chat, e a nota dele chega ao atendente
+
+**O que faltava.** A visão oculta do supervisor decidia pelo CANAL (`hasMediaRoom(channel)`): contato
+`webchat` nunca tem sala por canal, então a chamada presa a ele pela WCH-01 era invisível na
+supervisão — item (1) da `WCH-02`.
+
+**O que mudou.**
+- **platform-ui / supervisão** — a transcrição (`SessionTranscript.tsx`) deriva `callActive` do
+  ÚLTIMO `media.call` do stream, e a visão (`WebRTCSupervisorView`) passa a decidir por
+  `hasMedia(channel, callActive)`, o mesmo predicado do Console. Por vir do stream, sobrevive a
+  recarregar a tela da supervisão. `key` pela entrada da chamada: uma segunda chamada no mesmo
+  contato monta a visão do zero. `media.call` vira linha de evento (`📞 chamada iniciada/encerrada`,
+  i18n `contacts.transcript.call.*`), e `recording.*` deixa de aparecer como mensagem de autor
+  desconhecido.
+- **analytics-api / nota do supervisor** — medido na validação: a nota interna aparecia na
+  transcrição da supervisão (como JSON cru) e em lugar nenhum da tela do atendente. O Console não lê
+  o stream, recebe por `agent:events:{sid}`, e `/supervisor/message` só fazia XADD. Agora publica
+  `message.text` de autor `supervisor` ali (falha de publicação degrada DITA, o registro no stream
+  fica), e o payload no stream ganha o `message_id` da forma `{message_id, content}` de toda mensagem
+  de agente. O Console ganhou o autor `supervisor`; a transcrição desembrulha `content` sem depender
+  do `message_id`, então as notas antigas também aparecem como texto.
+- **channel-gateway** — a saída do supervisor (`participant_left` com o autor só no JSON aninhado)
+  era lida como atendente desconhecido e virava WARNING *"teto do cliente NAO recalculado"* a cada
+  "Sair" da supervisão (sessão `5be8cf81`). Supervisor nunca entra no conjunto de atendentes; a saída
+  dele agora é `debug`. Quem não é atendente nem supervisor continua avisando.
+
+**Medido.** analytics-api 18 (4 novos em `test_supervisor_message_delivery.py`: entrega ao Console,
+visibilidade como pedida, forma do stream e mesmo id nos dois lados, pub/sub fora não derruba o
+registro); channel-gateway 121 de webrtc (1 novo: saída do supervisor sem alarme, com o controle do
+desconhecido ao lado); typecheck do platform-ui limpo. Validado pelo dono no browser: supervisor entra
+na chamada de chat, ouve, e a nota interna aparece no Console na hora.
+
+**Varredura de logs da validação** (fora do fluxo testado) deixou duas fichas: `MEN-09` (o agente de
+fila escala sem instância no token, e o MEN-08 não confere — o aviso sai em toda saída de fila) e
+`AGH-04` (o login num pool `-int` tenta criá-lo no registry e recebe 422).
+
+**Fora.** Continua na `WCH-02`: Console recarregado no meio da chamada, IA na chamada, atendente sem
+áudio, relatórios. Nota do supervisor não reaparece num Console RECARREGADO (o histórico do Console é
+lido de outra chave) — é o mesmo item do reload.
+
 ## 2026-09-21 (6) — MEN-08: o especialista convidado não escala o contato de quem o convidou
 
 **O que foi medido.** Na validação da WCH-01 (sessão `e681ff62`), o humano convidou `@auth_form`; o

@@ -15,7 +15,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, EyeOff, Lock } from "lucide-react";
 
-import { hasMediaRoom, useWebRTCSession } from "../hooks/useWebRTCSession";
+import { hasMedia, useWebRTCSession } from "../hooks/useWebRTCSession";
 import { VideoGrid }        from "./VideoGrid";
 import { RemoteAudio }      from "./RemoteAudio";
 
@@ -26,12 +26,15 @@ interface WebRTCSupervisorViewProps {
   channel:   string;
   /** Optional compact mode (smaller grid cells) */
   compact?:  boolean;
+  /** WCH-02 — chamada presa a um contato de chat (último `media.call` do stream) */
+  callActive?: boolean;
 }
 
 export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
   sessionId,
   channel,
   compact = false,
+  callActive = false,
 }) => {
   const { t } = useTranslation("webrtc");
 
@@ -45,11 +48,11 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
     startAudio,
     mediaHold,
     ended,
-  } = useWebRTCSession(sessionId, SUPERVISOR_IDENTITY, channel, "supervisor");
+  } = useWebRTCSession(sessionId, SUPERVISOR_IDENTITY, channel, "supervisor", callActive);
   // ⚠️ O papel "supervisor" é o que dá token OCULTO e sem publicação. Até a VOZ-09 esta
   // visão pedia `role=agent` (o hook não recebia papel) e entraria na sala publicando.
 
-  if (!hasMediaRoom(channel)) return null;
+  if (!hasMedia(channel, callActive)) return null;
   // VOZ-38: sem isto a visão ficava em "Aguardando vídeo" numa sala vazia depois do fim
   if (ended) {
     return (

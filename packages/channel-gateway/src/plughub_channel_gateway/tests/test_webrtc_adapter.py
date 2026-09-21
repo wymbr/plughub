@@ -839,6 +839,19 @@ class TestWebRTCAdapterMediaCeiling:
         assert "desconhecido" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_saida_do_SUPERVISOR_nao_e_alarme(self, caplog):
+        # A forma que o analytics-api grava ao sair da supervisão: autor só no JSON aninhado.
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_attendant_left(self.ws, self.session_id, {
+                "type": "participant_left",
+                "author": '{"role": "supervisor", "participant_id": "sup-1"}',
+            })
+        assert _fw(await self._state()) == {"h1": "human"}
+        assert "nao e atendente registrado" not in caplog.text
+        assert [m["type"] for m in self.ws.sent_messages] == ["webrtc.ready"]
+
+    @pytest.mark.asyncio
     async def test_framework_ausente_consome_nada_e_avisa(self, caplog):
         with caplog.at_level("WARNING"):
             await self.adapter._on_routing_assigned(

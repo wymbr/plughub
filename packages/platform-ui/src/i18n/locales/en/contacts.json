@@ -264,6 +264,7 @@
     }
   },
   "transcript": {
+    "call": { "started": "📞 call started", "ended": "📞 call ended" },
     "back": "← Segments",
     "session": "Session",
     "supervising": "👁 supervising",

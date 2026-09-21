@@ -309,15 +309,40 @@ async def send_message(
     event_id   = str(uuid.uuid4())
     timestamp  = datetime.now(timezone.utc).isoformat()
 
-    # Field format matches StreamSubscriber._map_event / _map_message
+    text = body.text.strip()
+
+    # Field format matches StreamSubscriber._map_event / _map_message.
+    # `message_id` no payload: é a forma de toda mensagem de agente no stream
+    # ({message_id, content:{type,text}}), e é por ela que a transcrição desembrulha
+    # o conteúdo — sem ele a fala do supervisor aparecia como JSON cru.
     stream_eid = await _xadd(redis, body.session_id, {
         "type":       "message",
         "visibility": visibility,
         "author":     json.dumps({"role": "supervisor", "participant_id": body.participant_id}),
-        "payload":    json.dumps({"content": {"type": "text", "text": body.text.strip()}}),
+        "payload":    json.dumps({"message_id": event_id, "content": {"type": "text", "text": text}}),
         "event_id":   event_id,
         "timestamp":  timestamp,
     })
+
+    # O Console do atendente NÃO lê o stream: recebe por `agent:events:{sid}` (pub/sub
+    # do mcp-server). Só gravar no stream deixava a nota do supervisor visível na
+    # transcrição da supervisão e em lugar nenhum da tela de quem ela orienta (medido
+    # em 2026-09-21). O stream continua sendo o registro; isto é a entrega.
+    try:
+        await redis.publish(f"agent:events:{body.session_id}", json.dumps({
+            "type":       "message.text",
+            "session_id": body.session_id,
+            "message_id": event_id,
+            "author":     {"type": "supervisor", "id": body.participant_id},
+            "text":       text,
+            "timestamp":  timestamp,
+            "visibility": visibility,
+        }))
+    except Exception as exc:  # noqa: BLE001 — o registro já foi feito; a entrega degrada DITA
+        logger.warning(
+            "supervisor message session=%s gravada no stream mas NAO entregue ao Console: %s",
+            body.session_id, exc,
+        )
 
     logger.debug(
         "supervisor message session=%s vis=%s eid=%s",

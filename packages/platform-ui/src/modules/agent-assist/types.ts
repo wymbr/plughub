@@ -4,7 +4,7 @@ export type WsStatus = "connecting" | "connected" | "disconnected";
 
 // ── Chat messages ─────────────────────────────────────────────────────────────
 
-export type AuthorType = "customer" | "agent_human" | "agent_ai" | "system";
+export type AuthorType = "customer" | "agent_human" | "agent_ai" | "supervisor" | "system";
 
 export interface ChatMessage {
   id: string;

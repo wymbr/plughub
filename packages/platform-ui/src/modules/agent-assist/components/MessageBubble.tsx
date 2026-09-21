@@ -55,6 +55,7 @@ const AUTHOR_LABELS: Record<AuthorType, string> = {
   customer:    "Cliente",
   agent_human: "Agente",
   agent_ai:    "IA",
+  supervisor:  "Supervisor",
   system:      "Sistema",
 };
 
@@ -62,6 +63,7 @@ const BUBBLE_STYLES: Record<AuthorType, string> = {
   customer:    "bg-slate-100 text-slate-800 self-start rounded-tl-none",
   agent_human: "bg-primary text-white self-end rounded-tr-none",
   agent_ai:    "bg-ai-light text-ai-text self-start rounded-tl-none",
+  supervisor:  "bg-warning-light text-warning-text self-start rounded-tl-none border border-dashed border-warning/40",
   system:      "bg-warning-light text-warning-text self-center text-xs italic border border-warning/30",
 };
 
@@ -69,6 +71,7 @@ const LABEL_STYLES: Record<AuthorType, string> = {
   customer:    "text-left text-slate-400",
   agent_human: "text-right text-primary/60",
   agent_ai:    "text-left text-ai",
+  supervisor:  "text-left text-warning",
   system:      "text-center text-warning",
 };
 

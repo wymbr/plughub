@@ -998,7 +998,14 @@ chamada de chat (`_ceiling(state, sid)` passa `bot_leg_audio=False`), e o estado
 dormia 1 s (no observador do canal isso era `debug`, calado). `_STREAM_BLOCK_MS = 3 000`, com teste
 que compara com o timeout do cliente.
 
-**Fora da fatia (`WCH-02`):** supervisor não vê chamada de contato de chat; Console recarregado no
+**Supervisor (WCH-05, 2026-09-21).** A visão oculta decidia pelo canal e não via chamada de chat.
+Hoje a transcrição da supervisão deriva `callActive` do último `media.call` do stream (sobrevive a
+recarregar) e a visão decide por `hasMedia(channel, callActive)`, o predicado do Console; uma segunda
+chamada remonta a visão (`key` pela entrada). A nota de `/supervisor/message` é publicada também em
+`agent:events:{sid}` — o Console não lê o stream — com autor `supervisor`. A saída do supervisor
+(`participant_left`, autor só no JSON aninhado) não entra no cálculo do teto e não é alarme.
+
+**Fora da fatia (`WCH-02`):** Console recarregado no
 meio da chamada não a reencontra; IA não fala nem ouve; a chamada não é transcrita; regra para
 atendente sem áudio além da espera dita; o trecho de chamada nos relatórios.
 
