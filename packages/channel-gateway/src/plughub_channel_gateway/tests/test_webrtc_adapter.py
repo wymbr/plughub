@@ -852,6 +852,23 @@ class TestWebRTCAdapterMediaCeiling:
         assert [m["type"] for m in self.ws.sent_messages] == ["webrtc.ready"]
 
     @pytest.mark.asyncio
+    async def test_saida_do_AGENTE_DE_FILA_nao_e_alarme(self, caplog):
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_attendant_left(self.ws, self.session_id, {
+                "type": "participant_left", "author_id": f"queue-{self.session_id}"})
+        assert "nao e atendente registrado" not in caplog.text
+        assert _fw(await self._state()) == {"h1": "human"}
+
+    @pytest.mark.asyncio
+    async def test_controle_fila_de_OUTRA_sessao_segue_avisando(self, caplog):
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_attendant_left(self.ws, self.session_id, {
+                "type": "participant_left", "author_id": "queue-outra-sessao"})
+        assert "nao e atendente registrado" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_framework_ausente_consome_nada_e_avisa(self, caplog):
         with caplog.at_level("WARNING"):
             await self.adapter._on_routing_assigned(

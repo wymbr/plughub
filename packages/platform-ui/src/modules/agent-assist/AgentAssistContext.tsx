@@ -296,6 +296,41 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setActivePools([]);
   }, []);
 
+  // ── AGH-05: o F5 volta aos pools em que o agente estava ─────────────────
+  //
+  // A seleção vivia SÓ em memória: o F5 a zerava e o agente remarcava os pools à mão. Medido
+  // em 2026-09-22 (sessões `34decb41`, `2c81d1df`): esse passo manual passava da carência de
+  // 2,5 s do `close` (AGH-01), o bridge tratava como queda, o cliente ouvia o agente de fila
+  // e o mesmo agente era reatribuído segundos depois. Guardada em `sessionStorage`, por
+  // usuário: sobrevive ao F5 e morre com a aba — "voltar ao que eu fazia", não "lembrar para
+  // sempre". É conveniência de tela: ilegível ou ausente, o Console abre sem pools, como antes.
+  // Guarda-se o pool ESCOLHIDO; o espelho `-int` é derivado de novo (`withMirror`).
+  const poolsKey = session?.userId ? `plughub_console_pools:${session.userId}` : null;
+  const poolsRestored = useRef(false);
+  useEffect(() => {
+    if (poolsRestored.current || !poolsKey || availablePools.length === 0) return;
+    poolsRestored.current = true;
+    let saved: unknown = [];
+    try { saved = JSON.parse(sessionStorage.getItem(poolsKey) ?? "[]"); } catch { saved = []; }
+    if (!Array.isArray(saved) || saved.length === 0) return;
+    const escolhiveis = new Set(selectablePools.map(p => p.pool_id));
+    const volta = saved.filter((id): id is string => typeof id === "string" && escolhiveis.has(id));
+    const fora  = saved.filter(id => !volta.includes(id as string));
+    if (fora.length) {
+      console.info(`[agent-assist] pools salvos que não são mais selecionáveis, não restaurados: ${fora.join(", ")}`);
+    }
+    if (volta.length) {
+      console.info(`[agent-assist] F5: voltando aos pools ${volta.join(", ")}`);
+      setActivePools(Array.from(new Set(volta.flatMap(withMirror))));
+    }
+  }, [poolsKey, availablePools, selectablePools, withMirror]);
+  useEffect(() => {
+    // Só grava DEPOIS da restauração: antes dela `activePools` é o [] inicial e apagaria o salvo.
+    if (!poolsRestored.current || !poolsKey) return;
+    const escolhidos = activePools.filter(id => selectablePools.some(p => p.pool_id === id));
+    try { sessionStorage.setItem(poolsKey, JSON.stringify(escolhidos)); } catch { /* storage bloqueado */ }
+  }, [activePools, poolsKey, selectablePools]);
+
   // ── Multi-pool WebSocket ──────────────────────────────────────────────────
   // Pass user identity so the server keys the Redis instance per-user rather
   // than per-pool, enabling shared capacity across all logged-in pools.

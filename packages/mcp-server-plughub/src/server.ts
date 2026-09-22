@@ -28,6 +28,7 @@ import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
 import { registerWorkQueueTools }    from "./tools/work_queue"
 import { checkPoolRegistered } from "./lib/pool-registered"
+import { lastPresenceEvent } from "./lib/stream-presence"
 import { projectStreamForConsole, mergeByTimestamp } from "./lib/console-history"
 import type { RawStreamEntry } from "./lib/console-history"
 import { listQueue, claimTask, releaseTask, listPendingWorkTasks, workTaskHolder } from "./lib/work-queue"
@@ -3793,6 +3794,18 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // Helper: write participant_joined / participant_left to the session stream
     const writeParticipantEvent = async (type: "participant_joined" | "participant_left", sessionId: string) => {
       if (!sessionId) return
+      // AGH-05: presença IDEMPOTENTE — o mesmo fato duas vezes seguidas não é fato novo. O F5
+      // reconecta e recebe a atribuição de novo; sem isto, cada F5 gravaria outro "entrou".
+      // Leitura falhou → grava (`""`): presença duplicada é ruído, presença ausente é fato perdido.
+      const who = agentInstanceId || poolId
+      try {
+        if (await lastPresenceEvent(redis as any, sessionId, who) === type) {
+          console.log(`[agent-ws] ${type} NAO repetido: session=${sessionId} instance=${who} (ja e o ultimo fato de presenca)`)
+          return
+        }
+      } catch (e) {
+        console.warn(`[agent-ws] presenca ilegivel session=${sessionId} — gravando ${type} mesmo assim: ${String(e)}`)
+      }
       try {
         await writeStreamEntry(redis as any, {
           stream_key:  `session:${sessionId}:stream`,
@@ -4741,10 +4754,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
       clearInterval(pingInterval)
       if (poolId) dropConnection(userId, poolId)
       console.log(`[agent-ws] WS closed: pool=${poolId} user=${userId} instanceId=human-${userId || poolId}`)
-      // Write participant_left for every session still open on this connection.
-      for (const sid of subscribedSessions) {
-        writeParticipantEvent("participant_left", sid).catch(() => {})
-      }
+      // AGH-05: o `participant_left` NÃO é gravado aqui. Fechar o socket não é sair do contato —
+      // um F5 fecha e reabre em ~200 ms. Ele é gravado no fim da carência, e só se não houver
+      // conexão viva (abaixo), que é o mesmo critério pelo qual o bridge trata como queda.
+      const sessionsAtClose = [...subscribedSessions]
       subscriber.unsubscribe()
       subscriber.quit()
       // Notify routing engine that this human agent is no longer available.
@@ -4789,6 +4802,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
               `há conexão viva (reconectou após a janela de graça)`
             )
             return
+          }
+          // A queda é real: agora sim o agente saiu dos contatos que esta conexão atendia.
+          for (const sid of sessionsAtClose) {
+            writeParticipantEvent("participant_left", sid).catch(() => {})
           }
           // A conexão acabou: a afirmação de que ela existe sai junto, senão sobrevive até o TTL.
           redis.del(livenessKey(process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo", `human-${userId || poolId}`, poolId))

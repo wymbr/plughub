@@ -1349,6 +1349,13 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         if (fields.get("author_role", "") or author.get("role", "")) == "supervisor":
             logger.debug("webrtc media: supervisor %r saiu (session=%s) — nao e atendente", who, session_id)
             return
+        # MEN-09 deu ao agente de FILA a identidade `queue-{sid}` (par do bridge
+        # `queue_agent_participant_id`), e a saída dele passou a chegar aqui com nome. Ele nunca é
+        # atendente de mídia — é a plataforma segurando o contato —, então a saída não é alarme.
+        # Pelo NOME e pela sessão inteira, nunca por prefixo: `queue-` de outra sessão segue avisando.
+        if who == f"queue-{session_id}":
+            logger.debug("webrtc media: agente de fila saiu (session=%s) — nao e atendente", session_id)
+            return
         state = await self._load_media_state(session_id)
         if who not in state["attendants"]:
             # Não se inventa quem saiu. Se ids de entrada e saída divergirem, o teto fica

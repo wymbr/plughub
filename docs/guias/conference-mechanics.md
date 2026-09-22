@@ -2516,6 +2516,33 @@ e sai da supervisão sozinha.
 stream ausente não é criado; falha dita e o guarda liberado; um fim por sessão; censo por AST das duas
 chamadas e da ordem antes do anúncio).
 
+### Mudança 45 — fechar o socket do agente não é sair do contato: a saída espera a carência (AGH-05, 2026-09-22)
+
+**O que foi medido.** Com o Console voltando sozinho aos pools depois do F5 (seleção em
+`sessionStorage`), o WebSocket do agente fecha e reabre em **~170 ms** — medido três vezes contra a
+carência de 2,5 s do `close` (AGH-01) —, e o contato deixou de ir para a fila. Mas o `ws.on("close")`
+do mcp-server gravava `participant_left` no stream **no ato**, e a reconexão gravava `participant_joined`
+de novo: cada F5 virava "saiu / entrou" no registro. E o estado de mídia do gateway TIRA o atendente no
+`participant_left` e só o devolve num `routing.assigned` — que, sem re-roteamento, não vem. Enquanto o
+F5 levava ~5 s (passo manual), a queda mascarava o defeito com um re-roteamento; com o F5 rápido, um F5
+no meio da chamada deixaria o agente fora dela (`room_not_ready` sem fim).
+
+**Correção** (`server.ts`, `lib/stream-presence.ts`):
+- o `participant_left` do fechamento sai do `close` e vai para o fim da carência, gravado só se **não há
+  conexão viva** do mesmo agente — o mesmo critério pelo qual o bridge trata como queda
+  (`agent_disconnect`). Fechar o socket não é sair do contato;
+- presença **idempotente**: antes de gravar `participant_joined`/`participant_left`, o mcp-server lê o
+  último fato de presença DESTA instância no stream (`lastPresenceEvent`, de trás para frente, em páginas)
+  e não repete o mesmo. Leitura falhou → grava: presença duplicada é ruído, ausente é fato perdido.
+
+**Medido depois.** F5 durante chamada de chat, duas vezes: reconexão em 171 e 175 ms,
+`participant_joined NAO repetido`, nenhuma mudança no teto de mídia — a chamada seguiu. Controle, aba
+fechada: carência de 2,5 s, `agent_disconnect`, e SÓ então o gateway tirou o atendente (teto
+`audio → []`) e o contato foi para a fila; no retorno do agente o teto voltou e a chamada do cliente
+sobreviveu à fila. `lastPresenceEvent` medido também no Redis real (450 entradas, três páginas) — o
+`ioredis-mock` devolve vazio para `XREVRANGE` com id como limite superior, e o teste de paginação usa um
+leitor com a semântica do Redis.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

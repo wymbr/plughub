@@ -1,5 +1,30 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (4) — AGH-05: o F5 do Console não derruba mais o contato, nem a chamada
+
+**O que foi medido.** A seleção de pools do Console vivia só em memória: o F5 a zerava, o agente
+remarcava à mão e esse passo passava da carência de 2,5 s do `close` (AGH-01) — o bridge tratava como
+queda, o cliente ouvia o agente de fila, e o mesmo agente era reatribuído segundos depois (sessões
+`34decb41`, `2c81d1df`). **Decisão do dono: F5 é queda, e isso é normal; a lacuna era o passo manual.**
+
+**O que mudou.**
+- **platform-ui** — a seleção de pools é guardada em `sessionStorage`, por usuário (sobrevive ao F5,
+  morre com a aba), e restaurada quando a lista de pools chega, filtrada pelo que ainda é selecionável;
+  o espelho `-int` é derivado de novo. Ilegível ou ausente, o Console abre sem pools, como antes.
+- **mcp-server** — medir o F5 rápido revelou o defeito que o F5 lento escondia: o `participant_left` era
+  gravado no ATO do `close`, antes de a carência decidir, e o gateway tirava o atendente da chamada.
+  Agora a saída só é gravada no fim da carência, sem conexão viva, e a presença no stream é idempotente
+  (`lib/stream-presence.ts::lastPresenceEvent`). Detalhe em `conference-mechanics.md` § Mudança 45.
+- **channel-gateway** — a saída do agente de FILA (`queue-{sid}`, identidade dada na MEN-09) não é mais
+  alarme de atendente desconhecido: pelo nome e pela sessão inteira; `queue-` de outra sessão segue
+  avisando. Era o "Fora" registrado na MEN-09, e apareceu na validação desta ficha.
+
+**Medido.** F5 com contato: reconexão em **174 ms**, sem `agent_disconnect`, sem fila. F5 durante
+chamada, duas vezes: 171 e 175 ms, `participant_joined NAO repetido`, teto de mídia intacto, chamada
+viva. Controle, aba fechada: carência, `agent_disconnect`, atendente removido do teto e contato na fila;
+no retorno, teto de volta e chamada preservada. mcp-server 488 (4 novos em `stream-presence.test.ts`);
+paginação medida no Redis real; channel-gateway 1 413 (2 novos). Validado pelo dono no browser.
+
 ## 2026-09-22 (3) — PUI-03: nenhuma classe de cor que não gera CSS, e um gate que impede a volta
 
 **O que foi medido.** O `tailwind.config.ts` redefine `gray`, `red` e `green` como cor ÚNICA, o que
