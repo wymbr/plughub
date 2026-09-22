@@ -1,5 +1,38 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-21 (9) — AGH-04: o login humano pergunta se o pool existe, e não o cria mais
+
+**O que foi medido.** Na varredura de logs da WCH-05, todo login no espelho `retencao_humano-int`
+deixava `[agent-ws] Pool registration returned HTTP 422 … o sufixo "-int" é reservado`. O Step 0 do
+login (`registerHumanAgent`) fazia `POST /v1/pools` com config fixa no código (`channel_types`,
+`sla_target_ms`) "para garantir que o pool existe" — resíduo do seed antigo que escrevia pool direto
+no Redis. Desde o restart: **0** pools criados, 1 × 409, 1 × 422. O Console só oferece pools vindos do
+registry, e os cinco probes que abrem o WS do agente provisionam o pool pela API antes. O POST só
+rendia o WARN e uma porta lateral: abrir o WS com um `pool_id` inventado criava pool com config
+hardcoded, contra *"provisioning only via official API"*.
+
+**O que mudou.**
+- **mcp-server** — o Step 0 virou pergunta (`lib/pool-registered.ts::checkPoolRegistered`, `GET
+  /v1/pools/:id`). `registered` segue; `absent` (404) RECUSA com `login_denied / pool_not_registered`
+  — o reconciliador do bridge apaga o `pool_config` de pool que o registry não conhece, então logar ali
+  é logar num fantasma; `unverified` (registry fora, outro status) SEGUE com WARN nomeando o que não
+  foi conferido, na mesma postura do gate de kind (recusar login por falha de infra tiraria o
+  atendimento do ar pela dependência errada).
+- **platform-ui** — o toast de `login_denied` ganha o motivo novo, e as quatro mensagens saíram do
+  JSX para `t()` (`agentAssist.loginDenied.*`, en e pt-BR), incluindo as duas que já existiam
+  hardcoded em português.
+
+**Medido.** mcp-server 474 (5 novos em `pool-registered.test.ts`: 200/404/outro status/rede fora, e
+que nenhum desfecho faz POST); typecheck dos dois pacotes limpo; i18n sem chave duplicada. Ao vivo:
+`probe_agent_ws_credential.sh` VERDE (W6 e W9 — login em pool cadastrado, direto e pela borda 5174 —
+continuam entrando); verificação avulsa com pool inexistente: `login_denied / pool_not_registered`,
+registry 404 antes e depois (nada criado), zero instâncias no pool; controle em `probe_agh01`
+aceito.
+
+**Fora.** Depois da recusa, o timer de desregistro do `close` ainda roda para a instância que nunca
+entrou e loga *"membership NÃO utilizável — não deleto"*: é o caminho das recusas que já existiam
+(kind, capacidade), inofensivo.
+
 ## 2026-09-21 (8) — MEN-09: a saída da fila é conferida pelo nome, não aprovada por falta de leitura
 
 **O que foi medido.** Na varredura de logs da WCH-05 (sessão `5be8cf81`), o `conversation_escalate`

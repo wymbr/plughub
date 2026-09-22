@@ -1,4 +1,10 @@
 {
+  "loginDenied": {
+    "capacity": "Login denied: the contracted limit of concurrent human agents was reached ({{current}}/{{limit}}). Wait for a colleague to leave or contact the administrator.",
+    "poolKind": "Login denied: pool \"{{pool}}\" is an AI agent pool — human login is not allowed.",
+    "poolNotRegistered": "Login denied: pool \"{{pool}}\" does not exist in the registry. Ask an administrator to create it.",
+    "generic": "Login denied ({{reason}})."
+  },
   "title": "Agent Assist",
   "pool": {
     "select": "Select pool",

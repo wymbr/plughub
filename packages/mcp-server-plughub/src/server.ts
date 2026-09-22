@@ -27,6 +27,7 @@ import type { ExternalAgentDeps }     from "./tools/external-agent"
 import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
 import { registerWorkQueueTools }    from "./tools/work_queue"
+import { checkPoolRegistered } from "./lib/pool-registered"
 import { listQueue, claimTask, releaseTask, listPendingWorkTasks, workTaskHolder } from "./lib/work-queue"
 import type { WorkTaskState } from "./lib/work-queue"
 import { registerDelegationTools }  from "./tools/delegation"
@@ -377,6 +378,7 @@ async function refreshPoolInstances(
  *   human_capacity_exhausted — logins concorrentes ≥ C_human (contratado)
  * O caller (WS handler) envia `login_denied` ao Console e fecha a conexão.
  */
+// pool_not_registered — o pool não existe no registry (AGH-04); o login não o cria.
 class HumanLoginDenied extends Error {
   constructor(
     public reason:  string,
@@ -434,74 +436,26 @@ async function registerHumanAgent(
     // Redis error → fail-open (gate nunca derruba o login por falha de infra)
   }
 
-  // ── Step 0: ensure pool exists in Agent Registry (PostgreSQL) ──────────────
+  // ── Step 0: o pool EXISTE no registry? (AGH-04, 2026-09-21) ────────────────
   //
-  // The InstanceBootstrap reconciler (orchestrator-bridge) deletes any Redis
-  // pool_config keys that are NOT present in the Agent Registry.  If the pool
-  // was only written via seed-demo.ps1 (direct Redis write), the bootstrap will
-  // silently wipe it on startup and every 5 minutes.
-  //
-  // Solution: POST the pool to the Agent Registry so it persists in PostgreSQL.
-  // The Agent Registry publishes pool.registered → agent.registry.events →
-  // routing-engine's RegistryEventHandler writes pool_config to Redis
-  // immediately (no need to wait for the bootstrap cycle).
-  // A 409 response means the pool already exists — that is fine.
-  try {
-    const poolPayload = {
-      pool_id:       poolId,
-      agent_kind:    "human",   // item 2: pool auto-criado em login humano é humano por definição
-      description:   `Human agent pool — ${poolId} (auto-registered on agent login)`,
-      channel_types: ["webchat", "whatsapp"],
-      sla_target_ms: 300_000,   // 5 minutes
+  // Aqui havia um `POST /v1/pools` com config fixa no código "para garantir que o pool existe" —
+  // resíduo do seed antigo que escrevia pool direto no Redis. Medido: ZERO pools criados; o Console
+  // só oferece pools do registry, e o POST só rendia um WARN em todo login num espelho `-int` (422 do
+  // sufixo reservado) e uma porta lateral de provisionamento. O login PERGUNTA, não cria.
+  // Detalhe dos três desfechos: `lib/pool-registered.ts`.
+  {
+    const reg = await checkPoolRegistered(
+      registryUrl, tenantId, poolId, process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? "",
+    )
+    if (reg.kind === "absent") {
+      throw new HumanLoginDenied("pool_not_registered", { pool_id: poolId })
     }
-    // Credencial de SERVIÇO — `POST /v1/pools` é gateado por `requireResourceWrite`
-    // no agent-registry, que aceita `x-service-token` OU `Bearer` + ABAC. Este
-    // caller é interno (login do Console) e não carrega JWT de usuário aqui, então
-    // usa o token de serviço — o MESMO padrão de `tools/deploy.ts`, no mesmo
-    // processo e a partir da MESMA variável de ambiente, que o container já recebe.
-    //
-    // Sem ele o registro devolvia 401 em TODO login humano desde que o gate
-    // existe (TODO §101, achado 2026-08-04). O caminho degradava e seguia — a
-    // gravação em Redis logo abaixo mantinha o login funcionando —, e é justamente
-    // o fallback que impedia de notar. Não é cosmético: o pool deixava de existir
-    // no PostgreSQL do Registry, e o reconciliador do `InstanceBootstrap` apaga
-    // `pool_config` do Redis que NÃO esteja no Registry (ver comentário acima).
-    // Ou seja, o fallback competia com um processo que o desfaz a cada 5 min.
-    //
-    // Omitido quando vazio (`...(svcToken ? … : {})`): se o destino não configurou
-    // `service_token` nem `jwt_secret`, o gate é no-op e mandar header vazio só
-    // ruído. Ver `agent-registry/middleware/require-resource-write.ts` §39.
-    const svcToken = process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? ""
-    const resp = await fetch(`${registryUrl}/v1/pools`, {
-      method:  "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-tenant-id":  tenantId,
-        ...(svcToken ? { "x-service-token": svcToken } : {}),
-      },
-      body: JSON.stringify(poolPayload),
-    })
-    if (resp.ok) {
-      console.log(`[agent-ws] Pool registered in Agent Registry: pool=${poolId}`)
-    } else if (resp.status === 409) {
-      console.log(`[agent-ws] Pool already exists in Agent Registry: pool=${poolId}`)
-    } else {
-      // O corpo entra no log: um 401 e um 422 são falhas de naturezas diferentes
-      // (credencial × payload), e o status sozinho não distingue. Foi por não ter
-      // o corpo que este item ficou aberto desde 2026-08-04 — o TODO pedia
-      // "capturar a URL e o status body" como PRIMEIRO passo.
-      let detail = ""
-      try { detail = (await resp.text()).slice(0, 300) } catch { /* ignore */ }
+    if (reg.kind === "unverified") {
       console.warn(
-        `[agent-ws] Pool registration returned HTTP ${resp.status}: pool=${poolId} ` +
-        `token=${svcToken ? "enviado" : "AUSENTE (env AGENT_REGISTRY_SERVICE_TOKEN vazia)"} ` +
-        `body=${detail}`
+        `[agent-ws] existencia do pool NAO conferida (${reg.why}): pool=${poolId} — login segue; ` +
+        `se o pool nao existir no registry, o reconciliador apaga o pool_config dele`,
       )
     }
-  } catch (err) {
-    // Non-fatal: if the Agent Registry is unreachable, fall through.
-    // We still write to Redis directly below as a best-effort fallback.
-    console.warn(`[agent-ws] Pool registration request failed (non-fatal): pool=${poolId}`, err)
   }
 
   // Restore an active pause across reconnects: the durable marker

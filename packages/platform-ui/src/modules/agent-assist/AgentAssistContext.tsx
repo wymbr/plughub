@@ -504,10 +504,12 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const poolKey = String(e["_pool_id"] ?? e["pool_id"] ?? "");
       const msg =
         e["reason"] === "human_capacity_exhausted"
-          ? `Login negado: limite contratado de agentes humanos concorrentes atingido (${e["current"]}/${e["limit"]}). Aguarde um colega sair ou contate o administrador.`
+          ? t("loginDenied.capacity", { current: e["current"], limit: e["limit"] })
           : e["reason"] === "pool_kind_mismatch"
-          ? `Login negado: o pool "${e["pool_id"]}" é de agentes IA — login humano não é permitido.`
-          : "Login negado pela governança de capacidade.";
+          ? t("loginDenied.poolKind", { pool: e["pool_id"] })
+          : e["reason"] === "pool_not_registered"
+          ? t("loginDenied.poolNotRegistered", { pool: e["pool_id"] })
+          : t("loginDenied.generic", { reason: String(e["reason"] ?? "") });
       const prevId = loginDeniedToasts.current.get(poolKey);
       if (prevId) dismissToast(prevId);
       loginDeniedToasts.current.set(poolKey, addToast(msg, "error", /* persistent */ true));
@@ -718,7 +720,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEvent, addToast, dismissToast, fetchHistory, registerSession, unregisterSession]);
+  }, [lastEvent, addToast, dismissToast, fetchHistory, registerSession, unregisterSession, t]);
 
   // Clear typing timers on unmount (full app unmount, not navigation)
   useEffect(() => {

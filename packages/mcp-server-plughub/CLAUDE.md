@@ -97,6 +97,13 @@ Default port: 3100.
   motivo. `session_id` de reconexão só é assinado se o agente está em `session:{id}:human_agents`.
   Gate: `infra/test/probe_agent_ws_credential.sh` (inclui o controle pela borda COM credencial —
   sem ele, um proxy que descartasse o subprotocolo passaria no teste e derrubaria o Console).
+- **O login humano PERGUNTA se o pool existe; nunca o cria** (AGH-04, 2026-09-21). O Step 0 do
+  `registerHumanAgent` fazia `POST /v1/pools` com config fixa no código — zero pools criados na
+  medição, um 422 em todo login num espelho `-int` e uma porta lateral de provisionamento para quem
+  abrisse o WS com `pool_id` inventado. Hoje é `GET` (`lib/pool-registered.ts`): 404 recusa com
+  `login_denied / pool_not_registered` (o reconciliador apagaria o `pool_config` de um pool que o
+  registry não conhece); registry fora SEGUE com WARN nomeando o que não foi conferido. Pool se cria
+  pela API do registry — os probes que abrem o WS já faziam assim.
 - **O agente humano sai do pool por DOIS caminhos, e só um é o `close`** (AGH-02, 2026-09-15). O
   timer de 2,5 s do `close` é por (usuário, pool) desde a AGH-01; o segundo é o varredor
   (`lib/human-liveness.ts`), porque processo recriado derruba sockets sem `close`. A prova de vida é

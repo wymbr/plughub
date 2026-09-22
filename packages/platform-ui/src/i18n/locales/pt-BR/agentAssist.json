@@ -1,4 +1,10 @@
 {
+  "loginDenied": {
+    "capacity": "Login negado: limite contratado de agentes humanos concorrentes atingido ({{current}}/{{limit}}). Aguarde um colega sair ou contate o administrador.",
+    "poolKind": "Login negado: o pool \"{{pool}}\" é de agentes IA — login humano não é permitido.",
+    "poolNotRegistered": "Login negado: o pool \"{{pool}}\" não existe no cadastro. Peça a um administrador que o crie.",
+    "generic": "Login negado ({{reason}})."
+  },
   "title": "Agent Assist",
   "pool": {
     "select": "Selecionar pool",
