@@ -56,6 +56,10 @@ ROTAS_REPORTS = [
     "/reports/agent-events/summary?tenant_id=t",
     "/reports/agent-events/categories?tenant_id=t",
     "/reports/evaluator-calibration?tenant_id=t",
+    # ORQ-14 (2026-09-22) — entra na lista no MESMO commit da rota: rota nova sem
+    # linha aqui nasce sem o controle negativo, e o censo do deploy (§ B do
+    # `probe_route_credential_coverage.sh`) só a veria depois de subir.
+    "/reports/navigation/routing?tenant_id=t",
 ]
 
 ROTAS_SESSIONS = [

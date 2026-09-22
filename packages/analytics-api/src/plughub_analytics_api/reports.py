@@ -78,6 +78,7 @@ from .reports_query import (
     fetch_speech_checks,
     query_agent_events_categories,
     query_agent_events_tree,
+    query_navigation_routing,
     query_agent_events_epochs,
     query_evaluator_calibration,
 )
@@ -2116,6 +2117,55 @@ async def get_agent_events_categories(
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, "json", "")
+
+
+# ─── GET /reports/navigation/routing (ORQ-14) ────────────────────────────────
+
+@router.get("/navigation/routing")
+async def get_navigation_routing(
+    request:   Request,
+    tenant_id: str           = Query(...,   description="Tenant identifier"),
+    from_dt:   Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:     Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    pool_id:   Optional[str] = Query(None,  description="Recorte por pool ORQUESTRADOR"),
+    format:    str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    O roteamento do orquestrador acertou? Por DESTINO da árvore de navegação.
+
+    A série `{pool}.navegacao.destino.{caminho}` já diz ONDE cada contato aterrissou — e
+    é a mesma nos dois orquestradores, o determinístico e o com LLM, o que os torna
+    comparáveis. O que faltava é se aterrissou CERTO: sem isso, *"o LLM roteia melhor"*
+    não é afirmação medível.
+
+    **`re_roteados` é PROXY, e o nome diz isso.** Ninguém carimba *"o destino estava
+    errado"*; o que se observa é a consequência — o destino não concluiu e outro pool
+    atendeu o mesmo contato em seguida. Tem falso positivo legítimo (o destino certo que
+    descobre, atendendo, que o caso é de outra área) e falso negativo (o destino errado
+    que resolve assim mesmo). Chamá-lo de `errados` faria alguém tratar proxy como
+    veredicto e mexer na árvore errada.
+
+    Três populações ficam FORA da taxa, cada uma contada em campo próprio: hooks e
+    convidados (não são continuação do atendimento), o agente de fila (segurar não é
+    atender) e a volta ao orquestrador (é o *"tenho outro assunto"* do cliente, uma
+    decisão NOVA). `sem_destino` (o cliente saiu antes de ser atendido) sai da BASE da
+    taxa; `sem_cadeia` é defeito de dado e existe para não sumir calado.
+
+    `proximos` diz para onde os re-roteados foram, e é o campo ACIONÁVEL: uma folha que
+    sempre termina no mesmo outro pool é uma folha que falta na árvore — foi exatamente
+    o caso do `aumento_limite` (ORQ-11), que teria aparecido aqui em uma linha.
+    """
+    data = await query_navigation_routing(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        pool_id   = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, format, f"navigation_routing_{_today_label()}.csv")
 
 
 # ─── GET /reports/evaluator-calibration (Arc 13) ──────────────────────────────

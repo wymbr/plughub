@@ -509,3 +509,40 @@ Quatro consequências que sustentam a decisão:
 
 O que a ficha NÃO fez, e está nomeado: exibir a descrição ao cliente (`ORQ-15`) — a descrição ainda
 não viaja ao canal.
+
+### D9 — o destino é série; o ERRO é derivado do que veio depois (ORQ-14, 2026-09-22)
+
+`{pool}.navegacao.destino.{caminho}` diz ONDE o contato aterrissou, e é a mesma série nos dois
+orquestradores — é o que os torna comparáveis. Ela não diz se aterrissou CERTO, e sem isso
+*"o LLM roteia melhor"* não é afirmação medível: dois roteadores podem distribuir igual e errar
+diferente.
+
+**O erro não se observa; a consequência sim.** `GET /reports/navigation/routing` conta, por
+destino, o contato cujo destino **não concluiu** e cujo atendimento **seguiu em outro pool**. É
+proxy, e o campo se chama `re_roteados` exatamente para que ninguém o leia como veredicto: há
+falso positivo legítimo (o destino certo que descobre, atendendo, que o caso é de outra área) e
+falso negativo (o destino errado que resolve assim mesmo).
+
+Três exclusões fazem o número significar atendimento, e cada uma tem motivo próprio:
+
+| fora | por quê |
+|---|---|
+| hook e convidado (`role != 'primary'`) | NPS, wrap-up e `@mention` são paralelos, não continuação — contá-los faria todo contato com NPS parecer re-roteado |
+| agente de fila (`agent_type = 'system'`) | segurar o contato não é atender |
+| a volta ao ORQUESTRADOR | é o *"tenho outro assunto"* do cliente: decisão NOVA, com evento próprio |
+
+`sem_destino` (o cliente saiu antes de ser atendido) sai da BASE da taxa — somá-lo faria a folha
+abandonada parecer a melhor. `sem_cadeia` é defeito de dado e tem contador para não sumir calado.
+Sem ninguém atendido, a taxa é `null` (**não medida**), nunca `0.0`.
+
+**`proximos` é o campo acionável:** um destino que termina sempre no mesmo outro pool é uma folha
+que falta na árvore. Primeira medição (30 dias, 44 contatos, 27% de re-roteio):
+`demo_ia / sac.info_plano` 50% → `retencao_humano`, `portabilidade_ia`;
+`demo_llm_ia / aumento_limite` 60% → `sac_ia`. O segundo não é erro de roteamento: é o runner do
+limite escalando quando a identificação falha — que é o falso positivo previsto, e aparece aqui
+com o caminho que o explica.
+
+⚠️ **O que esta métrica ainda NÃO autoriza:** comparar os dois orquestradores com os dados de hoje.
+Eles têm janelas, volumes e destinos diferentes — a métrica passou a existir, a comparação precisa
+de amostra pareada. Dizer "o LLM erra menos" com 5 contatos contra 14 seria a mesma pressa que a
+métrica existe para evitar.

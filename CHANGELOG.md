@@ -1,5 +1,46 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (12) — ORQ-14: o roteamento errado passou a ter sinal
+
+**O que faltava.** A série do destino (`{pool}.navegacao.destino.{caminho}`) responde ONDE o
+contato aterrissou e é a mesma nos dois orquestradores — mas ninguém media se aterrissou CERTO.
+Sem isso, *"o LLM roteia melhor"* não era afirmação medível, e a ORQ-12 (significado na folha) não
+tinha como ser avaliada depois de entregue.
+
+**O sinal.** `GET /reports/navigation/routing` conta, por destino, o contato cujo destino **não
+concluiu** e cujo atendimento **seguiu em outro pool**. É PROXY e o nome diz isso (`re_roteados`,
+nunca `errados`): há falso positivo legítimo — o destino certo que descobre, atendendo, que o caso
+é de outra área — e falso negativo. `meta.sinal` carrega a frase, porque proxy sem rótulo vira
+veredicto na primeira reunião.
+
+**As três exclusões são o que fazem o número significar atendimento:** hook e convidado
+(`role != 'primary'`), agente de fila (`agent_type = 'system'`) e a volta ao orquestrador (o
+*"tenho outro assunto"* do cliente é decisão NOVA). `sem_destino` sai da BASE da taxa — somá-lo
+faria a folha abandonada parecer a melhor —, `sem_cadeia` tem contador, e taxa sem ninguém
+atendido é `null`, não `0.0`.
+
+**O gate mede a EXCLUSÃO, não a rota.** `probe_navigation_routing_signal.sh` faz a contraprova no
+dado vivo: a mesma contagem SEM o filtro de papel tem de dar maior. Medido: **34 sem a exclusão ×
+12 com ela** numa janela de 30 dias — se alguém tirar o `role = 'primary'` do SQL, a rota continua
+200 e a taxa só sobe, que é o tipo de regressão que não fica vermelha sozinha. Igualdade entre as
+duas contagens sai INCONCLUSIVO (a janela pode não ter hook depois do destino), nunca verde.
+
+**A primeira medição já encontrou coisa** (30 dias, 44 contatos, 27% de re-roteio):
+`demo_ia / sac.info_plano` 50% → `retencao_humano`, `portabilidade_ia`; `demo_llm_ia /
+aumento_limite` 60% → `sac_ia` (o runner do limite escalando quando a identificação falha — o falso
+positivo previsto, com o caminho que o explica ao lado). O `sac.especialista` do LLM: 13 contatos,
+zero re-roteios.
+
+⚠️ **O que ela ainda não autoriza:** comparar os dois orquestradores com estes dados — janelas,
+volumes e destinos diferentes. A métrica passou a existir; a comparação precisa de amostra pareada.
+
+**Medido.** analytics-api **827** (14 novos; o SQL EXECUTADO é o alvo das asserções, não o fonte) ·
+`probe_navigation_routing_signal.sh` VERDE · `probe_gates_manifest_coverage.sh` VERDE (o script
+novo entrou no manifesto no mesmo commit) · a rota entrou na lista do `test_route_credential_gate`
+junto com o código, e responde **401** sem credencial.
+
+Deixou ficha: `ORQ-16` (a métrica não tem tela; hoje só por `curl` com token de serviço).
+
 ## 2026-09-22 (11) — WCH-11: a fala do cliente tem UM registro, e o rótulo vem da interação
 
 **O que foi medido.** Sessão `e606ef68`: menu de TEXTO LIVRE respondido por voz produzia duas

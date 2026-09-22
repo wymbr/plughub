@@ -8392,3 +8392,217 @@ def build_speech_check_comparison(baseline_ref: "dict | None", baseline_error: "
         return {**out, "status": "reference_changed",
                 "detail": f"frases de referencia {base.get('reference_version')} x {latest.get('reference_version')} — nao comparaveis"}
     return {**out, "status": "compared", "comparison": compare_speech_checks(base, latest)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ORQ-14 — o roteamento do orquestrador ACERTOU?
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# A série `{pool}.navegacao.destino.{caminho}` diz ONDE cada contato aterrissou, e é a
+# mesma nos dois orquestradores (o determinístico e o com LLM) de propósito — é o que
+# os torna comparáveis. O que ela NÃO diz é se aterrissou CERTO, e sem isso "o LLM
+# roteia melhor" não é afirmação medível: dois roteadores podem distribuir igual e
+# errar diferente.
+#
+# ── O sinal, e por que ele é um PROXY declarado ──────────────────────────────────
+#
+# O erro de roteamento não se observa direto: ninguém carimba *"o destino estava
+# errado"*. O que se observa é a CONSEQUÊNCIA — o destino não concluiu o atendimento e
+# OUTRO pool atendeu o mesmo contato em seguida. É proxy, e como todo proxy tem falso
+# positivo legítimo (o destino certo que descobre, ao atender, que o caso é de outra
+# área) e falso negativo (o destino errado que resolve assim mesmo). Por isso o número
+# se chama `re_roteados`, e nunca `errados`.
+#
+# ── As três exclusões, cada uma por um motivo diferente ──────────────────────────
+#
+#   1. **hooks e convidados** (`role != 'primary'`): NPS, wrap-up e especialista de
+#      `@mention` são paralelos ao atendimento, não a continuação dele. Contá-los faria
+#      TODO contato com NPS parecer re-roteado.
+#   2. **agente de fila e sistema** (`agent_type = 'system'`): segurar o contato na
+#      fila não é atender.
+#   3. **a volta ao ORQUESTRADOR**: é o comando *"tenho outro assunto"* do cliente
+#      (`pos_atendimento.outra_coisa`), que reinicia a navegação. O que vem depois dela
+#      é uma decisão NOVA, com evento próprio — atribuí-la à primeira seria cobrar do
+#      roteador uma pergunta que o cliente ainda não tinha feito.
+#
+# ── O que fica de fora por decisão, e está CONTADO ───────────────────────────────
+#
+# Contato que fica no orquestrador e nunca chega a um destino (o cliente sai antes) não
+# é acerto nem erro: vai em `sem_destino`, e sai da base da taxa. Sessão com evento de
+# navegação e sem cadeia de segmentos vai em `sem_cadeia` — é defeito de DADO, e some no
+# silêncio se não tiver contador.
+
+
+async def query_navigation_routing(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    pool_id:  str | None = None,
+    accessible_pools: list[str] | None = None,
+) -> dict:
+    """Por DESTINO da árvore: quantos contatos o orquestrador mandou para lá, e em
+    quantos outro pool teve de atender em seguida (`re_roteados`). Ver o bloco acima."""
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    if scope_denies_everything(accessible_pools):
+        return {"data": [], "meta": _meta(1, 0, 0, since, until)}
+    try:
+        return await asyncio.to_thread(
+            _fetch_navigation_routing, client, database, tenant_id,
+            since, until, pool_id, accessible_pools,
+        )
+    except Exception as exc:
+        logger.warning("query_navigation_routing failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(1, 0, 0, since, until),
+                "error": "data_unavailable"}
+
+
+def _fetch_navigation_routing(
+    client:    Any,
+    db:        str,
+    tenant_id: str,
+    since:     str,
+    until:     str,
+    pool_id:   str | None,
+    accessible_pools: "list[str] | None" = None,
+) -> dict:
+    ev_cond = [
+        "tenant_id = {tenant_id:String}",
+        f"emitted_at >= '{since}'",
+        f"emitted_at <= '{until}'",
+        # `navegacao.destino` é o emissor+métrica comuns aos DOIS orquestradores; o
+        # primeiro segmento da categoria é o pool, e é por ele que se agrupa.
+        "position(category, '.navegacao.destino.') > 0",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        ev_cond.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(ev_cond, accessible_pools)
+    ev_where = " AND ".join(ev_cond)
+
+    # ⚠️ Alias de agregado NUNCA repete nome de coluna real (`pool_id`, `session_id`): o
+    # ClickHouse derruba a query inteira (code 184) e o wrapper devolve `data: []`, que
+    # se lê como "não há dado". Daí os sufixos `_ref`.
+    result = client.query(f"""
+        WITH
+        nav AS (
+            SELECT
+                session_id,
+                argMin(pool_id, emitted_at)                                  AS orquestrador_ref,
+                argMin(splitByString('.navegacao.destino.', category)[2],
+                       emitted_at)                                           AS destino_ref,
+                count()                                                      AS navegacoes_ref
+            FROM {db}.agent_business_events
+            WHERE {ev_where}
+            GROUP BY session_id
+        ),
+        cadeia AS (
+            SELECT
+                session_id,
+                groupArray(pool_id) AS pools_ref
+            FROM (
+                SELECT session_id, pool_id, started_at, segment_id
+                FROM {db}.segments FINAL
+                WHERE tenant_id = {{tenant_id:String}}
+                  AND role = 'primary'
+                  AND agent_type != 'system'
+                  AND session_id IN (SELECT session_id FROM nav)
+                ORDER BY started_at, segment_id
+            )
+            GROUP BY session_id
+        ),
+        avaliado AS (
+            SELECT
+                orquestrador_ref,
+                destino_ref,
+                navegacoes_ref,
+                pools_ref,
+                indexOf(pools_ref, orquestrador_ref)             AS i_orq_ref,
+                -- o que veio DEPOIS do orquestrador: o primeiro é o destino atendido
+                arraySlice(pools_ref, i_orq_ref + 1)             AS depois_ref,
+                if(length(depois_ref) > 0, depois_ref[1], '')    AS atendido_ref,
+                -- a volta ao orquestrador encerra a janela: dali em diante é navegação NOVA
+                arraySlice(depois_ref, 2)                        AS resto_ref,
+                indexOf(resto_ref, orquestrador_ref)             AS i_volta_ref,
+                if(i_volta_ref > 0, arraySlice(resto_ref, 1, i_volta_ref - 1),
+                   resto_ref)                                    AS janela_ref,
+                arrayFilter(p -> p != atendido_ref, janela_ref)   AS outros_ref
+            FROM nav
+            LEFT JOIN cadeia USING (session_id)
+        )
+        SELECT
+            orquestrador_ref                                     AS orquestrador,
+            destino_ref                                          AS destino,
+            count()                                              AS contatos,
+            countIf(atendido_ref = '')                           AS sem_destino,
+            countIf(atendido_ref != '' AND length(outros_ref) > 0) AS re_roteados,
+            countIf(length(pools_ref) = 0)                       AS sem_cadeia,
+            countIf(navegacoes_ref > 1)                          AS com_renavegacao,
+            topK(3)(arrayStringConcat(outros_ref, ','))          AS proximos_ref
+        FROM avaliado
+        GROUP BY orquestrador_ref, destino_ref
+        ORDER BY contatos DESC, destino
+    """, parameters=params)
+
+    dados: list[dict] = []
+    for l in _rows_to_dicts(result):
+        contatos    = int(l.get("contatos") or 0)
+        sem_destino = int(l.get("sem_destino") or 0)
+        re_roteados = int(l.get("re_roteados") or 0)
+        # ⚠️ A base da taxa EXCLUI quem nunca chegou a um destino: dividir por `contatos`
+        # faria uma folha que o cliente abandona parecer melhor do que é.
+        atendidos = contatos - sem_destino
+        dados.append({
+            "orquestrador":    l.get("orquestrador") or "",
+            "destino":         l.get("destino") or "",
+            "contatos":        contatos,
+            "atendidos":       atendidos,
+            "re_roteados":     re_roteados,
+            # `None` = NÃO MEDIDO (ninguém foi atendido nesta folha), nunca 0.0 — zero é
+            # ponto legítimo da escala e diria "nunca erra".
+            "taxa_re_roteio":  round(re_roteados / atendidos, 4) if atendidos else None,
+            "sem_destino":     sem_destino,
+            "sem_cadeia":      int(l.get("sem_cadeia") or 0),
+            "com_renavegacao": int(l.get("com_renavegacao") or 0),
+            # Para onde foram os re-roteados: é isto que aponta a folha que FALTA na
+            # árvore — um `sac.especialista` que sempre acaba em `limite_ia` é a folha de
+            # limite pedindo para existir, que foi exatamente o defeito da ORQ-11.
+            "proximos":        _proximos_distintos(l.get("proximos_ref")),
+        })
+
+    total_contatos = sum(d["contatos"] for d in dados)
+    total_atend    = sum(d["atendidos"] for d in dados)
+    total_re       = sum(d["re_roteados"] for d in dados)
+    meta = _meta(1, len(dados), len(dados), since, until)
+    meta.update({
+        "contatos":        total_contatos,
+        "atendidos":       total_atend,
+        "re_roteados":     total_re,
+        "taxa_re_roteio":  round(total_re / total_atend, 4) if total_atend else None,
+        "sem_destino":     sum(d["sem_destino"] for d in dados),
+        "sem_cadeia":      sum(d["sem_cadeia"] for d in dados),
+        "com_renavegacao": sum(d["com_renavegacao"] for d in dados),
+        # O nome do número é o que ele mede. Quem ler "errados" vai tratar proxy como
+        # veredicto, e a primeira decisão em cima disso será sobre a árvore errada.
+        "sinal":           "proxy: o destino nao concluiu e outro pool atendeu",
+    })
+    return {"data": dados, "meta": meta}
+
+
+def _proximos_distintos(valor: Any) -> list[str]:
+    """Os pools que atenderam DEPOIS do destino, distintos e em ordem de chegada.
+
+    O `topK` agrega as sequências inteiras (`'sac_ia,retencao_humano'`), porque a
+    sequência é o que identifica o caminho; aqui ela é desdobrada para a leitura.
+    """
+    saida: list[str] = []
+    for item in (valor or []):
+        for p in str(item).split(","):
+            p = p.strip()
+            if p and p not in saida:
+                saida.append(p)
+    return saida[:3]
