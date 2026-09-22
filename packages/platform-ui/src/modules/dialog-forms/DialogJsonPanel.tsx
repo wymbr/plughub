@@ -211,22 +211,22 @@ export const DialogJsonPanel: React.FC<Props> = ({
       <div className="flex h-full w-full max-w-6xl flex-col rounded-lg bg-white shadow-xl">
         {/* header */}
         <div className="flex items-center gap-3 border-b px-4 py-2">
-          <h2 className="text-sm font-semibold text-gray-700">{t('json.title')}</h2>
-          <span className="font-mono text-[11px] text-gray-400">{doc.form_id}</span>
+          <h2 className="text-sm font-semibold text-dark">{t('json.title')}</h2>
+          <span className="font-mono text-[11px] text-muted-light">{doc.form_id}</span>
           <div className="flex-1" />
           <button onClick={() => setTab('json')}
-            className={`rounded px-2 py-1 text-xs ${tab === 'json' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}>
+            className={`rounded px-2 py-1 text-xs ${tab === 'json' ? 'bg-blue-50 text-blue-700' : 'text-muted hover:bg-surface-muted'}`}>
             {t('json.tab.json')}
           </button>
           <button onClick={() => setTab('preview')}
-            className={`rounded px-2 py-1 text-xs ${tab === 'preview' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}>
+            className={`rounded px-2 py-1 text-xs ${tab === 'preview' ? 'bg-blue-50 text-blue-700' : 'text-muted hover:bg-surface-muted'}`}>
             {t('json.tab.preview')}
           </button>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><X size={16} /></button>
+          <button onClick={onClose} className="text-muted-light hover:text-dark"><X size={16} /></button>
         </div>
 
         {/* toolbar */}
-        <div className="flex items-center gap-2 border-b bg-gray-50 px-4 py-1.5 text-xs">
+        <div className="flex items-center gap-2 border-b bg-surface-muted px-4 py-1.5 text-xs">
           <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) importar(f); e.target.value = '' }} />
           <button disabled={readOnly} onClick={() => fileRef.current?.click()}
@@ -272,7 +272,7 @@ export const DialogJsonPanel: React.FC<Props> = ({
 
         {/* footer */}
         <div className="flex items-center gap-3 border-t px-4 py-2">
-          <button onClick={onClose} className="rounded border px-3 py-1.5 text-sm hover:bg-gray-50">
+          <button onClick={onClose} className="rounded border px-3 py-1.5 text-sm hover:bg-surface-muted">
             {t('json.cancel')}
           </button>
           <button disabled={readOnly} onClick={aplicar}
@@ -280,9 +280,9 @@ export const DialogJsonPanel: React.FC<Props> = ({
             className="rounded bg-blue-700 px-3 py-1.5 text-sm text-white hover:bg-blue-800 disabled:opacity-50">
             {verdict.kind === 'invalid' ? t('json.applyAnyway') : t('json.apply')}
           </button>
-          <span className="text-[11px] text-gray-400">{t('json.applyHint')}</span>
+          <span className="text-[11px] text-muted-light">{t('json.applyHint')}</span>
           {erroLocal && (
-            <span className="flex items-center gap-1 text-xs text-red-600">
+            <span className="flex items-center gap-1 text-xs text-red">
               <AlertTriangle size={13} />{erroLocal}
             </span>
           )}
@@ -298,15 +298,15 @@ const VerdictBadge: React.FC<{ state: Verdict }> = ({ state }) => {
   const { t } = useTranslation('dialogForms')
   if (state.kind === 'idle') return null
   if (state.kind === 'checking')
-    return <span className="flex items-center gap-1 text-gray-500"><Loader2 size={12} className="animate-spin" />{t('json.verdict.checking')}</span>
+    return <span className="flex items-center gap-1 text-muted"><Loader2 size={12} className="animate-spin" />{t('json.verdict.checking')}</span>
   if (state.kind === 'ok')
-    return <span className="flex items-center gap-1 text-green-700"><Check size={12} />{t('json.verdict.ok')}</span>
+    return <span className="flex items-center gap-1 text-green-text"><Check size={12} />{t('json.verdict.ok')}</span>
   if (state.kind === 'json_error')
     return <span className="text-amber-700">{t('json.verdict.syntax')}</span>
   if (state.kind === 'unavailable')
     // NUNCA verde: "não verificado" é o que ele é.
     return <span className="flex items-center gap-1 text-amber-700"><HelpCircle size={12} />{t('json.verdict.unavailable')}</span>
-  return <span className="flex items-center gap-1 text-red-600"><AlertTriangle size={12} />{t('json.verdict.invalid', { n: state.errors.length })}</span>
+  return <span className="flex items-center gap-1 text-red"><AlertTriangle size={12} />{t('json.verdict.invalid', { n: state.errors.length })}</span>
 }
 
 const VerdictPanel: React.FC<{ state: Verdict }> = ({ state }) => {
@@ -319,14 +319,14 @@ const VerdictPanel: React.FC<{ state: Verdict }> = ({ state }) => {
   if (state.kind === 'unavailable')
     return <div className={`${base} bg-amber-50 text-amber-900`}>{t('json.verdict.unavailableDetail', { reason: state.reason })}</div>
   if (state.kind === 'ok')
-    return <div className={`${base} bg-green-50 text-green-900`}>{t('json.verdict.okDetail')}</div>
+    return <div className={`${base} bg-green-light text-green-text`}>{t('json.verdict.okDetail')}</div>
 
   return (
-    <div className={`${base} bg-red-50`}>
+    <div className={`${base} bg-red-light`}>
       <ul className="space-y-0.5">
         {state.errors.map((e, i) => (
-          <li key={i} className="flex gap-2 text-red-900">
-            <span className="font-mono text-[11px] text-red-700">{e.path || '(raiz)'}</span>
+          <li key={i} className="flex gap-2 text-red-text">
+            <span className="font-mono text-[11px] text-red-text">{e.path || '(raiz)'}</span>
             <span>{e.message}</span>
           </li>
         ))}
@@ -341,7 +341,7 @@ const RenderPreview: React.FC<{ state: Verdict }> = ({ state }) => {
   const { t } = useTranslation('dialogForms')
   if (state.kind !== 'ok')
     return (
-      <div className="flex h-full items-center justify-center px-8 text-center text-xs text-gray-400">
+      <div className="flex h-full items-center justify-center px-8 text-center text-xs text-muted-light">
         {state.kind === 'checking' ? t('json.verdict.checking') : t('json.preview.unavailable')}
       </div>
     )
@@ -366,11 +366,11 @@ const RenderPreview: React.FC<{ state: Verdict }> = ({ state }) => {
 
       {r.options.length > 0 && (
         <section className="mb-4">
-          <h4 className="mb-1 font-semibold text-gray-600">{t('json.preview.options')}</h4>
+          <h4 className="mb-1 font-semibold text-muted">{t('json.preview.options')}</h4>
           <div className="flex flex-wrap gap-1">
             {r.options.map(o => (
-              <span key={o.id} className="rounded border bg-gray-50 px-2 py-0.5">
-                {o.label} <span className="font-mono text-gray-400">({o.id})</span>
+              <span key={o.id} className="rounded border bg-surface-muted px-2 py-0.5">
+                {o.label} <span className="font-mono text-muted-light">({o.id})</span>
               </span>
             ))}
           </div>
@@ -378,13 +378,13 @@ const RenderPreview: React.FC<{ state: Verdict }> = ({ state }) => {
       )}
 
       <section className="mb-4">
-        <h4 className="mb-1 font-semibold text-gray-600">
+        <h4 className="mb-1 font-semibold text-muted">
           {t('json.preview.fields', { n: r.fields.length })}
         </h4>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[42rem] border-collapse">
             <thead>
-              <tr className="border-b text-left text-[11px] text-gray-500">
+              <tr className="border-b text-left text-[11px] text-muted">
                 <th className="py-1 pr-2">id</th>
                 <th className="py-1 pr-2">{t('field.label')}</th>
                 <th className="py-1 pr-2">{t('json.preview.type')}</th>
@@ -400,14 +400,14 @@ const RenderPreview: React.FC<{ state: Verdict }> = ({ state }) => {
                   <td className="py-1 pr-2">{f.label}</td>
                   <td className="py-1 pr-2">
                     <code className="font-mono">{f.type}</code>
-                    {f.options && <span className="ml-1 text-gray-400">({f.options.length})</span>}
+                    {f.options && <span className="ml-1 text-muted-light">({f.options.length})</span>}
                   </td>
                   <td className="py-1 pr-2">{f.required ? '✓' : '—'}</td>
                   <td className="py-1 pr-2">
-                    {f.masked === false ? <span className="text-gray-300">—</span>
+                    {f.masked === false ? <span className="text-muted-light">—</span>
                       : <code className="font-mono text-amber-700">🔒 {String(f.masked)}</code>}
                   </td>
-                  <td className="py-1 pr-2 font-mono text-[11px] text-gray-500">
+                  <td className="py-1 pr-2 font-mono text-[11px] text-muted">
                     {f.validation ? JSON.stringify(f.validation) : '—'}
                   </td>
                 </tr>
@@ -418,8 +418,8 @@ const RenderPreview: React.FC<{ state: Verdict }> = ({ state }) => {
       </section>
 
       <details>
-        <summary className="cursor-pointer text-[11px] text-gray-500">{t('json.preview.raw')}</summary>
-        <pre className="mt-1 overflow-auto rounded bg-gray-50 p-2 font-mono text-[11px] leading-tight">
+        <summary className="cursor-pointer text-[11px] text-muted">{t('json.preview.raw')}</summary>
+        <pre className="mt-1 overflow-auto rounded bg-surface-muted p-2 font-mono text-[11px] leading-tight">
           {JSON.stringify(r, null, 2)}
         </pre>
       </details>
@@ -429,8 +429,8 @@ const RenderPreview: React.FC<{ state: Verdict }> = ({ state }) => {
 
 const Row: React.FC<{ k: string; v: React.ReactNode }> = ({ k, v }) => (
   <>
-    <dt className="text-gray-500">{k}</dt>
-    <dd className="text-gray-800">{v}</dd>
+    <dt className="text-muted">{k}</dt>
+    <dd className="text-dark">{v}</dd>
   </>
 )
 

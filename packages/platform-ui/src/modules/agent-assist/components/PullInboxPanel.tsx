@@ -323,7 +323,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
     .filter(g => g.items.length > 0)
 
   return (
-    <div className="border-t border-gray-200 mt-2 pt-2">
+    <div className="border-t border-border mt-2 pt-2">
       <div className="flex items-center justify-between px-3 mb-1">
         <span className="text-xs font-semibold text-dark uppercase tracking-wide">
           {t("pullInbox.title", { defaultValue: "Filas (pull)" })}
@@ -366,7 +366,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                 <button
                   type="button"
                   onClick={() => toggleGroup(g.pool_id)}
-                  className="w-full flex items-center gap-1 px-2 py-1 text-2xs font-semibold text-muted uppercase tracking-wide hover:bg-gray-50"
+                  className="w-full flex items-center gap-1 px-2 py-1 text-2xs font-semibold text-muted uppercase tracking-wide hover:bg-surface-muted"
                 >
                   <ChevronRight
                     className={`w-3 h-3 flex-shrink-0 transition-transform ${isCollapsed ? "" : "rotate-90"}`}
@@ -384,7 +384,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                         <li
                           key={c.session_id}
                           className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 ${
-                            previewSessionId === c.session_id ? "bg-primary-light" : "hover:bg-gray-50"
+                            previewSessionId === c.session_id ? "bg-primary-light" : "hover:bg-surface-muted"
                           }`}
                         >
                           <button

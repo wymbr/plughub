@@ -593,11 +593,11 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
               disabled={disabled}
               onChange={e => setFieldValues(p => ({ ...p, [f.id]: aplicaMascara(e.target.value, mask) }))}
               className={`text-sm border rounded px-2 py-1.5 bg-white text-dark placeholder-muted-light disabled:bg-slate-50 ${
-                ruim ? "border-red-500" : "border-border-strong"
+                ruim ? "border-red" : "border-border-strong"
               }`}
             />
             {ruim && (
-              <span className="text-[11px] text-red-700">
+              <span className="text-[11px] text-red-text">
                 {locStr(ent?.verdict?.error, t("formFill.formatInvalid", { defaultValue: "Invalid format." }))}
               </span>
             )}
@@ -684,7 +684,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                     disabled={disabled}
                     onClick={() => clique(ci, o)}
                     className={`w-full flex items-center justify-between gap-2 text-left text-sm px-2 py-1.5 rounded border transition-colors disabled:opacity-40 ${
-                      escolhida ? "bg-green-50 border-green text-green font-medium"
+                      escolhida ? "bg-green-light border-green text-green font-medium"
                       : aberta   ? "bg-slate-100 border-border-strong font-medium"
                       : "border-transparent hover:bg-slate-50 text-dark"
                     }`}
@@ -711,7 +711,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                 disabled={disabled}
                 onClick={() => desmarcar(ok, p, multi)}
                 title={t("formFill.tree.unselect")}
-                className="flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full border border-green/40 bg-green-50 text-green hover:border-green disabled:opacity-40"
+                className="flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full border border-green/40 bg-green-light text-green hover:border-green disabled:opacity-40"
               >
                 <span className="break-all">{p}</span>
                 <span aria-hidden="true" className="text-green/70">×</span>
@@ -806,11 +806,11 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                 disabled={disabled}
                 onChange={e => setAnswers(p => ({ ...p, [ok]: aplicaMascara(e.target.value, mask) }))}
                 className={`text-sm border rounded px-2 py-1.5 bg-white text-dark placeholder-muted-light disabled:bg-slate-50 ${
-                  ruim ? "border-red-500" : "border-border-strong"
+                  ruim ? "border-red" : "border-border-strong"
                 }`}
               />
               {ruim && (
-                <span className="text-[11px] text-red-700">
+                <span className="text-[11px] text-red-text">
                   {locStr(ent?.verdict?.error, t("formFill.formatInvalid", { defaultValue: "Invalid format." }))}
                 </span>
               )}

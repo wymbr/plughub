@@ -1276,7 +1276,14 @@ Fechar de vez pede a regra inversa: **proibir `fetch` cru no platform-ui**, com 
 dos wrappers de credencial (`apiFetch`, `api/auth.ts`, `modules/*/api.ts`) — manifesto, não glob,
 pela mesma razão do `run_gates.sh`. É lint, não runtime; cabe num passo próprio.
 
-### 🟡 101 classes `*-gray-N` INERTES no platform-ui (medido 2026-08-28)
+### ✅ 101 classes `*-gray-N` INERTES no platform-ui (medido 2026-08-28) — RESOLVIDO 2026-09-22 (PUI-03)
+
+> ⚠️ **Corrigido em 2026-09-22 por medição.** O parágrafo *"a categoria perigosa foi varrida e está
+> fechada"* abaixo era FALSO: a checagem olhava fundo e `text-white` no MESMO elemento, e os controles
+> de mídia do Console (WCH-07) tinham o fundo quebrado no PAI e o `text-white` no filho — invisíveis.
+> E a medição cobria só `gray`: `red` e `green` também são cor única no config. As 206 classes foram
+> trocadas e o mecanismo que esta entrada pedia existe: `infra/test/probe_ui_color_scale_classes.sh`,
+> que deriva as famílias do próprio config. Ver `CHANGELOG.md` § 2026-09-22 (3).
 
 `tailwind.config.ts:23` redefine o token `gray` como cor **CHAPADA** (`#6B7280`), o que
 substitui a escala inteira do Tailwind. Medição contra o bundle servido:

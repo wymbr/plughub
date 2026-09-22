@@ -223,7 +223,7 @@ function EpochBlock({
 
       {loading && nodes.length === 0 && <Spinner />}
       {error && (
-        <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs">
+        <div className="px-3 py-2 rounded-lg bg-red-light border border-red/30 text-red-text text-xs">
           {t('lens.errorBackend')} — {error}
         </div>
       )}
@@ -281,7 +281,7 @@ function EpochBlock({
                           {rotulo}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                          folha ? 'bg-green-50 text-green-700' : 'bg-surface-muted text-muted'}`}>
+                          folha ? 'bg-green-light text-green-text' : 'bg-surface-muted text-muted'}`}>
                           {folha ? t('lens.taxonomy.leaf') : t('lens.taxonomy.folder')}
                         </span>
                         {anomalia && <AlertTriangle size={12} className="text-warning" aria-hidden="true" />}

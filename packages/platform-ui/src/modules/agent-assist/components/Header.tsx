@@ -52,9 +52,9 @@ interface HeaderProps {
 
 
 const STATUS_COLORS: Record<WsStatus, string> = {
-  connected:    "bg-green-500",
+  connected:    "bg-green",
   connecting:   "bg-yellow-400",
-  disconnected: "bg-red-500",
+  disconnected: "bg-red",
 };
 
 const CHANNEL_ICON: Record<string, string> = {
@@ -108,7 +108,7 @@ const PoolCombo: React.FC<PoolComboProps> = ({
   const anyConnected  = activePools.some(p => poolStatuses.get(p) === "connected");
   const anyConnecting = activePools.some(p => poolStatuses.get(p) === "connecting");
   const comboDot =
-    anyConnected  ? "bg-green-500" :
+    anyConnected  ? "bg-green" :
     anyConnecting ? "bg-yellow-400 animate-pulse" :
                     "bg-border-strong";
 
@@ -183,7 +183,7 @@ const PoolCombo: React.FC<PoolComboProps> = ({
             const status  = poolStatuses.get(pool.pool_id);
             const dotColor =
               !active             ? "bg-border" :
-              status === "connected"  ? "bg-green-400" :
+              status === "connected"  ? "bg-green" :
               status === "connecting" ? "bg-yellow-400 animate-pulse" :
                                         "bg-border-strong";
 
@@ -260,7 +260,7 @@ export const Header: React.FC<HeaderProps> = ({
             <p className="text-xs leading-tight">
               {connectedCount === 0
                 ? <span className="text-blue-300 italic">{t('header.offline')}</span>
-                : <span className="text-green-300 font-medium">
+                : <span className="text-green-light font-medium">
                     {t(connectedCount > 1 ? 'header.readyIn_plural' : 'header.readyIn', { count: connectedCount })}
                   </span>
               }

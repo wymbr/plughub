@@ -1113,7 +1113,10 @@ Pipeline for tracking human agent pauses. Config API namespace `agent_activity`,
 
 ## Frontend Architecture — platform-ui
 
-Single-app shell in `packages/platform-ui/`. Design tokens: `primary=#1B4F8A`, `secondary=#2D9CDB`, `accent=#00B4D8`, `green=#059669`, `warning=#D97706`, `red=#DC2626`. Font: Inter. Never use inline hex — Tailwind tokens only.
+Single-app shell in `packages/platform-ui/`. Design tokens: `primary=#1B4F8A`, `secondary=#2D9CDB`, `accent=#00B4D8`, `green=#059669`, `warning=#D97706`, `red=#DC2626`. Font: Inter. Never use inline hex — Tailwind tokens only. ⚠️ `gray`, `red` e `green` são cor ÚNICA no
+config: a classe numerada (`bg-gray-900`, `text-red-600`) **não gera CSS** e o elemento fica sem cor,
+calado — usar os tokens (`muted`, `surface-alt`, `border`, `dark`, `red-light`, `green-text`…). Gate:
+`infra/test/probe_ui_color_scale_classes.sh` (famílias derivadas do config).
 
 Roles: `operator` (Monitor+Contacts), `supervisor` (+Evaluation+Reports), `admin` (+Config+Skills), `devops` (+Fluxo/DevTools — chamado `developer` até 2026-09-08; o preset era de AUTOR DE FLUXO, papel que os DialogForms tornaram obsoleto), `business` (cross-cutting, no operational items). **ABAC gates** on nav items: `contacts.monitorar` gates Monitor (observar), `agent_assist.atender` gates Console/fila (atender) — eram um campo só até a MOD-05; `skill_flows.operacao` gates Editor/Deploy; `visualizar` gates Reports/Análise tabs.
 

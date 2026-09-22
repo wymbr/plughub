@@ -356,7 +356,7 @@ const DialogFormsPage: React.FC = () => {
       {/* ── List ── */}
       <aside className="w-72 shrink-0 border rounded-lg bg-white overflow-auto">
         <div className="flex items-center justify-between px-3 py-2 border-b">
-          <h2 className="font-semibold text-sm text-gray-700">{t('title')}</h2>
+          <h2 className="font-semibold text-sm text-dark">{t('title')}</h2>
           <button onClick={openNew}
             className="flex items-center gap-1 text-xs bg-blue-700 text-white px-2 py-1 rounded hover:bg-blue-800">
             <Plus size={14} /> {t('new')}
@@ -368,19 +368,19 @@ const DialogFormsPage: React.FC = () => {
             <Archive size={12} /> {showArchived ? t('archive.showActive') : t('archive.showArchived')}
           </button>
         </div>
-        {loading && <div className="p-3 text-xs text-gray-400">{t('loading')}</div>}
-        {!loading && forms.length === 0 && <div className="p-3 text-xs text-gray-400">{t('empty')}</div>}
+        {loading && <div className="p-3 text-xs text-muted-light">{t('loading')}</div>}
+        {!loading && forms.length === 0 && <div className="p-3 text-xs text-muted-light">{t('empty')}</div>}
         <ul>
           {forms.map(f => (
             <li key={f.form_id}>
               <button onClick={() => openEdit(f.form_id)}
-                className={`w-full text-left px-3 py-2 border-b hover:bg-gray-50 ${draft?.form_id === f.form_id ? 'bg-blue-50' : ''}`}>
+                className={`w-full text-left px-3 py-2 border-b hover:bg-surface-muted ${draft?.form_id === f.form_id ? 'bg-blue-50' : ''}`}>
                 <div className={`text-sm truncate ${f.deleted_at ? 'text-muted-light line-through' : 'text-dark'}`}>
                   {f.name || f.form_id}
                 </div>
-                <div className="text-[11px] text-gray-400 flex gap-2">
+                <div className="text-[11px] text-muted-light flex gap-2">
                   <span>{f.form_id}</span>
-                  <span className={f.status === 'published' ? 'text-green-600' : 'text-amber-600'}>
+                  <span className={f.status === 'published' ? 'text-green' : 'text-amber-600'}>
                     {f.status} v{f.version}
                   </span>
                   {f.deleted_at && <span className="text-muted">{t('archive.badge')}</span>}
@@ -394,7 +394,7 @@ const DialogFormsPage: React.FC = () => {
       {/* ── Editor ── */}
       <main className="flex-1 border rounded-lg bg-white overflow-auto">
         {!draft && (
-          <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-2">
+          <div className="h-full flex flex-col items-center justify-center text-muted-light gap-2">
             <FileText size={32} /> <span className="text-sm">{t('selectOrNew')}</span>
           </div>
         )}
@@ -410,32 +410,32 @@ const DialogFormsPage: React.FC = () => {
             )}
             {/* metadata */}
             <div className="grid grid-cols-2 gap-3">
-              <label className="text-xs text-gray-600">
+              <label className="text-xs text-muted">
                 {t('field.formId')}
                 <input value={draft.form_id} disabled={!isNew}
                   onChange={e => patch({ form_id: e.target.value })}
                   placeholder="dialog_meu_form"
-                  className="mt-1 w-full border rounded px-2 py-1 text-sm disabled:bg-gray-100" />
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm disabled:bg-surface-alt" />
               </label>
-              <label className="text-xs text-gray-600">
+              <label className="text-xs text-muted">
                 {t('field.name')}
                 <input value={draft.name} onChange={e => patch({ name: e.target.value })}
                   className="mt-1 w-full border rounded px-2 py-1 text-sm" />
               </label>
-              <label className="text-xs text-gray-600">
+              <label className="text-xs text-muted">
                 {t('field.defaultLocale')}
                 <select value={draft.default_locale} onChange={e => patch({ default_locale: e.target.value })}
                   className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white">
                   {localeList.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
               </label>
-              <label className="text-xs text-gray-600">
+              <label className="text-xs text-muted">
                 {t('field.tags')}
                 <input value={(draft.tags ?? []).join(', ')}
                   onChange={e => patch({ tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
                   className="mt-1 w-full border rounded px-2 py-1 text-sm" />
               </label>
-              <label className="text-xs text-gray-600 col-span-2">
+              <label className="text-xs text-muted col-span-2">
                 {t('field.description')}
                 <input value={draft.description ?? ''} onChange={e => patch({ description: e.target.value || undefined })}
                   className="mt-1 w-full border rounded px-2 py-1 text-sm" />
@@ -443,7 +443,7 @@ const DialogFormsPage: React.FC = () => {
             </div>
 
             {/* composite (health score) */}
-            <div className="flex items-center gap-2 text-xs text-gray-600">
+            <div className="flex items-center gap-2 text-xs text-muted">
               <label className="flex items-center gap-1">
                 <input type="checkbox" checked={!!draft.composite}
                   onChange={e => patch({ composite: e.target.checked ? { metric: draft.composite?.metric || 'health' } : undefined })} />
@@ -454,7 +454,7 @@ const DialogFormsPage: React.FC = () => {
                   <input value={draft.composite.metric} placeholder="health"
                     onChange={e => patch({ composite: { metric: e.target.value } })}
                     className="w-32 border rounded px-2 py-0.5 bg-white font-mono" />
-                  <span className="text-gray-400">{t('composite.hint')}</span>
+                  <span className="text-muted-light">{t('composite.hint')}</span>
                 </>
               )}
             </div>
@@ -465,13 +465,13 @@ const DialogFormsPage: React.FC = () => {
             {/* blocks */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-gray-700">{t('blocks.title')}</h3>
-                <span className="text-[11px] text-gray-400">{t('dimensions.hint')}</span>
+                <h3 className="text-sm font-semibold text-dark">{t('blocks.title')}</h3>
+                <span className="text-[11px] text-muted-light">{t('dimensions.hint')}</span>
                 <div className="flex-1" />
                 <button onClick={addBlock}
-                  className="text-xs border px-2 py-1 rounded hover:bg-gray-50">+ {t('blocks.add')}</button>
+                  className="text-xs border px-2 py-1 rounded hover:bg-surface-muted">+ {t('blocks.add')}</button>
               </div>
-              {blocks.length === 0 && <p className="text-[11px] text-gray-400 py-1">{t('blocks.empty')}</p>}
+              {blocks.length === 0 && <p className="text-[11px] text-muted-light py-1">{t('blocks.empty')}</p>}
               {blocks.map((block, idx) => (
                 <BlockCard key={idx} block={block} idx={idx} total={blocks.length}
                   instruments={instruments} locale={editLocale} defaultLocale={draft.default_locale}
@@ -500,7 +500,7 @@ const DialogFormsPage: React.FC = () => {
               {/* Arquivado recusa escrita no backend (409). Desabilitar aqui não é
                   duplicar a regra: é evitar que o operador receba um código HTTP cru
                   no lugar de uma explicação. O portão continua sendo o do servidor. */}
-              {/* `bg-dark`, não `bg-gray-700`: o token `gray` do tailwind.config.ts é uma
+              {/* `bg-dark`, não um tom numerado de `gray`: o token `gray` do tailwind.config.ts é uma
                   cor CHAPADA, o que apaga a escala inteira do Tailwind — nenhuma classe
                   `*-gray-N` existe no CSS construído. Aqui isso era invisível no pior
                   sentido: fundo nenhum + `text-white` = botão branco no branco, com a
@@ -524,7 +524,7 @@ const DialogFormsPage: React.FC = () => {
               </button>
               {msg && (
                 <span className={`flex items-center gap-1 text-xs ${
-                  msg.kind === 'ok' ? 'text-green-600' : msg.kind === 'warn' ? 'text-amber-700' : 'text-red-600'
+                  msg.kind === 'ok' ? 'text-green' : msg.kind === 'warn' ? 'text-amber-700' : 'text-red'
                 }`}>
                   {msg.kind === 'ok' ? <Check size={14} /> : <AlertTriangle size={14} />}{msg.text}
                 </span>
@@ -678,7 +678,7 @@ const BlockCard: React.FC<BlockCardProps> = ({
   const typeValue = isInstrument ? (isCustom ? CUSTOM_TYPE : dim!.dimension_id)
                   : isForm       ? FORM_TYPE
                   : DIALOG_TYPE
-  const accent = isInstrument ? 'border-l-blue-400' : isForm ? 'border-l-emerald-400' : 'border-l-gray-300'
+  const accent = isInstrument ? 'border-l-blue-400' : isForm ? 'border-l-emerald-400' : 'border-l-border-strong'
 
   /** Patch na pergunta que DA identidade ao bloco form. */
   const updateFormQ = (patch: Partial<QuestionNode>) => {
@@ -716,11 +716,11 @@ const BlockCard: React.FC<BlockCardProps> = ({
             <input value={ltToStr(dim!.label, locale, defaultLocale)} placeholder={t('dimensions.labelPlaceholder')}
               onChange={e => updateDim({ label: setLt(dim!.label, locale, e.target.value, defaultLocale) })}
               className="flex-1 min-w-[100px] border rounded px-2 py-1 text-sm bg-white" />
-            <span className="text-xs text-gray-500">{t('dimensions.scale')}</span>
+            <span className="text-xs text-muted">{t('dimensions.scale')}</span>
             <input type="number" value={dim!.scale.min ?? 0}
               onChange={e => updateDim({ scale: { ...dim!.scale, min: Number(e.target.value) } })}
               className="w-12 border rounded px-1 py-0.5 text-center text-xs bg-white" />
-            <span className="text-gray-400">–</span>
+            <span className="text-muted-light">–</span>
             <input type="number" value={dim!.scale.max}
               onChange={e => updateDim({ scale: { ...dim!.scale, max: Number(e.target.value) } })}
               className="w-12 border rounded px-1 py-0.5 text-center text-xs bg-white" />
@@ -729,14 +729,14 @@ const BlockCard: React.FC<BlockCardProps> = ({
               className="border rounded px-1 py-0.5 text-xs bg-white">
               {AGGREGATIONS.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
-            <span className="text-xs text-gray-500">{t('field.interaction')}</span>
+            <span className="text-xs text-muted">{t('field.interaction')}</span>
             <select value={dim!.interaction ?? 'button'}
               onChange={e => updateDim({ interaction: e.target.value as DialogInteraction })}
               className="border rounded px-1 py-0.5 text-xs bg-white">
               {interactionOptions(dim!.interaction).map(i => <option key={i} value={i}>{i}</option>)}
             </select>
             {compositeOn && (
-              <span className="flex items-center gap-1 text-xs text-gray-500">
+              <span className="flex items-center gap-1 text-xs text-muted">
                 {t('composite.weight')}
                 <input type="number" min={0} value={dim!.weight ?? 1}
                   onChange={e => updateDim({ weight: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) })}
@@ -745,24 +745,24 @@ const BlockCard: React.FC<BlockCardProps> = ({
             )}
           </>
         ) : (
-          <span className="flex-1 text-xs text-gray-400">{t('block.dialogHint')}</span>
+          <span className="flex-1 text-xs text-muted-light">{t('block.dialogHint')}</span>
         )}
-        <button onClick={() => onMove(-1)} disabled={idx === 0} className="text-gray-400 hover:text-gray-700 disabled:opacity-30"><ArrowUp size={15} /></button>
-        <button onClick={() => onMove(1)} disabled={idx === total - 1} className="text-gray-400 hover:text-gray-700 disabled:opacity-30"><ArrowDown size={15} /></button>
-        <button onClick={onRemove} className="text-red-400 hover:text-red-600"><Trash2 size={15} /></button>
+        <button onClick={() => onMove(-1)} disabled={idx === 0} className="text-muted-light hover:text-dark disabled:opacity-30"><ArrowUp size={15} /></button>
+        <button onClick={() => onMove(1)} disabled={idx === total - 1} className="text-muted-light hover:text-dark disabled:opacity-30"><ArrowDown size={15} /></button>
+        <button onClick={onRemove} className="text-red/70 hover:text-red"><Trash2 size={15} /></button>
       </div>
 
       {/* anchors (scale-point labels) — instrument with option-based render */}
       {isInstrument && dim!.interaction && HAS_OPTIONS(dim!.interaction) && (
-        <div className="pl-2 text-xs text-gray-600">
-          <button onClick={() => setShowAnchors(s => !s)} className="text-gray-500 hover:text-gray-800">
+        <div className="pl-2 text-xs text-muted">
+          <button onClick={() => setShowAnchors(s => !s)} className="text-muted hover:text-dark">
             {showAnchors ? '−' : '+'} {t('block.anchors')}
           </button>
           {showAnchors && (
             <div className="flex flex-wrap gap-2 mt-1">
               {scalePoints.map((v, i) => (
                 <div key={v} className="flex items-center gap-1">
-                  <span className="text-gray-400 w-4 text-right">{v}</span>
+                  <span className="text-muted-light w-4 text-right">{v}</span>
                   <input value={ltToStr(dim!.anchors?.[i], locale, defaultLocale)} placeholder={String(v)}
                     onChange={e => setAnchor(i, e.target.value)}
                     className="w-24 border rounded px-1 py-0.5 bg-white" />
@@ -782,7 +782,7 @@ const BlockCard: React.FC<BlockCardProps> = ({
       )}
 
       {/* nodes — no bloco form a pergunta e o proprio bloco, entao nao vira linha */}
-      <div className="space-y-1.5 pl-2 border-l-2 border-gray-100">
+      <div className="space-y-1.5 pl-2 border-l-2 border-border">
         {block.nodes.map((node, i) => (
           isForm && node.id === formQ?.id ? null :
           <NodeRow key={node.id} node={node} first={i === 0} last={i === block.nodes.length - 1}
@@ -801,16 +801,16 @@ const BlockCard: React.FC<BlockCardProps> = ({
       )}
 
       {/* footer */}
-      <div className="flex items-center gap-2 text-xs text-gray-500 pt-1">
+      <div className="flex items-center gap-2 text-xs text-muted pt-1">
         {/* Bloco form ja TEM a sua pergunta — o bloco e o turno, e uma segunda
             pergunta faria a tela prometer dois turnos onde o runner faz um. */}
         {!isForm && (
-          <button onClick={() => addNode(newQuestion())} className="hover:text-gray-800"><Plus size={12} className="inline" /> {t('node.question')}</button>
+          <button onClick={() => addNode(newQuestion())} className="hover:text-dark"><Plus size={12} className="inline" /> {t('node.question')}</button>
         )}
-        <button onClick={() => addNode(newStatement())} className="hover:text-gray-800"><Plus size={12} className="inline" /> {t('node.statement')}</button>
+        <button onClick={() => addNode(newStatement())} className="hover:text-dark"><Plus size={12} className="inline" /> {t('node.statement')}</button>
         <div className="flex-1" />
         {isInstrument && qs.length > 0 && (
-          <button onClick={onToggleAdjust} className={`flex items-center gap-1 ${adjust ? 'text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>
+          <button onClick={onToggleAdjust} className={`flex items-center gap-1 ${adjust ? 'text-blue-700' : 'text-muted hover:text-dark'}`}>
             <SlidersHorizontal size={12} /> {adjust ? t('block.weightsHide') : t('block.weightsAdjust')}
           </button>
         )}
@@ -833,27 +833,27 @@ const NodeRow: React.FC<{
   const summary = ltToStr(node.kind === 'question' ? node.prompt : node.text, locale, defaultLocale)
     || (isQ ? t('node.question') : t('node.statement'))
   return (
-    <div className="border rounded bg-gray-50">
+    <div className="border rounded bg-surface-muted">
       <div className="flex items-center gap-2 px-2 py-1">
-        <button onClick={onToggle} className="text-gray-400 hover:text-gray-700">
+        <button onClick={onToggle} className="text-muted-light hover:text-dark">
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isQ ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-600'}`}>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isQ ? 'bg-blue-100 text-blue-700' : 'bg-border text-muted'}`}>
           {isQ ? t('node.question') : t('node.statement')}
         </span>
-        <span className="flex-1 text-xs text-gray-700 truncate">{summary}</span>
-        {node.kind === 'question' && <span className="text-[10px] text-gray-400">{node.interaction}</span>}
+        <span className="flex-1 text-xs text-dark truncate">{summary}</span>
+        {node.kind === 'question' && <span className="text-[10px] text-muted-light">{node.interaction}</span>}
         {node.kind === 'question' && showWeight && (
-          <span className="flex items-center gap-1 text-[11px] text-gray-500">
+          <span className="flex items-center gap-1 text-[11px] text-muted">
             <input type="number" min={0} value={node.capture?.weight ?? 1}
               onChange={e => onChange({ ...node, capture: { ...node.capture, weight: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) } })}
               className="w-12 border rounded px-1 py-0.5 bg-white" />
             <span className="text-blue-700 font-medium">{pct}%</span>
           </span>
         )}
-        <button onClick={() => onMove(-1)} disabled={first} className="text-gray-400 hover:text-gray-700 disabled:opacity-30"><ArrowUp size={13} /></button>
-        <button onClick={() => onMove(1)} disabled={last} className="text-gray-400 hover:text-gray-700 disabled:opacity-30"><ArrowDown size={13} /></button>
-        <button onClick={onRemove} className="text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+        <button onClick={() => onMove(-1)} disabled={first} className="text-muted-light hover:text-dark disabled:opacity-30"><ArrowUp size={13} /></button>
+        <button onClick={() => onMove(1)} disabled={last} className="text-muted-light hover:text-dark disabled:opacity-30"><ArrowDown size={13} /></button>
+        <button onClick={onRemove} className="text-red/70 hover:text-red"><Trash2 size={13} /></button>
       </div>
       {expanded && (
         <div className="px-3 pb-2">
@@ -871,7 +871,7 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLo
   const { t } = useTranslation('dialogForms')
   return (
     <div className="space-y-2">
-      <label className="block text-xs text-gray-600">
+      <label className="block text-xs text-muted">
         {t('field.text')}
         <textarea value={ltToStr(node.text, locale, defaultLocale)} rows={2}
           onChange={e => onChange({ ...node, text: setLt(node.text, locale, e.target.value, defaultLocale) })}
@@ -933,7 +933,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
   const setOptions = (options: DialogOption[]) => onChange({ ...node, options })
   return (
     <div className="space-y-2">
-      <label className="block text-xs text-gray-600">
+      <label className="block text-xs text-muted">
         {t('field.prompt')}
         <textarea value={ltToStr(node.prompt, locale, defaultLocale)} rows={2}
           onChange={e => onChange({ ...node, prompt: setLt(node.prompt, locale, e.target.value, defaultLocale) })}
@@ -941,9 +941,9 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
       </label>
       <div className="grid grid-cols-2 gap-2">
         {scored ? (
-          <div className="text-xs text-gray-400 flex items-end pb-1">{t('scoring.renderInherited')}</div>
+          <div className="text-xs text-muted-light flex items-end pb-1">{t('scoring.renderInherited')}</div>
         ) : (
-          <label className="text-xs text-gray-600">
+          <label className="text-xs text-muted">
             {t('field.interaction')}
             <select value={node.interaction}
               onChange={e => onChange({ ...node, interaction: e.target.value as DialogInteraction })}
@@ -952,7 +952,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
             </select>
           </label>
         )}
-        <label className="text-xs text-gray-600">
+        <label className="text-xs text-muted">
           {t('field.outputKey')}
           <input value={node.output_key} onChange={e => onChange({ ...node, output_key: e.target.value })}
             className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white" />
@@ -962,7 +962,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
       <VisibilityRow value={node.visibility} onChange={v => onChange({ ...node, visibility: v })} />
 
       {!scored && (
-        <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+        <div className="flex items-center gap-3 text-xs text-muted flex-wrap">
           {/*
             FMT-08 — o checkbox virou SELETOR DE TIPO.
             `MaskedDeclarationSchema` é `false | string` desde a T1, e a
@@ -1000,7 +1000,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
 
       {!scored && node.interaction === 'text' && (
         <div className="space-y-1.5 border-t pt-2">
-          <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+          <div className="flex items-center gap-3 text-xs text-muted flex-wrap">
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={!!node.validation?.numeric}
                 onChange={e => onChange({ ...node, validation: { ...node.validation, numeric: e.target.checked || undefined } })} />
@@ -1030,12 +1030,12 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
             data). A regex não saiu do sistema: mudou de AUTOR, e hoje é a
             implementação de uma entrada revisada uma vez.
           */}
-          <label className="flex items-center gap-1 text-xs text-gray-600">{t('field.format')}
+          <label className="flex items-center gap-1 text-xs text-muted">{t('field.format')}
             <select
               value={node.validation?.format ?? ''}
               disabled={!!derivado}
               onChange={e => onChange({ ...node, validation: { ...node.validation, format: e.target.value || undefined } })}
-              className="flex-1 border rounded px-2 py-0.5 bg-white disabled:bg-gray-100">
+              className="flex-1 border rounded px-2 py-0.5 bg-white disabled:bg-surface-alt">
               <option value="">{t('field.formatNone')}</option>
               {formats.map(f => (
                 <option key={f.id} value={f.id}>{formatLabel(f, locale)}</option>
@@ -1049,7 +1049,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
             </p>
           )}
           {conflito && (
-            <p className="text-[11px] text-red-700 flex items-center gap-1">
+            <p className="text-[11px] text-red-text flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" />
               {t('field.formatConflict', { declarado: node.validation?.format ?? '', derivado: conflito })}
             </p>
@@ -1057,7 +1057,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
           {catalogoErro && (
             <p className="text-[11px] text-amber-700">{t('field.catalogUnavailable')}</p>
           )}
-          <div className="flex items-center gap-2 text-xs text-gray-600">
+          <div className="flex items-center gap-2 text-xs text-muted">
             <span>{t('field.retry')}</span>
             <input value={ltToStr(node.retry?.reprompt, locale, defaultLocale)} placeholder={t('field.repromptPlaceholder')}
               onChange={e => onChange({ ...node, retry: e.target.value
@@ -1112,7 +1112,7 @@ const AskWhenRow: React.FC<{ guard?: AskWhen; priorKeys: string[]; onSet: (g: As
     onSet({ ...base, ...patch })
   }
   return (
-    <div className="flex items-center gap-2 flex-wrap text-xs text-gray-600 border-t pt-2">
+    <div className="flex items-center gap-2 flex-wrap text-xs text-muted border-t pt-2">
       <label className="flex items-center gap-1">
         <input type="checkbox" checked={!!g}
           onChange={e => onSet(e.target.checked ? { field: priorKeys[0] ?? '', op: 'lt', value: 0 } : undefined)} />
@@ -1142,7 +1142,7 @@ const VisibilityRow: React.FC<{ value: DialogVisibility | undefined; onChange: (
 ({ value, onChange }) => {
   const { t } = useTranslation('dialogForms')
   return (
-    <label className="text-xs text-gray-600">
+    <label className="text-xs text-muted">
       {t('field.visibility')}{' '}
       <select value={visToSelect(value)} onChange={e => onChange(selectToVis(e.target.value as VisSelect))}
         className="border rounded px-2 py-0.5 text-sm bg-white">
@@ -1164,17 +1164,17 @@ const LocaleBar: React.FC<{
   const [adding, setAdding] = useState('')
   const commit = () => { onAdd(adding); setAdding('') }
   return (
-    <div className="flex items-center flex-wrap gap-2 border rounded-lg bg-gray-50 px-3 py-2">
-      <span className="text-xs text-gray-500">{t('locale.editing')}</span>
+    <div className="flex items-center flex-wrap gap-2 border rounded-lg bg-surface-muted px-3 py-2">
+      <span className="text-xs text-muted">{t('locale.editing')}</span>
       {locales.map(l => (
         <span key={l}
           className={`inline-flex items-center gap-1 text-xs rounded px-2 py-0.5 border cursor-pointer ${
-            l === editLocale ? 'bg-blue-700 text-white border-blue-700' : 'bg-white text-gray-700 hover:bg-gray-100'
+            l === editLocale ? 'bg-blue-700 text-white border-blue-700' : 'bg-white text-dark hover:bg-surface-alt'
           }`}>
           <button onClick={() => onSelect(l)}>{l}{l === defaultLocale ? ` · ${t('locale.default')}` : ''}</button>
           {l !== defaultLocale && (
             <button onClick={() => onRemove(l)}
-              className={l === editLocale ? 'text-blue-100 hover:text-white' : 'text-gray-400 hover:text-red-600'}
+              className={l === editLocale ? 'text-blue-100 hover:text-white' : 'text-muted-light hover:text-red'}
               title={t('locale.remove')}>×</button>
           )}
         </span>

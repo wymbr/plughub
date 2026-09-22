@@ -130,7 +130,7 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
                 onClick={() => setAbertos(s => {
                   const n = new Set(s); n.has(cid) ? n.delete(cid) : n.add(cid); return n
                 })}
-                className="text-gray-500 hover:text-gray-800"
+                className="text-muted hover:text-dark"
                 aria-label={t('tree.expand')}
               >
                 {aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -144,7 +144,7 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
               title={novo ? undefined : t('tree.idLocked')}
               onChange={e => troca({ id: e.target.value })}
               className={`w-24 border rounded px-2 py-0.5 text-xs ${
-                novo ? 'bg-white' : 'bg-gray-100 text-gray-500 cursor-not-allowed'}`}
+                novo ? 'bg-white' : 'bg-surface-alt text-muted cursor-not-allowed'}`}
             />
             <input
               value={ltToStr(o.label, locale, defaultLocale)}
@@ -159,10 +159,10 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
               placeholder={t('field.value')}
               disabled={pasta}
               onChange={e => troca({ value: e.target.value || undefined })}
-              className="w-16 border rounded px-2 py-0.5 text-xs bg-white disabled:bg-gray-100"
+              className="w-16 border rounded px-2 py-0.5 text-xs bg-white disabled:bg-surface-alt"
             />
             <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-              pasta ? 'bg-gray-100 text-gray-600' : 'bg-green-50 text-green-700'}`}>
+              pasta ? 'bg-surface-alt text-muted' : 'bg-green-light text-green-text'}`}>
               {pasta ? t('tree.folder') : t('tree.leaf')}
             </span>
 
@@ -181,7 +181,7 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
             <button
               onClick={() => troca({ active: inativa ? undefined : false })}
               title={inativa ? t('tree.reactivate') : t('tree.retire')}
-              className="text-gray-400 hover:text-gray-700"
+              className="text-muted-light hover:text-dark"
             >
               {inativa ? <Eye size={13} /> : <EyeOff size={13} />}
             </button>
@@ -191,13 +191,13 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
                 const c = l.slice(); const [x] = c.splice(i, 1)
                 c.splice(Math.max(0, i - 1), 0, x!); return c
               }))}
-              className="text-gray-400 hover:text-gray-700"><ArrowUp size={12} /></button>
+              className="text-muted-light hover:text-dark"><ArrowUp size={12} /></button>
             <button
               onClick={() => onChange(comLista(options, idx, l => {
                 const c = l.slice(); const [x] = c.splice(i, 1)
                 c.splice(Math.min(c.length, i + 1), 0, x!); return c
               }))}
-              className="text-gray-400 hover:text-gray-700"><ArrowDown size={12} /></button>
+              className="text-muted-light hover:text-dark"><ArrowDown size={12} /></button>
 
             <button
               onClick={() => {
@@ -211,11 +211,11 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
                 }
                 onChange(comLista(options, idx, l => l.filter((_, k) => k !== i)))
               }}
-              className="text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+              className="text-red/70 hover:text-red"><Trash2 size={13} /></button>
           </div>
 
           {pasta && aberto && (
-            <div className="ml-4 pl-3 border-l border-gray-200 flex flex-col gap-0.5">
+            <div className="ml-4 pl-3 border-l border-border flex flex-col gap-0.5">
               {nivel(o.options ?? [], caminho, [...pais, o])}
             </div>
           )}
@@ -226,8 +226,8 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-gray-600">{t('field.options')}</span>
-        <span className="text-[10px] text-gray-400">
+        <span className="text-xs font-medium text-muted">{t('field.options')}</span>
+        <span className="text-[10px] text-muted-light">
           {t('tree.depth', { d: profundidade(options), max: DIALOG_OPTION_MAX_DEPTH })}
         </span>
         <button
@@ -239,7 +239,7 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
       </div>
       <div className="flex flex-col gap-0.5">{nivel(options, [], [])}</div>
       {options.length > 0 && (
-        <div className="text-[10px] text-gray-400 leading-snug">{t('tree.hint')}</div>
+        <div className="text-[10px] text-muted-light leading-snug">{t('tree.hint')}</div>
       )}
     </div>
   )

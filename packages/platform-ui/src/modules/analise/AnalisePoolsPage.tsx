@@ -535,7 +535,7 @@ const FilaSubTab: React.FC<{
                     const tier = queueTiers[r.pool_id] ?? 'none'
                     const cls = tier === 'attended'
                       ? 'bg-blue-50 text-blue-700'
-                      : tier === 'system' ? 'bg-gray-100 text-gray-600' : 'text-muted-light'
+                      : tier === 'system' ? 'bg-surface-alt text-muted' : 'text-muted-light'
                     return <span className={`text-2xs px-1.5 py-0.5 rounded ${cls}`}>{t(`pools.queue.tier.${tier}`)}</span>
                   })()}
                 </td>

@@ -81,7 +81,7 @@ export const FormBlockEditor: React.FC<{
 
   return (
     <div className="space-y-2 rounded border border-emerald-100 bg-emerald-50/40 p-2">
-      <label className="block text-xs text-gray-600">
+      <label className="block text-xs text-muted">
         {t('form.prompt')}
         <textarea value={ltToStr(node.prompt, locale, defaultLocale)} rows={2}
           placeholder={t('form.promptPlaceholder')}
@@ -89,7 +89,7 @@ export const FormBlockEditor: React.FC<{
           className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white" />
       </label>
 
-      <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+      <div className="flex items-center gap-3 text-xs text-muted flex-wrap">
         <label className="flex items-center gap-1">{t('field.outputKey')}
           <input value={node.output_key}
             onChange={e => onChange({ output_key: e.target.value })}
@@ -103,7 +103,7 @@ export const FormBlockEditor: React.FC<{
       </div>
 
       <div className="flex items-center gap-2 border-t border-emerald-100 pt-1">
-        <span className="text-xs font-medium text-gray-600">{t('form.fields', { n: fields.length })}</span>
+        <span className="text-xs font-medium text-muted">{t('form.fields', { n: fields.length })}</span>
         <button onClick={() => setFields([...fields, { id: '', label: '', type: 'text', required: false }])}
           className="rounded border px-1.5 py-0.5 text-[11px] hover:bg-white">+ {t('form.field')}</button>
         {catalogoErro && <span className="text-[11px] text-amber-700">{t('field.catalogUnavailable')}</span>}
@@ -146,7 +146,7 @@ const FieldRow: React.FC<{
   return (
     <div className="rounded border bg-white">
       <div className="flex items-center gap-2 px-2 py-1">
-        <button onClick={() => setAberto(v => !v)} className="text-gray-400 hover:text-gray-700">
+        <button onClick={() => setAberto(v => !v)} className="text-muted-light hover:text-dark">
           {aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
         <input value={f.id} placeholder="id"
@@ -159,22 +159,22 @@ const FieldRow: React.FC<{
           className="rounded border bg-white px-1 py-0.5 text-xs">
           {fieldTypeOptions(f.type).map(ft => <option key={ft} value={ft}>{ft}</option>)}
         </select>
-        <label className="flex items-center gap-1 text-[11px] text-gray-500">
+        <label className="flex items-center gap-1 text-[11px] text-muted">
           <input type="checkbox" checked={!!f.required}
             onChange={e => onChange({ ...f, required: e.target.checked })} />
           {t('form.required')}
         </label>
         {!!f.masked && <span className="text-[11px] text-amber-700">🔒</span>}
-        {conflito && <AlertTriangle size={12} className="text-red-500" />}
+        {conflito && <AlertTriangle size={12} className="text-red" />}
         <button onClick={() => onMove(-1)} disabled={first}
-          className="text-gray-400 hover:text-gray-700 disabled:opacity-30"><ArrowUp size={12} /></button>
+          className="text-muted-light hover:text-dark disabled:opacity-30"><ArrowUp size={12} /></button>
         <button onClick={() => onMove(1)} disabled={last}
-          className="text-gray-400 hover:text-gray-700 disabled:opacity-30"><ArrowDown size={12} /></button>
-        <button onClick={onRemove} className="text-red-400 hover:text-red-600"><Trash2 size={12} /></button>
+          className="text-muted-light hover:text-dark disabled:opacity-30"><ArrowDown size={12} /></button>
+        <button onClick={onRemove} className="text-red/70 hover:text-red"><Trash2 size={12} /></button>
       </div>
 
       {aberto && (
-        <div className="space-y-1.5 border-t px-3 py-2 text-xs text-gray-600">
+        <div className="space-y-1.5 border-t px-3 py-2 text-xs text-muted">
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-1">{t('form.value')}
               <input value={f.value === undefined ? '' : String(f.value)}
@@ -184,7 +184,7 @@ const FieldRow: React.FC<{
             {/* Só o Console pré-preenche — medido: webchat e página web montam o
                 input SEM `value`, e WhatsApp/SMS não têm a noção. Dizer isso aqui
                 evita que alguém conte com ele num formulário voltado ao cliente. */}
-            <span className="text-[11px] text-gray-400">{t('form.valueHint')}</span>
+            <span className="text-[11px] text-muted-light">{t('form.valueHint')}</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -201,7 +201,7 @@ const FieldRow: React.FC<{
             <label className="flex min-w-[180px] flex-1 items-center gap-1">{t('field.format')}
               <select value={f.validation?.format ?? ''} disabled={!!derivado}
                 onChange={e => onChange({ ...f, validation: { ...f.validation, format: e.target.value || undefined } })}
-                className="flex-1 rounded border bg-white px-1 py-0.5 disabled:bg-gray-100">
+                className="flex-1 rounded border bg-white px-1 py-0.5 disabled:bg-surface-alt">
                 <option value="">{t('field.formatNone')}</option>
                 {formats.map(fm => <option key={fm.id} value={fm.id}>{formatLabel(fm, locale)}</option>)}
               </select>
@@ -214,7 +214,7 @@ const FieldRow: React.FC<{
             </p>
           )}
           {conflito && (
-            <p className="flex items-center gap-1 text-[11px] text-red-700">
+            <p className="flex items-center gap-1 text-[11px] text-red-text">
               <AlertTriangle className="h-3 w-3" />
               {t('field.formatConflict', { declarado: f.validation?.format ?? '', derivado: conflito })}
             </p>
@@ -224,7 +224,7 @@ const FieldRow: React.FC<{
               sobrevivem ao round-trip e a tela as ANUNCIA, em vez de fingir que
               não existem — o widget entra quando houver quem use. */}
           {f.options?.length ? (
-            <p className="text-[11px] text-gray-500">{t('form.optionsCount', { n: f.options.length })}</p>
+            <p className="text-[11px] text-muted">{t('form.optionsCount', { n: f.options.length })}</p>
           ) : f.type === 'select' ? (
             <p className="text-[11px] text-amber-700">{t('form.selectNoOptions')}</p>
           ) : null}

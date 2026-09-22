@@ -1133,7 +1133,7 @@ export default function AgentFlowDeployPage() {
           <div className={`px-3.5 py-2 rounded-md text-xs border shrink-0 ${
             bannerRole === 'devops'
               ? 'bg-blue-50 border-blue-200 text-blue-700'
-              : 'bg-green-50 border-green-200 text-green-700'
+              : 'bg-green-light border-green/30 text-green-text'
           }`}>
             🔑 {t(bannerRole === 'devops' ? 'deploy.bannerDevops' : 'deploy.bannerOperator')}
           </div>

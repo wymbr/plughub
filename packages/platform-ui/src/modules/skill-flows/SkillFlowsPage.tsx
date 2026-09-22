@@ -348,7 +348,7 @@ const STATUS_BG: Record<StatusKind, string> = {
   idle:        'bg-white border-t border-border',
   loading:     'bg-white border-t border-border',
   saving:      'bg-primary/10 border-t border-primary/20',
-  saved:       'bg-green-50 border-t border-green-200',
+  saved:       'bg-green-light border-t border-green/30',
   error:       'bg-red-light border-t border-red/30',
   parse_error: 'bg-red-light border-t border-red/30',
 }
@@ -357,7 +357,7 @@ const STATUS_COLOR: Record<StatusKind, string> = {
   idle:        'text-muted',
   loading:     'text-muted',
   saving:      'text-primary',
-  saved:       'text-green-700',
+  saved:       'text-green-text',
   error:       'text-red-text',
   parse_error: 'text-red-text',
 }

@@ -655,7 +655,7 @@ function ConsolidadoDeProcessos({ tenantId, onDrillDown }: {
   // "não há processo", que é a leitura que esta ficha existe para fechar.
   if (erro && !resumo) {
     return (
-      <div className="p-6 text-sm text-red-400">
+      <div className="p-6 text-sm text-red-light">
         {t('processes.summary.unavailable')} <span className="text-slate-600">({erro})</span>
       </div>
     )
@@ -937,7 +937,7 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
                 {t('processes.instances.detail.resumeAddress')}
               </div>
               {detail.has_resume_token ? (
-                <div className="text-xs text-green-400">
+                <div className="text-xs text-green-light">
                   {t('processes.instances.detail.addressable')}
                   {detail.resume_expires_at && (
                     <span className="text-slate-500">
@@ -1075,7 +1075,7 @@ function EventsView({ tenantId }: { tenantId: string }) {
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
         {error && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs mb-4">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-light border border-red/30 text-red-text text-xs mb-4">
             <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
             <span>{error}</span>
           </div>
@@ -1226,8 +1226,8 @@ function AcoesDoProcesso({ sessionId, status, onDone }: {
           <button
             onClick={() => void encerrar()}
             disabled={busy}
-            className="px-3 py-1.5 text-xs rounded border border-red-900/60 bg-red-900/20 text-red-300
-                       hover:bg-red-900/40 disabled:opacity-50">
+            className="px-3 py-1.5 text-xs rounded border border-red/60 bg-red/20 text-red-light
+                       hover:bg-red/40 disabled:opacity-50">
             {busy ? t('processes.actions.encerrando') : t('processes.actions.encerrar')}
           </button>
         )}
@@ -1240,9 +1240,9 @@ function AcoesDoProcesso({ sessionId, status, onDone }: {
       </div>
       {msg && (
         <div className={`mt-2 text-xs ${
-          msg.tipo === 'ok'   ? 'text-green-400'
+          msg.tipo === 'ok'   ? 'text-green-light'
           : msg.tipo === 'nota' ? 'text-yellow-300'
-          : 'text-red-400'}`}>
+          : 'text-red-light'}`}>
           {msg.texto}
         </div>
       )}
@@ -1365,7 +1365,7 @@ export function MonitorTab({ tenantId, filters }: Props) {
                     <span className="font-semibold text-dark">
                       {selectedSegment.role}
                       {selectedSegment.ended_at === null && (
-                        <span className="ml-1 text-green-600">●</span>
+                        <span className="ml-1 text-green">●</span>
                       )}
                     </span>
                   </>

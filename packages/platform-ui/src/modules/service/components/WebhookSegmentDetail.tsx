@@ -91,8 +91,8 @@ function locStr(v: unknown, fallback: string): string {
 // ── Reason label ──────────────────────────────────────────────────────────────
 
 const REASON_STYLE: Record<string, { label: string; cls: string }> = {
-  on_success:  { label: 'success',  cls: 'bg-green-50 text-green-800 border-green-200' },
-  on_failure:  { label: 'failure',  cls: 'bg-red-50 text-red-800 border-red-200' },
+  on_success:  { label: 'success',  cls: 'bg-green-light text-green-text border-green/30' },
+  on_failure:  { label: 'failure',  cls: 'bg-red-light text-red-text border-red/30' },
   suspended:   { label: 'suspend',  cls: 'bg-amber-50 text-amber-800 border-amber-200' },
   resumed:     { label: 'resumed',  cls: 'bg-blue-50 text-blue-800 border-blue-200' },
   on_timeout:  { label: 'timeout',  cls: 'bg-purple-50 text-purple-800 border-purple-200' },
@@ -319,7 +319,7 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
         )}
 
         {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <div className="rounded-lg border border-red/30 bg-red-light px-4 py-3 text-sm text-red-text">
             {error}
           </div>
         )}
@@ -369,9 +369,9 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
               <div className="flex items-center gap-3">
                 <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 z-10 ${
                   ps.status === 'completed'
-                    ? 'bg-green-400 border-green-600'
+                    ? 'bg-green border-green'
                     : ps.status === 'failed'
-                    ? 'bg-red-400 border-red-600'
+                    ? 'bg-red border-red'
                     : ps.status === 'suspended' || ps.status === 'in_progress'
                     ? 'bg-amber-400 border-amber-600'
                     : 'bg-border border-border-strong'
@@ -381,7 +381,7 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
                   ps.status === 'suspended'
                     ? 'bg-amber-100 text-amber-700'
                     : ps.status === 'completed'
-                    ? 'bg-green-100 text-green-700'
+                    ? 'bg-green-light text-green-text'
                     : 'bg-surface-muted text-muted'
                 }`}>{ps.status}</span>
               </div>

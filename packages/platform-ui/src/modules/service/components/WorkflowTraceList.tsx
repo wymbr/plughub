@@ -79,9 +79,9 @@ const NODE_CONFIG: Record<TraceNodeType, {
   specialist_output: {
     label:     'trace.type.output',
     icon:      '↗',
-    bgClass:   'bg-green-50 border-green-200',
-    textClass: 'text-green-800',
-    dotClass:  'bg-green-400',
+    bgClass:   'bg-green-light border-green/30',
+    textClass: 'text-green-text',
+    dotClass:  'bg-green',
   },
   delegate_child: {
     label:     'trace.type.delegate',

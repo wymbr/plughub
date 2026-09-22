@@ -1,5 +1,40 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (3) — PUI-03: nenhuma classe de cor que não gera CSS, e um gate que impede a volta
+
+**O que foi medido.** O `tailwind.config.ts` redefine `gray`, `red` e `green` como cor ÚNICA, o que
+apaga a escala: `bg-gray-900`, `text-red-600`, `bg-green-400` não existem no CSS construído, e o
+elemento fica sem a cor sem erro em lugar nenhum. Na WCH-07 isso deixou os controles de mídia do
+Console invisíveis (branco no branco). Censo antes deste trabalho: **206** classes em **14** arquivos,
+fora os quatro componentes de mídia já consertados.
+
+**Um registro anterior dizia que o perigo estava fechado, e não estava.** `TODO.md` § *101 classes
+`*-gray-N` INERTES* (2026-08-28) mediu só `gray` e concluiu que *"nenhuma [classe de fundo] aparece
+junto de `text-white`"*. A checagem olhava o MESMO elemento; os controles da WCH-07 tinham o fundo
+quebrado no PAI e o `text-white` no filho. E `red`/`green` ficaram fora da medição. O mesmo registro
+dizia que o que impede a volta *"não é a varredura, é o mecanismo"* — e o mecanismo nunca foi feito.
+Corrigido lá, com a data.
+
+**O que mudou.**
+- **platform-ui** — as 206 classes trocadas por tokens do tema. Fundo claro: cinza → `muted`,
+  `muted-light`, `surface-muted`, `surface-alt`, `border`, `border-strong`, `dark`; vermelho/verde →
+  `red`/`red-light`/`red-text` e `green`/`green-light`/`green-text`, com opacidade quando era borda
+  ou tom suave. Fundo ESCURO (Monitor → Processos, cabeçalho do Console): os tons claros viram os
+  tints claros, não o tom saturado.
+- **gate** — `infra/test/probe_ui_color_scale_classes.sh`: as famílias proibidas são DERIVADAS do
+  `tailwind.config.ts` (qualquer família da paleta padrão redefinida como string), não listadas; o
+  gate reprova com arquivo:linha. Bateria `mut_ui_color_scale_classes.sh`: M0 controle positivo;
+  classe numerada e com variante reprovam; **família nova redefinida no config passa a ser acusada
+  sem editar o gate**; a mesma classe com o config original passa; tokens do tema passam; config sem
+  `colors` é INCONCLUSIVO, nunca verde.
+
+**Medido.** Gate VERDE (229 arquivos, famílias `gray`/`green`/`red`); mutação 7/7 pegas; o gate achou
+na primeira rodada uma classe que o censo manual deixou passar (`border-l-gray-300` — prefixo lateral).
+Typecheck limpo; no CSS construído os tokens usados existem. Validado pelo dono no browser: editor de
+Dialog Forms, cabeçalho e pools do Console, contexto, fila pull e wrap-up.
+
+**Limite do gate.** Classe montada por interpolação (`` `bg-${cor}-500` ``) não é vista — ele lê o texto.
+
 ## 2026-09-22 (2) — WCH-07: o Console desliga a chamada, os controles aparecem, e o "Hang up" sai
 
 **O que foi medido.** Três defeitos com a mesma cara — *"o Console não desliga a chamada"*:

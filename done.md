@@ -396,6 +396,7 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | id | tarefa | data | âncora no `CHANGELOG.md` |
 |---|---|---|---|
 | PUI-02 | **Tela de configuração do webhook que ninguém lia, removida.** `WebhookConfigPage` gravava HMAC, lista de IPs e timeouts no namespace `webhook` do config-api: inalcançável na tela (a sub-aba só existia para webchat), nenhum leitor no backend, namespace vazio ao vivo. Ligá-la daria controle de segurança que não faz nada — a credencial real do webhook é por endpoint (`auth_required` + token) | 2026-09-17 | `CHANGELOG.md` § 2026-09-17 (4) |
+| PUI-03 | **Nenhuma classe de cor que não gera CSS, e um gate que impede a volta.** 206 classes numeradas de `gray`/`red`/`green` (famílias redefinidas como cor única no config) trocadas por tokens em 14 arquivos; `probe_ui_color_scale_classes.sh` deriva as famílias do `tailwind.config.ts`, com bateria de mutação 7/7 | 2026-09-22 | `CHANGELOG.md` § 2026-09-22 (3) |
 
 ## `sem-demanda`
 
