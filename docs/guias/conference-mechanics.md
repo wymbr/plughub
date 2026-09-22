@@ -714,6 +714,17 @@ segment-id do wrap-up).
    `session:{id}:last_outcome` e re-publica o `participant_left` com o **MESMO segment_id**
    (ReplacingMergeTree substitui a linha) + `issue_status`=cru + `handoff_reason`=resumo (quando
    outcome≠resolved) + `close_reason` derivado do transporte.
+
+   > ⚠️ **`outcome = 'suspended'` tem DOIS escritores, e quem lê a tabela precisa saber qual
+   > respondeu** *(medido em 2026-09-22, TRF-02)*. O engine grava `suspended` quando SUSPENDE a
+   > execução para um delegado atender (990 segmentos em 30 dias); este mapa grava o MESMO valor
+   > para a disposição humana `pendente` (2 segmentos). **O discriminador é o `issue_status`**, e
+   > não é correlação: os dois campos vão no mesmo write (`mapping = {"outcome": …,
+   > "issue_status": <cru>}`), então `issue_status` vazio é assinatura do engine por construção.
+   > Guarda-se com `empty(coalesce(issue_status, ''))`, nunca `IS NULL` — o vazio é o valor
+   > plausível mais barato de produzir, e um ramo comparando com o que a fonte não emite fica
+   > morto sem ficar vermelho. Custou uma leitura errada: a cadeia da ORQ-14 tomou o hook de NPS
+   > de um contato humano por delegação e cobrou o pool do NPS como re-roteamento.
 3. **Dois gatilhos** (NX `session:{id}:primary_outcome_republished` garante um único re-publish):
    conclusão do hook side=agent em `process_routed` (caminho normal — `_close_contact_layer` já
    disparou na conclusão do NPS ou imediatamente sem hooks de cliente, ANTES do wrap-up terminar);

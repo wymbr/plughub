@@ -8514,16 +8514,32 @@ def _fetch_navigation_routing(
                        s.started_at AS started_at, s.segment_id AS segment_id
                 FROM {db}.segments s FINAL
                 LEFT JOIN (
-                    SELECT segment_id, outcome FROM {db}.segments FINAL
+                    SELECT segment_id, outcome, issue_status
+                    FROM {db}.segments FINAL
                 ) pai ON pai.segment_id = s.parent_segment_id
                 WHERE s.tenant_id = {{tenant_id:String}}
                   AND s.agent_type != 'system'
                   AND (
                         s.role = 'primary'
-                        -- delegação: o PAI suspendeu para este atender. Hook (NPS,
-                        -- wrap-up) e convidado de `@mention` têm pai CONCLUÍDO, e é
-                        -- isso que os separa aqui.
-                     OR (s.role = 'specialist' AND pai.outcome = 'suspended')
+                        -- Delegação: o PAI foi suspenso PELO ENGINE para este atender.
+                        -- Hook (NPS, wrap-up) e convidado de `@mention` têm pai
+                        -- CONCLUÍDO, e é isso que os separa aqui.
+                        --
+                        -- ⚠️ `outcome = 'suspended'` carrega DOIS fatos, e sem a
+                        -- segunda condição este ramo pega os dois: o engine suspendendo
+                        -- a execução (990 casos em 30 dias, `issue_status` vazio) e um
+                        -- wrap-up HUMANO classificado como `pendente`, que o
+                        -- `_WRAPUP_OUTCOME_MAP` mapeia para o mesmo valor (2 casos, com
+                        -- `issue_status = 'pendente'`). Os dois caminhos gravam
+                        -- `outcome` e `issue_status` JUNTOS, no mesmo write — então o
+                        -- campo vazio é a assinatura do engine, não uma correlação.
+                        -- Sem isto, o hook de NPS de um contato humano vira "delegação"
+                        -- e o pool dele aparece como re-roteamento.
+                     OR (    s.role = 'specialist'
+                         AND pai.outcome = 'suspended'
+                         -- `empty(...)`, nunca `IS NULL`: o vazio é o valor plausível
+                         -- mais barato de produzir, e o ramo morto não ficaria vermelho.
+                         AND empty(coalesce(pai.issue_status, '')))
                   )
                   AND s.session_id IN (SELECT session_id FROM nav)
                 ORDER BY s.started_at, s.segment_id

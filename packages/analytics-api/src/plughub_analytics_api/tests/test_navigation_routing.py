@@ -72,9 +72,31 @@ class TestOSQLExecutado:
         media o orquestrador determinístico como se ele nunca entregasse o contato —
         17 dos 44 contatos da janela de 30 dias, medido em 2026-09-22."""
         sql = self._sql()
-        assert "s.role = 'specialist' AND pai.outcome = 'suspended'" in sql
+        assert "s.role = 'specialist'" in sql
+        assert "pai.outcome = 'suspended'" in sql
         # e o hook continua fora: o pai dele está CONCLUÍDO, não suspenso
         assert "pai.segment_id = s.parent_segment_id" in sql
+
+    def test_suspenso_por_WRAP_UP_humano_nao_e_delegacao(self):
+        """`outcome = 'suspended'` carrega DOIS fatos, e o teste acima sozinho pega os
+        dois.
+
+        O engine suspende a execução para o delegado atender (990 casos em 30 dias,
+        `issue_status` vazio); e o `_WRAPUP_OUTCOME_MAP` do bridge mapeia a disposição
+        humana `pendente` para o MESMO valor (2 casos, `issue_status = 'pendente'`,
+        `close_reason = 'agent_hangup'`). Sem esta guarda, o hook de NPS de um contato
+        humano entra na cadeia como se fosse delegação, e o pool do NPS aparece como
+        re-roteamento — era o ruído residual declarado no ADR em 2026-09-22.
+
+        Os dois caminhos gravam `outcome` e `issue_status` no MESMO write, então o campo
+        vazio é assinatura do engine, não correlação. `empty(coalesce(...))` e nunca
+        `IS NULL`: o vazio é o valor plausível mais barato de produzir, e um ramo que
+        compara com o que a fonte não emite fica morto sem ficar vermelho.
+        """
+        sql = self._sql()
+        assert "empty(coalesce(pai.issue_status, ''))" in sql
+        assert "issue_status" in sql.split("LEFT JOIN")[1]   # veio no JOIN do pai
+        assert "pai.issue_status IS NULL" not in sql
 
     def test_o_destino_nao_e_o_proprio_orquestrador(self):
         """`suspend`/`resume` dá ao orquestrador um SEGUNDO segmento (16 dos 44): tomar

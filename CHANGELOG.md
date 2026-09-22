@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (15) — TRF-02: `outcome='suspended'` tem dois escritores, e a ficha acusava a metade errada
+
+**A ficha estava errada, e a medição a corrigiu antes de qualquer conserto.** Ela dizia que dois
+segmentos humanos fechavam com `outcome='suspended'` **contra** `close_reason='agent_hangup'`, e
+chamava isso de contradição do fechamento do segmento. Não é contradição nenhuma: o
+`_WRAPUP_OUTCOME_MAP` do bridge mapeia a disposição humana **`pendente` → `suspended`** de
+propósito (decisão §13.2 do analytics-agents-workbench, documentada na
+`conference-mechanics.md`). O humano desligou (transporte) e classificou a pendência (disposição).
+As duas marcações são verdadeiras, e cada uma responde uma pergunta diferente.
+
+**O que existia de verdade era outra coisa: um valor com DOIS escritores.** Medido em 30 dias:
+
+| escritor | `issue_status` | `close_reason` | n |
+|---|---|---|---|
+| engine suspendendo a execução para o delegado atender | vazio | vazio | **990** |
+| wrap-up humano classificado `pendente` | `pendente` | `agent_hangup` | **2** |
+
+E os dois campos vão no **mesmo write** (`mapping = {"outcome": …, "issue_status": <cru>}`), então
+`issue_status` vazio é **assinatura do engine por construção** — não é correlação que possa
+envelhecer.
+
+**Quem sofria com isso era a cadeia da ORQ-14, e só ela.** O censo de leitores de
+`segments.outcome = 'suspended'` no repositório devolve **um**: a consulta de navegação, que usava
+"pai suspenso" para dizer *"o chamador delegou"*. Com os dois fatos no mesmo valor, o hook de NPS de
+um contato humano entrava na cadeia como delegação e o pool do NPS aparecia como re-roteamento.
+Conserto: `AND empty(coalesce(pai.issue_status, ''))`. **`empty(coalesce(...))`, nunca `IS NULL`** —
+o vazio é o valor plausível mais barato de produzir, e um ramo que compara com o que a fonte não
+emite fica morto sem ficar vermelho.
+
+**Efeito medido:** `demo_llm_ia / sac.especialista` sai de **1 re-roteado (8%, `proximos: nps_ia`)**
+para **0**; o total de 30 dias vai de 6 para **5** re-roteados, taxa 13,6% → **11,4%**. Nenhuma outra
+linha muda. Era o último falso positivo estrutural conhecido da métrica — o que sobra
+(`aumento_limite` 60%) é o falso positivo *previsto e legítimo*: o runner do limite escala quando a
+identificação falha.
+
+**O que NÃO se tornou dívida nova.** Não abri ficha para "desambiguar o campo na origem": o campo
+não tem outro leitor, o discriminador existe e está documentado onde o próximo leitor procura
+(`conference-mechanics.md`, ao lado do mapa que produz a ambiguidade). Criar um valor de `outcome`
+novo mexeria em ReplacingMergeTree, MV e três telas para resolver um problema que hoje tem zero
+consumidores prejudicados — seria o oposto da regra de escopo.
+
+**Nota de método, porque foi a terceira vez em dois dias.** As três correções desta métrica
+(delegação invisível · o orquestrador como próprio destino · agora os dois escritores) têm a mesma
+forma: **um valor plausível não fica vermelho sozinho**. Nenhuma apareceu em teste; todas
+apareceram quando o número foi *usado* para uma pergunta concreta. E esta acrescenta um detalhe que
+vale guardar: **a ficha que eu mesmo escrevi afirmava um defeito que não existia** — foi medir antes
+de consertar que impediu o conserto errado no lugar errado.
+
+**Testes e gate.** `test_suspenso_por_WRAP_UP_humano_nao_e_delegacao` prende a guarda no SQL
+executado (e proíbe explicitamente a forma `IS NULL`). Suíte analytics-api: **830 verdes**. Gate ao
+vivo `probe_navigation_routing_signal.sh`: **VERDE**, contraprova do ramo B em 34 × 5.
+
 ## 2026-09-22 (14) — ORQ-16: a qualidade do roteamento virou lente, e o número passou a dizer o que é
 
 **O que faltava.** O sinal da ORQ-14 existia havia um dia e só era alcançável por `curl` com token

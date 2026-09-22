@@ -538,20 +538,26 @@ Três exclusões fazem o número significar atendimento, e cada uma tem motivo p
 | a volta ao ORQUESTRADOR | é o *"tenho outro assunto"* do cliente: decisão NOVA, com evento próprio |
 | o próprio ORQUESTRADOR como "destino" | `suspend`/`resume` lhe dá um SEGUNDO segmento; tomá-lo como destino faz a navegação seguinte parecer re-roteio |
 
-⚠️ **Ruído residual DECLARADO:** o discriminador "pai suspenso" deixa passar o hook cujo pai ficou
-com `outcome='suspended'` **contra** `close_reason='agent_hangup'` — contradição medida em **2** dos
-604 segmentos humanos `primary` de 30 dias (`789315e9`, `f0427a16`, ambos com filho `nps_ia`). O
-defeito é do fechamento do segmento humano, não da métrica, e está em `TRF-02`. A alternativa
-testada — exigir que o CHAMADOR retome — removeria esses 2 e derrubaria **11 delegações legítimas**
-(`portabilidade_confirmacao` 15 retomam × 10 não; `limite_retorno` 21 × 1): troca pior.
+⚠️ **O discriminador é "pai suspenso PELO ENGINE", e a segunda metade não é detalhe** *(TRF-02,
+2026-09-22)*. `outcome='suspended'` tem **dois escritores**: o engine, ao suspender a execução para
+um delegado atender (990 segmentos em 30 dias), e o `_WRAPUP_OUTCOME_MAP` do bridge, que mapeia a
+disposição humana `pendente` para o mesmo valor (2 segmentos). Ler só o `outcome` cobrava o hook de
+NPS de um contato humano como re-roteamento — era o "ruído residual" que esta seção declarou por
+algumas horas, e que **não era do fechamento do segmento: era desta consulta**. O separador é
+`empty(coalesce(pai.issue_status, ''))`, e vale por construção — os dois campos vão no mesmo write,
+então campo vazio é assinatura do engine, não correlação.
+
+*Alternativa testada e recusada:* exigir que o CHAMADOR retome removeria os mesmos 2 casos e
+derrubaria **11 delegações legítimas** (`portabilidade_confirmacao` 15 retomam × 10 não;
+`limite_retorno` 21 × 1) — troca pior, e pelo motivo errado.
 
 `sem_destino` (o cliente saiu antes de ser atendido) sai da BASE da taxa — somá-lo faria a folha
 abandonada parecer a melhor. `sem_cadeia` é defeito de dado e tem contador para não sumir calado.
 Sem ninguém atendido, a taxa é `null` (**não medida**), nunca `0.0`.
 
 **`proximos` é o campo acionável:** um destino que termina sempre no mesmo outro pool é uma folha
-que falta na árvore. Medição (30 dias, 44 contatos, **14%** de re-roteio):
-`demo_ia / sac.info_plano` 7% · `demo_llm_ia / sac.especialista` 8% (o ruído do `nps_ia` acima) ·
+que falta na árvore. Medição (30 dias, 44 contatos, **11%** de re-roteio):
+`demo_ia / sac.info_plano` 7% · `demo_llm_ia / sac.especialista` **0%** (era 8% antes da TRF-02) ·
 `demo_llm_ia / aumento_limite` **60%** → `sac_ia`, `retencao_humano`. O último não é erro de
 roteamento: é o runner do limite escalando quando a identificação falha — o falso positivo
 previsto, aparecendo aqui com o caminho que o explica.
