@@ -84,7 +84,7 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
 
   if (error) {
     return (
-      <div className="flex items-center gap-1.5 p-2 text-red-600 text-xs">
+      <div className="flex items-center gap-1.5 p-2 text-red text-xs">
         <EyeOff size={14} />
         {t("supervisor.error")}
       </div>
@@ -114,7 +114,7 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
         <div className="flex items-center gap-1.5 px-2 pt-2">
           <span
             className={`w-1.5 h-1.5 rounded-full ${
-              room ? "bg-green-400 animate-pulse" : "bg-gray-300"
+              room ? "bg-green animate-pulse" : "bg-border-strong"
             }`}
           />
           <span className="text-xs text-muted font-medium">
@@ -132,7 +132,7 @@ export const WebRTCSupervisorView: React.FC<WebRTCSupervisorViewProps> = ({
       {audio}
       <span
         className={`w-2 h-2 rounded-full flex-shrink-0 ${
-          room ? "bg-green-400 animate-pulse" : "bg-gray-400"
+          room ? "bg-green animate-pulse" : "bg-muted-light"
         }`}
       />
       <span className="text-xs text-muted">

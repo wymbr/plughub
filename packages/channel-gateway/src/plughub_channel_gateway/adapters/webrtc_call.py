@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -42,6 +43,13 @@ logger = logging.getLogger("plughub.channel-gateway.webrtc.call")
 
 CALL_CHANNELS = frozenset({"webchat"})     # contatos que podem ganhar chamada
 NO_BOT_LEG_REASON = "chamada de contato de chat: sem transcricao nem voz de IA (WCH-02)"
+
+
+def _stream_id(raw: object) -> tuple[int, int]:
+    """`"ms-seq"` → `(ms, seq)` para comparar. Ilegível vira `(-1, -1)`: nunca é "depois" de nada."""
+    s = raw.decode() if isinstance(raw, bytes) else str(raw)
+    ms, _, seq = s.partition("-")
+    return (int(ms), int(seq)) if ms.isdigit() and seq.isdigit() else (-1, -1)
 
 
 class CallRefused(Exception):
@@ -196,6 +204,60 @@ class CallAttachMixin:
 
     # ── Política do pool, lida só quando há chamada ──────────────────────────
 
+    # ── WCH-07: o atendente desliga a CHAMADA, não o contato ──────────────────
+
+    CALL_END_REQUESTED = "media.call.end_requested"
+
+    async def last_call_state(self, session_id: str) -> str:
+        """Estado do último `media.call` do stream (`started`/`ended`), ou "" se nunca houve.
+
+        Lê de trás para frente, em páginas: o stream é o registro durável do trecho, e é o
+        mesmo fato que o Console e a supervisão leem — nenhuma segunda casa para "há chamada"."""
+        key, end = f"session:{session_id}:stream", "+"
+        for _ in range(20):                                 # teto: 4 000 entradas
+            page = await self._redis.xrevrange(key, max=end, min="-", count=200)
+            if not page:
+                return ""
+            for entry_id, fields in page:
+                if fields.get("type") == "media.call":
+                    return fields.get("state") or str(self._json_field(fields, "payload").get("state") or "")
+            last = page[-1][0]
+            ms, _, seq = str(last).partition("-")
+            if not ms.isdigit() or not seq.isdigit():
+                return ""
+            end = f"({ms}-{seq}"                           # exclusivo: a página seguinte
+        logger.warning("webrtc chamada: media.call nao achado nas ultimas 4000 entradas (session=%s)",
+                       session_id)
+        return ""
+
+    async def request_agent_hangup(self, session_id: str, instance_id: str) -> None:
+        """Grava no stream o pedido de desligar. Quem encerra é o observador da chamada — na
+        instância que segura o WS do cliente, qualquer que seja —, e o autor fica registrado."""
+        now = datetime.now(timezone.utc).isoformat()
+        await self._redis.xadd(f"session:{session_id}:stream", {
+            "type": self.CALL_END_REQUESTED, "event_id": str(uuid.uuid4()),
+            "session_id": session_id, "timestamp": now, "visibility": "agents_only",
+            "author_id": instance_id, "author_role": "agent",
+            "author": json.dumps({"type": "agent_human", "id": instance_id}),
+            "payload": json.dumps({"requested_by": instance_id}),
+        })
+        logger.info("webrtc chamada: desligar pedido por %s (session=%s)", instance_id, session_id)
+
+    async def _stream_tail_id(self, stream_key: str) -> str:
+        """Última entrada do stream AGORA. Pedido de desligar só vale depois dela: o observador
+        relê o stream desde o início, e o pedido de uma chamada anterior do mesmo contato
+        encerraria a chamada nova na hora."""
+        try:
+            last = await self._redis.xrevrange(stream_key, max="+", min="-", count=1)
+            if isinstance(last, list) and last and isinstance(last[0][0], (str, bytes)):
+                return last[0][0].decode() if isinstance(last[0][0], bytes) else last[0][0]
+            if isinstance(last, list) and not last:
+                return "0-0"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc chamada: fim do stream ilegivel (%s) — pedidos de desligar valem "
+                           "a partir de agora pelo relogio", exc)
+        return f"{int(time.time() * 1000)}-0"
+
     async def _attached_pool_field(self, session_id: str, fields: dict) -> dict:
         """Completa o campo `pool` do `routing.assigned` de um contato de chat com a política do
         pool, lida FRESCA do registry. Registry fora ou pool ilegível → `registry_unavailable`,
@@ -237,6 +299,7 @@ class CallAttachMixin:
         procedências. Depois da sala, entradas e saídas seguem pelos mesmos handlers do canal."""
         from .webrtc import _STREAM_BLOCK_MS, _STREAM_WATCHER_SLEEP
         stream_key = f"session:{session_id}:stream"
+        hangup_after = _stream_id(await self._stream_tail_id(stream_key))
         last_id = "0-0"
         ready = False
         pending_sent: list[str] | None = None
@@ -259,6 +322,10 @@ class CallAttachMixin:
                     if kind in ("session_closed", "session.closed"):
                         self._call_end_reason[session_id] = "contact_closed"
                         await self._ws_send(ws, {"type": "webrtc.call_ended", "reason": "contact_closed"})
+                        return
+                    if kind == self.CALL_END_REQUESTED and _stream_id(entry_id) > hangup_after:
+                        self._call_end_reason[session_id] = "agent_hangup"
+                        await self._ws_send(ws, {"type": "webrtc.call_ended", "reason": "agent_hangup"})
                         return
                     if kind == "routing.assigned":
                         fields = await self._attached_pool_field(session_id, fields)

@@ -71,16 +71,16 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   const pipSize    = compact ? "w-20 h-16" : "w-28 h-20";
 
   return (
-    <div className="relative flex bg-gray-950 rounded-lg overflow-hidden select-none">
+    <div className="relative flex bg-dark rounded-lg overflow-hidden select-none">
       {/* Main remote video */}
-      <div className={`flex-1 ${mainHeight} flex items-center justify-center bg-gray-900`}>
+      <div className={`flex-1 ${mainHeight} flex items-center justify-center bg-black/20`}>
         {remoteVideoTrack ? (
           <TrackVideo
             track={remoteVideoTrack}
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="flex flex-col items-center gap-2 text-gray-500">
+          <div className="flex flex-col items-center gap-2 text-white/50">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="w-10 h-10"
@@ -95,7 +95,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                 d="M15 10l4.553-2.27A1 1 0 0121 8.645V15.36a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"
               />
             </svg>
-            <span className="text-xs text-gray-500">Aguardando vídeo…</span>
+            <span className="text-xs text-white/50">Aguardando vídeo…</span>
           </div>
         )}
       </div>

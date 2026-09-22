@@ -145,6 +145,11 @@ export default defineConfig({
       '^/webrtc/token/': {
         target: 'http://localhost:8010',
         changeOrigin: true
+      },
+      // WCH-07: o atendente desliga a chamada presa a um contato de chat.
+      '^/webrtc/call/': {
+        target: 'http://localhost:8010',
+        changeOrigin: true
       }
     }
   }

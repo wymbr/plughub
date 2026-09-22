@@ -5,6 +5,7 @@
     "text":  "Chat"
   },
   "overlay": {
+    "hangupFailed": "Could not hang up the call: {{reason}}",
     "connecting":  "Connecting to room…",
     "connected":   "Connected",
     "waitingRoom": "Waiting for room",
@@ -15,6 +16,7 @@
     "mediaHold":   "Audio paused: the customer is entering protected data on the phone. It resumes when they finish."
   },
   "controls": {
+    "hangupCall": "Hang up the call",
     "mute":        "Mute microphone",
     "unmute":      "Unmute microphone",
     "cameraOn":    "Turn camera on",

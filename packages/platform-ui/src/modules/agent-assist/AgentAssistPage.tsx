@@ -497,14 +497,6 @@ export const AgentAssistPage: React.FC = () => {
     [selectedSessionId, contacts, addToast, setContacts]
   );
 
-  const handleDesligar = useCallback(() => {
-    if (!selectedSessionId) return;
-    handleClose(selectedSessionId, {
-      issue_status: t("message.hungUpByAgent"),
-      outcome: "abandoned",
-    });
-  }, [selectedSessionId, handleClose, t]);
-
   const handleResume = useCallback(() => {
     setIsPaused(false);
     addToast(t("message.agentResumed"), "info");
@@ -796,7 +788,6 @@ export const AgentAssistPage: React.FC = () => {
                 contact={selected}
                 onEncerrar={() => { if (selected) handleClose(selected.sessionId, { issue_status: "closed", outcome: "resolved" }); }}
                 onTransferTo={handleTransferTo}
-                onDesligar={handleDesligar}
                 substitutionMode={substitutionMode}
                 onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
               />

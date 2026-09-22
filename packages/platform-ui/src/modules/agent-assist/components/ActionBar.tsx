@@ -227,7 +227,6 @@ export interface ActionBarProps {
   onEncerrar:               () => void;
   /** Called when operator selects a pool from the TransferCombo */
   onTransferTo?:            (poolId: string) => void;
-  onDesligar?:              () => void;
   /**
    * substitutionMode / onToggleSubstitutionMode: kept in props so the parent's
    * state and menu-card rendering still work. The toggle button lives in
@@ -246,7 +245,6 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   contact,
   onEncerrar,
   onTransferTo,
-  onDesligar,
   // substitutionMode and onToggleSubstitutionMode intentionally unused here —
   // button lives in Aba Ações (console-acoes-tab).
 }) => {
@@ -299,17 +297,10 @@ export const ActionBar: React.FC<ActionBarProps> = ({
           onTransferTo={poolId => onTransferTo?.(poolId)}
         />
 
-        {/* Desligar */}
-        <button
-          onClick={onDesligar}
-          disabled={contact.sessionClosed}
-          title={t('input.hangup')}
-          className="px-2.5 py-1 rounded text-xs font-medium border transition-colors
-            text-red-text bg-red-light border-red/30 hover:bg-red/10 hover:border-red/50
-            disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {t('input.hangup')}
-        </button>
+        {/* WCH-07: o "Hang up" que ficava aqui SAIU. Encerrava o CONTATO (como o Close), com
+            `outcome: abandoned` — desfecho do lado do cliente atribuído ao atendente —, e ao
+            lado de uma chamada de chat parecia desligar a chamada. Desligar a chamada mora na
+            sobreposição de mídia; encerrar o contato é o Close. */}
 
         {/* Iniciar Processo removed — moved to Aba Ações (console-acoes-tab) */}
       </div>

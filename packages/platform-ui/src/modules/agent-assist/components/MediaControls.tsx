@@ -23,6 +23,9 @@ interface MediaControlsProps {
   onToggleMic:  () => void;
   onToggleCam:  () => void;
   onDisconnect: () => void;
+  /** WCH-07 — chamada presa a contato de chat: o botão vermelho DESLIGA a chamada para todos */
+  onHangupCall?: () => void;
+  hangingUp?:    boolean;
 }
 
 const ControlButton: React.FC<{
@@ -39,10 +42,10 @@ const ControlButton: React.FC<{
     className={[
       "flex items-center justify-center w-10 h-10 rounded-full transition-colors",
       danger
-        ? "bg-red-600 hover:bg-red-700 text-white"
+        ? "bg-red hover:bg-red-text text-white"
         : active
           ? "bg-white/10 hover:bg-white/20 text-white"
-          : "bg-red-500/80 hover:bg-red-500 text-white",
+          : "bg-red/80 hover:bg-red text-white",
     ].join(" ")}
   >
     {children}
@@ -56,15 +59,17 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
   onToggleMic,
   onToggleCam,
   onDisconnect,
+  onHangupCall,
+  hangingUp = false,
 }) => {
   const { t } = useTranslation("webrtc");
 
   return (
     <div className="flex items-center justify-center gap-4 py-3 px-4
-                    bg-gray-900/90 backdrop-blur-sm">
+                    bg-black/30 backdrop-blur-sm">
 
       {/* Medium badge */}
-      <span className="text-xs text-gray-400 font-medium uppercase tracking-widest mr-2 select-none">
+      <span className="text-xs text-white/60 font-medium uppercase tracking-widest mr-2 select-none">
         {t(canVideo ? "medium.video" : "medium.voice")}
       </span>
 
@@ -88,11 +93,11 @@ export const MediaControls: React.FC<MediaControlsProps> = ({
         </ControlButton>
       )}
 
-      {/* Disconnect */}
+      {/* Disconnect — ou, na chamada de chat, desligar a chamada (WCH-07) */}
       <ControlButton
-        label={t("controls.disconnect")}
+        label={onHangupCall ? t("controls.hangupCall") : t("controls.disconnect")}
         danger
-        onClick={onDisconnect}
+        onClick={onHangupCall && !hangingUp ? onHangupCall : onHangupCall ? () => {} : onDisconnect}
       >
         <PhoneOff size={18} />
       </ControlButton>

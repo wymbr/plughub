@@ -65,7 +65,7 @@ const SYSTEM_TYPES_SET = new Set([
 /** Evento da plataforma, não fala de ninguém. `recording.*` (VOZ-06) caía como mensagem de autor
  *  desconhecido ("INTERNAL UNKNOWN") — é o mesmo tipo de fato que `participant_left`. */
 function isSystemEvent(type: string): boolean {
-  return SYSTEM_TYPES_SET.has(type) || type.startsWith('recording.')
+  return SYSTEM_TYPES_SET.has(type) || type.startsWith('recording.') || type.startsWith('media.call.')
 }
 
 /** WCH-02 — há chamada presa a este contato de chat AGORA? Derivado do stream (o último

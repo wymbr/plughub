@@ -295,6 +295,14 @@ RUN printf 'server {\n\
         proxy_set_header   Host $host;\n\
     }\n\
 \n\
+    # channel-gateway - o atendente desliga a chamada de chat (WCH-07).\n\
+    location ~ ^/webrtc/call/ {\n\
+        set $up_channel_call http://channel-gateway:8010;\n\
+        proxy_pass         $up_channel_call;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+    }\n\
+\n\
     # SPA fallback\n\
     location / {\n\
         try_files $uri $uri/ /index.html;\n\

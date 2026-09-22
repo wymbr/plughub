@@ -948,6 +948,46 @@ _WEBRTC_TOKEN_ROLE_GRANT: dict[str, tuple[str, str, str]] = {
 }
 
 
+async def _webrtc_media_caller(request: Request, session_id: str, role: str) -> dict:
+    """O portão de CAPACIDADE das rotas de mídia do Console, numa casa só (VOZ-01).
+
+    Bearer → 401 · papel desconhecido → 422 · sessão de outro tenant ou inexistente → 404 ·
+    sem a capacidade do papel NO POOL da sessão → 403. Devolve o payload do JWT. Serve ao token
+    de mídia e ao desligar a chamada (WCH-07): duas cópias deste portão divergiriam.
+    ⚠️ "Sou atendente deste contato" (VOZ-15) NÃO está aqui — cada rota decide o que o
+    conjunto vazio de atendentes significa para ela.
+    """
+    _tok = bearer_from_header(request.headers.get("authorization"))
+    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
+    if not _payload or not str(_payload.get("sub") or ""):
+        # Sem `sub` não há de quem ser a identidade na sala — é credencial inválida.
+        raise HTTPException(status_code=401, detail="token de midia exige credencial")
+    grant = _WEBRTC_TOKEN_ROLE_GRANT.get(role)
+    if grant is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"role desconhecido: {role!r} — esperado um de {sorted(_WEBRTC_TOKEN_ROLE_GRANT)}",
+        )
+    tenant = str(_payload.get("tenant_id") or "")
+    raw = await _webrtc_adapter._redis.get(f"session:{session_id}:meta")
+    try:
+        meta = json.loads(raw) if raw else None
+    except Exception:
+        meta = None
+    if not meta or str(meta.get("tenant_id") or "") != tenant:
+        raise HTTPException(status_code=404, detail="sessao nao encontrada para este tenant")
+    pool = str(meta.get("pool_id") or "")
+    module, field, min_access = grant
+    if not pool or not abac_can(_payload, module, field, min_access, scope_id=pool):
+        logger.warning("webrtc token NEGADO: sub=%s role=%s pool=%s — sem %s.%s",
+                       _payload.get("sub"), role, pool or "-", module, field)
+        raise HTTPException(
+            status_code=403,
+            detail=f"token de midia como {role} exige `{module}.{field}` no pool da sessao",
+        )
+    return _payload
+
+
 @app.get("/webrtc/token/{session_id}")
 async def webrtc_token(
     session_id: str,
@@ -982,34 +1022,7 @@ async def webrtc_token(
     if _webrtc_adapter.provider_unavailable is not None:
         raise HTTPException(status_code=503, detail=str(_webrtc_adapter.provider_unavailable))
 
-    _tok = bearer_from_header(request.headers.get("authorization"))
-    _payload = verify_user_jwt(_tok, get_settings().auth_jwt_secret) if _tok else None
-    if not _payload or not str(_payload.get("sub") or ""):
-        # Sem `sub` não há de quem ser a identidade na sala — é credencial inválida.
-        raise HTTPException(status_code=401, detail="token de midia exige credencial")
-    grant = _WEBRTC_TOKEN_ROLE_GRANT.get(role)
-    if grant is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"role desconhecido: {role!r} — esperado um de {sorted(_WEBRTC_TOKEN_ROLE_GRANT)}",
-        )
-    tenant = str(_payload.get("tenant_id") or "")
-    raw = await _webrtc_adapter._redis.get(f"session:{session_id}:meta")
-    try:
-        meta = json.loads(raw) if raw else None
-    except Exception:
-        meta = None
-    if not meta or str(meta.get("tenant_id") or "") != tenant:
-        raise HTTPException(status_code=404, detail="sessao nao encontrada para este tenant")
-    pool = str(meta.get("pool_id") or "")
-    module, field, min_access = grant
-    if not pool or not abac_can(_payload, module, field, min_access, scope_id=pool):
-        logger.warning("webrtc token NEGADO: sub=%s role=%s pool=%s — sem %s.%s",
-                       _payload.get("sub"), role, pool or "-", module, field)
-        raise HTTPException(
-            status_code=403,
-            detail=f"token de midia como {role} exige `{module}.{field}` no pool da sessao",
-        )
+    _payload = await _webrtc_media_caller(request, session_id, role)
 
     # ── VOZ-15: capacidade no pool NÃO é "sou eu quem atende este contato" ────
     #
@@ -1085,6 +1098,44 @@ async def webrtc_token(
 
 
 # ── Eventos do SFU (VOZ-02) ───────────────────────────────────────────────────
+
+
+@app.post("/webrtc/call/{session_id}/end", status_code=202)
+async def webrtc_call_end(session_id: str, request: Request) -> dict:
+    """WCH-07 — o ATENDENTE desliga a chamada presa a um contato de chat. O contato segue.
+
+    Mesmo portão do token de mídia como `agent` (`_webrtc_media_caller`) e, como lá, só quem
+    ATENDE o contato (VOZ-15). A rota não encerra nada sozinha: grava o pedido no stream, com
+    o autor, e o observador da chamada — na instância que segura o WS do cliente — a encerra
+    com `agent_hangup`, pelo mesmo caminho do desligar do cliente.
+
+      * contato que não é `webchat` → 409 `not_a_chat_call` (no canal `webrtc` a chamada É o
+        contato, e encerrá-lo é o Close);
+      * sem chamada em curso (último `media.call` ≠ `started`) → 409 `no_active_call`.
+    """
+    if _webrtc_adapter is None:
+        raise HTTPException(status_code=503, detail="WebRTC adapter not initialised")
+    payload = await _webrtc_media_caller(request, session_id, "agent")
+    raw = await _webrtc_adapter._redis.get(f"session:{session_id}:meta")
+    meta = json.loads(raw) if raw else {}
+    if str(meta.get("channel") or "") != "webchat":
+        raise HTTPException(status_code=409, detail={
+            "code": "not_a_chat_call",
+            "message": "so a chamada presa a um contato de chat se desliga aqui; no canal webrtc, encerre o contato",
+        })
+    if await _webrtc_adapter.last_call_state(session_id) != "started":
+        raise HTTPException(status_code=409, detail={
+            "code": "no_active_call", "message": "nao ha chamada em curso neste contato",
+        })
+    minha = f"human-{payload.get('sub')}"
+    atendentes = await _webrtc_adapter.attendant_ids(session_id)
+    if minha not in atendentes:
+        logger.warning("webrtc desligar NEGADO: %s nao atende a sessao %s (atendentes: %s)",
+                       minha, session_id, ",".join(sorted(atendentes)) or "-")
+        raise HTTPException(status_code=403,
+                            detail="desligar a chamada exige ATENDER este contato, nao so o pool dele")
+    await _webrtc_adapter.request_agent_hangup(session_id, minha)
+    return {"requested": True, "session_id": session_id}
 
 @app.post("/v1/livekit/webhook")
 async def livekit_webhook(request: Request) -> JSONResponse:

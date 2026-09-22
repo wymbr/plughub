@@ -5,6 +5,7 @@
     "text":  "Chat"
   },
   "overlay": {
+    "hangupFailed": "Não foi possível desligar a chamada: {{reason}}",
     "connecting":  "Conectando à sala…",
     "connected":   "Conectado",
     "waitingRoom": "Aguardando sala",
@@ -15,6 +16,7 @@
     "mediaHold":   "Áudio pausado: o cliente está digitando um dado protegido no telefone. Volta quando ele terminar."
   },
   "controls": {
+    "hangupCall": "Desligar a chamada",
     "mute":        "Silenciar microfone",
     "unmute":      "Reativar microfone",
     "cameraOn":    "Ligar câmera",

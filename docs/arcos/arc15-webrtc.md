@@ -1009,6 +1009,12 @@ chamada remonta a visão (`key` pela entrada). A nota de `/supervisor/message` �
 (`lib/console-history.ts`): `call_active` do último `media.call` e as notas do supervisor, intercaladas
 pela hora. O Console aplica no `fetchHistory`; F5 no meio da chamada remonta a sobreposição.
 
+**O atendente desliga a chamada (WCH-07, 2026-09-22).** `POST /webrtc/call/{sid}/end` — mesmo
+portão do token de mídia (`_webrtc_media_caller`), só quem ATENDE, só contato `webchat` com chamada
+em curso. Grava `media.call.end_requested` no stream, com o autor; o observador da chamada a encerra
+com `agent_hangup` se o pedido for posterior à anexação (o replay desde o início não pode derrubar
+uma chamada nova com o pedido da anterior). No Console, é o botão vermelho da sobreposição.
+
 **Fora da fatia (`WCH-02`):** IA não fala nem ouve; a chamada não é transcrita; regra para
 atendente sem áudio além da espera dita; o trecho de chamada nos relatórios.
 

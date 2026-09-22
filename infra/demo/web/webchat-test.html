@@ -176,6 +176,15 @@
   // esta sessão. O texto continua por aqui; a queda da chamada não encerra o chat.
   const CALL_URL   = 'ws://localhost:8010/ws/call';
   let chatToken = null, callWs = null, callRoom = null, callTracks = [];
+  // WCH-07: a chamada que acabou é DITA uma vez, qualquer que seja o caminho do fim. Quando o
+  // próprio cliente desligava, o servidor fechava a conexão sem `webrtc.call_ended` e o widget
+  // se desfazia calado — a última linha seguia dizendo "Em chamada".
+  let callOpen = false, callEndSaid = false;
+  function sayCallEnded(text) {
+    if (!callOpen || callEndSaid) return;
+    callEndSaid = true;
+    addMsg(text, 'sys');
+  }
   const JWT_SECRET = 'changeme_32chars_webchat_secret!';
   const TENANT_ID  = 'tenant_demo';
 
@@ -256,6 +265,7 @@
     if (callWs) { hangupCall(); return; }
     if (!sessionId || !chatToken) return;
     setCallBtn(true);
+    callOpen = true; callEndSaid = false;
     callWs = new WebSocket(CALL_URL);
     callWs.onmessage = async (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
@@ -272,9 +282,9 @@
       } else if (m.type === 'webrtc.message') {
         addMsg(m.text || '', 'sys');                // aviso de gravação e afins
       } else if (m.type === 'webrtc.call_ended') {
-        addMsg('📞 Chamada encerrada (' + (m.reason || '') + ')', 'sys');
+        sayCallEnded('📞 Chamada encerrada (' + (m.reason || '') + ')');
       } else if (m.type === 'conn.error') {
-        addMsg('📞 Chamada recusada: ' + (m.message || m.code), 'sys');
+        sayCallEnded('📞 Chamada recusada: ' + (m.message || m.code));
       } else if (m.type === 'conn.ping') {
         callWs.send(JSON.stringify({ type: 'conn.pong' }));
       }
@@ -309,6 +319,7 @@
 
   function hangupCall() {
     try { callWs && callWs.send(JSON.stringify({ type: 'webrtc.hangup' })); } catch {}
+    sayCallEnded('📞 Você desligou a chamada');
     endCallLocal();
   }
 
@@ -318,6 +329,8 @@
     if (callRoom) { try { callRoom.disconnect(); } catch {} callRoom = null; }
     const v = document.getElementById('call-video'); v.style.display = 'none';
     if (callWs) { const w = callWs; callWs = null; try { w.close(); } catch {} }
+    sayCallEnded('📞 Chamada encerrada');      // queda ou recusa sem motivo dito
+    callOpen = false;
     setCallBtn(false);
   }
 

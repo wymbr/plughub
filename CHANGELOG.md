@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (2) — WCH-07: o Console desliga a chamada, os controles aparecem, e o "Hang up" sai
+
+**O que foi medido.** Três defeitos com a mesma cara — *"o Console não desliga a chamada"*:
+- **Os controles existiam e eram INVISÍVEIS.** O `tailwind.config.ts` redefine `gray`, `red` e
+  `green` como cores únicas, então `bg-gray-950`, `bg-red-600`, `bg-green-400` e toda classe
+  numerada dessas três famílias não geram CSS. A sobreposição de mídia ficava sem fundo (a tela
+  branca das capturas da WCH-06) e microfone, câmera e desligar eram ícones brancos sobre branco.
+- **O único "desligar" do Console encerrava o CONTATO.** O "Hang up" da barra chamava o mesmo
+  `handleClose` do Close, com `outcome: abandoned` — desfecho do lado do cliente atribuído ao
+  atendente — e, ao lado de uma chamada de chat, parecia desligar a chamada. O botão vermelho da
+  sobreposição só desconectava o atendente localmente.
+- **O widget se calava quando o próprio cliente desligava.** O servidor fecha a conexão da chamada
+  sem `webrtc.call_ended` nesse caminho, e o widget se desfazia sem dizer nada: a última linha
+  seguia *"Em chamada (audio)"*. Foi isso que, na WCH-06, pareceu uma chamada que não desligou.
+
+**O que mudou.**
+- **channel-gateway** — `POST /webrtc/call/{sid}/end`: o ATENDENTE desliga a chamada presa a um
+  contato de chat; o contato segue. O portão de capacidade das rotas de mídia virou UMA função
+  (`_webrtc_media_caller`), usada pelo token e pelo desligar — duas cópias divergiriam —, e o
+  desligar exige ATENDER o contato (VOZ-15). Recusa com 409 `not_a_chat_call` (no canal `webrtc` a
+  chamada É o contato: encerrá-lo é o Close) e `no_active_call` (`last_call_state`, último
+  `media.call` do stream). A rota não encerra nada: grava `media.call.end_requested` no stream, com o
+  autor, e o observador da chamada — na instância que segura o WS do cliente — a encerra com
+  `agent_hangup`, pelo caminho do desligar do cliente. O observador relê o stream desde o início,
+  então o pedido só vale se POSTERIOR à última entrada no momento da anexação; o de uma chamada
+  anterior do mesmo contato encerraria a nova na hora.
+- **platform-ui** — as classes quebradas dos quatro componentes de mídia (sobreposição, controles,
+  grade de vídeo, visão do supervisor) trocadas por tokens do tema; o botão vermelho da sobreposição,
+  numa chamada de chat, é "Desligar a chamada" (recusa dita, com o código); o "Hang up" da barra
+  saiu — encerrar o contato é o Close. Rota nova liberada no `vite.config.ts` e no nginx do
+  `Dockerfile`. Na supervisão, `media.call.*` é evento, não fala.
+- **widget de demo** — o fim da chamada é DITO uma vez, qualquer que seja o caminho (*"Você desligou
+  a chamada"*, *"Chamada encerrada (motivo)"*, *"Chamada recusada"*).
+
+**Medido.** channel-gateway 1 411 (11 novos em `test_webrtc_call_hangup.py`: a rota — quem atende
+pede e o pedido vai ao stream com o autor, mesmo grant sem atender 403, sem credencial 401, canal
+`webrtc` 409, sem chamada 409 —; o observador honra o pedido posterior ao início e ignora o de
+chamada ANTERIOR; `last_call_state` atravessa páginas). Typecheck limpo; i18n sem chave duplicada.
+Pela borda 5174: sem credencial 401, sessão inexistente 404. Validado pelo dono no browser: controles
+visíveis, "Desligar a chamada" encerra do lado do cliente com `agent_hangup` e o chat segue, a
+chamada seguinte no mesmo contato não cai, e o widget diz *"Você desligou a chamada"*. O **mute** foi
+medido no SFU, porque o log não o registra e o microfone compartilhado vazava: com a chamada aberta,
+a trilha do atendente `MUTED` e a do cliente `ativo` na mesma sala.
+
+**Deixou ficha.** `PUI-03`: outros 14 componentes usam classes numeradas de `gray`/`red`/`green` que
+não geram CSS.
+
 ## 2026-09-22 (1) — WCH-06: o Console recarregado reencontra a chamada e as notas do supervisor
 
 **O que faltava.** Item (2) da `WCH-02`. O Console recarregado refaz o contato pelo
