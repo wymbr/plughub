@@ -469,3 +469,17 @@ inteiro.
   destruiria justamente o sinal.
 - **Época.** Menu muda muito mais que formulário de classificação, então a D13/D14 do ADR da árvore
   (época por forma) importa **mais** aqui do que no wrap-up. Já está pronta; só precisa ser exercida.
+
+## Estado em 2026-09-22 — a folha de limite, e o que o LLM enxerga
+
+O primeiro teste por VOZ do orquestrador com LLM (WCH-09) mediu um pedido de *aumento de limite*
+aterrissando em `sac.especialista`. Não era erro do LLM: a árvore não tinha folha de limite (e o
+`limite_ia` não estava no `navigation_pools`). A folha `aumento_limite` entrou na v5 da
+`dialog_navegacao_atendimento_v1`, raiz, apontando `limite_ia` com verbo `escalate` (o runner do
+limite retoma a pendência PRÓPRIA, não o chamador — `nao_retorna`) — ORQ-11.
+
+O achado que sobra é de desenho: `leaves` leva ao prompt só o CAMINHO das folhas, sem rótulo nem
+descrição, e o LLM classifica pelo texto do código. As três fichas abertas — `ORQ-12` (descrição e
+exemplos na folha, como SIGNIFICADO, nunca roteamento), `ORQ-13` (uma pergunta de esclarecimento
+antes do escape) e `ORQ-14` (medir o roteamento errado) — respeitam D2, D5 e D6 como estão.
+

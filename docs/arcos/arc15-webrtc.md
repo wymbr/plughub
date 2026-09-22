@@ -619,6 +619,13 @@ webrtc_stt_enabled:         bool = True
 > `await` — a primeira fala da IA chega junto da atribuição. Só a frase final sai do gateway;
 > áudio para o STT vem do assinante, não do egress (medido: `TODO.md` § *VOZ-05 — áudio para o
 > STT*). Ver `CHANGELOG.md` 2026-09-16 (2).
+>
+> **A trilha da voz nasce na PRIMEIRA fala, e a primeira fala espera ela ser assinada** (2026-09-22,
+> ORQ-11). A negociação do transporte do publicador leva ~2 s (medido no SFU: `mediaTrack published`
+> 2 s depois de o cliente entrar), e o que se capturava antes ia a lugar nenhum — o prompt curto do
+> menu sumia inteiro, em toda chamada, sem erro. `publish_audio` espera `wait_for_subscription()` da
+> publicação (teto `_FIRST_SUBSCRIPTION_S` = 3 s; estourou, fala e loga WARNING). Só a primeira fala
+> espera; o log diz `trilha da voz assinada em X s`.
 
 > **Transcrição da chamada — a conversa falada é MENSAGEM do falante (fatia 4, parte 2).** O
 > ouvinte assina uma trilha por falante: o cliente (`customer-…`) e cada atendente humano

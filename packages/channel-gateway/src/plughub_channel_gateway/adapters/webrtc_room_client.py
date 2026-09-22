@@ -40,6 +40,10 @@ AGENT_IDENTITY_PREFIX = "agent-"
 # só chegou por outro caminho —, e por isso as perguntas "é o cliente?" usam os DOIS prefixos.
 SIP_IDENTITY_PREFIX = "sip_"
 CUSTOMER_PREFIXES = (CUSTOMER_IDENTITY_PREFIX, SIP_IDENTITY_PREFIX)
+
+# Teto da espera pela primeira assinatura da trilha da voz (ver `publish_audio`). A negociação
+# medida levou ~2 s; 3 s cobre a folga sem prender a fala se ninguém assinar nunca.
+_FIRST_SUBSCRIPTION_S = 3.0
 # Quem o OUVINTE transcreve (VOZ-05 fatia 4): o cliente e os atendentes humanos — cada um no seu
 # canal. Fica de fora a VOZ do agente de IA (`voz-…`: o texto já é a mensagem) e o supervisor
 # (`supervisor-…`: escuta, não participa da conversa com o cliente).
@@ -375,10 +379,27 @@ class LiveKitRoomClient:
             options = rtc.TrackPublishOptions(
                 source = rtc.TrackSource.SOURCE_MICROPHONE,
             )
-            await self._room.local_participant.publish_track(
+            publicacao = await self._room.local_participant.publish_track(
                 self._audio_track, options
             )
             logger.debug("webrtc room_client: TTS LocalAudioTrack published")
+            # WCH-09 (2026-09-22): a trilha nasce na PRIMEIRA fala, e só fica alcançável quando o
+            # transporte do publicador negocia — medido ~2 s depois (`mediaTrack published` no SFU
+            # às 16:12:07.241, com a fala saindo desde 16:12:05). O que se capturava antes ia a
+            # lugar nenhum: o prompt curto do menu, que é a PRIMEIRA fala, sumia inteiro, e nada
+            # ficava vermelho. Espera-se a primeira assinatura, com teto; estourou, fala assim
+            # mesmo e diz — melhor meia frase dita do que uma fala presa esperando para sempre.
+            espera = getattr(publicacao, "wait_for_subscription", None)
+            if espera is not None:
+                inicio = asyncio.get_running_loop().time()
+                try:
+                    await asyncio.wait_for(espera(), timeout=_FIRST_SUBSCRIPTION_S)
+                    logger.info("webrtc room_client: trilha da voz assinada em %.1f s — primeira fala liberada",
+                                asyncio.get_running_loop().time() - inicio)
+                except asyncio.TimeoutError:
+                    logger.warning("webrtc room_client: ninguem assinou a trilha da voz em %.0f s — a "
+                                   "primeira fala sai assim mesmo e pode perder o inicio",
+                                   _FIRST_SUBSCRIPTION_S)
 
         # Quadros de 20 ms, não a fala num quadro só (VOZ-05 fatia 3): o SFU entregava o quadro
         # único, mas assim não havia ONDE parar — o barge-in precisa de uma fronteira a cada

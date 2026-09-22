@@ -1,5 +1,35 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (7) — ORQ-11: a árvore de navegação tem folha de limite, e a primeira fala da voz não se perde
+
+**O que foi medido.** No teste por voz da WCH-09 o dono pediu aumento de limite e foi parar no
+humano. A árvore `dialog_navegacao_atendimento_v1` (v4) não tinha folha de limite, e o `limite_ia`
+não estava no `navigation_pools` de nenhum orquestrador — nem o de botões chegaria lá. O LLM escolheu
+`sac.especialista`, e o motivo de escolher ESSA é o segundo achado: ele recebe só os caminhos crus
+das folhas, sem rótulo (ORQ-12).
+
+**O que mudou.**
+- **conteúdo** — folha `aumento_limite` ("💳 Aumento de limite do cartão") na raiz, publicada como v5
+  pela API do dialog-api; `aumento_limite → limite_ia` no `navigation_pools` de `demo_ia` e
+  `demo_llm_ia` (registry vivo). Verbo `escalate`: o runner do limite não devolve o controle
+  (`probe_orchestrator_delegability.sh` e `probe_orchestrator_delegate_verb.sh` o confirmam). Na raiz
+  e não numa pasta "Cartão" de um filho só, que custaria um clique no menu; id é imutável (D6).
+- **sementes** — `infra/dialog/…json` e `tenant_demo.yaml` iguais ao vivo (inclui
+  `pos_atendimento.especialista`, que estava só no banco), para a instalação limpa reproduzir.
+- **channel-gateway: a primeira fala** — segundo teste: roteou certo, mas o prompt do menu não foi
+  ouvido. O SFU mostrou a causa: a trilha da voz, criada na PRIMEIRA fala, só ficou alcançável ~2 s
+  depois de o cliente entrar (`mediaTrack published` às 16:12:07.241, fala saindo desde 16:12:05) — o
+  prompt de ~2 s ia inteiro para lugar nenhum. No teste anterior a corrida caiu do outro lado. Agora
+  `publish_audio` espera a primeira assinatura da publicação (teto 3 s, WARNING se estourar). Vale
+  para o canal `webrtc` também: toda chamada perdia o começo da primeira fala.
+
+**Medido.** Terceiro teste do dono: menu ouvido, `trilha da voz assinada em 0.1 s — primeira fala
+liberada`, `value por voice`, destino `limite_ia`. channel-gateway 1 443 (3 novos). Gate
+`probe_orchestrator_tree_nav.sh` VERDE.
+
+Deixou fichas: `ORQ-12` (descrição e exemplos na folha; o LLM hoje vê códigos) · `ORQ-13` (uma
+pergunta de esclarecimento antes do escape) · `ORQ-14` (medir o roteamento errado).
+
 ## 2026-09-22 (6) — WCH-09: a IA fala e ouve na chamada do contato de chat
 
 **O que faltava.** A WCH-01 recusava o bot leg na chamada de chat por construção

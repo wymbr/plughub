@@ -92,6 +92,12 @@
           "on_return": "pos_atendimento"
         },
         {
+          "id": "aumento_limite",
+          "label": {
+            "pt-BR": "💳 Aumento de limite do cartão"
+          }
+        },
+        {
           "id": "nao_se_aplica",
           "label": {
             "pt-BR": "❓ Nenhuma dessas — falar com atendente"

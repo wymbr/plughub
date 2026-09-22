@@ -190,7 +190,11 @@ pools:
       reembolso:         reembolso_ia
       auth_form:         auth_form_ia
       auth_sac:          auth_sac_ia
+      # ORQ (2026-09-22): a folha de limite. `limite_ia` NÃO devolve o controle ao
+      # chamador (o runner retoma a pendência PRÓPRIA), então o verbo é `escalate`.
+      aumento_limite:    limite_ia
       nao_se_aplica:     retencao_humano
+      pos_atendimento.especialista: retencao_humano
 
   # ── O gêmeo com LLM (F5/ORQ-05) ────────────────────────────────────
   #
@@ -216,7 +220,9 @@ pools:
       reembolso:         reembolso_ia
       auth_form:         auth_form_ia
       auth_sac:          auth_sac_ia
+      aumento_limite:    limite_ia
       nao_se_aplica:     retencao_humano
+      pos_atendimento.especialista: retencao_humano
 
   - pool_id: sac_ia
     agent_kind: ai

@@ -255,3 +255,59 @@ class TestPoolSemPolitica(_Setup):
     def test_controle_canal_webrtc_warning(self, caplog):
         (r,) = self._log(caplog)
         assert r.levelname == "WARNING"
+
+
+class TestPrimeiraFala:
+    """A trilha da voz nasce na primeira fala e só é alcançável depois de negociada (~2 s medido):
+    nada é capturado antes da primeira assinatura; sem assinatura no teto, fala assim mesmo e diz."""
+
+    def _cliente(self, monkeypatch, assinada: bool):
+        import asyncio
+        from livekit import rtc
+        from ..adapters import webrtc_room_client as rc
+        ordem: list[str] = []
+
+        class _Pub:
+            async def wait_for_subscription(self):
+                if not assinada:
+                    await asyncio.sleep(3600)
+                ordem.append("assinada")
+
+        class _Fonte:
+            def __init__(self, **k): pass
+            async def capture_frame(self, frame): ordem.append("quadro")
+
+        lp = MagicMock()
+        lp.publish_track = AsyncMock(return_value=_Pub())
+        monkeypatch.setattr(rtc, "AudioSource", _Fonte)
+        monkeypatch.setattr(rtc.LocalAudioTrack, "create_audio_track", staticmethod(lambda *a: object()))
+        monkeypatch.setattr(rtc, "TrackPublishOptions", lambda **k: None)
+        monkeypatch.setattr(rtc, "AudioFrame", lambda **k: None)
+        monkeypatch.setattr(rc, "_FIRST_SUBSCRIPTION_S", 0.05)
+        c = rc.LiveKitRoomClient()
+        c._room = MagicMock(local_participant=lp)
+        c._connected = True
+        return c, ordem
+
+    @pytest.mark.asyncio
+    async def test_nada_sai_antes_da_primeira_assinatura(self, monkeypatch):
+        c, ordem = self._cliente(monkeypatch, assinada=True)
+        await c.publish_audio(b"\x00\x01" * 960, sample_rate=24000)
+        assert ordem[0] == "assinada" and "quadro" in ordem
+
+    @pytest.mark.asyncio
+    async def test_sem_assinatura_fala_assim_mesmo_e_diz(self, monkeypatch, caplog):
+        import logging
+        c, ordem = self._cliente(monkeypatch, assinada=False)
+        with caplog.at_level(logging.WARNING):
+            await c.publish_audio(b"\x00\x01" * 960, sample_rate=24000)
+        assert "quadro" in ordem and "assinada" not in ordem
+        assert "ninguem assinou a trilha da voz" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_segunda_fala_nao_espera(self, monkeypatch):
+        c, ordem = self._cliente(monkeypatch, assinada=True)
+        await c.publish_audio(b"\x00\x01" * 960, sample_rate=24000)
+        ordem.clear()
+        await c.publish_audio(b"\x00\x01" * 960, sample_rate=24000)
+        assert "assinada" not in ordem
