@@ -131,7 +131,7 @@ from .webrtc_provider import (
 from . import media_policy
 from .webrtc_recording import CallRecorder
 from .webchat import menu_result_history_text
-from .webrtc_call import NO_BOT_LEG_REASON, CallAttachMixin
+from .webrtc_call import CallAttachMixin
 from .sip_leg import SipCall, is_sip_room, parse_sip_participant
 from .webrtc_room_client import (
     AGENT_IDENTITY_PREFIX,
@@ -365,6 +365,9 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._call_end_reason: dict[str, str] = {}
         # WCH-02 (relatórios): o início da chamada em curso, por sessão — o fim o reaproveita
         self._call_meta:       dict[str, dict] = {}
+        # WCH-02 (IA na chamada): o menu já armado na chamada, por sessão — o mesmo menu chega por
+        # dois caminhos (saída do Kafka e releitura do stream na hora de a chamada ficar pronta)
+        self._call_menu_armed: dict[str, str] = {}
 
         # VOZ-09: espelho em memória do TETO do cliente por sessão (fonte: Redis
         # `channel:webrtc:{sid}:media`). Substitui `_mediums`, que guardava UM meio para a
@@ -529,9 +532,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         com áudio é transcrita, cada falante no seu canal (VOZ-05 fatia 4; até ali só entrava
         com agente de IA, porque a fala de chamada com humano não tinha destino). Segue os
         ATENDENTES, não o teto. `publish` fica na assinatura porque é o que o gatilho antigo
-        lia (e a mutação do probe usa)."""
-        if session_id in self._attached:
-            return False            # WCH-01: chamada de contato de chat, sem bot leg nesta fatia
+        lia (e a mutação do probe usa). Vale igual para a chamada presa a contato de chat (WCH-02)."""
         return self._stt_unavailable is None and media_policy.bot_leg_needs(state["attendants"])["transcribe"]
 
     def _voice_should_run(self, state: dict) -> bool:
@@ -546,14 +547,13 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
 
     def _decide_voice(self, session_id: str, state: dict) -> bool:
         """Grava a decisão sobre a VOZ (`_voice_wanted`) e devolve se ela deve estar na sala."""
-        wanted = self._voice_should_run(state) and session_id not in self._attached
+        wanted = self._voice_should_run(state)
         if wanted:
             self._voice_wanted.add(session_id)
             self._voice_absent_why.pop(session_id, None)
         else:
             # a causa fica guardada: `_speak` roda ANTES de qualquer `await` e não pode ir ao Redis
-            self._voice_absent_why[session_id] = (NO_BOT_LEG_REASON if session_id in self._attached
-                                                  else self._voice_absent_reason(state))
+            self._voice_absent_why[session_id] = self._voice_absent_reason(state)
             if session_id in self._voice_wanted:
                 logger.info("webrtc voz: sai da chamada (session=%s) — %s",
                             session_id, self._voice_absent_why[session_id])
@@ -562,10 +562,6 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
 
     def _bot_leg_state(self, state: dict, session_id: str) -> dict:
         needs = media_policy.bot_leg_needs(state["attendants"])
-        if session_id in self._attached:
-            # WCH-01: ausência DECIDIDA, não falta de provedor — sem o ERROR de "não transcrita"
-            return {"transcribe": False, "convert": False, "available": False,
-                    "reason": NO_BOT_LEG_REASON}
         faltas = []
         if needs["transcribe"] and self._stt_unavailable:
             faltas.append(f"chamada NAO transcrita: {self._stt_unavailable}")
@@ -606,6 +602,43 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             except Exception as exc:
                 logger.warning("webrtc voz: disconnect falhou (session=%s): %s", session_id, exc)
             logger.info("webrtc voz: saiu da sala (session=%s)", session_id)
+
+    def chat_call_outbound(self, msg_type: str, payload: dict) -> None:
+        """WCH-02 — o que vai ao contato de CHAT, a chamada presa a ele FALA.
+
+        O `OutboundConsumer` entrega a saída de um contato `webchat` ao adapter do webchat, que
+        nunca conheceu a chamada. Este gancho recebe a MESMA mensagem, antes da entrega ao chat:
+        texto do agente de IA é falado (o texto segue no chat, que é o registro durável); menu tem
+        o prompt falado, ou vira coleta por fala/teclado quando o menu a declara — responder pela
+        TELA do chat continua valendo sempre. Texto digitado pelo humano não é falado (ele tem
+        voz própria), nem aviso de sistema — a mesma regra do canal `webrtc`.
+
+        ⚠️ SÍNCRONO de propósito: o consumidor abre uma task por mensagem, e a ordem entre elas só
+        é a do Kafka até a primeira suspensão (medido na fatia 3 da VOZ-05) — por isso a fala é
+        enfileirada aqui, antes de qualquer `await`. Sem chamada PRONTA (sala criada) não fala:
+        durante a espera (`webrtc.call_pending`) não há sala, e a frase ficaria presa esperando."""
+        session_id = payload.get("session_id", "")
+        if session_id not in self._attached or session_id not in self._call_started:
+            return
+        if msg_type == "message.text":
+            texto = payload.get("content", {}).get("text", "") or payload.get("text", "")
+            if texto and payload.get("author", {}).get("type") == "agent_ai":
+                self._speak(session_id, texto)
+        elif msg_type == "menu.payload":
+            menu_id = payload.get("menu_id", "")
+            if menu_id and self._call_menu_armed.get(session_id) == menu_id:
+                return              # já armado pela releitura do stream (ou vice-versa)
+            if menu_id:
+                self._call_menu_armed[session_id] = menu_id
+            masked = [f for f in (payload.get("masked_fields") or []) if isinstance(f, str)]
+            if masked and menu_id:
+                self._menu_masked.setdefault(session_id, {})[menu_id] = masked
+                self._masked_grace_until[session_id] = time.monotonic() + _MASKED_SPEECH_GRACE_S
+            plan = self._plan_collect(session_id, payload, masked)
+            if plan is not None:
+                self._start_collect(session_id, plan)
+            elif payload.get("prompt"):
+                self._speak(session_id, payload["prompt"])
 
     # ── ChannelAdapter interface — outbound delivery ──────────────────────────
 
@@ -1212,7 +1245,17 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             )
         record, aviso = media_policy.attendant_from_pool_field(framework, self._json_field(fields, "pool"))
         if aviso:
-            log = logger.error if record["policy_source"].startswith("registry_indisponivel") else logger.warning
+            fonte = record["policy_source"]
+            if fonte.startswith("registry_indisponivel"):
+                log = logger.error
+            elif fonte.startswith("pool_sem_politica:") and session_id in self._attached:
+                # WCH-09: num contato de CHAT a política é opcional (o `webrtc` a exige; o `webchat`,
+                # não) — pool sem ela é configuração legítima, e o atendente responde pela tela.
+                # WARNING aqui era alarme por escolha de config, e alarme que ensina a ignorar.
+                log = logger.info
+                aviso += " (opcional em contato de chat: responde pela tela)"
+            else:
+                log = logger.warning
             log("webrtc media: %s (instance=%s session=%s)", aviso, instance_id, session_id)
         return instance_id, record
 
@@ -1227,11 +1270,11 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         }
 
     def _ceiling(self, state: dict, session_id: str = "") -> frozenset[str]:
-        # WCH-01: numa chamada de contato de chat não há bot leg, logo o agente de IA não consome
-        # áudio — o teto vem só de quem ouve de verdade.
+        # WCH-02: a chamada presa a contato de chat tem bot leg como a de canal — o agente de IA
+        # consome áudio quando o gateway converte (STT e TTS). `session_id` fica na assinatura
+        # pelos chamadores; a regra não depende mais de qual conexão abriu a chamada.
         return media_policy.customer_ceiling(
-            state["attendants"],
-            bot_leg_audio=self._convert_available() and session_id not in self._attached)
+            state["attendants"], bot_leg_audio=self._convert_available())
 
     async def _on_routing_assigned(
         self,

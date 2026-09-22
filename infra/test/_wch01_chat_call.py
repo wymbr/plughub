@@ -2,8 +2,8 @@
 _wch01_chat_call.py — corpo do `probe_wch01_chat_call.sh` (WCH-01). Roda DENTRO do container do
 channel-gateway (usa o `websockets`, o `redis` e o segredo de webchat que ele já tem).
 
-Sem gente e sem humano logado: o contato de chat cai num pool de IA, que nesta fatia não oferece
-mídia — então o que se mede é a PORTA, a espera DITA e a independência chamada × contato. O caminho
+Sem gente e sem humano logado: o contato de chat cai num pool de IA SEM `media_policy` (conferido
+pelo `.sh` antes; desde a WCH-09, IA com política de áudio atende a chamada) — então o que se mede é a PORTA, a espera DITA e a independência chamada × contato. O caminho
 com humano e áudio foi validado pelo dono no browser (2026-09-21).
 Saída: 0 verde · 1 alguma falha · 2 não mediu.
 """
@@ -20,7 +20,7 @@ import websockets
 GW = "ws://localhost:8010"
 SECRET = os.environ["PLUGHUB_JWT_SECRET"]
 TENANT = os.environ["PLUGHUB_TENANT_ID"]
-POOL = os.environ.get("POOL", "demo_ia")
+POOL = os.environ.get("POOL", "sac_ia")
 
 
 def tok(sub, **extra):

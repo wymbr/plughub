@@ -300,6 +300,13 @@ class StreamSubscriber:
 
         content_type = content.get("type", "text")
 
+        # WCH-02 — fala transcrita de uma chamada (`audio_transcript`) é REGISTRO da sessão, não
+        # mensagem para o cliente: ele a ouviu. A do próprio cliente já sai no filtro acima; esta
+        # é a do atendente. Explícito, e não pela ausência de ramo abaixo: o tipo desconhecido é
+        # descartado em `debug`, e um ramo novo para "voz" um dia o faria aparecer no chat.
+        if content_type == "audio_transcript":
+            return None
+
         base = {
             "message_id": decoded.get("event_id", ""),
             "author": {

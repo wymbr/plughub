@@ -1031,8 +1031,29 @@ do ClickHouse quando o stream expira, recebe as chamadas como `media.call` com d
 Duração de chamada é tempo de VOZ: não se soma nem se compara com `elapsed_time_ms`.
 Medido: duas chamadas num contato — 92,9 s `agent_hangup` + 54,2 s `customer_hangup` → `2m 27s ×2`.
 
-**Fora da fatia (`WCH-02`):** IA não fala nem ouve; a chamada não é transcrita; regra para
-atendente sem áudio além da espera dita.
+**A IA na chamada de chat (WCH-09, 2026-09-22).** O bot leg entra como no canal `webrtc`: ouvinte
+quando há atendente de áudio (humano ou IA) e STT; voz quando a IA atende com `agent_publish` de
+áudio e o gateway converte. As quatro peças que o tornam possível:
+
+| peça | onde | por quê |
+|---|---|---|
+| registro da sessão (`_sessions`, canal `webchat`) | `_register_attached_session`, na sala pronta | sem ele a fala transcrita era descartada (`sessao sem registro de abertura`) |
+| a fala da IA | `chat_call_outbound`, chamado pelo `OutboundConsumer` para todo `webchat`, **síncrono** e antes da entrega ao chat | a saída de um contato de chat vai ao adapter do webchat, que nunca conheceu a chamada |
+| o menu que chegou ANTES da chamada | `_rearm_pending_menu`: o watcher guarda o último `interaction_request` ao cliente e, na sala pronta, rearma-o se `menu:waiting` ainda existe; dedupe por `menu_id` | o caso comum (o cliente lê o prompt e só então liga) deixava o menu sem fala e sem coleta — medido: cinco falas recusadas e o menu expirando |
+| o chat do cliente | `StreamSubscriber._map_message` descarta `audio_transcript`, explícito | a fala do atendente tem visibilidade `all`; o cliente a OUVIU |
+
+A fala transcrita só RESPONDE menu com `collect.input` contendo `voice` (regra da VOZ-05 fatia 5b, que
+não muda): o `skill_navegacao_llm_v1` passou a declarar `collect: {input: [voice, text]}` no `ouvir`.
+Texto digitado pelo humano e aviso de sistema não são falados. Pool sem `media_policy` num contato de
+chat é config legítima (o atendente responde pela tela) e loga INFO, não WARNING.
+
+Medido no browser do dono (sessão `492aa613`): menu rearmado na sala pronta, desfecho `value por voice`,
+o LLM classificou a frase falada (`destino.sac.especialista`), a voz saiu com a IA e o ouvinte ficou
+para o humano, cuja fala foi transcrita; especialista de formulário respondeu pela tela.
+Deixou fichas: `WCH-10` (transferência calada; voz corta a frase ao sair) · `WCH-11` (resposta falada
+duplicada e rotulada `[Seleção: …]`) · `WCH-12` (fala depende da instância do gateway).
+
+**Fora da fatia (`WCH-02`):** regra para atendente sem áudio além da espera dita.
 
 Gate: `infra/test/probe_wch01_chat_call.sh` (porta, espera dita, independência chamada × contato).
 O caminho com humano e áudio foi validado pelo dono no browser.

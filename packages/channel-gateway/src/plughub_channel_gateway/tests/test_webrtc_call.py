@@ -7,7 +7,7 @@ Proposições julgadas, cada uma com o seu controle:
   * sem atendente que ofereça mídia não há sala — e isso é dito (`webrtc.call_pending`);
   * a queda da chamada NÃO encerra o contato; o fim do contato encerra a chamada;
   * a conexão de chamada não tem caminho de texto;
-  * sem bot leg: o agente de IA não consome áudio numa chamada de chat.
+  * bot leg como no canal (WCH-02): a IA de áudio consome áudio; sem conversão, a causa real é dita.
 """
 from __future__ import annotations
 
@@ -172,7 +172,7 @@ class TestWatcher(_Setup):
 
     @pytest.mark.asyncio
     async def test_so_ia_nao_monta_sala_e_diz_por_que(self):
-        """Sem bot leg nesta fatia, a IA não consome áudio: nada a oferecer, nenhuma sala."""
+        """IA de pool que não publica áudio (`agent_publish: []`): nada a oferecer, nenhuma sala."""
         self._stream([_assigned("native", "ia1", source="not_webrtc", pool_id="fila_ia")])
         tipos = await self._run()
         assert "webrtc.ready" not in tipos and "webrtc.call_pending" in tipos
@@ -295,23 +295,33 @@ class TestReceive(_Setup):
         self.adapter._producer.send.assert_not_awaited()
 
 
-# ── Sem bot leg nesta fatia ───────────────────────────────────────────────────
+# ── Bot leg na chamada de chat (WCH-02) ───────────────────────────────────────
 
-class TestSemBotLeg(_Setup):
-    def _estado(self):
+class TestBotLegComoNoCanal(_Setup):
+    """Até a WCH-02 a chamada de chat recusava o bot leg por construção. Agora a regra é a do canal:
+    a mesma resposta para a mesma sala, qualquer que seja a conexão que a abriu."""
+
+    def _estado(self, agent_publish):
         rec = {"framework": "native", "pool_id": "p", "customer_publish": ["audio"],
-               "agent_publish": [], "policy_source": "pool:p", "recording": False}
+               "agent_publish": agent_publish, "policy_source": "pool:p", "recording": False}
         return {"attendants": {"ia1": rec}}
 
-    def test_ia_nao_consome_audio_em_chamada_de_chat(self):
+    def test_ia_de_audio_consome_audio_igual_ao_canal(self):
         self.adapter._convert_available = lambda: True
-        st = self._estado()
-        assert self.adapter._ceiling(st, "canal") == frozenset({"audio"})      # controle: canal webrtc
+        self.adapter._stt_unavailable = None
+        st = self._estado(["audio"])
+        canal = self.adapter._ceiling(st, "canal")
         self.adapter._attached.add(self.sid)
-        assert self.adapter._ceiling(st, self.sid) == frozenset()
-        assert self.adapter._bot_leg_should_run(st, frozenset({"audio"}), self.sid) is False
+        assert self.adapter._ceiling(st, self.sid) == canal == frozenset({"audio"})
+        assert self.adapter._bot_leg_should_run(st, frozenset({"audio"}), self.sid) is True
+        assert self.adapter._decide_voice(self.sid, st) is True
+
+    def test_controle_sem_conversao_a_ausencia_e_dita_pela_causa_real(self):
+        self.adapter._convert_available = lambda: False
+        self.adapter._attached.add(self.sid)
+        st = self._estado(["audio"])
         assert self.adapter._decide_voice(self.sid, st) is False
-        assert self.adapter._voice_absent_why[self.sid] == webrtc_call.NO_BOT_LEG_REASON
+        assert "WCH-02" not in self.adapter._voice_absent_why[self.sid]
 
 
 def test_rota_ligada():

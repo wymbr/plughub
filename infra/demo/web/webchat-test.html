@@ -321,6 +321,10 @@
     try { callWs && callWs.send(JSON.stringify({ type: 'webrtc.hangup' })); } catch {}
     sayCallEnded('📞 Você desligou a chamada');
     endCallLocal();
+    // o mesmo botão liga e desliga: um duplo clique desligava e ligava de novo (medido, 150 ms)
+    const b = document.getElementById('call-btn');
+    b.disabled = true;
+    setTimeout(() => { if (sessionId && chatToken) b.disabled = false; }, 1500);
   }
 
   function endCallLocal() {

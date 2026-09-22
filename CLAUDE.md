@@ -1055,7 +1055,9 @@ enquanto há chamada. O caminho de mensagens é UM só (o do webchat); o que é 
 ele. Desde a WCH-01 o cliente do chat liga por uma segunda conexão SÓ de chamada (`/ws/call`), presa à
 sessão: a sala nasce dos atendentes de AGORA com a política do pool (opcional em `webchat`), e cair
 encerra a chamada, **nunca o contato**. O `webrtc` avulso segue com o caminho de texto próprio até a
-`WCH-04`. Gate: `probe_wch01_chat_call.sh`.
+`WCH-04`. Desde a WCH-09 a chamada tem bot leg como a do canal: a IA de áudio fala o que escreve no
+chat e ouve por voz o menu que declara `collect` com `voice`; a fala transcrita é registro da sessão e
+nunca aparece no chat do cliente. Gate: `probe_wch01_chat_call.sh`.
 
 → See [`docs/adr/adr-webchat-channel.md`](docs/adr/adr-webchat-channel.md)
 

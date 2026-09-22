@@ -16,8 +16,10 @@ Diferenças para a conexão `webrtc` de canal (`WebRTCAdapter.handle_ws`), todas
   * **a política do pool é lida AQUI, e só quando há chamada** — o bridge não a lê para `webchat`
     (`media_policy_source=not_webrtc`) porque seria uma chamada HTTP por ativação de todo chat,
     quase todas sem chamada nenhuma (custo e escala decidiram o ADR);
-  * **sem bot leg nesta fatia** — nem transcrição nem voz de IA. Numa chamada de chat, a IA segue
-    falando por texto; a conversão fica para a WCH-02, e o motivo vai ao estado de mídia.
+  * **bot leg como no canal** (WCH-02, 2026-09-22) — ouvinte quando há atendente de áudio e STT,
+    voz quando o agente de IA de áudio e o gateway converte. A fala transcrita vai à sessão como
+    mensagem `webchat` marcada `audio_transcript` (o chat do cliente não a mostra); o que o agente de
+    IA escreve no chat é também FALADO (`chat_call_outbound`, chamado pelo consumidor de saída).
 
 A presença da chamada é anunciada como `media.call` (`started` | `ended`): no stream (registro
 durável do trecho, `agents_only`) e em `agent:events:{sid}`, que é por onde o Console fica sabendo
@@ -39,11 +41,11 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from . import media_policy
 from .. import call_events
+from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc.call")
 
 CALL_CHANNELS = frozenset({"webchat"})     # contatos que podem ganhar chamada
-NO_BOT_LEG_REASON = "chamada de contato de chat: sem transcricao nem voz de IA (WCH-02)"
 
 
 def _stream_id(raw: object) -> tuple[int, int]:
@@ -347,6 +349,7 @@ class CallAttachMixin:
         hangup_after = _stream_id(await self._stream_tail_id(stream_key))
         last_id = "0-0"
         ready = False
+        last_menu: dict | None = None      # o último menu ao CLIENTE — rearmado quando a sala fica pronta
         pending_sent: list[str] | None = None
         state = await self._load_media_state(session_id)
         state["attendants"] = {}        # reconstruído do stream: estado de chamada anterior não vale
@@ -372,6 +375,10 @@ class CallAttachMixin:
                         self._call_end_reason[session_id] = "agent_hangup"
                         await self._ws_send(ws, {"type": "webrtc.call_ended", "reason": "agent_hangup"})
                         return
+                    if kind == "interaction_request" and not ready:
+                        menu = self._customer_menu(fields)
+                        if menu is not None:
+                            last_menu = menu
                     if kind == "routing.assigned":
                         fields = await self._attached_pool_field(session_id, fields)
                         if ready:
@@ -392,6 +399,7 @@ class CallAttachMixin:
                 continue            # lote cheio = replay ainda não alcançou o fim do stream
             if await self._attached_setup(ws, session_id, state):
                 ready = True
+                await self._rearm_pending_menu(session_id, last_menu)
                 continue
             sources = sorted(media_policy.policy_sources(state["attendants"]))
             if sources != pending_sent:
@@ -409,8 +417,11 @@ class CallAttachMixin:
         if not publish:
             return False
         state["customer"] = self._customer_state(state, publish, "call_attached", session_id)
-        self._decide_voice(session_id, state)          # registra a ausência de voz, dita
+        # A decisão da VOZ antes de `_customer_media`, sem `await` entre as duas — a mesma ordem do
+        # canal (`_on_routing_assigned`): a fala da IA que chegar agora lê as duas juntas.
+        run_voice = self._decide_voice(session_id, state)
         self._customer_media[session_id] = publish
+        await self._register_attached_session(session_id)
         room = self._room_of(session_id)
         # a chave ANTES da sala (VOZ-02): sem ela, o `police_room` apaga a sala ao nascer
         await self._redis.setex(f"channel:webrtc:{session_id}:room_name",
@@ -428,10 +439,67 @@ class CallAttachMixin:
             "policy_sources": state["customer"]["policy_sources"],
         })
         await self._announce_call(session_id, "started", media_state=state)
+        if self._bot_leg_should_run(state, publish, session_id):
+            disparar(self._start_stt_pipeline(session_id, room), nome=f"webrtc-stt-start-{session_id[:8]}")
+        if run_voice:
+            disparar(self._start_voice(session_id, room), nome=f"webrtc-voz-start-{session_id[:8]}")
         self._recording_follow(session_id, state)
         logger.info("webrtc chamada pronta session=%s publish=%s fontes=%s room=%s", session_id,
                     state["customer"]["publish"], state["customer"]["policy_sources"], room)
         return True
+
+    def _customer_menu(self, fields: dict) -> dict | None:
+        """O menu de uma entrada `interaction_request`, se ele é para o CLIENTE (visibilidade
+        `all`). Menu dirigido a participantes (wrap-up, Console) não se fala ao cliente."""
+        vis = fields.get("visibility", "all")
+        try:
+            vis = json.loads(vis) if isinstance(vis, str) and vis.startswith(("[", '"')) else vis
+        except (json.JSONDecodeError, TypeError):
+            pass
+        if vis != "all":
+            return None
+        menu = self._json_field(fields, "payload")
+        return menu if menu.get("menu_id") else None
+
+    async def _rearm_pending_menu(self, session_id: str, menu: dict | None) -> None:
+        """A chamada ficou pronta DEPOIS de o menu chegar (o caso comum: o cliente lê o prompt e só
+        então liga). Sem isto o menu nunca foi falado nem virou coleta, e a fala do cliente é só
+        registro — medido em 2026-09-22, sessão 2d93ec26: cinco falas recusadas e o menu expirando.
+        Só se o motor AINDA espera (`menu:waiting`): menu respondido não se repete."""
+        if not menu:
+            return
+        try:
+            waiting = await self._redis.hlen(f"menu:waiting:{session_id}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc chamada: menu pendente NAO conferido (session=%s): %s — nao rearmado",
+                           session_id, exc)
+            return
+        if not waiting:
+            return
+        logger.info("webrtc chamada: menu %s pendente rearmado na chamada (session=%s)",
+                    menu.get("menu_id"), session_id)
+        self.chat_call_outbound("menu.payload", {**menu, "session_id": session_id})
+
+    async def _register_attached_session(self, session_id: str) -> None:
+        """O registro que o bot leg lê (`_sessions`): quem é o cliente e por qual CANAL a fala
+        transcrita volta. Sem ele a transcrição era descartada (`sessao sem registro de abertura`).
+        O canal é o do CONTATO — `webchat` —, porque a chamada é meio dele, não contato novo."""
+        try:
+            raw = await self._redis.get(f"session:{session_id}:meta")
+            meta = json.loads(raw) if raw else {}
+        except Exception as exc:  # noqa: BLE001
+            meta = {}
+            logger.warning("webrtc chamada: meta ilegivel (session=%s): %s", session_id, exc)
+        contact_id = str(meta.get("contact_id") or "")
+        if not contact_id:
+            logger.error("webrtc chamada: meta sem contact_id (session=%s) — a fala transcrita NAO "
+                         "chega a sessao", session_id)
+            return
+        self._sessions[session_id] = {
+            "contact_id": contact_id, "pool_id": str(meta.get("pool_id") or ""),
+            "started_at": str(meta.get("started_at") or ""), "speech_profile_id": None,
+            "channel": str(meta.get("channel") or "webchat"),
+        }
 
     # ── Fim ──────────────────────────────────────────────────────────────────
 
@@ -442,7 +510,14 @@ class CallAttachMixin:
         self._attached.discard(session_id)
         room = self._room_of(session_id)
         await self._recorder.close(session_id)          # a parte em curso fecha e é guardada
+        stt_task = self._stt_tasks.get(session_id)
         await self._stop_bot_leg(session_id)
+        if stt_task is not None:
+            # o resumo da fala (`speech.metrics`) sai no fim do fluxo e lê o registro da sessão
+            await asyncio.wait({stt_task}, timeout=2)
+        self._sessions.pop(session_id, None)
+        self._speech_resolved.pop(session_id, None)
+        self._call_menu_armed.pop(session_id, None)     # a próxima chamada rearma o que estiver pendente
         started = session_id in self._call_started
         self._call_started.discard(session_id)
         if started:

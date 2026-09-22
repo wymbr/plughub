@@ -98,12 +98,27 @@ steps:
   # ── 2. A demanda em TEXTO LIVRE ─────────────────────────────────────────────
   # `interaction: text` é a diferença visível para o cliente. Onde o determinístico
   # oferece uma lista, aqui ele fala.
+  #
+  # WCH-02 (2026-09-22): numa CHAMADA a fala transcrita é só registro — nunca responde menu
+  # (VOZ-05 fatia 5b, a regra que impede "espera um pouco" de virar escolha). Para o LLM ouvir o
+  # que o cliente DIZ, o menu declara a coleta por voz. `text` fica na lista: no chat sem chamada
+  # nada muda, e na chamada o cliente pode continuar escrevendo (a tela responde sempre).
+  # `first_input_timeout_s` abaixo do `timeout_s` (regra de `menuCollectViolations`) e alto de
+  # propósito: com a chamada aberta o cliente pode estar DIGITANDO, e o desfecho `timeout` da
+  # coleta encerraria a conversa. `end_silence_ms` maior que o default (700): descrever o que se
+  # precisa tem pausas, e cortar no meio mandaria meia frase ao LLM.
   - id: ouvir
     type: menu
-    prompt:      "Pode escrever aqui o que você precisa."
+    prompt:      "Diga ou escreva o que você precisa."
     interaction: text
     output_as:   fala
     timeout_s: 120
+    collect:
+      input: [voice, text]
+      first_input_timeout_s: 110
+      voice:
+        end_silence_ms: 1200
+        max_speech_s: 20
     on_success: classificar
     on_failure: finalizar
     on_timeout: finalizar

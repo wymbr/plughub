@@ -136,6 +136,17 @@ class OutboundConsumer:
             msg_type, channel, contact_id, payload.get("session_id"),
         )
 
+        if channel == "webchat":
+            # WCH-02 — a chamada presa ao contato de chat FALA o que o agente de IA escreve. Antes
+            # da entrega ao chat e sem `await`: a fala entra na fila na ordem do Kafka.
+            fala = getattr(self._adapters.get("webrtc"), "chat_call_outbound", None)
+            if fala is not None:
+                try:
+                    fala(msg_type, payload)
+                except Exception as exc:
+                    logger.error("chamada de chat: fala NAO enfileirada type=%s session=%s: %s",
+                                 msg_type, payload.get("session_id"), exc)
+
         try:
             if msg_type == "message.text":
                 await adapter.deliver_text(payload)

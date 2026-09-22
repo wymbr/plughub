@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (6) — WCH-09: a IA fala e ouve na chamada do contato de chat
+
+**O que faltava.** A WCH-01 recusava o bot leg na chamada de chat por construção
+(`NO_BOT_LEG_REASON` em quatro decisões): a IA seguia só por texto e a chamada não era transcrita.
+
+**O que mudou.**
+- **channel-gateway** — as quatro exclusões saíram; a regra é a do canal `webrtc`. Na sala pronta a
+  sessão entra no registro do bot leg com canal `webchat` (sem ele a fala transcrita era descartada) e
+  ouvinte/voz sobem como no canal. `chat_call_outbound`, chamado pelo `OutboundConsumer` para todo
+  contato `webchat`, síncrono e antes da entrega ao chat: texto da IA é falado, menu tem o prompt falado
+  ou vira coleta; texto do humano e aviso de sistema não. O `StreamSubscriber` descarta
+  `audio_transcript` explicitamente (já descartava por acidente, por tipo desconhecido).
+- **O menu anterior à chamada** — primeiro teste do dono (sessão `2d93ec26`): menu às 13:32:34,
+  chamada às 13:32:58; nada falado, nenhuma coleta, cinco falas recusadas como registro e o menu
+  expirando. O watcher agora guarda o último `interaction_request` ao cliente e o rearma na sala pronta
+  se o motor ainda espera (`menu:waiting`), com dedupe por `menu_id` contra a saída do Kafka.
+- **skill `skill_navegacao_llm_v1`** — `ouvir` declara `collect: {input: [voice, text]}`
+  (`first_input_timeout_s` 110 < `timeout_s` 120, `end_silence_ms` 1200) e o prompt virou "Diga ou
+  escreva o que você precisa." Promovido em `demo_llm_ia` com âncora conferida no snapshot.
+- **config viva** — `media_policy` de áudio em `demo_ia` e `demo_llm_ia` (o dono acrescentou também o
+  canal `webrtc`, que não é necessário para a chamada de chat: a política é lida pelo canal do CONTATO).
+- **log** — pool sem `media_policy` num contato de chat é INFO ("opcional em contato de chat"), não
+  WARNING; no canal `webrtc`, onde ela é obrigatória, continua WARNING.
+- **widget** — o botão que liga e desliga fica 1,5 s desabilitado depois de desligar: um duplo clique
+  religava a chamada 150 ms depois (medido).
+- **gate `probe_wch01_chat_call.sh`** — ficou VERMELHO (B2/B3/C3) sem defeito nenhum: usava `demo_ia`
+  como "pool de IA que não oferece mídia", premissa que era do CÓDIGO até aqui e passou a ser da CONFIG.
+  Agora o pool default é `sac_ia` e o gate CONFERE a premissa no registry antes de medir — pool com
+  `media_policy` dá INCONCLUSIVO nomeando o motivo (controle: `WCH01_POOL=demo_ia` → INCONCLUSIVO).
+
+**Medido.** Segundo teste do dono (sessão `492aa613`): menu rearmado na sala pronta, `value por voice`
+às 13:41:11, o LLM recebeu a frase crua e escolheu `sac.especialista`, a voz saiu com a IA e o ouvinte
+ficou para o humano (fala transcrita), o especialista de formulário respondeu pela tela com os campos
+mascarados redigidos, NPS e wrap-up normais. channel-gateway 1 440 (21 novos/reescritos).
+
+**Achado de produto.** O LLM não levou ao `limite_ia` porque a árvore `dialog_navegacao_atendimento_v1`
+não tem folha de limite, e o vocabulário que ele recebe é só o CAMINHO das folhas (`sac.info_plano`…),
+sem rótulo nem descrição — discussão aberta com o dono.
+
+Deixou fichas: `WCH-10` (transferência calada; a voz corta a frase ao sair) · `WCH-11` (resposta
+falada duplicada e rotulada `[Seleção: …]`) · `WCH-12` (a fala depende da instância do gateway).
+
 ## 2026-09-22 (5) — WCH-08: a chamada dentro do contato de chat aparece nos relatórios
 
 **O que faltava.** A chamada de um contato `webchat` (WCH-01) existia só no stream da sessão
