@@ -1,5 +1,61 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (13) — ORQ-14: a métrica de re-roteamento media errado, e quem a expôs foi a primeira pergunta feita a ela
+
+**O que aconteceu.** A ORQ-14 entregou o sinal de re-roteamento no mesmo dia, e a primeira leitura
+dele apontou `demo_ia / sac.info_plano` com **50%** — metade dos contatos mandados para a folha de
+informação de plano precisando de outro pool. O dono mandou investigar a folha. Não havia defeito
+na folha: **o defeito era da métrica**, e são dois.
+
+**Causa 1 — atender tem DOIS veículos, e a cadeia lia um só.** A cadeia de atendimento filtrava
+`role = 'primary'`. Com `escalate` o destino vira `primary`, mas com `delegate` ele atende como
+`specialist` enquanto o chamador fica **suspenso** — e é exatamente assim que o orquestrador
+determinístico entrega o contato. Medido: em **17 dos 44** contatos da janela de 30 dias o destino
+foi atendido por delegação, e para a métrica era como se ninguém o tivesse atendido.
+
+**Causa 2 — o "destino" era o próprio orquestrador.** A métrica tomava o primeiro pool depois do
+orquestrador na cadeia. Mas `suspend`/`resume` dá ao orquestrador um **segundo segmento**, e ele é
+justamente o primeiro: em **16 dos 44** contatos, o destino registrado era o orquestrador voltando,
+e o pool que realmente atendeu entrava na conta como *"outro pool depois do destino"* — isto é,
+como re-roteamento.
+
+**O conserto.** A cadeia passou a ser `primary` ∪ `specialist cujo segmento PAI está suspenso`, e o
+destino passou a ser o primeiro pool **diferente do orquestrador**. O discriminador é o PAI, não o
+papel: hook (NPS, wrap-up) e convidado de `@mention` têm pai concluído e continuam fora — que era o
+propósito da exclusão original e não se perdeu.
+
+**Números corrigidos** (30 dias, mesma janela): total **44 contatos, 6 re-roteados (14%)** contra os
+27% de antes. `demo_ia / sac.info_plano` **7%** (era 50%) · `demo_llm_ia / sac.especialista` 8% ·
+`demo_llm_ia / aumento_limite` **60%**, inalterado — este é o falso positivo previsto e legítimo: o
+runner do limite escala quando a identificação falha, e `proximos` mostra o caminho que o explica.
+
+**Ruído residual, declarado e NÃO compensado.** O discriminador "pai suspenso" deixa passar o hook
+cujo pai ficou com `outcome='suspended'` contra `close_reason='agent_hangup'` — contradição medida
+em **2 de 604** segmentos humanos `primary` (`789315e9`, `f0427a16`, ambos com filho `nps_ia`). O
+defeito é do FECHAMENTO do segmento humano, não da métrica; compensá-lo aqui esconderia o outro.
+Deixou ficha: **TRF-02**, no grupo da TRF-01, que é o mesmo par de campos discordando.
+
+**A alternativa que foi testada e recusada.** Exigir que o CHAMADOR retome (em vez de apenas estar
+suspenso) removeria os 2 falsos positivos — e derrubaria **11 delegações legítimas**:
+`portabilidade_confirmacao` tem 15 retomando contra 10 que não retomam, `limite_retorno` 21 × 1.
+Trocar 2 falsos positivos por 11 falsos negativos é trocar para pior.
+
+**O que isto ensina, e por que está escrito aqui.** O número errado não era absurdo — 27% e 50% são
+plausíveis para roteamento, e nenhum teste ficaria vermelho por causa deles. O que o expôs foi
+**usá-lo para uma pergunta concreta**: investigar a folha obrigou a olhar as cadeias uma a uma, e as
+cadeias não tinham a forma que a query supunha. É a regra de *um valor plausível esconde bugs* na
+própria ferramenta de medir — e vale o registro de que o defeito era meu, não da árvore.
+
+**Testes e gate.** `test_navigation_routing.py` ganhou dois casos que prendem as duas correções no
+SQL EXECUTADO (`test_a_cadeia_inclui_quem_atendeu_por_DELEGACAO`,
+`test_o_destino_nao_e_o_proprio_orquestrador`). Um terceiro teste **foi corrigido por ser largo
+demais**: `test_alias_de_agregado_nunca_repete_coluna_real` proibia `AS pool_id` em qualquer
+posição, e assim recusava a projeção legal `s.pool_id AS pool_id` que o `JOIN` com o pai exige — o
+invariante é sobre alias de **AGREGADO** (`any(pool_id) AS pool_id`, code 184), e o teste agora casa
+a função agregadora, com testemunha de presença para não ficar verde por não ter olhado nada.
+Suíte: 829 verdes. Gate ao vivo `probe_navigation_routing_signal.sh`: **VERDE**, com a contraprova
+do ramo B em 34 sem a exclusão × 6 com ela.
+
 ## 2026-09-22 (12) — ORQ-14: o roteamento errado passou a ter sinal
 
 **O que faltava.** A série do destino (`{pool}.navegacao.destino.{caminho}`) responde ONDE o

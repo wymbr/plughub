@@ -523,24 +523,46 @@ proxy, e o campo se chama `re_roteados` exatamente para que ninguém o leia como
 falso positivo legítimo (o destino certo que descobre, atendendo, que o caso é de outra área) e
 falso negativo (o destino errado que resolve assim mesmo).
 
+**Atender tem DOIS veículos, e ler só um deles falseia o número.** Com `escalate` o destino vira
+`primary`; com `delegate` ele atende como `specialist` enquanto o chamador fica **suspenso** —
+e é assim que o orquestrador determinístico entrega o contato. A cadeia é, portanto,
+`primary` ∪ `specialist cujo PAI está suspenso`. O discriminador é o pai, não o papel: hook (NPS,
+wrap-up) e convidado de `@mention` têm pai **concluído**, e continuam fora.
+
 Três exclusões fazem o número significar atendimento, e cada uma tem motivo próprio:
 
 | fora | por quê |
 |---|---|
-| hook e convidado (`role != 'primary'`) | NPS, wrap-up e `@mention` são paralelos, não continuação — contá-los faria todo contato com NPS parecer re-roteado |
+| hook e convidado (pai concluído) | NPS, wrap-up e `@mention` são paralelos, não continuação — contá-los faria todo contato com NPS parecer re-roteado |
 | agente de fila (`agent_type = 'system'`) | segurar o contato não é atender |
 | a volta ao ORQUESTRADOR | é o *"tenho outro assunto"* do cliente: decisão NOVA, com evento próprio |
+| o próprio ORQUESTRADOR como "destino" | `suspend`/`resume` lhe dá um SEGUNDO segmento; tomá-lo como destino faz a navegação seguinte parecer re-roteio |
+
+⚠️ **Ruído residual DECLARADO:** o discriminador "pai suspenso" deixa passar o hook cujo pai ficou
+com `outcome='suspended'` **contra** `close_reason='agent_hangup'` — contradição medida em **2** dos
+604 segmentos humanos `primary` de 30 dias (`789315e9`, `f0427a16`, ambos com filho `nps_ia`). O
+defeito é do fechamento do segmento humano, não da métrica, e está em `TRF-02`. A alternativa
+testada — exigir que o CHAMADOR retome — removeria esses 2 e derrubaria **11 delegações legítimas**
+(`portabilidade_confirmacao` 15 retomam × 10 não; `limite_retorno` 21 × 1): troca pior.
 
 `sem_destino` (o cliente saiu antes de ser atendido) sai da BASE da taxa — somá-lo faria a folha
 abandonada parecer a melhor. `sem_cadeia` é defeito de dado e tem contador para não sumir calado.
 Sem ninguém atendido, a taxa é `null` (**não medida**), nunca `0.0`.
 
 **`proximos` é o campo acionável:** um destino que termina sempre no mesmo outro pool é uma folha
-que falta na árvore. Primeira medição (30 dias, 44 contatos, 27% de re-roteio):
-`demo_ia / sac.info_plano` 50% → `retencao_humano`, `portabilidade_ia`;
-`demo_llm_ia / aumento_limite` 60% → `sac_ia`. O segundo não é erro de roteamento: é o runner do
-limite escalando quando a identificação falha — que é o falso positivo previsto, e aparece aqui
-com o caminho que o explica.
+que falta na árvore. Medição (30 dias, 44 contatos, **14%** de re-roteio):
+`demo_ia / sac.info_plano` 7% · `demo_llm_ia / sac.especialista` 8% (o ruído do `nps_ia` acima) ·
+`demo_llm_ia / aumento_limite` **60%** → `sac_ia`, `retencao_humano`. O último não é erro de
+roteamento: é o runner do limite escalando quando a identificação falha — o falso positivo
+previsto, aparecendo aqui com o caminho que o explica.
+
+> ⚠️ **A PRIMEIRA medição desta métrica estava errada, e o registro fica.** Ela dizia 27% no total
+> e **50% em `sac.info_plano`**, e o 50% foi o que mandou investigar uma árvore que não tinha
+> defeito nenhum. As duas causas eram da métrica: a cadeia só lia `primary` (17 dos 44 contatos
+> tinham o destino atendido por **delegação**, e ficavam invisíveis) e tomava como destino o
+> primeiro segmento depois do orquestrador, que em 16 dos 44 era **o próprio orquestrador
+> retomando**. Um número plausível — nem 0%, nem 100% — não fica vermelho sozinho: o que o expôs
+> foi usá-lo para uma pergunta concreta.
 
 ⚠️ **O que esta métrica ainda NÃO autoriza:** comparar os dois orquestradores com os dados de hoje.
 Eles têm janelas, volumes e destinos diferentes — a métrica passou a existir, a comparação precisa

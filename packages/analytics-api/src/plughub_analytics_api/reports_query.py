@@ -8505,13 +8505,28 @@ def _fetch_navigation_routing(
                 session_id,
                 groupArray(pool_id) AS pools_ref
             FROM (
-                SELECT session_id, pool_id, started_at, segment_id
-                FROM {db}.segments FINAL
-                WHERE tenant_id = {{tenant_id:String}}
-                  AND role = 'primary'
-                  AND agent_type != 'system'
-                  AND session_id IN (SELECT session_id FROM nav)
-                ORDER BY started_at, segment_id
+                -- A cadeia é de ATENDIMENTO, e atender tem DOIS veículos: o `escalate`
+                -- (o destino vira `primary`) e o `delegate` (o destino atende como
+                -- `specialist` enquanto o chamador fica SUSPENSO). Ler só `primary`
+                -- media o orquestrador determinístico como se ele nunca entregasse o
+                -- contato a ninguém — 17 dos 44 contatos da janela, medido.
+                SELECT s.session_id AS session_id, s.pool_id AS pool_id,
+                       s.started_at AS started_at, s.segment_id AS segment_id
+                FROM {db}.segments s FINAL
+                LEFT JOIN (
+                    SELECT segment_id, outcome FROM {db}.segments FINAL
+                ) pai ON pai.segment_id = s.parent_segment_id
+                WHERE s.tenant_id = {{tenant_id:String}}
+                  AND s.agent_type != 'system'
+                  AND (
+                        s.role = 'primary'
+                        -- delegação: o PAI suspendeu para este atender. Hook (NPS,
+                        -- wrap-up) e convidado de `@mention` têm pai CONCLUÍDO, e é
+                        -- isso que os separa aqui.
+                     OR (s.role = 'specialist' AND pai.outcome = 'suspended')
+                  )
+                  AND s.session_id IN (SELECT session_id FROM nav)
+                ORDER BY s.started_at, s.segment_id
             )
             GROUP BY session_id
         ),
@@ -8522,11 +8537,15 @@ def _fetch_navigation_routing(
                 navegacoes_ref,
                 pools_ref,
                 indexOf(pools_ref, orquestrador_ref)             AS i_orq_ref,
-                -- o que veio DEPOIS do orquestrador: o primeiro é o destino atendido
                 arraySlice(pools_ref, i_orq_ref + 1)             AS depois_ref,
-                if(length(depois_ref) > 0, depois_ref[1], '')    AS atendido_ref,
+                -- ⚠️ O destino é o primeiro pool DIFERENTE do orquestrador, nunca o
+                -- primeiro da lista: `suspend`/`resume` dá ao orquestrador um segundo
+                -- segmento (16 dos 44 contatos da janela), e tomá-lo como destino fazia
+                -- a navegação SEGUINTE do cliente parecer re-roteamento.
+                indexOf(arrayMap(p -> p != orquestrador_ref, depois_ref), 1) AS i_dest_ref,
+                if(i_dest_ref > 0, depois_ref[i_dest_ref], '')   AS atendido_ref,
                 -- a volta ao orquestrador encerra a janela: dali em diante é navegação NOVA
-                arraySlice(depois_ref, 2)                        AS resto_ref,
+                arraySlice(depois_ref, i_dest_ref + 1)           AS resto_ref,
                 indexOf(resto_ref, orquestrador_ref)             AS i_volta_ref,
                 if(i_volta_ref > 0, arraySlice(resto_ref, 1, i_volta_ref - 1),
                    resto_ref)                                    AS janela_ref,

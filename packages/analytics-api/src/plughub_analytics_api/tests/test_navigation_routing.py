@@ -16,6 +16,7 @@ deixar o array de segmentos sem ordem (a cadeia deixa de ser cadeia).
 """
 from __future__ import annotations
 
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,6 +25,11 @@ from ..reports_query import _fetch_navigation_routing, _proximos_distintos
 
 DB     = "plughub"
 TENANT = "tenant_demo"
+
+# Funções de AGREGAÇÃO: são estas que, aliasadas com o nome de uma coluna real,
+# derrubam a query inteira no ClickHouse (code 184).
+_AGREGADOS = {"any", "anyLast", "argMin", "argMax", "groupArray", "groupUniqArray",
+              "count", "countIf", "topK", "sum", "sumIf", "min", "max", "uniq", "avg"}
 
 _COLS = ["orquestrador", "destino", "contatos", "sem_destino", "re_roteados",
          "sem_cadeia", "com_renavegacao", "proximos_ref"]
@@ -57,25 +63,58 @@ class TestOSQLExecutado:
 
     def test_so_segmento_que_ATENDE_entra_na_cadeia(self):
         sql = self._sql()
-        assert "role = 'primary'" in sql          # hook/convidado fora
-        assert "agent_type != 'system'" in sql    # agente de fila fora
+        assert "s.role = 'primary'" in sql        # o destino por `escalate`
+        assert "s.agent_type != 'system'" in sql  # agente de fila fora
+
+    def test_a_cadeia_inclui_quem_atendeu_por_DELEGACAO(self):
+        """Atender tem dois veículos: `escalate` (o destino vira `primary`) e `delegate`
+        (o destino atende como `specialist` com o chamador SUSPENSO). Ler só `primary`
+        media o orquestrador determinístico como se ele nunca entregasse o contato —
+        17 dos 44 contatos da janela de 30 dias, medido em 2026-09-22."""
+        sql = self._sql()
+        assert "s.role = 'specialist' AND pai.outcome = 'suspended'" in sql
+        # e o hook continua fora: o pai dele está CONCLUÍDO, não suspenso
+        assert "pai.segment_id = s.parent_segment_id" in sql
+
+    def test_o_destino_nao_e_o_proprio_orquestrador(self):
+        """`suspend`/`resume` dá ao orquestrador um SEGUNDO segmento (16 dos 44): tomar
+        o primeiro item depois dele como destino fazia a navegação seguinte do cliente
+        parecer re-roteamento — era 50% de re-roteio em `sac.info_plano` que não existia."""
+        sql = self._sql()
+        assert "indexOf(arrayMap(p -> p != orquestrador_ref, depois_ref), 1)" in sql
+        assert "depois_ref[1]" not in sql
 
     def test_a_cadeia_e_ORDENADA_e_deduplicada(self):
         sql = self._sql()
         assert "segments FINAL" in sql            # ReplacingMergeTree: sem isto, linha dupla
-        assert "ORDER BY started_at, segment_id" in sql
+        assert "ORDER BY s.started_at, s.segment_id" in sql
 
     def test_a_volta_ao_orquestrador_fecha_a_janela(self):
         sql = self._sql()
         assert "indexOf(resto_ref, orquestrador_ref)" in sql
         assert "arraySlice(resto_ref, 1, i_volta_ref - 1)" in sql
 
-    def test_alias_de_agregado_nunca_repete_coluna_real(self):
+    def test_alias_de_AGREGADO_nunca_repete_coluna_real(self):
         """`any(pool_id) AS pool_id` derruba a query inteira (code 184) e o wrapper
-        devolve `data: []`, que se lê como 'não há dado'."""
+        devolve `data: []`, que se lê como 'não há dado'.
+
+        ⚠️ O proibido é o alias de AGREGADO. A primeira versão deste teste barrava
+        `AS pool_id` em QUALQUER posição, e isso é largo demais: `s.pool_id AS pool_id`
+        numa projeção é legal, e é como a cadeia nomeia a coluna depois de ganhar o
+        `JOIN` com o segmento PAI. Teste largo demais recusa a correção certa — foi o
+        que aconteceu aqui em 2026-09-22.
+        """
         sql = self._sql()
-        for proibido in ("AS pool_id", "AS session_id", "AS category"):
-            assert proibido not in sql
+        reais = {"pool_id", "session_id", "category", "outcome", "segment_id",
+                 "started_at", "tenant_id"}
+        achados = re.findall(r"\b(\w+)\((?:[^()]|\([^()]*\))*\)\s+AS\s+(\w+)", sql)
+        funcoes = {fn for fn, _ in achados}
+        # Testemunha de presença: sem ela, um regex que parasse de casar deixaria o
+        # teste verde por não ter olhado agregado nenhum.
+        assert {"argMin", "groupArray", "countIf"} <= funcoes, funcoes
+        for fn, alias in achados:
+            if fn in _AGREGADOS:
+                assert alias not in reais, f"{fn}(…) AS {alias}"
 
     def test_escopo_de_pool_entra_no_filtro(self):
         assert "pool_id IN ('demo_llm_ia')" in self._sql(accessible_pools=["demo_llm_ia"])
