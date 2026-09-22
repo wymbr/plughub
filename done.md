@@ -89,6 +89,7 @@ história no `CHANGELOG.md`.)*
 | WCH-09 | **A IA fala e ouve na chamada do contato de chat.** Bot leg como no canal `webrtc` (ouvinte + voz), fala transcrita volta como mensagem `webchat` marcada e fora do chat do cliente, o que a IA escreve é também falado, e o menu que chegou antes da chamada é rearmado nela; `skill_navegacao_llm_v1` ouve por voz; `demo_ia`/`demo_llm_ia` com áudio | 2026-09-22 | `CHANGELOG.md` § 2026-09-22 (6) |
 | WCH-10 | **A transferência é dita, e a voz termina a frase antes de sair.** Dois `notify` no `skill_navegacao_llm_v1` (destino confirmado × escape) e a saída da voz AGENDADA, com teto de 8 s, em vez do corte no meio da frase | 2026-09-22 | `CHANGELOG.md` § 2026-09-22 (9) |
 | WCH-13 | **A frase ouvida duas vezes era a BANCADA, não a plataforma** — medido: uma fala enfileirada por sessão nos três contatos, e o eco só nos dois em que o Console entrou DENTRO da frase; confirmado pelo dono (mudar a aba do Console mata o eco). Ficou o endurecimento do widget (um `<audio>` por trilha) e a instrumentação `webrtc fala: enfileirada #N` | 2026-09-22 | `CHANGELOG.md` § 2026-09-22 (10) |
+| WCH-11 | **A fala do cliente tem UM registro, e o rótulo vem da interação.** Coleta por `voice` deixa de virar segunda mensagem (stream, analytics, Console) e continua sendo entregue ao menu; `[Seleção: …]` deixa de rotular texto livre. Metadado (`via`/`interaction`) com mecanismo: ramos C e D do `probe_menu_result_contract.sh` | 2026-09-22 | `CHANGELOG.md` § 2026-09-22 (11) |
 
 ## `docs/adr/adr-voice-media-plane.md` — voz própria / Arc 15 WebRTC
 

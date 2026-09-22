@@ -1049,6 +1049,10 @@ quando há atendente de áudio (humano ou IA) e STT; voz quando a IA atende com 
 | o menu que chegou ANTES da chamada | `_rearm_pending_menu`: o watcher guarda o último `interaction_request` ao cliente e, na sala pronta, rearma-o se `menu:waiting` ainda existe; dedupe por `menu_id` | o caso comum (o cliente lê o prompt e só então liga) deixava o menu sem fala e sem coleta — medido: cinco falas recusadas e o menu expirando |
 | o chat do cliente | `StreamSubscriber._map_message` descarta `audio_transcript`, explícito | a fala do atendente tem visibilidade `all`; o cliente a OUVIU |
 
+⚠️ **E a resposta por voz tem UM registro** (WCH-11, 2026-09-22): o `menu_result` de uma coleta por
+`voice` continua sendo entregue ao menu, mas não vira segunda mensagem do cliente — o enunciado já
+está na sessão como `audio_transcript`. Detalhe e mecanismo em `conference-mechanics.md` § Mudança 46.
+
 A fala transcrita só RESPONDE menu com `collect.input` contendo `voice` (regra da VOZ-05 fatia 5b, que
 não muda): o `skill_navegacao_llm_v1` passou a declarar `collect: {input: [voice, text]}` no `ouvir`.
 Texto digitado pelo humano e aviso de sistema não são falados. Pool sem `media_policy` num contato de

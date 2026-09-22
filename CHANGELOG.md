@@ -1,5 +1,36 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (11) — WCH-11: a fala do cliente tem UM registro, e o rótulo vem da interação
+
+**O que foi medido.** Sessão `e606ef68`: menu de TEXTO LIVRE respondido por voz produzia duas
+linhas — a fala (`audio_transcript`) e o desfecho da coleta decorado `[Seleção: eu precisava falar
+com o atendente.]`. O cliente falou uma vez. Duas causas independentes:
+
+- **entregar ≠ registrar** — o `menu_result` de uma coleta por voz é o MESMO enunciado. Agora ele é
+  entregue (LPUSH ao menu, `receive`) e não re-registrado (stream, analytics, Console). O
+  discriminador é o `via` que o canal passou a publicar: `voice` não re-registra; `dtmf` e a
+  resposta pela TELA continuam registrando, porque nelas o `menu_result` é o único registro;
+- **o rótulo** — a decoração olhava `msg_type`; agora olha `interaction`: `text` sai cru, `form`
+  vira `[Formulário: …]`, opção continua `[Seleção: …]`. Interação ausente mantém o rótulo antigo,
+  porque não se adivinha texto livre a partir da falta de informação.
+
+**O metadado ganhou mecanismo, não um comentário.** `via`/`interaction` não podem entrar no
+contrato do VALOR (exigi-los de TODO produtor reprovaria `sms`, `voice`, `whatsapp` e webchat, que
+legitimamente não os mandam). Eles são lidos por uma porta única (`_menu_meta`) e o
+`probe_menu_result_contract.sh` ganhou **ramo C** (todo metadado lido é publicado por ALGUM
+produtor) e **ramo D** (planta a renomeação de `via` no canal e exige vermelho).
+
+⚠️ **O gate pegou um defeito MEU durante a entrega**, e vale registrar: a primeira versão lia
+`menu_id` pelo encadeamento `.get("payload")` numa linha de log — e aquele encadeamento é o censo
+do contrato. `menu_id` virou "chave de sinal", e o ramo B passou a aceitar um produtor que não
+publica `result`. Ficou vermelho na hora; leitura de metadado vai pela porta de metadado, inclusive
+em log.
+
+**Medido.** orchestrator-bridge **218** (11 novos, `test_wch11_fala_um_registro.py`, cada
+proposição com o seu controle: tecla e tela continuam registrando) · channel-gateway **1 449** (um
+teste existente atualizado: o payload da tecla agora carrega `via`) · `probe_menu_result_contract.sh`
+VERDE nos quatro ramos.
+
 ## 2026-09-22 (10) — WCH-13: a frase ouvida duas vezes era a BANCADA, e o instrumento que faltava
 
 **O sintoma.** Depois da WCH-10 o dono ouviu a frase de encaminhamento duas vezes, com 1–2 s de

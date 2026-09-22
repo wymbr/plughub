@@ -132,6 +132,30 @@ def leitores(src):
     return fora
 
 
+def metadados(src):
+    """Chaves lidas como `_menu_meta(<algo>, K)` no bridge (WCH-11).
+
+    Metadado NAO e o contrato do valor: produtor antigo legitimamente nao o manda, e por isso
+    ele nao entra no censo de `leitores` (que exige a chave em TODOS). O que se exige aqui e
+    mais fraco e ainda assim um mecanismo: ALGUM produtor tem de carregar cada metadado lido.
+    Sem isto, renomear `via` no canal faria o bridge voltar a registrar a fala duas vezes, em
+    silencio -- e o defeito so apareceria numa transcricao que ninguem confere.
+    """
+    fora = []
+    try:
+        arv = ast.parse(src)
+    except SyntaxError:
+        return fora
+    for n in ast.walk(arv):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "_menu_meta" and len(n.args) >= 2):
+            continue
+        chave = _const(n.args[1])
+        if isinstance(chave, str):
+            fora.append((chave, n.lineno))
+    return fora
+
+
 def carregar():
     if not os.path.isdir(ADAPTERS) or not os.path.exists(BRIDGE):
         return None, None
@@ -212,9 +236,57 @@ def contrato(mutar=False):
     return 0
 
 
+def metadado(mutar=False):
+    """Ramo C (WCH-11) -- todo METADADO lido pelo bridge e produzido por ALGUEM."""
+    fontes, bridge = carregar()
+    if fontes is None:
+        print("VEREDICTO: SEM AMOSTRA - fontes ausentes")
+        return 3
+    lidos = metadados(bridge)
+    if not lidos:
+        print("VEREDICTO: SEM AMOSTRA - o bridge nao le metadado de menu_result")
+        return 3
+    for k, ln in lidos:
+        print("   leitor   main.py linha %-6d metadado %r" % (ln, k))
+
+    if mutar:
+        alvo = [p for p in fontes if p.endswith("webrtc.py")] or [sorted(fontes)[0]]
+        fontes[alvo[0]] = fontes[alvo[0]].replace('"via": done.via', '"por_onde": done.via')
+
+    achados = produtores(fontes)
+    if not achados:
+        print("VEREDICTO: SEM AMOSTRA - nenhum produtor de %s" % TIPO)
+        return 3
+    publicadas = set()
+    for _arq, _ln, chaves in achados:
+        if chaves:
+            publicadas |= chaves
+
+    orfas = sorted(set(k for k, _ln in lidos) - publicadas)
+    for k in sorted(set(k for k, _ln in lidos)):
+        print("   %-8s metadado %r" % ("ok" if k in publicadas else "ORFAO", k))
+
+    if mutar:
+        if orfas:
+            print("VEREDICTO: OK - a mutacao foi ACUSADA (orfaos: %s)" % ", ".join(orfas))
+            return 0
+        print("VEREDICTO: FALHA - a mutacao passou; o censo nao pega renomeacao de metadado")
+        return 1
+
+    if orfas:
+        print("VEREDICTO: FALHA - o bridge le metadado que produtor nenhum manda: %s"
+              % ", ".join(orfas))
+        print("           Nao fica vermelho sozinho: o bridge decide como se o metadado")
+        print("           nao existisse -- e a fala volta a ser registrada duas vezes.")
+        return 1
+    print("VEREDICTO: OK - todo metadado lido tem produtor")
+    return 0
+
+
 if __name__ == "__main__":
     modo = sys.argv[1] if len(sys.argv) > 1 else "contrato"
-    fn = {"contrato": contrato, "contrato-mut": lambda: contrato(mutar=True)}.get(modo)
+    fn = {"contrato": contrato, "contrato-mut": lambda: contrato(mutar=True),
+          "metadado": metadado, "metadado-mut": lambda: metadado(mutar=True)}.get(modo)
     if not fn:
         print("modo desconhecido: %s" % modo)
         sys.exit(2)

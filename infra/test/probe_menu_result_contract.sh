@@ -23,6 +23,10 @@
 #      um leitor com chaves diferentes tambem reprova — seria o mesmo defeito do
 #      lado do consumidor.
 #   B  MUTACAO — renomeia a chave num produtor e exige que o censo acuse.
+#   C  METADADO (WCH-11) — `interaction` e `via` nao sao o contrato do VALOR: produtor antigo
+#      legitimamente nao os manda. A exigencia e mais fraca e ainda assim mecanismo: todo
+#      metadado lido pelo bridge (`_menu_meta`) e publicado por ALGUM produtor.
+#   D  MUTACAO — renomeia o metadado no canal e exige que o censo acuse.
 #
 # EXIT: 0 OK · 1 FALHA · 3 SEM AMOSTRA
 
@@ -53,6 +57,8 @@ echo "════════════════════════�
 
 rodar "A · CONTRATO — a chave vem do leitor, e todo produtor a carrega" contrato
 rodar "B · MUTACAO  — o censo acusa um produtor renomeado"             contrato-mut
+rodar "C · METADADO — todo metadado lido pelo bridge tem produtor"     metadado
+rodar "D · MUTACAO  — o censo acusa um metadado renomeado"            metadado-mut
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════"

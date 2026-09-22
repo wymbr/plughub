@@ -644,6 +644,22 @@ async def retire_session_stream(redis_client, session_id: str) -> None:
     await redis_client.expire(f"session:{session_id}:stream", STREAM_CLOSE_GRACE_S)
 
 
+def _menu_meta(content: dict, chave: str) -> str | None:
+    """Metadado OPCIONAL de um `menu_result`: `interaction` (como o menu foi oferecido) e
+    `via` (por onde a resposta chegou).
+
+    Lidos por UMA porta, e não pelo encadeamento de `.get("payload")`, porque o contrato do
+    `menu_result` é sobre o VALOR: `probe_menu_result_contract` mede a chave do valor no leitor
+    e exige que TODO produtor a carregue. Metadado não é assim — produtor antigo legitimamente
+    não o manda, e o bridge decide sem ele (ver `_decorar` e `ja_registrado_como_fala`).
+
+    ⚠️ Isso não os deixa sem mecanismo: o ramo C daquele gate faz o censo desta porta e exige
+    que ALGUM produtor carregue cada metadado lido. Renomear `via` no canal fica vermelho.
+    """
+    valor = (content.get("payload") or {}).get(chave)
+    return valor if isinstance(valor, str) and valor else None
+
+
 def redact_customer_reply(
     reply_text: str,
     *,
@@ -652,6 +668,7 @@ def redact_customer_reply(
     masked_fields: set[str] | None = None,
     suppressed_text: str = _MASKED_SUPPRESSED,
     decorate_non_text: bool = True,
+    interaction: str | None = None,
 ) -> tuple[str, str]:
     """Decide o que de `reply_text` pode ser publicado, e com que visibilidade.
 
@@ -749,8 +766,29 @@ def redact_customer_reply(
             return f"[Seleção: {suppressed_text}]", "all"
 
     if decorate_non_text:
-        return (reply_text if msg_type == "text" else f"[Seleção: {reply_text}]"), "all"
+        return _decorar(reply_text, msg_type=msg_type, interaction=interaction), "all"
     return reply_text, "all"
+
+
+def _decorar(reply_text: str, *, msg_type: str, interaction: str | None) -> str:
+    """O rótulo diz O QUE a resposta foi — e quem sabe isso é a INTERAÇÃO do menu.
+
+    Até 2026-09-22 o eixo era `msg_type`: tudo que não fosse `text` virava
+    `[Seleção: …]`, e um menu de TEXTO LIVRE respondido por voz aparecia como
+    *"[Seleção: eu precisava falar com o atendente.]"* — ninguém selecionou nada
+    (WCH-11). `menu_result` não diz como o cliente respondeu; `interaction` diz.
+
+    Interação ausente (produtor antigo, evento sem a chave) mantém o rótulo de
+    antes: não se adivinha texto livre a partir da falta de informação, porque o
+    erro nessa direção apaga a fronteira entre escolher e escrever.
+    """
+    if msg_type == "text":
+        return reply_text
+    if interaction == "text":
+        return reply_text
+    if interaction == "form":
+        return f"[Formulário: {reply_text}]"
+    return f"[Seleção: {reply_text}]"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -9846,6 +9884,11 @@ async def process_inbound(
         msg_type = content.get("type")
 
         # Normalise payload to text regardless of channel interaction type
+        menu_interaction: str | None = None
+        # WCH-11 — POR ONDE a resposta chegou. `voice` significa que o cliente FALOU, e a fala
+        # já entrou na sessão como `audio_transcript` pelo mesmo canal; sem isso o mesmo enunciado
+        # aparecia duas vezes na transcrição (e a segunda com rótulo de seleção).
+        menu_via: str | None = None
         if msg_type == "text":
             reply_text = content.get("text", "")
         elif msg_type == "menu_result":
@@ -9855,6 +9898,8 @@ async def process_inbound(
                 # destino — não é mensagem do cliente, e não há valor a registrar.
                 await deliver_collect_outcome(redis_client, session_id, contact_id, outcome)
                 return
+            menu_interaction = _menu_meta(content, "interaction")
+            menu_via         = _menu_meta(content, "via")
             result_value = content.get("payload", {}).get("result", "")
             # For button/list results (plain string) use the raw value — json.dumps
             # would wrap it in extra quotes ("especialista" → '"especialista"'),
@@ -9880,6 +9925,26 @@ async def process_inbound(
         #   1. Human agent   → Redis pub/sub  agent:events:{session_id}
         #   2. Native AI     → Redis LPUSH    menu:result:{session_id}    (Skill Flow menu step)
         #   3. External-MCP  → Redis Streams  session:{session_id}:stream   (XADD, fan-out)
+
+        # WCH-11 — a fala do cliente tem UM registro na sessão. Quando o canal coletou por VOZ, o
+        # enunciado já está no stream e no analytics como `audio_transcript` (fatia 4), e o
+        # `menu_result` que chega agora é o MESMO enunciado, não um segundo turno. Ele continua
+        # sendo ENTREGUE (LPUSH ao menu, step `receive`): entregar é transporte, registrar é
+        # história — confundir os dois foi o que pôs a mesma frase duas vezes na transcrição, na
+        # avaliação e no Console.
+        #
+        # ⚠️ Só `voice`: a TECLA (`dtmf`) não deixa rastro de texto e o clique da tela tampouco,
+        # então nesses o `menu_result` é o único registro e continua sendo escrito.
+        ja_registrado_como_fala = menu_via == "voice"
+        if ja_registrado_como_fala:
+            logger.info(
+                "Resposta por VOZ nao re-registrada (a fala ja esta na sessao): session=%s menu=%s",
+                # ⚠️ pela porta de metadado, NUNCA pelo encadeamento `.get("payload")`: aquele é o
+                # censo do contrato do VALOR, e `menu_id` lido por ali vira "chave de sinal" — um
+                # produtor que publicasse só `menu_id` passaria a ser aceito sem publicar `result`
+                # (medido: o ramo B do gate ficou vermelho na primeira tentativa desta linha).
+                session_id, _menu_meta(content, "menu_id") or "",
+            )
 
         is_human     = await redis_client.get(f"session:{session_id}:human_agent")
 
@@ -9999,6 +10064,7 @@ async def process_inbound(
                 any_masked      = any_masked,
                 masked_fields   = all_masked_fields,
                 suppressed_text = _MASKED_SUPPRESSED_HUMAN,
+                interaction     = menu_interaction,
             )
             if any_masked:
                 logger.info(
@@ -10019,10 +10085,15 @@ async def process_inbound(
                 "contact_id": contact_id,
                 "visibility": visibility,
             }
-            if speech is None:
+            if speech is None and not ja_registrado_como_fala:
                 await redis_client.publish(f"agent:events:{session_id}", json.dumps(event))
                 logger.info("Forwarded %s to human agent: session=%s masked=%s",
                             msg_type, session_id, bool(any_masked))
+            elif ja_registrado_como_fala:
+                # Mesma decisão do dono da fatia 4, um passo adiante: o humano OUVIU a resposta
+                # falada; o desfecho da coleta não volta ao chat dele como se digitado.
+                logger.info("Resposta por voz NAO encaminhada ao Console (o humano a ouviu): "
+                            "session=%s", session_id)
             else:
                 # Decisão do dono (VOZ-05 fatia 4): o humano OUVIU o cliente; a transcrição não
                 # aparece no chat dele como se digitada. Fica na sessão (stream, analytics).
@@ -10030,21 +10101,23 @@ async def process_inbound(
                             "session=%s", session_id)
 
             # Write to canonical stream so supervision SSE and analytics can see the message
+            # (WCH-11: exceto quando a fala já é o registro — ver `ja_registrado_como_fala`)
             try:
                 stream_key_human = f"session:{session_id}:stream"
-                await redis_client.xadd(
-                    stream_key_human,
-                    customer_message_stream_fields(
-                        event_id   = event.get("message_id", str(uuid.uuid4())),
-                        timestamp  = event.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                        author_id  = author.get("id") or contact_id or "customer",
-                        text       = display_text,
-                        visibility = visibility,
-                        content_type = spoken_type,
-                        speech       = speech,
-                    ),
-                )
-                await redis_client.expire(stream_key_human, _stl())  # 4h TTL
+                if not ja_registrado_como_fala:
+                    await redis_client.xadd(
+                        stream_key_human,
+                        customer_message_stream_fields(
+                            event_id   = event.get("message_id", str(uuid.uuid4())),
+                            timestamp  = event.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                            author_id  = author.get("id") or contact_id or "customer",
+                            text       = display_text,
+                            visibility = visibility,
+                            content_type = spoken_type,
+                            speech       = speech,
+                        ),
+                    )
+                    await redis_client.expire(stream_key_human, _stl())  # 4h TTL
             except Exception as _xadd_exc:
                 logger.warning(
                     "Could not XADD customer message to stream: session=%s — %s",
@@ -10090,7 +10163,10 @@ async def process_inbound(
             # nada foi declarado NESTA mensagem.
             if all_masked_types:
                 _analytics_event["masked_types"] = dict(all_masked_types)
-            if _kafka_producer:
+            # WCH-11 — a fala já foi publicada como `audio_transcript` pelo caminho da
+            # transcrição; um segundo evento com o MESMO enunciado duplicaria a linha da
+            # transcrição no ClickHouse, que é o que o avaliador lê.
+            if _kafka_producer and not ja_registrado_como_fala:
                 await _kafka_producer.send_and_wait(
                     "conversations.events",
                     json.dumps(_analytics_event).encode("utf-8"),
@@ -10177,13 +10253,14 @@ async def process_inbound(
             # form submissions, and other menu responses appear in the
             # Analytics/Sessions transcript even when no human agent is present.
             # Skipped when is_human — the human branch already wrote it.
-            if not is_human:
+            if not is_human and not ja_registrado_como_fala:
                 # Destino 3 — stream canônico da sessão IA.
                 _ai_stream_display, _ai_stream_vis = redact_customer_reply(
                     reply_text,
                     msg_type      = msg_type,
                     any_masked    = any_masked,
                     masked_fields = all_masked_fields,
+                    interaction   = menu_interaction,
                 )
 
                 try:

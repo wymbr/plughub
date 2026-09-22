@@ -2897,10 +2897,17 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                          "(session=%s) — NAO publicado", done.outcome, p.menu_id, session_id)
             return
         # Payloads LITERAIS e só com chaves que o bridge lê: `probe_menu_result_contract` mede cada
-        # produtor pelo literal e reprova chave sem leitor. Por onde veio (tecla/fala) fica no log.
+        # produtor pelo literal e reprova chave sem leitor.
+        #
+        # ⚠️ `via` deixou de ficar SÓ no log em 2026-09-22 (WCH-11), porque quem precisa dele é o
+        # bridge: coleta por VOZ significa que o enunciado já entrou na sessão como
+        # `audio_transcript`, e re-registrá-lo punha a mesma frase duas vezes na transcrição (a
+        # segunda rotulada `[Seleção: …]`). Quem lê é `process_inbound`; sem leitor, a chave não
+        # entraria — é a regra que este mesmo comentário enuncia.
         if done.outcome == "value":
             content = MessageContent(type="menu_result", payload={
-                "menu_id": p.menu_id, "interaction": p.interaction, "result": done.value})
+                "menu_id": p.menu_id, "interaction": p.interaction, "result": done.value,
+                "via": done.via})
         else:
             content = MessageContent(type="menu_result", payload={
                 "menu_id": p.menu_id, "outcome": done.outcome})

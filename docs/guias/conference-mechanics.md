@@ -2547,3 +2547,35 @@ leitor com a semântica do Redis.
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*
+
+### Mudança 46 — a fala do cliente tem UM registro, e o rótulo vem da INTERAÇÃO (WCH-11, 2026-09-22)
+
+**Medido** na sessão `e606ef68`: um menu de TEXTO LIVRE respondido por voz produzia DUAS linhas na
+sessão — a fala (`audio_transcript`, registro do canal, com confiança e janela) e o desfecho da
+coleta como mensagem do cliente, decorado `[Seleção: eu precisava falar com o atendente.]`. O
+cliente falou uma vez; a transcrição, a avaliação e o Console mostravam duas.
+
+**As duas causas são independentes, e por isso são dois consertos.**
+
+1. **Entregar ≠ registrar.** O `menu_result` de uma coleta por VOZ é o MESMO enunciado que já
+   entrou na sessão. Ele continua sendo ENTREGUE (LPUSH ao menu, step `receive`) — transporte —,
+   e deixa de ser REGISTRADO de novo (stream, analytics, Console) — história. O discriminador é o
+   `via` que o canal passou a mandar no payload: `voice` não re-registra; `dtmf` e a resposta pela
+   TELA continuam registrando, porque nelas o `menu_result` é o único registro que existe.
+2. **O rótulo diz o que a resposta FOI.** A decoração olhava `msg_type` (tudo que não era `text`
+   virava `[Seleção: …]`); agora olha a `interaction` do menu: `text` sai cru, `form` vira
+   `[Formulário: …]`, opção continua `[Seleção: …]`. Interação **ausente** mantém o rótulo antigo —
+   não se adivinha texto livre a partir da falta de informação.
+
+⚠️ **O metadado ganhou mecanismo, e não só um comentário.** `via`/`interaction` não entram no
+contrato do VALOR (produtor antigo legitimamente não os manda, e exigi-los de todos reprovaria
+`sms`, `voice`, `whatsapp` e o webchat). Eles são lidos por UMA porta (`_menu_meta`), e o ramo C do
+`probe_menu_result_contract.sh` exige que cada metadado lido seja publicado por ALGUM produtor; o
+ramo D planta a renomeação e exige vermelho. Sem isso, renomear `via` no canal faria a fala voltar
+a ser registrada duas vezes em silêncio.
+
+⚠️ **Armadilha medida ao escrever isto:** a primeira versão lia `menu_id` pelo encadeamento
+`.get("payload")` numa linha de LOG, e aquele encadeamento é o censo do contrato — `menu_id` virou
+"chave de sinal" e o ramo B do gate passou a aceitar um produtor que não publica `result`. O gate
+ficou vermelho e apontou. Leitura de metadado vai pela porta de metadado, inclusive em log.
+
