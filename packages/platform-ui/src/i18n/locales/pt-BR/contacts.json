@@ -965,6 +965,35 @@
     }
   },
   "lens": {
+    "routing": {
+      "title": "Roteamento",
+      "summary": "{{contacts}} contatos roteados · {{attended}} atendidos · {{rerouted}} re-roteados",
+      "proxy": "sinal indireto",
+      "proxyHint": "Ninguém carimba “o destino estava errado”. O que se conta é a consequência: o destino não concluiu o atendimento e outro pool atendeu em seguida. Há falso positivo legítimo (o destino certo que descobre, atendendo, que o caso é de outra área) e falso negativo (o destino errado que resolve assim mesmo). Leia como indicação, nunca como veredicto.",
+      "notMeasured": "—",
+      "notMeasuredHint": "Não medida: ninguém foi atendido neste destino, então não há base para uma taxa. Zero diria “nunca erra”.",
+      "smallSample": "n={{count}}",
+      "empty": "Nenhuma navegação no período",
+      "emptyHint": "Só aparecem contatos roteados por uma árvore de orquestrador — o destino vem do evento de negócio de navegação.",
+      "error": "Não foi possível carregar o sinal de roteamento",
+      "dataDefect": "{{count}} sessão(ões) com evento de navegação e sem cadeia de segmentos — defeito de dado, não de roteamento.",
+      "col": {
+        "orchestrator": "Orquestrador",
+        "destination": "Destino",
+        "contacts": "Contatos",
+        "noDestination": "Sem destino",
+        "attended": "Atendidos",
+        "rerouted": "Re-roteados",
+        "rate": "Taxa",
+        "next": "Seguiu para"
+      },
+      "hint": {
+        "noDestination": "O cliente saiu antes de chegar a um destino. Fora da base da taxa: dividir por ele faria a folha abandonada parecer a melhor.",
+        "rate": "Re-roteados ÷ atendidos. Nunca veredicto — ver a nota de sinal indireto acima.",
+        "next": "Os pools que atenderam depois do destino. Um destino que termina sempre no mesmo outro pool é uma folha que falta na árvore.",
+        "smallSample": "Menos de {{min}} contatos atendidos: um caso leva a taxa a 100%."
+      }
+    },
     "list": {
       "title": "Lista"
     },

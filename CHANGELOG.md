@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (14) — ORQ-16: a qualidade do roteamento virou lente, e o número passou a dizer o que é
+
+**O que faltava.** O sinal da ORQ-14 existia havia um dia e só era alcançável por `curl` com token
+de serviço. Número sem tela não entra em decisão de produto — ninguém consulta o que precisa de
+credencial de máquina —, e a prova disso aconteceu na mesma janela: a primeira leitura do relatório
+mandou investigar a árvore errada, e só um olhar demorado nas cadeias mostrou que o defeito era da
+métrica. Uma tela não teria evitado aquilo, mas é o que torna a próxima leitura barata.
+
+**A lente.** `routing`, na superfície A (`/analise/sessions?lens=routing`), com forma própria
+`routing_table`. Uma linha por destino da árvore: orquestrador · destino · contatos · sem destino ·
+atendidos · re-roteados · taxa · **seguiu para**. A última é a coluna acionável — um destino que
+termina sempre no mesmo outro pool é uma folha que falta na árvore, que foi o defeito da ORQ-11.
+
+**O rótulo do número é parte da tela, não um tooltip.** O cabeçalho traz o selo *sinal indireto* e
+a explicação do que o número mede, com o `meta.sinal` do backend no `title` como PROVENIÊNCIA: a
+tela não afirma sozinha o que é proxy: ela repassa a declaração de quem calcula. Se o backend
+parar de declarar, o `title` fica vazio em vez de a tela inventar a garantia.
+
+**Três honestidades, cada uma impedindo um defeito concreto:**
+
+1. **Taxa ausente ≠ zero.** `null` vira `—` com o motivo no `title`. `0%` diria *"esta folha nunca
+   erra"* sobre uma folha que ninguém chegou a atender — a família do `?? 0` que já custou o
+   sentimento fabricado.
+2. **Amostra pequena é marcada, não escondida.** Abaixo de 5 atendidos a taxa vem apagada e com
+   selo `n=…`. Na janela medida há uma linha com 1 contato e 1 re-roteio, ou seja **100%**: ela
+   encabeçaria qualquer ordenação por taxa. Omitir a linha esconderia o único sinal de uma folha
+   nova; por isso ela fica, sem o peso visual de um número medido.
+3. **A barra não julga.** Proporção em cor neutra. Verde/vermelho seria veredicto, e veredicto é o
+   que um proxy não autoriza.
+
+**A declaração fez trabalho, e o compilador cobrou.** `honors: 'period_only'` aqui não significa o
+mesmo que na lente `taxonomy`: lá o filtro de pool seria redundante; aqui ele é **outra pergunta** —
+o pool da barra é *quem ATENDEU*, o desta lente é o ORQUESTRADOR, *quem ROTEOU* (D10 do
+`adr-journey-session-segment-model`). E acrescentar a forma nova quebrou o build do
+`AgentsBenchPage`, que exaure `LensChart`: a mesa teve de declarar que não desenha esta forma. O
+`platform-ui` não tem suíte nem lint — esse `assertNever` é o mecanismo que existe, e é a segunda
+vez que ele pega uma forma nova antes de qualquer teste rodar.
+
+**Medido antes de entregar.** `tsc --noEmit` verde sobre 281 arquivos de `src/`. A chamada exata que
+a lente faz, com Bearer de **usuário** (o endpoint nasceu testado só com token de serviço): 7
+linhas, `contatos=44`, `taxa=0.1364`; com `accessible_pools` sem nenhum orquestrador, **0 linhas**;
+sem credencial, **401** — o par positivo/negativo, e não só o positivo. Gates verdes:
+`probe_report_surface` · `probe_i18n_duplicate_keys` · `probe_ui_color_scale_classes` ·
+`probe_ui_credential_coverage` · `gate_orphan_ui_callers`.
+
+**O que NÃO foi feito, e é decisão.** Nenhum gate novo: o que esta entrega acrescenta é tela, e o
+`platform-ui` não tem runner de teste — afirmar cobertura por `grep` no fonte contaria o comentário
+que documenta a regra, que é o modo de falha que este repositório já nomeou. O que protege a lente
+é o typecheck exaustivo, os cinco gates acima e o gate ao vivo do endpoint
+(`probe_navigation_routing_signal.sh`). Capacidade por rota (`contacts.visualizar` no backend)
+continua sendo dívida das 47 rotas de `/reports/*`, não desta ficha: a lente é gateada na UI pelo
+mesmo `RequireAbac` das outras lentes da mesma página.
+
 ## 2026-09-22 (13) — ORQ-14: a métrica de re-roteamento media errado, e quem a expôs foi a primeira pergunta feita a ela
 
 **O que aconteceu.** A ORQ-14 entregou o sinal de re-roteamento no mesmo dia, e a primeira leitura

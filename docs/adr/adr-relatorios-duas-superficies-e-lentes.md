@@ -711,3 +711,57 @@ COMPARACAO entre entidades.
 ⚠️ **O `assertNever` cobrou de novo, e da segunda superficie.** Acrescentar a forma quebrou o build
 do `AgentsBenchPage`, que exaure `LensChart` — a mesa teve de DECLARAR que nao desenha esta forma.
 E o mecanismo funcionando: forma nova para o build em vez de cair calada num render generico.
+
+---
+
+## Lente `routing` (2026-09-22, ORQ-16) — a quinta forma da superficie A
+
+Superficie do sinal da ORQ-14 (`GET /reports/navigation/routing`), que existia havia um dia e so
+era alcancavel por `curl` com token de servico. Numero sem tela nao entra em decisao de produto:
+ninguem consulta o que precisa de credencial de maquina.
+
+Forma PROPRIA (`routing_table`), e nao `metric_lines` reaproveitada. A pergunta nao e *como
+evoluiu*, e *em quais destinos o contato precisou de outro pool depois* — e o campo acionavel e
+`proximos` (a folha que FALTA na arvore), que e texto, nao serie. Plotar como linha exigiria um
+eixo de tempo que o endpoint nao produz, e convidaria a ler tendencia num numero indireto.
+
+### Tres honestidades que a tela deve ao dado, e o que cada uma impede
+
+**1. Taxa ausente nao e zero.** Sem ninguem atendido o backend devolve `null`, e a celula mostra
+`—` com o motivo no `title`. `0%` diria *"esta folha nunca erra"* sobre uma folha que ninguem
+chegou a atender — a mesma familia do `?? 0` que a WCH/ORQ ja pagou em sentimento.
+
+**2. Amostra pequena e MARCADA, nunca escondida.** Abaixo de 5 atendidos a taxa vem apagada e com
+selo `n=…`. O motivo e concreto: na janela medida ha uma linha com 1 contato e 1 re-roteio, isto e,
+**100%** — ela encabecaria qualquer ordenacao por taxa. Omitir a linha, porem, esconderia o unico
+sinal de uma folha nova; por isso ela fica, sem o peso visual de um numero medido.
+
+**3. A barra nao julga.** Largura proporcional, cor neutra (`secondary`). Verde/vermelho seria
+veredicto, e veredicto e exatamente o que um proxy nao autoriza — o rotulo *sinal indireto* fica no
+cabecalho, nao num tooltip que ninguem abre, e o `meta.sinal` do backend vai no `title` como
+PROVENIENCIA: se o backend parar de declarar, o `title` fica vazio em vez de a tela afirmar
+sozinha.
+
+### O que a declaracao fez de trabalho real
+
+**`honors: 'period_only'` — e aqui o filtro de pool NAO e "duas vezes a mesma coisa"**, como na
+`taxonomy`: e **outra pergunta**. O filtro de pool da barra significa *quem ATENDEU*; o pool desta
+lente e o ORQUESTRADOR, *quem ROTEOU* (D10 do `adr-journey-session-segment-model`). Honrar um com a
+semantica do outro filtraria pela coisa errada sem dizer — e o orquestrador ja e a primeira coluna
+da tabela.
+
+**`domain: 'ai'`** porque quem roteia e sempre um agente de orquestracao, o deterministico ou o com
+LLM, nunca uma pessoa. `universal` diria que a lente tambem fala de humano, e nao fala.
+
+⚠️ **O `assertNever` cobrou pela segunda vez, e pela mesma porta.** Acrescentar `routing_table`
+quebrou o build do `AgentsBenchPage` antes de qualquer teste rodar, e a mesa teve de DECLARAR que
+nao desenha esta forma. O `platform-ui` nao tem suite nem lint; este compilador exaustivo e o
+mecanismo que existe, e ele funcionou nas duas vezes em que foi exercido.
+
+### Medido antes de entregar
+
+`tsc --noEmit` verde sobre 281 arquivos de `src/`. A chamada que a lente faz, com Bearer de USUARIO
+(nao o token de servico com que o endpoint nasceu): 7 linhas, `contatos=44`, `taxa=0.1364`; com um
+token cujo `accessible_pools` nao contem orquestrador, **0 linhas**; sem credencial, **401**. Gates
+verdes: `probe_report_surface` · `probe_i18n_duplicate_keys` · `probe_ui_color_scale_classes` ·
+`probe_ui_credential_coverage` · `gate_orphan_ui_callers`.

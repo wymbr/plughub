@@ -1023,6 +1023,7 @@ function LensChart({
       case 'disposition_summary':
       case 'pool_panel':
       case 'account_tokens':
+      case 'routing_table':
         return (
           <div className="h-52 flex items-center justify-center text-sm text-muted-light px-6 text-center">
             {t('bench.chart.notInThisSurface')}

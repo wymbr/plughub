@@ -42,6 +42,7 @@ import { ListaTab }        from './tabs/ListaTab'
 import ContactLensChart    from './ContactLensChart'
 import WrapupSummaryPage   from '@/modules/analise/WrapupSummaryPage'
 import TaxonomyTreeLens   from '@/modules/analise/TaxonomyTreeLens'
+import RoutingQualityLens from '@/modules/analise/RoutingQualityLens'
 import { CONTACT_LENSES, assertNever, isContactLens } from '@/modules/analise/lens-contract'
 import type { ContactLensId } from '@/modules/analise/lens-contract'
 // Mesmo componente que a coluna "Processo" da lista usa — ver o comentário do
@@ -707,6 +708,12 @@ export default function SessionsPage() {
           // disposição: duas janelas de tempo na mesma tela seriam dois recortes
           // concorrentes, e a de dentro venceria em silêncio.
           <TaxonomyTreeLens fromDt={filters.fromDt} toDt={filters.toDt} />
+        ) : shape === 'routing_table' ? (
+          // Mesmo motivo das duas acima: recebe o intervalo da barra para não haver
+          // duas janelas de tempo concorrentes na mesma tela. O resto da barra ela
+          // NÃO honra, e a declaração (`honors: 'period_only'`) é quem diz isso — o
+          // aviso no canto da `LensBar` sai daí, não de uma condição repetida aqui.
+          <RoutingQualityLens fromDt={filters.fromDt} toDt={filters.toDt} />
         ) : shape === 'metric_lines' ? (
           // Toda lente de série é o MESMO componente, dirigido pela declaração —
           // nunca um branch por lente. Ver `ContactLensChart`.

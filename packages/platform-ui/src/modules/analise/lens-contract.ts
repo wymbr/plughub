@@ -200,6 +200,16 @@ export type LensChart =
   | 'taxonomy_tree'
   /** Tabela de consumo por CONTA LLM × modelo × origem (F3 · a metade B do token). */
   | 'account_tokens'
+  /**
+   * Tabela de qualidade do ROTEAMENTO por destino da árvore (ORQ-16).
+   *
+   * Forma própria, e não `metric_lines`: a pergunta não é *como evoluiu*, é *em quais
+   * destinos o contato precisou de outro pool depois* — e o campo acionável é
+   * `proximos` (a folha que falta na árvore), que é texto, não série. Plotar como
+   * linha exigiria escolher um eixo de tempo que o endpoint não produz, e a taxa é
+   * PROXY: uma curva convidaria a ler tendência onde há um número indireto.
+   */
+  | 'routing_table'
 
 export interface ReportMetric {
   key:         string
@@ -423,6 +433,26 @@ export const REPORT_LENSES = [
     metrics: [], evidence: 'delegated', comparability: 'same_form',
     source: 'own', honors: 'period_only',
     chart: 'taxonomy_tree',
+    surface: 'contacts',
+  },
+  {
+    // Qualidade do roteamento da árvore de navegação (ORQ-16; sinal da ORQ-14).
+    //
+    // **`domain: 'ai'`** porque quem roteia aqui é sempre um agente de orquestração —
+    // o determinístico ou o com LLM —, nunca uma pessoa. `universal` diria que a
+    // lente também fala de humano, e não fala.
+    //
+    // **`metrics: []` e `evidence: 'delegated'`**: a taxa não é série plotável e pode
+    // ser `null` (não medida) por linha; quem sabe desenhar isso é o componente.
+    //
+    // **`period_only` é a declaração honesta, não uma lacuna**: o filtro de pool da
+    // barra significa *quem ATENDEU*, e o pool desta lente é o ORQUESTRADOR (quem
+    // ROTEOU) — D10 do `adr-journey-session-segment-model`. Honrá-lo com a semântica
+    // trocada filtraria pela coisa errada sem dizer.
+    id: 'routing', entity: 'contact', domain: 'ai',
+    metrics: [], evidence: 'delegated', comparability: 'always',
+    source: 'own', honors: 'period_only',
+    chart: 'routing_table',
     surface: 'contacts',
   },
   // ── Superfície B · Recursos (F3) ────────────────────────────────────────────

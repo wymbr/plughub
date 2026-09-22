@@ -965,6 +965,35 @@
     }
   },
   "lens": {
+    "routing": {
+      "title": "Routing",
+      "summary": "{{contacts}} contacts routed · {{attended}} attended · {{rerouted}} re-routed",
+      "proxy": "indirect signal",
+      "proxyHint": "Nobody stamps “the destination was wrong”. What is counted is the consequence: the destination did not close the contact and another pool served it next. There are legitimate false positives (the right destination that discovers, while serving, that the case belongs elsewhere) and false negatives (the wrong destination that solves it anyway). Read it as a pointer, not as a verdict.",
+      "notMeasured": "—",
+      "notMeasuredHint": "Not measured: nobody was served on this destination, so there is no base for a rate. Zero would say “it never misroutes”.",
+      "smallSample": "n={{count}}",
+      "empty": "No navigation in this period",
+      "emptyHint": "Only contacts routed by an orchestrator tree appear here — the destination comes from the navigation business event.",
+      "error": "Could not load the routing signal",
+      "dataDefect": "{{count}} session(s) with a navigation event and no segment chain — data defect, not routing.",
+      "col": {
+        "orchestrator": "Orchestrator",
+        "destination": "Destination",
+        "contacts": "Contacts",
+        "noDestination": "No destination",
+        "attended": "Served",
+        "rerouted": "Re-routed",
+        "rate": "Rate",
+        "next": "Went on to"
+      },
+      "hint": {
+        "noDestination": "The customer left before reaching a destination. Out of the rate base: dividing by it would make an abandoned leaf look like the best one.",
+        "rate": "Re-routed ÷ served. Never a verdict — see the indirect-signal note above.",
+        "next": "The pools that served after the destination. A destination that always ends in the same other pool is a leaf missing from the tree.",
+        "smallSample": "Fewer than {{min}} contacts served: one case moves the rate to 100%."
+      }
+    },
     "list": {
       "title": "List"
     },
