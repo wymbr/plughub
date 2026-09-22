@@ -1,5 +1,74 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (10) — WCH-13: a frase ouvida duas vezes era a BANCADA, e o instrumento que faltava
+
+**O sintoma.** Depois da WCH-10 o dono ouviu a frase de encaminhamento duas vezes, com 1–2 s de
+defasagem, em 2 de 3 contatos — e notou que ela *"começava sem eco e passava a ter"*.
+
+**Duas hipóteses minhas caíram por medição, e ficam registradas porque o modo de errar foi o
+mesmo: inferir mecanismo antes de ter instrumento.** (1) *eco acústico* — o dono estava de FONE;
+(2) *o widget anexando a trilha duas vezes* — plausível pelo código (`track.attach()` sem
+argumento cria um elemento NOVO a cada evento) e pela reavaliação de permissão do cliente no
+SFU, mas a medição seguinte não a sustenta.
+
+**O que a medição diz.** Instrumentei a fala (`webrtc fala: enfileirada #N (x car., y na fila)`,
+contador por sessão) porque responder *"saiu daqui uma vez ou duas?"* exigia cruzar Kafka, o
+serviço de TTS e o SFU — arqueologia para uma pergunta de uma linha. Nos **três** contatos:
+uma enfileirada (`#2`) por sessão, uma reprodução (dreno de 4,8–4,9 s), **uma** trilha `voz-`.
+O que separa os casos é QUANDO o atendente entra na sala:
+
+| contato | frase | atendente entra | eco |
+|---|---|---|---|
+| `845efa07` | 18:33:53,3 → 58,2 | 18:34:10,8 — **12 s depois** | não |
+| `431ea095` | 18:34:58,7 → 18:35:03,6 | 18:34:58,9 — **dentro** | sim |
+| `6c3406d5` | 18:35:47,9 → 52,8 | 18:35:48,1 — **dentro** | sim |
+
+**A causa é a bancada:** o dono está nas DUAS pontas com um fone só, e o Console assina a trilha
+da voz ao entrar e toca o áudio da sala — que é o comportamento certo (o atendente precisa ouvir
+o que a IA está dizendo ao cliente). Do instante em que o Console conecta, a mesma trilha toca em
+dois players com buffers diferentes. **Confirmado pelo dono**: mudar a aba do Console mata o eco.
+
+**O que fica, e por quê.** O endurecimento dos dois widgets (UM `<audio>` por `track.sid`,
+removido do DOM no unsubscribe) **não era a causa deste sintoma** — é defeito latente de verdade,
+porque `attach()` sem argumento cria tocador novo a cada assinatura, e a reassinatura acontece.
+Fica como defesa, com a causa dita corretamente no histórico em vez de um conserto com causa
+inventada. E fica a instrumentação, que é o que transforma a próxima ocorrência numa linha de log
+em vez de uma tarde de correlação.
+
+## 2026-09-22 (9) — WCH-10: a transferência é dita, e a voz termina a frase antes de sair
+
+**O que foi medido.** No teste por voz da WCH-09 (sessão `492aa613`) a IA entendeu o pedido,
+transferiu, e o cliente só viu *"Agente entrou no atendimento"* — numa chamada, silêncio é
+indistinguível de queda. Duas causas independentes, e consertar uma só não entrega nada: o fluxo
+não avisava, e a voz **não conseguiria** avisar, porque sai da sala assim que a IA deixa de
+atender e o tocador era cancelado no meio da frase.
+
+**O que mudou.**
+- **fluxo** — `avisar_destino` (confirma o rótulo da folha pelo `node_label`, resolvido pela mesma
+  projeção que conferiu a folha) e `avisar_escape` (não classificou com segurança). Dois avisos
+  porque são dois desfechos: dizer o rótulo de *"Nenhuma dessas"* confirmaria ao cliente algo que
+  ele não pediu. Texto do FLUXO, rótulo da ÁRVORE — mensagem por folha continua proibida (D7).
+- **channel-gateway** — no ponto de decisão do teto, `_stop_voice_soon` agenda a saída:
+  `_drain_speech` espera o que já está na fila terminar (teto `_VOICE_DRAIN_MAX_S` = 8 s; estourou,
+  sai e loga WARNING). Agendada e não aguardada porque os dois chamadores são handlers de WebSocket
+  da sessão — segurá-los por segundos pararia de processar o que o cliente manda. Nada NOVO entra
+  na fila durante a janela: `_decide_voice` já decidiu antes, e `_can_speak` recusa.
+- **o contador é o instrumento** — `_speech_pending`, incrementado **antes** do `put_nowait` e
+  zerado quando a mensagem termina de qualquer jeito. `_speaking` não serviria: ele só é marcado
+  depois de `_wait_room_for_speech`, então uma mensagem esperando a sala pareceria "nada pendente"
+  e a voz sairia por cima dela — o mesmo defeito com outra roupa.
+- **o que NÃO drena**: o fim da chamada (`_stop_bot_leg`), porque não há para quem falar, e ele
+  ainda cancela uma saída agendada que tenha ficado esperando. Agente de IA de áudio que volta na
+  janela também cancela (`_cancel_voice_stop`), e se a saída já tiver acontecido a voz reentra pelo
+  caminho normal.
+
+**Medido.** channel-gateway **1 449** (6 novos, `TestVozNaTransferencia`). Bateria de mutação por
+`docker cp`: sem dreno (3 testes vermelhos), sem teto (1) e sem o decremento da pendência (1) —
+todas pegas, e o controle positivo verde antes e depois. Um teste EXISTENTE ficou vermelho e foi
+corrigido, não o produto: ele afirmava a saída síncrona da voz que esta ficha muda; o ouvinte
+continua saindo na hora, e o teste agora diz por quê. Skill promovido no `demo_llm_ia` com a
+âncora `avisar_destino` conferida no snapshot.
+
 ## 2026-09-22 (8) — ORQ-12: a folha diz o que cobre, e o roteador com LLM lê significado em vez de código
 
 **O que foi medido.** Na sessão `492aa613` (teste por voz da WCH-09) o pedido de aumento de limite

@@ -1057,6 +1057,36 @@ chat é config legítima (o atendente responde pela tela) e loga INFO, não WARN
 Medido no browser do dono (sessão `492aa613`): menu rearmado na sala pronta, desfecho `value por voice`,
 o LLM classificou a frase falada (`destino.sac.especialista`), a voz saiu com a IA e o ouvinte ficou
 para o humano, cuja fala foi transcrita; especialista de formulário respondeu pela tela.
+**A transferência é DITA, e a voz termina a frase antes de sair (WCH-10, 2026-09-22).** São duas
+metades, e uma sem a outra não entrega nada:
+
+- **o aviso é do FLUXO, não do mapa.** `skill_navegacao_llm_v1` ganhou dois `notify` antes de
+  transferir: `avisar_destino` (confirma o rótulo da folha, `{{nivel.node_label}}`) e
+  `avisar_escape` (não soube classificar). Dois porque são desfechos diferentes — dizer *"Entendi:
+  Nenhuma dessas"* confirmaria ao cliente uma coisa que ele não pediu. Mensagem POR FOLHA
+  continua proibida (D7 do ADR da árvore): o texto é do fluxo, o rótulo vem da árvore.
+- **a voz sai AGENDADA** (`_stop_voice_soon` → `_drain_speech`, teto `_VOICE_DRAIN_MAX_S` = 8 s).
+  O `_stop_voice` direto — que continua certo no fim da chamada — cortava a frase em curso: o
+  humano entra um instante depois do aviso, `_decide_voice` devolve `False` e o tocador era
+  cancelado no meio. O que a drenagem lê é `_speech_pending`, contado **na enfileirada** e zerado
+  quando a mensagem termina de qualquer jeito (tocada, interrompida ou não falada); `_speaking`
+  não serviria, porque só é marcado depois de a sala responder. Estourou o teto: sai assim mesmo e
+  loga WARNING. Agente de IA de áudio que volta durante a janela CANCELA a saída
+  (`_cancel_voice_stop`); o fim da chamada (`_stop_bot_leg`) não drena nada — não há para quem
+  falar. Testes: `TestVozNaTransferencia` (6 casos, com bateria de mutação: sem dreno, sem teto e
+  sem o decremento, três mutações pegas).
+
+**A fala tem registro, e "ouvi duas vezes" virou uma linha de log (WCH-13, 2026-09-22).** Cada
+mensagem que a plataforma manda falar loga `webrtc fala: enfileirada #N (x car., y na fila)`, com
+contador por sessão. Existe porque responder *"saiu daqui uma vez ou duas?"* exigia cruzar Kafka,
+o serviço de TTS e o SFU — e a resposta, medida em três contatos, foi **uma**. O eco que o dono
+ouviu era a BANCADA: quem testa as duas pontas com um fone só ouve a trilha da voz no widget **e**
+no Console, que a assina ao entrar (comportamento certo — o atendente precisa ouvir o que a IA diz
+ao cliente); por isso o eco só aparecia nos contatos em que o Console entrava DENTRO da frase, e
+mudar a aba do Console o mata. ⚠️ Os widgets ganharam UM `<audio>` por `track.sid` (em vez de um
+novo a cada evento de assinatura) como DEFESA, não como causa deste sintoma — `attach()` sem
+argumento cria tocador novo, e reassinatura acontece.
+
 Deixou fichas: `WCH-10` (transferência calada; voz corta a frase ao sair) · `WCH-11` (resposta falada
 duplicada e rotulada `[Seleção: …]`) · `WCH-12` (fala depende da instância do gateway).
 

@@ -176,6 +176,12 @@
   // esta sessão. O texto continua por aqui; a queda da chamada não encerra o chat.
   const CALL_URL   = 'ws://localhost:8010/ws/call';
   let chatToken = null, callWs = null, callRoom = null, callTracks = [];
+  // WCH-13 — UM elemento de áudio por trilha. `track.attach()` sem argumento CRIA um
+  // elemento novo a cada chamada, e o evento de assinatura pode vir mais de uma vez para a
+  // mesma trilha (o SFU reavalia a assinatura quando a permissão do participante muda — e ela
+  // muda quando um atendente entra, que é justamente quando a IA está falando). Dois elementos
+  // tocando a mesma trilha = a mesma frase ouvida duas vezes, defasada.
+  const callAudioEls = new Map();   // track.sid -> <audio>
   // WCH-07: a chamada que acabou é DITA uma vez, qualquer que seja o caminho do fim. Quando o
   // próprio cliente desligava, o servidor fechava a conexão sem `webrtc.call_ended` e o widget
   // se desfazia calado — a última linha seguia dizendo "Em chamada".
@@ -301,11 +307,18 @@
         const v = document.getElementById('call-video');
         track.attach(v); v.style.display = 'block';
       } else if (track.kind === LK.Track.Kind.Audio) {
-        document.body.appendChild(track.attach());
+        if (callAudioEls.has(track.sid)) return;     // já está tocando: anexar de novo duplica
+        const el = track.attach();
+        callAudioEls.set(track.sid, el);
+        document.body.appendChild(el);
       }
     });
     callRoom.on(LK.RoomEvent.TrackUnsubscribed, (track) => {
       track.detach();
+      // Sai do DOM também: `detach()` só desliga a trilha, o elemento ficava para trás e
+      // reaparecia no próximo `attach` como um tocador a mais.
+      const el = callAudioEls.get(track.sid);
+      if (el) { el.remove(); callAudioEls.delete(track.sid); }
       if (track.kind === LK.Track.Kind.Video) document.getElementById('call-video').style.display = 'none';
     });
     await callRoom.connect(m.livekit_url, m.token);
@@ -331,6 +344,8 @@
     for (const t of callTracks) { try { t.stop(); } catch {} }
     callTracks = [];
     if (callRoom) { try { callRoom.disconnect(); } catch {} callRoom = null; }
+    for (const el of callAudioEls.values()) { try { el.remove(); } catch {} }
+    callAudioEls.clear();
     const v = document.getElementById('call-video'); v.style.display = 'none';
     if (callWs) { const w = callWs; callWs = null; try { w.close(); } catch {} }
     sayCallEnded('📞 Chamada encerrada');      // queda ou recusa sem motivo dito

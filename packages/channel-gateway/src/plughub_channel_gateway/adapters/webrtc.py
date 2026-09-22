@@ -202,6 +202,11 @@ _NO_AI_AUDIO_ATTENDANT = "nenhum agente de IA de audio atende a chamada"
 _SENTENCE_MIN_CHARS = 25
 # VOZ-02: quanto a despedida da plataforma pode tocar antes de a chamada telefônica ser derrubada.
 _SIP_FAREWELL_MAX_S = 10.0
+# WCH-10: quanto a voz pode DEMORAR terminando o que já está falando antes de sair da sala, quando
+# a IA deixa de atender (transferência). Teto, não promessa: estourou, sai assim mesmo e LOGA — o
+# cliente não pode ficar preso a uma voz que não é mais atendida por ninguém.
+_VOICE_DRAIN_MAX_S  = 8.0
+_VOICE_DRAIN_TICK_S = 0.05
 
 # ── Coleta por teclado e fala (VOZ-05, fatia 5b) ──────────────────────────────
 #
@@ -418,6 +423,17 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._speech_tasks:   dict[str, asyncio.Task]       = {}
         self._speaking:       set[str] = set()
         self._speech_cancel:  set[str] = set()
+        # WCH-10: quantas mensagens desta sessão ainda não terminaram — a enfileirada que ninguém
+        # começou a tocar E a que está em curso. `_speaking` não serve para isto: ele só é marcado
+        # DEPOIS de `_wait_room_for_speech`, então uma mensagem esperando a sala pareceria "nada
+        # pendente" e a voz sairia por cima dela.
+        self._speech_pending: dict[str, int] = {}
+        # WCH-13: quantas mensagens esta sessão já mandou falar — o número que diz, na próxima
+        # chamada, se uma frase ouvida duas vezes saiu daqui duas vezes.
+        self._speech_seq: dict[str, int] = {}
+        # A saída da voz agendada (uma por sessão), para o retorno de um agente de IA de áudio
+        # durante a drenagem poder CANCELAR a saída em vez de esperá-la terminar.
+        self._voice_stopping: dict[str, asyncio.Task] = {}
 
         # VOZ-05 (fatia 5b): a coleta por teclado/fala em curso por sessão (no máximo uma: o menu
         # novo substitui o anterior) e o leitor de DTMF do ouvinte.
@@ -575,7 +591,13 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         return bot
 
     async def _stop_bot_leg(self, session_id: str) -> None:
-        """Os dois papéis saem da sala: o ouvinte e a voz."""
+        """Os dois papéis saem da sala: o ouvinte e a voz.
+
+        Aqui é o FIM da chamada, e por isso não se drena nada: não há para quem falar. Drenar é
+        só na transferência (`_stop_voice_soon`), e uma saída agendada que estivesse esperando
+        deixa de fazer sentido — some junto.
+        """
+        self._cancel_voice_stop(session_id)
         self._voice_wanted.discard(session_id)
         self._voice_absent_why.pop(session_id, None)
         await self._stop_voice(session_id)
@@ -592,6 +614,59 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             except Exception as exc:
                 logger.warning("webrtc bot leg: disconnect falhou (session=%s): %s", session_id, exc)
             logger.info("webrtc bot leg: ouvinte saiu da sala (session=%s)", session_id)
+
+    def _stop_voice_soon(self, session_id: str) -> None:
+        """WCH-10 — a voz sai da sala DEPOIS de terminar o que já está falando.
+
+        A IA deixa de atender no meio da própria frase: o aviso de transferência é dito pelo
+        fluxo e, um instante depois, o humano entra e `_decide_voice` devolve `False`. Cortar ali
+        (o que `_stop_voice` faz, e faz certo no fim da chamada) deixava o cliente com meia frase
+        e a impressão de queda — medido no teste do dono, sessão `492aa613`.
+
+        Agendado e NÃO aguardado: os dois chamadores são handlers de WebSocket da sessão, e
+        segurá-los por segundos pararia de processar o resto do que o cliente manda. A decisão
+        (`_voice_wanted`) já foi tomada por `_decide_voice` antes deste ponto, então nada NOVO
+        entra na fila durante a drenagem — só termina o que já estava lá.
+        """
+        if session_id in self._voice_stopping:
+            return
+        self._voice_stopping[session_id] = disparar(
+            self._drain_then_stop_voice(session_id), nome=f"webrtc-voz-sai-{session_id[:8]}",
+        )
+
+    def _cancel_voice_stop(self, session_id: str) -> None:
+        """Voltou a haver agente de IA de áudio antes de a voz sair: desmarca a saída."""
+        task = self._voice_stopping.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            logger.info("webrtc voz: saida CANCELADA — voltou a haver agente de IA de audio "
+                        "(session=%s)", session_id)
+
+    async def _drain_then_stop_voice(self, session_id: str) -> None:
+        try:
+            inicio = time.monotonic()
+            terminou = await self._drain_speech(session_id, _VOICE_DRAIN_MAX_S)
+            if not terminou:
+                logger.warning(
+                    "webrtc voz: fala nao terminou em %.0f s — saindo da sala assim mesmo "
+                    "(%d mensagem(ns) pendente(s), session=%s)",
+                    _VOICE_DRAIN_MAX_S, self._speech_pending.get(session_id, 0), session_id,
+                )
+            elif time.monotonic() - inicio > _VOICE_DRAIN_TICK_S:
+                logger.info("webrtc voz: terminou a fala em %.1f s e vai sair da sala (session=%s)",
+                            time.monotonic() - inicio, session_id)
+            await self._stop_voice(session_id)
+        finally:
+            self._voice_stopping.pop(session_id, None)
+
+    async def _drain_speech(self, session_id: str, teto: float) -> bool:
+        """Espera o que JÁ está na fila terminar de tocar. `True` = esvaziou dentro do teto."""
+        prazo = time.monotonic() + teto
+        while self._speech_pending.get(session_id, 0) > 0:
+            if time.monotonic() >= prazo:
+                return False
+            await asyncio.sleep(_VOICE_DRAIN_TICK_S)
+        return True
 
     async def _stop_voice(self, session_id: str) -> None:
         self._stop_speech(session_id)
@@ -1439,13 +1514,19 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             )
         elif not run_bot and session_id in self._room_clients:
             await self._stop_listener(session_id)
-        if run_voice and session_id not in self._voice_clients:
-            disparar(
-                self._start_voice(session_id, self._room_of(session_id)),
-                nome=f"webrtc-voz-start-{session_id[:8]}",
-            )
-        elif not run_voice and session_id in self._voice_clients:
-            await self._stop_voice(session_id)
+        if run_voice:
+            # Voltou a haver agente de IA de áudio: desmarca a saída antes de olhar a sala — se
+            # ela já tiver acontecido, o `not in` abaixo faz a voz entrar de novo.
+            self._cancel_voice_stop(session_id)
+            if session_id not in self._voice_clients:
+                disparar(
+                    self._start_voice(session_id, self._room_of(session_id)),
+                    nome=f"webrtc-voz-start-{session_id[:8]}",
+                )
+        elif session_id in self._voice_clients:
+            # WCH-10 — sai DEPOIS de terminar a frase em curso (o aviso de transferência é dito
+            # um instante antes de o humano entrar). Teto em `_VOICE_DRAIN_MAX_S`.
+            self._stop_voice_soon(session_id)
         if previous == new_list:
             state["customer"] = {**(state.get("customer") or {}),
                                  "policy_sources": media_policy.policy_sources(state["attendants"]),
@@ -2320,7 +2401,18 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             self._speech_tasks[session_id] = disparar(
                 self._speech_worker(session_id, fila), nome=f"webrtc-fala-{session_id[:8]}",
             )
+        # WCH-10 — conta ANTES de enfileirar: entre o `put_nowait` e o tocador pegar a mensagem
+        # há um `await`, e uma drenagem que corresse nesse intervalo veria fila vazia.
+        self._speech_pending[session_id] = self._speech_pending.get(session_id, 0) + 1
         fila.put_nowait((text, time.monotonic(), played))
+        # WCH-13 — a fala que a plataforma MANDA tocar não tinha registro nenhum: para saber se
+        # uma frase ouvida duas vezes saiu daqui duas vezes ou foi tocada duas vezes no cliente,
+        # era preciso cruzar Kafka, o serviço de TTS e o SFU. Agora está numa linha, com o
+        # contador por sessão. Texto do AGENTE (nunca valor mascarado, que não é falado).
+        self._speech_seq[session_id] = self._speech_seq.get(session_id, 0) + 1
+        logger.info("webrtc fala: enfileirada #%d (%d car., %d na fila) session=%s: %.60s",
+                    self._speech_seq[session_id], len(text),
+                    self._speech_pending[session_id], session_id, text)
 
     async def _speech_worker(
         self, session_id: str, fila: asyncio.Queue[tuple[str, float, asyncio.Event | None]],
@@ -2331,6 +2423,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             self._speech_cancel.discard(session_id)
             room_client = await self._wait_room_for_speech(session_id, chegou)
             if room_client is None or self._tts is None:
+                self._speech_done(session_id)
                 if played is not None:
                     played.set()
                 continue
@@ -2351,6 +2444,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                 logger.warning("webrtc fala: tocador falhou (session=%s): %s", session_id, exc)
             finally:
                 self._speaking.discard(session_id)
+                self._speech_done(session_id)
                 if played is not None:
                     played.set()
 
@@ -2451,6 +2545,14 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             session_id, descartadas,
         )
 
+    def _speech_done(self, session_id: str) -> None:
+        """Uma mensagem saiu da fila E terminou (tocada, interrompida ou não falada)."""
+        restam = self._speech_pending.get(session_id, 0) - 1
+        if restam > 0:
+            self._speech_pending[session_id] = restam
+        else:
+            self._speech_pending.pop(session_id, None)
+
     def _stop_speech(self, session_id: str) -> None:
         task = self._speech_tasks.pop(session_id, None)
         if task and not task.done():
@@ -2462,6 +2564,10 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                 played.set()
         self._speaking.discard(session_id)
         self._speech_cancel.discard(session_id)
+        self._speech_seq.pop(session_id, None)
+        # O que não vai mais tocar deixa de ser pendência — inclusive a mensagem que a task
+        # cancelada carregava, cujo `finally` não roda por inteiro.
+        self._speech_pending.pop(session_id, None)
 
     # ── Coleta por teclado e fala (VOZ-05, fatia 5b) ──────────────────────────
 

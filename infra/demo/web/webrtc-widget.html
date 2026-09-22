@@ -444,6 +444,10 @@ let ws              = null;
 let sessionId       = null;
 let currentMedium   = 'text';
 let room            = null;   // LiveKit Room
+// WCH-13 — UM elemento de áudio por trilha (mesma razão do `webchat-test.html`): `attach()`
+// sem argumento cria um elemento novo a cada evento de assinatura, e a mesma trilha assinada
+// duas vezes vira a mesma fala ouvida duas vezes.
+const audioEls      = new Map();   // track.sid -> <audio>
 let localTracks     = [];
 let micMuted        = false;
 let camOff          = false;
@@ -607,13 +611,17 @@ async function connectLiveKit(livekitUrl, livekitToken, medium) {
       remoteVideo.style.display = 'block';
     }
     if (track.kind === LK.Track.Kind.Audio) {
+      if (audioEls.has(track.sid)) return;          // já está tocando: anexar de novo duplica
       const audio = track.attach();
+      audioEls.set(track.sid, audio);
       document.body.appendChild(audio);
     }
   });
 
   room.on(LK.RoomEvent.TrackUnsubscribed, (track) => {
     track.detach();
+    const el = audioEls.get(track.sid);
+    if (el) { el.remove(); audioEls.delete(track.sid); }
     if (track.kind === LK.Track.Kind.Video) {
       document.getElementById('remote-video').style.display = 'none';
       document.getElementById('video-placeholder').style.display = 'flex';

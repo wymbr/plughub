@@ -229,7 +229,30 @@ steps:
         operator: eq
         value: "pos_atendimento.outra_coisa"
         next: vocabulario
-    default: registrar_demanda
+    default: avisar_destino
+
+  # ── 4b. O cliente SABE para onde está indo (WCH-10) ─────────────────────────
+  # Medido no teste do dono (sessão `492aa613`): a IA entendeu o pedido, transferiu, e o cliente
+  # só viu *"Agente entrou no atendimento"* — numa CHAMADA, silêncio é indistinguível de queda.
+  #
+  # ⚠️ **Dois avisos, não um**, porque são dois desfechos diferentes: aqui o roteador SABE o
+  # destino e o confirma (é a confirmação de entendimento que faltava); no escape ele não sabe, e
+  # dizer o rótulo de *"Nenhuma dessas"* seria confirmar uma coisa que o cliente não pediu.
+  #
+  # ⚠️ O texto é do FLUXO e o rótulo vem da ÁRVORE (D7 do ADR): mensagem POR FOLHA voltaria a pôr
+  # conteúdo no mapa, que é o que a D2 impede. `node_label` é o rótulo do nó do cursor, já
+  # resolvido na língua da sessão pela mesma projeção que conferiu a folha.
+  - id: avisar_destino
+    type: notify
+    message: "Entendi: {{$.pipeline_state.nivel.node_label}}. Vou te encaminhar agora — um momento."
+    on_success: registrar_demanda
+    on_failure: registrar_demanda
+
+  - id: avisar_escape
+    type: notify
+    message: "Não consegui identificar o assunto com segurança. Vou te encaminhar para um atendente — um momento."
+    on_success: registrar_demanda
+    on_failure: registrar_demanda
 
   # ── 5. O ESCAPE é um FATO, não um buraco ────────────────────────────────────
   # D6.2 + D7 do ADR da árvore: sem esta folha, "o LLM não soube" seria um nulo
@@ -250,7 +273,7 @@ steps:
       chosen_id:  "nao_se_aplica"
       tenant_id:  "$.tenant_id"
     output_as: nivel
-    on_success: registrar_demanda
+    on_success: avisar_escape
     on_failure: sem_navegacao
 
   # ── 6. A MESMA série do determinístico ──────────────────────────────────────

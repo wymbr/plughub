@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -808,8 +809,15 @@ class TestAgentSpeech:
         voz = adapter._voice_clients[SESSION_ID]
         state = {"attendants": {"ia2": _registro("native", audio=False)}, "customer": {"publish": ["audio"]}}
         await adapter._apply_customer_ceiling(ws, SESSION_ID, state, "attendant_left:native")
+        # WCH-10 — o OUVINTE sai na hora (não fala); a VOZ sai AGENDADA, para a frase em curso
+        # terminar. Aqui não há fala nenhuma, então a saída acontece na primeira volta do laço.
+        assert SESSION_ID not in adapter._room_clients
+        for _ in range(20):
+            if voz.disconnected:
+                break
+            await asyncio.sleep(0.01)
         assert voz.disconnected is True
-        assert SESSION_ID not in adapter._voice_clients and SESSION_ID not in adapter._room_clients
+        assert SESSION_ID not in adapter._voice_clients
 
     @pytest.mark.asyncio
     async def test_first_message_waits_for_the_bot_to_enter(self):
@@ -851,6 +859,119 @@ class TestAgentSpeech:
         await _drena(adapter)
         assert tarefa.cancelled() or tarefa.done()
         assert SESSION_ID not in adapter._speech_queues and SESSION_ID not in adapter._speaking
+
+
+
+class TestVozNaTransferencia:
+    """WCH-10 — a voz termina a frase antes de sair da sala.
+
+    A proposição: *quando a IA deixa de atender, a voz sai da sala DEPOIS do que já está
+    falando — e sai de qualquer jeito no teto*. São dois números, não um: o que ela espera
+    (a frase em curso) e o que ela NÃO espera (o teto, e o fim da chamada).
+
+    O que faria isto ficar vermelho: voltar a `_stop_voice` direto no ponto de decisão do teto
+    — era assim até 2026-09-22, e o cliente ouvia meia frase antes do humano entrar
+    (sessão `492aa613`).
+    """
+
+    def _adapter(self, tts=None, room=None):
+        adapter, _, _ = _make_adapter(tts=tts or _PcmTTS(), voice_client=room or MockRoomClient())
+        adapter._connections[SESSION_ID] = AsyncMock()
+        _abre(adapter)
+        return adapter
+
+    async def _falando(self, adapter):
+        await adapter.deliver_text({"session_id": SESSION_ID, "author": {"type": "agent_ai"},
+                                    "content": {"text": "Entendi: aumento de limite do cartao. Vou te encaminhar agora."},
+                                    "timestamp": "x"})
+        await _drena(adapter)
+
+    async def _ate(self, cond, prazo=2.0) -> bool:
+        fim = asyncio.get_running_loop().time() + prazo
+        while asyncio.get_running_loop().time() < fim:
+            if cond():
+                return True
+            await asyncio.sleep(0.01)
+        return cond()
+
+    @pytest.mark.asyncio
+    async def test_espera_a_frase_em_curso_antes_de_sair(self):
+        tts, room = _PcmTTS(), _RoomLenta()
+        adapter = self._adapter(tts, room)
+        await self._falando(adapter)
+        assert SESSION_ID in adapter._speaking          # premissa: há fala EM CURSO
+
+        adapter._stop_voice_soon(SESSION_ID)
+        await asyncio.sleep(0.15)                        # bem mais que o tique da drenagem
+        assert SESSION_ID in adapter._voice_clients and not room.disconnected, (
+            "a voz saiu da sala com a frase em curso — é o defeito da WCH-10"
+        )
+
+        room.soltar.set()                                # a frase terminou
+        assert await self._ate(lambda: room.disconnected)
+        assert SESSION_ID not in adapter._voice_clients
+
+    @pytest.mark.asyncio
+    async def test_sem_fala_pendente_sai_na_hora(self):
+        """CONTROLE do anterior: sem nada para terminar, não há espera nenhuma."""
+        room = MockRoomClient()
+        adapter = self._adapter(room=room)
+        adapter._stop_voice_soon(SESSION_ID)
+        assert await self._ate(lambda: room.disconnected, prazo=0.5)
+        assert SESSION_ID not in adapter._voice_clients
+
+    @pytest.mark.asyncio
+    async def test_teto_sai_assim_mesmo_e_diz_por_que(self, caplog, monkeypatch):
+        from plughub_channel_gateway.adapters import webrtc as mod
+        monkeypatch.setattr(mod, "_VOICE_DRAIN_MAX_S", 0.2)
+        tts, room = _PcmTTS(), _RoomLenta()
+        adapter = self._adapter(tts, room)
+        await self._falando(adapter)
+        with caplog.at_level(logging.WARNING):
+            adapter._stop_voice_soon(SESSION_ID)
+            assert await self._ate(lambda: room.disconnected)   # a sala NUNCA solta a reprodução
+        assert SESSION_ID not in adapter._voice_clients
+        assert "nao terminou" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_fim_da_chamada_nao_espera(self):
+        """Teardown é outro fato: não há para quem falar, e a saída agendada some junto."""
+        tts, room = _PcmTTS(), _RoomLenta()
+        adapter = self._adapter(tts, room)
+        await self._falando(adapter)
+        adapter._stop_voice_soon(SESSION_ID)
+        await adapter._stop_bot_leg(SESSION_ID)
+        assert room.disconnected and SESSION_ID not in adapter._voice_clients
+        assert SESSION_ID not in adapter._voice_stopping
+        assert SESSION_ID not in adapter._speech_pending
+
+    @pytest.mark.asyncio
+    async def test_agente_de_ia_que_volta_cancela_a_saida(self):
+        """A drenagem é janela: se um agente de IA de áudio volta nela, a voz FICA."""
+        tts, room = _PcmTTS(), _RoomLenta()
+        adapter = self._adapter(tts, room)
+        await self._falando(adapter)
+        adapter._stop_voice_soon(SESSION_ID)
+        await asyncio.sleep(0.1)
+        adapter._cancel_voice_stop(SESSION_ID)
+        room.soltar.set()
+        await asyncio.sleep(0.2)
+        assert SESSION_ID in adapter._voice_clients and not room.disconnected
+
+    @pytest.mark.asyncio
+    async def test_pendencia_nao_vaza_quando_a_fala_nao_toca(self):
+        """O contador é o que a drenagem lê: se ele vazasse, toda saída esperaria o teto.
+
+        Mensagem que o tocador larga (sem sala) tem de zerar igual à que tocou — este é o
+        caso que a contagem no `finally` sozinha NÃO cobre, porque ele nem chega lá.
+        """
+        adapter = self._adapter()
+        adapter._voice_clients.pop(SESSION_ID)           # sem voz na sala: a mensagem não toca
+        adapter._wait_room_for_speech = AsyncMock(return_value=None)
+        adapter._speak(SESSION_ID, "Texto que ninguem vai ouvir.")
+        assert adapter._speech_pending.get(SESSION_ID) == 1
+        await _drena(adapter)
+        assert SESSION_ID not in adapter._speech_pending
 
 
 # ─────────────────────────────────────────────────────────────────────────────
