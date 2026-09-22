@@ -359,14 +359,15 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   // pé, porque sobrescrevê-las com `[]` apagaria dado bom por causa de uma
   // releitura que falhou.
   const fetchHistory = useCallback(async (sessionId: string) => {
-    const { messages, error } = await loadConversationHistory(sessionId);
+    const { messages, error, callActive } = await loadConversationHistory(sessionId);
     setContacts(prev => {
       const c = prev.get(sessionId);
       if (!c) return prev;
       const next = new Map(prev);
       next.set(sessionId, error
         ? { ...c, historyError: error }
-        : { ...c, messages, historyError: null });
+        // WCH-02: a chamada em curso sobrevive ao F5 — o estado vem do stream, não da memória.
+        : { ...c, messages, historyError: null, ...(callActive !== undefined ? { callActive } : {}) });
       return next;
     });
   }, []);
@@ -519,10 +520,20 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // ── Chamada presa a um contato de chat (WCH-01) ───────────────────────
     if (event.type === "media.call") {
       const sid = event.session_id;
-      if (!sid) return;
+      // WCH-06: descartar este evento em silêncio deixa a sobreposição de mídia de pé depois
+      // que o cliente desligou (medido 2026-09-22: o servidor entregou o `ended` e a tela não
+      // saiu, sem rastro). O descarte é dito no console do browser, com o que faltou.
+      if (!sid) {
+        console.warn("[agent-assist] media.call sem session_id — descartado", event);
+        return;
+      }
+      console.info(`[agent-assist] media.call ${event.state} (session=${sid})`);
       setContacts(prev => {
         const c = prev.get(sid);
-        if (!c) return prev;
+        if (!c) {
+          console.warn(`[agent-assist] media.call ${event.state} para contato que o Console não tem (session=${sid}) — descartado`);
+          return prev;
+        }
         const next = new Map(prev);
         next.set(sid, { ...c, callActive: event.state === "started" });
         return next;

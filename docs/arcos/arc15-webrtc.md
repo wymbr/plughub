@@ -1005,8 +1005,11 @@ chamada remonta a visão (`key` pela entrada). A nota de `/supervisor/message` �
 `agent:events:{sid}` — o Console não lê o stream — com autor `supervisor`. A saída do supervisor
 (`participant_left`, autor só no JSON aninhado) não entra no cálculo do teto e não é alarme.
 
-**Fora da fatia (`WCH-02`):** Console recarregado no
-meio da chamada não a reencontra; IA não fala nem ouve; a chamada não é transcrita; regra para
+**Console recarregado (WCH-06, 2026-09-22).** `GET /api/conversation_history` projeta o stream
+(`lib/console-history.ts`): `call_active` do último `media.call` e as notas do supervisor, intercaladas
+pela hora. O Console aplica no `fetchHistory`; F5 no meio da chamada remonta a sobreposição.
+
+**Fora da fatia (`WCH-02`):** IA não fala nem ouve; a chamada não é transcrita; regra para
 atendente sem áudio além da espera dita; o trecho de chamada nos relatórios.
 
 Gate: `infra/test/probe_wch01_chat_call.sh` (porta, espera dita, independência chamada × contato).

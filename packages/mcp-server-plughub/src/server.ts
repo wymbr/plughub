@@ -28,6 +28,8 @@ import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
 import { registerWorkQueueTools }    from "./tools/work_queue"
 import { checkPoolRegistered } from "./lib/pool-registered"
+import { projectStreamForConsole, mergeByTimestamp } from "./lib/console-history"
+import type { RawStreamEntry } from "./lib/console-history"
 import { listQueue, claimTask, releaseTask, listPendingWorkTasks, workTaskHolder } from "./lib/work-queue"
 import type { WorkTaskState } from "./lib/work-queue"
 import { registerDelegationTools }  from "./tools/delegation"
@@ -2408,12 +2410,31 @@ export async function startServer(config: ServerConfig): Promise<void> {
   app.get("/api/conversation_history/:sessionId", async (req: Request, res: Response) => {
     if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)) return
     const { sessionId } = req.params
+    let messages: Array<Record<string, unknown>>
     try {
-      const raw      = await redis.lrange(`session:${sessionId}:messages`, 0, -1)
-      const messages = raw.map(s => JSON.parse(s))
-      res.json({ session_id: sessionId, messages })
+      const raw = await redis.lrange(`session:${sessionId}:messages`, 0, -1)
+      messages  = raw.map(s => JSON.parse(s) as Record<string, unknown>)
     } catch {
       res.status(500).json({ error: "history_unavailable" })
+      return
+    }
+    // WCH-02 (2026-09-22): a chamada presa ao contato e a nota do supervisor vivem SÓ no stream.
+    // Sem esta projeção, recarregar o Console escondia a chamada em curso e as notas recebidas.
+    // Falha aqui NÃO derruba o histórico (a lista é o essencial): responde sem os dois, e diz.
+    try {
+      const entries = await redis.xrange(`session:${sessionId}:stream`, "-", "+") as RawStreamEntry[]
+      const proj    = projectStreamForConsole(entries)
+      res.json({
+        session_id:  sessionId,
+        messages:    mergeByTimestamp(messages, proj.supervisorNotes as unknown as Array<Record<string, unknown>>),
+        call_active: proj.callActive,
+      })
+    } catch (err) {
+      console.warn(
+        `[conversation_history] stream ILEGIVEL session=${sessionId}: ${String(err)} — histórico ` +
+        `sem as notas do supervisor e sem o estado da chamada`,
+      )
+      res.json({ session_id: sessionId, messages, stream_unavailable: true })
     }
   })
 

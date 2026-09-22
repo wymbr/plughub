@@ -34,6 +34,9 @@ export interface ConversationHistory {
   messages: ChatMessage[]
   /** `null` = leitura bem-sucedida. Não-nulo = motivo, já legível ao operador. */
   error: string | null
+  /** WCH-02 — há chamada presa a este contato de chat AGORA (derivado do stream no servidor).
+   *  `undefined` = o servidor não soube dizer: quem lê mantém o que já sabia. */
+  callActive?: boolean
 }
 
 /**
@@ -59,8 +62,15 @@ export async function loadConversationHistory(sessionId: string): Promise<Conver
   }
 
   try {
-    const data = await res.json() as { messages?: ChatMessage[] }
-    return { messages: Array.isArray(data.messages) ? data.messages : [], error: null }
+    const data = await res.json() as { messages?: ChatMessage[]; call_active?: unknown; stream_unavailable?: boolean }
+    if (data.stream_unavailable) {
+      console.warn(`[agent-assist] histórico sem o stream (session=${sessionId}) — notas do supervisor e estado da chamada ausentes`)
+    }
+    return {
+      messages:   Array.isArray(data.messages) ? data.messages : [],
+      error:      null,
+      callActive: typeof data.call_active === "boolean" ? data.call_active : undefined,
+    }
   } catch (e) {
     const motivo = e instanceof Error ? e.message : String(e)
     console.error(`[agent-assist] histórico ILEGÍVEL (session=${sessionId}) — corpo não é JSON: ${motivo}`)

@@ -83,6 +83,7 @@ história no `CHANGELOG.md`.)*
 |---|---|---|---|
 | WCH-01 | **O cliente do chat liga sem sair do chat.** `/ws/call` prende a chamada ao contato `webchat` (token do chat, só o dono, sem outra chamada); a sala nasce dos atendentes de AGORA com a política do pool lida só quando há chamada; cair encerra a chamada, nunca o contato. Console monta a mídia por `media.call`; tela de pools oferece a política em `webchat`. Gate `probe_wch01_chat_call.sh`; validado no browser | 2026-09-21 | `CHANGELOG.md` § 2026-09-21 (5) |
 | WCH-05 | **O supervisor vê a chamada de um contato de chat, e a nota dele chega ao atendente.** A visão oculta decide por `hasMedia(channel, callActive)` com `callActive` derivado do último `media.call` do stream; a nota de `/supervisor/message` é publicada em `agent:events` (autor `supervisor` no Console) e deixa de aparecer como JSON cru; a saída do supervisor não é mais alarme de atendente desconhecido no gateway. Validado no browser | 2026-09-21 | `CHANGELOG.md` § 2026-09-21 (7) |
+| WCH-06 | **O Console recarregado reencontra a chamada e as notas do supervisor.** `/api/conversation_history` projeta o stream (`projectStreamForConsole`): `call_active` do último `media.call` e as notas do supervisor intercaladas pela hora; o `fetchHistory` aplica. O descarte calado do `media.call` no Console passa a ser dito. Validado no browser (F5 no meio da chamada) | 2026-09-22 | `CHANGELOG.md` § 2026-09-22 (1) |
 
 ## `docs/adr/adr-voice-media-plane.md` — voz própria / Arc 15 WebRTC
 

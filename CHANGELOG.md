@@ -1,5 +1,41 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (1) — WCH-06: o Console recarregado reencontra a chamada e as notas do supervisor
+
+**O que faltava.** Item (2) da `WCH-02`. O Console recarregado refaz o contato pelo
+`conversation.assigned` e lê o histórico por `GET /api/conversation_history`, que servia só a lista
+`session:{sid}:messages` (escrita pelo gateway). Dois fatos do contato vivem SÓ no stream e se perdiam
+no F5: a chamada presa ao contato de chat (`media.call`) — o Console a conhecia só pelo evento ao vivo
+— e a nota do supervisor (entregue ao vivo desde a WCH-05, nunca escrita na lista).
+
+**O que mudou.**
+- **mcp-server** — `lib/console-history.ts::projectStreamForConsole`, projeção pura do stream:
+  `callActive` (último `media.call` = `started` e contato não fechado) e as notas do supervisor
+  (`agents_only`/`all`; nota dirigida fica de fora, porque a rota não sabe quem lê; fala de outros
+  autores fica de fora, porque já está na lista). A rota intercala as notas pela hora
+  (`mergeByTimestamp`: hora ilegível acrescenta ao fim em vez de inventar posição) e devolve
+  `call_active`. Stream ilegível não derruba o histórico: responde sem os dois e diz
+  (`stream_unavailable`).
+- **platform-ui** — o `fetchHistory` aplica o `callActive` do servidor; `undefined` mantém o que o
+  Console já sabia. O `media.call` que o Console descartava calado (sem `session_id`, ou para contato
+  que ele não tem) passa a ser dito no console do browser, e cada transição é registrada em `info`.
+
+**Medido.** mcp-server 484 (10 novos em `console-history.test.ts`); typecheck dos dois pacotes limpo.
+Ao vivo na rota, sessão fechada `5be8cf81`: `call_active: false` e a nota antiga (gravada antes da
+WCH-05, sem `message_id`) de volta como texto. Validado pelo dono no browser: F5 no meio da chamada,
+a sobreposição de voz volta com a chamada em curso e a nota do supervisor permanece no chat.
+
+**Achado da validação, sem conclusão.** Na primeira de duas tentativas o dono relatou a sobreposição
+de pé depois de o cliente desligar, e encerrou pelo Close. Pelos logs o servidor fez o MESMO nas duas:
+às 10:01:56 o `media.call ended` chegou ao pub/sub do mcp-server com o Console conectado e inscrito na
+sessão, e foi repassado. Se a diferença foi no browser, o único descarte possível era calado — agora é
+dito, e a próxima ocorrência aparece no console do browser.
+
+**Deixou fichas.** `AGH-05` (o Console recarregado não volta sozinho aos pools, e a janela de queda
+passa da carência de 2,5 s: o cliente ouve o agente de fila a cada F5) e `WCH-07` (controles de
+chamada no Console, e o "Hang up" da barra que encerra o contato — e que o dono relata nunca ter
+funcionado).
+
 ## 2026-09-21 (9) — AGH-04: o login humano pergunta se o pool existe, e não o cria mais
 
 **O que foi medido.** Na varredura de logs da WCH-05, todo login no espelho `retencao_humano-int`
