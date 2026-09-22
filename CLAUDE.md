@@ -1495,6 +1495,11 @@ o publicado num bloco `render`. Provisionamento `infra/dialog/*.json`, **seed-if
   não mudaram. Gate: `infra/test/probe_caller_token_chain.sh`.
 - **`form` é um TIPO DE BLOCO, não um valor de `interaction`** — bloco é PROJEÇÃO sobre o `nodes[]`
   plano. A **dimensão VENCE** o form, e **campo NÃO é pergunta**.
+- **A folha declara SIGNIFICADO, e quem lê cada campo é diferente** (ORQ-12): `description` é texto
+  do CLIENTE (teto de 72, o da linha de lista do WhatsApp) e vai ao orquestrador com LLM;
+  `examples` é lido **só** pelo classificador, **nunca é exibido** — não entra no `render`, que é o
+  bloco dos canais — e **só existe em folha**. Roteamento continua fora: o mapa folha→pool é do
+  POOL (D2). Ver [`docs/adr/adr-orchestrator-tree-navigation.md`](docs/adr/adr-orchestrator-tree-navigation.md) § D8.
 - **O editor JSON é escape hatch e o VEREDICTO é do SERVIDOR** (`POST /api/dialog/preview`, mesma
   `buildRender`/`validateDialogForm` do `form_get`). Verificador fora do ar ⇒ *"não verificado"*,
   nunca verde. **Aplicar não grava.**

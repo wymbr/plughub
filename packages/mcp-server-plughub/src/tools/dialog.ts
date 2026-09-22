@@ -12,9 +12,9 @@
 
 import { z }                     from "zod"
 import type { McpServer }        from "@modelcontextprotocol/sdk/server/mcp.js"
-import { buildRender, duplicateNodeIds, optionsAtPath, leafPaths,
+import { buildRender, duplicateNodeIds, optionsAtPath, leafPaths, leafMeanings,
          entryQuestionId, categoryPathFor } from "@plughub/schemas"
-import type { DialogForm }               from "@plughub/schemas"
+import type { DialogForm, QuestionNode }  from "@plughub/schemas"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -248,6 +248,28 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
         const ultimo = trilha[trilha.length - 1]
         const nodeLabel = ultimo ? pai.options.find(o => o.id === ultimo)?.label : undefined
 
+        const leaves = leafPaths(nivel.options).map(c => [...trilha, c].join("."))
+        // ORQ-12 — o SIGNIFICADO de cada folha, lido do form CRU (os `examples`
+        // nao entram no `render`, que vai aos canais). Duas leituras do mesmo
+        // fato so valem CONFERIDAS: se os caminhos divergirem, o classificador
+        // estaria vendo uma arvore que a conferencia (D6) nao aceita — entao o
+        // vocabulario SAI e o motivo vai ao log, em vez de chegar torto ao prompt.
+        const qCru = form.nodes.find(
+          (n): n is QuestionNode => n.kind === "question" && n.id === q.id,
+        )
+        let vocabulary: ReturnType<typeof leafMeanings> | undefined =
+          leafMeanings(qCru?.options, trilha, form.default_locale, input.locale)
+        const caminhosVoc = vocabulary.map(v => v.path)
+        if (caminhosVoc.length !== leaves.length || caminhosVoc.some((c, i) => c !== leaves[i])) {
+          console.warn(
+            `[dialog_tree_level] vocabulario OMITIDO em ${form.form_id} v${form.version} ` +
+            `(${q.id}, path=[${trilha.join(",")}]): caminhos do form cru ` +
+            `[${caminhosVoc.join(", ")}] != leaves [${leaves.join(", ")}] — o classificador ` +
+            `recebe so os caminhos`,
+          )
+          vocabulary = undefined
+        }
+
         return ok({
           form_id:       form.form_id,
           version:       form.version,
@@ -270,7 +292,11 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           // Vocabulario de desfechos SOB o cursor (D6). Em `path: []` e a arvore
           // inteira — o que o orquestrador com LLM manda ao prompt E confere na
           // volta. As duas metades: mandar sem conferir e promessa sem mecanismo.
-          leaves:        leafPaths(nivel.options).map(c => [...trilha, c].join(".")),
+          leaves,
+          // ORQ-12 — `leaves` com rotulo, descricao e exemplos, MESMA ordem. E o
+          // que o prompt le; `leaves` continua sendo o que se CONFERE. Chave
+          // ausente = vocabulario omitido (divergencia logada acima).
+          ...(vocabulary ? { vocabulary } : {}),
           options:       nivel.options,
           path:          nivel.path,
           // Cauda da `category` do Arc 12 — o chamador nao precisa juntar, e assim

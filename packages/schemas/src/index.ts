@@ -896,6 +896,7 @@ export type {
 export {
   LocaleCodeSchema,
   LocalizedTextSchema,
+  LocalizedTextListSchema,
   DialogValidationSchema,
   DialogCaptureSchema,
   DialogDimensionSchema,
@@ -912,15 +913,20 @@ export {
   DialogFormStatusSchema,
   DialogFormSchema,
   resolveLocalizedText,
+  resolveLocalizedList,
   evaluateAskWhen,
   askWhenForwardRefErrors,
   optionTreeIssues,
   DIALOG_OPTION_MAX_DEPTH,
+  DIALOG_OPTION_DESCRIPTION_MAX,
+  DIALOG_OPTION_EXAMPLES_MAX,
+  DIALOG_OPTION_EXAMPLE_MAX_LEN,
 } from "./dialog"
 
 export type {
   LocaleCode,
   LocalizedText,
+  LocalizedTextList,
   DialogValidation,
   DialogCapture,
   DialogDimension,
@@ -948,6 +954,7 @@ export {
   duplicateNodeIds,
   optionsAtPath,
   leafPaths,
+  leafMeanings,
   entryQuestionId,
   categoryPathFor,
   returnRefErrors,
@@ -963,6 +970,7 @@ export type {
   DialogFormIssue,
   DialogFormVerdict,
   TreeLevel,
+  LeafMeaning,
 } from "./dialog-render"
 
 // ── DialogForm — catálogo de FORMATOS de entrada (ADR adr-dialog-input-format-catalog) ──

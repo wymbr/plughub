@@ -41,7 +41,8 @@
     "formatConflict": "Conflict: the declared format ({{declarado}}) disagrees with the one derived from the masked type ({{derivado}}). Publishing will be refused.",
     "maskedType": "Mask as",
     "maskedNone": "(do not mask)",
-    "catalogUnavailable": "Catalog unavailable — the list is empty because the read failed, not because there are no formats."
+    "catalogUnavailable": "Catalog unavailable — the list is empty because the read failed, not because there are no formats.",
+    "examples": "Examples"
   },
   "dimensions": {
     "title": "Instruments",
@@ -202,6 +203,10 @@
     "reactivate": "Reactivate",
     "confirmLastChild": "\"{{pasta}}\" would be left with no children and become a selectable LEAF: the folder label would become an answer. Remove anyway?",
     "depth": "depth {{d}} of {{max}}",
-    "hint": "A row with children is a folder (navigate only); without children it is a leaf (selectable). Value is ignored on a folder."
+    "hint": "A row with children is a folder (navigate only); without children it is a leaf (selectable). Value is ignored on a folder.",
+    "meaning": "Meaning — description and examples for the AI orchestrator",
+    "descriptionHint": "What this option covers (and when not to use it)",
+    "examplesHint": "One phrase per line: what a customer would say to land here",
+    "meaningHint": "The description is for the CUSTOMER (the channel may show it) and goes to the AI orchestrator. Examples are read by the orchestrator only — never shown to the customer, and only on a leaf."
   }
 }

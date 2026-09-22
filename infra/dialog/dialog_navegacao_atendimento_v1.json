@@ -40,34 +40,86 @@
               "label": {
                 "pt-BR": "📋 Informações sobre o plano"
               },
-              "on_return": "pos_atendimento"
+              "on_return": "pos_atendimento",
+              "description": {
+                "pt-BR": "O que o plano inclui: franquia, benefícios e valores"
+              },
+              "examples": {
+                "pt-BR": [
+                  "quanto de internet eu tenho",
+                  "quais benefícios do meu plano",
+                  "qual o valor da minha mensalidade"
+                ]
+              }
             },
             {
               "id": "status_servico",
               "label": {
                 "pt-BR": "🔍 Status do serviço"
               },
-              "on_return": "pos_atendimento"
+              "on_return": "pos_atendimento",
+              "description": {
+                "pt-BR": "Situação do serviço: ativo, suspenso, em instalação"
+              },
+              "examples": {
+                "pt-BR": [
+                  "meu serviço já está ativo?",
+                  "quando instalam a minha linha",
+                  "por que meu serviço foi suspenso"
+                ]
+              }
             },
             {
               "id": "problema_tecnico",
               "label": {
                 "pt-BR": "🔧 Problema técnico"
               },
-              "on_return": "pos_atendimento"
+              "on_return": "pos_atendimento",
+              "description": {
+                "pt-BR": "Falha técnica: sem sinal, lentidão, queda de conexão"
+              },
+              "examples": {
+                "pt-BR": [
+                  "minha internet caiu",
+                  "está tudo muito lento",
+                  "estou sem sinal no celular"
+                ]
+              }
             },
             {
               "id": "especialista",
               "label": {
                 "pt-BR": "👤 Falar com especialista humano"
+              },
+              "description": {
+                "pt-BR": "Só quando o cliente PEDE uma pessoa; nunca por assunto"
+              },
+              "examples": {
+                "pt-BR": [
+                  "quero falar com um atendente",
+                  "me transfere para uma pessoa",
+                  "não quero falar com robô"
+                ]
               }
             }
-          ]
+          ],
+          "description": {
+            "pt-BR": "Dúvidas, status e problemas do serviço já contratado"
+          }
         },
         {
           "id": "portabilidade",
           "label": {
             "pt-BR": "📱 Portabilidade de número"
+          },
+          "description": {
+            "pt-BR": "Trazer o número de outra operadora, ou levar o seu"
+          },
+          "examples": {
+            "pt-BR": [
+              "quero trazer meu número da outra operadora",
+              "como faço a portabilidade"
+            ]
           }
         },
         {
@@ -75,32 +127,71 @@
           "label": {
             "pt-BR": "💰 Solicitar reembolso"
           },
-          "on_return": "pos_atendimento"
+          "on_return": "pos_atendimento",
+          "description": {
+            "pt-BR": "Devolução de um valor já cobrado do cliente"
+          },
+          "examples": {
+            "pt-BR": [
+              "fui cobrado a mais e quero o dinheiro de volta",
+              "quero reembolso da fatura"
+            ]
+          }
         },
         {
           "id": "auth_form",
           "label": {
             "pt-BR": "🔐 Demo de formulário mascarado"
           },
-          "on_return": "pos_atendimento"
+          "on_return": "pos_atendimento",
+          "description": {
+            "pt-BR": "Demonstração de coleta de dado sensível mascarado"
+          },
+          "examples": {
+            "pt-BR": [
+              "quero ver a demo de formulário mascarado"
+            ]
+          }
         },
         {
           "id": "auth_sac",
           "label": {
             "pt-BR": "🔑 SAC autenticado (auth + SAC)"
           },
-          "on_return": "pos_atendimento"
+          "on_return": "pos_atendimento",
+          "description": {
+            "pt-BR": "SAC que exige identificação por PIN antes de atender"
+          },
+          "examples": {
+            "pt-BR": [
+              "preciso de atendimento autenticado",
+              "quero ver dados da conta com meu PIN"
+            ]
+          }
         },
         {
           "id": "aumento_limite",
           "label": {
             "pt-BR": "💳 Aumento de limite do cartão"
+          },
+          "description": {
+            "pt-BR": "Aumentar o limite do cartão de crédito"
+          },
+          "examples": {
+            "pt-BR": [
+              "quero aumentar meu limite",
+              "o limite do meu cartão está baixo",
+              "preciso de mais limite no cartão"
+            ]
           }
         },
         {
           "id": "nao_se_aplica",
           "label": {
             "pt-BR": "❓ Nenhuma dessas — falar com atendente"
+          },
+          "description": {
+            "pt-BR": "Escape: só quando nenhum outro destino servir"
           }
         }
       ]
@@ -119,18 +210,46 @@
           "id": "outra_coisa",
           "label": {
             "pt-BR": "🔄 Tenho outro assunto"
+          },
+          "description": {
+            "pt-BR": "O cliente tem um assunto NOVO; recomeça a navegação"
+          },
+          "examples": {
+            "pt-BR": [
+              "tenho outra dúvida",
+              "preciso de mais uma coisa"
+            ]
           }
         },
         {
           "id": "especialista",
           "label": {
             "pt-BR": "👤 Falar com um especialista humano"
+          },
+          "description": {
+            "pt-BR": "Cliente pede uma pessoa depois do atendimento"
+          },
+          "examples": {
+            "pt-BR": [
+              "quero falar com alguém",
+              "me passa para um atendente"
+            ]
           }
         },
         {
           "id": "encerrar",
           "label": {
             "pt-BR": "✅ Não, obrigado — pode encerrar"
+          },
+          "description": {
+            "pt-BR": "Cliente não quer mais nada; encerrar o contato"
+          },
+          "examples": {
+            "pt-BR": [
+              "não, obrigado",
+              "era só isso",
+              "pode encerrar"
+            ]
           }
         }
       ]

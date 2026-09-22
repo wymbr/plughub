@@ -1,5 +1,49 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (8) — ORQ-12: a folha diz o que cobre, e o roteador com LLM lê significado em vez de código
+
+**O que foi medido.** Na sessão `492aa613` (teste por voz da WCH-09) o pedido de aumento de limite
+foi parar em `sac.especialista`. A folha de limite não existia — isso a ORQ-11 consertou —, mas
+sobrou a causa de ESCOLHER aquela: o `dialog_tree_level` devolve `leaves` como caminhos crus
+(`sac.info_plano`, `auth_sac`, `sac.especialista`), e o `navigation_router_v1` classifica a fala do
+cliente contra o TEXTO DO CÓDIGO. Com isso a folha do humano vira pega-tudo do que não casa, que é
+justamente o desfecho mais caro.
+
+**O que mudou.**
+- **`@plughub/schemas`** — `DialogOption` ganha `description` (o que a opção cobre, na língua do
+  CLIENTE, teto de 72 caracteres = a `description` da linha de lista do WhatsApp, onde a ORQ-15 vai
+  exibi-la) e `examples` (frases típicas de quem quer aquele destino, **lidas só pelo
+  classificador**, nunca exibidas, e **só em folha** — exemplo numa pasta ensinaria o LLM a
+  aterrissar no que não é resposta). Os tetos moram em `optionTreeIssues`, a mesma casa das outras
+  regras da árvore, porque `superRefine` não cabe num `discriminatedUnion`.
+- **`leafMeanings`** — o vocabulário de `leafPaths` COM significado, lido do form CRU e não do
+  `render`: `examples` não pode entrar no bloco que vai aos CANAIS. Ler duas vezes a mesma árvore só
+  vale CONFERIDO, então o `dialog_tree_level` compara os caminhos das duas caminhadas e, se
+  divergirem, **omite o `vocabulary` e loga o motivo** — o prompt degrada para o que era antes desta
+  ficha, em vez de ficar sem destino nenhum. A divergência não é produzível por dado (as duas
+  caminhadas espelham as mesmas regras: aposentada fora, `value ?? id`, pasta esvaziada é folha), é
+  guarda contra drift de código, e o teste a planta com mock para o ramo poder reprovar.
+- **`skill_navegacao_llm_v1`** — `significado_dos_destinos` é campo À PARTE de
+  `destinos_permitidos`, e não a substituição dele: o segundo é o vocabulário CONFERIDO no
+  `conferir` (D6) e existe sempre; o primeiro é ajuda de classificação e pode faltar. Ref ausente
+  some do input (`resolveInputMap`), e a instrução diz o que fazer sem ela.
+- **editor de DialogForm** — segunda linha por opção (ícone de significado), com contador de
+  caracteres e exemplos um por linha; a caixa de exemplos **não aparece em pasta**, porque o
+  validador canônico recusaria o formulário inteiro depois. i18n nos dois locales.
+- **conteúdo** — `dialog_navegacao_atendimento_v1` v6 publicada com descrição em todas as folhas e
+  exemplos em 12 delas. `sac.especialista` recebeu a descrição ESTRITA (*"só quando o cliente PEDE
+  uma pessoa; nunca por assunto"*), que é o conserto do pega-tudo; `nao_se_aplica` tem descrição e
+  **nenhum exemplo**, de propósito — exemplo de escape ensinaria a escapar de alguma coisa, e o
+  escape existe para o que não casa com nada. Semente alinhada ao vivo.
+
+**Medido.** `schemas` 375 (14 novos) · `mcp-server-plughub` 492 em 43 arquivos (4 novos) · `tsc`
+limpo em schemas, mcp-server e platform-ui (280 arquivos) · gate `probe_orchestrator_tree_nav.sh`
+VERDE. No container do mcp-server, o MESMO caminho de código que a tool executa produziu os 10
+destinos com significado sobre a v6 publicada, com `paridade: true` contra `leaves`.
+
+Deixou ficha: `ORQ-15` (exibir a descrição ao cliente — a metade de tela que o dono pediu junto;
+hoje a descrição não viaja ao canal).
+
 ## 2026-09-22 (7) — ORQ-11: a árvore de navegação tem folha de limite, e a primeira fala da voz não se perde
 
 **O que foi medido.** No teste por voz da WCH-09 o dono pediu aumento de limite e foi parar no

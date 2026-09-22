@@ -128,6 +128,22 @@ steps:
   # ⚠️ `destinos_permitidos` vem do `vocabulario`, nunca de um literal aqui: um
   # literal envelheceria calado quando a forma mudasse, e o LLM passaria a ser
   # instruído com opções que não existem mais.
+  #
+  # ── ORQ-12: o SIGNIFICADO da folha, e por que ele é um campo À PARTE ─────────
+  #
+  # Até 2026-09-22 o prompt recebia SÓ os caminhos (`sac.especialista`,
+  # `auth_sac`…), e o LLM classificava pelo texto do CÓDIGO. Medido na sessão
+  # `492aa613`: um pedido de aumento de limite aterrissou em `sac.especialista`,
+  # o pega-tudo de quem não casa. `significado_dos_destinos` traz rótulo,
+  # descrição e exemplos declarados na MESMA árvore (nunca a descrição do POOL,
+  # que é texto de operador — o menu fala a língua do cliente, D5).
+  #
+  # ⚠️ **Dois campos, e não um**, porque as duas metades da D6 são diferentes:
+  # `destinos_permitidos` é o vocabulário CONFERIDO no `conferir`, e existe
+  # sempre; `significado_dos_destinos` é ajuda de classificação, e a tool o OMITE
+  # quando as duas leituras da árvore divergem (ela loga o motivo). Pendurar o
+  # prompt inteiro no campo opcional faria a divergência degradar para "o LLM não
+  # recebeu destino nenhum" — todo contato escapando, por defeito nosso.
   - id: classificar
     type: reason
     prompt_id: navigation_router_v1
@@ -137,11 +153,20 @@ steps:
         Você é o roteador de um atendimento. Leia o que o cliente escreveu e
         escolha UM destino da lista `destinos_permitidos`, devolvendo o caminho
         EXATAMENTE como aparece na lista. Não invente caminhos e não componha
-        caminhos novos. Se nada na lista servir, ou se você não tiver confiança
-        suficiente, devolva a string vazia em `destino` — dizer "não sei" é uma
-        resposta válida e preferível a um palpite.
-      destinos_permitidos: "$.pipeline_state.nivel.leaves"
-      fala_do_cliente:     "$.pipeline_state.fala"
+        caminhos novos.
+
+        `significado_dos_destinos` descreve cada caminho: `label` é como o destino
+        aparece ao cliente, `description` diz o que ele cobre (e, quando escrito,
+        quando NÃO usá-lo) e `examples` traz falas típicas de quem quer aquele
+        destino. Decida pelo significado, não pelo texto do caminho. Quando esse
+        campo não vier, decida pelo caminho mesmo.
+
+        Se nada na lista servir, ou se você não tiver confiança suficiente,
+        devolva a string vazia em `destino` — dizer "não sei" é uma resposta
+        válida e preferível a um palpite.
+      destinos_permitidos:     "$.pipeline_state.nivel.leaves"
+      significado_dos_destinos: "$.pipeline_state.nivel.vocabulary"
+      fala_do_cliente:         "$.pipeline_state.fala"
     output_schema:
       destino:
         type: string

@@ -34,8 +34,8 @@
  */
 import React from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, EyeOff, Eye, Plus, Trash2, ArrowUp, ArrowDown } from 'lucide-react'
-import type { DialogOption, LocalizedText } from '@/api/dialog-hooks'
+import { ChevronDown, ChevronRight, EyeOff, Eye, Plus, Trash2, ArrowUp, ArrowDown, MessageSquareText } from 'lucide-react'
+import type { DialogOption, LocalizedText, LocalizedTextList } from '@/api/dialog-hooks'
 
 // ── LocalizedText (mesma semântica dos outros editores deste módulo) ─────────
 
@@ -53,6 +53,33 @@ function setLt(
   }
   return { ...cur, [locale]: v }
 }
+
+/** ORQ-12 — mesma semântica do texto, sobre a LISTA (nunca mistura línguas). */
+function llToStr(l: LocalizedTextList | undefined, locale: string, defaultLocale: string): string {
+  if (l == null) return ''
+  if (Array.isArray(l)) return locale === defaultLocale ? l.join('\n') : ''
+  return (l[locale] ?? []).join('\n')
+}
+function setLl(
+  cur: LocalizedTextList | undefined, locale: string, v: string, defaultLocale: string,
+): LocalizedTextList | undefined {
+  // Linha vazia não é exemplo — e lista vazia não é "tem exemplos": a CHAVE sai,
+  // senão o validador canônico recusaria o form por um campo que o autor apagou.
+  const linhas = v.split('\n').map(x => x.trim()).filter(Boolean)
+  if (Array.isArray(cur) || cur == null) {
+    if (locale === defaultLocale) return linhas.length ? linhas : undefined
+    const base = cur && cur.length ? { [defaultLocale]: cur } : {}
+    const novo = { ...base, ...(linhas.length ? { [locale]: linhas } : {}) }
+    return Object.keys(novo).length ? novo : undefined
+  }
+  const novo = { ...cur }
+  if (linhas.length) novo[locale] = linhas
+  else delete novo[locale]
+  return Object.keys(novo).length ? novo : undefined
+}
+
+/** ORQ-12 — teto da descrição, espelhado de `DIALOG_OPTION_DESCRIPTION_MAX`. */
+export const DIALOG_OPTION_DESCRIPTION_MAX = 72
 
 // ── forma da árvore ──────────────────────────────────────────────────────────
 
@@ -103,6 +130,10 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
 }) => {
   const { t } = useTranslation('dialogForms')
   const [abertos, setAbertos] = React.useState<Set<string>>(() => new Set())
+  // ORQ-12 — o significado fica numa SEGUNDA linha, aberta por opção: a tabela
+  // existe para ver a taxonomia inteira de uma vez, e dois campos de texto por
+  // linha a tornariam ilegível justo em quem tem muitas folhas.
+  const [significados, setSignificados] = React.useState<Set<string>>(() => new Set())
 
   const idPath = (pais: DialogOption[], o: DialogOption) =>
     [...pais.map(p => p.value ?? p.id), o.value ?? o.id].filter(Boolean).join(OPT_SEP)
@@ -116,6 +147,10 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
       const novo     = !o.id || !idsSalvos.has(cid)
       const inativa  = o.active === false
       const podeDescer = profundidade(options) < DIALOG_OPTION_MAX_DEPTH || pasta
+
+      const descr   = ltToStr(o.description, locale, defaultLocale)
+      const exemplos = llToStr(o.examples, locale, defaultLocale)
+      const temSignificado = Boolean(o.description || o.examples)
 
       const troca = (patch: Partial<DialogOption>) =>
         onChange(comLista(options, idx, l => {
@@ -178,6 +213,17 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
               <Plus size={11} className="inline" /> {t('field.option')}
             </button>
 
+            {/* ORQ-12 — significado da opção (descrição e, em folha, exemplos). */}
+            <button
+              onClick={() => setSignificados(s => {
+                const n = new Set(s); n.has(cid) ? n.delete(cid) : n.add(cid); return n
+              })}
+              title={t('tree.meaning')}
+              className={`${temSignificado ? 'text-primary' : 'text-muted-light'} hover:text-dark`}
+            >
+              <MessageSquareText size={13} />
+            </button>
+
             <button
               onClick={() => troca({ active: inativa ? undefined : false })}
               title={inativa ? t('tree.reactivate') : t('tree.retire')}
@@ -213,6 +259,45 @@ export const OptionTreeEditor: React.FC<OptionTreeEditorProps> = ({
               }}
               className="text-red/70 hover:text-red"><Trash2 size={13} /></button>
           </div>
+
+          {significados.has(cid) && (
+            <div className="ml-[21px] flex flex-col gap-1 rounded border border-border bg-surface-alt px-2 py-1.5">
+              <label className="flex items-center gap-2">
+                <span className="w-20 shrink-0 text-[10px] text-muted">{t('field.description')}</span>
+                <input
+                  value={descr}
+                  maxLength={DIALOG_OPTION_DESCRIPTION_MAX}
+                  placeholder={t('tree.descriptionHint')}
+                  onChange={e => troca({
+                    description: e.target.value
+                      ? setLt(o.description, locale, e.target.value, defaultLocale)
+                      : undefined,
+                  })}
+                  className="flex-1 border rounded px-2 py-0.5 text-xs bg-white"
+                />
+                <span className="w-10 text-right text-[10px] text-muted-light">
+                  {descr.length}/{DIALOG_OPTION_DESCRIPTION_MAX}
+                </span>
+              </label>
+              {/* Exemplo só em FOLHA: numa pasta ele ensinaria o classificador a
+                  aterrissar no que não é resposta, e o validador canônico recusa
+                  o formulário inteiro. Melhor não oferecer do que recusar depois. */}
+              {!pasta && (
+                <label className="flex items-start gap-2">
+                  <span className="w-20 shrink-0 pt-1 text-[10px] text-muted">{t('field.examples')}</span>
+                  <textarea
+                    value={exemplos}
+                    rows={2}
+                    placeholder={t('tree.examplesHint')}
+                    onChange={e => troca({ examples: setLl(o.examples, locale, e.target.value, defaultLocale) })}
+                    className="flex-1 border rounded px-2 py-0.5 text-xs bg-white"
+                  />
+                  <span className="w-10" />
+                </label>
+              )}
+              <div className="text-[10px] text-muted-light leading-snug">{t('tree.meaningHint')}</div>
+            </div>
+          )}
 
           {pasta && aberto && (
             <div className="ml-4 pl-3 border-l border-border flex flex-col gap-0.5">

@@ -27,12 +27,14 @@
 
 import type {
   DialogForm,
+  DialogOption,
   QuestionNode,
 } from "./dialog"
 import {
   DialogFormSchema,
   askWhenForwardRefErrors,
   optionTreeIssues,
+  resolveLocalizedList,
   resolveLocalizedText,
 } from "./dialog"
 
@@ -283,6 +285,60 @@ export function leafPaths(roots: ReadonlyArray<RenderOption>): string[] {
     }
   }
   anda(roots, [])
+  return saida
+}
+
+/** ORQ-12 — o SIGNIFICADO de uma folha, para o classificador. */
+export interface LeafMeaning {
+  /** Caminho pontuado, idêntico a um item de `leafPaths` (prefixado pela trilha). */
+  path:         string
+  label:        string
+  description?: string
+  /** Só o classificador lê; nunca é exibido. */
+  examples?:    string[]
+}
+
+/**
+ * ORQ-12 — o vocabulário de `leafPaths` COM significado: rótulo, descrição e
+ * exemplos de cada folha sob `path`, na língua pedida.
+ *
+ * Lê o `DialogOption` CRU, e não o `RenderOption`, de propósito: `examples` não
+ * pode entrar no `render`, que vai aos canais — seria texto de classificador
+ * chegando a um adapter que o exibe. Por isso a caminhada REPETE as duas regras
+ * do `mapOptions` (aposentada sai; id = `value ?? id`; pasta esvaziada vira
+ * folha), e o chamador confere que os caminhos batem com `leafPaths` — duas
+ * leituras do mesmo fato só são aceitáveis CONFERIDAS.
+ */
+export function leafMeanings(
+  roots:   ReadonlyArray<DialogOption> | undefined,
+  path:    ReadonlyArray<string>,
+  dl:      string,
+  locale?: string,
+): LeafMeaning[] {
+  const ativos = (l: ReadonlyArray<DialogOption> | undefined) => (l ?? []).filter(o => o.active !== false)
+  let nivel = ativos(roots)
+  for (const passo of path) {
+    const achado = nivel.find(o => (o.value ?? o.id) === passo)
+    if (!achado) return []
+    nivel = ativos(achado.options)
+  }
+  const saida: LeafMeaning[] = []
+  const anda = (opts: DialogOption[], trilha: string[]): void => {
+    for (const o of opts) {
+      const aqui = [...trilha, o.value ?? o.id]
+      const filhos = ativos(o.options)
+      if (filhos.length) { anda(filhos, aqui); continue }
+      const m: LeafMeaning = { path: aqui.join("."), label: resolveLocalizedText(o.label, locale, dl) }
+      if (o.description !== undefined) {
+        const d = resolveLocalizedText(o.description, locale, dl).trim()
+        if (d) m.description = d
+      }
+      const ex = resolveLocalizedList(o.examples, locale, dl).map(x => x.trim()).filter(Boolean)
+      if (ex.length) m.examples = ex
+      saida.push(m)
+    }
+  }
+  anda(nivel, [...path])
   return saida
 }
 
@@ -569,6 +625,7 @@ export interface DialogFormIssue {
     | "schema" | "duplicate_node_id" | "ask_when_forward_ref" | "return_ref_unknown"
     | "option_duplicate_sibling_id" | "option_nesting_not_allowed"
     | "option_depth" | "option_empty_folder"
+    | "option_description_too_long" | "option_examples_on_folder" | "option_examples_limit"
 }
 
 export interface DialogFormVerdict {

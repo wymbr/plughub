@@ -43,6 +43,17 @@ export const LocalizedTextSchema = z.union([
 ])
 export type LocalizedText = z.infer<typeof LocalizedTextSchema>
 
+/**
+ * Localized LIST of texts: a bare array (single-locale) or { locale: string[] }.
+ * Same resolution order as `LocalizedText`, applied to the whole list — lists are
+ * never merged across locales (a pt-BR phrase is not an English example).
+ */
+export const LocalizedTextListSchema = z.union([
+  z.array(z.string()),
+  z.record(z.string(), z.array(z.string())),
+])
+export type LocalizedTextList = z.infer<typeof LocalizedTextListSchema>
+
 // ─────────────────────────────────────────────
 // Format-level validation (NOT semantic)
 // ─────────────────────────────────────────────
@@ -282,6 +293,20 @@ export interface DialogOption {
    * ⚠️ **PONTEIRO, nunca switch.** Ver o comentário do campo no schema Zod.
    */
   on_return?: string
+  /**
+   * ORQ-12 — o que esta opção COBRE, na língua do CLIENTE (D5). Vai ao
+   * orquestrador com LLM junto com o rótulo e, na ORQ-12b, à segunda linha do
+   * menu — por isso o teto de `DIALOG_OPTION_DESCRIPTION_MAX` (a `description`
+   * da linha de lista do WhatsApp). É SIGNIFICADO, nunca roteamento: o destino
+   * continua no `navigation_pools` do pool (D2).
+   */
+  description?: LocalizedText
+  /**
+   * ORQ-12 — frases que um cliente diria para chegar AQUI. Só o classificador
+   * lê; **nunca é exibido**. Só em folha: exemplo numa pasta ensinaria o LLM a
+   * aterrissar num lugar que não é resposta.
+   */
+  examples?: LocalizedTextList
 }
 
 /**
@@ -350,6 +375,10 @@ export const DialogOptionSchema: z.ZodType<DialogOption> = z.lazy(() =>
      * produzir (a mesma família do id de nó duplicado).
      */
     on_return: z.string().min(1).optional(),
+    /** ORQ-12 — ver `DialogOption.description`. Tetos em `optionTreeIssues`. */
+    description: LocalizedTextSchema.optional(),
+    /** ORQ-12 — ver `DialogOption.examples`. Só em folha (`optionTreeIssues`). */
+    examples:    LocalizedTextListSchema.optional(),
   }),
 )
 
@@ -522,6 +551,19 @@ export function resolveLocalizedText(
   return first ?? ""
 }
 
+/** Same order as `resolveLocalizedText`, over a whole list. Absent ⇒ `[]`. */
+export function resolveLocalizedList(
+  list: LocalizedTextList | undefined,
+  locale?: string,
+  defaultLocale?: string,
+): string[] {
+  if (list == null) return []
+  if (Array.isArray(list)) return list
+  if (locale && list[locale] !== undefined) return list[locale]
+  if (defaultLocale && list[defaultLocale] !== undefined) return list[defaultLocale]
+  return Object.values(list)[0] ?? []
+}
+
 // ─────────────────────────────────────────────
 // ask_when — pure evaluator + forward-reference validation
 // ─────────────────────────────────────────────
@@ -594,6 +636,14 @@ function _sobPrefixo(caminho: string, prefixo: string): boolean {
  *  nunca truncamento — truncar perderia subárvore inteira em silêncio. */
 export const DIALOG_OPTION_MAX_DEPTH = 5
 
+/** ORQ-12 — teto da `description` por língua: é o da `description` da linha de
+ *  lista do WhatsApp, onde a ORQ-12b a exibe. Acima, o canal CORTARIA o texto. */
+export const DIALOG_OPTION_DESCRIPTION_MAX = 72
+/** ORQ-12 — tetos de `examples`: são poucos e curtos porque viajam em TODA
+ *  chamada do classificador, multiplicados pelo número de folhas do nível. */
+export const DIALOG_OPTION_EXAMPLES_MAX = 8
+export const DIALOG_OPTION_EXAMPLE_MAX_LEN = 120
+
 export interface OptionTreeIssue {
   path:    string
   code:
@@ -601,7 +651,62 @@ export interface OptionTreeIssue {
     | "option_nesting_not_allowed"
     | "option_depth"
     | "option_empty_folder"
+    | "option_description_too_long"
+    | "option_examples_on_folder"
+    | "option_examples_limit"
   message: string
+}
+
+/** Os valores por língua de um LocalizedText, com a língua (`""` = sem mapa). */
+function _porLingua<T>(v: T | Record<string, T>, ehValor: (x: unknown) => x is T): Array<[string, T]> {
+  return ehValor(v) ? [["", v]] : Object.entries(v as Record<string, T>)
+}
+
+function _significadoIssues(opt: DialogOption, p: string, pasta: boolean): OptionTreeIssue[] {
+  const issues: OptionTreeIssue[] = []
+  if (opt.description !== undefined) {
+    const ehStr = (x: unknown): x is string => typeof x === "string"
+    for (const [lg, txt] of _porLingua(opt.description, ehStr)) {
+      if (txt.length > DIALOG_OPTION_DESCRIPTION_MAX) {
+        issues.push({
+          path: `${p}.description${lg ? `.${lg}` : ""}`,
+          code: "option_description_too_long",
+          message: `descrição de '${opt.id}'${lg ? ` (${lg})` : ""} tem ${txt.length} caracteres, e o teto é ${DIALOG_OPTION_DESCRIPTION_MAX} — o canal cortaria o texto ao exibi-lo`,
+        })
+      }
+    }
+  }
+  if (opt.examples !== undefined) {
+    if (pasta) {
+      issues.push({
+        path: `${p}.examples`,
+        code: "option_examples_on_folder",
+        message: `'${opt.id}' é pasta e declara 'examples' — exemplo ensina o classificador a aterrissar ali, e pasta não é resposta; mova-os para as folhas`,
+      })
+      return issues
+    }
+    const ehLista = (x: unknown): x is string[] => Array.isArray(x)
+    for (const [lg, lista] of _porLingua(opt.examples, ehLista)) {
+      const onde = `${p}.examples${lg ? `.${lg}` : ""}`
+      if (lista.length > DIALOG_OPTION_EXAMPLES_MAX) {
+        issues.push({
+          path: onde,
+          code: "option_examples_limit",
+          message: `'${opt.id}'${lg ? ` (${lg})` : ""} tem ${lista.length} exemplos, e o teto é ${DIALOG_OPTION_EXAMPLES_MAX} — eles viajam em toda chamada do classificador`,
+        })
+      }
+      lista.forEach((ex, k) => {
+        if (!ex.trim() || ex.length > DIALOG_OPTION_EXAMPLE_MAX_LEN) {
+          issues.push({
+            path: `${onde}.${k}`,
+            code: "option_examples_limit",
+            message: `exemplo ${k + 1} de '${opt.id}'${lg ? ` (${lg})` : ""} está ${ex.trim() ? `com ${ex.length} caracteres (teto ${DIALOG_OPTION_EXAMPLE_MAX_LEN})` : "vazio"}`,
+          })
+        }
+      })
+    }
+  }
+  return issues
 }
 
 /**
@@ -634,6 +739,7 @@ export function optionTreeIssues(
         })
       }
       vistos.add(opt.id)
+      issues.push(..._significadoIssues(opt, p, (opt.options?.length ?? 0) > 0))
 
       const filhos = opt.options
       if (filhos === undefined) return

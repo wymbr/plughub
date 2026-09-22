@@ -41,7 +41,8 @@
     "formatConflict": "Conflito: o formato declarado ({{declarado}}) discorda do derivado do tipo mascarado ({{derivado}}). A publicação será recusada.",
     "maskedType": "Mascarar como",
     "maskedNone": "(não mascarar)",
-    "catalogUnavailable": "Catálogo indisponível — a lista está vazia por falha de leitura, não por não haver formatos."
+    "catalogUnavailable": "Catálogo indisponível — a lista está vazia por falha de leitura, não por não haver formatos.",
+    "examples": "Exemplos"
   },
   "dimensions": {
     "title": "Instrumentos",
@@ -202,6 +203,10 @@
     "reactivate": "Reativar",
     "confirmLastChild": "\"{{pasta}}\" ficaria sem filhos e viraria uma FOLHA selecionável: o rótulo da pasta passaria a ser resposta. Remover mesmo assim?",
     "depth": "profundidade {{d}} de {{max}}",
-    "hint": "Linha com filhos é pasta (só navega); sem filhos é folha (selecionável). O valor é ignorado em pasta."
+    "hint": "Linha com filhos é pasta (só navega); sem filhos é folha (selecionável). O valor é ignorado em pasta.",
+    "meaning": "Significado — descrição e exemplos para o orquestrador com IA",
+    "descriptionHint": "O que esta opção cobre (e quando não usá-la)",
+    "examplesHint": "Uma frase por linha: o que o cliente diria para vir parar aqui",
+    "meaningHint": "A descrição é para o CLIENTE (o canal pode exibi-la) e vai ao orquestrador com IA. Os exemplos só o orquestrador lê — nunca aparecem para o cliente, e só existem em folha."
   }
 }

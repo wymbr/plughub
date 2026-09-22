@@ -483,3 +483,29 @@ descrição, e o LLM classifica pelo texto do código. As três fichas abertas �
 exemplos na folha, como SIGNIFICADO, nunca roteamento), `ORQ-13` (uma pergunta de esclarecimento
 antes do escape) e `ORQ-14` (medir o roteamento errado) — respeitam D2, D5 e D6 como estão.
 
+### D8 — a folha declara SIGNIFICADO, e ele é distinto do roteamento (ORQ-12, 2026-09-22)
+
+`DialogOption` ganhou dois campos OPCIONAIS, e o eixo que os separa não é o formato, é **quem lê**:
+
+| campo | quem lê | onde aparece |
+|---|---|---|
+| `description` | o classificador **e** o cliente | prompt hoje; menu na `ORQ-15` (teto de 72 = linha de lista do WhatsApp) |
+| `examples` | **só** o classificador | em lugar nenhum — nunca entra no `render`, que é o bloco dos canais |
+
+Quatro consequências que sustentam a decisão:
+
+1. **É significado, nunca roteamento.** O mapa folha→pool continua no `navigation_pools` do POOL
+   (D2), e a conferência contra a folha declarada (D6) não muda uma linha. Um campo `pool` na folha
+   continua proibido, e o ramo G do gate continua medindo isso.
+2. **Não se reusa a descrição do POOL.** Aquilo é texto de operador; o menu fala a língua do
+   CLIENTE (D5). Reusá-la poria o vocabulário do operador na boca do orquestrador.
+3. **`examples` só em folha.** Numa pasta, ele ensinaria o LLM a aterrissar no que não é resposta —
+   e pasta × folha é derivado (D2), então a regra vale sozinha quando alguém acrescenta um filho.
+4. **Duas leituras da mesma árvore, CONFERIDAS.** `leafMeanings` lê o form cru (porque `examples`
+   não pode viajar no `render`) e o `dialog_tree_level` compara os caminhos com `leafPaths`; se
+   divergirem, o `vocabulary` **sai** e o motivo vai ao log. Degradar para "só os caminhos" é o
+   comportamento de antes da ficha; degradar para "sem destino nenhum" teria feito todo contato
+   escapar por defeito nosso.
+
+O que a ficha NÃO fez, e está nomeado: exibir a descrição ao cliente (`ORQ-15`) — a descrição ainda
+não viaja ao canal.

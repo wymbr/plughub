@@ -18,6 +18,8 @@ import { apiFetch } from '@/api/apiFetch'
 const BASE = '/v1/dialog/forms'
 
 export type LocalizedText = string | Record<string, string>
+/** ORQ-12 — lista localizada (`examples`). Espelho de `LocalizedTextListSchema`. */
+export type LocalizedTextList = string[] | Record<string, string[]>
 
 export interface DialogValidation {
   /**
@@ -99,6 +101,15 @@ export interface DialogOption {
   /** `false` = APOSENTADA: sai da oferta e permanece no form, para o histórico
    *  continuar explicável (D6). Ausente = ativa. */
   active?: boolean
+  /** D2 do `adr-tree-return-continuation`: question que o CHAMADOR executa quando
+   *  o agente desta folha DEVOLVE o controle. Ausente ⇒ encerra. */
+  on_return?: string
+  /** ORQ-12 — o que a opção COBRE, na língua do cliente. Vai ao orquestrador com
+   *  LLM; teto de 72 caracteres (a `description` da linha de lista do WhatsApp). */
+  description?: LocalizedText
+  /** ORQ-12 — frases que um cliente diria para chegar aqui. Só o classificador lê,
+   *  **nunca é exibido**, e só existe em FOLHA. */
+  examples?: LocalizedTextList
 }
 
 export interface DialogField {
