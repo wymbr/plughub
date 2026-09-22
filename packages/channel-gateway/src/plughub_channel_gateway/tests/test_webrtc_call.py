@@ -267,7 +267,8 @@ class TestEnd(_Setup):
         ws = _fake_ws()
         self.adapter._connections[self.sid] = ws
         await self.adapter._end_attached_call(self.sid, "customer_disconnect")
-        assert self.adapter._producer.send.await_count == 0          # nenhum contact_closed
+        assert not [c for c in self.adapter._producer.send.await_args_list    # nenhum contact_closed
+                    if c.args and c.args[0] != "media.calls"]
         assert await self.redis.get(f"session:{self.sid}:ws_alive") == "1"   # é do webchat
         assert await self.redis.get(f"channel:webrtc:{self.sid}:room_name") is None
         assert self.provider.rooms_deleted

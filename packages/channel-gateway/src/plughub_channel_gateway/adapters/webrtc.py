@@ -363,6 +363,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._attached:        set[str]       = set()
         self._call_started:    set[str]       = set()
         self._call_end_reason: dict[str, str] = {}
+        # WCH-02 (relatórios): o início da chamada em curso, por sessão — o fim o reaproveita
+        self._call_meta:       dict[str, dict] = {}
 
         # VOZ-09: espelho em memória do TETO do cliente por sessão (fonte: Redis
         # `channel:webrtc:{sid}:media`). Substitui `_mediums`, que guardava UM meio para a

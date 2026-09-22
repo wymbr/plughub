@@ -240,6 +240,7 @@ async def report_sessions(
     status:           Optional[str] = Query(None,   description="Filter by session status (active|suspended|closed) — Arc 19"),
     origin:           str           = Query("live",  pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     scope:            str           = Query("contacts", pattern="^(contacts|all)$", description="contacts=só contatos de cliente (default, = E2f); all=inclui sessões de pool interno (wrap-up, dispatch) como linhas extras. NÃO existe em endpoints de agregado."),
+    has_call:         bool          = Query(False,  description="WCH-02: só contatos em que houve chamada (voz/vídeo) — linha em call_intervals, inclusive a em curso"),
     page:             int           = Query(1,       ge=1),
     page_size:        int           = Query(100,     ge=1),
     format:           str           = Query("json",  pattern="^(json|csv)$"),
@@ -286,6 +287,7 @@ async def report_sessions(
         dnis             = dnis,
         status           = status,
         origin           = origin,
+        has_call         = has_call,
         scope            = scope,
         page      = page,
         page_size = ps,
@@ -345,6 +347,7 @@ async def report_contacts_series(
     ani:              Optional[str] = Query(None),
     dnis:             Optional[str] = Query(None),
     status:           Optional[str] = Query(None),
+    has_call:         bool          = Query(False,  description="WCH-02: só contatos em que houve chamada (voz/vídeo) — linha em call_intervals, inclusive a em curso"),
     origin:           str           = Query("live", pattern="^(live|import|reeval)$"),
     pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
@@ -387,6 +390,7 @@ async def report_contacts_series(
         ani              = ani,
         dnis             = dnis,
         status           = status,
+        has_call         = has_call,
         origin           = origin,
     )
     return JSONResponse(content=data, status_code=503 if data.get("error") else 200)
@@ -423,6 +427,7 @@ async def report_token_breakdown(
     ani:              Optional[str] = Query(None),
     dnis:             Optional[str] = Query(None),
     status:           Optional[str] = Query(None),
+    has_call:         bool          = Query(False,  description="WCH-02: só contatos em que houve chamada (voz/vídeo) — linha em call_intervals, inclusive a em curso"),
     origin:           str           = Query("live", pattern="^(live|import|reeval)$"),
     pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
@@ -455,6 +460,7 @@ async def report_token_breakdown(
         insight_category = insight_category, insight_tags = tags_list,
         accessible_pools       = pool_principal.accessible_pools,
         supervised_agent_types = pool_principal.supervised_agent_types,
+        has_call         = has_call,
         ani = ani, dnis = dnis, status = status, origin = origin,
     )
     return JSONResponse(content=data, status_code=503 if data.get("error") else 200)

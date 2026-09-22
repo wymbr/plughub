@@ -176,6 +176,7 @@ function seriesParams(tenantId: string, f: ContactFilters, metric: string): URLS
     ['session_id', f.sessionIdSearch],
   ]
   for (const [k, v] of opt) if (v) p.set(k, v)
+  if (f.hasCall) p.set('has_call', 'true')     // WCH-02 — a lente responde sobre a população listada
   return p
 }
 

@@ -531,6 +531,7 @@ services:
           pool.occupancy
           speech.metrics
           audit.access
+          media.calls
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \

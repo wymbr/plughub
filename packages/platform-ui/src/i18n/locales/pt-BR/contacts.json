@@ -165,6 +165,8 @@
     "sessionId": "Session ID…",
     "allChannels": "Todos os canais",
     "allOutcomes": "Todos os outcomes",
+    "hasCall": "📞 Com chamada",
+    "hasCallHint": "Só contatos em que houve chamada de voz/vídeo, inclusive a em curso. A chamada é meio do contato, não canal.",
     "allDirections": "Todas as direções",
     "directionHint": "Direção do acesso — quem procurou quem. Sessão que o backend não classificou fica fora das três.",
     "direction": {
@@ -200,6 +202,7 @@
     "abandoned": "abandonado",
     "closed": "encerrado",
     "httpError": "Erro HTTP {{status}}",
+    "call": { "inProgress": "em curso", "hint": "{{count}} chamada(s) · total das encerradas {{duration}}" },
     "columns": {
       "direction": "Direção",
       "contact": "Contato",
@@ -264,7 +267,7 @@
     }
   },
   "transcript": {
-    "call": { "started": "📞 chamada iniciada", "ended": "📞 chamada encerrada" },
+    "call": { "started": "📞 chamada iniciada", "ended": "📞 chamada encerrada", "endRequested": "📞 atendente pediu o fim da chamada", "endedWith": "📞 chamada encerrada · {{duration}}" },
     "back": "← Segmentos",
     "session": "Sessão",
     "supervising": "👁 supervisionando",

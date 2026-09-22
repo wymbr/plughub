@@ -1015,8 +1015,24 @@ em curso. Grava `media.call.end_requested` no stream, com o autor; o observador 
 com `agent_hangup` se o pedido for posterior à anexação (o replay desde o início não pode derrubar
 uma chamada nova com o pedido da anterior). No Console, é o botão vermelho da sobreposição.
 
+**A chamada nos relatórios (WCH-08, 2026-09-22).** O gateway publica o INTERVALO no tópico
+`media.calls` (`call_events.py`, schema `@plughub/schemas/media-calls.ts`, chave `session_id`):
+`call_started` na anexação e `call_ended` no fim, com o **mesmo `call_id` = id da entrada
+`media.call started` no stream** — o discriminador da CHAMADA, não da sessão, porque um contato tem
+N chamadas. O fim leva a linha inteira do início (+ `ended_at`, `duration_ms`, `end_reason`); o pool é
+o de quem ATENDE (procedência `pool:<id>` da política de mídia, D10) e o tenant é o da SESSÃO. Sem id
+de stream não há `call_id` e nada é publicado, com ERROR; fim sem início conhecido é WARNING.
+A analytics-api grava `call_intervals` (`ReplacingMergeTree(row_version)`, versão
+`coalesce(ended_at, started_at)`, partição pelo INÍCIO). Em `/analise/sessions`: filtro
+**"Com chamada"** no predicado único (lista, série e tokens) e, na célula de duração, uma 2ª linha
+📞 com a soma das chamadas TERMINADAS, `×N` e selo "em curso" — nunca coluna própria (a coluna reabriu
+o scroll horizontal e escondeu `process`, medido no browser). A transcrição de contato fechado, lida
+do ClickHouse quando o stream expira, recebe as chamadas como `media.call` com duração.
+Duração de chamada é tempo de VOZ: não se soma nem se compara com `elapsed_time_ms`.
+Medido: duas chamadas num contato — 92,9 s `agent_hangup` + 54,2 s `customer_hangup` → `2m 27s ×2`.
+
 **Fora da fatia (`WCH-02`):** IA não fala nem ouve; a chamada não é transcrita; regra para
-atendente sem áudio além da espera dita; o trecho de chamada nos relatórios.
+atendente sem áudio além da espera dita.
 
 Gate: `infra/test/probe_wch01_chat_call.sh` (porta, espera dita, independência chamada × contato).
 O caminho com humano e áudio foi validado pelo dono no browser.

@@ -691,6 +691,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `speech.metrics` | Channel Gateway (bot leg WebRTC) · `speech-check` (verificação ativa, VOZ-23) | analytics-api → ClickHouse `speech_stream_summaries` / `speech_collect_outcomes` / `speech_checks` — só números, nunca texto (VOZ-22) |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
 | `audit.access` | Channel Gateway (ouvir/exportar gravação, VOZ-36) | analytics-api → ClickHouse `audit_access_log` — a trilha LGPD tem UMA escritora |
+| `media.calls` | Channel Gateway (chamada presa a contato de chat, WCH-08) | analytics-api → ClickHouse `call_intervals` — `call_id` = id da entrada no stream, chave `session_id` |
 | `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
 
 ## Kafka Event Schemas — Zod Coverage
@@ -716,6 +717,7 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `journey.merges` | `JourneyMergedEventSchema` | `journey-merges.ts` |
 | `speech.metrics` | `SpeechMetricsEventSchema` | `speech-metrics.ts` |
 | `audit.access` | `AuditAccessEventSchema` | `audit-access.ts` |
+| `media.calls` | `MediaCallEventSchema` | `media-calls.ts` |
 
 ---
 

@@ -853,6 +853,18 @@ async def session_stream(
                         store.query_session_messages,
                         store.new_client(), tenant_id, session_id,
                     )
+                    # WCH-02 — as chamadas entram na MESMA linha do tempo. Falhar aqui não derruba
+                    # a transcrição, mas é dito: sem isto a conversa fechada mostra texto sem dizer
+                    # onde houve voz.
+                    try:
+                        ch_calls = await asyncio.to_thread(
+                            store.query_session_calls, store.new_client(), tenant_id, session_id)
+                    except Exception as call_exc:  # noqa: BLE001
+                        ch_calls = []
+                        logger.warning("session_stream: chamadas NAO lidas do ClickHouse id=%s: %s",
+                                       session_id, call_exc)
+                    if ch_calls:
+                        ch_history = sorted(ch_history + ch_calls, key=lambda e: e.get("timestamp") or "")
                     if ch_history:
                         history = ch_history
                         logger.debug(

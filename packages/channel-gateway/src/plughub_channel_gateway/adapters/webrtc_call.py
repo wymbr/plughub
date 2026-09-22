@@ -38,6 +38,7 @@ import jwt as pyjwt
 from fastapi import WebSocket, WebSocketDisconnect
 
 from . import media_policy
+from .. import call_events
 
 logger = logging.getLogger("plughub.channel-gateway.webrtc.call")
 
@@ -67,6 +68,7 @@ class CallAttachMixin:
     _attached: set[str]
     _call_started: set[str]
     _call_end_reason: dict[str, str]
+    _call_meta: dict[str, dict]
 
     # ── Porta ────────────────────────────────────────────────────────────────
 
@@ -258,6 +260,49 @@ class CallAttachMixin:
                            "a partir de agora pelo relogio", exc)
         return f"{int(time.time() * 1000)}-0"
 
+    async def _publish_call_interval(self, session_id: str, state: str, reason: str, now: str,
+                                     entry_id: object, media_state: dict | None) -> None:
+        """WCH-02 — início e fim da chamada em `media.calls`. Nunca derruba a chamada; toda perda
+        é dita."""
+        if state == "started":
+            if isinstance(entry_id, bytes):
+                entry_id = entry_id.decode()
+            call_id = str(entry_id) if entry_id else ""
+            if not call_id:
+                # sem a entrada no stream não há o id que a transcrição e o relatório compartilham;
+                # um id inventado aqui faria a mesma chamada aparecer com dois nomes
+                logger.error("webrtc chamada: sem id de stream para a chamada (session=%s) — intervalo "
+                             "NAO publicado; o relatorio nao vera esta chamada", session_id)
+                return
+            customer = (media_state or {}).get("customer") or {}
+            begun = call_events.started(
+                tenant_id=await self._session_tenant(session_id), session_id=session_id,
+                call_id=call_id, channel="webchat",
+                pool_id=call_events.pool_from_sources(customer.get("policy_sources") or []),
+                customer_publish=list(customer.get("publish") or []), started_at=now)
+            self._call_meta[session_id] = begun
+            await call_events.publish(self._producer, begun)
+            return
+        begun = self._call_meta.pop(session_id, None)
+        if begun is None:
+            logger.warning("webrtc chamada: fim sem inicio conhecido nesta instancia (session=%s reason=%s) "
+                           "— intervalo NAO fechado no relatorio", session_id, reason)
+            return
+        await call_events.publish(self._producer, call_events.ended(begun=begun, ended_at=now,
+                                                                     end_reason=reason))
+
+    async def _session_tenant(self, session_id: str) -> str:
+        """Tenant da SESSÃO (o meta), não o do processo: o gateway atende vários."""
+        try:
+            raw = await self._redis.get(f"session:{session_id}:meta")
+            tenant = str((json.loads(raw) if raw else {}).get("tenant_id") or "")
+        except Exception:  # noqa: BLE001
+            tenant = ""
+        if not tenant:
+            logger.warning("webrtc chamada: meta sem tenant (session=%s) — usando o do processo", session_id)
+            tenant = self._settings.tenant_id
+        return tenant
+
     async def _attached_pool_field(self, session_id: str, fields: dict) -> dict:
         """Completa o campo `pool` do `routing.assigned` de um contato de chat com a política do
         pool, lida FRESCA do registry. Registry fora ou pool ilegível → `registry_unavailable`,
@@ -382,7 +427,7 @@ class CallAttachMixin:
             "room_name": room, "publish": state["customer"]["publish"],
             "policy_sources": state["customer"]["policy_sources"],
         })
-        await self._announce_call(session_id, "started")
+        await self._announce_call(session_id, "started", media_state=state)
         self._recording_follow(session_id, state)
         logger.info("webrtc chamada pronta session=%s publish=%s fontes=%s room=%s", session_id,
                     state["customer"]["publish"], state["customer"]["policy_sources"], room)
@@ -423,8 +468,10 @@ class CallAttachMixin:
         logger.info("webrtc chamada encerrada session=%s reason=%s (o contato de chat segue)",
                     session_id, reason)
 
-    async def _announce_call(self, session_id: str, state: str, reason: str = "") -> None:
-        """`media.call` no stream (registro durável do trecho) e em `agent:events` (Console)."""
+    async def _announce_call(self, session_id: str, state: str, reason: str = "",
+                             *, media_state: dict | None = None) -> None:
+        """`media.call` no stream (registro durável do trecho), em `agent:events` (Console) e, desde
+        a WCH-02, o intervalo em `media.calls` (relatórios)."""
         now = datetime.now(timezone.utc).isoformat()
         if state == "started":
             self._call_started.add(session_id)
@@ -433,11 +480,13 @@ class CallAttachMixin:
                   "author": json.dumps({"type": "system", "id": "channel-gateway"}),
                   "state": state, "reason": reason,
                   "payload": json.dumps({"state": state, "reason": reason})}
+        entry_id = None
         try:
-            await self._redis.xadd(f"session:{session_id}:stream", fields)
+            entry_id = await self._redis.xadd(f"session:{session_id}:stream", fields)
         except Exception as exc:  # noqa: BLE001
             logger.error("webrtc chamada: media.call %s NAO foi ao stream (%s) session=%s",
                          state, exc, session_id)
+        await self._publish_call_interval(session_id, state, reason, now, entry_id, media_state)
         try:
             await self._redis.publish(f"agent:events:{session_id}", json.dumps({
                 "type": "media.call", "session_id": session_id, "state": state,

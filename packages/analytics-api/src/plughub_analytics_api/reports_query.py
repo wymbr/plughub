@@ -717,6 +717,8 @@ async def query_sessions_report(
     scope:                  str              = "contacts",
     # Timeline do contato (S1): filhas de UM SALTO. Ver `_fetch_sessions`.
     origin_session_id:      str | None       = None,
+    # WCH-02 — só contatos em que houve chamada (`call_intervals`)
+    has_call:               bool             = False,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -737,6 +739,7 @@ async def query_sessions_report(
             internal_pools, scope, origin_session_id,
             entry_pool_id=entry_pool_id,
             direction=direction,
+            has_call=has_call,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -771,6 +774,7 @@ def _session_conditions(
     origin_session_id: str | None = None,
     entry_pool_id: str | None = None,
     direction: str | None = None,
+    has_call: bool = False,
 ) -> "tuple[list[str], dict]":
     """
     O predicado de CONTATO — extraído de `_fetch_sessions` na F2 do
@@ -947,6 +951,14 @@ def _session_conditions(
         conditions.append(f"{_DIRECTION_EXPR} = {{direction:String}}")
         params["direction"] = direction
 
+    # WCH-02 — contatos em que houve CHAMADA. Linha em `call_intervals` nasce no início da chamada,
+    # então chamada em curso conta. Subconsulta não correlacionada, como a de `pool_id`.
+    if has_call:
+        conditions.append(
+            f"s.session_id IN (SELECT session_id FROM {db}.call_intervals FINAL"
+            " WHERE tenant_id = {tenant_id:String})"
+        )
+
     # Pool-scope access filter (Arc 7c) — predicado ÚNICO, ver _session_scope_clause.
     # (Era inline aqui e em mais 3 endpoints; virou função na F1b porque o carimbo
     # `entrou por` fez as 4 cópias autorizarem pelo fato errado.)
@@ -1029,6 +1041,7 @@ async def query_contacts_series_report(
     dnis:                   str | None       = None,
     status:                 str | None       = None,
     origin:                 "str | list[str]" = "live",
+    has_call:               bool             = False,
     scope:                  str              = "contacts",
 ) -> dict:
     """
@@ -1067,6 +1080,7 @@ async def query_contacts_series_report(
         scope="contacts",
         origin_session_id=None,
         entry_pool_id=entry_pool_id, direction=direction,
+        has_call=has_call,
     )
     where = " AND ".join(conditions)
 
@@ -1111,6 +1125,7 @@ async def query_token_breakdown_report(
     dnis:                   str | None       = None,
     status:                 str | None       = None,
     origin:                 "str | list[str]" = "live",
+    has_call:               bool             = False,
 ) -> dict:
     """
     Breakdown de consumo de LLM (T3) sobre a MESMA população da lista.
@@ -1139,6 +1154,7 @@ async def query_token_breakdown_report(
         internal_pools=internal_pools, scope="contacts",
         origin_session_id=None,
         entry_pool_id=entry_pool_id, direction=direction,
+        has_call=has_call,
     )
     where = " AND ".join(conditions)
     _agent_join, _agent_where = _agent_scope_session_join(database, tenant_id, supervised_agent_types)
@@ -1171,6 +1187,7 @@ def _fetch_sessions(
     origin_session_id: str | None = None,
     entry_pool_id: str | None = None,
     direction: str | None = None,
+    has_call: bool = False,
 ) -> dict:
     conditions, params = _session_conditions(
         client, db, tenant_id, since, until,
@@ -1181,6 +1198,7 @@ def _fetch_sessions(
         internal_pools=internal_pools, scope=scope,
         origin_session_id=origin_session_id,
         entry_pool_id=entry_pool_id, direction=direction,
+        has_call=has_call,
     )
 
     where = " AND ".join(conditions)
@@ -1306,7 +1324,18 @@ def _fetch_sessions(
               AND role IN ('primary', 'specialist')
               AND duration_ms IS NOT NULL
             GROUP BY session_id
-        ) AS _agt ON _agt.session_id = s.session_id"""
+        ) AS _agt ON _agt.session_id = s.session_id
+        -- WCH-02 — chamadas dentro do contato. `call_ms` soma só as TERMINADAS (a em curso não
+        -- tem duração ainda, e somar zero por ela diria que durou zero); `call_open` diz que há
+        -- uma em curso. Aliases sufixados: `duration_ms` é coluna real de `call_intervals`.
+        LEFT JOIN (
+            SELECT session_id, count() AS call_n,
+                   sumIf(duration_ms, ended_at IS NOT NULL) AS call_ms,
+                   countIf(ended_at IS NULL) AS call_open
+            FROM {db}.call_intervals FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+            GROUP BY session_id
+        ) AS _calls ON _calls.session_id = s.session_id"""
 
     # Use __ANI_DNIS__ placeholder instead of str.format() to avoid conflicts
     # with ClickHouse's own {param:Type} syntax inside _joins.
@@ -1365,6 +1394,9 @@ def _fetch_sessions(
             _agt.agent_ms AS agent_time_ms,
             __ANI_DNIS__,
             COALESCE(_sc.cnt, 0) AS segment_count,
+            COALESCE(_calls.call_n, 0) AS call_count,
+            if(COALESCE(_calls.call_n, 0) - COALESCE(_calls.call_open, 0) > 0, _calls.call_ms, NULL) AS call_duration_ms,
+            COALESCE(_calls.call_open, 0) AS call_open_count,
             COALESCE(s.status, 'closed') AS status,
             -- Journey T1/T4: a ARESTA (quem me criou) e o seu RÓTULO (por quê).
             -- É com estes dois que a UI monta a árvore: sem o pai, tudo vira irmão;
@@ -1418,6 +1450,8 @@ def _fetch_sessions(
                     s.opened_at, s.closed_at, s.close_reason, s.outcome,
                     s.wait_time_ms, s.handle_time_ms,
                     NULL AS ani, NULL AS dnis, 0 AS segment_count,
+                    -- WCH-02: ausente, não zero — o modo degradado não sabe se houve chamada
+                    NULL AS call_count, NULL AS call_duration_ms, NULL AS call_open_count,
                     COALESCE(s.status, 'closed') AS status,
                     -- Journey T1/T4: a árvore tem de sobreviver ao modo degradado — sem
                     -- estes dois a UI perde a hierarquia e o motivo de cada nó existir.

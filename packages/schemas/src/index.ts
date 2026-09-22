@@ -788,6 +788,20 @@ export type {
   SpeechMetricsEvent,
 } from "./speech-metrics"
 
+// ── media.calls — intervalo de chamada dentro de um contato (WCH-02) ─────────
+export {
+  CALL_END_REASONS,
+  CallStartedEventSchema,
+  CallEndedEventSchema,
+  MediaCallEventSchema,
+} from "./media-calls"
+
+export type {
+  CallStartedEvent,
+  CallEndedEvent,
+  MediaCallEvent,
+} from "./media-calls"
+
 // ── audit.access — acesso a dado pessoal servido fora da analytics-api (VOZ-36) ──
 export {
   AUDIT_ACCESS_RESULTS,

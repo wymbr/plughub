@@ -25,6 +25,9 @@ export interface ContactFilters {
    *  cliente: a paginação é do servidor, e recortar a página já entregue diria
    *  "3 contatos" onde há 300. */
   direction?:      '' | ContactDirection
+  /** WCH-02 — só contatos em que houve chamada (voz/vídeo), inclusive a em curso. Filtrado no
+   *  BACKEND, no predicado único da lista, da série e dos tokens. */
+  hasCall?:        boolean
   /** Substrate isolation (ADR): origem do substrato (live=produção default | import | reeval).
    *  Usado só pelas telas de Analytics; ausente no Console (= produção). */
   origin?:         'live' | 'import' | 'reeval'
@@ -47,6 +50,11 @@ export interface ContactRow {
    *  `agent_time_ms` (agente × tempo) e **nunca** Σ segmentos (eles se SOBREPÕEM). */
   elapsed_time_ms?: number | null
   segment_count:  number
+  /** WCH-02 — chamadas dentro do contato. `null` = o backend degradou e não sabe (nunca 0). */
+  call_count?:        number | null
+  /** Σ das chamadas TERMINADAS; a em curso não soma. `null` = nenhuma terminou. */
+  call_duration_ms?:  number | null
+  call_open_count?:   number | null
   /** Arc 19: session status — 'active' | 'suspended' | 'closed' | null (pre-Arc-19) */
   status?:        string | null
   /** Arc 19: origin_session_id — for webhook sessions, the intake session that triggered them */
@@ -227,6 +235,7 @@ export const DEFAULT_FILTERS: ContactFilters = {
   insightCategory: '',
   insightTags:     '',
   direction:       '',
+  hasCall:         false,
 }
 
 /**

@@ -73,6 +73,7 @@ from .models import (
     parse_pool_occupancy,
     parse_speech_metrics_event,
     parse_audit_access_event,
+    parse_media_call_event,
 )
 from .segment_enricher import SegmentEnricher
 from .deployments_client import fetch_skill_version
@@ -319,6 +320,7 @@ _TOPICS = [
     "pool.occupancy",
     "speech.metrics",
     "audit.access",
+    "media.calls",
 ]
 
 # Maps topic → parser function.
@@ -345,6 +347,7 @@ _PARSERS = {
     "pool.occupancy":             parse_pool_occupancy,
     "speech.metrics":             parse_speech_metrics_event,
     "audit.access":               parse_audit_access_event,
+    "media.calls":                parse_media_call_event,
 }
 
 # Topics that require segment_id enrichment before being passed to the parser.
@@ -1035,6 +1038,8 @@ async def _write_row(
             await store.insert_speech_check(row)
         elif table == "audit_access_log":
             await store.insert_audit_access_log(row)
+        elif table == "call_intervals":
+            await store.upsert_call_interval(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

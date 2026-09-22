@@ -1,5 +1,40 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (5) — WCH-08: a chamada dentro do contato de chat aparece nos relatórios
+
+**O que faltava.** A chamada de um contato `webchat` (WCH-01) existia só no stream da sessão
+(`media.call` started/ended) e na cópia durável dele no PostgreSQL, que o analytics não lê: nenhum
+relatório sabia que houve voz num contato, nem quanto.
+
+**O que mudou.**
+- **schemas** — `media-calls.ts`: `CallStartedEventSchema` / `CallEndedEventSchema` (`.strict()`),
+  tópico `media.calls`.
+- **channel-gateway** — `call_events.py` publica o INTERVALO, chave `session_id` (início e fim em
+  ordem). `call_id` = id da entrada `media.call started` no stream: o discriminador da chamada, não da
+  sessão (um contato tem N chamadas; `uuid5(sessão)` apagaria a primeira). O fim leva a linha inteira
+  do início. Pool de quem ATENDE (D10), tenant da SESSÃO. Sem id de stream, nada é publicado e o log
+  diz (um id inventado daria dois nomes à mesma chamada); falha de Kafka nunca derruba a chamada.
+- **analytics-api** — `call_intervals` (`ReplacingMergeTree(row_version)`, versão
+  `coalesce(ended_at, started_at)`, partição pelo INÍCIO); parser recusa fim sem `ended_at` (apagaria o
+  início com "em curso"). `has_call` entra em `_session_conditions`, logo lista, série e tokens
+  respondem sobre a mesma população. A lista traz `call_count`, `call_duration_ms` (só as terminadas —
+  a em curso não soma zero) e `call_open_count`; no tier 3 degradado, `NULL`, nunca `0`. A transcrição
+  de contato fechado (fallback ClickHouse) intercala as chamadas como `media.call`, com duração;
+  falhar ali é WARNING e não derruba as mensagens.
+- **platform-ui** — filtro "📞 Com chamada"; na célula de duração, 2ª linha com a soma, `×N` e selo
+  "em curso". **A 1ª versão era coluna própria e reabriu o scroll horizontal**, cortando `process`
+  (o único pivô para o processo) — visto no browser do dono e trocado na hora. Transcrição: rótulo
+  para `media.call.end_requested` (aparecia o nome cru do evento) e "encerrada · duração".
+
+**Medido.** Contato com duas chamadas: `call_id` igual ao id do stream nas duas, 92 929 ms
+`agent_hangup` + 54 204 ms `customer_hangup`, pool `retencao_humano`, `['audio']`; quatro linhas
+cruas, duas após `FINAL` (a versão do fim vence). Tela: `2m 27s ×2`. Lista rodando no tier 1 contra o
+ClickHouse real. channel-gateway 1 419 (6 novos), analytics-api 813 (12 novos), typecheck e gates
+de i18n e cor verdes. Validado pelo dono no browser.
+
+**Fora.** Canal `webrtc` avulso e telefone ainda não publicam intervalo (o schema tem `channel` para
+eles); `voice_minutes` (USG-01) poderia nascer do `call_ended`, e fica para aquela ficha.
+
 ## 2026-09-22 (4) — AGH-05: o F5 do Console não derruba mais o contato, nem a chamada
 
 **O que foi medido.** A seleção de pools do Console vivia só em memória: o F5 a zerava, o agente

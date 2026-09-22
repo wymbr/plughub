@@ -165,6 +165,8 @@
     "sessionId": "Session ID…",
     "allChannels": "All channels",
     "allOutcomes": "All outcomes",
+    "hasCall": "📞 With call",
+    "hasCallHint": "Only contacts that had a voice/video call, including one in progress. The call is a medium of the contact, not a channel.",
     "allDirections": "All directions",
     "directionHint": "Access direction — who reached whom. Sessions the backend could not classify are excluded from all three.",
     "direction": {
@@ -200,6 +202,7 @@
     "abandoned": "abandoned",
     "closed": "closed",
     "httpError": "HTTP error {{status}}",
+    "call": { "inProgress": "in progress", "hint": "{{count}} call(s) · finished total {{duration}}" },
     "columns": {
       "direction": "Direction",
       "contact": "Contact",
@@ -264,7 +267,7 @@
     }
   },
   "transcript": {
-    "call": { "started": "📞 call started", "ended": "📞 call ended" },
+    "call": { "started": "📞 call started", "ended": "📞 call ended", "endRequested": "📞 agent asked to end the call", "endedWith": "📞 call ended · {{duration}}" },
     "back": "← Segments",
     "session": "Session",
     "supervising": "👁 supervising",

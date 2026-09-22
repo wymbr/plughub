@@ -759,6 +759,36 @@ def parse_audit_access_event(payload: dict[str, Any]) -> dict | None:
     }
 
 
+# ─── media.calls (WCH-02) ──────────────────────────────────────────────────────
+
+def parse_media_call_event(payload: dict[str, Any]) -> dict | None:
+    """media.calls → `call_intervals` (schema `@plughub/schemas/media-calls.ts`).
+
+    Início e fim viram a MESMA linha (`call_id`); o fim traz os campos do início, e o parser copia
+    todos, porque `ReplacingMergeTree` substitui a linha inteira. Fim sem `ended_at` é recusado:
+    gravá-lo apagaria o início com uma linha que diz "em curso" para uma chamada que acabou."""
+    tipo = payload.get("event_type")
+    if tipo not in ("call_started", "call_ended"):
+        return None
+    tenant_id, session_id, call_id = payload.get("tenant_id"), payload.get("session_id"), payload.get("call_id")
+    if not tenant_id or not session_id or not call_id or not payload.get("started_at"):
+        return None
+    ended = tipo == "call_ended"
+    if ended and not payload.get("ended_at"):
+        return None
+    dur = payload.get("duration_ms")
+    return {
+        "table": "call_intervals",
+        "tenant_id": tenant_id, "session_id": session_id, "call_id": call_id,
+        "channel": payload.get("channel") or "", "pool_id": payload.get("pool_id") or None,
+        "customer_publish": [m for m in (payload.get("customer_publish") or []) if m in ("audio", "video")],
+        "started_at": payload["started_at"],
+        "ended_at": payload.get("ended_at") if ended else None,
+        "duration_ms": int(dur) if ended and dur is not None else None,
+        "end_reason": (payload.get("end_reason") or "unknown") if ended else None,
+    }
+
+
 # ─── speech.metrics (VOZ-22) ──────────────────────────────────────────────────
 
 _SPEECH_SEG = ("energy_threshold", "end_silence_ms", "gap_ms", "min_speech_ms", "max_speech_ms", "vad_filter")

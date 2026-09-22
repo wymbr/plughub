@@ -1225,6 +1225,33 @@ ORDER BY (tenant_id, session_id, event_id)
 
 # VOZ-23 — uma linha por verificação ativa do caminho de fala. `items` é o JSON por item (só números e
 # booleanos); `segmentation` o JSON da segmentação que o gateway aplicou ('' quando não houve chamada).
+# WCH-02 (relatórios, 2026-09-22) — uma linha por CHAMADA dentro de um contato (`media.calls`).
+# `call_id` = id da entrada `media.call started` no stream: o discriminador da chamada, não da sessão
+# (um contato de chat pode ter várias). O fim chega com a linha INTEIRA do início, e a versão é fato
+# do EVENTO (`coalesce(ended_at, started_at)`), nunca da inserção: o fim vence mesmo se chegar primeiro
+# num reprocessamento. `date` sai do INÍCIO, senão início e fim de uma chamada que vira a meia-noite do
+# mês cairiam em partições diferentes e nunca se substituiriam.
+_DDL_CALL_INTERVALS = """
+CREATE TABLE IF NOT EXISTS {db}.call_intervals
+(
+    tenant_id        String,
+    session_id       String,
+    call_id          String,
+    channel          LowCardinality(String),
+    pool_id          Nullable(String),
+    customer_publish Array(String),
+    started_at       DateTime64(3, 'UTC'),
+    ended_at         Nullable(DateTime64(3, 'UTC')),
+    duration_ms      Nullable(UInt64),
+    end_reason       Nullable(String),
+    row_version      DateTime64(3, 'UTC') DEFAULT coalesce(ended_at, started_at),
+    date             Date
+)
+ENGINE = ReplacingMergeTree(row_version)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, call_id)
+"""
+
 _DDL_SPEECH_CHECKS = """
 CREATE TABLE IF NOT EXISTS {db}.speech_checks
 (
@@ -1308,6 +1335,7 @@ _ALL_DDL = [
     _DDL_SPEECH_STREAM_SUMMARIES,
     _DDL_SPEECH_COLLECT_OUTCOMES,
     _DDL_SPEECH_CHECKS,
+    _DDL_CALL_INTERVALS,              # WCH-02
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
     _DDL_MV_AGENT_PERFORMANCE,
@@ -1867,6 +1895,43 @@ class AnalyticsStore:
         vals += [_parse_dt(ts) or datetime.utcnow(), _today_utc(ts)]
         await asyncio.to_thread(self._insert, "speech_checks", [vals], self._SPEECH_CHECK_COLS)
 
+    # call_intervals (WCH-02)
+
+    _CALL_INTERVAL_COLS = [
+        "tenant_id", "session_id", "call_id", "channel", "pool_id", "customer_publish",
+        "started_at", "ended_at", "duration_ms", "end_reason",
+        # row_version omitido — DEFAULT coalesce(ended_at, started_at)
+        "date",
+    ]
+
+    async def upsert_call_interval(self, row: dict) -> None:
+        started = _parse_dt(row.get("started_at"))
+        if started is None:
+            logger.warning("call_intervals: chamada %s sem started_at — linha NAO gravada", row.get("call_id"))
+            return
+        vals = [row.get("tenant_id"), row.get("session_id"), row.get("call_id"), row.get("channel") or "",
+                row.get("pool_id"), list(row.get("customer_publish") or []),
+                started, _parse_dt(row.get("ended_at")), row.get("duration_ms"), row.get("end_reason"),
+                started]
+        await asyncio.to_thread(self._insert, "call_intervals", [vals], self._CALL_INTERVAL_COLS)
+
+    def query_session_calls(self, client: Any, tenant_id: str, session_id: str) -> list[dict]:
+        """As chamadas de um contato FECHADO como entradas `media.call` — a mesma forma que o stream
+        vivo entrega, para a transcrição mostrar onde a voz começou e acabou depois que o stream expira."""
+        result = client.query(f"""
+            SELECT call_id, started_at, ended_at, duration_ms, end_reason
+            FROM {self._database}.call_intervals FINAL
+            WHERE tenant_id = {{tenant_id:String}} AND session_id = {{session_id:String}}
+            ORDER BY started_at ASC
+        """, parameters={"tenant_id": tenant_id, "session_id": session_id})
+        out: list[dict] = []
+        for call_id, started_at, ended_at, duration_ms, end_reason in result.result_rows:
+            out.append(_call_entry(call_id, "started", started_at, {}))
+            if ended_at is not None:
+                out.append(_call_entry(call_id, "ended", ended_at,
+                                       {"reason": end_reason or "", "duration_ms": duration_ms}))
+        return out
+
     async def insert_speech_collect_outcome(self, row: dict) -> None:
         ts = row.get("timestamp")
         vals = [row.get(c) for c in self._SPEECH_COLLECT_COLS[:-2]]
@@ -2386,6 +2451,16 @@ def _parse_dt(ts: str | None) -> datetime | None:
         return dt.astimezone(timezone.utc).replace(tzinfo=None)
     except Exception:
         return datetime.utcnow()
+
+
+def _call_entry(call_id: str, state: str, ts: Any, extra: dict) -> dict:
+    """Entrada `media.call` reconstruída do ClickHouse (WCH-02), no formato de `_parse_entry`."""
+    ts_str = ts.replace(tzinfo=timezone.utc).isoformat() if isinstance(ts, datetime) else str(ts)
+    return {
+        "entry_id": f"{call_id}:{state}", "type": "media.call", "timestamp": ts_str,
+        "author_id": None, "author_role": "system", "visibility": "agents_only",
+        "content": None, "payload": {"state": state, **extra}, "content_type": "",
+    }
 
 
 def _today_utc(ts: str | None = None) -> datetime:

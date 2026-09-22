@@ -86,6 +86,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
       // desenha a coluna. Recortar no cliente daria um número certo para a página e
       // errado para o cabeçalho, que é servido pela contagem.
       if (direction)       params.set('direction',        direction)
+      if (filters.hasCall) params.set('has_call',         'true')          // WCH-02
       // ADR §7 — só o valor não-default viaja; `contacts` é o default do backend.
       if (scopeAll)        params.set('scope',            'all')
 
@@ -143,6 +144,9 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
   //   · `status` foi FUNDIDA em `outcome` — é a coluna 6 do desenho ("desfecho =
   //     outcome + close_reason"); eram duas células dizendo `resolved` e `closed`
   //     lado a lado.
+  //   · WCH-02: a CHAMADA entrou como coluna própria e reabriu o scroll horizontal (medido no
+  //     browser do dono, 2026-09-22: `process` cortado). Virou 2ª linha da célula de duração —
+  //     é tempo do mesmo contato, e o ícone a separa da duração do caso.
   const columns: string[] = [
     'direction', 'contact', 'pools',
     ...(scopeAll ? ['parent'] : []),
@@ -285,6 +289,30 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
 
 // ─── Row ──────────────────────────────────────────────────────────────────────
 
+/** WCH-02 — a chamada dentro do contato: soma das TERMINADAS, quantas foram, e se há uma em curso.
+ *  É duração de VOZ, outra grandeza que a do contato na linha de cima — nunca somar nem comparar.
+ *  Contato sem chamada não desenha nada: a linha é a exceção, não uma coluna de travessões. */
+function CallLine({ row }: { row: ContactRow }) {
+  const { t } = useTranslation('contacts')
+  const n    = row.call_count ?? 0
+  const open = row.call_open_count ?? 0
+  if (!n) return null
+  const done = row.call_duration_ms
+  return (
+    <div className="mt-0.5 text-2xs text-muted"
+      title={t('lista.call.hint', { count: n, duration: formatMs(done ?? null) })}>
+      <span className="mr-1">📞</span>
+      {done != null && formatMs(done)}
+      {n > 1 && <span className="ml-1">×{n}</span>}
+      {open > 0 && (
+        <span className="ml-1.5 font-semibold px-1.5 py-0.5 rounded-full bg-green-light text-green-text">
+          {t('lista.call.inProgress')}
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ── Status helpers ────────────────────────────────────────────────────────────
 
 const ABANDONED_REASONS = new Set([
@@ -414,6 +442,7 @@ function ContactRowItem({ row, onClick, showParent, onOpenParent, onOpenJourney 
           `handle_time_ms` fica só como fallback de backend antigo, não como fonte. */}
       <td className="px-4 py-3 text-dark tabular-nums whitespace-nowrap text-xs">
         {formatMs(row.elapsed_time_ms ?? row.handle_time_ms)}
+        <CallLine row={row} />
       </td>
       {/* Desfecho = estado + `outcome`, com `close_reason` no título (desenho §1,
           coluna 6). UMA célula: o badge responde "como terminou" (ou que ainda não

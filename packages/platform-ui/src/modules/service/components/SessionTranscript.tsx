@@ -9,6 +9,7 @@ import { WebRTCSupervisorView } from '@/modules/agent-assist/components/WebRTCSu
 import { hasMedia } from '@/modules/agent-assist/hooks/useWebRTCSession'
 import { renderWithTokens, useMaskingDisplayRules } from '@/components/MaskedToken'
 import { apiFetch } from '@/api/apiFetch'
+import { formatMs } from '@/modules/contacts/types'
 import type { ContactSegment, StreamEntry } from '../types'
 
 // ─── Business event types ─────────────────────────────────────────────────────
@@ -538,9 +539,17 @@ function EntryRow({ e, showEvents, maskingRules }: {
 
 function EventRow({ e }: { e: StreamEntry }) {
   const { t } = useTranslation('contacts')
+  // WCH-02 — a chamada vinda do ClickHouse (contato fechado) traz a duração; a do stream vivo, não
+  const dur = Number(((e.payload ?? {}) as Record<string, unknown>)['duration_ms'])
   const label = e.type === 'media.call'
-    ? t(`transcript.call.${callState(e) === 'started' ? 'started' : 'ended'}`)
-    : e.type.replace(/_/g, ' ')
+    ? (callState(e) === 'started'
+        ? t('transcript.call.started')
+        : Number.isFinite(dur) && dur >= 0
+          ? t('transcript.call.endedWith', { duration: formatMs(dur) })
+          : t('transcript.call.ended'))
+    : e.type === 'media.call.end_requested'
+      ? t('transcript.call.endRequested')      // WCH-07: o atendente pediu o fim (o fim vem na linha seguinte)
+      : e.type.replace(/_/g, ' ')
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0', color: '#475569' }}>
       <span style={{ flex: 1, height: 1, backgroundColor: '#1e293b', display: 'block' }} />

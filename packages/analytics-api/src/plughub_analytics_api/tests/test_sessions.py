@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from plughub_analytics_api.clickhouse import AnalyticsStore
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -853,6 +855,7 @@ class TestStreamClickHouseFallback:
         xrange_entries: list | None = None,
         ch_messages: list | None = None,
         ch_raise: Exception | None = None,
+        ch_calls: list | Exception | None = None,
     ):
         """
         Build a minimal FastAPI app with mocked Redis and store.
@@ -881,6 +884,13 @@ class TestStreamClickHouseFallback:
             store.query_session_messages = MagicMock(
                 return_value=ch_messages if ch_messages is not None else []
             )
+        # WCH-02 — as chamadas do contato fechado. Declarado explícito: o MagicMock criaria o método
+        # devolvendo um MagicMock, e o teste mediria o mock, não o produto.
+        assert hasattr(AnalyticsStore, "query_session_calls")
+        if isinstance(ch_calls, Exception):
+            store.query_session_calls = MagicMock(side_effect=ch_calls)
+        else:
+            store.query_session_calls = MagicMock(return_value=ch_calls or [])
 
         app.state.redis = redis
         app.state.store = store
@@ -974,6 +984,27 @@ class TestStreamClickHouseFallback:
 
         history = self._parse_sse_history(resp.text)
         assert history == []
+
+    def test_chamadas_entram_na_linha_do_tempo_em_ordem(self):
+        """WCH-02 — a transcrição fechada mostra onde a voz começou e acabou, entre as mensagens."""
+        msgs = [{**self._ch_message("m-1", "customer", "antes"), "timestamp": "2026-09-22T12:00:00+00:00"},
+                {**self._ch_message("m-2", "primary", "depois"), "timestamp": "2026-09-22T12:05:00+00:00"}]
+        calls = [{"entry_id": "1-0:started", "type": "media.call", "timestamp": "2026-09-22T12:01:00+00:00",
+                  "payload": {"state": "started"}},
+                 {"entry_id": "1-0:ended", "type": "media.call", "timestamp": "2026-09-22T12:04:00+00:00",
+                  "payload": {"state": "ended", "reason": "agent_hangup", "duration_ms": 180000}}]
+        app = self._make_app(xrange_entries=[], ch_messages=msgs, ch_calls=calls)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+        history = self._parse_sse_history(resp.text)
+        assert [h["entry_id"] for h in history] == ["m-1", "1-0:started", "1-0:ended", "m-2"]
+
+    def test_falha_nas_chamadas_nao_derruba_as_mensagens(self):
+        app = self._make_app(xrange_entries=[], ch_messages=[self._ch_message("m-1")],
+                             ch_calls=RuntimeError("tabela fora"))
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/sessions/sess_001/stream?tenant_id=tenant_test")
+        assert [h["entry_id"] for h in self._parse_sse_history(resp.text)] == ["m-1"]
 
     def test_history_event_present_before_live_tail(self):
         """The 'history' event always appears in the response (even for empty stream)."""

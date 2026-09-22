@@ -82,7 +82,7 @@ function FilterBar({ filters, setFilters }: {
     || filters.insightCategory || filters.insightTags)
 
   const hasAny = !!(filters.sessionIdSearch || filters.channel || filters.outcome
-    || filters.sessionStatus || filters.direction || hasExtra
+    || filters.sessionStatus || filters.direction || filters.hasCall || hasExtra
     || filters.fromDt !== DEFAULT_FILTERS.fromDt || filters.toDt !== DEFAULT_FILTERS.toDt)
 
   return (
@@ -133,6 +133,16 @@ function FilterBar({ filters, setFilters }: {
           <option value="closed">{t('sessions.status.closed')}</option>
           <option value="abandoned">{t('sessions.status.abandoned')}</option>
         </select>
+
+        {/* WCH-02 — a chamada é MEIO de um contato, não canal: "com chamada" é filtro próprio,
+            e não uma opção do seletor de canal (o contato continua `webchat`). */}
+        <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer hover:text-dark"
+          title={t('filter.hasCallHint')}>
+          <input type="checkbox" checked={!!filters.hasCall}
+            onChange={e => set('hasCall', e.target.checked)}
+            className="accent-primary cursor-pointer" />
+          {t('filter.hasCall')}
+        </label>
 
         <button onClick={() => setShowExtra(v => !v)}
           className={`text-xs px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-1 ${
@@ -655,6 +665,7 @@ export default function SessionsPage() {
     insightTags:     filters.insightTags,
     status:          filters.sessionStatus || undefined,  // Arc 19: pass status filter
     direction:       filters.direction,                   // D8 (F4)
+    hasCall:         filters.hasCall,                     // WCH-02
   }
 
   // A forma sai da DECLARAÇÃO uma vez só. Extraída para variável porque o
