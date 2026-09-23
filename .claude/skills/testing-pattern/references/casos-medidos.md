@@ -123,8 +123,11 @@ Duas respostas foram dadas, e só uma é certa:
 - **ORQ-19** (`menu-option-description.test.ts`): a asserção passou a ler `.at(-1)`. Isso
   **esconde** o vazamento em vez de removê-lo — o teste passa com o stream sujo e não prova
   que houve UMA entrada. ⚠️ Esta seção recomendou `.at(-1)` na primeira versão (2026-09-23);
-  a sessão B da DEN-01 respondeu à pergunta sem a skill e apontou o erro. Conserto do teste:
-  ficha `ORQ-20`.
+  a sessão B da DEN-01 respondeu à pergunta sem a skill e apontou o erro. Consertado na
+  `ORQ-20` (2026-09-23): com `flushall` + `toHaveLength(1)`, sem o `flushall` o teste reprova
+  com *"expected length 1 but got 3"* — o stream carregava os menus de dois testes vizinhos,
+  e o `.at(-1)` os pulava. O primeiro teste do arquivo não reprova na mesma mutação: roda com
+  o stream vazio, que é o "só às vezes" desta família.
 
 Regra: limpe o armazenamento e asserte o tamanho (`toHaveLength(1)`) antes de ler a entrada,
 para que um vazamento fique vermelho. Ver `CHANGELOG.md` § 2026-09-21 (6) e commit `0e1f6277`.

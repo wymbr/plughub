@@ -30,6 +30,7 @@ describe("ORQ-15 — description viaja no menu", () => {
 
   beforeEach(async () => {
     redis = new RedisMock()
+    await redis.flushall()   // o ioredis-mock COMPARTILHA dados entre instâncias (ORQ-20)
     kafka = createCapturingKafkaProducer()
     const mcp = new McpServer({ name: "test-orq15", version: "0.0.1" })
     registerBpmTools(mcp, { redis, kafka })
@@ -57,10 +58,12 @@ describe("ORQ-15 — description viaja no menu", () => {
     const r = await call({ session_id: SID, message: "Sobre o quê?", menu: { interaction: "list", options: OPTIONS } })
     expect(r.isError).toBeFalsy()
 
+    expect(outbound()).toHaveLength(1)
     const [k] = outbound()
     expect(k?.[0]?.["description"]).toBe(DESC)
     expect(k?.[1] && "description" in k[1]).toBe(false)
 
+    expect(await stream()).toHaveLength(1)
     const [s] = await stream()
     expect(s?.[0]?.["description"]).toBe(DESC)
     expect(s?.[1] && "description" in s[1]).toBe(false)
@@ -85,9 +88,11 @@ describe("ORQ-15 — description viaja no menu", () => {
       expect(r.isError).toBeFalsy()
     } finally { console.warn = orig }
 
-    // `.at(-1)`: o ioredis-mock COMPARTILHA dados entre instâncias, então o stream
-    // ainda traz os menus dos testes anteriores.
-    for (const opts of [outbound().at(-1), (await stream()).at(-1)]) {
+    // UM menu em cada saída: o `beforeEach` zera o Redis, então sobra de teste vizinho
+    // fica vermelho aqui em vez de ser pulada por `.at(-1)` (ORQ-20).
+    const saidas = [outbound(), await stream()]
+    for (const s of saidas) expect(s).toHaveLength(1)
+    for (const [opts] of saidas) {
       expect(opts?.map(o => o["id"])).toEqual(["sac", "humano"])
       expect(JSON.stringify(opts)).not.toContain("info_plano")
       expect(JSON.stringify(opts)).not.toContain("on_return")

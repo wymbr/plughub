@@ -1,5 +1,30 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (11) — ORQ-20: o teste da ORQ-19 zera o `ioredis-mock` e exige UM menu, em vez de pular o vazamento com `.at(-1)`
+
+**O defeito.** `menu-option-description.test.ts` criava `new RedisMock()` a cada teste, mas o
+`ioredis-mock` compartilha o armazenamento entre instâncias: o stream `session:sess_orq15:stream`
+acumulava os menus de todos os testes do arquivo. O teste da ORQ-19 lia `.at(-1)` para contornar
+isso, e o primeiro teste lia `[0]` e só passava por ser o primeiro. As duas leituras tornavam o
+vazamento invisível em vez de removê-lo.
+
+**O que mudou** (só o arquivo de teste):
+- `await redis.flushall()` no `beforeEach`, o padrão que o `escalate-conductor.test.ts` já usava
+  (MEN-08);
+- `toHaveLength(1)` nas duas saídas (`conversations.outbound` e o stream canônico) antes de ler a
+  entrada, no teste da ORQ-15 e no da ORQ-19; o `.at(-1)` saiu.
+
+**Prova.** vitest do arquivo (node:20 sobre a árvore): 5 verdes. Mutação M1, uma cópia sem a linha
+do `flushall` (conferida com `cmp`): o teste da ORQ-19 **reprova** com *"expected length 1 but got
+3"* — os dois menus extras são dos testes anteriores, e é essa a medida do vazamento que o
+`.at(-1)` escondia. O primeiro teste não reprova na mesma mutação porque roda com o stream vazio.
+
+**Os dois outros arquivos que a ficha mandava conferir não têm o defeito:**
+`menu-collect-payload.test.ts` e `masked-menu-channel-gate.test.ts` só leem o Kafka de captura,
+recriado a cada teste, e no Redis só gravam o `meta` que cada teste sobrescreve antes de usar.
+
+Skill `testing-pattern` casos § 2g atualizada com a medição.
+
 ## 2026-09-23 (10) — DEN-01: as regras de dados e de teste do dia chegaram às skills, e o `countIf` sobre `Nullable` subiu ao CLAUDE.md
 
 **O que entrou.**
