@@ -43,13 +43,7 @@ from aiokafka import AIOKafkaProducer
 
 from ..attachment_store import AttachmentStore
 from ..config import Settings
-from ..option_tree import (
-    flatten_to_sections,
-    is_tree,
-    list_row,
-    note_dropped_descriptions,
-    tree_depth,
-)
+from ..option_tree import list_row, note_dropped_descriptions
 from ..models import (
     ContactClosedEvent,
     ContactOpenEvent,
@@ -636,38 +630,7 @@ class WhatsAppAdapter(ChannelAdapter):
                 ]
                 await provider.send_interactive_buttons(to, prompt, buttons)
 
-            elif is_tree(options) and (secoes := flatten_to_sections(options)):
-                # F2 — a lista interativa tem SEÇÕES tituladas, e isso é exatamente
-                # uma árvore de um nível: pasta → título, folha → linha. O cliente
-                # resolve a árvore inteira num turno em vez de dois.
-                #
-                # ⚠️ A linha responde com o CAMINHO (`sac.info_plano`), não com o id
-                # da folha — `dialog_tree_level` divide o `chosen_id` por ponto. Sem
-                # isso o cursor procuraria a folha na RAIZ e a navegação reiniciaria
-                # parecendo certa.
-                #
-                # ORQ-15: a folha leva a `description` na linha (`_row`); a PASTA vira
-                # título de seção, que não tem segunda linha — essa é descartada nomeando.
-                note_dropped_descriptions(
-                    "whatsapp", [o for o in options if isinstance(o, dict) and o.get("options")],
-                    "titulo de secao nao tem segunda linha",
-                    session_id=session_id, menu_id=menu_id,
-                )
-                await provider.send_interactive_list(to, prompt[:60], prompt, secoes)
-
             elif 4 <= len(options) <= 10:
-                if is_tree(options):
-                    # NUNCA em silêncio. Aqui os filhos SÃO descartados, e o cliente
-                    # vê só as pastas — inócuo quando o fluxo desce nível a nível
-                    # (a navegação do orquestrador), e um beco sem saída quando quem
-                    # mandou esperava que ele alcançasse uma folha. O log é o que
-                    # separa os dois casos para quem for depurar.
-                    logger.info(
-                        "whatsapp: menu com ARVORE renderizado como NIVEL CORRENTE "
-                        "(profundidade=%d, opcoes=%d) — filhos nao enviados; o fluxo "
-                        "precisa descer. contact_id=%s",
-                        tree_depth(options), len(options), contact_id,
-                    )
                 # ORQ-15: a linha de lista TEM `description` — é a casa natural dela.
                 rows = [list_row(o) for o in options]
                 sections = [{"rows": rows}]

@@ -73,6 +73,42 @@ describe("ORQ-15 — description viaja no menu", () => {
     expect(outbound()[0]?.[0]?.["description"]).toHaveLength(200)
   })
 
+  it("ORQ-19 — o menu leva UM nível: filhos e on_return saem, NOMEADOS", async () => {
+    const warns: string[] = []
+    const orig = console.warn
+    console.warn = (...a: unknown[]) => { warns.push(a.map(String).join(" ")) }
+    try {
+      const r = await call({ session_id: SID, message: "?", menu: { interaction: "list", options: [
+        { id: "sac", label: "SAC", on_return: "pos", options: [{ id: "info_plano", label: "Plano" }] },
+        { id: "humano", label: "Pessoa" },
+      ] } })
+      expect(r.isError).toBeFalsy()
+    } finally { console.warn = orig }
+
+    // `.at(-1)`: o ioredis-mock COMPARTILHA dados entre instâncias, então o stream
+    // ainda traz os menus dos testes anteriores.
+    for (const opts of [outbound().at(-1), (await stream()).at(-1)]) {
+      expect(opts?.map(o => o["id"])).toEqual(["sac", "humano"])
+      expect(JSON.stringify(opts)).not.toContain("info_plano")
+      expect(JSON.stringify(opts)).not.toContain("on_return")
+    }
+    const w = warns.filter(x => x.includes("ORQ-19"))
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain("filhos em [sac]")
+    expect(w[0]).toContain("on_return em [sac]")
+    expect(w[0]).toContain(`session=${SID}`)
+  })
+
+  it("ORQ-19 — menu de um nível não gera aviso (controle)", async () => {
+    const warns: string[] = []
+    const orig = console.warn
+    console.warn = (...a: unknown[]) => { warns.push(a.map(String).join(" ")) }
+    try {
+      await call({ session_id: SID, message: "?", menu: { interaction: "list", options: OPTIONS } })
+    } finally { console.warn = orig }
+    expect(warns.filter(x => x.includes("ORQ-19"))).toHaveLength(0)
+  })
+
   it("`examples` NÃO é contrato do canal: o schema da tool o descarta", async () => {
     await call({ session_id: SID, message: "?", menu: { interaction: "list",
       options: [{ id: "a", label: "A", examples: ["frase de classificador"] }] } })

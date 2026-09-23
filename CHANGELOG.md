@@ -1,5 +1,55 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (6) — ORQ-19: o `menu` leva UM nível, e o ramo que desenhava árvore no canal saiu
+
+**O defeito, medido na ORQ-15.** O `notification_send` validava `menu.options` como
+`{id, label, description}`, e o Zod remove chave não declarada: `{id:"sac", on_return:"pos",
+options:[…]}` saía como `{id:"sac", label:"SAC"}`. Consequência: a F2 do orquestrador por árvore
+(seções tituladas no WhatsApp, grupos no `webchat-test.html`, linha respondendo o CAMINHO
+`sac.info_plano`) **nunca recebeu árvore pelo caminho vivo** — só o teste unitário do adapter a
+exercitava. E o dano que ela existia para evitar, o cliente ver uma pasta como folha, continuava
+possível, só que mudo, uma camada antes.
+
+**Decisão do dono (2026-09-23): aposentar o ramo, não fazer a tool aceitar árvore.** A navegação
+já desce nível a nível pelo fluxo (`dialog_tree_level`), que é o único caminho vivo.
+
+**O que mudou:**
+- **O contrato de um nível mora no `notification_send`.** `options` e `on_return` passam a ser
+  declarados no schema da opção só para serem descartados **nomeando**: `oneLevelMenuOptions`
+  (`bpm.ts`) tira as duas chaves e emite um WARN com os ids e a sessão. Antes, o mesmo descarte
+  era calado.
+- **Saiu do channel-gateway:** `is_tree`, `tree_depth`, `flatten_to_sections`, `WA_MAX_ROWS` e
+  `WA_SECTION_TITLE_MAX` do `option_tree.py`, o ramo de seções e o log de árvore do adapter de
+  WhatsApp. Ficam `list_row`, `option_description` e `note_dropped_descriptions` (ORQ-15).
+- **Saiu do widget:** os grupos e o id de caminho do `webchat-test.html`.
+- **Saiu do gate:** o ramo I do `probe_orchestrator_tree_nav.sh` e o `_nav_channel_parity.py` —
+  a paridade Python×TS que ele conferia perdeu um dos lados.
+- **Ficou, de propósito:** o `chosen_id` pontuado do `dialog_tree_level` e a proibição de ponto no
+  id da opção. O mapa da remoção achou outros dois produtores do caminho pontuado — o classificador
+  por LLM (`classificacao.destino`) e o esclarecimento da ORQ-13 —, e `category_path` e
+  `navigation_pools` usam o ponto como separador. Só os comentários que creditavam o split ao canal
+  foram reescritos.
+
+**Prova.**
+- vitest do mcp-server: o menu com `sac` (filhos + `on_return`) sai como `["sac", "humano"]` nas
+  DUAS saídas (`conversations.outbound` e stream canônico), sem `info_plano` e sem `on_return`, com
+  **um** WARN nomeando `sac` e a sessão; o controle (menu de um nível) não gera aviso. Falseável:
+  sem o `oneLevelMenuOptions`, as chaves agora declaradas passariam direto.
+- pytest do gateway: `hasattr` confere que as funções de árvore não existem mais, e uma opção com
+  filhos que escapasse vira UMA lista plana com ids do topo (sem título de seção, sem id de caminho).
+- Suítes: gateway 1 450 · schemas 28 (dialog-tree-level + dialog-render) · mcp 19 (3 arquivos) ·
+  `tsc` limpo em schemas e mcp.
+- Deploy: `mcp-server-plughub` e `channel-gateway` reconstruídos e a stack subida por
+  `infra/scripts/up.sh`. Ao vivo: `probe_orchestrator_tree_nav.sh` VERDE (A–H, J) e
+  `probe_orq15_option_description.sh` VERDE; `ORQ-19` presente no `dist` do mcp-server e
+  `flatten_to_sections` ausente do gateway em execução. O WARN do descarte foi medido no
+  unitário, não com contato real.
+
+**Correções de ficha.** `ORQ-08` (`WsMenuRender`): a alternativa *"o tipo precisa admitir
+árvore"* caiu — com um nível, `list[dict[str, str]]` é o tipo certo; sobra usar ou remover.
+`DLG-15`: pelo `menu` step nenhum canal desenha árvore; o que resta ali é a forma entregue por
+outro caminho.
+
 ## 2026-09-23 (5) — APF-02: o relatório de complexidade conta SEGMENTOS, e a segunda MV que contava versões saiu
 
 **O defeito, registrado pela APF-01.** A `mv_segment_summary` era a outra MATERIALIZED VIEW sobre

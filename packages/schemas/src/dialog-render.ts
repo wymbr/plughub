@@ -209,8 +209,8 @@ function temArvore(opts: ReadonlyArray<RenderOption>): boolean {
  * Existe porque navegar uma arvore com o CLIENTE e turno-a-turno: o `menu` step
  * mostra uma lista PLANA por vez, enquanto o `render` traz a arvore inteira
  * aninhada. Sem esta projecao, apontar a ref do menu para o render entregaria so o
- * nivel de cima e os filhos ficariam invisiveis — o mesmo achatamento mudo que o
- * adapter de WhatsApp produz, por outro caminho.
+ * nivel de cima e os filhos ficariam invisiveis. O `menu` leva UM nivel (ORQ-19):
+ * o `notification_send` descarta filhos NOMEANDO, e esta projecao e o caminho.
  */
 export interface TreeLevel {
   /**

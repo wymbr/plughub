@@ -85,12 +85,12 @@ describe("optionsAtPath", () => {
   })
 })
 
-// ── F2: o ponto e separador de CAMINHO, logo id nao pode conte-lo ────────────
+// ── o ponto e separador de CAMINHO, logo id nao pode conte-lo ────────────────
 //
 // Tres mecanismos ja assumiam esta regra sem ninguem impo-la: `category_path` do
 // Arc 12, o casamento por prefixo de `navigation_pools`, e o `chosen_id` pontuado
-// que deixa um canal responder a arvore inteira num turno. Um id com ponto
-// acrescentaria um segmento a serie SEM erro em lugar nenhum.
+// com que o classificador por LLM e a ORQ-13 aterrissam numa folha de uma vez. Um
+// id com ponto acrescentaria um segmento a serie SEM erro em lugar nenhum.
 describe("id de opcao × separador de caminho", () => {
   it("RECUSA id com ponto — o mecanismo que os tres pressupunham", () => {
     const r = DialogOptionSchema.safeParse({
@@ -105,8 +105,8 @@ describe("id de opcao × separador de caminho", () => {
   })
 
   it("um caminho pontuado projeta o MESMO nivel que os segmentos um a um", () => {
-    // E a proposicao que o `chosen_id` pontuado precisa: turno unico e turno a
-    // turno tem de aterrissar no mesmo lugar, senao o canal muda o resultado.
+    // E a proposicao que o `chosen_id` pontuado precisa: de uma vez e nivel a
+    // nivel tem de aterrissar no mesmo lugar, senao o caminho muda o resultado.
     const raizes = ARVORE
     const passo = optionsAtPath(raizes, ["sac", "info_plano"])
     const unico = optionsAtPath(raizes, "sac.info_plano".split("."))

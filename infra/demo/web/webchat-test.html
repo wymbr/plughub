@@ -65,8 +65,6 @@
   .ia-badge { font-size: 10px; background: #e0e7ff; color: #4338ca;
               border-radius: 4px; padding: 1px 5px; margin-left: 5px; vertical-align: middle; }
   .ia-prompt { margin-bottom: 8px; color: #1e293b; }
-    .ia-grupo { font-size:12px; font-weight:600; text-transform:uppercase;
-               letter-spacing:.04em; color:#64748b; margin:10px 0 4px; }
   .ia-opt-btn { display: block; width: 100%; margin: 3px 0; padding: 6px 10px;
                 background: white; color: #1e293b; border: 1px solid #cbd5e1;
                 border-radius: 6px; cursor: pointer; text-align: left; font-size: 13px; }
@@ -490,24 +488,9 @@
     html += `<div class="ia-prompt">${escHtml(msg.prompt)}</div>`;
 
     if (msg.interaction === 'button' || msg.interaction === 'list') {
+      // ORQ-19: o menu leva UM nivel. A arvore se percorre nivel a nivel pelo fluxo;
+      // os grupos (F2) sairam — o `notification_send` nunca lhes entregou filhos.
       const opts = msg.options || [];
-      // ── F2: opcao com FILHOS vira grupo, e a folha responde com o CAMINHO ────
-      //
-      // Antes desta fase os filhos eram descartados em SILENCIO: o cliente via so
-      // as pastas e, num menu que esperasse uma folha, nao havia como chegar la —
-      // sem erro em lugar nenhum. Agora a pasta vira um cabecalho e as folhas
-      // viram botoes.
-      //
-      // ⚠️ O botao responde com o CAMINHO (`sac.info_plano`), nao com o id da
-      // folha. `dialog_tree_level` divide o `chosen_id` por ponto; sem isso a
-      // projecao procuraria `info_plano` na RAIZ, nao acharia, e a navegacao
-      // reiniciaria PARECENDO certa. O ponto e separador seguro porque o schema
-      // proibe ponto no id da opcao.
-      const ehPasta = o => Array.isArray(o.options) && o.options.length > 0;
-      // Profundidade > 2 nao e desenhavel aqui (grupo dentro de grupo); nesse caso
-      // mostra o nivel corrente e deixa o fluxo descer, como antes.
-      const fundo = opts.some(o => (o.options || []).some(ehPasta));
-      const agrupar = !fundo && opts.some(ehPasta);
 
       // ORQ-15: a `description` e a SEGUNDA linha do botao. Resposta e eco continuam
       // sendo id e rotulo — a descricao explica a opcao, nao a substitui.
@@ -516,15 +499,7 @@
           onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${escHtml(id)}','${escHtml(label)}')"
           >${escHtml(label)}${optDesc(desc)}</button>`;
 
-      if (agrupar) {
-        opts.forEach(opt => {
-          if (!ehPasta(opt)) { html += botao(opt.id, opt.label, opt.description); return; }
-          html += `<div class="ia-grupo">${escHtml(opt.label)}${optDesc(opt.description)}</div>`;
-          opt.options.forEach(f => { html += botao(opt.id + '.' + f.id, f.label, f.description); });
-        });
-      } else {
-        opts.forEach(opt => { html += botao(opt.id, opt.label, opt.description); });
-      }
+      opts.forEach(opt => { html += botao(opt.id, opt.label, opt.description); });
 
     } else if (msg.interaction === 'text') {
       // Mascarado quando masked_fields contém qualquer campo (step scalar usa output_as/id como campo implícito)

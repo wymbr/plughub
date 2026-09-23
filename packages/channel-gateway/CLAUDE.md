@@ -46,33 +46,22 @@ adapters/
 | `checklist` | Sequential + comma input | Sequential + comma input | Native checkboxes | Not supported → on_failure |
 | `form` | Sequential field-by-field | Sequential field-by-field | Native HTML form | Not supported → on_failure |
 
-### Opções em ÁRVORE — `option_tree.py`
+### O `menu` leva UM nível (ORQ-19)
 
-Uma opção pode ter `options` (filhos). Até 2026-09-06 o adapter os descartava em
-**silêncio**: montava as linhas com o `label` do topo e os filhos não existiam para
-ele. Inócuo quando o FLUXO desce nível a nível (a navegação do orquestrador só
-precisa dos ids do topo) — e um beco sem saída quando quem manda espera que o
-cliente alcance uma folha: o menu renderiza, o cliente escolhe, e a resposta é um id
-de pasta que o skill não espera.
+Uma opção de `menu` **não tem filhos** no canal. A árvore de um DialogForm se percorre
+**nível a nível pelo fluxo** (`dialog_tree_level`): cada turno mostra uma lista plana, e
+o gateway desenha só aquele nível (botões ≤ 3 · lista 4–10 · texto numerado > 10).
 
-| situação | o adapter faz |
-|---|---|
-| não é árvore | como sempre (botões / lista / texto numerado) |
-| árvore de 1 nível que **cabe** (≤ 10 linhas) | seções tituladas: pasta → título, folha → linha |
-| árvore funda (> 2) ou acima do teto | nível corrente **+ log nomeando** por que não desenhou |
+O ramo que desenhava a árvore num turno só — seções tituladas no WhatsApp e grupos no
+widget, com a linha respondendo o CAMINHO (`sac.info_plano`) — foi **aposentado em
+2026-09-23**. Ele nunca recebeu árvore pelo caminho vivo: o `notification_send` removia
+os filhos antes de publicar. Hoje é lá que o contrato de um nível mora: filhos e
+`on_return` saem **nomeados** (`oneLevelMenuOptions`, WARN com a sessão), porque o
+cliente veria a pasta como se fosse folha.
 
-⚠️ **A linha responde com o CAMINHO** (`sac.info_plano`), nunca com o id da folha. O
-`dialog_tree_level` divide o `chosen_id` por ponto, então turno-único e turno-a-turno
-aterrissam no mesmo lugar e o fluxo é agnóstico de quantos turnos o canal usou. Sem
-isso a projeção procuraria a folha na RAIZ, não acharia, e a navegação **reiniciaria
-parecendo certa**. O ponto é separador seguro porque `DialogOptionSchema` proíbe
-ponto no id (medido: 0 de 87 ids nas 14 formas publicadas).
-
-⚠️ **`is_tree`/`tree_depth` são gêmeos Python do `temArvore` de `@plughub/schemas`.**
-Duas linguagens, nenhum código compartilhado — a paridade é conferida por gate (ramo
-I de `probe_orchestrator_tree_nav.sh`), como em `py-contextstore`. O modo de falha é
-mudo dos dois lados: trocar o separador de um lado só mantém a linha bonita e faz a
-projeção devolver `found: false`.
+⚠️ O `chosen_id` pontuado **continua** aceito pelo `dialog_tree_level` — quem o produz
+agora é o classificador por LLM e o esclarecimento da ORQ-13, não o canal. E a proibição
+de ponto no id da opção continua, pelos mesmos motivos.
 
 ### Segunda linha da opção — `description` (ORQ-15)
 
@@ -83,8 +72,8 @@ com `option_tree.note_dropped_descriptions` (uma linha INFO por menu, só quando
 | superfície | a descrição |
 |---|---|
 | webchat / WebRTC no browser | segunda linha no botão/checkbox (o widget desenha) |
-| WhatsApp lista (4–10) e seções | `description` da linha, cortada em 72 (teto do provider = do autor) |
-| WhatsApp botões (≤3), texto (>10), título de seção | descarte nomeado |
+| WhatsApp lista (4–10) | `description` da linha, cortada em 72 (teto do provider = do autor) |
+| WhatsApp botões (≤3), texto (>10) | descarte nomeado |
 | SMS · e-mail · voz Twilio · telefone SIP | descarte nomeado |
 
 ⚠️ `examples` nunca chega aqui: é do classificador. O Zod do `notification_send` já o remove.

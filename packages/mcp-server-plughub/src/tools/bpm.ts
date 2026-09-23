@@ -33,6 +33,31 @@ function genSessionId(): string {
   return `sess_${date}T${time}_${rand}`
 }
 
+/**
+ * ORQ-19 — o `menu` leva UM nível. Uma opção com filhos (`options`) ou `on_return`
+ * que chega aqui é violação desse contrato: o canal desenharia a pasta como FOLHA, e a
+ * resposta seria um id que o fluxo não espera. As duas chaves saem, e o descarte é
+ * NOMEADO — até a ORQ-19 o Zod as removia calado, e o ramo de seções do canal que
+ * existia para recebê-las (F2) nunca recebeu nada. A árvore se percorre nível a nível
+ * pelo fluxo (`dialog_tree_level`), que é o único caminho vivo.
+ */
+export function oneLevelMenuOptions<T extends { id: string; options?: unknown; on_return?: unknown }>(
+  options: T[],
+  sessionId: string,
+): Array<Omit<T, "options" | "on_return">> {
+  const comFilhos = options.filter(o => Array.isArray(o.options) && o.options.length > 0).map(o => o.id)
+  const comRetorno = options.filter(o => o.on_return !== undefined).map(o => o.id)
+  if (comFilhos.length || comRetorno.length) {
+    console.warn(
+      `[notification_send] menu com ARVORE descartada — o menu leva UM nivel (ORQ-19): ` +
+      `filhos em [${comFilhos.join(",")}], on_return em [${comRetorno.join(",")}]; ` +
+      `o cliente ve essas opcoes como folhas. Percorra a arvore pelo fluxo ` +
+      `(dialog_tree_level). session=${sessionId}`,
+    )
+  }
+  return options.map(({ options: _f, on_return: _r, ...resto }) => resto)
+}
+
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
 export interface BpmDeps {
@@ -149,6 +174,14 @@ const NotificationSendInputSchema = z.object({
        * causa de uma legenda — quem não tem espaço corta ou descarta nomeando.
        */
       description: z.string().optional(),
+      /**
+       * ORQ-19 — o `menu` leva UM nível, e estas duas chaves são declaradas só para
+       * serem RECUSADAS NOMEANDO (`oneLevelMenuOptions`). Sem declará-las, o Zod as
+       * removeria calado e o cliente veria uma pasta como se fosse folha. A árvore
+       * se percorre nível a nível pelo fluxo (`dialog_tree_level`).
+       */
+      options:   z.array(z.unknown()).optional(),
+      on_return: z.unknown().optional(),
     })).optional(),
     fields: z.array(z.record(z.unknown())).optional(),
     /**
@@ -518,6 +551,9 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     NotificationSendInputSchema.shape as any,
     withGuard("notification_send", async (input: Record<string, unknown>) => {
       const parsed = NotificationSendInputSchema.parse(input)
+      if (parsed.menu?.options) {
+        parsed.menu.options = oneLevelMenuOptions(parsed.menu.options, parsed.session_id)
+      }
 
       // Look up contact_id and channel via Redis keys written by channel-gateway on connect.
       // Keys: session:{session_id}:contact_id → contact_id string

@@ -219,7 +219,7 @@ def menus():
 def _category_path(entry, question, path):
     """Gemeo do `categoryPathFor` de `@plughub/schemas` — MESMA regra, outra casa.
 
-    ⚠️ E copia de proposito (topologia, como `is_tree`/`temArvore`): o Python nao
+    ⚠️ E copia de proposito (topologia, como o `py-contextstore`): o Python nao
     importa TypeScript. O que impede a divergencia sao os VETORES compartilhados,
     nao a boa vontade de quem editar.
     """

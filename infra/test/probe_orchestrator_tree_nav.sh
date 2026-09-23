@@ -13,7 +13,8 @@
 #   F  o alvo do `escalate` é REFERÊNCIA, e a resolução é um step visível (F3)
 #   G  guarda da D10: nenhuma folha carrega destino, e o schema não tem onde pô-lo
 #   H  o especialista RECONHECE as folhas que a navegação lhe manda (menu duplicado)
-#   I  o CANAL (Python) e o FLUXO (TS) concordam sobre o id da linha — duas linguagens
+#   I  (APOSENTADO, ORQ-19 2026-09-23) conferia o id da linha de SECAO que o canal
+#      desenhava; o menu passou a levar um nivel e o ramo de secoes saiu
 #   J  D6: o LLM aterrissa em folha DECLARADA (conferido, nao instruído) e mede na mesma série
 #
 # ⚠️ O ramo C é o único que não tem cara de teste feliz, e é o que importa. Se
@@ -253,52 +254,6 @@ case "$DUP" in
   DIVERGE*)               bad "o menu DUPLICADO volta em silencio: ${DUP}" ;;
   *)                      bad "veredicto inesperado: ${DUP}" ;;
 esac
-
-# ── I: o canal desenha e o fluxo entende ───────────────────────────────
-# Sao DUAS implementacoes em DUAS linguagens, e nada as obriga a concordar: o canal
-# (Python) decide que id vai na linha; o fluxo (TS) decide o que aquele id significa.
-# Se o canal emitir `sac|info_plano`, ou se o fluxo deixar de dividir por ponto, a
-# linha continua bonita e a projecao devolve `found:false` — a navegacao REINICIA
-# parecendo certa. Nenhum dos dois lados fica vermelho sozinho.
-printf '\n\033[1mI — o canal (Python) e o fluxo (TS) concordam sobre o id da linha\033[0m\n'
-PARIDADE="$(dirname "$0")/_nav_channel_parity.py"
-IDS=$(printf '%s' "$BODY" | python3 "$PARIDADE" 2>/dev/null)
-case "$IDS" in
-  SEM_MODULO*)        info "option_tree nao importavel — ramo I nao exercido"; INCONC=1 ;;
-  SEM_ARVORE|FORMA_ILEGIVEL|"") info "forma sem arvore ou ilegivel — ramo I nao exercido"; INCONC=1 ;;
-  PY_NAO_VE_ARVORE)   bad "o canal NAO reconhece como arvore o que o fluxo projeta em niveis" ;;
-  PY_RECUSA_DESENHAR) ok "o canal RECUSA desenhar esta arvore (fundo demais ou acima do teto) — recusa e resposta, e o fluxo desce nivel a nivel" ;;
-  IDS*) ;;
-  *) bad "veredicto inesperado do lado Python: ${IDS}" ;;
-esac
-
-case "$IDS" in IDS*)
-  if [ -z "$NODE" ] || [ ! -f "$SCHEMAS/dist/index.js" ]; then
-    info "node/dist ausente — metade TS do ramo I nao exercida"; INCONC=1
-  else
-    VER=$(printf '%s' "$BODY" | LINHAS="${IDS#IDS }" "$NODE" --input-type=module -e '
-import pkg from "'"$SCHEMAS"'/dist/index.js"
-const { buildRender, optionsAtPath } = pkg
-let raw = ""
-process.stdin.on("data", d => raw += d)
-process.stdin.on("end", () => {
-  const form = JSON.parse(raw)
-  const q = buildRender(form).questions.find(x => (x.options || []).some(o => o.options))
-  if (!q) { console.log("SEM_ARVORE"); return }
-  const ids = (process.env.LINHAS || "").split(" ").filter(Boolean)
-  const ruins = ids.filter(id => {
-    const n = optionsAtPath(q.options, id.split("."))
-    return !(n.found && n.is_leaf)
-  })
-  console.log(ruins.length === 0 ? ("TODAS_FOLHAS " + ids.length) : ("NAO_RESOLVEM " + ruins.join(",")))
-})' 2>/dev/null)
-    case "${VER:-}" in
-      "TODAS_FOLHAS "*) ok "as ${VER#TODAS_FOLHAS } linhas do canal resolvem em FOLHA pelo fluxo" ;;
-      NAO_RESOLVEM*)    bad "linha que o canal desenharia NAO resolve no fluxo: ${VER}" ;;
-      *)                info "metade TS muda — ramo I inconclusivo"; INCONC=1 ;;
-    esac
-  fi
-;; esac
 
 # ── J: a D6 — aterrissagem declarada, e a MESMA unidade de medida ──────────
 # ⚠️ A parte frágil da D6 não é o prompt — é a CONFERÊNCIA. Pedir ao modelo que

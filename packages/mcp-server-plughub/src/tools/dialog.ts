@@ -114,9 +114,10 @@ const TreeLevelInputSchema = z.object({
   chosen_id:  z.string().optional()
                 .describe(
                   "What the customer just picked, appended to `path` before projecting. " +
-                  "May be a DOTTED PATH (`sac.info_plano`) when the channel drew the whole " +
-                  "tree and the customer reached a leaf in one turn — each segment is " +
-                  "appended in order, so the flow is turn-agnostic.",
+                  "May be a DOTTED PATH (`sac.info_plano`) when the flow lands on a leaf in " +
+                  "one step — the LLM classifier's `destino` and the ORQ-13 clarify answer — " +
+                  "and each segment is appended in order. Channels never send one: a `menu` " +
+                  "carries ONE level (ORQ-19).",
                 ),
   // ── ORQ-13: a pergunta de esclarecimento ─────────────────────────────────
   //
@@ -304,12 +305,13 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           )
         }
 
-        // ⚠️ SPLIT, nao append cru (F2). Um canal que desenhou a arvore agrupada
-        // responde com o CAMINHO (`sac.info_plano`), nao com um id de um nivel; sem
-        // dividir, a projecao procuraria uma opcao chamada literalmente
-        // "sac.info_plano", nao acharia, e devolveria `found: false` — a navegacao
-        // reiniciaria e a tela pareceria certa. O ponto e separador seguro porque
-        // `DialogOptionSchema` proibe ponto no id (medido: 0 de 87).
+        // ⚠️ SPLIT, nao append cru. O classificador por LLM (`classificacao.destino`)
+        // e o esclarecimento da ORQ-13 respondem com o CAMINHO (`sac.info_plano`),
+        // nao com um id de um nivel; sem dividir, a projecao procuraria uma opcao
+        // chamada literalmente "sac.info_plano", nao acharia, e devolveria
+        // `found: false` — a navegacao reiniciaria e a tela pareceria certa. O ponto e
+        // separador seguro porque `DialogOptionSchema` proibe ponto no id (medido: 0
+        // de 87). (O canal tambem respondia com caminho na F2; o ramo saiu na ORQ-19.)
         const escolhidos = input.chosen_id
           ? input.chosen_id.split(".").filter(x => x !== "")
           : []

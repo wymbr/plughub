@@ -294,7 +294,7 @@ inteiro.
 |---|---|---|
 | **F0** ✅ | **Medir** — inventário de menus, espécies A×B, zero produtores de demanda, sanção de ciclo, alvo literal do `escalate` | — |
 | **F1** | **O eixo de demanda passa a existir**: árvore autorada no `DialogForm` + `agent_event` com o caminho, **ainda escalando pelo `choice` atual**. Sem tocar no engine | F0 |
-| **F2** ✅ | **Renderização em canal** (`DLG-15`) — seções no WhatsApp, grupos no webchat, e recusa NOMEADA onde não cabe | F0 |
+| **F2** ⛔ | **Renderização em canal** (`DLG-15`) — seções no WhatsApp, grupos no webchat, e recusa NOMEADA onde não cabe. **Aposentada em 2026-09-23 (ORQ-19)** — ver emenda | F0 |
 | **F3** ✅ | `escalate` com **alvo interpolável** + mapa `caminho → pool` na config do pool (D2) | ~~F2~~ — ver emenda |
 | **F4** ✅ | O **runner genérico** assume a navegação; `agente_triagem_v2` sai | F1, F3 |
 | **F5** ✅ | **Paridade LLM** (D6): o orquestrador IA aterrissa nas mesmas folhas declaradas | F4 |
@@ -458,6 +458,30 @@ inteiro.
 > linguagens, sem código compartilhado possível. Trocar o separador de um lado só mantém a linha
 > bonita na tela e faz a projeção devolver `found: false` — a navegação reinicia parecendo certa.
 > Verificado por mutação (`.` → `|` só no Python: VERMELHO, nomeando as 4 linhas).
+
+> **Emenda de 2026-09-23 — a F2 foi APOSENTADA (ORQ-19): o `menu` leva UM nível.** A guarda
+> acima nunca guardou nada pelo caminho vivo. O `notification_send` — a tool por onde todo `menu`
+> step chega ao canal — validava `menu.options` como `{id, label, description}`, e o Zod remove
+> chave não declarada: `{id:"sac", on_return:"pos", options:[…]}` saía como `{id:"sac",
+> label:"SAC"}` (medido chamando o handler). As seções do WhatsApp e os grupos do widget só
+> recebiam árvore no teste unitário do adapter, e o dano que a F2 existia para evitar — o cliente
+> vendo pastas como folhas — continuava possível, só que **mudo**, uma camada antes.
+>
+> Das duas saídas (tool aceitar `options` recursivo, ou declarar um nível), o dono escolheu a
+> segunda. O que mudou:
+> - **o contrato de um nível mora no `notification_send`**: `options` e `on_return` são declarados
+>   no schema da opção só para serem **descartados nomeando** (`oneLevelMenuOptions`, WARN com os
+>   ids e a sessão). A árvore se percorre pelo fluxo, nível a nível (`dialog_tree_level`);
+> - saíram `is_tree`/`tree_depth`/`flatten_to_sections` do `option_tree.py`, o ramo de seções do
+>   adapter de WhatsApp, os grupos do `webchat-test.html` e o **ramo I** do
+>   `probe_orchestrator_tree_nav.sh` (com o `_nav_channel_parity.py`) — a paridade Python×TS que
+>   ele conferia não tem mais um dos lados;
+> - **ficam**: o `chosen_id` pontuado e a proibição de ponto no id. Eles não eram só da F2 — o
+>   classificador por LLM (`classificacao.destino`) e o esclarecimento da ORQ-13 aterrissam numa
+>   folha de uma vez pelo mesmo split, e `category_path`/`navigation_pools` dependem do ponto como
+>   separador;
+> - `options_tree` e `temArvore` ficam, com o consumidor que têm (o `render`/`form_get` e o
+>   Console); a frase abaixo sobre a F2 lhe dar consumidor não vale mais.
 
 - **`options_tree` é hoje uma declaração sem consumidor** (medido: aparece só dentro de
   `packages/schemas` — definição, derivação, teste e `.d.ts`; o Console decide por conta própria com

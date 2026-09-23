@@ -457,24 +457,22 @@ class TestDeliverMenu:
         assert "description" not in rows[0]
         assert rows[0] == {"id": "0", "title": "Opção 0"}
 
-    async def test_tree_leaf_row_carries_description(self, adapter, mock_provider, caplog):
+    async def test_option_with_children_renders_ONE_level_ORQ19(self, adapter, mock_provider):
+        """ORQ-19: o `menu` leva um nível. Filhos que escapassem do `notification_send`
+        não viram seção nem linha com id de caminho — o canal desenha o nível corrente."""
         opts = [
             {"id": "sac", "label": "SAC", "description": "Dúvidas do plano", "options": [
-                {"id": "info", "label": "Info", "description": "O que inclui"},
-                {"id": "stat", "label": "Status"},
+                {"id": "info", "label": "Info"},
             ]},
             {"id": "port", "label": "Portabilidade"},
             {"id": "reemb", "label": "Reembolso"},
-            {"id": "canc", "label": "Cancelar", "description": "Encerrar a linha"},
+            {"id": "canc", "label": "Cancelar"},
         ]
-        with caplog.at_level("INFO"):
-            await adapter.deliver_menu(self._menu_payload(opts, "list"))
+        await adapter.deliver_menu(self._menu_payload(opts, "list"))
         secoes = mock_provider.sent_messages[0]["sections"]
-        assert secoes[0]["rows"][0] == {"id": "sac.info", "title": "Info", "description": "O que inclui"}
-        assert secoes[-1]["rows"][-1]["description"] == "Encerrar a linha"
-        # a PASTA vira título de seção, que não tem segunda linha: descarte NOMEADO
-        drop = [r.getMessage() for r in caplog.records if "ORQ-15" in r.getMessage()]
-        assert len(drop) == 1 and "descricao de 1 opcao" in drop[0] and "secao" in drop[0]
+        assert len(secoes) == 1 and "title" not in secoes[0]
+        assert [r["id"] for r in secoes[0]["rows"]] == ["sac", "port", "reemb", "canc"]
+        assert secoes[0]["rows"][0]["description"] == "Dúvidas do plano"
 
     async def test_buttons_drop_description_NAMED(self, adapter, mock_provider, caplog):
         opts = [{"id": "a", "label": "A", "description": "da A"}, {"id": "b", "label": "B"}]

@@ -331,7 +331,8 @@ export const DialogOptionSchema: z.ZodType<DialogOption> = z.lazy(() =>
      *     silêncio**, e a lente de árvore desenharia um nível que ninguém autorou;
      *   · `navigation_pools`, cujo casamento é por prefixo de segmento (F3);
      *   · `chosen_id` do `dialog_tree_level`, que aceita caminho pontuado para o
-     *     canal poder responder a árvore inteira num turno só (F2).
+     *     classificador por LLM e o esclarecimento da ORQ-13 aterrissarem numa
+     *     folha de uma vez (o canal também o usava na F2, aposentada na ORQ-19).
      *
      * Os três já assumiam esta regra sem ninguém impô-la — promessa sem mecanismo,
      * a família do DDL de `participation_intervals`. Medido antes de fechar:
@@ -361,9 +362,8 @@ export const DialogOptionSchema: z.ZodType<DialogOption> = z.lazy(() =>
      * **é** branching no JSON; um ponteiro é aresta única e não emenda nada.
      *
      * A consequência prática é a economia: como a folha ganha um ponteiro e
-     * **não filhos**, ela CONTINUA folha — `leafPaths`, `is_tree`,
-     * `flattenToSections` e o achatamento em canal não mudam. Era exatamente
-     * onde o `output` custaria.
+     * **não filhos**, ela CONTINUA folha — `leafPaths` e a projeção por nível
+     * não mudam. Era exatamente onde o `output` custaria.
      *
      * ⚠️ **O preço, declarado:** sem switch, *"resolvi"* e *"não consegui"*
      * apontam para a MESMA continuação. A discriminação por resultado vive no
