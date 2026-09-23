@@ -274,6 +274,12 @@ system_error         — unrecoverable error
   pool_id` derruba a query inteira (code 184) e o wrapper devolve `data: []`, igual a "não há dado".
   Sufixe `_ref` e renomeie na camada Python.
 
+- **Em ClickHouse, negação sobre coluna `Nullable` dentro de `countIf`/`sumIf` descarta a linha
+  NULL em silêncio.** `close_reason != 'agent_transfer'` vale NULL, não verdadeiro, e a linha some
+  das duas contagens. Use `coalesce(col, '')`; para transferência, importe `_NOT_TRANSFER_SQL` de
+  `reports_query.py`. Gate: `mut_trf01_transfer_marking.sh` (M1). Caso medido: skill
+  `data-engineering`, casos § 7.
+
 - **O que roda é a IMAGEM, não a árvore.** Nenhum serviço monta `packages/` por bind-mount
   (medido 2026-09-16): editar não muda o container, nem o `pytest` rodado nele. Mudança de código =
   `build` + `up -d`; `docker cp` é iteração efêmera que o próximo `up -d` apaga. Como levar mudança
