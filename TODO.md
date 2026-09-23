@@ -7898,6 +7898,33 @@ coluna `CREATED` do `ps`, que ninguém lê. Um probe que compare `docker inspect
 config` (env e `depends_on` por serviço) transformaria deriva silenciosa em vermelho — e é o que teria
 respondido esta sessão em um comando.
 
+### Reincidência de 2026-09-23 — desta vez com a evidência colhida ANTES do conserto
+
+O gatilho acima disparou, e a ordem foi respeitada: os logs e o log da API do Docker foram lidos
+antes do `up.sh`. **Duas quedas distintas no mesmo dia, e nenhuma é corrida de health no `up -d`:**
+
+1. **Reinício da máquina (Windows ligado 12:23 local = 15:23Z).** Os containers pararam limpos por
+   volta de 15:19Z e nada voltou. Causas medidas: o Docker Desktop tem `AutoStart: false`
+   (`%APPDATA%\Docker\settings-store.json`), e mesmo aberto o dockerd só religa o que a política
+   manda. `docker inspect` na stack: **24 containers sem política** (`no`), inclusive toda a base
+   — postgres, redis, kafka, clickhouse, minio, agent-registry, ai-gateway, analytics-api,
+   rules-engine, livekit; e **28 `on-failure`**, que o dockerd só religa se saíram com código ≠ 0 —
+   e o desligamento dá 0 à maioria. `depends_on`/healthcheck só existem dentro de
+   `docker compose up`; religação pelo daemon os ignora.
+2. **12:46–12:47 local: `stop` em 52 containers e `start` em 46**, pela API v1.55 com
+   `user_agent: compose/v5.5.1` e `usage ContainerStopComposeLinux` — um `compose restart` (ou
+   `stop`+`start`) do lado Linux, que não foi desta sessão (ela só rodou `up -d analytics-api`,
+   v1.56, às 12:41). O `start` não espera health: o `agent-registry` perdeu o Postgres
+   (`terminating connection due to administrator command`), tentou antes de ele aceitar conexão
+   (`Can't reach database server at postgres:5432`), saiu com 1 às 15:47:12Z e, **sem política de
+   restart, ficou morto** — e com ele tudo o que pede `agent-registry(healthy)`. É o modo de falha
+   que o cabeçalho do `up.sh` descreve (*"Start / `compose start` … sem esperar health nenhum"*).
+
+A hipótese de 2026-08-12 (*"botão Start do Docker Desktop, que inicia e não reconcilia"*) fica
+**provada por mecanismo** na queda 2, com o `compose start` no lugar do botão. `up.sh` completo
+reconciliou tudo (e só acusou o `sip-seed`, falso positivo — `GAT-06`). O que fazer da volta
+automática depois de reiniciar: `BOO-01`.
+
 ---
 
 ## Fixtures do e2e ainda falam AgentType — **seed base ✅ 2026-08-05; sobram 3 bolsões**
