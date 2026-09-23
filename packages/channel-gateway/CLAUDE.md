@@ -74,6 +74,22 @@ I de `probe_orchestrator_tree_nav.sh`), como em `py-contextstore`. O modo de fal
 mudo dos dois lados: trocar o separador de um lado só mantém a linha bonita e faz a
 projeção devolver `found: false`.
 
+### Segunda linha da opção — `description` (ORQ-15)
+
+A opção pode trazer `description` (texto do CLIENTE, já resolvido na língua pelo `render`,
+ausente quando não há — nunca `""`). **Quem tem onde pôr, põe; quem não tem, descarta NOMEANDO**
+com `option_tree.note_dropped_descriptions` (uma linha INFO por menu, só quando havia texto).
+
+| superfície | a descrição |
+|---|---|
+| webchat / WebRTC no browser | segunda linha no botão/checkbox (o widget desenha) |
+| WhatsApp lista (4–10) e seções | `description` da linha, cortada em 72 (teto do provider = do autor) |
+| WhatsApp botões (≤3), texto (>10), título de seção | descarte nomeado |
+| SMS · e-mail · voz Twilio · telefone SIP | descarte nomeado |
+
+⚠️ `examples` nunca chega aqui: é do classificador. O Zod do `notification_send` já o remove.
+Gate: `infra/test/probe_orq15_option_description.sh`.
+
 **Sequential fallback protocol**: The adapter sends each field/option as a separate
 WhatsApp/SMS message, stores partial responses in the adapter's session state (Redis TTL),
 and emits a single `MenuSubmitEvent` to Kafka only when all required fields are collected.

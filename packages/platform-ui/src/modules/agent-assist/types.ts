@@ -61,6 +61,8 @@ export interface WsMenuRender {
 export interface MenuOption {
   id:    string;
   label: string;
+  /** ORQ-15 — segunda linha: o que a opção cobre, como o cliente a vê. Dado, não UI. */
+  description?: string;
 }
 
 export interface MenuField {

@@ -39,7 +39,9 @@ import { parseSignal } from "./signals"
 // "$.pipeline_state.dialog_form.nodes.0.options") resolved at runtime from a
 // DialogForm loaded via form_get. Resolve to a concrete array before rendering;
 // the resolved shape is identical to the static path.
-type MenuOption = { id: string; label: string }
+// `description` (ORQ-15) é a segunda linha que o `render` já traz — declarada para o
+// tipo não esconder que ela viaja até o `notification_send`.
+type MenuOption = { id: string; label: string; description?: string }
 // `masked` é `false | string` no schema (MaskedDeclarationSchema): o tipo local
 // dizia `boolean` e só não quebrava porque `resolveMenuArray` faz cast. Um tipo
 // espelhado que estreita o original transforma perda de caso em código que

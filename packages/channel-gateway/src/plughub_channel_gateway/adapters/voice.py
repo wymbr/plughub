@@ -47,6 +47,7 @@ from ..models import (
 
 from ..attachment_store import AttachmentStore
 from ..config import Settings
+from ..option_tree import note_dropped_descriptions
 from .base import ChannelAdapter
 from .voice_provider import (
     ISTTProvider,
@@ -889,6 +890,13 @@ class VoiceAdapter(ChannelAdapter):
         fields     = menu.get("fields", [])
         options    = menu.get("options", [])
         input_mode = menu.get("input_mode", "dtmf")
+
+        # ORQ-15: voz não tem segunda linha — falar a descrição de cada opção
+        # alongaria o menu falado além do que se retém de ouvido. Nomeado, nunca mudo.
+        note_dropped_descriptions(
+            "voice", options, "menu falado so le o rotulo",
+            session_id=session_id, menu_id=str(menu_id),
+        )
 
         # Build field list from either fields (form) or options (menu)
         if not fields and options:

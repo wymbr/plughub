@@ -139,6 +139,9 @@ interface DialogOption {
   options?: DialogOption[]
   /** `false` = aposentada: sai da oferta, permanece no form (D6). */
   active?: boolean
+  /** ORQ-15 — segunda linha. `examples` fica FORA deste tipo de propósito: é do
+   *  classificador e nunca é exibido, então a tela nem o declara. */
+  description?: unknown
 }
 
 // ── Taxonomia em árvore (F3 do `adr-dialog-tree-options`) ────────────────────
@@ -689,7 +692,14 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                       : "border-transparent hover:bg-slate-50 text-dark"
                     }`}
                   >
-                    <span className="truncate">{locStr(o.label, o.id)}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate">{locStr(o.label, o.id)}</span>
+                      {locStr(o.description).trim() && (
+                        <span className="block text-xs font-normal text-muted leading-snug">
+                          {locStr(o.description).trim()}
+                        </span>
+                      )}
+                    </span>
                     {pasta && <span className="text-slate-400 text-xs">›</span>}
                   </button>
                 )
@@ -786,6 +796,11 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                   }`}
                 >
                   {locStr(o.label, o.id)}
+                  {locStr(o.description).trim() && (
+                    <span className="block text-xs font-normal opacity-80 leading-snug">
+                      {locStr(o.description).trim()}
+                    </span>
+                  )}
                 </button>
               )
             })}

@@ -142,6 +142,13 @@ const NotificationSendInputSchema = z.object({
     options: z.array(z.object({
       id:    z.string(),
       label: z.string(),
+      /**
+       * ORQ-15 — segunda linha da opção (`RenderOption.description`). Sem ela aqui o
+       * Zod a DESCARTARIA calado, e nenhum canal a veria. Sem teto: o de 72 é do
+       * AUTOR (`optionTreeIssues`), e recusar aqui derrubaria o menu inteiro por
+       * causa de uma legenda — quem não tem espaço corta ou descarta nomeando.
+       */
+      description: z.string().optional(),
     })).optional(),
     fields: z.array(z.record(z.unknown())).optional(),
     /**

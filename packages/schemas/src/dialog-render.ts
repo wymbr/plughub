@@ -79,6 +79,16 @@ export interface RenderOption {
    *  Viaja no render porque quem decide o que fazer no retorno é o CHAMADOR, e ele lê
    *  a árvore pelo render, nunca o form cru. */
   on_return?: string
+  /**
+   * ORQ-15 — o que a opção COBRE, já resolvido na língua pedida: a segunda linha do
+   * menu. Ausente quando o autor não escreveu (ou escreveu só espaço) — nunca `""`,
+   * para o canal não desenhar uma linha vazia.
+   *
+   * ⚠️ `examples` NÃO viaja aqui, e isso é o contrato: o `render` vai aos canais, e
+   * frase de classificador chegaria a um adapter que a exibe. Quem precisa dos
+   * exemplos lê o `DialogOption` cru (`leafMeanings`).
+   */
+  description?: string
 }
 // Retry affordance flattened for the menu step: reprompt localized, counter fixed.
 export interface RenderRetry { reprompt: string; max_attempts: number }
@@ -156,7 +166,7 @@ export interface DialogRender {
 // Flatten a question's retry (LocalizedText reprompt → string) for the menu step.
 /** Mapeia opções resolvendo i18n e PRESERVANDO a subárvore; descarta aposentadas. */
 function mapOptions(
-  opts: ReadonlyArray<{ id: string; value?: string; label: unknown; options?: unknown; active?: boolean; on_return?: string }> | undefined,
+  opts: ReadonlyArray<{ id: string; value?: string; label: unknown; options?: unknown; active?: boolean; on_return?: string; description?: unknown }> | undefined,
   locale: string | undefined,
   dl: string,
 ): RenderOption[] {
@@ -177,6 +187,13 @@ function mapOptions(
       // D2 do ADR do retorno: o ponteiro de continuação viaja para quem decide
       // o que fazer no retorno — o CHAMADOR, que lê a árvore pelo render.
       if (o.on_return) ro.on_return = o.on_return
+      // ORQ-15: mesma resolução do `leafMeanings` (trim, vazio = ausente), para o
+      // cliente ler exatamente o que o classificador leu. Cópia de regra CONFERIDA
+      // pelo gate `probe_orq15_option_description.sh`.
+      if (o.description !== undefined) {
+        const d = resolveLocalizedText(o.description as never, locale, dl).trim()
+        if (d) ro.description = d
+      }
       return ro
     })
 }

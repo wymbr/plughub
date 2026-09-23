@@ -33,6 +33,14 @@ interface InteractionProps {
   onSubmit:         (result: SubmitResult) => void;
 }
 
+/**
+ * ORQ-15 — a segunda linha da opção, a mesma que o cliente lê no widget e no
+ * WhatsApp. O operador em substituição responde pelo cliente, então vê o que ele vê.
+ * Sem `description` não desenha nada — nunca uma linha vazia.
+ */
+const OptionDescription: React.FC<{ text?: string }> = ({ text }) =>
+  text ? <span className="block text-2xs font-normal text-muted leading-snug">{text}</span> : null;
+
 const INTERACTION_ICONS: Record<ChatMenuData["interaction"], string> = {
   text:      "✏️",
   button:    "🔘",
@@ -68,6 +76,7 @@ const ButtonInteraction: React.FC<InteractionProps> = ({ data, substitutionMode,
         title={substitutionMode ? `Responder: ${opt.label}` : "Modo observação — apenas visualização"}
       >
         {opt.label}
+        <OptionDescription text={opt.description} />
       </button>
     ))}
   </div>
@@ -100,7 +109,10 @@ const ListInteraction: React.FC<InteractionProps> = ({ data, substitutionMode, o
         >
           {i + 1}
         </span>
-        {opt.label}
+        <span>
+          {opt.label}
+          <OptionDescription text={opt.description} />
+        </span>
       </li>
     ))}
   </ul>
@@ -143,7 +155,10 @@ const ChecklistInteraction: React.FC<InteractionProps> = ({ data, substitutionMo
                 substitutionMode ? "accent-warning" : "cursor-not-allowed",
               ].join(" ")}
             />
-            <span>{opt.label}</span>
+            <span>
+              {opt.label}
+              <OptionDescription text={opt.description} />
+            </span>
           </li>
         ))}
       </ul>

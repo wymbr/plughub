@@ -107,6 +107,7 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
+from ..option_tree import note_dropped_descriptions
 from ..session_registry import SessionRegistry
 from . import contact_lifecycle
 from .base import ChannelAdapter
@@ -805,6 +806,12 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         if session_id in self._sip:
             # VOZ-02: sem tela, o menu é o que se OUVE — coleta por fala/teclado quando o menu a
             # declara, senão o prompt falado (a resposta chega como fala transcrita do cliente).
+            # ORQ-15: sem tela, a segunda linha não tem onde ir — o browser a mostra, o
+            # telefone não; descarte NOMEADO, nunca mudo.
+            note_dropped_descriptions(
+                "webrtc-sip", payload.get("options"), "telefone sem tela, menu falado so le o rotulo",
+                session_id=session_id, menu_id=menu_id,
+            )
             plan = self._plan_collect(session_id, payload, masked)
             if plan is not None:
                 self._start_collect(session_id, plan)

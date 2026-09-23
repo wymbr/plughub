@@ -43,7 +43,13 @@ from aiokafka import AIOKafkaProducer
 
 from ..attachment_store import AttachmentStore
 from ..config import Settings
-from ..option_tree import flatten_to_sections, is_tree, tree_depth
+from ..option_tree import (
+    flatten_to_sections,
+    is_tree,
+    list_row,
+    note_dropped_descriptions,
+    tree_depth,
+)
 from ..models import (
     ContactClosedEvent,
     ContactOpenEvent,
@@ -619,6 +625,11 @@ class WhatsAppAdapter(ChannelAdapter):
                 )
 
             elif len(options) <= 3 and options:
+                # ORQ-15: o botão de resposta do WhatsApp só tem TÍTULO (20 car.).
+                note_dropped_descriptions(
+                    "whatsapp", options, "botao de resposta so tem titulo",
+                    session_id=session_id, menu_id=menu_id,
+                )
                 buttons = [
                     {"id": o.get("id", o.get("label", "")), "title": o.get("label", "")[:_BTN_TITLE_MAX]}
                     for o in options
@@ -634,6 +645,14 @@ class WhatsAppAdapter(ChannelAdapter):
                 # da folha — `dialog_tree_level` divide o `chosen_id` por ponto. Sem
                 # isso o cursor procuraria a folha na RAIZ e a navegação reiniciaria
                 # parecendo certa.
+                #
+                # ORQ-15: a folha leva a `description` na linha (`_row`); a PASTA vira
+                # título de seção, que não tem segunda linha — essa é descartada nomeando.
+                note_dropped_descriptions(
+                    "whatsapp", [o for o in options if isinstance(o, dict) and o.get("options")],
+                    "titulo de secao nao tem segunda linha",
+                    session_id=session_id, menu_id=menu_id,
+                )
                 await provider.send_interactive_list(to, prompt[:60], prompt, secoes)
 
             elif 4 <= len(options) <= 10:
@@ -649,15 +668,17 @@ class WhatsAppAdapter(ChannelAdapter):
                         "precisa descer. contact_id=%s",
                         tree_depth(options), len(options), contact_id,
                     )
-                rows = [
-                    {"id": o.get("id", o.get("label", "")), "title": o.get("label", "")[:24]}
-                    for o in options
-                ]
+                # ORQ-15: a linha de lista TEM `description` — é a casa natural dela.
+                rows = [list_row(o) for o in options]
                 sections = [{"rows": rows}]
                 await provider.send_interactive_list(to, prompt[:60], prompt, sections)
 
             else:
                 # >10 options — text fallback
+                note_dropped_descriptions(
+                    "whatsapp", options, "mais de 10 opcoes viram lista numerada em texto",
+                    session_id=session_id, menu_id=menu_id,
+                )
                 numbered = "\n".join(
                     f"{i+1}. {o.get('label', '')}" for i, o in enumerate(options)
                 )

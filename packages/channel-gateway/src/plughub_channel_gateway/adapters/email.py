@@ -61,6 +61,7 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
+from ..option_tree import note_dropped_descriptions
 from .base import ChannelAdapter
 from .email_provider import (
     EmailAttachment,
@@ -450,6 +451,14 @@ class EmailAdapter(ChannelAdapter):
         if not contact_id:
             logger.warning("email deliver_menu: missing contact_id")
             return
+
+        # ORQ-15: este adapter desenha as opções dos CAMPOS (`menu.fields`), não o
+        # `options` do menu (NIV-15) — a descrição não tem onde ir. Nomeado, nunca mudo.
+        note_dropped_descriptions(
+            "email", payload.get("options") or menu.get("options"),
+            "adapter nao desenha as opcoes do menu (NIV-15)",
+            session_id=session_id, menu_id=str(payload.get("menu_id") or menu.get("menu_id") or ""),
+        )
 
         title  = menu.get("title") or menu.get("question", "")
         fields = menu.get("fields", [])

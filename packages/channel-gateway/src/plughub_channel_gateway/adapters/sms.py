@@ -49,6 +49,7 @@ from ..models import (
     MessageContent,
     NormalizedInboundEvent,
 )
+from ..option_tree import note_dropped_descriptions
 from .base import ChannelAdapter
 from .sms_provider import ISMSProvider, MockSMSProvider, TwilioProvider, split_sms
 from plughub_tasks import disparar
@@ -495,6 +496,14 @@ class SMSAdapter(ChannelAdapter):
         if not contact_id:
             logger.warning("sms deliver_menu: missing contact_id")
             return
+
+        # ORQ-15: SMS é texto corrido — cada descrição dobraria a mensagem (e os
+        # segmentos cobrados). Descarte NOMEADO, nunca mudo.
+        note_dropped_descriptions(
+            "sms", payload.get("options") or menu.get("options"),
+            "canal so de texto, sem segunda linha",
+            session_id=session_id, menu_id=str(payload.get("menu_id") or menu.get("menu_id") or ""),
+        )
 
         # Intro text (title / question)
         title = menu.get("title") or menu.get("question", "")

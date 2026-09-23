@@ -269,6 +269,8 @@
     text-align: left; font-size: 13px;
   }
   .ia-opt-btn:hover { background: #e0e7ff; border-color: #1B4F8A; }
+  /* ORQ-15 — segunda linha da opcao (description), nunca desenhada vazia */
+  .ia-opt-desc { display: block; font-size: 11px; color: #64748b; margin-top: 2px; line-height: 1.3; }
   .ia-text-row { display: flex; gap: 6px; margin-top: 4px; }
   .ia-text-row input {
     flex: 1; padding: 6px 10px; border-radius: 6px; font-size: 13px;
@@ -855,6 +857,15 @@ function renderInteraction(msg) {
   };
 
   const opts = msg.options || [];
+  // ORQ-15 — segunda linha da opcao; textContent, nunca HTML (e texto de autor).
+  const optDesc = (parent, d) => {
+    const t = String(d || '').trim();
+    if (!t) return;
+    const s = document.createElement('span');
+    s.className = 'ia-opt-desc';
+    s.textContent = t;
+    parent.appendChild(s);
+  };
   const collect = msg.collect || null;
   const temTeclado = !!collect && (collect.input || []).includes('dtmf');
   const readout = () => {
@@ -883,6 +894,7 @@ function renderInteraction(msg) {
       box.value = opt.id;
       lbl.appendChild(box);
       lbl.appendChild(document.createTextNode(' ' + (opt.label || opt.id)));
+      optDesc(lbl, opt.description);
       card.appendChild(lbl);
       card.appendChild(document.createElement('br'));
       return box;
@@ -896,6 +908,7 @@ function renderInteraction(msg) {
       const btn = document.createElement('button');
       btn.className = 'ia-opt-btn';
       btn.textContent = opt.label || opt.id;
+      optDesc(btn, opt.description);
       btn.onclick = () => submit(opt.id, masked.size ? MASKED_ECHO : (opt.label || opt.id));
       card.appendChild(btn);
     }

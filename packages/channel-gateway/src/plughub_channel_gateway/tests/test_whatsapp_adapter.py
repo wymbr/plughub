@@ -443,6 +443,54 @@ class TestDeliverMenu:
         })
         assert not mock_provider.sent_messages
 
+    # ── ORQ-15 — a segunda linha da opção ─────────────────────────────────────
+
+    async def test_list_row_carries_description(self, adapter, mock_provider):
+        opts = [{"id": str(i), "label": f"Opção {i}"} for i in range(4)]
+        opts[1]["description"] = "O que o seu plano inclui"
+        opts[2]["description"] = "x" * 90
+        await adapter.deliver_menu(self._menu_payload(opts, "list"))
+        rows = mock_provider.sent_messages[0]["sections"][0]["rows"]
+        assert rows[1]["description"] == "O que o seu plano inclui"
+        assert len(rows[2]["description"]) == 72   # teto do provider, não do autor
+        # sem descrição, a CHAVE não existe — a Cloud API recusa `description: ""`
+        assert "description" not in rows[0]
+        assert rows[0] == {"id": "0", "title": "Opção 0"}
+
+    async def test_tree_leaf_row_carries_description(self, adapter, mock_provider, caplog):
+        opts = [
+            {"id": "sac", "label": "SAC", "description": "Dúvidas do plano", "options": [
+                {"id": "info", "label": "Info", "description": "O que inclui"},
+                {"id": "stat", "label": "Status"},
+            ]},
+            {"id": "port", "label": "Portabilidade"},
+            {"id": "reemb", "label": "Reembolso"},
+            {"id": "canc", "label": "Cancelar", "description": "Encerrar a linha"},
+        ]
+        with caplog.at_level("INFO"):
+            await adapter.deliver_menu(self._menu_payload(opts, "list"))
+        secoes = mock_provider.sent_messages[0]["sections"]
+        assert secoes[0]["rows"][0] == {"id": "sac.info", "title": "Info", "description": "O que inclui"}
+        assert secoes[-1]["rows"][-1]["description"] == "Encerrar a linha"
+        # a PASTA vira título de seção, que não tem segunda linha: descarte NOMEADO
+        drop = [r.getMessage() for r in caplog.records if "ORQ-15" in r.getMessage()]
+        assert len(drop) == 1 and "descricao de 1 opcao" in drop[0] and "secao" in drop[0]
+
+    async def test_buttons_drop_description_NAMED(self, adapter, mock_provider, caplog):
+        opts = [{"id": "a", "label": "A", "description": "da A"}, {"id": "b", "label": "B"}]
+        with caplog.at_level("INFO"):
+            await adapter.deliver_menu(self._menu_payload(opts))
+        btns = mock_provider.sent_messages[0]["buttons"]
+        assert all("description" not in b for b in btns)
+        drop = [r.getMessage() for r in caplog.records if "ORQ-15" in r.getMessage()]
+        assert len(drop) == 1 and "descricao de 1 opcao" in drop[0] and "menu-001" in drop[0]
+
+    async def test_no_description_no_drop_log(self, adapter, mock_provider, caplog):
+        """Controle: menu sem descrição não é descarte — não pode gerar a linha."""
+        with caplog.at_level("INFO"):
+            await adapter.deliver_menu(self._menu_payload([{"id": "a", "label": "A"}]))
+        assert not [r for r in caplog.records if "ORQ-15" in r.getMessage()]
+
 
 # ── Outbound deliver_typing ───────────────────────────────────────────────────
 

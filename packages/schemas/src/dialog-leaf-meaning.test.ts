@@ -100,6 +100,45 @@ describe("examples NUNCA vai ao render", () => {
   })
 })
 
+describe("ORQ-15 — description VAI ao render, resolvida na língua pedida", () => {
+  const byId = (opts: ReadonlyArray<{ id: string; options?: unknown }>, id: string) =>
+    opts.find(o => o.id === id) as { id: string; description?: string; options?: never[] }
+
+  it("pasta e folha carregam a segunda linha; a língua é a pedida", () => {
+    const pt = buildRender(form(OPCOES)).questions[0]!.options
+    const sac = byId(pt, "sac")
+    expect(sac.description).toBe("Dúvidas e problemas com o seu plano")
+    expect(byId(sac.options!, "info_plano").description).toBe("Consultar o que o seu plano inclui")
+
+    const en = buildRender(form(OPCOES), "en").questions[0]!.options
+    expect(byId(byId(en, "sac").options!, "info_plano").description).toBe("What your plan includes")
+  })
+
+  it("sem description, a chave NÃO existe — nunca `\"\"`, que o canal desenharia como linha vazia", () => {
+    const opts = buildRender(form([
+      { id: "a", label: "a" },
+      { id: "b", label: "b", description: "   " },
+    ])).questions[0]!.options
+    expect("description" in byId(opts, "a")).toBe(false)
+    expect("description" in byId(opts, "b")).toBe(false)
+  })
+
+  it("a folha diz ao cliente EXATAMENTE o que disse ao classificador (cópia de regra conferida)", () => {
+    const render = buildRender(form(OPCOES))
+    const folhas = leafMeanings(OPCOES, [], "pt-BR")
+    const doRender = (path: string) => {
+      let nivel = render.questions[0]!.options
+      let atual: { description?: string } | undefined
+      for (const passo of path.split(".")) {
+        atual = nivel.find(o => o.id === passo)
+        nivel = (atual as { options?: typeof nivel })?.options ?? []
+      }
+      return atual?.description
+    }
+    for (const f of folhas) expect(doRender(f.path)).toBe(f.description)
+  })
+})
+
 describe("optionTreeIssues — tetos do significado", () => {
   const codes = (opts: DialogOption[]) => optionTreeIssues(opts, { allowNesting: true }).map(i => i.code)
 

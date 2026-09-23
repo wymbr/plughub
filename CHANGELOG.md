@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (1) — ORQ-15: a segunda linha da opção chega ao cliente, ou o canal diz por que não
+
+**O que o dono pediu junto com a ORQ-12.** A `description` da folha já ia ao classificador; faltava
+MOSTRÁ-LA no menu. O contrato vinha primeiro, e a medição do caminho achou a casa que faltava na
+ficha: a descrição morria **duas** vezes antes de qualquer canal — no `mapOptions` (que só copiava
+`id`/`label`/`options`/`on_return`) e no Zod do `notification_send`, cujo `menu.options` era
+`z.object({id, label})`. Zod remove chave não declarada, então mesmo com o `render` certo nenhum
+canal a veria, sem nada vermelho. É a terceira vez desta família neste mesmo schema (VOZ-05 5a com
+o `collect`; ORQ-19 abaixo com os filhos).
+
+**O que passou a ser verdade.**
+- **Contrato.** `RenderOption.description` (`@plughub/schemas/dialog-render.ts`), resolvida na
+  língua pedida com a MESMA regra do `leafMeanings` (trim; vazio = ausente, nunca `""`) — o cliente
+  lê exatamente o que o classificador leu. `examples` segue FORA: o `render` vai aos canais.
+- **Tool.** `notification_send` aceita `description` **sem teto**: o de 72 é do autor
+  (`optionTreeIssues`), e recusar aqui derrubaria o menu inteiro por causa de uma legenda.
+- **Quem mostra.** `webchat-test.html` e `webrtc-widget.html` (segunda linha no botão/checkbox,
+  texto por `textContent`/`escHtml`); Console: `MenuCard` e `DialogFormRenderer` (lista, botões e
+  colunas da árvore); **WhatsApp**: a `description` da linha de lista, na lista plana e nas seções.
+- **Quem não tem onde pôr, descarta NOMEANDO** (`option_tree.note_dropped_descriptions`: uma linha
+  INFO por menu, só quando havia descrição, com canal · quantas · motivo · sessão · menu): botão
+  de resposta do WhatsApp (só título), >10 opções em texto, título de SEÇÃO (pasta), SMS, e-mail
+  (que nem desenha o `options` do menu — NIV-15), voz Twilio e **telefone SIP** do WebRTC. O
+  WebRTC no browser não descarta: a tela mostra.
+
+**Instrumentos.** Unitários nas três casas — `schemas` (3: pasta e folha, língua, ausência, e a
+paridade folha a folha com `leafMeanings`), `mcp-server` (`menu-option-description.test.ts`: as
+DUAS saídas — Kafka e stream —, a opção sem texto SEM a chave, descrição longa não derruba,
+`examples` descartado), gateway (7: linha de lista, seções, botão com descarte nomeado, controle
+sem log). **Quatro mutações**, cada uma removendo uma metade e exigindo vermelho: a tool volta a
+descartar · o render omite · a linha do WA sem descrição · o descarte vira mudo — as quatro
+pegas. Gate ao vivo **`probe_orq15_option_description.sh`** (AUTO): A render vivo com paridade
+contra o `vocabulary` (11 opções, 10 folhas) · B `examples` nunca em `.options` (controle: 9 folhas
+com examples no vocabulary) · C `notification_send` vivo → stream, com a opção sem texto como
+controle · D `examples` nos argumentos não atravessa. Sessão sintética `probe-orq15-*`, chaves
+apagadas no fim. Suítes: gateway 1456/1456, schemas 69 (dialog), mcp-server 22 (menu/bpm/dialog),
+typecheck limpo em `schemas`, `mcp-server`, `skill-flow-engine`, `platform-ui`. Imagens de
+`mcp-server-plughub`, `channel-gateway`, `platform-ui` e `skill-flow-service` rebuildadas, âncora
+conferida dentro de cada container; os widgets são bind-mount do nginx.
+
+⚠️ **O gate ao vivo NÃO foi falseado contra uma imagem mutada** — as mutações rodaram nos
+unitários, que cobrem as mesmas metades. E a tela **não foi vista no navegador** nesta entrega.
+
+**Achados, cada um com ficha.**
+- **ORQ-18 — a forma do demo fala com o classificador na frente do cliente.** Ao vivo:
+  `sac.especialista` = *"Só quando o cliente PEDE uma pessoa; nunca por assunto"*, `nao_se_aplica`
+  = *"Escape: só quando nenhum outro destino servir"*. A instrução do `classificar` convida isso
+  (*"e, quando escrito, quando NÃO usá-lo"*), enquanto a D8 diz que o campo é texto do cliente.
+  Com uma leitora só, as duas plateias não colidiam; a ORQ-15 deu a segunda. Decisão do dono
+  pendente — o texto está no ar no demo.
+- **ORQ-19 — o `notification_send` descarta filhos e `on_return`.** Medido chamando o handler.
+  A F2 (seções do WhatsApp, grupos do widget) nunca recebe árvore pelo `menu` step; exposição,
+  não dano, porque a navegação desce nível a nível.
+
+**Decisão registrada de passagem:** TRF-01 — a marcação de transferência é o
+`close_reason = 'agent_transfer'` (decisão do dono de 2026-09-23), anotada na ficha.
+
+Deixou fichas: `ORQ-18`, `ORQ-19`.
+
 ## 2026-09-22 (17) — ORQ-17: a conferência procurava na árvore de ENTRADA depois de uma continuação, e o "obrigado" virava atendente humano
 
 **Como apareceu.** No teste da ORQ-13, o dono foi atendido, agradeceu — e em vez de encerrar foi

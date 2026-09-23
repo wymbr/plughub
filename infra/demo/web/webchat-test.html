@@ -71,6 +71,8 @@
                 background: white; color: #1e293b; border: 1px solid #cbd5e1;
                 border-radius: 6px; cursor: pointer; text-align: left; font-size: 13px; }
   .ia-opt-btn:hover { background: #e0e7ff; border-color: #4f46e5; }
+  /* ORQ-15 — segunda linha da opcao (description), nunca desenhada vazia */
+  .ia-opt-desc { display: block; font-size: 11px; color: #64748b; margin-top: 2px; line-height: 1.3; }
   .ia-row { display: flex; gap: 6px; margin-top: 4px; }
   .ia-row input { flex: 1; padding: 6px 10px; border-radius: 6px; font-size: 13px;
                   border: 1px solid #cbd5e1; outline: none; }
@@ -507,19 +509,21 @@
       const fundo = opts.some(o => (o.options || []).some(ehPasta));
       const agrupar = !fundo && opts.some(ehPasta);
 
-      const botao = (id, label) =>
+      // ORQ-15: a `description` e a SEGUNDA linha do botao. Resposta e eco continuam
+      // sendo id e rotulo — a descricao explica a opcao, nao a substitui.
+      const botao = (id, label, desc) =>
         `<button class="ia-opt-btn"
           onclick="submitMenu('${msg.menu_id}','${msg.interaction}','${escHtml(id)}','${escHtml(label)}')"
-          >${escHtml(label)}</button>`;
+          >${escHtml(label)}${optDesc(desc)}</button>`;
 
       if (agrupar) {
         opts.forEach(opt => {
-          if (!ehPasta(opt)) { html += botao(opt.id, opt.label); return; }
-          html += `<div class="ia-grupo">${escHtml(opt.label)}</div>`;
-          opt.options.forEach(f => { html += botao(opt.id + '.' + f.id, f.label); });
+          if (!ehPasta(opt)) { html += botao(opt.id, opt.label, opt.description); return; }
+          html += `<div class="ia-grupo">${escHtml(opt.label)}${optDesc(opt.description)}</div>`;
+          opt.options.forEach(f => { html += botao(opt.id + '.' + f.id, f.label, f.description); });
         });
       } else {
-        opts.forEach(opt => { html += botao(opt.id, opt.label); });
+        opts.forEach(opt => { html += botao(opt.id, opt.label, opt.description); });
       }
 
     } else if (msg.interaction === 'text') {
@@ -578,7 +582,7 @@
       opts.forEach(opt => {
         html += `<label class="ia-check">
           <input type="checkbox" id="ia-ck-${msg.menu_id}-${escHtml(opt.id)}" value="${escHtml(opt.id)}">
-          ${escHtml(opt.label)}
+          <span>${escHtml(opt.label)}${optDesc(opt.description)}</span>
         </label>`;
       });
       html += `<button class="ia-submit" id="ia-clbtn-${escHtml(msg.menu_id)}">Confirmar</button>`;
@@ -686,6 +690,12 @@
   // ── Util ────────────────────────────────────────────────────────────────────
   function escHtml(s) {
     return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ORQ-15 — segunda linha da opcao; sem texto, nada (nunca uma linha vazia).
+  function optDesc(d) {
+    const t = String(d || '').trim();
+    return t ? `<span class="ia-opt-desc">${escHtml(t)}</span>` : '';
   }
 </script>
 </body>
