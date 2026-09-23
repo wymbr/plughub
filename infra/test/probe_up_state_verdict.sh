@@ -17,6 +17,8 @@
 #
 # RAMOS
 #   A  classificação derivada do compose (restart:"no" ∪ service_completed_successfully)
+#      ∪ declarada (label `plughub.one-shot: "true"`, GAT-06) — e `on-failure:N` SEM a
+#      label continua long-running (o controle: a regra não virou "teto de restart")
 #   B  veredicto: os casos que já custaram, cada um com o código esperado
 #   C  a lista fixa não voltou ao `up.sh`
 #   D  ao vivo: o compose REAL classifica os one-shots conhecidos, e o estado atual
@@ -42,13 +44,18 @@ command -v python3 >/dev/null || { echo "INCONCLUSIVO — python3 ausente"; exit
 
 # compose sintético: `api` long-running; `seed_no` com restart:"no"; `init_dep` sem
 # restart, mas esperado por completed_successfully (a forma do minio-init);
-# `seed_b` restart:"no".
+# `seed_b` restart:"no"; `seed_lbl` com on-failure:5 e a label (a forma do sip-seed);
+# `seed_lst` idem, com a label na forma de LISTA; `worker` com on-failure:5 e SEM a
+# label — long-running.
 cat > "$TMP/compose.json" <<'JSON'
 {"services": {
   "api":      {"depends_on": {"init_dep": {"condition": "service_completed_successfully"}}},
   "seed_no":  {"restart": "no"},
   "init_dep": {},
-  "seed_b":   {"restart": "no", "depends_on": {"api": {"condition": "service_healthy"}}}
+  "seed_b":   {"restart": "no", "depends_on": {"api": {"condition": "service_healthy"}}},
+  "seed_lbl": {"restart": "on-failure:5", "labels": {"plughub.one-shot": "true"}},
+  "seed_lst": {"restart": "on-failure:5", "labels": ["plughub.one-shot=true"]},
+  "worker":   {"restart": "on-failure:5"}
 }}
 JSON
 
@@ -69,10 +76,10 @@ caso() {  # rot esperado linha-do-ps...
 echo
 echo "A) classificação derivada do compose"
 CLS="$(python3 "$V" --oneshots "$TMP/compose.json" | paste -sd, -)"
-if [ "$CLS" = "init_dep,seed_b,seed_no" ]; then
-  ok "one-shots = $CLS (o dependente-concluído entra sem declarar restart)"
+if [ "$CLS" = "init_dep,seed_b,seed_lbl,seed_lst,seed_no" ]; then
+  ok "one-shots = $CLS (o dependente-concluído entra sem declarar restart; a label entra nas duas formas; o worker on-failure:5 sem label fica fora)"
 else
-  bad "one-shots = [$CLS] (esperado init_dep,seed_b,seed_no)"
+  bad "one-shots = [$CLS] (esperado init_dep,seed_b,seed_lbl,seed_lst,seed_no)"
 fi
 
 echo
@@ -89,6 +96,9 @@ caso "long-running que saiu com 0 NÃO concluiu" 1 "api${T}exited${T}0" "seed_no
 caso "one-shot ainda rodando é PENDENTE, não verde" 2 "api${T}running${T}0" "seed_b${T}running${T}0"
 caso "one-shot em 'created' (dependência falhou)" 1 "api${T}running${T}0" "seed_b${T}created${T}0"
 caso "pendente não mascara vermelho" 1 "api${T}exited${T}137" "seed_b${T}running${T}0"
+caso "one-shot DECLARADO que saiu com 0 (o caso sip-seed, GAT-06)" 0 "api${T}running${T}0" "seed_lbl${T}exited${T}0"
+caso "one-shot declarado que saiu com 1 continua VERMELHO" 1 "api${T}running${T}0" "seed_lbl${T}exited${T}1"
+caso "on-failure:N SEM label que saiu com 0 NÃO concluiu" 1 "api${T}running${T}0" "worker${T}exited${T}0"
 caso "listagem vazia é INCONCLUSIVO" 3 ""
 echo '{"nope": 1}' > "$TMP/ruim.json"
 printf 'api\trunning\t0\n' > "$TMP/ps.tsv"
@@ -116,11 +126,11 @@ DC=(docker compose -f "$RAIZ/docker-compose.demo.yml")
 if command -v docker >/dev/null && "${DC[@]}" config --format json > "$TMP/real.json" 2>/dev/null; then
   REAL=" $(python3 "$V" --oneshots "$TMP/real.json" | paste -sd' ' -) "
   FALTA=""
-  for s in auth-seed config-seed context-map-seed dialog-seed eval-seed kafka-init minio-init pricing-seed; do
+  for s in auth-seed config-seed context-map-seed dialog-seed eval-seed kafka-init minio-init pricing-seed sip-seed; do
     case "$REAL" in *" $s "*) ;; *) FALTA="$FALTA $s" ;; esac
   done
   if [ -z "$FALTA" ]; then
-    ok "o compose real classifica os 8 one-shots conhecidos:${REAL}"
+    ok "o compose real classifica os 9 one-shots conhecidos:${REAL}"
   else
     bad "one-shot(s) conhecido(s) fora da classificação:$FALTA"
   fi

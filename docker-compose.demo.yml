@@ -1567,6 +1567,11 @@ services:
       - plughub-demo
     # VOZ-41: diretório vazio (mount atrasado) e SFU fora saem != 0 — tenta de novo, não desiste calado
     restart: "on-failure:5"
+    # GAT-06: roda uma vez e sai. Com `on-failure:5` e sem dependente, nenhum critério
+    # derivado o reconhece como one-shot, e o `up.sh` lia o `exited 0` como serviço CAÍDO.
+    # Declarado aqui, ao lado do serviço — nunca numa lista de nomes no script.
+    labels:
+      plughub.one-shot: "true"
 
   # TURN para atravessar NAT. `lt-cred-mech` com usuário estático: o LiveKit repassa
   # `turn_servers` aos clientes com usuário/credencial fixos, e não gera credencial

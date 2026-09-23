@@ -21,7 +21,15 @@ compose, que e onde o fato ja esta declarado:
 
   one-shot  = servico com `restart: "no"`, OU que algum outro espera com
               `depends_on: {condition: service_completed_successfully}`
-              (o segundo criterio cobre o `minio-init`, que nao declara restart)
+              (o segundo criterio cobre o `minio-init`, que nao declara restart),
+              OU que DECLARA a label `plughub.one-shot: "true"` (GAT-06)
+
+O terceiro criterio e declaracao, nao deducao, de proposito. O `sip-seed` tem
+`restart: "on-failure:5"` (tenta de novo se o SFU ainda nao aceita, VOZ-41) e
+ninguem depende dele: os dois criterios derivados o liam como long-running, e o
+`up.sh` reprovava toda subida correta. Deduzir "`on-failure:N` e one-shot" seria
+adivinhar — um servico permanente tambem pode ter teto de tentativas. A label mora
+no proprio servico, entao envelhece junto com ele, e nao numa lista no script.
 
 O julgamento e uma funcao pura (compose + listagem do `ps`) justamente para poder
 ser REPROVADA sem subir a stack: `infra/test/probe_up_state_verdict.sh`.
@@ -45,6 +53,17 @@ import json
 import sys
 
 VERDE, VERMELHO, PENDENTE, INCONCLUSIVO = 0, 1, 2, 3
+ONE_SHOT_LABEL = "plughub.one-shot"
+
+
+def _declara_one_shot(labels: object) -> bool:
+    """A label pode vir como dict (o `config --format json` normaliza assim) ou como
+    lista `k=v` (forma curta do YAML)."""
+    if isinstance(labels, dict):
+        return str(labels.get(ONE_SHOT_LABEL, "")).strip().lower() == "true"
+    if isinstance(labels, list):
+        return any(str(x).strip().lower() == ONE_SHOT_LABEL + "=true" for x in labels)
+    return False
 
 
 def one_shots(compose: dict) -> set[str]:
@@ -55,6 +74,8 @@ def one_shots(compose: dict) -> set[str]:
     for nome, s in servicos.items():
         s = s or {}
         if str(s.get("restart", "")).strip('"') == "no":
+            out.add(nome)
+        if _declara_one_shot(s.get("labels")):
             out.add(nome)
         deps = s.get("depends_on") or {}
         if isinstance(deps, dict):

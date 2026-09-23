@@ -1,5 +1,33 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (7) — GAT-06: o `up.sh` deixou de reprovar toda subida correta por causa do `sip-seed`
+
+**O defeito.** A GAT-05 fez o `up.sh` julgar one-shot pelo exit code, com a classificação derivada
+do compose: `restart: "no"` ou alvo de `service_completed_successfully`. O `sip-seed` (VOZ-41) tem
+`restart: "on-failure:5"` — tenta de novo se o SFU ainda não aceita — e ninguém depende dele, então
+os dois critérios o liam como long-running, e o `exited (exit 0)` de um seed que terminou certo
+(`1 de 1 tronco(s) ok`) virava ❌. Medido no `up.sh` desta manhã. De quebra, o ramo ao vivo do
+`probe_up_state_verdict.sh` (AUTO) estava **vermelho desde a VOZ-41** pelo mesmo motivo — o mesmo
+modo de falha que a GAT-05 fechou para o `context-map-seed`: vermelho permanente ensina a ignorar
+o script.
+
+**O conserto: declarar, não deduzir.** Terceiro critério em `_up_state_verdict.py`: a label
+`plughub.one-shot: "true"` no próprio serviço (aceita nas formas dict e lista). Deduzir
+*"`on-failure:N` é one-shot"* seria adivinhar — um serviço permanente também pode ter teto de
+tentativas. E a label mora ao lado do serviço, no compose, e não numa lista de nomes no script, que
+é o que a GAT-05 removeu.
+
+**Prova.** `probe_up_state_verdict.sh`:
+- ramo A classifica o caso da label nas duas formas e deixa fora um `worker` com `on-failure:5`
+  sem label (o controle);
+- ramo B ganhou três casos: seed declarado com exit 0 é verde, com exit 1 continua vermelho, e
+  `on-failure:N` sem label que saiu com 0 não concluiu;
+- ramo D põe o `sip-seed` entre os one-shots conhecidos (9).
+Verde. A versão do `HEAD` reprova 4 ramos (A, B, D-classificação, D-estado ao vivo); as mutações
+"sem o critério da label" e "`on-failure:N` vira one-shot" também reprovam, pelo caso certo. Ponta
+a ponta: o `up.sh` real recriou só o `sip-seed` (idempotente: tronco e regra já existiam) e terminou
+em `✅ Stack no ar`.
+
 ## 2026-09-23 (6) — ORQ-19: o `menu` leva UM nível, e o ramo que desenhava árvore no canal saiu
 
 **O defeito, medido na ORQ-15.** O `notification_send` validava `menu.options` como
