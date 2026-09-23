@@ -22,6 +22,12 @@ o número só fica plausível e errado. O porquê de cada regra, com medição, 
    resume — por isso a testemunha por-segmento é `segments`.)
 3. **RMT substitui a LINHA INTEIRA.** Todo writer manda a linha completa ou é reidratado antes
    de escrever. Coluna que só um writer conhece é apagada pelo próximo.
+3b. **MATERIALIZED VIEW sobre tabela RMT conta VERSÕES, não linhas.** A MV dispara a cada
+   INSERT; o merge funde só a tabela, nunca a MV. `FINAL` não existe para ela, e `POPULATE`
+   não conserta: recriada, volta a contar versões no próximo INSERT. **Agregado sobre RMT se
+   lê de `<tabela> FINAL`** (ex.: `segments FINAL`). Se uma MV `FROM segments` for inevitável,
+   ela entra nos `dependent_views` do `_migrate_row_version` — e continua contando versões.
+   Medido em 2026-09-23: 0 MVs em `plughub_demo`; as duas que havia saíram (APF-01, APF-02, §6).
 4. **Migração**: `ALTER TABLE {db}.<t> ADD COLUMN IF NOT EXISTS …`, idempotente, acrescentada
    ao fim de `_MIGRATIONS` em `packages/analytics-api/src/plughub_analytics_api/clickhouse.py`,
    com comentário de uma linha dizendo o arco. **Trocar a engine de tabela existente** (ex.: para
@@ -42,6 +48,10 @@ o número só fica plausível e errado. O porquê de cada regra, com medição, 
   Antes do merge há duplicatas, e `count()` sem `FINAL` conta versões, não fatos.
 - **Alias de agregado NUNCA repete nome de coluna real**: `any(pool_id) AS pool_id` derruba a
   query inteira (code 184). Sufixe `_ref` e renomeie na camada Python (§4).
+- **Negação sobre coluna `Nullable` dentro de `countIf` descarta a linha em silêncio.**
+  `close_reason != 'agent_transfer'` vale NULL quando a coluna é NULL, e o `countIf` não conta
+  a linha. Use `coalesce(col, '') != 'v'`. Para transferência a casa única é
+  `_IS_TRANSFER_SQL` / `_NOT_TRANSFER_SQL` em `reports_query.py` — importe, não reescreva (§7).
 - **O `except` do wrapper loga o texto da exceção** — `data: []` por erro é indistinguível de
   "não há dado".
 - **Nunca somar `segments.duration_ms` para obter tempo de sessão**: segmentos se sobrepõem

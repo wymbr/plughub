@@ -80,3 +80,56 @@ a query falha com `UNKNOWN_DATABASE` (code 81). Com `2>/dev/null` no script, o e
 saída vazia parece *"não há linha"*: três consultas seguidas "responderam" nada sobre pools
 que tinham 93 e 4 segmentos. `session_timeline` está **vazia** neste deploy; o stream durável
 é `session_stream_events`, no **Postgres**, com colunas `event_type`/`payload`.
+
+---
+
+## 6. MATERIALIZED VIEW sobre `ReplacingMergeTree` conta VERSÕES, não linhas (2026-09-23)
+
+Uma MV é um gatilho de INSERT: cada bloco inserido na tabela de origem é agregado no estado
+dela. O merge do RMT funde as versões na TABELA e nunca na MV, então todo segmento que é
+regravado (fechamento + wrap-up) entra duas ou mais vezes. `FINAL` não se aplica à MV, e
+`POPULATE` não conserta: recriada, ela reagrega a tabela já fundida e volta a contar versões
+no próximo INSERT. Havia duas MVs sobre `segments`, e as duas saíram no mesmo dia.
+
+**APF-01 — `mv_agent_performance_daily`.** Achada pela TRF-01, ao ir trocar nela a coluna de
+transferência. Medido contra `segments FINAL`: `retencao_humano` **600 × 382**, `sac_ia`
+**327 × 240**, `fila_humano` 70 × 59, e as transferências guardadas como `transferred`, a
+versão placeholder que o wrap-up reescreveu. Único leitor no `system.query_log` de 30 dias: o
+`performance_job` (4 624 SELECTs), que grava `{t}:agent_perf:*` para o score de roteamento.
+Ao trocar a fonte para `segments FINAL`: 23 chaves gravadas e **5 scores mudaram** (ex.:
+`human_agent_retencao_humano` 0,7656 → 0,6053). Dano no roteamento zero só porque
+`routing.performance_score_weight` vivo é `0.0`.
+
+**APF-02 — `mv_segment_summary`.** Pior: sem filtro de `ended_at`, agregava também a versão
+de ABERTURA. `segment_count` medido duas vezes contra `segments FINAL`, e o excesso cresce a
+cada INSERT: **8 094 × 4 406** na APF-01 (com **1 889 de 2 220** sessões divergentes) e
+**8 371 × 4 406** na APF-02. Só `handoff_count` (`max`, idempotente) saía certo. O único leitor
+no código, `/reports/sessions/complexity`, **nunca tinha respondido**: a subquery era
+`FROM sessions FINAL WHERE s.tenant_id = …` sem o alias `s`, o ClickHouse recusava com
+**code 47**, e o wrapper convertia em `data: [], error: data_unavailable` — os unitários, com
+mock, não tinham como ver. Por isso a MV tinha zero leitores reais no `query_log`.
+
+**O desenho que ficou:** agregado lido de `segments FINAL`; DROP idempotente das MVs e views em
+`_MIGRATIONS` (view antes da MV), fora do `_ALL_DDL` e fora dos `dependent_views` do
+`_migrate_row_version`, que as recriaria no `finally`. Agregado pré-computado sobre RMT, se um
+dia for preciso, é outro desenho (refresh periódico com `FINAL`, ou agregação no consumidor
+com id). Fontes: `CHANGELOG.md` § 2026-09-23 (4) e (5); `docs/arcos/arc5-segments.md`;
+comentários `_DDL_AGENT_PERFORMANCE_DROP_*` e `_DDL_SEGMENT_SUMMARY_DROP_*` em `clickhouse.py`.
+Gates: `probe_apf01_performance_source.sh`, `probe_apf02_session_complexity.sh` e as baterias
+`mut_*` irmãs.
+
+---
+
+## 7. Negação sobre `Nullable` dentro de `countIf` descarta a linha (2026-09-23, TRF-01)
+
+Em SQL, `NULL != 'x'` é NULL, não verdadeiro, e o `countIf` só conta o verdadeiro. A TRF-01
+passou a marcar transferência por `close_reason = 'agent_transfer'` (fato do transporte), e o
+censo antes de mexer mostrou que `close_reason` é `Nullable` e está **NULL em 3 571 de 4 406**
+linhas de `segments FINAL`. Um `countIf(outcome = 'resolved' AND close_reason != 'agent_transfer')`
+teria encolhido o contador de resolvidos para os segmentos que TÊM `close_reason`, sem nada
+vermelho. O conserto é `coalesce(close_reason, '')`, e mora em uma casa:
+`_IS_TRANSFER_SQL` / `_NOT_TRANSFER_SQL` em `packages/analytics-api/src/plughub_analytics_api/reports_query.py`
+(o `performance_job` a importa). O gate `probe_trf01_transfer_marking.sh` tem controle de
+população: dos 1 787 resolvidos, **1 491 têm `close_reason` NULL** — sem eles o ramo não
+distinguiria o defeito; a bateria `mut_trf01_transfer_marking.sh` planta a negação sem
+`coalesce` (M1) e ela é pega. Fonte: `CHANGELOG.md` § 2026-09-23 (3).

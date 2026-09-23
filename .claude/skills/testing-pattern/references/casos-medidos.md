@@ -73,6 +73,52 @@ existir por outra razão — `ensure_future` sem guardar o retorno deixa o loop 
 e o CPython avisa que a task pode ser coletada no meio da execução; num produtor de CUSTO
 isso é fail-silent com a evidência na FATURA. Ver `CHANGELOG.md` 2026-08-30.
 
+### 2d. INCONCLUSIVO emitido depois de um ✗ esconde o defeito (2026-09-23, APF-02)
+
+A primeira versão do `probe_apf02_session_complexity.sh` conferia a população do ramo D (as
+transferências) **no relatório** e **depois** dos veredictos. Com o relatório quebrado pela
+mutação M1 (o alias `s` removido, o defeito original), B e C reprovavam, e o D, sem população
+no relatório, emitia INCONCLUSIVO — que troca o `exit 1` por `exit 2`. Na bateria, `2` não é
+"pega": a M1 **sobrevivia** justamente por causa do defeito que plantava. O conserto foi medir a
+população no **censo independente** e **antes** de qualquer veredicto. Regra: a pergunta *"há
+amostra?"* se responde na fonte que não está sob teste, e se responde primeiro. Ver
+`CHANGELOG.md` § 2026-09-23 (5).
+
+### 2e. Mutação sem população na janela fica verde e parece proteção (2026-09-23, APF-01)
+
+A bateria `mut_apf01_performance_source.sh` podia plantar três defeitos que o gate não tinha
+como ver: job sem `FINAL`, sem o filtro de `origin` e sem a regra da transferência. Na janela
+de 7 dias havia **0 versões não fundidas, 0 linhas não-live e 0 transferências** — contar
+versões e contar segmentos dava o mesmo número, e as três mutações ficariam verdes. Uma
+mutação verde é lida como *"o gate não pega isto"* só por quem sabe que a população é zero;
+para todo o resto ela parece proteção. O que foi feito: a bateria planta só os dois defeitos
+com população (M1 `system` de volta ao score, M2 família de escalação encolhida — os dois
+pegos) e **declara no cabeçalho** os três que não mede e quem os guarda (o unitário sobre o
+SQL executado, `test_reads_segments_final_not_the_mv_APF01`). A `mut_apf02_session_complexity.sh`
+repete o formato para o `FINAL`. Ver `CHANGELOG.md` § 2026-09-23 (4).
+
+### 2f. `sed` sem endereço e gate que confere o próprio censo (2026-09-23, APF-01/APF-02)
+
+Dois erros de instrumento do mesmo dia, da mesma família — o instrumento media outra coisa:
+- **O `sed` da M1 da APF-02 não tinha endereço** e mudou **12 queries** de `reports_query.py`
+  em vez da única sob teste. Um vermelho assim não diz que o gate pega o defeito, diz que o
+  arquivo quebrou. A mutação ficou restrita à função por intervalo
+  (`/^def f/,/^# ───/ s/…/`), e o `muta()` das baterias confere com `cmp` que o arquivo mudou
+  — idêntico ao original sai como *"a mutação NÃO se aplicou — não mede"*.
+- **A primeira versão do ramo C da APF-01 conferia o CENSO**, que exclui `system` por
+  construção — logo não podia reprovar. Foi reescrita sobre as linhas que a query do **job**
+  devolve, e o ramo B compara o job com um censo feito por outro caminho (`argMax(…,
+  row_version)` na tabela crua, em vez de `FINAL`). Ver `CHANGELOG.md` § 2026-09-23 (4) e (5).
+
+### 2g. `ioredis-mock` compartilha dados entre instâncias (2026-09-21, MEN-08; 2026-09-23, ORQ-19)
+
+Instâncias diferentes de `ioredis-mock` no mesmo processo de teste enxergam o mesmo dado. Na
+MEN-08 o teste novo achou isso e passou a limpar no `beforeEach`. Na ORQ-19
+(`menu-option-description.test.ts`) o `[0]` do stream era o menu de um teste anterior, e a
+asserção passou a ler `.at(-1)`, com o comentário explicando por quê. Um teste que lê o `[0]`
+pode ficar verde ou vermelho pelo teste vizinho, não pelo produto. Ver `CHANGELOG.md`
+§ 2026-09-21 (6) e commit `0e1f6277`.
+
 ---
 
 ## 3. Um ambiente que só sobe porque já subiu antes não está sendo verificado — está sendo lembrado

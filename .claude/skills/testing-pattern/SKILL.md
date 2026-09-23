@@ -38,6 +38,12 @@ quando a regra parecer excesso de zelo — foi medida.
   (senão cobra dado anterior ao deploy).
 - Ramos nomeados (`A · CENSO`, `B · MUTACAO`, …) e resumo final que permite chegar ao motivo
   sem re-rodar.
+- **População se confere ANTES de qualquer veredicto, e na fonte independente** — nunca no
+  objeto sob teste. INCONCLUSIVO emitido depois de um ✗ troca `exit 1` por `exit 2` e esconde
+  o defeito (casos-medidos §2d).
+- **O censo que o gate compara é produzido por OUTRO caminho** (ex.: `argMax(row_version)` na
+  tabela crua contra a query com `FINAL`). Gate que confere o próprio censo é tautológico
+  (§2f).
 
 ### Armadilhas de shell já pagas
 
@@ -54,12 +60,19 @@ quando a regra parecer excesso de zelo — foi medida.
 Gate que decide cobertura, autorização ou contrato ganha um **`mut_<gate>.sh`** irmão
 (modelo: `infra/test/mut_gates_manifest_coverage.sh`):
 
-1. **M0 = controle positivo**: sem mutação, o gate tem de estar VERDE. Se já está vermelho,
+1. **Meça a POPULAÇÃO antes de montar a bateria.** Mutação sem população na janela fica verde
+   e parece proteção. O que não tem população para reprovar vai **declarado no cabeçalho**
+   da bateria, com o teste que guarda aquilo no lugar dela (§2e; modelos: cabeçalho de
+   `mut_apf01_performance_source.sh` e `mut_apf02_session_complexity.sh`).
+2. **M0 = controle positivo**: sem mutação, o gate tem de estar VERDE. Se já está vermelho,
    saia 2 — as mutações não provariam nada.
-2. **M1..Mn**: plante cada defeito que o gate existe para pegar e **exija VERMELHO**.
-3. Prefira entrada de mentira por env (ex.: `GATE_MANIFEST`) a editar arquivo real; quando
+3. **M1..Mn**: plante cada defeito que o gate existe para pegar e **exija VERMELHO**.
+4. **Mutação por `sed` leva ENDEREÇO** (`/^def f/,/^# ───/ s/…/`), senão atinge o arquivo
+   inteiro; e **`cmp` confirma que ela se aplicou** — idêntico ao original é "não mede", nunca
+   "pega" (§2f).
+5. Prefira entrada de mentira por env (ex.: `GATE_MANIFEST`) a editar arquivo real; quando
    editar for inevitável, faça backup e restaure em `trap … EXIT INT TERM`.
-4. Saída: `0` todas pegas · `1` alguma sobreviveu · `2` não mediu.
+6. Saída: `0` todas pegas · `1` alguma sobreviveu · `2` não mediu.
 
 ## 4. Python / TypeScript
 
@@ -77,6 +90,9 @@ Gate que decide cobertura, autorização ou contrato ganha um **`mut_<gate>.sh`*
   helper com `asyncio.all_tasks` varre as tasks do chamador também.
 - Guarda sobre valor decodificado: `if not x`, nunca `is None` — os decoders do repo devolvem
   `""`. O teste do ramo de ausência tem de usar o valor que a FONTE produz.
+- **`ioredis-mock` compartilha dados entre instâncias**: o `[0]` de um stream pode ser o de
+  outro teste. Leia a última entrada (`.at(-1)`), use chave única por teste ou limpe no
+  `beforeEach` (§2g).
 
 ## 5. Rodar
 
