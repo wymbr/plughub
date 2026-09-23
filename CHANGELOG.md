@@ -34,8 +34,10 @@ passo manual continua valendo a qualquer hora.
   `up-at-login.sh` sai 4 com a mensagem que manda abrir o Docker Desktop.
 - Caminho feliz, na mão e pela tarefa disparada com `Start-ScheduledTask`: `LastTaskResult 0` e
   `✅ Stack no ar` no log da própria tarefa.
-- **Não testado:** um reinício real da máquina. O primeiro logon depois de reiniciar é a prova que
-  falta; o log a registra em `.logs/up-at-login-*.log`.
+- **Reinício real, medido no mesmo dia** (`.logs/up-at-login-20260923-135512.log`): Windows ligado
+  13:53:50, tarefa às 13:55:10 (`LastTaskResult 0`), Docker respondeu às 13:55:35, `up.sh` terminou
+  às 13:56:52 com `✅ Stack no ar` — 52 containers, os 41 permanentes em `running` e os 11 one-shots
+  com exit 0. `probe_up_state_verdict.sh` verde logo depois.
 
 ## 2026-09-23 (7) — GAT-06: o `up.sh` deixou de reprovar toda subida correta por causa do `sip-seed`
 
