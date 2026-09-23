@@ -356,6 +356,31 @@ class TestOtherEventTypes:
         assert msg["interaction"] == "button"
         assert msg["prompt"] == "Escolha uma opção:"
         assert msg["options"] == [{"id": "a", "label": "Cancelar"}]
+        # controle: sem campo mascarado, a CHAVE não existe (o widget testa presença)
+        assert "masked_fields" not in msg
+
+    async def test_interaction_request_carries_masked_fields_ORQ08(self):
+        """ORQ-08: este mapeamento É o contrato do `interaction.request` com o widget — o
+        `WsMenuRender` que o `CLAUDE.md` punha na cadeia do mascaramento nunca foi
+        construído e saiu. `masked_fields` é o que faz o widget abrir `<input
+        type="password">`; e a opção chega INTEIRA (ORQ-15: a `description` vai junto)."""
+        batch = _event(
+            "5002-1",
+            type="interaction_request", visibility="all",
+            payload={
+                "menu_id": "menu-002",
+                "interaction": "form",
+                "prompt": "Dados do cartão",
+                "fields": [{"id": "numero", "label": "Número"}],
+                "masked_fields": ["numero"],
+                "options": [{"id": "a", "label": "A", "description": "da A"}],
+            },
+        )
+        s = make_subscriber(make_xread(batch))
+        msg = (await collect(s, 1))[0]
+        assert msg["masked_fields"] == ["numero"]
+        assert msg["fields"] == [{"id": "numero", "label": "Número"}]
+        assert msg["options"] == [{"id": "a", "label": "A", "description": "da A"}]
 
     async def test_participant_joined_agent_delivered(self):
         batch = _event(

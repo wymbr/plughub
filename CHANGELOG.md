@@ -1,5 +1,36 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (9) — ORQ-08: o `WsMenuRender` saiu, e a cadeia do mascaramento passou a nomear o que roda
+
+**O achado, da F2 (2026-09-06).** `WsMenuRender` (`channel-gateway/models.py`) aparecia só na
+definição e em `tests/test_models.py`. O `interaction.request` que o widget recebe é o dict que o
+`StreamSubscriber` monta a partir da entrada `interaction_request` do stream canônico, e o
+`webchat.py` o envia cru (`send_json`). O modelo parecia impor forma sem impor nada — e três
+documentos, inclusive o `CLAUDE.md` raiz, o punham na cadeia de entrega dos campos mascarados.
+
+**Removido, não usado.** Com a ORQ-19 a razão para mantê-lo (admitir árvore) caiu. Passar a
+validá-lo no laço de entrega acrescentaria um jeito novo de um menu não chegar ao cliente (uma
+opção que não validasse), sem ganho medido. Quando a correção pode ser marcar cada caso ou remover
+a alternativa, remove-se.
+
+**O que mudou:**
+- `WsMenuRender` saiu de `models.py`, com seus dois testes. Importação de todos os 65 módulos do
+  pacote confirmada sem ele.
+- O contrato de verdade ganhou teste: `test_interaction_request_carries_masked_fields_ORQ08`
+  (repassa `masked_fields`, `fields` e a opção inteira, com `description`), e o teste existente
+  ganhou o controle de ausência (sem campo mascarado, a chave não existe).
+- A cadeia foi corrigida no `CLAUDE.md` (§ WebChat Channel), em
+  `docs/pacotes/channel-gateway-webchat.md` e em `docs/product/limite-credito-3-niveis-design.md`.
+
+**Achado de passagem.** A ALW-10 acrescentou `masked_types` **só** ao `WsMenuRender`, e o CHANGELOG
+daquele dia diz que *"o cliente do canal recebe o `masked_types`"*. Pelo webchat não recebe: o
+ramo `interaction_request` do `StreamSubscriber` repassa `masked_fields` e não `masked_types`, e
+nenhum widget em `infra/demo/web` o lê. Não é dano vivo (não há consumidor), mas é premissa da
+`ALW-15` e da `FMT-11`, onde ficou anotado com a data.
+
+**Prova.** Suíte do gateway: 1 449 (1 450 − 2 do modelo + 1 novo). Sem mudança de comportamento em
+execução — a classe removida não era importada fora dos testes — então não houve rebuild.
+
 ## 2026-09-23 (8) — BOO-01: a stack sobe sozinha depois de reiniciar a máquina, pelo mesmo `up.sh`
 
 **O problema, medido hoje** (`TODO.md` § *Subida automática falhou uma vez* → Reincidência de

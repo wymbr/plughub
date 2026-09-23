@@ -1047,7 +1047,7 @@ Three distinct channels: `webchat`, `webrtc`, `whatsapp`. Client is NOT a named 
 
 Upload (2-stage): WS `upload.request` → `upload.ready` (file_id, upload_url) → HTTP POST binary → `upload.committed` → WS `msg.image/document/video`. MIME allowlist: JPEG/PNG/WebP/GIF (16MB), PDF (100MB), MP4/WebM (512MB). Expiry: soft-delete hourly (410 dali em diante), blob delete daily (+24h grace) — task de boot `attachment-expiry` (`attachment_expiry.py`), nos dois backends. ⚠️ Até 2026-09-13 (VOZ-07) isto estava descrito aqui e em nenhum código: anexo nenhum expirava. Gate: `infra/test/probe_attachment_expiry.sh`. JWT via message body, never URL. `jwt_secret` per tenant via Redis `{tenant_id}:config:webchat:jwt_secret`.
 
-Masked fields delivery chain: `step.masked` → `notification_send` args → `conversations.outbound` Kafka → `WsMenuRender.masked_fields` → `interaction.request` WS event → `<input type="password">` overlay in webchat.
+Masked fields delivery chain: `step.masked` → `notification_send` args → stream entry `interaction_request` → `StreamSubscriber` maps it to the `interaction.request` WS event (untyped dict; carries `masked_fields`, **not** `masked_types`) → `<input type="password">` overlay in webchat. *(Corrected 2026-09-23, ORQ-08: the chain named a `WsMenuRender` model that no code ever built; it was removed.)*
 
 **Chamada é MEIO de um contato de chat, não outro canal de texto** (decisão do dono, 2026-09-21): o
 `webchat` fica — texto é longo, retomável e não depende do SFU; sala e bot leg custam e só existem

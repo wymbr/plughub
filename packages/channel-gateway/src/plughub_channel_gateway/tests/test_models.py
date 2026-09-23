@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from plughub_channel_gateway.models import (
     WsMessageText, WsMessageTextLegacy, WsMenuSubmit,
-    WsConnectionAccepted, WsMessageOutbound, WsMenuRender,
+    WsConnectionAccepted, WsMessageOutbound,
     WsAgentTyping, WsSessionClosed,
     ContextSnapshot, MessageAuthor, MessageContent,
     NormalizedInboundEvent, ContactOpenEvent, ContactClosedEvent,
@@ -95,25 +95,6 @@ class TestServerMessages:
         assert msg.type == "msg.text"
         d = msg.model_dump()
         assert d["author"]["type"] == "agent_ai"
-
-    def test_ws_menu_render_with_options(self):
-        msg = WsMenuRender(
-            menu_id="m1",
-            interaction="button",
-            prompt="Escolha uma opção:",
-            options=[{"id": "opt_1", "label": "Sim"}, {"id": "opt_2", "label": "Não"}],
-        )
-        assert msg.type == "interaction.request"
-        assert len(msg.options) == 2
-
-    def test_ws_menu_render_no_options(self):
-        msg = WsMenuRender(
-            menu_id="m1",
-            interaction="text",
-            prompt="Digite sua mensagem:",
-        )
-        assert msg.options is None
-        assert msg.fields is None
 
     def test_ws_agent_typing(self):
         msg = WsAgentTyping(author_type="agent_ai")

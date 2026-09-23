@@ -367,7 +367,7 @@ Instinto certo, base errada: **estender `skill_dialog_runner_v1`, não bifurcar 
 | `form_get` emite `render.fields[]` propagando `masked` | `tools/dialog.ts:110-127`, `:117` | ✅ |
 | `menu.fields` aceita união `array \| ref` | `skill.ts:473-487` | ✅ |
 | engine honra `masked` por campo | `menu.ts:162`, `:444-454` | ✅ |
-| cadeia até `<input type="password">` no webchat | `menu.ts:181` → `WsMenuRender.masked_fields` | ✅ |
+| cadeia até `<input type="password">` no webchat | `menu.ts:181` → stream `interaction_request` → `StreamSubscriber` *(corrigido em 2026-09-23, ORQ-08: citava um `WsMenuRender` que nunca foi construído)* | ✅ |
 
 **Mas o único skill as-built com `interaction: form` é `agente_auth_form_v1`**, com fields estáticos inline
 (`:75-86`). `render.fields` não é consumido por nenhum YAML. A peça genérica existe na plataforma e não

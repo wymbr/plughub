@@ -94,11 +94,20 @@ Quando um step `menu` declara campos mascarados, a cadeia de entrega é:
 ```
 step.masked
   → notification_send args
-  → conversations.outbound (Kafka)
-  → WsMenuRender.masked_fields
-  → interaction.request (evento WS)
+  → entrada `interaction_request` no stream canônico (payload.masked_fields)
+  → StreamSubscriber._map → dict `interaction.request` (stream_subscriber.py, repassa masked_fields)
+  → webchat.py send_json (sem modelo tipado)
   → <input type="password"> overlay no webchat
 ```
+
+Em paralelo, o `menu.payload` em `conversations.outbound` (Kafka) chega ao `OutboundConsumer`,
+que guarda os `masked_fields` no `SessionRegistry` para o `_handle_menu_submit` redigir a resposta.
+
+> ⚠️ **Corrigido em 2026-09-23 (ORQ-08).** A cadeia passava por um `WsMenuRender.masked_fields` que
+> nenhum código construía — o modelo existia só em `models.py` e no próprio teste, e saiu. O
+> contrato de verdade é o mapeamento do `StreamSubscriber`, testado em
+> `test_stream_subscriber.py::test_interaction_request_carries_masked_fields_ORQ08`. Esse
+> mapeamento **não repassa `masked_types`**, e nenhum widget o lê (ver `ALW-15`).
 
 O cliente renderiza os campos mascarados como `<input type="password">`. Os valores
 nunca trafegam em claro nem são persistidos no stream sem mascaramento.
