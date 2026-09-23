@@ -92,7 +92,7 @@
                 "pt-BR": "👤 Falar com especialista humano"
               },
               "description": {
-                "pt-BR": "Só quando o cliente PEDE uma pessoa; nunca por assunto"
+                "pt-BR": "Atendimento com uma pessoa da nossa equipe"
               },
               "examples": {
                 "pt-BR": [
@@ -129,7 +129,7 @@
           },
           "on_return": "pos_atendimento",
           "description": {
-            "pt-BR": "Devolução de um valor já cobrado do cliente"
+            "pt-BR": "Devolução de um valor que já foi cobrado de você"
           },
           "examples": {
             "pt-BR": [
@@ -145,7 +145,7 @@
           },
           "on_return": "pos_atendimento",
           "description": {
-            "pt-BR": "Demonstração de coleta de dado sensível mascarado"
+            "pt-BR": "Demonstração: envio seguro de um dado sensível"
           },
           "examples": {
             "pt-BR": [
@@ -160,7 +160,7 @@
           },
           "on_return": "pos_atendimento",
           "description": {
-            "pt-BR": "SAC que exige identificação por PIN antes de atender"
+            "pt-BR": "Atendimento que confirma o seu PIN antes de começar"
           },
           "examples": {
             "pt-BR": [
@@ -191,7 +191,7 @@
             "pt-BR": "❓ Nenhuma dessas — falar com atendente"
           },
           "description": {
-            "pt-BR": "Escape: só quando nenhum outro destino servir"
+            "pt-BR": "Não achou o seu assunto? Fale com um atendente"
           }
         }
       ]
@@ -212,7 +212,7 @@
             "pt-BR": "🔄 Tenho outro assunto"
           },
           "description": {
-            "pt-BR": "O cliente tem um assunto NOVO; recomeça a navegação"
+            "pt-BR": "Voltar ao menu para tratar de outro assunto"
           },
           "examples": {
             "pt-BR": [
@@ -227,7 +227,7 @@
             "pt-BR": "👤 Falar com um especialista humano"
           },
           "description": {
-            "pt-BR": "Cliente pede uma pessoa depois do atendimento"
+            "pt-BR": "Continuar com uma pessoa da nossa equipe"
           },
           "examples": {
             "pt-BR": [
@@ -242,7 +242,7 @@
             "pt-BR": "✅ Não, obrigado — pode encerrar"
           },
           "description": {
-            "pt-BR": "Cliente não quer mais nada; encerrar o contato"
+            "pt-BR": "Encerrar o atendimento por aqui"
           },
           "examples": {
             "pt-BR": [

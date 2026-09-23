@@ -489,7 +489,7 @@ antes do escape) e `ORQ-14` (medir o roteamento errado) — respeitam D2, D5 e D
 
 | campo | quem lê | onde aparece |
 |---|---|---|
-| `description` | o classificador **e** o cliente | prompt hoje; menu na `ORQ-15` (teto de 72 = linha de lista do WhatsApp) |
+| `description` | o classificador **e** o cliente | prompt e menu (desde a `ORQ-15`, 2026-09-23; teto de 72 = linha de lista do WhatsApp) |
 | `examples` | **só** o classificador | em lugar nenhum — nunca entra no `render`, que é o bloco dos canais |
 
 Quatro consequências que sustentam a decisão:
@@ -509,6 +509,17 @@ Quatro consequências que sustentam a decisão:
 
 O que a ficha NÃO fez, e está nomeado: exibir a descrição ao cliente (`ORQ-15`) — a descrição ainda
 não viaja ao canal.
+
+> **Emenda de 2026-09-23 (ORQ-15 + ORQ-18) — duas plateias, então uma voz só.** A ORQ-15 levou a
+> `description` ao menu, e a medição achou a forma do demo escrevendo nela para o CLASSIFICADOR
+> (*"Só quando o cliente PEDE uma pessoa; nunca por assunto"*) — a instrução do `classificar`
+> convidava isso (*"e, quando escrito, quando NÃO usá-lo"*). Com uma leitora só não havia colisão;
+> com duas, o cliente passou a ler regra de roteamento. **Decisão do dono: a `description` fala
+> com o CLIENTE, sempre.** Regra de classificação mora no prompt do `classificar`, dita por
+> ESPÉCIE de destino (pedir uma pessoa · "nenhuma dessas" · pós-atendimento), nunca por caminho —
+> pela mesma razão do vocabulário vir da forma: caminho literal envelhece calado. A alternativa
+> (campo próprio do classificador, irmão de `examples`) ficou de fora: com três espécies de regra,
+> todas genéricas, um campo por folha seria uma casa a mais para o mesmo fato.
 
 ### D9 — o destino é série; o ERRO é derivado do que veio depois (ORQ-14, 2026-09-22)
 

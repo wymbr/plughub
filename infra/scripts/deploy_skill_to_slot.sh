@@ -88,7 +88,10 @@ if val is None:
     print("campo ausente no slot current:", field, "| resposta crua:", raw[:800],
           file=sys.stderr)
 else:
-    print(json.dumps(val))
+    # ensure_ascii=False: o default escapa todo nao-ASCII (ê), e ancora com
+    # acento dava AUSENTE sobre o flow NOVO — vermelho falso culpando o deploy
+    # (medido 2026-09-23, ORQ-18: current tinha o texto, o grep nao o via).
+    print(json.dumps(val, ensure_ascii=False))
 ' "$1" "$2"
 }
 

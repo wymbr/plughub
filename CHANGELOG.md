@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (2) — ORQ-18: a `description` fala com o CLIENTE, e a regra de classificação subiu ao prompt
+
+**O problema, aberto pela ORQ-15 horas antes.** Levar a `description` ao menu deu ao campo uma
+segunda plateia, e a forma do demo escrevia nele para a primeira: *"Só quando o cliente PEDE uma
+pessoa; nunca por assunto"*, *"Escape: só quando nenhum outro destino servir"*, e as três opções
+do pós-atendimento em terceira pessoa (*"Cliente não quer mais nada; encerrar o contato"*). Não
+foi descuido: a instrução do `classificar` convidava a regra negativa no campo (*"e, quando
+escrito, quando NÃO usá-lo"*).
+
+**Decisão do dono: opção (1).** A `description` é texto de cliente, sempre; a regra vai ao prompt.
+- **Forma** `dialog_navegacao_atendimento_v1`: 8 descrições reescritas no seed (substituição exata,
+  contada, ≤ 72) e publicadas como **v7** pelo dialog-api (`PUT` + `publish`), partindo do doc do
+  STORE — medido antes: os `nodes` vivos da v6 eram idênticos ao seed, então nada foi perdido. Depois:
+  `nodes` publicados == seed.
+- **Prompt** (`skill_navegacao_llm_v1.yaml`, `classificar`): `label` e `description` passam a ser
+  descritos como o que o CLIENTE lê, e três regras por ESPÉCIE de destino — pedir uma pessoa (só
+  quando pede, nunca pelo assunto) · "nenhuma dessas" (na dúvida, vazio) · pós-atendimento (assunto
+  novo → voltar ao menu; agradecimento → encerrar). **Nunca por caminho literal**, pela mesma razão
+  do vocabulário vir da forma: caminho no prompt envelhece calado. Promovido em `demo_llm_ia`
+  (único pool com o skill no `current`); `current` tem o texto novo, `previous` o antigo, config
+  preservada.
+- **Docs:** `CLAUDE.md` § Dialog (a regra de classificação nunca mora na `description`) e emenda na
+  D8 do `adr-orchestrator-tree-navigation.md`, com o porquê de não criar um campo só do classificador.
+
+**Verificação.** Gates verdes depois da publicação: `probe_orq15_option_description` (a tool viva
+já serve o texto novo — sem cache no caminho), `probe_orq13_clarify`, `probe_orchestrator_tree_nav`.
+Censo: 1 de 16 formas vivas tem `description` de opção — a exposição inteira era esta. Amostra do
+classificador (`/v1/reason` com as `instrucoes` do snapshot PROMOVIDO, 5 falas, uma rodada — **não
+é gate**, LLM não é determinístico): "sem sinal" → `sac.problema_tecnico`; "quero falar com uma
+pessoa" → `sac.especialista`; cobrança ambígua → vazio com 2 candidatos (esclarecimento);
+pós-atendimento "obrigado, era só isso" → `encerrar`; "agora a portabilidade" → `outra_coisa`.
+O efeito na taxa de re-roteamento só a lente da ORQ-16 vai dizer, com contato real.
+
+**Achado de passagem — o instrumento de deploy reprovava o flow CERTO.** O
+`deploy_skill_to_slot.sh` respondeu *"âncora AUSENTE — o promote teve sucesso sobre o flow
+ERRADO"* com o flow novo no `current`. Causa: o `slot_field` imprimia com `json.dumps` default, que
+escapa todo não-ASCII (`ê` → `ê`), então **qualquer âncora acentuada** dava vermelho —
+justamente o vermelho que manda desconfiar da feature. Hipótese descartada no caminho, com medição:
+o argumento cruzando PowerShell → `wsl.exe` chega com os bytes certos (`c3 aa`). Conserto:
+`ensure_ascii=False`, conferido extraindo a função do script e rodando-a sobre o slot vivo (âncora
+acentuada presente; texto antigo ausente do `current`), sem re-promover.
+
 ## 2026-09-23 (1) — ORQ-15: a segunda linha da opção chega ao cliente, ou o canal diz por que não
 
 **O que o dono pediu junto com a ORQ-12.** A `description` da folha já ia ao classificador; faltava

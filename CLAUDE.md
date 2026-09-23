@@ -1496,7 +1496,9 @@ o publicado num bloco `render`. Provisionamento `infra/dialog/*.json`, **seed-if
 - **`form` é um TIPO DE BLOCO, não um valor de `interaction`** — bloco é PROJEÇÃO sobre o `nodes[]`
   plano. A **dimensão VENCE** o form, e **campo NÃO é pergunta**.
 - **A folha declara SIGNIFICADO, e quem lê cada campo é diferente** (ORQ-12): `description` é texto
-  do CLIENTE (teto de 72, o da linha de lista do WhatsApp) e vai ao orquestrador com LLM;
+  do CLIENTE (teto de 72, o da linha de lista do WhatsApp) e vai ao orquestrador com LLM —
+  **e desde a ORQ-15 o cliente a LÊ no menu**, então regra de classificação (*"só quando o
+  cliente pede"*) nunca mora nela: vai ao prompt do `classificar` (ORQ-18);
   `examples` é lido **só** pelo classificador, **nunca é exibido** — não entra no `render`, que é o
   bloco dos canais — e **só existe em folha**. Roteamento continua fora: o mapa folha→pool é do
   POOL (D2). Ver [`docs/adr/adr-orchestrator-tree-navigation.md`](docs/adr/adr-orchestrator-tree-navigation.md) § D8.
