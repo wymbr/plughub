@@ -2,7 +2,8 @@
 performance_job.py
 Arc 7d — Agent performance batch job.
 
-Reads mv_agent_performance_daily from ClickHouse and writes normalised
+Reads `segments FINAL` from ClickHouse (APF-01 — never the retired
+mv_agent_performance_daily, which counted segment VERSIONS) and writes normalised
 performance scores to Redis for consumption by the routing-engine:
 
   Key:   {tenant_id}:agent_perf:{agent_type_id}
@@ -26,6 +27,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
+# TRF-01 — uma casa para "o que é transferência"; o score não pode divergir dos relatórios.
+from .reports_query import _ESCALATE_FAMILY_SQL, _IS_TRANSFER_SQL, _NOT_TRANSFER_SQL
+
 logger = logging.getLogger("plughub.analytics.performance_job")
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -34,21 +38,37 @@ PERF_KEY_TTL  = 6 * 3600   # 6 hours — routing-engine reads this; refresh ever
 LOOKBACK_DAYS = 7           # aggregate over the last 7 days
 MIN_SESSIONS  = 5           # minimum sessions required for statistical significance
 
-# Query reads directly from the AggregatingMergeTree MV to apply Merge aggregators
-# correctly across multiple (tenant, agent_type, pool, date) buckets.
+# APF-01 (2026-09-23) — lê `segments FINAL`, nunca mais a `mv_agent_performance_daily`.
+#
+# A MV era uma materialized view sobre `segments`, que é `ReplacingMergeTree`: ela
+# dispara a cada INSERT, e cada VERSÃO fechada de um segmento (fechamento + regravação
+# do wrap-up) entrava no estado agregado — o merge do RMT apaga versões na tabela,
+# nunca na MV. Medido: `retencao_humano` 600 × 382 segmentos reais, e as transferências
+# guardadas como `transferred`, a versão PLACEHOLDER que o wrap-up reescreveu. Este job
+# alimenta o score de ROTEAMENTO, então a contagem errada viraria decisão de alocação
+# no dia em que alguém ligasse `routing.performance_score_weight`.
+#
+# Três filtros que a MV não tinha, cada um com motivo:
+#   · `origin = 'live'` — importado/reavaliado (quality-ingest/export) é substrato de
+#     QUALIDADE; misturá-lo no score de produção rotearia pelo histórico de outra casa.
+#   · `agent_type != 'system'` — segmento sintético de admissão não é agente.
+#   · a regra da TRF-01 — transferência (`close_reason`) não é resolução nem escalação
+#     pelo `outcome`; aqui ela entra como ESCALAÇÃO, como na bancada, porque o score
+#     pune "não resolveu e passou adiante". Um fragmento só, importado de lá.
 _PERF_QUERY = """
 SELECT
     tenant_id,
     agent_type_id,
-    countMerge(total_sessions_state)                                              AS total_sessions,
-    countIfMerge(resolved_count_state)
-        / greatest(countMerge(total_sessions_state), 1)                           AS resolution_rate,
-    countIfMerge(escalated_count_state)
-        / greatest(countMerge(total_sessions_state), 1)                           AS escalation_rate
-FROM {db}.mv_agent_performance_daily
-WHERE period_date >= today() - {lookback}
+    count()                                                                     AS total_sessions,
+    countIf(outcome = 'resolved' AND {not_transfer}) / count()                  AS resolution_rate,
+    countIf(outcome IN {escalate_family} OR {is_transfer}) / count()            AS escalation_rate
+FROM {db}.segments FINAL
+WHERE ended_at IS NOT NULL
+  AND started_at >= today() - {lookback}
+  AND origin = 'live'
+  AND agent_type != 'system'
 GROUP BY tenant_id, agent_type_id
-HAVING countMerge(total_sessions_state) >= {min_sessions}
+HAVING count() >= {min_sessions}
 """
 
 
@@ -76,7 +96,7 @@ def compute_performance_score(
 
 async def run_performance_sync(store, redis) -> dict:
     """
-    Queries ClickHouse mv_agent_performance_daily and writes one Redis key
+    Queries ClickHouse `segments FINAL` and writes one Redis key
     per (tenant_id, agent_type_id).
 
     Uses asyncio.to_thread() so the synchronous ClickHouse client does not
@@ -88,9 +108,12 @@ async def run_performance_sync(store, redis) -> dict:
     errors  = 0
 
     query = _PERF_QUERY.format(
-        db           = store._database,
-        lookback     = LOOKBACK_DAYS,
-        min_sessions = MIN_SESSIONS,
+        db              = store._database,
+        lookback        = LOOKBACK_DAYS,
+        min_sessions    = MIN_SESSIONS,
+        is_transfer     = _IS_TRANSFER_SQL,
+        not_transfer    = _NOT_TRANSFER_SQL,
+        escalate_family = _ESCALATE_FAMILY_SQL,
     )
 
     try:

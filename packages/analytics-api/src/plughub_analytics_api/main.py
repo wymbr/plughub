@@ -126,7 +126,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ))
 
     # ── Performance sync (Arc 7d) ─────────────────────────────────────────────
-    # Reads v_agent_performance from ClickHouse every 5 min and writes
+    # Reads `segments FINAL` from ClickHouse every 5 min (APF-01) and writes
     # performance scores to Redis for consumption by the routing-engine.
     perf_task = supervisionar("performance-sync", asyncio.create_task(
         run_performance_job_loop(store, redis),

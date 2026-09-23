@@ -46,7 +46,25 @@ reais do Console tinham `outcome='resolved'`. Por isso:
 
 Uma casa: `_IS_TRANSFER_SQL` / `_NOT_TRANSFER_SQL` em `reports_query.py`. Gate:
 `infra/test/probe_trf01_transfer_marking.sh` (+ `mut_trf01_transfer_marking.sh`).
-⚠️ A `mv_agent_performance_daily` **não** segue esta regra — e tem defeito maior: ver `APF-01`.
+### MV sobre `segments` conta VERSÕES (APF-01, 2026-09-23)
+
+`segments` é `ReplacingMergeTree`: cada fechamento e cada regravação (o wrap-up) é um
+INSERT, e o merge funde as versões **na tabela**. Uma MATERIALIZED VIEW dispara a cada
+INSERT e **nunca** vê o merge — então agrega todas as versões. Medido contra
+`segments FINAL`: a `mv_agent_performance_daily` tinha `retencao_humano` 600 × 382 e
+guardava transferências na versão placeholder `transferred`.
+
+- **`mv_agent_performance_daily` e `v_agent_performance` foram APOSENTADAS** (DROP
+  idempotente em `_MIGRATIONS`; o `_migrate_row_version` não as recria). Leitor único
+  medido no `query_log` de 30 dias: o `performance_job`.
+- O **`performance_job`** (score de roteamento → `{t}:agent_perf:{agent_type_id}`) lê
+  `segments FINAL`, com `origin = 'live'`, sem `system`, e com a regra da TRF-01
+  (transferência conta como escalação). Gate: `probe_apf01_performance_source.sh`
+  (censo independente por `argMax(row_version)`) + `mut_apf01_performance_source.sh`.
+- ⚠️ **Não reviver agregado como MV sobre `segments`.** `POPULATE` não conserta: recriada,
+  ela volta a contar versões no próximo INSERT.
+- ⚠️ A `mv_segment_summary` (`/reports/sessions/complexity`) tem o MESMO defeito, e pior
+  (sem filtro de `ended_at`, conta também a versão de abertura): `APF-02`.
 
 ### Conference topology
 

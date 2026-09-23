@@ -9612,8 +9612,9 @@ async def _handle_webhook_session_resumed(
     #
     # `outcome` fica None DE PROPÓSITO. É tentador carimbar "resolved" — a tarefa foi
     # concluída — mas `outcome` é campo do domínio de CONTATO e alimenta o
-    # `resolved_count` da `mv_agent_performance_daily`, ou seja, a taxa de resolução do
-    # atendente. Um wrap-up preenchido não é um contato resolvido; contá-lo assim
+    # `resolved_count` dos relatórios de performance e o score de roteamento do
+    # `performance_job` (a MV que citava aqui saiu na APF-01), ou seja, a taxa de
+    # resolução do atendente. Um wrap-up preenchido não é um contato resolvido; contá-lo assim
     # inflaria a métrica com um número perfeitamente plausível. O que este ponto sabe é
     # COMO terminou, e isso vai em `close_reason`.
     if _claimant_instance_id:

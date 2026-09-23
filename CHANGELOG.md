@@ -1,5 +1,60 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (4) — APF-01: o score de roteamento conta SEGMENTOS, e a MV que contava versões saiu
+
+**O defeito, achado pela TRF-01.** A `mv_agent_performance_daily` era uma MATERIALIZED VIEW
+sobre `segments`, que é `ReplacingMergeTree`. Uma MV dispara a cada INSERT; o merge do RMT funde
+as versões na TABELA e nunca na MV. Cada segmento fechado entra ao menos duas vezes (fechamento +
+regravação do wrap-up). Medido contra `segments FINAL`: `retencao_humano` **600 × 382**, `sac_ia`
+**327 × 240**, `fila_humano` 70 × 59 — e as transferências na versão placeholder `transferred`.
+
+**Quem a lia.** Medido no `system.query_log` de 30 dias: **só o `performance_job`** (4 624 SELECTs),
+que grava `{t}:agent_perf:{agent_type_id}` para o score de roteamento por performance. O endpoint
+`/reports/agent-performance/daily` já lia `segments FINAL` desde a C1b-B — a docstring dele (que é
+a descrição da rota no OpenAPI) ainda dizia que lia a MV.
+
+**O que passou a ser verdade.**
+- `performance_job._PERF_QUERY` lê `segments FINAL`, com três filtros que a MV não tinha:
+  `origin = 'live'` (importado/reavaliado é substrato de qualidade, não de produção),
+  `agent_type != 'system'` (admissão sintética — a MV gerava uma chave `agent_perf:system`) e a
+  regra da TRF-01, importada de `reports_query` (uma casa): transferência não resolve e conta como
+  escalação; a família de escalação passa a incluir `escalated_human`/`escalated_ai`, que a MV
+  ignorava.
+- `mv_agent_performance_daily` e `v_agent_performance`: **DROP idempotente** em `_MIGRATIONS`
+  (view antes da MV), fora do `_ALL_DDL` e fora dos `dependent_views` do `_migrate_row_version`,
+  que a recriaria no `finally`. Os dados eram derivados; a fonte (`segments`) não foi tocada.
+- Docstrings e comentários que descreviam a MV como fonte corrigidos (`reports.py`,
+  `reports_query.py`, `main.py`, `test_reports.py`, e o comentário do bridge que justificava
+  `outcome=None` por ela — só texto, bridge não rebuildado).
+
+**Efeito medido nos scores** (fotografia das 24 chaves antes, rodada do job depois): 23 gravadas
+(a `system` não é mais produzida; a antiga expira pelo TTL de 6 h), **5 mudaram** —
+`human_agent_retencao_humano` 0,7656 → 0,6053, `skill_atendimento_sac_v1` 0,5 → 0,4375,
+`skill_auth_form_v1` 0,2727 → 0,0744, `skill_intake_runner_v1` 0,4 → 0,16,
+`skill_navegacao_llm_v1` 0,1538 → 0,0414. **Dano no roteamento: zero** —
+`routing.performance_score_weight` vivo é `0.0`.
+
+**Instrumentos.** Unitários: o SQL executado lê `segments FINAL` com os três filtros; o schema
+nunca recria a MV (nem `_ALL_DDL`, nem `dependent_views`) e a derruba nas migrações — 834/834.
+Gate **`probe_apf01_performance_source.sh`** (AUTO): A MV e view ausentes · B o **conjunto** de
+chaves e o score do job == um censo **independente**, que deduplica por `argMax(…, row_version)`
+na tabela CRUA em vez de `FINAL` (23 = 23) · C a query do JOB não produz score para os ids de
+admissão. Bateria **`mut_apf01_performance_source.sh`**: `system` de volta ao score · família de
+escalação encolhida — **as duas pegas**. ⚠️ **O que ela declara não medir:** job sem `FINAL`,
+filtro de `origin` e regra da transferência não têm população na janela de 7 dias (0 versões não
+fundidas, 0 linhas não-live, 0 transferências) — mutação sem população fica verde e pareceria
+proteção. Esses três são guardados pelo unitário sobre o SQL.
+
+Um erro meu no caminho: a primeira versão do ramo C conferia o CENSO, que exclui `system` por
+construção — era tautológica. Reescrita sobre as linhas que a query do job devolve.
+
+**Achado, com ficha — `APF-02`:** a `mv_segment_summary` (`/reports/sessions/complexity`) tem o
+mesmo defeito, e pior — sem filtro de `ended_at`, agrega também a versão de abertura:
+`segment_count` **8 094 × 4 406**, 1 889 de 2 220 sessões divergentes. Outro leitor e outro
+relatório, então não foi consertada junto sem pedido.
+
+Deixou ficha: `APF-02`.
+
 ## 2026-09-23 (3) — TRF-01: a transferência se conta pelo TRANSPORTE, e a resolução deixou de incluí-la
 
 **Decisão do dono.** A marcação de transferência é `close_reason = 'agent_transfer'` — fato do

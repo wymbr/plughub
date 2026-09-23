@@ -17,12 +17,12 @@ Tables, all in database `plughub`:
 
 Materialized views (AggregatingMergeTree — incremental, POPULATE on creation):
 
-  mv_agent_performance_daily — pre-aggregated daily stats per (agent_type_id, pool_id)
   mv_segment_summary         — pre-aggregated participation stats per session_id
+                               ⚠️ counts segment VERSIONS, not segments (APF-02)
+  (mv_agent_performance_daily — RETIRED by APF-01, 2026-09-23: see _DDL_AGENT_PERFORMANCE_DROP)
 
 Readable views (regular SQL views over the MVs — always up-to-date):
 
-  v_agent_performance — resolution_rate, escalation_rate, avg_duration_ms per agent_type/pool/day
   v_segment_summary   — segment_count, handoff_count, escalations per session
 
 Design decisions:
@@ -957,55 +957,25 @@ ALTER TABLE {db}.pool_occupancy_peaks
     ADD COLUMN IF NOT EXISTS admitted_peak Int32 DEFAULT 0 AFTER provisioned_capacity
 """
 
-# ── Arc 5: mv_agent_performance_daily — AggregatingMergeTree MV over segments.
-# Captures a row per (tenant_id, agent_type_id, pool_id, period_date) on every INSERT.
-# Uses State/Merge aggregating functions so partial results compose correctly.
-# POPULATE backfills existing segments rows on first creation.
-_DDL_MV_AGENT_PERFORMANCE = """
-CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.mv_agent_performance_daily
-ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(period_date)
-ORDER BY (tenant_id, agent_type_id, pool_id, period_date)
-POPULATE
-AS SELECT
-    tenant_id,
-    agent_type_id,
-    pool_id,
-    toDate(started_at)                                    AS period_date,
-    countState()                                          AS total_sessions_state,
-    avgState(assumeNotNull(duration_ms))                  AS avg_duration_ms_state,
-    countIfState(outcome = 'resolved')                    AS resolved_count_state,
-    countIfState(outcome = 'escalated')                   AS escalated_count_state,
-    countIfState(outcome = 'transferred')                 AS transferred_count_state,
-    countIfState(agent_type = 'human')                    AS human_sessions_state
-FROM {db}.segments
-WHERE ended_at IS NOT NULL
-GROUP BY tenant_id, agent_type_id, pool_id, toDate(started_at)
-"""
-
-# Readable SQL view over mv_agent_performance_daily.
-# resolution_rate and escalation_rate are ratios computed with Merge aggregators.
-# Use greatest(..., 1) to avoid division by zero on empty buckets.
-_DDL_V_AGENT_PERFORMANCE = """
-CREATE VIEW IF NOT EXISTS {db}.v_agent_performance AS
-SELECT
-    tenant_id,
-    agent_type_id,
-    pool_id,
-    period_date,
-    countMerge(total_sessions_state)                                              AS total_sessions,
-    round(avgMerge(avg_duration_ms_state), 0)                                     AS avg_duration_ms,
-    countIfMerge(resolved_count_state)
-        / greatest(countMerge(total_sessions_state), 1)                           AS resolution_rate,
-    countIfMerge(escalated_count_state)
-        / greatest(countMerge(total_sessions_state), 1)                           AS escalation_rate,
-    countIfMerge(transferred_count_state)
-        / greatest(countMerge(total_sessions_state), 1)                           AS transfer_rate,
-    countIfMerge(human_sessions_state)
-        / greatest(countMerge(total_sessions_state), 1)                           AS human_rate
-FROM {db}.mv_agent_performance_daily
-GROUP BY tenant_id, agent_type_id, pool_id, period_date
-"""
+# ── Arc 5: mv_agent_performance_daily + v_agent_performance — APOSENTADAS (APF-01, 2026-09-23).
+#
+# Era uma MATERIALIZED VIEW sobre `segments`, que é ReplacingMergeTree. Uma MV dispara a
+# cada INSERT, e o merge do RMT apaga as versões antigas na TABELA, nunca na MV — então
+# cada versão fechada de um segmento (fechamento + regravação do wrap-up) entrava no
+# estado agregado. Medido contra `segments FINAL`: `retencao_humano` 600 × 382, `sac_ia`
+# 327 × 240; e as transferências guardadas como `transferred`, a versão PLACEHOLDER que
+# o wrap-up reescreveu. Nenhum `POPULATE` conserta isso: recriada, ela voltaria a contar
+# versões a partir do próximo INSERT.
+#
+# Leitores, medidos no `system.query_log` de 30 dias: só o `performance_job` (4 624
+# SELECTs). Ele passou a ler `segments FINAL`; o endpoint diário já lia desde a C1b-B.
+# Os dados eram DERIVADOS (a fonte é `segments`), então o DROP não perde fato nenhum.
+# Ordem: a view depende da MV.
+#
+# ⚠️ Não reviver como MV sobre `segments`. Agregado pré-computado sobre RMT precisa de
+# outro desenho (refresh periódico com FINAL, ou agregação no consumidor com id).
+_DDL_AGENT_PERFORMANCE_DROP_VIEW = "DROP VIEW IF EXISTS {db}.v_agent_performance"
+_DDL_AGENT_PERFORMANCE_DROP_MV   = "DROP TABLE IF EXISTS {db}.mv_agent_performance_daily"
 
 # ── Arc 5: mv_segment_summary — AggregatingMergeTree MV over segments per session.
 # Captures a row per (tenant_id, session_id) on every INSERT into segments.
@@ -1338,8 +1308,7 @@ _ALL_DDL = [
     _DDL_CALL_INTERVALS,              # WCH-02
     # Materialized views — must come AFTER the source tables they reference.
     # AggregatingMergeTree with POPULATE backfills existing data on first creation.
-    _DDL_MV_AGENT_PERFORMANCE,
-    _DDL_V_AGENT_PERFORMANCE,
+    # (mv_agent_performance_daily / v_agent_performance: aposentadas pela APF-01.)
     _DDL_MV_SEGMENT_SUMMARY,
     _DDL_V_SEGMENT_SUMMARY,
 ]
@@ -1378,6 +1347,9 @@ _MIGRATIONS = [
     _DDL_AGENT_BUSINESS_EVENTS_MIGRATE_SEGMENT,
     _DDL_SPEECH_STREAM_MIGRATE_PROFILE,   # VOZ-25: perfil de fala em vigor + modelo usado
     _DDL_SPEECH_COLLECT_MIGRATE_PROFILE,
+    # APF-01: a MV de performance contava VERSÕES de segmento — sai, view primeiro.
+    _DDL_AGENT_PERFORMANCE_DROP_VIEW,
+    _DDL_AGENT_PERFORMANCE_DROP_MV,
 ]
 
 
@@ -1469,7 +1441,7 @@ class AnalyticsStore:
             # relatório de complexidade congelariam sem erro). `sessions` não tem MV
             # dependente, e é por isso que a migração original pôde ignorar o ponto.
             dependent_views=[
-                ("mv_agent_performance_daily", _DDL_MV_AGENT_PERFORMANCE),
+                # (mv_agent_performance_daily saiu — APF-01; recriá-la aqui a reviveria)
                 ("mv_segment_summary",         _DDL_MV_SEGMENT_SUMMARY),
             ],
         )

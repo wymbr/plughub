@@ -5665,7 +5665,7 @@ def _fetch_agents_cross(
     return {"data": out, "meta": {"from_dt": since, "to_dt": until, "agents": len(out)}}
 
 
-# ─── /reports/agent-performance/daily (Arc 5 MV — v_agent_performance) ──────
+# ─── /reports/agent-performance/daily (segments FINAL — C1b-B) ───────────────
 
 async def query_agent_performance_daily(
     client:    Any,
@@ -5681,10 +5681,11 @@ async def query_agent_performance_daily(
     origin:                 "str | list[str]" = "live",
 ) -> dict:
     """
-    Returns daily pre-aggregated performance metrics from the mv_agent_performance_daily
-    AggregatingMergeTree, exposed via the v_agent_performance readable view.
+    Returns daily performance metrics computed from `segments FINAL` (C1b-B). The
+    former source, `mv_agent_performance_daily`, was retired by APF-01 — it counted
+    segment VERSIONS, not segments.
 
-    One row per (agent_type_id, pool_id, period_date) — no pagination needed since
+    One row per (agent_key, pool_id, period_date) — no pagination needed since
     the cardinality is bounded by (agent_types × pools × days).
 
     Metrics per row:
@@ -5696,8 +5697,6 @@ async def query_agent_performance_daily(
                            the transport marks it; outcome is the wrap-up disposition)
       human_rate         — fraction of human-agent sessions
 
-    More efficient than querying segments FINAL because the MV is pre-aggregated
-    incrementally; ideal for dashboard trend charts and the Arc 7d performance job.
     """
     since_date = _ch_fmt(from_dt)[:10] if from_dt else _default_from()[:10]
     until_date = _ch_fmt(to_dt)[:10]   if to_dt   else _default_to()[:10]
@@ -5753,8 +5752,8 @@ def _fetch_agent_performance_daily(
     # C1b-B — daily trend by identity (humans by user_id, AI by flow_id), computed
     # straight from segments so the Human/AI tabs each see their own agents and
     # `agent_type` is available for client-side filtering. The legacy
-    # mv_agent_performance_daily / v_agent_performance are keyed by the synthetic
-    # agent_type_id and collapse every human into human_agent_{pool}.
+    # mv_agent_performance_daily / v_agent_performance (retired by APF-01) were keyed
+    # by the synthetic agent_type_id and collapsed every human into human_agent_{pool}.
     result = client.query(f"""
         SELECT
             agent_key,

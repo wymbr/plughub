@@ -499,3 +499,11 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 |---|---|---|---|
 | TRF-02 | **`outcome='suspended'` tem DOIS escritores, e o discriminador é o `issue_status`.** A ficha dizia "contradição com `close_reason='agent_hangup'`" e estava ERRADA: `pendente→suspended` é mapa deliberado do wrap-up. O que existia era o engine (990 segmentos, `issue_status` vazio) e a disposição humana (2) no mesmo valor — com um único leitor prejudicado, a cadeia da ORQ-14, agora guardada por `empty(coalesce(pai.issue_status,''))` | 2026-09-22 | `CHANGELOG.md` § 2026-09-22 (15) |
 | TRF-01 | **A transferência se conta pelo TRANSPORTE.** Decisão do dono: `close_reason = 'agent_transfer'` (NULL-safe, `coalesce`) marca a transferência nos leitores de relatório — `transfer_rate`, `transferred_count`, e a família *escalação* da bancada (de onde `'transferred'` saiu); os contadores de desfecho a excluem. `outcome` fica com a disposição, intocado. Gate ao vivo contra o ClickHouse + 3 mutações (inclui a armadilha do NULL). A MV ficou de fora por defeito maior: `APF-01` | 2026-09-23 | `CHANGELOG.md` § 2026-09-23 (3) |
+
+---
+
+## `docs/arcos/arc5-segments.md` — segmentos e performance por agente
+
+| id | tarefa | data | ancora |
+|---|---|---|---|
+| APF-01 | **O score de roteamento conta SEGMENTOS, e a MV que contava versões saiu.** O `performance_job` lê `segments FINAL` (`origin='live'`, sem `system`, com a regra da TRF-01); `mv_agent_performance_daily` + `v_agent_performance` sofreram DROP idempotente (leitor único medido no `query_log`: o job) e não voltam pelo `_migrate_row_version`. Scores recalculados: 5 de 23 mudaram (`retencao_humano` 0,77 → 0,61). Gate com censo independente por `argMax(row_version)` + 2 mutações; o que a janela não tem população para reprovar ficou declarado. Deixou ficha: APF-02 | 2026-09-23 | `CHANGELOG.md` § 2026-09-23 (4) |

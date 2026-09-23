@@ -2331,11 +2331,11 @@ class TestQueryContactInsightsReport:
         assert "error" in result
 
 
-# ─── query_agent_performance_daily (Arc 5 MV — v_agent_performance) ──────────
+# ─── query_agent_performance_daily (segments FINAL — C1b-B) ──────────────────
 
 @pytest.mark.asyncio
 class TestQueryAgentPerformanceDaily:
-    """Tests for the daily MV-backed performance endpoint (v_agent_performance view)."""
+    """Tests for the daily performance endpoint (segments FINAL; the MV was retired by APF-01)."""
 
     _COLS = [
         "agent_type_id", "pool_id", "period_date",

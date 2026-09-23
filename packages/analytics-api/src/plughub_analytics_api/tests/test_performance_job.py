@@ -133,6 +133,34 @@ class TestRunPerformanceSync:
         assert float(value) == pytest.approx(1.0, abs=1e-4)
 
     @pytest.mark.asyncio
+    async def test_reads_segments_final_not_the_mv_APF01(self):
+        """APF-01: o score sai de `segments FINAL`, nunca da MV que contava versões."""
+        store = self._make_store([])
+        await run_performance_sync(store, self._make_redis())
+        sql = store.new_client.return_value.query.call_args[0][0]
+        assert "FROM analytics.segments FINAL" in sql
+        assert "mv_agent_performance_daily" not in sql
+        assert "origin = 'live'" in sql            # quality-ingest/export fora do score de produção
+        assert "agent_type != 'system'" in sql     # admissão sintética não é agente
+        # TRF-01: a transferência (transporte) não resolve e conta como escalação
+        assert "countIf(outcome = 'resolved' AND NOT (coalesce(close_reason, '') = 'agent_transfer'))" in sql
+        assert "OR coalesce(close_reason, '') = 'agent_transfer'" in sql
+        assert "'transferred'" not in sql
+
+    def test_schema_never_recreates_the_mv_APF01(self):
+        """O bootstrap não pode reviver a MV: nem no _ALL_DDL, nem como view dependente
+        da migração de row_version (que a recriaria no `finally`), e ela sai nas migrações."""
+        import inspect
+        from plughub_analytics_api import clickhouse as ch
+        assert not any("mv_agent_performance_daily" in d and "CREATE" in d for d in ch._ALL_DDL)
+        assert not any("v_agent_performance" in d and "CREATE" in d for d in ch._ALL_DDL)
+        drops = [d for d in ch._MIGRATIONS if "agent_performance" in d]
+        assert drops == [ch._DDL_AGENT_PERFORMANCE_DROP_VIEW, ch._DDL_AGENT_PERFORMANCE_DROP_MV]
+        assert "DROP VIEW IF EXISTS {db}.v_agent_performance" in drops[0]   # a view antes da MV
+        src = inspect.getsource(ch.AnalyticsStore.ensure_schema)
+        assert '("mv_agent_performance_daily"' not in src
+
+    @pytest.mark.asyncio
     async def test_clickhouse_error_returns_error_count(self):
         """When ClickHouse raises, returns updated=0, errors=1."""
         store = MagicMock()

@@ -1316,7 +1316,7 @@ async def report_timeseries_score(
     return JSONResponse(content=data, status_code=503 if data.get("error") else 200)
 
 
-# ─── /reports/agent-performance/daily (Arc 5 MV — v_agent_performance) ──────
+# ─── /reports/agent-performance/daily (segments FINAL — C1b-B) ───────────────
 
 @router.get("/agent-performance/daily")
 async def get_agent_performance_daily(
@@ -1331,12 +1331,14 @@ async def get_agent_performance_daily(
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
-    Daily pre-aggregated performance metrics from the mv_agent_performance_daily
-    materialized view (AggregatingMergeTree), read via the v_agent_performance
-    readable SQL view.
+    Daily performance metrics computed from `segments FINAL` (C1b-B), one row per
+    (agent, pool, period_date) — humans by user_id, AI by flow_id. Suitable for
+    trend charts and time-series dashboards.
 
-    One row per (agent_type_id, pool_id, period_date). Suitable for trend charts
-    and time-series dashboards — much faster than querying segments FINAL.
+    Transfers are read from `close_reason = 'agent_transfer'` and excluded from the
+    resolution/escalation rates (TRF-01). The former source, the
+    `mv_agent_performance_daily` materialized view, was retired (APF-01): it
+    counted segment VERSIONS, not segments.
 
     Columns:
       agent_type_id, pool_id, period_date,
