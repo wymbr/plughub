@@ -32,6 +32,21 @@ LOG="$LOG_DIR/up-$(date +%Y%m%d-%H%M%S).log"
 mkdir -p "$LOG_DIR"
 cd "$REPO_ROOT"
 
+# BOO-01 (2026-09-23): UMA subida por vez. A tarefa de logon (`up-at-login.sh`) e a
+# chamada manual podem coincidir, e dois `up -d` concorrentes disputam o mesmo
+# container (recreate × start) — o modo de falha que deixou o agent-registry morto
+# em 2026-09-23. A segunda chamada ESPERA a primeira e então reconcilia de novo,
+# o que é barato com a stack de pé. O lock é do kernel: morre com o processo.
+exec 9>"$LOG_DIR/.up.lock"
+if ! flock -n 9; then
+  echo "⏳ outro up.sh está rodando (manual ou a tarefa de logon) — esperando ele terminar…"
+  if ! flock -w "${UP_LOCK_WAIT_S:-1200}" 9; then
+    echo "⚠️  INCONCLUSIVO: o outro up.sh não terminou em ${UP_LOCK_WAIT_S:-1200}s."
+    echo "   ps -ef | grep up.sh   ·   logs em $LOG_DIR"
+    exit 2
+  fi
+fi
+
 if [ "${1:-}" = "--pull" ]; then
   echo "── pull das imagens de infra ──────────────────────────────────────"
   "${COMPOSE[@]}" pull --ignore-buildable 2>&1 | tee -a "$LOG"

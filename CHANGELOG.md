@@ -1,5 +1,42 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (8) — BOO-01: a stack sobe sozinha depois de reiniciar a máquina, pelo mesmo `up.sh`
+
+**O problema, medido hoje** (`TODO.md` § *Subida automática falhou uma vez* → Reincidência de
+2026-09-23). Depois de reiniciar, nada voltava: o Docker Desktop tem AutoStart desligado, e mesmo
+aberto o dockerd só religa pela política de restart — 24 containers sem política (toda a base) e
+28 `on-failure`, que não religam depois de uma saída limpa. Religar pelo daemon ou por
+`compose start` ignora `depends_on`/health, e foi assim que o `agent-registry` morreu às 12:47.
+
+**Decisão do dono: opção (b)** — subir pelo `up.sh` no logon, mantendo a ordem do compose. As
+outras duas ficaram de fora: `restart: unless-stopped` religaria fora de ordem e exigiria que cada
+serviço tentasse de novo até a dependência subir; só documentar o passo manual não resolvia. O
+passo manual continua valendo a qualquer hora.
+
+**O que mudou:**
+- **`infra/scripts/up-at-login.sh`** (novo): espera o Docker Engine responder (`docker info`, até
+  `UP_AT_LOGIN_WAIT_S`, padrão 1 800 s) e chama o `up.sh`. Não abre o Docker Desktop — o AutoStart
+  é configuração do dono; abrir o Docker dentro do prazo basta. Esgotado o prazo, sai 4 e o log diz
+  por quê. Log em `.logs/up-at-login-*.log`.
+- **`infra/scripts/windows/register-up-at-login.ps1`** (novo): registra a tarefa agendada
+  *"PlugHub - subir a stack demo no logon"* (logon do usuário + 1 min, `conhost --headless` para não
+  abrir janela, sem privilégio elevado) e a remove com `-Unregister`. Deduz distro e caminho do
+  próprio local (`\\wsl.localhost\<distro>\...`). Salvo com BOM: o Windows PowerShell 5.1 lê UTF-8
+  sem BOM como ANSI.
+- **`up.sh` ganhou trava** (`flock` em `.logs/.up.lock`, no `.gitignore`): a subida manual e a
+  automática podem coincidir, e dois `up -d` concorrentes disputam o mesmo container. A segunda
+  chamada espera a primeira (até `UP_LOCK_WAIT_S`, padrão 1 200 s) e reconcilia de novo.
+- A tarefa foi **registrada nesta máquina** (`WYM-GALAXYBOOK4\wymbr`).
+
+**Prova.**
+- Trava tomada por outro processo: o `up.sh` espera, sai 2 (INCONCLUSIVO) e **não** roda o `up -d`.
+- Docker inalcançável (`DOCKER_HOST` apontado para socket inexistente, prazo de 5 s): o
+  `up-at-login.sh` sai 4 com a mensagem que manda abrir o Docker Desktop.
+- Caminho feliz, na mão e pela tarefa disparada com `Start-ScheduledTask`: `LastTaskResult 0` e
+  `✅ Stack no ar` no log da própria tarefa.
+- **Não testado:** um reinício real da máquina. O primeiro logon depois de reiniciar é a prova que
+  falta; o log a registra em `.logs/up-at-login-*.log`.
+
 ## 2026-09-23 (7) — GAT-06: o `up.sh` deixou de reprovar toda subida correta por causa do `sip-seed`
 
 **O defeito.** A GAT-05 fez o `up.sh` julgar one-shot pelo exit code, com a classificação derivada

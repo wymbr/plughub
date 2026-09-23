@@ -35,6 +35,8 @@ scripts/linux/set-env.local.sh
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
+# BOO-01: trava do infra/scripts/up.sh (uma subida por vez)
+.logs/.up.lock
 logs/
 pm2-logs/
 .pm2/

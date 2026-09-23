@@ -7923,7 +7923,8 @@ antes do `up.sh`. **Duas quedas distintas no mesmo dia, e nenhuma é corrida de 
 A hipótese de 2026-08-12 (*"botão Start do Docker Desktop, que inicia e não reconcilia"*) fica
 **provada por mecanismo** na queda 2, com o `compose start` no lugar do botão. `up.sh` completo
 reconciliou tudo (e só acusou o `sip-seed`, falso positivo — `GAT-06`). O que fazer da volta
-automática depois de reiniciar: `BOO-01`.
+automática depois de reiniciar: `BOO-01` — **fechada em 2026-09-23 pela opção (b)**: tarefa de logon
+que espera o Docker e roda o `up.sh` (CHANGELOG § 2026-09-23 (8)).
 
 ---
 
