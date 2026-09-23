@@ -112,12 +112,22 @@ Dois erros de instrumento do mesmo dia, da mesma família — o instrumento medi
 
 ### 2g. `ioredis-mock` compartilha dados entre instâncias (2026-09-21, MEN-08; 2026-09-23, ORQ-19)
 
-Instâncias diferentes de `ioredis-mock` no mesmo processo de teste enxergam o mesmo dado. Na
-MEN-08 o teste novo achou isso e passou a limpar no `beforeEach`. Na ORQ-19
-(`menu-option-description.test.ts`) o `[0]` do stream era o menu de um teste anterior, e a
-asserção passou a ler `.at(-1)`, com o comentário explicando por quê. Um teste que lê o `[0]`
-pode ficar verde ou vermelho pelo teste vizinho, não pelo produto. Ver `CHANGELOG.md`
-§ 2026-09-21 (6) e commit `0e1f6277`.
+Instâncias diferentes de `ioredis-mock` no mesmo processo de teste enxergam o mesmo dado:
+`new RedisMock()` cria um cliente novo sobre o mesmo armazenamento. Um teste que lê o `[0]`
+pode ficar verde ou vermelho pelo teste vizinho, não pelo produto — e só "às vezes": rodado
+sozinho (`-t`, `.only`) ou primeiro do arquivo, ele acha o stream vazio e passa.
+
+Duas respostas foram dadas, e só uma é certa:
+- **MEN-08** (`escalate-conductor.test.ts:38`): `await redis.flushall()` no `beforeEach`. O
+  vazamento deixa de existir.
+- **ORQ-19** (`menu-option-description.test.ts`): a asserção passou a ler `.at(-1)`. Isso
+  **esconde** o vazamento em vez de removê-lo — o teste passa com o stream sujo e não prova
+  que houve UMA entrada. ⚠️ Esta seção recomendou `.at(-1)` na primeira versão (2026-09-23);
+  a sessão B da DEN-01 respondeu à pergunta sem a skill e apontou o erro. Conserto do teste:
+  ficha `ORQ-20`.
+
+Regra: limpe o armazenamento e asserte o tamanho (`toHaveLength(1)`) antes de ler a entrada,
+para que um vazamento fique vermelho. Ver `CHANGELOG.md` § 2026-09-21 (6) e commit `0e1f6277`.
 
 ---
 

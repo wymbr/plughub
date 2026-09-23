@@ -1,6 +1,6 @@
 ---
 name: testing-pattern
-description: Método de teste do PlugHub — como desenhar, falsear, rodar e registrar testes, probes e gates sem produzir verde que não pode reprovar. Use ao escrever ou revisar teste (pytest, vitest, jest), probe ou gate em infra/test/ (probe_*, gate_*, mut_*, smoke_*), bateria de mutação, gates.manifest ou run_gates.sh; ao mockar (MagicMock, vi.fn, patch); ao testar código asyncio (ensure_future, tasks); ao rodar suíte Python dentro de container Docker; ao interpretar um resultado verde, vermelho, skipped ou INCONCLUSIVO; e ao validar stack depois de rebuild, wipe ou up -d.
+description: Método de teste do PlugHub — como desenhar, falsear, rodar e registrar testes, probes e gates sem produzir verde que não pode reprovar. Use ao escrever ou revisar teste (pytest, vitest, jest), probe ou gate em infra/test/ (probe_*, gate_*, mut_*, smoke_*), bateria de mutação, gates.manifest ou run_gates.sh; ao mockar (MagicMock, vi.fn, patch, ioredis-mock, RedisMock); ao investigar teste instável (flaky) ou que lê dado de outro teste; ao testar código asyncio (ensure_future, tasks); ao rodar suíte Python dentro de container Docker; ao interpretar um resultado verde, vermelho, skipped ou INCONCLUSIVO; e ao validar stack depois de rebuild, wipe ou up -d.
 ---
 
 # testing-pattern — o teste tem de poder reprovar
@@ -90,9 +90,10 @@ Gate que decide cobertura, autorização ou contrato ganha um **`mut_<gate>.sh`*
   helper com `asyncio.all_tasks` varre as tasks do chamador também.
 - Guarda sobre valor decodificado: `if not x`, nunca `is None` — os decoders do repo devolvem
   `""`. O teste do ramo de ausência tem de usar o valor que a FONTE produz.
-- **`ioredis-mock` compartilha dados entre instâncias**: o `[0]` de um stream pode ser o de
-  outro teste. Leia a última entrada (`.at(-1)`), use chave única por teste ou limpe no
-  `beforeEach` (§2g).
+- **`ioredis-mock` compartilha dados entre instâncias**: `new RedisMock()` não dá Redis vazio,
+  e o `[0]` de um stream pode ser o de outro teste. **`await redis.flushall()` no
+  `beforeEach`** e **`toHaveLength(n)` antes de ler a entrada**, para o vazamento ficar
+  vermelho. Ler `.at(-1)` esconde o vazamento — o teste passa sem provar nada (§2g).
 
 ## 5. Rodar
 

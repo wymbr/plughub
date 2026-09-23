@@ -1,6 +1,6 @@
 ---
 name: data-engineering
-description: Método de dados do PlugHub — ClickHouse, Kafka e fatos derivados. Use ao criar ou alterar tabela, coluna, DDL ou migração ClickHouse (ReplacingMergeTree, row_version, ORDER BY, materialized view, _MIGRATIONS em analytics-api/clickhouse.py); ao escrever query de relatório (FINAL, any(), alias, agregação); ao criar ou mexer em produtor ou consumidor Kafka (publish, key, partição, tópico novo, schema Zod de evento); ao gerar id determinístico (uuid5); ao carimbar fato em segmento/sessão/journey; ao consultar ClickHouse ao vivo; e ao investigar linha ausente, duplicada ou sobrescrita em analytics.
+description: Método de dados do PlugHub — ClickHouse, Kafka e fatos derivados. Use ao criar ou alterar tabela, coluna, DDL ou migração ClickHouse (ReplacingMergeTree, AggregatingMergeTree, SummingMergeTree, row_version, ORDER BY, materialized view ou MV sobre segments/sessions, POPULATE, _MIGRATIONS em analytics-api/clickhouse.py); ao escrever ou conferir query de relatório (FINAL, any(), alias, agregação, countIf/sumIf, coluna Nullable, NULL, coalesce/ifNull, close_reason, transferência); ao criar ou mexer em produtor ou consumidor Kafka (publish, key, partição, tópico novo, schema Zod de evento); ao gerar id determinístico (uuid5); ao carimbar fato em segmento/sessão/journey; ao consultar ClickHouse ao vivo; e ao investigar linha ausente, duplicada ou sobrescrita em analytics.
 ---
 
 # data-engineering — a linha que sobrevive é a que você decidiu
