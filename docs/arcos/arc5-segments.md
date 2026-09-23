@@ -63,8 +63,18 @@ guardava transferências na versão placeholder `transferred`.
   (censo independente por `argMax(row_version)`) + `mut_apf01_performance_source.sh`.
 - ⚠️ **Não reviver agregado como MV sobre `segments`.** `POPULATE` não conserta: recriada,
   ela volta a contar versões no próximo INSERT.
-- ⚠️ A `mv_segment_summary` (`/reports/sessions/complexity`) tem o MESMO defeito, e pior
-  (sem filtro de `ended_at`, conta também a versão de abertura): `APF-02`.
+- **`mv_segment_summary` e `v_segment_summary` também foram APOSENTADAS (APF-02,
+  2026-09-23).** Mesmo defeito, e pior: sem filtro de `ended_at`, agregava também a versão
+  de abertura (`segment_count` 8 371 × 4 406). Leitor no `query_log` (2026-08-10 →
+  2026-09-23): nenhum além de uma medição manual. O único leitor no código,
+  `/reports/sessions/complexity`, **nunca respondeu**: a subquery de sessões qualificava
+  `s.` sem declarar o alias e o ClickHouse recusava (code 47), que o wrapper convertia em
+  `data_unavailable`. Hoje ele agrega `segments FINAL` por sessão, com a regra da TRF-01
+  nos desfechos e a coluna nova `transferred_count`. Gate:
+  `probe_apf02_session_complexity.sh` (censo por `argMax(row_version)`, 9 contagens por
+  sessão) + `mut_apf02_session_complexity.sh`.
+- Não há mais nenhuma MV no analytics. Se uma voltar a ler `FROM segments`, ela tem de
+  entrar nos `dependent_views` do `_migrate_row_version` — e contaria versões.
 
 ### Conference topology
 
@@ -116,10 +126,9 @@ PARTITION BY toYYYYMM(started_at)
 
 ### Materialized views
 
-| View | Engine | Purpose |
-|---|---|---|
-| `mv_agent_performance_daily` | AggregatingMergeTree | `resolution_rate`, `escalation_rate`, `avg_duration_ms` per `agent_type` × `pool_id` × day |
-| `mv_segment_summary` | AggregatingMergeTree | Segment count, avg duration, outcome distribution per pool |
+Nenhuma. As duas que existiam (`mv_agent_performance_daily`, `mv_segment_summary`) liam
+`segments` e contavam versões; foram aposentadas pela APF-01 e pela APF-02 (acima). Os
+leitores agregam `segments FINAL` direto.
 
 ---
 
@@ -128,9 +137,9 @@ PARTITION BY toYYYYMM(started_at)
 | Endpoint | Description |
 |---|---|
 | `GET /reports/segments` | Paginated segment list with filters: `session_id`, `pool_id`, `agent_type`, `date_from/to` |
-| `GET /reports/agents/performance` | Current performance stats from `mv_agent_performance_daily` |
+| `GET /reports/agents/performance` | Current performance stats from `segments FINAL` |
 | `GET /reports/agent-performance/daily` | Time-series performance per agent type (Arc 8 integration) |
-| `GET /reports/sessions/complexity` | Sessions ranked by segment count (handoff depth) |
+| `GET /reports/sessions/complexity` | Sessions ranked by handoff depth, counts per session from `segments FINAL` (APF-02) |
 
 Query parameters common to all endpoints: `tenant_id` (required), `pool_id` (optional filter), `from`/`to` (date range).
 

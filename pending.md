@@ -627,7 +627,6 @@ Grupo aberto em 2026-09-23 pela TRF-01, que mediu a MV ao ir trocar a marcação
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| APF-02 | **A `mv_segment_summary` conta VERSÕES de segmento — o mesmo defeito da APF-01, e pior.** MV sobre `segments` (RMT) sem filtro de `ended_at`: agrega a versão de ABERTURA e cada regravação. **Medido em 2026-09-23** contra `segments FINAL`: `segment_count` **8 094 × 4 406** reais, **1 889 de 2 220** sessões divergentes, `resolved_count` 2 040 × 1 791. Leitor: `/reports/sessions/complexity` (`reports_query.py`, `v_segment_summary` nas duas queries do `query_session_complexity`) — `handoff_count` = `maxMerge` do `sequence_index`, que o excesso de versões NÃO distorce (max é idempotente); as contagens sim. Não foi consertada junto com a APF-01 por ser outro leitor e outro relatório, sem pedido. Caminho: a query de complexidade passa a agregar `segments FINAL` por sessão e a MV + view saem (medir antes, no `query_log`, quem mais as lê — o precedente da APF-01). ⚠️ Ela também está nos `dependent_views` do `_migrate_row_version`, que a recriaria. **Gatilho:** o próximo uso do relatório de complexidade, ou o próximo trabalho em MV sobre `segments` | `aberto` | `clickhouse.py` `_DDL_MV_SEGMENT_SUMMARY` · `CHANGELOG.md` § 2026-09-23 (4) |
 
 ---
 

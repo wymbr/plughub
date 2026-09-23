@@ -708,8 +708,9 @@ predominantemente por consumidores Kafka no `analytics-api` (ver `docs/kafka-eve
 | `analytics.deploy_events` | — | `registry.changed` | Eventos de deploy como âncoras temporais (Arc 6 Fase 2) |
 | `calibration_events` | ReplacingMergeTree | `calibration.events` | Calibração de avaliadores (Arc 13) |
 
-> O `analytics-api` também mantém materialized views agregadas (`mv_agent_performance_daily`,
-> `mv_segment_summary`) sobre as tabelas base.
+> O `analytics-api` **não** mantém materialized views. As duas que havia
+> (`mv_agent_performance_daily`, `mv_segment_summary`) liam `segments` (RMT) e contavam
+> versões; saíram na APF-01 e na APF-02 (2026-09-23). Ver `docs/arcos/arc5-segments.md`.
 
 ---
 

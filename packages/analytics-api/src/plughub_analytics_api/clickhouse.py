@@ -15,15 +15,10 @@ Tables, all in database `plughub`:
   evaluation_events      — Arc 6: lifecycle audit log (submitted/reviewed/contested/locked)
   contact_insights       — business events from agent flows (insight_register MCP tool)
 
-Materialized views (AggregatingMergeTree — incremental, POPULATE on creation):
-
-  mv_segment_summary         — pre-aggregated participation stats per session_id
-                               ⚠️ counts segment VERSIONS, not segments (APF-02)
-  (mv_agent_performance_daily — RETIRED by APF-01, 2026-09-23: see _DDL_AGENT_PERFORMANCE_DROP)
-
-Readable views (regular SQL views over the MVs — always up-to-date):
-
-  v_segment_summary   — segment_count, handoff_count, escalations per session
+Materialized views: none. Both former MVs read `segments` (ReplacingMergeTree) and
+counted segment VERSIONS — retired by APF-01 (mv_agent_performance_daily +
+v_agent_performance) and APF-02 (mv_segment_summary + v_segment_summary), 2026-09-23.
+Their readers aggregate `segments FINAL` directly.
 
 Design decisions:
   - ReplacingMergeTree on every table for idempotent re-inserts (Kafka at-least-once).
@@ -977,47 +972,22 @@ ALTER TABLE {db}.pool_occupancy_peaks
 _DDL_AGENT_PERFORMANCE_DROP_VIEW = "DROP VIEW IF EXISTS {db}.v_agent_performance"
 _DDL_AGENT_PERFORMANCE_DROP_MV   = "DROP TABLE IF EXISTS {db}.mv_agent_performance_daily"
 
-# ── Arc 5: mv_segment_summary — AggregatingMergeTree MV over segments per session.
-# Captures a row per (tenant_id, session_id) on every INSERT into segments.
-# handoff_count = max(sequence_index) = number of primary-agent hand-offs in the session.
-_DDL_MV_SEGMENT_SUMMARY = """
-CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.mv_segment_summary
-ENGINE = AggregatingMergeTree()
-ORDER BY (tenant_id, session_id)
-POPULATE
-AS SELECT
-    tenant_id,
-    session_id,
-    countState()                                    AS segment_count_state,
-    countIfState(role = 'primary')                  AS primary_count_state,
-    countIfState(role = 'specialist')               AS specialist_count_state,
-    countIfState(agent_type = 'human')              AS human_count_state,
-    sumState(assumeNotNull(duration_ms))            AS total_duration_ms_state,
-    maxState(toInt64(sequence_index))               AS max_sequence_state,
-    countIfState(outcome = 'escalated')             AS escalation_count_state,
-    countIfState(outcome = 'resolved')              AS resolved_count_state
-FROM {db}.segments
-GROUP BY tenant_id, session_id
-"""
-
-# Readable SQL view over mv_segment_summary.
-# handoff_count = max sequence_index observed (0 = single agent, 1 = one hand-off, etc.).
-_DDL_V_SEGMENT_SUMMARY = """
-CREATE OR REPLACE VIEW {db}.v_segment_summary AS
-SELECT
-    tenant_id,
-    session_id,
-    countMerge(segment_count_state)         AS segment_count,
-    countIfMerge(primary_count_state)       AS primary_segments,
-    countIfMerge(specialist_count_state)    AS specialist_segments,
-    countIfMerge(human_count_state)         AS human_segments,
-    sumMerge(total_duration_ms_state)       AS total_duration_ms,
-    maxMerge(max_sequence_state)            AS handoff_count,
-    countIfMerge(escalation_count_state)    AS escalation_count,
-    countIfMerge(resolved_count_state)      AS resolved_count
-FROM {db}.mv_segment_summary
-GROUP BY tenant_id, session_id
-"""
+# ── Arc 5: mv_segment_summary + v_segment_summary — APOSENTADAS (APF-02, 2026-09-23).
+#
+# Mesmo defeito da APF-01, e pior: MV sobre `segments` (RMT) SEM filtro de `ended_at`,
+# então agregava também a versão de ABERTURA de cada segmento, além de cada regravação.
+# Medido contra `segments FINAL`: `segment_count` 8 371 × 4 406 (1 889 de 2 220
+# sessões divergentes). Só `handoff_count` (max) saía certo — max é idempotente.
+#
+# Leitores, medidos no `system.query_log` (2026-08-10 → 2026-09-23): nenhum além de
+# uma medição manual. O único leitor no código, `/reports/sessions/complexity`, nunca
+# chegou a ler: a subquery qualificava `s.` sem o alias e o ClickHouse recusava (code
+# 47). Ele passou a agregar `segments FINAL`. Dado DERIVADO — o DROP não perde fato.
+# Ordem: a view depende da MV.
+#
+# ⚠️ Não reviver como MV sobre `segments` (ver o bloco da APF-01 acima).
+_DDL_SEGMENT_SUMMARY_DROP_VIEW = "DROP VIEW IF EXISTS {db}.v_segment_summary"
+_DDL_SEGMENT_SUMMARY_DROP_MV   = "DROP TABLE IF EXISTS {db}.mv_segment_summary"
 
 # Journey J3 — journey_aliases: arestas de merge (source_root NOVO → canonical_root
 # ANTIGO). Fonte de verdade das uniões; a resolução canônica (union-find) roda no
@@ -1306,11 +1276,8 @@ _ALL_DDL = [
     _DDL_SPEECH_COLLECT_OUTCOMES,
     _DDL_SPEECH_CHECKS,
     _DDL_CALL_INTERVALS,              # WCH-02
-    # Materialized views — must come AFTER the source tables they reference.
-    # AggregatingMergeTree with POPULATE backfills existing data on first creation.
-    # (mv_agent_performance_daily / v_agent_performance: aposentadas pela APF-01.)
-    _DDL_MV_SEGMENT_SUMMARY,
-    _DDL_V_SEGMENT_SUMMARY,
+    # Materialized views: nenhuma. As duas que havia, ambas sobre `segments` (RMT),
+    # contavam versões e foram aposentadas — APF-01 (performance) e APF-02 (summary).
 ]
 
 # Migrations applied after CREATE IF NOT EXISTS (idempotent ALTER TABLE statements).
@@ -1350,6 +1317,9 @@ _MIGRATIONS = [
     # APF-01: a MV de performance contava VERSÕES de segmento — sai, view primeiro.
     _DDL_AGENT_PERFORMANCE_DROP_VIEW,
     _DDL_AGENT_PERFORMANCE_DROP_MV,
+    # APF-02: a MV de complexidade contava VERSÕES (inclusive a de abertura) — sai, view primeiro.
+    _DDL_SEGMENT_SUMMARY_DROP_VIEW,
+    _DDL_SEGMENT_SUMMARY_DROP_MV,
 ]
 
 
@@ -1395,7 +1365,7 @@ class AnalyticsStore:
         #
         # It used to split into base_ddl / view_ddl by substring, and the split
         # both REORDERED the list and misclassified: `CREATE OR REPLACE VIEW`
-        # (v_segment_summary) does not contain the literal "CREATE VIEW", so it
+        # (v_segment_summary, since retired by APF-02) does not contain the literal "CREATE VIEW", so it
         # landed in the strict base pass and ran BEFORE the materialized view it
         # selects from. On an existing database that was invisible (the MV was
         # already there); on a FRESH ClickHouse volume it raised UNKNOWN_TABLE
@@ -1434,16 +1404,12 @@ class AnalyticsStore:
             order_by="(tenant_id, session_id, segment_id)",
             default_expr="coalesce(ended_at, started_at)",
             why="o `joined` inserido depois do `left` vencia e o segmento nunca fechava",
-            # ⚠️ OBRIGATÓRIO: as duas MVs abaixo leem FROM segments. Em banco Atomic o
-            # vínculo MV→origem é por UUID, não por nome — sem derrubá-las antes do
-            # RENAME elas ficariam presas à tabela ANTIGA, que o passo seguinte apaga,
-            # e parariam de receber INSERT **em silêncio** (a bancada de agentes e o
-            # relatório de complexidade congelariam sem erro). `sessions` não tem MV
-            # dependente, e é por isso que a migração original pôde ignorar o ponto.
-            dependent_views=[
-                # (mv_agent_performance_daily saiu — APF-01; recriá-la aqui a reviveria)
-                ("mv_segment_summary",         _DDL_MV_SEGMENT_SUMMARY),
-            ],
+            # ⚠️ Se uma MV voltar a ler FROM segments, ela TEM de entrar aqui: em banco
+            # Atomic o vínculo MV→origem é por UUID, não por nome — sem derrubá-la antes
+            # do RENAME ela ficaria presa à tabela ANTIGA, que o passo seguinte apaga, e
+            # pararia de receber INSERT **em silêncio**. Hoje não há nenhuma: as duas que
+            # estavam aqui saíram (APF-01, APF-02) — e listá-las as recriaria no `finally`.
+            dependent_views=[],
         )
         self._migrate_row_version(
             table="participation_intervals",

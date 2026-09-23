@@ -1,5 +1,51 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (5) — APF-02: o relatório de complexidade conta SEGMENTOS, e a segunda MV que contava versões saiu
+
+**O defeito, registrado pela APF-01.** A `mv_segment_summary` era a outra MATERIALIZED VIEW sobre
+`segments` (RMT), e pior que a primeira: sem filtro de `ended_at`, agregava também a versão de
+ABERTURA de cada segmento, além de cada regravação. Medido hoje contra `segments FINAL`:
+`segment_count` **8 371 × 4 406** (o registro da ficha dizia 8 094; o excesso cresce a cada
+INSERT). Só o `handoff_count` (`max`) saía certo — `max` é idempotente; as contagens não.
+
+**Leitores, medidos antes do DROP.** `system.query_log` de 2026-08-10 a 2026-09-23 (5,4 M de
+linhas): **um** SELECT na view, a medição manual da sessão anterior. No código, o único leitor é
+`/reports/sessions/complexity`, sem consumidor na UI nem em outro serviço.
+
+**Achado de passagem: o endpoint nunca respondeu.** A subquery de sessões era
+`FROM sessions FINAL WHERE s.tenant_id = …` — o `WHERE` qualifica com `s.` e o alias não existia.
+O ClickHouse recusa com code 47 (`Missing columns: 's.origin' 's.opened_at' 's.tenant_id'`), o
+wrapper converte em `data: [], error: data_unavailable`, e os unitários, com mock, não tinham como
+ver. Reproduzido direto no `clickhouse-client` antes de mexer. Por isso a MV sem leitor: ninguém
+nunca chegou a lê-la.
+
+**O que mudou:**
+- `query_session_complexity` agrega `segments FINAL` por sessão, filtrado pelas sessões da janela
+  (`sessions AS s FINAL`, com o alias). Desfechos com a regra da TRF-01 (`escalation_count` e
+  `resolved_count` excluem a transferência) e coluna nova **`transferred_count`** — sem ela as 4
+  transferências sumiriam das duas contagens sem aparecer em lugar nenhum.
+- `mv_segment_summary` + `v_segment_summary`: **DROP idempotente** em `_MIGRATIONS` (view antes da
+  MV), fora do `_ALL_DDL`, e fora dos `dependent_views` do `_migrate_row_version`, que a recriaria
+  no `finally`. Com a APF-01, **não resta MV nenhuma no analytics**. Dado derivado: o DROP não
+  perde fato.
+- `segment_count` segue contando o que contava (inclui os segmentos `queue/system` de admissão);
+  a semântica só deixou de contar versões.
+
+**Prova.** `probe_apf02_session_complexity.sh`: A — MV e view ausentes; B — a função REAL,
+dentro do container, responde sem `error` nos 3 tenants com segmentos; C — as **2 197** sessões
+batem com um censo independente (`argMax(row_version)` por `segment_id` na tabela crua) nas 9
+contagens; D — as 4 transferências do censo estão em `transferred_count` e fora do
+`resolved_count`. `mut_apf02_session_complexity.sh`: M1 (sem o alias `s`, o defeito original) e
+M2 (`resolved_count` volta a contar transferência) **pegas**. Não medido e declarado: agregação
+sem `FINAL` — 0 versões não fundidas na tabela hoje; guarda-o o unitário sobre o SQL executado.
+Unitários do analytics: 836 verdes. APF-01 segue verde.
+
+**Erro de instrumento pago no caminho.** A primeira versão do gate conferia a população do ramo D
+no RELATÓRIO e depois dos veredictos: com o relatório quebrado (M1), B e C reprovavam e o D
+emitia INCONCLUSIVO, trocando o `exit 1` por `exit 2` — a mutação "sobrevivia". A população
+passou a ser medida no censo e ANTES dos veredictos. E o `sed` da M1 atingia 12 queries do
+arquivo; a mutação ficou restrita à função por intervalo.
+
 ## 2026-09-23 (4) — APF-01: o score de roteamento conta SEGMENTOS, e a MV que contava versões saiu
 
 **O defeito, achado pela TRF-01.** A `mv_agent_performance_daily` era uma MATERIALIZED VIEW

@@ -2414,17 +2414,36 @@ class TestQueryAgentPerformanceDaily:
         assert result.get("error") == "data_unavailable"
 
 
-# ─── query_session_complexity (Arc 5 MV — v_segment_summary) ─────────────────
+# ─── query_session_complexity (Arc 5 — segments FINAL, APF-02) ───────────────
 
 @pytest.mark.asyncio
 class TestQuerySessionComplexity:
-    """Tests for the session-complexity MV-backed endpoint (v_segment_summary view)."""
+    """Tests for the session-complexity endpoint (aggregates `segments FINAL`, APF-02)."""
 
     _COLS = [
         "session_id", "pool_id",
         "segment_count", "primary_segments", "specialist_segments", "human_segments",
         "total_duration_ms", "handoff_count", "escalation_count", "resolved_count",
+        "transferred_count",
     ]
+
+    async def test_reads_segments_final_not_the_mv_APF02(self):
+        """APF-02: as duas queries agregam `segments FINAL`, nunca a view da MV que
+        contava versões; e a subquery de sessões declara o alias `s` que o WHERE usa
+        (sem ele o ClickHouse recusava com code 47 e o endpoint nunca respondeu)."""
+        client = _make_client(self._count_result(0), _ch_result(self._COLS, []))
+        await query_session_complexity(client, DB, TENANT)
+        sqls = [c[0][0] for c in client.query.call_args_list]
+        assert len(sqls) == 2
+        for sql in sqls:
+            assert f"FROM {DB}.segments FINAL" in sql
+            assert "segment_summary" not in sql
+            assert f"FROM {DB}.sessions AS s FINAL" in sql
+            assert "s.tenant_id = {tenant_id:String}" in sql
+            # TRF-01: transferência pelo transporte, fora dos desfechos
+            assert "countIf(outcome = 'resolved'  AND NOT (coalesce(close_reason, '') = 'agent_transfer'))" in sql
+            assert "countIf(outcome = 'escalated' AND NOT (coalesce(close_reason, '') = 'agent_transfer'))" in sql
+            assert "countIf(coalesce(close_reason, '') = 'agent_transfer')" in sql
 
     def _count_result(self, n: int) -> MagicMock:
         r = MagicMock()
@@ -2456,6 +2475,7 @@ class TestQuerySessionComplexity:
                 2,       # handoff_count
                 1,       # escalation_count
                 0,       # resolved_count
+                0,       # transferred_count
             ]]),
         )
         result = await query_session_complexity(client, DB, TENANT)
@@ -2500,6 +2520,19 @@ class TestQuerySessionComplexity:
         result = await query_session_complexity(client, DB, TENANT)
         assert result["data"] == []
         assert result.get("error") == "data_unavailable"
+
+
+def test_schema_never_recreates_the_segment_summary_mv_APF02():
+    """O bootstrap não pode reviver a MV: nem no _ALL_DDL, nem como view dependente
+    da migração de row_version (que a recriaria no `finally`), e ela sai nas migrações."""
+    import inspect
+    from plughub_analytics_api import clickhouse as ch
+    assert not any("segment_summary" in d and "CREATE" in d for d in ch._ALL_DDL)
+    drops = [d for d in ch._MIGRATIONS if "segment_summary" in d]
+    assert drops == [ch._DDL_SEGMENT_SUMMARY_DROP_VIEW, ch._DDL_SEGMENT_SUMMARY_DROP_MV]
+    assert "DROP VIEW IF EXISTS {db}.v_segment_summary" in drops[0]   # a view antes da MV
+    src = inspect.getsource(ch.AnalyticsStore.ensure_schema)
+    assert '("mv_segment_summary"' not in src
 
 
 # ── query_agent_availability (Arc 8) ─────────────────────────────────────────

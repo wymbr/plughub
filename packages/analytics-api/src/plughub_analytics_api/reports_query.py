@@ -5804,7 +5804,7 @@ def _fetch_agent_performance_daily(
     }
 
 
-# ─── /reports/sessions/complexity (Arc 5 MV — v_segment_summary) ─────────────
+# ─── /reports/sessions/complexity (Arc 5 — segments FINAL, APF-02) ──────────
 
 async def query_session_complexity(
     client:    Any,
@@ -5821,9 +5821,10 @@ async def query_session_complexity(
     page_size: int = 100,
 ) -> dict:
     """
-    Returns session complexity metrics from the mv_segment_summary AggregatingMergeTree,
-    exposed via the v_segment_summary readable view joined with the sessions table
-    for date-range and pool filtering.
+    Returns session complexity metrics aggregated per session from `segments FINAL`
+    (one row per segment), joined with the sessions table for date-range and pool
+    filtering. The former source — the `mv_segment_summary` MV behind
+    `v_segment_summary` — was retired by APF-02: it counted segment VERSIONS.
 
     Ordered by handoff_count DESC so the most complex sessions surface first.
 
@@ -5834,8 +5835,9 @@ async def query_session_complexity(
       human_segments     — human-agent segments
       total_duration_ms  — sum of all segment durations
       handoff_count      — max sequence_index (0 = no handoffs, 1 = one handoff, …)
-      escalation_count   — segments with outcome = 'escalated'
-      resolved_count     — segments with outcome = 'resolved'
+      escalation_count   — segments with outcome = 'escalated', transfers excluded (TRF-01)
+      resolved_count     — segments with outcome = 'resolved', transfers excluded (TRF-01)
+      transferred_count  — segments closed with close_reason = 'agent_transfer'
 
     Use min_handoffs=1 to filter only sessions that had at least one agent transfer.
     """
@@ -5889,15 +5891,41 @@ def _fetch_session_complexity(
 
     sess_where = " AND ".join(sess_conditions)
 
+    # ⚠️ `AS s` é obrigatório: `sess_where` qualifica as colunas com `s.`. Sem o alias
+    # (como estava até a APF-02) o ClickHouse recusa com code 47, o wrapper devolve
+    # `data_unavailable`, e o endpoint nunca respondeu uma linha desde que nasceu.
+    sess_sub = f"""
+            SELECT DISTINCT s.session_id, s.pool_id
+            FROM {db}.sessions AS s FINAL
+            WHERE {sess_where}"""
+
+    # APF-02 — agrega `segments FINAL` por sessão, uma linha por SEGMENTO. A fonte
+    # anterior, `v_segment_summary` sobre a MV `mv_segment_summary`, contava VERSÕES
+    # (a MV dispara a cada INSERT e o merge do RMT nunca chega a ela): 8 094 × 4 406.
+    # Transferência pelo TRANSPORTE e excluída dos desfechos, como no resto (TRF-01).
+    agg = f"""
+        SELECT
+            session_id,
+            count()                                             AS segment_count,
+            countIf(role = 'primary')                           AS primary_segments,
+            countIf(role = 'specialist')                        AS specialist_segments,
+            countIf(agent_type = 'human')                       AS human_segments,
+            sum(ifNull(duration_ms, 0))                         AS total_duration_ms,
+            max(toInt64(sequence_index))                        AS handoff_count,
+            countIf(outcome = 'escalated' AND {_NOT_TRANSFER_SQL}) AS escalation_count,
+            countIf(outcome = 'resolved'  AND {_NOT_TRANSFER_SQL}) AS resolved_count,
+            countIf({_IS_TRANSFER_SQL})                         AS transferred_count
+        FROM {db}.segments FINAL
+        WHERE tenant_id = {{tenant_id:String}}
+          AND session_id IN (SELECT session_id FROM ({sess_sub}))
+        GROUP BY session_id"""
+
     # Count query
     count_result = client.query(f"""
         SELECT count()
-        FROM {db}.v_segment_summary vs
-        INNER JOIN (
-            SELECT DISTINCT session_id, pool_id
-            FROM {db}.sessions FINAL
-            WHERE {sess_where}
-        ) s ON vs.session_id = s.session_id AND vs.tenant_id = {'{tenant_id:String}'}
+        FROM ({agg}) vs
+        INNER JOIN ({sess_sub}
+        ) s ON vs.session_id = s.session_id
         WHERE vs.handoff_count >= {min_handoffs}
     """, parameters=params)
     total = count_result.result_rows[0][0] if count_result.result_rows else 0
@@ -5914,13 +5942,11 @@ def _fetch_session_complexity(
             vs.total_duration_ms,
             vs.handoff_count,
             vs.escalation_count,
-            vs.resolved_count
-        FROM {db}.v_segment_summary vs
-        INNER JOIN (
-            SELECT DISTINCT session_id, pool_id
-            FROM {db}.sessions FINAL
-            WHERE {sess_where}
-        ) s ON vs.session_id = s.session_id AND vs.tenant_id = {'{tenant_id:String}'}
+            vs.resolved_count,
+            vs.transferred_count
+        FROM ({agg}) vs
+        INNER JOIN ({sess_sub}
+        ) s ON vs.session_id = s.session_id
         WHERE vs.handoff_count >= {min_handoffs}
         ORDER BY vs.handoff_count DESC, vs.session_id
         LIMIT {page_size}

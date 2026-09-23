@@ -1364,7 +1364,7 @@ async def get_agent_performance_daily(
     return _respond(data, format, f"agent_performance_daily_{_today_label()}.csv")
 
 
-# ─── /reports/sessions/complexity (Arc 5 MV — v_segment_summary) ─────────────
+# ─── /reports/sessions/complexity (Arc 5 — segments FINAL, APF-02) ──────────
 
 @router.get("/sessions/complexity")
 async def get_session_complexity(
@@ -1381,8 +1381,8 @@ async def get_session_complexity(
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
-    Session complexity metrics from the mv_segment_summary materialized view
-    (AggregatingMergeTree), read via the v_segment_summary readable SQL view.
+    Session complexity metrics aggregated per session from `segments FINAL`
+    (APF-02 — the former mv_segment_summary counted segment versions).
     Joined with the sessions table for date-range and pool_id filtering.
 
     One row per session. Suitable for identifying complex interactions (high
@@ -1392,7 +1392,7 @@ async def get_session_complexity(
       session_id, pool_id,
       segment_count, primary_segments, specialist_segments, human_segments,
       total_duration_ms,
-      handoff_count, escalation_count, resolved_count
+      handoff_count, escalation_count, resolved_count, transferred_count
 
     Use min_handoffs=1 to find sessions that were transferred at least once.
     Use min_handoffs=2 to find sessions with multiple escalation steps.
