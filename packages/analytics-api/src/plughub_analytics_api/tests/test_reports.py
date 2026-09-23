@@ -908,6 +908,15 @@ class TestQueryAgentPerformanceReport:
         assert abs(row["escalation_rate"] - 0.1) < 1e-6
         assert abs(row["handoff_rate"]    - 0.2) < 1e-6
 
+    async def test_transfer_read_from_transport_TRF01(self):
+        """TRF-01: `transferred_count` lê o `close_reason` (NULL-safe) e os desfechos o excluem."""
+        client = _make_client(_ch_result(self._COLS, []))
+        await query_agent_performance_report(client, DB, TENANT)
+        sql = client.query.call_args_list[-1][0][0]
+        assert "countIf(coalesce(close_reason, '') = 'agent_transfer')" in sql
+        assert "outcome = 'transferred'" not in sql
+        assert "outcome = 'resolved'  AND NOT (coalesce(close_reason, '') = 'agent_transfer')" in sql
+
     async def test_multiple_groups_returned(self):
         client = _make_client(_ch_result(self._COLS, [
             ["agente_sac_v1",      "sac_ia",       "primary",   5, None, 4, 0, 0, 1, 0, 0, 0.0, 0.0],
@@ -1300,8 +1309,12 @@ class TestQueryAgentsCompare:
         client = _make_client(_ch_result(self._SEG_COLS, []))
         await query_agents_compare(client, DB, TENANT, lens="resolution")
         sql = client.query.call_args_list[-1][0][0]
-        for value in ("'escalated'", "'escalated_human'", "'escalated_ai'", "'transferred'"):
+        for value in ("'escalated'", "'escalated_human'", "'escalated_ai'"):
             assert value in sql
+        # TRF-01: a transferência entra pelo TRANSPORTE, não pelo outcome — e não resolve
+        assert "'transferred'" not in sql
+        assert "coalesce(close_reason, '') = 'agent_transfer'" in sql
+        assert "countIf(outc = 'resolved' AND NOT transf)" in sql
         assert "agent_type != 'system'" in sql
         assert "role = 'primary'" in sql
 
@@ -2361,6 +2374,15 @@ class TestQueryAgentPerformanceDaily:
         assert row["avg_duration_ms"] == pytest.approx(28500.0)
         assert row["resolution_rate"] == pytest.approx(0.857143)
         assert row["escalation_rate"] == pytest.approx(0.095238)
+
+    async def test_transfer_rate_from_transport_TRF01(self):
+        """TRF-01: `transfer_rate` lê o `close_reason`; a sub-select precisa trazê-lo."""
+        client = _make_client(_ch_result(self._COLS, []))
+        await query_agent_performance_daily(client, DB, TENANT)
+        sql = client.query.call_args_list[-1][0][0]
+        assert "countIf(coalesce(close_reason, '') = 'agent_transfer')" in sql
+        assert "outcome = 'transferred'" not in sql
+        assert "                close_reason,\n" in sql   # sem ela, a coluna não existe fora
 
     async def test_filters_do_not_crash(self):
         """Passing pool_id and agent_type_id filters runs without error."""

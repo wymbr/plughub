@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (3) — TRF-01: a transferência se conta pelo TRANSPORTE, e a resolução deixou de incluí-la
+
+**Decisão do dono.** A marcação de transferência é `close_reason = 'agent_transfer'` — fato do
+transporte, um escritor, que nada reescreve. `outcome` é a disposição do atendente e o wrap-up de
+segmento a reescreve: o `outcome='transferred'` que o `session_transfer` publica é placeholder.
+
+**Censo antes de mexer** (`segments FINAL`): 4 segmentos `human/primary` com
+`close_reason='agent_transfer'` e `outcome='resolved'` (as transferências REAIS) e 2
+`native/specialist` com `outcome='transferred'` e `close_reason` NULL (harness, 2026-08-21) — a
+mesma população da ficha. E um dado que decidiu o desenho: `close_reason` é `Nullable` e está
+**NULL em 3 571 de 4 406** linhas.
+
+**O que passou a ser verdade** (`reports_query.py`, uma casa: `_IS_TRANSFER_SQL` /
+`_NOT_TRANSFER_SQL`):
+- `transfer_rate` (diário) e `transferred_count` (agregado) contam `close_reason`;
+- `resolved_count`, `escalated_count`, `abandoned_count`, `timeout_count`, `resolution_rate` e
+  `escalation_rate` **excluem** a transferência — quem transferiu não resolveu o contato, seja qual
+  for a disposição, e antes as 4 reais inflavam a resolução;
+- bancada (lentes `resolution` e agregado com NPS): transferência entra na família *escalação*,
+  nunca em *resolvido*; `'transferred'` **saiu** de `_ESCALATE_FAMILY_SQL`, e a lente
+  `escalation_reason` aceita a transferência pelo transporte;
+- as 2 linhas do harness deixam de contar como transferência (não têm transporte) — decisão, não
+  efeito colateral: elas não descrevem transferência nenhuma.
+
+⚠️ **A armadilha que o `coalesce` fecha:** `close_reason != 'agent_transfer'` vale NULL em 3 571
+linhas, e o `countIf` as descarta calado — o contador de resolvidos encolheria para os segmentos
+que TÊM `close_reason`, sem nada vermelho.
+
+**Instrumentos.** Unitários sobre o SQL executado (família, agregado, diário; 832/832 no pacote).
+Gate ao vivo **`probe_trf01_transfer_marking.sh`** (AUTO): roda as funções de relatório DENTRO do
+container sobre o ClickHouse vivo e compara com um censo escrito no próprio gate — A
+`transferred_count` = 4 = censo · B `resolved_count` = 1 787 = censo, **dos quais 1 491 com
+`close_reason` NULL** (controle de população: sem eles, B não distinguiria o defeito) · C
+`Σ transfer_rate × total` diário = 4 · D as 2 linhas `transferred` do harness ficaram fora.
+Bateria **`mut_trf01_transfer_marking.sh`**: M1 negação sem `coalesce` · M2 transferência pelo
+`outcome` · M3 resolução com a transferência — **as três pegas**, M0 verde, arquivo do container
+restaurado. Imagem do `analytics-api` rebuildada, âncora conferida.
+
+**Achado, com ficha — `APF-01`: a `mv_agent_performance_daily` conta VERSÕES de segmento.** Ao ir
+trocar a coluna de transferência nela, a medição mostrou que ela diverge de `segments FINAL` muito
+além disso: `retencao_humano` 600 × 382, `sac_ia` 327 × 240. É MV sobre `ReplacingMergeTree` —
+dispara a cada INSERT, e o merge apaga versões na tabela, nunca na MV. Ela guarda as 4
+transferências como `transferred` (a versão placeholder). Por isso **não foi tocada**: consertar um
+contador sobre contagem de versões manteria o número errado. Único leitor vivo: o
+`performance_job` → `{t}:agent_perf:*` (24 chaves) → score de roteamento; **dano hoje zero** porque
+`routing.performance_score_weight` vivo é `0.0`.
+
+**Não verificado:** uma transferência NOVA pelo Console — o censo é de agosto. O gate prova que os
+leitores contam o `close_reason`; que o bridge continua gravando `agent_transfer` é o que a ficha
+dizia medir "com uma transferência nova", e isso exige alguém no Console.
+
+Deixou ficha: `APF-01`.
+
 ## 2026-09-23 (2) — ORQ-18: a `description` fala com o CLIENTE, e a regra de classificação subiu ao prompt
 
 **O problema, aberto pela ORQ-15 horas antes.** Levar a `description` ao menu deu ao campo uma

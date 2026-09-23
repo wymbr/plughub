@@ -29,6 +29,25 @@ ContactSegment {
 }
 ```
 
+### Transferência se lê pelo TRANSPORTE (TRF-01, 2026-09-23)
+
+`outcome` é a **disposição** do atendente, e o wrap-up de segmento a reescreve: o
+`outcome='transferred'` que o `session_transfer` publica é placeholder e vira
+`resolved`/`pending`/… quando o atendente preenche o wrap-up. Medido: as 4 transferências
+reais do Console tinham `outcome='resolved'`. Por isso:
+
+- **transferência = `coalesce(close_reason, '') = 'agent_transfer'`** — fato do transporte,
+  um escritor, que nada reescreve. `outcome='transferred'` **não** marca transferência.
+- **os contadores de desfecho excluem a transferência** (`resolved_count`,
+  `escalated_count`, `resolution_rate`…): quem transferiu não resolveu o contato, seja qual
+  for a disposição. Na bancada, transferência entra na família *escalação*.
+- ⚠️ **`coalesce` é obrigatório**: `close_reason` é `Nullable` e nulo na maioria das linhas;
+  sem ele, a negação vale NULL e o `countIf` descarta a linha em silêncio.
+
+Uma casa: `_IS_TRANSFER_SQL` / `_NOT_TRANSFER_SQL` em `reports_query.py`. Gate:
+`infra/test/probe_trf01_transfer_marking.sh` (+ `mut_trf01_transfer_marking.sh`).
+⚠️ A `mv_agent_performance_daily` **não** segue esta regra — e tem defeito maior: ver `APF-01`.
+
 ### Conference topology
 
 When a specialist is invited via the `task` Skill Flow step (assist mode):

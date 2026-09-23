@@ -3304,14 +3304,15 @@ def _fetch_agent_performance(
             role,
             count()                                                       AS total_sessions,
             avgOrNull(duration_ms)                                        AS avg_duration_ms,
-            countIf(outcome = 'resolved')                                 AS resolved_count,
-            countIf(outcome = 'escalated')                                AS escalated_count,
-            countIf(outcome = 'transferred')                              AS transferred_count,
-            countIf(outcome = 'abandoned')                                AS abandoned_count,
-            countIf(outcome = 'timeout')                                  AS timeout_count,
+            -- TRF-01: transferência pelo TRANSPORTE; os desfechos excluem-na (ver _IS_TRANSFER_SQL)
+            countIf(outcome = 'resolved'  AND {_NOT_TRANSFER_SQL})        AS resolved_count,
+            countIf(outcome = 'escalated' AND {_NOT_TRANSFER_SQL})        AS escalated_count,
+            countIf({_IS_TRANSFER_SQL})                                   AS transferred_count,
+            countIf(outcome = 'abandoned' AND {_NOT_TRANSFER_SQL})        AS abandoned_count,
+            countIf(outcome = 'timeout'   AND {_NOT_TRANSFER_SQL})        AS timeout_count,
             countIf(handoff_reason IS NOT NULL AND handoff_reason != '')  AS handoff_count,
             if(count() > 0,
-               countIf(outcome = 'escalated') / count(),
+               countIf(outcome = 'escalated' AND {_NOT_TRANSFER_SQL}) / count(),
                0.0)                                                       AS escalation_rate,
             if(count() > 0,
                countIf(handoff_reason IS NOT NULL AND handoff_reason != '') / count(),
@@ -3946,7 +3947,27 @@ _COMPARE_LENSES_PENDING: set[str] = set()
 
 # Folding da família escalate (§13.2): o alvo humano-vs-IA é recuperável pela
 # topologia do segmento seguinte; a bancada compara o CONCEITO escalação.
-_ESCALATE_FAMILY_SQL = "('escalated', 'escalated_human', 'escalated_ai', 'transferred')"
+#
+# TRF-01 (2026-09-23) — `'transferred'` SAIU desta lista. Ele não marca transferência:
+# o wrap-up de segmento o reescreve com a disposição (`resolved`…), e medido em
+# `segments FINAL` as 4 transferências REAIS do Console tinham `outcome='resolved'`,
+# enquanto as 2 linhas `transferred` eram do harness, sem `close_reason`. A
+# transferência entra na família pelo `_IS_TRANSFER_SQL`, lido do TRANSPORTE.
+_ESCALATE_FAMILY_SQL = "('escalated', 'escalated_human', 'escalated_ai')"
+
+# TRF-01 — a transferência é fato do TRANSPORTE (`close_reason`, um escritor), nunca do
+# `outcome` (disposição, que o wrap-up reescreve). Decisão do dono, 2026-09-23.
+#
+# ⚠️ `coalesce` é obrigatório: `close_reason` é `Nullable` e está NULL na maioria das
+# linhas (3 571 de 4 406, medido). Sem ele, `close_reason != 'agent_transfer'` vale
+# NULL e o `countIf` descarta a linha em silêncio — o contador de resolvidos
+# encolheria para os poucos segmentos que TÊM `close_reason`, e ninguém ficaria vermelho.
+#
+# Os contadores de DESFECHO (`resolved`, `escalated`…) usam `_NOT_TRANSFER_SQL`: um
+# segmento que terminou em transferência não resolveu o contato, seja qual for a
+# disposição que o atendente marcou — senão a transferência infla a resolução.
+_IS_TRANSFER_SQL = "coalesce(close_reason, '') = 'agent_transfer'"
+_NOT_TRANSFER_SQL = f"NOT ({_IS_TRANSFER_SQL})"
 
 # deploy lens (Arc 6 Fase 2): N mínimo p/ significância por bucket (spec §5).
 # Constante por ora; alvo = config-api namespace `quality_comparison_min_sample`.
@@ -4399,8 +4420,9 @@ def _compare_segments_lens(
             any(lbl)                        AS label,
             toString(bucket)                AS bucket,
             count()                         AS sessions,
-            countIf(outc = 'resolved')      AS resolved,
-            countIf(outc IN {_ESCALATE_FAMILY_SQL}) AS escalated,
+            -- TRF-01: transferência (transporte) conta como escalação, nunca como resolução
+            countIf(outc = 'resolved' AND NOT transf)          AS resolved,
+            countIf(outc IN {_ESCALATE_FAMILY_SQL} OR transf)  AS escalated,
             avg(dur)                        AS aht_ms
         FROM (
             SELECT
@@ -4413,6 +4435,7 @@ def _compare_segments_lens(
                    if(flow_id != '', flow_id, agent_type_id))       AS lbl,
                 toDate(started_at)                                  AS bucket,
                 outcome                                             AS outc,
+                {_IS_TRANSFER_SQL}                                  AS transf,
                 duration_ms                                         AS dur
             FROM {db}.segments FINAL
             WHERE {" AND ".join(conditions)}
@@ -4946,7 +4969,7 @@ def _compare_escalation_reason_lens(
         f"started_at <  '{until}'",
         "role = 'primary'",
         "agent_type != 'system'",
-        f"outcome IN {_ESCALATE_FAMILY_SQL}",
+        f"(outcome IN {_ESCALATE_FAMILY_SQL} OR {_IS_TRANSFER_SQL})",   # TRF-01
         "escalation_reason != ''",
         "escalation_reason IS NOT NULL",
     ]
@@ -5528,8 +5551,9 @@ def _fetch_agents_cross(
             any(at)                             AS agent_type,
             any(lbl)                            AS label,
             count()                             AS sessions,
-            countIf(outc = 'resolved')          AS resolved,
-            countIf(outc IN {_ESCALATE_FAMILY_SQL}) AS escalated
+            -- TRF-01: transferência (transporte) conta como escalação, nunca como resolução
+            countIf(outc = 'resolved' AND NOT transf)          AS resolved,
+            countIf(outc IN {_ESCALATE_FAMILY_SQL} OR transf)  AS escalated
         FROM (
             SELECT
                 if(agent_type = 'human',
@@ -5539,7 +5563,8 @@ def _fetch_agents_cross(
                 if(agent_type = 'human',
                    if(user_login != '', user_login, user_id),
                    if(flow_id != '', flow_id, agent_type_id))   AS lbl,
-                outcome                                         AS outc
+                outcome                                         AS outc,
+                {_IS_TRANSFER_SQL}                              AS transf
             FROM {db}.segments FINAL
             WHERE {" AND ".join(seg_conditions)}
         )
@@ -5665,9 +5690,10 @@ async def query_agent_performance_daily(
     Metrics per row:
       total_sessions     — total participation windows in that day
       avg_duration_ms    — mean handle time
-      resolution_rate    — fraction with outcome = 'resolved'
-      escalation_rate    — fraction with outcome = 'escalated'
-      transfer_rate      — fraction with outcome = 'transferred'
+      resolution_rate    — fraction with outcome = 'resolved', transfers excluded
+      escalation_rate    — fraction with outcome = 'escalated', transfers excluded
+      transfer_rate      — fraction with close_reason = 'agent_transfer' (TRF-01:
+                           the transport marks it; outcome is the wrap-up disposition)
       human_rate         — fraction of human-agent sessions
 
     More efficient than querying segments FINAL because the MV is pre-aggregated
@@ -5740,9 +5766,10 @@ def _fetch_agent_performance_daily(
             period_date,
             count()                                                            AS total_sessions,
             round(avgOrNull(duration_ms), 0)                                   AS avg_duration_ms,
-            round(countIf(outcome = 'resolved')    / greatest(count(), 1), 4)  AS resolution_rate,
-            round(countIf(outcome = 'escalated')   / greatest(count(), 1), 4)  AS escalation_rate,
-            round(countIf(outcome = 'transferred') / greatest(count(), 1), 4)  AS transfer_rate,
+            -- TRF-01: transferência pelo TRANSPORTE; os desfechos excluem-na (ver _IS_TRANSFER_SQL)
+            round(countIf(outcome = 'resolved'  AND {_NOT_TRANSFER_SQL}) / greatest(count(), 1), 4) AS resolution_rate,
+            round(countIf(outcome = 'escalated' AND {_NOT_TRANSFER_SQL}) / greatest(count(), 1), 4) AS escalation_rate,
+            round(countIf({_IS_TRANSFER_SQL})                             / greatest(count(), 1), 4) AS transfer_rate,
             round(countIf(is_human)                / greatest(count(), 1), 4)  AS human_rate
         FROM (
             SELECT
@@ -5753,6 +5780,7 @@ def _fetch_agent_performance_daily(
                 pool_id,
                 duration_ms,
                 outcome,
+                close_reason,
                 toDate(started_at) AS period_date,
                 (agent_type = 'human') AS is_human,
                 if(agent_type = 'human',
