@@ -65,8 +65,17 @@ async def _semeia(lk: api.LiveKitAPI, caminho: str) -> bool:
     if r.get("kind") != "individual":
         log(f"{caminho}: dispatch_rule.kind={r.get('kind')!r} — so `individual` existe (uma sala por chamada)")
         return False
-    senha = os.environ.get(t.get("auth_password_env") or "", "") if t.get("auth_username") else ""
-    if t.get("auth_username") and not senha:
+    if not t.get("auth_username"):
+        # VOZ-32: tronco sem autenticação aceita INVITE de qualquer origem para os números dele.
+        # E a outra forma de restringir (`allowed_addresses`) não vale nesta instalação: o Docker
+        # Desktop reescreve a origem de todo pacote que entra por porta publicada para o gateway
+        # da rede do Docker (medido: 172.17.0.1 vindo da LAN e do localhost), então o serviço SIP
+        # nunca vê o IP do provedor. Digest é a única trava que funciona aqui.
+        log(f"{caminho}: tronco sem auth_username — NAO semeado (sem digest ele aceitaria qualquer "
+            f"origem; lista de IPs nao serve atras do Docker Desktop, que reescreve a origem)")
+        return False
+    senha = os.environ.get(t.get("auth_password_env") or "", "")
+    if not senha:
         # Tronco com usuário e sem senha aceitaria qualquer um que soubesse o usuário. Recusa alto.
         log(f"{caminho}: auth_username declarado e {t.get('auth_password_env')!r} vazio no env — "
             f"tronco NAO semeado (sem senha ele ficaria aberto)")
@@ -101,8 +110,7 @@ async def _semeia(lk: api.LiveKitAPI, caminho: str) -> bool:
             info.max_call_duration.FromSeconds(int(t["max_call_duration_s"]))
         criado = await lk.sip.create_sip_inbound_trunk(lsip.CreateSIPInboundTrunkRequest(trunk=info))
         trunk_id = criado.sip_trunk_id
-        log(f"tronco {t['name']} CRIADO ({trunk_id}, numeros={list(info.numbers)}, "
-            f"auth={'digest' if senha else 'NENHUMA'})")
+        log(f"tronco {t['name']} CRIADO ({trunk_id}, numeros={list(info.numbers)}, auth=digest)")
 
     if regra:
         log(f"dispatch rule {r['name']} ja existe ({regra.sip_dispatch_rule_id}) — NAO tocada")

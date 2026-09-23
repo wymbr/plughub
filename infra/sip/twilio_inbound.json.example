@@ -1,0 +1,16 @@
+{
+  "seed_id": "twilio_inbound",
+  "description": "MODELO do tronco de ENTRADA pela Twilio (VOZ-32). Para usar: copie para `twilio_inbound.json` (o seed só lê *.json), troque o número pelo comprado na Twilio (E.164, igual ao usuário do SIP URI da TwiML) e ponha `SIP_TRUNK_PASSWORD_TWILIO` no .env.demo. O produto na Twilio é o NÚMERO de voz com a TwiML `<Dial><Sip username password>`, NÃO o Elastic SIP Trunking: este entrega a chamada por lista de IPs, e o Docker Desktop reescreve a origem (o serviço SIP nunca vê o IP da Twilio) — a TwiML autentica por digest, que é a trava que funciona aqui. O número também precisa de um ChannelEndpoint `voice` apontando para o pool.",
+  "trunk": {
+    "name": "plughub-twilio-inbound",
+    "numbers": ["+1XXXXXXXXXX"],
+    "auth_username": "plughub_twilio",
+    "auth_password_env": "SIP_TRUNK_PASSWORD_TWILIO",
+    "ringing_timeout_s": 60,
+    "max_call_duration_s": 3600
+  },
+  "dispatch_rule": {
+    "name": "plughub-twilio-dispatch",
+    "kind": "individual"
+  }
+}

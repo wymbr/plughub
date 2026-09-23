@@ -971,7 +971,15 @@ G.711 + digest — `_sip_ua.py`) e `probe_webrtc_media_plane.sh` A3/D4/D4g/D5 (o
 compensatório, com controle positivo). O mesmo probe mede as teclas (K1–K4, B1). Testes:
 `tests/test_sip_leg.py`.
 
-**Fora da fatia:** porta SIP publicada e classificação da borda (V10), TLS/SRTP, `REFER` e chamada
+**Borda SIP (VOZ-32, preparada em 2026-09-23, publicação opt-in):** a camada
+`docker-compose.sip-edge.yml` publica 5060/UDP e a faixa `rtp_port`, liga `use_external_ip` e troca as
+senhas dos troncos pelas do `.env.demo`; o `up.sh` só a inclui com `PLUGHUB_SIP_EDGE=true` no
+`.env.demo`. **Autenticação é digest, nunca lista de IPs**: o Docker Desktop reescreve a origem de todo
+pacote que entra por porta publicada (medido: `172.17.0.1`), e o seed recusa tronco sem autenticação.
+Com a Twilio, o produto é o número de voz com TwiML `<Dial><Sip username password>` (modelo em
+`infra/sip/twilio_inbound.json.example`). Gate: `infra/test/probe_sip_edge_surface.sh` (+ `mut_`).
+
+**Fora da fatia:** porta SIP publicada de fato (os passos de rede estão na VOZ-32), TLS/SRTP, `REFER` e chamada
 sainte, teclas validadas com operadora de verdade (VOZ-32), tela para tronco e regra de despacho, e
 provedor por **registro** (o conversor recebe por tronco, não se registra), e o eco `plain` de
 segredo (`NIV-06`). Fichas `VOZ-32..35` e `NIV-06` no `pending.md`.

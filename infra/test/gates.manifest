@@ -847,6 +847,11 @@ probe_orq15_option_description.sh
 probe_trf01_transfer_marking.sh
 probe_apf01_performance_source.sh
 probe_apf02_session_complexity.sh
+# VOZ-32 (2026-09-23): borda SIP classificada. A publicado so 5060/udp + a faixa rtp_port · B publicada
+# <=> use_external_ip · C todo tronco no SFU com digest · N senha errada recusada · Y senha em vigor
+# passa (controle positivo) · K com a borda publicada, a senha do REPOSITORIO e recusada. Fechada e
+# estado valido. Irma: mut_sip_edge_surface.sh (abre em 127.0.0.1, nunca na LAN).
+probe_sip_edge_surface.sh
 probe_duration_definitions.sh
 probe_edge_surface.sh
 probe_entry_pool_fww.sh
@@ -949,6 +954,7 @@ smoke_wrapup_slot_handoff.sh
 =mut_trf01_transfer_marking.sh                        mutacao
 =mut_apf01_performance_source.sh                      mutacao
 =mut_apf02_session_complexity.sh                      mutacao
+=mut_sip_edge_surface.sh                              mutacao
 =mutation_claim_lease_slot.sh                         mutacao
 =mutation_occupancy_peak.sh                           mutacao
 

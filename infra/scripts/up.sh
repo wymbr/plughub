@@ -26,6 +26,17 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.demo.yml")
+# VOZ-32: a borda SIP é OPT-IN, e a chave mora no `.env.demo` (local, fora do git) para valer
+# também na subida automática do logon. Ligada, entra a camada que publica as portas, e o
+# `.env.demo` vira fonte de interpolação (senhas dos troncos). `SIP_USE_EXTERNAL_IP` é derivada
+# daqui, nunca uma segunda chave: porta publicada com endereço interno no SDP é chamada muda.
+SIP_EDGE=false
+if grep -qE '^PLUGHUB_SIP_EDGE=true[[:space:]]*$' "$REPO_ROOT/.env.demo" 2>/dev/null; then
+  SIP_EDGE=true
+  export SIP_USE_EXTERNAL_IP=true
+  COMPOSE=(docker compose --env-file "$REPO_ROOT/.env.demo"
+           -f "$REPO_ROOT/docker-compose.demo.yml" -f "$REPO_ROOT/docker-compose.sip-edge.yml")
+fi
 LOG_DIR="$REPO_ROOT/.logs"
 LOG="$LOG_DIR/up-$(date +%Y%m%d-%H%M%S).log"
 
@@ -54,6 +65,10 @@ fi
 
 echo "── up -d (reconcilia + espera health) ─────────────────────────────"
 echo "   log: $LOG"
+if [ "$SIP_EDGE" = true ]; then
+  echo "   ⚠️  borda SIP LIGADA (PLUGHUB_SIP_EDGE=true): 5060/UDP e RTP 10000–10100/UDP publicados."
+  echo "      Classificação: bash infra/test/probe_sip_edge_surface.sh"
+fi
 "${COMPOSE[@]}" up -d --scale e2e-runner=0 > >(tee -a "$LOG") 2>&1
 RC=$?
 

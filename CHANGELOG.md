@@ -1,5 +1,46 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (12) — VOZ-32 (preparação): a borda SIP ganha classificação, trava de senha e publicação opt-in — ainda FECHADA
+
+**Por que agora.** O dono vai contratar um tronco na Twilio para os testes, que é o gatilho da VOZ-32.
+Esta entrega é a parte do repositório; a borda continua fechada até os passos de rede (ficha).
+
+**Medido antes de desenhar.**
+- A stack roda no **Docker Desktop**: a porta publicada abre direto no Windows. O passo "Windows → WSL
+  por `mirrored`" da ficha não existe.
+- **O Docker Desktop reescreve a origem** de todo pacote que entra por porta publicada: um receptor UDP
+  num container viu `172.17.0.1` para pacotes mandados pelo IP da LAN e pelo localhost. Consequência:
+  liberar os IPs do provedor (`allowed_addresses`) não restringe nada aqui, e liberar o gateway do
+  Docker abriria para todos. **Digest é a única trava que funciona.**
+- Por isso o produto da Twilio é o **número de voz com TwiML `<Dial><Sip username password>`**, que
+  autentica por digest — e não o Elastic SIP Trunking, que entrega por lista de IPs.
+- Duas travas que pareciam existir: o seed **criava tronco sem autenticação** (só logava
+  `auth=NENHUMA`), e a senha do tronco de demo **está no compose** — com a porta aberta, quem tem o
+  repositório liga para dentro.
+
+**O que passou a ser verdade.**
+- `seed_sip.py` recusa tronco sem `auth_username`, nomeando o motivo (verificado: arquivo sem
+  autenticação → *NAO semeado*, saída 1).
+- `docker-compose.sip-edge.yml`: publica 5060/UDP e 10000–10100/UDP (nada de TCP nem TLS), liga
+  `use_external_ip` e troca as senhas dos troncos pelas do `.env.demo`, com `:?` — sem senha o compose
+  recusa subir. Recria os troncos (`SIP_SEED_RECONCILE`), porque o seed é if-absent.
+- `up.sh`: a camada entra só com `PLUGHUB_SIP_EDGE=true` no `.env.demo` — uma chave, que vale também
+  na subida automática do logon; `SIP_USE_EXTERNAL_IP` é derivada dela, nunca uma segunda chave.
+- `infra/sip/twilio_inbound.json.example`: modelo do tronco (fica `.example` até existir o número —
+  o seed só lê `*.json`).
+
+**Instrumentos.** `probe_sip_edge_surface.sh` (AUTO): P população (o serviço responde e há tronco) · A só
+5060/udp + a faixa `rtp_port` publicadas, e a faixa inteira · B publicada ⇔ `use_external_ip` · C todo
+tronco no SFU com digest · N senha errada recusada · Y a senha em vigor passa (controle positivo) · K com
+a borda aberta, a senha do repositório é recusada no valor e ao vivo. VERDE com a borda fechada (N 401,
+Y 486). `mut_sip_edge_surface.sh` abre a borda **só em 127.0.0.1**: M0 verde, e M1 sem endereço
+externo (B), M2 porta fora da classificação (A), M3 senha do repositório (K) e M4 tronco sem
+autenticação (C) — **as quatro pegas**; borda devolvida fechada. `probe_gates_manifest_coverage` verde.
+
+**Fora, e segue na VOZ-32:** modem em bridge, encaminhamento no roteador, firewall, DDNS, o número e a
+TwiML na Twilio, o endpoint `voice`, ligar a chave e validar as teclas com operadora real. TLS/SRTP
+segue decisão do ADR §8.
+
 ## 2026-09-23 (11) — ORQ-20: o teste da ORQ-19 zera o `ioredis-mock` e exige UM menu, em vez de pular o vazamento com `.at(-1)`
 
 **O defeito.** `menu-option-description.test.ts` criava `new RedisMock()` a cada teste, mas o

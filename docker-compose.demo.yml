@@ -1487,9 +1487,11 @@ services:
   # VOZ-02 (fatia 1) — a perna SIP: tronco → sala, pelo serviço SIP do próprio SFU. A chamada vira
   # PARTICIPANTE (`kind=SIP`) de uma sala nova, com o prefixo da dispatch rule; o gateway adota a
   # sala quando o webhook chega (`adapters/sip_leg.py`).
-  # ⚠️ NENHUMA porta publicada no host, DE PROPÓSITO: sinalização SIP não é HTTP e está fora da
-  # allowlist de borda (ADR adr-voice-media-plane V10). Até a borda SIP ser classificada e ter probe,
-  # só se liga para cá de DENTRO da rede do compose — é onde o cliente SIP do gate mora.
+  # ⚠️ NENHUMA porta publicada no host por este arquivo, DE PROPÓSITO: sinalização SIP não é HTTP e
+  # está fora da allowlist de borda (ADR adr-voice-media-plane V10). Publicar é OPT-IN, pela camada
+  # `docker-compose.sip-edge.yml` (VOZ-32), que o `up.sh` só inclui com `PLUGHUB_SIP_EDGE=true` no
+  # `.env.demo` e que troca as senhas dos troncos pelas do `.env.demo`. A superfície publicada é
+  # classificada por `infra/test/probe_sip_edge_surface.sh`.
   # Versão: anda independente do SFU (numeração própria); a do seed dos troncos é a da imagem do
   # gateway (SDK `livekit-api`). Fixada por digest, como o `speaches`.
   livekit-sip:
@@ -1503,7 +1505,7 @@ services:
           address: livekit-redis:6379
         sip_port: 5060
         rtp_port: 10000-10100
-        use_external_ip: false
+        use_external_ip: ${SIP_USE_EXTERNAL_IP:-false}   # VOZ-32: `true` só com a camada sip-edge
         logging:
           level: info
     depends_on:
