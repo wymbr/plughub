@@ -16,6 +16,60 @@ import { buildRender, duplicateNodeIds, optionsAtPath, leafPaths, leafMeanings,
          entryQuestionId, categoryPathFor } from "@plughub/schemas"
 import type { DialogForm, QuestionNode }  from "@plughub/schemas"
 
+// ─── ORQ-13: as opções da pergunta de esclarecimento ──────────────────────────
+
+/** Teto de botões do WhatsApp — limite de CANAL, não gosto. */
+export const CLARIFY_MAX_OPTIONS = 3
+
+export interface ClarifyOption { id: string; label: string }
+
+export interface ClarifyResult {
+  options:            ClarifyOption[]
+  candidate_count:    number
+  candidates_dropped: string[]
+  /** Conferidos além do teto — o chamador loga, ninguém trunca em silêncio. */
+  truncated:          string[]
+}
+
+/**
+ * Resolve os caminhos propostos pelo classificador em opções com rótulo da ÁRVORE.
+ *
+ * Função PURA e exportada para poder reprovar: a conferência é a metade que faz a
+ * D6 valer na PERGUNTA (e não só no desfecho), e conferência enterrada num handler
+ * de 120 linhas é conferência que ninguém testa.
+ *
+ * A fonte é o `vocabulary` (folhas com rótulo), nunca `options`: um candidato é
+ * folha em QUALQUER profundidade, enquanto `options` é um nível só.
+ *
+ * ⚠️ `vocabulary` ausente — as duas leituras da árvore divergiram — devolve ZERO
+ * candidatos, e o fluxo escapa. Fabricar rótulo a partir do caminho poria texto de
+ * código na boca do cliente (`sac.info_plano` como pergunta).
+ */
+export function clarifyOptions(
+  vocabulary: ReadonlyArray<{ path: string; label: string }> | undefined,
+  onlyPaths:  ReadonlyArray<string>,
+): ClarifyResult {
+  const porCaminho = new Map((vocabulary ?? []).map(v => [v.path, v.label]))
+  const vistos  = new Set<string>()
+  const aceitos: ClarifyOption[] = []
+  const dropados: string[] = []
+  for (const p of onlyPaths) {
+    if (vistos.has(p)) continue      // repetido não é segundo candidato
+    vistos.add(p)
+    const label = porCaminho.get(p)
+    // Caminho que não é folha declarada NÃO vira botão — mesma conferência da D6.
+    if (label === undefined) { dropados.push(p); continue }
+    aceitos.push({ id: p, label })
+  }
+  const oferecidos = aceitos.slice(0, CLARIFY_MAX_OPTIONS)
+  return {
+    options:            oferecidos,
+    candidate_count:    oferecidos.length,
+    candidates_dropped: dropados,
+    truncated:          aceitos.slice(CLARIFY_MAX_OPTIONS).map(o => o.id),
+  }
+}
+
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
 export interface DialogDeps {
@@ -63,6 +117,25 @@ const TreeLevelInputSchema = z.object({
                   "May be a DOTTED PATH (`sac.info_plano`) when the channel drew the whole " +
                   "tree and the customer reached a leaf in one turn — each segment is " +
                   "appended in order, so the flow is turn-agnostic.",
+                ),
+  // ── ORQ-13: a pergunta de esclarecimento ─────────────────────────────────
+  //
+  // Quando o classificador com LLM nao consegue escolher entre dois destinos, o
+  // fluxo pergunta ao cliente — e os ROTULOS tem de vir da ARVORE, nunca do
+  // modelo (D7: o texto e do fluxo, o rotulo e do conteudo). Este campo recebe
+  // os caminhos que o LLM propos e devolve as opcoes correspondentes, ja
+  // CONFERIDAS contra as folhas declaradas: caminho inventado nao vira botao.
+  //
+  // ⚠️ Nao mexe no CURSOR e nao redefine `found`/`is_leaf`. Sobrecarregar um
+  // campo existente com um segundo significado e o defeito que a TRF-02 mediu
+  // (`outcome='suspended'` querendo dizer duas coisas); aqui a resposta vai em
+  // `candidate_count` e `candidates_dropped`, que so existem nesta pergunta.
+  only_paths: z.array(z.string()).optional()
+                .describe(
+                  "Restrict `options` to these leaf paths (dotted), for a clarifying question. " +
+                  "Paths are CONFERRED against the declared leaves: unknown ones are dropped and " +
+                  "reported in `candidates_dropped`. Order is the caller's, deduped, capped at 3 " +
+                  "(the WhatsApp button ceiling). `candidate_count` says how many survived.",
                 ),
   status:     z.enum(["draft", "published"]).default("published"),
   version:    z.number().int().positive().optional(),
@@ -270,6 +343,38 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           vocabulary = undefined
         }
 
+        // ── ORQ-13 — as opcoes da pergunta de esclarecimento ──────────────────
+        //
+        // Resolve os caminhos propostos pelo LLM em opcoes com rotulo da ARVORE.
+        // A fonte e o `vocabulary` (folhas com rotulo) e nao `options`, porque um
+        // candidato e uma FOLHA em qualquer profundidade, enquanto `options` e um
+        // nivel so.
+        //
+        // ⚠️ `vocabulary` ausente (as duas leituras da arvore divergiram, logado
+        // acima) ⇒ `candidate_count: 0`, e o fluxo escapa. Fabricar rotulo a
+        // partir do caminho poria texto de codigo na boca do cliente.
+        const esclarecimento = input.only_paths
+          ? clarifyOptions(vocabulary, input.only_paths)
+          : undefined
+        if (esclarecimento) {
+          // Truncar ou descartar em SILENCIO esconderia do cliente um destino que
+          // o classificador considerou — e do operador o motivo de a pergunta ter
+          // saido menor do que o modelo pediu.
+          if (esclarecimento.truncated.length > 0) {
+            console.warn(
+              `[dialog_tree_level] esclarecimento TRUNCADO em ${form.form_id} v${form.version}: ` +
+              `ofereco ${CLARIFY_MAX_OPTIONS} — fora [${esclarecimento.truncated.join(", ")}]`,
+            )
+          }
+          if (esclarecimento.candidates_dropped.length > 0) {
+            console.warn(
+              `[dialog_tree_level] candidatos DESCARTADOS em ${form.form_id} v${form.version}: ` +
+              `[${esclarecimento.candidates_dropped.join(", ")}] nao sao folhas declaradas` +
+              (vocabulary ? "" : " (vocabulario omitido por divergencia — ver aviso acima)"),
+            )
+          }
+        }
+
         return ok({
           form_id:       form.form_id,
           version:       form.version,
@@ -297,7 +402,16 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
           // que o prompt le; `leaves` continua sendo o que se CONFERE. Chave
           // ausente = vocabulario omitido (divergencia logada acima).
           ...(vocabulary ? { vocabulary } : {}),
-          options:       nivel.options,
+          // Com `only_paths` estas SAO as opcoes a oferecer em seguida — mesmo
+          // significado do campo, recorte pedido pelo chamador —, e o `id` de cada
+          // uma e o CAMINHO PONTUADO, que o `chosen_id` desta mesma tool sabe
+          // dividir. Sem isso o fluxo teria de remontar o caminho a partir do id
+          // do botao, e a composicao do caminho ganharia uma segunda casa.
+          options:       esclarecimento ? esclarecimento.options : nivel.options,
+          ...(esclarecimento
+            ? { candidate_count:    esclarecimento.candidate_count,
+                candidates_dropped: esclarecimento.candidates_dropped }
+            : {}),
           path:          nivel.path,
           // Cauda da `category` do Arc 12 — o chamador nao precisa juntar, e assim
           // ha UMA forma de compor o caminho, nao uma por skill.

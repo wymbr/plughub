@@ -315,7 +315,8 @@ case "$D6" in
   SEM_REASON)                  bad "o skill LLM nao tem step reason — nao ha LLM decidindo nada" ;;
   REASON_SEM_OUTPUT_AS)        bad "o reason nao guarda a decisao — nao ha o que conferir" ;;
   SEM_CONFERENCIA)             bad "a resposta do LLM NAO e conferida contra o vocabulario — o prompt virou a unica guarda: ${D6}" ;;
-  REASON_NAO_VAI_PARA_CONFERENCIA*) bad "o reason desvia da conferencia: ${D6}" ;;
+  REASON_DESVIA_DA_CONFERENCIA*) bad "ha caminho do reason ate o roteamento SEM conferencia: ${D6}" ;;
+  ENDERECO_FIXO_NA_CONFERENCIA*) bad "conferencia com endereco FIXO: depois de uma continuacao ela procura na arvore errada (ORQ-17): ${D6}" ;;
   SEM_VEREDICTO_FOUND_IS_LEAF) bad "a conferencia roda e ninguem olha found/is_leaf" ;;
   ESCAPE_NAO_CONTAVEL)         bad "o escape do LLM nao alcanca o evento — 'nao sei' vira nulo, nao fato (D7)" ;;
   SERIES_DIFERENTES*)          bad "os dois orquestradores medem em unidades diferentes — incomparaveis: ${D6}" ;;

@@ -164,6 +164,15 @@ steps:
         Se nada na lista servir, ou se você não tiver confiança suficiente,
         devolva a string vazia em `destino` — dizer "não sei" é uma resposta
         válida e preferível a um palpite.
+
+        Quando você não escolher um destino porque DOIS OU TRÊS da lista são
+        plausíveis e o cliente não disse o bastante para separá-los, devolva
+        `destino` vazio e liste esses caminhos em `candidatos`, do mais provável
+        ao menos, copiados EXATAMENTE como aparecem na lista. O cliente será
+        perguntado uma única vez sobre eles, então liste só os que você de fato
+        não consegue separar — nunca a lista inteira, e nunca um candidato que
+        você já descartou. Se nada servir, deixe `candidatos` vazio: aí o caso é
+        de atendente, não de pergunta.
       destinos_permitidos:     "$.pipeline_state.nivel.leaves"
       significado_dos_destinos: "$.pipeline_state.nivel.vocabulary"
       fala_do_cliente:         "$.pipeline_state.fala"
@@ -172,24 +181,70 @@ steps:
         type: string
       confianca:
         type: number
+      # ORQ-13 — os candidatos que o modelo não conseguiu separar. `required:
+      # false` de propósito: o caso normal é escolher, e exigir o campo faria o
+      # `validateAgainstSchema` reprovar toda classificação confiante (→ `escapar`,
+      # o oposto do que esta ficha entrega).
+      candidatos:
+        type: array
+        required: false
+        description: >
+          Caminhos plausíveis que você não conseguiu separar, do mais provável ao
+          menos. Só quando `destino` for vazio. Máximo 3.
+        items:
+          type: string
     output_as: classificacao
-    on_success: conferir
+    on_success: triagem
     on_failure: escapar
+
+  # ── 3b. Escolheu, hesitou, ou não sabe? (ORQ-13) ────────────────────────────
+  #
+  # A porta que faltava entre *"não sei"* e o escape. Antes daqui, `destino`
+  # vazio ia ao `conferir`, voltava `found: false` e caía em `nao_se_aplica` — o
+  # cliente que disse algo classificável em duas folhas recebia um atendente sem
+  # nunca ter sido perguntado qual das duas era.
+  #
+  # ⚠️ **A ordem das condições É a regra**: destino preenchido VENCE, mesmo que o
+  # modelo também tenha listado candidatos. Sem isso, um modelo prestativo que
+  # sempre preenchesse `candidatos` poria uma pergunta extra em todo contato.
+  #
+  # ⚠️ `neq ""` só é seguro porque `destino` é `required` no `output_schema`: uma
+  # resposta sem o campo (ou com `null`) reprova na validação do `reason` e vai
+  # pelo `on_failure`, então aqui ele é sempre string. Fosse opcional, `undefined
+  # !== ""` mandaria o "não respondeu" para o caminho do confiante.
+  - id: triagem
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.classificacao.destino"
+        operator: neq
+        value: ""
+        next: conferir
+      - field: "$.pipeline_state.classificacao.candidatos"
+        operator: exists
+        next: esclarecer_opcoes
+    default: escapar
 
   # ── 4. A CONFERÊNCIA — é ela que faz a D6 valer ─────────────────────────────
   # O prompt pediu; isto verifica. Usa a MESMA projeção do orquestrador
   # determinístico, com o caminho pontuado (F2): `found && is_leaf` é a definição
   # de "aterrissou numa folha declarada". Caminho inventado, pasta em vez de folha,
   # string vazia — os três caem no mesmo lugar, e o lugar é contável.
+  # ⚠️ **A question ATIVA, nunca a raiz fixa** (ORQ-17, medido em 2026-09-22). Este
+  # step dizia `output_key: "destino"`, e depois de uma continuação o cursor vive
+  # em OUTRA question: o cliente dizia *"obrigado"*, o LLM respondia `encerrar`
+  # — certo —, e a conferência procurava `encerrar` na árvore de ENTRADA, não
+  # achava (`found: false`) e mandava para o escape, que termina em atendente
+  # humano. O modelo acertou e a conferência jogou fora, sem nada ficar vermelho.
+  # O gêmeo determinístico já endereçava assim, com este mesmo aviso.
   - id: conferir
     type: invoke
     tool: dialog_tree_level
     input:
-      form_id:    "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
-      output_key: "destino"
-      path:       []
-      chosen_id:  "$.pipeline_state.classificacao.destino"
-      tenant_id:  "$.tenant_id"
+      form_id:     "$.config.form_id"   # parametrizado por deploy (PoolSkillSlot.config_json)
+      question_id: "$.pipeline_state.nivel.question_id"
+      path:        []
+      chosen_id:   "$.pipeline_state.classificacao.destino"
+      tenant_id:   "$.tenant_id"
     output_as: nivel
     on_success: avaliar
     on_failure: escapar
@@ -242,6 +297,91 @@ steps:
   # ⚠️ O texto é do FLUXO e o rótulo vem da ÁRVORE (D7 do ADR): mensagem POR FOLHA voltaria a pôr
   # conteúdo no mapa, que é o que a D2 impede. `node_label` é o rótulo do nó do cursor, já
   # resolvido na língua da sessão pela mesma projeção que conferiu a folha.
+  # ── 4c. A pergunta de esclarecimento (ORQ-13) ───────────────────────────────
+  #
+  # Os caminhos vêm do LLM; os RÓTULOS vêm da árvore, e a tool confere um contra
+  # o outro — candidato inventado não vira botão (é a D6 aplicada à PERGUNTA, e
+  # não só ao desfecho). Por isso o `only_paths` mora na mesma projeção que já
+  # confere a aterrissagem: duas conferências em casas diferentes divergiriam.
+  - id: esclarecer_opcoes
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:     "$.config.form_id"
+      # A question ATIVA, pelo mesmo motivo do `conferir` (ORQ-17): os candidatos
+      # vêm do vocabulário do nível CORRENTE, e conferi-los contra a árvore de
+      # entrada descartaria todos depois de uma continuação.
+      question_id: "$.pipeline_state.nivel.question_id"
+      path:        []
+      only_paths:  "$.pipeline_state.classificacao.candidatos"
+      tenant_id:   "$.tenant_id"
+    output_as: esclarecimento
+    on_success: avaliar_esclarecimento
+    on_failure: escapar
+
+  # ⚠️ **Campo PRÓPRIO, e não `found` reaproveitado.** `found` já significa "o
+  # caminho resolve"; fazê-lo significar também "há candidatos bastantes" seria um
+  # valor com dois fatos — exatamente o defeito que a TRF-02 mediu em
+  # `outcome='suspended'` e custou uma leitura errada de relatório.
+  #
+  # **`gte 2` porque uma opção não é escolha.** Um candidato só significa que o
+  # modelo tinha um palpite e não o assumiu; perguntar "é isto?" com um botão só
+  # empurra o cliente para o palpite, que é pior que escapar — o escape é contável
+  # e a confirmação forçada não.
+  - id: avaliar_esclarecimento
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.esclarecimento.candidate_count"
+        operator: gte
+        value: 2
+        next: perguntar_esclarecimento
+    default: escapar
+
+  # ⚠️ **O texto é do FLUXO, os rótulos são da ÁRVORE** (D7). Uma pergunta por
+  # folha voltaria a pôr conteúdo no mapa.
+  #
+  # ⚠️ **Uma pergunta, e o teto é ESTRUTURAL, não um contador.** A resposta vai ao
+  # `conferir_esclarecido` → `avaliar`, e `avaliar` escapa: não há aresta de volta
+  # para cá. Contador precisaria de lugar para morar e de alguém que o zerasse;
+  # a ausência de aresta não tem como envelhecer.
+  #
+  # `button` porque são no máximo 3 (o teto do WhatsApp, imposto na tool). A
+  # coleta declara `dtmf` para a chamada telefônica — sem ela o cliente na voz
+  # ouviria as opções e não teria como responder.
+  - id: perguntar_esclarecimento
+    type: menu
+    prompt:      "Só para eu não te encaminhar errado: qual destes é o seu caso?"
+    interaction: button
+    options:     "$.pipeline_state.esclarecimento.options"
+    output_as:   escolha_esclarecida
+    timeout_s: 120
+    collect:
+      input: [dtmf, voice, text]
+      first_input_timeout_s: 110
+      voice:
+        end_silence_ms: 900
+        max_speech_s: 12
+    on_success: conferir_esclarecido
+    on_failure: escapar
+    on_timeout: finalizar
+    on_disconnect: finalizar
+
+  # O `id` do botão é o CAMINHO PONTUADO, e esta é a mesma tool que o divide —
+  # o fluxo não remonta caminho nenhum. Daqui em diante é o trilho normal:
+  # `avaliar` decide folha, comando e reinício, sem uma segunda casa para isso.
+  - id: conferir_esclarecido
+    type: invoke
+    tool: dialog_tree_level
+    input:
+      form_id:     "$.config.form_id"
+      question_id: "$.pipeline_state.nivel.question_id"   # a ATIVA (ORQ-17)
+      path:        []
+      chosen_id:   "$.pipeline_state.escolha_esclarecida"
+      tenant_id:   "$.tenant_id"
+    output_as: nivel
+    on_success: avaliar
+    on_failure: escapar
+
   - id: avisar_destino
     type: notify
     message: "Entendi: {{$.pipeline_state.nivel.node_label}}. Vou te encaminhar agora — um momento."
@@ -263,6 +403,12 @@ steps:
   # ⚠️ Vai pela projeção também, e não por um literal montado aqui: se a folha de
   # escape sumir da forma, isto tem de falhar, não fabricar um caminho que a lente
   # desenharia como se alguém o tivesse autorado.
+  # ⚠️ **Este endereça a ENTRADA de propósito, e é a exceção da ORQ-17.** O
+  # `nao_se_aplica` é folha da árvore de entrada e não existe na continuação;
+  # apontá-lo para a question ativa faria o ESCAPE falhar justamente quando o
+  # fluxo já falhou — e o `on_failure` daqui é `sem_navegacao`, humano. Como o
+  # `chosen_id` é LITERAL, a folha é declarada por construção: é o único
+  # `dialog_tree_level` deste skill que pode ter endereço fixo.
   - id: escapar
     type: invoke
     tool: dialog_tree_level

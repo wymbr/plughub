@@ -270,8 +270,107 @@ def ramo_j():
     ]
     if not conf:
         return "SEM_CONFERENCIA"
-    if r.get("on_success") != conf[0]["id"]:
-        return "REASON_NAO_VAI_PARA_CONFERENCIA(%s)" % r.get("on_success")
+
+    # A decisao do LLM nao pode chegar ao ROTEAMENTO sem passar por uma
+    # conferencia. Ate 2026-09-22 isto era uma aresta DIRETA
+    # (`reason.on_success == conferir`); a ORQ-13 poe uma triagem no meio, e a
+    # pergunta de esclarecimento confere pelo `only_paths` em vez do `chosen_id`.
+    # A REGRA continua a mesma — o que mudou foi a forma.
+    #
+    # ⚠️ Afrouxar para *"existe uma conferencia em algum lugar do skill"* seria
+    # perder o ramo: o defeito que ele existe para pegar e o caminho que DESVIA.
+    # Por isso o teste virou ALCANCABILIDADE — todo caminho que sai do `reason`
+    # encontra uma conferencia ANTES de rotear, registrar ou escalar. Provado por
+    # mutacao: apontar `reason.on_success` para `escalar` volta a reprovar.
+    # A VARIAVEL que a medicao le — derivada do proprio skill, nunca fixada aqui:
+    # e ela que a conferencia tem de ESCREVER. Sem este vinculo, uma conferencia
+    # qualquer (a das opcoes da pergunta, por exemplo) contaria como se fosse a do
+    # destino, e o caminho registrado seria o da variavel ANTIGA — categoria errada
+    # na serie, sem nada ficar vermelho. (Mutacao M3, medida em 2026-09-22.)
+    var_medida = None
+    for s in llm.values():
+        if s.get("tool") == "agent_event_record":
+            ref = str((s.get("input") or {}).get("path", ""))
+            if ref.startswith("$.pipeline_state."):
+                partes = ref.split(".")
+                if len(partes) > 2:
+                    var_medida = partes[2]
+            break
+    if not var_medida:
+        return "SEM_VARIAVEL_MEDIDA"
+
+    def _confere(s):
+        if s.get("tool") != "dialog_tree_level":
+            return False
+        # ⚠️ Tem de escrever a variavel que a medicao le — ver acima.
+        if s.get("output_as") != var_medida:
+            return False
+        inp = s.get("input") or {}
+        # confere a resposta do modelo, ou a escolha que o cliente devolveu
+        ci = str(inp.get("chosen_id", ""))
+        if saida in ci or ci.startswith("$.pipeline_state."):
+            return True
+        # ...ou ancora num caminho LITERAL (o escape), que e folha declarada por
+        # construcao: e a mesma projecao decidindo, so que sobre um valor nosso.
+        return bool(ci) and not ci.startswith("$.") and not ci.startswith("@")
+
+    def _saidas(s):
+        """Todo sucessor: `on_*` string, `on_*` objeto ({next}), `default` e as
+        condicoes do `choice` — que a varredura anterior NAO seguia."""
+        for k, v in s.items():
+            if k.startswith("on_") or k in ("next", "default"):
+                if isinstance(v, str):
+                    yield v
+                elif isinstance(v, dict) and isinstance(v.get("next"), str):
+                    yield v["next"]
+        for c in (s.get("conditions") or []):
+            if isinstance(c, dict) and isinstance(c.get("next"), str):
+                yield c["next"]
+
+    # ── ORQ-17: quem confere valor DERIVADO endereça a question ATIVA ─────────
+    #
+    # Medido em 2026-09-22 na sessao `5f339d70`: o cliente disse "obrigado", o LLM
+    # respondeu `encerrar` (certo), e a conferencia procurou `encerrar` na arvore de
+    # ENTRADA porque o step dizia `output_key: destino` — `found: false`, escape,
+    # atendente humano. O modelo acertou e a conferencia jogou fora, sem nada ficar
+    # vermelho. Depois de uma continuacao o cursor vive em OUTRA question.
+    #
+    # A excecao e o ESCAPE: `chosen_id` LITERAL ancora numa folha declarada por
+    # construcao, e a folha de escape so existe na entrada.
+    for skill_nome, passos in (("llm", llm), ("det", det)):
+        for s in passos.values():
+            if s.get("tool") != "dialog_tree_level":
+                continue
+            inp = s.get("input") or {}
+            derivado = any(
+                str(inp.get(k, "")).startswith("$.")
+                for k in ("chosen_id", "only_paths")
+            )
+            if not derivado:
+                continue
+            endereco = str(inp.get("question_id", inp.get("output_key", "")))
+            if not endereco.startswith("$."):
+                return "ENDERECO_FIXO_NA_CONFERENCIA(%s:%s=%s)" % (
+                    skill_nome, s["id"], endereco or "(ausente)")
+
+    conf_ids = {s["id"] for s in llm.values() if _confere(s)}
+    consome  = {
+        s["id"] for s in llm.values()
+        if s.get("type") in ("escalate", "delegate")
+        or s.get("tool") in ("pool_route_resolve", "agent_event_record")
+    }
+    # estado = (passo, ja passou por conferencia)
+    inicio = r.get("on_success")
+    fila, vistos = [(inicio, inicio in conf_ids)], set()
+    while fila:
+        no, conferiu = fila.pop()
+        if (no, conferiu) in vistos or no not in llm:
+            continue
+        vistos.add((no, conferiu))
+        if no in consome and not conferiu:
+            return "REASON_DESVIA_DA_CONFERENCIA(%s->%s)" % (inicio, no)
+        for prox in _saidas(llm[no]):
+            fila.append((prox, conferiu or prox in conf_ids))
 
     # E o veredicto tem de ramificar sobre found/is_leaf — senao a conferencia
     # roda e ninguem olha o resultado.

@@ -574,3 +574,60 @@ previsto, aparecendo aqui com o caminho que o explica.
 Eles têm janelas, volumes e destinos diferentes — a métrica passou a existir, a comparação precisa
 de amostra pareada. Dizer "o LLM erra menos" com 5 contatos contra 14 seria a mesma pressa que a
 métrica existe para evitar.
+
+### D10 — entre *"não sei"* e o escape cabe UMA pergunta (ORQ-13, 2026-09-22)
+
+O classificador tinha duas saídas: escolher, ou cair em `nao_se_aplica`. Quem dissesse algo que
+cabe em duas folhas — e nem o cliente sabe que são duas — recebia um atendente **sem nunca ter
+sido perguntado qual das duas era**. A folha de escape continua existindo e continua contável; o
+que muda é que ela deixa de receber o caso que uma pergunta resolveria.
+
+**O modelo propõe, a ÁRVORE responde.** O `reason` ganhou `candidatos` (até 3 caminhos, só quando
+`destino` sai vazio), e a tool `dialog_tree_level` ganhou `only_paths`: ela resolve esses caminhos
+em opções **com o rótulo da árvore** e **confere** cada um contra as folhas declaradas. Caminho
+inventado não vira botão — é a D6 aplicada à PERGUNTA, e não só ao desfecho. Deixar o LLM compor a
+frase com os rótulos que recebeu teria sido mais barato e poria texto de modelo na boca da
+plataforma, com o risco de oferecer um destino que a conferência depois recusaria.
+
+**Por que a conferência mora na mesma tool que já confere a aterrissagem:** duas conferências em
+casas diferentes divergem. O `id` de cada opção é o **caminho pontuado**, que é o que o `chosen_id`
+da mesma tool sabe dividir — o fluxo não remonta caminho nenhum, e a ida e a volta usam a mesma
+projeção. É isso que o ramo C do gate mede: o botão oferecido resolve de volta em
+`found && is_leaf`. Se essa volta quebrasse, a pergunta funcionaria, o cliente escolheria, e a
+navegação **reiniciaria parecendo certa**.
+
+**Três decisões que parecem detalhe e não são:**
+
+| decisão | alternativa recusada |
+|---|---|
+| `destino` preenchido VENCE, mesmo com candidatos listados | ler candidatos primeiro: um modelo prestativo que sempre os preenchesse poria pergunta extra em TODO contato |
+| `gte 2` para perguntar | perguntar com UM candidato é confirmar um palpite — empurra o cliente para ele, e a confirmação forçada não é contável como o escape é |
+| campo PRÓPRIO (`candidate_count`), nunca `found` reaproveitado | `found` já significa *"o caminho resolve"*; dar-lhe um segundo fato é o defeito que a TRF-02 mediu em `outcome='suspended'`, e que custou uma leitura errada de relatório |
+
+**O teto de uma pergunta é ESTRUTURAL, não um contador.** A resposta entra em
+`conferir_esclarecido` → `avaliar`, e `avaliar` escapa: não existe aresta de volta para o
+esclarecimento. Contador precisaria de lugar para morar e de alguém que o zerasse; a ausência de
+aresta não tem como envelhecer. E reentrar no `avaliar` de sempre, em vez de duplicar suas
+condições, é o que mantém os COMANDOS (`encerrar`, `outra coisa`) numa casa só.
+
+**O teto de 3 opções é do CANAL** (botões do WhatsApp), imposto na tool e **logado** quando corta —
+truncar em silêncio esconderia do cliente um destino que o classificador considerou.
+
+Medido: unitário `dialog.test.ts` (7 casos) com bateria de mutação — as quatro mutações foram
+pegas; gate ao vivo `infra/test/probe_orq13_clarify.sh` (A conferência · B contraprova do caminho
+inventado · C ida e volta · D vocabulário indisponível não vira rótulo fabricado).
+
+> ⚠️ **O primeiro contato real achou outro defeito, e não era do modelo** (ORQ-17, mesmo dia).
+> Depois de uma continuação o cursor vive em OUTRA question (D5), e `conferir` endereçava a
+> projeção pela question de ENTRADA, fixa: o cliente dizia *"obrigado"*, o LLM respondia
+> `encerrar` — certo —, a conferência procurava na árvore errada, devolvia `found: false` e o
+> escape terminava em atendente humano. **Quem confere valor DERIVADO endereça a question ATIVA**
+> (`question_id: "$.pipeline_state.nivel.question_id"`); o escape é a exceção, porque seu
+> `chosen_id` é literal e a folha de escape só existe na entrada. Os dois steps que esta ficha
+> criou nasceram com o defeito, copiado do vizinho — e o gêmeo determinístico já trazia o aviso
+> escrito no próprio step, sem que isso protegesse o irmão. Por isso a regra virou ramo de gate,
+> valendo para os dois skills. Ver `CHANGELOG.md` § 2026-09-22 (17).
+
+⚠️ **O que NÃO foi medido:** um contato real passando pela pergunta. O disparo depende de o modelo
+declarar que não consegue separar dois destinos, e isso não se força por `curl` — vale para a
+primeira leitura da série, não para o mecanismo, que está preso pelos dois testes acima.

@@ -1,5 +1,136 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-22 (17) — ORQ-17: a conferência procurava na árvore de ENTRADA depois de uma continuação, e o "obrigado" virava atendente humano
+
+**Como apareceu.** No teste da ORQ-13, o dono foi atendido, agradeceu — e em vez de encerrar foi
+encaminhado a um agente humano. O relato descrevia o modelo como culpado (*"não entendeu que era
+pra finalizar"*), e a medição mostrou o contrário: **o modelo acertou.**
+
+**A medição, na sessão `5f339d70`.** A cadeia é `demo_llm_ia` (suspenso) → `sac_ia` atende
+(`sac.status_servico`) → `demo_llm_ia` retoma → evento `navegacao.destino.nao_se_aplica` →
+`retencao_humano`. O `nao_se_aplica` é folha da árvore de **entrada**; as folhas do nível em que o
+cliente estava (a continuação `pos_atendimento`) são `outra_coisa`, `especialista` e **`encerrar`**
+— esta última com a descrição *"Cliente não quer mais nada; encerrar o contato"* e o exemplo
+literal **"não, obrigado"**. Ou seja: o vocabulário certo estava na mão do classificador.
+
+Duas chamadas à tool fecham o caso:
+
+| chamada | resultado |
+|---|---|
+| `output_key: destino` + `chosen_id: encerrar` — **o que o fluxo fazia** | `found: false` → escape → humano |
+| `question_id: pos_atendimento` + `chosen_id: encerrar` — o que devia | `found: true`, `is_leaf: true`, `category_path: pos_atendimento.encerrar` → `finalizar` |
+
+**A causa.** `conferir` endereçava a projeção por `output_key: "destino"` — a question de ENTRADA,
+fixa. Depois de uma continuação o cursor vive em **outra question** (D5: a continuação é raiz
+própria), então a conferência procurava a folha na árvore errada, não achava, e o `found: false`
+mandava para o escape. **O modelo acertou e a conferência jogou fora**, sem nada ficar vermelho —
+um `found: false` é indistinguível de *"o LLM inventou um caminho"*, que é o caso que aquele ramo
+existe para pegar.
+
+⚠️ **O gêmeo determinístico já estava certo, com este aviso escrito no próprio step**
+(`descer`: *"a question ATIVA, nunca a raiz fixa… um `output_key` literal aqui levaria a navegação
+de volta à árvore de entrada sem nada ficar vermelho"*). A regra estava descoberta, documentada no
+lugar certo — e o irmão com LLM nunca a recebeu. Documentar num artefato não protege o outro; é
+por isso que a correção veio com mecanismo.
+
+**O conserto.** `conferir`, `esclarecer_opcoes` e `conferir_esclarecido` passam a endereçar
+`question_id: "$.pipeline_state.nivel.question_id"` — a question ATIVA, que a própria projeção
+devolve. Os dois últimos são steps que a ORQ-13 criou hoje: **nasceram com o defeito**, copiado do
+vizinho.
+
+**A exceção, declarada no YAML:** `escapar` continua endereçando a entrada, porque o
+`nao_se_aplica` só existe lá e o `chosen_id` dele é LITERAL — folha declarada por construção.
+Apontá-lo para a question ativa faria o escape falhar exatamente quando o fluxo já falhou, e o
+`on_failure` dali é humano.
+
+**O mecanismo (ramo J do `probe_orchestrator_tree_nav`):** todo `dialog_tree_level` cujo
+`chosen_id`/`only_paths` é valor DERIVADO (`$.`) tem de endereçar por referência, nunca por
+literal — e a checagem vale para os **dois** skills, porque a regra é do padrão, não deste flow.
+Mutações: `conferir` voltando ao endereço fixo · o esclarecimento conferindo contra a entrada · o
+**determinístico** regredindo — as três pegas, controle positivo verde.
+
+**Deploy verificado** (âncora `nivel.question_id` no snapshot promovido de `demo_llm_ia`); gates
+`probe_orchestrator_tree_nav`, `probe_orq13_clarify` e `probe_tree_continuation` verdes.
+
+**Nota de método.** É o segundo caso hoje em que o relato de um humano nomeia o suspeito errado e a
+medição encontra outro (o primeiro foi o 50% de `sac.info_plano`, que era defeito da métrica). A
+regra que valeu nos dois: **não consertar no lugar que o sintoma aponta antes de medir onde o fato
+se separa.** Aqui, a diferença entre *"o LLM não entendeu"* e *"a conferência descartou"* são duas
+chamadas de tool — e elas mudam completamente o que se conserta.
+
+## 2026-09-22 (16) — ORQ-13: entre "não sei" e o escape passou a caber UMA pergunta
+
+**O que faltava.** O orquestrador com LLM tinha duas saídas: escolher um destino, ou cair na folha
+de escape. Quem dissesse algo que cabe em duas folhas — e o cliente nem sabe que são duas —
+recebia um atendente **sem nunca ter sido perguntado qual das duas era**. O escape continua
+existindo e continua contável; o que muda é que ele deixa de receber o caso que uma pergunta
+resolve.
+
+**O modelo propõe, a ÁRVORE responde.** O `reason` ganhou `candidatos` (até 3 caminhos, e só
+quando `destino` sai vazio); a tool `dialog_tree_level` ganhou `only_paths`, que resolve esses
+caminhos em opções **com o rótulo da árvore** e **confere** cada um contra as folhas declaradas.
+Caminho inventado não vira botão — é a D6 aplicada à PERGUNTA, não só ao desfecho. A alternativa
+mais barata era deixar o LLM compor a frase com os rótulos que já recebe (ORQ-12); foi recusada
+porque poria texto de modelo na boca da plataforma e poderia oferecer um destino que a conferência
+depois recusaria.
+
+**A conferência mora na tool que já confere a aterrissagem**, e o `id` de cada opção é o caminho
+pontuado que o `chosen_id` da mesma tool sabe dividir: ida e volta pela mesma projeção, fluxo sem
+remontar caminho. Se essa volta quebrasse, a pergunta funcionaria, o cliente escolheria, e a
+navegação **reiniciaria parecendo certa**.
+
+**Três decisões que parecem detalhe:** (1) `destino` preenchido VENCE mesmo com candidatos listados
+— senão um modelo prestativo poria pergunta extra em todo contato; (2) só pergunta com **dois ou
+mais** candidatos conferidos — perguntar com um é confirmar um palpite, e confirmação forçada não é
+contável como o escape é; (3) campo **próprio** (`candidate_count`), nunca `found` reaproveitado —
+dar dois fatos a um valor é exatamente o defeito que a TRF-02 mediu hoje em `outcome='suspended'`.
+
+**O teto de uma pergunta é ESTRUTURAL:** a resposta entra em `conferir_esclarecido` → `avaliar`, e
+`avaliar` escapa. Não há aresta de volta. Contador precisaria de lugar para morar e de alguém que o
+zerasse; ausência de aresta não envelhece. Reentrar no `avaliar` de sempre também mantém os
+COMANDOS (`encerrar`, `outra coisa`) numa casa só. O teto de **3 opções** é do canal (botões do
+WhatsApp), imposto na tool e **logado** quando corta.
+
+**Medição.** `clarifyOptions` é função PURA e exportada — conferência enterrada num handler de 120
+linhas é conferência que ninguém testa. 7 casos em `dialog.test.ts` + **bateria de mutação com as
+quatro mutações pegas** (aceitar caminho inventado · repetido contando como segundo candidato ·
+truncar em silêncio · ignorar o teto do canal). Gate ao vivo `probe_orq13_clarify.sh`: A
+conferência · B contraprova do caminho inventado · C **ida e volta** · D vocabulário indisponível
+não vira rótulo fabricado. Deploy verificado pelo `deploy_skill_to_slot.sh` (âncora `triagem`
+presente no snapshot promovido de `demo_llm_ia`).
+
+**DOIS defeitos de INSTRUMENTO achados no caminho, e os dois davam verde/vermelho falso:**
+
+1. A bateria de mutação rodava `vitest | tail -4`, e o código de saída de um pipeline é o do
+   ÚLTIMO comando: ela media o `tail`, que sai 0 sempre. As quatro mutações "sobreviveram" porque a
+   bateria nunca olhou o vitest. Corrigido lendo o rc do processo, sem pipe.
+2. O gate ao vivo reprovou quatro ramos sobre um produto que estava certo: `chama()` fazia
+   `ID=$((ID+1))` e era invocada como `$(chama …)` — **comando substituído roda em subshell**, então
+   o contador do pai nunca subia, toda chamada pedia `id: 2` e o `select(.id == 2)` devolvia para
+   sempre a resposta da PRIMEIRA. Só uma chamada à mão, fora do gate, mostrou a diferença. Hoje o id
+   vem por argumento.
+
+   > Os dois têm a mesma moral, e é a da § Postura de Engenharia: **antes de acreditar num
+   > veredicto, pergunte o que ele mediu**. Um deles comprava confiança (verde sem ter olhado), o
+   > outro acusava o inocente — e nenhum dos dois estava falando do produto.
+
+**O ramo J do `probe_orchestrator_tree_nav` teve de ser REESCRITO, e isso merece o registro que
+afrouxar um gate normalmente não tem.** Ele exigia uma ARESTA DIRETA (`reason.on_success ==
+conferir`), e a triagem no meio o deixou vermelho sobre um fluxo que não viola nada. Trocar a
+condição para *"existe uma conferência em algum lugar do skill"* teria feito o gate passar — e
+perdido exatamente o defeito que ele existe para pegar, que é o caminho que DESVIA. Hoje ele testa
+**alcançabilidade**: todo caminho que sai do `reason` encontra uma conferência antes de rotear,
+registrar ou escalar, e a varredura passou a seguir também os ramos do `choice`, que a anterior
+ignorava. Duas exigências novas saíram da bateria: a conferência tem de **escrever a variável que a
+medição lê** (derivada do próprio skill, não fixada no gate) — sem isso, a conferência das OPÇÕES da
+pergunta contaria pela do DESTINO e o evento registraria o caminho da variável antiga. Mutações:
+`reason` direto para `escalar` · triagem direto para `resolver_rota` · a resposta do esclarecimento
+pulando a reconferência — **as três pegas**, com controle positivo verde.
+
+**O que NÃO foi medido, e está nomeado:** um contato real passando pela pergunta. O disparo depende
+de o modelo declarar que não consegue separar dois destinos, e isso não se força por `curl`. Vale
+para a primeira leitura da série; o mecanismo está preso pelos dois testes acima.
+
 ## 2026-09-22 (15) — TRF-02: `outcome='suspended'` tem dois escritores, e a ficha acusava a metade errada
 
 **A ficha estava errada, e a medição a corrigiu antes de qualquer conserto.** Ela dizia que dois
