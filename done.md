@@ -512,3 +512,11 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 |---|---|---|---|
 | APF-01 | **O score de roteamento conta SEGMENTOS, e a MV que contava versões saiu.** O `performance_job` lê `segments FINAL` (`origin='live'`, sem `system`, com a regra da TRF-01); `mv_agent_performance_daily` + `v_agent_performance` sofreram DROP idempotente (leitor único medido no `query_log`: o job) e não voltam pelo `_migrate_row_version`. Scores recalculados: 5 de 23 mudaram (`retencao_humano` 0,77 → 0,61). Gate com censo independente por `argMax(row_version)` + 2 mutações; o que a janela não tem população para reprovar ficou declarado. Deixou ficha: APF-02 | 2026-09-23 | `CHANGELOG.md` § 2026-09-23 (4) |
 | APF-02 | **O relatório de complexidade conta SEGMENTOS, e a segunda MV que contava versões saiu.** `query_session_complexity` agrega `segments FINAL` por sessão (TRF-01 nos desfechos, coluna nova `transferred_count`); `mv_segment_summary` + `v_segment_summary` sofreram DROP idempotente (nenhum leitor no `query_log` de 44 dias) e saíram dos `dependent_views` do `_migrate_row_version` — não resta MV no analytics. De passagem: o endpoint **nunca tinha respondido** (alias `s` ausente, code 47 engolido como `data_unavailable`). Gate com censo por `argMax(row_version)` nas 9 contagens de 2 197 sessões + 2 mutações | 2026-09-23 | `CHANGELOG.md` § 2026-09-23 (5) |
+
+---
+
+## `.claude/skills/data-engineering/SKILL.md` — método de dados
+
+| id | tarefa | data | ancora |
+|---|---|---|---|
+| DEN-01 | **As regras de dados e de teste de 2026-09-23 chegaram às skills, testadas em sessão nova.** `data-engineering`: MV sobre RMT conta versões; negação sobre `Nullable` no `countIf` (esta também no `CLAUDE.md` § Postura). `testing-pattern`: mutação sem população, população antes do veredicto, `sed` com endereço + `cmp`, censo por outro caminho, `ioredis-mock` com `flushall` + `toHaveLength`. Três rodadas de canário | 2026-09-23 | `CHANGELOG.md` § 2026-09-23 (10) |

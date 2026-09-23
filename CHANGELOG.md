@@ -1,5 +1,51 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (10) — DEN-01: as regras de dados e de teste do dia chegaram às skills, e o `countIf` sobre `Nullable` subiu ao CLAUDE.md
+
+**O que entrou.**
+- `data-engineering` § 1 (item 3b): MATERIALIZED VIEW sobre `ReplacingMergeTree` conta VERSÕES,
+  não linhas; agregado se lê de `segments FINAL`; `POPULATE` não conserta. Casos § 6 (APF-01,
+  APF-02).
+- `data-engineering` § 2: negação sobre coluna `Nullable` dentro de `countIf` descarta a linha;
+  `coalesce`, casa única `_NOT_TRANSFER_SQL`. Caso § 7 (TRF-01: 3 571 de 4 406).
+- `testing-pattern` § 2, § 3 e § 4, casos § 2d a § 2g: mutação sem população na janela fica
+  verde e se declara no cabeçalho; população conferida ANTES de qualquer veredicto e na fonte
+  independente; `sed` de mutação com endereço e `cmp`; censo por outro caminho; `ioredis-mock`
+  compartilha dados entre instâncias. As quatro últimas entraram por decisão do dono.
+- `CLAUDE.md` § Postura: a regra do `countIf` sobre `Nullable`, em uma linha com o gate
+  (`mut_trf01_transfer_marking.sh` M1) e ponteiro para o caso, que ficou só na skill.
+
+**Conferido na fonte antes de escrever:** os números do CHANGELOG (3), (4) e (5); 0 MVs em
+`plughub_demo` (29 tabelas); os nomes dos testes e o import do `performance_job`. O handoff
+juntava *"1 889 de 2 220 sessões"* com o 8 371 da APF-02; foi medido com o 8 094 da APF-01, e
+as duas medições entraram datadas. A frase *"saiu 8 em vez de 5"* não tinha fonte e ficou fora.
+
+**Teste em sessão nova (`claude-md-maintenance` § 6), três rodadas.**
+
+| cenário | 1ª rodada | 2ª rodada | 3ª |
+|---|---|---|---|
+| MV `AggregatingMergeTree` sobre `segments` | não carregou (acertou por Grep) | ✅ carregou e acertou | — |
+| `countIf(close_reason != …)` | não carregou; sem `_NOT_TRANSFER_SQL` | não carregou | ✅ acertou pelo CLAUDE.md |
+| `mut_*.sh` com 3 verdes | ✅ | ✅ | — |
+| controle: texto de botão do Console | ✅ nenhuma das duas | ✅ só `platform-ui-change` (2×) | — |
+| `ioredis-mock` lendo `stream[0]` | não carregou; **achou erro de conteúdo** | ✅ carregou e acertou | — |
+
+- **1ª → 2ª:** a `description` das duas skills passou a nomear os termos das perguntas (MV,
+  AggregatingMergeTree, countIf, Nullable, NULL, coalesce, ioredis-mock, flaky). E o conteúdo
+  mudou: a skill recomendava ler `.at(-1)` do stream, e a sessão sem skill mostrou que isso
+  esconde o vazamento; ficou `flushall()` no `beforeEach` + `toHaveLength` antes de ler.
+- **2ª → 3ª:** a pergunta de sim/não do `countIf` não carregou a skill em duas rodadas, mesmo com
+  os termos na `description` — o modelo vai direto ao código. Pela `claude-md-maintenance` § 1,
+  regra que tem de valer mesmo quando ninguém pede mora no CLAUDE.md; decisão do dono. A 3ª
+  rodada respondeu "não", com `coalesce`, `_NOT_TRANSFER_SQL`, o gate e o ponteiro, sem abrir
+  arquivo nenhum.
+
+**Lição de método.** Canário cuja resposta certa já está no CLAUDE.md não discrimina: a MV
+acertou na 1ª rodada sem a skill, porque o § Arc 5 já traz a regra. O critério que separa é o
+CARREGAMENTO, lido na transcrição, antes da resposta.
+
+Deixou ficha: `ORQ-20` (o teste da ORQ-19 lê `.at(-1)` do `ioredis-mock`).
+
 ## 2026-09-23 (9) — ORQ-08: o `WsMenuRender` saiu, e a cadeia do mascaramento passou a nomear o que roda
 
 **O achado, da F2 (2026-09-06).** `WsMenuRender` (`channel-gateway/models.py`) aparecia só na
