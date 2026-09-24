@@ -29,7 +29,7 @@ GW=plughub-demo-channel-gateway-1
 
 env_de() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" | sed -n "s/^$2=//p" | head -1; }
 ajudante() {
-  docker run --rm -i --network plughub-demo_plughub-demo --entrypoint python -v "$PWD/infra/test:/t:ro" -w /t \
+  docker run --rm --network plughub-demo_plughub-demo --entrypoint python -v "$PWD/infra/test:/t:ro" -w /t \
     -e "LK_URL=$(env_de $GW PLUGHUB_WEBRTC_LIVEKIT_URL)" -e "LK_KEY=$(env_de $GW PLUGHUB_WEBRTC_LIVEKIT_API_KEY)" \
     -e "LK_SECRET=$(env_de $GW PLUGHUB_WEBRTC_LIVEKIT_API_SECRET)" \
     "$(docker inspect -f '{{.Image}}' $GW)" /t/_sip_edge_check.py "$@" 2>&1

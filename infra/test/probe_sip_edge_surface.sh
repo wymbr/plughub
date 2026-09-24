@@ -62,7 +62,8 @@ LKENV=(-e "LK_URL=$(env_de "$GW" PLUGHUB_WEBRTC_LIVEKIT_URL)"
        -e "LK_KEY=$(env_de "$GW" PLUGHUB_WEBRTC_LIVEKIT_API_KEY)"
        -e "LK_SECRET=$(env_de "$GW" PLUGHUB_WEBRTC_LIVEKIT_API_SECRET)")
 ajudante() {
-  timeout 90 docker run --rm -i --network "$NET" --entrypoint python -v "$PWD/infra/test:/t:ro" -w /t \
+  # sem `-i`: com ele o container lê a entrada padrão, e um probe chamado por pipe perderia o resto do script
+  timeout 90 docker run --rm --network "$NET" --entrypoint python -v "$PWD/infra/test:/t:ro" -w /t \
     "${LKENV[@]}" "$IMG" /t/_sip_edge_check.py "$@" 2>&1
 }
 final_de() { printf '%s\n' "$1" | sed -n 's/^FINAL \([0-9a-z]*\).*/\1/p' | head -1; }

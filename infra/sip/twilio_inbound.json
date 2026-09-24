@@ -1,0 +1,18 @@
+{
+  "seed_id": "twilio_inbound",
+  "description": "Tronco de ENTRADA pela Twilio (VOZ-32): numero de voz +1 551 324 1410 com TwiML <Dial><Sip username password> para plughub-teste.ddns.net. Senha so no .env.demo (SIP_TRUNK_PASSWORD_TWILIO); digest e a unica trava, porque o Docker Desktop reescreve a origem. Endpoint voice -> probe_voz02_sip.",
+  "trunk": {
+    "name": "plughub-twilio-inbound",
+    "numbers": [
+      "+15513241410"
+    ],
+    "auth_username": "plughub_twilio",
+    "auth_password_env": "SIP_TRUNK_PASSWORD_TWILIO",
+    "ringing_timeout_s": 60,
+    "max_call_duration_s": 3600
+  },
+  "dispatch_rule": {
+    "name": "plughub-twilio-dispatch",
+    "kind": "individual"
+  }
+}
