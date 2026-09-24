@@ -46,7 +46,10 @@ POOL_NOREC="probe_voz06_norec"
 SKILL="skill_probe_recording_v1"
 FIXTURE="infra/test/fixtures/skill_probe_recording_v1.json"
 DNIS="${SIP_DNIS:-+551140000000}"
-SIP_PASS="${SIP_TRUNK_PASSWORD_DEMO:-changeme_sip_trunk_demo}"
+# VOZ-32: a senha EM VIGOR e a com que o sip-seed criou o tronco — com a borda SIP ligada ela vem
+# do .env.demo e a do repositorio e RECUSADA. Ler o compose aqui mediria a senha errada.
+SEEDC="${SEED_CONTAINER:-plughub-demo-sip-seed-1}"
+SIP_PASS="${SIP_TRUNK_PASSWORD_DEMO:-$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$SEEDC" 2>/dev/null | sed -n 's/^SIP_TRUNK_PASSWORD_DEMO=//p' | head -1)}"
 ANI="+5511$(( 90000000 + RANDOM * 30 + RANDOM % 30 ))0"
 FALHA=0
 INCONCL=0

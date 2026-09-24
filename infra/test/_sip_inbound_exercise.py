@@ -20,6 +20,7 @@ MODE=atende (endpoint cadastrado):
   K4 (NIV-07) um participante "humano" na sala antes do bloco é TIRADO dela antes do prompt e
      não vê o PIN — a tecla SIP chega a todos na sala, e é por isso que ele sai.
   S5 o fluxo encerra e a PLATAFORMA derruba a chamada (BYE chega ao telefone).
+  S5f (VOZ-42) a ÚLTIMA fala do fluxo TOCA antes do BYE (áudio ouvido entre o marcador e o fim).
   depois, uma 2ª chamada em que o CHAMADOR desliga — o probe confere o fechamento no log.
   B1 (VOZ-31, caracterização) 3ª chamada SEM `telephone-event`, tecla como TOM no áudio: o que o
      conversor faz. É fato medido, não veredicto — é a entrada do controle (1) da NIV-07.
@@ -218,6 +219,7 @@ async def atende() -> None:
     emit("OK" if ch.te_pt is not None else "FALHA", "K1",
          f"telephone-event negociado na resposta do servico SIP: PT {ch.te_pt}" if ch.te_pt is not None
          else "a resposta do servico SIP NAO aceitou telephone-event — tecla fora de banda impossivel")
+    t_ultima_fala: float | None = None   # S5f — só existe se o fluxo chegou à última frase
     if ch.te_pt is not None and m == "sip-m0=atendente":
         # K4: um "humano" entra na sala ANTES do bloco mascarado — como o atendente que acionou o
         # especialista de coleta sensível — e JÁ antes do m1: as teclas do m1 (sem máscara) são o
@@ -237,6 +239,8 @@ async def atende() -> None:
         if await menu_no_ar(rd, ua, sid, "Digite o PIN"):
             ua.teclar(PIN + "#")
             k3 = await marcador(rd, sid, 30, ("sip-m2-recebido", "sip-m2-timeout"))
+            if k3 == "sip-m2-recebido":
+                t_ultima_fala = time.monotonic()   # VOZ-42: a última frase do fluxo, antes do fim
             txt = await _stream_txt(rd, sid)
             # fronteira de dígito: o ANI do chamador, que o stream carrega, pode conter a sequência
             vazou = re.search(rf"(?<![0-9]){PIN}(?![0-9])", txt) is not None
@@ -267,6 +271,16 @@ async def atende() -> None:
     caiu = ua.chamada.bye_recebido_em is not None or await ua.esperar_bye(40)
     emit("OK" if caiu else "FALHA", "S5",
          "a plataforma encerrou e o telefone recebeu BYE" if caiu else "o fluxo acabou e a chamada NAO caiu em 40 s")
+    # S5f (VOZ-42): a ÚLTIMA fala do fluxo (`sip-m2-recebido`, um notify seguido de complete) tem de
+    # TOCAR antes do BYE. O marcador aparece no stream quando a fala é enfileirada; o que o telefone
+    # ouve depois dele é a fala tocando. Antes do conserto: ~0 s (a sala caía 24 ms depois).
+    if t_ultima_fala is None:
+        emit("INCONCL", "S5f", "o marcador sip-m2-recebido nao apareceu — sem ultima fala para medir")
+    else:
+        fim = ua.chamada.bye_recebido_em or time.monotonic()
+        fala = 0.02 * sum(1 for t, r in ua.chamada.energia if t_ultima_fala <= t <= fim and r >= 300.0)
+        emit("OK" if fala >= 0.4 else "FALHA", "S5f",
+             f"ultima fala antes do BYE: {fala:.1f} s de audio ouvidos (esperado >= 0.4 s)")
     await ua.desligar()
 
     # 2ª chamada: o CHAMADOR desliga

@@ -1386,8 +1386,9 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
 > assinado). Gate: `infra/test/probe_webrtc_media_plane.sh`. **Contato ponta a ponta validado com
 > gente no browser em 2026-09-15** (`VOZ-04`; roteiro `docs/guias/roteiro-validacao-webrtc-console.md`).
 > ⚠️ **O que ainda NÃO existe:** mídia para browser em OUTRA máquina da rede (o demo serve o próprio
-> host — loopback, UDP único e TURN com dois nomes), porta SIP publicada e chamada SAINTE
-> (`VOZ-32`/`VOZ-33`). O bot leg (ouvinte + voz, transcrição e coleta por teclado/fala) existe
+> host — loopback, UDP único e TURN com dois nomes) e chamada SAINTE (`VOZ-33`). A borda SIP
+> publicada é OPT-IN (`PLUGHUB_SIP_EDGE`), autenticada só por digest, e atendeu celular pela
+> Twilio em 2026-09-23 (`VOZ-32`; § 19 do arco). O bot leg (ouvinte + voz, transcrição e coleta por teclado/fala) existe
 > desde 2026-09-16 — `arc15-webrtc.md` § 15; a chamada telefônica ENTRANTE, desde 2026-09-18 — § 19.
 
 - **A chamada pelo tronco SIP é canal `voice` e entra na MESMA sala** (VOZ-02): o serviço SIP do SFU

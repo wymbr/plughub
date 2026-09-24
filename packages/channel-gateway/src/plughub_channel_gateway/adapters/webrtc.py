@@ -1951,16 +1951,28 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         await self._sip_teardown(session_id)
 
     async def _sip_platform_close(self, session_id: str, payload: dict) -> None:
-        """A plataforma encerrou: a despedida é FALADA (telefone não lê) e a chamada é derrubada."""
+        """A plataforma encerrou: o que ainda está na fila de fala é FALADO (telefone não lê), e só
+        então a chamada é derrubada.
+
+        VOZ-42: esperava só a `farewell_text`. A última frase do FLUXO (um `notify` seguido de
+        `complete`) chega ANTES do `session.closed` e estava na fila — e era cortada: medido em
+        chamada real, enfileirada 24 ms antes de a voz sair da sala, e o chamador ouviu silêncio.
+        A fila é FIFO, então drená-la cobre a despedida também; um teto só para as duas.
+        """
         farewell = payload.get("farewell_text") or ""
         if farewell:
-            tocada = asyncio.Event()
-            self._speak(session_id, farewell, tocada)
-            try:
-                await asyncio.wait_for(tocada.wait(), timeout=_SIP_FAREWELL_MAX_S)
-            except asyncio.TimeoutError:
-                logger.warning("webrtc sip: despedida nao terminou em %.0f s — desligando assim mesmo "
-                               "(session=%s)", _SIP_FAREWELL_MAX_S, session_id)
+            self._speak(session_id, farewell)
+        inicio = time.monotonic()
+        if not await self._drain_speech(session_id, _SIP_FAREWELL_MAX_S):
+            logger.warning("webrtc sip: fala nao terminou em %.0f s — desligando assim mesmo "
+                           "(%d mensagem(ns) pendente(s), session=%s)", _SIP_FAREWELL_MAX_S,
+                           self._speech_pending.get(session_id, 0), session_id)
+        elif time.monotonic() - inicio > _VOICE_DRAIN_TICK_S:
+            logger.info("webrtc sip: terminou de falar em %.1f s antes de desligar (session=%s)",
+                        time.monotonic() - inicio, session_id)
+        if session_id not in self._sip:
+            # o chamador desligou durante a espera: `_sip_hangup` já fechou como customer_hangup
+            return
         await self._close_session(session_id, "agent_done")
         await self._sip_teardown(session_id)
         logger.info("webrtc sip: chamada encerrada pela plataforma session=%s", session_id)

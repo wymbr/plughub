@@ -935,6 +935,9 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
   nunca há pool default. Registro inalcançável também recusa.
 - **Idempotência do nascimento** por `SET NX channel:sip:room:{room}` — o webhook pode repetir.
 - **Número oculto** vira contato `sip:{callID}`; nunca um ANI inventado.
+- **A última fala toca antes do BYE (VOZ-42).** Encerrando pela plataforma, a fila de fala inteira
+  é drenada (o que o fluxo já mandou falar, e a despedida atrás), no teto `_SIP_FAREWELL_MAX_S`;
+  chamador que desliga na espera fecha UMA vez, como `customer_hangup`. Gate: S5f do `probe_voz02`.
 - **Desligar pelos dois lados.** O chamador sai (`participant_left` da identidade SIP ou
   `room_finished`) → `customer_hangup`. A plataforma encerra → a despedida é falada (teto 10 s),
   depois `agent_done` e a sala é apagada — o que manda BYE ao telefone. Um `contact_closed` só.
@@ -971,18 +974,22 @@ G.711 + digest — `_sip_ua.py`) e `probe_webrtc_media_plane.sh` A3/D4/D4g/D5 (o
 compensatório, com controle positivo). O mesmo probe mede as teclas (K1–K4, B1). Testes:
 `tests/test_sip_leg.py`.
 
-**Borda SIP (VOZ-32, preparada em 2026-09-23, publicação opt-in):** a camada
+**Borda SIP (VOZ-32, 2026-09-23, publicação opt-in):** a camada
 `docker-compose.sip-edge.yml` publica 5060/UDP e a faixa `rtp_port`, liga `use_external_ip` e troca as
 senhas dos troncos pelas do `.env.demo`; o `up.sh` só a inclui com `PLUGHUB_SIP_EDGE=true` no
 `.env.demo`. **Autenticação é digest, nunca lista de IPs**: o Docker Desktop reescreve a origem de todo
 pacote que entra por porta publicada (medido: `172.17.0.1`), e o seed recusa tronco sem autenticação.
 Com a Twilio, o produto é o número de voz com TwiML `<Dial><Sip username password>` (modelo em
 `infra/sip/twilio_inbound.json.example`). Gate: `infra/test/probe_sip_edge_surface.sh` (+ `mut_`).
+Medida com celular pela Twilio (`twilio_inbound.json`): PT 101, sequência de teclas inteira, PIN
+mascarado. ⚠️ **No Windows, a rede tem de estar como PRIVADA**: o Docker Desktop nasce com regras de
+BLOQUEIO no perfil Público, que vencem as de permissão — a chamada chega à Twilio e morre antes do
+serviço SIP, sem INVITE no log. Passo a passo e medição: `CHANGELOG.md` § 2026-09-23 (14).
 
-**Fora da fatia:** porta SIP publicada de fato (os passos de rede estão na VOZ-32), TLS/SRTP, `REFER` e chamada
-sainte, teclas validadas com operadora de verdade (VOZ-32), tela para tronco e regra de despacho, e
+**Fora da fatia:** TLS/SRTP, `REFER` e chamada
+sainte, tecla longa e SIP INFO com operadora, tela para tronco e regra de despacho, e
 provedor por **registro** (o conversor recebe por tronco, não se registra), e o eco `plain` de
-segredo (`NIV-06`). Fichas `VOZ-32..35` e `NIV-06` no `pending.md`.
+segredo (`NIV-06`). Fichas `VOZ-33..35` e `NIV-06` no `pending.md`.
 
 
 ## 20. Chamada presa a um contato de chat (WCH-01, 2026-09-21)

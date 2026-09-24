@@ -239,6 +239,45 @@ class TestFim:
         assert len(fech) == 1 and fech[0]["reason"] == "agent_done" and fech[0]["channel"] == "voice"
         assert SALA in ad._provider.rooms_deleted and not ad.is_sip_session(sid)
 
+    # VOZ-42 — a última fala do fluxo toca ANTES de a plataforma derrubar a chamada. O que faria
+    # estes testes ficarem vermelhos: voltar a esperar só a `farewell_text` (medido em chamada real:
+    # a frase enfileirada 24 ms antes do BYE, e o chamador ouviu silêncio).
+    async def _encerra_com_fala_pendente(self, ad, sid):
+        assert hasattr(ad, "_speech_done") and hasattr(ad, "_speech_pending")
+        ad._speech_pending[sid] = 1                    # a última frase do fluxo, ainda tocando
+        return asyncio.create_task(ad.deliver_session_closed({"session_id": sid, "reason": "flow_complete"}))
+
+    async def test_a_ultima_fala_toca_antes_de_derrubar(self, monkeypatch):
+        ad, producer, sid = await self._sessao(monkeypatch)
+        t = await self._encerra_com_fala_pendente(ad, sid)
+        await asyncio.sleep(0.15)                      # bem mais que o tique da drenagem
+        assert SALA not in ad._provider.rooms_deleted, "derrubou com a fala na fila — é o defeito da VOZ-42"
+        assert not [e for e in _eventos(producer) if e.get("event_type") == "contact_closed"]
+        ad._speech_done(sid)                           # a frase terminou de tocar
+        await asyncio.wait_for(t, 2)
+        fech = [e for e in _eventos(producer) if e.get("event_type") == "contact_closed"]
+        assert len(fech) == 1 and fech[0]["reason"] == "agent_done"
+        assert SALA in ad._provider.rooms_deleted
+
+    async def test_fala_que_nao_termina_derruba_no_teto_e_diz(self, monkeypatch, caplog):
+        from ..adapters import webrtc as mod
+        monkeypatch.setattr(mod, "_SIP_FAREWELL_MAX_S", 0.2)
+        ad, producer, sid = await self._sessao(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            t = await self._encerra_com_fala_pendente(ad, sid)
+            await asyncio.wait_for(t, 2)              # a fala NUNCA termina; o teto derruba
+        assert SALA in ad._provider.rooms_deleted
+        assert "nao terminou" in caplog.text
+
+    async def test_chamador_desliga_durante_a_espera_nao_publica_dois(self, monkeypatch):
+        ad, producer, sid = await self._sessao(monkeypatch)
+        t = await self._encerra_com_fala_pendente(ad, sid)
+        await asyncio.sleep(0.1)
+        await ad.on_livekit_event("participant_left", SALA, PARTICIPANTE)
+        await asyncio.wait_for(t, 2)
+        fech = [e for e in _eventos(producer) if e.get("event_type") == "contact_closed"]
+        assert len(fech) == 1 and fech[0]["close_reason"] == "customer_hangup"
+
     async def test_desligar_depois_de_encerrar_nao_publica_dois(self, monkeypatch):
         ad, producer, sid = await self._sessao(monkeypatch)
         await ad.deliver_session_closed({"session_id": sid, "reason": "flow_complete"})

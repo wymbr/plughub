@@ -1,5 +1,54 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (14) — VOZ-32: a borda SIP é publicada e o telefone de verdade liga — tronco Twilio medido de ponta a ponta
+
+**O que fecha.** A preparação (§ 2026-09-23 (12)) virou borda publicada nesta máquina, e duas chamadas
+de celular pela Twilio atravessaram tudo: número de voz com TwiML `<Dial><Sip username password>` →
+`plughub-teste.ddns.net` (No-IP, atualizado pelo modem) → modem (5060/UDP e 10000–10100/UDP para o PC,
+IP reservado) → Windows → Docker Desktop → `livekit-sip` → sala → contato `voice` no `probe_voz02_sip`.
+
+**Medido nas chamadas reais.** INVITE de `sip.twilio.com` com a origem reescrita para `172.18.0.1` —
+a reescrita do Docker Desktop vale também vindo da internet, e por isso digest é a trava (e o Elastic
+SIP Trunking, que entrega por lista de IPs, não serve aqui) · PCMU · `telephone-event` no **PT 101**,
+igual ao simulado · 1 039 pacotes de áudio sem perda · uma tecla com 17 pacotes RFC 4733 contada UMA
+vez · **`4321#` inteiro e em ordem** · PIN mascarado coletado sob pausa de mídia · `customer_hangup` e
+encerramento pela plataforma.
+
+**O que falhou no caminho, e por quê.** A primeira ligação chegou à Twilio e morreu antes de nós, sem
+INVITE no serviço SIP: o Windows tinha regras de **BLOQUEIO do `com.docker.backend.exe` no perfil
+Público**, a Wi-Fi estava classificada como Pública, e bloqueio vence permissão — as regras que
+liberavam as portas não valiam. Conserto do dono: rede como Privada. O modem direto (sem o roteador
+próprio da medição de 2026-09-18) deixou de exigir bridge: NAT único e IP público no próprio modem.
+
+**Segurança.** A senha do tronco apareceu numa captura durante a configuração: foi rotacionada, e a
+antiga é recusada ao vivo (401). `probe_voz02` e `probe_voz06` passaram a ler a senha EM VIGOR (a do
+`sip-seed`), porque com a borda ligada a do repositório é recusada — eles reprovariam por
+autenticação sem medir nada.
+
+**Não medido:** tecla longa e SIP INFO (a Twilio negociou RFC 4733); a parte do Console no menu
+mascarado segue na VOZ-37. Deixou ficha: `VOZ-42` (fechada no mesmo dia, § (13)).
+
+## 2026-09-23 (13) — VOZ-42: a última fala do fluxo toca antes de a plataforma derrubar a chamada
+
+**O defeito, medido em chamada real (VOZ-32).** `_sip_platform_close` só esperava a `farewell_text`
+do evento de fechamento. A última frase do FLUXO — um `notify` seguido de `complete` — chega antes do
+`session.closed` e estava na fila de fala; a sala caía por cima dela: `sip-m2-recebido` enfileirada às
+00:32:33,427 e a voz fora da sala 24 ms depois. O dono ouviu silêncio e a queda. No webchat a frase
+aparece na tela; no telefone sumia, sem erro em lugar nenhum. O S5 do `probe_voz02` conferia o BYE e
+não que a fala TOCOU — por isso nunca ficou vermelho.
+
+**O que mudou.** A plataforma drena a fila inteira (o que o fluxo já mandou falar e a despedida, que
+é FIFO atrás dele) com o `_drain_speech` que já existia, no mesmo teto de 10 s; estourou, desliga
+assim mesmo e LOGA quantas mensagens ficaram. Guarda nova para a corrida que a espera abre: se o
+chamador desliga durante ela, o `_sip_hangup` já fechou como `customer_hangup` e a plataforma não
+publica um segundo `contact_closed`.
+
+**Prova.** Unitários (`TestFim`): a sala não cai com fala pendente e cai quando ela termina · o teto
+derruba e diz por quê · desligar durante a espera fecha UMA vez. Com o `webrtc.py` antigo os três
+reprovam. Suíte do gateway: 1 452 verdes. Ramo novo **S5f** no `probe_voz02`: áudio ouvido entre o
+marcador da última fala e o BYE — **1,2 s** com o conserto; com o código antigo no container, **0,0 s**
+e VERMELHO, enquanto o S5 seguia verde. Imagem reconstruída, âncora conferida no container.
+
 ## 2026-09-23 (12) — VOZ-32 (preparação): a borda SIP ganha classificação, trava de senha e publicação opt-in — ainda FECHADA
 
 **Por que agora.** O dono vai contratar um tronco na Twilio para os testes, que é o gatilho da VOZ-32.

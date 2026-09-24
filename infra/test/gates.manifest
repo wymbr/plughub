@@ -402,6 +402,7 @@ probe_webrtc_speech_profile.sh
 # nomeia quem tirou; K3g PIN em nenhum log (gateway, bridge, motor, mcp-server); K4 um "humano" na
 # sala antes do m1 ouve as teclas do m1 (controle) e e tirado antes do PIN. Pool SO voice (o
 # deploy mascarado passar ja e prova). ~4 chamadas; endpoint criado e apagado.
+# VOZ-42 (2026-09-23): S5f a ULTIMA fala do fluxo toca antes do BYE (audio entre o marcador e o fim).
 probe_voz02_sip_inbound.sh
 # VOZ-06 (2026-09-18): a chamada e GRAVADA quando o pool pede (`media_policy.recording`), so audio
 # misturado, em PARTES: G1 duas partes (antes e depois do PIN mascarado) · G2 classe call_recording,

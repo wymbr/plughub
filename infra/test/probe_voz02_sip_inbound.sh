@@ -28,6 +28,7 @@
 #   K4 (NIV-07) um "humano" na sala antes do bloco é tirado dela e não vê o PIN (a tecla SIP chega
 #      a TODOS na sala — medido —, e é por isso que ele sai)
 #   S5 o fluxo encerra e a PLATAFORMA derruba a chamada (BYE no telefone)
+#   S5f (VOZ-42) a ÚLTIMA fala do fluxo TOCA antes do BYE — sem isso a frase era cortada calada
 #   S6 o contato da chamada 1 fechou pela plataforma (log do gateway)
 #   H1 2ª chamada, o CHAMADOR desliga: o contato fecha como `customer_hangup`
 #   B1 (VOZ-31, INFO) 3ª chamada SEM `telephone-event`, tecla como TOM no áudio — caracterização do
@@ -54,7 +55,10 @@ POOL="probe_voz02_sip"
 SKILL="skill_probe_sip_inbound_v1"
 FIXTURE="infra/test/fixtures/skill_probe_sip_inbound_v1.json"
 DNIS="${SIP_DNIS:-+551140000000}"
-SIP_PASS="${SIP_TRUNK_PASSWORD_DEMO:-changeme_sip_trunk_demo}"
+# VOZ-32: a senha EM VIGOR e a com que o sip-seed criou o tronco — com a borda SIP ligada ela vem
+# do .env.demo e a do repositorio e RECUSADA. Ler o compose aqui mediria a senha errada.
+SEEDC="${SEED_CONTAINER:-plughub-demo-sip-seed-1}"
+SIP_PASS="${SIP_TRUNK_PASSWORD_DEMO:-$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$SEEDC" 2>/dev/null | sed -n 's/^SIP_TRUNK_PASSWORD_DEMO=//p' | head -1)}"
 ANI="+5511$(( 90000000 + RANDOM * 30 + RANDOM % 30 ))0"
 FALHA=0
 INCONCL=0
