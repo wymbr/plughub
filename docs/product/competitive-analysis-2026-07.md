@@ -1,5 +1,9 @@
 # PlugHub — Análise Competitiva Atualizada e Honesta (Julho 2026)
 
+> **Supersedido em 2026-09-24** por [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md),
+> que também rebaixa a governança de MCP (§4, linha 1) e corrige a data do EU AI Act (§1.2): o alto
+> risco foi adiado para dez/2027 pelo Digital Omnibus. Este arquivo fica como snapshot datado.
+
 > ⚠️ **Superseção parcial de 2026-08-19 — medido.** Este é um **snapshot datado de 2026-07-27** e as linhas
 > abaixo ficam como estavam, mas a classificação de **voz/áudio e WebRTC como "Entregue — Arc 15"** (`:74`,
 > `:155`) foi **derrubada por medição** e é **falsa**. `VoiceAdapter.handle_inbound` chama cinco métodos que não
