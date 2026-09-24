@@ -1,5 +1,68 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (7) — NIV-14/17/18: menu de escolha no SMS e no WhatsApp — o canal traduz o que numerou
+
+**Por que agora.** Desde a NIV-13 o motor recusa, num menu de escolha, resposta que não seja id
+de opção. O número digitado no texto numerado (WhatsApp com mais de 10 opções, SMS) passou a ser
+**recusado com reenvio**, em vez de seguir errado e calado. A NIV-13 abriu isso de propósito.
+
+**O que a medição achou**, além do que as fichas diziam:
+- **SMS não entregava menu NENHUM.** `deliver_menu` lia `payload["content"]` (título e campos
+  aninhados), formato que ninguém publica. Os testes passavam porque montavam esse formato.
+- **WhatsApp, mais de 10 opções:** virava coleta de formulário com um campo, e a escolha chegava ao
+  motor como `menu_result` de `form` com `{"option": "3"}`, lido como texto JSON.
+- **WhatsApp, menu `text` sem opções:** caía no mesmo ramo, mandava *"Responda com o número da
+  opção"* e embrulhava a resposta no mesmo formulário.
+- **WhatsApp, `checklist` com até 3 opções:** virava botões de escolha única.
+- **Campo de formulário com opções:** o `MenuStepSchema.fields` **não declara `options`**, e o Zod
+  as descarta. Os ramos "campo com opções" dos dois adaptadores não têm entrada real.
+
+**O que mudou:**
+- **`text_menu.py`, a casa única do menu de escolha em texto:**
+  - `render` monta o texto numerado ("Responda com o número" / "com os números, separados por
+    vírgula");
+  - `resolve` traduz a resposta para o id, ou para a lista no checklist;
+  - `PendingMenu` guarda o menu em aberto (`channel:{canal}:{sid}:menu_choice`, TTL de 30 min).
+  - A numeração e o casamento são os do `collect_core`: extraí `options_from_menu` e
+    `match_options`, que a coleta por voz e teclado passa a usar também. Com isso, "2" e "dois"
+    valem igual no telefone e no SMS.
+- **Resposta que não traduz segue CRUA**, e o motor recusa, reenvia e conta. O canal não ganhou
+  um segundo contador de tentativas.
+- **Checklist:** "1, 3", "1 e 3" e "1 3" viram a lista. "Boleto e PIX" é UMA opção, porque o "e"
+  só divide quando o pedaço inteiro não é uma opção. Um pedaço inválido invalida a resposta
+  inteira, sem inventar metade.
+- **SMS:** lê o formato plano. Escolha vira texto numerado com menu em aberto; formulário, campo a
+  campo; `text`, o prompt. O campo de formulário guarda o id, nunca o `value` (ramo sem entrada
+  real, como dito acima).
+- **WhatsApp:**
+  - checklist e mais de 10 opções viram texto numerado;
+  - `text` é só o prompt;
+  - botões (até 3) e lista (4 a 10) continuam nativos, mas o menu fica em aberto, e o **rótulo
+    digitado** no lugar do clique vira o id;
+  - o clique responde o menu em aberto como `menu_result`.
+- **O fechamento da sessão esquece o menu em aberto** nos dois canais.
+- **NIV-18:** a matriz do `channel-gateway/CLAUDE.md` passou a dizer o que cada canal faz. Ela
+  prometia "Sequential + comma input", que nenhum adaptador implementava.
+
+**Medição:**
+- **Testes:** `test_text_menu.py`, com a tradução (números, palavras, rótulo, id, controles,
+  ambíguo, checklist) e os dois canais de ponta a ponta sobre Redis em memória. Os testes antigos
+  do SMS que montavam o formato inventado foram trocados pelo formato real.
+- **Suíte do gateway:** 1521 verdes.
+- **Mutação:** M1 a M11, todas vermelhas (ambíguo aceito · pedaço inválido ignorado · "e" sempre
+  divide · SMS não traduz · menu não esquecido · checklist em botões · menu `text` pede número ·
+  clique não responde · fechamento não esquece · WhatsApp não traduz · campo guarda `value`).
+- **Contrato:** `probe_menu_result_contract.sh` OK, com 9 produtores publicando `result`. Ele
+  **pegou** os dois produtores novos com payload opaco (variável em vez de dicionário literal), e
+  eles foram corrigidos para o censo conseguir ler as chaves.
+- **Descrição:** `probe_orq15_option_description.sh` VERDE.
+- **Não medido ao vivo:** o demo não tem SMS configurado (pool padrão `sms_default` inexistente,
+  Twilio em modo dev), e o WhatsApp chama a Graph API da Meta com token de demo. Um probe de ponta a
+  ponta pede um pool `sms_default` de fixture, o que muda o destino de todo SMS do demo; fica para
+  decisão do dono.
+
+**Fora da fatia:** o e-mail (`NIV-15`) pode usar o mesmo `text_menu`.
+
 ## 2026-09-24 (6) — VOZ-44: a faixa de gravação só acende com o egress CONFIRMADO pelo SFU
 
 **A ficha foi corrigida pela medição antes do conserto.** Ela dizia que o egress *"aborta durante a

@@ -44,6 +44,8 @@ from aiokafka import AIOKafkaProducer
 from ..attachment_store import AttachmentStore
 from ..config import Settings
 from ..option_tree import list_row, note_dropped_descriptions
+from ..collect_core import options_from_menu
+from .. import text_menu
 from ..models import (
     ContactClosedEvent,
     ContactOpenEvent,
@@ -105,6 +107,9 @@ class WhatsAppAdapter(ChannelAdapter):
         # identidade existir (`attach_arrival_evidence`); ausente, a chegada não prova nada.
         self._arrival: ArrivalEvidenceRecorder | None = None
         self._arrival_ausente_avisado = False
+        # NIV-17: o menu de ESCOLHA em aberto — para traduzir o número digitado (lista em texto,
+        # checklist) e o rótulo digitado no lugar do clique
+        self._pending = text_menu.PendingMenu(redis, "whatsapp", _MENU_COLLECT_TTL)
 
     def attach_arrival_evidence(self, recorder: ArrivalEvidenceRecorder) -> None:
         falta = recorder.configured()
@@ -309,6 +314,13 @@ class WhatsAppAdapter(ChannelAdapter):
             )
             return
 
+        # NIV-17: resposta ao menu de escolha em aberto → o id da opção. O que não nomeia opção
+        # segue como texto: o motor recusa e reenvia o menu (NIV-13).
+        escolha = await self._pending.answer(session_id, text)
+        if escolha is not None:
+            await self._publish_menu_result(contact_id, session_id, escolha)
+            return
+
         event = NormalizedInboundEvent(
             message_id       = str(uuid.uuid4()),
             contact_id       = contact_id,
@@ -486,6 +498,9 @@ class WhatsAppAdapter(ChannelAdapter):
                 label=label,
                 wamid=wamid,
             )
+        elif (escolha := await self._pending.answer(session_id, value or label)) is not None:
+            # NIV-17: o clique responde o menu em aberto — `menu_result` com o id, como o texto
+            await self._publish_menu_result(contact_id, session_id, escolha)
         else:
             # Button/list reply with no active collect — segue como texto, mas com o ID da opção
             # (o `id` do botão/linha é o id da opção, `send_interactive_*`). NIV-13: o motor confere
@@ -620,8 +635,28 @@ class WhatsAppAdapter(ChannelAdapter):
                     prompt=prompt,
                     fields=fields or [{"id": f, "label": f} for f in payload.get("masked_fields", [])],
                 )
+                return
 
-            elif len(options) <= 3 and options:
+            if not text_menu.is_choice_menu(payload):
+                # NIV-17: menu `text` (sem opções) é só o prompt. Caía no ramo de ">10 opções", que
+                # mandava "Responda com o número da opção" e devolvia a resposta num formulário
+                # `{"option": …}` que o motor lia como texto JSON.
+                if prompt:
+                    await provider.send_text(to, prompt[:_MAX_TEXT_LEN])
+                return
+
+            if interaction == "checklist" or len(options) > 10:
+                # NIV-17: o WhatsApp não tem marcação múltipla — o checklist com ≤3 virava BOTÕES de
+                # escolha única. Texto numerado, e a resposta (números/rótulos) vira a lista de ids.
+                # E >10 deixa de ser "formulário de um campo": é a mesma escolha, em texto.
+                note_dropped_descriptions(
+                    "whatsapp", options, "menu em texto numerado so leva o rotulo",
+                    session_id=session_id, menu_id=menu_id,
+                )
+                texto = text_menu.render(prompt, options_from_menu(options), interaction)
+                await provider.send_text(to, texto[:_MAX_TEXT_LEN])
+
+            elif len(options) <= 3:
                 # ORQ-15: o botão de resposta do WhatsApp só tem TÍTULO (20 car.).
                 note_dropped_descriptions(
                     "whatsapp", options, "botao de resposta so tem titulo",
@@ -633,30 +668,19 @@ class WhatsAppAdapter(ChannelAdapter):
                 ]
                 await provider.send_interactive_buttons(to, prompt, buttons)
 
-            elif 4 <= len(options) <= 10:
+            else:
                 # ORQ-15: a linha de lista TEM `description` — é a casa natural dela.
                 rows = [list_row(o) for o in options]
                 sections = [{"rows": rows}]
                 await provider.send_interactive_list(to, prompt[:60], prompt, sections)
 
+            # o menu fica em aberto: o clique traz o id, mas o cliente pode DIGITAR (o número do
+            # texto numerado, ou o rótulo no lugar do botão) — e só o canal sabe o que numerou
+            if session_id:
+                await self._pending.remember(session_id, payload)
             else:
-                # >10 options — text fallback
-                note_dropped_descriptions(
-                    "whatsapp", options, "mais de 10 opcoes viram lista numerada em texto",
-                    session_id=session_id, menu_id=menu_id,
-                )
-                numbered = "\n".join(
-                    f"{i+1}. {o.get('label', '')}" for i, o in enumerate(options)
-                )
-                text = f"{prompt}\n\n{numbered}\n\nResponda com o número da opção."
-                await self._start_sequential_collect(
-                    provider=provider,
-                    to=to,
-                    session_id=session_id,
-                    menu_id=menu_id,
-                    prompt=text,
-                    fields=[{"id": "option", "label": text}],
-                )
+                logger.error("whatsapp deliver_menu: menu %s sem session_id — resposta digitada NAO "
+                             "sera traduzida para a opcao", menu_id)
 
         except Exception as exc:
             logger.error(
@@ -678,6 +702,7 @@ class WhatsAppAdapter(ChannelAdapter):
             await self._redis.delete(f"channel:whatsapp:{contact_id}:session")
         if session_id:
             await self._redis.delete(f"channel:whatsapp:{session_id}:menu_collect")
+            await self._pending.forget(session_id)
         logger.info(
             "whatsapp session closed contact_id=%s session_id=%s", contact_id, session_id
         )
@@ -803,6 +828,24 @@ class WhatsAppAdapter(ChannelAdapter):
             return ""
 
     # ── Kafka helpers ──────────────────────────────────────────────────────────
+
+    async def _publish_menu_result(self, contact_id: str, session_id: str, result: dict) -> None:
+        """NIV-17 — a escolha traduzida vai como `menu_result` (o id; a lista, no checklist)."""
+        await self._publish_inbound(NormalizedInboundEvent(
+            message_id       = str(uuid.uuid4()),
+            contact_id       = contact_id,
+            session_id       = session_id,
+            channel          = "whatsapp",
+            content_type     = "text",
+            author           = MessageAuthor(type="customer"),
+            # dicionário LITERAL: o censo do contrato (`probe_menu_result_contract.sh`) confere as chaves
+            content          = MessageContent(type="menu_result", payload={
+                "menu_id":     result["menu_id"],
+                "interaction": result["interaction"],
+                "result":      result["result"],
+            }),
+            context_snapshot = ContextSnapshot(),
+        ).model_dump())
 
     async def _publish_inbound(self, payload: dict) -> None:
         from ..config import get_settings

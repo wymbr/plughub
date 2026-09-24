@@ -481,50 +481,42 @@ class TestDeliverText:
 
 class TestDeliverMenu:
     @pytest.mark.asyncio
-    async def test_menu_with_title_and_options_sends_text(
+    async def test_menu_with_prompt_and_options_sends_numbered_text(
         self, adapter, mock_provider, mock_redis
     ):
+        # NIV-14: o formato PLANO que o `notification_send` publica. Este teste montava um
+        # `content` aninhado que ninguem produz — e passava, enquanto nenhum menu saia.
         await adapter.deliver_menu({
-            "contact_id": CONTACT_NUM,
-            "tenant_id":  TENANT_ID,
-            "session_id": "sid-001",
-            "content": {
-                "title": "Como posso ajudar?",
-                "menu_id": "menu_abc",
-                "fields": [
-                    {
-                        "id": "topic",
-                        "label": "Escolha o assunto",
-                        "options": [
-                            {"label": "Suporte técnico", "value": "suporte"},
-                            {"label": "Faturamento",     "value": "faturamento"},
-                        ],
-                    }
-                ],
-            },
+            "contact_id":  CONTACT_NUM,
+            "tenant_id":   TENANT_ID,
+            "session_id":  "sid-001",
+            "menu_id":     "menu_abc",
+            "interaction": "list",
+            "prompt":      "Como posso ajudar?",
+            "options": [
+                {"id": "suporte",     "label": "Suporte técnico"},
+                {"id": "faturamento", "label": "Faturamento"},
+            ],
         })
-        # Title should be sent as first SMS
-        assert len(mock_provider.sent_messages) >= 1
         bodies = [m["body"] for m in mock_provider.sent_messages]
-        assert any("Como posso ajudar?" in b for b in bodies)
-        # Numbered options should appear
-        assert any("1." in b or "Suporte técnico" in b for b in bodies)
+        assert len(bodies) == 1
+        assert "Como posso ajudar?" in bodies[0] and "1. Suporte técnico" in bodies[0]
+        assert any("menu_choice" in str(c) for c in mock_redis.setex.call_args_list)
 
     @pytest.mark.asyncio
     async def test_menu_starts_sequential_collect(
         self, adapter, mock_provider, mock_redis
     ):
         await adapter.deliver_menu({
-            "contact_id": CONTACT_NUM,
-            "tenant_id":  TENANT_ID,
-            "session_id": "sid-002",
-            "content": {
-                "menu_id": "m2",
-                "fields": [
-                    {"id": "f1", "label": "Pergunta 1"},
-                    {"id": "f2", "label": "Pergunta 2"},
-                ],
-            },
+            "contact_id":  CONTACT_NUM,
+            "tenant_id":   TENANT_ID,
+            "session_id":  "sid-002",
+            "menu_id":     "m2",
+            "interaction": "form",
+            "fields": [
+                {"id": "f1", "label": "Pergunta 1"},
+                {"id": "f2", "label": "Pergunta 2"},
+            ],
         })
         # Collect state stored in Redis
         mock_redis.setex.assert_called()
@@ -536,7 +528,7 @@ class TestDeliverMenu:
 
     @pytest.mark.asyncio
     async def test_missing_contact_id_noop(self, adapter, mock_provider):
-        await adapter.deliver_menu({"content": {}})
+        await adapter.deliver_menu({"interaction": "list", "options": [{"id": "a", "label": "A"}]})
         assert mock_provider.sent_messages == []
 
 
@@ -562,9 +554,9 @@ class TestDeliverSessionClosed:
             "contact_id": CONTACT_NUM,
             "session_id": "sid-close",
         })
-        mock_redis.delete.assert_called_once_with(
-            f"channel:sms:{CONTACT_NUM}:session"
-        )
+        deletadas = [c.args[0] for c in mock_redis.delete.call_args_list]
+        # NIV-14: o menu de escolha em aberto sai junto — "2" depois do fim é só texto
+        assert deletadas == [f"channel:sms:{CONTACT_NUM}:session", "channel:sms:sid-close:menu_choice"]
 
     @pytest.mark.asyncio
     async def test_no_sms_sent_to_customer(self, adapter, mock_provider, mock_redis):
@@ -578,7 +570,8 @@ class TestDeliverSessionClosed:
     async def test_missing_contact_id_safe(self, adapter, mock_redis):
         # Should not raise
         await adapter.deliver_session_closed({"session_id": "sid-x"})
-        mock_redis.delete.assert_not_called()
+        # sem contato não há chave de sessão a apagar; o menu em aberto da sessão sai
+        assert [c.args[0] for c in mock_redis.delete.call_args_list] == ["channel:sms:sid-x:menu_choice"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -624,8 +617,8 @@ class TestSequentialCollect:
                 "id": "topic",
                 "label": "Assunto:",
                 "options": [
-                    {"label": "Suporte", "value": "suporte"},
-                    {"label": "Vendas",  "value": "vendas"},
+                    {"id": "sup", "label": "Suporte", "value": "suporte"},
+                    {"id": "ven", "label": "Vendas",  "value": "vendas"},
                 ],
             }
         ]
@@ -647,7 +640,8 @@ class TestSequentialCollect:
         # `answers` e este teste afirmava `answers` — os dois olhando para o
         # produtor, nenhum para o consumidor. O collect sequencial de SMS
         # entregava string VAZIA ao skill, em silencio, com a suite verde.
-        assert published["content"]["payload"]["result"]["topic"] == "suporte"
+        # NIV-14: o ID da opção, nunca o `value` — que o menu nem declara
+        assert published["content"]["payload"]["result"]["topic"] == "sup"
 
     @pytest.mark.asyncio
     async def test_invalid_option_reprompts(

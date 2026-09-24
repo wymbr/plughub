@@ -91,11 +91,7 @@ class CollectPlan:
             # o schema recusa; chegar aqui é produtor fora do contrato, e esperar para sempre
             # por uma tecla é exatamente o que a recusa existe para impedir
             raise CollectNotApplicable("collect sem first_input_timeout_s positivo")
-        raw_opts = payload.get("options") or []
-        options = tuple(
-            Option(id=str(o.get("id", "")), label=str(o.get("label") or o.get("id") or ""), key=str(i + 1))
-            for i, o in enumerate(raw_opts) if isinstance(o, dict) and o.get("id") not in (None, "")
-        )
+        options = options_from_menu(payload.get("options"))
         if interaction in ("button", "list") and not options:
             raise CollectNotApplicable(f"menu {interaction!r} sem opcoes")
         voice = c.get("voice") if isinstance(c.get("voice"), dict) else {}
@@ -195,6 +191,36 @@ class Done:
 
 
 Action = Echo | Retry | Done
+
+
+def options_from_menu(raw_opts: object) -> tuple[Option, ...]:
+    """As opções do `menu.payload` com a TECLA de cada uma (1, 2, …) — a mesma numeração no
+    teclado do telefone e no texto numerado do SMS/WhatsApp (NIV-14/17). Opção sem id não entra:
+    ninguém conseguiria responder com ela."""
+    return tuple(
+        Option(id=str(o.get("id", "")), label=str(o.get("label") or o.get("id") or ""), key=str(i + 1))
+        for i, o in enumerate(raw_opts if isinstance(raw_opts, list) else [])
+        if isinstance(o, dict) and o.get("id") not in (None, "")
+    )
+
+
+def match_options(options: tuple[Option, ...], text: str) -> list[str]:
+    """Os ids das opções que `text` nomeia: a tecla SOZINHA ("2", "dois", "opção dois") ou o
+    rótulo/id como sequência de palavras. Uma casa para a fala transcrita e para o texto digitado —
+    "quero um boleto" não é a opção 1, em canal nenhum."""
+    tokens = _norm(text)
+    resto = [t for t in tokens if t not in _KEY_PREFIXES]
+    achadas: list[str] = []
+    for o in options:
+        if len(resto) == 1 and (resto[0] == o.key or _SPOKEN_DIGITS.get(resto[0]) == o.key):
+            achadas.append(o.id)
+            continue
+        for alvo in (_norm(o.label), _norm(o.id.replace("_", " "))):
+            n = len(alvo)
+            if n and any(tokens[i:i + n] == alvo for i in range(len(tokens) - n + 1)):
+                achadas.append(o.id)
+                break
+    return list(dict.fromkeys(achadas))
 
 
 def _norm(text: str) -> list[str]:
@@ -327,19 +353,7 @@ class CollectSession:
         return self.done
 
     def _match_options(self, tokens: list[str]) -> list[str]:
-        resto = [t for t in tokens if t not in _KEY_PREFIXES]
-        achadas: list[str] = []
-        for o in self.plan.options:
-            # só a tecla, sozinha ("dois", "2", "opção dois") — "quero um boleto" não é a opção 1
-            if len(resto) == 1 and (resto[0] == o.key or _SPOKEN_DIGITS.get(resto[0]) == o.key):
-                achadas.append(o.id)
-                continue
-            for alvo in (_norm(o.label), _norm(o.id.replace("_", " "))):
-                n = len(alvo)
-                if n and any(tokens[i:i + n] == alvo for i in range(len(tokens) - n + 1)):
-                    achadas.append(o.id)
-                    break
-        return list(dict.fromkeys(achadas))
+        return match_options(self.plan.options, " ".join(tokens))
 
     def _spoken_digits(self, tokens: list[str]) -> str | None:
         out = []

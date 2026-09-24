@@ -282,7 +282,7 @@ class TestInboundInteractive:
     async def test_button_reply_with_no_collect_publishes_as_text(
         self, adapter, mock_redis, mock_producer
     ):
-        mock_redis.get.side_effect = [SESSION_ID, None]  # session, no collect
+        mock_redis.get.side_effect = [SESSION_ID, None, None]  # session, no collect, no open menu (NIV-17)
         body = _meta_interactive_body(
             CONTACT_ID, "button_reply", "btn_yes", "Sim"
         )
@@ -297,7 +297,7 @@ class TestInboundInteractive:
     async def test_list_reply_with_no_collect_publishes_as_text(
         self, adapter, mock_redis, mock_producer
     ):
-        mock_redis.get.side_effect = [SESSION_ID, None]
+        mock_redis.get.side_effect = [SESSION_ID, None, None]
         body = _meta_interactive_body(
             CONTACT_ID, "list_reply", "opt_2", "Opção 2"
         )

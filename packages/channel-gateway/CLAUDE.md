@@ -38,13 +38,25 @@ adapters/
 
 ## Menu/Form collection — channel matrix
 
+*Reescrita em 2026-09-24 (NIV-18, medida no código): a tabela prometia "Sequential + comma input"
+para checklist no WhatsApp e no SMS, e nenhum adaptador tinha código de checklist nem lia vírgula.*
+
 | Interaction | WhatsApp | SMS | Web Chat | Email |
 |---|---|---|---|---|
-| `text` | Native | Native | Native | Native |
-| `button` | Interactive Buttons (≤3) | Numbered fallback | Native buttons | Numbered fallback |
-| `list` | List Message (≤10) | Numbered fallback | Native list | Numbered fallback |
-| `checklist` | Sequential + comma input | Sequential + comma input | Native checkboxes | Not supported → on_failure |
-| `form` | Sequential field-by-field | Sequential field-by-field | Native HTML form | Not supported → on_failure |
+| `text` | o prompt | o prompt | Native | ⚠️ não entrega (NIV-15) |
+| `button` | Interactive Buttons (≤3) · rótulo digitado vale | texto numerado | Native buttons | ⚠️ NIV-15 |
+| `list` | List Message (4–10) · texto numerado (>10) | texto numerado | Native list | ⚠️ NIV-15 |
+| `checklist` | texto numerado, números separados por vírgula | idem | Native checkboxes | ⚠️ NIV-15 |
+| `form` | campo a campo | campo a campo | Native HTML form | ⚠️ NIV-15 |
+
+**Menu de ESCOLHA em canal de texto tem UMA casa: `text_menu.py`** (NIV-14/17, 2026-09-24). Ela
+desenha o texto numerado e traduz a resposta digitada para o id: número sozinho ("2", "dois"),
+rótulo ou id. O casamento é o mesmo do `collect_core`, com a mesma tecla do telefone, e "quero um
+boleto" não é a opção 1. O checklist aceita "1, 3", "1 e 3" e "1 3", e um pedaço inválido invalida
+a resposta inteira. O canal guarda o menu em aberto (`channel:{canal}:{sid}:menu_choice`):
+- resposta que o traduz vai como `menu_result` com o id (ou a lista);
+- **resposta que não traduz segue CRUA**, e o motor recusa, reenvia o menu e conta as tentativas
+  (NIV-13). Não há segundo contador no canal.
 
 ### O `menu` leva UM nível (ORQ-19)
 
@@ -80,14 +92,17 @@ com `option_tree.note_dropped_descriptions` (uma linha INFO por menu, só quando
 Gate: `infra/test/probe_orq15_option_description.sh`.
 
 **A resposta de menu de escolha viaja como ID da opção, nunca como rótulo** (NIV-13, 2026-09-24):
-o motor recusa o que não é id (reenvia o menu, depois `on_invalid`/`on_failure`). O WhatsApp sem
-coleta ativa manda o `id` do botão/linha; o texto numerado (WhatsApp >10, SMS, e-mail) ainda não
-traduz o número digitado para o id — NIV-14/15/17.
+o motor recusa o que não é id (reenvia o menu, depois `on_invalid`/`on_failure`). O clique do
+WhatsApp traz o `id` do botão/linha; o texto numerado do WhatsApp e do SMS é traduzido pelo
+`text_menu`. O e-mail ainda não entrega menu nenhum (NIV-15).
 
-**Sequential fallback protocol**: The adapter sends each field/option as a separate
-WhatsApp/SMS message, stores partial responses in the adapter's session state (Redis TTL),
-and emits a single `MenuSubmitEvent` to Kafka only when all required fields are collected.
-The session state key is `channel:{channel}:{session_id}:menu_collect`.
+**Sequential fallback protocol** — só para **formulário** (`form`/`fields`): the adapter sends
+each field as a separate WhatsApp/SMS message, stores partial responses in the adapter's session
+state (Redis TTL), and emits a single `menu_result` only when all fields are collected. The
+session state key is `channel:{channel}:{session_id}:menu_collect`. ⚠️ O campo de formulário
+**não tem opções** no schema (`MenuStepSchema.fields`, o Zod as descarta); escolha é sempre menu
+`button`/`list`/`checklist`, pelo `text_menu`. Até a NIV-17, o WhatsApp mandava a lista de mais
+de 10 opções por este protocolo, e a escolha chegava ao motor como formulário `{"option": …}`.
 
 ## Chamada entre réplicas (WCH-12)
 

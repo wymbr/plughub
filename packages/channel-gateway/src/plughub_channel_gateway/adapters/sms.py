@@ -50,6 +50,8 @@ from ..models import (
     NormalizedInboundEvent,
 )
 from ..option_tree import note_dropped_descriptions
+from ..collect_core import options_from_menu
+from .. import text_menu
 from .base import ChannelAdapter
 from .sms_provider import ISMSProvider, MockSMSProvider, TwilioProvider, split_sms
 from plughub_tasks import disparar
@@ -91,6 +93,8 @@ class SMSAdapter(ChannelAdapter):
         self._redis     = redis
         self._settings  = settings
         self._provider  = provider  # None → resolved lazily per tenant
+        # NIV-14: o menu de ESCOLHA em aberto — o SMS numera, e só ele sabe o que "2" quer dizer
+        self._pending   = text_menu.PendingMenu(redis, "sms", _MENU_COLLECT_TTL)
 
     # ── Inbound — called from the FastAPI webhook route ───────────────────────
 
@@ -195,6 +199,13 @@ class SMSAdapter(ChannelAdapter):
                     collect_state=json.loads(collect_raw),
                     value=full_text,
                 )
+                return
+
+            # NIV-14: resposta ao menu de escolha em aberto → o id da opção. O que não nomeia opção
+            # segue como texto: o motor recusa e reenvia o menu (NIV-13).
+            escolha = await self._pending.answer(session_id, full_text)
+            if escolha is not None:
+                await self._publish_menu_result(contact_id, session_id, escolha)
                 return
 
             event = NormalizedInboundEvent(
@@ -364,17 +375,17 @@ class SMSAdapter(ChannelAdapter):
         field_id      = current_field.get("id", f"field_{index}")
         options       = current_field.get("options", [])
 
-        # Validate numeric option selection
+        # NIV-14: campo com opções guarda o ID da opção (número ou rótulo, a regra do `text_menu`);
+        # antes guardava o `value`, que o menu não declara. ⚠️ Ramo sem entrada real hoje: o
+        # `MenuStepSchema.fields` não declara `options` (o Zod as descarta) — a escolha de verdade
+        # chega como menu `button`/`list`/`checklist`, pelo `text_menu.PendingMenu`.
         if options:
-            try:
-                chosen = int(value.strip()) - 1  # 1-based → 0-based
-                if chosen < 0 or chosen >= len(options):
-                    raise ValueError
-                selected_value = options[chosen].get("value", options[chosen].get("label", ""))
-                answers[field_id] = selected_value
-            except (ValueError, TypeError):
+            achado = text_menu.resolve(value, options_from_menu(options), "list")
+            if achado is not None:
+                answers[field_id] = achado
+            else:
                 # Invalid selection — re-prompt
-                valid_range = f"1 a {len(options)}"
+                valid_range = f"1 a {len(options_from_menu(options))}"
                 await self._send_text_to_contact(
                     contact_id=contact_id,
                     tenant_id=tenant_id,
@@ -444,12 +455,7 @@ class SMSAdapter(ChannelAdapter):
         masked  = field.get("masked", False)
 
         if options:
-            lines = [label + ":"]
-            for i, opt in enumerate(options, start=1):
-                lines.append(f"{i}. {opt.get('label', opt.get('value', ''))}")
-            lines.append("")
-            lines.append("Responda com o número da opção.")
-            text = "\n".join(lines)
+            text = text_menu.render(label + ":", options_from_menu(options), "list")
         elif masked:
             text = f"{label}:\n(Este campo é confidencial. Sua resposta será tratada com segurança.)"
         else:
@@ -484,14 +490,22 @@ class SMSAdapter(ChannelAdapter):
 
     async def deliver_menu(self, payload: dict) -> None:
         """
-        Deliver a menu as numbered SMS text.
-        SMS has no native interactive elements — all menus use sequential collect.
+        O menu como TEXTO — SMS não tem elemento interativo.
+
+        NIV-14: lia `payload["content"]` (título e campos aninhados), formato que ninguém publica:
+        o `menu.payload` do `notification_send` é PLANO (`interaction`, `prompt`, `options`,
+        `fields`). Nada era enviado, e os testes passavam porque montavam o formato inventado.
+          · escolha (`button`/`list`/`checklist`) → texto numerado + menu em aberto (`text_menu`);
+          · formulário (`fields`) → coleta campo a campo;
+          · texto → o prompt.
         """
-        contact_id = payload.get("contact_id", "")
-        tenant_id  = payload.get("tenant_id", self._settings.tenant_id)
-        session_id = payload.get("session_id", "")
-        menu       = payload.get("content", {})
-        fields     = menu.get("fields", [])
+        contact_id  = payload.get("contact_id", "")
+        tenant_id   = payload.get("tenant_id", self._settings.tenant_id)
+        session_id  = payload.get("session_id", "")
+        menu_id     = str(payload.get("menu_id") or "")
+        interaction = payload.get("interaction") or "text"
+        prompt      = str(payload.get("prompt") or "")
+        fields      = payload.get("fields") or []
 
         if not contact_id:
             logger.warning("sms deliver_menu: missing contact_id")
@@ -500,37 +514,37 @@ class SMSAdapter(ChannelAdapter):
         # ORQ-15: SMS é texto corrido — cada descrição dobraria a mensagem (e os
         # segmentos cobrados). Descarte NOMEADO, nunca mudo.
         note_dropped_descriptions(
-            "sms", payload.get("options") or menu.get("options"),
-            "canal so de texto, sem segunda linha",
-            session_id=session_id, menu_id=str(payload.get("menu_id") or menu.get("menu_id") or ""),
+            "sms", payload.get("options"), "canal so de texto, sem segunda linha",
+            session_id=session_id, menu_id=menu_id,
         )
 
-        # Intro text (title / question)
-        title = menu.get("title") or menu.get("question", "")
-        if title:
-            await self._send_text_to_contact(
-                contact_id=contact_id,
-                tenant_id=tenant_id,
-                text=title,
-            )
-
-        if fields and session_id:
-            # Start sequential collect for multi-field menus
+        if interaction == "form" or fields:
+            if prompt:
+                await self._send_text_to_contact(contact_id=contact_id, tenant_id=tenant_id, text=prompt)
+            if not session_id:
+                logger.error("sms deliver_menu: formulario %s sem session_id — a coleta NAO tem onde "
+                             "guardar as respostas; menu nao entregue", menu_id)
+                return
             await self._start_sequential_collect(
-                session_id=session_id,
-                tenant_id=tenant_id,
-                contact_id=contact_id,
-                payload=menu,
+                session_id=session_id, tenant_id=tenant_id, contact_id=contact_id, payload=payload,
             )
-        elif fields:
-            # No session_id — send as plain enumerated text (fallback)
-            for field in fields:
-                await self._send_field_prompt(
-                    contact_id=contact_id,
-                    tenant_id=tenant_id,
-                    field=field,
-                    index=0,
-                )
+            return
+
+        if text_menu.is_choice_menu(payload):
+            texto = text_menu.render(prompt, options_from_menu(payload.get("options")), interaction)
+            await self._send_text_to_contact(contact_id=contact_id, tenant_id=tenant_id, text=texto)
+            if session_id:
+                await self._pending.remember(session_id, payload)
+            else:
+                logger.error("sms deliver_menu: menu %s sem session_id — o numero respondido NAO sera "
+                             "traduzido para a opcao", menu_id)
+            return
+
+        if prompt:
+            await self._send_text_to_contact(contact_id=contact_id, tenant_id=tenant_id, text=prompt)
+        else:
+            logger.warning("sms deliver_menu: menu %s (%s) sem prompt nem opcoes — nada a enviar "
+                           "(session=%s)", menu_id, interaction, session_id)
 
     async def deliver_typing(self, payload: dict) -> None:
         """SMS has no typing indicator — no-op."""
@@ -547,6 +561,8 @@ class SMSAdapter(ChannelAdapter):
         if contact_id:
             await self._redis.delete(f"channel:sms:{contact_id}:session")
             logger.info("sms: session closed contact=%s session=%s", contact_id, session_id)
+        if session_id:
+            await self._pending.forget(session_id)
 
     # ── Collect event — outbound capability-based (Arc 16 Phase D) ───────────
 
@@ -651,6 +667,24 @@ class SMSAdapter(ChannelAdapter):
         """Redis per-tenant override → env var default."""
         redis_val = await self._redis.get(f"{tenant_id}:config:sms:{key}")
         return redis_val or default or ""
+
+    async def _publish_menu_result(self, contact_id: str, session_id: str, result: dict) -> None:
+        """NIV-14 — a escolha traduzida vai como `menu_result` (o id; a lista, no checklist)."""
+        await self._publish_inbound(NormalizedInboundEvent(
+            message_id       = str(uuid.uuid4()),
+            contact_id       = contact_id,
+            session_id       = session_id,
+            channel          = "sms",
+            content_type     = "text",
+            author           = MessageAuthor(type="customer"),
+            # dicionário LITERAL: o censo do contrato (`probe_menu_result_contract.sh`) confere as chaves
+            content          = MessageContent(type="menu_result", payload={
+                "menu_id":     result["menu_id"],
+                "interaction": result["interaction"],
+                "result":      result["result"],
+            }),
+            context_snapshot = ContextSnapshot(),
+        ).model_dump())
 
     async def _publish_inbound(self, payload: dict) -> None:
         """Publish to conversations.inbound Kafka topic."""
