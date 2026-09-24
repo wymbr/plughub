@@ -1123,3 +1123,29 @@ duplicada e rotulada `[Seleção: …]`) · `WCH-12` (fala depende da instância
 
 Gate: `infra/test/probe_wch01_chat_call.sh` (porta, espera dita, independência chamada × contato).
 O caminho com humano e áudio foi validado pelo dono no browser.
+
+## 21. A chamada tem DONA entre réplicas (WCH-12, 2026-09-24)
+
+A chamada vive na **memória** de uma réplica do gateway: a sala, o bot leg, a fila de fala, a coleta
+e `_sip`/`_sip_by_room`. Duas entradas chegam a qualquer réplica:
+- o `conversations.outbound`, um grupo Kafka com 3 partições;
+- o webhook do SFU, pelo DNS de `channel-gateway`.
+
+Por isso a chamada tem **dona** (`call_relay.py`):
+
+| peça | o quê |
+|---|---|
+| posse | `channel:call:{sid}:owner = instance_id` — gravada antes do pedido de roteamento (`_open_session`) e ao anexar a chamada do chat; renovada nos keepalives; apagada só se ainda for desta réplica (Lua) |
+| canal | `call:deliver:{instance_id}` — cada réplica ouve só o seu |
+| saída | `OutboundConsumer`: `holds_call` (memória, síncrono) → local como sempre; senão `send_later` à dona; sem dona → local (o `voice` legado Twilio segue igual). No `webchat` o chat é entregue por quem consumiu e só a FALA vai à dona |
+| webhook | sala SIP que não é daqui → sessão por `channel:sip:room:{room}` → dona; `abrindo` espera até 5 s |
+
+- **Ordem:** perguntar a dona é `await`, então o envio é encadeado **por sessão**. A dona abre as
+  tasks na ordem de chegada, o mesmo contrato do consumidor (a fala é enfileirada antes do primeiro
+  `await`, VOZ-05 fatia 3).
+- **Dona que não ouve** (0 receptores no `publish`) é ERROR, e nada é entregue no lugar dela.
+- **Por que no `voice` era pior que silêncio:** fora da dona, o `VoiceChannelRouter` não via a
+  sessão SIP e mandava a mensagem ao legado Twilio.
+
+Gate: `infra/test/probe_wch12_two_replicas.sh` (ASSISTIDO: sobe uma réplica temporária atrás do
+alias). Testes: `test_call_relay.py`.

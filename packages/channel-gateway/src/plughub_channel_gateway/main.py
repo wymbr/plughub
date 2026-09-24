@@ -66,6 +66,7 @@ from .identity_auth import identity_principal, tenant_for
 from .context_reader import ContextReader
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint, resolve_pool
 from .outbound_consumer import OutboundConsumer
+from .call_relay import CallRelay
 from .registry_invalidation_consumer import RegistryInvalidationConsumer
 from .webchat_config import webchat_config
 from .session_registry import SessionRegistry
@@ -279,6 +280,11 @@ async def lifespan(app: FastAPI):
         # buraco e ninguém viu, porque ela nunca rodou.
         attachment_store = _attachment_store,
     )
+    # WCH-12 — a chamada vive na memória de UMA réplica; saída do Kafka e webhook do SFU que caem
+    # em outra seguem à dona pelo Redis (`call_relay.py`). O `instance_id` é o do registry do
+    # webchat: uma identidade por processo.
+    _call_relay = CallRelay(redis=_redis, instance_id=instance_id, ttl=settings.session_ttl_seconds)
+    _webrtc_adapter.attach_relay(_call_relay)
     _webhook_adapter = WebhookAdapter(
         producer = _producer,
         redis    = _redis,
@@ -306,7 +312,7 @@ async def lifespan(app: FastAPI):
         "webhook":  _webhook_adapter,
     }
 
-    outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings)
+    outbound = OutboundConsumer(adapters=_channel_adapters, settings=settings, relay=_call_relay)
 
     async def _session_parking_consumer() -> None:
         """
@@ -568,6 +574,7 @@ async def lifespan(app: FastAPI):
             await consumer.stop()
 
     pubsub_task     = supervisionar("registry-pubsub", asyncio.create_task(_registry.start_pubsub_listener()))
+    call_relay_task = supervisionar("call-relay",      asyncio.create_task(_call_relay.listen()))
     outbound_task   = supervisionar("outbound",        asyncio.create_task(outbound.run()))
     collect_task    = supervisionar("collect-events",  asyncio.create_task(_collect_events_consumer()))
     parking_task    = supervisionar("session-parking", asyncio.create_task(_session_parking_consumer()))
@@ -618,6 +625,7 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     pubsub_task.cancel()
+    call_relay_task.cancel()
     outbound_task.cancel()
     collect_task.cancel()
     parking_task.cancel()

@@ -99,6 +99,7 @@ class CallAttachMixin:
 
         self._connections[session_id] = ws
         self._attached.add(session_id)
+        await self._claim_call(session_id)          # WCH-12: a fala do chat vem para cá
         await self._ws_send(ws, {"type": "conn.authenticated", "session_id": session_id,
                                  "mode": "call"})
         logger.info("webrtc chamada anexada ao contato de chat session=%s", session_id)
@@ -203,6 +204,7 @@ class CallAttachMixin:
             try:
                 await self._redis.expire(f"channel:webrtc:{session_id}:room_name", ttl)
                 await self._redis.expire(self._media_key(session_id), ttl)
+                await self._renew_call(session_id)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("webrtc chamada keepalive (session=%s): %s", session_id, exc)
 
@@ -508,6 +510,7 @@ class CallAttachMixin:
         if session_id not in self._attached:
             return
         self._attached.discard(session_id)
+        await self._release_call(session_id)
         room = self._room_of(session_id)
         await self._recorder.close(session_id)          # a parte em curso fecha e é guardada
         stt_task = self._stt_tasks.get(session_id)

@@ -1,5 +1,72 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (4) — WCH-12: a chamada tem DONA entre réplicas, e a saída e o webhook chegam a ela
+
+**O defeito, medido antes de construir.** A chamada vive na memória de UMA réplica do gateway:
+sala, bot leg, fila de fala, coleta, `_sip`/`_sip_by_room`. Duas entradas não escolhem réplica:
+- **`conversations.outbound`**: um grupo Kafka só, com **3 partições** (medido);
+- **webhook do SFU** (`/v1/livekit/webhook`): vai a quem o DNS de `channel-gateway` escolher.
+
+A ficha citava a fala; a medição achou mais três caminhos com o mesmo defeito:
+- o **menu** e a **coleta** (`deliver_menu`);
+- o **`session.closed`**: a chamada não era derrubada;
+- o **`participant_left`/`room_finished`** do SFU: o chamador desligava e o contato ficava aberto.
+
+No canal `voice` era pior que silêncio: fora da dona, o `VoiceChannelRouter` via "não é sessão SIP"
+e entregava ao **legado Twilio**. O demo roda uma réplica só, então nada ficava vermelho.
+
+**Decisão do dono:** dona no Redis e encaminhamento por pub/sub, no padrão do `SessionRegistry` do
+webchat. A validação é de verdade, com uma 2ª réplica.
+
+**O que mudou** (`call_relay.py`, novo):
+- **Posse.** `channel:call:{sid}:owner = instance_id`:
+  - gravada **antes** do pedido de roteamento (`_open_session`: browser e SIP) e ao anexar a
+    chamada do chat;
+  - renovada nos dois keepalives;
+  - apagada **só se ainda for desta réplica** (Lua). O release atrasado de uma re-anexação não
+    apaga a posse da nova.
+- **Saída.** Nos canais `webrtc`, `voice` e `webchat`, o `OutboundConsumer` pergunta
+  `holds_call`, que é memória e não precisa de `await`:
+  - chamada daqui: o caminho de sempre, síncrono;
+  - chamada de outra réplica: `send_later` à dona pelo canal `call:deliver:{instance_id}`;
+  - sem dona: entrega local, como antes; o `voice` legado segue funcionando;
+  - no `webchat`, o chat continua sendo entregue por quem consumiu; só a FALA da chamada presa a
+    ele vai à dona.
+- **Ordem.** Perguntar a dona é `await`, e a fala tem de sair na ordem do Kafka (VOZ-05 fatia 3).
+  Por isso o envio é **encadeado por sessão**. Na dona, o ouvinte abre as tasks na ordem de
+  chegada, que é o contrato do consumidor.
+- **Webhook.** Evento de sala SIP que não é daqui acha a sessão por `channel:sip:room:{room}` e vai
+  à dona. Enquanto a dona ainda abre o contato (`abrindo`), o evento **espera** até 5 s: descartar
+  um `participant_left` rápido deixaria a chamada viva sem ninguém.
+- **Dona que não ouve** (`publish` com 0 receptores) é ERROR nomeado, e **nada** é entregue no lugar
+  dela. Entregar ali seria o silêncio que a peça existe para acabar.
+
+**Medição:**
+- **Testes:** `test_call_relay.py` (13 casos), com duas réplicas reais sobre um Redis compartilhado
+  em memória. Entre eles: ordem de 12 frases com o Redis respondendo fora de ordem; controle sem
+  dona; chat × fala.
+- **Suíte do gateway:** 1471 verdes.
+- **Mutação:** M1 a M8, todas vermelhas (nunca encaminhar · sem encadear · release incondicional ·
+  dona morta entregue local · não esperar a abertura · `_close_session` sem liberar · webhook sem
+  encaminhar · fim da chamada do chat sem liberar). O M6 sobreviveu na primeira bateria: na perna
+  SIP, o `_sip_teardown` também libera. Ganhou o teste do browser, que só passa pelo
+  `_close_session`.
+- **Ao vivo, réplica B sem alias** (webhook só no A): `probe_voz02` em 3 rodadas, todas VERDES. A B
+  consumiu 15 mensagens `voice` de chamadas do A e encaminhou as 15; zero ERROR do relay.
+- **Ao vivo, B atrás do alias `channel-gateway`** (o SFU divide os webhooks): o lado do telefone
+  ficou OK nas 3 rodadas. Foram 25 webhooks e 26 saídas encaminhados, nos dois sentidos, e 6
+  chamadas nasceram na B. Os ramos do voz02 que leem o log de UM container ficaram vermelhos para
+  essas 6, e é por isso que o gate novo não os usa.
+- **⚠️ Controle negativo ao vivo NÃO medido:** o build removeu a imagem antiga, e o probe usa a
+  imagem do container. A prova de que sem o relay a IA fica muda é a mutação M1.
+
+**Gate:** `infra/test/probe_wch12_two_replicas.sh`, ASSISTIDO, porque sobe uma réplica temporária
+por ~8 min. Ramos: P1 lado do telefone · P2/P3 houve encaminhamento de saída e de webhook (senão
+SEM AMOSTRA) · P4 zero ERROR do relay. Primeira rodada: VERDE (P2 A=13 B=2 · P3 A=14 B=5).
+
+**Fora da fatia:** o legado Twilio (`VoiceAdapter`) tem estado próprio em memória e não entra na
+posse. Nenhuma sessão dele passa por aqui, porque sem dona a entrega segue local, como antes.
+
 ## 2026-09-24 (3) — NIV-13: menu de escolha só aceita uma das opções; fora delas, o menu é reenviado
 
 **O que a ficha ainda tinha aberto, medido antes de construir.** A casa única da coleta e o lado da

@@ -177,6 +177,10 @@ _MASKED_SPEECH_GRACE_S = 5.0
 _MEDIA_HOLD_TTL_S = 900
 
 
+# WCH-12: quanto um evento de sala SIP espera a outra réplica terminar de abrir o contato
+_SIP_OPENING_WAIT_S = 5.0
+
+
 def listener_identity(session_id: str) -> str:
     """O ouvinte (STT + teclas) na sala. Uma casa: a pausa de mídia (NIV-07) o reconhece por ela."""
     return f"bot-{session_id[:8]}"
@@ -473,6 +477,70 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._sip_tasks:   dict[str, list[asyncio.Task]] = {}
         self._masked_sip_menu: dict[str, str] = {}   # NIV-07: menu mascarado aceito na perna SIP
         self._media_hold:  dict[str, str] = {}       # NIV-07: sessão → menu da pausa de mídia em curso
+
+        # WCH-12: as chamadas que ESTA instância segura (a posse no Redis é do `CallRelay`). Com
+        # várias réplicas, a saída do Kafka e o webhook do SFU chegam a qualquer uma; o que não é
+        # daqui vai à dona.
+        self._relay: Any | None = None
+        self._owned: set[str]   = set()
+
+    # ── WCH-12: posse da chamada entre réplicas ───────────────────────────────
+
+    def attach_relay(self, relay: Any) -> None:
+        self._relay = relay
+        relay.on("livekit", self._livekit_forwarded)
+
+    def holds_call(self, session_id: str) -> bool:
+        """Esta instância segura a chamada da sessão (sala, bot leg, fila de fala)."""
+        return session_id in self._owned
+
+    async def _claim_call(self, session_id: str) -> None:
+        self._owned.add(session_id)
+        if self._relay is None:
+            return
+        try:
+            await self._relay.claim(session_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("webrtc: posse da chamada NAO registrada (session=%s): %s — a saida que "
+                         "outra replica consumir nao chega a esta chamada", session_id, exc)
+
+    async def _release_call(self, session_id: str) -> None:
+        if session_id not in self._owned:
+            return
+        self._owned.discard(session_id)
+        if self._relay is not None:
+            await self._relay.release(session_id)
+
+    async def _renew_call(self, session_id: str) -> None:
+        if self._relay is not None and session_id in self._owned:
+            await self._relay.renew(session_id)
+
+    async def _livekit_forwarded(self, envelope: dict) -> None:
+        await self.on_livekit_event(envelope.get("event", ""), envelope.get("room", ""),
+                                    envelope.get("participant"), forwarded=True)
+
+    async def _forward_livekit(self, event: str, room: str, participant: dict | None) -> bool:
+        """O evento de uma sala SIP que não é daqui vai à dona. A sessão da sala está no Redis
+        (`channel:sip:room:{room}`); enquanto a dona abre o contato ela vale `abrindo`, e um
+        `participant_left` rápido ESPERA — descartá-lo deixaria a chamada viva sem ninguém."""
+        chave, limite = f"channel:sip:room:{room}", time.monotonic() + _SIP_OPENING_WAIT_S
+        while True:
+            sid = str(await self._redis.get(chave) or "")
+            if sid != "abrindo" or time.monotonic() >= limite:
+                break
+            await asyncio.sleep(0.2)
+        if sid == "abrindo":
+            logger.error("webrtc sip: %s da sala %s chegou e o contato NAO abriu em %.0f s na outra "
+                         "replica — evento descartado", event, room, _SIP_OPENING_WAIT_S)
+            return True
+        if not sid:
+            return False
+        dona = await self._relay.owner(sid)
+        if not dona or dona == self._relay.instance_id:
+            return False
+        await self._relay.forward(dona, sid, {"kind": "livekit", "event": event, "room": room,
+                                              "participant": participant})
+        return True
 
     # ── Provider factories ────────────────────────────────────────────────────
 
@@ -1150,6 +1218,9 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             "contact_id": contact_id, "pool_id": resolved_pool, "started_at": started_at,
             "speech_profile_id": speech_profile_id, "channel": channel,
         }
+        # WCH-12: a posse ANTES do pedido de roteamento — a primeira saída do agente pode ser
+        # consumida por outra réplica, e ela precisa saber para onde mandar
+        await self._claim_call(session_id)
 
         # O contrato é o do webchat (`contact_lifecycle`): abertura em `conversations.events`,
         # pedido de roteamento no formato que o routing-engine reconhece.
@@ -1728,6 +1799,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                 )
                 await self._redis.expire(self._media_key(session_id), ttl)
                 await self._touch_ws_alive(session_id)
+                await self._renew_call(session_id)
             except Exception as exc:
                 logger.debug(
                     "webrtc keepalive error (session=%s): %s", session_id, exc
@@ -1823,8 +1895,17 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         call = self._sip.get(session_id)
         return call.room if call is not None else build_room_name(session_id)
 
-    async def on_livekit_event(self, event: str, room: str, participant: dict | None) -> None:
-        """Um evento da sala, já com a assinatura conferida pela rota."""
+    async def on_livekit_event(self, event: str, room: str, participant: dict | None,
+                               *, forwarded: bool = False) -> None:
+        """Um evento da sala, já com a assinatura conferida pela rota — ou encaminhado pela réplica
+        que o recebeu (WCH-12): a chamada SIP vive na memória de quem a abriu."""
+        if (not forwarded and self._relay is not None and room not in self._sip_by_room
+                and event in ("participant_joined", "participant_left", "room_finished")
+                and is_sip_room(room)
+                and not (event == "participant_joined" and participant
+                         and parse_sip_participant(room, participant) is not None)):
+            if await self._forward_livekit(event, room, participant):
+                return
         if event == "room_started":
             await self.police_room(room)
         elif event == "participant_joined" and participant:
@@ -1991,6 +2072,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         if call is None:
             return
         self._sip_by_room.pop(call.room, None)
+        await self._release_call(session_id)
         atual = asyncio.current_task()
         for t in self._sip_tasks.pop(session_id, []):
             if t is not atual:
@@ -2035,6 +2117,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._masked_grace_until.pop(session_id, None)
         self._masked_sip_menu.pop(session_id, None)
         self._media_hold.pop(session_id, None)
+        await self._release_call(session_id)
         try:
             # a chave da sala sai junto (VOZ-02): sem ela, a sala recriada por um token de sessão
             # encerrada é apagada ao nascer (`police_room`) — é o que substitui o `auto_create: false`

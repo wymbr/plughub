@@ -28,6 +28,7 @@ import logging
 from aiokafka import AIOKafkaConsumer
 
 from .adapters.base import ChannelAdapter
+from .call_relay import CallRelay
 from .config import Settings
 from plughub_tasks import disparar
 
@@ -39,9 +40,15 @@ class OutboundConsumer:
         self,
         adapters:  dict[str, ChannelAdapter],
         settings:  Settings,
+        relay:     CallRelay | None = None,
     ) -> None:
         self._adapters  = adapters
         self._settings  = settings
+        # WCH-12: a saída de uma CHAMADA vai à instância que a segura (ver `call_relay.py`)
+        self._relay     = relay
+        if relay is not None:
+            relay.on("outbound", self._deliver_forwarded)
+            relay.on("chat_call", self._chat_call_forwarded)
 
     async def _cancelar_resumes_pendentes(self, payload: dict) -> None:
         """Delega ao dono dos tokens. Nunca aborta o fechamento por causa disto."""
@@ -136,17 +143,62 @@ class OutboundConsumer:
             msg_type, channel, contact_id, payload.get("session_id"),
         )
 
+        # WCH-12 — a chamada vive na memória de UMA instância, e esta mensagem caiu na partição de
+        # quem a consumiu. Chamada que não é daqui segue à dona, em ordem, ANTES de qualquer
+        # `await` (o encadeamento por sessão é do `send_later`).
+        session_id = payload.get("session_id") or ""
+        chamadas   = self._adapters.get("webrtc")
+        remota     = bool(
+            self._relay is not None and session_id and chamadas is not None
+            and channel in ("webrtc", "voice", "webchat")
+            and not chamadas.holds_call(session_id)
+        )
+
         if channel == "webchat":
             # WCH-02 — a chamada presa ao contato de chat FALA o que o agente de IA escreve. Antes
             # da entrega ao chat e sem `await`: a fala entra na fila na ordem do Kafka.
-            fala = getattr(self._adapters.get("webrtc"), "chat_call_outbound", None)
-            if fala is not None:
-                try:
-                    fala(msg_type, payload)
-                except Exception as exc:
-                    logger.error("chamada de chat: fala NAO enfileirada type=%s session=%s: %s",
-                                 msg_type, payload.get("session_id"), exc)
+            if remota:
+                # o chat é entregue aqui (o registry do webchat tem o próprio encaminhamento); só a
+                # FALA vai à dona da chamada, se houver chamada
+                self._relay.send_later(session_id, {"kind": "chat_call", "msg_type": msg_type,
+                                                    "payload": payload})
+            else:
+                self._chat_call_local(msg_type, payload)
+        elif remota:
+            self._relay.send_later(session_id, {"kind": "outbound", "payload": payload},
+                                   unowned=lambda: self._deliver(adapter, payload))
+            return
 
+        await self._deliver(adapter, payload)
+
+    def _chat_call_local(self, msg_type: str | None, payload: dict) -> None:
+        fala = getattr(self._adapters.get("webrtc"), "chat_call_outbound", None)
+        if fala is not None:
+            try:
+                fala(msg_type, payload)
+            except Exception as exc:
+                logger.error("chamada de chat: fala NAO enfileirada type=%s session=%s: %s",
+                             msg_type, payload.get("session_id"), exc)
+
+    async def _chat_call_forwarded(self, envelope: dict) -> None:
+        """WCH-12 — na DONA da chamada presa ao chat: a fala do que outra instância consumiu."""
+        self._chat_call_local(envelope.get("msg_type"), envelope.get("payload") or {})
+
+    async def _deliver_forwarded(self, envelope: dict) -> None:
+        """WCH-12 — na DONA: a saída que outra instância consumiu, entregue sem novo roteamento
+        (reencaminhar daqui faria o envelope voltar se a posse mudou no caminho)."""
+        payload = envelope.get("payload") or {}
+        adapter = self._adapters.get(payload.get("channel") or "")
+        if adapter is None:
+            logger.error("call_relay: saida encaminhada para canal sem adapter (%s) session=%s",
+                         payload.get("channel"), envelope.get("session_id"))
+            return
+        await self._deliver(adapter, payload)
+
+    async def _deliver(self, adapter: ChannelAdapter, payload: dict) -> None:
+        msg_type   = payload.get("type")
+        channel    = payload.get("channel")
+        contact_id = payload.get("contact_id")
         try:
             if msg_type == "message.text":
                 await adapter.deliver_text(payload)

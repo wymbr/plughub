@@ -89,6 +89,15 @@ WhatsApp/SMS message, stores partial responses in the adapter's session state (R
 and emits a single `MenuSubmitEvent` to Kafka only when all required fields are collected.
 The session state key is `channel:{channel}:{session_id}:menu_collect`.
 
+## Chamada entre réplicas (WCH-12)
+
+A chamada (`webrtc`, SIP, chamada presa ao chat) vive na memória de UMA réplica. A saída do Kafka e
+o webhook do SFU que caem em outra são **encaminhados à dona**. A posse fica em
+`channel:call:{sid}:owner`, o canal em `call:deliver:{instance_id}` e o código em `call_relay.py`.
+Estado novo de chamada em memória **não** precisa de outra posse: ele já mora na dona. Entrada nova
+que chegue a qualquer réplica (rota HTTP, tópico) **precisa** perguntar `holds_call` e encaminhar.
+Ver `docs/arcos/arc15-webrtc.md` § 21.
+
 ## MenuPayload → MenuSubmitEvent flow
 
 ```

@@ -1409,6 +1409,11 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   `create_room` e apagada no fechamento. Desligar o webhook desliga o controle; o
   `probe_webrtc_media_plane.sh` julga os dois juntos (A3) e mede o efeito com controle positivo (D4/D5).
 
+- **A chamada tem DONA entre réplicas** (WCH-12): o estado dela vive na memória de UMA réplica
+  do gateway, e saída do Kafka ou webhook do SFU que caem em outra são encaminhados à dona
+  (`call_relay.py`, posse em `channel:call:{sid}:owner`). Entrada nova que alcance qualquer réplica
+  pergunta `holds_call` e encaminha. Com uma réplica, nada disso fica vermelho. Gate:
+  `probe_wch12_two_replicas.sh`.
 - **Versões do LiveKit andam JUNTAS** — SFU no compose, `livekit-client` do Console (lockfile) e do
   widget (versão exata no CDN). SFU v1.8.4 com clientes 2.20/2.22 publicava áudio e não vídeo, sem
   nada vermelho: os probes usam o SDK Python, que negocia com o servidor antigo. Mudou uma, repita o

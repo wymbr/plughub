@@ -816,6 +816,10 @@ probe_up_state_verdict.sh
 !gate_pause_capacity.sh   exige um agente humano LOGADO no Console (a instancia nasce no login WS, `registerHumanAgent`) — forjar a chave em Redis testaria a forja, nao o produto
 !gate_queue_segment_not_born_without_flow.sh   exige T0 colhido ANTES do fluxo: T0=$(date -u +%FT%TZ)
 !gate_sentiment_engine_half.sh   exige T0 colhido ANTES de abrir o contato, e um contato que ENFILEIRE
+# WCH-12 (2026-09-24): chamada SIP atendida com DUAS replicas do gateway (saida do Kafka e webhook do
+# SFU caindo na replica errada sao encaminhados a dona). P1 lado do telefone do voz02 em N rodadas;
+# P2/P3 houve encaminhamento de saida e de webhook (senao SEM AMOSTRA); P4 zero ERROR do relay.
+!probe_wch12_two_replicas.sh   sobe uma replica TEMPORARIA do gateway atras do alias channel-gateway por ~8 min — gate que leia log do gateway rodando junto mede metade das chamadas; rodar SOZINHO
 !probe_release_reclaim_race.sh   exige <pool_id> <instance_id> de uma instancia viva
 !probe_agent_ws_restart_ghost.sh   REINICIA o mcp-server (derruba todo Console conectado, que reconecta sozinho) e segura ~5 min. AGH-02: agente humano cujo socket morreu sem close (reinicio do processo) ficava ready no pool para sempre, sem TTL, recebendo contato. Mede G1 (fantasma sai do pool e a chave some), C1 (o contato que ele atendia recebe agent_disconnect), os controles L1/L2 (quem reconectou e segurou o socket por mais que o TTL da liveness continua instancia) e L3 (a liveness de L foi sustentada pelos pongs, nao pelo cinto local do varredor, que numa replica so mascara a renovacao quebrada)
 !gate_webrtc_console_live.sh   exige uma chamada WebRTC feita por GENTE, aberta, com agente logado no Console e cliente no widget (roteiro docs/guias/roteiro-validacao-webrtc-console.md): prova a midia pelo browser do host lendo o SFU durante a chamada. Sem chamada sai INCONCLUSIVO; conferido na entrega com chamada sintetica (VERDE), agente sem video (VERMELHO no L3) e audio em silencio digital (VERMELHO no L5 com L3 verde)
