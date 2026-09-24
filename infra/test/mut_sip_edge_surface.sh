@@ -23,9 +23,9 @@ cd "$(dirname "$0")/../.."
 PROBE=infra/test/probe_sip_edge_surface.sh
 TMP=$(mktemp --suffix=.yml)
 SENHA_FORTE="mut-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-REPO_SENHA=$(sed -n 's/^ *SIP_TRUNK_PASSWORD_DEMO: *\([^ $#][^ #]*\).*/\1/p' docker-compose.demo.yml | head -1)
+REPO_SENHA=$(sed -n 's/^SIP_TRUNK_PASSWORD_DEMO=//p' .env.demo.example | tail -1)
 GW=plughub-demo-channel-gateway-1
-[ -n "$REPO_SENHA" ] || { echo "INCONCLUSIVO: senha de demo não achada no compose"; exit 2; }
+[ -n "$REPO_SENHA" ] || { echo "INCONCLUSIVO: senha de demo não achada no .env.demo.example"; exit 2; }
 
 env_de() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" | sed -n "s/^$2=//p" | head -1; }
 ajudante() {

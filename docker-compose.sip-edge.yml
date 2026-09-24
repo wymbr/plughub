@@ -9,9 +9,10 @@
 #     o que não está aqui não está classificado (`probe_sip_edge_surface.sh`).
 #   · liga o endereço externo do serviço SIP (`use_external_ip`), senão o SDP anuncia o IP
 #     interno do container e o áudio do provedor não volta.
-#   · troca as senhas dos troncos pelas do `.env.demo`. A senha de demo do compose principal está
-#     no repositório: com a porta aberta, quem tem o repositório liga para dentro. O `:?` faz o
-#     compose RECUSAR subir sem ela, em vez de publicar a senha conhecida.
+#   · NÃO toca nas senhas dos troncos: o `sip-seed` as lê do `.env.demo` por `env_file`, com a borda
+#     aberta ou fechada (VOZ-43 — quando esta camada as fornecia, fechar a borda trocava a fonte). Quem
+#     EXIGE senha antes de abrir é o `up.sh`: ausente, ou igual à do `.env.demo.example` (a que está no
+#     repositório), a borda não abre e ele diz por quê.
 #   · recria os troncos (`SIP_SEED_RECONCILE`), porque o seed é if-absent e manteria a senha antiga.
 #
 # ⚠️ Autenticação é DIGEST, nunca lista de IPs: o Docker Desktop reescreve a origem de todo pacote
@@ -25,6 +26,4 @@ services:
 
   sip-seed:
     environment:
-      SIP_TRUNK_PASSWORD_DEMO:   ${SIP_TRUNK_PASSWORD_DEMO:?defina SIP_TRUNK_PASSWORD_DEMO no .env.demo antes de abrir a borda SIP}
-      SIP_TRUNK_PASSWORD_TWILIO: ${SIP_TRUNK_PASSWORD_TWILIO:-}
-      SIP_SEED_RECONCILE:        "true"
+      SIP_SEED_RECONCILE: "true"

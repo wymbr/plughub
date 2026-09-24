@@ -6,8 +6,8 @@
 #
 # O ESTADO QUE O ORIGINOU: a allowlist de borda (`probe_edge_surface.sh`) só conhece prefixo HTTP;
 # SIP ficava fora de toda tabela. E duas travas que pareciam existir não existiam: o seed aceitava
-# tronco SEM autenticação (só logava `auth=NENHUMA`), e a senha do tronco de demo está escrita no
-# compose — com a porta aberta, quem tem o repositório liga para dentro. Lista de IPs também não
+# tronco SEM autenticação (só logava `auth=NENHUMA`), e a senha do tronco de demo está no repositório
+# (hoje no `.env.demo.example`) — com a porta aberta, quem o tem liga para dentro. Lista de IPs também não
 # serve de trava aqui: o Docker Desktop reescreve a origem de todo pacote que entra por porta
 # publicada (medido em 2026-09-23: 172.17.0.1 vindo da LAN e do localhost).
 #
@@ -128,7 +128,8 @@ for a in "${ARQS[@]}"; do
   user=$(jq -r .trunk.auth_username "$a"); penv=$(jq -r .trunk.auth_password_env "$a")
   if [ -z "$dnis" ]; then inconcl "N/Y/K $nome sem número declarado — não há como ligar para ele"; continue; fi
   vigor=$(env_de "$SEEDC" "$penv")
-  repo=$(sed -n "s/^ *$penv: *\([^ \$#][^ #]*\).*/\1/p" docker-compose.demo.yml | head -1)
+  # VOZ-43: a senha que está no REPOSITÓRIO é a do `.env.demo.example` (de onde a instalação a copia)
+  repo=$(sed -n "s/^$penv=//p" .env.demo.example | tail -1)
 
   # N — controle negativo
   F=$(final_de "$(ajudante invite "$dnis" "$user" "errada-$RANDOM$RANDOM")")
@@ -146,7 +147,11 @@ for a in "${ARQS[@]}"; do
 
   # K — senha do repositório com a borda publicada
   if [ -z "$repo" ]; then ok "K $nome: a senha não está no repositório ($penv só no env)"; continue; fi
-  if [ "$PUBLICADA" = false ]; then info "K $nome: senha do repositório em uso, borda FECHADA — aceitável só assim"; continue; fi
+  if [ "$PUBLICADA" = false ]; then
+    if [ "$vigor" = "$repo" ]; then info "K $nome: senha do repositório em uso, borda FECHADA — aceitável só assim"
+    else ok "K $nome: a senha em vigor não é a do repositório (borda fechada)"; fi
+    continue
+  fi
   if [ "$vigor" = "$repo" ]; then falha "K $nome: borda PUBLICADA com a senha que está no repositório ($penv)"; continue; fi
   F=$(final_de "$(ajudante invite "$dnis" "$user" "$repo")")
   if e_auth "$F"; then ok "K $nome: a senha do repositório é recusada ao vivo ($F)"

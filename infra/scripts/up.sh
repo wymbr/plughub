@@ -27,15 +27,28 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.demo.yml")
 # VOZ-32: a borda SIP é OPT-IN, e a chave mora no `.env.demo` (local, fora do git) para valer
-# também na subida automática do logon. Ligada, entra a camada que publica as portas, e o
-# `.env.demo` vira fonte de interpolação (senhas dos troncos). `SIP_USE_EXTERNAL_IP` é derivada
-# daqui, nunca uma segunda chave: porta publicada com endereço interno no SDP é chamada muda.
+# também na subida automática do logon. Ligada, entra a camada que publica as portas.
+# `SIP_USE_EXTERNAL_IP` é derivada daqui, nunca uma segunda chave: porta publicada com endereço
+# interno no SDP é chamada muda.
+# VOZ-43: as senhas dos troncos NÃO passam por aqui — o `sip-seed` as lê do `.env.demo` nos dois
+# estados. Aqui só se EXIGE, antes de abrir: toda senha que um tronco declara tem de existir, e a de
+# demo não pode ser a do `.env.demo.example` (está no repositório). Falhou: a borda fica FECHADA.
 SIP_EDGE=false
+SIP_EDGE_RECUSA=""
+env_val() { sed -n "s/^$1=//p" "$2" 2>/dev/null | tail -1; }
 if grep -qE '^PLUGHUB_SIP_EDGE=true[[:space:]]*$' "$REPO_ROOT/.env.demo" 2>/dev/null; then
-  SIP_EDGE=true
-  export SIP_USE_EXTERNAL_IP=true
-  COMPOSE=(docker compose --env-file "$REPO_ROOT/.env.demo"
-           -f "$REPO_ROOT/docker-compose.demo.yml" -f "$REPO_ROOT/docker-compose.sip-edge.yml")
+  for k in $(grep -ho '"auth_password_env": *"[A-Z_]*"' "$REPO_ROOT"/infra/sip/*.json 2>/dev/null | grep -o '[A-Z_]*"$' | tr -d '"' | sort -u); do
+    [ -n "$(env_val "$k" "$REPO_ROOT/.env.demo")" ] || SIP_EDGE_RECUSA="$SIP_EDGE_RECUSA $k ausente no .env.demo;"
+  done
+  demo=$(env_val SIP_TRUNK_PASSWORD_DEMO "$REPO_ROOT/.env.demo")
+  if [ -n "$demo" ] && [ "$demo" = "$(env_val SIP_TRUNK_PASSWORD_DEMO "$REPO_ROOT/.env.demo.example")" ]; then
+    SIP_EDGE_RECUSA="$SIP_EDGE_RECUSA SIP_TRUNK_PASSWORD_DEMO é a do .env.demo.example (está no repositório);"
+  fi
+  if [ -z "$SIP_EDGE_RECUSA" ]; then
+    SIP_EDGE=true
+    export SIP_USE_EXTERNAL_IP=true
+    COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.demo.yml" -f "$REPO_ROOT/docker-compose.sip-edge.yml")
+  fi
 fi
 LOG_DIR="$REPO_ROOT/.logs"
 LOG="$LOG_DIR/up-$(date +%Y%m%d-%H%M%S).log"
@@ -68,6 +81,8 @@ echo "   log: $LOG"
 if [ "$SIP_EDGE" = true ]; then
   echo "   ⚠️  borda SIP LIGADA (PLUGHUB_SIP_EDGE=true): 5060/UDP e RTP 10000–10100/UDP publicados."
   echo "      Classificação: bash infra/test/probe_sip_edge_surface.sh"
+elif [ -n "$SIP_EDGE_RECUSA" ]; then
+  echo "   ❌ borda SIP pedida (PLUGHUB_SIP_EDGE=true) e NÃO aberta — segue fechada:$SIP_EDGE_RECUSA"
 fi
 "${COMPOSE[@]}" up -d --scale e2e-runner=0 > >(tee -a "$LOG") 2>&1
 RC=$?

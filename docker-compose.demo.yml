@@ -1546,6 +1546,10 @@ services:
 
   # VOZ-02 — troncos de ENTRADA e dispatch rules, semeados de `infra/sip/*.json` pela API do SFU
   # (seed-if-absent). A senha do tronco vem do env, nunca do arquivo.
+  # VOZ-43: as senhas vêm do `.env.demo` por `env_file`, com a borda SIP aberta OU fechada. Ficavam
+  # aqui (a de demo) e na camada sip-edge (as reais), e fechar a borda trocava a fonte: o tronco no
+  # SFU ficava com uma senha e o seed com outra, e o tronco da Twilio perdia a senha (seed exit 1).
+  # Nunca repetir `SIP_TRUNK_PASSWORD_*` em `environment:` — ele vence o `env_file` calado.
   sip-seed:
     build:
       context: .
@@ -1554,12 +1558,13 @@ services:
     volumes:
       - ./infra/seed:/seed:ro
       - ./infra/sip:/sip:ro
+    env_file:
+      - .env.demo
     environment:
       LIVEKIT_URL:             http://livekit:7880
       LIVEKIT_API_KEY:         plughub_demo_key
       LIVEKIT_API_SECRET:      changeme_livekit_api_secret_demo_32chars
       SIP_DIR:                 /sip
-      SIP_TRUNK_PASSWORD_DEMO: changeme_sip_trunk_demo
       SIP_SEED_RECONCILE:      ${SIP_SEED_RECONCILE:-}
       SIP_SEED_ALLOW_EMPTY:    ${SIP_SEED_ALLOW_EMPTY:-}
     depends_on:

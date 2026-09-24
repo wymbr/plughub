@@ -975,9 +975,11 @@ compensatório, com controle positivo). O mesmo probe mede as teclas (K1–K4, B
 `tests/test_sip_leg.py`.
 
 **Borda SIP (VOZ-32, 2026-09-23, publicação opt-in):** a camada
-`docker-compose.sip-edge.yml` publica 5060/UDP e a faixa `rtp_port`, liga `use_external_ip` e troca as
-senhas dos troncos pelas do `.env.demo`; o `up.sh` só a inclui com `PLUGHUB_SIP_EDGE=true` no
-`.env.demo`. **Autenticação é digest, nunca lista de IPs**: o Docker Desktop reescreve a origem de todo
+`docker-compose.sip-edge.yml` publica 5060/UDP e a faixa `rtp_port` e liga `use_external_ip`; o `up.sh`
+só a inclui com `PLUGHUB_SIP_EDGE=true` no `.env.demo`, e **recusa abrir** (fica fechada e diz por quê)
+se faltar a senha de algum tronco ou se a de demo for a do `.env.demo.example`. As senhas **não** passam
+pela camada: o `sip-seed` as lê do `.env.demo` por `env_file` com a borda aberta ou fechada (VOZ-43 —
+quando a camada as fornecia, fechar a borda deixava o tronco no SFU com uma senha e o seed com outra). **Autenticação é digest, nunca lista de IPs**: o Docker Desktop reescreve a origem de todo
 pacote que entra por porta publicada (medido: `172.17.0.1`), e o seed recusa tronco sem autenticação.
 Com a Twilio, o produto é o número de voz com TwiML `<Dial><Sip username password>` (modelo em
 `infra/sip/twilio_inbound.json.example`). Gate: `infra/test/probe_sip_edge_surface.sh` (+ `mut_`).

@@ -1,5 +1,31 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (15) — VOZ-43: a senha dos troncos SIP tem UMA fonte, e fechar a borda deixou de quebrar o seed
+
+**O defeito, achado pelo dono ao fechar a borda da VOZ-32.** As senhas vinham de duas casas: a de
+demo, literal no compose; as reais, da camada `sip-edge`. Fechar a borda trocava a fonte, e o
+`probe_sip_edge_surface.sh` acusou os dois efeitos: o `sip-seed` saía 1 (5 reinícios), porque o tronco
+da Twilio continuava declarado e a senha dele só vinha com a camada; e o tronco de demo ficava no SFU
+com a senha do `.env.demo` enquanto o seed carregava a do repositório (seed-if-absent não sobrescreve)
+— ramo Y vermelho, e o `probe_voz02` reprovaria por autenticação.
+
+**O que passou a ser verdade.**
+- `sip-seed` lê as senhas do `.env.demo` por `env_file`, nos dois estados (precedente do próprio
+  compose: *estado da shell não é entrada declarada; o `.env.demo` é*). O literal saiu do compose, e a
+  senha de demo padrão passou ao `.env.demo.example`, de onde a instalação a copia.
+- A camada `sip-edge` não toca mais em senha: publica as portas, liga o endereço externo e recria os
+  troncos.
+- O `up.sh` EXIGE antes de abrir: toda senha que um tronco declara presente no `.env.demo`, e a de demo
+  diferente da do `.env.demo.example`. Falhou: a borda fica FECHADA e ele diz qual chave. Sem
+  `--env-file`: com a camada sem senha, a interpolação é a mesma nos dois estados.
+- Probe e bateria leem a "senha do repositório" do `.env.demo.example`; o K com a borda fechada diz
+  OK quando a senha em vigor não é a do repositório (antes dizia "em uso" sem comparar).
+
+**Prova.** `up.sh` fechado: `sip-seed` exit 0 com os dois troncos, probe VERDE. Recusa do `up.sh`
+testada isolada em quatro casos (senha do exemplo → fechada e nomeada · sem a da Twilio → fechada e
+nomeada · senhas certas → abre · não pedida → fechada). `mut_sip_edge_surface.sh`: M0 verde e M1–M4
+pegas, borda devolvida fechada e coerente.
+
 ## 2026-09-23 (14) — VOZ-32: a borda SIP é publicada e o telefone de verdade liga — tronco Twilio medido de ponta a ponta
 
 **O que fecha.** A preparação (§ 2026-09-23 (12)) virou borda publicada nesta máquina, e duas chamadas
