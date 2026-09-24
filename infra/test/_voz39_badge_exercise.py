@@ -10,9 +10,13 @@ protocolo do widget de demo (`webrtc-widget.html`), num pool de IA só-WebRTC qu
   B2 o `stopped` chega ANTES do `webrtc.session_closed` — a faixa apaga pelo servidor, não por
      o widget adivinhar
   B3 sem estado repetido e sem `paused` (não há bloco mascarado neste fluxo)
+  E1 (VOZ-44, MODE=aborta) sem mídia publicada o egress fica em STARTING (medido: a parte inteira) —
+     a faixa NÃO acende; antes ela dizia "Gravando" enquanto nada gravava
+  (MODE=grava) o cliente ENTRA na sala e publica um tom, como o widget com microfone: é o que faz o
+  SFU confirmar o egress, e só então a faixa acende
   N1 CONTROLE, pool que NÃO grava: nenhum `webrtc.recording` — a faixa não mente para o outro lado
 
-Uso: MODE=grava|nao_grava. Imprime `SID <id>` e as linhas de veredicto.
+Uso: MODE=grava|aborta|nao_grava. Imprime `SID <id>` e as linhas de veredicto.
 """
 from __future__ import annotations
 
@@ -23,12 +27,29 @@ import time
 import uuid
 
 import jwt
+import math
+import struct
 
 POOL   = os.environ["POOL"]
 MODE   = os.environ["MODE"]
 TENANT = os.environ["PLUGHUB_TENANT_ID"]
 SECRET = os.environ["PLUGHUB_JWT_SECRET"]
 GW     = f"ws://channel-gateway:8010/ws/webrtc/{POOL}"
+ABORT_WAIT_S = float(os.environ.get("ABORT_WAIT_S", "45"))
+LK_URL = os.environ["PLUGHUB_WEBRTC_LIVEKIT_URL"]
+
+
+async def _tom(source) -> None:
+    """440 Hz contínuo, em quadros de 10 ms — o microfone de um cliente que fala."""
+    from livekit import rtc
+    n, i = 480, 0
+    while True:
+        pcm = b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * (i + k) / 48000)))
+                       for k in range(n))
+        i += n
+        await source.capture_frame(rtc.AudioFrame(data=pcm, sample_rate=48000, num_channels=1,
+                                                  samples_per_channel=n))
+        await asyncio.sleep(0.01)
 
 
 def emit(status: str, ramo: str, texto: str) -> None:
@@ -70,6 +91,20 @@ async def main() -> None:
             emit("INCONCL", "B0", "cliente nao autenticou")
             return
         print(f"SID {auth.get('session_id', '')}", flush=True)
+        sala = tom = None
+        if MODE == "grava":
+            ready = await ate(lambda m: m.get("type") == "webrtc.ready", 60)
+            if not ready or not ready.get("token"):
+                emit("INCONCL", "B0", "sem webrtc.ready com token de midia — cliente nao entra na sala")
+                return
+            from livekit import rtc
+            sala = rtc.Room()
+            await asyncio.wait_for(sala.connect(LK_URL, ready["token"]), 20)
+            fonte = rtc.AudioSource(48000, 1)
+            trilha = rtc.LocalAudioTrack.create_audio_track("mic-cliente", fonte)
+            await asyncio.wait_for(sala.local_participant.publish_track(
+                trilha, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)), 20)
+            tom = asyncio.create_task(_tom(fonte))
         # o menu `text` chega como MENSAGEM (o prompt), não como `webrtc.interaction`
         menu = await ate(lambda m: m.get("type") in ("webrtc.interaction", "webrtc.message")
                          and "Digite qualquer coisa" in (m.get("prompt") or m.get("text") or ""), 60)
@@ -84,9 +119,20 @@ async def main() -> None:
                 return
         else:
             await ate(lambda m: False, 20)      # a mesma janela: se fosse gravar, gravaria aqui
+        if MODE == "aborta":
+            # VOZ-44: sem mídia, o egress nunca confirma — a faixa não pode acender
+            acendeu = await ate(lambda m: m.get("type") == "webrtc.recording" and m.get("state") == "recording",
+                                ABORT_WAIT_S)
+            emit("FALHA" if acendeu else "OK", "E1",
+                 f"sem midia publicada, a faixa {'ACENDEU' if acendeu else 'nao acendeu'} em "
+                 f"{ABORT_WAIT_S:.0f} s (egress pedido e nao confirmado)")
         await asyncio.sleep(2)                  # a parte corre um pouco com o menu na tela
         await ws.send(json.dumps({"type": "webrtc.message", "text": "fim"}))
         fechou = await ate(lambda m: m.get("type") == "webrtc.session_closed", 40)
+        if tom is not None:
+            tom.cancel()
+        if sala is not None:
+            await sala.disconnect()
         if not fechou:
             emit("INCONCL", "B0", "o contato nao fechou em 40 s depois da resposta")
             return
@@ -98,6 +144,8 @@ async def main() -> None:
         f"{m.get('type')}{'=' + str(m.get('state')) if m.get('type') == 'webrtc.recording' else ''}"
         for m in frames if m.get("type") not in ("conn.ping",)), flush=True)
 
+    if MODE == "aborta":
+        return
     if MODE == "nao_grava":
         emit("OK" if not estados else "FALHA", "N1",
              f"pool sem gravacao: {len(estados)} frame(s) webrtc.recording (esperado 0)")

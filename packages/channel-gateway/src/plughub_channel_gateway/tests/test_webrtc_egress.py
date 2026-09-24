@@ -20,6 +20,7 @@ import pytest
 
 from plughub_channel_gateway.adapters import media_policy, webrtc_recording
 from plughub_channel_gateway.adapters.webrtc_provider import (
+    EgressResult,
     LiveKitProvider,
     MockWebRTCProvider,
     WebRTCProviderUnavailable,
@@ -148,12 +149,12 @@ class TestGravaPeloPool:
 
     async def test_aviso_vem_ANTES_do_egress(self, rig):
         await rig.rec.update(SID, ROOM, {"p"})
-        assert rig.ordem == [f"texto:{AVISO}", "egress", "estado:recording"]
+        assert rig.ordem == [f"texto:{AVISO}", "egress"]
 
     async def test_aviso_falado_so_libera_depois_de_tocar(self, tmp_path):
         r = Rig(tmp_path, texto=False, voz=True)
         await r.rec.update(SID, ROOM, {"p"})
-        assert r.ordem == [f"voz:{AVISO}", "egress", "estado:recording"]
+        assert r.ordem == [f"voz:{AVISO}", "egress"]
 
     async def test_sem_aviso_entregue_nao_grava(self, tmp_path):
         r = Rig(tmp_path, texto=False, voz=False)
@@ -302,42 +303,87 @@ class TestNuncaFingeGravar:
         assert r.redis.stream[0]["type"] == "recording.failed"
 
 
-# ── VOZ-39: o estado que o widget mostra fixo ────────────────────────────────
+# ── VOZ-39 / VOZ-44: o estado que o widget mostra fixo ───────────────────────
+
+@pytest.fixture(autouse=True)
+def _vigia_rapido(monkeypatch):
+    """O vigia do egress pergunta ao SFU em ms, não em s — e o teste espera pelo FATO (o estado
+    anunciado), nunca por uma contagem de voltas."""
+    monkeypatch.setattr(webrtc_recording, "EGRESS_POLL_FAST_S", 0.005)
+    monkeypatch.setattr(webrtc_recording, "EGRESS_POLL_S", 0.005)
+
+
+async def _ate(cond, teto: float = 2.0) -> None:
+    fim = asyncio.get_running_loop().time() + teto
+    while not cond():
+        assert asyncio.get_running_loop().time() < fim, "condicao nao cumprida no prazo"
+        await asyncio.sleep(0.005)
+
+
+def _estado(eg: str, status: str, **kw) -> EgressResult:
+    return EgressResult(eg, status, **kw)
+
 
 class TestEstadoNoWidget:
     """O aviso é mensagem de chat, que rola; a faixa fixa lê ESTE estado. Anunciado só quando muda,
-    e sempre DEPOIS do fato: `recording` depois do egress começar, nunca antes."""
+    e só depois do FATO: `recording` quando o SFU CONFIRMA o egress (VOZ-44), não quando é pedido."""
 
-    async def test_gravando_so_depois_do_aviso_e_do_egress(self, rig):
+    async def test_gravando_so_depois_do_aviso_do_egress_e_da_confirmacao(self, rig):
+        rig.provider.egress_status_now["EG_mock_0001"] = _estado("EG_mock_0001", "EGRESS_STARTING")
         await rig.rec.update(SID, ROOM, {"p"})
+        await asyncio.sleep(0.05)
+        assert rig.ordem == [f"texto:{AVISO}", "egress"], "egress PEDIDO nao acende a faixa"
+        rig.provider.egress_status_now.pop("EG_mock_0001")          # o SFU confirma
+        await _ate(lambda: rig.estados == ["recording"])
         assert rig.ordem == [f"texto:{AVISO}", "egress", "estado:recording"]
+
+    async def test_egress_que_nao_confirma_nao_acende_e_e_dito(self, rig, monkeypatch, caplog):
+        """Medido ao vivo: sem ninguém publicando áudio, STARTING a parte inteira."""
+        monkeypatch.setattr(webrtc_recording, "EGRESS_STARTING_WARN_S", 0.05)
+        rig.provider.egress_status_now["EG_mock_0001"] = _estado("EG_mock_0001", "EGRESS_STARTING")
+        await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: any("NAO confirmou" in r.getMessage() for r in caplog.records))
+        assert rig.estados == [] and rig.rec.active(SID)
+        rig.provider.egress_status_now.pop("EG_mock_0001")          # confirmou tarde: acende
+        await _ate(lambda: rig.estados == ["recording"])
+
+    async def test_confirmada_e_depois_esfria_apaga(self, rig, monkeypatch):
+        """Parte nova depois de uma ativa, que nunca confirma: a faixa não fica mentindo."""
+        monkeypatch.setattr(webrtc_recording, "EGRESS_STARTING_WARN_S", 0.05)
+        await rig.rec.update(SID, ROOM, {"a"})
+        await _ate(lambda: rig.estados == ["recording"])
+        rig.provider.egress_status_now["EG_mock_0002"] = _estado("EG_mock_0002", "EGRESS_STARTING")
+        await rig.rec.update(SID, ROOM, {"a", "b"})
+        await _ate(lambda: rig.estados == ["recording", "stopped"])
 
     async def test_troca_de_atendentes_nao_pisca(self, rig):
         await rig.rec.update(SID, ROOM, {"a"})
+        await _ate(lambda: rig.estados == ["recording"])
         await rig.rec.update(SID, ROOM, {"a", "b"})      # corta a parte e começa outra
-        assert len(rig.provider.egresses_started) == 2
-        assert rig.estados == ["recording"]
+        await _ate(lambda: rig.rec._recs[SID].part.active)
+        assert len(rig.provider.egresses_started) == 2 and rig.estados == ["recording"]
         await rig.rec.close(SID)
         assert rig.estados == ["recording", "stopped"]
 
     async def test_bloco_mascarado_e_pausa(self, rig):
         await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: rig.estados == ["recording"])
         await rig.rec.hold(SID)
         await rig.rec.release(SID)
+        assert rig.estados == ["recording", "paused"], "parte nova ainda nao confirmada: segue pausa"
+        await _ate(lambda: rig.estados == ["recording", "paused", "recording"])
         await rig.rec.close(SID)
         assert rig.estados == ["recording", "paused", "recording", "stopped"]
 
     async def test_bloco_antes_de_gravar_nao_e_pausa(self, rig):
         """Sem aviso ainda não houve gravação — `paused` diria ao cliente que algo foi gravado."""
-        await rig.rec.update(SID, ROOM, {"p"})
-        await rig.rec.close(SID)
-        r2 = Rig(rig.dir.parent / "r2")
-        r2.rec._recs[SID] = webrtc_recording._Rec(room=ROOM, demand=("p",))
-        await r2.rec.hold(SID)
-        assert r2.estados == []
+        rig.rec._recs[SID] = webrtc_recording._Rec(room=ROOM, demand=("p",))
+        await rig.rec.hold(SID)
+        assert rig.estados == []
 
     async def test_ultimo_atendente_saiu_e_parado(self, rig):
         await rig.rec.update(SID, ROOM, {"a"})
+        await _ate(lambda: rig.estados == ["recording"])
         await rig.rec.update(SID, ROOM, set())
         assert rig.estados == ["recording", "stopped"]
 
@@ -347,25 +393,24 @@ class TestEstadoNoWidget:
         recusa = Rig(tmp_path / "b")
         recusa.redis.ctx[OPT_OUT_TAG] = _optout(True)
         await recusa.rec.update(SID, ROOM, {"p"})
+        await asyncio.sleep(0.05)
         assert sem_aviso.estados == [] and recusa.estados == []
 
     async def test_recusa_durante_a_parte_e_parado_nao_pausa(self, rig, monkeypatch):
         monkeypatch.setattr(webrtc_recording, "OPT_OUT_POLL_S", 0.01)
         await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: rig.estados == ["recording"])
         rig.redis.ctx[OPT_OUT_TAG] = _optout(True)
-        for _ in range(200):
-            if rig.estados[-1] != "recording":
-                break
-            await asyncio.sleep(0.01)
-        assert rig.estados == ["recording", "stopped"]
+        await _ate(lambda: rig.estados == ["recording", "stopped"])
 
     async def test_widget_fora_nao_para_a_gravacao(self, rig, caplog):
         async def quebra(_sid, _estado):
             raise ConnectionError("ws caiu")
         rig.rec._on_state = quebra
         await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: any("NAO chegou ao cliente" in r.getMessage() for r in caplog.records))
         assert rig.rec.active(SID)
-        assert any("NAO chegou ao cliente" in r.getMessage() for r in caplog.records)
+        await rig.rec.close(SID)
 
     async def test_adapter_manda_o_estado_pelo_socket_do_cliente(self):
         from plughub_channel_gateway.adapters.webrtc import WebRTCAdapter
@@ -378,6 +423,65 @@ class TestEstadoNoWidget:
         await ad._send_recording_state("sem-socket", "recording")    # telefone: não há tela
         [c] = ws.send_json.await_args_list
         assert c.args[0] == {"type": "webrtc.recording", "state": "recording"}
+
+
+class TestEgressTerminaSozinho:
+    """Egress que termina DEPOIS de confirmado (falho, abortado): a parte fecha na hora, a faixa
+    apaga e o fim é falha. Controle ao lado: egress vivo não fecha nada, e estado ilegível não é
+    "terminou"."""
+
+    async def test_abortado_depois_de_ativo_fecha_apaga_e_e_falha(self, rig):
+        await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: rig.estados == ["recording"])
+        rig.provider.egress_status_now["EG_mock_0001"] = _estado(
+            "EG_mock_0001", "EGRESS_ABORTED", error="Start signal not received")
+        await _ate(lambda: not rig.rec.active(SID))
+        await rig.rec.drain()
+        assert rig.estados == ["recording", "stopped"]
+        [f] = [e for e in rig.redis.stream if e["type"] == "recording.failed"]
+        assert f["stage"] == "egress" and "Start signal not received" in f["reason"]
+        assert "recording.discarded" not in rig.redis.tipos(), "aborto no meio NAO e 'parte vazia'"
+        assert rig.reserves() == []
+        assert rig.provider.egresses_stopped == [], "egress que ja terminou nao se pede para parar"
+
+    async def test_controle_egress_vivo_segue_gravando(self, rig):
+        await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: rig.estados == ["recording"])
+        await asyncio.sleep(0.1)                      # várias consultas
+        assert rig.rec.active(SID) and rig.estados == ["recording"]
+        assert "recording.failed" not in rig.redis.tipos()
+
+    async def test_estado_ilegivel_nao_e_terminou(self, rig, caplog):
+        await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: rig.estados == ["recording"])
+        rig.provider.egress_status_now["EG_mock_0001"] = ConnectionError("SFU fora")
+        await asyncio.sleep(0.1)
+        assert rig.rec.active(SID) and rig.estados == ["recording"]
+        avisos = [r for r in caplog.records if "ILEGIVEL" in r.getMessage()]
+        assert len(avisos) == 1, "o aviso sai UMA vez por queda, nao a cada consulta"
+
+    async def test_completo_sozinho_com_arquivo_e_guardado(self, rig):
+        """Ex.: a sala esvaziou e o SFU fechou o arquivo. O que foi gravado é gravação — guarda-se."""
+        await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: rig.estados == ["recording"])
+        caminho = rig.provider.egresses_started[0]["filepath"]
+        rig.provider.egress_status_now["EG_mock_0001"] = _estado(
+            "EG_mock_0001", "EGRESS_COMPLETE", filename=caminho)
+        await _ate(lambda: not rig.rec.active(SID))
+        await rig.rec.drain()
+        assert rig.estados == ["recording", "stopped"]
+        assert len(rig.reserves()) == 1 and "recording.completed" in rig.redis.tipos()
+
+    async def test_proximo_fato_abre_parte_nova_sem_repetir_o_aviso(self, rig):
+        await rig.rec.update(SID, ROOM, {"p"})
+        await _ate(lambda: rig.estados == ["recording"])
+        rig.provider.egress_status_now["EG_mock_0001"] = _estado("EG_mock_0001", "EGRESS_FAILED")
+        await _ate(lambda: not rig.rec.active(SID))
+        await rig.rec.update(SID, ROOM, {"p"})       # atendente renegociado
+        assert rig.rec.active(SID) and len(rig.provider.egresses_started) == 2
+        await _ate(lambda: rig.estados == ["recording", "stopped", "recording"])
+        assert [k for k in rig.ordem if k.startswith("texto")] == [f"texto:{AVISO}"]
+        await rig.rec.close(SID)
 
 
 # ── O gatilho: a política do pool ────────────────────────────────────────────

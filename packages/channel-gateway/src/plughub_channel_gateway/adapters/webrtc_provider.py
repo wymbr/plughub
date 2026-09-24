@@ -169,6 +169,11 @@ class IWebRTCProvider(Protocol):
         Estourado o prazo, devolve o último estado visto com `error` dizendo que não terminou."""
         ...
 
+    async def egress_status(self, egress_id: str) -> EgressResult:
+        """UMA leitura do estado do egress, sem esperar (VOZ-44). Falha levanta — quem chama
+        decide o que ler como "não sei"."""
+        ...
+
     async def update_participant_permission(
         self,
         room_name:           str,
@@ -421,6 +426,18 @@ class LiveKitProvider:
             size_bytes  = int(arq.size if arq else 0),
         )
 
+    async def egress_status(self, egress_id: str) -> EgressResult:
+        from livekit.api import EgressStatus, LiveKitAPI, ListEgressRequest
+
+        async with LiveKitAPI(self._url, self._api_key, self._api_secret) as lkapi:
+            resp = await lkapi.egress.list_egress(ListEgressRequest(egress_id=egress_id))
+        visto = resp.items[0] if resp.items else None
+        if visto is None:
+            return EgressResult(egress_id, "DESCONHECIDO", error="o SFU nao conhece este egress")
+        arq = visto.file_results[0] if visto.file_results else None
+        return EgressResult(egress_id, EgressStatus.Name(visto.status), error=visto.error or "",
+                            filename=arq.filename if arq else "")
+
     async def stop_egress(self, egress_id: str) -> None:
         """Stop a running LiveKit egress (cleanup path: failure is logged, not raised)."""
         from livekit.api import LiveKitAPI, StopEgressRequest
@@ -513,6 +530,8 @@ class MockWebRTCProvider:
         self.egress_bytes:       bytes = b"OggS" + b"\x00" * 60
         self.egress_start_error: Exception | None = None
         self.egress_end_error:   str = ""
+        # VOZ-44: o estado que o SFU "diz" a cada consulta (EgressResult ou exceção); ausente = ativo
+        self.egress_status_now:  dict[str, Any] = {}
         self.permission_updates: list[dict] = []
         self.joined:           set[str] = set()   # identidades "na sala", para o teste
         self.participants_removed: list[tuple[str, str]] = []
@@ -580,6 +599,14 @@ class MockWebRTCProvider:
     async def stop_egress(self, egress_id: str) -> None:
         self.egresses_stopped.append(egress_id)
 
+    async def egress_status(self, egress_id: str) -> EgressResult:
+        """VOZ-44: o teste põe em `egress_status_now[id]` o estado que o SFU "diz" (ou uma
+        exceção); ausente = ativo."""
+        atual = self.egress_status_now.get(egress_id)
+        if isinstance(atual, Exception):
+            raise atual
+        return atual or EgressResult(egress_id, "EGRESS_ACTIVE")
+
     async def wait_egress(self, egress_id: str, timeout_s: float) -> EgressResult:
         """O mock "grava" o que o teste pôs em `egress_bytes` (padrão: cabeçalho OGG) no
         caminho pedido — o resto do caminho (ler, guardar, apagar) roda de verdade."""
@@ -588,6 +615,15 @@ class MockWebRTCProvider:
             return EgressResult(egress_id, "DESCONHECIDO", error="egress nunca iniciado")
         if self.egress_end_error:
             return EgressResult(egress_id, "EGRESS_FAILED", error=self.egress_end_error)
+        final = self.egress_status_now.get(egress_id)
+        if isinstance(final, EgressResult) and final.status != "EGRESS_ACTIVE":
+            if not final.filename:
+                return final                       # terminou sem arquivo — o SFU não gravou nada
+            import pathlib as _pl
+            _pl.Path(final.filename).parent.mkdir(parents=True, exist_ok=True)
+            _pl.Path(final.filename).write_bytes(self.egress_bytes)
+            return EgressResult(egress_id, final.status, filename=final.filename, duration_ms=1000,
+                                size_bytes=len(self.egress_bytes))
         import pathlib
         p = pathlib.Path(inicio["filepath"])
         p.parent.mkdir(parents=True, exist_ok=True)

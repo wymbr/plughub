@@ -27,7 +27,12 @@ Invariantes, cada um com o mecanismo aqui:
     recusa no meio DESCARTA a parte em curso (o que foi gravado antes da decisão não fica) e
     nenhuma parte nova começa. Tag ilegível antes de começar ⇒ não começa.
   • NUNCA FINGE GRAVAR. Egress que não começa, que não termina ou arquivo que não se guarda viram
-    `recording.failed` com o motivo, no stream e no log.
+    `recording.failed` com o motivo, no stream e no log. E a FAIXA do widget só acende com o egress
+    CONFIRMADO pelo SFU (`EGRESS_ACTIVE`), não com o egress PEDIDO (VOZ-44 — medido: sem ninguém
+    publicando áudio, o egress fica em `STARTING` a parte inteira e só vira `ABORTED` no `stop`;
+    a faixa dizia "Gravando" enquanto nada gravava). Parte que não confirma em
+    `EGRESS_STARTING_WARN_S` apaga a faixa e é dita; egress que termina sozinho depois de ativo
+    fecha a parte como `recording.failed`.
   • O CLIENTE VÊ O ESTADO, NÃO SÓ O AVISO (VOZ-39). O aviso é mensagem de chat, que rola; o
     estado (`recording` · `paused` · `stopped`) vai ao widget por `on_state` a cada MUDANÇA,
     calculado DEPOIS de cada entrada — a troca de atendentes que corta uma parte e começa a
@@ -68,6 +73,14 @@ MIME = "audio/ogg"
 OPT_OUT_POLL_S = 2.0
 NOTICE_PLAY_TIMEOUT_S = 30.0
 EGRESS_END_TIMEOUT_S = 60.0
+# VOZ-44: de quanto em quanto o gravador pergunta ao SFU pelo egress da parte — rápido até ele
+# CONFIRMAR que grava (a faixa espera por isso), depois só para ver se ainda vive
+EGRESS_POLL_FAST_S = 1.0
+EGRESS_POLL_S = 5.0
+# parte que não confirmou nisso apaga a faixa (medido: com áudio na sala, o egress fica ativo em
+# ~2-3 s; sem ninguém publicando, fica em STARTING até o stop)
+EGRESS_STARTING_WARN_S = 30.0
+_EGRESS_FINAL = {"EGRESS_COMPLETE", "EGRESS_FAILED", "EGRESS_ABORTED", "EGRESS_LIMIT_REACHED"}
 # O egress roda com outro usuário (uid 1001, gid 0 — medido): o diretório da sessão tem de ser
 # gravável pelo GRUPO, e só por ele.
 _DIR_MODE = 0o770
@@ -82,6 +95,10 @@ class _Part:
     policy:     RecordingPolicy
     started_at: datetime
     watcher:    asyncio.Task | None = None
+    egress_watch: asyncio.Task | None = None
+    sfu_ended:  str = ""        # VOZ-44: o egress terminou SOZINHO durante a parte (status: motivo)
+    active:     bool = False    # VOZ-44: o SFU confirmou EGRESS_ACTIVE — só então a faixa diz "Gravando"
+    stale:      bool = False    # VOZ-44: não confirmou em EGRESS_STARTING_WARN_S
 
 
 @dataclass
@@ -259,6 +276,8 @@ class CallRecorder:
         rec.part = part
         part.watcher = disparar(self._watch_opt_out(session_id, rec, part),
                                 nome=f"webrtc-gravacao-recusa-{session_id[:8]}")
+        part.egress_watch = disparar(self._watch_egress(session_id, rec, part),
+                                     nome=f"webrtc-gravacao-egress-{session_id[:8]}")
         await self._state(session_id, part)
         logger.info("webrtc gravacao: parte %d INICIADA egress=%s pools=%s retencao=%d dias (%s) "
                     "(session=%s)", n, egress_id, list(part.pools), policy.retention_days,
@@ -287,10 +306,11 @@ class CallRecorder:
         part, rec.part = rec.part, None
         if part is None:
             return
-        if part.watcher is not None and part.watcher is not asyncio.current_task():
-            part.watcher.cancel()
+        for t in (part.watcher, part.egress_watch):
+            if t is not None and t is not asyncio.current_task():
+                t.cancel()
         provider = self._provider()
-        if provider is not None:
+        if provider is not None and not part.sfu_ended:     # o que já terminou não se pede para parar
             try:
                 await provider.stop_egress(part.egress_id)
             except Exception as exc:  # noqa: BLE001 — a finalização descobre como terminou
@@ -315,6 +335,13 @@ class CallRecorder:
         except Exception as exc:  # noqa: BLE001
             await self._fail(session_id, part.index, "finalize", f"fim do egress ilegivel: {exc}")
             self._cleanup(part.filepath)
+            return
+        if part.sfu_ended and not res.complete:
+            # VOZ-44: o cliente viu "Gravando" e o SFU parou sozinho — é falha, nunca "parte vazia"
+            await self._fail(session_id, part.index, "egress",
+                             f"o egress {part.egress_id} terminou DURANTE a parte ({part.sfu_ended}) — "
+                             "nada guardado")
+            self._cleanup(res.filename or part.filepath)
             return
         if discard:
             self._cleanup(res.filename or part.filepath)
@@ -428,6 +455,65 @@ class CallRecorder:
                 await self._announce(session_id, rec)
             return
 
+    async def _watch_egress(self, session_id: str, rec: _Rec, part: _Part) -> None:
+        """VOZ-44 — o egress da parte GRAVA? Até o SFU confirmar (`EGRESS_ACTIVE`) a faixa não acende;
+        sem confirmação em `EGRESS_STARTING_WARN_S` ela apaga e isso é dito. Terminou sozinho: a
+        parte fecha AGORA e o fim é falha. Não se reabre parte aqui: a próxima nasce do próximo
+        fato (atendente, fim de bloco)."""
+        t0 = asyncio.get_running_loop().time()
+        sem_leitura = False
+        while True:
+            await asyncio.sleep(EGRESS_POLL_S if part.active else EGRESS_POLL_FAST_S)
+            if (not part.active and not part.stale
+                    and asyncio.get_running_loop().time() - t0 >= EGRESS_STARTING_WARN_S):
+                async with rec.lock:
+                    if rec.part is not part:
+                        return
+                    part.stale = True
+                    logger.warning("webrtc gravacao: o egress %s da parte %d NAO confirmou que grava em "
+                                   "%.0f s — a faixa do widget apaga (motivo usual: ninguem publicando "
+                                   "audio na sala) (session=%s)", part.egress_id, part.index,
+                                   EGRESS_STARTING_WARN_S, session_id)
+                    await self._announce(session_id, rec)
+            provider = self._provider()
+            if provider is None:
+                continue
+            try:
+                st = await provider.egress_status(part.egress_id)
+            except Exception as exc:  # noqa: BLE001 — "não sei" não é "terminou" nem "grava"
+                if not sem_leitura:
+                    logger.warning("webrtc gravacao: estado do egress %s ILEGIVEL (%s) — sem confirmacao, a "
+                                   "faixa nao muda ate a leitura voltar (session=%s)",
+                                   part.egress_id, exc, session_id)
+                sem_leitura = True
+                continue
+            if sem_leitura:
+                logger.info("webrtc gravacao: estado do egress %s legivel de novo (session=%s)",
+                            part.egress_id, session_id)
+                sem_leitura = False
+            if st.status == "EGRESS_ACTIVE" and not part.active:
+                async with rec.lock:
+                    if rec.part is not part:
+                        return
+                    part.active = True
+                    logger.info("webrtc gravacao: parte %d GRAVANDO — o SFU confirmou o egress %s em "
+                                "%.1f s (session=%s)", part.index, part.egress_id,
+                                asyncio.get_running_loop().time() - t0, session_id)
+                    await self._announce(session_id, rec)
+                continue
+            if st.status not in _EGRESS_FINAL:
+                continue
+            async with rec.lock:
+                if rec.part is not part:
+                    return
+                part.sfu_ended = f"{st.status}: {st.error or 'sem motivo dado'}"
+                logger.error("webrtc gravacao: o egress %s da parte %d terminou SOZINHO (%s) — a parte "
+                             "fecha e a faixa apaga (session=%s)", part.egress_id, part.index,
+                             part.sfu_ended, session_id)
+                await self._stop(session_id, rec, f"o egress terminou sozinho ({part.sfu_ended})")
+                await self._announce(session_id, rec)
+            return
+
     # ── Estado e eventos ────────────────────────────────────────────────────────
 
     async def _announce(self, session_id: str, rec: _Rec) -> None:
@@ -437,7 +523,12 @@ class CallRecorder:
         vê que parou); fora disso, parte parada é `stopped`. Falha de entrega não para a gravação —
         o aviso de chat, a condição de gravar, já foi entregue — mas é dita."""
         if rec.part is not None:
-            estado = "recording"
+            if rec.part.active:
+                estado = "recording"
+            elif not rec.part.stale:
+                return          # parte começando: a faixa fica como está até o SFU confirmar
+            else:
+                estado = "stopped"
         elif rec.held and rec.noticed and rec.demand and not rec.closed and not rec.opted_out:
             estado = "paused"
         else:

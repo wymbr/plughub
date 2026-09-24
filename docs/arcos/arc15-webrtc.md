@@ -438,13 +438,15 @@ parte fechada → wait_egress (fim REAL, sem sleep) → AttachmentStore `call_re
 - **A faixa FIXA do widget** (VOZ-39, 2026-09-24). O aviso é mensagem de chat, que rola. O ESTADO vai ao
   widget como `webrtc.recording {state}` — `recording` · `paused` · `stopped` —, anunciado pelo
   gravador só quando MUDA e calculado depois de cada entrada:
-  - `recording` sai depois do aviso e do egress;
+  - `recording` sai depois do aviso e do egress CONFIRMADO pelo SFU (`EGRESS_ACTIVE`, VOZ-44), não do
+    egress pedido. Medido: sem ninguém publicando áudio, o egress fica em `STARTING` a parte inteira;
+    com áudio, confirma em ~3 s. Parte que não confirma em 30 s apaga a faixa e é dita;
   - a troca de atendentes não pisca;
   - `paused` é o bloco mascarado depois de já ter havido gravação, e na prática é da perna SIP, que
     não tem tela.
   Os dois widgets de demo mostram a faixa no cabeçalho. Gate: `probe_voz39_recording_badge.sh`.
-  ⚠️ O egress que aborta DURANTE a parte só é visto no `stop`, e a faixa segue dizendo "Gravando" até
-  lá (`VOZ-44`).
+  O vigia por parte (`_watch_egress`) também fecha como `recording.failed` o egress que termina
+  sozinho depois de ativo.
 - **Config:** aviso em `webrtc.recording_notice` (aba WebRTC); retenção em
   `storage.call_recording_retention_days` (Plataforma → Retenção de dados), carimbada na hora de
   guardar — mudar o número vale para gravações NOVAS. Lidos a cada parte que começa, sem cache.

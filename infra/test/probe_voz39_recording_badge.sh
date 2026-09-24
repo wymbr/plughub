@@ -15,7 +15,12 @@
 #   B2 o `stopped` chega antes do `webrtc.session_closed`
 #   B3 sequência exata ['recording', 'stopped'] — sem repetição, sem `paused`
 #   L1 o gateway registrou a parte 1 INICIADA para a sessão (a faixa acompanha um fato, não um desejo)
+#   L2 (VOZ-44) e a parte foi CONFIRMADA gravando pelo SFU — nos B* o cliente ENTRA na sala e publica
+#      um tom (como o widget com microfone), que é o que faz o egress sair de STARTING
 #   N1 CONTROLE: pool sem `recording` — nenhum `webrtc.recording`
+#   E1 (VOZ-44) cliente SEM midia publicada: o egress fica em STARTING (medido: a parte inteira, e só
+#      vira ABORTED no stop) — a faixa NÃO acende
+#   E2 (VOZ-44) o gateway diz que o egress NÃO confirmou, e nunca chama a parte de GRAVANDO
 # ⚠️ `paused` (bloco mascarado) existe só na perna SIP, que não tem tela; ele é coberto pelos testes
 # de unidade (`TestEstadoNoWidget`) e não por este probe.
 #
@@ -72,7 +77,7 @@ PUB=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${H[@]}" "$REG/v1/skills/$S
 ENV=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$GW" | grep -E '^PLUGHUB_' | sed 's/^/-e /' | tr '\n' ' ')
 
 exercicio() {  # $1 pool, $2 modo
-  timeout 180 docker run --rm -i --name "probe_voz39_$$_$RANDOM" --network "$NET" --entrypoint python \
+  timeout 300 docker run --rm -i --name "probe_voz39_$$_$RANDOM" --network "$NET" --entrypoint python \
     $ENV -e POOL="$1" -e MODE="$2" "$IMG" - < infra/test/_voz39_badge_exercise.py 2>&1
 }
 julga() {
@@ -94,6 +99,26 @@ if prepara "$POOL_REC" true; then
     docker logs --since "$T0" "$GW" 2>&1 | grep "parte 1 INICIADA" | grep -q "session=$SID" \
       && ok "L1 o gateway iniciou a parte 1 da gravacao de $SID" \
       || falha "L1 nenhuma parte INICIADA para $SID no log — a faixa acompanharia um desejo, nao um fato"
+    CONF=$(docker logs --since "$T0" "$GW" 2>&1 | grep "session=$SID" | grep "parte 1 GRAVANDO" | sed 's/.*confirmou/confirmou/' | cut -c1-80)
+    [ -n "$CONF" ] && ok "L2 o SFU confirmou o egress antes da faixa: $CONF" \
+                   || falha "L2 a parte 1 de $SID nunca foi confirmada GRAVANDO — a faixa acendeu sem fato"
+  fi
+fi
+
+if [ -n "${SID:-}" ]; then
+  T1=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  OUT=$(exercicio "$POOL_REC" aborta)
+  julga "$OUT"
+  printf '%s\n' "$OUT" | grep -qE '^(OK|FALHA) E1 ' \
+    || incon "E1 sem veredicto: $(printf '%s\n' "$OUT" | tail -2 | tr '\n' ' ' | cut -c1-300)"
+  SIDA=$(printf '%s\n' "$OUT" | sed -n 's/^SID //p' | head -1)
+  if [ -n "$SIDA" ]; then
+    LOGA=$(docker logs --since "$T1" "$GW" 2>&1 | grep "session=$SIDA")
+    NCF=$(printf '%s\n' "$LOGA" | grep -c "NAO confirmou que grava")
+    GRV=$(printf '%s\n' "$LOGA" | grep -c "parte 1 GRAVANDO")
+    { [ "$NCF" -ge 1 ] && [ "$GRV" = 0 ]; } \
+      && ok "E2 o gateway disse que o egress nao confirmou e nunca chamou a parte de GRAVANDO" \
+      || falha "E2 nao_confirmou=$NCF gravando=$GRV para $SIDA"
   fi
 fi
 

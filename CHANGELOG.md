@@ -1,5 +1,54 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (6) — VOZ-44: a faixa de gravação só acende com o egress CONFIRMADO pelo SFU
+
+**A ficha foi corrigida pela medição antes do conserto.** Ela dizia que o egress *"aborta durante a
+parte"* e que o gravador só via isso no `stop`. Medi o estado do egress a cada 5 s numa chamada
+sem mídia publicada: **`EGRESS_STARTING` por 75 s, a parte inteira**, e `EGRESS_ABORTED: Start
+signal not received` só **depois** do `stop`. Não havia aborto no meio para vigiar. O defeito real
+era da VOZ-39: **a faixa acendia com o egress PEDIDO, não com o egress GRAVANDO.**
+
+⚠️ **Correção de uma validação da VOZ-39** (2026-09-24 (5)). A faixa "● Gravando" que vi no
+navegador embutido estava **errada**. O navegador estava sem microfone ("Câmera/microfone
+negados"), o egress ficou em `STARTING`, e nada foi gravado. O B1 do probe passou pelo mesmo
+motivo: o cliente de teste não entrava na sala.
+
+**O que mudou** (`webrtc_recording.py`):
+- **Vigia por parte** (`_watch_egress`). Consulta o SFU (`egress_status`, uma leitura de
+  `list_egress`) a cada `EGRESS_POLL_FAST_S` = 1 s até a confirmação, e a cada `EGRESS_POLL_S` =
+  5 s depois dela.
+- **`recording` só com `EGRESS_ACTIVE`.** Com áudio na sala, a confirmação chegou em 3,0 s (medido).
+- **Parte começando não muda a faixa.** A emenda entre partes (troca de atendentes, fim do bloco
+  mascarado) não pisca, e a primeira parte fica apagada até confirmar.
+- **Sem confirmação em `EGRESS_STARTING_WARN_S` (30 s):** a faixa apaga e há um WARNING nomeado
+  (*"ninguem publicando audio na sala"*). Se a parte confirmar tarde, a faixa acende.
+- **Egress que termina sozinho depois de ativo** (falho, abortado): a parte fecha na hora, a faixa
+  apaga, e o fim é `recording.failed` (stage `egress`), nunca "parte vazia". Ao egress que já
+  terminou não se pede `stop`. Se ele termina `COMPLETE` com arquivo (a sala esvaziou), o arquivo é
+  guardado. A regra antiga do `_finalize` (só `COMPLETE` é guardado; `LIMIT_REACHED` é falha) não
+  mudou.
+- **Estado ilegível não é "terminou" nem "grava".** O aviso sai uma vez por queda.
+- **Parte não é reaberta pelo vigia.** A próxima nasce do próximo fato, porque o SFU que acabou de
+  abortar abortaria de novo.
+
+**Por que consulta e não webhook:** o vigia roda na réplica dona da chamada (sem o encaminhamento
+da WCH-12), usa a mesma leitura que o `wait_egress` já fazia, e não depende de o webhook de egress
+estar ligado.
+
+**Medição:**
+- **Testes:** as classes da VOZ-39 foram reescritas sobre a confirmação, mais `TestEgressTerminaSozinho`.
+  São 16 casos: pedido não acende · não confirmado não acende e é dito · confirmado tarde acende ·
+  emenda que esfria apaga · abortado depois de ativo · controle vivo · ilegível · completo sozinho
+  guardado · próximo fato. Suíte do gateway: 1487 verdes.
+- **Mutação:** M1 a M11, todas vermelhas (sem vigia · aborto vira vazio · `stop` em egress
+  terminado · ilegível vira fim · sem anúncio · aviso a cada consulta · `STARTING` vira fim ·
+  acende no pedido · nunca esfria · ativo sem anúncio · transição apaga).
+- **Ao vivo:** `probe_voz39_recording_badge.sh` VERDE, com o cliente de teste **entrando na sala e
+  publicando um tom** (como o widget com microfone). Ramos novos:
+  - L2: confirmado em 3,0 s;
+  - E1: cliente sem mídia, faixa apagada por 45 s;
+  - E2: o gateway disse *"NAO confirmou"* e nunca chamou a parte de GRAVANDO.
+
 ## 2026-09-24 (5) — VOZ-39: o widget mostra a gravação numa faixa FIXA, e o estado vem do servidor
 
 **O defeito.** O aviso de gravação chegava ao widget como mensagem de chat. A mensagem rola e some,
@@ -46,6 +95,8 @@ faixa **"● Gravando"** visível enquanto a parte corre.
   ou fala é do telefone e o telefone não tem tela; no browser o dado protegido é digitado e não
   passa pelo áudio. Também não exercitei a faixa na chamada presa ao chat: é o mesmo frame pelo
   mesmo `_connections`, coberto pelo teste do adaptador.
+
+⚠️ *Correção 2026-09-24 (6):* a faixa vista no navegador e o B1 acima foram falsos positivos: sem mídia na sala, o egress estava em `STARTING` e nada gravava. Desde a VOZ-44, a faixa só acende com o egress confirmado.
 
 **Achado, com ficha:** `VOZ-44`. No probe, o cliente não publicou mídia, e o egress abortou
 (`EGRESS_ABORTED: Start signal not received`). O gravador só descobriu isso no `stop`: durante a

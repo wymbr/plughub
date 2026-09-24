@@ -420,7 +420,9 @@ probe_voz06_recording.sh
 # VOZ-39 (2026-09-24): faixa FIXA de gravacao no widget. B1 `webrtc.recording=recording` chega
 # DEPOIS do aviso de sistema · B2 `stopped` antes do `webrtc.session_closed` · B3 sequencia exata
 # recording>stopped · L1 a parte 1 foi INICIADA no gateway · N1 controle: pool sem `recording` nao
-# manda estado. Cliente WS do protocolo do widget, pool so-WebRTC; ~1 min.
+# manda estado. Cliente WS do protocolo do widget, pool so-WebRTC.
+# VOZ-44: nos B* o cliente ENTRA na sala e publica um tom; L2 a parte foi CONFIRMADA pelo SFU antes da
+# faixa · E1 cliente sem midia: a faixa NAO acende em 45 s · E2 o gateway diz que nao confirmou. ~3 min.
 probe_voz39_recording_badge.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·

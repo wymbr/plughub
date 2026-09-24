@@ -8,7 +8,7 @@
     "entry": "n0",
     "steps": [
       {"id": "n0", "type": "notify", "message": "voz39-inicio", "on_success": "m0", "on_failure": "fim_falha"},
-      {"id": "m0", "type": "menu", "interaction": "text", "prompt": "Digite qualquer coisa para terminar.", "timeout_s": 60, "output_as": "r", "on_success": "n1", "on_failure": "fim_falha", "on_timeout": "fim_falha"},
+      {"id": "m0", "type": "menu", "interaction": "text", "prompt": "Digite qualquer coisa para terminar.", "timeout_s": 150, "output_as": "r", "on_success": "n1", "on_failure": "fim_falha", "on_timeout": "fim_falha"},
       {"id": "n1", "type": "notify", "message": "voz39-fim", "on_success": "fim", "on_failure": "fim_falha"},
       {"id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "probe: voz39 concluido"},
       {"id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "probe: voz39 falhou"}
