@@ -184,6 +184,15 @@ O autor declara explicitamente o ponto de rewind em `on_failure` no `begin_trans
   on_failure: avisar_falha_maxima  # vai para tratamento externo
 ```
 
+> ⚠️ **O rewind hoje engole também os ramos declarados no menu** *(medido 2026-09-24, VOZ-37)*.
+> O menu sinaliza o timeout e a entrada inválida do canal como saída de falha. Dentro do bloco,
+> o engine desvia toda saída de falha para o `on_failure` do `begin_transaction`
+> (`engine.ts:627`), então o `on_timeout` e o `on_invalid` do menu **nunca rodam**, e nada avisa.
+> Numa chamada de verdade, *"Não recebi o PIN"* saiu como *"Não foi possível receber o PIN"*.
+> **Decidido (2026-09-24, `NIV-19`):** ramo declarado vale dentro do bloco, e seguir o ramo encerra
+> a transação como o rewind encerra, descartando o escopo mascarado. Sem ramo declarado, o rewind
+> continua. Até a NIV-19 fechar, trate o desfecho no destino do bloco.
+
 ### `end_transaction` — caminho feliz
 
 `end_transaction` é sempre o caminho de sucesso. Nunca existe um rollback explícito no YAML — rollback é automático e interno ao engine quando qualquer step dentro do bloco falha após esgotar tentativas.

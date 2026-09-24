@@ -227,7 +227,7 @@ async def atende() -> None:
         # depois do m1 corre com o bloco: a 1ª medição (2026-09-18) entrou 0,6 s depois da pausa e
         # o gateway, corretamente, desfez a coleta como INTRUSÃO.
         humano = await humano_na_sala(rd, sid)
-        if await menu_no_ar(rd, ua, sid, "Digite o codigo"):
+        if await menu_no_ar(rd, ua, sid, "Informe o codigo"):
             ua.teclar(CODIGO + "#")
             k2 = await marcador(rd, sid, 30, (f"sip-m1={CODIGO}", "sip-m1=", "sip-m1-invalido", "sip-m1-timeout"))
             emit("OK" if k2 == f"sip-m1={CODIGO}" else "FALHA", "K2",
@@ -236,7 +236,7 @@ async def atende() -> None:
         else:
             emit("FALHA", "K2", "o menu de teclado (m1) nao chegou ao stream em 40 s")
         print(f"PIN {PIN}", flush=True)
-        if await menu_no_ar(rd, ua, sid, "Digite o PIN"):
+        if await menu_no_ar(rd, ua, sid, "Informe o PIN"):
             ua.teclar(PIN + "#")
             k3 = await marcador(rd, sid, 30, ("sip-m2-recebido", "sip-m2-timeout"))
             if k3 == "sip-m2-recebido":

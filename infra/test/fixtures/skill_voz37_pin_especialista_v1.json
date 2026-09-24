@@ -1,0 +1,24 @@
+{
+  "skill_id": "skill_voz37_pin_especialista_v1",
+  "name": "VOZ-37 - especialista de voz que coleta o PIN mascarado",
+  "version": "1.0",
+  "description": "Cenario da segunda rodada da VOZ-37: o atendente HUMANO de uma chamada telefonica convida este especialista pelo Console (@pin). Ele se apresenta, pede o PIN pelo TECLADO sob pausa de midia (NIV-07: humano e supervisor saem da sala de midia, a rota de token responde 409, e voltam sozinhos ao fim do bloco) e devolve o cliente ao atendente. O PIN nunca volta ao cliente nem ao atendente; so o desfecho.",
+  "classification": {"type": "orchestrator", "domain": "security"},
+  "flow": {
+    "entry": "ola",
+    "steps": [
+      {"id": "ola", "type": "notify", "message": "Olá, eu sou o assistente de segurança. Vou pedir o seu PIN pelo teclado do telefone.", "on_success": "tx", "on_failure": "fim_falha"},
+      {"id": "tx", "type": "begin_transaction", "on_failure": "falhou"},
+      {"id": "pin", "type": "menu", "interaction": "text", "prompt": "Por favor, informe o seu PIN.",
+       "masked": "credential", "timeout_s": 60, "output_as": "pin",
+       "collect": {"input": ["dtmf"], "first_input_timeout_s": 30, "min_digits": 4, "max_digits": 6, "terminator": "#"},
+       "on_success": "recebido", "on_failure": "falhou", "on_timeout": "sem_pin"},
+      {"id": "recebido", "type": "notify", "message": "PIN recebido, obrigado. Vou devolver você ao atendente.", "on_success": "tx_fim", "on_failure": "tx_fim"},
+      {"id": "tx_fim", "type": "end_transaction", "result_as": "auth", "on_success": "fim"},
+      {"id": "sem_pin", "type": "notify", "message": "Não recebi o PIN. Vou devolver você ao atendente.", "on_success": "fim_falha", "on_failure": "fim_falha"},
+      {"id": "falhou", "type": "notify", "message": "Não foi possível receber o PIN agora. Vou devolver você ao atendente.", "on_success": "fim_falha", "on_failure": "fim_falha"},
+      {"id": "fim", "type": "complete", "outcome": "resolved", "issue_status": "voz37: PIN recebido pelo teclado"},
+      {"id": "fim_falha", "type": "complete", "outcome": "failed", "issue_status": "voz37: PIN nao recebido"}
+    ]
+  }
+}

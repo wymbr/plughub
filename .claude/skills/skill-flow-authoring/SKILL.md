@@ -83,6 +83,14 @@ Fatos com `arquivo:linha` em [`references/fatos-do-codigo.md`](references/fatos-
   `standby: true` só acorda por `@mention`. `collect` declara a coleta (`input` text/dtmf/voice, timeouts de
   canal, dígitos, `echo`, `max_invalid`) e o registry recusa dtmf/voz sem `first_input_timeout_s`;
   desfechos do canal saem por `on_timeout`/`on_invalid` (`on_invalid` exige `max_invalid`).
+  ⚠️ **Dentro de `begin_transaction` isso NÃO vale hoje** (medido 2026-09-24, `NIV-19`): o
+  motor manda toda saída de falha do bloco, timeout incluído, para o `on_failure` do
+  `begin_transaction` (`engine.ts:627`), e o `on_timeout`/`on_invalid` do menu nunca roda. Até a
+  NIV-19, trate o desfecho no destino do bloco.
+  ⚠️ **Na voz, o canal fala a instrução do teclado sozinho**: *"Para X, tecle um…"* nas opções e
+  *"Digite e termine com jogo da velha."* quando há `terminator` (`collect_core.py`). O prompt diz
+  só O QUE pedir (*"Por favor, informe o seu PIN."*); repetir a instrução faz o cliente ouvir duas
+  vezes (medido na VOZ-37).
   ⚠️ Numa chamada, a FALA do cliente só responde menu cujo `collect.input` tem `voice` — sem isso
   ela é só registro (VOZ-05 fatia 5b); menu que precisa ouvir o cliente declara a coleta por voz.
   `collect.voice.end_silence_ms`/`max_speech_s` valem por menu. `min_confidence` compara com confiança

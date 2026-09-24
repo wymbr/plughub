@@ -1,5 +1,50 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (1) — VOZ-37: a pausa de mídia do PIN validada com gente, no Console e pelo telefone real
+
+**O cenário que faltava, montado.** A primeira rodada (§ 2026-09-21 (1)) não tinha como testar a faixa
+*"Áudio pausado"*: não havia pool humano de voz nem especialista de voz com PIN mascarado, e a chamada para
+pool humano nem era atendida até a VOZ-35. O cenário que foi montado:
+- `voz37_humano`: humano, `voice`, `@pin` em `mentionable_pools`;
+- `voz37_pin_ia`: IA de `voice` rodando `skill_voz37_pin_especialista_v1`. O especialista se apresenta,
+  pede o PIN pelo teclado dentro de `begin_transaction` com `masked`, e devolve o cliente ao atendente.
+
+`infra/scripts/voz37_round.sh` tem quatro comandos: `preparar` (idempotente), `apontar`/`devolver` o
+número (guarda a origem em vez de adivinhar) e `evidencias`. O roteiro está em
+`docs/guias/roteiro-validacao-pausa-midia-console.md`.
+
+**A rodada, 5 ligações pela Twilio com o dono no Console:**
+- P1–P3: a linha atende na hora e o áudio passa nos dois sentidos.
+- P4: o convite pelo Console põe a voz do especialista na sala.
+  - Caminho: o bridge ativa o especialista e grava `routing.assigned`, e o gateway soma o atendente.
+  - Era a primeira vez que um especialista convidado falava numa chamada telefônica.
+- P5/P6: a faixa aparece e o atendente fica mudo. Nos logs, pausa com
+  `1 participante(s) fora da sala (agent-…)`; a rota de token respondeu 10, 8, 21 e 3 vezes 409, e
+  12 vezes na ligação encerrada no meio do PIN.
+- P7–P9: a sequência de token foi **200 · 409… · 200** em toda ligação em que o bloco terminou, e o
+  áudio voltou sem recarregar. Na ligação encerrada durante o PIN não há 200 final, corretamente.
+- P10–P13: nada do PIN no Console. O desfecho sem tecla também devolve o áudio, e o contato fecha
+  pelos dois lados.
+- **O PIN de teste não aparece** nos logs de gateway, bridge, motor e mcp-server, nem no stream das
+  5 sessões. **Nenhuma chave `media_hold` ficou para trás**, nem na ligação encerrada no meio do bloco.
+
+**Dois achados.**
+1. **O prompt dobrado era da skill, e o autor não tinha como saber.** Na voz, o gateway fala sozinho
+   *"Digite e termine com jogo da velha."* quando há `terminator` (`collect_core.py:171`), e o prompt já
+   dizia isso: o cliente ouviu duas vezes. O mesmo acontecia no fixture do `probe_voz02` (m1 e m2).
+   - Os dois fixtures passaram a dizer só o que pedir, e as âncoras do exercício acompanharam.
+   - A skill `skill-flow-authoring` ganhou o aviso.
+2. **Dentro de `begin_transaction`, o `on_timeout` e o `on_invalid` do menu nunca rodam** (`NIV-19`).
+   - O que se ouviu: o PIN não digitado tocou o ramo de falha, e não o `on_timeout: sem_pin`.
+   - Causa: o menu sinaliza o timeout do canal como `on_failure`, e o engine desvia toda falha do bloco
+     para o `on_failure` do `begin_transaction` (`engine.ts:627`).
+   - Exposição 2 skills de produção, dano 0: as duas apontam o ramo para o mesmo destino do bloco.
+   - Decisão registrada na ficha: o ramo declarado passa a valer dentro do bloco e encerra a transação.
+   - O `masked-input.md` e a skill avisam até lá.
+
+**Gate:** `probe_voz02_sip_inbound.sh` rodado de novo com os prompts novos: **VERDE**, todos os ramos
+(S0–S6, K0–K4, K3p, K3g, S5f, H1, R1).
+
 ## 2026-09-23 (16) — VOZ-35: toda chamada SIP é atendida no nascimento, com IA ou sem — a LINHA
 
 **O defeito, agora medido ao vivo.** O serviço SIP do SFU só manda o 200 OK quando há trilha na sala
