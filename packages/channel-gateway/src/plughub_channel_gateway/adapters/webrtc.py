@@ -186,6 +186,11 @@ def voice_identity(session_id: str) -> str:
     """A voz da plataforma na sala (TTS). Mesma razão da `listener_identity`."""
     return f"voz-{session_id[:8]}"
 
+
+def line_identity(session_id: str) -> str:
+    """A LINHA da chamada SIP (VOZ-35): publica uma trilha muda para o serviço SIP atender."""
+    return f"linha-{session_id[:8]}"
+
 # ── Fala do agente (VOZ-05, fatia 3) ──────────────────────────────────────────
 #
 # Barge-in: voz do cliente contínua por este tempo, enquanto o agente fala, corta a fala e
@@ -389,6 +394,9 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._room_clients:  dict[str, IWebRTCRoomClient] = {}
         self._stt_tasks:     dict[str, asyncio.Task]       = {}
         self._voice_clients: dict[str, IWebRTCRoomClient] = {}
+        # VOZ-35: a LINHA de cada chamada SIP — do nascimento ao fim, com IA ou sem. É ela que faz
+        # o serviço SIP atender; sem ela, chamada que espera humano fica TOCANDO até o tronco desistir.
+        self._line_clients:  dict[str, IWebRTCRoomClient] = {}
         # Decisão sobre a VOZ por sessão, tomada no `routing.assigned`: presente = a voz entra
         # (ou já entrou). Ausente com a atribuição já conhecida = ninguém vai falar, e a fala da
         # IA é descartada NA HORA, com o motivo — não depois de esperar 15 s por uma voz que
@@ -1903,6 +1911,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._sip_tasks[session_id] = [
             disparar(self._stream_watcher(None, session_id, pool), nome=f"sip-stream-{session_id[:8]}"),
             disparar(self._keepalive(session_id), nome=f"sip-keepalive-{session_id[:8]}"),
+            disparar(self._start_line(session_id, call.room), nome=f"sip-linha-{session_id[:8]}"),
         ]
         logger.info(
             "webrtc sip: chamada %s de %s para %s virou contato session=%s pool=%s perfil=%s room=%s",
@@ -1987,6 +1996,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             if t is not atual:
                 t.cancel()
         await self._stop_bot_leg(session_id)
+        await self._stop_line(session_id)
         self._end_collect(session_id, "chamada encerrada", "session_closed")
         self._customer_media.pop(session_id, None)
         if self._provider is not None:
@@ -2136,6 +2146,47 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                            papel, session_id, exc, papel)
             return None
         return client
+
+    async def _start_line(self, session_id: str, room_name: str) -> None:
+        """VOZ-35 — a LINHA atende a chamada SIP no nascimento, com IA ou sem.
+
+        O serviço SIP só atende quando há trilha na sala para assinar. Sem agente de IA de áudio,
+        ninguém publicava: chamada que ia para a fila de um pool HUMANO ficava TOCANDO até o tronco
+        desistir (medido: 180 por 60 s e 486, contado como abandono do cliente). A linha publica uma
+        trilha MUDA — medido: basta a trilha, sem quadro nenhum, para atender em 0,5 s com o RTP
+        contínuo. É o piso da plataforma (decisão do dono): silêncio; conteúdo na espera é de um
+        agente de fila. Visível de propósito: participante oculto não entrega áudio (fatia 3).
+        """
+        line = await self._join_room(
+            session_id, room_name, identity=line_identity(session_id), display_name="Linha",
+            publish=True, subscribe=False, hidden=False, papel="linha",
+        )
+        if line is None:
+            logger.error("webrtc sip: a linha NAO entrou na sala — sem agente de IA de audio, a "
+                         "chamada fica tocando ate o tronco desistir (session=%s)", session_id)
+            return
+        if session_id not in self._sip or session_id in self._line_clients:
+            await line.disconnect()          # a chamada acabou (ou outra entrada venceu) enquanto conectava
+            return
+        # Guardada ANTES de publicar: se o teardown cancelar esta task no meio da publicação, é o
+        # `_stop_line` dele que tira a linha da sala — senão ela ficaria lá, órfã.
+        self._line_clients[session_id] = line
+        try:
+            await line.publish_line()
+        except Exception as exc:
+            logger.error("webrtc sip: a linha entrou mas NAO publicou a trilha (%s) — a chamada pode "
+                         "ficar tocando (session=%s)", exc, session_id)
+            await self._stop_line(session_id)
+            return
+        logger.info("webrtc sip: linha na sala — chamada atendida (session=%s room=%s)", session_id, room_name)
+
+    async def _stop_line(self, session_id: str) -> None:
+        line = self._line_clients.pop(session_id, None)
+        if line is not None:
+            try:
+                await line.disconnect()
+            except Exception as exc:
+                logger.warning("webrtc sip: a linha nao saiu da sala (session=%s): %s", session_id, exc)
 
     async def _start_voice(self, session_id: str, room_name: str) -> None:
         """VOZ (VOZ-05 fatia 4): visível, só publica. Oculta, ninguém a ouviria — medido na fatia
@@ -2749,7 +2800,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
 
     def _may_stay_in_hold(self, session_id: str, identity: str) -> bool:
         return (identity.startswith(CUSTOMER_PREFIXES)
-                or identity in (listener_identity(session_id), voice_identity(session_id)))
+                or identity in (listener_identity(session_id), voice_identity(session_id),
+                                line_identity(session_id)))
 
     async def _media_hold_start(self, session_id: str, ac: "_ActiveCollect") -> bool:
         """Registra a pausa (a rota de token passa a recusar) e tira da sala quem não pode ficar.

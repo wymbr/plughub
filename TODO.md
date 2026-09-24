@@ -56,7 +56,8 @@ sem ponte de mídia nossa. Canal: **`voice`** (ADR V2). Fatia 1: entrante, com f
    o próprio gateway teria a sala apagada na corrida. Alternativa recusada: um segundo SFU só para SIP (duas
    topologias de mídia, contra a V1).
 2. **Atender = alguém assinar áudio.** O 200 OK só sai quando o participante SIP assina trilha remota; até
-   lá o telefone chama. Com IA é imediato; com humano, é a VOZ-35.
+   lá o telefone chama. Com IA é imediato; com humano, é a VOZ-35. *(Fechada em 2026-09-23: a
+   **linha** publica uma trilha muda em toda chamada. Bastar a trilha, sem quadro, foi medido.)*
 3. **Transcodifica.** Trilha do chamador `audio/opus` na sala, PCMU no SIP. A §8 do ADR supunha relay.
 
 **Endereço = número DISCADO**, por `ChannelEndpoint` `voice`. Número sem endpoint é recusado, e o motivo vai

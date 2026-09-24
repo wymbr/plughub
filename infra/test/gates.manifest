@@ -404,6 +404,12 @@ probe_webrtc_speech_profile.sh
 # deploy mascarado passar ja e prova). ~4 chamadas; endpoint criado e apagado.
 # VOZ-42 (2026-09-23): S5f a ULTIMA fala do fluxo toca antes do BYE (audio entre o marcador e o fim).
 probe_voz02_sip_inbound.sh
+# VOZ-35 (2026-09-23): chamada para pool HUMANO sem ninguem (sem IA de audio) e ATENDIDA pela
+# LINHA: C0 controle (nenhuma voz de IA na sala) · L1 200 OK · L2 em <= 3 s · L3 RTP continuo calado
+# (>= 90% dos pacotes, nenhum buraco >= 1 s) · L4 o gateway registra a linha e fecha pelo chamador.
+# Controle negativo medido: o codigo anterior tocava 60 s e dava 486. Usa o mesmo DNIS do voz02
+# (K0 recusa endpoint real; roda em serie). 1 chamada de ~20 s + 35 s de cache do endpoint.
+probe_voz35_sip_line.sh
 # VOZ-06 (2026-09-18): a chamada e GRAVADA quando o pool pede (`media_policy.recording`), so audio
 # misturado, em PARTES: G1 duas partes (antes e depois do PIN mascarado) · G2 classe call_recording,
 # audio/ogg, retencao da CLASSE · G3 fala dentro de cada parte (transcrita) · G4 o PIN e o pedido dele

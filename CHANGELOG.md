@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-23 (16) — VOZ-35: toda chamada SIP é atendida no nascimento, com IA ou sem — a LINHA
+
+**O defeito, agora medido ao vivo.** O serviço SIP do SFU só manda o 200 OK quando há trilha na sala
+para o participante SIP assinar, e até aqui só o agente de IA publicava. Uma chamada para pool
+HUMANO sem atendente (`probe_voz35_humano`, sem IA e sem fila) ficou 60 s TOCANDO (180) e caiu com
+**486**, fechada como `customer_hangup`, com espera na fila de 60 018 ms. Cada ligação na fila de
+humano virava abandono do cliente, e o log só dizia *"texto de system NAO entregue"*.
+
+**O que faz atender (experimento, `_sip_line_experiment.py`, descartado).** Um participante
+entra na sala da chamada e publica uma trilha **sem mandar quadro nenhum**: atendida em ~0,5 s, e o
+conversor mantém o RTP contínuo sozinho (747 de 750 pacotes, maior intervalo 40 ms). Basta a
+trilha, e mandar silêncio não é necessário.
+
+**O que passou a ser verdade.**
+- Em toda chamada SIP, a **linha** (`linha-{sid[:8]}`, visível, só publica) entra no `_sip_arrived`
+  e publica uma trilha **muda** (`publish_line`), do nascimento ao teardown. Isso vale com IA ou
+  sem. A fala da IA e o microfone do humano tocam por cima.
+- **O piso é silêncio** (decisão do dono): aviso ou música na espera são de um agente de fila.
+- Nunca mudo: se a linha não entra, não publica ou cai sem conexão, o log registra ERROR. O
+  `publish_line` sem sala **levanta** em vez de retornar calado, porque senão o log diria
+  *"chamada atendida"* sem trilha. A linha é guardada antes de publicar, então um teardown no meio
+  dela não a deixa órfã na sala.
+- A linha pode ficar na **pausa de mídia** do bloco mascarado (NIV-07): ela não assina nada, e não
+  conta como intrusa.
+
+**Prova.**
+- `test_sip_leg.py` § `TestLinha`: 6 testes, 46 no arquivo e 1 458 na suíte (imagem nova).
+- Mutação (M1: a linha não nasce · M2: tratada como intrusa · M3: fica na sala · M4: entra e não
+  publica): **as quatro pegas**. A M2 com a sintaxe conferida antes.
+- Novo `probe_voz35_sip_line.sh`: **VERDE**, atendida em 0,1 s, 997 de 1 000 pacotes, maior
+  intervalo 40 ms.
+- Controle negativo ao vivo, com o `webrtc.py` do `HEAD` no container: **VERMELHO** (L1 486), e
+  o container foi restaurado da imagem.
+- Regressão: `probe_voz02_sip_inbound` (IA e linha publicando juntas: fala, teclas, PIN
+  mascarado, última fala), `probe_voz06_recording` e `probe_sip_edge_surface`, os três **VERDES**.
+
+**Fora.**
+- A chamada pela Twilio real não foi refeita, porque a borda está fechada.
+- Um pool humano **sem teto de fila** deixa o chamador em silêncio até ele desligar. Isso é
+  config do pool (`queue_config.max_wait_s`), não da linha.
+- `_sip_rtp_gaps.py` fica como instrumento (usado pelo probe).
+
 ## 2026-09-23 (15) — VOZ-43: a senha dos troncos SIP tem UMA fonte, e fechar a borda deixou de quebrar o seed
 
 **O defeito, achado pelo dono ao fechar a borda da VOZ-32.** As senhas vinham de duas casas: a de

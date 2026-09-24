@@ -948,8 +948,16 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
   `auto_create: false` toda chamada levava 486. Ligado por decisão do dono, com a garantia movida
   para REAÇÃO: `police_room` apaga, no `room_started`, sala `plughub-{uuid}` sem
   `channel:webrtc:{sid}:room_name`. Salas com prefixo SIP e salas fora do prefixo não são policiadas.
-- **A chamada só é atendida quando o participante SIP assina áudio** — com pool humano, o telefone
-  toca até o atendente publicar microfone (fila inclusa). Ficha própria no `pending.md`.
+- **Toda chamada é ATENDIDA no nascimento, pela LINHA (VOZ-35, 2026-09-23).** O serviço SIP só
+  manda o 200 OK quando há trilha na sala para o participante SIP assinar. Até a VOZ-35 só o agente
+  de IA publicava, e uma chamada para pool humano (fila inclusa) tocava 60 s e caía com 486, contada
+  como `customer_hangup` (medido). Hoje, em toda chamada SIP, com IA ou sem, a
+  **linha** (`linha-{sid[:8]}`, visível, só publica) entra no `_sip_arrived` e publica uma trilha
+  **muda**. Medido: basta a trilha, sem quadro nenhum; a chamada é atendida em 0,3 s e o conversor
+  mantém o RTP contínuo sozinho (1247 de 1250 pacotes, maior intervalo 40 ms). Ela sai no
+  teardown. **O piso é silêncio** (decisão do dono): conteúdo na espera é de um agente de fila, e
+  a fala da IA e o microfone do humano tocam por cima. Linha que não entra ou não publica é ERROR
+  no log, nunca *"atendida"*. Gate: `probe_voz35_sip_line.sh`.
 - **O conversor transcodifica** G.711 ↔ Opus (medido: trilha `audio/opus`, PCMU no SIP). O ADR §8
   foi corrigido.
 - **Teclas do telefone (VOZ-31).** Fora de banda (RFC 4733) o serviço SIP entrega a tecla como
@@ -959,7 +967,7 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
 - **Dado protegido pelo telefone é coletado por TECLA, sob PAUSA DE MÍDIA (NIV-07, 2026-09-18).**
   A tecla SIP chega a todos na sala (medido), então, no menu mascarado, o gateway grava
   `channel:webrtc:{sid}:media_hold`, tira da sala quem não é o cliente nem bot
-  (`listener_identity`/`voice_identity`) e só então fala o prompt. A rota de token responde **409
+  (`listener_identity`/`voice_identity`/`line_identity`) e só então fala o prompt. A rota de token responde **409
   `masked_collect_in_progress`**, e o Console mostra *"Áudio pausado"* e reconecta ao fim. Quem entra
   no meio desfaz a coleta (`aborted` → `on_failure`), e pausa que falha desfaz sem prompt.
   `masked` + fala é recusado (NIV-08), a transcrição é descartada no bloco, o histórico recebe a linha
@@ -991,7 +999,7 @@ serviço SIP, sem INVITE no log. Passo a passo e medição: `CHANGELOG.md` § 20
 **Fora da fatia:** TLS/SRTP, `REFER` e chamada
 sainte, tecla longa e SIP INFO com operadora, tela para tronco e regra de despacho, e
 provedor por **registro** (o conversor recebe por tronco, não se registra), e o eco `plain` de
-segredo (`NIV-06`). Fichas `VOZ-33..35` e `NIV-06` no `pending.md`.
+segredo (`NIV-06`). Fichas `VOZ-33`, `VOZ-34` e `NIV-06` no `pending.md`.
 
 
 ## 20. Chamada presa a um contato de chat (WCH-01, 2026-09-21)

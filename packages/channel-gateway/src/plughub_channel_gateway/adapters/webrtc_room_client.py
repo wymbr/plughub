@@ -220,6 +220,12 @@ class IWebRTCRoomClient(Protocol):
         """Barge-in (VOZ-05 fatia 3): para a fala em curso e descarta o áudio já enfileirado."""
         ...
 
+    async def publish_line(self) -> None:
+        """VOZ-35: publica uma trilha de áudio SEM mandar quadro nenhum — a LINHA da chamada SIP.
+        Medido: o serviço SIP atende quando há trilha para assinar (0,5 s) e mantém o RTP contínuo
+        sozinho; nenhum quadro de silêncio é necessário."""
+        ...
+
     def customer_present(self) -> bool:
         """O cliente está na sala — sem ele, falar é falar para ninguém (VOZ-05 fatia 3)."""
         ...
@@ -423,6 +429,19 @@ class LiveKitRoomClient:
             )
             await self._audio_source.capture_frame(frame)
 
+    async def publish_line(self) -> None:
+        if self._audio_source is not None:
+            return                                   # já publicada
+        if not self._connected or self._room is None:
+            # nunca retorno mudo: quem chama registraria "chamada atendida" sem trilha nenhuma
+            raise RuntimeError("sem conexao com a sala (SDK ausente ou connect falhou)")
+        from livekit import rtc  # type: ignore[import-not-found]
+        self._audio_source = rtc.AudioSource(sample_rate=48000, num_channels=1)
+        self._audio_track = rtc.LocalAudioTrack.create_audio_track("plughub-linha", self._audio_source)
+        await self._room.local_participant.publish_track(
+            self._audio_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+
     def customer_present(self) -> bool:
         if self._room is None or not self._connected:
             return False
@@ -479,6 +498,7 @@ class MockRoomClient:
         self.disconnected:     bool             = False
         self.interrupts:       int              = 0
         self.customer_in_room: bool             = True
+        self.line_published:   bool             = False
         self._speakers_q: asyncio.Queue[tuple[str, asyncio.Queue] | None] = asyncio.Queue()
         self._filas: dict[str, asyncio.Queue[bytes | None]] = {}
         self._dtmf_q: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
@@ -539,6 +559,9 @@ class MockRoomClient:
 
     def interrupt_audio(self) -> None:
         self.interrupts += 1
+
+    async def publish_line(self) -> None:
+        self.line_published = True
 
     def customer_present(self) -> bool:
         return self.customer_in_room

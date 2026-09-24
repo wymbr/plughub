@@ -520,6 +520,10 @@ numa central, e é só aqui. **É a única fase que exige telecom**, e entra por
 > - **A chamada só é ATENDIDA (200 OK) quando o participante SIP assina áudio remoto** — até lá o
 >   chamador ouve chamando. Com agente de IA é imediato (o bot leg entra e fala); com pool HUMANO, o
 >   telefone toca até o atendente publicar microfone, inclusive durante a fila.
+>   *Resolvido pela VOZ-35 (2026-09-23):* medido que basta **uma trilha publicada, sem quadro
+>   nenhum**. O gateway põe em toda chamada SIP a **linha**, um participante que publica trilha muda
+>   do nascimento ao fim, e a chamada é atendida em 0,3 s com RTP contínuo. O piso é silêncio;
+>   conteúdo na espera é de um agente de fila (`arc15-webrtc.md` § 19).
 >
 > **Teclas (VOZ-31, no mesmo dia):** RFC 4733 negociado e validado no tronco simulado; **sem
 > `telephone-event` a tecla não chega** — o tom dentro do áudio é ignorado, e o conversor atende assim

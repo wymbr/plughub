@@ -25,7 +25,8 @@ import pytest
 
 from ..adapters.sip_leg import SIP_ROOM_PREFIX, SipCall, normalize_number, parse_sip_participant
 from ..adapters.voice_router import VoiceChannelRouter
-from ..adapters.webrtc import WebRTCAdapter
+from ..adapters.webrtc import WebRTCAdapter, line_identity
+from ..adapters.webrtc_room_client import MockRoomClient
 from ..endpoint_resolver import ResolvedEndpoint
 from .test_webrtc_stt_tts import _make_adapter
 
@@ -74,6 +75,17 @@ def _adapter():
     assert hasattr(WebRTCAdapter, "_stream_watcher") and hasattr(WebRTCAdapter, "_keepalive")
     ad._stream_watcher = AsyncMock()
     ad._keepalive = AsyncMock()
+    # VOZ-35: a linha entra na sala por `_join_room`; aqui ela ganha um cliente em memória, e cada
+    # entrada fica anotada (papel, cliente) para o teste perguntar QUEM entrou.
+    assert hasattr(WebRTCAdapter, "_join_room")
+    ad._joined = []
+
+    async def _join(session_id, room_name, *, identity, display_name, publish, subscribe, hidden, papel):
+        c = MockRoomClient()
+        await c.connect(room_name, identity, "t", "u")
+        ad._joined.append((papel, identity, hidden, c))
+        return c
+    ad._join_room = _join
     return ad, producer
 
 
@@ -284,6 +296,100 @@ class TestFim:
         await ad.on_livekit_event("participant_left", SALA, PARTICIPANTE)
         await ad.on_livekit_event("room_finished", SALA, None)
         assert len([e for e in _eventos(producer) if e.get("event_type") == "contact_closed"]) == 1
+
+
+class TestLinha:
+    """VOZ-35 — toda chamada SIP é ATENDIDA no nascimento, com agente de IA ou sem. O serviço SIP só
+    atende quando há trilha para assinar; sem IA de áudio, ninguém publicava, e a chamada que ia para
+    a fila de um pool humano tocava 60 s e caía com 486 (medido). O que faria estes testes ficarem
+    vermelhos: a linha não nascer na chegada, não publicar, ficar na sala depois do fim, ou ser
+    tratada como intrusa na pausa de mídia do bloco mascarado."""
+
+    async def _chegou(self, monkeypatch):
+        _endpoint(monkeypatch, pool="fila_humana")
+        ad, producer = _adapter()
+        await ad.on_livekit_event("participant_joined", SALA, PARTICIPANTE)
+        sid = next(iter(ad._sip))
+        await asyncio.gather(*ad._sip_tasks[sid])      # espera pelas TASKS do produto
+        return ad, producer, sid
+
+    async def test_a_linha_entra_visivel_e_publica_na_chegada(self, monkeypatch):
+        ad, _, sid = await self._chegou(monkeypatch)
+        linhas = [j for j in ad._joined if j[0] == "linha"]
+        assert len(linhas) == 1
+        _, ident, hidden, cliente = linhas[0]
+        assert ident == line_identity(sid) and hidden is False    # oculto não entrega áudio
+        assert cliente.line_published and ad._line_clients[sid] is cliente
+
+    async def test_a_linha_sai_da_sala_quando_a_chamada_acaba(self, monkeypatch):
+        ad, _, sid = await self._chegou(monkeypatch)
+        cliente = ad._line_clients[sid]
+        await ad.on_livekit_event("participant_left", SALA, PARTICIPANTE)
+        assert cliente.disconnected and sid not in ad._line_clients
+
+    async def test_chamada_que_acabou_enquanto_a_linha_conectava_nao_a_deixa_orfa(self, monkeypatch):
+        _endpoint(monkeypatch)
+        ad, _ = _adapter()
+        entrou = asyncio.Event()
+        segura = asyncio.Event()
+        original = ad._join_room
+
+        async def _lenta(*a, **kw):
+            entrou.set()
+            await segura.wait()
+            return await original(*a, **kw)
+        ad._join_room = _lenta
+        await ad.on_livekit_event("participant_joined", SALA, PARTICIPANTE)
+        sid = next(iter(ad._sip))
+        await asyncio.wait_for(entrou.wait(), 2)        # a linha tem de ter começado a entrar
+        tarefa = ad._sip_tasks[sid][-1]
+        ad._sip.pop(sid)                    # a chamada acabou por outro caminho, sem cancelar a task
+        segura.set()
+        await tarefa
+        (_, _, _, cliente), = [j for j in ad._joined if j[0] == "linha"]
+        assert cliente.disconnected and sid not in ad._line_clients
+
+    async def test_linha_que_nao_publica_e_dita_e_sai(self, monkeypatch, caplog):
+        _endpoint(monkeypatch)
+        ad, _ = _adapter()
+        original = ad._join_room
+
+        async def _quebrada(*a, **kw):
+            c = await original(*a, **kw)
+            c.publish_line = AsyncMock(side_effect=RuntimeError("sem sala"))
+            return c
+        ad._join_room = _quebrada
+        with caplog.at_level(logging.ERROR):
+            await ad.on_livekit_event("participant_joined", SALA, PARTICIPANTE)
+            sid = next(iter(ad._sip))
+            await asyncio.gather(*ad._sip_tasks[sid])
+        assert "NAO publicou" in caplog.text and sid not in ad._line_clients
+        assert ad._joined[-1][3].disconnected
+
+    async def test_linha_que_nao_entra_e_dita(self, monkeypatch, caplog):
+        _endpoint(monkeypatch)
+        ad, _ = _adapter()
+
+        async def _nega(*a, **kw):
+            return None
+        ad._join_room = _nega
+        with caplog.at_level(logging.ERROR):
+            await ad.on_livekit_event("participant_joined", SALA, PARTICIPANTE)
+            sid = next(iter(ad._sip))
+            await asyncio.gather(*ad._sip_tasks[sid])
+        assert "linha NAO entrou" in caplog.text and sid not in ad._line_clients
+
+    async def test_a_linha_pode_ficar_na_pausa_de_midia(self, monkeypatch):
+        ad, _, sid = await self._chegou(monkeypatch)
+        assert ad._may_stay_in_hold(sid, line_identity(sid))
+        assert not ad._may_stay_in_hold(sid, "agent-alguem")       # controle: humano não fica
+        assert hasattr(WebRTCAdapter, "_media_hold_intrusion")
+        ad._media_hold_intrusion = AsyncMock()
+        ad._media_hold[sid] = "menu_pin"
+        await ad.on_livekit_event("participant_joined", SALA, {"identity": line_identity(sid), "kind": "STANDARD"})
+        assert ad._media_hold_intrusion.await_count == 0
+        await ad.on_livekit_event("participant_joined", SALA, {"identity": "agent-alguem", "kind": "STANDARD"})
+        assert ad._media_hold_intrusion.await_count == 1
 
 
 class TestControleCompensatorio:
