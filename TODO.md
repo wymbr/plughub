@@ -2235,6 +2235,15 @@ genérico) e **N4** (editor de DialogForm).
 investimento apodrece. Se passarem dois trimestres sem commit em `agent-flow`, esta frente virou o
 *"fallback sem investimento"* que o documento abortado proibia com razão.
 
+**Decisão de 2026-09-24 (dono): o canvas sai; a autoria passa a ser por TEXTO que gera o YAML.**
+Motivo: o paralelo com a AOP da Decagon mostrou que o mercado está trocando o canvas por procedimento
+escrito, e que o risco de um canvas é o mesmo registrado acima — apodrecer sem investimento. A parte
+deste texto que continua valendo é a alavanca: **rodar e ver**. Ela muda de casa, não de peso — vira a
+simulação da versão candidata contra conversas reais (`RRH-02`). O LLM entra só na AUTORIA (converte o
+texto em Skill Flow YAML, que é o que se revisa e roda); em runtime nada muda, e um fluxo sem IA continua
+sem LLM. Pré-requisito: o catálogo de ferramentas tipado, sem o qual o conversor inventaria interface.
+Fichas: `NLF-01..03`, `RRH-02`. Raciocínio completo: `docs/product/decagon-paralelo-2026-09.md` § 1 e § 3.
+
 ### Capacidade de IA — `reserved` × `shared`
 
 ADR: [`adr-pool-capacity-reserved-shared.md`](docs/adr/adr-pool-capacity-reserved-shared.md) ·

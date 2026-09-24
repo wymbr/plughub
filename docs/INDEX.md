@@ -15,6 +15,7 @@ Ponto de entrada único de toda a documentação do PlugHub. Cada seção mapeia
 | Visão técnica completa da plataforma | [visao-geral.md](visao-geral.md) |
 | O que é o PlugHub e para quem serve | [product/overview.md](product/overview.md) |
 | Como a plataforma compete no mercado | [product/competitive-analysis-2026-09.md](product/competitive-analysis-2026-09.md) (por segmento, set/2026; snapshots anteriores: [jul](product/competitive-analysis-2026-07.md), [mai](product/competitive-analysis.md)) |
+| O que adotar da Decagon (autoria por texto, simulação, analista, qualidade) | [product/decagon-paralelo-2026-09.md](product/decagon-paralelo-2026-09.md) |
 | O que cada tela da UI faz | [Módulos funcionais](#módulos-funcionais-modulos) |
 | Como um Arc/feature funciona internamente | [Arcos de implementação](#arcos-de-implementação-arcos) |
 | Como um pacote funciona internamente | [Pacotes técnicos](#pacotes-técnicos-pacotes) |
@@ -122,6 +123,7 @@ plughub/
       adr-relatorios-duas-superficies-e-lentes.md ← relatórios colapsam em DUAS superfícies (Contatos=demanda × Recursos=oferta) com nível × lente × modo; a mesa de comparação é MODO, não página; lente vira DECLARAÇÃO (`aggregation`/`emptiness`/`comparability`). **ARCO COMPLETO — F0–F4 + T0–T3** — implementado
       adr-agent-licensing-and-pool-isolation.md ← licenciamento de agentes e isolamento entre pools (D9 partição por pool, D10 licenças materializadas; D6 revogada) — proposto
       adr-pool-capacity-reserved-shared.md ← capacidade de IA por pool: `reserved` × `shared`, no provisionamento e na admissão de pools `agent_kind: ai` — proposto
+      adr-pool-slot-allocation-unit.md ← lançamento gradual: o endereço segue o `pool_id`; a unidade de ALOCAÇÃO vira `(pool, slot)`, com recursos por slot e peso escolhido pelo roteamento na saída da fila; relação em campos, nunca em id composto — proposto
       adr-pool-no-resource-policy.md ← desfecho do roteamento quando o pool não tem recurso: enfileirar ou recusar — proposto
       adr-ai-gateway-separation.md   ← separação do AI Gateway entre carga OPERACIONAL e AVALIAÇÃO (perfil `evaluation` isolado) — Aceito, implementado
       adr-identity-channel-possession.md ← plataforma é autoridade de POSSE DE CANAL (OTP), nunca de identidade-de-registro; `verification_class` (`claimed` × `possessed`) e `otp_verify` como única via para `possessed` — Aceito, implementado
