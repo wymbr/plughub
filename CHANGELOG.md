@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (2) — NIV-19: dentro de `begin_transaction`, o ramo declarado do menu vence o rewind
+
+**O defeito, achado na chamada real da VOZ-37.** O PIN não digitado deveria tocar *"Não recebi o PIN"*
+(`on_timeout: sem_pin`) e tocou *"Não foi possível receber o PIN"* (o destino do bloco). O menu
+sinaliza os desfechos do canal com `transition_reason: on_failure`, e o engine desviava toda falha
+dentro do bloco para o `on_failure` do `begin_transaction`. Os ramos `on_timeout`, `on_invalid` e
+`on_disconnect` do menu eram código morto ali dentro, sem aviso. Exposição: 2 skills de produção
+(`agente_auth_ia_v1`, `agente_auth_form_v1`), dano 0, porque as duas apontavam o ramo para o mesmo
+destino do bloco.
+
+**Decisão (dono indiferente, recomendação acatada): respeitar o ramo.** Recusar na validação proibiria
+distinguir "não respondeu" de "falhou", e manter deixaria o ramo morto calado.
+
+**O que passou a ser verdade.**
+- `StepResult.declared_branch`: o menu marca `true` quando o destino veio de um ramo DECLARADO. O
+  fallback para o próprio `on_failure` não conta, e o teste é de verdade (`Boolean(...)`), não
+  `!== undefined`.
+- O engine, dentro do bloco: com a marca, segue o ramo; sem ela, rewind como antes. Nos dois casos a
+  transação termina e o escopo mascarado é descartado; para coletar de novo, o ramo aponta para o
+  `begin_transaction`.
+- `aborted` (o canal desfez a coleta protegida, NIV-07) continua rewind, com ramo declarado ou sem.
+- `transition_reason` não mudou: é persistido e tem enum fechado em `@plughub/schemas`.
+
+**Prova.**
+- `engine-transaction.test.ts`: 13 casos. O antigo, que declarava `on_timeout` e esperava o rewind,
+  foi reescrito, porque documentava o defeito. Os novos cobrem:
+  - timeout pelo BLPOP e pelo canal, `invalid` e `disconnect`, cada um com o seu ramo;
+  - `invalid` sem ramo, e nenhum ramo: os dois fazem rewind;
+  - `aborted` com os ramos declarados: rewind;
+  - retry que reabre a transação e sai pelo ramo, com testemunha do caminho (3 esperas);
+  - um step depois da saída não recebe o `@masked` da coleta anterior, com a testemunha de que ele
+    rodou.
+- Suíte do motor: 286 verdes, rodada dentro da imagem.
+- Mutação: M1 (engine ignora o ramo, o defeito original) · M3 (menu não marca o timeout) · M4 (o
+  fallback vira ramo) · M5 (escopo não descartado) ficam VERMELHAS. M2 (rewind morto) trava em laço,
+  pelo teste antigo que volta ao `tx_start`, e cai no teto de 120 s: conta como pega. É um laço, não
+  um vermelho.
+- Os testes montados à mão erraram três vezes antes de medir, e cada erro foi pego por uma
+  testemunha:
+  - a chave do sinal escrita à mão (o `instanceId` padrão é `"unknown"`); agora as chaves vêm do
+    `redisKeys`;
+  - um ciclo que o validador de fluxo recusa;
+  - o `begin_transaction` avança para o PRÓXIMO step do array, e o menu de retry estava nele. Foi o
+    `toHaveBeenCalledTimes(3)` que acusou.
+- Deploy: `skill-flow-service` recriado às 17:16 UTC, com `declared_branch` no `dist` que o container
+  roda. `probe_voz02_sip_inbound.sh`: **VERDE** depois do deploy (o PIN mascarado segue coletado; K3/K3p/K3g/K4).
+
+**Casas atualizadas no mesmo commit:** `docs/guias/masked-input.md` (seção nova, no lugar do aviso),
+skill `skill-flow-authoring`, `packages/skill-flow-engine/CLAUDE.md`.
+
+**Fora:** refazer a ligação com gente para ouvir *"Não recebi o PIN"*. O caminho é o mesmo que a
+bateria cobre, e o `voz37_round.sh` o repete quando convier.
+
 ## 2026-09-24 (1) — VOZ-37: a pausa de mídia do PIN validada com gente, no Console e pelo telefone real
 
 **O cenário que faltava, montado.** A primeira rodada (§ 2026-09-21 (1)) não tinha como testar a faixa

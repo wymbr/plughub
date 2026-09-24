@@ -624,11 +624,15 @@ export class SkillFlowEngine {
       // ── Detectar falha dentro de bloco de transação ──────────────────────
       // Se estamos dentro de um begin_transaction (transactionOnFailure definido)
       // e o step retornou on_failure, fazemos rewind para on_failure da transação.
+      // NIV-19: se o destino é um ramo que o autor DECLAROU para esse desfecho (`on_timeout`/
+      // `on_invalid`/`on_disconnect` do menu), ele vale — antes era engolido pelo rewind sem aviso
+      // (medido em chamada real na VOZ-37). Nos dois casos a transação TERMINA aqui: o escopo
+      // mascarado é descartado, e voltar a coletar é apontar o ramo para o begin_transaction.
       if (
         transactionOnFailure !== null &&
         result.transition_reason === "on_failure"
       ) {
-        const rewindTarget = transactionOnFailure
+        const rewindTarget = result.declared_branch ? result.next_step_id : transactionOnFailure
         // Descartar masked_scope — nunca reutilizar valores sensíveis
         maskedScope          = {}
         transactionOnFailure = null

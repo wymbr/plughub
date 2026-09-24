@@ -314,6 +314,13 @@ export interface StepResult {
    */
   output_declared?:  boolean
   transition_reason: PipelineState["transitions"][number]["reason"]
+  /**
+   * NIV-19: `next_step_id` é um ramo que o AUTOR declarou para este desfecho (`on_timeout`,
+   * `on_invalid`, `on_disconnect` do menu) — não o fallback para `on_failure`. Dentro de
+   * `begin_transaction` o engine segue este ramo em vez de desviar para o `on_failure` do bloco.
+   * Ausente ⇒ `false`: o rewind do bloco é o default, e isentar-se dele é algo que se AFIRMA.
+   */
+  declared_branch?:  boolean
   /** Outcome final — apenas steps complete */
   outcome?:          string
 }

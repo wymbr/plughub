@@ -112,6 +112,12 @@ so it is always removed regardless of how the BLPOP resolves (success, timeout, 
 | `nil` (BLPOP timed out) | `on_timeout` (falls back to `on_failure`) |
 | `menu:signal` key fired | per signal: `trigger_step` → that step · `terminate` → `on_failure` · collect `timeout` → `on_timeout` · collect `invalid` → `on_invalid` (both fall back to `on_failure`) · unreadable → warn + `on_failure` |
 
+**Inside `begin_transaction` (NIV-19, 2026-09-24):** when the destination is a branch the author
+DECLARED (`on_timeout` / `on_invalid` / `on_disconnect`), the menu returns `declared_branch: true`
+and the engine follows it instead of rewinding to the block's `on_failure`. Either way the transaction
+ends and the masked scope is discarded. A fallback to the menu's own `on_failure`, and a channel
+`aborted`, still rewind. Tests: `engine-transaction.test.ts` § NIV-19 (mutation-checked).
+
 ### Why multi-key BLPOP on both result and closed
 
 Without the `session:closed` key, a disconnect mid-wait would cause the BLPOP to run

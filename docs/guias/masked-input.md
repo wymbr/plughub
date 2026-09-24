@@ -184,14 +184,23 @@ O autor declara explicitamente o ponto de rewind em `on_failure` no `begin_trans
   on_failure: avisar_falha_maxima  # vai para tratamento externo
 ```
 
-> ⚠️ **O rewind hoje engole também os ramos declarados no menu** *(medido 2026-09-24, VOZ-37)*.
-> O menu sinaliza o timeout e a entrada inválida do canal como saída de falha. Dentro do bloco,
-> o engine desvia toda saída de falha para o `on_failure` do `begin_transaction`
-> (`engine.ts:627`), então o `on_timeout` e o `on_invalid` do menu **nunca rodam**, e nada avisa.
-> Numa chamada de verdade, *"Não recebi o PIN"* saiu como *"Não foi possível receber o PIN"*.
-> **Decidido (2026-09-24, `NIV-19`):** ramo declarado vale dentro do bloco, e seguir o ramo encerra
-> a transação como o rewind encerra, descartando o escopo mascarado. Sem ramo declarado, o rewind
-> continua. Até a NIV-19 fechar, trate o desfecho no destino do bloco.
+### Ramo declarado no menu vence o rewind (NIV-19)
+
+Dentro do bloco, o `on_timeout`, o `on_invalid` e o `on_disconnect` de um `menu` **valem**: o
+desfecho segue o ramo que o autor declarou. Seguir o ramo **encerra a transação** do mesmo jeito que
+o rewind: o escopo mascarado é descartado, e um step depois da saída não lê o `@masked.*` da coleta.
+Para coletar de novo, aponte o ramo para o `begin_transaction`.
+
+O rewind para o `on_failure` do bloco continua valendo em três casos:
+- o desfecho **não tem ramo declarado** (o fallback do menu para o próprio `on_failure` não conta);
+- a falha é de outro step (um `invoke` que falhou);
+- o canal **desfez** a coleta protegida (`aborted`, NIV-07). Isso não é desfecho do cliente, e nunca
+  é ramo.
+
+*Por quê:* até 2026-09-24 o rewind engolia também os ramos declarados, sem aviso. Numa chamada real
+da VOZ-37, *"Não recebi o PIN"* (`on_timeout`) saiu como *"Não foi possível receber o PIN"* (o destino
+do bloco). Mecanismo: `StepResult.declared_branch`, marcado pelo menu e lido pelo engine.
+Testes: `engine-transaction.test.ts` § NIV-19.
 
 ### `end_transaction` — caminho feliz
 

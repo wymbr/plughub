@@ -24,6 +24,10 @@
  *                   OU o canal entregou o desfecho de coleta `timeout` (VOZ-05 fatia 5)
  *   on_invalid    — o canal esgotou `collect.max_invalid` (defaults to on_failure)
  *   on_disconnect — cliente desconectou durante a espera (defaults to on_failure)
+ *
+ * NIV-19: quando o destino vem de um desses ramos DECLARADO (não do fallback), o resultado leva
+ * `declared_branch: true` — dentro de `begin_transaction` o engine segue o ramo em vez de desviar
+ * para o `on_failure` do bloco. Sem ramo declarado, o rewind do bloco continua valendo.
  */
 
 import type { MenuStep } from "@plughub/schemas"
@@ -468,6 +472,7 @@ export async function executeMenu(
         return {
           next_step_id:      step.on_timeout ?? step.on_failure,
           transition_reason: "on_failure",
+          declared_branch:   Boolean(step.on_timeout),
         }
       }
 
@@ -478,6 +483,7 @@ export async function executeMenu(
         return {
           next_step_id:      step.on_disconnect ?? step.on_failure,
           transition_reason: "on_failure",
+          declared_branch:   Boolean(step.on_disconnect),
         }
       }
 
@@ -494,14 +500,16 @@ export async function executeMenu(
             return { next_step_id: step.on_failure, transition_reason: "on_failure" }
           case "collect":
             if (sinal.outcome === "timeout") {
-              return { next_step_id: step.on_timeout ?? step.on_failure, transition_reason: "on_failure" }
+              return { next_step_id: step.on_timeout ?? step.on_failure, transition_reason: "on_failure",
+                       declared_branch: Boolean(step.on_timeout) }
             }
             // NIV-07: coleta DESFEITA pelo canal (não pôde protegê-la) não é entrada inválida do
             // cliente — `on_invalid` pediria de novo o que o canal acabou de dizer que não garante
             if (sinal.outcome === "aborted") {
               return { next_step_id: step.on_failure, transition_reason: "on_failure" }
             }
-            return { next_step_id: step.on_invalid ?? step.on_failure, transition_reason: "on_failure" }
+            return { next_step_id: step.on_invalid ?? step.on_failure, transition_reason: "on_failure",
+                     declared_branch: Boolean(step.on_invalid) }
           default:
             console.warn(`[menu] sinal ilegível em ${step.id}: ${raw.slice(0, 120)} — on_failure`)
             return { next_step_id: step.on_failure, transition_reason: "on_failure" }
