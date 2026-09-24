@@ -92,10 +92,18 @@ class Rig:
             if played is not None:
                 played.set()
 
+        # VOZ-39: o estado que o widget recebe, na ORDEM das outras coisas
+        self.estados: list[str] = []
+
+        async def on_state(_sid, estado):
+            self.estados.append(estado)
+            self.ordem.append(f"estado:{estado}")
+
         self.rec = CallRecorder(
             redis=self.redis, tenant_id=TENANT, output_dir=str(self.dir), config_api_url="http://x",
             default_notice="padrao", provider=lambda: self.provider, store=lambda: self.store,
             speak=speak, can_speak=lambda _s: self._voz, send_text=send_text, policy=policy,
+            on_state=on_state,
         )
 
     def reserves(self) -> list[dict]:
@@ -140,12 +148,12 @@ class TestGravaPeloPool:
 
     async def test_aviso_vem_ANTES_do_egress(self, rig):
         await rig.rec.update(SID, ROOM, {"p"})
-        assert rig.ordem == [f"texto:{AVISO}", "egress"]
+        assert rig.ordem == [f"texto:{AVISO}", "egress", "estado:recording"]
 
     async def test_aviso_falado_so_libera_depois_de_tocar(self, tmp_path):
         r = Rig(tmp_path, texto=False, voz=True)
         await r.rec.update(SID, ROOM, {"p"})
-        assert r.ordem == [f"voz:{AVISO}", "egress"]
+        assert r.ordem == [f"voz:{AVISO}", "egress", "estado:recording"]
 
     async def test_sem_aviso_entregue_nao_grava(self, tmp_path):
         r = Rig(tmp_path, texto=False, voz=False)
@@ -292,6 +300,84 @@ class TestNuncaFingeGravar:
         r.rec._provider = lambda: None
         await r.rec.update(SID, ROOM, {"p"})
         assert r.redis.stream[0]["type"] == "recording.failed"
+
+
+# ── VOZ-39: o estado que o widget mostra fixo ────────────────────────────────
+
+class TestEstadoNoWidget:
+    """O aviso é mensagem de chat, que rola; a faixa fixa lê ESTE estado. Anunciado só quando muda,
+    e sempre DEPOIS do fato: `recording` depois do egress começar, nunca antes."""
+
+    async def test_gravando_so_depois_do_aviso_e_do_egress(self, rig):
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert rig.ordem == [f"texto:{AVISO}", "egress", "estado:recording"]
+
+    async def test_troca_de_atendentes_nao_pisca(self, rig):
+        await rig.rec.update(SID, ROOM, {"a"})
+        await rig.rec.update(SID, ROOM, {"a", "b"})      # corta a parte e começa outra
+        assert len(rig.provider.egresses_started) == 2
+        assert rig.estados == ["recording"]
+        await rig.rec.close(SID)
+        assert rig.estados == ["recording", "stopped"]
+
+    async def test_bloco_mascarado_e_pausa(self, rig):
+        await rig.rec.update(SID, ROOM, {"p"})
+        await rig.rec.hold(SID)
+        await rig.rec.release(SID)
+        await rig.rec.close(SID)
+        assert rig.estados == ["recording", "paused", "recording", "stopped"]
+
+    async def test_bloco_antes_de_gravar_nao_e_pausa(self, rig):
+        """Sem aviso ainda não houve gravação — `paused` diria ao cliente que algo foi gravado."""
+        await rig.rec.update(SID, ROOM, {"p"})
+        await rig.rec.close(SID)
+        r2 = Rig(rig.dir.parent / "r2")
+        r2.rec._recs[SID] = webrtc_recording._Rec(room=ROOM, demand=("p",))
+        await r2.rec.hold(SID)
+        assert r2.estados == []
+
+    async def test_ultimo_atendente_saiu_e_parado(self, rig):
+        await rig.rec.update(SID, ROOM, {"a"})
+        await rig.rec.update(SID, ROOM, set())
+        assert rig.estados == ["recording", "stopped"]
+
+    async def test_controle_sem_gravacao_nenhum_estado(self, tmp_path):
+        sem_aviso = Rig(tmp_path / "a", texto=False, voz=False)
+        await sem_aviso.rec.update(SID, ROOM, {"p"})
+        recusa = Rig(tmp_path / "b")
+        recusa.redis.ctx[OPT_OUT_TAG] = _optout(True)
+        await recusa.rec.update(SID, ROOM, {"p"})
+        assert sem_aviso.estados == [] and recusa.estados == []
+
+    async def test_recusa_durante_a_parte_e_parado_nao_pausa(self, rig, monkeypatch):
+        monkeypatch.setattr(webrtc_recording, "OPT_OUT_POLL_S", 0.01)
+        await rig.rec.update(SID, ROOM, {"p"})
+        rig.redis.ctx[OPT_OUT_TAG] = _optout(True)
+        for _ in range(200):
+            if rig.estados[-1] != "recording":
+                break
+            await asyncio.sleep(0.01)
+        assert rig.estados == ["recording", "stopped"]
+
+    async def test_widget_fora_nao_para_a_gravacao(self, rig, caplog):
+        async def quebra(_sid, _estado):
+            raise ConnectionError("ws caiu")
+        rig.rec._on_state = quebra
+        await rig.rec.update(SID, ROOM, {"p"})
+        assert rig.rec.active(SID)
+        assert any("NAO chegou ao cliente" in r.getMessage() for r in caplog.records)
+
+    async def test_adapter_manda_o_estado_pelo_socket_do_cliente(self):
+        from plughub_channel_gateway.adapters.webrtc import WebRTCAdapter
+        assert hasattr(WebRTCAdapter, "_send_recording_state")
+        ad = WebRTCAdapter.__new__(WebRTCAdapter)
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        ad._connections = {SID: ws}
+        await ad._send_recording_state(SID, "recording")
+        await ad._send_recording_state("sem-socket", "recording")    # telefone: não há tela
+        [c] = ws.send_json.await_args_list
+        assert c.args[0] == {"type": "webrtc.recording", "state": "recording"}
 
 
 # ── O gatilho: a política do pool ────────────────────────────────────────────

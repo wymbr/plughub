@@ -417,6 +417,11 @@ probe_voz35_sip_line.sh
 # DEPOIS · L2 aviso antes da gravacao · R1 recusa gravada pelo FLUXO descarta · N1 controle sem
 # recording. ~3 chamadas pelo MESMO numero do probe_voz02 (nao rodar os dois em paralelo).
 probe_voz06_recording.sh
+# VOZ-39 (2026-09-24): faixa FIXA de gravacao no widget. B1 `webrtc.recording=recording` chega
+# DEPOIS do aviso de sistema · B2 `stopped` antes do `webrtc.session_closed` · B3 sequencia exata
+# recording>stopped · L1 a parte 1 foi INICIADA no gateway · N1 controle: pool sem `recording` nao
+# manda estado. Cliente WS do protocolo do widget, pool so-WebRTC; ~1 min.
+probe_voz39_recording_badge.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro

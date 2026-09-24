@@ -64,6 +64,13 @@
   }
   .header-title { font-size: 15px; font-weight: 600; }
   .header-sub   { font-size: 11px; opacity: .75; margin-top: 2px; }
+  /* VOZ-39: a faixa FIXA de gravação — o aviso de chat rola, o estado fica */
+  .rec-badge { display: none; margin-left: 8px; padding: 1px 7px; border-radius: 9px;
+               font-size: 11px; font-weight: 600; background: #dc2626; color: #fff; }
+  .rec-badge.recording { display: inline-block; }
+  .rec-badge.recording::before { content: '● '; animation: rec-blink 1.4s infinite; }
+  .rec-badge.paused { display: inline-block; background: #6b7280; }
+  @keyframes rec-blink { 50% { opacity: .35; } }
   .status-dot {
     display: inline-block;
     width: 8px; height: 8px;
@@ -344,6 +351,7 @@
       <div class="header-sub">
         <span class="status-dot" id="dot"></span>
         <span id="status-text">Desconectado</span>
+        <span class="rec-badge" id="rec-badge"></span>
       </div>
     </div>
     <div style="font-size:11px;opacity:.65" id="session-label"></div>
@@ -761,8 +769,18 @@ function wsSend(obj) {
   }
 }
 
+// VOZ-39 — o estado que o servidor anuncia (`webrtc.recording`): recording · paused · stopped.
+// A faixa só existe enquanto o servidor disser que grava; texto fixo, não mensagem que rola.
+function setRecording(state) {
+  const el = document.getElementById('rec-badge');
+  el.className = 'rec-badge' + (state === 'recording' || state === 'paused' ? ' ' + state : '');
+  el.textContent = state === 'recording' ? 'Gravando' : state === 'paused' ? '⏸ Gravação pausada' : '';
+  el.title = state === 'paused' ? 'Dado protegido sendo coletado — este trecho não é gravado' : '';
+}
+
 function teardown() {
   connected = false;
+  setRecording('stopped');
   cleanupLocalTracks();
   if (room) { room.disconnect(); room = null; }
   if (ws)   { ws.close(); ws = null; }
@@ -1100,6 +1118,12 @@ async function connectWebRTC() {
       // sistema, não fala de agente — antes aparecia rotulado "Agente".
       if (text && msg.author === 'system') addMsg(text, 'sys');
       else if (text) addMsg(text, 'in', 'Agente');
+      return;
+    }
+
+    // ── Estado da gravação (VOZ-39) ────────────────────────────────────────
+    if (msg.type === 'webrtc.recording') {
+      setRecording(msg.state);
       return;
     }
 

@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (5) — VOZ-39: o widget mostra a gravação numa faixa FIXA, e o estado vem do servidor
+
+**O defeito.** O aviso de gravação chegava ao widget como mensagem de chat. A mensagem rola e some,
+e quem olhasse a conversa depois não sabia que a chamada estava sendo gravada. A referência da
+decisão do dono (2026-09-21: no WebRTC, texto basta) é o padrão das salas de conferência: uma
+faixa **"● Gravando"** visível enquanto a parte corre.
+
+**O que mudou:**
+- **Gravador** (`webrtc_recording.py`): anuncia `on_state(session, state)` com `recording`,
+  `paused` ou `stopped`.
+  - O estado é calculado **depois** de cada entrada (`update` · `hold` · `release` · `close` ·
+    recusa durante a parte) e só é anunciado quando **muda**. Por isso a troca de atendentes, que
+    corta uma parte e começa a próxima, não pisca.
+  - `recording` só sai **depois** do aviso entregue e do egress iniciado.
+  - `paused` só existe se já houve aviso: é o bloco mascarado, e antes dele nada foi gravado.
+  - Widget fora do ar não para a gravação (o aviso, que é a condição de gravar, já chegou), mas
+    a falha é dita.
+- **Adaptador:** manda `webrtc.recording {state}` pelo WebSocket do cliente. Sem tela (telefone),
+  não manda nada, e lá o aviso é a fala.
+- **Widgets de demo:** `webrtc-widget.html` e `webchat-test.html` (chamada presa ao chat) ganharam
+  a faixa no cabeçalho. Ela fica vermelha e piscando em `recording`, cinza com "⏸ Gravação
+  pausada" em `paused`, e é apagada no fim da chamada.
+
+**Medição:**
+- **Testes:** `TestEstadoNoWidget`, 9 casos:
+  - ordem aviso → egress → estado;
+  - troca de atendentes sem piscar;
+  - `recording` → `paused` → `recording` → `stopped` no bloco mascarado;
+  - bloco antes de gravar não é pausa;
+  - controles sem aviso e com recusa: nenhum estado;
+  - recusa durante a parte vira `stopped`, não `paused`;
+  - widget fora não para a gravação;
+  - o adaptador manda pelo socket e fica calado sem socket.
+- **Suíte do gateway:** 1480 verdes. Dois testes antigos de ordem passaram a exigir o estado
+  **depois** do egress.
+- **Mutação:** M1 a M7, todas vermelhas (hold sem anunciar · sem deduplicar · pausa sem aviso ·
+  recusa sem anunciar · adaptador calado · close sem anunciar · erro do widget derrubando a
+  gravação).
+- **Ao vivo:** `probe_voz39_recording_badge.sh` VERDE. Sequência medida:
+  `webrtc.ready > … > aviso > webrtc.recording=recording > … > webrtc.recording=stopped > webrtc.session_closed`.
+  O controle com pool sem `recording` teve 0 frames de estado. No navegador embutido, a faixa
+  "● Gravando" apareceu no cabeçalho depois do aviso e apagou com o "Atendimento encerrado".
+- **Não exercitado ao vivo:** `paused` existe só na perna SIP, porque a coleta mascarada por tecla
+  ou fala é do telefone e o telefone não tem tela; no browser o dado protegido é digitado e não
+  passa pelo áudio. Também não exercitei a faixa na chamada presa ao chat: é o mesmo frame pelo
+  mesmo `_connections`, coberto pelo teste do adaptador.
+
+**Achado, com ficha:** `VOZ-44`. No probe, o cliente não publicou mídia, e o egress abortou
+(`EGRESS_ABORTED: Start signal not received`). O gravador só descobriu isso no `stop`: durante a
+parte, nada acompanha o egress. Com a faixa, isso passou a ser visível ao cliente. Ela diz
+"Gravando" enquanto nada grava.
+
 ## 2026-09-24 (4) — WCH-12: a chamada tem DONA entre réplicas, e a saída e o webhook chegam a ela
 
 **O defeito, medido antes de construir.** A chamada vive na memória de UMA réplica do gateway:

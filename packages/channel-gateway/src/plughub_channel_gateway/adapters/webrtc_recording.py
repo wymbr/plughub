@@ -28,6 +28,10 @@ Invariantes, cada um com o mecanismo aqui:
     nenhuma parte nova começa. Tag ilegível antes de começar ⇒ não começa.
   • NUNCA FINGE GRAVAR. Egress que não começa, que não termina ou arquivo que não se guarda viram
     `recording.failed` com o motivo, no stream e no log.
+  • O CLIENTE VÊ O ESTADO, NÃO SÓ O AVISO (VOZ-39). O aviso é mensagem de chat, que rola; o
+    estado (`recording` · `paused` · `stopped`) vai ao widget por `on_state` a cada MUDANÇA,
+    calculado DEPOIS de cada entrada — a troca de atendentes que corta uma parte e começa a
+    próxima não pisca, e `paused` só existe se já houve gravação (o bloco mascarado).
   • A GRAVAÇÃO NÃO SAI PELA PORTA PÚBLICA DE ANEXOS: é guardada como `call_recording`, com a
     retenção da classe (`storage.call_recording_retention_days`), e `upload_router` a recusa.
 """
@@ -91,6 +95,7 @@ class _Rec:
     skipped:   set[str] = field(default_factory=set)
     held:      bool = False
     closed:    bool = False
+    shown:     str = "stopped"      # VOZ-39: o último estado anunciado ao cliente
     lock:      asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -109,6 +114,7 @@ class CallRecorder:
         can_speak:      Callable[[str], bool],
         send_text:      Callable[[str, str], Awaitable[bool]],
         policy:         Callable[[str], Awaitable[RecordingPolicy]] | None = None,
+        on_state:       Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._redis = redis
         self._tenant = tenant_id
@@ -119,6 +125,7 @@ class CallRecorder:
         self._can_speak = can_speak
         self._send_text = send_text
         self._policy = policy or (lambda t: recording_config.resolve(config_api_url, t, default_notice))
+        self._on_state = on_state
         self._recs: dict[str, _Rec] = {}
         self._finalizers: set[asyncio.Task] = set()
 
@@ -144,6 +151,7 @@ class CallRecorder:
                 if demand != antes:
                     logger.info("webrtc gravacao: pools que gravam %s (session=%s)", list(demand), session_id)
                 await self._start(session_id, rec)
+            await self._announce(session_id, rec)
 
     async def hold(self, session_id: str) -> None:
         """Começa um bloco que NÃO pode ser gravado (coleta mascarada, NIV-07). Volta quando a
@@ -155,6 +163,7 @@ class CallRecorder:
             rec.held = True
             if rec.part is not None:
                 await self._stop(session_id, rec, "bloco mascarado (NIV-07) — nao e gravado")
+            await self._announce(session_id, rec)
 
     async def release(self, session_id: str) -> None:
         rec = self._recs.get(session_id)
@@ -164,6 +173,7 @@ class CallRecorder:
             rec.held = False
             if rec.demand and rec.part is None and not rec.closed:
                 await self._start(session_id, rec)
+            await self._announce(session_id, rec)
 
     async def close(self, session_id: str) -> None:
         rec = self._recs.pop(session_id, None)
@@ -173,6 +183,7 @@ class CallRecorder:
             rec.closed = True
             if rec.part is not None:
                 await self._stop(session_id, rec, "chamada encerrada")
+            await self._announce(session_id, rec)
 
     async def drain(self) -> None:
         """Espera as partes em finalização (teste e desligamento)."""
@@ -414,9 +425,33 @@ class CallRecorder:
                     return
                 rec.opted_out = True
                 await self._stop(session_id, rec, "o cliente recusou a gravacao durante a parte", discard=True)
+                await self._announce(session_id, rec)
             return
 
     # ── Estado e eventos ────────────────────────────────────────────────────────
+
+    async def _announce(self, session_id: str, rec: _Rec) -> None:
+        """VOZ-39 — o estado que o CLIENTE vê, anunciado só quando muda. Com o lock.
+
+        `paused` é o bloco mascarado DEPOIS de já ter havido aviso (o cliente sabe que era gravado e
+        vê que parou); fora disso, parte parada é `stopped`. Falha de entrega não para a gravação —
+        o aviso de chat, a condição de gravar, já foi entregue — mas é dita."""
+        if rec.part is not None:
+            estado = "recording"
+        elif rec.held and rec.noticed and rec.demand and not rec.closed and not rec.opted_out:
+            estado = "paused"
+        else:
+            estado = "stopped"
+        if estado == rec.shown:
+            return
+        rec.shown = estado
+        if self._on_state is None:
+            return
+        try:
+            await self._on_state(session_id, estado)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc gravacao: estado %s NAO chegou ao cliente (%s) (session=%s)",
+                           estado, exc, session_id)
 
     async def _skip(self, session_id: str, rec: _Rec, reason: str, frase: str) -> None:
         if reason in rec.skipped:

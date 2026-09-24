@@ -421,6 +421,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             speak          = self._speak,
             can_speak      = self._can_speak,
             send_text      = self._send_recording_notice_text,
+            on_state       = self._send_recording_state,     # VOZ-39: a faixa fixa do widget
         )
 
         # VOZ-05 (fatia A): campos mascarados de cada menu entregue, por sessão
@@ -2512,6 +2513,15 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                  if isinstance(rec, dict) and rec.get("recording") is True}
         return disparar(self._recorder.update(session_id, self._room_of(session_id), pools),
                         nome=f"webrtc-gravacao-{session_id[:8]}")
+
+    async def _send_recording_state(self, session_id: str, state: str) -> None:
+        """VOZ-39 — `webrtc.recording {state}` ao cliente: o widget mostra a faixa FIXA enquanto
+        `recording` (e `paused` no bloco mascarado). Sem tela (telefone) não há a quem mostrar —
+        lá o aviso é a fala."""
+        ws = self._connections.get(session_id)
+        if ws is None:
+            return
+        await self._ws_send(ws, {"type": "webrtc.recording", "state": state})
 
     async def _send_recording_notice_text(self, session_id: str, text: str) -> bool:
         ws = self._connections.get(session_id)
