@@ -197,6 +197,38 @@ function judgeAnswer(
 }
 
 /**
+ * NIV-13: quantas vezes o menu é REENVIADO quando a resposta não é uma das opções, sem `retry`
+ * declarado pelo autor. Esgotou, sai por `on_invalid` (declarado) ou `on_failure`.
+ */
+export const OPTION_RESENDS = 2
+
+/**
+ * answerOutsideOptions — os valores da resposta que NÃO são id de opção, num menu de ESCOLHA
+ * (`button`, `list`, `checklist`). `null` = nada a recusar (outra interação, ou tudo é opção).
+ *
+ * NIV-13 (decisão do dono, 2026-09-24): até aqui qualquer texto que chegasse a um menu de botão
+ * virava "a escolha" — medido: em 6 de 11 menus das skills, um texto solto caía no `default` do
+ * `choice` e contava como uma das opções (encerrar o atendimento, "outro assunto", recusar a
+ * verificação); em 3, ia direto como valor. Confere o ID, nunca o rótulo: é o id que todo canal
+ * devolve no clique (widget, WhatsApp, coleta por voz/teclado).
+ *
+ * Sem opções resolvidas não há o que conferir: devolve `null` e quem chama DIZ no log.
+ */
+export function answerOutsideOptions(
+  raw:         string,
+  interaction: string,
+  options:     ReadonlyArray<{ id: string }>,
+): string[] | null {
+  if (interaction !== "button" && interaction !== "list" && interaction !== "checklist") return null
+  if (!options.length) return null
+  const ids = new Set(options.map(o => String(o.id)))
+  const multi = interaction === "checklist" ? coerceMultiAnswer(raw, interaction) : raw
+  const valores = Array.isArray(multi) ? multi.map(String) : [String(multi)]
+  const fora = valores.filter(v => !ids.has(v))
+  return fora.length ? fora : null
+}
+
+/**
  * coerceMultiAnswer — a resposta de `checklist` é uma LISTA, e o pipeline_state
  * tem de guardá-la como tal (F2 do `adr-dialog-tree-options`).
  *
@@ -449,6 +481,33 @@ export async function executeMenu(
     const blpopTimeout = isInfinite ? 0 : timeoutSec
     let value: string
     let attempt = 0
+    let foraDaOpcao = 0
+    // Reofertar o MESMO menu (opções, campos, máscara e coleta iguais); só a mensagem pode mudar
+    // (o `reprompt` do autor). Uma casa para os dois motivos de reoferta: formato e opção.
+    const reofertar = async (message: string): Promise<boolean> => {
+      try {
+        await ctx.mcpCall("notification_send", {
+          session_id: ctx.sessionId,
+          message,
+          channel:    "session",
+          visibility: resolvedVisibility,
+          ...(ctx.segmentId ? { segment_id: ctx.segmentId } : {}),
+          ...(ctx.instanceId ? { instance_id: ctx.instanceId } : {}),
+          menu: {
+            interaction:   resolvedInteraction,
+            options:       resolvedOptions,
+            fields:        resolvedFields,
+            masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
+            // ALW-10 — o TIPO viaja junto, para o canal decidir o eco ao cliente.
+            masked_types:  Object.keys(masked.types ?? {}).length > 0 ? masked.types : undefined,
+            ...(step.collect ? { collect: step.collect } : {}),
+          },
+        })
+        return true
+      } catch {
+        return false
+      }
+    }
 
     // ── Retry loop (dialog primitive) ───────────────────────────────────────
     // Repete SOMENTE quando o cliente respondeu com formato inválido (reprompt na
@@ -532,25 +591,39 @@ export async function executeMenu(
           return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
         // Reprompt na mesma superfície e espera de novo.
-        try {
-          await ctx.mcpCall("notification_send", {
-            session_id: ctx.sessionId,
-            message:    resolvedRetry!.reprompt,
-            channel:    "session",
-            visibility: resolvedVisibility,
-            ...(ctx.segmentId ? { segment_id: ctx.segmentId } : {}),
-            ...(ctx.instanceId ? { instance_id: ctx.instanceId } : {}),
-            menu: {
-              interaction:   resolvedInteraction,
-              options:       resolvedOptions,
-              fields:        resolvedFields,
-              masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
-              // ALW-10 — o TIPO viaja junto, para o canal decidir o eco ao cliente.
-              masked_types:  Object.keys(masked.types ?? {}).length > 0 ? masked.types : undefined,
-              ...(step.collect ? { collect: step.collect } : {}),
-            },
-          })
-        } catch {
+        if (!(await reofertar(resolvedRetry!.reprompt))) {
+          return { next_step_id: step.on_failure, transition_reason: "on_failure" }
+        }
+        continue
+      }
+
+      // ── NIV-13 — menu de ESCOLHA só aceita uma das opções ─────────────────
+      // Fora delas, o MESMO menu é reenviado (o `reprompt` do autor, se declarou `retry`; senão o
+      // próprio prompt — a plataforma não inventa texto ao cliente) até esgotar; aí `on_invalid`
+      // (declarado) ou `on_failure`. O valor recusado NUNCA vai ao log: pode ser dado do cliente.
+      if (resolvedOptions.length === 0 && ["button", "list", "checklist"].includes(resolvedInteraction)) {
+        console.warn(`[menu] ${step.id} (${resolvedInteraction}) sem opções resolvidas — resposta aceita SEM conferência (sessão ${ctx.sessionId})`)
+      }
+      const fora = answerOutsideOptions(raw, resolvedInteraction, resolvedOptions)
+      if (fora) {
+        foraDaOpcao++
+        const limite = podeRetentar ? maxAttempts - 1 : OPTION_RESENDS
+        if (foraDaOpcao > limite) {
+          console.warn(
+            `[menu] resposta fora das opções em ${step.id} — esgotou ${limite} reenvio(s), ` +
+            `${step.on_invalid ? "on_invalid" : "on_failure"} (sessão ${ctx.sessionId})`
+          )
+          return {
+            next_step_id:      step.on_invalid ?? step.on_failure,
+            transition_reason: "on_failure",
+            declared_branch:   Boolean(step.on_invalid),
+          }
+        }
+        console.info(
+          `[menu] resposta fora das opções em ${step.id} — reenviando o menu ` +
+          `(${foraDaOpcao}/${limite}, ${fora.length} valor(es) recusado(s), sessão ${ctx.sessionId})`
+        )
+        if (!(await reofertar(podeRetentar ? resolvedRetry!.reprompt : resolvedPrompt))) {
           return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
         continue

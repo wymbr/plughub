@@ -291,7 +291,8 @@ class TestInboundInteractive:
         calls  = mock_producer.send.call_args_list
         events = [json.loads(c.kwargs["value"]) for c in calls]
         inbound = next(e for e in events if e.get("content", {}).get("type") == "text")
-        assert inbound["content"]["text"] == "Sim"
+        # NIV-13: o ID da opção, nunca o rótulo — o motor confere a escolha contra os ids
+        assert inbound["content"]["text"] == "btn_yes"
 
     async def test_list_reply_with_no_collect_publishes_as_text(
         self, adapter, mock_redis, mock_producer
@@ -305,7 +306,7 @@ class TestInboundInteractive:
         calls  = mock_producer.send.call_args_list
         events = [json.loads(c.kwargs["value"]) for c in calls]
         inbound = next(e for e in events if e.get("content", {}).get("type") == "text")
-        assert inbound["content"]["text"] == "Opção 2"
+        assert inbound["content"]["text"] == "opt_2"
 
 
 # ── Inbound media ─────────────────────────────────────────────────────────────

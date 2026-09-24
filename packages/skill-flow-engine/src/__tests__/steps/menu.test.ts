@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { executeMenu }                            from "../../steps/menu"
+import { executeMenu, OPTION_RESENDS }            from "../../steps/menu"
 import type { StepContext }                       from "../../executor"
 import type { MenuStep, PipelineState }           from "@plughub/schemas"
 
@@ -629,5 +629,121 @@ describe("MEN-07 — texto do cliente com a forma de um sinal é RESPOSTA, nunca
   it("sinal ilegível na fila de sinal não vira sucesso", async () => {
     const r = await executeMenu(step, makeCtx([`menu:signal:s1`, "lixo"]))
     expect(r.next_step_id).toBe("falhou")
+  })
+})
+
+describe("NIV-13 — menu de ESCOLHA só aceita uma das opções", () => {
+  // Medido em 2026-09-24: em 6 de 11 menus button/list das skills, um texto solto caía no `default`
+  // do `choice` seguinte e contava como uma das opções (encerrar o atendimento, "outro assunto"...).
+  // Decisão do dono: fora das opções, REENVIAR o mesmo menu; esgotou, on_invalid ou on_failure.
+  // O que faria estes testes ficarem vermelhos: aceitar valor fora das opções (o defeito), recusar
+  // opção válida, inventar texto no reenvio, perder o `reprompt` do autor, ou vazar o valor no log.
+  const escolha = (extra: Partial<MenuStep> = {}): MenuStep => ({
+    id: "decidir", type: "menu", interaction: "button", prompt: "Confirma?",
+    options: [{ id: "sim", label: "Sim" }, { id: "nao", label: "Não" }],
+    timeout_s: 30, output_as: "decisao", on_success: "ok", on_failure: "falhou",
+    ...extra,
+  } as MenuStep)
+
+  function sequencia(ctx: StepContext, respostas: string[]) {
+    const f = vi.fn()
+    for (const r of respostas) f.mockResolvedValueOnce([`menu:result:s1`, r])
+    f.mockResolvedValue(null)                                 // depois das respostas: timeout
+    ;(ctx.redis as any).blpop = f
+    return f
+  }
+  const enviadas = (ctx: StepContext) =>
+    (ctx.mcpCall as ReturnType<typeof vi.fn>).mock.calls.filter(c => c[0] === "notification_send")
+
+  it("aceita uma das opções de primeira (controle positivo, um envio só)", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "sim"])
+    const r = await executeMenu(escolha(), ctx)
+    expect(r.next_step_id).toBe("ok")
+    expect(r.output_value).toBe("sim")
+    expect(enviadas(ctx).length).toBe(1)
+  })
+
+  it("texto fora das opções REENVIA o mesmo menu e aceita a opção que vem depois", async () => {
+    const ctx = makeCtx()
+    sequencia(ctx, ["espera um pouco", "nao"])
+    const r = await executeMenu(escolha(), ctx)
+    expect(r.next_step_id).toBe("ok")
+    expect(r.output_value).toBe("nao")
+    const env = enviadas(ctx)
+    expect(env.length).toBe(2)
+    const reenvio = env[1]?.[1] as Record<string, any>
+    expect(reenvio).toBeDefined()
+    // a plataforma não inventa texto: sem `retry`, o reenvio é o próprio prompt, com as mesmas opções
+    expect(reenvio.message).toBe("Confirma?")
+    expect(reenvio.menu.options.map((o: any) => o.id)).toEqual(["sim", "nao"])
+  })
+
+  it(`esgota ${OPTION_RESENDS} reenvios e sai por on_failure`, async () => {
+    const ctx = makeCtx()
+    sequencia(ctx, ["a", "b", "c", "sim"])                      // o "sim" nunca chega a valer
+    const r = await executeMenu(escolha(), ctx)
+    expect(r.next_step_id).toBe("falhou")
+    expect(r.transition_reason).toBe("on_failure")
+    expect(enviadas(ctx).length).toBe(1 + OPTION_RESENDS)
+  })
+
+  it("esgotou com on_invalid declarado: sai por ele, marcado como ramo declarado", async () => {
+    const ctx = makeCtx()
+    sequencia(ctx, ["a", "b", "c"])
+    const r = await executeMenu(escolha({ on_invalid: "nao_entendi" } as Partial<MenuStep>), ctx)
+    expect(r.next_step_id).toBe("nao_entendi")
+    expect(r.declared_branch).toBe(true)
+  })
+
+  it("com `retry` do autor, o reenvio usa o reprompt DELE e o max_attempts dele", async () => {
+    const ctx = makeCtx()
+    sequencia(ctx, ["a", "b", "sim"])
+    const r = await executeMenu(
+      escolha({ retry: { reprompt: "Responda sim ou não", max_attempts: 2 } } as Partial<MenuStep>), ctx)
+    expect(r.next_step_id).toBe("falhou")                      // 2 tentativas: 1 reenvio
+    const env = enviadas(ctx)
+    expect(env.length).toBe(2)
+    expect((env[1]?.[1] as any)?.message).toBe("Responda sim ou não")
+  })
+
+  it("checklist: todos os marcados têm de ser opções", async () => {
+    const ctx = makeCtx()
+    sequencia(ctx, ['["sim","talvez"]', '["sim","nao"]'])
+    const r = await executeMenu(escolha({ interaction: "checklist" } as Partial<MenuStep>), ctx)
+    expect(r.next_step_id).toBe("ok")
+    expect(r.output_value).toEqual(["sim", "nao"])
+    expect(enviadas(ctx).length).toBe(2)
+  })
+
+  it("opções DINÂMICAS (ref resolvida em runtime) também são conferidas", async () => {
+    const ctx = makeCtx()
+    ctx.state = { ...ctx.state, results: { ...ctx.state.results,
+      render: { opcoes: [{ id: "x1", label: "Um" }, { id: "x2", label: "Dois" }] } } }
+    sequencia(ctx, ["sim", "x2"])                              // "sim" não é opção AQUI
+    const r = await executeMenu(escolha({ options: "$.pipeline_state.render.opcoes" } as any), ctx)
+    expect(r.output_value).toBe("x2")
+    expect(enviadas(ctx).length).toBe(2)
+  })
+
+  it("interação `text` não tem opções a conferir: aceita qualquer texto", async () => {
+    const ctx = makeCtx([`menu:result:s1`, "qualquer coisa"])
+    const r = await executeMenu(escolha({ interaction: "text", options: undefined } as any), ctx)
+    expect(r.next_step_id).toBe("ok")
+    expect(enviadas(ctx).length).toBe(1)
+  })
+
+  it("o valor recusado NUNCA vai ao log", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {})
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const ctx = makeCtx()
+      sequencia(ctx, ["meu cpf 12345678900", "x", "y"])
+      await executeMenu(escolha(), ctx)
+      const logado = JSON.stringify([...info.mock.calls, ...warn.mock.calls])
+      expect(logado).toContain("fora das opções")                  // testemunha: o log EXISTE
+      expect(logado).not.toContain("12345678900")
+    } finally {
+      info.mockRestore(); warn.mockRestore()
+    }
   })
 })

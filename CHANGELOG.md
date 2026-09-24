@@ -1,5 +1,61 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (3) — NIV-13: menu de escolha só aceita uma das opções; fora delas, o menu é reenviado
+
+**O que a ficha ainda tinha aberto, medido antes de construir.** A casa única da coleta e o lado da
+voz já existiam (VOZ-05 5b): na chamada, a fala só responde menu que declara `collect` com `voice`, e
+a coleta devolve o id da opção. Faltava o caminho de TEXTO. O portão do motor (`judgeAnswer`) só
+julgava formato, então num menu `button`/`list` **qualquer texto virava "a escolha"**. Levantamento
+dos 11 menus de escolha em 10 skills (fonte declarada, YAML):
+- **6** jogam o texto no `default` do `choice` seguinte, e ele vale como uma das opções. Exemplos:
+  `skill_atendimento_auth_v1`, onde um texto qualquer ENCERRA o atendimento;
+  `agente_confirmacao_portabilidade`, onde vira "Outro assunto"; `skill_intake_runner`, onde vira
+  recusar a verificação.
+- **2** voltam ao mesmo menu, em silêncio.
+- **3** seguem com o texto como valor (`agente_reembolso_intake`: o texto vira o *motivo*;
+  `skill_limite_retorno`: qualquer texto vale "ciente").
+
+**Decisão do dono: reenviar o menu.** Das três opções (reenviar, recusar direto, só registrar), a
+escolhida conserta os 11 menus sem editar nenhuma skill.
+
+**O que passou a ser verdade.**
+- `answerOutsideOptions` (pura, exportada): em `button`/`list`/`checklist`, lista os valores que não
+  são id de opção. Vale também para opções DINÂMICAS, que chegam resolvidas em runtime.
+- Fora das opções, o MESMO menu é reenviado, com as mesmas opções, campos, máscara e coleta.
+  - O texto do reenvio é o `retry.reprompt` do autor, se ele declarou `retry`; senão é o próprio
+    prompt. **A plataforma não inventa texto ao cliente.**
+  - O limite é `OPTION_RESENDS = 2`, ou o `max_attempts` do autor.
+  - Esgotou: `on_invalid` (declarado, e marcado como ramo para a NIV-19) ou `on_failure`.
+- O valor recusado **não vai ao log**; o log diz o menu, a contagem e a sessão.
+- Menu de escolha sem opções resolvidas é aceito, mas **dito** no log (WARN).
+- O reenvio do formato e o da opção agora usam UMA função (`reofertar`), onde antes havia um bloco
+  duplicado.
+- **WhatsApp:** o clique sem estado de coleta passou a mandar o `id` do botão ou da linha, e não o
+  rótulo (que a Meta ainda corta em 20 caracteres). Sem isso, todo clique seria recusado.
+
+**Efeito que parece regressão e não é.** No texto numerado do WhatsApp com mais de 10 opções, e no
+SMS e no e-mail, o número digitado não é traduzido para o id. Antes, o fluxo recebia `"7"` como se
+fosse uma escolha e seguia errado, calado. Agora o menu é reenviado e depois falha, com log. Traduzir
+o número é trabalho do renderizador de cada canal: nota nas fichas NIV-14, NIV-15 e NIV-17.
+
+**Prova.**
+- `menu.test.ts` § NIV-13, 9 casos:
+  - controle positivo (opção válida, um envio só);
+  - reenvio com o prompt e as opções originais;
+  - limite esgotado e `on_invalid` como ramo;
+  - `reprompt` e `max_attempts` do autor;
+  - `checklist`, opções dinâmicas e `text` sem conferência;
+  - o valor recusado ausente do log, com a testemunha de que o log existe.
+- Suíte do motor: 295 verdes e `tsc` limpo, na imagem. Gateway: 1458, com os dois testes do
+  WhatsApp atualizados para o id.
+- Mutação M1–M6, todas vermelhas: aceitar tudo (o defeito) · reenvio com texto inventado · limite
+  errado · `on_invalid` sem marca · valor no log · `checklist` conferindo só o primeiro.
+- No ar: âncoras no `dist` do motor e no adaptador do WhatsApp dentro dos containers.
+  Probes: `probe_menu_result_contract.sh` **OK** e `probe_voz02_sip_inbound.sh` **VERDE** (o menu de botão com coleta por voz segue aceitando a opção falada).
+
+**Fora, com ficha:** `checklist`/`form` decompostos em coletas unitárias chegam com o primeiro canal
+sem tela (NIV-16). O número digitado virando id fica em NIV-14, NIV-15 e NIV-17.
+
 ## 2026-09-24 (2) — NIV-19: dentro de `begin_transaction`, o ramo declarado do menu vence o rewind
 
 **O defeito, achado na chamada real da VOZ-37.** O PIN não digitado deveria tocar *"Não recebi o PIN"*

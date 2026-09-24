@@ -112,6 +112,13 @@ so it is always removed regardless of how the BLPOP resolves (success, timeout, 
 | `nil` (BLPOP timed out) | `on_timeout` (falls back to `on_failure`) |
 | `menu:signal` key fired | per signal: `trigger_step` → that step · `terminate` → `on_failure` · collect `timeout` → `on_timeout` · collect `invalid` → `on_invalid` (both fall back to `on_failure`) · unreadable → warn + `on_failure` |
 
+**Choice menus only accept an option id (NIV-13, 2026-09-24):** for `button`/`list`/`checklist`,
+`answerOutsideOptions` checks the answer against the resolved option ids (static or dynamic). Outside
+them the SAME menu is re-offered — the author's `retry.reprompt` when declared, otherwise the prompt
+itself (the platform never invents customer-facing text) — up to `OPTION_RESENDS` (2), then
+`on_invalid` (declared) or `on_failure`. The refused value is never logged. Before this, any text
+became "the choice" (6 of 11 skill menus fed it to a `choice` default).
+
 **Inside `begin_transaction` (NIV-19, 2026-09-24):** when the destination is a branch the author
 DECLARED (`on_timeout` / `on_invalid` / `on_disconnect`), the menu returns `declared_branch: true`
 and the engine follows it instead of rewinding to the block's `on_failure`. Either way the transaction

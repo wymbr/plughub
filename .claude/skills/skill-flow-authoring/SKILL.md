@@ -87,6 +87,11 @@ Fatos com `arquivo:linha` em [`references/fatos-do-codigo.md`](references/fatos-
   **encerra a transação** (o `@masked.*` some); sem ramo declarado, ou com o canal desfazendo a
   coleta (`aborted`), o bloco volta ao `on_failure` do `begin_transaction`. Para coletar de novo,
   aponte o ramo para o `begin_transaction` (ver `docs/guias/masked-input.md`).
+  **Menu de escolha (`button`/`list`/`checklist`) só aceita id de opção** (NIV-13, 2026-09-24):
+  texto fora das opções faz o motor REENVIAR o mesmo menu (o `retry.reprompt` do autor, se houver;
+  senão o próprio prompt) até 2 vezes, e depois sair por `on_invalid` (se declarado) ou `on_failure`.
+  Não conte com o `default` do `choice` seguinte para "pegar o resto" — ele só vê opções. Quer
+  texto livre? Use `interaction: text`.
   ⚠️ **Na voz, o canal fala a instrução do teclado sozinho**: *"Para X, tecle um…"* nas opções e
   *"Digite e termine com jogo da velha."* quando há `terminator` (`collect_core.py`). O prompt diz
   só O QUE pedir (*"Por favor, informe o seu PIN."*); repetir a instrução faz o cliente ouvir duas

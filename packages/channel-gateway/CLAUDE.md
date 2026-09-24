@@ -79,6 +79,11 @@ com `option_tree.note_dropped_descriptions` (uma linha INFO por menu, só quando
 ⚠️ `examples` nunca chega aqui: é do classificador. O Zod do `notification_send` já o remove.
 Gate: `infra/test/probe_orq15_option_description.sh`.
 
+**A resposta de menu de escolha viaja como ID da opção, nunca como rótulo** (NIV-13, 2026-09-24):
+o motor recusa o que não é id (reenvia o menu, depois `on_invalid`/`on_failure`). O WhatsApp sem
+coleta ativa manda o `id` do botão/linha; o texto numerado (WhatsApp >10, SMS, e-mail) ainda não
+traduz o número digitado para o id — NIV-14/15/17.
+
 **Sequential fallback protocol**: The adapter sends each field/option as a separate
 WhatsApp/SMS message, stores partial responses in the adapter's session state (Redis TTL),
 and emits a single `MenuSubmitEvent` to Kafka only when all required fields are collected.

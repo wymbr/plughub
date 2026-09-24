@@ -487,7 +487,10 @@ class WhatsAppAdapter(ChannelAdapter):
                 wamid=wamid,
             )
         else:
-            # Button/list reply with no active collect — treat as free text
+            # Button/list reply with no active collect — segue como texto, mas com o ID da opção
+            # (o `id` do botão/linha é o id da opção, `send_interactive_*`). NIV-13: o motor confere
+            # a resposta de menu de escolha contra os ids — o rótulo (cortado em 20 car. pela Meta)
+            # seria recusado e o menu reenviado a cada clique.
             event = NormalizedInboundEvent(
                 message_id       = str(uuid.uuid4()),
                 contact_id       = contact_id,
@@ -495,7 +498,7 @@ class WhatsAppAdapter(ChannelAdapter):
                 channel          = "whatsapp",
                 content_type     = "text",
                 author           = MessageAuthor(type="customer"),
-                content          = MessageContent(type="text", text=label or value),
+                content          = MessageContent(type="text", text=value or label),
                 context_snapshot = ContextSnapshot(),
             )
             await self._publish_inbound(event.model_dump())
