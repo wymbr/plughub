@@ -43,6 +43,8 @@ interface DataTypeFormat {
   replacement?:          string
   preserve_last_digits?: number
   preserve_pattern?:     string
+  /** CTX-12 — conferência além da regex (ex.: `cpf_dv`). Somente leitura aqui (ALW-16). */
+  detect_validator?:     string
 }
 
 interface DataTypeEntry {
@@ -478,6 +480,13 @@ export default function MaskingPage() {
                       {detects
                         ? badge(t('section.categories.detects'), '#22c55e')
                         : badge(t('section.categories.declaredOnly'), '#94a3b8')}
+                      {detects && dt.formato?.detect_validator && (
+                        // CTX-12 — tokens do Tailwind, não hex (o resto da página é a PUI-01)
+                        <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold text-accent border border-accent">
+                          {t(`section.categories.validator.${dt.formato.detect_validator}`,
+                            { defaultValue: dt.formato.detect_validator })}
+                        </span>
+                      )}
                       {dt.lgpd && dt.lgpd !== 'none' && badge(
                         t(`lgpd.${dt.lgpd}`, { defaultValue: dt.lgpd }),
                         dt.lgpd === 'sensivel' ? '#dc2626' : dt.lgpd === 'credencial' ? '#a78bfa' : '#f59e0b',

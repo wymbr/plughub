@@ -1,5 +1,49 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (8) — CTX-12: a detecção separa CPF cru de telefone pelo dígito verificador
+
+**O defeito.** O `detect_pattern` do CPF exigia pontuação, então 11 dígitos crus escapavam dele e
+casavam o do telefone: o valor saía mascarado com o gabarito e a **categoria** de telefone — na
+trilha, no token do stream (`[phone:tk_…]`) e em `masked_categories`. E o conserto óbvio
+(`\b\d{11}\b` no CPF) inverteria o erro: a ordem das regras passaria a decidir.
+
+**Medido antes de decidir** (a ficha pedia; `plughub_demo.messages`, 11 dígitos crus):
+| quem | DV de CPF válido | forma de celular | n |
+|---|---|---|---|
+| cliente | ✓ | ✗ | **46** — CPFs tipados como telefone |
+| cliente | ✗ | ✓ | 144 — celulares |
+| cliente | ✗ | ✗ | 69 — outros números |
+| cliente | ✓ | ✓ | **0** — nenhuma colisão |
+O dígito verificador separa as duas populações sem colisão.
+
+**O conserto, decidido pelo dono: validador DECLARADO no catálogo.** O tipo `cpf` ganhou
+`formato.detect_validator: cpf_dv`, e o padrão passa a aceitar também os 11 dígitos crus;
+`DEFAULT_MASKING_RULES` leva o campo à regra (`validator`). `cpf_dv`: pontuado vale pelo formato
+(como sempre); cru só com DV válido (e nunca `000…0`/`111…1`); o que não passa **fica intacto para
+a regra seguinte** — o telefone, como hoje. Validador desconhecido recusa o casamento. Quatro
+motores: a rede do engine e o `MaskingService` (via `passesDetectValidator`, `@plughub/schemas`),
+o channel-gateway (`plughub_contextstore.masking.passes_detect_validator`) e a cópia declarada do
+quality-ingest. O seed do config-api acompanha; a tela `/config/masking` mostra o selo
+*"confere dígito verificador"* (i18n en/pt-BR), somente leitura como o resto do `formato` (ALW-16).
+
+**Gate novo** `probe_detect_validator_parity.sh` (no manifesto): fixture única com 18 casos, runner
+TS e runner Python (as duas casas Python comparadas entre si); ramos A–E, e o **E fixa os valores
+esperados**, porque motores que erram igual também concordam. Mutação: 4 de 4 vermelhas (TS sem
+DV, py-contextstore sem DV, cópia divergente, rede ignorando o validador). Testes de APLICAÇÃO nos
+dois sítios que o gate não roda: `message_send` (+2, cofre real) e `_mask_pii` do channel-gateway
+(+4, na imagem). Suítes: schemas 383, engine 309, mcp-server 510, channel-gateway 1531 (imagem),
+quality-ingest 30, py-contextstore 76, config-api 61; `tsc` limpo em engine, mcp-server e
+platform-ui; gates vizinhos verdes (seed parity, apply parity, i18n, manifesto).
+
+**Dois testes antigos mudaram de expectativa, e é o conserto:** `declared-content.test.ts` fixava
+que o exemplo `52998224725` do roteiro, sem carimbo, saía com o gabarito de **telefone** — o dano
+da CTX-11. Ele tem DV válido e agora sai como CPF; a isenção por proveniência continua sendo o que
+impede os dois.
+
+**Fora de produção até o rebuild** de mcp-server, skill-flow-service, channel-gateway e
+quality-ingest; e o catálogo VIVO (`masking.types`, seed-if-absent) ainda descreve o padrão antigo.
+Deixou ficha: **CTX-13**. Doc: `docs/adr/adr-context-read-audience-policy.md` § D12 (limites da rede).
+
 ## 2026-09-25 (7) — PID-19: a porta oferece "abrir pedido novo" sempre, e recusar a prova volta ao menu
 
 **O defeito.** A D11 diz que abrir processo novo **nunca** exige identificação, e a porta

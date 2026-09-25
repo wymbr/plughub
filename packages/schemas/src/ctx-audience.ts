@@ -22,6 +22,7 @@ import { z } from "zod"
 import {
   DEFAULT_DATA_TYPE_CATALOG,
   DEFAULT_MASKING_RULES,
+  passesDetectValidator,
   type DataTypeCatalog, type DataType, type ContextMaskingType,
   type DataCategory as ContextMaskingCategory,
 } from "./audit"
@@ -392,10 +393,11 @@ export interface FreeTextMaskResult {
   categories: ContextMaskingCategory[]
 }
 
-const _REDE: { re: RegExp; category: ContextMaskingCategory; replacement: string }[] =
+const _REDE: { re: RegExp; category: ContextMaskingCategory; replacement: string; validator?: string }[] =
   DEFAULT_MASKING_RULES.flatMap(r => {
     try {
-      return [{ re: new RegExp(r.pattern, "g"), category: r.category, replacement: r.replacement }]
+      return [{ re: new RegExp(r.pattern, "g"), category: r.category, replacement: r.replacement,
+                validator: r.validator }]
     } catch {
       // Regra com regex inválida SAI da rede em vez de derrubar o processo. É
       // degradação, e ela é contável: `_REDE.length` < `DEFAULT_MASKING_RULES.length`.
@@ -420,10 +422,15 @@ export function maskFreeText(value: unknown, path = ""): FreeTextMaskResult {
     const categories: ContextMaskingCategory[] = []
     for (const rule of _REDE) {
       rule.re.lastIndex = 0
-      if (rule.re.test(masked)) {
-        masked = masked.replace(rule.re, rule.replacement)
-        categories.push(rule.category)
-      }
+      // CTX-12: o casamento só é deste tipo se passar no validador declarado; o que não
+      // passa fica INTACTO aqui e segue para a próxima regra (CPF cru inválido → telefone).
+      let casou = false
+      masked = masked.replace(rule.re, m => {
+        if (!passesDetectValidator(rule.validator, m)) return m
+        casou = true
+        return rule.replacement
+      })
+      if (casou) categories.push(rule.category)
     }
     return categories.length > 0
       ? { value: masked, fields: [path || "$"], categories }

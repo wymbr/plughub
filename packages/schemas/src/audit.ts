@@ -78,11 +78,52 @@ export type VerificationClass = z.infer<typeof VerificationClassSchema>
 // Mascaramento de dados sensíveis
 // ─────────────────────────────────────────────
 
+/**
+ * DetectValidator — conferência que a REGEX não sabe fazer, declarada no tipo (CTX-12).
+ *
+ * `cpf_dv`: trecho PONTUADO (`###.###.###-##`) vale como CPF pelo próprio formato, como
+ * sempre valeu; 11 dígitos CRUS só valem como CPF com dígito verificador válido — senão o
+ * trecho não é deste tipo e segue para a próxima regra (a do telefone, na ordem do
+ * catálogo). Medido em 2026-09-25 sobre as mensagens do demo: dos 11 dígitos crus que
+ * clientes digitaram, 46 eram CPF (DV válido, sem forma de celular) e iam para a trilha
+ * como `phone`; 144 eram celular (DV inválido); **0** tinham as duas formas — o DV
+ * separa as populações sem colisão, e a ORDEM das regras deixa de ser quem decide.
+ *
+ * ⚠️ Vive em QUATRO motores (rede do engine, `MaskingService`, channel-gateway via
+ * `plughub_contextstore.masking`, cópia do quality-ingest). O gate de paridade é
+ * `infra/test/probe_detect_validator_parity.sh` — sem ele os motores divergiriam calados,
+ * como os sete inventários de categoria já divergiram.
+ */
+export const DetectValidatorSchema = z.enum(["cpf_dv"])
+export type DetectValidator = z.infer<typeof DetectValidatorSchema>
+
+/** O trecho casado passa na conferência declarada? Sem validador ⇒ passa. */
+export function passesDetectValidator(validator: string | undefined, match: string): boolean {
+  if (!validator) return true
+  if (validator === "cpf_dv") {
+    if (!/^\d{11}$/.test(match)) return true          // pontuado: o formato identifica
+    if (/^(\d)\1{10}$/.test(match)) return false      // 000…0, 111…1: DV "válido" e falso
+    const dv = (n: number): number => {
+      let s = 0
+      for (let i = 0; i < n; i++) s += Number(match[i]) * (n + 1 - i)
+      const r = (s * 10) % 11
+      return r === 10 ? 0 : r
+    }
+    return dv(9) === Number(match[9]) && dv(10) === Number(match[10])
+  }
+  // Validador desconhecido: RECUSA o casamento — nome que nenhum motor conhece não
+  // pode virar "passa em tudo". O trecho segue para a próxima regra (nunca fica cru
+  // por isso: as regras seguintes continuam rodando).
+  return false
+}
+
 export const MaskingRuleSchema = z.object({
   pattern:              z.string().min(1),          // regex de detecção
   category:             DataCategorySchema,
   replacement:          z.string().min(1),          // placeholder para display humano puro (ex: "***.***.***-**")
   preserve_last_digits: z.number().int().min(0).optional(), // ex: 4 para cartão, 2 para CPF
+  /** CTX-12: conferência além da regex (`passesDetectValidator`). Ausente = só a regex. */
+  validator:            DetectValidatorSchema.optional(),
   /**
    * preserve_pattern: regex de extração do trecho visível quando não é sufixo numérico.
    * Ex: para e-mail — preserva domínio: "(@.+)$"
@@ -296,6 +337,12 @@ export const DataTypeFormatSchema = z.object({
   replacement:          z.string().optional(),
   preserve_last_digits: z.number().int().min(0).optional(),
   preserve_pattern:     z.string().optional(),
+  /**
+   * CTX-12: conferência que a regex não faz — o casamento só vale para este tipo se
+   * passar (`passesDetectValidator`). Ex.: `cpf_dv` separa CPF cru de telefone pelo
+   * dígito verificador, em vez de deixar a ORDEM das regras decidir.
+   */
+  detect_validator:     DetectValidatorSchema.optional(),
 })
 export type DataTypeFormat = z.infer<typeof DataTypeFormatSchema>
 
@@ -528,7 +575,10 @@ export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
       icon:  "🪪",
       formato: {
         display:              "###.###.###-##",
-        detect_pattern:       "\\b\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}\\b",
+        // CTX-12: aceita também os 11 dígitos CRUS — e o `detect_validator` só os deixa
+        // ser CPF com dígito verificador válido (senão seguem para o telefone).
+        detect_pattern:       "\\b(?:\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}|\\d{11})\\b",
+        detect_validator:     "cpf_dv",
         replacement:          "***.***.***.--",
         preserve_last_digits: 2,
       },
@@ -913,6 +963,7 @@ export const DEFAULT_MASKING_RULES: MaskingRule[] = DEFAULT_DATA_TYPE_CATALOG.ty
     }
     if (typeof t.formato.preserve_last_digits === "number") rule.preserve_last_digits = t.formato.preserve_last_digits
     if (typeof t.formato.preserve_pattern === "string")     rule.preserve_pattern     = t.formato.preserve_pattern
+    if (t.formato.detect_validator)                         rule.validator            = t.formato.detect_validator
     return rule
   })
 

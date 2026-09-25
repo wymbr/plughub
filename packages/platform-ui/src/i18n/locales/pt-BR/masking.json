@@ -30,6 +30,9 @@
       "display": "Exibe",
       "detects": "detecta",
       "declaredOnly": "declarado, não detecta",
+      "validator": {
+        "cpf_dv": "confere dígito verificador"
+      },
       "catalogMissing": "Catálogo ausente ou vazio (masking.types). Nenhum tipo declarado — isto não significa que não há mascaramento: significa que esta tela não sabe dizer qual.",
       "tokenFormat": "Formato do token inline",
       "tokenExplanation": "substituído por display_partial na entrega ao cliente via WebSocket. Resolvido para o valor original por roles autorizados via MCP tools."

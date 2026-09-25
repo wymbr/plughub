@@ -63,10 +63,14 @@ describe("a REDE dispensa conteúdo declarado — e só ele", () => {
 
   it("SEM carimbo, o roteiro é mascarado — é o defeito de 2026-09-10, virado teste", () => {
     // Controle que dá sentido a todos os outros: prova que este caminho PODE ficar
-    // vermelho, e mostra exatamente o dano medido (telefone sobre um pedido de CPF).
+    // vermelho. ⚠️ O GABARITO mudou em 2026-09-25 (CTX-12): o exemplo `52998224725` tem
+    // DV de CPF válido, e a rede passou a tipá-lo como CPF — antes saía o gabarito de
+    // TELEFONE sobre um pedido de CPF, que era o dano medido. A isenção continua sendo o
+    // que impede os dois: sem carimbo, a rede mascara o roteiro de qualquer jeito.
     const fora = String(filtrarTextoLivre(ROTEIRO, CLIENTE, REF))
     expect(fora).not.toBe(ROTEIRO)
-    expect(fora).toContain("(##) ****-####")
+    expect(fora).toContain("***.***.***.--")
+    expect(fora).not.toContain("(##) ****-####")
   })
 
   it("COM carimbo, o roteiro atravessa byte a byte", () => {
@@ -262,6 +266,6 @@ describe("de ponta a ponta: o roteiro chega ao cliente como foi escrito", () => 
     // desligasse a rede passaria no caso de cima.
     const fora = await mensagemAoCliente("customer_get")
     expect(fora).not.toBe(ROTEIRO)
-    expect(fora).toContain("(##) ****-####")
+    expect(fora).toContain("***.***.***.--")   // CTX-12: CPF com DV válido tipa como CPF
   })
 })

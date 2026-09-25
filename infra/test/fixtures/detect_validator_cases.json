@@ -1,0 +1,25 @@
+{
+  "_doc": "CTX-12 — fixture única do validador de DETECÇÃO (`cpf_dv`). Consumida por `_detect_runner.ts` (@plughub/schemas: passesDetectValidator + rede maskFreeText) e `_detect_runner.py` (plughub_contextstore.masking + cópia do quality-ingest). CPFs de exemplo com DV válido são sintéticos.",
+  "validator_cases": [
+    { "name": "cpf_cru_dv_valido",        "validator": "cpf_dv", "match": "52998224725" },
+    { "name": "cpf_cru_dv_errado",        "validator": "cpf_dv", "match": "52998224724" },
+    { "name": "celular_cru",              "validator": "cpf_dv", "match": "11987654321" },
+    { "name": "digitos_repetidos",        "validator": "cpf_dv", "match": "11111111111" },
+    { "name": "zeros",                    "validator": "cpf_dv", "match": "00000000000" },
+    { "name": "cpf_cru_dv_valido_zero",   "validator": "cpf_dv", "match": "12345678909" },
+    { "name": "pontuado_dv_errado",       "validator": "cpf_dv", "match": "123.456.789-00" },
+    { "name": "pontuado_dv_valido",       "validator": "cpf_dv", "match": "529.982.247-25" },
+    { "name": "nao_onze_digitos",         "validator": "cpf_dv", "match": "1198765432" },
+    { "name": "sem_validador",            "validator": null,     "match": "11987654321" },
+    { "name": "validador_desconhecido",   "validator": "xyz_dv", "match": "52998224725" }
+  ],
+  "text_cases": [
+    { "name": "texto_cpf_cru",            "text": "Meu CPF é 52998224725" },
+    { "name": "texto_celular_cru",        "text": "Meu celular é 11987654321" },
+    { "name": "texto_cpf_e_celular",      "text": "CPF 529.982.247-25 e celular 11987654321" },
+    { "name": "texto_cpf_cru_dv_errado",  "text": "CPF 52998224724" },
+    { "name": "texto_dois_cpfs_crus",     "text": "52998224725 e 12345678909" },
+    { "name": "texto_cartao",             "text": "cartão 4111 1111 1111 1111" },
+    { "name": "texto_sem_dado",           "text": "nada sensível aqui" }
+  ]
+}

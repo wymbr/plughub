@@ -633,7 +633,9 @@ _SEED: list[tuple[str, str, object, str]] = [
                     "id": "cpf", "label": "CPF", "icon": "🪪",
                     "formato": {
                         "display": "###.###.###-##",
-                        "detect_pattern": r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b",
+                        # CTX-12: 11 dígitos crus também, e só com DV válido.
+                        "detect_pattern": r"\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b",
+                        "detect_validator": "cpf_dv",
                         "replacement": "***.***.***.--",
                         "preserve_last_digits": 2,
                     },

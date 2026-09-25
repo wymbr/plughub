@@ -16,7 +16,7 @@
  */
 
 import type { MessageContent, MaskingConfig, MaskingRule, DataCategory, MaskingAccessPolicy, ContextMaskingConfig } from "@plughub/schemas"
-import { DEFAULT_MASKING_RULES, DEFAULT_CONTEXT_MASKING_CONFIG, ContextMaskingConfigSchema } from "@plughub/schemas"
+import { DEFAULT_MASKING_RULES, DEFAULT_CONTEXT_MASKING_CONFIG, ContextMaskingConfigSchema, passesDetectValidator } from "@plughub/schemas"
 import type { ParticipantRole } from "@plughub/schemas"
 import type { TokenVault }       from "./token-vault"
 
@@ -105,6 +105,9 @@ export class MaskingService {
         const match = matches[i]
         if (!match) continue
         const full_match = match[0]
+        // CTX-12: casamento que não passa no validador declarado NÃO é deste tipo — fica
+        // no texto para a próxima regra (CPF cru com DV inválido segue para o telefone).
+        if (!passesDetectValidator(rule.validator, full_match)) continue
         const start      = match.index ?? 0
         const end        = start + full_match.length
 

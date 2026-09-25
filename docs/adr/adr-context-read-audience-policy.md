@@ -356,6 +356,14 @@ autorizá-la.
   só melhora uma estimativa.
 - **"Existe a função" ≠ "ela roda aqui"**: o MSK-02 é a prova — o cartão chegou CRU ao
   stream canônico apesar de o padrão casar 16 dígitos.
+- **Forma sozinha não separa CPF cru de telefone** — 11 dígitos são as duas coisas, e a
+  ORDEM das regras decidia (tudo virava `phone`). Desde 2026-09-25 (CTX-12) o tipo declara
+  uma conferência que a regex não faz: `formato.detect_validator: cpf_dv` (dígito
+  verificador; pontuado vale pelo formato). Medido antes: 46 CPFs crus de clientes tipados
+  como telefone, 144 celulares, **0** com as duas formas. Vive nos quatro motores, com
+  paridade em `probe_detect_validator_parity.sh`. Continua sendo mitigação: um celular com
+  DV de CPF válido por acaso (~1 em 100) seria tipado como CPF — mascarado igual, só com a
+  categoria trocada.
 
 **O que a rede tem de bom, e foi o que destravou a F5:** ela é **idempotente**. Medido
 nos quatro tipos detectáveis — o valor cru casa, o já mascarado **não**:

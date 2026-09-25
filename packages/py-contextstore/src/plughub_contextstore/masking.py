@@ -37,6 +37,7 @@ from typing import Any, Mapping
 __all__ = [
     "CONTEXT_MASKING_TYPES",
     "apply_masking_type_to_value",
+    "passes_detect_validator",
     "resolve_mask_for_audience",
 ]
 
@@ -45,6 +46,32 @@ CONTEXT_MASKING_TYPES = (
     "plain", "hidden", "full", "last_2", "last_4",
     "first_1", "first_word", "email_domain", "financial",
 )
+
+
+def passes_detect_validator(validator: str | None, match: str) -> bool:
+    """CTX-12 — gêmeo de `passesDetectValidator` (@plughub/schemas/audit.ts).
+
+    `cpf_dv`: trecho pontuado vale como CPF pelo formato; 11 dígitos CRUS só com dígito
+    verificador válido (senão o trecho segue para a próxima regra — o telefone). Sem
+    validador ⇒ passa; validador DESCONHECIDO ⇒ recusa o casamento (nome que nenhum
+    motor conhece não vira "passa em tudo"). Paridade:
+    `infra/test/probe_detect_validator_parity.sh`.
+    """
+    if not validator:
+        return True
+    if validator == "cpf_dv":
+        if not (len(match) == 11 and match.isdigit() and match.isascii()):
+            return True                           # pontuado: o formato identifica
+        if match == match[0] * 11:
+            return False                          # 000…0, 111…1: DV "válido" e falso
+
+        def dv(n: int) -> int:
+            s = sum(int(match[i]) * (n + 1 - i) for i in range(n))
+            r = (s * 10) % 11
+            return 0 if r == 10 else r
+
+        return dv(9) == int(match[9]) and dv(10) == int(match[10])
+    return False
 
 
 def apply_masking_type_to_value(raw: str, mask: str) -> str:

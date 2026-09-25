@@ -26,15 +26,44 @@ class MaskingRule:
     replacement: str
     preserve_last_digits: int | None = None
     preserve_pattern: str | None = None
+    validator: str | None = None
+
+
+def passes_detect_validator(validator: str | None, match: str) -> bool:
+    """CTX-12 — CÓPIA de `passesDetectValidator` (@plughub/schemas/audit.ts).
+
+    Cópia porque este serviço não depende de `plughub-contextstore` (onde mora o gêmeo
+    do channel-gateway); a mesma dívida das regras acima. Quem impede a divergência é
+    `infra/test/probe_detect_validator_parity.sh`, que roda ESTA função sobre a fixture.
+
+    `cpf_dv`: pontuado vale pelo formato; 11 dígitos crus só com DV válido.
+    """
+    if not validator:
+        return True
+    if validator == "cpf_dv":
+        if not (len(match) == 11 and match.isdigit() and match.isascii()):
+            return True
+        if match == match[0] * 11:
+            return False
+
+        def dv(n: int) -> int:
+            s = sum(int(match[i]) * (n + 1 - i) for i in range(n))
+            r = (s * 10) % 11
+            return 0 if r == 10 else r
+
+        return dv(9) == int(match[9]) and dv(10) == int(match[10])
+    return False
 
 
 # Mirror of DEFAULT_MASKING_RULES (audit.ts) — LGPD + PCI-DSS aligned.
 DEFAULT_MASKING_RULES: list[MaskingRule] = [
     MaskingRule(
-        pattern=r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b",
+        # CTX-12: também os 11 dígitos CRUS, que só são CPF com DV válido.
+        pattern=r"\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b",
         category="cpf",
         replacement="***.***.***.--",
         preserve_last_digits=2,
+        validator="cpf_dv",
     ),
     MaskingRule(
         pattern=r"\b(?:\d{4}[\s-]?){3}\d{4}\b",
@@ -111,10 +140,19 @@ def mask_text(
     masked = text
     for rule in active:
         compiled = re.compile(rule.pattern)
-        if not compiled.search(masked):
-            continue
-        if rule.category not in detected:
+        casou = False
+
+        def _troca(m: "re.Match[str]", r: MaskingRule = rule) -> str:
+            nonlocal casou
+            # CTX-12: casamento que não passa no validador fica INTACTO para a próxima
+            # regra — e não conta como categoria detectada.
+            if not passes_detect_validator(r.validator, m.group(0)):
+                return m.group(0)
+            casou = True
+            return _mask_match(m.group(0), r)
+
+        masked = compiled.sub(_troca, masked)
+        if casou and rule.category not in detected:
             detected.append(rule.category)
-        masked = compiled.sub(lambda m, r=rule: _mask_match(m.group(0), r), masked)
 
     return masked, detected

@@ -97,6 +97,22 @@ describe("MSK-04 — message_send mascara todo papel e nunca degrada para o orig
     expect(analitico()).toContain("[cpf:tk_")
   })
 
+  // CTX-12: 11 dígitos CRUS — o DV decide a categoria, não a ordem das regras.
+  it("CPF CRU com DV válido vira token de CPF — não de telefone", async () => {
+    await send(msg("Meu CPF é 52998224725"))
+    const c = JSON.stringify((await noStream())["content"])
+    expect(c).toContain("[cpf:tk_")
+    expect(c).not.toContain("[phone:tk_")
+    expect(c).not.toContain("52998224725")
+  })
+
+  it("celular CRU (DV de CPF inválido) continua token de TELEFONE", async () => {
+    await send(msg("Meu celular é 11987654321"))
+    const c = JSON.stringify((await noStream())["content"])
+    expect(c).toContain("[phone:tk_")
+    expect(c).not.toContain("[cpf:tk_")
+  })
+
   it("TESTEMUNHA: texto sem dado sensível sai intacto nos dois destinos", async () => {
     await send(msg("Vou verificar e já retorno"))
     const p = await noStream()

@@ -48,7 +48,7 @@ from plughub_contextstore import resolve_context_tag
 from plughub_contextstore.writer import write_context_tags
 from plughub_contextstore.loader import get_context_map, get_masking_catalog
 from plughub_contextstore.masking import (
-    apply_masking_type_to_value, resolve_mask_for_audience,
+    apply_masking_type_to_value, passes_detect_validator, resolve_mask_for_audience,
 )
 import os
 import re
@@ -163,7 +163,9 @@ async def store_key_for_context_entry(tenant_id: str, key: str) -> str:
 _PII_RULES: list[dict[str, Any]] = [
     {
         "category":             "cpf",
-        "pattern":              re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),
+        # CTX-12: também os 11 dígitos CRUS, que só são CPF com DV válido (validator).
+        "pattern":              re.compile(r"\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b"),
+        "validator":            "cpf_dv",
         "replacement":          "***.***.***.--",
         "preserve_last_digits": 2,
     },
@@ -393,7 +395,14 @@ def _mask_pii(value: Any) -> str | None:
         return None
     s = str(value)
     for rule in _PII_RULES:
-        s = rule["pattern"].sub(lambda m, r=rule: _mask_match(m.group(0), r), s)
+        # CTX-12: casamento que não passa no validador NÃO é deste tipo — fica intacto
+        # para a próxima regra (CPF cru com DV inválido segue para o telefone).
+        s = rule["pattern"].sub(
+            lambda m, r=rule: (_mask_match(m.group(0), r)
+                               if passes_detect_validator(r.get("validator"), m.group(0))
+                               else m.group(0)),
+            s,
+        )
     return s
 
 
