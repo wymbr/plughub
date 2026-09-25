@@ -551,6 +551,14 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     NotificationSendInputSchema.shape as any,
     withGuard("notification_send", async (input: Record<string, unknown>) => {
       const parsed = NotificationSendInputSchema.parse(input)
+      // ⚠️ MSK-04 (2026-09-25): este tool NÃO mascara o `message`, e é DECISÃO. Todos
+      // os chamadores são steps do skill-flow-engine, e o engine é a saída que tem
+      // PROVENIÊNCIA: aplica a máscara por tipo declarado (`by_role`) e a rede de
+      // texto livre na interpolação, e isenta o roteiro publicado (`form_get`). Aqui
+      // não se sabe o que é roteiro — uma rede neste ponto mascararia de novo o
+      // exemplo de formato do DialogForm, que é o dano medido da CTX-11. Medido antes
+      // de decidir: 0 dado real em claro em 3 816 mensagens de agente desde 05/09.
+      // Chamador NOVO que não seja o engine tem de passar pelo mesmo filtro antes.
       if (parsed.menu?.options) {
         parsed.menu.options = oneLevelMenuOptions(parsed.menu.options, parsed.session_id)
       }

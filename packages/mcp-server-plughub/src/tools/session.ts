@@ -26,6 +26,7 @@ import {
   MessageVisibilitySchema,
   ChannelSchema,
   StreamEventTypeSchema,
+  maskFreeText,
 } from "@plughub/schemas"
 import type { RedisClient }   from "../infra/redis"
 import type { KafkaProducer } from "../infra/kafka"
@@ -484,37 +485,49 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           })
         }
 
-        // ── Mascaramento LGPD com tokenização ────────────────────────────────
-        // Aplica MaskingService ao conteúdo antes de gravar no stream.
-        // Mensagens de agentes (role !== "customer") não são mascaradas —
-        // dados sensíveis vêm do cliente, não do agente.
+        // ── Mascaramento LGPD com tokenização — TODA mensagem, qualquer papel ──
+        // MSK-04 (2026-09-25). Antes só `customer`/`primary` eram mascarados, sob um
+        // comentário que dizia o contrário ("mensagens de agentes não são mascaradas"):
+        // um especialista em conferência — humano ou IA — gravava CPF em claro. O papel
+        // não é critério: quem escreve o dado não muda o que o dado é. E a falha era um
+        // `catch {}` que entregava o ORIGINAL; hoje ela é logada e degrada para a rede
+        // pura (`maskFreeText`, sem cofre e sem I/O), que mascara de forma irreversível.
         const SESSION_TTL = 14400  // 4h — TTL padrão de sessão
-        const vault = new TokenVault({ redis })
-        const maskingConfig = await MaskingService.loadConfig(redis, tenant_id)
-
+        const logCtx = `session=${session_id} role=${role}`
         let finalContent   = conteudoEntregue
         let originalContent: typeof content | undefined
         let masked          = false
         let maskedCategories: string[] = []
 
-        // Aplica mascaramento apenas em mensagens do cliente (role === "customer")
-        // ou quando não é possível determinar o role (fallback seguro: aplica)
-        if (role === "customer" || role === "primary") {
-          try {
-            const maskResult = await MaskingService.applyMasking(
-              conteudoEntregue,
-              maskingConfig,
-              vault,
-              tenant_id,
-              SESSION_TTL
-            )
-            if (maskResult.masked) {
-              finalContent    = maskResult.tokenized_content
-              originalContent = maskResult.original_content
-              masked          = true
-              maskedCategories = maskResult.categories_detected
-            }
-          } catch { /* mascaramento não-fatal — entrega conteúdo original */ }
+        try {
+          const vault = new TokenVault({ redis })
+          const maskingConfig = await MaskingService.loadConfig(redis, tenant_id)
+          const maskResult = await MaskingService.applyMasking(
+            conteudoEntregue,
+            maskingConfig,
+            vault,
+            tenant_id,
+            SESSION_TTL,
+            logCtx,
+          )
+          if (maskResult.masked) {
+            finalContent    = maskResult.tokenized_content
+            originalContent = maskResult.original_content
+            masked          = true
+            maskedCategories = maskResult.categories_detected
+          }
+        } catch (maskErr) {
+          const rede = maskFreeText(conteudoEntregue)
+          console.error(
+            `[message_send] mascaramento FALHOU ${logCtx} ` +
+            `(${maskErr instanceof Error ? maskErr.message : String(maskErr)}) — ` +
+            `degradado para a rede pura: categorias=[${[...new Set(rede.categories)].join(",")}] ` +
+            `mascaradas SEM token (irreversível); o original NÃO é gravado`)
+          if (rede.categories.length > 0) {
+            finalContent     = rede.value as typeof conteudoEntregue
+            masked           = true
+            maskedCategories = [...new Set(rede.categories)]
+          }
         }
 
         const payload = {
@@ -563,10 +576,10 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
               session_id,
               timestamp,
               author: event.author,
-              content,
+              content:    finalContent,
               visibility: effectiveVisibility,
-              masked:            false,
-              masked_categories: [],
+              masked,
+              masked_categories: maskedCategories,
             })
           )
         }
@@ -574,6 +587,9 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         // ── Publicar no Kafka ─────────────────────────────────────────────
         // Publish to conversations.events (same topic as contact_open/contact_closed)
         // so the analytics-api consumer can populate the ClickHouse messages table.
+        // ⚠️ MSK-04: vai o conteúdo MASCARADO. Publicava o `content` original — o stream
+        // guardava o token e o ClickHouse, o valor em claro, sem papel que o limitasse.
+        // O original só existe no `original_content` do stream, sob `authorized_roles`.
         await kafka.publish("conversations.events", {
           event_type: "message_sent",
           event_id,
@@ -583,8 +599,8 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           author_id:   participant_id,
           author_role:  event.author?.role ?? "",
           participant_id,
-          content:      typeof content === "string" ? content : JSON.stringify(content),
-          content_type: typeof content === "object" ? "json" : "text",
+          content:      typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent),
+          content_type: typeof finalContent === "object" ? "json" : "text",
           visibility: effectiveVisibility,
           timestamp,
         })

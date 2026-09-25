@@ -47,6 +47,7 @@ import { resolveInputMap }               from "../interpolate"
 import { extractOutputsToCtx }           from "../context-accumulator-util"
 import { redisKeys }                     from "../redis-keys"
 import { parseSignal }                   from "./signals"
+import { filtrarTextoLivre }             from "../ctx-audit"
 
 // ── Tipo de saída do resolve step ──────────────────────────────────────────────
 
@@ -169,10 +170,19 @@ export async function executeResolve(
   // ─────────────────────────────────────────────────────────────────────────
   // Fase 4 — Enviar pergunta e aguardar resposta (mesmo padrão do menu step)
   // ─────────────────────────────────────────────────────────────────────────
+  // MSK-04: a pergunta é TEXTO GERADO pelo LLM, com o contexto do cliente no prompt,
+  // e vai ao cliente (`all`). Era o único texto de agente do engine que chegava ao
+  // `notification_send` sem passar pela rede. Sem proveniência declarada: a rede
+  // sempre roda (a isenção de roteiro publicado não se aplica a saída de modelo).
+  const perguntaFiltrada = String(filtrarTextoLivre(
+    pergunta,
+    { stepType: "notify", visibility: "all", stepId: step.id },
+    `resolve:${step.id}.pergunta`,
+  ))
   try {
     await ctx.mcpCall("notification_send", {
       session_id: ctx.sessionId,
-      message:    pergunta,
+      message:    perguntaFiltrada,
       channel:    "session",
       visibility: "all",
     })

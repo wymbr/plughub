@@ -58,7 +58,9 @@ export class MaskingService {
     config:     MaskingConfig | null,
     vault:      TokenVault,
     tenantId:   string,
-    ttlSeconds: number
+    ttlSeconds: number,
+    /** Onde a máscara roda (ex.: `session=… role=…`) — só para o log de degradação. */
+    logCtx:     string = "",
   ): Promise<MaskingResult> {
     // Apenas texto é processado
     if (content.type !== "text" || !content.text) {
@@ -87,7 +89,11 @@ export class MaskingService {
       try {
         regex = new RegExp(rule.pattern, "g")
       } catch {
-        // Regex inválida — ignora esta regra (não deve acontecer com defaults)
+        // Regex inválida — a regra SAI, e isso é dito: uma categoria que deixa de ser
+        // mascarada em silêncio é o vazamento com cara de "nada a mascarar" (MSK-04).
+        console.error(
+          `[masking] regra IGNORADA — regex inválida categoria=${rule.category} ${logCtx}: ` +
+          `esta categoria NÃO está sendo mascarada nesta mensagem`)
         continue
       }
 
@@ -105,19 +111,32 @@ export class MaskingService {
         // Calcula display parcial
         const display = MaskingService.buildDisplay(full_match, rule)
 
-        // Gera token no vault
-        const token = await vault.generate(
-          tenantId,
-          rule.category,
-          full_match,
-          display,
-          ttlSeconds
-        )
+        // Gera token no vault. Se o cofre falhar, o trecho sai só com o display —
+        // máscara IRREVERSÍVEL (a tool não resolve o valor), nunca o valor cru, e o
+        // log nomeia a categoria (MSK-04: antes a exceção subia ao `catch {}` do
+        // chamador, que entregava a mensagem ORIGINAL).
+        let inline: string
+        try {
+          const token = await vault.generate(
+            tenantId,
+            rule.category,
+            full_match,
+            display,
+            ttlSeconds
+          )
+          inline = token.inline
+        } catch (e) {
+          console.error(
+            `[masking] cofre de tokens FALHOU categoria=${rule.category} ${logCtx} ` +
+            `(${e instanceof Error ? e.message : String(e)}) — trecho mascarado SEM token ` +
+            `(irreversível): nenhuma tool poderá resolver este valor`)
+          inline = display
+        }
 
         // Substitui no texto tokenizado
         tokenized_text =
           tokenized_text.slice(0, start) +
-          token.inline +
+          inline +
           tokenized_text.slice(end)
 
         if (!categories_detected.includes(rule.category)) {

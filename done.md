@@ -556,3 +556,9 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | id | tarefa | data | ancora |
 |---|---|---|---|
 | AUD-05 | A linha da trilha LGPD vai para o tenant cujo dado foi lido, não o da query | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (3) |
+
+## `docs/adr/adr-message-masking.md` — mascaramento de mensagem
+
+| id | tarefa | data | ancora |
+|---|---|---|---|
+| MSK-04 | Texto de agente mascarado em toda saída: `resolve`/`suspend` pela rede do engine, `message_send` em todo papel, ClickHouse tokenizado, falha nunca entrega o original | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (4) |

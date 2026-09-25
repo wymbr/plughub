@@ -422,3 +422,34 @@ describe("MEN-07 — resolve: texto com a forma de interrupção na fila de RESP
     expect(redisMock.blpop.mock.calls[0]![0]).toContain("menu:signal:s1:agente_sac_v1-001")
   })
 })
+
+// ─────────────────────────────────────────────
+// MSK-04 — a pergunta GERADA pelo LLM passa pela rede antes de ir ao cliente
+// ─────────────────────────────────────────────
+
+describe("MSK-04 — resolve: pergunta do LLM filtrada", () => {
+  function perguntaEnviada(ctx: StepContext): string {
+    const call = (ctx.mcpCall as ReturnType<typeof vi.fn>).mock.calls
+      .find(c => c[0] === "notification_send")
+    return String((call![1] as Record<string, unknown>)["message"])
+  }
+
+  it("CPF e cartão que o LLM ecoa NÃO chegam ao cliente", async () => {
+    const ctx = makeCtx({
+      aiGatewayCall: vi.fn()
+        .mockResolvedValueOnce({ pergunta: "Confirma o CPF 529.982.247-25 e o cartão 4111 1111 1111 1111?" })
+        .mockResolvedValueOnce({ fields: {} }),
+    })
+    await executeResolve(makeStep(), ctx)
+    const p = perguntaEnviada(ctx)
+    expect(p).not.toContain("529.982.247-25")
+    expect(p).not.toContain("4111 1111 1111 1111")
+    expect(p.startsWith("Confirma o CPF ")).toBe(true)
+  })
+
+  it("pergunta sem dado sensível sai INTACTA", async () => {
+    const ctx = makeCtx()
+    await executeResolve(makeStep(), ctx)
+    expect(perguntaEnviada(ctx)).toBe("Qual é o seu nome e motivo do contato?")
+  })
+})

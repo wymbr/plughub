@@ -1,5 +1,48 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (4) — MSK-04: texto de agente mascarado em toda saída, e a falha nunca entrega o original
+
+**A ficha estava certa no código que olhou e errada no dano.** Ela mediu o mcp-server
+(`notification_send` sem `MaskingService`; `message_send` só para `customer`/`primary`; `catch {}`)
+e concluiu por um ponto único de saída no tool. Faltava a camada do engine: desde a F3/F5 do
+`adr-context-read-audience-policy` (2026-09-04/05), a interpolação de `notify`/`menu` aplica a
+máscara por tipo declarado (`by_role`) e a rede de texto livre, isentando o roteiro publicado.
+
+**Medido antes de decidir** (`plughub_demo.messages`, mensagens de agente):
+- total: **383 de 5 297** com padrão detectável, **0** tokenizadas; mas ~365 são exemplo de
+  formato de prompt (`ex: 11999999999`, 219 num prompt que pede CPF — a CTX-12);
+- cartão completo interpolado de `session.numero_cartao`: **16 até 04/09, 0 depois** (106
+  mascarados) — o leitor por plateia funciona onde é aplicado;
+- **desde 05/09: 0 dado real em claro em 3 816 mensagens.** O que casa são os 245 exemplos de
+  roteiro publicado, que o engine isenta de propósito.
+
+Logo, **uma rede no `notification_send` mascararia de novo esses 245 exemplos** (a CTX-11) — ali
+não se sabe o que é roteiro. Ele fica sem máscara própria, por decisão escrita no código. Os
+buracos reais eram outros três, e foram fechados:
+
+1. **`resolve`**: a pergunta **gerada pelo LLM** ia ao cliente sem filtro — agora passa por
+   `filtrarTextoLivre`, sem isenção (saída de modelo não tem proveniência).
+2. **`suspend`**: o `notify` tinha interpolação própria, fora do filtro — cada valor substituído
+   passa pela rede, com a isenção de conteúdo declarado; o `resume_token` fica fora (é credencial).
+3. **`message_send`**: mascara **todo papel** (um especialista gravava CPF em claro); o
+   `conversations.events` → ClickHouse leva o conteúdo **mascarado** (levava o original); a falha
+   do cofre num trecho sai só com o display, irreversível, com log de categoria e sessão; qualquer
+   outra falha degrada para a rede pura (`maskFreeText`) com log; regex inválida é logada.
+
+**Testes:** `message-send-masking.test.ts` (4, novo), `suspend.test.ts` +3, `resolve.test.ts` +2 —
+cada um com a testemunha de que texto limpo, roteiro declarado e `resume_token` passam intactos.
+Suítes inteiras: engine 305/305, mcp-server 508/508, `tsc` limpo nos dois. **Bateria de mutação:
+7 de 7 vermelhas** — a M4 (falha do cofre subindo ao handler) sobreviveu na primeira rodada,
+porque a rede pura mascara igual; o teste passou a exigir que a falha seja contida no trecho.
+
+**Achado de passagem:** os testes da SFE-01 (commit `1cf09ec2`) tinham 3 erros de `tsc` que o
+vitest não vê — corrigidos aqui.
+
+**O que ficou de fora, por decisão do dono:** a exibição do dado detectado seguir o `by_role` de
+`/config/masking` nos dois caminhos — hoje são duas exibições, nenhuma do catálogo. Deixou ficha:
+**MSK-05**. Não rebuildado: vale para `skill-flow-service` e `mcp-server` no próximo build.
+Doc: `docs/adr/adr-message-masking.md` § *Mensagem de AGENTE — onde a máscara mora*.
+
 ## 2026-09-25 (3) — AUD-05: a linha da trilha LGPD vai para o tenant cujo dado foi lido
 
 **O defeito.** `_record_access` (`analytics-api/audit.py`) gravava `tenant_id` de

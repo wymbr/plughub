@@ -392,3 +392,51 @@ describe("executeSuspend — Arc 19 webhook path (persistSuspendWebhook)", () =>
     expect(ctx.state.results["aguardar_aprovacao:__suspended__"]).toBe("suspended")
   })
 })
+
+// ─────────────────────────────────────────────
+// MSK-04 — o notify do suspend passa pela MESMA rede do interpolate
+// ─────────────────────────────────────────────
+//
+// Era o único texto de agente do engine que chegava ao `notification_send` sem filtro:
+// o suspend tem interpolação própria. Os casos vêm em pares — só o "mascara" passaria
+// com uma rede que mascarasse tudo, inclusive o link de retomada.
+
+describe("executeSuspend — MSK-04: rede no texto interpolado", () => {
+  const CPF = "529.982.247-25"
+
+  function mensagem(ctx: StepContext): string {
+    const call = (ctx.mcpCall as ReturnType<typeof vi.fn>).mock.calls
+      .find(c => c[0] === "notification_send")
+    return String((call![1] as Record<string, unknown>)["message"])
+  }
+
+  it("mascara CPF vindo de pipeline_state", async () => {
+    const s: SuspendStep = { ...step, notify: { visibility: "agents_only",
+      text: "Aprovar pedido do CPF {{$.pipeline_state.cpf_cliente}}" } }
+    const ctx = makeCtx({ state: makeState({ cpf_cliente: CPF }) })
+    await executeSuspend(s, ctx)
+    expect(mensagem(ctx)).not.toContain(CPF)
+    expect(mensagem(ctx)).toContain("Aprovar pedido do CPF ")
+  })
+
+  it("texto sem dado sensível e o resume_token passam INTACTOS", async () => {
+    const s: SuspendStep = { ...step, notify: { visibility: "agents_only",
+      text: "Pedido {{$.session.order_id}} — token {{resume_token}}" } }
+    const ctx = makeCtx()
+    await executeSuspend(s, ctx)
+    const msg = mensagem(ctx)
+    expect(msg.startsWith("Pedido ORD-123 — token ")).toBe(true)
+    expect(msg.slice("Pedido ORD-123 — token ".length)).toHaveLength(36)
+  })
+
+  it("conteúdo DECLARADO (roteiro publicado) não é mascarado pela rede", async () => {
+    const s: SuspendStep = { ...step, notify: { visibility: "all",
+      text: "{{$.pipeline_state.dialog.exemplo}}" } }
+    const ctx = makeCtx({ state: makeState({
+      dialog: { exemplo: "Informe o CPF (ex: 52998224725)" },
+      __declared_content__: ["dialog"],
+    }) })
+    await executeSuspend(s, ctx)
+    expect(mensagem(ctx)).toBe("Informe o CPF (ex: 52998224725)")
+  })
+})

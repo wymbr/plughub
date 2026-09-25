@@ -106,11 +106,34 @@ coincidem — sem configuração adicional.
 
 ### `mcp-server-plughub` — `tools/session.ts`
 
-- `message_send`: aplica `MaskingService.applyMasking` antes de gravar no stream
+- `message_send`: aplica `MaskingService.applyMasking` antes de gravar no stream, **a
+  toda mensagem, qualquer papel** (MSK-04, 2026-09-25 — antes só `customer`/`primary`)
 - `session_context_get`: monta objeto de mensagem completo combinando campos do stream
   (`event_id → message_id`, `timestamp`, `author`, `visibility`) com o `payload`
   (content, original_content, masked, masked_categories) — garante que `MessageSchema`
   seja satisfeito e que `original_content` flua para roles autorizados
+
+## Mensagem de AGENTE — onde a máscara mora *(MSK-04, 2026-09-25)*
+
+Texto de agente sai por dois caminhos, e cada um tem a sua casa, **uma só**:
+
+| caminho | quem escreve | onde se mascara | por quê ali |
+|---|---|---|---|
+| `notification_send` | steps do engine (`notify`, `menu`, `receive`, `resolve`, `suspend`) | **no engine**, na interpolação: máscara por tipo declarado (`by_role`) e rede de texto livre, com isenção de roteiro publicado | só o engine sabe a PROVENIÊNCIA; o tool não mascara, por decisão (comentário em `tools/bpm.ts`) |
+| `message_send` | atendente humano, especialista, qualquer papel | no tool, por `MaskingService` (token + `original_content`) | não há template nem proveniência; o texto chega pronto |
+
+- **O `notification_send` não ganha rede própria.** Ela mascararia de novo o exemplo de
+  formato do DialogForm (o dano da CTX-11). Medido antes de decidir: **0 dado real em
+  claro em 3 816 mensagens de agente** desde 2026-09-05. Um chamador NOVO do tool que não
+  seja o engine tem de passar pelo mesmo filtro antes.
+- **O `conversations.events` (→ ClickHouse `messages`) leva o conteúdo MASCARADO.** Levava o
+  original, e o dado ia em claro para o analítico sem papel que o limitasse.
+- **Falha nunca entrega o original.** Cofre falhou num trecho → o trecho sai só com o display
+  (irreversível) e o log nomeia categoria e sessão. Qualquer outra falha → a rede pura
+  (`maskFreeText`, sem I/O) e log. Regra de regex inválida também é logada.
+- ⚠️ **Dívida aberta: a exibição da detecção NÃO segue o `by_role`** (MSK-05). A rede do engine
+  usa o `replacement` da regra e o `MaskingService`, o `preserve_last_digits` — duas
+  exibições para a mesma categoria, nenhuma lida de `/config/masking`.
 
 ## Redis keys
 
@@ -127,5 +150,9 @@ coincidem — sem configuração adicional.
   o backend. Sem isso, o agente precisaria passar o token_id explicitamente.
 - **Channel Gateway display**: ao renderizar mensagens para o cliente humano na tela,
   o Channel Gateway pode exibir apenas o `display_partial` sem o wrapper `[...]`.
+  ⚠️ *Medido em 2026-09-25:* só o webchat (`stream_subscriber._strip_tokens`) faz isso;
+  o `conversations.outbound` dos outros canais e o `prompt` de menu não têm leitor que
+  tire o token — hoje não chega token a eles porque o engine não tokeniza, só mascara.
+  Entra na MSK-05.
 - **Masking config UI**: interface no Agent Registry para o tenant configurar suas
   próprias regras de mascaramento além dos defaults.

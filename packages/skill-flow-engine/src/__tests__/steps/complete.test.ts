@@ -83,7 +83,7 @@ describe("executeComplete", () => {
 // SFE-01: o fallback para o literal nunca é mudo — e o caminho válido não loga
 // (testemunha: sem ela, um warn incondicional passaria nos ramos de fallback).
 describe("executeComplete — fallback barulhento (SFE-01)", () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.restoreAllMocks() })
 
   const step: CompleteStep = {
     id: "fin", type: "complete", outcome: "resolved",
@@ -94,7 +94,7 @@ describe("executeComplete — fallback barulhento (SFE-01)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     executeComplete(step, makeCtx({ wrapup_classificacao: "escalated_humano" }))
     expect(warn).toHaveBeenCalledTimes(1)
-    const msg = String(warn.mock.calls[0][0])
+    const msg = String(warn.mock.calls[0]![0])
     expect(msg).toContain("wrapup_classificacao")
     expect(msg).toContain("escalated_humano")
     expect(msg).toContain('"resolved"')
@@ -105,7 +105,7 @@ describe("executeComplete — fallback barulhento (SFE-01)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     executeComplete(step, makeCtx({ outra_chave: "escalated" }))
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0][0])).toContain("ausente")
+    expect(String(warn.mock.calls[0]![0])).toContain("ausente")
   })
 
   it("loga valor não-string", () => {

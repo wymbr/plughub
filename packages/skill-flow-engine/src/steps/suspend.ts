@@ -41,6 +41,8 @@
 import { randomUUID }      from "crypto"
 import type { SuspendStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
+import { filtrarTextoLivre, type SitioInterpolacao } from "../ctx-audit"
+import { PipelineStateManager } from "../state"
 
 /** Regex for {{resume_token}} and {{$.pipeline_state.*}} interpolation */
 const INTERPOLATION_REGEX = /\{\{([\$\.a-zA-Z_][^}]*)\}\}/g
@@ -231,7 +233,9 @@ export async function executeSuspend(
   // ── Send notification if configured ──────────────────────────────────────
   if (step.notify) {
     try {
-      const message = _interpolate(step.notify.text, ctx, resumeToken)
+      const message = _interpolate(step.notify.text, ctx, resumeToken, {
+        stepType: "notify", visibility: step.notify.visibility ?? "agents_only", stepId: step.id,
+      })
       await ctx.mcpCall("notification_send", {
         session_id:  ctx.sessionId,
         message,
@@ -270,21 +274,39 @@ export async function executeSuspend(
  *   {{$.resume_token}}          → same
  *   {{$.pipeline_state.field}}  → value from pipeline_state.results
  *   {{$.session.field}}         → value from sessionContext
+ *
+ * Interpolação própria do `suspend` — e por isso ela tem de aplicar o MESMO filtro de
+ * plateia que o `interpolate` compartilhado (MSK-04): antes, o `notify` do suspend era
+ * o único texto de agente do engine que chegava ao `notification_send` sem rede. Cada
+ * valor substituído passa por `filtrarTextoLivre`, com a isenção de conteúdo declarado.
+ * O `resume_token` fica FORA: é credencial de retomada, não dado de cliente, e
+ * mascará-lo quebraria o link que a mensagem existe para entregar.
  */
-function _interpolate(template: string, ctx: StepContext, resumeToken: string): string {
+function _interpolate(
+  template:    string,
+  ctx:         StepContext,
+  resumeToken: string,
+  sitio:       SitioInterpolacao,
+): string {
+  const declaradas = PipelineStateManager.chavesDeclaradas(ctx.state)
   return template.replace(INTERPOLATION_REGEX, (_, path: string) => {
     const normalised = path.replace(/^\$\./, "")
     if (normalised === "resume_token") return resumeToken
-
-    const parts = normalised.split(".")
-    let current: unknown = {
-      pipeline_state: ctx.state.results,
-      session:        ctx.sessionContext,
-    }
-    for (const part of parts) {
-      if (current == null || typeof current !== "object") return ""
-      current = (current as Record<string, unknown>)[part]
-    }
-    return current != null ? String(current) : ""
+    const valor = _resolvePath(normalised, ctx)
+    const filtrado = filtrarTextoLivre(valor, sitio, `$.${normalised}`, declaradas)
+    return filtrado != null ? String(filtrado) : ""
   })
+}
+
+function _resolvePath(normalised: string, ctx: StepContext): unknown {
+  const parts = normalised.split(".")
+  let current: unknown = {
+    pipeline_state: ctx.state.results,
+    session:        ctx.sessionContext,
+  }
+  for (const part of parts) {
+    if (current == null || typeof current !== "object") return ""
+    current = (current as Record<string, unknown>)[part]
+  }
+  return current != null ? String(current) : ""
 }
