@@ -1,5 +1,26 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (16) — CTX-13: o catálogo vivo passa a descrever a detecção que roda
+
+O rebuild da rodada (13) já tinha posto o validador `cpf_dv` nos quatro motores; faltava o
+`masking.types` vivo, que é seed-if-absent e seguia com o padrão antigo e sem `detect_validator`
+— a tela `/config/masking` lia um catálogo que descrevia uma detecção diferente da que rodava.
+
+O `PUT` exige `X-Admin-Token`, então foi o dono quem rodou o script (`ctx13_put.sh`, que relê o
+catálogo inteiro e muda só o `cpf.formato`). Resposta `200`, gravado na camada `__global__`,
+`shadowed_by: []` — nenhum override de tenant o encobre (a proveniência já dizia `effective_scope:
+global`, `tenant_present: false`).
+
+**Conferido depois, contra a autoridade e não só contra o que o script escreveu:** o catálogo vivo
+comparado ao `DEFAULT_DATA_TYPE_CATALOG` tipo a tipo — 15 × 15, sem extra, e o `formato` bate em
+todos. `probe_masking_types_seed_parity.sh` e `probe_detect_validator_parity.sh` verdes. O selo
+da tela lê `detect_validator` do catálogo vivo; não o vi renderizado (a tela exige login).
+
+**A comparação achou a única divergência que resta, e ela não é da CTX-13:** 8 tipos carregam
+`display.echo_to_operator`, campo que o código perdeu na ALW-17 (2026-09-12). Inerte — ninguém o
+lê —, mas é dado vivo descrevendo mecanismo inexistente. Deixou ficha: `ALW-21`, com o script do
+mesmo molde pronto.
+
 ## 2026-09-25 (15) — SFE-06: os três pools que faltavam recebem o `issue_status`, e as duas premissas da ficha caem
 
 **As duas razões pelas quais os três ficaram de fora estavam erradas — e as duas eram minhas.**
