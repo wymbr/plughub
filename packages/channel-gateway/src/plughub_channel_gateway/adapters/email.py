@@ -62,6 +62,8 @@ from ..models import (
     NormalizedInboundEvent,
 )
 from ..option_tree import note_dropped_descriptions
+from ..collect_core import options_from_menu
+from .. import text_menu
 from .base import ChannelAdapter
 from .email_provider import (
     EmailAttachment,
@@ -139,6 +141,8 @@ class EmailAdapter(ChannelAdapter):
         self._settings         = settings
         self._attachment_store = attachment_store
         self._provider         = provider
+        # NIV-15: o menu de ESCOLHA em aberto — o e-mail numera, e só ele sabe o que "2" quer dizer
+        self._pending          = text_menu.PendingMenu(redis, "email", _MENU_COLLECT_TTL)
 
     # ── Inbound — called from FastAPI webhook route ───────────────────────────
 
@@ -218,6 +222,14 @@ class EmailAdapter(ChannelAdapter):
                 payload["collect_token"] = pending.get("collect_token")
                 payload["response_text"] = new_text
                 await self._publish_inbound(payload)
+            elif (form_raw := await self._redis.get(f"channel:email:{session_id}:menu_collect")):
+                # NIV-15: resposta a um campo do formulário em curso — era gravado e NINGUÉM lia
+                await self._advance_form(session_id, parsed.from_address, json.loads(form_raw), new_text)
+            elif (escolha := await self._pending.answer(
+                    session_id, new_text, also=(_first_line(new_text),))) is not None:
+                # NIV-15: resposta ao menu de escolha em aberto → o id da opção. O que não nomeia
+                # opção segue como texto: o motor recusa e reenvia o menu (NIV-13).
+                await self._publish_menu_result(parsed.from_address, session_id, escolha)
             else:
                 # Publish normalised event
                 event = NormalizedInboundEvent(
@@ -438,67 +450,115 @@ class EmailAdapter(ChannelAdapter):
 
     async def deliver_menu(self, payload: dict) -> None:
         """
-        Deliver a menu as numbered plain text list in an email.
-        For single-field menus: sends numbered options in email body.
-        For multi-field menus: sends each field as a separate paragraph.
+        O menu por e-mail, em texto.
+
+        NIV-15: lia `payload["content"]` (título e campos aninhados), formato que ninguém publica:
+        o `menu.payload` é PLANO (`interaction`, `prompt`, `options`, `fields`). O corpo saía
+        vazio, o `deliver_text` recusava, e um estado de coleta era gravado sem que nenhum caminho
+        o lesse — nenhum menu chegava e nenhum `menu_result` saía.
+          · escolha (`button`/`list`/`checklist`) → texto numerado + menu em aberto (`text_menu`);
+          · formulário (`fields`) → um e-mail por campo, respostas guardadas até o último;
+          · texto → o prompt.
+        Campo mascarado não chega aqui: `email` não declara `masked_input`, e o deploy recusa.
         """
-        contact_id = payload.get("contact_id", "")
-        session_id = payload.get("session_id", "")
-        tenant_id  = payload.get("tenant_id", self._settings.tenant_id)
-        menu       = payload.get("content", {})
-        meta       = payload.get("metadata", {})
+        contact_id  = payload.get("contact_id", "")
+        session_id  = payload.get("session_id", "")
+        menu_id     = str(payload.get("menu_id") or "")
+        interaction = payload.get("interaction") or "text"
+        prompt      = str(payload.get("prompt") or "")
+        fields      = payload.get("fields") or []
 
         if not contact_id:
             logger.warning("email deliver_menu: missing contact_id")
             return
 
-        # ORQ-15: este adapter desenha as opções dos CAMPOS (`menu.fields`), não o
-        # `options` do menu (NIV-15) — a descrição não tem onde ir. Nomeado, nunca mudo.
+        # ORQ-15: e-mail aqui é texto corrido — a descrição não tem onde ir. Nomeado, nunca mudo.
         note_dropped_descriptions(
-            "email", payload.get("options") or menu.get("options"),
-            "adapter nao desenha as opcoes do menu (NIV-15)",
-            session_id=session_id, menu_id=str(payload.get("menu_id") or menu.get("menu_id") or ""),
+            "email", payload.get("options"), "menu em texto numerado so leva o rotulo",
+            session_id=session_id, menu_id=menu_id,
         )
 
-        title  = menu.get("title") or menu.get("question", "")
-        fields = menu.get("fields", [])
+        if interaction == "form" or fields:
+            if not session_id:
+                logger.error("email deliver_menu: formulario %s sem session_id — as respostas nao tem "
+                             "onde ficar; menu nao entregue", menu_id)
+                return
+            state = {"menu_id": menu_id, "fields": fields, "current_index": 0, "answers": {}}
+            await self._redis.setex(f"channel:email:{session_id}:menu_collect", _MENU_COLLECT_TTL,
+                                    json.dumps(state))
+            primeiro = str(fields[0].get("label") or fields[0].get("id") or "") if fields else ""
+            corpo = f"{prompt}\n\n{primeiro}" if prompt and primeiro and prompt != primeiro else (primeiro or prompt)
+            await self.deliver_text({**payload, "content": {"text": corpo}})
+            return
 
-        lines: list[str] = []
-        if title:
-            lines.append(title)
-            lines.append("")
+        if text_menu.is_choice_menu(payload):
+            corpo = text_menu.render(prompt, options_from_menu(payload.get("options")), interaction)
+            await self.deliver_text({**payload, "content": {"text": corpo}})
+            if session_id:
+                await self._pending.remember(session_id, payload)
+            else:
+                logger.error("email deliver_menu: menu %s sem session_id — o numero respondido NAO sera "
+                             "traduzido para a opcao", menu_id)
+            return
 
-        for field in fields:
-            label   = field.get("label", "")
-            options = field.get("options", [])
-            if label:
-                lines.append(label)
-            if options:
-                for i, opt in enumerate(options, start=1):
-                    lines.append(f"{i}. {opt.get('label', opt.get('value', ''))}")
-                lines.append("")
-                lines.append("Por favor, responda com o número da opção escolhida.")
-            lines.append("")
+        if prompt:
+            await self.deliver_text({**payload, "content": {"text": prompt}})
+        else:
+            logger.warning("email deliver_menu: menu %s (%s) sem prompt nem opcoes — nada a enviar "
+                           "(session=%s)", menu_id, interaction, session_id)
 
-        # Start sequential collect if session_id provided
-        if session_id and fields:
-            collect_key   = f"channel:email:{session_id}:menu_collect"
-            collect_state = {
-                "menu_id":       menu.get("menu_id", str(uuid.uuid4())),
-                "fields":        fields,
-                "current_index": 0,
-                "answers":       {},
-            }
-            await self._redis.setex(
-                collect_key, _MENU_COLLECT_TTL, json.dumps(collect_state)
-            )
+    async def _advance_form(self, session_id: str, contact_id: str, state: dict, value: str) -> None:
+        """Uma resposta do formulário por e-mail: guarda, e pede o próximo campo ou publica tudo."""
+        chave  = f"channel:email:{session_id}:menu_collect"
+        fields = state.get("fields") or []
+        idx    = int(state.get("current_index") or 0)
+        if idx >= len(fields):
+            logger.error("email: formulario %s com indice %d fora dos %d campos — estado descartado "
+                         "(session=%s)", state.get("menu_id"), idx, len(fields), session_id)
+            await self._redis.delete(chave)
+            return
+        campo = fields[idx]
+        state.setdefault("answers", {})[str(campo.get("id") or f"field_{idx}")] = value
+        if idx + 1 < len(fields):
+            state["current_index"] = idx + 1
+            await self._redis.setex(chave, _MENU_COLLECT_TTL, json.dumps(state))
+            prox = fields[idx + 1]
+            await self.deliver_text({"contact_id": contact_id, "session_id": session_id,
+                                     "content": {"text": str(prox.get("label") or prox.get("id") or "")}})
+            return
+        await self._redis.delete(chave)
+        await self._publish_inbound(NormalizedInboundEvent(
+            message_id       = str(uuid.uuid4()),
+            contact_id       = contact_id,
+            session_id       = session_id,
+            channel          = "email",
+            content_type     = "text",
+            author           = MessageAuthor(type="customer"),
+            content          = MessageContent(type="menu_result", payload={
+                "menu_id":     state.get("menu_id") or "",
+                "interaction": "form",
+                "result":      state["answers"],
+            }),
+            context_snapshot = ContextSnapshot(),
+        ).model_dump())
 
-        body_text = "\n".join(lines)
-        # Reuse deliver_text to handle MIME construction and threading
-        await self.deliver_text({
-            **payload,
-            "content": {"text": body_text},
-        })
+    async def _publish_menu_result(self, contact_id: str, session_id: str, result: dict) -> None:
+        """NIV-15 — a escolha traduzida vai como `menu_result` (o id; a lista, no checklist)."""
+        await self._publish_inbound(NormalizedInboundEvent(
+            message_id       = str(uuid.uuid4()),
+            contact_id       = contact_id,
+            session_id       = session_id,
+            channel          = "email",
+            content_type     = "text",
+            author           = MessageAuthor(type="customer"),
+            # dicionário LITERAL: o censo do contrato (`probe_menu_result_contract.sh`) confere as chaves
+            content          = MessageContent(type="menu_result", payload={
+                "menu_id":     result["menu_id"],
+                "interaction": result["interaction"],
+                "result":      result["result"],
+            }),
+            context_snapshot = ContextSnapshot(),
+        ).model_dump())
 
     async def deliver_typing(self, payload: dict) -> None:
         """Email has no typing indicator — no-op."""
@@ -519,6 +579,9 @@ class EmailAdapter(ChannelAdapter):
                 "email: session closed contact=%s session=%s",
                 contact_id, session_id,
             )
+        if session_id:
+            await self._redis.delete(f"channel:email:{session_id}:menu_collect")
+            await self._pending.forget(session_id)
 
     # ── Collect event — outbound capability-based (Arc 16 Phase D) ───────────
 
@@ -636,6 +699,11 @@ class EmailAdapter(ChannelAdapter):
 
 
 # ── Text helpers ──────────────────────────────────────────────────────────────
+
+def _first_line(text: str) -> str:
+    """A primeira linha não vazia — a resposta de menu antes da assinatura."""
+    return next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
+
 
 def _strip_quoted_text(body_text: str, body_html: str) -> str:
     """

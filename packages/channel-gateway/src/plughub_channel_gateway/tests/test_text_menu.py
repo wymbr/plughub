@@ -270,3 +270,86 @@ class TestWhatsApp:
         await ad.deliver_session_closed({"contact_id": CONTATO, "session_id": SID})
         await _wa_texto(ad, "2")
         assert _publicados(prod)[0]["content"]["type"] == "text"
+
+
+# ── E-mail (NIV-15) ──────────────────────────────────────────────────────────
+
+from plughub_channel_gateway.adapters.email import EmailAdapter  # noqa: E402
+from plughub_channel_gateway.adapters.email_provider import MockEmailProvider, ParsedEmail  # noqa: E402
+
+EMAIL = "cliente@exemplo.com"
+
+
+@pytest.fixture
+def mail():
+    prov, prod = MockEmailProvider(), AsyncMock()
+    ad = EmailAdapter(producer=prod, redis=MemRedis(), settings=_settings(), provider=prov)
+    assert hasattr(EmailAdapter, "_resolve_session") and hasattr(EmailAdapter, "_store_attachments")
+
+    async def _res(**kw):
+        return SID, "tenant_test"
+
+    async def _anexos(**kw):
+        return []
+    ad._resolve_session, ad._store_attachments = _res, _anexos
+    return ad, prov, prod
+
+
+async def _mail_chega(ad, prov, corpo):
+    prov.load_inbound(ParsedEmail(message_id="<m1@x>", from_address=EMAIL, to_address="a@b", subject="Re: x",
+                                  body_text=corpo, body_html="", in_reply_to=None, references=[]))
+    await ad._handle_inbound({}, b"")
+
+
+def _email_menu(interaction="list", opts=OPTS, **kw) -> dict:
+    return {**_menu(interaction, opts, **kw), "contact_id": EMAIL}
+
+
+class TestEmail:
+    async def test_menu_plano_e_entregue_numerado(self, mail):
+        ad, prov, _ = mail
+        await ad.deliver_menu(_email_menu())
+        [m] = prov.sent_messages
+        assert "Sobre o que e?" in m["body_text"] and "2. Pagamento" in m["body_text"]
+
+    async def test_numero_com_assinatura_vira_o_id(self, mail):
+        """A resposta de e-mail traz assinatura: a primeira linha é a que responde."""
+        ad, prov, prod = mail
+        await ad.deliver_menu(_email_menu())
+        await _mail_chega(ad, prov, "2\n\nEnviado do meu iPhone")
+        [ev] = _publicados(prod)
+        assert ev["content"]["type"] == "menu_result"
+        assert ev["content"]["payload"] == {"menu_id": "m1", "interaction": "list", "result": "pagamento"}
+
+    async def test_controle_texto_que_nao_e_opcao_segue_cru(self, mail):
+        ad, prov, prod = mail
+        await ad.deliver_menu(_email_menu())
+        await _mail_chega(ad, prov, "Preciso de ajuda com outra coisa")
+        [ev] = _publicados(prod)
+        assert ev["content"]["type"] == "text" and "outra coisa" in ev["content"]["text"]
+
+    async def test_menu_texto_e_so_o_prompt(self, mail):
+        ad, prov, _ = mail
+        await ad.deliver_menu(_email_menu("text", opts=[], prompt="Qual o numero do pedido?"))
+        [m] = prov.sent_messages
+        assert m["body_text"] == "Qual o numero do pedido?"
+
+    async def test_formulario_campo_a_campo_publica_no_fim(self, mail):
+        ad, prov, prod = mail
+        await ad.deliver_menu(_email_menu("form", opts=[], prompt="Dados:", fields=[
+            {"id": "nome", "label": "Seu nome?"}, {"id": "cidade", "label": "Sua cidade?"}]))
+        assert "Seu nome?" in prov.sent_messages[0]["body_text"]
+        await _mail_chega(ad, prov, "Ana")
+        assert _publicados(prod) == [] and prov.sent_messages[-1]["body_text"] == "Sua cidade?"
+        await _mail_chega(ad, prov, "Recife")
+        [ev] = _publicados(prod)
+        assert ev["content"]["type"] == "menu_result"
+        assert ev["content"]["payload"] == {"menu_id": "m1", "interaction": "form",
+                                            "result": {"nome": "Ana", "cidade": "Recife"}}
+
+    async def test_sessao_fechada_esquece_menu_e_formulario(self, mail):
+        ad, prov, prod = mail
+        await ad.deliver_menu(_email_menu())
+        await ad.deliver_session_closed({"contact_id": EMAIL, "session_id": SID})
+        await _mail_chega(ad, prov, "2")
+        assert _publicados(prod)[0]["content"]["type"] == "text"

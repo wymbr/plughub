@@ -99,10 +99,13 @@ class PendingMenu:
     async def forget(self, session_id: str) -> None:
         await self._redis.delete(self._key(session_id))
 
-    async def answer(self, session_id: str, text: str) -> dict | None:
+    async def answer(self, session_id: str, text: str, also: tuple[str, ...] = ()) -> dict | None:
         """O `payload` do `menu_result` quando `text` responde o menu em aberto — e o menu sai de
         aberto. None quando não há menu em aberto ou quando a resposta não nomeia opção: aí o texto
-        segue cru, e o motor recusa e reenvia."""
+        segue cru, e o motor recusa e reenvia.
+
+        `also`: leituras alternativas da MESMA resposta, tentadas se `text` não nomear opção — o
+        e-mail manda a primeira linha, porque a resposta traz assinatura ("Enviado do meu iPhone")."""
         raw = await self._redis.get(self._key(session_id))
         if not raw:
             return None
@@ -115,6 +118,10 @@ class PendingMenu:
                          self._channel, session_id, exc)
             return None
         valor = resolve(text, opts, interaction)
+        for alternativa in also:
+            if valor is not None:
+                break
+            valor = resolve(alternativa, opts, interaction)
         if valor is None:
             # o valor digitado não vai ao log (pode ser qualquer coisa que o cliente escreveu)
             logger.info("%s: resposta ao menu %s nao nomeia opcao (%d car.) — segue como texto, o motor "

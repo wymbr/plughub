@@ -524,39 +524,34 @@ class TestDeliverMenu:
     async def test_menu_options_formatted_as_numbered_list(
         self, adapter, mock_provider, mock_redis
     ):
+        # NIV-15: o formato PLANO que o `notification_send` publica. Este teste montava um
+        # `content` aninhado que ninguem produz — e passava, enquanto nenhum menu saia.
         await adapter.deliver_menu({
-            "contact_id": CONTACT_EMAIL,
-            "session_id": SESSION_ID,
-            "content": {
-                "title": "Como posso ajudar?",
-                "menu_id": "m_test",
-                "fields": [{
-                    "id": "topic",
-                    "label": "Escolha o assunto:",
-                    "options": [
-                        {"label": "Suporte", "value": "suporte"},
-                        {"label": "Financeiro", "value": "financeiro"},
-                    ],
-                }],
-            },
+            "contact_id":  CONTACT_EMAIL,
+            "session_id":  SESSION_ID,
+            "menu_id":     "m_test",
+            "interaction": "list",
+            "prompt":      "Como posso ajudar?",
+            "options": [
+                {"id": "suporte",    "label": "Suporte"},
+                {"id": "financeiro", "label": "Financeiro"},
+            ],
         })
         body = mock_provider.sent_messages[0]["body_text"]
-        assert "1." in body
-        assert "Suporte" in body
-        assert "2." in body
-        assert "Financeiro" in body
+        assert "Como posso ajudar?" in body
+        assert "1. Suporte" in body
+        assert "2. Financeiro" in body
 
     @pytest.mark.asyncio
     async def test_menu_stores_collect_state(
         self, adapter, mock_provider, mock_redis
     ):
         await adapter.deliver_menu({
-            "contact_id": CONTACT_EMAIL,
-            "session_id": SESSION_ID,
-            "content": {
-                "menu_id": "m2",
-                "fields": [{"id": "f1", "label": "Pergunta"}],
-            },
+            "contact_id":  CONTACT_EMAIL,
+            "session_id":  SESSION_ID,
+            "menu_id":     "m2",
+            "interaction": "form",
+            "fields":      [{"id": "f1", "label": "Pergunta"}],
         })
         stored = [
             c for c in mock_redis.setex.call_args_list
@@ -566,7 +561,7 @@ class TestDeliverMenu:
 
     @pytest.mark.asyncio
     async def test_missing_contact_id_noop(self, adapter, mock_provider):
-        await adapter.deliver_menu({"content": {}})
+        await adapter.deliver_menu({"interaction": "list", "options": [{"id": "a", "label": "A"}]})
         assert mock_provider.sent_messages == []
 
 
@@ -592,8 +587,10 @@ class TestDeliverSessionClosed:
             "contact_id": CONTACT_EMAIL,
             "session_id": SESSION_ID,
         })
-        key = _contact_key(CONTACT_EMAIL)
-        mock_redis.delete.assert_called_once_with(key)
+        deletadas = [c.args[0] for c in mock_redis.delete.call_args_list]
+        # NIV-15: formulário e menu de escolha em aberto saem junto com a sessão
+        assert deletadas == [_contact_key(CONTACT_EMAIL), f"channel:email:{SESSION_ID}:menu_collect",
+                             f"channel:email:{SESSION_ID}:menu_choice"]
 
     @pytest.mark.asyncio
     async def test_no_email_sent_to_customer(self, adapter, mock_provider, mock_redis):
@@ -606,7 +603,9 @@ class TestDeliverSessionClosed:
     @pytest.mark.asyncio
     async def test_missing_contact_id_safe(self, adapter, mock_redis):
         await adapter.deliver_session_closed({"session_id": SESSION_ID})
-        mock_redis.delete.assert_not_called()
+        # sem contato não há chave de endereço; o estado de menu da sessão sai
+        assert [c.args[0] for c in mock_redis.delete.call_args_list] == [
+            f"channel:email:{SESSION_ID}:menu_collect", f"channel:email:{SESSION_ID}:menu_choice"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

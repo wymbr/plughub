@@ -43,11 +43,15 @@ para checklist no WhatsApp e no SMS, e nenhum adaptador tinha código de checkli
 
 | Interaction | WhatsApp | SMS | Web Chat | Email |
 |---|---|---|---|---|
-| `text` | o prompt | o prompt | Native | ⚠️ não entrega (NIV-15) |
-| `button` | Interactive Buttons (≤3) · rótulo digitado vale | texto numerado | Native buttons | ⚠️ NIV-15 |
-| `list` | List Message (4–10) · texto numerado (>10) | texto numerado | Native list | ⚠️ NIV-15 |
-| `checklist` | texto numerado, números separados por vírgula | idem | Native checkboxes | ⚠️ NIV-15 |
-| `form` | campo a campo | campo a campo | Native HTML form | ⚠️ NIV-15 |
+| `text` | o prompt | o prompt | Native | o prompt |
+| `button` | Interactive Buttons (≤3) · rótulo digitado vale | texto numerado | Native buttons | texto numerado |
+| `list` | List Message (4–10) · texto numerado (>10) | texto numerado | Native list | texto numerado |
+| `checklist` | texto numerado, números separados por vírgula | idem | Native checkboxes | idem |
+| `form` | campo a campo | campo a campo | Native HTML form | um e-mail por campo |
+
+No e-mail, a resposta de escolha é lida no texto inteiro e, se ele não nomear opção, na primeira
+linha: a resposta traz assinatura ("Enviado do meu iPhone"). Campo mascarado não chega a nenhum
+destes três canais: nenhum declara `masked_input`, e o deploy recusa.
 
 **Menu de ESCOLHA em canal de texto tem UMA casa: `text_menu.py`** (NIV-14/17, 2026-09-24). Ela
 desenha o texto numerado e traduz a resposta digitada para o id: número sozinho ("2", "dois"),
@@ -94,10 +98,10 @@ Gate: `infra/test/probe_orq15_option_description.sh`.
 **A resposta de menu de escolha viaja como ID da opção, nunca como rótulo** (NIV-13, 2026-09-24):
 o motor recusa o que não é id (reenvia o menu, depois `on_invalid`/`on_failure`). O clique do
 WhatsApp traz o `id` do botão/linha; o texto numerado do WhatsApp e do SMS é traduzido pelo
-`text_menu`. O e-mail ainda não entrega menu nenhum (NIV-15).
+`text_menu`, e o do e-mail também desde a NIV-15.
 
 **Sequential fallback protocol** — só para **formulário** (`form`/`fields`): the adapter sends
-each field as a separate WhatsApp/SMS message, stores partial responses in the adapter's session
+each field as a separate WhatsApp/SMS/e-mail message, stores partial responses in the adapter's session
 state (Redis TTL), and emits a single `menu_result` only when all fields are collected. The
 session state key is `channel:{channel}:{session_id}:menu_collect`. ⚠️ O campo de formulário
 **não tem opções** no schema (`MenuStepSchema.fields`, o Zod as descarta); escolha é sempre menu

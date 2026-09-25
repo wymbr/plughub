@@ -345,6 +345,7 @@ história no `CHANGELOG.md`.)*
 | NIV-14 | **SMS entrega o menu real** (lia um formato aninhado que ninguém publica: nada saía) — escolha em texto numerado traduzida para o id pelo `text_menu`, formulário campo a campo | 2026-09-24 | `CHANGELOG.md` § 2026-09-24 (7) |
 | NIV-17 | **WhatsApp traduz o que numerou**: >10 e checklist em texto numerado (antes formulário de um campo / botões de escolha única), `text` só o prompt, rótulo digitado e clique viram o id | 2026-09-24 | `CHANGELOG.md` § 2026-09-24 (7) |
 | NIV-18 | **A matriz de menus do `channel-gateway/CLAUDE.md` diz o que cada canal faz** (prometia checklist sequencial com vírgula que não existia) | 2026-09-24 | `CHANGELOG.md` § 2026-09-24 (7) |
+| NIV-15 | **O e-mail entrega o menu e a resposta volta ao fluxo** (lia formato aninhado inexistente e gravava estado que ninguém lia): escolha em texto numerado pelo `text_menu` (primeira linha vale, por causa da assinatura), formulário um e-mail por campo | 2026-09-24 | `CHANGELOG.md` § 2026-09-24 (8) |
 | MSK-01 | Campo `masked` chegando a canal que não sabe mascarar deixa de ser silencioso — fechada pela metade de RUNTIME da NIV-03, não pela mitigação barata (tirar `whatsapp` de `limite_ia`). O desfecho é melhor que o previsto: em vez de um pool consertado, **todo** pool ficou coberto, e a exposição some sem depender de config | 2026-09-03 | `CHANGELOG.md` § 2026-09-03 NIV-03 |
 
 ## `docs/guias/masked-input.md` — mascaramento de entrada por canal

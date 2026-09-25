@@ -1,5 +1,43 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-24 (8) — NIV-15: o e-mail entrega o menu e a resposta volta ao fluxo
+
+**O defeito, medido.** O e-mail tinha o defeito do SMS e um a mais:
+- `deliver_menu` lia `payload["content"]`, formato aninhado que ninguém publica. O corpo saía
+  vazio e o `deliver_text` recusava.
+- Gravava `channel:email:{sid}:menu_collect`, que **nenhum caminho lia**, e nenhum `menu_result`
+  era publicado.
+
+Nenhum menu chegava ao cliente, e nenhuma resposta voltava como resposta de menu. Os testes
+passavam porque montavam o formato inventado.
+
+**O que mudou** (`adapters/email.py`, sobre a casa da NIV-14/17):
+- **Escolha:** texto numerado pelo `text_menu`, com o menu em aberto. A resposta que nomeia uma
+  opção vira `menu_result` com o id (ou a lista); a que não nomeia segue crua, e o motor recusa e
+  reenvia.
+- **Assinatura:** a resposta de e-mail traz assinatura, então lê-se o texto inteiro e, se ele não
+  nomear opção, a **primeira linha** não vazia. O `PendingMenu.answer` ganhou `also=` para leituras
+  alternativas da mesma resposta, sem regra nova no canal.
+- **Formulário:** um e-mail por campo. O estado passou a ser **lido** na resposta
+  (`_advance_form`), e o último campo publica `menu_result` de `form` com todas as respostas.
+- **Menu `text`:** só o prompt.
+- **Fechamento da sessão:** esquece o formulário e o menu em aberto.
+- **Dado mascarado:** não chega ao e-mail. O canal não declara `masked_input`, e o deploy recusa
+  menu mascarado em pool de e-mail.
+
+**Medição:**
+- **Testes:** `TestEmail` em `test_text_menu.py`, 6 casos (menu plano entregue · número com
+  assinatura vira o id · controle texto cru · `text` só o prompt · formulário campo a campo publica
+  no fim · fechamento esquece). Os testes antigos do e-mail no formato inventado foram trocados.
+- **Suíte do gateway:** 1527 verdes.
+- **Mutação:** M1 a M7, todas vermelhas (sem primeira linha · alternativa ignorada · formulário não
+  lido · escolha não traduz · menu não lembrado · fechamento não esquece · formulário publica no
+  primeiro campo).
+- **Contrato:** `probe_menu_result_contract.sh` OK, com 11 produtores, os dois do e-mail com
+  dicionário literal. `probe_orq15_option_description.sh` VERDE.
+- **Não medido ao vivo:** o demo não tem provedor de e-mail configurado, pela mesma razão do SMS e
+  do WhatsApp.
+
 ## 2026-09-24 (7) — NIV-14/17/18: menu de escolha no SMS e no WhatsApp — o canal traduz o que numerou
 
 **Por que agora.** Desde a NIV-13 o motor recusa, num menu de escolha, resposta que não seja id
