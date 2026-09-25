@@ -175,7 +175,8 @@ export interface SkillFlowEngineConfig {
 
 export type RunResult =
   /** `issue_status` (SFE-02): só no fechamento por `complete` que o declarou. */
-  | { outcome: string; issue_status?: string; pipeline_state: PipelineState }
+  /** `deploy_version` (SFE-03): a versão que EXECUTOU — a do nascimento, também na retomada. */
+  | { outcome: string; issue_status?: string; deploy_version?: string; pipeline_state: PipelineState }
   | { error: "PRECONDITION_FAILED"; active_job_id: string }
 
 // ─────────────────────────────────────────────
@@ -397,6 +398,12 @@ export class SkillFlowEngine {
      */
     config?:           Record<string, unknown>
     /**
+     * SFE-03 — identidade do deploy que o lançador resolveu AGORA (`set_at` do slot
+     * `current`). Só vale no nascimento: na retomada, o engine executa a versão fixada
+     * e este valor serve apenas para dizer, no log, que o pool já está noutra.
+     */
+    deployVersion?:    string
+    /**
      * Identificador da instância do Routing Engine alocada para esta execução.
      * Armazenado no execution lock para que:
      *   1. O crash detector saiba que o engine ainda está vivo para esta sessão.
@@ -448,17 +455,124 @@ export class SkillFlowEngine {
     }
 
     try {
-      return await this._execute({
-        tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId,
+      // SFE-03 — QUAL versão executa: a recebida (nascimento) ou a fixada (retomada).
+      const run = await this._pinnedVersion({
+        tenantId, sessionId, pipelineSessionId, skillId, flow,
         ...(config ? { config } : {}),
+        ...(resumeContext ? { resumeContext } : {}),
+        deployVersion: params.deployVersion ?? "",
+      })
+      const result = await this._execute({
+        tenantId, sessionId, pipelineSessionId, customerId,
+        skillId: run.skillId, flow: run.flow, sessionContext, instanceId,
+        pinnedVersion: run.deployVersion,
+        ...(run.config ? { config: run.config } : {}),
         ...(resumeContext ? { resumeContext } : {}),
         ...(segmentId ? { segmentId } : {}),
         ...(journeyId ? { journeyId } : {}),
       })
+      // A versão EXECUTADA sobe ao lançador: é ela que o segmento tem de carimbar,
+      // não o `current` do pool, que numa retomada já pode ser outro.
+      return "outcome" in result ? { ...result, deploy_version: run.deployVersion } : result
     } finally {
       // Libera apenas se ainda somos o titular do lock
       await this.stateManager.releaseLock(tenantId, pipelineSessionId, instanceId)
     }
+  }
+
+  // ─────────────────────────────────────────────
+  // SFE-03 — a sessão retomada executa a versão em que NASCEU
+  // ─────────────────────────────────────────────
+
+  /**
+   * "Este run continua um pipeline existente?" — a regra do `_execute`, num lugar só.
+   * `in_progress` = retomada após queda; `suspended` com `resumeContext` = retomada de
+   * workflow. Qualquer outro estado (ausente, concluído, falho, suspenso sem contexto)
+   * NASCE de novo a partir do `entry`.
+   */
+  static isResumption(state: PipelineState | null, resumeContext?: ResumeContext): boolean {
+    if (!state) return false
+    return state.status === "in_progress" || (state.status === "suspended" && !!resumeContext)
+  }
+
+  /**
+   * Decide QUAL versão este run executa.
+   *
+   * O lançador (bridge) resolve o fluxo lendo o slot `current` do pool AGORA. No
+   * nascimento isso está certo, e a versão é fixada em `{t}:pipeline:{psid}:pinned`.
+   * Na retomada (suspend, collect, delegate, recuperação de queda) o `current` pode ser
+   * outro — um promote no meio — e executá-lo continuaria o `current_step_id` gravado
+   * numa versão que não o gravou: step ausente ⇒ falha; step presente com outro
+   * sentido ⇒ sessão errada SEM erro (medido: `ff98077b`, nascida na versão de 12/08,
+   * `resolved` na de 13/08). Então a retomada executa o PIN.
+   *
+   * Pin ausente numa sessão que o tem declarado (`pinned_version` presente) é RECUSA
+   * nomeada, nunca o `current`: rodar a versão nova é exatamente o defeito.
+   * Pin ausente numa sessão ANTERIOR ao pin (sem marca) é a transição do rollout: fixa
+   * a versão recebida agora, e diz que fixou — é a única versão que ainda se tem.
+   */
+  private async _pinnedVersion(p: {
+    tenantId:          string
+    sessionId:         string
+    pipelineSessionId: string
+    skillId:           string
+    flow:              SkillFlow
+    config?:           Record<string, unknown>
+    resumeContext?:    ResumeContext
+    deployVersion:     string
+  }): Promise<{ skillId: string; flow: SkillFlow; config?: Record<string, unknown>; deployVersion: string }> {
+    const received = {
+      skillId: p.skillId, flow: p.flow, deployVersion: p.deployVersion,
+      ...(p.config ? { config: p.config } : {}),
+    }
+    const pinOf = (v: typeof received) => ({
+      skill_id: v.skillId, flow: v.flow, deploy_version: v.deployVersion,
+      pinned_at: new Date().toISOString(),
+      ...(v.config ? { config: v.config } : {}),
+    })
+
+    const state = await this.stateManager.get(p.tenantId, p.pipelineSessionId)
+    if (!state || !SkillFlowEngine.isResumption(state, p.resumeContext)) {
+      await this.stateManager.savePin(p.tenantId, p.pipelineSessionId, pinOf(received))
+      return received
+    }
+
+    const pin = await this.stateManager.getPin(p.tenantId, p.pipelineSessionId)
+    if (pin) {
+      if (pin.deploy_version !== p.deployVersion || pin.skill_id !== p.skillId) {
+        console.info(
+          `[engine] SFE-03 retomada session=${p.sessionId} executa a versão do NASCIMENTO ` +
+          `(skill=${pin.skill_id} deploy=${pin.deploy_version || "(sem id)"}); o pool está em ` +
+          `skill=${p.skillId} deploy=${p.deployVersion || "(sem id)"}`,
+        )
+      }
+      return {
+        skillId: pin.skill_id, flow: pin.flow as SkillFlow, deployVersion: pin.deploy_version,
+        ...(pin.config ? { config: pin.config } : {}),
+      }
+    }
+
+    if (state.pinned_version !== undefined) {
+      await this.stateManager.fail(p.tenantId, p.pipelineSessionId, state)
+      throw new Error(
+        `SFE-03: a versão em que a sessão ${p.sessionId} nasceu (deploy=` +
+        `${state.pinned_version || "(sem id)"}) não está mais guardada — a retomada foi ` +
+        `RECUSADA em vez de continuar o step "${state.current_step_id}" na versão atual ` +
+        `(deploy=${p.deployVersion || "(sem id)"}).`,
+      )
+    }
+
+    // Transição do rollout: pipeline nascido antes do pin.
+    if (state.transitions.length > 0) {
+      console.warn(
+        `[engine] SFE-03 session=${p.sessionId}: pipeline anterior ao pin, retomado no step ` +
+        `"${state.current_step_id}" — fixado na versão da RETOMADA ` +
+        `(deploy=${p.deployVersion || "(sem id)"}), que pode não ser a do nascimento`,
+      )
+    }
+    await this.stateManager.savePin(p.tenantId, p.pipelineSessionId, pinOf(received))
+    await this.stateManager.save(p.tenantId, p.pipelineSessionId, { ...state, pinned_version: p.deployVersion })
+    return received
   }
 
   // ─────────────────────────────────────────────
@@ -478,6 +592,8 @@ export class SkillFlowEngine {
     resumeContext?:    ResumeContext
     segmentId?:        string
     journeyId?:        string
+    /** SFE-03 — gravado no estado ao NASCER; ver `_pinnedVersion`. */
+    pinnedVersion?:    string
   }): Promise<RunResult> {
     const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, config, instanceId, resumeContext, segmentId } = params
     // Arc 16 — `let`, não `const`: um step `invoke journey_merge` muda a raiz canônica
@@ -494,9 +610,11 @@ export class SkillFlowEngine {
     // 1. Retomar ou iniciar pipeline (usa pipelineSessionId para state isolation)
     let state = await this.stateManager.get(tenantId, pipelineSessionId)
 
-    if (state?.status === "in_progress") {
+    // A pergunta "isto é retomada?" tem UMA resposta, compartilhada com `_pinnedVersion`:
+    // se as duas divergissem, o engine executaria a versão nova sobre um estado retomado.
+    if (state && SkillFlowEngine.isResumption(state, resumeContext) && state.status === "in_progress") {
       // Retomada após falha do orquestrador — continua do current_step_id
-    } else if (state?.status === "suspended" && resumeContext) {
+    } else if (state && SkillFlowEngine.isResumption(state, resumeContext)) {
       // Arc 4 — Resuming a suspended workflow.
       // Keep the stored results (sentinel keys, decision keys, step outputs) and
       // continue from state.current_step_id (the step that suspended).
@@ -509,7 +627,10 @@ export class SkillFlowEngine {
       await this.stateManager.save(tenantId, pipelineSessionId, state)
     } else {
       // Novo pipeline — inicia do entry
-      state = PipelineStateManager.create(skillId, flow.entry)
+      state = {
+        ...PipelineStateManager.create(skillId, flow.entry),
+        pinned_version: params.pinnedVersion ?? "",
+      }
 
       // ── CTR-06: o token do CHAMADOR é fato da ARESTA, não da sessão ────────
       // Nascer é o único momento em que a tag da sessão descreve com certeza a

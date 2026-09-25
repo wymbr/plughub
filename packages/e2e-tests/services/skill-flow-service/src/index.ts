@@ -338,7 +338,14 @@ app.post("/execute", async (req: Request, res: Response) => {
     webhook_pool,
     resume_context,
     session_token,
+    deploy_version,
   } = req.body as {
+    /**
+     * SFE-03 — `set_at` do slot `current` que o bridge resolveu AGORA. O engine o fixa
+     * no nascimento; na retomada executa a versão fixada e devolve, em
+     * `deploy_version` da resposta, a que de fato executou.
+     */
+    deploy_version?: string
     /**
      * PID-01 — token LIGADO À SESSÃO, emitido pelo mcp-server a pedido do bridge na
      * ativação. Injetado só nas tools de `SESSION_BOUND_TOOLS`, por cima do que o YAML
@@ -457,6 +464,9 @@ app.post("/execute", async (req: Request, res: Response) => {
             `session:${params.session_id}:stream`,
             `${params.tenant_id}:ctx:${params.session_id}`,
             `${params.tenant_id}:pipeline:${params.session_id}`,
+            // SFE-03: a versão fixada vive tanto quanto o estado que ela executa —
+            // senão a retomada depois de 24 h acha o estado e recusa por falta do pin.
+            `${params.tenant_id}:pipeline:${params.session_id}:pinned`,
             `${params.tenant_id}:session:${params.session_id}:status`,
           ]
           for (const key of sessionKeys) {
@@ -695,6 +705,7 @@ app.post("/execute", async (req: Request, res: Response) => {
       flow,
       sessionContext: session_context ?? {},
       ...(config ? { config } : {}),
+      ...(deploy_version ? { deployVersion: deploy_version } : {}),
       instanceId:     instance_id,
       segmentId:      segment_id,
       // J5a-1: habilita `@ctx.journey.*` (contexto compartilhado do processo).

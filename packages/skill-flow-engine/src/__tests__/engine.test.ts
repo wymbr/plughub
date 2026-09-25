@@ -17,6 +17,7 @@ const mockRedis = {
   // releaseLock and renewLock use Lua scripts via redis.eval().
   // Default: return 1 (success — lock owned and released / renewed).
   eval: vi.fn().mockResolvedValue(1),
+  expire: vi.fn().mockResolvedValue(1),  // SFE-03: save() renova o TTL do pin
 }
 
 const mockMcpCall  = vi.fn()

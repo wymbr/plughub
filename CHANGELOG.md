@@ -1,5 +1,51 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (12) — SFE-03: a sessão retomada executa a versão em que NASCEU
+
+**O defeito era real e medido.** O bridge resolve o fluxo lendo o slot `current` do pool a cada
+ativação, e a retomada (suspend, collect, delegate, recuperação de queda) continua o
+`current_step_id` gravado. Depois de um promote, a continuação rodava numa versão que não gravou
+aquele estado. Censo no ledger (`segments FINAL`, sessão × pool com mais de um `deploy_version`):
+**3 de 1 140** sessões suspensas atravessaram um promote, todas no `limite_processo` em agosto, e
+`ff98077b` nasceu na versão de 12/08 e terminou `resolved` na de 13/08 — a metade SILENCIOSA,
+sem erro nenhum. Raro no demo, mas é o pré-requisito da drenagem do ADR de slots (D4, D6), que
+multiplicaria esses casos por construção.
+
+**Decisão do dono: o snapshot fica na própria sessão**, não no registry. O `SkillDeployment` guarda
+o fluxo mas **não a config** (`config_json` é do slot), e a gravação dele no promote é *best
+effort*; servir por identidade exigiria mudar os dois e pôr o registry no caminho de toda retomada.
+
+**O que mudou:**
+- **Engine:** no nascimento grava `{t}:pipeline:{psid}:pinned` = fluxo + config + skill +
+  `deploy_version`, e marca `pipeline_state.pinned_version` (campo novo, opcional, no
+  `PipelineStateSchema`). Na retomada executa o pin. A pergunta *"isto é retomada?"* passou a ter
+  UMA casa (`SkillFlowEngine.isResumption`), usada pelo `_execute` e pelo pin — duas respostas
+  executariam a versão nova sobre um estado retomado.
+- **Pin ausente com marca ⇒ recusa nomeada** e pipeline `failed`; nunca o `current`.
+  **Sem marca** (pipeline anterior ao rollout) ⇒ fixa a versão da retomada e avisa.
+- **TTL:** `save()` renova o pin junto com o estado; o `persist-suspend` estende os dois.
+- **Carimbo:** o `RunResult` devolve `deploy_version` = a EXECUTADA, e os três
+  `participant_left` nativos do bridge que nascem de um run a passam explicitamente
+  (`_flow_deploy_version`), vencendo o cache do pool, que numa retomada já diria a versão nova. O
+  G5 fica de fora: o evento dele vem do mcp-server, não de um run do engine. O bridge também manda
+  `deploy_version` no payload do `/execute`.
+
+**Testes:** `pinned-version.test.ts` (13) com um Redis em memória de chaves e TTL reais — o mock
+de `vi.fn` não distingue a chave do pin da do estado. A queda é simulada por uma tool que nunca
+responde, deixando o estado `in_progress` com o pin gravado, como fica quando o processo morre.
+Mutação 6/6 mortas; a **M1 é o próprio defeito** (a retomada ler o fluxo recebido), que é o
+*"teste que prova o defeito"* que a ficha pedia. Bridge: `test_flow_deploy_version.py` (8),
+mutação 3/3. Suítes: engine 322, bridge 230 (5 pulados de antes, Redis de integração do
+`test_restore_instance_patch`), tsc do engine e do `skill-flow-service` limpos.
+
+⚠️ **Custo declarado nos mocks:** `save()` passou a chamar `expire`, e três arquivos de teste
+(`engine`, `caller-token-chain`, `declared-content`) ganharam `expire` no mock. Tentei
+`multi` primeiro: quebrava 32 testes que conferem o estado salvo pelas chamadas a `set`.
+
+**Docs:** `docs/pacotes/skill-flow-engine.md` § Retomada; `CLAUDE.md` § Instance Bootstrap
+(*"a retomada NÃO relê o `current`"*). Deixou ficha: `SFE-05` (rebuild e medição ao vivo);
+`SLT-05` passou a esperar a `SFE-05`, e não mais a `SFE-03`.
+
 ## 2026-09-25 (11) — CTX-09: o código deixa de citar um gate inexistente para o `invoke` cru
 
 **A ficha era só de documentação, e o ADR já estava certo:** a §D2 do

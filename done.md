@@ -557,6 +557,7 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 |---|---|---|---|
 | SFE-01 | `complete.outcome_from` que cai no literal passa a logar chave, valor achado, literal e sessão | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (2) |
 | SFE-02 | O `issue_status` declarado no `complete` passa a sobreviver ao parse e viajar até o segmento de IA (schema estrito, engine, bridge nos quatro publicadores) | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (5) |
+| SFE-03 | A sessão retomada executa a versão em que NASCEU (pin no engine) e o segmento carimba a versão executada | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (12) |
 
 ## `docs/arcos/audit-lgpd.md` — trilha e direitos do titular
 

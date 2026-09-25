@@ -1527,6 +1527,12 @@ async def activate_native_agent(
     pool_config = _pool_config_cache.get(pool_id, {}) if pool_id else {}
     if pool_config:
         payload["config"] = pool_config
+    # SFE-03: a identidade do deploy resolvido AGORA. O engine a fixa no nascimento
+    # junto com flow + config; numa retomada ele executa a versão fixada, e esta só
+    # serve para o log dizer que o pool já está noutra.
+    _dv_now = _pool_deploy_version_cache.get(pool_id, "") if pool_id else ""
+    if _dv_now:
+        payload["deploy_version"] = _dv_now
     # PID-01: token ligado à sessão para as tools de retomada. Viaja no corpo, nunca no
     # `session_context` — lá o YAML o leria (`$.session.*`) e poderia repassá-lo adiante.
     _session_token = await mint_session_token(
@@ -4515,6 +4521,20 @@ def _flow_issue_status(agent_result: dict | None) -> str | None:
     return raw if isinstance(raw, str) and raw else None
 
 
+def _flow_deploy_version(agent_result: dict | None) -> str:
+    """
+    SFE-03 — a versão que o engine EXECUTOU, para o carimbo do segmento.
+
+    Numa retomada depois de um promote o engine roda a versão em que a sessão nasceu,
+    e o `_pool_deploy_version_cache` já está na nova: carimbar o cache faria o segmento
+    afirmar a versão que ele NÃO rodou. O valor explícito vence o cache em
+    `_publish_participant_event`. Ausente (engine anterior ao pin) ⇒ ``""``, e o cache
+    volta a responder, como antes.
+    """
+    raw = (agent_result or {}).get("deploy_version")
+    return raw if isinstance(raw, str) else ""
+
+
 def _seg_signal_key(session_id: str, segment_id: str) -> str:
     return f"session:{session_id}:seg_signal:{segment_id}"
 
@@ -5805,6 +5825,7 @@ async def process_routed(
             flow_id=_part_flow_id,
             escalation_reason=_part_esc,
             issue_status=_part_issue,
+            deploy_version=_flow_deploy_version(agent_result),
         ))
         # G5 dedup guard: conference_agent_completed checks this key before emitting
         # participant_left for external conference specialists.  Native bridge agents
@@ -6881,6 +6902,7 @@ async def process_queued(
         outcome=_q_outcome,
         flow_id=_q_flow_id,
         issue_status=_q_issue,
+        deploy_version=_flow_deploy_version(agent_result),
     ))
 
     # Clean up marker after the queue agent completes.
@@ -9600,6 +9622,7 @@ async def _handle_webhook_session_resumed(
         outcome=_ai_outcome or None,
         flow_id=(((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or "",
         issue_status=_flow_issue_status(agent_result),
+        deploy_version=_flow_deploy_version(agent_result),
     ))
 
     # ── Outcome de SESSÃO: a janela de resume é o último segmento primary ──────

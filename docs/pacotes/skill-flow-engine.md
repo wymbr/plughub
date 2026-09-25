@@ -649,6 +649,32 @@ if (state?.status === "in_progress") {
 
 Isso garante que falhas de qualquer tipo (timeout de SLA, crash de instância, restart por deploy) não percam o estado do pipeline. O cliente não percebe a interrupção.
 
+### A retomada executa a versão em que o pipeline NASCEU (SFE-03, 2026-09-25)
+
+Retomar o estado não bastava: o bridge resolve o fluxo lendo o slot `current` do pool **a cada
+ativação**, e depois de um promote isso continuava o `current_step_id` gravado numa versão que não o
+gravou. Step ausente na versão nova ⇒ `Step não encontrado`; step presente com outro sentido ⇒ sessão
+errada **sem erro nenhum**. Medido: 3 de 1 140 sessões suspensas atravessaram um promote, e uma delas
+(`ff98077b`) nasceu na versão de 12/08 e terminou `resolved` na de 13/08.
+
+- **No nascimento**, o engine grava `{t}:pipeline:{psid}:pinned` = `{skill_id, flow, config,
+  deploy_version, pinned_at}` e marca `pipeline_state.pinned_version`. A regra *"isto é retomada?"*
+  mora em UM lugar (`SkillFlowEngine.isResumption`): `in_progress`, ou `suspended` com
+  `resumeContext`. Qualquer outro estado nasce de novo e **re-fixa** (o pin não é eterno).
+- **Na retomada**, executa o pin: fluxo **e** config do nascimento. O que o bridge mandou agora
+  serve só para o log dizer que o pool está noutra versão.
+- **Pin ausente numa sessão marcada** ⇒ recusa nomeada (`SFE-03 … RECUSADA`) e o pipeline vai a
+  `failed`. Nunca cai no `current`: rodar a versão nova é o defeito.
+- **Pipeline anterior ao pin** (sem marca): fixa a versão da retomada e **avisa** quando já havia
+  transições. É a transição do rollout, e dura no máximo o TTL do estado.
+- **TTL**: o `save()` renova o pin junto com o estado; o `persist-suspend` do skill-flow-service
+  estende os dois. TTLs discordantes fariam uma retomada achar o estado sem o pin.
+- O `RunResult` devolve `deploy_version` = a versão **executada**, e o bridge carimba o segmento com
+  ela (`_flow_deploy_version`). O cache do pool diria a versão que o segmento não rodou.
+
+Testes: `__tests__/pinned-version.test.ts` (13, mutação 6/6) · bridge
+`tests/test_flow_deploy_version.py` (mutação 3/3).
+
 ---
 
 ## Delegação Parcial do Context — pipeline_context

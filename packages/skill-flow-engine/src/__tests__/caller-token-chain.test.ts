@@ -33,6 +33,7 @@ const mockRedis = {
   set:  vi.fn().mockResolvedValue("OK"),
   del:  vi.fn().mockResolvedValue(1),
   eval: vi.fn().mockResolvedValue(1),
+  expire: vi.fn().mockResolvedValue(1),  // SFE-03: save() renova o TTL do pin
 }
 
 /** ContextStore mínimo, com um hash de verdade — a colisão é observável nele. */

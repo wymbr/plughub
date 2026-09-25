@@ -25,6 +25,24 @@ const LOCK_KEY = (tenantId: string, sessionId: string) =>
 const JOB_KEY = (tenantId: string, sessionId: string, stepId: string) =>
   `${tenantId}:pipeline:${sessionId}:job:${stepId}`
 
+/**
+ * SFE-03 — a VERSÃO em que o pipeline nasceu: fluxo + config + skill + identidade
+ * do deploy. Escrita UMA vez, no nascimento; toda retomada executa ESTA, nunca o
+ * slot `current` do momento da retomada. Vive e morre com o pipeline_state (o
+ * `save` renova os dois; o persist-suspend do skill-flow-service estende os dois).
+ */
+const PIN_KEY = (tenantId: string, sessionId: string) =>
+  `${tenantId}:pipeline:${sessionId}:pinned`
+
+export interface PinnedVersion {
+  skill_id:       string
+  flow:           unknown
+  config?:        Record<string, unknown>
+  /** `set_at` do slot do pool; "" quando o lançador não informou (fallback/dev). */
+  deploy_version: string
+  pinned_at:      string
+}
+
 const PIPELINE_TTL_SECONDS = 86_400  // 24h — alinhado com validade de sessão
 
 /**
@@ -58,12 +76,34 @@ export class PipelineStateManager {
    * Chamado a cada transição de step — antes de executar o próximo.
    */
   async save(tenantId: string, sessionId: string, state: PipelineState): Promise<void> {
+    // SFE-03: o pin renova junto. TTLs discordantes entre o estado e a versão que
+    // o executa fariam uma retomada achar o estado sem o pin — recusa sem culpa.
+    // Duas renovações de TTL, sem transação: uma queda entre as duas só deixa o pin
+    // com o TTL da escrita anterior, que o próximo `save` renova.
     await this.redis.set(
       PIPELINE_KEY(tenantId, sessionId),
       JSON.stringify(state),
       "EX",
       PIPELINE_TTL_SECONDS,
     )
+    await this.redis.expire(PIN_KEY(tenantId, sessionId), PIPELINE_TTL_SECONDS)
+  }
+
+  /** SFE-03 — grava a versão do nascimento (sobrescreve: nascer de novo é outra versão). */
+  async savePin(tenantId: string, sessionId: string, pin: PinnedVersion): Promise<void> {
+    await this.redis.set(PIN_KEY(tenantId, sessionId), JSON.stringify(pin), "EX", PIPELINE_TTL_SECONDS)
+  }
+
+  /** SFE-03 — a versão fixada, ou null (ausente ou ilegível — o chamador decide). */
+  async getPin(tenantId: string, sessionId: string): Promise<PinnedVersion | null> {
+    const raw = await this.redis.get(PIN_KEY(tenantId, sessionId))
+    if (!raw) return null
+    try {
+      const pin = JSON.parse(raw) as PinnedVersion
+      return pin && typeof pin.skill_id === "string" && pin.flow ? pin : null
+    } catch {
+      return null
+    }
   }
 
   /** Marca o pipeline como concluído. */
@@ -78,7 +118,7 @@ export class PipelineStateManager {
 
   /** Remove o pipeline_state da sessão (encerramento). */
   async delete(tenantId: string, sessionId: string): Promise<void> {
-    await this.redis.del(PIPELINE_KEY(tenantId, sessionId))
+    await this.redis.del(PIPELINE_KEY(tenantId, sessionId), PIN_KEY(tenantId, sessionId))
   }
 
   // ── Lock distribuído ────────────────────────────────────────────────────────

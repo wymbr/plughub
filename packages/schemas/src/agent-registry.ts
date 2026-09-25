@@ -705,6 +705,14 @@ export const PipelineStateSchema = z.object({
     reason:      z.enum(["on_success", "on_failure", "condition_match", "default", "suspended", "resumed"]),
     timestamp:   z.string().datetime(),
   })).default([]),
+
+  /**
+   * SFE-03 — identidade do deploy em que este pipeline NASCEU (`set_at` do slot do
+   * pool; `""` quando o lançador não a informou). A PRESENÇA é o que importa: ela diz
+   * que existe um pin (`{t}:pipeline:{sid}:pinned`) e que a retomada tem de executá-lo.
+   * Ausente = pipeline anterior ao pin. Nunca apagar ao re-salvar.
+   */
+  pinned_version: z.string().optional(),
 })
 export type PipelineState = z.infer<typeof PipelineStateSchema>
 

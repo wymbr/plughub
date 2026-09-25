@@ -220,6 +220,7 @@ describe("de ponta a ponta: o roteiro chega ao cliente como foi escrito", () => 
     set:  vi.fn().mockResolvedValue("OK"),
     del:  vi.fn().mockResolvedValue(1),
     eval: vi.fn().mockResolvedValue(1),
+    expire: vi.fn().mockResolvedValue(1),  // SFE-03: save() renova o TTL do pin
   }
 
   const flow = (tool: string): SkillFlow => ({
