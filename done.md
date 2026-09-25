@@ -41,6 +41,7 @@ história no `CHANGELOG.md`.)*
 | ALW-01 | **V4** — portão de cadastro do ContextStore no `PUT /v1/skills`: coletor das 5 superfícies de autoria em `@plughub/schemas`, gate de paridade TS × Python sobre fixture única, e o runtime passa a LOGAR a tag não cadastrada nos dois funis | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 V4 |
 | ALW-08 | Afordância preventiva no editor: dry-run `POST /v1/skills/validate` rodando o MESMO `validateSkillPayload()` do `PUT` (D2/D3 do ADR do editor), com painel que lista os erros e oferece atalho para `/config/context-map` quando o código é `unregistered_context_tag` | 2026-09-02 | `CHANGELOG.md` § 2026-09-02 ALW-08 |
 | MSK-03 | **Remove-se o VALOR, nunca o CAMPO — e as três casas do eco passam a concordar.** O dono viu 1 campo na tela de histórico onde o cliente preencheu 3; medido, não era perda: o bridge aplicava `echo_to_operator: none` (que APAGAVA a chave) e a lista Redis que a MESMA tela relê num F5 não conhece política nenhuma — um F5 mudava o que ele via da mesma submissão. ⚠️ **O argumento da ALW-10 não sobreviveu à medição:** o `MenuCard` renderiza o `label` de todo campo do formulário, mascarado incluído, então `none` não escondia a existência do campo — fazia o eco contradizer o cartão acima dele. Decisão do dono aplicada nas TRÊS casas (bridge · webchat · eco otimista do Console), mais a correção do campo VAZIO, que virava `••••••` e afirmava um valor inexistente (agora `""`, a mesma gramática do campo livre em branco). Mecanismo: `probe_masked_field_echo_parity.sh` COMPILA com o `tsc` e EXECUTA as três contra a mesma tabela — a ALW-10 já pedia o acordo em prosa. 12 casos com as duas classes exercidas (senão INCONCLUSIVO), 5 mutações. Suítes 148/148 e 771/771; o teste da semântica antiga foi REESCRITO com a razão ao lado, não apagado. ⚠️ Consequência declarada: `echo_policy` ficou INERTE, fixada como fato por teste próprio (`ALW-17`) | 2026-09-10 | `CHANGELOG.md` § 2026-09-10 (4) |
+| ALW-21 | Resíduo de `echo_to_operator` fora do catálogo vivo — vivo e autoridade sem divergência (15 × 15) | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (17) |
 
 ---
 
@@ -84,6 +85,7 @@ história no `CHANGELOG.md`.)*
 |---|---|---|---|
 | WAI-02 | Produtor de espera para o tier `max_wait_exceeded` (fatia B) | 2026-08-24 | `CHANGELOG.md:6304` |
 | WAI-01 | Produtor da espera no caminho atendido — o push já tinha; faltava o claim do pull | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (10) |
+| WAI-03 | WAI-01 no ar e medida: o claim de pull registrou a espera (30,2 min, `handoff`) e consumiu o carimbo | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (17) |
 
 ---
 
@@ -562,6 +564,7 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | SFE-03 | A sessão retomada executa a versão em que NASCEU (pin no engine) e o segmento carimba a versão executada | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (12) |
 | SFE-04 | O `issue_status` passa a viajar no que roda: rebuild + 13 de 16 pools re-promovidos, medido ao vivo (0 → 1) com o controle | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (14) |
 | SFE-06 | Os três pools que faltavam da SFE-04 re-promovidos com o `issue_status` — as duas premissas da ficha estavam erradas | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (15) |
+| SFE-05 | SFE-03 no ar e medida: sessão nascida em 14:30 retomou depois do promote de 15:01 executando a versão do nascimento | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (17) |
 
 ## `docs/arcos/audit-lgpd.md` — trilha e direitos do titular
 

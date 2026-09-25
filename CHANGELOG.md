@@ -1,5 +1,33 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (17) — WAI-03, SFE-05, ALW-21: as últimas medições ao vivo, com um gesto do dono
+
+As três dependiam de algo que eu não faço — agente logado e token de admin. O dono fez; eu medi.
+
+**Um item só serviu às duas primeiras.** A fila pull do `aprovacao_credito` tinha `c703abb2` — a
+MESMA sessão que a rodada (13) apontou como candidata da SFE-05, suspensa em `aprovar` com o pin
+de 14:30:11. Antes do gesto, o `limite_processo` foi re-promovido (mesmo conteúdo, identidade nova:
+15:01:18), para existir o "promote no meio". Depois, o dono pegou o item no Console e aprovou.
+
+- **WAI-03.** O claim gerou a linha de espera: `aprovacao_credito`, `outcome = handoff`,
+  **1 809 240 ms (30,2 min)**, `sla_target_ms` copiado. No log do routing o `queue exit` saiu no
+  mesmo instante do `work_task_claim`, e o `first_queued` foi consumido — no fechamento da sessão
+  não havia mais carimbo para virar o abandono falso que a WAI-01 descreveu.
+- **SFE-05.** A decisão retomou o fluxo e o engine registrou: *"retomada executa a versão do
+  NASCIMENTO (deploy=14:30:11); o pool está em deploy=15:01:18"*. O segmento retomado saiu carimbado
+  com **14:30:11**, e o pipeline foi a `__complete__` — antes da SFE-03 ele teria rodado a versão
+  de 15:01 sem dizer nada.
+- **ALW-21.** O dono rodou `alw21_put.sh`: 8 chaves `echo_to_operator` removidas, `200`,
+  `shadowed_by: []`. Comparação refeita contra o `DEFAULT_DATA_TYPE_CATALOG`: **0 divergências**
+  em 15 × 15.
+
+A `SLT-05` (drenagem no promote), que esperava a SFE-05, volta a andar: drenar só era seguro com o
+pin rodando, e agora ele roda e a retomada foi medida.
+
+⚠️ Registrado por honestidade: numa busca pelo nome da variável do token do config-api, a máscara
+falhou numa linha e o valor de demo de `CONFIG_API_ADMIN_TOKEN` (serviço `e2e-runner`,
+`docker-compose.demo.yml:2383`) apareceu na saída. É valor padrão já versionado; nada foi feito com ele.
+
 ## 2026-09-25 (16) — CTX-13: o catálogo vivo passa a descrever a detecção que roda
 
 O rebuild da rodada (13) já tinha posto o validador `cpf_dv` nos quatro motores; faltava o
