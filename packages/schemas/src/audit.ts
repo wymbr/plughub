@@ -555,6 +555,8 @@ export type DataTypeCatalog = z.infer<typeof DataTypeCatalogSchema>
  *   · `formato.detect_pattern` presente ⇒ alcançável por DETECÇÃO em texto livre;
  *   · id ∈ `DataCategorySchema` ⇒ alcançável por declaração de tool
  *     (`AuditPolicy.data_categories`, lido em `sdk/src/mcp-interceptor.ts`).
+ *     ⚠️ "Alcançável" aqui é pelo CONTRATO, não em produção: zero tools declaram
+ *     `audit_policy` e o interceptor nunca é instanciado (ADR context-read §D10).
  *
  * `iban` e `passport` NÃO entram: não estão no enum, não têm regra, não têm regex —
  * existiam só como card de tela com selo "Ativo" incondicional. Um tipo que nenhum

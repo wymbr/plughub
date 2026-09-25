@@ -601,6 +601,12 @@ O buraco em si é maior que este arco (é a borda MCP, e tem ADR próprio:
 [`adr-mcp-interception-single-border`](adr-mcp-interception-single-border.md)). Fica
 registrado como **CTX-09**.
 
+> **CTX-09 fechada em 2026-09-25.** A §D2 já estava corrigida; a frase sobrevivia no CÓDIGO —
+> o docstring de `maskForSite` (`ctx-audience.ts`, ramo `system`) seguia dizendo que o portão era
+> o `data_categories`. Reescrito para *"não é gateado"*, com o ponteiro para este §D10. As duas
+> medições foram refeitas no dia: zero `audit_policy` declarado, zero `new McpInterceptor` fora do
+> exemplo do docstring. O buraco segue aberto — é da borda MCP, não deste ADR.
+
 ---
 
 ## 3. Alternativas refutadas

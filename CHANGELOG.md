@@ -1,5 +1,25 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (11) — CTX-09: o código deixa de citar um gate inexistente para o `invoke` cru
+
+**A ficha era só de documentação, e o ADR já estava certo:** a §D2 do
+`adr-context-read-audience-policy` foi corrigida na F4 (2026-09-04), com o §D10 medindo que o
+`invoke` sai cru **sem portão**. A mesma frase, porém, sobrevivia onde o leitor de código a
+encontra: o docstring de `maskForSite` (`ctx-audience.ts`), no ramo `system`, seguia afirmando
+*"o portão daquele caminho é o `AuditPolicy.data_categories` da tool"*. Era a última casa da
+promessa sem mecanismo; agora diz *"não é gateado"* e aponta o §D10 e o ADR da borda MCP.
+
+Junto, uma meia-verdade em `audit.ts` (`DEFAULT_DATA_TYPE_CATALOG`): *"alcançável por declaração
+de tool, lido em `mcp-interceptor.ts`"* ganhou a ressalva de que é alcançável pelo CONTRATO, não em
+produção. As demais citações (`seed.py`, o bloco de `address/health/financial` em `audit.ts`,
+`probe_type_catalog.sh`) já diziam que nenhuma tool usa o caminho, e ficaram.
+
+**Medições refeitas hoje:** zero `audit_policy:` declarado em `packages/` e `infra/`; zero
+`new McpInterceptor` fora do exemplo do próprio docstring. A decisão não mudou (mascarar argumento
+de tool quebraria o CRM), e o buraco segue — é da borda MCP
+(`adr-mcp-interception-single-border`), que tem ADR próprio. Mudança só de comentário: sem teste,
+sem rebuild.
+
 ## 2026-09-25 (10) — WAI-01: o claim do pull encerra a espera, e o carimbo deixado para trás deixa de virar abandono
 
 **A ficha estava pela metade velha.** Dizia que *"contato que espera e é atendido não gera registro

@@ -193,8 +193,11 @@ export type CtxReadMask = ContextMaskingType | "undecided" | "unknown"
  * As três plateias que o catálogo não conhece são decididas aqui, cada uma por
  * um motivo diferente:
  *
- *   system — o valor sai INTEIRO. O CRM precisa do número, e o portão daquele
- *            caminho é o `AuditPolicy.data_categories` da tool, não este.
+ *   system — o valor sai INTEIRO, e **não é gateado**: o CRM precisa do número.
+ *            ⚠️ Este comentário dizia que o portão era o `AuditPolicy.data_categories`
+ *            da tool — medido (ADR §D10), zero tools o declaram e o único leitor
+ *            (`McpInterceptor`) nunca é instanciado. O buraco é da borda MCP
+ *            (`adr-mcp-interception-single-border`), não desta função.
  *   none   — não é renderizado para ninguém; não há o que filtrar.
  *   model  — `undecided` (§D5): um prompt SAI da plataforma, e mandar um CPF ao
  *            provedor de modelo é outro fato que mostrá-lo a um operador logado.
