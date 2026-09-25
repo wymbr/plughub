@@ -63,7 +63,9 @@ steps:
 
     # ── Coleta via formulário com campos mistos ────────────────────────────────
     # email:      sem masked → vai para pipeline_state.dados_coletados.email
-    #             também escrito em caller.email via context_tags (aparece na aba Contexto)
+    #             e gravado em caller.email pelos avisos ao agente depois da autenticação
+    #             (`aviso_sucesso_agente`, `conferencia_ok_agente`). SFE-07: ficava num
+    #             `context_tags` DESTE menu, que o schema descartava — o menu não escreve tag.
     # senha:      masked:true → maskedScope[@masked.senha], ausente de pipeline_state
     # codigo_2fa: masked:true → maskedScope[@masked.codigo_2fa], ausente de pipeline_state
     - id: coletar_dados
@@ -84,12 +86,6 @@ steps:
           label: "Código 2FA"
           type: "text"
           masked: "credential"
-      context_tags:
-        outputs:
-          email:
-            tag: caller.email
-            confidence: 1.0
-            merge: overwrite
       on_success: validar_senha
       on_failure: sair_falha
       on_timeout: sair_falha
@@ -152,12 +148,6 @@ steps:
           label: "Código 2FA"
           type: "text"
           masked: "credential"
-      context_tags:
-        outputs:
-          email:
-            tag: caller.email
-            confidence: 1.0
-            merge: overwrite
       on_success: validar_senha_retry
       on_failure: sair_falha
       on_timeout: sair_falha
@@ -195,6 +185,14 @@ steps:
       type: notify
       message: "✅ Autenticação concluída. Transferindo para você. Verifique dados_coletados.email no painel — senha e codigo_2fa não aparecem (mascarados)."
       visibility: agents_only
+      context_tags:
+        outputs:
+          # SFE-07 — o e-mail do formulário vai à aba Contexto do Console exatamente
+          # onde a mensagem manda o agente olhar. Chave = caminho em pipeline_state.
+          dados_coletados.email:
+            tag: caller.email
+            confidence: 1.0
+            merge: overwrite
       on_success: confirmacao
       on_failure: confirmacao
 
@@ -315,6 +313,14 @@ steps:
       type: notify
       message: "✅ Autenticação concluída. Verifique dados_coletados.email no painel — senha e codigo_2fa não aparecem (mascarados)."
       visibility: agents_only
+      context_tags:
+        outputs:
+          # SFE-07 — o e-mail do formulário vai à aba Contexto do Console exatamente
+          # onde a mensagem manda o agente olhar. Chave = caminho em pipeline_state.
+          dados_coletados.email:
+            tag: caller.email
+            confidence: 1.0
+            merge: overwrite
       on_success: finalizar
       on_failure: finalizar
 

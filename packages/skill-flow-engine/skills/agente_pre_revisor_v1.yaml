@@ -170,95 +170,16 @@ steps:
       # Participantes
       participant_summary: "$.pipeline_state.eval_context.participant_summary"
     output_schema:
+      # SFE-07: aqui só vale type/enum/minimum/maximum/required — é tudo o que o ai-gateway
+      # leva ao modelo. A estrutura dos itens que estava aqui era DESCARTADA no parse e nunca
+      # chegou ao modelo; ela precisa virar `json_schema` inline antes de este skill ser
+      # deployado (SFE-08). O formato original está no diff do commit da SFE-07.
       dimension_reviews:
         type: array
-        description: >
-          Uma entrada por dimensão revisada. Cobrindo todas as dimensões que o avaliador
-          pontuou (que estão nos evaluator_threads). Dimensões só com critérios
-          auto_computed podem ser omitidas (sem thread do avaliador).
         required: true
-        minItems: 1
-        items:
-          type: object
-          properties:
-            dimension_id:
-              type: string
-              description: "ID da dimensão — deve corresponder a um thread do avaliador"
-              required: true
-            action:
-              type: string
-              enum: ["approve", "adjust"]
-              description: >
-                approve: o score e as evidências do avaliador estão adequados.
-                adjust: o score ou as evidências precisam de correção.
-              required: true
-            score_override:
-              type: number
-              description: >
-                Novo score proposto (0 a max_score da dimensão).
-                OBRIGATÓRIO quando action=adjust. Omitir quando action=approve.
-              required: false
-              nullable: true
-            revised_evidence:
-              type: array
-              description: >
-                Evidências alternativas ou complementares que suportam o score_override.
-                OBRIGATÓRIO quando action=adjust. Mínimo 1 entry.
-                Omitir quando action=approve.
-              required: false
-              minItems: 1
-              items:
-                type: object
-                properties:
-                  stream_entry_id:
-                    type: string
-                    description: "event_id do replay_event que serve como evidência"
-                    required: true
-                  excerpt:
-                    type: string
-                    description: "Trecho exato (≤ 200 chars) do original_content do evento"
-                    required: true
-                  relevance_note:
-                    type: string
-                    description: "Por que este evento suporta o score_override (1–3 frases)"
-                    required: true
-            justification:
-              type: string
-              description: >
-                Obrigatório em todos os casos — mínimo 20 palavras.
-                Para approve: por que o score original está correto.
-                Para adjust: por que o score original estava errado e o override é adequado.
-              required: true
       calibration_signal:
         type: object
-        description: >
-          OPCIONAL — emitir apenas quando há evidência de padrão SISTEMÁTICO do avaliador,
-          não por discordância isolada em uma única dimensão. Um sinal de calibração
-          dispara CurationReview para o curador humano. Exemplos de padrão legítimo:
-          "Avaliador ignora consistentemente o contexto de canal de voz", "Avaliador
-          penaliza sessões curtas mesmo sem critério para duração no formulário".
         required: false
-        nullable: true
-        properties:
-          severity:
-            type: string
-            enum: ["low", "medium", "high"]
-            description: >
-              low: padrão menor, ajuste fino de calibração.
-              medium: padrão recorrente com impacto moderado nos scores.
-              high: viés sistemático que invalida múltiplas avaliações.
-            required: true
-          dimension_id:
-            type: string
-            description: "Dimensão onde o padrão foi detectado (ou a mais afetada)"
-            required: true
-          observation:
-            type: string
-            description: >
-              Descrição do padrão sistemático — mínimo 20 palavras. Deve ser específico
-              e baseado em evidências observadas nos threads. Não usar linguagem vaga como
-              "avaliador foi muito rigoroso".
-            required: true
     output_as:  review_result
     on_success: submit_pre_review
     on_failure: complete_error

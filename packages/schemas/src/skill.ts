@@ -338,14 +338,23 @@ export const InvokeStepSchema = z.object({
   on_failure: z.string(),
 })
 
-/** output_schema para step reason — subconjunto de JSON Schema */
+/**
+ * output_schema para step reason — subconjunto de JSON Schema.
+ *
+ * SFE-07 (2026-09-25) — `.strict()`. Os cinco atributos abaixo são TUDO o que o contrato
+ * leva ao modelo (`ai-gateway/reason.py::_format_schema`) e valida (`_validate_schema`).
+ * `description`, `items`, `properties`, `minItems`, `nullable` eram aceitos e DESCARTADOS
+ * no parse: o autor achava que o modelo lia a descrição e ele nunca a recebia. Instrução
+ * para o modelo vai no `input` do step; estrutura rica de saída vai por `json_schema_ref`
+ * (tool-use com JSON Schema completo).
+ */
 const ReasonOutputFieldSchema = z.object({
   type:     z.enum(["string", "number", "boolean", "object", "array"]),
   enum:     z.array(z.string()).optional(),
   minimum:  z.number().optional(),
   maximum:  z.number().optional(),
   required: z.boolean().optional(),
-})
+}).strict()
 
 export const ReasonStepSchema = z.object({
   id:                 z.string(),
@@ -722,7 +731,12 @@ export const MenuStepSchema = z.object({
   on_invalid:    z.string().optional(),
   /** Step para desconexão do cliente — usa on_failure se não especificado */
   on_disconnect: z.string().optional(),
-})
+}).strict()
+// SFE-07 (2026-09-25) — `.strict()`: campo desconhecido é RECUSADO no publish, nunca
+// descartado calado. Medido: `context_tags` declarado em dois menus do
+// `agente_auth_form_v1` sumia no parse, e o YAML prometia *"também escrito em
+// caller.email"* a uma aba do Console que nunca o recebeu. O `menu` não escreve tag;
+// quem escreve é `invoke`/`notify`/`reason`/`resolve`.
 
 // ── CollectStep — async multi-channel data collection (Arc 4 extension) ──────
 

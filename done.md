@@ -564,6 +564,7 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | SFE-03 | A sessão retomada executa a versão em que NASCEU (pin no engine) e o segmento carimba a versão executada | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (12) |
 | SFE-04 | O `issue_status` passa a viajar no que roda: rebuild + 13 de 16 pools re-promovidos, medido ao vivo (0 → 1) com o controle | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (14) |
 | SFE-06 | Os três pools que faltavam da SFE-04 re-promovidos com o `issue_status` — as duas premissas da ficha estavam erradas | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (15) |
+| SFE-07 | Campo desconhecido no `output_schema` do `reason` e no `menu` passa a ser RECUSADO no publish, não descartado; o e-mail do `auth_form` chega à aba Contexto | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (18) |
 | SFE-05 | SFE-03 no ar e medida: sessão nascida em 14:30 retomou depois do promote de 15:01 executando a versão do nascimento | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (17) |
 
 ## `docs/arcos/audit-lgpd.md` — trilha e direitos do titular

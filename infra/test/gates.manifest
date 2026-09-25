@@ -802,6 +802,9 @@ probe_masking_apply_parity.sh
 # rede/MaskingService, py-contextstore do channel-gateway, copia do quality-ingest). Exige
 # DOCKER (metade TS em container).
 probe_detect_validator_parity.sh
+# SFE-07: todo campo de skill YAML chega ao que roda — recusado pelos schemas `.strict()`
+# ou acusado quando o parse o descarta. Roda sem stack: precisa de `packages/schemas/dist`.
+probe_skill_yaml_strict.sh
 # ALW-03: exige a stack de pe (o ramo G cria uma cobaia, loga e escreve o mapa de volta
 # IDENTICO). Sem ela sai SEM AMOSTRA, que nao e verde.
 probe_context_map_grant_split.sh

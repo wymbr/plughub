@@ -416,20 +416,30 @@ Invoca o AI Gateway com um prompt declarado e retorna JSON estruturado conforme 
   type:        "reason"
   prompt_id:   string    // referência ao Prompt Registry
   input:       Record<string, unknown>   // literais ou JSONPath
-  output_schema: Record<string, {
+  output_schema: Record<string, {      // .strict(): outra chave é RECUSADA no publish (SFE-07)
     type:    "string" | "number" | "boolean" | "object" | "array"
-    enum?:   unknown[]
+    enum?:   string[]
     minimum?: number
     maximum?: number
-    required?: string[]
-    items?:    Record<string, unknown>
+    required?: boolean                 // o ai-gateway assume true quando ausente
   }>
+  json_schema?:     Record<string, unknown>   // JSON Schema completo → tool-use nativo
+  json_schema_ref?: string                    // idem, lido do pipeline_state
   output_as:          string
   max_format_retries: number   // default: 1
   on_success:         string
   on_failure:         string   // acionado após max_format_retries falhas de formato
 }
 ```
+
+> **O `output_schema` é tudo o que o modelo vê sobre a saída** no caminho sem `json_schema`:
+> o ai-gateway o converte em texto por `_format_schema` (tipo, enum, limites, obrigatório) e
+> valida a resposta por `_validate_schema`, com os mesmos cinco atributos. O `prompt_id` não é
+> resolvido. Até a SFE-07 (2026-09-25) o schema aceitava e DESCARTAVA `description`, `items`,
+> `properties`, `minItems` e `nullable` — o autor escrevia a regra do campo ali e o modelo nunca a
+> lia. Hoje o publish recusa; a regra vai no `input` (`instrucoes`), e estrutura rica vai por
+> `json_schema`/`json_schema_ref`. O mesmo vale para o `menu`, que recusa `context_tags`: quem
+> escreve tag é `invoke`, `notify`, `reason` e `resolve`. Gate: `infra/test/probe_skill_yaml_strict.sh`.
 
 **Validação pelo AI Gateway antes de persistir:**
 

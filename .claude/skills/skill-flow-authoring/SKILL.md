@@ -73,8 +73,12 @@ Fatos com `arquivo:linha` em [`references/fatos-do-codigo.md`](references/fatos-
 
 - **`reason`** — obrigatórios `prompt_id` · `output_schema` · `output_as` · `on_success` · `on_failure`.
   ⚠️ `prompt_id` **não é resolvido** por ninguém: o ai-gateway manda prompt de sistema genérico +
-  schema + `input`. **Escreva a instrução no `input`** (padrão: `instrucoes: |`) e descreva os
-  campos no `output_schema`. Sentimento só é medido se `customer_utterance` referenciar a fala
+  schema + `input`. **Escreva a instrução no `input`** (padrão: `instrucoes: |`) — inclusive o
+  que cada campo de saída significa. O `output_schema` aceita SÓ `type` · `enum` · `minimum` ·
+  `maximum` · `required` (boolean); `description`, `items`, `properties`, `minItems` e `nullable`
+  são **recusados no publish** (SFE-07) — eram descartados calados e o modelo nunca os via.
+  Estrutura de saída rica (array de objetos) vai por `json_schema` inline ou `json_schema_ref`
+  (tool-use com JSON Schema completo). Sentimento só é medido se `customer_utterance` referenciar a fala
   (`$.`/`@ctx.`, nunca literal). `model_profile`: `fast|balanced|powerful|evaluation`.
 - **`invoke`** — `tool` · `input` · `output_as` · `on_success`/`on_failure`; sem `target` usa
   `mcp-server-plughub`. ⚠️ O `invoke` de flow **não passa** pelo `judgeInvoke`, e `tools[]` do YAML

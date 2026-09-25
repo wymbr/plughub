@@ -208,14 +208,13 @@ steps:
       # false` de propósito: o caso normal é escolher, e exigir o campo faria o
       # `validateAgainstSchema` reprovar toda classificação confiante (→ `escapar`,
       # o oposto do que esta ficha entrega).
+      # SFE-07: aqui só vale type/enum/minimum/maximum/required — é tudo o que o
+      # ai-gateway leva ao modelo. A regra do campo (só com `destino` vazio, dois
+      # ou três caminhos, copiados da lista) mora nas `instrucoes` acima, que é o
+      # que o modelo de fato lê; uma `description` aqui era descartada no parse.
       candidatos:
         type: array
         required: false
-        description: >
-          Caminhos plausíveis que você não conseguiu separar, do mais provável ao
-          menos. Só quando `destino` for vazio. Máximo 3.
-        items:
-          type: string
     output_as: classificacao
     on_success: triagem
     on_failure: escapar

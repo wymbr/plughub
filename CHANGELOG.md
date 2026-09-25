@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (18) — SFE-07: o que o autor escreve no skill chega ao que roda, ou é recusado
+
+**A família da SFE-02, fora do `complete`.** `z.object` descarta chave desconhecida em silêncio,
+e o registry grava o resultado do parse. Censo dos 42 skill YAMLs pelo `SkillFlowSchema`
+compilado: `reason.output_schema.*` perdia `description`/`items` em 4 steps (+ `minItems`,
+`nullable`, `properties` nos revisores), e `menu.context_tags` sumia em 2 steps do
+`agente_auth_form_v1`.
+
+**Medido o dano antes de decidir.** O contrato inteiro (`ReasonOutputFieldSchema`, o Pydantic do
+ai-gateway, `_format_schema` que monta o texto para o modelo e `_validate_schema`) só conhece
+`type/enum/minimum/maximum/required`, e o `prompt_id` nem é resolvido — então nenhum desses campos
+chegaria ao modelo mesmo que o registry o guardasse. Dano vivo: ~0 no classificador (as
+`instrucoes` do `input` já diziam tudo, inclusive o "dois ou três"), 0 no avaliador (usa
+`json_schema_ref`), e 0 hoje nos revisores só porque **nenhum pool os roda** — neles o formato dos
+itens não chega por caminho nenhum. No `menu`, visível: `menu.ts` não implementa `context_tags`,
+e o YAML prometia *"também escrito em caller.email … (aparece na aba Contexto)"*.
+
+**Decisão do dono: recusar, nunca aceitar e jogar fora.** `.strict()` no `ReasonOutputFieldSchema`
+e no `MenuStepSchema`. Os 5 YAMLs foram limpos por um editor de indentação (comentários e formato
+preservados) sem perder nada que chegava ao modelo. O e-mail do `auth_form` passou a ser gravado
+pelos dois avisos que MANDAM o agente olhá-lo (`aviso_sucesso_agente`, `conferencia_ok_agente`),
+com `notify.context_tags.outputs`, que o engine implementa.
+
+⚠️ **Uma frase minha errada, pega antes do commit:** o comentário novo do avaliador dizia que as
+"threads por dimensão" chegavam ao modelo pelo `json_schema_ref`. Lido o builder
+(`buildEvaluationOutputSchema`): ele NÃO pede `dimension_threads`, `overall_score` nem
+`compliance_flags`. O comentário diz agora o que o builder faz, e a lacuna é a `SFE-08`.
+
+**Testes.** `strict-step-fields.test.ts` (9, em par: o que o contrato entende passa, o que não
+entende reprova nomeando), mutação 2/2 mortas; schemas 392, engine 322 + tsc, agent-registry 132.
+Gate novo `probe_skill_yaml_strict.sh` (sem stack; registrado no manifesto): reprova nos YAMLs do
+HEAD anterior nomeando os 11 casos, passa na árvore, e o ramo D planta os dois casos em cópia.
+
+**Subido e medido ao vivo.** Rebuild de `agent-registry`, `skill-flow-service` e
+`mcp-server-plughub` juntos (regra do `MenuStepSchema`), `.strict()` conferido no dist dos
+três. (1) `PUT` de um skill-cobaia com `description` no `output_schema` → **422** nomeando
+`flow.steps.0.output_schema.x`, e a cobaia NÃO foi criada (404). (2) `auth_form_ia` e
+`demo_llm_ia` publicados e promovidos (a testemunha: YAML limpo passa); um contato pelo chat
+autenticou (PIN de demo) e o ContextStore ganhou `caller.email` com
+`source: notify:aviso_sucesso_agente`, `agents_only` — o que a aba Contexto lê. A primeira
+tentativa desse contato falhou por erro MEU no roteiro do cliente (casou o aviso anterior, não o
+formulário); os dois contatos escalaram a `retencao_humano`.
+
+**Onde se aprende a escrever um `reason` ensinava o que agora é recusado:** a skill
+`skill-flow-authoring` mandava *"descreva os campos no `output_schema`"*, e
+`docs/pacotes/skill-flow-engine.md` documentava `items?` e `required?: string[]` (é boolean).
+Os dois corrigidos. ⚠️ A skill mudou e o teste em sessão NOVA que a `claude-md-maintenance` § 6
+pede não foi feito.
+
+Deixou ficha: `SFE-08` (contrato de saída dos agentes de avaliação).
+
 ## 2026-09-25 (17) — WAI-03, SFE-05, ALW-21: as últimas medições ao vivo, com um gesto do dono
 
 As três dependiam de algo que eu não faço — agente logado e token de admin. O dono fez; eu medi.

@@ -249,123 +249,33 @@ steps:
       # Modo comparativo — o LLM deve comparar replay com produção se true
       comparison_mode:     "$.pipeline_state.eval_context.comparison_mode"
     output_schema:
+      # SFE-07: aqui só vale type/enum/minimum/maximum/required. A estrutura que estava
+      # aqui era DESCARTADA no parse. O que chega ao modelo é o `json_schema_ref` acima —
+      # `evaluation_output_schema`, montado do FORMULÁRIO em mcp-server
+      # `tools/evaluation.ts::buildEvaluationOutputSchema` — e ele cobre SÓ
+      # `criterion_responses`, `overall_observation`, `highlights` e `improvement_points`.
+      # `dimension_threads`, `overall_score` e `compliance_flags` não chegam por caminho
+      # nenhum (SFE-08).
       criterion_responses:
         type: array
-        description: >
-          Uma entrada por critério do formulário com type != "auto_computed".
-          Critérios auto_computed devem ser omitidos — são preenchidos pelo
-          SessionMetricsExtractor no ingest. Quando na=true, value deve ser
-          null e na_reason deve explicar por que o critério não se aplica.
         required: true
-        items:
-          type: object
-          properties:
-            criterion_id:
-              type: string
-              required: true
-            value:
-              type: number
-              description: "Nota 0–10 ou null quando na=true"
-              nullable: true
-              required: true
-            na:
-              type: boolean
-              description: "true quando o critério não é aplicável a esta sessão"
-              required: true
-            na_reason:
-              type: string
-              description: "Obrigatório quando na=true"
-              required: false
-            justification:
-              type: string
-              description: "Fundamentação obrigatória — mínimo 20 palavras"
-              required: true
-            evidence_refs:
-              type: array
-              description: "turn_index[] dos replay_events — mantido para compatibilidade Arc 6"
-              items:
-                type: integer
-              required: false
       dimension_threads:
         type: array
-        description: >
-          Arc 13 — Thread de evidência estruturada por dimensão do formulário.
-          Produzir uma entrada para cada dimensão que tenha ao menos um critério
-          avaliado (na=false). Dimensões com todos os critérios na=true ou
-          type=auto_computed podem ser omitidas.
         required: true
-        items:
-          type: object
-          properties:
-            dimension_id:
-              type: string
-              description: "ID da dimensão conforme evaluation_form.dimensions[].id"
-              required: true
-            score:
-              type: number
-              description: >
-                Score da dimensão (0 a max_score), calculado como média ponderada
-                dos critérios avaliados (na=false) dentro da dimensão.
-              required: true
-            justification:
-              type: string
-              description: "Síntese da avaliação da dimensão — mínimo 30 palavras"
-              required: true
-            evidence_entries:
-              type: array
-              description: >
-                Evidências estruturadas que fundamentam o score da dimensão.
-                Mínimo 1 entrada por dimensão avaliada. Referenciar eventos
-                reais do replay_events via stream_entry_id.
-              required: true
-              minItems: 1
-              items:
-                type: object
-                properties:
-                  stream_entry_id:
-                    type: string
-                    description: >
-                      event_id do replay_event que serve como evidência
-                      (campo event_id ou id do evento no stream Redis).
-                    required: true
-                  excerpt:
-                    type: string
-                    description: >
-                      Trecho exato (≤ 200 caracteres) do conteúdo do evento
-                      que justifica a evidência. Não parafrasear — transcrever
-                      fielmente o que está no original_content do evento.
-                    required: true
-                  relevance_note:
-                    type: string
-                    description: >
-                      Explicação de por que este evento é relevante para
-                      o score desta dimensão (1–3 frases).
-                    required: true
       overall_score:
         type: number
-        description: "Nota geral 0–10 (média ponderada dos critérios avaliados)"
         required: true
       overall_observation:
         type: string
-        description: "Síntese da avaliação — mínimo 50 palavras"
         required: true
       highlights:
         type: array
-        description: "Pontos positivos identificados (máximo 5)"
-        items:
-          type: string
         required: false
       improvement_points:
         type: array
-        description: "Oportunidades de melhoria (máximo 5)"
-        items:
-          type: string
         required: false
       compliance_flags:
         type: array
-        description: "Violações de política ou protocolo detectadas"
-        items:
-          type: string
         required: false
     output_as:  llm_result
     on_success: submit_result

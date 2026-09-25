@@ -172,69 +172,13 @@ steps:
       # Participantes
       participant_summary: "$.pipeline_state.eval_context.participant_summary"
     output_schema:
+      # SFE-07: aqui só vale type/enum/minimum/maximum/required — é tudo o que o ai-gateway
+      # leva ao modelo. A estrutura dos itens que estava aqui era DESCARTADA no parse e nunca
+      # chegou ao modelo; ela precisa virar `json_schema` inline antes de este skill ser
+      # deployado (SFE-08). O formato original está no diff do commit da SFE-07.
       dimension_decisions:
         type: array
-        description: >
-          Uma entrada por dimensão que possui round=2 (contestada pelo agente humano).
-          Não incluir dimensões sem contestação — o revisor árbitro só decide o que
-          foi contestado. O score das demais dimensões permanece como estava.
         required: true
-        minItems: 1
-        items:
-          type: object
-          properties:
-            dimension_id:
-              type: string
-              description: "ID da dimensão — deve ter round=2 nos threads"
-              required: true
-            decision:
-              type: string
-              enum: ["upheld", "revised"]
-              description: >
-                upheld: a contestação não é procedente, score original mantido.
-                revised: a contestação é procedente, score alterado com evidência.
-              required: true
-            score_override:
-              type: number
-              description: >
-                Novo score proposto (0 a max_score da dimensão).
-                OBRIGATÓRIO quando decision=revised.
-                DEVE ser diferente do score do avaliador original.
-                Omitir quando decision=upheld.
-              required: false
-              nullable: true
-            evidence_entries:
-              type: array
-              description: >
-                Evidências do transcript que suportam a decisão revised.
-                OBRIGATÓRIO quando decision=revised. Mínimo 1 entry.
-                Omitir quando decision=upheld.
-              required: false
-              minItems: 1
-              items:
-                type: object
-                properties:
-                  stream_entry_id:
-                    type: string
-                    description: "event_id do replay_event que serve como evidência"
-                    required: true
-                  excerpt:
-                    type: string
-                    description: "Trecho exato (≤ 200 chars) do original_content do evento"
-                    required: true
-                  relevance_note:
-                    type: string
-                    description: "Por que este evento suporta a decisão (1–3 frases)"
-                    required: true
-            justification:
-              type: string
-              description: >
-                Obrigatório em todos os casos — mínimo 20 palavras.
-                Para upheld: por que a contestação não é procedente (argumento refutado
-                com referência ao transcript).
-                Para revised: por que a contestação é procedente (novo argumento ou
-                evidência não considerada na avaliação original).
-              required: true
     output_as:  review_result
     on_success: submit_review
     on_failure: complete_error
