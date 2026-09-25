@@ -29,7 +29,7 @@
       "id": "oferecer_verificacao",
       "kind": "statement",
       "text": {
-        "pt-BR": "Alterações de limite exigem confirmar sua identidade. Posso enviar um código de verificação?"
+        "pt-BR": "Para consultar ou confirmar uma solicitação de limite, preciso confirmar sua identidade com um código de verificação. Se preferir, você pode abrir um pedido novo ou falar com um atendente."
       }
     },
     {
@@ -43,7 +43,7 @@
       "id": "avisar_codigo_nao_enviado",
       "kind": "statement",
       "text": {
-        "pt-BR": "Não consegui enviar o código de verificação. Vou te transferir para um atendente, que pode confirmar sua identidade. Um instante..."
+        "pt-BR": "Não consegui enviar o código de verificação. Você ainda pode abrir um pedido novo ou falar com um atendente, que pode confirmar sua identidade."
       }
     },
     {
@@ -64,7 +64,7 @@
       "id": "avisar_verificacao_falhou",
       "kind": "statement",
       "text": {
-        "pt-BR": "Não consegui confirmar o código. Vamos seguir com uma solicitação nova."
+        "pt-BR": "Não consegui confirmar o código. Você pode tentar de novo, abrir um pedido novo ou falar com um atendente."
       }
     },
     {

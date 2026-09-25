@@ -18,6 +18,8 @@
 #      `limite_retorno` lê a journey; o `choice` enxerga `$.config.*` e lê `@ctx.journey.*`
 #      na journey. Controle da cópia limpa e oito mutações sobre CÓPIA. Desde a PID-17 o
 #      censo de nós e config é sobre TODA porta do seed (limite e portabilidade).
+#      Desde a PID-19 (2026-09-25) também: o menu da porta oferece `pedido novo` sempre, e
+#      nenhum nó da prova o abre sozinho (recusar ou errar o código volta ao menu).
 #   B  AO VIVO — o slot `current` do `limite_ia` roda o runner com a config exigida; a
 #      forma publicada cobre os nós; e o ACESSO 1 pelo chat com a mesma injeção: o
 #      processo nasce com o CPF de quem provou, e o texto injetado chega literal.
@@ -51,7 +53,7 @@ except Exception as e:
 
 # PID-17: as portas são POPULAÇÃO — o censo mede todo pool do seed que roda o runner, e a
 # exigência nomeia as duas vivas para que uma porta que SAIA do censo (seed trocado) apareça.
-LIMPO="d['runner_presente'] and {'limite_ia', 'portabilidade_ia'} <= set(d['portas']) and not d['literais_de_dominio'] and not d['context_json_no_runner'] and d['refs_by_node'] >= 12 and not d['nos_ausentes'] and not d['config_faltando'] and not d['intake_antigo'] and not d['retorno_le_sessao'] and d['choice_le_config'] and d['choice_le_journey'] and d['continuidade_le_journey'] == ['limite_solicitado', 'numero_cartao']"
+LIMPO="d['runner_presente'] and {'limite_ia', 'portabilidade_ia'} <= set(d['portas']) and not d['literais_de_dominio'] and not d['context_json_no_runner'] and d['refs_by_node'] >= 12 and not d['nos_ausentes'] and not d['config_faltando'] and not d['intake_antigo'] and not d['retorno_le_sessao'] and d['choice_le_config'] and d['choice_le_journey'] and d['continuidade_le_journey'] == ['limite_solicitado', 'numero_cartao'] and d['menu_porta'] == ['atendente', 'novo', 'sim'] and d['novo_abre_pedido'] and not d['pedido_automatico'] and d['falha_da_prova_volta_ao_menu']"
 
 echo "════════════════════════════════════════════════════════════════════"
 echo " a porta é de plataforma, e o pedido nasce sob quem provou?"
@@ -118,6 +120,15 @@ else
     "s.replace('contextStore.get(naJourney ? \`journey:\${ctx.journeyId}\` : ctx.sessionId', 'contextStore.get(ctx.sessionId', 1)"
   muta "retorno volta a ler da sessão" packages/skill-flow-engine/skills/skill_limite_retorno_v1.yaml \
     "s.replace('@ctx.journey.resultado', '@ctx.session.resultado', 1)"
+  # PID-19 — o pedido novo é escolha sempre oferecida, nunca automática
+  muta "menu da porta perde o pedido novo" "$R" \
+    "s.replace('      - id: novo\n        label: \"📝 Abrir pedido novo\"\n', '', 1)"
+  muta "opção novo não leva ao formulário" "$R" \
+    "s.replace('        value:    \"novo\"\n        next:     iniciar_solicitacao', '        value:    \"novo\"\n        next:     avisar_transferencia', 1)"
+  muta "código que não confere abre pedido sozinho" "$R" \
+    "s.replace('    on_success: oferecer_verificacao\n    on_failure: oferecer_verificacao\n', '    on_success: iniciar_solicitacao\n    on_failure: iniciar_solicitacao\n', 2)"
+  muta "código recusado volta a ir ao SAC" "$R" \
+    "s.replace('    on_success: oferecer_verificacao\n    on_failure: oferecer_verificacao\n', '    on_success: degradar\n    on_failure: degradar\n', 1)"
 fi
 
 echo ""

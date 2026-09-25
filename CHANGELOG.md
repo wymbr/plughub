@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (7) — PID-19: a porta oferece "abrir pedido novo" sempre, e recusar a prova volta ao menu
+
+**O defeito.** A D11 diz que abrir processo novo **nunca** exige identificação, e a porta
+(`skill_intake_runner_v1`) exigia: com âncora só `claimed`, o `pending_workflow_get` devolve
+`verification_required` para todos (anti-enumeração), e o menu oferecia *Enviar código · Atendente
+· Encerrar*. Para cliente não importado o OTP é recusado (PID-10), e o código recusado levava direto
+ao SAC — o ramo "pedido novo" não era alcançado desde 2026-09-10 fora das fixtures. Ao mesmo tempo,
+**o código que não conferia abria pedido novo sozinho**, que é a duplicata que o próprio fluxo dizia
+evitar.
+
+**A decisão do dono (2026-09-14), aplicada:**
+- menu `oferecer_verificacao` = **✅ Enviar código · 📝 Abrir pedido novo · 🗣️ Falar com atendente**,
+  idêntico para quem tem e para quem não tem pendência (nada vaza). Três botões é o teto do
+  WhatsApp; o `Encerrar` saiu (timeout e desconexão continuam encerrando);
+- `novo` → formulário do processo, sob a âncora informada; ver e confirmar pendência seguem exigindo
+  prova, e a duplicata é do N3;
+- código **recusado** e código que **não confere** (e falha da tool de conferência) voltam ao
+  **mesmo** menu — nunca ao SAC, nunca a pedido automático; sem código em 1 h → encerra por timeout
+  (antes abria pedido em nome de quem já tinha ido embora).
+- Roteiros das duas portas reescritos nos três nós que deixariam de ser verdade (o prompt perguntava
+  *"Posso enviar um código?"*; o aviso de código recusado prometia transferir; o de código errado
+  anunciava *"vamos seguir com uma solicitação nova"*).
+
+**Gate:** `probe_intake_runner.sh` ramo A ganhou quatro fatos no censo (`menu_porta`,
+`novo_abre_pedido`, `pedido_automatico`, `falha_da_prova_volta_ao_menu`) e quatro mutações — as 4
+vermelhas, as 8 antigas também; ramo B verde (ele mede o que roda, que ainda é a versão anterior).
+O fluxo passa pelo `SkillFlowSchema` (já com o `complete` estrito) e pelo `validateFlow` do engine
+(ciclo menu → prova → menu passa por I/O bloqueante); os dois roteiros, pelo schema de DialogForm.
+
+**Nada muda para o cliente ainda.** Skill e roteiros são seed-if-absent: publicar os roteiros
+antes, `PUT` do skill e promover `limite_ia`/`portabilidade_ia` — os mesmos pools da SFE-04, numa
+promoção só. Deixou ficha: **PID-23**. Doc: `docs/adr/adr-identity-door-evidence.md` (nota da D11 e
+tabela de fichas).
+
 ## 2026-09-25 (6) — AGH-03: a vaga sai do semáforo mesmo quando o registro do humano já foi apagado
 
 **O defeito.** `remove_conversation` (routing-engine) só chamava `release_instance` dentro de

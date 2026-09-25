@@ -24,6 +24,13 @@ mutada do probe) e imprime UM JSON de fatos:
   choice_le_journey        a condição `@ctx.journey.*` do `choice` lê o hash da journey
   continuidade_le_journey  a continuidade lê cartão e valor da journey (controle: o
                            censo acha as leituras quando elas existem)
+  menu_porta               opções do menu da porta — PID-19: `sim`, `novo`, `atendente`,
+                           o MESMO menu para quem tem e para quem não tem pendência
+  novo_abre_pedido         a opção `novo` leva ao formulário do pedido novo
+  pedido_automatico        nós do caminho da PROVA que abrem pedido novo SOZINHOS (tem de
+                           ser vazio: recusar ou errar o código volta ao menu, nunca cria
+                           um pedido que o cliente não escolheu)
+  falha_da_prova_volta_ao_menu  código recusado e código que não confere voltam ao menu
 """
 import io
 import json
@@ -119,6 +126,34 @@ choice_le_journey = bool(re.search(r"journey:\$\{ctx\.journeyId\}", choice)) and
 
 continuidade_le_journey = sorted(set(re.findall(r"@ctx\.journey\.(numero_cartao|limite_solicitado)\b", cont_txt)))
 
+# ── PID-19 — "abrir pedido novo" é ESCOLHA, sempre oferecida, nunca automática ──────
+passos = {st.get("id"): st for st in runner.get("steps") or []}
+
+
+def saidas(st):
+    """Todo destino declarado de um step (on_*, next de choice/delegate, default)."""
+    out = [v for k, v in st.items() if k.startswith("on_") and isinstance(v, str)]
+    out += [v["next"] for k, v in st.items() if k.startswith("on_") and isinstance(v, dict) and v.get("next")]
+    out += [c.get("next") for c in st.get("conditions") or [] if c.get("next")]
+    if st.get("default"):
+        out.append(st["default"])
+    return out
+
+
+menu_porta = sorted(o.get("id") for o in (passos.get("oferecer_verificacao") or {}).get("options") or [])
+novo_abre_pedido = any(
+    c.get("value") == "novo" and c.get("next") == "iniciar_solicitacao"
+    for c in (passos.get("avaliar_oferta") or {}).get("conditions") or [])
+# Nós do caminho da PROVA (pedir, emitir, coletar, conferir o código): nenhum pode levar ao
+# formulário do pedido novo por conta própria — recusar ou errar a prova volta ao MENU.
+PROVA = ("coletar_ancora_prova", "desafiar_posse", "avisar_codigo_nao_enviado",
+         "coletar_codigo_dialog", "verificar_codigo_otp", "avaliar_verificacao",
+         "avisar_verificacao_falhou")
+pedido_automatico = sorted(n for n in PROVA if "iniciar_solicitacao" in saidas(passos.get(n) or {}))
+falha_da_prova_volta_ao_menu = all(
+    set(saidas(passos.get(n) or {})) == {"oferecer_verificacao"}
+    for n in ("avisar_codigo_nao_enviado", "avisar_verificacao_falhou"))
+
 print(json.dumps({
     "runner_presente":         runner.get("id") == "skill_intake_runner_v1",
     "literais_de_dominio":     literais,
@@ -132,4 +167,8 @@ print(json.dumps({
     "choice_le_config":        choice_le_config,
     "choice_le_journey":       choice_le_journey,
     "continuidade_le_journey": continuidade_le_journey,
+    "menu_porta":              menu_porta,
+    "novo_abre_pedido":        novo_abre_pedido,
+    "pedido_automatico":       pedido_automatico,
+    "falha_da_prova_volta_ao_menu": falha_da_prova_volta_ao_menu,
 }, ensure_ascii=False))

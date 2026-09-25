@@ -170,8 +170,11 @@ acumula os dois papéis.
 > **(3)** `door_mode` e `accept_resume_key` **não** entraram — zero consumidores; viraram a PID-18.
 > Os fatos do processo que a continuidade e a entrega mostram moram na JOURNEY, gravados pelo próprio
 > processo: repassá-los pelo `delegate.context` foi recusado pelo cadastro do ContextStore (nome de tag
-> decidido em runtime). A D11 (*abrir processo novo nunca exige identificação*) **não é cumprida** pela
-> porta, por paridade com o intake que ela substituiu — PID-19.
+> decidido em runtime). A D11 (*abrir processo novo nunca exige identificação*) **não era cumprida**
+> pela porta, por paridade com o intake que ela substituiu. **Cumprida no fonte desde 2026-09-25
+> (PID-19):** o menu da prova é sempre *enviar código · abrir pedido novo · atendente*, idêntico com
+> ou sem pendência, e recusar ou errar o código volta a ele — nunca ao SAC, nunca a um pedido que o
+> cliente não escolheu. Em produção só depois da publicação (PID-23).
 >
 > **A segunda porta entrou em 2026-09-14 (PID-17): `portabilidade_ia`, com a âncora na própria LINHA
 > a portar** (`anchor_kind: phone`, `proof_anchor_kind: phone`). O número provado é o número portado:
@@ -495,7 +498,8 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 | PID-20 | o lote na tela de Deploy e como tool MCP (gatilho: primeiro consumidor além do release manual) | §4 |
 | PID-17 | portabilidade na porta de plataforma, âncora na linha; pendência ancorada na âncora, não no formulário; confirmação que cancela com `rejected` e sobrevive à ociosidade | D2, D6 |
 | PID-18 | `door_mode` e `accept_resume_key` (gatilho: porta só-entrada/só-retomada, ou canal com chave) | D2, D10 |
-| PID-19 | a porta exige prova para abrir pedido novo — contra a D11 | D11 |
+| PID-19 | ~~a porta exige prova para abrir pedido novo — contra a D11~~ fechada 2026-09-25 | D11 |
+| PID-23 | publicar roteiros + skill da PID-19 e promover as duas portas (junto da SFE-04) | D11 |
 | IDN-06 | credencial nas rotas de identidade do channel-gateway | (7) |
 | IDN-07 | eixo de procedência na âncora | D13 |
 | IDN-08 | a aba Cliente carimba `operator` | (8) |

@@ -204,6 +204,14 @@ steps:
         next:     oferecer_verificacao
     default: avisar_transferencia       # sem mecanismo de prova: degrada
 
+  # PID-19 (decisão do dono, 2026-09-14): "abrir pedido novo" SEMPRE neste menu, e o
+  # menu é IDÊNTICO para quem tem e para quem não tem pendência — nada vaza (D11). Antes,
+  # a porta exigia prova para ABRIR pedido, e para cliente não importado o OTP é recusado
+  # (PID-10): o ramo "pedido novo" não era alcançado desde 2026-09-10 fora das fixtures.
+  # É também o menu para onde se volta quando o código é recusado ou não confere — nunca
+  # um segundo menu que variasse com o motivo (ele vazaria a classe da âncora).
+  # Três botões: é o teto do WhatsApp, e o `Encerrar` saiu para caber o pedido novo
+  # (sair continua possível — o timeout e a desconexão já encerram).
   - id: oferecer_verificacao
     type: menu
     prompt: "{{$.pipeline_state.roteiro.render.by_node.oferecer_verificacao}}"
@@ -211,10 +219,10 @@ steps:
     options:
       - id: sim
         label: "✅ Enviar código"
+      - id: novo
+        label: "📝 Abrir pedido novo"
       - id: atendente
         label: "🗣️ Falar com atendente"
-      - id: encerrar
-        label: "❌ Encerrar"
     output_as: quer_verificar
     timeout_s: 180
     on_success: avaliar_oferta
@@ -222,9 +230,11 @@ steps:
     on_timeout: avisar_encerramento_verificacao
     on_disconnect: finalizar_timeout
 
-  # Recusar a verificação NÃO cai em processo novo: pode haver pendência (é por isso que
-  # a oferta apareceu), e coletar outro formulário sem avisar criaria uma duplicata que
-  # o cliente nem sabe que existe.
+  # O pedido novo é ESCOLHA do cliente, nunca consequência automática de recusar ou falhar a
+  # prova: pode haver pendência (é por isso que a oferta apareceu), e coletar outro
+  # formulário sem ele pedir criaria uma duplicata que nem sabe que existe. Quando ele
+  # escolhe, o pedido nasce sob a âncora informada; ver e confirmar pendência continuam
+  # exigindo prova, e a duplicata é do N3 (D11).
   - id: avaliar_oferta
     type: choice
     conditions:
@@ -232,6 +242,10 @@ steps:
         operator: eq
         value:    "sim"
         next:     coletar_ancora_prova
+      - field:    "$.pipeline_state.quer_verificar"
+        operator: eq
+        value:    "novo"
+        next:     iniciar_solicitacao
       - field:    "$.pipeline_state.quer_verificar"
         operator: eq
         value:    "atendente"
@@ -285,11 +299,13 @@ steps:
     on_success: coletar_codigo_dialog
     on_failure: avisar_codigo_nao_enviado
 
+  # PID-19: código recusado (canal não autoritativo, PID-10) volta ao MESMO menu — antes
+  # ia direto ao SAC, e era esse o fim de todo cliente não importado.
   - id: avisar_codigo_nao_enviado
     type: notify
     message: "{{$.pipeline_state.roteiro.render.by_node.avisar_codigo_nao_enviado}}"
-    on_success: degradar
-    on_failure: degradar
+    on_success: oferecer_verificacao
+    on_failure: oferecer_verificacao
 
   # O código GERADO nunca passa pelo runner de diálogo: challenge e verify ficam aqui.
   - id: coletar_codigo_dialog
@@ -300,8 +316,10 @@ steps:
     timeout_hours: 1
     on_resume:
       next: verificar_codigo_otp
+    # PID-19: sem código em 1 h o cliente foi embora — abrir pedido novo em nome dele
+    # (o destino anterior) criava processo que ele não pediu.
     on_timeout:
-      next: iniciar_solicitacao
+      next: avisar_timeout
 
   - id: verificar_codigo_otp
     type: invoke
@@ -314,7 +332,7 @@ steps:
       code:        "$.pipeline_state.coletar_codigo_dialog.value"
     output_as: otp_res
     on_success: avaliar_verificacao
-    on_failure: iniciar_solicitacao
+    on_failure: avisar_verificacao_falhou   # PID-19: volta ao menu, nunca pedido automático
 
   - id: avaliar_verificacao
     type: choice
@@ -325,11 +343,13 @@ steps:
         next:     verificar_pendencia_pos_otp
     default: avisar_verificacao_falhou
 
+  # PID-19: código que não confere volta ao MESMO menu. Antes abria pedido novo sozinho —
+  # a duplicata que o comentário do `avaliar_oferta` existe para impedir.
   - id: avisar_verificacao_falhou
     type: notify
     message: "{{$.pipeline_state.roteiro.render.by_node.avisar_verificacao_falhou}}"
-    on_success: iniciar_solicitacao
-    on_failure: iniciar_solicitacao
+    on_success: oferecer_verificacao
+    on_failure: oferecer_verificacao
 
   # Com a âncora da prova junto: é ela que está `possessed` agora.
   - id: verificar_pendencia_pos_otp
