@@ -1,5 +1,29 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (14) — PID-23 e SFE-04 fecham com as verificações ao vivo que faltavam
+
+Um contato só, pelo chat da porta `limite_ia`, com um CPF **não importado** (`ab1eac69`), fechou
+as duas metades que a rodada (13) deixou abertas.
+
+**PID-23.** O menu da porta chegou com os três botões — `✅ Enviar código` · `📝 Abrir pedido novo` ·
+`🗣️ Falar com atendente` — e a opção `novo` abriu o formulário do cartão
+(`numero_cartao`, `vencimento_cartao`, `limite_solicitado`, `cvv`). É o ramo que não era
+alcançado desde 2026-09-10. As opções foram lidas por uma cópia do `_ws_chat.py` que as imprime;
+o arquivo do repositório não mudou.
+
+**SFE-04, a metade positiva.** O cliente saiu sem preencher o formulário; o menu venceu (300 s) e o
+fluxo seguiu `avisar_timeout → finalizar_timeout`. O segmento fechou `failed` com
+`issue_status = "timeout ou desconexão — cliente não respondeu"` — **0 → 1** segmento de IA com o
+campo em todo o ledger. O controle já estava medido na rodada (13): `finalizar`, que não declara,
+fica `NULL`. As duas metades juntas são a verificação que a ficha pedia.
+
+A SFE-04 fecha com 13 de 16 pools. Os três de fora viram a **`SFE-06`**: `demo_llm_ia` (mudança
+alheia não promovida no mesmo YAML — o campo vem no próximo promote do dono) e `auth_form_ia`/
+`auth_ia` (skills sem YAML no disco; o registry apagou o campo antes do `.strict()` e não há fonte).
+
+Seguem abertas, dependendo de credencial ou de ação humana: `CTX-13` (PUT do catálogo),
+`WAI-03` (claim de pull por agente logado) e a metade de retomada da `SFE-05`.
+
 ## 2026-09-25 (13) — Rodada de subida: o trabalho do dia passa a RODAR no demo, 13 pools re-promovidos e a porta nova no ar
 
 **Nada do que foi entregue hoje estava rodando**: todas as imagens vivas eram anteriores aos commits
