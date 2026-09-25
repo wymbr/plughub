@@ -135,7 +135,6 @@ v1 **entregue em 2026-07-17**. O que resta é segunda onda, não v1 inacabado.
 | APR-04 | A6 — notificações e SLA na inbox | `aberto` | idem |
 | APR-05 | A6 — rework rate (Bancada / Arc 6) | `aberto` | idem |
 | APR-06 | A6 — auto-aprovação (pool IA) | `aberto` | idem |
-| APR-09 | **O ingress de resume aplica `approvals.decide` a QUALQUER resume com JWT** — follow-up medido do R1; parametrizar por tipo de tarefa. Um portão que decide sobre a espécie errada de trabalho autoriza a certa pelo motivo errado | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
 | APR-07 | Promote real: `invoke` de deploy no `efetuar_promocao`, hoje `complete` | `adiado` — não-objetivo v1. Gatilho: promoção agendada precisar valer em produção | idem |
 
 ---

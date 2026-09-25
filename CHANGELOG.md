@@ -1,5 +1,31 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (9) — APR-09: superada pela Camada E2 — e o resolvedor que a sustenta ganhou teste
+
+**A ficha estava velha.** Dizia que o ingress de resume aplicava `approvals.decide` *"a QUALQUER
+resume com JWT"* e pedia parametrizar por tipo de tarefa. Foi movida da antiga § Pending do
+`CLAUDE.md` em 2026-09-05 sem ser conferida — e o conserto já existia desde **2026-07-24**
+(`4fc3520f`, Camada E2): `WebhookAdapter.resume_required_abac` resolve SERVER-SIDE, do contexto
+da workflow suspensa, qual capacidade o resume exige — `session.resume_abac` declarado pelo autor
+> marcador de aprovação `session.decisions` (→ `approvals.decide`) > nada (form-fill/wrap-up: o
+vínculo do claim basta). Medido hoje: o channel-gateway é a ÚNICA porta que decide `approvals`
+(nem mcp-server, nem workflow-api, nem bridge); o fluxo de aprovação vivo
+(`skill_limite_processo_v1`) ainda escreve `session.decisions`; e a AUT-46 mediu 85 decisões de
+aprovação com credencial passando por esse par.
+
+**O que faltava, e foi feito:** o resolvedor — o coração da garantia — só aparecia **mockado**
+(`test_resume_authority.py`). Um que voltasse a devolver `("approvals","decide")` para tudo
+passaria em todos os testes, e o wrap-up de operador comum tomaria 403. Novo
+`test_resume_required_abac.py` (8, na imagem) roda a função REAL e o `_read_ctx_tag` real sobre um
+Redis falso: form-fill → `None`; marcador → `approvals.decide`; declaração explícita vence o
+marcador; declaração malformada cai na regra seguinte; token desconhecido não inventa exigência.
+Os 57 testes do portão (`test_approver_principal_authz.py` + `test_resume_authority.py`) verdes.
+
+⚠️ **Achado no próprio teste:** a primeira versão do harness não tinha o atributo de classe
+`_CTX_EMPTY`; a exceção caía no `except` fail-soft e **todo** caso virava `None` — e o teste do
+form-fill passava **por acidente**. É o par com os casos de aprovação que o torna falseável; o
+comentário ficou no arquivo.
+
 ## 2026-09-25 (8) — CTX-12: a detecção separa CPF cru de telefone pelo dígito verificador
 
 **O defeito.** O `detect_pattern` do CPF exigia pontuação, então 11 dígitos crus escapavam dele e
