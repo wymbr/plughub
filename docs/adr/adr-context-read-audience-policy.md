@@ -375,6 +375,11 @@ nos quatro tipos detectáveis — o valor cru casa, o já mascarado **não**:
 | `phone` | casa | `(##) ****-4321` não casa |
 | `email_addr` | casa | `m***@exemplo.com` não casa |
 
+> *MSK-05 (2026-09-25):* a exibição da rede deixou de ser o `replacement` e passou a ser a
+> máscara do `operator` no catálogo (`***25`, `***6467`, `***4321`, `j***@…` no semeado).
+> A idempotência deixou de depender da escolha dos `replacement`: `detectedDisplay` recusa
+> (`***`) toda exibição que ainda casaria a rede, qualquer que seja a config do tenant.
+
 É isso que dissolve o bloqueio da §D11: aplicar a rede sobre `pendencia.context.*`, que
 **já nasce mascarado**, é no-op. **O carimbo de proveniência deixa de ser pré-requisito
 de segurança** — vira otimização de precisão, e a §D11 é rebaixada de bloqueio a dívida.

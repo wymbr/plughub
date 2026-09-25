@@ -13,6 +13,10 @@
 # cara de medição.
 #
 # Roda do host. Exige a stack de pé.
+#
+# ⚠️ MEDIÇÃO DE MOMENTO, anterior à MSK-05 (2026-09-25): chama `buildDisplay`, que saiu.
+# A decisão que este script subsidiava foi tomada — o display é o `by_role` do catálogo —
+# e quem julga as portas hoje é o gate `probe_masking_display_parity.sh`.
 set -u
 
 cd "$(dirname "$0")/../.." || exit 2

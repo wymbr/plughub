@@ -1012,6 +1012,7 @@ export {
   resolveMaskForAudience,
   applyMaskingTypeToValue,
   maskFreeText,
+  detectedDisplay,
   freeTextNetSize,
   maskForSite,
   maskOmitsField,

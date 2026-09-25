@@ -131,9 +131,18 @@ Texto de agente sai por dois caminhos, e cada um tem a sua casa, **uma só**:
 - **Falha nunca entrega o original.** Cofre falhou num trecho → o trecho sai só com o display
   (irreversível) e o log nomeia categoria e sessão. Qualquer outra falha → a rede pura
   (`maskFreeText`, sem I/O) e log. Regra de regex inválida também é logada.
-- ⚠️ **Dívida aberta: a exibição da detecção NÃO segue o `by_role`** (MSK-05). A rede do engine
-  usa o `replacement` da regra e o `MaskingService`, o `preserve_last_digits` — duas
-  exibições para a mesma categoria, nenhuma lida de `/config/masking`.
+- **A exibição do dado DETECTADO é a máscara do `operator` em `/config/masking`** (MSK-05,
+  2026-09-25). Havia duas — a rede do engine usava o `replacement` da regra
+  (`(##) ****-####`) e o `MaskingService`, o `preserve_last_digits` (`*******4321`) —, e
+  nenhuma lia o `by_role`. Hoje é UMA função, `detectedDisplay` (`@plughub/schemas`), com
+  gêmeo `detected_display` (`py-contextstore`); consumidores: a rede do engine, o display
+  dentro do token do `message_send`, o net-pass de edições de aprovação do channel-gateway
+  e (por cópia declarada) o quality-ingest. Catálogo semeado: `***25` · `***6467` ·
+  `***4321` · `j***@dominio`. Duas recusas próprias de trecho de frase: `hidden` sai `***`
+  (não se omite pedaço de frase) e exibição que ainda casaria a rede sai `***` (mantém a
+  passada idempotente sobre qualquer config). Catálogo indisponível: o TS usa o semeado e
+  o Python esconde (`{}` → `***`), e os dois LOGAM. Gate: `probe_masking_display_parity.sh`,
+  que dá às portas o catálogo VIVO.
 
 ## Redis keys
 
@@ -153,6 +162,10 @@ Texto de agente sai por dois caminhos, e cada um tem a sua casa, **uma só**:
   ⚠️ *Medido em 2026-09-25:* só o webchat (`stream_subscriber._strip_tokens`) faz isso;
   o `conversations.outbound` dos outros canais e o `prompt` de menu não têm leitor que
   tire o token — hoje não chega token a eles porque o engine não tokeniza, só mascara.
-  Entra na MSK-05.
+  ✅ *Medido na MSK-05 (2026-09-25):* e o único tokenizador, o `message_send`, **não
+  publica em `conversations.outbound`** — escreve no stream (o webchat tira o wrapper), no
+  `conversations.events` e no WS do Console (`MaskedToken.tsx` renderiza). Não há caminho
+  de token a canal não-webchat; o dia em que um tokenizador publicar em outbound, é ali
+  que o leitor tem de nascer.
 - **Masking config UI**: interface no Agent Registry para o tenant configurar suas
   próprias regras de mascaramento além dos defaults.

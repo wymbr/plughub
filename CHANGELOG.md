@@ -1,5 +1,82 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (19) — MSK-05: o dado detectado em texto livre aparece como /config/masking manda para o papel
+
+**Decisão do dono** (ao abrir a ficha): *"a visualização deve seguir as regras definidas em
+configurations/masking de acordo com o papel"*.
+
+**O que estava errado (medido).** Havia DUAS exibições para a mesma categoria, e nenhuma lia
+`masking.types.*.mascara.by_role`:
+
+| categoria | rede do engine (`replacement`) | token do `message_send` (`buildDisplay`) | agora (semeado) |
+|---|---|---|---|
+| cpf | `***.***.***.--` | `*********25` | `***25` |
+| cartão | `**** **** **** ****` | `************6467` | `***6467` |
+| telefone | `(##) ****-####` | `*******4321` | `***4321` |
+| e-mail | `****@****.***` | `***@exemplo.com` | `j***@exemplo.com` |
+
+E as duas portas Python (net-pass de edições de aprovação no channel-gateway e o do quality-ingest)
+copiavam o `buildDisplay`, com o gate `probe_masking_display_parity.sh` garantindo que as TRÊS
+concordassem — na exibição errada.
+
+**O que mudou.**
+- `detectedDisplay(match, categoria, catálogo)` em `@plughub/schemas/ctx-audience.ts` e o gêmeo
+  `detected_display` em `py-contextstore`: `applyMaskingTypeToValue(match,
+  resolveMaskForAudience(tipo, "operator"))` — o mesmo par que o dado DECLARADO já seguia.
+  `operator` porque o texto é um só para o roster, e pela §D9.1 do ADR de plateia a visão dele é
+  também o teto do cliente.
+- Duas recusas próprias de trecho de frase: `hidden` sai `***` (não se omite pedaço de frase), e
+  exibição que ainda casaria a rede sai `***` (`first_word` num e-mail devolveria o e-mail). A
+  segunda é o que mantém a rede idempotente sobre QUALQUER config — antes a idempotência dependia de
+  os `replacement` terem sido bem escolhidos à mão, e isso era promessa em prosa.
+- Consumidores: `maskFreeText(valor, caminho, catálogo)` (engine, com o catálogo vivo que a leitura
+  por plateia já carregava; a entrada síncrona de `$.pipeline_state` usa o cache ou o semeado, e o
+  log da rede diz qual); `MaskingService.applyMasking` (o display dentro do token), com
+  `loadTypeCatalog` por tenant e 60 s de cache; `_mask_pii` do channel-gateway, com
+  `get_masking_catalog`; e o quality-ingest, que não alcança o config-api e leva uma CÓPIA
+  declarada do `by_role` semeado. `buildDisplay`, `_mask_match` (as duas cópias), `replacement` e
+  `preserve_*` das regras Python saíram.
+- Catálogo indisponível: o TS usa o semeado e o Python esconde tudo (`{}` → `***`, a postura que o
+  `get_masking_catalog` já declarava); os dois logam o que deixou de valer.
+
+**Gate** `probe_masking_display_parity.sh`, reescrito: lê o catálogo VIVO uma vez e o entrega às
+portas TS e channel-gateway; o quality-ingest não o recebe, então a coluna dele diverge — e fica
+vermelha — no dia em que o tenant mudar a exibição e a cópia envelhecer. Contra a stack rebuildada
+(`skill-flow-service`, `mcp-server-plughub`, `channel-gateway`, `quality-ingest`, âncoras
+conferidas dentro dos containers): **OK**, as três portas `***00` · `***3456` · `***3456` ·
+`j***@empresa.com.br` · `***4321`, e texto limpo intacto. Antes do rebuild o mesmo gate deu
+INCONCLUSIVO nomeando a imagem velha.
+
+**Testes**: schemas 33 · engine 31 · mcp-server 8 · py-contextstore 82 · channel-gateway 6 (e a
+suíte inteira, 1 535, que achou os 4 que chamavam `_mask_pii` com a assinatura antiga) ·
+quality-ingest 12. Mutação: 12 de 12 mortas — a M11 (quality-ingest sem a recusa da rede)
+sobreviveu na primeira rodada, porque a cópia de hoje nunca aciona a recusa, e morreu com um teste
+que troca a cópia por uma máscara que reexporia o dado.
+
+**No navegador, o que a medição achou.** Um contato `demo_ia` → portabilidade, digitando telefone e
+e-mail: **nenhuma superfície viva mostra a exibição da rede hoje**. A confirmação que em 10/09 ecoava
+os dados (`Número a portar: (##) ****-####`, 5 contatos) não ecoa mais; os dois textos que passaram
+pela rede eram roteiro publicado, isento pela CTX-11. A mudança está provada pelo gate sobre as
+imagens vivas com o catálogo vivo, não por um contato.
+
+**E o contato achou outra coisa, maior.** O que o CLIENTE digitou foi gravado EM CLARO no stream
+canônico — o bridge (`customer_message_stream_fields`) só redige campo declarado mascarado. A MSK-04
+dizia o contrário por premissa (`message_send` para `customer`), e o texto do cliente de webchat
+não passa por lá. Exposição: 260/445/55 mensagens de cliente com CPF/telefone/e-mail em claro no
+ClickHouse. Deixou ficha: **MSK-06**, com a decisão de desenho que ela pede.
+
+**Duas partes da ficha fecharam por medição, sem código:**
+- *Canal não-webchat sem leitor de token*: o único tokenizador, `message_send`, não publica em
+  `conversations.outbound` — não há caminho de token a canal que não o saiba ler (registrado no ADR).
+- *O WS do Console não mascara* (`server.ts:4388`): verdade, e com exposição medida ZERO (290
+  mensagens humanas, nenhuma com PII). Deixou ficha: **MSK-07**, com gatilho.
+
+Achado lendo o código: o cache de catálogos do engine é um por processo e ignora o tenant — o
+primeiro a carregar vale para todos. Deixou ficha: **CTX-14**.
+
+Docs: `adr-message-masking.md` (Mensagem de AGENTE; Pendente), `adr-context-read-audience-policy.md`
+§D12, `CLAUDE.md` § Message Masking (exemplo do token).
+
 ## 2026-09-25 (18) — SFE-07: o que o autor escreve no skill chega ao que roda, ou é recusado
 
 **A família da SFE-02, fora do `complete`.** `z.object` descarta chave desconhecida em silêncio,

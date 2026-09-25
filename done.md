@@ -578,3 +578,4 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | id | tarefa | data | ancora |
 |---|---|---|---|
 | MSK-04 | Texto de agente mascarado em toda saída: `resolve`/`suspend` pela rede do engine, `message_send` em todo papel, ClickHouse tokenizado, falha nunca entrega o original | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (4) |
+| MSK-05 | A exibição do dado DETECTADO é o `by_role` do `operator` em `/config/masking`, numa função só (`detectedDisplay` + gêmeo Python) usada pela rede do engine, pelo token do `message_send`, pelo net-pass do gateway e pelo quality-ingest | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (19) |

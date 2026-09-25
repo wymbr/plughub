@@ -61,8 +61,11 @@ describe("o que a rede não pode ESTRAGAR", () => {
     // de proveniência é dispensável"* — e não é: ela responde *"a rede estraga o que
     // JÁ foi mascarado?"*, nunca *"a rede estraga o que NUNCA foi dado de cliente?"*.
     // A segunda custou 15 contatos com o roteiro mutilado; ver `declared-content.test.ts`.
+    // MSK-05: as quatro exibições do `by_role` semeado (`***25`, `***4321`, `***6467`,
+    // `j***@…`) entram ao lado das grafias antigas, que continuam no stream gravado.
     for (const m of ["***4444", "**** **** **** ****", "***.***.***.--",
-                     "(##) ****-4321", "m***@exemplo.com"]) {
+                     "(##) ****-4321", "m***@exemplo.com",
+                     "***25", "***4321", "***6467", "j***@exemplo.com"]) {
       expect(filtrarTextoLivre(`Cartão: ${m}`, CLIENTE, "$.x")).toBe(`Cartão: ${m}`)
     }
   })

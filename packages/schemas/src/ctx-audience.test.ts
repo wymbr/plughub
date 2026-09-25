@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest"
 import {
   deriveAudience, resolveMaskForAudience, maskForSite, maskChangesValue,
-  flattenContextMap,
+  flattenContextMap, detectedDisplay, maskFreeText,
 } from "./ctx-audience"
 import { DEFAULT_DATA_TYPE_CATALOG } from "./audit"
 
@@ -143,5 +143,76 @@ describe("flattenContextMap — os ALIASES são o que importa", () => {
     })
     expect(maskForSite(real.get("session.numero_cartao"), "customer",
       DEFAULT_DATA_TYPE_CATALOG)).toBe("last_4")
+  })
+})
+
+// ─── MSK-05 — a exibição do dado DETECTADO é a do `by_role` ──────────────────
+// Asserções em pares: "segue o catálogo" só significa algo se trocar o catálogo
+// troca a saída, e se a saída não carrega o valor inteiro.
+
+/** O catálogo semeado com UMA máscara trocada — o que o tenant faz em /config/masking. */
+function comMascara(id: string, mascara: string) {
+  return {
+    ...DEFAULT_DATA_TYPE_CATALOG,
+    types: DEFAULT_DATA_TYPE_CATALOG.types.map(t =>
+      t.id === id ? { ...t, mascara: { ...t.mascara, by_role: { operator: mascara } } } : t),
+  } as typeof DEFAULT_DATA_TYPE_CATALOG
+}
+
+describe("detectedDisplay — o trecho detectado segue /config/masking (MSK-05)", () => {
+  it("catálogo semeado: a máscara do operator de cada categoria detectável", () => {
+    expect(detectedDisplay("529.982.247-25", "cpf")).toBe("***25")
+    expect(detectedDisplay("4539 1488 0343 6467", "credit_card")).toBe("***6467")
+    expect(detectedDisplay("(11) 98765-4321", "phone")).toBe("***4321")
+    expect(detectedDisplay("joao.silva@exemplo.com", "email_addr")).toBe("j***@exemplo.com")
+  })
+
+  it("trocar o by_role TROCA a exibição — é o catálogo que decide, não uma constante", () => {
+    expect(detectedDisplay("529.982.247-25", "cpf", comMascara("cpf", "last_4"))).toBe("***4725")
+    expect(detectedDisplay("529.982.247-25", "cpf", comMascara("cpf", "full"))).toBe("***")
+  })
+
+  it("`plain` é a escolha DECLARADA do tenant: o valor aparece", () => {
+    expect(detectedDisplay("529.982.247-25", "cpf", comMascara("cpf", "plain"))).toBe("529.982.247-25")
+  })
+
+  it("`hidden` não apaga pedaço de frase: sai `***`, nunca vazio", () => {
+    expect(detectedDisplay("529.982.247-25", "cpf", comMascara("cpf", "hidden"))).toBe("***")
+  })
+
+  it("exibição que ainda casaria a rede é recusada — `first_word` num e-mail devolveria o e-mail", () => {
+    expect(detectedDisplay("joao@exemplo.com", "email_addr", comMascara("email_addr", "first_word")))
+      .toBe("***")
+    // controle: a máscara que esconde NÃO é trocada por `***`
+    expect(detectedDisplay("joao@exemplo.com", "email_addr")).toBe("j***@exemplo.com")
+  })
+
+  it("categoria que o catálogo não conhece → `full` (recusa alta)", () => {
+    expect(detectedDisplay("529.982.247-25", "cpf", { ...DEFAULT_DATA_TYPE_CATALOG, types: [] }))
+      .toBe("***")
+  })
+})
+
+describe("maskFreeText — usa o catálogo que recebe, e continua idempotente (MSK-05)", () => {
+  const TEXTO = "cpf 529.982.247-25, fone (11) 98765-4321, email joao@exemplo.com"
+
+  it("sem catálogo: o semeado — e o valor inteiro não sobra", () => {
+    const r = maskFreeText(TEXTO)
+    expect(r.value).toBe("cpf ***25, fone ***4321, email j***@exemplo.com")
+    expect(r.categories).toEqual(["cpf", "phone", "email_addr"])
+  })
+
+  it("com o catálogo do tenant: a exibição muda na mesma chamada, recursivamente", () => {
+    const r = maskFreeText({ a: [TEXTO] }, "", comMascara("phone", "full"))
+    expect((r.value as { a: string[] }).a[0]).toBe("cpf ***25, fone ***, email j***@exemplo.com")
+  })
+
+  it("segunda passada é no-op, com o catálogo semeado e com um que tentaria reexpor", () => {
+    for (const cat of [undefined, comMascara("email_addr", "first_word")]) {
+      const once = maskFreeText(TEXTO, "", cat)
+      const twice = maskFreeText(once.value, "", cat)
+      expect(twice.value).toBe(once.value)
+      expect(twice.categories).toEqual([])
+    }
   })
 })

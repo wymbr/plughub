@@ -32,7 +32,7 @@ espécie que se cross-checa barato entre duas linguagens.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Pattern
 
 __all__ = [
     "CONTEXT_MASKING_TYPES",
@@ -147,3 +147,35 @@ def resolve_mask_for_audience(
         return "plain"                 # declarado ABERTO (tipo de finalidade)
     m = by_role.get(audiencia) or by_role.get("operator")
     return m if isinstance(m, str) and m else "full"
+
+
+def detected_display(
+    match: str,
+    category: str,
+    catalogo: Mapping[str, Mapping[str, Any]],
+    rede: Iterable[Pattern[str]] = (),
+) -> str:
+    """O que aparece NO LUGAR de um dado DETECTADO em texto livre (MSK-05).
+
+    Gêmeo de `detectedDisplay` (@plughub/schemas/ctx-audience.ts): a máscara do
+    `operator` no `masking.types` do tenant, a mesma que o dado DECLARADO segue.
+
+    `catalogo` é indexado por id (o formato de `get_masking_catalog`). `{}` — catálogo
+    indisponível — faz toda categoria cair em `full` e sair `***`: esconder por não
+    saber, como o loader promete.
+
+    `rede` são os padrões de detecção de quem chama. Duas recusas, as mesmas do TS:
+    `hidden` (`""`) vira `***`, porque não se omite pedaço de frase; e exibição que
+    ainda casa a rede não escondeu o que foi detectado, então vira `***` — é o que
+    mantém a passada idempotente sobre qualquer config. `plain` é a escolha declarada.
+    """
+    mascara = resolve_mask_for_audience(catalogo.get(category), "operator")
+    if mascara == "plain":
+        return match
+    d = apply_masking_type_to_value(match, mascara)
+    if d == "":
+        return "***"
+    for padrao in rede:
+        if padrao.search(d):
+            return "***"
+    return d

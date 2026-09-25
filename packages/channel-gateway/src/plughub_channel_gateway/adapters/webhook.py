@@ -48,7 +48,8 @@ from plughub_contextstore import resolve_context_tag
 from plughub_contextstore.writer import write_context_tags
 from plughub_contextstore.loader import get_context_map, get_masking_catalog
 from plughub_contextstore.masking import (
-    apply_masking_type_to_value, passes_detect_validator, resolve_mask_for_audience,
+    apply_masking_type_to_value, detected_display, passes_detect_validator,
+    resolve_mask_for_audience,
 )
 import os
 import re
@@ -57,7 +58,7 @@ import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 import jwt as pyjwt          # Journey J4c — mint the webchat JWT that pre-binds the survey session
 import redis.asyncio as aioredis
@@ -162,65 +163,33 @@ async def store_key_for_context_entry(tenant_id: str, key: str) -> str:
 # config não vier, porque degradar em masking é vazar PII. Fase própria.
 _PII_RULES: list[dict[str, Any]] = [
     {
-        "category":             "cpf",
+        "category":  "cpf",
         # CTX-12: também os 11 dígitos CRUS, que só são CPF com DV válido (validator).
-        "pattern":              re.compile(r"\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b"),
-        "validator":            "cpf_dv",
-        "replacement":          "***.***.***.--",
-        "preserve_last_digits": 2,
+        "pattern":   re.compile(r"\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b"),
+        "validator": "cpf_dv",
     },
     {
-        "category":             "credit_card",
-        "pattern":              re.compile(r"\b(?:\d{4}[\s-]?){3}\d{4}\b"),
-        "replacement":          "**** **** **** ****",
-        "preserve_last_digits": 4,
+        "category":  "credit_card",
+        "pattern":   re.compile(r"\b(?:\d{4}[\s-]?){3}\d{4}\b"),
     },
     {
-        "category":             "phone",
+        "category":  "phone",
         # `(?<!\w)` e não `\b` — ver audit.ts: com `\b` o `\(?` é ramo morto e o
         # parêntese de abertura ficava órfão (`(***4321`).
-        "pattern":              re.compile(r"(?<!\w)(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b"),
-        "replacement":          "(##) ****-####",
-        "preserve_last_digits": 4,
+        "pattern":   re.compile(r"(?<!\w)(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b"),
     },
     {
-        "category":         "email_addr",
-        "pattern":          re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b"),
-        "replacement":      "****@****.***",
-        "preserve_pattern": re.compile(r"(@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})$"),
+        "category":  "email_addr",
+        "pattern":   re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b"),
     },
 ]
 
-
-def _mask_match(match_text: str, rule: dict[str, Any]) -> str:
-    """Constrói o display mascarado de UM trecho casado.
-
-    Semântica CANÔNICA = `MaskingService.buildDisplay`
-    (`mcp-server-plughub/src/lib/masking.ts`), que é a que produz o `display_partial`
-    entregue ao cliente pelo WebSocket:
-      1. `preserve_pattern` → `"*" × ceil(len(prefixo)/4)` + trecho preservado;
-      2. `preserve_last_digits` → `"*" × (n_dígitos − N)` + últimos N dígitos;
-      3. senão → `replacement` (ÚLTIMO recurso, não a forma padrão).
-
-    ⚠️ Escolha registrada em 2026-08-26, depois de medir as três portas lado a lado
-    (`infra/test/q_masking_display_parity.sh`): nenhuma das cinco linhas era unânime.
-    Alinhar na direção do `replacement` mudaria o que o operador vê no stream vivo e
-    deixaria tokens já gravados com a grafia antiga.
-    """
-    preserve_pattern = rule.get("preserve_pattern")
-    if preserve_pattern is not None:
-        m = preserve_pattern.search(match_text)
-        if m:
-            preserved = m.group(1) if m.lastindex else m.group(0)
-            prefix = match_text[: len(match_text) - len(preserved)]
-            masked_len = max(1, -(-len(prefix) // 4))  # ceil(len/4)
-            return f"{'*' * masked_len}{preserved}"
-    keep = rule.get("preserve_last_digits") or 0
-    if keep > 0:
-        digits = re.sub(r"\D", "", match_text)
-        if len(digits) > keep:
-            return f"{'*' * (len(digits) - keep)}{digits[-keep:]}"
-    return rule["replacement"]
+# ⚠️ MSK-05 (2026-09-25): aqui morava `_mask_match`, cópia Python do `buildDisplay` do
+# mcp-server (`preserve_last_digits`/`preserve_pattern`), e cada regra carregava
+# `replacement` e `preserve_*`. Saíram os três: a exibição passou a ser a máscara do
+# `operator` no catálogo (`detected_display`, gêmeo de `detectedDisplay`), por decisão
+# do dono — "a visualização segue /config/masking, de acordo com o papel". O que resta
+# desta tabela é DETECÇÃO (padrão + validador), e é ela que continua sendo cópia.
 
 
 # ── Fase F (D7) — resume terminal-uma-vez ─────────────────────────────────────
@@ -386,19 +355,22 @@ class ResumeAlreadyTerminalError(RuntimeError):
         }
 
 
-def _mask_pii(value: Any) -> str | None:
+def _mask_pii(value: Any, catalogo: Mapping[str, Mapping[str, Any]]) -> str | None:
     """Mascara PII formatada num valor (net-pass). None permanece None.
 
-    Ordem das regras é contrato — a mesma de `DEFAULT_MASKING_RULES`.
+    Ordem das regras é contrato — a mesma de `DEFAULT_MASKING_RULES`. A exibição é
+    `detected_display` sobre `catalogo` (`masking.types` indexado por id) — obrigatório,
+    e não por esquecimento: um default aqui seria política velha com cara de config.
     """
     if value is None:
         return None
     s = str(value)
+    rede = [r["pattern"] for r in _PII_RULES]
     for rule in _PII_RULES:
         # CTX-12: casamento que não passa no validador NÃO é deste tipo — fica intacto
         # para a próxima regra (CPF cru com DV inválido segue para o telefone).
         s = rule["pattern"].sub(
-            lambda m, r=rule: (_mask_match(m.group(0), r)
+            lambda m, r=rule: (detected_display(m.group(0), r["category"], catalogo, rede)
                                if passes_detect_validator(r.get("validator"), m.group(0))
                                else m.group(0)),
             s,
@@ -927,12 +899,15 @@ class WebhookAdapter(ChannelAdapter):
 
         raw_edits = payload.get("field_edits") or []
         edits: list[dict[str, Any]] = []
+        # MSK-05: a exibição do trecho detectado é o `by_role` do catálogo vivo. Indisponível,
+        # o loader devolve `{}` (e loga) e todo trecho detectado sai `***`.
+        catalogo = await get_masking_catalog(tenant_id) if raw_edits else {}
         for e in raw_edits:
             if isinstance(e, dict):
                 edits.append({
                     "field":  str(e.get("field", "")),
-                    "before": _mask_pii(e.get("before")),
-                    "after":  _mask_pii(e.get("after")),
+                    "before": _mask_pii(e.get("before"), catalogo),
+                    "after":  _mask_pii(e.get("after"), catalogo),
                 })
 
         attachments = payload.get("attachments_viewed")

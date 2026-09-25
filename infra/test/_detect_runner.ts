@@ -27,8 +27,8 @@ const fx = JSON.parse(fs.readFileSync(FIXTURE, "utf-8")) as Fx
 for (const c of fx.validator_cases) {
   linha({ name: c.name, passa: passesDetectValidator(c.validator ?? undefined, c.match) })
 }
-// A CATEGORIA é o que se compara no texto: o display difere entre os motores por decisão
-// (a rede usa o `replacement`, os outros o `buildDisplay`) — dívida própria, a MSK-05.
+// A CATEGORIA é o que se compara no texto. O display foi unificado na MSK-05 (2026-09-25:
+// `detectedDisplay`, o by_role do catálogo); a paridade dele é do probe_masking_display_parity.
 for (const c of fx.text_cases) {
   const r = maskFreeText(c.text)
   linha({ name: c.name, categorias: [...new Set(r.categories)].sort() })

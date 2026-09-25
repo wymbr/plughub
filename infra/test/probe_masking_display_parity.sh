@@ -11,6 +11,9 @@
 # testemunha de que houve mascaramento (saída ≠ entrada E o dado original ausente).
 # Sem ela, "paridade OK" seria compatível com masking desligado nas três.
 #
+# MSK-05 (2026-09-25): o display comparado é o do `by_role` do catálogo VIVO (as portas
+# TS e channel-gateway o recebem; o quality-ingest confronta a cópia dele contra ele).
+#
 # Três estados: OK · FALHA · INCONCLUSIVO. Roda do host; exige a stack construída.
 set -u
 
@@ -32,20 +35,37 @@ V_TEXTS=(
 
 echo "═══ probe_masking_display_parity ════════════════════════════"
 
-# ── porta 1: TS — mesma ALGORITMIA das portas Python (substituição inline),
-#    para comparar maçã com maçã: o display sai de buildDisplay, o passeio é igual.
-TS_RAW="$($DC exec -T mcp-server-plughub sh -c "cd /app/packages/mcp-server-plughub && node -e \"
-let M; try { M = require('./dist/lib/masking.js').MaskingService } catch (e) { console.log('ERR:'+e.message); process.exit(0) }
-if (!M || typeof M.buildDisplay !== 'function') { console.log('ERR:buildDisplay ausente'); process.exit(0) }
-const { DEFAULT_MASKING_RULES } = require('@plughub/schemas');
+# ── o catálogo VIVO (MSK-05) ──────────────────────────────────────────────────
+# Desde a MSK-05 o display é a máscara do `operator` em `masking.types` — logo "as
+# portas concordam" só se julga com o MESMO catálogo nas que o leem. Ele é lido UMA vez,
+# do config-api, e entregue às portas TS e channel-gateway. O quality-ingest NÃO o
+# recebe: carrega uma cópia do `by_role` semeado, e é justamente essa cópia que este
+# gate confere — se o tenant mudar a exibição, a coluna dele diverge e fica vermelha.
+TENANT="${TENANT:-tenant_demo}"
+CAT="$($DC exec -T mcp-server-plughub node -e "
+fetch(process.env.CONFIG_API_URL + '/config/masking/types?tenant_id=${TENANT}')
+  .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+  .then(b => { const v = b && b.value; if (!v || !Array.isArray(v.types)) throw new Error('sem types[]'); console.log(JSON.stringify(v)) })
+  .catch(e => console.log('ERR:' + e.message))
+" 2>&1 | tr -d '\r' | tail -1)"
+case "$CAT" in
+  ERR:*|"") echo "  ? catálogo vivo indisponível: ${CAT:-vazio}"
+            echo; echo "VEREDICTO: INCONCLUSIVO — sem o catálogo, a paridade não significa nada"; exit 2 ;;
+esac
+N_DET="$(printf '%s' "$CAT" | grep -o '"detect_pattern"' | grep -c '')"
+echo "  catálogo vivo de ${TENANT}: ${N_DET} tipo(s) com detect_pattern"
+if [ "$N_DET" -lt 4 ]; then
+  echo; echo "VEREDICTO: INCONCLUSIVO — o catálogo vivo tem menos de 4 tipos detectáveis"; exit 2
+fi
+
+# ── porta 1: TS — a rede (`maskFreeText`) com o catálogo vivo; o `message_send` usa a
+#    MESMA `detectedDisplay` dentro do token, então esta porta responde pelas duas.
+TS_RAW="$($DC exec -T -e CAT="$CAT" mcp-server-plughub sh -c "cd /app/packages/mcp-server-plughub && node -e \"
+const S = require('@plughub/schemas');
+if (typeof S.detectedDisplay !== 'function') { console.log('ERR:detectedDisplay ausente (imagem anterior a MSK-05?)'); process.exit(0) }
+const cat = JSON.parse(process.env.CAT);
 const vec = ['123.456.789-00','1234 5678 9012 3456','1234-5678-9012-3456','joao.silva@empresa.com.br','(11) 98765-4321'];
-for (const texto of vec) {
-  let s = texto;
-  for (const r of DEFAULT_MASKING_RULES) {
-    s = s.replace(new RegExp(r.pattern, 'g'), m => M.buildDisplay(m, r));
-  }
-  console.log(s);
-}
+for (const t of vec) console.log(S.maskFreeText(t, '', cat).value);
 \"" 2>&1 | tr -d '\r')"
 
 PY_RAW="$($DC exec -T quality-ingest sh -c "cd /app && python3 -c \"
@@ -59,15 +79,16 @@ for t in ['123.456.789-00','1234 5678 9012 3456','1234-5678-9012-3456','joao.sil
     print(mask_text(t)[0])
 \"" 2>&1 | tr -d '\r')"
 
-CG_RAW="$($DC exec -T channel-gateway sh -c "cd /app/packages/channel-gateway && python3 -c \"
-import sys
+CG_RAW="$($DC exec -T -e CAT="$CAT" channel-gateway sh -c "cd /app/packages/channel-gateway && python3 -c \"
+import sys, os, json
 sys.path.insert(0, 'src')
 try:
     from plughub_channel_gateway.adapters.webhook import _mask_pii
 except Exception as e:
     print('ERR:' + str(e)); raise SystemExit(0)
+cat = {t['id']: t for t in json.loads(os.environ['CAT'])['types']}
 for t in ['123.456.789-00','1234 5678 9012 3456','1234-5678-9012-3456','joao.silva@empresa.com.br','(11) 98765-4321']:
-    print(_mask_pii(t))
+    print(_mask_pii(t, cat))
 \"" 2>&1 | tr -d '\r')"
 
 check_port() {
@@ -142,11 +163,11 @@ done
 echo
 echo "── testemunha negativa: texto sem PII ───────────────────────"
 CLEAN="obrigado pelo contato, tenha um bom dia"
-CG_CLEAN="$($DC exec -T channel-gateway sh -c "cd /app/packages/channel-gateway && python3 -c \"
-import sys
+CG_CLEAN="$($DC exec -T -e CAT="$CAT" channel-gateway sh -c "cd /app/packages/channel-gateway && python3 -c \"
+import sys, os, json
 sys.path.insert(0, 'src')
 from plughub_channel_gateway.adapters.webhook import _mask_pii
-print(_mask_pii('${CLEAN}'))
+print(_mask_pii('${CLEAN}', {t['id']: t for t in json.loads(os.environ['CAT'])['types']}))
 \"" 2>&1 | tr -d '\r')"
 if [ "$CG_CLEAN" = "$CLEAN" ]; then
   echo "  ✓ texto limpo atravessa intacto"

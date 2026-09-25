@@ -381,9 +381,14 @@ export const DECLARED_CONTENT_TOOLS: ReadonlySet<string> = new Set(["form_get"])
  *     por interpolação, dentro do turno.
  *
  * **Idempotente**, e é isso que a torna segura sobre valor que já passou por máscara:
- * os `replacement` não contêm padrão de PII, então uma segunda passada é no-op.
- * Medido nos quatro tipos — `***4444`, `***.***.***.--`, `(##) ****-4321` e
- * `m***@exemplo.com` não casam nada.
+ * a exibição não contém padrão de PII, então uma segunda passada é no-op. Desde a
+ * MSK-05 isso deixou de ser propriedade dos `replacement` escolhidos à mão e virou
+ * MECANISMO: `detectedDisplay` recusa a exibição que ainda casa a rede.
+ *
+ * ⚠️ **MSK-05 (2026-09-25): a exibição é a do `by_role`, não o `replacement`.** O
+ * trecho detectado era trocado pelo `replacement` da regra (`(##) ****-####`), e o
+ * `MaskingService` montava outro display (`*******4321`) para a mesma categoria — duas
+ * exibições, nenhuma lendo `/config/masking`. Hoje as duas passam por `detectedDisplay`.
  *
  * ⚠️ **Mudou de casa em 2026-09-04 (F5).** O corpo vivia em
  * `sdk/src/mcp-interceptor.ts` (R7a). O engine precisou dela e não importa o sdk — e
@@ -414,12 +419,57 @@ export function freeTextNetSize(): number {
 }
 
 /**
+ * detectedDisplay — o que aparece NO LUGAR de um dado DETECTADO em texto livre.
+ *
+ * É a máscara do `operator` no catálogo (`masking.types.*.mascara.by_role`), a mesma
+ * que o dado DECLARADO já segue (`resolveMaskForAudience` + `applyMaskingTypeToValue`):
+ * decisão do dono na MSK-05 — *"a visualização deve seguir as regras de
+ * `/config/masking`, de acordo com o papel"*. `operator` e não `customer` porque o
+ * texto é UM só para todo o roster, e pela §D9.1 do ADR de plateia a visão do
+ * `operator` é também o teto do cliente.
+ *
+ * Duas recusas, e as duas existem porque aqui não há CAMPO, há um trecho de FRASE:
+ *
+ *   · `hidden` devolve `""` (sinal de omitir o campo). Omitir um pedaço de frase
+ *     apagaria o trecho sem rastro — sai `***`.
+ *   · Exibição que AINDA casa alguma regra da rede não escondeu o que a regra
+ *     detectou (`first_word` num e-mail devolve o e-mail inteiro): sai `***`. É o
+ *     que mantém a rede idempotente sobre qualquer config, e não só sobre as
+ *     máscaras de hoje. `plain` é a exceção DECLARADA — o tenant escolheu mostrar.
+ *
+ * Categoria ausente do catálogo → `resolveMaskForAudience` devolve `full` (recusa alta).
+ */
+export function detectedDisplay(
+  match:    string,
+  category: string,
+  catalog:  DataTypeCatalog = DEFAULT_DATA_TYPE_CATALOG,
+): string {
+  const mascara = resolveMaskForAudience(catalog.types?.find(t => t.id === category), "operator")
+  if (mascara === "plain") return match
+  const d = applyMaskingTypeToValue(match, mascara)
+  if (d === "") return "***"
+  // Regex SEM `g`, cópias próprias: esta função roda de dentro do `replace` da rede,
+  // e um `test` na regex global dela mexeria no `lastIndex` de quem está iterando.
+  for (const r of _REDE) {
+    if (new RegExp(r.re.source).test(d)) return "***"
+  }
+  return d
+}
+
+/**
  * maskFreeText — anda o valor recursivamente e mascara PII nas folhas de string.
  *
  * Devolve a cópia mascarada, os caminhos onde houve substituição e as categorias
  * detectadas. Pura e síncrona — sem cofre, sem I/O. Conteúdo não-PII fica intacto.
+ *
+ * `catalog` é o `masking.types` do tenant, de onde sai a exibição (`detectedDisplay`).
+ * Ausente, vale o semeado — e quem chama sem o vivo é quem deve dizer isso no log.
  */
-export function maskFreeText(value: unknown, path = ""): FreeTextMaskResult {
+export function maskFreeText(
+  value:   unknown,
+  path     = "",
+  catalog: DataTypeCatalog = DEFAULT_DATA_TYPE_CATALOG,
+): FreeTextMaskResult {
   if (typeof value === "string") {
     let masked = value
     const categories: ContextMaskingCategory[] = []
@@ -431,7 +481,7 @@ export function maskFreeText(value: unknown, path = ""): FreeTextMaskResult {
       masked = masked.replace(rule.re, m => {
         if (!passesDetectValidator(rule.validator, m)) return m
         casou = true
-        return rule.replacement
+        return detectedDisplay(m, rule.category, catalog)
       })
       if (casou) categories.push(rule.category)
     }
@@ -444,7 +494,7 @@ export function maskFreeText(value: unknown, path = ""): FreeTextMaskResult {
     const fields: string[] = []
     const categories: ContextMaskingCategory[] = []
     value.forEach((item, i) => {
-      const r = maskFreeText(item, path ? `${path}[${i}]` : `[${i}]`)
+      const r = maskFreeText(item, path ? `${path}[${i}]` : `[${i}]`, catalog)
       out.push(r.value); fields.push(...r.fields); categories.push(...r.categories)
     })
     return { value: out, fields, categories }
@@ -454,7 +504,7 @@ export function maskFreeText(value: unknown, path = ""): FreeTextMaskResult {
     const fields: string[] = []
     const categories: ContextMaskingCategory[] = []
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const r = maskFreeText(v, path ? `${path}.${k}` : k)
+      const r = maskFreeText(v, path ? `${path}.${k}` : k, catalog)
       out[k] = r.value; fields.push(...r.fields); categories.push(...r.categories)
     }
     return { value: out, fields, categories }

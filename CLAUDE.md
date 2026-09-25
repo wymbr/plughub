@@ -990,7 +990,7 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
 
 ## Message Masking, @mention & Masked Input
 
-Token format in stream: `[{category}:{token_id}:{display_partial}]` (e.g. `[cpf:tk_b7d2:***-00]`). Stream stores `content` (masked) + `original_content` (unmasked). Default `authorized_roles: ["evaluator", "reviewer"]`. Domain MCP tools resolve tokens via `McpInterceptor.resolveToken` callback. Channel Gateway strips to `display_partial` only before WS delivery.
+Token format in stream: `[{category}:{token_id}:{display_partial}]` (e.g. `[cpf:tk_b7d2:***00]`; o `display_partial` é a máscara do `operator` em `masking.types.*.mascara.by_role` — MSK-05). Stream stores `content` (masked) + `original_content` (unmasked). Default `authorized_roles: ["evaluator", "reviewer"]`. Domain MCP tools resolve tokens via `McpInterceptor.resolveToken` callback. Channel Gateway strips to `display_partial` only before WS delivery.
 
 **@mention**: **quem CONDUZ menciona; quem foi CONVIDADO não convida** — `role === "primary"`,
 humano ou IA indiferentemente (MEN-01/MEN-02, 2026-09-12). Decisão e resolvedor em

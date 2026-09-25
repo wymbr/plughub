@@ -21,6 +21,7 @@ import { registerSessionTools } from "../tools/session"
 import { createCapturingKafkaProducer, type CapturingKafkaProducer } from "../infra/kafka"
 import { signSessionToken } from "../infra/jwt"
 import { MaskingService } from "../lib/masking"
+import { DEFAULT_DATA_TYPE_CATALOG } from "@plughub/schemas"
 
 type ToolResponse = { isError?: boolean; content: Array<{ type: string; text: string }> }
 
@@ -149,5 +150,72 @@ describe("MSK-04 — message_send mascara todo papel e nunca degrada para o orig
     expect(analitico()).not.toContain(CPF)
     expect((await noStream())["masked"]).toBe(true)
     expect(err.mock.calls.map(c => String(c[0])).join("\n")).toContain(`session=${SID}`)
+  })
+})
+
+// ─── MSK-05 — o display do token é o `by_role` do catálogo do TENANT ─────────
+// Tenant próprio por teste: o catálogo tem cache de 60 s por tenant, e reusar um
+// deixaria o segundo teste lendo o catálogo que o primeiro carregou.
+describe("MSK-05 — o display dentro do token segue /config/masking", () => {
+  let redis: InstanceType<typeof RedisMock>
+  let kafka: CapturingKafkaProducer
+  let send:  (i: unknown) => Promise<ToolResponse>
+
+  beforeEach(async () => {
+    redis = new RedisMock()
+    await redis.flushall()
+    kafka = createCapturingKafkaProducer()
+    const server = new McpServer({ name: "t", version: "0" })
+    registerSessionTools(server, { redis: redis as never, kafka })
+    send = handler(server, "message_send")
+    await redis.set(`session:${SID}:participants`,
+      JSON.stringify([{ participant_id: PID, role: "specialist" }]))
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  const enviar = (tenant: string, text: string) => send({
+    session_token: signSessionToken({
+      tenant_id: tenant, agent_type_id: "especialista_v1",
+      instance_id: "especialista_v1-001", permissions: [],
+    }),
+    session_id: SID, participant_id: PID, content: { type: "text", text }, visibility: "all",
+  })
+
+  async function conteudo(): Promise<string> {
+    const entries = await redis.xrange(`session:${SID}:stream`, "-", "+")
+    const fields = entries[0]![1] as string[]
+    return JSON.stringify(
+      (JSON.parse(fields[fields.indexOf("payload") + 1]!) as Record<string, unknown>)["content"])
+  }
+
+  it("catálogo do tenant com CPF em `last_4`: o token exibe os 4 últimos", async () => {
+    const catalogo = {
+      ...DEFAULT_DATA_TYPE_CATALOG,
+      types: DEFAULT_DATA_TYPE_CATALOG.types.map(t =>
+        t.id === "cpf" ? { ...t, mascara: { ...t.mascara, by_role: { operator: "last_4" } } } : t),
+    }
+    const f = vi.spyOn(globalThis, "fetch").mockImplementation((async (url: string) =>
+      new Response(JSON.stringify(
+        String(url).includes("/config/masking/types") ? { value: catalogo } : {}),
+        { status: 200 })) as never)
+
+    await enviar("tenant_msk05_vivo", `CPF ${CPF}`)
+    expect(await conteudo()).toMatch(/\[cpf:tk_[a-f0-9]+:\*\*\*4725\]/)
+    // prova de que o catálogo veio do tenant certo, e não do semeado por acaso
+    expect(f.mock.calls.map(c => String(c[0])).some(u =>
+      u.includes("/config/masking/types?tenant_id=tenant_msk05_vivo"))).toBe(true)
+  })
+
+  it("config-api fora: o semeado (`last_2`) — mascarado, e o log NOMEIA o que deixou de valer", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNREFUSED"))
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    await enviar("tenant_msk05_fora", `CPF ${CPF}`)
+    const c = await conteudo()
+    expect(c).toMatch(/\[cpf:tk_[a-f0-9]+:\*\*\*25\]/)
+    expect(c).not.toContain(CPF)
+    const log = warn.mock.calls.map(x => String(x[0])).join("\n")
+    expect(log).toContain("tenant=tenant_msk05_fora")
+    expect(log).toContain("/config/masking não vale")
   })
 })

@@ -4,10 +4,13 @@
  *
  * Token format: [{category}:{token_id}:{display_partial}]
  *
- *   [credit_card:tk_a8f3:****1234]   → AI vê "****1234", tool resolve número completo
- *   [cpf:tk_b7d2:***-00]             → AI vê "***-00", tool resolve CPF completo
- *   [phone:tk_c1e9:(11) ****-4321]   → AI vê "(11) ****-4321"
+ *   [credit_card:tk_a8f3:***1234]    → AI vê "***1234", tool resolve número completo
+ *   [cpf:tk_b7d2:***00]              → AI vê "***00", tool resolve CPF completo
+ *   [phone:tk_c1e9:***4321]          → AI vê "***4321"
  *   [email_addr:tk_d4f0:j***@empresa.com] → AI vê domínio preservado
+ *
+ * O display é a máscara do `operator` em `masking.types.*.mascara.by_role` — os
+ * exemplos acima são os do catálogo semeado; o tenant muda em /config/masking (MSK-05).
  *
  * O agente AI usa o display_partial para confirmar dados com o cliente.
  * O MCP Tool usa o token_id para resolver o valor completo no TokenVault.
@@ -15,8 +18,11 @@
  * Referência: plughub_spec_v1.docx seção 13 — Mascaramento LGPD
  */
 
-import type { MessageContent, MaskingConfig, MaskingRule, DataCategory, MaskingAccessPolicy, ContextMaskingConfig } from "@plughub/schemas"
-import { DEFAULT_MASKING_RULES, DEFAULT_CONTEXT_MASKING_CONFIG, ContextMaskingConfigSchema, passesDetectValidator } from "@plughub/schemas"
+import type { MessageContent, MaskingConfig, MaskingRule, DataCategory, MaskingAccessPolicy, ContextMaskingConfig, DataTypeCatalog } from "@plughub/schemas"
+import {
+  DEFAULT_MASKING_RULES, DEFAULT_CONTEXT_MASKING_CONFIG, DEFAULT_DATA_TYPE_CATALOG,
+  ContextMaskingConfigSchema, passesDetectValidator, detectedDisplay,
+} from "@plughub/schemas"
 import type { ParticipantRole } from "@plughub/schemas"
 import type { TokenVault }       from "./token-vault"
 
@@ -61,6 +67,8 @@ export class MaskingService {
     ttlSeconds: number,
     /** Onde a máscara roda (ex.: `session=… role=…`) — só para o log de degradação. */
     logCtx:     string = "",
+    /** `masking.types` do tenant (`loadTypeCatalog`); ausente, o semeado. */
+    catalog:    DataTypeCatalog = DEFAULT_DATA_TYPE_CATALOG,
   ): Promise<MaskingResult> {
     // Apenas texto é processado
     if (content.type !== "text" || !content.text) {
@@ -111,8 +119,8 @@ export class MaskingService {
         const start      = match.index ?? 0
         const end        = start + full_match.length
 
-        // Calcula display parcial
-        const display = MaskingService.buildDisplay(full_match, rule)
+        // Display = máscara do `operator` no catálogo (MSK-05), a mesma da rede do engine
+        const display = detectedDisplay(full_match, rule.category, catalog)
 
         // Gera token no vault. Se o cofre falhar, o trecho sai só com o display —
         // máscara IRREVERSÍVEL (a tool não resolve o valor), nunca o valor cru, e o
@@ -160,44 +168,55 @@ export class MaskingService {
     }
   }
 
-  /**
-   * Constrói o display parcial para um match, seguindo a regra:
-   *
-   * 1. Se `preserve_pattern` definido — extrai o grupo 1 (ou match completo) do padrão
-   *    Ex: email "joao@empresa.com" + preserve_pattern "(@.+)$" → "j***@empresa.com"
-   *
-   * 2. Se `preserve_last_digits` definido — mantém os últimos N dígitos
-   *    Ex: "4539 1234 5678 1234" + preserve_last_digits 4 → "****1234"
-   *
-   * 3. Fallback — usa replacement completo (sem parcial)
-   */
-  private static buildDisplay(match: string, rule: MaskingRule): string {
-    // Prioridade 1: preserve_pattern
-    if (rule.preserve_pattern) {
-      try {
-        const re     = new RegExp(rule.preserve_pattern)
-        const result = re.exec(match)
-        if (result) {
-          const preserved = result[1] ?? result[0]
-          const prefix    = match.slice(0, match.length - preserved.length)
-          const maskedLen = Math.max(1, Math.ceil(prefix.length / 4))
-          return `${"*".repeat(maskedLen)}${preserved}`
-        }
-      } catch { /* fallback */ }
-    }
+  // ⚠️ MSK-05 (2026-09-25): aqui morava `buildDisplay`, que montava o display por
+  // `preserve_pattern`/`preserve_last_digits` (`*******4321`) — uma SEGUNDA exibição para
+  // a categoria, divergente da rede do engine (`(##) ****-####`), e nenhuma das duas lia
+  // o `by_role` de `/config/masking`. Saiu; o display é `detectedDisplay`, a mesma função
+  // da rede. Não reintroduzir um display local: é a terceira casa voltando.
 
-    // Prioridade 2: preserve_last_digits
-    if (rule.preserve_last_digits && rule.preserve_last_digits > 0) {
-      const digits_only = match.replace(/\D/g, "")
-      if (digits_only.length > rule.preserve_last_digits) {
-        const tail     = digits_only.slice(-rule.preserve_last_digits)
-        const maskLen  = digits_only.length - rule.preserve_last_digits
-        return `${"*".repeat(maskLen)}${tail}`
+  // Catálogo `masking.types` VIVO por tenant — de onde o display sai. Cache de 60 s, como
+  // o `authorized_roles`: o mascaramento roda em TODA mensagem.
+  private static _typeCatalogCache = new Map<string, { catalog: DataTypeCatalog; expiresAt: number }>()
+  private static _typeCatalogWarned = new Set<string>()
+
+  /**
+   * Carrega `masking.types` do tenant (config-api resolve tenant → global).
+   *
+   * Falha degrada para o catálogo SEMEADO — e diz, NOMEANDO o que deixa de valer: as
+   * edições de exibição feitas em `/config/masking` não valem para o dado detectado
+   * enquanto durar. Degradar para "não mascarar" é o que nunca se faz aqui: o semeado
+   * mascara todas as categorias detectáveis.
+   */
+  static async loadTypeCatalog(configApiUrl: string, tenantId: string): Promise<DataTypeCatalog> {
+    const cached = MaskingService._typeCatalogCache.get(tenantId)
+    if (cached && cached.expiresAt > Date.now()) return cached.catalog
+
+    let catalog: DataTypeCatalog = DEFAULT_DATA_TYPE_CATALOG
+    try {
+      const base = configApiUrl.replace(/\/$/, "")
+      const resp = await fetch(
+        `${base}/config/masking/types?tenant_id=${encodeURIComponent(tenantId)}`,
+        { signal: AbortSignal.timeout(5000) },
+      )
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const body  = await resp.json() as { value?: unknown }
+      const value = body.value as DataTypeCatalog | undefined
+      if (!value || !Array.isArray(value.types)) throw new Error("valor sem `types[]`")
+      catalog = value
+      MaskingService._typeCatalogWarned.delete(tenantId)
+    } catch (e) {
+      if (!MaskingService._typeCatalogWarned.has(tenantId)) {
+        MaskingService._typeCatalogWarned.add(tenantId)
+        console.warn(
+          `[masking] catálogo masking.types INDISPONÍVEL tenant=${tenantId} ` +
+          `(${e instanceof Error ? e.message : String(e)}) — a exibição do dado DETECTADO ` +
+          `usa o catálogo SEMEADO: o que foi editado em /config/masking não vale para ela`)
       }
     }
-
-    // Fallback: usa o replacement da regra
-    return rule.replacement
+    MaskingService._typeCatalogCache.set(tenantId, {
+      catalog, expiresAt: Date.now() + MaskingService._ACCESS_POLICY_TTL_MS,
+    })
+    return catalog
   }
 
   // ─────────────────────────────────────────────

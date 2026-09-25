@@ -498,6 +498,10 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         let originalContent: typeof content | undefined
         let masked          = false
         let maskedCategories: string[] = []
+        // MSK-05: a exibição do trecho detectado é o `by_role` do catálogo do tenant.
+        // O carregador nunca lança — degrada para o semeado e diz.
+        const catalogoTipos = await MaskingService.loadTypeCatalog(
+          process.env["CONFIG_API_URL"] ?? "http://localhost:3600", tenant_id)
 
         try {
           const vault = new TokenVault({ redis })
@@ -509,6 +513,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
             tenant_id,
             SESSION_TTL,
             logCtx,
+            catalogoTipos,
           )
           if (maskResult.masked) {
             finalContent    = maskResult.tokenized_content
@@ -517,7 +522,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
             maskedCategories = maskResult.categories_detected
           }
         } catch (maskErr) {
-          const rede = maskFreeText(conteudoEntregue)
+          const rede = maskFreeText(conteudoEntregue, "", catalogoTipos)
           console.error(
             `[message_send] mascaramento FALHOU ${logCtx} ` +
             `(${maskErr instanceof Error ? maskErr.message : String(maskErr)}) — ` +

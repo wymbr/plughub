@@ -177,7 +177,7 @@ export async function filtrarLeituraCtx(
         `[ctx-audit] NÃO aplicado (${mascara === "undecided" ? "§D5, fase F4" : "§D4, é a V4 da allowlist"}): ` +
         `${quem} ${onde} → ${mascara}`))
       return mascara === "unknown"
-        ? redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${tag}`)
+        ? redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${tag}`, c.tipos)
         : valor
     }
 
@@ -219,13 +219,20 @@ function redeParaTextoLivre(
   valor:   unknown,
   plateia: CtxAudience,
   onde:    string,
+  /**
+   * `masking.types` VIVO do tenant — é dele que sai a exibição do trecho detectado
+   * (MSK-05: o `by_role` de `/config/masking`). Ausente, a rede usa o catálogo
+   * SEMEADO, e o log desta linha diz que foi assim.
+   */
+  tipos?:  DataTypeCatalog,
 ): unknown {
   if (plateia !== "customer" && plateia !== "operator") return valor
-  const r = maskFreeText(valor)
+  const r = maskFreeText(valor, "", tipos)
   if (r.categories.length === 0) return valor
   registra(`rede|${onde}|${[...new Set(r.categories)].sort().join(",")}`, () => console.info(
     `[ctx-audit] REDE (mitigação, §D12): ${onde} plateia=${plateia} — ` +
-    `categorias=${[...new Set(r.categories)].sort().join(",")} em ${r.fields.length} campo(s). ` +
+    `categorias=${[...new Set(r.categories)].sort().join(",")} em ${r.fields.length} campo(s), ` +
+    `exibição=${tipos ? "by_role do catálogo vivo" : "by_role do catálogo SEMEADO (vivo ainda não carregado)"}. ` +
     "Isto é dado capturado em TEXTO LIVRE; o certo é declará-lo num DialogForm."))
   return r.value
 }
@@ -282,7 +289,10 @@ export function filtrarTextoLivre(
       return valor
     }
 
-    return redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${ref}`)
+    // Síncrona: usa o catálogo que a leitura de contexto já carregou; sem ele, o
+    // semeado — e o log da rede nomeia qual dos dois valeu.
+    return redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${ref}`,
+                              cache?.tipos)
   } catch (e) {
     console.warn(
       `[ctx-audit] FALHA na rede para ${ref} step=${sitio.stepId ?? "?"} (${String(e)}) — ` +

@@ -69,8 +69,9 @@ describe("a REDE dispensa conteúdo declarado — e só ele", () => {
     // que impede os dois: sem carimbo, a rede mascara o roteiro de qualquer jeito.
     const fora = String(filtrarTextoLivre(ROTEIRO, CLIENTE, REF))
     expect(fora).not.toBe(ROTEIRO)
-    expect(fora).toContain("***.***.***.--")
-    expect(fora).not.toContain("(##) ****-####")
+    expect(fora).toContain("***25")        // MSK-05: exibição = by_role do CPF (last_2)
+    expect(fora).not.toContain("52998224725")
+    expect(fora).not.toContain("***4725")      // tipado como TELEFONE sairia o last_4
   })
 
   it("COM carimbo, o roteiro atravessa byte a byte", () => {
@@ -267,6 +268,6 @@ describe("de ponta a ponta: o roteiro chega ao cliente como foi escrito", () => 
     // desligasse a rede passaria no caso de cima.
     const fora = await mensagemAoCliente("customer_get")
     expect(fora).not.toBe(ROTEIRO)
-    expect(fora).toContain("***.***.***.--")   // CTX-12: CPF com DV válido tipa como CPF
+    expect(fora).toContain("***25")   // CTX-12 + MSK-05: tipa como CPF, exibe o last_2
   })
 })
