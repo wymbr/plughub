@@ -83,6 +83,7 @@ história no `CHANGELOG.md`.)*
 | id | tarefa | fechada em | âncora |
 |---|---|---|---|
 | WAI-02 | Produtor de espera para o tier `max_wait_exceeded` (fatia B) | 2026-08-24 | `CHANGELOG.md:6304` |
+| WAI-01 | Produtor da espera no caminho atendido — o push já tinha; faltava o claim do pull | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (10) |
 
 ---
 

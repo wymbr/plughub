@@ -2650,11 +2650,12 @@ class InstanceRegistry:
         # *Este comentário dizia "o score do sorted set é reordenado no re-enqueue".
         # Deixou de ser verdade em 2026-08-05 (item 4): a devolução re-enfileira com
         # o `queued_at_ms` ORIGINAL, então score e `first_queued` coincidem. O
-        # carimbo sobrevive porque é DURÁVEL de outra forma — vive além do ZSET
-        # (TTL 7d, não sai no claim), e é dele que a idade exibida na inbox sai.*
-        # (listQueue lê e cai em queued_at_ms se ausente/expirado). Mesmo padrão/
-        # chave da fila muda (mute_queue.mark_mute_queued). TTL 7d; UUID por sessão
-        # → sem colisão, limpeza por TTL (não precisa delete no claim/resolve).
+        # carimbo vive além do ZSET (TTL 7d), e é dele que a idade exibida na
+        # inbox sai.* (listQueue lê e cai em queued_at_ms se ausente/expirado).
+        # ⚠️ Ele é CONSUMIDO em toda saída da fila, inclusive no claim do pull
+        # (WAI-01, 2026-09-25): `resolve_queue_exit` o apaga ao registrar a espera.
+        # Deixado para trás, o fechamento da sessão o lia como ABANDONO. A
+        # devolução o reescreve (NX) com o `queued_at_ms` original — mesmo valor.
         await self._redis.set(
             first_queued_key(tenant_id, session_id),
             str(int(queued_at_ms)),

@@ -28,6 +28,7 @@ from .scorer import (
     compute_priority_score,
 )
 from .registry import InstanceRegistry, PoolRegistry
+from . import mute_queue
 from .config import get_settings
 from .routing_config import routing_config
 from plughub_tasks import disparar
@@ -758,6 +759,28 @@ class Router:
                 session_id, instance_id, pool_id,
             )
             return {"claimed": False, "reason": "no_capacity"}
+
+        # 5a — WAI-01: a espera ACABOU aqui, em handoff. O pull é a única saída de
+        # fila que não re-roteia (nem `route()` nem o drain rodam), e por isso era
+        # a única sem produtor: medido em 2026-09-25, 100% das esperas ≥ 5 s sem
+        # linha (102) estavam em pool pull. Pior que a ausência: o carimbo que o
+        # claim deixava para trás era consumido no FECHAMENTO da sessão pelo
+        # `Queue cleanup`, que o registrava como `abandoned` com a duração
+        # fila→fim — 5 abandonos falsos, com humano atendendo dentro da janela.
+        # Depois da vaga (o rollback `no_capacity` acima NÃO é saída da fila) e
+        # antes do `routed`. A devolução (`work_task_release`) re-enfileira com o
+        # `queued_at_ms` ORIGINAL, logo o próximo claim deriva o MESMO
+        # `segment_id` e substitui a linha — a espera não recomeça na devolução.
+        if self._producer is not None:
+            await mute_queue.resolve_queue_exit(
+                self._instances._redis, self._producer,
+                tenant_id, pool_id, session_id, "handoff",
+            )
+        else:
+            logger.warning(
+                "work_task_claim: producer ausente — segmento de espera NÃO emitido "
+                "session=%s pool=%s", session_id, pool_id,
+            )
 
         # 5 — mark_busy + lease + registro durável de posse
         await self._instances.mark_busy(tenant_id, pool_id, instance_id, session_id)

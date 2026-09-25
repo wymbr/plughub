@@ -73,12 +73,7 @@ sem tocar em vocabulário de skill, porque quem os escreve é o core. **CNS-02 f
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| WAI-01 | Produtor da janela de espera no caminho **ATENDIDO**: contato que espera e é atendido não gera registro nenhum (medido: 21,35 s, zero linha) | `aberto` | `TODO.md:2589` |
-
-⚠️ **Validação parcial, declarada.** A fatia B (2026-08-24, `CHANGELOG.md:6304`) criou um produtor
-para o tier `max_wait_exceeded`, e o arco D14 (i/ii/iii) passou a carimbar `sla_target_ms` na saída
-da fila. **Não confirmei** se o ramo atendido continua sem registro depois disso. Medir antes de
-construir — o oposto foi o que produziu os nove títulos velhos.
+| WAI-03 | Levar a WAI-01 ao ar: rebuild + `up -d` do `routing-engine` (o conserto está só na árvore; o que roda é a imagem) e medir o primeiro claim de pull com linha `role='queue' outcome='handoff'` — e nenhuma espera `abandoned` nova com humano do mesmo pool dentro da janela (a query está no `CHANGELOG.md` § 2026-09-25 (10)) | `aberto` | `CHANGELOG.md` § 2026-09-25 (10) |
 
 ---
 

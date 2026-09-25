@@ -2590,3 +2590,28 @@ a ser registrada duas vezes em silêncio.
 "chave de sinal" e o ramo B do gate passou a aceitar um produtor que não publica `result`. O gate
 ficou vermelho e apontou. Leitura de metadado vai pela porta de metadado, inclusive em log.
 
+
+### Mudança 47 — o claim do PULL encerra a espera, e o carimbo deixado para trás deixa de virar abandono (WAI-01, 2026-09-25)
+
+**Medido** no ledger (`segments FINAL`, desde 2026-08-22): a espera ATENDIDA do **push** já tinha
+produtor desde a D12 (98 sessões com espera `handoff` seguida de humano). O buraco que sobrava era
+o **pull**: das sessões com humano que esperaram 5 s ou mais **sem** linha de espera (102), **todas**
+estavam em pool pull (`aprovacao_credito` 53 · `retencao_humano-int` 37 · `formfill_demo` 8 ·
+`aprovacao_deploy` 4). O claim da inbox é a única saída de fila que não re-roteia — nem `route()`
+nem o drain rodam —, e era por eles que `resolve_queue_exit` era chamada.
+
+**O segundo defeito era pior que a ausência.** `work_task_claim` não consumia o
+`{t}:queue:first_queued:{sid}` (o comentário do `add_queued_contact` dizia *"não sai no claim"*),
+e o JSON do contato também fica. No FECHAMENTO da sessão, o `Queue cleanup` do
+`SessionClosedEventHandler` achava os dois e registrava a espera como **`abandoned`**, com a duração
+fila→fim: 5 abandonos falsos medidos, todos com um humano do mesmo pool entrando DENTRO da janela.
+
+**Conserto:** `work_task_claim` chama `resolve_queue_exit(..., "handoff")` **depois** de garantir a
+vaga (o rollback `no_capacity` re-enfileira: não é saída) e antes do `conversations.routed`. O
+carimbo é consumido ali, então o fechamento não acha mais nada. A devolução (`work_task_release`)
+re-enfileira com o `queued_at_ms` ORIGINAL; o próximo claim deriva o MESMO `segment_id` e a linha é
+substituída — a espera não recomeça na devolução, que é a regra de produto já vigente.
+
+⚠️ **Forward-only:** as 102 esperas e os 5 abandonos falsos anteriores ficam como estão — o carimbo
+é consumido na saída e a duração verdadeira não é recuperável.
+Gate: `routing-engine/tests/test_pull_claim_wait_segment.py` (5 testes; mutação 4/4).

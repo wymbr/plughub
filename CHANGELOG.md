@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (10) — WAI-01: o claim do pull encerra a espera, e o carimbo deixado para trás deixa de virar abandono
+
+**A ficha estava pela metade velha.** Dizia que *"contato que espera e é atendido não gera registro
+nenhum"* (21,35 s, medido em 2026-08-21). No mesmo dia nasceu o produtor da D12
+(`resolve_queue_exit`, `97578f85`), e o push atendido passou a registrar: medido hoje, 98 sessões
+com espera `handoff` seguida de humano. **O que restava era o PULL**, e medi antes de mexer
+(`segments FINAL`, humano `primary` desde 2026-08-22, lacuna entre o fim do segmento anterior e a
+entrada do humano):
+
+| lacuna | com linha de espera | sem linha |
+|---|---|---|
+| < 1 s | 27 | 141 (roteado direto — ausência correta) |
+| 1–5 s | 1 | 45 |
+| 5–30 s | 5 | 32 |
+| ≥ 30 s | 3 | 70 |
+
+As 102 sem linha com lacuna ≥ 5 s estavam **todas** em pool pull: `aprovacao_credito` 53 ·
+`retencao_humano-int` 37 · `formfill_demo` 8 · `aprovacao_deploy` 4. Os logs de uma delas
+(`e9e84159`) mostram o caminho inteiro: `Queued … no agents available` → `Contact persisted to
+queue` → `work_task_claim: claimed` → nenhum `queue exit`. O claim da inbox é a única saída de fila
+que não re-roteia — nem `route()` nem o drain rodam —, e era por eles que o produtor era chamado.
+
+**Achado de brinde, pior que a ausência: 5 abandonos FALSOS.** O claim não consumia o
+`first_queued` (o comentário do `add_queued_contact` dizia *"não sai no claim"*), e o JSON do
+contato também fica. No fechamento da sessão, o `Queue cleanup` do `SessionClosedEventHandler`
+achava os dois e registrava `abandoned` com a duração fila→fim — medido: 5 esperas `abandoned` com um
+humano do MESMO pool entrando dentro da janela (`575bdd23`, `aprovacao_credito`: 492 s "abandonada",
+humano entrou em 58 s).
+
+**Conserto:** `work_task_claim` chama `resolve_queue_exit(..., "handoff")` depois de garantir a vaga
+(o rollback `no_capacity` re-enfileira e não é saída) e antes do `conversations.routed`. Consumir o
+carimbo ali fecha os dois defeitos. A devolução re-enfileira com o `queued_at_ms` original, então o
+claim seguinte deriva o MESMO `segment_id` e substitui a linha: a espera não recomeça na devolução,
+como a regra de produto já dizia. A pergunta aberta da D12 (*"no pull há duas esperas?"*) foi
+respondida no ADR: é UMA, do enfileiramento ao claim.
+
+**Teste:** `test_pull_claim_wait_segment.py`, 5 testes em par (registrou o fato / não registrou o
+não-fato), rodados na imagem contra o Redis real, 0 pulados. O fake de produtor do arquivo vizinho
+não aceita `key=` — o publish lançaria `TypeError`, que `resolve_queue_exit` engole como aviso, e o
+teste passaria sem emissão; este usa um que aceita. Mutação 4/4 mortas (sem a chamada · antes da
+vaga · antes do ZREM · `abandoned`). Suíte do routing-engine: 303 passaram (298 + 5).
+
+**Forward-only:** as 102 esperas sem linha e os 5 abandonos falsos anteriores ficam — o carimbo é
+consumido na saída e a duração não é recuperável. Doc: `conference-mechanics.md` § Mudança 47 e
+ADR D12. Deixou ficha: `WAI-03` (rebuild do routing-engine e medição ao vivo). Consulta da medição:
+esperas `role='queue'` × `min(started_at)` do humano no mesmo `(session_id, pool_id)`.
+
 ## 2026-09-25 (9) — APR-09: superada pela Camada E2 — e o resolvedor que a sustenta ganhou teste
 
 **A ficha estava velha.** Dizia que o ingress de resume aplicava `approvals.decide` *"a QUALQUER

@@ -507,6 +507,13 @@ Duas emendas ao veículo:
 agente disponível" (fila) e "agente disponível que ainda não reivindicou" (inbox). Para SLA as duas
 contam; hoje nenhuma tem registro confiável.
 
+> ✅ **Respondido por medição em 2026-09-25 (WAI-01).** Não são dois fatos a registrar: no pull, a
+> espera é UMA — do enfileiramento ao **claim** —, com ou sem agente livre no meio, porque o cliente
+> não distingue as duas. Faltava o produtor na saída pelo claim (100% das esperas ≥ 5 s sem linha
+> estavam em pool pull) e ele passou a existir em `work_task_claim`, com `outcome='handoff'`.
+> Separar *"havia agente livre"* é leitura sobre a mesma linha (ocupação no intervalo), nunca
+> segundo segmento. Ver `conference-mechanics.md` § Mudança 47.
+
 ### D13 — Discriminador de contato é ÚNICO e ternário, derivado de `spawn_reason`
 
 | `spawn_reason` | Classe |
