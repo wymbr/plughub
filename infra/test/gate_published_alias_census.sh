@@ -102,9 +102,13 @@ DIVIDA = {
     # e, nos testes de 2026-09-03/04, nenhum recebeu trafego. Re-promove-los sem medir
     # o produtor de cada tag e exatamente o erro que a CNS-19 cometeu no OTP.
     # Gatilho para quitar: o pool voltar a ser exercido — ai o produtor se mede.
+    # (2026-09-25) Medido: os dois primeiros TEM produtor da canonica (`core.pool.id`
+    # pelo routing, `core.survey.grain` pelo gateway e pelo dispatch) — re-promover os
+    # quita. O terceiro NAO: `core.sentiment.category` nao tem produtor por decisao, e
+    # a definicao viva do skill le o mesmo alias. Quitar e reescrever o skill (CNS-27).
     ("pool", "outbound_survey_worker"): ["session.survey_grain"],
     ("pool", "survey_multi_ia"):        ["session.pool.id"],
-    ("pool", "copilot_sac"):            ["session.sentimento.categoria"],
+    ("pool", "copilot_sac"):            ["session.sentimento.categoria"],  # CNS-27
 }
 
 falhas = 0
