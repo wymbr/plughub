@@ -160,6 +160,14 @@ predicado sobre occupants tagueados com o pool — o que exigiria estender o occ
 (`{session_id}::{conference_id}` → mais um campo) e é decisão separada. Registrado para que ninguém
 justifique instância-por-pool com este requisito.
 
+**Corolário: o semáforo NÃO morre com o registro (AGH-03, 2026-09-25).** São chaves distintas
+(`{t}:instance:{iid}` × `{t}:instance:{iid}:sessions`), e o humano é desregistrado — pelo `close`
+ou pelo varredor da AGH-02 — **antes** de o `agent_done` do contato ser consumido. O
+`remove_conversation` libera a vaga pelo prefixo da sessão **também quando o registro já não
+existe**, com WARN; e nesse caso nunca troca por hold de wrap-up (não há quem o atenda). Antes, a
+vaga ficava presa até o reap ver `session:{sid}:closed`. Teste:
+`routing-engine/.../tests/test_release_without_instance_record.py` (Redis real).
+
 ### Q3 — Snapshots `session:{sid}:routing:{iid}` já gravados: migrar ou tolerar?
 
 **Nem migrar nem tolerar passivamente: encolher o snapshot para o que ele realmente é, e tornar a

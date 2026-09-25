@@ -1,5 +1,34 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (6) — AGH-03: a vaga sai do semáforo mesmo quando o registro do humano já foi apagado
+
+**O defeito.** `remove_conversation` (routing-engine) só chamava `release_instance` dentro de
+`if raw_inst:`. O agente humano é desregistrado **antes** de o `agent_done` do contato ser
+consumido — pelo `close` (publica `agent_disconnect` e chama `unregisterHumanAgent` na sequência)
+e pelo varredor da AGH-02 —, então o registro `{t}:instance:{iid}` sumia e o semáforo
+`{t}:instance:{iid}:sessions`, que é outra chave, ficava com a vaga até o reap ver
+`session:{sid}:closed`. Medido em 2026-09-15: 3 órfãos em 3 no probe de restart, um deles pela
+saída NORMAL. Dano: o mesmo usuário que relogasse enquanto o contato redistribuído corria voltava
+com capacidade a menos.
+
+**Censo que a ficha pedia (2026-09-25):** 0 recuperações pelo `reap:` e 0 semáforos órfãos no
+Redis do demo — mas o routing-engine reiniciou às 09:59, então o log cobre horas, e sem vaga
+ocupada não há semáforo nenhum (o release apaga o SET vazio). O gatilho não disparou pelo dado
+vivo; o conserto foi feito por ser local e o defeito estar demonstrado no código e no probe.
+
+**O conserto.** Sem registro, o release roda assim mesmo (é por prefixo de sessão e independe
+dele), com WARN nomeando instância, conversa e ocupação restante. Nunca troca por hold de
+wrap-up nesse ramo: seguraria a vaga para um wrap-up que ninguém vai atender. Espelho
+`current_sessions` e SETs de pool não são tocados (não há registro a atualizar).
+
+**Testes** (`test_release_without_instance_record.py`, Redis REAL): sem registro a vaga desta
+sessão sai e a de outra sessão fica (testemunha); `hold_for_wrapup` sem registro não cria hold;
+o WARN aparece. Mutação: ramo removido → 2 vermelhos; hold no ramo → 1 vermelho. Suíte inteira
+do routing-engine **298 passed, 0 skipped** — rodada num container descartável da própria imagem,
+na rede do demo, porque do WSL o Redis não é alcançável e os 24 testes do semáforo **pulavam**
+(pular sai verde). Não rebuildado: vale no próximo build do routing-engine.
+Doc: `docs/adr/adr-human-agent-pool-scoped-identity.md` § Q2, corolário.
+
 ## 2026-09-25 (5) — SFE-02: o `issue_status` do `complete` sobrevive ao parse e chega ao segmento de IA
 
 **O defeito, medido.** 37 dos 96 `complete` do repositório (20 skills) declaram por que o fluxo

@@ -2147,6 +2147,26 @@ class InstanceRegistry:
                         "remove_conversation: instance=%s current_sessions=%d→%d state=%s",
                         instance_id, old_sessions, inst.current_sessions, inst.state,
                     )
+                else:
+                    # AGH-03 — o REGISTRO da instância já foi apagado (desregistro humano
+                    # pelo `close` ou pelo varredor da AGH-02, que acontece ANTES de este
+                    # agent_done ser consumido), mas o SEMÁFORO é outra chave e não some
+                    # com ele. Liberar só dentro do `if raw_inst:` deixava a vaga presa
+                    # até o reap ver `session:{sid}:closed` — e se o MESMO usuário
+                    # relogasse antes, ele voltava com capacidade a menos (medido: 3 de 3
+                    # no probe de restart, um deles pela saída NORMAL). O release é por
+                    # prefixo de sessão e independe do registro. Nunca HOLD aqui: não há
+                    # wrap-up a atender por um agente que já saiu.
+                    remaining = await self.release_instance(
+                        tenant_id, instance_id, conversation_id,
+                    )
+                    logger.warning(
+                        "remove_conversation: registro AUSENTE instance=%s conv=%s — vaga "
+                        "liberada no semáforo mesmo assim (ocupação restante=%d); espelho "
+                        "current_sessions e SETs de pool não tocados (não há registro)%s",
+                        instance_id, conversation_id, remaining,
+                        " — hold de wrap-up DESCARTADO" if hold_for_wrapup else "",
+                    )
             except Exception as exc:
                 logger.warning(
                     "remove_conversation: failed to update instance state for %s: %s",
